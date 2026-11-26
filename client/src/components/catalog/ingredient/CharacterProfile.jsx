@@ -1,6 +1,6 @@
 // The Profile tab body for a character ingredient: the shared character sheet
 // editor wired to the page's draft, with identity controls, owning-universe
-// canon actions, image generation, family, forms and reveal timing.
+// canon actions, image generation, family, forms, reveal timing and LoRA.
 //
 // `gates` carries the page's busy/dirty flags: { readOnly, characterActionBusy,
 // setCharacterActionBusy, isDirty, saving, unlocking, lookSaving, externalDetails }.
@@ -8,6 +8,7 @@
 import CharacterDetailEditor from '../../universe/CharacterDetailEditor';
 import { RevealTimingField } from '../../pipeline/CanonCard';
 import TagPicker from '../../TagPicker';
+import CharacterLoraChip from './CharacterLoraChip';
 import GenerateImageControl from '../GenerateImageControl';
 import CatalogImagePreview from '../CatalogImagePreview';
 import { ReferenceSheetPanel } from '../CatalogSheetsPanel';
@@ -77,6 +78,10 @@ export default function CharacterProfile({ record, draft, owner, gates, typeDef,
       <RevealTimingField entry={{ ...payload, id: record.id }} editable={!readOnly && !characterActionBusy && payload.locked !== true}
         onPatch={patchPayload} />
       {showReferenceSheet && <ReferenceSheetPanel payload={payload} recordId={record.id} />}
+      <div className="bg-port-card border border-port-border rounded-lg p-3">
+        <div className="text-xs uppercase tracking-wider text-gray-500 mb-2">Character LoRA</div>
+        <CharacterLoraChip ingredientId={record.id} />
+      </div>
     </CharacterDetailEditor>
   );
 }

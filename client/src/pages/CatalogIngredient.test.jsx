@@ -194,6 +194,8 @@ vi.mock('../components/TagPicker', () => ({
 }));
 vi.mock('../components/ui/Toast');
 
+vi.mock('../components/catalog/ingredient/CharacterLoraChip', () => ({ default: () => null }));
+
 import CatalogIngredient from './CatalogIngredient';
 import { buildGenerationPromptSeed } from '../lib/catalogImagePrompt';
 import CatalogRelatedImages from '../components/catalog/CatalogRelatedImages';

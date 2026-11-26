@@ -362,7 +362,12 @@ describe('CI-selection cuts stay cut (#12285)', () => {
   // Positive control for the media scan: the boot owner still names every runtime and helper.
   it('still sees the runtime loaders bootHooks.js registers', () => {
     const bootTargets = importTargets('services/bootHooks.js');
-    expect(bootTargets.filter(target => QUEUE_IMPORTING_RUNTIME.test(target))).toHaveLength(5);
+    expect(bootTargets.filter(target => QUEUE_IMPORTING_RUNTIME.test(target)).sort()).toEqual([
+      'services/videoGen/stitchJob.js',
+      'services/videoGen/topazJob.js',
+      'services/videoGen/upscaleJob.js',
+      'services/videoGen/verticalJob.js',
+    ]);
     expect(bootTargets).toEqual(expect.arrayContaining([
       'services/musicVideo/render.js',
       'services/musicVideo/excerptRender.js',
