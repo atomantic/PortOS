@@ -476,6 +476,7 @@ jobs:
           PGDATABASE: portos_test
           PORTOS_TEST_MEMO_DIR: ${{ runner.temp }}/portos-test-memo
           CI_TEST_MODE: full
+          PORTOS_CI_PREPLANNED_RUN: ${{ runner.temp }}/portos-db-run.json
         run: node scripts/run-ci-tests.js db --check-remaining
 
       - name: Provision test database (portos_test)
@@ -514,6 +515,7 @@ jobs:
           PORTOS_TEST_MEMO_DIR: ${{ runner.temp }}/portos-test-memo
           PORTOS_CI_DIAGNOSTICS_DIR: ${{ runner.temp }}/portos-ci-diagnostics
           CI_TEST_MODE: full
+          PORTOS_CI_PREPLANNED_RUN: ${{ runner.temp }}/portos-db-run.json
           # The launcher ends its own test tree and prints the log at this wall-clock deadline (#18636), below the outer limit.
           PORTOS_CI_TEST_DEADLINE_MINUTES: 15
         run: node scripts/run-ci-tests.js db
@@ -580,6 +582,7 @@ jobs:
           PORTOS_REQUIRE_BROWSER_SUITES: '1'
           PORTOS_TEST_QUIET: 1
           PORTOS_CI_BEFORE_AUDIO_SETUP: '1'
+          PORTOS_CI_PREPLANNED_RUN: ${{ runner.temp }}/portos-browser-run.json
         run: node scripts/run-ci-tests.js server --check-remaining
 
       # The step timeout backs up the helper's download budget.
@@ -629,7 +632,7 @@ jobs:
           CI_TEST_FILES: ${{ toJSON(fromJSON(needs.impact.outputs.plan).browser_files) }}
           PORTOS_REQUIRE_BROWSER_SUITES: '1'
           PORTOS_TEST_QUIET: 1
-          PORTOS_CI_PREPLANNED_RUN: ${{ steps.browser-plan.outputs.recheck == 'true' && format('{0}/portos-browser-run.json', runner.temp) || '' }}
+          PORTOS_CI_PREPLANNED_RUN: ${{ runner.temp }}/portos-browser-run.json
         run: node scripts/watch-ci-tests.js server
 
       - name: Save the test memo

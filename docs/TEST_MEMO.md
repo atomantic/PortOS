@@ -436,10 +436,14 @@ install exists, the check can use unconditional package versions from the
 integrity-pinned client lockfile, which must match the lockfile in the memo
 key. Test execution still keys the installed package manifests. If provisioning
 ffmpeg could turn every remaining verdict into a hit, the shard checks again
-before client setup and browser startup. A cold memo or a definite miss goes
-straight from audio provisioning to the usual client setup and test runner.
-Only a successful browser run that records green entries saves a new memo.
-An unavailable tool cannot supply a browser memo hit or green entry.
+before client setup and browser startup. The DB and browser jobs pass the
+selected files from their memo check to the test runner. If audio setup
+changes the FFmpeg identity used by the check, the runner refreshes
+the selection against the installed tools. Pull-request jobs keep
+parsed facts for those checks in `RUNNER_TEMP/portos-facts-cache` and leave the
+restored memo untouched. Only a successful browser run that records green
+entries saves a new memo. An unavailable tool cannot supply a browser memo
+hit or green entry.
 
 ## Shards
 

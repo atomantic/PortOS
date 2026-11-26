@@ -102,9 +102,8 @@ function createMemoRunAnalysis({ scope, repoRoot, env = process.env, platform, a
 }
 
 /**
- * A browser recheck has already selected this shard. Snapshot only the
- * suites that will execute, using the installed tools and client packages
- * before running Vitest so trusted CI can still verify and record results.
+ * Snapshot only the previously selected suites, using the installed tools
+ * and packages so trusted CI can verify and record results after Vitest.
  */
 export function prepareMemoRun(run, { memoDir, ...options }) {
   if (!memoDir) return { run };
@@ -127,6 +126,15 @@ export function prepareMemoRun(run, { memoDir, ...options }) {
   return { ...analysis, run, unmemoizable, verdicts, factsCache };
 }
 
+/** Partition the complete memo-independent inventory before evaluating related reach or skipping green tests. */
+export function sliceTestCandidates({ scope, mode, repoFiles, repoRoot, shard, env, platform,
+  shardSlice = serverShardSlice, listTests = listWorkspaceTests }) {
+  const candidates = mode === 'files' ? uniqueSorted(repoFiles)
+    : uniqueSorted([...listTests(scope, { repoRoot, platform, env }).map((rel) => toRepoPath(scope, rel)), ...repoFiles]);
+  const owned = shard ? shardSlice(candidates, { repoRoot, scope, ...shard }) : candidates;
+  return { candidates, owned };
+}
+
 /**
  * The runner's selection and memo verdicts for one workspace. Verdicts cover
  * only owned candidates. For related plans, selection is also local to the
@@ -146,11 +154,7 @@ export function prepareMemoRun(run, { memoDir, ...options }) {
  *   unsettled: number, unmemoizable: Set<string>, analyze: (test: string, recorded: string[]) => object, verdicts: Map }}
  */
 export function planTestMemo({ scope, mode, repoFiles, repoSources, memoDir, repoRoot, shard = null, env = process.env, platform, arch, nodeVersion, toolVersion = () => null, freshToolVersion = toolVersion, requireToolVersions = false, provisionableTool, planBeforeClientSetup = false, caseFilter = [], acceptVerdictsFrom = [], listFiles = listRepositoryFiles, shardSlice = serverShardSlice, listTests = listWorkspaceTests, readRecord = readMemoRecord, readEntry = readMemoEntry, factsCache = memoDir ? loadFactsCache(memoDir, scope) : null }) {
-  const candidates = mode === 'files' ? uniqueSorted(repoFiles)
-    : uniqueSorted([...listTests(scope, { repoRoot, platform, env }).map((rel) => toRepoPath(scope, rel)), ...repoFiles]);
-  // Related reach can differ between sibling shards with different memo records.
-  // Partition the complete inventory first so this cannot move a test's owner.
-  const owned = shard ? shardSlice(candidates, { repoRoot, scope, ...shard }) : candidates;
+  const { candidates, owned } = sliceTestCandidates({ scope, mode, repoFiles, repoRoot, shard, env, platform, shardSlice, listTests });
   // Full and files modes already know what to run without analyzing never-memoized tests.
   const alwaysRun = new Set(getAlwaysRunTests());
   const unmemoizable = new Set(mode === 'files' || (mode === 'full' && memoDir)
