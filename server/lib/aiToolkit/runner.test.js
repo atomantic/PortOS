@@ -1053,9 +1053,8 @@ describe('AI Toolkit runner service', () => {
         body: {
           getReader: () => ({
             read: () => new Promise((_resolve, reject) => {
-              // Reject with the signal's own reason, exactly as undici does —
-              // for a reason-less `abort()` that is Node's DOMException whose
-              // message is "This operation was aborted".
+              // Check that a bare abort without a reason still counts as a
+              // user cancel when Stop initiated it.
               const fail = () => reject(signal.reason);
               if (signal.aborted) return fail();
               signal.addEventListener('abort', fail, { once: true });
@@ -1311,7 +1310,7 @@ describe('AI Toolkit runner service', () => {
     expect(onRunFailed).not.toHaveBeenCalled();
   });
   // A `data:` frame is NOT guaranteed to arrive whole: the reader hands back
-  // arbitrary byte-sized chunks (~8KB from undici), so a long frame — a
+  // arbitrary byte-sized chunks, so a long frame — a
   // reasoning model's `delta.reasoning`, a big content burst — routinely
   // straddles two reads. Parsing per-chunk instead of per-LINE fed JSON.parse a
   // half frame and threw `Unterminated string in JSON at position 8064`,
@@ -1554,7 +1553,12 @@ describe('AI Toolkit runner service', () => {
   // `.cause`. It matched nothing, so the run persisted `errorCategory: null`,
   // which the host's cascade reads as UNKNOWN and escalates to a tier-4
   // investigation task instead of a bounded retry.
-  it('classifies a mid-stream transport drop as a network error, not UNKNOWN', async () => {
+  it.each([
+    ['a native socket error', Object.assign(new Error('aborted'), { code: 'ECONNRESET' })],
+    ['a Fetch error with a nested cause', Object.assign(new TypeError('terminated'), {
+      cause: Object.assign(new Error('other side closed'), { code: 'UND_ERR_SOCKET' }),
+    })],
+  ])('classifies a mid-stream drop reported as %s as a network error', async (_kind, midStreamDrop) => {
     const dataDir = await mkdtemp(join(tmpdir(), 'ai-toolkit-runner-'));
     tempDirs.push(dataDir);
     const encoder = new TextEncoder();
@@ -1562,15 +1566,11 @@ describe('AI Toolkit runner service', () => {
       encoder.encode(`data: ${JSON.stringify({ choices: [{ delta: { content: 'Here' } }] })}\n`),
     ];
     let i = 0;
-    // undici's exact shape: an opaque outer TypeError over a coded cause.
-    const midStreamDrop = () => Object.assign(new TypeError('terminated'), {
-      cause: Object.assign(new Error('other side closed'), { code: 'UND_ERR_SOCKET' }),
-    });
     providerRequest.mockImplementation(vi.fn(async () => ({
       ok: true,
       body: { getReader: () => ({ read: async () => (i < chunks.length
         ? { done: false, value: chunks[i++] }
-        : Promise.reject(midStreamDrop())) }) },
+        : Promise.reject(midStreamDrop)) }) },
     })));
     const runner = createRunnerService({
       dataDir, hooks: { ensureProviderReady: async () => ({ success: true }) },
@@ -1588,7 +1588,7 @@ describe('AI Toolkit runner service', () => {
     expect(metadata.errorCategory).toBe('network-error');
     // The flattened chain, not the opaque outer message, is what the run record
     // and any investigation task quote.
-    expect(metadata.error).toContain('UND_ERR_SOCKET');
+    expect(metadata.error).toContain(midStreamDrop.cause?.code ?? midStreamDrop.code);
   });
 
   // The hidden channel is named `reasoning_content` by NVIDIA NIM, vLLM and the
