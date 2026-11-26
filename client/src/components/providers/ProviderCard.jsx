@@ -87,9 +87,7 @@ export const CARD_STATE_STYLES = {
     label: 'DISABLED',
     border: 'border-port-border',
     badge: 'bg-gray-500/20 text-gray-400',
-    // Switched-off cards recede until hovered, so a long list reads as the
-    // handful of providers that are actually live.
-    dim: 'opacity-70 hover:opacity-100 transition-opacity',
+    surface: 'bg-port-bg/40',
     hint: 'Switched off — nothing to do unless you want to use it.',
   },
 };
@@ -181,7 +179,7 @@ export default function ProviderCard({
       tabIndex={isCardDefault ? -1 : undefined}
       className={`@container ${
         isCardDefault ? 'bg-port-accent/10' : 'bg-port-card'
-      } border border-l-4 rounded-xl p-4 transition-colors duration-200 ${style.border} ${style.dim || ''} ${
+      } border border-l-4 rounded-xl p-4 transition-colors duration-200 ${style.border} ${style.surface || ''} ${
         isCardDefault ? 'ring-1 ring-port-accent/60' : ''
       }`}
     >

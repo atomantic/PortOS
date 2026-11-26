@@ -70,6 +70,22 @@ describe('SchedulesTab', () => {
     expect(runButton).toHaveTextContent('Run Now');
   });
 
+  it('shows disabled schedules clearly without reducing card opacity', async () => {
+    getAutomationSchedules.mockResolvedValue([{
+      id: 'schedule-1', agentId: 'agent-1', accountId: 'account-1', enabled: false,
+      action: { type: 'heartbeat', params: {} }, schedule: { type: 'interval', intervalMs: 60000 },
+      rateLimit: { maxPerDay: 5 },
+    }]);
+    getPlatformAccounts.mockResolvedValue([]);
+    getScheduleStats.mockResolvedValue(null);
+    render(<SchedulesTab agentId="agent-1" />);
+
+    const labels = await screen.findAllByText('Disabled');
+    const card = labels[0].closest('div.p-4');
+    expect(card.className).not.toMatch(/opacity-/);
+    expect(card).toHaveTextContent('Heartbeat');
+  });
+
   it('applies toggle and delete in place without refetching or flashing the spinner', async () => {
     const schedule = {
       id: 'schedule-1', agentId: 'agent-1', accountId: 'account-1', enabled: true,

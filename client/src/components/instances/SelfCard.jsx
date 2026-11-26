@@ -2,6 +2,7 @@ import { Network, Edit3, Check, X, Database, Brain, CheckCircle2, Clock, Globe }
 import toast from '../ui/Toast';
 import { updateSelfInstance } from '../../services/apiSystem.js';
 import { SNAPSHOT_CATEGORIES } from './syncCategoryMeta';
+import { setDocumentTitleInstanceName } from '../../hooks/useDocumentTitle.js';
 
 export default function SelfCard({ self, onUpdate, syncStatus, tailnetInfo, editing, setEditing, name, setName }) {
 
@@ -14,7 +15,7 @@ export default function SelfCard({ self, onUpdate, syncStatus, tailnetInfo, edit
     if (!name.trim()) return;
     const result = await updateSelfInstance({ name: name.trim() }).catch(() => null);
     if (!result) return;
-    document.title = `PortOS: ${name.trim()}`;
+    setDocumentTitleInstanceName(name.trim());
     onUpdate();
     setEditing(false);
     toast.success('Instance name updated');

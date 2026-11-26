@@ -379,7 +379,7 @@ export default function SchedulesTab({ agentId }) {
             return (
               <div
                 key={schedule.id}
-                className={`p-4 bg-port-card border rounded-lg ${schedule.enabled ? 'border-port-border' : 'border-port-border/50 opacity-60'}`}
+                className={`p-4 bg-port-card border rounded-lg ${schedule.enabled ? 'border-port-border' : 'border-port-border/50'}`}
               >
                 <div className="flex flex-wrap items-start justify-between gap-2">
                   <div className="min-w-0">
@@ -388,6 +388,7 @@ export default function SchedulesTab({ agentId }) {
                       <h3 className="font-semibold text-white">
                         {actionType?.label || schedule.action?.type}
                       </h3>
+                      {!schedule.enabled && <span className="text-xs px-2 py-0.5 rounded bg-gray-500/20 text-gray-400">Disabled</span>}
                       {schedule.isActive && (
                         <span className="text-xs px-2 py-0.5 rounded bg-port-success/20 text-port-success">
                           Active
