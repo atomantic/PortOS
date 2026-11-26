@@ -25,9 +25,10 @@ workflow automatically, and the page offers no unsupported Upgrade action.
   Hugging Face caches remain supported. Retirement does not uninstall them.
 
 Upgrading keeps saved training configuration, PostgreSQL run history and files on
-disk. Old queued or interrupted training entries close in the media queue.
-The LoRAs page manages installed adapters and lets operators remove the two
-retired data directories explicitly.
+disk. Old queued or interrupted training entries close in the media queue. PortOS
+continues to check for live legacy trainers before starting local accelerator
+work or applying an automatic update.
+Manage installed adapters and remove retired data from the LoRAs page.
 
 ## Explicit removal
 

@@ -5,7 +5,7 @@ import { join } from 'path';
 import { spawn, execFile, execFileSync } from 'node:child_process';
 import { promisify } from 'node:util';
 import { describe, expect, it, vi } from 'vitest';
-import { __cleanupHeldClaims, __findSurvivingTrainer as findSurvivingTrainer, __publishClaim, claimHeavyLocalJob, HEAVY_LOCAL_JOB_STALE_MS } from './heavyJobClaim.js';
+import { __cleanupHeldClaims, findSurvivingTrainer, __publishClaim, claimHeavyLocalJob, HEAVY_LOCAL_JOB_STALE_MS } from './heavyJobClaim.js';
 import { maintenance } from './maintenanceAdmission.js';
 
 const withClaimPath = async (run) => {

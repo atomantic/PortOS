@@ -4,8 +4,9 @@ import { manualUpdateBlockers } from '../lib/systemIdle.js';
 const deps = vi.hoisted(() => ({
   capability: vi.fn(), utilization: vi.fn(), jobs: vi.fn(), running: vi.fn(), models: vi.fn(), loaded: vi.fn(), tasks: vi.fn(), status: vi.fn(), agents: vi.fn(),
   mind: vi.fn(), operations: vi.fn(), updating: vi.fn(), runCount: vi.fn(), backupRunning: vi.fn(),
-  capacity: vi.fn(), modelCount: vi.fn(), mindRunning: vi.fn(), runnerAgents: vi.fn(),
+  capacity: vi.fn(), modelCount: vi.fn(), mindRunning: vi.fn(), runnerAgents: vi.fn(), retiredTrainer: vi.fn(),
 }));
+vi.mock('../lib/heavyJobClaim.js', () => ({ findSurvivingTrainer: deps.retiredTrainer }));
 vi.mock('../lib/cudaCapability.js', () => ({ getCudaCapability: deps.capability, getCudaUtilization: deps.utilization }));
 vi.mock('./mediaJobQueue/index.js', () => ({ listJobs: deps.jobs, getRunningJob: deps.running, getQueueCapacity: deps.capacity }));
 vi.mock('./mediaJobQueue/sanitizeJob.js', () => ({ sanitizeJob: (job) => ({ id: job.id, kind: job.kind, status: job.status, params: { musicStudio: job.params.musicStudio } }) }));
@@ -37,6 +38,7 @@ describe('active processing snapshot', () => {
     deps.updating.mockReturnValue(false);
     deps.runCount.mockResolvedValue(0);
     deps.backupRunning.mockReturnValue(false);
+    deps.retiredTrainer.mockResolvedValue(null);
     deps.capacity.mockReturnValue({ byKind: {} }); deps.modelCount.mockReturnValue(0);
     deps.mindRunning.mockReturnValue(false); deps.runnerAgents.mockResolvedValue([]);
   });
@@ -62,6 +64,21 @@ describe('active processing snapshot', () => {
     const { getObservedUpdateActivity } = await import('./activeProcessing.js');
     const kinds = manualUpdateBlockers(await getObservedUpdateActivity()).map(blocker => blocker.kind);
     expect(kinds).toEqual(['media-running:image', 'image-to-3d', 'agents-running', 'mind-thinking', 'llm-running', 'backup-running']);
+  });
+
+  it('counts a verified legacy trainer as active without creating a media queue row', async () => {
+    deps.jobs.mockReturnValue([]); deps.models.mockResolvedValue([]); deps.tasks.mockResolvedValue([]); deps.agents.mockResolvedValue([]);
+    deps.retiredTrainer.mockResolvedValueOnce({ pid: 777, run: 'private-run-path' });
+    const { getSystemActivity } = await import('./activeProcessing.js');
+    const snapshot = await getSystemActivity({ includeUpdateOwnership: true });
+
+    expect(snapshot.jobs).toEqual([]);
+    expect(snapshot.renders).toEqual([{ kind: 'retired-lora-training', noun: 'legacy LoRA trainer', to: '/models/loras' }]);
+    expect(snapshot.activity.idle).toBe(false);
+    expect(manualUpdateBlockers(snapshot)).toEqual([{ kind: 'render:retired-lora-training', label: '1 legacy LoRA trainer running', count: 1 }]);
+    expect(deps.retiredTrainer).toHaveBeenCalledTimes(1);
+
+    expect((await getSystemActivity()).activity.idle).toBe(true);
   });
 
   it('counts a direct Codex subscription call outside the toolkit and rejects a new call behind the update fence', async () => {
@@ -162,6 +179,7 @@ describe('persistent mind and idle verdict', () => {
     deps.status.mockResolvedValue({ activeAgents: 0 });
     deps.runCount.mockResolvedValue(0);
     deps.backupRunning.mockReturnValue(false);
+    deps.retiredTrainer.mockResolvedValue(null);
   });
 
   it('reports an active turn as thinking, carrying counts but no message content', async () => {
@@ -224,6 +242,7 @@ describe('queued agent count', () => {
     deps.status.mockResolvedValue({ activeAgents: 0 });
     deps.runCount.mockResolvedValue(0);
     deps.backupRunning.mockReturnValue(false);
+    deps.retiredTrainer.mockResolvedValue(null);
   });
 
   it('does not count a pending task a running agent already holds', async () => {
@@ -314,6 +333,7 @@ describe('LLM run and backup snapshot activity', () => {
   it('blocks idle while an LLM/pipeline run is in flight', async () => {
     deps.runCount.mockResolvedValue(1);
     deps.backupRunning.mockReturnValue(false);
+    deps.retiredTrainer.mockResolvedValue(null);
     const snapshot = await getActiveProcessing();
     expect(snapshot.llm).toMatchObject({ trusted: true, active: 1 });
     expect(snapshot.activity.idle).toBe(false);
@@ -326,6 +346,7 @@ describe('LLM run and backup snapshot activity', () => {
   it('refuses to read a failed run-count read as an idle one', async () => {
     deps.runCount.mockRejectedValue(new Error('toolkit unavailable'));
     deps.backupRunning.mockReturnValue(false);
+    deps.retiredTrainer.mockResolvedValue(null);
     const snapshot = await getActiveProcessing();
     expect(snapshot.llm).toMatchObject({ trusted: false, active: 0 });
     expect(snapshot.activity.idle).toBe(false);
@@ -335,6 +356,7 @@ describe('LLM run and backup snapshot activity', () => {
   it('reports zero active runs and idle when nothing is tracked', async () => {
     deps.runCount.mockResolvedValue(0);
     deps.backupRunning.mockReturnValue(false);
+    deps.retiredTrainer.mockResolvedValue(null);
     const snapshot = await getActiveProcessing();
     expect(snapshot.llm).toMatchObject({ trusted: true, active: 0 });
     expect(snapshot.activity.idle).toBe(true);

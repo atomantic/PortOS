@@ -21,8 +21,7 @@ import {
   runDatabasePhase,
   runPostRouteSequence,
   runPostListenSequence,
-  gateStepsForSmokeBoot,
-  SMOKE_BOOT_DISABLED_STEPS
+  gateStepsForSmokeBoot
 } from './bootstrapSequence.js';
 
 /** Records the order steps run in. `impl` lets a step return a value/promise. */

@@ -159,7 +159,7 @@ const readTrainerPid = async path => {
   } finally { await file.close(); }
 };
 
-async function findSurvivingTrainer({ root = PATHS.trainingRuns, ignorePid = null,
+export async function findSurvivingTrainer({ root = PATHS.trainingRuns, ignorePid = null,
   snapshot = async () => (await import('./detachedSpawn.js')).snapshotMaintenanceProcesses(),
   readControl = readTrainerPid } = {}) {
   let rootUnavailable = false;
@@ -235,7 +235,6 @@ async function findSurvivingTrainer({ root = PATHS.trainingRuns, ignorePid = nul
     return trainingCommand(command) && (runs.some(run => related(command, run)) || (rootUnavailable && related(command, root)));
   }) ?? null;
 }
-export { findSurvivingTrainer as __findSurvivingTrainer };
 
 const CLAIM_UNLINK_ATTEMPTS = 3;
 const CLAIM_UNLINK_RETRY_MS = 100;
@@ -494,7 +493,7 @@ export async function claimHeavyLocalJob({
   } finally { if (!handleState.retained) await permit?.finish(); }
 }
 
-// Pre-lock checks (recovery, surviving trainer, mutation lock), then one locked attempt.
+// Check for an existing trainer before taking the mutation lock, then recheck after publication.
 async function nextClaimStep(ctx, handleState) {
   const { pid, claimPath, survivorCheck } = ctx;
   if (localMutations.has(claimPath)) return { retryMs: 250, onDeadline: recoveryBusy };
