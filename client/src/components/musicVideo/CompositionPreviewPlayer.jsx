@@ -170,7 +170,7 @@ export default function CompositionPreviewPlayer({ project, audioUrl, seekReques
     cancelAnimationFrame(waiting.frame);
     clearTimeout(waiting.timer);
   }, []);
-  const stopPlayback = useCallback((time = audioRef.current?.currentTime || 0) => {
+  const stopPlayback = useCallback((time = audioRef.current?.currentTime || 0, { ended = false } = {}) => {
     const next = Math.min(Math.max(0, time), Math.max(0, duration - 1 / fps));
     cancelAudioStart();
     intent.current += 1;
@@ -178,7 +178,8 @@ export default function CompositionPreviewPlayer({ project, audioUrl, seekReques
     nativePlaying.current = false;
     audioRef.current?.pause?.();
     preview.pausePlayback(next);
-    if (audioRef.current && audioRef.current.currentTime !== next) audioRef.current.currentTime = next;
+    // Keep the media clock at the actual end so the timeline can detect its Out boundary.
+    if (!ended && audioRef.current && audioRef.current.currentTime !== next) audioRef.current.currentTime = next;
     setPreparing(false);
     setPlaying(false);
     setT(next);
@@ -360,7 +361,10 @@ export default function CompositionPreviewPlayer({ project, audioUrl, seekReques
 
   const togglePlay = () => {
     if (playing || preparing) stopPlayback();
-    else playFrom(audioRef.current?.currentTime || 0);
+    else {
+      if (audioRef.current?.ended) stopPlayback();
+      playFrom(audioRef.current?.currentTime || 0);
+    }
   };
 
   const retryPreview = () => {
@@ -465,7 +469,8 @@ export default function CompositionPreviewPlayer({ project, audioUrl, seekReques
         )}
         {lyric && !lyrics && <p className="text-xs italic break-words" aria-live="off" data-testid="preview-lyric">♪ {lyric}</p>}
       </div>
-      {audioUrl && <audio ref={audioRef} src={audioUrl} preload="none" data-song-clock="0" className="hidden" onError={handleAudioError} onEnded={() => stopPlayback()} />}
+      {audioUrl && <audio ref={audioRef} src={audioUrl} preload="none" data-song-clock="0" className="hidden" onError={handleAudioError}
+        onEnded={(event) => stopPlayback(event.currentTarget.currentTime, { ended: true })} />}
     </div>
   );
 }
