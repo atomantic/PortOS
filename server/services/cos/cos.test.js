@@ -20,7 +20,7 @@ import { registerCosOrphanRecoveryHandlers } from '../bootHookRegistry.js';
 import { firstLine } from './cosTaskStore.js';
 import { retryHoldMetadata, RETRY_HOLD_GRACE_MS } from '../../lib/taskRetryHold.js';
 import { canQueueImprovementTasks, DEFAULT_STATE } from './cosState.js';
-import { createDequeueCapacity, countRunningAgentsByLocalEndpoint, isUserTaskRunnableUnattended } from './cosDequeue.js';
+import { createDequeueCapacity, countRunningAgentsByLocalEndpoint, isUserTaskRunnableUnattended } from './cosDequeueAdmission.js';
 import { parseTasksMarkdown } from '../../lib/legacyTaskMarkdown.js';
 import { storedForm } from '../../lib/cos/cosTaskRows.js';
 import {
@@ -41,20 +41,20 @@ const __dirname = dirname(fileURLToPath(import.meta.url));
 const COS_SRC = readFileSync(join(__dirname, 'cos.js'), 'utf-8');
 // The task-generation engine (evaluateTasks + the improvement/idle generators
 // + applyPlanIdMetadata) was extracted to cosTaskGenerator.js (issue-741). The
-// spawn-side scheduler (dequeueNextTask, tryImmediateSpawn, the tasks:changed
-// listener) stays in cos.js. Source-level guards below read each invariant from
-// whichever module now owns it.
+// spawn-side scheduler lives in cosDequeue.js. Its event wiring stays in
+// cos.js; the source guards read each invariant where it is enforced.
 const GEN_SRC = readFileSync(join(__dirname, 'cosTaskGenerator.js'), 'utf-8');
 const SCHED_SRC = readFileSync(join(__dirname, 'cosJobScheduler.js'), 'utf-8');
 // The pure capacity tracker + idle tier-eligibility predicate that
-// dequeueNextTask (and these tests) call live in cosDequeue.js (issue #2530).
-const DEQ_SRC = readFileSync(join(__dirname, 'cosDequeue.js'), 'utf-8');
+// dequeueNextTask and the evaluator share live in cosDequeueAdmission.js.
+const ADMISSION_SRC = readFileSync(join(__dirname, 'cosDequeueAdmission.js'), 'utf-8');
+const DEQUEUE_SRC = readFileSync(join(__dirname, 'cosDequeue.js'), 'utf-8');
 
 // ─── Real capacity/gate exports driven by a thin harness ───────────────────
 
 /**
  * Build the REAL per-cycle capacity tracker (`createDequeueCapacity` from
- * cosDequeue.js) from a fixture state — the same tracker `dequeueNextTask`
+ * cosDequeueAdmission.js) from a fixture state — the same tracker `dequeueNextTask`
  * constructs. Exposes `availableSlots`, `perProjectLimit`, `spawnProjectCounts`,
  * and the `canSpawn`/`trackSpawn` closure the scheduler enforces. `spawned` is a
  * live numeric getter (not an array), so the drain harness below keeps its own
@@ -1170,10 +1170,10 @@ describe('cos.js source — priority + capacity invariants', () => {
     // own ordering (including this #7300 hold) is pinned once, behaviorally,
     // against the shared pass in cosTaskGenerator.test.js's
     // `describe('admitPendingUserTasks', …)` block.
-    const cosTier = extractFnBody(COS_SRC, COS_SRC.indexOf('async function spawnDequeuePriority1UserTasks'));
+    const cosTier = extractFnBody(DEQUEUE_SRC, DEQUEUE_SRC.indexOf('async function spawnDequeuePriority1UserTasks'));
     const genTier = extractFnBody(GEN_SRC, GEN_SRC.indexOf('async function spawnPriority1UserTasks'));
     for (const [label, body] of [
-      ['cos.js', cosTier],
+      ['cosDequeue.js', cosTier],
       ['cosTaskGenerator.js', genTier],
     ]) {
       expect(body, `${label} user tier must delegate to the shared admitPendingUserTasks pass`).toContain('admitPendingUserTasks(');
@@ -1261,9 +1261,9 @@ describe('cos.js source — priority + capacity invariants', () => {
     // The fallback `state.config.maxConcurrentAgentsPerProject || state.config.maxConcurrentAgents`
     // is the safety net for older state.json files that pre-date the
     // per-project cap. dequeueNextTask's capacity tracker was extracted to
-    // `createDequeueCapacity` in cosDequeue.js (issue #2530), so the dequeue-side
+    // `createDequeueCapacity` in cosDequeueAdmission.js (issue #2530), so the dequeue-side
     // fallback lives there now; evaluateTasks keeps its own inline copy.
-    const dequeueFn = extractFnBody(DEQ_SRC, DEQ_SRC.indexOf('export function createDequeueCapacity'));
+    const dequeueFn = extractFnBody(ADMISSION_SRC, ADMISSION_SRC.indexOf('export function createDequeueCapacity'));
     const evalFn    = extractFnBody(GEN_SRC, GEN_SRC.indexOf('export async function evaluateTasks'));
 
     const pattern = /maxConcurrentAgentsPerProject\s*\|\|\s*state\.config\.maxConcurrentAgents/;
@@ -1276,8 +1276,8 @@ describe('cos.js source — priority + capacity invariants', () => {
     // the running-agent tally — a refactor that drops either option silently
     // reverts to unlimited local dispatch, which is what caused the accelerator
     // OOM in the first place. Read from the real function body so a stray
-    // reference elsewhere in cos.js can't satisfy this.
-    const dequeueFn = extractFnBody(COS_SRC, COS_SRC.indexOf('async function dequeueNextTask'));
+    // reference elsewhere in cosDequeue.js can't satisfy this.
+    const dequeueFn = extractFnBody(DEQUEUE_SRC, DEQUEUE_SRC.indexOf('async function dequeueNextTask'));
     expect(dequeueFn).toMatch(/countRunningAgentsByLocalEndpoint\(/);
     expect(dequeueFn).toMatch(/resolveLocalEndpoint:/);
     expect(dequeueFn).toMatch(/localEndpointLimit:/);
@@ -1289,7 +1289,7 @@ describe('cos.js source — priority + capacity invariants', () => {
     // would be a weaker duplicate — it can only see a running-agent snapshot,
     // not the in-flight reservations the authoritative gate also counts — so it
     // could pass a task the chokepoint then holds, for an extra provider fetch.
-    const immediateFn = extractFnBody(COS_SRC, COS_SRC.indexOf('async function tryImmediateSpawn'));
+    const immediateFn = extractFnBody(DEQUEUE_SRC, DEQUEUE_SRC.indexOf('async function tryImmediateSpawn'));
     expect(immediateFn).not.toMatch(/resolveLocalEndpoint\(/);
     expect(immediateFn).not.toMatch(/countRunningAgentsByLocalEndpoint\(/);
   });
@@ -1339,11 +1339,11 @@ describe('cos.js source — priority + capacity invariants', () => {
     // Priorities 1 and 2 read from persisted queues, so skipping there is a
     // genuine defer — they keep the cap.
     for (const tier of ['spawnDequeuePriority0OnDemand', 'spawnDequeuePriority4IdleReview']) {
-      const body = extractFnBody(COS_SRC, COS_SRC.indexOf(`async function ${tier}`));
+      const body = extractFnBody(DEQUEUE_SRC, DEQUEUE_SRC.indexOf(`async function ${tier}`));
       expect(body, `${tier} must admit via canSpawnCommitted`).toMatch(/canSpawnCommitted\(/);
     }
     for (const tier of ['spawnDequeuePriority1UserTasks', 'spawnDequeuePriority2AutoApproved']) {
-      const body = extractFnBody(COS_SRC, COS_SRC.indexOf(`async function ${tier}`));
+      const body = extractFnBody(DEQUEUE_SRC, DEQUEUE_SRC.indexOf(`async function ${tier}`));
       expect(body, `${tier} defers rather than discards — it must keep the cap`).not.toMatch(/canSpawnCommitted\(/);
     }
   });
@@ -1352,10 +1352,10 @@ describe('cos.js source — priority + capacity invariants', () => {
     // Pin the strict-idle gate. If a refactor drops either fence, idle could
     // spawn alongside autoSystem and double-load the agent pool.
     // dequeueNextTask's idle tier (spawnDequeuePriority4IdleReview) now routes
-    // through the shared `isIdleTierEligible` predicate in cosDequeue.js
+    // through the shared `isIdleTierEligible` predicate in cosDequeueAdmission.js
     // (issue #2530), whose body carries the `spawned === 0` fence.
-    const idleTier = extractFnBody(COS_SRC, COS_SRC.indexOf('async function spawnDequeuePriority4IdleReview'));
-    const idlePred = extractFnBody(DEQ_SRC, DEQ_SRC.indexOf('export function isIdleTierEligible'));
+    const idleTier = extractFnBody(DEQUEUE_SRC, DEQUEUE_SRC.indexOf('async function spawnDequeuePriority4IdleReview'));
+    const idlePred = extractFnBody(ADMISSION_SRC, ADMISSION_SRC.indexOf('export function isIdleTierEligible'));
     // The generator engine's tiers are decomposed into named spawnPriority*
     // helpers (issue #1082), so its gate lives in `spawnPriority4IdleReview`
     // — scope to the whole cosTaskGenerator module (the engine).
@@ -1364,7 +1364,7 @@ describe('cos.js source — priority + capacity invariants', () => {
     expect(idleTier, 'dequeue idle tier must call the shared workflow').toMatch(/admitIdleReviewTask\(/);
     expect(evalIdleTier, 'evaluate idle tier must call the shared workflow').toMatch(/admitIdleReviewTask\(/);
     expect(idlePred, 'isIdleTierEligible must fence on spawned === 0 && idleReviewEnabled').toMatch(/spawned\s*===\s*0\s*&&\s*!!idleReviewEnabled/);
-    const idleWorkflow = extractFnBody(DEQ_SRC, DEQ_SRC.indexOf('export async function admitIdleReviewTask'));
+    const idleWorkflow = extractFnBody(ADMISSION_SRC, ADMISSION_SRC.indexOf('export async function admitIdleReviewTask'));
     expect(idleWorkflow).toMatch(/isIdleTierEligible\(/);
     expect(idleWorkflow).toMatch(/idleReviewEnabled:\s*state\.config\.idleReviewEnabled/);
   });
@@ -1372,14 +1372,14 @@ describe('cos.js source — priority + capacity invariants', () => {
   it('CoS auto-run domain gate (#711) fences autonomous spawns in BOTH engines', () => {
     // Per-domain autonomy: the `cos` guardrail must gate every AUTOMATIC internal
     // spawn path — not just the auto-approved loop. Both spawn engines
-    // (dequeueNextTask in cos.js, evaluateTasks in cosTaskGenerator.js) must read
+    // (dequeueNextTask in cosDequeue.js, evaluateTasks in cosTaskGenerator.js) must read
     // the cos mode and fence their idle / auto-approved blocks on it,
     // or "off"/"dry-run" leaks autonomous agents through the un-gated engine.
     // dequeueNextTask resolves the cos mode in spawnDequeuePriority2AutoApproved
     // and fences its idle tier through the shared eligibility predicate
-    // (issue #2530) — both still live in the cos.js module, so scope to it.
-    const dequeueSrc = COS_SRC;
-    const dequeueP2 = extractFnBody(COS_SRC, COS_SRC.indexOf('async function spawnDequeuePriority2AutoApproved'));
+    // in cosDequeueAdmission.js.
+    const dequeueSrc = DEQUEUE_SRC;
+    const dequeueP2 = extractFnBody(DEQUEUE_SRC, DEQUEUE_SRC.indexOf('async function spawnDequeuePriority2AutoApproved'));
     const budgetResolver = extractFnBody(GEN_SRC, GEN_SRC.indexOf('export async function resolveAutonomyBudget'));
     // evaluateTasks resolves the mode in `resolveAutonomyBudget` and fences each
     // autonomous tier inside its spawnPriority* helper (issue #1082) — both still
@@ -1397,7 +1397,7 @@ describe('cos.js source — priority + capacity invariants', () => {
     expect(dequeueSrc, `dequeueNextTask must delegate idle admission to the shared workflow`).toMatch(/admitIdleReviewTask\(/);
     expect(dequeueP2, 'dequeue auto-approved tier must call the shared pass').toMatch(/admitAutoApprovedSystemTasks\(/);
     expect(GEN_SRC, 'the shared pass must withhold spawns unless mode is execute').toMatch(/cosAutonomyMode\s*!==\s*['"]execute['"]/);
-    expect(DEQ_SRC, `cosDequeue predicates must enforce autonomyMode === 'execute'`).toMatch(/autonomyMode\s*===\s*['"]execute['"]/);
+    expect(ADMISSION_SRC, `cosDequeueAdmission predicates must enforce autonomyMode === 'execute'`).toMatch(/autonomyMode\s*===\s*['"]execute['"]/);
   });
 
   it('CoS auto-run domain gate (#711) covers the scheduled-job + improvement-check timers', () => {

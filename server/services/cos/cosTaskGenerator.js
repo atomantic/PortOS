@@ -37,7 +37,7 @@ import { isAppOnCooldown, } from '../appActivity.js';
 // The single Priority-0 on-demand loop body, shared with the dequeueNextTask
 // engine in cos.js so the two can no longer drift (#6618).
 import { drainOnDemandRequests } from '../onDemandDrain.js';
-import { admitFeatureAgentTasks, admitIdleReviewTask, countUnregisteredInFlight, isUserTaskRunnableUnattended } from './cosDequeue.js';
+import { admitFeatureAgentTasks, admitIdleReviewTask, countUnregisteredInFlight, isUserTaskRunnableUnattended } from './cosDequeueAdmission.js';
 import { spawningTasks } from '../agent/agentState.js';
 import { getSkipReason } from './cosTaskClaim.js';
 import { ensureInstanceId } from '../instanceIdentity.js';
@@ -506,7 +506,7 @@ export async function admitPendingUserTasks({ pendingUserTasks, instanceId }, ad
     }
     // A user row that says it is NOT auto-approved is withheld from the unattended
     // spawn (#7300) — see isUserTaskRunnableUnattended for why, and for why the
-    // rule lives in cosDequeue.js rather than once per engine.
+    // rule lives in cosDequeueAdmission.js rather than once per engine.
     if (!isUserTaskRunnableUnattended(task)) {
       emitLog('debug', `Skipping user task ${task.id} — recovered row is not auto-approved`, { taskId: task.id });
       continue;
