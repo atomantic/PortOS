@@ -72,7 +72,7 @@ describe.skipIf(!canRun)('greybox captures in real Chrome', () => {
         temp: cacheDir,
         config: {
           configFile: false, root: client, cacheDir,
-          optimizeDeps: { entries: ['src/components/catalog/GreyboxCapture.jsx'], include: ['react', 'react-dom/client', 'three', '@react-three/fiber', '@react-three/drei'] },
+          optimizeDeps: { entries: ['src/components/catalog/GreyboxCapture.jsx'], include: ['react', 'react-dom/client', 'three', '@react-three/fiber'] },
           plugins: [react(), { name: 'greybox-fixture', configureServer(viteServer) {
             viteServer.middlewares.use('/greybox-test', async (_req, res) => {
               res.setHeader('Content-Type', 'text/html');

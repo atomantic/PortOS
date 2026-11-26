@@ -1,0 +1,31 @@
+import { createRef } from 'react';
+import { expect, it, vi } from 'vitest';
+import { sceneFixture } from '../../test/threeFixture.jsx';
+import { MapControls, OrbitControls } from './controls.jsx';
+
+it.each([OrbitControls, MapControls])('attaches default controls, forwards pointer events and restores the previous owner', async Controls => {
+  const fixture = await sceneFixture(null);
+  const previous = {};
+  fixture.state().set({ controls: previous });
+  const ref = createRef();
+  const onChange = vi.fn();
+  const onStart = vi.fn();
+  const onEnd = vi.fn();
+  const invalidate = vi.fn();
+  fixture.state().set({ invalidate });
+  await fixture.render(<Controls ref={ref} makeDefault target={[1,2,3]} onChange={onChange} onStart={onStart} onEnd={onEnd} />);
+  const controls = ref.current;
+  expect(fixture.state().controls).toBe(controls);
+  expect(controls.target.toArray()).toEqual([1,2,3]);
+  const update = vi.spyOn(controls, 'update');
+  const dispose = vi.spyOn(controls, 'dispose');
+  fixture.frame(1);
+  expect(update).toHaveBeenCalled();
+  for (const type of ['change','start','end']) controls.dispatchEvent({ type });
+  expect(invalidate).toHaveBeenCalled();
+  for (const listener of [onChange, onStart, onEnd]) expect(listener).toHaveBeenCalled();
+  await fixture.render(null);
+  expect(dispose).toHaveBeenCalledOnce();
+  expect(fixture.state().controls).toBe(previous);
+  await fixture.unmount();
+});

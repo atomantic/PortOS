@@ -85,6 +85,8 @@ const assertRouteClosures = (outDir, preloads) => {
   const reaches = (set, prefix) => [...set].some((file) => file.startsWith(prefix));
   const reachCount = (prefix) => [...lazy].filter((entry) => reaches(closure(entry), prefix)).length;
   // Source truth is ~16 lazy boundaries for three, ~12 for recharts and 1 for xterm.
+  const charts = files.find(file => file.startsWith('vendor-charts-'));
+  expect(reaches(closure(charts), 'vendor-three-')).toBe(false);
   expect(reachCount('vendor-three-')).toBeLessThanOrEqual(40);
   expect(reachCount('vendor-charts-')).toBeLessThanOrEqual(40);
   expect(reachCount('vendor-term-')).toBeLessThanOrEqual(3);
@@ -116,29 +118,12 @@ describe('vite chunk groups', () => {
   it('captures the whole three stack on both path separators', () => {
     const { test } = groupNamed('vendor-three');
     expect(test.test('/app/node_modules/three/build/three.module.js')).toBe(true);
-    expect(test.test('/app/node_modules/three-mesh-bvh/src/index.js')).toBe(true);
+    expect(test.test('/app/node_modules/three/examples/jsm/loaders/GLTFLoader.js')).toBe(false);
     expect(test.test('C:\\app\\node_modules\\@react-three\\fiber\\index.js')).toBe(true);
     // A `three`-prefixed package we do not depend on must not be swept in.
     expect(test.test('/app/node_modules/three-globe/index.js')).toBe(false);
-    // three-stdlib (loaders/exporters) is split into its own chunk (#8146).
-    expect(test.test('/app/node_modules/three-stdlib/index.js')).toBe(false);
   });
 
-  it('isolates the three-stdlib loaders/exporters into their own chunk (#8146)', () => {
-    const { test } = groupNamed('vendor-three-loaders');
-    expect(test.test('/app/node_modules/three-stdlib/loaders/GLTFLoader.js')).toBe(true);
-    expect(test.test('C:\\app\\node_modules\\three-stdlib\\exporters\\USDZExporter.js')).toBe(true);
-    expect(test.test('/app/node_modules/three/build/three.module.js')).toBe(false);
-  });
-
-  // The regression this guards against is one step downstream of the two
-  // above: `vite.config.js` once handed rolldown a narrowed `{ name, test }`
-  // per group, silently dropping every OTHER field — including
-  // `includeDependenciesRecursively`, which is what makes the
-  // `vendor-three-loaders` split above actually take effect at build time
-  // instead of being re-absorbed into `vendor-three` (#8146). The regex-level
-  // tests above would keep passing even if this field were dropped again,
-  // because they only exercise `vite.chunkGroups.js` in isolation.
   it('passes every CHUNK_GROUPS field through to rolldown, not just name/test', () => {
     const resolved = viteConfig({ command: 'build', mode: 'production' });
     const groups = resolved.build.rolldownOptions.output.codeSplitting.groups;
@@ -148,8 +133,8 @@ describe('vite chunk groups', () => {
     });
     // Pin the specific field the regression dropped: without it, this
     // assertion is silently vacuous (both sides simply lack the key).
-    const loaders = groups.find((g) => g.name === 'vendor-three-loaders');
-    expect(loaders.includeDependenciesRecursively).toBe(false);
+    const shared = groups.find((g) => g.name === 'app-shared');
+    expect(shared.includeDependenciesRecursively).toBe(false);
   });
 
   it('preserves module execution order when a group opts out of recursive capture', () => {
@@ -260,7 +245,7 @@ describe('vite chunk groups', () => {
         .filter((tag) => /\brel="modulepreload"/.test(tag))
         .map((tag) => tag.match(/\bhref="([^"]+)"/)[1]);
       expect(preloads.length).toBeLessThanOrEqual(12);
-      const lazyVendor = /\/vendor-(?:three(?:-loaders)?|charts|term)-/;
+      const lazyVendor = /\/vendor-(?:three|charts|term)-/;
       for (const href of preloads) {
         expect(href, href).not.toMatch(lazyVendor);
         const file = join(outDir, href.replace(/^\//, ''));

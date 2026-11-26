@@ -18,7 +18,7 @@ vi.mock('@react-three/fiber', () => ({
   useThree: () => ({ camera: {}, size: { width: 100, height: 100 } }),
 }));
 const orbitControlsSpy = vi.hoisted(() => vi.fn(() => null));
-vi.mock('@react-three/drei', () => ({ OrbitControls: orbitControlsSpy }));
+vi.mock('../../lib/threeHelpers/controls.jsx', () => ({ OrbitControls: orbitControlsSpy }));
 
 import GraphScene, { graphMotionSettings } from './GraphScene';
 

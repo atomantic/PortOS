@@ -1,6 +1,8 @@
-import { Suspense, useState, useEffect, useMemo, useRef, useCallback, useId } from 'react';
+import { useState, useEffect, useMemo, useRef, useCallback, useId } from 'react';
 import { Canvas, useFrame, useThree } from '@react-three/fiber';
-import { Billboard, OrbitControls, Text } from '@react-three/drei';
+import { Billboard } from '../../lib/threeHelpers/primitives.jsx';
+import { OrbitControls } from '../../lib/threeHelpers/controls.jsx';
+import { BillboardText } from '../../lib/threeHelpers/billboardText.jsx';
 import * as THREE from 'three';
 import { useNavigate } from 'react-router';
 import { Search, Plus, Wand2, Type } from 'lucide-react';
@@ -8,7 +10,6 @@ import { GOALS_TREE_PATH, goalTreeDetailPath } from './goalConstants';
 import { layoutGoalNodes } from './goalTreeLayout';
 import {
   DIMMED_LABEL_OPACITY,
-  GOAL_LABEL_FONT_URL,
   computeGraphBounds,
   fitCameraToBounds,
   goalLabelColor,
@@ -102,9 +103,7 @@ const noRaycast = () => null;
 const labelWorldPos = new THREE.Vector3();
 
 // A persistent, camera-facing goal title. Opacity is driven imperatively from the
-// frame loop: a per-frame setState would re-render the whole scene 60x a second,
-// and troika reads `fillOpacity` off the instance at draw time, so mutating it
-// needs no sync() and no React round-trip.
+// frame loop so camera motion need not re-render the goal tree.
 function GoalLabel({ node, dimmed, fadeRange }) {
   const groupRef = useRef();
   const textRef = useRef();
@@ -119,8 +118,7 @@ function GoalLabel({ node, dimmed, fadeRange }) {
     const distance = camera.position.distanceTo(group.getWorldPosition(labelWorldPos));
     const opacity = labelOpacityForDistance(distance, range) * (isDimmed ? DIMMED_LABEL_OPACITY : 1);
     group.visible = opacity > 0.02;
-    text.fillOpacity = opacity;
-    text.outlineOpacity = opacity;
+    text.opacity = opacity;
   });
 
   const label = goalLabelText(node.title);
@@ -129,21 +127,18 @@ function GoalLabel({ node, dimmed, fadeRange }) {
 
   return (
     <Billboard ref={groupRef} position={[node.x, node.y + goalLabelOffsetY(node), node.z]}>
-      <Text
+      <BillboardText
         ref={textRef}
-        font={GOAL_LABEL_FONT_URL}
+        fontFamily="GeistPixelSquare"
         fontSize={fontSize}
         color={goalLabelColor(node)}
-        anchorX="center"
-        anchorY="bottom"
-        textAlign="center"
         maxWidth={fontSize * 12}
         outlineWidth={fontSize * 0.1}
         outlineColor="#000000"
         raycast={noRaycast}
       >
         {label}
-      </Text>
+      </BillboardText>
     </Billboard>
   );
 }
@@ -237,20 +232,14 @@ function GoalScene({ graph, bounds, selectedId, adjacentIds, onSelect, onHover, 
         );
       })}
 
-      {/* Own Suspense boundary: drei's <Text> suspends until the font loads, and
-          the Canvas-level boundary would blank the WHOLE scene while it does. */}
-      {showLabels && (
-        <Suspense fallback={null}>
-          {graph.nodes.map(node => (
-            <GoalLabel
-              key={`label-${node.id}`}
-              node={node}
-              dimmed={Boolean(selectedId && node.id !== selectedId && !adjacentIds?.has(node.id))}
-              fadeRange={fadeRange}
-            />
-          ))}
-        </Suspense>
-      )}
+      {showLabels && graph.nodes.map(node => (
+        <GoalLabel
+          key={`label-${node.id}`}
+          node={node}
+          dimmed={Boolean(selectedId && node.id !== selectedId && !adjacentIds?.has(node.id))}
+          fadeRange={fadeRange}
+        />
+      ))}
 
       {selNode && (
         <mesh geometry={sphereGeo} position={[selNode.x, selNode.y, selNode.z]} scale={selRadius + 0.2}>

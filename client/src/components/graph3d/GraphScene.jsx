@@ -1,6 +1,6 @@
 import { useEffect, useMemo, memo } from 'react';
 import { useThree } from '@react-three/fiber';
-import { OrbitControls } from '@react-three/drei';
+import { OrbitControls } from '../../lib/threeHelpers/controls.jsx';
 import * as THREE from 'three';
 import GraphEdges from './GraphEdges';
 import { pickNearestNodeByScreenDistance } from '../../lib/graphPicking';
