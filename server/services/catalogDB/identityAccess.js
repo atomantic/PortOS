@@ -15,9 +15,10 @@ function accessFromRows(rows, localId) {
     state: row.state, writable: reason === null, reason };
 }
 
-export async function getCatalogIdentityAccessForIds(ids) {
+export async function getCatalogIdentityAccessForIds(ids, { client } = {}) {
   if (!ids.length) return new Map();
-  const { rows } = await query(`SELECT requested.id AS requested_key, o.id, o.state, o.source_id, o.survivor_id,
+  const exec = client ? client.query.bind(client) : query;
+  const { rows } = await exec(`SELECT requested.id AS requested_key, o.id, o.state, o.source_id, o.survivor_id,
       o.source_owner, o.survivor_owner, o.local_owner, i.origin_instance_id,
       catalog_resolve_ingredient_id(requested.id) AS requested_id
     FROM unnest($1::text[]) requested(id)
@@ -47,7 +48,17 @@ export async function getCatalogIdentityAccess(id, { client } = {}) {
 
 export async function assertCatalogIdentityWritable(id, options) {
   const access = await getCatalogIdentityAccess(id, options);
-  if (!access || access.writable) return id;
+  assertWritable(access);
+  return id;
+}
+
+export async function assertCatalogIdentitiesWritable(ids, options) {
+  const access = await getCatalogIdentityAccessForIds(ids, options);
+  for (const id of ids) assertWritable(access.get(id));
+}
+
+function assertWritable(access) {
+  if (!access || access.writable) return;
   const messages = {
     CATALOG_IDENTITY_FENCED: 'This identity is awaiting coordinated completion or recovery',
     CATALOG_IDENTITY_RETAINED: 'This original is retained; select the canonical identity to edit',

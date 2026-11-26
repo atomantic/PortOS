@@ -20,24 +20,33 @@ import { rowToTag } from './shared.js';
  * tags are dropped. `{ client }` runs the upserts on the caller's transaction.
  */
 export async function normalizeTags(labels = [], { client } = {}) {
-  if (!Array.isArray(labels) || labels.length === 0) return [];
+  const [normalized] = await normalizeTagLists([labels], { client });
+  return normalized;
+}
+
+export async function normalizeTagLists(lists, { client } = {}) {
   const exec = client ? client.query.bind(client) : query;
 
-  // De-dup by canonical key, order-preserving, first-seen casing wins.
+  // Preserve each ingredient's tag order, with first-seen casing across the batch.
   const wanted = new Map();
-  for (const raw of labels) {
-    const key = canonicalTagKey(raw);
-    if (!key || wanted.has(key)) continue;
-    wanted.set(key, { id: tagIdForKey(key), label: String(raw).trim().replace(/\s+/g, ' ') });
-  }
-  if (wanted.size === 0) return [];
+  const idsByList = lists.map((labels) => {
+    const ids = new Set();
+    for (const raw of Array.isArray(labels) ? labels : []) {
+      const key = canonicalTagKey(raw);
+      if (!key) continue;
+      const id = tagIdForKey(key);
+      ids.add(id);
+      if (!wanted.has(id)) wanted.set(id, String(raw).trim().replace(/\s+/g, ' '));
+    }
+    return [...ids];
+  });
+  if (wanted.size === 0) return idsByList;
 
-  const entries = [...wanted.values()];
   // Query 1 — read every pre-existing row in one round-trip. A stored label
   // always wins over the incoming casing (`Noir` beats a later `NOIR`).
   const existing = await exec(
     `SELECT id, label FROM catalog_tags WHERE id = ANY($1)`,
-    [entries.map((e) => e.id)],
+    [[...wanted.keys()]],
   );
   const canonical = new Map(existing.rows.map((r) => [r.id, r.label]));
 
@@ -45,7 +54,8 @@ export async function normalizeTags(labels = [], { client } = {}) {
   // ON CONFLICT DO NOTHING keeps first-write-wins; a row that conflicts here
   // was created between the two statements, so fall back to the incoming
   // label rather than spending another round-trip re-reading it.
-  const missing = entries.filter((e) => !canonical.has(e.id));
+  // Use one lock order for concurrent batches with overlapping new tags.
+  const missing = [...wanted.keys()].filter((id) => !canonical.has(id)).sort();
   if (missing.length > 0) {
     const values = missing.map((_, i) => `($${i * 2 + 1}, $${i * 2 + 2})`).join(', ');
     const ins = await exec(
@@ -53,12 +63,12 @@ export async function normalizeTags(labels = [], { client } = {}) {
        VALUES ${values}
        ON CONFLICT (id) DO NOTHING
        RETURNING id, label`,
-      missing.flatMap((e) => [e.id, e.label]),
+      missing.flatMap((id) => [id, wanted.get(id)]),
     );
     for (const row of ins.rows) canonical.set(row.id, row.label);
   }
 
-  return entries.map((e) => canonical.get(e.id) ?? e.label);
+  return idsByList.map((ids) => ids.map((id) => canonical.get(id) ?? wanted.get(id)));
 }
 
 /**

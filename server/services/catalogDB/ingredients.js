@@ -36,7 +36,7 @@ import {
   liveHomingTargetSql,
   STORYBOARD_PANEL_MEMBERS_SQL,
 } from './shared.js';
-import { normalizeTags } from './tags.js';
+import { normalizeTagLists, normalizeTags } from './tags.js';
 import { assertCatalogIdentityWritable, getCatalogIdentityAccessForIds } from './identityAccess.js';
 import { toPgJson } from '../../lib/pgJson.js';
 import { ServerError } from '../../lib/errorHandler.js';
@@ -98,12 +98,23 @@ export const setIngredientLock = (id, locked) => setIngredientPayloadKey(id, 'lo
   },
 });
 
+const ingredientTagLabels = (type, tags) => [...defaultTagsForType(type), ...(tags || [])];
+
+export async function createScrapIngredients(drafts, { client }) {
+  const tagLists = await normalizeTagLists(drafts.map(({ type, tags }) => ingredientTagLabels(type, tags)), { client });
+  const created = [];
+  for (const [index, draft] of drafts.entries()) {
+    created.push(await createIngredient(draft, { client, source: 'extract', normalizedTags: tagLists[index] }));
+  }
+  return created;
+}
+
 // `{ client }` is optional — when supplied, SQL runs on the caller's transaction
 // client (so the write rolls back if a later step in the same `withTransaction`
 // block throws). Standalone creates own a transaction including tags and history.
 // See `POST /api/catalog/scraps/:id/commit` for the scrap-commit batch that
 // needs every per-draft ingredient + source-link to commit-or-rollback together.
-export async function createIngredient({ id: explicitId, type, name, payload = {}, tags = [], embedding = null, embeddingModel = null } = {}, { client, source = 'user', actor = null } = {}) {
+export async function createIngredient({ id: explicitId, type, name, payload = {}, tags = [], embedding = null, embeddingModel = null } = {}, { client, source = 'user', actor = null, normalizedTags } = {}) {
   if (!type || !getActiveCatalogType(type)) throw new Error(`Invalid ingredient type: ${type}`);
   if (!name || !String(name).trim()) throw new Error('name is required');
 
@@ -138,7 +149,7 @@ export async function createIngredient({ id: explicitId, type, name, payload = {
   // rows on first use) and seed the type's registry default tags. The freeform
   // TEXT[] column stores the canonical labels so existing tag-search/GIN paths
   // keep working unchanged.
-  const normalizedTags = await normalizeTags([...defaultTagsForType(type), ...(tags || [])], { client });
+  const storedTags = normalizedTags ?? await normalizeTags(ingredientTagLabels(type, tags), { client });
   const result = await exec(
     `INSERT INTO catalog_ingredients
        (id, type, name, payload, tags, embedding, embedding_model, origin_instance_id)
@@ -149,7 +160,7 @@ export async function createIngredient({ id: explicitId, type, name, payload = {
       type,
       String(name).trim(),
       toPgJson(storedPayload),
-      normalizedTags,
+      storedTags,
       embedding ? arrayToPgvector(embedding) : null,
       embeddingModel,
       originInstanceId,
@@ -157,10 +168,9 @@ export async function createIngredient({ id: explicitId, type, name, payload = {
   );
   const created = rowToIngredient(result.rows[0]);
   // Seed an initial revision so the history list shows the original state and a
-  // restore can always return to "as created". Runs on the same transaction
-  // client when one was supplied (scrap-commit batch) so a mid-batch rollback
-  // drops the seed revision alongside its ingredient.
-  await recordIngredientRevision(created, { source, actor, client });
+  // restore can always return to "as created". A just-inserted ingredient has
+  // nothing to prune, and its seed revision rolls back with the ingredient.
+  await recordIngredientRevision(created, { source, actor, client, skipPrune: true });
   return created;
 }
 
@@ -345,7 +355,7 @@ export async function updateIngredientIfFresh(id, patch, { sourceUpdatedAt, prio
  * rows. Called from updateIngredient (content changes) and createIngredient's
  * seed path. `{ client }` runs the insert on a caller transaction when present.
  */
-export async function recordIngredientRevision(ingredient, { source = 'user', actor = null, client } = {}) {
+export async function recordIngredientRevision(ingredient, { source = 'user', actor = null, client, skipPrune = false } = {}) {
   if (!ingredient?.id) return null;
   const src = REVISION_SOURCES.has(source) ? source : 'user';
   const exec = client ? client.query.bind(client) : query;
@@ -366,7 +376,7 @@ export async function recordIngredientRevision(ingredient, { source = 'user', ac
   );
   // Prune to the retention cap. Keep the newest N by created_at (tie-break on
   // id so a same-millisecond burst prunes deterministically). DELETE the rest.
-  await exec(
+  if (!skipPrune) await exec(
     `DELETE FROM catalog_ingredient_revisions
       WHERE ingredient_id = $1
         AND id NOT IN (
