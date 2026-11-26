@@ -66,9 +66,17 @@ const REAL_TREE_SOURCES = [
   'client/src/components/musicVideo/ProductionReviewPanel.jsx',
   'server/lib/eidoversePort.js', 'server/services/eidoverse.js', 'server/services/catalog/catalogSync.js', 'server/services/musicVideo/documentRender.js',
   'server/services/maintenanceRun.js', 'scripts/lib/guardBudget.js', 'scripts/pregate.js', 'server/test/admissionSetup.js',
+  'server/lib/testHelper.js',
 ];
 let realTreeInputs;
 const realTree = () => (realTreeInputs ??= collectPlanInputs({ baseSha: 'HEAD', changedFiles: REAL_TREE_SOURCES, cwd: REPO_ROOT }));
+
+it('includes the CTC contract in the related plan for changes to its Python test helper', () => {
+  const source = 'server/lib/testHelper.js';
+  const { server } = buildCiTestPlan([source], realTree());
+  expect(server.mode).toBe('related');
+  expect(server.files).toContain('scripts/ml/align_lyrics_ctc.test.js');
+});
 
 const TRACKED = [
   'server/lib/moduleSummaries.test.js',
