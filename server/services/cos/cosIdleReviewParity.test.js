@@ -138,7 +138,10 @@ vi.mock('./cosLocalEndpointSlots.js', async (importActual) => ({
 vi.mock('../featureAgents.js', async (importActual) => ({
   ...(await importActual()),
   getDueFeatureAgents: async () => [...mocks.dueFeatureAgents],
-  setCurrentAgent: async (...args) => { mocks.featureAgentPending.push(args); },
+  queueFeatureAgentTask: async (task) => {
+    mocks.featureAgentPending.push([task.metadata.featureAgentId, task.id]);
+    return { task };
+  },
 }));
 
 const { evaluateTasks } = await import('./cosTaskGenerator.js');
