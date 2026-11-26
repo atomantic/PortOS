@@ -1,10 +1,11 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import { act, render, screen, waitFor } from '@testing-library/react';
+import { act, render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { MemoryRouter, useLocation } from 'react-router';
 
 vi.mock('../../services/apiLocalLlm.js', () => ({
   getLocalLlmAssessments: vi.fn(),
+  getMtplxServerStatus: vi.fn(),
   runLocalLlmAssessment: vi.fn(),
   runOpenCodeAgentBenchmark: vi.fn(),
   deleteLocalLlmAssessment: vi.fn(),
@@ -36,6 +37,7 @@ vi.mock('../../services/apiModelPerformance', () => ({
 import {
   getModelCapabilityTests,
   getLocalLlmAssessments,
+  getMtplxServerStatus,
   runLocalLlmAssessment,
   runOpenCodeAgentBenchmark,
   deleteLocalLlmAssessment,
@@ -149,6 +151,7 @@ describe('LocalModelAssessments', () => {
     vi.clearAllMocks();
     idleSweep();
     getLocalLlmAssessments.mockResolvedValue(report());
+    getMtplxServerStatus.mockResolvedValue({ cachedModelRows: [], cacheError: null });
     getModelPerformanceBenchmarks.mockResolvedValue({ schemaVersion: 1, observations: [], inventory: [] });
   });
 
@@ -180,10 +183,37 @@ describe('LocalModelAssessments', () => {
     await user.click(screen.getAllByRole('button', { name: 'Run task check' })[0]);
     await waitFor(() => expect(runOpenCodeAgentBenchmark).toHaveBeenCalledWith({
       backend: 'llama', modelId: 'dflash',
-    }));
+    }, { silent: true }));
     expect(await screen.findByText('sentinel complete')).toBeInTheDocument();
     expect(screen.getByText(/4s fastest completion/)).toBeInTheDocument();
     expect(screen.getByText(/PTY-backed TUI/)).toBeInTheDocument();
+  });
+
+  it('offers both Inkling presets and ranks results independently for complete MTPLX checkpoints', async () => {
+    const first = 'example/Inkling-MTP';
+    const second = 'example/Other-MTP';
+    getMtplxServerStatus.mockResolvedValue({
+      cachedModelRows: [{ repo: first, valid: true }, { repo: second, valid: true }, { repo: 'example/partial', valid: false }],
+      cacheError: null,
+    });
+    runOpenCodeAgentBenchmark
+      .mockResolvedValueOnce({ backend: 'mtplx', modelId: first, completed: true, elapsedMs: 4000 })
+      .mockResolvedValueOnce({ backend: 'mtplx', modelId: second, completed: false, error: 'Task could not complete' });
+    const user = userEvent.setup();
+    await renderPanel('/models/performance/agent-checks');
+    expect(screen.getByText('inkling2-mini')).toBeInTheDocument();
+    expect(screen.getByText('thinkingmachines/Inkling-2-Mini')).toBeInTheDocument();
+    expect(screen.queryByText('example/partial')).not.toBeInTheDocument();
+    const firstCard = within((await screen.findByText(first)).parentElement);
+    const secondCard = within(screen.getByText(second).parentElement);
+
+    await user.click(firstCard.getByRole('button', { name: 'Run task check' }));
+    await user.click(secondCard.getByRole('button', { name: 'Run task check' }));
+
+    expect(runOpenCodeAgentBenchmark).toHaveBeenNthCalledWith(1, { backend: 'mtplx', modelId: first }, { silent: true });
+    expect(runOpenCodeAgentBenchmark).toHaveBeenNthCalledWith(2, { backend: 'mtplx', modelId: second }, { silent: true });
+    expect(firstCard.getByText('sentinel complete')).toBeInTheDocument();
+    expect(secondCard.getByText('Task could not complete')).toBeInTheDocument();
   });
 
   it('renders measured numbers for a ranked model', async () => {

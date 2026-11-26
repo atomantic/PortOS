@@ -51,7 +51,8 @@ const SHIPPED_REFRESHABLE = [
   // `/v1/messages` endpoint, but the catalog still comes from the OpenAI-side
   // listing — the `sglangBacked` marker selects that fetcher, not the command.
   'claude-sglang', 'claude-sglang-tui',
-  'splash', 'opencode-splash', 'claude-splash',
+  'splash', 'opencode-splash', 'opencode-splash-tui', 'claude-splash',
+  'mkserve', 'opencode-mkserve', 'opencode-mkserve-tui',
 ];
 const SHIPPED_NOT_REFRESHABLE = [
   'claude-code-tui-bedrock',
@@ -86,7 +87,7 @@ describe('MODEL_FETCHERS — shipped catalog visibility is unchanged', () => {
     expect([...SHIPPED_REFRESHABLE, ...SHIPPED_NOT_REFRESHABLE].sort()).toEqual(ids);
   });
 
-  it('answers exactly as the pre-table dispatch chains did', () => {
+  it('matches the expected refresh capability for each shipped provider', () => {
     for (const provider of Object.values(SHIPPED.providers)) {
       expect(
         canRefreshModels(provider),

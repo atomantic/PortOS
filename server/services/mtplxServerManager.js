@@ -535,10 +535,10 @@ export const startMtplxServer = (options = {}) => onDemand.runStart(() => launch
  * failed tuning relaunch puts back: without it the restore would bring the
  * daemon up untuned and call that "the previous configuration".
  *
- * @param {{port?: number, model?: string, tuning?: object, waitMs?: number, onProgress?: (line: string) => void}} options
+ * @param {{port?: number, model?: string, tuning?: object, temporary?: boolean, waitMs?: number, onProgress?: (line: string) => void}} options
  */
 async function launchMtplxServer(options = {}) {
-  const { port = DEFAULT_PORT, model: requestedModel = null, tuning = null, waitMs, onProgress = () => {} } = options;
+  const { port = DEFAULT_PORT, model: requestedModel = null, tuning = null, temporary = false, waitMs, onProgress = () => {} } = options;
   const normalizedTuning = normalizeTuning('mtplx', tuning);
   const emit = (line) => { appendLog(line); onProgress(line); };
 
@@ -599,7 +599,7 @@ async function launchMtplxServer(options = {}) {
     describeExit: (lines) => isMtplxRuntimeBootstrapFailure(lines.join('\n'))
       ? MTPLX_RUNTIME_BOOTSTRAP_ERROR
       : null,
-    onStarted: () => persistDaemonLaunchConfig({ key: 'mtplx', label: 'MTPLX', launch: { port, model, tuning: normalizedTuning } }),
+    onStarted: temporary ? undefined : () => persistDaemonLaunchConfig({ key: 'mtplx', label: 'MTPLX', launch: { port, model, tuning: normalizedTuning } }),
   });
 }
 
@@ -751,18 +751,18 @@ async function relaunchWithTuning(normalized, knobs) {
  * previous launch line goes back up, or MTPLX is stopped again when it was not running before.
  * Refuses to stop a server unless PortOS owns it and can name its checkpoint.
  *
- * `fn` receives the served model id as `/v1/models` reports it, which is what a request names.
+ * `fn` receives the served model id as `/v1/models` reports it and the endpoint serving it.
  *
  * @param {string} model a cached MTPLX repo id
- * @param {(servedModelId: string|null) => Promise<*>} fn
- * @param {{ signal?: AbortSignal }} [options] abort the switch while the new checkpoint is still loading
+ * @param {(servedModelId: string|null, endpoint: string) => Promise<*>} fn
+ * @param {{ signal?: AbortSignal, requireCached?: boolean }} [options] abort loading or require a complete cache entry
  */
-export async function runOnMtplxCheckpoint(model, fn, { signal } = {}) {
+export async function runOnMtplxCheckpoint(model, fn, { signal, requireCached = false } = {}) {
   if (signal?.aborted) throw checkpointAborted();
-  const switched = await onDemand.runStart(() => switchToCheckpoint(model, signal));
+  const switched = await onDemand.runStart(() => switchToCheckpoint(model, { signal, requireCached }));
   try {
     if (signal?.aborted) throw checkpointAborted();
-    return await fn(switched.servedModelId);
+    return await fn(switched.servedModelId, switched.endpoint);
   } finally {
     if (switched?.previous !== undefined) {
       await onDemand.runStart(() => restoreAfterCheckpoint(switched)).catch((err) => {
@@ -780,11 +780,20 @@ const checkpointAborted = () => {
 
 const servedModelIdAt = async (endpoint) => (await probeOpenAiModels(endpoint, { timeoutMs: PROBE_TIMEOUT_MS })).models?.[0] ?? null;
 
-async function switchToCheckpoint(model, signal) {
+async function switchToCheckpoint(model, { signal, requireCached }) {
   if (signal?.aborted) throw checkpointAborted();
   const status = await getMtplxServerStatus();
+  if (requireCached) {
+    if (status.cacheError) {
+      throw new ServerError(`MTPLX model cache could not be read: ${status.cacheError}`, { status: 503, code: 'MTPLX_CACHE_UNAVAILABLE' });
+    }
+    if (!status.cachedModelRows.some((row) => row.repo === model && row.valid)) {
+      throw new ServerError('Choose a complete cached checkpoint on the MTPLX runtime card', { status: 400, code: 'MTPLX_NO_CACHED_MODEL' });
+    }
+  }
   if (status.running && status.config?.model === model) {
-    return { servedModelId: await servedModelIdAt(endpointFor(status.config)), previous: undefined };
+    const endpoint = endpointFor(status.config);
+    return { endpoint, servedModelId: await servedModelIdAt(endpoint), previous: undefined };
   }
   if (status.running && status.managed !== true) {
     const why = status.managed === null
@@ -798,21 +807,18 @@ async function switchToCheckpoint(model, signal) {
       code: 'MTPLX_SWITCH_REFUSED',
     });
   }
-  // `null` previous = MTPLX was not running, so it is stopped again afterwards. Every launch persists
-  // its line as the saved launch, so the saved one is kept to write back: otherwise the next on-demand
-  // start would serve the bench pack instead of the operator's choice.
+  // If MTPLX was stopped, restore that state without changing its saved launch.
   const previous = status.running ? status.config : null;
-  const savedLaunch = previous ? null : (await onDemand.savedLaunch().catch(() => null))?.raw ?? null;
-  const port = previous?.port ?? DEFAULT_PORT;
+  const port = previous?.port ?? status.launch.port ?? DEFAULT_PORT;
   console.log(`🚄 MTPLX: switching to ${model}${previous?.model ? ` (from ${previous.model})` : ''}`);
   if (previous) {
     await stopMtplxServer();
     await waitForPortRelease(port);
   }
-  const started = await launchMtplxServer({ port, model }).catch((failure) => ({ failure }));
+  const started = await launchMtplxServer({ port, model, temporary: true }).catch((failure) => ({ failure }));
   if (signal?.aborted && !started.failure) {
     await stopMtplxServer().catch(() => {});
-    await restoreAfterCheckpoint({ previous, savedLaunch, stopped: true }).catch((restoreErr) => {
+    await restoreAfterCheckpoint({ previous, stopped: true }).catch((restoreErr) => {
       console.error(`❌ MTPLX: could not put the previous checkpoint back after an aborted switch to ${model}: ${restoreErr?.message ?? restoreErr}`);
     });
     throw checkpointAborted();
@@ -821,19 +827,18 @@ async function switchToCheckpoint(model, signal) {
     : started.online ? { ready: true } : await onDemand.waitForReady(started.endpoint, { signal });
   if (!ready.ready) {
     if (!started.failure) await stopMtplxServer().catch(() => {});
-    await restoreAfterCheckpoint({ previous, savedLaunch, stopped: true }).catch((restoreErr) => {
+    await restoreAfterCheckpoint({ previous, stopped: true }).catch((restoreErr) => {
       console.error(`❌ MTPLX: could not put the previous checkpoint back after failed switch to ${model}: ${restoreErr?.message ?? restoreErr}`);
     });
     if (ready.aborted || signal?.aborted) throw checkpointAborted();
     throw new ServerError(`MTPLX could not serve ${model}: ${ready.reason}`, { status: 503, code: 'MTPLX_SWITCH_FAILED' });
   }
-  return { servedModelId: await servedModelIdAt(started.endpoint), previous, savedLaunch };
+  return { endpoint: started.endpoint, servedModelId: await servedModelIdAt(started.endpoint), previous };
 }
 
-async function restoreAfterCheckpoint({ previous, savedLaunch, stopped = false }) {
+async function restoreAfterCheckpoint({ previous, stopped = false }) {
   if (!stopped) await stopMtplxServer();
-  if (previous) await restorePrevious(previous, null);
-  else if (savedLaunch) await persistDaemonLaunchConfig({ key: 'mtplx', label: 'MTPLX', launch: savedLaunch });
+  if (previous) await restorePrevious(previous, null, { temporary: true });
 }
 
 /**
@@ -862,9 +867,9 @@ const launchFailureReason = (err) => (err?.code === 'MTPLX_EXITED'
  * the caller reports the tuning as not applied either way, and a config here
  * would claim a daemon that is not running.
  */
-async function restorePrevious(previous, failure) {
+async function restorePrevious(previous, failure, { temporary = false } = {}) {
   await waitForPortRelease(previous.port ?? DEFAULT_PORT);
-  const restored = await launchMtplxServer(previous).catch((err) => {
+  const restored = await launchMtplxServer({ ...previous, temporary }).catch((err) => {
     console.error(`❌ MTPLX: could not restore the previous configuration: ${err.message}`);
     return null;
   });

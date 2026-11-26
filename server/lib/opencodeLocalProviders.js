@@ -8,6 +8,7 @@
 
 import { PROVIDER_GATEWAYS } from './provider/providerGateways.js';
 import { PORTS } from './ports.js';
+import { MKSERVE_ORIGIN } from './mkserveRuntime.js';
 import { SPLASH_ORIGIN } from './splashRuntime.js';
 
 const LLAMA_SERVER_BASE_URL = `http://127.0.0.1:${PORTS.LLAMA_SERVER}/v1`;
@@ -36,6 +37,11 @@ export const OPENCODE_LOCAL_BASE_PROVIDERS = {
     npm: '@ai-sdk/openai-compatible',
     name: 'Splash (local)',
     options: { baseURL: `${SPLASH_ORIGIN}/v1` },
+  },
+  mkserve: {
+    npm: '@ai-sdk/openai-compatible',
+    name: 'mkserve (local)',
+    options: { baseURL: `${MKSERVE_ORIGIN}/v1` },
   },
   llama: {
     npm: '@ai-sdk/openai-compatible',

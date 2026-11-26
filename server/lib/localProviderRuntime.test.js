@@ -68,7 +68,7 @@ describe('localRuntimeForProvider', () => {
     expect(runtime.endpoint).toBe('http://127.0.0.1:8090/v1');
     // Models → Runtimes (#7414), not the LLMs catalog: llama-server's
     // lifecycle is what an unmet check sends the user to.
-    expect(runtime.manageUrl).toBe('/models/llms-runtimes');
+    expect(runtime.manageUrl).toBe('/models/llms-runtimes/llama');
   });
 
   it('falls back to the provider endpoint when the stored OpenCode config is unparseable', () => {
@@ -241,11 +241,11 @@ describe('LOCAL_RUNTIMES — user-facing copy names its page by route, never by 
     // LLMs. Pinned per runtime because getting ONE of these wrong is the whole
     // bug — a checklist that links llama.cpp at the catalog is a dead end.
     expect(LOCAL_RUNTIME_MANAGE_URLS).toEqual({
-      llama: '/models/llms-runtimes',
-      slotstream: '/models/llms-runtimes',
+      llama: '/models/llms-runtimes/llama',
+      slotstream: '/models/llms-runtimes/slotstream',
       splash: '/models/llms-runtimes/splash',
       mkserve: '/models/llms-runtimes/mkserve',
-      mtplx: '/models/llms-runtimes',
+      mtplx: '/models/llms-runtimes/mtplx',
       ollama: '/models/llms',
       lmstudio: '/models/llms',
       // Operator-owned compose projects: the readiness checklist is the only

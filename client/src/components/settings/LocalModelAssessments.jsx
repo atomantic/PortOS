@@ -42,12 +42,14 @@ import { tuningNoticeChip } from '../../lib/assessmentTuningNotice';
 import { decodeLocalModelAssessmentKey, localModelAssessmentPath } from '../../lib/localModelAssessmentKey';
 import {
   getLocalLlmAssessments,
+  getMtplxServerStatus,
   runLocalLlmAssessment,
   runOpenCodeAgentBenchmark,
   deleteLocalLlmAssessment,
   getModelCapabilityTests,
 } from '../../services/apiLocalLlm.js';
-import { LOCAL_RUNTIME_LABELS } from '../../../../server/lib/modelPinMembership.js';
+import { LOCAL_TUI_AGENT_BENCHMARK_TARGETS } from '../../../../server/lib/localAgentBenchmarkTargets.js';
+import { LOCAL_RUNTIME_LABELS, LOCAL_RUNTIME_MANAGE_URLS } from '../../../../server/lib/modelPinMembership.js';
 
 // Load benchmark and assessment panels only when their tab opens.
 const PortosModelBenchmarkPanel = lazyWithReload(() => import('./PortosModelBenchmarkPanel'));
@@ -80,13 +82,9 @@ const BACKEND_LABEL = {
   ollama: LOCAL_RUNTIME_LABELS.ollama, lmstudio: LOCAL_RUNTIME_LABELS.lmstudio, llama: LOCAL_RUNTIME_LABELS.llama, mtplx: LOCAL_RUNTIME_LABELS.mtplx, vllm: 'vLLM',
 };
 
-const OPENCODE_AGENT_TARGETS = [
-  { backend: 'llama', label: 'OpenCode llama TUI (Qwen3.8-27B → dflash)', modelId: 'dflash' },
-  { backend: 'mtplx', label: 'OpenCode MTPLX TUI', modelId: 'mtplx-qwen38-27b-optimized-speed' },
-  { backend: 'ollama', label: 'OpenCode Ollama TUI', modelId: 'qwen3.8:27b-mlx' },
-  { backend: 'ollama-coder', label: 'OpenCode Ollama TUI (Qwen3-Coder 30B)', modelId: 'qwen3-coder:30b' },
-  { backend: 'claude-ollama', label: 'Claude Ollama TUI', modelId: 'qwen3.8:27b-mlx' },
-];
+const STATIC_AGENT_TARGETS = Object.entries(LOCAL_TUI_AGENT_BENCHMARK_TARGETS)
+  .filter(([backend]) => backend !== 'mtplx')
+  .map(([backend, { label, modelId }]) => ({ backend, label, modelId }));
 
 const VERDICT_META = {
   fits: { label: 'Fits', cls: 'text-emerald-400 border-emerald-400/50' },
@@ -725,9 +723,35 @@ function RuntimeRoster({ runtimes }) {
   );
 }
 
-function OpenCodeAgentBenchmarkPanel({ results, running, onRun }) {
-  const completed = OPENCODE_AGENT_TARGETS
-    .map((target) => ({ target, result: results?.[target.backend] }))
+function OpenCodeAgentBenchmarkPanel({ active, results, running, onRun }) {
+  const [mtplxStatus, setMtplxStatus] = useState(null);
+  const [cacheError, setCacheError] = useState(null);
+  const [cacheLoading, setCacheLoading] = useState(true);
+  const [cacheRequest, setCacheRequest] = useState(0);
+
+  useEffect(() => {
+    if (!active) return;
+    let current = true;
+    setCacheLoading(true);
+    getMtplxServerStatus({ silent: true })
+      .then((status) => {
+        if (!current) return;
+        setCacheError(status.cacheError);
+        if (!status.cacheError) setMtplxStatus(status);
+      })
+      .catch((error) => { if (current) setCacheError(error?.message || 'Could not read the MTPLX cache'); })
+      .finally(() => { if (current) setCacheLoading(false); });
+    return () => { current = false; };
+  }, [active, cacheRequest]);
+
+  const mtplxModels = [...new Set((mtplxStatus?.cachedModelRows || [])
+    .filter((row) => row.valid && typeof row.repo === 'string')
+    .map((row) => row.repo))];
+  const targets = [...STATIC_AGENT_TARGETS, ...mtplxModels.map((modelId) => ({
+    backend: 'mtplx', label: LOCAL_TUI_AGENT_BENCHMARK_TARGETS.mtplx.label, modelId,
+  }))];
+  const completed = targets
+    .map((target) => ({ target, result: results?.[modelKey(target)] }))
     .filter(({ result }) => result?.completed);
   const leader = [...completed]
     .filter(({ result }) => Number.isFinite(result.elapsedMs))
@@ -750,14 +774,26 @@ function OpenCodeAgentBenchmarkPanel({ results, running, onRun }) {
       </details>
       {leader && (
         <div className="text-[11px] text-port-accent border border-port-accent/30 rounded px-2 py-1">
-          Current task leader: <span className="font-medium">{leader.target.label}</span> — {formatDurationMs(leader.result.elapsedMs)} fastest completion
+          Current task leader: <span className="font-medium">{leader.target.label} · {leader.target.modelId}</span> — {formatDurationMs(leader.result.elapsedMs)} fastest completion
         </div>
       )}
-      <div className="grid gap-1.5 sm:grid-cols-2 xl:grid-cols-5">
-        {OPENCODE_AGENT_TARGETS.map((target) => {
-          const result = results?.[target.backend];
+      {cacheLoading && <p className="text-[11px] text-gray-400" role="status">Reading cached MTPLX checkpoints…</p>}
+      {cacheError && (
+        <div className="flex flex-wrap items-center gap-2 text-[11px] text-port-warning">
+          <span role="status">MTPLX cache unavailable. {cacheError}</span>
+          <button type="button" disabled={cacheLoading} onClick={() => setCacheRequest((value) => value + 1)} className="rounded border border-port-border px-2 py-1 hover:border-port-accent disabled:opacity-50">Retry</button>
+        </div>
+      )}
+      {!cacheLoading && !cacheError && mtplxModels.length === 0 && (
+        <p className="text-[11px] text-gray-400">
+          Add a complete checkpoint on the <Link className="text-port-accent hover:underline" to={LOCAL_RUNTIME_MANAGE_URLS.mtplx}>MTPLX runtime page</Link> to run an MTPLX task check.
+        </p>
+      )}
+      <div className="grid gap-1.5 sm:grid-cols-2 lg:grid-cols-3 2xl:grid-cols-4">
+        {targets.map((target) => {
+          const result = results?.[modelKey(target)];
           return (
-            <div key={target.backend} className="bg-port-card border border-port-border/70 rounded p-2 space-y-1.5">
+            <div key={modelKey(target)} className="bg-port-card border border-port-border/70 rounded p-2 space-y-1.5">
               <div className="text-[11px] text-gray-300">{target.label}</div>
               <div className="text-[10px] text-gray-500 font-mono break-all">{target.modelId}</div>
               {result && (
@@ -1092,8 +1128,8 @@ export function LocalModelAssessments({ view, taskView, assessmentKey } = {}) {
   }, { errorMessage: 'Could not discard that measurement' });
 
   const [runAgentBenchmark, agentBenchmarkRunning] = useAsyncAction(async (target) => {
-    const result = await runOpenCodeAgentBenchmark({ backend: target.backend, modelId: target.modelId });
-    setAgentBenchmarkResults((previous) => ({ ...previous, [target.backend]: result }));
+    const result = await runOpenCodeAgentBenchmark({ backend: target.backend, modelId: target.modelId }, { silent: true });
+    setAgentBenchmarkResults((previous) => ({ ...previous, [modelKey(target)]: result }));
     if (result?.completed) {
       toast.success(`${target.label}: agent task completed`);
     } else if (result) {
@@ -1175,6 +1211,7 @@ export function LocalModelAssessments({ view, taskView, assessmentKey } = {}) {
         aria-labelledby="tab-agent-checks"
       >
         <OpenCodeAgentBenchmarkPanel
+          active={activeView === 'agent-checks'}
           results={agentBenchmarkResults}
           running={agentBenchmarkRunning || busy}
           onRun={runAgentBenchmark}

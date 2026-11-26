@@ -12,6 +12,7 @@
 import { z } from 'zod';
 import { isSplashContextWindow } from './splashRuntime.js';
 import { PORTS } from './ports.js';
+import { LOCAL_TUI_AGENT_BENCHMARK_TARGETS } from './localAgentBenchmarkTargets.js';
 import { ASSESSABLE_RUNTIMES } from './localProviderRuntime.js';
 import { BENCHMARK_PROFILE, SWEEP_SCOPES } from './localModelAssessment.js';
 import { CAPABILITY_TEST_IDS } from './modelCapabilityTests.js';
@@ -414,11 +415,10 @@ export const localLlmAssessmentBenchmarkSchema = z.object({
 export const localLlmAssessmentIntentSchema = z.object({
   intent: z.enum(['balanced', 'smartest', 'fastest', 'lightweight']).optional().default('balanced'),
 });
-// One explicit local-TUI task through each configured Qwen runtime preset. The
-// service still restricts the model id and provider to the named target for that
-// backend, so this endpoint cannot become an arbitrary CLI launcher.
+// One explicit local-TUI task. The service restricts execution to the
+// configured local runtime presets and checks MTPLX cache membership.
 export const localLlmAgentBenchmarkSchema = z.object({
-  backend: z.enum(['ollama', 'ollama-coder', 'mtplx', 'llama', 'claude-ollama']),
+  backend: z.enum(Object.keys(LOCAL_TUI_AGENT_BENCHMARK_TARGETS)),
   modelId: localLlmModelIdSchema,
   timeoutMs: z.coerce.number().int().min(10000).max(600000).optional().default(600000),
 });

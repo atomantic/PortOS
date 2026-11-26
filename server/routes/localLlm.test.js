@@ -954,17 +954,22 @@ describe('measured assessments wiring', () => {
     expect(res.body).toMatchObject({ error: 'Source backend is unavailable', code: 'BAD_GATEWAY' });
   });
 
-  it('runs the explicit OpenCode agent benchmark with a bounded timeout', async () => {
+  it.each([
+    ['ollama', 'qwen3.8:27b-mlx'],
+    ['splash', 'inkling2-mini'],
+    ['mkserve', 'thinkingmachines/Inkling-2-Mini'],
+    ['mtplx', 'example/cached-inkling'],
+  ])('runs the %s agent benchmark with a bounded timeout', async (backend, modelId) => {
     const res = await request(makeApp())
       .post('/api/local-llm/assessments/agent-benchmark')
-      .send({ backend: 'ollama', modelId: 'qwen3.8:27b-mlx', timeoutMs: 120000 });
+      .send({ backend, modelId, timeoutMs: 120000 });
 
     expect(res.status).toBe(200);
     expect(res.body).toMatchObject({
-      backend: 'ollama', modelId: 'qwen3.8:27b-mlx', timeoutMs: 120000, completed: true,
+      backend, modelId, timeoutMs: 120000, completed: true,
     });
     expect(runOpenCodeAgentBenchmark).toHaveBeenCalledWith({
-      backend: 'ollama', modelId: 'qwen3.8:27b-mlx', timeoutMs: 120000,
+      backend, modelId, timeoutMs: 120000,
     });
   });
 

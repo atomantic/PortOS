@@ -1357,15 +1357,15 @@ describe('supportsModelRefresh', () => {
       'claude-sglang', 'claude-sglang-tui', 'claude-splash', 'codex', 'codex-lmstudio',
       'codex-ollama', 'codex-tui',
       'cursor-cli',
-      'cursor-tui', 'grok', 'lmstudio', 'mtplx', 'nvidia-nim', 'ollama',
+      'cursor-tui', 'grok', 'lmstudio', 'mkserve', 'mtplx', 'nvidia-nim', 'ollama',
       'opencode-llama-tui',
       'opencode-lmstudio', 'opencode-lmstudio-tui',
-      'opencode-mtplx', 'opencode-mtplx-tui',
+      'opencode-mkserve', 'opencode-mkserve-tui', 'opencode-mtplx', 'opencode-mtplx-tui',
       'opencode-nvidia-nim', 'opencode-nvidia-nim-tui',
       'opencode-ollama',
       'opencode-ollama-tui', 'opencode-openrouter', 'opencode-openrouter-tui',
       'opencode-orcarouter', 'opencode-orcarouter-tui',
-      'opencode-sglang', 'opencode-sglang-tui', 'opencode-splash',
+      'opencode-sglang', 'opencode-sglang-tui', 'opencode-splash', 'opencode-splash-tui',
       'opencode-vllm', 'opencode-vllm-tui',
       // The Zen API record is an ordinary OpenAI-compatible endpoint. Its CLI/TUI
       // wrappers are deliberately ABSENT: they carry no namespace marker, which

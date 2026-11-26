@@ -1,3 +1,4 @@
+import { readFileSync } from 'node:fs';
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 
 // The REAL toolkit envelope, deliberately: `getAllProviders()` resolves
@@ -43,6 +44,14 @@ describe('resolveOpencodeTuiProvider', () => {
   it('finds the preset through the envelope getAllProviders actually returns', async () => {
     expect((await resolveOpencodeTuiProvider('ollama')).id).toBe('opencode-ollama-tui');
     expect((await resolveOpencodeTuiProvider('llama')).id).toBe('opencode-llama-tui');
+  });
+
+  it.each(['splash', 'mkserve'])('resolves the shipped %s TUI driver for capability tests', async (runtime) => {
+    const { providers } = JSON.parse(readFileSync(new URL('../../data.reference/providers.json', import.meta.url), 'utf8'));
+    toolkitProviders.mockResolvedValue(envelope(Object.values(providers)));
+    await expect(resolveOpencodeTuiProvider(runtime)).resolves.toMatchObject({
+      id: `opencode-${runtime}-tui`, enabled: false, type: 'tui', args: [],
+    });
   });
 
   it('matches on the provider marker, not on a hardcoded id', async () => {

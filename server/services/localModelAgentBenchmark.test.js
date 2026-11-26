@@ -1,18 +1,17 @@
 import { describe, expect, it, vi, beforeEach } from 'vitest';
 import { join } from 'path';
+import { readFileSync } from 'node:fs';
 vi.mock('./provider/providers.js', () => ({ getProviderById: vi.fn() }));
 vi.mock('./provider/providerExecutionReadiness.js', () => ({ ensureProviderReadyForExecution: vi.fn().mockResolvedValue({ success: true }) }));
 vi.mock('./tuiPromptRunner.js', () => ({ executeTuiRun: vi.fn() }));
 vi.mock('./runner.js', () => ({ getRunsPath: vi.fn(() => '/tmp/portos-benchmark-runs') }));
 vi.mock('../lib/heavyJobClaim.js', () => ({ claimHeavyLocalJob: vi.fn() }));
-vi.mock('../lib/provider/providerModels.js', () => ({
-  isOpencodeCommand: vi.fn(() => true),
-  isClaudeCommand: vi.fn((command) => command === 'claude'),
-}));
+vi.mock('./mtplxServerManager.js', () => ({ runOnMtplxCheckpoint: vi.fn() }));
 
 import { claimHeavyLocalJob } from '../lib/heavyJobClaim.js';
 import { getProviderById } from './provider/providers.js';
 import { ensureProviderReadyForExecution } from './provider/providerExecutionReadiness.js';
+import { runOnMtplxCheckpoint } from './mtplxServerManager.js';
 import { executeTuiRun } from './tuiPromptRunner.js';
 import {
   buildOpenCodeAgentBenchmarkPrompt,
@@ -36,6 +35,8 @@ describe('summarizeOpenCodeEvents', () => {
       .toEqual({ assistantChars: 4, toolCalls: 0, outputTokens: null });
   });
 });
+
+const { providers: seeds } = JSON.parse(readFileSync(new URL('../../data.reference/providers.json', import.meta.url), 'utf8'));
 
 describe('runOpenCodeAgentBenchmark', () => {
   let release;
@@ -157,6 +158,34 @@ describe('runOpenCodeAgentBenchmark', () => {
     expect(executeTuiRun).toHaveBeenCalledTimes(1);
   });
 
+  it.each([
+    ['splash', 'opencode-splash-tui', 'inkling2-mini'],
+    ['mkserve', 'opencode-mkserve-tui', 'thinkingmachines/Inkling-2-Mini'],
+  ])('runs the Inkling task check against the shipped %s TUI route', async (backend, providerId, modelId) => {
+    getProviderById.mockResolvedValueOnce(seeds[providerId]);
+    await expect(runOpenCodeAgentBenchmark({ backend, modelId })).resolves.toMatchObject({
+      backend, providerId, modelId, completed: true,
+    });
+    expect(getProviderById).toHaveBeenCalledWith(providerId);
+    expect(executeTuiRun.mock.calls[0][0].provider.defaultModel).toBe(modelId);
+  });
+
+  it('pins the served model and actual endpoint when selecting a cached MTPLX checkpoint', async () => {
+    const modelId = 'example/Inkling-MTP';
+    const servedModelId = 'inkling-mtp';
+    const endpoint = 'http://127.0.0.1:8010/v1';
+    getProviderById.mockResolvedValueOnce(seeds['opencode-mtplx-tui']);
+    runOnMtplxCheckpoint.mockImplementationOnce(async (_model, run) => run(servedModelId, endpoint));
+    await expect(runOpenCodeAgentBenchmark({ backend: 'mtplx', modelId })).resolves.toMatchObject({
+      backend: 'mtplx', modelId, completed: true,
+    });
+    expect(runOnMtplxCheckpoint).toHaveBeenCalledWith(modelId, expect.any(Function), { requireCached: true });
+    const { provider } = executeTuiRun.mock.calls[0][0];
+    expect(provider).toMatchObject({ defaultModel: servedModelId, endpoint });
+    expect(JSON.parse(provider.envVars.OPENCODE_CONFIG_CONTENT).provider.mtplx.options.baseURL).toBe(endpoint);
+    expect(release).toHaveBeenCalledOnce();
+  });
+
   it('refuses with 409 when another heavy local job holds the machine, before waking the runtime', async () => {
     claimHeavyLocalJob.mockResolvedValue({
       ok: false, holder: { kind: 'local-model assessment sweep' }, message: 'A sweep is running', release: async () => {},
@@ -177,7 +206,7 @@ describe('runOpenCodeAgentBenchmark', () => {
     expect(release).toHaveBeenCalledTimes(2);
   });
 
-  it('rejects a model outside the three explicit benchmark targets', async () => {
+  it('rejects a model outside the fixed benchmark preset', async () => {
     await expect(runOpenCodeAgentBenchmark({ backend: 'llama', modelId: 'other-model' }))
       .rejects.toMatchObject({ code: 'LOCAL_AGENT_BENCHMARK_TARGET_INVALID', status: 400 });
     expect(getProviderById).not.toHaveBeenCalled();

@@ -1,5 +1,5 @@
 /**
- * User-triggered local-TUI agent-task checks for the local Qwen runtimes.
+ * User-triggered local-TUI agent-task checks for supported local runtimes.
  *
  * The ordinary assessment measures one direct generation at several context
  * lengths. That is the right instrument for decoder throughput, but it cannot
@@ -19,7 +19,10 @@ import { mkdtemp, readFile, rm } from 'fs/promises';
 import { tmpdir } from 'os';
 import { join } from 'path';
 import { ServerError } from '../lib/errorHandler.js';
-import { isClaudeCommand, isOpencodeCommand } from '../lib/provider/providerModels.js';
+import { isClaudeCommand, isOpencodeCommand, localRuntimeNamespace, parseOpencodeConfigContent } from '../lib/provider/providerModels.js';
+import { localRuntimeForProvider } from '../lib/localProviderRuntime.js';
+import { LOCAL_TUI_AGENT_BENCHMARK_TARGETS } from '../lib/localAgentBenchmarkTargets.js';
+import { buildOpencodeConfig } from '../lib/opencodeConfig.js';
 // The stream parser is shared with the capability test suite: two independent
 // parsers of the same OpenCode envelope is how the two end up reporting
 // different tool-call counts for the same run.
@@ -29,44 +32,7 @@ import { getProviderById } from './provider/providers.js';
 import { ensureProviderReadyForExecution } from './provider/providerExecutionReadiness.js';
 import { executeTuiRun } from './tuiPromptRunner.js';
 import { getRunsPath } from './runner.js';
-
-export const LOCAL_TUI_AGENT_BENCHMARK_TARGETS = Object.freeze({
-  llama: Object.freeze({
-    providerId: 'opencode-llama-tui',
-    label: 'OpenCode llama TUI (Qwen3.8-27B served as dflash)',
-    command: 'opencode',
-    modelId: 'dflash',
-    aliases: Object.freeze(['qwen3.8-27b-dflash2']),
-  }),
-  mtplx: Object.freeze({
-    providerId: 'opencode-mtplx-tui',
-    label: 'OpenCode MTPLX TUI',
-    command: 'opencode',
-    modelId: 'mtplx-qwen38-27b-optimized-speed',
-    aliases: Object.freeze([]),
-  }),
-  ollama: Object.freeze({
-    providerId: 'opencode-ollama-tui',
-    label: 'OpenCode Ollama TUI',
-    command: 'opencode',
-    modelId: 'qwen3.8:27b-mlx',
-    aliases: Object.freeze([]),
-  }),
-  'ollama-coder': Object.freeze({
-    providerId: 'opencode-ollama-tui',
-    label: 'OpenCode Ollama TUI (Qwen3-Coder 30B)',
-    command: 'opencode',
-    modelId: 'qwen3-coder:30b',
-    aliases: Object.freeze([]),
-  }),
-  'claude-ollama': Object.freeze({
-    providerId: 'claude-ollama-tui',
-    label: 'Claude Ollama TUI',
-    command: 'claude',
-    modelId: 'qwen3.8:27b-mlx',
-    aliases: Object.freeze([]),
-  }),
-});
+import { runOnMtplxCheckpoint } from './mtplxServerManager.js';
 
 export const buildOpenCodeAgentBenchmarkPrompt = (benchmarkFilePath = 'PORTOS_AGENT_BENCHMARK.txt') => [
   'This is a disposable PortOS runtime benchmark. You must exercise the terminal tool loop.',
@@ -79,10 +45,11 @@ export const buildOpenCodeAgentBenchmarkPrompt = (benchmarkFilePath = 'PORTOS_AG
 const DEFAULT_TIMEOUT_MS = 10 * 60 * 1000;
 
 const targetFor = (backend, modelId) => {
-  const target = LOCAL_TUI_AGENT_BENCHMARK_TARGETS[backend];
-  if (!target || (modelId !== target.modelId && !target.aliases.includes(modelId))) {
+  const target = Object.hasOwn(LOCAL_TUI_AGENT_BENCHMARK_TARGETS, backend) && LOCAL_TUI_AGENT_BENCHMARK_TARGETS[backend];
+  if (!target || typeof modelId !== 'string' || !modelId.trim()
+    || (backend !== 'mtplx' && modelId !== target.modelId && !target.aliases.includes(modelId))) {
     throw new ServerError(
-      `Local TUI agent benchmark supports only the configured ${backend || 'local'} Qwen target`,
+      `Local TUI agent benchmark supports only the configured ${backend || 'local'} target`,
       { status: 400, code: 'LOCAL_AGENT_BENCHMARK_TARGET_INVALID' },
     );
   }
@@ -93,15 +60,17 @@ const targetFor = (backend, modelId) => {
 // the envelope itself lives in `lib/opencodeStream.js`.
 export { summarizeOpenCodeEvents };
 
-const validateProvider = (provider, target) => {
+const validateProvider = (provider, target, backend) => {
   if (!provider) {
     throw new ServerError(`Provider "${target.providerId}" is not configured`, { status: 503, code: 'LOCAL_AGENT_BENCHMARK_PROVIDER_MISSING' });
   }
   const commandMatches = target.command === 'claude'
     ? isClaudeCommand(provider.command)
     : isOpencodeCommand(provider.command);
-  if (provider.type !== 'tui' || !commandMatches) {
-    throw new ServerError(`Provider "${target.providerId}" is not an OpenCode TUI provider`, { status: 503, code: 'LOCAL_AGENT_BENCHMARK_PROVIDER_INVALID' });
+  const runtime = backend === 'claude-ollama' || backend === 'ollama-coder' ? 'ollama' : backend;
+  if (provider.type !== 'tui' || !commandMatches || localRuntimeNamespace(provider) !== runtime
+    || localRuntimeForProvider(provider)?.kind !== runtime) {
+    throw new ServerError(`Provider "${target.providerId}" must be a local ${target.label} provider`, { status: 503, code: 'LOCAL_AGENT_BENCHMARK_PROVIDER_INVALID' });
   }
 };
 
@@ -112,28 +81,47 @@ const validateProvider = (provider, target) => {
  * takes: a 10-minute run on the same runtime would otherwise contend with them
  * and corrupt both sets of timings. Refuses with 409 instead of waiting.
  *
- * @param {{backend:'llama'|'mtplx'|'ollama'|'ollama-coder'|'claude-ollama', modelId:string, timeoutMs?:number}} options
+ * @param {{backend:'llama'|'mtplx'|'ollama'|'ollama-coder'|'claude-ollama'|'splash'|'mkserve', modelId:string, timeoutMs?:number}} options
  */
 export async function runOpenCodeAgentBenchmark({ backend, modelId, timeoutMs = DEFAULT_TIMEOUT_MS } = {}) {
   const target = targetFor(backend, modelId);
   const provider = await getProviderById(target.providerId);
-  validateProvider(provider, target);
+  validateProvider(provider, target, backend);
 
   const claim = await claimHeavyLocalJob({ kind: 'local-model agent benchmark', id: `${backend}/${modelId}` });
   if (!claim.ok) {
     throw new ServerError(claim.message, { status: 409, code: 'HEAVY_LOCAL_JOB_BUSY', context: { holder: claim.holder } });
   }
   try {
-    return await executeBenchmark({ backend, modelId, timeoutMs, target, provider });
+    const startedAt = Date.now();
+    // Keep the shipped served-id target callable for existing installs. Other
+    // MTPLX targets are cache repo IDs and can require changing the checkpoint.
+    if (backend === 'mtplx' && modelId !== target.modelId) {
+      return await runOnMtplxCheckpoint(modelId, (servedModelId, endpoint) => {
+        if (!servedModelId) {
+          throw new ServerError('MTPLX did not report a served model ID', { status: 503, code: 'LOCAL_AGENT_BENCHMARK_MODEL_UNAVAILABLE' });
+        }
+        const config = buildOpencodeConfig(servedModelId, parseOpencodeConfigContent(provider.envVars?.OPENCODE_CONFIG_CONTENT), 'mtplx');
+        config.provider.mtplx.options = { ...config.provider.mtplx.options, baseURL: endpoint };
+        // Project the daemon endpoint onto the provider record. The TUI
+        // runner still builds the child environment through its normal path.
+        const envVars = { ...provider.envVars };
+        envVars.OPENCODE_CONFIG_CONTENT = JSON.stringify(config);
+        return executeBenchmark({
+          backend, modelId, timeoutMs, target, servedModelId, startedAt,
+          provider: { ...provider, endpoint, envVars },
+        });
+      }, { requireCached: true });
+    }
+    return await executeBenchmark({ backend, modelId, timeoutMs, target, provider, startedAt });
   } finally {
     await claim.release();
   }
 }
 
-async function executeBenchmark({ backend, modelId, timeoutMs, target, provider }) {
+async function executeBenchmark({ backend, modelId, timeoutMs, target, provider, startedAt, servedModelId = modelId }) {
   const scratchDir = await mkdtemp(join(tmpdir(), 'portos-opencode-agent-benchmark-'));
   const runId = `portos-opencode-agent-benchmark-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`;
-  const startedAt = Date.now();
   const benchmarkFilePath = join(scratchDir, 'PORTOS_AGENT_BENCHMARK.txt');
   try {
     // This benchmark uses the direct PTY runner instead of
@@ -167,7 +155,7 @@ async function executeBenchmark({ backend, modelId, timeoutMs, target, provider 
     const completion = await new Promise((resolve) => {
       executeTuiRun({
         runId,
-        provider: { ...provider, defaultModel: modelId },
+        provider: { ...provider, defaultModel: servedModelId },
         prompt: buildOpenCodeAgentBenchmarkPrompt(benchmarkFilePath),
         workspacePath: scratchDir,
         timeout: timeoutMs,

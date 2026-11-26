@@ -8,6 +8,7 @@ import { Readable } from 'node:stream';
 import { spawn } from '../lib/childProcess.js';
 import { atomicWrite, sha256File, sha256Text } from '../lib/fileCore.js';
 import { assessDownloadPreflight, assertDownloadFits, etagPathFor, partialPathFor, streamResumableDownload } from '../lib/downloadPreflight.js';
+import { MKSERVE_MODEL } from '../lib/mkserveRuntime.js';
 import { PATHS } from '../lib/paths.js';
 import { ServerError } from '../lib/errorHandler.js';
 import { runStreamingCommand } from '../lib/streamingSpawn.js';
@@ -15,7 +16,7 @@ import { artifactDownloadEnv } from '../lib/processEnv.js';
 import { withSpawnCwdEnv } from '../lib/spawnCwd.js';
 
 export const MKSERVE_VERSION = '95e315c808a7d935c10ef924a8fc0d901bfc3b89';
-export const MKSERVE_MODEL = 'thinkingmachines/Inkling-2-Mini';
+export { MKSERVE_MODEL };
 const MODEL_REVISION = 'c9d028302cd0f035fdf8e7e91f089a4ce94d2195';
 const ARCHIVE_SHA256 = 'c72e99348f3ba301df71ae6bce755be959f1a3e8db8fafc8c4275d6db4f9f5f3';
 // Patched uv is bootstrapped without requiring Python, Homebrew, or Xcode.
