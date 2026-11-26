@@ -225,6 +225,7 @@ export function createManagedVisitorBroker({ path, getApp, host, now = Date.now 
       expiresAt: pending ? null : unresolved.length || bootBound !== null ? Math.max(bootBound ?? 0, ...unresolved.map(session => session.admissionDeadline ?? session.hostExpiresAt)) : null };
   }
   return { authenticate, provision, revoke, capabilities, admit, leave, cancelAdmission,
+    withLiveCredentialRestore: queue,
     listCredentials: async () => (await read()).credentials.map(publicCredential),
     observe: (auth, id, input) => operate(auth, id, input, true), action: (auth, id, input) => operate(auth, id, input, false) };
 }

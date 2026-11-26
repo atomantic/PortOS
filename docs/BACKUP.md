@@ -82,10 +82,15 @@ subject to the same requirements as the individual stores below.
 | Scope | Before and after confirming the preview |
 | --- | --- |
 | `settings.json` | Wait for the restore to finish before making further edits. PortOS lets admitted saves finish before copying and reloads its settings cache before queued saves continue. |
+| `managed-visitor-credentials.json` | Use this exact path to restore managed visitor credentials. Credential changes wait for the restore to finish. |
 | `cos` | Stop the CoS daemon and Persistent Mind, then finish or stop active agents. Pausing the daemon alone is insufficient. PortOS reloads CoS configuration and runtime state after the transfer. Restart PortOS before using CoS if either reload fails. |
 | `cos/task-schedule.json` | Use this exact path to recover schedules alone. Queued schedule edits continue against the restored file after it has been normalized and the new schedule is published. |
 | `health` or one day under `health/` | Let the restore finish before checking the recovered days. PortOS drains admitted day writes, invalidates its Health caches, and then lets waiting imports continue. |
 | `media-models.json` | Wait for the restore to finish before editing the registry. If the registry reload fails, edits remain unavailable until a successful restore or a restart reloads it. |
+
+On POSIX, file restore publishes `settings.json` and
+`managed-visitor-credentials.json` at mode `0600`, including from older
+snapshots with broader permissions. Preview reports needed permission changes.
 
 ### Federation identity is kept unless adopted
 
