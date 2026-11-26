@@ -55,6 +55,16 @@ beforeAll(async () => {
 beforeEach(() => { auth.authenticated = true; vi.clearAllMocks(); });
 afterAll(cleanupTempDataRoots);
 
+it('accepts Web mastering on an explicit build and defaults a bodyless request to As mixed', async () => {
+  const path = `${base}/publish-kit/build`;
+  expect((await request(app).post(path).send({ loudnessPreset: '-14' })).status).toBe(400);
+  expect(sinks.startPublishKitBuild).not.toHaveBeenCalled();
+  expect((await request(app).post(path)).body).toEqual({ jobId: 'mvpk-synthetic' });
+  expect(sinks.startPublishKitBuild).toHaveBeenLastCalledWith(projectId, { loudnessPreset: 'as-mixed' });
+  expect((await request(app).post(path).send({ loudnessPreset: 'web' })).body).toEqual({ jobId: 'mvpk-synthetic' });
+  expect(sinks.startPublishKitBuild).toHaveBeenLastCalledWith(projectId, { loudnessPreset: 'web' });
+});
+
 describe('POST /:id/publish/:target/cross-links', () => {
   it('refuses an unauthenticated caller before touching the browser', async () => {
     auth.authenticated = false;
@@ -124,10 +134,10 @@ describe('publish kit routes', () => {
     expect(sinks.getPublishKitCropPreview).toHaveBeenCalledWith(projectId);
     const { post } = request(app);
     expect((await post(`${base}/publish-kit/build`)).status).toBe(200);
-    expect(sinks.startPublishKitBuild).toHaveBeenLastCalledWith(projectId, {});
+    expect(sinks.startPublishKitBuild).toHaveBeenLastCalledWith(projectId, { loudnessPreset: 'as-mixed' });
     const crop = { ...shown.body, position: 0 };
-    expect((await post(`${base}/publish-kit/build`).send({ crop })).status).toBe(200);
-    expect(sinks.startPublishKitBuild).toHaveBeenLastCalledWith(projectId, { crop });
+    expect((await post(`${base}/publish-kit/build`).send({ crop, loudnessPreset: 'web' })).status).toBe(200);
+    expect(sinks.startPublishKitBuild).toHaveBeenLastCalledWith(projectId, { crop, loudnessPreset: 'web' });
     for (const invalid of [{ position: -0.01 }, { position: 1.01 }, { position: '0.5' }, { renderHistoryId: '' }, { endSec: 3 }]) {
       expect((await post(`${base}/publish-kit/build`).send({ crop: { ...crop, ...invalid } })).status).toBe(400);
     }

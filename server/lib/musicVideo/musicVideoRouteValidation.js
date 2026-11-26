@@ -643,6 +643,7 @@ export const musicVideoPromotionPlanSchema = z.object({
 export const musicVideoPublishFrameSchema = z.object({ atSec: z.number().finite().min(0) }).strict();
 
 export const musicVideoPublishKitBuildSchema = z.object({
+  loudnessPreset: z.enum(['as-mixed', 'web']).default('as-mixed'),
   crop: z.object({
     renderHistoryId: videoHistoryIdSchema,
     filename: z.string().min(1).max(255),

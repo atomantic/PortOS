@@ -66,7 +66,7 @@ it('starts centered, requires a current preview and refreshes after a stale kick
   getMusicVideoPublishCropPreview.mockResolvedValue(refreshed);
   await act(async () => result.current.refreshCropPreview());
   act(() => result.current.setCropMediaState(refreshed));
-  await act(async () => result.current.build());
-  expect(buildMusicVideoPublishKit).toHaveBeenLastCalledWith('mv-example', { silent: true, crop: { ...refreshed, position: 0.85 } });
+  await act(async () => result.current.build({ loudnessPreset: 'web' }));
+  expect(buildMusicVideoPublishKit).toHaveBeenLastCalledWith('mv-example', { silent: true, crop: { ...refreshed, position: 0.85 }, loudnessPreset: 'web' });
   expect(lastEventSource().url).toBe('/events/mvpk-crop');
 });

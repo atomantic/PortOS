@@ -89,14 +89,16 @@ export default function useMusicVideoPublishKit({ project, replaceProject } = {}
   };
 
   const job = useSseJobSlot({
-    startRequest: (draft) => buildMusicVideoPublishKit(projectId, {
-      silent: true, ...(draft ? { crop: { ...draft.preview, position: draft.position } } : {}),
+    startRequest: ({ crop: draft, loudnessPreset }) => buildMusicVideoPublishKit(projectId, {
+      silent: true,
+      ...(loudnessPreset === undefined ? {} : { loudnessPreset }),
+      ...(draft ? { crop: { ...draft.preview, position: draft.position } } : {}),
     }),
     eventsUrl: musicVideoPublishKitEventsUrl,
     cancelRequest: cancelMusicVideoPublishKit,
     readPercent,
     onComplete: (_frame, id) => reload(id),
-    onKickoffError: (err, draft) => {
+    onKickoffError: (err, { crop: draft }) => {
       if (err?.code === 'PUBLISH_CROP_PREVIEW_STALE') {
         setCrop(current => draft && current?.preview === draft.preview ? { ...current, preview: null, error: err.message } : current);
         return true;
@@ -243,7 +245,7 @@ export default function useMusicVideoPublishKit({ project, replaceProject } = {}
     refreshCropPreview: () => loadCropPreview(crop?.position ?? 0.5),
     setCropPosition: (position) => setCrop(current => current?.preview && current.preview === crop?.preview ? { ...current, position } : current),
     setCropMediaState: (preview, error) => setCrop(current => current?.preview === preview ? { ...current, ready: !error, error } : current),
-    build: () => { if (!cropBlockedReason) job.start(crop, projectId); },
+    build: ({ loudnessPreset } = {}) => { if (!cropBlockedReason) job.start({ crop, loudnessPreset }, projectId); },
     cancelBuild: job.cancel,
     drafting,
     saving,

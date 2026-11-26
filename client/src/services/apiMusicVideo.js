@@ -512,8 +512,12 @@ export const getMusicVideoSocialCuts = (id, { count, minSec, maxSec } = {}, opti
 // then per-field edits; both resolve to { project }.
 export const getMusicVideoPublishCropPreview = (id, options = {}) =>
   request(`/music-video/${encodeURIComponent(id)}/publish-kit/crop-preview`, options);
-export const buildMusicVideoPublishKit = (id, { crop, ...options } = {}) =>
-  request(`/music-video/${encodeURIComponent(id)}/publish-kit/build`, { method: 'POST', ...(crop ? { body: JSON.stringify({ crop }) } : {}), ...options });
+export const buildMusicVideoPublishKit = (id, { crop, loudnessPreset, ...options } = {}) =>
+  request(`/music-video/${encodeURIComponent(id)}/publish-kit/build`, {
+    method: 'POST',
+    ...(crop || loudnessPreset !== undefined ? { body: JSON.stringify({ ...(crop ? { crop } : {}), loudnessPreset }) } : {}),
+    ...options,
+  });
 export const musicVideoPublishKitEventsUrl = (jobId) => `/api/music-video/publish-kit/${encodeURIComponent(jobId)}/events`;
 export const cancelMusicVideoPublishKit = (jobId, options = {}) =>
   request(`/music-video/publish-kit/${encodeURIComponent(jobId)}/cancel`, { method: 'POST', ...options });

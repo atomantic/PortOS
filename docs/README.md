@@ -111,6 +111,7 @@ A living doc describes current behaviour and operator procedure; issue numbers, 
 ## Feature deep dives (`features/`)
 
 - [Music Video private sharing copy](./features/music-video-sharing-copy.md) — source-bound 720p downloads strictly under 100 MB, private local export and media queue lifecycle
+- [Music Video Publish kit](./features/music-video-publish-kit.md) — As mixed and measured Web loudness for release downloads
 - [Music Video cinema DCP](./MUSIC_VIDEO_DCP.md) — local cinema export, verification and venue delivery guidance
 - [Music Video festival packet](./features/music-video-festival-packet.md) — editable festival information, explicit source suggestions and selected text exports
 - [Music Video making-of export](./features/music-video-making-of.md) — local multi-variant planning packages, inventory previews, source planning retention and publication boundaries
