@@ -30,7 +30,7 @@ describe('MoodBoardReferenceStrip — uncontrolled (localStorage) mode', () => {
     const select = await screen.findByLabelText('Board');
     expect(select.value).toBe('mb-1');
     expect(listMoodBoardNames).toHaveBeenCalledWith({ silent: true });
-    expect(getMoodBoard).toHaveBeenCalledWith('mb-1', { silent: true });
+    await waitFor(() => expect(getMoodBoard).toHaveBeenCalledWith('mb-1', { silent: true }));
     // No "none" placeholder in uncontrolled mode.
     expect(screen.queryByRole('option', { name: /no board linked/i })).toBeNull();
   });
