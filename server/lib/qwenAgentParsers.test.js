@@ -14,7 +14,7 @@ const REPO_ROOT = join(dirname(fileURLToPath(import.meta.url)), '..', '..');
 
 describe('QWEN_AGENT_PARSERS', () => {
   it('pins the measured vLLM spelling (qwen3_xml, never hermes)', () => {
-    // docs/research/2026-08-21-qwen38-rtx3090-vllm.md: hermes parses nothing
+    // `hermes` parses nothing
     // because Qwen3.8 emits XML, and vLLM reports the failure as plain text.
     const flags = parserFlagsFor('vllm');
     expect(flags).toContain('qwen3_xml');

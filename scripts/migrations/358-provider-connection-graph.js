@@ -2,7 +2,7 @@ import { join } from 'node:path';
 import { atomicWrite, readJSONFileStrict, tryReadFile } from '../../server/lib/fileUtils.js';
 
 /**
- * Register the provider connection graph and park a recovery copy of its INPUT (issue #6367, design record `docs/plans/archive/2026-09-06-provider-connections-and-harnesses.md`).
+ * Register the provider connection graph and park a recovery copy of its INPUT (issue #6367).
  *
  * The import itself can't run here: `ai_connections` / `ai_harness_bindings` / `ai_route_bindings` are created by `ensureSchema()` at boot, after this file runner (as for migrations 048-052 and 108), so it runs in the database phase (`reconcileProviderGraph` in `bootstrapSequence.js` → `initProviderGraph`).
  * This migration owns what must precede any write to `data/providers.json` under a graph-aware server: a private, untouched copy of the pre-graph provider file (the import is lossless per round-trip tests, but a copy turns "the import mangled my custom route" into a diff).

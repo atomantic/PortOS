@@ -198,9 +198,8 @@ export const UNCALLED_ROUTE_ALLOWLIST = Object.freeze({
     '/api/memory/link',
     '/api/memory/tags',
     '/api/memory/timeline',
-    // docs/features/product-surfaces.md: the read of a server-owned production run started over this API.
+    // docs/features/music-video-autonomous.md#production-and-spend: documented API reads.
     '/api/music-video/:id/production-runs/:runId',
-    // docs/features/product-surfaces.md: a music video's spend by lane, for API callers; the page reads it off the project.
     '/api/music-video/:id/spend',
     // docs/API.md: the full character style, for API callers; the client reads the list.
     '/api/music-video/character-styles/:id',

@@ -48,6 +48,27 @@ export const HOST_CONTROL_GET_ROUTES = Object.freeze([
   'GET /api/instances/peers/tailcat/devices',
   // Progress of a forge sign-in the operator started on the host.
   'GET /api/apps/:id/forge-auth/refresh/:jobId/events',
+  // Reads files and planning metadata from managed host repositories (#19495).
+  'GET /api/apps/:id/documents',
+  'GET /api/apps/:id/documents/*docPath',
+  'GET /api/apps/:id/vite-host-check',
+  'GET /api/cos/gsd/projects',
+  'GET /api/cos/gsd/projects/:appId',
+  'GET /api/cos/gsd/projects/:appId/phases',
+  'GET /api/cos/gsd/projects/:appId/documents/:docName',
+  // Runs host process, forge and runtime probes (#19495).
+  'GET /api/ports/scan',
+  'GET /api/commands/processes',
+  'GET /api/github/accounts/:id/status',
+  'GET /api/apps/:id/issues',
+  'GET /api/apps/:id/pull-requests',
+  'GET /api/apps/:id/work-items',
+  'GET /api/apps/:id/lane-health',
+  'GET /api/devtools/video-download/yt-dlp',
+  'GET /api/midi-runtime/install',
+  'GET /api/music/setup/runtime-install',
+  // Materializes generated HTML on demand and returns its host path.
+  'GET /api/html-pages/runs/:id/pages/:index/path',
   // Raw backup archives export private records and credentials (#8772).
   'GET /api/backup/snapshots/:snapshotId/download',
   // Household records, subject-scoped counts and account links expose private data.

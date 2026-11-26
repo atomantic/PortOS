@@ -23,8 +23,7 @@
  *
  * Data: GET /pipeline/series/:id/manuscript (sections) + .../manuscript/review
  * (comments). Section saves reuse PATCH /pipeline/issues/:id; fixes go through
- * the manuscript-review fix/accept routes. See the design record at
- * docs/plans/archive/2026-06-06-manuscript-editor-inline-feedback.md.
+ * the manuscript-review fix/accept routes.
  */
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';

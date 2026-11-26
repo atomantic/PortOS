@@ -149,7 +149,6 @@ Other rules:
 - **No changelog entries in PRs.** Release notes are generated from commits.
 - After each change, review the diff for needless complexity and duplication (`/simplify` when available). A review-only request does not authorize shipping.
 - Make routine design decisions instead of parking issues for input; issue labels come only from `MANDATORY_DISPATCH_HINT_GUIDANCE` in `server/lib/dispatchLabels.js`.
-- **Archive approved design plans**: copy a plan approved out of plan mode from `~/.claude/plans/` to `./docs/plans/YYYY-MM-DD-<slug>.md` before implementing.
 
 ## Documentation
 

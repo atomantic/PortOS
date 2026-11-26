@@ -5,8 +5,7 @@ Date: 2026-09-12
 
 This document is the implementation-facing bridge between PortOS's exhaustive
 HTTP inventory, the governed semantic registry, Persistent Mind, and Agent
-Tools (MCP). It records what is shipped and separates it from the long-running
-job and confirmation extensions retained in the [unified design spec](./plans/archive/2026-08-27-unified-cos-tool-calling-interface.md).
+Tools (MCP). It records the shipped tool contract.
 
 ## Audit result
 

@@ -535,8 +535,7 @@ function hasMlxSignal(model) {
 // drafters) are auxiliary weights, not standalone chat models: the drafter for
 // a 27B target is ~2B of sidecar that only produces text once an engine pairs
 // it with that target. PortOS orchestrates Ollama and LM Studio and does not
-// own that pairing (docs/research/2026-08-19-dflash2-speculative-decoding.md,
-// .../2026-08-16-qwen38-mlx-macos.md), so installing one hands the user a model
+// own that pairing, so installing one hands the user a model
 // that cannot chat.
 //
 // `draft-model` / `drafter` is the publisher's own declaration that a repo is
@@ -560,7 +559,7 @@ function hasDrafterTag(model) {
 // drafter family — `mlx-community/NVIDIA-Nemotron-3.5-Lightning-30B-A3B-DSpark-bf16`
 // declares `mlx` + `dspark` + `speculative-decoding` but no `draft-model` tag, so
 // the tag predicate alone would offer a 30B target's drafter as a one-click
-// install (docs/research/2026-08-19-dspark-vs-dflash2.md).
+// install.
 const MLX_DRAFTER_NAME_RE = /(?:^|[/_-])(?:mtp|dflash\d*|dspark|drafter)(?:[/_\-.]|$)/i
 
 function isMlxDrafter(model) {

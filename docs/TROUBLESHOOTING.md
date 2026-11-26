@@ -826,9 +826,7 @@ boundary, so process-level mitigations alone do not prevent it.
 `pmset displaysleepnow` after launching, or drive headless over SSH. `caffeinate -s` alone
 does not turn the display off, and closing the lid sleeps
 the whole machine (suspending the render) unless an external display is attached.
-Update macOS and the MLX runtime if panics persist. The historical incident record
-(from the retired LoRA trainer) is in
-[`docs/research/2026-06-13-mflux-training-watchdog-panic.md`](research/2026-06-13-mflux-training-watchdog-panic.md).
+Update macOS and the MLX runtime if panics persist.
 
 ## Getting Help
 

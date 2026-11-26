@@ -66,9 +66,17 @@ const REAL_TREE_SOURCES = [
   'client/src/components/musicVideo/ProductionReviewPanel.jsx',
   'server/lib/eidoversePort.js', 'server/services/eidoverse.js', 'server/services/catalog/catalogSync.js', 'server/services/musicVideo/documentRender.js',
   'server/services/maintenanceRun.js', 'scripts/lib/guardBudget.js', 'scripts/pregate.js', 'server/test/admissionSetup.js',
+  'server/lib/testHelper.js',
 ];
 let realTreeInputs;
 const realTree = () => (realTreeInputs ??= collectPlanInputs({ baseSha: 'HEAD', changedFiles: REAL_TREE_SOURCES, cwd: REPO_ROOT }));
+
+it('includes the CTC contract in the related plan for changes to its Python test helper', () => {
+  const source = 'server/lib/testHelper.js';
+  const { server } = buildCiTestPlan([source], realTree());
+  expect(server.mode).toBe('related');
+  expect(server.files).toContain('scripts/ml/align_lyrics_ctc.test.js');
+});
 
 const TRACKED = [
   'server/lib/moduleSummaries.test.js',
@@ -1007,18 +1015,6 @@ describe('CI test impact planner', () => {
     expect(plan.server.mode).toBe('files');
     expect(plan.server.files).toEqual(expect.arrayContaining(paths));
     expect(plan.client.mode).toBe('skip');
-  });
-
-  it('covers the product-surfaces Markdown input without widening ordinary documentation changes', () => {
-    // The product-surfaces doc-parity check runs inside the structural guard runner (#16996).
-    const contract = 'server/test/guards/repo.guard.test.js';
-    const plan = buildCiTestPlan(['docs/features/product-surfaces.md'], {
-      trackedFiles: [...TRACKED, contract],
-    });
-
-    expect(plan).toMatchObject({ full: false, reason: 'documentation-only change',
-      server: { mode: 'files' }, client: { mode: 'skip' }, build: false, db: false, windows: false });
-    expect(plan.server.files).toContain(contract);
   });
 
   it('skips all expensive jobs for documentation-only changes, keeping the always-run guards', () => {

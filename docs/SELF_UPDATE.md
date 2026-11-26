@@ -132,8 +132,6 @@ Eidoverse checkouts to apply a PortOS world design.
 
 `GET /api/update/status` also compares recursive submodule checkouts with their pinned revisions. An uninitialized, conflicted, behind, or divergent module marks the install out of sync, making the existing Reconcile control available even when no newer release is waiting. A checkout deliberately advanced through the Submodules tab is not treated as stale, and CoS worktrees report submodule state as unknown because they intentionally leave submodules uninitialized and cannot run the primary-checkout update flow.
 
-For the point-in-time analysis of macOS Finder metadata false positives and the separate managed-App build omission, see [macOS “Install out of sync” research](research/2026-09-03-macos-install-out-of-sync.md).
-
 To prevent that confusion, `POST /api/update/execute` rejects fork runs with **412 `FORK_SYNC_REQUIRED`** unless either:
 
 - the request body sets `acknowledgeFork: true`, or

@@ -95,7 +95,7 @@ Also remove walkthroughs; keep meaningful type/JSDoc and public API docs. There 
 
 Read [ETHOS.md](../ETHOS.md) before proposing external edits to a mind’s own memories. Write commit subjects and bodies for people reading the release notes.
 
-[ETHOS.md](../ETHOS.md) also lists the commitments a change must not break. `docs/README.md` indexes ADRs (`docs/decisions/`) and plans (`docs/plans/`, conventions in `docs/plans/README.md`); start with `docs/STORAGE.md`, `docs/ARCHITECTURE.md` and `docs/API.md`.
+[ETHOS.md](../ETHOS.md) also lists the commitments a change must not break. `docs/README.md` indexes ADRs (`docs/decisions/`). Start with `docs/STORAGE.md`, `docs/ARCHITECTURE.md` and `docs/API.md`.
 
 ## Keyboard ownership and web storage
 
@@ -125,7 +125,7 @@ Settings-over-a-feature surfaces use the shared `client/src/components/Drawer.js
 
 **A sanctioned poll uses `useAutoRefetch(fetchFn, intervalMs, { enabled, pollOnly: true })`** (`hooks/useAutoRefetch.js`), never a hand-rolled `setInterval`; it pauses in hidden tabs (#5697). Pass the gate as `enabled`, not an early `return`, and `immediate: false` when another effect owns the first fetch. *Enforced:* `client/lint-no-view-interval.grit`.
 
-**Pick the right Layout scroll mode** by where the `<Route>` sits in `App.jsx`, never by pathname: `PageLayout` pages (`PageHeader` over an internally scrolling body) go under `<FullWidthMain />`, document/form routes (`/apps/create`) under `<PaddedMain />` (`components/PageShell.jsx`). Exceptions: `docs/research/PAGE_LAYOUT_AUDIT.md`.
+**Pick the right Layout scroll mode** by where the `<Route>` sits in `App.jsx`, never by pathname: `PageLayout` pages (`PageHeader` over an internally scrolling body) go under `<FullWidthMain />`, document/form routes (`/apps/create`) under `<PaddedMain />` (`components/PageShell.jsx`).
 
 ## Authentication and HTTPS detail
 

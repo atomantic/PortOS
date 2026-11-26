@@ -8,7 +8,7 @@
  *
  * Scanned (comment lines only): git-tracked non-test .js/.jsx/.mjs/.cjs under server/, client/src/
  * and scripts/. Referenced: paths anchored at `server/`, `client/src/`,
- * `scripts/` or `docs/(research|decisions|plans)/` ending in a file extension.
+ * `scripts/` or `docs/decisions/` ending in a file extension.
  * Placeholder examples (stem of one character, or foo|bar|baz|example) are
  * skipped. There is no allowlist: fix the path or drop the citation.
  */
@@ -16,7 +16,7 @@ import { describe, it, expect } from 'vitest';
 import { join } from 'path';
 import { readText, REPO_ROOT, trackedFiles } from '../../../../scripts/lib/guardCorpus.js';
 
-const REFERENCE = /(?<![\w./-])((?:server|client\/src|scripts|docs\/(?:research|decisions|plans))\/[\w./-]*[\w-]\.[A-Za-z][A-Za-z0-9]*)(?![\w-])/g;
+const REFERENCE = /(?<![\w./-])((?:server|client\/src|scripts|docs\/decisions)\/[\w./-]*[\w-]\.[A-Za-z][A-Za-z0-9]*)(?![\w-])/g;
 const PLACEHOLDER_STEM = /^(?:.|foo|bar|baz|example)$/;
 const SOURCE = /\.(?:jsx?|mjs|cjs)$/;
 // Comment text only: a path in a string literal is runtime data (a spawn arg, a

@@ -16,10 +16,10 @@ import { browserShardSlice } from './lib/browserSuites.js';
 import { browserProfileAcceptedVerdicts, browserTestProfileArgs, browserTestProfileFiles, assertBrowserProfileExecuted, BROWSER_FIDELITY_ONLY_FILES } from './lib/browserTestProfiles.js';
 import {
   clearVitestDependencies, createToolVersionResolver, currentCommit, fileResultsFromReport, findVitestDependenciesFile,
-  memoSummaryLine, memoUnrecordedLines, passedTestFiles, planTestMemo, prepareMemoRun, pruneTestMemo, readVitestDependencies, recordTestMemo, seedVitestDependencies, writeSelectionFile,
+  memoSummaryLine, memoUnrecordedLines, passedTestFiles, planTestMemo, prepareMemoRun, pruneTestMemo, readVitestDependencies, recordTestMemo, seedVitestDependencies, sliceTestCandidates, writeSelectionFile,
 } from './lib/testMemoRunner.js';
-import { saveFactsCache } from './lib/testMemo/factsCache.js';
-import { hasMemoEntries, resolveMemoDir } from './lib/testMemoStore.js';
+import { loadFactsCache, saveFactsCache } from './lib/testMemo/factsCache.js';
+import { hasMemoEntries, memoDirs, resolveMemoDir } from './lib/testMemoStore.js';
 import { SERVED_FILES_ENV, readServedFiles } from './lib/browserServedFiles.js';
 import { browserOwnerExcludes, TEST_SCOPES, workspaceOf } from './lib/workspaceTests.js';
 import { resolveDbTestFiles } from './lib/dbTestFiles.js';
@@ -574,8 +574,10 @@ function parseLauncherInput(cliArgs, env) {
 
   const browserJob = env.PORTOS_CI_BROWSER_OWNER === 'browser';
   const beforeAudioSetup = browserJob && checkRemaining && env.PORTOS_CI_BEFORE_AUDIO_SETUP === '1';
-  if (preplannedPath && (!browserJob || scope !== 'server' || mode !== 'files' || beforeAudioSetup || checkCtc)) {
-    throw new Error('Preplanned runs require the post-audio browser files job.');
+  const supportsPreplannedRun = scope === 'db' && mode === 'full'
+    || browserJob && scope === 'server' && mode === 'files';
+  if (preplannedPath && (!supportsPreplannedRun || checkCtc)) {
+    throw new Error('Preplanned runs require the DB full suite or the browser files job.');
   }
 
   let emptySelectionMessage = null;
@@ -595,47 +597,63 @@ function parseLauncherInput(cliArgs, env) {
     enforceGuardBudget, emptySelectionMessage };
 }
 
+function readPreplannedRun(path, selection, toolVersion) {
+  const { run, ffmpeg } = JSON.parse(readFileSync(path, 'utf8')) ?? {};
+  const { owned } = sliceTestCandidates(selection);
+  const allowed = new Set(owned);
+  if (!Array.isArray(run) || new Set(run).size !== run.length || run.some(test => !allowed.has(test))
+    || (ffmpeg !== undefined && ffmpeg !== null && typeof ffmpeg !== 'string')) {
+    throw new Error(`Invalid preplanned ${selection.scope === 'db' ? 'DB' : 'browser'} test selection for this shard.`);
+  }
+  // Setup can replace ffmpeg. A previous hit can turn into a miss as well as
+  // a miss becoming a hit, so replan with the installed version in either case.
+  return ffmpeg === undefined || ffmpeg === toolVersion('ffmpeg') ? run : null;
+}
+
 function planLauncherMemo({
   scope, mode, repoFiles, repoSources, shard, profile, browserJob, preplannedPath, checkRemaining, beforeAudioSetup,
 }, { memoDir, readOnlyMemo }) {
-  // The selection is closure-based (scripts/lib/testMemo.js): in related
-  // mode a test is selected when a changed source is in its module closure
-  // or inputs, or that walk fails closed on an unresolved edge or unbounded
-  // read. The selection also includes the planner's explicit files.
-  // Vitest used to resolve `related` itself from CI_TEST_SOURCES; computing
-  // the set here is what lets the memo subtract the files a trusted green
-  // run already verified, and the list reaches Vitest as a file because a
-  // related set can exceed the Windows command-line limit.
+  // PRs may reuse parsed facts within a job. Only trusted runs may update
+  // the memo directory that Actions restores and publishes across jobs.
+  const scratchFacts = readOnlyMemo && preplannedPath && process.env.RUNNER_TEMP
+    ? join(process.env.RUNNER_TEMP, 'portos-facts-cache') : null;
+  const factsDir = [scratchFacts, ...memoDirs(memoDir)].filter(Boolean);
   const caseFilter = browserProfileArgs();
   const acceptVerdictsFrom = profile !== undefined ? browserProfileAcceptedVerdicts(profile) : [];
   const toolVersion = createToolVersionResolver({ verifyAudioPair: browserJob });
   const analysisOptions = { scope, repoRoot, memoDir, caseFilter, toolVersion,
     ...(browserJob ? { requireToolVersions: true, freshToolVersion: createToolVersionResolver({ verifyAudioPair: true }) } : {}) };
+  const selection = { scope, mode, repoFiles, repoRoot, shard,
+    ...(browserJob ? { shardSlice: (files, shard) => browserShardSlice(files, shard, profile) } : {}) };
   let plan;
-  if (preplannedPath && !checkRemaining) {
-    const run = JSON.parse(readFileSync(preplannedPath, 'utf8'));
-    const owned = new Set(shard ? browserShardSlice(repoFiles, { repoRoot, scope, ...shard }, profile) : repoFiles);
-    if (!Array.isArray(run) || run.length === 0 || new Set(run).size !== run.length || run.some(test => !owned.has(test))) {
-      throw new Error('Invalid preplanned browser test selection for this shard.');
+  const recheck = browserJob && checkRemaining && !beforeAudioSetup;
+  if (preplannedPath && (!checkRemaining || recheck)) {
+    const run = readPreplannedRun(preplannedPath, selection, toolVersion);
+    if (run !== null) {
+      console.log(`Using the preplanned selection of ${run.length} ${browserJob ? 'browser' : 'DB'} test files.`);
+      plan = checkRemaining ? { run } : prepareMemoRun(run, { ...analysisOptions, memoDir: readOnlyMemo ? null : memoDir });
     }
-    console.log(`Using the post-audio selection of ${run.length} browser test files.`);
-    plan = prepareMemoRun(run, { ...analysisOptions, memoDir: readOnlyMemo ? null : memoDir });
-  } else {
-    plan = planTestMemo({ ...analysisOptions, mode, repoFiles, repoSources, shard, acceptVerdictsFrom,
-      ...(browserJob ? {
-        shardSlice: (files, shard) => browserShardSlice(files, shard, profile),
-        planBeforeClientSetup: checkRemaining,
-      } : {}),
-      provisionableTool: beforeAudioSetup && hasMemoEntries(memoDir) ? 'ffmpeg' : undefined });
+  }
+  let ffmpeg;
+  if (!plan) {
+    const beforeToolSetup = beforeAudioSetup || scope === 'db' && checkRemaining;
+    const provisionableTool = beforeToolSetup && hasMemoEntries(memoDir) ? 'ffmpeg' : undefined;
+    plan = planTestMemo({ ...analysisOptions, ...selection, repoSources, acceptVerdictsFrom,
+      planBeforeClientSetup: browserJob && checkRemaining,
+      provisionableTool, factsCache: memoDir ? loadFactsCache(factsDir, scope) : null });
     if (memoDir) {
       console.log(memoSummaryLine(plan));
       if (process.env.PORTOS_TEST_MEMO_VERBOSE === '1') {
         for (const { test, via, from } of plan.skipped) console.log(`🧠   skipped ${test} (${via} key${from ? `, ${from} verdict` : ''})`);
       }
     }
+    if (preplannedPath && beforeToolSetup && (plan.unsettled > 0
+      || plan.skipped.some(({ test, via }) => plan.verdicts.get(test)[via].tools?.has('ffmpeg')))) {
+      ffmpeg = toolVersion('ffmpeg');
+    }
   }
-  // A trusted planning step can warm the post-audio recheck and the test run.
-  if (memoDir && !readOnlyMemo && plan.factsCache) saveFactsCache(memoDir, scope, plan.factsCache);
+  if (plan.factsCache && (!readOnlyMemo || scratchFacts)) saveFactsCache(factsDir, scope, plan.factsCache);
+  if (preplannedPath && checkRemaining) writeFileSync(preplannedPath, JSON.stringify({ run: plan.run, ffmpeg }));
   return { plan, caseFilter };
 }
 
@@ -749,7 +767,10 @@ async function main() {
     preplannedPath, shard, shardName, label, deadline, enforceGuardBudget, browserJob, emptySelectionMessage } = input;
   if (emptySelectionMessage !== null) {
     console.log(emptySelectionMessage);
-    if (checkRemaining) writeStepOutput('remaining', '0');
+    if (checkRemaining) {
+      if (preplannedPath) writeFileSync(preplannedPath, JSON.stringify({ run: [] }));
+      writeStepOutput('remaining', '0');
+    }
     if (checkCtc) writeStepOutput('required', 'false');
     process.exitCode = 0;
     return;
@@ -757,8 +778,8 @@ async function main() {
   if (checkCtc) {
     // Related mode can reach beyond CI_TEST_FILES. Use its full candidate
     // inventory, which the runner partitions before checking related reach.
-    const { slice } = planTestMemo({ scope, mode: mode === 'related' ? 'full' : mode, repoFiles, repoRoot, shard, memoDir: null });
-    writeStepOutput('required', String(slice.includes('scripts/ml/align_lyrics_ctc.test.js')));
+    const { owned } = sliceTestCandidates({ scope, mode, repoFiles, repoRoot, shard });
+    writeStepOutput('required', String(owned.includes('scripts/ml/align_lyrics_ctc.test.js')));
     return;
   }
   // process.exitCode, not process.exit(): the runner streams the child's
@@ -768,7 +789,7 @@ async function main() {
   // returns.
   const memoDir = resolveMemoDir();
   const readOnlyMemo = process.env.GITHUB_EVENT_NAME === 'pull_request';
-  if (mode === 'full' && !memoDir && !shard && !checkRemaining) {
+  if (mode === 'full' && !memoDir && !shard && !checkRemaining && !preplannedPath) {
     process.exitCode = await spawnNpm(workspace, script, [], label, { name: scope, signal: deadline?.signal });
     return;
   }
@@ -779,10 +800,8 @@ async function main() {
     console.log(plan.run.length === 0
       ? noTestsMessage
       : `Remaining ${scope} tests${shard ? ` (shard ${shardName})` : ''}: ${plan.run.length}.`);
-    if (preplannedPath) writeFileSync(preplannedPath, JSON.stringify(plan.run));
     writeStepOutput('remaining', String(plan.run.length));
-    // Once any file definitely needs to run, the normal runner will replan
-    // after setup. Only a potentially empty shard needs a separate check.
+    // Only a potentially empty shard needs a separate check before client setup.
     if (beforeAudioSetup && plan.unsettled > 0 && plan.unsettled === plan.run.length) {
       console.log('Recheck after audio setup: all remaining memo verdicts may depend on ffmpeg.');
       writeStepOutput('recheck', 'true');

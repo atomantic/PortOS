@@ -65,9 +65,8 @@ describe('mambaFullMemoryRatio', () => {
 });
 
 describe('buildSglangQwenRecipe — the verified H200 cell', () => {
-  // Transcribed from the cookbook cell recorded in
-  // docs/research/2026-08-21-sglang-qwen38-27b.md. Changing a verified flag must
-  // fail here, not surface as a container that starts and never calls a tool.
+  // Transcribed from the cookbook cell. An incorrect flag can let the container
+  // start while silently dropping tool calls.
   it('pins the whole launch line', () => {
     expect(buildSglangQwenRecipe({ hw: 'h200' })).toMatchObject({
       image: 'lmsysorg/sglang:qwen38-27b',

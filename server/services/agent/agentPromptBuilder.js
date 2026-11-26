@@ -543,7 +543,10 @@ export async function buildAgentPrompt(task, config, workspaceDir, worktreeInfo 
   const taskFlags = resolveTaskMetadataFlags(task, worktreeInfo);
   // Both public-review postures must stay isolated from the install's private
   // context, even when a sandboxed stage can run commands.
-  const skipPersonalContext = taskFlags.noCodeOutput || isPublicReviewRestrictedProfile(task.metadata?.executionProfile);
+  // Claim prompts describe a procedure (and may not even have selected an issue).
+  // Use the issue, checkout, and explicit handoff, not private background context.
+  const skipPersonalContext = taskFlags.claimFlow || taskFlags.noCodeOutput
+    || isPublicReviewRestrictedProfile(task.metadata?.executionProfile);
   // Creative Director tasks supply their own creative tools and instructions.
   const skipDevContext = !!task.metadata?.creativeDirector;
   const [{ memorySection, digitalTwinSection, injectedMemories }, forgeCli, agentInstructionsSection] = await Promise.all([
@@ -823,6 +826,8 @@ async function loadPersonalContext(task, config) {
   const [memorySection, digitalTwinSection] = await Promise.all([
     getMemorySection(task, {
       maxTokens: config.memory?.maxContextTokens || 2000,
+      scopedToApp: true,
+      limit: 3,
       onInjected: (injected) => { injectedMemories = injected; },
     })
       .catch(err => { console.log(`⚠️ Memory retrieval failed: ${err.message}`); return null; }),

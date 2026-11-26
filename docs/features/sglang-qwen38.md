@@ -13,7 +13,7 @@ toolkit, never pulls the image, and never downloads the weights.** Its explicit
 project. It holds the whole GPU, so local image/video generation cannot run
 while it is up — see [GPU exclusivity](#gpu-exclusivity) below.
 
-Investigation record: [2026-08-21 SGLang Qwen3.8-27B](../research/2026-08-21-sglang-qwen38-27b.md). The latest local-model comparison is recorded in the [2026-08-22 performance audit](../research/2026-08-22-local-llm-performance-audit.md); it found this Apple Silicon install cannot run the recipe. The seed presets stay disabled by default; a live TUI card may be enabled for an explicit future test, but the readiness checklist keeps it blocked until a supported NVIDIA endpoint is reachable.
+The seed presets stay disabled by default. You can enable a live TUI card for an explicit test. The readiness checklist keeps it blocked until a supported NVIDIA endpoint is reachable.
 
 ## Which card
 
@@ -29,10 +29,9 @@ Investigation record: [2026-08-21 SGLang Qwen3.8-27B](../research/2026-08-21-sgl
 The gate is `sglangCellForGpu` / `sglangUnsupportedReason` in
 `server/lib/sglangQwenRecipe.js`, reading the compute-capability probe in
 `server/lib/cudaCapability.js`. Only the H200 cell is transcribed flag-for-flag
-from the cookbook; the two Blackwell cells carry what the research note records
-about them and deliberately omit H200's prefill overrides rather than pinning an
-unmeasured number. If you bring one up on real hardware, write a dated note in
-`docs/research/` and tighten the cell.
+from the cookbook. The two Blackwell cells use engine-default prefill sizing
+pending direct measurements. If you bring one up on real hardware, record the
+results in the tracker and update the cell.
 
 ## Set up the host
 
@@ -316,4 +315,3 @@ again when the host reports no NVIDIA GPU at all.
 - [vLLM Qwen3.8-27B on an RTX 3090](./qwen38-rtx3090.md) — the Ampere path
 - [MTPLX](./mtplx.md) and [DFlash 2 / DSpark](./dflash2.md) — the Apple Silicon paths
 - [Ports](../PORTS.md) — why `18021`
-- [Research: SGLang Qwen3.8-27B cookbook](../research/2026-08-21-sglang-qwen38-27b.md)

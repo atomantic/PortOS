@@ -15,8 +15,7 @@ import {
 import { isNonBlankStr } from '../textUtils.js';
 
 /**
- * The CONNECTION half of the provider-connection graph proposed in
- * `docs/plans/archive/2026-09-06-provider-connections-and-harnesses.md` (#6366).
+ * The CONNECTION half of the provider-connection graph (#6366).
  *
  * A connection is the backend a harness talks to: its wire protocol, its base
  * URL, and the credential material that reaches it. This module is the pure

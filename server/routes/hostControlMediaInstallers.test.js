@@ -163,10 +163,16 @@ describe('media installer operator authority (#9513)', () => {
     expect((await first).text).toContain('"type":"complete"');
   });
 
+  it('requires operator authority for the music runtime probe without starting installation', async () => {
+    const workflow = ['get', installers[0][0], undefined, isEngineHealthy, 200];
+    await expectRemoteRefusal(mounts, workflow);
+    await expectAuthorizedWorkflows({ auth: state, mounts, workflows: [workflow] });
+    expect(spawnSetupScript).not.toHaveBeenCalled();
+  });
+
   it('keeps status aliases read-only and contained rendering separate from installation', async () => {
     const app = await hostControlApp('192.0.2.10', mounts);
     for (const path of [
-      '/api/music/setup/runtime-install?runtime=example',
       '/api/video-gen/setup/runtime-status?runtime=example',
       '/api/video-gen/setup/runtime-install?runtime=example',
       '/api/music/supercollider/status',
