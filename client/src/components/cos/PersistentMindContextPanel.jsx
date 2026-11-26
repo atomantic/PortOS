@@ -367,7 +367,11 @@ const REFLECTION_EVENTS = ['cos:memory:created', 'cos:memory:updated', 'cos:memo
 function MemoryReflection() {
   const { data, loading, error, refetch } = useSocketResource(async ({ signal }) => {
     return getPersistentMindReflection({ signal, silent: true });
-  }, { namespace: 'cos', events: REFLECTION_EVENTS });
+  }, {
+    namespace: 'cos',
+    events: REFLECTION_EVENTS,
+    matchesEvent: (payload, event) => event !== 'cos:mind:event' || Boolean(payload?.data?.memoryReview?.memoryId),
+  });
   const sources = [data?.source, data?.inspected].filter((source, index, all) => source && all.findIndex(item => item?.id === source.id) === index);
   return (
     <section className="rounded border border-port-border bg-port-card p-4" aria-labelledby="mind-reflection-heading">
