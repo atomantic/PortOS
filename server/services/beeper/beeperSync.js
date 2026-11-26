@@ -678,7 +678,7 @@ async function lockConversationForMirrorWrite(client, conversationId) {
 
 async function commitMessages({
   conversationId, accountId, sourceChatId, rows, cursor, lastActivity,
-  touchpointCandidates, personIndex, resolvedPersonIds,
+  touchpointCandidates, personIndex,
 }) {
   const dedupedRows = deduplicateMessageRows(rows);
   return withTransaction(async (client) => {
@@ -744,7 +744,7 @@ async function commitMessages({
       }
     }
 
-    await logSenderTouchpoints(touchpointCandidates, { client, personIndex, resolvedPersonIds });
+    await logSenderTouchpoints(touchpointCandidates, { client, personIndex });
 
     // The cursor moves last so the next sweep retries the whole window if
     // message, attachment or touchpoint persistence fails.
@@ -882,9 +882,9 @@ async function sweepChat({
     ? await getPersonIndex()
     : null;
 
-  const { resolvedPersonIds } = mergedParticipants.size > 0
-    ? await upsertConversationParticipants(conversationId, [...mergedParticipants.values()], { personIndex })
-    : { resolvedPersonIds: new Map() };
+  if (mergedParticipants.size > 0) {
+    await upsertConversationParticipants(conversationId, [...mergedParticipants.values()], { personIndex });
+  }
 
   const committedMessages = await commitMessages({
     conversationId,
@@ -893,7 +893,6 @@ async function sweepChat({
     rows,
     touchpointCandidates,
     personIndex,
-    resolvedPersonIds,
     // A truncated forward walk advanced the cursor but did NOT reach the
     // chat's newest message, so the watermark must stay where it was: a null
     // here hits `COALESCE(EXCLUDED.last_activity, beeper_sync_cursors.…)` in

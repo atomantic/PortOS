@@ -866,7 +866,7 @@ describe('logSenderTouchpoints batch deduplication', () => {
       happenedAt: first.sentAt, channel: 'Example channel', summary: '',
       source: 'message', dedupeKey: 'beeper:2026-10-03',
       metadata: { network: 'discord', conversationId: CONVERSATION },
-    }, { client: undefined });
+    }, { client: expect.objectContaining({ query: expect.any(Function) }) });
   });
 
   it('shares a person/day across sender identities while keeping people and UTC days separate', async () => {
@@ -939,7 +939,7 @@ describe('touchpoint roster reuse', () => {
 
     expect(await beeperTribe.logSenderTouchpoints([candidate(), candidate(OTHER_CONVERSATION)], { personIndex }))
       .toEqual({ created: 1, matched: 1 });
-    expect(tribeService.autoCreateTouchpoint).toHaveBeenCalledWith(CLAIMING_PERSON, expect.objectContaining({ dedupeKey: 'beeper:2026-09-02' }), { client: undefined });
+    expect(tribeService.autoCreateTouchpoint).toHaveBeenCalledWith(CLAIMING_PERSON, expect.objectContaining({ dedupeKey: 'beeper:2026-09-02' }), { client: expect.objectContaining({ query: expect.any(Function) }) });
     expect(listPeople).toHaveBeenCalledTimes(1);
   });
 
@@ -1010,7 +1010,7 @@ describe('query-count reduction and batched upsertConversationParticipants (#181
     expect(identitySelects[0].replace(/\s+/g, ' ')).toContain('FROM unnest');
   });
 
-  it('upsertConversationParticipants batches 20 participants into 4 queries, preserves precedence/COALESCE/soft-delete, and lets logSenderTouchpoints skip re-querying', async () => {
+  it('upsertConversationParticipants batches 20 participants into 4 queries, preserves precedence/COALESCE/soft-delete, and resolves touchpoints in two fresh batch reads', async () => {
     seedConversation(CONVERSATION, 'whatsapp', ACCOUNT_ID);
     const SOFT_DELETED = '44444444-4444-4444-8444-444444444444';
     db.people.set(SOFT_DELETED, { deleted: true });
@@ -1088,7 +1088,7 @@ describe('query-count reduction and batched upsertConversationParticipants (#181
     expect(resolvedPersonIds.get('user-stale-cache')).toBe(CLAIMING_PERSON);
     expect(resolvedPersonIds.get('user-unlinked-0')).toBeNull();
 
-    // logSenderTouchpoints uses resolvedPersonIds without firing any DB queries for participants/identities or reloading roster
+    // Touchpoints recheck all sender claims in one batch without reloading the sweep roster.
     seenSql.length = 0;
     listPeople.mockClear();
     tribeService.autoCreateTouchpoint.mockReset();
@@ -1098,12 +1098,12 @@ describe('query-count reduction and batched upsertConversationParticipants (#181
       { conversationId: CONVERSATION, senderId: 'user-stale-cache', sentAt: '2026-10-03T12:00:00.000Z', network: 'whatsapp' },
       { conversationId: CONVERSATION, senderId: 'user-unlinked-10', sentAt: '2026-10-03T12:05:00.000Z', network: 'whatsapp' },
       { conversationId: CONVERSATION, senderId: 'user-beeper-only', sentAt: '2026-10-03T12:10:00.000Z', network: 'whatsapp' },
-    ], { resolvedPersonIds });
+    ], { personIndex });
 
     expect(tpResult).toEqual({ matched: 2, created: 2 });
-    expect(seenSql).toEqual([]);
+    expect(seenSql).toEqual([expect.stringContaining('p.source_user_id = ANY'), expect.stringContaining('JOIN tribe_identities')]);
     expect(listPeople).not.toHaveBeenCalled();
-    expect(tribeService.autoCreateTouchpoint).toHaveBeenCalledWith(CLAIMING_PERSON, expect.any(Object), { client: undefined });
-    expect(tribeService.autoCreateTouchpoint).toHaveBeenCalledWith(LEGACY_PHONE_PERSON, expect.any(Object), { client: undefined });
+    expect(tribeService.autoCreateTouchpoint).toHaveBeenCalledWith(CLAIMING_PERSON, expect.any(Object), { client: expect.objectContaining({ query: expect.any(Function) }) });
+    expect(tribeService.autoCreateTouchpoint).toHaveBeenCalledWith(LEGACY_PHONE_PERSON, expect.any(Object), { client: expect.objectContaining({ query: expect.any(Function) }) });
   });
 });
