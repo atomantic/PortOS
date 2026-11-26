@@ -1,6 +1,6 @@
 import { render, screen } from '@testing-library/react';
 import { describe, expect, it } from 'vitest';
-import { FeedbackSummary } from './LearningTab';
+import FeedbackSummary from './learning/FeedbackSummary';
 
 describe('LearningTab FeedbackSummary', () => {
   it('labels the feedback population as durable across live and archived runs', () => {

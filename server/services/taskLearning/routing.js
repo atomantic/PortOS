@@ -399,7 +399,10 @@ function suggestModelTierFrom(data, taskType) {
  * Returns a matrix suitable for display in the Learning tab UI
  */
 export async function getRoutingAccuracy() {
-  const data = await loadLearningData();
+  return summarizeRoutingAccuracy(await loadLearningData());
+}
+
+export function summarizeRoutingAccuracy(data) {
   const routingData = data.routingAccuracy || {};
 
   const matrix = [];
@@ -488,9 +491,11 @@ export async function getRoutingAccuracy() {
  * Get a performance summary for logging during task evaluation
  * Provides insights about how different task types are performing
  */
-export async function getPerformanceSummary({ sinceByTaskType = {}, since = null } = {}) {
-  const data = await loadLearningData();
+export async function getPerformanceSummary(options) {
+  return summarizePerformance(await loadLearningData(), options);
+}
 
+export function summarizePerformance(data, { sinceByTaskType = {}, since = null } = {}) {
   const summary = {
     totalCompleted: data.totals.completed,
     overallSuccessRate: data.totals.completed > 0
@@ -552,7 +557,10 @@ export async function getPerformanceSummary({ sinceByTaskType = {}, since = null
  * Useful for filtering out problematic task types in evaluateTasks
  */
 export async function getSkippedTaskTypes() {
-  const data = await loadLearningData();
+  return findLowSuccessTaskTypes(await loadLearningData());
+}
+
+export function findLowSuccessTaskTypes(data) {
   const skipped = [];
 
   for (const [taskType, metrics] of Object.entries(data.byTaskType)) {
@@ -647,8 +655,11 @@ export async function getTaskTypeConfidence(taskType, thresholds = {}) {
  * @param {Object} [thresholds] - Override default thresholds
  * @returns {Promise<Object>} All task types grouped by confidence tier
  */
-export async function getConfidenceLevels(thresholds = {}) {
-  const data = await loadLearningData();
+export async function getConfidenceLevels(thresholds) {
+  return summarizeConfidenceLevels(await loadLearningData(), thresholds);
+}
+
+export function summarizeConfidenceLevels(data, thresholds = {}) {
   const levels = { high: [], medium: [], low: [], new: [] };
 
   for (const [taskType, metrics] of Object.entries(data.byTaskType)) {
