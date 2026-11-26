@@ -5,8 +5,8 @@ import { fireEvent, render, screen } from '@testing-library/react';
 const dndMouseDown = vi.hoisted(() => vi.fn());
 const dndTouchStart = vi.hoisted(() => vi.fn());
 
-vi.mock('@dnd-kit/sortable', async () => {
-  const actual = await vi.importActual('@dnd-kit/sortable');
+vi.mock('../../lib/dnd/index.js', async () => {
+  const actual = await vi.importActual('../../lib/dnd/index.js');
   return {
     ...actual,
     useSortable: () => ({

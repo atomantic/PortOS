@@ -2,20 +2,9 @@ import { useGalleryPage } from '../hooks/useGalleryPage';
 import { useEffect, useRef, useState, useCallback, useMemo } from 'react';
 import { useParams, useNavigate } from 'react-router';
 import {
-  DndContext,
-  KeyboardSensor,
-  MouseSensor,
-  TouchSensor,
-  useSensor,
-  useSensors,
-  closestCenter,
-} from '@dnd-kit/core';
-import {
-  SortableContext,
-  arrayMove,
-  horizontalListSortingStrategy,
-  sortableKeyboardCoordinates,
-} from '@dnd-kit/sortable';
+  DndContext, KeyboardSensor, MouseSensor, TouchSensor, useSensor, useSensors,
+  closestCenter, SortableContext, arrayMove, horizontalListSortingStrategy, sortableKeyboardCoordinates,
+} from '../lib/dnd/index.js';
 import {
   Play, Pause, Save, Film, Loader2, ArrowLeft, Volume2, VolumeX,
   Image as ImageIcon, Music,

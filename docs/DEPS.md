@@ -52,8 +52,8 @@ Before removing a Tier 3 candidate, run a transitive-dep check (`npm ls <pkg>`).
 | `eslint` | — | REMOVED | Former cyclomatic complexity reporter | The report now computes classic scores from the Babel AST |
 | `vitest` | 1 | KEEP | test runner | |
 | **Client dependencies** | | | | |
-| `@dnd-kit/core` | 1 | KEEP | drag/drop | |
-| `@dnd-kit/sortable` | 1 | KEEP | drag/drop | |
+| `@dnd-kit/core` | — | REPLACED | Accessible drag and drop | Pointer, touch and keyboard sensors, collision detection and drag overlays in `client/src/lib/dnd/` (#19042) |
+| `@dnd-kit/sortable` | — | REPLACED | Sortable lists and grids | Measured displacement and keyboard navigation in `client/src/lib/dnd/` (#19042) |
 | `@react-three/drei` | — | REPLACED | 3D scenes | Owned controls, local asset loaders, labels and visual effects in `client/src/lib/threeHelpers/` (#19040) |
 | `@react-three/fiber` | 1 | KEEP | CyberCity 3D | React renderer for Three |
 | `@scalar/api-reference-react` | — | REMOVED | Dev Tools → API Explorer | 2026-09-11 → native REST Reference tab (issue #7012). Was the heaviest client dep (~half the lockfile, 3.24 MB dist, Vue 3 + Vercel AI SDK). See detailed finding |
@@ -151,7 +151,7 @@ Before removing a Tier 3 candidate, run a transitive-dep check (`npm ls <pkg>`).
 
 If `/do:depfree --heavy` is run, the following Tier 1 entries would drop to Tier 2/3 and become replacement candidates regardless of popularity:
 
-- Many of the `@dnd-kit/*`, `@xterm/*`, `lucide-react` deps would be re-evaluated.
+- Many of the `@xterm/*`, `lucide-react` deps would be re-evaluated.
 - `pm2` would NOT be replaced (foundational process manager).
 
 This is intentionally NOT done in default mode — current dependency footprint is reasonable for the project's deployment context (single-user, Tailscale-private).
@@ -163,7 +163,7 @@ This is intentionally NOT done in default mode — current dependency footprint 
 - `express` — the used surface is routing, middleware chaining, static files, and body parsing over `node:http`.
 - `socket.io` — the used surface is rooms, acks, and reconnection over WebSocket; a design must cover the client half too.
 - `react` / `react-dom` — a product-level rewrite rather than a dependency swap; expected to be recorded `SKIPPED_INFEASIBLE` with a design sketch and a filed issue, which is the mode's required output for a package it cannot remove.
-- `@dnd-kit/*`, `@xterm/*`, `lucide-react`, `three` — re-evaluated by used surface, not size.
+- `@xterm/*`, `lucide-react`, `three` — re-evaluated by used surface, not size.
 
 An extreme run re-tests every `SKIPPED_INFEASIBLE` row here rather than honoring it, so this section is a forecast, not a decision log; the decision log is the tables above, which record the mode each row was reached under.
 

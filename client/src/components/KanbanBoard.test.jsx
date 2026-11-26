@@ -17,7 +17,7 @@ vi.mock('../services/apiSystem.js', () => ({
 }));
 vi.mock('../services/apiAgents.js', () => ({ createJiraTicketTask: api.createJiraTicketTask }));
 vi.mock('./ui/Toast', () => ({ default: toast }));
-vi.mock('@dnd-kit/core', () => ({
+vi.mock('../lib/dnd/index.js', () => ({
   DndContext: ({ children, ...props }) => {
     dndState.context = props;
     return <>{children}</>;
@@ -40,7 +40,7 @@ vi.mock('@dnd-kit/core', () => ({
   useSensors: (...sensors) => sensors,
 }));
 
-import { closestCenter, KeyboardSensor, rectIntersection } from '@dnd-kit/core';
+import { closestCenter, KeyboardSensor, rectIntersection } from '../lib/dnd/index.js';
 import KanbanBoard, { kanbanCollisionDetection, kanbanKeyboardCoordinates } from './KanbanBoard';
 
 const TICKETS = [

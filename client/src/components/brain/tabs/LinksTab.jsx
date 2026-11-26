@@ -3,7 +3,7 @@ import { Link } from 'react-router';
 import {
   DndContext, DragOverlay, KeyboardSensor, PointerSensor,
   useDraggable, useSensor, useSensors,
-} from '@dnd-kit/core';
+} from '../../../lib/dnd/index.js';
 import {
   getBrainLinks,
   getBrainBuckets,
@@ -509,7 +509,7 @@ export default function LinksTab({ onRefresh }) {
 
   const handleDragCancel = useCallback(() => setActiveDrag(null), []);
 
-  // dnd-kit's stock announcements only say "draggable item N" (an id). Name
+  // The default drag announcements only say "draggable item N" (an id). Name
   // the bucket/link and its destination instead, using the live counts so
   // "position 2 of 5" stays accurate as buckets fill up.
   const dndAccessibility = useMemo(() => {
@@ -1188,7 +1188,7 @@ export default function LinksTab({ onRefresh }) {
 }
 
 /**
- * Drag source for a link-list row: dnd-kit's `attributes`/`listeners` must be
+ * Drag source for a link-list row: the drag handle's `attributes`/`listeners` must be
  * spread on a real focusable element (not the whole row, which also hosts
  * click targets like Edit/Delete/Open), so the grip icon becomes a dedicated
  * handle — the same shape as `LibraryPane.jsx`'s `WorkRow` and

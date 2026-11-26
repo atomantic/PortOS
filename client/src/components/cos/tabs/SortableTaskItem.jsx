@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { useSortable } from '@dnd-kit/sortable';
+import { useSortable } from '../../../lib/dnd/index.js';
 import { dndTransformToCss } from '../../../lib/dndTransform';
 import TaskItem from './TaskItem';
 

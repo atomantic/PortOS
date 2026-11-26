@@ -4,7 +4,7 @@ import {
   ChevronRight, ChevronDown, Plus, GripVertical, Search, Tag, Link2, Crown, Star, Wand2, AlertTriangle, Minus, Circle
 } from 'lucide-react';
 import toast from '../ui/Toast';
-import { DndContext, DragOverlay, KeyboardSensor, PointerSensor, useSensor, useSensors, useDraggable, useDroppable } from '@dnd-kit/core';
+import { DndContext, DragOverlay, KeyboardSensor, PointerSensor, useSensor, useSensors, useDraggable, useDroppable } from '../../lib/dnd/index.js';
 import { createFreeDroppableKeyboardCoordinates, keyboardAwareCollisionDetection } from '../../lib/dndKeyboardCoordinates';
 import { updateGoal } from '../../services/apiGoals.js';
 import GoalDetailPanel, { CATEGORY_CONFIG, HORIZON_OPTIONS, GOAL_TYPE_CONFIG, DEFAULT_NEW_GOAL } from './GoalDetailPanel';
@@ -90,7 +90,7 @@ function GoalRow({ goal, depth, expandedIds, onToggle, onSelect, selectedId, onA
         }`}
         style={{ '--goal-depth': Math.min(depth, 4) }}
       >
-        {/* dnd-kit's `attributes` make this a focusable role="button", so it
+        {/* the drag handle's `attributes` make this a focusable role="button", so it
             needs a name of its own — otherwise it is announced as an unlabeled
             button sitting in front of every goal in the tree. */}
         <div
@@ -347,7 +347,7 @@ export default function GoalsListView({ data, onRefresh, selectedGoalId }) {
 
   const handleDragCancel = useCallback(() => setDraggedGoal(null), []);
 
-  // dnd-kit's stock announcements read out `drag-<uuid>`. Name the goals the
+  // The default drag announcements read out `drag-<uuid>`. Name the goals the
   // user is reparenting instead, and say which target the drag is currently on.
   const accessibility = useMemo(() => {
     const goalTitle = (node) => node?.data?.current?.goal?.title || 'goal';
