@@ -114,7 +114,7 @@ vi.mock('../services/creativeDirector/videoExecution.js', () => ({ getVideoExecu
 vi.mock('../services/catalog/catalogDB.js', () => ({ listIngredients: vi.fn(async () => ({ items: [] })) }));
 vi.mock('../services/settings.js', async (importOriginal) => ({ ...(await importOriginal()), getSettings: vi.fn(async () => ({})) }));
 
-describe('cosStatusRoutes domainAutonomy.creative persistence & enforcement', () => {
+describe('cosStatusRoutes', () => {
   let app;
   let dispatchCreativeTool;
 
@@ -136,6 +136,28 @@ describe('cosStatusRoutes domainAutonomy.creative persistence & enforcement', ()
     app.use('/api/cos', cosStatusRoutes);
     app.use('/api/creative-director', creativeDirectorRoutes);
     app.use(errorMiddleware);
+  });
+
+  it.each([
+    ['start', true],
+    ['stop', false],
+    ['resume', true],
+  ])('returns HTTP 200 for an unchanged %s request', async (action, running) => {
+    const { setDaemonRunning } = await import('../services/cos/cosState.js');
+    setDaemonRunning(running);
+    const res = await request(app).post(`/api/cos/${action}`);
+    expect(res.status).toBe(200);
+    expect(res.body).toEqual({ success: true, unchanged: true });
+  });
+
+  it('returns HTTP 200 and the original timestamp for a repeated pause request', async () => {
+    const initial = await request(app).post('/api/cos/pause').send({ reason: 'Initial reason' });
+    expect(initial.status).toBe(200);
+    expect(initial.body).toEqual({ success: true, pausedAt: expect.any(String) });
+
+    const res = await request(app).post('/api/cos/pause').send({ reason: 'Later reason' });
+    expect(res.status).toBe(200);
+    expect(res.body).toEqual({ ...initial.body, unchanged: true });
   });
 
   it('persists domainAutonomy.creative overrides, preserves them across unrelated domain saves, and clears on null', async () => {
