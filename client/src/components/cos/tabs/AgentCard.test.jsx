@@ -469,7 +469,7 @@ describe('AgentCard feedback', () => {
       </MemoryRouter>
     );
 
-    await user.click(screen.getByRole('button', { name: 'Mark as helpful' }));
+    await user.click(screen.getByRole('button', { name: `Mark as helpful: ${agent.id}` }));
 
     expect(submitCosAgentFeedback).toHaveBeenCalledWith(
       agent.id,
@@ -497,7 +497,7 @@ describe('AgentCard feedback', () => {
       </MemoryRouter>
     );
 
-    await user.click(screen.getByRole('button', { name: 'Add feedback comment' }));
+    await user.click(screen.getByRole('button', { name: `Add feedback comment: ${agent.id}` }));
     await typeSettled(user, screen.getByPlaceholderText('What made this work well or poorly?'), updatedAgent.feedback.comment);
     await user.click(screen.getByRole('button', { name: 'Needs work' }));
 
@@ -526,7 +526,7 @@ describe('AgentCard feedback', () => {
       </MemoryRouter>
     );
 
-    await user.click(screen.getByRole('button', { name: 'Add feedback detail' }));
+    await user.click(screen.getByRole('button', { name: `Add feedback detail: ${agent.id}` }));
     await typeSettled(user, screen.getByPlaceholderText('What made this work well or poorly?'), detailedAgent.feedback.comment);
     await user.click(screen.getByRole('button', { name: 'Save detail' }));
 
@@ -588,7 +588,9 @@ describe('AgentCard agent ID', () => {
       </MemoryRouter>
     );
 
-    await user.click(screen.getByRole('button', { name: 'Copy agent ID' }));
+    const copy = screen.getByRole('button', { name: `Copy agent ID ${cardAgent.id}` });
+    expect(screen.getByRole('group', { name: `Agent ${cardAgent.id}` })).toContainElement(copy);
+    await user.click(copy);
 
     expect(copyToClipboard).toHaveBeenCalledWith(cardAgent.id, 'Agent ID copied to clipboard');
   });
@@ -607,16 +609,16 @@ describe('AgentCard responsive header', () => {
 
     for (const button of [
       screen.getAllByRole('button', { name: 'Show' })[0],
-      screen.getByRole('button', { name: "Relaunch this agent's task on a different provider or model" }),
-      screen.getByRole('button', { name: 'Pause agent and preserve worktree' }),
-      screen.getByRole('button', { name: 'Force kill agent (SIGKILL)' }),
-      screen.getByRole('button', { name: "Resume this agent's task on its preserved worktree" }),
+      screen.getByRole('button', { name: `Relaunch this agent's task on a different provider or model: ${runningAgent.id}` }),
+      screen.getByRole('button', { name: `Pause agent and preserve worktree: ${runningAgent.id}` }),
+      screen.getByRole('button', { name: `Force kill agent (SIGKILL): ${runningAgent.id}` }),
+      screen.getByRole('button', { name: "Resume this agent's task on its preserved worktree: paused-agent" }),
     ]) {
       expect(button).toHaveClass('min-h-[44px]', 'min-w-[44px]');
       expect(button.className).not.toMatch(/sm:min-[hw]-0/);
     }
 
-    await user.click(screen.getByRole('button', { name: 'Force kill agent (SIGKILL)' }));
+    await user.click(screen.getByRole('button', { name: `Force kill agent (SIGKILL): ${runningAgent.id}` }));
     for (const button of [screen.getByRole('button', { name: 'Kill' }), screen.getByRole('button', { name: 'Cancel' })]) {
       expect(button).toHaveClass('min-h-[44px]', 'min-w-[44px]');
     }
@@ -875,7 +877,7 @@ describe('AgentCard kill confirmation (#4034)', () => {
     );
 
     // Clicking Kill should show confirmation prompt and NOT call onKill immediately
-    await user.click(screen.getByRole('button', { name: 'Force kill agent (SIGKILL)' }));
+    await user.click(screen.getByRole('button', { name: `Force kill agent (SIGKILL): ${runningAgent.id}` }));
     expect(onKill).not.toHaveBeenCalled();
     expect(screen.getByText('Kill?')).toBeInTheDocument();
 
@@ -885,7 +887,7 @@ describe('AgentCard kill confirmation (#4034)', () => {
     expect(screen.queryByText('Kill?')).not.toBeInTheDocument();
 
     // Re-arm and click Confirm
-    await user.click(screen.getByRole('button', { name: 'Force kill agent (SIGKILL)' }));
+    await user.click(screen.getByRole('button', { name: `Force kill agent (SIGKILL): ${runningAgent.id}` }));
     await user.click(screen.getByRole('button', { name: 'Kill' }));
     expect(onKill).toHaveBeenCalledWith(runningAgent.id);
   });

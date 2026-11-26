@@ -241,7 +241,7 @@ export default function AgentCard({ agent, onPause, onKill, onDelete, onResume, 
   const cleanupTracked = agent.metadata?.cleanupOutcome || agent.result?.cleanupPending;
 
   return (
-    <div className={`min-w-0 bg-port-card border rounded-lg overflow-hidden ${completed && expanded ? 'col-span-full' : ''} ${
+    <div role="group" aria-label={`Agent ${agent.id}`} className={`min-w-0 bg-port-card border rounded-lg overflow-hidden ${completed && expanded ? 'col-span-full' : ''} ${
       agent.deliveryPending ? 'border-port-warning/40' : inactive
         ? isSystemAgent ? 'border-port-border opacity-50' : 'border-port-border opacity-75'
         : 'border-port-accent/50'

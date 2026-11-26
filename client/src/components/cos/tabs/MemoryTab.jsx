@@ -1,3 +1,4 @@
+import { cardRecordLabels } from '../cardRecordLabels';
 import { useState, useCallback, useRef, useMemo, lazy, Suspense } from 'react';
 import { useNavigate, useParams, useSearchParams } from 'react-router';
 import {Trash2, X, Check, XCircle, Pencil, AlertTriangle, Brain, Bot} from 'lucide-react';
@@ -29,6 +30,11 @@ import { useConfirmDelete } from '../../../hooks/useConfirmDelete';
 const MEMORY_EVENTS = ['cos:memory:created', 'cos:memory:updated', 'cos:memory:deleted', 'cos:memory:extracted'];
 const QUEUE_EVENTS = [...MEMORY_EVENTS, 'cos:memory:approval-needed'];
 const STATUS_EVENTS = [];
+
+function memorySnippet(memory) {
+  const summary = memory.summary?.trim() || memory.content?.trim() || memory.id;
+  return summary.length > 100 ? `${summary.slice(0, 100)}…` : summary;
+}
 
 export default function MemoryTab({ apps = [] }) {
   const [searchParams, setSearchParams] = useSearchParams();
@@ -146,6 +152,7 @@ export default function MemoryTab({ apps = [] }) {
   };
 
   const displayMemories = memories;
+  const snippets = cardRecordLabels([...pendingMemories, ...displayMemories].map(memory => [memory.id, memorySnippet(memory)]));
 
   return (
     <div className="space-y-6">
@@ -283,10 +290,9 @@ export default function MemoryTab({ apps = [] }) {
         <div className="space-y-3">
           <h3 className="text-lg font-semibold text-yellow-500">Pending Approval ({pendingMemories.length})</h3>
           {pendingMemories.map(memory => {
-            const summary = memory.summary || memory.content || '';
-            const snippet = summary.length > 100 ? `${summary.slice(0, 100)}…` : summary;
+            const snippet = snippets.get(memory.id);
             return (
-              <div key={memory.id} className="bg-port-card border border-yellow-500/50 rounded-lg p-4">
+              <div key={memory.id} role="group" aria-label={`Memory: ${snippet}`} className="bg-port-card border border-yellow-500/50 rounded-lg p-4">
                 <div className="flex flex-col sm:flex-row sm:items-start justify-between gap-4">
                   <div className="flex-1 min-w-0">
                     <div className="flex flex-wrap items-center gap-2 mb-2">
@@ -298,7 +304,7 @@ export default function MemoryTab({ apps = [] }) {
                         {formatPercent((memory.confidence || 0) * 100, { decimals: 0 })} confidence
                       </span>
                     </div>
-                    <p className="text-white text-sm whitespace-pre-wrap">{summary}</p>
+                    <p className="text-white text-sm whitespace-pre-wrap">{memory.summary || memory.content}</p>
                     {memory.tags?.length > 0 && (
                       <div className="flex flex-wrap gap-1 mt-2">
                         {memory.tags.map(tag => (
@@ -408,8 +414,9 @@ export default function MemoryTab({ apps = [] }) {
               )}
             </div>
           ) : (
-            displayMemories.map(memory => (
-              <div key={memory.id} className="bg-port-card border border-port-border rounded-lg p-4">
+            displayMemories.map(memory => {
+              const snippet = snippets.get(memory.id);
+              return <div key={memory.id} role="group" aria-label={`Memory: ${snippet}`} className="bg-port-card border border-port-border rounded-lg p-4">
                 <div className="flex flex-col sm:flex-row sm:items-start justify-between gap-3">
                   <div className="flex-1 min-w-0">
                     <div className="flex flex-wrap items-center gap-2 mb-2">
@@ -459,7 +466,7 @@ export default function MemoryTab({ apps = [] }) {
                       onClick={() => navigate(`/cos/memory/${encodeURIComponent(memory.id)}`)}
                       className="pointer-coarse:min-h-11 pointer-coarse:min-w-11 p-3 min-h-[40px] min-w-[40px] flex items-center justify-center text-gray-500 hover:text-port-accent transition-colors"
                       title="Edit memory"
-                      aria-label="Edit memory"
+                      aria-label={`Edit memory: ${snippet}`}
                     >
                       <Pencil size={18} />
                     </button>
@@ -467,7 +474,7 @@ export default function MemoryTab({ apps = [] }) {
                       onClick={() => requestDelete(memory.id)}
                       className="pointer-coarse:min-h-11 pointer-coarse:min-w-11 p-3 min-h-[40px] min-w-[40px] flex items-center justify-center text-gray-500 hover:text-port-error transition-colors"
                       title="Archive memory"
-                      aria-label="Archive memory"
+                      aria-label={`Archive memory: ${snippet}`}
                     >
                       <Trash2 size={18} />
                     </button>
@@ -477,7 +484,7 @@ export default function MemoryTab({ apps = [] }) {
                   <InlineConfirmRow
                     className="mt-3"
                     autoFocus
-                    aria-label={`Confirm archive memory ${(memory.summary || memory.content || memory.id).slice(0, 100)}`}
+                    aria-label={`Confirm archive memory ${snippet}`}
                     question="Archive this memory? It will be hidden from active memory and search. Its contents remain stored."
                     confirmText="Archive"
                     confirmTitle="Confirm archive"
@@ -486,8 +493,8 @@ export default function MemoryTab({ apps = [] }) {
                     onCancel={cancelDelete}
                   />
                 )}
-              </div>
-            ))
+              </div>;
+            })
           )}
         </div>
       ) : view === 'timeline' ? (

@@ -16,7 +16,7 @@ import BranchReconcileOutcome from './BranchReconcileOutcome';
 // appContext embeds the same card on a selected app's Automation tab: the
 // caller owns app-scoped saves/runs and supplies override controls as children.
 // Keep global coverage/history and global pin writes out of that context.
-export default function AppTaskCard({ taskType, config, apps, appsStatus, onTrigger, onConfigure, onUpdate, providers, providersLoaded = true, activeProviderId, improvementDisabled, orderStep, appContext, children }) {
+export default function AppTaskCard({ taskType, config, recordLabel = config.displayName?.trim() || taskType, apps, appsStatus, onTrigger, onConfigure, onUpdate, providers, providersLoaded = true, activeProviderId, improvementDisabled, orderStep, appContext, children }) {
   // Owned here, not in the controls, so Run can gate on the same `saving` flag —
   // it reads the server-side config, so a run fired mid-write uses the old pins.
   const pins = useTaskModelPins({ taskType, config, providers, activeProviderId, onUpdate });
@@ -45,7 +45,7 @@ export default function AppTaskCard({ taskType, config, apps, appsStatus, onTrig
   const stageCount = pipelineStages(config).length;
 
   return (
-    <div className="flex flex-col border border-port-border rounded-lg bg-port-card hover:border-port-border/60 transition-colors">
+    <div role="group" aria-label={recordLabel} className="flex flex-col border border-port-border rounded-lg bg-port-card hover:border-port-border/60 transition-colors">
       {/* `flex flex-col items-stretch` is load-bearing: a stretched <button> centers its
           content box vertically, which floats a short card's body to the middle of the
           card and breaks the top alignment across a row. */}

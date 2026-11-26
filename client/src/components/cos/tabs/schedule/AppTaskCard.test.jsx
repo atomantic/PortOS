@@ -271,7 +271,7 @@ describe('AppTaskCard', () => {
   describe('quick model pins', () => {
     it('persists a provider pick and clears the model + effort pins with it', async () => {
       const { onUpdate } = renderCardWithPins({ providerId: 'gemini', model: 'gemini-3-pro' });
-      fireEvent.change(screen.getByLabelText('Provider'), { target: { value: 'claude-code' } });
+      fireEvent.change(within(screen.getByRole('group', { name: 'code-review' })).getByLabelText('Provider'), { target: { value: 'claude-code' } });
       await waitFor(() => expect(onUpdate).toHaveBeenCalledWith('code-review', {
         providerId: 'claude-code', model: null, effort: null,
       }));

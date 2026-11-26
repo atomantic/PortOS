@@ -165,6 +165,18 @@ describe('MemoryTab accessible controls', () => {
     await screen.findByText('No memories yet.');
   });
 
+  it('distinguishes active records with the same summary', async () => {
+    const records = ['example-a', 'example-b'].map(id => ({ ...activeMemory, id }));
+    getMemories.mockImplementation(async params => ({ memories: params.status ? [] : records }));
+    renderTab();
+    await screen.findAllByText('Original summary');
+    for (const { id } of records) {
+      const snippet = `Original summary (${id})`;
+      const group = screen.getByRole('group', { name: `Memory: ${snippet}` });
+      expect(within(group).getByRole('button', { name: `Archive memory: ${snippet}` })).toBeVisible();
+    }
+  });
+
   it('names each pending action with its own memory summary or content', async () => {
     const second = { ...pending, id: 'synthetic-pending-2', summary: 'Another pending summary' };
     getMemories.mockImplementation(async params => ({ memories: params.status ? [pending, second] : [] }));
@@ -284,7 +296,9 @@ describe('MemoryTab lifecycle reconciliation', () => {
     getMemories.mockImplementation(async params => ({ memories: params.status ? [] : [activeMemory] }));
     renderTab();
     await screen.findByText('Original summary');
-    fireEvent.click(screen.getByRole('button', { name: 'Edit memory' }));
+    const edit = screen.getByRole('button', { name: 'Edit memory: Original summary' });
+    expect(screen.getByRole('group', { name: 'Memory: Original summary' })).toContainElement(edit);
+    fireEvent.click(edit);
     await screen.findByDisplayValue('Original body');
     fireEvent.change(screen.getByRole('textbox', { name: /Content/ }), { target: { value: 'Unsaved draft' } });
     getMemory.mockResolvedValue({ ...activeMemory, version: 2, content: 'Remote body', summary: 'Remote summary' });

@@ -1,3 +1,4 @@
+import { cardRecordLabels } from '../cardRecordLabels';
 import { sortByLabel } from '../../../lib/sortByLabel.js';
 import { useState, useEffect, useCallback, useMemo, useRef } from 'react';
 import { Plus, RefreshCw } from 'lucide-react';
@@ -211,6 +212,8 @@ export default function JobsTab() {
     });
   };
 
+  const jobLabels = cardRecordLabels(jobs.map(job => [job.id, job.name?.trim() || job.id]));
+
   if (loading) {
     return (
       <div className="flex items-center justify-center py-12 text-gray-500">
@@ -394,6 +397,7 @@ export default function JobsTab() {
               fixedType={job.portosOnly ? 'agent' : undefined}
               key={job.id}
               job={job}
+              recordLabel={jobLabels.get(job.id)}
               apps={apps}
               providers={providers}
               activeProviderId={activeProviderId}

@@ -27,7 +27,7 @@ export default function TaskItemStatusBar({ task, displayStatus, statusLabel, st
         }
       }}
       className="mt-0.5 hover:scale-110 transition-transform"
-      aria-label={`Status: ${statusLabel}. ${statusProtected ? protectedReason : `Click to mark as ${task.status === 'completed' || task.status === 'blocked' ? 'pending' : 'completed'}`}`}
+      aria-label={`Task ${task.id}. Status: ${statusLabel}. ${statusProtected ? protectedReason : `Click to mark as ${task.status === 'completed' || task.status === 'blocked' ? 'pending' : 'completed'}`}`}
     >
       {statusIcons[displayStatus]}
     </button>

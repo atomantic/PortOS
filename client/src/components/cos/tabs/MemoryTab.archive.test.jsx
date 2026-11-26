@@ -67,7 +67,7 @@ describe('MemoryTab archive confirmation', () => {
     renderTab();
 
     await screen.findAllByText('A synthetic test memory');
-    const trigger = screen.getByRole('button', { name: 'Archive memory' });
+    const trigger = screen.getByRole('button', { name: 'Archive memory: A synthetic test memory' });
     trigger.focus();
     await user.keyboard('{Enter}');
 
@@ -80,7 +80,7 @@ describe('MemoryTab archive confirmation', () => {
     expect(trigger).toHaveFocus();
     expect(deleteMemory).not.toHaveBeenCalled();
 
-    await user.click(screen.getByRole('button', { name: 'Archive memory' }));
+    await user.click(screen.getByRole('button', { name: 'Archive memory: A synthetic test memory' }));
     await user.click(screen.getByRole('button', { name: 'Archive' }));
     // The wrapper's default hard=false keeps this existing archive request soft.
     await waitFor(() => expect(deleteMemory).toHaveBeenCalledWith(memory.id));

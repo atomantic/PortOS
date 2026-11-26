@@ -42,7 +42,7 @@ export default function TaskItemActions({ task, agent, unconfirmed, editing, del
                 }}
                 className="min-h-[44px] min-w-[44px] inline-flex items-center justify-center p-1 text-gray-500 hover:text-port-success transition-colors"
                 title="Process now"
-                aria-label="Process task now"
+                aria-label={`Process task now ${task.id}`}
               >
                 <Play size={14} aria-hidden="true" />
               </button>
@@ -103,7 +103,7 @@ export default function TaskItemActions({ task, agent, unconfirmed, editing, del
                 onClick={onMarkBlocked}
                 className="min-h-[44px] min-w-[44px] inline-flex items-center justify-center p-1 text-gray-500 hover:text-port-error transition-colors"
                 title="Mark as blocked"
-                aria-label="Mark task as blocked"
+                aria-label={`Mark task as blocked ${task.id}`}
               >
                 <Ban size={14} aria-hidden="true" />
               </button>
@@ -112,7 +112,7 @@ export default function TaskItemActions({ task, agent, unconfirmed, editing, del
               onClick={onEdit}
               className="min-h-[44px] min-w-[44px] inline-flex items-center justify-center p-1 text-gray-500 hover:text-white transition-colors"
               title="Edit"
-              aria-label="Edit task"
+              aria-label={`Edit task ${task.id}`}
             >
               <Edit3 size={14} aria-hidden="true" />
             </button>
@@ -121,7 +121,7 @@ export default function TaskItemActions({ task, agent, unconfirmed, editing, del
               onClick={onRequestDelete}
               className="min-h-[44px] min-w-[44px] inline-flex items-center justify-center p-1 text-gray-500 hover:text-port-error transition-colors"
               title="Delete"
-              aria-label="Delete task"
+              aria-label={`Delete task ${task.id}`}
             >
               <Trash2 size={14} aria-hidden="true" />
             </button>

@@ -23,7 +23,7 @@ export default function AgentCardHeader({ agent, inactive, isSystemAgent, remote
           }}
           className="min-h-[44px] min-w-[44px] inline-flex items-center justify-center p-1 rounded text-gray-500 hover:bg-port-border/60 hover:text-white transition-colors shrink-0"
           title="Copy agent ID"
-          aria-label="Copy agent ID"
+          aria-label={`Copy agent ID ${agent.id}`}
         >
           <Copy size={13} aria-hidden="true" />
         </button>
@@ -161,7 +161,7 @@ function AgentControlBar({ agent, inactive, paused, completed, remote, hasOutput
         <button
           onClick={() => onRelaunch(agent)}
           className="flex min-h-[44px] min-w-[44px] items-center justify-center gap-1.5 px-2 py-1 text-xs rounded bg-port-accent/20 text-port-accent hover:bg-port-accent/30 transition-colors"
-          aria-label="Relaunch this agent's task on a different provider or model"
+          aria-label={`Relaunch this agent's task on a different provider or model: ${agent.id}`}
         >
           <RefreshCw size={12} aria-hidden="true" />
           <span className="hidden sm:inline">Relaunch</span>
@@ -172,7 +172,7 @@ function AgentControlBar({ agent, inactive, paused, completed, remote, hasOutput
           onClick={handlePause}
           disabled={pausing}
           className="flex min-h-[44px] min-w-[44px] items-center justify-center gap-1.5 px-2 py-1 text-xs rounded bg-yellow-500/20 text-yellow-400 hover:bg-yellow-500/30 transition-colors disabled:opacity-50"
-          aria-label="Pause agent and preserve worktree"
+          aria-label={`Pause agent and preserve worktree: ${agent.id}`}
         >
           {pausing ? <Loader2 size={12} aria-hidden="true" className="animate-spin" /> : <Pause size={12} aria-hidden="true" />}
           <span className="hidden sm:inline">Pause</span>
@@ -198,7 +198,7 @@ function AgentControlBar({ agent, inactive, paused, completed, remote, hasOutput
             onClick={() => setConfirmingKill(true)}
             disabled={killing}
             className="flex min-h-[44px] min-w-[44px] items-center justify-center gap-1.5 px-2 py-1 text-xs rounded bg-port-error/20 text-port-error hover:bg-port-error/30 transition-colors disabled:opacity-50"
-            aria-label="Force kill agent (SIGKILL)"
+            aria-label={`Force kill agent (SIGKILL): ${agent.id}`}
           >
             {killing ? <Loader2 size={12} aria-hidden="true" className="animate-spin" /> : <Skull size={12} aria-hidden="true" />}
             <span className="hidden sm:inline">Kill</span>
@@ -210,8 +210,8 @@ function AgentControlBar({ agent, inactive, paused, completed, remote, hasOutput
           onClick={() => onResume(agent)}
           className="flex min-h-[44px] min-w-[44px] items-center justify-center gap-1 text-xs px-2 py-1 rounded bg-port-accent/20 text-port-accent hover:bg-port-accent/30 transition-colors"
           aria-label={paused
-            ? "Resume this agent's task on its preserved worktree"
-            : "Create new task from this agent's context"}
+            ? `Resume this agent's task on its preserved worktree: ${agent.id}`
+            : `Create new task from this agent's context: ${agent.id}`}
         >
           <RotateCcw size={12} aria-hidden="true" />
           <span className="hidden sm:inline">Resume</span>
@@ -232,7 +232,7 @@ function AgentControlBar({ agent, inactive, paused, completed, remote, hasOutput
           <button
             onClick={() => requestDelete(agent.id)}
             className="min-h-[44px] min-w-[44px] inline-flex items-center justify-center p-1 text-gray-500 hover:text-port-error transition-colors"
-            aria-label="Remove agent"
+            aria-label={`Remove agent ${agent.id}`}
           >
             <Trash2 size={14} aria-hidden="true" />
           </button>
