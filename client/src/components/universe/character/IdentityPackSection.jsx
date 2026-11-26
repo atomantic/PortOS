@@ -1,13 +1,8 @@
+import { IDENTITY_ASSET_ROLES, IDENTITY_PACK_REQUIRED_ROLES } from '../../../../../server/lib/storyBibleRoles.js';
 import { Plus, Trash2, Images } from 'lucide-react';
 import { BIBLE_LIMITS as L } from '../../../lib/bibleLimits';
 import { REL_SELECT_CLASS } from './editorClasses';
 import BoxedSection from './BoxedSection';
-
-const IDENTITY_ASSET_ROLES = Object.freeze([
-  'neutral', 'profile', 'full-body', 'expression-gesture', 'wardrobe',
-  'prop-scale', 'negative-identity',
-]);
-const REQUIRED_IDENTITY_ROLES = Object.freeze(['neutral', 'profile', 'full-body']);
 
 export default function IdentityPackSection({ entry, onPatch, disabled }) {
   const pack = entry.identityPack || {};
@@ -15,8 +10,8 @@ export default function IdentityPackSection({ entry, onPatch, disabled }) {
   const approved = assets.filter((asset) => asset?.approved === true);
   const counts = new Map();
   for (const asset of approved) counts.set(asset.role, (counts.get(asset.role) || 0) + 1);
-  const missing = REQUIRED_IDENTITY_ROLES.filter((role) => !counts.get(role));
-  const ambiguous = REQUIRED_IDENTITY_ROLES.filter((role) => (counts.get(role) || 0) > 1);
+  const missing = IDENTITY_PACK_REQUIRED_ROLES.filter((role) => !counts.get(role));
+  const ambiguous = IDENTITY_PACK_REQUIRED_ROLES.filter((role) => (counts.get(role) || 0) > 1);
   const status = ambiguous.length ? 'ambiguous' : missing.length ? 'missing' : 'ready';
   const commit = (patch) => onPatch?.({ identityPack: { ...pack, ...patch } });
   const add = () => {

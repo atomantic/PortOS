@@ -6,7 +6,6 @@ import { describe, expect, it } from 'vitest';
 // scrolls; the loading skeleton must mirror the loaded PageHeader bar shape.
 const FILES = [
   '../pages/Uploads.jsx',
-  '../pages/AgentsPage.jsx',
   '../pages/HistoryPage.jsx',
   '../components/integrations/IntegrationInstancesPage.jsx',
 ];

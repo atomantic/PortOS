@@ -1,5 +1,8 @@
 import { recordingOperatorIo } from '../test/recordingOperatorIo.js';
 import { EventEmitter } from 'node:events';
+import { chmod, mkdtemp, readFile, rm, stat, writeFile } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { ERROR_CATEGORIES } from '../lib/aiToolkit/errorDetection.js';
 import { errorEvents } from '../lib/errorHandler.js';
@@ -297,6 +300,26 @@ afterEach(async () => {
 });
 
 describe('pre-route bootstrap', () => {
+  it.skipIf(process.platform === 'win32')('tightens both legacy secret stores during pre-route boot', async () => {
+    const dataDir = await mkdtemp(join(tmpdir(), 'portos-bootstrap-permissions-'));
+    const files = ['settings.json', 'managed-visitor-credentials.json'].map(file => join(dataDir, file));
+    try {
+      for (const file of files) {
+        await writeFile(file, '{}');
+        await chmod(file, 0o644);
+      }
+
+      const { spawnerReady } = await bootstrapServices({ ...paths, dataDir, io: {} });
+      await spawnerReady;
+      for (const file of files) {
+        expect((await stat(file)).mode & 0o777).toBe(0o600);
+        expect(await readFile(file, 'utf8')).toBe('{}');
+      }
+    } finally {
+      await rm(dataDir, { recursive: true, force: true });
+    }
+  });
+
   it('refuses to create the toolkit when smoke migrations fail', async () => {
     vi.stubEnv('PORTOS_SMOKE_BOOT', '1');
     steps.applyMigrations.mockRejectedValueOnce(new Error('fixture migration failed'));

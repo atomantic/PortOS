@@ -1,3 +1,4 @@
+import { readLayeredEngine } from '../../layeredEngineSource.js';
 import { readFileSync } from 'node:fs';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { chromium } from 'playwright-core';
@@ -86,7 +87,7 @@ describe.skipIf(!canRun)('lyricType in the layered template (browser pixels)', (
       await page.evaluate((mv) => { window.PORTOS_MV = mv; }, { ...MV, render: { ...MV.render, width: 640, height: 360 } });
       await page.addScriptTag({ content: readFileSync(new URL('./lyricType.js', import.meta.url), 'utf8'), type: 'module' });
       await page.waitForFunction(() => globalThis.PORTOS_LYRIC_TYPE);
-      await page.addScriptTag({ content: readFileSync(new URL('../layered/engine.js', import.meta.url), 'utf8') });
+      await page.addScriptTag({ content: (await readLayeredEngine()).toString('utf8') });
       const lit = (t) => page.evaluate(async (time) => {
         await globalThis.portosComposition.seek(time);
         const c = document.getElementById('stage');

@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { mkdir, mkdtemp, readFile, rm } from 'node:fs/promises';
+import { mkdir, mkdtemp, readFile, rm, stat } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import {
@@ -98,6 +98,10 @@ describe('runResetPassword', () => {
 
       const sessions = JSON.parse(await readFile(join(dataDir, 'auth-sessions.json'), 'utf8'));
       expect(sessions).toEqual({ tokens: [] });
+      if (process.platform !== 'win32') {
+        expect((await stat(join(dataDir, 'settings.json'))).mode & 0o777).toBe(0o600);
+        expect((await stat(join(dataDir, 'auth-sessions.json'))).mode & 0o777).toBe(0o600);
+      }
 
       const statusResult = await runResetPassword('--status', { dataDir });
       expect(statusResult).toEqual({ code: 0, message: '🔒 Password auth is enabled.' });

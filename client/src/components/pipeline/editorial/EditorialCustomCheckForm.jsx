@@ -11,15 +11,13 @@
  * renders sample findings inline — so the author can judge noise/scope before
  * committing the check to the catalog.
  */
+import { CHECK_SEVERITIES as SEVERITIES } from '../../../../../server/lib/editorial/checkInfra/taxonomy.js';
 import { useEffect, useRef, useState } from 'react';
 import useMounted from '../../../hooks/useMounted';
 import { FlaskConical, Loader2, Save, X } from 'lucide-react';
 import { CHECK_SCOPE_ORDER, scopeLabel, SEVERITY_BADGE_CLASSES } from '../../../lib/editorialChecks';
 
-// Scopes mirror the server registry's CHECK_SCOPES (via the client scope-order
-// catalog); severities have no client mirror so they live here.
 const SCOPES = CHECK_SCOPE_ORDER;
-const SEVERITIES = ['high', 'medium', 'low'];
 
 const blankDraft = {
   label: '',

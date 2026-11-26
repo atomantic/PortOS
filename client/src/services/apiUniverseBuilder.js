@@ -4,7 +4,7 @@
 
 import { request } from './apiCore.js';
 
-export const WORLD_CATEGORIES = ['landscapes', 'environments', 'structures', 'vehicles'];
+export { WORLD_CATEGORIES } from '../../../server/lib/universeWorldCategories.js';
 export const WORLD_CATEGORY_KEY_MAX = 64;
 export const COMPOSITE_PROMPT_MAX = 4000;
 // Universe bible field caps — used by the Universe Builder + Pipeline forms

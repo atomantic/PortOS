@@ -15,6 +15,8 @@ import { cosEvents } from './cos/cosEvents.js';
 import { ensureDir, PATHS, readJSONFile, atomicWrite, rmGuarded } from '../lib/fileUtils.js';
 import { createMutex } from '../lib/asyncMutex.js';
 import { isPlainObject } from '../lib/objects.js';
+import { isTruthyMeta } from '../lib/metadataFlags.js';
+import { ServerError } from '../lib/errorHandler.js';
 import { isQueuedContinuation } from '../lib/agent/agentOutcome.js';
 import { getAppById } from './apps.js';
 const DATA_DIR = PATHS.cos;
@@ -317,6 +319,44 @@ export async function queueFeatureAgentTask(task, { force = false } = {}) {
     }
     return { task: { ...persisted, taskType: 'internal' }, agent };
   });
+}
+
+// Bind the replacement under the same lock as Stop, Delete and dispatch. The
+// previous run's completion listener only hands off a pointer it still owns.
+export async function queueFeatureAgentReplacement(task, pausedRun) {
+  const { featureAgentId, featureAgentRun } = pausedRun.metadata;
+  return withBackupAssetPublication(() => withLock(async () => {
+    const data = await readData();
+    const agent = data.agents.find(candidate => candidate.id === featureAgentId);
+    const originalTaskId = pausedRun.taskId || pausedRun.metadata.taskId;
+    if (!featureAgentId || !isTruthyMeta(featureAgentRun) || !agent || agent.status === 'draft'
+      || !agent.currentAgentId || (agent.currentAgentId !== pausedRun.id && agent.currentAgentId !== originalTaskId)) {
+      throw new ServerError('Resume blocked: the Feature Agent no longer owns this paused run. Open Feature Agents to manage the current run or start a new one.', {
+        status: 409, code: 'AGENT_RESUME_FEATURE_RUN_UNAVAILABLE'
+      });
+    }
+
+    const { addTask } = await import('./cos/cosTaskStore.js');
+    const replacement = await addTask({
+      ...task,
+      metadata: { ...task.metadata, featureAgentId, featureAgentRun: true }
+    }, 'internal', { suppressDequeue: true });
+    // A previous write can queue the task before the feature pointer is saved.
+    // Only that exact continuation is safe to adopt when the request retries.
+    if (replacement?.duplicate && (replacement.status !== 'pending'
+      || replacement.metadata?.resumedFromAgentId !== pausedRun.id
+      || replacement.metadata?.featureAgentId !== featureAgentId
+      || !isTruthyMeta(replacement.metadata?.featureAgentRun))) {
+      throw new ServerError('Resume blocked: an equivalent task already exists. Resolve that task in the CoS queue, then retry.', {
+        status: 409, code: 'AGENT_RESUME_FEATURE_TASK_CONFLICT'
+      });
+    }
+    if (!replacement?.id) return { error: replacement?.error || 'Feature Agent replacement was not queued' };
+    agent.currentAgentId = replacement.id;
+    agent.updatedAt = new Date().toISOString();
+    await writeData(data);
+    return replacement;
+  }));
 }
 
 /**

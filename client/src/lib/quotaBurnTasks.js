@@ -12,10 +12,10 @@
  * inheritance display and the PUT payload without a server.
  */
 
+import { QUOTA_BURN_TASK_REF_KIND } from '../../../server/lib/quotaBurnTaskRefKind.js';
 import { buildMaintenanceSteps, MAINTENANCE_DRAIN_TASK, MAINTENANCE_SEQUENCE_TYPES, maintenanceStepParams } from '../../../server/lib/maintenanceSequence.js';
 
-/** Mirrors `QUOTA_BURN_TASK_REF_KIND` in `server/lib/quotaBurnTaskRef.js`. */
-export const QUOTA_BURN_TASK_REF_KIND = Object.freeze({ BUILTIN: 'builtin', CUSTOM: 'custom' });
+export { QUOTA_BURN_TASK_REF_KIND };
 
 export const BUILTIN_TASK_GROUP = 'PortOS scheduled tasks';
 export const CUSTOM_TASK_GROUP = 'App custom tasks';

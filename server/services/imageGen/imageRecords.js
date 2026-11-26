@@ -17,6 +17,7 @@ import { stripImageSidecarLocalFields, imageLiveStamp, sidecarPathForImage } fro
 import { GALLERY_IMAGE_EXTENSIONS, isSafeFilename } from '../../lib/pathSafety.js';
 import { isTombstoned } from '../../lib/tombstones.js';
 import { parseTsMs } from '../../lib/lwwTimestamp.js';
+import { sidecarEditQueue } from './sidecarStore.js';
 import { imageGenEvents } from '../imageGenEvents.js';
 import { mergeMediaTombstones, listMediaTombstones, clearMediaTombstone } from '../mediaTombstones.js';
 
@@ -124,18 +125,20 @@ export async function withLocalImageOrigin(meta) {
  */
 export async function writeLocalImageSidecarIfMissing(filename, { replace = false, preserveMetadata = false } = {}) {
   if (!isGalleryName(filename)) return false;
-  const paths = sidecarPaths(filename);
-  const existing = paths.filter((path) => existsSync(path));
-  if (existing.length && !replace) return false;
-  const metadata = preserveMetadata && existing.length ? await readJSONFile(existing[0], {}, { strict: true }) : {};
-  let next;
-  if (preserveMetadata && existing.length) {
-    const id = await localInstanceId();
-    if (!id || metadata.originInstanceId !== id) return false;
-    next = { ...metadata, originInstanceId: id, createdAt: new Date().toISOString() };
-  } else next = await withLocalImageOrigin({});
-  await atomicWrite(existing[0] || paths[0], next);
-  return true;
+  return sidecarEditQueue(filename, async () => {
+    const paths = sidecarPaths(filename);
+    const existing = paths.filter((path) => existsSync(path));
+    if (existing.length && !replace) return false;
+    const metadata = preserveMetadata && existing.length ? await readJSONFile(existing[0], {}, { strict: true }) : {};
+    let next;
+    if (preserveMetadata && existing.length) {
+      const id = await localInstanceId();
+      if (!id || metadata.originInstanceId !== id) return false;
+      next = { ...metadata, originInstanceId: id, createdAt: new Date().toISOString() };
+    } else next = await withLocalImageOrigin({});
+    await atomicWrite(existing[0] || paths[0], next);
+    return true;
+  });
 }
 
 async function stampRenderOrigin(payload) {

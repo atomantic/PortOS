@@ -6,7 +6,7 @@
  * (scripts/lib/cosWorkerBudget.js): cores / agents, never above the proven cap,
  * so several concurrent worktree gates share one host budget (#9773). Lower the
  * setting in the app to lighten host load; no env var is needed. A focused file
- * run is evidence for that file only. See docs/CONTRIBUTING.md.
+ * run is evidence for that file only. See CONTRIBUTING.md#testing.
  * `PORTOS_PREGATE_MAX_WORKERS` remains an internal handoff (pregate stage env,
  * browser-fidelity's single worker); it can only LOWER a workspace's cap.
  *

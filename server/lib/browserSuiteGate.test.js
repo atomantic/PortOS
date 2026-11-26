@@ -89,6 +89,24 @@ describe('H.264 probe outcomes', () => {
     expect(await chromeWithH264(chrome)).toBe(chrome);
   });
 
+  posix('cleans up a renderer holding stdout after Chrome exits and accepts the complete codec verdict', async () => {
+    const evidenceFile = join(mkdtempSync(join(tmpdir(), 'portos-fake-renderer-')), 'probe.json');
+    dirs.push(join(evidenceFile, '..'));
+    const chrome = fakeChrome(`
+      const { spawn } = require('node:child_process');
+      const renderer = spawn(process.execPath, ['-e', 'setInterval(() => {}, 1000)'], { stdio: ['ignore', 'inherit', 'ignore'] });
+      renderer.unref();
+      const profile = process.argv.find(arg => arg.startsWith('--user-data-dir=')).slice('--user-data-dir='.length);
+      require('node:fs').writeFileSync(${JSON.stringify(evidenceFile)}, JSON.stringify({ pid: renderer.pid, profile }));
+      process.stdout.write('<body>H264:probably</body>');
+    `);
+
+    expect(await probeChromeH264(chrome, { timeoutMs: 3000 })).toEqual({ ok: true, chromePath: chrome });
+    const { pid, profile } = JSON.parse(readFileSync(evidenceFile, 'utf8'));
+    expect(existsSync(profile)).toBe(false);
+    await vi.waitFor(() => expect(pidAlive(pid)).toBe(false), { timeout: 3000 });
+  });
+
   posix('treats a positive codec answer followed by a nonzero exit as a lifecycle failure, never a missing codec', async () => {
     const chrome = fakeChrome("process.stdout.write('<body>H264:probably</body>'); process.exitCode = 2;");
     const result = await probeChromeH264(chrome);

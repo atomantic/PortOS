@@ -714,12 +714,19 @@ async function replacePausedTask({ agentId, agent, task, taskType, overrides }) 
   inheritPausedCoordinatorContract(inheritedMetadata, agent?.metadata, {
     app: overridesPatch.app || app, taskType,
   });
-  const created = await addTask({
+  const replacement = {
     description,
     context, prompt, provider, model, effort, executionOptions, app,
     metadata: inheritedMetadata,
     ...overridesPatch
-  }, taskType);
+  };
+  let created;
+  if (!task && (agentMeta.featureAgentId || isTruthyMeta(agentMeta.featureAgentRun))) {
+    const { queueFeatureAgentReplacement } = await import('../featureAgents.js');
+    created = await queueFeatureAgentReplacement(replacement, agent);
+  } else {
+    created = await addTask(replacement, taskType);
+  }
   if (created?.error) {
     throw new ServerError(`Failed to queue resume task: ${created.error}`, {
       status: 500, code: 'AGENT_RESUME_FAILED'

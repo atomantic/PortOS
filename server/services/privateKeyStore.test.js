@@ -1,5 +1,5 @@
 import { beforeEach, afterEach, expect, it, vi } from 'vitest';
-import { mkdir, mkdtemp, readFile, writeFile, rm, stat } from 'node:fs/promises';
+import { chmod, mkdir, mkdtemp, readFile, writeFile, rm, stat } from 'node:fs/promises';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 
@@ -21,6 +21,17 @@ afterEach(async () => {
   vi.unstubAllEnvs();
   vi.unstubAllGlobals();
   await rm(directory, { recursive: true, force: true });
+});
+
+it.skipIf(process.platform === 'win32')('keeps newly written and legacy settings owner-only', async () => {
+  const file = join(directory, 'settings.json');
+  await settings.updateSettings({ theme: 'dark' });
+  expect((await stat(file)).mode & 0o777).toBe(0o600);
+
+  await chmod(file, 0o644);
+  await settings.updateSettings({ notifications: false });
+  expect((await stat(file)).mode & 0o777).toBe(0o600);
+  expect(JSON.parse(await readFile(file, 'utf8'))).toEqual({ theme: 'dark', notifications: false });
 });
 
 it('moves legacy keys out of settings, preserves unrelated data, and resolves after restart and clear', async () => {

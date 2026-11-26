@@ -21,9 +21,9 @@
 
 import { randomUUID } from 'crypto';
 import { sanitizeCoverLike } from './renderSlot.js';
-import { ARC_LIMITS, SERIES_DESIGN_MODES, SERIES_DESIGN_TEXT_MAX, SERIES_DESIGN_FIELDS } from './storyArcLimits.js';
+import { ARC_LIMITS, SERIES_DESIGN_MODES, SERIES_DESIGN_TEXT_MAX, SERIES_DESIGN_FIELDS, TICKING_CLOCK_KINDS } from './storyArcLimits.js';
 import { isStr, trimTo, trimToClause } from './textUtils.js';
-export { ARC_LIMITS } from './storyArcLimits.js';
+export { ARC_LIMITS, TICKING_CLOCK_KINDS } from './storyArcLimits.js';
 
 export const ARC_STATUSES = Object.freeze(['draft', 'verified']);
 export const SEASON_STATUSES = Object.freeze(['draft', 'verified', 'in-production', 'complete']);
@@ -61,7 +61,6 @@ export const TICKING_CLOCK_LIMITS = Object.freeze({
   ARC_POSITION_MAX: 9999,
   ISSUE_MAX: 9999,
 });
-export const TICKING_CLOCK_KINDS = Object.freeze(['deadline', 'event', 'countdown', 'prophecy', 'bomb', 'custom']);
 
 // Foreshadowing ledger — the authored plant → reinforce → payoff record the
 // arc-overview stage emits (#2172). Where `readerMap.hooks`/`payoffs` are the

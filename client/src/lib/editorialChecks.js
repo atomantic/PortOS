@@ -1,5 +1,6 @@
 // Pure helpers for the Editorial Checks page (`/pipeline/editorial-checks`, #1285):
 // `groupChecksByScope(checks)` buckets catalog rows into ordered Noun/Scene/Issue/Series sections.
+import { BIBLE_KEYS } from '../../../server/lib/universeCanon.js';
 import { descriptorForCanonEntry } from './canonPrompt.js';
 import { escapeRegExp } from './textUtils.js';
 
@@ -435,9 +436,6 @@ export function applyFindingsView(groups = [], filters = {}, sort = 'scope') {
 // canon section, with the entity's descriptor as a hovercard. Pure (no React/DOM)
 // so the page, the triage row, and the unit tests all share one implementation.
 
-// The plural canon-trunk array keys on a universe record (universe.characters, …).
-const CANON_TRUNK_KEYS = Object.freeze(['characters', 'places', 'objects']);
-
 // Singular human label per trunk — used in the chip hovercard when an entry has
 // no descriptor yet.
 export const CANON_KIND_LABELS = Object.freeze({ characters: 'character', places: 'place', objects: 'object' });
@@ -453,7 +451,7 @@ export function canonEntitiesFromUniverse(universe) {
   if (!universe || typeof universe !== 'object') return [];
   const out = [];
   const seen = new Set();
-  for (const key of CANON_TRUNK_KEYS) {
+  for (const key of BIBLE_KEYS) {
     const list = Array.isArray(universe[key]) ? universe[key] : [];
     for (const entry of list) {
       const name = String(entry?.name || '').trim();

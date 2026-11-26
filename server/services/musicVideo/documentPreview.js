@@ -276,7 +276,7 @@ export async function buildDocumentPreview(project, { draft = false, files: give
     const isModule = /type\s*=\s*['"]module['"]/i.test(match[1] + match[3]);
     html = html.split(match[0]).join(isModule
       ? `<script type="module">import ${JSON.stringify(await inlineDocumentModule(rel, files))};</script>`
-      : `<script${match[1]}${match[3]}>${inlineScript(await readFile(file.abs, 'utf8'))}</script>`);
+      : `<script${match[1]}${match[3]}>${inlineScript(file.data?.toString('utf8') ?? await readFile(file.abs, 'utf8'))}</script>`);
   }
   // Inline entry modules need the same local graph resolution as src modules.
   for (const [index, match] of [...html.matchAll(/<script\b[^>]*type\s*=\s*['"]module['"][^>]*>([\s\S]*?)<\/script>/gi)].entries()) {

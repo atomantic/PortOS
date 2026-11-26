@@ -6,7 +6,7 @@
 
 import { lstat, readdir, rename, stat } from 'fs/promises';
 import { basename, dirname, join, resolve, relative, isAbsolute } from 'path';
-import { PATHS, readJSONFileStrict, sha256File } from '../../lib/fileUtils.js';
+import { PATHS, readJSONFileStrict, sha256File, sha256Text } from '../../lib/fileUtils.js';
 import { acquireBackupSnapshotCut } from '../../lib/backupSnapshotBoundary.js';
 import { APPLIED_LEDGER_RELPATH, LEGACY_APPLIED_LEDGER_RELPATH } from '../../../scripts/lib/migrationLedger.js';
 import { ServerError } from '../../lib/errorHandler.js';
@@ -23,10 +23,12 @@ import {
   legacyDbMetadataMessage, manifestDataEntries, resolveSnapshotPath, usesFileEscapeHatch, withSnapshotRead,
 } from './snapshots.js';
 import {
-  IDENTITY_FILE, IDENTITY_RSYNC_EXCLUDE, OS_METADATA_RSYNC_EXCLUDES, RESTORE_PRESERVED_RSYNC_EXCLUDES, isIdentityPath,
+  IDENTITY_FILE, IDENTITY_RSYNC_EXCLUDE, OS_METADATA_RSYNC_EXCLUDES, RESTORE_CREDENTIAL_FILES,
+  RESTORE_CREDENTIAL_RSYNC_EXCLUDES, RESTORE_PRESERVED_RSYNC_EXCLUDES, isIdentityPath,
   isOsMetadataFile, isRestorePreservedPath, restoreScopeIsPreservedFile,
 } from './excludes.js';
 import { BACKUP_PROCESS_IDLE_TIMEOUT_MS, runRsync } from './rsync.js';
+import { readSnapshotCredentials, transferWithCredentials } from './restoreCredentials.js';
 
 // `-ii` heartbeats once per file rsync finishes deciding about, so a single
 // file whose `--checksum` digest outlasts the idle deadline still emits
@@ -215,7 +217,7 @@ async function assertRestoreStorageCompatible(srcDir, inventory, snapshotId) {
   }
 }
 
-async function verifySnapshotFiles(snapshotDir, srcDir, snapshotId, subdirFilter, { preserveIdentity = false } = {}) {
+async function verifySnapshotFiles(snapshotDir, srcDir, snapshotId, subdirFilter, { preserveIdentity, credentials }) {
   const isSkippedPath = preserveIdentity
     ? path => isRestorePreservedPath(path) || isIdentityPath(path)
     : isRestorePreservedPath;
@@ -264,10 +266,18 @@ async function verifySnapshotFiles(snapshotDir, srcDir, snapshotId, subdirFilter
   if (!inventory) throw snapshotFileIntegrityError(snapshotId);
   await assertRestoreStorageCompatible(srcDir, inventory, snapshotId);
   const { paths: snapshotPaths, largestFileBytes } = inventory;
-  const unmanifested = snapshotPaths.find(entry => !dataPaths.has(entry));
+  const unmanifested = snapshotPaths.find(entry => !dataPaths.has(entry))
+    ?? [...credentials.keys()].find(entry => !dataPaths.has(entry));
   if (unmanifested) throw snapshotFileIntegrityError(snapshotId, unmanifested);
 
   for (const { filePath, expectedHash } of selected) {
+    const name = relative(srcDir, filePath);
+    if (RESTORE_CREDENTIAL_FILES.includes(name)) {
+      // Verify the exact buffer the private writer will publish.
+      const bytes = credentials.get(name);
+      if (!bytes || sha256Text(bytes) !== expectedHash) throw snapshotFileIntegrityError(snapshotId);
+      continue;
+    }
     const info = await lstat(filePath).catch(() => null);
     if (!info || (!info.isFile() && !info.isSymbolicLink())) {
       throw snapshotFileIntegrityError(snapshotId);
@@ -356,7 +366,8 @@ async function restoreHeldSnapshot({ snapshotDir, currentSource }, snapshotId, {
   // Run the preflight independently for preview and execution. A preview is an
   // aid to confirmation, not an integrity lease: snapshot bytes may change
   // between requests, especially on removable or network-backed destinations.
-  const verification = await verifySnapshotFiles(snapshotDir, srcDir, snapshotId, subdirFilter, { preserveIdentity });
+  const credentials = await readSnapshotCredentials(srcDir, subdirFilter);
+  const verification = await verifySnapshotFiles(snapshotDir, srcDir, snapshotId, subdirFilter, { preserveIdentity, credentials });
   // A full restore installs the snapshot's ledger too, so the next boot re-runs
   // whatever it lacks; only a folder restore can leave restored files behind
   // migrations the live ledger already records.
@@ -401,12 +412,10 @@ async function restoreHeldSnapshot({ snapshotDir, currentSource }, snapshotId, {
   //
   // Before the include chain below: rsync takes the FIRST matching rule, so an
   // exclude placed after `--include=/<filter>/***` would never be consulted.
-  // These are the files `snapshotScopeInventory` skips — keeping the two in
-  // step is what preserves "everything transferred was verified".
-  // Same placement rule: excluded before the include chain, and kept out of the
-  // manifest selection and inventory above, so what rsync may write is exactly
-  // what the preflight verified.
+  // The inventory skips preserved paths. Credential records stay in the
+  // inventory and are excluded here because they have their own writer.
   const flags = ['-ii', '--checksum', ...OS_METADATA_RSYNC_EXCLUDES, ...RESTORE_PRESERVED_RSYNC_EXCLUDES,
+    ...RESTORE_CREDENTIAL_RSYNC_EXCLUDES,
     ...(preserveIdentity ? [IDENTITY_RSYNC_EXCLUDE] : [])];
   if (dryRun) flags.push('--dry-run');
   if (subdirFilter) {
@@ -426,7 +435,8 @@ async function restoreHeldSnapshot({ snapshotDir, currentSource }, snapshotId, {
   // file whose digest outlasts the default deadline emits no `-ii` heartbeat
   // until it finishes (#7302), so this restore's idle floor scales to it.
   const idleTimeoutMs = restoreIdleTimeoutMs(verification.largestFileBytes);
-  const transferFiles = () => runRsync(srcDir, PATHS.data, flags, { idleTimeoutMs });
+  const transferFiles = () => transferWithCredentials(credentials, PATHS.data,
+    () => runRsync(srcDir, PATHS.data, flags, { idleTimeoutMs }), { dryRun });
   // A preview holds no owner, fences no identity and reconciles no cache.
   if (dryRun) {
     const changedFiles = await transferFiles();
@@ -585,6 +595,7 @@ async function snapshotLegacyCosConfig(srcDir, scope) {
  *   queue they may need to finish, and keeps admission closed throughout.
  * - Schedule mutations can await CoS state, so their queue precedes CoS.
  * - The settings queue stays held through CoS reconciliation.
+ * - The visitor credential queue drains writes and holds them through publication.
  * - CoS acquires config then runtime internally (`withLiveCosRestore`) and
  *   refuses a busy daemon/mind/agent with `COS_RESTORE_BUSY`.
  * - The media registry refuses edits for the whole hold and is acquired after
@@ -618,6 +629,14 @@ const LIVE_FILE_RESTORE_OWNERS = Object.freeze([
     name: 'settings',
     appliesTo: scope => !scope || scope === 'settings.json',
     hold: inner => withLiveSettingsRestore(inner),
+  },
+  {
+    name: 'managed visitor credentials',
+    appliesTo: scope => !scope || scope === 'managed-visitor-credentials.json',
+    hold: async inner => {
+      const { getManagedVisitorBroker } = await import('../managedVisitors.js');
+      return getManagedVisitorBroker().withLiveCredentialRestore(inner);
+    },
   },
   {
     name: 'CoS config and runtime',
@@ -657,7 +676,7 @@ function withLiveFileRestoreOwners(scope, srcDir, operation) {
 
 /**
  * Peer-execution identity fence: shorter-lived than the owners above. It wraps
- * ONLY the rsync transfer, never reconciliation, and only when this restore
+ * ONLY the file transfer, never reconciliation, and only when this restore
  * installs instances.json (resolveIdentityRestore). The decision was made
  * before verification, so it is re-checked here under the identity writer lock:
  * a live identity written since then (first pairing, ensureSelf) must not be

@@ -22,9 +22,9 @@ describe('<MediaGen>', () => {
     expect(within(bar).getByRole('tab', { name: 'Image' })).toHaveAttribute('aria-selected', 'true');
   });
 
-  it('marks the Video tab active on /video/generate', () => {
+  it('marks the Video tab active on /media/video', () => {
     const { container } = render(
-      <MemoryRouter initialEntries={['/video/generate']}>
+      <MemoryRouter initialEntries={['/media/video']}>
         <MediaGen />
       </MemoryRouter>,
     );
@@ -38,11 +38,11 @@ describe('<MediaGen>', () => {
 // (#6383) — this pins the id/label/order the page means to render, and that
 // every manifest tab has a presentation entry (icon) in MediaGen.jsx, which
 // would otherwise only surface as a thrown import-time error. The short
-// "History"/"Three.js" labels come from the manifest's `tabLabel`.
+// "History" label comes from the manifest's `tabLabel`.
 describe('MediaGen TABS ↔ nav manifest', () => {
   it('renders the media tabGroup in page order with a presentation entry each', () => {
     expectPageNavTabs(TABS, [
-      'image:Image', 'video:Video', 'prompt:Prompt', 'threejs:Three.js', 'annotate:Annotate',
+      'image:Image', 'video:Video', 'prompt:Prompt', 'annotate:Annotate',
       'timeline:Timeline', 'history:History', 'collections:Collections',
     ]);
   });

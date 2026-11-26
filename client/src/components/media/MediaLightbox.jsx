@@ -377,7 +377,7 @@ export default function MediaLightbox({
 
         {!fullScreen && filmLookShown && (
           <aside className={`${ASIDE_CLASSES} ${FILM_LOOK_ASIDE_SIZE}`} onClick={(e) => e.stopPropagation()}
-            onKeyDown={(e) => { if (e.key !== 'Escape') e.stopPropagation(); }}>
+            onKeyDown={(e) => { if (e.key !== 'Escape' && e.key !== 'Tab') e.stopPropagation(); }}>
             <FilmLookPane item={item} draft={filmLook} onBack={() => setFilmLookOpen(false)} onComplete={onFilmLookComplete} projectLook={filmLookProject} />
           </aside>
         )}
@@ -453,11 +453,9 @@ function SettingsPane({
     <aside
       className={`${ASIDE_CLASSES} ${DETAILS_ASIDE_SIZE}`}
       onClick={(e) => e.stopPropagation()}
-      // Same containment, minus Escape: a keystroke from a focused control in
-      // this sidebar (an annotation field, a toggle) must not bubble to the
-      // overlay's onClick={onClose}, but Escape still needs to reach the
-      // window-level listener that owns close-precedence.
-      onKeyDown={(e) => { if (e.key !== 'Escape') e.stopPropagation(); }}
+      // Let Escape reach the window's close listener and Tab reach the
+      // document's focus trap.
+      onKeyDown={(e) => { if (e.key !== 'Escape' && e.key !== 'Tab') e.stopPropagation(); }}
     >
       {item.raw?.appId && <a className="block p-3 text-port-accent" href={`/apps/${encodeURIComponent(item.raw.appId)}/overview`}>Open source app</a>}
       <LightboxPaneHeader item={item} isVideo={isVideo} rating={rating} starred={!!annotation?.starred}

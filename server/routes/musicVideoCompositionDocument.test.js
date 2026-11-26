@@ -5,6 +5,7 @@
  * file bridge, and the refusals (traversal, symlinks, reserved names).
  */
 
+import { readLayeredEngine } from '../services/musicVideo/layeredEngineSource.js';
 import { describe, it, expect, vi, beforeEach, afterEach, afterAll } from 'vitest';
 import express from 'express';
 import { execFileSync } from 'node:child_process';
@@ -214,7 +215,7 @@ describe('music-video composition documents', () => {
     for (const [name, data] of Object.entries(authored)) {
       if (name !== 'engine.js') expect(files[name]).toEqual(Buffer.from(data));
     }
-    const shipped = await readFile(new URL('../services/musicVideo/documentTemplates/layered/engine.js', import.meta.url));
+    const shipped = await readLayeredEngine();
     expect(files['engine.js']).toEqual(shipped);
     const retained = await request(app).get(`/api/music-video/${clone.id}/composition/document/file?path=engine.js`);
     expect(retained.text).toBe(legacy.toString());
@@ -229,7 +230,7 @@ describe('music-video composition documents', () => {
     .replace('handheldView(scene, cameraView(scene, seg(t, scene.startSec, scene.endSec)), lt)', 'cameraView(scene, seg(t, scene.startSec, scene.endSec))');
 
   it('explicitly upgrades the shipped engine from before the handheld camera additions', async () => {
-    const shipped = await readFile(new URL('../services/musicVideo/documentTemplates/layered/engine.js', import.meta.url), 'utf8');
+    const shipped = (await readLayeredEngine()).toString('utf8');
     const legacy = withoutHandheld(await readFile(new URL('./fixtures/musicVideoLayeredEngineBeforePlannedCameraControls.txt', import.meta.url), 'utf8'));
     expect(createHash('sha256').update(legacy).digest('hex')).toBe('a20bb2cf128153aada5c963baf8af22ca4a5ca72bda56d801b2d41a693cb606e');
     const imported = await uploadZip(project.id, createZip([
@@ -244,7 +245,7 @@ describe('music-video composition documents', () => {
   });
 
   it('explicitly upgrades the shipped engine whose card glitch ignored beat-reaction controls', async () => {
-    const shipped = await readFile(new URL('../services/musicVideo/documentTemplates/layered/engine.js', import.meta.url), 'utf8');
+    const shipped = (await readLayeredEngine()).toString('utf8');
     const legacy = withoutHandheld(await readFile(new URL('./fixtures/musicVideoLayeredEngineBeforePlannedCameraControls.txt', import.meta.url), 'utf8')).replace('state.reactiveGain * templateEffects(scene).beatReaction);', 'state.reactiveGain);');
     // Pin the exact outgoing bytes, rather than accepting any synthesized engine.
     expect(createHash('sha256').update(legacy).digest('hex')).toBe('4ee3ae7c78bce6d9dde36a1f2336c7bfd899918f359b6a9906b619c07a0bfb1b');
@@ -317,7 +318,7 @@ describe('music-video composition documents', () => {
     const legacyEngine = await readFile(new URL('./fixtures/musicVideoLayeredEngine14833.txt', import.meta.url));
     const legacyEffects = await readFile(new URL('./fixtures/musicVideoImageEffects16f8de61cd.txt', import.meta.url));
     const shippedEffects = await readFile(new URL('../lib/musicVideo/musicVideoImageEffects.js', import.meta.url));
-    const shippedEngine = await readFile(new URL('../services/musicVideo/documentTemplates/layered/engine.js', import.meta.url));
+    const shippedEngine = await readLayeredEngine();
     const imported = await uploadZip(project.id, createZip([
       { name: 'index.html', data: PAGE }, { name: 'engine.js', data: legacyEngine },
       { name: 'musicVideoImageEffects.js', data: legacyEffects },

@@ -19,6 +19,7 @@ import { createRequire } from 'module';
 import { spawnSync } from 'node:child_process';
 import { runInNewContext } from 'node:vm';
 import databaseSettings from '../../../../scripts/lib/databaseSettings.cjs';
+import readDbCliConfig from '../../../../scripts/lib/readDbCliConfig.cjs';
 import { mkdirSync, mkdtempSync, rmSync, readFileSync, writeFileSync } from 'fs';
 import { tmpdir } from 'os';
 import { dirname, join } from 'path';
@@ -28,8 +29,9 @@ import { parseEnvFile, resolveHttpMirrorPortForRoot } from '../../../../scripts/
 const require = createRequire(import.meta.url);
 const REPO_ROOT = join(dirname(fileURLToPath(import.meta.url)), '../../../..');
 const CONFIG_SOURCE = readFileSync(join(REPO_ROOT, 'ecosystem.config.cjs'), 'utf8');
-// The config require()s this dependency-free parser (#9471), so each temp copy needs it too.
+// Each copy of the config loads these dependency-free modules beside its synthetic .env.
 const PARSER_SOURCE = readFileSync(join(REPO_ROOT, 'scripts', 'lib', 'envFile.cjs'), 'utf8');
+const SETTINGS_SOURCE = readFileSync(join(REPO_ROOT, 'scripts', 'lib', 'databaseSettings.cjs'), 'utf8');
 
 let tmpDirs = [];
 
@@ -56,7 +58,7 @@ function loadConfigIn(envContent, overrideEnv = {}) {
   writeFileSync(configPath, CONFIG_SOURCE);
   mkdirSync(join(dir, 'scripts', 'lib'), { recursive: true });
   writeFileSync(join(dir, 'scripts', 'lib', 'envFile.cjs'), PARSER_SOURCE);
-  writeFileSync(join(dir, 'scripts', 'lib', 'databaseSettings.cjs'), readFileSync(join(REPO_ROOT, 'scripts/lib/databaseSettings.cjs')));
+  writeFileSync(join(dir, 'scripts', 'lib', 'databaseSettings.cjs'), SETTINGS_SOURCE);
   if (envContent !== null) writeFileSync(join(dir, '.env'), envContent);
 
   const savedEnv = {};
@@ -318,18 +320,18 @@ describe('ecosystem.config.cjs server bind HOST (#10946)', () => {
 describe('database settings agree across setup, PM2 and CLI (#11254)', () => {
   const setupSource = readFileSync(join(REPO_ROOT, 'scripts/setup-db.js'), 'utf8');
   const setupConfig = setupSource.slice(setupSource.indexOf('const settings ='), setupSource.indexOf('function getMode()'));
-  const cliConfig = readFileSync(join(REPO_ROOT, 'scripts/db.sh'), 'utf8').split("<<'NODE'\n")[1].split('\nNODE')[0];
   const saved = 'PGMODE=docker\nPGPORT=5433\nPGPORT_DOCKER=5570\nPGHOST="db.example.com"\nPGUSER="example user"\nPGDATABASE=example-db\nPGPASSWORD=\'example $literal # secret\'\n';
-  const readCli = (dir, env, action = 'status') => {
-    const child = spawnSync(process.execPath, ['--input-type=commonjs', '-', dir, action], {
-      input: cliConfig, encoding: 'utf8', env,
+
+  it('writes the resolved settings as NUL-delimited pairs with a final completion marker', () => {
+    const { dir } = loadConfigIn(saved, clearedPgEnv);
+    const action = 'status';
+    const child = spawnSync(process.execPath, [join(REPO_ROOT, 'scripts/lib/readDbCliConfig.cjs'), dir, action], {
+      encoding: 'utf8', env: {},
     });
     expect(child.status, child.stderr).toBe(0);
-    const fields = child.stdout.split('\0');
-    const config = Object.fromEntries(Array.from({ length: (fields.length - 1) / 2 }, (_, i) => fields.slice(i * 2, i * 2 + 2)));
-    expect(config.complete).toBe('1');
-    return config;
-  };
+    const fields = Object.entries(readDbCliConfig(dir, action, {})).flat();
+    expect(child.stdout.split('\0')).toEqual([...fields, 'complete', '1', '']);
+  });
 
   it.each(['docker', 'native'].flatMap(mode =>
     ['', 'bad', '5571suffix', '5571.5', '0', '65536', '-1', '0x15c2'].map(raw => [mode, raw])))(
@@ -341,7 +343,7 @@ describe('database settings agree across setup, PM2 and CLI (#11254)', () => {
       const setup = runInNewContext(setupConfig + '\n({ PG_CHILD_ENV, COMPOSE_ENV })', {
         process: { env: exported }, envFile: parseEnvFile(join(dir, '.env')), databaseSettings,
       });
-      const cli = readCli(dir, exported);
+      const cli = readDbCliConfig(dir, 'status', exported);
       for (const app of config.apps.filter(app => ['portos-server', 'portos-cos'].includes(app.name))) {
         expect(app.env).toMatchObject({ PGPORT: mode === 'native' ? 5433 : 5570, PORTOS_NATIVE_PGPORT: 5433 });
         for (const key of ['PGHOST', 'PGUSER', 'PGDATABASE', 'PGPASSWORD']) {
@@ -361,7 +363,7 @@ describe('database settings agree across setup, PM2 and CLI (#11254)', () => {
       const setup = runInNewContext(setupConfig + '\n({ PG_CHILD_ENV, COMPOSE_ENV })', {
         process: { env: {} }, envFile: parseEnvFile(join(dir, '.env')), databaseSettings,
       });
-      const cli = readCli(dir, {});
+      const cli = readDbCliConfig(dir, 'status', {});
       expect(config.DATABASE_ENDPOINTS.native.port).toBe(5432);
       expect(config.DATABASE_ENDPOINTS.docker.port).toBe(5561);
       expect(cli).toMatchObject({ PGPORT: '5561', PGPASSWORD: 'portos' });
@@ -379,7 +381,7 @@ describe('database settings agree across setup, PM2 and CLI (#11254)', () => {
     expect(config.DATABASE_ENDPOINTS.native.port).toBe(5434);
     expect(config.DATABASE_ENDPOINTS.docker.port).toBe(5570);
     expect(setup.PGPORT).toBe('5434');
-    expect(readCli(dir, inherited).PGPORT).toBe('5572');
-    expect(readCli(dir, inherited, 'setup-native').SELECTED_PGPORT).toBe('5434');
+    expect(readDbCliConfig(dir, 'status', inherited).PGPORT).toBe('5572');
+    expect(readDbCliConfig(dir, 'setup-native', inherited).SELECTED_PGPORT).toBe('5434');
   });
 });

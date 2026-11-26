@@ -47,7 +47,7 @@ import {
 } from '../../lib/fableLoomParticipation.js';
 import { getUniverse } from '../universeBuilder.js';
 import { LOOM_LIMITS, fableLoomEvolutionEvidenceRefs, findEpisode, findNode, getLoom, mutateLoom } from './records.js';
-import { asLoomFormat, loomFormatLabel, narrationFormatContract, sceneFormatContract } from './formats.js';
+import { asLoomFormat, loomFormatLabel, narrationFormatContract, sceneFormatContract, sceneNeedsReformat } from '../../lib/fableLoomFormats.js';
 import { isStr, trimTo } from '../../lib/textUtils.js';
 
 const TRANSCRIPT_TURNS_MAX = 12;
@@ -1378,15 +1378,9 @@ const REFORMAT_CHUNK = 5;
 // instead of re-sending converted scenes and stalling in the same place forever.
 const REFORMAT_CHUNKS_MAX = 4;
 
-// A scene needs rewriting when it HAS prose and that prose isn't already in the
-// target format. Title-only placeholders are skipped, not sent: a rewrite
-// prompt whose rule is "every beat must survive" has nothing to preserve in an
-// empty scene, so the model invents one and it lands on the node as if authored.
-const needsReformat = (node, target) => isStr(node.prose) && !!node.prose.trim() && node.format !== target;
-
 /** Scenes across the WHOLE loom still waiting to be rewritten into `target`. */
 const unconvertedSceneCount = (loom, target) => loom.episodes.reduce(
-  (total, ep) => total + ep.nodes.filter((n) => needsReformat(n, target)).length, 0,
+  (total, ep) => total + ep.nodes.filter((n) => sceneNeedsReformat(n, target)).length, 0,
 );
 
 /**
@@ -1415,7 +1409,7 @@ export async function reformatEpisodeScenes(loomId, episodeId, { format, provide
   const episode = findEpisode(loom, episodeId);
   const canonDigest = await buildCanonDigest(loom);
   const runIds = [];
-  const nodes = episode.nodes.filter((n) => needsReformat(n, target));
+  const nodes = episode.nodes.filter((n) => sceneNeedsReformat(n, target));
   const status = createLoomAiStatus(
     { operationId, providerId, model, effort },
     { action: 'reformat-scenes', label: 'Reformatting scenes' },
@@ -1479,7 +1473,7 @@ export async function reformatEpisodeScenes(loomId, episodeId, { format, provide
   // batch). Tracking only the first would report a partial rewrite as complete
   // and pin the loom to a format some of its scenes are not in.
   const after = await getLoom(loomId);
-  const episodeRemaining = findEpisode(after, episodeId).nodes.filter((n) => needsReformat(n, target)).length;
+  const episodeRemaining = findEpisode(after, episodeId).nodes.filter((n) => sceneNeedsReformat(n, target)).length;
   const remaining = unconvertedSceneCount(after, target);
   // `capped` separates the two reasons an episode can come back unfinished: this
   // run hit its ceiling with scenes it never SENT (ask again and it continues

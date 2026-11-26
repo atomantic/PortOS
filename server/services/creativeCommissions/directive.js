@@ -7,12 +7,13 @@
  * brief lines + that digest into a CD directive `goal` under MAX_DIRECTIVE_GOAL_LEN.
  * The per-output-type directive assembly (which lines/deliverables each type
  * gets) lives in abilityAdapters.js (#2769), which imports these — this module
- * never imports back. Its only imports are the CAP CONSTANTS the goal budget is
- * derived from (see below); it pulls in no scheduler/store graph, so it stays
+ * never imports back. It shares the goal budget caps and cron ranges but
+ * pulls in no scheduler/store graph, so it stays
  * trivially unit-testable and importable anywhere. The authoritative
  * cron-VALIDITY check (isValidCron) lives in the scheduler/service.
  */
 
+import { MONTHLY_DAY_RANGES } from '../../lib/cronFields.js';
 import {
   COMMISSION_INTENT_MAX, COMMISSION_STYLE_SPEC_MAX, COMMISSION_BRIEF_TAG_MAX,
 } from '../../lib/creativeBriefLimits.js';
@@ -53,12 +54,6 @@ export const MAX_DIRECTIVE_GOAL_LEN = COMMISSION_INTENT_MAX
 export const clamp = (s, max) => (s.length > max ? `${s.slice(0, Math.max(0, max - 1))}…` : s);
 const clampNote = (note) => clamp(note, MAX_DIGEST_NOTE_LEN);
 
-const MONTHLY_DAY_RANGES = Object.freeze({
-  first: '1-7',
-  second: '8-14',
-  third: '15-21',
-  fourth: '22-28',
-});
 
 /** Return the rich calendar rule carried by a commission, when present. */
 export function commissionToRecurrence(schedule) {

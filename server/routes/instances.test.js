@@ -2,6 +2,7 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 import express from 'express';
 import { remoteRequestHandler } from '../lib/requestOrigin.js';
 import { verifySession } from '../services/auth.js';
+import { hostControlRouteGate } from '../services/authGate.js';
 vi.mock('../services/auth.js', () => {
   const verifySession = vi.fn().mockResolvedValue(true);
   return {
@@ -92,9 +93,16 @@ import {
 } from '../services/tailcatServe.js';
 import instancesRoutes from './instances.js';
 
-const buildApp = () => {
+const buildApp = (authContext) => {
   const app = express();
   app.use(express.json());
+  if (authContext) {
+    app.use((req, _res, next) => {
+      req.portosAuthContext = authContext;
+      next();
+    });
+    app.use(hostControlRouteGate);
+  }
   app.use('/api/instances', instancesRoutes);
   app.use(errorMiddleware);
   return app;
@@ -146,21 +154,42 @@ describe('POST /api/instances/peers/:id/reciprocate', () => {
 });
 
 describe('POST /api/instances/provision-cert', () => {
+  const path = '/api/instances/provision-cert';
+  const passwordFree = { enabled: false };
   beforeEach(() => { provisionTailscaleCert.mockReset(); });
 
-  it('passes a successful result through as 200 JSON', async () => {
+  it.each([
+    ['local password-free operator', passwordFree, false],
+    ['delegated operator session', { enabled: true, authenticated: true, method: 'session' }, true],
+  ])('passes the restart hint through for a %s', async (_principal, authContext, remote) => {
     const result = { ok: true, mode: 'tailscale', hostname: 'h.ts.net', wroteNew: true, requiresRestart: true, message: 'Cert installed' };
     provisionTailscaleCert.mockResolvedValue(result);
-    const res = await request(buildApp()).post('/api/instances/provision-cert');
+    const app = buildApp(authContext);
+    const res = await request(remote ? remoteRequestHandler(app) : app).post(path);
     expect(res.status).toBe(200);
     expect(res.body).toEqual(result);
   });
 
-  it('maps a structured failure to 400 with code equal to result.reason', async () => {
-    provisionTailscaleCert.mockResolvedValue({ ok: false, reason: 'no-magic-dns', message: 'No MagicDNS hostname' });
-    const res = await request(buildApp()).post('/api/instances/provision-cert');
+  it.each([
+    ['anonymous remote caller', passwordFree],
+    ['scoped peer', { enabled: true, authenticated: true, method: 'peer' }],
+  ])('refuses a %s before invoking the provisioner', async (_principal, authContext) => {
+    const res = await request(remoteRequestHandler(buildApp(authContext))).post(path);
+    expect(res.status).toBe(403);
+    expect(res.body.code).toBe('HOST_CONTROL_FORBIDDEN');
+    expect(provisionTailscaleCert).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    ['no-magic-dns', 'No MagicDNS hostname'],
+    ['cert-files-missing', 'tailscale cert returned success but cert files are missing.'],
+    ['tailscale-cert-failed', 'tailscale cert returned an invalid certificate or private key.'],
+    ['tailscale-sandboxed', 'Install the unsandboxed CLI with `brew install tailscale`.'],
+  ])('maps the %s failure to HTTP 400 with its message', async (reason, message) => {
+    provisionTailscaleCert.mockResolvedValue({ ok: false, reason, message });
+    const res = await request(buildApp(passwordFree)).post(path);
     expect(res.status).toBe(400);
-    expect(res.body).toMatchObject({ code: 'no-magic-dns', error: 'No MagicDNS hostname' });
+    expect(res.body).toMatchObject({ code: reason, error: message });
   });
 });
 

@@ -253,6 +253,9 @@ const RESTORE_PRESERVED_FILES = Object.freeze([
 // `[xX]` class): on a case-insensitive volume a `Database-Authority.json` entry
 // would otherwise overwrite the destination's lowercase record.
 const caseInsensitiveGlob = (name) => name.replace(/[a-z]/gi, ch => `[${ch.toLowerCase()}${ch.toUpperCase()}]`);
+export const RESTORE_CREDENTIAL_FILES = Object.freeze(['settings.json', 'managed-visitor-credentials.json']);
+// The restore coordinator verifies these records and publishes them privately.
+export const RESTORE_CREDENTIAL_RSYNC_EXCLUDES = RESTORE_CREDENTIAL_FILES.map(name => `--exclude=/${caseInsensitiveGlob(name)}`);
 export const RESTORE_PRESERVED_RSYNC_EXCLUDES = [
   ...RESTORE_PRESERVED_FILES.map(name => `--exclude=/${caseInsensitiveGlob(name)}`),
   `--exclude=${RECORDING_STAGE_RSYNC_GLOB}`,

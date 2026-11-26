@@ -22,12 +22,13 @@
  */
 
 import { join } from 'path';
-import { readJSONFile, atomicWrite, ensureDir } from '../lib/fileUtils.js';
-import { PATHS } from '../lib/fileUtils.js';
+import { readJSONFile, atomicWrite, ensureDir, PATHS } from '../lib/fileUtils.js';
+import { createFileWriteQueue } from '../lib/fileWriteQueue.js';
 import { getEngine, findEngine, ENGINES } from './pipeline/musicGen.js';
 import { isNonBlankStr } from '../lib/textUtils.js';
 
 const REGISTRY_FILE = join(PATHS.data, 'audio-models.json');
+const queueRegistryWrite = createFileWriteQueue();
 
 // HF repo ids look like `org/name` (optionally with extra path segments). Keep
 // the guard permissive but reject path-traversal / whitespace / control chars.
@@ -110,15 +111,17 @@ export async function addAudioModel({ engine: engineId, repo, name }) {
   if (!entry) {
     throw Object.assign(new Error('Invalid HuggingFace repo id'), { status: 400, code: 'AUDIO_MODEL_INVALID_REPO' });
   }
-  const reg = await loadRegistry();
-  const list = reg[engineId] || [];
-  const idx = list.findIndex((m) => m.id === entry.id);
-  if (idx >= 0) list[idx] = entry;
-  else list.push(entry);
-  reg[engineId] = list;
-  await saveRegistry(reg);
-  console.log(`🎚️ Registered audio model for ${engineId}: ${entry.repo}`);
-  return entry;
+  return queueRegistryWrite(async () => {
+    const reg = await loadRegistry();
+    const list = reg[engineId] || [];
+    const idx = list.findIndex((m) => m.id === entry.id);
+    if (idx >= 0) list[idx] = entry;
+    else list.push(entry);
+    reg[engineId] = list;
+    await saveRegistry(reg);
+    console.log(`🎚️ Registered audio model for ${engineId}: ${entry.repo}`);
+    return entry;
+  });
 }
 
 /**
@@ -127,13 +130,15 @@ export async function addAudioModel({ engine: engineId, repo, name }) {
  * is a no-op (not in the user registry) — shipped models can't be removed here.
  */
 export async function removeAudioModel({ engine: engineId, id }) {
-  const reg = await loadRegistry();
-  if (!Object.hasOwn(reg, engineId)) return false;
-  const list = reg[engineId];
-  const next = list.filter((m) => m.id !== id);
-  if (next.length === list.length) return false;
-  reg[engineId] = next;
-  await saveRegistry(reg);
-  console.log(`🎚️ De-registered audio model for ${engineId}: ${id}`);
-  return true;
+  return queueRegistryWrite(async () => {
+    const reg = await loadRegistry();
+    if (!Object.hasOwn(reg, engineId)) return false;
+    const list = reg[engineId];
+    const next = list.filter((m) => m.id !== id);
+    if (next.length === list.length) return false;
+    reg[engineId] = next;
+    await saveRegistry(reg);
+    console.log(`🎚️ De-registered audio model for ${engineId}: ${id}`);
+    return true;
+  });
 }
