@@ -18,22 +18,51 @@
  * restart in between).
  */
 import { execFile } from '../lib/childProcess.js';
-import { existsSync, mkdirSync, statSync } from 'fs';
 import { promisify } from 'util';
-import { PATHS, atomicWrite } from '../lib/fileUtils.js';
+import { PATHS } from '../lib/fileUtils.js';
 import { findTailscale, isSandboxedTailscale } from '../lib/tailscale.js';
 import { getHttpsEnabledAtBoot } from '../lib/httpsState.js';
 import { PORTS } from '../lib/ports.js';
 import { certPaths } from '../../lib/certPaths.js';
-import { readCertExpiresAt } from '../../lib/certMeta.js';
+import { installTailscaleCert, TAILSCALE_CERT_TIMEOUT_MS } from '../../lib/tailscaleCertInstall.js';
 
 const execFileAsync = promisify(execFile);
-
-const { dir: CERT_DIR, cert: CERT_PATH, key: KEY_PATH, meta: META_PATH } = certPaths(PATHS.data);
+const CERT_PATHS = certPaths(PATHS.data);
 
 async function tailscaleStatus(bin) {
-  const { stdout } = await execFileAsync(bin, ['status', '--json'], { timeout: 5000 });
+  const { stdout } = await execFileAsync(bin, ['status', '--json'], { timeout: 5000, killSignal: 'SIGKILL' });
   return JSON.parse(stdout);
+}
+
+function certFailure(bin, err) {
+  if (err.code === 'cert-files-missing') {
+    return { ok: false, reason: err.code, message: err.message };
+  }
+  if (err.code === 'cert-pair-invalid') {
+    return { ok: false, reason: 'tailscale-cert-failed', message: err.message };
+  }
+  if (err.code !== 'tailscale-cert-command-failed') throw err;
+
+  const cause = err.cause;
+  const stderr = cause.stderr?.toString().trim() || cause.message || 'unknown error';
+  if (isSandboxedTailscale(bin) && /operation not permitted/i.test(stderr)) {
+    return {
+      ok: false,
+      reason: 'tailscale-sandboxed',
+      message: 'The macOS Tailscale.app CLI is sandboxed and can\'t write the cert file. Install the unsandboxed CLI with `brew install tailscale`, then restart PortOS and retry.'
+    };
+  }
+
+  const firstLine = stderr.split('\n')[0].trim() || 'unknown error';
+  const needsPeriod = !/[.!?]$/.test(firstLine);
+  const httpsHint = /HTTPS.*not.*enabled|invalid request/i.test(stderr)
+    ? ' Enable "HTTPS Certificates" at login.tailscale.com/admin/dns and retry.'
+    : '';
+  return {
+    ok: false,
+    reason: 'tailscale-cert-failed',
+    message: `tailscale cert failed: ${firstLine}${needsPeriod ? '.' : ''}${httpsHint}`
+  };
 }
 
 /**
@@ -80,61 +109,19 @@ export async function provisionTailscaleCert() {
     };
   }
 
-  mkdirSync(CERT_DIR, { recursive: true });
-
-  const beforeMtime = existsSync(CERT_PATH) ? statSync(CERT_PATH).mtimeMs : 0;
-
-  const certResult = await execFileAsync(bin, [
-    'cert',
-    `--cert-file=${CERT_PATH}`,
-    `--key-file=${KEY_PATH}`,
-    hostname
-  ], { timeout: 60_000 }).catch(err => {
-    const stderr = err.stderr?.toString().trim();
-    return { _err: stderr || err.message || 'unknown error' };
-  });
-
-  if (certResult?._err) {
-    const stderr = certResult._err;
-    const firstLine = stderr.split('\n')[0].trim() || 'unknown error';
-    const needsPeriod = !/[.!?]$/.test(firstLine);
-
-    if (isSandboxedTailscale(bin) && /operation not permitted/i.test(stderr)) {
-      return {
-        ok: false,
-        reason: 'tailscale-sandboxed',
-        message: 'The macOS Tailscale.app CLI is sandboxed and can\'t write the cert file. Install the unsandboxed CLI with `brew install tailscale`, then restart PortOS and retry.'
-      };
-    }
-
-    const httpsHint = /HTTPS.*not.*enabled|invalid request/i.test(stderr)
-      ? ' Enable "HTTPS Certificates" at login.tailscale.com/admin/dns and retry.'
-      : '';
-    return {
-      ok: false,
-      reason: 'tailscale-cert-failed',
-      message: `tailscale cert failed: ${firstLine}${needsPeriod ? '.' : ''}${httpsHint}`
-    };
-  }
-
-  if (!existsSync(CERT_PATH) || !existsSync(KEY_PATH)) {
-    return {
-      ok: false,
-      reason: 'cert-files-missing',
-      message: 'tailscale cert returned success but cert files are missing.'
-    };
-  }
-
-  const afterMtime = statSync(CERT_PATH).mtimeMs;
-  const wroteNew = afterMtime > beforeMtime;
-
-  await atomicWrite(META_PATH, {
-    mode: 'tailscale',
+  const installed = await installTailscaleCert(CERT_PATHS, {
     hostname,
-    issuedAt: new Date().toISOString(),
-    expiresAt: readCertExpiresAt(CERT_PATH),
-    certMtime: afterMtime
-  });
+    runCert: args => execFileAsync(bin, args, {
+      timeout: TAILSCALE_CERT_TIMEOUT_MS,
+      killSignal: 'SIGKILL'
+    }).catch(cause => {
+      throw Object.assign(new Error('tailscale cert command failed', { cause }), {
+        code: 'tailscale-cert-command-failed'
+      });
+    })
+  }).catch(err => certFailure(bin, err));
+  if (installed.ok === false) return installed;
+  const wroteNew = installed.changed;
 
   // requiresRestart is keyed off the boot-time HTTPS state, not cert file
   // presence. The listener type was frozen at boot — if PortOS started in
