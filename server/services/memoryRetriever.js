@@ -7,20 +7,29 @@
 
 import { getMemories, searchMemories, hybridSearchMemories, peekMemories, recordMemoryAccess, DEFAULT_MEMORY_CONFIG } from './memoryBackend.js';
 import { generateQueryEmbedding, estimateTokens } from './memoryEmbeddings.js';
-import { fenceBlock, UNTRUSTED_REFERENCE_NOTICE } from '../lib/promptFencing.js';
+import { fenceBlock, neutralizeFences, UNTRUSTED_REFERENCE_NOTICE } from '../lib/promptFencing.js';
 import { isPersistentMindPrivateMemory } from '../lib/memoryQuery.js';
 
 // Search mode preference: 'hybrid' (FTS + vector) or 'vector' (embedding-only)
 const SEARCH_MODE = 'hybrid';
 
-// The memory types formatForPrompt renders; any other type is left out of the prompt.
-const FORMATTED_TYPES = new Set(['preference', 'fact', 'learning', 'observation', 'decision', 'context']);
+const MEMORY_HEADINGS = {
+  preference: 'User Preferences',
+  fact: 'Codebase Facts',
+  learning: 'Previous Learnings',
+  observation: 'Observations',
+  decision: 'Past Decisions',
+  context: 'Additional Context',
+};
 
-/**
- * Get relevant memories for a task
- * Returns formatted text ready for injection into agent prompt
- */
+/** Retrieve relevant memories and record access for the selected list (used by voice). */
 export async function getRelevantMemories(task, options = {}) {
+  const memories = await selectMemories(task, options);
+  if (memories.length > 0) await recordMemoryAccess(memories.map(memory => memory.id));
+  return memories;
+}
+
+async function selectMemories(task, options) {
   const maxTokens = options.maxTokens || DEFAULT_MEMORY_CONFIG.maxContextTokens;
   const minRelevance = options.minRelevance || DEFAULT_MEMORY_CONFIG.minRelevanceThreshold;
   // Cap the semantic-search fan-out. Callers that only inject a handful of
@@ -77,9 +86,7 @@ export async function getRelevantMemories(task, options = {}) {
   for (const hit of preferenceHits) pushId(hit.id);
   for (const hit of codebaseHits) pushId(hit.id);
 
-  // One hydration for every candidate. Rows the token budget later drops
-  // were still read, but they are not written: access bumps happen below,
-  // only for memories that fit.
+  // Hydrate candidates without bumping access before the consumer selects its final list.
   const hydrated = candidateIds.length > 0 ? await peekMemories(candidateIds) : [];
   // A file index or result from before a concurrent update can have stale tags.
   const byId = new Map(hydrated
@@ -115,10 +122,6 @@ export async function getRelevantMemories(task, options = {}) {
 
   memories.sort((a, b) => b.relevance - a.relevance);
 
-  // recordMemoryAccess returns how many rows changed. The prompt uses the
-  // peeked text, so a missing counter on the returned object is fine.
-  if (memories.length > 0) await recordMemoryAccess(memories.map(memory => memory.id));
-
   return memories;
 }
 
@@ -145,126 +148,52 @@ async function retrieveSearchHits(description, { searchLimit, minRelevance }) {
   return [];
 }
 
-/**
- * Format memories for prompt injection
- */
-export function formatForPrompt(memories, maxTokens = DEFAULT_MEMORY_CONFIG.maxContextTokens) {
-  if (!memories || memories.length === 0) {
-    return '';
-  }
-
-  const sections = {
-    preference: [],
-    fact: [],
-    learning: [],
-    observation: [],
-    decision: [],
-    context: []
-  };
-
-  for (const memory of memories) {
-    const type = memory.type || 'context';
-    if (sections[type]) {
-      sections[type].push(memory);
-    }
-  }
-
-  const lines = ['## Relevant Context from Memory\n'];
-
-  // Format preferences first (most important)
-  if (sections.preference.length > 0) {
-    lines.push('### User Preferences');
-    for (const mem of sections.preference) {
-      lines.push(`- ${mem.content}`);
-    }
-    lines.push('');
-  }
-
-  // Format facts about codebase
-  if (sections.fact.length > 0) {
-    lines.push('### Codebase Facts');
-    for (const mem of sections.fact) {
-      lines.push(`- ${mem.content}`);
-    }
-    lines.push('');
-  }
-
-  // Format learnings
-  if (sections.learning.length > 0) {
-    lines.push('### Previous Learnings');
-    for (const mem of sections.learning) {
-      lines.push(`- ${mem.content}`);
-    }
-    lines.push('');
-  }
-
-  // Format observations
-  if (sections.observation.length > 0) {
-    lines.push('### Observations');
-    for (const mem of sections.observation) {
-      lines.push(`- ${mem.content}`);
-    }
-    lines.push('');
-  }
-
-  // Format decisions
-  if (sections.decision.length > 0) {
-    lines.push('### Past Decisions');
-    for (const mem of sections.decision) {
-      lines.push(`- ${mem.content}`);
-    }
-    lines.push('');
-  }
-
-  // Format context
-  if (sections.context.length > 0) {
-    lines.push('### Additional Context');
-    for (const mem of sections.context) {
-      lines.push(`- ${mem.content}`);
-    }
-    lines.push('');
-  }
+function formatForPrompt(memories, maxTokens = DEFAULT_MEMORY_CONFIG.maxContextTokens) {
+  if (memories.length === 0) return { section: null, visibleMemories: [] };
 
   const label = 'Memory reference data';
-  // Include the notice, delimiters and possible truncation marker in the same
-  // budget used for retrieval; an oversized preference cannot crowd them out.
+  // Reserve room for the notice, delimiters and possible truncation marker.
   const overhead = UNTRUSTED_REFERENCE_NOTICE.length + 2
     + fenceBlock(label, 'x', 1).length - 1 + '\n… [truncated]'.length;
-  const block = fenceBlock(label, lines.join('\n'), Math.max(0, maxTokens * 4 - overhead));
-  return block ? `${UNTRUSTED_REFERENCE_NOTICE}\n\n${block}` : '';
-}
+  const maxBodyChars = Math.max(0, maxTokens * 4 - overhead);
 
-/**
- * Get memory section for agent prompt
- * Main entry point for subAgentSpawner integration
- */
-export async function getMemorySection(task, options = {}) {
-  const { section, injected } = await getMemoryInjection(task, options);
-  // Lets a caller that builds a run record (agentPromptBuilder) capture the
-  // lineage without changing this function's string-or-null return contract.
-  if (typeof options.onInjected === 'function') options.onInjected(injected);
-  return section;
-}
-
-/**
- * Same retrieval as getMemorySection, but also reports WHICH memories made it
- * into the prompt text: `injected: [{ id, version, relevance }]`. `version` is
- * null until memory versioning lands. Only memories the formatter actually
- * renders are listed (an unrecognised type is dropped from the prompt, so it is
- * dropped here too); `section` is null when nothing relevant was found.
- */
-async function getMemoryInjection(task, options = {}) {
-  const memories = await getRelevantMemories(task, options);
-
-  if (memories.length === 0) {
-    return { section: null, injected: [] };
+  const sections = Object.groupBy(memories, memory => memory.type || 'context');
+  const visible = new Set();
+  let body = '## Relevant Context from Memory\n';
+  for (const [type, heading] of Object.entries(MEMORY_HEADINGS)) {
+    const sectionMemories = sections[type];
+    if (!sectionMemories) continue;
+    body += `\n### ${heading}\n`;
+    for (const memory of sectionMemories) {
+      body += '- ';
+      // Use the neutralized length so positions match the body fenceBlock caps.
+      const content = neutralizeFences(memory.content);
+      const visibleContent = content.trimStart();
+      const contentStart = body.length + content.length - visibleContent.length;
+      if (visibleContent && contentStart + 1 <= maxBodyChars) visible.add(memory);
+      body += `${content}\n`;
+    }
   }
 
-  const section = formatForPrompt(memories, options.maxTokens);
-  const injected = section
-    ? memories
-      .filter(m => FORMATTED_TYPES.has(m.type || 'context'))
-      .map(m => ({ id: m.id, version: m.version ?? null, relevance: m.relevance ?? null }))
-    : [];
-  return { section: section || null, injected };
+  const block = fenceBlock(label, body, maxBodyChars);
+  return {
+    section: block ? `${UNTRUSTED_REFERENCE_NOTICE}\n\n${block}` : null,
+    visibleMemories: block ? memories.filter(memory => visible.has(memory)) : [],
+  };
+}
+
+/** Get the fenced memory section and report the memories that contributed content. */
+export async function getMemorySection(task, options = {}) {
+  const memories = await selectMemories(task, options);
+  const { section, visibleMemories } = formatForPrompt(memories, options.maxTokens);
+
+  if (visibleMemories.length > 0) await recordMemoryAccess(visibleMemories.map(memory => memory.id));
+  if (typeof options.onInjected === 'function') {
+    options.onInjected(visibleMemories.map(memory => ({
+      id: memory.id,
+      version: memory.version ?? null,
+      relevance: memory.relevance ?? null,
+    })));
+  }
+  return section;
 }
