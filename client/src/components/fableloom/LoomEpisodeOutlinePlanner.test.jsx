@@ -62,6 +62,56 @@ describe('LoomEpisodeOutlinePlanner', () => {
     expect(onExpand).toHaveBeenCalledWith({ providerId: 'writer', model: 'example-model', effort: 'low' });
   });
 
+  it('requires fresh validation when the same episode receives a draft outline', async () => {
+    const user = userEvent.setup();
+    const validation = { issues: [], stats: { sceneCount: 4, decisionCount: 1, endingCount: 2, errorCount: 0 } };
+    const validatedEpisode = { ...episode, storyOutline: { ...outline } };
+    const validatedLoom = { ...loom, episodes: [validatedEpisode] };
+    validateLoomEpisodeOutline.mockResolvedValue({
+      loom: validatedLoom, outline: validatedEpisode.storyOutline, validation,
+    });
+    const onLoomUpdate = vi.fn();
+    const onExpand = vi.fn();
+    const planner = (record) => (
+      <LoomEpisodeOutlinePlanner open loom={loom} episode={record} onLoomUpdate={onLoomUpdate} onExpand={onExpand} />
+    );
+    const { rerender } = render(planner(episode));
+
+    await user.click(screen.getByRole('button', { name: 'Validate outline' }));
+    await waitFor(() => expect(onLoomUpdate).toHaveBeenCalledWith(validatedLoom));
+    rerender(planner(validatedEpisode));
+    expect(screen.getByText('4 beats · 1 choices · 2 endings')).toBeInTheDocument();
+    const expand = screen.getByRole('button', { name: 'Expand validated outline to teleplay' });
+    expect(expand).toBeEnabled();
+
+    rerender(planner({
+      ...episode, title: 'Revised pilot',
+      storyOutline: { ...outline, validation: { status: 'draft', issues: [] } },
+    }));
+    expect(screen.getByText('Outline is a draft')).toBeInTheDocument();
+    expect(expand).toBeDisabled();
+
+    await user.click(screen.getByRole('button', { name: 'Validate outline' }));
+    await findEnabledByRole('button', { name: 'Expand validated outline to teleplay' });
+  });
+
+  it('preserves unsaved log-lines when the server updates the same episode', async () => {
+    const user = userEvent.setup();
+    const planner = (record) => <LoomEpisodeOutlinePlanner open loom={loom} episode={record} />;
+    const { rerender } = render(planner(episode));
+
+    await user.click(screen.getByTestId('outline-beat-s1').querySelector('button'));
+    const summary = screen.getByLabelText('Log-line / summary');
+    await user.type(summary, ' It names a ship.');
+    rerender(planner({
+      ...episode, synopsis: 'A changed synopsis.',
+      storyOutline: { ...outline, validation: { status: 'draft', issues: [] } },
+    }));
+
+    expect(summary).toHaveValue('A signal arrives. It names a ship.');
+    expect(screen.getByRole('button', { name: 'Save & validate' })).toBeEnabled();
+  });
+
   it('saves edited log-lines before the deterministic validation request', async () => {
     const user = userEvent.setup();
     const updatedLoom = { ...loom, episodes: [{ ...episode, storyOutline: { ...outline, validation: { status: 'draft', issues: [] } } }] };
