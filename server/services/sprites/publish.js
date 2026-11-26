@@ -46,7 +46,7 @@ import { isDeploying } from '../appDeployer.js';
 import { spriteDir, RUNTIME_POINTER_REL, RUNTIME_PUBLICATIONS_REL } from './paths.js';
 import { requireAnimatable } from './reference.js';
 import { listRecords, updateRecord } from './records.js';
-import { withWalkWriteTail } from './walk.js';
+import { withAnimationWriteTail as withWalkWriteTail } from './animationWorkflow.js';
 import { compileAtlasInTail } from './atlas.js';
 import { sha256Buffer } from './walkPostprocess.js';
 import { spriteRuntimeContractSchema } from '../../lib/spriteValidation.js';

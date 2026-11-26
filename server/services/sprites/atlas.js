@@ -63,9 +63,8 @@ import { getEffectiveAnimationTracks } from './animationTrackStore.js';
 import {
   buildAtlasGrid, resolveTrackUniformity, compiledGridUpToDate, trackDirections,
 } from './atlasGrid.js';
-import {
-  withWalkWriteTail, walkSetRelPath, importedWalkDirections, resolveChromaKey,
-} from './walk.js';
+import { withAnimationWriteTail as withWalkWriteTail, resolveChromaKey } from './animationWorkflow.js';
+import { walkSetRelPath, importedWalkDirections } from './walkRecords.js';
 import { trackSetRelPath } from './animationTrackWorkflow.js';
 import { verifyPackagedFrames } from './walkFrames.js';
 import { getRecord } from './records.js';
