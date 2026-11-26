@@ -7,7 +7,7 @@ import { triggerCosOnDemandTask } from '../../services/apiAgents';
 vi.mock('../../services/apiModelComparison', () => ({ getModelComparison: vi.fn() }));
 vi.mock('../../services/apiAgents', () => ({ triggerCosOnDemandTask: vi.fn() }));
 vi.mock('./ComparisonResearch', () => ({ default: () => <div>Research configuration</div> }));
-vi.mock('recharts', () => ({
+vi.mock('../ui/charts', () => ({
   ResponsiveContainer: ({ children }) => <div>{children}</div>, ScatterChart: ({ children }) => <div>{children}</div>,
   Scatter: ({ name, data }) => <div data-testid={`scatter-${name}`} data-values={JSON.stringify(data?.map(({ x, y }) => [x, y]))} data-labels={JSON.stringify(data?.map(({ label }) => label))} />,
   CartesianGrid: () => null, Tooltip: () => null, LabelList: () => null,

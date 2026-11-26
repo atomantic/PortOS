@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react';
 import { useSearchParams } from 'react-router';
-import { LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, ReferenceLine } from 'recharts';
+import { LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, ReferenceLine } from '../ui/charts';
 import { RefreshCw } from 'lucide-react';
 import { getAppQualityHistory } from '../../services/apiApps';
 import { QUALITY_HEALTHY_THRESHOLD } from '../../../../server/lib/auditDomains.js';
@@ -69,7 +69,7 @@ export default function AppQualityHistory({ appId, categories = [] }) {
               <YAxis domain={[0, 100]} tick={{ fill: '#9ca3af', fontSize: 11 }} width={35} />
               <ReferenceLine y={QUALITY_HEALTHY_THRESHOLD} stroke="#22c55e" strokeDasharray="4 4" strokeOpacity={0.5} />
               <Tooltip contentStyle={{ backgroundColor: '#111827', borderColor: '#374151' }} formatter={(value, _name, item) => [`${value}/100 · ${item.payload.evidence}`, 'Quality']} />
-              <Line type="stepAfter" dataKey="value" name="Quality" stroke="#60a5fa" strokeWidth={2} connectNulls={false} dot={measured.length === 1} isAnimationActive={false} />
+              <Line type="stepAfter" dataKey="value" name="Quality" stroke="#60a5fa" strokeWidth={2} connectNulls={false} dot={measured.length === 1} />
             </LineChart>
           </ResponsiveContainer>
         </div>

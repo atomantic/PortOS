@@ -1105,9 +1105,7 @@ html[data-port-theme] :is(.bg-port-error, .bg-port-warning, .bg-port-success, .b
   border-radius: var(--port-radius-lg);
 }
 
-html[data-port-theme] .recharts-cartesian-grid line,
-html[data-port-theme] .recharts-polar-grid-angle line,
-html[data-port-theme] .recharts-polar-grid-concentric circle {
+html[data-port-theme] .port-chart-grid {
   stroke: rgb(var(--port-chart-grid) / 0.34);
 }
 

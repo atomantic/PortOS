@@ -1,4 +1,4 @@
-import { ComposedChart, Bar, Line, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer } from 'recharts';
+import { ComposedChart, Bar, Line, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer } from '../ui/charts';
 import { formatCount, formatCompactCount, formatMonthYear, formatUsd } from '../../utils/formatters';
 import UsageCoverageNotice from './UsageCoverageNotice';
 import { seriesColors } from '../../lib/usageChartColors';
@@ -34,9 +34,9 @@ export default function MonthlyUsageCard({ history: points = [], series = [], in
               <YAxis yAxisId="tokens" orientation="right" tickFormatter={formatCompactCount} width={50} tick={{ fontSize: 10 }} domain={[0, 'auto']} />
               <Tooltip labelFormatter={monthLabel} formatter={(value, name, item) => [item.dataKey === 'tokens' ? formatCount(value) : formatUsd(value), name]} contentStyle={{ background: 'rgb(var(--port-card))', borderColor: 'rgb(var(--port-border))' }} />
               {series.length > 0 ? series.map((provider, i) => (
-                <Bar key={provider.key} yAxisId="cost" dataKey={`values[${i}]`} stackId="cost" name={provider.label} fill={colors[i]} maxBarSize={36} isAnimationActive={false} />
-              )) : <Bar yAxisId="cost" dataKey="estimatedCost" name="Est. API cost" fill={costColor} maxBarSize={36} isAnimationActive={false} />}
-              <Line yAxisId="tokens" dataKey="tokens" name="Tokens" stroke={tokenColor} strokeWidth={2} dot={{ r: 3 }} isAnimationActive={false} />
+                <Bar key={provider.key} yAxisId="cost" dataKey={`values[${i}]`} stackId="cost" name={provider.label} fill={colors[i]} maxBarSize={36} />
+              )) : <Bar yAxisId="cost" dataKey="estimatedCost" name="Est. API cost" fill={costColor} maxBarSize={36} />}
+              <Line yAxisId="tokens" dataKey="tokens" name="Tokens" stroke={tokenColor} strokeWidth={2} dot={{ r: 3 }} />
             </ComposedChart>
           </ResponsiveContainer>
         </div>

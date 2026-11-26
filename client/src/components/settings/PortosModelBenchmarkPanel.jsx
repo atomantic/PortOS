@@ -8,7 +8,7 @@ import {
   Tooltip,
   XAxis,
   YAxis,
-} from 'recharts';
+} from '../ui/charts';
 import {
   discoverModelPerformanceModels,
   getModelPerformanceBenchmarks,
@@ -267,7 +267,7 @@ export default function PortosModelBenchmarkPanel() {
           <div className="h-[420px] w-full">
             <ResponsiveContainer width="100%" height="100%">
               <ScatterChart title="Model benchmark results" desc="Scatter plot of PortOS benchmark runs comparing model intelligence against the selected usage metric." margin={{ top: 12, right: 20, bottom: 20, left: 6 }}>
-                <CartesianGrid strokeDasharray="3 3" stroke="var(--port-border)" />
+                <CartesianGrid strokeDasharray="3 3" stroke="rgb(var(--port-border))" />
                 <XAxis
                   type="number"
                   dataKey="x"

@@ -309,10 +309,14 @@ describe('direct dependency pinning (#5699)', () => {
   });
 
   it('scans every manifest, so a clean result is not vacuous', () => {
-    const scanned = MANIFESTS.flatMap(readDirectDeps);
-    // ~49 entries across the four manifests today. A path or shape change that
-    // makes the loop iterate nothing would otherwise report a clean sweep.
-    expect(scanned.length).toBeGreaterThanOrEqual(40);
+    // Compare against the independently generated lockfile roots. Every declaration
+    // must be scanned even when a dependency removal legitimately shrinks the tree.
+    for (const rel of MANIFESTS) {
+      const locked = readLockPackages(lockfileFor(rel))[''];
+      const expected = ['dependencies', 'devDependencies'].flatMap(block =>
+        Object.keys(locked[block] ?? {}).map(name => `${block}.${name}`));
+      expect(readDirectDeps(rel).map(({ block, name }) => `${block}.${name}`).sort()).toEqual(expected.sort());
+    }
     // And the matcher must actually reject the shapes this guard exists to catch,
     // so a regex that accidentally accepts everything fails here rather than
     // passing every manifest.

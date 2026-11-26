@@ -72,9 +72,9 @@ describe('PostProgress', () => {
     expect(screen.getByText('Current Streak')).toBeInTheDocument();
     expect(screen.getByText('2h 15m')).toBeInTheDocument(); // 135 minutes
     // Trend chart headings.
-    expect(screen.getByText('Score Trend')).toBeInTheDocument();
-    expect(screen.getByText('Accuracy Trend')).toBeInTheDocument();
-    expect(screen.getByText(/Response Time/)).toBeInTheDocument();
+    expect(screen.getByRole('heading', { name: 'Score Trend' })).toBeInTheDocument();
+    expect(screen.getByRole('heading', { name: 'Accuracy Trend' })).toBeInTheDocument();
+    expect(screen.getByRole('heading', { name: /Response Time/ })).toBeInTheDocument();
     // Mastery panel: multiplication + performance-valid cognitive rung + memory.
     expect(screen.getByText('Multiplication Ladder')).toBeInTheDocument();
     expect(screen.getByText('L2')).toBeInTheDocument();
@@ -133,7 +133,7 @@ describe('PostProgress — benchmark trend', () => {
       },
     });
     renderProgress();
-    await waitFor(() => expect(screen.getByText(/Benchmark Trend/)).toBeInTheDocument());
+    await waitFor(() => expect(screen.getByRole('heading', { name: /Benchmark Trend/ })).toBeInTheDocument());
     expect(screen.getByText(/post-foundation-battery v1/)).toBeInTheDocument();
   });
 
@@ -152,11 +152,10 @@ describe('PostProgress — benchmark trend', () => {
       },
     });
     renderProgress();
-    await waitFor(() => expect(screen.getByText(/Benchmark Trend/)).toBeInTheDocument());
+    await waitFor(() => expect(screen.getByRole('heading', { name: /Benchmark Trend/ })).toBeInTheDocument());
     // The one real result must be visible, not masked by the "no runs yet" text
     // TrendChart's own multi-point chart would otherwise fall back to.
-    expect(screen.getByText('88')).toBeInTheDocument();
-    expect(screen.getByText(/2026-06-03/)).toBeInTheDocument();
+    expect(screen.getByText(/Latest compatible run:/)).toHaveTextContent('Latest compatible run: 88 on 2026-06-03.');
     expect(screen.queryByText(/No compatible benchmark runs yet/)).not.toBeInTheDocument();
   });
 
@@ -175,7 +174,7 @@ describe('PostProgress — benchmark trend', () => {
       },
     });
     renderProgress();
-    await waitFor(() => expect(screen.getByText(/Benchmark Trend/)).toBeInTheDocument());
+    await waitFor(() => expect(screen.getByRole('heading', { name: /Benchmark Trend/ })).toBeInTheDocument());
     expect(screen.getByText(/Day average \(2 runs\)/)).toBeInTheDocument();
     expect(screen.queryByText(/Latest compatible run/)).not.toBeInTheDocument();
   });
@@ -195,13 +194,13 @@ describe('PostProgress — benchmark trend', () => {
       },
     });
     renderProgress();
-    await waitFor(() => expect(screen.getByText(/Benchmark Trend/)).toBeInTheDocument());
+    await waitFor(() => expect(screen.getByRole('heading', { name: /Benchmark Trend/ })).toBeInTheDocument());
     expect(screen.getByText(/2 earlier benchmark runs excluded/)).toBeInTheDocument();
   });
 
   it('omits the benchmark trend section entirely when the server sends no benchmark field', async () => {
     renderProgress();
-    await waitFor(() => expect(screen.getByText('Score Trend')).toBeInTheDocument());
+    await waitFor(() => expect(screen.getByRole('heading', { name: 'Score Trend' })).toBeInTheDocument());
     expect(screen.queryByText(/Benchmark Trend/)).not.toBeInTheDocument();
   });
 });

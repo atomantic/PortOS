@@ -1,7 +1,7 @@
 import { useState, useEffect, useCallback } from 'react';
 import {
   LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, Legend
-} from 'recharts';
+} from '../ui/charts';
 import { Trash2 } from 'lucide-react';
 import { getBodyHistory, removeBodyEntry } from '../../services/apiMeatspace.js';
 import BrailleSpinner from '../BrailleSpinner';

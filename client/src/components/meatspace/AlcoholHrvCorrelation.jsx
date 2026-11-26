@@ -1,7 +1,7 @@
 import { HeartPulse, Beer } from 'lucide-react';
 import {
   ComposedChart, Line, Bar, XAxis, YAxis, CartesianGrid, Tooltip, Legend, ResponsiveContainer
-} from 'recharts';
+} from '../ui/charts';
 import useChartColors from '../../hooks/useChartColors.js';
 import { pluralize } from '../../lib/textUtils';
 

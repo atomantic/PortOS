@@ -5,8 +5,7 @@ vi.mock('../../services/apiMeatspace.js', () => ({
   getDailyAlcohol: vi.fn(),
 }));
 vi.mock('../../hooks/useChartColors.js', () => ({ default: () => ({ grid: '#000', axis: '#000' }) }));
-// Recharts needs layout; a marker stands in for "a chart was drawn".
-vi.mock('recharts', () => {
+vi.mock('../ui/charts', () => {
   return {
     ResponsiveContainer: ({ children }) => <div data-testid="chart">{children}</div>,
     BarChart: ({ data }) => <div data-testid="bars" data-n={data.length} />, Bar: () => null, XAxis: () => null, YAxis: () => null,

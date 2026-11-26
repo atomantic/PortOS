@@ -64,7 +64,7 @@ Before removing a Tier 3 candidate, run a transitive-dep check (`npm ls <pkg>`).
 | `react` | 1 | KEEP | UI | |
 | `react-dom` | 1 | KEEP | UI | |
 | `react-router` | 1 | KEEP | routing | v8 dropped the `react-router-dom` alias package |
-| `recharts` | 1 | KEEP | charts | |
+| `recharts` | 1 | REPLACED | Responsive SVG charts | `client/src/components/ui/charts/` |
 | `socket.io-client` | 1 | KEEP | realtime client | |
 | `three` | 1 | KEEP | 3D | |
 | `three-stdlib` | — | REMOVED (direct) | 3D avatars | 2026-09-02 → `three/examples/jsm/utils/SkeletonUtils.js` (issue #5683). The sole direct import was `SkeletonUtils.clone`, which `three` itself ships. Its transitive use was removed with Drei (#19040). |
@@ -151,7 +151,7 @@ Before removing a Tier 3 candidate, run a transitive-dep check (`npm ls <pkg>`).
 
 If `/do:depfree --heavy` is run, the following Tier 1 entries would drop to Tier 2/3 and become replacement candidates regardless of popularity:
 
-- Many of the `@dnd-kit/*`, `@xterm/*`, `lucide-react`, `recharts` deps would be re-evaluated.
+- Many of the `@dnd-kit/*`, `@xterm/*`, `lucide-react` deps would be re-evaluated.
 - `pm2` would NOT be replaced (foundational process manager).
 
 This is intentionally NOT done in default mode — current dependency footprint is reasonable for the project's deployment context (single-user, Tailscale-private).
@@ -163,7 +163,7 @@ This is intentionally NOT done in default mode — current dependency footprint 
 - `express` — the used surface is routing, middleware chaining, static files, and body parsing over `node:http`.
 - `socket.io` — the used surface is rooms, acks, and reconnection over WebSocket; a design must cover the client half too.
 - `react` / `react-dom` — a product-level rewrite rather than a dependency swap; expected to be recorded `SKIPPED_INFEASIBLE` with a design sketch and a filed issue, which is the mode's required output for a package it cannot remove.
-- `@dnd-kit/*`, `@xterm/*`, `lucide-react`, `recharts`, `three` — re-evaluated by used surface, not size.
+- `@dnd-kit/*`, `@xterm/*`, `lucide-react`, `three` — re-evaluated by used surface, not size.
 
 An extreme run re-tests every `SKIPPED_INFEASIBLE` row here rather than honoring it, so this section is a forecast, not a decision log; the decision log is the tables above, which record the mode each row was reached under.
 
