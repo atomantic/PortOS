@@ -36,7 +36,7 @@ Signed-By: /usr/share/keyrings/ubuntu-archive-keyring.gpg
 // Inject a Bash clock and watchdog instead of sleeping against 1–3 second
 // budgets: startup/source rewriting consumed those budgets under load, and
 // macOS does not ship GNU timeout. The real script still computes deadlines.
-function run(mirror, cache, { includePostgres = true, event = 'push' } = {}) {
+function run(mirror, cache, { includePostgres = true, event = 'push', probeAvailable = true } = {}) {
   const dir = mkdtempSync(join(tmpdir(), 'ci-db-tools-'));
   const bin = join(dir, 'bin');
   const root = join(dir, 'root');
@@ -66,6 +66,17 @@ function run(mirror, cache, { includePostgres = true, event = 'push' } = {}) {
   writeFileSync(join(root, 'etc/apt/sources.list.d/microsoft-prod.sources'), 'Types: deb\nURIs: https://packages.microsoft.com/ubuntu/24.04/prod\nSuites: noble\nComponents: main\n');
   const fake = (name, body) => writeFileSync(join(bin, name), `#!/bin/bash\n${body}\n`, { mode: 0o755 });
   fake('sudo', 'exec "$@"');
+  fake('dpkg-architecture', '[[ "$1" = -qDEB_HOST_MULTIARCH ]] && echo x86_64-linux-gnu');
+  fake('dpkg-deb', `
+[[ "$1" = --extract && "$(cat "$2")" = '${PACKAGE_BYTES}' ]] || exit 1
+echo "extract $(basename "$2")" >> '${log}'
+mkdir -p "$3/usr/bin"
+if [[ "$(basename "$2")" = '${PACKAGE_FILE}' ]]; then
+  printf '%s\n' '#!/bin/bash' '[[ "$LD_LIBRARY_PATH" = *"/usr/lib/x86_64-linux-gnu:"* && "$1" = -version ]]' > "$3/usr/bin/ffmpeg"
+  chmod +x "$3/usr/bin/ffmpeg"
+elif ${probeAvailable}; then
+  cp "$3/usr/bin/ffmpeg" "$3/usr/bin/ffprobe"
+fi`);
   // Keep the production GNU sed invocation intact while adapting its in-place
   // flag only inside this synthetic command fixture on macOS.
   fake('sed', 'if [ "$(uname -s)" = Darwin ]; then\n  [ "$1" = "-i" ] && [ "$2" = "-E" ] || exit 2\n  shift 2\n  exec /usr/bin/sed -i "" -E "$@"\nfi\nexec /usr/bin/sed -i -E "$@"');
@@ -139,6 +150,7 @@ fi`);
       APT_ROOT: root,
       BASH_ENV: bashEnv,
       TEST_CLOCK: clock,
+      RUNNER_TEMP: dir,
       ...(includePostgres ? { PG_MAJOR: '17' } : { INCLUDE_POSTGRES: 'false' }),
       GITHUB_PATH: githubPath,
       GITHUB_EVENT_NAME: event,
@@ -160,6 +172,7 @@ fi`);
     downloaded: read(log).split('\n').filter(line => line.startsWith('download ')),
     checksumCalls: read(log).split('\n').filter(line => line === 'sha256sum').length,
     restoreCalls: read(log).split('\n').filter(line => line.startsWith('restore ')),
+    extracted: read(log).split('\n').filter(line => line.startsWith('extract ')),
     stageCalls: read(log).split('\n').filter(line => line.startsWith('stage ')),
     cachedPackage: read(join(packageCache, PACKAGE_FILE)),
     cachedPartial: existsSync(join(packageCache, 'unfinished.deb')),
@@ -188,7 +201,7 @@ describe.skipIf(process.platform === 'win32')('CI DB tool installation', () => {
   });
 
   it('installs ffmpeg without fetching the PostgreSQL key, adding PGDG, or exposing its binaries', () => {
-    const result = run('ok', 'warm', { includePostgres: false });
+    const result = run('ok', 'cold', { includePostgres: false });
     expect(result.status, result.stderr).toBe(0);
     expect(result.fetchedPgKey).toBe(false);
     expect(result.pgdg).toBeNull();
@@ -196,7 +209,6 @@ describe.skipIf(process.platform === 'win32')('CI DB tool installation', () => {
     expect(result.sourceparts).toEqual([['ubuntu.sources']]);
     expect(result.calls).toEqual([
       'apt-get update',
-      'apt-get --print-uris install -y --no-install-recommends ffmpeg',
       'apt-get install -y --no-install-recommends --download-only ffmpeg',
       'apt-get install -y --no-install-recommends --no-download ffmpeg',
     ]);
@@ -270,12 +282,28 @@ describe.skipIf(process.platform === 'win32')('CI DB tool installation', () => {
       expect(result.stageCalls).toEqual([]);
       if (cache === 'cold') {
         expect(result.restoreCalls).toEqual([]);
+        expect(result.extracted).toEqual([]);
         expect(result.downloaded).toEqual([`download ${PACKAGE_FILE}`, `download ${COMPANION_FILE}`]);
       } else {
-        expect(result.restoreCalls).toEqual(['restore 2 files']);
+        expect(result.restoreCalls).toEqual([]);
+        expect(result.extracted).toEqual([`extract ${PACKAGE_FILE}`, `extract ${COMPANION_FILE}`]);
         expect(result.downloaded).toEqual([]);
+        expect(result.githubPath).toMatch(/\/portos-ffmpeg\.[^/]+\/bin\n$/);
+        expect(result.calls).toEqual([
+          'apt-get update',
+          'apt-get --print-uris install -y --no-install-recommends ffmpeg',
+        ]);
       }
     }
+  });
+
+  it('uses system APT if the private runtime cannot execute both tools', () => {
+    const result = run('ok', 'warm', { includePostgres: false, probeAvailable: false });
+    expect(result.status, result.stderr).toBe(0);
+    expect(result.extracted).toHaveLength(2);
+    expect(result.restoreCalls).toEqual(['restore 2 files']);
+    expect(result.calls.at(-1)).toBe('apt-get install -y --no-install-recommends --no-download ffmpeg');
+    expect(result.githubPath).toBe('');
   });
 
   it('downloads a replacement for a same-size cache entry that fails signed-index hash verification', () => {
@@ -286,6 +314,10 @@ describe.skipIf(process.platform === 'win32')('CI DB tool installation', () => {
     expect(result.restoreCalls).toEqual(['restore 1 files']);
     expect(result.stdout).toContain('Ignoring invalid cached APT package');
     expect(result.cachedPackage).toBe(PACKAGE_BYTES);
+    const browser = run('ok', 'corrupt', { includePostgres: false, event: 'pull_request' });
+    expect(browser.status, browser.stderr).toBe(0);
+    expect(browser.extracted).toEqual([]);
+    expect(browser.downloaded).toEqual([`download ${PACKAGE_FILE}`]);
   });
 
   it('installs the service-major PostgreSQL client for the DB job and ffmpeg alone for browser', () => {

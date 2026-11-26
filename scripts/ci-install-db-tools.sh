@@ -9,7 +9,8 @@
 # official archive and the download resumes (finished .debs stay cached) until
 # APT_TOTAL_BUDGET_SECONDS. Repository signing is untouched — only the mirror
 # URI changes, so apt still verifies every Release file against its keyring.
-# Installation then runs from the local cache with --no-download.
+# A complete verified browser cache can provision FFmpeg without modifying dpkg's state.
+# Other installs run from the local archive directory with --no-download.
 #
 # APT_ROOT exists only so the contract test can run this against a fake tree.
 set -euo pipefail
@@ -60,6 +61,8 @@ if [[ "$INCLUDE_POSTGRES" == false ]]; then
   APT_OPTS+=("${APT_SOURCE_OPTS[@]}")
 fi
 ARCHIVES="${ROOT}/var/cache/apt/archives"
+BROWSER_RUNTIME=''
+BROWSER_READY=false
 
 fail() {
   echo "::error title=CI tool installation failed::$1 No test ran; this is an installation failure, not a test failure." >&2
@@ -74,17 +77,41 @@ bounded() {
   timeout --kill-after=10 "$remaining" "$@"
 }
 
+# Browser suites need the two executables and their libraries. A private runtime
+# avoids dpkg's serial unpack/configure cycle and scopes the library path to
+# these tools so Chrome, Node and other programs still use the runner's libraries.
+prepare_browser_runtime() {
+  local archive tool multiarch libdir
+  multiarch=$(dpkg-architecture -qDEB_HOST_MULTIARCH) || return
+  BROWSER_RUNTIME=$(mktemp -d "${RUNNER_TEMP:-${TMPDIR:-/tmp}}/portos-ffmpeg.XXXXXXXX") || return
+  for archive in "$@"; do
+    dpkg-deb --extract "$archive" "$BROWSER_RUNTIME/payload" || return
+  done
+  libdir="$BROWSER_RUNTIME/payload/usr/lib/$multiarch:$BROWSER_RUNTIME/payload/lib/$multiarch"
+  mkdir "$BROWSER_RUNTIME/bin" || return
+  for tool in ffmpeg ffprobe; do
+    printf '#!/bin/bash\nexport LD_LIBRARY_PATH=%q\nexec %q "$@"\n' \
+      "$libdir" "$BROWSER_RUNTIME/payload/usr/bin/$tool" > "$BROWSER_RUNTIME/bin/$tool" || return
+    chmod +x "$BROWSER_RUNTIME/bin/$tool" || return
+    "$BROWSER_RUNTIME/bin/$tool" -version >/dev/null || return
+  done
+  printf '%s\n' "$BROWSER_RUNTIME/bin" >> "$GITHUB_PATH" || return
+  BROWSER_READY=true
+}
+
 # apt accepts an existing archive by size alone. Only import restored downloads
 # whose SHA256 matches the current signed index, never cached indexes or state.
 restore_archives() {
   [[ -n "${APT_PACKAGE_CACHE:-}" ]] || return 0
-  local manifest _uri filename _size hash result
+  local manifest uri filename _size hash result expected=0
   local cached=("$APT_PACKAGE_CACHE/"*.deb) checksums=() verified=()
   [[ -f "${cached[0]:-}" ]] || return 0
   manifest=$(bounded "$1" sudo apt-get "${APT_OPTS[@]}" \
     -o "Dir::Cache::archives=${ARCHIVES}/verify-empty" -o Acquire::ForceHash=sha256 \
     --print-uris "${APT_INSTALL_OPTS[@]}" "${PACKAGES[@]}") || return
-  while read -r _uri filename _size hash; do
+  while read -r uri filename _size hash; do
+    [[ "$uri" == \'* ]] || continue
+    expected=$((expected + 1))
     [[ "$hash" =~ ^SHA256:[a-fA-F0-9]{64}$ && "$filename" =~ ^[a-zA-Z0-9][a-zA-Z0-9.+_~%:-]*\.deb$ ]] || continue
     [[ -f "${APT_PACKAGE_CACHE}/${filename}" ]] || continue
     checksums+=("${hash#SHA256:}  ${filename}")
@@ -105,6 +132,18 @@ restore_archives() {
     esac
   done < <(cd "$APT_PACKAGE_CACHE" && printf '%s\n' "${checksums[@]}" | LC_ALL=C sha256sum --check 2>/dev/null)
   (( ${#verified[@]} > 0 )) || return 0
+  if [[ "$INCLUDE_POSTGRES" == false && -n "${GITHUB_PATH:-}" ]] &&
+    (( ${#verified[@]} == expected )); then
+    local started=$SECONDS
+    if prepare_browser_runtime "${verified[@]}"; then
+      echo "⏱ Verified FFmpeg runtime prepared in $((SECONDS - started))s"
+      return 0
+    fi
+    if [[ -n "$BROWSER_RUNTIME" ]]; then
+      rm -rf -- "$BROWSER_RUNTIME"
+    fi
+    echo '♻️ Private FFmpeg runtime unavailable; installing through APT'
+  fi
   sudo install -d "$ARCHIVES" &&
     sudo install -m 644 -t "$ARCHIVES" -- "${verified[@]}"
 }
@@ -115,6 +154,7 @@ download_by() {
   echo "⏱ APT indexes refreshed in $((SECONDS - started))s"
   started=$SECONDS
   restore_archives "$1" || return
+  [[ "$BROWSER_READY" == false ]] || return 0
   bounded "$1" sudo apt-get "${APT_OPTS[@]}" "${APT_INSTALL_OPTS[@]}" --download-only "${PACKAGES[@]}" || return
   echo "⏱ APT archives ready in $((SECONDS - started))s"
 }
@@ -142,6 +182,11 @@ if ! download_by "$PRIMARY_BUDGET"; then
   sudo sed -i -E "s#${RUNNER_MIRROR}#${OFFICIAL_ARCHIVE}#g" "${sources[@]}"
   download_by "$TOTAL_BUDGET" ||
     fail "Packages did not download from the runner mirror or ${OFFICIAL_ARCHIVE} within ${TOTAL_BUDGET}s."
+fi
+
+if [[ "$BROWSER_READY" == true ]]; then
+  echo "✅ Prepared ffmpeg and ffprobe in ${SECONDS}s"
+  exit 0
 fi
 
 # A disposable runner doesn't need a kernel/service restart scan after installing test tools.
