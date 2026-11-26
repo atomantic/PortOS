@@ -60,6 +60,12 @@ const staticImportClosure = (entry) => walkImportClosure(entry, closureIo);
 const abs = (relative) => join(SERVER_DIR, ...relative.split('/'));
 const reaches = (entry, target) => staticImportClosure(abs(entry)).files.has(abs(target));
 
+it('keeps boot sequencing independent of service imports', () => {
+  const { statics, deferred, computed } = moduleSpecifiers(readText(abs('services/bootstrapSequence.js')));
+  expect([...statics, ...deferred]).toEqual([]);
+  expect(computed).toBe(false);
+});
+
 // The reusable engine cannot acquire Music Video persistence or finishing through an indirect import.
 it('keeps every shared film module outside the Music Video service graph', () => {
   for (const name of readdirSync(abs('services/film')).filter((name) => name.endsWith('.js') && !name.endsWith('.test.js'))) {
