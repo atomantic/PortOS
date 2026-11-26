@@ -3,7 +3,7 @@ import { chmod, mkdir, mkdtemp, readFile, rm, stat, writeFile } from 'fs/promise
 import { tmpdir } from 'os';
 import { delimiter, join } from 'path';
 import { createProviderService, isOllamaBackedProvider } from './providers.js';
-import { withCodexShippedModels } from './internal/codexShippedModels.js';
+import { CODEX_SHIPPED_MODELS, withCodexShippedModels } from './internal/codexShippedModels.js';
 
 // Temp dir, NOT a cwd-rooted one — see providerStatus.test.js (#3823).
 let TEST_DATA_DIR;
@@ -711,6 +711,7 @@ describe('Provider Service', () => {
       expect(codex.lightModel).toBe('gpt-5');
       expect(codex.mediumModel).toBe('gpt-5.2');
       expect(codex.heavyModel).toBe('gpt-5.2');
+      expect(codex.ultraModel).toBeUndefined();
 
       const onDisk = await readProvidersFile();
       expect(onDisk.providers.codex.defaultModel).toBe('gpt-5.2');
@@ -757,6 +758,7 @@ describe('Provider Service', () => {
       expect(codex.lightModel).toBe('gpt-5.6-luna');
       expect(codex.mediumModel).toBe('gpt-5.6-terra');
       expect(codex.heavyModel).toBe('gpt-5.6-sol');
+      expect(codex.ultraModel).toBe('gpt-6-astra');
     });
 
     it('migrates a sentinel-only Codex TUI config to selectable tiers', async () => {
@@ -773,6 +775,7 @@ describe('Provider Service', () => {
             lightModel: CODEX_SENTINEL,
             mediumModel: CODEX_SENTINEL,
             heavyModel: CODEX_SENTINEL,
+            ultraModel: 'gpt-6.2-astra',
           },
         },
       });
@@ -797,6 +800,28 @@ describe('Provider Service', () => {
       expect(codexTui.lightModel).toBe('gpt-5.6-luna');
       expect(codexTui.mediumModel).toBe('gpt-5.6-terra');
       expect(codexTui.heavyModel).toBe('gpt-5.6-sol');
+      expect(codexTui.ultraModel).toBe('gpt-6.2-astra');
+    });
+
+    it.each([undefined, null, ''])('fills and persists an unset ultra tier (%j) for an already-current Codex catalog', async (ultraModel) => {
+      await writeProvidersFile({
+        activeProvider: 'codex',
+        providers: {
+          codex: {
+            id: 'codex',
+            type: 'cli',
+            command: 'codex',
+            contextWindow: 1000000,
+            models: CODEX_SHIPPED_MODELS,
+            ultraModel,
+          },
+        },
+      });
+
+      const codex = await providerService.getProviderById('codex');
+      expect(codex.ultraModel).toBe('gpt-6-astra');
+      const onDisk = await readProvidersFile();
+      expect(onDisk.providers.codex).toMatchObject({ models: CODEX_SHIPPED_MODELS, ultraModel: 'gpt-6-astra' });
     });
 
     it.each([
@@ -840,6 +865,7 @@ describe('Provider Service', () => {
       expect(codex.lightModel).toBe('gpt-5.6-sol');
       expect(codex.mediumModel).toBe('gpt-5.6-luna');
       expect(codex.heavyModel).toBe('gpt-5.6-terra');
+      expect(codex.ultraModel).toBe('gpt-6-astra');
     });
 
     it('widens the 2026-08 seeded Codex catalog to include GPT-6 and GPT-5.4/5.5 models', async () => {
@@ -1027,6 +1053,21 @@ describe('Provider Service', () => {
       expect(codexTui.contextWindow).toBe(1000000);
       expect(antigravity.contextWindow).toBe(1048576);
       expect(custom.contextWindow).toBe(128000);
+    });
+
+    it.each([
+      ['/opt/example/bin/codex', 'cli', 1000000],
+      ['C:\\Tools\\Codex.EXE', 'tui', 1000000],
+      ['/opt/example/bin/agy', 'cli', 1048576],
+      ['AGY.EXE', 'tui', 1048576],
+    ])('upgrades the stale context window for custom %s providers', async (command, type, contextWindow) => {
+      await writeProvidersFile({
+        activeProvider: 'custom',
+        providers: { custom: { id: 'custom', type, command, contextWindow: 128000 } },
+      });
+
+      expect(await providerService.getProviderById('custom')).toMatchObject({ contextWindow });
+      expect((await readProvidersFile()).providers.custom.contextWindow).toBe(contextWindow);
     });
 
     it('preserves user-tuned context windows above the stale generic value', async () => {

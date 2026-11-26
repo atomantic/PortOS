@@ -19,11 +19,11 @@ Audit only the static CLI-provider fallback catalogs that PortOS ships. This is 
 PortOS maintenance task, not a managed-app task and not a live provider-refresh
 operation.
 
-The authoritative static surface is server/lib/aiToolkit/providers.js. Start by
-reading its CODEX_MODELS, ANTIGRAVITY_MODELS, and
-PRIOR_ANTIGRAVITY_MODEL_CATALOGS constants, then read the related provider,
-migration, seed-parity, pin-validation, and model-picker tests. Do not assume
-that a list returned by a single signed-in account is the universal fallback.
+Read CODEX_SHIPPED_MODELS in server/lib/aiToolkit/internal/codexShippedModels.js.
+Read ANTIGRAVITY_MODEL_CATALOG, the tier defaults, and the prior catalog lists in
+server/lib/aiToolkit/internal/providerServiceState.js. Then read the related
+provider, migration, seed-parity, pin-validation, and model-picker tests. Do not
+assume that a list returned by a single signed-in account is the universal fallback.
 
 Research current model IDs from authoritative provider documentation, release
 notes, or the provider CLI's model-list command when that command is supported
@@ -36,19 +36,18 @@ If a shipped fallback is stale, update only the PortOS static catalog and both
 fresh-install seed snapshots (server/lib/aiToolkit/defaults/providers.sample.json
 and data.reference/providers.json), keeping those seeds synchronized. Update the
 compatibility recognition that protects independently upgraded installs. When a
-shipped default changes, preserve the old seeded Antigravity list in
-PRIOR_ANTIGRAVITY_MODEL_CATALOGS. Codex has no prior-catalog recognition today —
-changing CODEX_MODELS requires adding a PRIOR_CODEX_MODEL_CATALOGS list and an
-isPriorSeededList branch in migrateCodexProvider, mirroring
-migrateAntigravityModelCatalog. Preserve configured-default
-sentinels, user-selected provider records, live-refreshed model lists, and every
-user-selected default/light/medium/heavy pin. Never rewrite data/providers.json or
-replace a customized provider list merely because it differs from the shipped
-fallback.
+shipped catalog changes, keep the old exact list in the existing
+PRIOR_CODEX_MODEL_CATALOGS or PRIOR_ANTIGRAVITY_MODEL_CATALOGS so
+migrateCodexProvider or migrateAntigravityModelCatalog can recognize it.
+Preserve configured-default sentinels, user-selected provider records,
+live-refreshed model lists, and every user-selected default/light/medium/heavy/ultra
+pin. Never rewrite data/providers.json or replace a customized provider list
+merely because it differs from the shipped fallback.
 
-Validate that every shipped model ID is unique, every real default/light/medium/heavy
-pin resolves to an ID in its provider catalog, configured-default sentinels remain
-valid, and the server and client provider model pickers still render valid choices.
+Validate that every shipped model ID is unique, every real
+default/light/medium/heavy/ultra pin resolves to an ID in its provider catalog,
+configured-default sentinels remain valid, and the server and client provider
+model pickers still render valid choices.
 Add or update focused tests covering fresh seeding, untouched-default upgrades,
 customized-list preservation, pin validity, and picker behavior. Run the relevant
 server and client tests.

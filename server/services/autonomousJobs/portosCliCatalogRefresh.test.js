@@ -29,11 +29,14 @@ describe('PortOS CLI provider catalog refresh custom task', () => {
   })
 
   it('keeps the prompt in the prepared PortOS workspace and makes the no-op contract explicit', () => {
-    expect(PORTOS_CLI_CATALOG_REFRESH_JOB.promptTemplate).toContain('CODEX_MODELS')
-    expect(PORTOS_CLI_CATALOG_REFRESH_JOB.promptTemplate).toContain('ANTIGRAVITY_MODELS')
+    expect(PORTOS_CLI_CATALOG_REFRESH_JOB.promptTemplate).toContain('server/lib/aiToolkit/internal/codexShippedModels.js')
+    expect(PORTOS_CLI_CATALOG_REFRESH_JOB.promptTemplate).toContain('server/lib/aiToolkit/internal/providerServiceState.js')
+    expect(PORTOS_CLI_CATALOG_REFRESH_JOB.promptTemplate).toContain('CODEX_SHIPPED_MODELS')
+    expect(PORTOS_CLI_CATALOG_REFRESH_JOB.promptTemplate).toContain('ANTIGRAVITY_MODEL_CATALOG')
     expect(PORTOS_CLI_CATALOG_REFRESH_JOB.promptTemplate).toContain('PRIOR_ANTIGRAVITY_MODEL_CATALOGS')
     expect(PORTOS_CLI_CATALOG_REFRESH_JOB.promptTemplate).toContain('PRIOR_CODEX_MODEL_CATALOGS')
     expect(PORTOS_CLI_CATALOG_REFRESH_JOB.promptTemplate).toContain('migrateCodexProvider')
+    expect(PORTOS_CLI_CATALOG_REFRESH_JOB.promptTemplate).not.toContain('Codex has no prior-catalog recognition')
     expect(PORTOS_CLI_CATALOG_REFRESH_JOB.promptTemplate).toContain('Do NOT create a commit, push a branch, or open a PR')
     expect(PORTOS_CLI_CATALOG_REFRESH_JOB.promptTemplate).toContain('data/providers.json')
   })
@@ -57,6 +60,18 @@ describe('PortOS CLI provider catalog refresh custom task', () => {
         promptTemplate: PORTOS_CLI_CATALOG_REFRESH_JOB.promptTemplate
       }
     })
+  })
+
+  it('upgrades an untouched stored prompt with its shipped snapshot', () => {
+    const data = createDefaultJobsData()
+    const job = data.jobs.find((candidate) => candidate.id === PORTOS_CLI_CATALOG_REFRESH_JOB_ID)
+    const previousPrompt = 'Previous shipped catalog instructions'
+    job.promptTemplate = previousPrompt
+    job._shippedDefaults.promptTemplate = previousPrompt
+
+    expect(mergeWithDefaults(data).dirty).toBe(true)
+    expect(job.promptTemplate).toBe(PORTOS_CLI_CATALOG_REFRESH_JOB.promptTemplate)
+    expect(job._shippedDefaults.promptTemplate).toBe(job.promptTemplate)
   })
 
   it('preserves a customized task during an upgrade', () => {

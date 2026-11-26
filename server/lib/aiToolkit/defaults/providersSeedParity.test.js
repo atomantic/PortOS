@@ -25,7 +25,11 @@ import { describe, it, expect } from 'vitest';
 import { readFileSync } from 'fs';
 import { resolve, dirname } from 'path';
 import { fileURLToPath } from 'url';
+import { ANTIGRAVITY_CONFIGURED_DEFAULT } from '../internal/antigravity.js';
 import { CODEX_SHIPPED_MODELS } from '../internal/codexShippedModels.js';
+import {
+  ANTIGRAVITY_MODEL_CATALOG, ANTIGRAVITY_MODEL_DEFAULTS, CODEX_MODEL_DEFAULTS,
+} from '../internal/providerServiceState.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 
@@ -38,14 +42,14 @@ const MODEL_FIELDS = ['models', 'defaultModel', 'lightModel', 'mediumModel', 'he
 // local model it ships guidance for, while the toolkit sample ships an empty
 // list because a generic install has no way to know what the user has pulled.
 const EXEMPT_IDS = new Set(['lmstudio']);
-const MODEL_PIN_FIELDS = ['defaultModel', 'lightModel', 'mediumModel', 'heavyModel', 'ultraModel'];
+const MODEL_PIN_FIELDS = MODEL_FIELDS.filter(field => field !== 'models');
 const STATIC_CLI_PROVIDER_SENTINELS = new Map([
   // Codex's sentinel-only legacy records migrate to real defaults; its fresh
   // seeds intentionally point at selectable models instead.
   ['codex', null],
   ['codex-tui', null],
-  ['antigravity-cli', 'antigravity-configured-default'],
-  ['antigravity-tui', 'antigravity-configured-default'],
+  ['antigravity-cli', ANTIGRAVITY_CONFIGURED_DEFAULT],
+  ['antigravity-tui', ANTIGRAVITY_CONFIGURED_DEFAULT],
 ]);
 
 const readJson = (path) => JSON.parse(readFileSync(path, 'utf8'));
@@ -90,26 +94,24 @@ describe('provider seed parity — data.reference ↔ aiToolkit sample', () => {
         if (sentinel) {
           expect(provider.models, `${seedName}.${id} lost its configured-default sentinel`).toContain(sentinel);
         }
-        if (id === 'codex' || id === 'codex-tui') {
+        const isCodex = id === 'codex' || id === 'codex-tui';
+        const tierDefaults = isCodex ? CODEX_MODEL_DEFAULTS : ANTIGRAVITY_MODEL_DEFAULTS;
+        const seedPins = Object.fromEntries(MODEL_PIN_FIELDS.map(field => [field, provider[field]]));
+        expect(seedPins, `${seedName}.${id} diverged from migration tier defaults`).toEqual(tierDefaults);
+        if (isCodex) {
           expect(provider.models, `${seedName}.${id} diverged from the catalog used during Codex refresh`).toEqual(CODEX_SHIPPED_MODELS);
           expect(provider.models, `${seedName}.${id} lost the current Codex Sol model`).toContain('gpt-6.1-sol');
           expect(provider.models, `${seedName}.${id} lost GPT-6.1 Terra`).toContain('gpt-6.1-terra');
           expect(provider.models).not.toContain('gpt-5.3-codex-spark');
         }
         if (id === 'antigravity-cli' || id === 'antigravity-tui') {
+          expect(provider.models, `${seedName}.${id} diverged from the Antigravity migration catalog`).toEqual(ANTIGRAVITY_MODEL_CATALOG);
           expect(provider.models, `${seedName}.${id} lost Gemini 4 Argon`).toContain('gemini-4-argon-medium');
           expect(provider.models, `${seedName}.${id} missing Gemini 4 Neon`).toEqual(expect.arrayContaining([
             'gemini-4-neon-high', 'gemini-4-neon-xhigh', 'gemini-4-neon-medium', 'gemini-4-neon-low',
             'gemini-4-hydrogen-high', 'gemini-4-hydrogen-xhigh', 'gemini-4-hydrogen-medium', 'gemini-4-hydrogen-low',
             'gemini-pro-orchestrator-neon', 'gemini-pro-orchestrator-g1-pro',
           ]));
-          expect(provider, `${seedName}.${id} missing concrete Antigravity tier defaults`).toMatchObject({
-            defaultModel: 'gemini-4-neon-medium',
-            lightModel: 'gemini-3.8-flash-medium',
-            mediumModel: 'gemini-4-neon-medium',
-            heavyModel: 'gemini-4-neon-high',
-            ultraModel: 'gemini-4-neon-xhigh',
-          });
         }
       }
     }
