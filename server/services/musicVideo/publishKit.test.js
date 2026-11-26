@@ -25,6 +25,7 @@ const kit = await import('./publishKit.js');
 const frames = await import('./thumbnailFrames.js');
 const excerptRender = await import('./excerptRender.js');
 const { captureMusicVideoEvidence } = await import('../../lib/musicVideo/musicVideoDependencies.js');
+const { publishCropRect } = await import('../../lib/musicVideo/musicVideoPublishCrop.js');
 const validation = await import('../../lib/musicVideo/musicVideoRouteValidation.js');
 const ffmpeg = await findFfmpeg();
 const watchedBuilds = new Set();
@@ -335,6 +336,55 @@ describe('publishing kit build (#9281)', () => {
     });
     return id;
   };
+
+  it.skipIf(!ffmpeg)('uses the previewed hook and off-center framing in the full-bleed vertical export', { timeout: 120000 }, async () => {
+    const { id } = await projects.createProject({ name: 'Example marked frame' });
+    await mkdir(PATHS.videos, { recursive: true });
+    const filename = `crop-${id}.mp4`;
+    const masterPath = join(PATHS.videos, filename);
+    const made = await runFfmpegProcess({ bin: ffmpeg, args: ['-v', 'error', '-f', 'lavfi', '-i', 'color=black:s=320x180:r=1:d=34',
+      '-vf', "drawbox=x=260:y=50:w=30:h=80:color=red:t=fill:enable='gte(t,5)'", '-c:v', 'libx264', '-pix_fmt', 'yuv420p', '-y', masterPath] });
+    expect(made.ok).toBe(true);
+    const renderHistoryId = `render-${id}`;
+    await saveHistory([{ id: renderHistoryId, filename, durationSec: 34 }]);
+    const setHook = (startSec) => projects.mutateProjectRecord(id, current => ({ project: {
+      ...current, renderHistoryId, audioAnalysis: { durationSec: 34 }, lyricCues: [cue('Example marked frame', startSec, 32)],
+    } }));
+    await setHook(5.25);
+    const preview = await kit.getPublishKitCropPreview(id);
+    expect(preview).toEqual({ renderHistoryId, filename, width: 320, height: 180, startSec: 5, endSec: 32.35 });
+    const crop = { ...preview, position: 1 };
+    const rect = publishCropRect(preview.width, preview.height, crop.position);
+    expect(rect.x + rect.width).toBe(preview.width);
+    expect(rect.y + rect.height).toBeLessThanOrEqual(preview.height);
+    expect(rect.width / rect.height).toBe(9 / 16);
+    expect(Object.values(rect).every(value => value >= 0 && value % 2 === 0)).toBe(true);
+    expect(publishCropRect(preview.width, preview.height, 0).x).toBe(0);
+
+    await setHook(6.25);
+    await expect(kit.startPublishKitBuild(id, { crop })).rejects.toMatchObject({ status: 409, code: 'PUBLISH_CROP_PREVIEW_STALE' });
+    await projects.mutateProjectRecord(id, current => ({ project: { ...current, renderHistoryId: 'another-render' } }));
+    await expect(kit.startPublishKitBuild(id, { crop })).rejects.toMatchObject({ status: 409, code: 'PUBLISH_CROP_PREVIEW_STALE' });
+    await setHook(5.25);
+    const { jobId } = await kit.startPublishKitBuild(id, { crop });
+    expect((await buildEnded(jobId)).type).toBe('complete');
+    const saved = (await projects.getProject(id)).publishKit;
+    expect(saved.master).toEqual({ filename, renderHistoryId });
+    const vertical = saved.exports.find(e => e.kind === 'vertical-9x16');
+    expect(vertical).toMatchObject({ layout: 'crop', width: 1080, height: 1920, startSec: preview.startSec, endSec: preview.endSec });
+
+    const sharp = (await import('sharp')).default;
+    const readRedMarker = async (input, startSec, x, y) => {
+      const output = join(PATHS.videos, `pixel-${x}-${y}.png`);
+      const sample = await runFfmpegProcess({ bin: ffmpeg, args: ['-v', 'error', '-ss', String(startSec), '-i', input, '-frames:v', '1', '-y', output] });
+      expect(sample.ok).toBe(true);
+      const [red, green, blue] = await sharp(output).extract({ left: x, top: y, width: 1, height: 1 }).raw().toBuffer();
+      expect(red).toBeGreaterThan(210);
+      expect(Math.max(green, blue)).toBeLessThan(40);
+    };
+    await readRedMarker(masterPath, preview.startSec, rect.x + rect.width / 2, rect.y + rect.height / 2);
+    await readRedMarker(join(PATHS.videos, vertical.filename), 0, 540, 960);
+  });
 
   it.skipIf(!ffmpeg)('renders the 9:16 cut natively when the composition lays itself out at that frame', { timeout: 120000 }, async () => {
     const id = await documentRendered();

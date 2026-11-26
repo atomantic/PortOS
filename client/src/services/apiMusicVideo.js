@@ -510,8 +510,10 @@ export const getMusicVideoSocialCuts = (id, { count, minSec, maxSec } = {}, opti
 // Build: platform encodes, thumbnails, captions and chapters from the final
 // render → { jobId } (progress over its own SSE URL). Copy: one provider draft,
 // then per-field edits; both resolve to { project }.
-export const buildMusicVideoPublishKit = (id, options = {}) =>
-  request(`/music-video/${encodeURIComponent(id)}/publish-kit/build`, { method: 'POST', ...options });
+export const getMusicVideoPublishCropPreview = (id, options = {}) =>
+  request(`/music-video/${encodeURIComponent(id)}/publish-kit/crop-preview`, options);
+export const buildMusicVideoPublishKit = (id, { crop, ...options } = {}) =>
+  request(`/music-video/${encodeURIComponent(id)}/publish-kit/build`, { method: 'POST', ...(crop ? { body: JSON.stringify({ crop }) } : {}), ...options });
 export const musicVideoPublishKitEventsUrl = (jobId) => `/api/music-video/publish-kit/${encodeURIComponent(jobId)}/events`;
 export const cancelMusicVideoPublishKit = (jobId, options = {}) =>
   request(`/music-video/publish-kit/${encodeURIComponent(jobId)}/cancel`, { method: 'POST', ...options });

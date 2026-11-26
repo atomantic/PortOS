@@ -642,6 +642,18 @@ export const musicVideoPromotionPlanSchema = z.object({
 }).strict();
 export const musicVideoPublishFrameSchema = z.object({ atSec: z.number().finite().min(0) }).strict();
 
+export const musicVideoPublishKitBuildSchema = z.object({
+  crop: z.object({
+    renderHistoryId: videoHistoryIdSchema,
+    filename: z.string().min(1).max(255),
+    width: z.number().int().positive(),
+    height: z.number().int().positive(),
+    startSec: z.number().finite().min(0),
+    endSec: z.number().finite().positive(),
+    position: z.number().finite().min(0).max(1),
+  }).strict().refine(({ startSec, endSec }) => endSec > startSec, { path: ['endSec'], message: 'Must be after the start time' }).optional(),
+}).strict();
+
 
 // Release cover art: a source (a kit thumbnail or a gallery image) composed
 // with the title and artist tag, or a fresh source image from a backend.
