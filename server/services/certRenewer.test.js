@@ -1,6 +1,7 @@
-import { describe, it, expect, vi, beforeEach, afterEach, afterAll } from 'vitest';
-import { mkdirSync, readFileSync, rmSync, utimesSync, writeFileSync } from 'fs';
-import { join } from 'path';
+import { describe, it, expect, vi, beforeEach, afterEach, afterAll, beforeAll } from 'vitest';
+import { execFileSync } from 'node:child_process';
+import { mkdirSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs';
+import { join } from 'node:path';
 import { makePathsProxy } from '../lib/mockPathsDataRoot.js';
 
 const { tempRoot } = await vi.hoisted(async () => {
@@ -22,27 +23,56 @@ const CERT = join(CERT_DIR, 'cert.pem');
 const KEY = join(CERT_DIR, 'key.pem');
 const META = join(CERT_DIR, 'meta.json');
 const HOST = 'host.example.ts.net';
+const oldMeta = { mode: 'tailscale', hostname: HOST, issuedAt: 'then' };
+const expectedFiles = ['cert.pem', 'key.pem', 'meta.json'];
 
-const seed = () => {
+function makePair(name) {
+  const key = join(tempRoot, `${name}.key.pem`);
+  const cert = join(tempRoot, `${name}.cert.pem`);
+  execFileSync('openssl', [
+    'req', '-x509', '-newkey', 'ec', '-pkeyopt', 'ec_paramgen_curve:prime256v1', '-nodes',
+    '-keyout', key, '-out', cert, '-days', '30', '-subj', '/CN=fixture'
+  ], { stdio: 'ignore' });
+  return { cert: readFileSync(cert), key: readFileSync(key) };
+}
+
+let oldPair;
+let newPair;
+beforeAll(() => {
+  oldPair = makePair('old');
+  newPair = makePair('new');
+});
+
+function seed() {
   mkdirSync(CERT_DIR, { recursive: true });
-  writeFileSync(CERT, 'old-cert');
-  writeFileSync(KEY, 'old-key');
-  utimesSync(CERT, 1_000_000, 1_000_000);
-  writeFileSync(META, JSON.stringify({ mode: 'tailscale', hostname: HOST, issuedAt: 'then', certMtime: 1_000_000_000 }));
-};
-const rotate = () => {
-  writeFileSync(CERT, 'new-cert');
-  writeFileSync(KEY, 'new-key');
-  utimesSync(CERT, 2_000_000, 2_000_000);
-};
+  writeFileSync(CERT, oldPair.cert);
+  writeFileSync(KEY, oldPair.key);
+  writeFileSync(META, JSON.stringify(oldMeta));
+}
 
-// initCertRenewer fires one renewal immediately, so tests observe the outcome
-// through the server stub and meta.json.
-const runInitial = async (server) => {
-  initCertRenewer(server);
-  await vi.waitFor(() => expect(execFile).toHaveBeenCalled());
-  await new Promise((r) => setTimeout(r, 50));
-};
+function writeStaged(args, { cert, key }) {
+  const [, certArg, keyArg] = args;
+  if (cert) writeFileSync(certArg.slice('--cert-file='.length), cert);
+  if (key) writeFileSync(keyArg.slice('--key-file='.length), key);
+}
+
+function readMeta() {
+  return JSON.parse(readFileSync(META, 'utf8'));
+}
+
+// Once the command starts, its staging directory exists until the renewal
+// settles. Wait for cleanup instead of assuming a fixed filesystem latency.
+async function waitForRenewal(callCount = 1) {
+  await vi.waitFor(() => expect(execFile).toHaveBeenCalledTimes(callCount));
+  await vi.waitFor(() => expect(readdirSync(CERT_DIR).sort()).toEqual(expectedFiles));
+}
+
+function expectOldPair() {
+  expect(readFileSync(CERT)).toEqual(oldPair.cert);
+  expect(readFileSync(KEY)).toEqual(oldPair.key);
+  expect(readMeta()).toEqual(oldMeta);
+  expect(server.setSecureContext).not.toHaveBeenCalled();
+}
 
 let server;
 const timer = { unref: vi.fn() };
@@ -51,7 +81,7 @@ beforeEach(() => {
   rmSync(CERT_DIR, { recursive: true, force: true });
   seed();
   server = { setSecureContext: vi.fn() };
-  findTailscale.mockReturnValue('/usr/local/bin/tailscale');
+  findTailscale.mockReturnValue('/fake/tailscale');
   vi.spyOn(console, 'log').mockImplementation(() => {});
   vi.spyOn(console, 'error').mockImplementation(() => {});
   vi.spyOn(globalThis, 'setInterval').mockImplementation(() => timer);
@@ -61,47 +91,69 @@ afterEach(() => vi.restoreAllMocks());
 afterAll(() => rmSync(tempRoot, { recursive: true, force: true }));
 
 describe('certRenewer', () => {
-  it('passes a 60s timeout, hot-swaps the renewed cert and persists fresh meta atomically', async () => {
-    execFile.mockImplementation((_bin, _args, _opts, cb) => { rotate(); cb(null, { stderr: 'Wrote public cert' }); });
-    await runInitial(server);
+  it('passes a 60s timeout, publishes the validated pair and hot-swaps it', async () => {
+    execFile.mockImplementation((_bin, args, _opts, cb) => {
+      writeStaged(args, newPair);
+      cb(null, { stderr: 'Wrote public cert' });
+    });
+    initCertRenewer(server);
+    await waitForRenewal();
 
     expect(execFile.mock.calls[0][2]).toMatchObject({ timeout: 60_000 });
-    expect(server.setSecureContext).toHaveBeenCalledTimes(1);
-    const meta = JSON.parse(readFileSync(META, 'utf8'));
-    expect(meta).toMatchObject({ mode: 'tailscale', hostname: HOST, certMtime: 2_000_000_000 });
+    expect(server.setSecureContext).toHaveBeenCalledExactlyOnceWith(newPair);
+    expect(readFileSync(CERT)).toEqual(newPair.cert);
+    expect(readFileSync(KEY)).toEqual(newPair.key);
+    const meta = readMeta();
+    expect(meta).toMatchObject({ mode: 'tailscale', hostname: HOST, certMtime: statSync(CERT).mtimeMs });
     expect(meta.issuedAt).not.toBe('then');
-    expect(meta).toHaveProperty('expiresAt');
+    expect(meta.expiresAt).toEqual(expect.any(String));
   });
 
-  it('does not hot-swap or rewrite meta when tailscale cert fails, even if files changed', async () => {
-    execFile.mockImplementation((_bin, _args, _opts, cb) => { rotate(); cb(new Error('timed out')); });
-    await runInitial(server);
+  it('preserves the live pair and metadata after a CLI timeout during a write', async () => {
+    execFile.mockImplementation((_bin, args, _opts, cb) => {
+      writeStaged(args, { cert: 'partial cert' });
+      cb(new Error('timed out'));
+    });
+    initCertRenewer(server);
+    await waitForRenewal();
+    expectOldPair();
+  });
 
-    expect(server.setSecureContext).not.toHaveBeenCalled();
-    expect(JSON.parse(readFileSync(META, 'utf8')).issuedAt).toBe('then');
+  it.each(['missing', 'mismatched'])('preserves the live pair when the staged key is %s', async (problem) => {
+    execFile.mockImplementation((_bin, args, _opts, cb) => {
+      writeStaged(args, { cert: newPair.cert, key: problem === 'mismatched' ? oldPair.key : null });
+      cb(null, { stderr: '' });
+    });
+    initCertRenewer(server);
+    await waitForRenewal();
+    expectOldPair();
   });
 
   it('skips a renewal while another is still in flight', async () => {
     let finish;
-    execFile.mockImplementation((_bin, _args, _opts, cb) => { finish = () => cb(null, { stderr: '' }); });
+    execFile.mockImplementation((_bin, args, _opts, cb) => {
+      finish = () => {
+        writeStaged(args, oldPair);
+        cb(null, { stderr: '' });
+      };
+    });
     initCertRenewer(server);
     await vi.waitFor(() => expect(execFile).toHaveBeenCalledTimes(1));
 
     const tick = setInterval.mock.calls[0][0];
     tick();
-    await new Promise((r) => setTimeout(r, 20));
+    expect(console.log).toHaveBeenCalledWith(expect.stringContaining('previous renewal still running'));
     expect(execFile).toHaveBeenCalledTimes(1);
 
     finish();
-    await new Promise((r) => setTimeout(r, 20));
+    await waitForRenewal();
     tick();
     await vi.waitFor(() => expect(execFile).toHaveBeenCalledTimes(2));
-    // Settle the second run so the module-level in-flight latch resets for later tests.
     finish();
-    await new Promise((r) => setTimeout(r, 20));
+    await waitForRenewal(2);
   });
 
-  it('is a no-op teardown when the server cannot hot-swap, meta is absent or self-signed', async () => {
+  it('is a no-op teardown when the server cannot hot-swap, meta is absent or self-signed', () => {
     for (const setup of [
       () => initCertRenewer({}),
       () => { rmSync(META); return initCertRenewer(server); },
@@ -118,32 +170,35 @@ describe('certRenewer', () => {
   });
 
   it('schedules an unref-ed 24h interval and the teardown clears it', async () => {
-    execFile.mockImplementation((_bin, _args, _opts, cb) => cb(null, { stderr: '' }));
+    execFile.mockImplementation((_bin, args, _opts, cb) => {
+      writeStaged(args, oldPair);
+      cb(null, { stderr: '' });
+    });
     const stop = initCertRenewer(server);
     expect(setInterval).toHaveBeenCalledWith(expect.any(Function), 24 * 60 * 60 * 1000);
     expect(timer.unref).toHaveBeenCalled();
     stop();
     expect(clearInterval).toHaveBeenCalledWith(timer);
-    await vi.waitFor(() => expect(execFile).toHaveBeenCalled());
+    await waitForRenewal();
   });
 
-  it('does not hot-swap when cert mtime is unchanged', async () => {
-    execFile.mockImplementation((_bin, _args, _opts, cb) => cb(null, { stderr: '' }));
-    await runInitial(server);
-    expect(server.setSecureContext).not.toHaveBeenCalled();
+  it('does not rewrite or hot-swap the cached certificate', async () => {
+    execFile.mockImplementation((_bin, args, _opts, cb) => {
+      writeStaged(args, oldPair);
+      cb(null, { stderr: '' });
+    });
+    const before = statSync(CERT).mtimeMs;
+    initCertRenewer(server);
+    await waitForRenewal();
+    expectOldPair();
+    expect(statSync(CERT).mtimeMs).toBe(before);
   });
 
   it('skips the run entirely when the tailscale CLI is missing', async () => {
     findTailscale.mockReturnValue(null);
     initCertRenewer(server);
-    await new Promise((r) => setTimeout(r, 50));
+    await vi.waitFor(() => expect(console.log).toHaveBeenCalledWith(expect.stringContaining('CLI not found')));
     expect(execFile).not.toHaveBeenCalled();
-    expect(server.setSecureContext).not.toHaveBeenCalled();
-  });
-
-  it('does not hot-swap when key.pem is missing after a renewal', async () => {
-    execFile.mockImplementation((_bin, _args, _opts, cb) => { rotate(); rmSync(KEY); cb(null, { stderr: '' }); });
-    await runInitial(server);
-    expect(server.setSecureContext).not.toHaveBeenCalled();
+    expectOldPair();
   });
 });
