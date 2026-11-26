@@ -1709,3 +1709,49 @@ describe('socket.js — inbound peer socket revocation (#17905)', () => {
     expect(live.disconnect).not.toHaveBeenCalled();
   });
 });
+
+describe('logs:subscribe host-control boundary (#19168)', () => {
+  let io;
+  const guardedSocket = (id, remote = true) => {
+    const socket = makeSocket(id);
+    socket.handshake.headers = remote ? { 'x-forwarded-for': '192.0.2.10' } : {};
+    socket.use = (fn) => { socket.middleware = fn; };
+    socket.runEvent = async (event, payload) => {
+      const next = vi.fn();
+      await socket.middleware([event, payload], next);
+      if (next.mock.calls.length) await socket.handlers[event](payload);
+      return next;
+    };
+    return socket;
+  };
+  beforeEach(() => {
+    io = makeIo();
+    initSocket(io);
+    vi.mocked(isAuthEnabled).mockResolvedValue(false);
+    vi.mocked(spawnPm2).mockClear();
+  });
+  it('refuses remote password-free log subscriptions and leaves unsubscribe available', async () => {
+    const socket = guardedSocket('remote');
+    io.connect(socket);
+    const payload = { processName: 'portos-server', lines: 20 };
+    const next = await socket.runEvent('logs:subscribe', payload);
+    expect(next).not.toHaveBeenCalled();
+    expect(socket.emitted).toContainEqual(['logs:error', expect.objectContaining({ code: 'HOST_CONTROL_FORBIDDEN', processName: payload.processName })]);
+    expect(spawnPm2).not.toHaveBeenCalled();
+    expect(await socket.runEvent('logs:unsubscribe', payload)).toHaveBeenCalled();
+  });
+  it('allows local password-free and authenticated operator subscriptions', async () => {
+    const local = guardedSocket('local', false);
+    local.data.portosLocalConnection = true;
+    io.connect(local);
+    expect(await local.runEvent('logs:subscribe', { processName: 'portos-server', lines: 20 })).toHaveBeenCalled();
+    vi.mocked(isAuthEnabled).mockResolvedValue(true);
+    vi.mocked(verifyRequestSession).mockResolvedValue(true);
+    const operator = guardedSocket('operator');
+    io.connect(operator);
+    expect(await operator.runEvent('logs:subscribe', { processName: 'portos-server', lines: 20 })).toHaveBeenCalled();
+    expect(spawnPm2).toHaveBeenCalledTimes(2);
+    expect(local.emitted).toContainEqual(['logs:subscribed', expect.objectContaining({ processName: 'portos-server' })]);
+    expect(operator.emitted).toContainEqual(['logs:subscribed', expect.objectContaining({ processName: 'portos-server' })]);
+  });
+});
