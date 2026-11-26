@@ -16,7 +16,7 @@ export default function usePublishStageWiring({ selected, replaceProject, publis
   const publishKit = useMusicVideoPublishKit({ project: selected, replaceProject });
   const publishBuildBlockedReason = creativeSetupPending ? 'Save or cancel the creative setup before building the publishing kit.'
     : styleReferencesPending ? 'Save or cancel the style references before building the publishing kit.'
-      : compositionSavePending > 0 ? 'Saving composition…' : null;
+      : compositionSavePending > 0 ? 'Saving composition…' : publishKit.cropBlockedReason;
   const buildPublishKit = () => {
     if (!selected.renderHistoryId || publishKit.building || publishBuildBlockedReason) return;
     goToStage('publish', 'mv-publish-kit');

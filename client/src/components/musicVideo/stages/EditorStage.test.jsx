@@ -4,10 +4,10 @@
  */
 import { describe, it, expect } from 'vitest';
 // The scaffold registers the mocks, so it loads before any mocked module.
-import { PROJECT_WITH_CLIP, PROJECT_ANALYZED, MV_ROUTES, LocationProbe, installMusicVideoPageHooks } from '../../../test/musicVideoPageMocks.jsx';
+import { PROJECT_WITH_CLIP, PROJECT_ANALYZED, MV_ROUTES, LocationProbe, NavTo, installMusicVideoPageHooks } from '../../../test/musicVideoPageMocks.jsx';
 import { render, screen, fireEvent, within, act, waitFor } from '@testing-library/react';
 import { MemoryRouter } from 'react-router';
-import { listMusicVideoProjects } from '../../../services/apiMusicVideo.js';
+import { listMusicVideoProjects, renderMusicVideoExcerpt } from '../../../services/apiMusicVideo.js';
 
 installMusicVideoPageHooks();
 
@@ -16,12 +16,14 @@ const PROJECT = {
   audioAnalysis: { ...PROJECT_ANALYZED.audioAnalysis, durationSec: 12 },
   scenes: [
     { sceneId: 's2', order: 1, startSec: 4, endSec: 12, prompt: 'Wide on the rink' },
-    { sceneId: 's1', order: 0, startSec: 0, endSec: 4, prompt: 'Close on the skates', referenceImageId: 'frame-a.png' },
+    { sceneId: 's1', order: 0, startSec: 0, endSec: 4, prompt: 'Close on the skates', referenceImageId: 'frame-a.png', videoHistoryId: 'test-clip' },
   ],
 };
 const renderAt = (path) => render(
   <MemoryRouter initialEntries={[path]}>
     <LocationProbe />
+    <NavTo to="/music-video/mv-1/editor?play=excerpt:fixture" />
+    <NavTo to="/music-video/mv-2/editor" />
     {MV_ROUTES}
   </MemoryRouter>,
 );
@@ -50,5 +52,60 @@ describe('MusicVideo editor page', () => {
     expect(screen.getByTestId('loc')).toHaveTextContent(/\/music-video\/mv-1\/editor$/);
     expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
     expect(screen.getByRole('region', { name: 'Timeline' })).toBeInTheDocument();
+  });
+
+  it('sends the displayed song-time range from an offset preview and shares the render slot with Review', async () => {
+    const fixture = {
+      ...PROJECT,
+      excerpts: [{ id: 'fixture', startSec: 2, endSec: 9, status: 'complete', filename: 'fixture.mp4' }],
+      scenes: [...PROJECT.scenes, { sceneId: 'lead', order: -1, preMusic: { durationSec: 3 }, prompt: 'Cold open' }],
+    };
+    listMusicVideoProjects.mockResolvedValue([fixture, { ...PROJECT, id: 'mv-2', name: 'Second project' }]);
+    renderAt('/music-video/mv-1/editor?play=excerpt:fixture');
+    const video = await screen.findByLabelText('Draft excerpt preview');
+    const playhead = screen.getByLabelText('Playhead time');
+    await waitFor(() => expect(playhead).toHaveTextContent('0:02.00'));
+    const setIn = screen.getByRole('button', { name: 'Set In' });
+    const setOut = screen.getByRole('button', { name: 'Set Out' });
+    const clear = screen.getByRole('button', { name: 'Clear Range' });
+    const renderDraft = screen.getByRole('button', { name: 'Render Draft' });
+    const loop = screen.getByRole('button', { name: 'Loop Range' });
+    expect(renderDraft).toBeDisabled();
+    fireEvent.click(setIn);
+    fireEvent.click(setOut);
+    expect(screen.getByText('Set In before Out and keep both points within the song.')).toBeInTheDocument();
+    fireEvent.click(clear);
+    expect(screen.queryByRole('slider', { name: 'In point' })).not.toBeInTheDocument();
+    fireEvent.click(setIn);
+
+    video.currentTime = 4.125;
+    await waitFor(() => expect(playhead).toHaveTextContent('0:06.13'));
+    fireEvent.click(setOut);
+    const marker = screen.getByRole('slider', { name: 'Out point' });
+    fireEvent.keyDown(marker, { key: 'ArrowRight', shiftKey: true });
+    expect(marker).toHaveAttribute('aria-valuetext', '0:07.125');
+    expect(screen.getByText('In 0:02.000 · Out 0:07.125 · 5.125s')).toBeInTheDocument();
+    expect(loop).toHaveAttribute('aria-pressed', 'false');
+    await waitFor(() => expect(loop).toBeEnabled());
+    fireEvent.click(loop);
+
+    let finishKickoff;
+    renderMusicVideoExcerpt.mockImplementationOnce(() => new Promise((resolve) => { finishKickoff = resolve; }));
+    fireEvent.click(renderDraft);
+    expect(renderMusicVideoExcerpt).toHaveBeenCalledWith('mv-1', { startSec: 2, endSec: 7.125 }, { silent: true });
+    expect(renderDraft).toBeDisabled();
+    await act(async () => finishKickoff({ jobId: 'draft-job' }));
+    expect(screen.getByText('Rendering draft · 0%')).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('link', { name: 'View drafts in Review' }));
+    expect(await screen.findByRole('button', { name: 'Render excerpt' })).toBeDisabled();
+    fireEvent.click(screen.getByRole('button', { name: 'go-/music-video/mv-1/editor?play=excerpt:fixture' }));
+    expect(await screen.findByText('In 0:02.000 · Out 0:07.125 · 5.125s')).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Loop Range' })).toHaveAttribute('aria-pressed', 'true');
+    fireEvent.click(screen.getByRole('button', { name: 'go-/music-video/mv-2/editor' }));
+    await screen.findByRole('heading', { level: 2, name: 'Second project' });
+    expect(screen.getByRole('button', { name: 'Loop Range' })).toHaveAttribute('aria-pressed', 'false');
+    expect(screen.getByRole('button', { name: 'Clear Range' })).toBeDisabled();
+    expect(screen.queryByRole('slider', { name: 'In point' })).not.toBeInTheDocument();
+    expect(renderMusicVideoExcerpt).toHaveBeenCalledTimes(1);
   });
 });

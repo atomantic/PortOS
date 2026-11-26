@@ -239,18 +239,21 @@ function useColdOpen({ project, songRef }) {
     audio.play?.()?.catch?.(() => {});
   }, [plan.length, mix, songRef, src]);
   // The song's own play from its first note runs the cold open first, except the
-  // play the cold open hands over with when it ends.
-  const handingOver = useRef(false);
+  // handover from the cold open or an explicit song-only range.
+  const skipColdOpen = useRef(false);
+  const playSong = useCallback((song) => {
+    if (song.paused) skipColdOpen.current = true;
+    song.play?.()?.catch?.(() => { skipColdOpen.current = false; });
+  }, []);
   const onEnded = () => {
     setActive(false);
     const song = songRef.current;
     if (!song) return;
-    handingOver.current = true;
     song.currentTime = 0;
-    song.play?.()?.catch?.(() => { handingOver.current = false; });
+    playSong(song);
   };
   const claimsPlay = useCallback((song) => {
-    if (handingOver.current) { handingOver.current = false; return false; }
+    if (skipColdOpen.current) { skipColdOpen.current = false; return false; }
     if (!plan.length || (song?.currentTime || 0) > 0.05) return false;
     start();
     return true;
@@ -259,7 +262,7 @@ function useColdOpen({ project, songRef }) {
     <audio ref={audioRef} preload="none" aria-label="Sound before the song" className="hidden"
       onTimeUpdate={(e) => setTime(e.currentTarget.currentTime)} onEnded={onEnded} />
   ) : null;
-  return { audioRef, scenes, seconds, active, time, audio, start, stop, claimsPlay };
+  return { audioRef, scenes, seconds, active, time, audio, start, stop, claimsPlay, playSong };
 }
 
 function computeFilmCutEffect({ film, picture, filmGap, planned, index, timed, shot, stillFps }) {
@@ -339,15 +342,17 @@ export default function useAnimaticPlayback({ project, seekRequest, onEditShot, 
   const outro = useMusicVideoStatsOutro({ projectId: project.id, seconds: endingPlan.reduce((sum, part) => sum + part.durationSec, 0), audioRef });
   const songEndSec = Number(project.audioAnalysis?.durationSec) || 0;
   const cold = useColdOpen({ project, songRef: audioRef });
+  const { stop: stopColdOpen, playSong } = cold;
 
   useEffect(() => {
     if (!seekRequest || applied.current === seekRequest.n || !audioRef.current) return;
     applied.current = seekRequest.n;
     audioRef.current.currentTime = seekRequest.t;
     setTime(seekRequest.t);
-    if (seekRequest.play) audioRef.current.play?.()?.catch?.(() => {});
+    if (seekRequest.play && seekRequest.songOnly) { stopColdOpen(); playSong(audioRef.current); }
+    else if (seekRequest.play) audioRef.current.play?.()?.catch?.(() => {});
     else if (seekRequest.pause) audioRef.current.pause?.();
-  }, [seekRequest]);
+  }, [seekRequest, playSong, stopColdOpen]);
 
   // Back and Next move the song; it keeps playing or stays paused as it was.
   const seekTo = useCallback((t) => {

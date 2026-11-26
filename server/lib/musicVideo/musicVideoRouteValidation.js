@@ -586,10 +586,6 @@ export const musicVideoSocialCutsQuerySchema = z.object({
 
 // #9281: publishing kit — per-platform copy edits, the copy draft request, the chosen thumbnail.
 const kitText = (max) => z.string().max(max);
-export const musicVideoPublishKitBuildSchema = z.object({
-  loudnessPreset: z.enum(['as-mixed', 'web']).default('as-mixed'),
-});
-
 export const musicVideoPublishCopyPatchSchema = z.object({
   youtube: z.object({ title: kitText(100), description: kitText(5000), tags: z.array(kitText(60)).max(30) }).partial().strict().optional(),
   shorts: z.object({ title: kitText(100), description: kitText(5000) }).partial().strict().optional(),
@@ -645,6 +641,19 @@ export const musicVideoPromotionPlanSchema = z.object({
   days: z.number().int().min(1).max(30).optional(),
 }).strict();
 export const musicVideoPublishFrameSchema = z.object({ atSec: z.number().finite().min(0) }).strict();
+
+export const musicVideoPublishKitBuildSchema = z.object({
+  loudnessPreset: z.enum(['as-mixed', 'web']).default('as-mixed'),
+  crop: z.object({
+    renderHistoryId: videoHistoryIdSchema,
+    filename: z.string().min(1).max(255),
+    width: z.number().int().positive(),
+    height: z.number().int().positive(),
+    startSec: z.number().finite().min(0),
+    endSec: z.number().finite().positive(),
+    position: z.number().finite().min(0).max(1),
+  }).strict().refine(({ startSec, endSec }) => endSec > startSec, { path: ['endSec'], message: 'Must be after the start time' }).optional(),
+}).strict();
 
 
 // Release cover art: a source (a kit thumbnail or a gallery image) composed

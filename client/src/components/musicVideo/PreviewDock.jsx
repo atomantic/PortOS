@@ -1,4 +1,5 @@
 import { hasTemplateBeatReaction } from '../../../../server/lib/musicVideo/musicVideoTemplateEffects.js';
+import { coldOpenScenes } from '../../../../server/lib/musicVideo/musicVideoColdOpen.js';
 import useAudioLayerPlayback from './useAudioLayerPlayback.js';
 import usePreviewSounds from './usePreviewSounds.js';
 import { lazy, Suspense, useEffect, useRef, useState } from 'react';
@@ -64,6 +65,7 @@ function VideoPreview({ source, scenes, projectName, seekRequest, collapsed, onE
         playsInline
         preload="metadata"
         data-song-clock={startSec}
+        data-song-end={source.endSec ?? undefined}
         onLoadedMetadata={() => { if (pending.current != null) { seekTo(pending.current); pending.current = null; } }}
         onTimeUpdate={(e) => setTime(e.currentTarget.currentTime)}
         onSeeked={(e) => setTime(e.currentTarget.currentTime)}
@@ -138,7 +140,7 @@ function DocumentPreview({ project, playback, audioUrl, seekRequest, collapsed, 
  * playable. `seekRequest` (`{ t, n }`) is the scene-card seek. `blender` is a
  * Blender film's `useMusicVideoBlender` reading: its live composite plays the
  * shots' renders from that state, so a render that lands shows without a reload.
- * `clockRef` is filled with `() => ({ t, playing }) | null`, the playing source's time on the song.
+ * `clockRef` reads the playing source's time and coverage on the song.
  * `compact` drops the title for a page that frames the player itself (the editor).
  * `controlsBeside` keeps the play bar under the picture and stacks the other
  * controls in a column to its right, for a short, wide space (the editor). Each
@@ -176,16 +178,23 @@ export default function PreviewDock({ project, sources, audioUrl, seekRequest, c
     for (const media of dockRef.current?.querySelectorAll('audio, video') || []) if (!media.muted) media.pause();
   });
   const sounding = (handler) => (event) => { if (!event.target.muted) handler(); };
+  // A cold open or edits since rendering can leave a final's song offset unknown.
+  const unknownSongOffset = source?.id === 'final'
+    && (project.renderDependencyState?.status === 'stale' || coldOpenScenes(project).length > 0);
   // Each player marks the media element that keeps the song's time (`data-song-clock`, its offset on
   // the song), so a reader outside the dock follows whichever source is playing without a re-render.
   useEffect(() => {
     if (!clockRef) return undefined;
     clockRef.current = () => {
       const media = dockRef.current?.querySelector('[data-song-clock]');
-      return media ? { t: media.currentTime + (Number(media.dataset.songClock) || 0), playing: !media.paused && !media.ended } : null;
+      if (!media) return null;
+      const start = Number(media.dataset.songClock) || 0;
+      const mediaEnd = Number.isFinite(media.duration) ? start + media.duration : Infinity;
+      const end = Math.min(mediaEnd, media.dataset.songEnd == null ? Infinity : Number(media.dataset.songEnd));
+      return { t: media.currentTime + start, playing: !media.paused && !media.ended, ended: media.ended, start, end, unknownSongOffset };
     };
     return () => { clockRef.current = null; };
-  }, [clockRef]);
+  }, [clockRef, unknownSongOffset]);
   return (
     // A flex gap, not space-y: space-y puts a margin under the header row even
     // when everything after it is hidden, so the folded dock sat off-center.

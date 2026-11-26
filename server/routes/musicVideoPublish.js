@@ -12,7 +12,7 @@ import { validateRequest } from '../lib/validateRequest.js';
 import { musicVideoPublishKitBuildSchema, musicVideoPublishCopyPatchSchema, musicVideoPublishCopyDraftSchema, musicVideoPromotionPlanSchema, musicVideoPublishFrameSchema, musicVideoCoverArtComposeSchema, musicVideoYoutubeThumbnailComposeSchema, musicVideoYoutubeThumbnailPaintSchema, musicVideoYoutubeThumbnailPaintPreviewSchema, musicVideoCoverArtGenerateSchema, musicVideoCoverDesignSaveSchema, musicVideoArtistStyleSaveSchema, musicVideoArtistStyleDeleteSchema, musicVideoCoverArtDesignSchema, musicVideoPublishTargetSchema, musicVideoPublishPrepareSchema, musicVideoPublishPlatformsPatchSchema, musicVideoPublishPostSchema, musicVideoPublishCrossLinksSchema, musicVideoCrossLinkTargetSchema, musicVideoCrossLinkEditSchema } from '../lib/musicVideo/musicVideoRouteValidation.js';
 import { uploadSingle } from '../lib/multipart.js';
 import { requireProject } from '../services/musicVideo/requireProject.js';
-import { startPublishKitBuild, attachPublishKitSseClient, cancelPublishKitBuild, draftPublishKitCopy, updatePublishKitCopy, finalRenderFile, capturePublishKitFrame } from '../services/musicVideo/publishKit.js';
+import { startPublishKitBuild, getPublishKitCropPreview, attachPublishKitSseClient, cancelPublishKitBuild, draftPublishKitCopy, updatePublishKitCopy, finalRenderFile, capturePublishKitFrame } from '../services/musicVideo/publishKit.js';
 import { preparePublishDraft, previewPublishPost, discardPublishDraft, listPublishDrafts, recordPublishPost, removePublishPost, prepareCrossLinkEdit, setPublishCrossLinks } from '../services/musicVideo/publish/index.js';
 import { getPublishPlatforms, updatePublishPlatforms, publishHistory } from '../services/musicVideo/publish/platforms.js';
 import { listArtistStyles, saveArtistStyle, removeArtistStyle } from '../services/musicVideo/publish/artistStyles.js';
@@ -26,6 +26,11 @@ const router = Router();
 router.get('/:id/publish-kit/video', asyncHandler(async (req, res) => {
   const { path } = await finalRenderFile(await requireProject(req.params.id));
   res.sendFile(path);
+}));
+
+router.get('/:id/publish-kit/crop-preview', asyncHandler(async (req, res) => {
+  res.set('Cache-Control', 'no-store');
+  res.json(await getPublishKitCropPreview(req.params.id));
 }));
 
 router.post('/:id/publish-kit/frame', asyncHandler(async (req, res) => {
