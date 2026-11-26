@@ -30,8 +30,8 @@ import { getSettings } from '../settings.js';
 import { deleteAutoTouchpoints } from '../tribe.js';
 import {
   getConversationAttachmentBytes,
-  purgeConversationAttachments,
   shapeAttachment,
+  unlinkPathsIfUnreferenced,
 } from './beeperAttachments.js';
 
 // The list endpoint returns a PARTICIPANT SUBSET, never a roster. Beeper's own
@@ -601,50 +601,50 @@ async function setConversationFlag(conversationId, field, column, value) {
  * deliberate — "reclaim the disk this chat is using" and "delete this chat"
  * are different intentions, and only the first one is undoable.
  *
- * Order matters. `purgeConversationAttachments` runs FIRST, while the rows it
- * reference-checks against still exist: the store is content-addressed, so a
- * photo forwarded into three other chats must survive this one being purged.
- * The conversation row goes last and the FK cascade takes messages,
- * participants and attachment rows with it.
+ * Keep the bytes until the database transaction commits. The cascade removes
+ * this conversation's attachment references so cleanup can check the surviving
+ * references against the content-addressed store.
  */
 export async function purgeConversation(conversationId) {
-  const found = await query(
-    'SELECT id, title, account_id, source_chat_id FROM beeper_conversations WHERE id = $1',
-    [conversationId],
-  );
-  const row = found?.rows?.[0];
-  if (!row) throw new ServerError('Conversation not found', { status: 404, code: 'NOT_FOUND' });
+  const { paths, messagesRemoved } = await withTransaction(async (client) => {
+    const found = await client.query(
+      'SELECT account_id, source_chat_id FROM beeper_conversations WHERE id = $1 FOR UPDATE',
+      [conversationId],
+    );
+    const row = found.rows[0];
+    if (!row) throw new ServerError('Conversation not found', { status: 404, code: 'NOT_FOUND' });
 
-  const bytes = await purgeConversationAttachments(conversationId);
-  const messages = await query(
-    'SELECT COUNT(*)::int AS count FROM beeper_messages WHERE conversation_id = $1',
-    [conversationId],
-  );
-  // The conversation, derived touchpoints/audit snapshots and SYNC CURSOR
-  // go together, in one transaction.
-  //
-  // `beeper_sync_cursors` is keyed on Beeper's own `(account_id, chat_id)` and
-  // carries an FK onto `beeper_accounts` alone, so the conversation's cascade
-  // cannot reach it. Left behind, its `last_activity` watermark still says this
-  // chat has not moved: `chatNeedsSweep` skips it, and once it does move,
-  // `fetchNewMessages` walks forward from the surviving cursor and mirrors only
-  // what arrives next. The purged history would never come back — the opposite
-  // of what the typed confirmation promises the user before they confirm an
-  // irreversible delete. Deleting the cursor is also the only thing that ever
-  // removes one, so it stops orphan cursor rows accumulating.
-  await withTransaction(async (client) => {
+    // A download can publish bytes to an existing attachment row without
+    // touching the conversation. Lock those rows before snapshotting paths.
+    const attachments = await client.query(
+      `WITH owned AS MATERIALIZED (
+         SELECT local_path FROM beeper_attachments WHERE conversation_id = $1 FOR UPDATE
+       ) SELECT DISTINCT local_path FROM owned WHERE local_path IS NOT NULL`,
+      [conversationId],
+    );
+    const messages = await client.query(
+      'SELECT COUNT(*)::int AS count FROM beeper_messages WHERE conversation_id = $1',
+      [conversationId],
+    );
     await deleteAutoTouchpoints({ beeperConversationId: conversationId, client });
     await client.query('DELETE FROM beeper_conversations WHERE id = $1', [conversationId]);
+    // The cursor has no conversation FK. Its watermark would otherwise make
+    // the next sweep skip this chat and leave the purged history unmirrored.
     await client.query(
       'DELETE FROM beeper_sync_cursors WHERE account_id = $1 AND chat_id = $2',
       [row.account_id, row.source_chat_id],
     );
+    return {
+      paths: attachments.rows.map(({ local_path }) => local_path),
+      messagesRemoved: messages.rows[0].count,
+    };
   });
+  const bytes = await unlinkPathsIfUnreferenced(paths);
   console.log(`🫧 Beeper conversation mirror purged: ${conversationId} (${bytes.removedFiles} file(s), ${bytes.freedBytes} bytes, ${bytes.failedUnlinks} unlink failure(s))`);
   return {
     purged: true,
     conversationId,
-    messagesRemoved: Number(messages?.rows?.[0]?.count) || 0,
+    messagesRemoved,
     filesRemoved: bytes.removedFiles,
     bytesFreed: bytes.freedBytes,
   };

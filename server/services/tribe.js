@@ -668,7 +668,7 @@ export async function createTouchpoint(personId, data = {}) {
 // beeper_participants cache, not the email/phone/name matcher in
 // tribeMatch.js — can reuse this exact dedupe-keyed insert + last_contact_on
 // advance instead of re-implementing it (#34).
-export async function autoCreateTouchpoint(personId, data) {
+export async function autoCreateTouchpoint(personId, data, { client } = {}) {
   const happenedAt = data.happenedAt || new Date().toISOString();
   // Advance last_contact_on by the user's LOCAL calendar day, not the UTC day the
   // raw instant's date part happens to fall on — an evening meeting/message must
@@ -676,8 +676,8 @@ export async function autoCreateTouchpoint(personId, data) {
   // (#8451). Falls back to the raw instant only if it doesn't parse as a date at
   // all (toUserDayKey returns null), matching the manual-touchpoint fallback.
   const contactDay = toUserDayKey(happenedAt, await getUserTimezone()) || happenedAt;
-  return withTransaction(async (client) => {
-    const result = await client.query(
+  const insert = async (db) => {
+    const result = await db.query(
       `INSERT INTO tribe_touchpoints (
         id, person_id, happened_at, channel, summary, source,
         calendar_account_id, calendar_event_id, dedupe_key, metadata
@@ -705,7 +705,7 @@ export async function autoCreateTouchpoint(personId, data) {
     // connect): it fires silently on every sync and would otherwise churn the
     // preference to the last meeting location / account type. The synced
     // channel is still preserved on the touchpoint row itself.
-    await client.query(
+    await db.query(
       `UPDATE tribe_people
        SET last_contact_on = GREATEST(COALESCE(last_contact_on, DATE '1900-01-01'), $2::date),
            updated_at = NOW()
@@ -713,7 +713,8 @@ export async function autoCreateTouchpoint(personId, data) {
       [personId, contactDay],
     );
     return rowToTouchpoint(result.rows[0]);
-  });
+  };
+  return client ? insert(client) : withTransaction(insert);
 }
 
 /**

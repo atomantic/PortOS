@@ -737,12 +737,13 @@ export async function createPersonAndLinkParticipant({
  * Accepts an optional sweep-scoped `personIndex` and optional
  * `resolvedPersonIds` (`Map<senderId, personId | null>` from
  * `upsertConversationParticipants`) so callers don't re-query already-resolved
- * senders; standalone calls load a roster index once when needed. Returns
+ * senders; standalone calls load a roster index once when needed. Pass a
+ * transaction client to commit the touchpoints with the mirrored messages. Returns
  * `{ created, matched }` (mirrors `tribe.autoLogTouchpoints`'s shape).
  */
-export async function logSenderTouchpoints(candidates = [], { personIndex = null, resolvedPersonIds = null } = {}) {
+export async function logSenderTouchpoints(candidates = [], { personIndex = null, resolvedPersonIds = null, client } = {}) {
   if (!Array.isArray(candidates) || candidates.length === 0) return { created: 0, matched: 0 };
-  await ensureReady();
+  if (!client) await ensureReady();
 
   // Reuse the sweep snapshot, or load once on the first unresolved sender.
   // Identity resolution still runs against current authoritative records.
@@ -792,7 +793,7 @@ export async function logSenderTouchpoints(candidates = [], { personIndex = null
       source: 'message',
       dedupeKey,
       metadata: { network: c.network || '', conversationId: c.conversationId },
-    });
+    }, { client });
     completedTouchpoints.add(touchpointKey);
     if (touchpoint) created++;
   }
