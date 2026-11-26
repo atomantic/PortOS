@@ -17,7 +17,7 @@ import { z } from 'zod';
 import { requireProductionReviewer } from '../services/musicVideo/productionReviewService.js';
 import { asyncHandler, ServerError } from '../lib/errorHandler.js';
 import { validateRequest } from '../lib/validateRequest.js';
-import { addProjectScene, updateScene, deleteScene, reorderProjectScenes, varyProjectWipes, splitProjectScene, cutProjectScenesOnLyrics, mergeProjectNextScene, mergeProjectPreviousScene, moveProjectSceneStart, moveProjectSceneEnd, appendSceneTakes, selectSceneTake, placeMediaPoolItem, reviewSceneTake, checkSceneTakePlate, rejectUnusedSceneTakes, swapProjectSceneFrames, moveSceneTake } from '../services/musicVideo/projectBoardEdits.js';
+import { addProjectScene, updateScene, deleteScene, reorderProjectScenes, varyProjectWipes, splitProjectScene, cutProjectScenesOnLyrics, mergeProjectNextScene, mergeProjectPreviousScene, moveProjectSceneStart, moveProjectSceneEnd, undoProjectBoardEdit, appendSceneTakes, selectSceneTake, placeMediaPoolItem, reviewSceneTake, checkSceneTakePlate, rejectUnusedSceneTakes, swapProjectSceneFrames, moveSceneTake } from '../services/musicVideo/projectBoardEdits.js';
 import { requireProject } from '../services/musicVideo/requireProject.js';
 import { approveFinal, upgradeApproved } from '../services/musicVideo/finalUpgrade.js';
 import { renderSceneClips, renderSceneFrames } from '../services/musicVideo/sceneCardRender.js';
@@ -102,6 +102,12 @@ router.post('/:id/scenes/reorder', asyncHandler(async (req, res) => {
   const { sceneIds } = validateRequest(musicVideoSceneReorderSchema, req.body);
   const { edit } = await reorderProjectScenes(req.params.id, sceneIds);
   res.json({ edit });
+}));
+
+// No body: restore the most recent structural or timing board edit (merge, split, delete, reorder, retime).
+router.post('/:id/scenes/undo', asyncHandler(async (req, res) => {
+  const { undone, edit } = await undoProjectBoardEdit(req.params.id);
+  res.json({ undone, edit });
 }));
 
 // Split a shot its backend cannot render in one take (#8977): a performance

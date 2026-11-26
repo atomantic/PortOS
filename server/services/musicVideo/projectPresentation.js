@@ -12,6 +12,7 @@ import { presentProjectAutonomousRun, presentProjectCastAndSets } from './proces
 
 import { withCatalogCheckin } from './catalogCheckin.js';
 import { musicVideoCompletionOverride } from '../../lib/musicVideo/musicVideoCompletion.js';
+import { peekBoardUndo } from './boardUndo.js';
 
 /** Classify only final render evidence, without projecting historical takes or reading unrelated ledgers. */
 export async function readProjectCompletion(project, { reads, requireCatalog = false } = {}) {
@@ -46,11 +47,11 @@ export async function readPresentationInputs(project) {
   }
   const [{ projectSongAudioChange }, { readProjectRenderSpend }] = await Promise.all([import('./songAudio.js'), import('./renderSpend.js')]);
   const [songAudioChange, renderSpend] = await Promise.all([projectSongAudioChange(project), readProjectRenderSpend(project)]);
-  return { film, songAudioChange, renderSpend };
+  return { film, songAudioChange, renderSpend, boardUndo: peekBoardUndo(project?.id) };
 }
 
 /** The presented record from a stored one (with its catalog check-in resolved) and its read inputs. */
-export function presentProjectRecord(project, { film = null, songAudioChange = null, renderSpend = null } = {}) {
+export function presentProjectRecord(project, { film = null, songAudioChange = null, renderSpend = null, boardUndo = null } = {}) {
   const current = film ? { ...project, blenderShots: film.shots } : project;
   const dependencies = presentMusicVideoDependencies(current);
   // The final video is joined from shot renders the record does not hold, so its evidence cannot
@@ -58,8 +59,8 @@ export function presentProjectRecord(project, { film = null, songAudioChange = n
   const presented = presentProjectAutonomousRun(presentProjectCastAndSets(film?.finalStale === true ? { ...dependencies, renderDependencyState: {
     status: 'stale', reasons: [...new Set([...(dependencies.renderDependencyState?.reasons || []), 'Blender shots changed or were rendered again after this final was joined'])],
   } } : dependencies));
-  // `renderSpend` is read-time like `blenderShots`: machine-local, never stored or synced.
-  return { ...presented, productionReadiness: productionReadiness(presented), songAudioChange, ...(renderSpend ? { renderSpend } : {}) };
+  // `renderSpend` and `boardUndo` are read-time like `blenderShots`: machine-local, never stored or synced.
+  return { ...presented, productionReadiness: productionReadiness(presented), songAudioChange, ...(renderSpend ? { renderSpend } : {}), ...(boardUndo ? { boardUndo } : {}) };
 }
 
 // Approvals decide stage completion and only the server computes them (#10136), so the read
