@@ -36,7 +36,7 @@ describe('cross-workspace browser suite registry', () => {
         expect(all, `${file} must not hide a newly added smoke case`).toEqual(expected);
       }
     }
-    const documentSource = readText(join(root, 'server/services/musicVideo/documentRender.browser.test.js'));
+    const documentSource = readText(join(root, 'server/services/musicVideo/documentRenderTemplates.browser.test.js'));
     const generationSource = readText(join(root, 'server/services/musicVideo/documentRenderGeneration.browser.test.js'));
     expect(documentSource).toContain("('propagates a deadline through a pending seek and waits for owned Chrome cleanup',");
     expect(generationSource).toContain("('generates and exports a Three.js scene with visible authored content',");

@@ -87,15 +87,16 @@ remain at most 1. Native video and FFmpeg RGB remain diagnostic evidence; failur
 include complete synthetic samples and versions even when CI silences console
 output. Forward/backward and adjacent-frame seeks check the alternating marker,
 and pause/resume checks native playback restoration. Fitting, incoming footage
-with film look, still motion/effects, lyrics, title and outro remain covered.
+with film look, still motion/effects, lyrics, title and outro also run across
+the capture and overlay suites.
 
-Run the fixture with:
+Run both suites with:
 
 ```sh
-npm test --prefix server -- services/musicVideo/animaticCapture.browser.test.js
+npm test --prefix server -- services/musicVideo/animaticCapture.browser.test.js services/musicVideo/animaticCaptureOverlays.browser.test.js
 ```
 
-The CI planner selects it when the capture helper, Save frame control or paused
+The CI planner selects both when the capture helper, Save frame control or paused
 video surface changes. Hosted Linux Chrome runs the same fixture; failing assertions retain its
 browser/version and numeric evidence. Local macOS results do not substitute
 for that CI result. Safari was present but could not create a WebDriver session

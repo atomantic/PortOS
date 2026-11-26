@@ -51,9 +51,11 @@ export const EXCLUSIVE_CAPTURE_TESTS = [
   // Save-frame pixel parity uses the same exact SVG film look and two-second
   // paused-video settle contract; keep unrelated browser work out of its budget.
   'services/musicVideo/animaticCapture.browser.test.js',
+  'services/musicVideo/animaticCaptureOverlays.browser.test.js',
   'lib/musicVideo/musicVideoTitleCard.browser.test.js',
   'services/htmlComposition/index.test.js',
   'services/musicVideo/documentRender.browser.test.js',
+  'services/musicVideo/documentRenderTemplates.browser.test.js',
   'services/musicVideo/documentRenderAudioTimeline.browser.test.js',
   'services/musicVideo/documentRenderGeneration.browser.test.js',
   'services/musicVideo/documentFilmLook.browser.test.js',
