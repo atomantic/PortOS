@@ -21,7 +21,8 @@ import { publishImageFiles } from './publication.js';
  */
 
 import { readFile } from 'fs/promises';
-import { join } from 'node:path';
+import { join, parse } from 'node:path';
+import { sidecarPathForImage } from '../../lib/assetHash.js';
 import { ServerError } from '../../lib/errorHandler.js';
 import { atomicWrite, PATHS } from '../../lib/fileUtils.js';
 import { stripPngC2PAChunk } from '../../lib/imageClean.js';
@@ -90,8 +91,7 @@ export async function persistVariant({
   extraFields = {},
 }) {
   const outPath = join(PATHS.images, outFilename);
-  const sidecarBase = outFilename.slice(0, -'.png'.length);
-  const sidecarPath = join(PATHS.images, `${sidecarBase}.metadata.json`);
+  const sidecarPath = sidecarPathForImage(outFilename);
 
   // Every caller builds `variantMeta` by spreading the SOURCE sidecar, which
   // carries that render's own timing. A variant is a post-process of bytes that
@@ -174,7 +174,7 @@ export async function applyImageClean({ filename, sourceMeta }) {
     throw new ServerError('Invalid or corrupt image', { status: 400, code: 'INVALID_IMAGE' });
   }
 
-  const base = filename.slice(0, -'.png'.length);
+  const { name: base } = parse(filename);
   const outFilename = `${base}_clean-resize-squeeze.png`;
   const createdAt = new Date().toISOString();
 
@@ -233,7 +233,7 @@ export async function applyWatermarkRemoval({ filename, sourceMeta, size, region
 
   const result = await removeCornerWatermark(buffer, { size, region });
 
-  const base = filename.slice(0, -'.png'.length);
+  const { name: base } = parse(filename);
   const outFilename = `${base}_nowatermark.png`;
 
   // Anchor the variant group at the root original — de-watermarking a
@@ -299,7 +299,7 @@ export async function applyLightRegenVariant({ filename, sourceAbsPath, sourceMe
     throw new ServerError('Could not decode image for light regen', { status: 400, code: 'INVALID_IMAGE' });
   }
 
-  const base = filename.slice(0, -'.png'.length);
+  const { name: base } = parse(filename);
   const outFilename = `${base}_regen-light.png`;
 
   // Anchor the variant group at the root original — regenerating a
