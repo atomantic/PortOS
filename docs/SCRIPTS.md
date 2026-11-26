@@ -40,3 +40,10 @@ Python ML runners and probes live under `scripts/ml/`. Their input and lock file
 | `scripts/ops/seed-readme-demo-data.mjs --root <empty-dir>` | Builds a synthetic data root for README screenshots from `data.reference/`. It never reads the install's `data/`. Give it an empty directory. |
 | `scripts/ml/align_lyrics_ctc_accuracy.py --model-dir <dir>` | Opt-in accuracy check of the lyric aligner against the real MMS_FA checkpoint (about 1.2 GB, downloaded on first use). CI never runs it. Run it with the `lyric-align` venv's interpreter. |
 | `scripts/prune-model-comparison-seed.js [--check]` | Prunes `data.reference/model-comparison.json` to models in provider scope and public benchmark observations. Run with `--check` in CI or after modifying `providers.json`. |
+
+## Test fixtures
+
+Run `scripts/fixtures/minimax_h3_history.py --runtime-dir <cached-mlx-checkout>`
+with the MiniMax H3 MLX environment's Python interpreter. It exercises the
+pinned runtime's history packing and scheduler with deterministic test tensors
+and small model stubs.
