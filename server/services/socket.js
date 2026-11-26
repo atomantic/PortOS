@@ -70,7 +70,7 @@ import { armReadinessWatchers, registerReadinessSocket } from './readinessNotify
 import { closeGeneratedPreviewsForSocket, registerGeneratedPreviewHandlers } from './generatedPreview/sessions.js';
 import { peerSyncBus } from './peerSyncEventBus.js';
 import { deliverPeerSyncEvent, registerPeerSyncSubscriber, PEER_SYNC_ROOM } from './peerSyncDelivery.js';
-import { broadcastToCommandSubscribers, commandSubscribers, emitToOperators, getIo, setIo, PEER_SOCKET_ROOM } from './socketIo.js';
+import { broadcastToCommandSubscribers, commandSubscribers, emitToOperators, emitToOperatorsOn, getIo, setIo, PEER_SOCKET_ROOM } from './socketIo.js';
 import { PEER_INSTANCE_HEADER } from '../lib/peerHttpClient.js';
 
 export { broadcastToCommandSubscribers, getIo };
@@ -262,7 +262,7 @@ function registerErrorHandlers(socket, io) {
       console.log(`🔧 Error recovery requested: ${code}`);
 
       const task = await handleErrorRecovery(code, context);
-      io.emit('error:recover:requested', {
+      emitToOperatorsOn(io, 'error:recover:requested', {
         code,
         context,
         taskId: task.id,

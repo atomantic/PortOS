@@ -1,3 +1,4 @@
+import { emitToOperatorsOn, PEER_SOCKET_ROOM } from '../services/socketIo.js';
 import * as pm2Standardizer from '../services/pm2Standardizer.js';
 import * as appsService from '../services/apps.js';
 import { runAppUpdate } from '../services/appUpdateRunner.js';
@@ -112,8 +113,8 @@ export const registerAppHandlers = (socket, io) => {
     } catch (err) {
       const message = err?.message ?? String(err);
       console.error(`❌ Socket handler error [app:update]: ${message}`);
-      io.emit('app:update:error', { appId, code: err?.code || null, message });
-      io.emit('app:update:complete', { appId, success: false, steps: [] });
+      emitToOperatorsOn(io, 'app:update:error', { appId, code: err?.code || null, message });
+      emitToOperatorsOn(io, 'app:update:complete', { appId, success: false, steps: [] });
     }
   });
 
@@ -157,12 +158,12 @@ export const registerAppHandlers = (socket, io) => {
           onStep: ({ step, status, data: detail }) => {
             const frame = { appId: app.id, step, status, message: detail?.message, timestamp: Date.now() };
             recordOperationStep(operation, frame);
-            io.emit('app:standardize:step', frame);
+            emitToOperatorsOn(io, 'app:standardize:step', frame);
           }
         });
 
         if (!flow.success) {
-          io.emit('app:standardize:error', { appId: app.id, message: flow.error });
+          emitToOperatorsOn(io, 'app:standardize:error', { appId: app.id, message: flow.error });
           return;
         }
         const { processes } = flow.result;
@@ -170,24 +171,26 @@ export const registerAppHandlers = (socket, io) => {
           await appsService.updateApp(data.appId, { pm2ProcessNames: processes.map(p => p.name) });
         }
 
-        io.emit('app:standardize:complete', { appId: app.id, success: true, result: flow.result });
+        emitToOperatorsOn(io, 'app:standardize:complete', { appId: app.id, success: true, result: flow.result });
         outcome = 'completion';
         console.log(`✅ Socket standardize complete for ${app.name}`);
       });
     } catch (err) {
       const message = err?.message ?? String(err);
       console.error(`❌ Socket handler error [app:standardize]: ${message}`);
-      io.emit('app:standardize:error', { appId: operatingAppId ?? requestedAppId, message });
+      emitToOperatorsOn(io, 'app:standardize:error', { appId: operatingAppId ?? requestedAppId, message });
     } finally {
       if (operatingAppId) endAppOperation(io, operatingAppId, outcome);
     }
   });
 
   // Push active operations on connect and on demand so remounts rehydrate.
-  socket.on('app:operations:list', () => {
-    socket.emit('app:operations:active', activeOperationsPayload());
-  });
-  socket.emit('app:operations:active', activeOperationsPayload());
+  // initSocket joins peer sockets to this room before registering handlers.
+  if (!socket.rooms?.has(PEER_SOCKET_ROOM)) {
+    const sendActiveOperations = () => socket.emit('app:operations:active', activeOperationsPayload());
+    socket.on('app:operations:list', sendActiveOperations);
+    sendActiveOperations();
+  }
 
   // A deploy runs for minutes, so like update/standardize it lives in the
   // operation registry and broadcasts on the io bus keyed by appId: a client
@@ -232,22 +235,22 @@ export const registerAppHandlers = (socket, io) => {
           if (type === 'status') {
             recordOperationStep(operation, { appId: app.id, step: payload.phase ?? 'deploy', status: payload.phase === 'complete' ? 'done' : 'running', message: payload.message, timestamp: frame.timestamp });
           }
-          io.emit(`app:deploy:${type}`, frame);
+          emitToOperatorsOn(io, `app:deploy:${type}`, frame);
         };
 
         const { runDeployFlow } = await import('../services/appDeployer.js');
         const result = await runDeployFlow(app.id, data.flags, { onOutput });
         if (!result.ok) {
-          io.emit('app:deploy:error', { appId: app.id, ...runId, message: result.error });
+          emitToOperatorsOn(io, 'app:deploy:error', { appId: app.id, ...runId, message: result.error });
           return;
         }
-        io.emit('app:deploy:complete', { appId: app.id, ...runId, success: result.success, code: result.code });
+        emitToOperatorsOn(io, 'app:deploy:complete', { appId: app.id, ...runId, success: result.success, code: result.code });
         if (result.success) outcome = 'completion';
       });
     } catch (err) {
       const message = err?.message ?? String(err);
       console.error(`❌ Socket handler error [app:deploy]: ${message}`);
-      io.emit('app:deploy:error', { appId: operatingAppId ?? requestedAppId, ...runId, message });
+      emitToOperatorsOn(io, 'app:deploy:error', { appId: operatingAppId ?? requestedAppId, ...runId, message });
     } finally {
       if (operatingAppId) endAppOperation(io, operatingAppId, outcome);
     }

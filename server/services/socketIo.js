@@ -31,9 +31,14 @@ export function getIo() {
 // `emitToOperators`, never a bare `getIo().emit`.
 export const PEER_SOCKET_ROOM = 'peer-sockets';
 
-/** Emit to every connected socket except peer sockets. */
+/** Emit to operators on the supplied Socket.IO server. */
+export function emitToOperatorsOn(io, event, data) {
+  io?.except(PEER_SOCKET_ROOM).emit(event, data);
+}
+
+/** Emit to operators on the live Socket.IO server. */
 export function emitToOperators(event, data) {
-  getIo()?.except(PEER_SOCKET_ROOM).emit(event, data);
+  emitToOperatorsOn(getIo(), event, data);
 }
 
 // Operator command-runner output (#12019). Never a global emit: the stream

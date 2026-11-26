@@ -14,6 +14,7 @@
  * progress/complete/error frames that every viewer needs stay on `io` in here.
  */
 
+import { emitToOperatorsOn } from './socketIo.js';
 import * as appsService from './apps.js';
 import * as appUpdater from './appUpdater.js';
 import { logAction } from './history.js';
@@ -111,7 +112,7 @@ export async function runAppUpdate({
     const emit = (step, status, message) => {
       const frame = { appId: app.id, step, status, message, timestamp: Date.now() };
       recordOperationStep(operation, frame);
-      io.emit('app:update:step', frame);
+      emitToOperatorsOn(io, 'app:update:step', frame);
     };
 
     let failure = null;
@@ -129,7 +130,7 @@ export async function runAppUpdate({
       // re-check, say) carry the same acknowledgement codes the pre-check
       // emits above — the panel's retry buttons key on `code`, so dropping it
       // here would leave a refusal the user could have acted on inert.
-      io.emit('app:update:error', { appId: app.id, code: err.code || null, message: err.message, ...(errorContext ? { context: errorContext } : {}) });
+      emitToOperatorsOn(io, 'app:update:error', { appId: app.id, code: err.code || null, message: err.message, ...(errorContext ? { context: errorContext } : {}) });
       return null;
     });
 
@@ -154,7 +155,7 @@ export async function runAppUpdate({
       // moment the server goes down.
       console.log(`♻️ PortOS self-update handed off — update.sh will restart this process`);
     } else if (result) {
-      io.emit('app:update:complete', { appId: app.id, success: result.success, steps: result.steps });
+      emitToOperatorsOn(io, 'app:update:complete', { appId: app.id, success: result.success, steps: result.steps });
       console.log(`✅ Update complete for ${app.name}`);
     }
 
@@ -182,7 +183,7 @@ export async function runAppUpdate({
       // A supervisor can fail before replacing this server. Clear this exact
       // progress row when it exits; a later operation must not be removed.
       result.completion?.then(outcome => {
-        if (!outcome?.success && !outcome?.superseded) io.emit('app:update:error', { appId: app.id,
+        if (!outcome?.success && !outcome?.superseded) emitToOperatorsOn(io, 'app:update:error', { appId: app.id,
           code: outcome?.errorCode || null, message: outcome?.errorMessage || 'The update did not complete' });
         endAppOperation(io, app.id, outcome?.success ? 'completion' : 'failure', operation);
       }).catch(() => endAppOperation(io, app.id, 'failure', operation));
