@@ -51,6 +51,7 @@ vi.mock('../services/mtplxServerManager.js', () => ({
   startMtplxServer: vi.fn(),
   stopMtplxServer: vi.fn(),
   installMtplx: vi.fn(),
+  uninstallMtplx: vi.fn(),
 }));
 vi.mock('../services/slotstreamServerManager.js', () => ({
   SLOTSTREAM_APP: 'example-runtime',
@@ -58,6 +59,7 @@ vi.mock('../services/slotstreamServerManager.js', () => ({
   startSlotstreamServer: vi.fn(),
   stopSlotstreamServer: vi.fn(),
   installSlotstream: vi.fn(),
+  uninstallSlotstream: vi.fn(),
 }));
 vi.mock('../services/slotstreamModelManager.js', () => ({
   cancelSlotstreamModelDownload: vi.fn(),
@@ -170,6 +172,7 @@ vi.mock('../services/lmStudioManager.js', () => ({
 import browserRoutes from './browser.js';
 import harnessRoutes from './harnesses.js';
 import localLlmRoutes from './localLlm.js';
+import { uninstallSlotstream } from '../services/slotstreamServerManager.js';
 import { updateConfig, launchBrowser } from '../services/browserService.js';
 import { streamHarnessAction } from '../services/harnessActionStream.js';
 import { listHarnesses } from '../services/harnesses.js';
@@ -191,6 +194,7 @@ const writes = [
   ['put', '/api/browser/config', { chromePath: '/opt/example/bin/chrome', headless: true }, updateConfig],
   ['post', '/api/browser/launch', {}, launchBrowser],
   ['post', '/api/harnesses/action?runtime=codex&action=uninstall', {}, streamHarnessAction],
+  ['post', '/api/local-llm/slotstream/uninstall', {}, uninstallSlotstream],
   ['post', '/api/local-llm/install-backend', { backend: 'ollama' }, installBackend],
   ['post', '/api/local-llm/assessments/agent-benchmark', { backend: 'ollama', modelId: 'example-model' }, runOpenCodeAgentBenchmark],
   ['put', '/api/local-llm/jev/policy', { scopeAdherenceEnabled: false }, updateSettingsWith],
@@ -201,6 +205,7 @@ describe('operator authority for browser, harness and local-runtime management',
     vi.clearAllMocks();
     auth.enabled = false;
     installBackend.mockResolvedValue({ success: true });
+    uninstallSlotstream.mockResolvedValue({ success: true });
     runOpenCodeAgentBenchmark.mockResolvedValue({ completed: true });
     runCapabilityTest.mockResolvedValue({ passed: true });
     getStatus.mockResolvedValue({ available: true });
@@ -212,6 +217,7 @@ describe('operator authority for browser, harness and local-runtime management',
 
   it('refuses a remote caller before a runtime install', async () => {
     await expectRemoteRefusal(mounts, ['post', '/api/local-llm/install-backend', { backend: 'ollama' }, installBackend]);
+    await expectRemoteRefusal(mounts, ['post', '/api/local-llm/slotstream/uninstall', {}, uninstallSlotstream]);
   });
 
   it('preserves local and delegated-agent runtime management and inference', async () => {

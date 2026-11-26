@@ -9,9 +9,8 @@
  * `prepareParams.js` — but *stating* the rule twice is how the two ends drift
  * into different messages and different error codes for the same request.
  *
- * So the rules live here, return a `ServerError` (or null) rather than throwing,
- * and each caller decides only what to do first: the route unlinks its staged
- * uploads, the render path just throws.
+ * The shared rules return a `ServerError` or null. The preparation boundary
+ * owns staged uploads and the render adapter uses resolved paths.
  *
  * Dependency-free apart from the error leaf and the registry's pure per-runtime
  * mode table (`lib/videoModeProfiles.js`), which keeps it importable from
@@ -313,4 +312,23 @@ export const videoReferenceModeError = (opts) => {
 export const videoContinuityContractError = (opts) => {
   const violation = continuityRequestViolation(opts);
   return violation ? new ServerError(violation.message, { status: 400, code: violation.code }) : null;
+};
+
+// Runtime builders pass resolved paths and throw the shared contract error.
+export const assertRenderModeContract = ({
+  model, mode, sourceImagePath, lastImagePath, keyframes,
+  extendFromVideoPath, audioFilePath, audioStartSec, icReferencePaths,
+}) => {
+  const err = videoModeContractError({
+    model,
+    mode,
+    hasFirstImage: !!sourceImagePath,
+    hasLastImage: !!lastImagePath,
+    keyframes,
+    extendFromVideo: extendFromVideoPath,
+    audioFile: audioFilePath,
+    audioStartSec,
+    icReferences: icReferencePaths,
+  });
+  if (err) throw err;
 };

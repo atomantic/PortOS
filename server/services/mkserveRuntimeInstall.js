@@ -68,6 +68,12 @@ function isCheckpointEntry(entry) {
     && Number.isSafeInteger(size) && size > 0;
 }
 
+export async function removeMkserveRelease({ bundle, revision }) {
+  if (!isMkserveRevision(bundle) || !isMkserveRevision(revision)) throw new TypeError('Invalid mkserve release');
+  await rm(mkserveInstallPaths(bundle, revision).work, { recursive: true, force: true });
+  await rm(MARKER, { force: true });
+}
+
 export async function readMkserveInstall() {
   const raw = await readFile(MARKER, 'utf8').catch((error) => {
     if (error.code === 'ENOENT') return null;

@@ -1,5 +1,5 @@
 /**
- * #5644 — every dequeue/immediate-spawn in cos.js is scheduled from a timer or
+ * #5644 — every CoS dequeue/immediate-spawn is scheduled from a timer or
  * setImmediate, outside the request lifecycle, where a rejection has nowhere to
  * bubble: it escapes as an unhandled rejection, which setupProcessErrorHandlers
  * classifies `critical` and broadcasts to every browser as
@@ -12,9 +12,11 @@ import { readFileSync } from 'fs';
 import { fileURLToPath } from 'url';
 import { dirname, join } from 'path';
 
-const COS_SRC = readFileSync(join(dirname(fileURLToPath(import.meta.url)), '../../../services/cos/cos.js'), 'utf-8');
+const COS_SRC = ['cos.js', 'cosDequeue.js']
+  .map(file => readFileSync(join(dirname(fileURLToPath(import.meta.url)), '../../../services/cos', file), 'utf-8'))
+  .join('\n');
 
-describe('cos.js dequeue scheduling', () => {
+describe('CoS dequeue scheduling', () => {
   it('never floats a dequeueNextTask / tryImmediateSpawn schedule without a .catch', () => {
     expect(
       COS_SRC,

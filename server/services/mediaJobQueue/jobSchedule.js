@@ -6,11 +6,16 @@
 export function jobScheduleState(job, now = Date.now()) {
   const schedule = job?.params?.schedule;
   if (!schedule) return null;
-  const stopBy = schedule.stopBy ? Date.parse(schedule.stopBy) : NaN;
+  const stopBy = jobStopBy(job);
   if (Number.isFinite(stopBy) && now >= stopBy) return { expired: true };
   const startAt = schedule.startAt ? Date.parse(schedule.startAt) : NaN;
   if (Number.isFinite(startAt) && now < startAt) return { startAt };
   return null;
+}
+
+export function jobStopBy(job) {
+  const stopBy = job?.params?.schedule?.stopBy;
+  return stopBy ? Date.parse(stopBy) : NaN;
 }
 
 // Built from the absolute start so the message stays constant while the job waits.

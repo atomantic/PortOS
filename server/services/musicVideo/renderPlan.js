@@ -11,6 +11,7 @@ import { PATHS } from '../../lib/fileUtils.js';
 import { ServerError } from '../../lib/errorHandler.js';
 import { findFfmpeg, hasAudioStream, safeUnder, probeVideoDuration, probeVideoGeometry } from '../../lib/ffmpeg.js';
 import { assertMusicVideoMediaSelections } from '../../lib/musicVideo/musicVideoMediaPolicy.js';
+import { mapWithConcurrency } from '../../lib/mapWithConcurrency.js';
 import { loadHistory } from '../videoGen/history.js';
 import { getTrack } from '../tracks/index.js';
 import { nameShots } from './productionReview.js';
@@ -32,6 +33,22 @@ import { MUSIC_VIDEO_CAMERA_FRAME_ASPECTS, musicVideoOverscan, shotCamera } from
 import { stillMoveForCamera } from '../../lib/cameraMovements.js';
 import { isEndFrameImageEffect, sceneImageEffect, scenePhotoSequence } from '../../lib/musicVideo/musicVideoImageEffects.js';
 import { osdDateText } from './renderFfmpegArgs.js';
+
+const PROBE_CONCURRENCY = 4;
+const newProbeCache = () => ({ geometry: new Map(), audio: new Map() });
+const hasRecordedGeometry = (entry) => entry.numFrames && entry.fps && entry.width && entry.height;
+
+async function loadRenderHistory() {
+  const history = await loadHistory();
+  return new Map((Array.isArray(history) ? history : []).map((entry) => [entry.id, entry]));
+}
+
+async function cacheClipProbes(paths, cache, probe) {
+  const pending = [...new Set(paths)].filter((path) => !cache.has(path));
+  await mapWithConcurrency(pending, PROBE_CONCURRENCY, async (path) => {
+    cache.set(path, await probe(path));
+  });
+}
 
 const round3 = (n) => Math.round(n * 1000) / 1000;
 // #8977: a performance take is placed by the immutable shot instruction it was
@@ -154,18 +171,11 @@ async function stillClip(scene, section, { layered, project }) {
     ...(playable ? { effect, ...(endImagePath ? { endImagePath } : {}) } : {}) } };
 }
 
-// A footage shot's verified clip: the history entry's own frame count and
-// dimensions, or the file's when a hosted render (Grok/fal/reactor) recorded
-// none (#8977). Null when the clip file is missing or unreadable, or has no
-// usable length or dimensions — a dimensionless entry would make
-// buildMusicVideoFfmpegArgs emit `scale=undefined:undefined` (opaque ffmpeg
-// failure), so it is reported as a missing clip like the duration guard.
-async function footageGeometry(entry) {
-  const videoPath = entry && entry.filename ? safeUnder(PATHS.videos, entry.filename) : null;
-  if (!entry || !videoPath || !existsSync(videoPath)) return null;
-  const measured = entry.numFrames && entry.fps && entry.width && entry.height
-    ? entry
-    : { ...entry, ...(await probeVideoGeometry(videoPath)) };
+// Keep authoritative measurements from each history entry. A hosted take
+// missing measurements can reuse a file probe even when several IDs name it.
+function footageGeometry(entry, videoPath, measuredGeometry) {
+  if (!videoPath) return null;
+  const measured = hasRecordedGeometry(entry) ? entry : { ...entry, ...measuredGeometry };
   const duration = measured.numFrames && measured.fps ? measured.numFrames / measured.fps : null;
   if (!duration || duration <= 0) return null;
   if (!measured.width || measured.width <= 0 || !measured.height || measured.height <= 0) return null;
@@ -173,12 +183,10 @@ async function footageGeometry(entry) {
 }
 
 // A footage shot's render clip, or `missing-clip` when its selected take cannot be read.
-async function footageClip(scene, entry, planned, editOverride = undefined, project = null) {
-  const geometry = await footageGeometry(entry);
+async function footageClip(scene, geometry, clipSound, planned, editOverride, project) {
   if (!geometry) return { problem: 'missing-clip' };
   const edit = editOverride !== undefined ? editOverride : performanceEdit(scene);
   const { rate, leadSec, inSec, outSec, sourceSec } = clipPlaybackWindow(scene, edit, geometry.duration);
-  const clipSound = songClipSound(scene);
   return { clip: {
     sceneId: scene.sceneId,
     videoPath: geometry.videoPath,
@@ -195,7 +203,7 @@ async function footageClip(scene, entry, planned, editOverride = undefined, proj
     // The director chose to hold the last frame over a shot longer than its clip.
     ...(scene.holdLastFrame === true ? { holdLastFrame: true } : {}),
     // The shot plays its own sound over the song, when its clip has any.
-    ...(clipSound && await hasAudioStream(geometry.videoPath) ? { clipSound } : {}),
+    ...(clipSound ? { clipSound } : {}),
     ...(rate !== 1 ? { rate } : {}),
     ...(leadSec > 0 ? { leadSec } : {}),
     inSec,
@@ -208,6 +216,28 @@ async function footageClip(scene, entry, planned, editOverride = undefined, proj
   } };
 }
 
+async function prepareFootageProbes(footage, getHistoryMap, probeCache) {
+  if (!footage.length) return;
+  const historyMap = await getHistoryMap();
+  for (const shot of footage) {
+    shot.entry = historyMap.get(shot.played.videoHistoryId);
+    const path = shot.entry?.filename ? safeUnder(PATHS.videos, shot.entry.filename) : null;
+    shot.videoPath = path && existsSync(path) ? path : null;
+  }
+  await cacheClipProbes(
+    footage.filter(({ entry, videoPath }) => videoPath && !hasRecordedGeometry(entry)).map(({ videoPath }) => videoPath),
+    probeCache.geometry, (path) => probeVideoGeometry(path),
+  );
+  for (const shot of footage) {
+    shot.geometry = footageGeometry(shot.entry, shot.videoPath, probeCache.geometry.get(shot.videoPath));
+    shot.clipSound = songClipSound(shot.shot);
+  }
+  await cacheClipProbes(
+    footage.filter(({ geometry, clipSound }) => geometry && clipSound).map(({ videoPath }) => videoPath),
+    probeCache.audio, (path) => hasAudioStream(path),
+  );
+}
+
 // Resolve every scene that has a generated i2v clip (`videoHistoryId`) to a
 // verified on-disk path + dims, in scene order. Scenes without a clip yet are
 // skipped (not an error — they're just not rendered). A scene whose clip id
@@ -217,7 +247,7 @@ async function footageClip(scene, entry, planned, editOverride = undefined, proj
 // in scene order. Neither needs footage: a still needs its selected reference
 // frame (404 MISSING_STILLS when it is gone), and both need an authored span
 // (422 UNTIMED_SECTIONS), since there is no clip to take a length from.
-export async function resolveSceneClips(project, { layered = false, stillForMissingClip = false, sceneId = null } = {}) {
+export async function resolveSceneClips(project, { layered = false, stillForMissingClip = false, sceneId = null, getHistoryMap = loadRenderHistory, probeCache = newProbeCache() } = {}) {
   // A draft shows a footage shot that has no clip yet as its still (layered renders only).
   const allScenes = Array.isArray(project.scenes) ? project.scenes : [];
   const playableId = (s) => scenePlayableClipId(s, allScenes);
@@ -236,19 +266,24 @@ export async function resolveSceneClips(project, { layered = false, stillForMiss
     });
   }
   const planned = plannedTransitions(project.productionReview?.draft?.storyboard);
-  const history = scenes.some((s) => sceneVisualLayer(s, { layered }) === 'footage') ? await loadHistory() : [];
-  const historyMap = new Map((Array.isArray(history) ? history : []).map((h) => [h.id, h]));
-  const problems = { 'missing-clip': [], 'missing-still': [], untimed: [] };
-  const clips = [];
-  for (const scene of scenes) {
+  const shots = scenes.map((scene) => {
     const resolved = resolveSourceTake(scene, allScenes);
     const played = resolved
       ? { ...scene, videoHistoryId: resolved.videoHistoryId, referenceImageId: resolved.referenceImageId || scene.referenceImageId || null }
       : scene;
     const layer = standIn(scene) ? 'still' : sceneVisualLayer(scene, { layered });
     const shot = applyCameraCutDefaults(played, project.cameras);
+    const edit = resolved ? { inSec: resolved.inSec, outSec: resolved.outSec } : undefined;
+    return { scene, played, layer, shot, edit };
+  });
+
+  await prepareFootageProbes(shots.filter(({ layer }) => layer === 'footage'), getHistoryMap, probeCache);
+
+  const problems = { 'missing-clip': [], 'missing-still': [], untimed: [] };
+  const clips = [];
+  for (const { scene, played, layer, shot, edit, geometry, clipSound, videoPath } of shots) {
     const { clip, problem } = layer === 'footage'
-      ? await footageClip(shot, historyMap.get(played.videoHistoryId), planned, resolved ? { inSec: resolved.inSec, outSec: resolved.outSec } : undefined, project)
+      ? await footageClip(shot, geometry, probeCache.audio.get(videoPath) ? clipSound : null, planned, edit, project)
       : await sectionClip(shot, layer, planned, { layered, project });
     if (clip) clips.push(withCameraPicture(clip, played, project));
     else problems[problem].push(scene);
@@ -438,8 +473,12 @@ export async function planMusicVideoRender(project, { draft = false, decode = tr
   // song's pipeline below never sees those shots.
   const songOnly = withSongScenesOnly(project);
   const song = { ...songOnly, scenes: wordTimedScenes(songOnly) };
-  const coldOpen = await resolveColdOpenClips(project, { layered: composed, stillForMissingClip: draft });
-  const rawClips = await resolveSceneClips(song, { layered: composed, stillForMissingClip: draft });
+  // Still/card-only renders can proceed without a video history file.
+  let history;
+  const getHistoryMap = () => (history ??= loadRenderHistory());
+  const clipOptions = { layered: composed, stillForMissingClip: draft, getHistoryMap, probeCache: newProbeCache() };
+  const coldOpen = await resolveColdOpenClips(project, clipOptions);
+  const rawClips = await resolveSceneClips(song, clipOptions);
   const audioDurationSec = await probeVideoDuration(audioPath).catch(() => null);
   const gridDecision = project.audioAnalysis?.gridDecision;
   // #14240: an untrustworthy automatic grid must not move cuts either.
@@ -486,14 +525,14 @@ function assertClipCoverage(project, clips) {
  * none of them has anything to show yet. Never beat-snapped: there is no song
  * under it.
  */
-export async function resolveColdOpenClips(project, { layered = false, stillForMissingClip = false } = {}) {
+export async function resolveColdOpenClips(project, { layered = false, stillForMissingClip = false, getHistoryMap, probeCache } = {}) {
   const plan = coldOpenPlan(project);
   if (!plan.length) return null;
   // Each shot is laid on a span of its own length so the shared resolver and
   // span honoring treat it like any authored shot.
   const scenes = plan.map(({ scene, preMusic }, order) => ({ ...scene, order, startSec: 0, endSec: preMusic.durationSec, beatAligned: true }));
   const shadow = { ...project, scenes };
-  const resolved = await resolveSceneClips(shadow, { layered, stillForMissingClip }).catch((err) => {
+  const resolved = await resolveSceneClips(shadow, { layered, stillForMissingClip, getHistoryMap, probeCache }).catch((err) => {
     if (err?.code === 'NO_SCENE_CLIPS') return [];
     throw err;
   });

@@ -1,4 +1,4 @@
-import { mkdir, readFile, writeFile } from 'node:fs/promises';
+import { mkdir, readdir, readFile, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { afterAll, beforeEach, describe, expect, it, vi } from 'vitest';
 
@@ -23,7 +23,7 @@ const { cleanupTempDataRoots } = await import('../../lib/mockPathsDataRoot.js');
 const { catalogEvents } = await import('./catalogEvents.js');
 const { listActiveRenders } = await import('../renderActivity.js');
 afterAll(cleanupTempDataRoots);
-const { getPhotorealStatus, openPhotorealBlend, startPhotorealRender, __setPhotorealDepsForTests } = await import('./catalogPhotoreal.js');
+const { cancelPhotorealRender, getPhotorealStatus, openPhotorealBlend, startPhotorealRender, __setPhotorealDepsForTests } = await import('./catalogPhotoreal.js');
 const { PATHS } = await import('../../lib/fileUtils.js');
 
 const PNG = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 1, 2, 3]);
@@ -174,7 +174,7 @@ describe('startPhotorealRender', () => {
     const results = await attempts;
     expect(results.map((result) => result.status)).toEqual(['fulfilled', 'rejected']);
     expect(results[1].reason).toMatchObject({ status: 409, code: 'PHOTOREAL_BUSY' });
-    expect(worker).toHaveBeenCalledTimes(1);
+    await vi.waitFor(() => expect(worker).toHaveBeenCalledTimes(1));
     releaseWorker({ status: 'killed', reason: 'test complete' });
     await expect(finished(`plc-${seq}`)).resolves.toMatchObject({ state: 'failed' });
   });
@@ -232,6 +232,87 @@ describe('startPhotorealRender', () => {
     await startPhotorealRender(`plc-${seq}`, { shotIds: ['wide'], engine: 'eevee' });
     await expect(finished(`plc-${seq}`)).resolves.toMatchObject({ state: 'failed', error: expect.stringContaining('not a PNG') });
     expect(upload).not.toHaveBeenCalled();
+  });
+});
+
+describe('cancelPhotorealRender', () => {
+  it('keeps the place busy until Blender exits, then publishes one canceled job and permits a new render', async () => {
+    const { id } = place();
+    db.getIngredient.mockResolvedValue(place());
+    let releaseWorker;
+    const worker = vi.fn().mockImplementationOnce(() => new Promise((resolve) => { releaseWorker = resolve; }))
+      .mockImplementation(fakeWorker({ 'report.json': '{"device":"CPU"}', 'blockout.blend': 'NEW SCENE', 'shot-wide.png': PNG }));
+    __setPhotorealDepsForTests({ resolveTool: async () => ({ executable: '/opt/blender', version: '5.2.3', worker }) });
+
+    const options = { shotIds: ['wide'], engine: 'cycles' };
+    const job = await startPhotorealRender(id, options);
+    await vi.waitFor(() => expect(worker).toHaveBeenCalledOnce());
+    const { signal } = worker.mock.calls[0][0];
+    await expect(cancelPhotorealRender(id, 'pr-stale')).rejects.toMatchObject({ status: 404, code: 'PHOTOREAL_RENDER_NOT_FOUND' });
+    expect(signal.aborted).toBe(false);
+    const pending = cancelPhotorealRender(id, job.id);
+    const duplicate = cancelPhotorealRender(id);
+    expect(signal.aborted).toBe(true);
+    expect(listActiveRenders().some(({ to }) => to === `/catalog/place/${id}`)).toBe(true);
+    await expect(startPhotorealRender(id, options)).rejects.toMatchObject({ code: 'PHOTOREAL_BUSY' });
+
+    releaseWorker({ status: 'terminated', reason: 'canceled' });
+    const canceled = await pending;
+    expect(canceled).toMatchObject({ id: job.id, state: 'canceled', finishedAt: expect.any(String), error: null });
+    expect(await duplicate).toEqual(canceled);
+    expect(frames.map(({ job }) => job.state)).toEqual(['running', 'canceled']);
+    expect(await getPhotorealStatus(id)).toMatchObject({ job: canceled, blendUrl: null, sceneBuilding: false });
+    expect(listActiveRenders().some(({ to }) => to === `/catalog/place/${id}`)).toBe(false);
+    expect(upload).not.toHaveBeenCalled();
+
+    const next = await startPhotorealRender(id, options);
+    expect(next.id).not.toBe(job.id);
+    await expect(finished(id)).resolves.toMatchObject({ id: next.id, state: 'done' });
+  });
+
+  it('aborts FFmpeg using the Blender signal and preserves the previous scene and media', async () => {
+    const record = place();
+    db.getIngredient.mockResolvedValue(record);
+    const blendDir = join(PATHS.data, 'photoreal-blends');
+    await mkdir(blendDir, { recursive: true });
+    const kept = join(blendDir, `${record.id}.blend`);
+    await writeFile(kept, 'PREVIOUS SCENE');
+    const pngFrames = Object.fromEntries(Array.from({ length: 48 }, (_, i) => [`frame-${String(i + 1).padStart(4, '0')}.png`, PNG]));
+    const worker = fakeWorker({ 'report.json': '{}', 'blockout.blend': 'NEW SCENE', ...pngFrames });
+    const runFfmpeg = vi.fn(({ signal }) => new Promise((resolve) => {
+      signal.addEventListener('abort', () => resolve({ ok: false, reason: 'cancelled' }), { once: true });
+    }));
+    const saveVideo = vi.fn();
+    __setPhotorealDepsForTests({
+      resolveTool: async () => ({ executable: '/opt/blender', version: '5.2.3', worker }),
+      findFfmpeg: async () => '/usr/bin/ffmpeg', runFfmpeg, saveVideo,
+    });
+
+    const job = await startPhotorealRender(record.id, { shotIds: ['wide', 'booth'], engine: 'cycles', flythroughSeconds: 2 });
+    await vi.waitFor(() => expect(runFfmpeg).toHaveBeenCalledOnce());
+    expect(runFfmpeg.mock.calls[0][0].signal).toBe(worker.mock.calls[0][0].signal);
+    await expect(cancelPhotorealRender(record.id, job.id)).resolves.toMatchObject({ state: 'canceled', video: null });
+    expect(await readFile(kept, 'utf8')).toBe('PREVIOUS SCENE');
+    expect((await readdir(blendDir)).some((name) => name.startsWith('.render-'))).toBe(false);
+    expect(saveVideo).not.toHaveBeenCalled();
+    expect(upload).not.toHaveBeenCalled();
+  });
+
+  it('finishes an in-progress publication when cancellation arrives after outputs start publishing', async () => {
+    const { id } = place();
+    db.getIngredient.mockResolvedValue(place());
+    const worker = fakeWorker({ 'report.json': '{"device":"CPU"}', 'blockout.blend': 'NEW SCENE', 'shot-wide.png': PNG });
+    __setPhotorealDepsForTests({ resolveTool: async () => ({ executable: '/opt/blender', version: '5.2.3', worker }) });
+    let finishUpload;
+    upload.mockImplementationOnce(() => new Promise((resolve) => { finishUpload = resolve; }));
+
+    const job = await startPhotorealRender(id, { shotIds: ['wide'], engine: 'cycles' });
+    await vi.waitFor(() => expect(finishUpload).toBeTypeOf('function'));
+    const pending = cancelPhotorealRender(id, job.id);
+    expect(worker.mock.calls[0][0].signal.aborted).toBe(false);
+    finishUpload({ mediaKey: 'new-wide.png' });
+    await expect(pending).resolves.toMatchObject({ id: job.id, state: 'done' });
+    expect(frames.map(({ job }) => job.state)).toEqual(['running', 'done']);
   });
 });
 

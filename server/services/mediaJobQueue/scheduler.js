@@ -1,10 +1,10 @@
-/** Lane promotion, worker polling, and shutdown for the media queue. */
+/** Lane promotion, worker wakeups, and shutdown for the media queue. */
 
 import { ServerError } from '../../lib/errorHandler.js';
 import { maintenance } from '../../lib/maintenanceAdmission.js';
 import { broadcastSse } from '../../lib/sseUtils.js';
 import { isRemoteMediaJob } from './remoteMediaJob.js';
-import { jobScheduleState, scheduledWaitMessage, SCHEDULED_WAIT_PATTERN, SCHEDULE_EXPIRED_ERROR } from './jobSchedule.js';
+import { jobScheduleState, jobStopBy, scheduledWaitMessage, SCHEDULED_WAIT_PATTERN, SCHEDULE_EXPIRED_ERROR } from './jobSchedule.js';
 import {
   isCloudImageJob, jobLane, jobSwimlane, laneTotalLimits, getEffectiveParallelLimit, getRateLimitCooldown,
   rateLimitWaitMessage, quotaCooldownResumeAt, QUOTA_WAIT_PATTERN, quotaWaitMessage,
@@ -12,8 +12,9 @@ import {
 import {
   queue, cloudRunning, remoteRunning, archive, videoHolds, mediaJobEvents, recoveringJobs, getRunningJob,
   setRunningJob, runningJobs, trackOperation, trackTerminalOperation, isRemoteReconcile, isTopazUpscale,
-  dispatchOperations, laneOperations, workerState,
+  dispatchOperations, laneOperations,
 } from './state.js';
+import { wakeWorker, workerState } from './workerSignal.js';
 import {
   restoredParams, stageTerminalTransition, persistTerminalTransition, persist, releaseStagedUploads, drainMediaJobQueue,
 } from './persistence.js';
@@ -25,6 +26,8 @@ import { loadMediaRuntimeModule } from '../bootHookRegistry.js';
 // A reservation row whose own reconcile attempt failed again is retried when a
 // later job to the same peer is blocked behind it, but no faster than this.
 const RESERVATION_RECONCILE_RETRY_MS = 30_000;
+
+export { wakeWorker };
 
 export const MEDIA_QUEUE_SHUTTING_DOWN = 'MEDIA_QUEUE_SHUTTING_DOWN';
 
@@ -50,14 +53,22 @@ export function laneConcurrencyFor(job) {
 export function startWorker(enqueueJob) {
   if (workerState.started || workerState.quiesced) return;
   workerState.started = true;
+  const admissionEvents = maintenance.events;
+  const onMaintenanceChanged = ({ state }) => {
+    if (state === 'normal' && queue.length) wakeWorker();
+  };
+  admissionEvents.on('changed', onMaintenanceChanged);
   // Detach from awaiting so init can return; the loop runs until shutdown quiesces it.
   workerState.operation = drainLoop(enqueueJob).catch((err) => {
     console.error(`❌ mediaJobQueue worker crashed: ${err.message}`, err.stack || '');
-  }).finally(() => { workerState.started = false; });
+  }).finally(() => {
+    admissionEvents.off('changed', onMaintenanceChanged);
+    workerState.started = false;
+  });
 }
 
 // Transient (never persisted): why a queued remote job is not dispatching.
-// Logged once per blocked job so a silent per-tick skip is still diagnosable.
+// Logged once per blocker so the waiting job explains why it is parked.
 function holdForPeer(job, blockingJobId) {
   if (job.peerHold?.blockingJobId === blockingJobId) return;
   job.peerHold = { reason: 'peer-settling', blockingJobId };
@@ -84,6 +95,7 @@ function requeueRetainedReservation(entry) {
     params: restoredParams({ ...entry, params: { ...entry.params, remoteMedia: { ...marker, reconcile: true } } }),
   };
   queue.push(reconciled);
+  wakeWorker();
   recomputeQueuePositions();
   // The old terminal grace timer owns the old subscribers. A new stream for
   // this attempt keeps that timer from evicting reconciliation or its clients.
@@ -92,9 +104,8 @@ function requeueRetainedReservation(entry) {
   return true;
 }
 
-// Every lane uses fire-and-forget so the poll loop is never blocked by a
-// running job in another lane.
-function startLaneJob(job, { lane }, enqueueJob) {
+// Starting a job leaves the worker free to fill other lanes.
+function startLaneJob(job, { lane, planWakeAt }, enqueueJob) {
   // The one promotion boundary every dispatch path crosses, so the shutdown
   // latch holds here even for a caller that raced past its own check.
   if (workerState.quiesced) return false;
@@ -122,9 +133,15 @@ function startLaneJob(job, { lane }, enqueueJob) {
       // The blocker settled failed/canceled without a terminal peer report;
       // only a reconcile can release it, so do not wait for a restart.
       // A prior reconcile run that failed again is retried at a bounded rate.
-      const retryDue = blocker.params.remoteMedia?.reconcile !== true
-        || Date.now() - new Date(blocker.completedAt || 0).getTime() >= RESERVATION_RECONCILE_RETRY_MS;
-      if (retryDue) requeueRetainedReservation(blocker);
+      // Pending terminal writes wake the worker when acknowledged.
+      if (!blocker.durabilityPending) {
+        const retryAt = new Date(blocker.completedAt || 0).getTime() + RESERVATION_RECONCILE_RETRY_MS;
+        if (blocker.params.remoteMedia?.reconcile !== true || retryAt <= Date.now()) {
+          requeueRetainedReservation(blocker);
+        } else {
+          planWakeAt(retryAt);
+        }
+      }
       return false;
     }
   }
@@ -181,6 +198,7 @@ function startLaneJob(job, { lane }, enqueueJob) {
     archive.push(job);
     recomputeQueuePositions();
     archiveWrite = persist();
+    wakeWorker();
     archiveWrite.catch((e) => console.error(`❌ media-job [${job.id.slice(0, 8)}] mediaJobQueue persist on ${label} done failed: ${e.message}`));
     return archiveWrite;
   }
@@ -267,6 +285,7 @@ export async function settleQueuedJob(job, { status, error }) {
   });
   archive.push(job);
   recomputeQueuePositions();
+  wakeWorker();
   await trackTerminalOperation(persistTerminalTransition(job));
   if (job.params?.reviewedReferenceSnapshot && !job.durabilityPending
     && !(isRemoteMediaJob(job) && (job.params?.remoteMedia?.reconcile === true || job.params?.remotePeerReservation === true))) {
@@ -290,20 +309,30 @@ export async function prepareQueuedVideos(jobs = queue.filter((job) => !job.admi
 }
 
 
-// Quiescing wakes the idle wait even under fake timers, so joining the worker
-// never depends on another clock tick. Preparation already in flight still joins.
-function waitForWorker() {
+function waitForWorker(delayMs = Infinity) {
+  if (workerState.quiesced || workerState.pendingWake) return;
   return new Promise(resolve => {
-    const timer = setTimeout(() => { workerState.wake = null; resolve(); }, 150);
-    workerState.wake = () => { clearTimeout(timer); workerState.wake = null; resolve(); };
+    // Node coerces larger delays to 1ms. Recheck long windows when the
+    // maximum representable timer fires.
+    const timer = Number.isFinite(delayMs)
+      ? setTimeout(finish, Math.min(delayMs, 2_147_483_647))
+      : null;
+    function finish() {
+      if (timer !== null) clearTimeout(timer);
+      workerState.wake = null;
+      resolve();
+    }
+    workerState.wake = finish;
   });
 }
 
 async function drainLoop(enqueueJob) {
   while (!workerState.quiesced) {
+    workerState.pendingWake = false;
+    if (!queue.length) { await waitForWorker(); continue; }
     const held = maintenance.held();
     const candidates = queue.filter((job) => !job.admitting && (!held || recoveringJobs.has(job.id)));
-    if (held && !candidates.length) { await waitForWorker(); continue; }
+    if (!candidates.length) { await waitForWorker(); continue; }
     await prepareQueuedVideos(candidates);
     // Shutdown may have begun while cohorts resolved; exit without promoting.
     if (workerState.quiesced) break;
@@ -327,11 +356,17 @@ async function drainLoop(enqueueJob) {
     for (const active of runningJobs()) swimSlots.set(jobSwimlane(active), freeSwimSlots(active) - 1);
     let quotaWaitChanged = false;
     const expired = [];
+    let nextWakeAt = Infinity;
+    const planWakeAt = (deadline) => {
+      if (Number.isFinite(deadline)) nextWakeAt = Math.min(nextWakeAt, deadline);
+    };
     for (const job of candidates) {
       if (job.status !== 'queued' || job.hold || job.admitting) continue;
       const scheduled = jobScheduleState(job);
       if (scheduled?.expired) { expired.push(job); continue; }
       if (scheduled) {
+        planWakeAt(jobStopBy(job));
+        planWakeAt(scheduled.startAt);
         const waiting = scheduledWaitMessage(scheduled.startAt);
         if (job.statusMsg !== waiting) {
           job.statusMsg = waiting;
@@ -345,6 +380,8 @@ async function drainLoop(enqueueJob) {
       // the Render Queue shows the wait across a restart too.
       const resumeAt = quotaCooldownResumeAt(job);
       if (resumeAt) {
+        planWakeAt(jobStopBy(job));
+        planWakeAt(resumeAt);
         const waiting = quotaWaitMessage(job.params.mode, resumeAt);
         if (job.statusMsg !== waiting) {
           job.statusMsg = waiting;
@@ -356,6 +393,7 @@ async function drainLoop(enqueueJob) {
       if (rlCooldown) {
         const free = freeSwimSlots(job);
         if (free <= 0) {
+          planWakeAt(rlCooldown.expiresAt);
           const waiting = rateLimitWaitMessage(rlCooldown.effectiveLimit, rlCooldown.expiresAt);
           if (job.statusMsg !== waiting) {
             job.statusMsg = waiting;
@@ -365,9 +403,10 @@ async function drainLoop(enqueueJob) {
       }
       const lane = jobLane(job);
       const free = freeSwimSlots(job);
-      if (laneSlots[lane] <= 0 || free <= 0) continue;
-      // Reconciliation occupies a peer's slot until settled (startLaneJob).
-      if (!startLaneJob(job, { lane }, enqueueJob)) continue;
+      if (laneSlots[lane] <= 0 || free <= 0 || !startLaneJob(job, { lane, planWakeAt }, enqueueJob)) {
+        planWakeAt(jobStopBy(job));
+        continue;
+      }
       laneSlots[lane] -= 1;
       swimSlots.set(jobSwimlane(job), free - 1);
     }
@@ -379,7 +418,7 @@ async function drainLoop(enqueueJob) {
     if (quotaWaitChanged) {
       persist().catch((e) => console.error(`❌ media-job mediaJobQueue persist on quota hold failed: ${e.message}`));
     }
-    if (!workerState.quiesced) await waitForWorker();
+    await waitForWorker(nextWakeAt - Date.now());
   }
 }
 
@@ -391,7 +430,7 @@ async function drainLoop(enqueueJob) {
 export function quiesceMediaJobQueue() {
   if (workerState.quiesced) return false;
   workerState.quiesced = true;
-  workerState.wake?.();
+  wakeWorker();
   console.log(`⏸️  mediaJobQueue dispatch stopped for shutdown (${queue.length} waiting job(s) kept queued)`);
   return true;
 }
@@ -411,5 +450,6 @@ export function runJobNow(jobId, enqueueJob) {
   if (!startLaneJob(job, { lane: 'cloud' }, enqueueJob)) {
     return { ok: false, code: 'MAINTENANCE_HELD', error: 'Maintenance is holding new renders; this job stays queued' };
   }
+  wakeWorker();
   return { ok: true, status: 'running' };
 }

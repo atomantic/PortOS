@@ -44,7 +44,7 @@ vi.mock('./splashManagedRuntime.js', async (original) => ({
   probeSplashEndpoint: mocks.probe,
 }));
 
-import { getSplashManagedState, installSplashRuntime, saveSplashContextWindow, SPLASH_APP, startSplashServer, stopSplashServer } from './splashServerManager.js';
+import { getSplashManagedState, installSplashRuntime, saveSplashContextWindow, SPLASH_APP, startSplashServer, stopSplashServer, uninstallSplashRuntime } from './splashServerManager.js';
 import { SPLASH_VERSION, splashRoot } from './splashManagedRuntime.js';
 import { getSplashRuntimeStatus } from './splashRuntimeStatus.js';
 
@@ -283,4 +283,21 @@ it('saves a per-machine next-start context and does not alter a running or exter
   await expect(saveSplashContextWindow(1000000)).rejects.toThrow('external server');
   await expect(saveSplashContextWindow(1010000)).rejects.toMatchObject({ code: 'SPLASH_INVALID_CONTEXT' });
   expect(mocks.saveSettings).toHaveBeenCalledTimes(1);
+});
+
+it('uninstalls a stopped Splash release but keeps the private model cache and settings', async () => {
+  await installSplashRuntime();
+  const cacheFile = join(splashRoot(), 'home', 'checkpoint');
+  await writeFile(cacheFile, 'weights');
+  const settings = structuredClone(mocks.settings);
+  await expect(getSplashManagedState()).resolves.toMatchObject({ installed: true, canUninstall: true });
+  mocks.portUsed.mockResolvedValueOnce(true);
+  await expect(uninstallSplashRuntime()).rejects.toThrow(/free its port/);
+  await expect(getSplashManagedState()).resolves.toMatchObject({ installed: true });
+  await expect(uninstallSplashRuntime()).resolves.toMatchObject({ success: true });
+  await expect(getSplashManagedState()).resolves.toMatchObject({ installed: false, canUninstall: false });
+  await expect(readFile(join(splashRoot(), `runtime-${SPLASH_VERSION}`, 'install', 'launcher.py'))).rejects.toMatchObject({ code: 'ENOENT' });
+  expect(await readFile(cacheFile, 'utf8')).toBe('weights');
+  expect(mocks.settings).toEqual(settings);
+  expect(mocks.pm2Command).not.toHaveBeenCalled();
 });

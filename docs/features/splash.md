@@ -14,3 +14,11 @@ The Splash card shows two different limits. **Splash context window** is the req
 The runtime card shows live model preparation progress. Choose **Cancel** to
 stop an install or update, or **View server logs** to see recent output from
 the PortOS-managed Splash process. Measure Splash on **Models → Performance**.
+
+### Removing the runtime
+
+In **Models → Runtimes**, stop Splash and choose **Uninstall** to remove the
+PortOS-installed release. The private model cache and provider presets stay
+available for reinstall. An external Splash installation is not changed.
+The same control is available for the PortOS-installed mkserve release; its
+downloaded checkpoint is also kept.

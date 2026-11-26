@@ -2,7 +2,7 @@ import { act, fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { MemoryRouter } from 'react-router';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import PhotorealPanel from './PhotorealPanel';
-import { draftCatalogPhotorealLook, getCatalogPhotoreal, getCatalogPhotorealTextures, installCatalogPhotorealTexture, searchCatalogPhotorealTextures, openCatalogPhotorealBlend, previewCatalogPhotorealLookPrompt, saveCatalogGreybox, saveCatalogPhotorealLook, startCatalogPhotorealRender } from '../../services/apiCatalog';
+import { cancelCatalogPhotorealRender, draftCatalogPhotorealLook, getCatalogPhotoreal, getCatalogPhotorealTextures, installCatalogPhotorealTexture, searchCatalogPhotorealTextures, openCatalogPhotorealBlend, previewCatalogPhotorealLookPrompt, saveCatalogGreybox, saveCatalogPhotorealLook, startCatalogPhotorealRender } from '../../services/apiCatalog';
 import { findCodeAnimationBlender, getCodeAnimationExecution, probeCodeAnimationExecution, updateCodeAnimationExecutionTools } from '../../services/apiCodeAnimation';
 import { copyToClipboard } from '../../lib/clipboard';
 import { findEnabledByRole } from '../../test/enabledBarrier';
@@ -10,7 +10,7 @@ import { findEnabledByRole } from '../../test/enabledBarrier';
 const { handlers } = vi.hoisted(() => ({ handlers: new Map() }));
 vi.mock('../../services/socket', () => ({ default: { on: (event, handler) => handlers.set(event, handler), off: (event) => handlers.delete(event) } }));
 vi.mock('../../services/apiCatalog', () => ({
-  getCatalogPhotoreal: vi.fn(), openCatalogPhotorealBlend: vi.fn(), saveCatalogGreybox: vi.fn(), startCatalogPhotorealRender: vi.fn(),
+  cancelCatalogPhotorealRender: vi.fn(), getCatalogPhotoreal: vi.fn(), openCatalogPhotorealBlend: vi.fn(), saveCatalogGreybox: vi.fn(), startCatalogPhotorealRender: vi.fn(),
   draftCatalogPhotorealLook: vi.fn(), previewCatalogPhotorealLookPrompt: vi.fn(), saveCatalogPhotorealLook: vi.fn(),
   getCatalogPhotorealTextures: vi.fn(async () => ({ installed: [] })), searchCatalogPhotorealTextures: vi.fn(), installCatalogPhotorealTexture: vi.fn(),
 }));
@@ -299,7 +299,10 @@ describe('PhotorealPanel', () => {
     await act(async () => finishOpen({ opened: true, blenderVersion: '5.2.3', blendUrl: '/scene.blend' }));
     expect(screen.getByRole('link', { name: 'Download .blend' })).toHaveAttribute('href', '/scene.blend');
     expect(startCatalogPhotorealRender).not.toHaveBeenCalled();
-    fireEvent.click(screen.getAllByRole('button', { name: 'Copy' })[0]);
+    const [copyBlend, copyRenders] = screen.getAllByRole('button', { name: 'Copy' });
+    expect(copyBlend).toHaveClass('border', 'min-h-11');
+    expect(copyRenders).toHaveClass('border', 'min-h-11');
+    fireEvent.click(copyBlend);
     expect(copyToClipboard).toHaveBeenCalledWith(files.blend, 'Path copied');
   });
 
@@ -548,6 +551,52 @@ describe('PhotorealPanel', () => {
     const body = startCatalogPhotorealRender.mock.calls[0][1];
     expect(body.samples).toBe(64);
     expect(body.flythroughSeconds).toBeLessThan(9999);
+  });
+
+  it('keeps renders disabled during cancellation and recovers from the HTTP response without a socket', async () => {
+    const running = { id: 'pr-cancel', state: 'running', engine: 'cycles', shotIds: ['wide'], startedAt: new Date().toISOString() };
+    const onRendered = vi.fn();
+    getCatalogPhotoreal.mockResolvedValue({ job: running, blendUrl: '/scene.blend' });
+    let finishCancel;
+    cancelCatalogPhotorealRender.mockImplementation(() => new Promise((resolve) => { finishCancel = resolve; }));
+    show({ onRendered });
+    const cancel = await findEnabledByRole('button', { name: 'Cancel render' });
+    fireEvent.click(cancel);
+    expect(cancelCatalogPhotorealRender).toHaveBeenCalledWith('plc-example', running.id, { silent: true });
+    expect(screen.getByRole('button', { name: 'Canceling render…' })).toBeDisabled();
+    expect(screen.getByRole('button', { name: 'Rendering…' })).toBeDisabled();
+    expect(screen.getByRole('button', { name: /Render fly-through/ })).toBeDisabled();
+
+    await act(async () => finishCancel({ ...running, state: 'canceled' }));
+    expect(screen.getByText('Render canceled.')).toHaveAttribute('role', 'status');
+    expect(screen.getByRole('button', { name: 'Render 2 cameras' })).toBeEnabled();
+    expect(screen.getByRole('button', { name: /Render fly-through/ })).toBeEnabled();
+    expect(onRendered).not.toHaveBeenCalled();
+  });
+
+  it('offers cancellation when the scene no longer has saved cameras', async () => {
+    const running = { id: 'pr-cancel', state: 'running', engine: 'cycles', shotIds: ['wide'], startedAt: new Date().toISOString() };
+    getCatalogPhotoreal.mockResolvedValue({ job: running, blendUrl: null });
+    cancelCatalogPhotorealRender.mockResolvedValue({ ...running, state: 'canceled' });
+    show({ record: { ...record, payload: { greybox: { ...greybox, shots: [] } } } });
+    expect(screen.getByText(/Save a camera/)).toBeInTheDocument();
+    fireEvent.click(await findEnabledByRole('button', { name: 'Cancel render' }));
+    expect(await screen.findByText('Render canceled.')).toBeInTheDocument();
+  });
+
+  it('preserves a newer running socket job when the canceled job response arrives late', async () => {
+    const running = { id: 'pr-cancel', state: 'running', engine: 'cycles', shotIds: ['wide'], startedAt: new Date().toISOString() };
+    getCatalogPhotoreal.mockResolvedValue({ job: running, blendUrl: '/scene.blend' });
+    let finishCancel;
+    cancelCatalogPhotorealRender.mockImplementation(() => new Promise((resolve) => { finishCancel = resolve; }));
+    show();
+    fireEvent.click(await findEnabledByRole('button', { name: 'Cancel render' }));
+    await act(async () => handlers.get('catalog:photoreal')({ ingredientId: record.id, job: { ...running, state: 'canceled' } }));
+    expect(screen.getByRole('button', { name: 'Render 2 cameras' })).toBeEnabled();
+    await act(async () => handlers.get('catalog:photoreal')({ ingredientId: record.id, job: { ...running, id: 'pr-new' } }));
+    await act(async () => finishCancel({ ...running, state: 'canceled' }));
+    expect(screen.getByRole('button', { name: 'Rendering…' })).toBeDisabled();
+    expect(screen.getByRole('button', { name: 'Cancel render' })).toBeEnabled();
   });
 
   it('keeps a finish frame that arrives before the start response', async () => {

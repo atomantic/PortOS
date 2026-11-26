@@ -57,6 +57,11 @@ export const catalogPhotorealRenderSchema = z.object({
   flythroughSeconds: z.number().finite().min(PHOTOREAL_FLYTHROUGH_SECONDS.MIN).max(PHOTOREAL_FLYTHROUGH_SECONDS.MAX).optional(),
 }).strict().refine((body) => !body.flythroughSeconds || body.shotIds.length >= 2, { message: 'a fly-through needs at least two cameras', path: ['shotIds'] });
 
+// A supplied id binds a cancel request to the render shown to the operator.
+export const catalogPhotorealCancelSchema = z.object({
+  jobId: z.string().min(1).max(64).optional(),
+}).strict();
+
 // Opening or building the scene takes no input: the data and executable are fixed.
 export const catalogPhotorealOpenSchema = z.object({}).strict();
 

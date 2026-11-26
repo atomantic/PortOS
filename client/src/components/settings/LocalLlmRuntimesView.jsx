@@ -118,7 +118,9 @@ export default function LocalLlmRuntimesView({ view } = {}) {
   const statusRequests = useRef({});
   const bundleProgress = useRef({});
   const [runtimeConfirm, setRuntimeConfirm] = useState(null);
-  const repairCopy = runtimeConfirm?.action === 'repair' && runtimeConfirm.descriptor.copy.repair;
+  const confirmationCopy = runtimeConfirm?.action === 'uninstall'
+    ? runtimeConfirm.descriptor.copy.uninstallDetail
+    : runtimeConfirm?.action === 'repair' && runtimeConfirm.descriptor.copy.repair;
   // The dedicated Qwen host is a docker container rather than a PM2 process, so
   // it is not part of the shared local-LLM status payload — but it IS a local
   // model server, and this is the page an operator comes to when they want to
@@ -283,7 +285,7 @@ export default function LocalLlmRuntimesView({ view } = {}) {
   };
   const runtimeAction = (id, action, payload) => {
     const descriptor = LOCAL_RUNTIME_DESCRIPTORS[id];
-    if (descriptor.capabilities.confirmInstall && Object.hasOwn(RUNTIME_CHANGE_LABELS, action)) {
+    if (action === 'uninstall' || (descriptor.capabilities.confirmInstall && Object.hasOwn(RUNTIME_CHANGE_LABELS, action))) {
       setRuntimeConfirm({ descriptor, action });
     } else {
       runRuntimeAction(id, action, payload);
@@ -694,8 +696,8 @@ export default function LocalLlmRuntimesView({ view } = {}) {
         <Modal open onClose={() => setRuntimeConfirm(null)} size="sm" usePortal
           ariaLabel={`${RUNTIME_CHANGE_LABELS[runtimeConfirm.action]} ${runtimeConfirm.descriptor.label}`}>
           <div className="rounded-xl border border-port-border bg-port-card p-5 space-y-4">
-            <p className="text-sm text-white">{repairCopy || runtimeConfirm.descriptor.copy.download}</p>
-            {!repairCopy && <p className="text-xs text-gray-400">This stages the PortOS-supported version. Existing providers and other runtimes are not changed.</p>}
+            <p className="text-sm text-white">{confirmationCopy || runtimeConfirm.descriptor.copy.download}</p>
+            {!confirmationCopy && <p className="text-xs text-gray-400">This stages the PortOS-supported version. Existing providers and other runtimes are not changed.</p>}
             <div className="flex flex-wrap justify-end gap-2">
               <button type="button" onClick={() => setRuntimeConfirm(null)} className="min-h-[44px] rounded border border-port-border px-3 text-sm text-gray-300">Cancel</button>
               <button type="button" onClick={confirmRuntimeAction} disabled={busy} className="min-h-[44px] rounded bg-port-accent px-3 text-sm text-white disabled:opacity-50">
@@ -842,6 +844,7 @@ export default function LocalLlmRuntimesView({ view } = {}) {
           onStart={(launch) => runRuntimeAction('slotstream', 'start', launch)}
           onStop={() => runRuntimeAction('slotstream', 'stop')}
           onInstall={() => runRuntimeAction('slotstream', 'install')}
+          onUninstall={() => runtimeAction('slotstream', 'uninstall')}
           onDownloadModel={slotstreamDownloadModel}
           onCancelDownload={cancelSlotstreamDownload}
           download={slotstreamDownload}
@@ -860,6 +863,7 @@ export default function LocalLlmRuntimesView({ view } = {}) {
           onStart={(launch) => runRuntimeAction('mtplx', 'start', launch)}
           onStop={() => runRuntimeAction('mtplx', 'stop')}
           onInstall={() => runRuntimeAction('mtplx', 'install')}
+          onUninstall={() => runtimeAction('mtplx', 'uninstall')}
           onSearchModels={mtplxSearch}
           onPullModel={mtplxPull}
           onRemoveModel={mtplxRemove}

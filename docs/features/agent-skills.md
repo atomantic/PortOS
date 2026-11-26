@@ -57,7 +57,7 @@ A second, open-ended skill system sits beside the fixed templates above (which k
 
 **Surfaces:**
 - REST (`server/routes/skills.js`): `GET /api/skills[?appId]`, `GET /api/skills/view?ref=…[&file=…][&appId=…]`, `POST /api/skills/manage`, `GET|PUT /api/skills/config`. The writes need operator authority, so a password-free LAN caller is refused.
-- CoS tools (`cosToolRegistry.js`): `skills.list` and `skills.view` (agent, mind and UI scopes, under `readPortos`), plus mind-only `skills.manage` behind the default-off **Allow mind to author procedural skills** grant (`manageSkills`). `skills.manage` writes only the `local` tier. Its actions are `create {name, category?, content}`, `patch {name, oldString, newString, replaceAll?}`, `write_file {name, path, content}`, `remove_file {name, path}` and `delete {name}`, each with its own strict schema (`server/lib/skillsValidation.js`).
+- CoS tools (`server/services/cos/tools/workspaceTools.js`): `skills.list` and `skills.view` (agent, mind and UI scopes, under `readPortos`), plus mind-only `skills.manage` behind the default-off **Allow mind to author procedural skills** grant (`manageSkills`). `skills.manage` writes only the `local` tier. Its actions are `create {name, category?, content}`, `patch {name, oldString, newString, replaceAll?}`, `write_file {name, path, content}`, `remove_file {name, path}` and `delete {name}`, each with its own strict schema (`server/lib/skillsValidation.js`).
 
 Code: `server/lib/skills/skillRegistry.js` (parse, discover, precedence, path jail), `server/lib/skills/skillLinter.js`, `server/services/skills/skillScanner.js`, `server/services/skills/skillService.js`.
 

@@ -8,7 +8,7 @@ import { isPortInUse } from '../lib/platform.js';
 import { readManagedPm2LogTail } from '../lib/managedDaemon.js';
 import { clearJlistCache, execPm2, getAppStatusStrict } from './pm2.js';
 import {
-  installPinnedSplash, probeSplashEndpoint, readInstalledSplashVersion, splashLaunchArgs, splashLaunchPrefix, SPLASH_UNSUPPORTED_REASON,
+  installPinnedSplash, probeSplashEndpoint, readInstalledSplashVersion, removeSplashRelease, splashLaunchArgs, splashLaunchPrefix, SPLASH_UNSUPPORTED_REASON,
   SPLASH_VERSION, supportsManagedSplash,
 } from './splashManagedRuntime.js';
 
@@ -45,6 +45,7 @@ export async function getSplashManagedState({ includeLogs = false } = {}) {
   const repairRecommended = owned && ['errored', 'stopped'].includes(pm2.status);
   return {
     installed: Boolean(version),
+    canUninstall: Boolean(version && !operation && (pm2?.status === 'not_found' || (owned && ['stopped', 'errored'].includes(pm2.status)))),
     requestedContextWindow,
     version,
     targetVersion: SPLASH_VERSION,
@@ -156,6 +157,25 @@ async function waitForSplashReady(version, contextWindow) {
   // Keep ownership after a slow startup so the UI still offers Stop.
   startTimedOut = true;
   throw fail('Splash has not become ready yet. Check its status or stop the managed server to retry.', 504, 'SPLASH_START_TIMEOUT');
+}
+
+export function uninstallSplashRuntime() {
+  return withOperation('uninstall', async () => {
+    const version = await readInstalledSplashVersion();
+    if (!version) throw fail('There is no PortOS-managed Splash release to uninstall.');
+    const pm2 = await checkedPm2();
+    const stoppedOwned = ownsProcess(pm2, version) && ['stopped', 'errored'].includes(pm2.status);
+    if ((!stoppedOwned && pm2.status !== 'not_found') || await isPortInUse(PORT)) {
+      throw fail('Stop Splash and free its port before uninstalling. PortOS will not alter an external server.');
+    }
+    if (stoppedOwned) {
+      await execPm2(['delete', String(pm2.pm_id)]);
+      clearJlistCache();
+    }
+    await removeSplashRelease(version);
+    startTimedOut = false;
+    return { success: true, message: 'Splash uninstalled. Model files were kept.' };
+  });
 }
 
 export function stopSplashServer() {

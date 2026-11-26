@@ -340,9 +340,10 @@ exposable merely because they appear in the internal OpenAPI inventory.
 
 Evidence anchors for these findings are the route catalog `stats` served by
 `GET /api/api-docs/catalog.json`,
-`VOICE_ADAPTERS` in `server/services/cos/cosToolRegistry.js`, the catalog query
-schema in `server/lib/cos/cosToolContracts.js`, the async task policy and normalized
-result path in `server/services/cos/cosToolRegistry.js`, and
+`VOICE_ADAPTERS` in `server/services/cos/tools/voiceTools.js`, the catalog query
+schema in `server/lib/cos/cosToolContracts.js`, the async task policy in
+`server/services/cos/tools/mindTools.js`, the normalized result path in
+`server/services/cos/cosToolRegistry.js`, and
 `semanticToolsForConfig`/`getManifest` in `server/services/agent/agentContextMcp.js`.
 
 ## Validation

@@ -54,6 +54,12 @@ export async function supportsManagedSplash({ platform = process.platform, arch 
   return !/^Apple M[12]\b/.test(cpuModel ?? cpus()[0]?.model ?? '');
 }
 
+export async function removeSplashRelease(version) {
+  if (!VERSION.test(version)) throw new TypeError('Invalid Splash release version');
+  await rm(releaseDirectory(version), { recursive: true, force: true });
+  await rm(activeFile(), { force: true });
+}
+
 export async function readInstalledSplashVersion() {
   const version = (await readFile(activeFile(), 'utf8').catch(() => '')).trim();
   if (!VERSION.test(version)) return null;

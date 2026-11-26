@@ -20,7 +20,6 @@ function stagingContext(overrides = {}) {
     settings,
     uploads: {},
     sourceImagePath: null,
-    cleanupStaged: vi.fn(async () => {}),
     stageUploadDurable: vi.fn(async () => '/staged/end.png'),
     ...overrides,
   };
@@ -32,16 +31,15 @@ describe.each([
 ])('$backend hosted submission', ({ backend, modelId, audioError }) => {
   const adapter = HOSTED_VIDEO_SUBMISSIONS[backend];
 
-  it('cleans up staged inputs when a source audio upload is refused', async () => {
+  it('refuses unsupported source audio before staging', async () => {
     const ctx = stagingContext({ uploads: { audioFile: { path: '/upload/audio.wav' } } });
     await expect(adapter.stageInputs(ctx)).rejects.toMatchObject({
       status: 400, code: 'VALIDATION_ERROR', message: expect.stringMatching(audioError),
     });
-    expect(ctx.cleanupStaged).toHaveBeenCalledOnce();
     expect(ctx.stageUploadDurable).not.toHaveBeenCalled();
   });
 
-  it('cleans up staged inputs if a gallery reference is missing', async () => {
+  it('refuses missing gallery references before staging', async () => {
     const ctx = stagingContext({
       body: { prompt: 'A test shot', [`${backend}ModelId`]: modelId, referenceImageFiles: ['present.png', 'missing.png'] },
     });
@@ -49,7 +47,6 @@ describe.each([
       status: 400, code: 'VALIDATION_ERROR', message: expect.stringContaining('missing.png'),
     });
     expect(resolveGalleryImage).toHaveBeenCalledWith('present.png');
-    expect(ctx.cleanupStaged).toHaveBeenCalledOnce();
     expect(ctx.stageUploadDurable).not.toHaveBeenCalled();
   });
 
@@ -80,7 +77,6 @@ describe.each([
     expect(staged).toStrictEqual({ lastImagePath, ...ownership });
     if (isUpload) expect(ctx.stageUploadDurable).toHaveBeenCalledExactlyOnceWith(lastImage, 'last');
     else expect(ctx.stageUploadDurable).not.toHaveBeenCalled();
-    expect(ctx.cleanupStaged).not.toHaveBeenCalled();
 
     expect(adapter.buildParams(ctx.body, { ...preparation.extras, ...staged, settings: ctx.settings })).toStrictEqual({
       modelId, lastImagePath, ...ownership, aspectRatio: undefined, width: 1920, height: 1080,
@@ -89,10 +85,9 @@ describe.each([
   });
 });
 
-it('preserves the Higgsfield catalog error code and cleans up rejected inputs', async () => {
+it('preserves the Higgsfield catalog error code for rejected inputs', async () => {
   const ctx = stagingContext({ body: { prompt: 'A test shot', lastImageFile: 'end.png' } });
 
   await expect(HOSTED_VIDEO_SUBMISSIONS.higgsfield.stageInputs(ctx))
     .rejects.toMatchObject({ status: 400, code: 'HIGGSFIELD_VIDEO_INPUT_INVALID' });
-  expect(ctx.cleanupStaged).toHaveBeenCalledOnce();
 });

@@ -612,9 +612,8 @@ export const probeFrameCount = async (videoPath) => {
 //
 // Every field is independently nullable: an unreadable axis is "unknown", never
 // 0, so a caller cannot read a failed probe as a real measurement.
-export const probeVideoStreamInfo = async (videoPath) => {
-  const empty = { width: null, height: null, fps: null, frameCount: null };
-  if (typeof videoPath !== 'string' || !videoPath) return empty;
+async function probeVideoFields(videoPath, includeDuration) {
+  if (typeof videoPath !== 'string' || !videoPath) return new Map();
   // Keyed output (`nokey=0`), NOT positional: ffprobe prints requested entries in
   // its own internal field order rather than the order they were asked for, so
   // destructuring the lines would silently swap two fields the day that order
@@ -622,14 +621,17 @@ export const probeVideoStreamInfo = async (videoPath) => {
   const stdout = await runFfprobe([
     '-v', 'error',
     '-select_streams', 'v:0',
-    '-show_entries', 'stream=width,height,avg_frame_rate,nb_frames',
+    '-show_entries', `stream=width,height,avg_frame_rate,nb_frames${includeDuration ? ':format=duration' : ''}`,
     '-of', 'default=noprint_wrappers=1',
     videoPath,
   ]);
-  const fields = new Map(stdout.split(/\r?\n/).map((line) => {
+  return new Map(stdout.split(/\r?\n/).map((line) => {
     const at = line.indexOf('=');
     return at === -1 ? null : [line.slice(0, at).trim(), line.slice(at + 1).trim()];
   }).filter(Boolean));
+}
+
+function videoStreamInfo(fields) {
   const width = fields.get('width');
   const height = fields.get('height');
   const frameRate = fields.get('avg_frame_rate');
@@ -654,7 +656,9 @@ export const probeVideoStreamInfo = async (videoPath) => {
     fps: parseRate(frameRate),
     frameCount: positiveInt(frames),
   };
-};
+}
+
+export const probeVideoStreamInfo = async (videoPath) => videoStreamInfo(await probeVideoFields(videoPath, false));
 
 // Pixel aspect is distinct from raster dimensions. Null means ffprobe could
 // not establish it; callers that require exact display geometry can refuse.
@@ -756,8 +760,10 @@ export const readAudioMasterFingerprint = async (masterPath) => {
 // producer never recorded a frame count (hosted Grok/fal/reactor renders), so a
 // consumer that trims by numFrames/fps measures the file instead of guessing.
 export const probeVideoGeometry = async (videoPath) => {
-  const [stream, durationSec] = await Promise.all([probeVideoStreamInfo(videoPath), probeDurationSeconds(videoPath)]);
-  if (!stream.width || !stream.height || !stream.fps || !durationSec) return null;
+  const fields = await probeVideoFields(videoPath, true);
+  const stream = videoStreamInfo(fields);
+  const durationSec = parseFloat(fields.get('duration'));
+  if (!stream.width || !stream.height || !stream.fps || !Number.isFinite(durationSec) || durationSec <= 0) return null;
   return {
     width: stream.width,
     height: stream.height,
