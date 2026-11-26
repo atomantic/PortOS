@@ -13,7 +13,11 @@ vi.mock('os', async (importOriginal) => {
   home.dir = fs.mkdtempSync(actual.tmpdir() + '/voice-bootstrap-');
   return { ...actual, default: { ...actual, homedir: () => home.dir }, homedir: () => home.dir };
 });
-vi.mock('../pm2.js', () => ({ execPm2: vi.fn(async () => ({})), getAppStatus: vi.fn(async () => null) }));
+vi.mock('../pm2.js', () => ({
+  clearJlistCache: vi.fn(),
+  execPm2: vi.fn(async () => ({})),
+  getAppStatusStrict: vi.fn(async () => ({ status: 'not_found' })),
+}));
 vi.mock('../../lib/processEnv.js', () => ({ whichFirst: vi.fn(async () => null) }));
 vi.mock('../../lib/childProcess.js', () => ({ execFile: vi.fn() }));
 vi.mock('../provider/providers.js', () => ({ getProviderById: vi.fn() }));
