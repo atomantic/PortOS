@@ -1,4 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { setImmediate } from 'node:timers/promises';
 
 // In-memory stand-ins for the persistence + timezone deps so the service tests
 // exercise the visit/handled state machine without touching disk or settings.
@@ -7,7 +8,7 @@ vi.mock('../lib/fileUtils.js', () => ({
   PATHS: { data: '/tmp/portos-test' },
   ensureDir: vi.fn(async () => {}),
   atomicWrite: vi.fn(async (_path, data) => { fileStore = data; }),
-  readJSONFile: vi.fn(async () => fileStore),
+  readJSONFile: vi.fn(async () => structuredClone(fileStore)),
 }));
 
 let mockToday = '2026-07-16';
@@ -24,6 +25,7 @@ import {
   getDriverState,
   markDriverHandled,
 } from './dailyDriver.js';
+import { atomicWrite } from '../lib/fileUtils.js';
 
 beforeEach(() => {
   fileStore = null;
@@ -54,6 +56,31 @@ describe('computeDriverState (pure gate)', () => {
 });
 
 describe('dailyDriver service (visit / handled lifecycle)', () => {
+  it('reports exactly one first visit when two landings overlap', async () => {
+    const visits = await Promise.all([getAndRecordVisit(), getAndRecordVisit()]);
+    expect(visits.map(({ firstVisitToday }) => firstVisitToday)).toEqual([true, false]);
+  });
+
+  it('preserves a handled marker when the first visit and dismissal overlap', async () => {
+    const visitWriteStarted = Promise.withResolvers();
+    const releaseVisit = Promise.withResolvers();
+    atomicWrite.mockImplementationOnce(async (_path, data) => {
+      visitWriteStarted.resolve();
+      await releaseVisit.promise;
+      fileStore = data;
+    });
+
+    const visit = getAndRecordVisit();
+    await visitWriteStarted.promise;
+    const dismissal = markDriverHandled();
+    // Let unblocked microtasks settle before the older visit reaches disk.
+    await setImmediate();
+    releaseVisit.resolve();
+    await Promise.all([visit, dismissal]);
+
+    expect(await getDriverState()).toMatchObject({ firstVisitToday: false, handledToday: true });
+  });
+
   it('first GET reports firstVisitToday, then records the visit so the next GET does not', async () => {
     const first = await getAndRecordVisit();
     expect(first).toEqual({ today: '2026-07-16', firstVisitToday: true, handledToday: false });

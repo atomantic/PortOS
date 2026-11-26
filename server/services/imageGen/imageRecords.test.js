@@ -10,6 +10,8 @@ import sharp from 'sharp';
 import { naturalUniverseVisualProfile } from '../../lib/universeVisualProfile.js';
 import { finishVisualProfileImage } from './finishVisualProfile.js';
 import { makePathsProxy } from '../../lib/mockPathsDataRoot.js';
+import { withBackupAssetPublication } from '../../lib/backupSnapshotBoundary.js';
+import { sidecarEditQueue } from './sidecarStore.js';
 
 let dataRoot;
 let admission;
@@ -27,6 +29,7 @@ let PATHS;
 let imageGenEvents;
 let initImageOriginStamping;
 let readHeldImage;
+let writeLocalImageSidecarIfMissing;
 let persistVariant;
 let saveUploadedGalleryImage;
 let disarm;
@@ -38,7 +41,7 @@ beforeAll(async () => {
   process.env.PORTOS_MEDIA_MODELS_FILE = join(dataRoot, 'media-models.json');
   ({ PATHS } = await import('../../lib/fileUtils.js'));
   ({ imageGenEvents } = await import('../imageGenEvents.js'));
-  ({ initImageOriginStamping, readHeldImage } = await import('./imageRecords.js'));
+  ({ initImageOriginStamping, readHeldImage, writeLocalImageSidecarIfMissing } = await import('./imageRecords.js'));
   ({ persistVariant } = await import('./variants.js'));
   ({ saveUploadedGalleryImage } = await import('./local.js'));
 });
@@ -58,6 +61,17 @@ const seed = (filename, sidecar) => {
 };
 
 describe('image origin', () => {
+  it('leaves a sidecar published by a competing editor intact', async () => {
+    const filename = 'concurrent.png';
+    const published = { prompt: 'Edited prompt', hidden: true, originInstanceId: 'other-inst' };
+    await withBackupAssetPublication(async () => {
+      const edit = sidecarEditQueue(filename, async () => seed(filename, published));
+      const [, created] = await Promise.all([edit, writeLocalImageSidecarIfMissing(filename)]);
+      expect(created).toBe(false);
+    });
+    expect(sidecarOf(filename)).toEqual(published);
+  });
+
   it("stamps a finished render with this machine's origin once, and skips temp renders", async () => {
     disarm = initImageOriginStamping();
     seed('render.png', { prompt: 'a fox' });
