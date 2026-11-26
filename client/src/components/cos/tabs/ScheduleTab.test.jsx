@@ -87,23 +87,16 @@ describe('mergeUpdatedTaskInterval', () => {
 });
 
 describe('ScheduleTab on-demand feedback', () => {
-  it('shows scheduled legacy audits and makes on-demand legacy profiles available separately', async () => {
-    const user = userEvent.setup();
+  it('renders consolidated audit domains as ordinary scheduled tasks', async () => {
     api.getCodeReviewDefaults.mockResolvedValue({});
-    const profile = { type: 'on-demand', enabled: true };
     api.getCosSchedule.mockResolvedValueOnce({ tasks: {
-      'code-simplification': { ...profile, displayName: 'Code simplification' },
-      simplify: { ...profile, displayName: 'Legacy simplify', legacyAuditDomain: 'code-simplification' },
-      'better-complexity': { ...profile, displayName: 'Legacy complexity', legacyAuditDomain: 'code-simplification', enabledAppCount: 1 },
+      'code-simplification': { type: 'on-demand', enabled: true, displayName: 'Code simplification' },
     } });
     render(<MemoryRouter><ScheduleTab apps={[]} providers={[]} /></MemoryRouter>);
     expect(screen.getByRole('status')).toHaveTextContent('Loading schedule');
     expect(await screen.findByText('Code simplification')).toBeVisible();
     expect(screen.queryByText('Loading schedule...')).not.toBeInTheDocument();
-    expect(screen.getByText('Legacy complexity')).toBeVisible();
-    expect(screen.queryByText('Legacy simplify')).not.toBeInTheDocument();
-    await user.click(screen.getByRole('checkbox', { name: 'Show all legacy audit profiles' }));
-    expect(screen.getByText('Legacy simplify')).toBeVisible();
+    expect(screen.queryByRole('checkbox', { name: 'Show all legacy audit profiles' })).not.toBeInTheDocument();
   });
 
   it('retains the last schedule on a failed refresh, shows the failure, and recovers', async () => {

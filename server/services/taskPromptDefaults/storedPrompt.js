@@ -43,8 +43,8 @@ export function reconcileStoredPrompt(config, taskType) {
   }
 
   // Unpinned older version: replace the body with this release's default.
-  if (PROMPT_VERSIONS[taskType] && !fields.promptCustomized
-    && (fields.promptVersion || 1) < currentVersion) {
+  if (PROMPT_VERSIONS[taskType] && fields.promptSource !== 'user' && !fields.promptCustomized
+    && ((isShippedDefault && !isCurrentDefault) || (fields.promptVersion || 1) < currentVersion)) {
     fields.prompt = currentPrompt;
     fields.promptVersion = currentVersion;
   }

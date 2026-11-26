@@ -3,7 +3,7 @@
 import { describe, it, expect } from 'vitest';
 import { auditQualityInstructions } from './auditQuality.js';
 import { ACTIVE_AUDIT_DOMAIN_IDS, CONSOLIDATED_AUDIT_DOMAINS } from './auditDomains.js';
-import { AUDIT_EXECUTION_TASK_TYPES } from './auditCatalog.js';
+import { AUDIT_TASK_TYPE_LIST } from './auditCatalog.js';
 
 const HEADING = '## Feature priority scope';
 const APP = { id: 'portos-default', name: 'PortOS', deploymentModel: 'One person, private network.' };
@@ -14,7 +14,7 @@ const daily = { label: 'Daily Area', globs: ['server/services/daily/**'] };
 const SCOPE = { exempt: false, p0: [daily], p2: [lowUse], p3: [dormant] };
 
 const EXEMPT_TYPES = ['security', 'privacy', 'data-integrity-safety', ...CONSOLIDATED_AUDIT_DOMAINS['data-integrity-safety'].members];
-const NON_EXEMPT_TYPES = AUDIT_EXECUTION_TASK_TYPES.filter((id) => !EXEMPT_TYPES.includes(id));
+const NON_EXEMPT_TYPES = AUDIT_TASK_TYPE_LIST.filter((id) => !EXEMPT_TYPES.includes(id));
 
 const section = (prompt) => {
   const start = prompt.indexOf(HEADING);
@@ -40,8 +40,8 @@ describe('feature priority scope in audit instructions', () => {
   });
 
   it('covers every exempt and non-exempt audit type the catalog can dispatch', () => {
-    for (const id of EXEMPT_TYPES) expect(AUDIT_EXECUTION_TASK_TYPES).toContain(id);
-    expect(NON_EXEMPT_TYPES.length).toBeGreaterThan(20);
+    expect(EXEMPT_TYPES.filter(id => AUDIT_TASK_TYPE_LIST.includes(id))).toEqual(['security', 'privacy', 'data-integrity-safety']);
+    expect(NON_EXEMPT_TYPES).toHaveLength(13);
   });
 
   it.each(NON_EXEMPT_TYPES)('%s: takes P3 out of the inventory and carries the P2 and P0 rules', (id) => {
@@ -96,7 +96,7 @@ describe('feature priority scope in audit instructions', () => {
     for (const id of ['better-complexity', 'code-simplification']) {
       expect(section(auditQualityInstructions(id, APP, { priorityScope: SCOPE }))).toContain(command);
     }
-    for (const id of ['simplify', 'performance-efficiency', 'security']) {
+    for (const id of ['architecture-maintainability', 'performance-efficiency', 'security']) {
       expect(section(auditQualityInstructions(id, APP, { priorityScope: SCOPE }))).not.toContain('--exclude');
     }
     // Nothing dormant: the shipped command already covers the right files.

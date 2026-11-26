@@ -22,13 +22,13 @@ import { execGit } from '../lib/execGit.js';
 import { query } from '../lib/db.js';
 import {
   AUDIT_CAPABILITY_MISSING_REASON,
-  AUDIT_EXECUTION_PROFILES,
+  AUDIT_DEFINITIONS,
   AUDIT_REPO_CAPABILITIES,
   AUDIT_TASK_TYPE_LIST,
   normalizeAuditTaskType,
   auditCapabilityRequirement,
 } from '../lib/auditCatalog.js';
-import { CONSOLIDATED_AUDIT_DOMAINS } from '../lib/auditDomains.js';
+import { auditDomainFor } from '../lib/auditDomains.js';
 import {
   CLAIM_DRAIN_TASK_TYPES,
   buildBusySlots,
@@ -212,7 +212,7 @@ export async function resolveQualityChecks(app, taskTypes = AUDIT_TASK_TYPE_LIST
     const reason = notApplicable.has(taskType)
       ? 'a previous audit reported this category as not applicable here'
       : missingCapabilityReason(taskType, capabilities, complete);
-    return { taskType, label: AUDIT_EXECUTION_PROFILES[taskType].label, applicable: !reason, reason };
+    return { taskType, label: AUDIT_DEFINITIONS[taskType].label, applicable: !reason, reason };
   });
   return { checks, capabilities, scanned, complete };
 }
@@ -232,8 +232,8 @@ export async function resolveQualityChecks(app, taskTypes = AUDIT_TASK_TYPE_LIST
  * @returns {Promise<{ applicable: boolean, reason: string|null }>}
  */
 export async function resolveAuditApplicability(app, taskType) {
-  const category = normalizeAuditTaskType(taskType);
-  if (!app?.id || !app.repoPath || !Object.hasOwn(AUDIT_EXECUTION_PROFILES, category)) return { applicable: true, reason: null };
+  const category = auditDomainFor(taskType);
+  if (!app?.id || !app.repoPath || !Object.hasOwn(AUDIT_DEFINITIONS, category)) return { applicable: true, reason: null };
   const { checks: [check] } = await resolveQualityChecks(app, [category]);
   return { applicable: check?.applicable !== false, reason: check?.reason || null };
 }
@@ -276,7 +276,7 @@ export async function inapplicableAuditReasons(app) {
  * @returns {Promise<string|null>}
  */
 export async function inapplicableAuditReason(appId, taskType) {
-  if (!appId || !Object.hasOwn(AUDIT_EXECUTION_PROFILES, normalizeAuditTaskType(taskType))) return null;
+  if (!appId || !Object.hasOwn(AUDIT_DEFINITIONS, auditDomainFor(taskType))) return null;
   const verdict = await getAppById(appId)
     // The schedule form's recorded override is the user's choice for this app,
     // whichever lane dispatches the audit.
@@ -337,12 +337,6 @@ export async function collectBusyOccupancies(app, { ignoreTaskTypes = [] } = {})
     if (config.perpetual) add(taskType, config.recheckCron, 'recheck');
   }
   return sources;
-}
-
-function legacyAuditMembers(taskTypes) {
-  return new Set(Object.entries(CONSOLIDATED_AUDIT_DOMAINS)
-    .filter(([domain]) => taskTypes.includes(domain))
-    .flatMap(([, { members }]) => members));
 }
 
 const CLAIM_OFFSET_CHOICES = [1, 2, 3, 4, 5, 6, 8, 12];
@@ -410,20 +404,19 @@ export async function buildQualitySchedulePlan(app, formOptions = {}, { hydrate 
     ? { ...saved.options, ...formOptions, taskTypes: saved.taskTypes, fileIssuesByType: saved.fileIssuesByType }
     : formOptions;
   const settings = resolveQualityScheduleOptions(options);
-  // Explicit requests from older clients still select their original task profile.
-  const requested = Array.isArray(options.taskTypes) ? options.taskTypes : null;
-  const plannedTypes = [...new Set([...AUDIT_TASK_TYPE_LIST, ...(requested || [])])].filter(type => Object.hasOwn(AUDIT_EXECUTION_PROFILES, type));
+  const requested = Array.isArray(options.taskTypes) ? [...new Set(options.taskTypes.map(auditDomainFor))] : null;
   // Independent: the repository scan and the schedule read share no input.
-  const [{ checks, capabilities, scanned, complete }, occupancies] = await Promise.all([
-    resolveQualityChecks(app, plannedTypes),
-    collectBusyOccupancies(app, { ignoreTaskTypes: [...plannedTypes, ...CLAIM_DRAIN_TASK_TYPES] }),
+  const [{ checks, capabilities, scanned, complete }, sources] = await Promise.all([
+    resolveQualityChecks(app),
+    collectBusyOccupancies(app, { ignoreTaskTypes: [...AUDIT_TASK_TYPE_LIST, ...CLAIM_DRAIN_TASK_TYPES] }),
   ]);
 
   const taskTypes = requested ?? checks.filter(check => check.applicable).map(check => check.taskType);
-  const replacedTypes = legacyAuditMembers(taskTypes);
-  const sources = occupancies.filter(({ taskType }) => !replacedTypes.has(taskType));
 
-  const fileIssuesByType = options.fileIssuesByType || {};
+  const suppliedModes = options.fileIssuesByType || {};
+  const fileIssuesByType = Object.fromEntries(Object.entries(suppliedModes)
+    .filter(([type]) => type === auditDomainFor(type) || !Object.hasOwn(suppliedModes, auditDomainFor(type)))
+    .map(([type, mode]) => [auditDomainFor(type), mode]));
   let plan = planQualitySchedule({ taskTypes, fileIssuesByType, busy: buildBusySlots(sources, settings), options: settings });
   // Padding can swallow every hour even when the raw crons leave gaps; an
   // unpadded plan beats an empty one, with the trade-off stated.
@@ -462,8 +455,7 @@ export async function buildQualitySchedulePlan(app, formOptions = {}, { hydrate 
  *
  * Checks the user left out are DISABLED rather than left alone — the form is
  * the whole picture of the app's quality cadence, so an audit dropped from the
- * selection must stop running. A domain that gets a slot also replaces its
- * enabled legacy members, except members explicitly selected in the plan.
+ * selection must stop running.
  *
  * @param {object} app - The managed app record
  * @param {object} [options] - The same option bag `buildQualitySchedulePlan` takes
@@ -491,12 +483,6 @@ export async function applyQualitySchedulePlan(app, options = {}) {
       // Clearing the interval alongside `enabled: false` keeps a stale cron
       // from reviving on the next manual enable.
       : { enabled: false, interval: null };
-  }
-  for (const taskType of legacyAuditMembers([...scheduled.keys()])) {
-    // A member explicitly selected by an older client already has its own patch.
-    if (!Object.hasOwn(patches, taskType) && existing[taskType]?.enabled === true) {
-      patches[taskType] = { enabled: false, interval: null };
-    }
   }
   if (plan.claim) patches[plan.claim.taskType] = { enabled: true, interval: plan.claim.cron };
   // Retire a drain an earlier plan planted. Without this, switching the drain

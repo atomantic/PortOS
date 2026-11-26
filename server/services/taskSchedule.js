@@ -19,6 +19,8 @@
  *   perpetual gate in cosTaskGenerator.prepareManagedAppImprovementTask.
  */
 
+import { auditDomainFor } from '../lib/auditDomains.js';
+import { taskExecutionKey } from '../lib/scheduledTaskTypes.js';
 import { scheduleExecutionFieldsSchema } from '../lib/scheduleExecutionFieldsValidation.js';
 import { randomUUID } from 'node:crypto';
 import { ServerError } from '../lib/errorHandler.js';
@@ -79,6 +81,7 @@ export { getScheduleStatus, getUpcomingTasks } from './taskScheduleStatus.js';
 const PRESENTATION_ONLY_SETTINGS = new Set(['labels', 'suggestedAfter']);
 
 export async function getTaskInterval(taskType) {
+  taskType = auditDomainFor(taskType);
   const schedule = await loadSchedule();
   return schedule.tasks[taskType] || {
     type: INTERVAL_TYPES.ON_DEMAND,
@@ -91,6 +94,7 @@ export async function getTaskInterval(taskType) {
 }
 
 export async function updateTaskInterval(taskType, settings) {
+  taskType = auditDomainFor(taskType);
   const executionFields = scheduleExecutionFieldsSchema.safeParse(settings);
   if (!executionFields.success) {
     throw new ServerError('Invalid schedule execution fields', { status: 400, code: 'VALIDATION_ERROR' });
@@ -212,7 +216,7 @@ export async function updateTaskInterval(taskType, settings) {
  */
 export async function recordExecution(taskType, appId = null) {
   return updateSchedule(async (schedule) => {
-    const key = taskType.startsWith('task:') ? taskType : `task:${taskType}`;
+    const key = taskExecutionKey(taskType);
 
     if (!schedule.executions[key]) {
       schedule.executions[key] = {
@@ -249,7 +253,7 @@ export async function recordExecution(taskType, appId = null) {
 export async function recordRecommendedAudits(taskType, appId, items) {
   if (!Array.isArray(items) || items.length === 0) return null;
   return updateSchedule(async (schedule) => {
-    const key = taskType.startsWith('task:') ? taskType : `task:${taskType}`;
+    const key = taskExecutionKey(taskType);
     schedule.executions[key] ||= { lastRun: null, count: 0, perApp: {} };
     schedule.executions[key].recommendedAudits = {
       at: new Date().toISOString(),
@@ -292,6 +296,7 @@ export async function triggerOnDemandTask(taskType, appId = null, {
   emit = true, origin = ON_DEMAND_ORIGINS.USER, targetPullRequest = null, burn = null,
   provider = null, model = null, effort = null, executionOptions, targetModels = null, cleanupSourceAgentId = null,
 } = {}) {
+  taskType = auditDomainFor(taskType);
   if (cleanupSourceAgentId != null && (typeof cleanupSourceAgentId !== 'string' || !/^agent-[a-z0-9-]{1,100}$/i.test(cleanupSourceAgentId))) {
     return { error: 'Invalid swarm cleanup continuation source' };
   }

@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { AUDIT_SUGGESTED_AFTER, AUDIT_EXECUTION_TASK_TYPES, AUDIT_TASK_TYPE_LIST, defaultFileIssuesFor } from './auditCatalog.js';
+import { AUDIT_SUGGESTED_AFTER, AUDIT_TASK_TYPE_LIST, defaultFileIssuesFor } from './auditCatalog.js';
 import { cronWeekdayHours } from './cronFields.js';
 import {
   buildBusySlots,
@@ -11,9 +11,9 @@ import {
 const busyFrom = (crons, padding = {}) =>
   buildBusySlots(crons.map(cronWeekdayHours), { padBeforeHours: 1, padAfterHours: 2, ...padding });
 
-// A fixed 35-audit prefix keeps slot-count assertions independent of how many
+// A fixed 14-audit prefix keeps slot-count assertions independent of how many
 // lanes the catalog grows to (the planner needs ceil(audits / 7) slots a day).
-const FIXED_AUDITS = AUDIT_EXECUTION_TASK_TYPES.slice(0, 35);
+const FIXED_AUDITS = AUDIT_TASK_TYPE_LIST.slice(0, 14);
 const planFixed = (overrides = {}) => planQualitySchedule({ taskTypes: [...FIXED_AUDITS], ...overrides });
 
 const planAll = (overrides = {}) => planQualitySchedule({ taskTypes: [...AUDIT_TASK_TYPE_LIST], ...overrides });
@@ -31,7 +31,7 @@ describe('buildBusySlots', () => {
 
 describe('orderQualityChecks', () => {
   it('puts every selected check after the predecessors the catalog names', () => {
-    const ordered = orderQualityChecks([...AUDIT_EXECUTION_TASK_TYPES]);
+    const ordered = orderQualityChecks([...AUDIT_TASK_TYPE_LIST]);
     for (const [taskType, predecessors] of Object.entries(AUDIT_SUGGESTED_AFTER)) {
       for (const predecessor of predecessors) {
         expect(ordered.indexOf(predecessor)).toBeLessThan(ordered.indexOf(taskType));
@@ -40,9 +40,7 @@ describe('orderQualityChecks', () => {
   });
 
   it('ignores a predecessor the user did not select', () => {
-    // `module-hygiene` follows `simplify`; with simplify deselected it is free
-    // to run first rather than being held back or dropped.
-    expect(orderQualityChecks(['module-hygiene'])).toEqual(['module-hygiene']);
+    expect(orderQualityChecks(['code-simplification'])).toEqual(['code-simplification']);
   });
 });
 
@@ -105,14 +103,14 @@ describe('planQualitySchedule', () => {
       { padBeforeHours: 0, padAfterHours: 0 },
     );
     const plan = planQualitySchedule({
-      taskTypes: ['performance', 'code-quality', 'security'],
+      taskTypes: ['performance-efficiency', 'code-simplification', 'security'],
       busy,
       options: { checksPerDay: 3, claimBetween: false },
     });
     const monday = plan.slots.filter(slot => slot.day === 1);
     expect(monday.map(slot => slot.hour)).toEqual([0, 4, 10]);
     const hourOf = taskType => monday.find(slot => slot.taskType === taskType).hour;
-    expect(hourOf('code-quality')).toBeLessThan(hourOf('performance'));
+    expect(hourOf('code-simplification')).toBeLessThan(hourOf('performance-efficiency'));
   });
 
   it('moves a late audit earlier to make space for a same-day claim drain', () => {
@@ -185,7 +183,7 @@ describe('planQualitySchedule', () => {
   it('keeps a request field from riding back as a planning option', () => {
     // The client seeds its form from `plan.options`; an echoed `taskTypes`
     // there would override the user's live selection on the next request.
-    const plan = planQualitySchedule({ taskTypes: ['security'], options: { taskTypes: ['ux'], nonsense: 1 } });
+    const plan = planQualitySchedule({ taskTypes: ['security'], options: { taskTypes: ['design-usability'], nonsense: 1 } });
     expect(plan.options.taskTypes).toBeUndefined();
     expect(plan.options.nonsense).toBeUndefined();
     expect(plan.slots.map(slot => slot.taskType)).toEqual(['security']);
@@ -194,8 +192,8 @@ describe('planQualitySchedule', () => {
   it('emits one daily cron covering every slot, not one per day', () => {
     const plan = planFixed();
     // The literal, not the production expression restated: a planner that
-    // emitted one claim hour for four daily slots would pass that version.
-    expect(plan.claim.cron).toBe('0 3,8,13,17,22 * * *');
+    // emitted one claim hour for two daily slots would pass that version.
+    expect(plan.claim.cron).toBe('0 3,15 * * *');
     expect(plan.claim.hours).toHaveLength(plan.checksPerDay);
     expect(plan.claim.taskType).toBe('claim-work');
   });
@@ -209,16 +207,16 @@ describe('planQualitySchedule', () => {
 
   it('honors a per-check delivery mode over the form default', () => {
     const plan = planQualitySchedule({
-      taskTypes: ['security', 'ux'],
+      taskTypes: ['security', 'design-usability'],
       fileIssuesByType: { security: false },
       options: { fileIssues: true },
     });
     expect(plan.slots.find(slot => slot.taskType === 'security').fileIssues).toBe(false);
-    expect(plan.slots.find(slot => slot.taskType === 'ux').fileIssues).toBe(true);
+    expect(plan.slots.find(slot => slot.taskType === 'design-usability').fileIssues).toBe(true);
   });
 
   it('confines slots to the chosen window and says so when they do not fit', () => {
-    const plan = planFixed({ options: { windowStartHour: 9, windowEndHour: 11 } });
+    const plan = planAll({ options: { checksPerDay: 4, windowStartHour: 9, windowEndHour: 11 } });
     for (const slot of plan.slots) {
       expect(slot.hour).toBeGreaterThanOrEqual(9);
       expect(slot.hour).toBeLessThanOrEqual(11);

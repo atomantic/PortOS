@@ -8,9 +8,8 @@
 import { execGit } from '../lib/execGit.js';
 import { withGlabJson } from '../lib/glabArgs.js';
 import { safeJSONParse } from '../lib/fileUtils.js';
-import { CONSOLIDATED_AUDIT_DOMAINS } from '../lib/auditDomains.js';
-import { normalizeAuditTaskType } from '../lib/auditCatalog.js';
-import { auditLanes, computeLaneHealth, LANE_HEALTH_WINDOW_DAYS, LANE_REFILE_WINDOW_DAYS } from '../lib/laneHealth.js';
+import { auditDomainFor } from '../lib/auditDomains.js';
+import { auditLanes, computeLaneHealth, HISTORICAL_LANE_LABELS, LANE_HEALTH_WINDOW_DAYS, LANE_REFILE_WINDOW_DAYS } from '../lib/laneHealth.js';
 import { resolveAppWorkTracker } from '../lib/workTracker.js';
 import { resolveForgeTokenEnv } from './forgeAuth.js';
 import { describeForgeReadFailure, resolveForgeContext, runForgeCli } from './taskDataInputs.js';
@@ -208,15 +207,14 @@ export function collectLaneHealth(app, options = {}) {
 async function readLaneHealth(app, { forge, taskType = null, now = Date.now(), deps = {} } = {}) {
   if (!forge || !app?.repoPath) return { ok: false, reason: 'forge-unavailable' };
   const lanes = auditLanes();
-  const lane = taskType ? lanes.find((candidate) => candidate.id === normalizeAuditTaskType(taskType)) : null;
+  const lane = taskType ? lanes.find((candidate) => candidate.id === auditDomainFor(taskType)) : null;
   if (taskType && !lane) return { ok: false, reason: 'not-an-audit-lane' };
-  const consolidated = lane && Object.hasOwn(CONSOLIDATED_AUDIT_DOMAINS, lane.id);
+  const consolidated = lane && Object.hasOwn(HISTORICAL_LANE_LABELS, lane.id);
   const singleMetric = lane && !consolidated;
   // A grouped audit owns findings under its own and its members' metric labels;
   // a GitHub OR search keeps the read to those instead of every issue in the repo.
   const domainLabels = consolidated && forge.cli === 'gh'
-    ? [...new Set([lane.metricLabel, ...CONSOLIDATED_AUDIT_DOMAINS[lane.id].members
-        .map((member) => lanes.find((candidate) => candidate.id === member)?.metricLabel || member), `source:${lane.id}`])]
+    ? [...new Set([lane.metricLabel, ...HISTORICAL_LANE_LABELS[lane.id], `source:${lane.id}`])]
     : null;
   const windowDays = LANE_HEALTH_WINDOW_DAYS;
   const refileDays = LANE_REFILE_WINDOW_DAYS;

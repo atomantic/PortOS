@@ -86,9 +86,9 @@ describe('migration 359', () => {
     await run();
 
     const converted = step('step-preset');
-    expect(converted.taskRef).toEqual({ kind: 'builtin', taskType: 'ux', appId: 'app-example' });
+    expect(converted.taskRef).toEqual({ kind: 'builtin', taskType: 'design-usability', appId: 'app-example' });
     expect(converted.jobType).toBeUndefined();
-    // Explicit `true` even though `ux` already defaults to filing: the shipped
+    // Explicit `true` even though `design-usability` already defaults to filing: the shipped
     // default is not the promise — the burn was an issues-only audit, and a
     // catalog default that flipped later must not turn it into code work.
     expect(converted.overrides.params.fileIssues).toBe(true);

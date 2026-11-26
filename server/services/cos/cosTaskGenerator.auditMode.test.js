@@ -97,7 +97,7 @@ import { generateTaskFromJob } from '../autonomousJobs/skillTemplates.js';
 import { buildLightContextPrompt } from '../agent/agentPromptBuilder.js';
 import { declaresNoCommitCriterion } from '../taskTypeHooks.js';
 import {
-  AUDIT_EXECUTION_TASK_TYPES as AUDIT_TYPES,
+  AUDIT_TASK_TYPE_LIST as AUDIT_TYPES,
   isAuditTaskType,
   FILE_ISSUES_DELIVERY_SETTINGS,
   defaultFileIssuesFor,
@@ -238,15 +238,14 @@ describe('issues-only audit dispatch never acquires code-shipping instructions (
     expect(task.description).toContain(`Reviewers: ${reviewers}`);
   });
 
-  it.each([true, false])('cognitive-load comment policy survives dispatch with fileIssues=%s', async (fileIssues) => {
+  it.each([true, false])('simplification comment policy survives dispatch with fileIssues=%s', async (fileIssues) => {
     const { DEFAULT_TASK_PROMPTS } = await import('../taskPromptDefaults.js');
     const { getTaskInterval } = await import('../taskSchedule.js');
-    promptTemplate.body = DEFAULT_TASK_PROMPTS['better-cognitive-load'];
+    promptTemplate.body = DEFAULT_TASK_PROMPTS['code-simplification'];
     getTaskInterval.mockResolvedValue({ type: 'weekly', taskMetadata: { fileIssues } });
 
-    const task = await generate('better-cognitive-load');
+    const task = await generate('code-simplification');
     const prompt = renderPrompt(task);
-    expect(prompt).toContain('Excessive code comments');
     // The resolve-every-finding contract binds the agent that CHANGES code; a
     // file-issues run changes nothing, so only the do-work banner carries it (#12080).
     const resolveEveryFinding = [
@@ -263,13 +262,12 @@ describe('issues-only audit dispatch never acquires code-shipping instructions (
       expect(prompt.split(sentence).length - 1, sentence)[fileIssues ? 'toBe' : 'toBeGreaterThanOrEqual'](fileIssues ? 0 : 1);
     }
     expect(prompt).toContain('safety rationale, external contracts, and justified workarounds');
-    expect(prompt).toContain('Preserve licenses, tool directives, meaningful type/JSDoc metadata');
-    expect(prompt).toContain('not a rewrite of user-facing documentation');
-    expect(prompt).toContain('review the diff for behavior preservation');
+    expect(prompt).toContain('Preserve licenses, tool directives, and meaningful type or JSDoc metadata');
+    expect(prompt).toContain('Preserve observable behavior.');
     expect(prompt).not.toContain('{modeInstructions}');
     expect(prompt).not.toMatch(/add (?:clear |helpful )?comments/i);
     if (fileIssues) {
-      expectNoCodeDelivery(prompt, 'better-cognitive-load');
+      expectNoCodeDelivery(prompt, 'code-simplification');
       expect(prompt).toContain('Mode: file issues, change nothing');
     } else {
       expect(task.metadata.noCodeOutput).not.toBe(true);
@@ -280,23 +278,18 @@ describe('issues-only audit dispatch never acquires code-shipping instructions (
   it.each([true, false])('infrastructure renders measured CI efficiency and safe delivery with fileIssues=%s', async (fileIssues) => {
     const { DEFAULT_TASK_PROMPTS } = await import('../taskPromptDefaults.js');
     const { getTaskInterval } = await import('../taskSchedule.js');
-    promptTemplate.body = DEFAULT_TASK_PROMPTS.infrastructure;
+    promptTemplate.body = DEFAULT_TASK_PROMPTS['infrastructure-environment'];
     getTaskInterval.mockResolvedValue({ type: 'on-demand', taskMetadata: { fileIssues, useWorktree: true, openPR: true } });
-    const task = await generate('infrastructure');
+    const task = await generate('infrastructure-environment');
     const prompt = renderPrompt(task);
     for (const instruction of [
-      'CI efficiency and placement', 'sample window and count', 'execution frequency',
-      'summed runner time', 'critical path', 'measured avoidable runner time',
-      'coverage/required-check failure', 'trigger/path selection', 'affected-test',
-      'duplicate work', 'unnecessary serialization', 'cache hits/misses',
-      'artifact upload/download cost', 'superseded-run', 'risk-based PR/MR',
-      'stronger surviving coverage', 'A slow test is not a valueless test',
-      'representative', 'required-check behavior', 'do not invent savings',
-      'preserve essential correctness/security coverage',
+      'sample window and count', 'execution frequency', 'summed runner time', 'critical path',
+      'measured avoidable runner time', 'duplicate work', 'serialization', 'cache and artifact cost',
+      'representative required-check behavior', 'preserve essential correctness/security coverage',
     ]) expect(prompt).toContain(instruction);
     expect(prompt).not.toContain('{modeInstructions}');
     if (fileIssues) {
-      expectNoCodeDelivery(prompt, 'infrastructure');
+      expectNoCodeDelivery(prompt, 'infrastructure-environment');
       expect(prompt).toContain('Mode: file issues, change nothing');
     } else {
       expect(task.metadata.fileIssues).toBe(false);
@@ -307,7 +300,7 @@ describe('issues-only audit dispatch never acquires code-shipping instructions (
   });
 
   it('keeps CI-efficiency discovery in customized infrastructure prompts', async () => {
-    const task = await generate('infrastructure');
+    const task = await generate('infrastructure-environment');
     expect(renderPrompt(task)).toContain('measure run frequency, job duration and critical path');
     expect(renderPrompt(task)).toContain('preserve essential correctness/security coverage');
   });
