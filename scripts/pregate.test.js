@@ -495,8 +495,9 @@ describe('pregate hidden-content invocation', () => {
     for (let runNumber = 1; runNumber <= 2; runNumber += 1) {
       const result = run();
       expect(result.status, result.stderr).toBe(0);
-      expect(result.stdout).toContain('server tests over the 2.5s per-guard target');
-      expect(result.stdout).toContain('client tests over the 2.5s per-guard target');
+      expect(result.stdout).toContain('server tests other guards over the 2.5s local per-guard target');
+      expect(result.stdout).toContain('client tests other guards over the 2.5s local per-guard target');
+      expect(result.stdout).toContain('the scheduled hosted guard budget does not apply');
       const report = JSON.parse(readFileSync(join(root, PREGATE_REPORT_PATH), 'utf8'));
       expect(report.stages.map(stage => stage.name)).toEqual([
         'hidden-content scan', 'client/server lint', 'server tests', 'client tests',

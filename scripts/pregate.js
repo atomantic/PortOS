@@ -970,7 +970,19 @@ function stageOutcomeVerdict(result, outcome) {
 function reportSlowGuards(result) {
   const over = overBudgetGuards(result.guardDurations);
   if (over.length > 0) {
-    console.log(`🐢 ${result.name} over the ${formatDuration(GUARD_BUDGET_MS)} per-guard target: ${describeGuardDurations(over)} (the scheduled hosted run fails a guard over ${formatDuration(CI_GUARD_BUDGET_MS)}; PR and push runs only warn).`);
+    const scheduledBudgetGuards = new Set([
+      ...getAlwaysRunTests(),
+      'scripts/generate-prompt-stage-call-sites.test.js',
+    ]);
+    const isScheduled = ({ file }) => scheduledBudgetGuards.has(file.split(' > ', 1)[0]);
+    const scheduled = over.filter(isScheduled);
+    const localOnly = over.filter(row => !isScheduled(row));
+    if (scheduled.length > 0) {
+      console.log(`🐢 ${result.name} scheduled-budget guards over the ${formatDuration(GUARD_BUDGET_MS)} local per-guard target: ${describeGuardDurations(scheduled)} (the scheduled hosted run fails these guards over ${formatDuration(CI_GUARD_BUDGET_MS)}; PR and push runs only warn).`);
+    }
+    if (localOnly.length > 0) {
+      console.log(`🐢 ${result.name} other guards over the ${formatDuration(GUARD_BUDGET_MS)} local per-guard target: ${describeGuardDurations(localOnly)} (these timings are local diagnostics; the scheduled hosted guard budget does not apply).`);
+    }
   }
 }
 
