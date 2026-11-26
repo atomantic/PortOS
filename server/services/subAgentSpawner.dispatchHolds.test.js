@@ -347,15 +347,27 @@ describe('subAgentSpawner — local-endpoint capacity hold (#4834)', () => {
     expect(acquireLocalEndpointSpawnSlot).not.toHaveBeenCalled();
   });
 
-  it('resumes spawning once the endpoint frees up — the hold is not sticky', async () => {
-    acquireLocalEndpointSpawnSlot.mockResolvedValue({ ok: false, reason: 'at capacity' });
-    await dispatch({ id: 'cos-l6', metadata: {} });
+  it('holds a scheduled job at the shared task:ready gate and releases its slot after admission', async () => {
+    // Scheduled jobs emit task:ready directly without passing through dequeueNextTask.
+    const task = { id: 'cos-job-task', metadata: { jobId: 'scheduled-job' } };
+    const reason = 'local endpoint at capacity';
+    acquireLocalEndpointSpawnSlot.mockResolvedValueOnce({ ok: false, reason });
+
+    await dispatch(task);
+
+    expect(acquireLocalEndpointSpawnSlot).toHaveBeenCalledExactlyOnceWith(task, {});
+    expect(cosEvents.emit).toHaveBeenCalledWith('task:held', { taskId: task.id, reason });
+    expect(cosEvents.emit).not.toHaveBeenCalledWith('agent:error', expect.anything());
     expect(spawnAgentForTask).not.toHaveBeenCalled();
 
-    acquireLocalEndpointSpawnSlot.mockResolvedValue({ ok: true, release });
-    await dispatch({ id: 'cos-l6', metadata: {} });
+    await dispatch(task);
 
-    expect(spawnAgentForTask).toHaveBeenCalledTimes(1);
+    expect(spawnAgentForTask).toHaveBeenCalledExactlyOnceWith(task);
+    expect(release).toHaveBeenCalledOnce();
+    const [, admittedAt] = acquireLocalEndpointSpawnSlot.mock.invocationCallOrder;
+    const [spawnedAt] = spawnAgentForTask.mock.invocationCallOrder;
+    expect(admittedAt).toBeLessThan(spawnedAt);
+    expect(spawnedAt).toBeLessThan(release.mock.invocationCallOrder[0]);
   });
 });
 
