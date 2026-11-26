@@ -1,6 +1,6 @@
 /** Browser profiles select existing assertions; they never change render settings. */
 export const BROWSER_FIDELITY_TESTS = {
-  'server/services/musicVideo/documentRender.browser.test.js': [
+  'server/services/musicVideo/documentRenderAudioTimeline.browser.test.js': [
     '[fidelity] matches bounded grades across real composed/document ramps and song-time excerpts',
     '[fidelity] matches bounded grades across real composed/document generated-shots and song-time excerpts',
   ],

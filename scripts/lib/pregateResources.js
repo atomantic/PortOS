@@ -27,6 +27,7 @@ const ROUTING_ENV = ['PGHOSTADDR', 'PGSERVICE', 'PGSERVICEFILE', 'PGOPTIONS'];
 /** Suites whose guards also need a Chrome that decodes H.264. */
 const H264_SUITES = new Set([
   'server/services/musicVideo/documentRender.browser.test.js',
+  'server/services/musicVideo/documentRenderAudioTimeline.browser.test.js',
   'server/services/musicVideo/documentRenderGeneration.browser.test.js',
 ]);
 

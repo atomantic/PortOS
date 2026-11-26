@@ -886,16 +886,22 @@ it('requests DB verification for the real deck, model pin and backup source cont
 
 it('keeps document generation and provider inputs out of the render-only browser closure', () => {
   const { browserDependencies } = realTree();
-  const render = browserDependencies['server/services/musicVideo/documentRender.browser.test.js'];
+  const renderSuites = [
+    'server/services/musicVideo/documentRender.browser.test.js',
+    'server/services/musicVideo/documentRenderAudioTimeline.browser.test.js',
+  ];
   const generation = browserDependencies['server/services/musicVideo/documentRenderGeneration.browser.test.js'];
   const generationInputs = [
     'server/services/musicVideo/documentGeneration.js',
     'server/lib/aiToolkit/internal/providerCatalogService.js',
     'server/lib/systemCapabilities.js',
   ];
-  expect(render).toContain('server/services/musicVideo/documentRender.js');
+  for (const suite of renderSuites) {
+    const render = browserDependencies[suite];
+    expect(render).toContain('server/services/musicVideo/documentRender.js');
+    for (const input of generationInputs) expect(render).not.toContain(input);
+  }
   expect(generation).toEqual(expect.arrayContaining(generationInputs));
-  for (const input of generationInputs) expect(render).not.toContain(input);
 });
 
 describe('late-bound hubs keep unrelated suites out of browser and DB plans (#17896)', () => {
@@ -915,7 +921,9 @@ describe('late-bound hubs keep unrelated suites out of browser and DB plans (#17
     const inputs = realTree();
     const render = 'server/services/musicVideo/documentRender.js';
     expect(planFor(render).browserFiles).toEqual(expect.arrayContaining([
-      'server/services/musicVideo/documentRender.browser.test.js', 'server/services/musicVideo/documentVignette.browser.test.js',
+      'server/services/musicVideo/documentRender.browser.test.js',
+      'server/services/musicVideo/documentRenderAudioTimeline.browser.test.js',
+      'server/services/musicVideo/documentVignette.browser.test.js',
     ]));
     // Reached only through a lazy import, several modules below the suite.
     expect(inputs.browserDependencies['server/services/musicVideo/documentVignette.browser.test.js']).toContain('server/services/htmlComposition/index.js');

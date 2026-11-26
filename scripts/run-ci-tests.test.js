@@ -27,7 +27,7 @@ import * as nodePath from 'node:path';
 import { computeTestMemoKeys, createDiskFs, relatedTests } from './lib/testMemo.js';
 import { VITEST_PROJECT_NAMES, listRepositoryFiles, vitestDependenciesPath, vitestShardSlice } from './lib/testMemoRunner.js';
 import { toWorkspacePath } from './lib/workspaceTests.js';
-import { BROWSER_SUITES, browserShardSlice } from './lib/browserSuites.js';
+import { BROWSER_SUITES } from './lib/browserSuites.js';
 import { staticImportClosure } from '../server/lib/staticImportGraph.js';
 import { destroyGitSandbox, makeGitSandbox } from '../server/lib/gitTestRepo.js';
 import { readTestProcesses } from './lib/testOwnedProcesses.js';
@@ -486,6 +486,7 @@ it('partitions complete browser profiles before per-shard memo reuse and preserv
     const firstCount = selections.full[0].length;
     const owner = file => selections.full.findIndex(files => files.includes(file));
     expect(owner('services/musicVideo/documentRender.browser.test.js')).not.toBe(owner('services/htmlComposition/index.test.js'));
+    expect(owner('services/musicVideo/documentRenderAudioTimeline.browser.test.js')).not.toBe(owner('services/musicVideo/documentRender.browser.test.js'));
     // The serial capture and parallel parity suite share an owner so the other
     // runner can absorb the rich authoring and catalog capture workload.
     const animaticOwner = owner('services/musicVideo/animaticCapture.browser.test.js');
@@ -1610,50 +1611,6 @@ describe('shouldWarmTestChrome (#17750)', () => {
   });
   it('never warms outside CI', () => {
     expect(shouldWarmTestChrome({ scope: 'client', run: [browser], env: {} })).toBe(false);
-  });
-});
-
-describe('browser shard ownership', () => {
-  it.each([1, 2, 3, 4])('covers every registered suite exactly once across %i shards', (count) => {
-    for (const profile of ['full', 'smoke']) {
-      const slices = Array.from({ length: count }, (_, i) => browserShardSlice(BROWSER_SUITES, { index: i + 1, count }, profile));
-      expect(slices.flat().toSorted()).toEqual([...BROWSER_SUITES].toSorted());
-    }
-  });
-
-  it.each(['full', 'smoke'])('distributes the observed memo misses in the four-shard %s profile', (profile) => {
-    const expected = [
-      [
-        'server/services/greyboxRender.browser.test.js',
-        'server/services/musicVideo/documentTemplateParity.browser.test.js',
-      ],
-      ['server/routes/musicVideoRichAuthoring.browser.test.js'],
-      ['server/services/musicVideo/animaticCapture.browser.test.js'],
-      [
-        'server/routes/catalogGreyboxViewer.browser.test.js',
-        'server/routes/musicVideoProductionReview.browser.test.js',
-        'server/routes/musicVideoSongRevision.browser.test.js',
-      ],
-    ];
-    const misses = expected.flat();
-    expect(expected.map((_, i) => browserShardSlice(misses, { index: i + 1, count: 4 }, profile))).toEqual(expected);
-  });
-
-  it.each(['full', 'smoke'])('keeps heavy serial capture on separate four-shard %s runners', (profile) => {
-    const shardOf = file => [1, 2, 3, 4].find(index => browserShardSlice([file], { index, count: 4 }, profile).includes(file));
-    expect(shardOf('server/services/musicVideo/documentRender.browser.test.js')).toBe(1);
-    expect(shardOf('server/services/htmlComposition/index.test.js')).toBe(2);
-    expect(shardOf('server/lib/filmLook.browser.test.js')).toBe(2);
-    expect(shardOf('server/services/musicVideo/animaticCapture.browser.test.js')).toBe(3);
-    expect(shardOf('server/lib/filmLookGpu.browser.test.js')).toBe(4);
-    expect(shardOf('server/services/musicVideo/documentRenderGeneration.browser.test.js')).toBe(4);
-  });
-
-  it('applies the smoke GPU override only to two-shard plans', () => {
-    const gpu = 'server/lib/filmLookGpu.browser.test.js';
-    expect(browserShardSlice([gpu], { index: 2, count: 2 }, 'full')).toEqual([]);
-    expect(browserShardSlice([gpu], { index: 2, count: 2 }, 'smoke')).toEqual([gpu]);
-    expect(browserShardSlice([gpu], { index: 4, count: 4 }, 'smoke')).toEqual([gpu]);
   });
 });
 

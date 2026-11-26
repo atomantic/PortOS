@@ -20,6 +20,7 @@ const BROWSER_SUITE_OWNERS = {
   'server/services/musicVideo/animaticCapture.browser.test.js': 1,
   'server/services/musicVideo/compositionRender.test.js': 1,
   'server/services/musicVideo/documentRender.browser.test.js': 2,
+  'server/services/musicVideo/documentRenderAudioTimeline.browser.test.js': 1,
   'server/services/musicVideo/documentRenderGeneration.browser.test.js': 2,
   'server/services/musicVideo/documentTemplateParity.browser.test.js': 1,
   'server/services/musicVideo/documentFilmLook.browser.test.js': 2,
@@ -40,14 +41,14 @@ const BROWSER_SUITE_OWNERS = {
 };
 export const BROWSER_SUITES = Object.keys(BROWSER_SUITE_OWNERS);
 
-// Keep document render, HTML composition, animatic capture, and GPU film look
-// on separate runners (#17748). On hosted run 45642241181, memo misses put
-// 107s of animatic capture, 48s of template parity, and 14s of production
-// review on one runner while document render hit the memo. Spread those misses
-// while keeping serial capture and parallel work in their existing projects.
+// Spread the two document-render capture suites, HTML composition, and
+// animatic capture across the four runners. Template parity ran for 40–53s
+// on hosted runs 45782641727 and 45781773182. Pair it with the audio/timeline suite, whose
+// smoke workload omits two fidelity cases, and away from HTML composition and
+// animatic capture so common render changes do not stack those long jobs.
 const FOUR_SHARD_OWNERS = {
   'server/lib/filmLook.browser.test.js': 2,
-  'server/lib/filmLookGpu.browser.test.js': 4,
+  'server/lib/filmLookGpu.browser.test.js': 3,
   'server/lib/musicVideo/musicVideoTitleCard.browser.test.js': 4,
   'server/routes/catalogGreyboxViewer.browser.test.js': 4,
   'server/routes/musicVideoProductionReview.browser.test.js': 4,
@@ -59,11 +60,12 @@ const FOUR_SHARD_OWNERS = {
   'server/services/browserVaultFill.browser.test.js': 1,
   'server/services/greyboxRender.browser.test.js': 1,
   'server/services/htmlComposition/index.test.js': 2,
-  'server/services/musicVideo/animaticCapture.browser.test.js': 3,
-  'server/services/musicVideo/compositionRender.test.js': 4,
+  'server/services/musicVideo/animaticCapture.browser.test.js': 4,
+  'server/services/musicVideo/compositionRender.test.js': 3,
   'server/services/musicVideo/documentRender.browser.test.js': 1,
-  'server/services/musicVideo/documentRenderGeneration.browser.test.js': 4,
-  'server/services/musicVideo/documentTemplateParity.browser.test.js': 1,
+  'server/services/musicVideo/documentRenderAudioTimeline.browser.test.js': 3,
+  'server/services/musicVideo/documentRenderGeneration.browser.test.js': 1,
+  'server/services/musicVideo/documentTemplateParity.browser.test.js': 3,
   'server/services/musicVideo/documentFilmLook.browser.test.js': 4,
   'server/services/musicVideo/documentVignette.browser.test.js': 2,
   'server/services/musicVideo/filmLookFinish.browser.test.js': 3,
@@ -73,8 +75,8 @@ const FOUR_SHARD_OWNERS = {
   'server/services/musicVideo/documentTemplates/shared/toonWorld.browser.test.js': 4,
   'server/services/musicVideo/lyricPlaythrough.browser.test.js': 3,
   'server/services/musicVideo/publish/linkedin.browser.test.js': 4,
-  'server/services/musicVideo/publish/x.browser.test.js': 2,
-  'server/services/musicVideo/publish/sunoHook.browser.test.js': 4,
+  'server/services/musicVideo/publish/x.browser.test.js': 3,
+  'server/services/musicVideo/publish/sunoHook.browser.test.js': 1,
   'server/routes/manualUpdateRecovery.browser.test.js': 1,
   'server/routes/autofixerUi.browser.test.js': 1,
   'server/services/musicVideo/overlayTextService.browser.test.js': 4,
