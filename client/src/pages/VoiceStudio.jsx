@@ -10,7 +10,7 @@ import { useSocketResource } from '../hooks/useSocketResource';
 import useAsyncAction from '../hooks/useAsyncAction';
 import useMounted from '../hooks/useMounted';
 import { listUniverseNames, getUniverse } from '../services/apiUniverseBuilder';
-import { listStudioVoices, getStudioVoice, getVoiceStudioStatus, setupVoiceStudio, unloadVoiceStudio,
+import { listStudioVoices, getStudioVoice, getVoiceStudioStatus, setupVoiceStudio, cancelVoiceStudioSetup, unloadVoiceStudio,
   designStudioVoice, assignStudioVoice } from '../services/apiVoice';
 import { formatCount } from '../utils/formatters';
 
@@ -122,6 +122,10 @@ export default function VoiceStudio() {
     const result = await setupVoiceStudio({ silent: true });
     engine.updateData(current => ({ ...current, ...result }));
   });
+  const [cancelSetup, cancelingSetup] = useAsyncAction(async () => {
+    const result = await cancelVoiceStudioSetup({ silent: true });
+    engine.updateData(result);
+  });
   const [unload, unloading] = useAsyncAction(async () => {
     await unloadVoiceStudio({ silent: true });
     engine.updateData(current => ({ ...current, loaded: false }));
@@ -187,10 +191,13 @@ export default function VoiceStudio() {
       <div className="flex-1 min-w-0 text-sm">
         <strong>AuK-Flash</strong> · {status.state === 'running' ? status.stage : status.busy ? 'Rendering voice…' : status.ready ? 'Ready on this Mac' : 'Setup required'}
         {!status.supported && <p className="text-gray-400">Generation requires an Apple Silicon Mac. Saved voices remain browsable.</p>}
+        {status.state === 'canceled' && <p role="status">{status.stage}</p>}
         {status.error && <p role="alert" className="text-port-error">{status.error}</p>}
         {!status.ready && status.supported && <p className="text-xs text-gray-400">Setup installs an isolated runtime and downloads/converts several GB of model weights. Allow at least 40 GB of free disk space. No speech is generated during setup.</p>}
       </div>
-      {status.supported && <button className={buttonClass} onClick={setup} disabled={settingUp || status.busy || status.state === 'running'}>{status.ready ? 'Repair setup' : 'Set up AuK locally'}</button>}
+      {status.state === 'running' ?
+        <button type="button" className={buttonClass} onClick={cancelSetup} disabled={settingUp || cancelingSetup}>{cancelingSetup ? 'Canceling setup…' : 'Cancel setup'}</button> :
+        status.supported && <button type="button" className={buttonClass} onClick={setup} disabled={settingUp || cancelingSetup || status.busy}>{status.ready ? 'Repair setup' : 'Set up AuK locally'}</button>}
       {status.loaded && <button className="text-sm text-port-accent" onClick={unload} disabled={unloading || status.busy}>Unload model</button>}
     </section>}
     <section aria-label="Character assignment target" className="rounded border border-port-border p-3 space-y-2">

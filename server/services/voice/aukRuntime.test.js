@@ -1,18 +1,31 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { EventEmitter, once } from 'node:events';
 import { PassThrough } from 'node:stream';
-import { promisify } from 'node:util';
 import { pinPlatform, pinArch } from '../../lib/testHelper.js';
-const setupMocks = vi.hoisted(() => ({ exec: vi.fn(), installLocked: vi.fn(), resolveUv: vi.fn() }));
+const setupMocks = vi.hoisted(() => ({ spawn: vi.fn(), installLocked: vi.fn(), resolveUv: vi.fn() }));
 const children = [];
 const requests = new EventEmitter();
 const renders = [];
 let controller;
 const access = vi.fn();
 let failWrite = false;
-vi.mock('node:fs/promises', () => ({ access: (...args) => access(...args), mkdir: vi.fn(),
-  readFile: vi.fn().mockResolvedValue(Buffer.from('test wav')), rm: vi.fn().mockResolvedValue() }));
-vi.mock('../../lib/childProcess.js', () => ({ execFile: Object.assign(vi.fn(), { [promisify.custom]: setupMocks.exec }), spawn: vi.fn(() => {
+let setupIncomplete = false;
+vi.mock('node:fs/promises', () => ({
+  access: path => {
+    if (path.endsWith('/.setup-incomplete')) return setupIncomplete ? Promise.resolve() : Promise.reject(new Error('missing'));
+    return access(path);
+  },
+  mkdir: vi.fn(),
+  mkdtemp: vi.fn(async prefix => `${prefix}example`),
+  rename: vi.fn(),
+  readFile: vi.fn().mockResolvedValue(Buffer.from('test wav')),
+  writeFile: vi.fn(async () => { setupIncomplete = true; }),
+  rm: vi.fn(async path => { if (path.endsWith('/.setup-incomplete')) setupIncomplete = false; }),
+}));
+vi.mock('../../lib/childProcess.js', async importActual => ({
+  ...await importActual(),
+  spawn: vi.fn((command, args, options) => {
+  if (options.detached) return setupMocks.spawn(command, args, options);
   const child = new EventEmitter();
   child.stdin = new PassThrough(); child.stdout = new PassThrough(); child.stderr = new PassThrough();
   child.kill = vi.fn(() => { child.emit('close', null); return true; });
@@ -31,13 +44,15 @@ vi.mock('../../lib/processEnv.js', () => ({ safeChildProcessOptions: value => va
 vi.mock('../../lib/pythonSetup.js', () => ({ installLockedRuntime: setupMocks.installLocked, resolvePatchedUv: setupMocks.resolveUv }));
 vi.mock('../../lib/spawnCwd.js', () => ({ withSpawnCwdEnv: (env, cwd) => ({ ...env, PWD: cwd }) }));
 vi.mock('../../lib/paths.js', () => ({ PATHS: { root: '/example' } }));
-const { AUK_WEIGHT_SOURCES, synthesizeAuk, getAukStatus, startAukSetup, unloadAuk } = await import('./aukRuntime.js');
+const { listActiveRenders } = await import('../renderActivity.js');
+const { AUK_WEIGHT_SOURCES, synthesizeAuk, getAukStatus, startAukSetup, cancelAukSetup, unloadAuk } = await import('./aukRuntime.js');
 let restorePlatform;
 let restoreArch;
 beforeEach(() => {
   restorePlatform = pinPlatform('darwin');
   restoreArch = pinArch('arm64');
   access.mockReset().mockResolvedValue(); children.length = 0; failWrite = false;
+  setupIncomplete = false;
   controller = new AbortController();
   renders.length = 0;
 });
@@ -46,8 +61,10 @@ afterEach(async () => {
     // A failed assertion can leave a render in readiness checks or inference.
     controller.abort();
     await Promise.allSettled(renders);
+    await cancelAukSetup();
     unloadAuk();
   } finally {
+    vi.restoreAllMocks();
     requests.removeAllListeners();
     restorePlatform();
     restoreArch();
@@ -134,13 +151,15 @@ describe('AuK resident inference lifecycle', () => {
 
 describe('AuK explicit setup', () => {
   let venvCreated;
-  const commands = () => setupMocks.exec.mock.calls.map(([command, args]) => [command, ...args].join(' '));
+  const commands = () => setupMocks.spawn.mock.calls.map(([command, args]) => [command, ...args].join(' '));
   const settled = () => vi.waitFor(async () => expect((await getAukStatus()).state).not.toBe('running'));
   beforeEach(() => {
     venvCreated = false;
-    setupMocks.exec.mockReset().mockImplementation(async (_command, args) => {
+    setupMocks.spawn.mockReset().mockImplementation((_command, args) => {
+      const child = new EventEmitter();
       if (args[0] === 'venv') venvCreated = true;
-      return { stdout: '', stderr: '' };
+      queueMicrotask(() => child.emit('close', 0));
+      return child;
     });
     setupMocks.resolveUv.mockReset().mockResolvedValue({ ok: true, uv: '/private/tools/uv' });
     setupMocks.installLocked.mockReset().mockReturnValue({ promise: Promise.resolve({ ok: true, code: 0 }), kill: vi.fn() });
@@ -158,7 +177,7 @@ describe('AuK explicit setup', () => {
     const [python, profile, , options] = setupMocks.installLocked.mock.calls[0];
     expect(python).toMatch(/\.venv\/bin\/python$/);
     expect(profile).toBe('auk-mlx');
-    expect(options.preferUv).toBe(true);
+    expect(options).toMatchObject({ verifiedUv: '/private/tools/uv', processGroup: true });
     expect(options.sourceInstalls).toEqual([['install', '--no-deps', '--no-build-isolation', '-e', expect.stringMatching(/\.portos\/auk$/)]]);
     // No command installs packages outside the lock: only git, the venv, weight download and conversion run.
     expect(commands().some(command => /\bpip\b|\binstall\b/.test(command))).toBe(false);
@@ -176,6 +195,91 @@ describe('AuK explicit setup', () => {
     expect(await getAukStatus()).toMatchObject({ state: 'failed', stage: 'Installing MLX dependencies', error: expect.stringContaining('AuK setup failed') });
     expect(commands().some(command => command.includes('snapshot_download'))).toBe(false);
   });
+  it('kills the active process and waits for close before releasing setup and its activity slot', async () => {
+    const child = new EventEmitter();
+    child.kill = vi.fn();
+    setupMocks.spawn.mockReturnValueOnce(child);
+    startAukSetup();
+    await vi.waitFor(() => expect(setupMocks.spawn).toHaveBeenCalledTimes(1));
+    expect(listActiveRenders()).toEqual([expect.objectContaining({
+      kind: 'voice-auk-setup', noun: 'AuK voice setup', to: '/voices',
+    })]);
+
+    const cancellation = cancelAukSetup();
+    expect(child.kill).toHaveBeenCalledWith('SIGTERM');
+    expect(listActiveRenders()).toHaveLength(1);
+    expect(() => startAukSetup()).toThrow('AuK is busy');
+    await expect(render('Hello.')).rejects.toMatchObject({ status: 409 });
+    child.emit('close', null, 'SIGTERM');
+    expect(await cancellation).toMatchObject({ state: 'canceled', ready: false, error: null });
+    expect(listActiveRenders()).toEqual([]);
+    expect(setupMocks.spawn).toHaveBeenCalledTimes(1);
+    expect(setupMocks.installLocked).not.toHaveBeenCalled();
+
+    startAukSetup();
+    await settled();
+    expect(await getAukStatus()).toMatchObject({ state: 'complete', ready: true });
+  });
+
+  it('stops the locked installer and requires repair before rendering from a partially rebuilt runtime', async () => {
+    let finish;
+    const kill = vi.fn(() => finish({ ok: false, code: -1 }));
+    setupMocks.installLocked.mockReturnValueOnce({ promise: new Promise(resolve => { finish = resolve; }), kill });
+    venvCreated = true;
+    startAukSetup();
+    await vi.waitFor(() => expect(setupMocks.installLocked).toHaveBeenCalledOnce());
+    expect(await cancelAukSetup()).toMatchObject({ state: 'canceled', ready: false, error: null });
+    expect(kill).toHaveBeenCalledOnce();
+    expect(commands().some(command => command.includes('snapshot_download'))).toBe(false);
+    expect(listActiveRenders()).toEqual([]);
+    await expect(render('Hello.')).rejects.toMatchObject({ status: 503 });
+  });
+
+  it('releases a healthy runtime when AuK stops waiting for the shared uv bootstrap', async () => {
+    let finish;
+    setupMocks.resolveUv.mockReturnValueOnce(new Promise(resolve => { finish = resolve; }));
+    venvCreated = true;
+    startAukSetup();
+    await vi.waitFor(() => expect(setupMocks.resolveUv).toHaveBeenCalledOnce());
+    expect(await cancelAukSetup()).toMatchObject({ state: 'canceled', ready: true });
+    finish({ ok: true, uv: '/private/tools/uv' });
+    const written = nextRequest();
+    const playback = render('Hello.');
+    response(await written);
+    await expect(playback).resolves.toMatchObject({ engine: 'auk' });
+    expect(setupMocks.spawn).not.toHaveBeenCalled();
+  });
+
+  it('logs the failing stage and safe diagnostic code without subprocess output or private exception text', async () => {
+    const log = vi.spyOn(console, 'error').mockImplementation(() => {});
+    const child = new EventEmitter();
+    setupMocks.spawn.mockReturnValueOnce(child);
+    startAukSetup();
+    await vi.waitFor(() => expect(setupMocks.spawn).toHaveBeenCalledOnce());
+    child.emit('error', Object.assign(new Error('private URL\nprivate directory'), { code: 'ENOENT' }));
+    child.emit('close', -1);
+    await settled();
+    expect(log.mock.calls).toEqual([['❌ AuK setup failed during Downloading AuK source: ENOENT.']]);
+    expect(await getAukStatus()).toMatchObject({
+      state: 'failed', error: 'AuK setup failed. Check network access, free disk space, and retry.',
+    });
+    expect(listActiveRenders()).toEqual([]);
+  });
+
+  it.each([
+    ['throws', () => { throw new Error('private notifier details'); }],
+    ['rejects', async () => { throw new Error('private notifier details'); }],
+  ])('settles and releases activity when the status callback %s', async (_name, notify) => {
+    const log = vi.spyOn(console, 'error').mockImplementation(() => {});
+    const callback = vi.fn(notify);
+    expect(startAukSetup(callback)).toMatchObject({ state: 'running' });
+    await settled();
+    expect(await getAukStatus()).toMatchObject({ state: 'complete', ready: true });
+    expect(callback).toHaveBeenCalledTimes(commands().length + 4);
+    expect(log.mock.calls).toEqual([['❌ AuK setup status notification failed.']]);
+    expect(listActiveRenders()).toEqual([]);
+  });
+
   it('passes an immutable 40-char hex revision to snapshot_download and records that same revision without querying model_info', async () => {
     expect(AUK_WEIGHT_SOURCES.length).toBeGreaterThan(0);
     for (const source of AUK_WEIGHT_SOURCES) {
@@ -183,7 +287,7 @@ describe('AuK explicit setup', () => {
     }
     startAukSetup();
     await settled();
-    const downloads = setupMocks.exec.mock.calls.filter(([, args]) => args[0] === '-c' && args[1]?.includes('snapshot_download'));
+    const downloads = setupMocks.spawn.mock.calls.filter(([, args]) => args[0] === '-c' && args[1]?.includes('snapshot_download'));
     expect(downloads).toHaveLength(AUK_WEIGHT_SOURCES.length);
     for (const source of AUK_WEIGHT_SOURCES) {
       const call = downloads.find(([, args]) => args[2] === source.repo);
@@ -203,7 +307,7 @@ describe('AuK explicit setup', () => {
     startAukSetup();
     await settled();
     expect(await getAukStatus()).toMatchObject({ state: 'failed', error: expect.stringContaining('Could not bootstrap uv') });
-    expect(setupMocks.exec).not.toHaveBeenCalled();
+    expect(setupMocks.spawn).not.toHaveBeenCalled();
     expect(setupMocks.installLocked).not.toHaveBeenCalled();
   });
 });

@@ -18,6 +18,8 @@ import { LOCK_PROFILES, lockEntryText, lockProfileUnsupportedReason, planLockedR
 import { ensurePrivateUv } from './privateUv.js';
 import { safeChildProcessOptions, whichFirst, whichFirstSync } from './processEnv.js';
 import { createLineReader } from './streamLines.js';
+import { killProcessTree } from './bufferedSpawn.js';
+import { trackDetachedGroup } from './credentialBootstrap.js';
 
 const execFileAsync = promisify(execFile);
 const IS_WIN = platform() === 'win32';
@@ -835,9 +837,12 @@ export async function checkPackages(pythonPath) {
 // Spawn a child, stream its stdout+stderr line-by-line via `onLog`, resolve
 // with the exit code (or -1 on spawn error). `onProc` is invoked with the
 // live child handle so the caller's outer closure can track it for SIGTERM.
-function streamSpawn(bin, args, onLog, onProc, env) {
+function streamSpawn(bin, args, onLog, onProc, env, processGroup) {
   return new Promise((resolve) => {
-    const proc = spawn(bin, args, safeChildProcessOptions({ stdio: ['ignore', 'pipe', 'pipe'], ...(env && { env }) }));
+    const proc = spawn(bin, args, safeChildProcessOptions({
+      stdio: ['ignore', 'pipe', 'pipe'], ...(env && { env }), ...(processGroup && { detached: true }),
+    }));
+    trackDetachedGroup(proc, processGroup);
     onProc(proc);
     // `splitRe: /[\r\n]+/` so a torch/tqdm progress bar that redraws with a
     // bare `\r` surfaces each redraw as its own log line; the carry buffer
@@ -883,22 +888,22 @@ async function resolveUvOrPip(onLog) {
 // returns the final `{ ok, code }`. Returns `{ promise, kill }` so the route can
 // SIGTERM the pip child if the SSE client disconnects mid-install — a 10-minute
 // torch install would otherwise keep running invisibly.
-function launchInstall(pythonPath, onLog, { preferUv, env }, work) {
+function launchInstall(pythonPath, onLog, { preferUv, verifiedUv, env, processGroup }, work) {
   let currentProc = null;
   let killed = false;
   const trackProc = (p) => { currentProc = p; };
   const promise = (async () => {
-    const uv = preferUv ? await resolveUvOrPip(onLog) : null;
+    const uv = verifiedUv ?? (preferUv ? await resolveUvOrPip(onLog) : null);
     // kill() cannot stop a bootstrap shared with other callers, but a cancelled
     // install must not start its package subprocess once the bootstrap settles.
     if (killed) return { ok: false, code: -1 };
     const runPip = (args) => {
       if (killed) return Promise.resolve(-1);
-      if (!uv) return streamSpawn(pythonPath, ['-m', 'pip', ...args], onLog, trackProc, env);
+      if (!uv) return streamSpawn(pythonPath, ['-m', 'pip', ...args], onLog, trackProc, env, processGroup);
       // uv does not accept pip's progress-bar/yes options. Keep the same
       // exact target interpreter and package specifications in both paths.
       const uvArgs = args.filter((arg, index) => arg !== '--yes' && arg !== '--progress-bar' && args[index - 1] !== '--progress-bar');
-      return streamSpawn(uv, ['pip', uvArgs[0], '--python', pythonPath, ...uvArgs.slice(1)], onLog, trackProc, env);
+      return streamSpawn(uv, ['pip', uvArgs[0], '--python', pythonPath, ...uvArgs.slice(1)], onLog, trackProc, env, processGroup);
     };
     return work({ runPip, tool: uv ? 'uv pip' : 'pip', usingUv: !!uv, isKilled: () => killed });
   })();
@@ -906,7 +911,9 @@ function launchInstall(pythonPath, onLog, { preferUv, env }, work) {
     promise,
     kill: () => {
       killed = true;
-      if (currentProc && !currentProc.killed) currentProc.kill('SIGTERM');
+      if (!currentProc || currentProc.killed) return;
+      if (processGroup) killProcessTree(currentProc, 'SIGKILL', { processGroup });
+      else currentProc.kill('SIGTERM');
     },
   };
 }
@@ -950,13 +957,15 @@ async function runLockInstall({ runPip, tool, isKilled }, profile, onLog, { user
 
 // Install a profile's complete hash-pinned closure into a dedicated venv (the
 // Prompt Guard / jev / AuK / Laya runtimes). No resolution happens at install
-// time. `env` replaces the installer's inherited environment.
-export function installLockedRuntime(pythonPath, profileId, onLog, { preferUv = false, sourceInstalls, env, platform: hostPlatform = platform(), arch: hostArch = arch() } = {}) {
+// time. `env` replaces the installer's inherited environment. `verifiedUv`
+// reuses a tool already obtained from resolvePatchedUv. `processGroup` lets
+// callers force-stop an owned POSIX install with all its build subprocesses.
+export function installLockedRuntime(pythonPath, profileId, onLog, { preferUv = false, verifiedUv, sourceInstalls, env, processGroup, platform: hostPlatform = platform(), arch: hostArch = arch() } = {}) {
   const profile = LOCK_PROFILES[profileId];
   if (!profile) return refuseInstall(onLog, `Unknown Python lock profile "${profileId}".`, { unsupported: true });
   const reason = lockProfileUnsupportedReason(profile, { platform: hostPlatform, arch: hostArch });
   if (reason) return refuseInstall(onLog, `${reason} PortOS does not resolve unlocked packages at install time.`, { unsupported: true });
-  return launchInstall(pythonPath, onLog, { preferUv, env }, (ctx) => runLockInstall(ctx, profile, onLog, { user: false, sourceInstalls }));
+  return launchInstall(pythonPath, onLog, { preferUv, verifiedUv, env, processGroup }, (ctx) => runLockInstall(ctx, profile, onLog, { user: false, sourceInstalls }));
 }
 
 // Generic setup-page repair. On Apple Silicon it dispatches to the smallest

@@ -1,11 +1,13 @@
 /** AuK-Flash MLX: explicit installation, lazy resident inference, bounded lifetime. */
-import { access, mkdir, readFile, rm } from 'node:fs/promises';
+import { access, mkdir, mkdtemp, readFile, rename, rm, writeFile } from 'node:fs/promises';
 import { homedir, tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { randomUUID } from 'node:crypto';
-import { promisify } from 'node:util';
 import { createInterface } from 'node:readline';
-import { execFile, spawn } from '../../lib/childProcess.js';
+import { spawn } from '../../lib/childProcess.js';
+import { awaitWithAbort } from '../../lib/abortTimeout.js';
+import { terminateWithEscalation } from '../../lib/bufferedSpawn.js';
+import { trackDetachedGroup } from '../../lib/credentialBootstrap.js';
 import { safeChildProcessOptions } from '../../lib/processEnv.js';
 import { installLockedRuntime, resolvePatchedUv } from '../../lib/pythonSetup.js';
 import { ServerError } from '../../lib/errorHandler.js';
@@ -14,7 +16,7 @@ import { PATHS } from '../../lib/paths.js';
 import { chunkRawText } from '../../lib/catalog/catalogChunking.js';
 import { isAppleSilicon } from '../../lib/platform.js';
 
-const run = promisify(execFile);
+import { trackedRenderMap } from '../renderActivity.js';
 const AUK_REVISION = '6943a1e967409e8c73139a7a345f2a611cfb3dd6';
 // The runtime reads both of these at start (`config.yaml`, the Qwen preprocessor).
 // Neither is prunable. The converted MLX files are a separate directory.
@@ -27,6 +29,8 @@ const AUK_PYTHON = '3.11';
 const INSTALL_TIMEOUT_MS = 30 * 60_000;
 const root = join(homedir(), '.portos', 'auk');
 const python = join(root, '.venv', 'bin', 'python');
+const incompleteSetup = join(root, '.setup-incomplete');
+const setupJobs = trackedRenderMap('voice-auk-setup', { noun: 'AuK voice setup', link: () => '/voices' });
 const supported = () => isAppleSilicon();
 let setup = { state: 'idle', stage: null, error: null };
 let worker = null;
@@ -38,46 +42,123 @@ const required = ['.venv/bin/python', 'ckpts/AuK-Flash/config.yaml', 'ckpts/mlx/
   'ckpts/mlx/thinker/thinker.safetensors', 'ckpts/mlx/thinker/thinker_config.json',
   'ckpts/Qwen2.5-Omni-3B/preprocessor_config.json'];
 
+const haveArtifacts = async () => (await Promise.all(required.map(file => present(join(root, file))))).every(Boolean);
+
 export async function getAukStatus() {
-  const ready = supported() && (await Promise.all(required.map(file => present(join(root, file))))).every(Boolean);
+  const ready = supported() && await haveArtifacts() && !(await present(incompleteSetup));
   return { supported: supported(), ready, loaded: Boolean(worker), busy: Boolean(pending), ...setup };
+}
+
+function runSetupCommand(command, args, cwd, signal) {
+  return new Promise((resolve, reject) => {
+    const child = spawn(command, args, safeChildProcessOptions({
+      cwd, env: withSpawnCwdEnv(process.env, cwd), stdio: 'ignore', detached: true,
+    }));
+    trackDetachedGroup(child, true);
+    let failure;
+    let cancelEscalation;
+    child.on('error', error => { failure = error; });
+    child.once('close', (code, exitSignal) => {
+      clearTimeout(timer);
+      cancelEscalation?.();
+      signal.removeEventListener('abort', stop);
+      if (failure) reject(failure);
+      else if (code === 0) resolve();
+      else reject(Object.assign(new Error('AuK setup command failed'), { code, signal: exitSignal }));
+    });
+    // Give Git time to remove its lock files on SIGTERM, then force-stop the
+    // process group if it is still running.
+    const stop = () => {
+      cancelEscalation ??= terminateWithEscalation(child, { graceMs: 1000, label: 'AuK setup command', processGroup: true });
+    };
+    const timer = setTimeout(stop, INSTALL_TIMEOUT_MS);
+    signal.addEventListener('abort', stop, { once: true });
+  });
+}
+
+// Log the stage and bounded diagnostic codes. Child output, command arguments
+// and exception messages may contain private paths or authenticated URLs.
+function setupFailureDetail(error) {
+  if (Number.isInteger(error?.code)) return `exit code ${error.code}`;
+  if (['SIGKILL', 'SIGTERM', 'SIGINT'].includes(error?.signal)) return error.signal;
+  if (['ENOENT', 'EACCES', 'EPERM', 'ENOSPC', 'EIO', 'EROFS', 'EEXIST', 'ENOTEMPTY'].includes(error?.code)) return error.code;
+  return error instanceof ServerError ? `status ${error.status}` : 'unexpected error';
 }
 
 export function startAukSetup(notify = () => {}) {
   if (!supported()) throw new ServerError('AuK local setup requires Apple Silicon macOS.', { status: 409 });
   if (setup.state === 'running' || pending) throw new ServerError('AuK is busy.', { status: 409 });
   if (worker) unloadAuk();
+  const controller = new AbortController();
+  const { signal } = controller;
+  let notifyFailed = false;
+  const logNotifyFailure = () => {
+    if (notifyFailed) return;
+    notifyFailed = true;
+    console.error('❌ AuK setup status notification failed.');
+  };
+  const publish = () => {
+    try { Promise.resolve(notify()).catch(logNotifyFailure); }
+    catch { logNotifyFailure(); }
+  };
   setup = { state: 'running', stage: 'Preparing isolated runtime', error: null };
-  notify();
-  const stage = async (label, command, args, cwd = root) => {
+  const reportStage = label => {
+    signal.throwIfAborted();
     setup = { ...setup, stage: label };
-    notify();
-    await run(command, args, safeChildProcessOptions({ cwd, env: withSpawnCwdEnv(process.env, cwd), timeout: 30 * 60_000, killSignal: 'SIGKILL', maxBuffer: 2 * 1024 * 1024 }));
+    publish();
+    signal.throwIfAborted();
+  };
+  const stage = (label, command, args, cwd = root) => {
+    reportStage(label);
+    return runSetupCommand(command, args, cwd, signal);
   };
   const install = async () => {
-    // PortOS-private patched uv, never the ambient one whose version is unknown.
-    const resolved = await resolvePatchedUv(() => {});
+    signal.throwIfAborted();
+    // The private uv bootstrap is shared by several installers. Stop this
+    // caller's wait on cancel; the bootstrap may still serve another caller.
+    const resolved = await awaitWithAbort(resolvePatchedUv(() => {}), signal);
     if (!resolved.ok) throw new ServerError(`${resolved.reason} Then retry AuK setup.`, { status: 503 });
     const uv = resolved.uv;
     await mkdir(root, { recursive: true });
     if (!(await present(join(root, '.git')))) {
-      await stage('Downloading AuK source', 'git', ['clone', '--depth', '1', '--branch', 'feat/mlx-apple-silicon',
-        'https://github.com/Tencent-Hunyuan/AuK.git', root], homedir());
+      // An interrupted clone must leave the runtime retryable and preserve
+      // any weights already present in the runtime root.
+      signal.throwIfAborted();
+      const checkout = await mkdtemp(join(root, '.setup-'));
+      try {
+        await stage('Downloading AuK source', 'git', ['clone', '--no-checkout', '--depth', '1', '--branch', 'feat/mlx-apple-silicon',
+          'https://github.com/Tencent-Hunyuan/AuK.git', checkout], homedir());
+        signal.throwIfAborted();
+        await rename(join(checkout, '.git'), join(root, '.git'));
+      } finally {
+        await rm(checkout, { recursive: true, force: true });
+      }
     }
     await stage('Pinning compatible AuK backend', 'git', ['fetch', '--depth', '1', 'origin', AUK_REVISION]);
+    signal.throwIfAborted();
+    // A repair can leave the old weights in place while replacing code and
+    // dependencies. File presence alone cannot prove that runtime is usable.
+    await writeFile(incompleteSetup, '');
     await stage('Checking out compatible backend', 'git', ['checkout', '--detach', AUK_REVISION]);
     // Always rebuilt: the lock is the whole environment, so a reused venv could keep
     // stale or unverified packages (including one older than the lock's CPython floor).
     await stage('Creating Python environment', uv, ['venv', '--clear', '--python', AUK_PYTHON, join(root, '.venv')]);
-    setup = { ...setup, stage: 'Installing MLX dependencies' };
-    notify();
+    reportStage('Installing MLX dependencies');
     // Hash-pinned closure first, then the pinned checkout itself editable with no
     // resolution and its (locked) build backend: nothing unpinned is fetched.
-    const locked = installLockedRuntime(python, 'auk-mlx', () => {}, { preferUv: true, env: withSpawnCwdEnv(process.env, root),
-      sourceInstalls: [['install', '--no-deps', '--no-build-isolation', '-e', root]] });
+    const locked = installLockedRuntime(python, 'auk-mlx', () => {}, {
+      verifiedUv: uv, processGroup: true, env: withSpawnCwdEnv(process.env, root),
+      sourceInstalls: [['install', '--no-deps', '--no-build-isolation', '-e', root]],
+    });
+    signal.addEventListener('abort', locked.kill, { once: true });
     const timer = setTimeout(locked.kill, INSTALL_TIMEOUT_MS);
-    const installed = await locked.promise.finally(() => clearTimeout(timer));
-    if (!installed.ok) throw new Error('Dependency installation failed');
+    try {
+      const installed = await locked.promise;
+      if (!installed.ok) throw Object.assign(new Error('Dependency installation failed'), { code: installed.code });
+    } finally {
+      clearTimeout(timer);
+      signal.removeEventListener('abort', locked.kill);
+    }
     for (const { repo, directory, revision } of AUK_WEIGHT_SOURCES) {
       await stage(`Downloading ${directory} weights`, python, ['-c',
         'from huggingface_hub import snapshot_download; import json, sys; from pathlib import Path; '
@@ -91,17 +172,41 @@ export function startAukSetup(notify = () => {}) {
       ['dit', 'ckpts/AuK-Flash/auk_flash.safetensors', 'ckpts/mlx/dit_flash.safetensors'],
       ['thinker', 'ckpts/Qwen2.5-Omni-3B', 'ckpts/mlx/thinker'],
     ]) await stage(`Converting ${args[0]} for Apple Silicon`, python, ['-m', 'auk_mlx.convert', ...args]);
-    if (!(await getAukStatus()).ready) throw new Error('Required model artifacts are missing');
+    reportStage('Verifying installed runtime');
+    if (!await haveArtifacts()) throw new Error('Required model artifacts are missing');
+    signal.throwIfAborted();
+    await rm(incompleteSetup, { force: true });
   };
-  install().then(() => {
-    setup = { state: 'complete', stage: 'Ready', error: null };
-    notify();
+  const job = { controller, done: null };
+  setupJobs.set('auk', job);
+  const canceled = { state: 'canceled', stage: 'Setup canceled', error: null };
+  const finish = status => {
+    setup = status;
+    setupJobs.delete('auk');
+    publish();
+  };
+  job.done = Promise.resolve().then(install).then(() => {
+    finish(signal.aborted ? canceled : { state: 'complete', stage: 'Ready', error: null });
   }, error => {
-    setup = { state: 'failed', stage: setup.stage, error: error instanceof ServerError
-      ? error.message : 'AuK setup failed. Check network access, free disk space, and retry.' };
-    notify();
-  });
+    if (signal.aborted) {
+      finish(canceled);
+      return;
+    }
+    console.error(`❌ AuK setup failed during ${setup.stage}: ${setupFailureDetail(error)}.`);
+    finish({ state: 'failed', stage: setup.stage, error: error instanceof ServerError
+      ? error.message : 'AuK setup failed. Check network access, free disk space, and retry.' });
+  }).catch(() => console.error('❌ AuK setup completion failed.'));
+  publish();
   return { ...setup };
+}
+
+export async function cancelAukSetup() {
+  const job = setupJobs.get('auk');
+  if (job) {
+    job.controller.abort();
+    await job.done;
+  }
+  return getAukStatus();
 }
 
 export function unloadAuk() {
