@@ -178,6 +178,8 @@ export default function FamilyCard({
             type="button"
             className="inline-flex items-center gap-1 rounded border border-port-border px-2.5 py-1 text-xs text-gray-300 hover:text-white pointer-coarse:min-h-11"
             onClick={() => onToggleExpand(familyId)}
+            aria-expanded={expanded}
+            aria-controls={`quota-burn-family-${familyId}`}
           >
             {expanded ? <ChevronDown size={14} /> : <ChevronRight size={14} />}
             {expanded ? 'Hide' : 'Configure'}
@@ -185,8 +187,9 @@ export default function FamilyCard({
         </div>
       </div>
 
-      {expanded && (
-        <div className="border-t border-port-border/60 p-3 space-y-4">
+      <div id={`quota-burn-family-${familyId}`} hidden={!expanded}>
+        {expanded && (
+          <div className="border-t border-port-border/60 p-3 space-y-4">
           {/* Every choice this section offers — which scheduled task, which app,
               which provider/model — comes from the catalog reads, so a failure
               empties them all. Say so where the empty controls are, and offer
@@ -239,11 +242,11 @@ export default function FamilyCard({
               {sortByLabel(sequenceApps, (app) => app.name || app.id).map(app => <option key={app.id} value={app.id}>{app.name || app.id}</option>)}
             </select>
             {sequenceAppId && !sequenceJobs && <p>Enable the listed tasks for this app in <Link to="/cos/schedule" className="text-port-accent underline">Scheduled Tasks</Link>, including perpetual mode on claim-issue.</p>}
-            <button type="button" disabled={actionsBusy || !sequenceJobs || jobs.length > 0} className="text-port-accent disabled:opacity-40"
+            <button type="button" disabled={actionsBusy || !sequenceJobs || jobs.length > 0} className="inline-flex items-center rounded border border-port-accent/50 px-2.5 py-1 text-sm text-port-accent hover:bg-port-accent/10 disabled:opacity-40 pointer-coarse:min-h-11"
               onClick={() => onPatch({ sequence: true, jobs: sequenceJobs.map(quotaBurnStepPayload) })}>
               Populate maintenance sequence
             </button>
-            <button type="button" disabled={actionsBusy || !sequenceJobs || jobs.length > 0} className="ml-3 text-port-accent disabled:opacity-40"
+            <button type="button" disabled={actionsBusy || !sequenceJobs || jobs.length > 0} className="ml-3 inline-flex items-center rounded border border-port-accent/50 px-2.5 py-1 text-sm text-port-accent hover:bg-port-accent/10 disabled:opacity-40 pointer-coarse:min-h-11"
               onClick={() => onStartSequence(familyId, sequenceJobs.map(quotaBurnStepPayload))}>
               Populate and start sequence
             </button>
@@ -251,7 +254,7 @@ export default function FamilyCard({
             {jobs.length > 0 && <p>Clear the existing plan to populate a new sequence.</p>}
             {config.sequence && <p>Strict sequence: waits for each step; claim steps repeat until eligible work is drained. Enable Quota Burn and this family, then use Burn now to start.</p>}
           </div>
-          <div className="space-y-3">
+          <div id={`quota-burn-jobs-${familyId}`} className="space-y-3">
             <div className="flex flex-wrap items-center justify-between gap-2">
               <h3 className="text-xs uppercase tracking-wide text-gray-400">Burn plan — runs in order</h3>
               <div className="flex items-center gap-3">
@@ -260,6 +263,8 @@ export default function FamilyCard({
                     type="button"
                     className="inline-flex items-center gap-1 text-xs text-gray-300 hover:text-white"
                     onClick={toggleAllJobs}
+                    aria-expanded={allExpanded}
+                    aria-controls={`quota-burn-jobs-${familyId}`}
                   >
                     {allExpanded ? <ChevronDown size={13} /> : <ChevronRight size={13} />}
                     {allExpanded ? 'Collapse all' : 'Expand all'}
@@ -330,8 +335,9 @@ export default function FamilyCard({
               />
             ))}
           </div>
-        </div>
-      )}
+          </div>
+        )}
+      </div>
     </div>
   );
 }

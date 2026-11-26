@@ -60,9 +60,9 @@ it('announces the briefing heading hierarchy and section disclosure state', asyn
   });
   renderTab();
 
-  expect(await screen.findByRole('heading', { name: 'Today', level: 4 })).toBeInTheDocument();
-  expect(screen.getByRole('heading', { name: 'Daily Briefing', level: 3 })).toBeInTheDocument();
-  expect(screen.getByRole('heading', { name: 'Priority', level: 5 })).toBeInTheDocument();
+  expect(await screen.findByRole('heading', { name: 'Today', level: 3 })).toBeInTheDocument();
+  expect(screen.getByRole('heading', { name: 'Daily Briefing', level: 2 })).toBeInTheDocument();
+  expect(screen.getByRole('heading', { name: 'Priority', level: 4 })).toBeInTheDocument();
   await user.click(screen.getByRole('button', { name: 'Focus', expanded: true }));
   expect(screen.getByRole('button', { name: 'Focus', expanded: false })).toBeInTheDocument();
   expect(screen.queryByRole('heading', { name: 'Priority' })).not.toBeInTheDocument();

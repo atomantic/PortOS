@@ -105,7 +105,7 @@ export function UniverseSelector({ universes, selectedId, value, onChange, onPic
   );
 }
 
-export default function UniverseBuilder() {
+export default function UniverseBuilder({ pageHeader = null }) {
   // The selected world id lives in the URL so deep-linking + back/forward
   // work. The editor is mounted at /universes/:universeId and /universes/new —
   // strip any trailing /<id> off the current pathname to derive the base for
@@ -502,6 +502,7 @@ export default function UniverseBuilder() {
   if (!draftReady) {
     return (
       <section className="p-4 space-y-3">
+        {pageHeader}
         <Link to="/universes" className="text-port-accent">All Universes</Link>
         {draftReadError ? (
           <div role="alert">
@@ -515,6 +516,7 @@ export default function UniverseBuilder() {
 
   return (
     <div className="flex flex-col h-full" aria-busy={restoringStarter}>
+      {pageHeader}
       {restoringStarter && <p role="status">Restoring latest Reality starter…</p>}
       <section inert={restoringStarter || undefined} className="flex-1 flex flex-col gap-3 p-4 min-h-0 overflow-y-auto">
         {/* Back to the universe index (list/table at /universes). */}

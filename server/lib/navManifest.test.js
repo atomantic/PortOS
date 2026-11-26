@@ -654,15 +654,8 @@ const SOCKET_JS = path.join(REPO_ROOT, 'client/src/services/socket.js');
 // not from ⌘K / voice / the sidebar.
 const NAV_COVERAGE_OPT_OUT = new Map([
   ['/*', 'catch-all 404 page — reached only by an unmatched URL, never a destination'],
-  ['/ai/presets/new', 'create-preset drawer, reached via the "Add preset" button on /ai/presets'],
-  ['/ai/services/new', 'add-service drawer, reached via the "Add service" button on /ai/services'],
-  ['/apps/create', 'create-app form, reached via the "New App" button on /apps'],
-  ['/creative-commission/new', 'create-commission drawer, reached via the "New Commission" button on /creative-commission'],
-  ['/feature-agents/create', 'create-agent form, reached via the "New Agent" button'],
   ['/fableloom/join', 'scoped QR mobile join view, reached via scanned QR code with fragment credentials'],
   ['/login', 'auth gate — surfaced only when settings.secrets.auth is enabled, reached via 401 redirect'],
-  ['/songbook/import', 'import-song form, reached via the "Import" button on /songbook'],
-  ['/universes/new', 'create-mode sentinel for the Universe Builder editor'],
 ]);
 
 // Element wrappers that forward to another route rather than render a page. A
@@ -775,6 +768,13 @@ describe('nav coverage — every navigable App.jsx route has a manifest entry', 
     const uncovered = [...routePaths]
       .filter((p) => !navPaths.has(p) && !NAV_COVERAGE_OPT_OUT.has(p));
     expect(uncovered).toEqual([]);
+  });
+
+  it('registers the seven create and import routes for palette and voice navigation', () => {
+    expect([...navPaths].filter((p) => [
+      '/apps/create', '/ai/presets/new', '/ai/services/new', '/feature-agents/create',
+      '/creative-commission/new', '/songbook/import', '/universes/new',
+    ].includes(p))).toHaveLength(7);
   });
 
   it('keeps the hosted audience join route outside the chrome layout', () => {

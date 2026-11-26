@@ -115,7 +115,6 @@ describe('a11y conventions: routeHeadings', () => {
 
   const ROUTE_HEADING_GAP_ALLOWLIST = new Set([
     'src/pages/MoodBoardDetail.jsx',
-    'src/pages/UniverseBuilder.jsx',
   ]);
 
   it('gives every routed page a top-level heading (#7245)', () => {

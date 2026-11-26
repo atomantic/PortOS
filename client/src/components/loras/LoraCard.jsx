@@ -67,7 +67,7 @@ function LoraCard({ lora, onDelete, onMeasured, deleting, deleteConfirm }) {
   // LoRAs (ltx-video, minimax-h3) deep-link to Video Gen — routing them to Image
   // Gen would preselect a video adapter into an incompatible image render.
   const isVideoLora = isVideoLoraFamily(family);
-  const testHref = `${isVideoLora ? '/media/video' : '/media/image'}?lora=${encodeURIComponent(lora.filename)}`;
+  const testHref = `${isVideoLora ? '/video/generate' : '/media/image'}?lora=${encodeURIComponent(lora.filename)}`;
   // The confirm pair also stays mounted while the delete is in flight (the hook
   // disarms the moment it fires), so the spinner replaces the row rather than
   // flashing the trash icon back for the duration of the request.
@@ -195,7 +195,7 @@ function LoraCard({ lora, onDelete, onMeasured, deleting, deleteConfirm }) {
                 href={civitai.url}
                 target="_blank"
                 rel="noopener noreferrer"
-                className="text-gray-400 hover:text-gray-200 p-1.5 rounded hover:bg-port-bg"
+                className="inline-flex min-h-[44px] min-w-[44px] items-center justify-center rounded p-1.5 text-gray-400 hover:bg-port-bg hover:text-gray-200"
                 title="Open on Civitai"
                 aria-label="Open on Civitai"
               >
@@ -207,7 +207,7 @@ function LoraCard({ lora, onDelete, onMeasured, deleting, deleteConfirm }) {
                 href={lora.huggingface.url}
                 target="_blank"
                 rel="noopener noreferrer"
-                className="text-gray-400 hover:text-gray-200 p-1.5 rounded hover:bg-port-bg"
+                className="inline-flex min-h-[44px] min-w-[44px] items-center justify-center rounded p-1.5 text-gray-400 hover:bg-port-bg hover:text-gray-200"
                 title="Open on HuggingFace"
                 aria-label="Open on HuggingFace"
               >

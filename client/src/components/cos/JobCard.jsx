@@ -1,6 +1,6 @@
 import { sortByLabel } from '../../lib/sortByLabel.js';
 import { useState, useEffect, useRef } from 'react';
-import { AlertTriangle, Play, Trash2, ChevronDown, ChevronUp, Clock, ToggleLeft, ToggleRight, Edit3, Save, X, Terminal } from 'lucide-react';
+import { AlertTriangle, Check, Play, Trash2, ChevronDown, ChevronUp, Clock, ToggleLeft, ToggleRight, Edit3, Save, X, Terminal } from 'lucide-react';
 import toast from '../ui/Toast';
 import { updateCosJob, acknowledgeCosJobIncident } from '../../services/apiAgents.js';
 import { timeAgo, timeUntil, formatDateNumeric } from '../../utils/formatters';
@@ -152,6 +152,7 @@ export function TaskMetadataFields({ data, onChange }) {
             title={`${label}: ${effective ? 'on' : 'off'}`}
             className={`text-xs px-1.5 py-0.5 rounded transition-colors border ${agentOptionButtonClass(effective, true)}`}
           >
+            {effective && <Check size={12} aria-hidden="true" />}
             {shortLabel}
           </button>
         );

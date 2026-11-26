@@ -26,12 +26,6 @@ describe('shipped copy names a Models page by route, never by literal (#7419)', 
     'g',
   );
 
-  // A hardcoded "Models → LLMs → Abuse Guard" names a THIRD-level breadcrumb
-  // (Abuse Guard nests under the LLMs tab in the sidebar) that
-  // `getNavPageForPath` cannot produce — it returns one `section → label` hop,
-  // never a drill-down chain. Deliberate, not a regression; #7419 leaves it.
-  const ABUSE_GUARD_CONTINUATION = /^\s*→\s*Abuse Guard/;
-
   // Deliberate weights-catalog references #7419 leaves alone: the LLMs page
   // they name has not moved, and rewriting them buys nothing a literal
   // "Models → LLMs" doesn't already say correctly.
@@ -65,9 +59,7 @@ describe('shipped copy names a Models page by route, never by literal (#7419)', 
 
   function breadcrumbOffenders(src) {
     const code = blankBlockComments(src);
-    return [...code.matchAll(BREADCRUMB_PATTERN)]
-      .filter((match) => !ABUSE_GUARD_CONTINUATION.test(code.slice(match.index + match[0].length, match.index + match[0].length + 20)))
-      .map((match) => match[0]);
+    return [...code.matchAll(BREADCRUMB_PATTERN)].map((match) => match[0]);
   }
 
   const trackedSources = (repoRoot = REPO_ROOT) => trackedFiles(repoRoot, [
@@ -100,8 +92,8 @@ describe('shipped copy names a Models page by route, never by literal (#7419)', 
     expect(execFileSync('git', ['ls-files', '--deleted'], { cwd: root, encoding: 'utf8' }))
       .toContain('client/src/components/deleted.jsx');
     expect(scanBreadcrumbs(root)).toEqual(['client/src/components/present source.jsx: Models → Runtimes']);
-    writeFileSync(join(root, 'client/src/components/present source.jsx'), 'const msg = "Open Models → LLMs → Abuse Guard to repair it.";');
-    expect(scanBreadcrumbs(root)).toEqual([]);
+    writeFileSync(join(root, 'client/src/components/present source.jsx'), 'const msg = "Open Models → Abuse Guard to repair it.";');
+    expect(scanBreadcrumbs(root)).toEqual(['client/src/components/present source.jsx: Models → Abuse Guard']);
   });
 
   it('propagates read failures for a present tracked source', () => {
@@ -125,11 +117,8 @@ describe('shipped copy names a Models page by route, never by literal (#7419)', 
     expect(breadcrumbOffenders('const msg = "Start it from Models → Runtimes.";')).toEqual(['Models → Runtimes']);
   });
 
-  it('still recognizes a deliberate breadcrumb it must NOT flag', () => {
-    // The guard's own negative case: `getNavPageForPath` cannot produce a
-    // third-level breadcrumb, so this must stay allowlisted rather than
-    // vacuously passing because nothing matched at all.
-    expect(breadcrumbOffenders('const msg = "Open Models → LLMs → Abuse Guard to repair it.";')).toEqual([]);
+  it('recognizes the current Abuse Guard breadcrumb as a route-derived-copy violation', () => {
+    expect(breadcrumbOffenders('const msg = "Open Models → Abuse Guard to repair it.";')).toEqual(['Models → Abuse Guard']);
   });
 
   it('flags a hardcoded breadcrumb outside the allowlist', () => {

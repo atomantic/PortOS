@@ -56,6 +56,7 @@ vi.mock('lucide-react', () => {
   };
 });
 
+import UniverseBuilder from '../../pages/UniverseBuilder.jsx';
 import UniverseBuilderPage from './UniverseBuilderPage.jsx';
 
 const navigateRef = { current: null };
@@ -165,6 +166,25 @@ beforeEach(() => {
 });
 
 describe('UniverseBuilderPage draft admission', () => {
+  it('announces different headings on the create and edit routes', async () => {
+    render(
+      <MemoryRouter initialEntries={['/universes/new']}>
+        <NavigationProbe />
+        <Routes>
+          <Route path="/universes/new" element={<UniverseBuilder create />} />
+          <Route path="/universes/:universeId" element={<UniverseBuilder />} />
+        </Routes>
+      </MemoryRouter>,
+    );
+
+    expect(screen.getByRole('heading', { level: 1, name: 'New Universe' })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Create' })).toBeInTheDocument();
+
+    await act(() => navigateRef.current('/universes/u1'));
+    expect(screen.getByRole('heading', { level: 1, name: 'Universe Builder' })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Save' })).toBeInTheDocument();
+  });
+
   it('hides draft actions while loading and exposes an inline retry on failure', () => {
     const draft = hookMocks.useUniverseDraft({ selectedId: 'u1' });
     const retryDraft = vi.fn();

@@ -64,6 +64,15 @@ describe('ActiveProcessingWidget', () => {
     expect(screen.getByRole('link', { name: /GPU ready/ })).toHaveAttribute('href', '/system-resources/overview');
   });
 
+  it('does not subscribe to the one-second clock while idle or offscreen', async () => {
+    vi.useFakeTimers();
+    intersecting = false;
+    await act(async () => { renderWidget(); });
+    expect(screen.getByText('Nothing is running')).toBeInTheDocument();
+    expect(vi.getTimerCount()).toBe(0);
+    vi.useRealTimers();
+  });
+
   it('summarizes active work and links each lane to its destination', async () => {
     mockGetSystemActivity.mockResolvedValue({
       jobs: [
