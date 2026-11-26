@@ -161,6 +161,8 @@ export default function EpigeneticTracker({ markerCategories = [] }) {
           </p>
         </div>
         <button
+          type="button"
+          aria-expanded={showAdd}
           onClick={() => setShowAdd(!showAdd)}
           className="flex items-center gap-1.5 px-3 py-2 bg-port-accent/20 text-port-accent border border-port-accent/30 rounded text-sm hover:bg-port-accent/30 transition-colors"
         >
@@ -282,6 +284,8 @@ export default function EpigeneticTracker({ markerCategories = [] }) {
             return (
               <div key={key} className="rounded bg-port-card border border-port-border overflow-hidden">
                 <button
+                  type="button"
+                  aria-expanded={Boolean(isExpanded)}
                   onClick={() => setExpandedTracked(prev => ({ ...prev, [key]: !prev[key] }))}
                   className="w-full flex items-center gap-3 p-3 text-left hover:bg-white/5 transition-colors"
                 >
@@ -397,6 +401,8 @@ export default function EpigeneticTracker({ markerCategories = [] }) {
             return (
               <div key={rec.id} className="rounded bg-port-card border border-port-border overflow-hidden">
                 <button
+                  type="button"
+                  aria-expanded={Boolean(isExpanded)}
                   onClick={() => setExpandedRecs(prev => ({ ...prev, [rec.id]: !prev[rec.id] }))}
                   className="w-full flex items-center gap-3 p-3 text-left hover:bg-white/5 transition-colors"
                 >

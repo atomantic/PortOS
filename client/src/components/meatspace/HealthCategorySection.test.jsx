@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 
 vi.mock('../../services/apiHealth.js', () => ({
   getAppleHealthMetrics: vi.fn(),
@@ -45,4 +45,22 @@ describe('HealthCategorySection metric loads', () => {
     await waitFor(() => expect(screen.queryByRole('alert')).toBeNull());
     expect(screen.getAllByTestId('metric-card')).toHaveLength(2);
   });
+});
+
+it('keeps the disclosure under a heading and associates it with its metric panel', async () => {
+  getAppleHealthMetrics.mockResolvedValue([{ date: '2026-03-01', value: 3 }]);
+  const availableMetrics = new Set(['steps']);
+  const props = { category, from: '2026-03-01', to: '2026-03-07', availableMetrics };
+  const { rerender } = render(<HealthCategorySection {...props} expanded={false} />);
+
+  const heading = screen.getByRole('heading', { level: 2, name: /Activity/ });
+  const button = within(heading).getByRole('button', { expanded: false });
+  const panel = document.getElementById(button.getAttribute('aria-controls'));
+  expect(panel).toHaveAttribute('hidden');
+  expect(screen.queryByTestId('metric-card')).toBeNull();
+
+  rerender(<HealthCategorySection {...props} expanded />);
+  expect(button).toHaveAttribute('aria-expanded', 'true');
+  expect(panel).not.toHaveAttribute('hidden');
+  expect(await within(panel).findByText('Steps:1')).toBeVisible();
 });

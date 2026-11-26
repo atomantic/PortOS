@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { MemoryRouter } from 'react-router';
 
 vi.mock('../../../services/apiMeatspace.js', () => ({
@@ -59,7 +59,8 @@ describe('HealthTab metric catalog load', () => {
 
     getAvailableHealthMetrics.mockResolvedValueOnce([{ name: 'sleep_analysis' }]);
     fireEvent.click(screen.getByRole('button', { name: 'Retry' }));
-    expect(await screen.findByText('Sleep', { selector: 'h2' })).toBeTruthy();
+    const heading = await screen.findByRole('heading', { level: 2, name: /Sleep/ });
+    expect(await within(heading).findByRole('button', { name: /Sleep/, expanded: true })).toBeInTheDocument();
     await waitFor(() => expect(getAppleHealthMetrics).toHaveBeenCalledWith('sleep_analysis', expect.any(String), expect.any(String), expect.anything()));
   });
 

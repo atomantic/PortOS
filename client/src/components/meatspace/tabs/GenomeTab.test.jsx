@@ -14,11 +14,12 @@ vi.mock('../../../services/apiMeatspace.js', () => ({
   syncClinvar: mocks.sync,
   deleteGenomeData: mocks.del,
   scanGenomeMarkers: vi.fn(async () => ({ markers: [] })),
+  scanClinvar: vi.fn(),
 }));
 vi.mock('../../ui/Toast', () => ({ default: { success: mocks.success } }));
 vi.mock('../EpigeneticTracker', () => ({ default: () => null }));
 import GenomeTab from './GenomeTab';
-import { getClinvarStatus, getGenomeSummary } from '../../../services/apiMeatspace.js';
+import { getClinvarStatus, getGenomeSummary, scanClinvar } from '../../../services/apiMeatspace.js';
 
 const emit = (frame) => act(() => { for (const handler of mocks.listeners) handler(frame); });
 const begin = async () => {
@@ -245,4 +246,28 @@ it('exposes the full status of collapsed markers and shows badges for non-typica
       expect(within(tile).queryByText('Typical', { exact: true })).not.toBeInTheDocument();
     }
   });
+});
+
+it('announces each ClinVar rating and keeps expansion tied to the finding during filtering', async () => {
+  getClinvarStatus.mockResolvedValueOnce({ synced: true, variantCount: 2 });
+  scanClinvar.mockResolvedValueOnce({
+    totalMatched: 2,
+    bySeverity: { pathogenic: 1, protective: 1 },
+    findings: [
+      { rsid: 'rs100', gene: 'TEST1', severity: 'pathogenic', reviewStars: 3, conditions: [] },
+      { rsid: 'rs200', gene: 'TEST2', severity: 'protective', reviewStars: 1, conditions: [] },
+    ],
+  });
+  render(<GenomeTab />);
+  fireEvent.click(await screen.findByRole('button', { name: 'Scan Against ClinVar' }));
+
+  const pathogenic = await screen.findByRole('button', { name: /rs100.*3 of 4 stars: Expert panel/, expanded: false });
+  expect(within(pathogenic).getByText('★★★☆')).toHaveAttribute('aria-hidden', 'true');
+  fireEvent.click(pathogenic);
+  expect(pathogenic).toHaveAttribute('aria-expanded', 'true');
+
+  const filters = within(screen.getByRole('group', { name: 'ClinVar severity' }));
+  fireEvent.click(filters.getByRole('button', { name: 'Protective', pressed: false }));
+  expect(filters.getByRole('button', { name: 'Protective', pressed: true })).toBeInTheDocument();
+  expect(screen.getByRole('button', { name: /rs200.*1 of 4 stars: Single submitter/, expanded: false })).toBeInTheDocument();
 });
