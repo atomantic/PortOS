@@ -4,19 +4,22 @@
  * entries are written only for files a run reported green.
  */
 
+import * as nodeFs from 'node:fs';
+import * as nodePath from 'node:path';
 import { execFileSync, spawnSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, posix, win32 } from 'node:path';
-import { fileURLToPath } from 'node:url';
+import { fileURLToPath, pathToFileURL } from 'node:url';
 import { afterEach, describe, expect, it } from 'vitest';
 import {
   CLIENT_BROWSER_SHARD_OWNERS, LOCAL_PRUNE_INTERVAL_MS, MEMO_UNRECORDED_LINE_LIMIT, VITEST_PROJECT_NAMES,
-  clearVitestDependencies, createToolVersionResolver, fileResultsFromReport, findVitestDependenciesFile, memoSummaryLine, memoUnrecordedLines, passedTestFiles, planTestMemo, prepareMemoRun, pruneTestMemo, readVitestDependencies,
+  listRepositoryFiles, clearVitestDependencies, createToolVersionResolver, fileResultsFromReport, findVitestDependenciesFile, memoSummaryLine, memoUnrecordedLines, passedTestFiles, planTestMemo, prepareMemoRun, pruneTestMemo, readVitestDependencies,
   SERVER_HEAVY_SHARD_OWNERS, recordTestMemo, seedVitestDependencies, serverShardSlice, vitestDependenciesPath, vitestShardHashInput, vitestShardRange, vitestShardSlice, writeSelectionFile,
 } from './testMemoRunner.js';
 import { EXCLUSIVE_CAPTURE_TESTS, EXCLUSIVE_TESTS, vitestCaptureProjects } from '../vitestCiPool.js';
+import { computeTestMemoKeys, createDiskFs } from './testMemo.js';
 import { readMemoEntry, readMemoRecord, writeMemoEntry, writeMemoRecord } from './testMemoStore.js';
 import { FULL_SUITE_SHARDS, buildCiTestPlan, shardIndexes } from '../ci-test-plan.js';
 import { browserProfileAcceptedVerdicts, browserTestProfileArgs } from './browserTestProfiles.js';
@@ -798,6 +801,48 @@ describe('planTestMemo and recordTestMemo', () => {
     expect(lines.at(-1)).toBe('🧠   not recorded: 3 more files not listed.');
     expect(lines.at(-2)).toContain(`server/lib/t${MEMO_UNRECORDED_LINE_LIMIT - 1}.test.js`);
   });
+
+  it('keys the real backup manifest suite with its fully replaced migration runner', () => {
+    root = realpathSync(mkdtempSync(join(tmpdir(), 'portos-backup-record-')));
+    const server = join(repoRootDir, 'server');
+    const config = join(root, 'probe.mjs');
+    const cacheDir = join(root, 'server/.cache/vitest');
+    const suite = 'server/services/backup.manifestScope.test.js';
+    const reader = 'scripts/lib/fileMigrationRunner.js';
+    // Use the real server setup and isolate the depfile from the enclosing Vitest run.
+    writeFileSync(config, `import server from ${JSON.stringify(pathToFileURL(join(server, 'vitest.config.js')).href)};
+      const { projects, ...test } = server.test;
+      export default { ...server, cacheDir: ${JSON.stringify(cacheDir)}, test: { ...test, fsModuleCache: false } };`);
+    const env = { ...process.env, PORTOS_CI_TEST_SELECTION: '', PORTOS_PREGATE_MAX_WORKERS: '1' };
+    delete env.PORTOS_TEST_TEMP_ROOT;
+    delete env.VITEST_POOL_ID;
+    delete env.VITEST_WORKER_ID;
+    const result = spawnSync(process.execPath, [join(server, 'node_modules/vitest/vitest.mjs'),
+      'run', 'services/backup.manifestScope.test.js', '--configLoader', 'runner', '--config', config,
+      '--experimental.recordDependencies', '--maxWorkers', '1', '--reporter=dot'], { cwd: server, env, encoding: 'utf8', timeout: 120000 });
+    expect(result.status, result.error?.message ?? result.stdout + result.stderr).toBe(0);
+    const modules = readVitestDependencies(vitestDependenciesPath(root, 'server'), 'server').get(suite);
+    expect(modules).toContain('scripts/run-migrations.js');
+    expect(modules).not.toContain(reader);
+
+    const disk = createDiskFs(repoRootDir, nodeFs, nodePath);
+    const tracked = listRepositoryFiles(repoRootDir);
+    const verdict = (changed, recorded = modules) => computeTestMemoKeys([suite], {
+      workspace: 'server', listFiles: () => tracked, records: new Map([[suite, recorded]]),
+      fs: { ...disk, read: rel => rel === changed ? Buffer.concat([disk.read(rel), Buffer.from('\n')]) : disk.read(rel) },
+    }).get(suite).recorded;
+    const baseline = verdict();
+    expect(baseline, baseline.reason).toMatchObject({ memoizable: true, key: expect.any(String) });
+    expect(verdict('scripts/doctor.js').key).toBe(baseline.key);
+    const changed = verdict('server/services/backup/restore.js');
+    expect(changed.memoizable).toBe(true);
+    expect(changed.key).not.toBe(baseline.key);
+    // Partial mocks and importActual also evaluate the implementation. A recorded
+    // reader must still fail closed when the shared fixture can replace its listing.
+    expect(verdict(null, [...modules, reader])).toMatchObject({
+      memoizable: false, reasons: expect.arrayContaining([expect.stringContaining(reader + ': relies on a directory listing')]),
+    });
+  }, 150000);
 
   // The cause #16545 found: a browser profile runs under `--testNamePattern`,
   // Vitest calls that run partial and writes no dependency record for a file

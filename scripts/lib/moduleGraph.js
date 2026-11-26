@@ -42,7 +42,7 @@ const MIGRATION_FILE_RE = /\/\d+-[^/]*\.js$/;
  * extending this table deliberately.
  */
 export const BOUNDED_DYNAMIC_IMPORTS = Object.freeze({
-  'scripts/run-migrations.js': { directory: 'scripts/migrations/', pattern: MIGRATION_FILE_RE },
+  'scripts/lib/fileMigrationRunner.js': { directory: 'scripts/migrations/', pattern: MIGRATION_FILE_RE },
   'server/scripts/run-db-migrations.js': { directory: 'server/scripts/db-migrations/', pattern: MIGRATION_FILE_RE },
   'server/services/eidoverseControllerRegistry.js': {
     directory: 'server/services/eidoverseControllerDefinitions/', pattern: /\.controller\.js$/,
