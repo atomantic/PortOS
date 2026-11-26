@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import { act, render, screen, waitFor } from '@testing-library/react';
+import { act, render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { MemoryRouter, Route, Routes, useLocation } from 'react-router';
 
@@ -13,6 +13,8 @@ const api = {
   syncXAccount: vi.fn(),
   openXAccountDestination: vi.fn(),
   createXDraft: vi.fn(),
+  updateXDraft: vi.fn(),
+  deleteXDraft: vi.fn(),
   reviewXDraft: vi.fn(),
   openXDraft: vi.fn(),
 };
@@ -26,6 +28,8 @@ vi.mock('../services/apiX.js', () => ({
   syncXAccount: api.syncXAccount,
   openXAccountDestination: api.openXAccountDestination,
   createXDraft: api.createXDraft,
+  updateXDraft: api.updateXDraft,
+  deleteXDraft: api.deleteXDraft,
   reviewXDraft: api.reviewXDraft,
   openXDraft: api.openXDraft,
 }));
@@ -181,6 +185,76 @@ describe('X page', () => {
     expect(screen.getByText('Approval expired')).toBeInTheDocument();
     await userEvent.click(screen.getByRole('button', { name: 'Re-submit for review' }));
     expect(api.reviewXDraft).toHaveBeenCalledWith('stale', { state: 'pending_review' }, { silent: true });
+  });
+
+  it.each(['draft', 'rejected'])('edits a %s draft inline and submits the saved revision for review', async (state) => {
+    const user = userEvent.setup();
+    const draft = { id: 'draft-one', accountId: account.id, body: 'Original text', state, reviewNote: 'Please revise.' };
+    const revised = { ...draft, body: 'Revised text', state: 'draft', reviewNote: '' };
+    api.getXDrafts.mockResolvedValue({ drafts: [draft] });
+    api.updateXDraft.mockResolvedValueOnce(revised);
+    api.reviewXDraft.mockResolvedValueOnce({ ...revised, state: 'pending_review' });
+
+    renderPage(`/x/${account.id}/drafts`);
+    await screen.findByText('Original text');
+    await user.click(screen.getByRole('button', { name: 'Edit' }));
+    const editor = screen.getByRole('textbox', { name: 'Edit draft text' });
+    expect(editor).toHaveValue('Original text');
+    await user.clear(editor);
+    expect(screen.getByRole('button', { name: 'Save changes' })).toBeDisabled();
+    await user.type(editor, 'Revised text');
+    await user.click(screen.getByRole('button', { name: 'Save changes' }));
+
+    expect(api.updateXDraft).toHaveBeenCalledWith(draft.id, { body: 'Revised text' }, { silent: true });
+    expect(await screen.findByText('Revised text')).toBeInTheDocument();
+    expect(screen.queryByText('Please revise.')).not.toBeInTheDocument();
+    await user.click(screen.getByRole('button', { name: 'Submit for review' }));
+    expect(api.reviewXDraft).toHaveBeenCalledWith(draft.id, { state: 'pending_review' }, { silent: true });
+    expect(await screen.findByText('Awaiting review')).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Edit' })).not.toBeInTheDocument();
+  });
+
+  it('cancels deletion locally, then removes only the confirmed draft', async () => {
+    const user = userEvent.setup();
+    api.getXDrafts.mockResolvedValue({ drafts: [
+      { id: 'draft-one', accountId: account.id, body: 'Delete me', state: 'draft' },
+      { id: 'draft-two', accountId: account.id, body: 'Keep me', state: 'draft' },
+    ] });
+    api.deleteXDraft.mockResolvedValueOnce(undefined);
+
+    renderPage(`/x/${account.id}/drafts`);
+    const card = within((await screen.findByText('Delete me')).closest('article'));
+    await user.click(card.getByRole('button', { name: 'Delete' }));
+    const confirmation = card.getByRole('group', { name: 'Delete this local draft?' });
+    await user.click(within(confirmation).getByRole('button', { name: 'Cancel' }));
+    expect(api.deleteXDraft).not.toHaveBeenCalled();
+    expect(card.getByText('Delete me')).toBeInTheDocument();
+
+    await user.click(card.getByRole('button', { name: 'Delete' }));
+    await user.click(within(card.getByRole('group', { name: 'Delete this local draft?' })).getByRole('button', { name: 'Delete' }));
+    expect(api.deleteXDraft).toHaveBeenCalledWith('draft-one', { silent: true });
+    await waitFor(() => expect(screen.queryByText('Delete me')).not.toBeInTheDocument());
+    expect(screen.getByText('Keep me')).toBeInTheDocument();
+    expect(api.getXDrafts).toHaveBeenCalledTimes(1);
+  });
+
+  it('keeps the card mounted when a deletion socket update arrives before its response', async () => {
+    const draft = { id: 'draft-one', accountId: account.id, body: 'Keep until confirmed', state: 'rejected' };
+    api.getXDrafts.mockResolvedValueOnce({ drafts: [draft] }).mockResolvedValueOnce({ drafts: [] });
+    let finishDelete;
+    api.deleteXDraft.mockReturnValueOnce(new Promise((resolve) => { finishDelete = resolve; }));
+
+    renderPage(`/x/${account.id}/drafts`);
+    await screen.findByText(draft.body);
+    await userEvent.click(screen.getByRole('button', { name: 'Delete' }));
+    await userEvent.click(within(screen.getByRole('group', { name: 'Delete this local draft?' })).getByRole('button', { name: 'Delete' }));
+
+    const onChanged = socket.on.mock.calls.find(([event]) => event === 'x:changed')[1];
+    await act(async () => { onChanged({ accountId: account.id }); });
+    expect(screen.getByText(draft.body)).toBeInTheDocument();
+    await act(async () => { finishDelete(); });
+    await waitFor(() => expect(screen.queryByText(draft.body)).not.toBeInTheDocument());
+    expect(screen.getByText(`No drafts for @${account.username}.`)).toBeInTheDocument();
   });
 
   it('displays a loading spinner in the draft queue while drafts are loading', async () => {
