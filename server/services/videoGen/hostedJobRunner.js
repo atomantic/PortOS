@@ -10,6 +10,7 @@ import { unlink, writeFile } from 'fs/promises';
 import { isAbsolute, join, relative, resolve } from 'path';
 import { probeVideoGeometry } from '../../lib/ffmpeg.js';
 import { PATHS } from '../../lib/fileUtils.js';
+import { ServerError } from '../../lib/errorHandler.js';
 import { createHostedJobRunner } from '../../lib/hostedJobRunner.js';
 import { maintenance } from '../../lib/maintenanceAdmission.js';
 import { closeJobAfterDelay } from '../../lib/sseUtils.js';
@@ -75,10 +76,10 @@ export function createHostedVideoJobRunner({ mode, provider, logName = provider,
       }
     })());
 
-    const finishFailure = async (reason) => {
+    const finishFailure = async (reason, code) => {
       await settleInputs();
       if (entry.aborted) return finalizeCanceled(job, jobId);
-      return finalizeJobFailure(job, jobId, null, reason, { force: true });
+      return finalizeJobFailure(job, jobId, null, reason, { force: true, code });
     };
 
     /**
@@ -120,7 +121,7 @@ export function createHostedVideoJobRunner({ mode, provider, logName = provider,
         });
       }
       if (abandonRemote) await abandonRemote(entry);
-      return finishFailure(`${provider} video generation failed: ${err?.message || err}`);
+      return finishFailure(`${provider} video generation failed: ${err?.message || err}`, err instanceof ServerError ? err.code : undefined);
     };
 
     return { entry, finishFailure, publish, fail };
