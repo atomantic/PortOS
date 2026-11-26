@@ -364,7 +364,7 @@ export default function AlcoholTab() {
       {/* Log a Drink */}
       <div className="bg-port-card border border-port-border rounded-xl p-4">
         <div className="flex items-center justify-between mb-3">
-          <h3 className="text-sm font-medium text-gray-400 uppercase tracking-wider">Log a Drink</h3>
+          <h2 className="text-sm font-medium text-gray-400 uppercase tracking-wider">Log a Drink</h2>
           {drinkButtons && <button
             type="button"
             aria-expanded={managingButtons}
@@ -431,6 +431,7 @@ export default function AlcoholTab() {
                       type="button"
                       onClick={() => setButtonVolumeUnit(u => u === 'oz' ? 'ml' : 'oz')}
                       className="px-1.5 py-1 text-[10px] pointer-coarse:min-h-11 font-medium rounded bg-port-border/50 text-gray-400 hover:text-port-accent hover:bg-port-accent/10 transition-colors"
+                      aria-label={`Switch drink button volume unit, currently ${buttonVolumeUnit}`}
                     >
                       {buttonVolumeUnit}
                     </button>
@@ -457,7 +458,7 @@ export default function AlcoholTab() {
                     <span className="flex-1 text-xs text-gray-300">{drink.name}</span>
                     <span className="text-xs text-gray-500">{drink.oz}oz</span>
                     <span className="text-xs text-gray-500">{drink.abv}%</span>
-                    <button onClick={() => startEditButton(idx)} className="min-h-[44px] min-w-[44px] inline-flex items-center justify-center p-1.5 text-gray-600 hover:text-port-accent" title="Edit" aria-label="Edit">
+                    <button onClick={() => startEditButton(idx)} className="min-h-[44px] min-w-[44px] inline-flex items-center justify-center p-1.5 text-gray-600 hover:text-port-accent" title="Edit" aria-label={`Edit ${drink.name}`}>
                       <Pencil size={12} />
                     </button>
                     {isConfirming(`btn:${idx}`) ? (
@@ -470,7 +471,7 @@ export default function AlcoholTab() {
                         onCancel={cancelDelete}
                       />
                     ) : (
-                      <button onClick={() => requestDelete(`btn:${idx}`)} className="min-h-[44px] min-w-[44px] inline-flex items-center justify-center p-1.5 text-gray-600 hover:text-port-error" title="Remove" aria-label="Remove">
+                      <button onClick={() => requestDelete(`btn:${idx}`)} className="min-h-[44px] min-w-[44px] inline-flex items-center justify-center p-1.5 text-gray-600 hover:text-port-error" title="Remove" aria-label={`Remove ${drink.name}`}>
                         <Trash2 size={12} />
                       </button>
                     )}
@@ -501,6 +502,7 @@ export default function AlcoholTab() {
                 <button
                   type="button"
                   onClick={() => setButtonVolumeUnit(u => u === 'oz' ? 'ml' : 'oz')}
+                  aria-label={`Switch new drink button volume unit, currently ${buttonVolumeUnit}`}
                   className="px-1.5 py-1 text-[10px] pointer-coarse:min-h-11 font-medium rounded bg-port-border/50 text-gray-400 hover:text-port-accent hover:bg-port-accent/10 transition-colors"
                 >
                   {buttonVolumeUnit}
@@ -605,20 +607,20 @@ export default function AlcoholTab() {
       {/* All Drink Entries */}
       {allEntries?.length > 0 && (
         <div className="bg-port-card border border-port-border rounded-xl p-4">
-          <h3 className="text-sm font-medium text-gray-400 uppercase tracking-wider mb-3">
+          <h2 className="text-sm font-medium text-gray-400 uppercase tracking-wider mb-3">
             All Drink Entries ({pluralize(allEntries.length, 'day')})
-          </h3>
+          </h2>
           <div className="max-h-dvh-cap [--dvh-cap:70dvh] overflow-x-auto overflow-y-auto rounded-lg border border-port-border">
             <table className="w-full text-sm min-w-[600px]">
               <thead className="sticky top-0 bg-port-card z-10">
                 <tr className="border-b border-port-border text-left text-xs text-gray-500 uppercase">
-                  <th className="px-3 py-2">Date</th>
-                  <th className="px-3 py-2">Name</th>
-                  <th className="px-3 py-2 text-right">Oz</th>
-                  <th className="px-3 py-2 text-right">ABV%</th>
-                  <th className="px-3 py-2 text-right">Count</th>
-                  <th className="px-3 py-2 text-right">Std Drinks</th>
-                  <th className="px-3 py-2 text-right w-20">Actions</th>
+                  <th scope="col" className="px-3 py-2">Date</th>
+                  <th scope="col" className="px-3 py-2">Name</th>
+                  <th scope="col" className="px-3 py-2 text-right">Oz</th>
+                  <th scope="col" className="px-3 py-2 text-right">ABV%</th>
+                  <th scope="col" className="px-3 py-2 text-right">Count</th>
+                  <th scope="col" className="px-3 py-2 text-right">Std Drinks</th>
+                  <th scope="col" className="px-3 py-2 text-right w-20">Actions</th>
                 </tr>
               </thead>
               <tbody>
@@ -655,7 +657,7 @@ export default function AlcoholTab() {
                               </span>
                             </div>
                           ) : (
-                            <span className="text-gray-700">&nbsp;</span>
+                            <span className="sr-only">{entry.date}</span>
                           )}
                         </td>
                         {isEditing ? (
@@ -684,6 +686,7 @@ export default function AlcoholTab() {
                                   type="button"
                                   onClick={() => setEditVolumeUnit(u => u === 'oz' ? 'ml' : 'oz')}
                                   className="px-1 py-0.5 text-[10px] pointer-coarse:min-h-11 font-medium rounded bg-port-border/50 text-gray-400 hover:text-port-accent hover:bg-port-accent/10 transition-colors"
+                                  aria-label={`Switch entry volume unit, currently ${editVolumeUnit}`}
                                 >
                                   {editVolumeUnit}
                                 </button>
@@ -746,7 +749,7 @@ export default function AlcoholTab() {
                                 <button
                                   onClick={() => startEdit(entry.date, idx, drink)}
                                   className="min-h-[44px] min-w-[44px] inline-flex items-center justify-center p-1 text-gray-600 hover:text-port-accent transition-colors"
-                                  title="Edit drink" aria-label="Edit drink"
+                                  title="Edit drink" aria-label={`Edit ${drink.name || 'drink'} entry for ${entry.date}`}
                                 >
                                   <Pencil size={12} />
                                 </button>
@@ -763,7 +766,7 @@ export default function AlcoholTab() {
                                   <button
                                     onClick={() => requestDelete(key)}
                                     className="min-h-[44px] min-w-[44px] inline-flex items-center justify-center p-1 text-gray-600 hover:text-port-error transition-colors"
-                                    title="Remove drink" aria-label="Remove drink"
+                                    title="Remove drink" aria-label={`Remove ${drink.name || 'drink'} entry for ${entry.date}`}
                                   >
                                     <Trash2 size={12} />
                                   </button>

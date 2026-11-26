@@ -260,7 +260,7 @@ export default function CalendarTab() {
       {/* Activity budgets */}
       <div className="bg-port-card border border-port-border rounded-lg p-4">
         <div className="flex items-center justify-between mb-3">
-          <h3 className="text-sm font-medium text-gray-400 uppercase tracking-wider">Activity Budget</h3>
+          <h2 className="text-sm font-medium text-gray-400 uppercase tracking-wider">Activity Budget</h2>
           <AddActivityForm onAdd={handleAddActivity} />
         </div>
         <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-2">

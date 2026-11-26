@@ -115,9 +115,9 @@ export default function SettingsTab({ onRefresh }) {
       <div className="bg-port-card border border-port-border rounded-xl p-6">
         <div className="flex items-center gap-2 mb-4">
           <Download size={18} className="text-port-accent" />
-          <h3 className="text-sm font-medium text-gray-400 uppercase tracking-wider">
+          <h2 className="text-sm font-medium text-gray-400 uppercase tracking-wider">
             Export to MortalLoom
-          </h3>
+          </h2>
         </div>
 
         <p className="text-sm text-gray-400 mb-2">
@@ -140,9 +140,9 @@ export default function SettingsTab({ onRefresh }) {
       <div className="bg-port-card border border-port-border rounded-xl p-6">
         <div className="flex items-center gap-2 mb-4">
           <FileJson size={18} className="text-port-accent" />
-          <h3 className="text-sm font-medium text-gray-400 uppercase tracking-wider">
+          <h2 className="text-sm font-medium text-gray-400 uppercase tracking-wider">
             Health Auto Export JSON Import
-          </h3>
+          </h2>
         </div>
 
         <p className="text-sm text-gray-400 mb-2">
@@ -208,9 +208,9 @@ export default function SettingsTab({ onRefresh }) {
       <div className="bg-port-card border border-port-border rounded-xl p-6">
         <div className="flex items-center gap-2 mb-4">
           <HeartPulse size={18} className="text-port-accent" />
-          <h3 className="text-sm font-medium text-gray-400 uppercase tracking-wider">
+          <h2 className="text-sm font-medium text-gray-400 uppercase tracking-wider">
             Apple Health XML Import
-          </h3>
+          </h2>
         </div>
 
         <p className="text-sm text-gray-400 mb-2">
@@ -248,7 +248,7 @@ export default function SettingsTab({ onRefresh }) {
 
         {/* Progress bar (indeterminate — total record count unknown) */}
         {xmlImporting && (
-          <div className="mt-4">
+          <div className="mt-4" role="progressbar" aria-label="XML import progress" aria-valuetext={`${xmlProgress} records processed; total unknown`}>
             <div className="flex items-center justify-between text-xs text-gray-400 mb-1">
               <span>Processing records...</span>
               <span>{formatCount(xmlProgress)} records processed</span>

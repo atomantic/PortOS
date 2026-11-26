@@ -40,9 +40,9 @@ export default function BloodTab() {
       <div>
         <div className="flex items-center gap-2 mb-3">
           <HeartPulse size={18} className="text-red-400" />
-          <h3 className="text-sm font-medium text-gray-400 uppercase tracking-wider">
+          <h2 className="text-sm font-medium text-gray-400 uppercase tracking-wider">
             Blood Tests ({failed ? '...' : bloodTests.length})
-          </h3>
+          </h2>
         </div>
         {failed ? (
           <LoadFailureNotice message="Could not load blood tests. Retry." onRetry={fetchData} />

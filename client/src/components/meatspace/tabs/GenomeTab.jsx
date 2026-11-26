@@ -820,7 +820,7 @@ export default function GenomeTab() {
 
         {/* Sync progress */}
         {clinvarProgress && (
-          <div className="flex items-center gap-2 p-3 rounded bg-port-accent-2/10 border border-port-accent-2/20 text-sm text-port-accent-2">
+          <div role="status" aria-live="polite" className="flex items-center gap-2 p-3 rounded bg-port-accent-2/10 border border-port-accent-2/20 text-sm text-port-accent-2">
             <BrailleSpinner />
             {clinvarProgress}
           </div>
@@ -996,7 +996,7 @@ export default function GenomeTab() {
 
         {/* Search result */}
         {searchResult && (
-          <div className="p-4 rounded bg-port-card border border-port-border space-y-3">
+          <div role="status" aria-live="polite" className="p-4 rounded bg-port-card border border-port-border space-y-3">
             {searchResult.found ? (
               <>
                 <div className="flex items-center justify-between flex-wrap gap-2">
@@ -1043,7 +1043,7 @@ export default function GenomeTab() {
 
       {/* Saving indicator */}
       {savingNotes && (
-        <div className="fixed bottom-4 right-4 px-3 py-2 bg-port-card border border-port-border rounded shadow-lg text-xs text-gray-400 flex items-center gap-2">
+        <div role="status" aria-live="polite" className="fixed bottom-4 right-4 px-3 py-2 bg-port-card border border-port-border rounded shadow-lg text-xs text-gray-400 flex items-center gap-2">
           <BrailleSpinner />
           Saving notes...
         </div>

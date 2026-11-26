@@ -45,9 +45,9 @@ export default function StandardDrinkCalculator() {
         <span className="text-gray-500 pb-1.5">=</span>
         <div className="text-center pb-1">
           <span className="text-xs text-gray-500 block">Std drinks</span>
-          <span className={`text-lg font-bold ${standardDrinks > 2 ? 'text-port-error' : standardDrinks > 0 ? 'text-port-accent' : 'text-gray-500'}`}>
+          <output aria-live="polite" className={`text-lg font-bold ${standardDrinks > 2 ? 'text-port-error' : standardDrinks > 0 ? 'text-port-accent' : 'text-gray-500'}`}>
             {standardDrinks || '—'}
-          </span>
+          </output>
         </div>
       </div>
       {pureAlcohol > 0 && (

@@ -54,10 +54,10 @@ describe('AlcoholTab history load', () => {
 it('sends the rendered event identity when editing and deleting a history row', async () => {
   getDailyAlcohol.mockResolvedValue([{ date: '2024-06-01', alcohol: { drinks: [{ id: 'event-id', name: 'Example', oz: 12, abv: 5, count: 1 }] } }]);
   render(<AlcoholTab />);
-  fireEvent.click(await screen.findByRole('button', { name: 'Edit drink', exact: true }));
+  fireEvent.click(await screen.findByRole('button', { name: 'Edit Example entry for 2024-06-01', exact: true }));
   fireEvent.click(screen.getByRole('button', { name: 'Save', exact: true }));
   await waitFor(() => expect(updateAlcoholDrink).toHaveBeenCalledWith('2024-06-01', 0, expect.objectContaining({ id: 'event-id' })));
-  fireEvent.click(await screen.findByRole('button', { name: 'Remove drink', exact: true }));
+  fireEvent.click(await screen.findByRole('button', { name: 'Remove Example entry for 2024-06-01', exact: true }));
   fireEvent.click(screen.getByRole('button', { name: 'Remove', exact: true }));
   await waitFor(() => expect(removeAlcoholDrink).toHaveBeenCalledWith('2024-06-01', 0, 'event-id'));
 });
@@ -84,10 +84,10 @@ it('keeps the edit draft on the same drink when an earlier button is removed in 
   removeCustomDrink.mockResolvedValue({ name: 'Example Stout', oz: 12, abv: 5 });
   render(<AlcoholTab />);
   fireEvent.click(await screen.findByRole('button', { name: /Manage/ }));
-  fireEvent.click(screen.getAllByRole('button', { name: 'Edit' })[1]);
+  fireEvent.click(screen.getAllByRole('button', { name: /Edit Example/ })[1]);
   expect(screen.getByLabelText('Drink button name')).toHaveValue('Example Lager');
 
-  fireEvent.click(screen.getAllByRole('button', { name: 'Remove' })[0]);
+  fireEvent.click(screen.getAllByRole('button', { name: /^Remove Example/ })[0]);
   const confirm = screen.getByRole('group', { name: 'Confirm remove quick-add button Example Stout' });
   fireEvent.click(within(confirm).getByRole('button', { name: /Remove/ }));
   await waitFor(() => expect(removeCustomDrink).toHaveBeenCalledWith(0));
@@ -138,7 +138,7 @@ it('leaves the drink editor open when the update rejects', async () => {
   }]);
   updateAlcoholDrink.mockRejectedValueOnce(new Error('boom'));
   render(<AlcoholTab />);
-  fireEvent.click(await screen.findByRole('button', { name: 'Edit drink', exact: true }));
+  fireEvent.click(await screen.findByRole('button', { name: 'Edit Example entry for 2024-06-01', exact: true }));
   fireEvent.change(screen.getByLabelText('Entry name'), { target: { value: 'Corrected' } });
   const readsBeforeSave = getDailyAlcohol.mock.calls.length;
   fireEvent.click(screen.getByRole('button', { name: 'Save', exact: true }));

@@ -48,7 +48,7 @@ export default function LifeEventsPanel({ events, onAdd, onToggle, onRemove }) {
       >
         <div className="flex items-center gap-2">
           <Calendar size={16} className="text-amber-400" />
-          <h3 className="text-sm font-medium text-gray-400 uppercase tracking-wider">Life Events</h3>
+          <h2 className="text-sm font-medium text-gray-400 uppercase tracking-wider">Life Events</h2>
           <span className="text-xs text-gray-600">{enabledCount} active</span>
         </div>
         <ChevronDown size={16} className={`text-gray-500 transition-transform ${expanded ? 'rotate-180' : ''}`} />
@@ -84,7 +84,7 @@ export default function LifeEventsPanel({ events, onAdd, onToggle, onRemove }) {
                   <button
                     onClick={() => onRemove(event.id)}
                     className="min-h-[44px] min-w-[44px] inline-flex items-center justify-center opacity-40 [@media(hover:hover)]:sm:opacity-0 sm:group-hover:opacity-100 focus-visible:opacity-100 transition-opacity text-gray-600 hover:text-port-error p-0.5"
-                    title="Remove" aria-label="Remove"
+                    title="Remove" aria-label={`Remove ${event.name || event.type || 'event'}`}
                   >
                     <Trash2 size={12} />
                   </button>

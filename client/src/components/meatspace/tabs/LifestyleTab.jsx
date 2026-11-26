@@ -108,7 +108,7 @@ export default function LifestyleTab() {
       <div className="bg-port-card border border-port-border rounded-xl p-6">
         <div className="flex items-center gap-2 mb-4">
           <ClipboardList size={18} className="text-port-accent" />
-          <h3 className="text-sm font-medium text-gray-400 uppercase tracking-wider">Profile</h3>
+          <h2 className="text-sm font-medium text-gray-400 uppercase tracking-wider">Profile</h2>
         </div>
         <div>
           <div className="flex items-center justify-between mb-2">
@@ -145,7 +145,7 @@ export default function LifestyleTab() {
       {/* Lifestyle Questionnaire */}
       <div className="bg-port-card border border-port-border rounded-xl p-6">
         <div className="flex items-center justify-between mb-6">
-          <h3 className="text-sm font-medium text-gray-400 uppercase tracking-wider">Lifestyle Questionnaire</h3>
+          <h2 className="text-sm font-medium text-gray-400 uppercase tracking-wider">Lifestyle Questionnaire</h2>
           <button
             onClick={handleSave}
             disabled={saving}
@@ -296,7 +296,7 @@ export default function LifestyleTab() {
 
       {/* Impact Preview */}
       <div className="bg-port-card border border-port-border rounded-xl p-6">
-        <h3 className="text-sm font-medium text-gray-400 uppercase tracking-wider mb-3">Impact on Life Expectancy</h3>
+        <h2 className="text-sm font-medium text-gray-400 uppercase tracking-wider mb-3">Impact on Life Expectancy</h2>
         <p className="text-xs text-gray-600 mb-3">
           Changes to lifestyle factors are immediately reflected in your death clock calculation when you save.
         </p>
