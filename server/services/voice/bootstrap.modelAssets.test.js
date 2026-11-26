@@ -77,6 +77,17 @@ describe('Piper voice with an ONNX but no sidecar (#9808)', () => {
     expect(inspectVoiceAsset('piper', onnxPath()).state).toBe('verified');
   });
 
+  it('keeps Piper audition setup from provisioning configured Whisper or CoreML', async () => {
+    setupScriptCompletes();
+    await expect(downloadPiperVoice(VOICE_ID, cfg({
+      stt: { ...VOICE_DEFAULTS.stt, engine: 'whisper', coreml: true },
+    }))).resolves.toMatchObject({ downloaded: true });
+
+    const setupEnv = execFile.mock.calls[0][2].env;
+    expect(setupEnv).toMatchObject({ STT_ENGINE: 'web-speech', INSTALL_COREML: '0' });
+    expect(inspectVoiceAsset('piper', onnxPath()).state).toBe('verified');
+  });
+
   it('rejects a download that left the voice unusable and lets the next request retry', async () => {
     setupScriptCompletes();
     execFile.mockImplementationOnce((_cmd, _args, _opts, done) => done(null, { stdout: '', stderr: '' }));
@@ -88,9 +99,10 @@ describe('Piper voice with an ONNX but no sidecar (#9808)', () => {
 
   it('is repaired by Save & Reconcile (default allowSetup) via the setup script', async () => {
     setupScriptCompletes();
-    await reconcile(cfg());
+    await expect(reconcile(cfg({ stt: { ...VOICE_DEFAULTS.stt, engine: 'whisper', coreml: true } })))
+      .rejects.toThrow(/whisper-server not on PATH/);
     expect(execFile).toHaveBeenCalledTimes(1);
-    expect(inspectVoiceAsset('piper', onnxPath()).state).toBe('verified');
+    expect(execFile.mock.calls[0][2].env).toMatchObject({ STT_ENGINE: 'whisper', INSTALL_COREML: '1' });
   });
 
   it('is left alone at boot: readiness is read-only and starts no download', async () => {

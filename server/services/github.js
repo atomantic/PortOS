@@ -1067,15 +1067,15 @@ export async function findPullRequestForBranch(branch, { cwd = null, env = null,
  * URL answers nothing useful — callers classify the host first and skip this.
  *
  * @param {string} prRef - PR url or number (anything `gh pr view` accepts)
- * @param {{ cwd?: string, env?: object|null, repoSpec?: string }} [opts] - working directory,
- *   forge credentials (see `resolveForgeForRepo`), and optional explicit `--repo` selector.
+ * @param {{ cwd?: string, env?: object|null }} [opts] - repo dir gh resolves the
+ *   remote from, and the env overlay to run under (see `resolveForgeForRepo`).
  * @returns {Promise<{ status: 'known'|'unavailable', state: string|null, detail: string|null }>}
  *   `state` is upper-cased (`MERGED` / `OPEN` / `CLOSED`) when status is `known`.
  */
-export async function getPullRequestState(prRef, { cwd = null, env = null, repoSpec = null } = {}) {
+export async function getPullRequestState(prRef, { cwd = null, env = null } = {}) {
   if (!prRef) return { status: 'unavailable', state: null, detail: 'no PR reference' };
   const { readPullRequestOutcome } = await import('./prProbe.js');
-  const { view, reason } = await readPullRequestOutcome(prRef, 'state', { cwd, env, repoSpec, timeoutMs: DEFAULT_EXEC_GH_TIMEOUT_MS });
+  const { view, reason } = await readPullRequestOutcome(prRef, 'state', { cwd, env, timeoutMs: DEFAULT_EXEC_GH_TIMEOUT_MS });
   if (!view) return { status: 'unavailable', state: null, detail: reason };
   const state = typeof view.state === 'string' ? view.state.toUpperCase() : null;
   // A zero-exit gh that emitted nothing parseable told us nothing.

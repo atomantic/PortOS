@@ -128,6 +128,8 @@ export const downloadPiperVoice = (voiceId, currentCfg) => withVoiceLifecycle(as
   // present, so this is cheap on repeat invocations.
   await runSetupScript({
     ...currentCfg,
+    // Voice auditions provision Piper only; Save & Reconcile owns STT setup.
+    stt: { ...currentCfg.stt, engine: 'web-speech', coreml: false },
     tts: { engine: 'piper', piper: { voicePath } },
   });
   const after = inspectVoiceAsset('piper', absVoicePath);
@@ -316,7 +318,7 @@ export const ensureToolCapableModel = async (cfg) => {
   // `null` = the backend could not be reached. Every entry in the install
   // chain would fail for that one shared reason, so say so ONCE and stop —
   // walking the chain here is what spawned four futile multi-GB downloads on
-  // every boot of a machine whose local server simply wasn't running.
+  // each time reconciliation ran against a stopped local server.
   if (installed === null) {
     console.warn(`🎙️  voice: ${backend.label} is not reachable — ${backend.remedy}`);
     return { skipped: 'backend-unreachable', backend: backend.id };
@@ -450,12 +452,14 @@ const reconcileVoice = async (cfg, { allowSetup = true } = {}) => {
     }
   }
 
-  // A first install can take minutes. Keep it off the lifecycle queue.
-  pendingModelConfig = cfg;
-  if (!modelProvisioning) {
-    modelProvisioning = drainModelProvisioning().catch((err) => {
-      console.warn(`🎙️  voice: model provisioning failed: ${err.message}`);
-    });
+  // Only Save & Reconcile can pull or warm LLM weights. Keep that work off the lifecycle queue.
+  if (allowSetup) {
+    pendingModelConfig = cfg;
+    if (!modelProvisioning) {
+      modelProvisioning = drainModelProvisioning().catch((err) => {
+        console.warn(`🎙️  voice: model provisioning failed: ${err.message}`);
+      });
+    }
   }
 
   const bins = await verifyBinaries(cfg);

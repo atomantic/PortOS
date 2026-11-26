@@ -142,18 +142,18 @@ export async function isMergedPrHead(sourceWorkspace, branchName, head) {
  * that branch, and a reused branch makes that a different one. Same tri-state
  * discipline — `readable: false` is "we could not ask", never "not merged".
  *
- * GitHub answers by number directly and accepts a bound `repoSpec`. GitLab
- * goes through the branch lookup and the IID is CROSS-CHECKED: a mismatch
+ * GitHub answers by number directly. GitLab has no by-IID state read wired here,
+ * so it goes through the branch lookup and the IID is CROSS-CHECKED: a mismatch
  * means the branch's newest MR is not the one asked about, which is unreadable
  * rather than an answer about the wrong MR.
  *
  * @param {string} sourceWorkspace - a git working directory with the remote configured
- * @param {{ number: number, branch?: string, repoSpec?: string }} target
+ * @param {{ number: number, branch: string }} target
  * @returns {Promise<{ prState: string|null, cli: string|null, readable: boolean }>}
  *   `prState` is upper-cased (`MERGED` / `OPEN` / `CLOSED`) when `readable`, and
  *   is named to match `probePrForBranch` so both results read the same way.
  */
-export async function probeChangeRequestState(sourceWorkspace, { number, branch, repoSpec } = {}) {
+export async function probeChangeRequestState(sourceWorkspace, { number, branch } = {}) {
   const unreadable = (cli = null) => ({ prState: null, cli, readable: false });
   // `Number(null)` is 0 and `Number.isSafeInteger(0)` is true, so the positivity
   // check is what keeps a missing number from being asked about as PR #0.
@@ -163,13 +163,12 @@ export async function probeChangeRequestState(sourceWorkspace, { number, branch,
   if (!forge?.cli) return unreadable();
   const { cli, env } = forge;
   if (cli === 'glab') {
-    if (repoSpec) return unreadable(cli);
     const probe = await probePrForBranch(sourceWorkspace, branch, forge);
     if (!probe.readable || Number(probe.prNumber) !== id) return unreadable(cli);
     return { prState: probe.prState, cli, readable: true };
   }
   const { getPullRequestState } = await import('./github.js');
-  const view = await getPullRequestState(String(id), { cwd: sourceWorkspace, env: env || null, ...(repoSpec ? { repoSpec } : {}) })
+  const view = await getPullRequestState(String(id), { cwd: sourceWorkspace, env: env || null })
     .catch(() => ({ status: 'unavailable', state: null }));
   if (view.status !== 'known' || !view.state) return unreadable(cli);
   return { prState: view.state, cli, readable: true };

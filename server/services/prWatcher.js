@@ -13,6 +13,7 @@
 import { execGh, ensureForgeReachable } from './github.js';
 import { resolveForgeExecOptions } from './forgeExecOptions.js';
 import { readPullRequest } from './prProbe.js';
+import { PR_WATCHER_LIST_LIMIT } from './prWatcherCompletion.js';
 import { isForgeNoAccessError, logForgeNoAccessOnce } from '../lib/forgeAccessErrors.js';
 import { getAppById, updateApp, getActiveApps } from './apps.js';
 import { mergePR } from './git/prs.js';
@@ -29,17 +30,6 @@ import { isSelfManagedPrActive } from '../lib/selfManagedPrAuthors.js';
 import { listWorktrees } from './worktreeManager.js';
 import { getBranches } from './git/status.js';
 import { loadLateBoundService } from '../lib/lateBoundServices.js';
-
-// Bound the gh query. The high-water mark (computePrCheck) advances to the max
-// open PR number it saw, so it can only correctly drain a backlog it received
-// in full: if `gh pr list` truncated the page, new PRs numbered below the
-// page's minimum would be marked seen without ever dispatching. gh returns
-// newest-first, so truncation drops the OLDEST new PRs. We set the cap high
-// enough (200) that a single-user app's default branch realistically never
-// truncates, and `checkPullRequests` emits a loud warning (never silent) if it
-// ever does — at which point the operator should run the watcher again or raise
-// the cap. 200 matches the limit github.js#syncRepos already uses.
-const PR_LIST_LIMIT = 200;
 
 // The pending-merge sweep runs on its own CoS timer (`cos-pending-merge-sweep`
 // in cos.js) every 30 minutes. Six hours is long enough for an ordinary CI
@@ -171,7 +161,7 @@ async function listOpenPullRequests(repoSpec, baseBranch, { cwd, env } = {}) {
   const raw = await execGh([
     'pr', 'list', '--repo', repoSpec,
     '--base', baseBranch, '--state', 'open',
-    '--limit', String(PR_LIST_LIMIT),
+    '--limit', String(PR_WATCHER_LIST_LIMIT),
     '--json', 'number,title,author,url,createdAt,updatedAt,isDraft,headRefName,headRefOid,mergeStateStatus,statusCheckRollup'
   ], undefined, { cwd, env, backoffKey: repoSpec }).catch((err) => {
     if (isForgeNoAccessError(err)) {
@@ -1085,8 +1075,8 @@ export async function checkPullRequests(app, {
   // mark instead; the next run retries, and once the open-PR count drops below
   // the cap the watcher resumes. No silent skip, no data loss. Realistically
   // unreachable for a single-user repo at a 200 cap.
-  if (prs.length >= PR_LIST_LIMIT) {
-    console.warn(`⚠️ pr-watcher: ${repoFullName} has ≥${PR_LIST_LIMIT} open PRs — deferring (not advancing the high-water mark) so no newly-opened PR is skipped.`);
+  if (prs.length >= PR_WATCHER_LIST_LIMIT) {
+    console.warn(`⚠️ pr-watcher: ${repoFullName} has ≥${PR_WATCHER_LIST_LIMIT} open PRs — deferring (not advancing the high-water mark) so no newly-opened PR is skipped.`);
     return { ok: false, reason: 'too-many-open-prs', repoFullName, defaultBranch };
   }
 
