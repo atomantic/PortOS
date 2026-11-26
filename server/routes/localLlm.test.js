@@ -1223,6 +1223,25 @@ describe('llama-server routes', () => {
     expect(res.status).toBe(400);
   });
 
+  it('ends install progress when llama.cpp installation rejects', async () => {
+    const { installLlamaServer } = await import('../services/llamaServerManager.js');
+    const start = { event: 'start', message: 'Installing llama.cpp via Homebrew…' };
+    installLlamaServer.mockImplementationOnce(async ({ onProgress }) => {
+      onProgress(start);
+      throw new ServerError('package manager exited', { status: 502 });
+    });
+    const app = makeApp();
+
+    const res = await request(app).post('/api/local-llm/llama-server/install');
+
+    expect(res.status).toBe(502);
+    const progressCalls = app.get('io').emit.mock.calls.filter(([event]) => event === 'localLlm:progress');
+    expect(progressCalls).toEqual([
+      ['localLlm:progress', start],
+      ['localLlm:progress', { event: 'error', message: 'llama.cpp install failed: package manager exited' }],
+    ]);
+  });
+
   it('POST /api/local-llm/llama-server/upgrade emits progress and returns the result', async () => {
     const { upgradeLlamaServer } = await import('../services/llamaServerManager.js');
     upgradeLlamaServer.mockResolvedValueOnce({ success: true, note: 'updated and restarted' });
