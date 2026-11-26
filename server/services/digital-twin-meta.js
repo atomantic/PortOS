@@ -80,8 +80,8 @@ export async function loadMeta() {
     // refuse outright; readers get uncached defaults, and saveMeta still refuses
     // to persist over the file until it is repaired, so the registry, histories
     // and tombstones are never replaced.
-    console.error(`❌ Digital twin meta.json is unreadable or malformed: ${META_FILE}`);
-    if (metaLockContext.getStore()) throw unreadableStoreError(META_FILE);
+    console.error('❌ Digital twin meta.json is unreadable or malformed: data/digital-twin/meta.json');
+    if (metaLockContext.getStore()) throw unreadableStoreError('data/digital-twin/meta.json');
     return structuredClone(DEFAULT_META);
   }
   const validated = digitalTwinMetaSchema.safeParse(parsed);
@@ -191,7 +191,7 @@ const readMetaObject = (content) => {
 // them would otherwise overwrite the real document registry and tombstones.
 async function assertMetaWritable() {
   const { ok, value } = await tryReadFileStrict(META_FILE);
-  if (!ok || (value !== null && !readMetaObject(value))) throw unreadableStoreError(META_FILE);
+  if (!ok || (value !== null && !readMetaObject(value))) throw unreadableStoreError('data/digital-twin/meta.json');
 }
 
 export async function saveMeta(meta) {

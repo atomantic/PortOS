@@ -108,7 +108,7 @@ export async function getDigitalTwinContextWithDocs(options = {}) {
   // failure leaves other prompt context available, including on CoS spawns.
   if (includePrivacyContext && meta.settings?.includePrivacyContext === true) {
     const privacyBlock = await getPrivacyTwinContext()
-      .catch(err => { console.log(`⚠️ Privacy twin context retrieval failed: ${err.message}`); return ''; });
+      .catch(() => { console.log('⚠️ Privacy twin context retrieval failed'); return ''; });
     if (privacyBlock && tokenCount + privacyBlock.length + 8 <= maxChars) {
       reference += `${privacyBlock}\n\n---\n\n`;
       tokenCount += privacyBlock.length + 8;

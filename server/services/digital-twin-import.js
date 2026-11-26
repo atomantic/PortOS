@@ -520,7 +520,7 @@ export async function analyzeAssessment(content, providerId, model) {
   }
 
   // 3. Call AI for analysis
-  console.log(`🧪 [${now()}] Calling ${provider.name} (${model}), prompt=${analysisPrompt.length} chars`);
+  console.log(`🧪 [${now()}] Calling ${provider.id} (${model}), prompt=${analysisPrompt.length} chars`);
   const aiResponse = await callProviderAI(provider, model, analysisPrompt);
 
   if (aiResponse.error) {

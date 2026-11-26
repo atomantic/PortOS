@@ -9,7 +9,7 @@ import { unlink, readdir } from 'fs/promises';
 import { join } from 'path';
 import { createHash } from 'crypto';
 import { v4 as uuidv4 } from '../lib/uuid.js';
-import { atomicWrite, ensureDir, PATHS, readJSONFile, readJSONFileStrict, tryReadFile, unreadableStoreError } from '../lib/fileUtils.js';
+import { atomicWrite, ensureDir, PATHS, readJSONFileStrict, tryReadFile, unreadableStoreError } from '../lib/fileUtils.js';
 import { isPlainObject } from '../lib/objects.js';
 import { withBackupAssetPublication } from '../lib/backupSnapshotBoundary.js';
 import { createFileWriteQueue } from '../lib/fileWriteQueue.js';
@@ -43,7 +43,7 @@ async function recoverIndexFromSnapshotFiles(reason) {
     entries
       .filter(name => name.endsWith('.json') && name !== 'index.json')
       .map(async name => indexEntryFromSnapshotFile(
-        await readJSONFile(join(SNAPSHOTS_DIR, name), null)
+        await readSnapshotFile(join(SNAPSHOTS_DIR, name))
       ))
   );
   const snapshots = metas
@@ -61,7 +61,7 @@ function isUsableIndex(parsed) {
 
 async function loadIndex() {
   await ensureSnapshotsDir();
-  const { ok, value } = await readJSONFileStrict(INDEX_FILE, null);
+  const { ok, value } = await readJSONFileStrict(INDEX_FILE, null, { logError: false });
   if (ok && isUsableIndex(value)) return { snapshots: value.snapshots };
   // Missing, empty, corrupt, or wrong-shaped index must not throw (that used
   // to disable every snapshot op). Rebuild from on-disk snapshot files so a
@@ -131,7 +131,8 @@ async function collectTwinData() {
     { key: 'autobiography/stories.json', path: join(DIGITAL_TWIN_DIR, 'autobiography', 'stories.json') }
   ];
   await Promise.all(jsonTargets.map(async ({ key, path }) => {
-    const parsed = await readJSONFile(path, null);
+    const { ok, value: parsed } = await readJSONFileStrict(path, null, { logError: false });
+    if (!ok) console.warn(`⚠️ Time capsule skipped unreadable input: ${key}`);
     if (parsed == null) return;
     if (key === 'genome.json') {
       const summary = summarizeGenomeForSnapshot(parsed);
@@ -219,7 +220,7 @@ export async function createSnapshot(label, description = '') {
     await atomicWrite(snapshotFile, { ...snapshot, data });
     index.snapshots.unshift(snapshot);
     await saveIndex(index);
-    console.log(`📸 Time capsule created: "${label}" (${snapshot.id.slice(0, 8)})`);
+    console.log(`📸 Time capsule created: ${snapshot.id.slice(0, 8)}`);
     return snapshot;
   }));
 }
@@ -314,10 +315,9 @@ export async function stripGenomeFromSnapshots() {
     const loaded = [];
     for (const name of snapshotFiles) {
       const filePath = join(SNAPSHOTS_DIR, name);
-      const { ok, value } = await readJSONFileStrict(filePath, null);
-      if (!ok) throw unreadableStoreError(filePath);
-      if (value === null) continue;
-      if (!isPlainObject(value)) throw unreadableStoreError(filePath);
+      const { ok, value } = await readJSONFileStrict(filePath, null, { logError: false });
+      if (ok && value === null) continue;
+      if (!ok || !isPlainObject(value)) throw unreadableStoreError('data/digital-twin/snapshots');
       loaded.push({ filePath, parsed: value });
     }
 
@@ -340,7 +340,7 @@ export async function stripGenomeFromSnapshots() {
       await atomicWrite(filePath, snapshot);
     }
 
-    const { ok: indexOk, value: indexValue } = await readJSONFileStrict(INDEX_FILE, null);
+    const { ok: indexOk, value: indexValue } = await readJSONFileStrict(INDEX_FILE, null, { logError: false });
     if (indexOk && isUsableIndex(indexValue)) {
       const metaById = new Map(allMetas.map(meta => [meta.id, meta]));
       let indexChanged = false;
@@ -386,13 +386,18 @@ export async function listSnapshots() {
   return index.snapshots;
 }
 
+async function readSnapshotFile(filePath) {
+  const { ok, value } = await readJSONFileStrict(filePath, null, { logError: false });
+  if (!ok) console.warn('⚠️ Time capsule snapshot is unreadable or malformed');
+  return value;
+}
+
 /**
  * Get a single snapshot with full data
  */
 export async function getSnapshot(id) {
   const snapshotFile = join(SNAPSHOTS_DIR, `${id}.json`);
-  const { value } = await readJSONFileStrict(snapshotFile, null);
-  return value;
+  return readSnapshotFile(snapshotFile);
 }
 
 /**
@@ -417,7 +422,7 @@ export async function deleteSnapshot(id) {
       throw err;
     });
 
-    console.log(`🗑️ Time capsule deleted: "${exists.label}" (${id.slice(0, 8)})`);
+    console.log(`🗑️ Time capsule deleted: ${id.slice(0, 8)}`);
     return true;
   }));
 }
