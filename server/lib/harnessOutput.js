@@ -3,14 +3,14 @@
  * banner and `compareHarnessVersions` compares versions null-safely.
  */
 
-import { parsePiModelList } from './aiToolkit/internal/pi.js';
 // Pure: the service layer hands captured stdout here. Model ids keep the spelling `--model` takes
 // (OpenCode's `provider/model` namespace is KEPT). agy and cursor-agent delegate to their existing
 // parsers (agy's handles older bare-id rows and drops the `<configured-default>` sentinel).
 
-import { parseAntigravityModelList } from './antigravity.js';
-import { compareSemver } from './versionUtils.js';
+import { parseAntigravityModelList } from './aiToolkit/internal/antigravity.js';
 import { parseCursorModelList } from './aiToolkit/internal/cursor.js';
+import { parsePiModelList } from './aiToolkit/internal/pi.js';
+import { compareSemver } from './versionUtils.js';
 
 /**
  * The first semver-looking token in a `--version` banner, or `null`.

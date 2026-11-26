@@ -6,10 +6,10 @@ import { ensureAntigravityPrintArgs, ensureAntigravityTuiArgs, ANTIGRAVITY_CLI_I
 import { unifyProviderModes } from './providerModes.js';
 import { modelContextWindowPatch } from './modelCatalog.js';
 import { normalizeModelAccess } from './modelAccess.js';
+import { CODEX_CONFIGURED_DEFAULT } from './codex.js';
 import { CODEX_SHIPPED_MODELS } from './codexShippedModels.js';
 import { LOCAL_RUNTIME_MARKER_KEYS } from './localRuntimeMarkers.js';
 
-const CODEX_CONFIGURED_DEFAULT = 'codex-configured-default';
 const CODEX_MODEL_KEYS = ['defaultModel', 'lightModel', 'mediumModel', 'heavyModel'];
 const CODEX_MODELS = CODEX_SHIPPED_MODELS;
 const CODEX_MODEL_DEFAULTS = {

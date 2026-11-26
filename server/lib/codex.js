@@ -3,6 +3,7 @@
  * predicate, and `ensureCodexTuiArgs` for TUI launch arguments.
  */
 
+import { isCodexCommand } from './aiToolkit/internal/codex.js';
 import { executionOptionsError } from './executionOptions.js';
 /**
  * Dependency-light (only `providerModels.js` helpers) so it stays importable from
@@ -15,23 +16,13 @@ import {
   argvHasFlag,
   buildCodexStartupArgs,
   codexOssLocalProvider,
-  commandBasename,
 } from './provider/providerModels.js';
 
-export const CODEX_COMMAND = 'codex';
-export const CODEX_CLI_ID = 'codex';
+export { CODEX_COMMAND, CODEX_CLI_ID, isCodexCommand } from './aiToolkit/internal/codex.js';
 
 /** The interactive Codex runner forwards images with its native --image flag. */
 export const isVisionCapableCodexTuiProvider = (provider) =>
   provider?.type === 'tui' && isCodexCommand(provider.command);
-
-/**
- * Matches by normalized binary basename so a path- or `.exe`-configured provider is recognized.
- * @param {string|null|undefined} command
- */
-export function isCodexCommand(command) {
-  return commandBasename(command) === CODEX_COMMAND;
-}
 
 // Approval/sandbox flags a user may already have pinned.
 const APPROVAL_POLICY_FLAGS = [

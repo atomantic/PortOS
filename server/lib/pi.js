@@ -9,10 +9,10 @@
  * Pi's user-owned `models.json`.
  */
 import { fileURLToPath } from 'node:url';
-import { argvHasFlag, commandBasename, hasModelFlag, buildEffortArgs } from './provider/providerModels.js';
+import { PI_COMMAND, isPiCommand } from './aiToolkit/internal/pi.js';
+import { argvHasFlag, hasModelFlag, buildEffortArgs } from './provider/providerModels.js';
 
-export const PI_COMMAND = 'pi';
-export const isPiCommand = (command) => commandBasename(command) === PI_COMMAND;
+export { PI_COMMAND, isPiCommand } from './aiToolkit/internal/pi.js';
 
 /** Provider name the shipped endpoint extension registers (see pi/portosEndpointExtension.js). */
 export const PI_ENDPOINT_PROVIDER = 'portos-endpoint';

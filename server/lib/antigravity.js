@@ -3,71 +3,28 @@
  * `isAntigravityCliProvider` predicates.
  */
 
-import { buildEffortArgs, commandBasename, extractBakedModel, hasModelFlag, resolveCliEffort, resolveCliModel, splitAntigravityModel, stripBrokenModelFlags } from './provider/providerModels.js';
+import {
+  ANTIGRAVITY_CLI_ID,
+  ANTIGRAVITY_COMMAND,
+  ANTIGRAVITY_PRINT_FLAGS,
+  stripAntigravityUnsupportedArgs,
+} from './aiToolkit/internal/antigravity.js';
+import { buildEffortArgs, extractBakedModel, hasModelFlag, resolveCliEffort, resolveCliModel, splitAntigravityModel, stripBrokenModelFlags } from './provider/providerModels.js';
 
-export const ANTIGRAVITY_CLI_ID = 'antigravity-cli';
-export const ANTIGRAVITY_TUI_ID = 'antigravity-tui';
-export const LEGACY_GEMINI_CLI_ID = 'gemini-cli';
-export const LEGACY_GEMINI_TUI_ID = 'gemini-tui';
-export const ANTIGRAVITY_CONFIGURED_DEFAULT = 'antigravity-configured-default';
-// Exported so cosValidation's REVIEWER_CLI_BINARIES maps the `antigravity` slug to this
-// string instead of retyping it.
-export const ANTIGRAVITY_COMMAND = 'agy';
-
-// Match by normalized binary basename so a path- or `.exe`-configured provider is still
-// recognized; exact-string matching would let prepareCliPrompt fall through to stdin
-// delivery, losing the prompt and leaving the trailing `--print` marker dangling.
-export function isAntigravityCommand(command) {
-  const base = commandBasename(command);
-  return base === ANTIGRAVITY_COMMAND || base === 'antigravity';
-}
-
-export function isAntigravityCliProvider(provider) {
-  return provider?.id === ANTIGRAVITY_CLI_ID || isAntigravityCommand(provider?.command);
-}
-
-// `agy models` prints one row per model on stdout (the "Fetching available models…"
-// banner goes to stderr). Older builds print a bare id per line; newer ones print
-// `<id>\t<Label>`. Both are accepted because other installs run older builds. The label
-// is anchored on a TAB, not "first whitespace token": a prose line ("Available models")
-// would otherwise surrender a regex-valid first word and be persisted as a model id.
-//
-// The id charset matches `sharedSchemas.js#cloudModelIdString`; restated rather than
-// imported because the schema graph is wider than this parser needs and several
-// mocked suites cannot absorb it.
-const MODEL_ID_CHARS = '[A-Za-z0-9][A-Za-z0-9._:/-]*';
-const ANTIGRAVITY_MODEL_ID = new RegExp(`^${MODEL_ID_CHARS}$`);
-const ANTIGRAVITY_MODEL_LINE = new RegExp(`^(${MODEL_ID_CHARS})(?:\\t.*)?$`);
-
-/**
- * Defense-in-depth id check for spawn sites whose `--model` value the route schema didn't bound.
- * @param {unknown} id
- */
-export function isAntigravityModelId(id) {
-  return typeof id === 'string' && ANTIGRAVITY_MODEL_ID.test(id);
-}
-
-/**
- * Parse ids out of `agy models` output, dropping prose and the configured-default
- * sentinel (which callers re-prepend). Mirrored in
- * `server/lib/aiToolkit/internal/antigravity.js` (cannot import out) — keep in sync.
- *
- * @param {string} stdout - raw stdout from `agy models`
- * @returns {string[]} deduped ids, in the order the binary listed them
- */
-export function parseAntigravityModelList(stdout) {
-  const ids = [];
-  for (const line of String(stdout || '').split(/\r?\n/)) {
-    const match = ANTIGRAVITY_MODEL_LINE.exec(line.trim());
-    if (match && match[1] !== ANTIGRAVITY_CONFIGURED_DEFAULT) ids.push(match[1]);
-  }
-  return [...new Set(ids)];
-}
-
-// `agy --print`/`-p`/`--prompt` takes the prompt as the flag's VALUE and does NOT read
-// stdin, so `--print <prompt>` must be the FINAL pair in the argv;
-// prepareAntigravityPrompt relocates the flag to the end at spawn time.
-export const ANTIGRAVITY_PRINT_FLAGS = ['--print', '-p', '--prompt'];
+export {
+  ANTIGRAVITY_CLI_ID,
+  ANTIGRAVITY_COMMAND,
+  ANTIGRAVITY_CONFIGURED_DEFAULT,
+  ANTIGRAVITY_PRINT_FLAGS,
+  ANTIGRAVITY_TUI_ID,
+  LEGACY_GEMINI_CLI_ID,
+  LEGACY_GEMINI_TUI_ID,
+  isAntigravityCliProvider,
+  isAntigravityCommand,
+  isAntigravityModelId,
+  parseAntigravityModelList,
+  stripAntigravityUnsupportedArgs,
+} from './aiToolkit/internal/antigravity.js';
 
 /**
  * Append `--model` / `--effort` to an agy argv for a per-run override when the provider
@@ -107,7 +64,7 @@ function appendAntigravityModelAndEffort(args, overrides = {}) {
  *   provider to hand `buildEffortArgs`.
  */
 export function resolveAntigravityModelAndEffort(args = [], { model = null, effort = null, models = null } = {}) {
-  const provider = { id: ANTIGRAVITY_CLI_ID, command: 'agy', models };
+  const provider = { id: ANTIGRAVITY_CLI_ID, command: ANTIGRAVITY_COMMAND, models };
   const pinned = hasModelFlag(args);
   const requested = resolveCliModel(model);
   const { base, effort: bakedEffort } = splitAntigravityModel(pinned ? extractBakedModel(args) : requested);
@@ -179,29 +136,6 @@ export function ensureAntigravityTuiArgs(args = []) {
   const out = stripBrokenModelFlags(stripAntigravityUnsupportedArgs(args));
   if (!out.includes('--dangerously-skip-permissions') && !out.includes('--sandbox')) {
     out.push('--dangerously-skip-permissions');
-  }
-  return out;
-}
-
-// `--yolo`, `-m`, `--output-format` and `-o` are legacy Gemini-CLI flags agy rejects.
-// The LONG `--model` is deliberately kept: it is a real user pin, and `hasModelFlag`
-// sees it, which suppresses PortOS's own injected `--model`.
-export function stripAntigravityUnsupportedArgs(args = []) {
-  const out = [];
-  for (let i = 0; i < args.length; i++) {
-    const arg = args[i];
-    if (arg === '--yolo') continue;
-    if (arg === '-m' || arg === '--output-format' || arg === '-o') {
-      i += 1;
-      continue;
-    }
-    if (
-      typeof arg === 'string'
-      && (arg.startsWith('-m=') || arg.startsWith('--output-format=') || arg.startsWith('-o='))
-    ) {
-      continue;
-    }
-    out.push(arg);
   }
   return out;
 }

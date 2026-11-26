@@ -10,22 +10,9 @@
  * Dependency-light so the standalone autofixer can import it.
  */
 
-import { argvHasFlag, commandBasename, foldCursorEffortIntoModel, hasModelFlag } from './provider/providerModels.js';
+import { argvHasFlag, foldCursorEffortIntoModel, hasModelFlag } from './provider/providerModels.js';
 
-/** The binary basename. Deliberately NOT `cursor` — that is the GUI editor. */
-export const CURSOR_COMMAND = 'cursor-agent';
-
-/**
- * True when a provider command points at the Cursor Agent binary (bare, by path, or with a
- * Windows `.exe`). Matches ONLY `cursor-agent`: a bare `cursor` is the GUI editor launcher,
- * which would open a window or hang.
- *
- * @param {string|null|undefined} command
- * @returns {boolean}
- */
-export function isCursorCommand(command) {
-  return commandBasename(command) === CURSOR_COMMAND;
-}
+export { CURSOR_COMMAND, isCursorCommand } from './aiToolkit/internal/cursor.js';
 
 const PRINT_FLAGS = ['--print', '-p'];
 // A headless run needs BOTH gates satisfied: TRUST (else it exits immediately) and APPROVAL
