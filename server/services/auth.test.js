@@ -2,11 +2,22 @@ import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from 'vites
 import { mockPathsDataRoot } from '../lib/mockPathsDataRoot.js';
 
 const { tempRoot, makeProxy, cleanup } = mockPathsDataRoot({ prefix: 'portos-auth-' });
-const { authTestHooks } = vi.hoisted(() => ({ authTestHooks: { hashGate: null } }));
+const { authTestHooks } = vi.hoisted(() => ({ authTestHooks: { hashGate: null, sessionWriteGate: null } }));
 
 vi.mock('../lib/fileUtils.js', async () => {
   const actual = await vi.importActual('../lib/fileUtils.js');
   return makeProxy(actual);
+});
+
+vi.mock('../lib/secureAuthStore.js', async (importOriginal) => {
+  const actual = await importOriginal();
+  return {
+    ...actual,
+    writeSecureJson: async (file, data) => {
+      if (authTestHooks.sessionWriteGate) await authTestHooks.sessionWriteGate();
+      return actual.writeSecureJson(file, data);
+    },
+  };
 });
 
 // High-level auth tests exercise state/session behavior, not production KDF
@@ -34,7 +45,7 @@ vi.mock('../../lib/portosAuthCore.js', async () => {
 // Reset settings.json between tests so a password-set in one test doesn't bleed
 // into the next. The auth service uses the real settings.js, which writes to
 // PATHS.data → tempRoot.
-import { writeFileSync } from 'fs';
+import { readFileSync, writeFileSync } from 'fs';
 import { join } from 'path';
 
 const resetSettings = () => {
@@ -47,6 +58,7 @@ const resetSettings = () => {
 beforeEach(() => {
   vi.resetModules();
   authTestHooks.hashGate = null;
+  authTestHooks.sessionWriteGate = null;
   resetSettings();
 });
 
@@ -252,7 +264,6 @@ describe('auth service', () => {
   });
 
   it('carries a missing label/id on an older record forward without invalidating it', async () => {
-    const { readFileSync } = await import('fs');
     const auth = await import('./auth.js');
     await auth.setPassword({ newPassword: 'correct-horse' });
     const { token } = await auth.createSession();
@@ -377,8 +388,65 @@ describe('auth service', () => {
     expect(await server.verifySession(token)).toBe(true);
   });
 
+  it('persists a full revoke after a session creation that was already writing', async () => {
+    const auth = await import('./auth.js');
+    const existing = await auth.createSession();
+    const writeStarted = Promise.withResolvers();
+    const releaseWrite = Promise.withResolvers();
+    let writeCount = 0;
+    authTestHooks.sessionWriteGate = async () => {
+      writeCount += 1;
+      if (writeCount === 1) {
+        writeStarted.resolve();
+        await releaseWrite.promise;
+      }
+    };
+
+    const create = auth.createSession();
+    await writeStarted.promise;
+    const revoke = auth.revokeAllSessions();
+    try {
+      await new Promise(setImmediate);
+      expect(writeCount).toBe(1);
+    } finally {
+      releaseWrite.resolve();
+      await Promise.all([create, revoke]);
+    }
+
+    expect(JSON.parse(readFileSync(join(tempRoot, 'auth-sessions.json'), 'utf8'))).toEqual({ tokens: [] });
+    vi.resetModules();
+    const fresh = await import('./auth.js');
+    expect(await fresh.verifySession(existing.token)).toBe(false);
+    expect(await fresh.verifySession((await create).token)).toBe(false);
+  });
+
+  it('preserves independently minted sessions when the server creates a session with a stale cache', async () => {
+    const server = await import('./auth.js');
+    const existing = await server.createSession();
+    vi.resetModules();
+    const mint = await import('./auth.js');
+    const external = await mint.createSession({ label: 'keepalive' });
+
+    const local = await server.createSession();
+    vi.resetModules();
+    const fresh = await import('./auth.js');
+    expect(new Set((await fresh.listSessions()).map(({ id }) => id))).toEqual(new Set([existing.id, external.id, local.id]));
+    expect(await fresh.verifySession(external.token)).toBe(true);
+  });
+
+  it('revokes an independently minted session by id before it has been verified locally', async () => {
+    const server = await import('./auth.js');
+    const existing = await server.createSession();
+    vi.resetModules();
+    const mint = await import('./auth.js');
+    const external = await mint.createSession({ label: 'keepalive' });
+
+    expect(await server.revokeSessionById(external.id)).toBe(true);
+    expect(await server.verifySession(external.token)).toBe(false);
+    expect(await server.verifySession(existing.token)).toBe(true);
+  });
+
   it('stores sessions hashed at rest (plaintext token never lands in the file)', async () => {
-    const { readFileSync } = await import('fs');
     const { join } = await import('path');
     const auth = await import('./auth.js');
     await auth.setPassword({ newPassword: 'correct-horse' });
