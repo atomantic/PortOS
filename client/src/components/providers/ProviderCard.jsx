@@ -34,12 +34,14 @@ import {
   isLaunchableTuiProvider,
   mergeObservedContextWindows,
   providerTypeClass,
+  runtimeBadgeMeta,
   resolveModelContextWindow,
   supportsModelRefresh,
   withRuntimeContextWindow,
 } from '../../utils/providers';
 import { formatContextLength, formatDateTime } from '../../utils/formatters';
 import { isHttpsUrl } from '../../utils/urlNormalize';
+import ProviderRuntimeBadge from './ProviderRuntimeBadge.jsx';
 import ProviderRuntimeStatus from './ProviderRuntimeStatus';
 import ProviderReadiness from './ProviderReadiness';
 import { CodexRoutingNotice, GatewayKeyHint } from './ProviderNotices';
@@ -152,6 +154,8 @@ export default function ProviderCard({
   const routingAdvisory = codexRoutingAdvisory(provider);
   const compatibleModels = filterHardwareCompatibleProviderModels(provider.models, provider);
   const fleetProvider = isFleetProvider(provider);
+  const runtimeBadge = runtimeBadgeMeta(provider);
+  const runtimeCopy = (fleetProvider && runtimeBadge?.fleet) || runtimeBadge;
   const fleetHost = fleetProvider && URL.canParse(provider.endpoint)
     ? new URL(provider.endpoint).hostname
     : null;
@@ -210,26 +214,7 @@ export default function ProviderCard({
               <Network size={11} /> FLEET HOST
             </span>
           )}
-          {provider.llamaBacked && (
-            <span className="text-xs px-2 py-0.5 rounded bg-purple-500/20 text-purple-300 border border-purple-500/30">
-              LLAMA.CPP / DFLASH
-            </span>
-          )}
-          {provider.vllmBacked && (
-            <span className="text-xs px-2 py-0.5 rounded bg-emerald-500/20 text-emerald-300 border border-emerald-500/30">
-              vLLM / DFLASH2
-            </span>
-          )}
-          {provider.sglangBacked && (
-            <span className="text-xs px-2 py-0.5 rounded bg-amber-500/20 text-amber-300 border border-amber-500/30">
-              SGLANG
-            </span>
-          )}
-          {provider.mtplxBacked && (
-            <span className="text-xs px-2 py-0.5 rounded bg-blue-500/20 text-blue-300 border border-blue-500/30">
-              MTPLX
-            </span>
-          )}
+          <ProviderRuntimeBadge meta={runtimeBadge} />
           {/* One badge for the card's state — the same one that
               colors its border and decides which section it sits in.
               BENCHED covers what used to render as UNAVAILABLE: an
@@ -516,19 +501,13 @@ export default function ProviderCard({
         )}
 
         <div className="text-sm text-gray-400 space-y-1">
-          {provider.llamaBacked && (
-            <p className="text-xs text-purple-300/90">
-              Local llama.cpp / llama-server harness (endpoint: <code className="text-purple-200">{provider.endpoint}</code>) — supports DFlash 2 speculative drafting.
-            </p>
-          )}
-          {provider.vllmBacked && (
-            <p className="text-xs text-emerald-300/90">
-              {fleetProvider ? 'Fleet vLLM runtime' : 'Local vLLM container'} (endpoint: <code className="text-emerald-200">{provider.endpoint}</code>) — Qwen3.8-27B with DFlash 2 drafting. {fleetProvider ? 'This PortOS sends work over the private network; runtime lifecycle stays on the GPU host.' : 'It holds the whole GPU, so stop it before running local image/video generation.'}
-            </p>
-          )}
-          {provider.sglangBacked && (
-            <p className="text-xs text-amber-300/90">
-              Local SGLang container (endpoint: <code className="text-amber-200">{provider.endpoint}</code>) — Qwen3.8-27B on a Hopper or Blackwell card. It holds the whole GPU, so stop it before running local image/video generation.
+          {runtimeCopy && (
+            <p className={`text-xs break-words ${runtimeBadge.descriptionClass || ''}`}>
+              {runtimeCopy.description}
+              {runtimeBadge.endpointClass && provider.endpoint && (
+                <> (endpoint: <code className={`break-all ${runtimeBadge.endpointClass}`}>{provider.endpoint}</code>)</>
+              )}
+              {runtimeCopy.detail && ` — ${runtimeCopy.detail}`}
             </p>
           )}
           {isProcessProvider(provider) && (

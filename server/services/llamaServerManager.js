@@ -475,13 +475,13 @@ export async function getLlamaServerEndpoint() {
 /**
  * Returns current status of llama-server (binary availability, running state, config, logs).
  */
-export async function getLlamaServerStatus() {
+export async function getLlamaServerStatus({ includeLogs } = {}) {
   const binaryPath = resolveLlamaServerBinary();
   const installed = Boolean(binaryPath);
   const plan = installPlan();
 
   return {
-    ...await daemon.getStatusBase({ installed }),
+    ...await daemon.getStatusBase({ installed, includeLogs }),
     // How llama.cpp is installed HERE, so the LLMs page can name the command
     // instead of guessing. Carried on the lifecycle status rather than on the
     // update probe below, because the not-installed card is exactly the one

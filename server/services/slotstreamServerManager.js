@@ -178,11 +178,11 @@ export async function getSlotstreamServerEndpoint() {
 /**
  * Current Slotstream state: binary, process, endpoint, memory plan, cache, logs.
  */
-export async function getSlotstreamServerStatus() {
+export async function getSlotstreamServerStatus({ includeLogs } = {}) {
   const binaryPath = resolveSlotstreamBinary();
   const installed = Boolean(binaryPath);
   const supported = installed || isAppleSilicon();
-  const base = await daemon.getStatusBase({ installed });
+  const base = await daemon.getStatusBase({ installed, includeLogs });
   const saved = await savedLaunchConfig();
   const cache = installed ? await listSlotstreamCachedModels() : { models: null, error: null };
   // The SAVED override, never the running config: `--memory-gb` is always on

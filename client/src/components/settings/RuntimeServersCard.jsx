@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react';
 import { Link } from 'react-router';
 import { Cpu, Box, Play, Square, Download, ArrowUpCircle, Power, PowerOff, RefreshCw, Save, Settings2, ExternalLink, Server } from 'lucide-react';
+import RuntimeLogDisclosure from './RuntimeLogDisclosure.jsx';
 import BrailleSpinner from '../BrailleSpinner';
 import ContextWindowSelect from '../ui/ContextWindowSelect.jsx';
 import { formatContextTokens, formatCount } from '../../utils/formatters';
@@ -529,6 +530,7 @@ export function ManagedInklingRuntimeCard({ descriptor, status, busy, actionInPr
       <ServerRow row={descriptor.toRow(status, (action) => () => onAction(id, action))} busy={busy} actionInProgress={actionInProgress}>
         <button type="button" onClick={onRefresh} className={neutralBtn}><RefreshCw size={12} />Check {label} status</button>
       </ServerRow>
+      <RuntimeLogDisclosure logs={status?.recentLogs} />
     </section>
   );
 }

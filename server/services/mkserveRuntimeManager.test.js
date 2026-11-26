@@ -70,7 +70,11 @@ describe('managed mkserve lifecycle', () => {
       if (verb === 'start') {
         getAppStatusStrict.mockResolvedValue({ status: 'online', pm_id: 7, args: args.slice(args.indexOf('--') + 1) });
         serve();
-      } else getAppStatusStrict.mockResolvedValue(missingApp);
+      } else if (verb === 'delete') {
+        getAppStatusStrict.mockResolvedValue(missingApp);
+      } else if (verb === 'logs') {
+        return { stdout: 'fixture output', stderr: 'fixture diagnostics' };
+      }
     });
 
     await expect(startMkserveServer()).resolves.toMatchObject({ success: true });
@@ -78,10 +82,11 @@ describe('managed mkserve lifecycle', () => {
       'start', '/usr/bin/env', '--name', MKSERVE_APP, '--cwd', installed.source,
       '-i', 'HF_HUB_OFFLINE=1', installed.python, '127.0.0.1', '8002', installed.weights,
     ]));
-    await expect(getMkserveRuntimeStatus()).resolves.toMatchObject({
-      state: 'running', managed: true, model: MKSERVE_MODEL, engine: 'offline-c', maxContext: 32768,
+    await expect(getMkserveRuntimeStatus({ includeLogs: true })).resolves.toMatchObject({
+      state: 'running', managed: true, recentLogs: ['fixture output', 'fixture diagnostics'], model: MKSERVE_MODEL, engine: 'offline-c', maxContext: 32768,
     });
     expect(installPinnedMkserve).not.toHaveBeenCalled();
+    expect(execPm2).toHaveBeenCalledWith(['logs', '7', '--nostream', '--lines', '100']);
     await expect(stopMkserveServer()).resolves.toMatchObject({ success: true });
     expect(execPm2).toHaveBeenCalledWith(['delete', '7'], { timeoutMs: 60_000 });
   });
@@ -90,7 +95,7 @@ describe('managed mkserve lifecycle', () => {
     readMkserveInstall.mockResolvedValue(installed);
     isPortInUse.mockResolvedValue(true);
     serve();
-    await expect(getMkserveRuntimeStatus()).resolves.toMatchObject({ state: 'external', managed: false, model: MKSERVE_MODEL });
+    await expect(getMkserveRuntimeStatus({ includeLogs: true })).resolves.toMatchObject({ state: 'external', managed: false, model: MKSERVE_MODEL });
     await expect(startMkserveServer()).rejects.toMatchObject({ code: 'MKSERVE_PORT_IN_USE' });
     await expect(stopMkserveServer()).rejects.toMatchObject({ code: 'MKSERVE_EXTERNAL_PROCESS' });
     getAppStatusStrict.mockResolvedValue({ status: 'online', args: ['unrelated local process'] });
