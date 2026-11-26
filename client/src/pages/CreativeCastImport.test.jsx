@@ -36,6 +36,36 @@ const renderPage = () => render(<MemoryRouter><CreativeCastImport /></MemoryRout
 describe('CreativeCastImport', () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    previewMusicVideoCastImport.mockReset();
+  });
+
+  it('shows a retryable error when the first preview fails', async () => {
+    previewMusicVideoCastImport.mockRejectedValueOnce(new Error('Preview unavailable')).mockResolvedValueOnce(PREVIEW);
+    renderPage();
+
+    expect(await screen.findByRole('alert')).toHaveTextContent('Could not load music video cast');
+    expect(screen.queryByText(/already in the catalog/)).not.toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: 'Retry' }));
+
+    expect(await screen.findByRole('link', { name: 'Example Video' })).toBeInTheDocument();
+    expect(screen.queryByRole('alert')).not.toBeInTheDocument();
+  });
+
+  it('keeps the previous preview visible when the refresh after import fails', async () => {
+    previewMusicVideoCastImport.mockResolvedValueOnce(PREVIEW)
+      .mockRejectedValueOnce(new Error('Preview unavailable')).mockResolvedValueOnce({ projects: [] });
+    commitMusicVideoCastImport.mockResolvedValue({ projects: 1, created: 2, linked: 1, kept: 0 });
+    renderPage();
+
+    fireEvent.click(await screen.findByRole('button', { name: 'Import 3' }));
+
+    expect(await screen.findByRole('alert')).toHaveTextContent('Could not load music video cast');
+    expect(screen.getByRole('link', { name: 'Example Video' })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Import 3' })).toBeDisabled();
+    expect(screen.queryByText(/already in the catalog/)).not.toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: 'Retry' }));
+
+    expect(await screen.findByText(/already in the catalog/)).toBeInTheDocument();
   });
 
   it('shows each video\'s proposals and imports the reviewed choices', async () => {
