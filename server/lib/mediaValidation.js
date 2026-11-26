@@ -15,7 +15,7 @@ import { CAPABILITY_TEST_IDS } from './modelCapabilityTests.js';
 import { HF_REPO_ID_RE } from './huggingfaceLora.js';
 import { SPEC_MODEL_ROLES } from './specDecodePresets.js';
 import { isLoopbackHostname, parseBrowserOrigin } from './beeperOAuthOrigin.js';
-import { MEDIA_COLLECTION_BULK_MAX } from './mediaItemKey.js';
+import { ANNOTATION_KINDS, isValidAnnotationKey, MEDIA_COLLECTION_BULK_MAX } from './mediaItemKey.js';
 
 // iMessage ingestion config (#2151) — the `settings.imessage` slice. Sync is OFF
 // by default and only reads chat.db when enabled (needs macOS Full Disk Access).
@@ -533,6 +533,16 @@ export const mediaSketchSaveSchema = z.object({
   // Flattened raster (image + strokes) as a PNG data URL. Optional so a caller
   // can persist just the vector layer; the service decodes + stores the bytes.
   png: z.string().startsWith('data:image/png;base64,').optional()
+});
+
+// GET /api/media/annotations accepts one key or a repeated keys query param.
+const annotationKeySchema = z.string().refine(isValidAnnotationKey, 'Invalid annotation key');
+export const mediaAnnotationsQuerySchema = z.object({
+  kind: z.enum(ANNOTATION_KINDS).optional(),
+  keys: z.union([
+    annotationKeySchema.transform(key => [key]),
+    z.array(annotationKeySchema).min(1).max(100),
+  ]).optional(),
 });
 
 // POST /api/media/collections/:id/primary
