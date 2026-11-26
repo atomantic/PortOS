@@ -84,6 +84,49 @@ it('starts provisioned Whisper while deferring missing Piper setup and LLM prelo
   expect(getProviderById).not.toHaveBeenCalled();
 });
 
+describe('Voice reconciliation model provisioning', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    existsSync.mockReturnValue(true);
+    whichFirst.mockImplementation(async (bin) => `/usr/bin/${bin}`);
+  });
+
+  const cfg = toolsOn({ stt: { ...VOICE_DEFAULTS.stt, engine: 'whisper' } });
+
+  it.each([
+    { scenario: 'cold model', installed: ['small:1b'] },
+    { scenario: 'no models', installed: [] },
+  ])(
+    'starts installed Whisper at boot without probing the provider ($scenario)',
+    async ({ installed }) => {
+      const backend = fakeBackend({
+        listModels: vi.fn(async () => installed),
+        isToolCapable: vi.fn(async () => true),
+      });
+      getVoiceProvisioner.mockReturnValue(backend);
+
+      await expect(reconcile(cfg, { allowSetup: false })).resolves.toMatchObject({ name: 'portos-whisper' });
+
+      expect(execPm2).toHaveBeenCalledWith(expect.arrayContaining(['start', '/usr/bin/whisper-server']));
+      expect(execFile).not.toHaveBeenCalled();
+      expect(getVoiceProvisioner).not.toHaveBeenCalled();
+    },
+  );
+
+  it('installs and preloads a model when Save & Reconcile requests setup', async () => {
+    const backend = fakeBackend({
+      listModels: vi.fn().mockResolvedValueOnce([]).mockResolvedValue(['small:1b']),
+      isToolCapable: vi.fn(async () => true),
+    });
+    getVoiceProvisioner.mockReturnValue(backend);
+
+    await expect(reconcile(cfg)).resolves.toMatchObject({ name: 'portos-whisper' });
+
+    await vi.waitFor(() => expect(backend.load).toHaveBeenCalledExactlyOnceWith('small:1b'));
+    expect(backend.install).toHaveBeenCalledExactlyOnceWith('small:1b');
+  });
+});
+
 // Voice OFF must never reach `lms get`. `reconcile` already returns early, so
 // this pins the guard on ensureToolCapableModel ITSELF — the export is what
 // shells out to a multi-GB download, and a future caller that forgets the
