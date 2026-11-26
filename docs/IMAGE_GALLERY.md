@@ -79,6 +79,14 @@ refresh the existing image-index hook after their authoritative writes.
 
 ## File sizes and recoverable deletion
 
+In **Media → History**, **Video file size** switches to videos and filters the
+whole history, not only the loaded page. Presets range from **Over 25 MB** to
+**Over 5 GB**, using the same binary units as the size badges. The gallery API
+accepts `videoSizeOverBytes` for a strict lower bound in bytes. It checks each
+original file on this machine once per request before paging and counting, so
+peer-only videos and unavailable originals are excluded. **Any video size**
+clears the threshold.
+
 Image and video gallery rows include `fileSizeBytes` when the original file can
 be measured. Compact pages keep it, and the shared `MediaCard` displays it next
 to resolution/FPS using `formatBytes`; the lightbox uses the same formatter.

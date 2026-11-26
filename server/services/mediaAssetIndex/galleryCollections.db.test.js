@@ -188,6 +188,27 @@ it('uses original files on this machine for local gallery pages and counts on bo
   }
 });
 
+it('combines actual video size and full prompt search before indexed paging and counts', async context => {
+  if (!available) return context.skip();
+  await mkdir(PATHS.videos, { recursive: true });
+  await Promise.all([
+    writeFile(join(PATHS.videos, 'size-small.mp4'), '3 B'),
+    writeFile(join(PATHS.videos, 'size-large.mp4'), 'much more than 3 bytes'),
+  ]);
+  await seed([{ filename: 'size-image.png', createdAt: '2026-01-01', prompt: 'private search needle' }]);
+  state.videos = [
+    { id: 'small', filename: 'size-small.mp4', createdAt: '2026-01-04', sentPrompt: 'private search needle', fileSizeBytes: 1000 },
+    { id: 'remote', filename: 'size-missing.mp4', createdAt: '2026-01-03', sentPrompt: 'private search needle', fileSizeBytes: 1000 },
+    { id: 'large', filename: 'size-large.mp4', createdAt: '2026-01-02', sentPrompt: 'private search needle', prompt: 'short title' },
+  ];
+  state.fullReads = 0;
+  const page = await listGalleryPage({ media: true, kind: 'all', summary: true, compact: true, hidden: false,
+    q: 'private search needle', videoSizeOverBytes: 3, limit: 1 }, disk);
+  expect(page).toMatchObject({ total: 1, counts: { all: 1, image: 0, video: 1 },
+    items: [{ kind: 'video', data: { id: 'large', fileSizeBytes: 22 } }] });
+  expect(state.fullReads).toBe(0);
+});
+
 it('preserves cover fallback, stable membership order, visibility and stale-reference contracts at the public boundary', async context => {
   if (!available) return context.skip();
   await seed([

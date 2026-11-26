@@ -38,6 +38,12 @@ import {
   makeVideoVertical,
 } from '../services/apiImageVideo.js';
 
+// Match the binary thresholds used by the Media History size badges.
+const VIDEO_SIZE_FILTERS = [
+  [25 * 1024 ** 2, '25 MB'], [100 * 1024 ** 2, '100 MB'], [500 * 1024 ** 2, '500 MB'],
+  [1024 ** 3, '1 GB'], [5 * 1024 ** 3, '5 GB'],
+];
+
 const FILTERS = [
   { id: 'all', label: 'All' },
   { id: 'image', label: 'Images' },
@@ -49,6 +55,7 @@ export default function MediaHistory() {
   const navigate = useNavigate();
   const [filter, setFilter] = useState('all');
   const [query, setQuery] = useState('');
+  const [videoSizeOverBytes, setVideoSizeOverBytes] = useState('');
   const [stitchMode, setStitchMode] = useState(false);
   const [showHosting, setShowHosting] = useState(false);
   const [selected, setSelected] = useState([]); // video ids
@@ -75,7 +82,8 @@ export default function MediaHistory() {
   // over the full metadata.
   const page = useGalleryPage({
     kind: filter, q: query, starred: favoritesOnly, localOnly: localOnly || undefined,
-    rating: ratingFilter || undefined, summary: true, hidden: false, compact: true,
+    rating: ratingFilter || undefined, videoSizeOverBytes: videoSizeOverBytes ? Number(videoSizeOverBytes) : undefined,
+    summary: true, hidden: false, compact: true,
   }, { media: true, preserveLoadedOnRefresh: true, revision: annotationRevision, paused: (favoritesOnly || !!ratingFilter) && annotationSaves > 0 });
   const { loading, counts, refresh } = page;
   const items = useMemo(() => page.items.map(normalizeMediaRow), [page.items]);
@@ -246,9 +254,9 @@ export default function MediaHistory() {
   // without a full gallery refetch.
   const handleCleanComplete = useCallback((cleaned) => {
     const normalized = normalizeImage(cleaned);
-    setItems((prev) => [normalized, ...prev.filter((x) => x.key !== normalized.key)]);
+    if (!videoSizeOverBytes) setItems((prev) => [normalized, ...prev.filter((x) => x.key !== normalized.key)]);
     refresh();
-  }, [setItems, refresh]);
+  }, [setItems, refresh, videoSizeOverBytes]);
   const { handleRemix, handleSendToImage, handleSendToVideo, handleSendTo3d, handleContinue, handleClean, handleRemoveWatermark, handleFilmLookComplete } = useMediaPreviewActions({
     onCleanComplete: handleCleanComplete,
   });
@@ -308,7 +316,10 @@ export default function MediaHistory() {
             <button
               key={f.id}
               type="button"
-              onClick={() => setFilter(f.id)}
+              onClick={() => {
+                setFilter(f.id);
+                if (f.id !== 'video') setVideoSizeOverBytes('');
+              }}
               className={`min-h-[44px] pointer-fine:sm:min-h-0 px-2.5 py-1 rounded-full border ${
                 filter === f.id
                   ? 'bg-port-accent/20 border-port-accent text-port-accent'
@@ -336,6 +347,22 @@ export default function MediaHistory() {
             On this machine
           </button>
           <RatingFilterChips value={ratingFilter} onChange={setRatingFilter} />
+          <select
+            aria-label="Video file size"
+            title="Filter by original video size on this machine"
+            value={videoSizeOverBytes}
+            onChange={event => {
+              const value = event.target.value;
+              setVideoSizeOverBytes(value);
+              if (value) setFilter('video');
+              setSelected([]);
+              setSelectedVerify([]);
+            }}
+            className="min-h-[44px] pointer-fine:sm:min-h-0 rounded-lg border border-port-border bg-port-card px-2.5 py-1 text-port-text"
+          >
+            <option value="">Any video size</option>
+            {VIDEO_SIZE_FILTERS.map(([bytes, label]) => <option key={bytes} value={bytes}>Over {label}</option>)}
+          </select>
         </div>
         <div className="flex items-center gap-1">
           <Link to="/media/image" className="flex items-center gap-1.5 px-2 py-1 text-xs text-gray-300 hover:text-white border border-port-border rounded hover:bg-port-border/50">
@@ -415,7 +442,7 @@ export default function MediaHistory() {
       )}
 
       <MediaBatchImport onImported={item => {
-        if ((filter === 'all' || filter === item.kind) && !query && !favoritesOnly && !ratingFilter) {
+        if ((filter === 'all' || filter === item.kind) && !query && !favoritesOnly && !ratingFilter && !videoSizeOverBytes) {
           page.setItems(previous => [item, ...previous.filter(row => !(row.kind === item.kind && row.data.filename === item.data.filename))]);
         }
         refresh();
@@ -428,7 +455,9 @@ export default function MediaHistory() {
         <div className="bg-port-card border border-port-border rounded-xl p-8 text-center text-gray-500 text-sm">
           {query.trim()
             ? <>No matches for <span className="text-gray-300">"{query}"</span>. <button type="button" onClick={() => setQuery('')} className="text-port-accent hover:underline">Clear search</button></>
-            : localOnly
+            : videoSizeOverBytes
+              ? 'No videos on this machine match this size filter.'
+              : localOnly
               ? 'No matching media on this machine.'
               : filter === 'video'
               ? <>No videos yet. <Link to="/media/video" className="text-port-accent hover:underline">Generate one →</Link></>
