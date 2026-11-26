@@ -5,6 +5,7 @@ import { runAppUpdate } from '../services/appUpdateRunner.js';
 import { activeOperationsPayload, appOperationResource, claimAppOperation, endAppOperation, recordOperationStep, runAppOperation } from '../services/appOperations.js';
 import { maintenance } from '../lib/maintenanceAdmission.js';
 import {
+  appDeployCancelSchema,
   appDeploySchema,
   appStandardizeSchema,
   appUpdateSchema,
@@ -191,6 +192,21 @@ export const registerAppHandlers = (socket, io) => {
     socket.on('app:operations:list', sendActiveOperations);
     sendActiveOperations();
   }
+
+  socket.on('app:deploy:cancel', async (rawData) => {
+    const data = validateSocketData(appDeployCancelSchema, rawData, socket, 'app:deploy:cancel');
+    if (!data) return;
+
+    try {
+      const { cancelDeploy } = await import('../services/appDeployer.js');
+      if (!cancelDeploy(data.appId)) {
+        socket.emit('app:deploy:cancel:error', { appId: data.appId, message: 'No active deploy to cancel' });
+      }
+    } catch (err) {
+      console.error(`❌ Socket handler error [app:deploy:cancel]: ${err.message}`);
+      socket.emit('app:deploy:cancel:error', { appId: data.appId, message: err.message });
+    }
+  });
 
   // A deploy runs for minutes, so like update/standardize it lives in the
   // operation registry and broadcasts on the io bus keyed by appId: a client

@@ -154,7 +154,7 @@ const PEER_RELAY_ALLOWED_EVENTS = new Set(['cos:subscribe', 'cos:unsubscribe', '
 // Voice host slots, dictation, and proactive output require operator authority.
 // The HTTP twin of this set is isHostControlRoute in lib/hostControlRoutes.js.
 const HOST_CONTROL_SOCKET_EVENTS = new Set([
-  'app:update', 'app:standardize', 'app:deploy', 'standardize:start', 'detect:start', 'error:recover', 'logs:subscribe',
+  'app:update', 'app:standardize', 'app:deploy', 'app:deploy:cancel', 'standardize:start', 'detect:start', 'error:recover', 'logs:subscribe',
   'agent-processes:subscribe', 'command:subscribe',
   'voice:call:attach', 'voice:call:audio', 'voice:call:hangup', 'voice:capture:start', 'voice:dictation:set',
   'voice:output:available', 'voice:output:claim',

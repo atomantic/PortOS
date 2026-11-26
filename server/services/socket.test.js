@@ -101,10 +101,11 @@ vi.mock('../lib/socketValidation.js', () => ({
   shellStartSchema: {},
   appUpdateSchema: {},
   appStandardizeSchema: {},
+  appDeployCancelSchema: {},
   appDeploySchema: {}
 }));
 vi.mock('./appUpdater.js', () => ({ updateApp: vi.fn() }));
-vi.mock('./appDeployer.js', () => ({ hasDeployScript: vi.fn(), deployApp: vi.fn(), runDeployFlow: vi.fn() }));
+vi.mock('./appDeployer.js', () => ({ hasDeployScript: vi.fn(), deployApp: vi.fn(), runDeployFlow: vi.fn(), cancelDeploy: vi.fn() }));
 vi.mock('../sockets/voice.js', () => ({ registerVoiceHandlers: vi.fn() }));
 
 import { broadcastToCommandSubscribers, initSocket } from './socket.js';
@@ -1752,6 +1753,38 @@ describe('socket.js — inbound peer socket revocation (#17905)', () => {
     const next = await live.runEvent('peer:sync:subscribe');
     expect(next).toHaveBeenCalled();
     expect(live.disconnect).not.toHaveBeenCalled();
+  });
+});
+
+describe('app:deploy:cancel host control', () => {
+  it('blocks a remote password-free caller and allows the existing operator session', async () => {
+    const { cancelDeploy } = await import('./appDeployer.js');
+    vi.mocked(cancelDeploy).mockReturnValue(true);
+    const io = makeIo();
+    initSocket(io);
+
+    const socket = makeSocket('deploy-cancel');
+    socket.handshake.headers = { 'x-forwarded-for': '192.0.2.10' };
+    socket.use = (middleware) => { socket.middleware = middleware; };
+    io.connect(socket);
+
+    const payload = { appId: 'example-app' };
+    const cancel = async () => {
+      const next = vi.fn();
+      await socket.middleware(['app:deploy:cancel', payload], next);
+      if (next.mock.calls.length) await socket.handlers['app:deploy:cancel'](payload);
+      return next;
+    };
+
+    vi.mocked(isAuthEnabled).mockResolvedValue(false);
+    expect(await cancel()).not.toHaveBeenCalled();
+    expect(socket.emitted).toContainEqual(['app:deploy:cancel:error', expect.objectContaining({ code: 'HOST_CONTROL_FORBIDDEN' })]);
+    expect(cancelDeploy).not.toHaveBeenCalled();
+
+    vi.mocked(isAuthEnabled).mockResolvedValue(true);
+    vi.mocked(verifyRequestSession).mockResolvedValue(true);
+    expect(await cancel()).toHaveBeenCalled();
+    expect(cancelDeploy).toHaveBeenCalledExactlyOnceWith('example-app');
   });
 });
 

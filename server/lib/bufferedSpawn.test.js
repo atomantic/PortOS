@@ -606,6 +606,40 @@ describe.skipIf(IS_WIN32)('terminateWithEscalation (#12021)', () => {
     expect(child.kill).toHaveBeenCalledTimes(1);
   });
 
+  it('escalates the entire group after its leader has already exited', async () => {
+    const script = `
+      const { spawn } = require('node:child_process');
+      const worker = spawn(process.execPath, ['-e', ${JSON.stringify(
+        "process.on('SIGTERM', () => {}); setInterval(() => {}, 1000); process.stdout.write('ready');"
+      )}], { stdio: ['ignore', 'pipe', process.stderr] });
+      worker.stdout.once('data', () => process.stdout.write('ready'));
+    `;
+    // Inherit the launcher's stderr so the worker holds its pipe open after
+    // SIGTERM kills the launcher. The test only receives close after SIGKILL.
+    const child = nodeSpawn(process.execPath, ['-e', script], {
+      stdio: ['ignore', 'pipe', 'pipe'], detached: true,
+    });
+    let exit;
+    const done = closed(child).then((result) => { exit = result; });
+    try {
+      await new Promise((resolve, reject) => {
+        child.stdout.once('data', resolve);
+        child.once('error', reject);
+      });
+      const cancel = terminateWithEscalation(child, { graceMs: 100, processGroup: true });
+      try {
+        await expect.poll(() => exit?.signal, { timeout: 1500 }).toBe('SIGTERM');
+      } finally {
+        cancel();
+      }
+    } finally {
+      if (!exit) {
+        try { process.kill(-child.pid, 'SIGKILL'); } catch { /* The group has already exited. */ }
+        await done;
+      }
+    }
+  });
+
   it('on Windows the tree kill is already forced, so there is nothing to escalate', () => {
     const child = makeFakeChild({ pid: 4242 });
     const taskkill = makeFakeChild();
