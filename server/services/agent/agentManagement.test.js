@@ -22,7 +22,6 @@ import { describe, it, expect, vi, beforeEach, afterEach, afterAll } from 'vites
 import { ChildProcess } from '../../lib/childProcess.js';
 import { pinPlatform } from '../../lib/testHelper.js';
 import { rmSync } from 'fs';
-import { join } from 'path';
 
 // The lifecycle ledger is a real file writer (data/cos/run-events.jsonl). Mocked
 // so the sweep's telemetry lands in a spy instead of the developing install's
