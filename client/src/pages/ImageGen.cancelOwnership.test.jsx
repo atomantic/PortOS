@@ -35,6 +35,20 @@ describe('Image Gen render ownership', () => {
     expect(screen.getByRole('button', { name: /^generate$/i })).toBeInTheDocument();
   });
 
+  it('keeps the render attached after the cancel request reports a conflict', async () => {
+    state.generateImage.mockResolvedValueOnce({ jobId: 'job-a' });
+    cancelImageGen.mockRejectedValueOnce(Object.assign(new Error('Job is already finishing'), { status: 409 }));
+    await renderImageGenPage();
+    fireEvent.click(screen.getByRole('button', { name: /^generate$/i }));
+    await waitFor(() => expect(lastEventSource()?.url).toBe('/api/image-gen/job-a/events'));
+
+    await act(async () => { fireEvent.click(screen.getByRole('button', { name: /cancel/i })); });
+
+    expect(cancelImageGen).toHaveBeenCalledExactlyOnceWith({ jobId: 'job-a' });
+    expect(lastEventSource().closed).toBe(false);
+    expect(screen.getByRole('button', { name: /cancel/i })).toBeInTheDocument();
+  });
+
   it('cancel before the POST is acknowledged cancels the eventual job once and opens no stream', async () => {
     let acknowledge;
     state.generateImage.mockReturnValueOnce(new Promise((resolve) => { acknowledge = resolve; }));

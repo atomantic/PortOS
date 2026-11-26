@@ -8,6 +8,7 @@
  * arranged against the beat grid".
  */
 
+import { assertCancelResult } from '../lib/cancelResponse.js';
 import { musicVideoColorMatchMeasureSchema, musicVideoColorMatchReferenceUpdateSchema, musicVideoSongDraftSchema, musicVideoSongActionSchema, musicVideoSongSelectSchema, musicVideoSongFromTrackSchema, musicVideoSongSceneActionSchema, musicVideoMakingOfSelectionSchema, musicVideoAudioLayerUploadQuerySchema } from '../lib/musicVideo/musicVideoRouteValidation.js';
 import { activeDcp } from '../services/musicVideo/dcp.js';
 import { pipeline } from 'stream/promises';
@@ -336,7 +337,7 @@ router.get('/vocal-stem/separate/:jobId/events', asyncHandler(async (req, res) =
 
 router.post('/vocal-stem/separate/:jobId/cancel', asyncHandler(async (req, res) => {
   const { cancelVocalSeparation } = await import('../services/musicVideo/vocalSeparation.js');
-  res.json({ ok: cancelVocalSeparation(req.params.jobId) });
+  res.json(assertCancelResult(cancelVocalSeparation(req.params.jobId), { notFoundMessage: 'Vocal separation job not found' }));
 }));
 
 // Run the offline beat/tempo/section analysis and cache it on the project.
@@ -509,7 +510,7 @@ router.get('/lyrics/verify/:jobId/events', (req, res) => {
   if (!attachLyricVerifySseClient(req.params.jobId, res)) throw new ServerError('Verification job not found or expired', { status: 404, code: 'NOT_FOUND' });
 });
 router.post('/lyrics/verify/:jobId/cancel', (req, res) => {
-  res.json({ ok: cancelLyricVerify(req.params.jobId) });
+  res.json(assertCancelResult(cancelLyricVerify(req.params.jobId), { notFoundMessage: 'Lyric verification job not found' }));
 });
 
 // Re-read the song's Suno style (excluded styles included) from its song link,
@@ -548,7 +549,7 @@ router.get('/lyrics/align/:jobId/events', (req, res) => {
 });
 
 router.post('/lyrics/align/:jobId/cancel', (req, res) => {
-  res.json({ ok: cancelLyricAlign(req.params.jobId) });
+  res.json(assertCancelResult(cancelLyricAlign(req.params.jobId), { notFoundMessage: 'Lyric alignment job not found' }));
 });
 
 // Read-only: the project's live alignment, vocal-separation and MIDI jobs on
@@ -596,7 +597,7 @@ router.get('/transcribe-midi/:jobId/events', (req, res) => {
 });
 
 router.post('/transcribe-midi/:jobId/cancel', (req, res) => {
-  res.json({ ok: cancelMidiTranscription(req.params.jobId) });
+  res.json(assertCancelResult(cancelMidiTranscription(req.params.jobId), { notFoundMessage: 'MIDI transcription job not found' }));
 });
 
 // --- Render (#1760, Phase 2) ---
@@ -693,7 +694,7 @@ router.post('/:id/shots/:sceneId/render', asyncHandler(async (req, res) => {
 }));
 router.post('/:id/shots/:sceneId/render/cancel', asyncHandler(async (req, res) => {
   const { cancelShotRender } = await import('../services/musicVideo/shotSegments.js');
-  res.json({ ok: cancelShotRender(req.params.id, req.params.sceneId) });
+  res.json(assertCancelResult(cancelShotRender(req.params.id, req.params.sceneId), { notFoundMessage: 'Active shot render not found' }));
 }));
 // The shots rendered so far, stitched in order with the song (a seam check
 // while the rest renders), and the film looks cached over the current takes.
@@ -748,7 +749,7 @@ router.get('/render/:jobId/events', (req, res) => {
 });
 
 router.post('/render/:jobId/cancel', (req, res) => {
-  res.json({ ok: cancelRender(req.params.jobId) });
+  res.json(assertCancelResult(cancelRender(req.params.jobId), { notFoundMessage: 'Final render job not found' }));
 });
 
 // Code-rendered style (#9076). Document reads build the page from stored

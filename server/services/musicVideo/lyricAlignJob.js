@@ -12,6 +12,7 @@
  */
 
 import { randomUUID } from 'crypto';
+import { CANCEL_ALREADY_TERMINAL } from '../../lib/cancelResponse.js';
 import { shortId } from '../../lib/fileUtils.js';
 import { broadcastSse, attachSseClient as attachSse, closeJobAfterDelay } from '../../lib/sseUtils.js';
 import { ServerError } from '../../lib/errorHandler.js';
@@ -35,7 +36,8 @@ export function getActiveLyricAlignJobId(projectId) {
 
 export function cancelLyricAlign(jobId) {
   const job = alignJobs.get(jobId);
-  if (!job || job.settled) return false;
+  if (!job) return false;
+  if (job.settled) return CANCEL_ALREADY_TERMINAL;
   job.cancelRequested = true;
   return true;
 }

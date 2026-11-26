@@ -129,7 +129,7 @@ afterEach(async () => {
   })), { timeout: 2000 }).toEqual(retainedBlockers);
   for (const job of new Set(broadcastSse.mock.calls.map(([job]) => job))) {
     expect(getRenderJobStatus(job.id).status).not.toBe('running');
-    expect(cancelRender(job.id)).toBe(false);
+    expect(cancelRender(job.id)).toEqual({ ok: false, code: 'ALREADY_TERMINAL' });
     expect(getActiveRenderJobId(job.projectId)).toBeNull();
   }
 });
@@ -274,7 +274,7 @@ describe('renderMusicVideo terminal handling (#2386)', () => {
     expect(writesOf(pid)).toEqual([expect.objectContaining(settled('complete'))]);
     expect(unlink).toHaveBeenCalledWith(expect.stringMatching(/music-video-.*\.mp4$/));
     expect(maintenance.status().blockers).not.toContainEqual(expect.objectContaining({ resource: pid }));
-    expect(cancelRender(jobId)).toBe(false);
+    expect(cancelRender(jobId)).toEqual({ ok: false, code: 'ALREADY_TERMINAL' });
     const again = await renderMusicVideo(pid);
     expect(again.jobId).not.toBe(jobId);
     lastProc().emit('error', new Error('spawn ENOENT'));
@@ -313,7 +313,7 @@ describe('renderMusicVideo terminal handling (#2386)', () => {
     await tick();
     await tick();
     expect(getRenderJobStatus(jobId).status).toBe('canceled');
-    expect(cancelRender(jobId)).toBe(false);
+    expect(cancelRender(jobId)).toEqual({ ok: false, code: 'ALREADY_TERMINAL' });
   });
 
   it('a late stray error after a successful close does not clobber the completed job', async () => {
@@ -661,7 +661,7 @@ describe('composed render lifecycle (#8984)', () => {
     expect(seg.stitch).not.toHaveBeenCalled();
     expect(h.procs).toHaveLength(0);
     expect(writesOf('cancel-1').at(-1)).toMatchObject(settled('complete', { renderError: null }));
-    expect(cancelRender(jobId)).toBe(false);
+    expect(cancelRender(jobId)).toEqual({ ok: false, code: 'ALREADY_TERMINAL' });
     const again = await renderMusicVideo('cancel-1');
     expect(again.jobId).not.toBe(jobId);
     await finishFakeSegments();
@@ -684,7 +684,7 @@ describe('composed render lifecycle (#8984)', () => {
     expect(getRenderJobStatus(jobId).status).toBe('complete');
     expectSettled('composed-1', 'complete', { renderHistoryId: jobId });
     // Nothing is left to cancel once the render has finished.
-    expect(cancelRender(jobId)).toBe(false);
+    expect(cancelRender(jobId)).toEqual({ ok: false, code: 'ALREADY_TERMINAL' });
   });
 
   it('finishes a steady card after the hold and before publishing the composed cut', async () => {
@@ -967,7 +967,7 @@ describe('a final render whose project settlement fails is never reported comple
     expect(sent).toContainEqual(expect.objectContaining({ type: 'error', error: expect.stringContaining('saving the project record failed') }));
     expect(sent.some((event) => event.type === 'complete')).toBe(false);
     expect(unlink).not.toHaveBeenCalled();
-    expect(cancelRender(jobId)).toBe(false);
+    expect(cancelRender(jobId)).toEqual({ ok: false, code: 'ALREADY_TERMINAL' });
     errorSpy.mockRestore();
     retainUnsettled();
   });

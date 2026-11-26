@@ -15,6 +15,7 @@
 
 import { Router } from 'express';
 import { z } from 'zod';
+import { assertCancelResult } from '../lib/cancelResponse.js';
 import { asyncHandler, ServerError } from '../lib/errorHandler.js';
 import { validateRequest } from '../lib/validateRequest.js';
 import * as svc from '../services/rounds.js';
@@ -262,7 +263,7 @@ router.get('/reference-audio/import/:jobId/events', (req, res) => {
 });
 
 router.post('/reference-audio/import/:jobId/cancel', (req, res) => {
-  res.json({ ok: cancelReferenceAudioImport(req.params.jobId) });
+  res.json(assertCancelResult(cancelReferenceAudioImport(req.params.jobId), { notFoundMessage: 'Reference audio import not found' }));
 });
 
 // --- Reference-audio → MIDI transcription (MuScriptor) ------------------------
@@ -293,7 +294,7 @@ router.get('/reference-audio/transcribe-midi/:jobId/events', (req, res) => {
 });
 
 router.post('/reference-audio/transcribe-midi/:jobId/cancel', (req, res) => {
-  res.json({ ok: cancelMidiTranscription(req.params.jobId) });
+  res.json(assertCancelResult(cancelMidiTranscription(req.params.jobId), { notFoundMessage: 'MIDI transcription job not found' }));
 });
 
 router.post('/', asyncHandler(async (req, res) => {

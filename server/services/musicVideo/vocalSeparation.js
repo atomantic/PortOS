@@ -22,6 +22,7 @@ import { randomUUID } from 'crypto';
 import { mkdtemp, readdir, rm } from 'fs/promises';
 import { tmpdir } from 'os';
 import { join } from 'path';
+import { CANCEL_ALREADY_TERMINAL } from '../../lib/cancelResponse.js';
 import { isAppleSilicon } from '../../lib/platform.js';
 import { ServerError } from '../../lib/errorHandler.js';
 import { shortId } from '../../lib/fileUtils.js';
@@ -94,7 +95,8 @@ export function getActiveVocalSeparationJobId(projectId) {
 
 export function cancelVocalSeparation(jobId) {
   const job = separationJobs.get(jobId);
-  if (!job || job.settled) return false;
+  if (!job) return false;
+  if (job.settled) return CANCEL_ALREADY_TERMINAL;
   job.cancelRequested = true;
   return true;
 }

@@ -40,6 +40,7 @@
  */
 
 import { Router } from 'express';
+import { assertCancelResult } from '../lib/cancelResponse.js';
 import { paginationQuerySchema, isPaginationRequested, paginateArray } from '../lib/queryValidation.js';
 import { readFile, unlink } from 'fs/promises';
 import { join } from 'path';
@@ -212,7 +213,7 @@ router.get('/import/:jobId/events', (req, res) => {
 });
 
 router.post('/import/:jobId/cancel', (req, res) => {
-  res.json({ ok: cancelYoutubeImport(req.params.jobId) || cancelSunoImport(req.params.jobId) });
+  res.json(assertCancelResult(cancelYoutubeImport(req.params.jobId) || cancelSunoImport(req.params.jobId), { notFoundMessage: 'Track import not found' }));
 });
 
 router.post('/', asyncHandler(async (req, res) => {

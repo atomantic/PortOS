@@ -151,8 +151,8 @@ describe('publish kit routes', () => {
 
   it('cancels nothing for an unknown job', async () => {
     const res = await request(app).post('/api/music-video/publish-kit/mvpk-missing/cancel');
-    expect(res.status).toBe(200);
-    expect(res.body).toEqual({ ok: false });
+    expect(res.status).toBe(404);
+    expect(res.body).toMatchObject({ code: 'NOT_FOUND' });
   });
 
   it('captures a frame and refuses a negative or unknown-key body', async () => {

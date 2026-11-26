@@ -354,7 +354,7 @@ describe('startSunoImport', () => {
     const { jobId } = await startSunoImport(`https://suno.com/song/${ID}`);
     await vi.waitFor(() => expect(fetchPublicBinary).toHaveBeenCalled());
     expect(cancelSunoImport(jobId)).toBe(true);
-    expect(cancelSunoImport(jobId)).toBe(false);
+    expect(cancelSunoImport(jobId)).toEqual({ ok: false, code: 'ALREADY_TERMINAL' });
     release({ buffer: Buffer.from('x'), contentType: 'audio/mpeg' });
     expect(await terminal()).toEqual({ type: 'canceled' });
     expect(importUploadedTrack).not.toHaveBeenCalled();

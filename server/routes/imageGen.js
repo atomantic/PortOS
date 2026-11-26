@@ -1,3 +1,4 @@
+import { assertCancelResult } from '../lib/cancelResponse.js';
 import { getRunwayModelCatalog } from '../services/runwayModelCatalog.js';
 import { getFalImageModelCatalog } from '../services/falImageModelCatalog.js';
 /**
@@ -408,16 +409,11 @@ router.post('/cancel', asyncHandler(async (req, res) => {
       if (!cancellable.includes(known)) {
         throw new ServerError(`Job already ${known.status}`, { status: 409, code: 'ALREADY_TERMINAL' });
       }
-      const result = await cancelJob(known.id);
-      if (!result?.ok && result?.code) {
-        throw new ServerError(result.error || 'Cancel failed', { status: result.code === 'ALREADY_TERMINAL' ? 409 : 404, code: result.code });
-      }
-      return res.json(result);
+      return res.json(assertCancelResult(await cancelJob(known.id)));
     }
     // Not in the queue — it may be a legacy provider job (sync codex/grok/agy/
     // fal, local) the dispatcher owns. Exact-ID only; never the bulk path.
-    if (imageGen.cancelJob(requestedJobId)) return res.json({ ok: true });
-    throw new ServerError('Job not found or expired', { status: 404 });
+    return res.json(assertCancelResult(imageGen.cancelJob(requestedJobId)));
   } else if (cancellable.length) {
     // "Most recent submit" — explicitly sort by queuedAt DESC instead of
     // relying on listJobs() ordering (which puts gpuRunning before
@@ -430,10 +426,9 @@ router.post('/cancel', asyncHandler(async (req, res) => {
       const tb = new Date(b.queuedAt || 0).getTime();
       return tb - ta;
     });
-    return res.json(await cancelJob(latestSubmitFirst[0].id));
+    return res.json(assertCancelResult(await cancelJob(latestSubmitFirst[0].id)));
   }
-  const cancelled = imageGen.cancel();
-  res.json({ ok: cancelled });
+  res.json(assertCancelResult(imageGen.cancel(), { notFoundMessage: 'No active image render' }));
 }));
 
 // Deletes on the machine that owns the image (services/mediaRemoteDelete.js):

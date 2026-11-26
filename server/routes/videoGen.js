@@ -1,3 +1,4 @@
+import { assertCancelResult } from '../lib/cancelResponse.js';
 import { sanitizeContinuation } from '../lib/videoContinuationProvenance.js';
 import { runtimeQuerySchema } from '../lib/queryValidation.js';
 /**
@@ -777,16 +778,6 @@ router.get('/:jobId/events', (req, res) => {
   if (!ok) throw new ServerError('Job not found or expired', { status: 404 });
 });
 
-// The queue reports a refused cancel as { ok: false, code }; surface it as an
-// error status so the caller never mistakes a refusal for a cancelled render.
-const cancelOrRefuse = async (jobId) => {
-  const result = await cancelJob(jobId);
-  if (!result?.ok && result?.code) {
-    throw new ServerError(result.error || 'Cancel failed', { status: result.code === 'ALREADY_TERMINAL' ? 409 : 404, code: result.code });
-  }
-  return result;
-};
-
 router.post('/cancel', asyncHandler(async (req, res) => {
   // Cancel selection rules, in priority order:
   //   1. Explicit body.jobId — cancel exactly that job (queued or running).
@@ -805,15 +796,15 @@ router.post('/cancel', asyncHandler(async (req, res) => {
     if (job.status !== 'queued' && job.status !== 'running') {
       throw new ServerError(`Job already ${job.status}`, { status: 409, code: 'ALREADY_TERMINAL' });
     }
-    return res.json(await cancelOrRefuse(job.id));
+    return res.json(assertCancelResult(await cancelJob(job.id)));
   }
   const running = listJobs({ kind: 'video', status: 'running' });
-  if (running.length) return res.json(await cancelOrRefuse(running[0].id));
+  if (running.length) return res.json(assertCancelResult(await cancelJob(running[0].id)));
   // No running render — cancel the newest queued video instead so the user
   // can pull back a submission before it starts.
   const queued = listJobs({ kind: 'video', status: 'queued' });
-  if (queued.length) return res.json(await cancelOrRefuse(queued[queued.length - 1].id));
-  res.json({ ok: false, reason: 'no active or queued video render' });
+  const result = queued.length > 0 && await cancelJob(queued[queued.length - 1].id);
+  res.json(assertCancelResult(result, { notFoundMessage: 'No active or queued video render' }));
 }));
 
 router.get('/history', asyncHandler(async (req, res) => {

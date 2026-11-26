@@ -1,3 +1,4 @@
+import { CANCEL_ALREADY_TERMINAL } from '../../lib/cancelResponse.js';
 import { assertRenderCleanupIdle } from './renderCleanupActivity.js';
 /**
  * Music Video — publishing kit (#9281).
@@ -342,7 +343,8 @@ async function beginPublishKitBuild(projectId, jobId, { crop, loudnessPreset }) 
 
 export function cancelPublishKitBuild(jobId) {
   const job = jobs.get(jobId);
-  if (!job || job.status !== 'running' || job.committing) return false;
+  if (!job) return false;
+  if (job.status !== 'running' || job.committing) return CANCEL_ALREADY_TERMINAL;
   job.abort.abort();
   return true;
 }

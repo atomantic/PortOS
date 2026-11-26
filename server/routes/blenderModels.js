@@ -6,6 +6,7 @@
  */
 import { Router } from 'express';
 import { createReadStream } from 'node:fs';
+import { assertCancelResult } from '../lib/cancelResponse.js';
 import { asyncHandler, ServerError } from '../lib/errorHandler.js';
 import { streamAttachment } from '../lib/streamAttachment.js';
 import { validateRequest } from '../lib/validateRequest.js';
@@ -92,7 +93,7 @@ router.post('/:id/builds/:buildId/cancel', asyncHandler(async (req, res) => {
   const { requireBlenderModel } = await models();
   const { cancelBlenderModelBuild } = await builds();
   await requireBlenderModel(req.params.id);
-  res.json({ ok: cancelBlenderModelBuild(req.params.id, req.params.buildId) });
+  res.json(assertCancelResult(cancelBlenderModelBuild(req.params.id, req.params.buildId), { notFoundMessage: 'Blender model build job not found' }));
 }));
 
 // One set's bake while a full build runs; canceling it ends that build, and an earlier build's baked set stays as it was.
@@ -100,7 +101,7 @@ router.post('/:id/builds/:buildId/bakes/:setId/cancel', asyncHandler(async (req,
   const { requireBlenderModel } = await models();
   const { cancelBlenderModelBake } = await bakes();
   await requireBlenderModel(req.params.id);
-  res.json({ ok: cancelBlenderModelBake(req.params.id, req.params.buildId, req.params.setId) });
+  res.json(assertCancelResult(cancelBlenderModelBake(req.params.id, req.params.buildId, req.params.setId), { notFoundMessage: 'Blender model bake job not found' }));
 }));
 
 router.post('/:id/builds/:buildId/open', asyncHandler(async (req, res) => {
@@ -199,7 +200,7 @@ router.post('/:id/builds/:buildId/review', asyncHandler(async (req, res) => {
 router.post('/:id/builds/:buildId/review/cancel', asyncHandler(async (req, res) => {
   const { requireBlenderModel } = await models();
   await requireBlenderModel(req.params.id);
-  res.json({ ok: (await reviews()).cancelBlenderModelReview(req.params.id, req.params.buildId) });
+  res.json(assertCancelResult((await reviews()).cancelBlenderModelReview(req.params.id, req.params.buildId), { notFoundMessage: 'Blender model review job not found' }));
 }));
 
 // <view>-<look>.png, sheet-<look>.jpg, review.json or review.log of one build's review.

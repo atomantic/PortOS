@@ -3,7 +3,7 @@ import { act, renderHook, waitFor } from '@testing-library/react';
 import useMusicVideoRenderJob from './useMusicVideoRenderJob.js';
 import { MockEventSource, lastEventSource } from '../../test/mockEventSource';
 import toast from '../ui/Toast';
-import { getMusicVideoActiveRender, renderMusicVideoProject } from '../../services/apiMusicVideo.js';
+import { cancelMusicVideoRender, getMusicVideoActiveRender, renderMusicVideoProject } from '../../services/apiMusicVideo.js';
 
 vi.mock('../../services/apiMusicVideo.js', () => ({
   getMusicVideoActiveRender: vi.fn(), renderMusicVideoProject: vi.fn(), musicVideoRenderEventsUrl: id => `/events/${id}`, cancelMusicVideoRender: vi.fn(),
@@ -63,4 +63,16 @@ it('reattach() is the explicit retry: it attaches a live job and explains when t
   await act(async () => { found = await result.current.reattach('mv-example'); });
   expect(found).toBe(true);
   expect(result.current.jobId).toBe('job-late');
+});
+
+it('refreshes the project and re-arms Stop when a render is already finishing', async () => {
+  const onSettled = vi.fn();
+  const error = Object.assign(new Error('Job has finished or is finishing'), { status: 409 });
+  cancelMusicVideoRender.mockRejectedValueOnce(error);
+  const { result } = renderHook(() => useMusicVideoRenderJob({ onSettled }));
+  act(() => result.current.attach('job-live', 'mv-example'));
+  act(() => result.current.cancel());
+  await waitFor(() => expect(onSettled).toHaveBeenCalledWith('cancel-rejected', 'mv-example'));
+  expect(toast.error).toHaveBeenCalledWith(error.message);
+  expect(result.current).toMatchObject({ jobId: 'job-live', cancelling: false });
 });

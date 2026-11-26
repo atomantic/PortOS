@@ -1,4 +1,5 @@
 import { randomUUID } from 'crypto';
+import { CANCEL_ALREADY_TERMINAL } from '../../lib/cancelResponse.js';
 import { broadcastSse, attachSseClient, closeJobAfterDelay } from '../../lib/sseUtils.js';
 import { ServerError } from '../../lib/errorHandler.js';
 import { requireProject } from './requireProject.js';
@@ -12,7 +13,8 @@ const jobs = new Map();
 export const attachLyricVerifySseClient = (jobId, res) => attachSseClient(jobs, jobId, res);
 export function cancelLyricVerify(jobId) {
   const job = jobs.get(jobId);
-  if (!job || job.settled) return false;
+  if (!job) return false;
+  if (job.settled) return CANCEL_ALREADY_TERMINAL;
   job.controller.abort();
   return true;
 }

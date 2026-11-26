@@ -156,6 +156,16 @@ describe('cancel feedback', () => {
     expect(onSettled).toHaveBeenCalledExactlyOnceWith('cancel-rejected', 'synthetic-ctx');
   });
 
+  it.each([404, 409])('reconciles a rejected cancel with status %s while keeping the stream', async (status) => {
+    const onSettled = vi.fn();
+    const error = Object.assign(new Error('Job is no longer stoppable'), { status });
+    const { result } = setup(vi.fn().mockRejectedValue(error), onSettled);
+    await act(async () => result.current.cancel());
+    expect(toast.error).toHaveBeenCalledWith(error.message);
+    expect(onSettled).toHaveBeenCalledExactlyOnceWith('cancel-rejected', 'synthetic-ctx');
+    expect(result.current.jobId).toBe('synthetic-job');
+  });
+
   it('toasts the failure when the cancel request rejects', async () => {
     const onSettled = vi.fn();
     const { result } = setup(vi.fn().mockRejectedValue(new Error('Synthetic 500')), onSettled);

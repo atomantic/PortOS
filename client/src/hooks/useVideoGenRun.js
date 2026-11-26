@@ -164,7 +164,7 @@ export function useVideoGenRun({ onCompleted, onResumed }) {
     // A refused cancel (job already finishing, or unknown) leaves the run and
     // its stream attached, so only a server-accepted cancel reads as Cancelled.
     const refused = await cancelRun().then(() => false, (err) => {
-      toast.error(err.message || 'Cancel failed');
+      if (!err?.toasted) toast.error(err?.message || 'Cancel failed');
       return true;
     });
     if (refused) return;

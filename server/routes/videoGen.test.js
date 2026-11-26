@@ -3694,8 +3694,8 @@ describe('videoGen routes', () => {
     it('reports nothing to cancel when no video render is running', async () => {
       mediaJobQueue.listJobs.mockReturnValue([]);
       const r = await request(app).post('/api/video-gen/cancel').send({});
-      expect(r.status).toBe(200);
-      expect(r.body.ok).toBe(false);
+      expect(r.status).toBe(404);
+      expect(r.body).toMatchObject({ code: 'NOT_FOUND' });
     });
 
     it('cancels the running video render through the queue', async () => {

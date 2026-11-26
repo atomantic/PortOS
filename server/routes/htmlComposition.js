@@ -1,8 +1,9 @@
 import { Router } from 'express';
+import { assertCancelResult } from '../lib/cancelResponse.js';
 import { asyncHandler, ServerError } from '../lib/errorHandler.js';
 import { validateRequest } from '../lib/validateRequest.js';
 import { MOTION_SKILL_PACKS, detectMotionSkills, installMotionSkillPack } from '../lib/motionSkills.js';
-import { enqueueJob, attachSseClient, cancelJob } from '../services/mediaJobQueue/index.js';
+import { enqueueJob, attachSseClient, cancelJob, getJob } from '../services/mediaJobQueue/index.js';
 
 import { htmlCompositionRenderSchema } from '../lib/htmlCompositionValidation.js';
 const router = Router();
@@ -59,7 +60,10 @@ router.get('/:jobId/events', (req, res) => {
 });
 
 router.post('/:jobId/cancel', asyncHandler(async (req, res) => {
-  res.json(await cancelJob(req.params.jobId));
+  const { jobId } = req.params;
+  const job = getJob(jobId);
+  const result = job?.kind === 'html-composition' && await cancelJob(jobId);
+  res.json(assertCancelResult(result, { notFoundMessage: 'HTML composition job not found or expired' }));
 }));
 
 export default router;

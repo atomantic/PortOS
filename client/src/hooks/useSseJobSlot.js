@@ -180,15 +180,21 @@ export default function useSseJobSlot({
   const cancel = () => {
     if (!mounted.current || !job?.jobId) return;
     const { jobId, context } = job;
-    // `{ ok: false }` (job settled or committing) and request failures must not vanish: tell the
-    // user and let the caller reconcile its persisted state.
-    cancelRequest(jobId, { silent: true })
+    const owner = slotRef.current;
+    const reportRefusal = (message) => {
+      if (!mounted.current || slotRef.current !== owner) return;
+      toast.error(message || 'This job can no longer be stopped — it may be finishing');
+      onSettled?.('cancel-rejected', context);
+    };
+    void cancelRequest(jobId, { silent: true })
       .then((res) => {
-        if (res?.ok !== false || !mounted.current) return;
-        toast.error('This job can no longer be stopped — it may be finishing');
-        onSettled?.('cancel-rejected', context);
+        // Other slot users still signal a refusal with a successful response.
+        if (res?.ok === false) reportRefusal();
       })
-      .catch((err) => { if (mounted.current) toast.error(err?.message || 'Could not stop the job'); });
+      .catch((err) => {
+        if (err?.status === 404 || err?.status === 409) reportRefusal(err.message);
+        else if (mounted.current && slotRef.current === owner) toast.error(err?.message || 'Could not stop the job');
+      });
   };
 
   return {

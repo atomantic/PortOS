@@ -96,19 +96,16 @@ export default function useMusicVideoExcerpts({ project, replaceProject } = {}) 
   };
   // An excerpt's id IS its render job id, so any rendering excerpt — including
   // one started before a reload, or by a revision — can be cancelled by id.
-  // `{ ok: false }` means the server no longer tracks the job (already settled/cleared), so
-  // reload the persisted record or the card stays on a dead "Checking render status" state.
+  // A refusal can race with settlement. Re-read the record so the card can show the result.
   const cancelExcerpt = (excerptId) => {
     if (cancellingRef.current.has(excerptId)) return Promise.resolve();
     cancellingRef.current.add(excerptId);
     setCancellingId(excerptId);
     return cancelMusicVideoExcerptRender(excerptId, { silent: true })
-      .then((res) => {
-        if (res?.ok !== false) return;
-        reload(projectId);
-        toast.error('This draft render is no longer running — refreshed status');
+      .catch((err) => {
+        if (err?.status === 404 || err?.status === 409) reload(projectId);
+        toast.error(err?.message || 'Failed to cancel the excerpt render');
       })
-      .catch((err) => toast.error(err?.message || 'Failed to cancel the excerpt render'))
       .finally(() => {
         cancellingRef.current.delete(excerptId);
         setCancellingId((cur) => (cur === excerptId ? null : cur));
