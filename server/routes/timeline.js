@@ -6,6 +6,7 @@ import { asyncHandler, ServerError } from '../lib/errorHandler.js';
 import { validateRequest } from '../lib/validateRequest.js';
 import { uploadSingle } from '../lib/multipart.js';
 import * as humanActivity from '../services/humanActivity.js';
+import * as spotifyAuth from '../services/spotifyAuth.js';
 import { importSpotifyHistory } from '../services/spotifyImport.js';
 import { importTakeoutLocationHistory } from '../services/takeoutLocationImport.js';
 import { importDiscordHistory } from '../services/discordImport.js';
@@ -123,7 +124,11 @@ router.get('/sources', asyncHandler(async (req, res) => {
 // required; there is no way to wipe every source in one call.
 router.delete('/events', asyncHandler(async (req, res) => {
   const filters = validateRequest(eraseQuerySchema, req.query);
-  res.json(await humanActivity.eraseEvents(filters));
+  const result = await humanActivity.eraseEvents(filters);
+  if (filters.source === 'spotify' && !filters.kind && !filters.from && !filters.to) {
+    await spotifyAuth.clearAuth();
+  }
+  res.json(result);
 }));
 
 // Shared handler for the bulk-backfill importers (#2160). Each accepts a ZIP or

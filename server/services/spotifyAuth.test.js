@@ -7,6 +7,10 @@ const mocks = {
   fetchWithTimeout: vi.fn(),
   getSelfHost: vi.fn(),
   getHttpsEnabledAtBoot: vi.fn(),
+  ensureSecureDir: vi.fn(async () => {}),
+  writeSecureJson: vi.fn(async () => {}),
+  rm: vi.fn(async () => {}),
+  rmdir: vi.fn(async () => {}),
 };
 
 vi.mock('../lib/fileCore.js', () => ({
@@ -18,6 +22,14 @@ vi.mock('../lib/fileUtils.js', () => ({
   ensureDir: (...args) => mocks.ensureDir(...args),
   atomicWrite: (...args) => mocks.atomicWrite(...args),
   tryReadFile: (...args) => mocks.tryReadFile(...args),
+}));
+vi.mock('../lib/secureAuthStore.js', () => ({
+  ensureSecureDir: (...args) => mocks.ensureSecureDir(...args),
+  writeSecureJson: (...args) => mocks.writeSecureJson(...args),
+}));
+vi.mock('node:fs/promises', () => ({
+  rm: (...args) => mocks.rm(...args),
+  rmdir: (...args) => mocks.rmdir(...args),
 }));
 
 vi.mock('../lib/fetchWithTimeout.js', () => ({
@@ -32,7 +44,17 @@ vi.mock('../lib/httpsState.js', () => ({
   getHttpsEnabledAtBoot: (...args) => mocks.getHttpsEnabledAtBoot(...args),
 }));
 
-import { isTokenExpired, withExpiry, getRedirectUri, getAuthStatus, getAccessToken, getAuthUrl, handleCallback, SPOTIFY_SCOPES } from './spotifyAuth.js';
+import { isTokenExpired, withExpiry, getRedirectUri, getAuthStatus, getAccessToken, getAuthUrl, handleCallback, clearAuth, SPOTIFY_SCOPES } from './spotifyAuth.js';
+
+describe('clearAuth', () => {
+  it('removes playlist data and legacy raw cache idempotently', async () => {
+    mocks.rm.mockRejectedValueOnce(Object.assign(new Error('missing'), { code: 'ENOENT' }));
+    await expect(clearAuth()).resolves.toEqual({ cleared: true });
+    expect(mocks.rm).toHaveBeenCalledWith('/tmp/spotify/playlists.json', { force: true });
+    expect(mocks.rm).toHaveBeenCalledWith('/tmp/spotify/cache/recently-played.json', { force: true });
+    expect(mocks.rmdir).toHaveBeenCalledWith('/tmp/spotify/cache');
+  });
+});
 
 describe('spotifyAuth pure helpers', () => {
   describe('withExpiry', () => {
