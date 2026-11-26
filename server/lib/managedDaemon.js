@@ -94,7 +94,7 @@ export function createDaemonLogBuffer({ maxLines = DEFAULT_MAX_LINES } = {}) {
 }
 
 /** Tail a verified PM2 process ID so a same-named process's output stays private. */
-export async function readManagedPm2LogTail(pmId, execPm2) {
+async function readManagedPm2LogTail(pmId, execPm2) {
   const maxLines = 40;
   const result = await execPm2(['logs', String(pmId), '--nostream', '--lines', String(maxLines)], { timeoutMs: 3000 }).catch(() => null);
   return `${result?.stdout ?? ''}\n${result?.stderr ?? ''}`.split('\n')
@@ -172,14 +172,14 @@ export function createDaemonWatcher({
 
   const endpoint = () => endpointFor(getConfig());
 
-  const getStatusBase = async ({ installed }) => {
+  const getStatusBase = async ({ installed, includeLogs = true }) => {
     const [pm2Status, savedApps] = await Promise.all([getAppStatus(appName), getSavedProcessNames()]);
     const isReadFailed = pm2Status === null;
     const isManagedActive = pm2Status?.status === 'online';
     const config = recoverConfig(pm2Status);
     const resolvedEndpoint = endpointFor(config);
     const reachable = await probe(resolvedEndpoint);
-    const pm2Logs = pm2Status && pm2Status.status !== 'not_found'
+    const pm2Logs = includeLogs && pm2Status && pm2Status.status !== 'not_found'
       ? await execPm2(['logs', appName, '--nostream', '--lines', String(logs.maxLines)]).catch(() => null)
       : null;
 
@@ -193,8 +193,8 @@ export function createDaemonWatcher({
       endpoint: resolvedEndpoint,
       config: isManagedActive || (isReadFailed && preserveConfigOnReadFailure) ? config : null,
       runAtStartup: savedApps === null ? null : savedApps.includes(appName),
-      recentLogs: logs.withPm2Logs(`${pm2Logs?.stdout || ''}\n${pm2Logs?.stderr || ''}`),
-      lastExitError: isReadFailed ? 'Failed to read PM2 status' : getLastExitError(),
+      recentLogs: includeLogs ? logs.withPm2Logs(`${pm2Logs?.stdout || ''}\n${pm2Logs?.stderr || ''}`) : [],
+      lastExitError: isReadFailed ? 'Failed to read PM2 status' : includeLogs ? getLastExitError() : null,
       releaseReason: isManagedActive ? null : (idleDaemons.get(appName)?.releaseReason ?? null),
     };
   };
@@ -466,6 +466,104 @@ export function createPm2ExitTail({ appName, execPm2, appendLog, lines = 15, tai
     for (const line of outputLines) appendLog(line);
     const tail = outputLines.slice(-tailLines).join(' | ');
     return tail ? `PM2 status: ${status} — ${tail}` : `PM2 status: ${status}`;
+  };
+}
+
+const ACTIVE_BUNDLE_STATUSES = new Set(['online', 'launching', 'waiting restart', 'stopping']);
+
+/**
+ * Lifecycle for a pinned bundle whose launch arguments prove ownership.
+ * Mutations fail closed on an unreadable PM2 list and address owned entries by
+ * ID. Managers supply bundle identity, launch settings and readiness checks.
+ */
+export function createBundleDaemon({
+  appName,
+  busy,
+  matchesLaunch,
+  pm2Unavailable,
+  nameInUse,
+  portInUse,
+  portCheckFailed,
+  unsupportedStop = nameInUse,
+  launchFailed,
+  deleteFailed,
+  getAppStatusStrict,
+  clearJlistCache,
+  execPm2,
+  isPortInUse,
+  port,
+  sleep,
+  timeoutMs,
+  pollMs,
+}) {
+  let operation = null;
+
+  const read = async (identity) => {
+    const app = await getAppStatusStrict(appName);
+    const owned = Number.isSafeInteger(app?.pm_id) && app.pm_id >= 0 && matchesLaunch(app, identity);
+    return { app, owned, active: ACTIVE_BUNDLE_STATUSES.has(app?.status) };
+  };
+
+  const assertNameAvailable = ({ app, owned }) => {
+    if (app.status !== 'not_found' && !owned) throw nameInUse();
+  };
+
+  const requireStatus = async (identity) => {
+    clearJlistCache();
+    const status = await read(identity);
+    if (!status.app) throw pm2Unavailable();
+    return status;
+  };
+
+  const hasListener = async () => isPortInUse(port).catch((err) => {
+    throw portCheckFailed ? portCheckFailed() : err;
+  });
+
+  return {
+    read,
+    requireStatus,
+    assertNameAvailable,
+    hasListener,
+    async assertPortFree() {
+      if (await hasListener()) throw portInUse();
+    },
+    withOperation(state, run) {
+      if (operation) throw busy();
+      operation = state;
+      return Promise.resolve()
+        .then(() => run((next) => { operation = next; }))
+        .finally(() => { operation = null; });
+    },
+    operation: () => operation,
+    recentLogs: ({ app, owned }) => owned ? readManagedPm2LogTail(app.pm_id, execPm2) : [],
+    async remove({ app, owned }, options) {
+      if (!owned) throw unsupportedStop();
+      const args = ['delete', String(app.pm_id)];
+      await (options ? execPm2(args, options) : execPm2(args)).catch((err) => {
+        throw deleteFailed ? deleteFailed() : err;
+      });
+      clearJlistCache();
+    },
+    async launch(args, { cwd, killTimeoutMs, force }) {
+      await execPm2([
+        'start', '/usr/bin/env', '--name', appName, ...(cwd ? ['--cwd', cwd] : []),
+        '--interpreter', 'none', '--no-autorestart', '--kill-timeout', String(killTimeoutMs),
+        ...(force ? ['--force'] : []), '--', ...args,
+      ]).catch((err) => {
+        throw launchFailed ? launchFailed() : err;
+      });
+    },
+    async waitUntilReady({ identity, probe, exited, timedOut }) {
+      const deadline = performance.now() + timeoutMs;
+      do {
+        // Verify ownership before crediting a response on the preset port.
+        const status = await requireStatus(identity);
+        if (!status.owned || !status.active) throw exited(status);
+        if (await probe()) return;
+        await sleep(pollMs);
+      } while (performance.now() < deadline);
+      throw timedOut();
+    },
   };
 }
 

@@ -35,6 +35,19 @@ const renderCard = (provider, daemonReadiness = null, props = {}) => render(
   </MemoryRouter>
 );
 
+describe('runtime identity on ProviderCard', () => {
+  it.each([
+    ['SPLASH', { splashBacked: true }, 'Splash runtime for Inkling 2 Mini.'],
+    ['MKSERVE', { id: 'mkserve', type: 'api' }, 'mkserve runtime for Inkling 2 Mini.'],
+    ['SLOTSTREAM', { id: 'slotstream', type: 'api' }, 'Slotstream runtime for SSD-streamed mixture-of-experts models on Apple Silicon.'],
+  ])('shows the %s badge and description', (badge, provider, description) => {
+    renderCard(wrapper(provider));
+
+    expect(screen.getByText(badge)).toBeInTheDocument();
+    expect(screen.getByText(description)).toBeInTheDocument();
+  });
+});
+
 describe('ProviderCard context window', () => {
   it('keeps disabled providers readable without dimming the whole card', () => {
     renderCard(wrapper({ enabled: false }), null, {
