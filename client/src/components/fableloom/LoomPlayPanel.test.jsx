@@ -324,6 +324,56 @@ describe('LoomPlayPanel', () => {
     expect(screen.getByText('A guard paces.')).toBeInTheDocument();
   });
 
+  it('ignores a pending cut after restarting', async () => {
+    const { promise, resolve } = Promise.withResolvers();
+    playLoomTurn.mockReturnValueOnce(promise);
+    const user = userEvent.setup();
+    const cutEpisode = {
+      ...episode, nodes: [{ ...episode.nodes[0], playbackMode: 'cut' }, episode.nodes[1]],
+    };
+    render(<LoomPlayPanel loom={loom} episode={cutEpisode} />);
+
+    await user.click(screen.getByRole('button', { name: 'Next cut' }));
+    expect(playLoomTurn).toHaveBeenCalledTimes(1);
+    await user.click(screen.getByRole('button', { name: 'Restart' }));
+
+    await act(async () => resolve({
+      action: 'move', narration: 'Old narration.', node: { id: 'n2', title: 'Inside', choices: [] },
+    }));
+
+    expect(screen.getByRole('button', { name: 'Next cut' })).toBeEnabled();
+    expect(screen.getByText('You stand before it.')).toBeInTheDocument();
+    expect(screen.queryByText('Old narration.')).not.toBeInTheDocument();
+    expect(screen.queryByRole('heading', { name: 'Inside' })).not.toBeInTheDocument();
+  });
+
+  it('ignores a pending reader turn after switching episodes', async () => {
+    const { promise, resolve } = Promise.withResolvers();
+    playLoomTurn.mockReturnValueOnce(promise);
+    const user = userEvent.setup();
+    const second = {
+      id: 'ep-2', startNodeId: 'n3',
+      nodes: [{ id: 'n3', title: 'The Harbor', prose: 'Fog drifts over the water.', isEnding: true }],
+    };
+    const series = { ...loom, episodes: [episode, second] };
+    const { rerender } = render(<LoomPlayPanel loom={series} episode={episode} />);
+
+    await sendMessage(user, 'I look around.');
+    expect(playLoomTurn).toHaveBeenCalledWith(
+      loom.id, episode.id, expect.objectContaining({ message: 'I look around.' }), { silent: true },
+    );
+    rerender(<LoomPlayPanel loom={series} episode={second} />);
+
+    await act(async () => resolve({
+      action: 'move', narration: 'Old narration.', node: { id: 'n2', title: 'Inside', choices: [] },
+    }));
+
+    expect(screen.getByText('Fog drifts over the water.')).toBeInTheDocument();
+    expect(screen.queryByText('I look around.')).not.toBeInTheDocument();
+    expect(screen.queryByText('Old narration.')).not.toBeInTheDocument();
+    expect(screen.queryByRole('heading', { name: 'Inside' })).not.toBeInTheDocument();
+  });
+
   it('loops rendered decision video while waiting for input', async () => {
     const decisionEpisode = {
       id: 'ep-loop', number: 1, title: 'Pilot', startNodeId: 'decision-1', nodes: [{

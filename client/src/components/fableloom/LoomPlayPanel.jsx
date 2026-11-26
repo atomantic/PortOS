@@ -112,6 +112,7 @@ export default function LoomPlayPanel({ loom, episode: initialEpisode, onClose }
   const hostAudioPlayerRef = useRef(null);
   const hostedSpeechRef = useRef(null);
   const scrollRef = useRef(null);
+  const sessionGenerationRef = useRef(0);
   const hostedSocketRef = useRef(null);
   // The episode id the server-side hosted session is currently bound to —
   // null while no session is active, otherwise re-armed to the current
@@ -279,6 +280,7 @@ export default function LoomPlayPanel({ loom, episode: initialEpisode, onClose }
     : previewMode;
 
   const restart = () => {
+    sessionGenerationRef.current += 1;
     setScene(start);
     setPlaybackPhase(initialPhaseForNode(start));
     setActiveHoldIndex(0);
@@ -304,6 +306,7 @@ export default function LoomPlayPanel({ loom, episode: initialEpisode, onClose }
   // play stage matches. The panel never resolves a move itself — one owner for
   // the rule, on the side that holds the authored graph.
   const [runTurn, sending] = useAsyncAction(async (turn, history) => {
+    const generation = sessionGenerationRef.current;
     const result = await playLoomTurn(loom.id, episode.id, {
       nodeId: scene.id,
       ...turn,
@@ -315,6 +318,8 @@ export default function LoomPlayPanel({ loom, episode: initialEpisode, onClose }
         .slice(-12)
         .map(({ role, text: t }) => ({ role, text: t })),
     }, { silent: true });
+    if (sessionGenerationRef.current !== generation) return;
+
     const additions = [];
     if (result.narration) additions.push({ role: 'narrator', text: result.narration });
     if (result.action === 'move' && result.node) {
