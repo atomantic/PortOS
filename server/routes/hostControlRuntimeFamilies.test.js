@@ -42,6 +42,7 @@ vi.mock('../services/llamaServerManager.js', () => ({
   startLlamaServer: vi.fn(),
   stopLlamaServer: vi.fn(),
   installLlamaServer: vi.fn(),
+  waitForLlamaServerReady: vi.fn(),
   upgradeLlamaServer: vi.fn(),
 }));
 vi.mock('../services/mtplxServerManager.js', () => ({
@@ -50,6 +51,7 @@ vi.mock('../services/mtplxServerManager.js', () => ({
   startMtplxServer: vi.fn(),
   stopMtplxServer: vi.fn(),
   installMtplx: vi.fn(),
+  waitForMtplxReady: vi.fn(),
   uninstallMtplx: vi.fn(),
 }));
 vi.mock('../services/slotstreamServerManager.js', () => ({
@@ -59,6 +61,24 @@ vi.mock('../services/slotstreamServerManager.js', () => ({
   stopSlotstreamServer: vi.fn(),
   installSlotstream: vi.fn(),
   uninstallSlotstream: vi.fn(),
+  waitForSlotstreamReady: vi.fn(),
+}));
+vi.mock('../services/splashRuntimeStatus.js', () => ({
+  getSplashRuntimeStatus: vi.fn(),
+}));
+vi.mock('../services/splashServerManager.js', () => ({
+  installSplashRuntime: vi.fn(),
+  saveSplashContextWindow: vi.fn(),
+  startSplashServer: vi.fn(),
+  stopSplashServer: vi.fn(),
+  uninstallSplashRuntime: vi.fn(),
+}));
+vi.mock('../services/mkserveRuntimeManager.js', () => ({
+  getMkserveRuntimeStatus: vi.fn(),
+  installMkserve: vi.fn(),
+  startMkserveServer: vi.fn(),
+  stopMkserveServer: vi.fn(),
+  uninstallMkserve: vi.fn(),
 }));
 vi.mock('../services/slotstreamModelManager.js', () => ({
   cancelSlotstreamModelDownload: vi.fn(),

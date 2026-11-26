@@ -350,6 +350,7 @@ export async function deleteProject(id) {
   syncCatalogLinks(id);
   // Its cached shot segments are regenerable, and only this machine's. The leaf loads only on this
   // rare path, keeping it out of the boot closure (importScoping.test.js).
+  await import('./boardUndo.js').then(({ clearBoardUndo }) => clearBoardUndo(id)).catch(() => {});
   await import('./shotSegmentPaths.js').then(({ removeProjectSegments }) => removeProjectSegments(id)).catch((err) => {
     console.warn(`⚠️ Music Video ${id.slice(0, 8)}: could not remove its cached shot segments: ${err.message}`);
   });

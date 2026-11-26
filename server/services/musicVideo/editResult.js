@@ -26,7 +26,9 @@ function diffPresentedProjects(before, after) {
 
 // `before` -> `after` are stored records with their catalog check-in resolved
 // (`mutateProjectRecord` with `{ edit }`); machine-local reads come once from `after`.
-export async function presentEditResult({ before, after }) {
+// `beforeBoardUndo` carries the undo summary that was visible before this edit changed the stack.
+export async function presentEditResult({ before, after, beforeBoardUndo }) {
   const inputs = await readPresentationInputs(after);
-  return diffPresentedProjects(presentProjectRecord(before, inputs), presentProjectRecord(after, inputs));
+  const beforeInputs = beforeBoardUndo === undefined ? inputs : { ...inputs, boardUndo: beforeBoardUndo };
+  return diffPresentedProjects(presentProjectRecord(before, beforeInputs), presentProjectRecord(after, inputs));
 }

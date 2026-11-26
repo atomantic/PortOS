@@ -1,10 +1,10 @@
 # Instruction-file rule detail
 
-Root and nested `AGENTS.md` files carry a byte budget (`server/test/guards/repo/agent-instructions-files.test.js`), so passages that are procedure or detail live here and the instruction file keeps the one-sentence rule. Each passage adds detail its instruction file leaves out, and the rule left there stays authoritative; a sentence already in the instruction file is not repeated here.
+Root and nested `AGENTS.md` files carry a byte budget (`server/test/guards/repo/docsIntegrity.test.js`), so passages that are procedure or detail live here and the instruction file keeps the one-sentence rule. Each passage adds detail its instruction file leaves out, and the rule left there stays authoritative; a sentence already in the instruction file is not repeated here.
 
 ## Agent instruction files
 
-**API-provider agents get these files too, within a budget**: `getAgentInstructionsContext()` in `server/services/promptSections/instructions.js` splices `~/.claude/CLAUDE.md`, the root file, then nested `AGENTS.md` files (depth 5 / 10 files; dot-dirs, `node_modules/`, `data/`, build output and nested repos skipped). The root file is the only guaranteed-first slot: rules guarding data loss, destructive actions, privacy or spend belong here. `server/test/guards/repo/agent-instructions-files.test.js` caps root at 28 KB and each nested file at 12 KB; move task-specific procedure into a skill (`.claude/skills/`) or doc rather than raising them.
+**API-provider agents get these files too, within a budget**: `getAgentInstructionsContext()` in `server/services/promptSections/instructions.js` splices `~/.claude/CLAUDE.md`, the root file, then nested `AGENTS.md` files (depth 5 / 10 files; dot-dirs, `node_modules/`, `data/`, build output and nested repos skipped). The root file is the only guaranteed-first slot: rules guarding data loss, destructive actions, privacy or spend belong here. `server/test/guards/repo/docsIntegrity.test.js` caps root at 28 KB and each nested file at 12 KB; move task-specific procedure into a skill (`.claude/skills/`) or doc rather than raising them.
 
 The 28 KB / 12 KB ceilings are the only absolute failure. A file already above 90% of its ceiling at the merge base (`CI_BASE_SHA`, else the merge-base with the remote default branch; a missing base fails closed) may not grow in the change, so two small edits merged separately cannot land over the cap while files can still shrink back toward the line.
 
@@ -152,7 +152,7 @@ The [root distribution rules](../AGENTS.md#security-model) govern migrations, cr
 - Each install records applied migrations in `data/migrations.applied.json`.
 - `setup-data.js` copies missing seeds first, so a seeded derived output looks “already done” (`scripts/migrations/340-cos-config-seed-repair.js`). Declare the path in the migration's `OWNED_OUTPUT_PATHS` as well as the central registry so the guard can match them.
 - `server/AGENTS.md` “Prompt templates” gives the integrity snapshot procedure. `server/lib/schemaVersions.js` declares the cross-machine schema versions.
-- Ship each new image or video model as one entry in `server/lib/mediaModels/catalogDefaults.js`. Change an existing entry in `VIDEO_REGISTRY_UPGRADES` or the image backfill chain, matching the previous shipped values to preserve customizations. Keep the pre-ledger video baseline frozen so the loader can append future models while respecting old deletions. Existing registry migrations remain in place. `server/test/guards/repo/mediaModelRegistryMigrations.test.js` rejects new ones.
+- Ship each new image or video model as one entry in `server/lib/mediaModels/catalogDefaults.js`. Change an existing entry in `VIDEO_REGISTRY_UPGRADES` or the image backfill chain, matching the previous shipped values to preserve customizations. Keep the pre-ledger video baseline frozen so the loader can append future models while respecting old deletions. Existing registry migrations remain in place. `server/test/guards/repo/migrations.test.js` rejects new ones.
 - The 409 `FORK_DIVERGED` response tells the user to run the fork sync themselves. The upstream slug lives only in `server/lib/gitRemote.js`. The UI reads `remoteInfo.isUpstream` for “you are running PortOS” ([self-update](SELF_UPDATE.md)).
 
 ## Privacy detail

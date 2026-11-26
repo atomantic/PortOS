@@ -33,7 +33,7 @@ import { localLlmBackendLabel } from '../lib/localLlmBackends.js';
  *   `complete` progress frame (the Library view re-queries its catalog).
  *   BOTH must be stable (`useCallback`) — they are effect dependencies.
  */
-export default function useLocalLlmStatus({ onRefresh, onReload, inlineErrors = false } = {}) {
+export default function useLocalLlmStatus({ onRefresh, onReload, onProgress, inlineErrors = false } = {}) {
   const [status, setStatus] = useState(null);
   const [loading, setLoading] = useState(true);
   const [statusError, setStatusError] = useState(null);
@@ -81,9 +81,10 @@ export default function useLocalLlmStatus({ onRefresh, onReload, inlineErrors = 
       // Hugging Face catalog once per measured model, all night. This tab owns
       // the unscoped install/migrate/upgrade frames only.
       if (data?.scope === 'assessment' || data?.scope === 'assessment-sweep' || data?.scope === 'security-guard' || data?.scope === 'jev') return;
+      onProgress?.(data);
       clearTimeout(progressTimer.current);
       setProgressMsg(data.message || '');
-      if (data.event === 'complete') {
+      if (data.event === 'complete' || data.event === 'cancelled') {
         progressTimer.current = setTimeout(() => setProgressMsg(''), 3000);
         loadStatus();
         onReload?.();
@@ -100,7 +101,7 @@ export default function useLocalLlmStatus({ onRefresh, onReload, inlineErrors = 
       socket.off('localLlm:progress', handleProgress);
       clearTimeout(progressTimer.current);
     };
-  }, [loadStatus, onReload]);
+  }, [loadStatus, onReload, onProgress]);
 
   const runAction = useCallback((key, fn, successMsg, options = {}) => {
     const { onError, clearConfirm = true, ollamaService = false } = options;
