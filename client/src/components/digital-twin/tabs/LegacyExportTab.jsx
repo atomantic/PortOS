@@ -30,6 +30,7 @@ export default function LegacyExportTab() {
   const [loading, setLoading] = useState(true);
   const [selected, setSelected] = useState([]);
   const [generating, setGenerating] = useState(false);
+  const [includePdf, setIncludePdf] = useState(false);
   const [progress, setProgress] = useState(null);
 
   const loadPreview = useCallback(async () => {
@@ -79,7 +80,7 @@ export default function LegacyExportTab() {
     // If every present section is selected, send no filter (server treats
     // omitted `sections` as "all") so a future section is included by default.
     const allPresent = selectedPresent.length === presentSections.length;
-    const buffer = await downloadLegacyExport({ sections: allPresent ? null : selectedPresent }, { silent: true })
+    const buffer = await downloadLegacyExport({ sections: allPresent ? null : selectedPresent, includePdf }, { silent: true })
       .catch(() => null);
     setGenerating(false);
     setProgress(null);
@@ -188,6 +189,22 @@ export default function LegacyExportTab() {
         )}
       </div>
 
+      {/* Optional rendered portrait */}
+      <label
+        htmlFor="legacy-include-pdf"
+        className="flex items-center gap-3 p-2 min-h-[44px] rounded border border-port-border cursor-pointer"
+      >
+        <input
+          id="legacy-include-pdf"
+          type="checkbox"
+          checked={includePdf}
+          onChange={(event) => setIncludePdf(event.target.checked)}
+          disabled={generating}
+          className="w-5 h-5 rounded border-port-border bg-port-bg text-port-accent focus:ring-port-accent"
+        />
+        <span className="text-sm text-white">Include PDF portrait (legacy-portrait.pdf)</span>
+      </label>
+
       {/* Generate */}
       <button
         onClick={handleGenerate}
@@ -197,7 +214,11 @@ export default function LegacyExportTab() {
         {generating ? (
           <>
             <BrailleSpinner />
-            {progress ? 'Building bundle…' : 'Generating…'}
+            {progress?.phase === 'gathered'
+              ? 'Gathering sections…'
+              : progress?.phase === 'pdf'
+                ? `Rendering PDF portrait…${progress.pageCount ? ` (${progress.pageCount} pages)` : ''}`
+                : 'Generating…'}
           </>
         ) : (
           <>

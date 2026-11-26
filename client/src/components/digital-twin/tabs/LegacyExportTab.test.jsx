@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { render, screen, waitFor } from '@testing-library/react';
+import { render, screen, waitFor, act } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 
 vi.mock('../../../services/apiDigitalTwin.js', () => ({
@@ -18,6 +18,7 @@ import LegacyExportTab from './LegacyExportTab';
 import { getLegacyExportPreview, downloadLegacyExport } from '../../../services/apiDigitalTwin.js';
 import { downloadBlob } from '../../../lib/downloadBlob';
 import toast from '../../ui/Toast';
+import socket from '../../../services/socket';
 
 const PREVIEW = {
   fileCount: 6,
@@ -43,8 +44,9 @@ describe('LegacyExportTab', () => {
     expect(screen.queryByText('Health Summary')).not.toBeInTheDocument();
     // Both present sections checked by default.
     const boxes = screen.getAllByRole('checkbox');
-    expect(boxes).toHaveLength(2);
-    expect(boxes.every(b => b.checked)).toBe(true);
+    expect(boxes).toHaveLength(3);
+    expect(screen.getByLabelText('Include PDF portrait (legacy-portrait.pdf)')).not.toBeChecked();
+    expect(boxes.slice(0, 2).every(b => b.checked)).toBe(true);
     // Count summary surfaces.
     expect(screen.getByText(/5 traits/)).toBeInTheDocument();
   });
@@ -58,9 +60,31 @@ describe('LegacyExportTab', () => {
     await user.click(screen.getByRole('button', { name: /generate & download/i }));
 
     await waitFor(() => expect(downloadLegacyExport).toHaveBeenCalledOnce());
-    expect(downloadLegacyExport).toHaveBeenCalledWith({ sections: null }, { silent: true });
+    expect(downloadLegacyExport).toHaveBeenCalledWith({ sections: null, includePdf: false }, { silent: true });
     expect(downloadBlob).toHaveBeenCalledOnce();
     expect(toast.success).toHaveBeenCalled();
+  });
+
+
+  it('includes the PDF option and displays live generation phases', async () => {
+    let onProgress;
+    socket.on.mockImplementation((event, handler) => {
+      if (event === 'legacy-export:progress') onProgress = handler;
+    });
+    downloadLegacyExport.mockImplementation(() => new Promise(() => {}));
+    const user = userEvent.setup();
+    render(<LegacyExportTab />);
+    await screen.findByText('Identity & Values');
+    await user.click(screen.getByLabelText('Include PDF portrait (legacy-portrait.pdf)'));
+    await user.click(screen.getByRole('button', { name: /generate & download/i }));
+
+    await waitFor(() => expect(downloadLegacyExport).toHaveBeenCalledWith(
+      { sections: null, includePdf: true }, { silent: true },
+    ));
+    await act(async () => onProgress({ phase: 'gathered' }));
+    expect(screen.getByText('Gathering sections…')).toBeInTheDocument();
+    await act(async () => onProgress({ phase: 'pdf', pageCount: 4 }));
+    expect(screen.getByText('Rendering PDF portrait… (4 pages)')).toBeInTheDocument();
   });
 
   it('sends the explicit subset when only some sections are selected', async () => {
@@ -75,7 +99,7 @@ describe('LegacyExportTab', () => {
     await user.click(screen.getByRole('button', { name: /generate & download/i }));
 
     await waitFor(() => expect(downloadLegacyExport).toHaveBeenCalledOnce());
-    expect(downloadLegacyExport).toHaveBeenCalledWith({ sections: ['goals'] }, { silent: true });
+    expect(downloadLegacyExport).toHaveBeenCalledWith({ sections: ['goals'], includePdf: false }, { silent: true });
   });
 
   it('toasts an error and skips download when the build fails', async () => {
