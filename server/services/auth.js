@@ -10,7 +10,9 @@ import { join } from 'path';
 import { EventEmitter } from 'events';
 import { randomBytes } from 'crypto';
 import { stat } from 'fs/promises';
-import { atomicWrite, PATHS, safeJSONParse, tryReadFile } from '../lib/fileUtils.js';
+import { PATHS, safeJSONParse, tryReadFile } from '../lib/fileUtils.js';
+import { createFileWriteQueue } from '../lib/fileWriteQueue.js';
+import { writeSecureJson } from '../lib/secureAuthStore.js';
 import {
   COOKIE_NAME,
   SESSION_TTL_MS,
@@ -77,11 +79,12 @@ const SESSION_ID_BYTES = 8;
 // opaque per-session handle so a caller can address one record without ever
 // seeing `tokenHash`.
 const sessions = new Map();
+const queueSessions = createFileWriteQueue();
 // Single in-flight load promise — both callers await the SAME promise so a
 // burst of concurrent verifySession calls after a restart can't observe an
 // empty Map while the first call is still reading auth-sessions.json.
 let loadPromise = null;
-// Identity of auth-sessions.json at last read/write — used to pick up tokens
+// Identity of auth-sessions.json at last read — used to pick up tokens
 // minted out-of-process (see mergeSessionsFromDisk). mtime alone is not enough:
 // file timestamps are kernel-tick coarse, so an out-of-process write landing in
 // the same tick as ours looked "unchanged" and its token stayed invisible.
@@ -92,7 +95,7 @@ const fileStamp = (st) => `${st.ino}:${st.size}:${st.mtimeMs}`;
 
 const now = () => Date.now();
 
-const readSessions = async () => {
+const readSessions = async (stamp) => {
   const raw = await tryReadFile(SESSIONS_FILE);
   const parsed = safeJSONParse(raw ?? '{}', {});
   if (!Array.isArray(parsed.tokens)) return;
@@ -112,11 +115,7 @@ const readSessions = async () => {
     const id = typeof entry.id === 'string' ? entry.id : randomBytes(SESSION_ID_BYTES).toString('hex');
     sessions.set(entry.tokenHash, { expiresAt: entry.expiresAt, label, id });
   }
-  try {
-    sessionsFileStamp = fileStamp(await stat(SESSIONS_FILE));
-  } catch {
-    // leave prior stamp; miss path will retry
-  }
+  sessionsFileStamp = stamp;
 };
 
 const writeSessions = async () => {
@@ -124,30 +123,13 @@ const writeSessions = async () => {
   for (const [tokenHash, { expiresAt, label, id }] of sessions) {
     tokens.push({ tokenHash, expiresAt, label, id });
   }
-  await atomicWrite(SESSIONS_FILE, JSON.stringify({ tokens }, null, 2) + '\n');
-  try {
-    sessionsFileStamp = fileStamp(await stat(SESSIONS_FILE));
-  } catch {
-    // next miss will refresh
-  }
+  await writeSecureJson(SESSIONS_FILE, JSON.stringify({ tokens }, null, 2) + '\n');
 };
 
-const ensureLoaded = async () => {
-  if (!loadPromise) {
-    loadPromise = readSessions().catch((err) => {
-      console.error(`❌ Failed to load auth sessions: ${err.message}`);
-    });
-  }
-  return loadPromise;
-};
-
-// Out-of-process callers (box keepalive, a shell one-liner) mint sessions by
-// importing this module against the same auth-sessions.json the running server
-// owns. The server's Map is loaded once at first verify, so a token written
-// after that load is invisible until restart — which made keepalive's
-// POST /api/cos/start keep answering AUTH_REQUIRED after the instance password
-// was enabled. On a miss, merge any newer disk records into the live Map;
-// never drop in-memory entries a racing disk write might have omitted.
+// Keepalive and local scripts can mint sessions against the same file. Import
+// newer records on verification misses and before mutations that keep sessions.
+// Stamp before reading so a concurrent replacement cannot mark unread data as
+// loaded. A write here also leaves the stamp alone for the same reason.
 const mergeSessionsFromDisk = async () => {
   let stamp;
   try {
@@ -156,8 +138,23 @@ const mergeSessionsFromDisk = async () => {
     return;
   }
   if (stamp === sessionsFileStamp) return;
-  await readSessions();
+  await readSessions(stamp);
 };
+
+const ensureLoaded = async () => {
+  if (!loadPromise) {
+    loadPromise = mergeSessionsFromDisk().catch((err) => {
+      console.error(`❌ Failed to load auth sessions: ${err.message}`);
+    });
+  }
+  return loadPromise;
+};
+
+const queueSessionMutation = (mutate) => queueSessions(async () => {
+  await ensureLoaded();
+  await mergeSessionsFromDisk();
+  return mutate();
+});
 
 const readAuthConfig = async () => {
   const settings = await getSettings();
@@ -319,15 +316,14 @@ export const verifyPassword = async (password) => {
 
 // `label` is `null` for an ordinary browser session; the agent loopback
 // credential (server/services/agent/agentApiAuth.js) passes `'agent'`.
-export const createSession = async ({ label = null } = {}) => {
-  await ensureLoaded();
+export const createSession = ({ label = null } = {}) => queueSessionMutation(async () => {
   const token = randomBytes(TOKEN_BYTES).toString('hex');
   const expiresAt = now() + SESSION_TTL_MS;
   const id = randomBytes(SESSION_ID_BYTES).toString('hex');
   sessions.set(hashToken(token), { expiresAt, label, id });
   await writeSessions();
   return { token, expiresAt, maxAgeMs: SESSION_TTL_MS, id };
-};
+});
 
 // Read-only listing for Settings → Security. Never returns `tokenHash` — an
 // `id` is the only handle a caller gets for a scoped revoke.
@@ -347,8 +343,7 @@ export const listSessions = async () => {
 // `revokeSession`/`revokeAllSessions`, this does not kick connected sockets:
 // the sessions this addresses are non-interactive API credentials, not
 // browser tabs). Returns whether a matching session was found.
-export const revokeSessionById = async (id) => {
-  await ensureLoaded();
+export const revokeSessionById = (id) => queueSessionMutation(async () => {
   for (const [tokenHash, entry] of sessions) {
     if (entry.id !== id) continue;
     sessions.delete(tokenHash);
@@ -356,14 +351,13 @@ export const revokeSessionById = async (id) => {
     return true;
   }
   return false;
-};
+});
 
 // Revoke every session carrying `label` except the one addressed by `keepId`.
 // The local agent key (services/agent/agentKey.js) keeps exactly one live session:
 // a rotation mints the replacement first, then drops the rest here. Like
 // revokeSessionById, no socket kick — these are non-interactive credentials.
-export const revokeSessionsByLabel = async (label, { keepId = null } = {}) => {
-  await ensureLoaded();
+export const revokeSessionsByLabel = (label, { keepId = null } = {}) => queueSessionMutation(async () => {
   let removed = 0;
   for (const [tokenHash, entry] of sessions) {
     if (entry.label !== label || entry.id === keepId) continue;
@@ -372,7 +366,7 @@ export const revokeSessionsByLabel = async (label, { keepId = null } = {}) => {
   }
   if (removed) await writeSessions();
   return removed;
-};
+});
 
 // The live session a plaintext token addresses — `{ id, label, expiresAt }` —
 // or null when the token does not verify. Never exposes `tokenHash`.
@@ -388,13 +382,19 @@ export const verifySession = async (token) => {
   const key = hashToken(token);
   let entry = sessions.get(key);
   if (!entry) {
-    await mergeSessionsFromDisk();
+    // A miss must wait for an in-flight revoke to persist before importing.
+    await queueSessions(mergeSessionsFromDisk);
     entry = sessions.get(key);
   }
   if (!entry) return false;
   if (entry.expiresAt <= now()) {
-    sessions.delete(key);
-    await writeSessions().catch(() => null);
+    await queueSessionMutation(async () => {
+      const current = sessions.get(key);
+      if (current && current.expiresAt <= now()) {
+        sessions.delete(key);
+        await writeSessions();
+      }
+    }).catch(() => null);
     return false;
   }
   return true;
@@ -420,8 +420,7 @@ export const verifyRequestSessionIdentity = async (req) => {
   return entry ? { kind: 'session', sessionId: entry.id, label: entry.label || null } : null;
 };
 
-export const revokeSession = async (token) => {
-  await ensureLoaded();
+export const revokeSession = (token) => queueSessionMutation(async () => {
   if (sessions.delete(hashToken(token))) {
     await writeSessions();
     // Logging-out one tab kicks every connected socket too — the
@@ -430,9 +429,9 @@ export const revokeSession = async (token) => {
     // response's clear-cookie reaches the browser first.
     setTimeout(() => authEvents.emit('sessions:revoked-all'), KICK_DELAY_MS);
   }
-};
+});
 
-export const revokeAllSessions = async () => {
+export const revokeAllSessions = () => queueSessions(async () => {
   await ensureLoaded();
   sessions.clear();
   await writeSessions();
@@ -448,7 +447,7 @@ export const revokeAllSessions = async () => {
   // own socket, which reconnects with the OLD cookie (the new one hasn't
   // arrived yet) and bounces them to /login mid-change.
   setTimeout(() => authEvents.emit('sessions:revoked-all'), KICK_DELAY_MS);
-};
+});
 
 // Per-IP sliding-window login throttle — auth is normally tailnet-only, so
 // this is defense in depth against a sidecar burning server CPU on scrypt
