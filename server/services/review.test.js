@@ -50,14 +50,8 @@ const {
   reviewEvents
 } = await import('./review.js');
 
-// `stat()` backs review.js's module-level items.json cache, which persists
-// across every test in this file (it is process/module state, not a vitest
-// mock). The default implementation below returns a fresh, never-repeating
-// value on every call, so — absent a test explicitly overriding it — every
-// `loadItems()` call in this file is a guaranteed cache MISS and re-reads via
-// `readFile`, exactly matching this suite's pre-caching expectations. Tests
-// that exercise the cache itself override `stat` locally to hold a value
-// steady (a hit) or change it (a miss/invalidation).
+// Default to fresh file identities so tests that change the mock file contents
+// need to opt into a stable identity only when they are exercising the caches.
 let statCounter = 0;
 const freshStat = () => Promise.resolve({ mtimeMs: ++statCounter, size: statCounter });
 
@@ -260,9 +254,12 @@ describe('review service', () => {
     };
     const filename = path => String(path).split(/[\\/]/).at(-1);
     readFile.mockImplementation(async path => JSON.stringify(files[filename(path)]));
+    stat.mockResolvedValue({ mtimeMs: 832001, size: 1 });
     atomicWrite.mockImplementation(async (path, items) => { files[filename(path)] = structuredClone(items); });
     try {
+      expect(await getItems({ status: 'completed' })).toMatchObject([{ id: 'old', title: 'Old' }]);
       await updateItem('old', { title: 'Edited' });
+      expect(await getItems({ status: 'completed' })).toMatchObject([{ id: 'old', title: 'Edited' }]);
       await dismissItem('old');
       expect(await getItems({ status: 'dismissed' })).toMatchObject([{ id: 'old', title: 'Edited' }]);
       await deleteItem('old');
@@ -499,6 +496,32 @@ describe('review service', () => {
       expect(pendingView.map(i => i.id)).toEqual(['live-pending']);
     });
 
+    it('shares in-flight archive reads, reuses the parse, and isolates paged results', async () => {
+      let archiveStats = { mtimeMs: 830001, size: 1 };
+      const isArchive = path => String(path).endsWith('archive.json');
+      const archived = { id: 'old', type: 'todo', metadata: { options: { pinned: true } } };
+      const fixture = JSON.stringify([archived]);
+      stat.mockImplementation(path => isArchive(path) ? Promise.resolve(archiveStats) : freshStat());
+      const { promise: archiveContents, resolve } = Promise.withResolvers();
+      readFile.mockImplementation(path => isArchive(path) ? archiveContents : Promise.resolve('[]'));
+
+      const firstRead = getItems({ limit: 1 });
+      const concurrentRead = getItems({ limit: 1 });
+      await vi.waitFor(() => expect(readFile.mock.calls.filter(([path]) => isArchive(path))).toHaveLength(1));
+      resolve(fixture);
+      const [first, concurrent] = await Promise.all([firstRead, concurrentRead]);
+      first.items[0].metadata.options.pinned = false;
+      expect(concurrent.items).toEqual([archived]);
+      expect((await getItems({ limit: 1 })).items).toEqual([archived]);
+      expect(readFile.mock.calls.filter(([path]) => isArchive(path))).toHaveLength(1);
+
+      archiveStats = { ...archiveStats, size: 2 };
+      await getItems({ limit: 1 });
+      archiveStats = { ...archiveStats, mtimeMs: 830002 };
+      await getItems({ limit: 1 });
+      expect(readFile.mock.calls.filter(([path]) => isArchive(path))).toHaveLength(3);
+    });
+
     it('dedupes by id when the same item is (transiently) in both files, preferring the live copy', async () => {
       stat.mockResolvedValue({ mtimeMs: 825001, size: 1 });
       // Models the crash-recovery window applyRetention's doc comment
@@ -708,6 +731,25 @@ describe('review service', () => {
       expect(atomicWrite.mock.calls[0][0]).toMatch(/archive\.json$/);
       expect(atomicWrite.mock.calls[1][0]).toMatch(/items\.json$/);
       expect(atomicWrite.mock.calls[1][1].some(i => i.id === 'c-old')).toBe(true);
+    });
+    it('preserves items moved to the archive while reopening an archived item', async () => {
+      vi.useFakeTimers();
+      vi.setSystemTime(Date.now() + 1000 * 60 * 60 * 24 * 800);
+      const files = {
+        'items.json': [{ id: 'retire', type: 'todo', status: 'completed', updatedAt: '2026-01-01T00:00:00Z' }],
+        'archive.json': [{ id: 'reopen', type: 'todo', status: 'completed' }],
+      };
+      const filename = path => String(path).split(/[\\/]/).at(-1);
+      stat.mockResolvedValue({ mtimeMs: 833001, size: 1 });
+      readFile.mockImplementation(async path => JSON.stringify(files[filename(path)]));
+      atomicWrite.mockImplementation(async (path, items) => { files[filename(path)] = structuredClone(items); });
+      try {
+        await expect(reopenItem('reopen')).resolves.toMatchObject({ id: 'reopen', status: 'pending' });
+        expect(await getItems({ status: 'completed' })).toMatchObject([{ id: 'retire' }]);
+        expect(files['archive.json']).toMatchObject([{ id: 'retire' }]);
+      } finally {
+        atomicWrite.mockResolvedValue(undefined);
+      }
     });
   });
 
