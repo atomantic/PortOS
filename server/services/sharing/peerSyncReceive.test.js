@@ -314,8 +314,11 @@ describe('applyIncomingPush linked track binding', () => {
     expect(RECORD_KINDS.track.merge).not.toHaveBeenCalled();
   });
 
-  it('keeps an existing local track even when the local project already links it', async () => {
-    RECORD_KINDS.musicVideoProject.load.mockResolvedValue(record);
+  it.each([
+    ['a new project points to it', null],
+    ['an existing project already links it', record],
+  ])('keeps an existing local track when %s', async (_name, localProject) => {
+    RECORD_KINDS.musicVideoProject.load.mockResolvedValue(localProject);
     RECORD_KINDS.track.load.mockResolvedValue({ ...linkedTrack, title: 'Local title' });
     await pushTrack();
     expect(RECORD_KINDS.musicVideoProject.merge).toHaveBeenCalledTimes(1);
