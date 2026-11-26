@@ -537,7 +537,7 @@ function AppDetail() {
               </button>
             )}
             {app.hasDeployScript && (
-              <DeployPanel appId={appId} appName={app.name} />
+              <DeployPanel key={appId} appId={appId} appName={app.name} />
             )}
           </div>
         </div>
