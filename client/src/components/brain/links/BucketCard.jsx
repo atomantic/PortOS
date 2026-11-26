@@ -1,6 +1,6 @@
 import { useState, Fragment } from 'react';
 import { Plus, Edit2, Trash2, Save, X, Check, GripVertical } from 'lucide-react';
-import { useDraggable, useDroppable } from '@dnd-kit/core';
+import { useDraggable, useDroppable } from '../../../lib/dnd/index.js';
 import BrailleSpinner from '../../BrailleSpinner';
 import InlineConfirmRow from '../../ui/InlineConfirmRow';
 import LinkChip from './LinkChip';
@@ -11,7 +11,7 @@ import { bucketDropId, chipSlotId, BUCKET_KIND, LINK_KIND, LINK_SLOT_KIND } from
  * A single bucket (bookmark group): colored header with inline edit/delete,
  * a grid of link chips, and an inline "add URL" affordance.
  *
- * Drag-and-drop is dnd-kit, driven by the ONE `DndContext` in `LinksTab`
+ * Drag-and-drop is driven by the shared `DndContext` in `LinksTab`
  * (buckets and chips share it so a link can move from the flat list straight
  * into a bucket). This card registers two independent drop targets: the
  * whole card is a 'bucket' droppable (reordering the board), and each chip —

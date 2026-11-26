@@ -10,8 +10,8 @@ import { BedAudio } from '../components/media/VideoTimelineLanes';
 // here is the page's own wiring: which lanes render, what counts as a missing
 // source, and the lane caps.
 
-vi.mock('@dnd-kit/sortable', async () => {
-  const actual = await vi.importActual('@dnd-kit/sortable');
+vi.mock('../lib/dnd/index.js', async () => {
+  const actual = await vi.importActual('../lib/dnd/index.js');
   return {
     ...actual,
     useSortable: () => ({

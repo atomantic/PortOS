@@ -1,20 +1,8 @@
-/**
- * Keyboard coordinate getters for `@dnd-kit/core`'s `KeyboardSensor`.
- *
- * `@dnd-kit/sortable` ships `sortableKeyboardCoordinates` for a `SortableContext`, and a board with its own geometry writes a bespoke getter (`KanbanBoard.jsx`'s `kanbanKeyboardCoordinates`). What has no shipped answer
- * is a `DndContext` whose drop targets are FREE `useDroppable` zones (a folder list, a goal tree) with no sort order to interpolate against. dnd-kit's default getter nudges 25px per arrow press, so crossing a tall
- * zone takes a dozen presses and a zone shorter than the step can be skipped; this getter JUMPS to the adjacent drop zone in visual order, as a pointer user gets and the announcements describe.
- *
- * `keyboardAwareCollisionDetection` is the other half: the jump lands on a zone's centre, which `closestCenter` resolves and `rectIntersection` may not.
- */
+// Move a keyboard drag between enabled free drop zones in visual order.
 
-import { closestCenter, rectIntersection } from '@dnd-kit/core';
+import { closestCenter, rectIntersection } from './dnd/index.js';
 
-/**
- * dnd-kit's default collision detection for pointer drags, `closestCenter` for keyboard ones. A keyboard drag needs `closestCenter` (the getters move the drag to a zone's centre; with `rectIntersection` a destination smaller
- * than the dragged item still resolves to no target). Applying it to POINTER drags too is the tempting version but a behavior change: it always finds a nearest target, so a drop over empty space would file into the closest zone.
- * @param {object} args dnd-kit collision-detection arguments
- */
+// A pointer must overlap a target, while a keyboard jump lands on its center.
 export function keyboardAwareCollisionDetection(args) {
   return args.pointerCoordinates ? rectIntersection(args) : closestCenter(args);
 }

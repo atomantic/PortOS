@@ -1,5 +1,5 @@
 /**
- * dnd-kit wiring for the Links board: keyboard coordinates + collision
+ * Drag-and-drop wiring for the Links board: keyboard coordinates + collision
  * detection shared by bucket reordering and chip (link) reordering, which
  * both live in ONE `DndContext` (LinksTab.jsx) so a link dragged from the
  * flat list can land inside any bucket at a specific position.
@@ -14,7 +14,7 @@
  * (data.index = that chip's index — "insert before this chip") plus one more
  * covering the bucket's chip area as a whole (data.index = links.length —
  * "append to the end"). The trailing slot's rect ENCLOSES the per-chip slots,
- * so `rectIntersection` (dnd-kit's pointer default) would usually prefer the
+ * so `rectIntersection` (the default pointer policy) would usually prefer the
  * larger container over the chip actually under the pointer. `closestCenter`
  * doesn't have that problem — a chip's center is far closer to the pointer
  * than the container's overall center whenever the pointer is actually near
@@ -22,7 +22,7 @@
  * the free-droppable/kanban helpers elsewhere in this tree.
  */
 
-import { closestCenter } from '@dnd-kit/core';
+import { closestCenter } from '../../../lib/dnd/index.js';
 
 export const BUCKET_KIND = 'bucket';
 export const LINK_KIND = 'link';

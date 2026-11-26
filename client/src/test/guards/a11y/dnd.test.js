@@ -1,16 +1,15 @@
 /**
- * Accessibility conventions: dnd-kit keyboard sensors and native drag-and-drop.
+ * Accessibility conventions: keyboard drag sensors and native drag-and-drop.
  * Shared scanner: `src/test/a11yScan*.js`; rule overview in `a11yScanCore.js`.
  */
 import { describe, it, expect } from 'vitest';
-import { escapeRegExp } from '../../../lib/textUtils.js';
 import { trackedJsxFiles, trackedSourceFiles, maskedSourceOf, rawSourceOf, openingTagAt, forEachOpeningTag, lineOf } from '../../a11yScanCore.js';
 
 describe('a11y conventions: dnd', () => {
   it('registers a KeyboardSensor in every DndContext (#7243)', () => {
     // `useDraggable`/`useSortable` return `attributes` that UNCONDITIONALLY
     // carry role="button", tabIndex={0}, aria-roledescription="draggable" and
-    // an aria-describedby pointing at dnd-kit's own "press the space bar to
+    // an aria-describedby pointing at the module's "press the space bar to
     // pick up" instruction text. So a DndContext registered with PointerSensor
     // alone is worse than a missing feature: every handle is a tab stop that
     // tells the user to press a key nothing is listening for.
@@ -22,12 +21,12 @@ describe('a11y conventions: dnd', () => {
     // elsewhere should extend the rule rather than be quietly exempted.
     //
     // Which getter to pass is the surface's call: a SortableContext wants
-    // @dnd-kit/sortable's `sortableKeyboardCoordinates`, free `useDroppable`
+    // the owned module's `sortableKeyboardCoordinates`, free `useDroppable`
     // zones want `createFreeDroppableKeyboardCoordinates` from
     // lib/dndKeyboardCoordinates.js, and a board with its own geometry writes
     // one (KanbanBoard.jsx's `kanbanKeyboardCoordinates`).
-    const namedImportsFrom = (src, moduleId) => {
-      const re = new RegExp(`import\\s*(?:[\\w$]+\\s*,\\s*)?\\{([^}]*)\\}\\s*from\\s*['"]${escapeRegExp(moduleId)}['"]`, 'g');
+    const dndImports = src => {
+      const re = /import\s*(?:[\w$]+\s*,\s*)?\{([^}]*)\}\s*from\s*['"](?:\.\.\/)+lib\/dnd\/index\.js['"]/g;
       const bindings = new Map();
       let m;
       while ((m = re.exec(src))) {
@@ -110,7 +109,7 @@ describe('a11y conventions: dnd', () => {
     // rule silently passes. Blanking applies only to the text handed to
     // `registers`, which is the one place a literal could forge a match.
     const offendersIn = (file, src) => {
-      const core = namedImportsFrom(src, '@dnd-kit/core');
+      const core = dndImports(src);
       const contextLocal = core.get('DndContext');
       if (!contextLocal) return [];
       const sensorLocal = core.get('KeyboardSensor');
@@ -130,12 +129,12 @@ describe('a11y conventions: dnd', () => {
     // Probe first — the tree is green, so nothing in it pins what the matcher
     // rejects, and a silent change of shape would turn the rule vacuous.
     const probe = (src) => offendersIn('probe.jsx', src);
-    const IMPORT_BOTH = "import { DndContext, KeyboardSensor, PointerSensor, useSensor, useSensors } from '@dnd-kit/core';";
-    const IMPORT_POINTER = "import { DndContext, PointerSensor, useSensor, useSensors } from '@dnd-kit/core';";
+    const IMPORT_BOTH = "import { DndContext, KeyboardSensor, PointerSensor, useSensor, useSensors } from '../lib/dnd/index.js';";
+    const IMPORT_POINTER = "import { DndContext, PointerSensor, useSensor, useSensors } from '../lib/dnd/index.js';";
     expect(probe(`${IMPORT_POINTER}\nconst s = useSensor(PointerSensor);\n<DndContext sensors={s} />`)).toEqual(['probe.jsx:3']);
     expect(probe(`${IMPORT_BOTH}\nconst s = useSensors(useSensor(PointerSensor), useSensor(KeyboardSensor, { coordinateGetter }));\n<DndContext sensors={s} />`)).toEqual([]);
     // An aliased import is the same registration under another name…
-    expect(probe("import { DndContext as Dnd, KeyboardSensor as KS, useSensor as sensor } from '@dnd-kit/core';\nconst s = sensor(KS, {});\n<Dnd sensors={s} />")).toEqual([]);
+    expect(probe("import { DndContext as Dnd, KeyboardSensor as KS, useSensor as sensor } from '../lib/dnd/index.js';\nconst s = sensor(KS, {});\n<Dnd sensors={s} />")).toEqual([]);
     // …and importing the symbol without ever registering it is not.
     expect(probe(`${IMPORT_BOTH}\nconst s = useSensor(PointerSensor);\n<DndContext sensors={s} />`)).toEqual(['probe.jsx:3']);
     // Neither is a quoted mention — and it must be pinned against an import
@@ -180,21 +179,21 @@ function B() { const sensors = useSensors(useSensor(PointerSensor)); return <Dnd
     expect(probe(DUPLICATE_NAME.replaceAll(', useSensor(KeyboardSensor)', ''))).toEqual(['probe.jsx:2', 'probe.jsx:3']);
     // A file that never mounts a DndContext is out of the rule's remit, even
     // when it uses dnd-kit for something else.
-    expect(probe("import { useDraggable } from '@dnd-kit/core';\nconst d = useDraggable({ id });")).toEqual([]);
+    expect(probe("import { useDraggable } from '../lib/dnd/index.js';\nconst d = useDraggable({ id });")).toEqual([]);
 
     // `maskComments` is the most expensive routine in this file, so mask only
-    // the handful of files that mention dnd-kit at all — the raw substring is a
+    // the handful of files that mention the drag-and-drop module at all — the raw substring is a
     // superset of "imports DndContext", and a commented-out import is still
     // rejected because the masked source is what `offendersIn` then reads.
-    const scanned = trackedSourceFiles().filter((file) => rawSourceOf(file).includes('@dnd-kit/core'));
-    const withContext = scanned.filter((file) => namedImportsFrom(maskedSourceOf(file), '@dnd-kit/core').has('DndContext'));
+    const scanned = trackedSourceFiles().filter((file) => rawSourceOf(file).includes('lib/dnd/index.js'));
+    const withContext = scanned.filter((file) => dndImports(maskedSourceOf(file)).has('DndContext'));
     // Assert the scan really found the live call sites, so a change to the file
     // walker can't turn this into a pass over zero DndContexts.
     expect(withContext.length, 'no client source mounts a DndContext — has trackedSourceFiles() changed its path shape?').toBeGreaterThanOrEqual(7);
 
     const offenders = [];
     for (const file of withContext) offenders.push(...offendersIn(file, maskedSourceOf(file)));
-    expect(offenders, `DndContext registered without a KeyboardSensor — every dnd-kit handle already announces itself as draggable and tells the user to press Space, so a pointer-only sensor list is a WCAG 2.1.1 failure. Add useSensor(KeyboardSensor, { coordinateGetter }) (sortableKeyboardCoordinates for a SortableContext, createFreeDroppableKeyboardCoordinates from lib/dndKeyboardCoordinates.js for free droppables):\n${offenders.join('\n')}`).toEqual([]);
+    expect(offenders, `DndContext registered without a KeyboardSensor — every drag handle already announces itself as draggable and tells the user to press Space, so a pointer-only sensor list is a WCAG 2.1.1 failure. Add useSensor(KeyboardSensor, { coordinateGetter }) (sortableKeyboardCoordinates for a SortableContext, createFreeDroppableKeyboardCoordinates from lib/dndKeyboardCoordinates.js for free droppables):\n${offenders.join('\n')}`).toEqual([]);
   });
 
   it('never reintroduces native HTML5 drag-and-drop (#8120)', () => {
@@ -236,6 +235,6 @@ function B() { const sensors = useSensors(useSensor(PointerSensor)); return <Dnd
 
     const offenders = [];
     for (const file of trackedJsxFiles()) offenders.push(...offendersIn(file, maskedSourceOf(file)));
-    expect(offenders, `A JSX draggable attribute other than draggable={false} — native HTML5 drag-and-drop has no keyboard path. Migrate to dnd-kit (useDraggable/useDroppable + a KeyboardSensor); components/brain/links/bucketDnd.js is a worked multi-container example:\n${offenders.join('\n')}`).toEqual([]);
+    expect(offenders, `A JSX draggable attribute other than draggable={false} — native HTML5 drag-and-drop has no keyboard path. Use the shared drag-and-drop module (useDraggable/useDroppable + a KeyboardSensor); components/brain/links/bucketDnd.js is a worked multi-container example:\n${offenders.join('\n')}`).toEqual([]);
   });
 });

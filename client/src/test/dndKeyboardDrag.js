@@ -1,12 +1,4 @@
-/**
- * Driving a real `@dnd-kit` keyboard drag under happy-dom. Two environment artifacts stand between a test and an honest assertion:
- *
- *   1. **No layout.** happy-dom's `getBoundingClientRect` is all zeros, so `closestCenter` only ties. `stubSequentialLayout` stacks elements in DOCUMENT order (how a vertical list paints,
- *      and how the keyboard coordinate getters sort zones), not measurement order: dnd-kit measures the dragged node first, which would put it above everything and pick the wrong starting zone.
- *   2. **Deferred work on both sides of the key.** `KeyboardSensor.attach()` registers its keydown handler inside a `setTimeout`, so an arrow key in the same macrotask as the pickup is dropped,
- *      and dnd-kit re-resolves collisions in deferred work after the key, so an immediate assertion can read a live region one tick behind. `pressKey` yields before AND after each dispatch.
- * Use with the REAL `@dnd-kit/core` (no module mock): proving the sensor is registered is what these helpers are for.
- */
+// Drive keyboard drags with a deterministic layout in happy-dom.
 
 import { act, fireEvent } from '@testing-library/react';
 
@@ -37,24 +29,9 @@ export function stubSequentialLayout({ axis = 'vertical', height = ROW_HEIGHT, w
   return () => { Element.prototype.getBoundingClientRect = original; };
 }
 
-const flushMacrotask = () => act(async () => {
-  await new Promise((resolve) => setTimeout(resolve, 0));
-});
-
-/**
- * Dispatch one key on `element` (default: the focused one) and let the sensor's deferred listeners and state updates settle.
- * @param {string} code a `KeyboardEvent.code` — 'Space', 'ArrowDown', 'Escape', …
- * @param {Element} [element]
- */
-export async function pressKey(code, element) {
+export function pressKey(code, element) {
   const key = code === 'Space' ? ' ' : code.replace(/^Key/, '');
-  // Flush the macrotask KeyboardSensor.attach() defers its listener into, so the key after a pickup isn't swallowed…
-  await flushMacrotask();
-  await act(async () => {
-    fireEvent.keyDown(element || document.activeElement || document.body, { key, code });
-  });
-  // …and again afterwards: dnd-kit re-resolves collisions in deferred work, so without this the assertion can read a live region one tick behind (passes alone, fails under parallel load).
-  await flushMacrotask();
+  return act(async () => { fireEvent.keyDown(element || document.activeElement || document.body, { key, code }); });
 }
 
 /**
@@ -69,5 +46,5 @@ export async function pressKeyTimes(code, times) {
 
 /** Current text of the DndContext live region, or '' when nothing is announced. */
 export function dndAnnouncement() {
-  return document.querySelector('[id^="DndLiveRegion"]')?.textContent || '';
+  return document.querySelector('[data-dnd-announcement]')?.textContent || '';
 }

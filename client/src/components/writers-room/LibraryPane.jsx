@@ -3,7 +3,7 @@ import { Folder, FolderPlus, FilePlus, FileText, ChevronDown, ChevronRight, Tras
 import {
   DndContext, DragOverlay, KeyboardSensor, PointerSensor,
   useDraggable, useDroppable, useSensor, useSensors,
-} from '@dnd-kit/core';
+} from '../../lib/dnd/index.js';
 import { createFreeDroppableKeyboardCoordinates, keyboardAwareCollisionDetection } from '../../lib/dndKeyboardCoordinates';
 import toast from '../ui/Toast';
 import CollapsibleListItem from '../ui/CollapsibleListItem';
@@ -23,9 +23,7 @@ import { useSingleFlight } from '../../hooks/useSingleFlight';
 
 const UNFILED_DROP_ID = 'wr-unfiled';
 
-// Arrow keys step between the folder rows and the Unfiled zone rather than
-// nudging the drag 25px at a time, which is dnd-kit's default and skips right
-// past a collapsed folder row.
+// Step by folder so a collapsed row is reachable in one keypress.
 const libraryKeyboardCoordinates = createFreeDroppableKeyboardCoordinates();
 
 export default function LibraryPane({
@@ -154,7 +152,7 @@ export default function LibraryPane({
   // stay on screen for good.
   const handleDragCancel = useCallback(() => setDraggingWork(null), []);
 
-  // dnd-kit's stock announcements only ever say "draggable item N", which is an
+  // The default drag announcements only ever say "draggable item N", which is an
   // id. Name the work and the folder instead — for the Unfiled zone and for
   // every folder, resolved off the drop target's own `folderId`.
   const accessibility = useMemo(() => {

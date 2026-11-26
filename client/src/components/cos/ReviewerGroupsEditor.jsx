@@ -1,6 +1,8 @@
 import { useEffect, useId, useRef, useState } from 'react';
-import { DndContext, KeyboardSensor, PointerSensor, closestCenter, useDraggable, useDroppable, useSensor, useSensors } from '@dnd-kit/core';
-import { arrayMove } from '@dnd-kit/sortable';
+import {
+  DndContext, KeyboardSensor, PointerSensor, closestCenter, useDraggable, useDroppable,
+  useSensor, useSensors, arrayMove,
+} from '../../lib/dnd/index.js';
 import { GripVertical } from 'lucide-react';
 import ReviewerPicker from './ReviewerPicker';
 import { createFreeDroppableKeyboardCoordinates } from '../../lib/dndKeyboardCoordinates';

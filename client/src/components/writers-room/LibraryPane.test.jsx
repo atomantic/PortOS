@@ -145,6 +145,18 @@ describe('LibraryPane keyboard filing (#7243)', () => {
     expect(dndAnnouncement()).toMatch(/Filed Example Story in Drafts/);
   });
 
+  it('can unfile into the drop zone that mounts on pickup', async () => {
+    renderPane({ folders: [FOLDERS[0]], works: [{ ...WORKS[0], folderId: 'f-drafts' }] });
+    fireEvent.click(screen.getByText('Drafts').closest('button'));
+    const handle = screen.getByRole('button', { name: 'Drag Example Story' });
+    handle.focus();
+    await pressKey('Space', handle);
+    await pressKey('ArrowUp');
+    expect(dndAnnouncement()).toMatch(/over Unfiled/);
+    await pressKey('Space');
+    expect(updateWritersRoomWork).toHaveBeenCalledWith('w-1', { folderId: null }, { silent: true });
+  });
+
   it('cancels on Escape without moving the work', async () => {
     await pickUpWork();
     await pressKeyTimes('ArrowUp', 3);

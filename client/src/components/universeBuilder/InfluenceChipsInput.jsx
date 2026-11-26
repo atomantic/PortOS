@@ -1,20 +1,9 @@
 import { useState } from 'react';
 import { X, GripVertical } from 'lucide-react';
 import {
-  DndContext,
-  KeyboardSensor,
-  PointerSensor,
-  closestCenter,
-  useSensor,
-  useSensors,
-} from '@dnd-kit/core';
-import {
-  SortableContext,
-  arrayMove,
-  rectSortingStrategy,
-  sortableKeyboardCoordinates,
-  useSortable,
-} from '@dnd-kit/sortable';
+  DndContext, KeyboardSensor, PointerSensor, closestCenter, useSensor, useSensors,
+  SortableContext, arrayMove, rectSortingStrategy, sortableKeyboardCoordinates, useSortable,
+} from '../../lib/dnd/index.js';
 import { dndTransformToCss } from '../../lib/dndTransform';
 import { WORLD_INFLUENCE_ENTRY_MAX, WORLD_INFLUENCES_PER_LIST_MAX } from '../../services/apiUniverseBuilder.js';
 

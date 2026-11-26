@@ -5,19 +5,9 @@ import { useSearchParams } from 'react-router';
 import { ChevronDown, ChevronRight } from 'lucide-react';
 import toast from '../../ui/Toast';
 import {
-  DndContext,
-  closestCenter,
-  KeyboardSensor,
-  PointerSensor,
-  useSensor,
-  useSensors,
-} from '@dnd-kit/core';
-import {
-  arrayMove,
-  SortableContext,
-  sortableKeyboardCoordinates,
-  verticalListSortingStrategy,
-} from '@dnd-kit/sortable';
+  DndContext, closestCenter, KeyboardSensor, PointerSensor, useSensor, useSensors,
+  arrayMove, SortableContext, sortableKeyboardCoordinates, verticalListSortingStrategy,
+} from '../../../lib/dnd/index.js';
 import { getCosTasks, getCosLearningDurations, reorderCosTasks } from '../../../services/apiAgents.js';
 import TaskItem, { taskRowId } from './TaskItem';
 import SortableTaskItem from './SortableTaskItem';
