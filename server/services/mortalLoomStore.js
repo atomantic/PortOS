@@ -13,7 +13,7 @@
  */
 
 import { dashboardEvents } from './dashboardEvents.js';
-import { homedir } from 'os';
+import { homedir, tmpdir } from 'os';
 import { join } from 'path';
 import { stat } from 'fs/promises';
 import { existsSync } from 'fs';
@@ -27,6 +27,8 @@ import { rowIdentityKeys, ROW_TOMBSTONES_KEY } from '../lib/meatspaceRowIdentity
 import { isTombstoned } from '../lib/tombstones.js';
 import { queueHealthWrite } from './meatspace/meatspaceWriteQueues.js';
 import { getSettings, settingsEvents } from './settings.js';
+import { isVitestRunner } from '../lib/runtimeEnv.js';
+import { canonicalizePath, isPathAtOrInsideDir } from '../lib/pathContainment.js';
 
 const DEFAULT_ICLOUD_PATH = join(
   homedir(),
@@ -39,7 +41,16 @@ const DEFAULT_ICLOUD_PATH = join(
 // listener where an unhandled throw crashes the process. Centralize the
 // "treat-as-string-or-fall-back" guard at every read.
 function normalizePath(rawPath) {
-  return (typeof rawPath === 'string' ? rawPath.trim() : '') || DEFAULT_ICLOUD_PATH;
+  const configured = typeof rawPath === 'string' ? rawPath.trim() : '';
+  // An isolated PortOS data root does not isolate this external shared file.
+  // Unit/integration tests must explicitly use a scratch file and never reach
+  // a real iCloud store through defaults, custom paths, or symlinks.
+  if (isVitestRunner()) {
+    if (!configured) return null;
+    const target = canonicalizePath(configured);
+    return isPathAtOrInsideDir(canonicalizePath(tmpdir()), target) ? configured : null;
+  }
+  return configured || DEFAULT_ICLOUD_PATH;
 }
 
 // === Transient-error retry ===
@@ -339,7 +350,7 @@ async function resolvePath() {
 
 export async function isMortalLoomEnabled() {
   const s = await getSettings();
-  return Boolean(s?.mortalloom?.enabled);
+  return Boolean(s?.mortalloom?.enabled && (!isVitestRunner() || normalizePath(s.mortalloom.path)));
 }
 
 /**
@@ -371,6 +382,7 @@ async function readEnabledStore() {
   const s = await getSettings();
   if (!s?.mortalloom?.enabled) return { enabled: false, ok: true, store: null };
   const path = normalizePath(s.mortalloom.path);
+  if (!path) return { enabled: false, ok: true, store: null };
   const { present, ok, store } = await readStoreAtPathResult(path);
   // `ok` collapses "readable" and "genuinely absent" into the single trustworthy
   // answer callers act on; only present-but-unreadable is a failure worth a throw.
@@ -410,6 +422,7 @@ function warnEvictedOnce(detail) {
 }
 
 async function readStoreAtPathResult(path) {
+  if (!path) return { present: false, ok: true, store: null };
   // Attempt the read directly and classify from the error code rather than gating
   // on `existsSync` first (codex #2742 review): `existsSync` swallows its errno —
   // an un-traversable parent dir (EACCES) or an EIO returns `false`, which the old
@@ -492,6 +505,7 @@ async function updateStoreUnqueued(mutator) {
   // writing to another (or the overwrite-guard's existsSync looking at a
   // different file than the read).
   const path = await resolvePath();
+  if (!path) throw new Error('MortalLoom tests must configure an isolated temporary store');
   let store = await readStoreAtPath(path);
   // The overwrite guard is based solely on post-read state, not a pre-read
   // snapshot. readStoreAtPath returns null for several reasons; we only care
@@ -825,7 +839,7 @@ export async function getStatus() {
     enabled, path, usingDefault: path === DEFAULT_ICLOUD_PATH, defaultPath: DEFAULT_ICLOUD_PATH,
     exists: false, size: 0, mtime: null, summary: null, appStoreUrl: MORTALLOOM_APP_STORE_URL,
   };
-  if (!existsSync(path)) return missingResponse;
+  if (!path || !existsSync(path)) return missingResponse;
   // Same transient-iCloud-failure tolerance as readStoreAtPath() — surface a
   // null summary instead of 500ing the Settings status page. ENOENT (file
   // disappeared between existsSync and stat/readFile) collapses back to the
