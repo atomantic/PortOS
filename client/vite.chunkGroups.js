@@ -31,7 +31,6 @@ const VENDOR_CHUNK_GROUPS = [
   { name: 'vendor-react', packages: ['react', 'react-dom', 'react-router', 'use-sync-external-store'] },
   // Socket dependencies
   { name: 'vendor-realtime', packages: ['socket.io-client'] },
-  // Drag and drop library (only used in CoS)
   // Icon library (largest dependency)
   { name: 'vendor-icons', packages: ['lucide-react'] },
   // Keep asset-only addons (GLTF, Draco, HDR, USDZ) in their importers'

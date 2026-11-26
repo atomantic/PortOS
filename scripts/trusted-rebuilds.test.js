@@ -164,11 +164,6 @@ describe('trusted rebuild allowlist', () => {
   // rebuild — recorded here so the lockfile-derived check stays honest rather than
   // being loosened.
   const FSEVENTS_STALE_FLAG = ['fsevents'];
-  // Scalar's Vue 3 renderer brings in vue-demi. Its postinstall only rewrites
-  // the shipped compatibility files when the host uses Vue 2; PortOS uses Vue
-  // 3 and the package already ships in Vue 3 mode. Keep the hook blocked rather
-  // than expanding the lifecycle-script allowlist for a no-op.
-  const VUE_DEMI_VUE3_NOOP = ['vue-demi'];
   // better-sqlite3-multiple-ciphers publishes `gypfile: false` and ships
   // prebuilt binaries (macOS, Linux glibc and musl, Windows; x64 and arm64).
   // `binding.gyp` is the maintainer's source-build recipe, which this scan
@@ -178,9 +173,26 @@ describe('trusted rebuild allowlist', () => {
   const SIGNAL_SQLCIPHER_PREBUILD = ['better-sqlite3-multiple-ciphers'];
   const DELIBERATELY_UNBUILT = {
     root: FSEVENTS_STALE_FLAG,
-    client: [...FSEVENTS_STALE_FLAG, ...VUE_DEMI_VUE3_NOOP],
+    client: FSEVENTS_STALE_FLAG,
     server: [...FSEVENTS_STALE_FLAG, ...SIGNAL_SQLCIPHER_PREBUILD]
   };
+
+  it.each(WORKSPACES)('%s: rebuild governance entries exist in its lockfile', (label) => {
+    const lockPath = join(workspaceDir(label), 'package-lock.json');
+    if (!existsSync(lockPath)) return;
+    const lock = JSON.parse(readFileSync(lockPath, 'utf8'));
+    const names = new Set(Object.entries(lock.packages ?? {}).flatMap(([path, meta]) => {
+      if (meta?.name) return [meta.name];
+      const index = path.lastIndexOf('node_modules/');
+      if (index >= 0) return [path.slice(index + 'node_modules/'.length)];
+      return Object.keys({ ...(meta?.dependencies ?? {}), ...(meta?.devDependencies ?? {}), ...(meta?.optionalDependencies ?? {}) });
+    }));
+    const governed = [
+      ...(TRUSTED_REBUILDS[label] ?? []).flatMap((group) => group.pkgs),
+      ...(DELIBERATELY_UNBUILT[label] ?? [])
+    ];
+    expect(governed.filter((name) => !names.has(name)), `${label}: stale rebuild governance entries`).toEqual([]);
+  });
 
   it('detects install hooks at all, so the accounting assertion is not vacuous', () => {
     // `unaccounted === []` also passes when the scan finds nothing, so a scan that
@@ -259,8 +271,14 @@ describe('rebuildTrusted failure semantics', () => {
     expect(rebuildTrusted('/tmp', 'server', { spawn: failFor('node-pty') })).toBe(false);
   });
 
-  it('still succeeds when only a non-fatal group fails', () => {
-    expect(rebuildTrusted('/tmp', 'server', { spawn: failFor('onnxruntime-node') })).toBe(true);
+  it('still succeeds when a synthetic non-fatal group fails', () => {
+    const original = TRUSTED_REBUILDS.server;
+    TRUSTED_REBUILDS.server = [{ pkgs: ['synthetic-optional'], fatal: false }];
+    try {
+      expect(rebuildTrusted('/tmp', 'server', { spawn: failFor('synthetic-optional') })).toBe(true);
+    } finally {
+      TRUSTED_REBUILDS.server = original;
+    }
   });
 
   it('attempts every group even after one fails', () => {

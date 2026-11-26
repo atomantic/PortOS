@@ -143,7 +143,13 @@ describe('dependency override parity across manifests (#2848)', () => {
 
     const stale = [];
     for (const rel of MANIFESTS) {
-      for (const [name, version] of Object.entries(readOverrides(rel))) {
+      const manifest = JSON.parse(readText(join(REPO_ROOT, rel)));
+      const pins = {
+        ...Object.fromEntries(Object.entries(manifest.dependencies ?? {}).filter(([name]) => MINIMUM_SAFE[name])),
+        ...Object.fromEntries(Object.entries(manifest.devDependencies ?? {}).filter(([name]) => MINIMUM_SAFE[name])),
+        ...readOverrides(rel)
+      };
+      for (const [name, version] of Object.entries(pins)) {
         if (typeof version !== 'string') continue;
         const min = MINIMUM_SAFE[name];
         if (!min) continue;
@@ -160,6 +166,21 @@ describe('dependency override parity across manifests (#2848)', () => {
     }
 
     expect(stale).toEqual([]);
+  });
+
+  it('rejects flat overrides with no non-root dependants', () => {
+    const dead = [];
+    for (const rel of MANIFESTS) {
+      const overrides = readOverrides(rel);
+      const packages = readLockPackages(lockfileFor(rel));
+      for (const key of Object.keys(overrides)) {
+        if (typeof overrides[key] !== 'string') continue;
+        const name = overrideTargetName(key);
+        const dependants = Object.entries(packages).filter(([path]) => path && packageNameFromLockPath(path) === name);
+        if (dependants.length === 0) dead.push(`${rel}: ${name}`);
+      }
+    }
+    expect(dead).toEqual([]);
   });
 
   // PortOS dropped its local braces depth guard (#9906) once pm2 7.1.0 stopped
