@@ -557,17 +557,16 @@ jobs:
         with:
           vitest-key-suffix: -browser-${{ matrix.shard }}of${{ strategy.job-total }}
 
-      # Smoke can use every trusted full-run lineage because smaller
-      # selections can use different shard owners. Per-test keys still require
-      # compatible inputs and coverage.
+      # Seven-shard smoke and full share owners, so restore only the matching
+      # partition. Smaller smoke matrices can still need any full-run shard.
       - name: Restore the test memo
         id: test-memo
         uses: ./.github/actions/test-memo
         with:
           suite: browser
           partition: browser-${{ matrix.shard }}of${{ strategy.job-total }}
-          merge-shards: ${{ env.PORTOS_BROWSER_TEST_PROFILE == 'smoke' && '7' || '0' }}
-          legacy-shards: '4'
+          merge-shards: ${{ env.PORTOS_BROWSER_TEST_PROFILE == 'smoke' && strategy.job-total != 7 && '7' || '0' }}
+          partition-only: ${{ strategy.job-total == 7 }}
 
       # Plan before installing ffmpeg/client deps so shards 100% covered by the
       # memo skip both. Uses the same env keys as the test step below.

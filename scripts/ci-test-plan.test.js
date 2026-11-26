@@ -2696,13 +2696,16 @@ describe('cross-workspace browser suites (#10312)', () => {
   });
 
   it('selects animatic pixel coverage when only the compositor or Save frame control changes', () => {
-    const suite = 'server/services/musicVideo/animaticCapture.browser.test.js';
+    const suites = [
+      'server/services/musicVideo/animaticCapture.browser.test.js',
+      'server/services/musicVideo/animaticCaptureOverlays.browser.test.js',
+    ];
     const inputs = realTree();
     const trackedFiles = inputs.trackedFiles.filter((path) => !/\.(?:test|spec)\.[cm]?[jt]sx?$/.test(path) || BROWSER_SUITES.includes(path));
     for (const source of ['client/src/lib/musicVideoFrameCapture.js', 'client/src/components/musicVideo/FrameStepper.jsx', 'client/src/components/musicVideo/PreviewVideo.jsx']) {
       const plan = buildCiTestPlan([source], { ...inputs, trackedFiles });
       expect(plan.full, source).toBe(false);
-      expect(plan.browserFiles, source).toContain(suite);
+      expect(plan.browserFiles, source).toEqual(expect.arrayContaining(suites));
     }
   });
 
@@ -2710,6 +2713,7 @@ describe('cross-workspace browser suites (#10312)', () => {
     const suites = [
       'server/services/htmlComposition/index.test.js',
       'server/services/musicVideo/animaticCapture.browser.test.js',
+      'server/services/musicVideo/animaticCaptureOverlays.browser.test.js',
       'server/services/musicVideo/documentTemplateParity.browser.test.js',
       'server/services/musicVideo/documentFilmLook.browser.test.js',
       'server/services/musicVideo/lyricPlaythrough.browser.test.js',

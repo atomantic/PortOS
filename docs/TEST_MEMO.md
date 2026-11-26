@@ -415,11 +415,10 @@ Every other key line (file bytes, records, packages, tools, Node, platform,
 arch and other env values) stays this run's own, and entries are still written
 under the run's own key only.
 
-Smoke can use a different stable shard assignment. Smoke jobs read all trusted
-full-run browser shard lineages, so a suite that moves can still reuse its
-former owner's verdict. The seven-shard browser matrix uses the matching
-four-shard cache lineage when a current lineage has not been seeded.
-Full-profile jobs keep their per-partition restore and save behavior.
+Seven-shard browser jobs use the same suite owners in smoke and full, and
+restore only the matching seven-shard cache lineage. Smaller smoke plans can
+use different owners, so they still read the trusted seven-shard lineages.
+Only trusted jobs save the memo, under their own partition.
 
 `smoke` skips `[fidelity]` cases and `full` skips `[local-performance]` ones.
 Every `[local-performance]` case is also `[fidelity]`, so a file's smoke cases

@@ -1,256 +1,14 @@
-import { afterAll, beforeAll, beforeEach, describe, expect, it, onTestFinished } from 'vitest';
-import { mkdir, mkdtemp, rm, symlink, writeFile } from 'node:fs/promises';
-import { tmpdir } from 'node:os';
-import { dirname, join, resolve } from 'node:path';
-import { execFileSync } from 'node:child_process';
-import express from 'express';
+import { describe, expect, it, onTestFinished } from 'vitest';
 import sharp from 'sharp';
-import { chromium } from 'playwright-core';
-import { startOwnedBrowserFixture } from '../../test/browserFixture.js';
-import { createTestPhaseDiagnostics } from '../../../lib/testPhaseDiagnostics.js';
-import { buildRecordedViteFixture, createRecordedStaticServer } from '../../../scripts/lib/browserServedFiles.js';
-import { createOwnedFixtureSetup } from '../../test/ownedFixtureSetup.js';
-import { browserSuiteCanRun, resolveTestChrome, resolveClientBundler } from '../../lib/browserSuiteGate.js';
-import { findFfmpeg } from '../../lib/ffmpeg.js';
+import { browserSuiteCanRun } from '../../lib/browserSuiteGate.js';
 import { filmLookPreset } from '../../lib/filmLook.js';
-import { buildLyricPlaythroughPreview } from './lyricPlaythrough.js';
+import { chartRgb, prerequisites, project, still, useAnimaticCaptureBrowserFixture } from './animaticCapture.browser.test.fixture.js';
 
-// Bundled StoryboardAnimatic.jsx exercises musicVideoFrameCapture.js, FrameStepper.jsx and PreviewVideo.jsx.
-// These source references are the fixture's CI dependency contract: generated JSX has no static import edge.
-const client = resolve(import.meta.dirname, '../../../client');
-const bundlers = resolveClientBundler(resolve(client, '..'));
-const chrome = resolveTestChrome();
-const ffmpeg = await findFfmpeg();
-const canRun = browserSuiteCanRun('animatic frame capture', { Chrome: chrome, ffmpeg, 'client dependencies': bundlers });
+const canRun = browserSuiteCanRun('animatic frame capture', prerequisites);
 
-const still = { sceneId: 'still', order: 0, label: 'Example still', startSec: 0, endSec: 4, visualLayer: 'still', referenceImageId: 'grid.png', stillMove: 'hold' };
-const project = (scenes = [still], extra = {}) => ({ id: 'capture-fixture', name: 'Example capture', scenes, composition: { mode: 'composed' }, ...extra });
-let dir, server, fixture, page, lyricProject, ffmpegVersion;
-const colorReferences = new Map();
-const colorYuvReferences = new Map();
-const chartColors = [[0, 255, 255], [255, 0, 255], [255, 255, 0], [255, 0, 0], [0, 255, 0], [0, 0, 255], [255, 255, 255], [0, 0, 0]];
-const chartRgb = (x, y, frame) => {
-  if (y < 120) return chartColors[Math.floor(x / 60)];
-  const gray = Math.floor(x / 30) * 17;
-  return y < 200 ? [gray, gray, gray] : frame % 2 ? [230, 40, 190] : [frame * 2, 255 - frame * 2, frame];
-};
-const errors = [];
-const setup = createOwnedFixtureSetup({ cleanup: async () => {
-  // A failed browser close must not leave the HTTP listener open.
-  const outcomes = await Promise.allSettled([fixture?.close(), server && new Promise((done, reject) => server.close(error => error ? reject(error) : done()))]);
-  // The generated workspace is independent of the owned browser profile.
-  outcomes.push(...await Promise.allSettled([dir && rm(dir, { recursive: true, force: true })]));
-  const failures = outcomes.filter(outcome => outcome.status === 'rejected').map(outcome => outcome.reason);
-  if (failures.length) throw new AggregateError(failures, 'Animatic fixture cleanup failed');
-} });
-afterAll(() => setup.close());
-
+// The CI planner selects both suites for StoryboardAnimatic.jsx, musicVideoFrameCapture.js, FrameStepper.jsx and PreviewVideo.jsx.
 describe.skipIf(!canRun)('saved storyboard pixels in a real browser', () => {
-  beforeAll(() => setup.run(async phase => {
-    ffmpegVersion = await phase('ffmpeg-version', timeout => execFileSync(ffmpeg, ['-version'], { timeout, killSignal: 'SIGKILL', encoding: 'utf8' }).split('\n')[0]);
-    await phase('workspace', async () => {
-      dir = await mkdtemp(join(tmpdir(), 'portos-animatic-capture-'));
-      await symlink(join(client, 'node_modules'), join(dir, 'node_modules'), 'dir');
-      const entry = `import React,{useState} from 'react';import{createRoot}from'react-dom/client';import Animatic from ${JSON.stringify(join(client, 'src/components/musicVideo/StoryboardAnimatic.jsx'))};import toast,{Toaster}from ${JSON.stringify(join(client, 'src/components/ui/Toast.jsx'))};import{capturePreviewFrame}from ${JSON.stringify(join(client, 'src/lib/musicVideoFrameCapture.js'))};window.capturePreviewFrame=capturePreviewFrame;
-window.uploads=[];window.captureErrors=[];const report=toast.error;toast.error=(message,...args)=>{window.captureErrors.push(message);return report(message,...args)};const realFetch=window.fetch;window.fetch=async(url,options)=>{if(url==='/api/image-gen/upload'){window.uploads.push(Array.from(new Uint8Array(await options.body.get('file').arrayBuffer())));return Response.json({filename:'synthetic.png'});}return realFetch(url,options)};
-const filterRevision=root=>{const filter=root?.querySelector('filter');return filter?[filter,...filter.querySelectorAll('*')].map(el=>[el.localName,[...el.attributes].filter(a=>a.name!=='style'&&!a.name.startsWith('xmlns')).map(a=>[a.name,a.value]).sort()]):null};
-const surfaceRevision=canvas=>{if(!canvas?.width||!canvas.height)return null;const bytes=canvas.getContext('2d').getImageData(0,0,canvas.width,canvas.height).data;let hash=2166136261;for(const byte of bytes)hash=Math.imul(hash^byte,16777619);return hash>>>0};
-window.previewMetadata=()=>{
-  const root=document.querySelector('figure')?.firstElementChild;
-  const box=root?.getBoundingClientRect();
-  return {songTime:document.querySelector('audio')?.currentTime,songFrame:Math.round((document.querySelector('audio')?.currentTime||0)*24),
-    box:box&&[box.width,box.height],look:root?.dataset.filmLook,filterFrame:root?.dataset.filmLookFrame,
-    filterSize:[root?.dataset.filmLookWidth,root?.dataset.filmLookHeight],filter:filterRevision(root),
-    videos:[...document.querySelectorAll('video[data-preview-video]')].map(v=>({label:v.getAttribute('aria-label'),
-      source:new URL(v.currentSrc||v.src,location.href).pathname.split('/').pop(),time:v.currentTime,pausedFrame:v.dataset.pausedFrame,
-      seeking:v.seeking,readyState:v.readyState,opacity:getComputedStyle(v.parentElement).opacity,
-      canvasVisible:getComputedStyle(v.nextElementSibling).visibility,canvasSize:[v.nextElementSibling.width,v.nextElementSibling.height],
-      canvasRevision:surfaceRevision(v.nextElementSibling)}))};
-};
-window.gateCaptureOnce=(hold=true)=>{
-  const decode=Image.prototype.decode;
-  window.captureDecodePending=false;
-  window.captureFrozen=null;window.captureSerialized=null;
-  let release;
-  const pending=new Promise(done=>{release=done});
-  window.releaseCapture=release;
-  Image.prototype.decode=function(){
-    Image.prototype.decode=decode;
-    window.captureFrozen=window.previewMetadata();
-    const doc=new DOMParser().parseFromString(decodeURIComponent(this.src.slice(this.src.indexOf(',')+1)),'image/svg+xml');
-    const root=doc.querySelector('[data-film-look]');
-    window.captureSerialized={filter:filterRevision(doc),filterFrame:root?.dataset.filmLookFrame,
-      filterSize:[root?.dataset.filmLookWidth,root?.dataset.filmLookHeight]};
-    window.captureDecodePending=true;
-    if(!hold) release();
-    return pending.then(()=>decode.call(this));
-  };
-};
-function App(){const[state,setState]=useState(null);window.show=(project,t)=>{window.fixtureScenes=project.scenes;window.captureErrors=[];setState({project,seek:{t,n:(window.seq=(window.seq||0)+1)}})};return <><main style={{width:642}}>{state&&<Animatic project={state.project} audioUrl='/song.wav' seekRequest={state.seek}/>}</main><Toaster/></>};createRoot(document.getElementById('root')).render(<App/>);`;
-      await writeFile(join(dir, 'entry.jsx'), `import ${JSON.stringify(join(client, 'src/index.css'))};\n${entry}`);
-      await writeFile(join(dir, 'index.html'), '<html><head></head><body style="margin:0"><div id="root"></div><script type="module" src="/entry.jsx"></script></body></html>');
-    });
-    await phase('bundle', async () => {
-      const { build } = await import(bundlers[0]);
-      const { default: react } = await import(bundlers[1]);
-      const { default: tailwind } = await import(bundlers[2]);
-      await buildRecordedViteFixture({
-        build,
-        recordedRoot: client,
-        temp: dir,
-        config: { configFile: false, root: dir, publicDir: join(client, 'public'), plugins: [react()], css: { postcss: { plugins: [tailwind({ base: client })] } }, build: { outDir: join(dir, 'dist'), emptyOutDir: true }, logLevel: 'warn' },
-      });
-    });
-    await phase('still-images', async () => {
-      const grid = '<svg width="1200" height="400" xmlns="http://www.w3.org/2000/svg"><rect width="1200" height="400" fill="#164080"/><rect width="200" height="400" fill="#ff3010"/><rect x="400" width="200" height="400" fill="#20dd50"/><rect x="1000" width="200" height="400" fill="#f5cf10"/><circle cx="650" cy="100" r="50" fill="white"/></svg>';
-      await sharp(Buffer.from(grid)).png().toFile(join(dir, 'grid.png'));
-      await sharp({ create: { width: 200, height: 400, channels: 3, background: '#ff00ff' } }).png().toFile(join(dir, 'end.png'));
-    });
-    // Tiny fixtures use one codec thread; host-wide defaults can dominate setup.
-    await phase('clip-encode', timeout => execFileSync(ffmpeg, ['-v', 'error', '-y', '-f', 'lavfi', '-i', 'color=c=cyan:s=120x240:r=24:d=4', '-c:v', 'libvpx', '-threads', '1', join(dir, 'clip.webm')], { timeout, killSignal: 'SIGKILL' }));
-    // RGB chart -> explicit limited-range YUV matrix, never a metadata-only retag.
-    const frames = await phase('chart-rgb', () => {
-      const frames = Buffer.alloc(480 * 240 * 3 * 96);
-      for (let f = 0; f < 96; f++) for (let y = 0; y < 240; y++) for (let x = 0; x < 480; x++) {
-        const rgb = chartRgb(x, y, f);
-        const offset = ((f * 240 + y) * 480 + x) * 3;
-        for (let c = 0; c < 3; c++) frames[offset + c] = rgb[c];
-      }
-      return frames;
-    });
-    for (const matrix of ['smpte170m', 'bt709']) {
-      const path = join(dir, `${matrix}.webm`);
-      await phase(`${matrix}-encode`, timeout => execFileSync(ffmpeg, ['-v', 'error', '-y', '-f', 'rawvideo', '-pixel_format', 'rgb24', '-video_size', '480x240', '-framerate', '24', '-i', 'pipe:0',
-        '-vf', `scale=out_color_matrix=${matrix}:out_range=tv,format=yuv420p`, '-colorspace', matrix, '-color_primaries', matrix, '-color_trc', matrix, '-color_range', 'tv',
-        '-c:v', 'libvpx-vp9', '-threads', '1', '-crf', '4', '-b:v', '2M', path], { timeout, killSignal: 'SIGKILL', input: frames }));
-      // Retain RGB as diagnostic evidence. CPU/GPU browser conversion need not
-      // match FFmpeg RGB; raw decoded YUV independently verifies the source.
-      const rgb = await phase(`${matrix}-rgb-decode`, timeout => execFileSync(ffmpeg, ['-v', 'error', '-i', path, '-vf', `scale=in_color_matrix=${matrix}:in_range=tv:out_range=pc,format=rgb24`,
-        '-f', 'rawvideo', '-pix_fmt', 'rgb24', 'pipe:1'], { timeout, killSignal: 'SIGKILL', maxBuffer: frames.length + 1024 }));
-      colorReferences.set(matrix, rgb);
-      colorYuvReferences.set(matrix, await phase(`${matrix}-yuv-decode`, timeout => execFileSync(ffmpeg, ['-v', 'error', '-i', path, '-f', 'rawvideo', '-pix_fmt', 'yuv420p', 'pipe:1'],
-        { timeout, killSignal: 'SIGKILL', maxBuffer: frames.length + 1024 })));
-    }
-    await phase('audio-encode', timeout => execFileSync(ffmpeg, ['-v', 'error', '-y', '-f', 'lavfi', '-i', 'sine=frequency=220:duration=8', join(dir, 'song.wav')], { timeout, killSignal: 'SIGKILL' }));
-    await phase('http-server', async () => {
-      const app = express();
-      const staticFiles = createRecordedStaticServer(express);
-      app.get('/data/images/:id', (req, res) => res.sendFile(join(dir, req.params.id)));
-      app.get('/api/video-gen/history/:id', (req, res) => res.json({ id: req.params.id, filename: colorReferences.has(req.params.id) ? `${req.params.id}.webm` : 'clip.webm', fps: 24, numFrames: 96, width: 120, height: 240 }));
-      app.get('/api/music-video/:id/stats-outro', (req, res) => res.json({ stats: { shots: 2, stills: { made: 3, kept: 1 }, clips: { made: 2, kept: 1 }, floorImages: [] } }));
-      app.get('/api/music-video/:id/lyrics/overlay/preview', async (req, res, next) => {
-        try { res.json(await buildLyricPlaythroughPreview(lyricProject, { overlay: true })); }
-        catch (error) { next(error); }
-      });
-      app.get('/data/videos/:name', (req, res) => res.sendFile(join(dir, req.params.name)));
-      app.get('/song.wav', (req, res) => res.sendFile(join(dir, 'song.wav')));
-      app.use(staticFiles.serve(join(dir, 'dist')));
-      server = await staticFiles.start(app);
-    });
-    await phase('browser-acquire', async () => {
-      fixture = await startOwnedBrowserFixture({ chromium, launchOptions: { executablePath: chrome, headless: true, args: ['--force-color-profile=srgb'] } });
-    });
-    await phase('page-acquire', async () => {
-      page = await fixture.browser.newPage({ viewport: { width: 1000, height: 800 } });
-      page.on('pageerror', (error) => errors.push(error.message));
-    });
-    await phase('navigation', () => page.goto(`http://127.0.0.1:${server.address().port}`));
-    await phase('readiness', () => page.waitForFunction(() => typeof window.show === 'function'));
-  }), 30000);
-
-  let phase, captureEvidence, caseNumber = 0;
-  beforeEach(({ onTestFailed }) => {
-    phase = createTestPhaseDiagnostics(onTestFailed);
-    captureEvidence = null;
-    const number = ++caseNumber;
-    onTestFailed(async () => {
-      const root = process.env.PORTOS_CI_DIAGNOSTICS_PATH ? dirname(process.env.PORTOS_CI_DIAGNOSTICS_PATH) : process.env.PORTOS_CI_DIAGNOSTICS_DIR;
-      if (!root || !captureEvidence) return;
-      const destination = join(root, 'animatic-capture', `case-${number}`);
-      await mkdir(destination, { recursive: true });
-      const { saved, displayed, ...metadata } = captureEvidence;
-      // Only the synthetic fixture's frame, not a page screenshot, enters CI artifacts.
-      for (const [name, png] of Object.entries({ saved, displayed })) {
-        if (png && png.length <= 2 * 1024 * 1024) await writeFile(join(destination, `${name}.png`), png);
-      }
-      const filters = [];
-      for (const key of ['frozen', 'serialized', 'beforeScreenshot', 'afterScreenshot', 'afterUpload', 'beforeFilterCommit', 'afterFilterCommit']) {
-        if (!metadata[key]) continue;
-        const { filter, ...snapshot } = metadata[key];
-        const signature = JSON.stringify(filter);
-        let revision = filters.findIndex(value => JSON.stringify(value) === signature);
-        if (revision < 0) { revision = filters.length; filters.push(filter); }
-        metadata[key] = { ...snapshot, filterRevision: revision };
-      }
-      const json = JSON.stringify({ ...metadata, filters });
-      if (Buffer.byteLength(json) > 65536) throw new Error('Capture diagnostics exceeded their bound');
-      await writeFile(join(destination, 'frame.json'), json);
-    });
-  });
-
-  const show = async (value, t) => {
-    await phase('show-render', () => page.evaluate(({ value, t }) => { window.uploads = []; window.show(value, t); }, { value, t }));
-    // Assigning currentTime is synchronous; its seeked handler can still leave Ending later.
-    await phase('show-song-seek', () => page.waitForFunction((t) => Math.abs(document.querySelector('audio')?.currentTime - t) < 0.00001 && !document.querySelector('audio').seeking, t));
-    await phase('show-images-ready', () => page.waitForFunction(() => [...document.querySelectorAll('figure img')].every((image) => image.complete && image.naturalWidth > 0)));
-  };
-  const enableFilmLook = async () => {
-    const look = page.getByRole('button', { name: 'Film look', exact: true });
-    if (await look.getAttribute('aria-pressed') === 'false') await look.click();
-  };
-  const capture = async (label = '', whileSettling) => {
-    await phase('capture-reset', () => page.evaluate(() => { window.uploads = []; window.captureErrors = []; }));
-    await phase('capture-video-ready', () => page.waitForFunction(() => [...document.querySelectorAll('video[data-preview-video]')].every(video => Number(getComputedStyle(video.parentElement).opacity) === 0 || (!video.seeking && video.dataset.pausedFrame === String(video.currentTime)))));
-    captureEvidence = { label, platform: process.platform, arch: process.arch, browser: fixture.browser.version(), ffmpegVersion };
-    // Observe serialization without delaying normal decode/upload timing. Only
-    // the mutation negative controls hold decode while changing the preview.
-    await phase('capture-observe', () => page.evaluate(() => window.gateCaptureOnce(false)));
-    await phase('capture-click', () => page.getByRole('button', { name: 'Save frame', exact: true }).click());
-    if (whileSettling) await phase('capture-settling', whileSettling);
-    await phase('capture-upload-or-error', () => page.waitForFunction(() => window.uploads.length > 0 || window.captureErrors.length > 0));
-    captureEvidence.frozen = await page.evaluate(() => window.captureFrozen);
-    captureEvidence.serialized = await page.evaluate(() => window.captureSerialized);
-    captureEvidence.afterUpload = await page.evaluate(() => window.previewMetadata());
-    captureEvidence.scenes = await page.evaluate(() => window.fixtureScenes);
-    captureEvidence.errors = await phase('capture-read-errors', () => page.evaluate(() => window.captureErrors));
-    expect(captureEvidence.errors, label).toEqual([]);
-    const saved = Buffer.from(await phase('capture-read-upload', () => page.evaluate(() => window.uploads.at(-1))));
-    captureEvidence.saved = saved;
-    const picture = page.getByLabel('Storyboard animatic', { exact: true }).locator(':scope > div').first();
-    captureEvidence.beforeScreenshot = await page.evaluate(() => window.previewMetadata());
-    captureEvidence.displayed = await phase('capture-screenshot', () => picture.screenshot({ style: '[data-toast-id]{visibility:hidden}' }));
-    captureEvidence.afterScreenshot = await page.evaluate(() => window.previewMetadata());
-    const displayed = captureEvidence.displayed;
-    const a = await phase('capture-decode-saved', () => sharp(saved).ensureAlpha().raw().toBuffer({ resolveWithObject: true }));
-    const b = await phase('capture-decode-displayed', () => sharp(displayed).ensureAlpha().raw().toBuffer({ resolveWithObject: true }));
-    expect([a.info.width, a.info.height]).toEqual([b.info.width, b.info.height]);
-    let difference = 0, opaque = 0;
-    const tiles = Array.from({ length: 16 }, () => ({ difference: 0, channels: 0 }));
-    for (let i = 0; i < a.data.length; i += 1) {
-      const error = Math.abs(a.data[i] - b.data[i]);
-      difference += error;
-      const pixel = Math.floor(i / 4), x = pixel % a.info.width, y = Math.floor(pixel / a.info.width);
-      const tile = tiles[Math.min(3, Math.floor(y * 4 / a.info.height)) * 4 + Math.min(3, Math.floor(x * 4 / a.info.width))];
-      tile.difference += error; tile.channels += 1;
-      if (i % 4 === 3 && a.data[i] === 255) opaque += 1;
-    }
-    captureEvidence.meanDifference = difference / a.data.length;
-    captureEvidence.tileMeanDifferences = tiles.map(tile => tile.difference / tile.channels);
-    if (label) {
-      const { songFrame, filterSize, videos } = captureEvidence.frozen;
-      const surfaces = videos.filter(video => Number(video.opacity) > 0)
-        .map(video => `${video.source}@${video.time}:${video.canvasRevision}`).join(',');
-      console.log(`🎞️ Synthetic capture ${label}: mean=${captureEvidence.meanDifference} songFrame=${songFrame} filter=${filterSize.join('x')} surfaces=${surfaces}`);
-    }
-    expect(captureEvidence.serialized).toEqual({ filter: captureEvidence.frozen.filter, filterFrame: captureEvidence.frozen.filterFrame, filterSize: captureEvidence.frozen.filterSize });
-    const revision = ({ videos, ...rest }) => ({ ...rest, videos: videos.filter(video => Number(video.opacity) > 0) });
-    expect(revision(captureEvidence.beforeScreenshot), 'Preview revision at freeze').toEqual(revision(captureEvidence.frozen));
-    expect(revision(captureEvidence.afterScreenshot), 'Preview revision through screenshot').toEqual(revision(captureEvidence.frozen));
-    expect(revision(captureEvidence.afterUpload), 'Preview revision after upload').toEqual(revision(captureEvidence.frozen));
-    expect(captureEvidence.meanDifference, label).toBeLessThan(1);
-    expect(opaque).toBe(a.info.width * a.info.height);
-    return saved;
-  };
+  const { state, errors, show, capture, enableFilmLook, colorReferences, colorYuvReferences } = useAnimaticCaptureBrowserFixture('color-seek', { readColorReferences: true });
 
   it('saves actual cover crops and camera endpoints for asymmetric push/pan stills', async () => {
     for (const move of ['hold', 'push', 'pan']) {
@@ -264,6 +22,7 @@ function App(){const[state,setState]=useState(null);window.show=(project,t)=>{wi
   });
 
   it('saves decoded footage with black, still, fill and VHS fitting while ignoring hidden preloads', async () => {
+    const { page } = state;
     for (const frameFit of ['black', 'still', 'fill', 'vhs']) {
       await show(project([{ ...still, visualLayer: 'footage', videoHistoryId: 'clip', frameFit },
         { ...still, sceneId: 'next', order: 1, startSec: 4, endSec: 8, visualLayer: 'footage', videoHistoryId: 'preloaded' }]), 1);
@@ -273,6 +32,7 @@ function App(){const[state,setState]=useState(null);window.show=(project,t)=>{wi
   });
 
   it('keeps BT601/709 saturated colors and grayscale identical across paused preview, decoded pixels and PNG', async () => {
+    const { page } = state;
     const points = [...Array.from({ length: 8 }, (_, i) => [i * 60 + 30, 60]), ...Array.from({ length: 16 }, (_, i) => [i * 30 + 15, 160]), [240, 220]];
     const samples = (data, width, channels, locations) => locations.map(([x, y]) => [...data.subarray((y * width + x) * channels, (y * width + x) * channels + 3)]);
     for (const matrix of ['smpte170m', 'bt709']) {
@@ -331,11 +91,11 @@ function App(){const[state,setState]=useState(null);window.show=(project,t)=>{wi
           finally { await video.evaluate(v => { v.style.visibility = 'hidden'; v.nextElementSibling.style.visibility = ''; }); }
           const nativePixels = await sharp(native).raw().toBuffer({ resolveWithObject: true });
           displayed = samples(nativePixels.data, nativePixels.info.width, nativePixels.info.channels, pngPoints);
-          console.log(`🎨 ${process.platform}/${process.arch} ${fixture.browser.version()} ${matrix} limited YUV -> sRGB: ${JSON.stringify({ native: displayed, decoded: pixels.samples, png: exported, ffmpeg: reference })}`);
+          console.log(`🎨 ${process.platform}/${process.arch} ${state.browserVersion} ${matrix} limited YUV -> sRGB: ${JSON.stringify({ native: displayed, decoded: pixels.samples, png: exported, ffmpeg: reference })}`);
         }
         // CI intentionally silences console output. Preserve the complete
         // independent measurements in the assertion failure, before bailing.
-        const evidence = JSON.stringify({ platform: process.platform, arch: process.arch, browser: fixture.browser.version(), ffmpegVersion,
+        const evidence = JSON.stringify({ platform: process.platform, arch: process.arch, browser: state.browserVersion, ffmpegVersion: state.ffmpegVersion,
           matrix, t, metadata: pixels.metadata, format: pixels.format, native: displayed, decoded: pixels.samples, fresh: pixels.fresh,
           png: exported, ffmpeg: reference, sourceYuv, browserYuv: pixels.yuv, expectedYuv });
         expect(pixels.yuv, `Source frame ${matrix} @ ${t}: ${evidence}`).toEqual(sourceYuv);
@@ -351,6 +111,7 @@ function App(){const[state,setState]=useState(null);window.show=(project,t)=>{wi
   }, 30000);
 
   it('uses native continuous playback, then freezes the selected source frame on pause and resume', async () => {
+    const { page } = state;
     await show(project([{ ...still, referenceImageId: null, visualLayer: 'footage', videoHistoryId: 'bt709' }]), 0.02);
     await capture();
     await page.evaluate(async () => { await document.querySelector('audio').play(); });
@@ -364,6 +125,7 @@ function App(){const[state,setState]=useState(null);window.show=(project,t)=>{wi
   });
 
   it('keeps a video-only picture visible on every animation frame through pause and three frame steps', async () => {
+    const { page } = state;
     await show(project([{ ...still, referenceImageId: null, visualLayer: 'footage', videoHistoryId: 'bt709', frameFit: 'black' }]), 0.02);
     await capture();
     await page.evaluate(async () => { await document.querySelector('audio').play(); });
@@ -421,6 +183,7 @@ function App(){const[state,setState]=useState(null);window.show=(project,t)=>{wi
   });
 
   it('shares both footage surfaces through an incoming dissolve and the selected exact film look', async () => {
+    const { page } = state;
     await show(project([
       { ...still, visualLayer: 'footage', videoHistoryId: 'smpte170m', cutEffect: { style: 'dissolve', enabled: true, overlapSec: 1 } },
       { ...still, sceneId: 'incoming', order: 1, startSec: 4, endSec: 8, visualLayer: 'footage', videoHistoryId: 'bt709' },
@@ -432,6 +195,7 @@ function App(){const[state,setState]=useState(null);window.show=(project,t)=>{wi
   });
 
   it('waits for metadata-only active footage before freezing a dissolve, without waiting for hidden preloads', async () => {
+    const { page } = state;
     onTestFinished(async () => {
       await page.reload();
       await page.waitForFunction(() => typeof window.show === 'function');
@@ -481,11 +245,11 @@ function App(){const[state,setState]=useState(null);window.show=(project,t)=>{wi
       expect(pending).toEqual({ frozen: false, uploads: 0, errors: [] });
       await page.evaluate(() => window.decodeActiveClip());
     });
-    const visible = captureEvidence.frozen.videos.filter(video => Number(video.opacity) > 0);
+    const visible = state.captureEvidence.frozen.videos.filter(video => Number(video.opacity) > 0);
     expect(visible).toHaveLength(2);
     expect(visible.map(video => video.source)).toEqual(['smpte170m.webm', 'bt709.webm']);
     expect(visible.every(video => video.readyState >= 2 && video.pausedFrame === String(video.time))).toBe(true);
-    expect(captureEvidence.frozen.videos.find(video => video.readyState === 0)).toMatchObject({ opacity: '0', pausedFrame: undefined });
+    expect(state.captureEvidence.frozen.videos.find(video => video.readyState === 0)).toMatchObject({ opacity: '0', pausedFrame: undefined });
     expect(await page.locator('[data-film-look="exact"]').count()).toBe(1);
   });
 
@@ -496,6 +260,7 @@ function App(){const[state,setState]=useState(null);window.show=(project,t)=>{wi
     ['resize while active', true, 602, 'smpte170m', 'bt709'],
     ['reverse footage order', false, 642, 'bt709', 'smpte170m'],
   ])('compares natural dissolve capture revisions: %s', async (label, active, width, outgoing, incoming) => {
+    const { page } = state;
     onTestFinished(async () => {
       await page.reload();
       await page.waitForFunction(() => typeof window.show === 'function');
@@ -518,6 +283,7 @@ function App(){const[state,setState]=useState(null);window.show=(project,t)=>{wi
   });
 
   it('saves a settled dissolve when animation frames arrive slower than the settle deadline (#16180)', async () => {
+    const { page } = state;
     onTestFinished(async () => {
       await page.reload();
       await page.waitForFunction(() => typeof window.show === 'function');
@@ -539,6 +305,7 @@ function App(){const[state,setState]=useState(null);window.show=(project,t)=>{wi
   });
 
   it('refuses a save at the settle deadline when a hidden tab suspends animation frames', async () => {
+    const { page } = state;
     onTestFinished(async () => {
       await page.reload();
       await page.waitForFunction(() => typeof window.show === 'function');
@@ -555,6 +322,7 @@ function App(){const[state,setState]=useState(null);window.show=(project,t)=>{wi
   });
 
   it('keeps a visible save waiting past the deadline for a frame, then refuses it once the tab hides', async () => {
+    const { page } = state;
     onTestFinished(async () => {
       await page.reload();
       await page.waitForFunction(() => typeof window.show === 'function');
@@ -573,264 +341,4 @@ function App(){const[state,setState]=useState(null);window.show=(project,t)=>{wi
     expect(await page.evaluate(() => window.uploads.length)).toBe(0);
     expect(await page.evaluate(() => window.captureErrors.at(-1))).toContain('Preview did not settle');
   });
-
-  it('isolates a deferred filter commit from box, song and both paused footage revisions', async () => {
-    onTestFinished(async () => {
-      await page.reload();
-      await page.waitForFunction(() => typeof window.show === 'function');
-    });
-    await page.reload();
-    await page.waitForFunction(() => typeof window.show === 'function');
-    await page.evaluate(() => {
-      const Observer = window.ResizeObserver;
-      window.ResizeObserver = function(callback) {
-        return new Observer((entries, observer) => {
-          const apply = () => callback(entries, observer);
-          if (window.deferFilterResize && entries.some(entry => entry.target.dataset.filmLook === 'exact')) window.applyFilterResize = apply;
-          else apply();
-        });
-      };
-    });
-    await show(project([
-      { ...still, visualLayer: 'footage', videoHistoryId: 'smpte170m', cutEffect: { style: 'dissolve', enabled: true, overlapSec: 1 } },
-      { ...still, sceneId: 'incoming', order: 1, startSec: 4, endSec: 8, visualLayer: 'footage', videoHistoryId: 'bt709' },
-    ], { filmLook: filmLookPreset('vhs') }), 3.5);
-    await enableFilmLook();
-    await page.waitForFunction(() => document.querySelector('[data-film-look-width="640"]'));
-    await page.evaluate(() => { window.deferFilterResize = true; document.querySelector('main').style.width = '602px'; });
-    await page.waitForFunction(() => typeof window.applyFilterResize === 'function');
-    const provisional = await capture('deferred filter at stable resized box');
-    const before = await page.evaluate(() => window.previewMetadata());
-    await page.evaluate(() => { window.uploads = []; window.gateCaptureOnce(); });
-    await page.getByRole('button', { name: 'Save frame', exact: true }).click();
-    await page.waitForFunction(() => window.captureDecodePending);
-    await page.evaluate(() => { window.deferFilterResize = false; window.applyFilterResize(); });
-    await page.waitForFunction(() => document.querySelector('[data-film-look-width="600"]'));
-    const after = await page.evaluate(() => window.previewMetadata());
-    expect(after.box).toEqual(before.box);
-    expect(after.songFrame).toBe(before.songFrame);
-    expect(after.videos).toEqual(before.videos);
-    expect(after.filter).not.toEqual(before.filter);
-    await page.evaluate(() => window.releaseCapture());
-    await page.waitForFunction(() => window.uploads.length > 0 || window.captureErrors.length > 0);
-    const uploaded = await page.evaluate(() => window.uploads.at(-1));
-    if (uploaded) {
-      // A regressed guard must retain the rejected control's actual pixels,
-      // rather than the earlier, successful provisional-filter capture.
-      captureEvidence = { label: 'deferred filter negative control', platform: process.platform,
-        arch: process.arch, browser: fixture.browser.version(), ffmpegVersion,
-        beforeFilterCommit: before, afterFilterCommit: after,
-        frozen: await page.evaluate(() => window.captureFrozen),
-        serialized: await page.evaluate(() => window.captureSerialized),
-        saved: Buffer.from(uploaded), beforeScreenshot: await page.evaluate(() => window.previewMetadata()),
-        displayed: await page.getByLabel('Storyboard animatic', { exact: true }).locator(':scope > div').first().screenshot(),
-        afterScreenshot: await page.evaluate(() => window.previewMetadata()),
-      };
-    }
-    expect(Boolean(uploaded)).toBe(false);
-    expect(await page.evaluate(() => window.captureErrors.at(-1))).toContain('Preview changed during capture');
-    expect(Buffer.compare(provisional, await capture('committed filter at same resized box'))).not.toBe(0);
-  });
-
-  it('saves end-frame effects, flash/develop, incoming dissolves and fade-black in their displayed order', async () => {
-    for (const [effect, t] of [['end-fade', 1.3], ['end-fade', 3], ['flash-develop', 0.1], ['flash-develop', 1]]) {
-      await show(project([{ ...still, imageEffect: effect, imageEffectSec: 1, endImageId: 'end.png', stillMove: 'pan' }]), t);
-      await capture();
-    }
-    await show(project([{ ...still, cutEffect: { style: 'dissolve', enabled: true, overlapSec: 1 } },
-      { ...still, sceneId: 'next', order: 1, startSec: 4, endSec: 8, referenceImageId: 'end.png', stillMove: 'push' }]), 3.5);
-    await capture();
-    await show(project([{ ...still, cutEffect: { style: 'fade-black', enabled: true, overlapSec: 1 } }]), 3.8);
-    await capture();
-  });
-
-  it('captures the exact paused film-look filter after freezing a newer audio clock across a shot boundary', async () => {
-    const look = filmLookPreset('vhs');
-    await show(project([still, { ...still, sceneId: 'next', startSec: 4, endSec: 8, order: 1, referenceImageId: 'end.png' }], { filmLook: look }), 3);
-    await enableFilmLook();
-    await page.evaluate(() => {
-      const audio = document.querySelector('audio');
-      audio.currentTime = 4.5;
-      audio.dispatchEvent(new Event('play'));
-    });
-    const styled = await capture();
-    expect(await page.locator('[data-film-look="exact"]').count()).toBe(1);
-    expect(await page.locator('figure img').first().getAttribute('src')).toBe('/data/images/end.png');
-    await page.getByRole('button', { name: 'Film look', exact: true }).click();
-    await page.evaluate(() => { window.uploads = []; });
-    const clean = await capture();
-    expect(Buffer.compare(styled, clean)).not.toBe(0);
-  });
-
-  it('captures the opaque lyric and title canvases only after the requested song seek completes', async () => {
-    const extra = { audioAnalysis: { durationSec: 8 }, lyricCues: [{ id: 'line', text: 'EXAMPLE WORDS', startSec: 1, endSec: 4 }],
-      titleCard: { enabled: true, title: 'Example title', artist: 'Example artist', startSec: 0, endSec: 5 } };
-    lyricProject = project([{ ...still, referenceImageId: null }], extra);
-    await show(project([still], extra), 2);
-    const frame = page.frameLocator('iframe');
-    await frame.locator('#stage').waitFor();
-    const withWords = await capture();
-    await page.getByRole('button', { name: 'Lyrics', exact: true }).click();
-    await page.evaluate(() => { window.uploads = []; });
-    const withoutWords = await capture();
-    expect(Buffer.compare(withWords, withoutWords)).not.toBe(0);
-  });
-
-  // Uniquely catches a steady title card lost from a saved frame (its layer sits outside the tree the
-  // capture freezes), or saved under the film look the preview shows it over.
-  it('saves a steady title card over the film look, and a card that is not steady through it', async () => {
-    const card = { enabled: true, title: 'Example title', artist: 'Example artist', style: 'mtv', accentColor: '#00ff00', startSec: 0, endSec: 5 };
-    // Pixels of the lower third's bar that kept its exact colour: none does once the look has filtered it.
-    const barPixels = async (png) => {
-      const { data } = await sharp(png).ensureAlpha().raw().toBuffer({ resolveWithObject: true });
-      let count = 0;
-      for (let i = 0; i < data.length; i += 4) if (data[i] === 0 && data[i + 1] === 255 && data[i + 2] === 0) count += 1;
-      return count;
-    };
-    const shown = async (titleCard) => {
-      const extra = { composition: { mode: 'composed' }, audioAnalysis: { durationSec: 8 }, filmLook: filmLookPreset('vhs'), titleCard };
-      lyricProject = project([{ ...still, referenceImageId: null }], extra);
-      await show(project([still], extra), 2);
-      await enableFilmLook();
-      await page.frameLocator('iframe').locator('canvas[data-portos-title-card]').waitFor();
-    };
-    await shown(card);
-    expect(await page.locator('figure [data-film-look] iframe').count()).toBe(0);
-    const steady = await barPixels(await capture('steady title card'));
-    expect(steady).toBeGreaterThan(20);
-    await shown({ ...card, steady: false });
-    expect(await page.locator('figure [data-film-look] iframe').count()).toBe(1);
-    expect(await barPixels(await capture())).toBeLessThan(steady / 10);
-    await page.getByRole('button', { name: 'Film look', exact: true }).click();
-  });
-
-  it('rejects a loading video-only shot without uploading a blank or a preloaded frame', async () => {
-    await page.route('**/data/videos/clip.webm', (route) => route.abort());
-    await show(project([{ ...still, referenceImageId: null, visualLayer: 'footage', videoHistoryId: 'loading' }]), 1);
-    await page.getByRole('button', { name: 'Save frame', exact: true }).click();
-    await page.waitForFunction(() => window.captureErrors.length > 0);
-    expect(await page.evaluate(() => window.uploads.length)).toBe(0);
-    expect(await page.evaluate(() => window.captureErrors.at(-1))).toContain('Video frame is still loading');
-    await page.unroute('**/data/videos/clip.webm');
-  });
-
-  it('freezes the displayed outro canvas and exact look before capture', async () => {
-    await show(project([still], { statsOutro: { enabled: true, durationSec: 8 }, filmLook: filmLookPreset('polaroid') }), 1);
-    const look = page.getByRole('button', { name: 'Film look', exact: true });
-    await phase('outro-enable-look', async () => {
-      if (await look.getAttribute('aria-pressed') === 'false') await look.click();
-    });
-    // The canvas mounts with provisional counts, so its presence/fonts do not
-    // establish a capture basis. Wait for the tally, then let React paint it.
-    const statsReady = page.waitForResponse('**/api/music-video/*/stats-outro');
-    await phase('outro-activate', () => page.getByRole('button', { name: 'Ending', exact: true }).click());
-    await phase('outro-canvas-ready', () => page.getByTestId('animatic-stats-outro').waitFor());
-    const statsResponse = await phase('outro-stats-response', () => statsReady);
-    expect(statsResponse.ok()).toBe(true);
-    expect(await phase('outro-stats-finished', () => statsResponse.finished())).toBeNull();
-    await phase('outro-fonts-ready', () => page.evaluate(() => document.fonts.ready));
-    await phase('outro-paint-settled', () => page.evaluate(() => new Promise((done) => requestAnimationFrame(() => requestAnimationFrame(done)))));
-    const saved = await capture();
-    expect(await phase('outro-exact-look', () => page.locator('[data-film-look="exact"]').count())).toBe(1);
-    await phase('outro-repeat-paint', () => page.evaluate(() => new Promise((done) => requestAnimationFrame(() => requestAnimationFrame(done)))));
-    await phase('outro-repeat-reset', () => page.evaluate(() => { window.uploads = []; }));
-    expect(Buffer.compare(saved, await capture())).toBe(0);
-  });
-
-  it('rejects a project change or late outro statistics while async frame rasterization is pending', async () => {
-    await show(project(), 1);
-    await page.evaluate(() => window.gateCaptureOnce());
-    await page.getByRole('button', { name: 'Save frame', exact: true }).click();
-    await page.waitForFunction(() => window.captureDecodePending);
-    await show(project([{ ...still, referenceImageId: 'end.png' }]), 1);
-    await page.evaluate(() => window.releaseCapture());
-    await page.waitForFunction(() => window.captureErrors.length > 0);
-    expect(await page.evaluate(() => window.uploads.length)).toBe(0);
-    expect(await page.evaluate(() => window.captureErrors.at(-1))).toContain('Preview changed during capture');
-
-    let pendingStats;
-    await page.route('**/api/music-video/*/stats-outro', (route) => { pendingStats = route; });
-    await show(project([still], { statsOutro: { enabled: true, durationSec: 8 } }), 1);
-    await page.getByRole('button', { name: 'Ending', exact: true }).click();
-    await page.getByTestId('animatic-stats-outro').waitFor();
-    await page.evaluate(() => document.fonts.ready);
-    await page.evaluate(() => window.gateCaptureOnce());
-    await page.getByRole('button', { name: 'Save frame', exact: true }).click();
-    await page.waitForFunction(() => window.captureDecodePending);
-    expect(pendingStats).toBeTruthy();
-    // The old success fixture's entire readiness condition is now true, yet
-    // the statistics request is still held and capture has not uploaded.
-    const controlState = () => page.evaluate(() => ({
-      seeking: document.querySelector('audio').seeking,
-      time: document.querySelector('audio').currentTime,
-      ending: document.querySelector('[data-testid="animatic-stats-outro"]') !== null,
-      errors: window.captureErrors, uploads: window.uploads.length,
-    }));
-    expect(await controlState()).toEqual({ seeking: false, time: 1, ending: true, errors: [], uploads: 0 });
-    await pendingStats.fulfill({ json: { stats: { shots: 9, floorImages: [] } } });
-    await page.evaluate(() => new Promise((done) => requestAnimationFrame(() => requestAnimationFrame(done))));
-    expect(await controlState()).toEqual({ seeking: false, time: 1, ending: true, errors: [], uploads: 0 });
-    await page.evaluate(() => window.releaseCapture());
-    await page.waitForFunction(() => window.captureErrors.length > 0);
-    expect(await page.evaluate(() => window.uploads.length)).toBe(0);
-    expect(await page.evaluate(() => window.captureErrors.at(-1))).toContain('Preview changed during capture');
-    await page.unroute('**/api/music-video/*/stats-outro');
-    // With that same Ending paused and its response applied, capture succeeds
-    // and keeps the exact displayed pixels on a second independent save.
-    const saved = await capture();
-    expect(Buffer.compare(saved, await capture())).toBe(0);
-  });
-  it('rejects a late exact-filter resize while keeping the selected song and footage frames frozen', async () => {
-    await show(project([
-      { ...still, visualLayer: 'footage', videoHistoryId: 'smpte170m', cutEffect: { style: 'dissolve', enabled: true, overlapSec: 1 } },
-      { ...still, sceneId: 'incoming', order: 1, startSec: 4, endSec: 8, visualLayer: 'footage', videoHistoryId: 'bt709' },
-    ], { filmLook: filmLookPreset('vhs') }), 3.5);
-    const look = page.getByRole('button', { name: 'Film look', exact: true });
-    if (await look.getAttribute('aria-pressed') === 'false') await look.click();
-    await page.evaluate(() => { window.uploads = []; window.gateCaptureOnce(); });
-    await page.getByRole('button', { name: 'Save frame', exact: true }).click();
-    await page.waitForFunction(() => window.captureDecodePending);
-    await page.locator('video[data-preview-video][aria-hidden="true"]').first().evaluate(video => { video.dataset.ready = 'false'; });
-    await page.evaluate(() => window.releaseCapture());
-    await page.waitForFunction(() => window.uploads.length > 0 || window.captureErrors.length > 0);
-    expect(await page.evaluate(() => window.captureErrors)).toEqual([]);
-    expect(await page.evaluate(() => window.uploads.length)).toBe(1);
-    await page.evaluate(() => { window.uploads = []; window.gateCaptureOnce(); });
-    await page.getByRole('button', { name: 'Save frame', exact: true }).click();
-    await page.waitForFunction(() => window.captureDecodePending);
-    const frozen = await page.evaluate(() => window.captureFrozen);
-    // No audio seek or project edit: only the box and the size-dependent SVG
-    // change after the actual preview has already been serialized.
-    await page.locator('main').evaluate(el => { el.style.width = '602px'; });
-    await page.waitForFunction(() => document.querySelector('[data-film-look-width="600"]'));
-    const resized = await page.evaluate(() => window.previewMetadata());
-    expect(resized.songFrame).toBe(frozen.songFrame);
-    expect(resized.videos).toEqual(frozen.videos);
-    expect(resized.filter).not.toEqual(frozen.filter);
-    await page.evaluate(() => window.releaseCapture());
-    await page.waitForFunction(() => window.captureErrors.length > 0 || window.uploads.length > 0);
-    expect(await page.evaluate(() => window.uploads.length)).toBe(0);
-    expect(await page.evaluate(() => window.captureErrors.at(-1))).toContain('Preview changed during capture');
-    try { await capture(); }
-    finally { await page.locator('main').evaluate(el => { el.style.width = '642px'; }); }
-  });
-
-  it('reports an unavailable paused color surface without uploading a different native-video image', async () => {
-    await page.evaluate(() => {
-      const original = HTMLCanvasElement.prototype.getContext;
-      window.restoreContext = () => { HTMLCanvasElement.prototype.getContext = original; };
-      HTMLCanvasElement.prototype.getContext = function(...args) { return this.dataset.pausedVideo ? null : original.apply(this, args); };
-    });
-    try {
-      await show(project([{ ...still, visualLayer: 'footage', videoHistoryId: 'smpte170m' }]), 1.02);
-      await page.waitForFunction(() => document.querySelector('video')?.dataset.previewError);
-      await page.getByRole('button', { name: 'Save frame', exact: true }).click();
-      await page.waitForFunction(() => window.captureErrors.length > 0);
-      expect(await page.evaluate(() => window.uploads.length)).toBe(0);
-      expect(await page.evaluate(() => window.captureErrors.at(-1))).toContain('Frame capture unavailable');
-      expect(await page.locator('video').evaluate(v => getComputedStyle(v).visibility)).toBe('hidden');
-    } finally { await page.evaluate(() => window.restoreContext()); }
-    expect(errors).toEqual([]);
-  });
-
 });
