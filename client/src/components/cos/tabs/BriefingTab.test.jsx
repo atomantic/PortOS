@@ -156,7 +156,7 @@ describe('BriefingTab empty state', () => {
 
   it('shows a rejected trigger reason once', async () => {
     const user = userEvent.setup();
-    api.triggerCosJob.mockResolvedValue({ success: false, status: 'skipped', reason: 'No provider available' });
+    api.triggerCosJob.mockRejectedValue(new Error('No provider available'));
     renderTab();
 
     await user.click(await screen.findByRole('button', { name: 'Generate today’s briefing' }));

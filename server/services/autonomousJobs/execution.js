@@ -1,4 +1,4 @@
-import { maintenance } from '../../lib/maintenanceAdmission.js';
+import { isMaintenanceHold, maintenance } from '../../lib/maintenanceAdmission.js';
 /**
  * Autonomous Jobs — direct execution paths.
  *
@@ -19,6 +19,9 @@ import { withLock } from './constants.js'
 import { loadJobs, saveJobs } from './store.js'
 import { recordJobExecution } from './crud.js'
 import { SCRIPT_HANDLERS } from './scriptHandlers.js'
+
+const jobExecutionError = (message, { cause, exitCode } = {}) =>
+  Object.assign(new Error(message, { cause }), { code: 'JOB_EXECUTION_FAILED', exitCode })
 
 /**
  * Check if a job is a script job (executes directly, no AI agent needed)
@@ -51,7 +54,13 @@ async function executeScriptJobAdmitted(job, { manual = false } = {}) {
   // handlers (goal-check-in) can decide whether their per-provider error toasts
   // coalesce (scheduled) or report individually (manual). Handlers that don't
   // fan out ignore the context.
-  const result = await handler({ background: !manual })
+  let result
+  try {
+    result = await handler({ background: !manual })
+  } catch (err) {
+    if (isMaintenanceHold(err)) throw err
+    throw jobExecutionError(err?.message || 'Script job failed', { cause: err, exitCode: err?.exitCode })
+  }
 
   // Record the job execution
   await recordJobExecution(job.id).catch(err => { maintenance.markCurrentUnsettled(); throw err })
@@ -71,7 +80,7 @@ async function executeShellJob(job) {
 async function executeShellJobAdmitted(job) {
   const validation = validateCommand(job.command)
   if (!validation.valid) {
-    throw new Error(`Invalid shell command: ${validation.error}`)
+    throw jobExecutionError(`Invalid shell command: ${validation.error}`)
   }
 
   console.log(`🐚 Executing shell job: ${job.name}`)
@@ -155,7 +164,7 @@ async function executeShellJobAdmitted(job) {
         if (code !== 0) {
           const message = killed ? `timed out after ${timeoutMs}ms`
             : spawnError ? `spawn error: ${spawnError.message}` : `exited with code ${code}: ${redactedOutput.substring(0, 500)}`
-          reject(Object.assign(new Error(`Shell job "${job.name}" ${message}`), { exitCode: code }))
+          reject(jobExecutionError(`Shell job "${job.name}" ${message}`, { exitCode: code }))
           return
         }
         console.log(`✅ Shell job completed: ${job.name} (exit ${code})`)
