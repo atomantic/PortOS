@@ -184,16 +184,16 @@ function appendVoMixChain(chains, voLines, firstInputIdx) {
   return '[vomix]';
 }
 
-// Build the sidechain-duck sub-graph: pad the VO mix to infinity, split it into
+// Build the sidechain-duck sub-graph: pad the VO mix, split it into
 // a "mixed back" copy + one sidechain key per bed, sidechaincompress each bed
 // against its key, then amix the ducked beds back over the VO. The apad-before-
 // split keeps each bed alive past the last VO line (sidechaincompress ends with
-// its shortest input). Appends to `chains` and returns the final `[aout]` label.
+// its shortest input). Appends to `chains` and writes the final `[aout]` label.
 // Shared by both mux builders so the (tricky, load-bearing) pad/split/duck graph
 // stays identical. `keyPrefix` namespaces the intermediate labels.
-function appendDuckChain(chains, voMixLabel, beds, duck, keyPrefix) {
+function appendDuckChain(chains, voMixLabel, beds, duck, keyPrefix, pad = 'apad') {
   const keys = beds.map((_, i) => `[${keyPrefix}sck${i}]`);
-  chains.push(`${voMixLabel}apad,asplit=${beds.length + 1}[vomain]${keys.join('')}`);
+  chains.push(`${voMixLabel}${pad},asplit=${beds.length + 1}[vomain]${keys.join('')}`);
   const ducked = beds.map((bed, i) => {
     chains.push(`${bed}${keys[i]}sidechaincompress=threshold=${duck.threshold}:ratio=${duck.ratio}:attack=${duck.attack}:release=${duck.release}[${keyPrefix}ducked${i}]`);
     return `[${keyPrefix}ducked${i}]`;
@@ -221,10 +221,11 @@ function appendDuckChain(chains, voMixLabel, beds, duck, keyPrefix) {
  *     so each bed needs its own copy). Each bed is `sidechaincompress`-ed
  *     against a VO key, then all ducked beds are mixed back over the VO
  *   - the final audio is `apad`-ed to infinity and paired with `-shortest` so
- *     the output always matches the VIDEO length (never truncates the episode
- *     to the last VO line, never trails silence past the video)
+ *     the output matches the video length, unless the caller supplies an exact
+ *     `targetSamples` at the 48 kHz mix rate. Then audio ends on that sample
+ *     grid and the video stream runs to EOF.
  */
-export function buildVoMuxArgs({ inputVideoPath, voLines, musicPath, musicGain = DEFAULT_MUSIC_GAIN, duck = DEFAULT_DUCK, clipAudio = false, outPath }) {
+export function buildVoMuxArgs({ inputVideoPath, voLines, musicPath, musicGain = DEFAULT_MUSIC_GAIN, duck = DEFAULT_DUCK, clipAudio = false, targetSamples, outPath }) {
   const args = ['-i', inputVideoPath];
   for (const line of voLines) args.push('-i', line.path);
   if (musicPath) args.push('-stream_loop', '-1', '-i', musicPath);
@@ -249,10 +250,13 @@ export function buildVoMuxArgs({ inputVideoPath, voLines, musicPath, musicGain =
     beds.push('[clip]');
   }
 
+  // An unbounded apad can keep FFmpeg running at video EOF despite -shortest
+  // (#19677). A known sample grid lets both streams reach EOF independently.
+  const pad = targetSamples === undefined ? 'apad' : `apad=whole_len=${targetSamples},atrim=end_sample=${targetSamples}`;
   if (beds.length) {
-    appendDuckChain(chains, voMixLabel, beds, duck, 'vo');
+    appendDuckChain(chains, voMixLabel, beds, duck, 'vo', pad);
   } else {
-    chains.push(`${voMixLabel}apad[aout]`);
+    chains.push(`${voMixLabel}${pad}[aout]`);
   }
 
   args.push(
@@ -262,7 +266,7 @@ export function buildVoMuxArgs({ inputVideoPath, voLines, musicPath, musicGain =
     '-c:v', 'copy',
     '-c:a', 'aac',
     '-b:a', '192k',
-    '-shortest',
+    ...(targetSamples === undefined ? ['-shortest'] : []),
     '-movflags', '+faststart',
     '-y',
     outPath,
@@ -285,9 +289,12 @@ export function buildVoMuxArgs({ inputVideoPath, voLines, musicPath, musicGain =
  * caller whose video a record already names can hold the backup admission
  * lease across that replacement without holding it through the encode.
  */
-export async function muxVoLines(inputVideoPath, { voLines = [], musicPath = null, musicGain = DEFAULT_MUSIC_GAIN, duck = DEFAULT_DUCK, signal, withInstall = install => install(), report } = {}) {
+export async function muxVoLines(inputVideoPath, { voLines = [], musicPath = null, musicGain = DEFAULT_MUSIC_GAIN, duck = DEFAULT_DUCK, targetSamples, signal, withInstall = install => install(), report } = {}) {
   if (!inputVideoPath || !existsSync(inputVideoPath)) {
     return { ok: false, reason: 'input video missing' };
+  }
+  if (targetSamples !== undefined && (!Number.isSafeInteger(targetSamples) || targetSamples <= 0)) {
+    return { ok: false, reason: 'invalid target audio sample count' };
   }
   const placed = (Array.isArray(voLines) ? voLines : []).filter((l) => (
     l?.path && existsSync(l.path) && isPlacedOffset(l.offsetSec)
@@ -311,7 +318,7 @@ export async function muxVoLines(inputVideoPath, { voLines = [], musicPath = nul
   });
 
   const tmpOut = `${inputVideoPath}.vomux.${randomUUID()}.mp4`;
-  const args = buildVoMuxArgs({ inputVideoPath, voLines: placed, musicPath: usableMusic, musicGain, duck, clipAudio, outPath: tmpOut });
+  const args = buildVoMuxArgs({ inputVideoPath, voLines: placed, musicPath: usableMusic, musicGain, duck, clipAudio, targetSamples, outPath: tmpOut });
 
   report?.('audio-mux-encode');
   const result = await runFfmpegProcess({
