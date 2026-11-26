@@ -21,6 +21,7 @@
  *     buildScoreEvents' timing semantics; keep the two in lockstep)
  */
 
+import { CHIPTUNE_NOISE_PRESETS } from './chiptuneNoisePresets.js';
 import { z } from 'zod';
 import { pitchToMidi, midiToFreq } from './pitchMath.js';
 
@@ -63,7 +64,7 @@ export const CHIPTUNE_LIMITS = Object.freeze({
 // The fixed channel palette. `wave` is constrained per id so the LLM can't
 // put a noise lane on a pulse channel (the renderer keys drum presets off it).
 export const CHIPTUNE_CHANNEL_IDS = Object.freeze(['pulse1', 'pulse2', 'triangle', 'noise']);
-export const CHIPTUNE_NOISE_PRESETS = Object.freeze(['kick', 'snare', 'hat', 'open-hat']);
+export { CHIPTUNE_NOISE_PRESETS };
 
 const patternNameField = z.string().regex(/^[A-Za-z0-9_-]{1,16}$/);
 

@@ -82,6 +82,29 @@ describe('Modal accessibility', () => {
     expect(onClose).toHaveBeenCalledTimes(1);
   });
 
+  it('recaptures Tab after a click on a non-dismissing backdrop', () => {
+    const onClose = vi.fn();
+    render(
+      <Modal open closeOnBackdrop={false} onClose={onClose} ariaLabel="Settings">
+        <button>First</button>
+        <button>Last</button>
+      </Modal>
+    );
+    const first = screen.getByRole('button', { name: 'First' });
+    const last = screen.getByRole('button', { name: 'Last' });
+
+    fireEvent.click(screen.getByRole('dialog').parentElement);
+    // The DOM test runner does not perform the pointer's native focus change.
+    first.blur();
+    expect(document.activeElement).toBe(document.body);
+    expect(onClose).not.toHaveBeenCalled();
+
+    expect(fireEvent.keyDown(document.body, { key: 'Tab' })).toBe(false);
+    expect(document.activeElement).toBe(first);
+    expect(fireEvent.keyDown(first, { key: 'Tab', shiftKey: true })).toBe(false);
+    expect(document.activeElement).toBe(last);
+  });
+
   it('renders nothing while closed', () => {
     render(<Modal open={false} onClose={() => {}} ariaLabel="x"><p>body</p></Modal>);
     expect(screen.queryByRole('dialog')).toBeNull();

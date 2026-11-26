@@ -198,7 +198,7 @@ export const JEV_FAILURE_CODES = Object.freeze([
 
 /**
  * What a caller may ask the sidecar to score. The decision route extends this schema:
- * `routes/localLlm.js` validates against it from HERE rather than through
+ * `routes/localLlm/jevRoutes.js` validates against it from HERE rather than through
  * a shared validation module: re-exporting it there would put this module into the
  * static import closure of every suite that reaches that module, for one schema one
  * route uses — the "constant re-exported through a heavy barrel" shape the

@@ -1,3 +1,4 @@
+import { ACCOUNT_OPTION } from '../../../../server/lib/musicVideo/musicVideoPublishAccount.js';
 import { inputXsFullClass as inputCls } from './controlClasses.js';
 import { useEffect, useRef, useState } from 'react';
 import ConfirmButtonPair from '../ui/ConfirmButtonPair.jsx';
@@ -50,7 +51,6 @@ export const PUBLISH_TARGETS = [
 const SONGWRITER_KEY = 'portos.musicVideo.distrokidSongwriter';
 const LEGACY_REMEMBERED = { songwriterFirst: 'first', songwriterLast: 'last', songwriterRole: 'role', language: 'language', performerRole: 'performerRole' };
 // Options that ARE the account named under Where you post: editing one here updates it there.
-const ACCOUNT_OPTION = { distrokid: 'artistName', substack: 'publication' };
 const REMEMBERED_OPTIONS = { distrokid: DISTROKID_REMEMBERED_OPTIONS };
 
 const summaryRows = (summary) => Object.entries(summary || {})

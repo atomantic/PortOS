@@ -85,6 +85,18 @@ describe('audioModels — add / list / merge / remove', () => {
     expect(await svc.removeAudioModel({ engine: 'musicgen', id: 'not/there' })).toBe(false);
   });
 
+  it('preserves concurrent additions and removals across engines in the shared registry', async () => {
+    await svc.addAudioModel({ engine: 'musicgen', repo: 'example/original' });
+    await Promise.all([
+      svc.addAudioModel({ engine: 'musicgen', repo: 'example/new-musicgen' }),
+      svc.addAudioModel({ engine: 'acestep', repo: 'example/new-acestep' }),
+      svc.removeAudioModel({ engine: 'musicgen', id: 'example/original' }),
+    ]);
+
+    expect((await svc.listUserModels('musicgen')).map(({ id }) => id)).toEqual(['example/new-musicgen']);
+    expect((await svc.listUserModels('acestep')).map(({ id }) => id)).toEqual(['example/new-acestep']);
+  });
+
   it('treats Object.prototype names as unknown engines everywhere', async () => {
     for (const engine of ['constructor', '__proto__', 'toString', 'hasOwnProperty']) {
       await expect(svc.addAudioModel({ engine, repo: 'org/repo' })).rejects.toMatchObject({ status: 400, code: 'AUDIO_MODEL_UNKNOWN_ENGINE' });

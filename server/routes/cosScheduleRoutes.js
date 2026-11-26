@@ -9,7 +9,7 @@ import { z } from 'zod';
 import * as taskSchedule from '../services/taskSchedule.js';
 import { logCosScheduleUpdate } from '../services/userActionScheduleLog.js';
 import { asyncHandler, ServerError } from '../lib/errorHandler.js';
-import { limitQuerySchema, parsePagination } from '../lib/queryValidation.js';
+import { limitQuerySchema, parsePagination, paginationQuerySchema, isPaginationRequested, paginateArray } from '../lib/queryValidation.js';
 import { effortUpdateSchema, scheduledAuditIdsSchema, taskDataInputsSchema, cosScheduleTriggerBodySchema, heldCheckoutRetireBodySchema, releaseSynchronizationResetBodySchema, releaseDeliveryVerificationBodySchema } from '../lib/cos/cosValidation.js';
 import { sanitizeTaskMetadata } from '../lib/cos/cosTaskMetadata.js';
 import { validateRequest } from '../lib/validateRequest.js';
@@ -331,8 +331,11 @@ router.post('/schedule/branch-reconcile/checkouts/retire', asyncHandler(async (r
 
 // Manual maintenance runs — the Schedule tab's "Run maintenance now"; see
 // services/maintenanceRun.js for why this is not a quota burn.
-router.get('/schedule/maintenance-runs', asyncHandler(async (_req, res) => {
-  res.json({ runs: await listMaintenanceRuns() });
+router.get('/schedule/maintenance-runs', asyncHandler(async (req, res) => {
+  const page = validateRequest(paginationQuerySchema, req.query);
+  const runs = await listMaintenanceRuns();
+  if (!isPaginationRequested(page)) return res.json({ runs });
+  res.json(paginateArray(runs, page, { maxLimit: 500 }));
 }));
 
 router.post('/schedule/maintenance-runs', asyncHandler(async (req, res) => {

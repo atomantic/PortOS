@@ -22,7 +22,9 @@ import {
 import { trackedRenderMap } from '../renderActivity.js';
 import { attachNodeVideo, getLoom } from './records.js';
 
-export const FAL_H3_MAX_FREE_URL = 'https://fal.ai/tools/minimax-h3-max';
+import { FAL_H3_MAX_FREE_URL } from '../../lib/falVideoConstants.js';
+
+export { FAL_H3_MAX_FREE_URL };
 
 const FAL_RENDER_TIMEOUT_MS = 20 * 60 * 1000;
 const FAL_CONTROL_TIMEOUT_MS = 2 * 60 * 1000;

@@ -28,7 +28,7 @@ Manage local applications, terminal environments, system resources, and develope
 | **Dashboard** | `/` | System overview, active agent count, PM2 process vitals, Quick Capture widget, fast jump to recent projects. | [ARCHITECTURE.md](../ARCHITECTURE.md) |
 | **Apps Manager** | `/apps`, `/apps/:id` | Managed app registry: launch, stop, restart processes, live process logs, environment variables, Git branch switcher, and per-app feature tabs. | [PM2.md](../PM2.md) |
 | **App Templates & Scaffolding** | `/templates` | Pre-configured starter stacks (React, Vite, Node, Python) and interactive project scaffolding. | [App Wizard](./app-wizard.md) |
-| **PortOS Submodules** | `/apps/portos-default/submodules`, `/devtools/submodules` | Git submodule management for PortOS and managed repositories, submodule update checks, and recursive synchronization. | [CONTRIBUTING.md](../CONTRIBUTING.md) |
+| **PortOS Submodules** | `/apps/portos-default/submodules`, `/devtools/submodules` | Git submodule management for PortOS and managed repositories, submodule update checks, and recursive synchronization. | [CONTRIBUTING.md](../../CONTRIBUTING.md#development-setup) |
 | **Web Shell** | `/shell` | Browser-based interactive terminal multiplexer for host command execution and active debugging. | — |
 | **Process Manager** | `/devtools/processes` | Real-time PM2 process table, status inspection, memory/CPU usage, and manual process restarts. | [PM2.md](../PM2.md) |
 | **Security Camera** | `/security` | Live webcam and microphone monitor with audio level meter, device selection, and a feed that can route host microphone audio to the speakers. | — |
@@ -118,7 +118,7 @@ An end-to-end creative production suite for authors, worldbuilders, filmmakers, 
 | **SongBook** | `/songbook` | Interactive chord charts, guitar tablature, lyric repertoire, and auto-scrolling practice sheet music. | — |
 | **Creative Director** | `/creative-director` | Multi-scene episodic video production orchestrator: turn briefs into treatments, storyboards, render plans, and completed episodes. | — |
 | **Creative Commissions** | `/creative-commission` | Standing briefs and scheduled/nightly autonomous media generation aligning with personal taste profiles and feedback. A universe and/or mood board can be picked as the style source: each run loads its style tags and reference images as the Creative Director's art-direction base, attaches those images to vision scene evaluation, and conditions local image renders on them. | — |
-| **Music Video Studio** | `/music-video` | Develop a music video from song and storyboard through shots and final render. Work step by step or start with one prompt in Autonomous, then prepare a release kit from the approved render. | [Autonomous Music Video](./music-video-autonomous.md), [Blender Production](./music-video-blender.md), [Publish Kit](./music-video-publish-kit.md) |
+| **Music Video Studio** | `/music-video` | Develop a music video from song and storyboard through shots and final render. Work step by step or start with one prompt in Autonomous, then prepare a release kit from the approved render. | [Music Video](./music-video.md) |
 | **Sharing & Conflict Resolution** | `/sharing`, `/sharing/duplicates`, `/sharing/conflicts` | Collaborative asset exchange via cloud storage buckets (Google Drive, Dropbox, iCloud, Syncthing) with duplicate reconciliation and conflict recovery journals. | — |
 
 ---

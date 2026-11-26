@@ -5,13 +5,13 @@
 // import their own list from here; there is no second copy.
 //
 // server/lib/navManifest.test.js reads the `id:` values of these exported
-// arrays from this file's source to check every routed `:mode` deep link is
-// registered, so each list stays an `export const X = [ … ];` literal closed by
-// a column-0 `];`.
+// rhetoric and elements arrays to check their routed `:mode` deep links.
+// Morse routes read the shared IDs directly.
 import {
   BookOpen, ChevronRight, EyeOff, Feather, GitBranch, Hand, Headphones, Layers,
   Lightbulb, List as ListIcon, Repeat2, Ruler, Target, Timer, Zap,
 } from 'lucide-react';
+import { MORSE_MODE_IDS } from '../../../../../server/lib/morseModes.js';
 
 export const RHETORIC_MODES = [
   {
@@ -109,36 +109,32 @@ export const ELEMENTS_MODE_IDS = ELEMENTS_PRACTICE_MODES.map((m) => m.id);
 
 // Mode ids map to the `morse-<id>` drill types, so the blurb lives once in
 // DRILL_DESCRIPTIONS (constants.js) and MorseTrainer reads it from there.
-export const MORSE_MODES = [
-  {
-    id: 'copy',
+const MORSE_MODE_PRESENTATION = {
+  copy: {
     label: 'Copy',
     icon: Headphones,
     color: 'text-cyan-400',
     bgColor: 'bg-cyan-500/20',
     example: 'Koch progression: K, M → add letters as you hit 90%',
   },
-  {
-    id: 'head-copy',
+  'head-copy': {
     label: 'Head Copy',
     icon: EyeOff,
     color: 'text-purple-400',
     bgColor: 'bg-purple-500/20',
     example: 'Same Koch pool, pure recall — nothing to look at',
   },
-  {
-    id: 'send',
+  send: {
     label: 'Send',
     icon: Hand,
     color: 'text-amber-400',
     bgColor: 'bg-amber-500/20',
     example: 'Tap short for ·, hold long for —',
   },
-];
+};
 
-// Valid `/post/morse/:mode` segments. Anything else (a stale or deleted deep
-// link) falls through to the mode grid rather than a blank panel.
-export const MORSE_MODE_IDS = MORSE_MODES.map((m) => m.id);
+export const MORSE_MODES = MORSE_MODE_IDS.map((id) => ({ id, ...MORSE_MODE_PRESENTATION[id] }));
+export { MORSE_MODE_IDS };
 
 // The `?ref=` reference charts beside the Morse drill.
 export const MORSE_REFERENCE_VIEWS = [

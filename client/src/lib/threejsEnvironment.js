@@ -10,50 +10,14 @@
 import * as THREE from 'three';
 import { RoomEnvironment } from 'three/examples/jsm/environments/RoomEnvironment.js';
 
-/**
- * Mirrors `THREEJS_ENVIRONMENT_PRESETS` in `server/lib/threejsModel.js`, which
- * is the authoring contract. `threejsEnvironment.test.js` asserts the two agree.
- */
-export const THREEJS_ENVIRONMENT_PRESETS = ['none', 'neutral', 'studio'];
-
-/** Mirrors `DEFAULT_THREEJS_ENVIRONMENT` — what a spec with no key was rendered with. */
-export const DEFAULT_THREEJS_ENVIRONMENT = Object.freeze({ preset: 'none', intensity: 1 });
-
-/**
- * Mirrors `THREEJS_RENDER_PROFILE`, the colour-management contract
- * `buildThreejsFactorySource()` stamps onto every export. The preview has to
- * actually render at these settings or the exported claim is false, and two
- * renders of the same spec stop being comparable.
- *
- * `outputColorSpace` and `toneMapping` are what react-three-fiber's `<Canvas>`
- * installs for `linear={false} flat={false}` (its defaults), so the preview
- * simply must not pass either flag; `toneMappingExposure` is the one it does not
- * touch, so the preview passes it through `gl`.
- */
-export const THREEJS_RENDER_PROFILE = Object.freeze({
-  outputColorSpace: 'srgb',
-  toneMapping: 'ACESFilmic',
-  toneMappingExposure: 1,
-});
-
-/**
- * The spec's environment, normalized. Client mirror of
- * `resolveThreejsEnvironment` — the preview is handed a bare spec, including
- * records stored before this block shipped, which read as `none` because that is
- * what they were authored against.
- */
-export function resolveSculptEnvironment(spec) {
-  const environment = spec?.environment;
-  if (!environment || typeof environment !== 'object') return { ...DEFAULT_THREEJS_ENVIRONMENT };
-  return {
-    preset: THREEJS_ENVIRONMENT_PRESETS.includes(environment.preset)
-      ? environment.preset
-      : DEFAULT_THREEJS_ENVIRONMENT.preset,
-    intensity: typeof environment.intensity === 'number' && Number.isFinite(environment.intensity)
-      ? environment.intensity
-      : DEFAULT_THREEJS_ENVIRONMENT.intensity,
-  };
-}
+// The R3F Canvas defaults match the shared profile's color space and tone mapping.
+// The preview passes exposure separately because Canvas does not set it.
+export {
+  DEFAULT_THREEJS_ENVIRONMENT,
+  THREEJS_ENVIRONMENT_PRESETS,
+  THREEJS_RENDER_PROFILE,
+  resolveThreejsEnvironment as resolveSculptEnvironment,
+} from '../../../server/lib/threejsModelEnvironment.js';
 
 // A three-panel softbox rig in a dark shell: a bright key, a broad soft fill opposite and a rim behind. Emissive panels rather than lights because PMREM prefilters what the scene
 // RENDERS (a punctual light contributes almost nothing to the radiance map). The dark shell gives a conductor high-contrast highlights, which makes `metalness`/`clearcoat` legible.

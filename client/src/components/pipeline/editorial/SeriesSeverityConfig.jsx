@@ -20,41 +20,25 @@
  * Display always shows the EFFECTIVE (override-merged-with-default) values, and
  * saves merge the touched key onto the series' STORED override (not the merged
  * effective values) so an untouched key/gate stays absent and keeps tracking the
- * default. Mirrors the server's mergeSeverityWeights / resolveBlockingSet
- * semantics so the UI never lies about what the autopilot will do.
+ * default. The shared merge and resolve helpers show the values the autopilot uses.
  */
 import { useEffect, useState } from 'react';
 
-export const DEFAULT_SEVERITY_WEIGHTS = { high: 12, medium: 5, low: 1 };
-export const DEFAULT_BLOCKING_SEVERITIES = {
-  arc: ['high', 'medium'],
-  beatContinuity: ['high', 'medium'],
-  editorial: ['high'],
-};
-const SEVERITIES = ['high', 'medium', 'low'];
+import { CHECK_SEVERITIES as SEVERITIES } from '../../../../../server/lib/editorial/checkInfra/taxonomy.js';
+import {
+  BLOCKING_GATES, DEFAULT_BLOCKING_SEVERITIES, DEFAULT_SEVERITY_WEIGHTS, mergeSeverityWeights, resolveBlockingSet,
+} from '../../../../../server/lib/editorial/severityConfig.js';
+
 const SEVERITY_LABELS = { high: 'High', medium: 'Medium', low: 'Low' };
-const GATES = [
-  { id: 'arc', label: 'Arc verification' },
-  { id: 'beatContinuity', label: 'Beat continuity' },
-  { id: 'editorial', label: 'Editorial review' },
-];
+const GATE_LABELS = {
+  arc: 'Arc verification',
+  beatContinuity: 'Beat continuity',
+  editorial: 'Editorial review',
+};
+const GATES = BLOCKING_GATES.map((id) => ({ id, label: GATE_LABELS[id] }));
 
-const isNonNegNumber = (v) => typeof v === 'number' && Number.isFinite(v) && v >= 0;
-
-// Effective weight for a severity: the stored override when it's a valid
-// non-negative number, else the frozen default. Mirrors mergeSeverityWeights.
-function effectiveWeight(override, sev) {
-  const raw = override && typeof override === 'object' ? override[sev] : undefined;
-  return isNonNegNumber(raw) ? raw : DEFAULT_SEVERITY_WEIGHTS[sev];
-}
-
-// Effective blocking set for a gate: the stored array when present (even empty),
-// else the gate's default. Mirrors resolveBlockingSet (Array.isArray first).
-function effectiveBlocking(override, gate) {
-  const raw = override && typeof override === 'object' ? override[gate] : undefined;
-  if (Array.isArray(raw)) return raw.filter((s) => SEVERITIES.includes(s));
-  return DEFAULT_BLOCKING_SEVERITIES[gate];
-}
+const effectiveWeight = (override, sev) => mergeSeverityWeights(override)[sev];
+const effectiveBlocking = (override, gate) => [...resolveBlockingSet(override, gate)];
 
 export default function SeriesSeverityConfig({ series, onSaveField, saving = false, resetNonce = 0 }) {
   const weightsOverride = series && typeof series.severityWeights === 'object' && series.severityWeights

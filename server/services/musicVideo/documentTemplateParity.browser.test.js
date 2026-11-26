@@ -1,3 +1,4 @@
+import { readLayeredEngine } from './layeredEngineSource.js';
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import { mkdir, mkdtemp, readFile, rm, symlink, writeFile } from 'node:fs/promises';
 import { release, tmpdir } from 'node:os';
@@ -128,6 +129,8 @@ function App(){const[value,setValue]=useState(null);window.show=(project,data,t)
     await phase('server', async () => {
       const app = express();
       const staticFiles = createRecordedStaticServer(express);
+      const layeredEngine = await readLayeredEngine();
+      app.get('/engine/engine.js', (_req, res) => res.type('js').send(layeredEngine));
       app.get('/engine/portos-mv.js', (_req, res) => res.type('js').send(`window.PORTOS_MV=${JSON.stringify(engineData)};window.PORTOS_MV_EVENT_STATE=${narrativeFrameState.toString()};${documentRenderInitScripts(current).join('\n')}`));
       app.get('/engine/media/:file', (req, res) => {
         const scene = engineData.scenes.find(s => s.media?.src === `media/${req.params.file}`);

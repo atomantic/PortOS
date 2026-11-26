@@ -23,6 +23,8 @@ const {
   bufferedSpawn,
   bufferedSpawnOrThrow,
   killProcessTree,
+  confirmWindowsProcessTreeExit,
+  pendingWindowsProcessTreeExit,
   needsShell,
   resolveWindowsExecutable,
   prepareWindowsSafeSpawn,
@@ -49,6 +51,7 @@ function makeFakeChild({ pid = 1234 } = {}) {
   child.pid = pid;
   child.exitCode = null;
   child.signalCode = null;
+  child.killed = false;
   child.stdout = new EventEmitter();
   child.stderr = new EventEmitter();
   child.kill = vi.fn();
@@ -78,6 +81,69 @@ describe('needsShell / constants', () => {
     // needsShell mirrors IS_WIN32 — false on non-Windows test runners.
     expect(needsShell('npm')).toBe(IS_WIN32);
     expect(needsShell('git')).toBe(false);
+  });
+});
+
+describe('confirmWindowsProcessTreeExit', () => {
+  it('coalesces in-flight attempts and waits for taskkill to close before marking the child killed', async () => {
+    const target = makeFakeChild();
+    const killer = makeFakeChild();
+    spawnMock.mockReturnValueOnce(killer);
+    const confirmation = confirmWindowsProcessTreeExit(target, true);
+    expect(confirmWindowsProcessTreeExit(target, true)).toBe(confirmation);
+    expect(spawnMock).toHaveBeenCalledExactlyOnceWith('taskkill', ['/T', '/F', '/PID', '1234'], expect.anything());
+    killer.emit('exit', 0);
+    await Promise.resolve();
+    expect(target.killed).toBe(false);
+    killer.emit('close', 0);
+    await confirmation;
+    expect(target.killed).toBe(true);
+  });
+
+  it('accepts a child that has already exited without signalling a potentially reused PID', async () => {
+    const target = makeFakeChild();
+    target.exitCode = 1;
+    await expect(confirmWindowsProcessTreeExit(target, true)).resolves.toBeUndefined();
+    expect(spawnMock).not.toHaveBeenCalled();
+  });
+
+  it('holds close finalization through a failed attempt and releases it after a confirmed retry', async () => {
+    const target = makeFakeChild();
+    const killer = makeFakeChild();
+    spawnMock.mockReturnValueOnce(killer);
+    const failedAttempt = confirmWindowsProcessTreeExit(target, true);
+    const finalized = vi.fn();
+    const closeFinalizer = pendingWindowsProcessTreeExit(target).then(finalized);
+    const rejection = expect(failedAttempt).rejects.toThrow('taskkill unavailable');
+    killer.emit('error', new Error('taskkill unavailable'));
+    await rejection;
+    expect(finalized).not.toHaveBeenCalled();
+
+    target.exitCode = 1;
+    await confirmWindowsProcessTreeExit(target, true);
+    await closeFinalizer;
+    expect(finalized).toHaveBeenCalledOnce();
+    expect(spawnMock).toHaveBeenCalledOnce();
+  });
+
+  it.each([['ESRCH', true], ['EPERM', false], [null, false]])('interprets nonzero taskkill with probe result %s', async (code, exited) => {
+    const probe = vi.spyOn(process, 'kill').mockImplementation(() => {
+      if (code) throw Object.assign(new Error(code), { code });
+      return true;
+    });
+    try {
+      const target = makeFakeChild();
+      const killer = makeFakeChild();
+      spawnMock.mockReturnValueOnce(killer);
+      const confirmation = confirmWindowsProcessTreeExit(target, true);
+      killer.emit('close', 1);
+      if (exited) await expect(confirmation).resolves.toBeUndefined();
+      else await expect(confirmation).rejects.toThrow('exit code 1');
+      expect(probe).toHaveBeenCalledExactlyOnceWith(target.pid, 0);
+      expect(target.killed).toBe(exited);
+    } finally {
+      probe.mockRestore();
+    }
   });
 });
 

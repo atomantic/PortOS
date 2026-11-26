@@ -3,6 +3,7 @@
  *
  * No React and no requests; `state` is what `GET /api/blender-models/:id` answers.
  */
+import { BLENDER_MODEL_FIXED_VIEWS as FIXED_VIEW_ANGLES } from '../../../server/lib/blenderModelCameras.js';
 import { formatCount } from '../utils/formatters.js';
 
 export const BLENDER_MODEL_SKILL_NAME = 'portos-blender-model';
@@ -59,10 +60,18 @@ function referenceLines(state) {
   ];
 }
 
+const FIXED_VIEW_LABELS = {
+  front: 'Front',
+  right: 'Right (+X side)',
+  back: 'Back',
+  left: 'Left (-X side)',
+  top: 'Top',
+  bottom: 'Bottom',
+  'three-quarter': 'Three-quarter',
+};
+
 /** The directions every review renders, in sheet order. */
-export const BLENDER_MODEL_FIXED_VIEWS = [
-  ['front', 'Front'], ['right', 'Right (+X side)'], ['back', 'Back'], ['left', 'Left (-X side)'], ['top', 'Top'], ['bottom', 'Bottom'], ['three-quarter', 'Three-quarter'],
-].map(([id, label]) => ({ id, label }));
+export const BLENDER_MODEL_FIXED_VIEWS = Object.keys(FIXED_VIEW_ANGLES).map((id) => ({ id, label: FIXED_VIEW_LABELS[id] }));
 
 /** A reference slot's name on screen. */
 export const referenceLabel = (slot) => (slot.role === 'overall' ? 'Overall sheet' : slot.mechanism);

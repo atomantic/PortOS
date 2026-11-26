@@ -1,3 +1,4 @@
+import { readLayeredEngine } from '../../services/musicVideo/layeredEngineSource.js';
 import { describe, expect, it } from 'vitest';
 import { readFile } from 'node:fs/promises';
 import { runInNewContext } from 'node:vm';
@@ -5,7 +6,6 @@ import { documentCameraCss, documentCameraView, documentSceneIndexes } from './m
 import { documentHandheld } from '../handheldCamera.js';
 import { templateEffects } from './musicVideoTemplateEffects.js';
 
-const layered = new URL('../../services/musicVideo/documentTemplates/layered/', import.meta.url);
 const W = 1920, H = 1080;
 
 // Runs the shipped engine against recording canvases and returns the view it
@@ -34,7 +34,7 @@ async function engineViews(scenes, song, times) {
   sandbox.window = sandbox;
   sandbox.globalThis = sandbox;
   runInNewContext(await readFile(new URL('./cameraRig.js', import.meta.url), 'utf8'), sandbox);
-  runInNewContext(await readFile(new URL('engine.js', layered), 'utf8'), sandbox);
+  runInNewContext((await readLayeredEngine()).toString('utf8'), sandbox);
   const views = [];
   for (const t of times) {
     calls.length = 0;

@@ -196,7 +196,7 @@ checkpoint is cached — Slotstream does not rely on lazy start alone.
 ## Startup at boot
 
 Like `portos-mtplx`, `portos-slotstream` is deliberately excluded from **Save
-PM2 list for reboot** (`server/routes/localLlm.js`, the `saveProcessList`
+PM2 list for reboot** (`server/routes/localLlmRuntimes.js`, the `saveProcessList`
 call's `exclude` list) — it starts on demand, so resurrecting it at boot would
 pin whichever checkpoint and memory cap happened to be saved on a machine
 nobody has asked anything of yet. The running process, if any, is left alone;
@@ -204,7 +204,7 @@ it just is not in the dump a reboot replays.
 
 ## API surface
 
-`server/routes/localLlm.js` exposes the lifecycle under
+`server/routes/localLlmRuntimes.js` exposes the lifecycle under
 `/api/local-llm/slotstream/*`:
 
 | Route | Purpose |

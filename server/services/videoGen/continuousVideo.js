@@ -21,6 +21,7 @@
  * pattern for its own multi-clip chain.
  */
 
+import { CONTINUOUS_VIDEO_BACKENDS } from '../../lib/continuousVideoBackends.js';
 import { join } from 'path';
 import { randomUUID } from 'crypto';
 import { tmpdir } from 'os';
@@ -38,7 +39,7 @@ import { getHistoryItem } from './history.js';
 import { stitchVideos } from './stitchVideos.js';
 import { videoContinuityContractError } from './modeContract.js';
 
-export const CONTINUOUS_VIDEO_BACKENDS = Object.freeze(['local', 'reactor', 'fal']);
+export { CONTINUOUS_VIDEO_BACKENDS };
 
 // Deferred rather than a static top-level import: each backend module (in
 // particular the local runtime's model-registry/HF-cache closure) is heavy,

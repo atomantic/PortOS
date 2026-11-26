@@ -23,8 +23,9 @@
 import { randomBytes } from 'node:crypto';
 import { join } from 'node:path';
 import { hashPassword, SALT_BYTES } from '../lib/portosAuthCore.js';
-import { atomicWrite, safeJSONParse, tryReadFileStrict, PATHS } from '../server/lib/fileUtils.js';
+import { safeJSONParse, tryReadFileStrict, PATHS } from '../server/lib/fileUtils.js';
 import { isPlainObject } from '../server/lib/objects.js';
+import { writeSecureJson } from '../server/lib/secureAuthStore.js';
 import { isDirectlyInvoked } from './lib/directInvocation.js';
 
 export const USAGE = [
@@ -83,7 +84,7 @@ const loadSettings = async (settingsFile) => {
 };
 
 const writeJSON = async (filePath, value) => {
-  await atomicWrite(filePath, JSON.stringify(value, null, 2) + '\n');
+  await writeSecureJson(filePath, JSON.stringify(value, null, 2) + '\n');
 };
 
 /**

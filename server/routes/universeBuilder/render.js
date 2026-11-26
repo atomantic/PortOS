@@ -5,6 +5,7 @@
  * Scoped under `/:id`, so mount order relative to crud.js doesn't matter.
  */
 
+import { BIBLE_KEYS } from '../../lib/universeCanon.js';
 import { universeVisualProfileSchema } from '../../lib/universeVisualProfileValidation.js';
 import { Router } from 'express';
 import { z } from 'zod';
@@ -36,14 +37,13 @@ const selectionSchema = z.record(
 // can't enqueue more entries than the server actually persists; per-string cap
 // uses the looser of `NAME_MAX` / `SLUGLINE_MAX` so a places entry filed by
 // slugline isn't rejected if those limits ever diverge (both 200 today).
-const CANON_TRUNK_KEYS = ['characters', 'places', 'objects'];
 const CANON_NEEDLE_MAX = Math.max(BIBLE_LIMITS.NAME_MAX, BIBLE_LIMITS.SLUGLINE_MAX);
 const canonSelectionValueSchema = z.union([
   z.literal('all'),
   z.array(z.string().trim().min(1).max(CANON_NEEDLE_MAX)).max(BIBLE_LIMITS.ENTRIES_PER_BIBLE_MAX),
 ]);
 const canonSelectionSchema = z.object(
-  Object.fromEntries(CANON_TRUNK_KEYS.map((k) => [k, canonSelectionValueSchema.optional()])),
+  Object.fromEntries(BIBLE_KEYS.map((k) => [k, canonSelectionValueSchema.optional()])),
 ).strict();
 
 const renderSchema = z.object({

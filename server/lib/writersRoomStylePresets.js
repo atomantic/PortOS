@@ -376,7 +376,7 @@ export function getStylePresetById(id) {
 
 // 'custom' = user wrote their own prompt without picking a preset.
 // 'none' = no style applied (image-gen uses scene visualPrompt verbatim).
-export const STYLE_ID = { NONE: 'none', CUSTOM: 'custom' };
+export const STYLE_ID = Object.freeze({ NONE: 'none', CUSTOM: 'custom' });
 export const ALL_STYLE_IDS = [STYLE_ID.NONE, STYLE_ID.CUSTOM, ...STYLE_PRESET_IDS];
 
-export const EMPTY_IMAGE_STYLE = { presetId: STYLE_ID.NONE, prompt: '', negativePrompt: '' };
+export const EMPTY_IMAGE_STYLE = Object.freeze({ presetId: STYLE_ID.NONE, prompt: '', negativePrompt: '' });

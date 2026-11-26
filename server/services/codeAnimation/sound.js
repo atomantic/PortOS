@@ -117,7 +117,7 @@ export async function muxSoundtrack({ projectId, revision, soundtrack, result, s
   if (reserve) await reserve((await stat(videoPath)).size * 2 + soundtrack.artifact.bytes);
   // A browser render's MP4 is already named by its history entry, so the
   // in-place install of the muxed file takes the backup lease (#9982).
-  const mux = await muxVoLines(videoPath, { voLines: [{ path: audioPath, offsetSec: 0 }], signal, report,
+  const mux = await muxVoLines(videoPath, { voLines: [{ path: audioPath, offsetSec: 0 }], targetSamples: timeline.samples, signal, report,
     withInstall: install => withBackupAssetPublication(install) });
   if (!mux.ok) throw fail(`Soundtrack mux failed: ${mux.reason}`);
   signal.throwIfAborted();

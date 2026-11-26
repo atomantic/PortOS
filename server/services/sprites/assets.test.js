@@ -4,8 +4,7 @@
  * confinement (traversal + record root), the state-index refusal, the
  * live-atlas refusal — plus the two delete shapes (a runtime version deletes
  * as a unit; every other asset deletes as the single file) and ENOENT
- * idempotency. assets.js imports the walk.js graph, so the same mocks as
- * atlas.test.js keep the import side-effect-free.
+ * idempotency.
  */
 
 import { describe, it, expect, afterAll } from 'vitest';
@@ -22,11 +21,6 @@ vi.mock('../../lib/fileUtils.js', async (importOriginal) => {
   Object.assign(actual.PATHS, { data: TEST_ROOT, sprites: join(TEST_ROOT, 'sprites') });
   return actual;
 });
-vi.mock('../settings.js', () => ({ getSettings: async () => ({ imageGen: { mode: 'codex' } }) }));
-vi.mock('../mediaJobQueue/index.js', () => ({
-  enqueueJob: () => ({ jobId: 'job-1', position: 0, status: 'queued' }),
-  mediaJobEvents: { on: () => {}, off: () => {} },
-}));
 
 const { deleteSpriteAsset } = await import('./assets.js');
 

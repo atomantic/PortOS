@@ -92,8 +92,6 @@ function ImportPanel({ intake }) {
     patch, analyze, retryIssues, importAndBuild,
   } = intake;
 
-  const types = IMPORTER_CONTENT_TYPES || ['short-story', 'novel', 'screenplay', 'comic-script'];
-
   const canon = preview?.canonPreview || {};
   const issueCount = preview?.issueProposals?.length || 0;
 
@@ -123,7 +121,7 @@ function ImportPanel({ intake }) {
         <label htmlFor="imp-type" className="block text-sm text-gray-400 mb-1">Content type</label>
         <select id="imp-type" value={contentType} onChange={(e) => patch({ contentType: e.target.value })}
           className="w-full bg-port-bg border border-port-border rounded px-3 py-2">
-          {types.map((t) => <option key={t} value={t}>{CONTENT_TYPE_LABELS[t] || t}</option>)}
+          {IMPORTER_CONTENT_TYPES.map((t) => <option key={t} value={t}>{CONTENT_TYPE_LABELS[t] || t}</option>)}
         </select>
       </div>
       <div>

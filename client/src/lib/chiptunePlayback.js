@@ -18,6 +18,7 @@
 // by re-basing its cursor each time it exhausts the event list, so the loop
 // boundary is sample-scheduler-exact rather than "restart on a timer".
 
+import { CHIPTUNE_NOISE_PRESETS } from '../../../server/lib/chiptuneNoisePresets.js';
 import { getAudioContext as ctx, getNoiseBuffer } from './audioContext.js';
 import { createLookaheadTransport, SYNTH_TIMING } from './lookaheadTransport.js';
 import { midiToFreq, makeSafeCall } from './scorePlayback.js';
@@ -28,7 +29,7 @@ const safeCall = makeSafeCall('chiptune playback');
 
 // --- Pure schedule build (mirrors server buildScoreEvents) ------------------
 
-export const CHIPTUNE_NOISE_PRESETS = ['kick', 'snare', 'hat', 'open-hat'];
+export { CHIPTUNE_NOISE_PRESETS };
 
 // MIDI number for a scientific-pitch STRING ("C4" = 60), or null — the shared
 // server/lib/pitchMath.js parser. Differs from scorePlayback.pitchToMidi, which

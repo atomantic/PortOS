@@ -5,8 +5,8 @@
  * sync envelope).
  *
  * Domain-namespaced (imported as `catalogValidation.X` from the lib barrel)
- * so cross-domain identifier collisions never bite. The route handler in
- * server/routes/catalog.js uses `validateRequest(schema, body)` against these.
+ * so cross-domain identifier collisions never bite. Catalog routers use these
+ * schemas through `validateRequest`.
  *
  * Payload shapes for character/place/object intentionally accept the
  * server/lib/storyBible.js field set verbatim — backfilled and freshly
