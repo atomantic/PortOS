@@ -32,6 +32,7 @@ import { shortSummary, localDayKey, recordEvents } from './humanActivity.js';
 import { getSettings } from './settings.js';
 import { fullDiskAccessDetails } from '../lib/fullDiskAccess.js';
 import { readBlocklist, withImessagePrivacyLock } from './imessagePrivacy.js';
+import { scrubHomePath } from '../lib/homePath.js';
 
 // ---------------------------------------------------------------------------
 // Constants
@@ -298,12 +299,12 @@ export async function checkSetup() {
     const fullDiskAccessRequired = isFullDiskAccessError(err);
     return {
       ok: false,
-      dbPath: path,
-      error: err?.message || 'Failed to open chat.db',
+      dbPath: scrubHomePath(path),
+      error: scrubHomePath(err?.message || 'Failed to open chat.db'),
       fullDiskAccessRequired,
       ...(fullDiskAccessRequired
         ? await fullDiskAccessDetails()
-        : { remediation: `Could not read ${path}: ${err?.message || 'unknown error'}` }),
+        : { remediation: scrubHomePath(`Could not read ${path}: ${err?.message || 'unknown error'}`) }),
     };
   } finally {
     try { db?.close(); } catch { /* already closed / never opened */ }
@@ -411,10 +412,11 @@ async function doRunSync() {
     batch = readMessages(db, state.cursorRowid, SCAN_LIMIT);
   } catch (err) {
     const fullDiskAccessRequired = isFullDiskAccessError(err);
-    console.error(`❌ iMessage sync failed to open chat.db: ${err?.message || err}`);
+    const error = scrubHomePath(err?.message || err);
+    console.error(`❌ iMessage sync failed to open chat.db: ${error}`);
     return {
       ok: false,
-      error: err?.message || 'Failed to open chat.db',
+      error,
       fullDiskAccessRequired,
       ...(fullDiskAccessRequired ? await fullDiskAccessDetails() : {}),
     };
@@ -446,12 +448,12 @@ async function doRunSync() {
   // a ROWID). Track failure and hold the cursor so the batch gets retried.
   let persistFailed = false;
   const activityResult = await recordEvents(activityFiltered.kept).catch((err) => {
-    console.error(`❌ iMessage activity record failed: ${err?.message || err}`);
+    console.error(`❌ iMessage activity record failed: ${scrubHomePath(err?.message || err)}`);
     persistFailed = true;
     return { recorded: 0, skipped: activityFiltered.kept.length };
   });
   const touchpointResult = await tribe.autoLogTouchpoints(touchpointFiltered.kept).catch((err) => {
-    console.error(`❌ iMessage touchpoint log failed: ${err?.message || err}`);
+    console.error(`❌ iMessage touchpoint log failed: ${scrubHomePath(err?.message || err)}`);
     persistFailed = true;
     return { created: 0, matched: 0 };
   });

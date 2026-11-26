@@ -44,6 +44,7 @@ import { shortSummary, localDayKey, recordEvents } from './humanActivity.js';
 import { withConsistentSnapshot } from './signalSnapshot.js';
 import { getSettings } from './settings.js';
 import { ServerError } from '../lib/errorHandler.js';
+import { scrubHomePath } from '../lib/homePath.js';
 
 const execFileAsync = promisify(execFile);
 
@@ -259,13 +260,13 @@ export async function resolveDbKey() {
   if (raw == null) {
     return {
       ok: false,
-      error: `Signal config not found at ${cfgPath}`,
+      error: `Signal config not found at ${scrubHomePath(cfgPath)}`,
       remediation: 'Signal Desktop does not appear to be installed for this user (no config.json).',
     };
   }
   const cfg = safeJSONParse(raw, null, { allowArray: false });
   if (!cfg || typeof cfg !== 'object') {
-    return { ok: false, error: `Could not parse ${cfgPath}`, remediation: 'Signal config.json is malformed.' };
+    return { ok: false, error: `Could not parse ${scrubHomePath(cfgPath)}`, remediation: 'Signal config.json is malformed.' };
   }
 
   // Legacy plaintext key.
@@ -391,14 +392,14 @@ export async function checkSetup() {
 
   const keyResult = await resolveDbKey();
   if (!keyResult.ok) {
-    return { ok: false, dbPath: dbPath(), error: keyResult.error, remediation: keyResult.remediation };
+    return { ok: false, dbPath: scrubHomePath(dbPath()), error: keyResult.error, remediation: keyResult.remediation };
   }
   const path = dbPath();
   const result = await readSignalDb(path, keyResult.key, (db) => {
     const row = db.prepare('SELECT COUNT(*) AS n FROM messages').get();
     return { keySource: keyResult.source, messageCount: Number(row?.n || 0) };
   });
-  return { ...result, dbPath: path };
+  return { ...result, dbPath: scrubHomePath(path), error: scrubHomePath(result.error) };
 }
 
 /**
@@ -430,14 +431,16 @@ async function doRunSync() {
 
   const keyResult = await resolveDbKey();
   if (!keyResult.ok) {
-    console.error(`❌ Signal sync: ${keyResult.error}`);
-    return { ok: false, error: keyResult.error, remediation: keyResult.remediation };
+    const error = scrubHomePath(keyResult.error);
+    console.error(`❌ Signal sync: ${error}`);
+    return { ok: false, error, remediation: keyResult.remediation };
   }
 
   const batch = await readSignalDb(dbPath(), keyResult.key, (db) => readMessages(db, state.cursorRowid, SCAN_LIMIT));
   if (!batch.ok) {
-    console.error(`❌ Signal sync: ${batch.error}`);
-    return batch;
+    const error = scrubHomePath(batch.error);
+    console.error(`❌ Signal sync: ${error}`);
+    return { ...batch, error };
   }
 
   const timezone = await getUserTimezone();
@@ -453,12 +456,12 @@ async function doRunSync() {
   // messages loses them permanently. Hold the cursor so the batch retries.
   let persistFailed = false;
   const activityResult = await recordEvents(activityCandidates).catch((err) => {
-    console.error(`❌ Signal activity record failed: ${err?.message || err}`);
+    console.error(`❌ Signal activity record failed: ${scrubHomePath(err?.message || err)}`);
     persistFailed = true;
     return { recorded: 0, skipped: activityCandidates.length };
   });
   const touchpointResult = await tribe.autoLogTouchpoints(touchpointCandidates).catch((err) => {
-    console.error(`❌ Signal touchpoint log failed: ${err?.message || err}`);
+    console.error(`❌ Signal touchpoint log failed: ${scrubHomePath(err?.message || err)}`);
     persistFailed = true;
     return { created: 0, matched: 0 };
   });

@@ -7,7 +7,7 @@
 import { createRequire } from 'node:module';
 import { createHash, randomBytes } from 'node:crypto';
 import { copyFileSync, existsSync, mkdtempSync, readFileSync, readdirSync, rmSync, statSync } from 'node:fs';
-import { tmpdir } from 'node:os';
+import { homedir, tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
 
@@ -165,6 +165,13 @@ describe('withConsistentSnapshot', () => {
     expect(result.reason).toBe('setup');
     expect(result.remediation).toContain(SQLCIPHER_DRIVER_PACKAGE);
     expect(readdirSync(dir)).toEqual([]);
+  });
+
+  it('redacts the home directory from missing database errors', async () => {
+    const sourcePath = join(homedir(), 'Library', 'Application Support', 'Signal', 'missing.sqlite');
+    const result = await withConsistentSnapshot(sourcePath, 'ab'.repeat(32), messageIds);
+    expect(result.error).toContain('~/Library/Application Support/Signal/missing.sqlite');
+    expect(result.error).not.toContain(homedir());
   });
 
   it('reports setup failure when opening the connection cannot load the native prebuild', async () => {
