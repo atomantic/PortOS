@@ -7,9 +7,13 @@
  * shared media queue.
  */
 
+import { randomUUID } from 'node:crypto';
 import { Router } from 'express';
 import { z } from 'zod';
 import { asyncHandler, ServerError } from '../lib/errorHandler.js';
+import { assertCancelResult } from '../lib/cancelResponse.js';
+import { cancelOperationSchema } from '../lib/sharedSchemas.js';
+import { emptyQuerySchema } from '../lib/queryValidation.js';
 import { validateRequest } from '../lib/validateRequest.js';
 import {
   deckAddSampleSchema,
@@ -34,6 +38,9 @@ const prompts = () => import('../services/deckPrompts.js');
 const render = () => import('../services/deckRender.js');
 
 const router = Router();
+const activePromptRuns = new Map();
+
+const describePromptRun = ({ runId, controller }) => ({ runId, status: controller.signal.aborted ? 'cancelling' : 'running' });
 
 // Ids are UUIDs minted by the service; validating up front turns a malformed
 // id into a 400 instead of a Postgres cast error surfacing as a 500.
@@ -117,6 +124,12 @@ router.post('/:id/generate-prompts', asyncHandler(async (req, res) => {
   // pinned model/effort rather than carrying them across providers.
   const { providerId, model, effort } = resolveLlmRoutePin(deck.promptLlm, body);
   const llm = { providerId: providerId || undefined, model: model || undefined, effort: effort || undefined };
+  const holder = activePromptRuns.get(deck.id);
+  if (holder) {
+    throw new ServerError('Prompt generation is already running for this deck.', {
+      status: 409, code: 'DECK_PROMPT_GENERATION_IN_PROGRESS', context: { runId: holder.runId },
+    });
+  }
   const wanted = Array.isArray(body.cardIds) && body.cardIds.length ? new Set(body.cardIds) : null;
   let roster = deck.cards;
   const targetIds = new Set(roster.filter((c) => (!wanted || wanted.has(c.id)) && (body.overwrite || !c.prompt)).map((c) => c.id));
@@ -130,27 +143,31 @@ router.post('/:id/generate-prompts', asyncHandler(async (req, res) => {
   // The GET may arrive before or after this POST. Reserve the channel here so
   // every emitted frame is retained for a late subscriber; generation is still
   // advisory and never waits on an SSE client.
-  const emit = (payload) => emitPromptProgress(deck.id, payload);
-  const finish = (payload) => finishPromptProgress(deck.id, payload);
+  const runId = randomUUID();
+  const controller = new AbortController();
+  const { signal } = controller;
+  const emit = (payload) => emitPromptProgress(deck.id, { ...payload, runId });
+  const finish = (payload) => finishPromptProgress(deck.id, { ...payload, runId });
+  activePromptRuns.set(deck.id, { runId, controller });
 
   let universe = null;
   let cast = null;
-  if (!beginPromptProgress(deck.id)) {
-    throw new ServerError('Prompt generation is already running for this deck.', {
-      status: 409, code: 'DECK_PROMPT_GENERATION_IN_PROGRESS',
-    });
-  }
+  let appliedCount = 0;
   try {
+    beginPromptProgress(deck.id);
     emit({ type: 'phase', deckId: deck.id, phase: 'preparing', label: 'Preparing prompt generation…' });
     if (deck.universeId) {
       universe = await getUniverse(deck.universeId).catch(() => null);
+      signal.throwIfAborted();
       if (universe && body.cast && roster.some((c) => targetIds.has(c.id) && !c.canonRef)) {
         emit({ type: 'phase', deckId: deck.id, phase: 'casting', label: 'Casting the universe onto the cards…' });
-        cast = await castDeckFromUniverse({ deck, cards: roster, universe, ...llm });
+        cast = await castDeckFromUniverse({ deck, cards: roster, universe, ...llm, signal });
+        signal.throwIfAborted();
         // Only cards not yet cast take an assignment; a user-accepted link stays.
         const uncast = new Set(roster.filter((c) => !c.canonRef).map((c) => c.id));
         const applied = new Map(cast.assignments.filter((a) => uncast.has(a.cardId)).map((a) => [a.cardId, a.canonRef]));
         await applyCardGenerations(deck.id, [...applied].map(([cardId, canonRef]) => ({ cardId, canonRef })));
+        signal.throwIfAborted();
         roster = roster.map((c) => (applied.has(c.id) ? { ...c, canonRef: applied.get(c.id) } : c));
         emit({ type: 'phase', deckId: deck.id, phase: 'cast', label: 'Casting done — writing prompts…', assigned: cast.assignments.filter((a) => a.canonRef).length });
       }
@@ -162,11 +179,10 @@ router.post('/:id/generate-prompts', asyncHandler(async (req, res) => {
 
     // Prompts persist chunk by chunk, so a chunk that fails mid-deck (a model
     // that returns bad JSON on its third call) leaves the earlier cards written.
-    let appliedCount = 0;
     let chunkIndex = 0;
     const byId = new Map(targets.map((c) => [c.id, c]));
     const generated = await generateDeckCardPrompts({
-      deck, roster, targets, universe, ...llm,
+      deck, roster, targets, universe, ...llm, signal,
       onBatchStart: ({ chunk, chunks: batchCount }) => emit({
         type: 'batch-start', deckId: deck.id, chunk, chunks: batchCount,
         written: appliedCount, requested: targets.length,
@@ -176,6 +192,7 @@ router.post('/:id/generate-prompts', asyncHandler(async (req, res) => {
         written: appliedCount, requested: targets.length,
       }),
       onChunk: async (chunk, batch) => {
+        signal.throwIfAborted();
         chunkIndex = Number.isFinite(batch?.chunk) ? batch.chunk : chunkIndex + 1;
         const batchCount = Number.isFinite(batch?.chunks) ? batch.chunks : chunks;
         const cardsWritten = chunk.length
@@ -190,21 +207,49 @@ router.post('/:id/generate-prompts', asyncHandler(async (req, res) => {
         });
       },
     });
+    const savedDeck = await getDeck(deck.id);
+    signal.throwIfAborted();
     finish({
       type: 'complete', deckId: deck.id, written: appliedCount, requested: targets.length,
       completedAt: new Date().toISOString(),
     });
     res.json({
-      deck: await getDeck(deck.id),
+      deck: savedDeck,
+      runId,
       written: appliedCount,
       requested: targets.length,
       cast: cast ? cast.assignments.filter((a) => a.canonRef).length : 0,
       llm: generated.llm,
     });
   } catch (error) {
+    if (signal.aborted) {
+      const message = 'Prompt generation was canceled.';
+      finish({ type: 'error', deckId: deck.id, code: 'DECK_PROMPT_GENERATION_CANCELED', error: message, written: appliedCount, requested: targetIds.size });
+      throw new ServerError(message, {
+        status: 409, code: 'DECK_PROMPT_GENERATION_CANCELED', context: { runId, written: appliedCount },
+      });
+    }
     finish({ type: 'error', deckId: deck.id, error: (error?.message || String(error)).slice(0, 1000) });
     throw error;
+  } finally {
+    activePromptRuns.delete(deck.id);
   }
+}));
+
+router.get('/:id/generate-prompts/status', (req, res) => {
+  validateRequest(emptyQuerySchema, req.query);
+  const active = activePromptRuns.get(deckId(req));
+  res.set('Cache-Control', 'no-store').json({ run: active ? describePromptRun(active) : null });
+});
+
+router.post('/:id/generate-prompts/cancel', asyncHandler(async (req, res) => {
+  validateRequest(emptyQuerySchema, req.query);
+  const { runId } = validateRequest(cancelOperationSchema, req.body ?? {});
+  const active = activePromptRuns.get(deckId(req));
+  const found = active && (!runId || active.runId === runId);
+  const result = assertCancelResult(found, { notFoundMessage: 'Active prompt generation run not found' });
+  active.controller.abort();
+  res.status(202).json({ ...result, ...describePromptRun(active) });
 }));
 
 // Live progress for the POST above. Attaching OPENS the channel, so the

@@ -1,5 +1,6 @@
+import { randomUUID } from 'node:crypto';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import { getCollectionPrimaryStatus, startCollectionPrimary } from './mediaCollectionPrimary.js';
+import { cancelCollectionPrimary, getCollectionPrimaryStatus, startCollectionPrimary } from './mediaCollectionPrimary.js';
 
 const fixtures = vi.hoisted(() => ({
   getCollection: vi.fn(),
@@ -68,7 +69,43 @@ describe('Unsorted primary consolidation', () => {
     expect(move.mock.calls).toEqual(files.map(file => [file]));
     expect(fixtures.getCollection).not.toHaveBeenCalled();
     expect(fixtures.setCollectionPrimaryMachine).not.toHaveBeenCalled();
-    expect(fixtures.emitCollectionPrimaryChanged.mock.calls).toEqual([['unsorted'], ['unsorted']]);
+    expect(fixtures.emitCollectionPrimaryChanged.mock.calls).toEqual([['unsorted'], ['unsorted'], ['unsorted']]);
+  });
+
+  it('stops after the current file and keeps the lock until that file settles', async () => {
+    const files = [{ kind: 'image', filename: 'one.png' }, { kind: 'image', filename: 'two.png' }];
+    const pending = Promise.withResolvers();
+    const move = vi.fn(() => pending.promise);
+    fixtures.prepareMediaConsolidation.mockResolvedValue(move);
+    fixtures.listUnsortedGalleryFiles.mockResolvedValue(files);
+
+    const { run } = await startCollectionPrimary('unsorted', 'test-peer');
+    const { runId } = run;
+    expect(cancelCollectionPrimary('unsorted', randomUUID())).toBe(false);
+    expect(cancelCollectionPrimary('unsorted', runId)).toEqual({ ok: true, runId });
+    try {
+      expect(await getCollectionPrimaryStatus('unsorted')).toMatchObject({ run: { runId, running: true, cancelling: true } });
+      await expect(startCollectionPrimary('unsorted', 'test-peer')).rejects.toMatchObject({ code: 'MEDIA_BUSY', context: { runId } });
+    } finally {
+      pending.resolve({ released: [], pending: [], kept: [] });
+    }
+    await vi.waitFor(async () => {
+      expect(await getCollectionPrimaryStatus('unsorted')).toMatchObject({ run: { runId, running: false, canceled: true, completed: 1 } });
+    });
+    expect(move.mock.calls).toEqual([[files[0]]]);
+    expect(cancelCollectionPrimary('unsorted', runId)).toBe(false);
+  });
+
+  it('can cancel during preparation before the first transfer', async () => {
+    const ready = Promise.withResolvers();
+    const move = vi.fn();
+    fixtures.prepareMediaConsolidation.mockReturnValueOnce(ready.promise);
+    const preparing = startCollectionPrimary('unsorted', 'test-peer');
+    const { run: { runId } } = await getCollectionPrimaryStatus('unsorted');
+    expect(cancelCollectionPrimary('unsorted', runId)).toMatchObject({ runId });
+    ready.resolve(move);
+    expect(await preparing).toMatchObject({ run: { runId, running: false, canceled: true, completed: 0 } });
+    expect(move).not.toHaveBeenCalled();
   });
 
   it('starts no transfer if membership inventory is unavailable', async () => {
@@ -77,6 +114,6 @@ describe('Unsorted primary consolidation', () => {
     fixtures.listUnsortedGalleryFiles.mockRejectedValue(new Error('Inventory unavailable'));
     await expect(startCollectionPrimary('unsorted', 'test-peer')).rejects.toThrow('Inventory unavailable');
     expect(move).not.toHaveBeenCalled();
-    expect(fixtures.emitCollectionPrimaryChanged).not.toHaveBeenCalled();
+    expect(fixtures.emitCollectionPrimaryChanged.mock.calls).toEqual([['unsorted'], ['unsorted']]);
   });
 });

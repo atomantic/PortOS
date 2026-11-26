@@ -525,9 +525,15 @@ async function executeAdmittedCliRun({
   const { command: spawnCommand, args: spawnArgs, wrapped } = resolveCliSpawn(provider, runCommand, args, childEnv);
   processGroup = needsProcessGroup(wrapped);
 
+  // Hold the daemon's window for the child's life. Finish this asynchronous
+  // preparation before admission so a cancel while waiting still prevents spawn.
+  const releaseOllamaWork = isOllamaBackedProvider(provider)
+    ? await import('./ollamaAgentContext.js').then(({ beginOllamaAgentWork }) => beginOllamaAgentWork(provider))
+    : null;
   if (beforeExecute) {
     try { await beforeExecute(); }
     catch (error) {
+      releaseOllamaWork?.();
       cleanupPromptFile();
       await cleanupVisionFiles().catch(() => {});
       await finalizeRunRecord({ runId, output: '', exitCode: 1, success: false, error: error.message, startTime,
@@ -535,14 +541,6 @@ async function executeAdmittedCliRun({
       throw error;
     }
   }
-
-  // Held for the child's lifetime so another agent's context reload waits for
-  // this harness instead of restarting the daemon under it (#17341). Same
-  // predicate-gated lazy import as the context preparation above; no await
-  // between registration and spawn.
-  const releaseOllamaWork = isOllamaBackedProvider(provider)
-    ? await import('./ollamaAgentContext.js').then(({ beginOllamaAgentWork }) => beginOllamaAgentWork(provider))
-    : null;
   try {
     childProcess = spawn(spawnCommand, spawnArgs, {
       cwd: runCwd,

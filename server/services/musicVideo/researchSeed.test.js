@@ -1,10 +1,17 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import express from 'express';
+import { randomUUID } from 'node:crypto';
 import { existsSync } from 'node:fs';
 import { realpath } from 'node:fs/promises';
 import sharp from 'sharp';
 import { execGit } from '../../lib/execGit.js';
+import { errorMiddleware } from '../../lib/errorHandler.js';
+import { request, waitForAbort } from '../../lib/testHelper.js';
+import researchRoutes from '../../routes/musicVideoResearchSeed.js';
 
 const store = vi.hoisted(() => ({ project: null }));
+const stopRun = vi.hoisted(() => vi.fn());
+vi.mock('../runner.js', () => ({ stopRun }));
 vi.mock('./projects.js', () => ({
   getProject: async () => store.project,
   mutateProjectRecord: async (_id, transform) => {
@@ -37,8 +44,8 @@ beforeEach(() => {
 });
 afterEach(() => Object.assign(deps, original));
 
-const settle = () => new Promise((resolve) => {
-  const on = (event) => { if (event.status !== 'running') { musicVideoEvents.off('research-seed', on); resolve(event); } };
+const settle = (matches = () => true) => new Promise((resolve) => {
+  const on = (event) => { if (event.status !== 'running' && matches(event)) { musicVideoEvents.off('research-seed', on); resolve(event); } };
   musicVideoEvents.on('research-seed', on);
 });
 
@@ -120,7 +127,7 @@ describe('startSceneResearch', () => {
     resolveProvider({ provider: { id: 'claude', type: 'cli', enabled: true }, selectedModel: null });
     const results = await attempts;
     expect(results.map((result) => result.status)).toEqual(['fulfilled', 'rejected']);
-    expect(results[1].reason).toMatchObject({ status: 409, code: 'RESEARCH_RUNNING' });
+    expect(results[1].reason).toMatchObject({ status: 409, code: 'RESEARCH_RUNNING', context: { runId: results[0].value.runId } });
     expect(await settled).toMatchObject({ status: 'failed' });
     expect(deps.run).toHaveBeenCalledTimes(1);
   });
@@ -172,5 +179,91 @@ describe('startCameoResearch', () => {
     await startCameoResearch('mv-1', 'mvcam-1', { subject: 'Example Dog', providerId: 'claude' }, { hasHostControl: true });
     expect(await settled).toMatchObject({ cameoId: 'mvcam-1', status: 'done', added: 1 });
     expect(store.project.cameos[0].references).toEqual([expect.objectContaining({ imageId: 'upload-1.png', source: 'research', pageUrl: 'https://example.com/a' })]);
+  });
+});
+
+describe('research status and cancellation routes', () => {
+  const makeApp = () => {
+    const app = express();
+    app.use(express.json());
+    app.use('/api/music-video', researchRoutes);
+    app.use(errorMiddleware);
+    return app;
+  };
+  const projectPath = '/api/music-video/mv-1';
+  const statusPath = `${projectPath}/research`;
+  const cancelPath = `${statusPath}/cancel`;
+  const input = { subject: 'Example Breed', providerId: 'claude' };
+
+  it('selects the run by ID, stops only its provider, and discards its late result', async () => {
+    const app = makeApp();
+    const replied = Promise.withResolvers();
+    const cameoReplied = Promise.withResolvers();
+    stopRun.mockImplementationOnce(async () => {
+      replied.resolve({ text: answer([{ imageUrl: 'https://example.com/late.jpg' }]) });
+      return true;
+    });
+    deps.fetchImage = vi.fn();
+    deps.run = vi.fn(async ({ prompt, onRunCreated, onRunSettled }) => {
+      const isScene = prompt.includes('Example Breed');
+      const concreteId = isScene ? 'example-scene-provider-run' : 'example-cameo-provider-run';
+      onRunCreated(concreteId);
+      try {
+        return await (isScene ? replied.promise : cameoReplied.promise);
+      } finally {
+        onRunSettled(concreteId);
+      }
+    });
+    const sceneSettled = settle(event => event.sceneId === 's1');
+    const cameoSettled = settle(event => event.cameoId === 'mvcam-1');
+    const scene = await request(app).post(`${projectPath}/scenes/s1/research-seed`).send(input);
+    const cameo = await request(app).post(`${projectPath}/cameos/mvcam-1/research-seed`).send({ ...input, subject: 'Example Cameo' });
+    try {
+      expect(scene.status).toBe(202);
+      expect(cameo.status).toBe(202);
+      await vi.waitFor(() => expect(deps.run).toHaveBeenCalledTimes(2));
+      const { runId } = scene.body;
+      const runs = [
+        { runId, sceneId: 's1', status: 'running' },
+        { runId: cameo.body.runId, cameoId: 'mvcam-1', status: 'running' },
+      ];
+      expect((await request(app).get(statusPath)).body).toEqual({ runs });
+      const ambiguity = await request(app).post(cancelPath).send({});
+      expect(ambiguity.status).toBe(409);
+      expect(ambiguity.body).toMatchObject({ code: 'RESEARCH_RUN_REQUIRED', context: { runs } });
+      expect((await request(app).post(cancelPath).send({ runId: randomUUID() })).status).toBe(404);
+      const cancel = await request(app).post(cancelPath).send({ runId });
+      expect(cancel.status).toBe(202);
+      expect(cancel.body).toMatchObject({ runId, status: 'cancelling' });
+      expect(await sceneSettled).toMatchObject({ runId, status: 'canceled' });
+      expect(stopRun.mock.calls).toEqual([['example-scene-provider-run']]);
+      expect(deps.fetchImage).not.toHaveBeenCalled();
+      expect(store.project.scenes[0].researchReferences).toBeUndefined();
+      expect((await request(app).get(statusPath)).body).toEqual({ runs: [runs[1]] });
+    } finally {
+      replied.resolve({ text: answer([]) });
+      cameoReplied.resolve({ text: answer([]) });
+      await Promise.all([sceneSettled, cameoSettled]);
+    }
+  });
+
+  it('aborts an active download and never files references from it', async () => {
+    const app = makeApp();
+    const downloading = Promise.withResolvers();
+    deps.run = vi.fn(async () => ({ text: answer([{ imageUrl: 'https://example.com/a.jpg' }]) }));
+    deps.fetchImage = vi.fn(async (_url, { signal }) => {
+      downloading.resolve(signal);
+      await waitForAbort(signal);
+      throw signal.reason;
+    });
+    const settled = settle();
+    const start = await request(app).post(`${projectPath}/scenes/s1/research-seed`).send(input);
+    expect(start.status).toBe(202);
+    const signal = await downloading.promise;
+    expect((await request(app).post(cancelPath).send({ runId: start.body.runId })).status).toBe(202);
+    expect(signal.aborted).toBe(true);
+    expect(await settled).toMatchObject({ status: 'canceled' });
+    expect(deps.saveImage).not.toHaveBeenCalled();
+    expect((await request(app).get(statusPath)).body).toEqual({ runs: [] });
   });
 });

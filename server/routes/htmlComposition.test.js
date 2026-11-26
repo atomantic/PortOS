@@ -156,6 +156,26 @@ describe('motion skills install authority (#9439)', () => {
     expect(skillState.installed).toBe(false);
   });
 
+  it('identifies the same active install in toolkit status and a duplicate refusal', async () => {
+    const local = buildApp('127.0.0.1');
+    const release = Promise.withResolvers();
+    installMotionSkillPack.mockReturnValueOnce(release.promise);
+    const pending = request(local).post(installPath).then(response => response);
+    try {
+      await vi.waitFor(() => expect(installMotionSkillPack).toHaveBeenCalledTimes(1));
+      const toolkit = await request(local).get('/api/html-composition/toolkit');
+      const { runId } = toolkit.body.skillInstall;
+      expect(runId).toEqual(expect.any(String));
+      const duplicate = await request(local).post(installPath);
+      expect(duplicate.status).toBe(409);
+      expect(duplicate.body).toMatchObject({ code: 'INSTALL_IN_PROGRESS', context: { runId } });
+    } finally {
+      release.resolve();
+      await pending;
+    }
+    expect((await request(local).get('/api/html-composition/toolkit')).body.skillInstall).toBeNull();
+  });
+
   it.each(['loopback', 'operator-session'])('allows %s authority and installs only missing packs', async mode => {
     const { MOTION_SKILL_PACKS } = await import('../lib/motionSkills.js');
     skillState.existingPack = MOTION_SKILL_PACKS[0].id;

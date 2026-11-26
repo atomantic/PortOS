@@ -216,7 +216,7 @@ export async function startStageRun(id, projectId, data, getActiveIds) {
     const live = await client.query(`SELECT id FROM code_animation_project_runs
       WHERE project_id = $1 AND status = $2 AND data->>'kind' = 'production-stages' LIMIT 1`, [projectId, RUN_ACTIVE]);
     if (live.rows[0]) {
-      throw new ServerError('A production run is already active for this project', { status: 409, code: 'CODE_ANIMATION_RUN_ACTIVE' });
+      throw new ServerError('A production run is already active for this project', { status: 409, code: 'CODE_ANIMATION_RUN_ACTIVE', context: { runId: live.rows[0].id } });
     }
     await client.query(`INSERT INTO code_animation_project_runs (id, project_id, revision_id, status, data)
       VALUES ($1, $2, $3, $4, $5)`, [id, projectId, data.sourceRevisionId, RUN_ACTIVE, data]);

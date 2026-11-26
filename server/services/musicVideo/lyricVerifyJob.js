@@ -21,12 +21,14 @@ export function cancelLyricVerify(jobId) {
 export async function startLyricVerify(projectId) {
   const running = getActiveLyricVerifyJobId(projectId);
   if (running) return { jobId: running, reused: true };
-  if (getReservedLyricAlignJobId(projectId)) throw new ServerError('Lyric alignment is running.', { status: 409, code: 'LYRIC_ALIGN_BUSY' });
+  const alignJobId = getReservedLyricAlignJobId(projectId);
+  if (alignJobId) throw new ServerError('Lyric alignment is running.', { status: 409, code: 'LYRIC_ALIGN_BUSY', context: { jobId: alignJobId } });
   const project = await requireProject(projectId);
   const stem = await verifyPrerequisites(project);
   const raced = getActiveLyricVerifyJobId(projectId);
   if (raced) return { jobId: raced, reused: true };
-  if (getReservedLyricAlignJobId(projectId)) throw new ServerError('Lyric alignment is running.', { status: 409, code: 'LYRIC_ALIGN_BUSY' });
+  const racedAlignJobId = getReservedLyricAlignJobId(projectId);
+  if (racedAlignJobId) throw new ServerError('Lyric alignment is running.', { status: 409, code: 'LYRIC_ALIGN_BUSY', context: { jobId: racedAlignJobId } });
   const jobId = randomUUID();
   const job = { id: jobId, clients: [], settled: false, controller: new AbortController() };
   jobs.set(jobId, job);

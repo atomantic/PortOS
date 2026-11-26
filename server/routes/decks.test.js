@@ -150,14 +150,46 @@ describe('deck routes', () => {
     expect(generateDeckCardPrompts).not.toHaveBeenCalled();
   });
 
-  it('rejects a second generate-prompts run while the deck already has one active', async () => {
-    beginPromptProgress.mockReturnValueOnce(false);
-    const res = await request(makeApp()).post(`/api/decks/${D1}/generate-prompts`).send({ overwrite: true });
-    expect(res.status).toBe(409);
-    expect(res.body.code).toBe('DECK_PROMPT_GENERATION_IN_PROGRESS');
-    expect(generateDeckCardPrompts).not.toHaveBeenCalled();
-    // The conflict must not close the first run's channel with a false error.
-    expect(finishPromptProgress).not.toHaveBeenCalled();
+  it('identifies and cancels the active run without writing a late result', async () => {
+    const path = `/api/decks/${D1}/generate-prompts`;
+    const app = makeApp();
+    const started = Promise.withResolvers();
+    const release = Promise.withResolvers();
+    generateDeckCardPrompts.mockImplementationOnce(async ({ signal, onChunk }) => {
+      await onChunk([{ cardId: C0, prompt: 'finished prompt' }]);
+      started.resolve(signal);
+      await release.promise;
+      await onChunk([{ cardId: CB, prompt: 'late prompt' }]);
+    });
+
+    const pending = request(app).post(path).send({}).then(response => response);
+    try {
+      const signal = await started.promise;
+      const status = await request(app).get(`${path}/status`);
+      const { runId } = status.body.run;
+      expect(status.body).toEqual({ run: { runId: expect.any(String), status: 'running' } });
+      const duplicate = await request(app).post(path).send({ overwrite: true });
+      expect(duplicate.status).toBe(409);
+      expect(duplicate.body).toMatchObject({ code: 'DECK_PROMPT_GENERATION_IN_PROGRESS', context: { runId } });
+      expect(finishPromptProgress).not.toHaveBeenCalled();
+
+      expect((await request(app).post(`${path}/cancel`).send({ runId: randomUUID() })).status).toBe(404);
+      expect(signal.aborted).toBe(false);
+      const cancel = await request(app).post(`${path}/cancel`).send({ runId });
+      expect(cancel.status).toBe(202);
+      expect(cancel.body).toEqual({ ok: true, runId, status: 'cancelling' });
+      expect(signal.aborted).toBe(true);
+      expect((await request(app).get(`${path}/status`)).body.run.status).toBe('cancelling');
+    } finally {
+      release.resolve();
+    }
+
+    const response = await pending;
+    expect(response.status).toBe(409);
+    expect(response.body).toMatchObject({ code: 'DECK_PROMPT_GENERATION_CANCELED', context: { written: 1 } });
+    expect(svc.applyCardGenerations.mock.calls).toEqual([[D1, [{ cardId: C0, prompt: 'finished prompt' }]]]);
+    expect((await request(app).get(`${path}/status`)).body).toEqual({ run: null });
+    expect((await request(app).post(path).send({})).status).toBe(200);
   });
 
   it('generate-prompts streams start/chunk/complete progress frames', async () => {

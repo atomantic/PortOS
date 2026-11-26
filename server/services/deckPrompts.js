@@ -16,6 +16,7 @@
  * the universe-variation contract.
  */
 
+import { runCancellablePrompt } from './cancellablePrompt.js';
 import { PROVIDERS_PAGE_BREADCRUMB } from '../lib/navManifest.js';
 import { extractJson } from '../lib/jsonExtract.js';
 import { ServerError } from '../lib/errorHandler.js';
@@ -186,12 +187,12 @@ export function salvagePromptPairs(text) {
   return pairs.length ? { prompts: pairs } : null;
 }
 
-const runJson = async ({ provider, selectedModel, effort, prompt, source, shapePredicate, what, salvage = null, onActivity = null }) => {
+const runJson = async ({ provider, selectedModel, effort, prompt, source, shapePredicate, what, salvage = null, onActivity = null, signal }) => {
   const { runPromptThroughProvider } = await promptRunner();
   let result;
   let activityReported = false;
   try {
-    result = await runPromptThroughProvider({
+    result = await runCancellablePrompt(runPromptThroughProvider, {
       provider, model: selectedModel, effort: effort || undefined, prompt, source,
       responseSchema: shapePredicate,
       repair: jsonRepair({ shapePredicate, salvage }),
@@ -202,7 +203,7 @@ const runJson = async ({ provider, selectedModel, effort, prompt, source, shapeP
         activityReported = true;
         onActivity?.();
       } } : {}),
-    });
+    }, signal);
   } catch (err) {
     if (err?.schemaFailure) throw invalidJson(what, { lastError: err, lastPreview: '' });
     throw err;
@@ -215,7 +216,7 @@ const runJson = async ({ provider, selectedModel, effort, prompt, source, shapeP
 /**
  * @returns {Promise<{ assignments: [{ cardId, canonRef }], llm }>}
  */
-export async function castDeckFromUniverse({ deck, cards, universe, providerId, model, effort } = {}) {
+export async function castDeckFromUniverse({ deck, cards, universe, providerId, model, effort, signal } = {}) {
   const { resolveProviderAndModel, assertProvider } = await promptRunner();
   const { provider, selectedModel } = await resolveProviderAndModel({ providerId, model });
   assertProvider(provider, noProvider());
@@ -225,7 +226,7 @@ export async function castDeckFromUniverse({ deck, cards, universe, providerId, 
     prompt: buildCastPrompt({ deck, cards: eligible, universe }),
     source: 'deck-cast',
     shapePredicate: (o) => o && Array.isArray(o.assignments),
-    what: 'deck casting',
+    what: 'deck casting', signal,
   });
   const index = canonIndex(universe);
   const byKey = new Map(eligible.map((c) => [c.key, c]));
@@ -245,7 +246,7 @@ export async function castDeckFromUniverse({ deck, cards, universe, providerId, 
  */
 export async function generateDeckCardPrompts({
   deck, roster, targets, universe = null, providerId, model, effort,
-  onBatchStart = null, onActivity = null, onChunk = null,
+  signal, onBatchStart = null, onActivity = null, onChunk = null,
 } = {}) {
   const { resolveProviderAndModel, assertProvider } = await promptRunner();
   const { provider, selectedModel } = await resolveProviderAndModel({ providerId, model });
@@ -254,6 +255,7 @@ export async function generateDeckCardPrompts({
   let llm = null;
   const chunks = Math.ceil(targets.length / PROMPTS_PER_CALL);
   for (let i = 0; i < targets.length; i += PROMPTS_PER_CALL) {
+    signal?.throwIfAborted();
     const chunk = targets.slice(i, i + PROMPTS_PER_CALL);
     const chunkNumber = Math.floor(i / PROMPTS_PER_CALL) + 1;
     await onBatchStart?.({
@@ -266,7 +268,7 @@ export async function generateDeckCardPrompts({
       prompt: buildCardPromptsPrompt({ deck, roster, targets: chunk, universe }),
       source: 'deck-card-prompts',
       shapePredicate: (o) => o && Array.isArray(o.prompts),
-      what: 'card prompts',
+      what: 'card prompts', signal,
       salvage: salvagePromptPairs,
       onActivity: () => onActivity?.({ chunk: chunkNumber, chunks, requested: targets.length }),
     });

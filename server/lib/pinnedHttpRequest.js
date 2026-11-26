@@ -6,10 +6,11 @@ import { isIP } from 'node:net';
 import { Readable } from 'node:stream';
 import { pipeline } from 'node:stream/promises';
 import { createBrotliDecompress, createUnzip } from 'node:zlib';
+import { anyAbortSignal } from './requestAbort.js';
 
 const BODYLESS_STATUSES = new Set([204, 205, 304]);
 
-export async function pinnedHttpRequest(url, { headers, lookup }, timeoutMs) {
+export async function pinnedHttpRequest(url, { headers, lookup, signal: callerSignal }, timeoutMs) {
   const target = new URL(url);
   // http.request would turn URL credentials into a Basic header. Fetch rejected
   // such URLs, so keep that refusal even on a vetted host.
@@ -18,9 +19,10 @@ export async function pinnedHttpRequest(url, { headers, lookup }, timeoutMs) {
   const secure = target.protocol === 'https:';
   if (!secure && target.protocol !== 'http:') throw new TypeError('Unsupported URL protocol');
   const hostname = target.hostname.replace(/^\[|\]$/g, '');
-  const signal = Number.isFinite(timeoutMs) && timeoutMs > 0
+  const deadline = Number.isFinite(timeoutMs) && timeoutMs > 0
     ? AbortSignal.timeout(Math.ceil(timeoutMs))
     : undefined;
+  const signal = anyAbortSignal([callerSignal, deadline]);
   const requestHeaders = new Headers(headers);
   if (!requestHeaders.has('accept-encoding')) requestHeaders.set('accept-encoding', 'gzip, deflate, br');
 

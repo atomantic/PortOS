@@ -215,3 +215,6 @@ export const nullishString = z.string().nullish();
 
 // A file name on the media static mounts: no path separators, no traversal.
 export const mediaFilenameSchema = z.string().min(1).max(255).refine((v) => !/[\\/]/.test(v) && v !== '.' && v !== '..', 'Invalid file name');
+
+/** Optional run identity lets callers avoid cancelling a replacement run. */
+export const cancelOperationSchema = z.strictObject({ runId: z.uuid().optional() });

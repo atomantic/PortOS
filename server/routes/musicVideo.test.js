@@ -764,7 +764,7 @@ describe('musicVideo routes', () => {
       expect(second.body).toEqual({ jobId: first.body.jobId, reused: true });
       const align = await request(app).post('/api/music-video/mv-1/lyrics/align').send({});
       expect(align.status).toBe(409);
-      expect(align.body.code).toBe('LYRIC_ALIGN_BUSY');
+      expect(align.body).toMatchObject({ code: 'LYRIC_ALIGN_BUSY', context: { jobId: first.body.jobId } });
       expect((await request(app).post(`/api/music-video/lyrics/verify/${first.body.jobId}/cancel`)).body).toEqual({ ok: true });
       await vi.waitFor(() => expect(verifyLyricSheet).toHaveBeenCalledOnce());
       finish();

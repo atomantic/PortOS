@@ -196,6 +196,14 @@ export const UNCALLED_ROUTE_ALLOWLIST = Object.freeze({
     'GET /api/managed-visitor-admin',
     'DELETE /api/managed-visitor-admin/:appId/credential',
     'POST /api/managed-visitor-admin/:appId/credential',
+    // docs/features/media-operation-control.md: identify and stop a specific active deck prompt run.
+    'GET /api/decks/:id/generate-prompts/status',
+    'POST /api/decks/:id/generate-prompts/cancel',
+    // docs/features/media-operation-control.md: stop consolidation at the next file boundary.
+    'POST /api/media/collections/:id/primary/cancel',
+    // docs/features/media-operation-control.md: identify and stop a specific active photo research run.
+    'GET /api/music-video/:id/research',
+    'POST /api/music-video/:id/research/cancel',
     // docs/features/privacy-center.md: erase historical Twin and imported Signal records.
     'POST /api/privacy/twin-history/cleanup',
     'POST /api/signal/blocklist/handles',

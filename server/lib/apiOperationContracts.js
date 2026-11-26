@@ -20,7 +20,7 @@ import {
   gitDeleteBranchBodySchema, gitDiffBodySchema, gitOptionalBranchBodySchema, gitPathBodySchema,
   gitCleanupMergedBodySchema, gitRemoteBranchesBodySchema, gitStageBodySchema
 } from './gitValidation.js';
-import { logsQuerySchema, pm2ProcessNameSchema } from './sharedSchemas.js';
+import { cancelOperationSchema, logsQuerySchema, pm2ProcessNameSchema } from './sharedSchemas.js';
 
 const jsonBody = (schema, options) => ({
   required: true,
@@ -38,7 +38,53 @@ const gitWriteOperation = (summary, schema) => ({
   },
 });
 
+const operationStatus = (summary, description) => ({
+  get: {
+    summary,
+    responses: {
+      200: { description },
+      400: { description: 'Invalid query or record ID', 'x-portos-error-codes': ['VALIDATION_ERROR'] },
+    },
+  },
+});
+
+const cancelOperation = (summary, description, conflict) => ({
+  post: {
+    summary,
+    description,
+    requestBody: { ...jsonBody(cancelOperationSchema), required: false },
+    responses: {
+      202: { description: 'Cancellation requested for the matching run' },
+      400: { description: 'Invalid body, query or record ID', 'x-portos-error-codes': ['VALIDATION_ERROR'] },
+      403: { description: 'Operator authority required', 'x-portos-error-codes': ['HOST_CONTROL_FORBIDDEN'] },
+      404: { description: 'No matching active run', 'x-portos-error-codes': ['NOT_FOUND'] },
+      ...(conflict ? { 409: conflict } : {}),
+    },
+  },
+});
+
 export const API_OPERATION_CONTRACTS = Object.freeze({
+  '/api/media/collections/:id/primary/cancel': cancelOperation(
+    'Cancel media collection consolidation',
+    'The current file finishes verification and release before the batch stops. Pass the run ID from collection primary status to target a specific run.',
+  ),
+  '/api/decks/:id/generate-prompts/status': operationStatus(
+    'Read active deck prompt generation status',
+    'An active run with its ID and status, or a null run when idle.',
+  ),
+  '/api/decks/:id/generate-prompts/cancel': cancelOperation(
+    'Cancel deck prompt generation',
+    'Prompts already written remain on the deck. Pass the run ID from status or progress to target a specific run.',
+  ),
+  '/api/music-video/:id/research': operationStatus(
+    'List active Music Video photo research runs',
+    'Active runs with their IDs, scene or cameo targets, and status.',
+  ),
+  '/api/music-video/:id/research/cancel': cancelOperation(
+    'Cancel Music Video photo research',
+    'Pass a run ID when multiple project runs are active. Files already imported remain in the gallery.',
+    { description: 'Choose a run or allow the current save to finish', 'x-portos-error-codes': ['RESEARCH_RUN_REQUIRED', 'ALREADY_TERMINAL'] },
+  ),
   '/api/settings/slice': {
     patch: {
       summary: 'Atomically merge a partial settings slice',

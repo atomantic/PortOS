@@ -196,9 +196,9 @@ export function buildPinnedLookup(address, family) {
   };
 }
 
-function pinnedFetch(url, resolved, headers, timeoutMs) {
+function pinnedFetch(url, resolved, headers, timeoutMs, signal) {
   const lookup = resolved.address ? buildPinnedLookup(resolved.address, resolved.family) : undefined;
-  return pinnedHttpRequest(url, { headers, lookup }, timeoutMs).catch(() => null);
+  return pinnedHttpRequest(url, { headers, lookup, signal }, timeoutMs).catch(() => null);
 }
 
 function discardBody(res) {
@@ -228,13 +228,14 @@ export async function assertPublicHttpUrl(target, { blockPrivate = false } = {})
 // want that); `throwOnUnsafe: false` makes it fail closed to null instead — for
 // callers (RSS feeds) whose own contract is a friendly "couldn't fetch" result
 // rather than a bubbled error.
-async function fetchGuarded(url, { timeoutMs = DEFAULT_TIMEOUT_MS, headers, blockPrivate = false, throwOnUnsafe = true } = {}) {
+async function fetchGuarded(url, { timeoutMs = DEFAULT_TIMEOUT_MS, headers, blockPrivate = false, throwOnUnsafe = true, signal } = {}) {
+  signal?.throwIfAborted();
   const first = await resolvePublicHttpUrl(url, { blockPrivate });
   if (!first.safe) {
     if (throwOnUnsafe) throwUnsafeUrl();
     return null;
   }
-  const res = await pinnedFetch(url, first, headers, timeoutMs);
+  const res = await pinnedFetch(url, first, headers, timeoutMs, signal);
   if (res && res.status >= 300 && res.status < 400) {
     const location = res.headers.get('location');
     await discardBody(res);
@@ -246,7 +247,7 @@ async function fetchGuarded(url, { timeoutMs = DEFAULT_TIMEOUT_MS, headers, bloc
     try { redirectUrl = new URL(location, url).href; } catch { return null; }
     const hop = await resolvePublicHttpUrl(redirectUrl, { blockPrivate });
     if (!hop.safe) return null;
-    const next = await pinnedFetch(redirectUrl, hop, headers, timeoutMs);
+    const next = await pinnedFetch(redirectUrl, hop, headers, timeoutMs, signal);
     // A second Fetch redirect used to reject via redirect: 'error'.
     if (next && [301, 302, 303, 307, 308].includes(next.status)) {
       await discardBody(next);
@@ -373,8 +374,8 @@ export async function fetchPublicText(url, { timeoutMs, headers, maxBytes, block
  * within the size cap, or null on any failure (see readBodyCapped for the
  * streaming peak-memory bound).
  */
-export async function fetchPublicBinary(url, { timeoutMs, headers, maxBytes = DEFAULT_MAX_BYTES, blockPrivate = false, throwOnUnsafe = true } = {}) {
-  const res = await fetchGuarded(url, { timeoutMs, headers, blockPrivate, throwOnUnsafe });
+export async function fetchPublicBinary(url, { timeoutMs, headers, maxBytes = DEFAULT_MAX_BYTES, blockPrivate = false, throwOnUnsafe = true, signal } = {}) {
+  const res = await fetchGuarded(url, { timeoutMs, headers, blockPrivate, throwOnUnsafe, signal });
   if (!res) return null;
   if (!res.ok) {
     await discardBody(res);

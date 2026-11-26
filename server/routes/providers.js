@@ -20,6 +20,7 @@ import {
   refreshServiceCatalog,
   updateService,
 } from '../services/provider/providerServices.js';
+import { randomUUID } from 'node:crypto';
 import { Router } from 'express';
 import { asyncHandler, ServerError } from '../lib/errorHandler.js';
 import { requestHasHostControl } from '../services/authGate.js';
@@ -104,7 +105,7 @@ const RUNNER_ALLOWED_COMMANDS = [...ALLOWED_COMMANDS].sort();
 // one because they install different things, but each is single-flight: two
 // concurrent `brew install`s (or two copies of one daemon racing for a port) is
 // never what a double-click meant.
-let runtimeSetupInFlight = false;
+let runtimeSetupInFlight = null;
 
 /**
  * Sanitize a provider object for client responses.
@@ -341,7 +342,7 @@ export function createPortOSProviderRoutes(aiToolkit, { syncProviderCatalogs } =
   // enable marker, drop the login task and remove the container.
   router.post('/fleet-host/stop', asyncHandler(async (req, res) => {
     const { disableFleetLlmHost, getFleetLlmHostStatus } = await import('../services/fleetLlmHost.js');
-    if (runtimeSetupInFlight) throw new ServerError('Model host setup is running — wait for it to finish before stopping the host.', { status: 409, code: 'SETUP_BUSY' });
+    if (runtimeSetupInFlight) throw new ServerError('Model host setup is running — wait for it to finish before stopping the host.', { status: 409, code: 'SETUP_BUSY', context: { holder: runtimeSetupInFlight } });
     const log = [];
     const result = await disableFleetLlmHost({ emit: (message) => log.push(message) });
     resetProviderReadinessCache();
@@ -371,8 +372,8 @@ export function createPortOSProviderRoutes(aiToolkit, { syncProviderCatalogs } =
   }));
   router.post('/fleet-host/setup', asyncHandler(async (req, res) => {
     const { configureFleetLlmHost, getFleetLlmHostStatus } = await import('../services/fleetLlmHost.js');
-    if (runtimeSetupInFlight) throw new ServerError('Another model setup is running.', { status: 409, code: 'SETUP_BUSY' });
-    runtimeSetupInFlight = true;
+    if (runtimeSetupInFlight) throw new ServerError('Another model setup is running.', { status: 409, code: 'SETUP_BUSY', context: { holder: runtimeSetupInFlight } });
+    runtimeSetupInFlight = { runId: randomUUID(), kind: 'fleet-host' };
     const { send, safeEnd } = openSseStream(res);
     let clientGone = false;
     onClientDisconnect(req, res, () => { clientGone = true; });
@@ -380,7 +381,7 @@ export function createPortOSProviderRoutes(aiToolkit, { syncProviderCatalogs } =
       emit: (message) => send({ type: 'log', message }),
       isCancelled: () => clientGone,
     }).catch((err) => ({ success: false, error: err.message }))
-      .finally(() => { runtimeSetupInFlight = false; resetProviderReadinessCache(); });
+      .finally(() => { runtimeSetupInFlight = null; resetProviderReadinessCache(); });
     const status = await getFleetLlmHostStatus().catch(() => null);
     send(result.success ? { type: 'complete', message: 'Host configured. Check model readiness below.', status } : { type: 'error', message: result.error });
     safeEnd();
@@ -826,11 +827,11 @@ export function createPortOSProviderRoutes(aiToolkit, { syncProviderCatalogs } =
     });
 
     if (runtimeSetupInFlight) {
-      send({ type: 'error', message: 'Another local-runtime setup is already running. Wait for it to finish.' });
+      send({ type: 'error', message: 'Another local-runtime setup is already running. Wait for it to finish.', code: 'SETUP_BUSY', context: { holder: runtimeSetupInFlight } });
       return safeEnd();
     }
     if (clientGone) return safeEnd();
-    runtimeSetupInFlight = true;
+    runtimeSetupInFlight = { runId: randomUUID(), kind: runtime.kind };
     holdsLock = true;
 
     send({ type: 'stage', stage: 'setup', message: `Setting up ${runtime.label} for ${runtime.endpoint}.` });
@@ -852,7 +853,7 @@ export function createPortOSProviderRoutes(aiToolkit, { syncProviderCatalogs } =
       io: req.app.get('io'),
     }).catch((err) => ({ success: false, error: err.message }));
 
-    if (holdsLock) { runtimeSetupInFlight = false; holdsLock = false; }
+    if (holdsLock) { runtimeSetupInFlight = null; holdsLock = false; }
     // A daemon just came up (or a binary just landed) — the readiness caches
     // remember it being down, and the page polls them within seconds.
     resetProviderReadinessCache();

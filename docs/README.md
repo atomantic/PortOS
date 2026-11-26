@@ -18,6 +18,7 @@ Start with the [project overview and quick start](../README.md) or read the [pro
 - [Storage](STORAGE.md) and [port assignments](PORTS.md) describe the local deployment.
 - [Chief of Staff](features/chief-of-staff.md) and [peer administration](features/peer-administration.md) cover agent work and federation.
 - [Maintenance scripts](SCRIPTS.md) lists operator commands and when to use them.
+- [Media operation controls](features/media-operation-control.md) covers status and cancellation for active media jobs.
 
 ## Contribute
 

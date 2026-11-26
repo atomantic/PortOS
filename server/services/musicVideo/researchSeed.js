@@ -15,12 +15,14 @@ import { randomUUID } from 'node:crypto';
 import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { CANCEL_ALREADY_TERMINAL } from '../../lib/cancelResponse.js';
 import { ServerError } from '../../lib/errorHandler.js';
 import { execGit } from '../../lib/execGit.js';
 import { extractJson } from '../../lib/jsonExtract.js';
 import { PROVIDER_TYPES } from '../../lib/aiToolkit/constants.js';
 import { MUSIC_VIDEO_RESEARCH_REFERENCE_LIMIT } from '../../lib/musicVideo/musicVideoConditioning.js';
 import { MUSIC_VIDEO_CAMEO_MAX_REFERENCES, findMusicVideoCameo } from '../../lib/musicVideo/musicVideoCameos.js';
+import { runCancellablePrompt } from '../cancellablePrompt.js';
 import { musicVideoEvents } from './events.js';
 import { mutateProjectRecord } from './projects.js';
 import { requireProject } from './requireProject.js';
@@ -47,7 +49,31 @@ export const deps = {
   sharp: async () => (await import('sharp')).default,
 };
 
-const running = new Set();
+const running = new Map();
+
+function describeRun({ runId, target, status }) {
+  return { runId, ...target, status };
+}
+
+export function listActiveResearch(projectId) {
+  return [...(running.get(projectId)?.values() ?? [])].map(describeRun);
+}
+
+export function cancelResearch(projectId, runId) {
+  const active = running.get(projectId);
+  if (!active?.size) return false;
+  if (!runId && active.size > 1) {
+    throw new ServerError('Choose the research run to cancel.', {
+      status: 409, code: 'RESEARCH_RUN_REQUIRED', context: { runs: listActiveResearch(projectId) },
+    });
+  }
+  const run = runId ? active.get(runId) : active.values().next().value;
+  if (!run) return false;
+  if (run.status === 'saving') return CANCEL_ALREADY_TERMINAL;
+  run.status = 'cancelling';
+  run.controller.abort();
+  return { ok: true, ...describeRun(run) };
+}
 
 /** The exact prompt the research agent receives: fixed instructions plus the director's subject. */
 function researchSeedPrompt(subject, count) {
@@ -92,9 +118,10 @@ function parseResearchCandidates(text) {
 }
 
 /** Download one candidate into the gallery, or null when it is not a usable photo. */
-async function importCandidate({ imageUrl, pageUrl }) {
-  const fetched = await deps.fetchImage(imageUrl, { timeoutMs: DOWNLOAD_TIMEOUT_MS, maxBytes: DOWNLOAD_MAX_BYTES, blockPrivate: true, throwOnUnsafe: false, headers: DOWNLOAD_HEADERS })
+async function importCandidate({ imageUrl, pageUrl }, signal) {
+  const fetched = await deps.fetchImage(imageUrl, { timeoutMs: DOWNLOAD_TIMEOUT_MS, maxBytes: DOWNLOAD_MAX_BYTES, blockPrivate: true, throwOnUnsafe: false, headers: DOWNLOAD_HEADERS, signal })
     .catch(() => null);
+  signal.throwIfAborted();
   if (!fetched?.buffer?.length || /^(text|application\/(json|xml|xhtml))/i.test(fetched.contentType || '')) return null;
   const sharp = await deps.sharp();
   const meta = await sharp(fetched.buffer, { limitInputPixels: 96e6 }).metadata().catch(() => null);
@@ -102,6 +129,7 @@ async function importCandidate({ imageUrl, pageUrl }) {
   const png = await sharp(fetched.buffer, { limitInputPixels: 96e6 }).rotate()
     .resize({ width: MAX_EDGE_PX, height: MAX_EDGE_PX, fit: 'inside', withoutEnlargement: true }).png().toBuffer().catch(() => null);
   if (!png) return null;
+  signal.throwIfAborted();
   const saved = await deps.saveImage(png).catch(() => null);
   return saved?.filename ? { imageId: saved.filename, sourceUrl: imageUrl, pageUrl, addedAt: new Date().toISOString() } : null;
 }
@@ -127,23 +155,29 @@ async function resolveResearchProvider({ providerId, model }, hasHostControl) {
  * gallery. Resolves to `{ images: [{ imageId, sourceUrl, pageUrl, addedAt }], runId, providerId, model }`.
  * Pass `resolved` when the caller already checked the provider.
  */
-async function researchSubjectImages({ subject, count = RESEARCH_SEED_DEFAULT_COUNT, providerId, model, effort, executionOptions, hasHostControl = false, resolved = null }) {
-  const { provider, selectedModel } = resolved || await resolveResearchProvider({ providerId, model }, hasHostControl);
+async function researchSubjectImages({ subject, count = RESEARCH_SEED_DEFAULT_COUNT, effort, executionOptions, resolved, signal }) {
+  const { provider, selectedModel } = resolved;
+  signal.throwIfAborted();
   const cwd = await mkdtemp(join(tmpdir(), 'portos-research-'));
-  // `codex exec` refuses a non-repository cwd unless the provider's args bypass
-  // or skip that check. Making the scratch its own git root satisfies it for
-  // every provider config. An agent that needs no repo can still run if this fails.
-  await execGit(['init', '--quiet'], cwd).catch((err) => {
-    console.warn(`⚠️ Research scratch git init failed: ${err.message}`);
-  });
-  const result = await deps.run({ provider, model: selectedModel, effort: effort || undefined, executionOptions,
-    prompt: researchSeedPrompt(subject, count), source: 'music-video-research-seed', allowFallback: false, cwd, timeout: RUN_TIMEOUT_MS })
-    .finally(() => rm(cwd, { recursive: true, force: true }).catch(() => {}));
+  let result;
+  try {
+    // `codex exec` needs a repo by default. The scratch directory supplies one.
+    await execGit(['init', '--quiet'], cwd).catch((err) => {
+      console.warn(`⚠️ Research scratch git init failed: ${err.message}`);
+    });
+    result = await runCancellablePrompt(deps.run, {
+      provider, model: selectedModel, effort: effort || undefined, executionOptions,
+      prompt: researchSeedPrompt(subject, count), source: 'music-video-research-seed', allowFallback: false, cwd, timeout: RUN_TIMEOUT_MS,
+    }, signal);
+  } finally {
+    await rm(cwd, { recursive: true, force: true }).catch(() => {});
+  }
   const candidates = parseResearchCandidates(result?.text);
   const images = [];
   for (const candidate of candidates) {
     if (images.length >= count) break;
-    const image = await importCandidate(candidate);
+    signal.throwIfAborted();
+    const image = await importCandidate(candidate, signal);
     if (image) images.push(image);
   }
   return { images, candidates: candidates.length, runId: result?.runId || null, providerId: provider.id, model: result?.model || selectedModel || null };
@@ -179,28 +213,51 @@ async function startResearch({ projectId, target, what, room, limit, input, hasH
   const promptAdditions = [{ id: 'research-seed-instructions', label: 'Research instructions', text: sentPrompt.split('\n').slice(2).join('\n') }];
   if (input.preview) return { status: 'preview', sentPrompt, promptAdditions };
   if (count < 1) throw new ServerError(`This ${what} already has ${limit} photos. Remove one first.`, { status: 409, code: 'RESEARCH_FULL' });
-  const key = `${projectId}:${target.sceneId || target.cameoId}`;
-  if (running.has(key)) throw new ServerError(`Research is already running for this ${what}.`, { status: 409, code: 'RESEARCH_RUNNING' });
+  const id = target.sceneId ?? target.cameoId;
+  const assertAvailable = () => {
+    const holder = listActiveResearch(projectId).find((run) => run.sceneId === target.sceneId && run.cameoId === target.cameoId);
+    if (holder) throw new ServerError(`Research is already running for this ${what}.`, { status: 409, code: 'RESEARCH_RUNNING', context: { runId: holder.runId } });
+  };
+  assertAvailable();
   const resolved = await resolveResearchProvider(input, hasHostControl);
   // Provider resolution yields, so another request may have claimed this target.
-  if (running.has(key)) throw new ServerError(`Research is already running for this ${what}.`, { status: 409, code: 'RESEARCH_RUNNING' });
-  running.add(key);
-  const label = `${what} ${target.sceneId || target.cameoId} of ${projectId}`;
-  emit({ projectId, ...target, status: 'running', subject });
-  (async () => {
-    const found = await researchSubjectImages({ ...input, subject, count, resolved });
-    if (!found.images.length) {
-      throw new ServerError(found.candidates ? `None of the ${found.candidates} photos the agent found could be downloaded as images.` : 'The agent found no photo links.', { code: 'RESEARCH_EMPTY' });
+  assertAvailable();
+  const controller = new AbortController();
+  const { signal } = controller;
+  const run = { runId: randomUUID(), target, controller, status: 'running' };
+  const active = running.get(projectId) ?? new Map();
+  active.set(run.runId, run);
+  running.set(projectId, active);
+  const label = `${what} ${id} of ${projectId}`;
+  const event = { projectId, ...target, runId: run.runId, subject };
+  emit({ ...event, status: 'running' });
+  void (async () => {
+    let outcome;
+    try {
+      const found = await researchSubjectImages({ ...input, subject, count, resolved, signal });
+      signal.throwIfAborted();
+      if (!found.images.length) {
+        throw new ServerError(found.candidates ? `None of the ${found.candidates} photos the agent found could be downloaded as images.` : 'The agent found no photo links.', { code: 'RESEARCH_EMPTY' });
+      }
+      // Once filing starts, let the existing project mutation finish as one operation.
+      run.status = 'saving';
+      const { project, added } = await save(subject, found.images);
+      console.log(`🔎 Research and seed: ${added} photo(s) for ${label}`);
+      outcome = { status: 'done', added, project };
+    } catch (err) {
+      if (signal.aborted) outcome = { status: 'canceled' };
+      else {
+        if (err?.code === 'RESEARCH_EMPTY') console.log(`⏭️ Research and seed found nothing usable for ${label}: ${err.message}`);
+        else console.error(`❌ Research and seed failed for ${label}: ${err?.message}`);
+        outcome = { status: 'failed', error: String(err?.message || 'Research failed').slice(0, 300) };
+      }
+    } finally {
+      active.delete(run.runId);
+      if (!active.size) running.delete(projectId);
     }
-    const { project, added } = await save(subject, found.images);
-    console.log(`🔎 Research and seed: ${added} photo(s) for ${label}`);
-    emit({ projectId, ...target, status: 'done', subject, added, project });
-  })().catch((err) => {
-    if (err?.code === 'RESEARCH_EMPTY') console.log(`⏭️ Research and seed found nothing usable for ${label}: ${err.message}`);
-    else console.error(`❌ Research and seed failed for ${label}: ${err?.message}`);
-    emit({ projectId, ...target, status: 'failed', subject, error: String(err?.message || 'Research failed').slice(0, 300) });
-  }).finally(() => running.delete(key));
-  return { status: 'running', sentPrompt, promptAdditions };
+    emit({ ...event, ...outcome });
+  })().catch((err) => console.error(`❌ Research and seed completion event failed: ${err?.message}`));
+  return { ...describeRun(run), sentPrompt, promptAdditions };
 }
 
 /** Research and seed for one shot: the photos land on `scene.researchReferences`. */

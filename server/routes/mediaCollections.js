@@ -20,7 +20,9 @@
  */
 
 import { Router } from 'express';
-import { paginationQuerySchema, isPaginationRequested, paginateArray } from '../lib/queryValidation.js';
+import { assertCancelResult } from '../lib/cancelResponse.js';
+import { cancelOperationSchema } from '../lib/sharedSchemas.js';
+import { emptyQuerySchema, paginationQuerySchema, isPaginationRequested, paginateArray } from '../lib/queryValidation.js';
 import { z } from 'zod';
 import { asyncHandler, ServerError, createServiceErrorMapper } from '../lib/errorHandler.js';
 import { validateRequest } from '../lib/validateRequest.js';
@@ -133,7 +135,7 @@ router.post('/:id/localize', asyncHandler(async (req, res) => {
 
 router.get('/:id/primary', asyncHandler(async (req, res) => {
   const { getCollectionPrimaryStatus } = await import('../services/mediaCollectionPrimary.js');
-  res.json(await getCollectionPrimaryStatus(req.params.id).catch((err) => { throw mapServiceError(err); }));
+  res.set('Cache-Control', 'no-store').json(await getCollectionPrimaryStatus(req.params.id).catch((err) => { throw mapServiceError(err); }));
 }));
 
 router.post('/:id/primary', asyncHandler(async (req, res) => {
@@ -141,6 +143,13 @@ router.post('/:id/primary', asyncHandler(async (req, res) => {
   const { startCollectionPrimary } = await import('../services/mediaCollectionPrimary.js');
   res.status(202).json(await startCollectionPrimary(req.params.id, instanceId)
     .catch((err) => { throw mapServiceError(err); }));
+}));
+
+router.post('/:id/primary/cancel', asyncHandler(async (req, res) => {
+  validateRequest(emptyQuerySchema, req.query);
+  const { runId } = validateRequest(cancelOperationSchema, req.body ?? {});
+  const { cancelCollectionPrimary } = await import('../services/mediaCollectionPrimary.js');
+  res.status(202).json(assertCancelResult(cancelCollectionPrimary(req.params.id, runId), { notFoundMessage: 'Active consolidation run not found' }));
 }));
 
 router.patch('/:id', asyncHandler(async (req, res) => {
