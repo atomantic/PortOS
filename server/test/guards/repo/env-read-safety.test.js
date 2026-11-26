@@ -21,7 +21,7 @@ describe.skipIf(process.platform === 'win32')('saved environment read safety', (
     root = realpathSync(mkdtempSync(join(tmpdir(), 'env-read-safety-')));
     for (const relative of [
       'scripts/setup-db.js', 'scripts/db.sh', 'scripts/lib/envFile.js',
-      'scripts/lib/envFile.cjs', 'scripts/lib/databaseSettings.cjs',
+      'scripts/lib/envFile.cjs', 'scripts/lib/databaseSettings.cjs', 'scripts/lib/readDbCliConfig.cjs',
       'server/lib/bashResolver.js', 'server/lib/childProcess.js', 'ecosystem.config.cjs',
     ]) {
       const target = join(root, relative);

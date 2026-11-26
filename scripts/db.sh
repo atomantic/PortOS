@@ -32,27 +32,7 @@ ROOT_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
 # The completion marker makes a missing Node/parser or truncated pipe fail closed
 # before any database command, instead of silently targeting the defaults.
 read_db_config() {
-  node --input-type=commonjs - "$ROOT_DIR" "$1" <<'NODE'
-const { join } = require('node:path');
-const { parseEnvFile } = require(join(process.argv[2], 'scripts/lib/envFile.cjs'));
-const saved = parseEnvFile(join(process.argv[2], '.env'));
-const { resolveDatabaseSettings, parsePort } = require(join(process.argv[2], 'scripts/lib/databaseSettings.cjs'));
-const resolved = resolveDatabaseSettings({ saved });
-const nativeSetup = process.argv[3] === 'setup-native';
-// Ordinary CLI commands retain an explicit exported endpoint override, even in
-// Docker mode (offline maintenance uses this to address a selected cluster).
-const selectedPort = nativeSetup ? resolved.selectedNativePort : parsePort(process.env.PGPORT);
-const settings = {
-  PGMODE: resolved.mode, PGUSER: resolved.user,
-  PGDATABASE: resolved.database, PGPASSWORD: resolved.password,
-  PGHOST: resolved.host, SELECTED_PGHOST: resolved.selectedHost,
-  PGPORT: String(selectedPort ?? (nativeSetup ? resolved.nativePort : resolved.port)),
-  SELECTED_PGPORT: selectedPort === undefined ? '' : String(selectedPort),
-  PGPORT_DOCKER: String(resolved.dockerPort),
-};
-process.stdout.write(Object.entries({ ...settings, complete: '1' })
-  .flat().join('\0') + '\0');
-NODE
+  node "$SCRIPT_DIR/lib/readDbCliConfig.cjs" "$ROOT_DIR" "$1"
 }
 _DB_CONFIG_COMPLETE=false
 while IFS= read -r -d '' key && IFS= read -r -d '' value; do

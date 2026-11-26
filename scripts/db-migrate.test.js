@@ -98,6 +98,7 @@ describe.skipIf(process.platform === 'win32')('scripts/db.sh export + migrate', 
     mkdirSync(join(root, 'scripts', 'lib'), { recursive: true });
     copyFileSync(join(here, 'lib', 'envFile.cjs'), join(root, 'scripts', 'lib', 'envFile.cjs'));
     copyFileSync(join(here, 'lib', 'databaseSettings.cjs'), join(root, 'scripts', 'lib', 'databaseSettings.cjs'));
+    copyFileSync(join(here, 'lib', 'readDbCliConfig.cjs'), join(root, 'scripts', 'lib', 'readDbCliConfig.cjs'));
     copyFileSync(join(here, 'db.sh'), join(root, 'scripts', 'db.sh'));
     copyFileSync(join(here, 'prepare-database-replay.mjs'), join(root, 'scripts', 'prepare-database-replay.mjs'));
     mkdirSync(join(root, 'server', 'services'), { recursive: true });
