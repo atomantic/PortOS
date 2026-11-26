@@ -612,6 +612,11 @@ export const SOCKET_EVENT_CONTRACTS = Object.freeze({
       additionalProperties: false,
     },
   },
+  'memory:models:changed': {
+    direction: 'server-to-client',
+    summary: 'Invalidate memory embedding and classifier availability after settings change.',
+    payloadSchema: { type: 'object', properties: {}, additionalProperties: false },
+  },
   'brain:changed': {
     direction: 'server-to-client',
     summary: 'Invalidate Brain summary/settings after a persisted change.',

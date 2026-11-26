@@ -151,6 +151,10 @@ The memory classifier uses LM Studio's gptoss-20b model to intelligently evaluat
 
 ### Configuration
 
+Choose **Memory extraction model** under **Settings → AI Assignments → Memory & Catalog**. The assignment is stored in `settings.memoryClassifier` as `{ providerId, model }`. The selected provider processes agent output and a summary of existing memories without tools. Choose **Disabled** to skip AI classification. The Memory tab shows whether the classifier is reachable.
+
+Choose **Legacy LM Studio** to keep the direct LM Studio classifier, which is the default when the assignment is unset. The defaults below can be overridden in `data/memory-classifier-config.json`. Its `timeout`, `maxOutputLength` and `fallbackToPatterns` settings also apply to assigned models.
+
 ```json
 {
   "enabled": true,
@@ -159,7 +163,6 @@ The memory classifier uses LM Studio's gptoss-20b model to intelligently evaluat
   "model": "gptoss-20b",
   "timeout": 60000,
   "maxOutputLength": 10000,
-  "minConfidence": 0.6,
   "fallbackToPatterns": true
 }
 ```
@@ -168,10 +171,10 @@ The memory classifier uses LM Studio's gptoss-20b model to intelligently evaluat
 
 Memories are extracted from agent output:
 
-1. **LLM Classification**: gptoss-20b analyzes task and output, extracts quality memories
-2. **Fallback Patterns**: If LLM unavailable, falls back to pattern matching
-3. **High confidence (>0.8)**: Auto-saved
-4. **Medium confidence (0.5-0.8)**: Queued for user approval
+1. The configured classifier analyzes the task and agent output for memories.
+2. When classification is disabled, unavailable, or fails, extraction uses pattern matching if `fallbackToPatterns` is enabled.
+3. In execute mode, memories with confidence of at least 0.85 are saved automatically.
+4. Memories with confidence from 0.7 up to 0.85 are queued for approval. In dry-run mode, higher-confidence memories also go to the queue.
 
 ## Memory Injection
 

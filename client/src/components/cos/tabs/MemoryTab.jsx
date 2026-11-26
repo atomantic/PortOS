@@ -1,6 +1,6 @@
 import { cardRecordLabels } from '../cardRecordLabels';
 import { useState, useCallback, useRef, useMemo, lazy, Suspense } from 'react';
-import { useNavigate, useParams, useSearchParams } from 'react-router';
+import { Link, useNavigate, useParams, useSearchParams } from 'react-router';
 import {Trash2, X, Check, XCircle, Pencil, AlertTriangle, Brain, Bot} from 'lucide-react';
 import toast from '../../ui/Toast';
 import Banner from '../../ui/Banner';
@@ -29,7 +29,8 @@ import { useConfirmDelete } from '../../../hooks/useConfirmDelete';
 
 const MEMORY_EVENTS = ['cos:memory:created', 'cos:memory:updated', 'cos:memory:deleted', 'cos:memory:extracted'];
 const QUEUE_EVENTS = [...MEMORY_EVENTS, 'cos:memory:approval-needed'];
-const STATUS_EVENTS = [];
+const MODEL_STATUS_EVENTS = ['memory:models:changed', 'providers:changed'];
+const BACKEND_STATUS_EVENTS = [];
 
 function memorySnippet(memory) {
   const summary = memory.summary?.trim() || memory.content?.trim() || memory.id;
@@ -88,24 +89,28 @@ export default function MemoryTab({ apps = [] }) {
     { namespace: 'cos', events: QUEUE_EVENTS }
   );
 
-  const status = useSocketResource(async () => {
-    const [embeddingStatus, backendStatus] = await Promise.all([
-      getEmbeddingStatus(), getMemoryBackendStatus()
-    ]);
-    return { embeddingStatus, backendStatus };
-  }, { events: STATUS_EVENTS });
+  const modelStatus = useSocketResource(
+    ({ signal }) => getEmbeddingStatus({ signal, silent: true }),
+    { events: MODEL_STATUS_EVENTS }
+  );
+  const backend = useSocketResource(
+    ({ signal }) => getMemoryBackendStatus({ signal }),
+    { events: BACKEND_STATUS_EVENTS }
+  );
 
   const memories = list.data || [];
   const pendingMemories = queue.data || [];
   const stats = counts.data;
-  const embeddingStatus = status.data?.embeddingStatus;
-  const backendStatus = status.data?.backendStatus;
+  const embeddingStatus = modelStatus.data;
+  const classifierStatus = embeddingStatus?.classifier;
+  const backendStatus = backend.data;
   const fetchData = useCallback(() => {
     list.refetch();
     queue.refetch();
     counts.refetch();
-    status.refetch();
-  }, [list.refetch, queue.refetch, counts.refetch, status.refetch]);
+    modelStatus.refetch();
+    backend.refetch();
+  }, [list.refetch, queue.refetch, counts.refetch, modelStatus.refetch, backend.refetch]);
 
   const [actionInFlight, setActionInFlight] = useState(null);
   const actionRef = useRef(false);
@@ -186,6 +191,13 @@ export default function MemoryTab({ apps = [] }) {
             {formatCount(stats?.active)} active memories
             {stats?.pendingApproval > 0 && <span className="text-yellow-400"> * {stats.pendingApproval} pending</span>}
             {embeddingStatus?.available ? ' * Embeddings online' : ' * Embeddings offline'}
+            {classifierStatus && (
+              <> * {classifierStatus.available ? 'Memory extraction online' : (
+                <Link to="/settings/ai-assignments?q=Memory+extraction+model" className="text-port-accent underline">
+                  Memory extraction {classifierStatus.disabled ? 'disabled' : 'offline'}
+                </Link>
+              )}</>
+            )}
           </p>
         </div>
         <div role="group" aria-label="Memory view" className="flex gap-2">
@@ -360,7 +372,7 @@ export default function MemoryTab({ apps = [] }) {
         </div>
       )}
 
-      {(list.error || queue.error || counts.error || status.error) && (
+      {(list.error || queue.error || counts.error || modelStatus.error || backend.error) && (
         <Banner tone="warning" title="Unable to refresh memories" actions={<button onClick={fetchData}>Retry</button>}>
           Existing rows are retained. Retry to reconcile the latest changes.
         </Banner>

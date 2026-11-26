@@ -91,7 +91,7 @@ const KEY_ORDER = [
   'id', 'name', 'type', 'harnessId', 'method', 'serviceId', 'servicePlan',
   'command', 'args', 'endpoint', 'apiKey',
   ...LOCAL_RUNTIME_MARKER_KEYS, 'gatewayBacked', 'orcarouterBacked',
-  'models', 'defaultModel', 'lightModel', 'mediumModel', 'heavyModel', 'ultraModel', 'memoryClassifierModel', 'fallbackProvider',
+  'models', 'defaultModel', 'lightModel', 'mediumModel', 'heavyModel', 'ultraModel', 'fallbackProvider',
   'contextWindow', 'numCtx', 'temperature', 'thinking',
   'textTransport', 'ignoreUserConfig',
   'timeout', 'enabled',
@@ -777,7 +777,7 @@ export const PROVIDER_ORDER = [
 export const SAMPLE_OVERRIDES = {};
 export const REFERENCE_OVERRIDES = {
   lmstudio: {
-    models: ['gptoss-20b'], defaultModel: 'gptoss-20b', memoryClassifierModel: 'gptoss-20b', enabled: true,
+    models: ['gptoss-20b'], defaultModel: 'gptoss-20b', enabled: true,
   },
 };
 

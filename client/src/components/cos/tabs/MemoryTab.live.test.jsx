@@ -209,6 +209,24 @@ describe('MemoryTab live approvals', () => {
 });
 
 describe('MemoryTab lifecycle reconciliation', () => {
+  it('refreshes the extraction model status when its assignment changes', async () => {
+    getEmbeddingStatus.mockResolvedValue({ available: true, classifier: { available: false, disabled: true } });
+    renderTab();
+    expect(await screen.findByRole('link', { name: 'Memory extraction disabled' }))
+      .toHaveAttribute('href', '/settings/ai-assignments?q=Memory+extraction+model');
+    expect(screen.getByText(/Embeddings online/)).toBeInTheDocument();
+
+    getEmbeddingStatus.mockResolvedValue({ available: true, classifier: { available: true, disabled: false } });
+    await dispatch('memory:models:changed', {});
+    expect(await screen.findByText(/Memory extraction online/)).toBeInTheDocument();
+    expect(screen.queryByRole('link', { name: 'Memory extraction disabled' })).not.toBeInTheDocument();
+
+    getEmbeddingStatus.mockResolvedValue({ available: true, classifier: { available: false, disabled: false } });
+    await dispatch('providers:changed', {});
+    expect(await screen.findByRole('link', { name: 'Memory extraction offline' }))
+      .toHaveAttribute('href', '/settings/ai-assignments?q=Memory+extraction+model');
+  });
+
   it('coalesces in-flight mutations and keeps rows/counts visible until the fresh result arrives', async () => {
     getMemories.mockImplementation(async params => ({ memories: params.status ? [] : [activeMemory] }));
     getMemoryStats.mockResolvedValue({ active: 1 });

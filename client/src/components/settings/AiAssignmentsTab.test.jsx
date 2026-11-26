@@ -227,6 +227,18 @@ describe('AiAssignmentsTab provider chips', () => {
 });
 
 describe('AiAssignmentsTab assignment management', () => {
+  it('opens an assignment from a prefilled search link', async () => {
+    getAiAssignments.mockResolvedValue(payload([
+      entry({ id: 'settings.memoryClassifier', label: 'Memory extraction model', area: 'Memory & Catalog' }),
+      entry({ id: 'settings.embeddings', label: 'Vector embeddings', area: 'Memory & Catalog' }),
+    ]));
+    render(<MemoryRouter initialEntries={['/settings/ai-assignments?q=Memory+extraction+model']}>
+      <AiAssignmentsTab />
+    </MemoryRouter>);
+    expect(await screen.findByLabelText('Provider for Memory extraction model')).toBeInTheDocument();
+    expect(screen.queryByLabelText('Provider for Vector embeddings')).not.toBeInTheDocument();
+  });
+
   it('filters persisted assignments by assignment type', async () => {
     getAiAssignments.mockResolvedValue(payload([
       entry({ id: 'creative', label: 'Creative row', assignmentType: 'Creative workflows' }),

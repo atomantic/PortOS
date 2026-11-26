@@ -3,7 +3,11 @@ import { cosEvents } from './cos/cosEvents.js';
 import { getDomainAutonomyMode } from './cos/cosState.js';
 import { getDomainBudgetStatus, recordDomainUsage } from './domainUsage.js';
 import { createMemory, getMemories, searchMemories, withPendingMemories } from './memoryBackend.js';
-import { classifyMemories, getConfig, isAvailable } from './memoryClassifier.js';
+import { classifyMemories, getConfig } from './memoryClassifier.js';
+import { getSettings } from './settings.js';
+import { getProviderById } from './provider/providers.js';
+import { runPromptThroughProvider } from './promptRunner.js';
+import { fetchWithTimeout } from '../lib/fetchWithTimeout.js';
 import { generateMemoryEmbedding } from './memoryEmbeddings.js';
 import { extractAndStoreMemories } from './memoryExtractor.js';
 import * as notifications from './notifications.js';
@@ -19,7 +23,12 @@ vi.mock('./memoryBackend.js', () => ({
   getMemories: vi.fn(),
   searchMemories: vi.fn()
 }));
-vi.mock('./memoryClassifier.js', () => ({ classifyMemories: vi.fn(), getConfig: vi.fn(), isAvailable: vi.fn() }));
+vi.mock('./memoryClassifier.js', () => ({ classifyMemories: vi.fn(), getConfig: vi.fn() }));
+vi.mock('./settings.js', () => ({ getSettings: vi.fn() }));
+vi.mock('./provider/providers.js', () => ({ getProviderById: vi.fn() }));
+vi.mock('./promptRunner.js', () => ({ runPromptThroughProvider: vi.fn() }));
+vi.mock('./promptService.js', () => ({ getStageTemplate: async () => 'Analyze {{agentOutput}}' }));
+vi.mock('../lib/fetchWithTimeout.js', () => ({ fetchWithTimeout: vi.fn() }));
 vi.mock('./memoryEmbeddings.js', () => ({ generateMemoryEmbedding: vi.fn() }));
 vi.mock('./review.js', () => ({ createMemoryApprovalItem: vi.fn() }));
 vi.mock('./notifications.js', async () => ({
@@ -56,7 +65,6 @@ describe('extractAndStoreMemories', () => {
     getDomainAutonomyMode.mockResolvedValue('execute');
     getDomainBudgetStatus.mockResolvedValue({ withinBudget: true });
     recordDomainUsage.mockResolvedValue(undefined);
-    isAvailable.mockResolvedValue(true);
     getConfig.mockResolvedValue({ fallbackToPatterns: true });
     generateMemoryEmbedding.mockResolvedValue(embedding);
     getMemories.mockResolvedValue({ memories: [] });
@@ -99,7 +107,6 @@ describe('extractAndStoreMemories', () => {
     } else {
       expect(getDomainBudgetStatus).toHaveBeenCalledExactlyOnceWith('memory');
     }
-    expect(isAvailable).not.toHaveBeenCalled();
     expect(classifyMemories).not.toHaveBeenCalled();
     expect(generateMemoryEmbedding).not.toHaveBeenCalled();
     expect(getMemories).not.toHaveBeenCalled();
@@ -109,6 +116,52 @@ describe('extractAndStoreMemories', () => {
     expect(approvalNeeded).not.toHaveBeenCalled();
     expect(extracted).not.toHaveBeenCalled();
     expect(recordDomainUsage).not.toHaveBeenCalled();
+  });
+
+  it('stores and queues memories from the assigned Ollama model without contacting LM Studio', async () => {
+    classifyMemories.mockImplementation((await vi.importActual('./memoryClassifier.js')).classifyMemories);
+    const provider = { id: 'ollama', type: 'api', enabled: true, defaultModel: 'unselected-model' };
+    getSettings.mockResolvedValue({ memoryClassifier: { providerId: provider.id, model: 'qwen3:8b' } });
+    getProviderById.mockResolvedValue(provider);
+    const active = preference('Written summaries before meetings', 0.9);
+    const pending = preference('One owner for each follow-up', 0.8);
+    runPromptThroughProvider.mockResolvedValue({ text: JSON.stringify({ memories: [active, pending] }) });
+
+    await expect(extractAndStoreMemories(agentId, taskId, fallbackOutput, task)).resolves.toMatchObject({
+      created: 1, pendingApproval: 1,
+      memories: [expect.objectContaining({ ...active, status: 'active' })],
+      pendingMemories: [expect.objectContaining({ ...pending, status: 'pending_approval' })],
+    });
+    expect(fetchWithTimeout).not.toHaveBeenCalled();
+    expect(runPromptThroughProvider).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({
+      provider, model: 'qwen3:8b', prompt: `Analyze ${fallbackOutput}`, toolFree: true, allowFallback: false,
+    }));
+  });
+
+  it.each([true, false])('skips the disabled classifier and honors fallbackToPatterns=%s', async fallbackToPatterns => {
+    classifyMemories.mockImplementation((await vi.importActual('./memoryClassifier.js')).classifyMemories);
+    getSettings.mockResolvedValue({ memoryClassifier: { providerId: 'none', model: null } });
+    getConfig.mockResolvedValue({ fallbackToPatterns });
+
+    await expect(extractAndStoreMemories(agentId, taskId, fallbackOutput, task)).resolves.toMatchObject({
+      created: fallbackToPatterns ? 1 : 0,
+      pendingApproval: fallbackToPatterns ? 2 : 0,
+    });
+    expect(getProviderById).not.toHaveBeenCalled();
+    expect(runPromptThroughProvider).not.toHaveBeenCalled();
+    expect(fetchWithTimeout).not.toHaveBeenCalled();
+  });
+
+  it('keeps agent output away from a provider that loses tool-free eligibility after selection', async () => {
+    classifyMemories.mockImplementation((await vi.importActual('./memoryClassifier.js')).classifyMemories);
+    getSettings.mockResolvedValue({ memoryClassifier: { providerId: 'unsafe' } });
+    getProviderById.mockResolvedValue({ id: 'unsafe', type: 'cli', command: 'codex', enabled: true });
+
+    await expect(extractAndStoreMemories(agentId, taskId, fallbackOutput, task)).resolves.toMatchObject({
+      created: 1, pendingApproval: 2,
+    });
+    expect(runPromptThroughProvider).not.toHaveBeenCalled();
+    expect(fetchWithTimeout).not.toHaveBeenCalled();
   });
 
   it('activates high-confidence memories, queues medium confidence, and charges elapsed classification time', async () => {
@@ -228,12 +281,11 @@ describe('extractAndStoreMemories', () => {
   });
 
   it.each([
-    { scenario: 'a successful empty verdict', available: true, verdict: { usedLLM: true, memories: [], rejected: ['Routine output'] } },
-    { scenario: 'a parse failure with fallback disabled', available: true, verdict: { usedLLM: true, error: 'Parse failed', fallbackAvailable: false } },
-    { scenario: 'an unavailable classifier with fallback disabled', available: false, fallbackToPatterns: false },
-    { scenario: 'a skipped classification with fallback disabled', available: true, verdict: { usedLLM: false, skipped: 'output-too-short' }, fallbackToPatterns: false }
-  ])('stores nothing and sends no approval for $scenario', async ({ available, verdict, fallbackToPatterns = true }) => {
-    isAvailable.mockResolvedValue(available);
+    { scenario: 'a successful empty verdict', verdict: { usedLLM: true, memories: [], rejected: ['Routine output'] } },
+    { scenario: 'a parse failure with fallback disabled', verdict: { usedLLM: true, error: 'Parse failed', fallbackAvailable: false } },
+    { scenario: 'an unavailable classifier with fallback disabled', verdict: { usedLLM: false, skipped: 'classifier-unavailable' }, fallbackToPatterns: false },
+    { scenario: 'a skipped classification with fallback disabled', verdict: { usedLLM: false, skipped: 'output-too-short' }, fallbackToPatterns: false }
+  ])('stores nothing and sends no approval for $scenario', async ({ verdict, fallbackToPatterns = true }) => {
     classifyMemories.mockResolvedValue(verdict);
     getConfig.mockResolvedValue({ fallbackToPatterns });
 
@@ -246,16 +298,14 @@ describe('extractAndStoreMemories', () => {
   });
 
   it.each([
-    { scenario: 'an unavailable classifier', available: false },
-    { scenario: 'an LLM failure', available: true, verdict: { usedLLM: false, error: 'LLM call failed', fallbackAvailable: true } },
-    { scenario: 'a parse failure', available: true, verdict: { usedLLM: true, error: 'Parse failed', fallbackAvailable: true } }
-  ])('falls back to structured blocks and user preference patterns after $scenario', async ({ available, verdict }) => {
-    isAvailable.mockResolvedValue(available);
+    { scenario: 'an unavailable classifier', verdict: { usedLLM: false, skipped: 'classifier-unavailable' } },
+    { scenario: 'an LLM failure', verdict: { usedLLM: false, error: 'LLM call failed', fallbackAvailable: true } },
+    { scenario: 'a parse failure', verdict: { usedLLM: true, error: 'Parse failed', fallbackAvailable: true } }
+  ])('falls back to structured blocks and user preference patterns after $scenario', async ({ verdict }) => {
     classifyMemories.mockResolvedValue(verdict);
 
     const result = await extractAndStoreMemories(agentId, taskId, fallbackOutput, task);
 
-    expect(classifyMemories).toHaveBeenCalledTimes(available ? 1 : 0);
     expect(createMemory).toHaveBeenCalledTimes(3);
     expect(result.memories).toEqual([expect.objectContaining({
       type: 'learning',

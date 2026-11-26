@@ -6,6 +6,7 @@ import { Router } from 'express';
 import * as memory from '../services/memoryBackend.js';
 import { ensureBackend } from '../services/memoryBackend.js';
 import * as embeddings from '../services/memoryEmbeddings.js';
+import { getClassifierAvailability } from '../services/memoryClassifier.js';
 import * as memorySync from '../services/memorySync.js';
 import { findRecentRunsUsingMemory } from '../services/memoryRunUsage.js';
 import { checkHealth } from '../lib/db.js';
@@ -103,10 +104,13 @@ router.post('/sync', asyncHandler(async (req, res) => {
   res.json(result);
 }));
 
-// GET /api/memory/embeddings/status - Check embedding service status
-router.get('/embeddings/status', asyncHandler(async (req, res) => {
-  const status = await embeddings.checkAvailability();
-  res.json(status);
+// GET /api/memory/embeddings/status - Check embedding and extraction model status
+router.get('/embeddings/status', asyncHandler(async (_req, res) => {
+  const [status, classifier] = await Promise.all([
+    embeddings.checkAvailability(),
+    getClassifierAvailability().catch(() => ({ available: false, disabled: false })),
+  ]);
+  res.json({ ...status, classifier });
 }));
 
 // GET /api/memory/embeddings/config - The resolved embedding backend (no probe):

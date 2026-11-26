@@ -53,7 +53,7 @@ import {
 import { backupConfigSchema } from '../lib/backupValidation.js';
 import { sharingSettingsPatchSchema } from '../lib/sharingValidation.js';
 import {
-  locationSettingsSchema, hideFirstRunCardSchema, networkSetupPreferenceSchema, settingsEmbeddingsSchema,
+  locationSettingsSchema, hideFirstRunCardSchema, networkSetupPreferenceSchema, settingsEmbeddingsSchema, memoryClassifierSettingsSchema,
   apiAccessSettingsSchema, instanceFeatureSettingsSchema, instanceFeatureIdSchema, instanceFeatureUpdateSchema,
   instanceFeatureGroupSettingsSchema, instanceFeatureGroupIdSchema, instanceFeatureGroupUpdateSchema
 } from '../lib/instanceSettingsValidation.js';
@@ -487,6 +487,7 @@ const SETTINGS_SLICE_VALIDATORS = [
   ['networkSetupPreference', networkSetupPreferenceSchema],
   ['hideFirstRunCard', hideFirstRunCardSchema],
   ['embeddings', settingsEmbeddingsSchema.partial()],
+  ['memoryClassifier', memoryClassifierSettingsSchema],
   ['localLlm', localLlmSettingsSchema],
   ['imessage', imessageConfigSchema.partial()],
   ['signal', signalConfigSchema.partial()],
