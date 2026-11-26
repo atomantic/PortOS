@@ -134,6 +134,17 @@ describe('releaseAppReviewMarker (issue #989)', () => {
     expect(rec.activeAgentId, 'a real bound agent must be left untouched').toBe('agent-abcd1234');
   });
 
+  it('preserves the real agent when binding and releasing overlap', async () => {
+    await appActivity.bindAppReviewAgent('app-1', 'idle-review-123');
+    const [, released] = await Promise.all([
+      appActivity.bindAppReviewAgent('app-1', 'agent-live'),
+      appActivity.releaseAppReviewMarker('app-1')
+    ]);
+
+    expect(released).toBeNull();
+    expect(await appActivity.getAppActivityById('app-1')).toMatchObject({ activeAgentId: 'agent-live' });
+  });
+
   it('is a no-op for an app with no marker', async () => {
     await appActivity.markAppReviewCooldown('app-1');
     await appActivity.releaseAppReviewMarker('app-1');
@@ -150,6 +161,36 @@ describe('releaseAppReviewMarker (issue #989)', () => {
   it('is a no-op when appId is falsy', async () => {
     const result = await appActivity.releaseAppReviewMarker(undefined);
     expect(result).toBeNull();
+  });
+});
+
+describe('appActivity concurrent writes', () => {
+  beforeEach(() => {
+    rmSync(TEST_DATA_ROOT, { recursive: true, force: true });
+    mkdirSync(TEST_DATA_ROOT, { recursive: true });
+  });
+
+  it('preserves updates to one app and to other apps while clearing stale agents', async () => {
+    await appActivity.bindAppReviewAgent('stale-app', 'agent-stale');
+
+    const [cleared] = await Promise.all([
+      appActivity.clearStaleActiveAgents(['agent-live']),
+      appActivity.startAppCooldown('reviewed-app', 60_000),
+      appActivity.markAppReviewCooldown('reviewed-app'),
+      appActivity.bindAppReviewAgent('live-app', 'agent-live')
+    ]);
+
+    expect(cleared).toEqual({ cleared: ['stale-app'] });
+    const { apps } = await appActivity.loadAppActivity();
+    expect(apps).toMatchObject({
+      'stale-app': { activeAgentId: null },
+      'reviewed-app': {
+        cooldownUntil: expect.any(String),
+        lastReviewedAt: expect.any(String),
+        lastTaskCompletedAt: expect.any(String)
+      },
+      'live-app': { activeAgentId: 'agent-live' }
+    });
   });
 });
 
