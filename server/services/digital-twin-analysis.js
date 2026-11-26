@@ -184,7 +184,7 @@ function parseContradictionResponse(response, promptToStrip = '') {
 }
 
 export async function generateDynamicTests(providerId, model) {
-  const soulContent = await getDigitalTwinForPrompt({ maxTokens: 8000, respectAutoInject: false });
+  const soulContent = await getDigitalTwinForPrompt({ maxTokens: 8000, respectAutoInject: false, includePrivacyContext: false });
 
   if (!soulContent || soulContent.length < 100) {
     return { tests: [], error: 'Insufficient soul content to generate tests' };
