@@ -1224,52 +1224,6 @@ export async function consolidateMemories(threshold = 0.9, dryRun = false, { rea
 }
 
 /**
- * Apply importance decay to old memories
- */
-export async function applyDecay(decayRate = 0.01) {
-  // Set-based decay: archive old low-importance memories and decay the rest in bulk
-  const archived = await withTransaction(async (client) => {
-    // Archive memories that have decayed below threshold and are older than 30 days. Mind-owned
-    // memories are exempt (ETHOS §7: pruning is self-directed); they still decay below 0.15 in the
-    // second UPDATE so selectMindMemoryForReview can surface them for the Mind's own verdict.
-    const archiveResult = await client.query(`
-      UPDATE memories SET status = 'archived',
-        importance = GREATEST(0.1,
-          importance * (1 - $1 * sqrt(EXTRACT(EPOCH FROM (NOW() - created_at)) / 86400.0))
-          + GREATEST(0, 0.1 - EXTRACT(EPOCH FROM (NOW() - COALESCE(last_accessed, created_at))) / 86400.0 * 0.001)
-        )
-      WHERE status = 'active'
-        AND NOT (COALESCE(tags, '{}'::text[]) && $2::text[])
-        AND source_agent_id IS DISTINCT FROM $3
-        AND created_at < NOW() - INTERVAL '30 days'
-        AND GREATEST(0.1,
-          importance * (1 - $1 * sqrt(EXTRACT(EPOCH FROM (NOW() - created_at)) / 86400.0))
-          + GREATEST(0, 0.1 - EXTRACT(EPOCH FROM (NOW() - COALESCE(last_accessed, created_at))) / 86400.0 * 0.001)
-        ) < 0.15
-    `, [decayRate, protectedMindMemoryTags, PERSISTENT_MIND_ID]);
-
-    // Decay importance for remaining active memories where change exceeds threshold
-    const decayResult = await client.query(`
-      UPDATE memories SET importance = GREATEST(0.1,
-        importance * (1 - $1 * sqrt(EXTRACT(EPOCH FROM (NOW() - created_at)) / 86400.0))
-        + GREATEST(0, 0.1 - EXTRACT(EPOCH FROM (NOW() - COALESCE(last_accessed, created_at))) / 86400.0 * 0.001)
-      )
-      WHERE status = 'active'
-        AND NOT (COALESCE(tags, '{}'::text[]) && $2::text[])
-        AND abs(importance - GREATEST(0.1,
-          importance * (1 - $1 * sqrt(EXTRACT(EPOCH FROM (NOW() - created_at)) / 86400.0))
-          + GREATEST(0, 0.1 - EXTRACT(EPOCH FROM (NOW() - COALESCE(last_accessed, created_at))) / 86400.0 * 0.001)
-        )) > 0.01
-    `, [decayRate, protectedMindMemoryTags]);
-
-    return archiveResult.rowCount + decayResult.rowCount;
-  });
-
-  console.log(`🧠 Decay applied to ${archived} memories`);
-  return { updated: archived };
-}
-
-/**
  * Clear expired memories
  */
 export async function clearExpired() {
@@ -1348,12 +1302,16 @@ export async function flushBM25Index() {
 }
 
 /** One fading, owned, unreviewed source; selection never records access. */
+// Keep the read-time SQL formula aligned with fadedPersistentMindMemoryImportance.
 export async function selectMindMemoryForReview(mindId) {
   const result = await query(`
     SELECT * FROM memories
     WHERE source_agent_id = $1 AND status = 'active'
       AND NOT (COALESCE(tags, '{}'::text[]) && $2::text[])
-      AND created_at < NOW() - INTERVAL '30 days' AND importance < 0.15
+      AND created_at < NOW() - INTERVAL '30 days'
+      AND importance * POWER(0.5::double precision,
+        GREATEST(0, EXTRACT(EPOCH FROM (NOW() - COALESCE(last_accessed, created_at))) / 86400.0 - 30) / 90
+      ) < 0.15
       AND NOT (last_review IS NOT NULL
         AND last_review->>'expectedVersion' = version::text
         AND last_review->>'latestVerdict' IN ('keep', 'learn', 'archive', 'defer'))

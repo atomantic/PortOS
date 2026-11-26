@@ -208,7 +208,7 @@ Full catalog (including design plans, ADRs, and research notes): [docs/README.md
 - [DFlash 2 / DSpark](./docs/features/dflash2.md) — Speculative drafting acceleration for local llama-server
 - [vLLM RTX 3090](./docs/features/qwen38-rtx3090.md) — Docker compose setup for Qwen 27B on NVIDIA RTX 3090 GPUs
 - [SGLang Qwen](./docs/features/sglang-qwen38.md) — SGLang engine configuration for Hopper/Blackwell hardware
-- [Memory System](./docs/features/memory-system.md) — Semantic memory with vector search and importance decay
+- [Memory System](./docs/features/memory-system.md) — Semantic memory with vector search and Persistent Mind reflection
 - [Digital Twin](./docs/features/digital-twin.md) — Genome, chronotype, taste, and mortality-aware goals
 - [Identity System](./docs/features/identity-system.md) — Extended identity modeling (P1-P3)
 - [Soul System](./docs/features/soul-system.md) — Identity scaffold with behavioral testing

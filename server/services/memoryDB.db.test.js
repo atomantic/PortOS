@@ -9,8 +9,8 @@
  * Covered here: createMemory/peek/get CRUD round-trip (including the pgvector
  * embedding round-trip and the dimension-mismatch guard), the filter/pagination
  * surface, searchMemories + hybridSearchMemories (vector, FTS and fused paths,
- * plus zero-result queries), consolidateMemories merge semantics, applyDecay
- * boundary behavior, and getGraphData's node/edge shape.
+ * plus zero-result queries), consolidation, expiration, reflection eligibility,
+ * and getGraphData's node/edge shape.
  *
  * `*.db.test.js` → runs ONLY via `npm run test:db` against `portos_test`, never
  * the real `portos` DB (the db.js runner guard + the suite skip below enforce
@@ -18,7 +18,7 @@
  *
  * Unlike most `*.db.test.js` suites — which keep assertions relative because the
  * DB is shared — several functions under test are inherently TABLE-GLOBAL
- * (`consolidateMemories`, `applyDecay`, `getGraphData` and `getStats` all scan
+ * (`consolidateMemories`, `getGraphData` and `getStats` all scan
  * every row). There is no per-row scoping to assert against, so each block
  * clears `memories` and seeds its own fixtures. `vitest.config.db.js` sets
  * `fileParallelism: false`, so no other suite is running while this one owns the
@@ -124,7 +124,6 @@ const backdate = (id, days) => query(
 );
 
 const statusOf = async (id) => (await memoryDB.peekMemory(id))?.status ?? null;
-const importanceOf = async (id) => (await memoryDB.peekMemory(id))?.importance ?? null;
 
 afterAll(async () => {
   if (dbReady) {
@@ -957,11 +956,11 @@ describe.skipIf(!runDb)('memoryDB consolidateMemories (#3447)', () => {
 });
 
 // ---------------------------------------------------------------------------
-// Decay
+// Manual maintenance
 // ---------------------------------------------------------------------------
 
-describe.skipIf(!runDb)('memoryDB applyDecay boundaries (#3447)', () => {
-  it('keeps protected identity and important records through consolidation, decay, and expiration', async () => {
+describe.skipIf(!runDb)('memoryDB maintenance boundaries (#3447)', () => {
+  it('keeps protected identity and important records through consolidation and expiration', async () => {
     await resetMemories();
     const input = { type: 'fact', content: 'Stable identity.', importance: 0.1, expiresAt: new Date(Date.now() - 60_000).toISOString() };
     const core = await memoryDB.createMemory({ ...input, tags: ['mind:core-identity'] }, axis(0));
@@ -969,81 +968,11 @@ describe.skipIf(!runDb)('memoryDB applyDecay boundaries (#3447)', () => {
     const ordinary = await memoryDB.createMemory({ ...input, tags: [] }, axis(0));
     for (const memory of [core, important, ordinary]) await backdate(memory.id, 400);
     await memoryDB.consolidateMemories(0.9);
-    await memoryDB.applyDecay(0.01);
     await memoryDB.clearExpired();
     expect(await statusOf(core.id)).toBe('active');
     expect(await statusOf(important.id)).toBe('active');
     expect(await statusOf(ordinary.id)).not.toBe('active');
     expect((await memoryDB.peekMemory(core.id)).tags).toEqual(['mind:core-identity']);
-  });
-
-  it('never auto-archives Persistent Mind memories, reviewed or not, yet decays them into review range (#18322)', async () => {
-    await resetMemories();
-    const mindId = 'cos-persistent-mind';
-    const reviewed = await memoryDB.createMemory({ type: 'observation', content: 'Reviewed fading note.', importance: 0.15, sourceAgentId: mindId });
-    const unreviewed = await memoryDB.createMemory({ type: 'observation', content: 'Unreviewed fading note.', importance: 0.15, sourceAgentId: mindId });
-    const foreign = await memoryDB.createMemory({ type: 'observation', content: 'Foreign fading note.', importance: 0.15, sourceAgentId: 'other-agent' });
-    for (const m of [reviewed, unreviewed, foreign]) await backdate(m.id, 400);
-    await memoryDB.reviewMindMemory({ memoryId: reviewed.id, expectedVersion: 1, verdict: 'keep' }, { mindId, turnId: 'synthetic-turn', providerId: 'example-provider', model: 'example-model' });
-    await memoryDB.applyDecay(0.01);
-    expect(await statusOf(reviewed.id)).toBe('active');
-    expect(await statusOf(unreviewed.id)).toBe('active');
-    expect(await importanceOf(unreviewed.id)).toBeLessThan(0.15);
-    expect(await statusOf(foreign.id)).toBe('archived');
-    expect((await memoryDB.selectMindMemoryForReview(mindId))?.id).toBe(unreviewed.id);
-  });
-
-  it('is a no-op at decayRate 0 for memories past the recency-bonus window', async () => {
-    await resetMemories();
-    // The recency bonus is GREATEST(0, 0.1 - daysSinceAccess * 0.001) — zero once
-    // a memory is 100+ days untouched. With decayRate 0 the age term drops out
-    // too, so the computed importance equals the stored one and NOTHING is
-    // written: the "change exceeds 0.01" guard is the only thing that can fire.
-    const a = await memoryDB.createMemory({ type: 'fact', content: 'Old but important.', importance: 0.5 });
-    const b = await memoryDB.createMemory({ type: 'fact', content: 'Old and middling.', importance: 0.3 });
-    await backdate(a.id, 400);
-    await backdate(b.id, 400);
-
-    expect(await memoryDB.applyDecay(0)).toEqual({ updated: 0 });
-    expect(await importanceOf(a.id)).toBeCloseTo(0.5, 6);
-    expect(await importanceOf(b.id)).toBeCloseTo(0.3, 6);
-    expect(await statusOf(a.id)).toBe('active');
-  });
-
-  it('archives only decayed-below-0.15 memories older than 30 days, and floors importance at 0.1', async () => {
-    await resetMemories();
-    // 400 days at rate 0.01 → 0.15 * (1 - 0.01*sqrt(400)) = 0.12 → below the
-    // 0.15 archive cut-off and past the 30-day gate.
-    const oldLow = await memoryDB.createMemory({ type: 'fact', content: 'Old and faded.', importance: 0.15 });
-    // 3000 days would compute 0.11 * 0.4523 ≈ 0.0498 — the GREATEST(0.1, …)
-    // floor clamps it to exactly 0.1.
-    const ancient = await memoryDB.createMemory({ type: 'fact', content: 'Ancient and faded.', importance: 0.11 });
-    // 20 days: its computed importance (≈0.128) is under the archive cut-off,
-    // but the 30-day gate keeps it active. This is the boundary that stops decay
-    // from evicting brand-new low-importance memories.
-    const youngLow = await memoryDB.createMemory({ type: 'fact', content: 'New and unimportant.', importance: 0.05 });
-    // Already archived — decay only ever touches active rows.
-    const alreadyArchived = await memoryDB.createMemory({ type: 'fact', content: 'Out of scope.', importance: 0.9, status: 'archived' });
-
-    await backdate(oldLow.id, 400);
-    await backdate(ancient.id, 3000);
-    await backdate(youngLow.id, 20);
-    await backdate(alreadyArchived.id, 400);
-
-    // 2 archived + 1 decayed-in-place.
-    expect(await memoryDB.applyDecay(0.01)).toEqual({ updated: 3 });
-
-    expect(await statusOf(oldLow.id)).toBe('archived');
-    expect(await importanceOf(oldLow.id)).toBeCloseTo(0.12, 4);
-
-    expect(await statusOf(ancient.id)).toBe('archived');
-    expect(await importanceOf(ancient.id)).toBeCloseTo(0.1, 6);
-
-    expect(await statusOf(youngLow.id)).toBe('active');
-    expect(await importanceOf(youngLow.id)).toBeCloseTo(0.12776, 3);
-
-    expect(await statusOf(alreadyArchived.id)).toBe('archived');
-    expect(await importanceOf(alreadyArchived.id)).toBeCloseTo(0.9, 6);
   });
 
   it('expires memories whose expiresAt has passed, leaving future and unset ones alone', async () => {
@@ -1501,7 +1430,6 @@ describe.skipIf(!runDb)('memory history and stale-write contract (#10494)', () =
     await memoryDB.getMemory(first.id);
     await memoryDB.updateMemoryEmbedding(first.id, VEC_FAR);
     await memoryDB.updateMemory(first.id, { importance: 0.7, content: 'Second text', summary: '', tags: ['b'] });
-    await memoryDB.applyDecay();
     expect((await memoryDB.peekMemory(first.id)).version).toBe(3);
     expect((await memoryDB.getMemoryVersions(first.id)).map(row => row.version)).toEqual([2, 1]);
     expect((await memoryDB.getMemoryVersions(first.id, { limit: 1, offset: 1 })).map(row => row.version)).toEqual([1]);
@@ -1665,17 +1593,41 @@ describe.skipIf(!runDb)('mind memory review transactions', () => {
 });
 
 describe.skipIf(!runDb)('mind reflection selection', () => {
-  it('filters ownership, retention, age and settled versions before LIMIT without access writes', async () => {
-    const owner = 'synthetic-reflection-mind';
-    const source = await memoryDB.createMemory({ content: 'Fading owned source', type: 'observation', importance: 0.1, sourceAgentId: owner });
-    const foreign = await memoryDB.createMemory({ content: 'Foreign source', type: 'fact', importance: 0.1, sourceAgentId: 'other-reflection-mind' });
-    const protectedSource = await memoryDB.createMemory({ content: 'Protected source', type: 'fact', tags: ['mind:important'], importance: 0.1, sourceAgentId: owner });
-    await query("UPDATE memories SET created_at = NOW() - INTERVAL '60 days' WHERE id = ANY($1)", [[source.id, foreign.id, protectedSource.id]]);
-    expect(await memoryDB.selectMindMemoryForReview(owner)).toMatchObject({ id: source.id, accessCount: 0 });
-    await memoryDB.reviewMindMemory({ memoryId: source.id, expectedVersion: 1, verdict: 'keep' }, { mindId: owner, turnId: 'synthetic-turn', providerId: 'example-provider', model: 'example-model' });
-    expect(await memoryDB.selectMindMemoryForReview(owner)).toBeNull();
+  beforeEach(resetMemories);
+
+  it('selects by idle time, ownership, protection, age and review state without writing', async () => {
+    const mindId = 'cos-persistent-mind';
+    const seed = (content, overrides) => memoryDB.createMemory({
+      content, type: 'observation', importance: 0.5, sourceAgentId: mindId, ...overrides,
+    });
+    const source = await seed('Idle for 200 days.');
+    const recent = await seed('Recently accessed.');
+    const nearThreshold = await seed('Idle for 185 days.');
+    const foreign = await seed('Owned by another agent.', { sourceAgentId: 'other-agent' });
+    const protectedSource = await seed('Protected source.', { tags: ['mind:important'] });
+    const young = await seed('Young source.', { importance: 0.1 });
+    const ids = [source.id, recent.id, nearThreshold.id, foreign.id, protectedSource.id, young.id];
+    for (const memory of [recent, nearThreshold, foreign, protectedSource]) await backdate(memory.id, 210);
+    await backdate(source.id, 200);
+    await backdate(young.id, 20);
+    await query('UPDATE memories SET last_accessed = created_at WHERE id = $1', [source.id]);
+    await query("UPDATE memories SET last_accessed = NOW() - INTERVAL '10 days' WHERE id = $1", [recent.id]);
+    await query("UPDATE memories SET last_accessed = NOW() - INTERVAL '185 days' WHERE id = $1", [nearThreshold.id]);
+
+    const readStoredState = async () => (await query(
+      'SELECT id, status, importance, access_count, last_accessed, updated_at, sync_sequence FROM memories WHERE id = ANY($1) ORDER BY id',
+      [ids],
+    )).rows;
+    const before = await readStoredState();
+    expect(await memoryDB.selectMindMemoryForReview(mindId)).toMatchObject({ id: source.id, importance: 0.5, accessCount: 0 });
+    expect(await readStoredState()).toEqual(before);
+
+    await memoryDB.reviewMindMemory({ memoryId: source.id, expectedVersion: 1, verdict: 'keep' }, {
+      mindId, turnId: 'synthetic-turn', providerId: 'example-provider', model: 'example-model',
+    });
+    expect(await memoryDB.selectMindMemoryForReview(mindId)).toBeNull();
+    await query('UPDATE memories SET last_accessed = NULL WHERE id = $1', [source.id]);
     await memoryDB.updateMemory(source.id, { content: 'New source version' });
-    expect(await memoryDB.selectMindMemoryForReview(owner)).toMatchObject({ id: source.id, version: 2, accessCount: 0 });
-    await query('DELETE FROM memories WHERE id = ANY($1)', [[source.id, foreign.id, protectedSource.id]]);
+    expect(await memoryDB.selectMindMemoryForReview(mindId)).toMatchObject({ id: source.id, version: 2, accessCount: 0 });
   });
 });

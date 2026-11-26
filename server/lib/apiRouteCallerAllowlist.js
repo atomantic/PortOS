@@ -196,7 +196,6 @@ export const UNCALLED_ROUTE_ALLOWLIST = Object.freeze({
     // docs/features/memory-system.md route table (memory maintenance endpoints, #18655).
     '/api/memory/categories',
     '/api/memory/consolidate',
-    '/api/memory/decay',
     '/api/memory/expired',
     '/api/memory/link',
     '/api/memory/tags',

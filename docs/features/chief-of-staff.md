@@ -477,7 +477,7 @@ Temporary thinking messages retain the exact accepted provider, model, and effor
 
 ### The decision journal
 
-Rollups are sealed prose and memories are flat facts that decay on one clock, so neither can say *that decision is retired now*: a reversed decision sat beside its replacement, and the more-accessed stale one could outrank the correction. The journal is the third shape — typed, individually addressable, and status-bearing.
+Rollups are sealed prose and memories are flat facts, so neither can say *that decision is retired now*: a reversed decision sat beside its replacement, and the more-accessed stale one could outrank the correction. The journal is the third shape — typed, individually addressable, and status-bearing.
 
 - **Kinds.** `decision`, `commitment`, `open_question`, `risk`, `goal`, `preference`. Each entry is a concise standalone statement in the mind's own words, never a transcript quote.
 - **Three operations.** `append`, `supersede` (this statement replaces entry E) and `resolve` (E is settled). Supersession is the operation the memory store cannot express: the old entry stays readable with `status: superseded` and a pointer to what replaced it, and stops being quoted as current. Nothing is ever deleted.
