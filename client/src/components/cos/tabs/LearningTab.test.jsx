@@ -1,6 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { StrictMode } from 'react';
-import { act, fireEvent, render, screen } from '@testing-library/react';
+import { act, fireEvent, render, screen, within } from '@testing-library/react';
 import { MemoryRouter } from 'react-router';
 import LearningTab from './LearningTab';
 
@@ -203,4 +203,70 @@ describe('LearningTab reviewer verdicts', () => {
     expect(await screen.findByText('Tasks Analyzed')).toBeInTheDocument();
     expect(screen.queryByText('Reviewer Verdicts')).not.toBeInTheDocument();
   });
+});
+
+it('reports disclosure state and names its analytics tables and row actions', async () => {
+  api.getCosLearning.mockResolvedValue({
+    totals: { completed: 12, succeeded: 10, failed: 2, successRate: 83 },
+    recommendations: [],
+    insights: {
+      modelEffectiveness: [{ tier: 'light', completed: 12, successRate: 83, avgDurationMin: 1 }],
+      commonErrors: [{ category: 'Timeout', count: 2 }],
+    },
+    standingLearnings: [{ message: 'Example operating note' }],
+  });
+  api.getCosLearningConfidence.mockResolvedValue({ summary: { total: 1 }, thresholds: {}, levels: {} });
+  api.getCosLearningSkipped.mockResolvedValue({
+    skippedCount: 1, skippedTypes: [{ taskType: 'example-task', successRate: 13, completed: 8 }],
+  });
+  api.getDismissedCosRecommendations.mockResolvedValue({ dismissed: [{ id: 'example-recommendation' }] });
+  const duration = { avgDurationMs: 60000, completed: 12, successRate: 83 };
+  api.getCosLearningDurations.mockResolvedValue({ 'example-task': duration, _overall: duration });
+  const tier = { tier: 'light', successRate: 75, succeeded: 3, failed: 1 };
+  api.getCosLearningRouting.mockResolvedValue({
+    matrix: [
+      { taskType: 'example-task', tiers: [tier, { ...tier, tier: 'medium' }] },
+      { taskType: 'other-task', tiers: [tier] },
+    ],
+  });
+  renderTab();
+  await screen.findByText('Tasks Analyzed');
+
+  for (const [name, initiallyExpanded] of [
+    [/dismissed$/, false],
+    [/^Confidence & Autonomy/, true],
+    [/^Task Type Performance/, true],
+    [/^Low-Success History/, true],
+    [/^Duration Estimates/, false],
+    [/^Model Performance/, true],
+    [/^Routing Accuracy/, true],
+    [/^Error Patterns/, false],
+    [/^Standing Learnings/, true],
+  ]) {
+    const button = screen.getByRole('button', { name });
+    expect(button).toHaveAttribute('type', 'button');
+    expect(button).toHaveAttribute('aria-expanded', String(initiallyExpanded));
+    fireEvent.click(button);
+    expect(button).toHaveAttribute('aria-expanded', String(!initiallyExpanded));
+    if (initiallyExpanded) fireEvent.click(button);
+  }
+
+  expect(screen.getByRole('button', { name: 'Restore recommendation example-recommendation' }))
+    .toHaveAttribute('type', 'button');
+  expect(screen.getByRole('button', { name: 'Reset example-task' })).toHaveAttribute('type', 'button');
+
+  const durationTable = within(screen.getByRole('table', { name: 'Duration Estimates' }));
+  const routingTable = within(screen.getByRole('table', { name: 'Routing Accuracy' }));
+  for (const table of [durationTable, routingTable]) {
+    const columns = table.getAllByRole('columnheader');
+    expect(columns).toHaveLength(5);
+    columns.forEach(column => expect(column).toHaveAttribute('scope', 'col'));
+  }
+  expect(durationTable.getByRole('rowheader', { name: 'example-task' })).toHaveAttribute('scope', 'row');
+  for (const [taskType, rows] of [['example-task', 2], ['other-task', 1]]) {
+    const header = routingTable.getByRole('rowheader', { name: taskType });
+    expect(header).toHaveAttribute('scope', 'rowgroup');
+    expect(header).toHaveAttribute('rowspan', String(rows));
+    expect(within(header.closest('tbody')).getAllByRole('row')).toHaveLength(rows);
+  }
 });
