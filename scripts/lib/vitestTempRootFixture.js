@@ -5,12 +5,29 @@ import { appendFileSync, existsSync, mkdirSync, readFileSync, realpathSync, syml
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
-const repo = fileURLToPath(new URL('../../', import.meta.url));
+const WORKSPACE_DIRS = Object.freeze({
+  server: new URL('../../server/', import.meta.url),
+  client: new URL('../../client/', import.meta.url),
+});
+const WORKSPACE_CONFIGS = Object.freeze({
+  server: new URL('../../server/vitest.config.js', import.meta.url),
+  client: new URL('../../client/vitest.config.js', import.meta.url),
+});
+
+function workspaceUrl(map, workspace) {
+  const url = map[workspace];
+  if (!url) throw new Error(`Unknown Vitest fixture workspace: ${workspace}`);
+  return url;
+}
 
 export function createVitestTempFixture(host, workspace, body, config = 'vitest.config.js') {
+  const workspaceDir = workspaceUrl(WORKSPACE_DIRS, workspace);
+  const configUrl = config === 'vitest.config.js' ? workspaceUrl(WORKSPACE_CONFIGS, workspace)
+    : new URL(config, workspaceDir);
+  const workspacePath = fileURLToPath(workspaceDir);
   const root = join(host, 'fixture');
   mkdirSync(root);
-  symlinkSync(join(repo, workspace, 'node_modules'), join(root, 'node_modules'),
+  symlinkSync(fileURLToPath(new URL('node_modules', workspaceDir)), join(root, 'node_modules'),
     process.platform === 'win32' ? 'junction' : 'dir');
   mkdirSync(join(root, 'src/test'), { recursive: true });
   writeFileSync(join(root, 'src/test/setup.js'), '');
@@ -48,9 +65,9 @@ export function createVitestTempFixture(host, workspace, body, config = 'vitest.
   delete env.VITEST_POOL_ID;
   delete env.VITEST_WORKER_ID;
   return {
-    args: [join(repo, workspace, 'node_modules/vitest/vitest.mjs'), 'run', '--configLoader', 'runner',
-      '--config', join(repo, workspace, config), '--root', root, '--maxWorkers', '1'],
-    options: { cwd: join(repo, workspace), env, encoding: 'utf8', timeout: 20000 },
+    args: [fileURLToPath(new URL('node_modules/vitest/vitest.mjs', workspaceDir)), 'run', '--configLoader', 'runner',
+      '--config', fileURLToPath(configUrl), '--root', root, '--maxWorkers', '1'],
+    options: { cwd: workspacePath, env, encoding: 'utf8', timeout: 20000 },
   };
 }
 
@@ -245,7 +262,7 @@ export async function runWatchConfigRestart(host, workspace, inspect, { signal }
   // Real path: the watcher reports canonical paths (macOS tmpdir is a symlink),
   // and a config file it cannot match is a plain rerun, not a restart.
   const wrapper = join(realpathSync(host), 'fixture', 'vitest.config.mjs');
-  writeFileSync(wrapper, `export { default } from ${JSON.stringify(join(repo, workspace, 'vitest.config.js'))};\n`);
+  writeFileSync(wrapper, `export { default } from ${JSON.stringify(fileURLToPath(workspaceUrl(WORKSPACE_CONFIGS, workspace)))};\n`);
   const cfg = args.indexOf('--config') + 1;
   args[cfg] = wrapper;
   args[args.indexOf('--root') + 1] = dirname(wrapper);
