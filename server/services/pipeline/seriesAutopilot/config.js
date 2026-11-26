@@ -3,7 +3,7 @@
  * per-run/settings option resolvers (#2842 split of seriesAutopilot.js).
  */
 
-import { readReadinessGate } from '../../../lib/editorial/index.js';
+import { readReadinessGate } from '../../../lib/editorial/severityConfig.js';
 import { resolveSeriesLlmOverride } from '../../../lib/seriesLlmOverride.js';
 import { SERIES_AUTOPILOT_DEFAULTS } from '../../../lib/seriesAutopilotDefaults.js';
 import { READINESS_GATES } from '../editorialScore.js';

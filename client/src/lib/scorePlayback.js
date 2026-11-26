@@ -11,6 +11,7 @@
 // schedule onto the audio clock and emits a per-note "now sounding" callback so
 // the UI can move a playhead. Pure (no React) — ScoreSheet wraps it in a hook.
 
+import { noteToFrequency } from './pitchDetect.js';
 import { getAudioContext as ctx } from './audioContext.js';
 import { createLookaheadTransport, SYNTH_TIMING } from './lookaheadTransport.js';
 import { midiToFreq } from '../../../server/lib/pitchMath.js';
@@ -33,12 +34,6 @@ export const pitchToMidi = (pitch) => {
 // Frequency (Hz) for a MIDI note number. A4 (69) → 440. The shared
 // server/lib/pitchMath.js math, re-exported for the client playback stack.
 export { midiToFreq };
-
-// Frequency (Hz) for a parsed pitch, or null when it isn't a pitch.
-export const noteToFrequency = (pitch) => {
-  const midi = pitchToMidi(pitch);
-  return midi == null ? null : midiToFreq(midi);
-};
 
 // --- Schedule building (pure) -----------------------------------------------
 // Walk the parsed score in render order (measures → notes) and assign each note

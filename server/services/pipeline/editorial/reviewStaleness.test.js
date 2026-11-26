@@ -9,7 +9,7 @@
  */
 import { describe, it, expect } from 'vitest';
 
-import { getCheck } from '../../../lib/editorial/index.js';
+import { getCheck } from '../../../lib/editorial/checkRegistry.js';
 import { buildEditorialSourceProjection, fingerprintForCheck } from './reviewStaleness.js';
 
 const LENS_ONLY_CHECKS = ['character.secondary-arc', 'arc.climax-agency'];

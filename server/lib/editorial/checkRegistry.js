@@ -387,15 +387,6 @@ export const readChecksSlice = (settings) => {
   return slice && typeof slice === 'object' && !Array.isArray(slice) ? slice : {};
 };
 
-// The editorial-health readiness gate (#1316) the autopilot loop + UI read as
-// "manuscript clean". Returns the raw stored value (or null) — the caller
-// resolves an unknown/absent value to the default via `resolveReadinessGate` in
-// editorialScore.js (kept there so the gate vocabulary lives with the scorer).
-export const readReadinessGate = (settings) => {
-  const gate = settings?.pipelineEditorialChecks?.readinessGate;
-  return typeof gate === 'string' && gate ? gate : null;
-};
-
 // Resolve a check's EFFECTIVE severity from its persisted per-check row: a valid
 // stored `severity` override (#1596) wins, otherwise the registry default. Kept
 // pure + tiny so resolveCheckState and the runner agree on the same fallback.

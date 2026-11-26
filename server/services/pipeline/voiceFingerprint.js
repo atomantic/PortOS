@@ -12,11 +12,7 @@
 import { getSeries } from './series.js';
 import { collectManuscriptSections, sectionsCorpus } from './arcPlanner.js';
 import { getSettings } from '../settings.js';
-import {
-  getCheckById,
-  readChecksSlice,
-  resolveCheckConfig,
-} from '../../lib/editorial/index.js';
+import { getCheckById, readChecksSlice, resolveCheckConfig } from '../../lib/editorial/checkRegistry.js';
 import {
   computeVoiceDrift,
   parseVoiceWells,
