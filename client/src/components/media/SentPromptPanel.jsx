@@ -19,7 +19,7 @@ export default function SentPromptPanel({
   if (typeof sentPrompt !== 'string') return null;
 
   const asWritten = !additions.length && !sentNegativePrompt && sentPrompt.trim() === (prompt || '').trim();
-  if (asWritten && !alwaysShowFull && !segmentPrompts) return <p className="text-[11px] text-gray-500">{asWrittenText}</p>;
+  if (asWritten && !alwaysShowFull && !segmentPrompts) return <p className="text-[11px] text-port-text-muted">{asWrittenText}</p>;
 
   const positive = segmentPrompts?.map((text, index) => `Segment ${index + 1}:\n${text}`).join('\n\n') ?? sentPrompt;
   const base = sentNegativePrompt ? `${positive}\n\nNegative prompt: ${sentNegativePrompt}` : positive;
@@ -32,7 +32,7 @@ export default function SentPromptPanel({
     <div className="space-y-2">
       {additions.length > 0 && (
         <div>
-          <span className="block mb-1 text-gray-500 uppercase tracking-wide">Added to the prompt</span>
+          <span className="block mb-1 text-port-text-muted uppercase tracking-wide">Added to the prompt</span>
           <div className="flex flex-wrap gap-1">
             {additions.map((addition) => (
               <button
@@ -41,14 +41,14 @@ export default function SentPromptPanel({
                 aria-pressed={openChip === addition.id}
                 onClick={() => setOpenChip(openChip === addition.id ? null : addition.id)}
                 className={`min-h-[32px] px-2 py-1 rounded-full border text-[11px] ${openChip === addition.id
-                  ? 'border-port-accent text-white bg-port-accent/20'
-                  : 'border-port-border text-gray-300 hover:text-white'}`}
+                  ? 'border-port-accent text-port-text bg-port-accent/20'
+                  : 'border-port-border text-port-text hover:bg-port-border/30'}`}
               >
                 + {addition.label}
               </button>
             ))}
           </div>
-          {opened && <p className="mt-1 p-2 rounded bg-port-bg border border-port-border text-gray-300 whitespace-pre-wrap break-words">{opened.text}</p>}
+          {opened && <p className="mt-1 p-2 rounded bg-port-bg border border-port-border text-port-text whitespace-pre-wrap break-words">{opened.text}</p>}
         </div>
       )}
       <div className="flex items-center justify-between">
@@ -56,7 +56,7 @@ export default function SentPromptPanel({
           type="button"
           aria-expanded={showFull}
           onClick={() => setShowFull(!showFull)}
-          className="min-h-[44px] px-2 py-1 rounded text-port-accent hover:text-white"
+          className="min-h-[44px] px-2 py-1 rounded text-port-accent hover:bg-port-border/30"
         >
           {showFull ? 'Hide full prompt' : 'Show full prompt'}
         </button>
@@ -64,14 +64,14 @@ export default function SentPromptPanel({
           <button
             type="button"
             onClick={() => copyToClipboard(fullText, 'Full prompt copied')}
-            className="min-h-[44px] min-w-[44px] inline-flex items-center justify-center gap-1 px-2 py-1 rounded text-gray-400 hover:text-white hover:bg-port-border/50"
+            className="min-h-[44px] min-w-[44px] inline-flex items-center justify-center gap-1 px-2 py-1 rounded text-port-text-muted hover:bg-port-border/50"
             aria-label="Copy full prompt"
           >
             <Copy className="w-3 h-3" /> Copy
           </button>
         )}
       </div>
-      {showFull && <pre className="p-2 rounded bg-port-bg border border-port-border text-gray-200 whitespace-pre-wrap break-words font-mono text-[11px]">{fullText}</pre>}
+      {showFull && <pre className="p-2 rounded bg-port-bg border border-port-border text-port-text whitespace-pre-wrap break-words font-mono text-[11px]">{fullText}</pre>}
     </div>
   );
 }

@@ -82,7 +82,7 @@ export default function QuickImageEdit({ item, onDone, generateParams, reference
 
   return (
     <form onSubmit={submit} className="w-full mt-1 p-2.5 rounded border border-port-border bg-port-bg/60 space-y-2">
-      <label htmlFor="quick-edit-instruction" className="block text-[11px] uppercase tracking-wide text-gray-400">What should change?</label>
+      <label htmlFor="quick-edit-instruction" className="block text-[11px] uppercase tracking-wide text-port-text-muted">What should change?</label>
       <div className="flex gap-2">
         <input
           id="quick-edit-instruction"
@@ -91,24 +91,24 @@ export default function QuickImageEdit({ item, onDone, generateParams, reference
           onChange={(e) => setInstruction(e.target.value)}
           disabled={busy}
           placeholder="e.g. make the jacket red"
-          className="flex-1 min-w-0 px-2 py-1 text-xs rounded bg-port-card border border-port-border text-gray-100 placeholder:text-gray-600 focus:outline-none focus:border-port-accent"
+          className="flex-1 min-w-0 px-2 py-1 text-xs rounded bg-port-card border border-port-border text-port-text selection:bg-port-accent/20 selection:text-port-text focus:outline-none focus:border-port-accent"
         />
         <button
           type="submit"
           disabled={!canSubmit}
-          className="min-h-[36px] flex items-center gap-1.5 px-3 text-xs bg-port-accent text-white hover:opacity-90 rounded disabled:opacity-50 disabled:cursor-not-allowed"
+          className="min-h-[36px] flex items-center gap-1.5 px-3 text-xs bg-port-accent text-port-on-accent hover:opacity-90 rounded disabled:opacity-50 disabled:cursor-not-allowed"
         >
           <Pencil className="w-3.5 h-3.5" /> {busy ? 'Sending…' : 'Edit'}
         </button>
       </div>
       <div className="flex flex-wrap items-center gap-2">
-        <label htmlFor="quick-edit-model" className="text-[11px] uppercase tracking-wide text-gray-400">Edit with</label>
+        <label htmlFor="quick-edit-model" className="text-[11px] uppercase tracking-wide text-port-text-muted">Edit with</label>
         <select
           id="quick-edit-model"
           value={editModel}
           onChange={(e) => setEditModel(e.target.value)}
           disabled={busy}
-          className="min-w-0 flex-1 px-2 py-1 text-xs rounded bg-port-card border border-port-border text-gray-100 focus:outline-none focus:border-port-accent disabled:opacity-50"
+          className="min-w-0 flex-1 px-2 py-1 text-xs rounded bg-port-card border border-port-border text-port-text focus:outline-none focus:border-port-accent disabled:opacity-50"
         >
           <option value="">Current image render</option>
           {QUICK_EDIT_MODELS.map((model) => <option key={model.id} value={model.id}>{model.label}</option>)}
@@ -122,7 +122,7 @@ export default function QuickImageEdit({ item, onDone, generateParams, reference
             <span className="absolute bottom-0.5 left-0.5 rounded port-media-overlay-strong px-1 text-[10px]">{index + 2}</span>
             <button type="button" onClick={() => removeReference(filename)} disabled={busy}
               aria-label={`Remove reference image ${index + 2}`}
-              className="pointer-coarse:min-h-11 pointer-coarse:min-w-11 absolute -top-2 -right-2 w-6 h-6 rounded-full bg-port-card border border-port-border text-gray-300 hover:text-white flex items-center justify-center">
+              className="pointer-coarse:min-h-11 pointer-coarse:min-w-11 absolute -top-2 -right-2 w-6 h-6 rounded-full bg-port-card border border-port-border text-port-text hover:bg-port-border/30 flex items-center justify-center">
               <X className="w-3 h-3" />
             </button>
           </div>
@@ -130,7 +130,7 @@ export default function QuickImageEdit({ item, onDone, generateParams, reference
         {!atMax && (
           <button type="button" onClick={() => setChoosing((open) => !open)} disabled={busy}
             aria-expanded={choosing}
-            className="min-h-[44px] inline-flex items-center gap-1 rounded border border-dashed border-port-border px-2 text-xs text-gray-300 hover:border-port-accent hover:text-white disabled:opacity-50">
+            className="min-h-[44px] inline-flex items-center gap-1 rounded border border-dashed border-port-border px-2 text-xs text-port-text hover:border-port-accent hover:bg-port-border/30 disabled:opacity-50">
             <Plus className="w-3.5 h-3.5" /> Add reference
           </button>
         )}
@@ -152,11 +152,11 @@ export default function QuickImageEdit({ item, onDone, generateParams, reference
           </div>}
           <div className="flex flex-wrap gap-2">
             <button type="button" onClick={() => setCatalogOpen(true)} disabled={busy}
-              className="min-h-[44px] inline-flex items-center gap-1 rounded border border-port-border px-2 text-xs text-port-accent hover:border-port-accent hover:text-white">
+              className="min-h-[44px] inline-flex items-center gap-1 rounded border border-port-border px-2 text-xs text-port-accent hover:border-port-accent hover:bg-port-border/30">
               <Plus className="w-3.5 h-3.5" /> Pick from catalog
             </button>
             <button type="button" onClick={() => setGalleryOpen(true)} disabled={busy}
-              className="min-h-[44px] inline-flex items-center gap-1 rounded border border-port-border px-2 text-xs text-port-accent hover:border-port-accent hover:text-white">
+              className="min-h-[44px] inline-flex items-center gap-1 rounded border border-port-border px-2 text-xs text-port-accent hover:border-port-accent hover:bg-port-border/30">
               <Images className="w-3.5 h-3.5" /> Pick from gallery
             </button>
           </div>
@@ -168,9 +168,9 @@ export default function QuickImageEdit({ item, onDone, generateParams, reference
         onBack={() => { setCatalogItem(null); setCatalogOpen(true); }}
         onSelect={(filename) => { addReference(filename); setCatalogItem(null); }} />
       <GalleryImagePicker open={galleryOpen} onClose={() => setGalleryOpen(false)} onSelect={(picked) => addReference(picked?.filename)} />
-      <p className="text-[10px] text-gray-500">Instruction: {formatCount(instruction.length)} characters{preview?.sentPrompt ? ` · Full prompt: ${formatCount(preview.sentPrompt.length)} characters` : ''}</p>
+      <p className="text-[10px] text-port-text-muted">Instruction: {formatCount(instruction.length)} characters{preview?.sentPrompt ? ` · Full prompt: ${formatCount(preview.sentPrompt.length)} characters` : ''}</p>
       <ModelInputPreview preview={modelInputPreview} prompt={instruction} />
-      <p className="text-[10px] leading-snug text-gray-500">
+      <p className="text-[10px] leading-snug text-port-text-muted">
         Sends this image as the reference with your instruction to {chosenEdit ? chosenEdit.label : 'the default image render'}, keeping everything else.{references.length ? ' Added images go along as visual references; name them by number (image 2, image 3).' : ''} Creates a new image; the original is kept.
       </p>
     </form>
