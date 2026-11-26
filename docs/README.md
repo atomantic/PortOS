@@ -114,7 +114,7 @@ A living doc describes current behaviour and operator procedure; issue numbers, 
 - [Music Video festival packet](./features/music-video-festival-packet.md) — editable festival information, explicit source suggestions and selected text exports
 - [Music Video making-of export](./features/music-video-making-of.md) — local multi-variant planning packages, inventory previews, source planning retention and publication boundaries
 
-Start with the [product surface map](./features/product-surfaces.md) ([repo-study mapping](./features/product-surfaces-repo-study.md)) for a complete, user-facing inventory of the application. The focused guides below explain the features with their own operating contracts.
+Start with the [product surface map](./features/product-surfaces.md) ([repo-study mapping](./features/product-surfaces-repo-study.md)) for a tour of the application’s major surfaces. The focused guides below explain the features with their own operating contracts.
 
 App management: [app-wizard](./features/app-wizard.md) · [app-quality](./features/app-quality.md) · [autofixer](./features/autofixer.md) · [browser](./features/browser.md) · [error-handling](./features/error-handling.md) · [jira-sprint-manager](./features/jira-sprint-manager.md)
 
