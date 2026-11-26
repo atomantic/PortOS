@@ -92,6 +92,32 @@ describe('ShotTimeline', () => {
     expect(clips()[0]).not.toHaveAttribute('aria-current');
   });
 
+  it('loops at a media end, rearms on landing, and restores play from the playhead when off', () => {
+    vi.useFakeTimers({ toFake: ['requestAnimationFrame', 'cancelAnimationFrame'] });
+    const frame = () => act(() => { vi.advanceTimersToNextFrame(); });
+    const onPreview = vi.fn();
+    const range = { start: 2.125, end: 9, loop: true };
+    let reading = { t: 8.999, playing: true, start: 2, end: 9 };
+    const props = { project, onPreview, songClock: () => reading };
+    const { rerender } = render(<ShotTimeline {...props} range={range} />);
+    frame();
+    expect(onPreview).not.toHaveBeenCalled();
+    reading = { ...reading, t: 9, playing: false, ended: true };
+    frame();
+    frame();
+    expect(onPreview).toHaveBeenCalledExactlyOnceWith(2.125, true, true);
+    reading = { ...reading, t: 2.125, playing: true, ended: false };
+    frame();
+    reading = { ...reading, t: 9 };
+    frame();
+    expect(onPreview).toHaveBeenCalledTimes(2);
+    rerender(<ShotTimeline {...props} range={{ ...range, loop: false }} />);
+    reading = { ...reading, playing: false };
+    frame();
+    fireEvent.click(screen.getByRole('button', { name: 'Play' }));
+    expect(onPreview).toHaveBeenLastCalledWith(9, true);
+  });
+
   // Uniquely catches a dragged cut saving the wrong shot, edge or time, or snapping back before its save lands.
   it('drags a cut to a frame, shows both shots meeting there, and saves it', async () => {
     let settle;
