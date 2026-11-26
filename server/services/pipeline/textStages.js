@@ -794,7 +794,9 @@ async function runDraftGate({ issueId, stageId, template, ctx, options, gate, pe
     final = { issue: restored.issue, stage: restored.stage, runId: best.runId, output: best.output };
     // Re-judge the restored winner so the persisted judge snapshot matches the
     // active content (the loop's final judge scored the now-displaced attempt).
-    await judgeIssue(issueId, { stageId, force: true }).catch(() => {});
+    await judgeIssue(issueId, { stageId, force: true }).catch((error) => {
+      console.error(`❌ Restored draft re-judge failed: issue=${issueId} stage=${stageId} run=${best.runId} code=${error?.code ?? 'JUDGE_FAILED'}`);
+    });
   }
 
   // Persist the per-attempt scorecard (rejected attempts + their scores) for

@@ -246,8 +246,22 @@ async function removeUnrecordedOutputLink({ jobId, finalPath }) {
 
 /** Persists what is known about the provider request after a failed run: still uncertain, or complete and recoverable. */
 async function recordFailedRun({ jobId, requestId, providerTerminal, confirmedCancel, status }) {
-  if (getJob(jobId)?.result?.topazPhase) await updateJobResult(jobId, { topazUncertain: !providerTerminal, topazRequestId: requestId }).catch(() => {});
-  if (providerTerminal && !confirmedCancel && status?.status === 'complete') await updateJobResult(jobId, { topazRecoveryAvailable: true, topazProviderStatus: 'complete', topazRequestId: requestId }).catch(() => {});
+  const job = getJob(jobId);
+  const recoverable = providerTerminal && !confirmedCancel && status?.status === 'complete';
+  if (!job || (!job.result?.topazPhase && !recoverable)) return;
+  const patch = {
+    topazUncertain: !providerTerminal,
+    topazRequestId: requestId,
+    ...(recoverable ? { topazRecoveryAvailable: true, topazProviderStatus: 'complete' } : {}),
+  };
+  try {
+    if (!await updateJobResult(jobId, patch)) throw Object.assign(new Error('Job unavailable'), { code: 'JOB_NOT_FOUND' });
+  } catch (error) {
+    // The queue rolls back failed writes. Keep the billing and recovery state
+    // on the live record so subsequent requests see it during this process.
+    job.result = { ...job.result, ...patch };
+    console.error(`❌ Topaz failure state could not be saved: job=${jobId} request=${requestId} code=${error?.code ?? 'PERSIST_FAILED'}`);
+  }
 }
 
 /** Local file cleanup once a run ends. Files are retained and the job marked unsettled whenever ownership cannot be proven. */

@@ -55,6 +55,19 @@ export function attachClient(seriesId, res) {
   return attachSseClient(runs, seriesId, res);
 }
 
+async function stopAutopilotLlm(record, runId) {
+  // Keep the active ID until settlement so another cancel can retry if the
+  // runner rejects the stop or has yet to register its execution handle.
+  let code;
+  try {
+    if (await stopRun(runId) || record.activeLlmRunId !== runId) return;
+    code = 'RUN_NOT_REGISTERED';
+  } catch (error) {
+    code = error?.code ?? 'STOP_FAILED';
+  }
+  console.error(`❌ Autopilot LLM stop failed: series=${record.seriesId} autopilotRun=${record.runId} llmRun=${runId} code=${code}`);
+}
+
 export function cancelSeriesAutopilot(seriesId) {
   const run = runs.get(seriesId);
   if (!run || run.finished) return false;
@@ -73,11 +86,7 @@ export function cancelSeriesAutopilot(seriesId) {
   // Direct staged-LLM steps (arc, episode plan, foundation judge/repair) do
   // not have a delegated child coordinator. Stop their concrete run too; the
   // prompt runner reports fallback run ids through the same lifecycle hook.
-  if (run.activeLlmRunId) {
-    stopRun(run.activeLlmRunId).catch((err) => {
-      console.log(`⚠️ autopilot: active LLM stop failed for ${seriesId.slice(0, 12)}: ${err.message}`);
-    });
-  }
+  if (run.activeLlmRunId) void stopAutopilotLlm(run, run.activeLlmRunId);
   return true;
 }
 
@@ -425,7 +434,7 @@ const runLifecycle = (record, role) => ({
     }).catch(() => {});
     // Close the race where Stop lands after createRun but before provider
     // execution registers its child process.
-    if (record.cancelRequested) stopRun(runId).catch(() => {});
+    if (record.cancelRequested) void stopAutopilotLlm(record, runId);
   },
   onRunSettled: (runId) => {
     if (record.activeLlmRunId === runId) record.activeLlmRunId = null;
