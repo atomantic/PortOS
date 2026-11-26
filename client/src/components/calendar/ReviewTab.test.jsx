@@ -1,4 +1,4 @@
-import { fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { act, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { MemoryRouter, useLocation, useNavigate } from 'react-router';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
@@ -15,9 +15,10 @@ const dayEvents = (from, to) => Array.from({ length: to - from }, (_, i) => ({
 
 vi.mock('../../services/apiCalendar.js', () => ({
   getDailyReview: vi.fn(() => Promise.resolve(reviewPage([]))),
+  confirmDailyReviewEvent: vi.fn(),
 }));
 
-import { getDailyReview } from '../../services/apiCalendar.js';
+import { confirmDailyReviewEvent, getDailyReview } from '../../services/apiCalendar.js';
 import ReviewTab from './ReviewTab';
 
 describe('ReviewTab', () => {
@@ -133,6 +134,69 @@ describe('ReviewTab', () => {
     expect(screen.getByText('No events for this date')).toBeTruthy();
     expect(screen.queryByText('No calendar connected')).toBeNull();
     expect(screen.queryByText('Sync your calendar to see events here')).toBeNull();
+  });
+
+  it('keeps goal progress attached to the selected event and review date', async () => {
+    const [first, second, unlinked] = dayEvents(0, 3);
+    first.matchingGoals = [{ goalId: 'goal-a', goalTitle: 'Goal A' }];
+    second.matchingGoals = [{ goalId: 'goal-b', goalTitle: 'Goal B' }];
+    const firstDay = reviewPage([first, second, unlinked]);
+    const afterConfirm = {
+      ...firstDay,
+      confirmations: { [unlinked.id]: { happened: true } },
+    };
+    getDailyReview
+      .mockResolvedValueOnce(firstDay)
+      .mockResolvedValueOnce(afterConfirm)
+      .mockResolvedValueOnce({
+        ...afterConfirm,
+        confirmations: { ...afterConfirm.confirmations, [second.id]: { happened: true } },
+      })
+      .mockResolvedValueOnce(reviewPage([first]));
+    confirmDailyReviewEvent
+      .mockResolvedValueOnce({ confirmation: { happened: true } })
+      .mockResolvedValueOnce({ progressEntry: { goalId: 'goal-b' } });
+
+    render(
+      <MemoryRouter initialEntries={['/calendar/review?reviewDate=2026-01-01']}>
+        <ReviewTab />
+      </MemoryRouter>
+    );
+
+    const confirmButtons = await screen.findAllByRole('button', { name: 'Confirm - it happened' });
+    fireEvent.click(confirmButtons[0]);
+    fireEvent.change(screen.getByLabelText('Note'), { target: { value: 'First draft' } });
+    await act(async () => { fireEvent.click(confirmButtons[1]); });
+
+    expect(confirmDailyReviewEvent).not.toHaveBeenCalled();
+    expect(screen.getByLabelText('Goal').value).toBe('goal-b');
+    expect(screen.getByLabelText('Note').value).toBe(second.title);
+    fireEvent.change(screen.getByLabelText('Note'), { target: { value: 'Second draft' } });
+    fireEvent.change(screen.getByLabelText('Duration in minutes'), { target: { value: '35' } });
+    fireEvent.click(confirmButtons[2]);
+
+    expect(confirmDailyReviewEvent).toHaveBeenNthCalledWith(1, '2026-01-01', {
+      eventId: unlinked.id, happened: true,
+    }, { silent: true });
+    await waitFor(() => expect(screen.getAllByRole('button', { name: 'Confirm - it happened' })).toHaveLength(1));
+    expect(screen.getByLabelText('Note').value).toBe('Second draft');
+    expect(screen.getByLabelText('Duration in minutes').value).toBe('35');
+
+    fireEvent.click(screen.getByRole('button', { name: 'Confirm', exact: true }));
+    expect(confirmDailyReviewEvent).toHaveBeenNthCalledWith(2, '2026-01-01', {
+      eventId: second.id, happened: true, goalId: 'goal-b', durationMinutes: 35, note: 'Second draft',
+    }, { silent: true });
+    await waitFor(() => expect(screen.queryByLabelText('Note')).toBeNull());
+
+    fireEvent.click(screen.getByRole('button', { name: 'Confirm - it happened' }));
+    expect(screen.getByLabelText('Note').value).toBe(first.title);
+    fireEvent.click(screen.getByRole('button', { name: 'Next' }));
+    expect(await screen.findByText(first.title)).toBeTruthy();
+    expect(screen.queryByLabelText('Note')).toBeNull();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Confirm - it happened' }));
+    expect(screen.getByLabelText('Goal').value).toBe('goal-a');
+    expect(confirmDailyReviewEvent).toHaveBeenCalledTimes(2);
   });
 
   describe('paged days', () => {
