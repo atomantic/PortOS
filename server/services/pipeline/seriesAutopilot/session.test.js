@@ -10,7 +10,8 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 // loaded the same way.
 const h = await vi.hoisted(() => import('./seriesAutopilot.testFixtures.js'));
 
-vi.mock('../../runner.js', (importOriginal) => h.runnerFactory(importOriginal));
+const stopRun = vi.hoisted(() => vi.fn());
+vi.mock('../../runner.js', async (importOriginal) => ({ ...await h.runnerFactory(importOriginal), stopRun }));
 vi.mock('../../../lib/fileUtils.js', () => h.fileUtilsFactory());
 vi.mock('crypto', () => h.cryptoFactory());
 vi.mock('../../instanceIdentity.js', () => h.instanceIdentityFactory());
@@ -44,6 +45,27 @@ const autopilot = await import('../seriesAutopilot.js');
 
 beforeEach(() => {
   h.resetFixtures({ autopilot, getDomainBudgetStatus, getSettings });
+  stopRun.mockReset();
+});
+
+it('keeps a canceled run available to retry when stopping the provider fails', async () => {
+  const record = { seriesId: 'test-series', runId: 'test-autopilot', options: {}, clients: [], cancelRequested: true };
+  const { onRunCreated, onRunSettled } = autopilot.__testing.providerOverrideOpts(record);
+  autopilot.runs.set(record.seriesId, record);
+  stopRun.mockRejectedValueOnce(Object.assign(new Error('synthetic stop failure'), { code: 'EPERM' })).mockResolvedValue(true);
+  const log = vi.spyOn(console, 'error').mockImplementation(() => {});
+  try {
+    onRunCreated('test-llm');
+    await vi.waitFor(() => expect(log).toHaveBeenCalledWith(expect.stringContaining('llmRun=test-llm code=EPERM')));
+    expect(record.activeLlmRunId).toBe('test-llm');
+    expect(autopilot.cancelSeriesAutopilot(record.seriesId)).toBe(true);
+    expect(stopRun.mock.calls).toEqual([['test-llm'], ['test-llm']]);
+    onRunSettled('test-llm');
+    expect(record.activeLlmRunId).toBeNull();
+  } finally {
+    log.mockRestore();
+    autopilot.runs.delete(record.seriesId);
+  }
 });
 
 describe('provider/model threading helpers (#1514 provider + #1558 model — both SOFT defaults)', () => {

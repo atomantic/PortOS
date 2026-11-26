@@ -24,6 +24,15 @@ vi.mock('./instances.js', async (importOriginal) => mockNoPeers({}, {
   updatePeer: async () => {},
 }));
 vi.mock('./instanceIdentity.js', () => mockTestIdentity());
+// This suite tests federation of the PortOS-owned file, not its optional
+// mirror into a real MortalLoom iCloud container outside the data root.
+vi.mock('./settings.js', async importOriginal => {
+  const actual = await importOriginal();
+  return { ...actual, getSettings: async (...args) => ({
+    ...await actual.getSettings(...args),
+    mortalloom: { enabled: false }
+  }) };
+});
 vi.mock('./sharing/peerOutboundCoverage.js', () => mockNoPeerSync({}, {
   getOutboundCoverageForPeer: async () => ({ universe: new Set(), pipeline: new Set(), mediaCollections: new Set() }),
 }));

@@ -26,7 +26,7 @@ import { normalizeComposition, invalidateCompositionTiming, withStoredCompositio
 import { normalizeSoundBed } from './soundBed.js';
 import { applyAudioLayersPatch, normalizeAudioLayers } from './audioLayers.js';
 import { normalizeFilmLook } from '../../lib/filmLook.js';
-import { normalizeTemplateEffects } from '../../lib/musicVideo/musicVideoTemplateEffects.js';
+import { DEFAULT_NEW_PROJECT_TEMPLATE_EFFECTS, normalizeTemplateEffects } from '../../lib/musicVideo/musicVideoTemplateEffects.js';
 import { normalizeOverscan } from '../../lib/musicVideo/musicVideoFilmLook.js';
 import { normalizeProductionMedium } from '../../lib/musicVideo/musicVideoProductionMedium.js';
 import { normalizeTitleCard } from '../../lib/musicVideo/musicVideoTitleCard.js';
@@ -179,7 +179,10 @@ export function buildProjectRecord(input, { id, now, blender, sourceFilm }) {
     ...(Array.isArray(input.audioLayers) && input.audioLayers.length ? { audioLayers: normalizeAudioLayers(input.audioLayers) } : {}),
     // The finishing film look every preview, render and baked still is viewed through; null = none.
     filmLook: input.filmLook ? normalizeFilmLook(input.filmLook) : null,
-    ...(input.templateEffects ? { templateEffects: normalizeTemplateEffects(input.templateEffects) } : {}),
+    // Stamp restrained defaults onto new videos while leaving legacy records without `templateEffects` untouched.
+    templateEffects: input.templateEffects === null
+      ? null
+      : normalizeTemplateEffects({ ...DEFAULT_NEW_PROJECT_TEMPLATE_EFFECTS, ...input.templateEffects }),
     ...(overscan != null ? { overscan } : {}),
     // The handmade medium (stepped holds, compositor-only lettering); null = none.
     ...(normalizeProductionMedium(input.productionMedium) ? { productionMedium: normalizeProductionMedium(input.productionMedium) } : {}),

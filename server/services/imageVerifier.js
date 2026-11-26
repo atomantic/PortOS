@@ -15,9 +15,9 @@ import {
   DEFAULT_VERIFICATION_PROFILES,
   verificationProfileSchema,
   buildMultiAspectVerificationPrompt,
-  buildDefectConfirmationPrompt,
+  buildBatchDefectConfirmationPrompt,
   parseVerificationResponse,
-  parseConfirmationResponse,
+  parseBatchConfirmationResponse,
 } from '../lib/imageVerification.js';
 
 export const isAdvisoryVisionReviewer = isOllamaBackedProvider;
@@ -197,73 +197,60 @@ export async function verifyImage({
   const { runPromptThroughProvider, assertVisionRunUsedImages } = await import('./promptRunner.js');
   const { isToolFreeOneShotProvider } = await import('../lib/provider/providerVendors.js');
 
-  const toolFree = isToolFreeOneShotProvider(reviewer.provider);
+  const runVision = async (reviewPrompt, reviewSource) => {
+    const result = await runPromptThroughProvider({
+      provider: { ...reviewer.provider, thinking: false },
+      model: reviewer.model,
+      prompt: reviewPrompt,
+      screenshots: [resolvedPath],
+      source: reviewSource,
+      timeout: Math.min(reviewer.provider.timeout || 120000, 120000),
+      toolFree: isToolFreeOneShotProvider(reviewer.provider),
+      allowFallback: false,
+      beforeExecute,
+    });
+    assertVisionRunUsedImages(result, reviewer.provider);
+    return result;
+  };
 
   // Pass 1: Multi-Aspect Scan
   const pass1Prompt = buildMultiAspectVerificationPrompt({ profile, prompt, isImport });
-  const result1 = await runPromptThroughProvider({
-    provider: { ...reviewer.provider, thinking: false },
-    model: reviewer.model,
-    prompt: pass1Prompt,
-    screenshots: [resolvedPath],
-    source,
-    timeout: Math.min(reviewer.provider.timeout || 120000, 120000),
-    toolFree,
-    allowFallback: false,
-    beforeExecute,
-  });
-  assertVisionRunUsedImages(result1, reviewer.provider);
-
+  const result1 = await runVision(pass1Prompt, source);
   const parsed = parseVerificationResponse(result1.text);
-  const advisory = isAdvisoryVisionReviewer(reviewer.provider);
 
   // Pass 2: Skeptical Defect Confirmation
   if (parsed.defects.length > 0) {
-    const confirmedDefects = [];
-    for (const defect of parsed.defects) {
-      try {
-        const pass2Prompt = buildDefectConfirmationPrompt({
-          claim: defect.claim,
-          dimension: defect.dimension,
-          region: defect.region,
-          prompt,
-        });
+    const pass2Prompt = buildBatchDefectConfirmationPrompt({ defects: parsed.defects, prompt });
+    const result2 = await runVision(pass2Prompt, `${source}-confirmation`).catch(() => null);
 
-        const result2 = await runPromptThroughProvider({
-          provider: { ...reviewer.provider, thinking: false },
-          model: reviewer.model,
-          prompt: pass2Prompt,
-          screenshots: [resolvedPath],
-          source: `${source}-confirmation`,
-          timeout: Math.min(reviewer.provider.timeout || 120000, 120000),
-          toolFree,
-          allowFallback: false,
-          beforeExecute,
-        });
-        assertVisionRunUsedImages(result2, reviewer.provider);
+    if (result2) {
+      const { verdicts } = parseBatchConfirmationResponse(result2.text, parsed.defects.length);
+      const byIndex = new Map(verdicts.map((verdict) => [verdict.index, verdict]));
+      const claims = parsed.defects;
 
-        const confirmation = parseConfirmationResponse(result2.text);
-        if (confirmation.confirmed) {
-          confirmedDefects.push({
-            ...defect,
-            confirmed: true,
-            confirmationNote: confirmation.note,
-            region: confirmation.region || defect.region,
-          });
-        } else {
-          // False alarm: Demote corresponding check to unverified
-          parsed.checks = parsed.checks.map((c) => (c.dimension === defect.dimension
-            ? { ...c, status: 'unverified', note: `Unconfirmed defect claim: ${c.note || defect.claim}` }
-            : c));
-        }
-      } catch (_err) {
-        if (!advisory) confirmedDefects.push(defect);
-      }
+      // The first pass emits failed checks as claims in order, then appends any hand-only claim.
+      let claimIndex = 0;
+      parsed.checks = parsed.checks.map((check) => {
+        if (check.status !== 'fail') return check;
+        const index = claimIndex++;
+        if (byIndex.get(index)?.confirmed) return check;
+        return { ...check, status: 'unverified', note: `Unconfirmed defect claim: ${check.note || claims[index].claim}` };
+      });
+      parsed.defects = claims.flatMap((defect, index) => {
+        const verdict = byIndex.get(index);
+        return verdict?.confirmed ? [{
+          ...defect,
+          confirmationNote: verdict.note,
+          region: verdict.region || defect.region,
+        }] : [];
+      });
+    } else if (isAdvisoryVisionReviewer(reviewer.provider)) {
+      // Keep first-pass checks but drop advisory defects when the confirmation run fails.
+      parsed.defects = [];
     }
 
-    parsed.defects = confirmedDefects;
     const hasRemainingCritical = parsed.checks.some((c) => c.status === 'fail' && c.severity === 'critical')
-      || confirmedDefects.some((d) => d.severity === 'critical');
+      || parsed.defects.some((d) => d.severity === 'critical');
     parsed.overallVerdict = hasRemainingCritical ? 'fail' : 'pass';
   }
 

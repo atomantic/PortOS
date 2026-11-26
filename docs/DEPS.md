@@ -36,6 +36,7 @@ Before removing a Tier 3 candidate, run a transitive-dep check (`npm ls <pkg>`).
 | `sharp` | 1 | KEEP | image processing | Native, widely-audited |
 | `socket.io` | 1 | KEEP | realtime | Foundational |
 | `socket.io-client` | 1 | KEEP | server-to-client | Paired with socket.io |
+| `socks` | 1 | KEEP | resumable artifact downloads | Negotiates SOCKS5 tunnels, including proxy authentication and remote DNS |
 | `three` | 1 | KEEP | code film rendering | Supplies the Three.js runtime for generated film pages |
 | `ws` | 1 | KEEP | remote desktop + browser WebSockets | Foundational WebSocket transport; also used transitively by Socket.IO |
 | `zod` | 1 | KEEP | input validation | Widely-audited |

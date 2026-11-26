@@ -170,10 +170,7 @@ export default function BriefingTab() {
     if (generationPending || generationInFlightRef.current) return;
     generationInFlightRef.current = true;
     try {
-      const result = await triggerCosJob('job-daily-briefing', { silent: true });
-      if (!result || result.success === false || (result.status === 'skipped' && !result.duplicate)) {
-        throw new Error(result?.reason || 'The briefing could not be generated');
-      }
+      await triggerCosJob('job-daily-briefing', { silent: true });
       setGenerationPending(true);
       await refetch();
     } finally {

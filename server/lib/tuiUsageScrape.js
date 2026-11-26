@@ -113,6 +113,7 @@ export async function scrapeTuiUsage({
   const hardStop = new Promise((resolve) => { hardTimer = setTimeout(resolve, timeoutMs); });
   let timedOut = false;
   hardStop.then(() => { timedOut = true; });
+  const isActive = () => !exited && !timedOut;
 
   // Wait until the screen stops changing (no PTY output for `idleMs`), bounded by `capMs`; each await also races the hard timeout. Callers reset `lastDataAt` after a keystroke so idle is measured from that input.
   // `requireOutput` guards the render phase: a slow sign-in/quota lookup can stay silent for >idleMs, and the initial silence would read as "done" and kill the TUI before its panel renders; when set, idle counts
@@ -121,7 +122,7 @@ export async function scrapeTuiUsage({
   const waitForIdle = async (capMs, { requireOutput = false, ready = null } = {}) => {
     const start = Date.now();
     const deadline = start + capMs;
-    while (!exited && !timedOut && Date.now() < deadline) {
+    while (isActive() && Date.now() < deadline) {
       const sawOutput = lastDataAt > start;
       const idle = Date.now() - lastDataAt >= idleMs;
       if ((!requireOutput || sawOutput) && idle && (!ready || ready())) return;
@@ -134,15 +135,14 @@ export async function scrapeTuiUsage({
     await waitForIdle(readyCapMs, { requireOutput: true });
 
     // Dismiss the first-run gate (agy: "Do you trust this folder?", grok: start menu): one Enter clears either, and on a trusted sandbox it is a harmless empty submit. Wait for the repaint.
-    if (!exited) { pty.write(SUBMIT_KEY); lastDataAt = Date.now(); }
+    if (isActive()) { pty.write(SUBMIT_KEY); lastDataAt = Date.now(); }
     await waitForIdle(primerCapMs);
 
     // Bracketed-paste the command so multi-word input (`/usage show`) lands atomically, then submit and wait for the panel.
-    if (!exited) {
+    if (isActive()) {
       pty.write(`\x1b[200~${slashCommand}\x1b[201~`);
       await Promise.race([sleep(400), hardStop]);
-      pty.write(SUBMIT_KEY);
-      lastDataAt = Date.now();
+      if (isActive()) { pty.write(SUBMIT_KEY); lastDataAt = Date.now(); }
     }
     await waitForIdle(renderCapMs, {
       requireOutput: true,

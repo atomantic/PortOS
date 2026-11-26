@@ -680,6 +680,27 @@ export async function rejectMemory(id, options = {}) {
 // Search Operations
 // =============================================================================
 
+// Tally and page the same filtered matches in one snapshot. The left join
+// preserves the total when the requested page is empty.
+async function querySearchPage({ score, where, params, limit, offset, includeSourceAgent }) {
+  const { rows } = await query(
+    `WITH hits AS (
+       SELECT id, ${score} AS score FROM memories WHERE ${where}
+     ), tally AS (
+       SELECT COUNT(*) AS total FROM hits
+     ), page AS (
+       SELECT id, score FROM hits ORDER BY score DESC, id
+       LIMIT $${params.length + 1} OFFSET $${params.length + 2}
+     )
+     SELECT tally.total, page.score, m.id, m.type, m.category, m.tags, m.summary,
+            m.importance, m.created_at, m.status, m.source_app_id${includeSourceAgent ? ', m.source_agent_id' : ''}
+     FROM tally LEFT JOIN page ON TRUE LEFT JOIN memories m ON m.id = page.id
+     ORDER BY page.score DESC, page.id`,
+    [...params, limit, offset]
+  );
+  return { total: Number(rows[0].total), rows: rows.filter(row => row.id !== null) };
+}
+
 /**
  * Search memories semantically using pgvector cosine similarity
  */
@@ -690,8 +711,8 @@ export async function searchMemories(queryEmbedding, options = {}) {
   const limit = options.limit || 20;
 
   const conditions = ["status = 'active'"];
-  const params = [arrayToPgvector(queryEmbedding), minRelevance, limit];
-  let paramIdx = 4;
+  const params = [arrayToPgvector(queryEmbedding), minRelevance];
+  let paramIdx = 3;
 
   if (options.types?.length > 0) {
     conditions.push(`type = ANY($${paramIdx++})`);
@@ -714,27 +735,18 @@ export async function searchMemories(queryEmbedding, options = {}) {
 
   if (options.excludePersistentMind) conditions.push(excludePersistentMindWhere(params));
 
-  const where = conditions.join(' AND ');
+  // pgvector's cosine distance is 1 minus cosine similarity.
+  const score = '1 - (embedding <=> $1)';
+  const { total, rows } = await querySearchPage({
+    score,
+    where: `embedding IS NOT NULL AND ${conditions.join(' AND ')} AND ${score} >= $2`,
+    params,
+    limit,
+    offset: options.offset ?? 0
+  });
+  const memories = rows.map(row => ({ ...rowToMeta(row), similarity: parseFloat(row.score) }));
 
-  // Use pgvector cosine distance operator <=>
-  // Cosine distance = 1 - cosine_similarity, so similarity = 1 - distance
-  const result = await query(
-    `SELECT id, type, category, tags, summary, importance, created_at, status, source_app_id,
-            1 - (embedding <=> $1) AS similarity
-     FROM memories
-     WHERE embedding IS NOT NULL AND ${where}
-       AND 1 - (embedding <=> $1) >= $2
-     ORDER BY embedding <=> $1
-     LIMIT $3`,
-    params
-  );
-
-  const memories = result.rows.map(row => ({
-    ...rowToMeta(row),
-    similarity: parseFloat(row.similarity)
-  }));
-
-  return { total: memories.length, memories };
+  return { total, memories };
 }
 
 /**
@@ -742,7 +754,7 @@ export async function searchMemories(queryEmbedding, options = {}) {
  * Uses Reciprocal Rank Fusion (RRF) to merge rankings
  */
 export async function hybridSearchMemories(queryText, queryEmbedding, options = {}) {
-  const { limit = 20, minRelevance = 0.5, ftsWeight = options.bm25Weight ?? 0.4, vectorWeight = 0.6, lexicalMatch = 'all' } = options;
+  const { limit = 20, offset, minRelevance = 0.5, ftsWeight = options.bm25Weight ?? 0.4, vectorWeight = 0.6, lexicalMatch = 'all' } = options;
   const RRF_K = 60;
 
   const filterConditions = ["status = 'active'"];
@@ -787,6 +799,23 @@ export async function hybridSearchMemories(queryText, queryEmbedding, options = 
     const tsQuery = lexicalMatch === 'any'
       ? `replace(plainto_tsquery('english', $${queryParam})::text, ' & ', ' | ')::tsquery`
       : `websearch_to_tsquery('english', $${queryParam})`;
+    // An explicit lexical page uses full-match ranks and totals. Mixed retrieval
+    // callers still fuse the bounded candidate lists below.
+    if (!queryEmbedding && offset !== undefined) {
+      const { total, rows } = await querySearchPage({
+        score: `ts_rank(search_tsv, ${tsQuery})`,
+        where: `${filterWhere} AND search_tsv @@ ${tsQuery}`,
+        params: [...filterParams, queryText],
+        limit,
+        offset,
+        includeSourceAgent: true
+      });
+      const memories = rows.map((row, index) => {
+        const ftsRank = offset + index + 1;
+        return { ...rowToMeta(row), ftsRank, vectorRank: null, rrfScore: ftsWeight / (RRF_K + ftsRank), searchMethod: 'fts' };
+      });
+      return { total, memories };
+    }
     searches.push(query(
       `SELECT id, type, category, tags, summary, importance, created_at, status, source_app_id, source_agent_id,
               ts_rank(search_tsv, ${tsQuery}) AS fts_score

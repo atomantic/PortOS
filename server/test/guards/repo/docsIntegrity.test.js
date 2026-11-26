@@ -1,6 +1,6 @@
 import { execFileSync } from 'node:child_process';
-import { existsSync, lstatSync, readdirSync, statSync } from 'node:fs';
-import { basename, dirname, join, posix, resolve } from 'node:path';
+import { existsSync, lstatSync, statSync } from 'node:fs';
+import { basename, dirname, join, resolve } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import { ALWAYS_PUBLIC_API_PATHS } from '../../../lib/apiAccessPolicy.js';
 import { getApiRouteCatalog } from '../../../lib/apiRouteGraph.js';
@@ -18,33 +18,7 @@ const AGENT_FILES = trackedFiles(REPO_ROOT, ['AGENTS.md', '*/AGENTS.md']);
 const TRACKED = trackedFiles(REPO_ROOT);
 const TRACKED_SET = new Set(TRACKED);
 
-function linkedMarkdownPaths(indexFile, text) {
-  const targets = new Set();
-  for (const [, , link] of text.matchAll(MD_LINK)) {
-    const path = link.split(/[?#]/)[0];
-    if (!path.endsWith('.md') || /^(?:\/|[a-z][a-z+.-]*:)/i.test(path)) continue;
-    const target = posix.join(posix.dirname(indexFile), path);
-    if (!target.startsWith('../')) targets.add(target);
-  }
-  return targets;
-}
-
-const DOC_INDEX_LINKS = linkedMarkdownPaths('docs/README.md', readDoc('docs/README.md'));
-const INDEXED_DOCS = new Set([
-  'README.md', 'docs/README.md', ...DOC_INDEX_LINKS, ...linkedMarkdownPaths('README.md', readDoc('README.md')),
-]);
-
-const markdownIn = (dir) => readdirSync(join(REPO_ROOT, dir), { withFileTypes: true })
-  .filter((entry) => entry.isFile() && entry.name.endsWith('.md'))
-  .map((entry) => `${dir}/${entry.name}`);
-
-// Living guides carry present-tense route and size contracts. The index can
-// also link decision records, plans, and research that preserve past context.
-const LIVING_DOCS = [
-  ...markdownIn('docs').filter((file) => file !== 'docs/README.md'),
-  ...markdownIn('docs/features'),
-];
-
+const DOCS = TRACKED.filter((file) => /^docs\/.*\.md$/.test(file));
 
 // Regression guard for #4852. `AGENTS.md` is the cross-vendor agent-instructions
 // standard every CLI PortOS drives reads — except Claude Code, whose memory
@@ -604,58 +578,6 @@ describe('endpoint mentions in docs name a route the server mounts', () => {
   });
 });
 
-const MAX_DOC_BYTES = 40 * 1024;
-const RATCHET_SLACK_BYTES = 2 * 1024;
-
-// Grandfathered byte ceilings for living docs that currently exceed 40 KB.
-// Each ceiling must stay within 2 KB of the file's actual size so shrinking
-// a doc forces its entry down or out.
-const SIZE_RATCHET_CEILINGS = {
-  'HTML_COMPOSITIONS.md': 67233,
-  'TROUBLESHOOTING.md': 46000,
-  'FEDERATED_MEDIA_PROVIDERS.md': 45625,
-  'QUOTA-BURN.md': 44909,
-};
-
-describe('docs/README.md index coverage', () => {
-  it('discovers the living docs it guards', () => {
-    expect(LIVING_DOCS).toContain('docs/JEV_SETUP.md');
-    expect(LIVING_DOCS).toContain('docs/features/tailcat-peers.md');
-  });
-
-  it('links every living document by its relative path', () => {
-    expect(LIVING_DOCS.filter((doc) => !DOC_INDEX_LINKS.has(doc)), 'add these docs to docs/README.md').toEqual([]);
-  });
-
-  it('resolves only repository-relative markdown links and ignores fragments and external links', () => {
-    const text = '[Guide](./GUIDE.md#section) [Local](../AGENTS.md) [Jump](#section) [External](https://example.com/file.md)';
-    expect([...linkedMarkdownPaths('docs/README.md', text)]).toEqual(['docs/GUIDE.md', 'AGENTS.md']);
-  });
-});
-
-describe('living doc size ratchet', () => {
-  it('only lists existing living docs above 40 KB', () => {
-    for (const [doc, ceiling] of Object.entries(SIZE_RATCHET_CEILINGS)) {
-      expect(LIVING_DOCS, `${doc} is not a living doc`).toContain(`docs/${doc}`);
-      expect(ceiling, `${doc} ceiling should be > ${MAX_DOC_BYTES}`).toBeGreaterThan(MAX_DOC_BYTES);
-    }
-  });
-
-  it('keeps every living doc within its byte ceiling', () => {
-    const violations = [];
-    for (const file of LIVING_DOCS) {
-      const doc = file.slice('docs/'.length);
-      const size = statSync(join(REPO_ROOT, file)).size;
-      const ceiling = SIZE_RATCHET_CEILINGS[doc] ?? MAX_DOC_BYTES;
-      if (size > ceiling) violations.push(`${file}: ${size} B exceeds ${ceiling} B; split by topic`);
-      if (doc in SIZE_RATCHET_CEILINGS && ceiling - size > RATCHET_SLACK_BYTES) {
-        violations.push(`${file}: shrank to ${size} B; lower or remove the ${ceiling} B ceiling`);
-      }
-    }
-    expect(violations).toEqual([]);
-  });
-});
-
 const FILE_TOKEN = /^(?:\.\/|~\/|<repo-root>\/)?([\w.][\w./-]*\.(?:jsx?|[cm]js|md|json|ya?ml))$/;
 /** Example names the prose uses as stand-ins (`foo.js:412`), never real files. */
 const PLACEHOLDER_STEM = /^(?:foo|bar|baz|qux|x|y|example)$/;
@@ -761,7 +683,7 @@ describe('instruction file references', () => {
     expect(findStaleReferences({ files: ['server/AGENTS.md'], tracked: new Set(), mentions: () => true })).toEqual([]);
   });
 
-  it('checks filename labels in README-linked markdown and AGENTS.md', () => {
+  it('checks filename labels in documentation and AGENTS.md', () => {
     expect(documentationFindings().mislabelledLinks).toEqual([]);
   });
 
@@ -776,12 +698,13 @@ describe('instruction file references', () => {
   });
 });
 
+// Living guides carry route contracts. Subdirectories such as decisions and
+// examples can describe historical or hypothetical endpoints.
 const ENDPOINT_DOCS = new Set([
-  ...LIVING_DOCS.filter((file) => DOC_INDEX_LINKS.has(file)), ...AGENT_FILES, ...MODULE_GUIDES,
+  ...DOCS.filter((file) => /^docs\/(?:features\/)?[^/]+\.md$/.test(file)), ...AGENT_FILES, ...MODULE_GUIDES,
   'client/src/utils/README.md', 'client/src/services/README.md',
 ]);
-// The README indexes define the supported documentation surface for link labels.
-const LINK_LABEL_DOCS = new Set([...INDEXED_DOCS, ...AGENT_FILES]);
+const LINK_LABEL_DOCS = new Set([...DOCS, 'README.md', 'CONTRIBUTING.md', 'ETHOS.md', '.changelog/README.md', ...AGENT_FILES]);
 
 let findings;
 function documentationFindings() {

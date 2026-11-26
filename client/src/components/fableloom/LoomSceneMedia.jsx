@@ -1,3 +1,10 @@
+import { useState } from 'react';
+import { AlertCircle, ImagePlus, Loader2, Sparkles, Upload, Video, XCircle } from 'lucide-react';
+import { FAL_H3_MAX_FREE_ALLOWANCE_NOTE } from '../../lib/falVideoHandoff.js';
+import GalleryVideoPicker from '../videoGen/GalleryVideoPicker';
+import LoomSceneVideoSlot from './LoomSceneVideoSlot';
+import LoomSceneStillSlot from './LoomSceneStillSlot';
+
 /**
  * FableLoom's shared scene-media surface.
  *
@@ -6,12 +13,6 @@
  * frame while rendering) remains visible. Generation controls never disappear,
  * and queued/running/failed/canceled states stay visible after the POST returns.
  */
-
-import { useState } from 'react';
-import { AlertCircle, ImagePlus, Loader2, Sparkles, Upload, Video, XCircle } from 'lucide-react';
-import { FAL_H3_MAX_FREE_ALLOWANCE_NOTE } from '../../lib/falVideoHandoff.js';
-import MediaImage from '../MediaImage';
-import GalleryVideoPicker from '../videoGen/GalleryVideoPicker';
 
 const ACTIVE_STATUSES = new Set(['submitting', 'queued', 'running', 'unknown']);
 
@@ -37,6 +38,22 @@ const jobStateLabel = (kind, job) => {
     ? `Starting ${noun}…`
     : `Generating ${noun}${pct !== null ? ` ${pct}%` : '…'}`;
 };
+
+function getSceneMediaNotice(imageJob, videoJob) {
+  const failedJob = videoJob?.status === 'failed'
+    ? { kind: 'video', ...videoJob }
+    : imageJob?.status === 'failed'
+      ? { kind: 'image', ...imageJob }
+      : null;
+  const canceledJob = !failedJob && (videoJob?.status === 'canceled'
+    ? { kind: 'video', ...videoJob }
+    : imageJob?.status === 'canceled'
+      ? { kind: 'image', ...imageJob }
+      : null);
+  return failedJob || canceledJob;
+}
+
+const stopNodeActivation = (event) => event.stopPropagation();
 
 export default function LoomSceneMedia({
   node,
@@ -66,17 +83,7 @@ export default function LoomSceneMedia({
     || (videoActive ? 'A scene video is already rendering' : '');
   const activeJob = videoActive ? videoJob : imageActive ? imageJob : null;
   const activeKind = videoActive ? 'video' : imageActive ? 'image' : null;
-  const failedJob = videoJob?.status === 'failed'
-    ? { kind: 'video', ...videoJob }
-    : imageJob?.status === 'failed'
-      ? { kind: 'image', ...imageJob }
-      : null;
-  const canceledJob = !failedJob && (videoJob?.status === 'canceled'
-    ? { kind: 'video', ...videoJob }
-    : imageJob?.status === 'canceled'
-      ? { kind: 'image', ...imageJob }
-      : null);
-  const noticeJob = failedJob || canceledJob;
+  const noticeJob = getSceneMediaNotice(imageJob, videoJob);
   const noticeLabel = noticeJob && jobStateLabel(noticeJob.kind, noticeJob);
   const activeLabel = activeKind && jobStateLabel(activeKind, activeJob);
   const title = node.title || 'Scene';
@@ -86,17 +93,7 @@ export default function LoomSceneMedia({
   // context with an empty spinner.
   const showFinalVideo = Boolean(node.videoHistoryId) && !videoActive;
   const liveFrame = activeJob?.currentImage || null;
-  const showStill = !showFinalVideo && !liveFrame && Boolean(node.image);
-  const showSpinner = !showFinalVideo && !liveFrame && !showStill && Boolean(activeJob);
 
-  // Scene cards are too narrow for three worded chips ("Regen…", "Gener…"),
-  // so compact actions are icon buttons; the label stays as the accessible
-  // name and the `title` tooltip explains the action.
-  const labelClass = compact ? 'sr-only' : 'truncate';
-  const stopNodeActivation = (event) => event.stopPropagation();
-  const buttonClass = compact
-    ? 'inline-flex min-h-[26px] min-w-0 items-center justify-center rounded border border-port-border bg-port-bg/80 px-1.5 py-1 text-[9px] text-port-text hover:border-port-accent hover:text-port-accent disabled:opacity-45'
-    : 'inline-flex items-center justify-center gap-1.5 rounded border border-port-border px-2.5 py-1.5 text-xs text-port-text hover:border-port-accent hover:text-port-accent disabled:opacity-45';
   // Compact media still lives inside an SVG foreignObject. Keep its overlapping
   // preview/status layers in one grid cell: WebKit handles that more reliably
   // than positioned HTML descendants, while the canvas owns card coordinates.
@@ -112,121 +109,174 @@ export default function LoomSceneMedia({
     <div className={compact ? 'flex h-full w-full min-h-0 min-w-0 flex-col gap-1' : 'space-y-2'}>
       <div className={previewClass}>
         {showFinalVideo ? (
-          <video
-            src={`/data/videos/${encodeURIComponent(node.videoHistoryId)}.mp4`}
-            aria-label={`${title} video preview`}
-            className={`${previewItemClass} block h-full w-full object-cover`}
-            controls={!compact}
-            autoPlay={compact}
-            muted={compact}
-            loop={compact}
-            playsInline
-            preload={compact ? 'metadata' : 'none'}
-            onPointerDown={stopNodeActivation}
-            onClick={stopNodeActivation}
+          <LoomSceneVideoSlot
+            node={node}
+            compact={compact}
+            title={title}
+            previewItemClass={previewItemClass}
+            onInteract={stopNodeActivation}
           />
-        ) : liveFrame ? (
-          <img
-            src={`data:image/png;base64,${liveFrame}`}
-            alt={`${title} ${activeKind} generation preview`}
-            className={`${previewItemClass} block h-full w-full object-cover`}
-          />
-        ) : showStill ? (
-          <MediaImage
-            src={`/data/images/${node.image}`}
-            alt={`${title} image preview`}
-            className={`${previewItemClass} block h-full w-full object-cover`}
-          />
-        ) : showSpinner ? (
-          <div className={`${previewItemClass} grid h-full min-h-16 place-items-center text-port-accent`}>
-            <Loader2 size={compact ? 16 : 22} className="animate-spin" aria-hidden="true" />
-          </div>
         ) : (
-          <div className={`${previewItemClass} flex h-full min-h-16 flex-col items-center justify-center gap-1 text-port-text-muted`}>
-            <ImagePlus size={compact ? 15 : 22} aria-hidden="true" />
-            <span className={compact ? 'text-[9px]' : 'text-xs'}>No scene media yet</span>
-          </div>
+          <LoomSceneStillSlot
+            node={node}
+            title={title}
+            activeKind={activeKind}
+            liveFrame={liveFrame}
+            generating={Boolean(activeJob)}
+            compact={compact}
+            previewItemClass={previewItemClass}
+          />
         )}
-
-        {activeLabel && (
-          <div className={`port-media-overlay ${noticePositionClass} px-2 py-1 text-center text-[9px] font-medium`} role="status">
-            {activeLabel}
-          </div>
-        )}
-        {noticeLabel && (
-          <div
-            className={`port-media-overlay-strong ${noticePositionClass} flex items-center justify-center gap-1 px-2 py-1 text-[9px] font-medium text-port-error`}
-            role={compact ? 'alert' : undefined}
-            title={noticeJob.error || noticeLabel}
-          >
-            <AlertCircle size={10} aria-hidden="true" /> {noticeLabel}
-          </div>
-        )}
+        <SceneMediaPreviewStatus
+          compact={compact}
+          activeLabel={activeLabel}
+          noticeJob={noticeJob}
+          noticeLabel={noticeLabel}
+          noticePositionClass={noticePositionClass}
+        />
       </div>
 
-      <div
-        className={`grid shrink-0 gap-1 ${compact ? 'grid-cols-3' : 'grid-cols-2'}`}
-        onPointerDown={stopNodeActivation}
-        onClick={stopNodeActivation}
-        onKeyDown={stopNodeActivation}
+      <SceneMediaActions
+        node={node}
+        compact={compact}
+        imageActive={imageActive}
+        videoActive={videoActive}
+        videoJob={videoJob}
+        generationDisabled={generationDisabled}
+        generationDisabledReason={generationDisabledReason}
+        onGenerateImage={onGenerateImage}
+        onGenerateVideo={onGenerateVideo}
+        onAutomateFalVideo={onAutomateFalVideo}
+        falActive={falActive}
+        freeToolDisabled={freeToolDisabled}
+        freeToolDisabledReason={freeToolDisabledReason}
+        onCancelFalVideo={onCancelFalVideo}
+        onAttachVideo={onAttachVideo}
+        setVideoPickerOpen={setVideoPickerOpen}
+      />
+
+      <SceneMediaNotices
+        node={node}
+        compact={compact}
+        noticeJob={noticeJob}
+        noticeLabel={noticeLabel}
+        generationDisabledReason={generationDisabledReason}
+        onAutomateFalVideo={onAutomateFalVideo}
+        falRequiresImage={falRequiresImage}
+        onAttachVideo={onAttachVideo}
+        setVideoPickerOpen={setVideoPickerOpen}
+        videoPickerOpen={videoPickerOpen}
+      />
+    </div>
+  );
+}
+
+function SceneMediaPreviewStatus({ compact, activeLabel, noticeJob, noticeLabel, noticePositionClass }) {
+  return (
+    <>
+      {activeLabel && (
+        <div className={`port-media-overlay ${noticePositionClass} px-2 py-1 text-center text-[9px] font-medium`} role="status">
+          {activeLabel}
+        </div>
+      )}
+      {noticeLabel && (
+        <div
+          className={`port-media-overlay-strong ${noticePositionClass} flex items-center justify-center gap-1 px-2 py-1 text-[9px] font-medium text-port-error`}
+          role={compact ? 'alert' : undefined}
+          title={noticeJob.error || noticeLabel}
+        >
+          <AlertCircle size={10} aria-hidden="true" /> {noticeLabel}
+        </div>
+      )}
+    </>
+  );
+}
+
+function SceneMediaActions({
+  node, compact, imageActive, videoActive, videoJob, generationDisabled,
+  generationDisabledReason, onGenerateImage, onGenerateVideo, onAutomateFalVideo, falActive,
+  freeToolDisabled, freeToolDisabledReason, onCancelFalVideo, onAttachVideo,
+  setVideoPickerOpen,
+}) {
+  // Scene cards are too narrow for three worded chips ("Regen…", "Gener…"),
+  // so compact actions are icon buttons; the label stays as the accessible
+  // name and the `title` tooltip explains the action.
+  const labelClass = compact ? 'sr-only' : 'truncate';
+  const buttonClass = compact
+    ? 'inline-flex min-h-[26px] min-w-0 items-center justify-center rounded border border-port-border bg-port-bg/80 px-1.5 py-1 text-[9px] text-port-text hover:border-port-accent hover:text-port-accent disabled:opacity-45'
+    : 'inline-flex items-center justify-center gap-1.5 rounded border border-port-border px-2.5 py-1.5 text-xs text-port-text hover:border-port-accent hover:text-port-accent disabled:opacity-45';
+  return (
+    <div
+      className={`grid shrink-0 gap-1 ${compact ? 'grid-cols-3' : 'grid-cols-2'}`}
+      onPointerDown={stopNodeActivation}
+      onClick={stopNodeActivation}
+      onKeyDown={stopNodeActivation}
+    >
+      <button
+        type="button"
+        onClick={() => onGenerateImage?.(node)}
+        disabled={imageActive || generationDisabled || !onGenerateImage}
+        title={generationDisabledReason || (node.image ? 'Regenerate scene image' : 'Generate scene image')}
+        className={buttonClass}
       >
+        {imageActive ? <Loader2 size={compact ? 13 : 12} className="animate-spin" /> : <ImagePlus size={compact ? 13 : 12} />}
+        <span className={labelClass}>{imageActive ? 'Generating image' : node.image ? 'Regenerate image' : 'Generate image'}</span>
+      </button>
+      <button
+        type="button"
+        onClick={() => onGenerateVideo?.(node)}
+        disabled={videoActive || generationDisabled || !onGenerateVideo}
+        title={generationDisabledReason || (node.videoHistoryId ? 'Regenerate scene video' : 'Generate scene video')}
+        className={buttonClass}
+      >
+        {videoActive ? <Loader2 size={compact ? 13 : 12} className="animate-spin" /> : <Video size={compact ? 13 : 12} />}
+        <span className={labelClass}>{videoActive ? 'Generating video' : node.videoHistoryId ? 'Regenerate video' : 'Generate video'}</span>
+      </button>
+      <button
+        type="button"
+        onClick={() => onAutomateFalVideo?.(node)}
+        disabled={freeToolDisabled || !onAutomateFalVideo}
+        title={freeToolDisabledReason || 'Upload the scene image and prompt to fal.ai H3 Max, then save the finished video here'}
+        className={buttonClass}
+      >
+        {falActive
+          ? <Loader2 size={compact ? 13 : 12} className="animate-spin" aria-hidden="true" />
+          : <Sparkles size={compact ? 13 : 12} aria-hidden="true" />}
+        <span className={labelClass}>{falActive ? 'Running fal.ai' : 'Automate fal.ai'}</span>
+      </button>
+      {!compact && falActive && videoJob?.jobId && onCancelFalVideo && (
         <button
           type="button"
-          onClick={() => onGenerateImage?.(node)}
-          disabled={imageActive || generationDisabled || !onGenerateImage}
-          title={generationDisabledReason || (node.image ? 'Regenerate scene image' : 'Generate scene image')}
+          onClick={() => onCancelFalVideo(node, videoJob)}
+          title="Stop this fal.ai render and free the browser queue"
           className={buttonClass}
         >
-          {imageActive ? <Loader2 size={compact ? 13 : 12} className="animate-spin" /> : <ImagePlus size={compact ? 13 : 12} />}
-          <span className={labelClass}>{imageActive ? 'Generating image' : node.image ? 'Regenerate image' : 'Generate image'}</span>
+          <XCircle size={12} aria-hidden="true" />
+          <span className="truncate">Cancel fal.ai</span>
         </button>
+      )}
+      {!compact && (
         <button
           type="button"
-          onClick={() => onGenerateVideo?.(node)}
-          disabled={videoActive || generationDisabled || !onGenerateVideo}
-          title={generationDisabledReason || (node.videoHistoryId ? 'Regenerate scene video' : 'Generate scene video')}
+          onClick={() => setVideoPickerOpen(true)}
+          disabled={!onAttachVideo}
+          title="Attach a downloaded fal MP4 or another video from Media History"
           className={buttonClass}
         >
-          {videoActive ? <Loader2 size={compact ? 13 : 12} className="animate-spin" /> : <Video size={compact ? 13 : 12} />}
-          <span className={labelClass}>{videoActive ? 'Generating video' : node.videoHistoryId ? 'Regenerate video' : 'Generate video'}</span>
+          <Upload size={12} aria-hidden="true" />
+          <span className="truncate">Attach video</span>
         </button>
-        <button
-          type="button"
-          onClick={() => onAutomateFalVideo?.(node)}
-          disabled={freeToolDisabled || !onAutomateFalVideo}
-          title={freeToolDisabledReason || 'Upload the scene image and prompt to fal.ai H3 Max, then save the finished video here'}
-          className={buttonClass}
-        >
-          {falActive
-            ? <Loader2 size={compact ? 13 : 12} className="animate-spin" aria-hidden="true" />
-            : <Sparkles size={compact ? 13 : 12} aria-hidden="true" />}
-          <span className={labelClass}>{falActive ? 'Running fal.ai' : 'Automate fal.ai'}</span>
-        </button>
-        {!compact && falActive && videoJob?.jobId && onCancelFalVideo && (
-          <button
-            type="button"
-            onClick={() => onCancelFalVideo(node, videoJob)}
-            title="Stop this fal.ai render and free the browser queue"
-            className={buttonClass}
-          >
-            <XCircle size={12} aria-hidden="true" />
-            <span className="truncate">Cancel fal.ai</span>
-          </button>
-        )}
-        {!compact && (
-          <button
-            type="button"
-            onClick={() => setVideoPickerOpen(true)}
-            disabled={!onAttachVideo}
-            title="Attach a downloaded fal MP4 or another video from Media History"
-            className={buttonClass}
-          >
-            <Upload size={12} aria-hidden="true" />
-            <span className="truncate">Attach video</span>
-          </button>
-        )}
-      </div>
+      )}
+    </div>
+  );
+}
 
+function SceneMediaNotices({
+  node, compact, noticeJob, noticeLabel, generationDisabledReason, onAutomateFalVideo,
+  falRequiresImage, onAttachVideo, setVideoPickerOpen, videoPickerOpen,
+}) {
+  return (
+    <>
       {noticeLabel && !compact && (
         <p className="flex items-start gap-1 text-xs text-port-error" role="alert">
           <AlertCircle size={13} className="mt-0.5 shrink-0" aria-hidden="true" />
@@ -256,6 +306,6 @@ export default function LoomSceneMedia({
           accept="video/mp4,.mp4"
         />
       )}
-    </div>
+    </>
   );
 }

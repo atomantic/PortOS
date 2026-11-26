@@ -31,18 +31,20 @@
  */
 import { execFileSync } from 'child_process';
 import { createSecureContext } from 'tls';
-import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, renameSync, rmSync, writeFileSync, statSync } from 'fs';
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, renameSync, rmSync, writeFileSync } from 'fs';
 import { networkInterfaces } from 'os';
 import { join, dirname } from 'path';
 import { fileURLToPath } from 'url';
 import { findTailscale, hasOnlySandboxedTailscale } from '../server/lib/tailscale.js';
 import { hasTailscaleCert } from '../lib/tailscale-https.js';
 import { certPaths } from '../lib/certPaths.js';
-import { readCertExpiresAt } from '../lib/certMeta.js';
+import { readCertExpiresAt, readCertMeta } from '../lib/certMeta.js';
+import { installTailscaleCert, TAILSCALE_CERT_TIMEOUT_MS } from '../lib/tailscaleCertInstall.js';
 import { isDirectlyInvoked } from './lib/directInvocation.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const ROOT = join(__dirname, '..');
+const TAILSCALE_STATUS_TIMEOUT_MS = 15_000;
 
 const DEFAULT_DEPS = {
   execFileSync,
@@ -72,7 +74,12 @@ export function createContext({ dataDir = join(ROOT, 'data'), argv = process.arg
 }
 
 function tailscaleStatus(ctx, bin) {
-  const out = ctx.deps.execFileSync(bin, ['status', '--json'], { stdio: ['ignore', 'pipe', 'ignore'] });
+  const out = ctx.deps.execFileSync(bin, ['status', '--json'], {
+    stdio: ['ignore', 'pipe', 'ignore'],
+    timeout: TAILSCALE_STATUS_TIMEOUT_MS,
+    windowsHide: true,
+    killSignal: 'SIGKILL'
+  });
   return JSON.parse(out.toString());
 }
 
@@ -80,16 +87,6 @@ function tailscaleHostname(status) {
   const raw = status?.Self?.DNSName;
   if (!raw) return null;
   return raw.replace(/\.$/, '');
-}
-
-function runTailscaleCert(ctx, bin, hostname) {
-  mkdirSync(ctx.certDir, { recursive: true });
-  ctx.deps.execFileSync(bin, [
-    'cert',
-    `--cert-file=${ctx.certPath}`,
-    `--key-file=${ctx.keyPath}`,
-    hostname
-  ], { stdio: 'inherit' });
 }
 
 // ---- Self-signed path ----------------------------------------------------
@@ -180,18 +177,6 @@ ${buildSANs(ips)}
 
 // ---- Regeneration logic --------------------------------------------------
 
-function readMeta(ctx) {
-  if (!existsSync(ctx.metaPath)) return null;
-  try {
-    return JSON.parse(readFileSync(ctx.metaPath, 'utf-8'));
-  } catch {
-    // Partial/corrupt meta.json (e.g. interrupted write) — treat as absent so
-    // the script falls through to its normal "no usable cert state" branches
-    // instead of crashing `npm start` before the server can even boot HTTP.
-    return null;
-  }
-}
-
 function certExpiresAt(ctx) {
   const iso = readCertExpiresAt(ctx.certPath);
   return iso ? new Date(iso) : null;
@@ -208,7 +193,7 @@ export function shouldRegenTailscale(ctx, hostname) {
   // being preserved (the file would be present but createSecureContext would
   // throw at server boot).
   if (!hasTailscaleCert(ctx.certDir)) return true;
-  const meta = readMeta(ctx);
+  const meta = readCertMeta(ctx.metaPath);
   if (!meta || meta.mode !== 'tailscale' || meta.hostname !== hostname) return true;
   const expiry = certExpiresAt(ctx);
   if (!expiry) return true;
@@ -220,7 +205,7 @@ export function shouldRegenTailscale(ctx, hostname) {
 export function shouldRegenSelfSigned(ctx, ips) {
   if (ctx.force) return true;
   if (!hasTailscaleCert(ctx.certDir)) return true;
-  const meta = readMeta(ctx);
+  const meta = readCertMeta(ctx.metaPath);
   if (!meta || meta.mode !== 'self-signed') return true;
   const prev = (meta.ips || []).slice().sort().join(',');
   const curr = ips.slice().sort().join(',');
@@ -251,7 +236,7 @@ function trySelfSigned(ctx) {
 // files are stale on disk and the server still serves TLS" surprise.
 export function maybeFallbackSelfSigned(ctx) {
   const { log } = ctx.deps;
-  const meta = readMeta(ctx);
+  const meta = readCertMeta(ctx.metaPath);
   const hasCert = hasTailscaleCert(ctx.certDir);
 
   // Files exist but are unparseable (interrupted provisioning). hasTailscaleCert
@@ -285,10 +270,10 @@ export function maybeFallbackSelfSigned(ctx) {
 }
 
 /**
- * Provision the cert for `dataDir`. Always resolves without calling
- * process.exit; every "nothing more to do" path is an early return.
+ * Provision the cert for `dataDir`, or keep the existing HTTP/HTTPS mode
+ * when Tailscale is unavailable.
  */
-export function runSetupCert(options = {}) {
+export async function runSetupCert(options = {}) {
   const ctx = createContext(options);
   const { log } = ctx.deps;
 
@@ -338,33 +323,30 @@ export function runSetupCert(options = {}) {
 
   log(`🔒 Fetching Let's Encrypt cert for ${hostname} via Tailscale...`);
   try {
-    runTailscaleCert(ctx, bin, hostname);
+    const { changed, expiresAt } = await installTailscaleCert({
+      dir: ctx.certDir,
+      cert: ctx.certPath,
+      key: ctx.keyPath,
+      meta: ctx.metaPath
+    }, {
+      hostname,
+      now: ctx.deps.now,
+      runCert: args => ctx.deps.execFileSync(bin, args, {
+        stdio: 'inherit',
+        timeout: TAILSCALE_CERT_TIMEOUT_MS,
+        windowsHide: true,
+        killSignal: 'SIGKILL'
+      })
+    });
+    const outcome = changed ? 'installed' : 'unchanged';
+    log(`✅ Tailscale cert ${outcome} for ${hostname} (expires ${expiresAt ?? 'unknown'})`);
   } catch (err) {
     log(`⚠️  tailscale cert failed (${err.message}).`);
     log(`   (Common cause: HTTPS Certificates not enabled in the tailnet admin console at login.tailscale.com/admin/dns)`);
     maybeFallbackSelfSigned(ctx);
-    return;
   }
-
-  if (!existsSync(ctx.certPath) || !existsSync(ctx.keyPath)) {
-    log(`⚠️  tailscale cert returned success but files missing.`);
-    maybeFallbackSelfSigned(ctx);
-    return;
-  }
-
-  const expiry = certExpiresAt(ctx);
-  const metaTmp = `${ctx.metaPath}.${process.pid}.tmp`;
-  writeFileSync(metaTmp, JSON.stringify({
-    mode: 'tailscale',
-    hostname,
-    issuedAt: new Date(ctx.deps.now()).toISOString(),
-    expiresAt: expiry?.toISOString() ?? null,
-    certMtime: statSync(ctx.certPath).mtimeMs
-  }, null, 2));
-  renameSync(metaTmp, ctx.metaPath);
-  log(`✅ Tailscale cert installed for ${hostname} (expires ${expiry?.toISOString() ?? 'unknown'})`);
 }
 
 if (isDirectlyInvoked(import.meta.url)) {
-  runSetupCert();
+  await runSetupCert();
 }

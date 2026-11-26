@@ -36,6 +36,7 @@ vi.mock('../../services/apiWritersRoom', async (importOriginal) => ({
   snapshotWritersRoomDraft: vi.fn(),
   listWritersRoomExercises: vi.fn(async () => []),
   promoteWritersRoomExercise: vi.fn(),
+  promoteWritersRoomWorkToPipeline: vi.fn(),
   runWritersRoomAnalysis: vi.fn(),
   listWritersRoomCharacters: vi.fn(async () => []),
   listWritersRoomPlaces: vi.fn(async () => []),
@@ -52,7 +53,7 @@ vi.mock('./LibraryPane', () => ({ default: () => <div>Library controls</div> }))
 
 import WorkEditor from './WorkEditor';
 import WritersRoom from '../../pages/WritersRoom';
-import { getWritersRoomWork, runWritersRoomAnalysis, saveWritersRoomDraft, updateWritersRoomWork, setWritersRoomActiveDraft, snapshotWritersRoomDraft, listWritersRoomExercises, promoteWritersRoomExercise } from '../../services/apiWritersRoom';
+import { getWritersRoomWork, runWritersRoomAnalysis, saveWritersRoomDraft, updateWritersRoomWork, setWritersRoomActiveDraft, snapshotWritersRoomDraft, listWritersRoomExercises, promoteWritersRoomExercise, promoteWritersRoomWorkToPipeline } from '../../services/apiWritersRoom';
 
 const work = {
   id: 'wr-work-1',
@@ -365,6 +366,18 @@ describe('WorkEditor async buffer ownership (#9738)', () => {
     return view;
   };
   const formatResult = { status: 'complete', result: { formattedBody: 'Old formatted text.' } };
+
+  it('does not navigate when a Pipeline promotion resolves after leaving the editor', async () => {
+    const { router } = await renderEditor();
+    const promotion = deferred();
+    promoteWritersRoomWorkToPipeline.mockReturnValueOnce(promotion.promise);
+    await openMenuItem('Promote to pipeline');
+
+    await act(async () => { await router.navigate('/dashboard'); });
+    await act(async () => { promotion.resolve({ series: { id: 'series-a' }, issue: { id: 'issue-a' } }); });
+
+    expect(router.state.location.pathname).toBe('/dashboard');
+  });
 
   it('applies the format result to a clean, untouched editor', async () => {
     const { container } = await renderEditor();

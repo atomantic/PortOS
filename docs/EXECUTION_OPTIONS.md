@@ -70,7 +70,7 @@ Every shared-selector consumer below uses the legacy reference bridge unless it 
 | `client/src/components/digital-twin/tabs/InterviewTab.jsx` | Shared structured options or saved provider reference |
 | `client/src/components/digital-twin/tabs/PersonalityTab.jsx` | Shared structured options or saved provider reference |
 | `client/src/components/digital-twin/tabs/VoiceStyleTab.jsx` | Shared structured options or saved provider reference |
-| `client/src/components/fableloom/LoomEditorialAutomation.jsx` | Shared structured options or saved provider reference |
+| `client/src/components/fableloom/EditorialRunControls.jsx` | Provider, model and effort go to the editorial request. Autopilot stores the route on the run. |
 | `client/src/components/fableloom/LoomEpisodeFeedback.jsx` | Shared structured options or saved provider reference |
 | `client/src/components/fableloom/LoomEpisodeOutlinePlanner.jsx` | Shared structured options or saved provider reference |
 | `client/src/components/fableloom/LoomSeriesPlan.jsx` | Shared structured options or saved provider reference |
@@ -114,7 +114,7 @@ Every shared-selector consumer below uses the legacy reference bridge unless it 
 | `client/src/components/musicVideo/TreatmentPanel.jsx` | Shared structured options or saved provider reference |
 | `client/src/components/musicVideo/stages/PrevizAi.jsx` | Session-local options forwarded to previz preview and proposal requests; changing providers clears the options |
 | `client/src/components/pipeline/AutopilotOptionsPanel.jsx` | Shared structured options or saved provider reference |
-| `client/src/components/pipeline/AutopilotStageQualitySections.jsx` | Shared structured options or saved provider reference |
+| `client/src/components/pipeline/AutopilotStageRoutingForm.jsx` | Per-run provider, model and effort overrides scoped to one stage and role. Paused runs restore these choices on resume. |
 | `client/src/components/pipeline/SeriesAutopilotSchedule.jsx` | Shared structured options or saved provider reference |
 | `client/src/components/pipeline/SeriesLlmPicker.jsx` | Shared structured options or saved provider reference |
 | `client/src/components/pipeline/stages/NounsStage.jsx` | Shared structured options or saved provider reference |

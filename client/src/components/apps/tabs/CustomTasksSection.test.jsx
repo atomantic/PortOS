@@ -251,18 +251,18 @@ describe('CustomTasksSection trigger outcomes', () => {
     await waitFor(() => expect(toast.success).toHaveBeenCalledWith('Started "Example Task" for Example App'));
   });
 
-  it('surfaces a skipped trigger without claiming the task ran', async () => {
-    api.triggerCosJob.mockResolvedValue({
-      success: false,
-      status: 'skipped',
-      reason: 'Task was not queued'
-    });
+  it('surfaces a refused trigger once without claiming the task ran', async () => {
+    api.triggerCosJob.mockRejectedValue(Object.assign(new Error('No available agent slots (1/1)'), {
+      code: 'JOB_SPAWN_REFUSED',
+      status: 409
+    }));
     render(<CustomTasksSection appId="app-1" appName="Example App" />);
     await screen.findByText('Example Task');
 
     fireEvent.click(screen.getByRole('button', { name: 'Run now' }));
 
-    await waitFor(() => expect(toast.error).toHaveBeenCalledWith('Task was not queued'));
+    await waitFor(() => expect(toast.error).toHaveBeenCalledWith('No available agent slots (1/1)'));
+    expect(toast.error).toHaveBeenCalledTimes(1);
     expect(toast.success).not.toHaveBeenCalled();
   });
 
@@ -306,7 +306,8 @@ describe('CustomTasksSection trigger outcomes', () => {
     await user.click(screen.getByRole('button', { name: 'Run now' }));
 
     await waitFor(() => expect(api.triggerCosJob).toHaveBeenCalledWith('job-1', {
-      formValues: { subject: 'One-off subject' }
+      formValues: { subject: 'One-off subject' },
+      silent: true
     }));
     expect(api.updateCosJob).not.toHaveBeenCalled();
   });
@@ -330,7 +331,7 @@ describe('CustomTasksSection trigger outcomes', () => {
     // the values: the server merges what it receives over the job it just read,
     // so echoing them would revert a change made from another surface since
     // this card rendered.
-    await waitFor(() => expect(api.triggerCosJob).toHaveBeenCalledWith('job-1', {}));
+    await waitFor(() => expect(api.triggerCosJob).toHaveBeenCalledWith('job-1', { silent: true }));
   });
 
   it('blocks an ad-hoc run that leaves a required card field blank', async () => {
@@ -370,7 +371,7 @@ describe('CustomTasksSection trigger outcomes', () => {
     expect(runNow).not.toBeDisabled();
     fireEvent.click(runNow);
 
-    await waitFor(() => expect(api.triggerCosJob).toHaveBeenCalledWith('job-1', {}));
+    await waitFor(() => expect(api.triggerCosJob).toHaveBeenCalledWith('job-1', { silent: true }));
     expect(api.toggleCosJob).not.toHaveBeenCalled();
   });
   it('shows a failed task read as an error with Retry, not as an app with no custom tasks', async () => {

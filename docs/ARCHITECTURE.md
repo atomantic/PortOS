@@ -2,18 +2,6 @@
 
 PortOS is a monorepo application with a React frontend and Express.js backend, managed by PM2.
 
-## Shared Blender film engine
-
-`server/services/film/` renders authored Blender films through an owner adapter:
-identity and workspace, timeline, optional song context, atomic record changes,
-sync integration and events. Music Video provides that adapter in
-`server/services/musicVideo/blender/owner.js`; its routes and workspace layout
-stay unchanged. The shared engine owns Python execution, per-shot code renders and code
-layers, shot queues, resume, stills, previews and joins. Board mirroring, title cards, grading, timed effects,
-film look and final project publication remain Music Video responsibilities.
-The import-scoping guard prevents the engine from reaching Music Video services.
-See [Blender film ownership](features/music-video-blender.md#shared-engine-and-ownership).
-
 ## System Diagram
 
 ```
@@ -23,8 +11,8 @@ See [Blender film ownership](features/music-video-blender.md#shared-engine-and-o
 │                                                                                     │
 │  ┌────────────────────┐             ┌──────────────────────────────────────┐        │
 │  │  React Client      │             │        Express Server                │        │
-│  │  (port 5554)       │    HTTP     │        (port 5555)                   │        │
-│  │                    │ <---------> │                                      │        │
+│  │  :5555 production  │    HTTP     │        (port 5555)                   │        │
+│  │  :5554 Vite dev    │ <---------> │                                      │        │
 │  │  ┌──────────────┐  │             │  ┌──────────┐  ┌──────────────────┐  │        │
 │  │  │    Pages     │  │             │  │  Routes  │──│    Services      │  │        │
 │  │  └──────────────┘  │             │  └──────────┘  └──────────────────┘  │        │
@@ -192,7 +180,7 @@ Server Event → Socket.IO → socket.js → React Component State Update
 2. For each pending task:
    a. Select appropriate AI model based on task complexity
    b. Build prompt with context and memory injection
-   c. Spawn Claude CLI via Sub-Agent Spawner
+   c. Dispatch the run using the selected provider's CLI harness or API
 3. Agent executes task, output captured
 4. On completion:
    a. Mark task as completed

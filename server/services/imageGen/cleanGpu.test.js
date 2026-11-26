@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach, afterAll } from 'vitest';
-import { mkdirSync, rmSync, existsSync, readdirSync, writeFileSync } from 'node:fs';
+import { mkdirSync, rmSync, existsSync, readdirSync, writeFileSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import sharp from 'sharp';
 
@@ -16,6 +16,7 @@ vi.mock('../../lib/fileUtils.js', async (importOriginal) => {
   return {
     ...actual,
     PATHS: { ...actual.PATHS, imageCleanTmp: TMP },
+    atomicWrite: vi.fn(actual.atomicWrite),
     // Re-anchor the resolver at the test dir so result-fetch resolves there.
     resolveImageCleanTmp: (name) => {
       if (typeof name !== 'string' || !name || name.includes('/') || name.includes('..')) return null;
@@ -40,12 +41,15 @@ vi.mock('./regen.js', async (importOriginal) => {
   };
 });
 
+import { atomicWrite } from '../../lib/fileUtils.js';
 import { enqueueGpuClean, readGpuCleanResult, getGpuCleanStatus } from './cleanGpu.js';
 
 const AVAILABLE = { available: true, model: { id: 'flux2-klein-4b' }, pythonPath: null };
 
 beforeEach(() => {
   enqueueJob.mockReset();
+  enqueueJob.mockImplementation((_job, { jobId }) => ({ jobId, position: 1, status: 'queued' }));
+  atomicWrite.mockClear();
   getJob.mockReset();
   resolveRegenBackend.mockReset();
   mkdirSync(TMP, { recursive: true });
@@ -58,12 +62,11 @@ const makePng = (w = 8, h = 8) => sharp({ create: { width: w, height: h, channel
 describe('enqueueGpuClean', () => {
   it('stages the init bytes to the temp dir and enqueues a non-gallery job', async () => {
     resolveRegenBackend.mockResolvedValue(AVAILABLE);
-    enqueueJob.mockReturnValue({ jobId: 'aaaaaaaa-0000-4000-8000-000000000000', position: 1, status: 'queued' });
     const init = await makePng(8, 8);
 
     const out = await enqueueGpuClean({ initBuffer: init, sourceDims: { width: 8, height: 8 } });
 
-    expect(out.jobId).toBe('aaaaaaaa-0000-4000-8000-000000000000');
+    expect(out.jobId).toBe(enqueueJob.mock.calls[0][1].jobId);
     expect(out.modelId).toBe('flux2-klein-4b');
     // A job was enqueued with a NON-GALLERY output target + skipSidecar.
     expect(enqueueJob).toHaveBeenCalledTimes(1);
@@ -86,7 +89,6 @@ describe('enqueueGpuClean', () => {
 
   it('honors an explicit strength + max-MP override', async () => {
     resolveRegenBackend.mockResolvedValue(AVAILABLE);
-    enqueueJob.mockReturnValue({ jobId: 'bbbbbbbb-0000-4000-8000-000000000000', position: 1, status: 'queued' });
     const init = await makePng(2000, 2000);
 
     const out = await enqueueGpuClean({ initBuffer: init, sourceDims: { width: 2000, height: 2000 }, strength: 0.4, maxMegapixels: 1.0 });
@@ -102,16 +104,40 @@ describe('enqueueGpuClean', () => {
 
   it('stages the mask + original when an ignore-zone rides along', async () => {
     resolveRegenBackend.mockResolvedValue(AVAILABLE);
-    enqueueJob.mockReturnValue({ jobId: 'cccccccc-0000-4000-8000-000000000000', position: 1, status: 'queued' });
     const init = await makePng(8, 8);
     const original = await makePng(8, 8);
     const mask = await sharp(Buffer.alloc(8 * 8, 255), { raw: { width: 8, height: 8, channels: 1 } }).png().toBuffer();
 
-    await enqueueGpuClean({ initBuffer: init, sourceDims: { width: 8, height: 8 }, originalBuffer: original, maskBuffer: mask, feather: 4 });
+    enqueueJob.mockImplementation((_job, { jobId }) => {
+      expect(readFileSync(join(TMP, `${jobId}-original.png`))).toEqual(original);
+      expect(readFileSync(join(TMP, `${jobId}-mask.png`))).toEqual(mask);
+      expect(JSON.parse(readFileSync(join(TMP, `${jobId}-clean.json`), 'utf8'))).toMatchObject({ hasMask: true, feather: 4 });
+      return { jobId, position: 1, status: 'queued' };
+    });
 
-    const files = readdirSync(TMP);
-    expect(files.some((f) => f.endsWith('-original.png'))).toBe(true);
-    expect(files.some((f) => f.endsWith('-mask.png'))).toBe(true);
+    await enqueueGpuClean({ initBuffer: init, sourceDims: { width: 8, height: 8 }, originalBuffer: original, maskBuffer: mask, feather: 4 });
+    expect(enqueueJob).toHaveBeenCalledOnce();
+  });
+
+  it.each(['-original.png', '-mask.png', '-clean.json'])('refuses to enqueue a masked render when writing %s fails', async suffix => {
+    resolveRegenBackend.mockResolvedValue(AVAILABLE);
+    const log = vi.spyOn(console, 'error').mockImplementation(() => {});
+    const write = atomicWrite.getMockImplementation();
+    atomicWrite.mockImplementation(async (path, value) => {
+      if (path.endsWith(suffix)) throw Object.assign(new Error('synthetic write failure'), { code: 'ENOSPC' });
+      return write(path, value);
+    });
+    try {
+      const png = await makePng();
+      await expect(enqueueGpuClean({ initBuffer: png, originalBuffer: png, maskBuffer: png })).rejects.toMatchObject({
+        status: 500, code: 'IMAGE_CLEAN_STAGING_FAILED',
+      });
+      expect(enqueueJob).not.toHaveBeenCalled();
+      expect(log).toHaveBeenCalledWith(expect.stringContaining('code=ENOSPC'));
+    } finally {
+      atomicWrite.mockImplementation(write);
+      log.mockRestore();
+    }
   });
 
   it('throws a 400 when no local FLUX runner is available (hardware gate)', async () => {
