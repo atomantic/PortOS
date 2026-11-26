@@ -19,7 +19,7 @@ import { getLoadedModels as getLoadedLmStudioModels, getLastLoadedModelsError as
 import { getSettings, readSettingsStrict, updateSettingsWith } from '../services/settings.js';
 import { localLlmCompareSchema, localLlmTestSchema } from '../lib/mediaValidation.js';
 import { installSplashRuntime, saveSplashContextWindow, startSplashServer, stopSplashServer } from '../services/splashServerManager.js';
-import { installMkserve, startMkserveServer, stopMkserveServer } from '../services/mkserveRuntimeManager.js';
+import { getMkserveRuntimeStatus, installMkserve, startMkserveServer, stopMkserveServer } from '../services/mkserveRuntimeManager.js';
 import { ServerError, errorEvents } from '../lib/errorHandler.js';
 import { saveProcessList } from '../services/pm2.js';
 import { syncRuntimeProviderModels } from '../services/localRuntimeProviderSync.js';
@@ -1400,6 +1400,37 @@ describe.each([
     expect(stop).toHaveBeenCalledOnce();
   });
 
+  it('cancels only the addressed installation and keeps its slot until teardown', async () => {
+    const app = makeApp();
+    let signal;
+    let finish;
+    const transfer = new Promise((_resolve, reject) => { finish = () => reject(signal.reason); });
+    install.mockImplementationOnce((options) => {
+      signal = options.signal;
+      return transfer;
+    });
+    const accepted = await mutate(app, 'upgrade');
+    expect(accepted.status).toBe(202);
+    const { operation } = accepted.body;
+    try {
+      expect((await mutate(app, 'cancel').send({ operationId: '61d3819b-c7ab-476c-be68-81355beebdae' })).body).toEqual({ cancelled: false });
+      expect(signal.aborted).toBe(false);
+      expect((await mutate(app, 'cancel').send({ operationId: operation.id })).body).toMatchObject({
+        cancelled: true, operation: { id: operation.id, cancelling: true },
+      });
+      expect(signal.aborted).toBe(true);
+      expect((await readStatus(app)).body.operation).toMatchObject({ cancelling: true });
+      expect((await mutate(app, 'install')).status).toBe(409);
+    } finally {
+      finish();
+    }
+    expect((await readStatus(app)).body).toMatchObject({ operation: null, lastError: null });
+    expect((await mutate(app, 'cancel')).body).toEqual({ cancelled: false });
+    expect(app.get('io').emit).toHaveBeenCalledWith(
+      'localLlm:progress', expect.objectContaining({ event: 'cancelled', runtime: id, operation: null }),
+    );
+  });
+
   it('surfaces actionable refusal after accepting a background start', async () => {
     const app = makeApp();
     start.mockRejectedValueOnce(new ServerError('Preset port is occupied. Stop the external process first.', { status: 409 }));
@@ -1411,6 +1442,27 @@ describe.each([
       'localLlm:progress', expect.objectContaining({ event: 'error', runtime: id }),
     );
   });
+});
+
+it('accepts the repair flag only on mkserve Install and requires operator authority for status logs', async () => {
+  const app = makeApp();
+  installMkserve.mockClear().mockResolvedValueOnce({});
+  const accepted = await request(app).post('/api/local-llm/mkserve/install').send({ repair: true });
+  expect(accepted.status).toBe(202);
+  expect(accepted.body.operation.action).toBe('repair');
+  expect(installMkserve).toHaveBeenCalledWith(expect.objectContaining({ repair: true }));
+  expect((await request(app).post('/api/local-llm/mkserve/start').send({ repair: true })).status).toBe(400);
+  expect((await request(app).post('/api/local-llm/splash/install').send({ repair: true })).status).toBe(400);
+  expect((await request(app).get('/api/local-llm/mkserve/status')).status).toBe(200);
+  expect(getMkserveRuntimeStatus).toHaveBeenLastCalledWith({ includeLogs: false });
+  const operatorApp = express();
+  operatorApp.use((req, _res, next) => {
+    req.portosAuthContext = { enabled: true, authenticated: true, method: 'session' };
+    next();
+  });
+  operatorApp.use('/api/local-llm', localLlmRoutes);
+  expect((await request(operatorApp).get('/api/local-llm/mkserve/status')).status).toBe(200);
+  expect(getMkserveRuntimeStatus).toHaveBeenLastCalledWith({ includeLogs: true });
 });
 
 

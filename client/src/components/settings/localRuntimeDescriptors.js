@@ -63,7 +63,7 @@ function pm2Row({ id, label, icon, status, platformReason, onStart, onStop, onIn
 }
 
 const BUSY_STATES = ['installing', 'updating', 'stopping'];
-const ACTION_STATE = { install: 'installing', upgrade: 'updating', start: 'starting', stop: 'stopping' };
+const ACTION_STATE = { install: 'installing', repair: 'installing', upgrade: 'updating', start: 'starting', stop: 'stopping' };
 const OCCUPIED_STATES = ['external', 'unrecognized', 'not-ready', 'starting', 'running', 'online'];
 
 function bundleRow(status, action) {
@@ -105,6 +105,10 @@ function bundleApi(id) {
   return {
     status: (options) => getManagedInklingRuntimeStatus(id, options),
     install: () => controlManagedInklingRuntime(id, 'install'),
+    repair: () => id === 'mkserve'
+      ? controlManagedInklingRuntime(id, 'install', { body: JSON.stringify({ repair: true }) })
+      : controlManagedInklingRuntime(id, 'install'),
+    cancel: (operationId) => controlManagedInklingRuntime(id, 'cancel', { body: JSON.stringify({ operationId }) }),
     start: () => controlManagedInklingRuntime(id, 'start'),
     stop: () => controlManagedInklingRuntime(id, 'stop'),
     upgrade: () => controlManagedInklingRuntime(id, 'upgrade'),
@@ -246,6 +250,7 @@ export const LOCAL_RUNTIME_DESCRIPTORS = {
     copy: {
       requirement: 'Requires macOS 26 or later and an Apple M5 Max with at least 36 GiB of unified memory.',
       download: 'Downloads about 19 GiB of Inkling 2 Mini weights, plus the runtime and its Python environment.',
+      repair: 'Clear and rebuild the mkserve engine cache using the checkpoint already on this machine.',
       provider: 'When it is ready, add an OpenAI-compatible provider using the endpoint and model ID shown here.',
     },
     toRow: bundleRow,

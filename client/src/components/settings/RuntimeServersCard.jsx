@@ -3,6 +3,7 @@ import { Link } from 'react-router';
 import { Cpu, Box, Play, Square, Download, ArrowUpCircle, Power, PowerOff, RefreshCw, Save, Settings2, ExternalLink, Server } from 'lucide-react';
 import BrailleSpinner from '../BrailleSpinner';
 import ContextWindowSelect from '../ui/ContextWindowSelect.jsx';
+import RuntimeLogDisclosure from './RuntimeLogDisclosure.jsx';
 import { formatContextTokens, formatCount } from '../../utils/formatters';
 import { SPLASH_CONTEXT, SPLASH_CONTEXT_WINDOWS } from '../../../../server/lib/splashRuntime.js';
 import { LOCAL_RUNTIME_LABELS } from '../../../../server/lib/modelPinMembership.js';
@@ -515,6 +516,8 @@ function SplashContextPicker({ status, busy, onSave }) {
 
 export function ManagedInklingRuntimeCard({ descriptor, status, busy, actionInProgress, onAction, onRefresh, onSaveContext }) {
   const { id, label, copy: { requirement, download, provider } } = descriptor;
+  const operation = status?.operation;
+  const cancellable = ['install', 'upgrade', 'repair'].includes(operation?.action);
   return (
     <section className="@container bg-port-card border border-port-border rounded-xl p-4 sm:p-6 space-y-3">
       <h3 className="text-sm font-medium text-white">{label} · Inkling 2 Mini</h3>
@@ -527,8 +530,14 @@ export function ManagedInklingRuntimeCard({ descriptor, status, busy, actionInPr
         <SplashContextPicker status={status} busy={busy} onSave={onSaveContext} />
       )}
       <ServerRow row={descriptor.toRow(status, (action) => () => onAction(id, action))} busy={busy} actionInProgress={actionInProgress}>
+        {cancellable && (
+          <button type="button" onClick={() => onAction(id, 'cancel', operation.id)} disabled={busy || operation.cancelling} className={neutralBtn}>
+            {operation.cancelling ? 'Cancelling…' : 'Cancel'}
+          </button>
+        )}
         <button type="button" onClick={onRefresh} className={neutralBtn}><RefreshCw size={12} />Check {label} status</button>
       </ServerRow>
+      <RuntimeLogDisclosure logs={status?.recentLogs} />
     </section>
   );
 }

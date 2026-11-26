@@ -6,9 +6,10 @@ import { sleep } from '../lib/fileCore.js';
 import { MANAGED_RUNTIME_APPS } from '../lib/managedRuntimeApps.js';
 import { ServerError } from '../lib/errorHandler.js';
 import { isPortInUse } from '../lib/platform.js';
+import { readManagedPm2LogTail } from '../lib/managedDaemon.js';
 import {
   MKSERVE_BUNDLE, MKSERVE_MODEL, MKSERVE_VERSION, installPinnedMkserve, isMkserveRevision,
-  mkserveInstallPaths, mkserveLaunchEnvironment, readMkserveInstall,
+  mkserveInstallPaths, mkserveLaunchEnvironment, readMkserveInstall, rebuildMkserveEngine,
 } from './mkserveRuntimeInstall.js';
 import { clearJlistCache, execPm2, getAppStatusStrict } from './pm2.js';
 
@@ -101,14 +102,15 @@ async function portInUse() {
   });
 }
 
-export async function getMkserveRuntimeStatus() {
+export async function getMkserveRuntimeStatus({ includeLogs = true } = {}) {
   const supported = supportsMkserve();
   const base = { supported, endpoint: ENDPOINT, installed: false, version: null, availableVersion: MKSERVE_VERSION, updateAvailable: false };
-  if (!supported) return { ...base, state: 'unsupported', reason: SUPPORTED_REASON };
+  if (!supported) return { ...base, recentLogs: [], state: 'unsupported', reason: SUPPORTED_REASON };
   const [installed, app, health] = await Promise.all([readMkserveInstall(), getAppStatusStrict(MKSERVE_APP), probeMkserve()]);
-  const status = { ...base, installed: !!installed, version: installed?.version ?? null,
-    updateAvailable: !!installed && installed.bundle !== MKSERVE_BUNDLE };
   const managed = isManaged(app);
+  const status = { ...base, installed: !!installed, version: installed?.version ?? null,
+    recentLogs: includeLogs && managed ? await readManagedPm2LogTail(app.pm_id, execPm2) : [],
+    updateAvailable: !!installed && installed.bundle !== MKSERVE_BUNDLE };
   if (operation) return { ...status, managed, state: operation, ...health };
   if (health) {
     if (!managed || !ACTIVE.has(app.status)) return { ...status, ...health, managed: false, state: 'external' };
@@ -116,20 +118,29 @@ export async function getMkserveRuntimeStatus() {
   }
   if (managed && ACTIVE.has(app.status)) return { ...status, managed: true, state: 'starting' };
   if (await portInUse()) return { ...status, managed: false, state: 'unrecognized', reason: 'Another service is using port ' + PORT + '.' };
-  if (managed && app.status === 'errored') {
-    return { ...status, managed: true, state: 'error', reason: 'mkserve exited. Check its PM2 logs before restarting.' };
+  // PM2 records a crash as stopped when --no-autorestart is set. The PortOS
+  // Stop action deletes the entry, so an owned stopped entry still merits Repair.
+  if (managed && ['errored', 'stopped'].includes(app.status)) {
+    return { ...status, managed: true, state: 'error', repairRecommended: true, reason: 'mkserve exited. Check its PM2 logs or use Repair to rebuild the engine.' };
   }
   return { ...status, managed, state: installed ? 'stopped' : 'missing' };
 }
 
-export function installMkserve({ onProgress: progress } = {}) {
+export function installMkserve({ onProgress: progress, repair = false, signal } = {}) {
   return runOperation('installing', async () => {
     const installed = await readMkserveInstall();
-    if (installed?.bundle === MKSERVE_BUNDLE) return { success: true, message: 'mkserve is up to date' };
+    signal?.throwIfAborted();
+    const current = installed?.bundle === MKSERVE_BUNDLE;
+    if (current && !repair) return { success: true, message: 'mkserve is up to date' };
     if (installed) operation = 'updating';
     const app = await requireAppStatus();
     if (isManaged(app) && ACTIVE.has(app.status)) throw error('Stop the managed mkserve server before updating or repairing it.');
-    await installPinnedMkserve((message) => onProgress(progress, message), installed);
+    const emit = (message) => onProgress(progress, message);
+    if (current) {
+      await rebuildMkserveEngine(installed, emit, { repair: true, signal });
+      return { success: true, message: 'mkserve repaired' };
+    }
+    await installPinnedMkserve(emit, installed, { signal });
     return { success: true, message: installed ? 'mkserve updated' : 'mkserve installed' };
   });
 }

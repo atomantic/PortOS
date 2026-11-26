@@ -170,6 +170,7 @@ const managedRuntimeRequests = {
     start: (options) => request('/local-llm/splash/start', { ...options, method: 'POST' }),
     stop: (options) => request('/local-llm/splash/stop', { ...options, method: 'POST' }),
     upgrade: (options) => request('/local-llm/splash/upgrade', { ...options, method: 'POST' }),
+    cancel: (options) => request('/local-llm/splash/cancel', { ...options, method: 'POST' }),
   },
   mkserve: {
     status: (options) => request('/local-llm/mkserve/status', options),
@@ -177,6 +178,7 @@ const managedRuntimeRequests = {
     start: (options) => request('/local-llm/mkserve/start', { ...options, method: 'POST' }),
     stop: (options) => request('/local-llm/mkserve/stop', { ...options, method: 'POST' }),
     upgrade: (options) => request('/local-llm/mkserve/upgrade', { ...options, method: 'POST' }),
+    cancel: (options) => request('/local-llm/mkserve/cancel', { ...options, method: 'POST' }),
   },
 };
 
