@@ -26,7 +26,7 @@ export const windowsInstalls = (path) => WINDOWS_INSTALLED_WORKSPACES.some((dir)
 // pull ~20 server modules into a planner that runs before any install.
 // ci-test-plan.test.js fails when the allowlist names a package this list misses.
 export const PLATFORM_PACKAGE_RES = [
-  /^node-pty$/, /^sharp$/, /^onnxruntime-/, /^protobufjs$/,
+  /^node-pty$/, /^sharp$/,
   /^@img\//, /^esbuild$/, /^@esbuild\//,
   /^rollup$/, /^@rollup\/rollup-/, /^rolldown$/, /^@rolldown\//, /^@biomejs\//,
   /^lightningcss(?:-|$)/, /^@tailwindcss\/oxide/, /^playwright(?:-core)?$/, /^@playwright\//,

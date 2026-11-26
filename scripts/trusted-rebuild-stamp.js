@@ -9,9 +9,7 @@
  * un-built. But "was this rebuilt?" is not answerable by looking at the tree.
  * With today's versions the rebuild is close to a no-op: node-pty and sharp
  * ship prebuilt bindings inside their tarballs (there is no `build/` directory
- * even in a fully rebuilt tree), onnxruntime-node bundles its CPU binaries and
- * only fetches the CUDA execution provider, and protobufjs only regenerates a
- * bundle nothing requires. So `require()`-ing the packages proves nothing — it
+ * even in a fully rebuilt tree). So `require()`-ing the packages proves nothing — it
  * succeeds on a never-rebuilt tree, which is exactly the false confidence this
  * module replaced.
  *

@@ -58,11 +58,7 @@ export const TRUSTED_REBUILDS = {
     // sharp ships prebuilt bindings today (its rebuild is a no-op) but is equally
     // runtime-critical. Grouped because they share `fatal`; every extra group
     // costs another npm spawn (~180ms).
-    { pkgs: ['node-pty', 'sharp'], fatal: true },
-    // Transitive, behind optional local-inference features: onnxruntime-node's
-    // postinstall fetches platform binaries (absent = feature unavailable, not
-    // fatal); protobufjs's only generates a minimal build.
-    { pkgs: ['onnxruntime-node', 'protobufjs'], fatal: false }
+    { pkgs: ['node-pty', 'sharp'], fatal: true }
   ]
 };
 
