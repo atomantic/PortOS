@@ -425,7 +425,8 @@ describe.skipIf(!canRun)('layered template with real Chrome and ffmpeg', () => {
     await mkdir(PATHS.videos, { recursive: true });
     const reference = join(dir, 'reference.png');
     if (fixture === 'generated-shots') {
-      await copyFile(new URL('../../../docs/validation/assets/9302/generated-reference.png', import.meta.url), reference);
+      await sharp(await readFile(new URL('./__fixtures__/grade-reference.webp', import.meta.url)))
+        .resize(width, height).png().toFile(reference);
     } else {
       await sharp(bytes, { raw: { width, height, channels: 3 } }).png().toFile(reference);
     }
