@@ -20,8 +20,13 @@ Semantic memory system for the Chief of Staff that stores facts, learnings, obse
 3. **LLM Classification**: Intelligent memory extraction with quality filtering (M31)
 4. **Auto-Extraction**: Memories extracted from successful agent task completions
 5. **Auto-Injection**: Relevant memories injected into agent prompts before execution
-6. **Importance Decay**: Time-based decay with access-based boosts
-7. **Memory Consolidation**: Merge similar memories automatically
+6. **Persistent Mind Reflection**: Stored importance changes through edits. For reflection,
+   the Mind considers active standard memories it owns that are older than 30 days and
+   lack a verdict on the current version. The reflection score starts at stored importance
+   and halves every 90 idle days after a 30-day grace period. Idleness starts at the last
+   access or, for unread memories, at creation. A score below 0.15 makes the memory eligible
+   for review.
+7. **Manual Maintenance**: API calls consolidate similar memories or clear expired memories.
 8. **Real-time Updates**: WebSocket events for memory changes
 9. **Graph Visualization**: D3.js relationship graph (planned)
 
@@ -50,7 +55,7 @@ remain standard until explicitly marked; no identity is inferred from private
 conversation history during installation or startup.
 
 Protected memories remain active through manual and self-triggered mind cleanup,
-background decay, expiration, and duplicate consolidation. Cleanup reports both
+expiration, and duplicate consolidation. Cleanup reports both
 archived and preserved counts. Clearing history still removes facts stored only
 in that history, so save lasting identity and knowledge as protected memories
 first. Protected memories take priority in the bounded context; protection is a
@@ -108,7 +113,7 @@ or a note whose events were cleared with the history, is shown as author unknown
   sourceAgentId: string,   // Origin agent
   embedding: number[],     // Vector (768 dims for nomic-embed)
   confidence: number,      // 0.0-1.0
-  importance: number,      // 0.0-1.0 (decays over time)
+  importance: number,      // Stored value from 0.0 to 1.0
   accessCount: number,
   lastAccessed: string,
   createdAt: string,
@@ -202,9 +207,8 @@ Before agent task execution:
 | GET /api/memory/graph | Graph visualization data |
 | GET /api/memory/stats | Memory statistics |
 | POST /api/memory/link | Link two memories |
-| POST /api/memory/consolidate | Merge similar memories |
-| POST /api/memory/decay | Apply importance decay (`decayRate` in (0, 0.02], default 0.01; else 400) |
-| DELETE /api/memory/expired | Clear expired memories |
+| POST /api/memory/consolidate | Manually merge similar memories (supports `dryRun`) |
+| DELETE /api/memory/expired | Manually clear expired memories |
 | GET /api/memory/embeddings/status | LM Studio connection status |
 | GET /api/memory/backend/status | Active storage backend status |
 | GET /api/memory/sync | File↔DB sync status |
@@ -236,14 +240,11 @@ Before agent task execution:
 
 ```javascript
 memory: {
-  enabled: true,
-  embeddingProvider: 'lmstudio',
   embeddingEndpoint: 'http://localhost:1234/v1/embeddings',
   embeddingModel: 'text-embedding-nomic-embed-text-v2-moe',
   embeddingDimension: 768,
   maxContextTokens: 2000,
-  minRelevanceThreshold: 0.7,
-  autoExtractEnabled: true
+  minRelevanceThreshold: 0.7
 }
 ```
 

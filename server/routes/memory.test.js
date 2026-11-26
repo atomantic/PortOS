@@ -23,7 +23,6 @@ vi.mock('../services/memoryBackend.js', () => ({
   searchMemories: vi.fn(),
   consolidateMemories: vi.fn(),
   linkMemories: vi.fn(),
-  applyDecay: vi.fn(),
   clearExpired: vi.fn(),
   approveMemory: vi.fn(),
   rejectMemory: vi.fn()
@@ -72,7 +71,7 @@ vi.mock('../services/settings.js', async () => ({
 }));
 
 import { PEER_INSTANCE_ID_HEADER } from '../services/sharing/peerPullAuthorization.js';
-import { ensureBackend, getMemories, getTimeline, archiveMemory, purgeMemory, applyDecay, linkMemories } from '../services/memoryBackend.js';
+import { ensureBackend, getMemories, getTimeline, archiveMemory, purgeMemory, linkMemories } from '../services/memoryBackend.js';
 import { checkHealth } from '../lib/db.js';
 import * as memorySync from '../services/memorySync.js';
 import { findRecentRunsUsingMemory } from '../services/memoryRunUsage.js';
@@ -528,30 +527,9 @@ describe('Memory Routes', () => {
     });
   });
 
-  describe('POST /api/memory/decay', () => {
-    it.each([[{ decayRate: 5 }], [{ decayRate: -1 }], [{ decayRate: 'abc' }], [{ decayRate: 0 }], [{ decayRate: null }]])(
-      'rejects %j without applying decay', async (body) => {
-        const response = await request(app).post('/api/memory/decay').send(body);
-        expect(response.status).toBe(400);
-        expect(response.body.code).toBe('VALIDATION_ERROR');
-        expect(applyDecay).not.toHaveBeenCalled();
-      });
-
-    it('applies the default rate for an empty object or no body', async () => {
-      applyDecay.mockResolvedValue({});
-      expect((await request(app).post('/api/memory/decay').send({})).status).toBe(200);
-      expect((await request(app).post('/api/memory/decay')).status).toBe(200);
-      expect(applyDecay).toHaveBeenCalledTimes(2);
-      expect(applyDecay).toHaveBeenNthCalledWith(1, 0.01);
-      expect(applyDecay).toHaveBeenNthCalledWith(2, 0.01);
-    });
-
-    it('accepts the maximum rate', async () => {
-      applyDecay.mockResolvedValue({});
-      const response = await request(app).post('/api/memory/decay').send({ decayRate: 0.02 });
-      expect(response.status).toBe(200);
-      expect(applyDecay).toHaveBeenCalledWith(0.02);
-    });
+  it('returns 404 for the retired POST /api/memory/decay endpoint', async () => {
+    const response = await request(app).post('/api/memory/decay').send({ decayRate: 0.01 });
+    expect(response.status).toBe(404);
   });
 
   describe('POST /api/memory/link', () => {

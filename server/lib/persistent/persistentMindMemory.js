@@ -1,6 +1,6 @@
 /**
- * Persistent Mind memory protection schema, durable tag encoding, public projection, and
- * protected-first context ordering.
+ * Persistent Mind memory protection, durable tag encoding, context ordering,
+ * public projection, and read-time fading for reflection.
  */
 
 import { z } from 'zod';
@@ -82,6 +82,12 @@ export function comparePersistentMindMemories(a, b) {
 export const projectPersistentMindMemory = (memory) => memory
   ? { ...memory, protection: persistentMindMemoryProtection(memory) }
   : null;
+
+/** Fade only the eligibility score. The stored importance still ranks ordinary recall. */
+export function fadedPersistentMindMemoryImportance(memory, now) {
+  const idleDays = (now - Date.parse(memory.lastAccessed ?? memory.createdAt)) / 86400000;
+  return memory.importance * 0.5 ** (Math.max(0, idleDays - 30) / 90);
+}
 
 // At most one outcome per verdict/content version. Authorship is supplied separately
 // by the executing mind runtime, never accepted in model arguments.

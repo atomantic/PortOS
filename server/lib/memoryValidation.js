@@ -191,11 +191,6 @@ export const memoryConsolidateSchema = z.object({
   reason: z.string().max(2000).optional()
 });
 
-// Decay request schema — 0.02 is 2x the shipped default; higher rates purge rather than tune
-export const memoryDecaySchema = z.object({
-  decayRate: z.number().positive().max(0.02).optional().default(0.01)
-}).strict();
-
 // Link memories request schema
 export const memoryLinkSchema = z.object({
   sourceId: z.string().guid(),

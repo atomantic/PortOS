@@ -255,11 +255,6 @@ export async function consolidateMemories(threshold, dryRun, options) {
   return b.consolidateMemories(threshold, dryRun, options);
 }
 
-export async function applyDecay(decayRate) {
-  const b = await getBackend();
-  return b.applyDecay(decayRate);
-}
-
 export async function clearExpired() {
   const b = await getBackend();
   return b.clearExpired();
