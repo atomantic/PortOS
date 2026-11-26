@@ -61,6 +61,9 @@ vi.mock('../domainUsage.js', async (importActual) => ({
   ...(await importActual()),
   getDomainBudgetStatus: async () => ({ exceeded: null, budget: {}, usage: {} }),
 }));
+vi.mock('../decisionLog.js', async original => ({
+  ...await original(), recordDecision: vi.fn(async () => {}),
+}));
 vi.mock('../instanceIdentity.js', async (importActual) => ({
   ...(await importActual()),
   ensureInstanceId: async () => 'instance-a',

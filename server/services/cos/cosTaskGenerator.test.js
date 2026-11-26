@@ -119,6 +119,7 @@ it('declines an old app-scoped research request before generating a task', async
 });
 
 it('withholds a global PR review with no managed app target', async () => {
+  getTaskInterval.mockResolvedValueOnce({ taskMetadata: {} });
   expect(await cosImprovementTasks.generateSelfImprovementTaskForType('pr-reviewer', { config: {} })).toBeNull();
 });
 
