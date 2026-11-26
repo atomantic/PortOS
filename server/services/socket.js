@@ -156,8 +156,13 @@ const PEER_RELAY_ALLOWED_EVENTS = new Set(['cos:subscribe', 'cos:unsubscribe', '
 // gallery); read-only subscriptions stay open to remote sockets.
 // `error:recover` queues a recovery agent that runs shell commands (#8716).
 // Detection can bootstrap a PM2 daemon while inspecting an app-specific home.
+// Voice host slots, dictation, and proactive output require operator authority.
 // The HTTP twin of this set is isHostControlRoute in lib/hostControlRoutes.js.
-const HOST_CONTROL_SOCKET_EVENTS = new Set(['app:update', 'app:standardize', 'app:deploy', 'standardize:start', 'detect:start', 'error:recover', 'logs:subscribe']);
+const HOST_CONTROL_SOCKET_EVENTS = new Set([
+  'app:update', 'app:standardize', 'app:deploy', 'standardize:start', 'detect:start', 'error:recover', 'logs:subscribe',
+  'voice:call:attach', 'voice:call:audio', 'voice:call:hangup', 'voice:capture:start', 'voice:dictation:set',
+  'voice:output:available', 'voice:output:claim',
+]);
 const HOST_CONTROL_SOCKET_PREFIXES = ['shell:', 'iterm:', 'generated-preview:'];
 // Closing only stops work, so a refused socket can always tear down its own preview.
 const HOST_CONTROL_SOCKET_EXEMPT_EVENTS = new Set(['generated-preview:close']);
@@ -174,6 +179,10 @@ const hostControlRefusal = (event, payload) => {
   if (event.startsWith('generated-preview:')) {
     return ['generated-preview:error', { ...refusal, requestId: payload?.requestId, sessionId: payload?.sessionId }];
   }
+  if (event.startsWith('voice:')) {
+    const stage = event.startsWith('voice:call:') ? 'call' : event.startsWith('voice:capture:') ? 'capture' : 'voice';
+    return ['voice:error', { stage, ...refusal }];
+  }
   if (event === 'standardize:start') return ['standardize:complete', { success: false, ...refusal }];
   if (event === 'detect:start') return ['detect:complete', { success: false, ...refusal }];
   if (event === 'logs:subscribe') return ['logs:error', { ...refusal, processName: payload?.processName }];
@@ -189,7 +198,7 @@ function registerAuthHandlers(socket, _io) {
       try {
         if (!(await isAuthEnabled())) {
           if (!isHostControlSocketEvent(event) || socketHasHostControl(socket)) return next();
-          console.warn(`⛔ Refused host-control socket event ${event} from a non-local connection`);
+          console.log(`🚫 Refused host-control socket event ${event} from a non-local connection`);
           socket.emit(...hostControlRefusal(event, payload));
           // After the refusal so the client settles on the error before the close.
           if (event.startsWith('generated-preview:')) await closeGeneratedPreviewsForSocket(socket.id);

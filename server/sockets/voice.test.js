@@ -12,6 +12,12 @@ vi.mock(import('../services/voice/config.js'), async (importOriginal) => {
   };
 });
 
+vi.mock('../services/auth.js', async (importOriginal) => ({
+  ...(await importOriginal()),
+  isAuthEnabled: vi.fn(async () => false),
+  verifyRequestSession: vi.fn(async () => false),
+}));
+
 // The call host speaks its opening line through the real TTS entry point;
 // stub it so the suite never loads a speech model.
 vi.mock('../services/voice/tts.js', () => ({
@@ -54,6 +60,7 @@ const {
 const { transcribe } = await import('../services/voice/stt.js');
 const { synthesize } = await import('../services/voice/tts.js');
 const { runTurn } = await import('../services/voice/pipeline.js');
+const { isAuthEnabled, verifyRequestSession } = await import('../services/auth.js');
 const { getVoiceConfig } = await import('../services/voice/config.js');
 const {
   attachHost: attachCallHost,
@@ -250,7 +257,44 @@ describe('voice:text validation', () => {
 });
 
 describe('voice:text turn recovery', () => {
-  afterEach(() => runTurn.mockClear());
+  afterEach(() => {
+    runTurn.mockClear();
+    vi.mocked(isAuthEnabled).mockResolvedValue(false);
+    vi.mocked(verifyRequestSession).mockReset();
+  });
+
+  it.each([
+    ['remote password-free', false, false, false, false],
+    ['local password-free', false, true, false, true],
+    ['delegated operator', true, false, true, true],
+    ['expired operator session', true, true, false, false],
+  ])('rechecks host authority when a turn requests a write for %s', async (_kind, authEnabled, local, session, allowed) => {
+    const socket = makeFakeSocket();
+    socket.data = { portosLocalConnection: local };
+    socket.handshake = { headers: { authorization: 'Bearer example-session' } };
+    vi.mocked(isAuthEnabled).mockResolvedValue(authEnabled);
+    vi.mocked(verifyRequestSession).mockResolvedValue(session);
+    registerVoiceHandlers(socket);
+    const write = vi.fn();
+    runTurn.mockImplementationOnce(async ({ hasHostControl }) => {
+      if (await hasHostControl()) {
+        write();
+        return {};
+      }
+      throw Object.assign(new Error('Host control required'), { code: 'HOST_CONTROL_FORBIDDEN' });
+    });
+
+    await socket.fire('voice:text', { text: 'Example journal entry', source: 'voice' });
+    expect(write).toHaveBeenCalledTimes(allowed ? 1 : 0);
+    if (allowed) {
+      expect(socket.emitted.some(({ event }) => event === 'voice:error')).toBe(false);
+    } else {
+      expect(socket.emitted).toContainEqual({
+        event: 'voice:error', payload: { stage: 'text', code: 'HOST_CONTROL_FORBIDDEN', message: 'Host control required' },
+      });
+      expect(socket.emitted).toContainEqual({ event: 'voice:idle', payload: { reason: 'error' } });
+    }
+  });
 
   it('emits voice:error and voice:idle when the LLM deadline expires', async () => {
     const socket = makeFakeSocket();

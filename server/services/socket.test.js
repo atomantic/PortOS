@@ -1755,3 +1755,68 @@ describe('logs:subscribe host-control boundary (#19168)', () => {
     expect(operator.emitted).toContainEqual(['logs:subscribed', expect.objectContaining({ processName: 'portos-server' })]);
   });
 });
+
+
+describe('voice socket host-control boundary (#19169)', () => {
+  const hostEvents = [
+    ['voice:call:attach', 'call'],
+    ['voice:call:audio', 'call'],
+    ['voice:call:hangup', 'call'],
+    ['voice:capture:start', 'capture'],
+    ['voice:dictation:set', 'voice'],
+    ['voice:output:available', 'voice'],
+    ['voice:output:claim', 'voice'],
+  ];
+  let io;
+  const connectedSocket = ({ local = false, headers = {} } = {}) => {
+    const socket = makeSocket();
+    socket.data.portosLocalConnection = local;
+    socket.handshake.headers = headers;
+    socket.use = (middleware) => { socket.middleware = middleware; };
+    io.connect(socket);
+    return socket;
+  };
+
+  beforeEach(() => {
+    io = makeIo();
+    initSocket(io);
+    vi.mocked(isAuthEnabled).mockResolvedValue(false);
+    vi.mocked(verifyRequestSession).mockResolvedValue(false);
+  });
+
+  afterEach(() => {
+    authEvents.removeAllListeners('sessions:revoked-all');
+    vi.mocked(isAuthEnabled).mockResolvedValue(false);
+    vi.mocked(verifyRequestSession).mockResolvedValue(false);
+  });
+
+  it.each(hostEvents)('stops %s before dispatch for a remote password-free socket', async (event, stage) => {
+    const socket = connectedSocket();
+    const next = vi.fn();
+    await socket.middleware([event], next);
+    expect(next).not.toHaveBeenCalled();
+    expect(socket.emitted).toContainEqual(['voice:error', expect.objectContaining({ stage, code: 'HOST_CONTROL_FORBIDDEN' })]);
+  });
+
+  it.each([['local password-free', false], ['delegated operator session', true]])('dispatches host events for a %s socket', async (_kind, authEnabled) => {
+    const headers = authEnabled ? { authorization: 'Bearer example-session' } : {};
+    vi.mocked(isAuthEnabled).mockResolvedValue(authEnabled);
+    vi.mocked(verifyRequestSession).mockImplementation(async (request) => request.headers === headers);
+    const socket = connectedSocket({ local: !authEnabled, headers });
+    for (const [event] of hostEvents) {
+      const next = vi.fn();
+      await socket.middleware([event], next);
+      expect(next).toHaveBeenCalledExactlyOnceWith();
+    }
+    expect(socket.emitted.some(([event]) => event === 'voice:error')).toBe(false);
+  });
+
+  it('allows owner-scoped cleanup and conversational input through for password-free sockets', async () => {
+    const socket = connectedSocket();
+    for (const event of ['voice:call:detach', 'voice:capture:stop', 'voice:text']) {
+      const next = vi.fn();
+      await socket.middleware([event], next);
+      expect(next).toHaveBeenCalledExactlyOnceWith();
+    }
+  });
+});

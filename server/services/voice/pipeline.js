@@ -15,6 +15,7 @@ import { isEchoOfRecentTts, rememberTtsSentence } from './echo.js';
 import { appendJournal, getToday } from '../brainJournal.js';
 import { resolvePending, isExpired } from './confirmGate.js';
 import { anyAbortSignal } from '../../lib/requestAbort.js';
+import { ServerError } from '../../lib/errorHandler.js';
 // getRelevantMemories is imported lazily inside buildMemoryContext — it only
 // runs for retrieval-shaped turns, so keep its memory-backend + embeddings
 // dependency graph out of voice startup / non-retrieval turns (same rationale
@@ -409,7 +410,7 @@ const emitSyntheticReply = async ({ reply, signal, recentTts, emit }) => {
 };
 
 // Journal dictation bypasses the model and emits only the newly appended segment.
-const runDictationTurn = async ({ userText, state, signal, emit }) => {
+const runDictationTurn = async ({ userText, state, signal, emit, hasHostControl }) => {
   const trimmed = userText.trim();
   // STT can return whitespace-only transcripts (Whisper on silent audio,
   // trailing partials). Don't fire a bogus append event with { entry: null };
@@ -428,11 +429,21 @@ const runDictationTurn = async ({ userText, state, signal, emit }) => {
   // Defensive: dictation can be enabled without a date (e.g. UI toggle
   // without a date, or tool side-effect missing one). Default to today so
   // we never throw here and kill the user's dictation turn.
-  let date = state.dictation.date;
-  if (!date) {
-    date = await getToday();
-    state.dictation.date = date;
-    console.warn(`🎙️  dictation missing date; defaulting to ${date}`);
+  const dictation = state.dictation;
+  const date = dictation.date || await getToday();
+  if (typeof hasHostControl !== 'function' || await hasHostControl() !== true) {
+    const { HOST_CONTROL_FORBIDDEN_MESSAGE } = await import('../authGate.js');
+    throw new ServerError(HOST_CONTROL_FORBIDDEN_MESSAGE, { status: 403, code: 'HOST_CONTROL_FORBIDDEN' });
+  }
+  // Authority and date lookups can yield to a newer turn or a dictation toggle.
+  if (signal?.aborted) return { transcript: userText, reply: '' };
+  if (state.dictation !== dictation) {
+    emit('voice:idle', { reason: 'dictation-changed' });
+    return { transcript: userText, reply: '' };
+  }
+  if (!dictation.date) {
+    dictation.date = date;
+    console.log(`🎙️  dictation missing date; defaulting to ${date}`);
     emit('voice:dictation', { enabled: true, date });
   }
   const entry = await appendJournal(date, trimmed, { source: 'voice' });
@@ -697,7 +708,7 @@ export const runTurn = async ({ audio, text, mimeType, source, history = [], emi
   // that hint in addition to the no-text case.
   const isSpokenInput = !text || source === 'voice';
   if (isSpokenInput && state?.dictation?.enabled) {
-    return runDictationTurn({ userText, state, signal, emit });
+    return runDictationTurn({ userText, state, signal, emit, hasHostControl });
   }
 
   const speakSyntheticReply = (reply) => emitSyntheticReply({ reply, signal, recentTts: state?.recentTts, emit });

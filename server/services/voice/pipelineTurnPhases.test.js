@@ -204,7 +204,7 @@ describe('runTurn dictation routing', () => {
       segments: [{ text: 'Earlier entry' }, segment], updatedAt: '2026-01-02T12:00:00Z' });
     const state = { dictation: { enabled: true, date: null } };
     const events = [];
-    const result = await runTurn({ text: '  Example journal entry  ', source: 'voice', state,
+    const result = await runTurn({ text: '  Example journal entry  ', source: 'voice', state, hasHostControl: async () => true,
       emit: (event, payload) => events.push({ event, payload }) });
 
     expect(result).toEqual({ transcript: '  Example journal entry  ', reply: '' });
@@ -217,6 +217,29 @@ describe('runTurn dictation routing', () => {
     expect(events.at(-1)).toEqual({ event: 'voice:idle', payload: { reason: 'dictation-appended' } });
     expect(mocks.streamChat).not.toHaveBeenCalled();
     expect(mocks.synthesize).not.toHaveBeenCalled();
+  });
+
+  it.each([['missing authority', undefined], ['revoked authority', async () => false]])(
+    'refuses to append dictation with %s', async (_kind, hasHostControl) => {
+      const emit = vi.fn();
+      const state = { dictation: { enabled: true, date: '2026-01-02' } };
+      await expect(runTurn({ text: 'Example journal entry', source: 'voice', state, emit, hasHostControl }))
+        .rejects.toMatchObject({ status: 403, code: 'HOST_CONTROL_FORBIDDEN' });
+      expect(mocks.appendJournal).not.toHaveBeenCalled();
+      expect(emit).not.toHaveBeenCalledWith('voice:dailyLog:appended', expect.anything());
+    },
+  );
+
+  it('skips a journal append when dictation changes during the authority check', async () => {
+    const state = { dictation: { enabled: true, date: '2026-01-02' } };
+    const hasHostControl = async () => {
+      state.dictation = { enabled: false, date: null };
+      return true;
+    };
+    const emit = vi.fn();
+    await runTurn({ text: 'Example journal entry', source: 'voice', state, emit, hasHostControl });
+    expect(mocks.appendJournal).not.toHaveBeenCalled();
+    expect(emit).toHaveBeenLastCalledWith('voice:idle', { reason: 'dictation-changed' });
   });
 
   it('stops spoken dictation and speaks its canonical reply without appending or calling the model', async () => {
