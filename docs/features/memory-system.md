@@ -200,7 +200,7 @@ Before agent task execution:
 | POST /api/memory | Create memory |
 | PUT /api/memory/:id | Update memory |
 | DELETE /api/memory/:id | Delete (soft) memory |
-| POST /api/memory/search | Semantic search |
+| POST /api/memory/search | Searches semantically when embeddings are available and by text otherwise. Returns `searchMode` as `semantic` or `lexical`. |
 | GET /api/memory/categories | List categories |
 | GET /api/memory/tags | List tags |
 | GET /api/memory/timeline | Timeline view data |

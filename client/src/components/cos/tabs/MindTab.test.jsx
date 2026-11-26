@@ -3,6 +3,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { createEvent, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { MemoryRouter } from 'react-router';
+import { PROVIDERS_PAGE_PATH } from '../../../../../server/lib/navManifest.js';
 import { awaitEnabled, findEnabledByLabelText, findEnabledByRole } from '../../../test/enabledBarrier.js';
 
 const api = vi.hoisted(() => ({
@@ -640,7 +641,7 @@ describe('MindTab', () => {
     expect((await screen.findAllByAltText('diagram.png')).length).toBeGreaterThan(0);
     expect(screen.getByLabelText('Attach images')).toBeDisabled();
     expect(screen.getByText(/Image attachments are unavailable/)).toBeInTheDocument();
-    expect(screen.getByRole('link', { name: 'Settings' })).toHaveAttribute('href', '/settings?tab=providers');
+    expect(screen.getByRole('link', { name: 'Settings' })).toHaveAttribute('href', PROVIDERS_PAGE_PATH);
   });
 
   it('does not submit an IME composition commit key', async () => {
@@ -933,19 +934,20 @@ describe('MindTab', () => {
     expect(memory.protection).toBe('important');
   });
 
-  it('retains unsaved context drafts across workspace panels and ignores accidental dismissal', async () => {
+  it('retains unsaved context drafts across panels and allows dismissal when idle', async () => {
     const user = userEvent.setup();
     renderTab('/cos/mind?panel=context');
 
     const identity = await screen.findByLabelText('Identity');
     await user.clear(identity);
     await user.type(identity, 'Unsaved operating identity');
+    expect(screen.getByLabelText('Identity')).toHaveValue('Unsaved operating identity');
     await user.click(screen.getByRole('tab', { name: 'Memories' }));
     await user.click(screen.getByRole('tab', { name: 'Context' }));
-    expect(screen.getByLabelText('Identity')).toHaveValue('Unsaved operating identity');
+    expect(await screen.findByLabelText('Identity')).toHaveValue('Resident mind');
 
     fireEvent.keyDown(window, { key: 'Escape' });
-    expect(screen.getByRole('heading', { name: 'Identity and operating prompt' })).toBeInTheDocument();
+    expect(screen.queryByRole('dialog', { name: 'Mind workspace' })).not.toBeInTheDocument();
   });
 
   it('refreshes the effective context after a memory is created', async () => {

@@ -1,4 +1,5 @@
 import { Link } from 'react-router';
+import { PROVIDERS_PAGE_PATH } from '../../../../../server/lib/navManifest.js';
 import { ArrowUp, ImagePlus, MessageCircle, RefreshCw, X } from 'lucide-react';
 import BrailleSpinner from '../../BrailleSpinner';
 import AutoSizeTextarea from '../../ui/AutoSizeTextarea';
@@ -77,7 +78,7 @@ export default function MindConversationPanel({
         {imageAttachmentsUnavailable && (
           <p className="mt-2 text-xs text-port-text-muted">
             Image attachments are unavailable for this Mind profile. {imageCapabilityGuidance || 'Choose a vision-capable provider or model in'}{' '}
-            <Link to="/settings?tab=providers" className="text-port-accent underline">Settings</Link>.
+            <Link to={PROVIDERS_PAGE_PATH} className="text-port-accent underline">Settings</Link>.
           </p>
         )}
         {messageImages.length > 0 && (

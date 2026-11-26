@@ -14,6 +14,10 @@ export const JSON_WRITEBACK_EXCEPTIONS = [
     "reason": "No non-strict write-back: mutations use the strict default; only the listing sweep passes strict:false and skips unreadable members."
   },
   {
+    "key": "auth.js :: SESSIONS_FILE",
+    "reason": "Rebuildable: a lost session file only signs browsers out (login mints new sessions); it never grants access."
+  },
+  {
     "key": "claudeChangelog.js :: STATE_FILE",
     "reason": "Cache-only: feed polling replaces the feed cache and its polling/seen cursors; there is no user-edit writer."
   },
@@ -24,6 +28,10 @@ export const JSON_WRITEBACK_EXCEPTIONS = [
   {
     "key": "codexSummaryRepair.js :: metaPath",
     "reason": "No failed-read write-back: an unreadable or non-object metadata file returns null before the repair write."
+  },
+  {
+    "key": "contactsSync.js :: cachePath ( )",
+    "reason": "Cache-only: sync builds the complete cache from the macOS Contacts databases; readContactCache serves lookups and never supplies the next write."
   },
   {
     "key": "contactsSync.js :: statePath ( )",

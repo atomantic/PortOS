@@ -1,6 +1,5 @@
 import { Check, CirclePlay, StickyNote, Upload } from 'lucide-react';
 import Drawer from '../../Drawer';
-import TabPills from '../../ui/TabPills';
 import PersistentMindContextPanel from '../PersistentMindContextPanel';
 import PersistentMindJournalPanel from '../PersistentMindJournalPanel';
 import PersistentMindMaintenancePanel from '../PersistentMindMaintenancePanel';
@@ -73,12 +72,12 @@ export default function MindWorkspaceDrawers({
         subtitle="Inspect and configure the state available to Persistent Mind"
         size="xl"
         closeLabel="Close mind workspace"
-        closeOnEsc={false}
-        closeOnBackdrop={false}
+        closeOnEsc={!setupSaving && !editingPresetId}
+        closeOnBackdrop={!setupSaving && !editingPresetId}
+        tabs={MIND_PANEL_TABS}
+        activeTab={activePanel || 'context'}
+        onTabChange={openPanel}
       >
-        <div className="mb-4">
-          <TabPills tabs={MIND_PANEL_TABS} activeTab={activePanel || 'context'} onChange={openPanel} variant="pills" size="sm" mobileCompact ariaLabel="Mind workspace sections" />
-        </div>
         {(visitedPanels.has('context') || activePanel === 'context') && <div hidden={activePanel !== 'context'} className="space-y-4">
           <PersistentMindRuntimePanel runtime={runtime} error={runtimeError} loading={runtimeLoading} />
             <PersistentMindVisibilityPanel visibility={visibility} error={visibilityError} loading={visibilityLoading} onRefresh={() => loadVisibility({ refresh: true })} onPrepareRepair={prepareRepair} />

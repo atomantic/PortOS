@@ -119,31 +119,19 @@ router.get('/embeddings/config', asyncHandler(async (req, res) => {
   res.json(await embeddings.resolveEmbeddingSource());
 }));
 
-// POST /api/memory/search - Semantic search
+// POST /api/memory/search - Semantic search with a lexical fallback
 router.post('/search', asyncHandler(async (req, res) => {
   const { query, types, categories, tags, appId, minRelevance, limit, offset } = validateRequest(memorySearchSchema, req.body);
-
-  // Generate query embedding
+  const options = { types, categories, tags, appId, limit, offset };
   const queryEmbedding = await embeddings.generateQueryEmbedding(query, { types, categories });
 
-  if (!queryEmbedding) {
-    const source = await embeddings.resolveEmbeddingSource();
-    throw new ServerError(source.disabled
-      ? `Embeddings are disabled — choose a provider on ${embeddings.embeddingsSettingsPage()} to enable semantic search`
-      : `Failed to generate query embedding — is the ${source.provider} embedding backend running?`, { status: 503 });
+  if (queryEmbedding) {
+    const result = await memory.searchMemories(queryEmbedding, { ...options, minRelevance });
+    return res.json({ ...result, searchMode: 'semantic' });
   }
 
-  const result = await memory.searchMemories(queryEmbedding, {
-    types,
-    categories,
-    tags,
-    appId,
-    minRelevance,
-    limit,
-    offset
-  });
-
-  res.json(result);
+  const result = await memory.hybridSearchMemories(query, null, { ...options, lexicalMatch: 'any' });
+  res.json({ ...result, searchMode: 'lexical' });
 }));
 
 // POST /api/memory - Create a new memory

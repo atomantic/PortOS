@@ -232,12 +232,29 @@ describe('extractAndStoreMemories', () => {
 
     const result = await extractAndStoreMemories(agentId, taskId, output, task);
 
-    expect(searchMemories).toHaveBeenCalledExactlyOnceWith(embedding, { minRelevance: 0.82, limit: 3 });
+    expect(searchMemories).toHaveBeenCalledExactlyOnceWith(embedding, { minRelevance: 0.82, limit: 3, excludePersistentMind: true });
     expect(createMemory).not.toHaveBeenCalled();
     expect(result).toEqual({ created: 0, pendingApproval: 0, memories: [], pendingMemories: [] });
     expect(extracted).toHaveBeenCalledExactlyOnceWith({
       agentId, taskId, count: 0, pendingApproval: 0, skippedDuplicates: 1
     });
+  });
+
+  it('stores a shared memory when the only active and pending matches are private', async () => {
+    const candidate = preference('Written summaries before meetings', 0.9);
+    const privateMatch = { id: 'private-match', sourceAgentId: 'cos-persistent-mind', summary: candidate.content };
+    classifyMemories.mockResolvedValue({ usedLLM: true, memories: [candidate] });
+    searchMemories.mockImplementation(async (_embedding, { excludePersistentMind }) => ({
+      memories: excludePersistentMind ? [] : [privateMatch],
+    }));
+    getMemories.mockImplementation(async ({ excludePersistentMind }) => ({
+      memories: excludePersistentMind ? [] : [privateMatch],
+    }));
+
+    const result = await extractAndStoreMemories(agentId, taskId, output, task);
+
+    expect(createMemory).toHaveBeenCalledExactlyOnceWith(expect.objectContaining(candidate), embedding);
+    expect(result.created).toBe(1);
   });
 
   it('logs the matched memory ID without duplicate prose', async () => {
@@ -269,7 +286,7 @@ describe('extractAndStoreMemories', () => {
 
     const result = await extractAndStoreMemories(agentId, taskId, output, task);
 
-    expect(getMemories).toHaveBeenCalledExactlyOnceWith({ status: 'pending_approval', limit: 1000 });
+    expect(getMemories).toHaveBeenCalledExactlyOnceWith({ status: 'pending_approval', limit: 1000, excludePersistentMind: true });
     expect(searchMemories).not.toHaveBeenCalled();
     expect(createMemory).toHaveBeenCalledExactlyOnceWith(
       expect.objectContaining({ ...distinct, status: 'pending_approval' }), null
