@@ -591,6 +591,7 @@ export function applySceneSplit(project, sceneId, plannedPieces, { preserveClip 
         imageEffect: scene.imageEffect ?? null,
         imageEffectSec: scene.imageEffectSec ?? null,
         ...(scene.stillMove ? { stillMove: scene.stillMove } : {}),
+        ...(scene.filmLook ? { filmLook: scene.filmLook } : {}),
         ...(scene.photoSequence ? { photoSequence: scene.photoSequence } : {}),
         ...(scene.imageTreatments?.length ? { imageTreatments: scene.imageTreatments } : {}),
         shotMode: scene.shotMode ?? 'cutaway',
@@ -878,6 +879,9 @@ function joinScenes(project, idx, { keep, backend }) {
   const scenes = project.scenes || [];
   const [first, second] = [scenes[idx], scenes[idx + 1]];
   const [kept, removed] = keep === 'first' ? [first, second] : [second, first];
+  if (isPreMusicShot(first) || isPreMusicShot(second)) {
+    throw new ServerError('Set the cold-open shot length directly. Shots before the song cannot be merged on song time.', { status: 400, code: 'MUSIC_VIDEO_MERGE_PRE_MUSIC' });
+  }
   // Only a manifest-sourced storyboard owns the shot order; a Board-sourced document project merges here.
   if (project.composition?.mode === 'document' && project.productionReview?.draft?.storyboardSource === 'document') {
     throw new ServerError("This video's shot order comes from its composition document — merge the shots in the shot manifest instead.", { status: 400, code: 'MUSIC_VIDEO_MERGE_DOCUMENT' });

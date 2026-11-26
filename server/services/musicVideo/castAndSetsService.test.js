@@ -2252,7 +2252,7 @@ it('holds approval for a changed greybox camera and releases it when the change 
   } } }));
   const mixed = await request(app).patch(`/api/music-video/${project.id}/cast-and-sets/direction`).send({
     sets: [{ id: 'lab', setReference: { subjectId: 'place-example', greyboxShotId: 'wide' } }],
-    props: [{ name: 'Notebook' }],
+    props: [{ name: 'Notebook', description: 'A pocket notebook' }],
   });
   expect(mixed.status).toBe(400);
   expect(mixed.body.context.details).toContainEqual({ path: '', message: 'Save greybox selections separately from direction edits.' });

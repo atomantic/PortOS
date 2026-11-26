@@ -1405,6 +1405,10 @@ describe('shots before the song', () => {
     expect(() => splitScene(replanned, scene.sceneId, { atSec: 1 })).toThrow(/no song time to split/);
     expect(() => reorderScenes(replanned, [scenes[0].sceneId, scene.sceneId]))
       .toThrow(expect.objectContaining({ code: 'MUSIC_VIDEO_REORDER_PRE_MUSIC' }));
+    expect(() => mergeNextScene(replanned, scene.sceneId))
+      .toThrow(expect.objectContaining({ code: 'MUSIC_VIDEO_MERGE_PRE_MUSIC' }));
+    expect(() => mergePreviousScene(replanned, scenes[0].sceneId))
+      .toThrow(expect.objectContaining({ code: 'MUSIC_VIDEO_MERGE_PRE_MUSIC' }));
     const { updated: back } = applySceneUpdate(replanned, scene.sceneId, { preMusic: null });
     expect(back.preMusic).toBeNull();
   });
@@ -1412,7 +1416,7 @@ describe('shots before the song', () => {
 
 it.each([
   { visualLayer: 'card', cardText: 'Interlude', cardColor: '#112233', textZone: 'upper-left' },
-  { visualLayer: 'still', imageEffect: 'end-fade', imageEffectSec: 1, endImageId: 'end.png' },
+  { visualLayer: 'still', imageEffect: 'end-fade', imageEffectSec: 1, endImageId: 'end.png', filmLook: { preset: 'vhs' } },
 ])('retains $visualLayer rendering inputs on both sides of a split', (visual) => {
   const scene = { sceneId: 'original', order: 0, startSec: 0, endSec: 4, ...visual };
   const { scenes } = splitScene({ ...baseProject(), scenes: [scene] }, scene.sceneId, { atSec: 2 });
