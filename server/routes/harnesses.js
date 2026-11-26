@@ -21,6 +21,7 @@ import { Router } from 'express';
 import { z } from 'zod';
 import { asyncHandler, ServerError } from '../lib/errorHandler.js';
 import { validateRequest } from '../lib/validateRequest.js';
+import { assertHostControl } from '../services/authGate.js';
 import { streamHarnessAction } from '../services/harnessActionStream.js';
 import { listHarnesses, refreshHarnessModels } from '../services/harnesses.js';
 import { harnessActionSchema, harnessRefreshSchema } from '../lib/providerValidation.js';
@@ -40,8 +41,10 @@ const reviewUpdateSchema = harnessRefreshSchema.extend({
  * waiting out a cache.
  */
 router.get('/', asyncHandler(async (req, res) => {
-  const { fresh } = validateRequest(listQuerySchema, req.query);
-  res.json({ harnesses: await listHarnesses({ fresh: fresh === '1' }) });
+  const { fresh: freshParam } = validateRequest(listQuerySchema, req.query);
+  const fresh = freshParam === '1';
+  if (fresh) assertHostControl(req);
+  res.json({ harnesses: await listHarnesses({ fresh }) });
 }));
 
 // Reference data is scoped to a currently actionable, fixed-registry harness.

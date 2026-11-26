@@ -244,6 +244,22 @@ describe('Security monitor toggle posts the new flag value', () => {
     expect(await screen.findByRole('option', { name: 'Example replacement camera' })).toBeTruthy();
   });
 
+  it('shows a device-list refusal on mount and clears it after a successful refresh', async () => {
+    const api = (await import('../services/apiCore.js')).default;
+    api.get.mockRejectedValueOnce(Object.assign(new Error('Host control requires an operator session.'), {
+      status: 403, code: 'HOST_CONTROL_FORBIDDEN',
+    }));
+
+    render(<Security />);
+    const error = 'Failed to fetch devices: Host control requires an operator session.';
+    expect(await screen.findByText(error)).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Devices' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Refresh devices' }));
+    expect(await screen.findByRole('option', { name: 'Camera 1' })).toBeInTheDocument();
+    expect(screen.queryByText(error)).toBeNull();
+  });
+
   it('allows another start after a failed start request', async () => {
     const api = (await import('../services/apiCore.js')).default;
     api.post.mockRejectedValueOnce(new Error('Example start refusal'));

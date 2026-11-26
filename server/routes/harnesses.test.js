@@ -21,6 +21,12 @@ import harnessRoutes from './harnesses.js';
 function makeApp() {
   const app = express();
   app.use(express.json());
+  // This router fixture starts after session verification. The host-control
+  // suites mount both gates and exercise session verification itself.
+  app.use((req, _res, next) => {
+    req.portosAuthContext = { enabled: true, authenticated: true, method: 'session' };
+    next();
+  });
   app.use('/api/harnesses', harnessRoutes);
   app.use(errorMiddleware);
   return app;
