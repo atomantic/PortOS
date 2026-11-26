@@ -7,7 +7,7 @@ import { promisify } from 'util';
 import { basename, join } from 'path';
 import { createServer } from 'net';
 import { PATHS, sleep } from '../../lib/fileUtils.js';
-import { execPm2, getAppStatus } from '../pm2.js';
+import { clearJlistCache, execPm2, getAppStatusStrict } from '../pm2.js';
 import { expandPath, piperVoiceTildePath, voiceHome, IS_WIN, PIPER_BIN_NAME } from './config.js';
 import { isReasoningModel } from './llm.js';
 import {
@@ -19,6 +19,7 @@ import { whichFirst } from '../../lib/processEnv.js';
 import { PORTS } from '../../lib/ports.js';
 import { inspectVoiceAsset, isManagedVoiceAsset, isVoiceAssetUsable } from '../../lib/voiceModelAssets.js';
 import { createMutex } from '../../lib/asyncMutex.js';
+import { ServerError } from '../../lib/errorHandler.js';
 
 export const pexec = promisify(execFile);
 
@@ -136,11 +137,6 @@ export const downloadPiperVoice = (voiceId, currentCfg) => withVoiceLifecycle(as
   return { downloaded: true, voicePath };
 });
 
-const isWhisperRunning = async () => {
-  const status = await getAppStatus(WHISPER_APP).catch(() => null);
-  return status?.status === 'online';
-};
-
 // Returns null if the port is free, else a short description of who's there.
 // `port` MUST be coerced to a number — `net.Server.listen(stringPort)` is
 // interpreted as a pipe path and silently misses real TCP port collisions.
@@ -233,8 +229,24 @@ const startWhisperProcess = async (cfg) => {
 };
 
 const stopWhisperProcess = async () => {
-  if (!(await isWhisperRunning())) return { skipped: true };
-  await execPm2(['delete', WHISPER_APP]).catch(() => {});
+  clearJlistCache();
+  const before = await getAppStatusStrict(WHISPER_APP);
+  if (!before) {
+    throw new ServerError(`PM2 could not read the status of ${WHISPER_APP}. Check that the PM2 daemon is running and retry.`, {
+      status: 503, code: 'WHISPER_PM2_UNAVAILABLE',
+    });
+  }
+  if (before.status === 'not_found') return { skipped: true };
+
+  await execPm2(['delete', WHISPER_APP]).finally(() => clearJlistCache()).catch(async () => {
+    // A timeout or competing delete can leave the process absent despite a CLI error.
+    const after = await getAppStatusStrict(WHISPER_APP);
+    if (after?.status !== 'not_found') {
+      throw new ServerError(`PM2 could not confirm that ${WHISPER_APP} stopped. Check PM2 logs for ${WHISPER_APP} and retry.`, {
+        status: 503, code: 'WHISPER_STOP_FAILED',
+      });
+    }
+  });
   console.log(`🛑 voice: ${WHISPER_APP} stopped`);
   return { stopped: true };
 };
@@ -430,7 +442,7 @@ const reconcileVoice = async (cfg, { allowSetup = true } = {}) => {
       // Keep an already-provisioned speech recognizer available while TTS
       // waits for consent. No setup scripts or LLM preloads run on this path.
       if (cfg.stt?.engine === 'web-speech') {
-        await stopWhisperProcess().catch(() => null);
+        await stopWhisperProcess();
       } else if (bins.whisper && models.sttModel && (!cfg.stt.coreml || models.coreml)) {
         return { ...await startWhisperProcess(cfg), setupRequired: 'piper' };
       }
@@ -464,7 +476,7 @@ const reconcileVoice = async (cfg, { allowSetup = true } = {}) => {
       console.warn(`🎙️  voice: incomplete model download (${repair.join(', ')}) — run Save & Reconcile in Settings → Voice to repair`);
       const setupRequired = repair.join(',');
       if (webSpeech) {
-        await stopWhisperProcess().catch(() => null);
+        await stopWhisperProcess();
       } else if (!repair.includes('whisper') && bins.whisper && models.sttModel && !coremlMissing) {
         return { ...await startWhisperProcess(cfg), setupRequired };
       }
@@ -492,7 +504,7 @@ const reconcileVoice = async (cfg, { allowSetup = true } = {}) => {
   if (webSpeech) {
     if (piperMissing) await runSetupScript(cfg);
     else await adoptReceipts();
-    await stopWhisperProcess().catch(() => null);
+    await stopWhisperProcess();
     return { skipped: 'web-speech', piperProvisioned: piperMissing };
   }
 

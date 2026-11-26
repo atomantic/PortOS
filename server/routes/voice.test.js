@@ -461,15 +461,19 @@ describe('Voice Routes', () => {
       if (cleared) expect(config.updateVoiceConfig).toHaveBeenLastCalledWith({ tts: { retiredEngine: null } });
     });
 
-    it('reports reconcile failures without 500-ing the route', async () => {
-      config.updateVoiceConfig.mockResolvedValue({ ...DEFAULT_CFG, enabled: true });
-      bootstrap.reconcile.mockRejectedValue(new Error('whisper-server not on PATH'));
+    it.each([
+      [true, 'whisper-server not on PATH'],
+      [false, 'PM2 could not confirm that portos-whisper stopped. Check PM2 logs for portos-whisper and retry.'],
+    ])('reports reconciliation failure after saving enabled=%s', async (enabled, error) => {
+      config.updateVoiceConfig.mockReset().mockResolvedValue({ ...DEFAULT_CFG, enabled });
+      bootstrap.reconcile.mockRejectedValue(new Error(error));
 
       const res = await request(buildApp())
         .put('/api/voice/config')
-        .send({ enabled: true });
+        .send({ enabled });
       expect(res.status).toBe(200);
-      expect(res.body.reconciliation).toEqual({ error: 'whisper-server not on PATH' });
+      expect(res.body.config.enabled).toBe(enabled);
+      expect(res.body.reconciliation).toEqual({ error });
     });
   });
 
@@ -672,6 +676,18 @@ describe('Voice Routes', () => {
       expect(bootstrap.stopWhisper).toHaveBeenCalledTimes(1);
       expect(bootstrap.startWhisper).not.toHaveBeenCalled();
       expect(health.invalidateHealthCache).toHaveBeenCalled();
+    });
+
+    it('returns the actionable PM2 error when shutdown cannot be confirmed', async () => {
+      const message = 'PM2 could not confirm that portos-whisper stopped. Check PM2 logs for portos-whisper and retry.';
+      bootstrap.stopWhisper.mockRejectedValueOnce(new ServerError(message, {
+        status: 503, code: 'WHISPER_STOP_FAILED',
+      }));
+
+      const res = await request(buildApp()).post('/api/voice/whisper').send({ action: 'stop' });
+      expect(res.status).toBe(503);
+      expect(res.body).toMatchObject({ error: message, code: 'WHISPER_STOP_FAILED' });
+      expect(res.body).not.toHaveProperty('success');
     });
 
     it('starts whisper from the current config and returns the bootstrap result', async () => {

@@ -1,4 +1,4 @@
-import { expect, it, vi } from 'vitest';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 vi.mock('fs', () => ({ existsSync: vi.fn(() => false) }));
 // These boot-flow tests model "the file is there" through the fs mock; asset
@@ -11,7 +11,11 @@ vi.mock('../../lib/voiceModelAssets.js', async (importOriginal) => {
   };
 });
 vi.mock('../../lib/processEnv.js', () => ({ whichFirst: vi.fn(async () => null) }));
-vi.mock('../pm2.js', () => ({ execPm2: vi.fn(async () => ({})), getAppStatus: vi.fn(async () => null) }));
+vi.mock('../pm2.js', () => ({
+  clearJlistCache: vi.fn(),
+  execPm2: vi.fn(async () => ({})),
+  getAppStatusStrict: vi.fn(async () => ({ status: 'not_found' })),
+}));
 vi.mock('../../lib/fetchWithTimeout.js', () => ({ fetchWithTimeout: vi.fn(async () => ({})) }));
 vi.mock('net', () => ({ createServer: () => {
   const handlers = {};
@@ -33,7 +37,7 @@ vi.mock('../settings.js', () => ({ getSettings: vi.fn(), updateSettings: vi.fn()
 
 import { existsSync } from 'fs';
 const { whichFirst } = await import('../../lib/processEnv.js');
-const { execPm2, getAppStatus } = await import('../pm2.js');
+const { clearJlistCache, execPm2, getAppStatusStrict } = await import('../pm2.js');
 const { execFile } = await import('../../lib/childProcess.js');
 const { fetchWithTimeout } = await import('../../lib/fetchWithTimeout.js');
 const { getProviderById } = await import('../provider/providers.js');
@@ -176,6 +180,58 @@ it('skips the preload when the chosen model is already resident', async () => {
   expect(backend.load).not.toHaveBeenCalled();
 });
 
+describe('Whisper shutdown', () => {
+  beforeEach(() => vi.clearAllMocks());
+
+  it('rejects a failed status read without issuing a delete', async () => {
+    getAppStatusStrict.mockResolvedValueOnce(null);
+    await expect(stopWhisper()).rejects.toMatchObject({
+      code: 'WHISPER_PM2_UNAVAILABLE',
+      message: expect.stringContaining('Check that the PM2 daemon is running and retry'),
+    });
+    expect(execPm2).not.toHaveBeenCalled();
+  });
+
+  it('skips a delete when Whisper is confirmed absent', async () => {
+    await expect(stopWhisper()).resolves.toEqual({ skipped: true });
+    expect(execPm2).not.toHaveBeenCalled();
+  });
+
+  it('deletes a registered Whisper process when disabling Voice', async () => {
+    getAppStatusStrict.mockResolvedValueOnce({ status: 'waiting restart' });
+    await expect(reconcile({ enabled: false })).resolves.toEqual({ stopped: true });
+    expect(execPm2).toHaveBeenCalledExactlyOnceWith(['delete', 'portos-whisper']);
+  });
+
+  it.each([{ status: 'online' }, null])('rejects disabling Voice after an unconfirmed delete (%j)', async (after) => {
+    getAppStatusStrict.mockResolvedValueOnce({ status: 'online' }).mockResolvedValueOnce(after);
+    execPm2.mockRejectedValueOnce(new Error('PM2 delete failed'));
+    await expect(reconcile({ enabled: false })).rejects.toMatchObject({
+      code: 'WHISPER_STOP_FAILED',
+      message: expect.stringContaining('Check PM2 logs for portos-whisper and retry'),
+    });
+    expect(getAppStatusStrict).toHaveBeenCalledTimes(2);
+    expect(clearJlistCache.mock.invocationCallOrder[1]).toBeLessThan(getAppStatusStrict.mock.invocationCallOrder[1]);
+  });
+
+  it('accepts confirmed absence after an ambiguous delete', async () => {
+    getAppStatusStrict.mockResolvedValueOnce({ status: 'online' });
+    execPm2.mockRejectedValueOnce(new Error('PM2 delete timed out'));
+    await expect(stopWhisper()).resolves.toEqual({ stopped: true });
+    expect(getAppStatusStrict).toHaveBeenCalledTimes(2);
+  });
+
+  it('propagates a shutdown error when Web Speech replaces Whisper during reconciliation', async () => {
+    getAppStatusStrict.mockResolvedValueOnce(null);
+    const cfg = {
+      ...VOICE_DEFAULTS, enabled: true,
+      stt: { ...VOICE_DEFAULTS.stt, engine: 'web-speech' },
+      tts: { ...VOICE_DEFAULTS.tts, engine: 'qwen3-tts' },
+    };
+    await expect(reconcile(cfg)).rejects.toMatchObject({ code: 'WHISPER_PM2_UNAVAILABLE' });
+  });
+});
+
 it('finishes Whisper readiness before overlapping stop and reconcile requests mutate PM2', async () => {
   vi.clearAllMocks();
   existsSync.mockImplementation(() => true);
@@ -185,7 +241,7 @@ it('finishes Whisper readiness before overlapping stop and reconcile requests mu
     llm: { model: 'explicit' },
     tts: { ...VOICE_DEFAULTS.tts, engine: 'qwen3-tts' },
   });
-  getAppStatus.mockResolvedValueOnce({ status: 'online' });
+  getAppStatusStrict.mockResolvedValueOnce({ status: 'online' });
   const probeStarted = Promise.withResolvers();
   const finishProbe = Promise.withResolvers();
   fetchWithTimeout.mockImplementationOnce(() => {
