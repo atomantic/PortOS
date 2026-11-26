@@ -1,5 +1,6 @@
 import { Link } from 'react-router';
 import { Brain, Database, Eraser, Wrench } from 'lucide-react';
+import { PROVIDERS_PAGE_BREADCRUMB, PROVIDERS_PAGE_PATH } from '../../../../../server/lib/navManifest.js';
 import PersistentMindRoutePanel from '../PersistentMindRoutePanel';
 import { formatCount, formatDateTime, timeUntil } from '../../../utils/formatters';
 import { MindStateButton } from './MindPanelParts.jsx';
@@ -37,7 +38,7 @@ export default function MindStateSidebar({
         <p className="mt-3 text-sm text-port-text-muted">
           {turnProgress.phase === 'stalled' ? 'No heartbeat from the current turn — checking whether it is still alive.'
             : turnProgress.phase === 'blocked' ? (state?.contextBudgetBlocked
-              ? `${turnProgress.reason || 'Local context window is too small for this wake'}. Raise provider numCtx under Settings → AI providers (or shrink Context), then Resume.`
+              ? `${turnProgress.reason || 'Local context window is too small for this wake'}. Raise provider numCtx under ${PROVIDERS_PAGE_BREADCRUMB} (or shrink Context), then Resume.`
               : `${turnProgress.reason || 'Blocked'}${turnProgress.retryAt ? ' — the mind retries on its own; no action needed.' : '. No retry is scheduled.'}`)
               : turnProgress.phase === 'thinking' ? `${turnProgress.stage || 'Working through the current turn'}.`
                 : state?.pauseReason || (state?.started ? 'Listening for messages and scheduled wakes.' : 'Configure the AI profile to begin.')}
@@ -54,12 +55,12 @@ export default function MindStateSidebar({
             >
               Open Context
             </button>
-            <a
-              href="/settings?tab=providers"
+            <Link
+              to={PROVIDERS_PAGE_PATH}
               className="rounded-lg border border-port-border px-2.5 py-1 font-medium text-port-text hover:border-port-accent hover:text-port-accent"
             >
               AI providers (numCtx)
-            </a>
+            </Link>
           </div>
         )}
         {turnProgress.detail && (
