@@ -388,6 +388,26 @@ const shortId = () => Math.random().toString(36).slice(2, 7);
 // of that conversation and a runaway caller would blow the model's window.
 const MAX_SYSTEM_CONTEXT_CHARS = 4000;
 
+const reportTtsError = (err, signal, emit) => {
+  // Piper can reject with a plain Error when synthesis is interrupted.
+  if (signal?.aborted || err?.name === 'AbortError' || /aborted/i.test(err?.message || '')) return;
+  emit('voice:error', { stage: 'tts', message: err?.message ?? String(err) });
+};
+
+// Canonical replies still complete in text when the synthesizer is unavailable.
+const emitSyntheticReply = async ({ reply, signal, recentTts, emit }) => {
+  if (signal?.aborted) return;
+  const audio = await synthesize(reply, { signal }).catch((err) => reportTtsError(err, signal, emit));
+  if (signal?.aborted) return;
+  if (audio) {
+    if (recentTts) rememberTtsSentence(recentTts, reply);
+    emit('voice:tts:audio', { sentence: reply, wav: audio.wav, latencyMs: audio.latencyMs });
+  }
+  emit('voice:llm:delta', { delta: reply });
+  emit('voice:llm:done', { text: reply });
+  emit('voice:idle', { reason: 'turn-complete' });
+};
+
 // Journal dictation bypasses the model and emits only the newly appended segment.
 const runDictationTurn = async ({ userText, state, signal, emit }) => {
   const trimmed = userText.trim();
@@ -402,13 +422,7 @@ const runDictationTurn = async ({ userText, state, signal, emit }) => {
     state.dictation = { enabled: false, date: null };
     emit('voice:dictation', { enabled: false });
     const reply = 'Dictation off.';
-    const { wav, latencyMs } = await synthesize(reply, { signal });
-    // Report the real synth latency so the client's TTS timing stats
-    // reflect actual work, not a hardcoded zero.
-    if (!signal?.aborted) emit('voice:tts:audio', { sentence: reply, wav, latencyMs });
-    emit('voice:llm:delta', { delta: reply });
-    emit('voice:llm:done', { text: reply });
-    emit('voice:idle', { reason: 'turn-complete' });
+    await emitSyntheticReply({ reply, signal, emit });
     return { transcript: userText, reply };
   }
   // Defensive: dictation can be enabled without a date (e.g. UI toggle
@@ -686,24 +700,7 @@ export const runTurn = async ({ audio, text, mimeType, source, history = [], emi
     return runDictationTurn({ userText, state, signal, emit });
   }
 
-  // Short, hand-crafted assistant reply that bypasses the LLM. Used by the
-  // confirmation gate (and any other future synchronous responses) so the
-  // user hears the canonical "Confirmed — Delete account." / "Cancelled."
-  // line via TTS plus the same llm:delta/done/idle event sequence a normal
-  // turn produces.
-  const speakSyntheticReply = async (reply) => {
-    const { wav, latencyMs } = await synthesize(reply, { signal });
-    if (signal?.aborted) return;
-    // Track what we just said in the echo-suppression buffer so the next
-    // inbound transcript ("Confirmed — Delete." round-tripping through the
-    // mic) is dropped as TTS echo instead of being misclassified as user
-    // intent. Mirrors the normal `speak()` path.
-    if (state?.recentTts) rememberTtsSentence(state.recentTts, reply);
-    emit('voice:tts:audio', { sentence: reply, wav, latencyMs });
-    emit('voice:llm:delta', { delta: reply });
-    emit('voice:llm:done', { text: reply });
-    emit('voice:idle', { reason: 'turn-complete' });
-  };
+  const speakSyntheticReply = (reply) => emitSyntheticReply({ reply, signal, recentTts: state?.recentTts, emit });
 
   const confirmed = await resolvePendingConfirmation({ state, userText, turnId, emit, tlog, speakSyntheticReply });
   if (confirmed) return confirmed;
@@ -717,18 +714,21 @@ export const runTurn = async ({ audio, text, mimeType, source, history = [], emi
   let pending = '';
   const ttsTimings = [];
   let ttsIdx = 0;
-  // Keep TTS cancellation coupled to the turn, while retaining a separate
-  // deadline path so a timed-out LLM can stop queued audio without making the
-  // socket mistake the timeout for a user cancellation.
+  // Stop audio on LLM failure without making the socket treat it as a barge-in.
   const ttsController = new AbortController();
   const ttsSignal = anyAbortSignal([signal, ttsController.signal]);
+  const cancelTts = (reason) => {
+    if (ttsSignal.aborted) return;
+    ttsController.abort();
+    emit('voice:tts:cancel', { reason });
+  };
   const speak = async (sentence) => {
-    if (ttsSignal?.aborted || !sentence) return;
+    if (ttsSignal.aborted) return;
     const i = ++ttsIdx;
     const t0 = Date.now();
     tlog(`tts.start #${i} chars=${sentence.length}`);
     const { wav, latencyMs } = await synthesize(sentence, { signal: ttsSignal });
-    if (ttsSignal?.aborted) return;
+    if (ttsSignal.aborted) return;
     ttsTimings.push(latencyMs);
     tlog(`tts.done  #${i} ${latencyMs}ms synth+queue=${Date.now() - t0}ms`);
     // Track what we just said so the next inbound transcript can be checked
@@ -739,19 +739,14 @@ export const runTurn = async ({ audio, text, mimeType, source, history = [], emi
   };
 
   let synthQueue = Promise.resolve();
+  const enqueueSpeak = (sentence) => {
+    if (!sentence) return;
+    synthQueue = synthQueue.then(() => speak(sentence)).catch((err) => reportTtsError(err, ttsSignal, emit));
+  };
   const flushSentence = (delta) => {
-    pending += delta;
-    const { sentences, remainder } = splitSentences(pending);
+    const { sentences, remainder } = splitSentences(pending + delta);
     pending = remainder;
-    for (const s of sentences) {
-      synthQueue = synthQueue.then(() => speak(s)).catch((err) => {
-        // Barge-in aborts the turn mid-synthesis — Kokoro throws Error('aborted')
-        // and Piper rejects 'piper synthesis aborted'. That's expected, not a
-        // real failure, so don't surface it as voice:error.
-        if (ttsSignal?.aborted || /aborted/i.test(err?.message || '')) return;
-        emit('voice:error', { stage: 'tts', message: err.message });
-      });
-    }
+    for (const sentence of sentences) enqueueSpeak(sentence);
   };
 
   let firstLlm = null;
@@ -764,89 +759,94 @@ export const runTurn = async ({ audio, text, mimeType, source, history = [], emi
   // record was already stashed on state by the tool itself.
   let confirmationPrompt = null;
 
-  for (let iter = 0; iter < maxIterations; iter++) {
-    if (signal?.aborted) break;
-
-    const iterStart = Date.now();
-    let firstDeltaAt = null;
-    let deltaChars = 0;
-    tlog(`llm.start iter=${iter + 1}/${maxIterations} provider=${cfg.llm.provider || 'lmstudio'} model=${cfg.llm.model} tools=${toolSpecs?.length || 0} msgs=${messages.length}`);
-    const llm = await streamChat(messages, {
-      provider: cfg.llm.provider,
-      model: cfg.llm.model,
-      signal,
-      onTimeout: () => {
-        ttsController.abort();
-        emit('voice:tts:cancel', { reason: 'timeout' });
-      },
-      tools: toolSpecs,
-      tag: turnId,
-      onDelta: (delta) => {
-        if (firstDeltaAt === null) {
-          firstDeltaAt = Date.now();
-          tlog(`llm.ttft  iter=${iter + 1} ${firstDeltaAt - iterStart}ms model=${lastLlm?.model || cfg.llm.model}`);
-        }
-        deltaChars += delta.length;
-        emit('voice:llm:delta', { delta });
-        flushSentence(delta);
-      },
-    });
-    if (!firstLlm) firstLlm = llm;
-    lastLlm = llm;
-    tlog(`llm.done  iter=${iter + 1} ${Date.now() - iterStart}ms model=${llm.model} text=${(llm.text || '').length}c spoken=${deltaChars}c tool_calls=${llm.toolCalls?.length || 0} finish=${llm.finishReason ?? '—'}`);
-    // Accumulate spoken text across tool-calling iterations. The old single-
-    // assignment version dropped every earlier segment, so the persisted
-    // `reply` (and next turn's history) diverged from what the user actually
-    // heard when the model spoke before/between tool calls.
-    if (llm.text) finalText += (finalText ? ' ' : '') + llm.text;
-
-    if (!llm.toolCalls?.length) break;
-
-    // Assign stable IDs up-front so the assistant's tool_calls[].id and each
-    // tool response's tool_call_id are guaranteed to match, even when the
-    // upstream stream omitted tc.id. Previously the fallback `call_<index>`
-    // was computed only at the tool-response side, so the assistant entry
-    // could carry a different id and the next LLM iteration wouldn't pair
-    // the result with the call.
-    const callsWithIds = llm.toolCalls.map((tc, i) => ({
-      ...tc,
-      resolvedId: tc.id || `call_${iter}_${tc.index ?? i}`,
-    }));
-
-    // Persist the assistant's tool-call turn, then execute each call and
-    // feed the result back as a 'tool' message for the next iteration.
-    messages.push({
-      role: 'assistant',
-      content: llm.text || null,
-      tool_calls: callsWithIds.map((tc) => ({
-        id: tc.resolvedId,
-        type: tc.type,
-        function: { name: tc.function.name, arguments: tc.function.arguments },
-      })),
-    });
-
-    for (const tc of callsWithIds) {
+  try {
+    for (let iter = 0; iter < maxIterations; iter++) {
       if (signal?.aborted) break;
-      const result = await executeTurnToolCall({ tc, cfg, emit, state, signal, hasHostControl, tlog, toolRuns });
-      messages.push({
-        role: 'tool',
-        tool_call_id: tc.resolvedId,
-        content: JSON.stringify(result),
+
+      const iterStart = Date.now();
+      let firstDeltaAt = null;
+      let deltaChars = 0;
+      tlog(`llm.start iter=${iter + 1}/${maxIterations} provider=${cfg.llm.provider || 'lmstudio'} model=${cfg.llm.model} tools=${toolSpecs?.length || 0} msgs=${messages.length}`);
+      const llm = await streamChat(messages, {
+        provider: cfg.llm.provider,
+        model: cfg.llm.model,
+        signal,
+        onTimeout: () => cancelTts('timeout'),
+        tools: toolSpecs,
+        tag: turnId,
+        onDelta: (delta) => {
+          if (firstDeltaAt === null) {
+            firstDeltaAt = Date.now();
+            tlog(`llm.ttft  iter=${iter + 1} ${firstDeltaAt - iterStart}ms model=${lastLlm?.model || cfg.llm.model}`);
+          }
+          deltaChars += delta.length;
+          emit('voice:llm:delta', { delta });
+          flushSentence(delta);
+        },
       });
-      // Destructive-action short-circuit: the tool stashed a pending record on
-      // state and returned a deterministic confirmation prompt. Stop executing
-      // further tool calls in this turn AND skip the next LLM iteration so the
-      // model can't (a) issue more tool calls that overwrite pendingDestructive
-      // or fire unrelated side effects, or (b) paraphrase the prompt in its
-      // own voice. The next user utterance ("yes"/"cancel") is handled by the
-      // pre-LLM gate in this same function.
-      if (result?.confirmation_required) {
-        confirmationPrompt = result.summary || 'That looks destructive — confirm by saying "yes" or "cancel" to skip.';
-        break;
+      if (!firstLlm) firstLlm = llm;
+      lastLlm = llm;
+      tlog(`llm.done  iter=${iter + 1} ${Date.now() - iterStart}ms model=${llm.model} text=${(llm.text || '').length}c spoken=${deltaChars}c tool_calls=${llm.toolCalls?.length || 0} finish=${llm.finishReason ?? '—'}`);
+      // Accumulate spoken text across tool-calling iterations. The old single-
+      // assignment version dropped every earlier segment, so the persisted
+      // `reply` (and next turn's history) diverged from what the user actually
+      // heard when the model spoke before/between tool calls.
+      if (llm.text) finalText += (finalText ? ' ' : '') + llm.text;
+
+      if (!llm.toolCalls?.length) break;
+
+      // Assign stable IDs up-front so the assistant's tool_calls[].id and each
+      // tool response's tool_call_id are guaranteed to match, even when the
+      // upstream stream omitted tc.id. Previously the fallback `call_<index>`
+      // was computed only at the tool-response side, so the assistant entry
+      // could carry a different id and the next LLM iteration wouldn't pair
+      // the result with the call.
+      const callsWithIds = llm.toolCalls.map((tc, i) => ({
+        ...tc,
+        resolvedId: tc.id || `call_${iter}_${tc.index ?? i}`,
+      }));
+
+      // Persist the assistant's tool-call turn, then execute each call and
+      // feed the result back as a 'tool' message for the next iteration.
+      messages.push({
+        role: 'assistant',
+        content: llm.text || null,
+        tool_calls: callsWithIds.map((tc) => ({
+          id: tc.resolvedId,
+          type: tc.type,
+          function: { name: tc.function.name, arguments: tc.function.arguments },
+        })),
+      });
+
+      for (const tc of callsWithIds) {
+        if (signal?.aborted) break;
+        const result = await executeTurnToolCall({ tc, cfg, emit, state, signal, hasHostControl, tlog, toolRuns });
+        messages.push({
+          role: 'tool',
+          tool_call_id: tc.resolvedId,
+          content: JSON.stringify(result),
+        });
+        // Destructive-action short-circuit: the tool stashed a pending record on
+        // state and returned a deterministic confirmation prompt. Stop executing
+        // further tool calls in this turn AND skip the next LLM iteration so the
+        // model can't (a) issue more tool calls that overwrite pendingDestructive
+        // or fire unrelated side effects, or (b) paraphrase the prompt in its
+        // own voice. The next user utterance ("yes"/"cancel") is handled by the
+        // pre-LLM gate in this same function.
+        if (result?.confirmation_required) {
+          confirmationPrompt = result.summary || 'That looks destructive — confirm by saying "yes" or "cancel" to skip.';
+          break;
+        }
       }
+      if (confirmationPrompt) break;
     }
-    if (confirmationPrompt) break;
+  } catch (err) {
+    cancelTts('error');
+    throw err;
   }
+
+  enqueueSpeak(pending.trim());
+  await synthQueue;
 
   // Destructive-confirm short-circuit: drain any already-streamed sentences
   // (the model may have spoken "Okay, deleting that" before the tool call),
@@ -855,15 +855,10 @@ export const runTurn = async ({ audio, text, mimeType, source, history = [], emi
   // continuing tool iterations — the gate is enforced server-side regardless
   // of what the model would have done next.
   if (confirmationPrompt && !signal?.aborted) {
-    if (pending.trim()) synthQueue = synthQueue.then(() => speak(pending.trim()));
-    await synthQueue;
     tlog(`confirm.prompt chars=${confirmationPrompt.length}`);
     await speakSyntheticReply(confirmationPrompt);
     return { transcript: userText, reply: confirmationPrompt };
   }
-
-  if (pending.trim()) synthQueue = synthQueue.then(() => speak(pending.trim()));
-  await synthQueue;
 
   const totalMs = Date.now() - turnStart;
   const ttsTotal = ttsTimings.reduce((a, b) => a + b, 0);
