@@ -469,9 +469,16 @@ describe.skipIf(!chrome)('MediaLightbox native video keyboard controls', () => {
               expect(rect.height).toBeGreaterThanOrEqual(44);
               expect(rect.width).toBeGreaterThanOrEqual(44);
             }
-            const fullScreen = await page.getByRole('button', { name: 'Full screen', exact: true }).boundingBox();
-            expect(fullScreen.width).toBeGreaterThanOrEqual(44);
-            expect(fullScreen.height).toBeGreaterThanOrEqual(44);
+            const fullScreen = page.getByRole('button', { name: 'Full screen', exact: true });
+            if (opener === '#opener') {
+              expect(await fullScreen.isVisible()).toBe(false);
+              const video = page.getByRole('dialog').locator('video');
+              expect(await video.evaluate(v => v.controls && v.playsInline && !v.controlsList.contains('nofullscreen'))).toBe(true);
+            } else {
+              const rect = await fullScreen.boundingBox();
+              expect(rect.width).toBeGreaterThanOrEqual(44);
+              expect(rect.height).toBeGreaterThanOrEqual(44);
+            }
             await assertReachable(aside.getByRole('textbox', { name: 'Note' }));
             for (const control of await aside.locator('footer button, footer a').all()) await assertReachable(control);
             if (!roomy) expect(await scroll.evaluate(el => el.scrollHeight > el.clientHeight)).toBe(true);

@@ -358,11 +358,12 @@ export default function MediaLightbox({
           ) : (
             <MediaImage src={item.previewUrl} fallbackSrc={item.fallbackUrl} alt={item.label || item.prompt} className={`${imgMax} object-contain`} placeholderClassName="w-full h-full" />
           )}
-          {/* Solid white pill keeps it readable against black letterbox bars. */}
+          {/* Touch video already has native fullscreen. Keep the lightbox
+              toggle for images and mouse users, including narrow desktops. */}
           <button
             type="button"
             onClick={(e) => { e.stopPropagation(); setFullScreen((v) => !v); }}
-            className="absolute top-2 right-2 z-30 min-h-[44px] min-w-[44px] flex items-center justify-center p-2 rounded-full bg-white text-black hover:bg-white/85 shadow-lg focus:outline-none focus:ring-2 focus:ring-port-accent"
+            className={`absolute top-2 right-2 z-30 min-h-[44px] min-w-[44px] flex items-center justify-center p-2 rounded-full bg-white text-black hover:bg-white/85 shadow-lg focus:outline-none focus:ring-2 focus:ring-port-accent ${isVideo && !fullScreen ? 'pointer-coarse:hidden' : ''}`}
             aria-label={fullScreen ? 'Exit full screen' : 'Full screen'}
             title={fullScreen ? 'Exit full screen (Esc, F)' : 'Full screen (F)'}
           >
