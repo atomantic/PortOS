@@ -105,6 +105,7 @@ export default function StoryboardEditor({ boardId: id, panelId, boardPath, embe
   const [loadError, setLoadError] = useState(null);
   const [loadAttempt, setLoadAttempt] = useState(0);
   const [pending, setPending] = useState(null);
+  const [sketchingPanels, setSketchingPanels] = useState([]);
   const moodBoardList = useListResource(readMoodBoardNames);
   const moodBoards = moodBoardList.items;
   const [sketchNonces, setSketchNonces] = useState({});
@@ -212,6 +213,9 @@ export default function StoryboardEditor({ boardId: id, panelId, boardPath, embe
   }, [board]);
 
   const panelPath = (pid) => `${boardPath}/panel/${pid}`;
+  const currentPanelPath = panelId ? panelPath(panelId) : null;
+  const activePanelPath = useRef(currentPanelPath);
+  activePanelPath.current = currentPanelPath;
   const openPanel = (pid) => navigate(`${panelPath(pid)}${panelSearch()}`);
   const closePanel = () => navigate(`${boardPath}${panelSearch()}`);
   const setView = (next) => setSearchParams((prev) => {
@@ -286,18 +290,21 @@ export default function StoryboardEditor({ boardId: id, panelId, boardPath, embe
     // A blank sketch is minted server-side, added as the panel's take, then
     // drawn on the annotate page, which returns here.
     onSketch: async () => {
-      setPending('sketch');
-      const minted = await createBlankSketch({ silent: true }).catch(() => null);
-      if (!minted?.key) {
-        setPending(null);
-        toast.error('Could not start a sketch');
-        return;
+      setSketchingPanels((paths) => [...paths, currentPanelPath]);
+      try {
+        const minted = await createBlankSketch({ silent: true }).catch(() => null);
+        if (!minted?.key) {
+          toast.error('Could not start a sketch');
+          return;
+        }
+        const res = await write(() => addStoryboardPanelTake(id, panelId, { source: 'sketch', sketchKey: minted.key }));
+        // The take belongs to the panel that started it, even if the user has stepped away.
+        if (!res || activePanelPath.current !== currentPanelPath) return;
+        const returnTo = `${currentPanelPath}${panelSearch()}`;
+        navigate(`/media/annotate/${encodeURIComponent(minted.key)}?returnTo=${encodeURIComponent(returnTo)}`);
+      } finally {
+        setSketchingPanels((paths) => paths.filter((path) => path !== currentPanelPath));
       }
-      const res = await write(() => addStoryboardPanelTake(id, panelId, { source: 'sketch', sketchKey: minted.key }));
-      setPending(null);
-      if (!res) return;
-      const returnTo = `${panelPath(panelId)}${panelSearch()}`;
-      navigate(`/media/annotate/${encodeURIComponent(minted.key)}?returnTo=${encodeURIComponent(returnTo)}`);
     },
   };
 
@@ -488,7 +495,7 @@ export default function StoryboardEditor({ boardId: id, panelId, boardPath, embe
         found={found}
         panelNumber={found ? panelNumbers.get(found.panel.id) : null}
         sketchNonce={sketchNonce}
-        busy={pending === 'sketch'}
+        busy={sketchingPanels.includes(currentPanelPath)}
         onClose={closePanel}
         onStep={stepPanel}
         handlers={panelHandlers}

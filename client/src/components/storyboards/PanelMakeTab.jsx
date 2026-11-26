@@ -112,15 +112,19 @@ export default function PanelMakeTab({ board, found, sketchNonce, handlers }) {
 
   useEffect(() => {
     let active = true;
+    setLinkedError(false);
     if (!linkKey) {
       setLinkedRefs([]);
       return undefined;
     }
-    setLinkedError(false);
     getStoryboardPanelMake(board.id, panel.id, { silent: true })
       .then((res) => { if (active) setLinkedRefs(Array.isArray(res?.linkedRefs) ? res.linkedRefs : []); })
       // A failed read says so; it must not look like a panel with no cast images.
-      .catch(() => { if (active) setLinkedError(true); });
+      .catch(() => {
+        if (!active) return;
+        setLinkedRefs([]);
+        setLinkedError(true);
+      });
     return () => { active = false; };
   }, [board.id, panel.id, linkKey, pickKey]);
 
