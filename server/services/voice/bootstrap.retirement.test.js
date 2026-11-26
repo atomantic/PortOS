@@ -33,12 +33,13 @@ vi.mock('../settings.js', () => ({ getSettings: vi.fn(), updateSettings: vi.fn()
 
 import { existsSync } from 'fs';
 const { whichFirst } = await import('../../lib/processEnv.js');
-const { execPm2 } = await import('../pm2.js');
+const { execPm2, getAppStatus } = await import('../pm2.js');
 const { execFile } = await import('../../lib/childProcess.js');
+const { fetchWithTimeout } = await import('../../lib/fetchWithTimeout.js');
 const { getProviderById } = await import('../provider/providers.js');
 const { VOICE_DEFAULTS } = await import('./config.js');
 const { getVoiceProvisioner } = await import('./modelProvisioners.js');
-const { reconcile, ensureToolCapableModel, preloadModel } = await import('./bootstrap.js');
+const { reconcile, startWhisper, stopWhisper, ensureToolCapableModel, preloadModel } = await import('./bootstrap.js');
 
 // A provisioner double: every primitive is a spy so a test can assert that an
 // unreachable backend short-circuits BEFORE any install is attempted.
@@ -173,4 +174,72 @@ it('skips the preload when the chosen model is already resident', async () => {
   getVoiceProvisioner.mockReturnValue(backend);
   await expect(preloadModel(toolsOn())).resolves.toEqual({ skipped: 'already-loaded', model: 'small:1b' });
   expect(backend.load).not.toHaveBeenCalled();
+});
+
+it('finishes Whisper readiness before overlapping stop and reconcile requests mutate PM2', async () => {
+  vi.clearAllMocks();
+  existsSync.mockImplementation(() => true);
+  whichFirst.mockResolvedValue('/usr/bin/whisper-server');
+  const cfg = toolsOn({
+    stt: { ...VOICE_DEFAULTS.stt, engine: 'whisper' },
+    llm: { model: 'explicit' },
+    tts: { ...VOICE_DEFAULTS.tts, engine: 'qwen3-tts' },
+  });
+  getAppStatus.mockResolvedValueOnce({ status: 'online' });
+  const probeStarted = Promise.withResolvers();
+  const finishProbe = Promise.withResolvers();
+  fetchWithTimeout.mockImplementationOnce(() => {
+    probeStarted.resolve();
+    return finishProbe.promise;
+  });
+
+  const start = startWhisper(cfg);
+  await probeStarted.promise;
+  const stop = stopWhisper();
+  const reconciled = reconcile(cfg);
+  await new Promise(setImmediate);
+  const commandsWhileProbing = execPm2.mock.calls.map(([[command]]) => command);
+  finishProbe.resolve({});
+
+  await expect(Promise.all([start, stop, reconciled])).resolves.toMatchObject([
+    { name: 'portos-whisper' }, { stopped: true }, { name: 'portos-whisper' },
+  ]);
+  expect(commandsWhileProbing).toEqual(['delete', 'start']);
+  expect(execPm2.mock.calls.map(([[command]]) => command)).toEqual(['delete', 'start', 'delete', 'delete', 'start']);
+});
+
+it('coalesces overlapping reconciles to the latest config while the model load is in flight', async () => {
+  vi.clearAllMocks();
+  const loadStarted = Promise.withResolvers();
+  const finishLoad = Promise.withResolvers();
+  const resident = new Set();
+  const backend = fakeBackend({
+    id: 'lmstudio',
+    listModels: vi.fn(async () => ['small:1b']),
+    isToolCapable: vi.fn(async () => true),
+    loadedModels: vi.fn(async () => resident),
+    load: vi.fn(async (model) => {
+      loadStarted.resolve();
+      await finishLoad.promise;
+      resident.add(model);
+      return { ok: true };
+    }),
+  });
+  getVoiceProvisioner.mockReturnValue(backend);
+  const cfg = toolsOn({
+    stt: { ...VOICE_DEFAULTS.stt, engine: 'web-speech' },
+    tts: { ...VOICE_DEFAULTS.tts, engine: 'qwen3-tts' },
+    llm: { provider: 'lmstudio' },
+  });
+
+  await reconcile(cfg);
+  await loadStarted.promise;
+  await Promise.all([reconcile(toolsOn({ ...cfg, llm: { provider: 'ollama' } })), reconcile(cfg)]);
+  const providersWhileLoading = getVoiceProvisioner.mock.calls.map(([provider]) => provider);
+  finishLoad.resolve();
+
+  await vi.waitFor(() => expect(backend.loadedModels).toHaveBeenCalledTimes(2));
+  expect(providersWhileLoading).toEqual(['lmstudio', 'lmstudio']);
+  expect(getVoiceProvisioner.mock.calls).toEqual([['lmstudio'], ['lmstudio'], ['lmstudio'], ['lmstudio']]);
+  expect(backend.load).toHaveBeenCalledExactlyOnceWith('small:1b');
 });
