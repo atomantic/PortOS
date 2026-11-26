@@ -327,7 +327,8 @@ export async function getCategoryDetail(categoryKey, { measure = false } = {}) {
       const run = runs.get(item.name);
       if (run) {
         item.label = run.name || run.character?.name || run.baseModelId || item.name;
-        item.description = [run.baseModelId, run.status].filter(Boolean).join(' · ');
+        const status = ['queued', 'running'].includes(run.status) ? `last recorded as ${run.status}` : run.status;
+        item.description = [run.baseModelId, status].filter(Boolean).join(' · ');
       }
       item.sourceUnavailable = result === null ? 'Source lookup unavailable' : !run ? 'Run record no longer available' : null;
     }

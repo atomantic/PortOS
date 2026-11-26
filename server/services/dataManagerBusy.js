@@ -16,6 +16,7 @@ import { join } from 'path';
 import { PATHS } from '../lib/fileUtils.js';
 import { isDetachedRunning } from '../lib/detachedSpawn.js';
 import { maintenance } from '../lib/maintenanceAdmission.js';
+import { findSurvivingTrainer } from '../lib/heavyJobClaim.js';
 import { listJobs } from './mediaJobQueue/index.js';
 import { collectActiveCleanBasenames } from './imageCleanTmpGc.js';
 import { collectActiveFederatedAssetBasenames } from './federatedMedia/assetStore.js';
@@ -83,7 +84,8 @@ export async function trainingRunsBusy({ runsDir = null } = {}) {
   const surviving = await Promise.all(
     runs.map(name => isDetachedRunning(join(dir, name, '.detached')))
   );
-  if (!surviving.some(Boolean)) return IDLE;
+  // The supervisor may have left a stale exit marker or no PID file.
+  if (!surviving.some(Boolean) && !await findSurvivingTrainer({ root: dir })) return IDLE;
   return {
     busy: true,
     reason: 'A LoRA trainer that outlived a restart is still writing here — wait for it to finish before removing the data.'

@@ -27,7 +27,8 @@ workflow automatically, and the page offers no unsupported Upgrade action.
 Upgrading keeps saved training configuration, PostgreSQL run history and files on
 disk. Old queued or interrupted training entries close in the media queue. PortOS
 continues to check for live legacy trainers before starting local accelerator
-work or applying an automatic update.
+work or applying an automatic update. Data Manager labels an unfinished run
+record with its last recorded status.
 Manage installed adapters and remove retired data from the LoRAs page.
 
 ## Explicit removal

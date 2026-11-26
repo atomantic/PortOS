@@ -216,13 +216,15 @@ describe('purgeCategory — category-scoped categories keep their behavior', () 
 
 describe('training-run source details', () => {
   it('resolves stored run names while retaining orphan folders', async () => {
-    for (const id of ['example-run', 'orphan-run']) {
+    for (const id of ['example-run', 'interrupted-run', 'orphan-run']) {
       mkdirSync(dataPath('training-runs', id), { recursive: true });
       writeFileSync(dataPath('training-runs', id, 'checkpoint.bin'), 'checkpoint');
     }
     query.mockResolvedValue({ rows: [{ data: {
       id: 'example-run', name: 'Example portrait study', datasetId: 'example-dataset',
       baseModelId: 'example-model', status: 'completed',
+    } }, { data: {
+      id: 'interrupted-run', baseModelId: 'example-model', status: 'running',
     } }] });
     const detail = await getCategoryDetail('training-runs');
     expect(detail.items.find(item => item.name === 'example-run')).toMatchObject({
@@ -230,6 +232,9 @@ describe('training-run source details', () => {
       description: 'example-model · completed',
     });
     expect(detail.items.find(item => item.name === 'example-run')).not.toHaveProperty('sourceHref');
+    expect(detail.items.find(item => item.name === 'interrupted-run')).toMatchObject({
+      description: 'example-model · last recorded as running',
+    });
     expect(detail.items.find(item => item.name === 'orphan-run')).toMatchObject({ sourceUnavailable: 'Run record no longer available' });
     await expect(purgeCategory('training-runs', { subPath: 'example-run' })).rejects.toMatchObject({ status: 403, code: 'CATEGORY_NOT_PURGEABLE' });
     expect(existsSync(dataPath('training-runs', 'example-run'))).toBe(true);

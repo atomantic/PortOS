@@ -4,6 +4,7 @@ import { tmpdir } from 'os';
 import { join } from 'path';
 import { spawn, execFile, execFileSync } from 'node:child_process';
 import { promisify } from 'node:util';
+import { createInterface } from 'node:readline';
 import { describe, expect, it, vi } from 'vitest';
 import { __cleanupHeldClaims, findSurvivingTrainer, __publishClaim, claimHeavyLocalJob, HEAVY_LOCAL_JOB_STALE_MS } from './heavyJobClaim.js';
 import { maintenance } from './maintenanceAdmission.js';
@@ -54,7 +55,7 @@ describe('claimHeavyLocalJob', () => {
     await writeFile(join(root, '.portos-disposable-root'), '');
     const trainer = spawn(process.execPath, ['-e', 'setInterval(() => {}, 1000)', '--', 'train_mflux_lora.py', '--output-dir', run], { stdio: 'ignore' });
     const stopped = new Promise(resolve => trainer.once('close', resolve));
-    let laterTrainer, laterStopped, racing, go;
+    let laterTrainer, laterStopped, racing;
     try {
       await new Promise((resolve, reject) => { trainer.once('spawn', resolve); trainer.once('error', reject); });
       await writeFile(join(control, 'pid'), String(trainer.pid));
@@ -71,39 +72,50 @@ describe('claimHeavyLocalJob', () => {
       const script = `import { claimHeavyLocalJob } from ${JSON.stringify(moduleUrl)};\n`
         + `import { createMaintenanceAdmission } from ${JSON.stringify(admissionUrl)};\n`
         + `import { writeFile } from 'node:fs/promises';\n`
-        + `import { existsSync } from 'node:fs'; import { setTimeout as delay } from 'node:timers/promises';\n`
         + `const data = ${JSON.stringify(data)}, claimPath = ${JSON.stringify(claimPath)};\n`
         + `const admission = createMaintenanceAdmission(data, { assertWrite: path => { if (path !== ${JSON.stringify(join(data, 'workflow-maintenance'))}) throw new Error('unexpected path'); } });\n`
-        + `const createClaim = async (path, bytes, options) => { if (path !== claimPath) throw new Error('unexpected claim'); if (process.env.CLAIM_TEST_READY) { await writeFile(process.env.CLAIM_TEST_READY, 'ready'); while (!existsSync(process.env.CLAIM_TEST_GO)) await delay(10); } return writeFile(path, bytes, options); };\n`
+        + `const createClaim = async (path, bytes, options) => {
+          if (path !== claimPath) throw new Error('unexpected claim');
+          if (process.env.CLAIM_TEST_PAUSE === '1') {
+            console.log('READY');
+            await new Promise(resolve => process.stdin.once('end', resolve).resume());
+          }
+          return writeFile(path, bytes, options);
+        };\n`
         + `const claim = await claimHeavyLocalJob({ kind: 'image', id: 'other-process', claimPath, admission, createClaim });\n`
         + `console.log('RESULT:' + JSON.stringify({ ok: claim.ok }));\nif (claim.ok) await claim.release();`;
-      const runClaim = async (extra = {}) => {
-        const { stdout } = await promisify(execFile)(process.execPath, ['--input-type=module', '-e', script], {
-          env: { ...process.env, PORTOS_DATA_ROOT: root, CLAIM_TEST_READY: '', CLAIM_TEST_GO: '', ...extra }, timeout: 15000,
+      const runClaim = (pause = false) => {
+        const execution = promisify(execFile)(process.execPath, ['--input-type=module', '-e', script], {
+          env: { ...process.env, PORTOS_DATA_ROOT: root, CLAIM_TEST_PAUSE: pause ? '1' : '0' }, timeout: 15000,
         });
-        return JSON.parse(stdout.match(/RESULT:(\{[^\n]+\})/)?.[1] ?? '{}');
+        const result = execution.then(({ stdout }) => JSON.parse(stdout.match(/RESULT:(\{[^\n]+\})/)?.[1] ?? '{}'));
+        if (!pause) return { result };
+        const ready = new Promise((resolve, reject) => {
+          const output = createInterface({ input: execution.child.stdout });
+          output.on('line', line => { if (line === 'READY') resolve(); });
+          void result.then(() => reject(new Error('Claim process exited before the publication pause')), reject);
+        });
+        return { result, ready, release: () => execution.child.stdin.end() };
       };
-      expect(await runClaim()).toEqual({ ok: false });
+      expect(await runClaim().result).toEqual({ ok: false });
       trainer.kill('SIGTERM');
       await stopped;
       await writeFile(join(control, 'exit'), '0');
-      const ready = join(root, 'ready');
-      go = join(root, 'go');
-      racing = runClaim({ CLAIM_TEST_READY: ready, CLAIM_TEST_GO: go });
-      await vi.waitFor(() => expect(existsSync(ready)).toBe(true));
+      racing = runClaim(true);
+      await racing.ready;
       laterTrainer = spawn(process.execPath, ['-e', 'setInterval(() => {}, 1000)', '--', 'train_mflux_lora.py', '--output-dir', run], { stdio: 'ignore' });
       laterStopped = new Promise(resolve => laterTrainer.once('close', resolve));
       await new Promise((resolve, reject) => { laterTrainer.once('spawn', resolve); laterTrainer.once('error', reject); });
       await writeFile(join(control, 'pid'), String(laterTrainer.pid));
-      await writeFile(go, 'go');
-      expect(await racing).toEqual({ ok: false });
+      racing.release();
+      expect(await racing.result).toEqual({ ok: false });
       laterTrainer.kill('SIGTERM');
       await laterStopped;
-      expect(await runClaim()).toEqual({ ok: true });
+      expect(await runClaim().result).toEqual({ ok: true });
     } finally {
       if (trainer.exitCode === null && trainer.signalCode === null) { trainer.kill('SIGTERM'); await stopped; }
       if (laterTrainer && laterTrainer.exitCode === null && laterTrainer.signalCode === null) { laterTrainer.kill('SIGTERM'); await laterStopped; }
-      if (racing) { await writeFile(go, 'go').catch(() => {}); await racing.catch(() => {}); }
+      if (racing) { racing.release(); await racing.result.catch(() => {}); }
       await rm(root, { recursive: true, force: true });
     }
   });

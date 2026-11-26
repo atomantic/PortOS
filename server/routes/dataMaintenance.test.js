@@ -6,7 +6,7 @@ import express from 'express';
 import { request } from '../lib/testHelper.js';
 import { makePathsProxy } from '../lib/mockPathsDataRoot.js';
 const root = realpathSync(mkdtempSync(join(tmpdir(), 'maintenance-fixture-')));
-const state = vi.hoisted(() => ({ jobs: [], authorized: true, failRemoval: false, recreate: false }));
+const state = vi.hoisted(() => ({ jobs: [], processes: [], authorized: true, failRemoval: false, recreate: false }));
 vi.mock('../lib/fileUtils.js', async original => {
   const actual = await original();
   return { ...makePathsProxy(actual, { dataRoot: root }), rmGuarded: async (path, options) => {
@@ -19,6 +19,10 @@ vi.mock('../lib/fileUtils.js', async original => {
   } };
 });
 vi.mock('../services/mediaJobQueue/index.js', () => ({ listJobs: () => state.jobs }));
+vi.mock('../lib/detachedSpawn.js', async importOriginal => ({
+  ...await importOriginal(),
+  snapshotMaintenanceProcesses: async () => state.processes,
+}));
 vi.mock('../lib/backupSnapshotBoundary.js', () => ({ withBackupAssetPublication: work => work() }));
 // hostControlRouteGate (#16018) admits the writes; the inventory GET carries its own check.
 const gate = (_req, res, next) => state.authorized ? next() : res.sendStatus(403);
@@ -34,7 +38,7 @@ beforeEach(() => {
   writeFileSync(join(root, 'training-runs/run-example/checkpoint.bin'), 'unique checkpoint');
   writeFileSync(join(root, 'lora-datasets/example/images/source.png'), 'unique source');
   writeFileSync(join(root, 'loras/example.safetensors'), 'shared adapter');
-  state.jobs = []; state.authorized = true; state.failRemoval = false; state.recreate = false;
+  state.jobs = []; state.processes = []; state.authorized = true; state.failRemoval = false; state.recreate = false;
 });
 afterAll(() => rmSync(root, { recursive: true, force: true }));
 describe('allowlisted data maintenance HTTP workflow', () => {
@@ -86,6 +90,18 @@ describe('allowlisted data maintenance HTTP workflow', () => {
     expect((await del()).body.status).toBe('deleted');
     expect(existsSync(join(root, 'loras/example.safetensors'))).toBe(true);
   });
+  it('protects files when a legacy trainer has no usable control files', async () => {
+    state.processes = [{
+      pid: 777,
+      state: 'S',
+      command: `python train_flux2_lora.py --output-dir "${join(root, 'training-runs/run-example')}"`,
+    }];
+    expect((await del()).body.code).toBe('MAINTENANCE_BUSY');
+    expect((await del('retired-lora-datasets')).body.code).toBe('MAINTENANCE_BUSY');
+    expect(existsSync(join(root, 'training-runs/run-example/checkpoint.bin'))).toBe(true);
+    expect(existsSync(join(root, 'lora-datasets/example/images/source.png'))).toBe(true);
+  });
+
   it('reports nothing-to-delete as stale', async () => {
     expect((await del()).status).toBe(200);
     expect((await del()).body.code).toBe('MAINTENANCE_STALE');
