@@ -232,3 +232,10 @@ step commits to it.
   [carloslfu/slotstream](https://github.com/carloslfu/slotstream) for the
   runtime itself, its supported checkpoint formats, and its own release
   notes.
+
+### Removing the runtime
+
+In **Models → Runtimes**, stop Slotstream and choose **Uninstall**. This removes
+the executable at PortOS's release-install location (`~/.slotstream/bin/slotstream`).
+Model checkpoints and provider or launch settings stay available for reinstall.
+An external install elsewhere on PATH is not removed.

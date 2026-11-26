@@ -8,7 +8,7 @@ import { ServerError } from '../lib/errorHandler.js';
 import { isPortInUse } from '../lib/platform.js';
 import {
   MKSERVE_BUNDLE, MKSERVE_MODEL, MKSERVE_VERSION, installPinnedMkserve, isMkserveRevision,
-  mkserveInstallPaths, mkserveLaunchEnvironment, readMkserveInstall,
+  mkserveInstallPaths, mkserveLaunchEnvironment, readMkserveInstall, removeMkserveRelease,
 } from './mkserveRuntimeInstall.js';
 import { clearJlistCache, execPm2, getAppStatusStrict } from './pm2.js';
 
@@ -19,11 +19,11 @@ const PORT = PORTS.MKSERVE;
 const ORIGIN = 'http://' + HOST + ':' + PORT;
 const ENDPOINT = ORIGIN + '/v1';
 const START_TIMEOUT_MS = 180_000;
-const SUPPORTED_REASON = 'mkserve is supported on Apple M5 Max with macOS 26 or later and at least 36 GB of unified memory.';
+export const MKSERVE_UNSUPPORTED_REASON = 'mkserve is supported on Apple M5 Max with macOS 26 or later and at least 36 GB of unified memory.';
 const ACTIVE = new Set(['online', 'launching', 'stopping', 'waiting restart']);
 let operation = null;
 
-function supportsMkserve() {
+export function supportsMkserve() {
   return process.platform === 'darwin' && process.arch === 'arm64'
     && Number(release().split('.')[0]) >= 25
     && cpus()[0]?.model === 'Apple M5 Max' && totalmem() >= 36 * 2 ** 30;
@@ -38,7 +38,7 @@ function onProgress(callback, message) {
 }
 
 function runOperation(state, action) {
-  if (!supportsMkserve()) throw error(SUPPORTED_REASON, 400, 'UNSUPPORTED_PLATFORM');
+  if (!supportsMkserve()) throw error(MKSERVE_UNSUPPORTED_REASON, 400, 'UNSUPPORTED_PLATFORM');
   if (operation) throw error('Another mkserve operation is already running.');
   operation = state;
   return action().finally(() => { operation = null; });
@@ -104,7 +104,7 @@ async function portInUse() {
 export async function getMkserveRuntimeStatus() {
   const supported = supportsMkserve();
   const base = { supported, endpoint: ENDPOINT, installed: false, version: null, availableVersion: MKSERVE_VERSION, updateAvailable: false };
-  if (!supported) return { ...base, state: 'unsupported', reason: SUPPORTED_REASON };
+  if (!supported) return { ...base, state: 'unsupported', reason: MKSERVE_UNSUPPORTED_REASON };
   const [installed, app, health] = await Promise.all([readMkserveInstall(), getAppStatusStrict(MKSERVE_APP), probeMkserve()]);
   const status = { ...base, installed: !!installed, version: installed?.version ?? null,
     updateAvailable: !!installed && installed.bundle !== MKSERVE_BUNDLE };
@@ -117,9 +117,10 @@ export async function getMkserveRuntimeStatus() {
   if (managed && ACTIVE.has(app.status)) return { ...status, managed: true, state: 'starting' };
   if (await portInUse()) return { ...status, managed: false, state: 'unrecognized', reason: 'Another service is using port ' + PORT + '.' };
   if (managed && app.status === 'errored') {
-    return { ...status, managed: true, state: 'error', reason: 'mkserve exited. Check its PM2 logs before restarting.' };
+    return { ...status, managed: true, state: 'error', canUninstall: Boolean(installed), reason: 'mkserve exited. Check its PM2 logs before restarting.' };
   }
-  return { ...status, managed, state: installed ? 'stopped' : 'missing' };
+  const canUninstall = Boolean(installed && (app?.status === 'not_found' || (managed && app.status === 'stopped')));
+  return { ...status, managed, canUninstall, state: installed ? 'stopped' : 'missing' };
 }
 
 export function installMkserve({ onProgress: progress } = {}) {
@@ -175,6 +176,20 @@ export function startMkserveServer({ onProgress: progress } = {}) {
     ]).catch(() => { throw error('PM2 could not launch mkserve. Check the process manager and retry.', 503, 'START_FAILED'); });
     await waitUntilReady();
     return { success: true, message: 'mkserve started' };
+  });
+}
+
+export function uninstallMkserve() {
+  return runOperation('uninstalling', async () => {
+    const installed = await readMkserveInstall();
+    if (!installed) throw error('There is no PortOS-managed mkserve release to uninstall.', 409, 'NOT_INSTALLED');
+    const app = await requireAppStatus();
+    if (!['not_found', 'stopped', 'errored'].includes(app.status) || await portInUse()) {
+      throw error('Stop mkserve and free its port before uninstalling. PortOS will not alter an external server.');
+    }
+    if (app.status !== 'not_found') await removeManaged(app);
+    await removeMkserveRelease(installed);
+    return { success: true, message: 'mkserve uninstalled. Model files were kept.' };
   });
 }
 

@@ -301,8 +301,26 @@ export function createDaemonWatcher({
     return { success: true, message: `${label} stopped` };
   };
 
+  const assertStoppedForUninstall = async ({ label, codePrefix, savedPort }) => {
+    clearStatusCache();
+    const app = await getAppStatus(appName);
+    if (!app) {
+      throw new ServerError(`PortOS could not verify that ${label} is stopped. Check PM2 and retry.`, {
+        status: 503, code: `${codePrefix}_PM2_UNAVAILABLE`,
+      });
+    }
+    const inUse = () => new ServerError(`Stop ${label} and free its configured port before uninstalling.`, {
+      status: 409, code: `${codePrefix}_IN_USE`,
+    });
+    if (!['not_found', 'stopped', 'errored'].includes(app.status)) throw inUse();
+    const ports = new Set([defaultPort, savedPort, getConfig()?.port, parseConfigFromArgs(app.args)?.port].filter(Boolean));
+    const listening = await Promise.all([...ports].map((port) => isPortInUse(port)));
+    if (listening.some(Boolean)) throw inUse();
+  };
+
   return {
     appendLog: logs.append,
+    assertStoppedForUninstall,
     assertPortFree,
     endpoint,
     getStatusBase,

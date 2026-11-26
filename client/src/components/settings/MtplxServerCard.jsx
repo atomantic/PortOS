@@ -29,6 +29,7 @@ export default function MtplxServerCard({
   onStart,
   onStop,
   onInstall,
+  onUninstall,
   onSearchModels,
   onPullModel,
   onRemoveModel,
@@ -235,6 +236,11 @@ export default function MtplxServerCard({
       )}
 
       <RuntimeLogDisclosure logs={status?.recentLogs} />
+      {status?.canUninstall && onUninstall && (
+        <button type="button" onClick={onUninstall} disabled={busy} className={`${btnClass} border border-port-border text-port-warning`}>
+          Uninstall MTPLX
+        </button>
+      )}
     </div>
   );
 }

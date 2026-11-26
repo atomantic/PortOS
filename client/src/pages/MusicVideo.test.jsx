@@ -882,7 +882,7 @@ describe('MusicVideo stage tabs (#9243)', () => {
     }]);
     renderAt('/music-video/mv-1/cast-sets');
     await screen.findByRole('heading', { level: 2, name: PROJECT_WITH_CLIP.name });
-    const review = screen.getByRole('region', { name: 'Production review' });
+    const review = await screen.findByRole('region', { name: 'Production review' });
     expect(within(review).getByRole('region', { name: 'Approve: Art direction' })).toBeInTheDocument();
     expect(within(review).queryByRole('region', { name: 'Approve: Lyric-timed storyboard' })).toBeNull();
     expect(screen.queryByText('Production approvals')).toBeNull();
@@ -902,7 +902,7 @@ describe('MusicVideo stage tabs (#9243)', () => {
         expect(within(panel).queryByRole('region', { name: 'Production review' })).toBeNull();
         continue;
       }
-      const stageReview = within(panel).getByRole('region', { name: 'Production review' });
+      const stageReview = await within(panel).findByRole('region', { name: 'Production review' });
       if (stage === 'cast-sets') {
         // Look is reviewed through its visual guide: the step's work comes first and the approval closes it.
         expect(panel.lastElementChild).toBe(stageReview);

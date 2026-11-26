@@ -46,6 +46,7 @@ export default function DayView({ accounts }) {
   // Current time indicator — update every 60s so the red line moves
   const [now, setNow] = useState(() => new Date());
   useEffect(() => {
+    // biome-ignore lint/plugin/lint-no-view-interval: Moves the "now" line down the day grid; no I/O.
     const id = setInterval(() => setNow(new Date()), 60_000);
     return () => clearInterval(id);
   }, []);

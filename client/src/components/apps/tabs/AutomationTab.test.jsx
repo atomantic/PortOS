@@ -129,9 +129,9 @@ describe('AutomationTab per-app options', () => {
     expect(api.toggleAllAppTaskTypes).not.toHaveBeenCalled();
     fireEvent.click(screen.getByRole('button', { name: 'Enable all' }));
 
-    await waitFor(() => expect(api.toggleAllAppTaskTypes).toHaveBeenCalledWith('app-1', true, { silent: true }));
+    await waitFor(() => expect(screen.queryByText('Enable all 3 scheduled tasks for MyApp?')).not.toBeInTheDocument());
+    expect(api.toggleAllAppTaskTypes).toHaveBeenCalledWith('app-1', true, { silent: true });
     expect(mockToast.success).toHaveBeenCalledWith('Enabled all 3 scheduled tasks for MyApp');
-    expect(screen.queryByText('Enable all 3 scheduled tasks for MyApp?')).not.toBeInTheDocument();
   });
 
   it('acknowledges a slow run immediately, prevents duplicate clicks, and retains the queued receipt', async () => {

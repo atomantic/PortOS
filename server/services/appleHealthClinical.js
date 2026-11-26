@@ -6,7 +6,6 @@
  * into blood-tests.json.
  */
 
-import { emitToOperatorsOn } from './socketIo.js';
 import { safeJSONParse } from '../lib/fileUtils.js';
 import { commitClinicalBloodImport } from './meatspace/meatspaceHealth.js';
 import { POLLUTING_KEYS } from '../lib/objects.js';
@@ -266,12 +265,10 @@ export function mergeBloodTests(existing, fhirData) {
 
 /**
  * Import clinical records from FHIR JSON strings.
- * Reads existing blood-tests.json, merges FHIR data, writes back, emits progress.
+ * Reads existing blood-tests.json, merges FHIR data, and writes back.
  */
-export async function importClinicalRecords(jsonStrings, io) {
+export async function importClinicalRecords(jsonStrings) {
   if (!jsonStrings?.length) return { clinicalRecords: 0, newDates: 0, newValues: 0 };
-
-  emitToOperatorsOn(io, 'health:import:progress', { stage: 'clinical', message: `Processing ${jsonStrings.length} clinical records...` });
 
   const fhirData = processClinicalRecords(jsonStrings);
   const merged = await commitClinicalBloodImport(fhirData, mergeBloodTests);
@@ -285,7 +282,6 @@ export async function importClinicalRecords(jsonStrings, io) {
   };
 
   console.log(`🧪 Clinical records imported: ${fhirData.totalParsed} labs from ${fhirData.tests.length} dates (${merged.newDates} new)`);
-  emitToOperatorsOn(io, 'health:import:progress', { stage: 'clinical_done', ...summary });
 
   return summary;
 }

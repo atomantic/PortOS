@@ -1,6 +1,8 @@
+import { join } from 'node:path';
 import { recordingOperatorIo } from '../test/recordingOperatorIo.js';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { pinPlatform } from '../lib/testHelper.js';
+import { slotstreamBinDir } from '../lib/slotstreamModels.js';
 
 const probe = vi.hoisted(() => ({ probeOpenAiModels: vi.fn() }));
 vi.mock('../lib/openAiModelsProbe.js', () => probe);
@@ -27,7 +29,8 @@ const localLlm = vi.hoisted(() => ({
   controlOllamaServer: vi.fn(async () => ({ success: true })),
 }));
 vi.mock('./localLlm.js', () => localLlm);
-vi.mock('./lmStudioManager.js', () => ({ isAppInstalled: () => false }));
+const lmStudio = vi.hoisted(() => ({ isAppInstalled: vi.fn(() => false) }));
+vi.mock('./lmStudioManager.js', () => lmStudio);
 // MTPLX's model cache — this module reads it directly (the checklist's refusals
 // and its `pull-start` download button are phrased for THIS surface, so the
 // reading happens here rather than inside the manager).
@@ -54,6 +57,29 @@ const vllmManager = vi.hoisted(() => ({
   startVllmQwenProject: vi.fn(async () => ({ success: true })),
 }));
 vi.mock('./vllmQwenManager.js', () => vllmManager);
+const slotstream = vi.hoisted(() => ({
+  installSlotstream: vi.fn(async () => ({ success: true })),
+  startSlotstreamServer: vi.fn(async () => ({ success: true })),
+}));
+vi.mock('./slotstreamServerManager.js', async (importOriginal) => ({ ...(await importOriginal()), ...slotstream }));
+const splash = vi.hoisted(() => ({
+  supportsManagedSplash: vi.fn(),
+  readInstalledSplashVersion: vi.fn(),
+  SPLASH_UNSUPPORTED_REASON: 'Splash requires macOS 26.4 or later and an Apple M3 or newer.',
+  installSplashRuntime: vi.fn(),
+  startSplashServer: vi.fn(),
+}));
+vi.mock('./splashManagedRuntime.js', () => splash);
+vi.mock('./splashServerManager.js', () => splash);
+const mkserve = vi.hoisted(() => ({
+  supportsMkserve: vi.fn(),
+  readMkserveInstall: vi.fn(),
+  MKSERVE_UNSUPPORTED_REASON: 'mkserve requires Apple M5 Max.',
+  installMkserve: vi.fn(),
+  startMkserveServer: vi.fn(),
+}));
+vi.mock('./mkserveRuntimeInstall.js', () => mkserve);
+vi.mock('./mkserveRuntimeManager.js', () => mkserve);
 const providerSync = vi.hoisted(() => ({ syncRuntimeProviderModels: vi.fn(async () => false) }));
 vi.mock('./localRuntimeProviderSync.js', () => providerSync);
 // The SGLang project on disk, and the CUDA probe its start row consults BEFORE
@@ -108,6 +134,7 @@ beforeEach(() => {
 afterEach(() => {
   vi.clearAllMocks();
   pathLookup.findCommandOnPath.mockReturnValue(null);
+  lmStudio.isAppInstalled.mockReturnValue(false);
   commands.commandExists.mockResolvedValue(true);
   streaming.runStreamingCommand.mockResolvedValue({ success: true });
   // The placement loop writes this on a Windows host so the rest of the run
@@ -117,7 +144,7 @@ afterEach(() => {
 
 describe('describeRuntimeSetup', () => {
   it('covers every runtime the readiness checklist can report', () => {
-    expect([...SETUP_RUNTIME_KINDS].sort()).toEqual(['llama', 'lmstudio', 'mtplx', 'ollama', 'sglang', 'slotstream', 'vllm']);
+    expect([...SETUP_RUNTIME_KINDS].sort()).toEqual(['llama', 'lmstudio', 'mkserve', 'mtplx', 'ollama', 'sglang', 'slotstream', 'splash', 'vllm']);
   });
 
   it('offers install AND start when nothing is there yet', () => {
@@ -265,6 +292,16 @@ describe('runLocalRuntimeSetup', () => {
     expect(localLlm.installBackend).toHaveBeenCalledWith('ollama', expect.any(Function));
     expect(localLlm.controlOllamaServer).not.toHaveBeenCalled();
     expect(result).toMatchObject({ success: true, message: expect.stringContaining('qwen3') });
+  });
+
+  it('recognizes the installed LM Studio app and explains how to enable its CLI', async () => {
+    lmStudio.isAppInstalled.mockReturnValue(true);
+    probe.probeOpenAiModels.mockResolvedValue(unreachable);
+    expect(await runLocalRuntimeSetup('lmstudio', { action: 'start' })).toMatchObject({
+      success: false, error: expect.stringContaining('lms bootstrap'),
+    });
+    expect(localLlm.installBackend).not.toHaveBeenCalled();
+    expect(streaming.runStreamingCommand).not.toHaveBeenCalled();
   });
 
   it('starts an installed-but-stopped Ollama', async () => {
@@ -910,4 +947,94 @@ describe('sglang — a hardware gate in front of the same never-provision postur
     expect(streaming.runStreamingCommand).not.toHaveBeenCalled();
     restore();
   });
+});
+
+describe.each([
+  {
+    kind: 'splash', installation: '1.7.2', download: '~17 GB', installed: splash.readInstalledSplashVersion,
+    supported: splash.supportsManagedSplash, install: splash.installSplashRuntime, start: splash.startSplashServer,
+    progress: 'Loading Splash',
+  },
+  {
+    kind: 'mkserve', installation: { version: 'pinned' }, download: '~19 GiB', installed: mkserve.readMkserveInstall,
+    supported: mkserve.supportsMkserve, install: mkserve.installMkserve, start: mkserve.startMkserveServer,
+    progress: { message: 'Loading mkserve' },
+  },
+])('one-click $kind setup', ({ kind, installation, download, installed, supported, install, start, progress }) => {
+  beforeEach(() => {
+    supported.mockReturnValue(true);
+    installed.mockResolvedValue(null);
+    install.mockResolvedValue({ success: true });
+    start.mockImplementation(async ({ onProgress }) => {
+      onProgress(progress);
+      return { success: true };
+    });
+    probe.probeOpenAiModels.mockResolvedValueOnce(unreachable).mockResolvedValueOnce(unreachable).mockResolvedValue(reachable());
+  });
+
+  it('offers the bundled model download when missing and starts after an explicit install', async () => {
+    expect(describeRuntimeSetup(kind, { installed: false, running: false })).toMatchObject({
+      action: 'install-start',
+      actionLabel: expect.stringContaining(download),
+      provisions: true,
+    });
+
+    // An unmanaged command on PATH must not make the bundled install look present.
+    pathLookup.findCommandOnPath.mockReturnValue('/usr/local/bin/example');
+    const emit = vi.fn();
+    expect(await runLocalRuntimeSetup(kind, { action: 'install-start', emit })).toMatchObject({ success: true });
+    expect(install).toHaveBeenCalledOnce();
+    expect(start).toHaveBeenCalledOnce();
+    expect(install.mock.invocationCallOrder[0]).toBeLessThan(start.mock.invocationCallOrder[0]);
+    expect(emit).toHaveBeenCalledWith(typeof progress === 'string' ? progress : progress.message);
+  });
+
+  it('starts the managed install without reinstalling it', async () => {
+    installed.mockResolvedValue(installation);
+    expect(await runLocalRuntimeSetup(kind, { action: 'start' })).toMatchObject({ success: true });
+    expect(install).not.toHaveBeenCalled();
+    expect(start).toHaveBeenCalledOnce();
+  });
+
+  it('refuses to download weights if the install has disappeared since Start was shown', async () => {
+    expect(await runLocalRuntimeSetup(kind, { action: 'start' })).toMatchObject({
+      success: false,
+      error: expect.stringContaining(download),
+    });
+    expect(install).not.toHaveBeenCalled();
+    expect(start).not.toHaveBeenCalled();
+  });
+
+  it('refuses setup when the manager cannot run on this host', async () => {
+    supported.mockReturnValue(false);
+    expect(await runLocalRuntimeSetup(kind, { action: 'install-start' })).toMatchObject({
+      success: false,
+      error: expect.stringContaining('requires'),
+    });
+    expect(install).not.toHaveBeenCalled();
+    expect(start).not.toHaveBeenCalled();
+  });
+
+  it('refuses setup for a custom port the managed server cannot bind', async () => {
+    expect(await runLocalRuntimeSetup(kind, {
+      action: 'install-start', endpoint: 'http://127.0.0.1:9100/v1',
+    })).toMatchObject({ success: false, error: expect.stringContaining('Use that endpoint') });
+    expect(install).not.toHaveBeenCalled();
+    expect(start).not.toHaveBeenCalled();
+  });
+});
+
+it('starts a release-installed Slotstream binary without reinstalling', async () => {
+  const restore = pinPlatform('darwin');
+  try {
+    const executable = join(slotstreamBinDir(), 'slotstream');
+    pathLookup.findCommandOnPath.mockImplementation((command) => command === executable ? executable : null);
+    probe.probeOpenAiModels.mockResolvedValueOnce(unreachable).mockResolvedValueOnce(unreachable).mockResolvedValue(reachable());
+    expect(await runLocalRuntimeSetup('slotstream', { action: 'start' })).toMatchObject({ success: true });
+    expect(slotstream.installSlotstream).not.toHaveBeenCalled();
+    expect(slotstream.startSlotstreamServer).toHaveBeenCalledOnce();
+    expect(pathLookup.findCommandOnPath).toHaveBeenCalledWith(executable);
+  } finally {
+    restore();
+  }
 });

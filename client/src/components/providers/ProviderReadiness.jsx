@@ -100,6 +100,27 @@ export default function ProviderReadiness({ readiness, onAutoSetup, onUseServedM
     );
   }
 
+  const actions = (
+    <>
+      {setup?.action && onAutoSetup && (
+        <button
+          type="button"
+          onClick={() => onAutoSetup(setup)}
+          className={ACTION_CLASS}
+          title={setup.provisions
+            ? `${setup.actionLabel} — a multi-gigabyte download onto this host, then ${label} starts on ${endpoint}.`
+            : `PortOS runs this on ${endpoint} for you — no terminal needed.`}
+        >
+          {setup.provisions ? <Download size={12} /> : <Wand2 size={12} />}
+          {setup.actionLabel}
+        </button>
+      )}
+      {manageUrl && (
+        <Link to={manageUrl} className={ACTION_CLASS}>{manageLinkLabel(manageUrl)}</Link>
+      )}
+    </>
+  );
+
   if (standby) {
     return (
       <Banner
@@ -110,9 +131,7 @@ export default function ProviderReadiness({ readiness, onAutoSetup, onUseServedM
         title={`${label} installed · standby`}
       >
         {standbyDetail && <p className="mt-1 text-gray-400"><CodeText text={standbyDetail} /></p>}
-        {manageUrl && (
-          <Link to={manageUrl} className={`${ACTION_CLASS} mt-2`}>{manageLinkLabel(manageUrl)}</Link>
-        )}
+        <div className="flex flex-wrap items-center gap-3 pt-1.5">{actions}</div>
       </Banner>
     );
   }
@@ -181,25 +200,7 @@ export default function ProviderReadiness({ readiness, onAutoSetup, onUseServedM
         })}
       </ul>
       <div className="flex flex-wrap items-center gap-3 pt-1.5">
-        {setup?.action && onAutoSetup && (
-          <button
-            type="button"
-            onClick={() => onAutoSetup(setup)}
-            className={ACTION_CLASS}
-            // Provisioning is the one thing here that spends gigabytes, so the
-            // button says so before it is clicked rather than after. The label
-            // already names the payload; this says where it lands.
-            title={setup.provisions
-              ? `${setup.actionLabel} — a multi-gigabyte download onto this host, then ${label} starts on ${endpoint}.`
-              : `PortOS runs this on ${endpoint} for you — no terminal needed.`}
-          >
-            {setup.provisions ? <Download size={12} /> : <Wand2 size={12} />}
-            {setup.actionLabel}
-          </button>
-        )}
-        {manageUrl && (
-          <Link to={manageUrl} className={ACTION_CLASS}>{manageLinkLabel(manageUrl)}</Link>
-        )}
+        {actions}
       </div>
     </Banner>
   );

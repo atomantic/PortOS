@@ -81,6 +81,24 @@ describe('mounted route graph', () => {
     ]) expect(operations.has(operation), operation).toBe(true);
   });
 
+  it('discovers all shared model artifact handlers under their owning routers', () => {
+    const operations = new Set(getApiRouteCatalog().routes.map(({ method, path }) => `${method} ${path}`));
+    for (const path of [
+      '/api/image-gen/models/:modelId',
+      '/api/video-gen/models/:modelId',
+      '/api/video-gen/ic-loras/:mode',
+      '/api/video-gen/text-encoders/:id',
+      '/api/video-gen/text-encoder',
+    ]) {
+      expect(operations.has(`GET ${path}/download`), path).toBe(true);
+      expect(operations.has(`POST ${path}/download`), path).toBe(true);
+      expect(operations.has(`POST ${path}/repair`), path).toBe(true);
+    }
+    for (const kind of ['image', 'video']) {
+      expect(operations.has(`POST /api/${kind}-gen/models/verify`)).toBe(true);
+    }
+  });
+
   it('covers every declaration in the mounted toolkit providers and runs routers', () => {
     const { declarationKeys } = routeGraph();
     for (const relativePath of ['lib/aiToolkit/routes/providers.js', 'lib/aiToolkit/routes/runs.js']) {

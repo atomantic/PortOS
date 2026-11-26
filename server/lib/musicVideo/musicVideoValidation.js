@@ -808,8 +808,8 @@ export const musicVideoCastAndSetsDirectionEditSchema = z.object({
   }).strict()).max(8).optional(),
 }).strict().refine((edits) => {
   if (!edits.sets?.some((set) => Object.hasOwn(set, 'setReference'))) return true;
-  return !Object.hasOwn(edits, 'renderingMedium') && !Object.hasOwn(edits, 'sheetLayout') && !edits.protagonist && !edits.world && !edits.looks && !edits.cast && !edits.tests
-    && edits.sets.every((set) => Object.keys(set).every((key) => key === 'id' || key === 'setReference'));
+  return Object.keys(edits).every((key) => key === 'sets')
+    && edits.sets.every((set) => Object.hasOwn(set, 'setReference') && Object.keys(set).every((key) => key === 'id' || key === 'setReference'));
 }, 'Save greybox selections separately from direction edits.');
 
 // #14820: the sung word (or phrase) a shot was cut on; its start follows that word's onset.
