@@ -20,6 +20,7 @@ vi.mock('../services/settings.js', () => ({ getSettings: vi.fn(async () => ({}))
 const { default: router } = await import('./musicVideo.js');
 const projects = await import('../services/musicVideo/projects.js');
 const boardEdits = await import('../services/musicVideo/projectBoardEdits.js');
+const { clearBoardUndo } = await import('../services/musicVideo/boardUndo.js');
 const { recordEvents } = await import('../services/sharing/recordEvents.js');
 const { productionReviewBasis } = await import('../services/musicVideo/productionReview.js');
 
@@ -35,6 +36,7 @@ const base = () => `/api/music-video/${project.id}`;
 const read = async () => (await request(app).get(base())).body;
 
 beforeEach(async () => {
+  clearBoardUndo();
   mkdirSync(join(ROOT(), 'images'), { recursive: true });
   for (const image of ['a.png', 'b.png', 'c.png', 'spare.png']) writeFileSync(join(ROOT(), 'images', image), 'synthetic-image');
   writeFileSync(join(ROOT(), 'video-history.json'), JSON.stringify(['clip-a', 'clip-b', 'clip-c'].map((id) => ({ id, filename: `${id}.mp4` }))));
@@ -255,5 +257,49 @@ describe('take decision replies carry what a reload would show', () => {
     const afterDone = applyMusicVideoEdit(afterConfirm, done.body.edit);
     expect(afterDone).toEqual(await read());
     expect(takeOf(afterDone, 'a', 'a.png').dependencyState.status).toBe('current');
+  });
+});
+
+describe('board edit undo restores prior shots and keeps reload parity', () => {
+  it('undoes merge-next, merge-previous, split and delete in stack order and refuses when empty', async () => {
+    const initial = await read();
+    expect(initial.boardUndo).toBeUndefined();
+
+    // Empty stack returns 400 NOTHING_TO_UNDO.
+    const empty = await request(app).post(`${base()}/scenes/undo`).send();
+    expect(empty.status).toBe(400);
+    expect(empty.body.code).toBe('NOTHING_TO_UNDO');
+
+    // Accidental merge-next of Shot 1 over Shot 2, then undo restores Shot 2 with its takes and timing.
+    const mergedNext = await expectReloadParity(() => request(app).post(`${base()}/scenes/a/merge-next`).send({}));
+    expect(mergedNext.after.scenes.map((s) => s.sceneId)).toEqual(['a', 'c']);
+    expect(mergedNext.after.boardUndo).toEqual({ count: 1, label: 'merge with next' });
+
+    const undoneMerge = await expectReloadParity(() => request(app).post(`${base()}/scenes/undo`).send());
+    expect(undoneMerge.reply.undone).toBe('merge with next');
+    expect(undoneMerge.after.scenes.map((s) => s.sceneId)).toEqual(['a', 'b', 'c']);
+    expect(undoneMerge.after.scenes[0]).toMatchObject({ sceneId: 'a', startSec: 0, endSec: 5 });
+    expect(undoneMerge.after.scenes[1]).toMatchObject({ sceneId: 'b', startSec: 5, endSec: 10, referenceImageId: 'b.png', videoHistoryId: 'clip-b' });
+    expect(undoneMerge.after.boardUndo).toBeUndefined();
+
+    // Multi-step undo: merge-previous then delete, then undo twice.
+    const mergedPrev = await expectReloadParity(() => request(app).post(`${base()}/scenes/b/merge-previous`).send({}));
+    expect(mergedPrev.after.scenes.map((s) => s.sceneId)).toEqual(['b', 'c']);
+    expect(mergedPrev.after.boardUndo).toEqual({ count: 1, label: 'merge over previous' });
+
+    const deleted = await expectReloadParity(() => request(app).delete(`${base()}/scenes/c`));
+    expect(deleted.after.scenes.map((s) => s.sceneId)).toEqual(['b']);
+    expect(deleted.after.boardUndo).toEqual({ count: 2, label: 'delete shot' });
+
+    const undoDelete = await expectReloadParity(() => request(app).post(`${base()}/scenes/undo`).send());
+    expect(undoDelete.reply.undone).toBe('delete shot');
+    expect(undoDelete.after.scenes.map((s) => s.sceneId)).toEqual(['b', 'c']);
+    expect(undoDelete.after.boardUndo).toEqual({ count: 1, label: 'merge over previous' });
+
+    const undoMergePrev = await expectReloadParity(() => request(app).post(`${base()}/scenes/undo`).send());
+    expect(undoMergePrev.reply.undone).toBe('merge over previous');
+    expect(undoMergePrev.after.scenes.map((s) => s.sceneId)).toEqual(['a', 'b', 'c']);
+    expect(undoMergePrev.after.scenes[0]).toMatchObject({ sceneId: 'a', startSec: 0, endSec: 5, referenceImageId: 'a.png' });
+    expect(undoMergePrev.after.boardUndo).toBeUndefined();
   });
 });

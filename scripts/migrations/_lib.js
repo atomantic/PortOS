@@ -29,7 +29,7 @@
  *   9. Plain document reads — `readJsonOrNull` is the "absent or unparseable
  *      → null, anything else throws" reader that thirty-odd applied migrations
  *      each declared as a local `readJson`. Those stay frozen;
- *      `server/test/guards/repo/migrationConventions.test.js` stops a new migration from
+ *      `server/test/guards/repo/migrations.test.js` stops a new migration from
  *      declaring its own copy of any helper exported here.
  *
  * Families 5, 7, and 7b all target `data/providers.json` and share its

@@ -99,6 +99,7 @@ vi.mock('../services/apiMusicVideo.js', () => ({
   reorderMusicVideoScenes: vi.fn(),
   splitMusicVideoScene: vi.fn(),
   moveMusicVideoSceneStart: vi.fn(),
+  undoMusicVideoBoardEdit: vi.fn(),
   importMusicVideoLyrics: vi.fn(),
   importMusicVideoTrackLyrics: vi.fn(),
   alignMusicVideoLyrics: vi.fn(),

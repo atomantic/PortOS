@@ -102,6 +102,8 @@ export function normalizeSceneCardProps({ position, composition, media, takes, a
     onSplit: pick(actions, legacy, 'onSplit'),
     onMergeNext: pick(actions, legacy, 'onMergeNext'),
     onMergePrevious: pick(actions, legacy, 'onMergePrevious', null),
+    onUndoBoardEdit: pick(actions, legacy, 'onUndoBoardEdit', null),
+    undoingBoard: pick(actions, legacy, 'undoingBoard', false),
     onMoveStart: pick(actions, legacy, 'onMoveStart', null),
     onMoveEnd: pick(actions, legacy, 'onMoveEnd', null),
     onRepairPerformance: pick(actions, legacy, 'onRepairPerformance'),

@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useLayoutEffect, useRef, useId } from 'react';
 import { useSearchParams } from 'react-router';
 import { Plus, Trash2, RefreshCw, Globe, Calendar, Eye, EyeOff, ChevronDown, ChevronRight, Search, Key, ExternalLink, Wand2, Monitor } from 'lucide-react';
 import toast from '../ui/Toast';
@@ -32,19 +32,20 @@ const TYPE_ICONS = { 'outlook-calendar': Globe, 'google-calendar': Calendar };
 const SYNC_STATUS_CLASS = { partial: 'text-port-warning', error: 'text-port-error' };
 const TYPE_LABELS = { 'outlook-calendar': 'Outlook Calendar (API)', 'google-calendar': 'Google Calendar' };
 
-function SubcalendarColor({ name, color, disabled, onSave }) {
+function SubcalendarColor({ name, color, onSave }) {
   // Keep the preview out of the account so other controls cannot persist it.
   const [draft, setDraft] = useState(null);
   const displayedColor = draft ?? color;
+  const inputId = useId();
 
   return (
-    <label className="relative w-4 h-4 shrink-0 cursor-pointer" title="Change color">
-      <div className="w-4 h-4 rounded-full border border-port-border" style={{ backgroundColor: displayedColor }} />
+    <label htmlFor={inputId} className="relative pointer-coarse:min-h-11 pointer-coarse:min-w-11 inline-flex items-center justify-center rounded-full shrink-0 cursor-pointer focus-within:ring-2 focus-within:ring-port-accent" title="Change color">
+      <span className="w-4 h-4 rounded-full border border-port-border" style={{ backgroundColor: displayedColor }} />
       <input
+        id={inputId}
         aria-label={`Change color for ${name}`}
         type="color"
         value={displayedColor}
-        disabled={disabled}
         onChange={(event) => setDraft(event.target.value)}
         onBlur={() => {
           setDraft(null);
@@ -63,8 +64,12 @@ export default function ConfigTab({ accounts, setAccounts }) {
   const [deleting, setDeleting] = useState(null);
   const { isConfirming, requestDelete, cancelDelete, confirmDelete } = useConfirmDelete();
   const [expandedAccounts, setExpandedAccounts] = useState({});
-  const [savingSubcals, setSavingSubcals] = useState(null);
-  const [discovering, setDiscovering] = useState(null);
+  const accountsRef = useRef(accounts);
+  const subcalendarQueues = useRef(new Map());
+  const [discovering, setDiscovering] = useState(new Set());
+  useLayoutEffect(() => {
+    accountsRef.current = accounts;
+  }, [accounts]);
   const { status: googleAuth, state: googleAuthState, error: googleAuthError, reload: fetchGoogleAuth, retry: retryGoogleAuth } = useGoogleAuthStatus();
   const [clearingGoogleAuth, setClearingGoogleAuth] = useState(false);
   const [oauthForm, setOauthForm] = useState({ clientId: '', clientSecret: '' });
@@ -198,44 +203,55 @@ export default function ConfigTab({ accounts, setAccounts }) {
     setExpandedAccounts(prev => ({ ...prev, [id]: !prev[id] }));
   };
 
-  // Update subcalendar field and persist to server
-  const handleSubcalendarToggle = async (account, calendarId, field, value) => {
-    const subcalendars = (account.subcalendars || []).map(sc =>
-      sc.calendarId === calendarId ? { ...sc, [field]: value } : sc
-    );
-    setAccounts(prev => prev.map(a => a.id === account.id ? { ...a, subcalendars } : a));
-    setSavingSubcals(account.id);
-    const result = await updateSubcalendars(account.id, { subcalendars }, { silent: true }).catch(() => null);
-    setSavingSubcals(null);
-    if (!result) {
-      // Rollback on failure
-      setAccounts(prev => prev.map(a => a.id === account.id ? account : a));
-      return toast.error('Failed to update subcalendars');
+  // Discovery and saves replace the entire list. Build each write from the
+  // latest confirmed list, including responses React has yet to render.
+  const enqueueSubcalendarChange = (id, change) => {
+    const queues = subcalendarQueues.current;
+    const pending = (queues.get(id) ?? Promise.resolve()).then(async () => {
+      const account = accountsRef.current.find(a => a.id === id);
+      if (!account) return;
+      const subcalendars = await change(account);
+      if (!subcalendars) return;
+      const apply = list => list.map(a => a.id === id ? { ...a, subcalendars } : a);
+      accountsRef.current = apply(accountsRef.current);
+      setAccounts(apply);
+    }).finally(() => {
+      if (queues.get(id) === pending) queues.delete(id);
+    });
+    queues.set(id, pending);
+    return pending;
+  };
+
+  const saveSubcalendars = (id, edit, successMessage) => enqueueSubcalendarChange(id, account => {
+    const subcalendars = edit(account.subcalendars || []);
+    if (!subcalendars) return;
+    return updateSubcalendars(id, { subcalendars }, { silent: true }).then(result => {
+      if (successMessage) toast.success(successMessage);
+      return result.subcalendars;
+    }).catch(() => {
+      toast.error('Failed to update subcalendars');
+    });
+  });
+
+  const handleSubcalendarChange = (id, calendarId, edit) => saveSubcalendars(id, subcalendars => {
+    if (!subcalendars.some(sc => sc.calendarId === calendarId)) return;
+    return subcalendars.map(sc => sc.calendarId === calendarId ? edit(sc) : sc);
+  });
+
+  const handleDiscoverCalendars = async (id) => {
+    setDiscovering(prev => new Set(prev).add(id));
+    try {
+      await enqueueSubcalendarChange(id, async (account) => {
+        const discover = account.syncMethod === 'google-api' ? apiDiscoverCalendars : mcpDiscoverCalendars;
+        // The API helper already reports discovery errors.
+        const result = await discover(id).catch(() => null);
+        if (!result) return;
+        toast.success(`Discovered ${result.calendars?.length || 0} calendars`);
+        return result.calendars;
+      });
+    } finally {
+      setDiscovering(prev => new Set([...prev].filter(accountId => accountId !== id)));
     }
-  };
-
-  const handleDiscoverCalendars = async (account) => {
-    setDiscovering(account.id);
-    const useApi = (account.syncMethod || 'claude-mcp') === 'google-api';
-    const result = useApi
-      ? await apiDiscoverCalendars(account.id).catch(() => null)
-      : await mcpDiscoverCalendars(account.id).catch(() => null);
-    setDiscovering(null);
-    // Failures arrive as throws (the API helper already toasted the server's
-    // error message) — the .catch above turns them into null.
-    if (!result) return;
-    toast.success(`Discovered ${result.calendars?.length || 0} calendars`);
-    setAccounts(prev => prev.map(a => a.id === account.id ? { ...a, subcalendars: result.calendars } : a));
-  };
-
-  const handleEnableAll = async (account) => {
-    const subcalendars = (account.subcalendars || []).map(sc => ({ ...sc, enabled: true, dormant: false }));
-    setSavingSubcals(account.id);
-    const result = await updateSubcalendars(account.id, { subcalendars }, { silent: true }).catch(() => null);
-    setSavingSubcals(null);
-    if (!result) return toast.error('Failed to update');
-    setAccounts(prev => prev.map(a => a.id === account.id ? { ...a, subcalendars } : a));
-    toast.success('All calendars enabled');
   };
 
   return (
@@ -364,6 +380,7 @@ export default function ConfigTab({ accounts, setAccounts }) {
                       disabled={deleting === account.id}
                       className="pointer-coarse:min-h-11 pointer-coarse:min-w-11 inline-flex items-center justify-center p-1 text-gray-500 hover:text-port-error transition-colors"
                       title="Delete account"
+                      aria-label={`Delete account ${account.name}`}
                     >
                       {deleting === account.id ? (
                         <RefreshCw size={16} className="animate-spin" />
@@ -565,29 +582,28 @@ export default function ConfigTab({ accounts, setAccounts }) {
                         <div className="flex flex-wrap items-center gap-2">
                           {subcals.length > 0 && (
                             <button
-                              onClick={() => handleEnableAll(account)}
-                              disabled={savingSubcals === account.id}
+                              onClick={() => saveSubcalendars(account.id, list => list.map(sc => ({ ...sc, enabled: true, dormant: false })), 'All calendars enabled')}
                               className="pointer-coarse:min-h-11 inline-flex items-center px-2 py-0.5 text-xs rounded text-gray-500 hover:text-white hover:bg-gray-800"
                             >
                               Enable All
                             </button>
                           )}
                           <button
-                            onClick={() => handleDiscoverCalendars(account)}
-                            disabled={discovering === account.id}
+                            onClick={() => handleDiscoverCalendars(account.id)}
+                            disabled={discovering.has(account.id)}
                             className="flex items-center gap-1 pointer-coarse:min-h-11 px-2 py-0.5 text-xs rounded bg-port-accent/20 text-port-accent hover:bg-port-accent/30 disabled:opacity-50"
                           >
-                            {discovering === account.id ? (
+                            {discovering.has(account.id) ? (
                               <RefreshCw size={12} className="animate-spin" />
                             ) : (
                               <Search size={12} />
                             )}
-                            {discovering === account.id ? 'Discovering...' : subcals.length > 0 ? 'Refresh' : 'Discover Calendars'}
+                            {discovering.has(account.id) ? 'Discovering...' : subcals.length > 0 ? 'Refresh' : 'Discover Calendars'}
                           </button>
                         </div>
                       </div>
 
-                      {subcals.length === 0 && discovering !== account.id && (
+                      {subcals.length === 0 && !discovering.has(account.id) && (
                         <div className="text-xs text-gray-600 py-2">
                           Click "Discover Calendars" to fetch your Google Calendar list.
                         </div>
@@ -604,8 +620,7 @@ export default function ConfigTab({ accounts, setAccounts }) {
                             <SubcalendarColor
                               name={sc.name}
                               color={sc.color || DEFAULT_AVATAR_COLOR}
-                              disabled={savingSubcals === account.id}
-                              onSave={(color) => handleSubcalendarToggle(account, sc.calendarId, 'color', color)}
+                              onSave={(color) => handleSubcalendarChange(account.id, sc.calendarId, sc => ({ ...sc, color }))}
                             />
                             <div className="min-w-0">
                               <div className={`text-xs font-medium truncate ${sc.dormant ? 'text-gray-500' : 'text-gray-300'}`}>
@@ -617,8 +632,7 @@ export default function ConfigTab({ accounts, setAccounts }) {
                           <div className="flex items-center gap-1.5 shrink-0">
                             {sc.dormant ? (
                               <button
-                                onClick={() => handleSubcalendarToggle(account, sc.calendarId, 'dormant', false)}
-                                disabled={savingSubcals === account.id}
+                                onClick={() => handleSubcalendarChange(account.id, sc.calendarId, sc => ({ ...sc, dormant: false }))}
                                 className="pointer-coarse:min-h-11 inline-flex items-center px-2 py-0.5 text-xs rounded bg-port-accent/20 text-port-accent hover:bg-port-accent/30"
                               >
                                 Activate
@@ -626,10 +640,11 @@ export default function ConfigTab({ accounts, setAccounts }) {
                             ) : (
                               <>
                                 <button
-                                  onClick={() => handleSubcalendarToggle(account, sc.calendarId, 'enabled', !sc.enabled)}
-                                  disabled={savingSubcals === account.id}
+                                  onClick={() => handleSubcalendarChange(account.id, sc.calendarId, sc => ({ ...sc, enabled: !sc.enabled }))}
                                   className="pointer-coarse:min-h-11 pointer-coarse:min-w-11 inline-flex items-center justify-center p-0.5"
                                   title={sc.enabled ? 'Disable' : 'Enable'}
+                                  aria-label={`${sc.enabled ? 'Disable' : 'Enable'} ${sc.name}`}
+                                  aria-pressed={sc.enabled}
                                 >
                                   {sc.enabled ? (
                                     <Eye size={14} className="text-port-success" />
@@ -638,8 +653,7 @@ export default function ConfigTab({ accounts, setAccounts }) {
                                   )}
                                 </button>
                                 <button
-                                  onClick={() => handleSubcalendarToggle(account, sc.calendarId, 'dormant', true)}
-                                  disabled={savingSubcals === account.id}
+                                  onClick={() => handleSubcalendarChange(account.id, sc.calendarId, sc => ({ ...sc, dormant: true }))}
                                   className="pointer-coarse:min-h-11 inline-flex items-center px-1.5 py-0.5 text-xs rounded text-gray-600 hover:text-gray-400 hover:bg-gray-800"
                                   title="Mark dormant"
                                 >
