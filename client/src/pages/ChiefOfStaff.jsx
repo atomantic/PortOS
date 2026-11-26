@@ -81,7 +81,7 @@ export default function ChiefOfStaff() {
   const primaryView = primaryTabs.find(({ id }) => id === primaryTab);
   const cos = useCosPageData({ activeTab, selectedTask });
   const {
-    status, loading, agentState, insights, tasks, agents, agentsLoaded, agentsError, liveOutputs,
+    status, statusReadFailed, loading, agentState, insights, tasks, agents, agentsLoaded, agentsError, liveOutputs,
     providers, providersLoaded, activeProviderId, apps, appsStatus, readApps, health, healthLoaded, healthError,
     completedRevision, taskHistoryRevision, configAvatarStyle, avatarStyle, fetchData, fetchQueue,
     setAvatarStyle, handleForceEvaluate, handleHealthCheck, handleTaskUnblocked, handleTaskDeleted, handleUserTaskAdded,
@@ -184,7 +184,7 @@ export default function ChiefOfStaff() {
             {statusKnown ? <>
               <StatusIndicator running={status.running} paused={status.paused} />
               <StateLabel state={agentState} compact />
-            </> : <CosStatusPlaceholder failed={cos.statusReadFailed} onRetry={fetchData} />}
+            </> : activeTab !== 'config' && <CosStatusPlaceholder failed={statusReadFailed} onRetry={fetchData} />}
           </div>
         )}
         <div className="flex flex-1 min-h-0 min-w-0 flex-col overflow-y-auto overflow-x-hidden p-3 lg:p-4">
@@ -290,9 +290,14 @@ export default function ChiefOfStaff() {
             </Suspense>
           )}
           {activeTab === 'config' && (
-            <Suspense fallback={<TabLoadFallback label="configuration" />}>
-              <ConfigTab config={status?.config} onUpdate={fetchData} onEvaluate={handleForceEvaluate} avatarStyle={configAvatarStyle} setAvatarStyle={setAvatarStyle} riggedAvatars={riggedAvatars} />
-            </Suspense>
+            <>
+              {(statusReadFailed || !status?.config) && <CosStatusPlaceholder failed={statusReadFailed} onRetry={fetchData} />}
+              {status?.config && (
+                <Suspense fallback={<TabLoadFallback label="configuration" />}>
+                  <ConfigTab config={status.config} onUpdate={fetchData} onEvaluate={handleForceEvaluate} avatarStyle={configAvatarStyle} setAvatarStyle={setAvatarStyle} riggedAvatars={riggedAvatars} />
+                </Suspense>
+              )}
+            </>
           )}
         </div>
         </div>

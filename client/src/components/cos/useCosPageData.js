@@ -136,6 +136,7 @@ export default function useCosPageData({ activeTab, selectedTask }) {
   const appsReadRef = useRef(null);
 
   const [status, setStatus] = useState(null);
+  const [statusReadFailed, setStatusReadFailed] = useState(false);
   const statusRef = useRef(null);
   const applyStatus = useCallback((next) => {
     statusRef.current = typeof next === 'function' ? next(statusRef.current) : next;
@@ -154,8 +155,13 @@ export default function useCosPageData({ activeTab, selectedTask }) {
   const applyStatusRead = useCallback(({ seq, data }) => {
     if (seq < statusReadAppliedRef.current) return false;
     statusReadAppliedRef.current = seq;
-    applyStatus(data);
-    return true;
+    const config = data?.config;
+    const valid = typeof data?.running === 'boolean' && config != null
+      && typeof config === 'object' && !Array.isArray(config);
+    setStatusReadFailed(!valid);
+    // A failed read leaves daemon status unknown but must not reset saved settings.
+    applyStatus(prev => valid ? data : (prev?.config ? { config: prev.config } : null));
+    return valid;
   }, [applyStatus]);
   const [tasks, setTasks] = useState({ user: null, cos: null });
   const tasksRef = useRef(tasks);
@@ -195,7 +201,6 @@ export default function useCosPageData({ activeTab, selectedTask }) {
   // good load keeps the last list but stays retryable on the next tab switch.
   const providersCurrentRef = useRef(false);
   const lastTabRef = useRef(activeTab);
-  const [statusReadFailed, setStatusReadFailed] = useState(false);
   const [speaking, setSpeaking] = useState(false);
   // Socket events and manual checks share one visible speaking window. Each
   // burst owns a generation so a stale timer or request completion cannot end
@@ -468,7 +473,7 @@ export default function useCosPageData({ activeTab, selectedTask }) {
 
       const [statusRead, tasksData] = await coreRead;
       if (controller.signal.aborted) return;
-      if (applyStatusRead(statusRead)) setStatusReadFailed(typeof statusRead.data?.running !== 'boolean');
+      applyStatusRead(statusRead);
       // A queue refresh started later can still resolve first. Its task payload
       // must not be clobbered by this older, pre-flip read — otherwise the row
       // returns to the pending-AND-active state this guard exists to remove.
@@ -539,10 +544,7 @@ export default function useCosPageData({ activeTab, selectedTask }) {
       awaitSlice('agents', readAgents(controller)),
     ]).then(async ([statusRead, tasksData]) => {
       if (controller.signal.aborted || queueSeqRef.current !== queueSeq) return;
-      const summary = statusRead.data;
-      if (summary && applyStatusRead(statusRead)) {
-        // A failed first status read is recovered by any later successful one.
-        setStatusReadFailed(typeof summary.running !== 'boolean');
+      if (applyStatusRead(statusRead)) {
         // Coding and Thinking are the states a missed agent event leaves wrong (an
         // agent paused or started while this tab ignored agent events), and the
         // summary's activeAgents is what reveals it. Reviewing is a transient

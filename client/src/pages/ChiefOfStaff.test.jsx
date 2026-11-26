@@ -502,6 +502,50 @@ describe('ChiefOfStaff config mount readiness (#11548)', () => {
     expect(screen.getByRole('heading', { name: 'Chief of Staff settings' })).toBeInTheDocument();
     expect(screen.getByRole('button', { name: /Force Evaluate/i })).toBeEnabled();
   });
+
+  it('requires a confirmed config before editing and retains it when a refresh fails', async () => {
+    api.getCosStatus.mockResolvedValue({
+      running: false,
+      config: {
+        ...config,
+        domainAutonomy: { cos: 'dry-run' },
+        domainBudgets: { cos: { maxActionsPerDay: 7, maxMinutesPerDay: 15 } },
+        safetyKindApproval: { enabled: true, alwaysApproveKinds: ['content'] },
+      },
+    }).mockRejectedValueOnce(new Error('Unavailable'));
+
+    await renderSettledConfigTab();
+    const panel = within(screen.getByRole('tabpanel', { name: 'Config' }));
+    const error = panel.getByRole('alert');
+    expect(error).toHaveTextContent('Could not load CoS status.');
+    expect(panel.queryByRole('heading', { name: 'Chief of Staff settings' })).not.toBeInTheDocument();
+    expect(panel.queryByRole('checkbox', { name: /^Publish/ })).not.toBeInTheDocument();
+    expect(api.updateCosConfig).not.toHaveBeenCalled();
+
+    await act(async () => {
+      fireEvent.click(within(error).getByRole('button', { name: 'Retry CoS status' }));
+    });
+
+    const expectConfirmedValues = () => {
+      const mode = panel.getByRole('group', { name: 'CoS auto-run mode' });
+      expect(within(mode).getByRole('button', { name: 'Dry-run' })).toHaveAttribute('aria-pressed', 'true');
+      const domain = within(mode.closest('article'));
+      expect(domain.getByRole('spinbutton', { name: 'Actions/day' })).toHaveValue(7);
+      expect(domain.getByRole('spinbutton', { name: 'Minutes/day' })).toHaveValue(15);
+      expect(panel.getByRole('checkbox', { name: /^Content/ })).toBeChecked();
+      for (const name of [/^Publish/, /^Federation/, /^External PR/]) {
+        expect(panel.getByRole('checkbox', { name })).not.toBeChecked();
+      }
+    };
+    expect(panel.queryByRole('alert')).not.toBeInTheDocument();
+    expectConfirmedValues();
+
+    api.getCosStatus.mockRejectedValueOnce(new Error('Unavailable'));
+    await act(async () => { socketStub.receive('cos:config:changed'); });
+    expect(panel.getByRole('alert')).toHaveTextContent('Could not load CoS status.');
+    expectConfirmedValues();
+    expect(api.updateCosConfig).not.toHaveBeenCalled();
+  });
 });
 
 describe('ChiefOfStaff handleForceEvaluate', () => {
