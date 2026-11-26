@@ -11,18 +11,13 @@
  *
  * Design constraints (docs/plans/archive/2026-07-04-human-activity-tracking.md, #11149):
  *
- * - **Consistent snapshot, not a main-file copy.** Signal runs in WAL mode, so
- *   committed messages can live only in the WAL until the next checkpoint.
- *   `signalSnapshot.js` opens the live file read-only with the bundled
- *   SQLCipher driver, holds a read transaction, and exports one committed
- *   view (WAL frames included) to a private plaintext database. `node:sqlite`
- *   then reads that plaintext file. Key unwrap stays in `server/lib/signalCrypto.js`.
+ * - **Consistent snapshot.** Signal runs in WAL mode, so committed messages can
+ *   live only in the WAL until the next checkpoint. The bundled SQLCipher
+ *   driver queries the live database in one read-only transaction and keeps
+ *   decrypted data in memory. Key unwrap stays in server/lib/signalCrypto.js.
  *   The macOS keychain read shells to the system `security` CLI.
- * - **Fail closed.** If the driver prebuild cannot load, or the export is not
- *   one integrity-clean snapshot, sync returns a setup/snapshot error and does
- *   not advance the cursor. A stale main-file copy is not a fallback.
- * - **Never write Signal's live database or WAL.** No checkpoint, no rekey, no
- *   journal-mode change on the source. Only the private temp copy is decrypted.
+ * - **Fail closed.** If the driver cannot load or a query fails, sync reports
+ *   the failure and holds the cursor.
  * - **Machine-local.** The incremental cursor lives in a `data/` JSON file — the DB
  *   and its rowids are per-machine. Derived events land in the already-machine-local
  *   `human_activity_events` table (excluded from peer sync).
@@ -36,10 +31,8 @@
  * unit-tested with fixtures — no real Signal DB required.
  */
 import { readBlocklist, filterBlockedMessages, withSignalPrivacyLock } from './signalPrivacy.js';
-import { DatabaseSync } from 'node:sqlite';
 import { promisify } from 'node:util';
 import { execFile } from '../lib/childProcess.js';
-import { rm } from 'node:fs/promises';
 import { join } from 'node:path';
 
 import { expandHome, dataPath, atomicWrite, tryReadFile, safeJSONParse } from '../lib/fileUtils.js';
@@ -48,7 +41,7 @@ import { getUserTimezone } from './userTimezone.js';
 import { identityFromHandle } from '../lib/tribeMatch.js';
 import { decryptSafeStorageValue, isRawHexKey } from '../lib/signalCrypto.js';
 import { shortSummary, localDayKey, recordEvents } from './humanActivity.js';
-import { captureConsistentSnapshot } from './signalSnapshot.js';
+import { withConsistentSnapshot } from './signalSnapshot.js';
 import { getSettings } from './settings.js';
 import { ServerError } from '../lib/errorHandler.js';
 
@@ -312,14 +305,18 @@ export async function resolveDbKey() {
 }
 
 // ---------------------------------------------------------------------------
-// DB access — read-only SQLCipher snapshot, then node:sqlite on the plaintext.
+// DB access — read-only SQLCipher transaction over the live database and WAL.
 // ---------------------------------------------------------------------------
 
-// Export one committed view of the live database, including WAL frames, to a
-// private plaintext file. Returns { ok, plaintextPath, tmpDir } or an error
-// report. Does not write the source database or WAL. See signalSnapshot.js.
-async function openDecryptedSnapshot(key) {
-  return captureConsistentSnapshot(dbPath(), key);
+async function readSignalDb(path, key, readFn) {
+  const snapshot = await withConsistentSnapshot(path, key, (db) => {
+    const schema = verifySchema(db);
+    if (!schema.ok) {
+      return { ...schema, remediation: 'This Signal database schema is not yet supported.' };
+    }
+    return { ok: true, ...readFn(db) };
+  });
+  return snapshot.ok ? snapshot.value : snapshot;
 }
 
 // Confirm the decrypted DB carries the Signal schema we understand. On an
@@ -327,7 +324,7 @@ async function openDecryptedSnapshot(key) {
 // version" instead of throwing mid-query.
 function verifySchema(db) {
   const tables = new Set(
-    db.prepare("SELECT name FROM sqlite_master WHERE type='table'").all().map((r) => r.name),
+    db.prepare("SELECT name FROM sqlite_schema WHERE type = 'table' AND name IN ('messages', 'conversations')").all().map((r) => r.name),
   );
   for (const t of ['messages', 'conversations']) {
     if (!tables.has(t)) return { ok: false, error: `Signal schema missing expected table "${t}"` };
@@ -396,29 +393,16 @@ export async function checkSetup() {
   if (!keyResult.ok) {
     return { ok: false, dbPath: dbPath(), error: keyResult.error, remediation: keyResult.remediation };
   }
-  const snapshot = await openDecryptedSnapshot(keyResult.key);
-  if (!snapshot.ok) {
-    return { ok: false, dbPath: dbPath(), error: snapshot.error, remediation: snapshot.remediation, reason: snapshot.reason };
-  }
-  let db;
-  try {
-    db = new DatabaseSync(snapshot.plaintextPath, { readOnly: true });
-    const schema = verifySchema(db);
-    if (!schema.ok) {
-      return { ok: false, dbPath: dbPath(), error: schema.error, remediation: 'This Signal database schema is not yet supported.' };
-    }
+  const path = dbPath();
+  const result = await readSignalDb(path, keyResult.key, (db) => {
     const row = db.prepare('SELECT COUNT(*) AS n FROM messages').get();
-    return { ok: true, dbPath: dbPath(), keySource: keyResult.source, messageCount: Number(row?.n || 0) };
-  } catch (err) {
-    return { ok: false, dbPath: dbPath(), error: err?.message || 'Failed to open decrypted Signal DB', remediation: 'The decrypted Signal database could not be opened — the SQLCipher format may have changed.' };
-  } finally {
-    try { db?.close(); } catch { /* already closed / never opened */ }
-    await rm(snapshot.tmpDir, { recursive: true, force: true }).catch(() => {});
-  }
+    return { keySource: keyResult.source, messageCount: Number(row?.n || 0) };
+  });
+  return { ...result, dbPath: path };
 }
 
 /**
- * Run one incremental sync pass: resolve the key, decrypt a DB snapshot, read new
+ * Run one incremental sync pass: resolve the key, read new
  * messages after the stored rowid cursor, record activity events + Tribe
  * touchpoints, and advance the cursor. Returns a summary. Safe to call repeatedly
  * — dedupe keys make re-ingestion a no-op. Runs outside the request lifecycle
@@ -450,28 +434,10 @@ async function doRunSync() {
     return { ok: false, error: keyResult.error, remediation: keyResult.remediation };
   }
 
-  const snapshot = await openDecryptedSnapshot(keyResult.key);
-  if (!snapshot.ok) {
-    console.error(`❌ Signal sync: ${snapshot.error}`);
-    return { ok: false, error: snapshot.error, remediation: snapshot.remediation, reason: snapshot.reason };
-  }
-
-  let db;
-  let batch;
-  try {
-    db = new DatabaseSync(snapshot.plaintextPath, { readOnly: true });
-    const schema = verifySchema(db);
-    if (!schema.ok) {
-      console.error(`❌ Signal sync: ${schema.error}`);
-      return { ok: false, error: schema.error, remediation: 'This Signal database schema is not yet supported.' };
-    }
-    batch = readMessages(db, state.cursorRowid, SCAN_LIMIT);
-  } catch (err) {
-    console.error(`❌ Signal sync failed reading DB: ${err?.message || err}`);
-    return { ok: false, error: err?.message || 'Failed to read Signal DB' };
-  } finally {
-    try { db?.close(); } catch { /* noop */ }
-    await rm(snapshot.tmpDir, { recursive: true, force: true }).catch(() => {});
+  const batch = await readSignalDb(dbPath(), keyResult.key, (db) => readMessages(db, state.cursorRowid, SCAN_LIMIT));
+  if (!batch.ok) {
+    console.error(`❌ Signal sync: ${batch.error}`);
+    return batch;
   }
 
   const timezone = await getUserTimezone();

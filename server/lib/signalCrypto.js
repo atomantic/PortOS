@@ -20,8 +20,8 @@
  *     verification) into a plaintext SQLite buffer. Live sync does not use
  *     them to read the on-disk file: a main-file decrypt misses committed WAL
  *     frames (#11149). `services/signalSnapshot.js` opens the live database
- *     read-only through the bundled SQLCipher driver and exports one committed
- *     snapshot instead. Key format checks (`isRawHexKey`) still live here.
+ *     read-only through the bundled SQLCipher driver and queries one committed
+ *     snapshot in memory. Key format checks (`isRawHexKey`) still live here.
  *
  *  2. **Chromium `safeStorage` decryption.** Signal ≥6.2 no longer stores the DB
  *     key in plaintext; `config.json` carries an `encryptedKey` wrapped by
