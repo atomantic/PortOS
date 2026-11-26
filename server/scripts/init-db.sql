@@ -71,14 +71,6 @@ CREATE TABLE IF NOT EXISTS brain_memory_links (
       memory_id UUID NOT NULL
     );
 
-CREATE TABLE IF NOT EXISTS deep_audit_ledgers (
-      id TEXT PRIMARY KEY,
-      app_id TEXT NOT NULL,
-      category TEXT NOT NULL,
-      ledger JSONB NOT NULL,
-      updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
-    );
-
 ALTER TABLE memory_links ADD COLUMN IF NOT EXISTS id UUID NOT NULL DEFAULT gen_random_uuid();
 
 ALTER TABLE memory_links ADD COLUMN IF NOT EXISTS link_type VARCHAR(32) NOT NULL DEFAULT 'related';

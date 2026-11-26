@@ -149,13 +149,6 @@ export const coreDdl = [
       bridge_key TEXT PRIMARY KEY,
       memory_id UUID NOT NULL
     )`,
-    `CREATE TABLE IF NOT EXISTS deep_audit_ledgers (
-      id TEXT PRIMARY KEY,
-      app_id TEXT NOT NULL,
-      category TEXT NOT NULL,
-      ledger JSONB NOT NULL,
-      updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
-    )`,
     ...memoryHistoryDdl,
     ...memoryReviewDdl,
     `CREATE TABLE IF NOT EXISTS app_quality_measurements (
