@@ -1303,6 +1303,16 @@ describe('local LLM default switching', () => {
     expect(progress.some(([, payload]) => payload.event === 'error' && payload.message === error)).toBe(true);
   });
 
+  it('returns 502 with the existing error envelope when a switch fails', async () => {
+    const error = 'Backend unavailable';
+    switchBackend.mockResolvedValue({ success: false, error });
+
+    const res = await request(makeApp()).post('/api/local-llm/switch').send({ to: 'lmstudio' });
+
+    expect(res.status).toBe(502);
+    expect(res.body).toMatchObject({ error, code: 'INTERNAL_ERROR' });
+  });
+
   it('returns a successful default change and emits completion', async () => {
     switchBackend.mockResolvedValue({ success: true, backend: 'lmstudio' });
     const app = makeApp();

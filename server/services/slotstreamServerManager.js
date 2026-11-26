@@ -251,7 +251,7 @@ export async function installSlotstream({ onProgress = () => {} } = {}) {
 
     emit('Extracting Slotstream…');
     const extract = await runStreamingCommand('tar', ['-xzf', archivePath, '-C', extractDir], emit, { timeoutMs: 60_000 });
-    if (!extract.success) throw new ServerError(`Slotstream extract failed: ${extract.error}`, { status: 500 });
+    if (!extract.success) throw new ServerError(`Slotstream extract failed: ${extract.error}`, { status: 502, code: 'INTERNAL_ERROR' });
 
     const extractedBinary = join(extractDir, 'slotstream');
     const extractedStat = await lstat(extractedBinary).catch(() => null);
@@ -276,7 +276,7 @@ export async function installSlotstream({ onProgress = () => {} } = {}) {
     }
 
     if (!resolveSlotstreamBinary() && !findCommandOnPath(binary)) {
-      throw new ServerError('Slotstream downloaded but the binary was not found in ~/.slotstream/bin.', { status: 500 });
+      throw new ServerError('Slotstream downloaded but the binary was not found in ~/.slotstream/bin.', { status: 502, code: 'INTERNAL_ERROR' });
     }
     return { success: true, message: 'Slotstream installed' };
   } finally {

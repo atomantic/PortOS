@@ -2796,6 +2796,30 @@ describe('editing a saved Cast & Sets image', () => {
     expect((await current(project.id)).castAndSets.images.character.imageId).toBe(input.imageId);
   });
 
+  it('discards a legacy image edit and publishes the updated project, while refusing catalog check-ins', async () => {
+    const project = await ready();
+    const requested = await requestEdit(project);
+    expect(requested.status).toBe(202);
+    const job = jobs.at(-1);
+    await landEdit(project, job);
+    const requestId = job.params.musicVideo.castAndSets.editRequestId;
+    const events = [];
+    const capture = (event) => { if (event.projectId === project.id) events.push(event); };
+    musicVideoEvents.on('cast-and-sets', capture);
+    onTestFinished(() => musicVideoEvents.off('cast-and-sets', capture));
+
+    const discarded = await request(app).post(editUrl(project.id, 'discard-image-edit')).send({ key: 'character', requestId });
+    expect(discarded.status).toBe(200);
+    expect(discarded.body.project.castAndSets.images.character.edit).toBeNull();
+    expect(events.at(-1).project.castAndSets.images.character.edit).toBeNull();
+
+    await projects.mutateProjectRecord(project.id, (current) => ({ project: { ...current,
+      castAndSets: { ...current.castAndSets, source: 'catalog', status: 'review' } } }));
+    const refused = await request(app).post(editUrl(project.id, 'discard-image-edit')).send({ key: 'character', requestId });
+    expect(refused.status).toBe(409);
+    expect(refused.body.code || refused.body.error?.code).toBe('CAST_SETS_CATALOG_ONLY');
+  });
+
   it('charges an active run before queueing and settles a discarded edit without stranding its budget step', async () => {
     const { project, run } = await productionCheckin({ maxGenerations: 30, spendCapUsd: 10 });
     await runTo(project.id, 'review');

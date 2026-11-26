@@ -1070,7 +1070,10 @@ export const editCastAndSetsImage = async (projectId, input) => {
   assertLegacyCheckin(await requireProject(projectId));
   return requestCastSetsImageEdit(projectId, input, { ...deps, processId: PROCESS_ID, publish });
 };
-export const discardCastAndSetsImageEdit = (projectId, input) => discardCastSetsImageEdit(projectId, input, publish);
+export async function discardCastAndSetsImageEdit(projectId, input) {
+  assertLegacyCheckin(await requireProject(projectId));
+  return discardCastSetsImageEdit(projectId, input, publish);
+}
 export async function acceptCastAndSetsImageEdit(projectId, input) {
   assertLegacyCheckin(await requireProject(projectId));
   const out = await acceptCastSetsImageEdit(projectId, input, PROCESS_ID);

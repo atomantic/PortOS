@@ -1507,8 +1507,8 @@ export async function installLlamaServer({ onProgress = () => {} } = {}) {
   const child = spawn(plan.manager, plan.installArgs, spawnOpts);
 
   return new Promise((resolve, reject) => {
-    // Once error or exit takes ownership of settlement, late process output
-    // must not replace the terminal frame or restart the progress banner.
+    // Error and exit can both fire. The first owns settlement, and late
+    // process output must not replace a terminal progress frame.
     let settled = false;
     const reportOutput = (data) => {
       if (!settled) onProgress({ event: 'progress', message: data.toString().trim() });
@@ -1518,7 +1518,7 @@ export async function installLlamaServer({ onProgress = () => {} } = {}) {
     child.on('error', (err) => {
       if (settled) return;
       settled = true;
-      reject(new ServerError(`Failed to run ${plan.manager}: ${err.message}`, { status: 500 }));
+      reject(new ServerError(`Failed to run ${plan.manager}: ${err.message}`, { status: 502, code: 'INTERNAL_ERROR' }));
     });
     // Async listener on a child-process event: it runs outside the Express
     // lifecycle AND outside this Promise executor's own throw path, so an
@@ -1549,9 +1549,9 @@ export async function installLlamaServer({ onProgress = () => {} } = {}) {
         const msg = code === 0
           ? `${plan.manager} completed but llama-server was not found on PATH — ${hint}`
           : `${plan.installCommand} failed (exit code ${code})`;
-        reject(new ServerError(msg, { status: 500 }));
+        reject(new ServerError(msg, { status: 502, code: 'INTERNAL_ERROR' }));
       } catch (err) {
-        reject(new ServerError(`Failed to verify the llama.cpp install: ${err.message}`, { status: 500 }));
+        reject(new ServerError(`Failed to verify the llama.cpp install: ${err.message}`, { status: 502, code: 'INTERNAL_ERROR' }));
       }
     });
   });

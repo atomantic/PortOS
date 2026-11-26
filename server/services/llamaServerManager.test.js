@@ -737,7 +737,7 @@ describe('llamaServerManager', () => {
       return child;
     });
 
-    await expect(installLlamaServer()).rejects.toThrow(/Could not symlink bin\/llama-server/);
+    await expect(installLlamaServer()).rejects.toMatchObject({ status: 502, message: expect.stringMatching(/Could not symlink bin\/llama-server/) });
   });
 
   it('rejects instead of hanging when the link spawn throws synchronously', async () => {
@@ -754,7 +754,7 @@ describe('llamaServerManager', () => {
       return child;
     });
 
-    await expect(installLlamaServer()).rejects.toThrow(/Failed to verify the llama\.cpp install: spawn EACCES/);
+    await expect(installLlamaServer()).rejects.toMatchObject({ status: 502, message: expect.stringMatching(/Failed to verify the llama\.cpp install: spawn EACCES/) });
   });
 
   it('rejects with a `brew link` hint when linking does not resolve the binary', async () => {

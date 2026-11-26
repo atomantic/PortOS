@@ -895,7 +895,7 @@ describe('mtplxServerManager', () => {
 
     it('does not report success when the installer leaves no executable', async () => {
       streamingSpawn.runStreamingCommand.mockResolvedValue({ success: true });
-      await expect(installMtplx()).rejects.toMatchObject({ code: 'MTPLX_INSTALL_FAILED', message: expect.stringContaining('executable') });
+      await expect(installMtplx()).rejects.toMatchObject({ status: 502, code: 'MTPLX_INSTALL_FAILED', message: expect.stringContaining('executable') });
     });
 
     it('refuses before install when the private patched tool is unavailable', async () => {
@@ -1036,7 +1036,7 @@ describe('mtplxServerManager', () => {
         await writeFile(entry, '#!/bin/sh');
         return { success: false, error: 'hash mismatch' };
       });
-      await expect(installMtplx()).rejects.toMatchObject({ code: 'MTPLX_INSTALL_FAILED' });
+      await expect(installMtplx()).rejects.toMatchObject({ status: 502, code: 'MTPLX_INSTALL_FAILED' });
       await expect(readFile(entry)).rejects.toMatchObject({ code: 'ENOENT' });
       run.mockImplementation(successfulInstallStep);
       await expect(installMtplx()).resolves.toMatchObject({ success: true });

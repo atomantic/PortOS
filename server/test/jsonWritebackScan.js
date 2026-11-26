@@ -102,7 +102,12 @@ function expressionKey(node, tokens, source) {
   return parts.join(' ');
 }
 
-const HELPER_NAMES = ['readJSONFile', 'readJSONFileStrict', 'atomicWrite', 'tryReadFile', 'readFile', 'safeJSONParse'];
+const WRITE_HELPER_NAMES = ['atomicWrite', 'writeSecureJson'];
+const HELPER_NAMES = [...WRITE_HELPER_NAMES, 'readJSONFile', 'readJSONFileStrict', 'tryReadFile', 'readFile', 'safeJSONParse'];
+
+export function mayWriteJsonFile(source) {
+  return WRITE_HELPER_NAMES.some(name => source.includes(name)) || source.includes('\\u');
+}
 
 function helperNames(ast) {
   const names = new Map(HELPER_NAMES.map(name => [name, name]));
@@ -283,7 +288,7 @@ export function scanJsonWriteback(source, { module = '', registry = new Map() } 
     }
     if (name === 'tryReadFile' || name === 'readFile') return;
     const key = pathKey(node.arguments[0]);
-    if (name === 'atomicWrite') writes.add(key);
+    if (WRITE_HELPER_NAMES.includes(name)) writes.add(key);
     else if (name === 'readJSONFileStrict' || isStrict(node.arguments[2])) strictReads.add(key);
     else reads.add(key);
   }, node => {
