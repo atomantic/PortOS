@@ -124,7 +124,7 @@ one Actions API call for the newest successful `push` or `schedule` run of
 `--no-renames`). Any lookup, fetch or diff failure runs every native job.
 Scheduled, dispatched and release runs are unchanged. A gated push publishes no `Full CI Gate`
 (`native_gated`): it is not complete-run evidence for release reuse.
-Snapshot-only pushes: [CI_SNAPSHOT_PUSHES.md](CI_SNAPSHOT_PUSHES.md).
+See [CI for generated snapshot pushes](GITHUB_ACTIONS.md#ci-for-generated-snapshot-pushes).
 
 A merge commit on `main` is tested because a PR gate only proves the PR
 against the base it was built on: two PRs that were each green can merge into a

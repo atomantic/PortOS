@@ -42,7 +42,7 @@ vi.mock('./documentRender.js', async (importOriginal) => ({
 
 const { PATHS } = await import('../../lib/paths.js');
 const projects = await import('./projects.js');
-const { renderMusicVideo } = await import('./render.js');
+const { renderMusicVideo, getActiveRenderJobId } = await import('./render.js');
 const { startExcerptRender } = await import('./excerptRender.js');
 const { importDocumentTemplate } = await import('./compositionDocument.js');
 const { startPublishKitBuild } = await import('./publishKit.js');
@@ -95,15 +95,17 @@ describe('final render', () => {
     } finally {
       proceed.resolve();
       (await cut)();
+      // Let post-publish `retireOldFinals` finish before the next test clears `mutateVideoHistory`.
+      await waitFor(() => expect(getActiveRenderJobId(id)).toBeNull());
     }
   });
 
   it('files a render that finishes during a cut only after the cut is released', async () => {
     const id = await documentProject();
-    mutateVideoHistory.mockClear();
-    encodeDocumentComposition.mockClear();
     const release = await acquireBackupSnapshotCut();
     try {
+      mutateVideoHistory.mockClear();
+      encodeDocumentComposition.mockClear();
       const { jobId } = await renderMusicVideo(id);
       await waitFor(() => expect(encodeDocumentComposition).toHaveBeenCalledOnce());
       await settleSeveral();
@@ -113,6 +115,7 @@ describe('final render', () => {
       await waitFor(async () => expect((await projects.getProject(id)).renderHistoryId).toBe(jobId));
     } finally {
       release();
+      await waitFor(() => expect(getActiveRenderJobId(id)).toBeNull());
     }
   });
 });

@@ -26,6 +26,14 @@ update. Retrying resumes the interrupted checkpoint download when possible.
 If mkserve exits with an engine error, **Repair** clears and rebuilds the
 current engine cache using the local checkpoint.
 
+Checkpoint downloads honour `HTTPS_PROXY` and fall back to `ALL_PROXY`,
+including SOCKS5 and SOCKS5h URLs. SOCKS5 resolves artifact hosts locally,
+while SOCKS5h resolves them through the proxy. Configure exceptions with
+`NO_PROXY`. Use `CURL_CA_BUNDLE` (or `SSL_CERT_FILE`) for an explicit PEM
+bundle and `SSL_CERT_DIR` for directories of PEM certificates, including
+OpenSSL hash-named entries. Directory certificates extend the explicit bundle
+when present and the normal Node trust store otherwise.
+
 The build and checkpoint are reproducible caches under `data/cache/mkserve`,
 excluded from PortOS backups. The engine is pinned to the reviewed upstream
 [megakernel-zoo commit](https://github.com/dangxingyu/megakernel-zoo/tree/95e315c808a7d935c10ef924a8fc0d901bfc3b89).
