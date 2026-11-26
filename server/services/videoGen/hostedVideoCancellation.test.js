@@ -1,9 +1,29 @@
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { readFile } from 'node:fs/promises';
+import { join } from 'node:path';
+import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { PATHS } from '../../lib/paths.js';
+import { cleanupTempDataRoots, mockTestIdentity } from '../../lib/mockPathsDataRoot.js';
+import { videoGenEvents } from './events.js';
+import * as google from './google.js';
+import * as higgsfield from './higgsfield.js';
+import { loadHistory } from './history.js';
 
-const m = vi.hoisted(() => ({ probe: vi.fn(), unlink: vi.fn(), finalize: vi.fn(), canceled: vi.fn(), failure: vi.fn() }));
-vi.mock('fs/promises', async (load) => ({ ...await load(), writeFile: vi.fn(async () => {}), unlink: m.unlink }));
-vi.mock('../../lib/fileUtils.js', async (load) => ({ ...await load(), ensureDir: vi.fn(async () => {}) }));
-vi.mock('../../lib/ffmpeg.js', () => ({ probeVideoGeometry: m.probe }));
+const probe = vi.hoisted(() => vi.fn());
+vi.mock('../../lib/paths.js', async (load) => {
+  const { lazyTempDataRoot, makePathsProxy } = await import('../../lib/mockPathsDataRoot.js');
+  return makePathsProxy(await load(), {
+    dataRoot: () => lazyTempDataRoot('portos-hosted-video-adapter-cancel-'),
+  });
+});
+vi.mock('../../lib/ffmpeg.js', () => ({
+  probeVideoGeometry: probe,
+  optimizeForStreaming: vi.fn(),
+  generateThumbnail: vi.fn(),
+  probeFrameCount: vi.fn(),
+  probeVideoDuration: vi.fn(),
+}));
+vi.mock('../instanceIdentity.js', () => mockTestIdentity());
+vi.mock('../peerSyncEventBus.js', () => ({ announceLocalVideoRows: () => {} }));
 vi.mock('../higgsfieldApi.js', () => ({
   createHiggsfieldRequestEntry: () => ({ controller: new AbortController() }),
   resolveHiggsfieldApiKey: () => 'example-key',
@@ -18,32 +38,52 @@ vi.mock('../googleCloudApi.js', () => ({
   googleExpressModeRefusal: () => null,
   submitGoogleOperation: async () => 'operation',
   awaitGoogleOperation: async () => ({ outcome: 'completed', response: { videos: [{ bytesBase64Encoded: 'YQ==' }] } }),
-  abandonGoogleOperation: vi.fn(), googleFilteredReason: vi.fn(), googleInlineImage: vi.fn(),
+  abandonGoogleOperation: vi.fn(),
+  googleFilteredReason: vi.fn(),
+  googleInlineImage: vi.fn(),
 }));
-vi.mock('../../lib/fetchWithTimeout.js', () => ({ fetchWithTimeout: async () => ({ ok: true, arrayBuffer: async () => new ArrayBuffer(1) }) }));
-vi.mock('./generateVideoHelpers.js', () => ({ finalizeGeneratedVideo: m.finalize, discardUnpublishedVideo: vi.fn(), emitCloudRenderStatus: vi.fn(), CLOUD_RENDER_PHASE: {} }));
-vi.mock('../../lib/sseUtils.js', () => ({ attachSseClient: vi.fn(), closeJobAfterDelay: vi.fn(), createJobFailureFinalizer: () => Object.assign(m.failure, { canceled: m.canceled }) }));
 vi.mock('../hostedRenderRemoteDelete.js', () => ({ autoDeleteHostedCopy: vi.fn() }));
 
-import * as google from './google.js';
-import * as higgsfield from './higgsfield.js';
-
 beforeEach(() => {
-  vi.clearAllMocks();
-  m.unlink.mockResolvedValue(undefined);
+  probe.mockReset();
+  vi.stubGlobal('fetch', vi.fn(async () => new Response('a')));
 });
+
+afterEach(() => {
+  vi.unstubAllGlobals();
+});
+
+afterAll(cleanupTempDataRoots);
 
 describe('hosted video cancellation before publication', () => {
   it.each([['Google', google], ['Higgsfield', higgsfield]])('keeps a %s cancellation received during geometry probing out of history', async (label, provider) => {
-    let release;
-    m.probe.mockImplementation(() => new Promise(resolve => { release = resolve; }));
+    const probing = Promise.withResolvers();
+    const geometryReady = Promise.withResolvers();
+    probe.mockImplementation((path) => {
+      probing.resolve(path);
+      return geometryReady.promise;
+    });
     const jobId = `probe-cancel-${label}`;
-    await provider.generateVideo({ jobId, settings: {}, apiKey: 'example-key', prompt: 'A dancer turns' });
-    await vi.waitFor(() => expect(release).toBeTypeOf('function'));
-    expect(provider.cancel(jobId)).toBe(true);
-    release({ durationSec: 5 });
-    await vi.waitFor(() => expect(m.canceled).toHaveBeenCalled());
-    expect(m.unlink).toHaveBeenCalledWith(expect.stringContaining(`${jobId}.mp4`));
-    expect(m.finalize).not.toHaveBeenCalled();
+    const failed = vi.fn();
+    videoGenEvents.on('failed', failed);
+    try {
+      const job = await provider.generateVideo({ jobId, settings: {}, apiKey: 'example-key', prompt: 'A dancer turns' });
+      const output = join(PATHS.videos, job.filename);
+      try {
+        expect(await probing.promise).toBe(output);
+        await expect(readFile(output, 'utf8')).resolves.toBe('a');
+        expect(provider.cancel(jobId)).toBe(true);
+      } finally {
+        geometryReady.resolve({ durationSec: 5 });
+        await vi.waitFor(() => expect(failed).toHaveBeenCalledExactlyOnceWith({ generationId: jobId, error: 'Canceled' }));
+      }
+
+      await expect(readFile(output)).rejects.toMatchObject({ code: 'ENOENT' });
+      expect(await loadHistory()).toEqual([]);
+      expect(provider.getActiveJob()).toBeNull();
+      expect(provider.cancel(jobId)).toBe(false);
+    } finally {
+      videoGenEvents.off('failed', failed);
+    }
   });
 });
