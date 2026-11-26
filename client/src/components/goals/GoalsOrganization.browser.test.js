@@ -195,6 +195,7 @@ describe.skipIf(!chrome)('Goals responsive controls', () => {
             expect(action.x + action.width).toBeLessThanOrEqual(panelBox.x);
             await addSubGoal.click({ trial: true });
             await panel.getByRole('button', { name: 'Close panel' }).click();
+            await panel.waitFor({ state: 'hidden' });
           } else {
             const heading = panel.getByRole('heading', { level: 2, name: 'Nested example 9' });
             await heading.waitFor();
