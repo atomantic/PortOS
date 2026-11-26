@@ -12,21 +12,7 @@ PortOS turns a local development machine into a personal operating system: a sin
 
 ## Goals & Objectives
 
-Reused verbatim (condensed to objective statements) from [GOALS.md](./GOALS.md)'s Core Goals — this PRD does not re-derive them:
-
-1. **Centralized App Lifecycle Management** — one dashboard replaces juggling terminals/browser tabs across every active project.
-2. **Autonomous AI Agent Orchestration (CoS)** — tasks are generated from goals, routed to the best-performing AI provider, and executed without human intervention, learning from outcomes over time.
-3. **Personal Knowledge Management** — Brain + Memory function as a persistent, auto-classified, semantically searchable second brain.
-4. **Digital Identity Modeling** — a machine-readable digital twin briefs AI agents on tone, style, and preference so they act authentically on the user's behalf.
-5. **Creative Production Suite** — an end-to-end studio (writing, worldbuilding, series production, image/video generation, editing) makes creating easier than consuming.
-6. **Developer Productivity Toolkit** — shell, git, browser control, and process tooling available from any device.
-7. **Self-Improving Intelligence** — the system tunes its own routing/metrics from observed outcomes rather than staying static.
-8. **Full Digital Autonomy** — agents can act across connected platforms (voice, Telegram, messaging, social) around the clock.
-9. **Knowledge Legacy** — personal knowledge, identity, and creative output are preserved as a durable, local record. PortOS itself is the backup of record (data lives on the user's hardware and is covered by automatic snapshots — see `docs/BACKUP.md`), so per-domain backup-style exports are out of scope; download/export buttons exist only for sharing or handoff to other tools (Sharing buckets, Legacy Bundle, format-specific creative deliverables).
-10. **Anywhere Access on Private Network** — every feature is reachable from any device on the user's Tailnet, with no public exposure.
-11. **Health & Longevity** — health data (MeatSpace) is tracked and made actionable via mortality/longevity-aware goal scoring.
-12. **Personal Productivity & Life Management** — calendar, goals, and communications are unified with the same tooling that manages digital projects.
-13. **Cognitive Training & Lifelong Learning** — POST and Wiki actively strengthen how the user learns, not just record what they learned.
+See [GOALS.md](./GOALS.md#core-goals) for the core goals and objectives.
 
 ---
 
@@ -56,7 +42,7 @@ Reused verbatim (condensed to objective statements) from [GOALS.md](./GOALS.md)'
 | FR-2 | The system MUST manage PM2-backed app lifecycle actions (start/stop/restart/update/build/status/logs). | Must | Each lifecycle action returns success/failure state and streams logs for the target app within its running duration. |
 | FR-3 | The system MUST detect port conflicts against the canonical `PORTS` registry before allocation. | Must | Requesting a port already claimed by another app returns a conflict, not a silent overwrite. |
 | FR-4 | The system SHOULD expose configurable system-health thresholds. | Should | `PUT /api/system/health/thresholds` persists new thresholds and subsequent `GET /api/system/health` checks use them. |
-| FR-59 | The system MUST provide in-app UI for the full lifecycle of every local runtime it supports and every model that runtime needs — install/uninstall the runtime, search a catalog, download a model, and remove a downloaded model — with progress surfaced live. A user MUST never be told to run a shell command to complete one of these steps. | Must | For each supported local runtime (Ollama, LM Studio, llama.cpp, MTPLX), the UI offers install, start/stop, model search, model download with byte progress, and model removal; no user-facing empty/blocked state names a terminal command as its remedy. |
+| FR-59 | The system MUST provide in-app UI for the full lifecycle of every local runtime it supports and every model that runtime needs — install/uninstall the runtime, search a catalog, download a model, and remove a downloaded model — with progress surfaced live. A user MUST never be told to run a shell command to complete one of these steps. | Must | For each managed runtime, the Runtimes workspace offers installation, uninstallation and start/stop where supported by that runtime. Model controls offer catalog search, downloads with byte progress, and removal for the formats the runtime supports; no user-facing empty/blocked state names a terminal command as its remedy. |
 
 ### AI Agent Orchestration (CoS)
 

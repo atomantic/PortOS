@@ -25,11 +25,11 @@ function quickReferenceRows(markdown) {
   const rows = [];
   let scope = '';
   for (const line of section.split('\n')) {
-    const [, cell, , verdict] = line.split('|').map(part => part.trim());
+    const [, cell] = line.split('|').map(part => part.trim());
     const heading = /^\*\*(\S+) (\w+)\*\*$/.exec(cell ?? '');
     if (heading) scope = `${heading[1].toLowerCase()} ${heading[2]}`;
     const name = /`([^`]+)`/.exec(cell ?? '')?.[1];
-    if (name && !/^(REMOVED|REPLACED)\b/.test(verdict ?? '')) rows.push(`${scope}: ${name}`);
+    if (name) rows.push(`${scope}: ${name}`);
   }
   return rows;
 }
@@ -41,7 +41,7 @@ describe('docs/DEPS.md', () => {
     expect([...DECLARED].filter(entry => !documented.includes(entry))).toEqual([]);
   });
 
-  it('has one current row per declaration, with historical removals allowed', () => {
+  it('requires deletion of rows for removed declarations and rejects duplicates', () => {
     expect(documented.filter(entry => !DECLARED.has(entry))).toEqual([]);
     expect(new Set(documented).size).toBe(documented.length);
   });
@@ -52,7 +52,7 @@ describe('docs/DEPS.md', () => {
     expect(documented.length).toBe(DECLARED.size);
   });
 
-  it('counts active rows in the right scope and excludes historical removals', () => {
+  it('counts rows in the right scope regardless of verdict', () => {
     const sample = [
       '## Quick Reference Table',
       '| **Client dependencies** | | | | |',
@@ -62,6 +62,11 @@ describe('docs/DEPS.md', () => {
       '| **Server devDependencies** | | | | |',
       '| `current` | 1 | KEEP | | |',
     ].join('\n');
-    expect(quickReferenceRows(sample)).toEqual(['client dependencies: current', 'server devDependencies: current']);
+    expect(quickReferenceRows(sample)).toEqual([
+      'client dependencies: legacy',
+      'client dependencies: old',
+      'client dependencies: current',
+      'server devDependencies: current',
+    ]);
   });
 });
