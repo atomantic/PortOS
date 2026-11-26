@@ -17,6 +17,14 @@ import { createFileWriteQueue } from '../lib/fileWriteQueue.js';
 import { _healthRestoreDrainingForTests, ingestHealthData, withLiveHealthRestore } from './appleHealthIngest.js';
 import { meatspaceEvents } from './meatspace/meatspaceEvents.js';
 
+const machineLocalCredentialRestoreExcludes = [
+  '--exclude=/[cC][aA][lL][eE][nN][dD][aA][rR]/[gG][oO][oO][gG][lL][eE]-[aA][uU][tT][hH]',
+  '--exclude=/[sS][pP][oO][tT][iI][fF][yY]/[cC][rR][eE][dD][eE][nN][tT][iI][aA][lL][sS].[jJ][sS][oO][nN]',
+  '--exclude=/[sS][pP][oO][tT][iI][fF][yY]/[tT][oO][kK][eE][nN][sS].[jJ][sS][oO][nN]',
+  '--exclude=/[sS][pP][oO][tT][iI][fF][yY]/[cC][aA][cC][hH][eE]',
+  '--exclude=/[oO][pP][eE][nN][cC][lL][aA][wW]',
+];
+
 // snapshotId validation + rsync filter construction + settings cache re-sync.
 // restoreSnapshot writes over the user's live data/ directory, so each of these
 // is a data-loss-adjacent contract, not a style nit (issue #3917).
@@ -102,6 +110,7 @@ describe('restoreSnapshot snapshotId, filter flags, and settings re-sync', () =>
       '--exclude=/[tT][aA][iI][lL][cC][aA][tT]-[sS][eE][rR][vV][eE].[jJ][sS][oO][nN]',
       '--exclude=/[tT][aA][iI][lL][cC][aA][tT]-[sS][eE][rR][vV][eE].[aA][dD][dD][rR]',
       '--exclude=/[tT][aA][iI][lL][cC][aA][tT]-[fF][oO][rR][wW][aA][rR][dD][sS].[jJ][sS][oO][nN]',
+      ...machineLocalCredentialRestoreExcludes,
       '--exclude=/[dD][aA][tT][aA][bB][aA][sS][eE]-[aA][uU][tT][hH][oO][rR][iI][tT][yY].[jJ][sS][oO][nN]',
       '--exclude=/[dD][aA][tT][aA][bB][aA][sS][eE]-[rR][eE][sS][tT][oO][rR][eE]-[rR][eE][cC][oO][vV][eE][rR][yY].[jJ][sS][oO][nN]',
         '--exclude=/[dD][aA][tT][aA][bB][aA][sS][eE]-[mM][aA][iI][nN][tT][eE][nN][aA][nN][cC][eE]',
@@ -178,6 +187,13 @@ describe('restoreSnapshot snapshotId, filter flags, and settings re-sync', () =>
       // integrity inventory skips); nothing else scopes an unfiltered restore.
       expect(args.filter(a => a.startsWith('--include='))).toEqual([]);
       expect(args.filter(a => a.startsWith('--exclude='))).toEqual(expectedExcludes);
+    });
+
+    it('passes machine-local OAuth and OpenClaw exclusions to rsync restores', async () => {
+      await runRestore('/dest', 'snap-1', { dryRun: true });
+
+      const args = spawn.mock.calls[0][1];
+      expect(args).toEqual(expect.arrayContaining(machineLocalCredentialRestoreExcludes));
     });
 
     it('echoes the subdirFilter back in the result', async () => {
