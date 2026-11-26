@@ -1,36 +1,34 @@
-# Release v2.129.0 - Guided Kestrel
+# Release v2.130.0 - Crafted Peregrine
 
-Released: 2026-11-25
+Released: 2026-11-26
 
 ## Highlights
 
-- **Managed Local Runtimes & Coding Context**: Install, start, repair, and monitor Splash (with its Inkling checkpoint) and mkserve directly from PortOS with PM2 logs, performance tracking, free-disk checks, and automatic provider model refreshes, while editing Claude Code, OpenCode, and Splash context in-app.
-- **Multi-Runtime LLM Playground**: Test and compare models across every running local runtime in the Local LLM Playground, with clearer per-runtime listing errors and removable stale selections.
-- **Music Video & Media Studio**: Apply non-destructive Image Treatments to music video shots, move takes between shots, label and switch project versions, browse a paginated video gallery picker, and inspect or edit negative prompts on image and video retries.
-- **CoS Linking & Feature Audit Priorities**: Navigate directly between Chief of Staff agents, runs, run events, and tasks via deep links, and view or pin feature-area audit priority tiers in Settings > Features.
-- **Performance & Reliability**: Split heavy charting and 3D libraries out of cold-load bundles, speed up app status lists, media gallery search, and Review history, and add retryable error states and duplicate-submit guards across core pages.
+- **Owned Charts, 3D Scenes & Drag-and-Drop**: Replaced third-party charting, 3D helper, and drag-and-drop libraries with built-in accessible SVG charts, Three.js scene helpers, and native drag-and-drop interactions.
+- **Music Video Mastering & Studio Polish**: Master publishing kits for web loudness, preview custom vertical crops, loop and render selected ranges in the editor, add editable credit blocks to endings, and search shot reference galleries by type.
+- **Stronger Privacy & Host-Control Boundaries**: Gated realtime voice mutations, log subscriptions, runtime probes, and private data reads behind host control, cleared local Spotify data on disconnect, and scrubbed revoked vault facts from raw recordings and operational logs.
+- **Accessibility & Chief of Staff Controls**: Added full keyboard and screen-reader support across Chief of Staff panels and Goals lists, preserved focus through inline confirmations, and surfaced pull request remediation scope in Chief of Staff.
+- **Data Integrity & Performance**: Serialized Tribe imports, transacted Beeper participant edits, batched Catalog image and scrap updates, and preserved local OAuth credentials and operation locks across backups and restores.
 
 ## Added
 
-- **Managed Splash & mkserve Lifecycle**: Added in-app lifecycle controls, pinned installation, free-disk verification, PM2 log integration, performance measurements, proxy support, and cache repair for Splash (including Inkling) and mkserve, plus automatic provider-model refreshes after starts, downloads, or removals.
-- **In-App Coding Context Editor**: Added editing for Claude Code, OpenCode, and Splash context inside PortOS, with Launch in Shell support for managed apps and OpenCode 2.
-- **Local LLM Playground Multi-Runtime Comparison**: Added side-by-side testing and comparison across all running local runtimes, retaining unavailable selections as removable rows and surfacing per-runtime listing errors.
-- **Music Video & Media Controls**: Added non-destructive Image Treatments for music video shots, moving takes to another shot, music video project version labels and switching, and pagination in the video gallery picker.
-- **CoS Cross-Linking & Audit Priorities**: Linked Chief of Staff agents, runs, run events, and tasks with deep-link resolution by run ID, added automatic feature-area usage learning with pinnable priority tiers in Settings > Features, and added reasoning-only timeout reporting for HTML Pages.
+- **Music Video Studio**: Added web-loudness mastering for Music Video publishing kits, custom vertical kit crop previews, range looping and rendering in the Music Video Editor, editable credit blocks and styling for video endings, and type-based search in shot reference galleries.
+- **Chief of Staff & Diagnostics**: Exposed pull request remediation scope in Chief of Staff, surfaced GitHub workflow access blocks clearly, and captured suite hook failures in test diagnostics.
 
 ## Changed
 
-- **Performance & Bundle Splitting**: Split shared client chunks so routes no longer load 3D and charting libraries unnecessarily, served Video Gen status from a shared probe cache, indexed media gallery search and filter fields, paged Review history, trimmed mood board and comparison payloads, and read only metadata prefixes when scanning Obsidian notes.
-- **Retry & Edit Flows**: Built the image Edit and Retry form from Image Gen compose controls with model-input previews, showed source negative prompts on Regenerate and annotation re-renders, and kept Schedule Timeline edits applied locally with clearable recheck schedules.
-- **Dependencies & Retirements**: Updated client charting and icon dependencies (`recharts` and `lucide-react`), and retired the Integration Flows viewer along with unused routes.
+- **Built-In UI Infrastructure**: Replaced Recharts, Drei, and third-party drag-and-drop packages with owned accessible SVG charts, Three.js scene helpers, and native drag-and-drop interactions, while updating icon and router dependencies.
+- **Accessibility Across Core Views**: Improved keyboard navigation, focus preservation on inline confirmations, and screen-reader labels across Chief of Staff views (memory graph, schedule timeline, run controls, task templates, learning, and digest), Goals panels, and route titles.
+- **Media, Catalog & Runtime Performance**: Batched Catalog scrap commits, scoped Catalog image filing to changed ingredients, compacted Media Gallery images after pagination, kept Models Performance focused on available runtimes, and allowed directors to omit catalog subjects from a shot.
+- **Configurable Memory & Providers**: Made the memory extraction classifier configurable, computed reflection fading at read time, and shared CLI provider primitives while aligning provider migrations with shipped defaults.
 
 ## Fixed
 
-- **Media & Video Generation**: Prevented duplicate 3D renders on double-click, refused unsupported negative prompts on Reactor renders, validated hosted video durations and attachments for Gemini, Runway, and Higgsfield, preserved inherited prompts and retry edits after refusals, and prompted before leaving Media Annotate with unsaved strokes.
-- **Chief of Staff & Runs**: Stabilized Chief of Staff avatar state and slice refreshes across tab switches and socket updates, serialized pinned Runs reads, kept scheduled jobs armed after overlapped or failed fires, and prevented updates from killing detached jobs.
-- **Error States & Form Input**: Added retryable load-error states across Insights, Catalog, Privacy Center, POST, and Dashboard widgets, fixed digit-by-digit number input and speech-rate entry below 1, preserved commas and spaces in Brain follow-ups, and stopped double-clicks from creating duplicate records.
-- **Imports, Feeds & Backups**: Fixed iPhone Google Timeline visit imports, WhatsApp afternoon timestamps, legacy Spotify podcast plays, Gmail Takeout sent-mail labels, Atom feed decoding, Rapid Reader book reopening, and exclusion of managed Python environments from backups.
+- **Security & Privacy**: Enforced host control for realtime voice mutations, log subscriptions, runtime probes, and private data reads; secured Spotify local data and cleared it on disconnect; purged blocked Signal handles and queried the live encrypted database in memory; and redacted revoked vault facts from Digital Twin logs and pending Chief of Staff recordings.
+- **Music Video & FableLoom**: Preserved Music Video edits during reloads, coalesced clip timing saves, aligned final previews to the encoded song, prevented omitted cast alternates from appearing in prompts, and stabilized FableLoom storyboard approvals, episode outline refreshes, and scene transition recovery.
+- **Messaging, Sync & Backups**: Guarded Beeper attachment writes against concurrent updates, transacted Tribe participant link edits, serialized Tribe contact enrichment and imports, preserved local OAuth credentials and machine-local HTTPS material during backups and restores, and propagated memory hard purges across federated peers.
+- **Chief of Staff, Voice & Local Runtimes**: Made daemon control transitions idempotent, retired replaced audit schedules, finished voice turns after synthesis failures, reported local checkpoint download failures, and verified pinned vLLM and Laya-MLX artifacts before provisioning.
 
 ## Full Changelog
 
-**Full Diff**: https://github.com/atomantic/PortOS/compare/v2.128.0...v2.129.0
+**Full Diff**: https://github.com/atomantic/PortOS/compare/v2.129.0...v2.130.0
