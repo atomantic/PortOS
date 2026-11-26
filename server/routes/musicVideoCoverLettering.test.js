@@ -9,6 +9,7 @@
 import { describe, it, expect, vi, beforeEach, afterAll } from 'vitest';
 import express from 'express';
 import { rmSync } from 'fs';
+import { readFile, readdir } from 'fs/promises';
 import { join } from 'path';
 import { request } from '../lib/testHelper.js';
 import { errorMiddleware } from '../lib/errorHandler.js';
@@ -80,12 +81,46 @@ describe('uploaded cover typefaces', () => {
     expect(file.headers['content-type']).toContain('font/ttf');
 
     // The same family again replaces it under the same id, so designs naming it keep working.
-    const again = await upload('ExampleSans-Regular-v2.ttf', sfntFont('Example Sans'));
+    const replacement = Buffer.concat([sfntFont('Example Sans'), Buffer.from('replacement')]);
+    const again = await upload('ExampleSans-Regular-v2.ttf', replacement);
+    expect(again.status).toBe(201);
+    expect(await readFile(join(ROOT(), 'cover-fonts', 'example-sans.ttf'))).toEqual(replacement);
     expect(again.body.fonts.map((f) => f.id)).toEqual(['example-sans']);
 
     const removed = await request(app).delete('/api/music-video/publish/cover-fonts/example-sans');
     expect(removed.body.fonts).toEqual([]);
     expect((await request(app).get('/api/music-video/publish/cover-fonts/example-sans/file')).status).toBe(404);
+  });
+
+  it.each([false, true])('preserves the installed font and index when a replacement fails (mirror: %s)', async (useMirror) => {
+    const coverDir = join(ROOT(), 'cover-fonts');
+    const mirrorDir = useMirror ? join(ROOT(), 'cover-font-mirror') : null;
+    const name = 'ExampleSans.ttf';
+    const fileName = 'example-sans.ttf';
+    const original = sfntFont('Example Sans');
+    const replacement = Buffer.concat([original, Buffer.from('replacement')]);
+    fonts.__setCoverFontDepsForTests({ sharp: async () => fakeSharp, mirrorDir, waitMs: 0 });
+
+    expect((await upload(name, original)).status).toBe(201);
+    const index = await readFile(join(coverDir, 'fonts.json'));
+    fonts.__setCoverFontDepsForTests({
+      sharp: async () => (input) => Buffer.isBuffer(input)
+        ? fakeSharp(Buffer.alloc(0))
+        : fakeSharp(input),
+      mirrorDir,
+      waitMs: 0,
+    });
+
+    const refused = await upload(name, replacement);
+    expect(refused.status).toBe(422);
+    expect(refused.body.code).toBe('COVER_FONT_UNUSABLE');
+    expect(await readFile(join(coverDir, fileName))).toEqual(original);
+    expect(await readFile(join(coverDir, 'fonts.json'))).toEqual(index);
+    expect((await readdir(coverDir)).sort()).toEqual([fileName, 'fonts.json']);
+    if (mirrorDir) {
+      expect(await readFile(join(mirrorDir, fileName))).toEqual(original);
+      expect(await readdir(mirrorDir)).toEqual([fileName]);
+    }
   });
 
   it('refuses a file that is not a font, a font the renderer cannot set, and the wrong extension', async () => {

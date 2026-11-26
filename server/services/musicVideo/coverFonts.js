@@ -21,7 +21,7 @@
  * install and rendering depends on this machine's font system. No relations or
  * search, so not in the DB; included in normal data backups.
  */
-import { createHash } from 'crypto';
+import { createHash, randomUUID } from 'crypto';
 import { copyFile, readFile, rm, stat, mkdir } from 'fs/promises';
 import { homedir } from 'os';
 import { join } from 'path';
@@ -52,6 +52,8 @@ export function __setCoverFontDepsForTests(overrides) { deps = { ...defaults, ..
 const fontError = (status, code, message) => new ServerError(message, { status, code });
 const indexFile = () => join(PATHS.coverFonts, 'fonts.json');
 const fontFile = (font) => join(PATHS.coverFonts, `${font.id}.${font.ext}`);
+const mirrorFile = (font) => join(deps.mirrorDir, `${font.id}.${font.ext}`);
+const registerFontFile = (sharp, file) => sharp({ text: { text: 'A', fontfile: file, rgba: true } }).png().toBuffer();
 const registered = new Set();
 function resetRegistered() { registered.clear(); }
 
@@ -93,7 +95,7 @@ export async function registerCoverFonts(fonts) {
   if (deps.mirrorDir) {
     await mkdir(deps.mirrorDir, { recursive: true });
     for (const font of fonts) {
-      const target = join(deps.mirrorDir, `${font.id}.${font.ext}`);
+      const target = mirrorFile(font);
       if (!(await stat(target).catch(() => null))) await copyFile(fontFile(font), target);
     }
     return;
@@ -102,7 +104,7 @@ export async function registerCoverFonts(fonts) {
   for (const font of fonts) {
     const file = fontFile(font);
     if (registered.has(file)) continue;
-    await sharp({ text: { text: 'A', fontfile: file, rgba: true } }).png().toBuffer().catch((err) => {
+    await registerFontFile(sharp, file).catch((err) => {
       console.warn(`⚠️ Cover font ${font.id}: renderer would not take the file (${err.message})`);
     });
     registered.add(file);
@@ -152,29 +154,40 @@ export async function addCoverFont({ tempPath, originalName = '' }) {
     const taken = (id) => fonts.some((f) => f.id === id && f !== same);
     const id = same?.id || (taken(slug) ? `${slug}-${createHash('sha1').update(family).digest('hex').slice(0, 6)}` : slug);
     const font = { id, family, ext, width: 0, addedAt: new Date().toISOString() };
-    await mkdir(PATHS.coverFonts, { recursive: true });
-    await atomicWrite(fontFile(font), buffer);
-    // The probe runs against what is on disk; a replaced font under the same name keeps its old registration until a restart on fontconfig platforms.
-    registered.delete(fontFile(font));
-    await registerCoverFonts([font]);
-    const measured = await measureRegisteredFont(font);
+    const measured = await measureUploadedFont(font, buffer);
     if (!measured) {
-      await rm(fontFile(font), { force: true });
-      if (deps.mirrorDir) await rm(join(deps.mirrorDir, `${font.id}.${font.ext}`), { force: true });
       throw fontError(422, 'COVER_FONT_UNUSABLE', `This machine's renderer could not set text in "${family}". Try the .ttf or .otf version of the font`);
     }
     font.width = measured;
-    // A same-family upload in another format leaves the old file behind otherwise.
-    if (same && same.ext !== ext) await rm(fontFile(same), { force: true });
+    await atomicWrite(fontFile(font), buffer);
+    if (deps.mirrorDir) await atomicWrite(mirrorFile(font), buffer);
+    registered.delete(fontFile(font));
     await atomicWrite(indexFile(), { fonts: [...fonts.filter((f) => f !== same), font] });
+    if (same && same.ext !== ext) {
+      await rm(fontFile(same), { force: true });
+      if (deps.mirrorDir) await rm(mirrorFile(same), { force: true });
+    }
     console.log(`🔤 Cover font ${font.id} added (${family}, ${ext})`);
     return font;
   });
 }
 
-async function measureRegisteredFont(font) {
+async function measureUploadedFont(font, buffer) {
   const sharp = await deps.sharp();
-  return measureRegistered(sharp, font.family);
+  // Probe the candidate under its own filename, keeping the installed font and mirror readable.
+  const stagedFont = { ...font, id: `upload-${randomUUID()}` };
+  const stagingPath = deps.mirrorDir ? mirrorFile(stagedFont) : fontFile(stagedFont);
+  try {
+    await atomicWrite(stagingPath, buffer);
+    if (!deps.mirrorDir) {
+      // A previous registration of this family can still satisfy the width probe.
+      const loaded = await registerFontFile(sharp, stagingPath).then(() => true, () => false);
+      if (!loaded) return null;
+    }
+    return await measureRegistered(sharp, font.family);
+  } finally {
+    await rm(stagingPath, { force: true });
+  }
 }
 
 /** Remove an uploaded font. Designs that name it fall back to the default typeface. */
@@ -185,7 +198,7 @@ export async function removeCoverFont(id) {
     if (!font) throw fontError(404, 'NOT_FOUND', 'Font not found');
     await atomicWrite(indexFile(), { fonts: fonts.filter((f) => f !== font) });
     await rm(fontFile(font), { force: true });
-    if (deps.mirrorDir) await rm(join(deps.mirrorDir, `${font.id}.${font.ext}`), { force: true });
+    if (deps.mirrorDir) await rm(mirrorFile(font), { force: true });
     console.log(`🔤 Cover font ${font.id} removed`);
   });
 }
