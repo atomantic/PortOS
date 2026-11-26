@@ -13,12 +13,13 @@ vi.mock('./mkserveRuntimeInstall.js', async (importOriginal) => ({
   ...await importOriginal(),
   readMkserveInstall: vi.fn(),
   installPinnedMkserve: vi.fn(),
+  rebuildMkserveEngine: vi.fn(),
   removeMkserveRelease: vi.fn(),
 }));
 
 import { isPortInUse } from '../lib/platform.js';
 import { execPm2, getAppStatusStrict } from './pm2.js';
-import { installPinnedMkserve, mkserveInstallPaths, readMkserveInstall, removeMkserveRelease, MKSERVE_BUNDLE, MKSERVE_VERSION } from './mkserveRuntimeInstall.js';
+import { installPinnedMkserve, mkserveInstallPaths, readMkserveInstall, rebuildMkserveEngine, removeMkserveRelease, MKSERVE_BUNDLE, MKSERVE_VERSION } from './mkserveRuntimeInstall.js';
 import { MKSERVE_APP, MKSERVE_MODEL, getMkserveRuntimeStatus, installMkserve, startMkserveServer, stopMkserveServer, uninstallMkserve } from './mkserveRuntimeManager.js';
 
 const modelRevision = 'a'.repeat(40);
@@ -84,7 +85,7 @@ describe('managed mkserve lifecycle', () => {
       if (verb === 'start') {
         getAppStatusStrict.mockResolvedValue({ status: 'online', pm_id: 7, args: args.slice(args.indexOf('--') + 1) });
         serve();
-      } else getAppStatusStrict.mockResolvedValue(missingApp);
+      } else if (verb === 'delete') getAppStatusStrict.mockResolvedValue(missingApp);
     });
 
     await expect(startMkserveServer()).resolves.toMatchObject({ success: true });
@@ -121,6 +122,38 @@ describe('managed mkserve lifecycle', () => {
       state: 'stopped', installed: true, version: previous.version, updateAvailable: true,
     });
     await expect(installMkserve()).resolves.toMatchObject({ success: true, message: 'mkserve updated' });
+  });
+
+  it('tails only the owned PM2 process and rebuilds the current bundle on Repair', async () => {
+    readMkserveInstall.mockResolvedValue(installed);
+    const app = {
+      status: 'errored', pm_id: 7,
+      args: [installed.python, MKSERVE_MODEL, '--model-dir', installed.weights, '--workdir', installed.build,
+        '--host', '127.0.0.1', '--port', '8002'],
+    };
+    getAppStatusStrict.mockResolvedValue(app);
+    execPm2.mockResolvedValue({ stdout: 'engine startup\n', stderr: 'engine cache is broken\n' });
+    await expect(getMkserveRuntimeStatus()).resolves.toMatchObject({
+      state: 'error', repairRecommended: true, canUninstall: true, recentLogs: ['engine startup', 'engine cache is broken'],
+    });
+    expect(execPm2).toHaveBeenCalledWith(['logs', '7', '--nostream', '--lines', '40'], { timeoutMs: 3000 });
+    execPm2.mockClear();
+    getAppStatusStrict.mockResolvedValue({ ...app, status: 'stopped' });
+    await expect(getMkserveRuntimeStatus({ includeLogs: false })).resolves.toMatchObject({ state: 'error', recentLogs: [] });
+    expect(execPm2).not.toHaveBeenCalled();
+    await expect(installMkserve()).resolves.toMatchObject({ message: 'mkserve is up to date' });
+    expect(rebuildMkserveEngine).not.toHaveBeenCalled();
+    const { signal } = new AbortController();
+    await expect(installMkserve({ repair: true, signal })).resolves.toMatchObject({ message: 'mkserve repaired' });
+    expect(rebuildMkserveEngine).toHaveBeenCalledWith(installed, expect.any(Function), { repair: true, signal });
+    expect(installPinnedMkserve).not.toHaveBeenCalled();
+
+    getAppStatusStrict.mockResolvedValue({ ...app, status: 'online' });
+    await expect(installMkserve({ repair: true })).rejects.toMatchObject({ code: 'MKSERVE_BUSY' });
+    expect(rebuildMkserveEngine).toHaveBeenCalledTimes(1);
+    getAppStatusStrict.mockResolvedValue({ ...app, args: [] });
+    await expect(getMkserveRuntimeStatus()).resolves.toMatchObject({ recentLogs: [] });
+    expect(execPm2).not.toHaveBeenCalled();
   });
 
   it('does not mutate PM2 when its application ownership could not be checked', async () => {

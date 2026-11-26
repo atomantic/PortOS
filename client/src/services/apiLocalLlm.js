@@ -173,6 +173,7 @@ const managedRuntimeRequests = {
     stop: (options) => request('/local-llm/splash/stop', { ...options, method: 'POST' }),
     uninstall: (options) => request('/local-llm/splash/uninstall', { ...options, method: 'POST' }),
     upgrade: (options) => request('/local-llm/splash/upgrade', { ...options, method: 'POST' }),
+    cancel: (options) => request('/local-llm/splash/cancel', { ...options, method: 'POST' }),
   },
   mkserve: {
     status: (options) => request('/local-llm/mkserve/status', options),
@@ -181,6 +182,7 @@ const managedRuntimeRequests = {
     stop: (options) => request('/local-llm/mkserve/stop', { ...options, method: 'POST' }),
     uninstall: (options) => request('/local-llm/mkserve/uninstall', { ...options, method: 'POST' }),
     upgrade: (options) => request('/local-llm/mkserve/upgrade', { ...options, method: 'POST' }),
+    cancel: (options) => request('/local-llm/mkserve/cancel', { ...options, method: 'POST' }),
   },
 };
 

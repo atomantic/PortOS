@@ -93,6 +93,15 @@ export function createDaemonLogBuffer({ maxLines = DEFAULT_MAX_LINES } = {}) {
   };
 }
 
+/** Tail a verified PM2 process ID so a same-named process's output stays private. */
+export async function readManagedPm2LogTail(pmId, execPm2) {
+  const maxLines = 40;
+  const result = await execPm2(['logs', String(pmId), '--nostream', '--lines', String(maxLines)], { timeoutMs: 3000 }).catch(() => null);
+  return `${result?.stdout ?? ''}\n${result?.stderr ?? ''}`.split('\n')
+    .map((line) => line.trimEnd()).filter(Boolean).slice(-maxLines)
+    .map((line) => line.slice(-2000));
+}
+
 /**
  * The value following `flag` in a PM2 process's recorded argv, or `null`.
  *

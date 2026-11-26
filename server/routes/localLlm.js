@@ -12,11 +12,13 @@ import { observeModelMutations } from '../services/modelObservation.js';
  */
 
 import os from 'os'
+import { randomUUID } from 'node:crypto'
 import { jevPolicyPatchSchema, resolveUntrustedContentPolicy } from '../lib/untrustedContent.js'
 import { readSettingsStrict, updateSettingsWith } from '../services/settings.js'
 import { Router } from 'express'
 import { asyncHandler, ServerError } from '../lib/errorHandler.js'
 import { validateRequest } from '../lib/validateRequest.js'
+import { requestHasHostControl } from '../services/authGate.js'
 import {
   localLlmInstallSchema,
   localLlmModelTargetSchema,
@@ -45,6 +47,8 @@ import {
   localLlmLmStudioServiceSchema,
   localLlmMtplxStartSchema,
   managedInklingActionSchema,
+  managedInklingCancelSchema,
+  mkserveInstallSchema,
   splashContextSchema,
   localLlmSlotstreamStartSchema,
   localLlmSlotstreamDownloadSchema,
@@ -1214,47 +1218,68 @@ router.post('/mtplx/models/remove', asyncHandler(async (req, res) => {
 // available from Status as well as the socket, so reopening the tab is safe.
 const inklingOperations = new Map()
 const inklingErrors = new Map()
-const runtimeStatusRoute = (runtime, readStatus) => asyncHandler(async (_req, res) => {
-  const status = await readStatus()
-  res.json({ ...status, operation: inklingOperations.get(runtime) ?? null, lastError: inklingErrors.get(runtime) ?? null })
+const runtimeStatusRoute = (runtime, readStatus) => asyncHandler(async (req, res) => {
+  const status = await readStatus({ includeLogs: requestHasHostControl(req) })
+  res.json({ ...status, operation: inklingOperations.get(runtime)?.operation ?? null, lastError: inklingErrors.get(runtime) ?? null })
 })
 
-const runtimeActionRoute = (runtime, label, action, run) => asyncHandler(async (req, res) => {
-  validateRequest(managedInklingActionSchema, req.body ?? {})
+const runtimeActionRoute = (runtime, label, action, run, schema = managedInklingActionSchema) => asyncHandler(async (req, res) => {
+  const options = validateRequest(schema, req.body ?? {})
   if (inklingOperations.has(runtime)) {
     throw new ServerError(`${label} already has an operation in progress.`, { status: 409 })
   }
   const emit = emitter(req)
   const scope = { runtime }
-  const operation = { action, message: '' }
+  const controller = ['install', 'upgrade'].includes(action) ? new AbortController() : null
+  const operation = { id: randomUUID(), action: options.repair ? 'repair' : action, message: '' }
   inklingErrors.delete(runtime)
-  inklingOperations.set(runtime, operation)
+  inklingOperations.set(runtime, { operation, controller })
   const report = (progress) => {
     const message = typeof progress === 'string' ? progress : progress?.message
-    if (!message || inklingOperations.get(runtime) !== operation) return
+    if (!message || controller?.signal.aborted || inklingOperations.get(runtime)?.operation !== operation) return
     operation.message = `${label}: ${message}`
-    emit('progress', operation.message, scope)
+    emit('progress', operation.message, { ...scope, operation: { ...operation } })
   }
-  report({ install: 'Preparing installation', upgrade: 'Preparing update', start: 'Starting', stop: 'Stopping', uninstall: 'Removing runtime files' }[action])
+  report({ install: 'Preparing installation', repair: 'Preparing repair', upgrade: 'Preparing update', start: 'Starting', stop: 'Stopping', uninstall: 'Removing runtime files' }[operation.action])
   res.status(202).json({ operation })
-  void Promise.resolve().then(() => run({ onProgress: report })).then(
+  void Promise.resolve().then(() => run({ ...options, onProgress: report, signal: controller?.signal })).then(
     () => {
       inklingOperations.delete(runtime)
       resetProviderReadinessCache()
-      const done = { install: 'installation complete', upgrade: 'update complete', start: 'start completed', stop: 'stopped', uninstall: 'uninstalled' }[action]
-      emit('complete', `${label}: ${done}.`, scope)
+      const done = { install: 'installation complete', repair: 'repair complete', upgrade: 'update complete', start: 'start completed', stop: 'stopped', uninstall: 'uninstalled' }[operation.action]
+      emit('complete', `${label}: ${done}.`, { ...scope, operation: null, lastError: null })
       // Their start only resolves once the model answers, so no readiness wait.
       if (action === 'start') refreshRuntimeModels(req, runtime)
     },
     (err) => {
       inklingOperations.delete(runtime)
       resetProviderReadinessCache()
+      if (controller?.signal.aborted && (err === controller.signal.reason || err?.name === 'AbortError')) {
+        emit('cancelled', `${label}: ${operation.action === 'repair' ? 'Repair' : 'Installation'} cancelled.`, { ...scope, operation: null, lastError: null })
+        return
+      }
       const message = err instanceof ServerError ? (err.responseMessage || err.message) : 'Operation failed. See PortOS server logs for details.'
       if (!(err instanceof ServerError)) console.error(`❌ ${label} ${action} failed: ${err?.message ?? 'Unknown error'}`)
       inklingErrors.set(runtime, message)
-      emit('error', `${label}: ${message}`, scope)
+      emit('error', `${label}: ${message}`, { ...scope, operation: null, lastError: message })
     },
   )
+})
+
+const runtimeCancelRoute = (runtime, label) => asyncHandler(async (req, res) => {
+  const { operationId } = validateRequest(managedInklingCancelSchema, req.body ?? {})
+  const active = inklingOperations.get(runtime)
+  if (!active?.controller || (operationId && active.operation.id !== operationId)) {
+    return res.json({ cancelled: false })
+  }
+  const { controller, operation } = active
+  if (!controller.signal.aborted) {
+    controller.abort()
+    operation.cancelling = true
+    operation.message = `${label}: Cancelling ${operation.action === 'repair' ? 'repair' : 'installation'}…`
+    emitter(req)('progress', operation.message, { runtime, operation: { ...operation } })
+  }
+  res.json({ cancelled: true, operation })
 })
 
 router.get('/splash/status', runtimeStatusRoute('splash', getSplashRuntimeStatus))
@@ -1267,13 +1292,15 @@ router.put('/splash/context', asyncHandler(async (req, res) => {
 }))
 router.post('/splash/install', runtimeActionRoute('splash', 'Splash', 'install', installSplashRuntime))
 router.post('/splash/upgrade', runtimeActionRoute('splash', 'Splash', 'upgrade', installSplashRuntime))
+router.post('/splash/cancel', runtimeCancelRoute('splash', 'Splash'))
 router.post('/splash/start', runtimeActionRoute('splash', 'Splash', 'start', startSplashServer))
 router.post('/splash/stop', runtimeActionRoute('splash', 'Splash', 'stop', stopSplashServer))
 router.post('/splash/uninstall', runtimeActionRoute('splash', 'Splash', 'uninstall', uninstallSplashRuntime))
 
 router.get('/mkserve/status', runtimeStatusRoute('mkserve', getMkserveRuntimeStatus))
-router.post('/mkserve/install', runtimeActionRoute('mkserve', 'mkserve', 'install', installMkserve))
+router.post('/mkserve/install', runtimeActionRoute('mkserve', 'mkserve', 'install', installMkserve, mkserveInstallSchema))
 router.post('/mkserve/upgrade', runtimeActionRoute('mkserve', 'mkserve', 'upgrade', installMkserve))
+router.post('/mkserve/cancel', runtimeCancelRoute('mkserve', 'mkserve'))
 router.post('/mkserve/start', runtimeActionRoute('mkserve', 'mkserve', 'start', startMkserveServer))
 router.post('/mkserve/stop', runtimeActionRoute('mkserve', 'mkserve', 'stop', stopMkserveServer))
 router.post('/mkserve/uninstall', runtimeActionRoute('mkserve', 'mkserve', 'uninstall', uninstallMkserve))
