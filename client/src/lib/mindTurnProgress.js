@@ -94,13 +94,14 @@ export function mindTurnHeadline(progress, formatRetry) {
  * @param {object|null} args.state — public persistent-mind state
  * @param {object|null} args.runtime — `GET /mind/runtime` snapshot
  * @param {Array|null} args.events — visible trajectory events
+ * @param {number} args.snapshotAgeMs — local time since the runtime sample arrived
  * @returns {{phase: 'thinking'|'stalled'|'blocked'|'idle', busy: boolean,
  *   stage: string|null, retryAt: string|null, reason: string|null,
  *   detail: string|null}}
  */
-export function describeMindTurnProgress({ state, runtime, events } = {}) {
+export function describeMindTurnProgress({ state, runtime, events, snapshotAgeMs = 0 } = {}) {
   const inference = mindTurnRuntimeSnapshot(state, runtime);
-  const elapsedMs = Number.isFinite(inference?.elapsedMs) ? inference.elapsedMs : null;
+  const elapsedMs = Number.isFinite(inference?.elapsedMs) ? inference.elapsedMs + snapshotAgeMs : null;
   const heartbeatAgeMs = Number.isFinite(inference?.heartbeatAgeMs) ? inference.heartbeatAgeMs : null;
   const thinking = state?.status === 'thinking' && Boolean(trimmed(state?.activeTurnId));
   // A degraded/interrupted wake is as opaque as a quota pause: both stop making

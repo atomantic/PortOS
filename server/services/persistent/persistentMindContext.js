@@ -146,7 +146,7 @@ export async function readAllProtectedPersistentMindMemories(mindId = PERSISTENT
 async function readPersistentMindContinuationNote(mindId = PERSISTENT_MIND_ID, history = null) {
   const { memories = [] } = await memoryBackend.getMemories({
     status: 'active', sourceAgentId: mindId, tags: [PERSISTENT_MIND_CONTINUATION_TAG],
-    sortBy: 'updatedAt', sortOrder: 'desc', limit: 1,
+    sortBy: 'updatedAt', sortOrder: 'desc', limit: 1, includeCount: false,
   });
   const memory = memories[0] ? await memoryBackend.peekMemory(memories[0].id) : null;
   if (memory?.sourceAgentId !== mindId || memory.status !== 'active'
@@ -256,14 +256,28 @@ export async function recordPersistentMindRecallAccess(memoryIds = []) {
 export async function readPersistentMindName(mindId = PERSISTENT_MIND_ID) {
   const { memories = [] } = await memoryBackend.getMemories({
     status: 'active', sourceAgentId: mindId, tags: [PERSISTENT_MIND_CHOSEN_NAME_TAG],
-    sortBy: 'updatedAt', sortOrder: 'desc', limit: 1,
+    sortBy: 'updatedAt', sortOrder: 'desc', limit: 1, includeCount: false,
   });
   const memory = memories[0] ? await memoryBackend.peekMemory(memories[0].id) : null;
   if (memory?.sourceAgentId === mindId && memory.status === 'active') {
     const name = resolvePersistentMindChosenName([memory]);
     if (name) return name;
   }
-  return resolvePersistentMindChosenName(await readPersistentMindMemories(mindId));
+  // Naming without the manageMind grant used a core-identity prose record.
+  // Scope the compatibility read to tagged candidates so an unnamed mind
+  // never has to load its ordinary context memories just to answer this.
+  const tags = [PERSISTENT_MIND_MEMORY_PROTECTION_TAGS['core-identity'], 'name'];
+  const { memories: candidates = [] } = await memoryBackend.getMemories({
+    status: 'active', sourceAgentId: mindId, tags,
+    sortBy: 'importance', sortOrder: 'desc', limit: 12, includeCount: false,
+  });
+  if (candidates.length === 0) return null;
+  const legacyMemories = await memoryBackend.peekMemories(candidates.map((candidate) => candidate.id));
+  return resolvePersistentMindChosenName(legacyMemories.filter((candidate) => (
+    candidate?.sourceAgentId === mindId && candidate.status === 'active'
+    && !isPersistentMindContinuationNote(candidate)
+    && candidate.tags?.some((tag) => tags.includes(tag))
+  )).sort(comparePersistentMindMemories));
 }
 
 /** Bulk cleanup never archives protected memories, regardless of its caller. */
