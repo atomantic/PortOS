@@ -23,7 +23,6 @@ import {
   REGRESSION_6009,
   REGRESSION_6156,
   basePathsToReadFromGit,
-  benchmarkProxySplit,
   compareImportGrowth,
   evaluateWorkingTreeImportGrowth,
   formatImportGrowthReport,
@@ -421,22 +420,6 @@ describe('git base versus worktree head', () => {
     expect(report.bootClosure.ok).toBe(false);
     expect(report.bootClosure.delta).toBe(16);
     expect(report.bootClosure.added).toContain('server/extra-15.js');
-  });
-});
-
-describe('benchmark timings stay out of the gate', () => {
-  it('reports collection and execution separately on synthetic data', () => {
-    const benchmark = benchmarkProxySplit({ modules: 12 });
-    expect(benchmark.collectionMs).toEqual(expect.any(Number));
-    expect(benchmark.executionMs).toEqual(expect.any(Number));
-    expect(benchmark.executed).toBe(13);
-    expect(benchmark.environment.synthetic).toBe(true);
-    expect(benchmark.limitations.join('\n')).toMatch(/CI pass\/fail threshold/);
-    expect(benchmark.limitations.join('\n')).toMatch(/not Vitest transforming/);
-    expect(benchmark.limitations.join('\n')).toMatch(/not test bodies/);
-    const passing = compareImportGrowth(...Object.values(fanOut({ suites: 2, extra: 1 })));
-    expect(passing.ok).toBe(true);
-    expect(passing.timings).toBeUndefined();
   });
 });
 

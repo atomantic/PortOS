@@ -6,6 +6,7 @@ import { delimiter, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { dependencyHash, npmConfigHash, readDependencyHashes, writeDependencyHashes } from './lib/dependencyReceipts.js';
 import { dependencyWorkspaces, hasLinkedDependencies, inspectWorkspaceDependencies } from './lib/workspaceDependencies.js';
+import { clearDependencyReconcilePending, pendingReconcilePath } from './lib/dependencyReconcile.js';
 import { prepareWindowsSafeSpawn, resolveWindowsExecutable } from '../server/lib/aiToolkit/internal/windowsSafeSpawn.js';
 
 const root = fileURLToPath(new URL('..', import.meta.url));
@@ -19,7 +20,7 @@ const productionApps = 'portos-server,portos-cos,portos-autofixer,portos-browser
 const dataDir = join(root, 'data');
 const updateLog = join(dataDir, 'update.log');
 const marker = join(dataDir, 'update-complete.json');
-const pendingReconcile = join(dataDir, 'dependency-reconcile-pending.json');
+const pendingReconcile = pendingReconcilePath(dataDir);
 const pm2Local = [process.execPath, join(root, 'node_modules', 'pm2', 'bin', 'pm2')];
 const pm2Start = ['start', 'ecosystem.config.cjs', '--only', productionApps];
 const signals = { SIGTERM: 143, SIGINT: 130, SIGHUP: 129 };
@@ -279,7 +280,7 @@ async function install(previous) {
   }
   // Preserve pending repair evidence until the install receipts are in place.
   writeDependencyHashes(root);
-  rmSync(pendingReconcile, { force: true });
+  clearDependencyReconcilePending(dataDir);
   step('npm-install', 'done', installed ? `Dependencies installed in ${installed} of ${workspaces.length} workspaces` : 'Verified existing workspace dependencies');
 }
 

@@ -237,7 +237,7 @@ export const getGuardTests = () => (guardTests ??= guardTestFiles(REPO_ROOT));
 /** Client guards are reached by structuralTestsFor on any client/src js(x) change. */
 const isClientGuard = (path) => path.startsWith('client/src/');
 
-export let alwaysRun;
+let alwaysRun;
 const alwaysRunFrom = (guards) => [...new Set([
   ...EXPLICIT_ALWAYS_RUN_TESTS,
   ...guards.filter((path) => !isClientGuard(path)),
