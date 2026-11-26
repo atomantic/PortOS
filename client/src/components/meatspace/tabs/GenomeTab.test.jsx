@@ -1,6 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { act, fireEvent, render, screen, waitFor, cleanup } from '@testing-library/react';
 import { afterEach } from 'vitest';
+import userEvent from '@testing-library/user-event';
 
 const mocks = vi.hoisted(() => ({ listeners: new Set(), sync: vi.fn(), del: vi.fn(), success: vi.fn() }));
 vi.mock('../../../services/socket', () => ({ default: {
@@ -88,6 +89,55 @@ describe('genome load failure vs empty', () => {
   });
 });
 
+describe('genome category jump', () => {
+  const openJump = async (user) => {
+    getGenomeSummary.mockResolvedValueOnce({
+      uploaded: true,
+      savedMarkers: Object.fromEntries(
+        ['longevity', 'cardiovascular', 'iron', 'methylation', 'nutrient', 'caffeine'].map(category => [
+          `test-${category}`, { category, status: 'typical' },
+        ]),
+      ),
+    });
+    render(<GenomeTab />);
+    const trigger = await screen.findByRole('button', { name: 'Jump to category (6)' });
+    expect(trigger).toHaveAttribute('aria-expanded', 'false');
+    expect(trigger).toHaveAttribute('aria-haspopup', 'true');
+    trigger.focus();
+    await user.keyboard('{Enter}');
+    const menu = screen.getByRole('menu', { name: 'Jump to category' });
+    expect(trigger).toHaveAttribute('aria-expanded', 'true');
+    expect(trigger).toHaveAttribute('aria-controls', menu.id);
+    expect(screen.getByRole('menuitem', { name: /Longevity/ })).toHaveFocus();
+    return trigger;
+  };
+
+  it('dismisses the menu on Escape and returns focus to the trigger', async () => {
+    const user = userEvent.setup();
+    const trigger = await openJump(user);
+    await user.keyboard('{Escape}');
+    expect(screen.queryByRole('menu')).not.toBeInTheDocument();
+    expect(trigger).toHaveAttribute('aria-expanded', 'false');
+    expect(trigger).toHaveFocus();
+  });
+
+  it('moves focus to the selected category disclosure when activated from the keyboard', async () => {
+    const user = userEvent.setup();
+    const trigger = await openJump(user);
+    const disclosure = screen.getByRole('button', { name: /Cardiovascular/ });
+    const scroll = vi.spyOn(disclosure.closest('#genome-cat-cardiovascular'), 'scrollIntoView');
+    await user.keyboard('{ArrowDown}');
+    expect(screen.getByRole('menuitem', { name: /Cardiovascular/ })).toHaveFocus();
+    await user.keyboard('{Enter}');
+    expect(trigger).toHaveAttribute('aria-expanded', 'false');
+    expect(disclosure).toHaveFocus();
+    expect(scroll).toHaveBeenCalledWith({ behavior: 'smooth', block: 'start' });
+    expect(disclosure).toHaveAttribute('aria-expanded', 'false');
+    await user.keyboard('{Enter}');
+    expect(disclosure).toHaveAttribute('aria-expanded', 'true');
+  });
+});
+
 describe('genome delete (#17354)', () => {
   const confirmDelete = async () => {
     getGenomeSummary.mockResolvedValue({ uploaded: true, markers: [] });
@@ -95,6 +145,30 @@ describe('genome delete (#17354)', () => {
     fireEvent.click(await screen.findByRole('button', { name: /Delete Genome/ }));
     fireEvent.click(screen.getByRole('button', { name: 'Yes, delete everything' }));
   };
+
+  it('returns focus to Delete Genome when the user cancels from the keyboard', async () => {
+    const user = userEvent.setup();
+    render(<GenomeTab />);
+    const trigger = await screen.findByRole('button', { name: 'Delete Genome' });
+    trigger.focus();
+    await user.keyboard('{Enter}');
+    expect(screen.getByRole('group', { name: /permanently delete/ })).toHaveFocus();
+    await user.tab();
+    await user.tab();
+    expect(screen.getByRole('button', { name: 'Cancel' })).toHaveFocus();
+    await user.keyboard('{Enter}');
+    expect(trigger).toHaveFocus();
+    expect(mocks.del).not.toHaveBeenCalled();
+  });
+
+  it('disables only the confirm button while deletion is pending', async () => {
+    let resolve;
+    mocks.del.mockImplementationOnce(() => new Promise(r => { resolve = r; }));
+    await confirmDelete();
+    expect(screen.getByRole('button', { name: 'Deleting...' })).toBeDisabled();
+    expect(screen.getByRole('button', { name: 'Cancel' })).toBeEnabled();
+    await act(async () => resolve(null));
+  });
 
   it('keeps the loaded summary, no success toast and no drop zone when the delete rejects', async () => {
     mocks.del.mockRejectedValueOnce(new Error('boom'));
