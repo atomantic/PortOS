@@ -387,12 +387,12 @@ describe('git base versus worktree head', () => {
   });
 
   it('reuses only closures with identical reachable edges across revisions', () => {
-    const { root, write, commit } = repo();
+    const { root, write } = repo();
     write('server/index.js', "import './cycle.js';");
     write('server/cycle.js', "import './index.js';\nimport './added.js';\n");
     write('server/keep.test.js', "import './cycle.js';");
     write('server/other.test.js', 'export const other = 1;');
-    const sha = commit();
+    const sha = commit(root);
 
     write('server/added.js', 'export const added = 1;');
     const head = measureWorkingTree(root);
