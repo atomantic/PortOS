@@ -2,8 +2,6 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { MemoryRouter } from 'react-router';
 
-// Regression coverage for #2519 — failed CoS config calls must NOT flash a
-// success toast and must leave the user's value visible with a retry cue.
 const api = vi.hoisted(() => ({
   updateCosConfig: vi.fn(),
   getCosBudgetUsage: vi.fn(),
@@ -68,7 +66,7 @@ const config = {
   idleReviewEnabled: true,
 };
 
-const renderConfig = (props = {}) => render(
+const configTree = (props = {}) => (
   <MemoryRouter>
     <ConfigTab
       config={config}
@@ -77,8 +75,10 @@ const renderConfig = (props = {}) => render(
       avatarStyle="svg"
       {...props}
     />
-  </MemoryRouter>,
+  </MemoryRouter>
 );
+
+const renderConfig = (props) => render(configTree(props));
 
 beforeEach(() => {
   vi.clearAllMocks();
@@ -102,7 +102,7 @@ beforeEach(() => {
 
 describe('ConfigTab autosave', () => {
   it('makes controls available immediately and saves checkbox changes as partial updates', async () => {
-    api.updateCosConfig.mockResolvedValue({ success: true });
+    api.updateCosConfig.mockResolvedValue({ ...config, autonomousJobsEnabled: false });
     const onUpdate = vi.fn();
     renderConfig({ onUpdate });
     await screen.findByText('Waiting for the next wake');
@@ -122,7 +122,7 @@ describe('ConfigTab autosave', () => {
   });
 
   it('commits numeric fields on blur and discards an incomplete value', async () => {
-    api.updateCosConfig.mockResolvedValue({ success: true });
+    api.updateCosConfig.mockResolvedValue({ ...config, maxTotalProcesses: 64 });
     renderConfig();
     await screen.findByText('Waiting for the next wake');
 
@@ -142,8 +142,10 @@ describe('ConfigTab autosave', () => {
     ));
   });
 
-  it('keeps a failed auto-save visible and reports the failure without a success toast', async () => {
-    api.updateCosConfig.mockRejectedValue(new Error('network down'));
+  it('restores a failed auto-save and lets the user retry without a success toast', async () => {
+    api.updateCosConfig
+      .mockRejectedValueOnce(new Error('network down'))
+      .mockResolvedValue({ ...config, autonomousJobsEnabled: false });
     const onUpdate = vi.fn();
     renderConfig({ onUpdate });
 
@@ -153,15 +155,21 @@ describe('ConfigTab autosave', () => {
     await waitFor(() => expect(toast.error).toHaveBeenCalledWith('network down'));
     expect(toast.success).not.toHaveBeenCalled();
     expect(onUpdate).not.toHaveBeenCalled();
-    expect(scheduledJobs).not.toBeChecked();
+    expect(scheduledJobs).toBeChecked();
     expect(screen.getByRole('alert')).toHaveTextContent('Change those settings to retry');
+
+    fireEvent.click(scheduledJobs);
+    await waitFor(() => expect(screen.getByTestId('config-save-status')).toHaveTextContent('All changes saved'));
+    expect(api.updateCosConfig).toHaveBeenCalledTimes(2);
+    expect(api.updateCosConfig).toHaveBeenLastCalledWith({ autonomousJobsEnabled: false }, { silent: true });
+    expect(scheduledJobs).not.toBeChecked();
   });
 
   it('serializes rapid changes so an older request cannot finish after the newer value', async () => {
     let resolveFirst;
     api.updateCosConfig
       .mockImplementationOnce(() => new Promise((resolve) => { resolveFirst = resolve; }))
-      .mockResolvedValue({ success: true });
+      .mockResolvedValue({ ...config, autonomousJobsEnabled: true });
     renderConfig();
     await screen.findByText('Waiting for the next wake');
 
@@ -172,7 +180,7 @@ describe('ConfigTab autosave', () => {
     await waitFor(() => expect(api.updateCosConfig).toHaveBeenCalledTimes(1));
     expect(api.updateCosConfig).toHaveBeenNthCalledWith(1, { autonomousJobsEnabled: false }, { silent: true });
     await act(async () => {
-      resolveFirst({ success: true });
+      resolveFirst({ ...config, autonomousJobsEnabled: false });
     });
     expect(api.updateCosConfig).toHaveBeenCalledTimes(2);
     expect(api.updateCosConfig).toHaveBeenNthCalledWith(2, { autonomousJobsEnabled: true }, { silent: true });
@@ -236,7 +244,7 @@ describe('persistent mind profile', () => {
 
 describe('Default Avatar Style dropdown', () => {
   it('is immediately editable and saves the selected avatar style', async () => {
-    api.updateCosConfig.mockResolvedValue({ success: true });
+    api.updateCosConfig.mockResolvedValue({ ...config, avatarStyle: 'cyber' });
     renderConfig({ config: { ...config, avatarStyle: 'svg' } });
     await screen.findByText('Waiting for the next wake');
 
@@ -284,7 +292,7 @@ describe('Rigged avatar records in the Default Avatar dropdown', () => {
   });
 
   it('shows the coverage note and saves a selected rigged record', async () => {
-    api.updateCosConfig.mockResolvedValue({ success: true });
+    api.updateCosConfig.mockResolvedValue({ ...config, avatarStyle: 'rigged-image3d-1' });
     renderConfig({ config: { ...config, avatarStyle: 'svg' }, riggedAvatars });
     await screen.findByText('Waiting for the next wake');
 
@@ -330,7 +338,7 @@ describe('persistent mind status', () => {
 
 describe('domain guardrails and embeddings', () => {
   it('saves an autonomy mode change immediately', async () => {
-    api.updateCosConfig.mockResolvedValue({ success: true });
+    api.updateCosConfig.mockResolvedValue({ ...config, domainAutonomy: { cos: 'off' } });
     renderConfig();
     await screen.findByText('Waiting for the next wake');
 
@@ -342,8 +350,62 @@ describe('domain guardrails and embeddings', () => {
     ));
   });
 
+  it('restores a failed autonomy mode and accepts the same selection on retry', async () => {
+    const savedConfig = { ...config, domainAutonomy: { cos: 'dry-run' } };
+    api.updateCosConfig
+      .mockRejectedValueOnce(new Error('autonomy save failed'))
+      .mockResolvedValue({ ...config, domainAutonomy: { cos: 'off' } });
+    renderConfig({ config: savedConfig });
+    const group = within(screen.getByRole('group', { name: 'CoS auto-run mode' }));
+    const off = group.getByRole('button', { name: 'Off' });
+    const dryRun = group.getByRole('button', { name: 'Dry-run' });
+
+    fireEvent.click(off);
+    expect(off).toHaveAttribute('aria-pressed', 'true');
+    await waitFor(() => expect(screen.getByRole('alert')).toHaveTextContent('Change those settings to retry'));
+    expect(dryRun).toHaveAttribute('aria-pressed', 'true');
+
+    fireEvent.click(off);
+    await waitFor(() => expect(screen.getByTestId('config-save-status')).toHaveTextContent('All changes saved'));
+    expect(api.updateCosConfig.mock.calls).toEqual([
+      [{ domainAutonomy: { cos: 'off' } }, { silent: true }],
+      [{ domainAutonomy: { cos: 'off' } }, { silent: true }],
+    ]);
+    expect(off).toHaveAttribute('aria-pressed', 'true');
+  });
+
+  it.each(['fails', 'succeeds'])('keeps a newer autonomy edit pending when the previous save %s', async (firstOutcome) => {
+    const firstSucceeds = firstOutcome === 'succeeds';
+    const first = Promise.withResolvers();
+    const newer = Promise.withResolvers();
+    api.updateCosConfig.mockReturnValueOnce(first.promise).mockReturnValueOnce(newer.promise);
+    renderConfig({ config: { ...config, domainAutonomy: { cos: 'execute' } } });
+    const group = within(screen.getByRole('group', { name: 'CoS auto-run mode' }));
+    const off = group.getByRole('button', { name: 'Off' });
+    const dryRun = group.getByRole('button', { name: 'Dry-run' });
+    const execute = group.getByRole('button', { name: 'Execute' });
+
+    fireEvent.click(off);
+    fireEvent.click(dryRun);
+    await waitFor(() => expect(api.updateCosConfig).toHaveBeenCalledTimes(1));
+
+    await act(async () => {
+      if (firstSucceeds) first.resolve({ ...config, domainAutonomy: { cos: 'off' } });
+      else first.reject(new Error('first failed'));
+    });
+    expect(api.updateCosConfig).toHaveBeenLastCalledWith({ domainAutonomy: { cos: 'dry-run' } }, { silent: true });
+    expect(dryRun).toHaveAttribute('aria-pressed', 'true');
+    expect(screen.getByTestId('config-save-status')).toHaveTextContent('Saving changes');
+
+    await act(async () => { newer.reject(new Error('second failed')); });
+    expect(screen.getByRole('alert')).toHaveTextContent('Change those settings to retry');
+    expect(firstSucceeds ? off : execute).toHaveAttribute('aria-pressed', 'true');
+  });
+
   it('renders Creative orchestrator inheriting CoS by default and saves explicit overrides and Inherit CoS clears', async () => {
-    api.updateCosConfig.mockResolvedValue({ success: true });
+    api.updateCosConfig
+      .mockResolvedValueOnce({ ...config, domainAutonomy: { cos: 'dry-run', creative: 'execute' } })
+      .mockResolvedValue({ ...config, domainAutonomy: { cos: 'dry-run', creative: null } });
     const { rerender } = renderConfig({
       config: { ...config, domainAutonomy: { cos: 'dry-run' } },
     });
@@ -360,16 +422,7 @@ describe('domain guardrails and embeddings', () => {
       { silent: true },
     ));
 
-    rerender(
-      <MemoryRouter>
-        <ConfigTab
-          config={{ ...config, domainAutonomy: { cos: 'dry-run', creative: 'execute' } }}
-          onUpdate={vi.fn()}
-          onEvaluate={vi.fn()}
-          avatarStyle="svg"
-        />
-      </MemoryRouter>,
-    );
+    rerender(configTree({ config: { ...config, domainAutonomy: { cos: 'dry-run', creative: 'execute' } } }));
     expect(within(group).getByRole('button', { name: 'Execute' })).toHaveAttribute('aria-pressed', 'true');
     expect(within(group).getByRole('button', { name: 'Inherit CoS auto-run' })).toHaveAttribute('aria-pressed', 'false');
 
@@ -405,7 +458,7 @@ describe('domain guardrails and embeddings', () => {
   });
 
   it('saves a budget cap when its number field loses focus', async () => {
-    api.updateCosConfig.mockResolvedValue({ success: true });
+    api.updateCosConfig.mockResolvedValue({ ...config, domainBudgets: { brain: { maxActionsPerDay: 5 } } });
     renderConfig();
     await screen.findByText('Waiting for the next wake');
 
@@ -418,11 +471,42 @@ describe('domain guardrails and embeddings', () => {
       { silent: true },
     ));
   });
+
+  it('restores a failed budget cap and accepts the same value on retry', async () => {
+    const savedConfig = { ...config, domainBudgets: { brain: { maxActionsPerDay: 5 } } };
+    api.updateCosConfig
+      .mockRejectedValueOnce(new Error('budget save failed'))
+      .mockResolvedValue({ ...config, domainBudgets: { brain: { maxActionsPerDay: null } } });
+    renderConfig({ config: savedConfig });
+    const actionsPerDay = () => screen.getAllByRole('spinbutton', { name: 'Actions/day' })[0];
+
+    fireEvent.change(actionsPerDay(), { target: { value: '' } });
+    fireEvent.blur(actionsPerDay());
+    expect(actionsPerDay()).toHaveDisplayValue('');
+    await waitFor(() => expect(screen.getByRole('alert')).toHaveTextContent('Change those settings to retry'));
+    expect(actionsPerDay()).toHaveValue(5);
+
+    fireEvent.change(actionsPerDay(), { target: { value: '' } });
+    fireEvent.blur(actionsPerDay());
+    await waitFor(() => expect(screen.getByTestId('config-save-status')).toHaveTextContent('All changes saved'));
+    expect(api.updateCosConfig.mock.calls).toEqual([
+      [{ domainBudgets: { brain: { maxActionsPerDay: null } } }, { silent: true }],
+      [{ domainBudgets: { brain: { maxActionsPerDay: null } } }, { silent: true }],
+    ]);
+    expect(actionsPerDay()).toHaveDisplayValue('');
+  });
 });
 
 describe('approval gates', () => {
   it('saves confidence thresholds and a safety-kind change', async () => {
-    api.updateCosConfig.mockResolvedValue({ success: true });
+    const approvalConfig = {
+      ...config,
+      confidenceAutoApproval: { enabled: false, highThreshold: 80, lowThreshold: 50, minSamples: 5 },
+    };
+    api.updateCosConfig
+      .mockResolvedValueOnce(approvalConfig)
+      .mockResolvedValueOnce({ ...approvalConfig, confidenceAutoApproval: { ...approvalConfig.confidenceAutoApproval, lowThreshold: 30 } })
+      .mockResolvedValue({ ...approvalConfig, safetyKindApproval: { alwaysApproveKinds: ['content', 'federation', 'external-pr'] } });
     renderConfig({
       config: {
         ...config,
@@ -456,6 +540,52 @@ describe('approval gates', () => {
     ));
   });
 
+  it('rolls a failed confidence edit back to a refreshed server value', async () => {
+    const pending = Promise.withResolvers();
+    api.updateCosConfig.mockReturnValueOnce(pending.promise);
+    const { rerender } = renderConfig({ config: { ...config, confidenceAutoApproval: { lowThreshold: 40 } } });
+    const low = screen.getByRole('spinbutton', { name: 'Low confidence' });
+
+    fireEvent.change(low, { target: { value: '30' } });
+    fireEvent.blur(low);
+    rerender(configTree({ config: { ...config, confidenceAutoApproval: { lowThreshold: 45 } } }));
+    expect(low).toHaveValue(30);
+
+    await act(async () => { pending.reject(new Error('confidence save failed')); });
+    expect(screen.getByRole('alert')).toHaveTextContent('Change those settings to retry');
+    expect(low).toHaveValue(45);
+  });
+
+  it('excludes a failed safety kind change from the next queued full-list write', async () => {
+    const first = Promise.withResolvers();
+    const newer = Promise.withResolvers();
+    api.updateCosConfig.mockReturnValueOnce(first.promise).mockReturnValueOnce(newer.promise);
+    renderConfig();
+    const publish = screen.getByRole('checkbox', { name: /^Publish/ });
+    const federation = screen.getByRole('checkbox', { name: /^Federation/ });
+
+    fireEvent.click(publish);
+    fireEvent.click(federation);
+    await waitFor(() => expect(api.updateCosConfig).toHaveBeenCalledTimes(1));
+    expect(publish).not.toBeChecked();
+    expect(federation).not.toBeChecked();
+
+    await act(async () => { first.reject(new Error('safety save failed')); });
+    expect(api.updateCosConfig).toHaveBeenLastCalledWith(
+      { safetyKindApproval: { alwaysApproveKinds: ['content', 'publish', 'external-pr'] } },
+      { silent: true },
+    );
+    expect(publish).toBeChecked();
+    expect(federation).not.toBeChecked();
+
+    await act(async () => {
+      newer.resolve({ ...config, safetyKindApproval: { alwaysApproveKinds: ['content', 'publish', 'external-pr'] } });
+    });
+    expect(publish).toBeChecked();
+    expect(federation).not.toBeChecked();
+    expect(screen.getByRole('alert')).toHaveTextContent('Change those settings to retry');
+  });
+
   it('shows a saved safety list that omits a kind', async () => {
     renderConfig({
       config: {
@@ -472,7 +602,7 @@ describe('approval gates', () => {
 
 describe('boot startup compatibility', () => {
   it('shows alwaysOn as the boot setting and clears the legacy alias when autosaving it off', async () => {
-    api.updateCosConfig.mockResolvedValue({ success: true });
+    api.updateCosConfig.mockResolvedValue({ ...config, alwaysOn: false, autoStart: false });
     renderConfig({ config: { ...config, alwaysOn: true, autoStart: true } });
 
     const toggle = screen.getByRole('checkbox', { name: /Start on server boot/i });

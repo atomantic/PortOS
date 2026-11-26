@@ -54,8 +54,7 @@ const DOMAIN_MODE_COLORS = {
 const PRIORITY_OPTIONS = ['LOW', 'MEDIUM', 'HIGH', 'CRITICAL']
   .map((value) => ({ value, label: value[0] + value.slice(1).toLowerCase() }));
 
-// Mirrors OUTWARD_SAFETY_KINDS. Field names stay flat so the pending-save
-// resync can compare primitives.
+// Mirrors OUTWARD_SAFETY_KINDS. Each kind has its own pending form value.
 const SAFETY_KIND_FIELDS = [
   { id: 'content', field: 'safetyKindContent', label: 'Content', description: 'Generated posts, newsletters, and blogs.' },
   { id: 'publish', field: 'safetyKindPublish', label: 'Publish', description: 'Deploys, releases, and outbound sends.' },
@@ -64,6 +63,12 @@ const SAFETY_KIND_FIELDS = [
 ];
 
 const selectedSafetyKinds = (form) => SAFETY_KIND_FIELDS.filter((item) => form[item.field]).map((item) => item.id);
+
+const removeOverride = (overrides, key) => {
+  const remaining = { ...overrides };
+  delete remaining[key];
+  return remaining;
+};
 
 const getDefaultFormData = (config, avatarStyle) => ({
   healthCheckIntervalMs: config?.healthCheckIntervalMs ?? 900_000,
@@ -270,7 +275,9 @@ function PersistentMindStatus({ mind, loaded, error }) {
 }
 
 export default function ConfigTab({ config, onUpdate, onEvaluate, avatarStyle, riggedAvatars = [] }) {
-  const [formData, setFormData] = useState(() => getDefaultFormData(config, avatarStyle));
+  const [confirmedConfig, setConfirmedConfig] = useState(config);
+  const confirmedConfigRef = useRef(config);
+  const [pendingConfigFields, setPendingConfigFields] = useState({});
   const [domainAutonomyOverrides, setDomainAutonomyOverrides] = useState({});
   const [domainBudgetOverrides, setDomainBudgetOverrides] = useState({});
   const [saveStatus, setSaveStatus] = useState('idle');
@@ -282,19 +289,38 @@ export default function ConfigTab({ config, onUpdate, onEvaluate, avatarStyle, r
   const configSaveQueueRef = useRef(Promise.resolve());
   const pendingSaveCountRef = useRef(0);
   const failedSaveKeysRef = useRef(new Set());
-  const pendingConfigFieldsRef = useRef(new Map());
+  const writeSequencesRef = useRef(new Map());
 
-  const saveConfigPatch = useCallback((patch, { failureKeys = Object.keys(patch), onSuccess } = {}) => {
+  const confirmConfig = useCallback((nextConfig) => {
+    if (!nextConfig) return;
+    confirmedConfigRef.current = nextConfig;
+    setConfirmedConfig(nextConfig);
+  }, []);
+
+  useEffect(() => { confirmConfig(config); }, [config, confirmConfig]);
+
+  const formData = { ...getDefaultFormData(confirmedConfig, avatarStyle), ...pendingConfigFields };
+
+  const saveConfigPatch = useCallback((buildPatch, { key, clearOverride, onSuccess }) => {
+    const sequence = (writeSequencesRef.current.get(key) ?? 0) + 1;
+    writeSequencesRef.current.set(key, sequence);
+    const isLatestWrite = () => writeSequencesRef.current.get(key) === sequence;
     pendingSaveCountRef.current += 1;
     setSaveStatus('saving');
 
-    const request = configSaveQueueRef.current
-      .catch(() => undefined)
-      .then(() => updateCosConfig(patch, { silent: true }));
+    const request = configSaveQueueRef.current.then(async () => {
+      const result = await updateCosConfig(buildPatch(confirmedConfigRef.current), { silent: true });
+      // A successful older write still determines what a newer failure rolls back to.
+      confirmConfig(result);
+      return result;
+    });
     configSaveQueueRef.current = request.catch(() => undefined);
 
     return request.then((result) => {
-      failureKeys.forEach((key) => failedSaveKeysRef.current.delete(key));
+      if (isLatestWrite()) {
+        clearOverride();
+        failedSaveKeysRef.current.delete(key);
+      }
       const reportRefreshError = (error) => toast.error(error?.message || 'Settings saved, but the page could not refresh');
       try {
         Promise.resolve(onSuccess?.(result)).catch(reportRefreshError);
@@ -308,7 +334,10 @@ export default function ConfigTab({ config, onUpdate, onEvaluate, avatarStyle, r
       }
       return result;
     }, (error) => {
-      failureKeys.forEach((key) => failedSaveKeysRef.current.add(key));
+      if (isLatestWrite()) {
+        clearOverride();
+        failedSaveKeysRef.current.add(key);
+      }
       toast.error(error?.message || 'Configuration could not be saved');
       return null;
     }).finally(() => {
@@ -316,69 +345,46 @@ export default function ConfigTab({ config, onUpdate, onEvaluate, avatarStyle, r
       if (pendingSaveCountRef.current > 0) setSaveStatus('saving');
       else setSaveStatus(failedSaveKeysRef.current.size ? 'error' : 'saved');
     });
-  }, [onUpdate]);
+  }, [confirmConfig, onUpdate]);
 
-  const updateSetting = useCallback((field, value) => {
-    pendingConfigFieldsRef.current.set(field, value);
-    setFormData((current) => ({ ...current, [field]: value }));
-    const patch = field === 'startOnBoot'
-      ? { alwaysOn: value, autoStart: false }
-      : { [field]: value };
-    return saveConfigPatch(patch, { failureKeys: [field] });
-  }, [saveConfigPatch]);
+  const patchFormField = (field, value, buildPatch) => {
+    setPendingConfigFields((current) => ({ ...current, [field]: value }));
+    return saveConfigPatch(buildPatch, {
+      key: field,
+      clearOverride: () => setPendingConfigFields((current) => removeOverride(current, field)),
+    });
+  };
 
-  const patchConfidence = useCallback((field, apiKey, value) => {
-    pendingConfigFieldsRef.current.set(field, value);
-    setFormData((current) => ({ ...current, [field]: value }));
-    return saveConfigPatch({ confidenceAutoApproval: { [apiKey]: value } }, { failureKeys: [field] });
-  }, [saveConfigPatch]);
+  const updateSetting = (field, value) => patchFormField(field, value, () => (
+    field === 'startOnBoot' ? { alwaysOn: value, autoStart: false } : { [field]: value }
+  ));
 
-  const patchSafetyEnabled = useCallback((value) => {
-    pendingConfigFieldsRef.current.set('safetyEnabled', value);
-    setFormData((current) => ({ ...current, safetyEnabled: value }));
-    return saveConfigPatch({ safetyKindApproval: { enabled: value } }, { failureKeys: ['safetyEnabled'] });
-  }, [saveConfigPatch]);
+  const patchConfidence = (field, apiKey, value) => patchFormField(field, value, () => (
+    { confidenceAutoApproval: { [apiKey]: value } }
+  ));
 
-  const patchSafetyKind = useCallback((field, checked) => {
-    pendingConfigFieldsRef.current.set(field, checked);
-    const nextForm = { ...formData, [field]: checked };
-    setFormData(nextForm);
-    return saveConfigPatch(
-      { safetyKindApproval: { alwaysApproveKinds: selectedSafetyKinds(nextForm) } },
-      { failureKeys: [field] },
-    );
-  }, [formData, saveConfigPatch]);
+  const patchSafetyEnabled = (value) => patchFormField('safetyEnabled', value, () => (
+    { safetyKindApproval: { enabled: value } }
+  ));
 
-  useEffect(() => {
-    const savedFormData = getDefaultFormData(config, avatarStyle);
-    setFormData(Object.fromEntries(Object.entries(savedFormData).map(([field, savedValue]) => {
-      const pendingValue = pendingConfigFieldsRef.current.get(field);
-      if (pendingConfigFieldsRef.current.has(field) && pendingValue !== savedValue) return [field, pendingValue];
-      pendingConfigFieldsRef.current.delete(field);
-      return [field, savedValue];
-    })));
-
-    setDomainAutonomyOverrides((current) => Object.fromEntries(Object.entries(current).filter(
-      ([domainId, mode]) => getSavedDomainSelection(config, domainId) !== mode,
-    )));
-    setDomainBudgetOverrides((current) => Object.fromEntries(Object.entries(current).flatMap(([domainId, fields]) => {
-      const savedBudget = getDomainBudget(config, domainId);
-      const remaining = Object.fromEntries(Object.entries(fields).filter(([field, value]) => (savedBudget[field] ?? null) !== value));
-      return Object.keys(remaining).length ? [[domainId, remaining]] : [];
-    })));
-  }, [config, avatarStyle]);
+  const patchSafetyKind = (field, checked) => patchFormField(field, checked, (savedConfig) => {
+    // The API replaces the entire list. Build it when the write starts so a sibling
+    // edit that failed while this one was queued cannot be persisted accidentally.
+    const savedForm = getDefaultFormData(savedConfig, avatarStyle);
+    return { safetyKindApproval: { alwaysApproveKinds: selectedSafetyKinds({ ...savedForm, [field]: checked }) } };
+  });
 
   const displayConfig = useMemo(() => {
-    const domainBudgets = { ...(config?.domainBudgets || {}) };
+    const domainBudgets = { ...confirmedConfig?.domainBudgets };
     for (const [domainId, fields] of Object.entries(domainBudgetOverrides)) {
       domainBudgets[domainId] = { ...(domainBudgets[domainId] || {}), ...fields };
     }
     return {
-      ...config,
-      domainAutonomy: { ...(config?.domainAutonomy || {}), ...domainAutonomyOverrides },
+      ...confirmedConfig,
+      domainAutonomy: { ...confirmedConfig?.domainAutonomy, ...domainAutonomyOverrides },
       domainBudgets,
     };
-  }, [config, domainAutonomyOverrides, domainBudgetOverrides]);
+  }, [confirmedConfig, domainAutonomyOverrides, domainBudgetOverrides]);
 
   const refreshBudgetUsage = useCallback(() => (
     getCosBudgetUsage({ silent: true })
@@ -443,8 +449,9 @@ export default function ConfigTab({ config, onUpdate, onEvaluate, avatarStyle, r
   const handleDomainChange = (domainId, mode) => {
     if (getSavedDomainSelection(displayConfig, domainId) === mode) return Promise.resolve();
     setDomainAutonomyOverrides((current) => ({ ...current, [domainId]: mode }));
-    return saveConfigPatch({ domainAutonomy: { [domainId]: mode } }, {
-      failureKeys: [`domainAutonomy:${domainId}`],
+    return saveConfigPatch(() => ({ domainAutonomy: { [domainId]: mode } }), {
+      key: `domainAutonomy:${domainId}`,
+      clearOverride: () => setDomainAutonomyOverrides((current) => removeOverride(current, domainId)),
       onSuccess: refreshMindStatus,
     });
   };
@@ -457,8 +464,14 @@ export default function ConfigTab({ config, onUpdate, onEvaluate, avatarStyle, r
       ...currentOverrides,
       [domainId]: { ...(currentOverrides[domainId] || {}), [field]: value },
     }));
-    return saveConfigPatch({ domainBudgets: { [domainId]: { [field]: value } } }, {
-      failureKeys: [`domainBudget:${domainId}:${field}`],
+    return saveConfigPatch(() => ({ domainBudgets: { [domainId]: { [field]: value } } }), {
+      key: `domainBudget:${domainId}:${field}`,
+      clearOverride: () => setDomainBudgetOverrides((overrides) => {
+        const fields = removeOverride(overrides[domainId], field);
+        return Object.keys(fields).length
+          ? { ...overrides, [domainId]: fields }
+          : removeOverride(overrides, domainId);
+      }),
       onSuccess: refreshBudgetUsage,
     });
   };
