@@ -240,29 +240,4 @@ export const beeperDdl = [
   )`,
   `ALTER TABLE beeper_outbox ADD COLUMN IF NOT EXISTS send_requested_at TIMESTAMPTZ`,
   `CREATE INDEX IF NOT EXISTS idx_beeper_outbox_conversation_state ON beeper_outbox (conversation_id, state, created_at DESC)`,
-
-  // #96 backfill — one idempotent statement, LAST in this array because it reads
-  // `beeper_participants` and `tribe_identities` (created by the earlier `tribeDdl` list).
-  // It promotes hand-made participant links that exist ONLY in the
-  // `beeper_participants.tribe_person_id` cache to durable `kind='beeper-user'` claims, so a
-  // purge + resweep can't lose them. No-op on a fresh database.
-  //
-  //   - The `NOT EXISTS` guard makes it ONE-SHOT: `ensureSchema()` re-runs the whole list per
-  //     service call, and the uncorrelated subquery skips the join once ANY beeper-user claim
-  //     exists (the app writes one on every link).
-  //   - `ON CONFLICT DO NOTHING`: `linkParticipant` is the authority; never overwrite its claims.
-  //   - `DISTINCT ON` + `ORDER BY updated_at DESC`: the most recent link wins when one Beeper
-  //     user was linked to different people in different conversations.
-  //   - The `tribe_people` join drops soft-deleted persons (no FK cascade fires), so a purge
-  //     doesn't resurrect a link to a deleted person.
-  `INSERT INTO tribe_identities (person_id, kind, network, handle, source, linked_at)
-   SELECT DISTINCT ON (c.account_id, p.source_user_id)
-          p.tribe_person_id, 'beeper-user', c.account_id, p.source_user_id, 'backfill', NOW()
-   FROM beeper_participants p
-   JOIN beeper_conversations c ON c.id = p.conversation_id
-   JOIN tribe_people tp ON tp.id = p.tribe_person_id AND tp.deleted = FALSE
-   WHERE p.tribe_person_id IS NOT NULL AND c.account_id <> ''
-     AND NOT EXISTS (SELECT 1 FROM tribe_identities WHERE kind = 'beeper-user')
-   ORDER BY c.account_id, p.source_user_id, p.updated_at DESC
-   ON CONFLICT (kind, network, handle) DO NOTHING`,
 ];
