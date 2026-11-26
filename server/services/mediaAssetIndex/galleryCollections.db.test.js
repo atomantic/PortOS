@@ -311,7 +311,11 @@ it('projects compact no-search pages before SQL with identical rows, previews an
       expect(await listGalleryPage({ ...input, compact: true }), JSON.stringify(input)).toEqual(expected);
       for (const [sql, params] of state.query.mock.calls) {
         // Image-only counts read no record payload at all.
-        if (!sql.startsWith('SELECT COUNT(*)')) expect(sql).toContain('jsonb_each(data)');
+        if (sql.includes('gallery_page AS')) {
+          expect(sql).toMatch(/LIMIT \$\d+ OFFSET \$\d+[\s\S]+jsonb_each\(ma\.data\)/);
+        } else if (!sql.startsWith('SELECT COUNT(*)')) {
+          expect(sql).toContain('jsonb_each(data)');
+        }
         expect(JSON.stringify(params)).not.toContain(beyond);
       }
     }

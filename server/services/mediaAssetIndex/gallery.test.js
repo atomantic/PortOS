@@ -108,7 +108,8 @@ describe('indexed gallery page', () => {
     const [sql, params] = query.mock.calls[0];
     expect(JSON.parse(params[0])[0].data).toEqual({ id: 'clip-1', filename: 'clip.mp4', thumbnail: 'clip.png',
       stitchedFrom: ['a', 'b'], trimmedFrom: 'original-clip', universeId: 'u', _promptPreviewSource: 'x'.repeat(241) });
-    expect(sql).toContain('jsonb_each(data)');
+    expect(sql).toMatch(/LIMIT \$\d+ OFFSET \$\d+[\s\S]+jsonb_each\(ma\.data\)/);
+    expect(sql.match(/jsonb_each\(/g)).toHaveLength(1);
 
     // A search reads the cached compact snapshot and its search text (#18631):
     // the full history is never loaded, and only matching compact rows are bound.
