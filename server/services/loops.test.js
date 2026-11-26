@@ -239,10 +239,25 @@ describe('loops.js', () => {
       ).rejects.toThrow('Interval must be between 10 seconds and 24 days');
     });
 
-    it('throws when prompt is empty', async () => {
+    it('rejects whitespace-only prompts before saving or dispatching', async () => {
       await expect(
-        createLoop({ prompt: '   ', interval: '1m', runImmediately: false })
+        createLoop({ prompt: '  \t\n', interval: '1m' })
       ).rejects.toThrow('Prompt is required');
+      await vi.advanceTimersByTimeAsync(60_000);
+      expect(atomicWrite).not.toHaveBeenCalled();
+      expect(mockRunPrompt).not.toHaveBeenCalled();
+    });
+
+    it('dispatches the exact saved prompt on the first iteration', async () => {
+      const prompt = '    example\n\n';
+      await createLoop({ prompt, interval: '1m' });
+      const saved = atomicWrite.mock.calls[0][1];
+      expect(saved[0].prompt).toBe(prompt);
+      tryReadFile.mockResolvedValue(JSON.stringify(saved));
+
+      await vi.advanceTimersByTimeAsync(100);
+      expect(mockRunPrompt).toHaveBeenCalledTimes(1);
+      expect(mockRunPrompt.mock.calls[0][0].prompt).toBe(prompt);
     });
   });
 
