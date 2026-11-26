@@ -4,6 +4,7 @@ import { RefreshCw, Play, PauseCircle, Sparkles, AlertTriangle, Search } from 'l
 import toast from '../../ui/Toast';
 import BrailleSpinner from '../../BrailleSpinner';
 import ListLoadError from '../../ui/ListLoadError';
+import InlineConfirmRow from '../../ui/InlineConfirmRow';
 import useListResource from '../../../hooks/useListResource.js';
 import CronInput from '../../CronInput';
 import ToggleSwitch from '../../ToggleSwitch';
@@ -51,6 +52,7 @@ export default function AutomationTab({ appId, appName }) {
   const [resuming, setResuming] = useState(false);
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
+  const [pendingBulkEnabled, setPendingBulkEnabled] = useState(null);
   const [cronEditing, setCronEditing] = useState({});
   // Only one Configure panel open at a time — a per-task disclosure holding the
   // per-app provider/model override (and, for layered-intelligence, a link to
@@ -207,13 +209,14 @@ export default function AutomationTab({ appId, appName }) {
 
   const handleToggleAll = async () => {
     setSaving(true);
-    const newEnabled = !allEnabled;
+    const newEnabled = pendingBulkEnabled;
     const result = await toggleAllAppTaskTypes(appId, newEnabled, { silent: true }).catch(err => {
       toast.error(err.message);
       return null;
     });
     setSaving(false);
     if (!result) return;
+    setPendingBulkEnabled(null);
     setOverrides(prev => {
       const updated = { ...prev };
       for (const t of taskTypes) {
@@ -221,6 +224,7 @@ export default function AutomationTab({ appId, appName }) {
       }
       return updated;
     });
+    toast.success(`${newEnabled ? 'Enabled' : 'Disabled'} all ${taskTypes.length} scheduled task${taskTypes.length === 1 ? '' : 's'} for ${appName}`);
   };
 
   return (
@@ -261,7 +265,19 @@ export default function AutomationTab({ appId, appName }) {
               leave one on <em>Inherit</em> and it follows the global schedule defaults.
             </p>
           </div>
-          {overridesReady && scheduleReady && <ToggleSwitch enabled={allEnabled} onChange={handleToggleAll} size="sm" activeColor="bg-port-success" disabled={saving} ariaLabel={allEnabled ? 'Disable every scheduled task for this app' : 'Enable every scheduled task for this app'} />}
+          {overridesReady && scheduleReady && (
+            <div role="group" aria-label="All tasks" className="flex items-center gap-2 shrink-0 text-xs text-gray-300">
+              <span>All tasks</span>
+              <ToggleSwitch
+                enabled={allEnabled}
+                onChange={() => setPendingBulkEnabled(!allEnabled)}
+                size="sm"
+                activeColor="bg-port-success"
+                disabled={saving || taskTypes.length === 0}
+                ariaLabel={allEnabled ? 'Disable every scheduled task for this app' : 'Enable every scheduled task for this app'}
+              />
+            </div>
+          )}
         </div>
         <button
           onClick={refreshAll}
@@ -271,6 +287,17 @@ export default function AutomationTab({ appId, appName }) {
           <RefreshCw size={14} /> Refresh
         </button>
       </div>
+
+      {pendingBulkEnabled !== null && (
+        <InlineConfirmRow
+          tone="warning"
+          question={`${pendingBulkEnabled ? 'Enable' : 'Disable'} all ${taskTypes.length} scheduled task${taskTypes.length === 1 ? '' : 's'} for ${appName}?`}
+          confirmText={pendingBulkEnabled ? 'Enable all' : 'Disable all'}
+          confirmDisabled={saving}
+          onConfirm={handleToggleAll}
+          onCancel={() => setPendingBulkEnabled(null)}
+        />
+      )}
 
       {providersError && (
         <ListLoadError what="the provider list" error={providersError} onRetry={fetchData} />

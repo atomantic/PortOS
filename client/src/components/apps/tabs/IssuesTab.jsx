@@ -826,16 +826,30 @@ export default function IssuesTab({ appId, appName }) {
           good list below — blanking issues the user was reading is worse than
           showing them alongside a "couldn't refresh" notice. */}
       {issues.length === 0 && total > 0 && (
-        <div className="px-3 py-2 text-sm text-gray-500 bg-port-card border border-port-border rounded-lg">
-          {query.trim()
-            ? <>No open issues match &ldquo;{query}&rdquo;{hidingByLabel ? ' with the current label filters' : ''}.</>
-            : unassignedOnly && filedBy
-              ? <>No unassigned open issues filed by {filedBy}{hidingByLabel ? ' match the current label filters' : ''}.</>
-              : unassignedOnly
-                ? <>No unassigned open issues{hidingByLabel ? ' match the current label filters' : ''}.</>
-                : filedBy
-                  ? <>No open issues filed by {filedBy}{hidingByLabel ? ' match the current label filters' : ''}.</>
-                  : 'No open issues match the current label filters.'}
+        <div className="px-3 py-2 text-sm text-gray-500 bg-port-card border border-port-border rounded-lg flex flex-wrap items-center gap-3">
+          <span>
+            {query.trim()
+              ? <>No open issues match &ldquo;{query}&rdquo;{hidingByLabel ? ' with the current label filters' : ''}.</>
+              : unassignedOnly && filedBy
+                ? <>No unassigned open issues filed by {filedBy}{hidingByLabel ? ' match the current label filters' : ''}.</>
+                : unassignedOnly
+                  ? <>No unassigned open issues{hidingByLabel ? ' match the current label filters' : ''}.</>
+                  : filedBy
+                    ? <>No open issues filed by {filedBy}{hidingByLabel ? ' match the current label filters' : ''}.</>
+                    : 'No open issues match the current label filters.'}
+          </span>
+          <button
+            type="button"
+            onClick={() => {
+              setQuery('');
+              setUnassignedOnly(false);
+              setFiledBy('');
+              setLabelFilter(defaultLabelFilter());
+            }}
+            className="px-2.5 py-1 rounded border border-port-border text-gray-300 hover:text-white hover:bg-port-border/60"
+          >
+            Reset filters
+          </button>
         </div>
       )}
 
@@ -846,50 +860,52 @@ export default function IssuesTab({ appId, appName }) {
             return (
               <div key={issue.number} className={`${issueRowTint(issue)} @container`}>
                 <div className="flex flex-col @min-[40rem]:flex-row @min-[40rem]:items-start gap-2 @min-[40rem]:gap-3 p-3">
-                  <button
-                    onClick={() => toggleExpanded(issue.number)}
-                    aria-expanded={isOpen}
-                    aria-label={`${isOpen ? 'Collapse' : 'Expand'} description for issue ${issue.number}`}
-                    className="pointer-coarse:min-h-11 pointer-coarse:min-w-11 flex text-gray-500 hover:text-white transition-colors mt-0.5 shrink-0"
-                  >
-                    {isOpen ? <ChevronDown size={16} /> : <ChevronRight size={16} />}
-                  </button>
+                  <div className="flex items-start gap-2 flex-1 min-w-0">
+                    <button
+                      onClick={() => toggleExpanded(issue.number)}
+                      aria-expanded={isOpen}
+                      aria-label={`${isOpen ? 'Collapse' : 'Expand'} description for issue ${issue.number}`}
+                      className="pointer-coarse:min-h-11 pointer-coarse:min-w-11 flex text-gray-500 hover:text-white transition-colors mt-0.5 shrink-0"
+                    >
+                      {isOpen ? <ChevronDown size={16} /> : <ChevronRight size={16} />}
+                    </button>
 
-                  <div className="flex-1 min-w-0">
-                    <div className="flex items-start gap-2">
-                      <CircleDot size={14} className="text-port-success shrink-0 mt-0.5" />
-                      <span className="text-xs font-mono text-gray-500 shrink-0 mt-0.5">#{issue.number}</span>
-                      <button
-                        onClick={() => toggleExpanded(issue.number)}
-                        aria-expanded={isOpen}
-                        className="text-sm font-medium text-white text-left hover:text-port-accent transition-colors break-words flex-1 min-w-0"
-                      >
-                        {issue.title || '(no title)'}
-                      </button>
-                    </div>
-
-                    {issue.labels.length > 0 && (
-                      <div className="flex flex-wrap gap-1 mt-1.5">
-                        {issue.labels.map(l => <LabelChip key={l.name} label={l} />)}
+                    <div className="flex-1 min-w-0">
+                      <div className="flex items-start gap-2">
+                        <CircleDot size={14} className="text-port-success shrink-0 mt-0.5" />
+                        <span className="text-xs font-mono text-gray-500 shrink-0 mt-0.5">#{issue.number}</span>
+                        <button
+                          onClick={() => toggleExpanded(issue.number)}
+                          aria-expanded={isOpen}
+                          className="text-sm font-medium text-white text-left hover:text-port-accent transition-colors break-words flex-1 min-w-0"
+                        >
+                          {issue.title || '(no title)'}
+                        </button>
                       </div>
-                    )}
 
-                    <div className="flex flex-wrap items-center gap-x-3 gap-y-1 mt-1.5 text-xs text-gray-500">
-                      {issue.author && <span>opened by {issue.author}</span>}
-                      {issue.updatedAt && <span>updated {timeAgo(issue.updatedAt)}</span>}
-                      {issue.milestone && <span className="text-cyan-400">{issue.milestone}</span>}
-                      {issue.commentCount > 0 && (
-                        <span className="flex items-center gap-1">
-                          <MessageSquare size={12} /> {issue.commentCount} comment{issue.commentCount === 1 ? '' : 's'}
-                        </span>
+                      {issue.labels.length > 0 && (
+                        <div className="flex flex-wrap gap-1 mt-1.5">
+                          {issue.labels.map(l => <LabelChip key={l.name} label={l} />)}
+                        </div>
                       )}
-                      {issue.assignees.length > 0 ? (
-                        <span className="flex items-center gap-1 text-gray-300">
-                          <User size={12} /> {issue.assignees.join(', ')}
-                        </span>
-                      ) : (
-                        <span className="italic">unassigned</span>
-                      )}
+
+                      <div className="flex flex-wrap items-center gap-x-3 gap-y-1 mt-1.5 text-xs text-gray-500">
+                        {issue.author && <span>opened by {issue.author}</span>}
+                        {issue.updatedAt && <span>updated {timeAgo(issue.updatedAt)}</span>}
+                        {issue.milestone && <span className="text-cyan-400">{issue.milestone}</span>}
+                        {issue.commentCount > 0 && (
+                          <span className="flex items-center gap-1">
+                            <MessageSquare size={12} /> {issue.commentCount} comment{issue.commentCount === 1 ? '' : 's'}
+                          </span>
+                        )}
+                        {issue.assignees.length > 0 ? (
+                          <span className="flex items-center gap-1 text-gray-300">
+                            <User size={12} /> {issue.assignees.join(', ')}
+                          </span>
+                        ) : (
+                          <span className="italic">unassigned</span>
+                        )}
+                      </div>
                     </div>
                   </div>
 
