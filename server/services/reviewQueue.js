@@ -1081,6 +1081,15 @@ async function gatherProducer(producer, ctx = {}) {
 
 const PRODUCERS_BY_SOURCE = Object.fromEntries(PRODUCERS.map(p => [p.source, p]));
 
+// These row prefixes are shared by the adapters for stored items and notifications.
+const ADAPTED_TRIAGE_SOURCES = new Set(['cos', 'memory', 'goal-fidelity', 'plan', 'content', 'autopilot']);
+
+function triageProducerSources(source) {
+  const sources = Object.hasOwn(PRODUCERS_BY_SOURCE, source) ? [source] : [];
+  if (ADAPTED_TRIAGE_SOURCES.has(source)) sources.push('review', 'notifications');
+  return new Set(sources);
+}
+
 const queueSnapshots = new Map();
 
 const stableQueryValue = (value) => {
@@ -1376,7 +1385,7 @@ export async function triageQueueItem(queueItemId, operation, input = {}, { now:
   }
 
   const { source } = queueSourceAndRawId(queueItemId);
-  const queue = await gatherFullQueue({}, { applyTriageState: false, now });
+  const queue = await gatherFullQueue({}, { applyTriageState: false, now, onlySources: triageProducerSources(source) });
   const sourceDescriptor = queue.sources[source];
   if (sourceDescriptor?.error) {
     throw new ServerError(`Cannot triage ${source} while its source is unavailable`, {
@@ -1565,11 +1574,14 @@ async function readQueueTriageForProjection({
   return entries.filter((entry) => !removableKeys.has(reviewQueueTriageStore.triageIdentityKey(entry)));
 }
 
-async function gatherFullQueue(query = {}, { applyTriageState = true, now = new Date() } = {}) {
+async function gatherFullQueue(query = {}, { applyTriageState = true, now = new Date(), onlySources } = {}) {
+  const view = typeof query.view === 'string' && query.view ? query.view : null;
+  const visibleProducers = PRODUCERS.filter(producer => (
+    (!onlySources || onlySources.has(producer.source)) && visibleInLiveViews(producer, view)
+  ));
   // Fetch active goals once (not per Ask row) so the goal picker on Ask rows
   // has targets. A failure here degrades to no goal targets, not a sunk queue.
-  const goalOptions = await getActiveGoalOptions();
-  const view = typeof query.view === 'string' && query.view ? query.view : null;
+  const goalOptions = visibleProducers.some(producer => producer.source === 'ask') ? await getActiveGoalOptions() : [];
   const timezone = view === 'today'
     ? await getUserTimezone().catch((err) => {
       console.error(`⚠️ Review queue: timezone read failed: ${err.message}`);
@@ -1583,7 +1595,6 @@ async function gatherFullQueue(query = {}, { applyTriageState = true, now = new 
     scheduleQueueClockInvalidation(anchorLocalMidnightUtc(tomorrow.toISOString().slice(0, 10), timezone));
   }
   const ctx = { goalOptions, view, timezone, now: clock };
-  const visibleProducers = PRODUCERS.filter((producer) => visibleInLiveViews(producer, view));
 
   const results = await Promise.all(visibleProducers.map(async (producer) => {
     return gatherProducer(producer, ctx)
