@@ -3,7 +3,7 @@ import { Clapperboard, Plus, RotateCcw, X } from 'lucide-react';
 import useMounted from '../../hooks/useMounted.js';
 import { getMusicVideoCreditsPrefill } from '../../services/apiMusicVideo.js';
 import {
-  CREDITS_OUTRO_DEFAULTS, CREDITS_OUTRO_LIMITS, CREDITS_OUTRO_ROLES, normalizeCreditsOutro,
+  CREDITS_OUTRO_COLORS, CREDITS_OUTRO_DEFAULTS, CREDITS_OUTRO_LIMITS, CREDITS_OUTRO_ROLES, normalizeCreditsOutro,
 } from '../../../../server/lib/musicVideo/musicVideoCreditsOutro.js';
 
 // Lengths offered for the credits, in seconds (inside CREDITS_OUTRO_LIMITS).
@@ -11,22 +11,59 @@ const LENGTHS = [6, 8, 10, 12, 15, 20, 25, 30];
 
 // The layouts offered, in CREDITS_OUTRO_LAYOUTS order.
 const LAYOUT_LABELS = { roll: 'Roll', grid: 'Grid (one screen)' };
+const FONT_LABELS = { title: 'Playfair Display · Serif', body: 'Archivo · Sans serif', condensed: 'Oswald · Condensed', mono: 'IBM Plex Mono' };
+const COLOR_LABELS = { textColor: 'Main text color', labelColor: 'Label and closing line color', backgroundColor: 'Background color' };
 
 const FIELD = 'min-h-[44px] rounded border border-port-border bg-port-bg px-2 py-1 text-sm pointer-fine:sm:min-h-0';
 
 /** One text field: edited in place, saved when it loses focus. */
-function TextField({ id, label, value, placeholder = '', list, onCommit, hideLabel = false }) {
+function TextField({ id, label, value, placeholder = '', list, onCommit, multiline = false }) {
   const [draft, setDraft] = useState(value);
   useEffect(() => { setDraft(value); }, [value]);
+  const props = { value: draft, placeholder, onChange: (e) => setDraft(e.target.value),
+    onBlur: () => { if (draft.trim() !== value) onCommit(draft.trim()); }, className: `${FIELD} w-full` };
   return (
     <div className="min-w-0">
-      <label htmlFor={id} className={hideLabel ? 'sr-only' : 'mb-0.5 block text-xs text-port-text-muted'}>{label}</label>
-      <input id={id} type="text" value={draft} maxLength={CREDITS_OUTRO_LIMITS.textMax} placeholder={placeholder} list={list}
-        onChange={(e) => setDraft(e.target.value)}
-        onBlur={() => { if (draft.trim() !== value) onCommit(draft.trim()); }}
-        onKeyDown={(e) => { if (e.key === 'Enter') e.currentTarget.blur(); }}
-        className={`${FIELD} w-full`} />
+      <label htmlFor={id} className="mb-0.5 block text-xs text-port-text-muted">{label}</label>
+      {multiline ? <textarea id={id} {...props} rows={2} maxLength={CREDITS_OUTRO_LIMITS.blockTextMax} />
+        : <input id={id} {...props} type="text" maxLength={CREDITS_OUTRO_LIMITS.textMax} list={list}
+            onKeyDown={(e) => { if (e.key === 'Enter') e.currentTarget.blur(); }} />}
     </div>
+  );
+}
+
+function CreditsAppearance({ credits, id, commit }) {
+  return (
+    <fieldset className="min-w-0 space-y-2 border-t border-port-border pt-2">
+      <legend className="text-xs text-port-text-muted">Appearance</legend>
+      <div className="flex flex-wrap gap-x-4 gap-y-1">
+        <label htmlFor={id('quote')} className="inline-flex min-h-11 items-center gap-2 text-sm">
+          <input id={id('quote')} type="checkbox" checked={credits.quoteTitle !== false} onChange={(e) => commit({ quoteTitle: e.target.checked })} />
+          Quote song title
+        </label>
+        <label htmlFor={id('show-performer')} className="inline-flex min-h-11 items-center gap-2 text-sm">
+          <input id={id('show-performer')} type="checkbox" checked={credits.showPerformer !== false} onChange={(e) => commit({ showPerformer: e.target.checked })} />
+          Show “Performed by”
+        </label>
+      </div>
+      <div className="grid grid-cols-[repeat(auto-fit,minmax(min(100%,10rem),1fr))] gap-2">
+        {[['titleFont', 'Title font', 'title'], ['bodyFont', 'Credits font', 'body']].map(([key, label, fallback]) => (
+          <div key={key} className="min-w-0">
+            <label htmlFor={id(key)} className="mb-0.5 block text-xs text-port-text-muted">{label}</label>
+            <select id={id(key)} value={credits[key] || fallback} onChange={(e) => commit({ [key]: e.target.value })} className={`${FIELD} w-full`}>
+              {Object.entries(FONT_LABELS).map(([value, name]) => <option key={value} value={value}>{name}</option>)}
+            </select>
+          </div>
+        ))}
+        {Object.entries(COLOR_LABELS).map(([key, label]) => (
+          <div key={key}>
+            <label htmlFor={id(key)} className="mb-0.5 block text-xs text-port-text-muted">{label}</label>
+            <input id={id(key)} type="color" value={credits[key] || CREDITS_OUTRO_COLORS[key]}
+              onChange={(e) => commit({ [key]: e.target.value })} className="h-11 w-16 rounded border border-port-border bg-port-bg p-1" />
+          </div>
+        ))}
+      </div>
+    </fieldset>
   );
 }
 
@@ -62,8 +99,11 @@ export default function CreditsOutroPanel({ project, onEditLocal, onSave }) {
   const lines = credits?.lines || [];
   const setLine = (index, patch) => commit({ lines: lines.map((line, i) => (i === index ? { ...line, ...patch } : line)) });
   const removeLine = (index) => commit({ lines: lines.filter((_, i) => i !== index) });
-  // A new line needs a role to be kept (an empty pair is dropped), so it starts on the first role not yet used.
-  const addLine = () => commit({ lines: [...lines, { role: CREDITS_OUTRO_ROLES.find((role) => !lines.some((line) => line.role === role)) || 'Special thanks', name: '' }] });
+  const addLine = () => commit({ lines: [...lines, { role: 'New credit', name: '' }] });
+  const refill = () => {
+    const { title: _title, artist: _artist, lines: _lines, footer: _footer, ...settings } = credits;
+    return fill({ ...settings, quoteTitle: credits.quoteTitle !== false });
+  };
   const lengths = !credits || LENGTHS.includes(credits.durationSec) ? LENGTHS : [...LENGTHS, credits.durationSec].sort((a, b) => a - b);
   const id = (key) => `mv-credits-${key}`;
   return (
@@ -83,7 +123,7 @@ export default function CreditsOutroPanel({ project, onEditLocal, onSave }) {
         <fieldset disabled={filling} className="min-w-0 space-y-2">
           <div className="grid grid-cols-[repeat(auto-fit,minmax(min(100%,10rem),1fr))] gap-2">
             <TextField id={id('title')} label="Song title" value={credits.title} onCommit={(title) => commit({ title })} />
-            <TextField id={id('artist')} label="Performed by" value={credits.artist} onCommit={(artist) => commit({ artist })} />
+            {credits.showPerformer !== false && <TextField id={id('artist')} label="Performed by" value={credits.artist} onCommit={(artist) => commit({ artist })} />}
             <div>
               <label htmlFor={id('length')} className="mb-0.5 block text-xs text-port-text-muted">Length</label>
               <select id={id('length')} value={credits.durationSec} onChange={(e) => commit({ durationSec: Number(e.target.value) })} className={FIELD}>
@@ -97,31 +137,35 @@ export default function CreditsOutroPanel({ project, onEditLocal, onSave }) {
               </select>
             </div>
           </div>
+          <CreditsAppearance credits={credits} commit={commit} id={id} />
           <fieldset className="min-w-0 space-y-1">
-            <legend className="mb-0.5 text-xs text-port-text-muted">Credits</legend>
+            <legend className="mb-0.5 text-xs text-port-text-muted">Credit blocks</legend>
+            <p className="text-xs text-port-text-muted">Give each block an optional heading and your own text. In Grid, each block gets its own cell.</p>
             <datalist id={id('roles')}>
               {CREDITS_OUTRO_ROLES.map((role) => <option key={role} value={role} />)}
             </datalist>
             {lines.map((line, i) => (
-              <div key={i} className="grid grid-cols-[minmax(0,1fr)_minmax(0,1fr)_auto] items-center gap-1.5">
-                <TextField id={id(`role-${i}`)} label={`Credit ${i + 1} role`} hideLabel value={line.role} placeholder="Role" list={id('roles')}
+              <div key={i} className="grid grid-cols-[minmax(0,1fr)_auto] items-start gap-1.5 rounded border border-port-border p-2">
+                <TextField id={id(`role-${i}`)} label={`Block ${i + 1} heading`} value={line.role} placeholder="Optional" list={id('roles')}
                   onCommit={(role) => setLine(i, { role })} />
-                <TextField id={id(`name-${i}`)} label={`Credit ${i + 1} name`} hideLabel value={line.name} placeholder="Name"
-                  onCommit={(name) => setLine(i, { name })} />
-                <button type="button" onClick={() => removeLine(i)} aria-label={`Remove ${line.role || 'credit'} ${line.name}`.trim()}
-                  className="flex min-h-[44px] min-w-[44px] items-center justify-center rounded text-port-text-muted pointer-fine:sm:min-h-0 pointer-fine:sm:min-w-0 sm:p-1">
+                <button type="button" onClick={() => removeLine(i)} aria-label={`Remove credit block ${i + 1}`}
+                  className="flex min-h-[44px] min-w-[44px] items-center justify-center rounded border border-port-border text-port-text-muted hover:border-port-accent">
                   <X size={14} aria-hidden="true" />
                 </button>
+                <div className="col-span-2">
+                  <TextField id={id(`name-${i}`)} label={`Block ${i + 1} text`} value={line.name} placeholder="Names or other text" multiline
+                    onCommit={(name) => setLine(i, { name })} />
+                </div>
               </div>
             ))}
             <div className="flex flex-wrap gap-2">
               {lines.length < CREDITS_OUTRO_LIMITS.linesMax && (
                 <button type="button" onClick={addLine}
                   className="flex min-h-[44px] items-center gap-1 rounded border border-port-border px-2 text-xs pointer-fine:sm:min-h-0 sm:py-1">
-                  <Plus size={14} aria-hidden="true" /> Add credit
+                  <Plus size={14} aria-hidden="true" /> Add credit block
                 </button>
               )}
-              <button type="button" onClick={() => fill({ durationSec: credits.durationSec, layout: credits.layout })} disabled={filling}
+              <button type="button" onClick={refill} disabled={filling}
                 className="flex min-h-[44px] items-center gap-1 rounded border border-port-border px-2 text-xs text-port-text-muted pointer-fine:sm:min-h-0 sm:py-1">
                 <RotateCcw size={14} aria-hidden="true" /> Refill from song &amp; artist
               </button>

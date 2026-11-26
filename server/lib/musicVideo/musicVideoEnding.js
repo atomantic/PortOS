@@ -14,7 +14,7 @@
  */
 
 import { drawStatsOutro, normalizeStatsOutro, statsOutroRows, statsOutroSeconds } from './musicVideoStatsOutro.js';
-import { CREDITS_OUTRO_FONTS, creditsOutroSeconds, drawCreditsOutro, normalizeCreditsOutro } from './musicVideoCreditsOutro.js';
+import { CREDITS_OUTRO_FACE_LOADS, CREDITS_OUTRO_FONTS, creditsOutroSeconds, drawCreditsOutro, normalizeCreditsOutro } from './musicVideoCreditsOutro.js';
 
 /**
  * The ending's parts in play order, `{ kind: 'floor'|'credits', startSec,
@@ -66,7 +66,7 @@ export { endingPartAt, drawEnding };
 /** The weights each page waits for before it draws (the faces its @font-face rules declare). */
 const ENDING_FACE_LOADS = Object.freeze([
   '800 40px "MV Archivo"', '500 40px "MV Mono"', '600 40px "MV Mono"',
-  `700 40px "${CREDITS_OUTRO_FONTS.title.family}"`, `400 40px "${CREDITS_OUTRO_FONTS.body.family}"`, `600 40px "${CREDITS_OUTRO_FONTS.body.family}"`,
+  ...CREDITS_OUTRO_FACE_LOADS,
 ]);
 
 /**
@@ -79,6 +79,7 @@ const ENDING_FACE_LOADS = Object.freeze([
 export function endingPageSource({ stats, parts, imageSrcs = [], width, height, fps, durationSec }) {
   const json = (value) => JSON.stringify(value).replace(/</g, '\\u003c');
   return `(() => {
+  const CREDITS_OUTRO_FONTS = ${json(CREDITS_OUTRO_FONTS)};
   ${statsOutroRows.toString()}
   ${drawStatsOutro.toString()}
   ${drawCreditsOutro.toString()}

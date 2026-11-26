@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react';
-import { CREDITS_OUTRO_FONTS, drawCreditsOutro } from '../../../../server/lib/musicVideo/musicVideoCreditsOutro.js';
+import { CREDITS_OUTRO_FACE_LOADS, CREDITS_OUTRO_FONTS, drawCreditsOutro } from '../../../../server/lib/musicVideo/musicVideoCreditsOutro.js';
 
 // The canvas the animatic paints at; CSS scales it to the figure. The final render paints at the cut's own size.
 const WIDTH = 1280;
@@ -22,15 +22,13 @@ function addCreditsFaces() {
  */
 export default function CreditsOutroCanvas({ credits, t, durationSec }) {
   const canvasRef = useRef(null);
-  const [fontsReady, setFontsReady] = useState(0);
+  const [fontsReady, setFontsReady] = useState(false);
 
   useEffect(() => {
     addCreditsFaces();
     let active = true;
-    Promise.all([
-      document.fonts?.load?.(`700 40px "${CREDITS_OUTRO_FONTS.title.family}"`),
-      document.fonts?.load?.(`500 40px "${CREDITS_OUTRO_FONTS.body.family}"`),
-    ]).then(() => { if (active) setFontsReady((n) => n + 1); }).catch(() => {});
+    Promise.allSettled(CREDITS_OUTRO_FACE_LOADS.map((font) => document.fonts?.load?.(font)))
+      .then(() => { if (active) setFontsReady(true); });
     return () => { active = false; };
   }, []);
 
@@ -39,7 +37,7 @@ export default function CreditsOutroCanvas({ credits, t, durationSec }) {
     if (!ctx) return;
     drawCreditsOutro(ctx, { width: WIDTH, height: HEIGHT, t, durationSec, credits });
   }, [t, durationSec, credits, fontsReady]);
-  const label = [credits?.title, credits?.artist].filter(Boolean).join(', performed by ');
+  const label = [credits?.title, credits?.showPerformer === false ? '' : credits?.artist].filter(Boolean).join(', performed by ');
 
   return (
     <canvas
