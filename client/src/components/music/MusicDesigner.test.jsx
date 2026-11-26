@@ -1,6 +1,6 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
-import { render, screen, fireEvent, waitFor, cleanup } from '@testing-library/react';
-import { MemoryRouter, Routes, Route, useLocation } from 'react-router';
+import { act, render, screen, fireEvent, waitFor, cleanup } from '@testing-library/react';
+import { Link, MemoryRouter, Routes, Route, useLocation } from 'react-router';
 import MusicDesigner from './MusicDesigner';
 import { getSettings, patchSettingsSlice } from '../../services/apiSystem.js';
 import { createTrack, getTrack, updateTrack } from '../../services/apiTracks.js';
@@ -70,8 +70,9 @@ function LocationDisplay() {
   return <div data-testid="location">{location.pathname}{location.search}</div>;
 }
 
-const renderAt = (path) => render(
+const renderAt = (path, switchTo) => render(
   <MemoryRouter initialEntries={[path]}>
+    {switchTo && <Link to={switchTo}>Switch track</Link>}
     <Routes>
       <Route path="/music/:tab" element={<><LocationDisplay /><MusicDesigner /></>} />
       <Route path="/music/:tab/:id" element={<><LocationDisplay /><MusicDesigner /></>} />
@@ -122,12 +123,111 @@ describe('<MusicDesigner>', () => {
       expect(createTrack).toHaveBeenCalledTimes(1);
     });
 
-    it('does not create a track for an explicit ?trackId= that is 404', async () => {
+    it('keeps an explicit missing track in the URL until the user starts a fresh draft', async () => {
+      const activeDraftKey = 'portos.musicDesigner.activeDraft';
+      window.localStorage.setItem(activeDraftKey, 'track-old');
       getTrack.mockRejectedValueOnce(httpError(404));
+      const creation = Promise.withResolvers();
+      createTrack.mockReturnValueOnce(creation.promise);
       renderAt('/music/generate/concept?trackId=missing');
+
       expect(await screen.findByText('Track not found.')).toBeInTheDocument();
       expect(createTrack).not.toHaveBeenCalled();
       expect(screen.getByTestId('location')).toHaveTextContent('trackId=missing');
+      fireEvent.click(screen.getByRole('button', { name: 'Start a new track' }));
+      await waitFor(() => expect(createTrack).toHaveBeenCalledTimes(1));
+      expect(window.localStorage.getItem(activeDraftKey)).toBeNull();
+
+      await act(async () => creation.resolve({ id: 'track-new', title: 'Untitled music draft' }));
+      expect(await findEnabledByLabelText(/what do you want to hear/i)).toHaveValue('');
+      await waitFor(() => expect(screen.getByTestId('location')).toHaveTextContent('trackId=track-new'));
+      expect(window.localStorage.getItem(activeDraftKey)).toBe('track-new');
+      expect(getTrack.mock.calls.map(([id]) => id)).toEqual(['missing']);
+    });
+
+    it('shows the draft creation error and creates the draft when retried', async () => {
+      createTrack.mockRejectedValueOnce(new Error('Service unavailable'));
+      renderAt('/music/generate/concept');
+
+      expect(await screen.findByRole('alert')).toHaveTextContent('Could not create a music draft');
+      expect(screen.getByRole('alert')).toHaveTextContent('Service unavailable');
+      fireEvent.click(screen.getByRole('button', { name: 'Retry' }));
+
+      expect(await findEnabledByLabelText(/what do you want to hear/i)).toHaveValue('');
+      await waitFor(() => expect(screen.getByTestId('location')).toHaveTextContent('trackId=track-draft'));
+      expect(createTrack).toHaveBeenCalledTimes(2);
+      expect(getTrack).not.toHaveBeenCalled();
+    });
+  });
+
+  describe('track sessions', () => {
+    it('clears the old session during navigation and sends edits to the newly hydrated track', async () => {
+      const nextTrack = Promise.withResolvers();
+      getTrack.mockResolvedValueOnce({ id: 'track-a', concept: 'First draft' });
+      getTrack.mockReturnValueOnce(nextTrack.promise);
+      renderAt('/music/generate/concept?trackId=track-a', '/music/generate/concept?trackId=track-b');
+
+      expect(await findEnabledByLabelText(/what do you want to hear/i)).toHaveValue('First draft');
+      fireEvent.change(screen.getByLabelText(/extra guidance/i), { target: { value: 'First draft guidance' } });
+      fireEvent.click(screen.getByRole('link', { name: 'Switch track' }));
+
+      await waitFor(() => expect(getTrack).toHaveBeenLastCalledWith('track-b', { silent: true }));
+      expect(screen.getByLabelText(/what do you want to hear/i)).toBeDisabled();
+      expect(screen.getByLabelText(/what do you want to hear/i)).toHaveValue('');
+      expect(screen.getByLabelText(/extra guidance/i)).toHaveValue('');
+
+      await act(async () => nextTrack.resolve({ id: 'track-b', concept: 'Second draft' }));
+      const editor = await findEnabledByLabelText(/what do you want to hear/i);
+      expect(editor).toHaveValue('Second draft');
+      fireEvent.change(editor, { target: { value: 'Edited second draft' } });
+      fireEvent.blur(editor);
+      await waitFor(() => expect(updateTrack).toHaveBeenCalledExactlyOnceWith(
+        'track-b', { concept: 'Edited second draft' }, { silent: true },
+      ));
+    });
+
+    it.each([
+      {
+        step: 'concept',
+        readyField: /what do you want to hear/i,
+        runLabel: /describe it/i,
+        request: describeMusic,
+        response: { description: 'Superseded description', sentPrompt: 'Old prompt' },
+        expectedValue: 'Second concept',
+        initialSave: { concept: 'First concept' },
+      },
+      {
+        step: 'lyrics',
+        readyField: 'Lyrics',
+        runLabel: /generate lyrics/i,
+        request: generateLyrics,
+        response: { lyrics: 'Superseded lyrics', sentPrompt: 'Old prompt' },
+        expectedValue: 'Second lyrics',
+        initialSave: { prompt: 'First description' },
+      },
+    ])('ignores a pending $step response after switching tracks', async ({
+      step, readyField, runLabel, request, response, expectedValue, initialSave,
+    }) => {
+      const generation = Promise.withResolvers();
+      request.mockReturnValueOnce(generation.promise);
+      getTrack.mockResolvedValueOnce({ id: 'track-a', concept: 'First concept', prompt: 'First description' });
+      getTrack.mockResolvedValueOnce({
+        id: 'track-b', concept: 'Second concept', prompt: 'Second description', lyrics: 'Second lyrics',
+      });
+      renderAt(`/music/generate/${step}?trackId=track-a`, `/music/generate/${step}?trackId=track-b`);
+
+      await findEnabledByLabelText(readyField);
+      fireEvent.click(screen.getByRole('button', { name: runLabel }));
+      expect(request).toHaveBeenCalledTimes(1);
+      fireEvent.click(screen.getByRole('link', { name: 'Switch track' }));
+      expect(await findEnabledByLabelText(readyField)).toHaveValue(expectedValue);
+
+      await act(async () => generation.resolve(response));
+      expect(screen.getByLabelText(readyField)).toHaveValue(expectedValue);
+      expect(screen.getByTestId('location')).toHaveTextContent(`/music/generate/${step}?trackId=track-b`);
+      expect(updateTrack).toHaveBeenCalledExactlyOnceWith('track-a', initialSave, { silent: true });
+      expect(patchSettingsSlice).not.toHaveBeenCalled();
+      expect(screen.queryByText('Last sent to the AI')).not.toBeInTheDocument();
     });
   });
 
@@ -157,10 +257,12 @@ describe('<MusicDesigner>', () => {
     });
 
     it('creates a persisted draft immediately and uses its id for the wizard', async () => {
-      renderAt('/music/generate/concept');
+      renderAt('/music/generate/concept?engine=code');
 
-      await screen.findByLabelText(/what do you want to hear/i);
-      expect(createTrack).toHaveBeenCalledWith({ title: 'Untitled music draft' }, { silent: true });
+      await findEnabledByLabelText(/what do you want to hear/i);
+      expect(createTrack).toHaveBeenCalledExactlyOnceWith({ title: 'Untitled music draft' }, { silent: true });
+      await waitFor(() => expect(screen.getByTestId('location')).toHaveTextContent('?engine=code&trackId=track-draft'));
+      expect(getTrack).not.toHaveBeenCalled();
     });
 
     it('reopens the active unnamed draft after leaving the Music section', async () => {
