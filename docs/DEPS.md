@@ -2,7 +2,7 @@
 
 Living reference of every third-party dependency in PortOS, why it's kept, and what the current verdict is. Updated by `/do:depfree` runs.
 
-That "every dependency" claim is enforced by `server/test/guards/repo/deps-doc.test.js` (run by `cd server && npm test`): every dependency needs a row under the workspace and dependency group that declares it. Delete the row when its declaration is removed.
+That "every dependency" claim is enforced by `server/test/guards/repo/docsIntegrity.test.js` (run by `cd server && npm test`): every dependency needs a row under the workspace and dependency group that declares it. Delete the row when its declaration is removed.
 
 **Last audited:** 2026-11-26 (metadata refresh after #19040–#19042).
 **Verdict:** Current direct dependencies are listed below with their justification.

@@ -289,6 +289,11 @@ export const moveMusicVideoSceneEnd = (id, sceneId, endSec, options = {}) =>
   request(`/music-video/${encodeURIComponent(id)}/scenes/${encodeURIComponent(sceneId)}/end`, {
     method: 'POST', body: JSON.stringify({ endSec }), ...options,
   });
+// Undo the most recent structural or timing board edit (merge, split, delete, reorder, retime) → { undone, edit }.
+export const undoMusicVideoBoardEdit = (id, options = {}) =>
+  request(`/music-video/${encodeURIComponent(id)}/scenes/undo`, {
+    method: 'POST', ...options,
+  });
 // Optional vocal stem (#8977): a full-length vocal bounce on the master's
 // timebase that performance shots are conditioned on. Both → the project.
 export const uploadMusicVideoVocalStem = (id, file, options = {}) => {

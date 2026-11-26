@@ -12,7 +12,7 @@ schema.
 | Column **rename**, **type change**, data **transform**, **embedding-dimension** change, dropping a column | A migration file here |
 | Retiring a table (removing its DDL) | A `DROP TABLE IF EXISTS … RESTRICT` migration here, in the same change — the restore preflight refuses any table the current DDL no longer declares |
 
-Additive DDL needs no numbered file migration in `scripts/migrations/` either: a log-only `up()` stub is rejected by `server/test/guards/repo/migrationConventions.test.js` (#16093).
+Additive DDL needs no numbered file migration in `scripts/migrations/` either: a log-only `up()` stub is rejected by `server/test/guards/repo/migrations.test.js` (#16093).
 
 `ensureSchema()`'s `CREATE/ADD IF NOT EXISTS` gates can only express additive
 fresh-install schema. Anything that has to *transform* an existing install —

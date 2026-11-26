@@ -25,7 +25,7 @@ import {
 // an `export const purge = true`. Comments are stripped first so the rationale
 // block every purge migration carries cannot match. A `purge: true` nested
 // deeper inside a data literal is data, not the marker.
-// `server/test/guards/repo/migrationConventions.test.js` checks every shipped migration's module
+// `server/test/guards/repo/migrations.test.js` checks every shipped migration's module
 // against this probe so the two cannot drift.
 const stripComments = (source) => source
   .replace(/\/\*[\s\S]*?\*\//g, '')
