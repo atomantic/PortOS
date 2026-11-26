@@ -5,7 +5,7 @@
  * Shared vocabulary of the Music Video "Blender film" render style
  * (`composition.mode === 'blender'`): the settings shape, the id and path
  * rules, and the frame arithmetic the server, the Python driver and the client
- * must agree on. Pure and browser-safe. See docs/features/music-video-blender.md.
+ * must agree on. Pure and browser-safe. See docs/features/music-video.md#blender-films.
  */
 
 // PortOS engine ids. `BLENDER_EEVEE_NEXT` is EEVEE on every supported Blender

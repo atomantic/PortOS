@@ -8,7 +8,7 @@ Start with the [project overview and quick start](../README.md) or read the [pro
 - [Product surface map](features/product-surfaces.md) shows where to find features in the app.
 - [AI providers](AI_PROVIDERS.md) explains how harnesses, services, models, and presets fit together.
 - [Digital Twin](features/digital-twin.md), [Brain](features/brain-system.md), and [Privacy Center](features/privacy-center.md) cover personal context, capture, and privacy.
-- [Music Video](features/music-video-autonomous.md) walks through a project from brief and song to production.
+- [Music Video](features/music-video.md) walks through a project from brief and song to production.
 
 ## Operate an install
 

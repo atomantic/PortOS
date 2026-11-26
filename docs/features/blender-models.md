@@ -64,7 +64,7 @@ mesh, so two builds of one declared size frame identically. A model built outsid
 ## Trust and requirements
 
 A model script is the operator's own code and runs with this machine's privileges, exactly like a
-[Blender film](./music-video-blender.md). So:
+[Blender film](./music-video.md#blender-films). So:
 
 - Builds need the operator-checked Blender in **Trusted local** mode (Code Animation > Production > Blender execution).
   In contained mode a build is refused with `409 MUSIC_VIDEO_BLENDER_NEEDS_TRUSTED_LOCAL`, the same answer films give.
