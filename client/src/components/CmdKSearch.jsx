@@ -440,7 +440,7 @@ export default function CmdKSearch({ open: controlledOpen, setOpen: controlledSe
       else toast.success(summary);
       close();
     },
-  }), [navigate, close, enterCaptureMode]);
+  }), [location.pathname, navigate, close, enterCaptureMode]);
 
   const dispatchCommand = useCallback((item) => DISPATCH[item.kind]?.(item), [DISPATCH]);
 
