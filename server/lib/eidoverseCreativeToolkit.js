@@ -35,7 +35,7 @@
  * is `eidoverse.creative-catalog`; `buildDistrictTemplateAugmentOperations()`
  * (via `generateDistrictTemplatePlacement()`) is `eidoverse.place-layout`;
  * `buildDistrictTemplateFoundationDraft()` is `eidoverse.draft-foundation`
- * (`services/cos/cosToolRegistry.js`); and `generateDistrictTemplatePlacement()`
+ * (`services/cos/tools/eidoverseTools.js`); and `generateDistrictTemplatePlacement()`
  * is also what `services/eidoverseFoundationLedger.js`'s
  * `recordEidoverseFoundation()` replays server-side to derive a
  * `district-template`'s `body.placement` from its declared
@@ -277,12 +277,12 @@ export function buildDistrictTemplateFoundationDraft({
 // ---------------------------------------------------------------------------
 // Tool input schemas (#7627)
 // ---------------------------------------------------------------------------
-// `services/cos/cosToolRegistry.js` wires the two generative builders above as
+// `services/cos/tools/eidoverseTools.js` wires the two generative builders above as
 // `eidoverse.place-layout` (live-scene augment operations) and
 // `eidoverse.draft-foundation` (an `eidoverse.record`-ready district-template
 // input) — the "two ways to use a chosen layout" the module header always
 // described, now with a caller on both. Declared here, beside the functions
-// they validate for, rather than in `services/cos/cosToolRegistry.js`.
+// they validate for, rather than in `services/cos/tools/eidoverseTools.js`.
 
 const eidoverseCreativeLayoutIdSchema = z.enum(EIDOVERSE_CREATIVE_LAYOUTS.map((layout) => layout.id));
 const eidoverseCreativeMaterialIdSchema = z.enum(EIDOVERSE_CREATIVE_MATERIALS.map((material) => material.id));
