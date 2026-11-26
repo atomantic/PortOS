@@ -190,7 +190,9 @@ import { initImageOriginStamping } from './imageGen/imageRecords.js';
  * route factories in index.js, `spawnerReady` gates CoS init in
  * `runBootSequence` below.
  */
-export const bootstrapServices = async ({ io, dataDir, dataReferenceDir, serverDir }) => {
+export const bootstrapServices = async ({ io, dataDir, dataReferenceDir, serverDir }, {
+  exit = (code) => process.exit(code)
+} = {}) => {
   // First: the CoS daemon, media queue and git cleanup route all call through
   // these. Loaded lazily so the registrar's loaders stay off the boot closure.
   (await import('./bootHooks.js')).registerBootHooks();
@@ -286,7 +288,7 @@ export const bootstrapServices = async ({ io, dataDir, dataReferenceDir, serverD
         // report readiness after abandoning its migration sweep.
         if (!smokeBoot) throw err;
         console.error(`❌ Smoke boot: migration run failed, refusing to report ready: ${err?.stack ?? err}`);
-        process.exit(1);
+        return exit(1);
       }
       // Local recovery only: no mail, browser, or LLM provider calls.
       await initializeMessageDrafts();
@@ -433,7 +435,9 @@ export const bootstrapServices = async ({ io, dataDir, dataReferenceDir, serverD
  * Fire-and-forget service inits + scheduler arming. None of these block the
  * server from listening; each logs its own failure and the boot continues.
  */
-const startBackgroundServices = ({ spawnerReady, io, httpsEnabled, port }) => {
+const startBackgroundServices = ({ spawnerReady, io, httpsEnabled, port }, {
+  armHostedSessions = startHostedSessionSweep
+} = {}) => {
   // A crashed process leaks settled reservations that finish() never reached.
   // Stamp uncertain publications before later boot steps read the journal.
   // Sync and non-throwing; CoS may be off. Smoke boot skips this whole function.
@@ -535,7 +539,7 @@ const startBackgroundServices = ({ spawnerReady, io, httpsEnabled, port }) => {
   // Arm the FableLoom hosted-session sweeper. Timer only — it walks in-memory
   // QR play sessions and tears down the ones past their TTL, making no AI
   // provider call, so it is safe under AGENTS.md's "No cold-bootstrap LLM calls".
-  startHostedSessionSweep({ io });
+  armHostedSessions({ io });
   // Initialize activity-digest scheduler — OFF by default; drafts daily-log
   // auto-summaries from the Human Activity timeline only when the user enables it
   // (Settings → Daily Log → Activity Digest). Silent + no LLM calls until then.
@@ -932,10 +936,14 @@ const announceListening = ({ io, httpServer, localHttpServer, httpsEnabled, port
  * so a caller can await it; index.js intentionally does not (boot proceeds in
  * the background and any fatal step exits the process itself).
  */
-export const runBootSequence = ({ io, httpServer, localHttpServer, httpsEnabled, port, host, spawnerReady }) =>
+export const runBootSequence = ({ io, httpServer, localHttpServer, httpsEnabled, port, host, spawnerReady }, {
+  onFatal,
+  backgroundDependencies
+} = {}) =>
   runPostRouteSequence(gateStepsForSmokeBoot({
     isStopping: isHostShuttingDown,
-    startBackgroundServices: () => startBackgroundServices({ spawnerReady, io, httpsEnabled, port }),
+    onFatal,
+    startBackgroundServices: () => startBackgroundServices({ spawnerReady, io, httpsEnabled, port }, backgroundDependencies),
 
     // Instance identity + sync log come up before requests are accepted, so a
     // brain mutation can't arrive before the sync log is ready.
@@ -1133,7 +1141,10 @@ const describeSlowShutdown = (summary, settledMs) => {
  * Wire SIGTERM/SIGINT to the graceful-shutdown state machine. Idempotent per
  * signal: once shutdown starts, later signals are ignored.
  */
-export const registerShutdownHandlers = ({ io, httpServer, localHttpServer }) => {
+export const registerShutdownHandlers = ({ io, httpServer, localHttpServer }, {
+  hostProcess = process,
+  createLagProbe = createEventLoopLagProbe
+} = {}) => {
   // Track in-flight requests from boot so shutdown knows what it is waiting on.
   const httpDrain = createHttpDrain([httpServer, localHttpServer]);
   let shuttingDown = false;
@@ -1161,7 +1172,7 @@ export const registerShutdownHandlers = ({ io, httpServer, localHttpServer }) =>
         () => finish('✅ Scheduled events drained'),
         (err) => finishWithError('⚠️ Scheduled events drain failed', err),
       ));
-    const timing = createEventLoopLagProbe().begin('tailcat');
+    const timing = createLagProbe().begin('tailcat');
     // Concurrent steps settle out of phase order; recorded as ms since the signal.
     const settledMs = {};
     const recordSettled = (name) => () => { settledMs[name] = timing.snapshot().totalMs; };
@@ -1173,18 +1184,17 @@ export const registerShutdownHandlers = ({ io, httpServer, localHttpServer }) =>
     // signal came from PM2 (parent is the PM2 god process), a TTY (parent is
     // the user's shell), or some external orchestrator. pm_* env vars are set
     // by PM2 so their presence + a matching ppid is the smoking gun.
-    const pid = process.pid;
-    const ppid = process.ppid;
-    const tty = process.stdin.isTTY ? 'tty' : 'no-tty';
-    const pmId = process.env.pm_id ?? process.env.PM2_ID ?? '<not set>';
-    const pmExecPath = process.env.pm_exec_path ?? '<not set>';
+    const { pid, ppid, stdin, env } = hostProcess;
+    const tty = stdin.isTTY ? 'tty' : 'no-tty';
+    const pmId = env.pm_id ?? env.PM2_ID ?? '<not set>';
+    const pmExecPath = env.pm_exec_path ?? '<not set>';
     console.log(`🛑 Received ${signal} - shutting down gracefully (pid=${pid} ppid=${ppid} ${tty} pm_id=${pmId})`);
     if (pmExecPath !== '<not set>') console.log(`   ↳ launched by PM2: pm_exec_path=${pmExecPath}`);
 
     const forceExitTimer = setTimeout(() => {
       console.error('⚠️ Graceful shutdown timed out, forcing exit');
       reportIfSlow();
-      process.exit(1);
+      hostProcess.exit(1);
     }, GRACEFUL_SHUTDOWN_TIMEOUT_MS);
     // Don't let the safety timer itself keep the event loop alive — if every
     // other handle has closed we should exit immediately, not wait out the timer.
@@ -1342,7 +1352,6 @@ export const registerShutdownHandlers = ({ io, httpServer, localHttpServer }) =>
     await catalogFilingFlushed;
     await flushPendingUsageWrites().catch(err => logBootstrapFailure('❌ Usage ledger flush failed', err));
     timing.mark('dbPool');
-    // Kept dynamic: bootstrap.shutdown.test.js runs this handler in a vm with module loading injected.
     const { close } = await import('../lib/db.js');
     if (typeof close === 'function') {
       // Bound the DB pool close: pool.end() waits for every checked-out client to
@@ -1360,8 +1369,8 @@ export const registerShutdownHandlers = ({ io, httpServer, localHttpServer }) =>
     await ideaLoomFlushed;
     clearTimeout(forceExitTimer);
     reportIfSlow();
-    process.exit(0);
+    hostProcess.exit(0);
   };
-  process.on('SIGTERM', () => shutdown('SIGTERM'));
-  process.on('SIGINT', () => shutdown('SIGINT'));
+  hostProcess.on('SIGTERM', () => shutdown('SIGTERM'));
+  hostProcess.on('SIGINT', () => shutdown('SIGINT'));
 };
