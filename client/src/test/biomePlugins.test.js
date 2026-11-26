@@ -6,7 +6,7 @@ import { expect, it } from 'vitest';
 
 const CLIENT_ROOT = resolve(import.meta.dirname, '../..');
 
-it('reports browser bindings, view timers, and raw formats only in code', () => {
+it('lints browser bindings, view timers, raw formats, and bare click targets', () => {
   const root = mkdtempSync(join(tmpdir(), 'portos-biome-plugins-'));
   try {
     for (const name of readdirSync(CLIENT_ROOT)) {
@@ -33,6 +33,8 @@ it('reports browser bindings, view timers, and raw formats only in code', () => 
 
     const source = [
       ...violations,
+      '<div onClick={update}>Click</div>;',
+      '<tr onClick={update}><td>Click</td></tr>;',
       'const { fetch: load } = window;',
       'const timerId = setTimeout(update, 100);',
       'formatPercent(amount);',
@@ -52,7 +54,8 @@ it('reports browser bindings, view timers, and raw formats only in code', () => 
 
     const biome = join(CLIENT_ROOT, 'node_modules', '@biomejs', 'biome', 'bin', 'biome');
     const result = spawnSync(process.execPath, [
-      biome, 'lint', '--only=plugin', '--reporter=json', 'src/components/probe.jsx',
+      biome, 'lint', '--only=plugin', '--only=lint/a11y/useKeyWithClickEvents',
+      '--reporter=json', 'src/components/probe.jsx',
     ], { cwd: root, encoding: 'utf8' });
 
     expect(result.error).toBeUndefined();
@@ -60,7 +63,10 @@ it('reports browser bindings, view timers, and raw formats only in code', () => 
     const { diagnostics } = JSON.parse(result.stdout);
     expect(diagnostics.map(({ category, severity, location }) => [
       category, severity, location?.start?.line,
-    ])).toEqual(violations.map((_, index) => ['plugin', 'error', index + 1]));
+    ])).toEqual([
+      ...violations.map((_, index) => ['plugin', 'error', index + 1]),
+      ['lint/a11y/useKeyWithClickEvents', 'error', violations.length + 1],
+    ]);
   } finally {
     rmSync(root, { recursive: true, force: true });
   }
