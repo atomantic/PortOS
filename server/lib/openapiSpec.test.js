@@ -153,9 +153,8 @@ describe('buildInternalOpenApiSpec', () => {
     expect(appLogs.responses[400]['x-portos-error-codes']).toEqual(['MISSING_PROCESS', 'INVALID_PROCESS_NAME']);
   });
 
-  it('documents 422 and 403 refusal responses on CoS tool call, voice synthesize, and sdapi endpoints', () => {
+  it('documents refusal responses on voice synthesize and sdapi endpoints', () => {
     const spec = buildInternalOpenApiSpec({}, {});
-    expect(spec.paths['/api/cos/tools/call'].post.responses[422]).toBeDefined();
     expect(spec.paths['/api/voice/public/synthesize'].post.responses[403]).toMatchObject({
       'x-portos-error-codes': ['HOST_CONTROL_FORBIDDEN'],
     });

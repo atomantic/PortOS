@@ -129,15 +129,6 @@ router.post('/:id/characters/differentiate-cast', asyncHandler(async (req, res) 
   res.json(result);
 }));
 
-// Deterministic migration for legacy canon entries whose image-ready `prompt`
-// was persisted but whose canonical description field was left blank. This is
-// fill-blanks-only, respects locks, and makes no LLM call.
-router.post('/:id/canon/backfill-descriptions', asyncHandler(async (req, res) => {
-  const result = await canonSvc.backfillCanonDescriptionsFromPrompts(req.params.id)
-    .catch((err) => { throw mapServiceError(err); });
-  res.json(result);
-}));
-
 // Cross-reference: per-canon-entry usage across the universe's linked series.
 // Read-only aggregation; no LLM calls, no writes. Surfaces which series + how
 // many issues each character / place / object appears in, so the user can

@@ -7,7 +7,6 @@ import gitRoutes from './git.js';
 vi.mock('../services/git/status.js', () => ({
   getStatus: vi.fn().mockResolvedValue({ files: [] }),
   getDiff: vi.fn().mockResolvedValue(''),
-  getCommits: vi.fn().mockResolvedValue([]),
   stageFiles: vi.fn().mockResolvedValue(undefined),
   unstageFiles: vi.fn().mockResolvedValue(undefined),
   commit: vi.fn().mockResolvedValue({ sha: 'abc123' }),
@@ -94,7 +93,6 @@ describe('git routes — workspace root validation', () => {
     it.each([
       ['POST /status', '/status', { path: '/etc/passwd' }],
       ['POST /diff', '/diff', { path: '/etc' }],
-      ['POST /commits', '/commits', { path: '/etc' }],
       ['POST /push', '/push', { path: '/etc' }],
       ['POST /rebase-push', '/rebase-push', { path: '/etc' }],
       ['POST /info', '/info', { path: '/etc' }],
@@ -118,7 +116,6 @@ describe('git routes — workspace root validation', () => {
     it.each([
       ['POST /status', '/status', { path: '/Users/me/project' }],
       ['POST /diff', '/diff', { path: '/Users/me/project' }],
-      ['POST /commits', '/commits', { path: '/Users/me/project' }],
       ['POST /push', '/push', { path: '/Users/me/project' }],
       ['POST /rebase-push', '/rebase-push', { path: '/Users/me/project' }],
       ['POST /info', '/info', { path: '/Users/me/project' }],
@@ -556,7 +553,6 @@ describe('git routes — body validation (#9154)', () => {
     ['/diff', { staged: 'true' }],
     ['/diff', { staged: 1 }],
     ['/remote-branches', { force: 'false' }],
-    ['/commits', { limit: '5' }],
     ['/commit', { message: ['a'] }],
   ])('POST %s rejects wrongly typed %j', async (route, extra) => {
     const res = await request(makeApp()).post(`/api/git${route}`).send({ path: P, ...extra });

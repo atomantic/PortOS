@@ -14,14 +14,9 @@ review those before sharing a package. Selected external audio is declared but
 its bytes are not included. Procedural Web Audio is declared as live sound with
 no offline soundtrack. Unrecorded seed and execution settings remain `null`.
 
-`POST /api/code-animation/packages/validate` accepts the package directly as its
-JSON body. It returns `{ schemaVersion, revisionHash, renderer, fileCount,
-totalBytes, executed: false }` or a 400 validation error. This is an integrity
-check: it does not stage or execute code, install dependencies, call a provider,
-create a project, or modify a saved animation. A valid Blender package does not
-establish Blender readiness, code safety, a rendered result, or passing review.
-Durable production import, execution, and rendering are separate implementation
-slices of #9383.
+Production import validates package integrity before staging source. A valid
+package does not establish Blender readiness, code safety, a rendered result,
+or passing review.
 
 ## Version-1 envelope
 

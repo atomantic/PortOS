@@ -174,8 +174,6 @@ const routes = [
   ['/api/logs/portos-server?follow=true', effects.spawnPm2],
   ['/api/browser/logs', effects.getBrowserLogs],
   ['/api/browser/config', effects.getBrowserConfig],
-  ['/api/browser/process', effects.getBrowserProcess],
-  ['/api/browser/version', effects.getBrowserVersion],
   ['/api/apps/app-001/logs', effects.getLogs],
   ['/api/update/software/homebrew?fresh=1', effects.getHomebrewStatus],
   ['/api/git/submodules/status', effects.getSubmoduleOverview],

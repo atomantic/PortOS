@@ -127,7 +127,6 @@ Every mounted API prefix (see `server/index.js` for the authoritative list). Eac
 | `/api/rapid-reader` | Rapid reader library and Accelerando source cache |
 | `/api/palette` | ⌘K command palette manifest + actions |
 | `/api/dashboard/layouts` | Dashboard widget layouts |
-| `/api/dashboard/daily-actions` | Dashboard daily action tracking |
 | `/api/media/collections`, `/api/media/annotations`, `/api/media/sketches` | Media library collections/annotations/sketches. Operators can rebuild missing memberships with `POST /auto-organize`. `GET /:id/primary` lists eligible machines and run status; `POST /:id/primary` `{ instanceId }` saves a primary and consolidates in the background. One-time ids save nothing: `unsorted` (unfiled gallery) and `shared-media` (files on 2+ machines). |
 | `/api/media/holders` | Which machines hold each media file (`GET`) and Make primary (`POST /primary` `{ kind, filename, instanceId }`): keep that holder's copy and release the others |
 | `/api/media/usages` | Where each media file is used (`GET`): `{ items: { '<kind>:<ref>': [{ source, label, id, title, role, href }] } }`. `DELETE /api/image-gen/:filename` and `DELETE /api/video-gen/history/:id` refuse a used file with `409 MEDIA_IN_USE` (usages in `context.usages`) unless `?force=1` |
@@ -211,7 +210,7 @@ Every mounted API prefix (see `server/index.js` for the authoritative list). Eac
 | `/api/threejs-models` | Procedural Three.js models |
 | `/api/html-pages` | HTML Pages bench for installed models, downloaded MTPLX packs, API providers, and tool-free CLIs including local headless OpenCode MTPLX. Provider routes retain model and effort. Ineligible routes return `409` on start or resume. Download saved pages from `GET /runs/:id/pages/:index/file` or get their local path from `…/path`. |
 | `/api/film-styles` | Read-only film style grammar catalog: picker list (`GET /`), full grammar record (`GET /:id`) and rendered prompt-section preview (`GET /:id/prompt?parts=motion,camera`) |
-| `/api/code-animation` | Code Animation: LLM-written briefs, prompt building (a `baseJobId` forks a finished animation: its HTML rides the prompt as the cut to extend, refused whole above `baseHtmlMax`), persistent jobs gallery with poster thumbnails (`GET`/`POST /jobs/:id/poster`; captured in the jailed preview browser); `DELETE /jobs/:id` moves a finished item's HTML and poster to the system Trash, then removes it), generated HTML retrieval, frame-exact MP4 export (`POST /:id/export` → HTML-composition media job), a generated soundtrack for a finished animation (`POST /:id/soundtrack` → one local music-engine render at the film length onto a Music-library track that becomes the job audio; `POST /:id/soundtrack/track` returns that track, created on first use, for a coded score saved with `POST /api/music/code` + the track's code-take routes), the vendored three.js modules the `three` renderer's preview inlines (`GET /vendor/three`; the export stages the same files, hashed, beside the page), portable source download (`GET /:id/package`), and data-only package validation (`POST /packages/validate`; [contract](CODE_ANIMATION_PACKAGES.md)) |
+| `/api/code-animation` | Code Animation: LLM-written briefs, prompt building (a `baseJobId` forks a finished animation: its HTML rides the prompt as the cut to extend, refused whole above `baseHtmlMax`), persistent jobs gallery with poster thumbnails (`GET`/`POST /jobs/:id/poster`; captured in the jailed preview browser); `DELETE /jobs/:id` moves a finished item's HTML and poster to the system Trash, then removes it), generated HTML retrieval, frame-exact MP4 export (`POST /:id/export` → HTML-composition media job), a generated soundtrack for a finished animation (`POST /:id/soundtrack` → one local music-engine render at the film length onto a Music-library track that becomes the job audio; `POST /:id/soundtrack/track` returns that track, created on first use, for a coded score saved with `POST /api/music/code` + the track's code-take routes), the vendored three.js modules the `three` renderer's preview inlines (`GET /vendor/three`; the export stages the same files, hashed, beside the page), and portable source download (`GET /:id/package`; [contract](CODE_ANIMATION_PACKAGES.md)) |
 | `/api/code-animation/execution` | Code Animation contained production execution: platform sandbox and lane readiness (`GET /`), operator-owned tool paths (`PUT /tools`, host control) and the adversarial containment check (`POST /probe`, host control; re-run automatically after a restart for an unchanged, already checked configuration) ([contract](CODE_ANIMATION_PACKAGES.md#contained-production-execution)) |
 | `/api/image-to-3d` | Image-to-3D conversion |
 | `/api/blender-models` | [Blender Models](features/blender-models.md): source, builds, publish, GLB |
@@ -219,7 +218,6 @@ Every mounted API prefix (see `server/index.js` for the authoritative list). Eac
 | `/api/privacy` | PII vault / trusted-org / broker opt-out |
 | `/api/shell` | Browser PTY shells |
 | `/api/iterm` | iTerm2 view capability status (`GET /status` → `{ state, detail }`); sessions themselves travel over the `iterm:*` socket events ([ITERM.md](./ITERM.md)) |
-| `/api/ports` | Port scan / allocation |
 | `/api/logs` | PM2 process logs |
 | `/api/scaffold` | App scaffolding |
 | `/api/usage` | Provider usage / quota |
@@ -228,7 +226,7 @@ Every mounted API prefix (see `server/index.js` for the authoritative list). Eac
 | `/api/autofix` | Autofixer metrics |
 | `/api/uploads` | Generic uploads |
 | `/api/agents` | Agent process management |
-| `/api/agents/personalities`, `/api/agents/accounts`, `/api/agents/schedules`, `/api/agents/activity` | Agent personalities, platform accounts, automation schedules and activity feed |
+| `/api/agents/personalities`, `/api/agents/accounts`, `/api/agents/schedules`, `/api/agents/activity/timeline` | Agent personalities, platform accounts, automation schedules and activity feed |
 | `/api/agents/tools/moltworld`, `/api/agents/tools/moltworld/ws` | MoltWorld agent tools and WebSocket |
 | `/api/cos` | Chief of Staff |
 | `/api/memory` | Memory CRUD / search |

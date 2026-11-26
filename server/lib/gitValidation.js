@@ -38,10 +38,6 @@ export const gitBranchComparisonBodySchema = z.object({
   head: gitRefNameSchema.nullish(),
 });
 export const gitDiffBodySchema = z.object({ path: gitPathField, staged: z.boolean().default(false) });
-export const gitCommitsBodySchema = z.object({
-  path: gitPathField,
-  limit: z.number().int().min(1).max(100).default(10),
-});
 export const gitRemoteBranchesBodySchema = z.object({ path: gitPathField, force: z.boolean().default(false) });
 export const gitDeleteBranchBodySchema = z.object({
   path: gitPathField,

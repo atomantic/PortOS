@@ -1246,6 +1246,14 @@ describe('CI test impact planner', () => {
   // One row per structural trigger in structuralTestsFor. Each diff pairs the
   // trigger with an unrelated path, so a rule that only fires when every changed
   // file matches (`.some` → `.every`) drops its guard and fails here.
+  it('selects API route parity when operator tooling changes', () => {
+    const changed = 'scripts/portos-acp.js';
+    const guard = 'server/lib/apiRouteParity.test.js';
+    const plan = buildCiTestPlan([changed], { trackedFiles: [...TRACKED, changed, guard] });
+    expect(plan.full).toBe(false);
+    expect(plan.server.files).toContain(guard);
+  });
+
   const STRUCTURAL_GUARD_ROWS = [
     { changed: 'server/sockets/chat.js', runner: 'server', guards: ['server/sockets/asyncHandlerGuard.test.js'] },
     { changed: 'server/lib/bufferedSpawn.js', runner: 'server', guards: ['server/lib/moduleSummaries.test.js'] },

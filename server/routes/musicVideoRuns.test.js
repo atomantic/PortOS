@@ -25,14 +25,12 @@ vi.mock('../services/musicVideo/autoReviewService.js', () => ({
 }));
 vi.mock('../services/musicVideo/productionService.js', () => ({
   startProduction: vi.fn(),
-  getProduction: vi.fn(),
   resumeProduction: vi.fn(),
   stopProduction: vi.fn(),
   cancelProduction: vi.fn(),
 }));
 vi.mock('../services/musicVideo/autonomousService.js', () => ({
   startAutonomousVideo: vi.fn(),
-  getAutonomousRun: vi.fn(),
   resumeAutonomousVideo: vi.fn(),
   stopAutonomousVideo: vi.fn(),
   cancelAutonomousVideo: vi.fn(),
@@ -110,10 +108,6 @@ const cases = [
     args: [projectId, { ...productionPlan, reviewer: reviewerPin }], conflict: 'PRODUCTION_IN_PROGRESS',
   },
   {
-    method: 'get', path: `/${projectId}/production-runs/${productionId}`, service: production.getProduction,
-    args: [projectId, productionId],
-  },
-  {
     method: 'post', path: `/${projectId}/production-runs/${productionId}/resume`, service: production.resumeProduction,
     body: { acceptBasis: true, stopBefore: null }, invalid: { acceptBasis: 'yes' },
     args: [projectId, productionId, { acceptBasis: true, stopBefore: null }], conflict: 'PRODUCTION_BASIS_CHANGED',
@@ -131,7 +125,6 @@ const cases = [
     body: { ...autonomousStart, prompt: `  ${autonomousStart.prompt}  `, password }, invalid: { prompt: '   ' },
     args: [autonomousStart, { autoApproveAuthorized: false }], conflict: 'NO_SONG',
   },
-  { method: 'get', path: `/${projectId}/autonomous`, service: autonomous.getAutonomousRun, args: [projectId] },
   {
     method: 'post', path: `/${projectId}/autonomous/resume`, service: autonomous.resumeAutonomousVideo,
     body: { ...autonomousResume, password }, invalid: { lyrics: false },

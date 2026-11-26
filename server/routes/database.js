@@ -3,7 +3,7 @@ import { asyncHandler } from '../lib/errorHandler.js';
 import { validateRequest } from '../lib/validateRequest.js';
 import * as dbAdmin from '../services/dbAdmin.js';
 import {
-  databaseSwitchSchema, databaseBackendSchema, databaseExportSchema, databaseMaintenancePreflightSchema,
+  databaseBackendSchema, databaseExportSchema, databaseMaintenancePreflightSchema,
   databaseMaintenanceCutoverSchema, databaseMaintenanceRecoverSchema
 } from '../lib/databaseValidation.js';
 
@@ -50,12 +50,6 @@ router.post('/maintenance/recover', asyncHandler(async (req, res) => {
 // GET /api/database/status — current mode, connectivity, row counts, resource stats
 router.get('/status', asyncHandler(async (_req, res) => {
   res.json(await dbAdmin.getStatus());
-}));
-
-// POST /api/database/switch — switch mode and optionally migrate
-router.post('/switch', asyncHandler(async (req, res) => {
-  const options = validateRequest(databaseSwitchSchema, req.body);
-  res.json(await dbAdmin.switchDatabase(options, req.app.get('io')));
 }));
 
 // POST /api/database/sync — copy data from active to non-active backend

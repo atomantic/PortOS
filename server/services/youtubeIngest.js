@@ -52,7 +52,6 @@ import {
   readJSONFile,
   renameGuarded,
   shortId,
-  tryReadFile,
   unlinkGuarded,
 } from '../lib/fileUtils.js';
 import { withBackupAssetPublication } from '../lib/backupSnapshotBoundary.js';
@@ -210,13 +209,6 @@ export async function listIngests({ limit, cursor } = {}) {
 export async function getIngest(videoId) {
   const index = await loadIndex();
   return index[videoId] || null;
-}
-
-/** The stored transcript markdown, or null when this video has none. */
-export async function getTranscript(videoId) {
-  const record = await getIngest(videoId);
-  if (!record?.transcript?.path) return null;
-  return tryReadFile(record.transcript.path);
 }
 
 /**

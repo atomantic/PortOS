@@ -176,9 +176,9 @@ The escape hatch is **guarded from bitrot by the test suite** (tests boot with `
 ### Moving between Docker and native
 
 Use **Settings → Database** for coordinated backend migration, including
-progress and recovery of an interrupted cutover. The legacy switch/migration
-requests and `scripts/db.sh migrate`, `use-native`, and `use-docker` still refuse
-before copying data or changing mode. Those former paths could accept writes
+progress and recovery of an interrupted cutover. The legacy `scripts/db.sh migrate`,
+`use-native`, and `use-docker` commands refuse before copying data or changing
+mode. Former switch and migration paths could accept writes
 after the dump snapshot and strand them on the source; changing `.env` also
 leaves the running server connected to its original pool.
 

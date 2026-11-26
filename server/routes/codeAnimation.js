@@ -14,7 +14,6 @@
  *   GET  /api/code-animation/generate/:id   poll a job (html once completed)
  *   POST /api/code-animation/:id/export     queue a frame-exact MP4 render → 202 media job
  *   GET  /api/code-animation/:id/package    download a portable source package
- *   POST /api/code-animation/packages/validate   check package data/integrity only
  *   POST /api/code-animation/projects/:id/stage-runs            start a bounded production run → 202
  *   POST /api/code-animation/projects/:id/stage-runs/:runId/cancel   stop an active run
  *   GET  /api/code-animation/projects/:id/acceptance      accepted output + freshness + run comparison
@@ -59,7 +58,7 @@ import { getBlenderStarterPackage } from '../services/codeAnimation/blenderStart
 import { lastCheckedBlenderVersion } from '../services/codeAnimation/execution.js';
 import { exportCodeAnimationPackage } from '../services/codeAnimation/package.js';
 import { readThreeVendor } from '../services/codeAnimation/threeVendor.js';
-import { codeAnimationPackageSchema, summarizeCodeAnimationPackage } from '../lib/codeAnimationPackage.js';
+import { codeAnimationPackageSchema } from '../lib/codeAnimationPackage.js';
 import { codeAnimationProjectSchema, codeAnimationProjectPatchSchema, codeAnimationStageRunSchema } from '../lib/codeAnimationProjects.js';
 import { acceptProductionOutput, getProductionAcceptance } from '../services/codeAnimation/acceptance.js';
 import { startProductionStageRun, cancelProductionStageRun } from '../services/codeAnimation/stages.js';
@@ -213,11 +212,6 @@ router.get('/packages/starter/blender', asyncHandler(async (_req, res) => {
   const version = lastCheckedBlenderVersion();
   res.json(await getBlenderStarterPackage(version ? { version } : {}));
 }));
-
-router.post('/packages/validate', (req, res) => {
-  const pkg = validateRequest(codeAnimationPackageSchema, req.body);
-  res.json(summarizeCodeAnimationPackage(pkg));
-});
 
 router.get('/:id/package', asyncHandler(async (req, res) => {
   const { id } = validateRequest(exportParamsSchema, req.params);

@@ -89,13 +89,5 @@ first. `catalog:primitive-changed` refreshes ownership and membership views.
 
 ## Canon description repair
 
-`POST /api/universe-builder/:id/canon/backfill-descriptions` repairs legacy canon
-entries using their existing image prompts. It accepts no body and returns
-`{ universe, report }`, where `report` includes `filled`, `byKind`
-(`character`, `place`, `object`), `alreadyDescribed`, `missingPrompt`, and
-`skippedLocked`. It fills blank character `physicalDescription` or place/object
-`description` fields, trims and bounds prompt text, and preserves authored
-(including legacy character) descriptions and locked entries. No AI provider is
-called. The normal instance authentication gate applies; missing universes return
-404. Migration 422 applies this repair once across live universes on upgrade;
-this endpoint remains available for explicit agent or operator repairs afterward.
+Migration 422 fills blank descriptions from existing image prompts. It
+preserves authored descriptions and locked entries and makes no AI calls.

@@ -20,11 +20,13 @@
  */
 
 import { describe, it, expect } from 'vitest';
+import { parse } from '@babel/parser';
+import { readFileSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { getApiRouteCatalog } from './apiRouteGraph.js';
 import { findUncalledServerRoutes, findUnmountedClientPaths, scanClientApiPaths } from './clientApiPaths.js';
-import { ROUTE_CALLER_CLASSES, UNCALLED_ROUTE_ALLOWLIST } from './apiRouteCallerAllowlist.js';
+import { OPERATOR_SCRIPT_CALLER_FILES, ROUTE_CALLER_CLASSES, UNCALLED_ROUTE_ALLOWLIST } from './apiRouteCallerAllowlist.js';
 
 const REPO_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..');
 
@@ -66,6 +68,44 @@ const routeKey = ({ method, path }) => `${method} ${path}`;
 const expandRoutes = (routes) => routes.flatMap(({ path, methods }) =>
   methods.map((method) => ({ path, method })));
 const covers = (entry, route) => entry === route.path || entry === routeKey(route);
+
+// These are the transports actually used by the listed scripts. Parse their call
+// expressions so comments, prose, and standalone path constants cannot pass.
+const propertyValue = (object, key) => object?.properties?.find((property) =>
+  !property.computed && (property.key?.name ?? property.key?.value) === key)?.value;
+
+function scriptRequestKey({ callee, arguments: [input, options] }) {
+  const stream = callee.object?.name === 'client' && callee.property?.name === 'stream';
+  const request = ['read', 'fetch'].includes(callee.name)
+    || (callee.operator === '??' && callee.right.name === 'requestApi');
+  if (!stream && !request) return null;
+
+  const url = stream ? propertyValue(input, 'path') : input;
+  const method = stream ? propertyValue(input, 'method')?.value
+    : options ? propertyValue(options, 'method')?.value : 'GET';
+  const urlText = url?.type === 'TemplateLiteral'
+    ? url.quasis.map((part) => part.value.cooked).join(':p').replace(/^:p(?=\/api\/)/, '')
+    : url?.value;
+  if (typeof urlText !== 'string' || !urlText.startsWith('/api/') || typeof method !== 'string') return null;
+  return `${method.toUpperCase()} ${urlText.split(/[?#]/, 1)[0]}`;
+}
+
+function scriptRequestKeys(source) {
+  const keys = new Set();
+  function visit(node) {
+    if (!node?.type) return;
+    if (node.type === 'CallExpression') {
+      const key = scriptRequestKey(node);
+      if (key) keys.add(key);
+    }
+    for (const child of Object.values(node)) {
+      if (Array.isArray(child)) child.forEach(visit);
+      else visit(child);
+    }
+  }
+  visit(parse(source, { sourceType: 'module' }).program);
+  return keys;
+}
 
 const describeSite = (site) => `${site.file}: ${site.expression}`;
 const describeSitePath = (site) => `${describeSite(site)} → ${site.path}`;
@@ -127,6 +167,28 @@ describe('client ↔ server API route parity', () => {
       'methods covered by multiple entries').toEqual([]);
     expect(catalog.routes.filter((route) => allowlistEntries.some((entry) => covers(entry, route)) && !uncalled.has(routeKey(route))).map(routeKey),
       'allowlisted methods a client now calls').toEqual([]);
+  });
+
+  it('requires a first-party script request with the matching HTTP method for each operator-script route', () => {
+    const requests = new Set(OPERATOR_SCRIPT_CALLER_FILES.flatMap((file) =>
+      [...scriptRequestKeys(readFileSync(path.join(REPO_ROOT, file), 'utf8'))]));
+    const uncovered = catalog.routes
+      .filter((route) => UNCALLED_ROUTE_ALLOWLIST['operator-script'].some((entry) => covers(entry, route)))
+      .map(routeKey)
+      .filter((key) => !requests.has(key.replace(/\/:[\w]+/g, '/:p')));
+    expect(uncovered, 'cite and register a calling script or remove the unused route').toEqual([]);
+  });
+
+  it('does not treat prose, comments, URL values or the wrong HTTP method as script callers', () => {
+    const keys = scriptRequestKeys([
+      "// fetch('/api/probe/ignored');",
+      'const docs = "fetch(\'/api/probe/quoted\')";',
+      "const unused = '/api/probe/unused';",
+      "fetch('/api/probe/unknown-method', { method });",
+      'fetch(`${base}/api/probe/${encodeURIComponent(id)}`, { method: "POST" });',
+    ].join('\n'));
+    expect([...keys]).toEqual(['POST /api/probe/:p']);
+    expect(keys.has('GET /api/probe/:p')).toBe(false);
   });
 
   // ── bypass probes ─────────────────────────────────────────────────────────

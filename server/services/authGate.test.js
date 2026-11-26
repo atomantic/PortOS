@@ -930,7 +930,6 @@ describe('host control by default on /api writes (#16018)', () => {
       '/api/cos/gsd/projects/example-app',
       '/api/cos/gsd/projects/example-app/phases',
       '/api/cos/gsd/projects/example-app/documents/ROADMAP.md',
-      '/api/ports/scan',
       '/api/commands/processes',
       '/api/github/accounts/example-account/status',
       '/api/apps/example-app/issues',

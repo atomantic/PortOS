@@ -49,7 +49,7 @@ vi.mock('../services/universeCanon.js', () => ({
   DESC_LIMIT: { character: 4000, place: 4000, object: 4000 },
   extractCanonFromProse: effects.extract, refineUniverseCharacter: effects.refineCharacter,
   differentiateUniverseCast: effects.differentiate, applyCanonImageCorrection: effects.applyImage,
-  backfillCanonDescriptionsFromPrompts: effects.backfill, setCanonEntryLock: effects.lock,
+  setCanonEntryLock: effects.lock,
 }));
 vi.mock('../services/universeCharacterExpand.js', () => ({ expandUniverseCharacter: effects.expandCharacter }));
 vi.mock('../services/universeCastIntegrity.js', () => ({
@@ -126,7 +126,6 @@ describe('Universe Builder agent workflows behind the default-deny gate (#10669,
       ['post', `${base}/merge`, merge, effects.merge, 200],
       ['post', `${world}/canon/character/example-character/apply-image-correction`, { description: 'Example corrected', imageFilename: 'example.png' }, effects.applyImage, 200],
       ['post', `${character}/augment/apply`, { fields: [{ field: 'motivations', value: 'Example revised' }] }, effects.applyAugment, 200],
-      ['post', `${world}/canon/backfill-descriptions`, {}, effects.backfill, 200],
       ['patch', `${world}/canon/character/example-character/lock`, { locked: true }, effects.lock, 200],
     ] });
     expect(effects.expand).toHaveBeenLastCalledWith(expect.objectContaining(picker));

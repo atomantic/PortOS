@@ -141,25 +141,6 @@ describe('database route boundary', () => {
   });
 });
 
-// Regression: an API migration must not start the unfenced snapshot/cutover,
-// even for an older client that still exposes the migration button.
-describe('database migration admission', () => {
-  it.each([['docker', true], ['native', true], ['docker', false], ['native', false]])('refuses repeated cutovers to %s (migrate=%s) without side effects', async (target, migrate) => {
-    vi.clearAllMocks();
-    const app = makeApp();
-    for (let attempt = 0; attempt < 2; attempt++) {
-      const res = await request(app).post('/api/database/switch').send({ target, migrate });
-      expect(res.status).toBe(409);
-      expect(res.body.code).toBe('DATABASE_CUTOVER_UNAVAILABLE');
-      expect(res.body.error).toMatch(/coordinated shutdown and restart/);
-    }
-    expect(execFile).not.toHaveBeenCalled();
-    expect(spawn).not.toHaveBeenCalled();
-    expect(query).not.toHaveBeenCalled();
-    expect(checkHealth).not.toHaveBeenCalled();
-  });
-});
-
 // Regression: raw shell admin operations bypass the pooled DB write fence.
 // Exercise the real durable journal through HTTP, without a live database.
 describe('database admin maintenance admission', () => {
@@ -170,7 +151,6 @@ describe('database admin maintenance admission', () => {
     const operation = journal.begin({ source, target: { ...source, mode: 'docker', port: 5561 } });
     try {
       for (const [route, body] of [
-        ['switch', { target: 'docker', migrate: true }],
         ['sync', {}], ['start', { backend: 'docker' }],
         ['stop', { backend: 'native' }], ['destroy', { backend: 'docker' }],
         ['setup-native', {}], ['fix', {}],
@@ -1030,7 +1010,6 @@ describe('POST /api/database/sync endpoint safety', () => {
     const pending = request(app).post('/api/database/sync').send({}).then(res => res);
     await vi.waitFor(() => expect(finishProbe).toBeTypeOf('function'));
     for (const [route, body] of [
-      ['switch', { target: 'docker', migrate: false }],
       ['destroy', { backend: 'docker' }],
       ['sync', {}],
       ['export', {}],
@@ -1064,7 +1043,6 @@ describe('database admin routes host-control gating', () => {
     ['export', {}],
     ['sync', {}],
     ['fix', {}],
-    ['switch', { target: 'docker', migrate: false }],
   ])('refuses POST /api/database/%s without host control and runs nothing', async (route, body) => {
     const res = await request(gated).post(`/api/database/${route}`).send(body);
     expect(res.status).toBe(403);

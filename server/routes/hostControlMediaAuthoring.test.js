@@ -51,7 +51,6 @@ vi.mock('../services/musicCode.js', () => ({
 vi.mock('../services/musicVideo/autonomousService.js', () => ({
   startAutonomousVideo: vi.fn(async () => ({ status: 'running' })),
   resumeAutonomousVideo: vi.fn(async () => ({ status: 'running' })),
-  getAutonomousRun: vi.fn(async () => ({ status: 'paused' })),
   stopAutonomousVideo: vi.fn(async () => ({ status: 'stopped' })),
   cancelAutonomousVideo: vi.fn(async () => ({ status: 'cancelled' })),
 }));

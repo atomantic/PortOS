@@ -52,8 +52,6 @@ step; the server derives and caches both inventories from source.
 | Method | Endpoint | Request and response behavior |
 |---|---|---|
 | `GET` | `/api/cos/tools` | Query: `scope=all\|agent\|mind\|ui\|voice`, optional `intent` (trimmed, ≤500 characters), and `format=portos\|openai\|anthropic\|mcp`. Mind and agent scopes refresh saved recipe availability. Returns a catalog with an `ETag`; recipe revision/archive/restore changes alter it, and `If-None-Match` returns `304`. |
-| `POST` | `/api/cos/tools/call` | Body is a strict `portos_tool_call`. Optional `Idempotency-Key` must equal `requestId`. Authority is derived as the HTTP `ui` principal from the server auth context. |
-| `GET` | `/api/cos/tools/calls/:requestId` | Returns the retained normalized result for a process-local call, or `404 TOOL_CALL_NOT_FOUND`. Retention is in memory, so callers must not treat this as durable job history. |
 
 The semantic registry is not a route proxy. A caller supplies a catalog tool
 name and typed arguments; it cannot supply a URL, route, shell command, SQL
@@ -71,7 +69,7 @@ The transport accepts loopback socket addresses only and rejects a non-loopback
 `Origin`. The normal PortOS authentication gate still applies when an instance
 password is configured. Context tools remain read-only. Semantic actions and
 saved recipe invocation are separate default-off grants and execute through
-the same registry as the HTTP and Persistent Mind paths.
+the same registry as Persistent Mind.
 
 ### Persistent Mind authority inventory
 
