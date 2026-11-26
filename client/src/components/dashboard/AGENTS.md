@@ -1,7 +1,5 @@
 # Dashboard Widgets & Layouts (`client/src/components/dashboard/`)
 
-See [layout maintenance](../../../../docs/INSTRUCTION_RULE_DETAIL.md#dashboard-layout-maintenance) for implementation details.
-
 Register widgets in `widgetRegistry.jsx`. The dashboard renders the active layout. Built-ins seed on first read, cannot be deleted and get the same dynamic palette commands as custom layouts.
 
 **Grid model.** Store 12-column placement with `{ id, x, w, order, h?, fixedH? }`. Pack by `order`, or synthesize an empty grid from widget defaults. Below 640px container width sort by `order`, then `x`. Keep legacy `y` reads. New seed migrations write `order`.
@@ -10,7 +8,7 @@ Register widgets in `widgetRegistry.jsx`. The dashboard renders the active layou
 
 **Arrange mode (desktop).** Each cell gets move (top-right) and resize (bottom-right) handles. A move snaps to columns and re-inserts at the rank its drop position implies (`rankAtPixel` → `insertAtOrder`), renumbering `order` densely; Save persists to the layout's `grid`.
 
-- Share placement between pointer and keyboard. Enter/Space lifts or drops, arrows step and Escape restores. Horizontal keyboard steps keep order. Announce steps and expose grabbed state.
+- Share placement between pointer and keyboard. Enter/Space lifts or drops, arrows step and Escape restores. Horizontal keyboard steps keep order. Announce steps via `role="status"` and expose grabbed state via `aria-pressed`.
 - **A keyboard grab is modal**: anything that ends Arrange mode under it (Save/Cancel, a rotation across the breakpoint) must cancel it, since unmounting a focused handle fires no blur. One effect watching `editable`/`isMobile` owns that.
 
 **Mobile reordering.** Free-form move/resize is desktop-only; on mobile, edit mode shows one reorder handle backed by `client/src/lib/dnd/` (`PointerSensor` + `KeyboardSensor` + `verticalListSortingStrategy`, as in `cos/tabs/TasksTab.jsx`). Never hand-roll a pointer gesture for it. Use `dndTransformToCss` from `client/src/lib/dndTransform.js`, never `@dnd-kit/utilities`, and keep `touch-action: none` on the handle. On drop, `onDragEnd` re-flows the grid through `reflowToOrder` (keeping each `w`/`h`), which re-packs the desktop layout into row flow; the edit-mode hint says so.

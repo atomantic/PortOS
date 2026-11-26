@@ -4,8 +4,8 @@ Root instructions also apply.
 
 ## Validation and schema parity
 
-- **Schema parity**: a new sanitizer, `createXxx` or payload field needs its Zod schema ([detail](../docs/INSTRUCTION_RULE_DETAIL.md#server-conventions)).
-- Validate all JSON mutation bodies with the domain Zod schema and `validateRequest` ([schema placement](../docs/INSTRUCTION_RULE_DETAIL.md#server-schema-validation)). Keep the raw/multipart allowance shrinking.
+- **Schema parity**: a new sanitizer, `createXxx` or payload field needs its Zod schema.
+- Validate JSON mutation bodies with their domain Zod schema and `validateRequest`. Use `schema.partial()` for partial updates and shared fragments from `lib/sharedSchemas.js`. Keep the raw/multipart allowance shrinking.
 - Validate the entire query on every method. Shared shapes live in `lib/queryValidation.js`.
 
 ## Offering models vs running them
@@ -30,34 +30,29 @@ Root instructions also apply.
 
 ## Tests and peer fan-out
 
-Record writes sync only via `recordEvents.js`; peer-sync suites use `mockNoPeers()` / `mockNoPeerSync()` ([detail](../docs/INSTRUCTION_RULE_DETAIL.md#server-conventions)).
+Record writes sync only via `recordEvents.js`. Suites reaching `peerSync.js` or `sharing/index.js` mock instances with `mockNoPeers()` and peer sync with `mockNoPeerSync()`, both from `server/lib/mockPathsDataRoot.js`. Test auto-subscription with `registerSubscriptionAdapter()` and reset it with `__resetSubscriptionAdapter()`.
 
 ## Import scoping
 
-Measure imports with `node scripts/lib/importReach.js <source>`. See [import scoping](../docs/INSTRUCTION_RULE_DETAIL.md#import-scoping).
+Measure imports with `node scripts/lib/importReach.js <source>`.
 
 - Import constants from their defining leaf and defer boot-only imports.
 - Dynamic imports still affect CI selection. Use shared leaves, registered hooks or late-bound services to cut those edges.
 - Use `import().then(...).catch(handler)` when outside an async scope.
-- **Import growth is base-relative**: narrow or defer, or raise `EXISTING_SUITE_GROWTH_LIMIT` on purpose ([detail](../docs/INSTRUCTION_RULE_DETAIL.md#server-conventions)).
+- **Import growth is base-relative.** Narrow or defer imports. If the limit needs to grow, raise `EXISTING_SUITE_GROWTH_LIMIT` in the same change and name the module that needs it.
 - Check for `vi.mock` before changing a barrel import specifier.
 
 ## Generated manifests
 
-See [manifest maintenance](../docs/INSTRUCTION_RULE_DETAIL.md#generated-manifests).
-
 - Derive cheap deterministic manifests on first use. Commit one only for expensive, nondeterministic or unavailable inputs.
 - Key shipped manifests by file and semantic identity. Prove position invariance with `shiftSourceText`.
 
-
 ## Prompt templates
 
-See [prompt and migration maintenance](../docs/INSTRUCTION_RULE_DETAIL.md#prompt-and-migration-maintenance).
-
-- Run `node scripts/regen-shipped-prompt-hashes.js` after template edits. Keep historical hashes and migrations intact.
-- Ship media model additions in `catalogDefaults.js` and updates through its compatibility chains.
+- Run `node scripts/regen-shipped-prompt-hashes.js` after template edits. Keep historical hashes and migrations intact. The hash-based upgrade preserves customizations.
+- Ship media models in `catalogDefaults.js`. For updates, match prior shipped values in `VIDEO_REGISTRY_UPGRADES` or the image backfill chain to preserve customizations.
 - Use an unused migration number after dependencies. Keep shipped filenames stable and retire only through `RETIRED_MIGRATIONS`.
 - Add new IDs to `data.reference/providers.json` and the toolkit sample. Decide compatibility for renames, removals and default changes.
-- Freeze migration transforms with pure helpers and top-level purge markers. Put additive DDL in `ensureSchema`.
+- Freeze migration transforms with `_lib.js` primitives or pure helpers. Keep purge markers top-level and put additive DDL in `ensureSchema`.
 - After prompt-default edits, run `node scripts/regen-prompt-integrity-snapshot.js`. Take the base snapshot on conflict and regenerate.
 - Classify new creative prompts in `server/lib/creativeLatitude.js` for visible IP latitude.

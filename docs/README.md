@@ -86,7 +86,6 @@ A living doc describes current behaviour and operator procedure; issue numbers, 
 | [features/artist-submission-profile.md](./features/artist-submission-profile.md) | Artist-curated bios, credits, statements and links that agents read when filling festival and distributor forms |
 | [features/music-renderer-benchmarks.md](./features/music-renderer-benchmarks.md) | Technical and full-length listening evidence for local music renderer profiles |
 | [CONTRIBUTING.md](./CONTRIBUTING.md) | Dev setup (PostgreSQL required), code conventions |
-| [INSTRUCTION_RULE_DETAIL.md](./INSTRUCTION_RULE_DETAIL.md) | Full wording of rules whose short form lives in the `AGENTS.md` files |
 | [LOCAL_REVIEW_LIFECYCLE.md](./LOCAL_REVIEW_LIFECYCLE.md) | Durable one-time pre-PR review, recovery and hosted-feedback continuation |
 | [CODE_REVIEW_DIAGNOSTICS.md](./CODE_REVIEW_DIAGNOSTICS.md) | Privacy-safe CLI deadline phases, process timing and a synthetic review probe |
 | [CLI_REVIEW_OUTCOMES.md](./CLI_REVIEW_OUTCOMES.md) | Reviewer tiers, provider pins and bounded, authenticated CLI health reports |

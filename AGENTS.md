@@ -55,7 +55,7 @@ Test at the highest practical public boundary. Use unit tests where they cheaply
 - **Auth**: an optional instance password (`server/services/auth.js`, `authGate.js`) gates `/api/*` and `/data/*` except `ALWAYS_PUBLIC_API_PATHS` in `server/lib/apiAccessPolicy.js` (`/api/auth/status`, `/api/auth/whoami`, `/api/auth/login`, `/api/auth/logout`, `/api/system/health`, `/api/eidoverse/travel/guest`).
 - **PortOS-spawned agents** authenticate with `PORTOS_API_TOKEN`: any `curl` against this install's API carries `-H "Authorization: Bearer ${PORTOS_API_TOKEN:-}"`; on `401 AUTH_REQUIRED`, check for a missing, expired or invalid token first. It is empty when no password is set and never given to a public-content review stage.
 - **Agents PortOS did not spawn** use `node scripts/portos-api.js …`; never ask for or type the instance password ([docs/AGENT_API_KEY.md](docs/AGENT_API_KEY.md)).
-- **HTTPS**: `npm run setup:cert` flips `:5555` to TLS with a loopback-only HTTP mirror on `:5553`. [Detail](docs/INSTRUCTION_RULE_DETAIL.md#authentication-and-https-detail).
+- **HTTPS**: `npm run setup:cert` flips `:5555` to TLS with a loopback-only HTTP mirror on `:5553`. See [ports](docs/PORTS.md).
 
 **Preserve delegated operator sessions** including verified `PORTOS_API_TOKEN`. Scoped peer credentials and network reachability grant no host access. Test unauthorized refusal and the authorized workflow.
 
@@ -70,9 +70,9 @@ Test at the highest practical public boundary. Use unit tests where they cheaply
 **Distribution model.** Support cross-install and cross-version compatibility:
 
 - **Never delete or skip migration/compatibility code because "there's only one install."** On-disk format changes need a migration in `scripts/migrations/`; seed files ship in `data.reference/`.
-- Derived migrations gate on the input and ship no output seed. Register outputs in `scripts/lib/migrationOwnedPaths.js`.
+- Derived migrations gate on the input and ship no output seed. Declare outputs in the migration's `OWNED_OUTPUT_PATHS` and register them in `scripts/lib/migrationOwnedPaths.js`.
 - Prompt-default changes bump the version via the integrity-snapshot regen; sync payloads stay version-gated.
-- **Never add `--force` to the server-side `gh repo sync`** (it discards fork commits). [Detail](docs/INSTRUCTION_RULE_DETAIL.md#distribution-model-detail).
+- **Never add `--force` to the server-side `gh repo sync`** (it discards fork commits). See [self-update](docs/SELF_UPDATE.md).
 
 **Keep the intentional dev DB fallback `portos`.** Production sets `PGPASSWORD`.
 
@@ -84,7 +84,7 @@ Test at the highest practical public boundary. Use unit tests where they cheaply
 
 ## AI Provider Usage Policy
 
-**No cold-bootstrap LLM calls.** Boot reads disk. User-triggered fills name provider/model. Never silently grow background batches. User-configured schedules and automations are the exception ([details](docs/INSTRUCTION_RULE_DETAIL.md#ai-provider-policy-detail)).
+**No cold-bootstrap LLM calls.** Boot reads disk. Unscheduled calls need a direct user action or explicit consent. Let users choose or decline the provider and model for fills. Replenish consumed items silently only within the existing batch size. User-configured schedules and automations may run automatically.
 
 **Send chosen model input as written.** Keep additions in labeled, openable chips and show/copy the exact sent prompt from the same server builder. Record exact input and additions for unattended runs. Count and refuse over-limit inputs. Correct generated text at the writer, never with a cleanup pass.
 
@@ -98,11 +98,11 @@ PortOS owns 5553–5569. Define ports in `ecosystem.config.cjs` (`PORTS`). Vite 
 
 ### Per-directory conventions
 
-Read the nested `AGENTS.md` (bridge `CLAUDE.md`) before editing `client/src`, `client/src/components/dashboard`, `server` or `server/lib/aiToolkit` (no imports out to other PortOS modules); API-provider agents get these files within a byte budget ([detail](docs/INSTRUCTION_RULE_DETAIL.md#agent-instruction-files)).
+Read the nested `AGENTS.md` (bridge `CLAUDE.md`) before editing `client/src`, `client/src/components/dashboard`, `server` or `server/lib/aiToolkit` (no imports out to other PortOS modules). API-provider agents also load these instructions within a 16 KiB root and 6 KiB per-file nested budget. Keep safety-critical rules in the root and task-specific procedures in skills.
 
 **Navigation**: a `<Route>` without a `NAV_COMMANDS` entry (`server/lib/navManifest.js`) is unreachable from ⌘K and voice; a toggle that arms background work reconciles at toggle time ([portos-add-page](.claude/skills/portos-add-page/SKILL.md)).
 
-**Slashdo**: `lib/slashdo` is a submodule exposed as `.claude/commands/do/`; `!read lib/<name>.md` means read `lib/slashdo/lib/<name>.md` ([rules](docs/INSTRUCTION_RULE_DETAIL.md#slashdo-read-resolution)).
+**Slashdo**: `lib/slashdo` is a submodule exposed as `.claude/commands/do/`; `!read lib/<name>.md` means read `lib/slashdo/lib/<name>.md`. In a staged CoS bundle, resolve from the containing file.
 
 ## Module Organization
 
@@ -119,7 +119,7 @@ Treat every branch artifact and shared log as public. Keep live data and identif
 - **PII**: real names, addresses, phone numbers, birthdays, government IDs, payment details, GPS coordinates, biometrics, of the user or anyone in their data.
 - **Personal app data**: real universe/series/catalog records, brain/journal entries, MeatSpace/POST data, media project names, task payloads, chat/voice transcripts, any record from `data/`, the live DB or a running screen.
 
-Use obviously fake placeholders (`example.com`, `192.0.2.10`, `<hostname>`, `<record-id>`) and redact repro logs. Read `hostname`, `whoami`, `ifconfig`, `tailscale status`, `env` or `git config user.*` only for in-session logic, never into an artifact. Scan your diff before committing; if real data was committed, rewrite the branch before pushing. Prefer repo-relative paths. **Never link AI conversation sessions** (`claude.ai`, `chatgpt.com` or any chat share URL). More: [detail](docs/INSTRUCTION_RULE_DETAIL.md#privacy-detail).
+Use obviously fake placeholders (`example.com`, `192.0.2.10`, `<hostname>`, `<record-id>`) and redact repro logs. Read `hostname`, `whoami`, `ifconfig`, `tailscale status`, `env` or `git config user.*` only for in-session logic, never into an artifact. Scan your diff before committing; if real data was committed, rewrite the branch before pushing. Prefer repo-relative paths. **Never link AI conversation sessions** (`claude.ai`, `chatgpt.com` or any chat share URL). Cite issue numbers, commit SHAs or file paths instead.
 
 ## Code comments
 
@@ -127,13 +127,13 @@ Document invariants, safety rationale, external contracts and workarounds in com
 
 ## Code Conventions
 
-- **Error handling**: Express handlers let errors reach the central middleware; no per-handler try/catch. Client code uses the shared boundaries in `client/src/AGENTS.md`. Outside the request lifecycle (PTY/child-process/timer callbacks) wrap hook invocations in try/catch, because an uncaught throw crashes Node ([detail](docs/INSTRUCTION_RULE_DETAIL.md#error-handling-outside-the-request-lifecycle)).
+- **Error handling**: Express handlers let errors reach the central middleware; no per-handler try/catch. Client code uses the shared boundaries in `client/src/AGENTS.md`. Outside the request lifecycle (PTY/child-process/timer callbacks) wrap hook invocations in try/catch, because an uncaught throw crashes Node.
 - **Functional programming**: no classes; hooks in React. **Zod** route validation lives in `lib/*Validation.js`.
 - **Lint is Biome** (`server/biome.jsonc`, `client/biome.jsonc`); `eslint-disable` does nothing. Suppress an enabled rule with `// biome-ignore lint/<group>/<rule>: <reason>`.
 - **Push, don't poll**: the server emits a Socket.IO event when data changes; own mutations apply their response locally; never refetch on a timer ([exceptions](docs/UX_DESIGN_GUIDE.md#realtime-updates-not-polling); client rules in `client/src/AGENTS.md`).
-- **Single-line logging** with emoji prefixes and interpolation, never JSON blobs or arrays. **stderr means "investigate"**: `console.error`/`console.warn` only for something actually wrong; guard refusals, skips and handled degraded states stay on `console.log` with a non-failure marker (`server/test/guards/runtime/logLevelConventions.test.js`; [marker table](docs/INSTRUCTION_RULE_DETAIL.md#logging-levels)).
-- **LLM response merging**: key absent preserves the original; key present and empty applies the clear; never `.length` truthiness. Keep server merges and the client's `pick` helpers mirrored ([string and array gates](docs/INSTRUCTION_RULE_DETAIL.md#llm-response-merging-and-sentinels)).
-- **Sentinels**: never let absent, failed-to-fetch or invalid collapse into fetched-and-empty or valid; use an explicit sentinel and validate, not `x.length` or `x || fallback` ([examples](docs/INSTRUCTION_RULE_DETAIL.md#llm-response-merging-and-sentinels)).
+- **Single-line logging** with emoji prefixes and interpolation, never JSON blobs or arrays. **stderr means "investigate"**: `console.error`/`console.warn` only for something actually wrong; guard refusals, skips and handled degraded states stay on `console.log` with a non-failure marker (`server/test/guards/runtime/logLevelConventions.test.js`).
+- **LLM response merging.** Preserve the original for absent or invalid fields. Apply valid empty values as clears. Check types and keep server merges and client `pick` helpers mirrored.
+- **Sentinels**: never let absent, failed-to-fetch or invalid collapse into fetched-and-empty or valid; use an explicit sentinel and validate, not `x.length` or `x || fallback`.
 
 ## Git Workflow
 
