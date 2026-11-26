@@ -282,12 +282,12 @@ export async function getEnergySchedule() {
   if (rec.windDownStart && rec.sleepTime) {
     const windStart = parseTime(rec.windDownStart);
     const windEnd = parseTime(rec.sleepTime);
-    if (validMinutes(windStart, windEnd) && windEnd >= windStart) {
+    if (validMinutes(windStart, windEnd)) {
       zones.push({
         id: 'wind-down',
         label: 'Wind Down',
         startMin: windStart,
-        endMin: windEnd,
+        endMin: windEnd < windStart ? 1440 : windEnd,
         color: '#8b5cf6',
         opacity: 0.10
       });
