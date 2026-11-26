@@ -1,4 +1,5 @@
 import { withBackupAssetPublication } from '../../lib/backupSnapshotBoundary.js';
+import { FINISHED_OUTPUT_ADMISSION_MS } from '../../lib/backupPublicationWait.js';
 import { discardUnpublishedVideo } from './generateVideoHelpers.js';
 /** Non-destructive 2x upscaling for video-history items. */
 
@@ -317,5 +318,8 @@ export async function upscaleHistoryItem(historyId, options = {}) {
       if (!committed) await discardUnpublishedVideo({ jobId: newId, outputPath: newPath });
       throw error;
     }
+  }, {
+    timeoutMs: FINISHED_OUTPUT_ADMISSION_MS,
+    onWait: () => console.log(`⏸️ Lanczos upscale [${newId.slice(0, 8)}] waiting for the backup to finish before saving`),
   });
 }

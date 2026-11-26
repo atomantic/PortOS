@@ -5,6 +5,8 @@ import { readFile, rm, writeFile } from 'fs/promises';
 import { tmpdir } from 'os';
 import { basename, join } from 'path';
 import { YOUTUBE_VIDEO_URL_RE } from '../lib/youtubeUrl.js';
+import { withBackupAssetPublication } from '../lib/backupSnapshotBoundary.js';
+import { FINISHED_OUTPUT_ADMISSION_MS } from '../lib/backupPublicationWait.js';
 
 const testDoubles = vi.hoisted(() => ({
   spawn: vi.fn(),
@@ -240,6 +242,7 @@ describe('YouTube ingest audio handoff', () => {
   }
 
   it('copies completed audio into the ingest directory without renaming across filesystems', async () => {
+    withBackupAssetPublication.mockClear();
     const { terminal } = await runAudioIngest();
     const { payload, tempPresence } = await terminal;
     expect(payload.type).toBe('complete');
@@ -248,6 +251,9 @@ describe('YouTube ingest audio handoff', () => {
     const { PATHS } = await import('../lib/fileUtils.js');
     const audioPath = join(PATHS.brain, 'youtube', 'oCnxnaVg0bY.mp3');
     expect(await readFile(audioPath)).toEqual(audioBytes);
+    expect(withBackupAssetPublication).toHaveBeenCalledWith(expect.any(Function), {
+      timeoutMs: FINISHED_OUTPUT_ADMISSION_MS, onWait: expect.any(Function),
+    });
     expect(testDoubles.copyFileGuarded).toHaveBeenCalledWith(downloadedPaths[0], expect.stringContaining('.mp3.part'));
     expect(testDoubles.rename).not.toHaveBeenCalledWith(downloadedPaths[0], audioPath);
     for (const path of downloadedPaths) await expect(readFile(path)).rejects.toMatchObject({ code: 'ENOENT' });

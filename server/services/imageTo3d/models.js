@@ -1,5 +1,6 @@
 import { maintenance } from '../../lib/maintenanceAdmission.js';
 import { withBackupAssetPublication } from '../../lib/backupSnapshotBoundary.js';
+import { FINISHED_OUTPUT_ADMISSION_MS } from '../../lib/backupPublicationWait.js';
 /**
  * Image-to-3D model orchestration (issue #2952) — gallery-image lineage, target
  * dispatch, guarded local render, persistence, and GLB export.
@@ -309,7 +310,10 @@ async function executeRender({ id, operationId, adapter, sourcePath, caps, optio
           completedAt,
         }),
       };
-    }, { includeDeleted: true }));
+    }, { includeDeleted: true }), {
+      timeoutMs: FINISHED_OUTPUT_ADMISSION_MS,
+      onWait: () => console.log(`⏸️ Image-to-3D mesh ${id} waiting for the backup to finish before saving`),
+    });
     if (finished?.status === 'ready' && !finished.deleted) noteImageTo3d('completion');
     await rmGuarded(usdzDiskPath(id), { force: true })
       .catch((err) => console.error(`❌ Image-to-3D stale USDZ cleanup failed for ${id}: ${err.message}`));

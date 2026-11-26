@@ -1,5 +1,6 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { ServerError } from '../lib/errorHandler.js';
+import { acquireBackupSnapshotCut, _backupSnapshotWaitersForTests } from '../lib/backupSnapshotBoundary.js';
 
 vi.mock('../lib/safeUrlFetch.js', () => ({ assertPublicHttpUrl: vi.fn(async () => {}) }));
 vi.mock('../lib/sseUtils.js', () => ({
@@ -80,12 +81,22 @@ describe('startReferenceAudioImport — outcomes', () => {
       downloadAudioToTempMp3.mockResolvedValue({ outcome: 'complete', outPath: '/tmp/x.mp3', title: 'My Clip' });
     });
 
-    it('attaches the finished file and reports it on the complete frame', async () => {
+    it('attaches the finished file after a long backup and reports it on the complete frame', async () => {
       attachReferenceAudio.mockResolvedValue(true);
-      await startReferenceAudioImport('https://example.com/clip', target);
-      await flush();
+      const release = await acquireBackupSnapshotCut();
+      vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout', 'Date'] });
+      try {
+        await startReferenceAudioImport('https://example.com/clip', target);
+        await vi.waitFor(() => expect(_backupSnapshotWaitersForTests().publications).toBe(1));
+        await vi.advanceTimersByTimeAsync(5 * 60_000);
+        expect(attachReferenceAudio).not.toHaveBeenCalled();
+        expect(completeFrame()).toBeUndefined();
+      } finally {
+        release();
+        vi.useRealTimers();
+      }
+      await vi.waitFor(() => expect(completeFrame()).toMatchObject({ filename: FILE, attached: true }));
       expect(attachReferenceAudio).toHaveBeenCalledWith('round-1', 'ref-1', FILE);
-      expect(completeFrame()).toMatchObject({ filename: FILE, attached: true });
     });
 
     it('leaves attaching to the client when no target was given (an unsaved reference)', async () => {

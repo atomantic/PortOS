@@ -10,6 +10,7 @@ import { createWriteStream } from 'node:fs';
 import { PATHS, UUID_RE } from '../../lib/fileUtils.js';
 import { safeUnder, probeVideoStreamInfo, probeFrameCount, probeVideoDuration, probeSquareVideoPixels, probeVideoAudioPresence, generateThumbnail } from '../../lib/ffmpeg.js';
 import { withBackupAssetPublication } from '../../lib/backupSnapshotBoundary.js';
+import { FINISHED_OUTPUT_ADMISSION_MS } from '../../lib/backupPublicationWait.js';
 import { omitDerivedRenderFields } from '../../lib/renderTiming.js';
 import { maintenance } from '../../lib/maintenanceAdmission.js';
 import { withAbortTimeout } from '../../lib/abortTimeout.js';
@@ -390,6 +391,12 @@ export async function runVideoUpscale(params) {
         if (thumbnailPath) await unlink(thumbnailPath).then(() => { thumbnailPath = null; }).catch(error => { if (error.code === 'ENOENT') thumbnailPath = null; else cleanupFailed(); });
         throw error;
       }
+    }, {
+      timeoutMs: FINISHED_OUTPUT_ADMISSION_MS,
+      onWait: () => {
+        console.log(`⏸️ Topaz upscale [${jobId.slice(0, 8)}] waiting for the backup to finish before saving`);
+        videoGenEvents.emit('activity', { generationId: jobId });
+      },
     });
     delivered = true;
     await retireRecoveryOffers();

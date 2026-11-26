@@ -27,6 +27,7 @@ import {
 } from '../../lib/fileUtils.js';
 import { ServerError } from '../../lib/errorHandler.js';
 import { withBackupAssetPublication } from '../../lib/backupSnapshotBoundary.js';
+import { FINISHED_OUTPUT_ADMISSION_MS } from '../../lib/backupPublicationWait.js';
 import { executeTuiRun } from '../tuiPromptRunner.js';
 import { GROK_TUI_ID } from '../../lib/grok.js';
 import { getSettings } from '../settings.js';
@@ -66,7 +67,7 @@ import {
 } from './animationTracks.js';
 import {
   planLocalAnimationRender, enqueueLocalAnimationRender, localRenderManifest,
-  normalizeStaleAnimationRun, verifyLocalAnimationAnchor, localAnimationPrompt,
+  activeTuiAttachments, normalizeStaleAnimationRun, verifyLocalAnimationAnchor, localAnimationPrompt,
 } from './localAnimationRender.js';
 // #3152 — the anchor-invalidation sweep below must cover a USER-DEFINED track too:
 // a stored row seeded from a directional anchor holds approvals descended from the
@@ -1151,7 +1152,16 @@ async function runWalkTuiRender(recordId, { runId, direction, grokPath, task, ge
   });
   // The lease comes first, like the completion hook's: the clip grok wrote, the
   // decoded frames and the run record naming them are one publication (#9982).
-  await withBackupAssetPublication(() => walkWriteTail(recordId, () => attachTuiWalkResult(recordId, runId, videoAbs)));
+  const attachmentKey = `${recordId}/${runId}`;
+  activeTuiAttachments.add(attachmentKey);
+  try {
+    await withBackupAssetPublication(() => walkWriteTail(recordId, () => attachTuiWalkResult(recordId, runId, videoAbs)), {
+      timeoutMs: FINISHED_OUTPUT_ADMISSION_MS,
+      onWait: () => console.log(`⏸️ sprite walk ${recordId}/${runId} waiting for the backup to finish before attaching`),
+    });
+  } finally {
+    activeTuiAttachments.delete(attachmentKey);
+  }
 }
 
 /**

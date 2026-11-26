@@ -44,12 +44,13 @@ import { randomUUID } from 'crypto';
 import { atomicWrite, ensureDir, pathExists, readJSONFile, sha256File, rmGuarded } from '../../lib/fileUtils.js';
 import { ServerError } from '../../lib/errorHandler.js';
 import { withBackupAssetPublication } from '../../lib/backupSnapshotBoundary.js';
+import { FINISHED_OUTPUT_ADMISSION_MS } from '../../lib/backupPublicationWait.js';
 import { executeTuiRun } from '../tuiPromptRunner.js';
 import { GROK_TUI_ID } from '../../lib/grok.js';
 import { resolveGrokDuration } from '../../lib/grokVideoClip.js';
 import {
   planLocalAnimationRender, enqueueLocalAnimationRender, localRenderManifest,
-  normalizeStaleAnimationRun, verifyLocalAnimationAnchor, localAnimationPrompt,
+  activeTuiAttachments, normalizeStaleAnimationRun, verifyLocalAnimationAnchor, localAnimationPrompt,
 } from './localAnimationRender.js';
 import { getSettings } from '../settings.js';
 import { getRecord, listRecords } from './records.js';
@@ -424,9 +425,18 @@ async function runTrackTuiRender(row, recordId, { runId, direction, generatedAbs
   }).catch((err) => console.error(`❌ sprite ${row.id} grok-tui run failed ${recordId}/${runId}: ${err?.message || err}`));
   // Lease before the tail, as in the completion hook (#9982): the clip, its decoded
   // frames and the run record naming them are one publication.
-  await withBackupAssetPublication(() => withAnimationWriteTail(
-    recordId, () => attachTrackTuiResult(row.id, recordId, runId, videoAbs),
-  ));
+  const attachmentKey = `${recordId}/${runId}`;
+  activeTuiAttachments.add(attachmentKey);
+  try {
+    await withBackupAssetPublication(() => withAnimationWriteTail(
+      recordId, () => attachTrackTuiResult(row.id, recordId, runId, videoAbs),
+    ), {
+      timeoutMs: FINISHED_OUTPUT_ADMISSION_MS,
+      onWait: () => console.log(`⏸️ sprite ${row.id} ${recordId}/${runId} waiting for the backup to finish before attaching`),
+    });
+  } finally {
+    activeTuiAttachments.delete(attachmentKey);
+  }
 }
 
 export async function attachTrackTuiResult(trackId, recordId, runId, videoAbs) {

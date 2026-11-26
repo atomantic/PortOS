@@ -28,7 +28,6 @@ vi.mock('../mediaJobQueue/index.js', () => ({
     state.updates.push({ id, patch }); Object.assign(state.result, patch); return true;
   },
 }));
-vi.mock('../../lib/backupSnapshotBoundary.js', () => ({ withBackupAssetPublication: async fn => fn() }));
 vi.mock('../../lib/ffmpeg.js', () => ({
   safeUnder: (base, name) => name && !name.includes('/') ? join(base, name) : null,
   probeVideoStreamInfo: async path => path.endsWith('.final.mp4') && state.finalInfo ? state.finalInfo : path.includes('source') ? { width: state.invalid ? 0 : 640, height: 480, fps: 24, frameCount: 24 } : path.includes('topaz-staging') && !path.endsWith('.output.mp4') && !path.endsWith('.final.mp4') ? { width: 864, height: 486, fps: 24, frameCount: state.failPreparedProbe ? null : 24 } : { width: state.invalidOutput ? 1280 : 1920, height: 1080, fps: 24, frameCount: 24 },
@@ -44,6 +43,7 @@ vi.mock('./upscaleFfmpeg.js', () => ({
   finalizeUpscaleOutput: async (_input, output) => { await writeFile(output, 'final'); return { ok: true }; },
 }));
 const { PATHS } = await import('../../lib/fileUtils.js');
+const { acquireBackupSnapshotCut, _backupSnapshotWaitersForTests } = await import('../../lib/backupSnapshotBoundary.js');
 const { quoteTopaz } = await import('./topazQuote.js');
 const { topazPreparedPath, topazOutputPath, registerStaging, releaseTopazStaging, cleanupTopazStaging, cleanupOrphanTopazStaging } = await import('./topazStaging.js');
 const { assertNoPendingTopaz, enqueueTopazUpscale, runVideoUpscale, cancel, recoverTopazResult, reconcileTopazStatus } = await import('./topazJob.js');
@@ -405,6 +405,29 @@ describe('Topaz job boundary', () => {
     await runVideoUpscale(recovered);
     expect(state.rows[0]).toMatchObject({ upscaledFrom: sourceId, upscaleMethod: 'topaz' });
     expect(state.fetches.every(([url]) => !url.endsWith('/accept') && !url.includes('/upload'))).toBe(true);
+  });
+
+  it('keeps the verified Topaz result staged while a long backup cut is open', async () => {
+    const { params } = await queued();
+    const activity = vi.fn();
+    const release = await acquireBackupSnapshotCut();
+    videoGenEvents.on('activity', activity);
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout', 'Date'] });
+    const work = runVideoUpscale(params);
+    try {
+      await vi.waitFor(() => expect(_backupSnapshotWaitersForTests().publications).toBe(1));
+      activity.mockClear();
+      await vi.advanceTimersByTimeAsync(5 * 60_000);
+      expect(state.rows).toHaveLength(1);
+      expect(activity).toHaveBeenCalledWith({ generationId: jobId });
+      expect(_backupSnapshotWaitersForTests().publications).toBe(1);
+    } finally {
+      release();
+      vi.useRealTimers();
+      videoGenEvents.off('activity', activity);
+    }
+    expect(await work).toMatchObject({ id: jobId, upscaleMethod: 'topaz' });
+    expect(await readFile(join(PATHS.videos, `${jobId}.mp4`), 'utf8')).toBe('final');
   });
 
   it('retires the parent recovery offer when restart finds a published result', async () => {

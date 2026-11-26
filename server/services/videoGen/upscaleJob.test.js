@@ -371,6 +371,27 @@ describe('local-only (#6511 item 7)', () => {
 });
 
 describe('runVideoUpscale — success', () => {
+  it('keeps the queue alive while finished output waits through a long backup', async () => {
+    const { acquireBackupSnapshotCut, _backupSnapshotWaitersForTests } = await import('../../lib/backupSnapshotBoundary.js');
+    const activity = vi.fn();
+    videoGenEvents.on('activity', activity);
+    const release = await acquireBackupSnapshotCut();
+    const work = runVideoUpscale(jobParams());
+    try {
+      await vi.waitFor(() => expect(state.child.listenerCount('close')).toBeGreaterThan(0));
+      vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout', 'Date'] });
+      finishChild();
+      await vi.waitFor(() => expect(_backupSnapshotWaitersForTests().publications).toBe(1));
+      await vi.advanceTimersByTimeAsync(5 * 60_000);
+      expect(activity).toHaveBeenCalledWith({ generationId: JOB_ID });
+      expect(_backupSnapshotWaitersForTests().publications).toBe(1);
+    } finally {
+      release();
+      vi.useRealTimers();
+      videoGenEvents.off('activity', activity);
+    }
+    expect(await work).toMatchObject({ upscaledFrom: SOURCE_ID, upscaleMethod: 'ltx' });
+  });
   // Both runners announce the fingerprint of the stack they run on and the
   // factor they read off the adapter before the pipeline loads. Those are
   // provenance: a clip must be traceable to the exact runtime and the rule it

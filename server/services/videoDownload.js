@@ -28,6 +28,7 @@ import { randomUUID } from 'crypto';
 import { ServerError } from '../lib/errorHandler.js';
 import { shortId, PATHS, unlinkGuarded } from '../lib/fileUtils.js';
 import { withBackupAssetPublication } from '../lib/backupSnapshotBoundary.js';
+import { FINISHED_OUTPUT_ADMISSION_MS } from '../lib/backupPublicationWait.js';
 import { findFfmpeg, generateThumbnail, probeVideoDuration } from '../lib/ffmpeg.js';
 import { findYtDlp } from '../lib/ytdlp.js';
 import { killWithEscalation } from '../lib/killWithEscalation.js';
@@ -223,6 +224,9 @@ export async function downloadVideoIntoLibrary({
       await unlinkGuarded(join(PATHS.videoThumbnails, `${jobId}.jpg`)).catch(() => {});
       throw err;
     }
+  }, {
+    timeoutMs: FINISHED_OUTPUT_ADMISSION_MS,
+    onWait: () => console.log(`⏸️ Video download ${shortId(jobId)} waiting for the backup to finish before saving`),
   });
   // Notify only after publication; a listener failure cannot remove committed bytes.
   videoGenEvents.emit('completed', { generationId: jobId, filename: entry.filename, path: `/data/videos/${entry.filename}`, thumbnail: entry.thumbnail });

@@ -21,7 +21,7 @@ let encodedInsideLease;
 
 vi.mock('../../lib/backupSnapshotBoundary.js', async importOriginal => {
   const actual = await importOriginal();
-  return { ...actual, withBackupAssetPublication: work => bypassAdmission ? work() : actual.withBackupAssetPublication(work) };
+  return { ...actual, withBackupAssetPublication: (work, options) => bypassAdmission ? work() : actual.withBackupAssetPublication(work, options) };
 });
 vi.mock('../../lib/ffmpeg.js', async importOriginal => {
   const actual = await importOriginal();
@@ -44,7 +44,7 @@ vi.mock('../../lib/ffmpeg.js', async importOriginal => {
     },
   };
 });
-const { acquireBackupSnapshotCut } = await import('../../lib/backupSnapshotBoundary.js');
+const { acquireBackupSnapshotCut, _backupSnapshotWaitersForTests } = await import('../../lib/backupSnapshotBoundary.js');
 const { muxMusicBed, muxVoLines, muxCueBed, muxStripAudio } = await import('./audioMux.js');
 const settle = () => new Promise(resolve => setImmediate(resolve));
 const root = () => lazyTempDataRoot('portos-audio-mux-backup-');
@@ -75,15 +75,24 @@ afterAll(async () => {
 });
 
 describe.each(writers)('$name backup publication', ({ run }) => {
-  it('encodes outside admission but preserves the named video throughout an open cut', async () => {
+  it('encodes outside admission and preserves the named video through a long cut', async () => {
     const release = await acquireBackupSnapshotCut();
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout', 'Date'] });
     const work = run();
+    const settled = vi.fn();
+    void work.then(settled, settled);
     try {
       await encoded.promise;
-      await settle();
+      await vi.waitFor(() => expect(_backupSnapshotWaitersForTests().publications).toBe(1));
+      await vi.advanceTimersByTimeAsync(5 * 60_000);
       expect(encodedInsideLease).toBe(false);
+      expect(settled).not.toHaveBeenCalled();
       expect(await capture()).toEqual(before);
-    } finally { release(); releaseInstall.resolve(); }
+    } finally {
+      release();
+      releaseInstall.resolve();
+      vi.useRealTimers();
+    }
     expect((await work).ok).toBe(true);
     expect(await capture()).toEqual(after);
     expect(await readdir(join(root(), 'videos'))).toEqual(['episode.mp4']);

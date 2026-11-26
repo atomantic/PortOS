@@ -1,4 +1,5 @@
 import { withBackupAssetPublication } from '../../lib/backupSnapshotBoundary.js';
+import { FINISHED_OUTPUT_ADMISSION_MS } from '../../lib/backupPublicationWait.js';
 /**
  * Generative video upscale — the media-job lifecycle (#6511).
  *
@@ -441,6 +442,7 @@ export async function runVideoUpscale({
 
     await withBackupAssetPublication(async () => {
       try {
+        if (entry.canceled) throw new ServerError('Upscale canceled', { status: 499, code: 'UPSCALE_CANCELED' });
         // Provenance is MEASURED off the deliverable, not assumed from the plan —
         // a generative render is the one upscale method whose output can legally
         // differ from 2× the source, so a recorded guess would be a lie.
@@ -494,6 +496,12 @@ export async function runVideoUpscale({
         if (!result) for (const path of [deliverablePath, join(PATHS.videoThumbnails, `${newId}.jpg`)]) await removeOwnedFile(path);
         throw error;
       }
+    }, {
+      timeoutMs: FINISHED_OUTPUT_ADMISSION_MS,
+      onWait: () => {
+        console.log(`⏸️ Video upscale [${jobId.slice(0, 8)}] waiting for the backup to finish before saving`);
+        videoGenEvents.emit('activity', { generationId: jobId });
+      },
     });
   } catch (err) {
     // The history row is written LAST, so nothing here can orphan one — only a

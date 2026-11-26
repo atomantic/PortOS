@@ -1,4 +1,5 @@
 import { withBackupAssetPublication } from '../../lib/backupSnapshotBoundary.js';
+import { FINISHED_OUTPUT_ADMISSION_MS } from '../../lib/backupPublicationWait.js';
 import { fileOwnedMediaBestEffort, videoItem } from '../mediaCollectionRules.js';
 import { discardUnpublishedVideo } from '../videoGen/generateVideoHelpers.js';
 import { maintenance } from '../../lib/maintenanceAdmission.js';
@@ -748,6 +749,9 @@ async function renderAdmittedProject(projectId, { posterSec } = {}, permit) {
             await discardUnpublishedVideo({ jobId, outputPath });
             throw error;
           }
+        }, {
+          timeoutMs: FINISHED_OUTPUT_ADMISSION_MS,
+          onWait: () => console.log(`⏸️ Timeline render [${jobId.slice(0, 8)}] waiting for the backup to finish before saving`),
         });
         job.status = 'complete';
         console.log(`✅ Timeline rendered [${jobId.slice(0, 8)}]: ${filename}`);
