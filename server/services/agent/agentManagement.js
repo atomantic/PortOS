@@ -29,7 +29,7 @@ import { REQUEUED_AT_KEY, LAST_SPAWNED_AT_KEY } from '../../lib/taskRequeue.js';
 import { resolveTaskTargetBranch } from '../../lib/taskTargetBranch.js';
 import { flushRunnerOutputBatcher } from './agentRunnerOutputBatchers.js';
 import { appendRunEvent } from './agentRunEventLog.js';
-import { killProcessTree } from '../../lib/bufferedSpawn.js';
+import { confirmWindowsProcessTreeExit, killProcessTree } from '../../lib/bufferedSpawn.js';
 import * as shellService from '../shell.js';
 import { closePausedRun } from './agentOrphanRecovery.js';
 
@@ -824,6 +824,14 @@ export async function killAgent(agentId) {
   // Track as user-terminated so the close handler doesn't re-queue
   userTerminatedAgents.add(agentId);
 
+  const treeExit = confirmWindowsProcessTreeExit(agent.process);
+  if (treeExit) {
+    await treeExit.catch(error => {
+      userTerminatedAgents.delete(agentId);
+      throw new ServerError(error.message, { status: 500, code: 'AGENT_KILL_FAILED' });
+    });
+  }
+
   // Drain pending batched stdout/stderr before the terminal record so it
   // doesn't land after completion (the close handler also drains; idempotent).
   await agent.flushOutput?.();
@@ -847,10 +855,9 @@ export async function killAgent(agentId) {
     }
   }
 
-  // Kill the process immediately with SIGKILL — killProcessTree so a Windows
-  // cmd.exe-wrapped shim's real child isn't orphaned (#2243), and
-  // `processGroup` so a credential-bootstrap wrapper's harness dies too (#7496).
-  killProcessTree(agent.process, 'SIGKILL', { processGroup: agent.processGroup });
+  // Keep PTY and POSIX signalling in the existing order. A POSIX credential
+  // bootstrap wrapper needs the process-group signal to reach its harness too.
+  if (!treeExit) killProcessTree(agent.process, 'SIGKILL', { processGroup: agent.processGroup });
 
   unregisterSpawnedAgent(agent.pid);
   activeAgents.delete(agentId);

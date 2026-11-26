@@ -19,6 +19,7 @@
  */
 
 import { describe, it, expect, vi, beforeEach, afterEach, afterAll } from 'vitest';
+import { EventEmitter } from 'node:events';
 import { ChildProcess } from '../../lib/childProcess.js';
 import { pinPlatform } from '../../lib/testHelper.js';
 import { rmSync } from 'fs';
@@ -43,12 +44,15 @@ vi.mock('../cos/cos.js', () => ({
   forceSpawnTask: vi.fn().mockResolvedValue({ success: true })
 }));
 
-// Only `exec` is replaced so the Windows tasklist cases never run a real command.
-const { execMock } = vi.hoisted(() => ({ execMock: vi.fn() }));
-vi.mock('../../lib/childProcess.js', async (importOriginal) => ({
-  ...(await importOriginal()),
-  exec: execMock
-}));
+const { execMock, taskkillMock } = vi.hoisted(() => ({ execMock: vi.fn(), taskkillMock: vi.fn() }));
+vi.mock('../../lib/childProcess.js', async (importOriginal) => {
+  const actual = await importOriginal();
+  return {
+    ...actual,
+    exec: execMock,
+    spawn: (command, ...args) => command === 'taskkill' ? taskkillMock(...args) : actual.spawn(command, ...args),
+  };
+});
 
 vi.mock('../cos/cosEvents.js', () => ({
   emitLog: vi.fn()
@@ -169,7 +173,7 @@ import { readHostShutdownMarker, clearHostShutdownMarker } from '../../lib/hostS
 import { committedDuringRun } from '../../lib/gitCommitProbe.js';
 import { holdRecoveredRunnerOllamaWork, readRunnerCompletionReceipt } from './agentRunnerSync.js';
 import { handleAgentCompletion } from './agentLifecycle.js';
-import { activeAgents, runnerAgents, completingAgents, spawningTasks, pausedAgents, consumePausedAgentExit } from './agentState.js';
+import { activeAgents, runnerAgents, completingAgents, spawningTasks, pausedAgents, consumePausedAgentExit, userTerminatedAgents } from './agentState.js';
 
 // Stamp the task as a real dispatch does and return agent metadata carrying the
 // receipt that dispatch binds. Legacy fixtures deliberately omit this helper
@@ -3087,6 +3091,47 @@ describe('lifecycle ledger — pause and interruption', () => {
     // projection for a run that does not exist.
     await expect(killAgent('ghost')).rejects.toMatchObject({ status: 404 });
     expect(ledgerCalls('run.interrupted')).toHaveLength(0);
+  });
+});
+
+describe('Windows force-kill in direct mode', () => {
+  it('keeps ownership and task state on spawn failure and waits for taskkill on retry', async () => {
+    const restorePlatform = pinPlatform('win32');
+    const agentId = 'windows-direct';
+    const process = Object.assign(fakeChildProcess(), { pid: 1234 });
+    const agent = { process, pid: process.pid, taskId: 'task-1' };
+    activeAgents.set(agentId, agent);
+    const failed = new EventEmitter();
+    const retry = new EventEmitter();
+    vi.clearAllMocks();
+    taskkillMock.mockReturnValueOnce(failed).mockReturnValueOnce(retry);
+    try {
+      const firstResult = killAgent(agentId);
+      const rejection = expect(firstResult).rejects.toMatchObject({ code: 'AGENT_KILL_FAILED' });
+      await vi.waitFor(() => expect(taskkillMock).toHaveBeenCalledTimes(1));
+      failed.emit('error', new Error('taskkill unavailable'));
+      await rejection;
+      expect(activeAgents.get(agentId)).toBe(agent);
+      expect(userTerminatedAgents.has(agentId)).toBe(false);
+      expect(markAgentComplete).not.toHaveBeenCalled();
+      expect(updateTask).not.toHaveBeenCalled();
+
+      const succeeded = vi.fn();
+      const retryResult = killAgent(agentId).then(succeeded);
+      await vi.waitFor(() => expect(taskkillMock).toHaveBeenCalledTimes(2));
+      expect(succeeded).not.toHaveBeenCalled();
+      expect(markAgentComplete).not.toHaveBeenCalled();
+      expect(activeAgents.get(agentId)).toBe(agent);
+      retry.emit('close', 0);
+      await retryResult;
+      expect(succeeded).toHaveBeenCalledWith({ success: true, agentId, pid: process.pid, signal: 'SIGKILL' });
+      expect(activeAgents.has(agentId)).toBe(false);
+    } finally {
+      activeAgents.delete(agentId);
+      userTerminatedAgents.delete(agentId);
+      taskkillMock.mockReset();
+      restorePlatform();
+    }
   });
 });
 
