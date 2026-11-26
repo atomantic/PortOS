@@ -133,6 +133,36 @@ describe('ollamaManager residency status', () => {
   })
 })
 
+describe('ollamaManager installed-model cache', () => {
+  afterEach(() => vi.unstubAllGlobals())
+
+  it('refreshes the cached model inventory after a successful pull', async () => {
+    let models = []
+    let listRequests = 0
+    vi.stubGlobal('fetch', vi.fn(async (url) => {
+      if (String(url).endsWith('/api/version')) return versionResponse()
+      if (String(url).endsWith('/api/tags')) {
+        listRequests++
+        return Response.json({ models })
+      }
+      if (String(url).endsWith('/api/pull')) {
+        models = [{ name: 'example-model:7b' }]
+        return makeStreamResponse([{ status: 'success' }])
+      }
+      throw new Error(`unexpected fetch: ${url}`)
+    }))
+    const { getInstalledModels, pullModel } = await loadManager()
+
+    await expect(getInstalledModels()).resolves.toEqual([])
+    await expect(getInstalledModels()).resolves.toEqual([])
+    expect(listRequests).toBe(1)
+
+    await expect(pullModel('example-model:7b')).resolves.toMatchObject({ success: true })
+    await expect(getInstalledModels()).resolves.toMatchObject([{ id: 'example-model:7b' }])
+    expect(listRequests).toBe(2)
+  })
+})
+
 describe('ollamaManager.isOllamaProvider locality', () => {
   afterEach(() => vi.unstubAllEnvs())
 
