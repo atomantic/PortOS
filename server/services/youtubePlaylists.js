@@ -10,7 +10,8 @@
  * federated: a bounded cache of scraped metadata, not a Brain record. No sync
  * cursor or tombstone.
  */
-import { dataPath, ensureDir, atomicWrite, readJSONFile, sleep } from '../lib/fileUtils.js';
+import { dataPath, readJSONFile, sleep } from '../lib/fileUtils.js';
+import { ensureSecureDir, writeSecureJson } from '../lib/secureAuthStore.js';
 import { findOrOpenPage, listCdpPages, isAuthPage, evaluateOnPage } from './browserService.js';
 import { withYoutubeTab } from './youtubeBrowserLock.js';
 
@@ -267,8 +268,8 @@ async function doSyncYoutubePlaylists() {
     warnings,
     ...(nextPlaylistId ? { nextPlaylistId } : {}),
   };
-  await ensureDir(dataPath('youtube'));
-  await atomicWrite(PLAYLISTS_FILE, snapshot);
+  await ensureSecureDir(dataPath('youtube'));
+  await writeSecureJson(PLAYLISTS_FILE, snapshot);
 
   const summary = youtubePlaylistSnapshotSummary(snapshot);
   const result = {
