@@ -10,7 +10,7 @@ vi.mock('../../services/apiModelPerformance', () => ({
   runModelPerformanceBenchmark: vi.fn(),
 }));
 vi.mock('../ui/Toast');
-vi.mock('recharts', () => ({
+vi.mock('../ui/charts', () => ({
   ResponsiveContainer: ({ children }) => <div>{children}</div>,
   ScatterChart: ({ children }) => <div>{children}</div>,
   Scatter: ({ name, data }) => <div data-testid={`scatter-${name}`} data-values={JSON.stringify(data?.map(({ x, y }) => [x, y]))} />,

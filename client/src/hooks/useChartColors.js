@@ -1,19 +1,9 @@
 /**
  * Resolves the `--port-*` theme tokens (accent/success/warning/error, `chart-1..4`, grid, axis,
  * tooltip surfaces) to concrete `rgb()` strings via `getComputedStyle`, re-resolving on theme switch.
- *
- * Use when: A recharts card needs theme-following colors — SVG `fill`/`stroke` props can't read CSS
- * vars, so pass these resolved strings instead of hardcoded hex.
  */
 
 import { useState, useEffect } from 'react';
-
-// recharts renders colors as SVG presentation attributes (fill/stroke), which
-// cannot read CSS custom properties — `stroke="var(--port-accent)"` is ignored
-// by the SVG renderer. This hook resolves the `--port-*` theme tokens to
-// concrete color strings via getComputedStyle so chart cards follow the active
-// theme instead of hardcoding hex values, and re-resolves when the theme
-// switches (useTheme sets `data-port-theme` on <html>).
 
 // Theme tokens are stored as space-separated RGB triples ("59 130 246").
 const CHART_VARS = {

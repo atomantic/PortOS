@@ -3,7 +3,7 @@ import { useNavigate } from 'react-router';
 import { ArrowLeft, ChevronRight, Flame, Trophy } from 'lucide-react';
 import {
   LineChart, Line, BarChart, Bar, Cell, XAxis, YAxis, Tooltip, ResponsiveContainer, CartesianGrid
-} from 'recharts';
+} from '../../ui/charts';
 import { getPostSessions, getPostStats } from '../../../services/apiMeatspace.js';
 import useChartColors from '../../../hooks/useChartColors.js';
 import useUserTimezone from '../../../hooks/useUserTimezone.js';
@@ -19,7 +19,7 @@ const RANGES = [
   { label: 'All', days: 0 }
 ];
 
-// Concrete hex per domain so recharts SVG fills follow the same palette as the
+// Concrete hex per domain so SVG fills follow the same palette as the
 // `text-*-400` domain classes in constants.js (SVG can't read CSS custom props).
 const DOMAIN_HEX = {
   math: '#60a5fa',       // blue-400

@@ -13,7 +13,7 @@ import {
 } from 'lucide-react';
 import {
   RadarChart, Radar, PolarGrid, PolarAngleAxis, PolarRadiusAxis, Legend, Tooltip, ResponsiveContainer
-} from 'recharts';
+} from '../../ui/charts';
 import BrailleSpinner from '../../BrailleSpinner';
 import {
   getModelPersonalityHistory,

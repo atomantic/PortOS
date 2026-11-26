@@ -2,7 +2,7 @@ import { fireEvent, render, screen, within } from '@testing-library/react';
 import { expect, it, vi } from 'vitest';
 import CodingBenchmarkComparison from './CodingBenchmarkComparison';
 
-vi.mock('recharts', () => ({
+vi.mock('../ui/charts', () => ({
   ResponsiveContainer: ({ children }) => <div>{children}</div>,
   ScatterChart: ({ title, children }) => <div data-testid="coding-scatter" data-title={title}>{children}</div>,
   Scatter: ({ data }) => <div data-testid="coding-series" data-points={JSON.stringify(data.map(({ model, harness, effort, usd, score }) => [model, harness, effort, usd, score]))} />,

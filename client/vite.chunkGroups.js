@@ -28,8 +28,6 @@ const buildGroupTest = (packages, suffix = '') =>
   new RegExp(`${PATH_SEP}node_modules${PATH_SEP}(${packages.map(packagePattern).join('|')})${PATH_SEP}${suffix}`);
 
 const VENDOR_CHUNK_GROUPS = [
-  // Both Fiber and Recharts use React's external-store shim. If either vendor
-  // captures it recursively, the other must download that entire renderer.
   { name: 'vendor-react', packages: ['react', 'react-dom', 'react-router', 'use-sync-external-store'] },
   // Socket dependencies
   { name: 'vendor-realtime', packages: ['socket.io-client'] },
@@ -40,8 +38,6 @@ const VENDOR_CHUNK_GROUPS = [
   // Keep asset-only addons (GLTF, Draco, HDR, USDZ) in their importers'
   // lazy closures. Procedural scenes need only the shared renderer.
   { name: 'vendor-three', packages: ['three', '@react-three'], test: buildGroupTest(['three', '@react-three'], `(?!examples${PATH_SEP})`) },
-  // Charting (recharts) — lazy chart pages only
-  { name: 'vendor-charts', packages: ['recharts', 'd3-*', 'victory-*'] },
   // Terminal emulator (xterm) — Shell page only
   { name: 'vendor-term', packages: ['@xterm'] },
 ].map((group) => ({
@@ -65,8 +61,7 @@ const VENDOR_CHUNK_GROUPS = [
 // the lazy shared chunks. `entriesAware` splits shared modules by the set of
 // lazy entries that use them, so a route loads only chunks some module of its
 // own reaches. A size-only split makes every consumer load a whole grab-bag
-// chunk and chains them into one closure that reaches `vendor-three` and
-// `vendor-charts` from nearly every page. `entriesAwareMergeThreshold` folds a
+// chunk and chains them into one closure that reaches `vendor-three` from nearly every page. `entriesAwareMergeThreshold` folds a
 // consumer-set chunk below it into a neighbour; it stays small because each
 // merge widens a route's closure (15_000 still reached three.js from the 404
 // page). The cost is more, smaller files; the build test bounds both. Recursive capture stays off: a shared helper must

@@ -1,6 +1,5 @@
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { describe, expect, it } from 'vitest';
 import { render, screen, within } from '@testing-library/react';
-import { measureChartHost } from '../../test/measureChartHost';
 import MonthlyUsageCard from './MonthlyUsageCard';
 
 const history = [
@@ -10,9 +9,6 @@ const history = [
 const series = [{ key: 'claude', label: 'Claude Code' }, { key: 'codex', label: 'Codex' }];
 
 describe('monthly usage', () => {
-  let restoreMeasurement;
-  beforeEach(() => { restoreMeasurement = measureChartHost(); });
-  afterEach(() => restoreMeasurement());
 
   it('shows each month’s API cost and exact token totals without hover, including zero and partial months', () => {
     render(<MonthlyUsageCard history={history} series={series} instanceCount={3} />);
@@ -21,13 +17,13 @@ describe('monthly usage', () => {
     expect(rows[0]).toHaveTextContent('MonthClaude Code (USD)Codex (USD)Est. cost (USD)Tokens');
     expect(rows[1]).toHaveTextContent('September 2026$100.00$23.45$123.451,250,000');
     expect(rows[2]).toHaveTextContent('October 2026 (partial)$0.00$0.00$0.000');
-    expect(screen.getByRole('application')).toBeInTheDocument();
+    expect(screen.getByRole('img', { name: 'Monthly estimated API cost and tokens' })).toBeInTheDocument();
     expect(screen.getByText(/3 instances/)).toHaveTextContent('Calendar months differ from a trailing 30-day window');
   });
 
   it('shows an empty state when no monthly history is available', () => {
     render(<MonthlyUsageCard />);
     expect(screen.getByText('No monthly usage recorded yet.')).toBeInTheDocument();
-    expect(screen.queryByRole('application')).not.toBeInTheDocument();
+    expect(screen.queryByRole('img', { name: 'Monthly estimated API cost and tokens' })).not.toBeInTheDocument();
   });
 });

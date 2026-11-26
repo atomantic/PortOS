@@ -1,6 +1,6 @@
 import {
   ComposedChart, Bar, Line, XAxis, YAxis, CartesianGrid, Tooltip, Legend, ResponsiveContainer
-} from 'recharts';
+} from '../ui/charts';
 import useChartColors from '../../hooks/useChartColors.js';
 import { pluralize } from '../../lib/textUtils';
 import { formatCount, shiftISODate } from '../../utils/formatters';

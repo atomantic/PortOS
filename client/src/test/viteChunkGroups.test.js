@@ -84,17 +84,14 @@ const assertRouteClosures = (outDir, preloads) => {
   for (const href of preloads) for (const file of closure(href.split('/').pop())) initial.add(file);
   const reaches = (set, prefix) => [...set].some((file) => file.startsWith(prefix));
   const reachCount = (prefix) => [...lazy].filter((entry) => reaches(closure(entry), prefix)).length;
-  // Source truth is ~16 lazy boundaries for three, ~12 for recharts and 1 for xterm.
-  const charts = files.find(file => file.startsWith('vendor-charts-'));
-  expect(reaches(closure(charts), 'vendor-three-')).toBe(false);
+  expect(files.some(file => file.startsWith('vendor-charts-'))).toBe(false);
   expect(reachCount('vendor-three-')).toBeLessThanOrEqual(40);
-  expect(reachCount('vendor-charts-')).toBeLessThanOrEqual(40);
   expect(reachCount('vendor-term-')).toBeLessThanOrEqual(3);
   for (const route of ['Dashboard-', 'Settings-', 'NotFound-']) {
     const entry = files.find((file) => file.startsWith(route) && lazy.has(file));
     expect(entry, route).toBeDefined();
     const extra = [...closure(entry)].filter((file) => !initial.has(file));
-    for (const vendor of ['vendor-three-', 'vendor-charts-', 'vendor-term-']) {
+    for (const vendor of ['vendor-three-', 'vendor-term-']) {
       expect(reaches(new Set(extra), vendor), `${route} reaches ${vendor}`).toBe(false);
     }
     if (route === 'Dashboard-') {
@@ -245,7 +242,7 @@ describe('vite chunk groups', () => {
         .filter((tag) => /\brel="modulepreload"/.test(tag))
         .map((tag) => tag.match(/\bhref="([^"]+)"/)[1]);
       expect(preloads.length).toBeLessThanOrEqual(12);
-      const lazyVendor = /\/vendor-(?:three|charts|term)-/;
+      const lazyVendor = /\/vendor-(?:three|term)-/;
       for (const href of preloads) {
         expect(href, href).not.toMatch(lazyVendor);
         const file = join(outDir, href.replace(/^\//, ''));
@@ -270,9 +267,5 @@ describe('vite chunk groups', () => {
     const { test } = groupNamed('vendor-react');
     expect(test.test('/app/node_modules/react/index.js')).toBe(true);
     expect(test.test('/app/node_modules/react-redux/index.js')).toBe(false);
-    // Family prefixes still match every member.
-    const charts = groupNamed('vendor-charts').test;
-    expect(charts.test('/app/node_modules/d3-scale/src/band.js')).toBe(true);
-    expect(charts.test('/app/node_modules/victory-vendor/d3-scale.js')).toBe(true);
   });
 });

@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { CartesianGrid, LabelList, ResponsiveContainer, Scatter, ScatterChart, Tooltip, XAxis, YAxis } from 'recharts';
+import { CartesianGrid, LabelList, ResponsiveContainer, Scatter, ScatterChart, Tooltip, XAxis, YAxis } from '../ui/charts';
 import { formatCount, formatDateNumeric, formatUsd } from '../../utils/formatters';
 import { CODING_BENCHMARKS } from './codingBenchmarkData';
 
@@ -30,7 +30,7 @@ function BenchmarkChart({ rows, suite }) {
           <XAxis type="number" dataKey="usd" name="USD / task" scale="log" domain={[0.1, 100]} ticks={[0.1, 1, 10, 100]} tickFormatter={formatCost} tick={{ fill: 'rgb(var(--port-text-muted))' }} label={{ value: 'Average USD / task (log scale)', position: 'insideBottom', offset: -15, fill: 'rgb(var(--port-text-muted))' }} />
           <YAxis type="number" dataKey="score" name={suite.scoreLabel} domain={[0, 100]} tick={{ fill: 'rgb(var(--port-text-muted))' }} label={{ value: suite.scoreLabel, position: 'insideLeft', angle: -90, fill: 'rgb(var(--port-text-muted))' }} />
           <Tooltip content={<BenchmarkTooltip suite={suite} />} />
-          {models.map((model, index) => <Scatter key={model} name={model} data={rows.filter(row => row.model === model)} fill={colors[index % colors.length]} isAnimationActive={false}>
+          {models.map((model, index) => <Scatter key={model} name={model} data={rows.filter(row => row.model === model)} fill={colors[index % colors.length]}>
             {rows.length <= 5 && <LabelList dataKey="effort" position="top" fill="rgb(var(--port-text))" fontSize={11} />}
           </Scatter>)}
         </ScatterChart>

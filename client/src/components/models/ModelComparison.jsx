@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Link } from 'react-router';
-import { CartesianGrid, LabelList, ResponsiveContainer, Scatter, ScatterChart, Tooltip, XAxis, YAxis } from 'recharts';
+import { CartesianGrid, LabelList, ResponsiveContainer, Scatter, ScatterChart, Tooltip, XAxis, YAxis } from '../ui/charts';
 import { getModelComparison } from '../../services/apiModelComparison';
 import { safeReadJsonStorage, safeWriteJsonStorage } from '../../lib/safeStorage';
 import { formatCount, formatUsd, formatPercent, timeAgo } from '../../utils/formatters';
@@ -303,7 +303,7 @@ export default function ModelComparison() {
             const firstPoint = points[0];
             const providerId = firstPoint?.providerId;
             const color = providerColorMap.get(providerId) || getProviderColor(providerId, firstPoint?.provider, models.indexOf(firstPoint?.model));
-            return <Scatter isAnimationActive={false} key={key} name={key} data={points} fill={color} line={points.length > 1 ? { strokeDasharray: '4 4', strokeWidth: 2 } : false}>{plotted.length <= 30 && <LabelList className="hidden @xl:block" dataKey="label" position="top" fontSize={11} fill="rgb(var(--port-text))" />}</Scatter>;
+            return <Scatter key={key} name={key} data={points} fill={color} line={points.length > 1 ? { strokeDasharray: '4 4', strokeWidth: 2 } : false}>{plotted.length <= 30 && <LabelList className="hidden @xl:block" dataKey="label" position="top" fontSize={11} fill="rgb(var(--port-text))" />}</Scatter>;
           })}
         </ScatterChart></ResponsiveContainer>
       </div> : <p className="p-10 text-center text-sm text-port-text-muted">{loading ? 'Loading comparison…' : money ? 'No points match these choices. Plotting requires both an intelligence score and the selected cost metric. Available token prices appear in the effort value guide below even when benchmark results are missing.' : `No points match these choices. Plotting requires both an intelligence score and a measured ${axis.label.toLowerCase()}. Measure a local model in Models › Performance to plot it here.`}</p>}

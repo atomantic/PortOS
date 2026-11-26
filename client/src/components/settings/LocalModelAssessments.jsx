@@ -49,8 +49,7 @@ import {
 } from '../../services/apiLocalLlm.js';
 import { LOCAL_RUNTIME_LABELS } from '../../../../server/lib/modelPinMembership.js';
 
-// Heavy, tab-gated panels: PortosModelBenchmarkPanel pulls vendor-charts, the
-// capability matrix is ~1,000 lines, and the sweep panel is only used on its tab.
+// Load benchmark and assessment panels only when their tab opens.
 const PortosModelBenchmarkPanel = lazyWithReload(() => import('./PortosModelBenchmarkPanel'));
 const ModelCapabilityTests = lazyWithReload(() => import('./ModelCapabilityTests.jsx'));
 const AssessmentSweepPanel = lazyWithReload(() => import('./AssessmentSweepPanel'));

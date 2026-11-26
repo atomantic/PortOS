@@ -10,8 +10,6 @@ vi.mock('../../../services/apiSystem.js', () => ({
   getSettings: vi.fn().mockResolvedValue({ timezone: 'UTC' }),
 }));
 
-// recharts ResponsiveContainer renders nothing at 0-width in jsdom; the
-// assertions below target the non-chart DOM (stat cards + drill breakdown).
 import PostHistory from './PostHistory';
 import { getPostSessions, getPostStats } from '../../../services/apiMeatspace.js';
 
@@ -115,7 +113,7 @@ describe('PostHistory analytics dashboard', () => {
 
     getPostSessions.mockResolvedValue(SESSIONS);
     fireEvent.click(screen.getByRole('button', { name: 'Retry' }));
-    expect(await screen.findByText('2026-06-01')).toBeTruthy();
+    expect(await screen.findByRole('button', { name: /Session 2026-06-01/ })).toBeTruthy();
     expect(screen.queryByRole('alert')).toBeNull();
   });
 });
@@ -125,37 +123,32 @@ describe('PostHistory analytics dashboard', () => {
 describe('PostHistory session rows navigate to the detail route (issue #2098)', () => {
   it('exposes each session row as a keyboard-focusable navigation control', async () => {
     renderHistory();
-    await waitFor(() => expect(screen.getByText('2026-06-01')).toBeTruthy());
-    const row = screen.getByRole('button', { name: /Session 2026-06-01/ });
+    const row = await screen.findByRole('button', { name: /Session 2026-06-01/ });
     expect(row).toHaveAttribute('tabindex', '0');
     expect(row).not.toHaveAttribute('aria-expanded');
   });
 
   it('navigates to /post/session/:id on click', async () => {
     renderHistory();
-    await waitFor(() => expect(screen.getByText('2026-06-01')).toBeTruthy());
-    fireEvent.click(screen.getByRole('button', { name: /Session 2026-06-01/ }));
+    fireEvent.click(await screen.findByRole('button', { name: /Session 2026-06-01/ }));
     expect(screen.getByTestId('loc')).toHaveTextContent('/post/session/a');
   });
 
   it('navigates via the Enter key (default prevented so the page does not scroll)', async () => {
     renderHistory();
-    await waitFor(() => expect(screen.getByText('2026-06-02')).toBeTruthy());
-    fireEvent.keyDown(screen.getByRole('button', { name: /Session 2026-06-02/ }), { key: 'Enter' });
+    fireEvent.keyDown(await screen.findByRole('button', { name: /Session 2026-06-02/ }), { key: 'Enter' });
     expect(screen.getByTestId('loc')).toHaveTextContent('/post/session/b');
   });
 
   it('navigates via the Space key', async () => {
     renderHistory();
-    await waitFor(() => expect(screen.getByText('2026-06-01')).toBeTruthy());
-    fireEvent.keyDown(screen.getByRole('button', { name: /Session 2026-06-01/ }), { key: ' ' });
+    fireEvent.keyDown(await screen.findByRole('button', { name: /Session 2026-06-01/ }), { key: ' ' });
     expect(screen.getByTestId('loc')).toHaveTextContent('/post/session/a');
   });
 
   it('ignores unrelated keys — a row does not navigate on an arbitrary keypress', async () => {
     renderHistory();
-    await waitFor(() => expect(screen.getByText('2026-06-01')).toBeTruthy());
-    fireEvent.keyDown(screen.getByRole('button', { name: /Session 2026-06-01/ }), { key: 'a' });
+    fireEvent.keyDown(await screen.findByRole('button', { name: /Session 2026-06-01/ }), { key: 'a' });
     expect(screen.getByTestId('loc')).toHaveTextContent('/post/history');
   });
 });

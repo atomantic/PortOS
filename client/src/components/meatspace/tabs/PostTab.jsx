@@ -36,7 +36,7 @@ const MemoryPractice = lazyWithReload(() => import('../post/MemoryPractice'));
 const ElementsSong = lazyWithReload(() => import('../post/ElementsSong'));
 const MorseTrainer = lazyWithReload(() => import('../post/MorseTrainer'));
 const RhetoricTrainer = lazyWithReload(() => import('../post/RhetoricTrainer'));
-// History and Progress draw recharts charts the launcher never needs.
+// History and Progress draw charts the launcher never needs.
 const PostHistory = lazyWithReload(() => import('../post/PostHistory'));
 const PostProgress = lazyWithReload(() => import('../post/PostProgress'));
 

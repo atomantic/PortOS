@@ -20,8 +20,8 @@ for (const workspace of WORKSPACES) {
   }
 }
 
-function quickReferenceRows() {
-  const section = DOC.split('## Quick Reference Table\n')[1]?.split('\n## ')[0] ?? '';
+function quickReferenceRows(markdown) {
+  const section = markdown.split('## Quick Reference Table\n')[1]?.split('\n## ')[0] ?? '';
   const rows = [];
   let scope = '';
   for (const line of section.split('\n')) {
@@ -35,7 +35,7 @@ function quickReferenceRows() {
 }
 
 describe('docs/DEPS.md', () => {
-  const documented = quickReferenceRows();
+  const documented = quickReferenceRows(DOC);
 
   it('documents every direct dependency under the workspace and manifest group that declares it', () => {
     expect([...DECLARED].filter(entry => !documented.includes(entry))).toEqual([]);
@@ -46,8 +46,22 @@ describe('docs/DEPS.md', () => {
     expect(new Set(documented).size).toBe(documented.length);
   });
 
-  it('scans a non-empty set of manifests and table rows', () => {
-    expect(WORKSPACES.length).toBeGreaterThanOrEqual(4);
-    expect(documented.length).toBeGreaterThanOrEqual(40);
+  it('includes the install workspaces and their current declarations as dependencies are retired', () => {
+    expect(WORKSPACES).toEqual(expect.arrayContaining(['root', 'client', 'server', 'browser']));
+    expect(DECLARED.size).toBeGreaterThan(0);
+    expect(documented.length).toBe(DECLARED.size);
+  });
+
+  it('counts active rows in the right scope and excludes historical removals', () => {
+    const sample = [
+      '## Quick Reference Table',
+      '| **Client dependencies** | | | | |',
+      '| `legacy` | 1 | REPLACED | | |',
+      '| `old` | 2 | REMOVED (direct) | | |',
+      '| `current` | 1 | KEEP | | |',
+      '| **Server devDependencies** | | | | |',
+      '| `current` | 1 | KEEP | | |',
+    ].join('\n');
+    expect(quickReferenceRows(sample)).toEqual(['client dependencies: current', 'server devDependencies: current']);
   });
 });

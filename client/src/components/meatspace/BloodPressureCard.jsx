@@ -1,7 +1,7 @@
 import { useState, useEffect, useCallback } from 'react';
 import {
   LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, Legend, ReferenceLine
-} from 'recharts';
+} from '../ui/charts';
 import { HeartPulse, Plus, X, Check, TrendingUp, TrendingDown, Trash2 } from 'lucide-react';
 import { getBloodPressure, addBloodPressure, removeBloodPressure } from '../../services/apiMeatspace.js';
 import BrailleSpinner from '../BrailleSpinner';
