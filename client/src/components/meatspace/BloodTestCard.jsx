@@ -1,7 +1,8 @@
 import { Trash2 } from 'lucide-react';
 import { REFERENCE_RANGES, getBloodValueStatus, STATUS_COLORS } from './constants';
-import { getCategoryForKey } from '../../lib/clinicianReport';
+import { getCategoryForKey, STATUS_LABELS } from '../../lib/clinicianReport';
 import ConfirmButtonPair from '../ui/ConfirmButtonPair';
+import Pill from '../ui/Pill';
 
 export default function BloodTestCard({ test, confirming = false, onRequestDelete, onConfirmDelete, onCancelDelete }) {
   if (!test) return null;
@@ -57,12 +58,18 @@ export default function BloodTestCard({ test, confirming = false, onRequestDelet
             <h5 className="text-xs font-medium text-gray-500 uppercase mb-1">{category}</h5>
             <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-2">
               {items.map(item => (
-                <div key={item.key} className="flex items-baseline justify-between gap-2 px-2 py-1 rounded bg-port-bg/50">
-                  <span className="text-xs text-gray-400 truncate">{item.label}</span>
-                  <span className={`text-sm font-mono font-medium ${STATUS_COLORS[item.status]}`}>
+                <div key={item.key} className="flex flex-wrap items-baseline gap-x-2 gap-y-1 px-2 py-1 rounded bg-port-bg/50">
+                  <span className="text-xs text-gray-400 min-w-0 truncate">{item.label}</span>
+                  <span className={`ml-auto text-sm font-mono font-medium ${STATUS_COLORS[item.status]}`}>
                     {item.value}
                     {item.unit && <span className="text-xs text-gray-600 ml-0.5">{item.unit}</span>}
+                    {STATUS_LABELS[item.status] && <span className="sr-only"> ({STATUS_LABELS[item.status]})</span>}
                   </span>
+                  {(item.status === 'high' || item.status === 'low') && (
+                    <Pill aria-hidden="true" size="xs" className="ml-auto" tone={item.status === 'high' ? 'error' : 'warning'}>
+                      {STATUS_LABELS[item.status]}
+                    </Pill>
+                  )}
                 </div>
               ))}
             </div>
