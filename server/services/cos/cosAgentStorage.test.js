@@ -1,6 +1,6 @@
 import { afterAll, beforeEach, expect, it, vi } from 'vitest';
 import { mkdir, mkdtemp, writeFile, readFile, rm, utimes, readdir } from 'node:fs/promises';
-import { dirname, join } from 'node:path';
+import { basename, dirname, join } from 'node:path';
 import { spawnSync } from 'node:child_process';
 import { gunzipSync, gzipSync } from 'node:zlib';
 import express from 'express';
@@ -23,6 +23,16 @@ vi.mock('./cosState.js', () => ({
   saveConfig: async value => { fixture.config = value; },
   withConfigLock: createFileWriteQueue(), withStateLock: createFileWriteQueue(),
 }));
+vi.mock('node:fs/promises', async importOriginal => {
+  const actual = await importOriginal();
+  return { ...actual, lstat: (path, ...args) => {
+    fixture.onStat?.(path);
+    return actual.lstat(path, ...args);
+  }, readdir: (path, ...args) => {
+    fixture.onReadDir?.(path);
+    return actual.readdir(path, ...args);
+  } };
+});
 vi.mock('node:fs', async importOriginal => {
   const actual = await importOriginal();
   const { Readable } = await import('node:stream');
@@ -57,11 +67,10 @@ app.use(express.json()); app.use('/api/data', routes); app.use(errorMiddleware);
 const date = '2001-01-01';
 const source = 'Example terminal redraw\n'.repeat(4000);
 const recordingPath = id => join('cos', 'agents', date, id);
-const runDir = id => join(fixture.root, recordingPath(id));
-async function seed(id = 'agent-example', metadata = {}) {
-  const dir = runDir(id);
+async function seed(id = 'agent-example', metadata = {}, bucket = date, completedAt = `${bucket}T12:00:00Z`) {
+  const dir = join(fixture.root, 'cos', 'agents', bucket, id);
   await mkdir(dir, { recursive: true });
-  await writeFile(join(dir, 'metadata.json'), JSON.stringify({ id, status: 'completed', completedAt: `${date}T12:00:00Z`, result: { success: true, cost: 0.01 }, metadata: { model: 'example-model', taskSummary: 'Fixed an example defect', ...metadata } }));
+  await writeFile(join(dir, 'metadata.json'), JSON.stringify({ id, status: 'completed', completedAt, result: { success: true, cost: 0.01 }, metadata: { model: 'example-model', taskSummary: 'Fixed an example defect', ...metadata } }));
   for (const [name, text] of [['raw.txt', source], ['output.txt', 'Retained useful output'], ['prompt.txt', 'Example instructions'], ['evidence.json', '{"keep":true}']]) {
     await writeFile(join(dir, name), text);
     await utimes(join(dir, name), new Date(date), new Date(date));
@@ -91,6 +100,7 @@ beforeEach(async () => {
   fixture.state = {}; fixture.config = {}; fixture.trusted = true;
   fixture.failWrite = false; fixture.corruptVerification = false; fixture.onWrite = null;
   fixture.afterManifest = null; fixture.onAdmission = null; fixture.bypassAdmission = false;
+  fixture.onStat = null; fixture.onReadDir = null;
 });
 afterAll(() => rm(fixture.root, { recursive: true, force: true }));
 
@@ -112,6 +122,85 @@ it('compresses through HTTP, verifies bytes, serves the gzip, and preserves old 
   const download = await storage.getAgentRecordingDownload(date, 'agent-example');
   expect(download.name).toBe('raw.txt.gz');
   expect((await storage.previewAgentStorage({ action: 'compress' })).totals.eligibleRuns).toBe(0);
+});
+
+it('keeps interactive preview totals and ordered pages exact across batches while serializing live references once', async () => {
+  await Promise.all(Array.from({ length: 18 }, (_, index) => seed(`agent-${String(index).padStart(2, '0')}`)));
+  await seed('agent-other', { model: 'other-model' });
+  const unreadable = await seed('agent-unreadable');
+  await writeFile(join(unreadable, 'metadata.json'), '{');
+  const liveMetadata = vi.fn(() => ({ nested: { ref: 'prefix/agent-01/suffix' } }));
+  fixture.state = { 'agent-live': { metadata: { toJSON: liveMetadata } } };
+  const statPaths = [];
+  fixture.onStat = path => statPaths.push(path);
+
+  const preview = await storage.previewAgentStorage({ model: 'example-model' }, { offset: 15, limit: 1 });
+  expect(preview.totals).toMatchObject({ scanned: 20, unreadable: 1, recordingBytes: 18 * Buffer.byteLength(source), eligibleRuns: 1 });
+  expect(preview.models).toEqual(['example-model', 'other-model']);
+  expect(preview.matching).toBe(18);
+  expect(preview.reasons).toEqual({ 'Referenced by a live run': 1, 'Next batch': 16 });
+  expect(preview.rows.map(row => row.id)).toEqual(['agent-15', 'agent-16', 'agent-17']);
+  expect(liveMetadata).toHaveBeenCalledTimes(1);
+  const metadataPaths = statPaths.filter(path => basename(path) === 'metadata.json');
+  expect(metadataPaths).toHaveLength(20);
+  expect(new Set(metadataPaths).size).toBe(20);
+  expect(statPaths.filter(path => basename(path) === date)).toHaveLength(1);
+
+  const started = await storage.startAgentStorage({ token: preview.token });
+  expect(started.job.total).toBe(1);
+  expect(await settled()).toMatchObject({ processed: 1, skipped: 0 });
+  expect((await storage.getAgentRecordingDownload(date, 'agent-00')).name).toBe('raw.txt.gz');
+});
+
+it('stops automatic discovery at 25 eligible candidates and leaves later runs for the next tick', async () => {
+  await Promise.all(Array.from({ length: 27 }, (_, index) => seed(`agent-${String(index).padStart(2, '0')}`)));
+  const scannedIds = new Set();
+  fixture.onStat = path => {
+    if (basename(path) === 'metadata.json') scannedIds.add(basename(dirname(path)));
+  };
+  fixture.onWrite = () => {
+    fixture.config.agentStorage = { autoCompress: false };
+  };
+  await storage.runAutomaticAgentStorage();
+  expect(await settled()).toMatchObject({ total: 25, skipped: 25 });
+  expect([...scannedIds].sort()).toEqual(Array.from({ length: 25 }, (_, index) => `agent-${String(index).padStart(2, '0')}`));
+});
+
+it('shares automatic fallback discovery, retains the one-day buffer, and skips newer date buckets', async () => {
+  const old = await seed('agent-absent');
+  await rm(join(old, 'raw.txt'));
+  const now = Date.now();
+  const day = 86400000;
+  const retentionDay = new Date(now - 7 * day).toISOString().slice(0, 10);
+  const bufferDay = new Date(now - 6 * day).toISOString().slice(0, 10);
+  const recentDay = new Date(now).toISOString().slice(0, 10);
+  await seed('agent-buffer', {}, bufferDay, `${retentionDay}T00:00:00Z`);
+  await seed('agent-recent', {}, recentDay);
+  fixture.config.agentStorage = { autoPurge: true, autoCompress: true };
+  const inspectedOld = vi.fn();
+  const openedBuckets = [];
+  fixture.onStat = path => {
+    if (path === join(old, 'metadata.json')) inspectedOld();
+  };
+  fixture.onReadDir = path => openedBuckets.push(basename(path));
+
+  await storage.runAutomaticAgentStorage();
+  expect(await settled()).toMatchObject({ action: 'compress', total: 1, skipped: 0 });
+  expect(inspectedOld).toHaveBeenCalledTimes(1);
+  expect(openedBuckets).toContain(bufferDay);
+  expect(openedBuckets).not.toContain(recentDay);
+  expect((await storage.getAgentRecordingDownload(bufferDay, 'agent-buffer')).name).toBe('raw.txt.gz');
+});
+
+it('gives eligible automatic purges priority and rechecks live references inside the publication boundary', async () => {
+  const dir = await seed();
+  fixture.config.agentStorage = { autoPurge: true, autoCompress: true };
+  fixture.onAdmission = () => {
+    fixture.state = { 'agent-live': { metadata: { resumedFrom: 'agent-example' } } };
+  };
+  await storage.runAutomaticAgentStorage();
+  expect(await settled()).toMatchObject({ action: 'purge', total: 1, skipped: 1 });
+  expect(await readFile(join(dir, 'raw.txt'), 'utf8')).toBe(source);
 });
 
 it('requires purge confirmation and retained evidence, keeps metadata and exposes the purged state', async () => {
