@@ -295,8 +295,6 @@ if (${pm2StartFailure} && args.startsWith('start') && !fs.existsSync(${JSON.stri
   return { scratch, repo, bin, calls, optionalCalls, dependencyCalls, forceClean, releaseFile, nodeOptions: flags.join(' '), headSha, aheadSha, peerTarget };
 }
 
-// The three runs share no state, so they go out concurrently rather than
-// serializing three full update scripts.
 function runUpdate(sandbox, { onStart, automatic = false, operationId } = {}) {
   return new Promise((resolve, reject) => {
     const env = { ...process.env, PORTOS_DATA_ROOT: sandbox.repo, HOME: sandbox.scratch,
@@ -365,13 +363,20 @@ describe.skipIf(SKIP_HEAVY_INTEGRATION)('shared updater headless-install guard',
       // safe_install wiped root node_modules — pm2 included — on the way.
       pm2Wiped: { npmShim: 'fail', forceClean: true, pm2OnPath: true }
     };
-    await Promise.all(Object.entries(cases).map(async ([name, options]) => {
-      sandboxes[name] = await makeSandbox(options);
-    }));
-    await Promise.all(Object.keys(cases).map(async (name) => {
-      const automatic = ['preDelete', 'oldNode', 'oldNodeAhead', 'oldNodePeer', 'postPullRefusal', 'unknownPrevious'].includes(name);
-      results[name] = await runUpdate(sandboxes[name], { automatic });
-    }));
+    const entries = Object.entries(cases);
+    // Vitest's worker cap does not limit the Git brokers and updater children
+    // inside this worker. A full fixture fan-out coincided with runner-wide
+    // STATUS_DLL_INIT_FAILED exits in Windows CI (#19092).
+    const batchSize = WINDOWS ? 2 : entries.length;
+    for (let start = 0; start < entries.length; start += batchSize) {
+      const outcomes = await Promise.allSettled(entries.slice(start, start + batchSize).map(async ([name, options]) => {
+        sandboxes[name] = await makeSandbox(options);
+        const automatic = ['preDelete', 'oldNode', 'oldNodeAhead', 'oldNodePeer', 'postPullRefusal', 'unknownPrevious'].includes(name);
+        results[name] = await runUpdate(sandboxes[name], { automatic });
+      }));
+      const failed = outcomes.find(outcome => outcome.status === 'rejected');
+      if (failed) throw failed.reason;
+    }
   }, 180000);
 
   afterAll(async () => {
