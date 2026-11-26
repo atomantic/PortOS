@@ -250,9 +250,8 @@ router.post('/install/huggingface/stream', asyncHandler(async (req, res) => {
   safeEnd();
 }));
 
-// Trained LoRAs linked to a universe character — used by the character card
-// chip in the universe editor + catalog detail page. 2-segment path keeps it
-// off the `/:filename` wildcard below.
+// The Catalog character reads its installed adapters here. Declare this
+// before the generic filename route.
 const byCharacterSchema = z.object({
   entryId: z.preprocess(emptyToUndefined, z.string().max(128).optional()),
   ingredientId: z.preprocess(emptyToUndefined, z.string().max(128).optional()),

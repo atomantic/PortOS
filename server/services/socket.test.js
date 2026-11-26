@@ -7,7 +7,6 @@ import { settingsEvents } from './settings.js';
 import { emitRecordUpdated, emitRecordDeleted, emitRecordInvalidated } from './sharing/recordEvents.js';
 import { writeOriginScope } from '../lib/writeOrigin.js';
 import { fableLoomRunEvents } from './fableLoom/runEvents.js';
-import { trainingEvents } from './loraTraining/events.js';
 import { authEvents, isAuthEnabled, verifyRequestSession } from './auth.js';
 import { verifyPeerToken } from './authGate.js';
 import { PEER_INSTANCE_HEADER } from '../lib/peerHttpClient.js';
@@ -909,11 +908,9 @@ describe('socket.js — initSocket', () => {
     );
   });
 
-  it('broadcasts bounded queue and checkpoint invalidations', () => {
+  it('broadcasts bounded queue invalidations', () => {
     mediaJobEvents.emit('changed', { privateRecord: 'must not be forwarded' });
-    trainingEvents.emit('checkpoints:changed', { runId: 'example-run', privateRecord: 'must not be forwarded' });
     expect(io.emitted).toContainEqual(['media-jobs:changed', {}]);
-    expect(io.emitted).toContainEqual(['training:checkpoints:changed', { runId: 'example-run' }]);
   });
 
   it('relays render progress only to active queue subscribers', () => {

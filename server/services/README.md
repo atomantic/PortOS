@@ -65,7 +65,6 @@ Remaining flat `brain*` and `eidoverse*` clusters are candidates for the same tr
 | `creativeStyleSources.js` | Resolves a universe style guide or mood board into art-direction text plus local reference images; shared by Code Animation and Creative Commissions. |
 | `creativeDirector/firstPassGen.js` | Gracefully gated first-pass portraits and scene frames. |
 | `universeCharacterSheet.js` | Character reference-sheet render and completion workflow. |
-| `loraDatasets.js` | Retained LoRA dataset store and the surviving-trainer status update; training is retired. |
 | `dataMaintenance.js` | Allowlisted retired-data inventory and serialized removal by operation id with active-work refusal. |
 | `sprites/reference.js` | Sprite reference candidate rendering and provenance. |
 | `deckRender.js` | Deck card image render jobs. |

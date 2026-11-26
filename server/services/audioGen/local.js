@@ -2,7 +2,7 @@
  * Audio job-kind adapter for the media job queue (#1928).
  *
  * The queue (server/services/mediaJobQueue/index.js) dispatches every job kind
- * through an emitter contract shared with video/image/training:
+ * through an emitter contract shared with video and image generation:
  * `<kind>Events.emit('completed' | 'failed', { generationId, ... })`, optionally
  * preceded by `'activity'`/`'progress'` events the idle watchdog listens for.
  * `generateMusic` (server/services/pipeline/musicGen.js) is a plain awaited

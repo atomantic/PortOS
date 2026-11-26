@@ -606,6 +606,12 @@ export const removeCustomMediaModel = (id, { silent = false } = {}) => request(`
 // metadata so the manager UI can show trigger words, base model, recommended
 // scale, preview thumbnail. Used by /models/loras and the Image Gen LoRA picker.
 export const listLorasFull = (options = {}) => request('/loras', options);
+export const getCharacterLoras = ({ entryId, ingredientId } = {}, { silent = false } = {}) => {
+  const params = new URLSearchParams();
+  if (entryId) params.set('entryId', entryId);
+  if (ingredientId) params.set('ingredientId', ingredientId);
+  return request(`/loras/by-character?${params.toString()}`, { silent });
+};
 // `silent: true` suppresses the auto-toast in apiCore so the page can route
 // CIVITAI_AUTH errors into the in-UI key prompt instead of a fire-and-forget
 // red toast the user can't act on.

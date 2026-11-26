@@ -382,19 +382,28 @@ describe('managed app repository topology', () => {
   });
 
   it('shares concurrent repository and fork comparison probes for one checkout', async () => {
-    const results = await Promise.all([
-      getManagedAppRepositorySources(app),
-      getManagedAppRepositorySources(app),
-      getManagedAppRepositorySources(app),
-    ]);
+    // Each response stamps checkedAt independently of the shared probes.
+    vi.useFakeTimers({ toFake: ['Date'] });
+    const checkedAt = '2026-01-01T00:00:00.000Z';
+    vi.setSystemTime(new Date(checkedAt));
+    try {
+      const results = await Promise.all([
+        getManagedAppRepositorySources(app),
+        getManagedAppRepositorySources(app),
+        getManagedAppRepositorySources(app),
+      ]);
 
-    expect(results[0].sources[0].forkVsUpstream).toMatchObject({ available: true, behind: 2 });
-    expect(results[1]).toEqual(results[0]);
-    expect(results[2]).toEqual(results[0]);
-    expect(mock.execGh.mock.calls.map(([args]) => args[1])).toEqual([
-      'repos/example-owner/example-app',
-      'repos/example-org/example-app/compare/example-org%3Amain...example-owner%3Amain',
-    ]);
+      expect(results[0].checkedAt).toBe(checkedAt);
+      expect(results[0].sources[0].forkVsUpstream).toMatchObject({ available: true, behind: 2 });
+      expect(results[1]).toEqual(results[0]);
+      expect(results[2]).toEqual(results[0]);
+      expect(mock.execGh.mock.calls.map(([args]) => args[1])).toEqual([
+        'repos/example-owner/example-app',
+        'repos/example-org/example-app/compare/example-org%3Amain...example-owner%3Amain',
+      ]);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it('keeps permission-bearing metadata separate for different checkouts of the same origin', async () => {

@@ -23,7 +23,7 @@ beforeEach(() => {
 
 describe('videoGen displayPower', () => {
   describe('isDisplaySleepEnabled', () => {
-    it('is off by default on darwin (absent slice / absent flag) — opt-in, unlike LoRA training', () => {
+    it('is off by default on darwin (absent slice / absent flag)', () => {
       expect(isDisplaySleepEnabled(undefined)).toBe(false);
       expect(isDisplaySleepEnabled({})).toBe(false);
       expect(isDisplaySleepEnabled({ displaySleep: false })).toBe(false);

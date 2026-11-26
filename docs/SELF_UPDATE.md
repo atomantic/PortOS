@@ -51,8 +51,9 @@ positive running work requires interruption consent. Stale ordinary
 reservations are removed after shutdown without requiring an audit receipt.
 Domain jobs and outputs are never marked successful by that cleanup, and
 positively identified detached workers retain their ownership evidence. Boot uses normal interrupted-media recovery:
-owned orphan videos are reaped and failed, remote jobs reconcile, and surviving
-trainers reattach. Unrelated desktop daemons are untouched.
+owned orphan videos are reaped and failed, remote jobs reconcile, and legacy
+training jobs are retired without signaling detached processes. Unrelated
+desktop daemons are untouched.
 
 A live installer, database restore/cutover, or dirty/divergent source still
 prevents conflicting changes. A surviving directly launched PortOS runtime is

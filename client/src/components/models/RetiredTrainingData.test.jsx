@@ -2,9 +2,9 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { render, screen, waitFor, fireEvent } from '@testing-library/react';
 import RetiredTrainingData from './RetiredTrainingData';
 import toast from '../ui/Toast';
-import { getRetiredDataInventory, deleteRetiredData } from '../../services/apiLoraTraining.js';
+import { getRetiredDataInventory, deleteRetiredData } from '../../services/apiSystem.js';
 
-vi.mock('../../services/apiLoraTraining.js', () => ({
+vi.mock('../../services/apiSystem.js', () => ({
   getRetiredDataInventory: vi.fn(),
   deleteRetiredData: vi.fn(),
 }));

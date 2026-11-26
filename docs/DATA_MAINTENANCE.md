@@ -8,7 +8,8 @@ operator authority. The registry contains only LoRA retirement operations;
 archive retention and whole-checkout cleanup are separate workflows.
 
 LoRA training is retired. New training, dataset generation/captioning, resume and
-media-queue retries are refused. Old training URLs (and `/settings/data-maintenance`) lead to Models → LoRAs.
+media-queue retries are refused. Old training page URLs and `/settings/data-maintenance` lead to Models → LoRAs.
+The legacy `/api/lora-training` routes have been removed.
 Use the reference-image inputs supported by your chosen image model for new work.
 PortOS does not convert a training dataset or checkpoint into a reference-image
 workflow automatically, and the page offers no unsupported Upgrade action.
@@ -24,19 +25,12 @@ workflow automatically, and the page offers no unsupported Upgrade action.
 - Shared inference environments (mflux, MLX, torch/diffusers), media models and
   Hugging Face caches remain supported. Retirement does not uninstall them.
 
-Saved training configuration and PostgreSQL history remain readable. No format
-migration, boot purge or automatic configuration rewrite is required. A queued
-trainer is retired without spawning; the run records the retirement. A verified
-trainer that already survived a restart is observed to completion without starting
-a new trainer. Its outputs are finalized normally. Automatic stall resumes are
-disabled. Existing cancellation controls remain available in **Active Queues**.
-A detached trainer whose queue record is missing is also observed through completion,
-and blocks maintenance until it exits. The retained run cancel endpoint
-(`POST /api/lora-training/runs/:id/cancel`) can cancel that observer-owned process;
-upgrade never kills it merely because the queue record is absent. A retained run's
-checkpoint can still be made the deployed adapter with
-`POST /api/lora-training/runs/:id/promote-checkpoint` (`{ "step": <n> }`) once the
-run is no longer active.
+Upgrading keeps saved training configuration, PostgreSQL run history and files on
+disk. Old queued or interrupted training entries close in the media queue. PortOS
+continues to check for live legacy trainers before starting local accelerator
+work or applying an automatic update. Data Manager labels an unfinished run
+record with its last recorded status.
+Manage installed adapters and remove retired data from the LoRAs page.
 
 ## Explicit removal
 
@@ -49,8 +43,8 @@ The page is not a backup system.
    leaves everything intact.
 2. Confirm. The client calls `DELETE /api/data-maintenance/:operationId`; the
    server allowlist determines the path (callers cannot supply one) and the call
-   needs operator authority. A symlink, an unreadable tree, a surviving trainer or
-   queued/running media work refuses removal; resolve the reason and retry.
+   needs operator authority. Symlinks, unreadable files, a detached trainer from
+   an older install or queued/running media work block removal.
 
 Removal is permanent. There is no fake recovery/archive promise. A short admission
 gate prevents media submissions racing the removal. The server serializes removals,

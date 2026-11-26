@@ -149,7 +149,6 @@ import { relayUnloggedRecords } from './brainReconcile.js';
 import { initMediaJobQueue, resumeMediaJobCompletions, flushMediaJobQueue, quiesceMediaJobQueue } from './mediaJobQueue/index.js';
 import { createMediaJobHookLoader } from './mediaJobQueue/hookRegistry.js';
 import { initSpriteLocalAnimationHook } from './sprites/localAnimationJobHook.js';
-import { initLoraTraining } from './loraTraining/index.js';
 import { initSharing, quiesceSharingForExit, drainPeerSyncOperations } from './sharing/index.js';
 import { initMortalLoomStore } from './mortalLoomStore.js';
 import { initCatalogUniverseFiling, flushCatalogUniverseFiling } from './catalog/catalogUniverseFiling.js';
@@ -161,7 +160,6 @@ import { issueStore } from './pipeline/issues.js';
 import { storyBuilderStore } from './storyBuilder.js';
 import { writersRoomStore } from './writersRoom/store.js';
 import { mediaCollectionStore } from './mediaCollections.js';
-import { loraDatasetStore } from './loraDatasets.js';
 import { rapidReaderLibraryStore } from './rapidReaderLibrary.js';
 import { commissionStore, backfillAllCommissionFeedback } from './creativeCommissions/store.js';
 import { backfillProjectCommissionIds } from './creativeCommissions/projectControl.js';
@@ -305,7 +303,7 @@ export const bootstrapServices = async ({ io, dataDir, dataReferenceDir, serverD
     // but DO NOT crash the server. PortOS is single-user (AGENTS.md "Security
     // Model"); a hard exit on startup is worse than a noisy log the user can act
     // on. Returns per-store statuses for downstream telemetry; we discard them.
-    verifyCollections: () => verifyCollectionVersions([universeStore(), seriesStore(), issueStore(), conflictJournalStore(), storyBuilderStore(), mediaCollectionStore(), loraDatasetStore, rapidReaderLibraryStore, liOutcomesStore(), commissionStore(), gameStore, fableLoomStore, ...brainCollectionStores()]),
+    verifyCollections: () => verifyCollectionVersions([universeStore(), seriesStore(), issueStore(), conflictJournalStore(), storyBuilderStore(), mediaCollectionStore(), rapidReaderLibraryStore, liOutcomesStore(), commissionStore(), gameStore, fableLoomStore, ...brainCollectionStores()]),
 
     createToolkit: () => createAIToolkit({
       dataDir,
@@ -967,7 +965,6 @@ export const runBootSequence = ({ io, httpServer, localHttpServer, httpsEnabled,
     // LoRA run records reconcile against the live queue (interrupted runs →
     // failed) and mirror queue-side cancels. Own step so the smoke boot can
     // no-op it: the reconcile needs a database the hermetic root does not have.
-    initLoraTraining,
     initMediaJobDependentHooks,
     // Needs the reloaded queue (live frame jobs keep their panel state) and the
     // database; state repair only, never a provider or image call.

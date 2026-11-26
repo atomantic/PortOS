@@ -26,15 +26,25 @@ import { isPersistentMindTurnRunning } from './persistent/persistentMindSupervis
 const importRunner = () => import('./runner.js');
 const importBackup = () => import('./backup.js');
 
+// Detached trainers can survive a direct upgrade. Report verified process
+// activity without registering it as a queue job or exposing its identity.
+async function getRetiredTrainerActivity() {
+  const { findSurvivingTrainer } = await import('../lib/heavyJobClaim.js');
+  return await findSurvivingTrainer()
+    ? [{ kind: 'retired-lora-training', noun: 'legacy LoRA trainer', to: '/models/loras' }]
+    : [];
+}
+
 /** Manual updates care about executing work, not persisted recovery records. */
-export async function getObservedUpdateActivity() {
+export async function getObservedUpdateActivity(retiredTrainerActivity) {
   const attempt = fn => Promise.resolve().then(fn).catch(() => null);
-  const [capacity, models, mind, runs, backup, runner] = await Promise.all([
+  const [capacity, models, mind, runs, backup, runner, retiredTrainer] = await Promise.all([
     attempt(() => getQueueCapacity()), attempt(() => getActiveModelOperationCount()),
     attempt(() => isPersistentMindTurnRunning()),
     attempt(() => importRunner().then(m => m.getActiveRunCount())),
     attempt(() => importBackup().then(m => m.isBackupInProgress())),
     attempt(() => import('./cos/cosRunnerClient.js').then(m => m.getActiveAgentsFromRunner({ timeoutMs: 1500 }))),
+    retiredTrainerActivity ?? attempt(getRetiredTrainerActivity),
   ]);
   const agentIds = new Set();
   for (const [id, entry] of activeAgents) {
@@ -50,7 +60,7 @@ export async function getObservedUpdateActivity() {
     extras: { imageTo3d: Array.from({ length: Math.max(0, Number(models) || 0) }, () => ({})) },
     mind: { thinking: mind === true, queued: 0 }, llm: { active: (Number(runs) || 0) + getDirectProviderCallCount() },
     appOperations: listActiveAppOperations({ includeUpdateOwnership: true, onlyRunning: true }),
-    renders: listActiveRenders(), backup: { inProgress: backup === true },
+    renders: [...listActiveRenders(), ...(retiredTrainer ?? [])], backup: { inProgress: backup === true },
   };
 }
 
@@ -162,7 +172,7 @@ function agentCounts(agents, cosStatus, pendingTaskIds) {
  * The HTTP inspector opts into cached residency; safety checks omit it.
  */
 export async function getSystemActivity({ includeOllama = false, includeUpdateOwnership = false } = {}) {
-  const [jobs, models, pendingTaskIds, agents, mindState, llmState, backupInProgress, ollama] = await Promise.all([
+  const [jobs, models, pendingTaskIds, agents, mindState, llmState, backupInProgress, ollama, retiredTrainer] = await Promise.all([
     Promise.resolve(listJobs()).then((items) => items.filter((job) => LIVE_STATUSES.has(job.status))),
     // `null` = the read FAILED, distinct from `[]` = read fine, nothing
     // building. Both of these degrade to the value that unlocks a restart, so
@@ -186,6 +196,7 @@ export async function getSystemActivity({ includeOllama = false, includeUpdateOw
     // running", the same fail-closed direction every other slice here takes.
     importBackup().then((m) => m.isBackupInProgress()).catch(() => true),
     includeOllama ? getOllamaTelemetry() : null,
+    getRetiredTrainerActivity(),
   ]);
   const cosStatus = agents === null ? await getStatus().catch(() => null) : null;
   const slices = {
@@ -209,11 +220,11 @@ export async function getSystemActivity({ includeOllama = false, includeUpdateOw
     update: { inProgress: isUpdateInProgress(), ...(includeUpdateOwnership ? { handoffTracking: true } : {}) },
     // Final renders, draft excerpts and shot renders run their own ffmpeg and
     // browsers outside the media queue; an in-process count, no I/O.
-    renders: listActiveRenders(),
+    renders: [...listActiveRenders(), ...retiredTrainer],
     // No trusted contract needed: an in-process flag with no I/O once loaded.
     backup: { inProgress: backupInProgress },
   };
-  return { ...slices, ...(includeUpdateOwnership ? { observedWork: await getObservedUpdateActivity() } : {}),
+  return { ...slices, ...(includeUpdateOwnership ? { observedWork: await getObservedUpdateActivity(retiredTrainer) } : {}),
     ...(includeOllama ? { ollama } : {}), activity: summarizeSystemActivity(slices) };
 }
 

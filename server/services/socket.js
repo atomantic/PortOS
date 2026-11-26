@@ -28,7 +28,6 @@ import { attachTailcatForwardsToPeers } from './tailcatPeer.js';
 import { reviewEvents } from './review.js';
 import { loopEvents } from './loops.js';
 import { imageGenEvents } from './imageGenEvents.js';
-import { trainingEvents } from './loraTraining/events.js';
 import { mediaPromptHistoryEvents } from './mediaPromptHistory.js';
 import { mediaJobEvents } from './mediaJobQueue/index.js';
 import { importerEvents, getImporterProgressFrames } from './importerEvents.js';
@@ -977,9 +976,6 @@ function setupMediaGenEventForwarding() {
   });
   mediaJobEvents.on('changed', () => {
     emitToOperators('media-jobs:changed', {});
-  });
-  trainingEvents.on('checkpoints:changed', ({ runId }) => {
-    emitToOperators('training:checkpoints:changed', { runId });
   });
 
   // Bridge media-job cancellation onto a `*-gen:canceled` socket event keyed by

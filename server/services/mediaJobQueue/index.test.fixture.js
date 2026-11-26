@@ -115,11 +115,6 @@ export const stubs = {
   cancelAudioRemote: vi.fn(),
   cancelImageRemote: vi.fn(),
   cancelVideoRemote: vi.fn(),
-  // #1332: loraTraining is loaded through the runtime registry for runTraining
-  // (worker) and hasSurvivingTrainer (boot reconcile). Stub both so the boot
-  // re-attach decision is testable without loading the real trainer module.
-  runTraining: vi.fn(() => new Promise(() => {})),
-  hasSurvivingTrainer: vi.fn(async () => false),
   runVideoUpscale: vi.fn(() => new Promise(() => {})),
   cancelVideoUpscale: vi.fn(),
   runTopazUpscale: vi.fn(() => new Promise(() => {})),
@@ -245,12 +240,6 @@ vi.mock('../videoGen/remote.js', () => ({
   cancel: (...args) => stubs.cancelVideoRemote(...args),
 }));
 
-vi.mock('../loraTraining/index.js', () => ({
-  runTraining: (...args) => stubs.runTraining(...args),
-  hasSurvivingTrainer: (...args) => stubs.hasSurvivingTrainer(...args),
-  cancel: () => {},
-}));
-
 // Import the queue + the gen-event emitters AFTER the mocks above are
 // registered. Static imports would race with vi.mock hoisting on a real
 // dependency cycle, so dynamic-import this in beforeEach.
@@ -325,11 +314,6 @@ beforeEach(async () => {
   // Default codex stub: hang (matches video/local defaults so tests that
   // don't care about codex don't accidentally complete too fast).
   stubs.generateImageCodex.mockImplementation(() => new Promise(() => {}));
-  // #1332 training stubs lose their implementations on mockReset above; restore
-  // safe defaults (no survivor; runTraining hangs so a re-attached run stays
-  // 'running'). Individual tests override hasSurvivingTrainer as needed.
-  stubs.runTraining.mockImplementation(() => new Promise(() => {}));
-  stubs.hasSurvivingTrainer.mockResolvedValue(false);
   stubs.runVideoUpscale.mockImplementation(() => new Promise(() => {}));
   stubs.runTopazUpscale.mockImplementation(() => new Promise(() => {}));
   stubs.cancelTopazUpscale.mockReturnValue(true);

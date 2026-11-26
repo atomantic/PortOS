@@ -475,24 +475,6 @@ describe('mediaJobQueue', () => {
     expect(cleanupInterruptedSharingCopy).toHaveBeenCalledWith(id);
   });
 
-  it.each([true, false])('manual update recovery: training survivor=%s is observed or failed, never left indefinitely running', async survives => {
-    const id = '00000000-0000-4000-8000-000000000304';
-    writeFileSync(join(tempDataDir, 'media-jobs.json'), JSON.stringify({ jobs: [{ id, kind: 'training', status: 'running',
-      queuedAt: '2026-04-30T10:00:00.000Z', params: { runId: 'training-example' } }] }));
-    const { maintenance } = await import('../../lib/maintenanceAdmission.js');
-    const { hold } = maintenance.begin({ reason: 'Update acknowledged', owner: 'manual-update' });
-    try {
-      await importFresh(); stubs.hasSurvivingTrainer.mockResolvedValue(survives);
-      await mediaJobQueue.initMediaJobQueue();
-      if (survives) {
-        await waitFor(() => expect(stubs.runTraining).toHaveBeenCalledWith(expect.objectContaining({ jobId: id, reattach: true })));
-      } else {
-        expect(mediaJobQueue.getJob(id)).toMatchObject({ status: 'failed', error: 'interrupted by restart' });
-        expect(stubs.runTraining).not.toHaveBeenCalled();
-      }
-    } finally { maintenance.resume({ id: hold.id, revision: hold.revision }); }
-  });
-
   it('manual update recovery fails an interrupted local video and leaves queued work queued', async () => {
     const video = '00000000-0000-4000-8000-000000000305', queued = '00000000-0000-4000-8000-000000000306';
     writeFileSync(join(tempDataDir, 'media-jobs.json'), JSON.stringify({ jobs: [
@@ -531,57 +513,37 @@ describe('mediaJobQueue', () => {
     } finally { maintenance.resume({ id: hold.id, revision: hold.revision }); }
   });
 
-  it('boot recovery (#1332): a "running" training job whose trainer survived is re-enqueued for re-attach', async () => {
-    const runId = 'run-survivor-1';
+  it.each([
+    { status: 'queued', reattach: false, holdOwner: null },
+    { status: 'queued', reattach: true, holdOwner: null },
+    { status: 'running', reattach: false, holdOwner: null },
+    { status: 'running', reattach: true, holdOwner: 'manual-update' },
+    { status: 'running', reattach: true, holdOwner: 'Operator' },
+  ])('retires a $status training job (reattach: $reattach, hold: $holdOwner) without touching its files', async ({ status, reattach, holdOwner }) => {
+    const runId = 'example-retired';
     const trainingId = '00000000-0000-4000-8000-000000000010';
-    const persisted = {
-      jobs: [{
-        id: trainingId, kind: 'training', status: 'running',
-        queuedAt: '2026-04-30T10:00:00.000Z', startedAt: '2026-04-30T10:00:01.000Z',
-        params: { runId },
-      }],
-    };
-    writeFileSync(join(tempDataDir, 'media-jobs.json'), JSON.stringify(persisted, null, 2));
+    const runDir = join(tempDataDir, 'training-runs', runId);
+    mkdirSync(runDir, { recursive: true });
+    const checkpoint = join(runDir, 'checkpoint.bin');
+    writeFileSync(checkpoint, 'retained checkpoint');
+    const params = { runId, reattach };
+    const file = join(tempDataDir, 'media-jobs.json');
+    writeFileSync(file, JSON.stringify({ jobs: [{ id: trainingId, kind: 'training', status, params }] }));
+    const { maintenance } = await import('../../lib/maintenanceAdmission.js');
+    const hold = holdOwner ? maintenance.begin({ reason: 'Test hold', owner: holdOwner }).hold : null;
 
-    await importFresh();
-    stubs.hasSurvivingTrainer.mockResolvedValue(true); // trainer is still alive
-    await mediaJobQueue.initMediaJobQueue();
+    try {
+      await importFresh();
+      await mediaJobQueue.initMediaJobQueue();
 
-    // The reconcile consulted the probe with the run id.
-    expect(stubs.hasSurvivingTrainer).toHaveBeenCalledWith(runId);
-    // The worker resumes it via runTraining flagged reattach:true (NOT failed) —
-    // the same job id so SSE clients keyed off it still resolve.
-    await waitFor(() => stubs.runTraining.mock.calls.length === 1);
-    expect(stubs.runTraining).toHaveBeenCalledWith(expect.objectContaining({
-      jobId: trainingId, runId, reattach: true,
-    }));
-    // It occupies the GPU lane as a running job rather than being archived failed.
-    const job = mediaJobQueue.getJob(trainingId);
-    expect(job.status).toBe('running');
-    expect(job.error).toBeUndefined();
-  });
-
-  it('boot recovery (#1332): a "running" training job with no surviving trainer is failed as before', async () => {
-    const runId = 'run-dead-1';
-    const trainingId = '00000000-0000-4000-8000-000000000011';
-    const persisted = {
-      jobs: [{
-        id: trainingId, kind: 'training', status: 'running',
-        queuedAt: '2026-04-30T10:00:00.000Z', startedAt: '2026-04-30T10:00:01.000Z',
-        params: { runId },
-      }],
-    };
-    writeFileSync(join(tempDataDir, 'media-jobs.json'), JSON.stringify(persisted, null, 2));
-
-    await importFresh();
-    stubs.hasSurvivingTrainer.mockResolvedValue(false); // trainer did not survive
-    await mediaJobQueue.initMediaJobQueue();
-
-    expect(stubs.hasSurvivingTrainer).toHaveBeenCalledWith(runId);
-    const job = mediaJobQueue.getJob(trainingId);
-    expect(job.status).toBe('failed');
-    expect(job.error).toMatch(/interrupted by restart/);
-    expect(stubs.runTraining).not.toHaveBeenCalled();
+      const retired = { id: trainingId, status: 'canceled', error: expect.stringContaining('retired'), params };
+      expect(mediaJobQueue.getJob(trainingId)).toMatchObject(retired);
+      expect(JSON.parse(readFileSync(file, 'utf8')).jobs).toEqual([expect.objectContaining(retired)]);
+      expect(mediaJobQueue.getRunningJob()).toBeNull();
+      expect(readFileSync(checkpoint, 'utf8')).toBe('retained checkpoint');
+    } finally {
+      if (hold) maintenance.resume({ id: hold.id, revision: hold.revision });
+    }
   });
 
   it('boot recovery: persisted "queued" jobs are re-enqueued for the worker', async () => {

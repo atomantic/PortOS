@@ -79,23 +79,8 @@ const controlDir = (...segments) => {
 describe('trainingRunsBusy', () => {
   const emptyRunsDir = () => controlDir('runs-empty');
 
-  it('is idle when no training job is in flight', async () => {
-    await expect(trainingRunsBusy({ jobs: [], runsDir: emptyRunsDir() })).resolves.toEqual({ busy: false, reason: null });
-  });
-
-  it('is idle once every run has finished', async () => {
-    const jobs = [trainingJob({ status: 'completed' }), trainingJob({ id: 'job-0004', status: 'canceled' })];
-    await expect(trainingRunsBusy({ jobs, runsDir: emptyRunsDir() })).resolves.toEqual({ busy: false, reason: null });
-  });
-
-  it.each(['queued', 'running'])('reports busy for a %s run and counts it', async (status) => {
-    const { busy, reason } = await trainingRunsBusy({ jobs: [trainingJob({ status })], runsDir: emptyRunsDir() });
-    expect(busy).toBe(true);
-    expect(reason).toMatch(/^1 LoRA training run/);
-  });
-
-  it('survives a non-array job list instead of throwing into the fail-closed path', async () => {
-    await expect(trainingRunsBusy({ jobs: null, runsDir: emptyRunsDir() })).resolves.toBeTruthy();
+  it('is idle with no run directories', async () => {
+    await expect(trainingRunsBusy({ runsDir: emptyRunsDir() })).resolves.toEqual({ busy: false, reason: null });
   });
 
   it('is idle when a runs directory holds only finished runs', async () => {
@@ -103,23 +88,21 @@ describe('trainingRunsBusy', () => {
     const detached = controlDir('runs-finished', 'run-0001', '.detached');
     writeFileSync(join(detached, 'pid'), String(process.pid));
     writeFileSync(join(detached, 'exit'), '0');
-    await expect(trainingRunsBusy({ jobs: [], runsDir })).resolves.toEqual({ busy: false, reason: null });
+    await expect(trainingRunsBusy({ runsDir })).resolves.toEqual({ busy: false, reason: null });
   });
 
-  // A trainer is a detached child that outlives a pm2 restart, so between
-  // accepting requests and the boot reconcile it has no queue job at all.
-  it('reports busy for a trainer that outlived a restart and has no queue job', async () => {
+  it('reports busy for a detached trainer that outlived a restart', async () => {
     const runsDir = controlDir('runs-surviving');
     controlDir('runs-surviving', 'run-0001');
     const detached = controlDir('runs-surviving', 'run-0002', '.detached');
     writeFileSync(join(detached, 'pid'), String(process.pid));
-    const { busy, reason } = await trainingRunsBusy({ jobs: [], runsDir });
+    const { busy, reason } = await trainingRunsBusy({ runsDir });
     expect(busy).toBe(true);
     expect(reason).toMatch(/outlived a restart/);
   });
 
   it('is idle when the runs directory does not exist at all', async () => {
-    await expect(trainingRunsBusy({ jobs: [], runsDir: join(TEST_ROOT, 'runs-missing') }))
+    await expect(trainingRunsBusy({ runsDir: join(TEST_ROOT, 'runs-missing') }))
       .resolves.toEqual({ busy: false, reason: null });
   });
 
@@ -128,7 +111,7 @@ describe('trainingRunsBusy', () => {
   it('rejects rather than reporting idle when the runs directory cannot be read', async () => {
     const notADir = join(TEST_ROOT, 'runs-not-a-dir');
     writeFileSync(notADir, 'not a directory');
-    await expect(trainingRunsBusy({ jobs: [], runsDir: notADir })).rejects.toThrow();
+    await expect(trainingRunsBusy({ runsDir: notADir })).rejects.toThrow();
   });
 });
 

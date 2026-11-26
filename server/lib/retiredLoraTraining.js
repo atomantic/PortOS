@@ -1,41 +1,22 @@
 /**
- * Retirement refusal and short-lived admission for retained training data access/removal.
+ * Retirement response and media admission gate during retired data removal.
  */
 
 import { ServerError } from './errorHandler.js';
 
-export const TRAINING_RETIRED_MESSAGE = 'LoRA training is retired. Existing datasets, checkpoints and adapters are preserved. Use reference images for new generation; delete retained files from the LoRAs page.';
+export const TRAINING_RETIRED_MESSAGE = 'LoRA training is retired. Any remaining datasets, checkpoints and adapters are kept on disk. Use reference images for new generation; delete retained files from the LoRAs page.';
 
 export function refuseRetiredTraining() {
   throw new ServerError(TRAINING_RETIRED_MESSAGE, { status: 410, code: 'LORA_TRAINING_RETIRED' });
 }
 
 let removingRetiredData = false;
-let retainedDataUsers = 0;
 export function assertRetiredDataAvailable() {
   if (removingRetiredData) throw new ServerError('Data maintenance is removing retired inputs. Retry after it finishes.', { status: 409, code: 'DATA_MAINTENANCE_ACTIVE' });
 }
 export async function withRetiredDataRemoval(work) {
   assertRetiredDataAvailable();
-  if (retainedDataUsers > 0) throw new ServerError('Retained training data is being updated or a checkpoint is being promoted. Retry after it finishes.', { status: 409, code: 'MAINTENANCE_BUSY' });
   removingRetiredData = true;
   try { return await work(); }
   finally { removingRetiredData = false; }
-}
-
-export function acquireRetiredDataAccess() {
-  assertRetiredDataAvailable();
-  retainedDataUsers += 1;
-  let released = false;
-  return () => {
-    if (released) return;
-    released = true;
-    retainedDataUsers -= 1;
-  };
-}
-
-export async function withRetiredDataAccess(work) {
-  const release = acquireRetiredDataAccess();
-  try { return await work(); }
-  finally { release(); }
 }

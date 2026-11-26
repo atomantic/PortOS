@@ -33,7 +33,6 @@ const mediaRuntimeLoaders = {
   ltxUpscale: () => import('./videoGen/upscaleJob.js'),
   stitch: () => import('./videoGen/stitchJob.js'),
   vertical: () => import('./videoGen/verticalJob.js'),
-  training: () => import('./loraTraining/index.js'),
   videoLocal: () => import('./videoGen/local.js'),
   videoGrok: () => import('./videoGen/grok.js'),
   videoFal: () => import('./videoGen/fal.js'),

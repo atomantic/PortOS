@@ -1,11 +1,11 @@
-/** Retained adapter link for catalog and universe subjects; never creates training data. */
+/** Link from a catalog character to its installed inference adapter. */
 
 import { useCallback } from 'react';
 import { Link } from 'react-router';
 import { Sparkles } from 'lucide-react';
-import { getCharacterLoras } from '../../services/apiLoraTraining.js';
-import useListResource from '../../hooks/useListResource';
-import ListLoadError from '../ui/ListLoadError';
+import { getCharacterLoras } from '../../../services/apiImageVideo.js';
+import useListResource from '../../../hooks/useListResource';
+import ListLoadError from '../../ui/ListLoadError';
 
 export default function CharacterLoraChip({ entryId, ingredientId }) {
   const fetchLoras = useCallback(

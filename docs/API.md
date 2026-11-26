@@ -199,7 +199,6 @@ Every mounted API prefix (see `server/index.js` for the authoritative list). Eac
 | `/api/importer` | Story importer |
 | `/api/story-builder` | Story Builder |
 | `/api/loras` | Supported inference adapter management |
-| `/api/lora-training` | Retained run history: list/read runs, checkpoints and sample images, `POST /runs/:id/cancel` and `POST /runs/:id/promote-checkpoint`; launch and every other write return 410 `LORA_TRAINING_RETIRED`. `/api/lora-datasets` is removed |
 | `/api/data-maintenance` | Operator-authorized retired-data inventory and `DELETE /:operationId` removal of an allowlisted directory; see [Data Maintenance](DATA_MAINTENANCE.md) |
 | `/sdapi/v1` | AUTOMATIC1111-compatible image generation surface (gated by `settings.imageGen.expose.a1111`) |
 | `/api/openclaw` | OpenClaw operator chat |

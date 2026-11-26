@@ -156,7 +156,6 @@ describe('local video failure holds', () => {
     expect(mediaJobQueue.getJob(other).status).toBe('running');
     await finish(other, null);
     for (const [kind, emitter] of [['image', imageGenEvents], ['audio', audioGenEvents]]) {
-      stubs.runTraining.mockResolvedValue({});
       const { jobId } = await mediaJobQueue.enqueueJob({ kind, params: {} });
       await tick();
       expect(mediaJobQueue.getJob(jobId).status).toBe('running');
@@ -315,13 +314,12 @@ describe('local video failure holds', () => {
       { id: 'malformed-hold' },
     ] });
     writeFileSync(file, snapshot);
-    stubs.hasSurvivingTrainer.mockResolvedValue(true);
-    stubs.runTraining.mockResolvedValue({});
     await expect(mediaJobQueue.initMediaJobQueue()).resolves.toBeUndefined();
     await tick();
     expect(stubs.generateVideo).not.toHaveBeenCalled();
     expect(mediaJobQueue.getJob('interrupted-video').status).toBe('failed');
-    for (const generate of [stubs.generateImage, stubs.generateImageCodex, stubs.generateAudioRemote, stubs.runTraining]) {
+    expect(mediaJobQueue.getJob('saved-training').status).toBe('canceled');
+    for (const generate of [stubs.generateImage, stubs.generateImageCodex, stubs.generateAudioRemote]) {
       expect(generate).not.toHaveBeenCalled();
     }
     await expect(submit('example-other')).rejects.toMatchObject({ code: mediaJobQueue.MEDIA_QUEUE_PERSIST_FAILED });

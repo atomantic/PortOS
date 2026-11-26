@@ -106,8 +106,6 @@ export function listJobs({ status, kind, owner } = {}) {
   });
 }
 
-// IDs proven by the boot probe to have an existing trainer; request params cannot grant this.
-export const recoveringJobs = new Set();
 
 // Test-only: empty every container in place so held references stay valid.
 export function resetQueueStateForTests() {
@@ -117,5 +115,4 @@ export function resetQueueStateForTests() {
   remoteRunning.length = 0;
   archive.length = 0;
   videoHolds.clear();
-  recoveringJobs.clear();
 }

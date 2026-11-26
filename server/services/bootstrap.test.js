@@ -215,7 +215,6 @@ vi.mock('./mediaJobQueue/index.js', () => ({
   flushMediaJobQueue: steps.flushMedia, quiesceMediaJobQueue: steps.quiesceMedia,
 }));
 vi.mock('./sprites/localAnimationJobHook.js', () => ({ initSpriteLocalAnimationHook: noop }));
-vi.mock('./loraTraining/index.js', () => ({ initLoraTraining: asyncNoop }));
 vi.mock('./sharing/index.js', () => ({
   initSharing: steps.initSharing, quiesceSharingForExit: steps.quiesceSharing,
   drainPeerSyncOperations: steps.drainPeerSync, shutdownSharing: steps.shutdownSharing,
@@ -230,7 +229,6 @@ vi.mock('./pipeline/issues.js', () => ({ issueStore: collectionStore }));
 vi.mock('./storyBuilder.js', () => ({ storyBuilderStore: collectionStore }));
 vi.mock('./writersRoom/store.js', () => ({ writersRoomStore: collectionStore }));
 vi.mock('./mediaCollections.js', () => ({ mediaCollectionStore: collectionStore }));
-vi.mock('./loraDatasets.js', () => ({ loraDatasetStore: {} }));
 vi.mock('./rapidReaderLibrary.js', () => ({ rapidReaderLibraryStore: {} }));
 vi.mock('./creativeCommissions/store.js', () => ({ commissionStore: collectionStore, backfillAllCommissionFeedback: asyncNoop }));
 vi.mock('./creativeCommissions/projectControl.js', () => ({ backfillProjectCommissionIds: asyncNoop }));

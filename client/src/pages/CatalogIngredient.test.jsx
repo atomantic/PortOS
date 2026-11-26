@@ -180,7 +180,6 @@ vi.mock('../components/media/PinToMoodBoardMenu', () => ({ default: () => null }
 vi.mock('../components/media/PromptRefineModal', () => ({ default: () => null }));
 vi.mock('../components/media/PromptFromMedia', () => ({ PromptFromMediaModal: () => null }));
 vi.mock('../components/MediaImage', () => ({ default: ({ src, alt, fallbackSrc }) => <img src={src} alt={alt} data-fallback-src={fallbackSrc} /> }));
-vi.mock('../components/loraTraining/CharacterLoraChip', () => ({ default: () => null }));
 vi.mock('../components/TagPicker', () => ({
   default: ({ value = [], onChange }) => (
     <button
@@ -194,6 +193,8 @@ vi.mock('../components/TagPicker', () => ({
   ),
 }));
 vi.mock('../components/ui/Toast');
+
+vi.mock('../components/catalog/ingredient/CharacterLoraChip', () => ({ default: () => null }));
 
 import CatalogIngredient from './CatalogIngredient';
 import { buildGenerationPromptSeed } from '../lib/catalogImagePrompt';

@@ -41,7 +41,7 @@ vi.mock('../services/apiImageVideo.js', () => ({
   searchVideoLoras: vi.fn(),
   probeLoraEffect: vi.fn(),
 }));
-vi.mock('../services/apiLoraTraining.js', () => ({
+vi.mock('../services/apiSystem.js', () => ({
   getRetiredDataInventory: vi.fn(async () => []),
   deleteRetiredData: vi.fn(),
 }));

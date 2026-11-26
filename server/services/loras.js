@@ -278,7 +278,7 @@ export const listLoras = async () => {
         previewImageUrl: normalizeCivitaiImageUrl(stillPreviewUrl(sidecar?.previewImageUrl)) || null,
         description: sidecar?.description || '',
         license: typeof sidecar?.license === 'string' && sidecar.license.trim() ? sidecar.license.trim() : null,
-        // Trained-LoRA surfacing (sidecars written by services/loraTraining):
+        // Trained-LoRA surfacing (sidecars written by older PortOS installs):
         // 'trained' source + the character identity block let the library UI
         // badge them and characterLoraResolver match them. Null for Civitai
         // installs and legacy drops.

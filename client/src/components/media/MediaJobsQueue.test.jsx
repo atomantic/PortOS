@@ -48,11 +48,6 @@ vi.mock('../../services/apiSystem.js', async (importOriginal) => ({
   getSettings: vi.fn(async () => ({})),
 }));
 
-const listLoraTrainingCheckpoints = vi.fn();
-vi.mock('../../services/apiLoraTraining.js', () => ({
-  listLoraTrainingCheckpoints: (...a) => listLoraTrainingCheckpoints(...a),
-}));
-
 const socketHandlers = vi.hoisted(() => new Map());
 const socketEmit = vi.hoisted(() => vi.fn());
 vi.mock('../../services/socket', () => ({
@@ -99,7 +94,6 @@ beforeEach(() => {
   toast.error.mockClear();
   listMediaVideoHolds.mockReset().mockResolvedValue([]);
   resumeMediaVideoHold.mockReset();
-  listLoraTrainingCheckpoints.mockReset();
   retryMediaJob.mockReset();
   retryMediaJob.mockResolvedValue({ jobId: 'new-job-1234' });
   getVideoGenModelContext.mockReset();
@@ -115,7 +109,6 @@ beforeEach(() => {
 
 it('applies only matching progress frames to a running row without rereading the queue', async () => {
   listQueueMediaJobs.mockResolvedValue([trainingJob]);
-  listLoraTrainingCheckpoints.mockResolvedValue({ checkpoints: [] });
   const { unmount } = render(<MediaJobsQueue kind="training" />);
   expect(await screen.findByText('50%')).toBeInTheDocument();
   expect(socketEmit).toHaveBeenCalledWith('media-jobs:subscribe');
@@ -922,7 +915,6 @@ describe('MediaJobsQueue — Agy retry model field', () => {
 describe('MediaJobsQueue — training rows', () => {
   it('renders a training summary + engine/character label instead of a prompt', async () => {
     listQueueMediaJobs.mockResolvedValue([trainingJob]);
-    listLoraTrainingCheckpoints.mockResolvedValue({ checkpoints: [] });
 
     render(<MediaJobsQueue kind="training" />);
 
@@ -932,76 +924,24 @@ describe('MediaJobsQueue — training rows', () => {
     expect(screen.getByText(/Training Queue/i)).toBeInTheDocument();
   });
 
-  it('draws a loss sparkline and sample thumbnails from the run checkpoints', async () => {
-    listQueueMediaJobs.mockResolvedValue([trainingJob]);
-    listLoraTrainingCheckpoints.mockResolvedValue({
-      checkpoints: [
-        { step: 100, loss: 0.8, previewUrl: '/api/lora-training/runs/run-abc/samples/a.png', deployed: false },
-        { step: 200, loss: 0.4, previewUrl: '/api/lora-training/runs/run-abc/samples/b.png', deployed: true },
-      ],
-    });
-
-    render(<MediaJobsQueue kind="training" />);
-
-    await waitFor(() => expect(screen.getByRole('img', { name: /Training loss curve/i })).toBeInTheDocument());
-    // Latest loss is surfaced.
-    expect(screen.getByText('0.4000')).toBeInTheDocument();
-    // Both checkpoint sample thumbnails render.
-    expect(screen.getByAltText('sample @ step 100')).toBeInTheDocument();
-    expect(screen.getByAltText('sample @ step 200')).toBeInTheDocument();
-  });
-
-  it('shows a friendly placeholder when no checkpoints exist yet', async () => {
-    listQueueMediaJobs.mockResolvedValue([trainingJob]);
-    listLoraTrainingCheckpoints.mockResolvedValue({ checkpoints: [] });
-
-    render(<MediaJobsQueue kind="training" />);
-
-    await waitFor(() => expect(screen.getByText(/No checkpoints yet/i)).toBeInTheDocument());
-  });
-
-  it('does not fetch checkpoints for non-training jobs', async () => {
-    listQueueMediaJobs.mockResolvedValue([{
-      id: 'img1', kind: 'image', status: 'running', progress: 0.2,
-      params: { prompt: 'a castle', modelId: 'z-image-turbo' },
-    }]);
-
-    render(<MediaJobsQueue kind="image" />);
-
-    await waitFor(() => expect(screen.getByText(/"a castle"/)).toBeInTheDocument());
-    expect(listLoraTrainingCheckpoints).not.toHaveBeenCalled();
-  });
 });
 
-// Queue and checkpoints advance from events, without timer-driven reads.
+// Queue updates arrive from events without timer-driven reads.
 describe('MediaJobsQueue — socket updates', () => {
   beforeEach(() => { vi.useFakeTimers({ shouldAdvanceTime: true }); });
   afterEach(() => { vi.useRealTimers(); vi.restoreAllMocks(); });
 
   it('updates from events and reconciles reconnect and tab show once', async () => {
     listQueueMediaJobs.mockResolvedValue([trainingJob]);
-    listLoraTrainingCheckpoints.mockResolvedValue({ checkpoints: [] });
-    const { unmount } = render(<MediaJobsQueue kind="training" />);
-    await screen.findByText(/No checkpoints yet/);
+      const { unmount } = render(<MediaJobsQueue kind="training" />);
+    await screen.findByText(/Training "Kessa"/);
     expect(listQueueMediaJobs).toHaveBeenCalledTimes(1);
-    expect(listLoraTrainingCheckpoints).toHaveBeenCalledTimes(1);
 
     await act(async () => { await vi.advanceTimersByTimeAsync(60_000); });
     expect(listQueueMediaJobs).toHaveBeenCalledTimes(1);
-    expect(listLoraTrainingCheckpoints).toHaveBeenCalledTimes(1);
-
-    listLoraTrainingCheckpoints.mockResolvedValue({ checkpoints: [
-      { step: 250, loss: 0.42, previewUrl: '/example-preview.png' },
-    ] });
-    await act(async () => { emitSocket('training:checkpoints:changed', { runId: 'other-run' }); });
-    expect(listLoraTrainingCheckpoints).toHaveBeenCalledTimes(1);
-    await act(async () => { emitSocket('training:checkpoints:changed', { runId: 'run-abc' }); });
-    expect(screen.queryByText(/No checkpoints yet/)).not.toBeInTheDocument();
-    expect(listLoraTrainingCheckpoints).toHaveBeenCalledTimes(2);
 
     await act(async () => { emitSocket('connect'); });
     expect(listQueueMediaJobs).toHaveBeenCalledTimes(2);
-    expect(listLoraTrainingCheckpoints).toHaveBeenCalledTimes(3);
 
     const visibility = vi.spyOn(document, 'visibilityState', 'get').mockReturnValue('hidden');
     await act(async () => { document.dispatchEvent(new Event('visibilitychange')); });
@@ -1013,7 +953,6 @@ describe('MediaJobsQueue — socket updates', () => {
     visibility.mockReturnValue('visible');
     await act(async () => { document.dispatchEvent(new Event('visibilitychange')); });
     expect(listQueueMediaJobs).toHaveBeenCalledTimes(3);
-    expect(listLoraTrainingCheckpoints).toHaveBeenCalledTimes(4);
 
     listQueueMediaJobs.mockResolvedValue([]);
     await act(async () => { emitSocket('media-jobs:changed', {}); });

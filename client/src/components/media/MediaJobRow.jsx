@@ -13,7 +13,6 @@ import {
   recoverTopazJob,
 } from '../../services/apiImageVideo.js';
 import ContinuationDetails from '../videoGen/ContinuationDetails';
-import TrainingJobDetail, { trainingSummary } from './TrainingJobDetail';
 import EditRetryForm from './EditRetryForm';
 import VideoRetryForm from './VideoRetryForm';
 import { codexEffortOf } from './retryOverrides';
@@ -25,6 +24,19 @@ const STATUS_BADGE = {
   failed: 'bg-port-error/30 text-port-error',
   canceled: 'bg-port-warning/30 text-port-warning',
 };
+
+// One-line training summary in place of the (absent) prompt: who's training,
+// the LoRA rank, and the step budget.
+function trainingSummary(params) {
+  if (!params) return 'training';
+  const who = (params.characterName || '').trim();
+  const bits = [
+    who ? `Training "${who}"` : 'Training',
+    Number.isFinite(params.rank) ? `rank ${params.rank}` : null,
+    Number.isFinite(params.steps) ? `${params.steps} steps` : null,
+  ].filter(Boolean);
+  return bits.join(' · ');
+}
 
 const KIND_ICON = { video: Film, image: ImageIcon, training: Cpu };
 
@@ -40,7 +52,7 @@ const ownerLabel = (job) => isCreativeDirectorJob(job) ? 'Creative Director' : j
 
 // Compact "engine / model" badge so a failed row tells the user *what* failed,
 // not just that it failed. Codex jobs carry `params.model`; local image/video
-// jobs carry `params.modelId`; training jobs carry a runtime + character. A
+// jobs carry `params.modelId`; historical training jobs carry a runtime + character. A
 // federated job is badged `remote` off the server-projected `job.renderer`.
 // Trims long HF repo paths to the tail segment.
 function modelLabel(params, renderer) {
@@ -316,9 +328,6 @@ export default function JobRow({ job, snapshotRequestedAt, onCancel, onRetry, on
         <div role="status" className="text-xs text-port-warning-text mt-2 truncate" title={job.statusMsg}>{job.statusMsg}</div>
       )}
       {job.status === 'running' && <RunningJobProgress job={job} snapshotRequestedAt={snapshotRequestedAt} />}
-      {job.kind === 'training' && job.params?.runId && (
-        <TrainingJobDetail runId={job.params.runId} />
-      )}
       {job.kind === 'video' && job.params?.continuation && (
         <details className="mt-2 text-xs text-port-text-muted">
           <summary className="cursor-pointer">Continuation details</summary>

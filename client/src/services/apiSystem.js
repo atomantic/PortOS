@@ -419,6 +419,12 @@ export const deleteBackupSnapshot = (snapshotId, source, options = {}) => {
   return request(`/backup/snapshots/${encodeURIComponent(snapshotId)}${query}`, { method: 'DELETE', ...options });
 };
 
+// Retired-training storage (allowlisted server-side; the caller names an operation id, never a path).
+export const getRetiredDataInventory = (options = {}) =>
+  request('/data-maintenance', { silent: true, hostControlOptional: true, ...options });
+export const deleteRetiredData = (operationId) =>
+  request(`/data-maintenance/${encodeURIComponent(operationId)}`, { method: 'DELETE' });
+
 // Data Manager
 export const getDataOverview = (options) => request('/data', options);
 export const getDataCategory = (key, options = {}) => request(`/data/${key}${options.measure ? '?measure=1' : ''}`, options);
