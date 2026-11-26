@@ -2585,17 +2585,6 @@ ALTER TABLE beeper_outbox ADD COLUMN IF NOT EXISTS send_requested_at TIMESTAMPTZ
 
 CREATE INDEX IF NOT EXISTS idx_beeper_outbox_conversation_state ON beeper_outbox (conversation_id, state, created_at DESC);
 
-INSERT INTO tribe_identities (person_id, kind, network, handle, source, linked_at)
-   SELECT DISTINCT ON (c.account_id, p.source_user_id)
-          p.tribe_person_id, 'beeper-user', c.account_id, p.source_user_id, 'backfill', NOW()
-   FROM beeper_participants p
-   JOIN beeper_conversations c ON c.id = p.conversation_id
-   JOIN tribe_people tp ON tp.id = p.tribe_person_id AND tp.deleted = FALSE
-   WHERE p.tribe_person_id IS NOT NULL AND c.account_id <> ''
-     AND NOT EXISTS (SELECT 1 FROM tribe_identities WHERE kind = 'beeper-user')
-   ORDER BY c.account_id, p.source_user_id, p.updated_at DESC
-   ON CONFLICT (kind, network, handle) DO NOTHING;
-
 CREATE TABLE IF NOT EXISTS github_notifications (
     account_id TEXT NOT NULL,
     thread_id TEXT NOT NULL,
