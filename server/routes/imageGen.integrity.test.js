@@ -167,8 +167,13 @@ describe('Image Gen integrity routes', () => {
     expect(repairModelCache).toHaveBeenCalledWith('org/flux2', { deep: false, revision: null });
   });
 
-  it('POST /models/:id/repair 404s for an unknown model', async () => {
-    const res = await request(app).post('/api/image-gen/models/nope/repair').send({});
-    expect(res.status).toBe(404);
+  it('resolves the repair target before validating the body', async () => {
+    const unknown = await request(app).post('/api/image-gen/models/nope/repair').send({ deep: 'true' });
+    expect(unknown.status).toBe(404);
+    expect(unknown.body.code).toBe('UNKNOWN_MODEL');
+    const invalid = await request(app).post('/api/image-gen/models/flux2/repair').send({ deep: 'true' });
+    expect(invalid.status).toBe(400);
+    expect(invalid.body).toMatchObject({ code: 'VALIDATION_ERROR', error: expect.stringMatching(/^Validation failed: deep:/) });
+    expect(repairModelCache).not.toHaveBeenCalled();
   });
 });

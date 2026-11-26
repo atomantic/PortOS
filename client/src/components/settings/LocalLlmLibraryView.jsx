@@ -745,7 +745,7 @@ export default function LocalLlmLibraryView() {
                             ~{ram} GB RAM
                           </span>
                         )}
-                        {isHf && <span>{m.downloads?.toLocaleString?.() || 0} downloads</span>}
+                        {isHf && <span>{formatCount(m.downloads, { fallback: '0' })} downloads</span>}
                         {isHf && Number.isFinite(createdMs) && (
                           <span
                             title={`Published ${formatDateNumeric(createdMs)}${Number.isFinite(updatedMs) ? ` · updated ${timeAgo(m.updatedAt)}` : ''}`}

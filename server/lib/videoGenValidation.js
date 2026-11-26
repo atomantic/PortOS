@@ -5,7 +5,10 @@
 import { z } from 'zod';
 import { VIDEO_GEN_MODES } from './generationModes.js';
 import { a2vLoraStageStrengthsSchema, isDefaultA2vLoraStages } from './videoLoraStageValidation.js';
-import { grokVideoDurationSchema } from './sharedSchemas.js';
+import { grokVideoDurationSchema, modelDownloadQuerySchema } from './sharedSchemas.js';
+import { HANDHELD_SEED_MAX } from './handheldCamera.js';
+import { JSON_BODY_LIMIT_BYTES } from './uploadLimits.js';
+import { VERTICAL_RATIO_IDS } from './verticalReframe.js';
 import {
   REACTOR_MAX_CLIP_ID_LENGTH, REACTOR_MIN_CLIP_SECONDS, REACTOR_MAX_CLIP_SECONDS,
   REACTOR_ASPECTS,
@@ -17,6 +20,7 @@ import {
   VIDEO_GEN_LOCAL_ONLY_FIELDS,
   MAX_VIDEO_REFERENCE_LABEL_LENGTH,
   PREVIEW_UPLOAD_FIELDS,
+  UPSCALE_METHODS, DEFAULT_UPSCALE_METHOD,
 } from './videoGenRequestFields.js';
 import { IC_LORA_MODE_VALUES, listIcLoraRemixModes } from './icLoraWeights.js';
 import { DRAFT_DECODE_IDS } from './videoDraftDecoders.js';
@@ -491,3 +495,76 @@ export const promptPreviewBodySchema = generateBodySchema.safeExtend({
 
 // GET /status: `fresh=true` drops the 30s interpreter-health memo before probing (manual Refresh, install completion).
 export const statusQuerySchema = z.object({ fresh: z.enum(['true', 'false']).optional() });
+
+export const overnightBodySchema = z.object({
+  projectId: z.string().min(1).max(200),
+  sceneIds: z.array(z.string().min(1).max(200)).min(1).max(200),
+  modelIds: z.array(z.string().min(1).max(256)).min(1).max(4),
+  startAt: z.string().datetime().optional(),
+  stopBy: z.string().datetime().optional(),
+}).refine((b) => !b.startAt || !b.stopBy || Date.parse(b.stopBy) > Date.parse(b.startAt),
+  { message: 'The stop-by time must be after the start time', path: ['stopBy'] });
+
+export const overnightQuerySchema = z.object({ projectId: z.string().min(1).max(200) });
+
+export const batchIdParamsSchema = z.object({ batchId: z.string().uuid() });
+
+export const updatePromptSchema = z.object({ prompt: z.string().max(8000) });
+
+// `hidden` is required: reading an absent body as `false` turned a malformed
+// request into a silent unhide.
+export const visibilitySchema = z.object({ hidden: z.boolean() });
+
+// Legacy base64 callers retain the JSON transport bounds; multipart files bypass them.
+export const uploadVideoSchema = z.object({
+  data: z.string().min(1).max(JSON_BODY_LIMIT_BYTES),
+  filename: z.string().max(255).optional(),
+});
+
+export const posterSchema = z.object({ atSec: z.number().finite().nullable() });
+
+// Render jobs use UUID history ids, while shared-gallery uploads use an
+// `upload-<uuid8>` id. These operations derive a NEW artifact path from the
+// resolved record (an anchor frame, an upscale, a stitch output) rather than
+// merely reading or mutating the row, so they hold the tighter of the two
+// contracts and accept only the two id forms this install can mint.
+export const historyIdSchema = z.string().regex(
+  /^(?:[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}|upload-[a-f0-9]{8})$/i,
+  'invalid history id',
+);
+
+// The method choice, shared by the action's body and the plan endpoint's query
+// so the two can never disagree on what is accepted or what an omission means.
+// An absent method is exactly Lanczos, so every pre-#6509 client keeps its
+// current behavior without sending anything new.
+export const upscaleMethodSchema = z.object({
+  method: z.enum(UPSCALE_METHODS).default(DEFAULT_UPSCALE_METHOD),
+});
+
+export const trimBodySchema = z.object({
+  startSec: z.number().finite().positive().max(3600).optional(),
+  endSec: z.number().finite().positive().max(3600).optional(),
+}).refine((b) => b.startSec !== undefined || b.endSec !== undefined, { message: 'startSec or endSec is required' })
+  .refine((b) => b.startSec === undefined || b.endSec === undefined || b.endSec > b.startSec, { message: 'endSec must be after startSec', path: ['endSec'] });
+
+export const handheldBodySchema = z.object({
+  shake: z.number().finite().min(0).max(1),
+  steps: z.number().finite().min(0).max(1),
+  seed: z.number().int().min(1).max(HANDHELD_SEED_MAX).optional(),
+}).strict();
+
+export const verticalBodySchema = z.object({ ratio: z.enum(VERTICAL_RATIO_IDS) }).strict();
+
+export const stitchBodySchema = z.object({
+  videoIds: z.array(historyIdSchema).min(2).max(20),
+});
+
+export const topazQuoteBodySchema = z.object({ model: z.enum(['proteus', 'starlight']).default('proteus') });
+
+export const topazJobParamsSchema = z.object({ jobId: z.string().uuid() });
+
+export const topazTokenBodySchema = z.object({ token: z.string().uuid() });
+
+export const speedProfileDownloadQuerySchema = modelDownloadQuerySchema.extend({
+  speedProfileId: z.string().min(1).max(64).optional(),
+});

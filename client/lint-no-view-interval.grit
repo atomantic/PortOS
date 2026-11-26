@@ -1,0 +1,16 @@
+language js
+
+JsCallExpression(callee = or {
+  `setInterval`,
+  JsStaticMemberExpression(member = `setInterval`),
+  JsComputedMemberExpression(
+    object = or { `window`, `globalThis`, `self` },
+    member = or { `"setInterval"`, `'setInterval'` }
+  )
+}) as $call where {
+  register_diagnostic(
+    span = $call,
+    message = "Use socket updates for server data, or hooks/useAutoRefetch.js for a sanctioned poll. Document local-only timers at the call site.",
+    severity = "error"
+  )
+}

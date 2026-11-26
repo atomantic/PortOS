@@ -9,8 +9,6 @@ vi.mock('../lib/runCliBounded.js', () => ({
 }));
 import { runCliBounded } from '../lib/runCliBounded.js';
 
-import { scaffoldXcode } from './xcodeScaffold.js';
-
 /** Every emitted file, repo-relative with POSIX separators, sorted. */
 async function listFiles(root) {
   const entries = await readdir(root, { recursive: true, withFileTypes: true });
@@ -22,15 +20,21 @@ async function listFiles(root) {
 
 describe('scaffoldXcode', () => {
   let repoPath;
+  let scaffoldXcode;
   const steps = [];
   const addStep = (name, status) => steps.push([name, status]);
 
   beforeEach(async () => {
+    vi.stubEnv('XCODE_TEAM_ID', undefined);
+    vi.stubEnv('XCODE_BUNDLE_PREFIX', undefined);
+    vi.resetModules();
+    ({ scaffoldXcode } = await import('./xcodeScaffold.js'));
     steps.length = 0;
     repoPath = await mkdtemp(join(tmpdir(), 'portos-xcode-scaffold-'));
   });
 
   afterEach(async () => {
+    vi.unstubAllEnvs();
     await rm(repoPath, { recursive: true, force: true });
   });
 
@@ -63,6 +67,10 @@ describe('scaffoldXcode', () => {
 
     const projectYml = await readFile(join(repoPath, 'project.yml'), 'utf8');
     expect(projectYml).toContain('  Sample_App:\n    type: application\n    platform: iOS');
+    expect(projectYml).toContain('bundleIdPrefix: com.example');
+    expect(projectYml).toContain('DEVELOPMENT_TEAM: YOUR_TEAM_ID');
+    expect(projectYml).toContain('PRODUCT_BUNDLE_IDENTIFIER: com.example.SampleApp');
+    expect(await readFile(join(repoPath, '.env.example'), 'utf8')).toContain('TEAM_ID=YOUR_TEAM_ID\n');
     expect(projectYml).toContain('  Sample_AppTests:');
     expect(projectYml).not.toContain('macOS');
     expect(projectYml).not.toContain('watchOS');
@@ -71,6 +79,20 @@ describe('scaffoldXcode', () => {
     expect(await readFile(join(repoPath, 'Sample_App/ContentView.swift'), 'utf8'))
       .not.toContain('AppConstants');
     expect(steps).toContainEqual(['Create iOS project', 'done']);
+  });
+
+  it('uses configured signing and bundle defaults throughout the scaffold', async () => {
+    vi.stubEnv('XCODE_TEAM_ID', 'EXAMPLE123');
+    vi.stubEnv('XCODE_BUNDLE_PREFIX', 'org.example');
+    vi.resetModules();
+    ({ scaffoldXcode } = await import('./xcodeScaffold.js'));
+    await scaffoldXcode(repoPath, 'Sample App', 'sample-app', addStep, { platforms: ['ios'] });
+
+    const projectYml = await readFile(join(repoPath, 'project.yml'), 'utf8');
+    expect(projectYml).toContain('bundleIdPrefix: org.example');
+    expect(projectYml).toContain('DEVELOPMENT_TEAM: EXAMPLE123');
+    expect(projectYml).toContain('PRODUCT_BUNDLE_IDENTIFIER: org.example.SampleApp');
+    expect(await readFile(join(repoPath, '.env.example'), 'utf8')).toContain('TEAM_ID=EXAMPLE123\n');
   });
 
   it('emits iOS + macOS + watchOS targets by default', async () => {

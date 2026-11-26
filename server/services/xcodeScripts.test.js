@@ -25,7 +25,7 @@ vi.mock('util', () => ({
 }));
 
 import {
-  toBundleId, toTargetName, XCODE_BUNDLE_PREFIX,
+  toBundleId, toTargetName, XCODE_BUNDLE_PREFIX, XCODE_TEAM_ID,
   checkScripts, installScripts,
   generateDeployScript, generateScreenshotScript, generateMacScreenshotScript
 } from './xcodeScripts.js';
@@ -381,6 +381,10 @@ describe('xcodeScripts', () => {
       expect(result.errors).toHaveLength(0);
       // writeFile called for each script + .env.example (since deploy.sh installed)
       expect(writeFile).toHaveBeenCalledTimes(3);
+      expect(writeFile).toHaveBeenCalledWith(
+        expect.stringMatching(/[\\/]\.env\.example$/),
+        expect.stringContaining(`TEAM_ID=${XCODE_TEAM_ID}\n`)
+      );
       // chmod called once with both installed paths
       const [chmodBin, chmodArgs] = hoisted.execFileMock.mock.calls[0];
       expect(chmodBin).toBe('chmod');

@@ -13,6 +13,7 @@ import {
 import toast from '../../ui/Toast';
 import { updateCosConfig, getCosBudgetUsage, getPersistentMind } from '../../../services/apiAgents.js';
 import { useSocketResource } from '../../../hooks/useSocketResource.js';
+import socket from '../../../services/socket';
 import PersistentMindProfileControls from '../PersistentMindProfileControls';
 import { PersistentMindThoughtStatus } from '../PersistentMindRuntimePanel';
 import ConfigRow from './ConfigRow';
@@ -222,7 +223,7 @@ const getSavedDomainSelection = (config, domainId) => (
   domainId === CREATIVE_DOMAIN.id ? getCreativeAutonomyOverride(config) : getDomainMode(config, domainId)
 );
 
-const MIND_STATUS_EVENTS = ['cos:mind:event', 'cos:mind:status', 'cos:config:changed'];
+const MIND_STATUS_EVENTS = ['cos:config:changed'];
 
 function PersistentMindStatus({ mind, loaded, error }) {
   const state = mind?.state;
@@ -385,11 +386,32 @@ export default function ConfigTab({ config, onUpdate, onEvaluate, avatarStyle, r
       .catch(() => {})
   ), []);
 
-  const { data: mindData, loading: mindLoading, error: mindError, refetch: refreshMindStatus } = useSocketResource(
-    () => getPersistentMind({ limit: 1 }, { silent: true }),
+  const mindRead = useRef(null);
+  const { data: mindData, loading: mindLoading, error: mindError, refetch: refreshMindStatus, updateData: updateMindStatus } = useSocketResource(
+    async ({ signal }) => {
+      const read = { state: null };
+      mindRead.current = read;
+      try {
+        const data = await getPersistentMind({ limit: 1 }, { signal, silent: true });
+        return read.state ? { ...data, state: read.state } : data;
+      } finally {
+        if (mindRead.current === read) mindRead.current = null;
+      }
+    },
     { namespace: 'cos', events: MIND_STATUS_EVENTS },
   );
   const mindStatus = { data: mindData, loaded: !mindLoading, error: mindError ? mindError.message || 'Persistent mind status is unavailable' : null };
+
+  useEffect(() => {
+    const applyStatus = state => {
+      if (document.visibilityState === 'hidden' || typeof state?.status !== 'string') return;
+      // Keep the profile read alive when a status snapshot arrives mid-read.
+      if (mindRead.current) mindRead.current.state = state;
+      else updateMindStatus(previous => ({ ...previous, state }));
+    };
+    socket.on('cos:mind:status', applyStatus);
+    return () => socket.off('cos:mind:status', applyStatus);
+  }, [updateMindStatus]);
 
   useEffect(() => { void refreshBudgetUsage(); }, [refreshBudgetUsage]);
 

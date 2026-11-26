@@ -225,6 +225,25 @@ describe('restoreSnapshot manifest verification', () => {
         expect(existsSync(liveLegacyLedgerPath())).toBe(false);
       });
 
+      it('restores the live ledger when installing the legacy ledger fails', async () => {
+        await seedLegacySnapshot();
+        const liveLedger = JSON.stringify(['001-example.js', '359-example.js']);
+        const legacyLedger = JSON.stringify(['001-example.js']);
+        await realFs.writeFile(liveLedgerPath(), liveLedger);
+        await realFs.mkdir(joinPath(PATHS.data, 'migrations'), { recursive: true });
+        await realFs.writeFile(liveLegacyLedgerPath(), legacyLedger);
+        const installError = Object.assign(new Error('Legacy ledger rename denied'), { code: 'EACCES' });
+        fs.rename.mockImplementation(async (source, destination) => {
+          if (source === liveLegacyLedgerPath() && destination === liveLedgerPath()) throw installError;
+          return realFs.rename(source, destination);
+        });
+
+        await expect(finishRestore({ dryRun: false })).rejects.toMatchObject({ code: 'EACCES', message: expect.stringContaining(installError.message) });
+        expect(await realFs.readFile(liveLedgerPath(), 'utf8')).toBe(liveLedger);
+        expect(await realFs.readFile(liveLegacyLedgerPath(), 'utf8')).toBe(legacyLedger);
+        expect(await parkedLedgers()).toEqual([]);
+      });
+
       it('adopts the ledger on an install that had none, parking nothing', async () => {
         await seedLegacySnapshot();
         await realFs.mkdir(joinPath(PATHS.data, 'migrations'), { recursive: true });

@@ -65,15 +65,26 @@ vi.mock('./projects.js', () => ({
 const { buildTypographyDocument } = await import('./composition.js');
 const { titleCardRuntimeSource } = await import('../../lib/musicVideo/musicVideoTitleCard.js');
 const { typographyOverlayWindows } = await import('./compositionRender.js');
-const { cancelShotRender, getShotRenderStatus, startShotRender } = await import('./shotSegments.js');
+const { assertSegmentCleanupIdle, cancelShotRender, getShotRenderStatus, startShotRender } = await import('./shotSegments.js');
+const { assertRenderCleanupIdle } = await import('./renderCleanupActivity.js');
 const { musicVideoEvents } = await import('./events.js');
 const { PATHS } = await import('../../lib/fileUtils.js');
 
 const previousTimeout = process.env.PORTOS_MUSIC_VIDEO_OVERLAY_FRAME_TIMEOUT_MS;
-afterAll(() => {
-  if (previousTimeout === undefined) delete process.env.PORTOS_MUSIC_VIDEO_OVERLAY_FRAME_TIMEOUT_MS;
-  else process.env.PORTOS_MUSIC_VIDEO_OVERLAY_FRAME_TIMEOUT_MS = previousTimeout;
-  cleanupTempDataRoots();
+afterAll(async () => {
+  try {
+    // The terminal event can precede the last encoder and cache cleanup work.
+    await vi.waitFor(() => {
+      for (const projectId of ['mv-overlay-shot', 'mv-overlay-cancel']) {
+        assertSegmentCleanupIdle(projectId);
+        assertRenderCleanupIdle(projectId);
+      }
+    }, { timeout: 8000 });
+  } finally {
+    if (previousTimeout === undefined) delete process.env.PORTOS_MUSIC_VIDEO_OVERLAY_FRAME_TIMEOUT_MS;
+    else process.env.PORTOS_MUSIC_VIDEO_OVERLAY_FRAME_TIMEOUT_MS = previousTimeout;
+    cleanupTempDataRoots();
+  }
 });
 
 const hasFfmpeg = (() => {

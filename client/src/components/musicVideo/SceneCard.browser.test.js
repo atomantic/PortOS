@@ -11,6 +11,15 @@ import { resolveTestChrome } from '../../../../scripts/lib/testChrome.js';
 const chrome = resolveTestChrome();
 const root = fileURLToPath(new URL('../../..', import.meta.url));
 
+function isolateFixturePage(page, origin) {
+  const fixtureOrigin = new URL(origin).origin;
+  return page.route('**/*', route => {
+    const url = new URL(route.request().url());
+    return url.origin === fixtureOrigin && !/^\/(api|data|socket\.io)(\/|$)/.test(url.pathname)
+      ? route.continue() : route.abort();
+  });
+}
+
 describe.skipIf(!chrome)('shot editor render selector layout', () => {
   let fixture;
 
@@ -18,6 +27,12 @@ describe.skipIf(!chrome)('shot editor render selector layout', () => {
     fixture = await startBrowserFixture({
       name: 'shot-editor-render-selector', createServer, chromium,
       launchOptions: { executablePath: chrome, args: ['--mute-audio'] },
+      // Compile the SceneCard module graph before the interaction deadlines start.
+      warmup: async (page, origin) => {
+        await isolateFixturePage(page, origin);
+        await page.goto(`${origin}shot-editor-test?width=1100&drawer=1`, { waitUntil: 'domcontentloaded' });
+        await page.getByRole('checkbox', { name: 'Done', exact: true }).waitFor();
+      },
       viteConfig: temp => ({
         configFile: false, root, cacheDir: join(temp, 'vite-cache'),
         optimizeDeps: { entries: ['src/components/musicVideo/SceneCard.jsx'], include: ['react', 'react-dom/client'] },
@@ -69,11 +84,7 @@ describe.skipIf(!chrome)('shot editor render selector layout', () => {
 
   it('keeps Done reachable and keyboard-operable on narrow and wide editors', async () => {
     const page = await fixture.browser.newPage();
-    await page.route('**/*', route => {
-      const url = new URL(route.request().url());
-      return url.origin === new URL(fixture.origin).origin && !/^\/(api|data|socket\.io)(\/|$)/.test(url.pathname)
-        ? route.continue() : route.abort();
-    });
+    await isolateFixturePage(page, fixture.origin);
     try {
       for (const width of [360, 1100]) {
         await page.setViewportSize({ width, height: 900 });
@@ -96,11 +107,7 @@ describe.skipIf(!chrome)('shot editor render selector layout', () => {
   it('pins the shot header to the drawer top while scrolling', async () => {
     const page = await fixture.browser.newPage({ viewport: { width: 1100, height: 700 } });
     try {
-      await page.route('**/*', route => {
-        const url = new URL(route.request().url());
-        return url.origin === new URL(fixture.origin).origin && !/^\/(api|data|socket\.io)(\/|$)/.test(url.pathname)
-          ? route.continue() : route.abort();
-      });
+      await isolateFixturePage(page, fixture.origin);
       for (const width of [360, 1100]) {
       await page.setViewportSize({ width, height: 700 });
       await page.goto(`${fixture.origin}shot-editor-test?width=${width}&drawer=1`);
@@ -127,11 +134,7 @@ describe.skipIf(!chrome)('shot editor render selector layout', () => {
       window.frameLayoutErrors = [];
       window.addEventListener('error', event => window.frameLayoutErrors.push(event.message));
     });
-    await page.route('**/*', route => {
-      const url = new URL(route.request().url());
-      return url.origin === new URL(fixture.origin).origin && !/^\/(api|data|socket\.io)(\/|$)/.test(url.pathname)
-        ? route.continue() : route.abort();
-    });
+    await isolateFixturePage(page, fixture.origin);
     try {
       await page.goto(`${fixture.origin}shot-editor-test?width=1000&frames=1`);
       await page.getByRole('group', { name: 'Show' }).getByRole('button', { name: 'Frames' }).click();
@@ -209,11 +212,7 @@ describe.skipIf(!chrome)('shot editor render selector layout', () => {
     [1440, 240], [1440, 320], [1440, 480], [1440, 820],
   ])('keeps renderer controls inside the shot column at viewport %i and container %i', async (viewportWidth, containerWidth) => {
     const page = await fixture.browser.newPage({ viewport: { width: viewportWidth, height: 1000 } });
-    await page.route('**/*', route => {
-      const url = new URL(route.request().url());
-      return url.origin === new URL(fixture.origin).origin && !/^\/(api|data|socket\.io)(\/|$)/.test(url.pathname)
-        ? route.continue() : route.abort();
-    });
+    await isolateFixturePage(page, fixture.origin);
     try {
       await page.goto(`${fixture.origin}shot-editor-test?width=${containerWidth}`);
       const renderer = page.getByRole('region', { name: 'Render' }).getByLabel('Render on');

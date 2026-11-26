@@ -76,7 +76,7 @@ function PacketEditor({ project }) {
             <button type="button" className={buttonClass} onClick={() => edit({ ...packet, fields: { ...packet.fields, [suggestion.field]: suggestion.value } })}>Apply {suggestion.source} suggestion</button>
           </li>)}
         </ul><p>Applying replaces that field in this draft. Save to keep it.</p></details>}
-        {[...new Set(data.fields.map(field => field.group))].map(group => <details key={group} open={group === 'Film'} className="rounded border border-port-border p-3">
+        {[...new Set(data.fields.map(field => field.group))].map(group => <details key={group} open={group === 'Film' || undefined} className="rounded border border-port-border p-3">
           <summary>{group}</summary>
           <div className="mt-3 grid gap-3 sm:grid-cols-2">
             {data.fields.filter(field => field.group === group).map(field => <div key={field.id} className="space-y-1">

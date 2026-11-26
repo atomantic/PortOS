@@ -148,6 +148,7 @@ vi.mock('fs/promises', async (importOriginal) => {
     ...actual,
     stat: vi.fn(actual.stat),
     readdir: vi.fn(actual.readdir),
+    rename: vi.fn(actual.rename),
     readFile: vi.fn(actual.readFile),
     access: vi.fn(actual.access),
     unlink: vi.fn(actual.unlink),
@@ -182,6 +183,7 @@ beforeEach(async () => {
   await authorityBodies.drain();
   const actual = await vi.importActual('fs/promises');
   fs.readdir.mockImplementation(actual.readdir);
+  fs.rename.mockImplementation(actual.rename);
   fs.access.mockImplementation(actual.access);
   fs.readFile.mockImplementation(actual.readFile);
   fs.unlink.mockImplementation(actual.unlink);

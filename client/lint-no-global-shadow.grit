@@ -1,0 +1,12 @@
+language js
+
+// Binding nodes cover destructuring (including nested aliases) without matching
+// property keys or references to the globals themselves.
+JsIdentifierBinding() as $binding where {
+  $binding <: r"^(?:setInterval|clearInterval|setTimeout|clearTimeout|requestAnimationFrame|cancelAnimationFrame|fetch)$",
+  register_diagnostic(
+    span = $binding,
+    message = "This binding shadows a browser timer or fetch global. Name the binding for what it holds.",
+    severity = "error"
+  )
+}

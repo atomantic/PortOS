@@ -16,6 +16,7 @@ import { errorMiddleware } from '../lib/errorHandler.js';
 import { createZip } from '../lib/zipWriter.js';
 
 const imports = vi.hoisted(() => ({ paths: [], impl: null, limits: undefined }));
+const clinicalSummary = { clinicalRecords: 1, labsParsed: 1, labsSkipped: 0, newDates: 1, totalDates: 1 };
 vi.mock('../lib/zipStream.js', async (importOriginal) => {
   const actual = await importOriginal();
   return { ...actual, createZipBudget: options => actual.createZipBudget(imports.limits ?? options) };
@@ -33,7 +34,7 @@ vi.mock('../services/appleHealthQuery.js', () => ({
   getLatestMetricValues: vi.fn(async () => ({ step_count: 1 })),
 }));
 vi.mock('../services/appleHealthClinical.js', () => ({
-  importClinicalRecords: vi.fn(async () => ({ imported: 0 })),
+  importClinicalRecords: vi.fn(async () => clinicalSummary),
 }));
 
 const { default: appleHealthRoutes } = await import('./appleHealth.js');
@@ -95,6 +96,16 @@ describe('POST /api/health/import/xml — ZIP extraction temp dir', () => {
     ]);
     expect(res.status).toBe(413);
     expect(imports.paths).toHaveLength(0);
+  });
+
+  it('includes the clinical import summary in the successful ZIP response', async () => {
+    const res = await postZip([
+      { name: 'export.xml', data: XML },
+      { name: 'clinical_records/a.json', data: '{}' }
+    ]);
+
+    expect(res.status).toBe(200);
+    expect(res.body).toEqual({ days: 1, records: 2, clinical: clinicalSummary });
   });
 
   it('rejects duplicate XML destinations without leaving an extracted file', async () => {

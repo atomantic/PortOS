@@ -264,6 +264,39 @@ describe('errorHandler.js', () => {
       expect(body.context).toEqual({ modelId: 'm' });
     });
 
+    it.each([
+      [null, 'null'],
+      [undefined, 'undefined'],
+      ['string error', 'string error'],
+      [new Error('plain error'), 'plain error'],
+    ])('responds with a 500 envelope and emits telemetry for %s', (thrown, message) => {
+      const io = { emit: vi.fn() };
+      const { req, res } = makeReqRes(io);
+      const next = vi.fn();
+      using errorLog = vi.spyOn(console, 'error').mockImplementation(() => {});
+
+      const listener = vi.fn();
+      errorEvents.on('error', listener);
+      try {
+        errorMiddleware(thrown, req, res, next);
+      } finally {
+        errorEvents.off('error', listener);
+      }
+
+      expect(res.status).toHaveBeenCalledWith(500);
+      expect(res.json).toHaveBeenCalledWith(expect.objectContaining({
+        error: message,
+        code: 'INTERNAL_ERROR',
+        timestamp: expect.any(Number),
+      }));
+      expect(io.emit).toHaveBeenCalledWith('error:occurred', expect.objectContaining({
+        message,
+        code: 'INTERNAL_ERROR',
+      }));
+      expect(next).not.toHaveBeenCalled();
+      if (thrown instanceof Error) expect(errorLog).toHaveBeenCalledWith(thrown.stack);
+    });
+
     it('omits context when it is empty', () => {
       const res = makeRes();
       errorMiddleware(new ServerError('nope', { status: 400 }), makeReq(), res, () => {});
