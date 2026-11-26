@@ -24,7 +24,7 @@
 import { getScheduleStatus } from './taskSchedule.js';
 import { TASK_READINESS_REASON } from '../lib/taskReadinessReasons.js';
 import { DEFAULT_PERPETUAL_RECHECK_MS } from './taskScheduleConstants.js';
-import { AUDIT_EXECUTION_TASK_TYPES } from '../lib/auditCatalog.js';
+import { AUDIT_TASK_TYPE_LIST } from '../lib/auditCatalog.js';
 import { dedupeByKey } from '../lib/arrayUtils.js';
 import * as autonomousJobs from './autonomousJobs.js';
 import { checkJobGate, hasGate, getRegisteredGates } from './jobGates.js';
@@ -80,7 +80,7 @@ export const WORKFLOW_STAGES = [
     // a parity test whose only job was to catch the copy going stale.
     // `dependency-updates` is the one deliberate extra — it audits the manifest
     // but carries no file-issues/do-work toggle, so it is not a catalog type.
-    taskTypes: [...AUDIT_EXECUTION_TASK_TYPES, 'dependency-updates'],
+    taskTypes: [...AUDIT_TASK_TYPE_LIST, 'dependency-updates'],
     jobIds: ['job-wiki-maintenance', 'job-refresh-local-llm-catalog', 'job-refresh-cli-provider-catalogs']
   },
   {

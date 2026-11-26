@@ -1,6 +1,5 @@
 import { executionOptionsSchema } from '../lib/aiToolkit/internal/executionOptionsValidation.js';
 import { PR_COMPLETION_VALUES } from '../lib/prDisposition.js';
-import { AUDIT_EXECUTION_TASK_TYPES } from '../lib/auditCatalog.js';
 /**
  * CoS Task Schedule Routes
  */
@@ -11,7 +10,7 @@ import * as taskSchedule from '../services/taskSchedule.js';
 import { logCosScheduleUpdate } from '../services/userActionScheduleLog.js';
 import { asyncHandler, ServerError } from '../lib/errorHandler.js';
 import { limitQuerySchema, parsePagination } from '../lib/queryValidation.js';
-import { effortUpdateSchema, taskDataInputsSchema, cosScheduleTriggerBodySchema, heldCheckoutRetireBodySchema, releaseSynchronizationResetBodySchema, releaseDeliveryVerificationBodySchema } from '../lib/cos/cosValidation.js';
+import { effortUpdateSchema, scheduledAuditIdsSchema, taskDataInputsSchema, cosScheduleTriggerBodySchema, heldCheckoutRetireBodySchema, releaseSynchronizationResetBodySchema, releaseDeliveryVerificationBodySchema } from '../lib/cos/cosValidation.js';
 import { sanitizeTaskMetadata } from '../lib/cos/cosTaskMetadata.js';
 import { validateRequest } from '../lib/validateRequest.js';
 import { promptSourceSchema, PROMPT_SOURCES, scheduleExecutionFieldsSchema } from '../lib/cos/cosValidation.js';
@@ -35,7 +34,7 @@ const suggestedAfterSchema = z.array(z.string()).max(SUGGESTED_AFTER_MAX);
 // service's live provider gate, not to this schema. Blank effort inherits each
 // scheduled task's saved effort.
 const maintenanceRunStartSchema = z.object({
-  taskTypes: z.array(z.enum(AUDIT_EXECUTION_TASK_TYPES)).min(1).max(AUDIT_EXECUTION_TASK_TYPES.length).optional(),
+  taskTypes: scheduledAuditIdsSchema.refine(ids => ids.length > 0, 'Select at least one audit').optional(),
   // The user named these checks one by one (the Quality tab's per-category Run),
   // so each runs even where the repository scan says it cannot apply.
   explicitCheck: z.boolean().optional(),

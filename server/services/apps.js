@@ -7,6 +7,8 @@ import {
   containsPortosRootToken,
   expandPortosRootInApp,
 } from '../lib/portosRootPlaceholder.js';
+import { foldAppAuditOverrides } from '../lib/auditScheduleCompatibility.js';
+import { auditDomainFor } from '../lib/auditDomains.js';
 import { PORTOS_APP_ID } from '../lib/appIdentity.js';
 import { NON_PM2_TYPES, usesPm2 } from './appProcessTypes.js';
 import { SELF_IMPROVEMENT_TASK_TYPES } from './taskScheduleRegistry.js';
@@ -142,6 +144,8 @@ async function loadApps() {
       data.apps[id] = expanded;
       placeholderDirty = true;
     }
+    // Startup migration handles disk; normalize here too for restored older backups.
+    foldAppAuditOverrides(data.apps[id]);
   }
 
   // Ensure PortOS baseline app is always present and up-to-date
@@ -583,7 +587,7 @@ export async function getAppTaskTypeOverrides(id) {
 export async function isTaskTypeEnabledForApp(id, taskType) {
   const overrides = await getAppTaskTypeOverrides(id);
   // No override means disabled — new task types must be explicitly enabled per app
-  return overrides[taskType]?.enabled === true;
+  return overrides[auditDomainFor(taskType)]?.enabled === true;
 }
 
 /**
@@ -591,7 +595,7 @@ export async function isTaskTypeEnabledForApp(id, taskType) {
  */
 export async function getAppTaskTypeInterval(appId, taskType) {
   const overrides = await getAppTaskTypeOverrides(appId);
-  return overrides[taskType]?.interval || null;
+  return overrides[auditDomainFor(taskType)]?.interval || null;
 }
 
 /**
@@ -603,7 +607,7 @@ export async function getAppTaskTypeInterval(appId, taskType) {
  */
 export async function getAppTaskTypeIntervalMs(appId, taskType) {
   const overrides = await getAppTaskTypeOverrides(appId);
-  const ms = overrides[taskType]?.intervalMs;
+  const ms = overrides[auditDomainFor(taskType)]?.intervalMs;
   return typeof ms === 'number' && Number.isFinite(ms) && ms > 0 ? ms : null;
 }
 
@@ -618,6 +622,7 @@ export async function getAppTaskTypeIntervalMs(appId, taskType) {
  * resetWatchersIfDisabled.
  */
 function mergeTaskTypeOverride(overrides, taskType, { enabled, interval, intervalMs, providerId, model, taskMetadata } = {}) {
+  taskType = auditDomainFor(taskType);
   const updated = { ...(overrides[taskType] || {}) };
   if (typeof enabled === 'boolean') updated.enabled = enabled;
   if (interval !== undefined) updated.interval = interval;

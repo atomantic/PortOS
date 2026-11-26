@@ -19,7 +19,8 @@ import { ORCHESTRATION_MODES, ORCHESTRATION_ROLES } from '../orchestrationProfil
 import { RUN_EVENT_READ_LIMITS } from '../agent/agentRunEvents.js';
 import { TASK_STATUS_VALUES, TASK_PRIORITY_VALUES } from '../taskParser.js';
 import { recurrenceRuleSchema } from '../recurrenceValidation.js';
-import { AUDIT_EXECUTION_TASK_TYPES, DEPFREE_MODES } from '../auditCatalog.js';
+import { AUDIT_DOMAIN_ALIASES, auditDomainFor } from '../auditDomains.js';
+import { AUDIT_TASK_TYPE_LIST, DEPFREE_MODES } from '../auditCatalog.js';
 import { CLAIM_DRAIN_TASK_TYPES } from '../qualitySchedulePlan.js';
 import { JOB_INTERVAL_VALUES } from '../autonomousJobIntervals.js';
 import { jobFormFieldsSchema, jobFormValuesSchema } from '../jobFormFields.js';
@@ -943,11 +944,16 @@ export const runEventReconcileSchema = z.object({
 // naming `do-release` would otherwise have its cadence rewritten by a form
 // that never showed it. `fileIssuesByType` is keyed the same way and read only
 // for the types actually scheduled.
+const readableAuditIds = [...AUDIT_TASK_TYPE_LIST, ...Object.keys(AUDIT_DOMAIN_ALIASES)];
+const readableAuditId = z.enum(readableAuditIds);
+export const scheduledAuditIdsSchema = z.array(readableAuditId).max(readableAuditIds.length)
+  .transform(ids => [...new Set(ids.map(auditDomainFor))]);
+
 export const qualitySchedulePlanSchema = z.object({
-  taskTypes: z.array(z.enum(AUDIT_EXECUTION_TASK_TYPES)).max(AUDIT_EXECUTION_TASK_TYPES.length).optional(),
+  taskTypes: scheduledAuditIdsSchema.optional(),
   // partialRecord, not record: a Zod 4 enum-keyed record demands EVERY key, and
   // the form only sends the checks whose mode the user actually changed.
-  fileIssuesByType: z.partialRecord(z.enum(AUDIT_EXECUTION_TASK_TYPES), z.boolean()).optional(),
+  fileIssuesByType: z.partialRecord(readableAuditId, z.boolean()).optional(),
   // null = spread the selection evenly over the week.
   checksPerDay: z.number().int().min(1).max(24).nullable().optional(),
   windowStartHour: z.number().int().min(0).max(23).optional(),

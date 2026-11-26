@@ -27,6 +27,7 @@
  * so existing importers of taskPromptService are unaffected by the leaf split.
  */
 
+import { auditDomainFor } from '../lib/auditDomains.js';
 import { PATHS } from '../lib/fileUtils.js';
 import { loadSlashdoFile, loadSlashdoLib } from '../lib/slashdoLoader.js';
 import { getTaskInterval } from './taskSchedule.js';
@@ -159,6 +160,7 @@ Analyze the codebase and make improvements. Commit changes with clear descriptio
 }
 
 export async function getTaskPrompt(taskType, { claimFlow = false, claimIssueOptions = null, withSource = false } = {}) {
+  taskType = auditDomainFor(taskType);
   const interval = await getTaskInterval(taskType);
   const storedDefault = claimFlow && interval.promptSource !== 'user'
     && promptMatchesShippedDefault(interval.prompt, taskType);

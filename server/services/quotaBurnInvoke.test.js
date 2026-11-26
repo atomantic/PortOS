@@ -122,14 +122,14 @@ const step = (raw) => normalizeQuotaBurnJob({ id: 'step-1', enabled: true, ...ra
 
 beforeEach(() => {
   state.schedule = {
-    ux: { enabled: true, providerId: null, model: 'saved-model', effort: 'medium', taskMetadata: { fileIssues: true, depth: 'full' } },
+    'design-usability': { enabled: true, providerId: null, model: 'saved-model', effort: 'medium', taskMetadata: { fileIssues: true, depth: 'full' } },
     'pr-reviewer': { enabled: true, taskMetadata: {} },
     'universe-bible-images': { enabled: true, providerId: null, model: null, effort: null, taskMetadata: { maxEntries: 5 } },
     'jira-sprint-manager': { enabled: true, feature: 'jira', taskMetadata: {} },
     'model-comparison-refresh': { enabled: true, taskMetadata: {} },
   };
   state.apps = [{ id: 'app-1', name: 'Example App' }];
-  state.appOverrides = { 'app-1': { ux: { enabled: true }, 'pr-reviewer': { enabled: true } } };
+  state.appOverrides = { 'app-1': { 'design-usability': { enabled: true }, 'pr-reviewer': { enabled: true } } };
   state.features = {};
   state.jobs = [
     { id: 'job-a', name: 'Nightly sweep', type: 'agent', enabled: true, autonomyLevel: 'yolo', appId: 'app-1', providerId: null, model: null, effort: null, taskMetadata: { useWorktree: true } },
@@ -172,7 +172,7 @@ describe('getQuotaBurnTaskCatalog', () => {
   it('lists only the apps that have a built-in type switched on', async () => {
     state.apps = [{ id: 'app-1' }, { id: 'app-2' }];
     const { builtin } = await getQuotaBurnTaskCatalog();
-    expect(builtin.ux.appIds).toEqual(['app-1']);
+    expect(builtin['design-usability'].appIds).toEqual(['app-1']);
   });
 
   it('marks shell and script jobs ineligible and agent jobs eligible', async () => {
@@ -190,7 +190,7 @@ describe('getQuotaBurnTaskCatalog', () => {
 describe('resolved effective settings', () => {
   it('layers the step overrides over the task\'s saved settings and merges params', async () => {
     const resolved = await resolveQuotaBurnStep(step({
-      taskRef: { kind: 'builtin', taskType: 'ux', appId: 'app-1' },
+      taskRef: { kind: 'builtin', taskType: 'design-usability', appId: 'app-1' },
       overrides: { model: 'burn-model', params: { depth: 'shallow' } },
     }));
     expect(resolved.effective).toEqual({
@@ -220,8 +220,8 @@ describe('refusal paths', () => {
   };
 
   it('refuses a disabled task type', async () => {
-    state.schedule.ux.enabled = false;
-    const result = await refuse({ taskRef: { kind: 'builtin', taskType: 'ux', appId: 'app-1' } });
+    state.schedule['design-usability'].enabled = false;
+    const result = await refuse({ taskRef: { kind: 'builtin', taskType: 'design-usability', appId: 'app-1' } });
     expect(result).toEqual({ dispatched: false, reason: expect.stringContaining('is disabled'), code: 'disabled' });
     dispatchedNothing();
   });
@@ -252,7 +252,7 @@ describe('refusal paths', () => {
   });
 
   it('refuses an app the type is not configured for', async () => {
-    const result = await refuse({ taskRef: { kind: 'builtin', taskType: 'ux', appId: 'app-9' } });
+    const result = await refuse({ taskRef: { kind: 'builtin', taskType: 'design-usability', appId: 'app-9' } });
     expect(result.reason).toContain("is not enabled for app 'app-9'");
     dispatchedNothing();
   });
@@ -278,7 +278,7 @@ describe('refusal paths', () => {
 
   it('refuses a provider pin belonging to another family', async () => {
     const result = await refuse({
-      taskRef: { kind: 'builtin', taskType: 'ux', appId: 'app-1' },
+      taskRef: { kind: 'builtin', taskType: 'design-usability', appId: 'app-1' },
       overrides: { providerId: 'codex-tui' },
     });
     expect(result.reason).toContain('does not belong to the grok family');
@@ -287,7 +287,7 @@ describe('refusal paths', () => {
 
   it('refuses when the burning family has no enabled CLI/TUI provider', async () => {
     state.providers = [{ id: 'codex-tui', command: '/usr/local/bin/codex', type: 'tui', enabled: true }];
-    const result = await refuse({ taskRef: { kind: 'builtin', taskType: 'ux', appId: 'app-1' } });
+    const result = await refuse({ taskRef: { kind: 'builtin', taskType: 'design-usability', appId: 'app-1' } });
     expect(result.reason).toContain('no enabled CLI/TUI provider in the grok family');
     dispatchedNothing();
   });
@@ -299,7 +299,7 @@ describe('refusal paths', () => {
   // this identity; the automatic sweep hands over a plan's family record.
   describe('a manual run pinned outside every subscription family', () => {
     const unfamilied = { id: null, unfamilied: true };
-    const uxStep = (providerId) => step({ taskRef: { kind: 'builtin', taskType: 'ux', appId: 'app-1' }, overrides: { providerId } });
+    const designStep = (providerId) => step({ taskRef: { kind: 'builtin', taskType: 'design-usability', appId: 'app-1' }, overrides: { providerId } });
 
     beforeEach(() => {
       state.providers.push(
@@ -309,7 +309,7 @@ describe('refusal paths', () => {
     });
 
     it.each(['opencode-tui', 'claude-ollama-tui'])('dispatches on the pinned %s and attributes the run, not a window', async (providerId) => {
-      const result = await invokeQuotaBurnStep({ step: uxStep(providerId), family: unfamilied, catalog: null, maintenanceRunId: 'maint-1' });
+      const result = await invokeQuotaBurnStep({ step: designStep(providerId), family: unfamilied, catalog: null, maintenanceRunId: 'maint-1' });
       expect(result.dispatched).toBe(true);
       expect(state.triggered[0].options.burn.overrides.providerId).toBe(providerId);
       expect(state.triggered[0].options.burn.maintenanceRunId).toBe('maint-1');
@@ -322,11 +322,11 @@ describe('refusal paths', () => {
     it('still refuses a provider that is disabled, absent, or not a process provider', async () => {
       state.providers.push({ id: 'opencode-api', type: 'api', enabled: true }, { id: 'off-tui', command: 'opencode', type: 'tui', enabled: false });
       for (const providerId of ['opencode-api', 'off-tui', 'not-registered']) {
-        expect(await invokeQuotaBurnStep({ step: uxStep(providerId), family: unfamilied, maintenanceRunId: 'maint-1' }))
+        expect(await invokeQuotaBurnStep({ step: designStep(providerId), family: unfamilied, maintenanceRunId: 'maint-1' }))
           .toMatchObject({ dispatched: false, reason: expect.stringContaining('is not an enabled CLI/TUI provider') });
       }
       // With nothing pinned there is no family left to resolve against either.
-      expect(await invokeQuotaBurnStep({ step: uxStep(null), family: unfamilied, maintenanceRunId: 'maint-1' }))
+      expect(await invokeQuotaBurnStep({ step: designStep(null), family: unfamilied, maintenanceRunId: 'maint-1' }))
         .toMatchObject({ dispatched: false, reason: expect.stringContaining('must name the provider') });
       expect(state.triggered).toEqual([]);
     });
@@ -334,9 +334,9 @@ describe('refusal paths', () => {
     // The guarantee the relaxation must not weaken: an AUTOMATIC burn carries a
     // real family and can only ever spend that family's window.
     it('leaves the automatic sweep refusing an out-of-family and a local-runtime pin', async () => {
-      expect(await invokeQuotaBurnStep({ step: uxStep('opencode-tui'), family: grok, candidate }))
+      expect(await invokeQuotaBurnStep({ step: designStep('opencode-tui'), family: grok, candidate }))
         .toMatchObject({ dispatched: false, reason: expect.stringContaining('does not belong to the grok family') });
-      expect(await invokeQuotaBurnStep({ step: uxStep('claude-ollama-tui'), family: grok, candidate }))
+      expect(await invokeQuotaBurnStep({ step: designStep('claude-ollama-tui'), family: grok, candidate }))
         .toMatchObject({ dispatched: false, reason: expect.stringContaining('is not an enabled CLI/TUI provider') });
       expect(state.triggered).toEqual([]);
     });
@@ -349,8 +349,8 @@ describe('refusal paths', () => {
     const forced = (raw) => invokeQuotaBurnStep({ step: step(raw), family: grok, candidate, force: true });
     expect((await forced({ taskRef: { kind: 'custom', jobId: 'job-shell' } })).dispatched).toBe(false);
     expect((await forced({ taskRef: { kind: 'custom', jobId: 'job-manual' } })).reason).toContain('needs approval');
-    state.schedule.ux.enabled = false;
-    expect((await forced({ taskRef: { kind: 'builtin', taskType: 'ux', appId: 'app-1' } })).reason).toContain('is disabled');
+    state.schedule['design-usability'].enabled = false;
+    expect((await forced({ taskRef: { kind: 'builtin', taskType: 'design-usability', appId: 'app-1' } })).reason).toContain('is disabled');
     dispatchedNothing();
   });
 
@@ -359,7 +359,7 @@ describe('refusal paths', () => {
     // tolerates it (the plan is not orphaned); dispatch must not — with no saved
     // record to inherit from, the work would silently become something else.
     const result = await invokeQuotaBurnStep({
-      step: step({ taskRef: { kind: 'builtin', taskType: 'ux', appId: 'app-1' } }),
+      step: step({ taskRef: { kind: 'builtin', taskType: 'design-usability', appId: 'app-1' } }),
       family: grok,
       candidate,
       catalog: {},
@@ -391,11 +391,11 @@ describe('refusal paths', () => {
   // has no backstop at all — `triggerOnDemandTask` appends unconditionally — so
   // without this two clicks queue the same task twice and charge the cap twice.
   it('refuses a duplicate even under force, on both agent lanes', async () => {
-    state.onDemandRequests = [{ id: 'demand-0', taskType: 'ux', appId: 'app-1' }];
+    state.onDemandRequests = [{ id: 'demand-0', taskType: 'design-usability', appId: 'app-1' }];
     state.inFlightJobIds = ['job-a'];
     const forced = (raw) => invokeQuotaBurnStep({ step: step(raw), family: grok, candidate, force: true });
 
-    expect((await forced({ taskRef: { kind: 'builtin', taskType: 'ux', appId: 'app-1' } })).reason)
+    expect((await forced({ taskRef: { kind: 'builtin', taskType: 'design-usability', appId: 'app-1' } })).reason)
       .toContain('already queued');
     expect((await forced({ taskRef: { kind: 'custom', jobId: 'job-a' } })).reason)
       .toContain('already in flight');
@@ -411,8 +411,8 @@ describe('refusal paths', () => {
 
 describe('built-in agent task invocation', () => {
   it('reports an audit that cannot apply as no work and declines it, unless the step carries the user override', async () => {
-    inapplicable.byType = { ux: 'no user interface found in this repository' };
-    const auditStep = (params) => step({ taskRef: { kind: 'builtin', taskType: 'ux', appId: 'app-1' }, overrides: { params } });
+    inapplicable.byType = { 'design-usability': 'no user interface found in this repository' };
+    const auditStep = (params) => step({ taskRef: { kind: 'builtin', taskType: 'design-usability', appId: 'app-1' }, overrides: { params } });
     // The status page's probe and the runner agree it is not ready work.
     expect(await countQuotaBurnStepPending({ step: auditStep({ fileIssues: true }), family: grok })).toMatchObject({ count: 0, detail: expect.stringMatching(/does not apply/) });
     const refused = await invokeQuotaBurnStep({ step: auditStep({ fileIssues: true }), family: grok, candidate });
@@ -426,15 +426,15 @@ describe('built-in agent task invocation', () => {
     inapplicable.byType = {};
   });
 
-  const uxStep = () => step({
-    taskRef: { kind: 'builtin', taskType: 'ux', appId: 'app-1' },
+  const designStep = () => step({
+    taskRef: { kind: 'builtin', taskType: 'design-usability', appId: 'app-1' },
     overrides: { effort: 'high', params: { fileIssues: false } },
   });
 
   it('stamps a manual maintenance run id on the request only when one is given', async () => {
-    await invokeQuotaBurnStep({ step: uxStep(), family: grok, candidate, maintenanceRunId: 'maint-1' });
+    await invokeQuotaBurnStep({ step: designStep(), family: grok, candidate, maintenanceRunId: 'maint-1' });
     expect(state.triggered[0].options.burn).toMatchObject({ family: 'grok', stepId: 'step-1', maintenanceRunId: 'maint-1' });
-    await invokeQuotaBurnStep({ step: uxStep(), family: grok, candidate });
+    await invokeQuotaBurnStep({ step: designStep(), family: grok, candidate });
     expect(state.triggered[1].options.burn).not.toHaveProperty('maintenanceRunId');
   });
 
@@ -445,23 +445,23 @@ describe('built-in agent task invocation', () => {
   it('attributes a dispatch log line to the maintenance run, not quota burn, when one is present', async () => {
     const log = vi.spyOn(console, 'log').mockImplementation(() => {});
     try {
-      await invokeQuotaBurnStep({ step: uxStep(), family: grok, candidate, maintenanceRunId: 'maint-1' });
-      expect(log).toHaveBeenCalledWith(expect.stringMatching(/^🧹 Maintenance run maint-1 requested scheduled task ux \(/));
+      await invokeQuotaBurnStep({ step: designStep(), family: grok, candidate, maintenanceRunId: 'maint-1' });
+      expect(log).toHaveBeenCalledWith(expect.stringMatching(/^🧹 Maintenance run maint-1 requested scheduled task design-usability \(/));
       expect(log).not.toHaveBeenCalledWith(expect.stringMatching(/🔥/));
 
       log.mockClear();
-      await invokeQuotaBurnStep({ step: uxStep(), family: grok, candidate });
-      expect(log).toHaveBeenCalledWith(expect.stringMatching(/^🔥 Quota-burn requested scheduled task ux for grok \(/));
+      await invokeQuotaBurnStep({ step: designStep(), family: grok, candidate });
+      expect(log).toHaveBeenCalledWith(expect.stringMatching(/^🔥 Quota-burn requested scheduled task design-usability for grok \(/));
     } finally {
       log.mockRestore();
     }
   });
 
   it('routes through the schedule\'s on-demand lane with quota-burn provenance', async () => {
-    const result = await invokeQuotaBurnStep({ step: uxStep(), family: grok, candidate });
+    const result = await invokeQuotaBurnStep({ step: designStep(), family: grok, candidate });
     expect(result.dispatched).toBe(true);
     expect(state.triggered).toEqual([{
-      taskType: 'ux',
+      taskType: 'design-usability',
       appId: 'app-1',
       options: {
         origin: 'quota-burn',
@@ -485,7 +485,7 @@ describe('built-in agent task invocation', () => {
 
   it('reports the schedule\'s own refusal verbatim instead of dispatching', async () => {
     state.triggerResult = { error: 'Improvement is disabled — enable it in CoS → Config to run on-demand tasks' };
-    const result = await invokeQuotaBurnStep({ step: uxStep(), family: grok, candidate });
+    const result = await invokeQuotaBurnStep({ step: designStep(), family: grok, candidate });
     expect(result).toEqual({ dispatched: false, reason: state.triggerResult.error });
   });
 
@@ -493,7 +493,7 @@ describe('built-in agent task invocation', () => {
   // may still refuse the request — so it has to say so, or the runner charges
   // the window for work that never starts.
   it('names the request it is awaiting, so the runner reserves instead of charging', async () => {
-    const result = await invokeQuotaBurnStep({ step: uxStep(), family: grok, candidate });
+    const result = await invokeQuotaBurnStep({ step: designStep(), family: grok, candidate });
     expect(result.awaiting).toEqual({ requestId: 'demand-1' });
   });
 });
@@ -612,11 +612,11 @@ describe('programmatic handler invocation', () => {
 describe('countPending contract', () => {
   it('reports one ready unit for an eligible built-in agent task', async () => {
     const pending = await countQuotaBurnStepPending({
-      step: step({ taskRef: { kind: 'builtin', taskType: 'ux', appId: 'app-1' } }),
+      step: step({ taskRef: { kind: 'builtin', taskType: 'design-usability', appId: 'app-1' } }),
       family: grok,
     });
     expect(pending.count).toBe(1);
-    expect(pending.detail).toContain('ux');
+    expect(pending.detail).toContain('design-usability');
   });
 
   it('reports one ready unit for an eligible custom job', async () => {
@@ -628,12 +628,12 @@ describe('countPending contract', () => {
   });
 
   it('reports zero with a reason for an already-queued built-in run', async () => {
-    state.onDemandRequests = [{ id: 'demand-0', taskType: 'ux', appId: 'app-1' }];
+    state.onDemandRequests = [{ id: 'demand-0', taskType: 'design-usability', appId: 'app-1' }];
     const pending = await countQuotaBurnStepPending({
-      step: step({ taskRef: { kind: 'builtin', taskType: 'ux', appId: 'app-1' } }),
+      step: step({ taskRef: { kind: 'builtin', taskType: 'design-usability', appId: 'app-1' } }),
       family: grok,
     });
-    expect(pending).toEqual({ count: 0, detail: 'an on-demand run of "ux" is already queued' });
+    expect(pending).toEqual({ count: 0, detail: 'an on-demand run of "design-usability" is already queued' });
   });
 
   it('reports zero with a reason while a run of the custom job is already in flight', async () => {
@@ -658,7 +658,7 @@ describe('countPending contract', () => {
 
   it('probes without writing, enqueuing, or calling a provider', async () => {
     const steps = [
-      step({ taskRef: { kind: 'builtin', taskType: 'ux', appId: 'app-1' } }),
+      step({ taskRef: { kind: 'builtin', taskType: 'design-usability', appId: 'app-1' } }),
       step({ taskRef: { kind: 'custom', jobId: 'job-a' } }),
       step({ taskRef: { kind: 'builtin', taskType: 'universe-bible-images' } }),
     ];

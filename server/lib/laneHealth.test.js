@@ -8,7 +8,7 @@ import {
   extractProblemFileReferences,
   laneHealthFor,
 } from './laneHealth.js';
-import { AUDIT_EXECUTION_PROFILES } from './auditCatalog.js';
+import { AUDIT_DEFINITIONS } from './auditCatalog.js';
 
 const NOW = Date.parse('2026-10-17T12:00:00.000Z');
 const daysAgo = (days) => new Date(NOW - days * 86_400_000).toISOString();
@@ -30,8 +30,8 @@ const issue = (number, overrides = {}) => ({
 describe('laneHealth', () => {
   it('derives one lane per audit definition and attributes an issue to its most specific lane', () => {
     const lanes = auditLanes();
-    expect(lanes.map(({ id }) => id)).toEqual(Object.keys(AUDIT_EXECUTION_PROFILES));
-    expect(lanes.find(({ id }) => id === 'better-complexity')).toEqual({ id: 'better-complexity', label: 'Cyclomatic complexity', metricLabel: 'complexity', issueLabel: 'code-quality' });
+    expect(lanes.map(({ id }) => id)).toEqual(Object.keys(AUDIT_DEFINITIONS));
+    expect(lanes.find(({ id }) => id === 'code-simplification')).toMatchObject({ metricLabel: 'code-simplification', issueLabel: 'code-quality' });
     // The shared category label yields to the lane label beside it.
     const report = computeLaneHealth({ now: NOW, issues: [
       issue(1, { labels: [{ name: 'code-quality' }, { name: 'Simplify' }] }),
@@ -40,8 +40,7 @@ describe('laneHealth', () => {
       issue(4, { labels: ['bug', 'model:heavy'] }),
     ] });
     const filed = Object.fromEntries(report.lanes.filter(({ filed }) => filed).map(({ id, filed }) => [id, filed]));
-    expect(filed).toEqual({ simplify: 1, 'code-quality': 1, copy: 1,
-      'architecture-maintainability': 1, 'code-simplification': 1, 'documentation-content': 1 });
+    expect(filed).toEqual({ 'architecture-maintainability': 1, 'code-simplification': 1, 'documentation-content': 1 });
   });
 
   it('matches re-filed findings on file:line citations and ignores URLs and bare words', () => {
@@ -129,18 +128,18 @@ describe('laneHealth', () => {
     ];
     const report = computeLaneHealth({ issues, pullRequests, commits, now: NOW });
     expect(report).toMatchObject({ windowDays: 60, refileDays: 30, from: daysAgo(60), to: new Date(NOW).toISOString() });
-    expect(report.lanes.map(({ id }) => id)).toEqual(Object.keys(AUDIT_EXECUTION_PROFILES));
+    expect(report.lanes.map(({ id }) => id)).toEqual(Object.keys(AUDIT_DEFINITIONS));
 
     const complexity = laneHealthFor(report, 'better-complexity');
-    expect(complexity).toMatchObject({ metricLabel: 'complexity', filed: 8, completed: 4, notPlanned: 2, open: 2, reverted: 1, refiled: 1, flaggedTotal: 4 });
-    expect(complexity.flagged.map(({ number }) => number)).toEqual([5, 3, 2, 6]);
+    expect(complexity).toMatchObject({ metricLabel: 'code-simplification', filed: 9, completed: 4, notPlanned: 3, open: 2, reverted: 1, refiled: 1, flaggedTotal: 5 });
+    expect(complexity.flagged.map(({ number }) => number)).toEqual([10, 5, 3, 2, 6]);
     expect(complexity.flagged.find(({ number }) => number === 5).reasons).toEqual([{ kind: 'reverted', pullRequest: 120, commit: '2222222222222222222222222222222222222222' }]);
     expect(complexity.flagged.find(({ number }) => number === 6).reasons).toEqual([{ kind: 're-filed', of: 8, path: 'server/routes/api.js' }]);
     expect(complexity.flagged.find(({ number }) => number === 3).reasons).toEqual([{ kind: 'not-planned', stateReason: 'duplicate' }]);
-    expect(complexity.flagged[3]).toMatchObject({ number: 6, title: 'Router hotspot again', url: 'https://example.com/issues/6' });
+    expect(complexity.flagged[4]).toMatchObject({ number: 6, title: 'Router hotspot again', url: 'https://example.com/issues/6' });
 
     const simplify = laneHealthFor(report, 'simplify');
-    expect(simplify).toMatchObject({ filed: 1, notPlanned: 1, completed: 0, reverted: 0, refiled: 0 });
+    expect(simplify).toBe(complexity);
     expect(laneHealthFor(report, 'code-quality')).toMatchObject({ filed: 0, flagged: [] });
     expect(laneHealthFor(report, 'missing-lane')).toBeNull();
   });

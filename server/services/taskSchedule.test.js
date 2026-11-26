@@ -134,7 +134,7 @@ import { RETIRED_CONSOLE_ERRORS_PROMPT } from './taskPromptDefaults/retiredPromp
 // — the posture guard below iterates it so the two can't drift apart.
 import { NON_COMMITTING_COORDINATOR_TASK_TYPES } from './taskTypeHooks.js'
 import { enforceManagedAgentOptions } from './taskScheduleRegistry.js'
-import { modeContractFor, auditDoWorkRequiresWorktree, AUDIT_EXECUTION_TASK_TYPES, isAuditTaskType } from '../lib/auditCatalog.js'
+import { modeContractFor, defaultFileIssuesFor, auditDoWorkRequiresWorktree, AUDIT_TASK_TYPE_LIST, isAuditTaskType } from '../lib/auditCatalog.js'
 import { NO_CHANGE_SCHEDULED_TYPES } from '../lib/noChangeCompletion.js'
 
 import { loadState } from './cos/cosState.js'
@@ -215,21 +215,30 @@ describe('taskSchedule', () => {
 
   })
 
-  it('keeps two legacy profiles independent when the Quality catalog groups them into one domain', async () => {
-    const tasks = {
-      simplify: { type: 'cron', cronExpression: '0 5 * * 2', prompt: 'Custom simplify mission', model: 'fixture-one' },
-      'better-complexity': { type: 'cron', cronExpression: '0 9 * * 4', prompt: 'Custom complexity mission', model: 'fixture-two' },
-    }
-    const requests = [{ id: 'fixture-a', taskType: 'simplify' }, { id: 'fixture-b', taskType: 'better-complexity' }]
-    mockSchedule({ tasks, onDemandRequests: requests, executions: {
-      'task:simplify': { count: 3, perApp: {} }, 'task:better-complexity': { count: 5, perApp: {} },
-    } })
+  it('folds legacy schedule changes, pending requests and history beneath one active domain', async () => {
+    const first = { type: 'cron', cronExpression: '0 5 * * 2', prompt: 'Custom simplify mission', model: 'fixture-one' }
+    const second = { type: 'cron', cronExpression: '0 9 * * 4', prompt: 'Custom complexity mission', model: 'fixture-two' }
+    mockSchedule({
+      tasks: {
+        'code-simplification': DEFAULT_TASK_INTERVALS['code-simplification'],
+        simplify: first, 'better-complexity': second,
+        security: { runAfter: ['simplify', 'better-complexity'] },
+      },
+      onDemandRequests: [{ id: 'fixture-a', taskType: 'simplify' }, { id: 'fixture-b', taskType: 'better-complexity' }],
+      executions: {
+        'task:simplify': { count: 3, perApp: {} }, 'task:better-complexity': { count: 5, perApp: {} },
+      },
+    })
     const schedule = await loadSchedule()
-    for (const [id, config] of Object.entries(tasks)) expect(schedule.tasks[id]).toMatchObject(config)
-    expect(schedule.onDemandRequests).toEqual(requests)
-    expect(schedule.executions['task:simplify'].count).toBe(3)
-    expect(schedule.executions['task:better-complexity'].count).toBe(5)
-    expect(schedule.tasks['code-simplification']).toMatchObject({ type: 'on-demand', taskMetadata: { fileIssues: true } })
+    expect(schedule.tasks['code-simplification']).toMatchObject({ ...first, promptCustomized: true })
+    expect(schedule.tasks).not.toHaveProperty('simplify')
+    expect(schedule.tasks).not.toHaveProperty('better-complexity')
+    expect(schedule.tasks.security.runAfter).toEqual(['code-simplification'])
+    expect(schedule.retiredAuditConfigs).toEqual({ 'better-complexity': second })
+    expect(schedule.onDemandRequests).toEqual([
+      { id: 'fixture-a', taskType: 'code-simplification' }, { id: 'fixture-b', taskType: 'code-simplification' },
+    ])
+    expect(schedule.executions).toEqual({ 'task:code-simplification': { count: 8, perApp: {} } })
   })
 
   describe('feature-gated shipped tasks', () => {
@@ -640,18 +649,18 @@ describe('taskSchedule', () => {
           'code-quality': { type: 'once', enabled: true },
           'test-coverage': { type: 'custom', intervalMs: 15 * 60 * 1000, enabled: true },
           documentation: { type: 'perpetual', recheckCron: '0 3 * * *', enabled: true },
-          typing: { type: 'cron', cronExpression: '30 8 * * 2', perpetual: true, enabled: true },
+          'api-contract': { type: 'cron', cronExpression: '30 8 * * 2', perpetual: true, enabled: true },
         }
       })
 
       const { tasks } = await loadSchedule()
       expect(tasks.security).toMatchObject({ type: 'cron', cronExpression: '0 7 * * *', perpetual: false })
-      expect(tasks['code-quality']).toMatchObject({ type: 'on-demand', perpetual: false })
-      expect(tasks['code-quality'].cronExpression).toBeFalsy()
-      expect(tasks['test-coverage']).toMatchObject({ type: 'cron', cronExpression: '*/15 * * * *' })
-      expect(tasks.documentation).toMatchObject({ type: 'on-demand', perpetual: true, recheckCron: '0 3 * * *' })
+      expect(tasks['architecture-maintainability']).toMatchObject({ type: 'on-demand', perpetual: false })
+      expect(tasks['architecture-maintainability'].cronExpression).toBeFalsy()
+      expect(tasks['test-quality-coverage']).toMatchObject({ type: 'cron', cronExpression: '*/15 * * * *' })
+      expect(tasks['documentation-content']).toMatchObject({ type: 'on-demand', perpetual: true, recheckCron: '0 3 * * *' })
       // Already on the new model: left exactly as stored.
-      expect(tasks.typing).toMatchObject({ type: 'cron', cronExpression: '30 8 * * 2', perpetual: true })
+      expect(tasks['api-contract']).toMatchObject({ type: 'cron', cronExpression: '30 8 * * 2', perpetual: true })
     })
 
     it('should merge defaults for missing task types', async () => {
@@ -661,8 +670,8 @@ describe('taskSchedule', () => {
 
       const schedule = await loadSchedule()
       // Should have all default task types even though only security was saved
-      expect(schedule.tasks['code-quality']).toBeDefined()
-      expect(schedule.tasks['test-coverage']).toBeDefined()
+      expect(schedule.tasks['architecture-maintainability']).toBeDefined()
+      expect(schedule.tasks['test-quality-coverage']).toBeDefined()
     })
   })
 
@@ -677,16 +686,13 @@ describe('taskSchedule', () => {
     // {appName} body. RETIRED_CONSOLE_ERRORS_PROMPT is one such retired default
     // — see taskPromptDefaults/retiredPromptFixtures.js.
 
-    it('versions the basic self-improvement tasks so deployed installs can auto-upgrade', () => {
-      for (const t of ['security', 'code-quality', 'test-coverage', 'performance', 'accessibility',
-        'dependency-updates', 'documentation', 'ui-bugs', 'mobile-responsive', 'do-release']) {
-        expect(PROMPT_VERSIONS[t], `PROMPT_VERSIONS['${t}']`).toBeGreaterThanOrEqual(2)
-      }
+    it('versions every active audit so deployed installs can auto-upgrade', () => {
+      for (const type of AUDIT_TASK_TYPE_LIST) expect(PROMPT_VERSIONS[type]).toBeGreaterThanOrEqual(1)
     })
 
     it('the current documentation default no longer hardcodes PortOS', () => {
-      expect(DEFAULT_TASK_PROMPTS['documentation']).not.toContain('PortOS')
-      expect(DEFAULT_TASK_PROMPTS['documentation']).toContain('{appName}')
+      expect(DEFAULT_TASK_PROMPTS['documentation-content']).not.toContain('PortOS')
+      expect(DEFAULT_TASK_PROMPTS['documentation-content']).toContain('{appName}')
     })
 
     it('upgrades a stale, non-customized retired default (promptVersion: 1) to the current body', async () => {
@@ -694,9 +700,9 @@ describe('taskSchedule', () => {
         tasks: { 'console-errors': { type: 'once', enabled: false, providerId: null, model: null, prompt: RETIRED_CONSOLE_ERRORS_PROMPT, promptVersion: 1 } }
       })
       const schedule = await loadSchedule()
-      const task = schedule.tasks['console-errors']
-      expect(task.prompt).toBe(DEFAULT_TASK_PROMPTS['console-errors'])
-      expect(task.promptVersion).toBe(PROMPT_VERSIONS['console-errors'])
+      const task = schedule.tasks['ui-runtime-bugs']
+      expect(task.prompt).toBe(DEFAULT_TASK_PROMPTS['ui-runtime-bugs'])
+      expect(task.promptVersion).toBe(PROMPT_VERSIONS['ui-runtime-bugs'])
     })
 
     it('upgrades a pre-versioning retired default (promptVersion undefined) via the legacy-migration path', async () => {
@@ -704,8 +710,8 @@ describe('taskSchedule', () => {
         tasks: { 'console-errors': { type: 'once', enabled: false, providerId: null, model: null, prompt: RETIRED_CONSOLE_ERRORS_PROMPT } }
       })
       const schedule = await loadSchedule()
-      expect(schedule.tasks['console-errors'].prompt).toBe(DEFAULT_TASK_PROMPTS['console-errors'])
-      expect(schedule.tasks['console-errors'].promptCustomized).not.toBe(true)
+      expect(schedule.tasks['ui-runtime-bugs'].prompt).toBe(DEFAULT_TASK_PROMPTS['ui-runtime-bugs'])
+      expect(schedule.tasks['ui-runtime-bugs'].promptCustomized).not.toBe(true)
     })
 
     it('self-heals a mis-flagged promptCustomized that actually matches a retired default, then upgrades', async () => {
@@ -713,20 +719,20 @@ describe('taskSchedule', () => {
         tasks: { 'console-errors': { type: 'once', enabled: false, providerId: null, model: null, prompt: RETIRED_CONSOLE_ERRORS_PROMPT, promptVersion: 1, promptCustomized: true } }
       })
       const schedule = await loadSchedule()
-      const task = schedule.tasks['console-errors']
-      expect(task.promptCustomized).toBe(false)
-      expect(task.prompt).toBe(DEFAULT_TASK_PROMPTS['console-errors'])
-      expect(task.promptVersion).toBe(PROMPT_VERSIONS['console-errors'])
+      const task = schedule.tasks['ui-runtime-bugs']
+      expect(task.promptCustomized).not.toBe(true)
+      expect(task.prompt).toBe(DEFAULT_TASK_PROMPTS['ui-runtime-bugs'])
+      expect(task.promptVersion).toBe(PROMPT_VERSIONS['ui-runtime-bugs'])
     })
 
     it('preserves a genuine user customization even when it mentions PortOS', async () => {
       const custom = 'My own documentation prompt that happens to mention PortOS but matches no shipped default.'
       mockSchedule({
-        tasks: { 'documentation': { type: 'once', enabled: false, providerId: null, model: null, prompt: custom, promptCustomized: true } }
+        tasks: { 'documentation-content': { type: 'once', enabled: false, providerId: null, model: null, prompt: custom, promptCustomized: true } }
       })
       const schedule = await loadSchedule()
-      expect(schedule.tasks['documentation'].prompt).toBe(custom)
-      expect(schedule.tasks['documentation'].promptCustomized).toBe(true)
+      expect(schedule.tasks['documentation-content'].prompt).toBe(custom)
+      expect(schedule.tasks['documentation-content'].promptCustomized).toBe(true)
     })
   })
 
@@ -742,7 +748,7 @@ describe('taskSchedule', () => {
       mockSchedule({
         tasks: { 'console-errors': { type: 'once', enabled: false, providerId: null, model: null, ...config } }
       })
-      return (await loadSchedule()).tasks['console-errors']
+      return (await loadSchedule()).tasks['ui-runtime-bugs']
     }
 
     it('keeps a user-pinned retired default pinned instead of self-healing it', async () => {
@@ -763,8 +769,8 @@ describe('taskSchedule', () => {
         promptCustomized: true,
         promptSource: 'legacy-inferred'
       })
-      expect(task.promptCustomized).toBe(false)
-      expect(task.prompt).toBe(DEFAULT_TASK_PROMPTS['console-errors'])
+      expect(task.promptCustomized).not.toBe(true)
+      expect(task.prompt).toBe(DEFAULT_TASK_PROMPTS['ui-runtime-bugs'])
     })
 
     // Every install that upgrades into this field carries no promptSource at all.
@@ -777,8 +783,8 @@ describe('taskSchedule', () => {
         promptCustomized: true
       })
       expect(task.promptSource).toBeUndefined()
-      expect(task.promptCustomized).toBe(false)
-      expect(task.prompt).toBe(DEFAULT_TASK_PROMPTS['console-errors'])
+      expect(task.promptCustomized).not.toBe(true)
+      expect(task.prompt).toBe(DEFAULT_TASK_PROMPTS['ui-runtime-bugs'])
     })
 
     it('stamps legacy-inferred when the legacy migration flags an unrecognized body', async () => {
@@ -791,13 +797,13 @@ describe('taskSchedule', () => {
 
     it('drops a stale promptSource when the config has no prompt to pin', async () => {
       const task = await loadStored({ prompt: null, promptSource: 'user' })
-      expect(task.prompt).toBe(DEFAULT_TASK_PROMPTS['console-errors'])
-      expect(task.promptSource).toBeNull()
+      expect(task.prompt).toBe(DEFAULT_TASK_PROMPTS['ui-runtime-bugs'])
+      expect(task.promptSource).toBeFalsy()
     })
 
     it('survives a PROMPT_VERSIONS bump when the pin is user-sourced', async () => {
-      const original = PROMPT_VERSIONS['console-errors']
-      PROMPT_VERSIONS['console-errors'] = original + 1
+      const original = PROMPT_VERSIONS['ui-runtime-bugs']
+      PROMPT_VERSIONS['ui-runtime-bugs'] = original + 1
       try {
         const task = await loadStored({
           prompt: RETIRED_CONSOLE_ERRORS_PROMPT,
@@ -808,13 +814,13 @@ describe('taskSchedule', () => {
         expect(task.prompt).toBe(RETIRED_CONSOLE_ERRORS_PROMPT)
         expect(task.promptVersion).toBe(original)
       } finally {
-        PROMPT_VERSIONS['console-errors'] = original
+        PROMPT_VERSIONS['ui-runtime-bugs'] = original
       }
     })
 
     it('upgrades the same body across a bump when the pin is legacy-inferred', async () => {
-      const original = PROMPT_VERSIONS['console-errors']
-      PROMPT_VERSIONS['console-errors'] = original + 1
+      const original = PROMPT_VERSIONS['ui-runtime-bugs']
+      PROMPT_VERSIONS['ui-runtime-bugs'] = original + 1
       try {
         const task = await loadStored({
           prompt: RETIRED_CONSOLE_ERRORS_PROMPT,
@@ -822,10 +828,10 @@ describe('taskSchedule', () => {
           promptCustomized: true,
           promptSource: 'legacy-inferred'
         })
-        expect(task.prompt).toBe(DEFAULT_TASK_PROMPTS['console-errors'])
+        expect(task.prompt).toBe(DEFAULT_TASK_PROMPTS['ui-runtime-bugs'])
         expect(task.promptVersion).toBe(original + 1)
       } finally {
-        PROMPT_VERSIONS['console-errors'] = original
+        PROMPT_VERSIONS['ui-runtime-bugs'] = original
       }
     })
   })
@@ -844,7 +850,7 @@ describe('taskSchedule', () => {
       mockSchedule({
         tasks: { [taskType]: { type: 'once', enabled: false, providerId: null, model: null, prompt, promptVersion, promptCustomized: true } }
       })
-      return (await loadSchedule()).tasks[taskType]
+      return (await loadSchedule()).tasks['ui-runtime-bugs']
     }
 
     // Runs under BOTH version stamps a frozen install can carry. The legacy
@@ -855,12 +861,12 @@ describe('taskSchedule', () => {
     // Testing only the version-1 stamp misses that entirely.
     it.each([
       ['pre-versioning', 1],
-      ['current-version', PROMPT_VERSIONS['console-errors']],
+      ['current-version', PROMPT_VERSIONS['ui-runtime-bugs']],
     ])('self-heals and upgrades a stored pre-unification prompt (%s stamp)', async (_label, storedVersion) => {
       const task = await loadOne('console-errors', RETIRED_CONSOLE_ERRORS_PROMPT, storedVersion)
-      expect(task.promptCustomized).toBe(false)
-      expect(task.prompt).toBe(DEFAULT_TASK_PROMPTS['console-errors'])
-      expect(task.promptVersion).toBe(PROMPT_VERSIONS['console-errors'])
+      expect(task.promptCustomized).not.toBe(true)
+      expect(task.prompt).toBe(DEFAULT_TASK_PROMPTS['ui-runtime-bugs'])
+      expect(task.promptVersion).toBe(PROMPT_VERSIONS['ui-runtime-bugs'])
     })
 
     it('preserves a genuine user customization that merely mimics a retired header', async () => {
@@ -1142,11 +1148,11 @@ describe('taskSchedule', () => {
 
   describe('shouldRunTask', () => {
     it('keeps invalid cron verdicts one shape before and after cron parsing', async () => {
-      mockSchedule({ tasks: { 'ui-bugs': { type: 'cron', enabled: true, cronExpression: 'not a cron' } } })
-      const malformed = await shouldRunTask('ui-bugs')
-      mockSchedule({ tasks: { 'ui-bugs': { type: 'cron', enabled: true, cronExpression: '0 7 * * *' } } })
+      mockSchedule({ tasks: { 'ui-runtime-bugs': { type: 'cron', enabled: true, cronExpression: 'not a cron' } } })
+      const malformed = await shouldRunTask('ui-runtime-bugs')
+      mockSchedule({ tasks: { 'ui-runtime-bugs': { type: 'cron', enabled: true, cronExpression: '0 7 * * *' } } })
       parseCronToNextRun.mockReturnValue(null)
-      const unresolvable = await shouldRunTask('ui-bugs')
+      const unresolvable = await shouldRunTask('ui-runtime-bugs')
       expect(malformed).toEqual({ shouldRun: false, reason: 'invalid-cron', cronExpression: null })
       expect(unresolvable).toEqual({ shouldRun: false, reason: 'invalid-cron', cronExpression: '0 7 * * *' })
     })
@@ -1173,33 +1179,33 @@ describe('taskSchedule', () => {
       readJSONFile.mockResolvedValue({
         version: 2,
         tasks: {
-          'code-quality': { type: 'rotation', enabled: true, providerId: null, model: null, prompt: null }
+          'architecture-maintainability': { type: 'rotation', enabled: true, providerId: null, model: null, prompt: null }
         },
         executions: {}
       })
 
-      const interval = await getTaskInterval('code-quality')
+      const interval = await getTaskInterval('architecture-maintainability')
       expect(interval).toMatchObject({ type: 'cron', cronExpression: '0 7 * * *', perpetual: false })
     })
 
     it('never auto-runs a plain on-demand task, but drains one carrying the perpetual flag', async () => {
       mockSchedule({
         tasks: {
-          'ui-bugs': { type: 'on-demand', enabled: true, providerId: null, model: null, prompt: null },
+          'ui-runtime-bugs': { type: 'on-demand', enabled: true, providerId: null, model: null, prompt: null },
           'claim-issue': { type: 'on-demand', perpetual: true, enabled: true, providerId: null, model: null, prompt: null }
         }
       })
 
-      expect(await shouldRunTask('ui-bugs')).toMatchObject({ shouldRun: false, reason: 'on-demand-only' })
+      expect(await shouldRunTask('ui-runtime-bugs')).toMatchObject({ shouldRun: false, reason: 'on-demand-only' })
       expect(await shouldRunTask('claim-issue')).toMatchObject({ shouldRun: true, reason: 'perpetual-drain' })
     })
 
     it('should not run on-demand tasks automatically', async () => {
       mockSchedule({
-        tasks: { 'ui-bugs': { type: 'on-demand', enabled: true, providerId: null, model: null, prompt: null } }
+        tasks: { 'ui-runtime-bugs': { type: 'on-demand', enabled: true, providerId: null, model: null, prompt: null } }
       })
 
-      const result = await shouldRunTask('ui-bugs')
+      const result = await shouldRunTask('ui-runtime-bugs')
       expect(result.shouldRun).toBe(false)
       expect(result.reason).toBe('on-demand-only')
     })
@@ -1461,14 +1467,14 @@ describe('taskSchedule', () => {
       mockSchedule({
         tasks: {
           ...PAUSED_SHIPPED_DRAINS,
-          'code-quality': { type: 'cron', cronExpression: '0 7 * * *', enabled: true, providerId: null, model: null, prompt: null },
+          'architecture-maintainability': { type: 'cron', cronExpression: '0 7 * * *', enabled: true, providerId: null, model: null, prompt: null },
           'security': { type: 'cron', cronExpression: '0 7 * * 1', enabled: false, providerId: null, model: null, prompt: null }
         }
       })
 
       const due = await getDueTasks()
       expect(due.length).toBe(1)
-      expect(due[0].taskType).toBe('code-quality')
+      expect(due[0].taskType).toBe('architecture-maintainability')
     })
   })
 
@@ -1485,7 +1491,7 @@ describe('taskSchedule', () => {
       mockSchedule({
         tasks: {
           ...PAUSED_SHIPPED_DRAINS,
-          'code-quality': { type: 'on-demand', enabled: true, providerId: null, model: null, prompt: null },
+          'architecture-maintainability': { type: 'on-demand', enabled: true, providerId: null, model: null, prompt: null },
           'error-handling': { type: 'on-demand', enabled: true, providerId: null, model: null, prompt: null }
         }
       })
@@ -1515,7 +1521,7 @@ describe('taskSchedule', () => {
       mockSchedule({
         tasks: {
           ...PAUSED_SHIPPED_DRAINS,
-          'code-quality': { type: 'on-demand', perpetual: true, enabled: true, providerId: null, model: null, prompt: null, runAfter: [] },
+          'architecture-maintainability': { type: 'on-demand', perpetual: true, enabled: true, providerId: null, model: null, prompt: null, runAfter: [] },
           'plan-task':    { type: 'cron',   enabled: true, cronExpression: '0 9 * * *', providerId: null, model: null, prompt: null, createdAt: yesterdayNineAm.toISOString() }
         }
       })
@@ -1559,7 +1565,7 @@ describe('taskSchedule', () => {
       mockSchedule({
         tasks: {
           ...PAUSED_SHIPPED_DRAINS,
-          'code-quality':  { type: 'cron', cronExpression: '0 7 * * *', enabled: true, providerId: null, model: null, prompt: null },
+          'architecture-maintainability':  { type: 'cron', cronExpression: '0 7 * * *', enabled: true, providerId: null, model: null, prompt: null },
           'error-handling': { type: 'on-demand', enabled: true, providerId: null, model: null, prompt: null }
         }
       })
@@ -1584,19 +1590,19 @@ describe('taskSchedule', () => {
   describe('execution field write safety', () => {
     it('keeps a persisted custom prompt readable after rejecting malformed updates', async () => {
       mockSchedule();
-      await updateTaskInterval('documentation', { prompt: 'Example custom prompt', providerId: 'example-provider', model: 'example-model' });
+      await updateTaskInterval('documentation-content', { prompt: 'Example custom prompt', providerId: 'example-provider', model: 'example-model' });
       const saved = JSON.parse(writeFile.mock.calls.at(-1)[1]);
-      const original = saved.tasks.documentation;
+      const original = saved.tasks['documentation-content'];
       readJSONFile.mockResolvedValue(saved);
       writeFile.mockClear();
       for (const field of ['prompt', 'providerId', 'model']) {
         for (const value of [{ text: 'Example malformed prompt' }, ['example'], true, 42]) {
-          await expect(updateTaskInterval('documentation', { [field]: value })).rejects.toMatchObject({ status: 400, code: 'VALIDATION_ERROR' });
+          await expect(updateTaskInterval('documentation-content', { [field]: value })).rejects.toMatchObject({ status: 400, code: 'VALIDATION_ERROR' });
         }
       }
       expect(writeFile).not.toHaveBeenCalled();
-      expect(saved.tasks.documentation).toEqual(original);
-      expect(await getTaskPrompt('documentation')).toBe('Example custom prompt');
+      expect(saved.tasks['documentation-content']).toEqual(original);
+      expect(await getTaskPrompt('documentation-content')).toBe('Example custom prompt');
       expect(original).toMatchObject({ promptSource: 'user', providerId: 'example-provider', model: 'example-model' });
     });
   });
@@ -1794,68 +1800,18 @@ describe('taskSchedule', () => {
     })
   })
 
-  describe('design audit defaults (#13737)', () => {
-    // Regression: a catalog-only registration could appear in Quality without
-    // a dispatchable task or the correct operator-selected delivery posture.
-    it('generates an on-demand, issue-filing design task with rendered evidence and opt-in fixes', async () => {
-      expect(SELF_IMPROVEMENT_TASK_TYPES).toContain('design')
-      expect(TASK_TYPE_DESCRIPTIONS.design).toContain('Rendered design audit')
-      expect(DEFAULT_TASK_INTERVALS.design).toMatchObject({
-        type: INTERVAL_TYPES.ON_DEMAND, enabled: true,
-        taskMetadata: { fileIssues: true, useWorktree: false, openPR: false, readOnly: false }
-      })
-      expect(MANAGED_AGENT_OPTIONS.design).toBeUndefined()
-      const prompt = await getTaskPrompt('design')
-      expect(prompt).toContain('{trackerInstructions}')
-      expect(prompt).toContain('{modeInstructions}')
-      expect(prompt).toContain('AND inspect screenshots')
-      expect(prompt).toContain('six route/state/viewport/theme captures')
-      expect(prompt).toContain('Apps without themes skip')
-      expect(prompt).toContain('not accepted defects or automatically actionable tracker items')
-      expect(prompt).toContain('even in implement mode')
+  it('ships the design and usability domain as an on-demand filing audit with rendered evidence', async () => {
+    const type = 'design-usability'
+    expect(DEFAULT_TASK_INTERVALS[type]).toMatchObject({
+      type: INTERVAL_TYPES.ON_DEMAND, enabled: true,
+      taskMetadata: { fileIssues: true, useWorktree: false, openPR: false },
     })
-  })
-
-  describe('ux defaults (#3273)', () => {
-    it('defaults to on-demand + enabled with file-issues on (worktree/PR off)', () => {
-      const cfg = DEFAULT_TASK_INTERVALS['ux']
-      expect(cfg.type).toBe(INTERVAL_TYPES.ON_DEMAND)
-      // Manual Run is explicit consent; choosing a cadence opts into scheduling.
-      expect(cfg.enabled).toBe(true)
-      expect(cfg.taskMetadata.fileIssues).toBe(true)
-      expect(cfg.taskMetadata.useWorktree).toBe(false)
-      expect(cfg.taskMetadata.openPR).toBe(false)
-      // File-issues posture is enforced at dispatch, not via a static lock, so
-      // the user can flip fileIssues off and implement.
-      expect(MANAGED_AGENT_OPTIONS['ux']).toBeUndefined()
-      expect(cfg.taskMetadata.readOnly).toBe(false)
-    })
-
-    it('ships a prompt that files findings to the tracker and honors the injected mode', async () => {
-      const prompt = await getTaskPrompt('ux')
-      // The tracker block is injected at dispatch, so the token must survive here.
-      expect(prompt).toContain('{trackerInstructions}')
-      expect(prompt).toContain('short, human-readable title')
-      expect(prompt).not.toContain('[ux-…]')
-      // Read-only-on-source is carried by the injected mode banner, not restated
-      // in the body. ux is a file-issues-CAPABLE audit that merely DEFAULTS to
-      // filing, so a body that hardcoded "no branches, no PRs" contradicted the
-      // do-work banner the catalog prepends when the user flips the toggle.
-      // Pin the seam instead of the sentence, and assert the contract it
-      // resolves to actually forbids the edits.
-      expect(prompt).toContain('{modeInstructions}')
-      expect(prompt).not.toMatch(/do NOT (edit|create branches)/)
-      expect(modeContractFor(true)).toContain('deliverable is tracker items, not code')
-      expect(modeContractFor(true)).toContain('open a PR, create a branch')
-      // Named checklist, not vibes.
-      expect(prompt).toContain('above the fold')
-      expect(prompt).toContain('sampled desktop viewport')
-      expect(prompt).toContain('narrow task-flow sample')
-      // Explicitly defers to the sibling task types it would otherwise duplicate.
-      expect(prompt).toContain('ui-bugs')
-      expect(prompt).toContain('mobile-responsive')
-      expect(prompt).toContain('accessibility')
-    })
+    expect(MANAGED_AGENT_OPTIONS[type]).toBeUndefined()
+    const prompt = await getTaskPrompt(type)
+    expect(prompt).toContain('{modeInstructions}')
+    expect(prompt).toContain('six screenshots')
+    expect(prompt).toContain('authored theme')
+    expect(modeContractFor(true)).toContain('deliverable is tracker items, not code')
   })
 
   describe('media-render-research defaults', () => {
@@ -1935,42 +1891,16 @@ describe('taskSchedule', () => {
     // PRs to dedup against work in flight without spending forge calls. Every
     // audit also preloads its recent slices so runs rotate coverage (#12090)
     // and its lane health so it does not re-file a rejected finding (#12088).
-    const OPEN_ISSUES_ONLY = ['open-issues', 'audit-slice-history', 'lane-health']
-    const DEDUP_PRELOAD = ['open-issues', 'open-pull-requests', 'audit-slice-history', 'lane-health']
-    const FILE_ISSUES_LANES = [
-      ['data-safety', OPEN_ISSUES_ONLY],
-      ['simplify', OPEN_ISSUES_ONLY],
-      ['ui-lifecycle', OPEN_ISSUES_ONLY],
-      ['module-hygiene', DEDUP_PRELOAD],
-      ['upgrade-rehearsal', DEDUP_PRELOAD],
-      // Derived, so a seventh better-* lane cannot be added without landing here.
-      ...[...AUDIT_EXECUTION_TASK_TYPES]
-        .filter((taskType) => taskType.startsWith('better-'))
-        .map((taskType) => [taskType, DEDUP_PRELOAD]),
-    ]
-
-    it('covers every better-* lane, derived from the catalog rather than hand-listed', () => {
-      const lanes = FILE_ISSUES_LANES.map(([taskType]) => taskType).filter((t) => t.startsWith('better-'))
-      expect(lanes).toEqual([
-        'better-complexity',
-        'better-cognitive-load',
-        'better-structural-drift',
-        'better-runtime-safety',
-        'better-dependency-freedom',
-        'better-test-quality',
-        'better-dev-environment',
-      ])
-    })
-
+    const FILE_ISSUES_LANES = AUDIT_TASK_TYPE_LIST.filter(defaultFileIssuesFor)
     it('ships open issues, the slice rotation record and lane health for every scheduled quality audit', () => {
-      for (const taskType of AUDIT_EXECUTION_TASK_TYPES) {
+      for (const taskType of AUDIT_TASK_TYPE_LIST) {
         expect(DEFAULT_TASK_INTERVALS[taskType]?.dataInputs, taskType).toContain('open-issues')
         expect(DEFAULT_TASK_INTERVALS[taskType]?.dataInputs, taskType).toContain('audit-slice-history')
         expect(DEFAULT_TASK_INTERVALS[taskType]?.dataInputs, taskType).toContain('lane-health')
       }
     })
 
-    it.each(FILE_ISSUES_LANES)('registers %s as an enabled on-demand file-issues audit', (taskType, dataInputs) => {
+    it.each(FILE_ISSUES_LANES)('registers %s as an enabled on-demand file-issues audit', (taskType) => {
       expect(SELF_IMPROVEMENT_TASK_TYPES).toContain(taskType)
       expect(TASK_TYPE_DESCRIPTIONS[taskType]).toBeTruthy()
       expect(DEFAULT_TASK_PROMPTS[taskType]).toBeTruthy()
@@ -1980,35 +1910,26 @@ describe('taskSchedule', () => {
       expect(cfg.taskMetadata.fileIssues).toBe(true)
       expect(cfg.taskMetadata.useWorktree).toBe(false)
       expect(cfg.taskMetadata.openPR).toBe(false)
-      expect(cfg.dataInputs).toEqual(dataInputs)
+      expect(cfg.dataInputs).toContain('open-issues')
       // The file-issues posture is enforced at dispatch, so the user can still
       // flip the toggle and implement.
       expect(MANAGED_AGENT_OPTIONS[taskType]).toBeUndefined()
     })
 
     it('requires worktree isolation for the lanes whose remediation restructures code', () => {
-      const isolated = [...AUDIT_EXECUTION_TASK_TYPES]
-        .filter((t) => t.startsWith('better-') && auditDoWorkRequiresWorktree(t))
-      expect(isolated).toEqual([
-        'better-complexity',
-        'better-cognitive-load',
-        'better-structural-drift',
-        'better-dependency-freedom',
+      expect(AUDIT_TASK_TYPE_LIST.filter(auditDoWorkRequiresWorktree)).toEqual([
+        'better-dependency-freedom', 'architecture-maintainability', 'code-simplification',
       ])
     })
 
     it('surfaces fileIssuesCapable on audit types in getScheduleStatus', async () => {
       mockSchedule()
       const status = await getScheduleStatus()
-      expect(status.tasks['security'].fileIssuesCapable).toBe(true)
-      expect(status.tasks['security'].defaultFileIssues).toBe(false)
-      expect(status.tasks['ux'].fileIssuesCapable).toBe(true)
-      expect(status.tasks['ux'].defaultFileIssues).toBe(true)
-      expect(status.tasks['data-safety'].fileIssuesCapable).toBe(true)
-      expect(status.tasks['module-hygiene'].fileIssuesCapable).toBe(true)
-      expect(status.tasks['module-hygiene'].defaultFileIssues).toBe(true)
-      expect(status.tasks['module-hygiene'].doWorkRequiresWorktree).toBe(true)
-      expect(status.tasks['simplify'].doWorkRequiresWorktree).toBeUndefined()
+      expect(status.tasks.security).toMatchObject({ fileIssuesCapable: true, defaultFileIssues: false })
+      expect(status.tasks['design-usability']).toMatchObject({ fileIssuesCapable: true, defaultFileIssues: true })
+      expect(status.tasks['architecture-maintainability']).toMatchObject({
+        fileIssuesCapable: true, defaultFileIssues: true, doWorkRequiresWorktree: true,
+      })
       expect(status.tasks['claim-issue'].fileIssuesCapable).toBeUndefined()
     })
 
@@ -2071,8 +1992,8 @@ describe('taskSchedule', () => {
     describe('inputs-unchanged gate (#12907)', () => {
       const HEAD = 'a'.repeat(40)
       const gated = (lastCleanHead) => mockSchedule({
-        tasks: { 'upgrade-rehearsal': { type: 'on-demand', enabled: true } },
-        executions: { 'task:upgrade-rehearsal': { perApp: { 'app-1': { lastRun: null, count: 0, ...(lastCleanHead ? { lastCleanHead } : {}) } } } }
+        tasks: { 'data-integrity-safety': { type: 'on-demand', enabled: true } },
+        executions: { 'task:data-integrity-safety': { perApp: { 'app-1': { lastRun: null, count: 0, ...(lastCleanHead ? { lastCleanHead } : {}) } } } }
       })
       beforeEach(() => {
         getAppById.mockResolvedValue({ id: 'app-1', repoPath: '/repo' })
@@ -2082,31 +2003,31 @@ describe('taskSchedule', () => {
 
       it('declines unattended launches while no declared input changed since the clean baseline, but never a user Run', async () => {
         gated(HEAD)
-        const refill = await triggerOnDemandTask('upgrade-rehearsal', 'app-1', { origin: ON_DEMAND_ORIGINS.REFILL })
+        const refill = await triggerOnDemandTask('data-integrity-safety', 'app-1', { origin: ON_DEMAND_ORIGINS.REFILL })
         expect(refill).toMatchObject({ reason: 'inputs-unchanged' })
         expect(inputsUnchangedSince).toHaveBeenCalledWith(expect.objectContaining({ repoPath: '/repo', lastCleanHead: HEAD }))
-        expect(await triggerOnDemandTask('upgrade-rehearsal', 'app-1')).toMatchObject({ taskType: 'upgrade-rehearsal', origin: ON_DEMAND_ORIGINS.USER })
+        expect(await triggerOnDemandTask('data-integrity-safety', 'app-1')).toMatchObject({ taskType: 'data-integrity-safety', origin: ON_DEMAND_ORIGINS.USER })
       })
 
       it('launches when an input changed or no clean baseline exists', async () => {
         gated(HEAD)
         inputsUnchangedSince.mockResolvedValue(false)
-        expect(await triggerOnDemandTask('upgrade-rehearsal', 'app-1', { origin: ON_DEMAND_ORIGINS.REFILL })).toMatchObject({ taskType: 'upgrade-rehearsal' })
+        expect(await triggerOnDemandTask('data-integrity-safety', 'app-1', { origin: ON_DEMAND_ORIGINS.REFILL })).toMatchObject({ taskType: 'data-integrity-safety' })
         gated(null)
         inputsUnchangedSince.mockClear()
-        expect(await triggerOnDemandTask('upgrade-rehearsal', 'app-1', { origin: ON_DEMAND_ORIGINS.REFILL })).toMatchObject({ taskType: 'upgrade-rehearsal' })
+        expect(await triggerOnDemandTask('data-integrity-safety', 'app-1', { origin: ON_DEMAND_ORIGINS.REFILL })).toMatchObject({ taskType: 'data-integrity-safety' })
         expect(inputsUnchangedSince).not.toHaveBeenCalled()
       })
 
       it('reports inputs-unchanged from readiness instead of a due cron slot', async () => {
         mockSchedule({
-          tasks: { 'upgrade-rehearsal': { type: 'cron', enabled: true, cronExpression: '* * * * *' } },
-          executions: { 'task:upgrade-rehearsal': { perApp: { 'app-1': { lastRun: null, count: 0, lastCleanHead: HEAD } } } }
+          tasks: { 'data-integrity-safety': { type: 'cron', enabled: true, cronExpression: '* * * * *' } },
+          executions: { 'task:data-integrity-safety': { perApp: { 'app-1': { lastRun: null, count: 0, lastCleanHead: HEAD } } } }
         })
         parseCronToNextRun.mockReturnValue(new Date(Date.now() - 1000))
-        expect(await shouldRunTask('upgrade-rehearsal', 'app-1')).toMatchObject({ shouldRun: false, reason: 'inputs-unchanged' })
+        expect(await shouldRunTask('data-integrity-safety', 'app-1')).toMatchObject({ shouldRun: false, reason: 'inputs-unchanged' })
         inputsUnchangedSince.mockResolvedValue(false)
-        expect(await shouldRunTask('upgrade-rehearsal', 'app-1')).toMatchObject({ shouldRun: true, reason: 'cron-due' })
+        expect(await shouldRunTask('data-integrity-safety', 'app-1')).toMatchObject({ shouldRun: true, reason: 'cron-due' })
       })
     })
 
@@ -2542,12 +2463,8 @@ describe('taskSchedule', () => {
       expect(status.tasks.security).toMatchObject({ displayName: 'better-security', labels: ['backend'], description: 'Custom summary', enabled: false })
       expect(status.tasks.security.defaultLabels).toEqual(expect.arrayContaining(['slashdo', 'codebase-improvement', 'security']))
       expect(status.tasks['better-security']).toBeUndefined()
-      // Ordering is carried by NAMED task types, not by the prose — the prose
-      // only says why. A reader of the old guidance couldn't tell whether
-      // "structural drift" was another scheduled task or just a concept.
-      expect(status.tasks['module-hygiene'].suggestedAfter).toEqual(['simplify'])
-      expect(status.tasks['better-complexity'].suggestedAfter).toEqual(['module-hygiene'])
-      expect(status.tasks['module-hygiene'].runGuidance).toContain('module boundaries')
+      expect(status.tasks['code-simplification'].suggestedAfter).toEqual(['architecture-maintainability', 'feature-completeness'])
+      expect(status.tasks['code-simplification'].runGuidance).toContain('Simplify code')
       expect(status.tasks['claim-issue']).toMatchObject({ displayName: 'claim-issue', defaultLabels: [] })
       expect(status.tasks['music-video-autopilot']).toMatchObject({ displayName: 'Autonomous run' })
     })
@@ -2559,7 +2476,7 @@ describe('taskSchedule', () => {
           enabled: true,
           taskMetadata: { issueAuthorFilter: 'self', issueExcludeLabels: ['manual-review'], simplify: false },
         },
-        'module-hygiene': {
+        'code-simplification': {
           type: 'on-demand',
           enabled: true,
           suggestedAfter: [],
@@ -2571,7 +2488,7 @@ describe('taskSchedule', () => {
         'taskMetadata.issueExcludeLabels', 'taskMetadata.simplify',
       ]));
       expect(tasks['claim-issue'].globalOverrideFields).not.toContain('taskMetadata.issueAuthorFilter');
-      expect(tasks['module-hygiene'].globalOverrideFields).toContain('suggestedAfter');
+      expect(tasks['code-simplification'].globalOverrideFields).toContain('suggestedAfter');
     });
 
     it('projects task summaries and explains hook-owned prompts', async () => {
@@ -4006,25 +3923,25 @@ describe('boundParkedUntil', () => {
 // record and surfaces on the Schedule card (#12085).
 describe('recordRecommendedAudits', () => {
   it('stores the ranked list on the execution record and exposes it on schedule status', async () => {
-    mockSchedule({ tasks: {}, executions: { 'task:code-quality': { lastRun: '2026-10-01T00:00:00Z', count: 2, perApp: {} } } })
-    const recorded = await recordRecommendedAudits('code-quality', 'app-1', [
+    mockSchedule({ tasks: {}, executions: { 'task:architecture-maintainability': { lastRun: '2026-10-01T00:00:00Z', count: 2, perApp: {} } } })
+    const recorded = await recordRecommendedAudits('architecture-maintainability', 'app-1', [
       'better-structural-drift — drifted registries: server/lib/navManifest.js',
       'ux — buried primary action: client/src/pages/Apps.jsx',
     ])
     expect(recorded).toMatchObject({ appId: 'app-1', items: [expect.stringContaining('better-structural-drift'), expect.stringContaining('ux —')] })
     expect(Date.parse(recorded.at)).toBeGreaterThan(0)
-    const history = (await loadSchedule()).executions['task:code-quality']
+    const history = (await loadSchedule()).executions['task:architecture-maintainability']
     expect(history.count).toBe(2)
     expect(history.recommendedAudits.items).toHaveLength(2)
     const status = await getScheduleStatus()
-    expect(status.tasks['code-quality'].recommendedAudits).toEqual(history.recommendedAudits)
+    expect(status.tasks['architecture-maintainability'].recommendedAudits).toEqual(history.recommendedAudits)
     expect(status.tasks['security'].recommendedAudits).toBeNull()
   })
 
   it('keeps the previous recommendation when a run produced none', async () => {
     const previous = { at: '2026-10-01T00:00:00Z', appId: 'app-1', items: ['ux — one'] }
-    mockSchedule({ tasks: {}, executions: { 'task:code-quality': { lastRun: '2026-10-01T00:00:00Z', count: 1, perApp: {}, recommendedAudits: previous } } })
-    expect(await recordRecommendedAudits('code-quality', 'app-1', [])).toBeNull()
-    expect((await loadSchedule()).executions['task:code-quality'].recommendedAudits).toEqual(previous)
+    mockSchedule({ tasks: {}, executions: { 'task:architecture-maintainability': { lastRun: '2026-10-01T00:00:00Z', count: 1, perApp: {}, recommendedAudits: previous } } })
+    expect(await recordRecommendedAudits('architecture-maintainability', 'app-1', [])).toBeNull()
+    expect((await loadSchedule()).executions['task:architecture-maintainability'].recommendedAudits).toEqual(previous)
   })
 })

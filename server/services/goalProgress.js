@@ -24,19 +24,19 @@ const GOAL_MAPPINGS = {
     icon: '🔧',
     color: 'emerald',
     keywords: ['security', 'audit', 'mobile', 'responsive', 'dry', 'dead-code', 'test', 'coverage', 'console', 'lint', 'refactor'],
-    taskTypes: ['task:security', 'task:mobile-responsive', 'task:code-quality', 'task:test-coverage', 'task:console-errors', 'self-improve:security-audit', 'self-improve:mobile-responsive', 'app-improve:security']
+    taskTypes: ['task:architecture-maintainability', 'task:test-quality-coverage', 'task:design-usability', 'task:ui-runtime-bugs', 'task:security', 'task:mobile-responsive', 'task:code-quality', 'task:test-coverage', 'task:console-errors', 'self-improve:security-audit', 'self-improve:mobile-responsive', 'app-improve:security']
   },
   'Self-Improvement': {
     icon: '🧠',
     color: 'purple',
     keywords: ['capability', 'improvement', 'learn', 'analysis', 'error', 'retry', 'prioritization', 'a11y', 'i18n', 'seo'],
-    taskTypes: ['task:feature-ideas', 'task:error-handling', 'idle-review']
+    taskTypes: ['task:reliability-error-handling', 'task:feature-ideas', 'task:error-handling', 'idle-review']
   },
   'Documentation': {
     icon: '📚',
     color: 'blue',
     keywords: ['document', 'docs', 'readme', 'plan', 'report', 'summary', 'changelog'],
-    taskTypes: ['task:documentation', 'self-improve:documentation', 'app-improve:documentation']
+    taskTypes: ['task:documentation-content', 'task:documentation', 'self-improve:documentation', 'app-improve:documentation']
   },
   'User Engagement': {
     icon: '💬',
@@ -48,7 +48,7 @@ const GOAL_MAPPINGS = {
     icon: '💚',
     color: 'green',
     keywords: ['health', 'pm2', 'memory', 'performance', 'monitor', 'alert', 'process', 'service'],
-    taskTypes: ['task:performance', 'task:dependency-updates', 'auto-fix', 'internal-task']
+    taskTypes: ['task:performance-efficiency', 'task:performance', 'task:dependency-updates', 'auto-fix', 'internal-task']
   }
 }
 

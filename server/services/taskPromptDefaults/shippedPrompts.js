@@ -17,12 +17,14 @@
  *
  * See ../taskPromptDefaults.js and AGENTS.md "Distribution model".
  */
+import { auditDomainFor } from '../../lib/auditDomains.js';
 import { DEFAULT_TASK_PROMPTS } from './prompts.js';
 import { hashPromptBody, readPromptIntegritySnapshot } from './integrityHash.js';
 
 const RETIRED_PROMPT_HASHES = readPromptIntegritySnapshot().PREVIOUS_DEFAULT_PROMPTS;
 
 export function promptMatchesShippedDefault(prompt, taskType) {
+  taskType = auditDomainFor(taskType);
   if (!prompt || !DEFAULT_TASK_PROMPTS[taskType]) return false;
   if (prompt === DEFAULT_TASK_PROMPTS[taskType]) return true;
   return Boolean(RETIRED_PROMPT_HASHES[taskType]?.includes(hashPromptBody(prompt)));
