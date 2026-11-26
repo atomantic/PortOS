@@ -800,6 +800,13 @@ describe('always-run guard time budget through the real runner (#16551, #16996)'
       expect(enforced.status).toBe(1);
       expect(enforced.stderr).toContain(`❌ Guard over its time budget: ${over}`);
       expect(ranSets(enforced.stdout)).toEqual([[guardSelector, 'test/guards/repo.guard.test.js'], [`../${scheduled}`], [`../${other}`]]);
+      const timings = enforced.stdout.split('\n')
+        .filter(line => line.startsWith('Guard timings (ms): '))
+        .map(line => JSON.parse(line.slice('Guard timings (ms): '.length)));
+      expect(timings).toEqual([
+        { [guard]: 6500, [`${runner} > slowCheck`]: 4500, [`${runner} > fastCheck`]: 4605 },
+        { [scheduled]: 10 },
+      ]);
 
       const slowScheduled = run({ CI_GUARD_BUDGET: 'enforce', FAKE_SLOW_GUARD: `../${scheduled}` });
       expect(slowScheduled.status).toBe(1);
@@ -812,6 +819,7 @@ describe('always-run guard time budget through the real runner (#16551, #16996)'
         expect(reported.status, reported.stderr).toBe(0);
         expect(ranSets(reported.stdout)).toEqual([[guardSelector, `../${other}`, `../${scheduled}`, 'test/guards/repo.guard.test.js'].sort()]);
         expect(reported.stdout).toContain(`::warning title=Guard over its time budget::${over}`);
+        expect(reported.stdout).not.toContain('Guard timings (ms): ');
         expect(reported.stderr).not.toContain('Guard over its time budget');
       }
 
@@ -824,9 +832,10 @@ describe('always-run guard time budget through the real runner (#16551, #16996)'
     }
   }, 120_000);
 
-  it('enforces it on the scheduled Linux server run only, and reports it everywhere else', () => {
+  it('enforces it on the scheduled Linux server run and the opt-in manual run only', () => {
     const jobs = readCiJobs();
-    const expression = "CI_GUARD_BUDGET: ${{ github.event_name == 'schedule' && 'enforce' || 'report' }}";
+    const expression = "CI_GUARD_BUDGET: ${{ (github.event_name == 'schedule' || (github.event_name == 'workflow_dispatch' && inputs.enforce_guard_budget)) && 'enforce' || 'report' }}";
+    expect(WORKFLOW).toMatch(/workflow_dispatch:\n {4}inputs:\n {6}enforce_guard_budget:\n {8}description: [^\n]+\n {8}type: boolean\n {8}default: false/);
     expect(Object.entries(jobs).filter(([, body]) => body.includes('CI_GUARD_BUDGET:')).map(([id]) => id)).toEqual(['server']);
     expect(jobs.server).toContain(expression);
   });

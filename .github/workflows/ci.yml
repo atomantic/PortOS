@@ -11,6 +11,11 @@ on:
     - cron: '17 9 * * *'
     - cron: '17 21 * * *'
   workflow_dispatch:
+    inputs:
+      enforce_guard_budget:
+        description: Run the Linux server guards in the scheduled budget-enforcing passes
+        type: boolean
+        default: false
   workflow_call:
     inputs:
       full:
@@ -227,10 +232,9 @@ jobs:
           CI_EXPECT_SLASHDO_SUBMODULE: ${{ fromJSON(needs.impact.outputs.plan).slashdo }}
           # The always-run guards' time budget (each structural guard runner's checks,
           # and every other always-run file whole) fails the run only on the
-          # twice-daily schedule, where a regression is still caught within 12
-          # hours without runner noise blocking a PR, push or release. Every other
-          # event reports it as a warning (scripts/lib/guardBudget.js, #16551, #16810, #16996).
-          CI_GUARD_BUDGET: ${{ github.event_name == 'schedule' && 'enforce' || 'report' }}
+          # twice-daily schedule or an explicit manual reproduction. PR, push,
+          # release and ordinary manual runs report a warning.
+          CI_GUARD_BUDGET: ${{ (github.event_name == 'schedule' || (github.event_name == 'workflow_dispatch' && inputs.enforce_guard_budget)) && 'enforce' || 'report' }}
           # Keep successful-test output signal-dense. Developers can reproduce
           # locally without this flag when assertion context needs app logs.
           PORTOS_TEST_QUIET: 1

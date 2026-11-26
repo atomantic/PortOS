@@ -74,6 +74,10 @@ The scheduled Linux server job enforces a 4s budget
 pass. When selected, the prompt-stage call-site manifest test gets its own
 budgeted pass so its source scan does not compete with the other scanners or the
 broader test shard. Its selection on PRs and pushes follows the usual impact plan.
+To run the same budget-enforcing passes on a specific branch in GitHub Actions,
+dispatch CI with `gh workflow run ci.yml --ref <branch> -f enforce_guard_budget=true`.
+Each enforced pass logs its full `Guard timings (ms)` map, including guard
+module-load time, for comparison with `guardDurations` in the local pregate receipt.
 `scripts/ensure-deps.test.js` is selected by changes to `ensure-deps.js`,
 `update.sh`, `update.ps1` and the lockfiles. Persistent test memo rules and
 worker caps still apply.
