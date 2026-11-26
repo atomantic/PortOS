@@ -824,7 +824,7 @@ describe('local LLM memory-management routes', () => {
       .send({ backend: 'lmstudio', modelId: 'some-model' });
 
     expect(res.status).toBe(400);
-    expect(res.body.error).toMatch(/use \/api\/lmstudio\/unload/);
+    expect(res.body.code).toBe('VALIDATION_ERROR');
     expect(unloadModel).not.toHaveBeenCalled();
   });
 
@@ -1299,6 +1299,19 @@ describe('local LLM catalog and loaded query validation', () => {
     listModels.mockClear();
     const res = await request(makeApp()).get('/api/local-llm/catalog?backend=ollama&backend=lmstudio');
     expect(res.status).toBe(400);
+    expect(res.body.code).toBe('VALIDATION_ERROR');
+    expect(listModels).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    ['backend=invalid'],
+    ['backend=ollama&variants=yes'],
+    [`backend=ollama&q=${'x'.repeat(161)}`],
+  ])('GET /catalog rejects invalid query %s before listing models', async (query) => {
+    listModels.mockClear();
+    const res = await request(makeApp()).get(`/api/local-llm/catalog?${query}`);
+    expect(res.status).toBe(400);
+    expect(res.body.code).toBe('VALIDATION_ERROR');
     expect(listModels).not.toHaveBeenCalled();
   });
 
@@ -1306,6 +1319,7 @@ describe('local LLM catalog and loaded query validation', () => {
     getLoadedModels.mockClear();
     const res = await request(makeApp()).get('/api/local-llm/loaded?fresh=1&fresh=0');
     expect(res.status).toBe(400);
+    expect(res.body.code).toBe('VALIDATION_ERROR');
     expect(getLoadedModels).not.toHaveBeenCalled();
   });
 });

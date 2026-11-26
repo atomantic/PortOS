@@ -169,19 +169,29 @@ export const localLlmBackendSchema = z.enum(['ollama', 'lmstudio']);
 export const localLlmModelIdSchema = z.string().min(1).max(256)
   .refine((v) => !v.startsWith('-'), { message: 'modelId may not start with "-"' })
   .refine((v) => !/[\0\r\n]/.test(v), { message: 'modelId may not contain control characters (NUL, CR, LF)' });
-export const localLlmInstallSchema = z.object({
+export const localLlmModelTargetSchema = z.object({
   backend: localLlmBackendSchema,
   modelId: localLlmModelIdSchema,
+});
+export const localLlmInstallSchema = localLlmModelTargetSchema.extend({
   // Re-pull even when the model is already on disk. Needed when a publisher
   // replaces GGUF files in place (e.g. Unsloth Dynamic 3.0) under the same id.
   force: z.boolean().optional(),
 });
-export const localLlmDeleteSchema = localLlmInstallSchema;
-// Memory-management unload: same `backend` + `modelId` shape as install/delete
-// so the validator catches the same set of malformed ids (no leading dash,
-// no control chars) — those reach Ollama via `/api/generate` body fields and
-// then echo into PortOS's emoji-prefixed unload log line.
-export const localLlmUnloadSchema = localLlmInstallSchema;
+export const localLlmDeleteSchema = localLlmModelTargetSchema;
+// Memory-management unload targets Ollama only. Keep model-id validation shared
+// because the value reaches Ollama's API and PortOS's unload log line.
+export const localLlmUnloadSchema = localLlmModelTargetSchema.extend({ backend: z.literal('ollama') });
+const localLlmBooleanQuerySchema = z.enum(['0', '1', 'true', 'false']);
+export const localLlmCatalogQuerySchema = z.object({
+  backend: localLlmBackendSchema,
+  q: z.string().max(160).optional().default(''),
+  variants: localLlmBooleanQuerySchema.optional(),
+});
+export const localLlmLoadedQuerySchema = z.object({ fresh: localLlmBooleanQuerySchema.optional() });
+export const manualGuardScanSchema = z.object({
+  content: z.string().min(1).max(2_000_000).refine(value => value.trim().length > 0),
+}).strict();
 export const localLlmSwitchSchema = z.object({ to: localLlmBackendSchema });
 // Migrate moves models from the OTHER backend onto `to` (bidirectional, never
 // flips the default marker). `mode` picks how the GGUF lands on disk: 'link'

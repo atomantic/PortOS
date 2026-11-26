@@ -18,6 +18,10 @@ import { asyncHandler, ServerError } from '../lib/errorHandler.js'
 import { validateRequest } from '../lib/validateRequest.js'
 import {
   localLlmInstallSchema,
+  localLlmModelTargetSchema,
+  localLlmCatalogQuerySchema,
+  localLlmLoadedQuerySchema,
+  manualGuardScanSchema,
   localLlmDeleteSchema,
   localLlmSwitchSchema,
   localLlmUnloadSchema,
@@ -72,11 +76,10 @@ import { getSpecDecodePresetStatus, downloadSpecDecodeModel, previewSpecDecodeDo
 import { SPEC_TYPE_SUGGESTIONS } from '../lib/specDecodePresets.js'
 import { resetProviderReadinessCache } from '../services/provider/providerReadiness.js'
 import { syncRuntimeProviderModels } from '../services/localRuntimeProviderSync.js'
-import { MODEL_ABUSE_GUARD, MODEL_ABUSE_GUARD_MAX_INPUT_CHARS } from '../lib/modelAbuseGuard.js'
+import { MODEL_ABUSE_GUARD } from '../lib/modelAbuseGuard.js'
 import { JEV_MODEL, jevDecideRequestSchema } from '../lib/jev.js'
 import { jevHeadActionRequestSchema, jevHeadTrainRequestSchema } from '../lib/jevHead.js'
-import { z } from 'zod'
-import { getCatalog, searchCatalog, isBackend } from '../lib/localLlmCatalog.js'
+import { getCatalog, searchCatalog } from '../lib/localLlmCatalog.js'
 import { isAppleSilicon } from '../lib/platform.js'
 import {
   captureSystemCapabilities,
@@ -237,12 +240,9 @@ router.get('/tool-use-models', asyncHandler(async (_req, res) => {
 // RAM-aware default as the live Hugging Face search, so the recommended quant
 // fits this machine instead of being hard-coded per model.
 // Scalars only: a repeated key (`?backend=a&backend=b`) is a 400, while `backend` itself keeps its own check below.
-const catalogQuerySchema = z.object({ backend: z.string().optional(), q: z.string().optional(), variants: z.string().optional() })
-const loadedQuerySchema = z.object({ fresh: z.string().optional() })
 
 router.get('/catalog', asyncHandler(async (req, res) => {
-  const { backend, q, variants } = validateRequest(catalogQuerySchema, req.query)
-  if (!isBackend(backend)) throw new ServerError('backend must be "ollama" or "lmstudio"', { status: 400 })
+  const { backend, q, variants } = validateRequest(localLlmCatalogQuerySchema, req.query)
   const installedModels = await listModels(backend)
   // getCatalog/searchCatalog normalize raw ids (no `@quant` suffix) — feed them the
   // RAW ids so the offline installed overlay is correct even when HF enrichment
@@ -313,10 +313,6 @@ router.get('/security-guard/status', asyncHandler(async (_req, res) => {
   ])
   res.json({ ...status, contributionAssessment })
 }))
-
-const manualGuardScanSchema = z.object({
-  content: z.string().min(1).max(MODEL_ABUSE_GUARD_MAX_INPUT_CHARS).refine(value => value.trim().length > 0),
-}).strict()
 
 // Explicit operator action: the default host-control write gate applies. This
 // runs only the local abuse scan, not a GitHub contribution assessment.
@@ -661,7 +657,7 @@ router.post('/install', asyncHandler(async (req, res) => {
 // The install request then answers `{ canceled: true }` after removing the
 // partial files.
 router.post('/install/cancel', asyncHandler(async (req, res) => {
-  const { backend, modelId } = validateRequest(localLlmInstallSchema, req.body)
+  const { backend, modelId } = validateRequest(localLlmModelTargetSchema, req.body)
   const result = cancelModelInstall(backend, modelId)
   if (!result.success) {
     throw new ServerError(result.error, { status: result.code === 'INSTALL_NOT_CANCELABLE' ? 409 : 404, code: result.code })
@@ -743,7 +739,7 @@ router.post('/migrate', asyncHandler(async (req, res) => {
 // the user opted out of availability warnings for, so the panel stays quiet
 // about them WITHOUT weakening that cleanup guard.
 router.get('/loaded', asyncHandler(async (req, res) => {
-  const { fresh } = validateRequest(loadedQuerySchema, req.query)
+  const { fresh } = validateRequest(localLlmLoadedQuerySchema, req.query)
   res.json(await loadedObservation.read({ fresh: fresh === '1' }));
 }))
 
@@ -752,8 +748,7 @@ router.get('/loaded', asyncHandler(async (req, res) => {
 // LM Studio's unload lives at POST /api/lmstudio/unload — we don't proxy
 // it here to keep each backend's quirks behind its own router.
 router.post('/unload', asyncHandler(async (req, res) => {
-  const { backend, modelId } = validateRequest(localLlmUnloadSchema, req.body)
-  if (backend !== 'ollama') throw new ServerError('backend must be "ollama" (use /api/lmstudio/unload for LM Studio)', { status: 400 })
+  const { modelId } = validateRequest(localLlmUnloadSchema, req.body)
   const result = await unloadOllamaModel(modelId)
   // "not loaded" is an idempotent no-op (the model already isn't resident
   // — between the panel's last poll and this click it may have hit Ollama's
