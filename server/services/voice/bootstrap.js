@@ -128,6 +128,8 @@ export const downloadPiperVoice = (voiceId, currentCfg) => withVoiceLifecycle(as
   // present, so this is cheap on repeat invocations.
   await runSetupScript({
     ...currentCfg,
+    // Voice auditions provision Piper only; Save & Reconcile owns STT setup.
+    stt: { ...currentCfg.stt, engine: 'web-speech', coreml: false },
     tts: { engine: 'piper', piper: { voicePath } },
   });
   const after = inspectVoiceAsset('piper', absVoicePath);
