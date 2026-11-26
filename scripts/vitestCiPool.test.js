@@ -84,7 +84,7 @@ describe('vitestCiPool', () => {
 
 // Real workers catch inheritance/array-merging mistakes that can duplicate or
 // drop suites, or defeat exclusion, despite correct-looking config objects.
-it('runs parallel units before exclusive, nonduplicated captures and cutover proofs', () => {
+it.each([1, 2])('runs parallel units before exclusive, nonduplicated captures and cutover proofs with %i worker(s)', maxWorkers => {
   const scratch = mkdtempSync(join(tmpdir(), 'portos-capture-schedule-'));
   const fixture = join(scratch, 'fixture');
   const server = fileURLToPath(new URL('../server/', import.meta.url));
@@ -113,11 +113,11 @@ it('runs parallel units before exclusive, nonduplicated captures and cutover pro
         }
       }
     `;
-    for (const [name, other] of [['unit-a', 'unit-b'], ['unit-b', 'unit-a']]) {
+    for (const name of ['unit-a', 'unit-b']) {
       put(`${name}.test.js`, `${common}test('${name}', async () => {
         expect(existsSync(marker('capture-lock'))).toBe(false);
         writeFileSync(marker('${name}-started'), '');
-        await waitFor('${other}-started');
+        await delay(20);
         writeFileSync(marker('${name}-done'), '');
         record('${name}');
       });`);
@@ -152,14 +152,25 @@ it('runs parallel units before exclusive, nonduplicated captures and cutover pro
     delete env.PORTOS_TEST_TEMP_ROOT;
     delete env.VITEST_FAST;
     delete env.PORTOS_CI_BROWSER_OWNER;
+    const config = join(scratch, 'vitest.config.js');
+    const baseConfig = fileURLToPath(new URL('../server/vitest.config.js', import.meta.url));
+    writeFileSync(config, `import config from ${JSON.stringify(baseConfig)};
+config.test.projects = config.test.projects.map(project => ({
+  ...project,
+  test: { ...project.test, maxWorkers: project.test.name === 'parallel' ? Math.max(1, ${maxWorkers} - 1) : 1 },
+}));
+export default config;
+`);
     const result = spawnSync(process.execPath, [join(server, 'node_modules/vitest/vitest.mjs'), 'run', '--configLoader', 'runner',
-      '--config', join(server, 'vitest.config.js'), '--root', fixture, '--maxWorkers', '2',
+      '--config', config, '--root', fixture, '--maxWorkers', String(maxWorkers),
     ], { cwd: server, env, encoding: 'utf8', timeout: 30000 });
     expect(result.error).toBeUndefined();
     expect(result.status, `${result.stdout}\n${result.stderr}`).toBe(0);
+    expect(result.stdout).toMatch(/Isolate\s+15 workers spawned/);
     const events = readFileSync(join(fixture, 'events'), 'utf8').trim().split('\n');
     expect(events.slice(0, 2).sort()).toEqual(['unit-a', 'unit-b']);
     expect(events.slice(2).sort()).toEqual(['animatic', 'assembly', 'cutover', 'film-look', 'greybox', 'html', 'music', 'music-generation', 'ownership-recheck', 'poster', 'shared-git-recovery', 'suno', 'workspace-caches']);
+    expect(events).toHaveLength(15);
   } finally {
     rmSync(scratch, { recursive: true, force: true });
   }
