@@ -7,7 +7,7 @@ Issue: #9302. Synthetic visual review performed 2026-10-01.
 With Chrome and FFmpeg available, run:
 
 ```sh
-PORTOS_GRADE_PROOF_DIR="$(mktemp -d)" npm test --prefix server -- --run services/musicVideo/documentRender.browser.test.js -t 'matches bounded grades'
+PORTOS_GRADE_PROOF_DIR="$(mktemp -d)" npm test --prefix server -- --run services/musicVideo/documentRenderAudioTimeline.browser.test.js -t 'matches bounded grades'
 ```
 
 The fixture creates RGB and grey ramps, encodes a lossless source clip, and
