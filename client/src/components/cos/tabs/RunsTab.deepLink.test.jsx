@@ -110,7 +110,7 @@ describe('RunsTab ?run= deep link', () => {
     await act(async () => { socket.fire('system:activity', { seq: 1, source: 'llm', phase: 'start' }); });
     api.deleteRun.mockResolvedValue({ ok: true });
     api.getRuns.mockResolvedValue({ runs: [RUNS[1]] });
-    await act(async () => { fireEvent.click(within(screen.getByTestId('run-row-run-a')).getByRole('button', { name: 'Delete run' })); });
+    await act(async () => { fireEvent.click(within(screen.getByTestId('run-row-run-a')).getByRole('button', { name: 'Delete run demo (run-a)' })); });
     await act(async () => { finishStale({ runs: RUNS }); });
     expect(screen.queryByText('first prompt')).not.toBeInTheDocument();
     expect(screen.getByText('second prompt')).toBeInTheDocument();
@@ -257,7 +257,7 @@ describe('RunsTab ?run= deep link', () => {
     api.getRunPrompt.mockResolvedValue('prompt b');
     await act(async () => { fireEvent.click(screen.getByText('go-b')); });
     await act(async () => { fireEvent.click(screen.getByText('go-a')); });
-    expect(screen.getByRole('button', { name: 'Collapse run details' })).toBeInTheDocument();
+    expect(screen.getByRole('button', { expanded: true })).toBeInTheDocument();
     view.unmount();
   });
 
@@ -310,16 +310,16 @@ describe('RunsTab ?run= deep link', () => {
     expect(api.getRunOutput).not.toHaveBeenCalled();
 
     await act(async () => {
-      fireEvent.click(within(screen.getByTestId('run-row-failed')).getByRole('button', { name: 'Expand run details' }));
+      fireEvent.click(within(screen.getByTestId('run-row-failed')).getByRole('button', { expanded: false }));
     });
     expect(await screen.findByText('full output for run-b')).toBeVisible();
     expect(screen.getAllByText(/Choose an available model for this service/)).toHaveLength(1);
     expect(screen.getAllByRole('button', { name: /View system logs/i })).toHaveLength(1);
 
     await act(async () => {
-      fireEvent.click(within(screen.getByTestId('run-row-run-b')).getByRole('button', { name: 'Expand run details' }));
+      fireEvent.click(within(screen.getByTestId('run-row-run-b')).getByRole('button', { expanded: false }));
     });
-    expect(screen.getAllByRole('button', { name: 'Resume run' })).toHaveLength(2);
+    expect(screen.getAllByRole('button', { name: /^Resume run demo \(/ })).toHaveLength(2);
     expect(screen.queryByRole('button', { name: 'Continue Conversation' })).not.toBeInTheDocument();
   });
 

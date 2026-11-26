@@ -157,7 +157,7 @@ describe.skipIf(!chrome && !auditCdp)('run actions without hover', () => {
     const guidance = page.getByRole('note');
     expect(await guidance.innerText()).toContain(failureReason);
     expect(await guidance.innerText()).toContain(suggestedFix);
-    expect(await page.getByRole('button', { name: 'Collapse run details' }).count()).toBe(0);
+    expect(await page.getByRole('button', { expanded: true }).count()).toBe(0);
     for (const width of [240, 320, 480]) {
       await page.evaluate(width => { document.getElementById('root').style.width = `${width}px`; }, width);
       const geometry = await guidance.evaluate(el => {
@@ -220,8 +220,8 @@ describe.skipIf(!chrome && !auditCdp)('run actions without hover', () => {
       await cdp.send('Input.dispatchMouseEvent', { type: 'mouseMoved', x: 0, y: 0 });
       expect(await page.evaluate(() => matchMedia('(hover: none)').matches)).toBe(touch);
 
-      for (const [label, count] of [['Stop run', 1], ['Resume run', 1], ['View system logs', 1], ['Delete run', 2]]) {
-        const actions = await page.getByRole('button', { name: label, exact: true }).all();
+      for (const [label, count] of [['Stop run', 1], ['Resume run', 1], ['View system logs for run', 1], ['Delete run', 2]]) {
+        const actions = await page.getByRole('button', { name: new RegExp(`^${label} `) }).all();
         expect(actions.length, label).toBe(count);
         for (const action of actions) {
           const geometry = await action.evaluate(el => {
@@ -242,15 +242,15 @@ describe.skipIf(!chrome && !auditCdp)('run actions without hover', () => {
       }
 
       if (width === 360) {
-        const stop = page.getByRole('button', { name: 'Stop run', exact: true });
+        const stop = page.getByRole('button', { name: 'Stop run Example provider sample-model (running-example)', exact: true });
         const box = await stop.boundingBox();
         await cdp.send('Input.dispatchTouchEvent', { type: 'touchStart', touchPoints: [{ x: box.x + box.width / 2, y: box.y + box.height / 2 }] });
         await cdp.send('Input.dispatchTouchEvent', { type: 'touchEnd', touchPoints: [] });
         await page.waitForFunction(() => window.runsFixture.stops.length === 1);
         expect(await page.evaluate(() => window.runsFixture.stops)).toEqual(['running-example']);
-        expect(await page.getByRole('button', { name: 'Stopping run', exact: true }).isDisabled()).toBe(true);
-        // The pending action must not bubble into the expandable row.
-        expect(await page.getByRole('button', { name: 'Collapse run details', exact: true }).count()).toBe(0);
+        expect(await page.getByRole('button', { name: 'Stopping run Example provider sample-model (running-example)', exact: true }).isDisabled()).toBe(true);
+        // The pending action leaves both run disclosures collapsed.
+        expect(await page.getByRole('button', { expanded: true }).count()).toBe(0);
         await page.evaluate(() => window.runsFixture.finishStop());
         await page.getByTestId('resume-run-running-example').waitFor();
         expect(await page.getByTestId('stop-run-running-example').count()).toBe(0);
