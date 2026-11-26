@@ -75,6 +75,19 @@ describe('DocumentsTab', () => {
     expect(screen.queryByText('Failed to load document')).not.toBeInTheDocument();
   });
 
+  it('retries a failed document load and recovers the same document', async () => {
+    getAppDocument
+      .mockRejectedValueOnce(new Error('temporary failure'))
+      .mockResolvedValueOnce({ filename: 'ARCHITECTURE.md', content: '# Recovered' });
+
+    renderTab('/apps/app-1/documents?doc=ARCHITECTURE.md');
+
+    fireEvent.click(await screen.findByRole('button', { name: 'Retry' }));
+
+    expect(await screen.findByRole('heading', { name: 'Recovered' })).toBeInTheDocument();
+    expect(requestedPaths()).toEqual(['ARCHITECTURE.md', 'ARCHITECTURE.md']);
+  });
+
   it('still offers to create a conventional document the repo is missing', async () => {
     renderTab();
 
@@ -114,6 +127,24 @@ describe('DocumentsTab', () => {
     fireEvent.click(screen.getByRole('button', { name: /README\.md/ }));
     fireEvent.click(screen.getByRole('button', { name: 'Discard' }));
     expect(await screen.findByRole('heading', { name: 'README.md' })).toBeInTheDocument();
+  });
+
+  it('confirms dirty Cancel and exits immediately when the editor is clean', async () => {
+    renderTab();
+    fireEvent.click(await screen.findByRole('button', { name: 'Edit' }));
+    fireEvent.change(screen.getByRole('textbox', { name: 'Document content' }), { target: { value: 'typed text' } });
+
+    fireEvent.click(screen.getByRole('button', { name: 'Cancel' }));
+    expect(screen.getByRole('button', { name: 'Keep editing' })).toBeInTheDocument();
+    expect(screen.getByRole('textbox', { name: 'Document content' })).toHaveValue('typed text');
+
+    fireEvent.click(screen.getByRole('button', { name: 'Discard' }));
+    expect(screen.getByRole('button', { name: 'Edit' })).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Edit' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Cancel' }));
+    expect(screen.queryByRole('button', { name: 'Keep editing' })).not.toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Edit' })).toBeInTheDocument();
   });
 
   it('returns to the open document when creating another is cancelled', async () => {

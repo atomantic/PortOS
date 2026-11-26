@@ -32,7 +32,10 @@ export default function DocumentsTab({ appId, repoPath }) {
 
   // `null` = failed to load (or nothing selected); `''` is a real, empty file.
   const [docContent, setDocContent] = useState(null);
+  const docContentRef = useRef(docContent);
+  docContentRef.current = docContent;
   const [loadingDoc, setLoadingDoc] = useState(false);
+  const [docReloadNonce, setDocReloadNonce] = useState(0);
   // The document being created — never in the URL, since it doesn't exist yet.
   const [creating, setCreating] = useState(null);
   const [editing, setEditing] = useState(false);
@@ -80,7 +83,7 @@ export default function DocumentsTab({ appId, repoPath }) {
         setLoadingDoc(false);
       });
     return () => { cancelled = true; };
-  }, [appId, selectedDoc]);
+  }, [appId, selectedDoc, docReloadNonce]);
 
   const fetchDocuments = useCallback(async () => {
     setLoading(true);
@@ -90,6 +93,9 @@ export default function DocumentsTab({ appId, repoPath }) {
     // A failed refresh keeps the list already on screen rather than blanking it.
     if (!data) {
       setListFailed(true);
+      if (selectedDocRef.current && docContentRef.current === null) {
+        setDocReloadNonce(value => value + 1);
+      }
       return;
     }
     setListFailed(false);
@@ -325,7 +331,10 @@ export default function DocumentsTab({ appId, repoPath }) {
                     question={`Discard your unsaved changes to ${activeDoc}?`}
                     confirmText="Discard"
                     cancelText="Keep editing"
-                    onConfirm={() => applyPick(pendingPick)}
+                    onConfirm={() => {
+                      if (pendingPick.cancel) cancelEdit();
+                      else applyPick(pendingPick);
+                    }}
                     onCancel={() => setPendingPick(null)}
                   />
                 )}
@@ -333,7 +342,10 @@ export default function DocumentsTab({ appId, repoPath }) {
                   <span className="text-sm text-gray-400">Editing {activeDoc}</span>
                   <div className="flex gap-2">
                     <button
-                      onClick={cancelEdit}
+                      onClick={() => {
+                        if (dirty) setPendingPick({ cancel: true });
+                        else cancelEdit();
+                      }}
                       disabled={saving}
                       className="px-3 py-1.5 bg-port-border hover:bg-port-border/80 text-white rounded-lg text-xs flex items-center gap-1"
                     >
@@ -374,7 +386,15 @@ export default function DocumentsTab({ appId, repoPath }) {
                   : <p className="text-gray-500 text-sm italic">This document is empty.</p>}
               </div>
             ) : selectedDoc ? (
-              <p className="text-gray-500 text-sm">Failed to load document</p>
+              <div className="flex items-center gap-3 text-sm text-gray-400">
+                <p>Failed to load document</p>
+                <button
+                  onClick={() => setDocReloadNonce(value => value + 1)}
+                  className="px-3 py-1.5 bg-port-border hover:bg-port-border/80 text-white rounded-lg text-xs"
+                >
+                  Retry
+                </button>
+              </div>
             ) : (
               <p className="text-gray-500 text-sm">Select a document to view</p>
             )}
