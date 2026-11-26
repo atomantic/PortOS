@@ -15,8 +15,9 @@ const finite = (v) => (typeof v === 'number' && Number.isFinite(v) ? v : null);
 
 /** The asset a completed job produced and the price and model its record carries. */
 async function renderRecord(job) {
-  if (job.kind === 'video') {
-    const assetId = job.result?.generationId || job.id;
+  if (job.kind === 'video' || job.kind === 'video-upscale') {
+    const assetId = (job.kind === 'video-upscale' && typeof job.result?.id === 'string' && job.result.id)
+      || job.result?.generationId || job.id;
     const { getHistoryItem } = await import('../videoGen/history.js');
     const entry = await getHistoryItem(assetId);
     return { assetId, estimatedUsd: finite(entry?.estimatedCostUsd), modelId: entry?.modelId || null };
@@ -29,7 +30,7 @@ async function renderRecord(job) {
 }
 
 /** True when a completed job belongs in some project's ledger; cheap, so the hook filters first. */
-export const isMeteredProjectRender = (job) => (job?.kind === 'image' || job?.kind === 'video')
+export const isMeteredProjectRender = (job) => (job?.kind === 'image' || job?.kind === 'video' || job?.kind === 'video-upscale')
   && Boolean(mediaJobProjectId(job)) && METERED_RENDER_LANES.includes(job.params?.mode);
 
 /** Record one completed job's spend and push the project's new summary. Returns the entry, or null. */

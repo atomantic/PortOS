@@ -51,7 +51,7 @@ export function requireMergedBranchCleanup() {
   return mergedBranchCleanup;
 }
 
-export const QUEUE_IMPORTING_RUNTIMES = Object.freeze(['topazUpscale', 'ltxUpscale', 'stitch', 'vertical']);
+export const QUEUE_IMPORTING_RUNTIMES = Object.freeze(['topazUpscale', 'falUpscale', 'ltxUpscale', 'stitch', 'vertical']);
 
 export const MEDIA_RUNTIME_MODULES = Object.freeze([
   ...QUEUE_IMPORTING_RUNTIMES,

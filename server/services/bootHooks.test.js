@@ -35,6 +35,7 @@ vi.mock('./blenderModels/referenceImageHook.js', () => {
   return { initBlenderModelReferenceHook: calls.initBlenderHook };
 });
 vi.mock('./universeCharacterSheet.js', () => ({ initCharacterSheetCompletionHook: calls.initCharacterSheetHook }));
+vi.mock('./videoGen/falUpscaleJob.js', () => ({ runVideoUpscale: () => 'fal-seedvr2' }));
 vi.mock('./videoGen/upscaleJob.js', () => ({ runVideoUpscale: () => 'ltx' }));
 vi.mock('./videoGen/stitchJob.js', () => ({ runVideoStitch: () => 'stitch' }));
 vi.mock('./videoGen/verticalJob.js', () => ({ runVideoVertical: () => 'vertical' }));
@@ -48,7 +49,7 @@ vi.mock('./musicVideo/excerptRender.js', () => ({ recoverStuckMusicVideoExcerpts
 
 // The entry point the queue's runtime table invokes for each registered name.
 const ENTRY = {
-  topazUpscale: 'runVideoUpscale', ltxUpscale: 'runVideoUpscale', stitch: 'runVideoStitch', vertical: 'runVideoVertical',
+  topazUpscale: 'runVideoUpscale', falUpscale: 'runVideoUpscale', ltxUpscale: 'runVideoUpscale', stitch: 'runVideoStitch', vertical: 'runVideoVertical',
   videoLocal: 'generateVideo', imageLocal: 'generateImage', audioLocal: 'generateAudio',
   creativeDirectorVideoExecution: 'settleVideoAttempt', musicVideoProjects: 'getProject',
 };
@@ -103,7 +104,7 @@ describe('boot hook registration (#17499, #18217)', () => {
     const checkedNames = [...QUEUE_IMPORTING_RUNTIMES, 'videoLocal', 'imageLocal', 'audioLocal', 'creativeDirectorVideoExecution', 'musicVideoProjects'];
     const runtimes = await Promise.all(checkedNames.map(async name => [name, (await loadMediaRuntimeModule(name))[ENTRY[name]]()]));
     expect(Object.fromEntries(runtimes)).toEqual({
-      topazUpscale: 'topaz', ltxUpscale: 'ltx', stitch: 'stitch', vertical: 'vertical',
+      topazUpscale: 'topaz', falUpscale: 'fal-seedvr2', ltxUpscale: 'ltx', stitch: 'stitch', vertical: 'vertical',
       videoLocal: 'videoLocal', imageLocal: 'imageLocal', audioLocal: 'audioLocal',
       creativeDirectorVideoExecution: 'settle', musicVideoProjects: 'project',
     });

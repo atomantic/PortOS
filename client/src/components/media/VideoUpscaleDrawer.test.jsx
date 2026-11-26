@@ -270,4 +270,29 @@ describe('VideoUpscaleDrawer', () => {
 
     expect(screen.getByLabelText(/LTX-2\.5 generative/i).disabled).toBe(false);
   });
+
+  it('fetches the SeedVR2 plan on selection, displays estimated cost, and submits method: "fal-seedvr2"', async () => {
+    const onClose = vi.fn();
+    getUpscalePlan.mockImplementation(async (_id, method) => ({
+      plan: method === 'fal-seedvr2'
+        ? {
+          id: 'video-1',
+          method: 'fal-seedvr2',
+          alreadyUpscaled: false,
+          target: { width: 1920, height: 1088, frameCount: 121 },
+          runtime: { id: 'fal-seedvr2', label: 'fal.ai SeedVR2', supported: true, installed: true, reason: null },
+          estimatedCostUsd: 0.3712,
+        }
+        : READY_PLAN,
+    }));
+    upscaleVideo.mockResolvedValue({ ok: true, job: { jobId: 'job-fal-1', status: 'queued' } });
+
+    render(<VideoUpscaleDrawer item={ITEM} onClose={onClose} onUpscaled={vi.fn()} />);
+    fireEvent.click(screen.getByLabelText(/SeedVR2 cloud 1080p/i));
+    expect(await screen.findByText(/1920×1088/)).toBeInTheDocument();
+    expect(screen.getByText(/\$0\.37/)).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: 'Start SeedVR2 upscale' }));
+    await waitFor(() => expect(upscaleVideo).toHaveBeenCalledWith('video-1', { method: 'fal-seedvr2', silent: true }));
+    expect(onClose).toHaveBeenCalled();
+  });
 });

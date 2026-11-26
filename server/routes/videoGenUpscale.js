@@ -5,6 +5,7 @@ import { asyncHandler, failValidation } from '../lib/errorHandler.js';
 import { validateRequest } from '../lib/validateRequest.js';
 import { upscaleHistoryItem, planUpscaleHistoryItem } from '../services/videoGen/local.js';
 import { enqueueLtxUpscale } from '../services/videoGen/upscaleJob.js';
+import { enqueueFalSeedvr2Upscale } from '../services/videoGen/falUpscaleJob.js';
 import { quoteTopaz } from '../services/videoGen/topazQuote.js';
 import { assertNoPendingTopaz, enqueueTopazUpscale, reconcileTopazStatus, recoverTopazResult } from '../services/videoGen/topazJob.js';
 import { historyIdSchema, topazJobParamsSchema, topazQuoteBodySchema, topazTokenBodySchema, upscaleMethodSchema } from '../lib/videoGenValidation.js';
@@ -66,6 +67,10 @@ router.post('/upscale/:id', asyncHandler(async (req, res) => {
   if (!body.success) failValidation(body);
   if (body.data.method === 'ltx') {
     res.json({ ok: true, job: await enqueueLtxUpscale(parsed.data) });
+    return;
+  }
+  if (body.data.method === 'fal-seedvr2') {
+    res.json({ ok: true, job: await enqueueFalSeedvr2Upscale(parsed.data, body.data) });
     return;
   }
   const entry = await upscaleHistoryItem(parsed.data, body.data);

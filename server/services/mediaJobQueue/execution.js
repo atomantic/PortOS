@@ -77,7 +77,11 @@ const MEDIA_JOB_RUNTIME = Object.freeze({
     events: videoGenEvents,
     verb: 'Upscaling',
     watchdogMs: flatWatchdog(WATCHDOG_VIDEO_MS),
-    modules: { topaz: () => loadMediaRuntimeModule('topazUpscale'), default: () => loadMediaRuntimeModule('ltxUpscale') },
+    modules: {
+      topaz: () => loadMediaRuntimeModule('topazUpscale'),
+      fal: () => loadMediaRuntimeModule('falUpscale'),
+      default: () => loadMediaRuntimeModule('ltxUpscale'),
+    },
     invoke: (mod, request) => mod.runVideoUpscale(request),
   },
   // Hand stitching (#13000): ffmpeg only, so it never touches the GPU lane's

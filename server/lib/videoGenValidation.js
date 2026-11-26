@@ -21,6 +21,7 @@ import {
   MAX_VIDEO_REFERENCE_LABEL_LENGTH,
   PREVIEW_UPLOAD_FIELDS,
   UPSCALE_METHODS, DEFAULT_UPSCALE_METHOD,
+  FAL_SEEDVR2_TARGET_RESOLUTIONS,
 } from './videoGenRequestFields.js';
 import { IC_LORA_MODE_VALUES, listIcLoraRemixModes } from './icLoraWeights.js';
 import { DRAFT_DECODE_IDS } from './videoDraftDecoders.js';
@@ -539,6 +540,9 @@ export const historyIdSchema = z.string().regex(
 // current behavior without sending anything new.
 export const upscaleMethodSchema = z.object({
   method: z.enum(UPSCALE_METHODS).default(DEFAULT_UPSCALE_METHOD),
+  targetResolution: z.enum(FAL_SEEDVR2_TARGET_RESOLUTIONS).optional(),
+  musicVideoProjectId: z.string().min(1).max(128).optional(),
+  sceneId: z.string().min(1).max(128).optional(),
 });
 
 export const trimBodySchema = z.object({

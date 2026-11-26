@@ -14,7 +14,36 @@
  * ffprobe, the HF cache, or the history file.
  */
 
-export { UPSCALE_METHODS, DEFAULT_UPSCALE_METHOD } from '../../lib/videoGenRequestFields.js';
+export {
+  UPSCALE_METHODS, DEFAULT_UPSCALE_METHOD,
+  FAL_SEEDVR2_TARGET_RESOLUTIONS, DEFAULT_FAL_SEEDVR2_TARGET_RESOLUTION,
+} from '../../lib/videoGenRequestFields.js';
+
+export const FAL_SEEDVR2_MODEL_ID = 'fal-ai/seedvr/upscale/video';
+export const FAL_SEEDVR2_HISTORY_MODEL_ID = `fal:${FAL_SEEDVR2_MODEL_ID}`;
+export const FAL_SEEDVR2_RUNTIME_ID = 'fal-seedvr2';
+export const FAL_SEEDVR2_USD_PER_MP = 0.001;
+const FAL_SEEDVR2_TARGET_SHORT_EDGE = Object.freeze({ '720p': 720, '1080p': 1080, '1440p': 1440, '2160p': 2160 });
+
+/** Target dimensions SeedVR2 aims for in `upscale_mode: 'target'` (rounded to multiples of 16). */
+export const planFalSeedvr2Target = ({ width, height, frameCount, targetResolution = '1080p' } = {}) => {
+  const frames = Number.isFinite(frameCount) && frameCount > 0 ? Math.round(frameCount) : null;
+  if (!(Number.isFinite(width) && width > 0 && Number.isFinite(height) && height > 0)) {
+    return { width: null, height: null, frameCount: frames };
+  }
+  const targetShort = FAL_SEEDVR2_TARGET_SHORT_EDGE[targetResolution] ?? 1080;
+  const scale = targetShort / Math.min(width, height);
+  const round16 = (n) => Math.max(16, Math.round(n / 16) * 16);
+  return { width: round16(width * scale), height: round16(height * scale), frameCount: frames };
+};
+
+/** SeedVR2 bills $0.001 per output megapixel (width * height * frameCount / 1e6). */
+export const estimateFalSeedvr2CostUsd = ({ width, height, frameCount } = {}) => {
+  if (!(Number.isFinite(width) && width > 0 && Number.isFinite(height) && height > 0 && Number.isFinite(frameCount) && frameCount > 0)) {
+    return null;
+  }
+  return Math.round(((width * height * frameCount) / 1_000_000) * FAL_SEEDVR2_USD_PER_MP * 1e4) / 1e4;
+};
 
 // Both methods double each axis. Declared once because the plan endpoint, the
 // Lanczos entry builder and the client disclosure all quote it.
@@ -115,8 +144,10 @@ export const planLtxAlignment = ({ width, height, frameCount } = {}, grid = LTX_
   };
 };
 
-// Lanczos scales the source verbatim; the generative method scales the PADDED source.
-export const planTargetDimensions = ({ method, width, height, frameCount, alignment }) => {
+// Lanczos scales the source verbatim; the generative method scales the PADDED source;
+// fal-seedvr2 scales to the requested target resolution preserving aspect ratio.
+export const planTargetDimensions = ({ method, width, height, frameCount, alignment, targetResolution }) => {
+  if (method === 'fal-seedvr2') return planFalSeedvr2Target({ width, height, frameCount, targetResolution });
   const scaleAxis = (n) => (Number.isFinite(n) && n > 0 ? Math.round(n) * UPSCALE_SCALE : null);
   if (method !== 'ltx') {
     return {
