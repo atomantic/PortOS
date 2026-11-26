@@ -697,6 +697,41 @@ describe.skipIf(!runDb)('memoryDB prompt audience filtering', () => {
   });
 });
 
+describe.skipIf(!runDb)('memoryDB search pagination', () => {
+  const content = 'Observatory notes from the mountain.';
+  const sourceAppId = 'example-app';
+  const eligibleIds = [];
+
+  beforeAll(async () => {
+    await resetMemories();
+    await memoryDB.createMemory({ content, type: 'preference', sourceAppId }, VEC_A);
+    await memoryDB.createMemory({ content, type: 'fact', sourceAppId: 'brain' }, VEC_A);
+    await memoryDB.createMemory({ content, type: 'fact', sourceAppId, status: 'archived' }, VEC_A);
+    for (let index = 0; index < 3; index += 1) {
+      const { id } = await memoryDB.createMemory({ content, type: 'fact', sourceAppId }, VEC_NEAR_A);
+      eligibleIds.push(id);
+    }
+    eligibleIds.sort();
+  });
+
+  it.each(['semantic', 'lexical'])('returns deterministic %s pages and counts all eligible hits', async mode => {
+    const search = mode === 'semantic'
+      ? options => memoryDB.searchMemories(VEC_A, options)
+      : options => memoryDB.hybridSearchMemories('observatory unmatched', null, { ...options, lexicalMatch: 'any' });
+
+    for (const offset of [0, 1, 2, 3, 1]) {
+      const { total, memories } = await search({ types: ['fact'], appId: '__not_brain', limit: 1, offset });
+      expect(total).toBe(3);
+      expect(memories.map(hit => hit.id)).toEqual(eligibleIds.slice(offset, offset + 1));
+      if (mode === 'lexical' && memories.length) {
+        expect(memories[0]).toMatchObject({
+          ftsRank: offset + 1, rrfScore: 0.4 / (61 + offset), searchMethod: 'fts',
+        });
+      }
+    }
+  });
+});
+
 describe.skipIf(!runDb)('memoryDB search (#3447)', () => {
   let quasar;      // VEC_A,      app 'brain'
   let zebrafish;   // VEC_NEAR_A, app 'studio'

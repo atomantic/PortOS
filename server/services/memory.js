@@ -37,7 +37,8 @@ import {
   compareMemoryEntries,
   passesSearchMetaFilters,
   passesHybridMetaFilters,
-  fuseRankingsRRF
+  fuseRankingsRRF,
+  RRF_K
 } from '../lib/memoryQuery.js';
 
 export { DEFAULT_MEMORY_CONFIG };
@@ -471,18 +472,14 @@ export async function searchMemories(queryEmbedding, options = {}) {
 
   const indexMap = new Map(index.memories.map(m => [m.id, m]));
 
-  // Privacy-scoped searches must fill their limit from eligible records.
-  const candidates = options.excludePersistentMind ? similar : similar.slice(0, limit);
-  const results = candidates
-    .map(r => {
-      const meta = indexMap.get(r.id);
-      if (!passesSearchMetaFilters(meta, options)) return null;
-      return { ...meta, similarity: r.similarity };
-    })
-    .filter(Boolean);
+  const ranked = similar.filter(({ id }) => passesSearchMetaFilters(indexMap.get(id), options));
+  ranked.sort((a, b) => b.similarity - a.similarity || a.id.localeCompare(b.id));
 
-  const memories = options.excludePersistentMind ? results.slice(0, limit) : results;
-  return { total: memories.length, memories };
+  const offset = options.offset ?? 0;
+  const memories = ranked.slice(offset, offset + limit).map(({ id, similarity }) => ({
+    ...indexMap.get(id), similarity
+  }));
+  return { total: ranked.length, memories };
 }
 
 /**
@@ -495,24 +492,38 @@ export async function searchMemories(queryEmbedding, options = {}) {
  * @returns {Promise<{total: number, memories: Array}>}
  */
 export async function hybridSearchMemories(query, queryEmbedding, options = {}) {
-  const { limit = 20, minRelevance = 0.5, ftsWeight = options.bm25Weight ?? 0.4, vectorWeight = 0.6 } = options
+  const { limit = 20, offset, minRelevance = 0.5, ftsWeight = options.bm25Weight ?? 0.4, vectorWeight = 0.6 } = options
 
   const index = await loadIndex()
-  const embeddings = await loadEmbeddings()
   const indexMap = new Map(index.memories.map(m => [m.id, m]))
+
+  const pagedLexical = query && !queryEmbedding && offset !== undefined
+  const bm25Hits = query ? await memoryBM25.searchBM25(query, { limit: Infinity, threshold: 0.05 }) : []
+
+  // The paginated lexical fallback uses the same app scope as semantic search.
+  if (pagedLexical) {
+    const ranked = bm25Hits.filter(({ id }) => {
+      const meta = indexMap.get(id)
+      return passesSearchMetaFilters(meta, options) &&
+        (!options.sourceAgentId || meta.sourceAgentId === options.sourceAgentId)
+    })
+    ranked.sort((a, b) => b.score - a.score || a.id.localeCompare(b.id))
+    const memories = ranked.slice(offset, offset + limit).map(({ id }, index) => {
+      const bm25Rank = offset + index + 1
+      return { ...indexMap.get(id), bm25Rank, vectorRank: null, rrfScore: ftsWeight / (RRF_K + bm25Rank), searchMethod: 'bm25' }
+    })
+    return { total: ranked.length, memories }
+  }
 
   // Filter before capping and ranking: scoped results must not lose their only
   // match to a global top-N of records the caller can never receive.
   const eligible = ({ id }) => passesHybridMetaFilters(indexMap.get(id), options)
-
-  // Get BM25 results (any-term by construction, so options.lexicalMatch needs no branch)
-  const bm25Results = query
-    ? (await memoryBM25.searchBM25(query, { limit: Infinity, threshold: 0.05 })).filter(eligible).slice(0, limit * 2)
-    : []
+  const bm25Results = bm25Hits.filter(eligible).slice(0, limit * 2)
 
   // Get vector results
   let vectorResults = []
-  if (queryEmbedding && Object.keys(embeddings.vectors).length > 0) {
+  if (queryEmbedding) {
+    const embeddings = await loadEmbeddings()
     const similar = findAboveThreshold(queryEmbedding, embeddings.vectors, minRelevance * 0.5)
     vectorResults = similar.filter(eligible).slice(0, limit * 2).map(r => ({
       id: r.id,
