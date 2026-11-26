@@ -19,7 +19,7 @@ import { execFileSync } from 'child_process';
 import { dirname, join, resolve, sep } from 'path';
 import { fileURLToPath } from 'url';
 import { prepareWindowsSafeSpawn, resolveWindowsExecutable } from '../server/lib/aiToolkit/internal/windowsSafeSpawn.js';
-import { buildCiTestPlan, getAlwaysRunTests, FULL_SUITE_SHARDS, structuralTestsFor, TOOLING_TESTS } from './ci-test-plan.js';
+import { buildCiTestPlan, getAlwaysRunTests, PROMPT_STAGE_GUARD, FULL_SUITE_SHARDS, structuralTestsFor, TOOLING_TESTS } from './ci-test-plan.js';
 import { EXCLUSIVE_TESTS } from './vitestCiPool.js';
 import { toRepoPath } from './lib/workspaceTests.js';
 import { guardRunnerFor, isGuardTest } from './lib/guardScanners.js';
@@ -970,7 +970,19 @@ function stageOutcomeVerdict(result, outcome) {
 function reportSlowGuards(result) {
   const over = overBudgetGuards(result.guardDurations);
   if (over.length > 0) {
-    console.log(`🐢 ${result.name} over the ${formatDuration(GUARD_BUDGET_MS)} per-guard target: ${describeGuardDurations(over)} (the scheduled hosted run fails a guard over ${formatDuration(CI_GUARD_BUDGET_MS)}; PR and push runs only warn).`);
+    const scheduledBudgetGuards = new Set([
+      ...getAlwaysRunTests(),
+      PROMPT_STAGE_GUARD,
+    ]);
+    const isScheduled = ({ file }) => scheduledBudgetGuards.has(file.split(' > ', 1)[0]);
+    const scheduled = over.filter(isScheduled);
+    const localOnly = over.filter(row => !isScheduled(row));
+    if (scheduled.length > 0) {
+      console.log(`🐢 ${result.name} scheduled-budget guards over the ${formatDuration(GUARD_BUDGET_MS)} local per-guard target: ${describeGuardDurations(scheduled)} (the scheduled hosted run enforces a ${formatDuration(CI_GUARD_BUDGET_MS)} budget for these guards).`);
+    }
+    if (localOnly.length > 0) {
+      console.log(`🐢 ${result.name} other guards over the ${formatDuration(GUARD_BUDGET_MS)} local per-guard target: ${describeGuardDurations(localOnly)} (these timings are local diagnostics; the scheduled hosted guard budget does not apply).`);
+    }
   }
 }
 

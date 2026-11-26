@@ -23,6 +23,7 @@ const TEST_FILE_RE = /\.(?:test|spec)\.[cm]?[jt]sx?$/i;
 // runnerForTest(isTestFile) filter already narrows a broad hit back down, so
 // over-matching here costs nothing.
 export const TEST_FILE_GLOBS = ['*.test.*', '*.spec.*'];
+export const PROMPT_STAGE_GUARD = 'scripts/generate-prompt-stage-call-sites.test.js';
 // The server rule set lints server/ whole, plus scripts/, lib/ (not the slashdo
 // submodule) and autofixer/ (fast, ~1s). SERVER_LINT_RE lives in
 // scripts/lib/serverLintSurface.js so the planner and the runner cannot drift,
