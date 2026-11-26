@@ -42,11 +42,11 @@
  * guard reading source; they are not compared to a threshold.
  */
 
-import { spawnSync } from 'child_process';
 import { existsSync, readFileSync } from 'fs';
 import { join, posix } from 'path';
 import { staticImportSpecifiersFromSource } from '../../server/lib/staticImportGraph.js';
-import { createGuardCorpus } from './guardCorpus.js';
+import { createGuardCorpus } from '../../lib/guardCorpus.js';
+import { runWorktreeGit } from '../../lib/gitWorktree.js';
 
 /** Proxy counts recorded for the heavy edges this guard is calibrated against. */
 export const HISTORICAL_PROXY_TOTALS = Object.freeze({
@@ -359,13 +359,7 @@ export function formatImportGrowthReport(report) {
 
 
 function git(repoRoot, args, { input, encoding = 'utf8', maxBuffer = 64 * 1024 * 1024 } = {}) {
-  const result = spawnSync('git', args, {
-    cwd: repoRoot,
-    input,
-    encoding,
-    maxBuffer,
-  });
-  return result;
+  return runWorktreeGit(repoRoot, args, { input, encoding, maxBuffer });
 }
 
 function gitOk(repoRoot, args, options) {

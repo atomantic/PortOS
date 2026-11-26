@@ -21,10 +21,10 @@
  * ZERO external dependencies — this runs before `npm ci` in the impact job.
  */
 
-import { execFileSync } from 'node:child_process';
-import { readFileSync } from 'node:fs';
 import { dirname, posix } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { createGuardCorpus } from '../lib/guardCorpus.js';
+import { readWorktreeGit } from '../lib/gitWorktree.js';
 import { staticImportSpecifiersFromSource } from '../server/lib/staticImportGraph.js';
 import { isDirectlyInvoked } from './lib/directInvocation.js';
 
@@ -216,7 +216,7 @@ export function foldTracked(tracked) {
   return folded;
 }
 
-const gitOutput = (args, cwd) => execFileSync('git', args, { cwd, encoding: 'utf8', maxBuffer: 64 * 1024 * 1024 });
+const gitOutput = (args, cwd) => readWorktreeGit(cwd, args, { encoding: 'utf8', maxBuffer: 64 * 1024 * 1024 });
 const gitLines = (args, cwd) => gitOutput(args, cwd).split('\n').filter(Boolean);
 
 /**
@@ -232,10 +232,11 @@ export function checkImportCase({ cwd = process.cwd(), baseSha = null } = {}) {
     ? gitLines(['diff', '--name-only', '--diff-filter=ACMR', `${baseSha}...HEAD`], cwd).filter((path) => tracked.has(path))
     : [...tracked];
   const modules = changed.filter((path) => MODULE_RE.test(path) && !path.includes('/node_modules/'));
+  const { read } = createGuardCorpus(cwd);
   const mismatches = modules.flatMap((file) => {
     let source;
     try {
-      source = readFileSync(posix.join(cwd, file), 'utf8');
+      source = read(file);
     } catch {
       return [];
     }
