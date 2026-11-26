@@ -501,7 +501,11 @@ async function measureModel({ backend, modelId, contexts, benchmark = false, tun
 
   const endpoint = isEndpointRuntime(backend) ? await runtimeEndpoint(backend) : null;
   if (isEndpointRuntime(backend) && !endpoint) {
-    throw new Error(`No endpoint is configured for the ${backend} runtime`);
+    throw new ServerError(`No endpoint is configured for the ${backend} runtime`, {
+      status: 503,
+      code: 'LOCAL_LLM_ENDPOINT_MISSING',
+      context: { backend },
+    });
   }
   // Same key the listing probe used — a key-gated vLLM 401s every sample
   // otherwise, and the run would record "does-not-fit" for an auth failure.
