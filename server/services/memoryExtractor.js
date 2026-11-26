@@ -152,12 +152,12 @@ function deduplicateMemories(memories) {
  * Check if a proposed memory duplicates an existing active or pending memory.
  * Uses vector similarity for active memories and text prefix matching for pending.
  */
-async function findExistingDuplicate(embedding, content, pendingMemories) {
+async function findExistingDuplicate(embedding, content, pendingMemories, scope) {
   if (embedding) {
     const results = await searchMemories(embedding, {
       minRelevance: DEDUP_SIMILARITY_THRESHOLD,
       limit: 3,
-      excludePersistentMind: true,
+      ...scope,
     }).catch(err => {
       console.log(`⚠️ Dedup vector search failed: ${err.message}`);
       return { memories: [] };
@@ -297,21 +297,22 @@ export async function extractAndStoreMemories(agentId, taskId, output, task = nu
 
   const sourceAppId = task?.metadata?.app || null;
 
-  // Pre-fetch pending memories once for dedup checks across both loops.
-  // Pass a high limit to avoid relying on the default pagination (50) — dedup
-  // should see the full pending backlog so duplicates aren't missed when the
-  // queue grows.
-  const pendingForDedup = await getMemories({ status: 'pending_approval', limit: 1000, excludePersistentMind: true })
-    .catch(err => {
-      console.log(`⚠️ Failed to load pending memories for dedup: ${err.message}`);
-      return { memories: [] };
-    });
+  // A match in a different app cannot replace a memory this app can recall.
+  const scope = { excludePersistentMind: true, ...(sourceAppId ? { appId: sourceAppId } : {}) };
+  // Skip the pending backlog entirely when the classifier has no candidates.
+  const pendingForDedup = highConfidence.length || mediumConfidence.length
+    ? await getMemories({ status: 'pending_approval', limit: 1000, includeCount: false, ...scope })
+      .catch(err => {
+        console.log(`⚠️ Failed to load pending memories for dedup: ${err.message}`);
+        return { memories: [] };
+      })
+    : { memories: [] };
 
   let skippedDuplicates = 0;
 
   async function dedupAndCreate(mem, extraFields = {}) {
     const embedding = await generateMemoryEmbedding(mem);
-    const existing = await findExistingDuplicate(embedding, mem.content, pendingForDedup.memories);
+    const existing = await findExistingDuplicate(embedding, mem.content, pendingForDedup.memories, scope);
     if (existing) {
       console.log(`🧠 Skipping duplicate memory (matches ${existing.id || 'existing'})`);
       skippedDuplicates++;

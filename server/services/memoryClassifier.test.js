@@ -124,7 +124,7 @@ describe('memoryClassifier', () => {
       content: 'The reading group meets on the first Monday of each month.',
       confidence: 0.7
     };
-    const task = { id: 'task-1', description: 'Record reading group notes' };
+    const task = { id: 'task-1', description: 'Record reading group notes', metadata: { app: 'reading' } };
     const output = 'The reading group discussed the next meeting and agreed to keep the recurring schedule throughout the year.';
     const rejected = [{ reason: 'Unrelated to the meeting' }];
     const fetchWithTimeout = vi.fn();
@@ -224,9 +224,9 @@ describe('memoryClassifier', () => {
       await classifier.classifyMemories(task, output);
 
       expect(getMemories).toHaveBeenNthCalledWith(1, {
-        status: 'active', sortBy: 'importance', sortOrder: 'desc', limit: 30, excludePersistentMind: true
+        status: 'active', sortBy: 'importance', sortOrder: 'desc', limit: 30, appId: 'reading', includeCount: false, excludePersistentMind: true
       });
-      expect(getMemories).toHaveBeenNthCalledWith(2, { status: 'pending_approval', limit: 30, excludePersistentMind: true });
+      expect(getMemories).toHaveBeenNthCalledWith(2, { status: 'pending_approval', limit: 30, appId: 'reading', includeCount: false, excludePersistentMind: true });
       const [, request] = fetchWithTimeout.mock.lastCall;
       expect(JSON.parse(request.body).messages.at(-1).content).toBe(
         `Existing memories:\n- [fact] The group meets monthly.\n- [preference] The group prefers evening meetings.\nNotes: ${output}`

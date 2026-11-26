@@ -232,7 +232,7 @@ describe('extractAndStoreMemories', () => {
 
     const result = await extractAndStoreMemories(agentId, taskId, output, task);
 
-    expect(searchMemories).toHaveBeenCalledExactlyOnceWith(embedding, { minRelevance: 0.82, limit: 3, excludePersistentMind: true });
+    expect(searchMemories).toHaveBeenCalledExactlyOnceWith(embedding, { minRelevance: 0.82, limit: 3, excludePersistentMind: true, appId: 'example-app' });
     expect(createMemory).not.toHaveBeenCalled();
     expect(result).toEqual({ created: 0, pendingApproval: 0, memories: [], pendingMemories: [] });
     expect(extracted).toHaveBeenCalledExactlyOnceWith({
@@ -286,7 +286,7 @@ describe('extractAndStoreMemories', () => {
 
     const result = await extractAndStoreMemories(agentId, taskId, output, task);
 
-    expect(getMemories).toHaveBeenCalledExactlyOnceWith({ status: 'pending_approval', limit: 1000, excludePersistentMind: true });
+    expect(getMemories).toHaveBeenCalledExactlyOnceWith({ status: 'pending_approval', limit: 1000, includeCount: false, excludePersistentMind: true, appId: 'example-app' });
     expect(searchMemories).not.toHaveBeenCalled();
     expect(createMemory).toHaveBeenCalledExactlyOnceWith(
       expect.objectContaining({ ...distinct, status: 'pending_approval' }), null

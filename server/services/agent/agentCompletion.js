@@ -1,4 +1,5 @@
 import { isPrivateSecurityTask } from '../../lib/privateSecurityPolicy.js';
+import { hasClaimFlowContract } from '../../lib/claimFlowTaskTypes.js';
 /**
  * Agent Completion Helpers
  *
@@ -33,8 +34,8 @@ export async function processAgentCompletion(agentId, task, success, outputBuffe
     emitLog('warn', `Failed to finalize malware scan for ${task.id}: ${err.message}`, { taskId: task.id, agentId });
   });
 
-  // Extract memories from successful output
-  if (success && outputBuffer.length > 100) {
+  // Claim transcripts are issue/PR work logs, not a source of durable preferences.
+  if (success && outputBuffer.length > 100 && !hasClaimFlowContract(task)) {
     const memoryResult = await extractAndStoreMemories(agentId, task.id, outputBuffer, task).catch(err => {
       console.log(`⚠️ Memory extraction failed: ${err.message}`);
       return { created: 0, pendingApproval: 0 };

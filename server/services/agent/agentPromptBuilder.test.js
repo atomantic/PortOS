@@ -2998,6 +2998,8 @@ describe('buildAgentPrompt — Memory and Digital Twin context', () => {
     it.each([
       ['Creative Director', { creativeDirector: { kind: 'evaluate' } }],
       ['no-code output', { noCodeOutput: true }],
+      ['manual claim', { claimFlow: true }],
+      ['scheduled claim', { analysisType: 'claim-issue' }],
       ['tool-free public review', { executionProfile: 'public-review-gate' }],
       ['sandboxed public review', { executionProfile: 'public-review-actions' }],
     ])('skips both retrievals for %s', async (_label, metadata) => {
@@ -3610,7 +3612,7 @@ describe('discardWorktree (reasoning-only) completion contract', () => {
         }, '/r', null, { providerType: 'api' });
         expect(prompt).toContain('Example Global Instructions');
         expect(prompt).toMatch(/^## Instructions$/m);
-        expect(getMemorySection).toHaveBeenLastCalledWith(expect.anything(), { maxTokens: 2000, onInjected: expect.any(Function) });
+        expect(getMemorySection).toHaveBeenLastCalledWith(expect.anything(), { maxTokens: 2000, scopedToApp: true, limit: 3, onInjected: expect.any(Function) });
         expect(getDigitalTwinForPrompt).toHaveBeenLastCalledWith({ maxTokens: 1200, personaId: 'active' });
         expect(log).toHaveBeenCalledWith('⚠️ Memory retrieval failed: memory unavailable');
         expect(log).toHaveBeenCalledWith('⚠️ Digital twin context retrieval failed: twin unavailable');
