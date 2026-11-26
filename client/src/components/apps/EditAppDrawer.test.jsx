@@ -1,6 +1,6 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
-import { render, screen, fireEvent, cleanup, waitFor, within } from '@testing-library/react';
-import { MemoryRouter } from 'react-router';
+import { act, render, screen, fireEvent, cleanup, waitFor, within } from '@testing-library/react';
+import { MemoryRouter, Route, Routes } from 'react-router';
 
 // Mock the API surface EditAppDrawer touches on mount, plus the work-tracker
 // resolver and the update path used on save.
@@ -47,10 +47,11 @@ const APP = {
 
 // The drawer is now tabbed and deep-links its active tab via a URL search param
 // (useDrawerTab), so every render needs a real router around it.
-function renderDrawer(props = {}) {
+function renderDrawer(props = {}, children = null) {
   return render(
     <MemoryRouter>
       <EditAppDrawer app={APP} onClose={() => {}} onSave={() => {}} {...props} />
+      {children}
     </MemoryRouter>
   );
 }
@@ -58,7 +59,8 @@ function renderDrawer(props = {}) {
 // Switch to a named tab pill (both a desktop tab button and a mobile <select>
 // option render; target the tab button).
 async function openTab(name) {
-  fireEvent.click(await screen.findByRole('tab', { name }));
+  const tab = await screen.findByRole('tab', { name });
+  await act(async () => { fireEvent.click(tab); });
 }
 
 beforeEach(() => {
@@ -91,7 +93,7 @@ beforeEach(() => {
       allowedScopes: ['app-improvement', 'app-data-gap'],
     },
   });
-  getAppLayeredIntelligenceOutcomes.mockResolvedValue({ stats: {}, recent: [] });
+  getAppLayeredIntelligenceOutcomes.mockResolvedValue({ read: true, stats: { total: 0 }, recent: [] });
   getProviders.mockResolvedValue({ providers: [] });
   // Scheduling (enabled/interval/provider/model) is read from the per-app task
   // override now (#2322); default to an empty override.
@@ -144,6 +146,96 @@ describe('EditAppDrawer tabbed layout', () => {
       jira: true,
       gsd: false,
     });
+  });
+});
+
+describe('EditAppDrawer unsaved changes', () => {
+  it.each(['Close settings', 'Cancel'])('closes a clean drawer immediately via %s', async (action) => {
+    const onClose = vi.fn();
+    renderDrawer({ onClose });
+    await openTab('Intelligence');
+    await screen.findByText(/No recent tracked proposals/);
+    fireEvent.click(screen.getByRole('button', { name: action }));
+
+    expect(onClose).toHaveBeenCalledOnce();
+    expect(screen.queryByRole('group', { name: 'Discard unsaved changes?' })).not.toBeInTheDocument();
+  });
+
+  it('keeps changes from multiple tabs until discard is confirmed', async () => {
+    const onClose = vi.fn();
+    renderDrawer({ onClose });
+    fireEvent.change(await screen.findByLabelText('Name'), { target: { value: 'Updated App' } });
+    await openTab('Commands');
+    fireEvent.change(screen.getByLabelText('Build Command'), { target: { value: 'npm run build' } });
+
+    fireEvent.click(screen.getByRole('button', { name: 'Close settings' }));
+    const prompt = screen.getByRole('group', { name: 'Discard unsaved changes?' });
+    expect(prompt).toHaveFocus();
+    expect(onClose).not.toHaveBeenCalled();
+    fireEvent.click(within(prompt).getByRole('button', { name: 'Keep editing' }));
+    expect(prompt).not.toBeInTheDocument();
+    expect(screen.getByLabelText('Build Command')).toHaveValue('npm run build');
+    await openTab('General');
+    expect(screen.getByLabelText('Name')).toHaveValue('Updated App');
+
+    fireEvent.click(screen.getByRole('button', { name: 'Cancel' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Discard' }));
+    expect(onClose).toHaveBeenCalledOnce();
+    expect(updateApp).not.toHaveBeenCalled();
+  });
+
+  it('confirms a draft that changes only Layered Intelligence scheduling', async () => {
+    const onClose = vi.fn();
+    renderDrawer({ onClose });
+    await openTab('Intelligence');
+    await screen.findByText(/No recent tracked proposals/);
+    const enabled = screen.getByLabelText('Enable the self-improvement loop for this app');
+    fireEvent.click(enabled);
+    fireEvent.click(screen.getByRole('button', { name: 'Cancel' }));
+    expect(screen.getByRole('group', { name: 'Discard unsaved changes?' })).toBeInTheDocument();
+    expect(onClose).not.toHaveBeenCalled();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Keep editing' }));
+    fireEvent.click(enabled);
+    fireEvent.click(screen.getByRole('button', { name: 'Cancel' }));
+    expect(onClose).toHaveBeenCalledOnce();
+  });
+
+  it('closes without confirmation when a feature override is restored', async () => {
+    const onClose = vi.fn();
+    renderDrawer({ onClose });
+    await openTab('Features');
+    const setting = screen.getByLabelText('JIRA availability');
+    fireEvent.change(setting, { target: { value: 'enabled' } });
+    fireEvent.change(setting, { target: { value: 'inherit' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Cancel' }));
+    expect(onClose).toHaveBeenCalledOnce();
+  });
+
+  it.each([false, true])('navigates to the JIRA tab only after any required confirmation (dirty: %s)', async (dirty) => {
+    const onClose = vi.fn();
+    renderDrawer({ app: { ...APP, workTracker: 'jira' }, onClose }, (
+      <Routes>
+        <Route path="/apps/app-1/jira" element={<h1>JIRA board</h1>} />
+        <Route path="*" element={null} />
+      </Routes>
+    ));
+    await openTab('Workflow');
+    if (dirty) fireEvent.change(screen.getByLabelText('GitHub Account'), { target: { value: 'example-bot' } });
+
+    const jira = screen.getByRole('link', { name: 'JIRA tab' });
+    fireEvent.click(jira);
+    if (dirty) {
+      expect(onClose).not.toHaveBeenCalled();
+      expect(screen.queryByRole('heading', { name: 'JIRA board' })).not.toBeInTheDocument();
+      fireEvent.click(screen.getByRole('button', { name: 'Keep editing' }));
+      expect(screen.getByLabelText('GitHub Account')).toHaveValue('example-bot');
+      expect(onClose).not.toHaveBeenCalled();
+      fireEvent.click(jira);
+      fireEvent.click(screen.getByRole('button', { name: 'Discard' }));
+    }
+    expect(onClose).toHaveBeenCalledOnce();
+    expect(await screen.findByRole('heading', { name: 'JIRA board' })).toBeInTheDocument();
   });
 });
 
@@ -347,7 +439,9 @@ describe('EditAppDrawer work tracker selector', () => {
       fireEvent.change(within(row).getByLabelText('Name'), { target: { value: 'Quoted' } });
       fireEvent.change(within(row).getByLabelText('Paths (one glob per line)'), { target: { value: "src/it's/**" } });
       fireEvent.click(screen.getByRole('button', { name: 'Save Changes' }));
-      expect(await screen.findByRole('alert')).toHaveTextContent('no quotes or backticks');
+      const alert = await screen.findByRole('alert');
+      expect(alert).toHaveTextContent('no quotes or backticks');
+      expect(screen.getByRole('tabpanel')).not.toContainElement(alert);
       expect(updateApp).not.toHaveBeenCalled();
     });
 
@@ -457,15 +551,23 @@ describe('EditAppDrawer cleared fields', () => {
     });
   });
 
-  it('keeps the drawer open with the error when the save fails', async () => {
-    updateApp.mockRejectedValue(new Error('Port in use'));
+  it('keeps the drawer open with the save error outside the scrolling Workflow tab', async () => {
+    updateApp.mockRejectedValueOnce(new Error('Port in use'));
     const onSave = vi.fn();
     renderDrawer({ onSave });
-    fireEvent.click(await screen.findByRole('button', { name: 'Save Changes' }));
+    await openTab('Workflow');
+    fireEvent.click(screen.getByRole('button', { name: 'Save Changes' }));
 
-    expect(await screen.findByRole('alert')).toHaveTextContent('Port in use');
+    const alert = await screen.findByRole('alert');
+    expect(alert).toHaveTextContent('Port in use');
+    expect(screen.getByRole('dialog', { name: 'Edit App' })).toContainElement(alert);
+    expect(screen.getByRole('tabpanel')).not.toContainElement(alert);
     expect(onSave).not.toHaveBeenCalled();
     expect(screen.getByRole('button', { name: 'Save Changes' })).toBeEnabled();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Save Changes' }));
+    await waitFor(() => expect(onSave).toHaveBeenCalledOnce());
+    expect(screen.queryByRole('alert')).not.toBeInTheDocument();
   });
 });
 

@@ -60,6 +60,7 @@ export default function Drawer({
   activeTab,            // controlled active tab id (falls back to uncontrolled)
   onTabChange,          // (id) => void — required for the controlled form
   bodyClassName = '',   // extra classes on the scroll region (e.g. multi-column grid)
+  beforeBody = null,    // status or confirmation outside the body scroll region
   closeOnEsc = true,
   closeOnBackdrop = true,
   closeLabel = 'Close settings',
@@ -144,6 +145,7 @@ export default function Drawer({
             />
           </div>
         )}
+        {beforeBody}
         {/* One body element for both modes. When tabbed, `key={currentTab}`
             remounts the panel on switch so each tab's scroll resets — no single
             accumulated page-length scroll. */}
