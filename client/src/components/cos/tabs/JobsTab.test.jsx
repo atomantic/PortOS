@@ -17,7 +17,7 @@ const api = vi.hoisted(() => ({
 
 const socket = vi.hoisted(() => ({ on: vi.fn(), off: vi.fn(), emit: vi.fn() }));
 vi.mock('../../../services/socket', () => ({ default: socket }));
-const toast = vi.hoisted(() => ({ success: vi.fn(), error: vi.fn(), loading: vi.fn() }));
+const toast = vi.hoisted(() => ({ success: vi.fn(), error: vi.fn(), loading: vi.fn(() => 'job-toast'), dismiss: vi.fn() }));
 
 vi.mock('../../../services/apiAgents.js', () => ({
   getCosJobs: api.getCosJobs,
@@ -94,22 +94,22 @@ it('keeps the provider pickers when an older provider retry fails after a newer 
 });
 
 describe('JobsTab / JobCard Run Now disable behavior (#4036)', () => {
-  it('surfaces a deliberate skipped trigger without claiming the job ran', async () => {
-    api.triggerCosJob.mockResolvedValue({
-      success: false,
-      status: 'skipped',
-      reason: 'Task was not queued'
-    });
+  it('surfaces a failed execution once and refreshes the recorded run', async () => {
+    api.triggerCosJob.mockRejectedValue(Object.assign(new Error('Command exited with code 7'), {
+      code: 'JOB_EXECUTION_FAILED',
+      status: 502
+    }));
     render(<JobsTab apps={[]} providers={[]} />);
     await waitFor(() => expect(screen.getByText('Test Job')).toBeInTheDocument());
 
     fireEvent.click(screen.getByRole('button', { name: 'Run now' }));
 
-    await waitFor(() => expect(toast.error).toHaveBeenCalledWith(
-      'Task was not queued',
-      { id: 'job-trigger' }
-    ));
+    await waitFor(() => expect(toast.error).toHaveBeenCalledWith('Command exited with code 7'));
+    expect(api.triggerCosJob).toHaveBeenCalledWith('job-1', { silent: true });
+    expect(toast.dismiss).toHaveBeenCalledWith('job-toast');
+    expect(toast.error).toHaveBeenCalledTimes(1);
     expect(toast.success).not.toHaveBeenCalled();
+    expect(api.getCosJobs).toHaveBeenCalledTimes(2);
   });
 
   it('enables the Run now button when not editing and disables it while editing (save flow)', async () => {

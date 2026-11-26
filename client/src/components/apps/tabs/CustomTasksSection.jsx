@@ -238,15 +238,16 @@ export default function CustomTasksSection({ appId, appName, providerCatalog, ac
     const job = tasks.find(task => task.id === jobId);
     if (!job) return;
     setTriggering(jobId);
-    const result = await triggerCosJob(jobId, runOptions).catch(() => null);
-    setTriggering(null);
-    if (!result) return; // HTTP/network error already toasted by the api helper
-    if (result.status === 'skipped') {
-      const notify = result.duplicate ? toast.success : toast.error;
-      notify(result.reason || 'Task was not queued');
-    } else if (result.success === false) toast.error(result.reason || 'Task failed to trigger');
-    else toast.success(`${result.started ? 'Started' : 'Triggered'} "${job.name}" for ${appName}`);
-    fetchTasks();
+    try {
+      const result = await triggerCosJob(jobId, { ...runOptions, silent: true });
+      if (result.duplicate) toast.success(result.reason || 'An equivalent task is already queued');
+      else toast.success(`${result.started ? 'Started' : 'Triggered'} "${job.name}" for ${appName}`);
+      fetchTasks();
+    } catch (err) {
+      if (!err.toasted) toast.error(err.message);
+    } finally {
+      setTriggering(prev => (prev === jobId ? null : prev));
+    }
   };
 
   const handleDelete = async (jobId) => {

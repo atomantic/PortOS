@@ -1269,6 +1269,17 @@ describe('autonomousJobs', () => {
       expect(result).toEqual({ prompted: true, prompt: { id: 'test-1', text: 'test' } })
     })
 
+    it('classifies a handler rejection as a job execution failure', async () => {
+      checkAndPrompt.mockRejectedValueOnce(new Error('Handler failed'))
+
+      await expect(executeScriptJob({
+        id: 'job-autobiography-prompt',
+        name: 'Autobiography Story Prompt',
+        type: 'script',
+        scriptHandler: 'autobiography-prompt'
+      })).rejects.toMatchObject({ code: 'JOB_EXECUTION_FAILED', message: 'Handler failed' })
+    })
+
     it('executeScriptJob throws for non-script jobs', async () => {
       const regularJob = {
         id: 'job-test',
