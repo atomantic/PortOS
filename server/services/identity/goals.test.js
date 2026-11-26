@@ -2,7 +2,7 @@ import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 
 // In-memory store so decompose/accept/migration logic can be exercised without
 // touching disk or a real AI provider.
-const h = vi.hoisted(() => ({ goalsData: null, aiText: '' }));
+const h = vi.hoisted(() => ({ goalsData: null, aiText: '', derivedBarrier: null, derivedResult: null }));
 
 vi.mock('./store.js', () => ({
   editGoals: vi.fn(async fn => fn(h.goalsData)),
@@ -28,6 +28,19 @@ vi.mock('../provider/providers.js', () => ({
   getProviderById: vi.fn(async () => ({ id: 'p1', apiType: 'openai', defaultModel: 'm1' }))
 }));
 
+vi.mock('../meatspace/meatspaceCalendar.js', () => ({ getActivities: vi.fn(async () => []) }));
+vi.mock('../meatspace/meatspace.js', () => ({ updateBirthDate: vi.fn(async () => {}) }));
+vi.mock('./longevity.js', async importOriginal => ({
+  ...await importOriginal(),
+  deriveLongevity: vi.fn(async () => {
+    if (h.derivedBarrier) {
+      h.derivedBarrier.entered.resolve();
+      await h.derivedBarrier.release.promise;
+    }
+    return h.derivedResult;
+  })
+}));
+
 vi.mock('../aiProvider.js', async (importOriginal) => {
   const actual = await importOriginal();
   return { ...actual, callProviderAISimple: vi.fn(async () => ({ text: h.aiText })) };
@@ -38,6 +51,7 @@ const {
   acceptGoalPhases, acceptGoalDecomposition, completeMilestoneTask, updateGoalProgress, getGoalsTree,
   createGoal, linkActivity, linkCalendarToGoal
 } = await import('./goals.js');
+const { setBirthDate, reconcileCalendarProgress, unlinkActivity } = await import('./goals.js');
 const { addTodo } = await import('./todos.js');
 
 describe('computeGoalVelocity', () => {
@@ -166,6 +180,70 @@ describe('goal decomposition', () => {
     h.goalsData.goals[0].milestones = [{ id: 'ms-legacy', title: 'Old', completedAt: null }];
     const data = await getGoals();
     expect(data.goals[0].milestones[0].tasks).toEqual([]);
+  });
+});
+
+describe('goal record reconciliation', () => {
+  beforeEach(() => {
+    h.goalsData = {
+      goals: [
+        { id: 'goal-1', title: 'First', status: 'active', linkedActivities: [{ activityName: 'Running', requiredFrequency: 2, note: '' }], progressLog: [] },
+        { id: 'goal-2', title: 'Second', status: 'active', linkedActivities: [], progressLog: [] }
+      ], birthDate: null
+    };
+    h.derivedBarrier = null;
+    h.derivedResult = null;
+  });
+
+  it('updates an existing activity link instead of duplicating it', async () => {
+    const goal = await linkActivity('goal-1', { activityName: 'Running', requiredFrequency: 4, note: 'Weekly' });
+    expect(goal.linkedActivities).toEqual([{ activityName: 'Running', requiredFrequency: 4, note: 'Weekly' }]);
+  });
+
+  it('leaves the goal unchanged when unlinking an activity name that is absent', async () => {
+    Object.assign(h.goalsData.goals[0], {
+      goalType: 'standard', parentId: null, tags: [], linkedCalendars: [], featureAreas: [],
+      targetDate: null, timeBlockConfig: null, scheduledEvents: [], checkIns: [],
+      progress: 0, progressHistory: [], todos: []
+    });
+    const before = structuredClone(h.goalsData.goals[0]);
+    const result = await unlinkActivity('goal-1', 'Cycling');
+    expect(result).toEqual(before);
+    expect(h.goalsData.goals[0]).toEqual(before);
+  });
+
+  it('does not apply derived horizons after a newer birth-date edit wins', async () => {
+    const barrier = { entered: Promise.withResolvers(), release: Promise.withResolvers() };
+    h.derivedBarrier = barrier;
+    h.derivedResult = {
+      timeHorizons: { yearsRemaining: 5, healthyYearsRemaining: 4, percentLifeComplete: 90 },
+      lifeExpectancy: { adjusted: 84 }
+    };
+
+    const olderWrite = setBirthDate('1980-01-01');
+    await barrier.entered.promise;
+    h.goalsData.birthDate = '1990-01-01';
+    barrier.release.resolve();
+
+    const result = await olderWrite;
+    expect(result.birthDate).toBe('1990-01-01');
+    expect(result.timeHorizons).toBeUndefined();
+    expect(result.lifeExpectancy).toBeUndefined();
+  });
+
+  it('reconciles calendar progress in place when it moves between goals', async () => {
+    const first = await reconcileCalendarProgress('calendar-review-1', {
+      goalId: 'goal-1', date: '2026-01-01', note: 'Review', durationMinutes: 30
+    });
+    const second = await reconcileCalendarProgress('calendar-review-1', {
+      goalId: 'goal-2', date: '2026-01-02', note: 'Updated review', durationMinutes: 45
+    });
+
+    expect(second).toMatchObject({ id: first.id, createdAt: first.createdAt, sourceKey: 'calendar-review-1' });
+    expect(h.goalsData.goals[0].progressLog).toEqual([]);
+    expect(h.goalsData.goals[1].progressLog).toEqual([expect.objectContaining({
+      id: first.id, createdAt: first.createdAt, sourceKey: 'calendar-review-1', date: '2026-01-02', note: 'Updated review'
+    })]);
   });
 });
 

@@ -788,6 +788,15 @@ describe('Integration: getIdentityStatus', () => {
     expect(result.sections.aesthetics.status).toBe('unavailable');
   });
 
+  it('marks aesthetics active only when the taste profile reaches 100%', async () => {
+    const { getTasteProfile } = await import('./taste-questionnaire.js');
+    getTasteProfile.mockResolvedValue({ completedCount: 5, totalSections: 5, overallPercentage: 100, lastSessionAt: '2026-01-01T00:00:00.000Z' });
+    expect((await getIdentityStatus()).sections.aesthetics.status).toBe('active');
+
+    getTasteProfile.mockResolvedValue({ completedCount: 4, totalSections: 5, overallPercentage: 99, lastSessionAt: '2026-01-01T00:00:00.000Z' });
+    expect((await getIdentityStatus()).sections.aesthetics.status).toBe('pending');
+  });
+
   it('should show chronotype as pending when genome uploaded but not derived', async () => {
     const result = await getIdentityStatus();
 
