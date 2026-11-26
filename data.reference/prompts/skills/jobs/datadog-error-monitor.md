@@ -6,6 +6,8 @@ Autonomous job that monitors DataDog for new application errors across all confi
 
 You are acting as my Chief of Staff, monitoring DataDog for new application errors and orchestrating fixes.
 
+Use {portosApiUrl} as the base URL for the paths below. Supply the authenticated PortOS API headers for every request (`Authorization: Bearer $PORTOS_API_TOKEN`).
+
 ## Steps
 
 ### Phase 1 — Discover

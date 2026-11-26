@@ -2,6 +2,7 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { readFile } from 'fs/promises';
 import { join, dirname } from 'path';
 import { fileURLToPath } from 'url';
+import { expandPartials } from '../lib/promptPartials.js';
 import { applyTemplate } from '../lib/promptTemplate.js';
 
 // Resolve the templates from disk so the tests exercise the real Prompts
@@ -16,11 +17,14 @@ const __HERE = dirname(fileURLToPath(import.meta.url));
 const RUNTIME_STAGES_DIR = join(__HERE, '..', '..', 'data', 'prompts', 'stages');
 const SAMPLE_STAGES_DIR = join(__HERE, '..', '..', 'data.reference', 'prompts', 'stages');
 const loadStage = async (stageName) => {
-  const runtimePath = join(RUNTIME_STAGES_DIR, `${stageName}.md`);
-  return readFile(runtimePath, 'utf-8').catch((err) => {
+  const filename = `${stageName}.md`;
+  const runtimeTemplate = await readFile(join(RUNTIME_STAGES_DIR, filename), 'utf-8').catch((err) => {
     if (err.code !== 'ENOENT') throw err;
-    return readFile(join(SAMPLE_STAGES_DIR, `${stageName}.md`), 'utf-8');
+    return null;
   });
+  const stagesDir = runtimeTemplate === null ? SAMPLE_STAGES_DIR : RUNTIME_STAGES_DIR;
+  const template = runtimeTemplate ?? await readFile(join(stagesDir, filename), 'utf-8');
+  return expandPartials(template, { partialsDir: join(stagesDir, '..', '_partials') });
 };
 
 // Mock the prompt-service buildPrompt to render the on-disk template through
@@ -80,14 +84,18 @@ describe('buildPlanPrompt — locked render settings', () => {
 // The agent's PATCH target must stay a token: buildAgentPrompt expands it at
 // spawn time to the loopback origin that actually speaks HTTP on this install
 // (the mirror when :5555 is TLS-only), which a load-time URL cannot know (#12405).
-describe('Creative Director stage prompts — API origin', () => {
+describe('Creative Director stage prompts — API write-back', () => {
   it.each([
     ['treatment', () => buildTreatmentPrompt(baseProject), '/api/creative-director/cd-1/treatment'],
     ['plan', () => buildPlanPrompt(baseProject, { toolSpecs: [] }), '/api/creative-director/cd-1/plan'],
     ['evaluate', () => buildEvaluatePrompt(baseProject, baseScene), '/api/creative-director/cd-1/scene/scene-2'],
-  ])('%s sends its write-back to the {portosApiUrl} token, not a hardcoded origin', async (_stage, render, path) => {
+  ])('%s documents authenticated write-back using {portosApiUrl}', async (_stage, render, path) => {
     const out = await render();
-    expect(out).toContain(`PATCH {portosApiUrl}${path}`);
+    expect(out).toContain(`PATCH {portosApiUrl}${path}\nAuthorization: Bearer $PORTOS_API_TOKEN`);
+    expect(out).toContain('`401 AUTH_REQUIRED` means you should check for a missing, invalid, or expired token');
+    if (path.endsWith('/scene/scene-2')) {
+      expect(out).toContain('POST {portosApiUrl}/api/media/collections/col-1/items\nAuthorization: Bearer $PORTOS_API_TOKEN');
+    }
     expect(out).not.toMatch(/https?:\/\/localhost:5555/);
   });
 });
