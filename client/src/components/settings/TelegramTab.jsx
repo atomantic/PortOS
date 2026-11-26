@@ -182,7 +182,7 @@ export function TelegramTab() {
           >
             <div className="text-sm font-medium text-white">Manual Bot</div>
             <div className="text-xs text-gray-500 mt-1">
-              Self-hosted polling bot with /status, /goals, /checkin commands. Requires bot token and chat ID.
+              Self-hosted polling bot with /status, /goals, /checkin, /agents, /help commands. Requires bot token and chat ID.
             </div>
           </button>
           <button
