@@ -1,9 +1,11 @@
 import { describe, it, expect, vi } from 'vitest';
 import { Readable } from 'stream';
+import { createWriteStream } from 'fs';
+import { readFile, stat, unlink } from 'node:fs/promises';
 import { uploadSingle, uploadFields } from './multipart.js';
 
 vi.mock('fs', () => ({
-  createWriteStream: () => {
+  createWriteStream: vi.fn((path) => {
     const chunks = [];
     const handlers = {};
     return {
@@ -24,9 +26,10 @@ vi.mock('fs', () => ({
       destroy: () => {},
       on: (evt, fn) => { handlers[evt] = fn; },
       once: (evt, fn) => { handlers[evt] = fn; },
+      path,
       _chunks: chunks,
     };
-  },
+  }),
 }));
 
 const BOUNDARY = '----WebKitFormBoundaryTEST';
@@ -84,6 +87,46 @@ describe('multipart parser', () => {
     expect(req.file.mimetype).toBe('image/png');
   });
 
+  it.skipIf(process.platform === 'win32')('creates owner-only temporary uploads on disk', async () => {
+    const realFs = await vi.importActual('fs');
+    vi.mocked(createWriteStream).mockImplementationOnce(realFs.createWriteStream);
+    const req = makeMultipartReq([
+      { name: 'sourceImage', filename: 'a.png', body: 'example bytes' },
+    ]);
+
+    try {
+      await runMiddleware(req);
+      expect((await stat(req.file.path)).mode & 0o777).toBe(0o600);
+      expect(await readFile(req.file.path, 'utf8')).toBe('example bytes');
+    } finally {
+      if (req.file?.path) await unlink(req.file.path);
+    }
+  });
+
+  it('preserves a pre-existing file when exclusive creation fails', async () => {
+    const realFs = await vi.importActual('fs');
+    let path;
+    let closed;
+    vi.mocked(createWriteStream).mockImplementationOnce((target, options) => {
+      realFs.writeFileSync(target, 'existing bytes', { flags: 'wx', mode: 0o600 });
+      path = target;
+      const stream = realFs.createWriteStream(target, options);
+      closed = new Promise((resolve) => stream.once('close', resolve));
+      return stream;
+    });
+    const req = makeMultipartReq([
+      { name: 'sourceImage', filename: 'a.png', body: 'upload bytes' },
+    ]);
+
+    try {
+      await expect(runMiddleware(req)).rejects.toMatchObject({ code: 'EEXIST' });
+      await closed;
+      expect(await readFile(path, 'utf8')).toBe('existing bytes');
+    } finally {
+      if (path) await unlink(path);
+    }
+  });
+
   it('handles file as the FIRST part (text fields after)', async () => {
     const req = makeMultipartReq([
       { name: 'sourceImage', filename: 'a.png', contentType: 'image/png', body: Buffer.from([0xff, 0xee]) },
@@ -101,9 +144,10 @@ describe('multipart parser', () => {
     // with "Cannot read properties of null (reading 'write')".
     vi.resetModules();
     vi.doMock('fs', () => ({
-      createWriteStream: () => {
+      createWriteStream: (path) => {
         const handlers = {};
         return {
+          path,
           write: () => true,
           end: (data, cb) => {
             const callback = typeof data === 'function' ? data : cb;
