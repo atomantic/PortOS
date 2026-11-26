@@ -17,11 +17,15 @@ import socket from '../../../services/socket';
 import { formatTime, formatRuntime, formatBytes, formatDateTime } from '../../../utils/formatters';
 import BrailleSpinner from '../../BrailleSpinner';
 import Banner from '../../ui/Banner';
+import ConfirmButtonPair from '../../ui/ConfirmButtonPair';
+import InlineConfirmRow from '../../ui/InlineConfirmRow';
+import useConfirmDelete from '../../../hooks/useConfirmDelete';
 import ListLoadError from '../../ui/ListLoadError';
 import useListResource from '../../../hooks/useListResource';
 import ProcessLogModal from '../../ui/ProcessLogModal';
 import { copyToClipboard } from '../../../lib/clipboard';
 
+const CLEAR_FAILED = Symbol('clear failed runs');
 const runEventsPath = TABS.find(({ id }) => id === 'run-events').to;
 
 // Map an AI run's source to the PM2 process whose system log holds the full
@@ -39,6 +43,7 @@ export default function RunsTab() {
   const [expandedDetails, setExpandedDetails] = useState({});
   const [sourceFilter, setSourceFilter] = useState('all');
   const [statusFilter, setStatusFilter] = useState('all');
+  const { isConfirming, requestDelete, cancelDelete, confirmDelete } = useConfirmDelete();
   const [stoppingIds, setStoppingIds] = useState(() => new Set());
   // The failed run whose system logs are open in the log modal, or null.
   const [logModalRun, setLogModalRun] = useState(null);
@@ -345,7 +350,7 @@ export default function RunsTab() {
     );
   }
 
-  const failedCount = runs.filter(r => r.success === false).length;
+  const hasFailedRuns = runs.some(run => run.success === false);
   const logProc = logModalRun ? runLogProcessName(logModalRun.source) : '';
 
   const handleClearFailed = async () => {
@@ -411,51 +416,63 @@ export default function RunsTab() {
             {run.success ? 'Succeeded' : run.success === false ? 'Failed' : 'Running'}
           </span>
           <span className="text-sm text-gray-500 shrink-0">{formatTime(run.startTime)}</span>
-          {run.success === false && (
-            <button
-              type="button"
-              onClick={() => setLogModalRun(run)}
-              className="min-h-[44px] min-w-[44px] inline-flex items-center justify-center p-1 text-gray-500 hover:text-port-accent transition-colors"
-              title="View system logs"
-              aria-label={`View system logs for run ${runLabel}`}
-              data-testid={`view-logs-${run.id}`}
-            >
-              <ScrollText size={14} aria-hidden="true" />
-            </button>
+          {isConfirming(run.id) ? (
+            <ConfirmButtonPair
+              prompt={run.success === null ? 'Stop and delete?' : 'Delete?'}
+              ariaLabel={`Confirm ${run.success === null ? 'stop and delete' : 'delete'} run ${runLabel}`}
+              onConfirm={() => confirmDelete(() => handleDelete(run.id))}
+              onCancel={cancelDelete}
+              className="flex-wrap"
+            />
+          ) : (
+            <>
+              {run.success === false && (
+                <button
+                  type="button"
+                  onClick={() => setLogModalRun(run)}
+                  className="min-h-[44px] min-w-[44px] inline-flex items-center justify-center p-1 text-gray-500 hover:text-port-accent transition-colors"
+                  title="View system logs"
+                  aria-label={`View system logs for run ${runLabel}`}
+                  data-testid={`view-logs-${run.id}`}
+                >
+                  <ScrollText size={14} aria-hidden="true" />
+                </button>
+              )}
+              {run.success !== null && (
+                <button
+                  type="button"
+                  onClick={() => handleResume(run)}
+                  className="min-h-[44px] min-w-[44px] inline-flex items-center justify-center p-1 text-gray-500 hover:text-port-accent transition-colors"
+                  title="Resume run" aria-label={`Resume run ${runLabel}`}
+                  data-testid={`resume-run-${run.id}`}
+                >
+                  <RotateCcw size={14} aria-hidden="true" />
+                </button>
+              )}
+              {run.success === null && (
+                <button
+                  type="button"
+                  onClick={() => handleStop(run.id)}
+                  disabled={stoppingIds.has(run.id)}
+                  className="min-h-[44px] min-w-[44px] inline-flex items-center justify-center p-1 text-gray-500 hover:text-port-error transition-colors disabled:opacity-40"
+                  title={stopLabel}
+                  aria-label={`${stopLabel} ${runLabel}`}
+                  data-testid={`stop-run-${run.id}`}
+                >
+                  <Square size={14} aria-hidden="true" fill="currentColor" />
+                </button>
+              )}
+              <button
+                type="button"
+                onClick={() => requestDelete(run.id)}
+                className="min-h-[44px] min-w-[44px] inline-flex items-center justify-center p-1 text-gray-500 hover:text-port-error transition-colors"
+                title="Delete run" aria-label={`Delete run ${runLabel}`}
+                data-testid={`delete-run-${run.id}`}
+              >
+                <Trash2 size={14} aria-hidden="true" />
+              </button>
+            </>
           )}
-          {run.success !== null && (
-            <button
-              type="button"
-              onClick={() => handleResume(run)}
-              className="min-h-[44px] min-w-[44px] inline-flex items-center justify-center p-1 text-gray-500 hover:text-port-accent transition-colors"
-              title="Resume run" aria-label={`Resume run ${runLabel}`}
-              data-testid={`resume-run-${run.id}`}
-            >
-              <RotateCcw size={14} aria-hidden="true" />
-            </button>
-          )}
-          {run.success === null && (
-            <button
-              type="button"
-              onClick={() => handleStop(run.id)}
-              disabled={stoppingIds.has(run.id)}
-              className="min-h-[44px] min-w-[44px] inline-flex items-center justify-center p-1 text-gray-500 hover:text-port-error transition-colors disabled:opacity-40"
-              title={stopLabel}
-              aria-label={`${stopLabel} ${runLabel}`}
-              data-testid={`stop-run-${run.id}`}
-            >
-              <Square size={14} aria-hidden="true" fill="currentColor" />
-            </button>
-          )}
-          <button
-            type="button"
-            onClick={() => handleDelete(run.id)}
-            className="min-h-[44px] min-w-[44px] inline-flex items-center justify-center p-1 text-gray-500 hover:text-port-error transition-colors"
-            title="Delete run" aria-label={`Delete run ${runLabel}`}
-            data-testid={`delete-run-${run.id}`}
-          >
-            <Trash2 size={14} aria-hidden="true" />
-          </button>
         </div>
       </div>
 
@@ -608,17 +625,27 @@ export default function RunsTab() {
     <div className="space-y-4 lg:space-y-6">
       <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
         <h2 className="text-lg sm:text-xl font-bold text-white">Recent Runs</h2>
-        {failedCount > 0 && (
+        {hasFailedRuns && (
           <button
             type="button"
-            onClick={handleClearFailed}
+            onClick={() => requestDelete(CLEAR_FAILED)}
             className="flex items-center gap-2 px-3 py-1.5 text-sm bg-port-error/20 hover:bg-port-error/30 text-port-error rounded-lg transition-colors self-end sm:self-auto"
           >
             <Trash2 size={14} aria-hidden="true" />
-            Clear Failed ({failedCount})
+            Clear Failed
           </button>
         )}
       </div>
+
+      {isConfirming(CLEAR_FAILED) && (
+        <InlineConfirmRow
+          autoFocus
+          question="Delete every failed run on this install? This removes their prompts and output."
+          confirmText="Delete failed runs"
+          onConfirm={() => confirmDelete(handleClearFailed)}
+          onCancel={cancelDelete}
+        />
+      )}
 
       {/* Source Filter */}
       <div role="group" aria-label="Filter runs by source" className="flex flex-wrap gap-1.5 sm:gap-2">
