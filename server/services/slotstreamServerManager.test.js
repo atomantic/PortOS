@@ -22,6 +22,7 @@ import {
   startSlotstreamServer,
   stopSlotstreamServer,
   installSlotstream,
+  uninstallSlotstream,
   _resetSlotstreamServerStateForTests,
   ensureSlotstreamRunning,
   isSlotstreamProvider,
@@ -54,6 +55,53 @@ const resetForTest = (overrides = {}) => {
 };
 
 describe('slotstreamServerManager', () => {
+  async function fixtureInstall() {
+    const bin = join(testLogDir, '.slotstream', 'bin');
+    const binary = join(bin, 'slotstream');
+    const checkpoint = join(testLogDir, '.slotstream', 'models', 'checkpoint');
+    vi.spyOn(slotstreamModels, 'slotstreamBinDir').mockReturnValue(bin);
+    await mkdir(bin, { recursive: true });
+    await mkdir(dirname(checkpoint), { recursive: true });
+    await writeFile(binary, 'runtime', { mode: 0o755 });
+    await writeFile(checkpoint, 'weights');
+    return { bin, binary, checkpoint };
+  }
+
+  it('removes only the release binary and keeps weights and launch settings', async () => {
+    const { binary, checkpoint } = await fixtureInstall();
+    settingsStore.current = { localLlm: { slotstream: { port: 12980, model: 'checkpoint' } } };
+    const saved = structuredClone(settingsStore.current);
+    await expect(getSlotstreamServerStatus()).resolves.toMatchObject({ canUninstall: true });
+    await expect(uninstallSlotstream()).resolves.toMatchObject({ success: true });
+    await expect(lstat(binary)).rejects.toMatchObject({ code: 'ENOENT' });
+    expect(await readFile(checkpoint, 'utf8')).toBe('weights');
+    expect(settingsStore.current).toEqual(saved);
+    expect(execPm2Calls).toEqual([]);
+  });
+
+  it('refuses to remove the binary when a launch or an external listener is active', async () => {
+    const { binary } = await fixtureInstall();
+    pm2Module.getAppStatusStrict.mockResolvedValueOnce({ status: 'launching' });
+    await expect(uninstallSlotstream()).rejects.toMatchObject({ code: 'SLOTSTREAM_IN_USE' });
+    platform.isPortInUse.mockResolvedValue(true);
+    await expect(uninstallSlotstream()).rejects.toMatchObject({ code: 'SLOTSTREAM_IN_USE' });
+    expect(await readFile(binary, 'utf8')).toBe('runtime');
+    expect(execPm2Calls).toEqual([]);
+  });
+
+  it('refuses external installs and symlinked install directories', async () => {
+    const { bin, binary, checkpoint } = await fixtureInstall();
+    const outside = join(testLogDir, 'outside');
+    await mkdir(outside);
+    await writeFile(join(outside, 'slotstream'), 'external');
+    await rm(bin, { recursive: true });
+    await expect(uninstallSlotstream()).rejects.toMatchObject({ code: 'SLOTSTREAM_NOT_MANAGED' });
+    await symlink(outside, bin, 'dir');
+    await expect(uninstallSlotstream()).rejects.toMatchObject({ code: 'SLOTSTREAM_NOT_MANAGED' });
+    expect(await readFile(binary, 'utf8')).toBe('external');
+    expect(await readFile(checkpoint, 'utf8')).toBe('weights');
+  });
+
   let pm2State = null;
   let execPm2Calls = [];
   let testLogDir = null;

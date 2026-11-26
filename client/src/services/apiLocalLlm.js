@@ -155,12 +155,14 @@ const managedRuntimeRequests = {
   mtplx: {
     status: (options) => request('/local-llm/mtplx/status', options),
     install: (options) => request('/local-llm/mtplx/install', { ...options, method: 'POST' }),
+    uninstall: () => request('/local-llm/mtplx/uninstall', { method: 'POST' }),
     start: (config = {}) => request('/local-llm/mtplx/start', { method: 'POST', body: JSON.stringify(config) }),
     stop: (options) => request('/local-llm/mtplx/stop', { ...options, method: 'POST' }),
   },
   slotstream: {
     status: (options) => request('/local-llm/slotstream/status', options),
     install: (options) => request('/local-llm/slotstream/install', { ...options, method: 'POST' }),
+    uninstall: () => request('/local-llm/slotstream/uninstall', { method: 'POST' }),
     start: (config = {}) => request('/local-llm/slotstream/start', { method: 'POST', body: JSON.stringify(config) }),
     stop: (options) => request('/local-llm/slotstream/stop', { ...options, method: 'POST' }),
   },
@@ -169,6 +171,7 @@ const managedRuntimeRequests = {
     install: (options) => request('/local-llm/splash/install', { ...options, method: 'POST' }),
     start: (options) => request('/local-llm/splash/start', { ...options, method: 'POST' }),
     stop: (options) => request('/local-llm/splash/stop', { ...options, method: 'POST' }),
+    uninstall: (options) => request('/local-llm/splash/uninstall', { ...options, method: 'POST' }),
     upgrade: (options) => request('/local-llm/splash/upgrade', { ...options, method: 'POST' }),
   },
   mkserve: {
@@ -176,6 +179,7 @@ const managedRuntimeRequests = {
     install: (options) => request('/local-llm/mkserve/install', { ...options, method: 'POST' }),
     start: (options) => request('/local-llm/mkserve/start', { ...options, method: 'POST' }),
     stop: (options) => request('/local-llm/mkserve/stop', { ...options, method: 'POST' }),
+    uninstall: (options) => request('/local-llm/mkserve/uninstall', { ...options, method: 'POST' }),
     upgrade: (options) => request('/local-llm/mkserve/upgrade', { ...options, method: 'POST' }),
   },
 };
@@ -192,12 +196,14 @@ export const controlManagedInklingRuntime = (runtime, action, options) =>
 export const getMtplxServerStatus = managedRuntimeRequests.mtplx.status;
 export const startMtplxServer = managedRuntimeRequests.mtplx.start;
 export const stopMtplxServer = () => managedRuntimeRequests.mtplx.stop();
+export const uninstallMtplx = managedRuntimeRequests.mtplx.uninstall;
 export const installMtplx = () => managedRuntimeRequests.mtplx.install();
 
 export const getSlotstreamServerStatus = managedRuntimeRequests.slotstream.status;
 export const startSlotstreamServer = managedRuntimeRequests.slotstream.start;
 export const stopSlotstreamServer = () => managedRuntimeRequests.slotstream.stop();
 export const installSlotstream = () => managedRuntimeRequests.slotstream.install();
+export const uninstallSlotstream = managedRuntimeRequests.slotstream.uninstall;
 
 // Fetch one checkpoint into Slotstream's cache. `model` is a catalog id from
 // the status payload, or a Hugging Face `owner/name`. Byte progress arrives on

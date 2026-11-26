@@ -4,7 +4,7 @@ import * as os from 'os';
 vi.mock('os', async (importOriginal) => ({ ...(await importOriginal()), release: vi.fn(() => '23.0.0') }));
 import { join } from 'path';
 import { describe, it, expect, beforeEach, afterEach, afterAll, vi } from 'vitest';
-import { getMtplxServerStatus, startMtplxServer, stopMtplxServer, relaunchMtplxServerWithTuning, runOnMtplxCheckpoint, installMtplx, _resetMtplxServerStateForTests, ensureMtplxRunning, ensureMtplxProviderReady, isMtplxProvider, MTPLX_APP } from './mtplxServerManager.js';
+import { getMtplxServerStatus, startMtplxServer, stopMtplxServer, relaunchMtplxServerWithTuning, runOnMtplxCheckpoint, installMtplx, uninstallMtplx, _resetMtplxServerStateForTests, ensureMtplxRunning, ensureMtplxProviderReady, isMtplxProvider, MTPLX_APP } from './mtplxServerManager.js';
 import { mtplxCachedModelIds } from './localCachedModels.js';
 import * as processEnv from '../lib/processEnv.js';
 import * as platform from '../lib/platform.js';
@@ -63,6 +63,23 @@ const resetForTest = (overrides = {}) => {
 };
 
 describe('mtplxServerManager', () => {
+  it('uninstalls its private venv without removing another MTPLX installation', async () => {
+    await createManagedEntry();
+    const external = join(testLogDir, 'external-mtplx');
+    await writeFile(external, 'external');
+    const realLookup = processEnv.findCommandOnPath;
+    vi.spyOn(processEnv, 'findCommandOnPath').mockImplementation((cmd) => cmd === 'mtplx' ? external : realLookup(cmd));
+    await expect(getMtplxServerStatus()).resolves.toMatchObject({ canUninstall: true });
+    platform.isPortInUse.mockResolvedValueOnce(true);
+    await expect(uninstallMtplx()).rejects.toMatchObject({ code: 'MTPLX_IN_USE' });
+    await expect(uninstallMtplx()).resolves.toMatchObject({ success: true });
+    await expect(readFile(mtplxRuntime.mtplxManagedBinary())).rejects.toMatchObject({ code: 'ENOENT' });
+    expect(await readFile(external, 'utf8')).toBe('external');
+    await expect(getMtplxServerStatus()).resolves.toMatchObject({ installed: true, canUninstall: false });
+    await expect(uninstallMtplx()).rejects.toMatchObject({ code: 'MTPLX_NOT_MANAGED' });
+    expect(execPm2Calls).toEqual([]);
+  });
+
   let pm2State = null;
   let execPm2Calls = [];
   let testLogDir = null;

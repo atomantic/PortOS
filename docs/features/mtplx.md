@@ -308,3 +308,9 @@ To read answers side by side rather than only speeds, open the Local LLM
 Playground (Compare mode): a running MTPLX appears as its own group beside Ollama
 and LM Studio. The Playground never starts the daemon; a stopped one shows as
 "not running" with a link to Models → Runtimes. `POST /api/local-llm/{test,test/stream,compare}` accept any assessable runtime as `backend` (no `/runs` record), and `GET /api/local-llm/runtime-models` lists what each bare-endpoint runtime serves without generating.
+
+### Removing the runtime
+
+Stop MTPLX and choose **Uninstall** in **Models → Runtimes**. This removes the
+private PortOS environment, not checkpoints, provider or launch settings, or
+any Homebrew or other external installation of MTPLX.

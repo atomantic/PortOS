@@ -18,8 +18,8 @@ import { getLoadedModels, unloadModel } from '../services/ollamaManager.js';
 import { getLoadedModels as getLoadedLmStudioModels, getLastLoadedModelsError as getLmStudioResidencyError } from '../services/lmStudioManager.js';
 import { getSettings, readSettingsStrict, updateSettingsWith } from '../services/settings.js';
 import { localLlmCompareSchema, localLlmTestSchema } from '../lib/mediaValidation.js';
-import { installSplashRuntime, saveSplashContextWindow, startSplashServer, stopSplashServer } from '../services/splashServerManager.js';
-import { installMkserve, startMkserveServer, stopMkserveServer } from '../services/mkserveRuntimeManager.js';
+import { installSplashRuntime, saveSplashContextWindow, startSplashServer, stopSplashServer, uninstallSplashRuntime } from '../services/splashServerManager.js';
+import { installMkserve, startMkserveServer, stopMkserveServer, uninstallMkserve } from '../services/mkserveRuntimeManager.js';
 import { ServerError, errorEvents } from '../lib/errorHandler.js';
 import { saveProcessList } from '../services/pm2.js';
 import { syncRuntimeProviderModels } from '../services/localRuntimeProviderSync.js';
@@ -166,6 +166,7 @@ vi.mock('../services/mtplxServerManager.js', async (importOriginal) => ({
   startMtplxServer: vi.fn(),
   stopMtplxServer: vi.fn(),
   installMtplx: vi.fn(),
+  uninstallMtplx: vi.fn(),
   waitForMtplxReady: vi.fn(),
 }));
 vi.mock('../services/slotstreamServerManager.js', async (importOriginal) => ({
@@ -174,6 +175,7 @@ vi.mock('../services/slotstreamServerManager.js', async (importOriginal) => ({
   startSlotstreamServer: vi.fn(),
   stopSlotstreamServer: vi.fn(),
   installSlotstream: vi.fn(),
+  uninstallSlotstream: vi.fn(),
   waitForSlotstreamReady: vi.fn(),
 }));
 vi.mock('../services/mtplxModelManager.js', async (importOriginal) => ({
@@ -198,6 +200,7 @@ vi.mock('../services/splashServerManager.js', () => ({
   saveSplashContextWindow: vi.fn(),
   startSplashServer: vi.fn(),
   stopSplashServer: vi.fn(),
+  uninstallSplashRuntime: vi.fn(),
 }));
 vi.mock('../services/mkserveRuntimeManager.js', () => ({
   MKSERVE_APP: 'portos-mkserve',
@@ -205,6 +208,7 @@ vi.mock('../services/mkserveRuntimeManager.js', () => ({
   installMkserve: vi.fn(),
   startMkserveServer: vi.fn(),
   stopMkserveServer: vi.fn(),
+  uninstallMkserve: vi.fn(),
 }));
 
 vi.mock('../services/specDecodeModels.js', () => ({
@@ -1325,9 +1329,9 @@ describe('local LLM catalog and loaded query validation', () => {
 });
 
 describe.each([
-  { id: 'splash', install: installSplashRuntime, start: startSplashServer, stop: stopSplashServer },
-  { id: 'mkserve', install: installMkserve, start: startMkserveServer, stop: stopMkserveServer },
-])('$id lifecycle routes', ({ id, install, start, stop }) => {
+  { id: 'splash', install: installSplashRuntime, start: startSplashServer, stop: stopSplashServer, uninstall: uninstallSplashRuntime },
+  { id: 'mkserve', install: installMkserve, start: startMkserveServer, stop: stopMkserveServer, uninstall: uninstallMkserve },
+])('$id lifecycle routes', ({ id, install, start, stop, uninstall }) => {
   const url = `/api/local-llm/${id}`;
   const readStatus = (app) => request(app).get(`${url}/status`);
   const mutate = (app, action) => request(app).post(`${url}/${action}`);
@@ -1369,6 +1373,21 @@ describe.each([
     expect(install).toHaveBeenCalledOnce();
     expect((await mutate(app, 'stop')).status).toBe(202);
     expect(stop).toHaveBeenCalledOnce();
+  });
+
+  it('accepts uninstall and reports its scoped completion without launching the server', async () => {
+    const app = makeApp();
+    uninstall.mockClear().mockResolvedValueOnce({ success: true });
+    start.mockClear();
+    const response = await mutate(app, 'uninstall');
+    expect(response.status).toBe(202);
+    expect(response.body.operation.action).toBe('uninstall');
+    expect((await readStatus(app)).body).toMatchObject({ operation: null, lastError: null });
+    expect(uninstall).toHaveBeenCalledOnce();
+    expect(start).not.toHaveBeenCalled();
+    expect(app.get('io').emit).toHaveBeenCalledWith(
+      'localLlm:progress', expect.objectContaining({ event: 'complete', runtime: id, message: expect.stringContaining('uninstalled') }),
+    );
   });
 
   it('surfaces actionable refusal after accepting a background start', async () => {
