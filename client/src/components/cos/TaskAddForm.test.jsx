@@ -15,6 +15,7 @@ const api = vi.hoisted(() => ({
   getAppWorkTracker: vi.fn(),
   getAppRepositorySources: vi.fn(),
   applyCosTaskTemplate: vi.fn(),
+  deleteCosTaskTemplate: vi.fn(),
   addCosTask: vi.fn(),
   getOrchestrationProfiles: vi.fn(),
   // Declared so the render-path assertion below is real: the picker must read the
@@ -46,6 +47,7 @@ vi.mock('../../services/apiSystem', () => apiSystem);
 vi.mock('../../services/apiAgents.js', () => ({
   getCosPopularTemplates: api.getCosPopularTemplates,
   applyCosTaskTemplate: api.applyCosTaskTemplate,
+  deleteCosTaskTemplate: api.deleteCosTaskTemplate,
   addCosTask: api.addCosTask,
   getOrchestrationProfiles: api.getOrchestrationProfiles,
 }));
@@ -239,13 +241,21 @@ describe('TaskAddForm responsive layout', () => {
     expect(screen.getByLabelText('Attach files')).toBeInTheDocument();
     expect(screen.getByRole('button', { name: /Inspect example/ })).toBeVisible();
     await user.type(screen.getByRole('textbox', { name: /Task description/ }), 'Inspect synthetic queue');
-    await user.click(screen.getByRole('button', { name: 'Task configuration' }));
+    const configuration = screen.getByRole('button', { name: 'Task configuration' });
+    expect(configuration).toHaveAttribute('aria-expanded', 'false');
+    expect(configuration).not.toHaveAttribute('aria-controls');
+    await user.click(configuration);
+    expect(configuration).toHaveAttribute('aria-expanded', 'true');
+    expect(configuration).toHaveAttribute('aria-controls', 'task-configuration');
+    expect(screen.getByRole('region', { name: 'Task configuration' })).toHaveAttribute('id', 'task-configuration');
     expect(openPrToggle()).toBeChecked();
     expect(worktreeToggle()).toBeChecked();
     await user.click(worktreeToggle());
     await user.selectOptions(screen.getByLabelText('When done'), 'commit-push');
     expect(screen.getByLabelText('When done')).toHaveValue('commit-push');
-    await user.click(screen.getByRole('button', { name: 'Task configuration' }));
+    await user.click(configuration);
+    expect(configuration).not.toHaveAttribute('aria-controls');
+    expect(screen.queryByRole('region', { name: 'Task configuration' })).not.toBeInTheDocument();
     expect(screen.getByLabelText('Task execution summary')).toHaveTextContent('Direct checkout · Commit and push to default branch');
     await user.click(screen.getByRole('button', { name: 'Add task' }));
     await waitFor(() => expect(toast.error).toHaveBeenCalledWith('Queue unavailable'));
@@ -645,6 +655,30 @@ describe('TaskAddForm quick templates', () => {
     // A template that pins no app must not clear the one already selected —
     // clearing it also silently reset the app's worktree/PR defaults.
     expect(screen.getByLabelText(/target application/i)).toHaveValue('example-app');
+  });
+
+  it('renders independently actionable apply and delete buttons for a custom template', async () => {
+    const user = userEvent.setup();
+    api.getCosPopularTemplates.mockResolvedValue({
+      templates: [{ id: 'user-abc', name: 'My Template', description: 'Do the thing', isBuiltin: false }],
+    });
+    api.deleteCosTaskTemplate.mockResolvedValue({ success: true });
+    renderForm();
+    await openTemplates(user);
+
+    const apply = screen.getByRole('button', { name: 'My Template' });
+    const remove = screen.getByRole('button', { name: 'Delete template My Template' });
+    expect(apply.tagName).toBe('BUTTON');
+    expect(apply).toHaveAttribute('type', 'button');
+    expect(remove.tagName).toBe('BUTTON');
+    expect(remove).toHaveAttribute('type', 'button');
+    expect(apply.parentElement).toBe(remove.parentElement);
+    expect(apply.parentElement).not.toHaveAttribute('role');
+
+    await user.click(remove);
+    await waitFor(() => expect(apply).not.toBeInTheDocument());
+    expect(api.deleteCosTaskTemplate).toHaveBeenCalledWith('user-abc', { silent: true });
+    expect(api.applyCosTaskTemplate).not.toHaveBeenCalled();
   });
 
   it('remembers a collapsed section across queue-first task forms', async () => {
@@ -1394,7 +1428,7 @@ describe('TaskAddForm target application persistence', () => {
     await waitFor(() => expect(screen.getByText('Quick Templates')).toBeInTheDocument());
     await user.click(screen.getByText('Quick Templates'));
 
-    const templateBtn = await screen.findByRole('button', { name: /App B Template/i });
+    const templateBtn = await screen.findByRole('button', { name: 'App B Template' });
     await user.click(templateBtn);
 
     expect(screen.getByLabelText('Target application')).toHaveValue('app-b');
