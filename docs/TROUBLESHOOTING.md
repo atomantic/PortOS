@@ -11,7 +11,7 @@ This is a model-access rejection, not evidence that login failed. Run
 authentication method. PortOS lets Codex own its credentials and token refresh.
 
 To pin which login method PortOS uses, set **Codex authentication** on the Codex provider
-(AI Providers → edit): *ChatGPT subscription* or *API key*. It passes
+(Models → Providers → edit): *ChatGPT subscription* or *API key*. It passes
 `-c forced_login_method=...` to Codex; leave it on the default to let Codex decide.
 
 Choose a supported model in the task or provider settings, or clear the task's
@@ -219,9 +219,12 @@ claude --version
 **Symptom**: AI runs fail with authentication errors.
 
 **Solution**:
-1. Check provider configuration in PortOS Settings
-2. Verify API key is valid and has credits
-3. For Claude: ensure `ANTHROPIC_API_KEY` is set
+1. Check the provider under **Models → Providers** and its saved credentials under
+   **Settings → Credentials**.
+2. Verify the API key is valid and has credits.
+3. Claude Code CLI login uses the CLI's own authenticated session; it does not
+   require `ANTHROPIC_API_KEY`. That variable enables metered API-key billing and
+   should be configured only when you intend to use it.
 
 ### Model Not Found
 
@@ -253,11 +256,10 @@ system prompt, tool schemas, and a growing transcript, and sizes its own
 compaction against the window it thinks it has — so it overruns the real one
 without warning. The task isn't too big; the window is too small.
 
-**Solution**: set **Local num_ctx** on the provider (AI Providers → the provider
-→ Context Window). PortOS reloads the Ollama daemon at that window before the
-next run, because a CLI/TUI harness talks to Ollama directly and nothing else
-can raise it. `OLLAMA_CONTEXT_LENGTH` in the environment works as a machine-wide
-fallback.
+**Solution**: set **Local num_ctx** under **Models → Providers → edit provider
+→ Generation → Context Window**. PortOS reloads Ollama at that window before the
+next run; CLI/TUI harnesses talk to Ollama directly. `OLLAMA_CONTEXT_LENGTH` in
+the environment works as a machine-wide fallback.
 
 The shipped `claude-ollama` / `claude-ollama-tui` records already pin 128K, so
 this usually bites the OpenCode Ollama harnesses or a record whose window was
@@ -817,7 +819,7 @@ boundary, so process-level mitigations alone do not prevent it.
   environment to disable.
 - Video Gen can sleep the display during local MLX renders while keeping the system awake.
   This is **off by default** (`settings.videoGen.displaySleep`); opt in via **Sleep display
-  during local MLX video renders** in **Create → Image Gen → Settings → Defaults**
+  during local MLX video renders** in **Create → Media Gen → Settings → Defaults**
   (`/media/image?settings=1`) or per-render on **Video Gen**.
 
 **What to do**: keep the display off the GPU — enable display sleep above, run

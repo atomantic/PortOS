@@ -81,7 +81,7 @@ function promptChoice() {
     console.log('');
     console.log('   1) Ollama    (CLI-first, simple `ollama pull`, great default)');
     console.log('   2) LM Studio (GUI app with a built-in model browser)');
-    console.log('   3) Skip      (configure later in Settings → Local LLMs)');
+    console.log('   3) Skip      (configure later in Models → Runtimes)');
     console.log('');
     const rl = createInterface({ input: process.stdin, output: process.stdout });
     rl.question('   Enter choice [1/2/3]: ', (answer) => {
@@ -116,14 +116,14 @@ if (existing) {
 
 // Non-interactive: don't block setup / CI. Leave LLM_BACKEND unset.
 if (!process.stdin.isTTY || !process.stdout.isTTY) {
-  console.log('🧠 No local LLM backend selected — set one later in Settings → Local LLMs (or `npm run setup:llm`).');
+  console.log('🧠 No local LLM backend selected — set one later in Models → Runtimes (or `npm run setup:llm`).');
   process.exit(0);
 }
 
 const choice = await promptChoice();
 
 if (choice === 'skip') {
-  console.log('   Skipped — pick a backend later in Settings → Local LLMs.');
+  console.log('   Skipped — pick a backend later in Models → Runtimes.');
   process.exit(0);
 }
 

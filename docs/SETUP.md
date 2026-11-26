@@ -94,7 +94,7 @@ Initial setup is complete once at least one enabled provider is actually runnabl
 
 - **Subscription CLI:** install and authenticate a supported CLI such as Claude Code, Codex, or Antigravity. This is the recommended cost model for sustained autonomous work.
 - **API provider:** add a key for the paid provider you intend to use. PortOS never enables a paid provider automatically.
-- **Local/private:** install Ollama or LM Studio and download a compatible model under **Models → LLMs**.
+- **Local/private:** install Ollama or LM Studio under **Models → Runtimes** and download a compatible model under **Models → Model Library**.
 
 The Setup page checks binaries, credentials, local runtimes, and models without making an LLM request. PortOS never performs cold-bootstrap model calls.
 
@@ -131,6 +131,6 @@ For HTTPS without Tailscale, `npm run setup:cert -- --self-signed` remains an ex
 On a **CPU-only ~16 GB** host (for example a Grok Bot box with no GPU), prefer a
 **free local Persistent Mind** on Ollama + `qwen2.5:7b-instruct`, and keep
 **Cursor Agent / OpenCode Zen** for coding. PortOS offers that setup on
-**AI Providers**, **Models → LLMs**, and **Persistent Mind → Settings**. See
+**Models → Providers**, **Models → Model Library**, and **Chief of Staff → Mind**. See
 [features/grok-box-local-mind.md](./features/grok-box-local-mind.md).
 
