@@ -8,12 +8,14 @@ const api = vi.hoisted(() => ({
   getGoogleAuthStatus: vi.fn(),
   clearGoogleAuth: vi.fn(),
   deleteCalendarAccount: vi.fn(),
+  updateSubcalendars: vi.fn(),
 }));
 const toast = vi.hoisted(() => ({ success: vi.fn(), error: vi.fn() }));
 vi.mock('../../services/apiCalendar.js', () => ({
   getGoogleAuthStatus: api.getGoogleAuthStatus,
   clearGoogleAuth: api.clearGoogleAuth,
   deleteCalendarAccount: api.deleteCalendarAccount,
+  updateSubcalendars: api.updateSubcalendars,
 }));
 vi.mock('../ui/Toast', () => ({ default: toast }));
 
@@ -162,5 +164,74 @@ describe('ConfigTab narrow-viewport layout', () => {
     expect(subcalName.parentElement.className).toContain('min-w-0');
     expect(subcalName.parentElement.parentElement.className).toContain('min-w-0');
     expect(subcalName.parentElement.parentElement.parentElement.className).toContain('flex-wrap');
+  });
+});
+
+describe('subcalendar color', () => {
+  const subcalendar = { calendarId: 'example', name: 'Work', enabled: true, color: '#112233' };
+
+  async function openColorPicker() {
+    function Harness() {
+      const [accounts, setAccounts] = useState([{ ...account, subcalendars: [subcalendar] }]);
+      return <ConfigTab accounts={accounts} setAccounts={setAccounts} />;
+    }
+
+    render(<MemoryRouter><Harness /></MemoryRouter>);
+    fireEvent.click(screen.getByRole('button', { name: 'Expand calendars for Example Calendar' }));
+    await screen.findByText('Google API authenticated');
+    return screen.getByLabelText('Change color for Work');
+  }
+
+  it('previews input events and saves the final color once on blur', async () => {
+    api.updateSubcalendars.mockResolvedValue({});
+    const picker = await openColorPicker();
+
+    for (const value of ['#ff1000', '#ff2000', '#ff3000']) {
+      await act(async () => fireEvent.input(picker, { target: { value } }));
+      expect(picker).toHaveValue(value);
+    }
+    expect(api.updateSubcalendars).not.toHaveBeenCalled();
+
+    await act(async () => fireEvent.blur(picker));
+    expect(api.updateSubcalendars).toHaveBeenCalledExactlyOnceWith(
+      account.id, { subcalendars: [{ ...subcalendar, color: '#ff3000' }] }, { silent: true },
+    );
+    await act(async () => fireEvent.blur(picker));
+    expect(api.updateSubcalendars).toHaveBeenCalledTimes(1);
+  });
+
+  it('skips an unchanged blur and restores the last saved color on failure', async () => {
+    api.updateSubcalendars.mockRejectedValue(new Error('Synthetic save failure'));
+    const picker = await openColorPicker();
+
+    await act(async () => fireEvent.blur(picker));
+    expect(api.updateSubcalendars).not.toHaveBeenCalled();
+
+    await act(async () => fireEvent.input(picker, { target: { value: '#ff1000' } }));
+    await act(async () => fireEvent.input(picker, { target: { value: '#ff2000' } }));
+    await act(async () => fireEvent.blur(picker));
+
+    expect(picker).toHaveValue(subcalendar.color);
+    expect(toast.error).toHaveBeenCalledExactlyOnceWith('Failed to update subcalendars');
+  });
+
+  it('still saves enable, dormant and activate actions immediately', async () => {
+    api.updateSubcalendars.mockResolvedValue({});
+    await openColorPicker();
+
+    for (const [index, name, fields] of [
+      [1, 'Disable', { enabled: false }],
+      [2, 'Enable', { enabled: true }],
+      [3, 'Dormant', { dormant: true }],
+      [4, 'Activate', { dormant: false }],
+    ]) {
+      const button = screen.getByRole('button', { name });
+      await act(async () => {
+        fireEvent.click(button);
+        expect(api.updateSubcalendars).toHaveBeenNthCalledWith(
+          index, account.id, { subcalendars: [{ ...subcalendar, ...fields }] }, { silent: true },
+        );
+      });
+    }
   });
 });

@@ -1,3 +1,4 @@
+// @vitest-environment node
 import { describe, it, expect } from 'vitest';
 import { AVATAR_STYLES, AVATAR_STYLE_IDS } from '../../../server/lib/avatarStyles.js';
 import { AVATAR_STYLE_LABELS, WEBGL_AVATAR_STYLE_IDS } from './avatarStyles';

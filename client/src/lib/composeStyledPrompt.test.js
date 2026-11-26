@@ -1,3 +1,4 @@
+// @vitest-environment node
 import { describe, it, expect } from 'vitest';
 import { composeStyledPrompt, composeCanonStyledPrompt } from './composeStyledPrompt.js';
 import { universeStylePreset } from './universeStylePreset.js';

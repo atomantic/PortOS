@@ -1,5 +1,5 @@
 import { MIN_RETENTION_COUNT, MAX_RETENTION_COUNT, DEFAULT_RETENTION_COUNT } from '../../../../server/lib/backupConfig.js';
-import { useState, useEffect, useId, useRef } from 'react';
+import { useState, useEffect, useId, useRef, useCallback } from 'react';
 import useSettingsForm from '../../hooks/useSettingsForm';
 import { AlertTriangle, Archive, CalendarClock, CheckCircle2, Database, Play, Plus, Save, ShieldOff, Trash2, X, ChevronDown, ChevronRight } from 'lucide-react';
 import toast from '../ui/Toast';
@@ -151,7 +151,9 @@ export function BackupTab() {
   // Same reasoning as the catalog above: the effective list is defaults + user
   // entries, so it is longer still. Collapsed by default, one click from visible.
 
-  useEffect(() => {
+  const loadInitialSettings = useCallback(() => {
+    setLoading(true);
+    setLoadFailed(false);
     Promise.allSettled([
       getSettings({ silent: true }),
       getBackupStatus({ silent: true }),
@@ -198,10 +200,12 @@ export function BackupTab() {
       })
       .catch((err) => {
         setLoadFailed(true);
-        toast.error(failureMessage('Could not load backup settings', err, 'Reload the page to retry.'));
+        toast.error(failureMessage('Could not load backup settings', err, 'Retry the request.'));
       })
       .finally(() => setLoading(false));
-  }, []);
+  }, [load]);
+
+  useEffect(() => { loadInitialSettings(); }, [loadInitialSettings]);
 
   const refreshSnapshots = async () => {
     const generation = ++snapshotGenerationRef.current;
@@ -302,8 +306,8 @@ export function BackupTab() {
   if (loadFailed) {
     return (
       <div className="text-sm text-port-error">
-        Failed to load backup settings. Reload the page to try again — the form stays hidden so an
-        unresolved response can&apos;t be saved over your schedule.
+        <p>Failed to load backup settings. The form stays hidden so an unresolved response can&apos;t be saved over your schedule.</p>
+        <button type="button" className="mt-3 px-3 py-2 border border-port-border rounded-lg hover:bg-port-border" onClick={loadInitialSettings}>Retry</button>
       </div>
     );
   }

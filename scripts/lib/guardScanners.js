@@ -259,10 +259,13 @@ export const shellsOutToGitEnumeration = (source) => {
 
 /** True when `source` asserts over the tracked tree instead of over its imports. */
 export const scansTrackedTree = (source) => {
-  const code = blankLiterals(stripLineComments(source));
-  return (GIT_CALL.test(code) && GIT_ENUMERATION.test(code)) || TRACKED_HELPER.test(code)
-    || SHARED_WALKER_CALL.test(code) || RECURSIVE_READDIR.test(code)
-    || hasRecursiveDirectoryWalk(source) || shellsOutToGitEnumeration(source);
+  // Normalization only removes text and blanks literals, so these markers must already be present.
+  if (/(?:git|trackedFiles|guardCorpus|(?:collect|read)(?:Server|Client)Source|readdirSync)/.test(source)) {
+    const code = blankLiterals(stripLineComments(source));
+    if ((GIT_CALL.test(code) && GIT_ENUMERATION.test(code)) || TRACKED_HELPER.test(code)
+      || SHARED_WALKER_CALL.test(code) || RECURSIVE_READDIR.test(code)) return true;
+  }
+  return hasRecursiveDirectoryWalk(source) || shellsOutToGitEnumeration(source);
 };
 
 /** Which runner owns `relPath` (a `git ls-files`-relative path): 'client' or 'server'. */

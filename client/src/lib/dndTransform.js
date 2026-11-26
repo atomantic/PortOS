@@ -1,21 +1,6 @@
-// `dndTransformToCss(transform)` — render a dnd-kit `useSortable` transform (`{ x, y, scaleX, scaleY
-// }` or `null`) as a CSS `transform` string.
-//
-// Owned replacement for `@dnd-kit/utilities`' `CSS.Transform.toString()`; use it in every
-// `useSortable` style object instead of re-adding that dependency.
-//
-// Owned replacement for `@dnd-kit/utilities`' `CSS.Transform.toString()`.
-// dnd-kit's `useSortable` hands back a `{ x, y, scaleX, scaleY }` transform (or
-// `null` when the node isn't being dragged); every PortOS call site feeds that
-// straight into a `style.transform`. That one call shape was the only reason the
-// package was a dependency, so we own the ~10 lines instead.
-//
-// Behavior matches @dnd-kit/utilities 3.2.2 exactly: `undefined` for a nullish
-// transform (so React omits the property), translations rounded to whole pixels,
-// scales emitted verbatim.
-
 /**
- * Render a dnd-kit transform as a CSS `transform` value.
+ * Serialize a drag transform to rounded pixel translations and unrounded scales.
+ *
  * @param {{x: number, y: number, scaleX: number, scaleY: number}|null|undefined} transform
  * @returns {string|undefined} e.g. `translate3d(4px, 0px, 0) scaleX(1) scaleY(1)`
  */

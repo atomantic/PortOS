@@ -27,7 +27,7 @@ import * as nodePath from 'node:path';
 import { computeTestMemoKeys, createDiskFs, relatedTests } from './lib/testMemo.js';
 import { VITEST_PROJECT_NAMES, listRepositoryFiles, vitestDependenciesPath, vitestShardSlice } from './lib/testMemoRunner.js';
 import { toWorkspacePath } from './lib/workspaceTests.js';
-import { BROWSER_SUITES, browserShardSlice } from './lib/browserSuites.js';
+import { BROWSER_SUITES } from './lib/browserSuites.js';
 import { staticImportClosure } from '../server/lib/staticImportGraph.js';
 import { destroyGitSandbox, makeGitSandbox } from '../server/lib/gitTestRepo.js';
 import { readTestProcesses } from './lib/testOwnedProcesses.js';
@@ -486,6 +486,7 @@ it('partitions complete browser profiles before per-shard memo reuse and preserv
     const firstCount = selections.full[0].length;
     const owner = file => selections.full.findIndex(files => files.includes(file));
     expect(owner('services/musicVideo/documentRender.browser.test.js')).not.toBe(owner('services/htmlComposition/index.test.js'));
+    expect(owner('services/musicVideo/documentRenderAudioTimeline.browser.test.js')).not.toBe(owner('services/musicVideo/documentRender.browser.test.js'));
     // The serial capture and parallel parity suite share an owner so the other
     // runner can absorb the rich authoring and catalog capture workload.
     const animaticOwner = owner('services/musicVideo/animaticCapture.browser.test.js');
@@ -892,15 +893,20 @@ describe('ci.yml shard wiring', () => {
     expect(jobs.gate).toContain('CI_GATE_RESULT_WINDOWS_SERVER:');
   });
 
-  it('runs once-only steps on the first shard alone', () => {
-    // Smoke boot and the production build are not
-    // sharded work; on every shard they would triple the cost for no coverage.
-    for (const step of ['Smoke-boot server', 'Build client']) {
-      const start = WORKFLOW.indexOf(`- name: ${step}\n`);
-      expect(start, step).toBeGreaterThan(0);
-      const condition = WORKFLOW.slice(start).match(/\n {8}if: (.*)\n/)[1];
-      expect(condition, step).toMatch(/&& matrix\.shard == 1$/);
-    }
+  it('runs smoke boot on the first server shard alone', () => {
+    expect(CI_JOBS.server).toMatch(/- name: Smoke-boot server\n {8}if: .*&& matrix\.shard == 1\n/);
+  });
+
+  it('builds the client once in parallel with the test shards and requires its result', () => {
+    const build = CI_JOBS['client-build'];
+    expect(CI_JOBS.client).toContain("if: fromJSON(needs.impact.outputs.plan).client_mode != 'skip'\n");
+    for (const [id, body] of runners) expect(body, id).not.toContain('npm run build --prefix client');
+    expect(build).toContain('needs: impact\n');
+    expect(build).toContain('if: fromJSON(needs.impact.outputs.plan).build\n');
+    expect(build).not.toMatch(/strategy:|matrix\.shard/);
+    expect(build).toMatch(/uses: \.\/\.github\/actions\/setup-client\n[\s\S]*\n {6}- run: npm run build --prefix client\n/);
+    expect(CI_JOBS.gate).toMatch(/needs: \[[^\]]*\bclient-build\b/);
+    expect(CI_JOBS.gate).toContain('CI_GATE_RESULT_CLIENT_BUILD: ${{ needs.client-build.result }}');
   });
 
   it('keeps client lint out of the sharded test jobs entirely', () => {
@@ -1191,6 +1197,54 @@ describe('structured failure diagnostics', () => {
       }
     } finally { rmSync(fixture, { recursive: true, force: true }); }
   }, 65_000);
+
+  it('reports a nested suite hook timeout when Vitest JSON has no failure message', () => {
+    const fixture = mkdtempSync(join(tmpdir(), 'portos-suite-hook-'));
+    try {
+      writeFileSync(join(fixture, 'vitest.config.mjs'), FIXTURE_CONFIG);
+      writeFileSync(join(fixture, 'fixture.test.js'), `
+        describe('outer suite', () => {
+          describe('setup suite', () => {
+            beforeAll(() => new Promise(() => {}), 20);
+            it('waits for setup', () => {});
+          });
+        });`);
+      const durable = join(fixture, 'durable');
+      const args = ['--config', join(fixture, 'vitest.config.mjs'), '--root', fixture, './fixture.test.js'];
+      const env = { ...process.env, NODE_ENV: 'test', NODE_DISABLE_COMPILE_CACHE: '1',
+        PORTOS_CI_DIAGNOSTICS_DIR: durable };
+      delete env.PORTOS_TEST_TEMP_ROOT;
+      const result = spawnSync(process.execPath, ['--input-type=module', '-e', `
+        import { runNpm } from ${JSON.stringify(new URL('./run-ci-tests.js', import.meta.url).href)};
+        process.exitCode = (await runNpm('server', 'test:ci', ${JSON.stringify(args)})).status;
+      `], { encoding: 'utf8', timeout: 30_000, env });
+
+      expect(result.error).toBeUndefined();
+      expect(result.status).toBe(1);
+      const attempt = join(durable, readdirSync(durable)[0]);
+      const reportPath = join(attempt, 'failures.json');
+      const runPath = join(attempt, 'run.json');
+      expect(JSON.parse(readFileSync(reportPath, 'utf8')).testResults).toMatchObject([
+        { status: 'failed', message: '', assertionResults: [{ status: 'skipped' }] },
+      ]);
+      expect(JSON.parse(readFileSync(runPath, 'utf8'))).toMatchObject({
+        errorCount: 0,
+        errors: [],
+        suiteErrors: [{
+          file: '<outside-repository>/fixture.test.js',
+          suite: 'outer suite > setup suite',
+          summary: expect.stringMatching(/HookTimeoutError: Hook timed out in 20ms/),
+        }],
+      });
+      const diagnostic = structuredFailureDiagnostics(reportPath, runPath);
+      expect(diagnostic).toContain('fixture.test.js > outer suite > setup suite');
+      expect(diagnostic).toContain('HookTimeoutError: Hook timed out in 20ms');
+      expect(diagnostic).not.toContain('Inconclusive');
+      expect(diagnostic).not.toContain(fixture);
+    } finally {
+      rmSync(fixture, { recursive: true, force: true });
+    }
+  }, 35_000);
 
   it('reports a run-level rejection and worker cause when every test passed (#11244)', () => {
     const fixture = mkdtempSync(join(tmpdir(), 'portos-diagnostics-'));
@@ -1557,35 +1611,6 @@ describe('shouldWarmTestChrome (#17750)', () => {
   });
   it('never warms outside CI', () => {
     expect(shouldWarmTestChrome({ scope: 'client', run: [browser], env: {} })).toBe(false);
-  });
-});
-
-describe('browser shard ownership', () => {
-  it.each([1, 2, 3, 4])('covers every registered suite exactly once across %i shards', (count) => {
-    for (const profile of ['full', 'smoke']) {
-      const slices = Array.from({ length: count }, (_, i) => browserShardSlice(BROWSER_SUITES, { index: i + 1, count }, profile));
-      expect(slices.flat().toSorted()).toEqual([...BROWSER_SUITES].toSorted());
-    }
-  });
-
-  it('gives document render its own runner in both four-shard profiles', () => {
-    for (const profile of ['full', 'smoke']) {
-      const shard = index => browserShardSlice(BROWSER_SUITES, { index, count: 4 }, profile);
-      expect(shard(1)).toEqual(['server/services/musicVideo/documentRender.browser.test.js']);
-      expect(shard(3)).toContain('server/services/musicVideo/documentTemplateParity.browser.test.js');
-      expect(shard(4)).toContain('server/services/musicVideo/documentRenderGeneration.browser.test.js');
-    }
-  });
-
-  it('keeps the four heaviest serial capture suites on separate four-shard runners', () => {
-    const heavy = [
-      'server/services/musicVideo/documentRender.browser.test.js',
-      'server/services/htmlComposition/index.test.js',
-      'server/services/musicVideo/animaticCapture.browser.test.js',
-      'server/lib/filmLookGpu.browser.test.js',
-    ];
-    const shardOf = (file) => [1, 2, 3, 4].find(index => browserShardSlice(BROWSER_SUITES, { index, count: 4 }, 'smoke').includes(file));
-    expect(heavy.map(shardOf)).toEqual([1, 2, 3, 4]);
   });
 });
 

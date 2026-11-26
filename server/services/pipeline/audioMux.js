@@ -34,13 +34,14 @@
  * and works on every ffmpeg — so the fallback is never broken on the same host.
  */
 
-import { join } from 'path';
+import { basename, join } from 'path';
 import { unlink } from 'fs/promises';
 import { existsSync } from 'fs';
 import { randomUUID } from 'crypto';
 import { PATHS } from '../../lib/fileUtils.js';
 import { findFfmpeg, runFfmpegProcess, hasAudioStream, safeUnder, installEncodedVideo } from '../../lib/ffmpeg.js';
 import { withBackupAssetPublication } from '../../lib/backupSnapshotBoundary.js';
+import { FINISHED_OUTPUT_ADMISSION_MS } from '../../lib/backupPublicationWait.js';
 import { statMusicTrack } from './musicLibrary.js';
 
 // Mux callers can name an already-published history entry. Encoding stays outside
@@ -156,7 +157,10 @@ export async function muxMusicBed(inputVideoPath, { musicPath, musicGain = DEFAU
   // silent original intact rather than a half-written video. A failed install
   // rolls back and degrades to "bed skipped" rather than throwing out of the
   // caller's stitch (#7237); see the failure-handling note at the top.
-  const installed = await withBackupAssetPublication(() => installEncodedVideo(tmpOut, inputVideoPath, 'music bed'));
+  const installed = await withBackupAssetPublication(() => installEncodedVideo(tmpOut, inputVideoPath, 'music bed'), {
+    timeoutMs: FINISHED_OUTPUT_ADMISSION_MS,
+    onWait: () => console.log(`⏸️ Music bed for ${basename(inputVideoPath)} waiting for the backup to finish before installing`),
+  });
   if (!installed.ok) return installed;
   return { ok: true };
 }
@@ -322,7 +326,10 @@ export async function muxVoLines(inputVideoPath, { voLines = [], musicPath = nul
     if (!signal?.aborted) return installEncodedVideo(tmpOut, inputVideoPath, 'VO mux');
     await unlink(tmpOut);
     return { ok: false, reason: 'cancelled' };
-  }));
+  }), {
+    timeoutMs: FINISHED_OUTPUT_ADMISSION_MS,
+    onWait: () => console.log(`⏸️ VO mux for ${basename(inputVideoPath)} waiting for the backup to finish before installing`),
+  });
   if (!installed.ok) return installed;
   return { ok: true, lineCount: placed.length, ducked: !!usableMusic, clipAudio };
 }
@@ -519,7 +526,10 @@ export async function muxCueBed(inputVideoPath, { cues = [], voLines = [], music
     await unlink(tmpOut).catch(() => {});
     return result;
   }
-  const installed = await withBackupAssetPublication(() => installEncodedVideo(tmpOut, inputVideoPath, 'cue bed'));
+  const installed = await withBackupAssetPublication(() => installEncodedVideo(tmpOut, inputVideoPath, 'cue bed'), {
+    timeoutMs: FINISHED_OUTPUT_ADMISSION_MS,
+    onWait: () => console.log(`⏸️ Cue bed for ${basename(inputVideoPath)} waiting for the backup to finish before installing`),
+  });
   if (!installed.ok) return installed;
   return { ok: true, cueCount: placedCues.length, ducked: placedVo.length > 0, clipAudio };
 }
@@ -553,7 +563,10 @@ export async function muxStripAudio(inputVideoPath, { signal } = {}) {
     await unlink(tmpOut).catch(() => {});
     return result;
   }
-  const installed = await withBackupAssetPublication(() => installEncodedVideo(tmpOut, inputVideoPath, 'silent strip'));
+  const installed = await withBackupAssetPublication(() => installEncodedVideo(tmpOut, inputVideoPath, 'silent strip'), {
+    timeoutMs: FINISHED_OUTPUT_ADMISSION_MS,
+    onWait: () => console.log(`⏸️ Silent strip for ${basename(inputVideoPath)} waiting for the backup to finish before installing`),
+  });
   if (!installed.ok) return installed;
   return { ok: true };
 }

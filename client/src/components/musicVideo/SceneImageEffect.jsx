@@ -4,7 +4,7 @@ import ScenePhotoSequence from './ScenePhotoSequence.jsx';
 import {
   DEFAULT_IMAGE_EFFECT_SEC, IMAGE_EFFECT_CHANGE_SECS, IMAGE_EFFECT_DEVELOP_SECS, MUSIC_VIDEO_IMAGE_EFFECTS, MUSIC_VIDEO_IMAGE_EFFECT_LABELS,
   isEndFrameImageEffect,
-} from '../../lib/musicVideoImageEffects.js';
+} from '../../../../server/lib/musicVideo/musicVideoImageEffects.js';
 
 // The develop length picked last on this device, for the next shot that takes an effect.
 const LAST_SEC_KEY = 'portos-mv-image-effect-sec';

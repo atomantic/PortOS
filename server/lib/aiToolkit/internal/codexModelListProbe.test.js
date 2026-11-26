@@ -125,12 +125,20 @@ describe('probeCodexModelsViaAppServer', () => {
     await expect(promise).rejects.toMatchObject({ probeFailure: 'launch' });
   });
 
-  it('classifies a probe that exceeds its deadline', async () => {
+  it.each([
+    [[], 'initialize'],
+    [[[1, {}]], 'account/read'],
+    [[[1, {}], [3, { account: { type: 'chatgpt' } }]], 'configRequirements/read'],
+    [[[1, {}], [3, {}], [4, { requirements: null }]], 'config/read'],
+    [[[1, {}], [3, {}], [4, { requirements: null }], [5, { config: {} }], [10, { data: [], nextCursor: 'private-cursor' }]], 'model/list'],
+  ])('classifies a stalled capability probe at its latest RPC (%j)', async (replies, probeStage) => {
     vi.useFakeTimers();
     try {
-      spawn.mockReturnValue(fakeChild());
-      const promise = probeCodexModelsViaAppServer('codex', ['app-server'], null, { timeoutMs: 50 });
-      const rejected = expect(promise).rejects.toMatchObject({ probeFailure: 'timeout' });
+      const child = fakeChild();
+      spawn.mockReturnValue(child);
+      const promise = probeCodexModelsViaAppServer('/private/codex', ['app-server'], null, { timeoutMs: 50, includeDetails: true });
+      for (const [id, result] of replies) child.stdout.emit('data', JSON.stringify({ id, result }) + '\n');
+      const rejected = expect(promise).rejects.toMatchObject({ probeFailure: 'timeout', probeStage, message: `Codex app-server timed out waiting for ${probeStage}` });
       await vi.advanceTimersByTimeAsync(50);
       await rejected;
     } finally {

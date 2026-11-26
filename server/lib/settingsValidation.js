@@ -5,13 +5,14 @@
  */
 
 import { z } from 'zod';
+import { deepMerge, isPlainObject, POLLUTING_KEYS } from './objects.js';
 import { isSplashContextWindow } from './splashRuntime.js';
 import {
   AUTO_UPDATE_CHANNELS, AUTO_UPDATE_MIN_INTERVAL_HOURS_MIN, AUTO_UPDATE_MIN_INTERVAL_HOURS_MAX,
   cloudModelIdString, GOOGLE_CREDENTIAL_MAX_LENGTH
 } from './sharedSchemas.js';
 import { isValidCronExpression } from './cronValidation.js';
-import { providerRefSchema, emptyToUndefined, emptyToNull } from './zodCompat.js';
+import { providerRefSchema, emptyToUndefined, emptyToNull, partialWithoutDefaults } from './zodCompat.js';
 import { EFFORT_LEVELS } from './provider/providerModels.js';
 import { RENDER_TARGET_BACKEND_AUTO, RENDER_TARGETS } from './renderTargets.js';
 import { VIDEO_GEN_MODES, QUEUEABLE_IMAGE_MODES, IMAGE_GEN_MODES } from './generationModes.js';
@@ -23,7 +24,6 @@ import { HIGGSFIELD_IMAGE_MODEL_IDS } from './higgsfieldImageModels.js';
 import { GOOGLE_IMAGE_MODEL_IDS } from './googleImageModels.js';
 import { MAX_IMAGE_EDGE } from './imageLimits.js';
 import { pipelineEditorialChecksSettingsSchema } from './pipelineValidation.js';
-import { POLLUTING_KEYS } from './objects.js';
 
 // Automatic PortOS self-update (Update tab). Stored under the top-level
 // `autoUpdate` key and OFF by default — an install must never start restarting
@@ -162,8 +162,8 @@ const agyImageModelSchema = z.preprocess(
 // version rollback (or a newer client against an older server) a target/field
 // this build doesn't know would otherwise 400 every Image Gen save until the
 // user hand-edits settings.json — the same forward-compat call the settings
-// route makes for catalogUserTypes. The route persists the raw body, so a
-// newer build's pins survive the round-trip intact rather than being dropped.
+// route makes for catalogUserTypes. Settings saves overlay parsed fields on
+// the request so a newer build's pins survive the round-trip.
 // Known fields keep full enum/charset enforcement (that's what stops a bad
 // model id reaching a CLI argv); the known-key alphabet is RENDER_TARGETS from
 // lib/renderTargets.js, which the client re-exports rather than mirrors.
@@ -434,7 +434,7 @@ export const settingsSlicePartialSchemas = Object.freeze({
   'videoGen.reactor': z.object({ parallelLimit: z.number().int().min(1).max(Number.MAX_SAFE_INTEGER).optional() }).strict(),
   pipeline: z.object({ imageGen: renderFormSettingsSchema.nullable().optional() }).strict(),
   writersRoom: z.object({ imageGen: renderFormSettingsSchema.nullable().optional() }).strict(),
-  seriesAutopilot: seriesAutopilotSettingsSchema.partial(),
+  seriesAutopilot: partialWithoutDefaults(seriesAutopilotSettingsSchema),
   pipelineEditorialChecks: pipelineEditorialChecksSettingsSchema.partial(),
   autoUpdate: autoUpdateSettingsSchema,
   // The Chiptune panel and the Music Designer each own one sub-slice, so a save
@@ -442,6 +442,8 @@ export const settingsSlicePartialSchemas = Object.freeze({
   'music.chiptune': musicSettingsSchema.shape.chiptune.unwrap().strict(),
   'music.designer': musicSettingsSchema.shape.designer.unwrap().strict(),
 });
+
+export const settingsPutSchema = z.custom(isPlainObject, 'Expected a settings object').default({});
 
 // Check raw JSON before Zod can strip a dangerous key. Arrays can contain
 // nested objects too; none may smuggle prototype-related property names.
@@ -456,11 +458,13 @@ export const settingsSlicePatchSchema = z.preprocess((value, ctx) => {
 }, z.object({
   slicePath: z.enum(Object.keys(settingsSlicePartialSchemas)),
   partial: z.record(z.unknown()),
-}).strict().superRefine(({ slicePath, partial }, ctx) => {
+}).strict().transform(({ slicePath, partial }, ctx) => {
   const result = settingsSlicePartialSchemas[slicePath].safeParse(partial);
   if (!result.success) {
     for (const issue of result.error.issues) {
       ctx.addIssue({ ...issue, path: ['partial', ...issue.path] });
     }
+    return z.NEVER;
   }
+  return { slicePath, partial: deepMerge(partial, result.data) };
 }));

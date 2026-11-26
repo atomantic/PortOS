@@ -17,6 +17,8 @@ export default function GoalPlanSection({
   return (
     <div>
       <button
+        type="button"
+        aria-expanded={planOpen}
         onClick={() => setPlanOpen(!planOpen)}
         className="flex items-center gap-1 text-xs font-medium text-gray-400 hover:text-white w-full"
       >
@@ -77,7 +79,7 @@ export default function GoalPlanSection({
                           setProposedPhases(next.map((p, i) => ({ ...p, order: i })));
                         }}
                         disabled={idx === 0}
-                        aria-label="Move up"
+                        aria-label={`Move phase ${idx + 1} up`}
                         className="pointer-coarse:min-h-11 pointer-coarse:min-w-11 text-gray-600 hover:text-white disabled:opacity-30"
                       >
                         <ArrowUp className="w-2.5 h-2.5" />
@@ -90,7 +92,7 @@ export default function GoalPlanSection({
                           setProposedPhases(next.map((p, i) => ({ ...p, order: i })));
                         }}
                         disabled={idx === proposedPhases.length - 1}
-                        aria-label="Move down"
+                        aria-label={`Move phase ${idx + 1} down`}
                         className="pointer-coarse:min-h-11 pointer-coarse:min-w-11 text-gray-600 hover:text-white disabled:opacity-30"
                       >
                         <ArrowDown className="w-2.5 h-2.5" />
@@ -109,7 +111,7 @@ export default function GoalPlanSection({
                     />
                     <button
                       onClick={() => setProposedPhases(proposedPhases.filter((_, i) => i !== idx).map((p, i) => ({ ...p, order: i })))}
-                      aria-label="Delete"
+                      aria-label={`Delete phase ${idx + 1}`}
                       className="pointer-coarse:min-h-11 pointer-coarse:min-w-11 text-gray-600 hover:text-red-400"
                     >
                       <Trash2 className="w-3 h-3" />
@@ -165,7 +167,7 @@ export default function GoalPlanSection({
                           setProposedDecomposition(next.map((m, i) => ({ ...m, order: i })));
                         }}
                         disabled={idx === 0}
-                        aria-label="Move up"
+                        aria-label={`Move milestone ${idx + 1} up`}
                         className="pointer-coarse:min-h-11 pointer-coarse:min-w-11 text-gray-600 hover:text-white disabled:opacity-30"
                       >
                         <ArrowUp className="w-2.5 h-2.5" />
@@ -178,7 +180,7 @@ export default function GoalPlanSection({
                           setProposedDecomposition(next.map((m, i) => ({ ...m, order: i })));
                         }}
                         disabled={idx === proposedDecomposition.length - 1}
-                        aria-label="Move down"
+                        aria-label={`Move milestone ${idx + 1} down`}
                         className="pointer-coarse:min-h-11 pointer-coarse:min-w-11 text-gray-600 hover:text-white disabled:opacity-30"
                       >
                         <ArrowDown className="w-2.5 h-2.5" />
@@ -211,7 +213,7 @@ export default function GoalPlanSection({
                     </div>
                     <button
                       onClick={() => setProposedDecomposition(proposedDecomposition.filter((_, i) => i !== idx).map((m, i) => ({ ...m, order: i })))}
-                      aria-label="Delete"
+                      aria-label={`Delete milestone ${idx + 1}`}
                       className="pointer-coarse:min-h-11 pointer-coarse:min-w-11 text-gray-600 hover:text-red-400 pt-0.5"
                     >
                       <Trash2 className="w-3 h-3" />
@@ -234,7 +236,7 @@ export default function GoalPlanSection({
                               next[idx] = { ...next[idx], tasks: ms.tasks.filter((_, i) => i !== tIdx) };
                               setProposedDecomposition(next);
                             }}
-                            aria-label="Delete"
+                            aria-label={`Delete task ${tIdx + 1} in milestone ${idx + 1}: ${task.title}`}
                             className="pointer-coarse:min-h-11 pointer-coarse:min-w-11 text-gray-600 hover:text-red-400 shrink-0"
                           >
                             <Trash2 className="w-2.5 h-2.5" />

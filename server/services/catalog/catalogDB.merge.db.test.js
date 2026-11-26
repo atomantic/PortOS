@@ -96,6 +96,23 @@ describe.skipIf(!ready)('recoverable local catalog merge', () => {
     await expect(recoverIngredientMerge(result.id)).rejects.toMatchObject({ code: 'CATALOG_MERGE_STALE' });
   });
 
+  it('skips a newer peer tombstone for an active local merge survivor', async () => {
+    const input = await pair();
+    await apply(input);
+    const survivor = await getIngredient(input.survivorId);
+    const updatedAt = new Date(Date.parse(survivor.updatedAt) + 10000).toISOString();
+    const tombstone = { ...survivor, updatedAt, deleted: true, deletedAt: updatedAt };
+
+    expect(await upsertIngredientFromPeer(tombstone)).toEqual({ applied: false, isInsert: false });
+    const stats = await applyRemoteChanges({
+      portosMeta: { schemaVersions: PORTOS_SCHEMA_VERSIONS },
+      ingredients: [tombstone],
+    });
+    expect(stats.ingredients).toMatchObject({ skipped: 1, failed: 0 });
+    expect(stats.errors).toEqual([]);
+    expect(await getIngredient(input.survivorId)).toEqual(survivor);
+  });
+
   it.each([true, false])('applies peer associations to the survivor (tombstone fields present: %s)', async hasTombstones => {
     const input = await pair();
     const { sourceId, survivorId } = input;

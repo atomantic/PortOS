@@ -313,14 +313,24 @@ async function syncBrainFromPeer(peer, cursor) {
 async function syncMemoryFromPeer(peer, cursor) {
   let memorySeq = cursor.memorySeq ?? '0';
   let totalApplied = 0;
+  let includesDeletions = cursor.memoryIncludesDeletions === true;
 
   let hasMore = true;
   while (hasMore) {
-    const data = await fetchPeer(peer, `/api/memory/sync?since=${memorySeq}&limit=100&schemaVersion=${PORTOS_SCHEMA_VERSIONS.memoryHistory}`);
-    if (!data?.memories?.length) break;
+    const data = await fetchPeer(peer, `/api/memory/sync?since=${memorySeq}&limit=100&schemaVersion=${PORTOS_SCHEMA_VERSIONS.memoryHistory}&tombstoneVersion=1`);
+    if (!Array.isArray(data?.memories)) break;
+    if (Array.isArray(data.deletedIds) && !includesDeletions) {
+      // An older reader may have passed purges while consuming a live-only feed.
+      if (memorySeq !== '0') {
+        memorySeq = '0';
+        continue;
+      }
+      includesDeletions = true;
+    }
+    if (!data.memories.length && (data.deletedIds === undefined || (Array.isArray(data.deletedIds) && !data.deletedIds.length))) break;
 
-    const result = await memorySync.applyRemoteChanges(data.memories, data.schemaVersion ?? 0);
-    totalApplied += result.inserted + result.updated;
+    const result = await memorySync.applyRemoteChanges(data.memories, data.schemaVersion ?? 0, data.deletedIds);
+    totalApplied += result.inserted + result.updated + (result.deleted ?? 0);
     // Same non-advancing-cursor guard as the brain drain above. Peers older
     // than v1.26.0 send the cursor as a number; newer ones send a string.
     const next = Number.isSafeInteger(data.maxSequence) && data.maxSequence >= 0 ? String(data.maxSequence) : data.maxSequence;
@@ -332,7 +342,7 @@ async function syncMemoryFromPeer(peer, cursor) {
     hasMore = data.hasMore === true;
   }
 
-  return { memorySeq, totalApplied };
+  return { memorySeq, totalApplied, includesDeletions };
 }
 
 // Build the `?since[scraps]=A&since[ingredients]=B&...` query string the
@@ -564,10 +574,10 @@ async function syncDataCategoryFromPeer(peer, peerId, category, cachedChecksums,
     const { hasUnattributedMedia } = await import('./mediaOriginReconcile.js');
     for (const kind of kinds) {
       // The gallery-wide image library is asked for only while some media here has no settled origin.
-      const unattributed = await hasUnattributedMedia(kind, { peerId: peer.instanceId }).catch(() => false);
+      const unattributed = kind === 'image' && await hasUnattributedMedia(kind, { peerId: peer.instanceId }).catch(() => false);
       const inventory = await fetchHostedInventory(peer, category, kind, { probeOlderPeers: hostMode }).catch(() => null);
       if (inventory) await dataSync.applyRemote(category, inventory, { peerId, portosMeta: inventory.portosMeta, inventory: true, inventoryKind: kind });
-      if (kind === 'image' && unattributed) {
+      if (unattributed) {
         const library = await fetchImageLibraryInventory(peer);
         if (library) await dataSync.applyRemote(category, library, { peerId, portosMeta: library.portosMeta, inventory: true, inventoryKind: kind, inventoryScope: 'library' });
       }
@@ -981,6 +991,7 @@ export async function syncWithPeer(peer, { logStart = true, onCategoryFailure, p
       // positions describe rows the restore discarded, so keep the rewind.
       const postgresCursorsCurrent = cursorGeneration === getPostgresCursorGeneration();
       if (postgresCursorsCurrent && memoryResult.memorySeq !== (cursor.memorySeq ?? '0')) cursors[peerId].memorySeq = memoryResult.memorySeq;
+      if (postgresCursorsCurrent && memoryResult.includesDeletions) cursors[peerId].memoryIncludesDeletions = true;
       // Persist the per-kind catalog cursor only when the drain wasn't blocked
       // by a schema gap — a blocked cycle leaves the prior cursor so we re-try
       // the same window after the sender upgrades (mirrors the snapshot path).

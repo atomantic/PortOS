@@ -52,6 +52,22 @@ afterEach(() => {
   vi.useRealTimers();
 });
 
+it('announces the briefing heading hierarchy and section disclosure state', async () => {
+  const user = userEvent.setup();
+  api.getCosLatestBriefing.mockResolvedValue({
+    date: '2026-09-11',
+    content: '# Today\n## Focus\n### Priority\nAn existing briefing',
+  });
+  renderTab();
+
+  expect(await screen.findByRole('heading', { name: 'Today', level: 4 })).toBeInTheDocument();
+  expect(screen.getByRole('heading', { name: 'Daily Briefing', level: 3 })).toBeInTheDocument();
+  expect(screen.getByRole('heading', { name: 'Priority', level: 5 })).toBeInTheDocument();
+  await user.click(screen.getByRole('button', { name: 'Focus', expanded: true }));
+  expect(screen.getByRole('button', { name: 'Focus', expanded: false })).toBeInTheDocument();
+  expect(screen.queryByRole('heading', { name: 'Priority' })).not.toBeInTheDocument();
+});
+
 it('keeps the shown briefing and says a refresh failed', async () => {
   const user = userEvent.setup();
   api.getCosLatestBriefing

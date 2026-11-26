@@ -47,7 +47,7 @@ vi.mock('../links/BucketBoard', () => ({
 // the drag-end routing and the live announcement text be exercised directly,
 // since jsdom cannot supply real pointer geometry to drive an actual drag.
 const dndState = vi.hoisted(() => ({ context: null }));
-vi.mock('@dnd-kit/core', () => ({
+vi.mock('../../../lib/dnd/index.js', () => ({
   DndContext: ({ children, ...props }) => {
     dndState.context = props;
     return <>{children}</>;
@@ -77,7 +77,7 @@ import {
   reorderBrainLinks,
 } from '../../../services/apiBrain.js';
 import toast from '../../ui/Toast';
-import { KeyboardSensor } from '@dnd-kit/core';
+import { KeyboardSensor } from '../../../lib/dnd/index.js';
 import { BUCKET_KIND, LINK_KIND, LINK_SLOT_KIND, linksKeyboardCoordinates } from '../links/bucketDnd';
 import LinksTab from './LinksTab';
 

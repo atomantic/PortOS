@@ -337,6 +337,20 @@ describe('getSnapshot / deleteSnapshot', () => {
     await expect(deleteSnapshot('aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee')).resolves.toBe(false);
   });
 
+  it('logs the snapshot id prefix for creation and deletion', async () => {
+    const log = vi.spyOn(console, 'log').mockImplementation(() => {});
+    try {
+      const snapshot = await createSnapshot('Private example label');
+      await deleteSnapshot(snapshot.id);
+      expect(log.mock.calls).toEqual([
+        [`📸 Time capsule created: ${snapshot.id.slice(0, 8)}`],
+        [`🗑️ Time capsule deleted: ${snapshot.id.slice(0, 8)}`],
+      ]);
+    } finally {
+      log.mockRestore();
+    }
+  });
+
   it('removes a snapshot from the index and disk', async () => {
     writeTwinJson('identity.json', { name: 'Example Twin' });
     const snapshot = await createSnapshot('keep-me');

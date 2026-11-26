@@ -1,8 +1,8 @@
 # vLLM Qwen3.8-27B (DFlash 2) on an RTX 3090
 
 [syv-ai/qwen38-27b-rtx3090](https://github.com/syv-ai/qwen38-27b-rtx3090) is a
-frozen, reproducible packaging of patched vLLM 0.27.1 + a requantized
-Qwen3.8-27B + a Docker compose file, targeted at **one specific card**: a 24 GB
+packaging of patched vLLM 0.27.1 + a requantized Qwen3.8-27B + a Docker compose
+file. The revision PortOS provisions targets **one specific card**: a 24 GB
 RTX 3090. It serves an OpenAI-compatible API with DFlash 2 speculative drafting
 and prefix caching turned on.
 
@@ -71,10 +71,8 @@ would.
 
 ### 1. Prepare the stack (on the 3090 host)
 
-The host itself is yours: Docker, the NVIDIA Container Toolkit (driver ≥ 580 /
-CUDA 13), and — on Windows — WSL2. PortOS will not install any of those; they are
-operator decisions with driver requirements it cannot judge, and the readiness
-checklist's **Install** button keeps saying so.
+Install Docker with Compose 2.24.4 or newer and the NVIDIA Container Toolkit
+(driver ≥ 580 / CUDA 13) on the 3090 host. Windows hosts also need WSL2.
 
 The *project* on top of them can go either way.
 
@@ -83,9 +81,17 @@ The *project* on top of them can go either way.
 On a host that already has Docker and the NVIDIA runtime, the provider
 readiness checklist offers **"Clone, build & prepare vLLM (Qwen3.8-27B) (~30 GB),
 then start"**. The label names the payload because the click IS the consent — this
-is the one button in PortOS that spends tens of gigabytes. It clones this repo,
-writes the `.env` below (including the settings in §1a, which is the point), builds
-the image, runs `prepare`, and brings the container up, streaming every line.
+is the one button in PortOS that spends tens of gigabytes. For a new install,
+PortOS fetches the [pinned upstream revision](https://github.com/syv-ai/HyperQwen/commit/18db5cb3b56e63e30f64eee7901f0e97e632ab32)
+and verifies the detached checkout before writing `.env` or running Compose.
+Before publishing the checkout, PortOS verifies its artifact manifest and applies
+its build and prepare patch. A Compose override binds the API to loopback and
+uses a local image tagged with the manifest's SHA-256 digest. PortOS then writes the settings below, builds
+the image, runs `prepare`, and starts the container. It reuses existing project
+directories with their packaging and operator overrides intact. If the selected
+fast checkpoint is incomplete, explicit Prepare restores missing shards from the
+prepared base and the pinned Hub snapshot. It verifies the selected weights before
+reporting success.
 
 It is idempotent: re-running skips whatever already landed, and `prepare`'s
 download resumes, so a cancelled run costs minutes rather than the 20 GB. An
@@ -97,7 +103,7 @@ step 2 below is just "enable it".
 **On Windows it places the project inside WSL2 for you.** The default
 `~/qwen-serving` resolves to a *Windows* home, and 20 GB of weights reached from
 the WSL2 VM across a 9p share is a mistake that costs 20 GB to discover — so
-before it clones anything, PortOS asks WSL for the default distro's name and home
+before it fetches anything, PortOS asks WSL for the default distro's name and home
 (`wsl.exe -e sh -c 'echo "$WSL_DISTRO_NAME"; echo "$HOME"'`), checks that
 `\\wsl.localhost\<distro>\home\<user>` is readable from Windows, and records
 the result as `VLLM_QWEN_PROJECT_DIR` in PortOS's own `.env` so the readiness
@@ -114,27 +120,97 @@ The one thing it deliberately will not do is raise the WSL2 memory ceiling — s
 #### By hand
 
 Still fully supported, and the explanation of what the button does. Run the
-commands below *inside the WSL2 distro*, not in PowerShell — the compose project
-and its 20 GB of weights belong on the Linux filesystem.
+commands below **from your PortOS checkout** inside the WSL2 distro (or on
+native Linux) for a fresh `~/qwen-serving` checkout.
+The compose project and its 20 GB of weights belong on the Linux filesystem.
 
 ```bash
-git clone https://github.com/syv-ai/qwen38-27b-rtx3090 ~/qwen-serving
-cd ~/qwen-serving
-echo "VLLM_API_KEY=$(openssl rand -hex 24)" > .env
-printf 'SPEC=dflash2\nPREFIX_CACHE=1\n' >> .env
-echo 'EXTRA_ARGS=--enable-auto-tool-choice --tool-call-parser qwen3_xml' >> .env   # required for any agent use
-if grep -qi microsoft /proc/version; then                                          # WSL2 only, both required
-  printf 'VLLM_WSL2_ENABLE_PIN_MEMORY=1\nPYTORCH_CUDA_ALLOC_CONF=expandable_segments:False\n' >> .env
-fi
-docker compose build              # ~9.5 GB image, built here — there is no registry to pull from
-docker compose run --rm prepare   # ~20 GB download + CPU requantization, idempotent, resumable
-docker compose --profile single up -d
+(
+  set -e
+  recipe="$(git rev-parse --show-toplevel)/docker/vllm-qwen"
+  revision=18db5cb3b56e63e30f64eee7901f0e97e632ab32
+  project_dir="$HOME/qwen-serving"
+  test ! -e "$project_dir"
+  git init "$project_dir"
+  cd "$project_dir"
+  git fetch --no-tags --depth 1 https://github.com/syv-ai/qwen38-27b-rtx3090 "$revision"
+  git checkout --detach FETCH_HEAD
+  test "$(git rev-parse HEAD)" = "$revision"
+  mkdir docker/portos
+  cp "$recipe"/{manifest.sha256,provision.patch,install-apt.sh,cuda-packages.sha256,requirements.lock,fast_checkpoint.py} docker/portos/
+  test "$(head -n 1 docker/portos/manifest.sha256)" = "# HyperQwen $revision"
+  (cd docker/portos && sha256sum --strict --check manifest.sha256)
+  git apply --index docker/portos/provision.patch
+  image_tag=$(sha256sum docker/portos/manifest.sha256 | cut -d ' ' -f 1)
+  cat > compose.override.yaml <<YAML
+services:
+  prepare: &built
+    image: portos-vllm-qwen:$image_tag
+    pull_policy: never
+  single: &local
+    <<: *built
+    ports: !override
+      - "127.0.0.1:\${PORT:-18020}:\${PORT:-18020}"
+  batch: *local
+YAML
+  api_key=$(openssl rand -hex 24)
+  (umask 077; printf 'VLLM_API_KEY=%s\n' "$api_key" > .env)
+  printf 'SPEC=dflash2\nPREFIX_CACHE=1\n' >> .env
+  echo 'EXTRA_ARGS=--enable-auto-tool-choice --tool-call-parser qwen3_xml' >> .env   # required for agent use
+  if grep -qi microsoft /proc/version; then                                          # WSL2 only
+    printf 'VLLM_WSL2_ENABLE_PIN_MEMORY=1\nPYTORCH_CUDA_ALLOC_CONF=expandable_segments:False\n' >> .env
+  fi
+  docker compose build              # ~9.5 GB image, built locally
+  docker compose run --rm prepare   # ~20 GB download + CPU requantization, idempotent, resumable
+  docker compose --profile single up -d
+)
 ```
 
-`docker compose --profile single up -d` on its own does all three — `prepare` is
-a `depends_on` of the server. Running them separately is worth it anyway: it is
-the long, unattended part, and PortOS's Start button deliberately refuses until
-`prepare` has actually landed weights on disk (see below).
+After the image is built, `docker compose --profile single up -d` also runs
+`prepare` as a service dependency. Running `prepare` separately shows progress
+during the download and requantization. The PortOS Start button checks for the
+weights on disk before it starts the server.
+
+#### Reviewing a provisioning update
+
+The PortOS manifest binds the source revision to the packaging patch, its
+installation inputs, and the fast checkpoint repair script. The patch selects the Linux amd64 CUDA 13.0.1 base
+by digest. APT verifies the signed Noble, Noble Updates and Noble Security
+indexes from the 2026-08-27 Ubuntu snapshot and checks their recorded SHA-256
+digests. The NVIDIA compiler and development packages are downloaded by exact
+filename and verified against `cuda-packages.sha256`. The Python 3.12 venv
+starts with the Ubuntu snapshot's pip and installs only the wheels in
+`requirements.lock`, including transitive dependencies. [Provisioning manifest](../../docker/vllm-qwen/manifest.sha256)
+
+Prepare requests an exact Hub commit for each default model. A failed download
+of the selected DFlash2 drafter stops prepare. `DFLASH2=0` still explicitly
+skips that step. [Base model](https://huggingface.co/dbirks/Qwen3.8-27B-W4A16-AutoRound/tree/1f05c441c4e64ae0549de44fa9ea5a6d43610314) ·
+[Fast variant](https://huggingface.co/syvai/qwen3.8-27b-3090-fast-variant/tree/124c14e7e8c7d2f5402933b9af368e772a9fcf0c) ·
+[DFlash2 drafter](https://huggingface.co/syvai/Qwen3.8-27B-DFlash2-W4A16/tree/4d30ec736ffc6b8688dc2ae2b502d9b48bdec279)
+
+1. Review changes to the upstream Dockerfile and all download paths at the new
+   source commit. Check the amd64 manifest bytes against the registry digest,
+   the signed Ubuntu snapshot indexes against their hashes, and each NVIDIA deb
+   against NVIDIA's package index. Inspect the files at each model commit,
+   including the optional bf16 revision if the drafter helper changes.
+2. Resolve upstream's `docker/requirements.txt` for CPython 3.12, Ubuntu 24.04
+   x86_64 with binary wheels only. The current resolution used a PyPI cutoff
+   of 2026-08-28 inclusive. Record one `name==version --hash=sha256:…` per
+   selected wheel, check each digest against its PyPI release, and review changes
+   to the full dependency set alongside the CUDA and torch versions.
+3. Refresh the patch against the verified checkout. Update the source revision
+   in the manager and manifest header together. From `docker/vllm-qwen`, keep
+   that header and regenerate the four rows with `sha256sum provision.patch
+   install-apt.sh cuda-packages.sha256 requirements.lock`. Run the
+   `vllmQwenManager.test.js` service tests, including the refused-bundle cases.
+4. Smoke-test in a fresh project with empty weights and cache on an RTX 3090
+   with a compatible NVIDIA driver. Run the build, prepare, and single-profile
+   start above on native CUDA and Docker Desktop/WSL2. Check Compose reports
+   the loopback binding, the build completes its upstream patch checks, and the
+   requested fast-model and DFlash2 files exist. Check `/health`, the authenticated
+   `/v1/models` response and a tool-call request. On WSL2 check pin memory,
+   allocator settings and prepare memory as described below. Record the hardware
+   and outcome when reviewing a new lock.
 
 **Tool calling must be switched on, or the coding agent is useless.** Upstream's
 `single-user/start_qwen.sh` serves without it, and vLLM then rejects every
@@ -288,17 +364,21 @@ container keeps its own chat-template default, which is not the same as being
 pinned to a value. So this is a step you take once per install, not something
 the preset does for you.
 
-The provider card's requirements checklist probes `:18020` directly. Its
-**Start** button runs `docker compose --profile single up -d` — but only when it
-can see a prepared project (a compose file in `~/qwen-serving`, or wherever
-`VLLM_QWEN_PROJECT_DIR` points) **and** confirm the weights are already on disk.
-It never builds and never downloads — that is the separate,
-explicitly-named provisioning action above. `prepare` writes them into the project's own
-`models/` directory (compose bind-mounts `${MODELS_DIR:-./models}`), which is
-what PortOS looks at; the `qwen-cache` docker volume alongside it holds only the
-torch.compile / Triton / FlashInfer JIT caches. If PortOS cannot read that
-directory at all, the button says so, and `VLLM_QWEN_WEIGHTS_DIR` is the escape
-hatch for weights kept somewhere else entirely. On Windows the Start button first
+The provider card's requirements checklist probes `:18020` directly. **Start**
+requires a Compose checkout and a complete checkpoint for its single-user model.
+It starts only the serving service, with Compose dependency startup, image pulls
+and builds disabled. Use **Clone, build & prepare** to fetch and prepare missing
+weights.
+
+PortOS checks the project's `models/` bind mount or its configured `MODELS_DIR`.
+It verifies the model metadata and indexed shards, including the fast variant or
+DFlash2 drafter when selected. If the path is unreadable, set
+`VLLM_QWEN_PROJECT_DIR` to the checkout or `VLLM_QWEN_WEIGHTS_DIR` to the
+host-visible location of the weights. The latter only changes PortOS inspection.
+Compose still needs its own matching bind mount. Operator checkouts that set
+`MODEL` to a Hub repo ID must mount its cache, set `HF_HUB_OFFLINE=1` and
+`VERIFY=0` in the project `.env`, and leave the selected snapshot under
+`refs/main` available. On Windows the Start button first
 resolves the WSL2 placement described above, so a project prepared by hand inside
 the distro is found without any configuration.
 

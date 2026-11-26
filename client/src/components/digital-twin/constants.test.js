@@ -1,3 +1,4 @@
+// @vitest-environment node
 import { describe, expect, it } from 'vitest';
 import { SECTION_GROUPS, TABS } from './constants';
 import { expectPageNavTabs } from '../../test/pageNavTabAssertions.js';

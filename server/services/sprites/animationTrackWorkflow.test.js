@@ -20,6 +20,7 @@ import { tmpdir } from 'os';
 import { join } from 'path';
 import { mkdir, writeFile, readFile } from 'fs/promises';
 import { createHash } from 'crypto';
+import { acquireBackupSnapshotCut, _backupSnapshotWaitersForTests } from '../../lib/backupSnapshotBoundary.js';
 import { lockAllAnchors, placeCandidate, expectCarriesCorrection } from './spriteTestFixtures.js';
 
 const TEST_ROOT = mkdtempSync(join(tmpdir(), 'sprite-track-workflow-test-'));
@@ -47,6 +48,10 @@ vi.mock('../settings.js', () => ({
 // Reports a fixed PORTRAIT anchor size so the local lane's REAL canvas chooser
 // is exercised — only the sharp measurement is stubbed.
 const STUB_ANCHOR_SIZE = { width: 512, height: 896 };
+const runWalkPostprocess = vi.fn(async ({ frameCount, fps, runRel }) => ({
+  manifest: { frameCount, frameRate: fps },
+  manifestPath: `${runRel}/generated/manifest.json`,
+}));
 const prepareWalkAnchorChromaInput = vi.fn(async (_sourceAbs, inputAbs, _chromaKey, chooseCanvas = null) => {
   await mkdir(join(inputAbs, '..'), { recursive: true });
   const bytes = Buffer.from('track-chroma-input');
@@ -60,6 +65,7 @@ const prepareWalkAnchorChromaInput = vi.fn(async (_sourceAbs, inputAbs, _chromaK
 vi.mock('./walkPostprocess.js', async (importOriginal) => ({
   ...await importOriginal(),
   prepareWalkAnchorChromaInput: (...args) => prepareWalkAnchorChromaInput(...args),
+  runWalkPostprocess: (...args) => runWalkPostprocess(...args),
 }));
 
 // ── Local render lane (#4876) ───────────────────────────────────────────────
@@ -179,12 +185,41 @@ beforeEach(() => {
   executeTuiRun.mockClear();
   executeTuiRun.mockImplementation(() => new Promise(() => {}));
   prepareWalkAnchorChromaInput.mockClear();
+  runWalkPostprocess.mockClear();
   rmSync(join(TEST_ROOT, 'sprite-records.json'), { force: true });
 });
 afterAll(() => rmSync(TEST_ROOT, { recursive: true, force: true }));
 
 describe.each(TRACKS)('the generic workflow drives the $id track', (track) => {
   const row = () => getAnimationTrack(track.id, EFFECTIVE);
+
+  it('attaches a finished Grok clip after a backup outlasts the old publication wait', async () => {
+    const id = await track.seed(newId());
+    const tui = Promise.withResolvers();
+    executeTuiRun.mockReturnValueOnce(tui.promise);
+    const { runId } = await startTrackGeneration(track.id, id, track.body);
+    const [{ workspacePath }] = executeTuiRun.mock.lastCall;
+    await writeFile(join(workspacePath, 'source-video.mp4'), 'grok-clip-bytes');
+    const release = await acquireBackupSnapshotCut();
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout', 'Date'] });
+    try {
+      tui.resolve();
+      await vi.waitFor(() => expect(_backupSnapshotWaitersForTests().publications).toBe(1));
+      await vi.advanceTimersByTimeAsync(5 * 60_000);
+      const { runs } = await getTrackState(track.id, id);
+      expect(runs.find(run => run.id === runId)).toMatchObject({ status: 'rendering' });
+      expect(runWalkPostprocess).not.toHaveBeenCalled();
+      expect(_backupSnapshotWaitersForTests().publications).toBe(1);
+    } finally {
+      vi.useRealTimers();
+      release();
+    }
+    await vi.waitFor(async () => {
+      const { runs } = await getTrackState(track.id, id);
+      expect(runs.find(run => run.id === runId)).toMatchObject({ status: 'candidate' });
+    });
+    expect(runWalkPostprocess).toHaveBeenCalledOnce();
+  });
 
   it('is provider-silent on reads, then starts one user-triggered render at the row\'s defaults', async () => {
     const id = await track.seed(newId());

@@ -6,7 +6,7 @@ vi.mock('../../hooks/useFilmLookPresets.js', () => ({ default: () => ({ presets:
 vi.mock('../../hooks/useVideoFileSrc.js', () => ({ useVideoFileSrc: vi.fn(() => ({})) }));
 vi.mock('../../services/apiMusicVideo.js', async (importOriginal) => ({ ...(await importOriginal()), getMusicVideoMediaPool: vi.fn(async () => ({ items: [] })) }));
 vi.mock('../../services/apiImageVideo.js', async (importOriginal) => ({
-  ...(await importOriginal()), previewImagePrompt: vi.fn(async (body) => ({ sentPrompt: body.prompt, promptAdditions: [] })), previewVideoPrompt: vi.fn(async () => ({ backend: 'grok', sentPrompt: 'Cast reference preview', promptAdditions: [] })),
+  ...(await importOriginal()), getVideoHistoryItem: vi.fn(async () => null), previewImagePrompt: vi.fn(async (body) => ({ sentPrompt: body.prompt, promptAdditions: [] })), previewVideoPrompt: vi.fn(async () => ({ backend: 'grok', sentPrompt: 'Cast reference preview', promptAdditions: [] })),
 }));
 vi.mock('../../services/apiTracks.js', async (importOriginal) => ({ ...(await importOriginal()), listTracks: vi.fn(async () => []) }));
 import SceneCard from './SceneCard.jsx';
@@ -26,6 +26,22 @@ beforeEach(() => {
   localStorage.clear();
   useVideoFileSrc.mockReturnValue({});
   previewVideoPrompt.mockClear();
+});
+
+it.each([
+  ['Frames', 'image', 'alternate.png'],
+  ['Clip', 'video', 'alternate-clip'],
+])('offers Move on an unused take in the %s tab', (tab, kind, assetId) => {
+  const onMoveTake = vi.fn();
+  const take = { takeId: 'alternate', assetId, kind, status: 'candidate' };
+  const scene = { sceneId: 's1', order: 0, startSec: 0, endSec: 4, referenceImageId: 'frame.png', videoHistoryId: 'clip', takes: [take] };
+  const project = { id: 'mv-1', scenes: [scene, { sceneId: 's2', order: 1 }] };
+  render(<SceneCard scene={scene} project={project} position={{ index: 0 }}
+    actions={{ onGenerateEndFrame: vi.fn(), onReviewTake: vi.fn(), onSelectTake: vi.fn(), onMoveTake, onEditLocal: vi.fn(), onSave: vi.fn() }} />);
+  show(tab);
+  fireEvent.click(screen.getByRole('button', { name: 'Move', exact: true }));
+  fireEvent.change(screen.getByRole('combobox', { name: 'Move take to shot' }), { target: { value: 's2' } });
+  expect(onMoveTake).toHaveBeenCalledWith(scene, expect.objectContaining({ takeId: 'alternate', kind }), 's2');
 });
 
 it('holds Render while clip references are saving or failed and releases it after a retry', async () => {
@@ -1469,9 +1485,12 @@ it('passes the selected LTX character references and prompt labels from the shot
 
 describe('LTX reference box default', () => {
   const models = [{ id: 'ltx25_example', name: 'LTX 2.5', runtime: 'ltx25', supportedModes: ['image', 'a2v'] }];
-  const project = (scene) => ({ id: 'mv-reference', scenes: [scene], visualSpec: { references: [
-    { id: 'rider', imageId: 'rider.png', role: 'character', label: 'Rider', condition: true },
-  ] } });
+  const project = (scene) => ({ id: 'mv-reference', scenes: [scene],
+    concept: { subjects: [{ id: 'cast-rider', kind: 'character', name: 'Rider' }] },
+    visualSpec: { references: [
+      { id: 'rider', imageId: 'rider.png', role: 'character', label: 'Rider', condition: true, catalogSubjectId: 'cast-rider' },
+    ] },
+  });
   const renderCard = (over) => {
     const scene = { sceneId: 's1', prompt: 'The rider turns', referenceImageId: 'start.png', startSec: 0, endSec: 6, takes: [], ...over };
     const onGenerateVideo = vi.fn();
@@ -1486,6 +1505,13 @@ describe('LTX reference box default', () => {
     renderCard({ frameReferenceIds: ['rider'] });
     expect(box()).not.toBeChecked();
     expect(screen.getByRole('status')).toHaveTextContent('These references are not sent');
+  });
+
+  it('keeps the clip render available when its only saved pick was omitted', () => {
+    const onGenerateVideo = renderCard({ clipReferenceIds: ['rider'], omittedCatalogSubjectIds: ['cast-rider'] });
+    expect(box()).not.toBeChecked();
+    fireEvent.click(screen.getByRole('button', { name: 'Render' }));
+    expect(onGenerateVideo.mock.calls[0][1].card).toMatchObject({ expectedClipReferenceFiles: [] });
   });
 
   it('honors unticking a picked selection and warns the references stay behind', () => {
@@ -1550,6 +1576,21 @@ describe('project LTX 2.5 References mode on the shot card (#15482)', () => {
     expect(screen.queryByLabelText(/Use LTX reference images/)).toBeNull();
     expect(screen.getByText(reason)).toBeTruthy();
   });
+});
+
+it('leaves the expected clip references empty for a frame-only Higgsfield render', () => {
+  const scene = { sceneId: 's1', prompt: 'A rider turns', referenceImageId: 'start.png',
+    clipReferenceIds: ['lead'], startSec: 0, endSec: 4, takes: [] };
+  const project = { id: 'mv-card', scenes: [scene], visualSpec: {
+    references: [{ id: 'lead', imageId: 'lead.png', role: 'character', condition: true }],
+  } };
+  const onGenerateVideo = vi.fn();
+  render(<SceneCard scene={scene} project={project} index={0} expanded onEditLocal={vi.fn()} onSave={vi.fn()}
+    onGenerateVideo={onGenerateVideo} falVideoSettings={{ backend: 'higgsfield' }} />);
+  show('Clip');
+  fireEvent.click(screen.getByRole('checkbox', { name: /tick for plain image-to-video/ }));
+  fireEvent.click(screen.getByRole('button', { name: /^Render(?: draft)?$/i }));
+  expect(onGenerateVideo.mock.calls[0][1].card).toMatchObject({ frameRoute: 'image', expectedClipReferenceFiles: [] });
 });
 
 it('does not offer LTX references for a storyboard clip that cannot carry them', () => {

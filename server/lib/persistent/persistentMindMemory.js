@@ -1,6 +1,6 @@
 /**
- * Persistent Mind memory protection schema, durable tag encoding, public projection, and
- * protected-first context ordering.
+ * Persistent Mind memory protection, durable tag encoding, context ordering,
+ * public projection, and read-time fading for reflection.
  */
 
 import { z } from 'zod';
@@ -20,6 +20,12 @@ export const PERSISTENT_MIND_MEMORY_PROTECTION_TAGS = Object.freeze({
 // candidate, panel edit, or promotion cannot pose as the note.
 export const PERSISTENT_MIND_CONTINUATION_TAG = 'mind:continuation-note';
 export const PERSISTENT_MIND_CONTINUATION_NOTE_MAX_CHARS = 4_000;
+
+export const PERSISTENT_MIND_PRIVATE_TAGS = Object.freeze([
+  PERSISTENT_MIND_CHOSEN_NAME_TAG,
+  PERSISTENT_MIND_CONTINUATION_TAG,
+  ...Object.values(PERSISTENT_MIND_MEMORY_PROTECTION_TAGS),
+]);
 
 // null is a local model's spelling of an absent field, so it preserves the note;
 // only an explicit empty string clears it.
@@ -60,9 +66,8 @@ export function persistentMindMemoryProtection(memory) {
 
 export function persistentMindMemoryTags(tags, protection) {
   const level = persistentMindMemoryProtectionSchema.parse(protection);
-  const reserved = [...Object.values(PERSISTENT_MIND_MEMORY_PROTECTION_TAGS), PERSISTENT_MIND_CONTINUATION_TAG, PERSISTENT_MIND_CHOSEN_NAME_TAG];
   const ordinary = [...new Set((Array.isArray(tags) ? tags : [])
-    .filter((tag) => typeof tag === 'string' && tag && !reserved.includes(tag)))];
+    .filter((tag) => typeof tag === 'string' && tag && !PERSISTENT_MIND_PRIVATE_TAGS.includes(tag)))];
   const marker = PERSISTENT_MIND_MEMORY_PROTECTION_TAGS[level];
   return marker ? [...ordinary.slice(0, 19), marker] : ordinary.slice(0, 20);
 }
@@ -77,6 +82,12 @@ export function comparePersistentMindMemories(a, b) {
 export const projectPersistentMindMemory = (memory) => memory
   ? { ...memory, protection: persistentMindMemoryProtection(memory) }
   : null;
+
+/** Fade only the eligibility score. The stored importance still ranks ordinary recall. */
+export function fadedPersistentMindMemoryImportance(memory, now) {
+  const idleDays = (now - Date.parse(memory.lastAccessed ?? memory.createdAt)) / 86400000;
+  return memory.importance * 0.5 ** (Math.max(0, idleDays - 30) / 90);
+}
 
 // At most one outcome per verdict/content version. Authorship is supplied separately
 // by the executing mind runtime, never accepted in model arguments.

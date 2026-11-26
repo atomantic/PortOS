@@ -111,7 +111,7 @@ function spawnAliases(arrays) {
   return aliases;
 }
 
-const isGitProgram = (text) => posix.basename(text.trim().split(/\s+/)[0]) === 'git';
+const isGitProgram = (text) => text === 'git' || (text.includes('git') && posix.basename(text.trim().split(/\s+/)[0]) === 'git');
 /** A git command inside a shell line: `sh -c 'git status'`, `cd x && git log`, `$(git rev-parse HEAD)`. */
 const SHELL_GIT = /(?:^|[\s;&|(`$])git\s+[a-z-]/;
 const COMMAND_LINE = 'runs git through a command line, which hides the directory it runs in';
@@ -145,12 +145,9 @@ function spelledTexts(w, arr, m, from, to, seen, texts) {
     if (owner === undefined || seen.has(binder)) continue;
     seen.add(binder);
     const { index } = owner.parameters.find((parameter) => parameter.token === binder.token);
-    for (const call of w.arrays) {
-      for (let at = 0; at + 1 < call.arr.length; at += 1) {
-        const open = isWord(call.arr[at], owner.name) && !w.definitions.has(call.arr[at]) ? callOpen(call.arr, call.m, at) : null;
-        const passed = open === null ? [] : listRanges(call.arr, call.m, open);
-        if (index < passed.length) spelledTexts(w, call.arr, call.m, passed[index][0], passed[index][1], seen, texts);
-      }
+    for (const { arr: caller, m: brackets, open } of callersOf(w, owner.name)) {
+      const passed = listRanges(caller, brackets, open);
+      if (index < passed.length) spelledTexts(w, caller, brackets, passed[index][0], passed[index][1], seen, texts);
     }
   }
 }
@@ -273,6 +270,14 @@ function directoryOf(arr, m, args) {
 function callOpen(arr, m, i) {
   const open = isPunct(arr[i + 1], '?.') ? i + 2 : i + 1;
   return isPunct(arr[open], '(') && m[open] !== undefined ? open : null;
+}
+
+function* callersOf(w, name) {
+  for (const { arr, m, i } of occurrencesOf(w, name)) {
+    if (w.definitions.has(arr[i])) continue;
+    const open = callOpen(arr, m, i);
+    if (open !== null) yield { arr, m, open };
+  }
 }
 
 /** Note that code at source offset `offset` can start git: every named function around it is one that runs git. */
@@ -441,31 +446,27 @@ function parameterProblem(w, token, memberProp) {
 
 function callersProblem(w, name, index, prop, defaulted) {
   const omitted = `${name}() is called without the directory its git call reads, which runs git where the test process is`;
-  for (const { arr, m } of w.arrays) {
-    for (let i = 0; i + 1 < arr.length; i += 1) {
-      const open = isWord(arr[i], name) && !w.definitions.has(arr[i]) ? callOpen(arr, m, i) : null;
-      if (open === null) continue;
-      const passed = listRanges(arr, m, open);
-      if (passed.slice(0, index + 1).some(([from]) => isPunct(arr[from], '...'))) continue;
-      if (index >= passed.length) {
+  for (const { arr, m, open } of callersOf(w, name)) {
+    const passed = listRanges(arr, m, open);
+    if (passed.slice(0, index + 1).some(([from]) => isPunct(arr[from], '...'))) continue;
+    if (index >= passed.length) {
+      if (!defaulted) return omitted;
+      continue;
+    }
+    let [from, to] = passed[index];
+    if (prop !== null) {
+      if (!isPunct(arr[from], '{') || m[from] !== to - 1) continue;
+      const entries = listRanges(arr, m, from);
+      if (entries.some(([at]) => isPunct(arr[at], '...'))) continue;
+      const entry = entries.find(([at, until]) => (arr[at].t === 'id' || arr[at].t === 's') && arr[at].v === prop && (until === at + 1 || isPunct(arr[at + 1], ':')));
+      if (entry === undefined) {
         if (!defaulted) return omitted;
         continue;
       }
-      let [from, to] = passed[index];
-      if (prop !== null) {
-        if (!isPunct(arr[from], '{') || m[from] !== to - 1) continue;
-        const entries = listRanges(arr, m, from);
-        if (entries.some(([at]) => isPunct(arr[at], '...'))) continue;
-        const entry = entries.find(([at, until]) => (arr[at].t === 'id' || arr[at].t === 's') && arr[at].v === prop && (until === at + 1 || isPunct(arr[at + 1], ':')));
-        if (entry === undefined) {
-          if (!defaulted) return omitted;
-          continue;
-        }
-        [from, to] = [entry[1] === entry[0] + 1 ? entry[0] : entry[0] + 2, entry[1]];
-      }
-      const problem = directoryProblem(w, arr, m, from, to);
-      if (problem !== null) return problem;
+      [from, to] = [entry[1] === entry[0] + 1 ? entry[0] : entry[0] + 2, entry[1]];
     }
+    const problem = directoryProblem(w, arr, m, from, to);
+    if (problem !== null) return problem;
   }
   return null;
 }
@@ -487,11 +488,9 @@ function gitCallProblem(w, { arr, m, open, whole }) {
  */
 function assignmentsOf(w, name) {
   const found = [];
-  for (const { arr, m } of w.arrays) {
-    for (let i = 0; i + 2 < arr.length; i += 1) {
-      if (!isWord(arr[i], name) || !isPunct(arr[i + 1], '=') || isPunct(arr[i + 2], '=') || isPunct(arr[i - 1], '.', '?.')) continue;
-      if (!functionStartsAt(arr, m, i + 2)) found.push({ arr, m, at: i + 2 });
-    }
+  for (const { arr, m, i } of occurrencesOf(w, name)) {
+    if (i + 2 >= arr.length || !isPunct(arr[i + 1], '=') || isPunct(arr[i + 2], '=') || isPunct(arr[i - 1], '.', '?.')) continue;
+    if (!functionStartsAt(arr, m, i + 2)) found.push({ arr, m, at: i + 2 });
   }
   return found;
 }
@@ -517,21 +516,19 @@ function assignmentsProblem(w, name) {
  * a git call's own directory is.
  */
 function runnerProblem(w, name) {
-  for (const { arr, m } of w.arrays) {
-    for (let i = 0; i < arr.length; i += 1) {
-      const token = arr[i];
-      if (!isWord(token, name) || w.definitions.has(token)) continue;
-      const open = callOpen(arr, m, i);
-      const indirect = isPunct(arr[i + 1], '.', '?.') && isWord(arr[i + 2], 'call', 'apply', 'bind');
-      if (open !== null) {
-        reaches(w, token.i);
-        const problem = (GIT_HELPERS.includes(name) ? helperDirectoryProblem(w, arr, m, open) : null) ?? rangeProblem(w, arr, m, open + 1, m[open]);
-        if (problem !== null) return problem;
-      } else if (isPunct(arr[i + 1], ':') && isPunct(arr[i - 1], '{', ',')) {
-        continue; // an object key of that spelling
-      } else if (indirect || !(GIT_HELPERS.includes(name) || isPunct(arr[i - 1], '.', '?.'))) {
-        return `${name}() runs git and is used other than by a direct call, so its callers are not all in view`;
-      }
+  for (const { arr, m, i } of occurrencesOf(w, name)) {
+    const token = arr[i];
+    if (w.definitions.has(token)) continue;
+    const open = callOpen(arr, m, i);
+    const indirect = isPunct(arr[i + 1], '.', '?.') && isWord(arr[i + 2], 'call', 'apply', 'bind');
+    if (open !== null) {
+      reaches(w, token.i);
+      const problem = (GIT_HELPERS.includes(name) ? helperDirectoryProblem(w, arr, m, open) : null) ?? rangeProblem(w, arr, m, open + 1, m[open]);
+      if (problem !== null) return problem;
+    } else if (isPunct(arr[i + 1], ':') && isPunct(arr[i - 1], '{', ',')) {
+      continue; // an object key of that spelling
+    } else if (indirect || !(GIT_HELPERS.includes(name) || isPunct(arr[i - 1], '.', '?.'))) {
+      return `${name}() runs git and is used other than by a direct call, so its callers are not all in view`;
     }
   }
   return null;
@@ -544,11 +541,28 @@ function helperDirectoryProblem(w, arr, m, open) {
   return ranges.length < 2 ? NO_DIRECTORY : directoryProblem(w, arr, m, ranges[1][0], ranges[1][1]);
 }
 
+/** Preserve token-array order so the first reported contradiction stays the same. */
+function occurrencesOf(w, name) {
+  if (w.occurrences === null) {
+    w.occurrences = new Map();
+    for (const { arr, m } of w.arrays) {
+      for (let i = 0; i < arr.length; i += 1) {
+        const token = arr[i];
+        if (token.t !== 'id') continue;
+        const occurrences = w.occurrences.get(token.v);
+        if (occurrences === undefined) w.occurrences.set(token.v, [{ arr, m, i }]);
+        else occurrences.push({ arr, m, i });
+      }
+    }
+  }
+  return w.occurrences.get(name) ?? [];
+}
+
 /** The state one file is read with: its token arrays, its named functions and what has been followed so far. */
 function reading(arrays, ctx) {
   const functions = namedFunctions(arrays);
   return {
-    arrays, ctx, functions,
+    arrays, ctx, functions, occurrences: null,
     spawners: spawnAliases(arrays),
     definitions: new Set(functions.map((fn) => fn.token)),
     names: new Set(), runners: new Set(GIT_HELPERS), iterables: new Set(), directoryNames: new Set(), directoryParameters: new Set(),

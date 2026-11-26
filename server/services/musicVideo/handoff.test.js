@@ -46,7 +46,7 @@ describe('buildHandoffBundle', () => {
     // 'ref-deleted.png' is referenced but never written to disk.
 
     const project = await projects.createProject({ name: 'Bundle Test' });
-    const scene = await projects.addProjectScene(project.id, { prompt: 'a lighthouse at dusk' });
+    const { scenes: [scene] } = await projects.addProjectScenes(project.id, [{ prompt: 'a lighthouse at dusk' }]);
     await projects.updateProject(project.id, {
       visualSpec: {
         references: [
@@ -123,7 +123,7 @@ describe('buildHandoffManifest typography (#8992)', () => {
    expect(saved.concept).toEqual({ ...concept, style: 'Monochrome' });
    const clone = await filmActions.cloneProject(p.id, {});
    expect(clone.concept).toEqual(saved.concept);
-   await projects.addProjectScene(p.id, { framePrompt: 'A close-up', prompt: 'Slow push in' });
+   await projects.addProjectScenes(p.id, [{ framePrompt: 'A close-up', prompt: 'Slow push in' }]);
    const manifest = buildHandoffManifest(await projects.getProject(p.id));
    expect(manifest.concept.subjects).toEqual(concept.subjects);
    expect(manifest.scenes[0].framePrompt).toContain('Example singer — Silver coat');

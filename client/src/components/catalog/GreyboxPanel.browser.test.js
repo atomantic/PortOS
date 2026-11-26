@@ -25,7 +25,7 @@ describe.skipIf(!chrome)('manual greybox in Chromium', () => {
         configFile: false, cacheDir: join(temp, 'vite-cache'),
         root: fileURLToPath(new URL('../../..', import.meta.url)),
         resolve: { dedupe: ['three'] },
-        optimizeDeps: { entries: ['src/components/catalog/GreyboxPanel.jsx', 'src/components/catalog/GreyboxViewer.jsx'], include: ['react', 'react-dom/client', 'react-router', 'three', '@react-three/fiber', '@react-three/drei'] },
+        optimizeDeps: { entries: ['src/components/catalog/GreyboxPanel.jsx', 'src/components/catalog/GreyboxViewer.jsx'], include: ['react', 'react-dom/client', 'react-router', 'three', '@react-three/fiber'] },
         plugins: [react(), {
           name: 'greybox-fixture', enforce: 'pre',
           resolveId(id) {

@@ -5,6 +5,7 @@ import { asyncHandler, ServerError } from '../lib/errorHandler.js';
 import { validateRequest } from '../lib/validateRequest.js';
 import { UUID_RE } from '../lib/fileUtils.js';
 import { MESSAGE_ACCOUNT_TRANSPORT, MESSAGE_ACCOUNT_TYPES, sendViaForAccountType } from '../lib/messageTransport.js';
+import { normalizeEmail } from '../lib/messageRecipientEmail.js';
 import * as messageAccounts from '../services/messageAccounts.js';
 import * as messageSync from '../services/messageSync.js';
 import * as messageDrafts from '../services/messageDrafts.js';
@@ -221,12 +222,15 @@ router.post('/drafts/generate', asyncHandler(async (req, res) => {
   if (data.replyToMessageId) {
     const originalMsg = await messageSync.getMessage(data.accountId, data.replyToMessageId);
     if (!originalMsg) throw new ServerError('The message being replied to was not found', { status: 404, code: 'REPLY_ORIGINAL_NOT_FOUND' });
-    // Email replies need explicit delivery fields; Teams/browser chats target a conversation, not a mailbox.
+    // Teams can draft without an address, which the user supplies before sending.
+    const sender = originalMsg.from?.email;
     if (MESSAGE_ACCOUNT_TRANSPORT[account.type]?.email) {
-      const sender = originalMsg.from?.email;
       if (!sender) throw new ServerError('The original message has no sender address to reply to', { status: 422, code: 'REPLY_TARGET_UNAVAILABLE' });
       to = [sender];
       subject = replySubject(originalMsg.subject);
+    } else if (account.type === 'teams') {
+      const recipient = normalizeEmail(sender);
+      if (recipient) to = [recipient];
     }
     // Load thread context if available
     let threadMessages = null;
@@ -348,7 +352,7 @@ router.post('/gmail/enable-api', asyncHandler(async (req, res) => {
 
 // === Selector Routes ===
 router.get('/selectors', asyncHandler(async (req, res) => {
-  const selectors = await getSelectors();
+  const selectors = await getSelectors({ strict: true });
   res.json(selectors);
 }));
 
@@ -381,12 +385,22 @@ router.get('/thread/:accountId/:threadId', asyncHandler(async (req, res) => {
   res.json({ messages });
 }));
 
-// === Message params schema (shared by detail + refresh routes) ===
+async function requireBodyRefreshAccount(accountId) {
+  const account = await messageAccounts.getAccount(accountId);
+  if (!account) throw new ServerError('Account not found', { status: 404 });
+  if (MESSAGE_ACCOUNT_TRANSPORT[account.type]?.supportsBodyRefresh !== true) {
+    throw new ServerError('This account does not support refreshing message content', {
+      status: 400, code: 'BODY_REFRESH_NOT_SUPPORTED'
+    });
+  }
+}
+
 // === Per-message refresh ===
 router.post('/:accountId/:messageId/refresh', asyncHandler(async (req, res) => {
   const parsed = messageParamsSchema.safeParse(req.params);
   if (!parsed.success) throw new ServerError('Invalid accountId or messageId format', { status: 400 });
   const { accountId, messageId } = parsed.data;
+  await requireBodyRefreshAccount(accountId);
   const message = await messageSync.getMessage(accountId, messageId);
   if (!message) throw new ServerError('Message not found', { status: 404 });
   const result = await messageSync.refreshMessage(accountId, messageId);
@@ -404,9 +418,7 @@ router.post('/fetch-full/:accountId', asyncHandler(async (req, res) => {
     throw new ServerError('Invalid account ID format', { status: 400 });
   }
   const { accountId } = req.params;
-  const account = await messageAccounts.getAccount(accountId);
-  if (!account) throw new ServerError('Account not found', { status: 404 });
-  if (account.type !== 'outlook') return res.json({ updated: 0, total: 0 });
+  await requireBodyRefreshAccount(accountId);
 
   const { force } = validateRequest(messageFetchFullBodySchema, req.body ?? {});
   const allResult = await messageSync.getMessages({ accountId, limit: FULL_BODY_REFRESH_LIMIT });

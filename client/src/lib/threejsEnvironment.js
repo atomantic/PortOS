@@ -4,8 +4,7 @@
  * `spec.lights` are punctual: they light a surface but give it nothing to REFLECT. Every reflective PBR channel (`metalness`, `transmission`, `clearcoat`, `iridescence`)
  * reads off an environment map, so a conductor renders near-black in a scene with none.
  *
- * Both presets are built from three's own primitives and prefiltered through `PMREMGenerator`, NOT drei's `<Environment preset=…>`, which fetches an HDR from a CDN
- * (rendering a local model must never make an outbound request).
+ * Both presets use Three's own primitives and PMREMGenerator so rendering a local model works offline.
  */
 
 import * as THREE from 'three';

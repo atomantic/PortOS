@@ -2,8 +2,8 @@ import { useState } from 'react';
 import GalleryImagePicker from '../imageGen/GalleryImagePicker.jsx';
 import {
   DEFAULT_PHOTO_LAYOUT, PHOTO_LAYOUT_RANGES, PHOTO_SEQUENCE_DEFAULT_FRAMES, PHOTO_SEQUENCE_LIMIT, PHOTO_SEQUENCE_OVERLAP_MAX_FRAMES, photoStackLayouts,
-} from '../../lib/musicVideoImageEffects.js';
-import { BEAT_TOGGLE_RATES, BEAT_TOGGLE_RATE_LABELS } from '../../lib/musicVideoCutEffects.js';
+} from '../../../../server/lib/musicVideo/musicVideoImageEffects.js';
+import { BEAT_TOGGLE_RATES, BEAT_TOGGLE_RATE_LABELS } from '../../../../server/lib/musicVideo/musicVideoCutEffects.js';
 import { formatCount } from '../../utils/formatters.js';
 import MediaImage from '../MediaImage';
 

@@ -121,7 +121,7 @@ describe('cutting room floor outro pass', () => {
     expect(opened.options).toMatchObject({ ownedBrowser: true, initScripts: [] });
     // A JPEG still rides as itself (as the animatic shows it); a PNG with no thumbnail is a film offcut.
     expect(opened.media).toEqual(['floor-1.jpg']);
-    expect(opened.fonts.sort()).toEqual(['archivo-variable.woff2', 'ibm-plex-mono-500.woff2', 'playfair-display-700.woff2']);
+    expect(opened.fonts.sort()).toEqual(['archivo-variable.woff2', 'ibm-plex-mono-500.woff2', 'oswald-700.woff2', 'playfair-display-700.woff2']);
     expect(opened.index).toContain('<canvas id="outro">');
     // The counts the page draws are the project's: its shot, its collection and the clip stamped with it.
     expect(opened.app).toContain('"stills":{"made":3,"kept":1},"clips":{"made":2,"kept":0}');
@@ -135,12 +135,18 @@ describe('cutting room floor outro pass', () => {
   });
 
   it('plays the credits after the floor, and alone without counting anything when the floor is off', async () => {
-    const creditsOutro = { enabled: true, durationSec: 10, title: 'Example Song', artist: 'Example Artist', lines: [{ role: 'Directed by', name: 'Example Artist' }] };
+    const creditsOutro = {
+      enabled: true, durationSec: 10, title: 'Example Song', artist: 'Example Artist', quoteTitle: false, showPerformer: false,
+      titleFont: 'condensed', bodyFont: 'mono', textColor: '#ffbe72', lines: [{ role: 'Starring', name: 'Name one\nName two' }],
+    };
     expect(await appendStatsOutro({ project: { ...project, creditsOutro }, path, jobId: 'job-both' })).toBe(16);
     expect(seen.contract.durationSec).toBe(16);
     expect(seen.opened[0].app).toContain('"kind":"floor","startSec":0,"durationSec":6');
     expect(seen.opened[0].app).toContain('"kind":"credits","startSec":6,"durationSec":10');
     expect(seen.opened[0].index).toContain('font-family: "MV Credits Serif"');
+    expect(seen.opened[0].index).toContain('font-family: "MV Credits Condensed"');
+    expect(seen.opened[0].app).toContain('"showPerformer":false');
+    expect(seen.opened[0].app).toContain('Name one\\nName two');
     await writeFile(path, 'render');
     seen.opened.length = 0;
     expect(await appendStatsOutro({ project: { ...project, statsOutro: null, creditsOutro }, path, jobId: 'job-credits' })).toBe(10);

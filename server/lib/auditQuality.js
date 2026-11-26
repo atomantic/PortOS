@@ -4,18 +4,20 @@
  *
  * Category discovery strategies, slice-scored assessment prompt and v1/v2 report schema, sentinel
  * parsing, and freshness-aware app quality aggregation: per-category rolling window of recent run
- * scores over daily winners across peers.
+ * scores across local, peer and snapshot evidence.
  */
 
 import { z } from 'zod';
 import { createHash } from 'node:crypto';
-import { CONSOLIDATED_AUDIT_DOMAINS, QUALITY_HEALTHY_THRESHOLD, QUALITY_RECENCY_HALF_LIFE_DAYS, auditDomainFor, isPriorityExemptAuditType } from './auditDomains.js';
+import { CONSOLIDATED_AUDIT_DOMAINS, QUALITY_HEALTHY_THRESHOLD, QUALITY_SCORE_BANDS, QUALITY_RECENCY_HALF_LIFE_DAYS, auditDomainFor, isPriorityExemptAuditType } from './auditDomains.js';
 import { AUDIT_DEFINITIONS, AUDIT_EXECUTION_PROFILES, isAuditTaskType, normalizeAuditTaskType } from './auditCatalog.js';
 import { safeJSONParse } from './jsonIo.js';
 
 const REPORT_PREFIX = 'QUALITY_AUDIT_JSON: ';
 const SLICE_PREFIX = 'AUDIT_SLICE: ';
 const MAX_SLICE_CHARS = 500;
+export const BROAD_COVERAGE_MIN_RATIO = 0.95;
+const broadCoverageMinPercent = BROAD_COVERAGE_MIN_RATIO * 100;
 
 // Each lens must explain how to find candidates before choosing a slice.
 const profileDiscovery = Object.freeze({
@@ -106,7 +108,7 @@ function featurePriorityScope(category, priorityScope) {
   const rules = exempt
     ? [`- P3 areas stay fully in scope for this lane and nothing is removed from the inventory: a vulnerability or migration bug in a dormant feature still shares the server, database, credentials and host privileges. Do not skip or down-rank these paths because the feature is unused.\n${scopeAreaLines(p3)}`]
     : [
-      p3.length ? `- P3, out of scope for this lane: remove every path matching these globs from the step 1 inventory before the signal scan, and never choose one as the slice or name it in AUDIT_SLICE. totalFiles and scannedFiles count only the inventory that remains, so coverage "broad" means every remaining file was scanned. A verified defect in P3 code met while tracing something else is still filed.\n${scopeAreaLines(p3)}` : '',
+      p3.length ? `- P3, out of scope for this lane: remove every path matching these globs from the step 1 inventory before the signal scan, and never choose one as the slice or name it in AUDIT_SLICE. totalFiles and scannedFiles count only the inventory that remains, so coverage "broad" requires scanning at least ${broadCoverageMinPercent}% of that inventory. A verified defect in P3 code met while tracing something else is still filed.\n${scopeAreaLines(p3)}` : '',
       p3.length && AUDIT_DISCOVERY[category].includes('quality:complexity') ? `- Complexity shortlist without the P3 paths (only where the repository has the quality:complexity script): npm run quality:complexity -- ${p3.flatMap(({ globs }) => globs).map(glob => `--exclude '${glob}'`).join(' ')}` : '',
       p2.length ? `- P2: file or fix verified functional or reliability defects only. No polish, micro-optimization, refactor, copy or speculative test work.\n${scopeAreaLines(p2)}` : '',
       p0.length ? `- P0: the first tie-break after severity and user impact, ahead of churn and fan-in, and preferred when rotating slices.\n${scopeAreaLines(p0)}` : '',
@@ -127,21 +129,24 @@ ${rules.join('\n')}
 export function auditQualityInstructions(taskType, app, { priorityScope = null } = {}) {
   const category = normalizeAuditTaskType(taskType);
   if (!isAuditTaskType(category)) return '';
-  return `## Repository-wide discovery, worst offender first, and quality assessment
+  return `## Repository-wide discovery, remediation verification, and quality assessment
 
 This contract overrides narrower slice-selection or ranking advice in the mission, including customized prompts. Preserve the selected file-issues/fix mode and documented non-issues. Read the lane-health block: do not re-file a finding it lists as reverted or not-planned without new evidence.
 1. Inventory all first-party source roots with git ls-files or rg --files, excluding vendored/generated/build/dependency output. Do a cheap repository-wide signal scan BEFORE choosing where to investigate. Do not deep-read the entire repository.
 2. Category search: ${AUDIT_DISCOVERY[category]}
-3. Rank at least the top five candidates (or all if fewer), with paths, measured signals, impact, reach, confidence and why higher candidates win. Validate the top candidates through callers, tests and relevant history before filing or fixing. Severity and user impact outrank ease, small scope and recency. Churn and fan-in break ties; inactivity alone never dismisses a severe offender. If the raw worst is exempt, already filed or not actionable, report why and continue down the ranking. Existing unresolved issues still count against quality. Never pick a nit while a verified major problem remains actionable. You may also choose to re-verify a remediated slice listed in audit-slice-history that scored below ${QUALITY_HEALTHY_THRESHOLD} once its filed issues are closed; re-auditing the same slice with the same AUDIT_SLICE supersedes its older pre-fix score in the rolling window.
+3. Rank at least the top five candidates (or all if fewer), with paths, measured signals, impact, reach, confidence and why higher candidates win. Validate the top candidates through callers, tests and relevant history before filing or fixing. Severity and user impact outrank ease, small scope and recency. Churn and fan-in break ties; inactivity alone never dismisses a severe offender. If the raw worst is exempt, already filed or not actionable, report why and continue down the ranking. Existing unresolved issues still count against quality. Never pick a nit while a verified major problem remains actionable. Before rotating to a new offender, prefer to re-verify a slice in audit-slice-history that scored below ${QUALITY_HEALTHY_THRESHOLD} once its filed issues are closed and the fixes are present in the checkout. Skip slices already re-verified since those fixes. For a re-verification, retain the same primary path or cover the original paths in AUDIT_SLICE. Otherwise, choose the highest-ranked actionable candidate.
    Proportionality check, before filing or fixing any candidate: the proposed fix must be the smallest change that removes the demonstrated harm, and should avoid unnecessary validation layers, archives, ledgers, retries, recovery workflows, extra CI stages or slower processes. A demonstrated security boundary may require a new or strengthened control; do not reject one solely because it adds validation. Speed of execution (CI time, agent turnaround, local build/test gate time) counts as a cost: a fix that slows CI or process needs a measured harm that outweighs it. Defer to the project's existing sources of truth (for example its code host or CI system, whether GitHub, GitLab or a self-hosted/enterprise instance, for branch, merge and review state; the platform toolchain for build and signing state) instead of building a parallel verification of them. If proposed process machinery lacks demonstrated harm or a reachable failure to justify it, do not file that robust-process fix; file at most one documentation or decision-gap item stating the question and the simple options, and score the slice without penalizing the gap. When the audited code is itself machinery of that kind, prefer a finding that removes or simplifies it.
    Reachability check, before ranking: apply the section below to every candidate.
 ${category === 'security' ? `   Security assessment: require evidence of attacker control, a reachable sink and unauthorized impact, including configuration and existing controls. Distinguish accidental owner-input reliability harm, conditional exposure, unconfirmed candidates and justified dispositions. Do not count rejected or unconfirmed candidates as verified security defects. Preserve defenses against compromised dependencies, external content and browser-origin access to local services; trace and reuse existing screening only where the actual path invokes it. For PortOS, follow docs/SECURITY_RISK_ASSESSMENT.md, search prior dispositions and record conditions for reevaluation.` : ''}
 4. Keep investigation bounded after this scan. Report scanned roots, tools/commands, candidate ranking, exclusions, reviewed paths, unreviewed inventory and stopping reason. If tools or budget prevent broad discovery, report partial coverage, never claim a global worst or a clean repository.
-5. Assess the PRE-FIX state of the SLICE you deep-reviewed on 0–100 (higher is healthier): 90–100 target met / high quality, no material defect found after real inspection; 85–89 healthy with minor polish; 70–84 mostly healthy slice with 1–2 localized moderate defects; 40–69 recurring or systemic defects across multiple files/paths in the slice; 10–39 severe/core-workflow defects; 0–9 pervasive critical failure. The pragmatic target band is 85–95: do not chase 100/100 through speculative hardening, defensive layers or extra abstractions, and do not deduct points for absent hardening or ceremony without demonstrated harm. Name the slice (the top-level paths or area actually read, not the whole inventory) and rate only what you read; the dashboard derives the category trend server-side from recent slice scores, so never extrapolate a repository-wide number from a signal scan. Rate the slice, not the agent's performance or issue count. Explain the sliceScore using severity, prevalence and concrete evidence from the slice. Do not award points merely for filing or fixing this run. Use sliceScore:null for unavailable or inapplicable assessment; zero is a real score.
+5. Assess the PRE-FIX state of the SLICE you deep-reviewed on 0–100 (higher is healthier). Score the whole reviewed slice proportionally using the severity, prevalence and reach of verified defects across all deep-reviewed paths. A finding that led you to choose the slice is only one part of that evidence. Record the worst defect separately in step 6. Use these anchors:
+${QUALITY_SCORE_BANDS.map(([band, meaning]) => `   - ${band}: ${meaning}.`).join('\n')}
+   For a clean slice with worstSeverity 0, score 90–95. Simplicity earns no deduction. The pragmatic target band is 85–95. Avoid speculative hardening, defensive layers, micro-optimizations or extra abstractions to chase 100. Scores above 95 are optional.
+   Name the slice by the top-level paths or area you actually read, with the primary path first. The dashboard derives the category trend from recent slice scores. Never extrapolate a repository-wide score from a signal scan. Explain the sliceScore with concrete evidence from the reviewed paths. Filing or fixing an issue earns no points for this pre-fix assessment. Use sliceScore:null for unavailable or inapplicable assessment. Zero is a real score.
 6. Score the worst finding's severity separately on 1–10: 1–3 minor localized impact, 4–6 material recurring cost, 7–8 major workflow/reliability impact, 9–10 critical data/security/availability failure. Use 0 only when no material finding was verified. List this severity for every finding in the narrative.
-7. Include exactly one single-line QUALITY_AUDIT_JSON: {...} in your completion sentinel summary AND final response, with no secrets or personal data. Replace the example values with observed evidence. The category is fixed to this task; do not rate other categories. Beside it, include exactly one line AUDIT_SLICE: <comma-separated top-level paths or areas deep-reviewed> naming the same slice; PortOS records it so later runs of this lane rotate to other areas. Keep ordinary completion/PR instructions and summaries too.
+7. Include exactly one single-line QUALITY_AUDIT_JSON: {...} in your completion sentinel summary AND final response, with no secrets or personal data. Replace the example values with observed evidence. The category is fixed to this task; do not rate other categories. Beside it, include exactly one line AUDIT_SLICE: <comma-separated top-level paths or areas deep-reviewed> naming the same slice; PortOS records it so later runs of this lane can re-verify remediated slices or rotate to uncovered areas. Keep ordinary completion/PR instructions and summaries too. The report's inner JSON "summary" field must contain plain assessment prose only, with no QUALITY_AUDIT_JSON: or AUDIT_SLICE: lines.
 QUALITY_AUDIT_JSON: {"version":2,"category":"${category}","slice":"top-level paths or area deep-reviewed","sliceScore":null,"worstSeverity":0,"coverage":"unavailable","confidence":"low","summary":"Explain the slice assessment and strongest evidence","scannedFiles":0,"totalFiles":0}
-Allowed coverage: broad, partial, unavailable, not-applicable. Allowed confidence: low, medium, high. coverage describes the signal scan in step 1, not the deep review: scannedFiles counts files actually included in the category signal scan; totalFiles is the eligible inventory. Broad requires the whole inventory to be scanned (deep review remains bounded). Partial assessments are excluded from the overall score. For partial coverage, use sliceScore:null when the inspected evidence cannot support a slice score; explain why rather than inventing one. A numeric partial score is provisional. If unavailable or not-applicable, sliceScore must be null and explain why. Even a zero-finding audit returns this assessment.
+Allowed coverage: broad, partial, unavailable, not-applicable. Allowed confidence: low, medium, high. coverage describes the signal scan in step 1, not the deep review: scannedFiles counts files actually included in the category signal scan; totalFiles is the eligible inventory. Broad requires scanning at least ${broadCoverageMinPercent}% of a nonempty inventory (deep review remains bounded). Partial assessments are excluded from the overall score. For partial coverage, use sliceScore:null when the inspected evidence cannot support a slice score; explain why rather than inventing one. A numeric partial score is provisional. If unavailable or not-applicable, sliceScore must be null and explain why. Even a zero-finding audit returns this assessment.
 
 ${featurePriorityScope(category, priorityScope)}${reachabilityCheck(app)}`;
 }
@@ -169,6 +174,9 @@ const reportFields = {
   totalFiles: z.number().int().nonnegative(),
 };
 
+const meetsBroadCoverageMinimum = (scannedFiles, totalFiles) =>
+  totalFiles > 0 && scannedFiles / totalFiles >= BROAD_COVERAGE_MIN_RATIO;
+
 /**
  * Two report shapes are stored side by side (#12076). v1 carried a category-wide
  * `score` the agent extrapolated from a bounded slice, which moved with the slice
@@ -182,7 +190,7 @@ const qualityReportSchema = category => z.discriminatedUnion('version', [
   z.object({ version: z.literal(2), category, slice: z.string().trim().min(1).max(500), sliceScore: scoreSchema, ...reportFields }).strict(),
 ]).refine(r => r.scannedFiles <= r.totalFiles)
   .refine(r => ['unavailable', 'not-applicable'].includes(r.coverage) ? qualityRunScore(r) === null : r.scannedFiles > 0 && (r.coverage === 'partial' || qualityRunScore(r) !== null))
-  .refine(r => r.coverage !== 'broad' || (r.totalFiles > 0 && r.scannedFiles === r.totalFiles));
+  .refine(r => r.coverage !== 'broad' || meetsBroadCoverageMinimum(r.scannedFiles, r.totalFiles));
 export const auditQualityReportSchema = qualityReportSchema(categorySchema);
 // Historical files can carry a retired or newer category without registering it
 // as an active audit or admitting it to the older peer wire contract.
@@ -202,9 +210,22 @@ function qualityRunScore(report) {
  * the machine. The result is still validated by its consumer's schema.
  */
 export function numericQualityReport(report) {
-  if (!report || typeof report !== 'object' || report.version !== 2) return report;
+  if (!report || typeof report !== 'object') return report;
   const { category, worstSeverity, coverage, confidence, scannedFiles, totalFiles } = report;
-  return { version: 1, category, score: qualityRunScore(report), worstSeverity, coverage, confidence, scannedFiles, totalFiles };
+  // Older readers require equal counts for broad rows. Keep the raw counts
+  // on the stored report and project only counts that meet the local minimum.
+  const projectedScannedFiles = coverage === 'broad' && scannedFiles < totalFiles
+    && Number.isSafeInteger(scannedFiles) && Number.isSafeInteger(totalFiles)
+    && meetsBroadCoverageMinimum(scannedFiles, totalFiles) ? totalFiles : scannedFiles;
+  if (report.version === 1 && projectedScannedFiles !== scannedFiles) return { ...report, scannedFiles: projectedScannedFiles };
+  if (report.version !== 2) return report;
+  return { version: 1, category, score: qualityRunScore(report), worstSeverity, coverage, confidence, scannedFiles: projectedScannedFiles, totalFiles };
+}
+
+function sanitizeReportSummary(value) {
+  return value.split(/\r?\n/)
+    .filter(line => !/^\s*(?:AUDIT_SLICE|QUALITY_AUDIT_JSON):/.test(line))
+    .join('\n');
 }
 
 export function parseAuditQualityReport(summary, category) {
@@ -212,12 +233,11 @@ export function parseAuditQualityReport(summary, category) {
   const lines = summary.split(/\r?\n/).filter(line => line.startsWith(REPORT_PREFIX));
   if (lines.length !== 1) return null;
   const raw = safeJSONParse(lines[0].slice(REPORT_PREFIX.length), null);
-  // An agent that scanned only part of the inventory but labelled it "broad"
-  // (the common slip) still measured something real. Record it as the partial
-  // assessment it honestly is rather than dropping the whole run's measurement.
+  if (typeof raw?.summary === 'string') raw.summary = sanitizeReportSummary(raw.summary);
+  // Keep scored evidence below the broad coverage minimum as a partial assessment.
   const claim = raw && typeof raw === 'object' && raw.coverage === 'broad' && qualityRunScore(raw) !== null
     && Number.isFinite(raw.scannedFiles) && Number.isFinite(raw.totalFiles)
-    && raw.scannedFiles > 0 && raw.scannedFiles < raw.totalFiles
+    && raw.scannedFiles > 0 && raw.totalFiles > 0 && !meetsBroadCoverageMinimum(raw.scannedFiles, raw.totalFiles)
     ? { ...raw, coverage: 'partial' } : raw;
   const parsed = auditQualityReportSchema.safeParse(claim);
   return parsed.success && parsed.data.category === normalizeAuditTaskType(category) ? parsed.data : null;
@@ -271,7 +291,7 @@ export function isFreshAssessment(assessedAt, now = Date.now()) {
 }
 
 /** How many recent run scores a category's dashboard figure averages (#12076). */
-export const QUALITY_WINDOW_RUNS = 5;
+export const QUALITY_WINDOW_RUNS = 3;
 // A low-confidence run never contributes; the window weights the rest so a
 // hedged assessment moves the figure half as far as a confident one.
 const CONFIDENCE_WEIGHT = Object.freeze({ high: 1, medium: 0.5 });
@@ -283,14 +303,22 @@ const DAY_MS = 24 * 60 * 60 * 1000;
 
 function normalizeSliceText(value) {
   if (typeof value !== 'string') return null;
-  const segments = [...new Set(value.split(',').map(segment => segment.trim().toLowerCase()).filter(Boolean))].sort();
-  return segments.length ? segments.join(',') : null;
+  const segments = value.split(',')
+    .map(segment => segment.trim().toLowerCase().replaceAll('\\', '/').replace(/^\.\/+|\/+$/g, ''))
+    .filter(Boolean);
+  return segments.length ? [...new Set(segments)] : null;
 }
 
-/** Canonical slice key for same-slice superseding; null for slice-less v1/peer/snapshot rows. */
-function normalizeSliceKey(run) {
+/** Canonical slice segments in reported order, with the primary path first. */
+function normalizeSliceSegments(run) {
   const raw = run?.record?.slice ?? (run?.report?.version === 2 ? run.report.slice : null);
   return normalizeSliceText(raw) ?? (run?.report?.version === 2 ? normalizeSliceText(run.report.slice) : null);
+}
+
+function coversSlice(newer, older) {
+  return newer[0] === older[0] || older.every(path =>
+    newer.some(candidate => path === candidate || path.startsWith(`${candidate}/`))
+  );
 }
 
 function utcDay(assessedAt) {
@@ -311,9 +339,11 @@ function qualifiesForWindow(run, now) {
  * Select up to `QUALITY_WINDOW_RUNS` qualifying runs (already sorted newest-first) for a category:
  * - For a consolidated domain with >= 1 fresh qualifying domain-native run, drop pre-consolidation
  *   legacy member runs whose `assessedAt` is strictly earlier than the earliest domain-native run.
- * - Skip any older run whose non-empty normalized slice key already appeared in a newer qualifying
- *   run, so re-auditing a remediated slice supersedes its older pre-fix run.
- * - Keep at most one slice-less daily winner per category and UTC day for v1, peer, and snapshot rows.
+ * - Skip older slices when a newer qualifying run shares their canonical primary path or covers
+ *   every segment. Directory prefixes match only on path boundaries.
+ * - Prefer a retained slice over same-day slice-less evidence unless the imported run is strictly newer.
+ * - Keep one slice-less winner per eligible day. Peer and snapshot rows must also be at
+ *   least as recent as the newest qualifying local slice in the window's eligible set.
  */
 function selectCategoryWindow(id, runs, now) {
   const qualifying = runs.filter(run => qualifiesForWindow(run, now));
@@ -327,18 +357,34 @@ function selectCategoryWindow(id, runs, now) {
       );
     }
   }
-  const seenSlices = new Set();
-  const seenSlicelessDays = new Set();
-  const window = [];
+  const seenSlices = [];
+  const newestSliceByDay = new Map();
+  const candidates = [];
+  let newestLocalSliceMs = -Infinity;
+  // Check retained slices first so equal timestamps prefer identified slices regardless of tie order.
   for (const run of eligible) {
-    const sliceKey = normalizeSliceKey(run);
-    if (sliceKey !== null) {
-      if (seenSlices.has(sliceKey)) continue;
-      seenSlices.add(sliceKey);
-    } else {
-      const dayKey = `${normalizeAuditTaskType(run.record.category)}|${utcDay(run.record.assessedAt)}`;
-      if (seenSlicelessDays.has(dayKey)) continue;
-      seenSlicelessDays.add(dayKey);
+    const { assessedAt, category, sourcePeerId, sourcePeerName } = run.record;
+    const slice = normalizeSliceSegments(run);
+    const dayKey = `${normalizeAuditTaskType(category)}|${utcDay(assessedAt)}`;
+    const imported = Boolean(sourcePeerId || sourcePeerName);
+    if (slice !== null) {
+      const superseded = seenSlices.some(newer => coversSlice(newer, slice));
+      seenSlices.push(slice);
+      if (superseded) continue;
+      if (!newestSliceByDay.has(dayKey)) newestSliceByDay.set(dayKey, Date.parse(assessedAt));
+      if (!imported) newestLocalSliceMs = Math.max(newestLocalSliceMs, Date.parse(assessedAt));
+    }
+    candidates.push({ run, slice, dayKey, imported });
+  }
+  const window = [];
+  const sliceLessDays = new Set();
+  for (const { run, slice, dayKey, imported } of candidates) {
+    if (slice === null) {
+      const assessedMs = Date.parse(run.record.assessedAt);
+      const sameDaySlice = newestSliceByDay.get(dayKey);
+      if (sliceLessDays.has(dayKey) || (imported && assessedMs < newestLocalSliceMs)) continue;
+      if (sameDaySlice !== undefined && (!imported || assessedMs <= sameDaySlice)) continue;
+      sliceLessDays.add(dayKey);
     }
     window.push(run);
     if (window.length >= QUALITY_WINDOW_RUNS) break;
@@ -360,10 +406,9 @@ function windowScore(window, now = Date.now()) {
 /**
  * Roll each category's recent measurements into the app's quality summary.
  *
- * A category's `score` is the confidence- and recency-weighted mean (14-day half-life) of its newest
+ * A category's `score` is the confidence- and recency-weighted mean of its newest
  * `QUALITY_WINDOW_RUNS` qualifying runs (fresh, broad coverage, medium/high
- * confidence, scored), deduplicated by normalized slice key so re-auditing a
- * remediated slice supersedes its older pre-fix run, and isolating consolidated
+ * confidence, scored), superseding re-audited slices and isolating consolidated
  * domains from pre-consolidation legacy member runs older than the earliest
  * fresh qualifying domain-native run; `window` reports how many runs fed it and the worst
  * severity any of them found. One run's slice score is slice noise — a 20-point
@@ -373,7 +418,7 @@ function windowScore(window, now = Date.now()) {
  * run's own score, shown beside its stale/partial/low-confidence evidence as
  * before, and does not contribute. Everything else about the row (coverage,
  * confidence, slice, `runScore`, summary, provenance, staleness) describes the
- * newest run.
+ * newest run, or the window leader when same-day qualifying evidence competes.
  * The overall score stays the equal-weight mean of the contributing categories.
  *
  * `inapplicable` maps category → reason for categories this repository cannot
@@ -406,12 +451,15 @@ export function summarizeAppQuality(records = [], now = Date.now(), { inapplicab
   }
   const categories = definitions.map(([id, definition]) => {
     const runs = (runsByCategory.get(id) || []).sort((a, b) => compareQualityRecords(b.record, a.record));
-    const latest = runs[0];
+    const window = selectCategoryWindow(id, runs, now);
+    // When same-day evidence ties or a legacy slice-less run yields to a named
+    // slice, describe the winner. A newer partial/stale result still describes itself.
+    const newest = runs[0];
+    const latest = window.length && qualifiesForWindow(newest, now) ? window[0] : newest;
     const record = latest?.record;
     const valid = Boolean(latest?.valid);
     const assessedAt = record?.assessedAt;
     const stale = valid && !isFreshAssessment(assessedAt, now);
-    const window = selectCategoryWindow(id, runs, now);
     const contributes = Object.hasOwn(AUDIT_DEFINITIONS, id) && window.length > 0;
     // Only this install's own ruling, as the dispatch gate reads it: a peer's
     // or a release snapshot's describes a different checkout of the repository.
@@ -536,7 +584,7 @@ function releaseCoveredByDayRecords(release, dayRecords) {
  * release snapshot (`.quality.json`) so published evidence is never counted
  * twice, and return remaining runs in ascending order. Distinct local runs
  * from the same UTC day stay intact so `selectCategoryWindow` can apply
- * `qualifiesForWindow` and `normalizeSliceKey` superseding across all of them.
+ * qualification and slice superseding across all of them.
  */
 export function dailyQualityRecords(records) {
   const nonReleaseByDay = new Map();

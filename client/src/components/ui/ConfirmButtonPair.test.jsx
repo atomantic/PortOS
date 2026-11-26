@@ -1,5 +1,7 @@
 import { describe, it, expect, vi } from 'vitest';
 import { render, screen, fireEvent } from '@testing-library/react';
+import { useState } from 'react';
+import userEvent from '@testing-library/user-event';
 import { Trash2 } from 'lucide-react';
 
 import ConfirmButtonPair from './ConfirmButtonPair';
@@ -7,6 +9,7 @@ import ConfirmButtonPair from './ConfirmButtonPair';
 describe('ConfirmButtonPair', () => {
   it('renders default Delete/Cancel buttons with the error tone and no prompt', () => {
     render(<ConfirmButtonPair />);
+    expect(screen.getByRole('group', { name: 'Delete?' })).toHaveFocus();
     const confirm = screen.getByRole('button', { name: 'Delete' });
     expect(confirm.className).toContain('bg-port-error/20');
     const cancel = screen.getByRole('button', { name: 'Cancel' });
@@ -33,8 +36,33 @@ describe('ConfirmButtonPair', () => {
   });
 
   it('renders a short inline prompt when supplied', () => {
-    render(<ConfirmButtonPair prompt="Delete?" />);
-    expect(screen.getByText('Delete?')).toBeTruthy();
+    render(<ConfirmButtonPair prompt="Delete this note?" />);
+    expect(screen.getByText('Delete this note?')).toBeTruthy();
+    expect(screen.getByRole('group', { name: 'Delete this note?' })).toHaveFocus();
+  });
+
+  it('follows the old slot into a wrapped trigger when the pair closes', async () => {
+    const user = userEvent.setup();
+    function Actions() {
+      const [armed, setArmed] = useState(false);
+      return (
+        <div>
+          <button type="button">Other action</button>
+          {armed ? <ConfirmButtonPair onCancel={() => setArmed(false)} /> : (
+            <div><button type="button" onClick={() => setArmed(true)}>Delete note</button></div>
+          )}
+        </div>
+      );
+    }
+
+    render(<Actions />);
+    screen.getByRole('button', { name: 'Delete note' }).focus();
+    await user.keyboard('{Enter}');
+    expect(screen.getByRole('group', { name: 'Delete?' })).toHaveFocus();
+    await user.tab();
+    await user.tab();
+    await user.keyboard('{Enter}');
+    expect(screen.getByRole('button', { name: 'Delete note' })).toHaveFocus();
   });
 
   it('fires onConfirm and onCancel for the respective buttons', () => {

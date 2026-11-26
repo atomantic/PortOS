@@ -319,6 +319,7 @@ describe('CreativeCommissionDetail stop controls', () => {
     render(
       <MemoryRouter initialEntries={['/creative-commission/cc-1']}>
         <Routes>
+          <Route path="/creative-commission" element={<h1>Creative commissions</h1>} />
           <Route path="/creative-commission/:id" element={<CreativeCommissionDetail />} />
         </Routes>
       </MemoryRouter>,
@@ -367,6 +368,7 @@ describe('CreativeCommissionDetail stop controls', () => {
     });
 
     expect(deleteCommission).toHaveBeenCalledWith('cc-1', { silent: true });
+    expect(await screen.findByRole('heading', { name: 'Creative commissions' })).toBeInTheDocument();
     expect(toast.success).toHaveBeenCalledWith(expect.stringContaining('still in flight'));
   });
 });

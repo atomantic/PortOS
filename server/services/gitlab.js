@@ -97,7 +97,14 @@ export async function findMergeRequestForBranch(branch, cwd, { includeDraft = fa
   const mr = rows[0];
   if (!mr) return { status: 'none', number: null, url: null, detail: null };
   const mergedAt = typeof mr.merged_at === 'string' && Number.isFinite(Date.parse(mr.merged_at)) ? mr.merged_at : null;
-  return { status: 'found', number: mr.iid ?? null, url: mr.web_url || null, body: typeof mr.description === 'string' ? mr.description : null, detail: mr.state || null, headRefOid: typeof mr.sha === 'string' ? mr.sha : null, ...(mergedAt ? { mergedAt } : {}), ...(includeDraft ? { isDraft: mr.draft === true || mr.work_in_progress === true } : {}) };
+  return {
+    status: 'found',
+    number: mr.iid ?? null, url: mr.web_url || null, body: typeof mr.description === 'string' ? mr.description : null,
+    detail: mr.state || null, headRefOid: typeof mr.sha === 'string' ? mr.sha : null,
+    headBranch: mr.source_branch, baseBranch: mr.target_branch,
+    sameRepository: Number.isSafeInteger(mr.source_project_id) && mr.source_project_id > 0 && mr.source_project_id === mr.target_project_id,
+    ...(mergedAt ? { mergedAt } : {}), ...(includeDraft ? { isDraft: mr.draft === true || mr.work_in_progress === true } : {}),
+  };
 }
 
 /**

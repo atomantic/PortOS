@@ -26,6 +26,8 @@ describe('Rounds index', () => {
     await renderPage();
     expect(await screen.findByText('No rounds yet — write your first above.')).toBeInTheDocument();
     expect(screen.queryByRole('alert')).toBeNull();
+    fireEvent.click(screen.getByRole('button', { name: 'Write a round' }));
+    expect(screen.getByLabelText('Title')).toHaveFocus();
   });
 
   it('shows a Retry instead of the empty copy on a failed read, and recovers on Retry', async () => {

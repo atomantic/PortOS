@@ -5,6 +5,7 @@
  */
 
 import { anchorUserExcludes } from '../../lib/sharedSchemas.js';
+import { RECORDING_STAGE_PATH, RECORDING_STAGE_RSYNC_GLOB } from '../cos/recordingStages.js';
 
 // Paths under data/ that are skipped by default on top of user-configured excludes.
 // Two classes live here: (1) ephemeral/cache data the user almost never wants in a
@@ -26,12 +27,19 @@ export const DEFAULT_EXCLUDES = [
   { path: '/images/.media-copy-*.tmp', reason: 'Unpublished collection media transfer bytes', overridable: false },
   { path: '/videos/.media-copy-*.tmp', reason: 'Unpublished collection media transfer bytes', overridable: false },
   { path: '/videos/.topaz-staging/', reason: 'Ephemeral Topaz upload and result staging', overridable: false },
+  { path: '/certs/', reason: 'Machine-local HTTPS certificates and private keys — provisioned per host', overridable: false },
+  { path: '/calendar/google-auth/', reason: 'Machine-local Google OAuth credentials — reauthorized per host', overridable: false },
+  { path: '/spotify/credentials.json', reason: 'Machine-local Spotify OAuth client credentials', overridable: false },
+  { path: '/spotify/tokens.json', reason: 'Machine-local Spotify OAuth tokens — reauthorized per host', overridable: false },
+  { path: '/spotify/cache/', reason: 'Machine-local Spotify raw response cache', overridable: false },
+  { path: '/openclaw/', reason: 'Machine-local OpenClaw credentials', overridable: false },
   { path: '/backup-admission/', reason: 'Machine-local publication ownership and snapshot fences', overridable: false },
   { path: '/image-thumbnails/', reason: 'Regenerable image grid previews', overridable: false },
   { path: '/python/', reason: 'Managed Python virtualenvs and the Laya-MLX runtime/weights — rebuilt by the next Python-backed run; a restored venv has absolute interpreter paths and is broken on another machine', overridable: false },
   { path: '/venvs/', reason: 'Reactor environment, its private Python and downloaded uv — rebuilt by npm run setup:reactor; absolute paths make a restored copy unusable', overridable: false },
   { path: '/browser-profile/', reason: 'Browser CDP profile — cache/cookies, can be several GB', overridable: false },
   { path: '/cos/agents/.branch-policy-revision*', reason: 'Machine-local archive policy index revision', overridable: false },
+  { path: RECORDING_STAGE_RSYNC_GLOB, reason: 'Unpublished CoS recording compression scratch, including interrupted writes', overridable: false },
   { path: '/cos/worktrees/', reason: 'Ephemeral agent git worktrees — recreated on demand', overridable: false },
   { path: '/cos/initialized-checkout-fixtures/', reason: 'Retired CoS checkout test fixtures — regenerable, removed by migration 461', overridable: false },
   { path: '/autofixer/worktrees/', reason: 'Disposable Autofixer repair worktrees — recreated for each repair', overridable: false },
@@ -78,6 +86,13 @@ export const DEFAULT_EXCLUDES = [
   { path: '/tailcat-forwards.json.*.tmp', reason: 'Interrupted atomic writes of Tailcat peer forwards', overridable: false },
   { path: '/database-restore-recovery.json', reason: 'In-flight database restore recovery journal — a machine-local admission fence for one restore operation, never data to restore', overridable: false },
   { path: '/.database-restore-recovery-*.pending', reason: 'Unpublished database restore recovery journal bytes — scratch from an interrupted journal write', overridable: false },
+  { path: '/database-maintenance/', reason: 'Machine-local database cutover admission fence and active operation', overridable: false },
+  { path: '/database-authority-*.pending', reason: 'Unpublished database cutover authority writes', overridable: false },
+  { path: '/.peer-execution-authority-lock', reason: 'Machine-local peer execution authority lock or adoption intent', overridable: false },
+  { path: '/.peer-execution-authority-*.pending', reason: 'Unpublished peer execution authority writes', overridable: false },
+  { path: '/.peer-execution-adoption-*.pending', reason: 'Unpublished peer execution adoption intent writes', overridable: false },
+  { path: '/migrations.lock/', reason: 'Machine-local file migration runner lock', overridable: false },
+  { path: '/migrations.applied.json.tmp-*', reason: 'Unpublished file migration ledger writes', overridable: false },
   { path: '/model-manifest.json', reason: 'Tracked downloaded-model inventory — machine-local and re-derivable by rescanning the model stores; a restored copy would describe another machine\'s disks', overridable: false },
   { path: '/contacts-cache.json', reason: 'Regenerable macOS Contacts lookup cache — re-synced from AddressBook on demand', overridable: false },
   // Anchored, like every entry here. Readiness evidence is bound to THIS
@@ -213,7 +228,7 @@ export const isOsMetadataFile = (name) => OS_METADATA_FILES.has(name) || name.st
 export const OS_METADATA_RSYNC_EXCLUDES = [...OS_METADATA_FILES, '._*'].map(name => `--exclude=${name}`);
 
 /**
- * Data-root files a restore never installs. Some snapshots retain them as
+ * Data-root paths a restore never installs. Some snapshots retain them as
  * recovery evidence; Tailcat authority is excluded from new snapshots too. `database-authority.json` names which database backend a
  * completed cutover retired ON THE MACHINE THAT RAN IT. Installing another
  * machine's record (or an older snapshot's, after a reverse cutover) would fence
@@ -225,8 +240,10 @@ export const OS_METADATA_RSYNC_EXCLUDES = [...OS_METADATA_FILES, '._*'].map(name
  * verification and execution cannot disagree.
  */
 const RESTORE_PRESERVED_FILES = Object.freeze([
-  'tailcat-serve.json', 'tailcat-serve.addr', 'tailcat-forwards.json',
-  'database-authority.json', 'peer-execution', 'peer-execution-catalog.json', 'peer-execution-grants.json', 'peer-execution-authority.json', 'peer-execution-recovery.jsonl', 'workflow-maintenance', 'backup-admission', 'cos/agents/.branch-policy-revision',
+  'certs', 'tailcat-serve.json', 'tailcat-serve.addr', 'tailcat-forwards.json',
+  'calendar/google-auth', 'spotify/credentials.json', 'spotify/tokens.json', 'spotify/cache', 'openclaw',
+  'database-authority.json', 'database-restore-recovery.json', 'database-maintenance',
+  '.peer-execution-authority-lock', 'migrations.lock', 'peer-execution', 'peer-execution-catalog.json', 'peer-execution-grants.json', 'peer-execution-authority.json', 'peer-execution-recovery.jsonl', 'workflow-maintenance', 'backup-admission', 'cos/agents/.branch-policy-revision',
 ]);
 // Matched case-insensitively (rsync has no such flag, so each letter becomes a
 // `[xX]` class): on a case-insensitive volume a `Database-Authority.json` entry
@@ -234,13 +251,24 @@ const RESTORE_PRESERVED_FILES = Object.freeze([
 const caseInsensitiveGlob = (name) => name.replace(/[a-z]/gi, ch => `[${ch.toLowerCase()}${ch.toUpperCase()}]`);
 export const RESTORE_PRESERVED_RSYNC_EXCLUDES = [
   ...RESTORE_PRESERVED_FILES.map(name => `--exclude=/${caseInsensitiveGlob(name)}`),
+  `--exclude=${RECORDING_STAGE_RSYNC_GLOB}`,
   `--exclude=/${caseInsensitiveGlob('tailcat-serve.json.*.tmp')}`,
   `--exclude=/${caseInsensitiveGlob('tailcat-forwards.json.*.tmp')}`,
+  `--exclude=/${caseInsensitiveGlob('.database-restore-recovery-*.pending')}`,
+  `--exclude=/${caseInsensitiveGlob('database-authority-*.pending')}`,
+  `--exclude=/${caseInsensitiveGlob('.peer-execution-authority-*.pending')}`,
+  `--exclude=/${caseInsensitiveGlob('.peer-execution-adoption-*.pending')}`,
+  `--exclude=/${caseInsensitiveGlob('migrations.applied.json.tmp-*')}`,
 ];
 export const isRestorePreservedPath = (relativePath) => {
   if (typeof relativePath !== 'string') return false;
   const normalized = relativePath.toLowerCase();
-  return /^tailcat-(?:serve|forwards)\.json\.[^/]+\.tmp$/.test(normalized)
+  return RECORDING_STAGE_PATH.test(relativePath)
+    || /^tailcat-(?:serve|forwards)\.json\.[^/]+\.tmp$/.test(normalized)
+    || /^\.database-restore-recovery-[^/]*\.pending(?:\/|$)/.test(normalized)
+    || /^database-authority-[^/]*\.pending(?:\/|$)/.test(normalized)
+    || /^\.peer-execution-(?:authority|adoption)-[^/]*\.pending(?:\/|$)/.test(normalized)
+    || /^migrations\.applied\.json\.tmp-[^/]*(?:\/|$)/.test(normalized)
     || RESTORE_PRESERVED_FILES.some(path => normalized === path || normalized.startsWith(`${path}/`));
 };
 
@@ -248,7 +276,7 @@ export const isRestorePreservedPath = (relativePath) => {
 // Compared case-insensitively after dropping empty/`.` segments, so
 // `./Database-Authority.json/` cannot slip past on a case-insensitive volume.
 export const restoreScopeIsPreservedFile = (subdirFilter) => {
-  const normalized = subdirFilter?.split('/').filter(part => part && part !== '.').join('/').toLowerCase();
+  const normalized = subdirFilter?.split('/').filter(part => part && part !== '.').join('/');
   return isRestorePreservedPath(normalized);
 };
 

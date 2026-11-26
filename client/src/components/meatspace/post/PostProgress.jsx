@@ -2,7 +2,7 @@ import { useState, useEffect, useCallback, useMemo, useRef } from 'react';
 import { ArrowLeft, Flame, Trophy, Clock, Gauge, TrendingUp, History } from 'lucide-react';
 import {
   LineChart, Line, XAxis, YAxis, Tooltip, ResponsiveContainer, CartesianGrid
-} from 'recharts';
+} from '../../ui/charts';
 import { useNavigate } from 'react-router';
 import { getPostProgress } from '../../../services/apiMeatspace.js';
 import useChartColors from '../../../hooks/useChartColors.js';

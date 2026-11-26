@@ -153,7 +153,7 @@ function findFreeHour(target, { busy, taken, low, high }) {
 }
 
 /**
- * First free hour at or AFTER `target`, wrapping past midnight.
+ * First free hour at or AFTER `target` on the same day.
  *
  * The claim drain works the issues the audit before it just filed, so it may
  * only ever move later. An outward search would happily place it an hour
@@ -254,9 +254,19 @@ export function planQualitySchedule({ taskTypes = [], fileIssuesByType = {}, bus
   // One audit hour per daily slot, plus the claim hour that follows it.
   const taken = new Set();
   const placements = [];
+  const claimOffset = Math.max(1, Number(settings.claimOffsetHours) || 1);
+  const claimSafeEnd = settings.claimBetween
+    ? Math.min(windowEndHour, Math.max(windowStartHour, 23 - claimOffset))
+    : windowEndHour;
   for (let slot = 0; slot < checksPerDay; slot += 1) {
     const target = windowStartHour + Math.round((slot * windowHours) / checksPerDay);
-    const auditHour = findFreeHour(Math.min(target, windowEndHour), { busy, taken, low: windowStartHour, high: windowEndHour });
+    const search = { busy, taken, low: windowStartHour, high: claimSafeEnd };
+    // Prefer leaving room for a same-day drain. Keep the audit even when
+    // only the last hours of the window are free.
+    const auditHour = findFreeHour(Math.min(target, claimSafeEnd), search)
+      ?? (claimSafeEnd < windowEndHour
+        ? findFreeHour(Math.min(target, windowEndHour), { ...search, high: windowEndHour })
+        : null);
     if (auditHour === null) {
       warnings.push('Not enough unoccupied hours in the chosen window for every daily slot; reduce checks per day or widen the window.');
       break;
@@ -268,7 +278,7 @@ export function planQualitySchedule({ taskTypes = [], fileIssuesByType = {}, bus
     if (!settings.claimBetween) continue;
     // The claim drain may sit outside the audit window — it is the follow-up
     // work, not an audit — but never past midnight (see findFreeHourForward).
-    const claimTarget = auditHour + Math.max(1, Number(settings.claimOffsetHours) || 1);
+    const claimTarget = auditHour + claimOffset;
     const claimHour = claimTarget > 23 ? null : findFreeHourForward(claimTarget, { busy, taken });
     if (claimHour === null) {
       warnings.push('No free hour left in the day for the claim drain after every check; it will run on fewer slots.');

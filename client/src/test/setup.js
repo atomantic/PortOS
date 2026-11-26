@@ -1,125 +1,145 @@
-import '@testing-library/jest-dom/vitest';
 import { afterEach, expect } from 'vitest';
-import { cleanup, configure } from '@testing-library/react';
 import { installTestStorage } from './storagePolyfill.js';
-import { installFormValidityFix } from './formValidityPolyfill.js';
-import { ASYNC_UTIL_TIMEOUT_MS } from './timeouts.js';
-import { actWarningEntry, formatActWarningError } from './actWarnings.js';
 import { createUnexpectedFetchGuard } from './networkGuard.js';
-
-// The suite-wide Testing Library async budget. The value, and why the per-test
-// and hook budgets in vitest.config.js are derived from it rather than written
-// alongside it, live in timeouts.js — read that before changing this.
-configure({ asyncUtilTimeout: ASYNC_UTIL_TIMEOUT_MS });
 
 // Guarantee a working localStorage/sessionStorage before any test runs, regardless
 // of how the environment exposes Storage. See storagePolyfill.js / #1438.
 installTestStorage();
-
-// Make constraint validation match a browser so implicit form submission isn't
-// swallowed by a float-modulo step check. See formValidityPolyfill.js / #6144.
-installFormValidityFix();
 
 // A missing transport mock must never fall through to happy-dom's localhost:3000
 // server. Explicit integration fixtures can replace fetch for their own tests.
 const networkGuard = createUnexpectedFetchGuard(() => expect.getState().currentTestName);
 globalThis.fetch = networkGuard.fetch;
 
-// Iframe protocol tests inspect URLs and supply their own messages/documents.
-// Allow inert frame creation, then stop navigation before Happy DOM's internal
-// fetch (which bypasses the global fetch guard). Disabling the loader itself
-// emits an error even for about:blank instead of giving these fixtures a frame.
-const testDomSettings = globalThis.window?.happyDOM?.settings;
-if (testDomSettings) {
-  testDomSettings.navigation.disableChildFrameNavigation = true;
-  testDomSettings.enableIframePageLoading = true;
-}
+const hasDom = typeof document !== 'undefined';
+let cleanup;
+let takeActWarningError;
 
-// The test DOM doesn't implement Element.prototype.scrollIntoView; components call it
-// (often from a requestAnimationFrame callback that can fire AFTER a test unmounts),
-// and the resulting unhandled error fails the whole run despite passing assertions
-// (#2958). Stub it once, guarded so it never clobbers a real implementation — on real
-// DOM elements scrollIntoView is always present, so production is unaffected.
-if (typeof Element !== 'undefined' && !Element.prototype.scrollIntoView) {
-  Element.prototype.scrollIntoView = () => {};
-}
+if (hasDom) {
+  const [
+    { cleanup: cleanupReact, configure },
+    { installFormValidityFix },
+    { ASYNC_UTIL_TIMEOUT_MS },
+    { actWarningEntry, formatActWarningError },
+  ] = await Promise.all([
+    import('@testing-library/react'),
+    import('./formValidityPolyfill.js'),
+    import('./timeouts.js'),
+    import('./actWarnings.js'),
+    import('@testing-library/jest-dom/vitest'),
+  ]);
+  cleanup = cleanupReact;
 
-// Stub the media/canvas methods the test DOM omits, to eliminate stderr noise in test runs
-if (typeof HTMLMediaElement !== 'undefined') {
-  HTMLMediaElement.prototype.play = () => Promise.resolve();
-  HTMLMediaElement.prototype.pause = () => {};
-}
+  // The suite-wide Testing Library async budget. The value, and why the per-test
+  // and hook budgets in vitest.config.js are derived from it rather than written
+  // alongside it, live in timeouts.js — read that before changing this.
+  configure({ asyncUtilTimeout: ASYNC_UTIL_TIMEOUT_MS });
 
-if (typeof HTMLCanvasElement !== 'undefined') {
-  HTMLCanvasElement.prototype.getContext = () => ({
-    fillRect: () => {},
-    clearRect: () => {},
-    getImageData: (_x, _y, w, h) => ({ data: new Uint8ClampedArray(w * h * 4) }),
-    putImageData: () => {},
-    createImageData: () => ({ data: new Uint8ClampedArray(0) }),
-    setTransform: () => {},
-    drawImage: () => {},
-    save: () => {},
-    fillText: () => {},
-    restore: () => {},
-    beginPath: () => {},
-    moveTo: () => {},
-    lineTo: () => {},
-    closePath: () => {},
-    stroke: () => {},
-    translate: () => {},
-    scale: () => {},
-    rotate: () => {},
-    arc: () => {},
-    fill: () => {},
-    measureText: (text) => ({ width: String(text ?? '').length * 6 }),
-    transform: () => {},
-    rect: () => {},
-    clip: () => {},
-    // Path/text/gradient members the graph + poster canvases use. A gradient
-    // has to be an object with addColorStop, because callers assign it to
-    // fillStyle and keep drawing.
-    roundRect: () => {},
-    quadraticCurveTo: () => {},
-    strokeText: () => {},
-    setLineDash: () => {},
-    createLinearGradient: () => ({ addColorStop: () => {} }),
-    createRadialGradient: () => ({ addColorStop: () => {} }),
-  });
-}
+  // Make constraint validation match a browser so implicit form submission isn't
+  // swallowed by a float-modulo step check. See formValidityPolyfill.js / #6144.
+  installFormValidityFix();
 
-// Fail any test that triggers React's "not wrapped in act(...)" warning (#2406).
-// These mark unsettled async state updates — usually a mount-effect fetch whose
-// mocked promise resolves after the sync test body — which vitest hides locally
-// for passing tests but which flood CI logs and are the mechanism behind
-// timing-dependent CI flakes. Fix by settling inside act after render:
-//   await act(async () => {});
-// (see renderConfig in src/components/meatspace/post/PostDrillConfig.test.jsx).
-// Tests that assert an in-flight pending state should settle at the END instead.
-// Each entry records the component and the test running when the warning fired.
-// This is observation context only: a late setState may come from asynchronous
-// work started in an earlier test, whose identity cannot be recovered here.
-const actWarnings = [];
-const originalConsoleError = console.error;
-console.error = (...args) => {
-  originalConsoleError(...args);
-  if (typeof args[0] === 'string' && args[0].includes('not wrapped in act')) {
-    // Null between tests; formatActWarningError renders that case too.
-    actWarnings.push(actWarningEntry(args[1], expect.getState().currentTestName));
+  // Iframe protocol tests inspect URLs and supply their own messages/documents.
+  // Allow inert frame creation, then stop navigation before Happy DOM's internal
+  // fetch (which bypasses the global fetch guard). Disabling the loader itself
+  // emits an error even for about:blank instead of giving these fixtures a frame.
+  const testDomSettings = globalThis.window?.happyDOM?.settings;
+  if (testDomSettings) {
+    testDomSettings.navigation.disableChildFrameNavigation = true;
+    testDomSettings.enableIframePageLoading = true;
   }
-};
+
+  // The test DOM doesn't implement Element.prototype.scrollIntoView; components call it
+  // (often from a requestAnimationFrame callback that can fire AFTER a test unmounts),
+  // and the resulting unhandled error fails the whole run despite passing assertions
+  // (#2958). Stub it once, guarded so it never clobbers a real implementation — on real
+  // DOM elements scrollIntoView is always present, so production is unaffected.
+  if (typeof Element !== 'undefined' && !Element.prototype.scrollIntoView) {
+    Element.prototype.scrollIntoView = () => {};
+  }
+
+  // Stub the media/canvas methods the test DOM omits, to eliminate stderr noise in test runs
+  if (typeof HTMLMediaElement !== 'undefined') {
+    HTMLMediaElement.prototype.play = () => Promise.resolve();
+    HTMLMediaElement.prototype.pause = () => {};
+  }
+
+  if (typeof HTMLCanvasElement !== 'undefined') {
+    HTMLCanvasElement.prototype.getContext = () => ({
+      fillRect: () => {},
+      clearRect: () => {},
+      getImageData: (_x, _y, w, h) => ({ data: new Uint8ClampedArray(w * h * 4) }),
+      putImageData: () => {},
+      createImageData: () => ({ data: new Uint8ClampedArray(0) }),
+      setTransform: () => {},
+      drawImage: () => {},
+      save: () => {},
+      fillText: () => {},
+      restore: () => {},
+      beginPath: () => {},
+      moveTo: () => {},
+      lineTo: () => {},
+      closePath: () => {},
+      stroke: () => {},
+      translate: () => {},
+      scale: () => {},
+      rotate: () => {},
+      arc: () => {},
+      fill: () => {},
+      measureText: (text) => ({ width: String(text ?? '').length * 6 }),
+      transform: () => {},
+      rect: () => {},
+      clip: () => {},
+      // Path/text/gradient members the graph + poster canvases use. A gradient
+      // has to be an object with addColorStop, because callers assign it to
+      // fillStyle and keep drawing.
+      roundRect: () => {},
+      quadraticCurveTo: () => {},
+      strokeText: () => {},
+      setLineDash: () => {},
+      createLinearGradient: () => ({ addColorStop: () => {} }),
+      createRadialGradient: () => ({ addColorStop: () => {} }),
+    });
+  }
+
+  // Fail any test that triggers React's "not wrapped in act(...)" warning (#2406).
+  // These mark unsettled async state updates — usually a mount-effect fetch whose
+  // mocked promise resolves after the sync test body — which vitest hides locally
+  // for passing tests but which flood CI logs and are the mechanism behind
+  // timing-dependent CI flakes. Fix by settling inside act after render:
+  //   await act(async () => {});
+  // (see renderConfig in src/components/meatspace/post/PostDrillConfig.test.jsx).
+  // Tests that assert an in-flight pending state should settle at the END instead.
+  // Each entry records the component and the test running when the warning fired.
+  // This is observation context only: a late setState may come from asynchronous
+  // work started in an earlier test, whose identity cannot be recovered here.
+  const actWarnings = [];
+  const originalConsoleError = console.error;
+  console.error = (...args) => {
+    originalConsoleError(...args);
+    if (typeof args[0] === 'string' && args[0].includes('not wrapped in act')) {
+      // Null between tests; formatActWarningError renders that case too.
+      actWarnings.push(actWarningEntry(args[1], expect.getState().currentTestName));
+    }
+  };
+
+  takeActWarningError = () => {
+    const actError = actWarnings.length > 0
+      ? formatActWarningError(actWarnings, expect.getState().currentTestName)
+      : null;
+    actWarnings.length = 0;
+    return actError;
+  };
+}
 
 afterEach(() => {
-  cleanup();
+  cleanup?.();
   const networkError = networkGuard.takeError();
   // Reset storage between tests so a file that forgets its own `clear()` can't leak
   // state into the next — reinforces the isolation the polyfill restores.
   globalThis.localStorage?.clear();
   globalThis.sessionStorage?.clear();
-  const actError = actWarnings.length > 0
-    ? formatActWarningError(actWarnings, expect.getState().currentTestName)
-    : null;
-  actWarnings.length = 0;
+  const actError = takeActWarningError?.();
   if (networkError || actError) {
     throw new Error([networkError?.message, actError].filter(Boolean).join('\n'));
   }

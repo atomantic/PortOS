@@ -37,7 +37,7 @@ export function footageReady(project) {
   if (FOOTAGE_OPTIONAL_MODES.has(project?.composition?.mode || 'concat')) return true;
   const scenes = project?.scenes || [];
   const layered = isLayeredComposition(project);
-  return scenes.length > 0 && scenes.every((scene) => sceneRenderReady(scene, { layered, scenes }));
+  return scenes.length > 0 && scenes.every((scene) => sceneRenderReady(scene, { layered, scenes, assetMarks: project.assetMarks }));
 }
 
 /** A code video is composed once it was generated or the director holds sections to render. */

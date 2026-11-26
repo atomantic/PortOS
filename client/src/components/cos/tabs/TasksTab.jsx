@@ -1,3 +1,4 @@
+import { cardRecordLabels, taskCardLabel } from '../cardRecordLabels';
 import { usePagedCollection } from '../../../hooks/usePagedCollection';
 import InfiniteScrollFooter from '../../ui/InfiniteScrollFooter';
 import { useState, useRef, useEffect, useCallback, useMemo } from 'react';
@@ -5,19 +6,9 @@ import { useSearchParams } from 'react-router';
 import { ChevronDown, ChevronRight } from 'lucide-react';
 import toast from '../../ui/Toast';
 import {
-  DndContext,
-  closestCenter,
-  KeyboardSensor,
-  PointerSensor,
-  useSensor,
-  useSensors,
-} from '@dnd-kit/core';
-import {
-  arrayMove,
-  SortableContext,
-  sortableKeyboardCoordinates,
-  verticalListSortingStrategy,
-} from '@dnd-kit/sortable';
+  DndContext, closestCenter, KeyboardSensor, PointerSensor, useSensor, useSensors,
+  arrayMove, SortableContext, sortableKeyboardCoordinates, verticalListSortingStrategy,
+} from '../../../lib/dnd/index.js';
 import { getCosTasks, getCosLearningDurations, reorderCosTasks } from '../../../services/apiAgents.js';
 import TaskItem, { taskRowId } from './TaskItem';
 import SortableTaskItem from './SortableTaskItem';
@@ -301,6 +292,8 @@ export default function TasksTab({ completedRevision = 0, tasks, agents = [], ag
     onRefresh();
   }, [onRefresh, onTaskAdded]);
 
+  const taskLabels = cardRecordLabels([...userTasksLocal, ...cosTasks].map(task => [task.id, taskCardLabel(task)]));
+
   const isUserLoading = tasks?.user == null;
   const isCosLoading = tasks?.cos == null;
   const isQueueLoading = isUserLoading || isCosLoading;
@@ -335,7 +328,7 @@ export default function TasksTab({ completedRevision = 0, tasks, agents = [], ag
       const { task, section } = entry;
       const spawning = agentsLoaded && !agentsError && isSpawning(task);
       const agent = section !== 'unconfirmed' && (task.status === 'in_progress' || spawning) ? taskAgent(task) : null;
-      const props = { task, agent, spawning, liveOutput: liveOutputs[runningAgentByTaskId.get(task.id)?.id],
+      const props = { task, recordLabel: taskLabels.get(task.id), agent, spawning, liveOutput: liveOutputs[runningAgentByTaskId.get(task.id)?.id],
         waiting: section === 'pending' && task.status === 'in_progress',
         unconfirmed: section === 'unconfirmed' ? unconfirmedReason(task) : null,
         retryIdentity: section === 'unconfirmed' && agentsLoaded && !agentsError && !selfInstanceId

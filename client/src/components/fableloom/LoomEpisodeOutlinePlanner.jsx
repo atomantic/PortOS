@@ -1,5 +1,5 @@
 import LoomShotPlanner from './LoomShotPlanner';
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { AlertTriangle, CheckCircle2, ChevronDown, ChevronUp, CircleAlert, Loader2, Save, Sparkles, Trash2 } from 'lucide-react';
 import ProviderModelSelector from '../ProviderModelSelector';
 import { FormField } from '../ui/FormField.jsx';
@@ -238,6 +238,8 @@ export default function LoomEpisodeOutlinePlanner({
   expanding = false,
 }) {
   const [outline, setOutline] = useState(() => cloneOutline(episode.storyOutline));
+  const lastServerOutline = useRef({ episodeId: episode.id, outline: episode.storyOutline });
+  const publishedOutline = useRef(null);
   const [dirty, setDirty] = useState(false);
   const [validation, setValidation] = useState(null);
   const [review, setReview] = useState(null);
@@ -257,12 +259,30 @@ export default function LoomEpisodeOutlinePlanner({
   }), [route]);
 
   useEffect(() => {
+    const previous = lastServerOutline.current;
+    const switchedEpisode = previous.episodeId !== episode.id;
+    if (!switchedEpisode && previous.outline === episode.storyOutline) return;
+    lastServerOutline.current = { episodeId: episode.id, outline: episode.storyOutline };
+    const cameFromPlanner = publishedOutline.current?.outline === episode.storyOutline
+      && publishedOutline.current?.episodeId === episode.id;
+    publishedOutline.current = null;
+    if (!switchedEpisode && (dirty || cameFromPlanner)) return;
     setOutline(cloneOutline(episode.storyOutline));
-    setDirty(false);
     setValidation(null);
     setReview(null);
-    setExpandedKey(null);
-  }, [episode.id]);
+    if (switchedEpisode) {
+      setDirty(false);
+      setExpandedKey(null);
+    }
+  }, [episode.id, episode.storyOutline, dirty]);
+
+  const publishOutlineUpdate = (nextLoom) => {
+    const savedOutline = nextLoom?.episodes?.find((item) => item.id === episode.id)?.storyOutline;
+    // Keep the richer local result when this mutation's response returns as a prop.
+    publishedOutline.current = { episodeId: episode.id, outline: savedOutline };
+    onLoomUpdate(nextLoom);
+    return savedOutline;
+  };
 
   const scenes = asArray(outline?.scenes);
   const plotPoints = asArray(loom.seriesPlan?.plotPoints)
@@ -313,7 +333,7 @@ export default function LoomEpisodeOutlinePlanner({
     setValidation(result.validation || null);
     setReview(null);
     setDirty(false);
-    onLoomUpdate(result.loom);
+    publishOutlineUpdate(result.loom);
     toast.success(hasScenes ? 'Beat outline refreshed from the episode' : 'Episode beat outline drafted');
   }, { errorMessage: 'Episode outline drafting failed' });
 
@@ -322,8 +342,7 @@ export default function LoomEpisodeOutlinePlanner({
     const updated = await updateLoomEpisode(loom.id, episode.id, {
       storyOutline: { ...outline, validation: { ...draftValidation } },
     }, { silent: true });
-    onLoomUpdate(updated);
-    const saved = updated.episodes.find((item) => item.id === episode.id)?.storyOutline;
+    const saved = publishOutlineUpdate(updated);
     setOutline(cloneOutline(saved));
     setDirty(false);
     setValidation(null);
@@ -341,7 +360,7 @@ export default function LoomEpisodeOutlinePlanner({
     setOutline(cloneOutline(result.outline));
     setValidation(result.validation);
     setDirty(false);
-    onLoomUpdate(result.loom);
+    publishOutlineUpdate(result.loom);
     toast.success(result.validation.stats.errorCount ? 'Outline needs edits' : 'Outline validated — ready for expansion');
   }, { errorMessage: 'Outline validation failed' });
 
@@ -470,7 +489,7 @@ export default function LoomEpisodeOutlinePlanner({
           ) : null}
         </>
       )}
-      <LoomShotPlanner onRunningChange={setShotPlanning} key={episode.id} loom={loom} episode={episode} route={routeBody} guidance={guidance} disabled={busy || dirty || generating || saving || validating || reviewing || expanding} onLoomUpdate={(next) => { onLoomUpdate(next); setOutline(cloneOutline(next.episodes.find((item) => item.id === episode.id)?.storyOutline)); setValidation(null); }} />
+      <LoomShotPlanner onRunningChange={setShotPlanning} key={episode.id} loom={loom} episode={episode} route={routeBody} guidance={guidance} disabled={busy || dirty || generating || saving || validating || reviewing || expanding} onLoomUpdate={(next) => { setOutline(cloneOutline(publishOutlineUpdate(next))); setValidation(null); }} />
       <LoomAiRunStatus run={generateRun.run} />
       <LoomAiRunStatus run={reviewRun.run} />
     </section>

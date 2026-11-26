@@ -198,15 +198,15 @@ describe('pending-merge handoff instructions (#12247)', () => {
     expect(prompt).toContain('before each local review attempt capture `REVIEW_ATTEMPTED_HEAD=$(git rev-parse HEAD)`');
     expect(prompt).toContain('nonempty all-optional roster');
     expect(prompt).toContain('accepted unresolved findings or rejection');
-    const command = prompt.split('\n').find((line) => line.includes('printf "REVIEW_STATUS=optional-inconclusive'));
+    const command = prompt.split('\n').find((line) => line.includes('write-status') && line.includes('optional-inconclusive "$REVIEW_ATTEMPTED_HEAD"'));
     const repo = mkdtempSync(join(tmpdir(), 'optional-review-head-'));
     try {
       const git = (...args) => execFileSync('git', args, { cwd: repo, encoding: 'utf8' }).trim();
-      git('init', '-q');
+      git('init', '-q', '-b', 'example');
       git('-c', 'user.name=Example', '-c', 'user.email=example@example.com', 'commit', '-q', '--allow-empty', '-m', 'example');
       const head = git('rev-parse', 'HEAD');
       const statusFile = join(repo, git('rev-parse', '--git-path', 'portos-review-status'));
-      const run = (attempted) => execFileSync('sh', ['-c', command], { cwd: repo, env: { ...process.env, REVIEW_ATTEMPTED_HEAD: attempted } });
+      const run = (attempted) => execFileSync('sh', ['-c', command], { cwd: repo, env: { ...process.env, REVIEW_WORKTREE: repo, REVIEW_BRANCH: 'example', REVIEW_ATTEMPTED_HEAD: attempted } });
       for (const blocked of ['review-blocked', 'findings', 'pending']) {
         writeFileSync(statusFile, `REVIEW_STATUS=${blocked}\n`);
         expect(() => run(head)).toThrow();
@@ -226,19 +226,24 @@ describe('pending-merge handoff instructions (#12247)', () => {
   // kept, exactly one REVIEW_HEAD naming the reviewed commit.
   it.skipIf(process.platform === 'win32')('records exactly one REVIEW_HEAD for the reviewed commit beside REVIEW_STATUS', () => {
     const prompt = buildClaimFlowCompletionSection({ agentId: 'parent-example', mergeHandoff: true });
-    const command = prompt.split('\n').find((line) => line.includes('REVIEW_HEAD=%s'));
+    const command = prompt.split('\n').find((line) => line.includes('record-head') && line.includes('"$REVIEW_ATTEMPTED_HEAD"'));
     const repo = mkdtempSync(join(tmpdir(), 'review-head-'));
     try {
       const git = (...args) => execFileSync('git', args, { cwd: repo, encoding: 'utf8' }).trim();
-      git('init', '-q');
+      git('init', '-q', '-b', 'example');
       git('-c', 'user.name=Example', '-c', 'user.email=example@example.com', 'commit', '-q', '--allow-empty', '-m', 'example');
       const statusFile = join(repo, git('rev-parse', '--git-path', 'portos-review-status'));
+      const inspected = git('rev-parse', 'HEAD');
+      git('-c', 'user.name=Example', '-c', 'user.email=example@example.com', 'commit', '-q', '--allow-empty', '-m', 'later');
+      const run = () => execFileSync('sh', ['-c', command], {
+        cwd: repo, env: { ...process.env, REVIEW_WORKTREE: repo, REVIEW_BRANCH: 'example', REVIEW_ATTEMPTED_HEAD: inspected },
+      });
       // No reviewers ran: the record must not invent a status file the server would read as unreadable.
-      execFileSync('sh', ['-c', command], { cwd: repo });
+      run();
       expect(existsSync(statusFile)).toBe(false);
       writeFileSync(statusFile, `REVIEW_STATUS=clean\nREVIEW_HEAD=${'f'.repeat(40)}\n`);
-      execFileSync('sh', ['-c', command], { cwd: repo });
-      expect(readFileSync(statusFile, 'utf8')).toBe(`REVIEW_STATUS=clean\nREVIEW_HEAD=${git('rev-parse', 'HEAD')}\n`);
+      run();
+      expect(readFileSync(statusFile, 'utf8')).toBe(`REVIEW_STATUS=clean\nREVIEW_HEAD=${inspected}\n`);
     } finally {
       rmSync(repo, { recursive: true, force: true });
     }
@@ -261,7 +266,8 @@ describe('claim flow workflow-scope handoff', () => {
     expect(missing).toContain('lacks the `workflow` scope');
     expect(missing).toContain('gh auth refresh -h github.com -s workflow');
     expect(missing).toContain('status "blocked"');
-    expect(missing).toContain('"mode":"approval"');
+    expect(missing).toContain('"mode":"approval","code":"github-workflow-scope"');
+    expect(missing).toContain('held branch if publication was refused');
     expect(missing).toContain('This is a warning, not a merge refusal.');
     expect(missing).toContain('After the configured review and required CI gates pass');
     expect(missing).toContain('one normal head-pinned merge attempt using the assigned credential');

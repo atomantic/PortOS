@@ -4,6 +4,7 @@ import { isCatalogMediaReferenceId, musicVideoCastGuideReferences, musicVideoCat
 import { musicVideoGreyboxReferences } from '../../../../server/lib/musicVideo/musicVideoGreybox.js';
 import { MUSIC_VIDEO_OTHER_REFERENCES_NOTE } from '../../../../server/lib/musicVideo/musicVideoShotPrompt.js';
 import { musicVideoCameoReferences } from '../../../../server/lib/musicVideo/musicVideoCameos.js';
+import { isIncludedShotReference } from '../../../../server/lib/musicVideo/musicVideoCastSelection.js';
 import MediaImage from '../MediaImage';
 import SceneReferencePicker from './SceneReferencePicker.jsx';
 import InfoTooltip from '../ui/InfoTooltip';
@@ -41,11 +42,12 @@ export default function SceneFrameReferences({ project, scene, castMedia = null,
   const chosen = musicVideoConditioningReferences(project, scene, castMedia, greybox, { limit: MUSIC_VIDEO_MAX_REFERENCE_CHOICES + musicVideoGreyboxReferences(greybox).length });
   const chosenIds = chosen.map((ref) => ref.id);
   const ids = chosen.filter((ref) => !ref.greybox).map((ref) => ref.id);
-  const others = musicVideoOfferedReferences(choices).filter((ref) => !chosenIds.includes(ref.id));
+  const others = musicVideoOfferedReferences(choices).filter((ref) => !chosenIds.includes(ref.id) && isIncludedShotReference(project, scene, ref));
   const auto = !Array.isArray(scene.frameReferenceIds);
   // Unresolved saved guides still occupy slots and must survive an edit.
   // Compared as resolved: a saved id that moved to a listed reference is that chip, not an unresolved guide.
-  const unresolvedGuides = resolvedFramePickIds(project, scene, castMedia).filter((refId) => isCatalogMediaReferenceId(refId) && !ids.includes(refId));
+  const unresolvedGuides = resolvedFramePickIds(project, scene, castMedia).filter((refId) => !ids.includes(refId)
+    && (isCatalogMediaReferenceId(refId) || choices.some(ref => ref.id === refId && !isIncludedShotReference(project, scene, ref))));
   const full = ids.length + unresolvedGuides.length >= MUSIC_VIDEO_MAX_REFERENCE_CHOICES;
   const notOffered = auto ? [] : musicVideoCatalogPickPlans(project, [scene])[0]?.unmappedFrame || [];
   const previewProps = (ref) => ({
@@ -120,7 +122,7 @@ export default function SceneFrameReferences({ project, scene, castMedia = null,
         {others.length > 0 && (
           <li>
             <button type="button" onClick={() => setAdding((open) => !open)} disabled={locked || full} aria-expanded={adding}
-              title={full ? `Up to ${MUSIC_VIDEO_MAX_REFERENCE_CHOICES} references` : 'Send another character or set'}
+              title={full ? `Up to ${MUSIC_VIDEO_MAX_REFERENCE_CHOICES} references` : 'Send another reference'}
               className={`${CHIP} px-2 disabled:opacity-50`}>
               <Plus size={12} aria-hidden="true" /> Add
             </button>
@@ -133,7 +135,8 @@ export default function SceneFrameReferences({ project, scene, castMedia = null,
       {!locked && musicVideoMissingFrameLinkedPicks(project, scene, castMedia).length > 0 && <p className="text-[11px] text-port-warning">A picked cast reference is unavailable, so frames will not render. Reload to try again, or use Back to auto.</p>}
       {notOffered.length > 0 && <p className="text-[11px] text-port-warning">Left out of new renders because the catalog check-in does not offer {notOffered.map(nameOf).join(', ')}. Offer {notOffered.length === 1 ? 'it' : 'them'} on the catalog record, add a replacement here, or use Back to auto.</p>}
       {chosen.length === 0 && <p className="text-[11px] text-port-text-muted">No shot references selected. Mood-board images may fill available slots.</p>}
-      <SceneReferencePicker open={adding && !full} references={others} label="References to add" hint={PICKER_HINT} onClose={() => setAdding(false)}
+      <SceneReferencePicker open={adding && !full} references={others} label="References to add" hint={PICKER_HINT}
+        onClose={() => { setAdding(false); setPreview(null); }} onFilterChange={() => setPreview(null)}
         tileProps={(ref) => ({ disabled: locked, onClick: unlessLongPress(() => { set([...ids, ref.id]); setAdding(false); setPreview(null); }), ...previewProps(ref) })}>
         {adding && previewFigure}
       </SceneReferencePicker>

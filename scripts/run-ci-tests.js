@@ -11,7 +11,7 @@ import { isDirectlyInvoked } from './lib/directInvocation.js';
 import { sweepStaleRunRoots, writeOwnerFile } from './lib/vitestStaleRunRoots.js';
 import { formatErrorAnnotation, formatWarningAnnotation, writeStepOutput, writeStepSummary } from './lib/githubOutput.js';
 import { reportWindowsCrashDiagnostics } from './ci-windows-crash-diagnostics.js';
-import { RUN_DIAGNOSTIC_MAX_BYTES, replayContext, replayDiagnostic, diagnosticTestFile, persistTestDiagnostic, processExitDiagnostic } from './ci-test-diagnostics.js';
+import { RUN_DIAGNOSTIC_MAX_BYTES, SUITE_ERROR_LIMIT, SUITE_ERROR_FIELD_LIMIT, replayContext, replayDiagnostic, diagnosticTestFile, persistTestDiagnostic, processExitDiagnostic } from './ci-test-diagnostics.js';
 import { browserShardSlice } from './lib/browserSuites.js';
 import { browserProfileAcceptedVerdicts, browserTestProfileArgs, browserTestProfileFiles, assertBrowserProfileExecuted, BROWSER_FIDELITY_ONLY_FILES } from './lib/browserTestProfiles.js';
 import {
@@ -24,14 +24,13 @@ import { SERVED_FILES_ENV, readServedFiles } from './lib/browserServedFiles.js';
 import { browserOwnerExcludes, TEST_SCOPES, workspaceOf } from './lib/workspaceTests.js';
 import { resolveDbTestFiles } from './lib/dbTestFiles.js';
 import { CI_GUARD_BUDGET_MS, describeGuardDurations, guardDurations, overBudgetGuards, readGuardLoads } from './lib/guardBudget.js';
-import { getAlwaysRunTests } from './lib/ciPlanRules.js';
+import { getAlwaysRunTests, PROMPT_STAGE_GUARD } from './lib/ciPlanRules.js';
 import { isClientBrowserSuite } from './lib/importReach.js';
 
 const repoRoot = join(dirname(fileURLToPath(import.meta.url)), '..');
 
 // The manifest scan is selected on relevant diffs and in the full suite.
 // Give it the scheduled guard budget without making it run on unrelated PRs.
-const PROMPT_STAGE_GUARD = 'scripts/generate-prompt-stage-call-sites.test.js';
 
 /**
  * Vitest's own signature for a worker that never returned control at all — a
@@ -168,6 +167,7 @@ function readInvocation(reportPath) {
  */
 export function structuredFailureDiagnostics(reportPath, runReportPath) {
   const lines = [];
+  let suiteFailures = [];
   if (runReportPath) {
     try {
       if (statSync(runReportPath).size > RUN_DIAGNOSTIC_MAX_BYTES) throw new Error('run report exceeds limit');
@@ -178,6 +178,12 @@ export function structuredFailureDiagnostics(reportPath, runReportPath) {
       lines.push(replayDiagnostic(readInvocation(reportPath), run));
       lines.push(`Vitest run: reason=${run.reason}, exitCode=${run.exitCode}, unhandledErrors=${run.errorCount}`);
       lines.push(processExitDiagnostic(run));
+      if (Array.isArray(run.suiteErrors)) {
+        suiteFailures = run.suiteErrors.slice(0, SUITE_ERROR_LIMIT)
+          .filter(record => typeof record?.file === 'string' && typeof record.suite === 'string' && typeof record.summary === 'string')
+          .map(({ file, suite, summary }) => `FAIL ${diagnosticTestFile(file)} > ${suite.slice(0, SUITE_ERROR_FIELD_LIMIT)}\n${summary.slice(0, SUITE_ERROR_FIELD_LIMIT)}`);
+      }
+      if (suiteFailures.length) lines.push(`Structured Vitest suite errors (up to ${SUITE_ERROR_LIMIT}):\n${suiteFailures.join('\n')}`);
       if (run.teardownTimeout) lines.push('Vitest teardown timed out.');
       if (run.errors.length) lines.push(`Vitest unhandled errors (up to 10):\n${run.errors.slice(0, 10).map(error => error.slice(0, 8000)).join('\n')}`);
     } catch {
@@ -207,9 +213,11 @@ export function structuredFailureDiagnostics(reportPath, runReportPath) {
       }
       if (failures.length >= 10) break;
     }
-    lines.push(failures.length
-      ? `Structured Vitest failure diagnostics (up to 10 failures):\n${failures.slice(0, 10).join('\n')}`
-      : 'Inconclusive Vitest diagnostics: structured report contains no failed assertion or suite message.');
+    if (failures.length) {
+      lines.push(`Structured Vitest failure diagnostics (up to 10 failures):\n${failures.slice(0, 10).join('\n')}`);
+    } else if (suiteFailures.length === 0) {
+      lines.push('Inconclusive Vitest diagnostics: structured report contains no failed assertion or suite message.');
+    }
   } catch {
     lines.push('Inconclusive Vitest diagnostics: structured report is missing, malformed, or exceeds 32 MiB.');
   }

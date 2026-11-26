@@ -6,24 +6,29 @@ Semantic memory system for the Chief of Staff that stores facts, learnings, obse
 
 - **Memory Backend** (`server/services/memoryBackend.js`): Selects the storage backend — `memoryDB.js` (PostgreSQL + pgvector) for real installs; `memory.js` (JSON files) is a test-only escape hatch (`MEMORY_BACKEND=file` / `NODE_ENV=test`), not a supported deployment mode
 - **Memory DB Service** (`server/services/memoryDB.js`): Primary CRUD, search, and lifecycle operations against PostgreSQL
-- **Embeddings Service** (`server/services/memoryEmbeddings.js`): LM Studio integration for vector generation
+- **Embeddings Service** (`server/services/memoryEmbeddings.js`): Configured embeddings provider integration for vector generation
 - **Memory Extractor** (`server/services/memoryExtractor.js`): Extract memories from agent output
 - **Memory Classifier** (`server/services/memoryClassifier.js`): LLM-based quality filtering
 - **Memory Retriever** (`server/services/memoryRetriever.js`): Context injection for agent prompts
 - **Memory Routes** (`server/routes/memory.js`): REST API endpoints
-- **Memory Tab** (`ChiefOfStaff.jsx`): UI with list, timeline, and graph views
+- **Memory Tab** (`client/src/components/cos/tabs/MemoryTab.jsx`): UI with list, timeline, and graph views
 
 ## Features
 
 1. **Six Memory Types**: fact, learning, observation, decision, preference, context
-2. **Semantic Search**: LM Studio embeddings for similarity-based retrieval
+2. **Semantic Search**: Configured embeddings provider for similarity-based retrieval
 3. **LLM Classification**: Intelligent memory extraction with quality filtering (M31)
 4. **Auto-Extraction**: Memories extracted from successful agent task completions
 5. **Auto-Injection**: Relevant memories injected into agent prompts before execution
-6. **Importance Decay**: Time-based decay with access-based boosts
-7. **Memory Consolidation**: Merge similar memories automatically
+6. **Persistent Mind Reflection**: Stored importance changes through edits. For reflection,
+   the Mind considers active standard memories it owns that are older than 30 days and
+   lack a verdict on the current version. The reflection score starts at stored importance
+   and halves every 90 idle days after a 30-day grace period. Idleness starts at the last
+   access or, for unread memories, at creation. A score below 0.15 makes the memory eligible
+   for review.
+7. **Manual Maintenance**: API calls consolidate similar memories or clear expired memories.
 8. **Real-time Updates**: WebSocket events for memory changes
-9. **Graph Visualization**: D3.js relationship graph (planned)
+9. **Graph Visualization**: React Three Fiber relationship graph (`client/src/components/cos/tabs/MemoryGraph.jsx`)
 
 ## Persistent Mind message recall
 
@@ -50,7 +55,7 @@ remain standard until explicitly marked; no identity is inferred from private
 conversation history during installation or startup.
 
 Protected memories remain active through manual and self-triggered mind cleanup,
-background decay, expiration, and duplicate consolidation. Cleanup reports both
+expiration, and duplicate consolidation. Cleanup reports both
 archived and preserved counts. Clearing history still removes facts stored only
 in that history, so save lasting identity and knowledge as protected memories
 first. Protected memories take priority in the bounded context; protection is a
@@ -108,7 +113,7 @@ or a note whose events were cleared with the history, is shown as author unknown
   sourceAgentId: string,   // Origin agent
   embedding: number[],     // Vector (768 dims for nomic-embed)
   confidence: number,      // 0.0-1.0
-  importance: number,      // 0.0-1.0 (decays over time)
+  importance: number,      // Stored value from 0.0 to 1.0
   accessCount: number,
   lastAccessed: string,
   createdAt: string,
@@ -151,6 +156,10 @@ The memory classifier uses LM Studio's gptoss-20b model to intelligently evaluat
 
 ### Configuration
 
+Choose **Memory extraction model** under **Settings → AI Assignments → Memory & Catalog**. The assignment is stored in `settings.memoryClassifier` as `{ providerId, model }`. The selected provider processes agent output and a summary of existing memories without tools. Choose **Disabled** to skip AI classification. The Memory tab shows whether the classifier is reachable.
+
+Choose **Legacy LM Studio** to keep the direct LM Studio classifier, which is the default when the assignment is unset. The defaults below can be overridden in `data/memory-classifier-config.json`. Its `timeout`, `maxOutputLength` and `fallbackToPatterns` settings also apply to assigned models.
+
 ```json
 {
   "enabled": true,
@@ -159,7 +168,6 @@ The memory classifier uses LM Studio's gptoss-20b model to intelligently evaluat
   "model": "gptoss-20b",
   "timeout": 60000,
   "maxOutputLength": 10000,
-  "minConfidence": 0.6,
   "fallbackToPatterns": true
 }
 ```
@@ -168,10 +176,10 @@ The memory classifier uses LM Studio's gptoss-20b model to intelligently evaluat
 
 Memories are extracted from agent output:
 
-1. **LLM Classification**: gptoss-20b analyzes task and output, extracts quality memories
-2. **Fallback Patterns**: If LLM unavailable, falls back to pattern matching
-3. **High confidence (>0.8)**: Auto-saved
-4. **Medium confidence (0.5-0.8)**: Queued for user approval
+1. The configured classifier analyzes the task and agent output for memories.
+2. When classification is disabled, unavailable, or fails, extraction uses pattern matching if `fallbackToPatterns` is enabled.
+3. In execute mode, memories with confidence of at least 0.85 are saved automatically.
+4. Memories with confidence from 0.7 up to (but below) 0.85 are queued for approval; lower-confidence memories are dropped. In dry-run mode for the `memory` autonomy domain, every memory that passes this quality filter—including high-confidence memories that would otherwise be auto-saved—is sent to approval.
 
 ## Memory Injection
 
@@ -199,10 +207,9 @@ Before agent task execution:
 | GET /api/memory/graph | Graph visualization data |
 | GET /api/memory/stats | Memory statistics |
 | POST /api/memory/link | Link two memories |
-| POST /api/memory/consolidate | Merge similar memories |
-| POST /api/memory/decay | Apply importance decay (`decayRate` in (0, 0.02], default 0.01; else 400) |
-| DELETE /api/memory/expired | Clear expired memories |
-| GET /api/memory/embeddings/status | LM Studio connection status |
+| POST /api/memory/consolidate | Manually merge similar memories (supports `dryRun`) |
+| DELETE /api/memory/expired | Manually clear expired memories |
+| GET /api/memory/embeddings/status | Embedding and classifier availability |
 | GET /api/memory/backend/status | Active storage backend status |
 | GET /api/memory/sync | File↔DB sync status |
 | POST /api/memory/sync | Trigger file↔DB sync |
@@ -221,28 +228,15 @@ Before agent task execution:
 
 ## Setup Requirements
 
-**LM Studio** must be running with an embedding model loaded:
+Configure the embedding backend under **Models → Embeddings**. Select an embedding
+provider (Ollama, LM Studio, or **Disabled**) and its model. The memory system
+uses that shared embedding setting; no particular local server is required when
+embeddings are disabled or another provider is selected. Configure the memory
+classifier separately under **Settings → AI Assignments → Memory & Catalog**.
 
-1. Download and install [LM Studio](https://lmstudio.ai/)
-2. Load an embedding model: `text-embedding-nomic-embed-text-v2-moe` (recommended)
-3. Load a classification model: `gptoss-20b` or similar
-4. Start the local server on port 1234 (default)
-5. The memory system will automatically connect
-
-## LM Studio Configuration
-
-```javascript
-memory: {
-  enabled: true,
-  embeddingProvider: 'lmstudio',
-  embeddingEndpoint: 'http://localhost:1234/v1/embeddings',
-  embeddingModel: 'text-embedding-nomic-embed-text-v2-moe',
-  embeddingDimension: 768,
-  maxContextTokens: 2000,
-  minRelevanceThreshold: 0.7,
-  autoExtractEnabled: true
-}
-```
+Memory injection has a fixed budget of 2,000 tokens and uses a relevance floor
+of 0.7. These are implementation limits, not settings in the CoS configuration
+store.
 
 ## Implementation Files
 
@@ -253,7 +247,7 @@ memory: {
 | `server/services/memoryBackend.js` | Backend switcher (Postgres primary, file test-only) |
 | `server/services/memoryDB.js` | Core CRUD, search, lifecycle (PostgreSQL + pgvector) |
 | `server/services/memory.js` | File-backed CRUD (test-only backend) |
-| `server/services/memoryEmbeddings.js` | LM Studio embedding generation |
+| `server/services/memoryEmbeddings.js` | Configured embeddings provider integration |
 | `server/services/memoryExtractor.js` | Extract memories from agent output |
 | `server/services/memoryClassifier.js` | LLM-based classification service |
 | `server/services/memoryRetriever.js` | Retrieve and format for injection |

@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from 'vitest';
 import { act, fireEvent, render, screen, waitFor } from '@testing-library/react';
-import StoryboardAnimatic, { clipTimeAt, shotAt } from './StoryboardAnimatic.jsx';
+import StoryboardAnimatic from './StoryboardAnimatic.jsx';
+import { clipTimeAt, shotAt } from './animaticTiming.js';
 import { PREVIEW_FILM_LOOK_KEY } from './PreviewFilmLook.jsx';
 
 const scenes = [

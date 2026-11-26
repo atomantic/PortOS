@@ -31,7 +31,7 @@
  * narrows the root it hands to Vite to those files (`servedTree`).
  *
  * Sharding: the runner partitions the memo-independent candidate inventory
- * (`serverShardSlice` for the server's two shards, Vitest's hash otherwise),
+ * (`serverShardSlice` pins costly server and client suites over the hash),
  * then evaluates related reach and memo hits within the owned slice. Each
  * file has one owner across shards even when their memo records differ.
  * Vitest itself never receives `--shard`.
@@ -46,6 +46,7 @@ import * as nodePath from 'node:path';
 import { dirname, isAbsolute, join, relative, sep } from 'node:path';
 import { resolveTestChrome } from './testChrome.js';
 import { TOOLING_TESTS, getAlwaysRunTests } from './ciPlanRules.js';
+import { FULL_SUITE_SHARDS } from './ciPlanOutput.js';
 import { isGuardTest } from './guardScanners.js';
 import { NEVER_MARKER, TEST_MEMO_NEVER, WORKSPACE_BASE_INPUTS, WORKSPACE_SETUP_ENTRIES, createDiskFs, createTestMemoAnalyzer, relatedTests } from './testMemo.js';
 import { loadFactsCache } from './testMemo/factsCache.js';
@@ -271,58 +272,58 @@ export const SERVER_HEAVY_SHARD_OWNERS = {
 };
 
 /**
- * The 34 real-Chromium client suites, pinned so the 4-way client matrix gets 8-9
- * each and the four slowest (SceneClipCoverageLayout, MoodBoardDetail,
- * PageLayout, SceneCard) land on distinct shards (#17750). The raw hash had
- * placed 6 / 9 / 9 / 10 with the two slowest together. A browser suite added
- * later is simply not in the table and stays on the hash.
+ * Pin 5–6 real-Chromium suites per client shard. The assignments use hosted
+ * durations from four-shard runs to balance the browser load against each
+ * shard's hashed non-browser files (#18795). New suites stay on the hash
+ * until they are pinned.
  */
 export const CLIENT_BROWSER_SHARD_OWNERS = Object.freeze({
-  'client/src/components/Drawer.browser.test.js': 1,
-  'client/src/components/brain/tabs/InboxTab.browser.test.js': 1,
-  'client/src/components/catalog/GenerateImageControl.browser.test.js': 1,
-  'client/src/components/cos/tabs/AgentCard.touch.browser.test.js': 1,
+  'client/src/components/DownloadManager.browser.test.js': 1,
   'client/src/components/media/MediaLightbox.browser.test.js': 1,
-  'client/src/components/musicVideo/SceneClipCoverageLayout.browser.test.js': 1,
+  'client/src/components/musicVideo/BlenderFilmPanel.browser.test.js': 1,
+  'client/src/components/musicVideo/CastAndSetsGreybox.browser.test.js': 1,
   'client/src/components/ui/InfoTooltip.browser.test.js': 1,
-  'client/src/pages/Loras.browser.test.js': 1,
+  'client/src/lib/musicVideoFlyer.browser.test.js': 1,
   'client/src/components/ProviderModelSelector.browser.test.js': 2,
-  'client/src/components/catalog/CatalogCard.browser.test.js': 2,
-  'client/src/components/catalog/GreyboxGlb.browser.test.js': 2,
-  'client/src/components/cos/tabs/PreflightProgress.browser.test.js': 2,
-  'client/src/components/goals/GoalsOrganization.browser.test.js': 2,
-  'client/src/components/ui/OverflowMenu.browser.test.js': 2,
-  'client/src/pages/MoodBoardDetail.browser.test.js': 2,
-  'client/src/pages/PromptManager.browser.test.js': 2,
-  'client/src/components/catalog/CatalogMergePanel.browser.test.js': 3,
+  'client/src/components/brain/tabs/InboxTab.browser.test.js': 2,
+  'client/src/components/cos/tabs/AgentCard.touch.browser.test.js': 2,
+  'client/src/components/cos/tabs/RunsTab.browser.test.js': 2,
+  'client/src/pages/Loras.browser.test.js': 2,
+  'client/src/pages/PageLayout.browser.test.js': 2,
+  'client/src/components/catalog/GenerateImageControl.browser.test.js': 3,
   'client/src/components/catalog/GreyboxPanel.browser.test.js': 3,
-  'client/src/components/cos/tabs/RunsTab.browser.test.js': 3,
-  'client/src/components/goals/GoalsTreeView.browser.test.js': 3,
-  'client/src/components/musicVideo/CastAndSetsGreybox.browser.test.js': 3,
-  'client/src/components/settings/AiAssignmentsTab.layout.browser.test.js': 3,
-  'client/src/lib/musicVideoFlyer.browser.test.js': 3,
-  'client/src/pages/PageLayout.browser.test.js': 3,
-  'client/src/pages/Shell.browser.test.js': 3,
+  'client/src/components/cos/tabs/PreflightProgress.browser.test.js': 3,
+  'client/src/components/goals/GoalsOrganization.browser.test.js': 3,
+  'client/src/main.browser.test.js': 3,
+  'client/src/pages/MoodBoardDetail.browser.test.js': 3,
   'client/src/components/CmdKSearch.browser.test.js': 4,
-  'client/src/components/DownloadManager.browser.test.js': 4,
-  'client/src/components/ThemeSwitcher.browser.test.js': 4,
-  'client/src/components/catalog/CatalogReferenceVideo.browser.test.js': 4,
-  'client/src/components/media/AssetReferences.browser.test.js': 4,
-  'client/src/components/musicVideo/BlenderFilmPanel.browser.test.js': 4,
-  'client/src/components/musicVideo/SceneCard.browser.test.js': 4,
-  'client/src/pages/FableLoomStory.browser.test.js': 4,
-  'client/src/pages/StoryBuilder.browser.test.js': 4,
+  'client/src/components/Drawer.browser.test.js': 4,
+  'client/src/components/catalog/CatalogMergePanel.browser.test.js': 4,
+  'client/src/components/catalog/GreyboxGlb.browser.test.js': 4,
+  'client/src/components/musicVideo/SceneClipCoverageLayout.browser.test.js': 4,
+  'client/src/components/catalog/CatalogCard.browser.test.js': 5,
+  'client/src/components/catalog/CatalogReferenceVideo.browser.test.js': 5,
+  'client/src/components/media/AssetReferences.browser.test.js': 5,
+  'client/src/components/musicVideo/SceneCard.browser.test.js': 5,
+  'client/src/components/settings/AiAssignmentsTab.layout.browser.test.js': 5,
+  'client/src/pages/PromptManager.browser.test.js': 5,
+  'client/src/components/ThemeSwitcher.browser.test.js': 6,
+  'client/src/components/goals/GoalsTreeView.browser.test.js': 6,
+  'client/src/components/ui/OverflowMenu.browser.test.js': 6,
+  'client/src/pages/FableLoomStory.browser.test.js': 6,
+  'client/src/pages/Shell.browser.test.js': 6,
+  'client/src/pages/StoryBuilder.browser.test.js': 6,
 });
 
 /**
  * Shard `index` of `count`. Server with two shards moves `SERVER_HEAVY_SHARD_OWNERS`
- * and client with four moves `CLIENT_BROWSER_SHARD_OWNERS` off the hash; every
+ * and the client matrix moves `CLIENT_BROWSER_SHARD_OWNERS` off the hash. Every
  * other file stays where `vitestShardSlice` of the full list put it. Any other
  * shape is that hash alone, so Vitest's own sequencer stays aligned.
  */
 export function serverShardSlice(files, options) {
   const { index, count, scope } = options;
-  const owners = scope === 'client' && count === 4 ? CLIENT_BROWSER_SHARD_OWNERS
+  const owners = scope === 'client' && count === FULL_SUITE_SHARDS.client ? CLIENT_BROWSER_SHARD_OWNERS
     : scope !== 'client' && count === 2 ? SERVER_HEAVY_SHARD_OWNERS : null;
   if (!owners) return vitestShardSlice(files, options);
   const pinned = new Set(files.filter((file) => Number.isInteger(owners[file])));

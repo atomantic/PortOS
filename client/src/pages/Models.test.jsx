@@ -86,6 +86,7 @@ describe('Models', () => {
     expect(await screen.findByText('comparison panel')).toBeInTheDocument();
     fireEvent.click(screen.getByRole('tab', { name: 'Coding benchmarks' }));
     expect(await screen.findByRole('heading', { name: 'Coding benchmark comparison' })).toBeInTheDocument();
+    expect(await screen.findByRole('img', { name: /score vs. task cost/ })).toBeInTheDocument();
     expect(screen.queryByText('comparison panel')).not.toBeInTheDocument();
     fireEvent.click(screen.getByRole('tab', { name: 'General intelligence' }));
     expect(await screen.findByText('comparison panel')).toBeInTheDocument();

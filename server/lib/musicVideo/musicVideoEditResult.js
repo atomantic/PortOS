@@ -5,8 +5,7 @@
  * the edit and the one it presents now (services/musicVideo/editResult.js): `updatedAt`,
  * `sceneIds` (the shot order), the changed `scenes` presented, the other changed top-level `project`
  * fields (readiness, approvals, final staleness) and the `removed` ones. Applied to the record it
- * was taken from, it gives exactly what a reload would show. A pure leaf: the client re-exports it
- * (client/src/lib/musicVideoEditResult.js) and the server's reload-parity tests run it.
+ * was taken from, it gives exactly what a reload would show. The client and the server's reload-parity tests import this pure leaf.
  *
  * A diff is only safe against that record. Null means "reload instead": the reply is older than what
  * the page shows (a later change already landed), it was taken from a revision other than the one

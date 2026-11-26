@@ -39,28 +39,34 @@ function holdNextWrite({ fail = false } = {}) {
 afterAll(() => rmSync(TEST_DATA_ROOT, { recursive: true, force: true }));
 
 describe('messageAccounts', () => {
-  it('derives send capabilities on read without trusting persisted capability flags', async () => {
+  it('derives send and action capabilities without trusting persisted capability flags', async () => {
     await messageAccounts.createAccount({ name: 'Gmail', type: 'gmail' });
     uuid.mockReturnValueOnce('outlook-id');
     await messageAccounts.createAccount({ name: 'Outlook', type: 'outlook' });
     uuid.mockReturnValueOnce('teams-id');
-    await messageAccounts.createAccount({ name: 'Teams', type: 'teams' });
+    expect(await messageAccounts.createAccount({ name: 'Teams', type: 'teams' })).toMatchObject({ actions: [] });
+    expect(await messageAccounts.updateAccount('outlook-id', { name: 'Outlook' })).toMatchObject({ actions: ['archive', 'delete'] });
     expect((await messageAccounts.listAccounts()).map(({ type, canSend }) => ({ type, canSend }))).toEqual([
       { type: 'gmail', canSend: true }, { type: 'outlook', canSend: true }, { type: 'teams', canSend: true }
     ]);
-    expect(await messageAccounts.getAccount('teams-id')).toMatchObject({ type: 'teams', canSend: true, provider: 'playwright' });
+    expect(await messageAccounts.getAccount('teams-id')).toMatchObject({ type: 'teams', canSend: true, provider: 'playwright', actions: [] });
+    expect((await messageAccounts.listAccounts()).map(({ type, actions }) => ({ type, actions }))).toEqual([
+      { type: 'gmail', actions: ['archive', 'delete'] },
+      { type: 'outlook', actions: ['archive', 'delete'] },
+      { type: 'teams', actions: [] }
+    ]);
   });
 
-  it('derives the offered sync modes and read-state capability per provider (#9968)', async () => {
+  it('derives sync modes, read state and body refresh capabilities per provider', async () => {
     await messageAccounts.createAccount({ name: 'Gmail', type: 'gmail' });
     uuid.mockReturnValueOnce('outlook-id');
     await messageAccounts.createAccount({ name: 'Outlook', type: 'outlook' });
     uuid.mockReturnValueOnce('teams-id');
     await messageAccounts.createAccount({ name: 'Teams', type: 'teams' });
-    expect((await messageAccounts.listAccounts()).map(({ type, syncModes, hasReadState }) => ({ type, syncModes, hasReadState }))).toEqual([
-      { type: 'gmail', syncModes: ['unread', 'full'], hasReadState: true },
-      { type: 'outlook', syncModes: ['unread', 'full'], hasReadState: true },
-      { type: 'teams', syncModes: ['full'], hasReadState: false }
+    expect((await messageAccounts.listAccounts()).map(({ type, syncModes, hasReadState, supportsBodyRefresh }) => ({ type, syncModes, hasReadState, supportsBodyRefresh }))).toEqual([
+      { type: 'gmail', syncModes: ['unread', 'full'], hasReadState: true, supportsBodyRefresh: false },
+      { type: 'outlook', syncModes: ['unread', 'full'], hasReadState: true, supportsBodyRefresh: true },
+      { type: 'teams', syncModes: ['full'], hasReadState: false, supportsBodyRefresh: false }
     ]);
   });
 

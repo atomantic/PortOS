@@ -1,5 +1,8 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
+const publishConflictReview = vi.hoisted(() => vi.fn());
+vi.mock('./prConflictReview.js', () => ({ publishConflictReview }));
+
 const reportInfrastructureFailure = vi.hoisted(() => vi.fn(async () => null));
 vi.mock('./reviewInfrastructureFailure.js', () => ({ reportReviewInfrastructureFailure: reportInfrastructureFailure }));
 
@@ -415,11 +418,33 @@ describe('runPrReviewerSecurityPreflight', () => {
 
   beforeEach(() => {
     reportInfrastructureFailure.mockClear();
+    publishConflictReview.mockReset();
     securityMock.listExternalOpenPullRequests.mockReset();
     securityMock.runPrReviewerSecurityScan.mockReset();
     securityMock.securityScanFingerprint.mockReset().mockReturnValue('scan-key-1');
     guardMock.writePublicReviewInputSnapshot.mockReset().mockResolvedValue(true);
     taskStoreMock.getCosTasks.mockReset().mockResolvedValue({ tasks: [] });
+  });
+
+  it('delivers a targeted deterministic defect as a review without writing agent input', async () => {
+    listed(externalPr(12, HEAD_12));
+    securityMock.runPrReviewerSecurityScan.mockResolvedValue({ ok: false, code: 'patch-conflict-markers' });
+    publishConflictReview.mockResolvedValue('posted');
+    const result = await runPrReviewerSecurityPreflight('pr-reviewer', APP, preflightMetadata(), 12, schedule(), { allowPatchFeedback: true });
+    expect(result).toMatchObject({ skipped: true, patchFeedback: { delivered: true } });
+    expect(securityMock.runPrReviewerSecurityScan).toHaveBeenCalledWith(expect.objectContaining({ detectPatchDefects: true }));
+    expect(publishConflictReview).toHaveBeenCalledWith(expect.objectContaining({ app: APP, pr: expect.objectContaining({ number: 12, headRefOid: HEAD_12 }) }));
+    expect(guardMock.writePublicReviewInputSnapshot).not.toHaveBeenCalled();
+    expect(reportInfrastructureFailure).not.toHaveBeenCalled();
+  });
+
+  it.each([true, false])('never publishes uncertain assessment (operator feedback enabled: %s)', async (allowPatchFeedback) => {
+    listed(externalPr(12, HEAD_12));
+    securityMock.runPrReviewerSecurityScan.mockResolvedValue({ ok: false, code: 'security-model-uncertain', message: 'Classifier prose' });
+    expect(await runPrReviewerSecurityPreflight('pr-reviewer', APP, preflightMetadata(), 12, schedule(), { allowPatchFeedback }))
+      .toMatchObject({ skipped: true, reason: 'security-model-uncertain' });
+    expect(publishConflictReview).not.toHaveBeenCalled();
+    expect(guardMock.writePublicReviewInputSnapshot).not.toHaveBeenCalled();
   });
 
   it('stops a broken local guard and queues infrastructure diagnosis without forwarding the PR', async () => {

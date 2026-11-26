@@ -31,6 +31,7 @@ vi.mock('../services/instances.js', async (importOriginal) => ({
   getAssignableInstances: vi.fn(),
   getPeers: vi.fn(),
   probePeer: vi.fn(),
+  queryPeer: vi.fn(),
 }));
 // This suite's routes/instances.js import pulls getSelf/updateSelf from the
 // identity leaf (#6836) — double it too so an untested route (e.g. GET /
@@ -97,6 +98,22 @@ const buildApp = () => {
   app.use(errorMiddleware);
   return app;
 };
+
+describe('GET /api/instances/peers/:id/query', () => {
+  it.each([
+    [404, 'NOT_FOUND', 'Peer not found'],
+    [502, 'BAD_GATEWAY', 'Peer query failed (upstream HTTP 403)'],
+    [502, 'BAD_GATEWAY', 'Peer query failed (upstream HTTP 500)'],
+  ])('returns HTTP %i and %s for %s', async (status, code, error) => {
+    instances.queryPeer.mockResolvedValueOnce({ status, error });
+
+    const res = await request(buildApp()).get('/api/instances/peers/peer-1/query?path=/api/apps');
+
+    expect(res.status).toBe(status);
+    expect(res.body).toMatchObject({ code, error });
+    expect(instances.queryPeer).toHaveBeenLastCalledWith('peer-1', '/api/apps');
+  });
+});
 
 describe('POST /api/instances/provision-cert', () => {
   beforeEach(() => { provisionTailscaleCert.mockReset(); });
@@ -508,7 +525,11 @@ describe('local peer admission configuration', () => {
     expect(instances.pairPeerSyncSecret).toHaveBeenCalledWith('peer-a');
   });
 
-  it('accepts the one-time bootstrap only from Basic auth and a registered peer identity', async () => {
+  it.each([
+    ['RFC UUID', '191aaece-a492-41ee-a66d-d4661eadc132', 200],
+    ['legacy GUID', '191aaece-a492-f1ee-666d-d4661eadc132', 200],
+    ['malformed identity', 'not-a-guid', 400],
+  ])('validates the %s during Basic-auth bootstrap', async (_label, instanceId, status) => {
     const app = express();
     app.use(express.json());
     app.use((req, _res, next) => {
@@ -517,12 +538,16 @@ describe('local peer admission configuration', () => {
     });
     app.use('/api/instances', instancesRoutes);
     app.use(errorMiddleware);
-    const instanceId = '191aaece-a492-41ee-a66d-d4661eadc132';
     instances.acceptPeerSyncSecretFromPeer.mockResolvedValue({ id: 'peer-a' });
     const res = await request(remoteRequestHandler(app)).post('/api/instances/peers/pair-secret')
       .set('X-PortOS-Instance-Id', instanceId)
       .send({ syncSecret: 'synthetic-pair-secret-32-characters-long' });
-    expect(res.status).toBe(200);
+    expect(res.status).toBe(status);
+    if (status === 400) {
+      expect(res.body.code).toBe('PEER_IDENTITY_REQUIRED');
+      expect(instances.acceptPeerSyncSecretFromPeer).not.toHaveBeenCalled();
+      return;
+    }
     expect(res.body).toEqual({ paired: true });
     expect(instances.acceptPeerSyncSecretFromPeer).toHaveBeenCalledWith(instanceId, 'synthetic-pair-secret-32-characters-long');
   });

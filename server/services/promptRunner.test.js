@@ -142,6 +142,37 @@ describe('promptRunner — happy paths', () => {
     expect(runner.executeApiRun).not.toHaveBeenCalled();
   });
 
+  it('forwards a pinned tool-free CLI output allowance to the launch', async () => {
+    runner.executeCliRun.mockImplementation(async ({ onComplete }) => onComplete({ success: true, text: 'ok' }));
+    await runPromptThroughProvider({ provider: cliProvider(), prompt: 'p', source: 'test', toolFree: true, allowFallback: false, maxTokens: 48_000 });
+    expect(runner.executeCliRun).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({ toolFree: true, maxTokens: 48_000 }));
+  });
+
+  it('returns the first-turn output evidence alongside the CLI final response without a retry', async () => {
+    const reasoningOutputLimit = { stopReason: 'max_tokens', outputTokens: 48000, thinkingTokens: 47998 };
+    runner.executeCliRun.mockImplementation(async ({ onComplete }) => onComplete({
+      success: true, text: 'No page was generated.', reasoningOutputLimit,
+    }));
+    const result = await runPromptThroughProvider({
+      provider: cliProvider({ command: 'claude' }), prompt: 'p', source: 'html-pages-bench',
+      toolFree: true, allowFallback: false, captureClaudeOutputLimit: true,
+    });
+    expect(result).toMatchObject({ text: 'No page was generated.', reasoningOutputLimit });
+    expect(runner.executeCliRun).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({ captureClaudeOutputLimit: true, toolFree: true, prompt: 'p' }));
+    expect(runner.createRun).toHaveBeenCalledTimes(1);
+  });
+
+  it('returns a CLI output limit immediately when fallback is enabled', async () => {
+    runner.executeCliRun.mockImplementation(async ({ onComplete }) => onComplete({
+      success: false, error: 'Output allowance exceeded', errorAnalysis: { category: 'output-limit' },
+    }));
+    await expect(runPromptThroughProvider({ provider: cliProvider(), prompt: 'p', source: 'test' }))
+      .rejects.toMatchObject({ message: 'Output allowance exceeded', errorAnalysis: { category: 'output-limit' } });
+    expect(runner.createRun).toHaveBeenCalledTimes(1);
+    expect(runner.executeCliRun).toHaveBeenCalledTimes(1);
+    expect(runner.executeApiRun).not.toHaveBeenCalled();
+  });
+
   it('uses the CLI final response even when diagnostics contain valid prompt JSON', async () => {
     runner.executeCliRun.mockImplementation(async ({ onData, onComplete }) => {
       onData('OpenAI Codex v1\nuser\n{"message":"example"}\n');

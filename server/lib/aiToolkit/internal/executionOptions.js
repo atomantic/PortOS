@@ -11,14 +11,23 @@ const CODEX_SPEED_PROBE_FAILURE_MESSAGES = Object.freeze({
 });
 export const CODEX_SPEED_PROBE_FAILURES = Object.freeze(Object.keys(CODEX_SPEED_PROBE_FAILURE_MESSAGES));
 
-export function codexSpeedProbeFailureMessage(category) {
-  return typeof category === 'string' && Object.hasOwn(CODEX_SPEED_PROBE_FAILURE_MESSAGES, category)
-    ? CODEX_SPEED_PROBE_FAILURE_MESSAGES[category] : undefined;
+export const CODEX_SPEED_PROBE_STAGES = Object.freeze(['initialize', 'account/read', 'configRequirements/read', 'config/read', 'model/list']);
+
+export function codexSpeedProbeStage(category, stage) {
+  return category === 'timeout' && CODEX_SPEED_PROBE_STAGES.includes(stage) ? stage : undefined;
 }
 
-export function executionOptionsError(message, probeFailure) {
+export function codexSpeedProbeFailureMessage(category, stage) {
+  if (typeof category !== 'string' || !Object.hasOwn(CODEX_SPEED_PROBE_FAILURE_MESSAGES, category)) return undefined;
+  const message = CODEX_SPEED_PROBE_FAILURE_MESSAGES[category];
+  const rpc = codexSpeedProbeStage(category, stage);
+  return rpc ? `${message} Last awaited RPC: ${rpc}.` : message;
+}
+
+export function executionOptionsError(message, probeFailure, stage) {
+  const probeStage = codexSpeedProbeStage(probeFailure, stage);
   return Object.assign(new Error(message), { code: EXECUTION_OPTIONS_ERROR, status: 400 },
-    codexSpeedProbeFailureMessage(probeFailure) ? { probeFailure } : {});
+    codexSpeedProbeFailureMessage(probeFailure) ? { probeFailure, ...(probeStage ? { probeStage } : {}) } : {});
 }
 export const EXECUTION_OPTION_DEFINITIONS = Object.freeze({
   serviceTier: Object.freeze({

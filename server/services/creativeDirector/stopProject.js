@@ -8,11 +8,11 @@
  *
  *   1. Park as `paused` FIRST (unless already parked, see projectCommands.js), so a
  *      completion / media-job event mid-stop returns early instead of dispatching.
- *   2. Mark in-flight run rows `failed`, so re-dispatch guards don't see a worker.
+ *   2. Detach settlement listeners and mark in-flight run rows `failed`.
  *   3. Kill live agent processes attached to those runs.
  *   4. Retire the internal CoS tasks so sweeps can't respawn them (same
  *      `'internal'` / `'completed'` constraints as recovery.js).
- *   5. Reset the scene / plan-step state the stop invalidated, so Resume works.
+ *   5. Reset the scene / plan-step state so Resume works.
  *   6. Cancel every queued/running media job the project owns.
  *
  * Steps 2-4 are exported as `retireRuns` for callers moving a project to a
@@ -133,7 +133,7 @@ export async function stopProject(projectId, { reason = 'Stopped', project: prer
   const command = resolveCreativeDirectorProjectCommand(project, 'stop', { reason });
   if (command.outcome === 'skip') return { projectId, stopped: false, skipped: command.skipped, runs: 0, tasks: 0, agents: 0, jobs: 0 };
 
-  // 1. Park first — a settle event racing us must find `paused` and bail. A draft or
+  // 1. Park first so a racing settlement cannot advance the project. A draft or
   // already-paused project needs no write (null patch) but still gets the teardown.
   if (command.outcome === 'delegate') {
     const { pauseVideoExecution } = await import('./videoExecution.js');
@@ -145,6 +145,13 @@ export async function stopProject(projectId, { reason = 'Stopped', project: prer
     }
   } else if (command.patch) await updateProject(projectId, command.patch)
     .catch((e) => console.error(`❌ CD stop ${projectId}: park failed: ${e.message}`));
+
+  const [{ clearSceneRenderListeners }, { clearPlanListenersForProject }] = await Promise.all([
+    import('./sceneRunner.js'),
+    import('./planAdvance.js'),
+  ]);
+  clearSceneRenderListeners(projectId);
+  clearPlanListenersForProject(projectId);
 
   const retired = await retireRuns(projectId, { runs: inflightRuns(project), reason });
 

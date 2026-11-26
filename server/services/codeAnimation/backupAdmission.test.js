@@ -50,7 +50,7 @@ const { PATHS } = await import('../../lib/paths.js');
 const { createCodeAnimationPackage } = await import('../../lib/codeAnimationPackage.js');
 const { codeAnimationBudgetsSchema } = await import('../../lib/codeAnimationProjects.js');
 const { soundTimeline } = await import('../../lib/codeAnimationSound.js');
-const { acquireBackupSnapshotCut } = await import('../../lib/backupSnapshotBoundary.js');
+const { acquireBackupSnapshotCut, _backupSnapshotWaitersForTests } = await import('../../lib/backupSnapshotBoundary.js');
 const { sourceHashOf, stageProjectFiles, writeRunArtifact } = await import('./projectFiles.js');
 const { startCodeAnimationGeneration } = await import('./index.js');
 const { importProductionPackage } = await import('./projects.js');
@@ -166,17 +166,21 @@ describe('Code Animation workflows and a backup cut', () => {
     expect(jobs.saveCodeAnimationHtml).toHaveBeenCalledTimes(1);
   });
 
-  it('writes no generated HTML while a cut is held', async () => {
+  it('keeps generated HTML pending through a long backup cut', async () => {
     const release = await acquireBackupSnapshotCut();
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout', 'Date'] });
     try {
       await startCodeAnimationGeneration({
         providerId: 'example-provider', concept: 'A cube hops over a cone.',
         format: { aspectRatio: '16:9', resolution: '720p', fps: 24, durationSeconds: 4 },
       });
-      await settle();
+      await vi.waitFor(() => expect(_backupSnapshotWaitersForTests().publications).toBe(1));
+      await vi.advanceTimersByTimeAsync(5 * 60_000);
       expect(jobs.saveCodeAnimationHtml).not.toHaveBeenCalled();
+      expect(jobs.saveCodeAnimationJobRecord).toHaveBeenLastCalledWith(expect.objectContaining({ status: 'running' }));
     } finally {
       release();
+      vi.useRealTimers();
     }
     await vi.waitFor(() => expect(jobs.saveCodeAnimationJobRecord).toHaveBeenLastCalledWith(expect.objectContaining({ status: 'completed' })));
     expect(jobs.saveCodeAnimationHtml).toHaveBeenCalledTimes(1);

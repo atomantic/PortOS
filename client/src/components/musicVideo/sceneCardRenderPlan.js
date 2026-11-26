@@ -1,6 +1,7 @@
 import { getHiggsfieldVideoModel, HIGGSFIELD_DEFAULT_VIDEO_MODEL } from '../../../../server/lib/higgsfieldVideoModels.js';
 import { getGoogleVideoModel, GOOGLE_DEFAULT_VIDEO_MODEL } from '../../../../server/lib/googleVideoModels.js';
-import { musicVideoGreyboxReference } from '../../../../server/lib/musicVideo/musicVideoGreybox.js';
+import { isMusicVideoSetOmitted, musicVideoGreyboxReference } from '../../../../server/lib/musicVideo/musicVideoGreybox.js';
+import { LTX_REFERENCES_MAX_REFERENCES } from '../../../../server/lib/musicVideo/musicVideoClipRequest.js';
 import { sceneRenderTierChoices } from '../../../../server/lib/musicVideo/musicVideoRenderTier.js';
 import { musicVideoClipConditioningReferences, musicVideoClipReferenceCapacity, musicVideoClipReferenceChoices, musicVideoSceneCastIds } from '../../../../server/lib/musicVideo/musicVideoConditioning.js';
 import { LTX_REFERENCES_GENERATION_MODE, isLtx25Model, ltxReferenceSheetPrefix, ltxReferencesUnavailableReason } from '../../lib/musicVideoLtxReferences.js';
@@ -23,11 +24,11 @@ function resolveReferenceModel(referenceBackend, { scene, renderSettings, videoM
   return null;
 }
 
-function computeLtxReferenceState({ scene, layer, performance, referenceBackend, referenceModel, renderSettings, renderInputs, storyboardDefault }) {
+function computeLtxReferenceState({ project, scene, castMedia, layer, performance, referenceBackend, referenceModel, renderSettings, renderInputs, storyboardDefault }) {
   const ltxReferencesAvailable = !performance && referenceBackend === 'local' && isLtx25Model(referenceModel)
     && renderSettings?.generationMode !== 'audioReactive';
   const canUseLtxReferences = ltxReferencesAvailable && !storyboardDefault;
-  const ltxReferencesGreyboxBlocked = !!scene.setReference?.greyboxShotId;
+  const ltxReferencesGreyboxBlocked = !!scene.setReference?.greyboxShotId && !isMusicVideoSetOmitted(scene);
   // The project's LTX 2.5 References mode makes the box default on; unticking is this shot's override.
   const ltxReferencesProjectDefault = renderSettings?.generationMode === LTX_REFERENCES_GENERATION_MODE && !ltxReferencesGreyboxBlocked;
   // Say why References is not offered instead of hiding the option, but only where
@@ -41,7 +42,8 @@ function computeLtxReferenceState({ scene, layer, performance, referenceBackend,
     : null;
   // References the director picked turn the box on. Auto cast does not, since it
   // costs the shot its song audio. Unticking, or asking for song audio or an end frame, wins.
-  const ltxReferencesPicked = !ltxReferencesGreyboxBlocked && scene.clipReferenceIds?.length > 0;
+  const ltxReferencesPicked = !ltxReferencesGreyboxBlocked && scene.clipReferenceIds?.length > 0
+    && (!scene.omittedCatalogSubjectIds?.length || musicVideoClipConditioningReferences(project, scene, castMedia, { limit: 1 }).length > 0);
   const useLtxReferences = canUseLtxReferences && (renderInputs.ltxReferences ?? (ltxReferencesProjectDefault || ltxReferencesPicked));
   return { canUseLtxReferences, ltxReferencesGreyboxBlocked, ltxReferencesProjectDefault, ltxReferencesReason, useLtxReferences };
 }
@@ -85,7 +87,8 @@ function computeClipConditioning({ project, scene, castMedia, referenceBackend, 
   const startFrameLayout = referenceBackend === 'grok' && !storyboardDefault && renderInputs.startFrameLayout === true;
   // Higgsfield sends a frame plus sheets as the first reference image; ticking this renders plain image-to-video instead.
   const higgsfieldFrameOnly = referenceBackend === 'higgsfield' && renderInputs.frameRoute === 'image';
-  const referenceCapacity = useLtxReferences ? 8 : musicVideoClipReferenceCapacity(referenceBackend, referenceModel, { endFrame: runwayEndFrameOn, startFrameLayout });
+  const referenceCapacity = useLtxReferences ? LTX_REFERENCES_MAX_REFERENCES
+    : higgsfieldFrameOnly ? 0 : musicVideoClipReferenceCapacity(referenceBackend, referenceModel, { endFrame: runwayEndFrameOn, startFrameLayout });
   const castIds = referenceCapacity > 0 && castMedia ? musicVideoSceneCastIds(project, scene) : [];
   const guidesPending = castIds.some((id) => castMedia[id] === undefined);
   // A failed read (null) would otherwise send the clip without the member's guides.
@@ -168,7 +171,7 @@ export function buildSceneRenderPlan({
   // Storyboard-to-clip chaining cannot yet pass LTX reference inputs. Offer
   // them after the storyboard's first frame has landed instead.
   const storyboardDefault = storyboardClipOffered({ scene, layer, performance });
-  const ltx = computeLtxReferenceState({ scene, layer, performance, referenceBackend, referenceModel, renderSettings, renderInputs, storyboardDefault });
+  const ltx = computeLtxReferenceState({ project, scene, castMedia, layer, performance, referenceBackend, referenceModel, renderSettings, renderInputs, storyboardDefault });
   const { canUseLtxReferences, ltxReferencesGreyboxBlocked, ltxReferencesProjectDefault, useLtxReferences } = ltx;
 
   // Exactly what Render sends: the prompt as typed and the inputs the card toggles.

@@ -5,7 +5,9 @@
 export {
   EXECUTION_OPTIONS_ERROR,
   CODEX_SPEED_PROBE_FAILURES,
+  CODEX_SPEED_PROBE_STAGES,
   codexSpeedProbeFailureMessage,
+  codexSpeedProbeStage,
   executionOptionsError,
   EXECUTION_OPTION_DEFINITIONS,
   validateExecutionOptions,

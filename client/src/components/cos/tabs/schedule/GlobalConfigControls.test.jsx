@@ -683,3 +683,31 @@ describe('GlobalConfigControls — pr-watcher self-managed authors', () => {
     });
   });
 });
+
+describe('GlobalConfigControls — pr-watcher remediation scope', () => {
+  it('shows and saves the selected trusted-author scope', () => {
+    const taskMetadata = { prAuthorFilter: 'self' };
+    const onUpdate = renderControls({ taskType: 'pr-watcher', taskMetadata });
+    const scope = screen.getByLabelText('PR Remediation Scope');
+
+    expect(scope).toHaveValue('self');
+    expect(scope).toHaveDisplayValue('Only PRs you opened');
+    expect(scope.parentElement.textContent).toContain('Only PRs opened by the signed-in operator are eligible for PR remediation.');
+
+    fireEvent.change(scope, { target: { value: 'trusted' } });
+    expect(onUpdate).toHaveBeenCalledWith('pr-watcher', { taskMetadata: { ...taskMetadata, prAuthorFilter: 'trusted' } });
+  });
+
+  it.each(['any', 'others', undefined])('displays legacy scope %s as trusted without rewriting it', (legacyScope) => {
+    const taskMetadata = legacyScope ? { prAuthorFilter: legacyScope } : {};
+    const onUpdate = renderControls({ taskType: 'pr-watcher', taskMetadata });
+    const scope = screen.getByLabelText('PR Remediation Scope');
+
+    expect(scope).toHaveValue('trusted');
+    expect(scope).toHaveDisplayValue('Owner and write collaborators');
+    expect(onUpdate).not.toHaveBeenCalled();
+
+    fireEvent.change(scope, { target: { value: 'self' } });
+    expect(onUpdate).toHaveBeenCalledWith('pr-watcher', { taskMetadata: { ...taskMetadata, prAuthorFilter: 'self' } });
+  });
+});

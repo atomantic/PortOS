@@ -1,3 +1,4 @@
+import { useId } from 'react';
 import {
   X, Target,
   Brain, HeartPulse, PenLine, Globe, Clapperboard, Users,
@@ -17,10 +18,13 @@ const AREA_ICONS = {
   BookOpen, Package, Share2, ListTree, BrainCircuit, Target,
 };
 
+const WEEKDAYS = ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday', 'Sunday'];
+
 export default function GoalEditForm({
   form, setForm, tagInput, setTagInput, addTag, removeTag,
   toggleFeatureArea, parentOptions, saveEdit, saving, onCancel
 }) {
+  const preferredDaysId = useId();
   const selectedAreas = form.featureAreas || [];
   const { features, error } = useInstanceFeatures();
   // This picker writes a persistent Daily Driver override, so it must fail
@@ -116,15 +120,18 @@ export default function GoalEditForm({
         <span className="text-xs text-gray-500">Time Block Config</span>
         <div className="mt-1 space-y-2">
           <div>
-            <span className="text-[10px] text-gray-600">Preferred days</span>
-            <div className="flex flex-wrap gap-1 mt-0.5">
-              {['mon','tue','wed','thu','fri','sat','sun'].map(d => {
+            <span id={preferredDaysId} className="text-[10px] text-gray-600">Preferred days</span>
+            <div role="group" aria-labelledby={preferredDaysId} className="flex flex-wrap gap-1 mt-0.5">
+              {WEEKDAYS.map(day => {
+                const d = day.slice(0, 3).toLowerCase();
                 const days = form.timeBlockConfig?.preferredDays || [];
                 const active = days.includes(d);
                 return (
                   <button
                     key={d}
                     type="button"
+                    aria-label={day}
+                    aria-pressed={active}
                     onClick={() => {
                       const next = active ? days.filter(x => x !== d) : [...days, d];
                       setForm({ ...form, timeBlockConfig: { ...(form.timeBlockConfig || { timeSlot: 'morning', sessionDurationMinutes: 60 }), preferredDays: next } });

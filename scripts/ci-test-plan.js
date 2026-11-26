@@ -35,7 +35,7 @@ export {
   LINUX_CONTAINMENT_PATH_RE, LINUX_CONTAINMENT_TESTS, MACOS_NATIVE_PATH_RE, MACOS_NATIVE_TESTS,
   NODE_MINIMUM_PATH_RE, SERVER_SEED_OWNERS, SLASHDO_CONTRACT_TEST_FILES, SLASHDO_GITLINK_PATH,
   SUPERCOLLIDER_LIVE_ENTRIES, SUPERCOLLIDER_LIVE_PATH_RE, TOOLING_OWNER_RE, TOOLING_TESTS, WINDOWS_CONTRACT_TESTS,
-  WINDOWS_RISK_RULES, getAlwaysRunTests, getGuardTests, isRouteOnlyAppDiff, isServerSeed, serverSeedTestsFor,
+  WINDOWS_RISK_RULES, PROMPT_STAGE_GUARD, getAlwaysRunTests, getGuardTests, isRouteOnlyAppDiff, isServerSeed, serverSeedTestsFor,
   sourceReferencePattern, splitByRunner, structuralTestsFor,
 } from './lib/ciPlanRules.js';
 export {
@@ -473,12 +473,14 @@ const finishPlan = (plan, options = {}) => {
     fansOut(runner, plan[runner], reachSelected[runner], browserSuites[runner]) ? 'full' : plan[runner].mode,
     FULL_SUITE_SHARDS[runner],
   );
+  const browserSuitesSelected = plan.browserFiles.length;
+  const browserShardCount = browserSuitesSelected >= FULL_SUITE_SHARDS.browser ? FULL_SUITE_SHARDS.browser
+    : browserSuitesSelected >= 4 ? 4
+      : browserSuitesSelected > 1 ? 2 : 1;
   const shards = {
     server: linuxShards('server'),
     client: linuxShards('client'),
-    // Four shards put the serial-capture backlog on separate runners; see
-    // scripts/lib/browserSuites.js for the balanced owner tables.
-    browser: plan.browserFiles.length >= 4 ? [1, 2, 3, 4] : plan.browserFiles.length > 1 ? [1, 2] : [1],
+    browser: shardIndexes('full', browserShardCount),
     // The native contract set stays on one runner and never follows the
     // application import graph, even when the primary jobs run full suites.
     windows: [1],

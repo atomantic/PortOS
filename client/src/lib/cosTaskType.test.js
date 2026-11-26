@@ -1,3 +1,4 @@
+// @vitest-environment node
 import { describe, expect, it } from 'vitest';
 import { EXTERNAL_UNTYPED_TASK_TYPE } from '../../../server/lib/taskTypeBucket.js';
 import { extractCosTaskType } from './cosTaskType';

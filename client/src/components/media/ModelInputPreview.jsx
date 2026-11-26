@@ -16,8 +16,8 @@ export default function ModelInputPreview({ preview, prompt, onOpenPreview, onTo
         inputProvenance={sent.remote ? 'peer-requested' : sent.referenceInputProvenance} />
       {!!sent.loraAdapters?.length && (
         <section aria-label="LoRA adapters" className="space-y-1">
-          <h3 className="font-semibold text-gray-300">LoRA adapters</h3>
-          <ul className="space-y-1 text-gray-400">
+          <h3 className="font-semibold text-port-text">LoRA adapters</h3>
+          <ul className="space-y-1 text-port-text-muted">
             {sent.loraAdapters.map((adapter, index) => (
               <li key={`${adapter.filename}:${index}`} className="break-words">
                 {adapter.filename} · strength {adapter.scale} · {adapter.source}

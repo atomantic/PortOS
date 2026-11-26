@@ -1,5 +1,6 @@
+import { cardRecordLabels } from '../cardRecordLabels';
 import { useState, useCallback, useRef, useMemo, lazy, Suspense } from 'react';
-import { useNavigate, useParams, useSearchParams } from 'react-router';
+import { Link, useNavigate, useParams, useSearchParams } from 'react-router';
 import {Trash2, X, Check, XCircle, Pencil, AlertTriangle, Brain, Bot} from 'lucide-react';
 import toast from '../../ui/Toast';
 import Banner from '../../ui/Banner';
@@ -28,7 +29,13 @@ import { useConfirmDelete } from '../../../hooks/useConfirmDelete';
 
 const MEMORY_EVENTS = ['cos:memory:created', 'cos:memory:updated', 'cos:memory:deleted', 'cos:memory:extracted'];
 const QUEUE_EVENTS = [...MEMORY_EVENTS, 'cos:memory:approval-needed'];
-const STATUS_EVENTS = [];
+const MODEL_STATUS_EVENTS = ['memory:models:changed', 'providers:changed'];
+const BACKEND_STATUS_EVENTS = [];
+
+function memorySnippet(memory) {
+  const summary = memory.summary?.trim() || memory.content?.trim() || memory.id;
+  return summary.length > 100 ? `${summary.slice(0, 100)}…` : summary;
+}
 
 export default function MemoryTab({ apps = [] }) {
   const [searchParams, setSearchParams] = useSearchParams();
@@ -82,24 +89,28 @@ export default function MemoryTab({ apps = [] }) {
     { namespace: 'cos', events: QUEUE_EVENTS }
   );
 
-  const status = useSocketResource(async () => {
-    const [embeddingStatus, backendStatus] = await Promise.all([
-      getEmbeddingStatus(), getMemoryBackendStatus()
-    ]);
-    return { embeddingStatus, backendStatus };
-  }, { events: STATUS_EVENTS });
+  const modelStatus = useSocketResource(
+    ({ signal }) => getEmbeddingStatus({ signal, silent: true }),
+    { events: MODEL_STATUS_EVENTS }
+  );
+  const backend = useSocketResource(
+    ({ signal }) => getMemoryBackendStatus({ signal }),
+    { events: BACKEND_STATUS_EVENTS }
+  );
 
   const memories = list.data || [];
   const pendingMemories = queue.data || [];
   const stats = counts.data;
-  const embeddingStatus = status.data?.embeddingStatus;
-  const backendStatus = status.data?.backendStatus;
+  const embeddingStatus = modelStatus.data;
+  const classifierStatus = embeddingStatus?.classifier;
+  const backendStatus = backend.data;
   const fetchData = useCallback(() => {
     list.refetch();
     queue.refetch();
     counts.refetch();
-    status.refetch();
-  }, [list.refetch, queue.refetch, counts.refetch, status.refetch]);
+    modelStatus.refetch();
+    backend.refetch();
+  }, [list.refetch, queue.refetch, counts.refetch, modelStatus.refetch, backend.refetch]);
 
   const [actionInFlight, setActionInFlight] = useState(null);
   const actionRef = useRef(false);
@@ -146,6 +157,7 @@ export default function MemoryTab({ apps = [] }) {
   };
 
   const displayMemories = memories;
+  const snippets = cardRecordLabels([...pendingMemories, ...displayMemories].map(memory => [memory.id, memorySnippet(memory)]));
 
   return (
     <div className="space-y-6">
@@ -179,12 +191,21 @@ export default function MemoryTab({ apps = [] }) {
             {formatCount(stats?.active)} active memories
             {stats?.pendingApproval > 0 && <span className="text-yellow-400"> * {stats.pendingApproval} pending</span>}
             {embeddingStatus?.available ? ' * Embeddings online' : ' * Embeddings offline'}
+            {classifierStatus && (
+              <> * {classifierStatus.available ? 'Memory extraction online' : (
+                <Link to="/settings/ai-assignments?q=Memory+extraction+model" className="text-port-accent underline">
+                  Memory extraction {classifierStatus.disabled ? 'disabled' : 'offline'}
+                </Link>
+              )}</>
+            )}
           </p>
         </div>
-        <div className="flex gap-2">
+        <div role="group" aria-label="Memory view" className="flex gap-2">
           {['list', 'timeline', 'graph'].map(v => (
             <button
               key={v}
+              type="button"
+              aria-pressed={view === v}
               onClick={() => setView(v)}
               className={`px-3 py-1.5 text-sm rounded-lg transition-colors ${
                 view === v ? 'bg-port-accent text-white' : 'bg-port-border text-gray-400 hover:text-white'
@@ -215,8 +236,9 @@ export default function MemoryTab({ apps = [] }) {
         </button>
         {submittedSearch && (
           <button
+            type="button"
             onClick={() => { setSubmittedSearch(''); setSearchQuery(''); }}
-            aria-label="Close"
+            aria-label="Clear search"
             className="px-2 py-1.5 flex items-center justify-center bg-port-border text-gray-400 hover:text-white rounded-lg transition-colors min-h-[44px] min-w-[44px]"
           >
             <X size={18} />
@@ -279,75 +301,78 @@ export default function MemoryTab({ apps = [] }) {
       {pendingMemories.length > 0 && (
         <div className="space-y-3">
           <h3 className="text-lg font-semibold text-yellow-500">Pending Approval ({pendingMemories.length})</h3>
-          {pendingMemories.map(memory => (
-            <div key={memory.id} className="bg-port-card border border-yellow-500/50 rounded-lg p-4">
-              <div className="flex flex-col sm:flex-row sm:items-start justify-between gap-4">
-                <div className="flex-1 min-w-0">
-                  <div className="flex flex-wrap items-center gap-2 mb-2">
-                    <span className={`px-2 py-1 text-xs rounded-full border ${MEMORY_TYPE_COLORS[memory.type]}`}>
-                      {memory.type}
-                    </span>
-                    <span className="text-xs text-gray-500">{memory.category}</span>
-                    <span className="text-xs text-yellow-400">
-                      {formatPercent((memory.confidence || 0) * 100, { decimals: 0 })} confidence
-                    </span>
-                  </div>
-                  <p className="text-white text-sm whitespace-pre-wrap">{memory.summary || memory.content}</p>
-                  {memory.tags?.length > 0 && (
-                    <div className="flex flex-wrap gap-1 mt-2">
-                      {memory.tags.map(tag => (
-                        <span key={tag} className="px-2 py-1 text-xs bg-port-border rounded text-gray-400">
-                          {tag}
-                        </span>
-                      ))}
+          {pendingMemories.map(memory => {
+            const snippet = snippets.get(memory.id);
+            return (
+              <div key={memory.id} role="group" aria-label={`Memory: ${snippet}`} className="bg-port-card border border-yellow-500/50 rounded-lg p-4">
+                <div className="flex flex-col sm:flex-row sm:items-start justify-between gap-4">
+                  <div className="flex-1 min-w-0">
+                    <div className="flex flex-wrap items-center gap-2 mb-2">
+                      <span className={`px-2 py-1 text-xs rounded-full border ${MEMORY_TYPE_COLORS[memory.type]}`}>
+                        {memory.type}
+                      </span>
+                      <span className="text-xs text-gray-500">{memory.category}</span>
+                      <span className="text-xs text-yellow-400">
+                        {formatPercent((memory.confidence || 0) * 100, { decimals: 0 })} confidence
+                      </span>
                     </div>
-                  )}
-                  <div className="text-xs text-gray-500 mt-2 flex flex-wrap gap-2">
-                    <span>{formatDateNumeric(memory.createdAt)}</span>
-                    {getAppName(memory.sourceAppId, apps) && (
-                      <>
-                        <span>*</span>
-                        <span className="text-port-accent">{getAppName(memory.sourceAppId, apps)}</span>
-                      </>
+                    <p className="text-white text-sm whitespace-pre-wrap">{memory.summary || memory.content}</p>
+                    {memory.tags?.length > 0 && (
+                      <div className="flex flex-wrap gap-1 mt-2">
+                        {memory.tags.map(tag => (
+                          <span key={tag} className="px-2 py-1 text-xs bg-port-border rounded text-gray-400">
+                            {tag}
+                          </span>
+                        ))}
+                      </div>
                     )}
+                    <div className="text-xs text-gray-500 mt-2 flex flex-wrap gap-2">
+                      <span>{formatDateNumeric(memory.createdAt)}</span>
+                      {getAppName(memory.sourceAppId, apps) && (
+                        <>
+                          <span>*</span>
+                          <span className="text-port-accent">{getAppName(memory.sourceAppId, apps)}</span>
+                        </>
+                      )}
+                    </div>
                   </div>
-                </div>
-                <div className="flex gap-2 sm:flex-col md:flex-row">
-                  <button
-                    onClick={() => navigate(`/cos/memory/${encodeURIComponent(memory.id)}`)}
-                    disabled={actionInFlight === memory.id}
-                    className="flex-1 sm:flex-none p-3 min-h-[44px] min-w-[44px] flex items-center justify-center bg-port-accent/20 text-port-accent hover:bg-port-accent/30 active:bg-port-accent/40 rounded-lg transition-colors disabled:opacity-50"
-                    title="Edit before approving"
-                    aria-label="Edit before approving"
-                  >
-                    <Pencil size={20} />
-                  </button>
-                  <button
-                    onClick={() => handleApprove(memory.id)}
-                    disabled={!!actionInFlight}
-                    className="flex-1 sm:flex-none p-3 min-h-[44px] min-w-[44px] flex items-center justify-center bg-port-success/20 text-port-success hover:bg-port-success/30 active:bg-port-success/40 rounded-lg transition-colors disabled:opacity-50"
-                    title="Approve"
-                    aria-label="Approve memory"
-                  >
-                    {actionInFlight === memory.id ? <BrailleSpinner /> : <Check size={20} />}
-                  </button>
-                  <button
-                    onClick={() => handleReject(memory.id)}
-                    disabled={!!actionInFlight}
-                    className="flex-1 sm:flex-none p-3 min-h-[44px] min-w-[44px] flex items-center justify-center bg-red-500/20 text-red-400 hover:bg-red-500/30 active:bg-red-500/40 rounded-lg transition-colors disabled:opacity-50"
-                    title="Reject"
-                    aria-label="Reject memory"
-                  >
-                    {actionInFlight === memory.id ? <BrailleSpinner /> : <XCircle size={20} />}
-                  </button>
+                  <div className="flex gap-2 sm:flex-col md:flex-row">
+                    <button
+                      onClick={() => navigate(`/cos/memory/${encodeURIComponent(memory.id)}`)}
+                      disabled={actionInFlight === memory.id}
+                      className="flex-1 sm:flex-none p-3 min-h-[44px] min-w-[44px] flex items-center justify-center bg-port-accent/20 text-port-accent hover:bg-port-accent/30 active:bg-port-accent/40 rounded-lg transition-colors disabled:opacity-50"
+                      title="Edit before approving"
+                      aria-label={`Edit before approving: ${snippet}`}
+                    >
+                      <Pencil size={20} />
+                    </button>
+                    <button
+                      onClick={() => handleApprove(memory.id)}
+                      disabled={!!actionInFlight}
+                      className="flex-1 sm:flex-none p-3 min-h-[44px] min-w-[44px] flex items-center justify-center bg-port-success/20 text-port-success hover:bg-port-success/30 active:bg-port-success/40 rounded-lg transition-colors disabled:opacity-50"
+                      title="Approve"
+                      aria-label={`Approve memory: ${snippet}`}
+                    >
+                      {actionInFlight === memory.id ? <BrailleSpinner /> : <Check size={20} />}
+                    </button>
+                    <button
+                      onClick={() => handleReject(memory.id)}
+                      disabled={!!actionInFlight}
+                      className="flex-1 sm:flex-none p-3 min-h-[44px] min-w-[44px] flex items-center justify-center bg-red-500/20 text-red-400 hover:bg-red-500/30 active:bg-red-500/40 rounded-lg transition-colors disabled:opacity-50"
+                      title="Reject"
+                      aria-label={`Reject memory: ${snippet}`}
+                    >
+                      {actionInFlight === memory.id ? <BrailleSpinner /> : <XCircle size={20} />}
+                    </button>
+                  </div>
                 </div>
               </div>
-            </div>
-          ))}
+            );
+          })}
         </div>
       )}
 
-      {(list.error || queue.error || counts.error || status.error) && (
+      {(list.error || queue.error || counts.error || modelStatus.error || backend.error) && (
         <Banner tone="warning" title="Unable to refresh memories" actions={<button onClick={fetchData}>Retry</button>}>
           Existing rows are retained. Retry to reconcile the latest changes.
         </Banner>
@@ -401,8 +426,9 @@ export default function MemoryTab({ apps = [] }) {
               )}
             </div>
           ) : (
-            displayMemories.map(memory => (
-              <div key={memory.id} className="bg-port-card border border-port-border rounded-lg p-4">
+            displayMemories.map(memory => {
+              const snippet = snippets.get(memory.id);
+              return <div key={memory.id} role="group" aria-label={`Memory: ${snippet}`} className="bg-port-card border border-port-border rounded-lg p-4">
                 <div className="flex flex-col sm:flex-row sm:items-start justify-between gap-3">
                   <div className="flex-1 min-w-0">
                     <div className="flex flex-wrap items-center gap-2 mb-2">
@@ -452,7 +478,7 @@ export default function MemoryTab({ apps = [] }) {
                       onClick={() => navigate(`/cos/memory/${encodeURIComponent(memory.id)}`)}
                       className="pointer-coarse:min-h-11 pointer-coarse:min-w-11 p-3 min-h-[40px] min-w-[40px] flex items-center justify-center text-gray-500 hover:text-port-accent transition-colors"
                       title="Edit memory"
-                      aria-label="Edit memory"
+                      aria-label={`Edit memory: ${snippet}`}
                     >
                       <Pencil size={18} />
                     </button>
@@ -460,7 +486,7 @@ export default function MemoryTab({ apps = [] }) {
                       onClick={() => requestDelete(memory.id)}
                       className="pointer-coarse:min-h-11 pointer-coarse:min-w-11 p-3 min-h-[40px] min-w-[40px] flex items-center justify-center text-gray-500 hover:text-port-error transition-colors"
                       title="Archive memory"
-                      aria-label="Archive memory"
+                      aria-label={`Archive memory: ${snippet}`}
                     >
                       <Trash2 size={18} />
                     </button>
@@ -469,6 +495,8 @@ export default function MemoryTab({ apps = [] }) {
                 {isConfirming(memory.id) && (
                   <InlineConfirmRow
                     className="mt-3"
+                    autoFocus
+                    aria-label={`Confirm archive memory ${snippet}`}
                     question="Archive this memory? It will be hidden from active memory and search. Its contents remain stored."
                     confirmText="Archive"
                     confirmTitle="Confirm archive"
@@ -477,8 +505,8 @@ export default function MemoryTab({ apps = [] }) {
                     onCancel={cancelDelete}
                   />
                 )}
-              </div>
-            ))
+              </div>;
+            })
           )}
         </div>
       ) : view === 'timeline' ? (

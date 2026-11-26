@@ -22,7 +22,7 @@ import { assertMusicVideoMediaSelections } from '../../lib/musicVideo/musicVideo
  * sweep. The soft-delete fields were already on the record, so this was additive.
  */
 
-import { droppedTakeAssets, fileMusicVideoMedia, fileAppendedTakes, assertNewMediaSelections, markPoolAssets } from './mediaPool.js';
+import { droppedTakeAssets, fileMusicVideoMedia, fileAppendedTakes, assertNewMediaSelections } from './mediaPool.js';
 import { presentMusicVideoDependencies, retainMusicVideoDependencies } from '../../lib/musicVideo/musicVideoDependencies.js';
 import { createRecordStoreBackendSelector } from '../../lib/pgFileFacade.js';
 import { emitRecordUpdated, emitRecordDeleted, autoSubscribeRecordToAllPeers } from '../sharing/recordEvents.js';
@@ -158,7 +158,7 @@ export async function listProjectIds(options = {}) {
 // trap the universe batch form and sprites page picker hit on the image side.
 import { getTrack } from '../tracks/index.js';
 import { parseLyricCues } from './timedText.js';
-import { setSceneLastFailure, appendSceneTakes as appendTakes, appendTakesAcrossScenes as appendTakesAcross, selectSceneTake as selectTake, rejectUnusedTakes, swapSceneFrames, reviewSceneTake as reviewTake } from './takes.js';
+import { setSceneLastFailure, appendSceneTakes as appendTakes, appendTakesAcrossScenes as appendTakesAcross, selectSceneTake as selectTake } from './takes.js';
 
 // resolveVideoMode usability-gates the pin (a disabled grok pin seeds local);
 // an input that names a backend explicitly wins untouched.
@@ -369,16 +369,6 @@ export async function setProjectSections(id, sections) {
   return project;
 }
 
-/** Add a director's shot at its time; shots locked before stay locked. Resolves to the new shot. */
-export async function addProjectScene(id, sceneInput) {
-  const [{ addScene }, { carryShotLocks }] = await Promise.all([import('./projectsLogic.js'), import('./productionReview.js')]);
-  const { scene } = await mutateProjectRecord(id, (current) => {
-    const outcome = addScene(current, sceneInput);
-    return { ...outcome, project: carryShotLocks(current, outcome.project) };
-  });
-  return scene;
-}
-
 /**
  * Bulk-append scenes (the autonomous planner, #1855) — emits one update, not
  * N. Returns `{ project, scenes }` — the freshly-persisted project, so a
@@ -404,24 +394,9 @@ export async function updateScene(id, sceneId, patch) {
   return updated;
 }
 
-// Take decisions (select, reject, mark, swap) touch only scenes and marks and answer with
-// scenes, so they skip the catalog check-in and description resolution around the write:
-// those read every linked catalog record and stat its media, twice per click.
+// finalUpgrade.js selects an existing take and needs only the updated scene. Skipping
+// catalog check-in avoids reading linked records and checking their media on this write.
 const SCENE_ONLY = Object.freeze({ sceneOnly: true });
-
-/**
- * Mark assets ★ ingredient or ✕ bad (null clears). Returns the project's marks,
- * the shots whose takes a bad mark rejected or moved, and the per-shot changes list.
- */
-export async function markMediaPoolAssets(id, keys, mark, options = {}) {
-  let changes = [];
-  const { project, scenes } = await mutateProjectRecord(id, (current) => {
-    const outcome = markPoolAssets(current, keys, mark, options);
-    changes = outcome.changes || [];
-    return outcome;
-  }, SCENE_ONLY);
-  return { assetMarks: project.assetMarks || {}, scenes, changes };
-}
 
 // ---- scene takes (#8965) ----
 // Append candidate takes to one scene: `{ scene, appended }`. A take fills its
@@ -453,32 +428,6 @@ export async function appendTakesAcrossScenes(id, items) {
 /** Explicitly select a take for its scene slot. Returns the updated scene. */
 export async function selectSceneTake(id, sceneId, takeId, options = {}) {
   return (await mutateProjectRecord(id, (current) => selectTake(current, sceneId, takeId, options), SCENE_ONLY)).scene;
-}
-
-/** Reject every take of a shot that is not its selected frame, end frame or clip. Returns `{ scene, rejected }`. */
-export async function rejectUnusedSceneTakes(id, sceneId) {
-  const { scene, rejected } = await mutateProjectRecord(id, (current) => rejectUnusedTakes(current, sceneId), SCENE_ONLY);
-  return { scene, rejected };
-}
-
-/** Swap a shot's start and end frames (and their prompts). Returns the scene. */
-export async function swapProjectSceneFrames(id, sceneId) {
-  return (await mutateProjectRecord(id, (current) => swapSceneFrames(current, sceneId), SCENE_ONLY)).scene;
-}
-
-/** Reject/restore a take and/or set its note. Returns the updated scene. */
-export async function reviewSceneTake(id, sceneId, takeId, review) {
-  // A catalog project's character references come from its check-in, which only the full write resolves (#16473).
-  const accepting = Boolean(review.acceptCharacterReferences);
-  const { project, scene } = await mutateProjectRecord(id, (current) => reviewTake(current, sceneId, takeId, review), accepting ? {} : SCENE_ONLY);
-  // The full write's saved project already carries its check-in; present the accepted shot as GET does.
-  if (accepting) return presentMusicVideoDependencies(project).scenes.find((entry) => entry.sceneId === sceneId) || scene;
-  // A scene-only write presents takes against the stored record. A confirmation's reply is what the
-  // board shows as cleared, so present it as GET does, with the catalog check-in (#16274).
-  if (!review.confirmFrame || project?.castAndSets?.source !== 'catalog') return scene;
-  const { withCatalogCheckin } = await import('./catalogCheckin.js');
-  const presented = presentMusicVideoDependencies(await withCatalogCheckin(project));
-  return presented.scenes.find((entry) => entry.sceneId === sceneId) || scene;
 }
 
 /**

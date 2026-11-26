@@ -11,7 +11,7 @@ vi.mock('../../../services/apiMeatspace.js', () => ({
 }));
 vi.mock('../../../hooks/useChartColors.js', () => ({ default: () => ({}) }));
 // Charts do not participate in date entry and require browser layout.
-vi.mock('recharts', () => ({
+vi.mock('../../ui/charts', () => ({
   ResponsiveContainer: () => null, LineChart: () => null, Line: () => null,
   XAxis: () => null, YAxis: () => null, CartesianGrid: () => null,
   Tooltip: () => null, Legend: () => null, ReferenceLine: () => null,

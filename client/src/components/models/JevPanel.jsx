@@ -27,7 +27,7 @@ import { jevHeadBlockerLabel } from '../../lib/jevHeadReasons';
 // so the checklist never renders as an empty box. Mirrors JEV_STAGES in
 // server/lib/jev.js — four stages, no Hugging Face token: openjev is ungated.
 const FALLBACK_STAGES = [
-  { id: 'python', label: 'Host Python', description: 'Python 3.10 or newer, with a supported PyTorch wheel for this machine.' },
+  { id: 'python', label: 'Host Python', description: 'Python 3.11 or newer, with a supported PyTorch wheel for this machine.' },
   { id: 'venv', label: 'Dedicated jev runtime', description: 'A private virtualenv that never shares packages with Prompt Guard, image, or video generation.' },
   { id: 'packages', label: 'Scorer packages', description: 'Pinned torch, transformers, safetensors, and huggingface_hub imports.' },
   { id: 'model', label: 'Pinned model snapshot', description: 'The four required files from the pinned 4B NLI subfolder.' },

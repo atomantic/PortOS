@@ -1,6 +1,6 @@
 import { useRef, useState } from 'react';
 import { Film, Flag, CheckCircle2, Trash2, X, Clapperboard, RotateCcw, Smartphone, Sparkles } from 'lucide-react';
-import { musicVideoAspect, MUSIC_VIDEO_ASPECTS } from '../../lib/musicVideoAspect.js';
+import { musicVideoAspect, MUSIC_VIDEO_ASPECTS } from '../../../../server/lib/musicVideo/musicVideoAspect.js';
 import { getMusicVideoSocialCuts } from '../../services/apiMusicVideo.js';
 import RevisionPanel, { currentRevision } from './RevisionPanel.jsx';
 import AutoReviewPanel from './AutoReviewPanel.jsx';

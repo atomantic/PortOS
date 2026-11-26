@@ -73,6 +73,23 @@ export function normalizePhones(phones) {
   return [...seen];
 }
 
+/** Compute normalized additions while retaining the person's existing identifiers. */
+export function computePhoneEmailFill(person, contact) {
+  const existingPhones = person.phones || [];
+  const existingEmails = person.emails || [];
+  const havePhones = new Set(normalizePhones(existingPhones));
+  const haveEmails = new Set(normalizeEmails(existingEmails));
+  const addPhones = normalizePhones(contact.phones).filter((phone) => !havePhones.has(phone));
+  const addEmails = normalizeEmails(contact.emails).filter((email) => !haveEmails.has(email));
+  if (addPhones.length === 0 && addEmails.length === 0) return null;
+  return {
+    phones: [...existingPhones, ...addPhones],
+    emails: [...existingEmails, ...addEmails],
+    addPhones,
+    addEmails,
+  };
+}
+
 export function rowToPerson(row) {
   return {
     id: row.id,
@@ -244,6 +261,10 @@ export async function checkDuplicateTribeIdentifiers() {
   return findDuplicateTribeIdentifiers(await listPeople());
 }
 
+const PERSON_LIST_ORDER = `CASE ring WHEN 'support' THEN 1 WHEN 'core' THEN 2 WHEN 'tribe' THEN 3 WHEN 'village' THEN 4 WHEN 'external' THEN 5 ELSE 6 END,
+       COALESCE(last_contact_on, DATE '1900-01-01') ASC,
+       name ASC`;
+
 export async function listPeople(options = {}) {
   await ensureReady();
   const conditions = ['deleted = FALSE'];
@@ -269,10 +290,7 @@ export async function listPeople(options = {}) {
     `SELECT *
      FROM tribe_people
      WHERE ${conditions.join(' AND ')}
-     ORDER BY
-       CASE ring WHEN 'support' THEN 1 WHEN 'core' THEN 2 WHEN 'tribe' THEN 3 WHEN 'village' THEN 4 WHEN 'external' THEN 5 ELSE 6 END,
-       COALESCE(last_contact_on, DATE '1900-01-01') ASC,
-       name ASC`,
+     ORDER BY ${PERSON_LIST_ORDER}`,
     params,
   );
   return result.rows.map(rowToPerson);
@@ -291,12 +309,12 @@ export async function getPerson(id) {
   return result.rows[0] ? rowToPerson(result.rows[0]) : null;
 }
 
-export async function createPerson(data) {
-  await ensureReady();
+export async function createPerson(data, { client } = {}) {
+  if (!client) await ensureReady();
   const id = data.id || uuidv4();
   const ring = data.ring || 'tribe';
   const cadenceDays = data.cadenceDays ?? DEFAULT_RING_CADENCE[ring] ?? 45;
-  const result = await query(
+  const result = await (client ?? { query }).query(
     `INSERT INTO tribe_people (
       id, name, relationship, ring, cadence_days, last_contact_on, channel,
       energy, tags, emails, phones, next_move, notes, updated_at
@@ -319,6 +337,57 @@ export async function createPerson(data) {
     ],
   );
   return rowToPerson(result.rows[0]);
+}
+
+export async function importPersonByIdentifiers(data) {
+  const phones = normalizePhones(data.phones);
+  const emails = normalizeEmails(data.emails);
+  await ensureReady();
+  return withTransaction(async (client) => {
+    // Hold the lock through commit so a waiting import searches again after the insert.
+    await client.query("SELECT pg_advisory_xact_lock(hashtext('tribe_import_contact'))");
+    // Multiple identifiers can match different existing people. Keep the existing
+    // phone-first, input-order priority and use Tribe list order for shared identifiers.
+    const { rows: [existing] } = await client.query(
+      `SELECT * FROM tribe_people
+       WHERE deleted = FALSE AND (phones && $1::text[] OR emails && $2::text[])
+       ORDER BY (
+         SELECT min(position)
+         FROM unnest($1::text[] || $2::text[]) WITH ORDINALITY AS input(identifier, position)
+         WHERE identifier = ANY(CASE WHEN position <= cardinality($1::text[]) THEN phones ELSE emails END)
+       ), ${PERSON_LIST_ORDER}
+       LIMIT 1`,
+      [phones, emails],
+    );
+    if (existing) {
+      const reason = phones.some((phone) => existing.phones?.includes(phone)) ? 'phone-match' : 'email-match';
+      return { person: rowToPerson(existing), created: false, reason };
+    }
+    const person = await createPerson({ ...data, phones, emails }, { client });
+    return { person, created: true };
+  });
+}
+
+export async function mergePersonIdentifiers(id, { addPhones = [], addEmails = [] } = {}) {
+  await ensureReady();
+  return withTransaction(async (client) => {
+    const { rows: [existing] } = await client.query(
+      'SELECT * FROM tribe_people WHERE id = $1 AND deleted = FALSE FOR UPDATE',
+      [id],
+    );
+    if (!existing) return null;
+    const fill = computePhoneEmailFill(existing, { phones: addPhones, emails: addEmails });
+    if (!fill) return null;
+    const { rows: [updated] } = await client.query(
+      `UPDATE tribe_people SET phones = $2, emails = $3, updated_at = NOW()
+       WHERE id = $1
+       RETURNING *,
+         (SELECT COUNT(*) FROM tribe_touchpoints t WHERE t.person_id = tribe_people.id) AS touchpoint_count,
+         (SELECT COUNT(*) FROM tribe_memory_links ml WHERE ml.person_id = tribe_people.id) AS linked_memory_count`,
+      [id, fill.phones, fill.emails],
+    );
+    return rowToPerson(updated);
+  });
 }
 
 export async function updatePerson(id, updates) {

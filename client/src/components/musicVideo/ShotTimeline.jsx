@@ -10,11 +10,12 @@ import {
   timelineCuts, timelineDurationSec, timelineShotAt, timelineShots, timelineSplitAt, waveformPath,
 } from '../../lib/musicVideoTimeline.js';
 import { effectNaturalSec, effectTimeAt } from '../../lib/musicVideoTimelineEffects.js';
-import { MUSIC_VIDEO_SHOT_GLITCH_LIMIT } from '../../lib/musicVideoTransitions.js';
+import { MUSIC_VIDEO_SHOT_GLITCH_LIMIT } from '../../../../server/lib/musicVideo/musicVideoTransitions.js';
 import { NEW_GLITCH_STYLE } from './SceneGlitches.jsx';
 import FilePickerButton from '../ui/FilePickerButton.jsx';
 import { AUDIO_LAYER_ACCEPT, AUDIO_LAYER_ROW_H, TimelineAudioLayerPanel, TimelineAudioLayerRow, TimelineClipSoundRow, clipSoundShots } from './ShotTimelineAudioLayers.jsx';
 import { TimelineEffectLibrary, TimelineEffectSpans, TimelineEffectsPanel, TimelineInShotEffects, timelineEffectLanes } from './ShotTimelineEffects.jsx';
+import { TimelineRangeControls, TimelineRangeMarks } from './ShotTimelineRange.jsx';
 
 // About the width of a ruler label ("12:30") at its 10px size.
 const TICK_LABEL_PX = 30;
@@ -33,10 +34,13 @@ const REORDER_DRAG_PX = 6;
 // Every row is labeled in a column at the left; an effects row is tall enough to tap on a touch screen.
 const ROW_CLS = 'relative border-b border-port-border';
 const FX_ROW_H = 'h-7 pointer-coarse:h-12';
+const RULER_ROW_H = 'h-7 pointer-coarse:h-12';
 // The selected effect plays from this long before it to this long after it.
 const LOOP_LEAD_SEC = 0.75;
 // After a loop jump, how long the player gets to land before its clock is trusted again.
 const LOOP_SETTLE_MS = 400;
+// The excerpt route accepts song times through 36,000s.
+const MAX_EXCERPT_SEC = 36000;
 // A ruler label: minutes and seconds, with tenths only when the labels are closer than a second apart.
 const tickLabel = (t, stepSec) => {
   const m = Math.floor(t / 60);
@@ -101,9 +105,16 @@ const cssUrl = (src) => `url("${src.replace(/["\\\n]/g, (ch) => encodeURICompone
  * whose styles add at the playhead, and a selected effect's controls take its
  * place there until closed; without it the controls show under the timeline.
  */
-export default function ShotTimeline({ project, activeSceneId = null, songClock = null, onSeek, onOpenShot, shotName, posters = null, onMoveCut = null, onReorder = null, effectOptions = null, onEditShot = null, onPreview = null, onSplitShot = null, libraryEl = null, onAddAudioLayer = null, onEditAudioLayers = null }) {
+export default function ShotTimeline({ project, activeSceneId = null, songClock = null, onSeek, onOpenShot, shotName, posters = null, onMoveCut = null, onReorder = null, effectOptions = null, onEditShot = null, onPreview = null, onSplitShot = null, libraryEl = null, onAddAudioLayer = null, onEditAudioLayers = null, range = null, onRangeChange = null, excerpts = null, draftUnavailable = null }) {
   const { shots: savedShots, off } = useMemo(() => timelineShots(project), [project]);
   const durationSec = timelineDurationSec(project, savedShots);
+  const songDuration = project.audioAnalysis?.durationSec;
+  const rangeLimit = Math.min(MAX_EXCERPT_SEC, Number.isFinite(songDuration) && songDuration > 0 ? songDuration : savedShots.reduce((end, shot) => Math.max(end, shot.endSec), 0));
+  const validRange = range?.start != null && range?.end != null && range.end > range.start && range.end <= rangeLimit;
+  const rangeMessage = !rangeLimit ? 'Time shots on the song to select a range.'
+    : range?.start == null || range?.end == null ? 'Set both range points at the playhead.'
+      : !validRange ? 'Set In before Out and keep both points within the song.' : null;
+  const setRangePoint = (edge, t) => onRangeChange({ ...range, [edge]: Math.min(rangeLimit, Math.max(0, roundMs(t))) });
   // A cut being dragged, or one let go and still saving, shows where it will land.
   const [cutDrag, setCutDrag] = useState(null);
   const cuts = useMemo(() => (onMoveCut ? timelineCuts(savedShots, durationSec) : []), [onMoveCut, savedShots, durationSec]);
@@ -130,6 +141,8 @@ export default function ShotTimeline({ project, activeSceneId = null, songClock 
   const [zoom, setZoom] = useState(null);
   const [onScreenId, setOnScreenId] = useState(null);
   const [playing, setPlaying] = useState(false);
+  const [previewMessage, setPreviewMessage] = useState(null);
+  const [pointMessage, setPointMessage] = useState(null);
   useLayoutEffect(() => {
     const scroller = scrollerRef.current;
     if (!scroller) return undefined;
@@ -145,8 +158,7 @@ export default function ShotTimeline({ project, activeSceneId = null, songClock 
 
   // What the frame loop reads: kept in a ref so the loop is started once.
   const live = useRef({});
-  live.current = { pxPerSec, shots, songClock, durationSec };
-  // The loop the frame loop enforces: playback that runs past the selected effect jumps back before it.
+  live.current = { pxPerSec, shots, songClock, durationSec, range: validRange ? range : null, onPreview };
   const loopRef = useRef(null);
   const loopJump = useRef(-Infinity); // never jumped; 0 would read as a jump at clock zero and mute the first loop-back for LOOP_SETTLE_MS
   const timeRef = useRef(0);
@@ -208,12 +220,40 @@ export default function ShotTimeline({ project, activeSceneId = null, songClock 
   useEffect(() => {
     let handle;
     let drawn = { t: null, px: null };
+    let wasPlaying = false;
+    let lastPreviewMessage = null;
+    let lastPointMessage = null;
+    let pendingRange = null;
     const tick = () => {
-      const { pxPerSec: px, shots: list, songClock: clock, durationSec: total } = live.current;
+      const { pxPerSec: px, shots: list, songClock: clock, durationSec: total, range: selected, onPreview: previewSong } = live.current;
       const reading = clock?.() || null;
       const t = Math.min(Math.max(0, reading?.t ?? timeRef.current), total);
       const isPlaying = !!reading?.playing;
       setPlaying((current) => (current === isPlaying ? current : isPlaying));
+      const pointUnavailable = reading?.unknownSongOffset ? 'Choose a preview with known song timing to set points or loop.' : null;
+      if (pointUnavailable !== lastPointMessage) {
+        lastPointMessage = pointUnavailable;
+        setPointMessage(pointUnavailable);
+      }
+      const message = !selected || pointUnavailable ? null
+        : !reading || !previewSong ? 'Open a song preview to loop the range.'
+          : selected.start < reading.start || (Number.isFinite(reading.end) && selected.end > reading.end + 0.001)
+            ? 'Choose a preview that covers the whole range to loop it.' : null;
+      if (message !== lastPreviewMessage) {
+        lastPreviewMessage = message;
+        setPreviewMessage(message);
+      }
+      const rangeLoop = selected?.loop && !message && !pointUnavailable ? selected : null;
+      const clockTime = reading?.t ?? t;
+      const outside = rangeLoop && (clockTime < rangeLoop.start || clockTime >= rangeLoop.end || (reading?.ended && clockTime >= rangeLoop.end - 0.001));
+      if (!outside || pendingRange !== rangeLoop || (!isPlaying && !reading?.ended)) pendingRange = null;
+      // A completed media element can report ended on the very frame it reaches Out.
+      // Rearm as soon as the seek lands inside, even for loops shorter than the effect settle time.
+      if (outside && (isPlaying || (reading?.ended && wasPlaying)) && !pendingRange) {
+        pendingRange = rangeLoop;
+        previewSong(rangeLoop.start, true, true);
+      }
+      wasPlaying = isPlaying;
       const moved = t !== drawn.t;
       if (moved || px !== drawn.px) {
         timeRef.current = t;
@@ -230,7 +270,7 @@ export default function ShotTimeline({ project, activeSceneId = null, songClock 
           if (x < 0 || x > scroller.clientWidth - FOLLOW_MARGIN_PX) scroller.scrollLeft = Math.max(0, t * px - scroller.clientWidth * 0.1);
         }
         drawn = { t, px };
-        const loop = loopRef.current;
+        const loop = rangeLoop ? null : loopRef.current;
         // One jump per pass: the player takes a few frames to land, and its clock still reads past the end meanwhile.
         if (loop && reading?.playing && t >= loop.end && performance.now() - loopJump.current > LOOP_SETTLE_MS) {
           loopJump.current = performance.now();
@@ -394,11 +434,15 @@ export default function ShotTimeline({ project, activeSceneId = null, songClock 
   })() : null;
   loopRef.current = loopOn && loopRange && onPreview ? { ...loopRange, jump: (t) => onPreview(roundMs(t), true) } : null;
   const preview = () => { if (loopRange) cue(loopRange.start); };
-  // Play or pause where the playhead is; with a selected effect looping, play starts its loop when the playhead is outside it.
+  // The range takes precedence over an armed effect loop while the preview covers it.
   const togglePlay = () => {
     if (!onPreview) return;
     const t = timeRef.current;
     if (playing) { onPreview(roundMs(t), false); return; }
+    if (validRange && range.loop && !previewMessage && !pointMessage) {
+      onPreview(t < range.start || t >= range.end ? range.start : roundMs(t), true, true);
+      return;
+    }
     const loop = loopRef.current;
     onPreview(roundMs(loop && (t < loop.start || t >= loop.end) ? loop.start : t), true);
   };
@@ -435,7 +479,7 @@ export default function ShotTimeline({ project, activeSceneId = null, songClock 
     ) },
   ].filter(Boolean) : [];
   const rowLabels = [
-    ['Time', 'h-7'], ...(sections.length ? [['Sections', 'h-4']] : []), ['Shots', 'h-14'],
+    ['Time', RULER_ROW_H], ...(sections.length ? [['Sections', 'h-4']] : []), ['Shots', 'h-14'],
     ...effectRows.map((row) => [row.label, FX_ROW_H]), ...(cues.length ? [['Lyrics', 'h-5']] : []), ...(wave ? [['Song', 'h-8']] : []),
     ...audioLayers.map((layer) => [layer.label || 'Audio', AUDIO_LAYER_ROW_H, `audio:${layer.id}`]),
   ];
@@ -510,6 +554,10 @@ export default function ShotTimeline({ project, activeSceneId = null, songClock 
           </button>
         </div>
       </div>
+      {onRangeChange && <TimelineRangeControls range={range} valid={validRange} limit={rangeLimit} rangeMessage={rangeMessage}
+        previewMessage={previewMessage} pointMessage={pointMessage}
+        onSetPoint={(edge) => { if (!songClock?.()?.unknownSongOffset) setRangePoint(edge, timeRef.current); }}
+        onChange={onRangeChange} excerpts={excerpts} draftUnavailable={draftUnavailable} projectId={project.id} />}
       <div className="flex min-w-0 border-t border-port-border bg-port-bg">
       {/* Each row's name, beside the row; it stays put while the rows scroll. */}
       <div aria-hidden="true" className="w-[4.5rem] shrink-0 border-r border-port-border bg-port-card sm:w-24">
@@ -524,23 +572,26 @@ export default function ShotTimeline({ project, activeSceneId = null, songClock 
         {/* Clipped across: a label or handle hanging past the song's end would otherwise scroll a fitted timeline. */}
         <div className="relative overflow-x-clip" style={{ width: `${widthPx}px` }}>
           {/* The ruler scrubs (touch-none); the tracks under it pan the view. */}
-          <div ref={rulerRef} role="slider" tabIndex={0} aria-label="Seek" aria-valuemin={0} aria-valuemax={Math.round(durationSec)} aria-valuenow={0}
-            className={`${ROW_CLS} h-7 cursor-pointer touch-none select-none`}
-            onPointerDown={onRulerDown} onPointerMove={onRulerMove} onPointerUp={onRulerUp} onPointerCancel={onRulerUp}
-            onKeyDown={(event) => {
-              const dir = event.key === 'ArrowRight' ? 1 : event.key === 'ArrowLeft' ? -1 : 0;
-              if (!dir) return;
-              event.preventDefault();
-              const t = Math.min(Math.max(0, timeRef.current + dir * (event.shiftKey ? 1 : 1 / 24)), durationSec);
-              timeRef.current = t;
-              onSeek?.(Math.round(t * 1000) / 1000);
-            }}>
-            {/* A label with no room before the end is left off rather than cut in half. */}
-            {ticks.filter((t) => t * pxPerSec + TICK_LABEL_PX <= widthPx).map((t) => (
-              <span key={t} className="pointer-events-none absolute inset-y-0 border-l border-port-border pl-1 text-[10px] leading-7 tabular-nums text-port-text-muted" style={{ left: t * pxPerSec }}>
-                {tickLabel(t, stepSec)}
-              </span>
-            ))}
+          <div className="relative">
+            <div ref={rulerRef} role="slider" tabIndex={0} aria-label="Seek" aria-valuemin={0} aria-valuemax={Math.round(durationSec)} aria-valuenow={0}
+              className={`${ROW_CLS} ${RULER_ROW_H} cursor-pointer touch-none select-none`}
+              onPointerDown={onRulerDown} onPointerMove={onRulerMove} onPointerUp={onRulerUp} onPointerCancel={onRulerUp}
+              onKeyDown={(event) => {
+                const dir = event.key === 'ArrowRight' ? 1 : event.key === 'ArrowLeft' ? -1 : 0;
+                if (!dir) return;
+                event.preventDefault();
+                const t = Math.min(Math.max(0, timeRef.current + dir * (event.shiftKey ? 1 : 1 / 24)), durationSec);
+                timeRef.current = t;
+                onSeek?.(roundMs(t));
+              }}>
+              {/* A label with no room before the end is left off rather than cut in half. */}
+              {ticks.filter((t) => t * pxPerSec + TICK_LABEL_PX <= widthPx).map((t) => (
+                <span key={t} className="pointer-events-none absolute inset-y-0 flex items-center border-l border-port-border pl-1 text-[10px] tabular-nums text-port-text-muted" style={{ left: t * pxPerSec }}>
+                  {tickLabel(t, stepSec)}
+                </span>
+              ))}
+            </div>
+            {onRangeChange && <TimelineRangeMarks range={range} valid={validRange} limit={rangeLimit} pxPerSec={pxPerSec} onChange={setRangePoint} />}
           </div>
           {sections.length > 0 && (
             <div className={`${ROW_CLS} h-4`} aria-hidden="true">

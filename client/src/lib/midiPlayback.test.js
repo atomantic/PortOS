@@ -1,3 +1,4 @@
+// @vitest-environment node
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { createMidiPlayer } from './midiPlayback.js';
 import { createFakeAudio } from '../test/fakeAudioContext.js';

@@ -47,7 +47,7 @@ function checkout(host, name, workspace, configName, dependencies) {
   const parent = join(host, name);
   mkdirSync(parent);
   put(join(parent, 'package.json'), '{"type":"module"}');
-  const fixture = createVitestTempFixture(parent, workspace, 'expect(true).toBe(true);', configName);
+  const fixture = createVitestTempFixture(parent, workspace, 'expect(true).toBe(true);', pathToFileURL(join(REPO, workspace, configName)));
   delete fixture.options.env.PORTOS_CI_BROWSER_OWNER;
   // Not a `_test` database: the DB run lock stands down, so the fixture neither needs `pg` nor queues behind a real run.
   fixture.options.env.PGTESTDATABASE = 'workspace_cache_fixture';

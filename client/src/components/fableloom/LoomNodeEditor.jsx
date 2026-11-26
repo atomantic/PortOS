@@ -125,6 +125,20 @@ export default function LoomNodeEditor({
     });
   }, [node.id]);
 
+  // A replacement still invalidates approval even when the scene stays selected.
+  const storyboardImageApproved = node.visualCanon?.storyboardImageApproved === true;
+  useEffect(() => {
+    setForm((current) => {
+      if (!current?.visualCanon || current.visualCanon.storyboardImageApproved === storyboardImageApproved) {
+        return current;
+      }
+      return {
+        ...current,
+        visualCanon: { ...current.visualCanon, storyboardImageApproved },
+      };
+    });
+  }, [node.id, node.image, storyboardImageApproved]);
+
   const otherNodes = useMemo(
     () => episode.nodes.filter((n) => n.id !== node.id),
     [episode.nodes, node.id],

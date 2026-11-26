@@ -10,6 +10,7 @@
  * repoPath, and atomically replaces the file — refusing when the destination
  * bytes no longer match the previous publish (something else changed the
  * game's atlas; clobbering it silently would destroy that change).
+ * Every output, sidecar, and code-binding source needs its own destination.
  *
  * The optional codeBinding is a verify-or-rewrite guard over the game source
  * file that references the atlas: the binding's resourcePath must appear in
@@ -34,9 +35,10 @@
 import { dirname, join, resolve } from 'path';
 import { mkdir, readFile, realpath, stat } from 'fs/promises';
 import {
-  atomicWrite, isPathInsideDir, readJSONFile, safeJSONParse, sha256File, pathExists,
+  atomicWrite, isPathInsideDir, readJSONFile, safeJSONParse, sha256File,
 } from '../../lib/fileUtils.js';
 import { isSymlinkFreeRepoPath } from '../../lib/repoPublishPath.js';
+import { canonicalizePath, isPathAtOrInsideDir } from '../../lib/pathContainment.js';
 import { ServerError } from '../../lib/errorHandler.js';
 import { createKeyCachedQueue } from '../../lib/createKeyCachedQueue.js';
 import { getAppById } from '../apps.js';
@@ -83,6 +85,41 @@ async function anchorRepoPath(repoRoot, relPath, label) {
     throw bindingError(`${label} must stay inside the app repository without symlinks: ${relPath}`, 'INVALID_PUBLISH_PATH');
   }
   return abs;
+}
+
+function publishDestinations({ atlasDestPath, portraitDestPath, presentationIdleDestPath, codeBinding }) {
+  return {
+    atlasDestPath,
+    layoutDestPath: typeof atlasDestPath === 'string' ? layoutSidecarPath(atlasDestPath) : undefined,
+    ...(portraitDestPath ? { portraitDestPath } : {}),
+    ...(presentationIdleDestPath ? {
+      presentationIdleDestPath,
+      presentationIdleLayoutDestPath: typeof presentationIdleDestPath === 'string'
+        ? presentationIdleSidecarPath(presentationIdleDestPath)
+        : undefined,
+    } : {}),
+    ...(codeBinding ? { 'codeBinding.path': codeBinding.path } : {}),
+  };
+}
+
+async function validatePublishDestinations(repoRoot, destinations, status) {
+  const anchored = {};
+  const checked = new Map();
+  for (const [field, path] of Object.entries(destinations)) {
+    const abs = await anchorRepoPath(repoRoot, path, field);
+    const canonical = canonicalizePath(abs);
+    for (const [otherField, otherPath] of checked) {
+      // Each destination is a file, so it cannot also serve as an output directory.
+      if (isPathAtOrInsideDir(otherPath, canonical) || isPathAtOrInsideDir(canonical, otherPath)) {
+        throw new ServerError(`Publish destinations overlap: ${otherField} and ${field}. Choose separate paths for both files.`, {
+          status, code: 'PUBLISH_DESTINATIONS_OVERLAP', context: { fields: [otherField, field] },
+        });
+      }
+    }
+    anchored[field] = abs;
+    checked.set(field, canonical);
+  }
+  return anchored;
 }
 
 /**
@@ -140,22 +177,9 @@ export async function validatePublishBinding(binding) {
     codeBinding, runtimeContract,
   } = binding;
   const { repoRoot } = await requireAppRepo(appId, 400);
-  await anchorRepoPath(repoRoot, atlasDestPath, 'atlasDestPath');
-  // The sidecar lands beside the atlas, so its path must anchor too — catch a
-  // destination whose sidecar would escape the repo at SAVE time, not mid-publish.
-  await anchorRepoPath(repoRoot, layoutSidecarPath(atlasDestPath), 'atlas layout sidecar');
-  if (portraitDestPath) {
-    await anchorRepoPath(repoRoot, portraitDestPath, 'portraitDestPath');
-  }
-  if (presentationIdleDestPath) {
-    await anchorRepoPath(repoRoot, presentationIdleDestPath, 'presentationIdleDestPath');
-    await anchorRepoPath(repoRoot, presentationIdleSidecarPath(presentationIdleDestPath), 'picker animation sidecar');
-  }
-  if (codeBinding) {
-    await anchorRepoPath(repoRoot, codeBinding.path, 'codeBinding.path');
-    if (typeof codeBinding.resourcePath !== 'string' || !codeBinding.resourcePath.trim()) {
-      throw bindingError('codeBinding.resourcePath is required', 'INVALID_CODE_BINDING');
-    }
+  await validatePublishDestinations(repoRoot, publishDestinations(binding), 400);
+  if (codeBinding && (typeof codeBinding.resourcePath !== 'string' || !codeBinding.resourcePath.trim())) {
+    throw bindingError('codeBinding.resourcePath is required', 'INVALID_CODE_BINDING');
   }
   return {
     appId,
@@ -194,19 +218,21 @@ export async function validatePublishBinding(binding) {
  * without this gate being revisited. Walk is character-only today, so nothing
  * that used to be accepted or refused here changes.
  */
-export async function setPublishBinding(recordId, binding) {
-  const record = await requireAnimatable(recordId);
-  const stored = record.publishBinding;
-  const effective = binding ? { ...binding } : null;
-  if (effective && effective.appId === stored?.appId) {
-    // Validate inherited paths too: a symlink may have appeared since the
-    // previous save, even when an older client omits optional destinations.
-    for (const field of ['runtimeContract', 'portraitDestPath', 'presentationIdleDestPath']) {
-      if (effective[field] === undefined) effective[field] = stored[field] ?? null;
+export function setPublishBinding(recordId, binding) {
+  return withWalkWriteTail(recordId, async () => {
+    const record = await requireAnimatable(recordId);
+    const stored = record.publishBinding;
+    const effective = binding ? { ...binding } : null;
+    if (effective && effective.appId === stored?.appId) {
+      // Validate inherited paths too: a symlink may have appeared since the
+      // previous save, even when an older client omits optional destinations.
+      for (const field of ['runtimeContract', 'portraitDestPath', 'presentationIdleDestPath']) {
+        if (effective[field] === undefined) effective[field] = stored[field] ?? null;
+      }
     }
-  }
-  const validated = await validatePublishBinding(effective);
-  return updateRecord(recordId, { publishBinding: validated });
+    const validated = await validatePublishBinding(effective);
+    return updateRecord(recordId, { publishBinding: validated });
+  });
 }
 
 /**
@@ -265,6 +291,32 @@ async function applyCodeBinding(repoRoot, codeBinding, previousResourcePath) {
     `Code binding drifted: ${codeBinding.path} contains ${currentCount} occurrence(s) of the resource path (expected ${required})`,
     { status: 409, code: 'CODE_BINDING_DRIFTED' },
   );
+}
+
+// A failed read is not evidence of a vacant destination.
+function absentOrThrow(error) {
+  if (error.code === 'ENOENT') return null;
+  throw error;
+}
+
+function checkOverwriteConsent({ recordId, repoRoot, binding, appLabel, collisions, acknowledgeOverwrite }) {
+  if (!collisions.some(({ needsConsent }) => needsConsent)) {
+    if (acknowledgeOverwrite) {
+      throw new ServerError('Publish destinations changed. Review the current binding and publish again.', {
+        status: 409, code: 'PUBLISH_OVERWRITE_STALE',
+      });
+    }
+    return;
+  }
+  // Bind even identical relative paths and bytes to this record, saved binding
+  // and real checkout. A retry recomputes the revision under the repo write lock.
+  const revision = sha256Buffer(JSON.stringify([recordId, repoRoot, binding, collisions]));
+  if (acknowledgeOverwrite !== revision) {
+    throw new ServerError('Confirm the listed files before replacing them.', {
+      status: 409, code: 'PUBLISH_OUTPUTS_OCCUPIED',
+      context: { appLabel, paths: [...new Set(collisions.map(({ path }) => path))], revision },
+    });
+  }
 }
 
 /**
@@ -329,7 +381,8 @@ async function publishAtlasImpl(recordId, { acknowledgeOverwrite = false } = {})
   });
   const layoutBuffer = Buffer.from(`${JSON.stringify(layout, null, 2)}\n`);
   const layoutSha256 = sha256Buffer(layoutBuffer);
-  const layoutDestPath = layoutSidecarPath(binding.atlasDestPath);
+  const destinations = publishDestinations(binding);
+  const { layoutDestPath, presentationIdleLayoutDestPath = null } = destinations;
   const portrait = binding.portraitDestPath
     ? await buildPresentationPortrait(recordId, record)
     : null;
@@ -345,9 +398,6 @@ async function publishAtlasImpl(recordId, { acknowledgeOverwrite = false } = {})
   const presentationIdleLayoutSha256 = presentationIdleLayoutBuffer
     ? sha256Buffer(presentationIdleLayoutBuffer)
     : null;
-  const presentationIdleLayoutDestPath = presentationIdle
-    ? presentationIdleSidecarPath(binding.presentationIdleDestPath)
-    : null;
 
   return repoPublishTail(resolve(repoRoot), async () => {
     // Don't mutate a tree a deploy is currently building from — appDeployer
@@ -356,70 +406,30 @@ async function publishAtlasImpl(recordId, { acknowledgeOverwrite = false } = {})
     if (isDeploying(app.repoPath)) {
       throw new ServerError(`App ${appLabel} is deploying — retry when the deploy finishes`, { status: 409, code: 'APP_DEPLOY_IN_PROGRESS' });
     }
-    const destAbs = await anchorRepoPath(repoRoot, binding.atlasDestPath, 'atlasDestPath');
-    // The sidecar is repo-anchored and written inside this same per-repo tail
-    // as the PNG, so the pair is never interleaved with another publish into
-    // the same checkout.
-    const layoutAbs = await anchorRepoPath(repoRoot, layoutDestPath, 'atlas layout sidecar');
-    const portraitAbs = portrait
-      ? await anchorRepoPath(repoRoot, binding.portraitDestPath, 'portraitDestPath')
-      : null;
-    const presentationIdleAbs = presentationIdle
-      ? await anchorRepoPath(repoRoot, binding.presentationIdleDestPath, 'presentationIdleDestPath')
-      : null;
-    const presentationIdleLayoutAbs = presentationIdle
-      ? await anchorRepoPath(repoRoot, presentationIdleLayoutDestPath, 'picker animation sidecar')
-      : null;
-    const destinations = [
-      [binding.atlasDestPath, 'atlasDestPath'],
-      [layoutDestPath, 'atlas layout sidecar'],
-      ...(portrait ? [[binding.portraitDestPath, 'portraitDestPath']] : []),
-      ...(presentationIdle ? [
-        [binding.presentationIdleDestPath, 'presentationIdleDestPath'],
-        [presentationIdleLayoutDestPath, 'picker animation sidecar'],
-      ] : []),
-      ...(binding.codeBinding ? [[binding.codeBinding.path, 'codeBinding.path']] : []),
-    ];
-    const preflightDestinations = async () => {
-      for (const [path, label] of destinations) await anchorRepoPath(repoRoot, path, label);
-    };
-    // Media paths were checked above; check source before any app-file reads.
-    if (binding.codeBinding) await anchorRepoPath(repoRoot, binding.codeBinding.path, 'codeBinding.path');
+    const {
+      atlasDestPath: destAbs,
+      layoutDestPath: layoutAbs,
+      portraitDestPath: portraitAbs,
+      presentationIdleDestPath: presentationIdleAbs,
+      presentationIdleLayoutDestPath: presentationIdleLayoutAbs,
+    } = await validatePublishDestinations(repoRoot, destinations, 409);
     // Repeat the complete preflight after creating output parents, before
     // either branch can rewrite source.
     const prepareDestinations = async () => {
-      for (const [path, label] of destinations) {
+      const entries = Object.entries(destinations);
+      for (const [label, path] of entries) {
         const abs = await anchorRepoPath(repoRoot, path, label);
         await mkdir(dirname(abs), { recursive: true });
         await anchorRepoPath(repoRoot, path, label);
       }
-      await preflightDestinations();
+      for (const [label, path] of entries) await anchorRepoPath(repoRoot, path, label);
     };
     const writeDestination = async (path, label, buffer) => {
       const abs = await anchorRepoPath(repoRoot, path, label);
       await atomicWrite(abs, buffer);
     };
-    const existingLayout = await readFile(layoutAbs).catch(() => null);
+    const existingLayout = await readFile(layoutAbs).catch(absentOrThrow);
     const layoutUpToDate = Boolean(existingLayout?.equals(layoutBuffer));
-    // Occupied-destination guard, mirroring the atlas's: PortOS owns files it
-    // stamped with its own `kind`, and will regenerate one freely, but a JSON
-    // file it never wrote sitting at that path is somebody else's — replacing
-    // it needs the same explicit acknowledgment replacing a foreign atlas does.
-    // A malformed/non-JSON file counts as foreign too: a parse failure must
-    // not become a 500, and must not license an overwrite.
-    //
-    // Split from the write and asserted BEFORE applyCodeBinding, which mutates
-    // the game's source file — a refusal after that rewrite would leave the
-    // source pointing at an atlas this publish then declined to write.
-    const assertLayoutDestWritable = () => {
-      if (layoutUpToDate || acknowledgeOverwrite || !existingLayout) return;
-      if (safeJSONParse(existingLayout.toString('utf8'))?.kind !== ATLAS_LAYOUT_KIND) {
-        throw new ServerError(
-          `${layoutDestPath} already exists and was not written by PortOS — confirm the overwrite to replace it.`,
-          { status: 409, code: 'PUBLISH_LAYOUT_OCCUPIED' },
-        );
-      }
-    };
     // Write only when the content actually differs, so a republish that changes
     // nothing stays a genuine no-op. Returns whether the repo was mutated — an
     // atlas already at the destination but MISSING its sidecar still gets one,
@@ -496,103 +506,72 @@ async function publishAtlasImpl(recordId, { acknowledgeOverwrite = false } = {})
       return publication;
     };
 
-    const portraitDestSha256 = portrait && await pathExists(portraitAbs)
-      ? await sha256File(portraitAbs)
-      : null;
+    const portraitDestSha256 = portrait ? await sha256File(portraitAbs).catch(absentOrThrow) : null;
     const portraitUpToDate = Boolean(portrait && portraitDestSha256 === portrait.sha256);
-    const assertPortraitDestWritable = () => {
-      if (!portrait || portraitUpToDate || acknowledgeOverwrite || portraitDestSha256 === null) return;
-      if (previousPortrait && portraitDestSha256 !== previousPortrait.portraitSha256) {
-        throw new ServerError(
-          'Destination portrait no longer matches the previous publish — it was changed outside PortOS. Resolve it in the game repo, then re-publish.',
-          { status: 409, code: 'PUBLISH_PORTRAIT_DIVERGED' },
-        );
-      }
-      if (!previousPortrait) {
-        throw new ServerError(
-          'Destination already contains a portrait PortOS did not publish — confirm the overwrite to replace it.',
-          { status: 409, code: 'PUBLISH_PORTRAIT_OCCUPIED' },
-        );
-      }
-    };
     const writePortrait = async () => {
       if (!portrait || portraitUpToDate) return false;
       await writeDestination(binding.portraitDestPath, 'portraitDestPath', portrait.buffer);
       return true;
     };
-    const presentationIdleDestSha256 = presentationIdle && await pathExists(presentationIdleAbs)
-      ? await sha256File(presentationIdleAbs)
-      : null;
-    const presentationIdleUpToDate = Boolean(
-      presentationIdle && presentationIdleDestSha256 === presentationIdle.sha256,
-    );
-    const assertPresentationIdleDestWritable = () => {
-      if (!presentationIdle
-        || presentationIdleUpToDate
-        || acknowledgeOverwrite
-        || presentationIdleDestSha256 === null) return;
-      if (previousPresentationIdle
-        && presentationIdleDestSha256 !== previousPresentationIdle.presentationIdleSha256) {
-        throw new ServerError(
-          'Destination picker animation no longer matches the previous publish — it was changed outside PortOS. Resolve it in the game repo, then re-publish.',
-          { status: 409, code: 'PUBLISH_PRESENTATION_IDLE_DIVERGED' },
-        );
-      }
-      if (!previousPresentationIdle) {
-        throw new ServerError(
-          'Destination already contains a picker animation PortOS did not publish — confirm the overwrite to replace it.',
-          { status: 409, code: 'PUBLISH_PRESENTATION_IDLE_OCCUPIED' },
-        );
-      }
-    };
+    const presentationIdleDestSha256 = presentationIdle
+      ? await sha256File(presentationIdleAbs).catch(absentOrThrow) : null;
+    const presentationIdleUpToDate = Boolean(presentationIdle && presentationIdleDestSha256 === presentationIdle.sha256);
     const writePresentationIdle = async () => {
       if (!presentationIdle || presentationIdleUpToDate) return false;
       await writeDestination(binding.presentationIdleDestPath, 'presentationIdleDestPath', presentationIdle.buffer);
       return true;
     };
     const existingPresentationIdleLayout = presentationIdle
-      ? await readFile(presentationIdleLayoutAbs).catch(() => null)
+      ? await readFile(presentationIdleLayoutAbs).catch(absentOrThrow)
       : null;
     const presentationIdleLayoutUpToDate = Boolean(
       existingPresentationIdleLayout?.equals(presentationIdleLayoutBuffer),
     );
-    const assertPresentationIdleLayoutWritable = () => {
-      if (!presentationIdle
-        || presentationIdleLayoutUpToDate
-        || acknowledgeOverwrite
-        || !existingPresentationIdleLayout) return;
-      if (safeJSONParse(existingPresentationIdleLayout.toString('utf8'))?.kind
-        !== PRESENTATION_IDLE_LAYOUT_KIND) {
-        throw new ServerError(
-          `${presentationIdleLayoutDestPath} already exists and was not written by PortOS — confirm the overwrite to replace it.`,
-          { status: 409, code: 'PUBLISH_PRESENTATION_IDLE_LAYOUT_OCCUPIED' },
-        );
-      }
-    };
     const writePresentationIdleLayout = async () => {
       if (!presentationIdle || presentationIdleLayoutUpToDate) return false;
       await writeDestination(presentationIdleLayoutDestPath, 'picker animation sidecar', presentationIdleLayoutBuffer);
       return true;
     };
 
-    const destSha256 = (await pathExists(destAbs)) ? await sha256File(destAbs) : null;
+    const destSha256 = await sha256File(destAbs).catch(absentOrThrow);
+    const collisions = [];
+    const inspectOutput = (path, current, next, publication, hashField, divergenceCode, ownedLayout = false) => {
+      if (current === null || current === next) return;
+      if (publication && current !== publication[hashField]) {
+        throw new ServerError(`Previously published file ${path} was changed outside PortOS. Resolve it in the game repo, then re-publish.`, {
+          status: 409, code: divergenceCode,
+        });
+      }
+      collisions.push({ path, current, next, needsConsent: !publication && !ownedLayout });
+    };
+    inspectOutput(binding.atlasDestPath, destSha256, compiled.atlasSha256,
+      previous, 'atlasSha256', 'PUBLISH_DEST_DIVERGED');
+    // Legacy sidecars can predate recorded layout hashes. Use their ownership
+    // marker only in the absence of a recorded baseline.
+    inspectOutput(layoutDestPath, existingLayout && sha256Buffer(existingLayout), layoutSha256,
+      previous?.layoutSha256 && previous, 'layoutSha256', 'PUBLISH_LAYOUT_DIVERGED',
+      safeJSONParse(existingLayout?.toString('utf8'))?.kind === ATLAS_LAYOUT_KIND);
+    inspectOutput(binding.portraitDestPath, portraitDestSha256, portrait?.sha256,
+      previousPortrait, 'portraitSha256', 'PUBLISH_PORTRAIT_DIVERGED');
+    inspectOutput(binding.presentationIdleDestPath, presentationIdleDestSha256, presentationIdle?.sha256,
+      previousPresentationIdle, 'presentationIdleSha256', 'PUBLISH_PRESENTATION_IDLE_DIVERGED');
+    inspectOutput(presentationIdleLayoutDestPath, existingPresentationIdleLayout && sha256Buffer(existingPresentationIdleLayout),
+      presentationIdleLayoutSha256, previousPresentationIdle?.presentationIdleLayoutSha256 && previousPresentationIdle,
+      'presentationIdleLayoutSha256', 'PUBLISH_PRESENTATION_IDLE_LAYOUT_DIVERGED',
+      safeJSONParse(existingPresentationIdleLayout?.toString('utf8'))?.kind === PRESENTATION_IDLE_LAYOUT_KIND);
+    checkOverwriteConsent({ recordId, repoRoot, binding, appLabel, collisions, acknowledgeOverwrite });
+
+    await prepareDestinations();
+    const codeBinding = binding.codeBinding
+      ? await applyCodeBinding(repoRoot, binding.codeBinding, previousForCode?.codeBinding?.resourcePath)
+      : null;
+    // Sidecars land before their images so a consumer can detect a partial
+    // publish using the source image hash, including when repairing a sidecar.
+    const layoutWritten = await writeLayoutSidecar();
+    const portraitWritten = await writePortrait();
+    const presentationIdleLayoutWritten = await writePresentationIdleLayout();
+    const presentationIdleWritten = await writePresentationIdle();
     if (destSha256 === compiled.atlasSha256) {
-      assertLayoutDestWritable();
-      assertPortraitDestWritable();
-      assertPresentationIdleDestWritable();
-      assertPresentationIdleLayoutWritable();
-      await prepareDestinations();
-      // Verify the code binding even on a no-op so drift never hides.
-      const codeBinding = binding.codeBinding
-        ? await applyCodeBinding(repoRoot, binding.codeBinding, previousForCode?.codeBinding?.resourcePath)
-        : null;
-      // An up-to-date atlas can still be missing (or carrying a stale) layout
-      // sidecar — from a publish that predates it, or a hand-deleted file.
-      // Reconcile it here so the pair converges on the next publish.
-      const layoutWritten = await writeLayoutSidecar();
-      const portraitWritten = await writePortrait();
-      const presentationIdleLayoutWritten = await writePresentationIdleLayout();
-      const presentationIdleWritten = await writePresentationIdle();
       // The destination already holds the current bytes, but three sub-cases
       // still mutate durable state and must be recorded: a code-binding
       // rewrite just changed the game's source, the sidecar was just written,
@@ -625,43 +604,6 @@ async function publishAtlasImpl(recordId, { acknowledgeOverwrite = false } = {})
         presentationIdleLayoutWritten,
       };
     }
-    if (previous && destSha256 !== null && destSha256 !== previous.atlasSha256) {
-      throw new ServerError(
-        'Destination atlas no longer matches the previous publish — it was changed outside PortOS. Resolve in the game repo, then re-publish.',
-        { status: 409, code: 'PUBLISH_DEST_DIVERGED' },
-      );
-    }
-    // Never silently destroy bytes PortOS didn't write: a destination that
-    // already exists with no publication history needs an explicit overwrite
-    // acknowledgment from the caller.
-    if (!previous && destSha256 !== null && !acknowledgeOverwrite) {
-      throw new ServerError(
-        'Destination already contains an atlas PortOS did not publish — confirm the overwrite to replace it.',
-        { status: 409, code: 'PUBLISH_DEST_OCCUPIED' },
-      );
-    }
-
-    // Verify/rewrite the code binding BEFORE replacing the atlas so a drifted
-    // binding aborts the publish with the game repo untouched — and assert the
-    // sidecar destination first, since that rewrite is itself a mutation.
-    assertLayoutDestWritable();
-    assertPortraitDestWritable();
-    assertPresentationIdleDestWritable();
-    assertPresentationIdleLayoutWritable();
-    await prepareDestinations();
-    const codeBinding = binding.codeBinding
-      ? await applyCodeBinding(repoRoot, binding.codeBinding, previousForCode?.codeBinding?.resourcePath)
-      : null;
-
-    // Sidecar BEFORE the atlas. Either order has a crash window, but only this
-    // one fails loudly: the layout carries `sourceAtlasSha256`, so a sidecar
-    // that landed without its atlas is DETECTABLE by the consumer, whereas a
-    // new atlas under a stale/absent layout is exactly the silent column shift
-    // this whole contract exists to prevent.
-    const layoutWritten = await writeLayoutSidecar();
-    const portraitWritten = await writePortrait();
-    const presentationIdleLayoutWritten = await writePresentationIdleLayout();
-    const presentationIdleWritten = await writePresentationIdle();
     await writeDestination(binding.atlasDestPath, 'atlasDestPath', atlasBuffer);
 
     const publication = await recordPublication({

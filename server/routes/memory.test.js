@@ -23,7 +23,6 @@ vi.mock('../services/memoryBackend.js', () => ({
   searchMemories: vi.fn(),
   consolidateMemories: vi.fn(),
   linkMemories: vi.fn(),
-  applyDecay: vi.fn(),
   clearExpired: vi.fn(),
   approveMemory: vi.fn(),
   rejectMemory: vi.fn()
@@ -53,6 +52,11 @@ vi.mock('../services/memorySync.js', () => ({
   applyRemoteChanges: vi.fn()
 }));
 
+vi.mock('../services/provider/providers.js', () => ({
+  getProviderById: vi.fn(),
+}));
+vi.mock('../lib/openAiModelsProbe.js', () => ({ probeOpenAiModels: vi.fn() }));
+
 // The real peer-pull gate runs; only the peer registry and settings it reads
 // are stubbed, as in routes/dataSync.test.js.
 const peers = [];
@@ -67,12 +71,39 @@ vi.mock('../services/settings.js', async () => ({
 }));
 
 import { PEER_INSTANCE_ID_HEADER } from '../services/sharing/peerPullAuthorization.js';
-import { ensureBackend, getMemories, getTimeline, archiveMemory, purgeMemory, applyDecay, linkMemories } from '../services/memoryBackend.js';
+import { ensureBackend, getMemories, getTimeline, archiveMemory, purgeMemory, linkMemories } from '../services/memoryBackend.js';
 import { checkHealth } from '../lib/db.js';
 import * as memorySync from '../services/memorySync.js';
 import { findRecentRunsUsingMemory } from '../services/memoryRunUsage.js';
+import * as embeddings from '../services/memoryEmbeddings.js';
+import { getProviderById } from '../services/provider/providers.js';
+import { probeOpenAiModels } from '../lib/openAiModelsProbe.js';
 
 describe('Memory Routes', () => {
+  it.each([
+    { probe: { reachable: true, models: ['qwen3:8b'] }, available: true },
+    { probe: { reachable: true, models: ['different-model'] }, available: false },
+    { probe: { reachable: true, error: 'authentication required', models: null }, available: false },
+    { probe: { reachable: false }, available: false },
+  ])('includes the selected classifier reachability alongside embeddings ($probe)', async ({ probe, available }) => {
+    const app = express();
+    app.use('/api/memory', memoryRoutes);
+    settings = { memoryClassifier: { providerId: 'ollama', model: 'qwen3:8b' } };
+    embeddings.checkAvailability.mockResolvedValue({ available: true, embeddingModel: 'synthetic-embed' });
+    getProviderById.mockResolvedValue({ id: 'ollama', type: 'api', enabled: true, endpoint: 'http://127.0.0.1:11434/v1' });
+    probeOpenAiModels.mockResolvedValue(probe);
+
+    const res = await request(app).get('/api/memory/embeddings/status');
+    settings = {};
+    expect(res.status).toBe(200);
+    expect(res.body).toEqual({
+      available: true,
+      embeddingModel: 'synthetic-embed',
+      classifier: { available, disabled: false },
+    });
+    expect(probeOpenAiModels).toHaveBeenCalledWith('http://127.0.0.1:11434/v1', expect.any(Object));
+  });
+
   it('GET /:id/runs lists recent runs that used the memory (#10495)', async () => {
     const app = express();
     app.use('/api/memory', memoryRoutes);
@@ -184,7 +215,7 @@ describe('Memory Routes', () => {
       const response = await request(app).get('/api/memory/sync?since=10&limit=50').set(PEER_INSTANCE_ID_HEADER, 'peer-a-instance-id');
 
       expect(response.status).toBe(200);
-      expect(memorySync.getChangesSince).toHaveBeenCalledWith('10', 50);
+      expect(memorySync.getChangesSince).toHaveBeenCalledWith('10', 50, undefined, false);
     });
 
     it('should default since to 0 and limit to 100', async () => {
@@ -193,7 +224,7 @@ describe('Memory Routes', () => {
 
       await request(app).get('/api/memory/sync').set(PEER_INSTANCE_ID_HEADER, 'peer-a-instance-id');
 
-      expect(memorySync.getChangesSince).toHaveBeenCalledWith('0', 100);
+      expect(memorySync.getChangesSince).toHaveBeenCalledWith('0', 100, undefined, false);
     });
 
     it('should cap limit at 1000', async () => {
@@ -202,17 +233,17 @@ describe('Memory Routes', () => {
 
       await request(app).get('/api/memory/sync?limit=5000').set(PEER_INSTANCE_ID_HEADER, 'peer-a-instance-id');
 
-      expect(memorySync.getChangesSince).toHaveBeenCalledWith('0', 1000);
+      expect(memorySync.getChangesSince).toHaveBeenCalledWith('0', 1000, undefined, false);
     });
 
     it('forwards the sender schema version', async () => {
       ensureBackend.mockResolvedValue('postgres');
       memorySync.getChangesSince.mockResolvedValue({ memories: [], maxSequence: '0' });
 
-      const response = await request(app).get('/api/memory/sync?since=10&limit=50&schemaVersion=3').set(PEER_INSTANCE_ID_HEADER, 'peer-a-instance-id');
+      const response = await request(app).get('/api/memory/sync?since=10&limit=50&schemaVersion=3&tombstoneVersion=1').set(PEER_INSTANCE_ID_HEADER, 'peer-a-instance-id');
 
       expect(response.status).toBe(200);
-      expect(memorySync.getChangesSince).toHaveBeenCalledWith('10', 50, 3);
+      expect(memorySync.getChangesSince).toHaveBeenCalledWith('10', 50, 3, true);
     });
 
     it('refuses a peer the user does not share memory with by default', async () => {
@@ -323,16 +354,24 @@ describe('Memory Routes', () => {
       expect(response.body.error).toMatch(/Validation failed/);
     });
 
-    it('forwards the sender schema version with remote changes', async () => {
+    it('rejects an invalid deletion before applying a sync page', async () => {
+      ensureBackend.mockResolvedValue('postgres');
+      const response = await request(app).post('/api/memory/sync')
+        .send({ memories: [], deletedIds: [{ id: 'invalid', deletedAt: 'yesterday' }] });
+      expect(response.status).toBe(400);
+      expect(memorySync.applyRemoteChanges).not.toHaveBeenCalled();
+    });
+
+    it('forwards the sender schema version and deletions with remote changes', async () => {
       ensureBackend.mockResolvedValue('postgres');
       memorySync.applyRemoteChanges.mockResolvedValue({ inserted: 0, updated: 0, skipped: 0 });
 
       const response = await request(app)
         .post('/api/memory/sync')
-        .send({ memories: [], schemaVersion: 3 });
+        .send({ memories: [], schemaVersion: 3, deletedIds: [{ id: '00000000-0000-4000-8000-00000000aaaa', deletedAt: '2026-01-02T00:00:00Z' }] });
 
       expect(response.status).toBe(200);
-      expect(memorySync.applyRemoteChanges).toHaveBeenCalledWith([], 3);
+      expect(memorySync.applyRemoteChanges).toHaveBeenCalledWith([], 3, [{ id: '00000000-0000-4000-8000-00000000aaaa', deletedAt: '2026-01-02T00:00:00Z' }]);
     });
   });
 
@@ -488,30 +527,9 @@ describe('Memory Routes', () => {
     });
   });
 
-  describe('POST /api/memory/decay', () => {
-    it.each([[{ decayRate: 5 }], [{ decayRate: -1 }], [{ decayRate: 'abc' }], [{ decayRate: 0 }], [{ decayRate: null }]])(
-      'rejects %j without applying decay', async (body) => {
-        const response = await request(app).post('/api/memory/decay').send(body);
-        expect(response.status).toBe(400);
-        expect(response.body.code).toBe('VALIDATION_ERROR');
-        expect(applyDecay).not.toHaveBeenCalled();
-      });
-
-    it('applies the default rate for an empty object or no body', async () => {
-      applyDecay.mockResolvedValue({});
-      expect((await request(app).post('/api/memory/decay').send({})).status).toBe(200);
-      expect((await request(app).post('/api/memory/decay')).status).toBe(200);
-      expect(applyDecay).toHaveBeenCalledTimes(2);
-      expect(applyDecay).toHaveBeenNthCalledWith(1, 0.01);
-      expect(applyDecay).toHaveBeenNthCalledWith(2, 0.01);
-    });
-
-    it('accepts the maximum rate', async () => {
-      applyDecay.mockResolvedValue({});
-      const response = await request(app).post('/api/memory/decay').send({ decayRate: 0.02 });
-      expect(response.status).toBe(200);
-      expect(applyDecay).toHaveBeenCalledWith(0.02);
-    });
+  it('returns 404 for the retired POST /api/memory/decay endpoint', async () => {
+    const response = await request(app).post('/api/memory/decay').send({ decayRate: 0.01 });
+    expect(response.status).toBe(404);
   });
 
   describe('POST /api/memory/link', () => {

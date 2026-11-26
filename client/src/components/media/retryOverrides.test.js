@@ -1,3 +1,4 @@
+// @vitest-environment node
 import { describe, it, expect } from 'vitest';
 import { DEFAULT_SPEED_PROFILE_ID } from '../../lib/videoGenParams';
 import { buildImageRetryOverrides, buildVideoRetryOverrides, reconcileModelBoundParams, textChanged, numberChanged, codexEffortOf } from './retryOverrides';

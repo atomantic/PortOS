@@ -1,5 +1,5 @@
 import { sortByLabel } from '../../lib/sortByLabel.js';
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useRef } from 'react';
 import { AlertTriangle, Play, Trash2, ChevronDown, ChevronUp, Clock, ToggleLeft, ToggleRight, Edit3, Save, X, Terminal } from 'lucide-react';
 import toast from '../ui/Toast';
 import { updateCosJob, acknowledgeCosJobIncident } from '../../services/apiAgents.js';
@@ -119,7 +119,7 @@ function BriefingConfig({ config, onChange }) {
             }`} />
             <div>
               <div className="font-medium">{opt.label}</div>
-              <div className="text-xs opacity-60">{opt.desc}</div>
+              <div className="text-xs text-port-text-muted">{opt.desc}</div>
             </div>
           </button>
         ))}
@@ -167,6 +167,7 @@ export function TaskMetadataFields({ data, onChange }) {
  */
 export default function JobCard({
   job,
+  recordLabel = job.name?.trim() || job.id,
   apps = [],
   providers,
   activeProviderId,
@@ -192,6 +193,7 @@ export default function JobCard({
   // the card happened to mount with.
   const [runValues, setRunValues] = useState(null);
   const { isConfirming, requestDelete, cancelDelete, confirmDelete } = useConfirmDelete();
+  const deleteButtonRef = useRef(null);
   const hasFixedApp = typeof fixedAppId === 'string' && fixedAppId.length > 0;
   const isShell = job.type === 'shell';
   const isScript = job.type === 'script';
@@ -326,15 +328,15 @@ export default function JobCard({
     && (hasNextRunAt(job) ? Date.now() >= new Date(job.nextRunAt).getTime() : !job.lastRun);
 
   return (
-    <div className={`flex flex-col bg-port-card border rounded-lg transition-colors ${
-      job.enabled ? 'border-port-border' : 'border-port-border/50 opacity-60'
+    <div role="group" aria-label={`Job ${recordLabel}`} className={`flex flex-col bg-port-card border rounded-lg transition-colors ${
+      job.enabled ? 'border-port-border' : 'border-port-border/50'
     }`}>
       <div className="flex items-start gap-3 p-4">
         <button
           onClick={() => onToggle(job.id)}
           className={`pointer-coarse:min-h-11 pointer-coarse:min-w-11 shrink-0 transition-colors ${job.enabled ? 'text-port-success' : 'text-gray-600'}`}
           title={job.enabled ? 'Disable job' : 'Enable job'}
-          aria-label={job.enabled ? 'Disable job' : 'Enable job'}
+          aria-label={`${job.enabled ? 'Disable' : 'Enable'} job ${recordLabel}`}
         >
           {job.enabled ? <ToggleRight size={24} /> : <ToggleLeft size={24} />}
         </button>
@@ -342,6 +344,7 @@ export default function JobCard({
         <div className="flex-1 min-w-0">
           <div className="flex items-center gap-2 flex-wrap">
             <span className="text-white font-medium truncate">{job.name}</span>
+            {!job.enabled && <span className="px-1.5 py-0.5 bg-port-bg text-port-text-muted text-xs rounded">Disabled</span>}
             {isDue && (
               <span className="px-1.5 py-0.5 bg-port-warning/20 text-port-warning text-xs rounded">Due</span>
             )}
@@ -602,9 +605,12 @@ export default function JobCard({
                   <pre className="mt-2 p-3 bg-port-bg border border-port-border rounded-lg text-xs text-gray-400 font-mono whitespace-pre-wrap break-words max-h-48 overflow-y-auto">{job.promptTemplate}</pre>
                 </details>
               )}
-              <JobNotepad jobId={job.id} />
+              <JobNotepad jobId={job.id} jobName={job.name} />
               {isConfirming(job.id) ? (
                 <InlineConfirmRow
+                  autoFocus
+                  aria-label={`Confirm delete job ${recordLabel}`}
+                  returnFocusRef={deleteButtonRef}
                   question="Delete this job? This cannot be undone."
                   confirmTitle="Confirm delete"
                   cancelTitle="Cancel delete"
@@ -614,6 +620,7 @@ export default function JobCard({
               ) : (
                 <div className="flex justify-end">
                   <button
+                    ref={deleteButtonRef}
                     onClick={() => requestDelete(job.id)}
                     className="flex items-center gap-1 px-2 py-1 text-xs text-red-400/60 hover:text-red-400 transition-colors"
                   >

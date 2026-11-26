@@ -1,3 +1,4 @@
+import { useRef } from 'react';
 import { Ban, Edit3, Play, RefreshCw, Trash2, Unlock } from 'lucide-react';
 import ConfirmButtonPair from '../../ui/ConfirmButtonPair';
 import toast from '../../ui/Toast';
@@ -7,6 +8,7 @@ import { MAX_SPAWNS_BLOCKED_CATEGORY, hasSpawnBudgetResetPrerequisite } from '..
 
 export default function TaskItemActions({ task, agent, unconfirmed, editing, deleteConfirmation, budget, onRefresh, onRelaunch, onUnblock, unblocking, onMarkBlocked, onEdit }) {
   const { confirming, onConfirmDelete, onCancelDelete, onRequestDelete } = deleteConfirmation;
+  const deleteButtonRef = useRef(null);
   const { budgetResetAvailable, budgetResetConfirm, budgetResetting, setBudgetResetAvailable, setBudgetResetConfirm, setBudgetResetting } = budget;
   return (
     <div className="flex flex-wrap items-center justify-end gap-1 sm:gap-2 shrink-0 ml-auto basis-full sm:basis-auto">
@@ -16,6 +18,7 @@ export default function TaskItemActions({ task, agent, unconfirmed, editing, del
             prompt="Delete?"
             confirmText="Delete"
             ariaLabel="Confirm delete task"
+            returnFocusRef={deleteButtonRef}
             onConfirm={onConfirmDelete}
             onCancel={onCancelDelete}
           />
@@ -39,7 +42,7 @@ export default function TaskItemActions({ task, agent, unconfirmed, editing, del
                 }}
                 className="min-h-[44px] min-w-[44px] inline-flex items-center justify-center p-1 text-gray-500 hover:text-port-success transition-colors"
                 title="Process now"
-                aria-label="Process task now"
+                aria-label={`Process task now ${task.id}`}
               >
                 <Play size={14} aria-hidden="true" />
               </button>
@@ -100,7 +103,7 @@ export default function TaskItemActions({ task, agent, unconfirmed, editing, del
                 onClick={onMarkBlocked}
                 className="min-h-[44px] min-w-[44px] inline-flex items-center justify-center p-1 text-gray-500 hover:text-port-error transition-colors"
                 title="Mark as blocked"
-                aria-label="Mark task as blocked"
+                aria-label={`Mark task as blocked ${task.id}`}
               >
                 <Ban size={14} aria-hidden="true" />
               </button>
@@ -109,15 +112,16 @@ export default function TaskItemActions({ task, agent, unconfirmed, editing, del
               onClick={onEdit}
               className="min-h-[44px] min-w-[44px] inline-flex items-center justify-center p-1 text-gray-500 hover:text-white transition-colors"
               title="Edit"
-              aria-label="Edit task"
+              aria-label={`Edit task ${task.id}`}
             >
               <Edit3 size={14} aria-hidden="true" />
             </button>
             <button
+              ref={deleteButtonRef}
               onClick={onRequestDelete}
               className="min-h-[44px] min-w-[44px] inline-flex items-center justify-center p-1 text-gray-500 hover:text-port-error transition-colors"
               title="Delete"
-              aria-label="Delete task"
+              aria-label={`Delete task ${task.id}`}
             >
               <Trash2 size={14} aria-hidden="true" />
             </button>

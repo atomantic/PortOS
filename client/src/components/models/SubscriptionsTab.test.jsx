@@ -109,6 +109,19 @@ describe('buildRowPatch', () => {
 });
 
 describe('SubscriptionsTab', () => {
+  it('replaces the skeleton with a retryable error when the plans read fails', async () => {
+    api.getSubscriptions.mockRejectedValueOnce(new Error('Plans unavailable'));
+    renderTab();
+
+    expect(await screen.findByRole('alert')).toHaveTextContent('Could not load subscriptions');
+    expect(screen.queryByLabelText('Loading subscriptions')).not.toBeInTheDocument();
+    expect(screen.queryByText(/No subscriptions to manage/)).not.toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: 'Retry' }));
+
+    expect(await screen.findByLabelText('Enable the Codex subscription')).toBeInTheDocument();
+    expect(screen.queryByRole('alert')).not.toBeInTheDocument();
+  });
+
   it('updates quota cards on completion without recurring fetches', async () => {
     vi.useFakeTimers({ shouldAdvanceTime: true });
     renderTab();

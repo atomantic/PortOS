@@ -19,7 +19,7 @@
  * The phase that actually stalled under load was the warmup, and its cost was
  * not the fixture's own modules: with `configFile: false` and no
  * `optimizeDeps.entries`, Vite globs every `.html` under the root, finds `client/index.html`,
- * crawls the WHOLE app, and pre-bundles three.js, drei, recharts, xterm, … before
+ * crawls the WHOLE app, and pre-bundles three.js, xterm, … before
  * it answers the first request. So the config must scope dependency discovery
  * to what the fixture renders: `entries` names the real source files and
  * `include` the bare imports of the virtual fixture module (which the scanner

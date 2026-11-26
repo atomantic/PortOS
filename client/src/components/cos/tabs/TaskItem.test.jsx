@@ -1,6 +1,7 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { MemoryRouter } from 'react-router';
 import { fireEvent, render, screen, waitFor } from '@testing-library/react';
+import userEvent from '@testing-library/user-event';
 import { formatCompositeId } from '../../../utils/providerRef.js';
 
 const api = vi.hoisted(() => ({
@@ -53,6 +54,22 @@ beforeEach(() => {
 });
 
 describe('TaskItem task source', () => {
+  it('returns keyboard focus to Delete task after cancelling the confirmation', async () => {
+    const user = userEvent.setup();
+    render(<TaskItem task={{ ...task, status: 'completed' }} providers={providers} />);
+    const group = screen.getByRole('group', { name: 'Task: Reference repo review' });
+    const trigger = screen.getByRole('button', { name: 'Delete task sys-model-edit' });
+    expect(group).toContainElement(trigger);
+    trigger.focus();
+    await user.keyboard('{Enter}');
+    expect(screen.getByRole('group', { name: 'Confirm delete task' })).toHaveFocus();
+    await user.tab();
+    await user.tab();
+    await user.keyboard('{Enter}');
+    expect(screen.getByRole('button', { name: `Delete task ${task.id}` })).toHaveFocus();
+    expect(api.deleteCosTask).not.toHaveBeenCalled();
+  });
+
   it.each([
     ['delivery cleanup', { deliveryRecovery: 'cleanup', deliveryRecoveryAgentId: 'agent-owner' }, /Cleanup must finish/],
     ['retry cleanup', { retryPendingCleanup: 'agent-owner' }, /Cleanup must finish/],
@@ -82,7 +99,7 @@ describe('TaskItem task source', () => {
     api.resetSpawnBudgetAndRun.mockResolvedValue({ success: true });
     render(<TaskItem task={task} isSystem onRefresh={vi.fn()} providers={providers} />);
     expect(screen.queryByRole('button', { name: 'Reset spawn budget and run' })).toBeNull();
-    fireEvent.click(screen.getByRole('button', { name: 'Process task now' }));
+    fireEvent.click(screen.getByRole('button', { name: `Process task now ${task.id}` }));
     fireEvent.click(await screen.findByRole('button', { name: 'Reset spawn budget and run' }));
     expect(screen.getByText('Reset spawn count to zero and run? Failure count stays.')).toBeInTheDocument();
     expect(api.resetSpawnBudgetAndRun).not.toHaveBeenCalled();
@@ -95,7 +112,7 @@ describe('TaskItem task source', () => {
   it('does not offer the reset for any other Run now refusal', async () => {
     api.forceSpawnTask.mockRejectedValue(Object.assign(new Error('No available agent slots (3/3)'), { code: 'NO_CAPACITY' }));
     render(<TaskItem task={task} isSystem onRefresh={vi.fn()} providers={providers} />);
-    fireEvent.click(screen.getByRole('button', { name: 'Process task now' }));
+    fireEvent.click(screen.getByRole('button', { name: `Process task now ${task.id}` }));
     await waitFor(() => expect(toast.error).toHaveBeenCalledWith('No available agent slots (3/3)'));
     expect(screen.queryByRole('button', { name: 'Reset spawn budget and run' })).toBeNull();
   });
@@ -200,7 +217,7 @@ describe('TaskItem task source', () => {
   it('updates a system task in the internal queue when saving its model', async () => {
     render(<TaskItem task={task} isSystem onRefresh={vi.fn()} providers={providers} />);
 
-    fireEvent.click(screen.getByRole('button', { name: 'Edit task' }));
+    fireEvent.click(screen.getByRole('button', { name: `Edit task ${task.id}` }));
     fireEvent.click(screen.getByRole('button', { name: 'Save' }));
 
     await waitFor(() => expect(api.updateCosTask).toHaveBeenCalledWith(
@@ -219,7 +236,7 @@ describe('TaskItem task source', () => {
     const metadata = { provider, model: 'gpt-5.6-terra', effort: 'high' };
     render(<TaskItem task={{ ...task, metadata }} isSystem onRefresh={vi.fn()} providers={providers} />);
 
-    fireEvent.click(screen.getByRole('button', { name: 'Edit task' }));
+    fireEvent.click(screen.getByRole('button', { name: `Edit task ${task.id}` }));
 
     expect(await screen.findByRole('option', { name: 'Codex · CLI · OpenAI' })).toBeInTheDocument();
     expect(screen.getByRole('combobox', { name: 'Provider' })).toHaveValue(provider);
@@ -241,7 +258,7 @@ describe('TaskItem task source', () => {
     render(<TaskItem task={effortTask} isSystem onRefresh={vi.fn()} providers={providers} />);
 
     expect(screen.getByText('medium effort')).toBeInTheDocument();
-    fireEvent.click(screen.getByRole('button', { name: 'Edit task' }));
+    fireEvent.click(screen.getByRole('button', { name: `Edit task ${effortTask.id}` }));
 
     const effortSelect = screen.getByRole('combobox', { name: 'Thinking effort' });
     expect(effortSelect).toHaveValue('medium');
@@ -267,7 +284,7 @@ describe('TaskItem task source', () => {
     };
     render(<TaskItem task={effortTask} isSystem onRefresh={vi.fn()} providers={providers} />);
 
-    fireEvent.click(screen.getByRole('button', { name: 'Edit task' }));
+    fireEvent.click(screen.getByRole('button', { name: `Edit task ${effortTask.id}` }));
     fireEvent.change(screen.getByRole('combobox', { name: 'Provider' }), { target: { value: '' } });
     expect(screen.queryByRole('combobox', { name: 'Thinking effort' })).not.toBeInTheDocument();
     fireEvent.click(screen.getByRole('button', { name: 'Save' }));
@@ -295,7 +312,7 @@ describe('TaskItem task source', () => {
     }];
     render(<TaskItem task={legacyTask} isSystem onRefresh={vi.fn()} providers={antigravityProviders} />);
 
-    fireEvent.click(screen.getByRole('button', { name: 'Edit task' }));
+    fireEvent.click(screen.getByRole('button', { name: `Edit task ${legacyTask.id}` }));
     expect(screen.getByRole('combobox', { name: 'Model' })).toHaveValue('gemini-3.6-flash');
     expect(screen.getByRole('combobox', { name: 'Thinking effort' })).toHaveValue('high');
 
@@ -304,7 +321,7 @@ describe('TaskItem task source', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Cancel' }));
     expect(screen.queryByRole('group', { name: 'Confirm discard task edits' })).not.toBeInTheDocument();
 
-    fireEvent.click(screen.getByRole('button', { name: 'Edit task' }));
+    fireEvent.click(screen.getByRole('button', { name: `Edit task ${legacyTask.id}` }));
     fireEvent.click(screen.getByRole('button', { name: 'Save' }));
     await waitFor(() => expect(api.updateCosTask).toHaveBeenCalledWith(
       'sys-model-edit',
@@ -357,6 +374,32 @@ describe('TaskItem blocked reason', () => {
     expect(screen.getByText('The owner updated the recovery reason.')).toBeVisible();
     expect(screen.getByText('Preserve the candidate')).toBeVisible();
     expect(screen.getByText('Abandon the candidate')).toBeVisible();
+  });
+
+  it.each([
+    ['coded', { status: 'blocked', reason: 'GitHub rejected the push.', recovery: { mode: 'approval', code: 'github-workflow-scope' } }],
+    ['saved before the recovery code', { status: 'blocked', reason: 'The assigned GitHub OAuth credential still lacks the required workflow scope.', recovery: { mode: 'approval' } }],
+  ])('shows workflow permission recovery for a %s task', async (_kind, taskOutcome) => {
+    const task = { id: 'sys-workflow-approval', description: 'Claim issue', status: 'blocked', metadata: {
+      blockedCategory: 'task-approval', blockedReason: taskOutcome.reason, taskOutcome,
+    } };
+    render(<TaskItem task={task} isSystem onRefresh={vi.fn()} providers={providers} />);
+    expect(screen.getByRole('region', { name: 'GitHub workflow access' })).toHaveTextContent('On the instance that ran this task');
+    expect(screen.getByText('gh auth refresh -h github.com -s workflow')).toBeVisible();
+    expect(screen.getByRole('region', { name: 'GitHub workflow access' })).toHaveTextContent('The refresh updates the stored login, not an injected token.');
+    expect(api.updateCosTask).not.toHaveBeenCalled();
+    fireEvent.click(screen.getByRole('button', { name: 'Unblock task sys-workflow-approval and move it to pending' }));
+    await waitFor(() => expect(api.updateCosTask).toHaveBeenCalledWith(task.id, { status: 'pending', type: 'internal' }, { silent: true }));
+  });
+
+  it('does not confuse a GitHub branch rule with a missing workflow scope', () => {
+    const reason = 'GitHub rejected this merge because required branch checks did not pass.';
+    const task = { id: 'sys-branch-policy', description: 'Claim issue', status: 'blocked', metadata: {
+      blockedCategory: 'task-approval', blockedReason: reason, taskOutcome: { status: 'blocked', reason, recovery: { mode: 'approval' } },
+    } };
+    render(<TaskItem task={task} isSystem onRefresh={vi.fn()} providers={providers} />);
+    expect(screen.getByText(reason)).toBeVisible();
+    expect(screen.queryByRole('region', { name: 'GitHub workflow access' })).toBeNull();
   });
 
   it('renders blockedReason when a blocked task has no user-set blocker', () => {
@@ -412,12 +455,12 @@ describe('TaskItem unblock action', () => {
 
   it('is offered only on blocked tasks, and never alongside Mark as blocked', () => {
     const { unmount } = render(<TaskItem task={blocked} isSystem onRefresh={vi.fn()} providers={providers} />);
-    expect(screen.queryByRole('button', { name: 'Mark task as blocked' })).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: /^Mark task as blocked / })).not.toBeInTheDocument();
     unmount();
 
     render(<TaskItem task={task} isSystem onRefresh={vi.fn()} providers={providers} />);
     expect(screen.queryByRole('button', { name: /^Unblock task/ })).not.toBeInTheDocument();
-    expect(screen.getByRole('button', { name: 'Mark task as blocked' })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: `Mark task as blocked ${task.id}` })).toBeInTheDocument();
   });
 
   it('re-enables the button when the update fails so the user can retry', async () => {
@@ -447,7 +490,7 @@ describe('TaskItem delete action', () => {
     render(<TaskItem task={blockedTask} isSystem onRefresh={onRefresh} onTaskDeleted={onTaskDeleted} providers={providers} />);
 
     // Click trash button
-    fireEvent.click(screen.getByRole('button', { name: 'Delete task' }));
+    fireEvent.click(screen.getByRole('button', { name: `Delete task ${blockedTask.id}` }));
 
     // Confirm delete button inside group
     fireEvent.click(screen.getByRole('button', { name: 'Delete' }));
@@ -464,7 +507,7 @@ describe('TaskItem delete action', () => {
     const onTaskDeleted = vi.fn();
 
     render(<TaskItem task={blockedTask} isSystem onRefresh={onRefresh} onTaskDeleted={onTaskDeleted} providers={providers} />);
-    fireEvent.click(screen.getByRole('button', { name: 'Delete task' }));
+    fireEvent.click(screen.getByRole('button', { name: `Delete task ${blockedTask.id}` }));
     fireEvent.click(screen.getByRole('button', { name: 'Delete' }));
 
     await waitFor(() => expect(onRefresh).toHaveBeenCalled());
@@ -475,7 +518,7 @@ describe('TaskItem delete action', () => {
 
 describe('TaskItem block modal state (#4038)', () => {
   const openBlockModal = () =>
-    fireEvent.click(screen.getByRole('button', { name: 'Mark task as blocked' }));
+    fireEvent.click(screen.getByRole('button', { name: /^Mark task as blocked / }));
   const reasonField = () =>
     screen.getByPlaceholderText('e.g., Waiting for API access, Needs design review...');
 
@@ -607,7 +650,7 @@ describe('TaskItem long-text clamping', () => {
     const withContext = { ...task, id: 'sys-edit-context', metadata: { context: longPrompt } };
     render(<TaskItem task={withContext} isSystem onRefresh={vi.fn()} providers={providers} />);
 
-    fireEvent.click(screen.getByRole('button', { name: 'Edit task' }));
+    fireEvent.click(screen.getByRole('button', { name: `Edit task ${withContext.id}` }));
     const contextField = screen.getByPlaceholderText('Context');
     expect(contextField.tagName).toBe('TEXTAREA');
     expect(contextField).toHaveValue(longPrompt);
@@ -634,7 +677,7 @@ describe('TaskItem prompt field (#4153)', () => {
     const onRefresh = vi.fn();
     render(<TaskItem task={split} isSystem onRefresh={onRefresh} providers={providers} />);
 
-    fireEvent.click(screen.getByRole('button', { name: 'Edit task' }));
+    fireEvent.click(screen.getByRole('button', { name: `Edit task ${split.id}` }));
     const promptField = screen.getByPlaceholderText('Prompt');
     expect(promptField.tagName).toBe('TEXTAREA');
     expect(promptField).toHaveValue('the agent body\nsecond line');
@@ -651,7 +694,7 @@ describe('TaskItem prompt field (#4153)', () => {
 
   it('shows the confirm row when only the prompt field changed', () => {
     render(<TaskItem task={split} isSystem onRefresh={vi.fn()} providers={providers} />);
-    fireEvent.click(screen.getByRole('button', { name: 'Edit task' }));
+    fireEvent.click(screen.getByRole('button', { name: `Edit task ${split.id}` }));
     fireEvent.change(screen.getByPlaceholderText('Prompt'), { target: { value: 'edited' } });
     fireEvent.click(screen.getByRole('button', { name: 'Cancel' }));
     expect(screen.getByRole('group', { name: 'Confirm discard task edits' })).toBeInTheDocument();
@@ -663,7 +706,7 @@ describe('TaskItem prompt field (#4153)', () => {
     const legacy = { ...task, id: 'sys-legacy', metadata: { context: 'legacy body' } };
     render(<TaskItem task={legacy} isSystem onRefresh={vi.fn()} providers={providers} />);
 
-    fireEvent.click(screen.getByRole('button', { name: 'Edit task' }));
+    fireEvent.click(screen.getByRole('button', { name: `Edit task ${legacy.id}` }));
     expect(screen.queryByPlaceholderText('Prompt')).not.toBeInTheDocument();
 
     fireEvent.change(screen.getByPlaceholderText('Context'), { target: { value: 'edited note' } });
@@ -684,7 +727,7 @@ describe('TaskItem prompt field (#4153)', () => {
     const { rerender } = render(<TaskItem task={legacy} isSystem onRefresh={vi.fn()} providers={providers} />);
     rerender(<TaskItem task={splitTask} isSystem onRefresh={vi.fn()} providers={providers} />);
 
-    fireEvent.click(screen.getByRole('button', { name: 'Edit task' }));
+    fireEvent.click(screen.getByRole('button', { name: `Edit task ${splitTask.id}` }));
     await waitFor(() => expect(screen.getByPlaceholderText('Prompt')).toHaveValue('the refreshed body\nsecond line'));
     fireEvent.click(screen.getByRole('button', { name: 'Save' }));
 
@@ -743,13 +786,13 @@ describe('TaskItem cancel-edit confirmation (#4037)', () => {
   it('discards immediately when Cancel is clicked with no unsaved changes', () => {
     render(<TaskItem task={task} isSystem onRefresh={vi.fn()} providers={providers} />);
 
-    fireEvent.click(screen.getByRole('button', { name: 'Edit task' }));
+    fireEvent.click(screen.getByRole('button', { name: `Edit task ${task.id}` }));
     fireEvent.click(screen.getByRole('button', { name: 'Cancel' }));
 
     // Back to the read-only view — no confirm row, no edit fields.
     expect(screen.queryByRole('button', { name: 'Save' })).not.toBeInTheDocument();
     expect(screen.queryByRole('group', { name: 'Confirm discard task edits' })).not.toBeInTheDocument();
-    expect(screen.getByRole('button', { name: 'Edit task' })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: `Edit task ${task.id}` })).toBeInTheDocument();
   });
 
   it('keeps the active draft on queue refresh and reopens the latest values after discarding', () => {
@@ -760,7 +803,7 @@ describe('TaskItem cancel-edit confirmation (#4037)', () => {
     );
     const { rerender } = render(renderRow(task));
 
-    fireEvent.click(screen.getByRole('button', { name: 'Edit task' }));
+    fireEvent.click(screen.getByRole('button', { name: `Edit task ${task.id}` }));
     fireEvent.change(screen.getByRole('textbox', { name: 'Task description' }), { target: { value: 'Local draft' } });
     rerender(renderRow({ ...task, description: 'Refreshed queue description' }));
     expect(screen.getByRole('textbox', { name: 'Task description' })).toHaveValue('Local draft');
@@ -771,14 +814,14 @@ describe('TaskItem cancel-edit confirmation (#4037)', () => {
     expect(onEditingChange.mock.calls).toEqual([[true], [false]]);
     expect(api.updateCosTask).not.toHaveBeenCalled();
 
-    fireEvent.click(screen.getByRole('button', { name: 'Edit task' }));
+    fireEvent.click(screen.getByRole('button', { name: `Edit task ${task.id}` }));
     expect(screen.getByRole('textbox', { name: 'Task description' })).toHaveValue('Refreshed queue description');
   });
 
   it('shows an inline confirm row instead of discarding when there are unsaved changes', () => {
     render(<TaskItem task={task} isSystem onRefresh={vi.fn()} providers={providers} />);
 
-    fireEvent.click(screen.getByRole('button', { name: 'Edit task' }));
+    fireEvent.click(screen.getByRole('button', { name: `Edit task ${task.id}` }));
     fireEvent.change(screen.getByDisplayValue(task.description), { target: { value: 'Edited description' } });
     fireEvent.click(screen.getByRole('button', { name: 'Cancel' }));
 
@@ -795,7 +838,7 @@ describe('TaskItem cancel-edit confirmation (#4037)', () => {
     // this block since they all edit description.
     render(<TaskItem task={task} isSystem onRefresh={vi.fn()} providers={providers} />);
 
-    fireEvent.click(screen.getByRole('button', { name: 'Edit task' }));
+    fireEvent.click(screen.getByRole('button', { name: `Edit task ${task.id}` }));
     fireEvent.change(screen.getByPlaceholderText('Context'), { target: { value: 'New context note' } });
     fireEvent.click(screen.getByRole('button', { name: 'Cancel' }));
 
@@ -807,7 +850,7 @@ describe('TaskItem cancel-edit confirmation (#4037)', () => {
     // Pins hasUnsavedEdits' model branch in isolation (provider left untouched).
     render(<TaskItem task={task} isSystem onRefresh={vi.fn()} providers={providers} />);
 
-    fireEvent.click(screen.getByRole('button', { name: 'Edit task' }));
+    fireEvent.click(screen.getByRole('button', { name: `Edit task ${task.id}` }));
     const [, modelSelect] = screen.getAllByRole('combobox');
     fireEvent.change(modelSelect, { target: { value: '' } });
     fireEvent.click(screen.getByRole('button', { name: 'Cancel' }));
@@ -819,7 +862,7 @@ describe('TaskItem cancel-edit confirmation (#4037)', () => {
     // Pins hasUnsavedEdits' provider branch.
     render(<TaskItem task={task} isSystem onRefresh={vi.fn()} providers={providers} />);
 
-    fireEvent.click(screen.getByRole('button', { name: 'Edit task' }));
+    fireEvent.click(screen.getByRole('button', { name: `Edit task ${task.id}` }));
     const [providerSelect] = screen.getAllByRole('combobox');
     fireEvent.change(providerSelect, { target: { value: '' } });
     fireEvent.click(screen.getByRole('button', { name: 'Cancel' }));
@@ -830,24 +873,24 @@ describe('TaskItem cancel-edit confirmation (#4037)', () => {
   it('discards the draft on a second click confirming the discard', () => {
     render(<TaskItem task={task} isSystem onRefresh={vi.fn()} providers={providers} />);
 
-    fireEvent.click(screen.getByRole('button', { name: 'Edit task' }));
+    fireEvent.click(screen.getByRole('button', { name: `Edit task ${task.id}` }));
     fireEvent.change(screen.getByDisplayValue(task.description), { target: { value: 'Edited description' } });
     fireEvent.click(screen.getByRole('button', { name: 'Cancel' }));
     fireEvent.click(screen.getByRole('button', { name: 'Discard' }));
 
     expect(screen.queryByDisplayValue('Edited description')).not.toBeInTheDocument();
-    expect(screen.getByRole('button', { name: 'Edit task' })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: `Edit task ${task.id}` })).toBeInTheDocument();
   });
 
   it('reverts the draft, not just hides it, so reopening Edit does not resurrect the discarded text', () => {
     render(<TaskItem task={task} isSystem onRefresh={vi.fn()} providers={providers} />);
 
-    fireEvent.click(screen.getByRole('button', { name: 'Edit task' }));
+    fireEvent.click(screen.getByRole('button', { name: `Edit task ${task.id}` }));
     fireEvent.change(screen.getByDisplayValue(task.description), { target: { value: 'Edited description' } });
     fireEvent.click(screen.getByRole('button', { name: 'Cancel' }));
     fireEvent.click(screen.getByRole('button', { name: 'Discard' }));
 
-    fireEvent.click(screen.getByRole('button', { name: 'Edit task' }));
+    fireEvent.click(screen.getByRole('button', { name: `Edit task ${task.id}` }));
     expect(screen.getByDisplayValue(task.description)).toBeInTheDocument();
     expect(screen.queryByDisplayValue('Edited description')).not.toBeInTheDocument();
   });
@@ -855,7 +898,7 @@ describe('TaskItem cancel-edit confirmation (#4037)', () => {
   it('returns to the edit fields when the discard confirm is itself canceled', () => {
     render(<TaskItem task={task} isSystem onRefresh={vi.fn()} providers={providers} />);
 
-    fireEvent.click(screen.getByRole('button', { name: 'Edit task' }));
+    fireEvent.click(screen.getByRole('button', { name: `Edit task ${task.id}` }));
     fireEvent.change(screen.getByDisplayValue(task.description), { target: { value: 'Edited description' } });
     fireEvent.click(screen.getByRole('button', { name: 'Cancel' }));
     fireEvent.click(screen.getByRole('button', { name: 'Cancel' }));
@@ -997,7 +1040,7 @@ describe('TaskItem federated instance pin (#4520)', () => {
 
   it('saves a re-pin from the editor', async () => {
     render(<TaskItem task={task} providers={providers} instances={instances} onRefresh={vi.fn()} />);
-    fireEvent.click(screen.getByLabelText("Edit task"));
+    fireEvent.click(screen.getByLabelText(`Edit task ${task.id}`));
     fireEvent.change(screen.getByLabelText('Run on'), { target: { value: PEER } });
     fireEvent.click(screen.getByText('Save'));
     await waitFor(() => expect(api.updateCosTask).toHaveBeenCalled());
@@ -1006,7 +1049,7 @@ describe('TaskItem federated instance pin (#4520)', () => {
 
   it('sends null when the editor selects "Any instance" — the explicit unpin', async () => {
     render(<TaskItem task={pinned} providers={providers} instances={instances} onRefresh={vi.fn()} />);
-    fireEvent.click(screen.getByLabelText("Edit task"));
+    fireEvent.click(screen.getByLabelText(`Edit task ${pinned.id}`));
     fireEvent.change(screen.getByLabelText('Run on'), { target: { value: '' } });
     fireEvent.click(screen.getByText('Save'));
     await waitFor(() => expect(api.updateCosTask).toHaveBeenCalled());
@@ -1017,7 +1060,7 @@ describe('TaskItem federated instance pin (#4520)', () => {
     // Otherwise an edit made here would silently unpin a task another machine
     // pinned — the field would ride along as `null` on every save.
     render(<TaskItem task={task} providers={providers} instances={[{ instanceId: SELF, name: 'workstation', isSelf: true }]} onRefresh={vi.fn()} />);
-    fireEvent.click(screen.getByLabelText("Edit task"));
+    fireEvent.click(screen.getByLabelText(`Edit task ${task.id}`));
     expect(screen.queryByLabelText('Run on')).toBeNull();
     fireEvent.click(screen.getByText('Save'));
     await waitFor(() => expect(api.updateCosTask).toHaveBeenCalled());
@@ -1028,7 +1071,7 @@ describe('TaskItem federated instance pin (#4520)', () => {
     // Hiding it there would leave the pin permanently unclearable and the task
     // unrunnable on every instance.
     render(<TaskItem task={pinned} providers={providers} instances={[{ instanceId: SELF, name: 'workstation', isSelf: true }]} onRefresh={vi.fn()} />);
-    fireEvent.click(screen.getByLabelText("Edit task"));
+    fireEvent.click(screen.getByLabelText(`Edit task ${pinned.id}`));
     fireEvent.change(screen.getByLabelText('Run on'), { target: { value: '' } });
     fireEvent.click(screen.getByText('Save'));
     await waitFor(() => expect(api.updateCosTask).toHaveBeenCalled());
@@ -1037,7 +1080,7 @@ describe('TaskItem federated instance pin (#4520)', () => {
 
   it('hides the picker until the registry read lands, so an edit mid-load cannot unpin', async () => {
     render(<TaskItem task={pinned} providers={providers} onRefresh={vi.fn()} />);
-    fireEvent.click(screen.getByLabelText("Edit task"));
+    fireEvent.click(screen.getByLabelText(`Edit task ${pinned.id}`));
     expect(screen.queryByLabelText('Run on')).toBeNull();
     fireEvent.click(screen.getByText('Save'));
     await waitFor(() => expect(api.updateCosTask).toHaveBeenCalled());
@@ -1073,13 +1116,13 @@ describe('TaskItem editing a pin whose instance has left the registry (#4520)', 
 
   it('shows the dead pin as the selected option rather than a misleading "Any instance"', () => {
     render(<TaskItem task={orphaned} providers={providers} instances={instances} onRefresh={vi.fn()} />);
-    fireEvent.click(screen.getByLabelText('Edit task'));
+    fireEvent.click(screen.getByLabelText(`Edit task ${orphaned.id}`));
     expect(screen.getByLabelText('Run on').value).toBe('ghost-instance-id');
   });
 
   it('lets the user move the task to a live instance', async () => {
     render(<TaskItem task={orphaned} providers={providers} instances={instances} onRefresh={vi.fn()} />);
-    fireEvent.click(screen.getByLabelText('Edit task'));
+    fireEvent.click(screen.getByLabelText(`Edit task ${orphaned.id}`));
     fireEvent.change(screen.getByLabelText('Run on'), { target: { value: 'peer-instance-id' } });
     fireEvent.click(screen.getByText('Save'));
     await waitFor(() => expect(api.updateCosTask).toHaveBeenCalled());

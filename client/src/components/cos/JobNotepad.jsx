@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { Edit3, Plus, Trash2 } from 'lucide-react';
 import { getCosJobNotepad, setCosJobNote, deleteCosJobNote, clearCosJobNotepad } from '../../services/apiAgents.js';
 import { formatCount } from '../../utils/formatters';
@@ -10,13 +10,14 @@ const ICON_BUTTON_CLASS = 'inline-flex items-center justify-center min-h-[44px] 
 
 // The notepad is fetched once when the section opens; each mutation
 // replaces local state with the server's full-notepad response (no refetch).
-function NotepadBody({ jobId }) {
+function NotepadBody({ jobId, jobName }) {
   const [pad, setPad] = useState(null);
   const [loadFailed, setLoadFailed] = useState(false);
   const [draftKey, setDraftKey] = useState('');
   const [draftValue, setDraftValue] = useState('');
   const [saving, setSaving] = useState(false);
   const [confirmingClear, setConfirmingClear] = useState(false);
+  const clearButtonRef = useRef(null);
 
   useEffect(() => {
     let active = true;
@@ -48,13 +49,16 @@ function NotepadBody({ jobId }) {
           {pad ? `${formatCount(pad.usedBytes)} / ${formatCount(pad.maxBytes)} bytes used` : loadFailed ? 'Notepad unavailable' : 'Loading…'}
         </span>
         {pad?.notes.length > 0 && !confirmingClear && (
-          <button type="button" onClick={() => setConfirmingClear(true)} className="px-2 py-1 border border-port-border rounded text-gray-400 hover:text-white">
+          <button ref={clearButtonRef} type="button" onClick={() => setConfirmingClear(true)} className="px-2 py-1 border border-port-border rounded text-gray-400 hover:text-white">
             Clear all
           </button>
         )}
       </div>
       {confirmingClear && (
         <InlineConfirmRow
+          autoFocus
+          aria-label={`Confirm clear notepad for job ${jobName}`}
+          returnFocusRef={clearButtonRef}
           question="Clear every notepad entry for this job?"
           confirmText="Clear all"
           onConfirm={() => { setConfirmingClear(false); apply(clearCosJobNotepad(jobId)); }}
@@ -111,12 +115,12 @@ function NotepadBody({ jobId }) {
 }
 
 // Collapsible section; the notepad is fetched only once the user opens it.
-export default function JobNotepad({ jobId }) {
+export default function JobNotepad({ jobId, jobName = jobId }) {
   const [opened, setOpened] = useState(false);
   return (
     <details className="group" onToggle={(e) => { if (e.currentTarget.open) setOpened(true); }}>
       <summary className="text-xs text-gray-500 cursor-pointer hover:text-gray-300 transition-colors">Notepad</summary>
-      <div className="mt-2">{opened && <NotepadBody jobId={jobId} />}</div>
+      <div className="mt-2">{opened && <NotepadBody jobId={jobId} jobName={jobName} />}</div>
     </details>
   );
 }

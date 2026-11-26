@@ -21,6 +21,48 @@ const UPDATE_PS1 = join(PATHS.root, 'update.ps1');
 const CLEANABLE_WORKSPACES = new Set(['.', 'client', 'server']);
 const supersededUpdates = new Set();
 
+function verifyPeerUpdateCapability(peerExecution, digest) {
+  return assertPeerExecutionCapability(peerExecution.capability, { action: 'portos.update' }, digest);
+}
+
+function buildUpdateChildEnv({ pinnedNode, forceCleanWorkspaces, acknowledgePersistentMindImageBackup, peerOperation, peerTarget }) {
+  // For a reconcile (issue #1779), a bare `git pull` left stale node_modules
+  // even though HEAD already advanced — so the scripts' commit-diff dependency
+  // detection finds nothing to reinstall. Pass the workspaces whose deps are
+  // actually stale (per installState's receipt check) so update.sh/update.ps1
+  // force a from-scratch reinstall of exactly those, regardless of the diff.
+  const cleanList = Array.isArray(forceCleanWorkspaces)
+    ? forceCleanWorkspaces.filter(w => CLEANABLE_WORKSPACES.has(w))
+    : [];
+  // The script's bare `node`/`npm` must be the pinned runtime pm2 will launch:
+  // its npm install and native rebuilds target whichever Node runs them.
+  // Exporting the pin also tells pm2-daemon-refresh.js to move the daemon onto
+  // it when the daemon still runs an older Node.
+  const childEnv = withNodeBinOnPath({ ...process.env }, pinnedNode);
+  if (pinnedNode) childEnv[NODE_INTERPRETER_ENV_KEY] = pinnedNode;
+  // Never inherit peer-only pinning from an operator's ambient environment.
+  if (acknowledgePersistentMindImageBackup) childEnv.PORTOS_UPDATE_IMAGE_BACKUP_ACKNOWLEDGED = '1';
+  else delete childEnv.PORTOS_UPDATE_IMAGE_BACKUP_ACKNOWLEDGED;
+  delete childEnv.PORTOS_DEFERRED_UPDATE_ID;
+  delete childEnv.PORTOS_UPDATE_INTERRUPT;
+  delete childEnv.PORTOS_UPDATE_STOP_FIRST;
+  delete childEnv.PORTOS_DEFERRED_UPDATE_LAUNCH_ID;
+  delete childEnv.PORTOS_PEER_UPDATE_OPERATION_ID;
+  delete childEnv.PORTOS_PEER_UPDATE_TARGET_SHA;
+  delete childEnv.PORTOS_PEER_UPDATE_EXPECTED_SHA;
+  if (peerOperation) {
+    childEnv.PORTOS_PEER_UPDATE_OPERATION_ID = peerOperation.operationId;
+    childEnv.PORTOS_PEER_UPDATE_TARGET_SHA = peerTarget.targetSha;
+    childEnv.PORTOS_PEER_UPDATE_EXPECTED_SHA = peerTarget.headSha;
+  }
+  if (cleanList.length) {
+    childEnv.PORTOS_FORCE_CLEAN_WORKSPACES = cleanList.join(',');
+  } else {
+    delete childEnv.PORTOS_FORCE_CLEAN_WORKSPACES;
+  }
+  return childEnv;
+}
+
 /**
  * Launch the PortOS update script (git pull to latest).
  *
@@ -73,45 +115,14 @@ async function launchUpdateLocked(tag, report, { forceCleanWorkspaces, peerExecu
 
   emit('starting', 'running', `Starting update (target: ${tag})...`);
 
-  // For a reconcile (issue #1779), a bare `git pull` left stale node_modules
-  // even though HEAD already advanced — so the scripts' commit-diff dependency
-  // detection finds nothing to reinstall. Pass the workspaces whose deps are
-  // actually stale (per installState's receipt check) so update.sh/update.ps1
-  // force a from-scratch reinstall of exactly those, regardless of the diff.
-  const cleanList = Array.isArray(forceCleanWorkspaces)
-    ? forceCleanWorkspaces.filter(w => CLEANABLE_WORKSPACES.has(w))
-    : [];
-  // The script's bare `node`/`npm` must be the pinned runtime pm2 will launch:
-  // its npm install and native rebuilds target whichever Node runs them.
-  // Exporting the pin also tells pm2-daemon-refresh.js to move the daemon onto
-  // it when the daemon still runs an older Node.
-  const childEnv = withNodeBinOnPath({ ...process.env }, pinnedNode);
-  if (pinnedNode) childEnv[NODE_INTERPRETER_ENV_KEY] = pinnedNode;
-  // Never inherit peer-only pinning from an operator's ambient environment.
-  if (acknowledgePersistentMindImageBackup) childEnv.PORTOS_UPDATE_IMAGE_BACKUP_ACKNOWLEDGED = '1';
-  else delete childEnv.PORTOS_UPDATE_IMAGE_BACKUP_ACKNOWLEDGED;
-  delete childEnv.PORTOS_DEFERRED_UPDATE_ID;
-  delete childEnv.PORTOS_UPDATE_INTERRUPT;
-  delete childEnv.PORTOS_UPDATE_STOP_FIRST;
-  delete childEnv.PORTOS_DEFERRED_UPDATE_LAUNCH_ID;
-  delete childEnv.PORTOS_PEER_UPDATE_OPERATION_ID;
-  delete childEnv.PORTOS_PEER_UPDATE_TARGET_SHA;
-  delete childEnv.PORTOS_PEER_UPDATE_EXPECTED_SHA;
-  if (peerExecution) {
-    const { capability, evidence } = peerExecution;
-    const operation = assertPeerExecutionCapability(capability, { action: 'portos.update' },
-      createHash('sha256').update(canonicalStringify(evidence)).digest('hex'));
-    if (!/^[a-f0-9]{40}$/.test(evidence.target.targetSha) || !/^[a-f0-9]{40}$/.test(evidence.target.headSha))
-      throw new Error('Invalid peer update revision.');
-    childEnv.PORTOS_PEER_UPDATE_OPERATION_ID = operation.operationId;
-    childEnv.PORTOS_PEER_UPDATE_TARGET_SHA = evidence.target.targetSha;
-    childEnv.PORTOS_PEER_UPDATE_EXPECTED_SHA = evidence.target.headSha;
-  }
-  if (cleanList.length) {
-    childEnv.PORTOS_FORCE_CLEAN_WORKSPACES = cleanList.join(',');
-  } else {
-    delete childEnv.PORTOS_FORCE_CLEAN_WORKSPACES;
-  }
+  // The receiver supplies frozen evidence. The environment takes its verified
+  // revisions now, while capability ownership must still be current after the process check.
+  const peerDigest = peerExecution && createHash('sha256').update(canonicalStringify(peerExecution.evidence)).digest('hex');
+  const peerOperation = peerExecution && verifyPeerUpdateCapability(peerExecution, peerDigest);
+  const peerTarget = peerExecution?.evidence.target;
+  if (peerOperation && (!/^[a-f0-9]{40}$/.test(peerTarget.targetSha) || !/^[a-f0-9]{40}$/.test(peerTarget.headSha)))
+    throw new Error('Invalid peer update revision.');
+  const childEnv = buildUpdateChildEnv({ pinnedNode, forceCleanWorkspaces, acknowledgePersistentMindImageBackup, peerOperation, peerTarget });
 
   // spawnDetached launches the script outside this process's tree (POSIX
   // double-fork, Windows supervisor) so it survives the pm2 TreeKill its own
@@ -119,9 +130,7 @@ async function launchUpdateLocked(tag, report, { forceCleanWorkspaces, peerExecu
   // ChildProcess-like (stdout/stderr 'data', 'close', 'error'), streamed by
   // tailing the control dir's log files — so the STEP: progress parsing below
   // works unchanged. The control dir is reused across updates (spawnDetached
-  // keeps the files as the post-mortem record of the launch.
-  const peerOperation = peerExecution && assertPeerExecutionCapability(peerExecution.capability, { action: 'portos.update' },
-    createHash('sha256').update(canonicalStringify(peerExecution.evidence)).digest('hex'));
+  // keeps the files as the post-mortem record of the launch).
   const legacyControlDir = peerOperation
     ? join(PATHS.data, 'peer-execution', peerOperation.operationId)
     : join(PATHS.data, 'update-detached');
@@ -149,8 +158,7 @@ async function launchUpdateLocked(tag, report, { forceCleanWorkspaces, peerExecu
     return { started: false, result: { success: false, failedStep: 'starting', errorMessage } };
   }
 
-  if (peerExecution) assertPeerExecutionCapability(peerExecution.capability, { action: 'portos.update' },
-    createHash('sha256').update(canonicalStringify(peerExecution.evidence)).digest('hex'));
+  if (peerExecution) verifyPeerUpdateCapability(peerExecution, peerDigest);
   if (!peerExecution && expectedRefusalId === undefined) await reconcileReusedLaunch(admission, supervisorSnapshot);
   try { ticket = peerExecution ? null : admission.deferredUpdate.reserveLaunch({ recoverWaiting: true,
     ...(expectedRefusalId !== undefined ? { expectedRefusalId } : {}) }); }
@@ -162,6 +170,7 @@ async function launchUpdateLocked(tag, report, { forceCleanWorkspaces, peerExecu
   }
   if (previous && waiting && alreadyObserved && !automatic) supersededUpdates.add(previous.id);
   if (ticket) childEnv.PORTOS_DEFERRED_UPDATE_LAUNCH_ID = ticket;
+  const cancelLaunch = () => admission.deferredUpdate.cancelLaunch(ticket);
   const controlDir = ticket ? join(legacyControlDir, ticket) : legacyControlDir;
   const untrackControl = trackUpdateControl(controlDir);
   let child;
@@ -169,7 +178,7 @@ async function launchUpdateLocked(tag, report, { forceCleanWorkspaces, peerExecu
     cwd: PATHS.root,
     env: childEnv,
     controlDir,
-    ...(ticket ? { onLaunchTimeout: () => admission.deferredUpdate.cancelLaunch(ticket) } : {}),
+    ...(ticket ? { onLaunchTimeout: cancelLaunch } : {}),
     // The default 250ms cadence is calibrated for trainer/render output; this
     // job emits one human-paced `STEP:` line per multi-second stage, so a
     // quarter of the syscalls buys the same perceived progress.
@@ -177,8 +186,8 @@ async function launchUpdateLocked(tag, report, { forceCleanWorkspaces, peerExecu
   }); } catch (error) {
     untrackControl();
     if (ticket) {
-      try { admission.deferredUpdate.cancelLaunch(ticket); }
-      catch { retryPendingLaunchCancellation(admission, ticket); }
+      try { cancelLaunch(); }
+      catch { scheduleJournalRetry(cancelLaunch); }
     }
     throw error;
   }
@@ -188,19 +197,21 @@ async function launchUpdateLocked(tag, report, { forceCleanWorkspaces, peerExecu
   child.once('error', untrackControl);
   child.once('close', untrackControl);
   const observedAt = Date.now();
-  if (ticket && Number.isSafeInteger(child.pid) && child.pid > 0) {
-    try { admission.deferredUpdate.bindLaunch(ticket, child.pid); }
-    catch { retryPendingLaunchBinding(admission, ticket, child.pid); }
+  const childPid = child.pid;
+  if (ticket && Number.isSafeInteger(childPid) && childPid > 0) {
+    const bindLaunch = () => admission.deferredUpdate.bindLaunch(ticket, childPid);
+    try { bindLaunch(); }
+    catch { scheduleJournalRetry(bindLaunch); }
   }
 
   if (ticket && (!Number.isSafeInteger(child.pid) || child.pid <= 0)) {
     let outcome;
     try {
       if (child.launchTimeoutError) throw child.launchTimeoutError;
-      outcome = child.launchTimeoutResult ?? admission.deferredUpdate.cancelLaunch(ticket);
+      outcome = child.launchTimeoutResult ?? cancelLaunch();
     }
     catch (error) {
-      retryPendingLaunchCancellation(admission, ticket);
+      scheduleJournalRetry(cancelLaunch);
       throw Object.assign(new Error(`Update launch status is uncertain: ${error.message}`), { code: 'UPDATE_LAUNCH_UNCERTAIN' });
     }
     if (outcome.state === 'unknown') return { started: false, result: { success: false, uncertain: true,
@@ -222,7 +233,6 @@ async function launchUpdateLocked(tag, report, { forceCleanWorkspaces, peerExecu
     }
   }
 
-  let ignoreLateEvents = false;
   let finalizing = false;
   const completion = new Promise((resolve) => {
     let lastStep = 'starting';
@@ -239,9 +249,9 @@ async function launchUpdateLocked(tag, report, { forceCleanWorkspaces, peerExecu
         return true;
       }
       let outcome;
-      try { outcome = admission.deferredUpdate.cancelLaunch(ticket); }
+      try { outcome = cancelLaunch(); }
       catch (error) {
-        retryPendingLaunchCancellation(admission, ticket);
+        scheduleJournalRetry(cancelLaunch);
         resolve({ success: false, uncertain: true, failedStep: 'starting', errorMessage: `Update launch status is uncertain: ${error.message}` });
         return true;
       }
@@ -253,47 +263,20 @@ async function launchUpdateLocked(tag, report, { forceCleanWorkspaces, peerExecu
       return true;
     };
 
-    // Parse STEP:name:status:message lines from stdout/stderr streams
-    const makeLineHandler = () => {
-      let buffer = '';
-      return (data) => {
-        buffer += data.toString();
-        let newlineIdx;
-        while ((newlineIdx = buffer.indexOf('\n')) !== -1) {
-          const line = buffer.slice(0, newlineIdx).replace(/\r$/, '');
-          buffer = buffer.slice(newlineIdx + 1);
-          const match = line.match(/STEP:([^:]+):([^:]+):(.+)/);
-          if (match) {
-            const [, name, status, message] = match;
-            // The synthetic 'starting' step means "we launched the script"; the
-            // first real step proves that, so close it out instead of leaving
-            // it spinning for the rest of the update.
-            if (!sawStep) {
-              sawStep = true;
-              emit('starting', 'done', 'Update script running');
-            }
-            lastStep = name;
-            emit(name, status, message);
-          }
-        }
-      };
-    };
-
-    // Pipe stdout/stderr for progress tracking, with EPIPE guards
-    // in case the parent process exits before the detached child finishes writing
-    if (child.stdout) {
-      child.stdout.on('error', (err) => { if (err.code !== 'EPIPE') console.error(`⚠️ stdout stream error: ${err.message}`); });
-      child.stdout.on('data', makeLineHandler());
-    }
-    if (child.stderr) {
-      child.stderr.on('error', (err) => { if (err.code !== 'EPIPE') console.error(`⚠️ stderr stream error: ${err.message}`); });
-      child.stderr.on('data', makeLineHandler());
-    }
+    attachUpdateLineStreams(child, (name, status, message) => {
+      // Close the synthetic starting step once script output proves it ran.
+      if (!sawStep) {
+        sawStep = true;
+        reportUpdateOutcome(emit, 'starting', 'done', 'Update script running');
+      }
+      lastStep = name;
+      reportUpdateOutcome(emit, name, status, message);
+    });
 
     child.on('close', async (code, signal) => {
-      if (ignoreLateEvents || finalizing) return;
+      if (finalizing) return;
       if (await settleClaimedTicket()) return;
-      if (ignoreLateEvents || finalizing) return;
+      if (finalizing) return;
       finalizing = true;
       // Exit 0 alone is not proof the update ran. A launch that never executed
       // the script exits 0 with no output at all, and stamping the triggering
@@ -306,63 +289,24 @@ async function launchUpdateLocked(tag, report, { forceCleanWorkspaces, peerExecu
       const errorMessage = code === 0
         ? 'Update script exited 0 without reporting any progress — it never ran'
         : `Update failed at step "${lastStep}" (${signal ? `killed by ${signal}` : `exit code ${code}`})`;
-      // Record result for both success and failure so updateInProgress gets
-      // cleared even if PM2 restart doesn't kill this process.
-      if (!success) {
-        await recordUpdateResult({
-          version: targetVersion,
-          success: false,
-          completedAt: new Date().toISOString(),
-          log: errorMessage
-        }).catch(e => console.error(`❌ Failed to record update result: ${e.message}`));
-      }
       if (success) {
-        // Read the actual version from the completion marker written by the script.
-        // Always record a success result so updateInProgress gets cleared even if
-        // PM2 restart doesn't kill this process.
-        let actualVersion = null;
-        let completedAt = null;
-        const markerPath = join(PATHS.data, 'update-complete.json');
-        try {
-          const marker = JSON.parse(await readFile(markerPath, 'utf-8'));
-          actualVersion = marker.version || null;
-          completedAt = marker.completedAt || null;
-        } catch { /* marker consumed/unreadable — fall back below */ }
-        // No marker usually means the restarted server already consumed it, so
-        // the version that stands is the one on disk — NOT the triggering tag:
-        // package.json is what the install actually runs, while the tag is only
-        // what we aimed at (#6169).
-        if (!actualVersion) actualVersion = await getCurrentVersion().catch(() => targetVersion);
-        if (!completedAt) completedAt = new Date().toISOString();
-        let recorded = false;
-        try {
-          await recordUpdateResult({
-            version: actualVersion,
-            success: true,
-            completedAt,
-            log: ''
-          });
-          recorded = true;
-        } catch (e) {
-          console.error(`❌ Failed to record update result: ${e.message}`);
-        }
-        // Remove marker only after result is persisted so boot-time processing
-        // can still recover if this process is killed before recordUpdateResult
-        if (recorded) {
-          await unlink(markerPath).catch(() => {});
-        }
-        emit('complete', 'done', 'Update complete — restarting');
-        resolve({ success: true, version: actualVersion });
-      } else {
-        emit(lastStep, 'error', errorMessage);
-        resolve({ success: false, failedStep: lastStep, errorMessage });
+        resolve(await recordCompletedUpdate({ targetVersion, emit }));
+        return;
       }
+      await recordUpdateResult({
+        version: targetVersion,
+        success: false,
+        completedAt: new Date().toISOString(),
+        log: errorMessage
+      }).catch(e => console.error(`❌ Failed to record update result: ${e.message}`));
+      reportUpdateOutcome(emit, lastStep, 'error', errorMessage);
+      resolve({ success: false, failedStep: lastStep, errorMessage });
     });
 
     child.on('error', async (err) => {
-      if (ignoreLateEvents || finalizing) return;
+      if (finalizing) return;
       if (await settleClaimedTicket()) return;
-      if (ignoreLateEvents || finalizing) return;
+      if (finalizing) return;
       finalizing = true;
       await recordUpdateResult({
         version: targetVersion,
@@ -371,7 +315,7 @@ async function launchUpdateLocked(tag, report, { forceCleanWorkspaces, peerExecu
         log: err.message
       }).catch(e => console.error(`❌ Failed to record update result: ${e.message}`));
       const errorMessage = `Failed to start update: ${err.message}`;
-      emit('starting', 'error', errorMessage);
+      reportUpdateOutcome(emit, 'starting', 'error', errorMessage);
       resolve({ success: false, failedStep: 'starting', errorMessage });
     });
 
@@ -385,10 +329,52 @@ async function launchUpdateLocked(tag, report, { forceCleanWorkspaces, peerExecu
     absent: supervisorAbsent, snapshot: supervisorSnapshot, intervalMs: monitorIntervalMs, beginFinalization: () => {
       if (finalizing) return false;
       finalizing = true;
-      ignoreLateEvents = true;
       return true;
     }, untrackControl }) : completion;
   return { started: true, completion: observed.finally(() => supersededUpdates.delete(ticket)), supervisorPid: child.pid };
+}
+
+function attachUpdateLineStreams(child, onStep) {
+  for (const name of ['stdout', 'stderr']) {
+    const stream = child[name];
+    if (!stream) continue;
+    // The detached child can still write after the parent's pipe closes.
+    stream.on('error', error => { if (error.code !== 'EPIPE') console.error(`⚠️ ${name} stream error: ${error.message}`); });
+    let buffer = '';
+    stream.on('data', data => {
+      buffer += data.toString();
+      let newlineIdx;
+      while ((newlineIdx = buffer.indexOf('\n')) !== -1) {
+        const line = buffer.slice(0, newlineIdx).replace(/\r$/, '');
+        buffer = buffer.slice(newlineIdx + 1);
+        const match = line.match(/STEP:([^:]+):([^:]+):(.+)/);
+        if (!match) continue;
+        const [, step, status, message] = match;
+        onStep(step, status, message);
+      }
+    });
+  }
+}
+
+function isSupervisorProcessGone(observed, observedAt, expectedExecutable) {
+  const raw = String(observed?.command ?? '').trim();
+  // ps prints only `(node)` (BSD) or `[node]` (procps) while a process's arguments are
+  // unreadable, as during a slow exec. That names no other program.
+  const command = /^(?:\([^()]*\)|\[[^[\]]*\])$/.test(raw) ? '' : raw;
+  const node = /(?:^|[\s"'/\\])node(?:js|\.exe)?(?=$|[\s"'])/i.test(command);
+  const expected = join(PATHS.root, 'scripts', 'deferred-update.mjs').replaceAll('\\', '/');
+  const escaped = escapeRegExp(expected);
+  const exact = new RegExp(`(?:^|[\\s"'=])${escaped}(?=$|[\\s"'])`, process.platform === 'win32' ? 'i' : '')
+    .test(command.replaceAll('\\', '/'));
+  const first = /^(?:"([^"]+)"|'([^']+)'|(\S+))/.exec(command);
+  const executable = basename((first?.[1] ?? first?.[2] ?? first?.[3] ?? '').replaceAll('\\', '/')).toLowerCase();
+  const expectedName = basename(expectedExecutable.replaceAll('\\', '/')).toLowerCase();
+  const bothNode = /^node(?:js|\.exe)?$/.test(executable) && /^node(?:js|\.exe)?$/.test(expectedName);
+  const differentExecutable = executable && expectedName && executable !== expectedName && !bothNode;
+  const explicitOther = command && !exact && (differentExecutable || (/\s/.test(command)
+    && (!node || /(?:^|\s)(?:-e|--eval|\S+\.(?:m?js|cjs))(?=$|\s)/i.test(command))));
+  return Number.isFinite(observed?.startedAt) && (observed.startedAt > observedAt || explicitOther
+    || isSettledProcessState(String(observed.state ?? '')));
 }
 
 function watchSupervisor({ admission, ticket, child, completion, emit, targetVersion, observedAt, expectedExecutable, absent, snapshot, intervalMs, beginFinalization, untrackControl }) {
@@ -415,24 +401,7 @@ function watchSupervisor({ admission, ticket, child, completion, emit, targetVer
         if (!gone) {
           const rows = await snapshot().catch(() => []);
           const observed = rows.find(row => row.pid === child.pid);
-          const raw = String(observed?.command ?? '').trim();
-          // ps prints only `(node)` (BSD) or `[node]` (procps) while a process's arguments are
-          // unreadable, as during a slow exec. That names no other program.
-          const command = /^(?:\([^()]*\)|\[[^[\]]*\])$/.test(raw) ? '' : raw;
-          const node = /(?:^|[\s"'/\\])node(?:js|\.exe)?(?=$|[\s"'])/i.test(command);
-          const expected = join(PATHS.root, 'scripts', 'deferred-update.mjs').replaceAll('\\', '/');
-          const escaped = escapeRegExp(expected);
-          const exact = new RegExp(`(?:^|[\\s"'=])${escaped}(?=$|[\\s"'])`, process.platform === 'win32' ? 'i' : '')
-            .test(command.replaceAll('\\', '/'));
-          const first = /^(?:"([^"]+)"|'([^']+)'|(\S+))/.exec(command);
-          const executable = basename((first?.[1] ?? first?.[2] ?? first?.[3] ?? '').replaceAll('\\', '/')).toLowerCase();
-          const expectedName = basename(expectedExecutable.replaceAll('\\', '/')).toLowerCase();
-          const bothNode = /^node(?:js|\.exe)?$/.test(executable) && /^node(?:js|\.exe)?$/.test(expectedName);
-          const differentExecutable = executable && expectedName && executable !== expectedName && !bothNode;
-          const explicitOther = command && !exact && (differentExecutable || (/\s/.test(command)
-            && (!node || /(?:^|\s)(?:-e|--eval|\S+\.(?:m?js|cjs))(?=$|\s)/i.test(command))));
-          gone = Number.isFinite(observed?.startedAt) && (observed.startedAt > observedAt || explicitOther
-            || isSettledProcessState(String(observed.state ?? '')));
+          gone = isSupervisorProcessGone(observed, observedAt, expectedExecutable);
         }
         if (done) return;
         if (supersededUpdates.has(ticket)) { await finishSuperseded(); return; }
@@ -451,8 +420,7 @@ function watchSupervisor({ admission, ticket, child, completion, emit, targetVer
               const errorMessage = knownUnclaimed ? 'Update supervisor exited before starting the update' : 'Update outcome is unavailable';
               if (knownUnclaimed) await recordUpdateResult({ version: targetVersion, success: false, completedAt: new Date().toISOString(),
                 log: errorMessage }).catch(() => {});
-              try { emit('starting', 'error', errorMessage); }
-              catch (error) { console.error(`❌ Could not report update outcome: ${error.message}`); }
+              reportUpdateOutcome(emit, 'starting', 'error', errorMessage);
               finish({ success: false, ...(knownUnclaimed ? {} : { uncertain: true }), failedStep: 'starting', errorMessage });
             }
             return;
@@ -466,22 +434,39 @@ function watchSupervisor({ admission, ticket, child, completion, emit, targetVer
   });
 }
 
-function retryPendingLaunchCancellation(admission, id) {
-  const retry = () => {
-    try { admission.deferredUpdate.cancelLaunch(id); }
-    catch { const timer = setTimeout(retry, 5000); timer.unref?.(); }
-  };
-  const timer = setTimeout(retry, 5000);
+function scheduleJournalRetry(action) {
+  const timer = setTimeout(() => {
+    try { action(); }
+    catch { scheduleJournalRetry(action); }
+  }, 5000);
   timer.unref?.();
 }
 
-function retryPendingLaunchBinding(admission, id, childPid) {
-  const retry = () => {
-    try { admission.deferredUpdate.bindLaunch(id, childPid); }
-    catch { const timer = setTimeout(retry, 5000); timer.unref?.(); }
-  };
-  const timer = setTimeout(retry, 5000);
-  timer.unref?.();
+async function recordCompletedUpdate({ targetVersion, fallbackCompletedAt, emit, isSuperseded }) {
+  const markerPath = join(PATHS.data, 'update-complete.json');
+  let marker;
+  try { marker = JSON.parse(await readFile(markerPath, 'utf8')); }
+  catch { /* Boot may have consumed the marker already. */ }
+  // The installed version is authoritative when the marker is missing (#6169).
+  const version = marker?.version || await getCurrentVersion().catch(() => targetVersion);
+  const completedAt = marker?.completedAt || (fallbackCompletedAt ?? new Date().toISOString());
+  const recorded = await recordUpdateResult({ version, success: true, completedAt, log: '' }).then(
+    () => true,
+    error => {
+      console.error(`❌ Failed to record update result: ${error.message}`);
+      return false;
+    }
+  );
+  if (isSuperseded?.()) return { success: false, superseded: true, interrupted: true };
+  // Keep the marker for boot-time recovery until the result has been persisted.
+  if (recorded) await unlink(markerPath).catch(() => {});
+  reportUpdateOutcome(emit, 'complete', 'done', 'Update complete — restarting');
+  return { success: true, version };
+}
+
+function reportUpdateOutcome(emit, step, status, message) {
+  try { emit(step, status, message); }
+  catch (error) { console.error(`❌ Could not report update outcome: ${error.message}`); }
 }
 
 async function waitForClaimedUpdate(admission, id, existingResult, targetVersion, emit) {
@@ -500,36 +485,25 @@ async function waitForClaimedUpdate(admission, id, existingResult, targetVersion
     if (state.result?.id === id) result = state.result;
     else return { success: false, uncertain: true, failedStep: 'starting', errorMessage: 'Update outcome is unavailable' };
   }
-  let version = targetVersion;
-  let errorCode;
-  if (!result.success) {
-    try {
-      const refusal = JSON.parse(await readFile(join(admission.directory, `update-refusal-${id}.json`), 'utf8'));
-      if (refusal.id === id && refusal.code === 'UPDATE_INTERRUPTION_REQUIRED') errorCode = refusal.code;
-    } catch { /* Older scripts have no typed refusal metadata. */ }
+  if (result.success) {
+    const isSuperseded = () => supersededUpdates.has(id);
+    if (isSuperseded()) return { success: false, superseded: true, interrupted: true };
+    return recordCompletedUpdate({ targetVersion, fallbackCompletedAt: result.completedAt, emit, isSuperseded });
   }
+
+  let errorCode;
+  try {
+    const refusal = JSON.parse(await readFile(join(admission.directory, `update-refusal-${id}.json`), 'utf8'));
+    if (refusal.id === id && refusal.code === 'UPDATE_INTERRUPTION_REQUIRED') errorCode = refusal.code;
+  } catch { /* Older scripts have no typed refusal metadata. */ }
   const errorMessage = errorCode === 'UPDATE_INTERRUPTION_REQUIRED'
     ? 'Updating restarts PortOS and Chrome. Active work may fail or lose unsaved progress. Save your work, then explicitly continue the update.'
     : 'The update did not finish successfully';
   if (supersededUpdates.has(id)) return { success: false, superseded: true, interrupted: true };
-  let completedAt = result.completedAt;
-  const markerPath = join(PATHS.data, 'update-complete.json');
-  if (result.success) {
-    try {
-      const marker = JSON.parse(await readFile(markerPath, 'utf8'));
-      version = marker.version || await getCurrentVersion().catch(() => targetVersion);
-      completedAt = marker.completedAt || completedAt;
-    } catch { version = await getCurrentVersion().catch(() => targetVersion); }
-  }
-  const recorded = await recordUpdateResult({ version, success: result.success, completedAt,
-    log: result.success ? '' : errorMessage }).then(() => true, () => false);
+  await recordUpdateResult({ version: targetVersion, success: false, completedAt: result.completedAt, log: errorMessage }).catch(() => {});
   if (supersededUpdates.has(id)) return { success: false, superseded: true, interrupted: true };
-  if (recorded && result.success) await unlink(markerPath).catch(() => {});
-  try {
-    if (result.success) emit('complete', 'done', 'Update complete — restarting');
-    else emit('starting', 'error', errorMessage);
-  } catch (error) { console.error(`❌ Could not report update outcome: ${error.message}`); }
-  return result.success ? { success: true, version } : { success: false, failedStep: 'starting', errorMessage, ...(errorCode ? { errorCode } : {}) };
+  reportUpdateOutcome(emit, 'starting', 'error', errorMessage);
+  return { success: false, failedStep: 'starting', errorMessage, ...(errorCode ? { errorCode } : {}) };
 }
 
 /**

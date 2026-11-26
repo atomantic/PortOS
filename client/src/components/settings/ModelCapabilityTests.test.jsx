@@ -431,13 +431,14 @@ describe('a runtime that could not be listed', () => {
 
   it('says what is wrong and links to where it is fixed', () => {
     renderPanel({ report: withListError() });
-    expect(screen.getByRole('alert')).toHaveTextContent(/llama\.cpp is not running/);
-    expect(screen.getByRole('link', { name: /start llama\.cpp/i })).toHaveAttribute('href', '/models/llms');
+    expect(screen.getByRole('alert')).toHaveTextContent(/Could not list llama\.cpp models:.*ECONNREFUSED/);
+    expect(screen.getByRole('link', { name: 'View runtimes' })).toHaveAttribute('href', '/models/llms-runtimes');
+    expect(screen.queryByRole('link', { name: /start/i })).not.toBeInTheDocument();
   });
 
   it('says the models below came off disk, so they are real but unrunnable', () => {
     renderPanel({ report: withListError() });
-    expect(screen.getByRole('alert')).toHaveTextContent(/showing the 2 models PortOS has on disk/);
+    expect(screen.getByRole('alert')).toHaveTextContent(/Showing 2 cached models/);
   });
 
   it('falls back to the docs for a runtime PortOS cannot start', () => {
@@ -446,8 +447,8 @@ describe('a runtime that could not be listed', () => {
         id: 'vllm', label: 'vLLM', recovered: 0, manageUrl: null, docsUrl: 'https://docs.vllm.ai/',
       }),
     });
-    expect(screen.getByRole('alert')).toHaveTextContent(/missing from this table/);
-    expect(screen.getByRole('link', { name: /how to start it/i })).toHaveAttribute('href', 'https://docs.vllm.ai/');
+    expect(screen.getByRole('alert')).toHaveTextContent(/Could not list vLLM models/);
+    expect(screen.getByRole('link', { name: /runtime documentation/i })).toHaveAttribute('href', 'https://docs.vllm.ai/');
   });
 
   it('marks an offline model as installed-but-not-running', () => {

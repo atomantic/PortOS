@@ -14,7 +14,7 @@ a new one.
 | `browserFixture.js` | `startBrowserFixture` — phase-bounded Vite + Chromium + warmup startup for `*.browser.test.js` (a stalled Chromium launch is retried once with a fresh process), naming the stalled phase and closing everything it started (a real launch is reaped through its own Playwright browser server: graceful close, then that server's kill, confirmed by the process's exit status); a timed-out launch attempt reports redacted Linux facts about its own browser child, and on GitHub Actions the ready/failure lines are kept in the step summary. |
 | `classNameScan.js` | Shared string-literal scanner (comment-stripping + literal walk) for the class-string convention guards. |
 | `a11yScanCore.js`, `a11yScanNames.js`, `a11yScanRules.js`, `a11yScanWrappers.js` | Shared JSX tag/attribute scanner and accessible-name resolver behind the `src/test/guards/a11y/` guards (core lexer → names → wrappers → rules). |
-| `dndKeyboardDrag.js` | Drives a real `@dnd-kit` keyboard drag under happy-dom, stubbing the layout happy-dom can't provide. |
+| `dndKeyboardDrag.js` | Drives the owned keyboard drag sensor under happy-dom, stubbing the layout happy-dom can't provide. |
 | `downloadPreflightConfirm.js` | `clickStartDownload` — waits for the confirm button to be enabled (built on `enabledBarrier.js`) before clicking, then settles. |
 | `enabledBarrier.js` | `awaitEnabled` / `findEnabledByLabelText` / `findEnabledByRole` — wait for a control to be enabled, not just present, before interacting. |
 | `fakeAudioContext.js` | Minimal Web Audio fake for playback tests (jsdom/node have no Web Audio). |

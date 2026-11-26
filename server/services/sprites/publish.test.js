@@ -14,7 +14,7 @@ import { describe, it, expect, beforeEach, afterAll, vi } from 'vitest';
 import { mkdtempSync, rmSync } from 'fs';
 import { tmpdir } from 'os';
 import { join } from 'path';
-import { mkdir, writeFile, readFile, realpath, symlink, unlink } from 'fs/promises';
+import { mkdir, writeFile, readFile, readdir, realpath, symlink, unlink } from 'fs/promises';
 import { createHash } from 'crypto';
 import sharp from 'sharp';
 import { trackSpan as fullSpan } from './spriteTestFixtures.js';
@@ -76,6 +76,7 @@ vi.mock('./presentationIdle.js', () => ({
 
 const records = await import('./records.js');
 const { setPublishBinding, publishAtlas, validatePublishBinding, listPublishBindingsForApp } = await import('./publish.js');
+const { spritePublishBindingSchema } = await import('../../lib/spriteValidation.js');
 const { walkPhaseLabels } = await import('./walkBounds.js');
 
 let seq = 0;
@@ -171,6 +172,57 @@ beforeEach(async () => {
   await mkdir(OTHER_APP_REPO, { recursive: true });
 });
 afterAll(() => rmSync(TEST_ROOT, { recursive: true, force: true }));
+
+describe('overlapping publish destinations', () => {
+  const codeBinding = (path) => ({ path, resourcePath: 'res://hero-atlas.png' });
+  const cases = [
+    ['the same atlas and portrait path', { portraitDestPath: BINDING.atlasDestPath },
+      ['atlasDestPath', 'portraitDestPath']],
+    ['equivalent atlas and portrait paths', { portraitDestPath: './assets//sprites/./hero/hero-atlas.png' },
+      ['atlasDestPath', 'portraitDestPath']],
+    ['the atlas sidecar and code source', { codeBinding: codeBinding(sidecarPath(BINDING.atlasDestPath)) },
+      ['layoutDestPath', 'codeBinding.path']],
+    ['the picker sidecar and code source', {
+      presentationIdleDestPath: 'picker/hero.png', codeBinding: codeBinding('picker/./hero.presentation.json'),
+    }, ['presentationIdleLayoutDestPath', 'codeBinding.path']],
+    ['an output used as another output’s parent directory', { portraitDestPath: `${BINDING.atlasDestPath}/portrait.png` },
+      ['atlasDestPath', 'portraitDestPath']],
+  ];
+  if (process.platform === 'darwin' || process.platform === 'win32') {
+    cases.push(['case aliases for the atlas and portrait', { portraitDestPath: BINDING.atlasDestPath.toUpperCase() },
+      ['atlasDestPath', 'portraitDestPath']]);
+  }
+
+  it.each(cases)('refuses to save %s and preserves the previous binding', async (_case, fields, conflict) => {
+    const { id } = await characterWithAtlas();
+    const saved = await setPublishBinding(id, BINDING);
+    const binding = spritePublishBindingSchema.parse({ ...BINDING, ...fields });
+
+    await expect(setPublishBinding(id, binding)).rejects.toMatchObject({
+      status: 400, code: 'PUBLISH_DESTINATIONS_OVERLAP', context: { fields: conflict },
+    });
+    expect((await records.getRecord(id)).publishBinding).toEqual(saved.publishBinding);
+  });
+
+  it.each(cases)('refuses a saved binding with %s before changing any app files or history', async (_case, fields, conflict) => {
+    const { id } = await characterWithAtlas();
+    await addLockedMainReference(id);
+    const strip = Buffer.from('synthetic-picker-strip');
+    presentationIdleMocks.buildPresentationIdle.mockResolvedValue({
+      buffer: strip, sha256: sha256(strip), frameCount: 3, frameRate: 6, cellSize: 512,
+    });
+    // Recreate a binding saved before overlap validation existed.
+    await records.updateRecord(id, { publishBinding: { ...BINDING, ...fields } });
+
+    const refusal = await publishAtlas(id).catch((error) => error);
+    expect(await readdir(APP_REPO)).toEqual([]);
+    await expect(readFile(join(TEST_ROOT, 'sprites', id, 'runtime/publications.json')))
+      .rejects.toMatchObject({ code: 'ENOENT' });
+    expect(refusal).toMatchObject({
+      status: 409, code: 'PUBLISH_DESTINATIONS_OVERLAP', context: { fields: conflict },
+    });
+  });
+});
 
 describe('validatePublishBinding / setPublishBinding', () => {
   it('persists a normalized binding on the record', async () => {
@@ -435,18 +487,89 @@ describe('publishAtlas', () => {
     await expect(publishAtlas(id)).rejects.toMatchObject({ status: 409, code: 'PUBLISH_DEST_DIVERGED' });
   });
 
-  it('refuses an occupied destination it never published unless acknowledged', async () => {
+  it('binds overwrite approval to all five destinations, their contents and the saved binding', async () => {
     const { id, atlasBytes } = await characterWithAtlas();
-    await setPublishBinding(id, BINDING);
-    await mkdir(join(APP_REPO, 'assets/sprites/hero'), { recursive: true });
-    await writeFile(join(APP_REPO, BINDING.atlasDestPath), 'hand-made-atlas-from-before-portos');
+    const binding = { appId: 'game-app', atlasDestPath: 'atlas.png', portraitDestPath: 'portrait.png', presentationIdleDestPath: 'idle.png' };
+    const paths = ['atlas.png', 'atlas.layout.json', 'portrait.png', 'idle.png', 'idle.presentation.json'];
+    const strip = Buffer.from('synthetic-picker-strip');
+    presentationIdleMocks.buildPresentationIdle.mockResolvedValue({
+      buffer: strip, sha256: sha256(strip), frameCount: 3, frameRate: 6, cellSize: 512,
+    });
+    await addLockedMainReference(id);
+    await setPublishBinding(id, binding);
+    for (const path of paths) await writeFile(join(APP_REPO, path), path);
+    const readOutputs = () => Promise.all(paths.map((path) => readFile(join(APP_REPO, path), 'utf8')));
+    const review = async (options) => {
+      const refusal = publishAtlas(id, options);
+      await expect(refusal).rejects.toMatchObject({
+        status: 409, code: 'PUBLISH_OUTPUTS_OCCUPIED',
+        context: { appLabel: 'Example Game', paths, revision: expect.stringMatching(/^[0-9a-f]{64}$/) },
+      });
+      return { acknowledgeOverwrite: (await refusal.catch((error) => error.context)).revision };
+    };
+    const first = await review({ acknowledgeOverwrite: true });
+    expect(await readOutputs()).toEqual(paths);
 
-    await expect(publishAtlas(id)).rejects.toMatchObject({ status: 409, code: 'PUBLISH_DEST_OCCUPIED' });
-    // Explicit acknowledgment replaces it and records the prior sha.
-    const acked = await publishAtlas(id, { acknowledgeOverwrite: true });
-    expect(acked.published).toBe(true);
-    expect(acked.publication.destPreviousSha256).toBe(sha256(Buffer.from('hand-made-atlas-from-before-portos')));
-    expect((await readFile(join(APP_REPO, BINDING.atlasDestPath))).toString()).toBe(atlasBytes);
+    await writeFile(join(APP_REPO, 'portrait.png'), 'edited');
+    const afterEdit = await review(first);
+    expect(afterEdit).not.toEqual(first);
+    const expected = ['atlas.png', 'atlas.layout.json', 'edited', 'idle.png', 'idle.presentation.json'];
+    expect(await readOutputs()).toEqual(expected);
+
+    // The same paths and bytes still require a new decision for a different binding.
+    await setPublishBinding(id, { ...binding, runtimeContract: { walkFrameCount: 8 } });
+    const afterBinding = await review(afterEdit);
+    expect(afterBinding).not.toEqual(afterEdit);
+    expect(await readOutputs()).toEqual(expected);
+
+    await unlink(join(APP_REPO, 'portrait.png'));
+    const retry = publishAtlas(id, afterBinding);
+    await expect(retry).rejects.toMatchObject({
+      code: 'PUBLISH_OUTPUTS_OCCUPIED', context: { paths: paths.filter((path) => path !== 'portrait.png') },
+    });
+    await expect(readFile(join(APP_REPO, 'portrait.png'))).rejects.toMatchObject({ code: 'ENOENT' });
+    await expect(readFile(join(TEST_ROOT, 'sprites', id, 'runtime/publications.json'))).rejects.toMatchObject({ code: 'ENOENT' });
+
+    const { revision } = await retry.catch((error) => error.context);
+    const result = await publishAtlas(id, { acknowledgeOverwrite: revision });
+    expect(result.publication.destPreviousSha256).toBe(sha256('atlas.png'));
+    expect(await readFile(join(APP_REPO, 'atlas.png'), 'utf8')).toBe(atlasBytes);
+    expect(await readFile(join(APP_REPO, 'idle.png'))).toEqual(strip);
+  });
+
+  it('refuses an old review after a rebind to an empty destination', async () => {
+    const { id } = await characterWithAtlas();
+    await setPublishBinding(id, { ...BINDING, atlasDestPath: 'old.png' });
+    await writeFile(join(APP_REPO, 'old.png'), 'occupied');
+    const { revision } = await publishAtlas(id).catch((error) => error.context);
+    await setPublishBinding(id, { ...BINDING, atlasDestPath: 'new/atlas.png' });
+    await expect(publishAtlas(id, { acknowledgeOverwrite: revision })).rejects.toMatchObject({ code: 'PUBLISH_OVERWRITE_STALE' });
+    await expect(readFile(join(APP_REPO, 'new'))).rejects.toMatchObject({ code: 'ENOENT' });
+    expect(await readFile(join(APP_REPO, 'old.png'), 'utf8')).toBe('occupied');
+    expect((await publishAtlas(id)).published).toBe(true);
+  });
+
+  it.each([
+    ['portraitDestPath', 'PUBLISH_PORTRAIT_DIVERGED'],
+    ['presentationIdleDestPath', 'PUBLISH_PRESENTATION_IDLE_DIVERGED'],
+  ])('keeps externally edited %s under its divergence refusal after atlas confirmation', async (field, code) => {
+    const { id } = await characterWithAtlas();
+    const binding = { ...BINDING, [field]: 'presentation.png' };
+    if (field === 'portraitDestPath') await addLockedMainReference(id);
+    const strip = Buffer.from('synthetic-picker-strip');
+    presentationIdleMocks.buildPresentationIdle.mockResolvedValue({
+      buffer: strip, sha256: sha256(strip), frameCount: 3, frameRate: 6, cellSize: 512,
+    });
+    await setPublishBinding(id, binding);
+    await publishAtlas(id);
+    await setPublishBinding(id, { ...binding, atlasDestPath: 'new.png' });
+    await writeFile(join(APP_REPO, 'new.png'), 'foreign atlas');
+    const { revision } = await publishAtlas(id).catch((error) => error.context);
+    await writeFile(join(APP_REPO, 'presentation.png'), 'external edit');
+    await expect(publishAtlas(id, { acknowledgeOverwrite: revision })).rejects.toMatchObject({ code });
+    expect(await readFile(join(APP_REPO, 'presentation.png'), 'utf8')).toBe('external edit');
+    expect(await readFile(join(APP_REPO, 'new.png'), 'utf8')).toBe('foreign atlas');
+    await expect(readFile(join(APP_REPO, 'new.layout.json'))).rejects.toMatchObject({ code: 'ENOENT' });
   });
 
   it('refuses to publish while the app is deploying', async () => {
@@ -730,11 +853,15 @@ describe('layout sidecar (#2982)', () => {
     await mkdir(join(APP_REPO, 'assets/sprites/hero'), { recursive: true });
     await writeFile(join(APP_REPO, sidecarPath(BINDING.atlasDestPath)), '{"kind":"someone-elses-file"}');
 
-    await expect(publishAtlas(id)).rejects.toMatchObject({ status: 409, code: 'PUBLISH_LAYOUT_OCCUPIED' });
+    const refusal = publishAtlas(id);
+    await expect(refusal).rejects.toMatchObject({
+      status: 409, code: 'PUBLISH_OUTPUTS_OCCUPIED', context: { paths: [sidecarPath(BINDING.atlasDestPath)] },
+    });
     // The refusal aborts before the atlas lands.
     expect(await readFile(join(APP_REPO, BINDING.atlasDestPath)).catch(() => null)).toBeNull();
 
-    const acked = await publishAtlas(id, { acknowledgeOverwrite: true });
+    const { revision } = await refusal.catch((error) => error.context);
+    const acked = await publishAtlas(id, { acknowledgeOverwrite: revision });
     expect(acked.published).toBe(true);
     expect((await readSidecar(BINDING.atlasDestPath)).kind).toBe('portos-sprite-atlas-layout');
   });
@@ -757,7 +884,7 @@ describe('layout sidecar (#2982)', () => {
     await setPublishBinding(id, { ...BINDING, codeBinding: { path: 'src/Hero.cs', resourcePath: newResource } });
     await writeFile(join(APP_REPO, sidecarPath(BINDING.atlasDestPath)), 'not even json');
 
-    await expect(publishAtlas(id)).rejects.toMatchObject({ status: 409, code: 'PUBLISH_LAYOUT_OCCUPIED' });
+    await expect(publishAtlas(id)).rejects.toMatchObject({ status: 409, code: 'PUBLISH_OUTPUTS_OCCUPIED' });
     // The refusal must land before applyCodeBinding mutates the game source —
     // otherwise the source points at an atlas this publish declined to write.
     expect(await readFile(join(APP_REPO, 'src/Hero.cs'), 'utf8')).toBe(sourceBefore);
@@ -785,7 +912,7 @@ describe('layout sidecar (#2982)', () => {
     await writeFile(join(APP_REPO, BINDING.atlasDestPath), atlasBytes);
     await writeFile(join(APP_REPO, sidecarPath(BINDING.atlasDestPath)), '{"kind":"someone-elses-file"}');
 
-    await expect(publishAtlas(id)).rejects.toMatchObject({ status: 409, code: 'PUBLISH_LAYOUT_OCCUPIED' });
+    await expect(publishAtlas(id)).rejects.toMatchObject({ status: 409, code: 'PUBLISH_OUTPUTS_OCCUPIED' });
     expect(await readFile(join(APP_REPO, 'src/Hero.cs'), 'utf8')).toBe(sourceBefore);
   });
 
@@ -856,7 +983,7 @@ describe('publication filesystem boundary', () => {
 
       // Save-time validation and use-time validation share the same refusal.
       await expect(validatePublishBinding(binding)).rejects.toMatchObject({ code: 'INVALID_PUBLISH_PATH' });
-      await expect(publishAtlas(id, { acknowledgeOverwrite: true })).rejects.toMatchObject({ code: 'INVALID_PUBLISH_PATH' });
+      await expect(publishAtlas(id, { acknowledgeOverwrite: 'a'.repeat(64) })).rejects.toMatchObject({ code: 'INVALID_PUBLISH_PATH' });
       expect(await readFile(outsidePath, 'utf8')).toBe(outsideBefore);
       expect(await readFile(join(APP_REPO, sourcePath), 'utf8')).toBe(sourceBefore);
       expect(await readFile(historyPath)).toEqual(historyBefore);

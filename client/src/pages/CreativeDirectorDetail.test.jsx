@@ -58,6 +58,7 @@ const renderPage = async () => {
     <MemoryRouter initialEntries={['/creative-director/cd-example/overview']}>
       <LocationProbe />
       <Routes>
+        <Route path="/creative-director" element={<h1>Creative Director projects</h1>} />
         <Route path="/creative-director/:id/:tab" element={<CreativeDirectorDetail />} />
       </Routes>
     </MemoryRouter>,
@@ -93,6 +94,7 @@ describe('CreativeDirectorDetail project deletion', () => {
 
     await waitFor(() => expect(cdApi.deleteCreativeDirectorProject).toHaveBeenCalledWith(PROJECT.id, { silent: true }));
     expect(screen.getByTestId('location')).toHaveTextContent('/creative-director');
+    expect(await screen.findByRole('heading', { name: 'Creative Director projects' })).toBeInTheDocument();
   });
 });
 
@@ -115,7 +117,10 @@ describe('CreativeDirectorDetail route isolation', () => {
       <MemoryRouter initialEntries={['/creative-director/cd-example/overview']}>
         <LocationProbe />
         <Link to="/creative-director/cd-other/overview">Open B</Link>
-        <Routes><Route path="/creative-director/:id/:tab" element={<CreativeDirectorDetail />} /></Routes>
+        <Routes>
+          <Route path="/creative-director" element={<h1>Creative Director projects</h1>} />
+          <Route path="/creative-director/:id/:tab" element={<CreativeDirectorDetail />} />
+        </Routes>
       </MemoryRouter>,
     );
     await waitFor(() => expect(getCosAgents).toHaveBeenCalled());
@@ -132,6 +137,7 @@ describe('CreativeDirectorDetail route isolation', () => {
     expect(screen.getByTestId('agents')).not.toHaveTextContent('agent-a');
     await user.click(screen.getByRole('button', { name: 'Delete', exact: true }));
     expect(cdApi.deleteCreativeDirectorProject).toHaveBeenCalledWith(projectB.id, { silent: true });
+    expect(await screen.findByRole('heading', { name: 'Creative Director projects' })).toBeInTheDocument();
   });
 
   it('loads only active CoS agents and shows a running agent for this project', async () => {

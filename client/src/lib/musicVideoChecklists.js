@@ -391,7 +391,7 @@ function boardChecklist({ project, readiness, scenes, draft }) {
 
 function footageItem(project, scenes) {
   const layered = isLayeredComposition(project);
-  const ready = scenes.filter((scene) => sceneRenderReady(scene, { layered, scenes })).length;
+  const ready = scenes.filter((scene) => sceneRenderReady(scene, { layered, scenes, assetMarks: project.assetMarks })).length;
   const footageDone = footageReady(project);
   return { id: 'footage', label: `Footage for every shot (${formatCount(ready)} of ${formatCount(scenes.length)})`, done: footageDone,
     action: footageDone ? null : { label: 'Make the footage', anchor: 'mv-generation' } };
@@ -543,7 +543,7 @@ export function stepNotes(project, readiness = project?.productionReadiness, pub
   let make = '';
   if (scenes.length && !FOOTAGE_OPTIONAL_MODES.has(mode)) {
     const layered = isLayeredComposition(project);
-    const ready = scenes.filter((scene) => sceneRenderReady(scene, { layered, scenes })).length;
+    const ready = scenes.filter((scene) => sceneRenderReady(scene, { layered, scenes, assetMarks: project.assetMarks })).length;
     const staleFrames = scenes.filter((scene) => (scene.takes || []).some((take) => (
       (take.kind === 'image' && take.assetId === scene.referenceImageId) || (take.kind === 'endImage' && take.assetId === scene.endImageId)
     ) && take.dependencyState?.status === 'stale')).length;

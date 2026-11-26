@@ -268,10 +268,10 @@ describe('socket.js — initSocket', () => {
     expect(io.emitted).toEqual([['usage-backfill:updated', {}]]);
   });
 
-  it('invalidates Jev policy after an unreadable settings restore without forwarding content', () => {
+  it('invalidates Jev policy and memory status after an unreadable settings restore without forwarding content', () => {
     io.emitted.length = 0;
     settingsEvents.emit('settings:invalidated', { privateContent: 'Example settings' });
-    expect(io.emitted).toEqual([['jev:policy', {}]]);
+    expect(io.emitted).toEqual([['memory:models:changed', {}], ['jev:policy', {}]]);
   });
 
   it('invalidates Eidoverse projection progress without world content', () => {
@@ -405,7 +405,12 @@ describe('socket.js — initSocket', () => {
     subscriber.emitted.length = 0;
     previousIo.emitted.length = 0;
     io.emitted.length = 0;
-    settingsEvents.emit('settings:updated', { privateContent: 'Example settings' });
+    const memoryClassifier = { providerId: 'ollama', model: 'qwen3:8b' };
+    settingsEvents.emit('settings:updated', { memoryClassifier, privateContent: 'Example settings' });
+    expect(io.emitted).toEqual([['memory:models:changed', {}], ['backup:changed', {}], ['jev:policy', {}]]);
+    expect(io.excepted).toContainEqual(['memory:models:changed', 'peer-sockets']);
+    io.emitted.length = 0;
+    settingsEvents.emit('settings:updated', { memoryClassifier, privateContent: 'Unrelated settings edit' });
     expect(io.emitted).toEqual([['backup:changed', {}], ['jev:policy', {}]]);
     dashboardEvents.emit('goals:changed', { privateContent: 'Example goal' });
     dashboardEvents.emit('cos:day:changed', { privateContent: 'Example day' });
@@ -1702,5 +1707,116 @@ describe('socket.js — inbound peer socket revocation (#17905)', () => {
     const next = await live.runEvent('peer:sync:subscribe');
     expect(next).toHaveBeenCalled();
     expect(live.disconnect).not.toHaveBeenCalled();
+  });
+});
+
+describe('logs:subscribe host-control boundary (#19168)', () => {
+  let io;
+  const guardedSocket = (id, remote = true) => {
+    const socket = makeSocket(id);
+    socket.handshake.headers = remote ? { 'x-forwarded-for': '192.0.2.10' } : {};
+    socket.use = (fn) => { socket.middleware = fn; };
+    socket.runEvent = async (event, payload) => {
+      const next = vi.fn();
+      await socket.middleware([event, payload], next);
+      if (next.mock.calls.length) await socket.handlers[event](payload);
+      return next;
+    };
+    return socket;
+  };
+  beforeEach(() => {
+    io = makeIo();
+    initSocket(io);
+    vi.mocked(isAuthEnabled).mockResolvedValue(false);
+    vi.mocked(spawnPm2).mockClear();
+  });
+  it('refuses remote password-free log subscriptions and leaves unsubscribe available', async () => {
+    const socket = guardedSocket('remote');
+    io.connect(socket);
+    const payload = { processName: 'portos-server', lines: 20 };
+    const next = await socket.runEvent('logs:subscribe', payload);
+    expect(next).not.toHaveBeenCalled();
+    expect(socket.emitted).toContainEqual(['logs:error', expect.objectContaining({ code: 'HOST_CONTROL_FORBIDDEN', processName: payload.processName })]);
+    expect(spawnPm2).not.toHaveBeenCalled();
+    expect(await socket.runEvent('logs:unsubscribe', payload)).toHaveBeenCalled();
+  });
+  it('allows local password-free and authenticated operator subscriptions', async () => {
+    const local = guardedSocket('local', false);
+    local.data.portosLocalConnection = true;
+    io.connect(local);
+    expect(await local.runEvent('logs:subscribe', { processName: 'portos-server', lines: 20 })).toHaveBeenCalled();
+    vi.mocked(isAuthEnabled).mockResolvedValue(true);
+    vi.mocked(verifyRequestSession).mockResolvedValue(true);
+    const operator = guardedSocket('operator');
+    io.connect(operator);
+    expect(await operator.runEvent('logs:subscribe', { processName: 'portos-server', lines: 20 })).toHaveBeenCalled();
+    expect(spawnPm2).toHaveBeenCalledTimes(2);
+    expect(local.emitted).toContainEqual(['logs:subscribed', expect.objectContaining({ processName: 'portos-server' })]);
+    expect(operator.emitted).toContainEqual(['logs:subscribed', expect.objectContaining({ processName: 'portos-server' })]);
+  });
+});
+
+
+describe('voice socket host-control boundary (#19169)', () => {
+  const hostEvents = [
+    ['voice:call:attach', 'call'],
+    ['voice:call:audio', 'call'],
+    ['voice:call:hangup', 'call'],
+    ['voice:capture:start', 'capture'],
+    ['voice:dictation:set', 'voice'],
+    ['voice:output:available', 'voice'],
+    ['voice:output:claim', 'voice'],
+  ];
+  let io;
+  const connectedSocket = ({ local = false, headers = {} } = {}) => {
+    const socket = makeSocket();
+    socket.data.portosLocalConnection = local;
+    socket.handshake.headers = headers;
+    socket.use = (middleware) => { socket.middleware = middleware; };
+    io.connect(socket);
+    return socket;
+  };
+
+  beforeEach(() => {
+    io = makeIo();
+    initSocket(io);
+    vi.mocked(isAuthEnabled).mockResolvedValue(false);
+    vi.mocked(verifyRequestSession).mockResolvedValue(false);
+  });
+
+  afterEach(() => {
+    authEvents.removeAllListeners('sessions:revoked-all');
+    vi.mocked(isAuthEnabled).mockResolvedValue(false);
+    vi.mocked(verifyRequestSession).mockResolvedValue(false);
+  });
+
+  it.each(hostEvents)('stops %s before dispatch for a remote password-free socket', async (event, stage) => {
+    const socket = connectedSocket();
+    const next = vi.fn();
+    await socket.middleware([event], next);
+    expect(next).not.toHaveBeenCalled();
+    expect(socket.emitted).toContainEqual(['voice:error', expect.objectContaining({ stage, code: 'HOST_CONTROL_FORBIDDEN' })]);
+  });
+
+  it.each([['local password-free', false], ['delegated operator session', true]])('dispatches host events for a %s socket', async (_kind, authEnabled) => {
+    const headers = authEnabled ? { authorization: 'Bearer example-session' } : {};
+    vi.mocked(isAuthEnabled).mockResolvedValue(authEnabled);
+    vi.mocked(verifyRequestSession).mockImplementation(async (request) => request.headers === headers);
+    const socket = connectedSocket({ local: !authEnabled, headers });
+    for (const [event] of hostEvents) {
+      const next = vi.fn();
+      await socket.middleware([event], next);
+      expect(next).toHaveBeenCalledExactlyOnceWith();
+    }
+    expect(socket.emitted.some(([event]) => event === 'voice:error')).toBe(false);
+  });
+
+  it('allows owner-scoped cleanup and conversational input through for password-free sockets', async () => {
+    const socket = connectedSocket();
+    for (const event of ['voice:call:detach', 'voice:capture:stop', 'voice:text']) {
+      const next = vi.fn();
+      await socket.middleware([event], next);
+      expect(next).toHaveBeenCalledExactlyOnceWith();
+    }
   });
 });

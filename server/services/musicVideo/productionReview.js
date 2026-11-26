@@ -12,7 +12,7 @@ import { overlayTextReport } from './overlayText.js';
 import { musicVideoAspect } from '../../lib/musicVideo/musicVideoAspect.js';
 import { hasPlayableLyricWordTimings } from './timedText.js';
 import { cuesSungWithin, lyricAnchorOnset } from '../../lib/musicVideo/musicVideoLyricAnchors.js';
-import { isLayeredComposition, sceneVisualLayer } from '../../lib/musicVideo/musicVideoLayers.js';
+import { isLayeredComposition, sceneTakeProblems, sceneVisualLayer } from '../../lib/musicVideo/musicVideoLayers.js';
 import { coldOpenScenes, songScenes } from '../../lib/musicVideo/musicVideoColdOpen.js';
 import { CHARACTER_REFERENCE_CHANGED, musicVideoSceneCharacterReferenceTakes } from '../../lib/musicVideo/musicVideoCharacterReferenceAge.js';
 const artifact = (project, id) => (project.devArtifacts || []).find(a => a.id === id && !a.deleted);
@@ -808,11 +808,9 @@ export function productionReadiness(project) {
   // previously completed per-shot reviews valid for projects saved before this change.
   const storyboardApproved = !boardProblems.length && (storyboardApprovalCurrent(review.approvals?.storyboard, basis)
     || (byShot && scenes.length > 0 && !unlocked.length));
-  const selectedTakeMarkedBad = (project.scenes || []).some((s) => s.selectedTakeMarkedBad || (project.assetMarks && (
-    (s.referenceImageId && project.assetMarks[`image:${s.referenceImageId}`] === 'bad') ||
-    (s.endImageId && project.assetMarks[`image:${s.endImageId}`] === 'bad') ||
-    (s.videoHistoryId && project.assetMarks[`video:${s.videoHistoryId}`] === 'bad')
-  )));
+  const mediaScenes = project.scenes || [];
+  const takeContext = { layered: isLayeredComposition(project), scenes: mediaScenes, assetMarks: project.assetMarks };
+  const selectedTakeMarkedBad = mediaScenes.some(scene => sceneTakeProblems(scene, takeContext).bad);
   const camera = storyboardCameraReport(scenes, documentShots ? null : boardStoryboard(project));
   const proof = proofReadiness(project, review, basis, storyboardApproved);
   return { basis, inputs, alignment: { basis: alignmentBasis, status: alignmentStatus(draft, alignmentVerified) }, documentShotImport: { documentDirectory: project.composition?.document?.directory || null, audioBasis: alignmentBasis }, art: { approved: artApproved, ...problemFields(artProblems), stale: artApproved ? null : staleApproval(project, 'art', basis.art, inputs) },

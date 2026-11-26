@@ -853,28 +853,21 @@ export default function ModelCapabilityTests({ report, loading, error, onReload,
 
       {report && <CapabilityRecommendations report={report} onOpen={openRecommended} stale={Boolean(error)} />}
 
-      {/* A runtime PortOS could not reach. Every line carries the fix: for the
-          runtimes PortOS can start, a link to the page that starts them; for the
-          ones it cannot (vLLM and SGLang are containers the user runs), the
-          docs. When PortOS listed the weights on disk anyway, it says so — those
-          models ARE in the table below, just not runnable yet. */}
       {report?.listErrors?.length > 0 && (
         <div className="border border-port-warning/30 rounded p-2.5 space-y-1.5" role="alert">
           {report.listErrors.map((runtime) => (
             <p key={runtime.id} className="text-[11px] text-gray-400 flex items-start gap-1.5 leading-snug">
               <AlertTriangle size={12} className="mt-0.5 shrink-0 text-port-warning" />
               <span>
-                <span className="text-gray-300">{runtime.label}</span>{' '}
-                {runtime.offline ? 'is not running' : 'could not be listed'}
-                {runtime.recovered > 0
-                  ? ` — showing the ${runtime.recovered} model${runtime.recovered === 1 ? '' : 's'} PortOS has on disk for it. Start it to run anything against them.`
-                  : ' — any models it serves are missing from this table.'}
-                {runtime.manageUrl
-                  ? <> <Link to={runtime.manageUrl} className="text-port-accent hover:underline">Start {runtime.label}</Link></>
-                  : (runtime.docsUrl && <> <a href={runtime.docsUrl} target="_blank" rel="noreferrer" className="text-port-accent hover:underline">How to start it</a></>)}
+                Could not list {runtime.label} models: {runtime.error}.
+                {runtime.recovered > 0 && ` Showing ${runtime.recovered} cached model${runtime.recovered === 1 ? '' : 's'}.`}
+                {runtime.docsUrl && !runtime.manageUrl && (
+                  <> <a href={runtime.docsUrl} target="_blank" rel="noreferrer" className="text-port-accent hover:underline">Runtime documentation</a></>
+                )}
               </span>
             </p>
           ))}
+          <Link to="/models/llms-runtimes" className="text-[11px] text-port-accent hover:underline">View runtimes</Link>
         </div>
       )}
 

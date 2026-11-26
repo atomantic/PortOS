@@ -1,3 +1,4 @@
+// @vitest-environment node
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 
 // Only the transport is stubbed: the assertion is the URL each wrapper builds.

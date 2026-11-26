@@ -9,7 +9,7 @@
  */
 
 import { describe, it, expect } from 'vitest';
-import { isAgentHandoff, isQueuedContinuation, agentHandoffReason, isTaskDeliveryComplete, resolveTaskOutcome } from './agentOutcome.js';
+import { isAgentHandoff, isQueuedContinuation, agentHandoffReason, isTaskDeliveryComplete, resolveTaskOutcome, normalizeTaskOutcome } from './agentOutcome.js';
 
 // The record `resumeAgent` retires when Relaunch swaps providers mid-run: it
 // carries `success: false` and a summary in `error`, because the pause/requeue
@@ -138,4 +138,15 @@ describe('isTaskDeliveryComplete', () => {
     agent.metadata.releaseSynchronization.status = 'verified';
     expect(isTaskDeliveryComplete(agent)).toBe(true);
   });
+});
+
+it('keeps the known workflow approval code through delivery normalization without retaining arbitrary codes', () => {
+  const reported = {
+    status: 'blocked',
+    reason: 'GitHub rejected the workflow push.',
+    recovery: { mode: 'approval', options: ['Refresh the assigned credential', 'Preserve the worktree'] },
+  };
+  expect(normalizeTaskOutcome({ ...reported, recovery: { ...reported.recovery, code: 'github-workflow-scope' } }))
+    .toMatchObject({ recovery: { mode: 'approval', code: 'github-workflow-scope' } });
+  expect(normalizeTaskOutcome({ ...reported, recovery: { ...reported.recovery, code: 'irrelevant' } })).toEqual(reported);
 });

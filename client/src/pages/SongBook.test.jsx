@@ -48,8 +48,10 @@ const LocationProbe = () => {
 const renderPage = async (path = '/songbook') => {
   const result = render(
     <MemoryRouter initialEntries={[path]}>
-      <LocationProbe />
-      <Routes><Route path="/songbook" element={<SongBook />} /></Routes>
+      <Routes>
+        <Route path="/songbook" element={<SongBook />} />
+        <Route path="/songbook/:id" element={<LocationProbe />} />
+      </Routes>
     </MemoryRouter>,
   );
   await act(async () => {});

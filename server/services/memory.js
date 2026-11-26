@@ -13,8 +13,7 @@
 
 import { ServerError } from '../lib/errorHandler.js';
 import { v4 as uuidv4 } from '../lib/uuid.js';
-import { PERSISTENT_MIND_ID } from '../lib/persistent/persistentMindTrajectory.js';
-import { persistentMindMemoryProtection, existingPersistentMindReview, createPersistentMindReview, mergePersistentMindReview, createPersistentMindReviewOrigin } from '../lib/persistent/persistentMindMemory.js';
+import { persistentMindMemoryProtection, fadedPersistentMindMemoryImportance, existingPersistentMindReview, createPersistentMindReview, mergePersistentMindReview, createPersistentMindReviewOrigin } from '../lib/persistent/persistentMindMemory.js';
 import { DEFAULT_MEMORY_LINK_TYPE, isSymmetricMemoryLinkType } from '../lib/memoryLinkTypes.js';
 import { cosEvents } from './cos/cosEvents.js';
 import { findTopK, findAboveThreshold, clusterBySimilarity } from '../lib/vectorMath.js';
@@ -118,7 +117,7 @@ export async function createMemory(data, embedding = null) {
       source: memory.sourceAppId
     }).catch(err => console.error(`⚠️ BM25 index error: ${err.message}`));
 
-    console.log(`🧠 Memory created: ${memory.type} - ${memory.summary.substring(0, 50)}...`);
+    console.log(`🧠 Memory created: ${memory.id} (${memory.type})`);
     cosEvents.emit('memory:created', { id, type: memory.type, summary: memory.summary });
 
     return memory;
@@ -141,6 +140,18 @@ function memoryIdList(ids) {
     unique.push(id);
   }
   return unique;
+}
+
+// Hold the purge/update lock through every secondary write derived from these records.
+export function withPendingMemories(ids, publish) {
+  return withMemoryLock(async () => {
+    const pending = [];
+    for (const id of memoryIdList(ids)) {
+      const memory = await loadMemory(id, { strict: true });
+      if (memory?.status === 'pending_approval') pending.push(memory);
+    }
+    return publish(pending);
+  });
 }
 
 /** One locked pass. The stored record keeps its embedding; the default return does not. */
@@ -347,22 +358,15 @@ export async function archiveMemory(id) {
  */
 export async function purgeMemory(id) {
   return withMemoryLock(async () => {
+    const memory = await loadMemory(id);
     await deleteMemoryFiles(id);
-
-    // Remove from index
-    const index = await loadIndex();
-    index.memories = index.memories.filter(m => m.id !== id);
-    index.count = index.memories.length;
-    await saveIndex(index);
-
-    // Remove embedding
-    const embeddings = await loadEmbeddings();
-    delete embeddings.vectors[id];
-    await saveEmbeddings(embeddings);
-
-    // Remove from BM25 index
-    memoryBM25.removeMemoryFromIndex(id)
-      .catch(err => console.error(`⚠️ BM25 remove error: ${err.message}`));
+    if (memory?.status === 'pending_approval') {
+      await decrementAgentPendingApproval(memory.sourceAgentId);
+    }
+    await removeMemoryFromIndexes(id);
+    const { removeMemoryApprovalItems } = await import('./review.js');
+    await removeMemoryApprovalItems(id);
+    await notifications.removeByMetadata('memoryId', id);
 
     console.log(`🧠 Memory purged: ${id}`);
     cosEvents.emit('memory:deleted', { id, hard: true });
@@ -418,26 +422,8 @@ export async function rejectMemory(id) {
       return { success: false, error: 'Memory is not pending approval' };
     }
 
-    // Store sourceAgentId before deletion
-    const sourceAgentId = memory.sourceAgentId;
-
-    // Hard delete - remove files
     await deleteMemoryFiles(id);
-
-    // Remove from index
-    const index = await loadIndex();
-    index.memories = index.memories.filter(m => m.id !== id);
-    index.count = index.memories.length;
-    await saveIndex(index);
-
-    // Remove embedding
-    const embeddings = await loadEmbeddings();
-    delete embeddings.vectors[id];
-    await saveEmbeddings(embeddings);
-
-    // Remove from BM25 index
-    memoryBM25.removeMemoryFromIndex(id)
-      .catch(err => console.error(`⚠️ BM25 remove error: ${err.message}`));
+    await removeMemoryFromIndexes(id);
 
     console.log(`🧠 Memory rejected: ${id}`);
     cosEvents.emit('memory:rejected', { id });
@@ -446,10 +432,24 @@ export async function rejectMemory(id) {
     await notifications.removeByMetadata('memoryId', id);
 
     // Decrement agent's pendingApproval count
-    await decrementAgentPendingApproval(sourceAgentId);
+    await decrementAgentPendingApproval(memory.sourceAgentId);
 
     return { success: true, id };
   });
+}
+
+// The caller holds the memory lock while updating the file-backed indexes.
+async function removeMemoryFromIndexes(id) {
+  const index = await loadIndex();
+  index.memories = index.memories.filter(m => m.id !== id);
+  index.count = index.memories.length;
+  await saveIndex(index);
+
+  const embeddings = await loadEmbeddings();
+  delete embeddings.vectors[id];
+  await saveEmbeddings(embeddings);
+
+  await memoryBM25.removeMemoryFromIndex(id);
 }
 
 /**
@@ -469,13 +469,11 @@ export async function searchMemories(queryEmbedding, options = {}) {
 
   const similar = findAboveThreshold(queryEmbedding, embeddings.vectors, minRelevance);
 
-  // Filter by additional options
-  let results = similar.slice(0, limit);
-
-  // Get memory metadata from index
   const indexMap = new Map(index.memories.map(m => [m.id, m]));
 
-  results = results
+  // Privacy-scoped searches must fill their limit from eligible records.
+  const candidates = options.excludePersistentMind ? similar : similar.slice(0, limit);
+  const results = candidates
     .map(r => {
       const meta = indexMap.get(r.id);
       if (!passesSearchMetaFilters(meta, options)) return null;
@@ -483,7 +481,8 @@ export async function searchMemories(queryEmbedding, options = {}) {
     })
     .filter(Boolean);
 
-  return { total: results.length, memories: results };
+  const memories = options.excludePersistentMind ? results.slice(0, limit) : results;
+  return { total: memories.length, memories };
 }
 
 /**
@@ -856,51 +855,6 @@ export async function consolidateMemories(threshold = 0.9, dryRun = false) {
 }
 
 /**
- * Apply importance decay to old memories
- */
-export async function applyDecay(decayRate = 0.01) {
-  const index = await loadIndex();
-  const now = Date.now();
-  let updated = 0;
-
-  // Filter active memories first
-  const activeMemories = index.memories.filter(m => m.status === 'active' && persistentMindMemoryProtection(m) === 'standard');
-
-  // Batch load all active memories to avoid N+1 query pattern
-  const memoryLoadPromises = activeMemories.map(m => loadMemory(m.id));
-  const loadedMemories = await Promise.all(memoryLoadPromises);
-
-  // Process each loaded memory
-  for (let i = 0; i < activeMemories.length; i++) {
-    const meta = activeMemories[i];
-    const memory = loadedMemories[i];
-    if (!memory || persistentMindMemoryProtection(memory) !== 'standard') continue;
-
-    const ageInDays = (now - new Date(memory.createdAt).getTime()) / (1000 * 60 * 60 * 24);
-    const accessRecency = memory.lastAccessed
-      ? (now - new Date(memory.lastAccessed).getTime()) / (1000 * 60 * 60 * 24)
-      : ageInDays;
-
-    // Decay formula: importance = baseImportance * (1 - decayRate * sqrt(age)) + accessBoost
-    const accessBoost = Math.max(0, 0.1 - accessRecency * 0.001);
-    const newImportance = Math.max(0.1, memory.importance * (1 - decayRate * Math.sqrt(ageInDays)) + accessBoost);
-
-    // Archive if importance falls below threshold and old enough
-    // Mind-owned memories are archived only by the Mind's own review, never by background decay.
-    if (newImportance < 0.15 && ageInDays > 30 && memory.sourceAgentId !== PERSISTENT_MIND_ID) {
-      await updateMemory(meta.id, { status: 'archived', archivedReason: 'decay' });
-      updated++;
-    } else if (Math.abs(newImportance - memory.importance) > 0.01) {
-      await updateMemory(meta.id, { importance: newImportance });
-      updated++;
-    }
-  }
-
-  console.log(`🧠 Decay applied to ${updated} memories`);
-  return { updated };
-}
-
-/**
  * Clear expired memories
  */
 export async function clearExpired() {
@@ -1018,17 +972,19 @@ export function reviewMindMemory(input, provenance) {
 
 /** Filter the index before loading source prose; no access or retention writes. */
 export async function selectMindMemoryForReview(mindId) {
-  const cutoff = Date.now() - 30 * 86400000;
+  const now = Date.now();
+  const cutoff = now - 30 * 86400000;
   const index = await loadIndex();
-  const candidates = index.memories.filter(meta => meta.sourceAgentId === mindId
-    && meta.status === 'active' && meta.importance < 0.15
-    && Date.parse(meta.createdAt) < cutoff && persistentMindMemoryProtection(meta) === 'standard')
+  const isCandidate = memory => memory?.status === 'active'
+    && memory.sourceAgentId === mindId
+    && Date.parse(memory.createdAt) < cutoff
+    && persistentMindMemoryProtection(memory) === 'standard';
+  // Access timestamps live in the full record and can change without an index write.
+  const candidates = index.memories.filter(isCandidate)
     .sort((a, b) => Date.parse(a.createdAt) - Date.parse(b.createdAt) || a.id.localeCompare(b.id));
   for (const meta of candidates) {
     const source = await loadMemory(meta.id);
-    if (source?.sourceAgentId === mindId && source.status === 'active'
-        && source.importance < 0.15 && Date.parse(source.createdAt) < cutoff
-        && persistentMindMemoryProtection(source) === 'standard'
+    if (isCandidate(source) && fadedPersistentMindMemoryImportance(source, now) < 0.15
         && !(source.lastReview?.expectedVersion === (source.version ?? 1) && source.lastReview?.latestVerdict)) return source;
   }
   return null;

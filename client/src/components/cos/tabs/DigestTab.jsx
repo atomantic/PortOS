@@ -328,6 +328,8 @@ export default function DigestTab() {
           {currentDigest.insights?.length > 0 && (
             <div>
               <button
+                type="button"
+                aria-expanded={expandedSections.insights}
                 onClick={() => toggleSection('insights')}
                 className="flex items-center gap-2 w-full text-left mb-3"
               >
@@ -361,6 +363,8 @@ export default function DigestTab() {
           {currentDigest.accomplishments?.length > 0 && (
             <div>
               <button
+                type="button"
+                aria-expanded={expandedSections.accomplishments}
                 onClick={() => toggleSection('accomplishments')}
                 className="flex items-center gap-2 w-full text-left mb-3"
               >
@@ -393,6 +397,8 @@ export default function DigestTab() {
           {currentDigest.byTaskType?.length > 0 && (
             <div>
               <button
+                type="button"
+                aria-expanded={expandedSections.byTaskType}
                 onClick={() => toggleSection('byTaskType')}
                 className="flex items-center gap-2 w-full text-left mb-3"
               >
@@ -404,18 +410,19 @@ export default function DigestTab() {
               {expandedSections.byTaskType && (
                 <div className="bg-port-card border border-port-border rounded-lg overflow-x-auto">
                   <table className="w-full min-w-[460px] text-sm">
+                    <caption className="sr-only">By Task Type</caption>
                     <thead className="bg-port-bg">
                       <tr>
-                        <th className="text-left p-2 text-gray-500 font-medium">Type</th>
-                        <th className="text-right p-2 text-gray-500 font-medium">Done</th>
-                        <th className="text-right p-2 text-gray-500 font-medium">Rate</th>
-                        <th className="text-right p-2 text-gray-500 font-medium">Time</th>
+                        <th scope="col" className="text-left p-2 text-gray-500 font-medium">Type</th>
+                        <th scope="col" className="text-right p-2 text-gray-500 font-medium">Done</th>
+                        <th scope="col" className="text-right p-2 text-gray-500 font-medium">Rate</th>
+                        <th scope="col" className="text-right p-2 text-gray-500 font-medium">Time</th>
                       </tr>
                     </thead>
                     <tbody>
                       {currentDigest.byTaskType.map((item, idx) => (
                         <tr key={idx} className="border-t border-port-border">
-                          <td className="p-2 text-gray-300 truncate max-w-[150px]">{item.type}</td>
+                          <th scope="row" className="p-2 text-gray-300 truncate max-w-[150px] text-left font-normal">{item.type}</th>
                           <td className="p-2 text-right text-white font-mono">{item.completed}</td>
                           <td className={`p-2 text-right font-mono ${
                             item.successRate >= 80 ? 'text-port-success' :
@@ -439,6 +446,8 @@ export default function DigestTab() {
           {currentDigest.issues?.length > 0 && (
             <div>
               <button
+                type="button"
+                aria-expanded={expandedSections.issues}
                 onClick={() => toggleSection('issues')}
                 className="flex items-center gap-2 w-full text-left mb-3"
               >
@@ -448,24 +457,26 @@ export default function DigestTab() {
                 <span className="text-xs text-gray-500">({currentDigest.issues.length})</span>
               </button>
               {expandedSections.issues && (
-                <div className="space-y-2">
+                <ul className="space-y-2" role="list">
                   {currentDigest.issues.map((issue, idx) => (
-                    <Banner
-                      key={idx}
-                      tone="error"
-                      size="md"
-                      align="center"
-                      actions={<span className="text-xs text-gray-500">{issue.count}x</span>}
-                    >
-                      <span className="font-medium">{issue.error}</span>
-                      {issue.tasks?.length > 0 && (
-                        <div className="text-xs text-gray-500 mt-2">
-                          Affected: {issue.tasks.map(t => t.description || t.id).join(', ')}
-                        </div>
-                      )}
-                    </Banner>
+                    <li key={idx}>
+                      <Banner
+                        role={undefined}
+                        tone="error"
+                        size="md"
+                        align="center"
+                        actions={<span className="text-xs text-gray-500">{issue.count}x</span>}
+                      >
+                        <span className="font-medium">{issue.error}</span>
+                        {issue.tasks?.length > 0 && (
+                          <div className="text-xs text-gray-500 mt-2">
+                            Affected: {issue.tasks.map(t => t.description || t.id).join(', ')}
+                          </div>
+                        )}
+                      </Banner>
+                    </li>
                   ))}
-                </div>
+                </ul>
               )}
             </div>
           )}

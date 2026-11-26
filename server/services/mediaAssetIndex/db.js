@@ -220,10 +220,13 @@ const videoFacetSql = field => `CASE WHEN jsonb_typeof(video.data->'${field}') =
  * from the record, and the gallery passes the per-revision cache in
  * videoGen/history.js so a keystroke does not re-serialize the history.
  *
- * `compact` (#9676) projects card/filter fields of either kind, so neither the
- * bound parameter nor a materialized CTE holds full detail bodies.
+ * `compact` (#9676) projects card/filter fields of either kind.
+ * `deferImageData` keeps image payloads out of the mixed page's materialized
+ * rows. Only optional filename and lineage predicates read them at the source.
  */
-function assetSource(params, videos, { materialized = false, compact = false, localImages, q = '', searchTextOf } = {}) {
+function assetSource(params, videos, {
+  deferImageData = false, filename, cleanedFrom, compact = false, localImages, q = '', searchTextOf,
+} = {}) {
   const scope = [];
   if (localImages !== undefined) {
     params.push(localImages);
@@ -245,19 +248,26 @@ function assetSource(params, videos, { materialized = false, compact = false, lo
   const rows = params.length;
   params.push(tokens.join(' '));
   const text = params.length;
+  const needsData = !deferImageData || filename !== undefined || cleanedFrom !== undefined;
+  const imageData = needsData ? ', data' : '';
+  const videoData = needsData ? ', video.data' : '';
+  const imagePageFields = deferImageData ? ', NULL::jsonb AS video_data, TRUE AS has_cover' : '';
+  const videoPageFields = deferImageData ? ", video.data, NULLIF(video.data->>'thumbnail', '') IS NOT NULL" : '';
   // Videos arrive already compact; only index rows are projected in SQL.
-  const data = compact ? `CASE WHEN kind = 'image' THEN ${compactSourceSql('data')} ELSE data END` : 'data';
+  const projection = deferImageData ? 'video_data, has_cover' : compact
+    ? `CASE WHEN kind = 'image' THEN ${compactSourceSql('data')} ELSE data END AS data`
+    : 'data';
   return clauses => ({
     data: 'data',
     from: 'gallery_assets',
-    cte: `WITH gallery_assets AS ${materialized ? 'MATERIALIZED ' : ''}(
-      SELECT media_key, kind, ref, ${data} AS data, created_at, is_hidden FROM (
-        SELECT media_key, kind, ref, data, created_at, search_text, is_hidden, universe_id, entry_category, entry_kind
+    cte: `WITH gallery_assets AS ${deferImageData ? 'MATERIALIZED ' : ''}(
+      SELECT media_key, kind, ref, created_at, is_hidden, ${projection} FROM (
+        SELECT media_key, kind, ref, created_at, search_text, is_hidden, universe_id, entry_category, entry_kind${imageData}${imagePageFields}
         FROM media_assets WHERE ${scope.join(' AND ')}
         UNION ALL
-        SELECT 'video:' || (video.data->>'id'), 'video', video.data->>'id', video.data, video.created_at,
+        SELECT 'video:' || (video.data->>'id'), 'video', video.data->>'id', video.created_at,
           $${text}::text, COALESCE(video.data->>'hidden', 'false') = 'true',
-          ${videoFacetSql('universeId')}, ${videoFacetSql('entryCategory')}, ${videoFacetSql('entryKind')}
+          ${videoFacetSql('universeId')}, ${videoFacetSql('entryCategory')}, ${videoFacetSql('entryKind')}${videoData}${videoPageFields}
         FROM (SELECT value->'data' AS data, (value->>'createdAt')::timestamptz AS created_at
           FROM jsonb_array_elements($${rows}::jsonb)) AS video
       ) AS source${whereOf(clauses)}
@@ -317,32 +327,44 @@ export async function countAssets({ videos, localImages, searchTextOf, ...filter
 
 /** One snapshot expansion serves the mixed page and every summary count. */
 export async function listMixedGalleryPage({
-  videos = [], limit = 60, offset = 0, orderedKeys, cover, countMediaKeys, compact = false, localImages, searchTextOf, ...filters
+  videos = [], limit = 60, offset = 0, orderedKeys, cover, countMediaKeys, compact = false,
+  localImages, searchTextOf, filename, cleanedFrom, ...filters
 } = {}) {
   const params = [];
-  const source = assetSource(params, videos, { materialized: true, compact, localImages, q: filters.q, searchTextOf });
-  // The page and all four aggregates share the search and facet predicates, so
-  // they run once per row at the source; the rest differ per consumer.
-  const { cte, from } = source(sharedClauses(filters, params));
+  const source = assetSource(params, videos, { deferImageData: true, filename, cleanedFrom, compact, localImages, q: filters.q, searchTextOf });
+  // Search, facets, filename, and lineage apply to both the page and all counts.
+  const { cte, from } = source([
+    ...sharedClauses(filters, params),
+    ...assetFilter({ filename, cleanedFrom }, params, { shared: false }),
+  ]);
   const predicate = options => assetFilter(options, params, { shared: false }).join(' AND ') || 'TRUE';
   const totalFilter = predicate(filters);
   const hiddenFilter = predicate({ ...filters, hidden: true });
   // Chips follow search/collection/visibility, before kind and favorites.
   const facetFilter = predicate({ ...filters, kind: undefined, mediaKeys: countMediaKeys });
-  const pageFilter = predicate({ ...filters, cover });
-  let order = 'created_at DESC, media_key ASC';
+  const pageFilter = predicate(filters);
+  let order = 'page.created_at DESC, page.media_key ASC';
   if (orderedKeys) {
     params.push(orderedKeys);
-    order = `array_position($${params.length}::text[], media_key), media_key ASC`;
+    order = `array_position($${params.length}::text[], page.media_key), page.media_key ASC`;
   }
   params.push(limit, offset);
+  const imageData = compact ? compactSourceSql('ma.data') : 'ma.data';
+  // The key is unique. LIMIT 1 keeps the lookup correlated to each page row
+  // so the planner cannot build a hash table of full gallery payloads.
   const result = await query(`${cte}, gallery_page AS (
-      SELECT * FROM ${from} WHERE ${pageFilter}
+      SELECT * FROM ${from} AS page WHERE ${pageFilter}${cover ? ' AND has_cover' : ''}
       ORDER BY ${order} LIMIT $${params.length - 1} OFFSET $${params.length}
     )
     SELECT
-      (SELECT COALESCE(jsonb_agg(jsonb_build_object('kind', kind, 'data', data)
-        ORDER BY ${order}), '[]'::jsonb) FROM gallery_page) AS items,
+      (SELECT COALESCE(jsonb_agg(jsonb_build_object('kind', page.kind, 'data',
+        CASE WHEN page.kind = 'image' THEN image.data ELSE page.video_data END)
+        ORDER BY ${order}), '[]'::jsonb)
+        FROM gallery_page AS page LEFT JOIN LATERAL (
+          SELECT ${imageData} AS data FROM media_assets AS ma
+          WHERE ma.media_key = page.media_key AND page.kind = 'image'
+          LIMIT 1
+        ) AS image ON TRUE) AS items,
       COUNT(*) FILTER (WHERE ${totalFilter}) AS total,
       COUNT(*) FILTER (WHERE ${hiddenFilter}) AS "hiddenTotal",
       COUNT(*) FILTER (WHERE (${facetFilter}) AND kind = 'image') AS image,

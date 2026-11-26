@@ -26,14 +26,96 @@ beforeEach(() => {
 });
 
 describe('memory prompt reference boundary (#9040)', () => {
-  it('keeps the notice and complete fence inside the configured budget for a boundary-sized memory', async () => {
-    vi.mocked(peekMemories).mockResolvedValueOnce([{ id: 'example-memory', type: 'preference', content: 'x'.repeat(7990), importance: 1 }]);
-    const text = await getMemorySection({}, { maxTokens: 2000 });
+  it('excludes private memories after hydration, before budgeting or recording access', async () => {
+    const privateMemories = [
+      { id: 'owned', sourceAgentId: 'cos-persistent-mind' },
+      { id: 'name', tags: ['mind:chosen-name'] },
+      { id: 'identity', tags: ['mind:core-identity'] },
+      { id: 'important', tags: ['mind:important'] },
+      { id: 'continuation', tags: ['mind:continuation-note'] },
+    ];
+    vi.mocked(generateQueryEmbedding).mockResolvedValue([0.1]);
+    vi.mocked(hybridSearchMemories).mockResolvedValue({ memories: [{ id: 'owned' }, { id: 'name' }] });
+    vi.mocked(getMemories)
+      .mockResolvedValueOnce({ memories: [{ id: 'identity' }, { id: 'important' }] })
+      .mockResolvedValueOnce({ memories: [{ id: 'continuation' }, { id: 'shared' }] });
+    vi.mocked(peekMemories).mockResolvedValue([
+      ...privateMemories.map(memory => ({ ...memory, type: 'fact', content: 'Private context', importance: 1 })),
+      { id: 'shared', type: 'fact', content: 'Shared context', importance: 1 },
+    ]);
+
+    const onInjected = vi.fn();
+    const text = await getMemorySection({ description: 'query', metadata: { app: 'demo' } }, { onInjected });
+    expect(hybridSearchMemories).toHaveBeenCalledWith('query', [0.1], expect.objectContaining({ excludePersistentMind: true }));
+    for (const call of vi.mocked(getMemories).mock.calls) {
+      expect(call[0].excludePersistentMind).toBe(true);
+    }
+    expect(text).toContain('Shared context');
+    expect(text).not.toContain('Private context');
+    expect(onInjected).toHaveBeenCalledExactlyOnceWith([{ id: 'shared', version: null, relevance: 0.8 }]);
+    expect(recordMemoryAccess).toHaveBeenCalledExactlyOnceWith(['shared']);
+  });
+
+  it('counts a partly visible memory and omits a memory lost to the prompt cap', async () => {
+    const memories = [
+      { id: 'partial', type: 'preference', content: 'x'.repeat(7988), importance: 1 },
+      { id: 'omitted', type: 'preference', content: 'skipped', importance: 0.9 },
+    ];
+    vi.mocked(getMemories).mockResolvedValue({ memories });
+    vi.mocked(peekMemories).mockResolvedValue(memories);
+    const onInjected = vi.fn();
+
+    const text = await getMemorySection({}, { maxTokens: 2000, onInjected });
+
     expect(text.length).toBeLessThanOrEqual(8000);
     expect(text).toContain(UNTRUSTED_REFERENCE_NOTICE);
+    expect(text).toContain('- xxx');
     expect(text).toContain('[truncated]');
+    expect(text).not.toContain(memories[0].content);
+    expect(text).not.toContain('skipped');
     expect(text.endsWith('```')).toBe(true);
+    expect(onInjected).toHaveBeenCalledExactlyOnceWith([{ id: 'partial', version: null, relevance: 1 }]);
+    expect(recordMemoryAccess).toHaveBeenCalledExactlyOnceWith(['partial']);
   });
+
+  it('omits a memory whose list prefix and indentation are visible without its content', async () => {
+    const memories = [
+      { id: 'first', type: 'preference', content: 'x'.repeat(7732), importance: 1 },
+      { id: 'omitted', type: 'preference', content: ' '.repeat(256) + 'skipped', importance: 0.9 },
+    ];
+    vi.mocked(getMemories).mockResolvedValue({ memories });
+    vi.mocked(peekMemories).mockResolvedValue(memories);
+    const onInjected = vi.fn();
+
+    const text = await getMemorySection({}, { maxTokens: 2000, onInjected });
+
+    expect(text).toContain("\n-  ");
+    expect(text).not.toContain('skipped');
+    expect(onInjected).toHaveBeenCalledExactlyOnceWith([{ id: 'first', version: null, relevance: 1 }]);
+    expect(recordMemoryAccess).toHaveBeenCalledExactlyOnceWith(['first']);
+  });
+
+  it('counts memories made visible by neutralizing a long fence-like run', async () => {
+    const memories = [
+      { id: 'first', type: 'preference', content: 'x'.repeat(7732) + '`'.repeat(256), importance: 1 },
+      { id: 'second', type: 'preference', content: 'visible', importance: 0.9 },
+    ];
+    vi.mocked(getMemories).mockResolvedValue({ memories });
+    vi.mocked(peekMemories).mockResolvedValue(memories);
+    const onInjected = vi.fn();
+
+    const text = await getMemorySection({}, { maxTokens: 2000, onInjected });
+
+    expect(text.length).toBeLessThanOrEqual(8000);
+    expect(text).toContain("\n- xxx");
+    expect(text).toContain("'''\n- visible\n```");
+    expect(onInjected).toHaveBeenCalledExactlyOnceWith([
+      { id: 'first', version: null, relevance: 1 },
+      { id: 'second', version: null, relevance: 0.9 },
+    ]);
+    expect(recordMemoryAccess).toHaveBeenCalledExactlyOnceWith(['first', 'second']);
+  });
+
   it('fences stored preferences and neutralizes a forged closing delimiter', async () => {
     const text = await getMemorySection({});
     expect(text).toContain(UNTRUSTED_REFERENCE_NOTICE);

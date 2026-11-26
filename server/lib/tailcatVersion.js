@@ -9,6 +9,9 @@ import { compareSemver } from './versionUtils.js';
 /** Lowest Tailcat release PortOS will use for managed forward/serve. */
 export const MIN_TAILCAT_VERSION = '0.6.0';
 
+/** Reviewed upstream release used by the Go install fallback. */
+export const PINNED_TAILCAT_VERSION = '0.6.0';
+
 /**
  * Parse a `tailcat version` banner into a bare semver string, or `null`: accepts `v0.6.0` (typical), bare `0.6.0`, and banners embedding the token; the leading `v` is stripped so the result suits {@link compareSemver}.
  *
@@ -45,9 +48,10 @@ export function tailcatVersionTooOldMessage({
   platform = process.platform,
 } = {}) {
   const found = version ? `found ${version}` : 'could not determine version';
+  const goInstall = `\`go install github.com/tailscale/tailcat/cmd/tailcat@v${PINNED_TAILCAT_VERSION}\``;
   const upgrade = platform === 'darwin'
-    ? '`brew upgrade tailcat` (or `brew install tailcat` / `go install github.com/tailscale/tailcat/cmd/tailcat@latest`)'
-    : '`go install github.com/tailscale/tailcat/cmd/tailcat@latest` or a release binary from https://github.com/tailscale/tailcat/releases';
+    ? `\`brew upgrade tailcat\` (or \`brew install tailcat\` / ${goInstall})`
+    : `${goInstall} or a release binary from https://github.com/tailscale/tailcat/releases`;
   return (
     `tailcat ${MIN_TAILCAT_VERSION}+ is required for PSK-compatible forward/serve (${found}). `
     + `Upgrade with ${upgrade}, then retry. Do not set --psk=false to paper over an old client.`

@@ -68,11 +68,26 @@ export async function attributeMtplxRequest({ logPath, startedAtMs, endedAtMs, m
   const from = startedAtMs - CLOCK_SLACK_MS;
   const to = endedAtMs + LATE_GRACE_MS;
   const inWindow = text.split('\n').map(project).filter((r) => r && r.loggedAtMs >= from && r.loggedAtMs <= to);
-  const [request] = inWindow;
-  if (inWindow.length !== 1) return { status: 'unattributed', reason: inWindow.length ? 'concurrent requests' : 'no request in window' };
-  if (!request.cancelled) return { status: 'unattributed', reason: 'request was not cancelled by the run' };
-  // A request that began before the run did is another client's, still ending inside the window.
-  if (request.startedAtMs !== null && request.startedAtMs < from) return { status: 'unattributed', reason: 'request began before the run' };
-  if (model && request.model && request.model !== model) return { status: 'unattributed', reason: 'request names a different model' };
-  return { status: 'matched', requestId: request.requestId, completionTokens: request.completionTokens };
+  if (!inWindow.length) return { status: 'unattributed', reason: 'no request in window' };
+  // The preceding plan can finish just inside the clock slack even though it
+  // began well before this page request. Unknown starts remain candidates.
+  const candidates = inWindow.filter((r) => r.startedAtMs === null || r.startedAtMs >= from);
+  const [first] = candidates;
+  if (!first) return { status: 'unattributed', reason: 'request began before the run' };
+  // MTPLX can emit the stream cancellation and a separate metrics summary
+  // with the same request id. Distinct or unidentified rows still cannot
+  // prove this caller owned the request.
+  if (candidates.length > 1 && (!first.requestId || candidates.some((r) => r.requestId !== first.requestId))) {
+    return { status: 'unattributed', reason: 'concurrent requests' };
+  }
+  // Conflicting start evidence on the same id cannot authorize attribution.
+  if (first.requestId && inWindow.some((r) => r.requestId === first.requestId && r.startedAtMs !== null && r.startedAtMs < from)) {
+    return { status: 'unattributed', reason: 'request began before the run' };
+  }
+  if (!candidates.some((r) => r.cancelled)) return { status: 'unattributed', reason: 'request was not cancelled by the run' };
+  const models = new Set(candidates.map((r) => r.model).filter(Boolean));
+  if (models.size > 1 || (model && models.size && !models.has(model))) {
+    return { status: 'unattributed', reason: 'request names a different model' };
+  }
+  return { status: 'matched', requestId: first.requestId, completionTokens: Math.max(...candidates.map((r) => r.completionTokens)) };
 }

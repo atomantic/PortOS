@@ -1302,13 +1302,38 @@ describe('managed runtime provider-model refresh after a user lifecycle action',
   it.each([
     ['mtplx', 'mtplx/models/pull', pullMtplxModel],
     ['slotstream', 'slotstream/models/download', downloadSlotstreamModel],
-  ])('%s checkpoint download refreshes only when it reports success', async (kind, path, action) => {
-    action.mockResolvedValueOnce({ success: false });
-    await post(path, { model: MODEL });
-    expect(syncRuntimeProviderModels).not.toHaveBeenCalled();
+  ])('%s checkpoint download refreshes when it succeeds', async (kind, path, action) => {
     action.mockResolvedValueOnce({ success: true });
-    await post(path, { model: MODEL });
+    expect((await post(path, { model: MODEL })).status).toBe(200);
     expect(syncRuntimeProviderModels.mock.calls[0][0]).toMatchObject({ kind, waitForReady: null });
+  });
+
+  it.each([
+    ['mtplx/models/pull', pullMtplxModel, {}, 502, 'MTPLX_PULL_FAILED'],
+    ['slotstream/models/download', downloadSlotstreamModel, {}, 502, 'SLOTSTREAM_DOWNLOAD_FAILED'],
+    ['slotstream/models/download', downloadSlotstreamModel, { status: 401, code: 'HF_AUTH' }, 401, 'HF_AUTH'],
+    ['slotstream/models/download', downloadSlotstreamModel, { status: 422, code: 'SLOTSTREAM_NO_WEIGHTS' }, 422, 'SLOTSTREAM_NO_WEIGHTS'],
+    ['slotstream/models/download', downloadSlotstreamModel, { status: 504, code: 'SLOTSTREAM_METADATA_TIMEOUT' }, 504, 'SLOTSTREAM_METADATA_TIMEOUT'],
+  ])('%s returns a structured error and skips refresh (%#)', async (path, action, details, status, code) => {
+    action.mockResolvedValueOnce({ success: false, error: 'Checkpoint unavailable', ...details });
+
+    const response = await post(path, { model: MODEL });
+
+    expect(response.status).toBe(status);
+    expect(response.body).toMatchObject({ error: 'Checkpoint unavailable', code });
+    expect(syncRuntimeProviderModels).not.toHaveBeenCalled();
+  });
+
+  it('returns a successful HTTP response for Slotstream cancellation and skips refresh', async () => {
+    downloadSlotstreamModel.mockResolvedValueOnce({
+      success: false, cancelled: true, model: MODEL, error: 'Cancelled', code: 'SLOTSTREAM_DOWNLOAD_CANCELLED',
+    });
+
+    const response = await post('slotstream/models/download', { model: MODEL });
+
+    expect(response.status).toBe(200);
+    expect(response.body).toEqual({ success: false, cancelled: true, model: MODEL });
+    expect(syncRuntimeProviderModels).not.toHaveBeenCalled();
   });
 
   it('mtplx checkpoint removal refreshes', async () => {
@@ -1340,6 +1365,17 @@ describe('managed runtime provider-model refresh after a user lifecycle action',
     stop.mockResolvedValueOnce({ success: true });
     expect((await post(path)).status).toBe(200);
     expect(syncRuntimeProviderModels).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    ['llama-server/stop', stopLlamaServer],
+    ['mtplx/stop', stopMtplxServer],
+    ['slotstream/stop', stopSlotstreamServer],
+  ])('%s reports an externally owned daemon as a conflict', async (path, stop) => {
+    stop.mockResolvedValueOnce({ success: false, message: 'An external process is listening.', code: 'EXTERNAL_PROCESS_RUNNING' });
+    const res = await request(makeApp()).post(`/api/local-llm/${path}`);
+    expect(res.status).toBe(409);
+    expect(res.body).toMatchObject({ error: 'An external process is listening.', code: 'EXTERNAL_PROCESS_RUNNING' });
   });
 });
 

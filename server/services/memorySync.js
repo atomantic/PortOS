@@ -16,16 +16,15 @@
  *      sync_sequence cursor is below every position, so it replays the stream
  *   5. Conflict resolution: last-writer-wins by updated_at timestamp
  *
- * Note: memory_links (relationships) are not synced — only the memories table
- * is replicated. Relationship data is instance-local.
+ * Peers advertising tombstoneVersion=1 also receive purge markers on that cursor.
+ * Relationship data and revision history are instance-local.
  */
 
 import { PLATFORM_SCHEMA_VERSIONS } from '../lib/schemaVersions/platform.js';
 import { ServerError } from '../lib/errorHandler.js';
 import { query, withTransaction, arrayToPgvector, pgvectorToArray } from '../lib/db.js';
-import { PERSISTENT_MIND_ID } from '../lib/persistent/persistentMindTrajectory.js';
-import { PERSISTENT_MIND_CHOSEN_NAME_TAG } from '../lib/persistent/persistentMindChosenName.js';
-import { BRAIN_BRIDGE_SOURCE_AGENT_ID } from '../lib/brainBridgeSource.js';
+import { canFederate, federatedRow, exclusionParams, lockPurgeMarkers, applyDeletions } from './memory/federatedPurge.js';
+import { memorySyncDeletedIdsSchema } from '../lib/memoryValidation.js';
 import { dedupeByKey } from '../lib/arrayUtils.js';
 
 /**
@@ -34,29 +33,29 @@ import { dedupeByKey } from '../lib/arrayUtils.js';
  *
  * @param {string} sinceSequence - Return changes after this feed position (string to avoid BigInt precision loss)
  * @param {number} limit - Max records to return per batch
- * @returns {Promise<{memories: Array, maxSequence: string, hasMore: boolean}>}
+ * @param {number} schemaVersion - Receiver's memory-history version
+ * @param {boolean} includeDeleted - Receiver can consume pages containing only purge markers
+ * @returns {Promise<{memories: Array, deletedIds?: Array, maxSequence: string, hasMore: boolean}>}
  */
-export async function getChangesSince(sinceSequence = '0', limit = 100, schemaVersion = 0) {
+export async function getChangesSince(sinceSequence = '0', limit = 100, schemaVersion = 0, includeDeleted = false) {
   if (schemaVersion > PLATFORM_SCHEMA_VERSIONS.memoryHistory) {
     throw new ServerError('Unsupported memory schema version', { status: 409 });
   }
   // Fetch limit+1 rows to detect whether more records exist beyond this batch
   const result = await query(
-    `SELECT m.id, m.version, m.type, m.content, m.summary, m.category, m.tags,
+    `SELECT COALESCE(m.id, t.id) AS id, t.deleted_at, m.version, m.type, m.content, m.summary, m.category, m.tags,
             m.embedding, m.embedding_model, m.confidence, m.importance,
             m.status, m.source_task_id, m.source_agent_id, m.source_app_id,
             m.expires_at, m.created_at, m.updated_at, m.origin_instance_id,
             f.position::text AS feed_position
      FROM sync_feed f
-     JOIN memories m ON m.sync_sequence = f.row_sequence
-     WHERE f.stream = 'memories'
-       AND f.position > $1
-       AND m.source_agent_id IS DISTINCT FROM $3
-       AND m.source_agent_id IS DISTINCT FROM $5
-       AND NOT ($4 = ANY(COALESCE(m.tags, '{}'::text[])))
+     LEFT JOIN memories m ON f.stream = 'memories' AND m.sync_sequence = f.row_sequence
+     LEFT JOIN memory_tombstones t ON f.stream = 'memory_tombstones' AND t.sync_sequence = f.row_sequence
+     WHERE f.stream IN ('memories', 'memory_tombstones') AND f.position > $1
+       AND ((m.id IS NOT NULL AND ${federatedRow('m', 3)}) OR ($5 AND t.id IS NOT NULL))
      ORDER BY f.position ASC
      LIMIT $2`,
-    [sinceSequence, limit + 1, PERSISTENT_MIND_ID, PERSISTENT_MIND_CHOSEN_NAME_TAG, BRAIN_BRIDGE_SOURCE_AGENT_ID]
+    [sinceSequence, limit + 1, ...exclusionParams, includeDeleted]
   );
 
   const hasMore = result.rows.length > limit;
@@ -64,7 +63,7 @@ export async function getChangesSince(sinceSequence = '0', limit = 100, schemaVe
 
   // access_count and last_accessed are instance-local read stats,
   // not replicated — omitted from sync payload intentionally.
-  const memories = rows.map(row => ({
+  const memories = rows.filter(row => !row.deleted_at).map(row => ({
     id: row.id,
     ...(schemaVersion === PLATFORM_SCHEMA_VERSIONS.memoryHistory ? { version: row.version } : {}),
     type: row.type,
@@ -87,11 +86,10 @@ export async function getChangesSince(sinceSequence = '0', limit = 100, schemaVe
     originInstanceId: row.origin_instance_id
   }));
 
-  const maxSequence = memories.length > 0
-    ? memories[memories.length - 1].syncSequence
-    : sinceSequence;
-
-  return { memories, maxSequence, hasMore, ...(schemaVersion ? { schemaVersion } : {}) };
+  const maxSequence = rows.at(-1)?.feed_position ?? sinceSequence;
+  const page = { memories, maxSequence, hasMore, ...(schemaVersion ? { schemaVersion } : {}) };
+  if (includeDeleted) page.deletedIds = rows.filter(row => row.deleted_at).map(row => ({ id: row.id, deletedAt: row.deleted_at.toISOString() }));
+  return page;
 }
 
 /**
@@ -100,19 +98,22 @@ export async function getChangesSince(sinceSequence = '0', limit = 100, schemaVe
  * Batches inserts (100 per query) to reduce round-trips and lock time.
  *
  * @param {Array} incomingMemories - Array of memory objects from remote peer
- * @returns {Promise<{inserted: number, updated: number, skipped: number}>}
+ * @param {number} schemaVersion - Sender's memory-history version
+ * @param {Array} deletedIds - Optional deletion markers from a capable sender
+ * @returns {Promise<{inserted: number, updated: number, skipped: number, deleted?: number}>}
  *   inserted - new rows created
  *   updated  - existing rows replaced (remote was newer)
  *   skipped  - rows rejected by last-writer-wins (local was newer)
  */
-export async function applyRemoteChanges(incomingMemories, schemaVersion = 0) {
+export async function applyRemoteChanges(incomingMemories, schemaVersion = 0, deletedIds = []) {
   if (!Number.isInteger(schemaVersion) || schemaVersion < 0 || schemaVersion > PLATFORM_SCHEMA_VERSIONS.memoryHistory) {
     throw new ServerError('Unsupported memory schema version', { status: 409 });
   }
   // Never import a peer's revision counter into the local history PK. The
   // trigger snapshots the local text and increments our counter on replacement.
 
-  if (incomingMemories.length === 0) return { inserted: 0, updated: 0, skipped: 0 };
+  const markers = memorySyncDeletedIdsSchema.parse(deletedIds);
+  if (!markers.length && incomingMemories.length === 0) return { inserted: 0, updated: 0, skipped: 0 };
 
   const COLS = 18;
   const BATCH_SIZE = 100;
@@ -138,23 +139,30 @@ export async function applyRemoteChanges(incomingMemories, schemaVersion = 0) {
     return Number.isNaN(at) ? -Infinity : at;
   };
   const deduped = dedupeByKey(
-    incomingMemories.filter((mem) => mem.sourceAgentId !== PERSISTENT_MIND_ID
-      && mem.sourceAgentId !== BRAIN_BRIDGE_SOURCE_AGENT_ID
-      && !mem.tags?.includes(PERSISTENT_MIND_CHOSEN_NAME_TAG)),
-    (mem) => mem.id,
+    incomingMemories.filter(mem => canFederate(mem.sourceAgentId, mem.tags)),
+    (mem) => mem.id.toLowerCase(),
     (held, next) => (lwwClock(held) >= lwwClock(next) ? held : next),
   );
   // A collapsed duplicate lost last-writer-wins, which is exactly what `skipped`
   // counts — so the three tallies still sum to what the peer sent.
   const collapsed = incomingMemories.length - deduped.length;
 
-  return withTransaction(async (client) => {
+  const { inserted, updated, skipped, purges } = await withTransaction(async (client) => {
+    await lockPurgeMarkers(client);
+    const purges = markers.length ? await applyDeletions(client, markers) : [];
+    const { rows: shadowed } = await client.query(
+      `SELECT incoming.id FROM unnest($1::text[], $2::timestamptz[]) AS incoming(id, updated_at)
+       JOIN memory_tombstones t ON t.id = incoming.id::uuid AND t.deleted_at >= incoming.updated_at`,
+      [deduped.map(mem => mem.id), deduped.map(mem => mem.updatedAt)]
+    );
+    const purgedIds = new Set(shadowed.map(row => row.id));
+    const live = deduped.filter(mem => !purgedIds.has(mem.id));
     let inserted = 0;
     let updated = 0;
-    let skipped = collapsed;
+    let skipped = collapsed + deduped.length - live.length;
 
-    for (let i = 0; i < deduped.length; i += BATCH_SIZE) {
-      const batch = deduped.slice(i, i + BATCH_SIZE);
+    for (let i = 0; i < live.length; i += BATCH_SIZE) {
+      const batch = live.slice(i, i + BATCH_SIZE);
       const values = [];
       const params = [];
 
@@ -169,9 +177,8 @@ export async function applyRemoteChanges(incomingMemories, schemaVersion = 0) {
         );
       });
 
-      params.push(PERSISTENT_MIND_ID, PERSISTENT_MIND_CHOSEN_NAME_TAG);
-      const localMindParam = params.length - 1;
-      const nameTagParam = params.length;
+      const exclusionParam = params.length + 1;
+      params.push(...exclusionParams);
       // access_count and last_accessed are instance-local, not synced
       const result = await client.query(
         `INSERT INTO memories (
@@ -191,8 +198,7 @@ export async function applyRemoteChanges(incomingMemories, schemaVersion = 0) {
             source_app_id = EXCLUDED.source_app_id,
             origin_instance_id = EXCLUDED.origin_instance_id
           WHERE EXCLUDED.updated_at > memories.updated_at
-            AND memories.source_agent_id IS DISTINCT FROM $${localMindParam}
-            AND NOT ($${nameTagParam} = ANY(COALESCE(memories.tags, '{}'::text[])))
+            AND ${federatedRow('memories', exclusionParam)}
           RETURNING (xmax = 0) AS is_insert`,
         params
       );
@@ -202,8 +208,13 @@ export async function applyRemoteChanges(incomingMemories, schemaVersion = 0) {
       skipped += batch.length - result.rows.length;
     }
 
-    return { inserted, updated, skipped };
+    return { inserted, updated, skipped, purges };
   });
+  if (purges.length) {
+    const { finishMemoryPurge } = await import('./memory/purgeEffects.js');
+    for (const row of purges) await finishMemoryPurge(row.id, row);
+  }
+  return { inserted, updated, skipped, ...(markers.length ? { deleted: purges.filter(row => row.deleted).length } : {}) };
 }
 
 /**
@@ -214,6 +225,6 @@ export async function applyRemoteChanges(incomingMemories, schemaVersion = 0) {
  * @returns {Promise<string>} Position as string to avoid BigInt precision loss
  */
 export async function getMaxSequence() {
-  const result = await query("SELECT COALESCE(MAX(position), 0)::text AS max_seq FROM sync_feed WHERE stream = 'memories'");
+  const result = await query("SELECT COALESCE(MAX(position), 0)::text AS max_seq FROM sync_feed WHERE stream IN ('memories', 'memory_tombstones')");
   return result.rows?.[0]?.max_seq ?? '0';
 }

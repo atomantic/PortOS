@@ -7,7 +7,7 @@ import { dirname, join } from 'node:path';
 import { assertBrowserProfileExecuted, BROWSER_FIDELITY_ONLY_FILES, BROWSER_FIDELITY_TESTS, browserProfileAcceptedVerdicts, browserTestProfileArgs, browserTestProfileFiles, localPerformanceTagViolations } from './browserTestProfiles.js';
 
 const smokeNames = {
-  'server/services/musicVideo/documentRender.browser.test.js': ['propagates a deadline through a pending seek and waits for owned Chrome cleanup'],
+  'server/services/musicVideo/documentRenderAudioTimeline.browser.test.js': ['mixes the retimed clip over the dipped song in a final and in a mid-shot excerpt'],
   'server/services/musicVideo/documentRenderGeneration.browser.test.js': [
     'generates and exports a Three.js scene with visible authored content',
     'renders a generated 3-second card/still/clip document with the selected performance in-point',
@@ -30,7 +30,7 @@ describe('browser test profiles', () => {
   });
 
   it('omits only the explicitly fidelity-only suite from smoke selection', () => {
-    const mixed = 'server/services/musicVideo/documentRender.browser.test.js';
+    const mixed = 'server/services/musicVideo/documentRenderAudioTimeline.browser.test.js';
     const smoke = 'server/lib/musicVideo/musicVideoTitleCard.browser.test.js';
     const files = [mixed, smoke, ...BROWSER_FIDELITY_ONLY_FILES];
     expect(browserTestProfileFiles('smoke', files)).toEqual([mixed, smoke]);
@@ -53,7 +53,7 @@ describe('browser test profiles', () => {
     for (const mutate of [
       report => report.testResults.pop(),
       report => report.testResults[0].assertionResults.pop(),
-      report => { report.testResults[0].name = '/unrelated/documentRender.browser.test.js'; },
+      report => { report.testResults[0].name = '/unrelated/documentRenderAudioTimeline.browser.test.js'; },
       report => report.testResults[0].assertionResults.push(report.testResults[0].assertionResults[0]),
       report => report.testResults[0].assertionResults.push({ title: '[fidelity] new case', status: 'passed' }),
     ]) {

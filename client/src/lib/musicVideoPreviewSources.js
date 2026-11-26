@@ -63,7 +63,7 @@ export function describePreviewSourceChange(before, after) {
 
 /**
  * Everything the docked preview can play, in the order it picks a default:
- * the final render (its resolved `finalVideoSrc`), the live composite,
+ * the final render (its resolved file and timing), the live composite,
  * then each finished draft excerpt, newest first. `leadWith` picks the
  * ordering: `"final"` (default) as above; `"drafts"` (Final render stage)
  * puts the drafts before the composition; `"storyboard"` (Plan and Shots
@@ -77,10 +77,15 @@ export function describePreviewSourceChange(before, after) {
  * disabled and carries `reason`.
  * Each entry has a stable `id` (the `?play=` value) and a `label` for the source picker.
  */
-export function listPreviewSources(project, { finalVideoSrc = null, leadWith = 'final' } = {}) {
+export function listPreviewSources(project, { finalVideo = null, leadWith = 'final' } = {}) {
   const sources = [];
-  const final = project?.renderHistoryId && finalVideoSrc
-    ? { id: 'final', kind: 'video', label: project.renderDependencyState?.status === 'stale' ? 'Final render (out of date)' : 'Final render', src: finalVideoSrc, startSec: 0, endSec: null }
+  const final = project?.renderHistoryId && finalVideo?.src
+    ? {
+        id: 'final', kind: 'video', label: project.renderDependencyState?.status === 'stale' ? 'Final render (out of date)' : 'Final render',
+        src: finalVideo.src, startSec: 0, endSec: finalVideo.songDurationSec ?? null, fps: finalVideo.fps,
+        // The file clock starts before song zero when a cold open is encoded.
+        clockOffsetSec: finalVideo.songStartSec == null ? null : -finalVideo.songStartSec,
+      }
     : null;
   const live = liveCompositeSource(project);
   const drafts = (project?.excerpts || []).filter((e) => e.status === 'complete' && e.filename).reverse().map((excerpt) => ({

@@ -1,5 +1,5 @@
 import { selectXsClass as selectClass } from './controlClasses.js';
-import { BEAT_TOGGLE_OVERLAP, BEAT_TOGGLE_RATE_LABELS, BEAT_TOGGLE_RATES, MUSIC_VIDEO_CUT_EFFECT_LABELS, MUSIC_VIDEO_CUT_EFFECTS, sceneCutEffect } from '../../lib/musicVideoCutEffects.js';
+import { BEAT_TOGGLE_OVERLAP, BEAT_TOGGLE_RATE_LABELS, BEAT_TOGGLE_RATES, MUSIC_VIDEO_CUT_EFFECT_LABELS, MUSIC_VIDEO_CUT_EFFECTS, sceneCutEffect } from '../../../../server/lib/musicVideo/musicVideoCutEffects.js';
 
 const OVERLAPS = Object.freeze([0.5, 1, 1.5, 2, 3, 4]);
 const OVERLAP_LABELS = { 0.5: '½ s', 1: '1 s', 1.5: '1½ s', 2: '2 s', 3: '3 s', 4: '4 s' };

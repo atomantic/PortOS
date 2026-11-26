@@ -15,7 +15,7 @@ import {
   ScrollText,
   MessageCircle
 } from 'lucide-react';
-import { normalizeReviewerSlug, REVIEWER_VALUES } from '../../lib/reviewerPins';
+import { isProviderReviewer, normalizeReviewerSlug, REVIEWER_VALUES } from '../../lib/reviewerPins';
 import { AVATAR_STYLE_LABELS } from '../../lib/avatarStyles';
 import { inPlaceClipName } from '../../utils/animationClips';
 import { getNavPageForPath, getPageNavTabs } from '../../../../server/lib/navManifest.js';
@@ -105,7 +105,7 @@ export const AGENT_STATES = {
 // FIRST entry must still be an in-place clip (it is the fallback loop, played
 // as named); the constants test asserts that.
 //
-// Consumed by MuseCoSAvatar's AnimationMixer (via drei useAnimations). Clip
+// Consumed by MuseCoSAvatar's AnimationMixer (via useAnimations). Clip
 // names are matched case-sensitively against the loaded GLB: unresolvable steps
 // are dropped, a state with none left falls back to MUSE_ANIMATION_FALLBACK,
 // and a GLB with NO clips at all falls back to the fully-procedural
@@ -349,8 +349,12 @@ export const REVIEWER_OPTIONS = REVIEWER_VALUES.map((value) => {
 // reviewer slug into prose, so a roster addition renders everywhere without a
 // literal edit. Resolves the `gemini` alias; an `@username` (or any token with no
 // option row) falls through to itself.
-export const reviewerLabel = (value) =>
-  REVIEWER_OPTIONS.find(o => o.value === normalizeReviewerSlug(value))?.label || value;
+export const reviewerLabel = (value, providers) => {
+  if (isProviderReviewer(value)) {
+    return providers?.find(provider => `provider:${provider.id}` === value)?.name || value.slice(9);
+  }
+  return REVIEWER_OPTIONS.find(o => o.value === normalizeReviewerSlug(value))?.label || value;
+};
 
 // The whole reviewer vocabulary — the roster, its aliases and defaults, the
 // review-username pattern and cap, the max-rounds ceiling, the stop-mode list,
@@ -388,6 +392,7 @@ export {
 // pr-watcher owns trusted remediation. Legacy filter values remain accepted
 // server-side for compatibility; every dispatch enforces collaborator trust.
 export const PR_AUTHOR_FILTER_OPTIONS = [
+  { value: 'self', label: 'Only PRs you opened', description: 'Only PRs opened by the signed-in operator are eligible for PR remediation.' },
   { value: 'trusted', label: 'Owner and write collaborators', description: 'Verified repository collaborators and the signed-in operator; external PRs use PR Reviewer' }
 ];
 

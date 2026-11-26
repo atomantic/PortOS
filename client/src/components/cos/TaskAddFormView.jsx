@@ -1,3 +1,4 @@
+import { useId } from 'react';
 import { sortByLabel } from '../../lib/sortByLabel.js';
 import { Plus, Image, X, ChevronDown, ChevronRight, Sparkles, Loader2, Paperclip, FileText, Zap, Bookmark, Ticket, GitBranch, GitMerge, GitPullRequest, ShieldCheck, Wand2 } from 'lucide-react';
 import ProviderModelSelector from '../ProviderModelSelector';
@@ -14,8 +15,7 @@ import {
   isOpencodeLocalProvider,
   providerModeSelectionPolicy,
 } from '../../utils/providers';
-import { PR_COMPLETION_OPTIONS, prCompletionMerges, prCompletionOption } from './constants';
-import { clickableProps, onActivateKeyDown } from '../../lib/a11yKeyboard';
+import { PR_COMPLETION_OPTIONS, prCompletionMerges, prCompletionOption, reviewerLabel } from './constants';
 import { slashdoLabel } from '../../lib/slashdoCatalog';
 
 // Opt-ins for a PR that a required code-owner review blocks (server: resolveAutoApprovePR / resolveAdminMerge).
@@ -92,23 +92,24 @@ function TaskTemplates({ form }) {
       {state.showTemplates && (
         <div className="flex flex-wrap gap-2">
           {state.templates.map((template) => (
-            <div
-              key={template.id}
-              onClick={() => applyTemplate(template)}
-              {...clickableProps(() => applyTemplate(template))}
-              onKeyDown={onActivateKeyDown(() => applyTemplate(template))}
-              className="group relative flex items-center gap-1 px-3 py-1.5 bg-port-card border border-port-border rounded-lg text-sm text-gray-300 hover:text-white hover:border-port-accent/50 transition-colors cursor-pointer"
-              title={template.slashdoCommand ? `${slashdoLabel(template.slashdoCommand)} — ${template.context || template.description}` : template.description}
-            >
-              <span>{template.icon || '📝'}</span>
-              <span className="max-w-[120px] truncate">{template.name}</span>
-              {template.slashdoCommand && <span className="hidden @sm:inline text-xs text-port-accent/80 font-mono">{slashdoLabel(template.slashdoCommand)}</span>}
-              {template.useCount > 0 && <span className="text-xs text-gray-600">({template.useCount})</span>}
+            <div key={template.id} className="group relative">
+              <button
+                type="button"
+                onClick={() => applyTemplate(template)}
+                className="flex items-center gap-1 px-3 py-1.5 bg-port-card border border-port-border rounded-lg text-sm text-gray-300 hover:text-white hover:border-port-accent/50 transition-colors cursor-pointer"
+                title={template.slashdoCommand ? `${slashdoLabel(template.slashdoCommand)} — ${template.context || template.description}` : template.description}
+              >
+                <span aria-hidden="true">{template.icon || '📝'}</span>
+                <span className="max-w-[120px] truncate">{template.name}</span>
+                {template.slashdoCommand && <span className="hidden @sm:inline text-xs text-port-accent/80 font-mono">{slashdoLabel(template.slashdoCommand)}</span>}
+                {template.useCount > 0 && <span className="text-xs text-gray-600">({template.useCount})</span>}
+              </button>
               {!template.isBuiltin && (
                 <button
-                  onClick={(event) => deleteTemplate(template.id, event)}
+                  type="button"
+                  onClick={() => deleteTemplate(template.id)}
                   className="flex [@media(hover:hover)]:md:opacity-0 [@media(hover:hover)]:md:pointer-events-none md:group-hover:opacity-100 md:group-hover:pointer-events-auto focus-visible:opacity-100 focus-visible:pointer-events-auto transition-opacity absolute -top-3 -right-3 w-11 h-11 items-center justify-center"
-                  aria-label="Delete template"
+                  aria-label={`Delete template ${template.name}`}
                 >
                   <span className="flex w-4 h-4 bg-port-error rounded-full items-center justify-center">
                     <X size={10} />
@@ -230,10 +231,11 @@ function TaskTypeFields({ form, compact, queueFirst }) {
   return (
     <>
       <div className="flex flex-wrap items-center justify-between gap-2 pt-1 border-t border-port-border/40">
-        <div className="flex flex-wrap items-center gap-1.5 text-xs text-gray-400">
-          <span>Execution:</span>
+        <div role="group" aria-label="Execution mode" className="flex flex-wrap items-center gap-1.5 text-xs text-gray-400">
+          <span aria-hidden="true">Execution:</span>
           <button
             type="button"
+            aria-pressed={state.orchestrationMode === 'direct'}
             onClick={() => setField('orchestrationMode', 'direct')}
             className={`px-2.5 py-1 rounded text-xs transition-colors ${state.orchestrationMode === 'direct' ? 'bg-port-accent text-white font-medium' : 'bg-port-border/40 text-gray-400 hover:text-white'}`}
           >
@@ -241,6 +243,7 @@ function TaskTypeFields({ form, compact, queueFirst }) {
           </button>
           <button
             type="button"
+            aria-pressed={state.orchestrationMode === 'orchestrated'}
             onClick={() => setField('orchestrationMode', 'orchestrated')}
             className={`px-2.5 py-1 rounded text-xs transition-colors ${state.orchestrationMode === 'orchestrated' ? 'bg-port-accent text-white font-medium' : 'bg-port-border/40 text-gray-400 hover:text-white'}`}
           >
@@ -431,6 +434,7 @@ function TaskCompletionFields({ form }) {
     planOnlySupported,
     issueTargets,
     reviewerModelOptions,
+    rememberReviewerProvider,
     handlePlanOnlyChange,
   } = form;
   const notGitRepo = selectedApp?.isGitRepo === false;
@@ -601,6 +605,7 @@ function TaskCompletionFields({ form }) {
                   reviewerModels={reviewOverrides.reviewerModels ?? reviewDefaults.reviewerModels}
                   reviewerEfforts={reviewOverrides.reviewerEfforts ?? reviewDefaults.reviewerEfforts}
                   modelOptions={reviewerModelOptions}
+                  onProviderSelectionCreated={rememberReviewerProvider}
                   installed={reviewerCliInstalled}
                   providerReviewUnsupported={providerReviewUnsupported}
                   stopMode={reviewOverrides.stopMode ?? reviewDefaults.stopMode}
@@ -632,6 +637,8 @@ function TaskCompletionFields({ form }) {
 }
 
 function TaskTemplateFields({ form, compact }) {
+  const positionId = useId();
+  const positionLabelId = `${positionId}-label`;
   const { state, quickTemplatesEnabled, setField, saveAsTemplate } = form;
   return (
     <>
@@ -653,8 +660,14 @@ function TaskTemplateFields({ form, compact }) {
       {!compact && (
         <div className="flex flex-wrap items-center gap-2">
           <div className="flex items-center gap-2 mr-auto">
-            <label htmlFor="add-position" className="text-sm text-gray-400">Queue:</label>
-            <button id="add-position" type="button" onClick={() => setField('addToTop', !state.addToTop)} className={`flex items-center gap-1 px-3 py-1.5 rounded-lg text-sm transition-colors min-h-[44px] ${state.addToTop ? 'bg-port-accent/20 text-port-accent border border-port-accent/50' : 'bg-port-bg text-gray-400 border border-port-border'}`} aria-pressed={state.addToTop}>
+            <span id={positionLabelId} className="text-sm text-gray-400">Queue:</span>
+            <button
+              id={positionId}
+              aria-labelledby={`${positionLabelId} ${positionId}`}
+              type="button"
+              onClick={() => setField('addToTop', !state.addToTop)}
+              className={`flex items-center gap-1 px-3 py-1.5 rounded-lg text-sm transition-colors min-h-[44px] ${state.addToTop ? 'bg-port-accent/20 text-port-accent border border-port-accent/50' : 'bg-port-bg text-gray-400 border border-port-border'}`}
+            >
               {state.addToTop ? 'Top' : 'Bottom'}
             </button>
           </div>
@@ -719,7 +732,7 @@ export default function TaskAddFormView({ form, compact = false, queueFirst = fa
             : [selectedProvider?.name || state.newTask.provider || 'Default provider', form.selectedModelOrSole || 'default model', state.newTask.effort].filter(Boolean).join(' / ')}
           {' · '}{state.planOnly ? 'Read-only planning' : state.useWorktree ? 'Worktree' : 'Direct checkout'}
           {' · '}{completion}
-          {!state.planOnly && state.openPR && state.prCompletion === 'review-then-merge' && ` · Review: ${[...reviewers, ...usernames.map((name) => '@' + name)].join(', ') || 'None'}`}
+          {!state.planOnly && state.openPR && state.prCompletion === 'review-then-merge' && ` · Review: ${[...reviewers.map(token => reviewerLabel(token, form.reviewerModelOptions.providers)), ...usernames.map((name) => '@' + name)].join(', ') || 'None'}`}
           {isFederated && ` · Instance: ${assignableInstances.find((instance) => instance.instanceId === state.targetInstanceId)?.name || state.targetInstanceId || 'Any'}`}
           {state.planOnly && ` · Issue: ${state.issueTarget}`}
           {state.createJiraTicket && !state.planOnly && ' · JIRA ticket'}
@@ -730,7 +743,7 @@ export default function TaskAddFormView({ form, compact = false, queueFirst = fa
         <TaskUploadControls form={form} />
         <TaskUploadPreviews form={form} />
         <div className="flex flex-wrap items-center justify-between gap-2">
-          <button type="button" onClick={() => setField('configurationOpen', !state.configurationOpen)} aria-expanded={state.configurationOpen} aria-controls="task-configuration" className="min-h-[44px] px-3 py-2 text-sm text-port-accent border border-port-border rounded-lg">
+          <button type="button" onClick={() => setField('configurationOpen', !state.configurationOpen)} aria-expanded={state.configurationOpen} aria-controls={state.configurationOpen ? 'task-configuration' : undefined} className="min-h-[44px] px-3 py-2 text-sm text-port-accent border border-port-border rounded-lg">
             Task configuration
           </button>
           <TaskSubmitButton form={form} variant="queue" />

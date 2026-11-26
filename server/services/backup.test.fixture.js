@@ -38,6 +38,7 @@ vi.mock('../lib/fileUtils.js', async (importOriginal) => {
   // through it, and the restore identity tests read that file (#12596).
   return makePathsProxy(actual, { dataRoot: testDataRoot, overrides: {
     atomicWrite: vi.fn(actual.atomicWrite),
+    execFileAsync: vi.fn(actual.execFileAsync),
     dataPath: (...segments) => joinPath(testDataRoot(), ...segments),
   } });
 });

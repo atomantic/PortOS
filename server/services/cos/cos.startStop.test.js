@@ -90,6 +90,8 @@ vi.mock('../persistent/persistentMindSupervisor.js', async (importOriginal) => (
   ...(await importOriginal()),
   initializePersistentMindSupervisor: vi.fn(async () => {}),
   shutdownPersistentMindSupervisor: vi.fn(async () => {}),
+  handlePersistentMindGlobalPause: vi.fn(async () => {}),
+  handlePersistentMindGlobalResume: vi.fn(async () => {}),
   registerPersistentMindTurnAdapter: vi.fn(async () => {}),
 }));
 // The handoff follow-up poll lives in prWatcher; the daemon arms its gate and
@@ -102,14 +104,16 @@ vi.mock('../prWatcher.js', () => ({
   cancelHandoffFollowUps: () => { handoffFollowUp.gate = null; },
 }));
 
-const { start, stop, init, getStatus, resumeDeferredCompletions } = await import('./cos.js');
+const { start, stop, pause, resume, init, getStatus, resumeDeferredCompletions } = await import('./cos.js');
 // The daemon reaches agent recovery only through the handlers bootHooks.js registers at boot.
 (await import('../bootHookRegistry.js')).registerCosOrphanRecoveryHandlers({
   cleanupOrphanedAgents: (...args) => boot.cleanupOrphanedAgents(...args),
   handleOrphanedTask: vi.fn(async () => {}),
 });
 const { cosEvents } = await import('./cosEvents.js');
-const { isDaemonRunning } = await import('./cosState.js');
+const { isDaemonRunning, setDaemonRunning } = await import('./cosState.js');
+const { shutdownPersistentMindSupervisor, handlePersistentMindGlobalPause, handlePersistentMindGlobalResume } =
+  await import('../persistent/persistentMindSupervisor.js');
 
 const cosEventIds = () => [...scheduled].filter(id => id.startsWith('cos-') || id.startsWith('job:'));
 const waitFor = async (predicate) => {
@@ -208,7 +212,7 @@ describe('CoS daemon start/stop lifecycle (#11860)', () => {
     expect(statuses.at(-1)).toEqual({ running: false });
   });
 
-  it('a second start() while the daemon runs is refused at info, not reported as a fault', async () => {
+  it('a second start() succeeds without booting again', async () => {
     const log = vi.spyOn(console, 'log').mockImplementation(() => {});
     const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
     const starting = start();
@@ -216,10 +220,44 @@ describe('CoS daemon start/stop lifecycle (#11860)', () => {
     releaseRecovery();
     await starting;
 
-    await expect(start()).resolves.toEqual({ success: false, error: 'Already running' });
+    await expect(start()).resolves.toEqual({ success: true, unchanged: true });
 
+    expect(boot.cleanupOrphanedAgents).toHaveBeenCalledTimes(1);
     expect(log).toHaveBeenCalledWith(expect.stringContaining('CoS already running'));
     expect(warn).not.toHaveBeenCalledWith(expect.stringContaining('CoS already running'));
+  });
+
+  it('stop() succeeds without tearing down an already-stopped daemon', async () => {
+    shutdownPersistentMindSupervisor.mockClear();
+
+    await expect(stop()).resolves.toEqual({ success: true, unchanged: true });
+
+    expect(shutdownPersistentMindSupervisor).not.toHaveBeenCalled();
+    expect(statuses).toEqual([]);
+  });
+
+  it('repeated pause() preserves the initial pause and does not pause Persistent Mind again', async () => {
+    persisted = { ...persisted, paused: false, stats: { tasksCompleted: 0 } };
+    handlePersistentMindGlobalPause.mockClear();
+
+    const initial = await pause('Initial reason');
+    expect(initial).toEqual({ success: true, pausedAt: expect.any(String) });
+    await expect(pause('Later reason')).resolves.toEqual({ ...initial, unchanged: true });
+
+    expect(await getStatus()).toMatchObject({ paused: true, pausedAt: initial.pausedAt, pauseReason: 'Initial reason' });
+    expect(handlePersistentMindGlobalPause).toHaveBeenCalledExactlyOnceWith('Initial reason');
+  });
+
+  it('resume() succeeds without waking Persistent Mind or scheduling dequeue when already resumed', async () => {
+    persisted = { ...persisted, paused: false };
+    setDaemonRunning(true);
+    handlePersistentMindGlobalResume.mockClear();
+    const timersBeforeResume = vi.getTimerCount();
+
+    await expect(resume()).resolves.toEqual({ success: true, unchanged: true });
+
+    expect(handlePersistentMindGlobalResume).not.toHaveBeenCalled();
+    expect(vi.getTimerCount()).toBe(timersBeforeResume);
   });
 
   it('the handoff follow-up poll shares the pending-merge gate and is cancelled on stop', async () => {

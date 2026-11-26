@@ -1045,6 +1045,7 @@ router.post('/llama-server/start', asyncHandler(async (req, res) => {
 // POST /api/local-llm/llama-server/stop — stop managed llama-server
 router.post('/llama-server/stop', asyncHandler(async (_req, res) => {
   const result = await stopLlamaServer()
+  if (result?.success === false) throw new ServerError(result.message || 'Could not stop runtime', { status: 409, code: result.code || 'EXTERNAL_PROCESS_RUNNING' })
   resetProviderReadinessCache()
   res.json(result)
 }))
@@ -1110,6 +1111,7 @@ router.post('/mtplx/start', asyncHandler(async (req, res) => {
 // POST /api/local-llm/mtplx/stop — stop the managed MTPLX process
 router.post('/mtplx/stop', asyncHandler(async (_req, res) => {
   const result = await stopMtplxServer()
+  if (result?.success === false) throw new ServerError(result.message || 'Could not stop runtime', { status: 409, code: result.code || 'EXTERNAL_PROCESS_RUNNING' })
   resetProviderReadinessCache()
   res.json(result)
 }))
@@ -1147,11 +1149,14 @@ router.post('/mtplx/models/pull', asyncHandler(async (req, res) => {
   const { model } = validateRequest(localLlmMtplxPullSchema, req.body)
   const io = req.app.get('io')
   const result = await pullMtplxModel({ model, onProgress: (frame) => io?.emit('mtplx:download', frame) })
+  if (!result.success) {
+    throw new ServerError(result.error || 'MTPLX checkpoint pull failed', { status: 502, code: 'MTPLX_PULL_FAILED' })
+  }
   // A cache that just went from empty to servable is exactly what the readiness
   // probes remember as "MTPLX setup incomplete".
-  if (result.success) resetProviderReadinessCache()
+  resetProviderReadinessCache()
   res.json(result)
-  if (result.success) refreshRuntimeModels(req, 'mtplx')
+  refreshRuntimeModels(req, 'mtplx')
 }))
 
 // POST /api/local-llm/mtplx/models/remove — delete one checkpoint from the cache
@@ -1253,6 +1258,7 @@ router.post('/slotstream/start', asyncHandler(async (req, res) => {
 
 router.post('/slotstream/stop', asyncHandler(async (_req, res) => {
   const result = await stopSlotstreamServer()
+  if (result?.success === false) throw new ServerError(result.message || 'Could not stop runtime', { status: 409, code: result.code || 'EXTERNAL_PROCESS_RUNNING' })
   resetProviderReadinessCache()
   res.json(result)
 }))
@@ -1279,11 +1285,20 @@ router.post('/slotstream/models/download', asyncHandler(async (req, res) => {
   const { model } = validateRequest(localLlmSlotstreamDownloadSchema, req.body)
   const io = req.app.get('io')
   const result = await downloadSlotstreamModel({ model, onProgress: (frame) => io?.emit('slotstream:download', frame) })
+  if (result.cancelled === true) {
+    return res.json({ success: false, cancelled: true, model: result.model })
+  }
+  if (!result.success) {
+    throw new ServerError(result.error || 'Slotstream checkpoint download failed', {
+      status: result.status || 502,
+      code: result.code || 'SLOTSTREAM_DOWNLOAD_FAILED',
+    })
+  }
   // A cache that just went from empty to servable is exactly what the readiness
   // probes remember as "Slotstream has no checkpoint".
-  if (result.success) resetProviderReadinessCache()
+  resetProviderReadinessCache()
   res.json(result)
-  if (result.success) refreshRuntimeModels(req, 'slotstream')
+  refreshRuntimeModels(req, 'slotstream')
 }))
 
 // POST /api/local-llm/slotstream/models/download/cancel — a checkpoint download

@@ -11,6 +11,10 @@
       "bd0149bf1a5c721e65e053dad8e536d3"
     ]
   },
+  "_partials/portos-api-auth.md": {
+    "current": "65fc444e6c9f10486b51ea356d5b1d31",
+    "retired": []
+  },
   "_partials/scene-output-contract.md": {
     "current": "e310b103bdfec2a9c33cde0b775d40a9",
     "retired": []
@@ -96,25 +100,27 @@
     ]
   },
   "stages/cd-evaluate.md": {
-    "current": "a86de29e186581d3508662569c8acbf6",
+    "current": "83138277c4d54fb657dd5332ce60e90d",
     "retired": [
       "c986613edbb595cece674403db0f069d",
-      "e9b413b85d410c41dc8d7fd9254d9fff"
+      "e9b413b85d410c41dc8d7fd9254d9fff",
+      "a86de29e186581d3508662569c8acbf6"
     ]
   },
   "stages/cd-plan.md": {
-    "current": "03b7a1a207d2eda621a876bdeeb72038",
+    "current": "1305bb07f4a8510ad67733420e42635c",
     "retired": [
       "02354df62fe776704669d3ff06f346e4",
       "0768d6809645c2c1fe73cacae9740fe9",
       "3ce871196a8fd04781b71b6780e89c86",
       "41a61590896d1327df2c6915557361de",
       "ef0d96f6ebde43af6c4579969d31cfb7",
-      "8dac4102dbbaee05f2f23f37c7e80782"
+      "8dac4102dbbaee05f2f23f37c7e80782",
+      "03b7a1a207d2eda621a876bdeeb72038"
     ]
   },
   "stages/cd-treatment.md": {
-    "current": "06864fe3cc8402f7ee718cc005c17307",
+    "current": "48b9b4e7be72e2e5f5065e379a4d211e",
     "retired": [
       "16d0ef6a7fd2533719a846019122ebee",
       "1de973575a772db0544bbeda2ba5df77",
@@ -122,7 +128,8 @@
       "4da071646deff0001473502a7c4b5252",
       "95b7685690ecfee4f682b0293b790277",
       "d940eadfb406ce584f0e244032f33382",
-      "16c5ce4a199d8efbf80016424315beb6"
+      "16c5ce4a199d8efbf80016424315beb6",
+      "06864fe3cc8402f7ee718cc005c17307"
     ]
   },
   "stages/cos-agent-briefing.md": {

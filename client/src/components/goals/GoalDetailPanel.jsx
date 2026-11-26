@@ -1,3 +1,4 @@
+import { useLayoutEffect, useRef } from 'react';
 import { X, AlertTriangle, Calendar, Activity, Tag, Check, Trash2 } from 'lucide-react';
 import Pill from '../ui/Pill';
 import ProvenanceChip from '../ui/ProvenanceChip';
@@ -16,6 +17,7 @@ import GoalCheckIns from './GoalCheckIns';
 import GoalProgressLog from './GoalProgressLog';
 import GoalLinkedActivities from './GoalLinkedActivities';
 import GoalLinkedCalendars from './GoalLinkedCalendars';
+import { isEditableTarget } from '../../lib/a11yKeyboard';
 import { formatCount, formatDateNumeric } from '../../utils/formatters';
 
 // Re-exported for backward compatibility — GoalsListView/GoalsTreeView/GoalProgressWidget
@@ -46,7 +48,29 @@ export default function GoalDetailPanel({ goal, allGoals, onClose, onRefresh }) 
   const s = useGoalDetail({ goal, allGoals, onClose, onRefresh });
   const { isConfirming, requestDelete, cancelDelete, confirmDelete } = useConfirmDelete();
 
+  const panelRef = useRef(null);
+  const headingRef = useRef(null);
+  const goalId = goal?.id;
+  // Restore focus before removing the focused panel from the DOM.
+  useLayoutEffect(() => {
+    const panel = panelRef.current;
+    const previousFocus = document.activeElement;
+    headingRef.current?.focus({ preventScroll: true });
+    return () => {
+      if (panel?.contains(document.activeElement) && previousFocus?.isConnected) {
+        previousFocus.focus({ preventScroll: true });
+      }
+    };
+  }, [goalId]);
+
   if (!goal) return null;
+
+  const handleKeyDown = (event) => {
+    if (event.key !== 'Escape' || event.defaultPrevented || s.editing || isEditableTarget(event.target)) return;
+    if (!event.currentTarget.contains(event.target)) return;
+    event.preventDefault();
+    onClose();
+  };
 
   const cat = CATEGORY_CONFIG[goal.category] || CATEGORY_CONFIG.mastery;
   const CatIcon = cat.icon;
@@ -64,14 +88,14 @@ export default function GoalDetailPanel({ goal, allGoals, onClose, onRefresh }) 
     || (goal.feasibility && Array.isArray(goal.feasibility.links));
 
   return (
-    <section aria-label="Goal details" className="w-full bg-port-card border-l border-port-border h-full overflow-y-auto p-4 space-y-4">
+    <section ref={panelRef} aria-label="Goal details" onKeyDown={handleKeyDown} className="w-full bg-port-card border-l border-port-border h-full overflow-y-auto p-4 space-y-4">
       {/* Header */}
       <div className="flex items-center justify-between">
         <div className="flex items-center gap-2 min-w-0">
           <div className={`p-1.5 rounded ${cat.bg} shrink-0`}>
             <CatIcon className={`w-4 h-4 ${cat.color}`} />
           </div>
-          <span className="text-sm font-medium text-white truncate">{goal.title}</span>
+          <h2 ref={headingRef} tabIndex={-1} className="text-sm font-medium text-white truncate">{goal.title}</h2>
           {goal.goalType && goal.goalType !== 'standard' && (
             // Not <Pill>: text-xs + px-1.5 is a size combo Pill doesn't carry, and
             // its sm/xs padding would override the className, shifting this badge.

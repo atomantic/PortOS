@@ -134,6 +134,36 @@ describe('VoiceTab TTS engine registry', () => {
     ));
   });
 
+  it('tests only saved TTS settings and waits for reconciliation even when TTS is unchanged', async () => {
+    render(<MemoryRouter><VoiceTab /></MemoryRouter>);
+    const test = await screen.findByRole('button', { name: 'Test voice' });
+    expect(test).toBeEnabled();
+
+    const voice = screen.getByRole('combobox', { name: 'Voice' });
+    await screen.findByRole('option', { name: /Expressive Alto/ });
+    fireEvent.change(voice, { target: { value: 'expressive-alto' } });
+    expect(test).toBeDisabled();
+    expect(test).toHaveAccessibleDescription(/Save & Reconcile your text-to-speech changes/);
+    fireEvent.click(test);
+    expect(voiceApi.testTts).not.toHaveBeenCalled();
+    fireEvent.change(voice, { target: { value: 'warm-narrator' } });
+    expect(test).toBeEnabled();
+
+    fireEvent.change(screen.getByLabelText('Hotkey'), { target: { value: 'KeyV' } });
+    const save = Promise.withResolvers();
+    voiceApi.updateVoiceConfig.mockReturnValueOnce(save.promise);
+    fireEvent.click(screen.getByRole('button', { name: 'Save & Reconcile' }));
+    expect(test).toBeDisabled();
+    await act(async () => save.resolve({ config, reconciliation: {} }));
+    expect(test).toBeEnabled();
+
+    fireEvent.change(voice, { target: { value: 'expressive-alto' } });
+    await act(async () => fireEvent.click(screen.getByRole('button', { name: 'Save & Reconcile' })));
+    expect(test).toBeEnabled();
+    await act(async () => fireEvent.click(test));
+    expect(voiceApi.testTts).toHaveBeenCalledWith('Voice mode is online. I am ready to help.');
+  });
+
   it('preserves the saved engine and disables voice edits when registry metadata is unavailable', async () => {
     voiceApi.listVoiceEngines.mockRejectedValueOnce(new Error('offline'));
 
@@ -159,6 +189,7 @@ describe('VoiceTab TTS engine registry', () => {
 
     expect(await screen.findByRole('combobox', { name: 'TTS engine' })).toHaveValue('qwen3-tts');
     expect(screen.getByRole('combobox', { name: 'Voice' }).disabled).toBe(false);
+    expect(screen.getByRole('button', { name: 'Test voice' })).toBeEnabled();
   });
 
   it('keeps a linked voice the fetched catalog no longer has selectable', async () => {
@@ -497,4 +528,21 @@ describe('VoiceTab fast-path and footer refresh', () => {
     await waitFor(() => expect(voiceApi.listVoices.mock.calls.length).toBeGreaterThan(callsBefore));
     expect(voiceApi.getVoiceStatus).toHaveBeenCalledTimes(2);
   });
+  it('shows one pending Refresh probe and restores Refresh after failure', async () => {
+    const probe = Promise.withResolvers();
+    voiceApi.getVoiceStatus.mockResolvedValueOnce({ services: {} }).mockReturnValueOnce(probe.promise);
+    render(<MemoryRouter><VoiceTab /></MemoryRouter>);
+    fireEvent.click(await screen.findByRole('button', { name: 'Refresh' }));
+
+    const refreshing = screen.getByRole('button', { name: 'Refreshing…' });
+    expect(refreshing).toBeDisabled();
+    expect(screen.getByRole('status', { name: 'Refreshing…' })).toBeInTheDocument();
+    fireEvent.click(refreshing);
+    expect(voiceApi.getVoiceStatus).toHaveBeenCalledTimes(2);
+    expect(voiceApi.getVoiceStatus).toHaveBeenLastCalledWith({ silent: false });
+    await act(async () => probe.reject(new Error('probe failed')));
+    expect(screen.getByRole('button', { name: 'Refresh' })).toBeEnabled();
+    expect(toast.error).not.toHaveBeenCalled();
+  });
+
 });

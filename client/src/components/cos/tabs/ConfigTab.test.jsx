@@ -172,8 +172,8 @@ describe('ConfigTab autosave', () => {
     expect(api.updateCosConfig).toHaveBeenNthCalledWith(1, { autonomousJobsEnabled: false }, { silent: true });
     await act(async () => {
       resolveFirst({ success: true });
-      await waitFor(() => expect(api.updateCosConfig).toHaveBeenCalledTimes(2));
     });
+    expect(api.updateCosConfig).toHaveBeenCalledTimes(2);
     expect(api.updateCosConfig).toHaveBeenNthCalledWith(2, { autonomousJobsEnabled: true }, { silent: true });
     await waitFor(() => expect(screen.getByTestId('config-save-status')).toHaveTextContent('All changes saved'));
   });

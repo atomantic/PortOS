@@ -1,3 +1,4 @@
+// @vitest-environment node
 import { existsSync, readFileSync } from 'node:fs';
 import { builtinModules } from 'node:module';
 import { dirname, extname, relative, resolve } from 'node:path';

@@ -1,5 +1,5 @@
-import { beforeEach, describe, expect, it, vi } from 'vitest';
-const mocks = vi.hoisted(() => ({ project: null, start: vi.fn(), enqueue: vi.fn() }));
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+const mocks = vi.hoisted(() => ({ project: null, start: vi.fn(), pause: vi.fn(), logFailure: vi.fn() }));
 vi.mock('./local.js', () => ({
   getProject: vi.fn(async () => structuredClone(mocks.project)),
   mutateVideoProject: vi.fn(async (_id, mutate) => {
@@ -10,6 +10,8 @@ vi.mock('./local.js', () => ({
 }));
 vi.mock('../instanceIdentity.js', () => ({ getInstanceId: vi.fn(async () => 'example-owner') }));
 vi.mock('./completionHook.js', () => ({ startCreativeDirectorProject: mocks.start }));
+vi.mock('./videoExecution.js', () => ({ pauseVideoExecution: mocks.pause }));
+vi.mock('../../lib/failureLogging.js', () => ({ logFailureWithStack: mocks.logFailure }));
 vi.mock('./videoSources.js', () => ({ assertVideoSourcesAvailable: vi.fn() }));
 import { getVideoReview, reviewVideo, videoReviewAllowsDispatch } from './videoReview.js';
 import { applySceneUpdate, applyPlanStepUpdate, applyTreatment, applyPlan, mergeProjectRecord } from './projectsLogic.js';
@@ -18,6 +20,7 @@ import { sanitizeRecordForWire } from '../../lib/syncWire.js';
 const scene = (id, order, extra = {}) => ({ sceneId: id, order, intent: 'Example shot', prompt: 'Example landscape', durationSeconds: 5, status: 'accepted', renderedJobId: `example-render-${id}`, workRevision: 0, ...extra });
 beforeEach(() => {
   vi.clearAllMocks();
+  mocks.start.mockReset();
   mocks.project = { id: 'example-video', workspace: 'video', videoOwnerInstanceId: 'example-owner', videoReplica: false,
     status: 'rendering', targetDurationSeconds: 15, aspectRatio: '16:9', updatedAt: '2026-09-01T00:00:00Z',
     videoDraft: { reviewPolicy: 'review', sources: [], checkpoints: ['script-shot-plan', 'references', 'rough-cut', 'final-cut'] },
@@ -26,6 +29,7 @@ beforeEach(() => {
     videoRoughCut: { videoId: 'example-rough' }, videoFinalCut: { videoId: 'example-final' },
   };
 });
+afterEach(() => vi.dynamicImportSettled());
 const inputFor = async (stage, action, extra = {}) => ({ stage, action, revision: (await getVideoReview('example-video')).checkpoints.find(row => row.stage === stage).revision, ...extra });
 
 describe('Video review workflow', () => {
@@ -49,6 +53,7 @@ describe('Video review workflow', () => {
     const approval = await inputFor('script-shot-plan', 'approve');
     await reviewVideo('example-video', approval);
     await reviewVideo('example-video', approval);
+    await vi.dynamicImportSettled();
     expect(mocks.start).toHaveBeenCalledTimes(1);
     expect(await videoReviewAllowsDispatch('example-video', ['script-shot-plan', 'references'])).toBe(true);
     const reloaded = await getVideoReview('example-video');
@@ -57,6 +62,24 @@ describe('Video review workflow', () => {
     mocks.project.modelOverrides = { treatment: { providerId: 'example-new-provider' } };
     await expect(reviewVideo('example-video', approval)).rejects.toMatchObject({ code: 'VIDEO_REVIEW_STALE' });
     expect(await videoReviewAllowsDispatch('example-video', ['script-shot-plan'])).toBe(false);
+  });
+
+  it('returns the saved approval while resumption is pending, then logs and pauses if it fails', async () => {
+    const resumption = Promise.withResolvers();
+    mocks.start.mockReturnValueOnce(resumption.promise);
+    const approval = await inputFor('script-shot-plan', 'approve');
+    await expect(reviewVideo('example-video', approval)).resolves.toMatchObject({
+      checkpoints: expect.arrayContaining([
+        expect.objectContaining({ stage: approval.stage, revision: approval.revision, status: 'approved' }),
+      ]),
+    });
+    await vi.waitFor(() => expect(mocks.start).toHaveBeenCalledWith('example-video'));
+    expect(mocks.pause).not.toHaveBeenCalled();
+
+    const failure = new Error('Example assembly failure');
+    resumption.reject(failure);
+    await vi.waitFor(() => expect(mocks.pause).toHaveBeenCalledWith('example-video', failure.message));
+    expect(mocks.logFailure).toHaveBeenCalledWith(expect.stringContaining('example-video'), failure);
   });
 
   it('retains accepted independent shots and history while refusing late render/evaluator callbacks', async () => {

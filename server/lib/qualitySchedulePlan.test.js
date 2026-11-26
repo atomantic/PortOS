@@ -115,6 +115,27 @@ describe('planQualitySchedule', () => {
     expect(hourOf('code-quality')).toBeLessThan(hourOf('performance'));
   });
 
+  it('moves a late audit earlier to make space for a same-day claim drain', () => {
+    const plan = planQualitySchedule({
+      taskTypes: ['code-simplification', 'feature-completeness'],
+      options: { checksPerDay: 2, windowStartHour: 17, windowEndHour: 23, claimOffsetHours: 3, fileIssues: true },
+    });
+    expect(plan.slots.map(slot => slot.hour)).toEqual([17, 19]);
+    expect(plan.claim).toMatchObject({ hours: [20, 22], gapHours: [3], cron: '0 20,22 * * *' });
+    expect(plan.warnings).toEqual([]);
+  });
+
+  it('keeps the audit in a later hour when the claim-safe hours are occupied', () => {
+    const plan = planQualitySchedule({
+      taskTypes: ['code-simplification'],
+      busy: busyFrom(['0 19,20 * * *'], { padBeforeHours: 0, padAfterHours: 0 }),
+      options: { windowStartHour: 19, windowEndHour: 23, claimOffsetHours: 3 },
+    });
+    expect(plan.slots.map(slot => slot.hour)).toEqual([21]);
+    expect(plan.claim).toBeNull();
+    expect(plan.warnings.join(' ')).toMatch(/No free hour left in the day/);
+  });
+
   it('drops the claim slot rather than wrapping it past midnight', () => {
     // A 23:00 audit has no room left in the day for a +3h drain. Wrapping to
     // 02:00 on a DAILY cron would run it before every audit, not after.

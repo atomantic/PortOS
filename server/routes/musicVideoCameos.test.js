@@ -43,7 +43,10 @@ beforeEach(async () => {
   writeFileSync(join(ROOT(), 'video-history.json'), '[]');
   project = await projects.createProject({ name: 'Example Roll Call' });
   shots = [];
-  for (const prompt of ['dog one', 'dog two', 'dog three']) shots.push(await projects.addProjectScene(project.id, { prompt }));
+  for (const prompt of ['dog one', 'dog two', 'dog three']) {
+    const { scenes: [shot] } = await projects.addProjectScenes(project.id, [{ prompt }]);
+    shots.push(shot);
+  }
 });
 afterAll(cleanupTempDataRoots);
 

@@ -2,7 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Pause, Play } from 'lucide-react';
 import ImageEffectStill from './ImageEffectStill.jsx';
 import { shotImageUrl } from './sceneImageTreatmentUrls.js';
-import { sceneImageEffect, scenePhotoSequence } from '../../lib/musicVideoImageEffects.js';
+import { sceneImageEffect, scenePhotoSequence } from '../../../../server/lib/musicVideo/musicVideoImageEffects.js';
 
 // A shot with no span still previews its effect over this long.
 const FALLBACK_SPAN_SEC = 4;

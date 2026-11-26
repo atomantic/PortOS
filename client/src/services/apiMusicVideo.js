@@ -5,6 +5,7 @@
  * measure, take correction and group reference.
  */
 
+import { createBlenderFilmApi } from './apiBlenderFilm.js';
 import { request } from './apiCore.js';
 
 export const getMusicVideoMakingOfCatalog = (id, options = {}) => request(`/music-video/${encodeURIComponent(id)}/making-of/catalog`, options);
@@ -510,8 +511,14 @@ export const getMusicVideoSocialCuts = (id, { count, minSec, maxSec } = {}, opti
 // Build: platform encodes, thumbnails, captions and chapters from the final
 // render → { jobId } (progress over its own SSE URL). Copy: one provider draft,
 // then per-field edits; both resolve to { project }.
-export const buildMusicVideoPublishKit = (id, options = {}) =>
-  request(`/music-video/${encodeURIComponent(id)}/publish-kit/build`, { method: 'POST', ...options });
+export const getMusicVideoPublishCropPreview = (id, options = {}) =>
+  request(`/music-video/${encodeURIComponent(id)}/publish-kit/crop-preview`, options);
+export const buildMusicVideoPublishKit = (id, { crop, loudnessPreset, ...options } = {}) =>
+  request(`/music-video/${encodeURIComponent(id)}/publish-kit/build`, {
+    method: 'POST',
+    ...(crop || loudnessPreset !== undefined ? { body: JSON.stringify({ ...(crop ? { crop } : {}), loudnessPreset }) } : {}),
+    ...options,
+  });
 export const musicVideoPublishKitEventsUrl = (jobId) => `/api/music-video/publish-kit/${encodeURIComponent(jobId)}/events`;
 export const cancelMusicVideoPublishKit = (jobId, options = {}) =>
   request(`/music-video/publish-kit/${encodeURIComponent(jobId)}/cancel`, { method: 'POST', ...options });
@@ -939,60 +946,8 @@ export const setMusicVideoCameoStillFromShot = (id, cameoId, { sceneId, variantI
 export const unlinkMusicVideoCameoShots = (id, sceneIds, options = {}) =>
   request(`/music-video/${encodeURIComponent(id)}/cameo-links/clear`, cameoJson('POST', { sceneIds }, options));
 
-// Blender film render style: the project's Blender workspace, shot renders, cuts and jobs.
-// The state read and the mutations that answer with it share one shape:
-// { settings, tool, workspace, manifest, renders, cuts, jobs, notes }. Progress is pushed on
-// the `music-video:blender` socket channel, never polled.
-const blenderPath = (id) => `/music-video/${encodeURIComponent(id)}/blender`;
-const blenderJson = (method, body, options) => ({ method, ...(body ? { body: JSON.stringify(body) } : {}), ...options });
-export const getMusicVideoBlender = (id, options = {}) => request(blenderPath(id), options);
-// `settings` holds only the fields that changed; film option values go as `{ options: { key: value } }`
-// (null clears one back to the film's default).
-export const saveMusicVideoBlenderSettings = (id, settings, options = {}) => request(`${blenderPath(id)}/settings`, blenderJson('PUT', settings, options));
-export const createMusicVideoBlenderWorkspace = (id, body = { template: 'starter' }, options = {}) =>
-  request(`${blenderPath(id)}/workspace`, blenderJson('POST', body, options));
-// { files: [{ path, bytes, mtime, text }] } for src/; binary assets are listed, never read.
-export const listMusicVideoBlenderFiles = (id, options = {}) => request(`${blenderPath(id)}/files`, options);
-export const getMusicVideoBlenderFile = (id, path, options = {}) => request(`${blenderPath(id)}/file?path=${encodeURIComponent(path)}`, options);
-export const saveMusicVideoBlenderFile = (id, { path, content }, options = {}) => request(`${blenderPath(id)}/file`, blenderJson('PUT', { path, content }, options));
-export const deleteMusicVideoBlenderFile = (id, path, options = {}) =>
-  request(`${blenderPath(id)}/file?path=${encodeURIComponent(path)}`, blenderJson('DELETE', null, options));
-// 3D models copied from the library into src/models/: { models: [{ slug, kind, name, updateAvailable, sourceMissing, snippet }] }.
-export const listMusicVideoBlenderModels = (id, options = {}) => request(`${blenderPath(id)}/models`, options);
-// Body: { kind: 'image-to-3d' | 'threejs', id, variant?, slug?, replace? } → 201 { model, snippet }; a taken slug is 409 unless replace.
-export const addMusicVideoBlenderModel = (id, body, options = {}) => request(`${blenderPath(id)}/models`, blenderJson('POST', body, options));
-// Re-copies one model from its library source → { model, snippet }; never runs by itself.
-export const updateMusicVideoBlenderModel = (id, slug, options = {}) => request(`${blenderPath(id)}/models/${encodeURIComponent(slug)}/update`, blenderJson('POST', {}, options));
-// Starts the film's describe step as a background job → 202 { job }; when it ends the shots are
-// mirrored to storyboard scenes. 409 MUSIC_VIDEO_BLENDER_SCENES_CONFLICT asks for `replaceScenes: true`.
-export const syncMusicVideoBlender = (id, body = {}, options = {}) => request(`${blenderPath(id)}/sync`, blenderJson('POST', body, options));
-// Body: { shotIds?, quality: 'still' | 'sheet' | 'preview' | 'final', times?, sheet?, force?, onlyStale? } → 202 { jobs, skipped }.
-export const renderMusicVideoBlender = (id, body, options = {}) => request(`${blenderPath(id)}/render`, blenderJson('POST', body, options));
-// What the workspace takes on disk: { sourceBytes, rendersBytes, frameBytes, frameFiles, clearableBytes, removedShots }.
-export const getMusicVideoBlenderUsage = (id, options = {}) => request(`${blenderPath(id)}/usage`, options);
-// Removes the frames of finished renders (their videos stay) → { freedBytes, usage }.
-export const clearMusicVideoBlenderFrames = (id, options = {}) => request(`${blenderPath(id)}/frames/clear`, blenderJson('POST', null, options));
-export const cancelMusicVideoBlenderJob = (id, jobId, options = {}) =>
-  request(`${blenderPath(id)}/jobs/${encodeURIComponent(jobId)}/cancel`, blenderJson('POST', null, options));
-export const cancelMusicVideoBlenderJobs = (id, options = {}) => request(`${blenderPath(id)}/cancel`, blenderJson('POST', null, options));
-// Body: { quality: 'preview' | 'final', animatic?, filmLook? } → 202 { job }.
-export const assembleMusicVideoBlenderCut = (id, body, options = {}) => request(`${blenderPath(id)}/cut`, blenderJson('POST', body, options));
-export const saveMusicVideoBlenderShotNote = (id, shotId, body, options = {}) =>
-  request(`${blenderPath(id)}/shots/${encodeURIComponent(shotId)}/note`, blenderJson('PUT', body, options));
-// Replaces a shot's motion references (timing-only clips, at most three) → the film state.
-// Body: { references: [{ id?, filename, inSec, outSec, speed, note }] }.
-export const saveMusicVideoBlenderMotionReferences = (id, shotId, references, options = {}) =>
-  request(`${blenderPath(id)}/shots/${encodeURIComponent(shotId)}/motion-references`, blenderJson('PUT', { references }, options));
-// Tiles one reference on a contact sheet's grid (`sheet`: its media path; omitted, the newest) → { file, path, every, columns, tiles, available }.
-export const makeMusicVideoBlenderMotionStrip = (id, shotId, refId, body = {}, options = {}) =>
-  request(`${blenderPath(id)}/shots/${encodeURIComponent(shotId)}/motion-references/${encodeURIComponent(refId)}/strip`, blenderJson('POST', body, options));
-export const openMusicVideoBlenderShot = (id, shotId, options = {}) =>
-  request(`${blenderPath(id)}/shots/${encodeURIComponent(shotId)}/open`, blenderJson('POST', null, options));
-// A file under the workspace's renders/ folder (shot video, frame, still, cut), for a media element's src.
-export const musicVideoBlenderMediaUrl = (id, path) => `/api${blenderPath(id)}/media?path=${encodeURIComponent(path)}`;
-// A job's log, read as text through the same media route.
-export const getMusicVideoBlenderLog = (id, path, options = {}) =>
-  request(`${blenderPath(id)}/media?path=${encodeURIComponent(path)}`, { responseType: 'text', ...options });
+export const musicVideoFilmApi = createBlenderFilmApi(id => `/music-video/${encodeURIComponent(id)}/blender`);
+export const { musicVideoBlenderMediaUrl } = musicVideoFilmApi;
 
 export const verifyMusicVideoLyrics = (id, options = {}) => request(`/music-video/${encodeURIComponent(id)}/lyrics/verify`, { method: 'POST', body: '{}', ...options });
 export const musicVideoLyricVerifyEventsUrl = jobId => `/api/music-video/lyrics/verify/${encodeURIComponent(jobId)}/events`;

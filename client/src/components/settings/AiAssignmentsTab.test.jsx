@@ -227,6 +227,18 @@ describe('AiAssignmentsTab provider chips', () => {
 });
 
 describe('AiAssignmentsTab assignment management', () => {
+  it('opens an assignment from a prefilled search link', async () => {
+    getAiAssignments.mockResolvedValue(payload([
+      entry({ id: 'settings.memoryClassifier', label: 'Memory extraction model', area: 'Memory & Catalog' }),
+      entry({ id: 'settings.embeddings', label: 'Vector embeddings', area: 'Memory & Catalog' }),
+    ]));
+    render(<MemoryRouter initialEntries={['/settings/ai-assignments?q=Memory+extraction+model']}>
+      <AiAssignmentsTab />
+    </MemoryRouter>);
+    expect(await screen.findByLabelText('Provider for Memory extraction model')).toBeInTheDocument();
+    expect(screen.queryByLabelText('Provider for Vector embeddings')).not.toBeInTheDocument();
+  });
+
   it('filters persisted assignments by assignment type', async () => {
     getAiAssignments.mockResolvedValue(payload([
       entry({ id: 'creative', label: 'Creative row', assignmentType: 'Creative workflows' }),
@@ -354,7 +366,7 @@ describe('AiAssignmentsTab assignment management', () => {
   // land in the catch-all group rather than vanish, or a rotted pin becomes
   // unreachable from the one control that could retarget it.
   it('still offers an assigned provider the install no longer carries', async () => {
-    getAiAssignments.mockResolvedValue(payload([entry({ providerId: 'retired-provider', model: 'old-model' })]));
+    getAiAssignments.mockResolvedValue(payload([entry({ id: 'settings.creativeDirector.plan', providerId: 'retired-provider', model: 'old-model' })]));
     renderTab();
 
     const from = await screen.findByLabelText('Replace from provider');

@@ -39,6 +39,7 @@ export default function Security() {
   const [selectedVideo, setSelectedVideo] = useState('0');
   const [selectedAudio, setSelectedAudio] = useState('0');
   const [error, setError] = useState(null);
+  const [deviceError, setDeviceError] = useState(null);
   const [audioLevel, setAudioLevel] = useState(0);
   const [showSettings, setShowSettings] = useState(false);
   const [isLoading, setIsLoading] = useState(false);
@@ -69,15 +70,20 @@ export default function Security() {
 
   // Fetch available devices from server
   const fetchDevices = useCallback(async () => {
-    const response = await api.get('/media/devices', { silent: true });
-    setDevices(response);
+    try {
+      const response = await api.get('/media/devices', { silent: true });
+      setDevices(response);
+      setDeviceError(null);
 
-    // Set default selections if not already set
-    if (!selectedVideo && response.video.length > 0) {
-      setSelectedVideo(response.video[0].id);
-    }
-    if (!selectedAudio && response.audio.length > 0) {
-      setSelectedAudio(response.audio[0].id);
+      // Set default selections if not already set
+      if (!selectedVideo && response.video.length > 0) {
+        setSelectedVideo(response.video[0].id);
+      }
+      if (!selectedAudio && response.audio.length > 0) {
+        setSelectedAudio(response.audio[0].id);
+      }
+    } catch (err) {
+      setDeviceError(`Failed to fetch devices: ${err.message}`);
     }
   }, [selectedVideo, selectedAudio]);
 
@@ -307,9 +313,7 @@ export default function Security() {
 
   // Fetch devices on mount
   useEffect(() => {
-    fetchDevices().catch(err => {
-      setError(`Failed to fetch devices: ${err.message}`);
-    });
+    void fetchDevices();
   }, [fetchDevices]);
 
   useEffect(() => {
@@ -382,6 +386,10 @@ export default function Security() {
       <div className="flex-1 min-h-0 overflow-auto p-4 md:p-6">
 
       {/* Error display */}
+      {deviceError && (
+        <Banner tone="error" size="lg" className="mb-6">{deviceError}</Banner>
+      )}
+
       {error && (
         <Banner tone="error" size="lg" className="mb-6">{error}</Banner>
       )}
@@ -538,7 +546,7 @@ export default function Security() {
               )}
 
               <button
-                onClick={() => fetchDevices().catch(err => setError(`Failed to fetch devices: ${err.message}`))}
+                onClick={fetchDevices}
                 disabled={isLoading}
                 className="p-3 rounded-full bg-port-card border border-port-border text-gray-400 hover:text-white hover:bg-port-border transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
                 title="Refresh devices" aria-label="Refresh devices"

@@ -19,27 +19,37 @@ the check again to rerun it. Status updates arrive through the existing maintena
 reconnecting or returning to the tab. Loading and failed reads are shown beside
 a retry action rather than reported as an empty queue.
 
-Every scheduled audit category first inventory first-party source roots, scan
-for their category's signals, rank the top five candidates (or all if fewer),
-and validate the strongest candidates before selecting a bounded investigation.
-The raw worst offender may be passed over only with an explanation such as a
-verified exemption or an existing issue. Existing unresolved issues still affect
-the assessment. Low churn alone does not exempt a severe hotspot. Each category
-has its own discovery strategy in `server/lib/auditQuality.js`; these instructions
-are injected at dispatch even when an install customized its stored prompt.
-File-only versus fix mode remains authoritative.
+Each scheduled audit inventories first-party source roots, scans for its
+category's signals, ranks the top five candidates (or all if fewer), and
+validates the strongest candidates before selecting a bounded investigation.
+Prefer to re-verify a slice that scored below 85 once its filed issues are
+closed and their fixes are present in the checkout. When no remediated slice
+needs verification, pick the highest-ranked actionable candidate. Existing
+unresolved issues still affect the assessment. Low churn alone does not exempt
+a severe hotspot. Dispatch injects the discovery strategy from
+`server/lib/auditQuality.js`, including for customized prompts. The selected
+file-only or fix mode remains authoritative.
 
 ## Scoring
 
-Auditors assess the **pre-fix** category from 0–100, where higher is healthier:
+Auditors assess the entire **pre-fix slice** they deep-reviewed on a scale from
+0–100, where higher is healthier. The score reflects the severity, prevalence,
+and reach of verified defects across all deep-reviewed paths. The defect that
+led to selecting the slice is one part of that evidence.
 
 | Score | Meaning |
 | --- | --- |
-| 90–100 | No material defect found after broad evidence |
-| 70–89 | Localized moderate debt |
-| 40–69 | Significant recurring or widespread problems |
-| 10–39 | Severe defects in core workflows |
-| 0–9 | Pervasive critical failure |
+| 96–100 | Exceptional quality demonstrated by inspection (optional) |
+| 90–95 | High quality, with no verified material defects |
+| 85–89 | Healthy, with minor localized polish only |
+| 75–84 | Mostly healthy, with localized moderate defects in secondary paths |
+| 60–74 | Material defects contained within a feature area |
+| 40–59 | Systemic or recurring defects across core workflows |
+| 0–39 | Severe core workflow breakage, data loss, or verified reachable exploits |
+
+Score a clean slice with zero material findings at **90–95**. This is the pragmatic
+ceiling. Deduct points only for demonstrated harm. Optional scores above 95
+never require speculative hardening, defensive layers or micro-optimizations.
 
 Worst-finding severity is a separate 0–10 value (higher is worse; 0 means no
 material finding verified). An issue being filed, or one fix being made, is not
@@ -54,20 +64,29 @@ slice the agent picked — a 20-point swing between consecutive runs was normal.
 Stored v1 reports stay readable; their `score` is read as that run's score.
 
 A category's score is derived server-side: the confidence- and recency-weighted
-mean (high 1, medium 0.5, each further halved per 14 days of age so remediated
-pre-fix runs stop pinning the figure) of its newest five eligible runs — **broad** discovery coverage,
-medium/high confidence, scored, and at most 30 days old — one run per UTC day.
-The pragmatic target band is **85–95**; the audit rubric tells agents not to
-chase 100/100 with speculative hardening. The `audit-slice-history` input shows each
-prior slice's score so a lane can re-verify a remediated slice that scored below 75.
+mean of up to three qualifying runs from the last 30 days. Qualifying runs
+have broad discovery coverage, medium or high confidence, and a score. High
+confidence starts at weight 1 and medium at 0.5, with each weight halved every
+seven days. A newer qualifying run supersedes an older slice when both share
+the same canonical primary path (the first listed segment), or when the newer
+slice covers all of the older slice's comma-separated segments. Paths match
+exactly or by directory prefix at a slash boundary after normalizing case,
+whitespace, and slash notation. Distinct slices may contribute on the same UTC
+day. Each category can contribute at most one slice-less run per UTC day.
+Peer and snapshot runs omit slice names and yield to newer local slices. A
+strictly newer peer or snapshot run can lead the window alongside an earlier
+same-day slice. Named slices win equal timestamps. Same-day local slice-less
+runs yield to retained named slices.
+The pragmatic target band is **85–95**. A qualifying category score of **85**
+or above displays **Target met** in the breakdown.
 The breakdown shows how many runs fed the figure and the worst severity any of
 them found; the row's coverage, confidence, date, slice and summary describe the
-newest run. A newer partial run does not erase a fresh scored one. With no
-eligible run the row shows the newest run's own score beside its stale, partial
+newest run, taking the window leader when same-day qualifying evidence competes.
+A newer partial run does not erase a fresh scored one. With no eligible run the row shows the newest run's own score beside its stale, partial
 or low-confidence label and does not contribute. The overall score is the
 rounded, equal-weight average of the contributing category scores. Broad means
-the signal scan covered the entire declared eligible inventory; deep
-investigation still stays bounded. Partial, stale, low-confidence, unavailable
+the signal scan covered at least 95% of the declared eligible inventory. Deep
+investigation stays bounded. Partial, stale, low-confidence, unavailable
 and inapplicable assessments remain visible but do not contribute. Missing
 categories do not count as 100. The contributing category count is shown beside
 the score so a single good category cannot imply complete coverage. Its denominator is the number of categories that **apply** to the
@@ -78,6 +97,9 @@ assessment shows it applies after all. Inapplicable categories stay listed at
 the bottom of the breakdown with their reason; `totalCategories` keeps the
 catalog size for existing readers. An app with no eligible assessments shows **not assessed**, not zero.
 Database failures show **unavailable** while app management stays usable.
+
+Broad coverage requires a signal scan of at least 95% of a nonempty eligible
+inventory. A scored broad claim below that threshold is recorded as partial.
 
 For PortOS itself, scores cover the install's `P0`-`P2` feature scope: an audit drops
 areas this install marks `P3` (dormant) from its inventory, so `totalFiles`,
@@ -101,11 +123,15 @@ audit batch is enabled automatically. The summary also carries one
 `slice` column (null for runs that predate it, or the v2 report's `slice` when
 the line is missing). Every audit lane preloads its last eight slices for the
 app through the `audit-slice-history` task data input ("Recent audit slices")
-so consecutive runs rotate to other areas instead of re-scanning the same
-inventory; the `ux` and `module-hygiene` prompts read that block for their
-route and slice choice. Peers and the `.quality.json` snapshot
+with each recorded score and worst severity. When lane health is selected, the
+history includes the number of open issues filed by that lane in the observed
+tracker window. Truncated and unavailable reads are labeled. For a below-target
+slice, check its own issues and the fixes in the checkout before re-verification.
+The `ux` and `module-hygiene` prompts read that block for their route and slice choice. Peers and the `.quality.json` snapshot
 receive the numeric v1 wire shape with a v2 run's `sliceScore` in `score`, so
-an older install keeps reading it; the slice text never leaves the machine.
+older installs can read it. Exports set `scannedFiles` to `totalFiles` for
+qualifying broad rows to satisfy older readers' equal-count rule. PostgreSQL and
+the local category tooltip keep the actual counts. Slice text stays local.
 
 ### Lane health
 
@@ -218,8 +244,8 @@ rules as today's score. Coverage is shown with each value because adding or
 losing a category can change the mean without same-category improvement.
 History begins with newly reported assessments; no scores are invented for old
 runs. The local detail endpoint `/api/apps/:id/quality-history?days=90` reads only
-that app's measurements and bounds results to the last measurement per UTC day
-and category, including a 30-day lookback to seed the selected range.
+that app's measurements, including multiple local runs per UTC day, with a
+30-day lookback to seed the selected range.
 
 ## Release snapshot file
 
@@ -332,9 +358,9 @@ this app plus every install-wide type whether or not it is, each perpetual drain
 recheck cadence, and the app's own cron overrides — where a per-app cadence
 REPLACES the global one, as `shouldRunTask` reads it), pads each by an hour before
 and two after, and places slots in the free cells nearest an even spacing. That
-is what keeps an audit out of a 03:30 nightly release window. The types the plan
-is about to rewrite are excluded from that collection, so re-running the form
-does not treat last week's plan as an obstacle to this week's. A window cannot
+is what keeps an audit out of a 03:30 nightly release window. The planner
+excludes the cadence it is about to rewrite, including legacy audits covered
+by the selected domains. A window cannot
 wrap past midnight; asking for one is reported rather than silently collapsed.
 
 **Delivery and the claim drain.** Each check either files issues or implements the
@@ -343,19 +369,21 @@ default** — 11 audits ship `defaultFileIssues: false`, and a form-wide default
 would silently contradict every other dispatch path — with a form-wide override
 and a per-check override above it. When at least one check files issues, one claim
 job — `claim-work` by default, which routes to whichever tracker the app resolves
-to — is scheduled a few hours after each check as a single daily cron (with the
-shipped defaults, `0 3,9,15,21 * * *`), so the issues an audit files get worked
-before the next audit runs. Its placement only ever moves later **in the same
-day** than the check it follows — a daily cron that wrapped past midnight would
-run before every audit, not after — and the slot is dropped rather than wrapped
-when the day has no room left. No claim drain is scheduled when every selected
+to — is scheduled a few hours after each check as a single daily cron, so the
+issues an audit files get worked before the next audit runs. The planner prefers
+audit hours that leave room for the requested claim delay before midnight. If
+only later audit hours are available, it keeps the audit and reports a dropped
+claim slot when the follow-up cannot fit on the same day. No claim drain is
+scheduled when every selected
 check implements its own fixes, and Apply retires a drain an earlier plan planted
 when the drain is switched off or switched to another type (recognized by the
 cron shape this planner emits, so a claim cadence set by hand survives).
 
 Nothing is written until **Apply**, which is also the whole picture: the selected
-checks are enabled with their planned cron and delivery mode, and audit types
-left out are disabled with their stale cron cleared. Other task types are
-untouched. Endpoints: `GET /api/apps/:id/quality-schedule`,
+checks are enabled with their planned cron and delivery mode, and unselected
+domains are disabled with their stale crons cleared. Apply also disables the
+enabled legacy members of each domain that receives a slot and clears their
+crons. Legacy audits that an older client explicitly selects still receive
+their own slots. Endpoints: `GET /api/apps/:id/quality-schedule`,
 `POST /api/apps/:id/quality-schedule/preview` (read-only re-plan), and
 `POST /api/apps/:id/quality-schedule/apply`.

@@ -103,7 +103,7 @@ export default function LoomPlayPanel({ loom, episode: initialEpisode, onClose }
   const [transcript, setTranscript] = useState(() => (start ? [{ role: 'scene', node: start }] : []));
   const [message, setMessage] = useState('');
   const [previewMode, setPreviewMode] = useState('auto');
-  const [failedVideoId, setFailedVideoId] = useState(null);
+  const [failedVideoIds, setFailedVideoIds] = useState(() => new Set());
   const [showInspector, setShowInspector] = useState(false);
   const [hostedModalOpen, setHostedModalOpen] = useState(false);
   const [hostedSession, setHostedSession] = useState(null);
@@ -112,6 +112,7 @@ export default function LoomPlayPanel({ loom, episode: initialEpisode, onClose }
   const hostAudioPlayerRef = useRef(null);
   const hostedSpeechRef = useRef(null);
   const scrollRef = useRef(null);
+  const sessionGenerationRef = useRef(0);
   const hostedSocketRef = useRef(null);
   // The episode id the server-side hosted session is currently bound to —
   // null while no session is active, otherwise re-armed to the current
@@ -189,7 +190,7 @@ export default function LoomPlayPanel({ loom, episode: initialEpisode, onClose }
       // exit, and a failed render belong to the scene being left (#17269).
       setActiveHoldIndex(0);
       setPendingTransition(null);
-      setFailedVideoId(null);
+      setFailedVideoIds(new Set());
       setHostedTurnPhase('idle');
       if (data.node) {
         setScene(data.node);
@@ -273,19 +274,20 @@ export default function LoomPlayPanel({ loom, episode: initialEpisode, onClose }
     transitionId: pendingTransition?.id || null,
   }), [scene, playbackPhase, activeHoldIndex, pendingTransition]);
   const currentVideoId = currentAsset.videoHistoryId || scene?.videoHistoryId || null;
-  const currentVideoFailed = Boolean(currentVideoId && failedVideoId === currentVideoId);
+  const currentVideoFailed = failedVideoIds.has(currentVideoId);
   const activePreviewMode = previewMode === 'auto'
     ? bestAvailablePreviewMode(scene, currentVideoId, currentVideoFailed)
     : previewMode;
 
   const restart = () => {
+    sessionGenerationRef.current += 1;
     setScene(start);
     setPlaybackPhase(initialPhaseForNode(start));
     setActiveHoldIndex(0);
     setPendingTransition(null);
     setTranscript(start ? [{ role: 'scene', node: start }] : []);
     setMessage('');
-    setFailedVideoId(null);
+    setFailedVideoIds(new Set());
   };
 
   useEffect(() => { setPlayEpisodeId(initialEpisode.id); }, [initialEpisode.id]);
@@ -304,6 +306,7 @@ export default function LoomPlayPanel({ loom, episode: initialEpisode, onClose }
   // play stage matches. The panel never resolves a move itself — one owner for
   // the rule, on the side that holds the authored graph.
   const [runTurn, sending] = useAsyncAction(async (turn, history) => {
+    const generation = sessionGenerationRef.current;
     const result = await playLoomTurn(loom.id, episode.id, {
       nodeId: scene.id,
       ...turn,
@@ -315,6 +318,8 @@ export default function LoomPlayPanel({ loom, episode: initialEpisode, onClose }
         .slice(-12)
         .map(({ role, text: t }) => ({ role, text: t })),
     }, { silent: true });
+    if (sessionGenerationRef.current !== generation) return;
+
     const additions = [];
     if (result.narration) additions.push({ role: 'narrator', text: result.narration });
     if (result.action === 'move' && result.node) {
@@ -322,6 +327,7 @@ export default function LoomPlayPanel({ loom, episode: initialEpisode, onClose }
       setPlaybackPhase(initialPhaseForNode(result.node));
       setActiveHoldIndex(0);
       setPendingTransition(null);
+      setFailedVideoIds(new Set());
       additions.push({ role: 'scene', node: result.node });
     }
     // A turn that moves nowhere and says nothing would read as the app
@@ -342,8 +348,8 @@ export default function LoomPlayPanel({ loom, episode: initialEpisode, onClose }
     const history = [...transcript, { role: 'reader', text: choice.intent }];
     setTranscript(history);
 
-    const hasExitClip = Boolean(scene.playbackAssets?.exitByTransition?.[choice.id]);
-    if (hasExitClip && activePreviewMode === 'video') {
+    const exitClipId = scene.playbackAssets?.exitByTransition?.[choice.id];
+    if (exitClipId && !failedVideoIds.has(exitClipId) && activePreviewMode === 'video') {
       setPendingTransition(choice);
       setPlaybackPhase('exit');
     } else {
@@ -356,13 +362,24 @@ export default function LoomPlayPanel({ loom, episode: initialEpisode, onClose }
     runTurn({ transitionId: scene.choices[0].id }, transcript);
   };
 
+  const enterHold = () => {
+    setPlaybackPhase('hold');
+    setActiveHoldIndex(0);
+  };
+
+  const commitExit = () => {
+    if (!pendingTransition) return;
+    setPendingTransition(null);
+    setPlaybackPhase('hold');
+    runTurn({ transitionId: pendingTransition.id }, transcript);
+  };
+
   const handleVideoEnded = () => {
     if (playbackPhase === 'entry') {
       if (automaticCut) {
         advanceCut();
       } else {
-        setPlaybackPhase('hold');
-        setActiveHoldIndex(0);
+        enterHold();
       }
     } else if (playbackPhase === 'hold') {
       const holdLoops = scene?.playbackAssets?.holdLoopVideoHistoryIds || [];
@@ -370,11 +387,16 @@ export default function LoomPlayPanel({ loom, episode: initialEpisode, onClose }
         setActiveHoldIndex((prev) => (prev + 1) % holdLoops.length);
       }
     } else if (playbackPhase === 'exit') {
-      if (pendingTransition) {
-        const choice = pendingTransition;
-        setPendingTransition(null);
-        runTurn({ transitionId: choice.id }, transcript);
-      }
+      commitExit();
+    }
+  };
+
+  const handleVideoError = () => {
+    setFailedVideoIds((prev) => new Set(prev).add(currentVideoId));
+    if (playbackPhase === 'exit') {
+      commitExit();
+    } else if (playbackPhase === 'entry' && !automaticCut) {
+      enterHold();
     }
   };
 
@@ -536,7 +558,7 @@ export default function LoomPlayPanel({ loom, episode: initialEpisode, onClose }
             activeAsset={currentAsset}
             automaticCut={automaticCut}
             videoFailed={currentVideoFailed}
-            onVideoError={() => setFailedVideoId(currentVideoId)}
+            onVideoError={handleVideoError}
           />
           <div className="port-media-overlay-strong absolute left-3 top-3 max-w-[calc(100%-1.5rem)] rounded px-2.5 py-1.5 sm:left-4 sm:top-4">
             <p className="truncate text-[10px] uppercase tracking-[0.18em] opacity-70">

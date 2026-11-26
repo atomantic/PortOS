@@ -67,7 +67,8 @@ export async function readRecentAuditSlices(appId, taskType, deps = {}) {
   return result.rows.map(row => {
     const report = row.report; // jsonb column, already parsed by pg
     const score = report && typeof report === 'object' ? (report.version === 2 ? report.sliceScore : report.score) : null;
-    return { assessedAt: new Date(row.assessed_at).toISOString(), slice: row.slice, sliceScore: Number.isFinite(score) ? score : null };
+    return { assessedAt: new Date(row.assessed_at).toISOString(), slice: row.slice, sliceScore: Number.isFinite(score) ? score : null,
+      worstSeverity: Number.isFinite(report?.worstSeverity) ? report.worstSeverity : null };
   });
 }
 

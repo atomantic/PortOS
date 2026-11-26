@@ -60,9 +60,9 @@ describe('trusted CI test-memo cache reuse', () => {
   it.each([
     ['server', FULL_SUITE_SHARDS.server],
     ['client', FULL_SUITE_SHARDS.client],
-    ['browser', 4],
+    ['browser', FULL_SUITE_SHARDS.browser],
   ])('restores and merges each full-run %s shard lineage once', (family, count) => {
-    const mergeBrowserShards = "env.PORTOS_BROWSER_TEST_PROFILE == 'smoke' && '4' || '0'";
+    const mergeBrowserShards = `env.PORTOS_BROWSER_TEST_PROFILE == 'smoke' && '${FULL_SUITE_SHARDS.browser}' || '0'`;
     const mergeExpression = family === 'browser'
       ? mergeBrowserShards
       : `fromJSON(needs.impact.outputs.plan).${family}_mode == 'full' && '0' || '${count}'`;
@@ -129,9 +129,10 @@ describe('trusted CI test-memo cache reuse', () => {
     expect(additionalKeys(restoreFrom(initial, [fallback, scopedKey], scopedContext))).toEqual(fullKeys);
     expect(additionalKeys(restoreFrom(initial, [], scopedContext))).toEqual(fullKeys);
     // A cache from an older shard layout must still fetch every current lineage.
-    const previousLayout = fullKeys[0].replace(`of${count}-`, `of${count - 1}-`);
+    const previousCount = family === 'client' ? 4 : count - 1;
+    const previousLayout = fullKeys[0].replace(`of${count}-`, `of${previousCount}-`);
     expect(additionalKeys(restoreFrom(initial, [previousLayout], scopedContext))).toEqual(fullKeys);
-    // The delimiter distinguishes, for example, client-4of4 from client-4of40.
+    // The delimiter distinguishes a partition such as client-6of6 from client-6of60.
     expect(additionalKeys(fallback.replace(`of${count}-`, `of${count}0-`))).toEqual(fullKeys);
 
     expect(memoPath(initial)).toBe(memoPath(save));
@@ -148,6 +149,26 @@ describe('trusted CI test-memo cache reuse', () => {
     expect(inPlace).not.toContain('merge-test-memo');
     expect(step(noMergeJob, 'Read the full-run shard lineages in place')).toContain("if: fromJSON('0') >= 1");
     expect(job.indexOf(`- name: Park full-run shard ${count}\n`)).toBeLessThan(job.indexOf('- name: Read the full-run shard lineages in place\n'));
+  });
+
+  it('prefers the new browser lineage and falls back to all four old shard indices', () => {
+    const job = jobs.browser;
+    const currentCount = FULL_SUITE_SHARDS.browser;
+    const oldCount = 4;
+    expect(step(job, 'Restore the test memo')).toContain("legacy-shards: '4'");
+    const mergeInput = `\${{ env.PORTOS_BROWSER_TEST_PROFILE == 'smoke' && '${currentCount}' || '0' }}`;
+    const context = { 'runner.os': 'Linux', 'runner.arch': 'X64' };
+    const previous = Array.from({ length: oldCount }, (_, index) => `test-memo-Linux-X64-browser-${index + 1}of${oldCount}-123`);
+
+    for (let shard = 1; shard <= currentCount; shard += 1) {
+      const rawRestore = step(job, `Restore full-run shard ${shard} of the memo`).replaceAll(mergeInput, String(currentCount));
+      const expression = `\${{ fromJSON(inputs.legacy-shards) >= ${shard} && format('test-memo-{0}-{1}-{2}-${shard}of{3}-', runner.os, runner.arch, inputs.suite, inputs.legacy-shards) || '' }}`;
+      expect(rawRestore).toContain(expression);
+      const restore = rawRestore.replace(expression, shard <= oldCount ? `test-memo-Linux-X64-browser-${shard}of${oldCount}-` : '');
+      const current = `test-memo-Linux-X64-browser-${shard}of${currentCount}-456`;
+      expect(restoreFrom(restore, previous, context)).toBe(previous[shard - 1]);
+      expect(restoreFrom(restore, [...previous, current], context)).toBe(current);
+    }
   });
 
   it('keeps the database consumer on its unsharded restore and save path', () => {

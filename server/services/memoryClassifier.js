@@ -13,6 +13,14 @@ import { extractJson } from '../lib/jsonExtract.js';
 import { fetchWithTimeout } from '../lib/fetchWithTimeout.js';
 import { readResponseJson } from '../lib/readResponseJson.js';
 import { getMemories } from './memoryBackend.js';
+import { isPersistentMindPrivateMemory } from '../lib/memoryQuery.js';
+import { isToolFreeOneShotProvider } from '../lib/provider/providerVendors.js';
+import { getSettings } from './settings.js';
+import { getProviderById } from './provider/providers.js';
+import { probeOpenAiModels } from '../lib/openAiModelsProbe.js';
+import { evaluateSecretEndpoint } from '../lib/aiToolkit/endpointGuard.js';
+import { findCommandOnPath } from '../lib/processEnv.js';
+import { applyCredentialBootstrap } from '../lib/credentialBootstrap.js';
 
 const MODEL_LIST_TIMEOUT_MS = 5000;
 const MODEL_LOAD_TIMEOUT_MS = 120000;
@@ -47,6 +55,22 @@ async function loadConfig() {
   }
   configCache = value ? { ...DEFAULT_CONFIG, ...value } : DEFAULT_CONFIG;
   return configCache;
+}
+
+async function resolveClassifier() {
+  const [config, { memoryClassifier }] = await Promise.all([loadConfig(), getSettings()]);
+  const providerId = memoryClassifier?.providerId || null;
+  return {
+    config,
+    providerId,
+    model: providerId ? memoryClassifier?.model : config.model,
+    disabled: providerId ? providerId === 'none' : !config.enabled,
+  };
+}
+
+async function resolveToolFreeProvider(providerId) {
+  const provider = await getProviderById(providerId);
+  return provider?.enabled !== false && isToolFreeOneShotProvider(provider) ? provider : null;
 }
 
 // updateConfig refuses while the stored bytes are unreadable, so defaults
@@ -88,13 +112,13 @@ export async function updateConfig(updates) {
  */
 async function loadExistingMemorySummary() {
   const [active, pending] = await Promise.all([
-    getMemories({ status: 'active', sortBy: 'importance', sortOrder: 'desc', limit: 30 })
+    getMemories({ status: 'active', sortBy: 'importance', sortOrder: 'desc', limit: 30, excludePersistentMind: true })
       .catch(() => ({ memories: [] })),
-    getMemories({ status: 'pending_approval', limit: 30 })
+    getMemories({ status: 'pending_approval', limit: 30, excludePersistentMind: true })
       .catch(() => ({ memories: [] }))
   ]);
 
-  const allMemories = [...active.memories, ...pending.memories];
+  const allMemories = [...active.memories, ...pending.memories].filter(m => !isPersistentMindPrivateMemory(m));
   if (allMemories.length === 0) return '';
 
   // getMemories() returns index/metadata rows without \`content\` — fall back
@@ -304,6 +328,7 @@ function parseLLMResponse(response, promptToStrip = '') {
 
   // Validate each memory — reject implementation details and low-value noise
   const validMemories = parsed.memories.filter(m => {
+    if (!m || typeof m !== 'object') return false;
     if (!m.type || !m.content || typeof m.confidence !== 'number') return false;
     if (m.confidence < 0.7) return false;
     if (m.content.length < 15) return false;
@@ -315,7 +340,7 @@ function parseLLMResponse(response, promptToStrip = '') {
     // Reject implementation details — file paths, function names, CSS values
     if (/\.(jsx?|tsx?|css|json|md|py|sh|yml)\b/i.test(m.content) && m.type !== 'preference') return false;
     if (/\b\d+px\b/.test(m.content)) return false;
-    if (/\b#[0-9a-f]{6}\b/i.test(m.content) && m.type !== 'preference') return false;
+    if (/(?<!\w)#[0-9a-f]{6}\b/i.test(m.content) && m.type !== 'preference') return false;
     if (/\bport\s+\d{4}\b/i.test(m.content)) return false;
 
     // Reject architecture descriptions (easily discoverable from code)
@@ -345,7 +370,7 @@ function parseLLMResponse(response, promptToStrip = '') {
  * @returns {Object} { memories: [], rejected: [], usedLLM: boolean, error?: string }
  */
 export async function classifyMemories(task, agentOutput) {
-  const config = await loadConfig();
+  const { config, providerId, model, disabled } = await resolveClassifier();
 
   // Skip if output is too short
   if (!agentOutput || agentOutput.length < 100) {
@@ -353,15 +378,21 @@ export async function classifyMemories(task, agentOutput) {
   }
 
   // Skip if disabled
-  if (!config.enabled) {
+  if (disabled) {
     return { memories: [], rejected: [], usedLLM: false, skipped: 'classifier-disabled' };
   }
 
-  const prompt = await buildClassificationPrompt(task, agentOutput, config);
+  const provider = providerId ? await resolveToolFreeProvider(providerId) : null;
+  if (providerId ? !provider : !(await isLegacyAvailable(config))) {
+    return { memories: [], rejected: [], usedLLM: false, skipped: 'classifier-unavailable' };
+  }
 
-  // Call LLM for classification
-  const llmResponse = await callLLM(prompt, config).catch(err => {
-    console.log(`⚠️ LLM classification failed: ${err.message}`);
+  const prompt = await buildClassificationPrompt(task, agentOutput, config);
+  const llmResponse = await (provider
+    ? callAssignedClassifier(provider, model, prompt, config.timeout)
+    : callLLM(prompt, config)
+  ).catch(() => {
+    console.log('⚠️ LLM classification request failed');
     return null;
   });
 
@@ -397,15 +428,18 @@ export async function classifyMemories(task, agentOutput) {
   };
 }
 
-/**
- * Check if the classifier is available (LLM endpoint reachable)
- */
-export async function isAvailable() {
-  const config = await loadConfig();
+async function callAssignedClassifier(provider, model, prompt, timeout) {
+  const { runPromptThroughProvider } = await import('./promptRunner.js');
+  const { text } = await runPromptThroughProvider({
+    provider, model, prompt, source: 'memory-classifier',
+    timeout, maxTokens: 2000,
+    // Agent output is untrusted. Run it without host tools or a provider swap.
+    toolFree: true, allowFallback: false,
+  });
+  return text;
+}
 
-  if (!config.enabled) return false;
-
-  // Quick health check
+async function isLegacyAvailable(config) {
   const response = await fetchWithTimeout(
     config.endpoint.replace('/chat/completions', '/models'),
     { method: 'GET' },
@@ -413,4 +447,34 @@ export async function isAvailable() {
   ).catch(() => null);
 
   return response?.ok === true;
+}
+
+/** Check reachability without submitting any agent output or starting inference. */
+export async function getClassifierAvailability() {
+  const { config, providerId, model, disabled } = await resolveClassifier();
+  if (disabled) return { available: false, disabled: true };
+  if (!providerId) return { available: await isLegacyAvailable(config), disabled: false };
+
+  const provider = await resolveToolFreeProvider(providerId);
+  if (!provider) return { available: false, disabled: false };
+
+  if (provider.type === 'cli') {
+    // Check executable discovery only. A status read must not launch a provider.
+    const { command } = applyCredentialBootstrap(provider, provider.command, []);
+    const available = Boolean(findCommandOnPath(command, { env: { ...process.env, ...provider.envVars } }));
+    return { available, disabled: false };
+  }
+
+  if (provider.apiKey && !evaluateSecretEndpoint(provider.endpoint, {
+    allowCustomEndpoint: provider.allowCustomEndpoint === true,
+  }).allowed) {
+    return { available: false, disabled: false };
+  }
+
+  const probe = await probeOpenAiModels(provider.endpoint, { apiKey: provider.apiKey, timeoutMs: HEALTH_CHECK_TIMEOUT_MS });
+  const selectedModel = model || provider.defaultModel;
+  const available = probe.reachable && Array.isArray(probe.models) && (
+    !selectedModel || probe.models.some(id => id === selectedModel || id === `${selectedModel}:latest`)
+  );
+  return { available, disabled: false };
 }

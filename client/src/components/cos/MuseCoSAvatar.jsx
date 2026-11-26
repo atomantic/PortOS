@@ -1,6 +1,7 @@
 import { useRef, useMemo, useEffect, useState, useCallback, Suspense } from 'react';
 import { Canvas, useFrame, useThree } from '@react-three/fiber';
-import { useGLTF, Sparkles } from '@react-three/drei';
+import { useGLTF } from '../../lib/threeHelpers/gltf.js';
+import { Sparkles } from '../../lib/threeHelpers/effects.jsx';
 import * as THREE from 'three';
 import {
   AGENT_STATES,

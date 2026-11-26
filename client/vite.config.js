@@ -229,12 +229,6 @@ export default defineConfig(({ command, mode }) => {
       // Share Three.js without bypassing its package exports with a directory alias.
       dedupe: ['three'],
     },
-    // Recharts is imported by lazy-loaded pages. Its published ESM files use
-    // bare es-toolkit/compat/* imports, so prebundle it before a lazy tab can
-    // expose those specifiers directly to the browser.
-    optimizeDeps: {
-      include: ['recharts']
-    },
     server: {
       host: '0.0.0.0',
       port: 5554,
@@ -318,29 +312,13 @@ export default defineConfig(({ command, mode }) => {
             // rolldown option, so it's the one field left out here.
             groups: CHUNK_GROUPS.map(({ packages, ...group }) => group)
           },
-          // `vendor-three-loaders` disables recursive dependency capture to
-          // keep the loaders out of the main three chunk. Rolldown warns that
-          // this can create invalid execution order across chunks; preserve
-          // source module order so lazy routes don't evaluate against missing
-          // runtime exports.
+          // Application groups disable recursive capture. Preserve initialization order across their chunks.
           strictExecutionOrder: true,
         }
       },
       // Enable source maps for debugging in production
       sourcemap: false,
-      // Chunk size warning budget (#8146). `vendor-three` — three.js core plus
-      // @react-three/fiber and drei's own runtime (troika text rendering,
-      // camera-controls, meshline, zustand, …), all lazy-loaded and shared by
-      // every 3D page (Model Detail, Brain/Memory graph, Goals tree, CoS
-      // avatars) — measures ~1.08 MB minified / ~300 KB gzip. That floor is
-      // three.js's own footprint, not something PortOS's imports control: the
-      // GLTF/DRACO/KTX2/HDR loaders and the USDZ exporter are already split
-      // into their own `vendor-three-loaders` chunk (~114 KB / ~35 KB gzip)
-      // that only pages actually loading an asset pay for, and drei's helper
-      // runtime is deliberately kept IN `vendor-three` rather than
-      // re-duplicated into each page's own chunk (see `vite.chunkGroups.js`).
-      // 1200 KB gives `vendor-three` headroom without silencing every other
-      // chunk's real regression budget.
+      // Budget for Three and its renderer, shared by lazy 3D routes (#8146).
       chunkSizeWarningLimit: 1200
     }
   };

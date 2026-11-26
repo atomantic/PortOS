@@ -7,7 +7,7 @@ const astCache = new Map();
 function parseSource(source) {
   let ast = astCache.get(source);
   if (!ast) {
-    ast = parse(source, { sourceType: 'module', tokens: true });
+    ast = parse(source, { sourceType: 'module', tokens: true, attachComment: false });
     astCache.set(source, ast);
   }
   return ast;
@@ -134,7 +134,10 @@ function returnedExpressions(node, expressions = []) {
 export function buildJsonReadWrapperRegistry(modules) {
   const registry = new Map();
   for (const [module, source] of modules) {
-    if (!mayReadJsonFile(source) && !source.includes('tryReadFile')) continue;
+    // Only exported direct JSON reads or a raw read returned through the JSON
+    // parser can supply wrapper descriptors. Escaped identifiers need the AST.
+    if (!source.includes('export') || !(source.includes('readJSONFile') || source.includes('\\u')
+      || (source.includes('safeJSONParse') && /tryReadFile|readFile/.test(source)))) continue;
     const ast = parseSource(source);
     const names = helperNames(ast);
     const functions = new Map();

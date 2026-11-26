@@ -206,6 +206,44 @@ describe('getAiAssignments', () => {
 });
 
 describe('updateAiAssignment routing', () => {
+  it('offers tool-free presets and Disabled beside embeddings', async () => {
+    mocks.getSelectableProviders.mockResolvedValue({
+      activeProvider: 'ollama',
+      providers: [
+        { id: 'ollama', name: 'Ollama', type: 'api' },
+        { id: 'claude', name: 'Claude', type: 'cli', command: 'claude' },
+        { id: 'codex', name: 'Codex', type: 'cli', command: 'codex' },
+      ],
+    });
+    const { assignments } = await getAiAssignments();
+    const embeddingIndex = assignments.findIndex(entry => entry.id === 'settings.embeddings');
+    expect(assignments[embeddingIndex + 1]).toMatchObject({
+      id: 'settings.memoryClassifier',
+      area: 'Memory & Catalog',
+      label: 'Memory extraction model',
+      providerOptions: [
+        { id: 'none', name: 'Disabled' },
+        { id: 'ollama', name: 'Ollama' },
+        { id: 'claude', name: 'Claude' },
+      ],
+    });
+  });
+
+  it.each(['ollama', 'none', null])('saves the extraction assignment for %s', async providerId => {
+    mocks.getProviderById.mockResolvedValue({ id: 'ollama', type: 'api', enabled: true });
+    await updateAiAssignment('settings.memoryClassifier', { providerId, model: 'qwen3:8b' });
+    expect(mocks.updateSettings).toHaveBeenCalledExactlyOnceWith({
+      memoryClassifier: { providerId, model: providerId === 'ollama' ? 'qwen3:8b' : null },
+    });
+  });
+
+  it('refuses to assign a CLI that needs host tools', async () => {
+    mocks.getProviderById.mockResolvedValue({ id: 'codex', type: 'cli', command: 'codex', enabled: true });
+    await expect(updateAiAssignment('settings.memoryClassifier', { providerId: 'codex' }))
+      .rejects.toMatchObject({ status: 400, code: 'VALIDATION_ERROR' });
+    expect(mocks.updateSettings).not.toHaveBeenCalled();
+  });
+
   it('provider.active sets the active provider', async () => {
     await updateAiAssignment('provider.active', { providerId: 'claude' });
     expect(mocks.setActiveProvider).toHaveBeenCalledWith('claude');

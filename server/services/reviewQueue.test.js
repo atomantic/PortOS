@@ -1328,6 +1328,42 @@ describe('reviewQueue triage', () => {
     }));
   });
 
+  it('reads only the direct producer for direct IDs and loads goals only for Ask', async () => {
+    askConversations.listConversations.mockResolvedValue([{
+      id: 'a1', title: 'Optional', promoted: false, assistantTurnCount: 1,
+    }]);
+
+    await expect(triageQueueItem('brain:missing', 'unsnooze')).rejects.toMatchObject({
+      status: 404, code: 'NOT_FOUND',
+    });
+    expect(brain.getInboxLog).toHaveBeenCalledOnce();
+    expect(askConversations.listConversations).not.toHaveBeenCalled();
+    expect(identity.getGoals).not.toHaveBeenCalled();
+    expect(reviewService.getItems).not.toHaveBeenCalled();
+    expect(proactiveAlerts.generateNonProductAlerts).not.toHaveBeenCalled();
+
+    await expect(triageQueueItem('ask:a1', 'dismiss')).resolves.toMatchObject({ triaged: true });
+    expect(identity.getGoals).toHaveBeenCalledOnce();
+    expect(brain.getInboxLog).toHaveBeenCalledOnce();
+  });
+
+  it.each([
+    ['memory', 'memory_approval', { memoryId: 'target' }, '/cos/memory', 'memory.approval'],
+    ['cos', 'task_approval', { taskId: 'target' }, '/cos/tasks', 'task.approval'],
+  ])('gathers the adapter producers for %s IDs', async (source, type, metadata, link, actionKind) => {
+    notifications.getNotifications.mockResolvedValue([{ id: 'record', type, metadata, link }]);
+
+    await expect(triageQueueItem(`${source}:target`, 'unsnooze')).resolves.toMatchObject({ triaged: true });
+    expect(reviewService.getItems).toHaveBeenCalledExactlyOnceWith({ status: 'pending' });
+    expect(notifications.getNotifications).toHaveBeenCalledOnce();
+    expect(cosTaskStore.getCosApprovalView).toHaveBeenCalledTimes(source === 'cos' ? 1 : 0);
+    expect(reviewQueueTriageStore.removeReviewQueueTriage).toHaveBeenCalledWith(expect.objectContaining({
+      actionKey: `${actionKind}:target`,
+    }));
+    expect(brain.getInboxLog).not.toHaveBeenCalled();
+    expect(identity.getGoals).not.toHaveBeenCalled();
+  });
+
   it('rejects a triage mutation when the owning source read is unavailable', async () => {
     brain.getInboxLog.mockRejectedValue(new Error('inbox unavailable'));
 

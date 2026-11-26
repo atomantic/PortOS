@@ -19,12 +19,6 @@ import {
 } from './tailcatPeer.js';
 import { DEFAULT_TAILCAT_LOCAL_PORT, DEFAULT_TAILCAT_REMOTE_PORT } from '../lib/ports.js';
 
-vi.mock('fs/promises', async (original) => ({
-  ...(await original()),
-  chmod: vi.fn().mockResolvedValue(undefined),
-}));
-import { chmod } from 'fs/promises';
-
 // secureAuthStore writes through fileCore; mock at that source so the fileUtils re-export is the same spy.
 vi.mock('../lib/fileCore.js', async (original) => ({
   ...(await original()),
@@ -706,7 +700,7 @@ describe('saved tailcat forwards', () => {
     expect(removePeerFn).toHaveBeenCalledWith('peer-1', { stopTransport: false });
     const [, written] = atomicWrite.mock.calls.at(-1);
     expect(written.forwards).toEqual([]);
-    expect(chmod).toHaveBeenCalledWith(expect.stringMatching(/tailcat-forwards\.json$/), 0o600);
+    expect(atomicWrite).toHaveBeenLastCalledWith(expect.stringMatching(/tailcat-forwards\.json$/), expect.any(Object), { mode: 0o600 });
   });
 });
 

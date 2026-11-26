@@ -33,15 +33,12 @@ describe.skipIf(!chrome)('Goals responsive controls', () => {
           if (id === '/goals-fixture.jsx') return '\0goals-fixture.jsx';
           // The regression concerns the toolbar, not WebGL scene rendering.
           if (id === '@react-three/fiber') return '\0goals-fiber.jsx';
-          if (id === '@react-three/drei') return '\0goals-drei.js';
         },
         load(id) {
           if (id === '\0goals-fiber.jsx') return `import React from 'react';
             export const Canvas = () => React.createElement('div');
             export const useFrame = () => {};
             export const useThree = () => null;`;
-          if (id === '\0goals-drei.js') return `export const OrbitControls = () => null;
-            export const Billboard = () => null; export const Text = () => null;`;
           if (id !== '\0goals-fixture.jsx') return;
           return `
             import React from 'react';
@@ -161,12 +158,10 @@ describe.skipIf(!chrome)('Goals responsive controls', () => {
       await page.route('**/api/**', route => route.fulfill({ json: [] }));
       await page.goto(`${origin}goals-test?list&layout`);
       const workspace = page.getByRole('main', { name: 'Goals workspace' });
-      const title = page.getByText('Nested example 9', { exact: true });
-      const addAction = page.getByRole('button', { name: 'Add sub-goal' });
-      const row = page.getByRole('button').filter({ has: title }).filter({ has: addAction });
-      const deepTitle = row.getByText('Nested example 9', { exact: true });
+      const selectGoal = workspace.getByRole('button', { name: /^Nested example 9/ });
+      const deepTitle = selectGoal.getByText('Nested example 9', { exact: true });
       await deepTitle.waitFor({ timeout: ASYNC_UTIL_TIMEOUT_MS });
-      const addSubGoal = row.getByRole('button', { name: 'Add sub-goal' });
+      const addSubGoal = workspace.getByRole('button', { name: 'Add sub-goal under Nested example 9', exact: true });
       const parentTitle = page.getByText('Nested example 1', { exact: true });
       const leafTitle = page.getByText('Sibling leaf', { exact: true });
       for (const [width, height] of [[320, 800], [360, 800], [768, 1024], [1024, 768], [1155, 900], [1156, 900], [1440, 900], [1536, 900]]) {
@@ -189,7 +184,7 @@ describe.skipIf(!chrome)('Goals responsive controls', () => {
           await page.getByRole('button', { name: 'Cancel', exact: true }).click();
         }
         if (width >= 768) {
-          await deepTitle.click();
+          await selectGoal.click();
           const panel = page.getByRole('region', { name: 'Goal details' });
           const workspaceWidth = (await workspace.boundingBox()).width;
           const panelBox = await panel.boundingBox();
@@ -199,8 +194,16 @@ describe.skipIf(!chrome)('Goals responsive controls', () => {
             const action = await addSubGoal.boundingBox();
             expect(action.x + action.width).toBeLessThanOrEqual(panelBox.x);
             await addSubGoal.click({ trial: true });
+            await panel.getByRole('button', { name: 'Close panel' }).click();
+            await panel.waitFor({ state: 'hidden' });
+          } else {
+            const heading = panel.getByRole('heading', { level: 2, name: 'Nested example 9' });
+            await heading.waitFor();
+            expect(await heading.evaluate(element => document.activeElement === element)).toBe(true);
+            await page.keyboard.press('Escape');
+            await panel.waitFor({ state: 'hidden' });
+            expect(await selectGoal.evaluate(element => document.activeElement === element)).toBe(true);
           }
-          await page.getByRole('button', { name: 'Close panel' }).click();
         }
       }
       await page.addStyleTag({ content: 'html { font-size: 20px; }' });

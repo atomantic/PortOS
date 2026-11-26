@@ -96,7 +96,7 @@ export function ensureDocumentInMeta(meta, filename, title, category, { enabled 
 export async function ensureSoulDir() {
   if (!existsSync(DIGITAL_TWIN_DIR)) {
     await ensureDir(DIGITAL_TWIN_DIR);
-    console.log(`🧬 Created soul data directory: ${DIGITAL_TWIN_DIR}`);
+    console.log('🧬 Created soul data directory: data/digital-twin');
   }
 }
 

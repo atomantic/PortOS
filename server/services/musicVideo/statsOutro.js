@@ -34,6 +34,8 @@ const ENDING_FONT_FILES = Object.freeze({
   [STATS_OUTRO_FONTS.body.file]: FONT_DIR,
   [CREDITS_OUTRO_FONTS.title.file]: TITLE_FONT_DIR,
   [CREDITS_OUTRO_FONTS.body.file]: FONT_DIR,
+  [CREDITS_OUTRO_FONTS.condensed.file]: TITLE_FONT_DIR,
+  [CREDITS_OUTRO_FONTS.mono.file]: FONT_DIR,
 });
 
 /** The tally for a floor that is not shown: nothing to count, nothing on the floor. */
@@ -101,8 +103,7 @@ function endingPage({ width, height }) {
   return `<!doctype html><html><head><meta charset="utf-8"><title>Ending</title>
 <style>${face(STATS_OUTRO_FONTS.head, '100 900')}
 ${face(STATS_OUTRO_FONTS.body, '100 900')}
-${face(CREDITS_OUTRO_FONTS.title, CREDITS_OUTRO_FONTS.title.weight)}
-${face(CREDITS_OUTRO_FONTS.body, CREDITS_OUTRO_FONTS.body.weight)}
+${Object.values(CREDITS_OUTRO_FONTS).map((font) => face(font, font.weight)).join('\n')}
 html,body{margin:0;width:${width}px;height:${height}px;overflow:hidden;background:#000}canvas{display:block;width:${width}px;height:${height}px}</style>
 </head><body><canvas id="outro"></canvas><script src="app.js"></script></body></html>\n`;
 }

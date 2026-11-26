@@ -1,7 +1,7 @@
 import { useState, useEffect, useCallback } from 'react';
 import {
   BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer
-} from 'recharts';
+} from '../ui/charts';
 import { getDailyNicotine } from '../../services/apiMeatspace.js';
 import BrailleSpinner from '../BrailleSpinner';
 import LoadFailureNotice from './LoadFailureNotice';

@@ -15,6 +15,7 @@
  */
 
 import { useMemo, useState } from 'react';
+import { Link } from 'react-router';
 import { PlayCircle, History } from 'lucide-react';
 import Modal from '../ui/Modal';
 import BrailleSpinner from '../BrailleSpinner';
@@ -194,7 +195,9 @@ export default function LocalBenchmarkPanel({ report, runtimeLabelFor, disabled 
       </div>
 
       {!candidates.length ? (
-        <p className="text-xs text-gray-500">{report ? 'No installed local models are listable right now. Start a runtime on the LLMs page to benchmark it.' : 'Loading installed models…'}</p>
+        <p className="text-xs text-gray-500">
+          {report ? <>No local models are available to benchmark. <Link to="/models/llms-runtimes" className="text-port-accent hover:underline">View runtimes</Link></> : 'Loading installed models…'}
+        </p>
       ) : (
         <fieldset className="flex flex-wrap gap-2" disabled={starting}>
           <legend className="sr-only">Models to benchmark</legend>

@@ -1,5 +1,5 @@
 import { MUSIC_VIDEO_FRAME_FITS } from '../../lib/musicVideoLayers.js';
-import { matchesMusicVideoAspect } from '../../lib/musicVideoAspect.js';
+import { matchesMusicVideoAspect } from '../../../../server/lib/musicVideo/musicVideoAspect.js';
 
 export const FRAME_FIT_LABELS = Object.freeze({
   fill: 'Zoom to fill',

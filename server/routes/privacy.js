@@ -27,6 +27,7 @@ import {
   privacySubjectConsentRevokeSchema,
   privacyChangeListQuerySchema,
   privacySubjectScopeQuerySchema,
+  privacyTwinHistoryCleanupSchema,
   privacyVaultCreateSchema,
   privacyVaultUpdateSchema,
   privacyVaultListQuerySchema,
@@ -186,6 +187,12 @@ router.post('/subjects/:id/consents/revoke', asyncHandler(async (req, res) => {
 router.get('/status', asyncHandler(async (req, res) => {
   const { subjectId } = validateRequest(privacySubjectScopeQuerySchema, req.query);
   res.json(await getVaultStatus({ subjectId }));
+}));
+
+router.post('/twin-history/cleanup', asyncHandler(async (req, res) => {
+  const request = validateRequest(privacyTwinHistoryCleanupSchema, req.body);
+  const { cleanHistoricalTwinArtifacts } = await import('../services/privacyTwinHistory.js');
+  res.json(await cleanHistoricalTwinArtifacts(request));
 }));
 
 router.get('/vault', asyncHandler(async (req, res) => {

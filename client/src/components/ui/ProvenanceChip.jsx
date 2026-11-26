@@ -132,6 +132,11 @@ export default function ProvenanceChip({
         ref={btnRef}
         type="button"
         onClick={() => setOpen((v) => !v)}
+        onKeyDown={(event) => {
+          if (event.key !== 'Escape' || !open) return;
+          event.preventDefault();
+          close();
+        }}
         aria-expanded={open}
         aria-controls={open ? popId : undefined}
         title={`${meta.label} — tap for how this is derived`}

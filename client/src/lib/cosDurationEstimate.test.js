@@ -1,3 +1,4 @@
+// @vitest-environment node
 import { describe, it, expect } from 'vitest';
 import { executionDurationKey as serverExecutionDurationKey } from '../../../server/lib/executionDurationKey.js';
 import { estimateCosDuration } from './cosDurationEstimate.js';

@@ -152,6 +152,39 @@ describe('ImageGen cross-page Remix handoff', () => {
     expect(state.loraPickerProps.selected).toEqual([]);
   });
 
+  it.each([
+    { mode: 'fal', model: 'fal-ai/nano-banana-pro' },
+    { mode: 'fal', model: 'fal-ai/nano-banana-2' },
+    { mode: 'google', model: 'gemini-3-pro-image' },
+    { mode: 'google', model: 'gemini-3.1-flash-image' },
+  ])('keeps every $model reference active after Remix and reserves one slot for an init image', async ({ mode, model }) => {
+    state.settings = { imageGen: { mode, [mode]: { enabled: true, model } } };
+    const references = Array.from({ length: 14 }, (_, index) => `reference-${index}.png`);
+    state.getGalleryImages.mockResolvedValue([{
+      ...RECORD,
+      initImageFilename: 'source.png',
+      referenceImageFilenames: references.slice(0, 13),
+    }]);
+    state.initImagePickerFactory = ({ initImage, onClear }) => initImage.source && (
+      <button type="button" onClick={onClear}>Clear source</button>
+    );
+    vi.stubGlobal('fetch', vi.fn(async () => ({
+      ok: true, blob: async () => new Blob(['x'], { type: 'image/png' }),
+    })));
+    try {
+      await renderImageGenPage('/media/image?remix=' + encodeURIComponent(RECORD.filename));
+
+      await waitFor(() => expect(state.referenceImagePickerProps?.referenceImages.map(({ file }) => file?.name))
+        .toEqual(references.slice(0, 13)));
+      expect(screen.queryByText(/won't be sent/)).toBeNull();
+
+      fireEvent.click(screen.getByRole('button', { name: 'Clear source' }));
+      expect(state.referenceImagePickerProps.referenceImages).toHaveLength(14);
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+
   it('restores the init and reference images the render used', async () => {
     const flux2 = imageGenModel('flux2-example', { name: 'Example FLUX.2', runner: 'flux2' });
     state.models = [flux2];

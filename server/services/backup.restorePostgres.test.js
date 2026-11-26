@@ -10,6 +10,8 @@ import { spawn } from '../lib/childProcess.js';
 import { resolve } from 'path';
 import * as fs from 'fs/promises';
 import { maintenance } from '../lib/maintenanceAdmission.js';
+import { execFileAsync } from '../lib/fileUtils.js';
+import { posixPath } from '../lib/testHelper.js';
 
 describe('restorePostgres', () => {
   let restorePostgres;
@@ -35,6 +37,8 @@ describe('restorePostgres', () => {
     // clearAllMocks does not undo stubEnv — a PGPASSWORD stub from a failed
     // (thrown) test would otherwise leak into every test after it.
     vi.unstubAllEnvs();
+    vi.stubEnv('PORTOS_PSQL', undefined);
+    execFileAsync.mockReset().mockResolvedValue({ stdout: '' });
     rmSync(RECOVERY_JOURNAL(), { force: true });
     query.mockReset().mockImplementation(restoreDbAnswer());
     executionRestore.prepare.mockReset().mockResolvedValue(undefined);
@@ -126,6 +130,7 @@ describe('restorePostgres', () => {
     expect(result.sizeBytes).toBe(4096);
     expect(result.tableCount).toBe(2);
     expect(spawn).not.toHaveBeenCalled();
+    expect(execFileAsync).not.toHaveBeenCalled();
     expect(withDatabaseMaintenance).not.toHaveBeenCalled();
     expect(readRecoveryJournal()).toBeNull();
     expect(ensureSchema).not.toHaveBeenCalled();
@@ -829,6 +834,35 @@ describe('restorePostgres', () => {
     } finally {
       vi.useRealTimers();
     }
+  });
+
+  it.each([
+    ['PORTOS_PSQL override', '/custom/bin/psql', '', '/custom/bin/psql'],
+    ['keg-only client', undefined, '', '/opt/homebrew/opt/postgresql@17/bin/psql'],
+    ['older PATH client', undefined, 'psql (PostgreSQL) 16.12', '/opt/homebrew/opt/postgresql@17/bin/psql'],
+  ])('spawns the resolved psql with a %s', async (_case, override, pathOutput, expectedBinary) => {
+    const homebrew = '/opt/homebrew/opt';
+    const kegBinary = `${homebrew}/postgresql@17/bin/psql`;
+    const readDir = fs.readdir.getMockImplementation();
+    fs.readdir.mockImplementation(async (path, ...args) => {
+      if (path === homebrew) return ['postgresql@17'];
+      if (path === '/usr/local/opt' || path === '/Applications/Postgres.app/Contents/Versions') return [];
+      return readDir(path, ...args);
+    });
+    execFileAsync.mockImplementation(async binary => ({
+      stdout: binary === 'psql' ? pathOutput : posixPath(binary) === kegBinary ? 'psql (PostgreSQL) 17.12' : '',
+    }));
+    vi.stubEnv('PORTOS_PSQL', override);
+    getServerMajorVersion.mockResolvedValue(17);
+    vi.spyOn(fs, 'stat').mockResolvedValue({ size: 4096, isFile: () => true });
+    mockLegacyDumpRead();
+    const proc = fakeProc();
+    spawn.mockReturnValue(proc);
+    const pending = restorePostgres('/dest', 'snap-1', { dryRun: false });
+    await flush();
+    proc.emit('close', 0);
+    expect(await pending).toMatchObject({ status: 'ok', dryRun: false });
+    expect(posixPath(spawn.mock.calls[0][0])).toBe(expectedBinary);
   });
 
   // The atomicity contract: ON_ERROR_STOP=1 aborts on the first failed statement

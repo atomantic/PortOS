@@ -1,7 +1,7 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { DatabaseSync } from 'node:sqlite';
 import crypto from 'node:crypto';
-import { existsSync, mkdirSync, readFileSync, writeFileSync, rmSync } from 'node:fs';
+import { mkdirSync, readFileSync, writeFileSync, rmSync } from 'node:fs';
 import { join } from 'node:path';
 import { createTempDataRoot } from '../lib/mockPathsDataRoot.js';
 import { decryptSqlcipherDatabase, deriveSqlcipherKeys, sqlcipherPageHmac,
@@ -9,7 +9,7 @@ import { decryptSqlcipherDatabase, deriveSqlcipherKeys, sqlcipherPageHmac,
   SQLCIPHER_IV_BYTES } from '../lib/signalCrypto.js';
 
 const mocks = vi.hoisted(() => ({
-  root: '', snapshots: [], recordEvents: vi.fn(), autoLogTouchpoints: vi.fn(),
+  root: '', snapshotDirAttempts: [], recordEvents: vi.fn(), autoLogTouchpoints: vi.fn(),
   readFile: vi.fn(), execFile: vi.fn(),
 }));
 vi.mock('../lib/fileUtils.js', async (importOriginal) => {
@@ -21,9 +21,8 @@ vi.mock('../lib/childProcess.js', () => ({ execFile: mocks.execFile }));
 vi.mock('node:fs/promises', async (importOriginal) => {
   const actual = await importOriginal();
   return { ...actual, mkdtemp: async (...args) => {
-    const path = await actual.mkdtemp(...args);
-    mocks.snapshots.push(path);
-    return path;
+    mocks.snapshotDirAttempts.push(args[0]);
+    return actual.mkdtemp(...args);
   } };
 });
 vi.mock('./settings.js', () => ({ getSettings: vi.fn(async () => ({ signal: { enabled: true } })) }));
@@ -96,7 +95,7 @@ beforeEach(() => {
   mocks.readFile.mockClear();
   mocks.execFile.mockReset().mockImplementation((...args) => args.at(-1)(new Error('Unexpected keychain access')));
   mocks.root = createTempDataRoot('signal-auth-test-');
-  mocks.snapshots = [];
+  mocks.snapshotDirAttempts = [];
   mkdirSync(join(mocks.root, 'sql'));
   writeFileSync(join(mocks.root, 'config.json'), JSON.stringify({ key: KEY }));
   vi.stubEnv('SIGNAL_DIR', mocks.root);
@@ -112,12 +111,8 @@ afterEach(() => {
   vi.unstubAllEnvs();
   rmSync(mocks.root, { recursive: true, force: true });
   vi.restoreAllMocks();
+  expect(mocks.snapshotDirAttempts).toEqual([]);
 });
-
-function expectSnapshotsRemoved() {
-  expect(mocks.snapshots.length).toBeGreaterThan(0);
-  expect(mocks.snapshots.every((path) => !existsSync(path))).toBe(true);
-}
 
 describe('Signal authenticated snapshot ingestion', () => {
   it.each([{}, { signal: { enabled: false } }])('refuses disabled sync and setup before any Signal file or keychain access (%j)', async (settings) => {
@@ -131,7 +126,6 @@ describe('Signal authenticated snapshot ingestion', () => {
     expect(await checkSetup()).toEqual({ enabled: false });
     expect(mocks.readFile).not.toHaveBeenCalled();
     expect(mocks.execFile).not.toHaveBeenCalled();
-    expect(mocks.snapshots).toEqual([]);
     expect(mocks.recordEvents).not.toHaveBeenCalled();
     expect(mocks.autoLogTouchpoints).not.toHaveBeenCalled();
   });
@@ -166,7 +160,6 @@ describe('Signal authenticated snapshot ingestion', () => {
     expect(await runSync()).toMatchObject({ ok: true, recorded: 0, scanned: 0, cursorRowid: 8 });
     expect(mocks.recordEvents.mock.calls[1][0]).toEqual([]);
     expect((await readSyncState()).cursorRowid).toBe(8);
-    expectSnapshotsRemoved();
   });
 
   it('refuses a corrupt sync-state file without ingesting or overwriting it, and getStatus stays usable', async () => {
@@ -220,6 +213,5 @@ describe('Signal authenticated snapshot ingestion', () => {
     expect(mocks.autoLogTouchpoints).not.toHaveBeenCalled();
     expect(readFileSync(statePath, 'utf8')).toBe(state);
     expect((await readSyncState()).cursorRowid).toBe(7);
-    expectSnapshotsRemoved();
   });
 });

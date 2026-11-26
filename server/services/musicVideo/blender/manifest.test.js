@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { blenderFilmProblems, blenderLeadSec, blenderSongEndSec, validateBlenderManifest } from './manifest.js';
+import { blenderFilmProblems, blenderLeadSec, blenderSongEndSec, validateBlenderManifest } from '../../film/manifest.js';
 import { blenderFrameName } from '../../film/renderIndex.js';
 import { blenderStillName } from '../../film/renderJob.js';
 

@@ -191,11 +191,6 @@ export const memoryConsolidateSchema = z.object({
   reason: z.string().max(2000).optional()
 });
 
-// Decay request schema — 0.02 is 2x the shipped default; higher rates purge rather than tune
-export const memoryDecaySchema = z.object({
-  decayRate: z.number().positive().max(0.02).optional().default(0.01)
-}).strict();
-
 // Link memories request schema
 export const memoryLinkSchema = z.object({
   sourceId: z.string().guid(),
@@ -233,9 +228,14 @@ const syncMemoryItemSchema = z.object({
   syncSequence: z.string().regex(/^\d+$/).optional()
 });
 
+export const memorySyncDeletedIdsSchema = z.array(z.object({
+  id: z.string().guid(), deletedAt: z.string().datetime()
+})).max(1000);
+
 // Sync request body schema
 export const memorySyncSchema = z.object({
   memories: z.array(syncMemoryItemSchema).max(1000),
+  deletedIds: memorySyncDeletedIdsSchema.optional(),
   schemaVersion: z.number().int().nonnegative().optional()
 });
 
@@ -256,6 +256,7 @@ export const memoryDeleteQuerySchema = memoryRetireSchema.extend({
 });
 
 export const memorySyncQuerySchema = z.object({
+  tombstoneVersion: z.literal('1').optional(),
   since: z.string().regex(/^\d+$/).default('0'),
   limit: z.coerce.number().int().min(1).transform(value => Math.min(value, 1000)).default(100),
   schemaVersion: z.coerce.number().int().nonnegative().optional()

@@ -162,7 +162,7 @@ export default function Media3DDetail() {
   const latestRun = Array.isArray(record.runs) && record.runs.length ? record.runs[record.runs.length - 1] : null;
   const percent = Number.isFinite(latestRun?.percent) ? Math.round(latestRun.percent) : null;
   // Re-renders overwrite the same model.glb path. Key the fetch to the completed
-  // generation so drei's URL cache loads the new bytes when this record is rendered
+  // generation so the GLTF URL cache loads the new bytes when this record is rendered
   // again, while old records without generatedAt retain their historical URL.
   // Read from the last run rather than the live form: the form is what the NEXT
   // render will use, while the mesh on screen came from the last one.

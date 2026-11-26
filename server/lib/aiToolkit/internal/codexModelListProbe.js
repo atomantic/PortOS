@@ -37,6 +37,7 @@ export function probeCodexModelsViaAppServer(command, args, provider, options = 
   return new Promise((resolve, reject) => {
     let settled = false;
     let child;
+    let awaitingStage = 'initialize';
     const settle = (err, result) => {
       if (settled) return;
       settled = true;
@@ -46,7 +47,9 @@ export function probeCodexModelsViaAppServer(command, args, provider, options = 
       else resolve(result);
     };
     const timer = setTimeout(() => {
-      settle(probeError('timeout', `${label} timed out waiting for model catalog`));
+      settle(Object.assign(probeError('timeout', options.includeDetails
+        ? `Codex app-server timed out waiting for ${awaitingStage}`
+        : `${label} timed out waiting for model catalog`), { probeStage: awaitingStage }));
     }, timeoutMs);
     timer.unref?.();
     try {
@@ -66,7 +69,10 @@ export function probeCodexModelsViaAppServer(command, args, provider, options = 
     let modelRequestId = options.includeDetails ? 10 : 2;
     let pages = 0;
     const collected = [];
-    const send = (id, method, params = {}) => child.stdin?.write(JSON.stringify({ jsonrpc: '2.0', id, method, params }) + '\n');
+    const send = (id, method, params = {}) => {
+      awaitingStage = method;
+      child.stdin?.write(JSON.stringify({ jsonrpc: '2.0', id, method, params }) + '\n');
+    };
     child.stdout?.on('data', (chunk) => {
       buffer += chunk.toString();
       if (buffer.length > 4 * 1024 * 1024) { settle(probeError('invalid_response', `${label} model catalog frame exceeded its bound`)); return; }
@@ -123,11 +129,6 @@ export function probeCodexModelsViaAppServer(command, args, provider, options = 
         } catch { /* not JSON, or not a message we're waiting on — ignore */ }
       }
     });
-    child.stdin?.write(JSON.stringify({
-      jsonrpc: '2.0',
-      id: 1,
-      method: 'initialize',
-      params: { clientInfo: { name: 'portos', version: '1.0.0' } },
-    }) + '\n');
+    send(1, 'initialize', { clientInfo: { name: 'portos', version: '1.0.0' } });
   });
 }

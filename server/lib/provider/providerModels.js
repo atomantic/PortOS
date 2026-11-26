@@ -7,9 +7,14 @@ import { isLocalInstanceEndpoint } from '../localEndpoint.js';
 import { isPlainObject } from '../objects.js';
 import { isOllamaBackedProvider, ollamaThinkingLevelsForModel } from '../aiToolkit/internal/ollamaBacked.js';
 import { markedLocalRuntime } from '../aiToolkit/internal/localRuntimeMarkers.js';
+import { ANTIGRAVITY_CLI_ID, ANTIGRAVITY_CONFIGURED_DEFAULT, ANTIGRAVITY_TUI_ID, isAntigravityCommand } from '../aiToolkit/internal/antigravity.js';
+import { CODEX_CLI_ID, CODEX_CONFIGURED_DEFAULT, CODEX_TUI_ID, isCodexCommand } from '../aiToolkit/internal/codex.js';
+import { commandBasename } from '../aiToolkit/internal/commandBasename.js';
+import { CURSOR_TUI_ID, isCursorCommand } from '../aiToolkit/internal/cursor.js';
+import { isPiCommand } from '../aiToolkit/internal/pi.js';
 
-export const CODEX_CONFIGURED_DEFAULT = 'codex-configured-default';
-export const ANTIGRAVITY_CONFIGURED_DEFAULT = 'antigravity-configured-default';
+export { ANTIGRAVITY_CONFIGURED_DEFAULT, CODEX_CONFIGURED_DEFAULT, commandBasename };
+
 // Legacy opt-in sentinel: shipped Grok Build providers now pin a concrete model so displayed
 // model, execution, and planner attribution agree.
 export const GROK_CONFIGURED_DEFAULT = 'grok-configured-default';
@@ -26,17 +31,6 @@ const CONFIGURED_DEFAULT_SENTINELS = new Set([
 
 /** True for any provider "use CLI's own default" sentinel (Codex / Antigravity / Grok Build). */
 export const isConfiguredDefaultModel = (model) => CONFIGURED_DEFAULT_SENTINELS.has(model);
-
-/**
- * Normalize a provider `command` to its lowercase binary basename, stripping any directory prefix
- * and a Windows `.exe` suffix — e.g. `/opt/homebrew/bin/Grok.exe` → `grok`. Returns `''` for empty/non-string input.
- * @param {string|null|undefined} command
- * @returns {string}
- */
-export function commandBasename(command) {
-  if (typeof command !== 'string' || command === '') return '';
-  return command.split(/[\\/]/).pop().toLowerCase().replace(/\.exe$/, '');
-}
 
 /**
  * True when argv contains any of `flags`, in either separated (`--flag`) or joined
@@ -235,7 +229,7 @@ export function pickAntigravityRelayModel(models) {
  */
 export function isCodexProvider(provider) {
   const id = String(provider?.id || '').toLowerCase();
-  return id === 'codex' || id === 'codex-tui' || commandBasename(provider?.command) === 'codex';
+  return id === CODEX_CLI_ID || id === CODEX_TUI_ID || isCodexCommand(provider?.command);
 }
 
 /**
@@ -248,8 +242,7 @@ export function isCodexProvider(provider) {
 export function isCodexSubscriptionProvider(provider) {
   if (provider?.type !== 'cli' && provider?.type !== 'tui') return false;
   const command = typeof provider?.command === 'string' ? provider.command.trim() : '';
-  if (command === '') return false;
-  if (commandBasename(command) !== 'codex') return false;
+  if (!isCodexCommand(command)) return false;
   return localRuntimeNamespace(provider) === null;
 }
 
@@ -322,9 +315,7 @@ export function isAntigravityProvider(provider) {
   if (!provider) return false;
   if (provider.harnessId === 'antigravity') return true;
   const id = String(provider.id || '').toLowerCase();
-  if (id === 'antigravity-cli' || id === 'antigravity-tui') return true;
-  const base = commandBasename(provider.command);
-  return base === 'agy' || base === 'antigravity';
+  return id === ANTIGRAVITY_CLI_ID || id === ANTIGRAVITY_TUI_ID || isAntigravityCommand(provider.command);
 }
 
 /**
@@ -336,7 +327,7 @@ export function isAntigravityProvider(provider) {
 export function isCursorProvider(provider) {
   if (!provider) return false;
   const id = String(provider.id || '').toLowerCase();
-  return id === 'cursor-cli' || id === 'cursor-tui' || commandBasename(provider.command) === 'cursor-agent';
+  return id === 'cursor-cli' || id === CURSOR_TUI_ID || isCursorCommand(provider.command);
 }
 
 /**
@@ -380,7 +371,7 @@ export function effortLevelsForProvider(provider, model = null) {
     if (perModel === null) return ANTIGRAVITY_FALLBACK_EFFORT_LEVELS;
     return perModel.length ? perModel : null;
   }
-  if (harness === 'pi' || commandBasename(provider.command) === 'pi') return PI_EFFORT_LEVELS;
+  if (harness === 'pi' || isPiCommand(provider.command)) return PI_EFFORT_LEVELS;
   if (harness === 'cursor' || isCursorProvider(provider)) return CURSOR_EFFORT_LEVELS;
   if (harness === 'grok' || isGrokProvider(provider)) return GROK_EFFORT_LEVELS;
   if (harness === 'claude' || isClaudeProvider(provider)) return CLAUDE_EFFORT_LEVELS;
@@ -489,7 +480,7 @@ export function hasEffortFlag(args) {
 export function buildEffortArgs(effort, provider, existingArgs = [], model = null) {
   const effectiveEffort = resolveCliEffort(effort, provider, model);
   if (!effectiveEffort || hasEffortFlag(existingArgs)) return [];
-  if (commandBasename(provider?.command) === 'pi') return ['--thinking', effectiveEffort];
+  if (isPiCommand(provider?.command)) return ['--thinking', effectiveEffort];
   if (isCursorProvider(provider)) return []; // rides `--model`, not a flag — see above
   return isCodexProvider(provider)
     ? ['-c', `${CODEX_EFFORT_KEY}=${effectiveEffort}`]

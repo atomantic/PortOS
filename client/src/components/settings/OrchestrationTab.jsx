@@ -132,8 +132,8 @@ export default function OrchestrationTab() {
       };
 
       const saved = isNew
-        ? await saveOrchestrationProfile(payload)
-        : await updateOrchestrationProfile(id, payload);
+        ? await saveOrchestrationProfile(payload, { silent: true })
+        : await updateOrchestrationProfile(id, payload, { silent: true });
       toast.success(`Profile "${payload.name}" ${isNew ? 'created' : 'updated'}`);
 
       // Apply the server's saved record in place: a full reload flips `loading`
@@ -153,7 +153,7 @@ export default function OrchestrationTab() {
   const handleDelete = async (id, name) => {
     setDeletingId(id);
     try {
-      await deleteOrchestrationProfile(id);
+      await deleteOrchestrationProfile(id, { silent: true });
       toast.success(`Profile "${name}" deleted`);
       setProfiles((prev) => prev.filter((p) => p.id !== id));
     } catch (err) {

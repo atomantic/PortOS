@@ -5,7 +5,7 @@ import { MUSIC_VIDEO_MEDIUM_LABELS } from '../../../../server/lib/musicVideo/mus
 import { clipSoundSummary } from '../../../../server/lib/musicVideo/musicVideoClipSound.js';
 import { isPreMusicShot, normalizePreMusic, preMusicSoundSummary } from '../../../../server/lib/musicVideo/musicVideoColdOpen.js';
 import { MUSIC_VIDEO_VISUAL_LAYERS, clipReversed, composedDrawsLyrics, sceneHasAuthoredSpan } from '../../lib/musicVideoLayers.js';
-import { plannedTransitions } from '../../lib/musicVideoCutEffects.js';
+import { plannedTransitions } from '../../../../server/lib/musicVideo/musicVideoCutEffects.js';
 import { shotEffectLabel, shotEffects } from '../../lib/musicVideoShotEffects.js';
 import ConfirmButtonPair from '../ui/ConfirmButtonPair.jsx';
 import PlateComparison from './PlateComparison.jsx';

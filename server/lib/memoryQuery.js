@@ -10,6 +10,13 @@
  * orchestration layer stays focused on persistence + event wiring.
  */
 
+import { PERSISTENT_MIND_PRIVATE_TAGS } from './persistent/persistentMindMemory.js';
+import { PERSISTENT_MIND_ID } from './persistent/persistentMindTrajectory.js';
+
+export const isPersistentMindPrivateMemory = (memory) =>
+  memory.sourceAgentId === PERSISTENT_MIND_ID
+  || (Array.isArray(memory.tags) && memory.tags.some(tag => PERSISTENT_MIND_PRIVATE_TAGS.includes(tag)));
+
 /**
  * Project a full memory record down to the lightweight metadata stored in the
  * index. Used on create/update so the index stays consistent everywhere.
@@ -71,6 +78,10 @@ export function filterMemoryIndex(memories, options = {}) {
 
   if (options.sourceAgentId) {
     filtered = filtered.filter(m => m.sourceAgentId === options.sourceAgentId);
+  }
+
+  if (options.excludePersistentMind) {
+    filtered = filtered.filter(m => !isPersistentMindPrivateMemory(m));
   }
 
   // Only when the caller passes the key. null matches rows with no task id
@@ -137,6 +148,7 @@ export function compareMemoryEntries(sortBy = 'createdAt', sortOrder = 'desc') {
  */
 export function passesSearchMetaFilters(meta, options = {}) {
   if (!meta || meta.status !== 'active') return false;
+  if (options.excludePersistentMind && isPersistentMindPrivateMemory(meta)) return false;
   if (options.types && options.types.length > 0 && !options.types.includes(meta.type)) return false;
   if (options.categories && options.categories.length > 0 && !options.categories.includes(meta.category)) return false;
   if (options.tags && options.tags.length > 0 && !meta.tags.some(t => options.tags.includes(t))) return false;
@@ -156,6 +168,7 @@ export function passesSearchMetaFilters(meta, options = {}) {
  */
 export function passesHybridMetaFilters(meta, options = {}) {
   if (!meta || meta.status !== 'active') return false;
+  if (options.excludePersistentMind && isPersistentMindPrivateMemory(meta)) return false;
   if (options.types?.length > 0 && !options.types.includes(meta.type)) return false;
   if (options.categories?.length > 0 && !options.categories.includes(meta.category)) return false;
   if (options.tags?.length > 0 && !meta.tags.some(t => options.tags.includes(t))) return false;

@@ -102,7 +102,7 @@ describe('whole-workflow media modes', () => {
 
   it('enforces project and take selection, handoff imports and narrowing without deleting selected data', async () => {
     const project = await projects.createProject({ name: 'Example', mediaMode: 'code-images' });
-    const scene = await projects.addProjectScene(project.id, { label: 'Scene' });
+    const { scenes: [scene] } = await projects.addProjectScenes(project.id, [{ label: 'Scene' }]);
     await expect(projects.updateScene(project.id, scene.sceneId, { videoHistoryId: 'video-example' })).rejects.toMatchObject({ code: 'MUSIC_VIDEO_MEDIA_POLICY' });
     await mkdir(PATHS.images, { recursive: true });
     await writeFile(join(PATHS.images, 'example.png'), 'synthetic still');

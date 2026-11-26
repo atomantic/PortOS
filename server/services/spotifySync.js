@@ -12,8 +12,6 @@
  *   `spotify:<played_at>:<trackId>` dedupe key, so re-polls are no-ops.
  * - **LLM-free.** Track/artist/genre metadata is stored verbatim for later twin
  *   enrichment (Phase 7); no AI-provider calls happen on this path.
- * - **Raw-response cache.** The first (most recent) API page is cached under
- *   `data/spotify/cache/` (local, unsynced) for debugging / re-derivation.
  *
  * The pure mappers (candidate mapping and dedupe keys) are exported
  * and unit-tested with fixture payloads — no network or DB required.
@@ -35,7 +33,6 @@ const RECENTLY_PLAYED_TIMEOUT_MS = 15_000;
 const SCAN_LIMIT = 50;
 
 const STATE_FILE = 'sync-state.json';
-const CACHE_FILE = 'recently-played.json';
 
 // Sync is OFF by default — the user connects Spotify + opts in from Settings.
 const DEFAULT_CONFIG = { enabled: false, intervalMinutes: 25 };
@@ -143,11 +140,6 @@ async function writeSyncState(state) {
   await atomicWrite(stateFilePath(), JSON.stringify(state, null, 2));
 }
 
-async function writeRawCache(payload) {
-  await ensureDir(dataPath('spotify', 'cache'));
-  await atomicWrite(dataPath('spotify', 'cache', CACHE_FILE), JSON.stringify(payload, null, 2));
-}
-
 // ---------------------------------------------------------------------------
 // Sync (side-effecting — network + DB). Runs outside the request lifecycle
 // (scheduler / explicit endpoint), so network/persist failures return an error
@@ -240,10 +232,6 @@ async function doRunSync() {
     const payload = await res.json().catch(() => null);
     if (!Array.isArray(payload?.items)) return failHistory('Spotify returned an invalid recently-played page.');
     const { items, next } = payload;
-    if (visitedPages.size === 1) {
-      await writeRawCache(payload).catch((err) => console.error(`⚠️ Spotify raw-cache write failed: ${err?.message || err}`));
-    }
-
     // A continuation may change cursor direction. Keep the original exclusive
     // floor for every page and only checkpoint plays mapped for persistence.
     scanned += items.length;

@@ -7,7 +7,7 @@ import usePreviewSounds from './usePreviewSounds.js';
 import { getVideoHistoryItem } from '../../services/apiImageVideo.js';
 
 vi.mock('../../services/apiImageVideo.js', async (importOriginal) => ({ ...(await importOriginal()), getVideoHistoryItem: vi.fn() }));
-vi.mock('../../lib/musicVideoGlitchCanvas.js', () => ({ createMusicVideoGlitchPainter: () => () => {} }));
+vi.mock('../../../../server/lib/musicVideo/musicVideoGlitchCanvas.js', () => ({ createMusicVideoGlitchPainter: () => () => {} }));
 
 const voice = { id: 'layer-1', filename: 'music-example.wav', label: 'sky line', startSec: 4, durationSec: 2, volume: 1, muted: false };
 const project = {

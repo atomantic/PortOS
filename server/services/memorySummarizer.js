@@ -21,7 +21,7 @@ import { getProviderById } from './provider/providers.js';
 import { loadMeta } from './brainStorage.js';
 import { readArchivedConversation } from './chatgptImport.js';
 import { runPromptThroughProvider } from './promptRunner.js';
-import { isToolFreeOneShotProvider } from '../lib/provider/providerVendors.js';
+import { isPrivateNetworkEndpoint } from '../lib/localEndpoint.js';
 
 // Preferred summarizer model when the Brain default doesn't resolve. gpt-oss:20b
 // is the typical Brain default and has ample context for a full transcript.
@@ -40,29 +40,29 @@ const SUMMARY_SYSTEM_PROMPT =
 
 const truncateText = (s, n) => (s.length > n ? s.slice(0, n) : s);
 
+// Embedding can read entire private archives, so provider capability alone
+// does not authorize the destination.
+const isLocalEnabledApiProvider = (provider) =>
+  provider?.type === 'api' && provider.enabled !== false && isPrivateNetworkEndpoint(provider.endpoint);
+
 /**
- * Resolve the provider+model to summarize with. Prefers the Brain default
- * provider; falls back to the `ollama` provider so a fresh install still works.
- * Returns { provider, model } or null when no usable provider is configured.
+ * Prefer Brain's default when eligible, then try private-network Ollama.
+ * Returns null when the embedder should truncate locally.
  */
 async function resolveSummarizer() {
   const meta = await loadMeta().catch(() => null);
   const providerId = meta?.defaultProvider || 'ollama';
-
-  // Try the Brain default provider first. `meta.defaultModel` belongs to THIS
-  // provider, so it's only valid when this lookup succeeds.
-  let provider = await getProviderById(providerId).catch(() => null);
-  if (provider) {
+  const provider = await getProviderById(providerId).catch(() => null);
+  if (isLocalEnabledApiProvider(provider)) {
     const model = meta?.defaultModel || provider.defaultModel || PREFERRED_MODEL;
     return { provider, model };
   }
 
-  // Default provider is stale/removed — fall back to ollama, but use ITS own
-  // model (NOT meta.defaultModel, which named a model on the missing provider
-  // and would likely 404 against ollama).
-  provider = await getProviderById('ollama').catch(() => null);
-  if (!provider) return null;
-  return { provider, model: provider.defaultModel || PREFERRED_MODEL };
+  if (providerId === 'ollama') return null;
+  // The Brain model belongs to the rejected provider. Use Ollama's own model.
+  const ollama = await getProviderById('ollama').catch(() => null);
+  if (!isLocalEnabledApiProvider(ollama)) return null;
+  return { provider: ollama, model: ollama.defaultModel || PREFERRED_MODEL };
 }
 
 /**
@@ -86,7 +86,7 @@ async function resolveSourceText(memory, fallbackText) {
  */
 export async function summarizeForEmbedding(memory, fallbackText) {
   const summarizer = await resolveSummarizer();
-  if (!summarizer || !isToolFreeOneShotProvider(summarizer.provider)) return null;
+  if (!summarizer) return null;
 
   const sourceText = await resolveSourceText(memory, fallbackText);
   if (!sourceText?.trim()) return null;
@@ -97,10 +97,8 @@ export async function summarizeForEmbedding(memory, fallbackText) {
     provider: summarizer.provider,
     model: summarizer.model,
     prompt,
-    // Memory text is reference data, never authority to use host tools. The
-    // runner's toolFree flag only constrains supported CLI one-shots; pin the
-    // admitted provider so proactive/runtime fallback cannot switch to a TUI
-    // or a CLI without tool-disable support. Failure falls back to truncation.
+    // Keep the admitted provider pinned so recovery cannot send private text
+    // to another provider.
     toolFree: true,
     allowFallback: false,
     source: 'memory-embedding-summary'

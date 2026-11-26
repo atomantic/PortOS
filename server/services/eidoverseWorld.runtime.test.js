@@ -541,6 +541,60 @@ describe('Eidoverse private-world lifecycle', () => {
     });
   });
 
+  it('keeps a new world pending for an explicit first projection without carrying over the previous result', async () => {
+    mocks.persistedState = {
+      schemaVersion: 1,
+      world: 'portos',
+      recipe: EIDOVERSE_WORLD_DESIGN_V1,
+    };
+    const { recipe } = await world.ensureEidoverseWorldConfig();
+    await world.updateEidoverseWorldConfig({
+      recipe: { ...recipe, name: 'Example Systems Garden' },
+      assetOverrides: { app: 'store/example-local-asset' },
+    });
+    await world.projectEidoverseWorld();
+    const first = await world.getEidoverseWorldProjectionStatus();
+    expect(first).toMatchObject({
+      design: { lastAppliedVersion: first.design.selectedVersion, reconciliation: { status: 'complete' } },
+      projection: { lastSuccessAt: expect.any(String), lastSummary: expect.any(Object) },
+    });
+    expect((await world.getEidoverseWorldStatus()).design.migrationReport).toMatchObject({ status: 'applied' });
+
+    await world.updateEidoverseWorldConfig({ world: ' PORTOS ' });
+    expect(await world.getEidoverseWorldProjectionStatus()).toEqual(first);
+
+    mocks.sent.length = 0;
+    await world.updateEidoverseWorldConfig({ world: 'second-world' });
+    const projectionStatus = await world.getEidoverseWorldProjectionStatus();
+    expect(projectionStatus).toEqual({
+      design: {
+        selectedVersion: first.design.selectedVersion,
+        lastAppliedVersion: null,
+        pendingVersion: first.design.selectedVersion,
+        reconciliation: {
+          status: 'pending', checkpoint: 'configuration-saved', error: null, errorCode: null,
+          errorContext: null, startedAt: null, completedAt: null, planFingerprint: null,
+          operationCount: 0, appliedOperations: 0, compensationStatus: null,
+        },
+      },
+      projection: { lastRunAt: null, lastSuccessAt: null, lastError: null, lastSummary: null },
+    });
+    expect(await world.getEidoverseWorldStatus()).toMatchObject({
+      world: 'second-world',
+      recipe: expect.objectContaining({ name: 'Example Systems Garden' }),
+      design: {
+        ...projectionStatus.design,
+        migrationReport: null,
+        userOverrides: { assets: { app: 'store/example-local-asset' } },
+        assetResolutions: { app: { path: 'store/example-local-asset' } },
+      },
+      projection: projectionStatus.projection,
+    });
+    await expect(world.reconcilePendingEidoverseWorld()).resolves.toEqual({ reconciled: false, reason: 'current' });
+    expect(mocks.sent.some(({ type }) => type === 'verb')).toBe(false);
+    expect(mocks.worlds.has('second-world')).toBe(false);
+  });
+
   it('migrates a stale V1 recipe submitted after the update instead of pinning V1 defaults', async () => {
     const updated = await world.updateEidoverseWorldConfig({ recipe: EIDOVERSE_WORLD_DESIGN_V1 });
 
@@ -705,7 +759,6 @@ describe('Eidoverse private-world lifecycle', () => {
     };
 
     const reset = await world.updateEidoverseWorldConfig({
-      world: 'example-reset-world',
       humanName: 'Example Reset Human',
       reset: { scope: 'all' },
     });
@@ -813,6 +866,30 @@ describe('Eidoverse private-world lifecycle', () => {
     expect(result.operations[0]).toMatchObject({ outcome: 'accepted' });
     expect(result.operations[1]).toMatchObject({ verb: 'place', outcome: 'refused', committed: null });
     expect(result.operations[1].reason).toMatch(/pos, yaw, or scale/);
+  });
+
+  it('refuses an overlong removal ID without touching the entity that shares its prefix', async () => {
+    const id = 'Entity_1-'.padEnd(64, 'a');
+    const spawn = { verb: 'spawn', args: { id, lib: 'eidoverse/assets/models/example.glb' } };
+    await expect(world.augmentEidoverseWorld([spawn])).resolves.toMatchObject({ success: true, applied: 1 });
+    mocks.sent.length = 0;
+
+    const result = await world.augmentEidoverseWorld([
+      { verb: 'remove', args: { id: `${id}b` } },
+      { ...spawn, args: { ...spawn.args, id: 'another-entity' } },
+    ]);
+
+    expect(result).toMatchObject({
+      success: false,
+      applied: 1,
+      operations: [
+        { verb: 'remove', outcome: 'refused', committed: null, reason: expect.stringContaining('64') },
+        { verb: 'spawn', id: 'another-entity', outcome: 'accepted' },
+      ],
+    });
+    expect(mocks.sent.filter(({ type }) => type === 'verb')).toEqual([
+      expect.objectContaining({ verb: 'spawn', args: expect.objectContaining({ id: 'another-entity' }) }),
+    ]);
   });
 
   it('stops the rest of a batch once the world refuses one operation, leaving the remainder unattempted', async () => {
@@ -1272,6 +1349,42 @@ describe('Eidoverse private-world lifecycle', () => {
         checkpoint: 'compensation-complete',
         compensationStatus: 'complete',
       },
+    });
+  });
+
+  it.each(['legacy', 'aggregate'])('compensates an in-place update of a %s PortOS component', async (shape) => {
+    await world.projectEidoverseWorld();
+    const id = 'portos-design-v2-city-surface';
+    const spawn = mocks.sent.find(({ verb, args }) => verb === 'spawn' && args.id === id);
+    const update = mocks.sent.find(({ verb, args }) => verb === 'comp' && args.id === id && args.type === 'portos');
+    const legacyLabel = 'Synthetic legacy component label';
+    const prior = shape === 'legacy'
+      ? { managedBy: 'portos', label: legacyLabel }
+      : { ...update.args.data, districtId: 'example-prior-district', disclosure: 'aggregate' };
+    await world.__resetEidoverseWorldForTests();
+    mocks.worlds.get('portos').entities = { [id]: { ...spawn.args, comp: { portos: prior } } };
+    mocks.sent.length = 0;
+    mocks.rejectVerb = 'terrain';
+
+    await expect(world.projectEidoverseWorld()).rejects.toMatchObject({
+      code: 'EIDOVERSE_WORLD_VERB_REJECTED',
+      compensationStatus: 'complete',
+    });
+
+    const failedIndex = mocks.sent.findIndex(({ verb }) => verb === 'terrain');
+    expect(mocks.sent.slice(0, failedIndex)).toContainEqual(expect.objectContaining({
+      verb: 'comp',
+      args: update.args,
+    }));
+    expect(mocks.sent.filter(({ verb, args }) => verb === 'spawn' && args.id === id)).toEqual([]);
+    const rollback = mocks.sent.slice(failedIndex + 1);
+    expect(rollback.filter(({ verb, args }) => verb === 'comp' && args.id === id && args.type === 'portos')
+      .map(({ args }) => args.data)).toEqual([shape === 'legacy' ? null : prior]);
+    expect(JSON.stringify(rollback)).not.toContain(legacyLabel);
+    expect(mocks.persistedState.reconciliation).toMatchObject({
+      status: 'failed',
+      checkpoint: 'compensation-complete',
+      compensationStatus: 'complete',
     });
   });
 

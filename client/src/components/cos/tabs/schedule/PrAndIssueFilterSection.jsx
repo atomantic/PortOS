@@ -7,6 +7,8 @@ const splitList = (text) => text.split(',').map((s) => s.trim()).filter(Boolean)
 // `onMetadataChange(field, value)` writes one taskMetadata key through the
 // parent's in-flight-save lock, so every control here gates Run Now and Esc.
 export default function PrAndIssueFilterSection({ taskType, config, updating, activeCount, onMetadataChange }) {
+  const prAuthorFilter = config.taskMetadata?.prAuthorFilter === 'self' ? 'self' : 'trusted';
+  const selectedPrAuthorFilter = PR_AUTHOR_FILTER_OPTIONS.find(option => option.value === prAuthorFilter);
   // Comma-separated free text, committed as an array on blur.
   const excludeLabelsDraft = useFieldDraft(
     (config.taskMetadata?.issueExcludeLabels || []).join(', '),
@@ -41,8 +43,9 @@ export default function PrAndIssueFilterSection({ taskType, config, updating, ac
           <label htmlFor={`pr-author-filter-${taskType}`} className="text-sm text-gray-400 block mb-2">PR Remediation Scope</label>
           <select
             id={`pr-author-filter-${taskType}`}
-            value="trusted"
-            disabled
+            value={prAuthorFilter}
+            onChange={(e) => onMetadataChange('prAuthorFilter', e.target.value)}
+            disabled={updating}
             className="w-full bg-port-card border border-port-border rounded px-3 py-2 text-white text-sm"
           >
             {PR_AUTHOR_FILTER_OPTIONS.map(opt => (
@@ -50,7 +53,7 @@ export default function PrAndIssueFilterSection({ taskType, config, updating, ac
             ))}
           </select>
           <p className="text-xs text-gray-500 mt-1">
-            {PR_AUTHOR_FILTER_OPTIONS.find(o => o.value === 'trusted')?.description}
+            {selectedPrAuthorFilter?.description}
             {' '}Edit the prompt below to control what the agent does for each opened PR (it can use <code>{'{prData}'}</code>, <code>{'{repoFullName}'}</code>, <code>{'{defaultBranch}'}</code>).
           </p>
           <div className="grid gap-3 mt-3 grid-cols-1 sm:grid-cols-[minmax(0,1fr)_10rem]">

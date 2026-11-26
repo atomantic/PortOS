@@ -1,3 +1,4 @@
+// @vitest-environment node
 import { describe, it, expect } from 'vitest';
 import { automationDraftFrom, automationFromDraft, llmRouteLabel } from './musicVideoAutomation.js';
 import { autonomousRequestFromDraft, autopilotDraftFromParams, autopilotParamsFromDraft, emptyAutonomousDraft } from './musicVideoAutonomous.js';

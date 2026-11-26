@@ -57,14 +57,13 @@ same port would silently steal its traffic instead of failing loudly.
 ## Setup
 
 1. **Install** from **Local Runtime Servers**. `installSlotstream()`
-   downloads the pinned Apple Silicon release
+   downloads the pinned Apple Silicon release directly over HTTPS
    (`SLOTSTREAM_RELEASE_TAG`, currently `v0.2.30`, from `carloslfu/slotstream`)
    into an isolated temporary directory, verifies the archive's SHA-256 digest
    against the pinned value before extracting, checks the extracted binary is a
-   regular file, then atomically renames it into `~/.slotstream/bin`. It needs the GitHub CLI (`gh`) on
-   `PATH`; without it the install refuses with
-   `SLOTSTREAM_INSTALL_UNAVAILABLE` rather than trying an unauthenticated
-   fallback. This step never downloads model weights.
+   regular file, then atomically renames it into `~/.slotstream/bin`. The public
+   release download needs no GitHub CLI or credentials. This step never
+   downloads model weights.
 2. **Download a checkpoint** from the Slotstream card's **Add a checkpoint**
    picker — a curated dropdown (`SLOTSTREAM_CATALOG` in
    `server/lib/slotstreamCatalog.js`) of three Hugging Face MoE checkpoints

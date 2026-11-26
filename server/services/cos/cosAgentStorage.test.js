@@ -1,12 +1,15 @@
 import { afterAll, beforeEach, expect, it, vi } from 'vitest';
-import { mkdir, writeFile, readFile, rm, utimes, readdir } from 'node:fs/promises';
-import { join } from 'node:path';
+import { mkdir, mkdtemp, writeFile, readFile, rm, utimes, readdir } from 'node:fs/promises';
+import { basename, dirname, join } from 'node:path';
+import { spawnSync } from 'node:child_process';
 import { gunzipSync, gzipSync } from 'node:zlib';
 import express from 'express';
 import { request } from '../../lib/testHelper.js';
 import { errorMiddleware } from '../../lib/errorHandler.js';
 import { createFileWriteQueue } from '../../lib/fileWriteQueue.js';
 import { cosEvents } from './cosEvents.js';
+import { computeEffectiveExcludes } from '../backup/excludes.js';
+import { runRsync } from '../backup/rsync.js';
 const fixture = await vi.hoisted(async () => {
   const { mkdtemp } = await import('node:fs/promises');
   const { tmpdir } = await import('node:os');
@@ -14,12 +17,22 @@ const fixture = await vi.hoisted(async () => {
   return { root: await mkdtemp(join(tmpdir(), 'cos-storage-')), state: {}, config: {}, trusted: true, failWrite: false, corruptVerification: false, onWrite: null };
 });
 vi.mock('./cosState.js', () => ({
-  AGENTS_DIR: fixture.root,
+  AGENTS_DIR: join(fixture.root, 'cos', 'agents'),
   readAgentsStateForSafetyCheck: async () => ({ trusted: fixture.trusted, agents: fixture.state }),
   loadConfig: async () => fixture.config,
   saveConfig: async value => { fixture.config = value; },
   withConfigLock: createFileWriteQueue(), withStateLock: createFileWriteQueue(),
 }));
+vi.mock('node:fs/promises', async importOriginal => {
+  const actual = await importOriginal();
+  return { ...actual, lstat: (path, ...args) => {
+    fixture.onStat?.(path);
+    return actual.lstat(path, ...args);
+  }, readdir: (path, ...args) => {
+    fixture.onReadDir?.(path);
+    return actual.readdir(path, ...args);
+  } };
+});
 vi.mock('node:fs', async importOriginal => {
   const actual = await importOriginal();
   const { Readable } = await import('node:stream');
@@ -46,17 +59,18 @@ vi.mock('../../lib/backupSnapshotBoundary.js', async importOriginal => {
 });
 vi.mock('../codexSummaryRepair.js', () => ({ repairCodexTaskSummary: async () => null }));
 const storage = await import('./cosAgentStorage.js');
-const { acquireBackupSnapshotCut } = await import('../../lib/backupSnapshotBoundary.js');
+const { acquireBackupSnapshotCut, withBackupAssetPublication } = await import('../../lib/backupSnapshotBoundary.js');
+const { withStateLock } = await import('./cosState.js');
 const { default: routes } = await import('../../routes/dataManager.js');
 const app = express();
 app.use(express.json()); app.use('/api/data', routes); app.use(errorMiddleware);
 const date = '2001-01-01';
 const source = 'Example terminal redraw\n'.repeat(4000);
-const runDir = id => join(fixture.root, date, id);
-async function seed(id = 'agent-example', metadata = {}) {
-  const dir = runDir(id);
+const recordingPath = id => join('cos', 'agents', date, id);
+async function seed(id = 'agent-example', metadata = {}, bucket = date, completedAt = `${bucket}T12:00:00Z`) {
+  const dir = join(fixture.root, 'cos', 'agents', bucket, id);
   await mkdir(dir, { recursive: true });
-  await writeFile(join(dir, 'metadata.json'), JSON.stringify({ id, status: 'completed', completedAt: `${date}T12:00:00Z`, result: { success: true, cost: 0.01 }, metadata: { model: 'example-model', taskSummary: 'Fixed an example defect', ...metadata } }));
+  await writeFile(join(dir, 'metadata.json'), JSON.stringify({ id, status: 'completed', completedAt, result: { success: true, cost: 0.01 }, metadata: { model: 'example-model', taskSummary: 'Fixed an example defect', ...metadata } }));
   for (const [name, text] of [['raw.txt', source], ['output.txt', 'Retained useful output'], ['prompt.txt', 'Example instructions'], ['evidence.json', '{"keep":true}']]) {
     await writeFile(join(dir, name), text);
     await utimes(join(dir, name), new Date(date), new Date(date));
@@ -86,6 +100,7 @@ beforeEach(async () => {
   fixture.state = {}; fixture.config = {}; fixture.trusted = true;
   fixture.failWrite = false; fixture.corruptVerification = false; fixture.onWrite = null;
   fixture.afterManifest = null; fixture.onAdmission = null; fixture.bypassAdmission = false;
+  fixture.onStat = null; fixture.onReadDir = null;
 });
 afterAll(() => rm(fixture.root, { recursive: true, force: true }));
 
@@ -107,6 +122,85 @@ it('compresses through HTTP, verifies bytes, serves the gzip, and preserves old 
   const download = await storage.getAgentRecordingDownload(date, 'agent-example');
   expect(download.name).toBe('raw.txt.gz');
   expect((await storage.previewAgentStorage({ action: 'compress' })).totals.eligibleRuns).toBe(0);
+});
+
+it('keeps interactive preview totals and ordered pages exact across batches while serializing live references once', async () => {
+  await Promise.all(Array.from({ length: 18 }, (_, index) => seed(`agent-${String(index).padStart(2, '0')}`)));
+  await seed('agent-other', { model: 'other-model' });
+  const unreadable = await seed('agent-unreadable');
+  await writeFile(join(unreadable, 'metadata.json'), '{');
+  const liveMetadata = vi.fn(() => ({ nested: { ref: 'prefix/agent-01/suffix' } }));
+  fixture.state = { 'agent-live': { metadata: { toJSON: liveMetadata } } };
+  const statPaths = [];
+  fixture.onStat = path => statPaths.push(path);
+
+  const preview = await storage.previewAgentStorage({ model: 'example-model' }, { offset: 15, limit: 1 });
+  expect(preview.totals).toMatchObject({ scanned: 20, unreadable: 1, recordingBytes: 18 * Buffer.byteLength(source), eligibleRuns: 1 });
+  expect(preview.models).toEqual(['example-model', 'other-model']);
+  expect(preview.matching).toBe(18);
+  expect(preview.reasons).toEqual({ 'Referenced by a live run': 1, 'Next batch': 16 });
+  expect(preview.rows.map(row => row.id)).toEqual(['agent-15', 'agent-16', 'agent-17']);
+  expect(liveMetadata).toHaveBeenCalledTimes(1);
+  const metadataPaths = statPaths.filter(path => basename(path) === 'metadata.json');
+  expect(metadataPaths).toHaveLength(20);
+  expect(new Set(metadataPaths).size).toBe(20);
+  expect(statPaths.filter(path => basename(path) === date)).toHaveLength(1);
+
+  const started = await storage.startAgentStorage({ token: preview.token });
+  expect(started.job.total).toBe(1);
+  expect(await settled()).toMatchObject({ processed: 1, skipped: 0 });
+  expect((await storage.getAgentRecordingDownload(date, 'agent-00')).name).toBe('raw.txt.gz');
+});
+
+it('stops automatic discovery at 25 eligible candidates and leaves later runs for the next tick', async () => {
+  await Promise.all(Array.from({ length: 27 }, (_, index) => seed(`agent-${String(index).padStart(2, '0')}`)));
+  const scannedIds = new Set();
+  fixture.onStat = path => {
+    if (basename(path) === 'metadata.json') scannedIds.add(basename(dirname(path)));
+  };
+  fixture.onWrite = () => {
+    fixture.config.agentStorage = { autoCompress: false };
+  };
+  await storage.runAutomaticAgentStorage();
+  expect(await settled()).toMatchObject({ total: 25, skipped: 25 });
+  expect([...scannedIds].sort()).toEqual(Array.from({ length: 25 }, (_, index) => `agent-${String(index).padStart(2, '0')}`));
+});
+
+it('shares automatic fallback discovery, retains the one-day buffer, and skips newer date buckets', async () => {
+  const old = await seed('agent-absent');
+  await rm(join(old, 'raw.txt'));
+  const now = Date.now();
+  const day = 86400000;
+  const retentionDay = new Date(now - 7 * day).toISOString().slice(0, 10);
+  const bufferDay = new Date(now - 6 * day).toISOString().slice(0, 10);
+  const recentDay = new Date(now).toISOString().slice(0, 10);
+  await seed('agent-buffer', {}, bufferDay, `${retentionDay}T00:00:00Z`);
+  await seed('agent-recent', {}, recentDay);
+  fixture.config.agentStorage = { autoPurge: true, autoCompress: true };
+  const inspectedOld = vi.fn();
+  const openedBuckets = [];
+  fixture.onStat = path => {
+    if (path === join(old, 'metadata.json')) inspectedOld();
+  };
+  fixture.onReadDir = path => openedBuckets.push(basename(path));
+
+  await storage.runAutomaticAgentStorage();
+  expect(await settled()).toMatchObject({ action: 'compress', total: 1, skipped: 0 });
+  expect(inspectedOld).toHaveBeenCalledTimes(1);
+  expect(openedBuckets).toContain(bufferDay);
+  expect(openedBuckets).not.toContain(recentDay);
+  expect((await storage.getAgentRecordingDownload(bufferDay, 'agent-buffer')).name).toBe('raw.txt.gz');
+});
+
+it('gives eligible automatic purges priority and rechecks live references inside the publication boundary', async () => {
+  const dir = await seed();
+  fixture.config.agentStorage = { autoPurge: true, autoCompress: true };
+  fixture.onAdmission = () => {
+    fixture.state = { 'agent-live': { metadata: { resumedFrom: 'agent-example' } } };
+  };
+  await storage.runAutomaticAgentStorage();
+  expect(await settled()).toMatchObject({ action: 'purge', total: 1, skipped: 1 });
+  expect(await readFile(join(dir, 'raw.txt'), 'utf8')).toBe(source);
 });
 
 it('requires purge confirmation and retained evidence, keeps metadata and exposes the purged state', async () => {
@@ -213,6 +307,79 @@ it.each(['compress', 'purge'])('%s waits out an open backup cut before changing 
   } finally { release(); }
   expect((await settled()).state).toBe('completed');
   await expectSettledRecording(dir, action);
+});
+
+it('copies published recordings and nearby files during a cut while verified compression waits to publish', async context => {
+  if (process.platform === 'win32' && spawnSync('rsync', ['--version']).error?.code === 'ENOENT') {
+    context.skip('Windows runner has no rsync executable; real rsync remains required on Linux/macOS.');
+    return;
+  }
+  const id = 'agent-example';
+  const dir = await seed(id);
+  const nearby = 'raw.txt.gz.00000000-0000-4000-7000-000000000001.tmp';
+  await writeFile(join(dir, nearby), 'unrelated file');
+  await writeFile(join(dir, 'raw.txt.gz'), gzipSync('prior published recording'));
+  await utimes(join(dir, 'raw.txt.gz'), new Date(date), new Date(date));
+  const snapshot = await mkdtemp(join(dirname(fixture.root), 'cos-storage-cut-'));
+  const reached = deferred();
+  fixture.onAdmission = reached.resolve;
+  const release = await acquireBackupSnapshotCut();
+  let started = false;
+  try {
+    await startStorageAction('compress');
+    started = true;
+    await reached.promise;
+    const stage = (await readdir(dir)).find(name => name.endsWith('.tmp') && name !== nearby);
+    expect(stage).toBeDefined();
+    expect(gunzipSync(await readFile(join(dir, stage))).toString()).toBe(source);
+    await writeFile(join(fixture.root, stage), 'same basename outside the CoS archive');
+
+    const defaults = computeEffectiveExcludes();
+    const flags = computeEffectiveExcludes({ disabledDefaultExcludes: defaults }).flatMap(path => ['--exclude', path]);
+    await runRsync(fixture.root, snapshot, flags);
+    const copied = join(snapshot, recordingPath(id));
+    await expect(readFile(join(copied, stage))).rejects.toMatchObject({ code: 'ENOENT' });
+    expect(await readFile(join(copied, nearby), 'utf8')).toBe('unrelated file');
+    expect(await readFile(join(snapshot, stage), 'utf8')).toBe('same basename outside the CoS archive');
+    expect(await readFile(join(copied, 'raw.txt'), 'utf8')).toBe(source);
+    expect(gunzipSync(await readFile(join(copied, 'raw.txt.gz'))).toString()).toBe('prior published recording');
+  } finally {
+    release();
+    await rm(snapshot, { recursive: true, force: true });
+    if (started) expect(await settled()).toMatchObject({ state: 'completed', skipped: 0 });
+  }
+  await expect(readFile(join(dir, 'raw.txt'))).rejects.toMatchObject({ code: 'ENOENT' });
+  expect(gunzipSync(await readFile(join(dir, 'raw.txt.gz'))).toString()).toBe(source);
+  expect((await readdir(dir)).filter(name => name.endsWith('.tmp'))).toEqual([nearby]);
+});
+
+it('waits for active staging before scrubbing and retires a pending candidate even when the plain file is unchanged', async () => {
+  const dir = await seed();
+  const writing = deferred();
+  const resume = deferred();
+  fixture.onWrite = async () => { writing.resolve(); await resume.promise; };
+  await startStorageAction('compress');
+  await writing.promise;
+  const scrubAdmitted = deferred();
+  let scrubFinished = false;
+  const scrub = withBackupAssetPublication(() => withStateLock(async () => {
+    scrubAdmitted.resolve();
+    // The revoked fact may exist only in residue, so the source fingerprint
+    // can stay identical even though this candidate has been invalidated.
+    await storage.scrubAgentRecordings(dir, ['absent synthetic fact']);
+    scrubFinished = true;
+  }));
+  try {
+    await scrubAdmitted.promise;
+    await settleTurn();
+    expect(scrubFinished).toBe(false);
+  } finally {
+    resume.resolve();
+    await scrub;
+    expect(await settled()).toMatchObject({ state: 'completed', skipped: 1, failed: 0 });
+  }
+  expect(await readFile(join(dir, 'raw.txt'), 'utf8')).toBe(source);
+  expect((await readdir(dir)).filter(name => name.startsWith('raw.txt'))).toEqual(['raw.txt']);
 });
 
 it.each(['compress', 'purge'])('%s drains the file-primary manifest and byte deletion together', async action => {

@@ -56,14 +56,14 @@ const { mutateVideoHistory } = await import('../videoGen/history.js');
 const { musicVideoEvents } = await import('./events.js');
 const filmSync = await import('../film/sync.js');
 const filmSources = await import('../film/sources.js');
+const { enqueueBlenderRenders, cancelBlenderProjectJobs } = await import('../film/queue.js');
+const { resumePendingBlenderRenders } = await import('./blender/queue.js');
 const { musicVideoFilmOwner } = await import('./blender/owner.js');
-const { enqueueBlenderRenders, cancelBlenderProjectJobs, resumePendingBlenderRenders } = await import('./blender/queue.js');
-const { saveBlenderSettings } = await import('./blender/record.js');
-const { listBlenderJobs } = await import('./blender/jobs.js');
+const { saveBlenderSettings } = await import('../film/record.js');
+const { __resetBlenderJobsForTests, listBlenderJobs } = await import('../film/jobs.js');
 const { blenderFilmReadState } = await import('./blender/renderIndex.js');
 const startBlenderSync = (id, ...args) => filmSync.startBlenderSync(musicVideoFilmOwner(id), ...args);
 const writeBlenderFile = (id, ...args) => filmSources.writeBlenderFile(musicVideoFilmOwner(id), ...args);
-const { __resetBlenderJobsForTests } = await import('./blender/jobs.js');
 
 afterAll(cleanupTempDataRoots);
 
@@ -75,7 +75,7 @@ musicVideoEvents.on('blender', (event) => { if (event.kind === 'job' && ['done',
 
 async function renderShots(quality, shotIds = null, { force = false } = {}) {
   ended.length = 0;
-  const { jobs } = await enqueueBlenderRenders(id, { quality, force, ...(shotIds ? { shotIds } : {}) });
+  const { jobs } = await enqueueBlenderRenders(musicVideoFilmOwner(id), { quality, force, ...(shotIds ? { shotIds } : {}) });
   await vi.waitFor(() => expect(ended.filter((job) => job.kind === 'render')).toHaveLength(jobs.length), WAIT);
   expect(ended.map((job) => job.error).filter(Boolean)).toEqual([]);
 }
@@ -138,7 +138,7 @@ it('refuses the final render until every shot has a complete, current final rend
   expect(mux).toEqual(expect.arrayContaining(['-i', join(ROOT(), 'music', 'example-song.wav'), '-c:v', 'copy', '-c:a', 'aac', '-t', '6']));
   expect(mux.at(-1)).toMatch(/music-video-.*\.mp4\.part\.mp4$/);
   const history = mutateVideoHistory.mock.calls.map(([mutate]) => mutate([])).flat();
-  expect(history).toContainEqual(expect.objectContaining({ id: jobId, modelId: 'music-video-blender', width: 1920, height: 1080, fps: 24, numFrames: 144, musicVideoProjectId: id }));
+  expect(history).toContainEqual(expect.objectContaining({ id: jobId, modelId: 'music-video-blender', width: 1920, height: 1080, fps: 24, numFrames: 144, songStartSec: 0, songDurationSec: 6, musicVideoProjectId: id }));
   expect(await projects.getProject(id)).toMatchObject({ status: 'complete', renderHistoryId: jobId });
   // A neutral look leaves the joined picture untouched.
   expect(applyFilmLookFinish).not.toHaveBeenCalled();
@@ -288,22 +288,22 @@ it('cuts an excerpt window out of the best available shot videos and refuses one
 });
 
 it('starts waiting stills, previews, then finals in stable order without interrupting a running final', async () => {
-  await saveBlenderSettings(id, { concurrency: 1 });
+  await saveBlenderSettings(musicVideoFilmOwner(id), { concurrency: 1 });
   let release;
   blender.fake.control.hold = new Promise((resolve) => { release = resolve; });
   try {
-    const finals = await enqueueBlenderRenders(id, { quality: 'final' });
+    const finals = await enqueueBlenderRenders(musicVideoFilmOwner(id), { quality: 'final' });
     await vi.waitFor(() => expect(blender.fake.control.jobs.filter((job) => job.mode !== 'describe')).toHaveLength(1), WAIT);
     const firstFinal = finals.jobs[0];
-    expect(listBlenderJobs(id).find(({ id: jobId }) => jobId === firstFinal.id).status).toBe('running');
+    expect(listBlenderJobs(musicVideoFilmOwner(id)).find(({ id: jobId }) => jobId === firstFinal.id).status).toBe('running');
 
-    const previews = await enqueueBlenderRenders(id, { quality: 'preview', shotIds: ['s020', 's030'] });
-    const stills = await enqueueBlenderRenders(id, { quality: 'still', shotIds: ['s010', 's020'] });
+    const previews = await enqueueBlenderRenders(musicVideoFilmOwner(id), { quality: 'preview', shotIds: ['s020', 's030'] });
+    const stills = await enqueueBlenderRenders(musicVideoFilmOwner(id), { quality: 'still', shotIds: ['s010', 's020'] });
     // The visible job list remains in creation order even though dispatch priority differs.
-    expect(listBlenderJobs(id).map(({ id: jobId }) => jobId).slice(-finals.jobs.length - previews.jobs.length - stills.jobs.length))
+    expect(listBlenderJobs(musicVideoFilmOwner(id)).map(({ id: jobId }) => jobId).slice(-finals.jobs.length - previews.jobs.length - stills.jobs.length))
       .toEqual([...finals.jobs, ...previews.jobs, ...stills.jobs].map(({ id: jobId }) => jobId));
     expect(blender.fake.control.jobs.filter((job) => job.mode !== 'describe')).toHaveLength(1);
-    expect(listBlenderJobs(id).find(({ id: jobId }) => jobId === firstFinal.id).status).toBe('running');
+    expect(listBlenderJobs(musicVideoFilmOwner(id)).find(({ id: jobId }) => jobId === firstFinal.id).status).toBe('running');
 
     release();
     const expectedJobs = [
@@ -356,25 +356,25 @@ it('recovers an interrupted final batch from disk, skips finished shots and remo
 });
 
 it('merges concurrent requests, persists both qualities but not stills, and cancel prevents restart resurrection', async () => {
-  await saveBlenderSettings(id, { concurrency: 1 });
+  await saveBlenderSettings(musicVideoFilmOwner(id), { concurrency: 1 });
   let release;
   blender.fake.control.hold = new Promise((resolve) => { release = resolve; });
   try {
     const [first, second] = await Promise.all([
-      enqueueBlenderRenders(id, { quality: 'final', shotIds: ['s010', 's020'] }),
-      enqueueBlenderRenders(id, { quality: 'final', shotIds: ['s020', 's030'] }),
+      enqueueBlenderRenders(musicVideoFilmOwner(id), { quality: 'final', shotIds: ['s010', 's020'] }),
+      enqueueBlenderRenders(musicVideoFilmOwner(id), { quality: 'final', shotIds: ['s020', 's030'] }),
     ]);
     expect(second.jobs[0].id).toBe(first.jobs[1].id);
-    await enqueueBlenderRenders(id, { quality: 'preview', shotIds: ['s020'] });
-    await enqueueBlenderRenders(id, { quality: 'still', shotIds: ['s010'] });
+    await enqueueBlenderRenders(musicVideoFilmOwner(id), { quality: 'preview', shotIds: ['s020'] });
+    await enqueueBlenderRenders(musicVideoFilmOwner(id), { quality: 'still', shotIds: ['s010'] });
     expect(pending()).toEqual([
       { quality: 'final', shotIds: ['s010', 's020', 's030'], attempt: 0 },
       { quality: 'preview', shotIds: ['s020'], attempt: 0 },
     ]);
-    expect(await cancelBlenderProjectJobs(id)).toBe(true);
+    expect(await cancelBlenderProjectJobs(musicVideoFilmOwner(id))).toBe(true);
     expect(existsSync(pendingPath())).toBe(false);
     release();
-    await vi.waitFor(() => expect(listBlenderJobs(id).filter((job) => !['done', 'error', 'canceled'].includes(job.status))).toHaveLength(0), WAIT);
+    await vi.waitFor(() => expect(listBlenderJobs(musicVideoFilmOwner(id)).filter((job) => !['done', 'error', 'canceled'].includes(job.status))).toHaveLength(0), WAIT);
     const runs = blender.fake.control.jobs.length;
     await resumePendingBlenderRenders([id], 2);
     expect(blender.fake.control.jobs).toHaveLength(runs);
@@ -401,7 +401,7 @@ it('removes exhausted or unavailable batches with one diagnostic and allows canc
     expect(existsSync(pendingPath())).toBe(false);
     expect(log.mock.calls.filter(([message]) => message.includes('Blender boot recovery'))).toHaveLength(1);
     marker(0);
-    expect(await cancelBlenderProjectJobs(id)).toBe(true);
+    expect(await cancelBlenderProjectJobs(musicVideoFilmOwner(id))).toBe(true);
     await resumePendingBlenderRenders([id], 2);
     expect(blender.fake.control.jobs).toHaveLength(1); // initial sync only
   } finally {
@@ -411,7 +411,7 @@ it('removes exhausted or unavailable batches with one diagnostic and allows canc
 
 
 it('still settles jobs when a full disk prevents clearing pending intent, so retry is not deduplicated to a dead job', async () => {
-  await saveBlenderSettings(id, { concurrency: 1 });
+  await saveBlenderSettings(musicVideoFilmOwner(id), { concurrency: 1 });
   let release;
   blender.fake.control.hold = new Promise((resolve) => { release = resolve; });
   const fileCore = await import('../../lib/fileCore.js');
@@ -420,7 +420,7 @@ it('still settles jobs when a full disk prevents clearing pending intent, so ret
   let failed = false;
   let writeSpy;
   try {
-    const { jobs } = await enqueueBlenderRenders(id, { quality: 'final', shotIds: ['s010', 's020'] });
+    const { jobs } = await enqueueBlenderRenders(musicVideoFilmOwner(id), { quality: 'final', shotIds: ['s010', 's020'] });
     writeSpy = vi.spyOn(fileCore, 'atomicWrite').mockImplementation((path, ...args) => {
       if (path === pendingPath() && !failed) {
         failed = true;
@@ -429,12 +429,12 @@ it('still settles jobs when a full disk prevents clearing pending intent, so ret
       return write(path, ...args);
     });
     release();
-    await vi.waitFor(() => expect(jobs.map((job) => listBlenderJobs(id).find((entry) => entry.id === job.id).status)).toEqual(['done', 'done']), WAIT);
+    await vi.waitFor(() => expect(jobs.map((job) => listBlenderJobs(musicVideoFilmOwner(id)).find((entry) => entry.id === job.id).status)).toEqual(['done', 'done']), WAIT);
     expect(failed).toBe(true);
     expect(errorLog).toHaveBeenCalledWith(expect.stringContaining('could not clear pending intent: disk full'));
     writeSpy.mockRestore();
     ended.length = 0;
-    const retry = await enqueueBlenderRenders(id, { quality: 'final', shotIds: ['s010'], force: true });
+    const retry = await enqueueBlenderRenders(musicVideoFilmOwner(id), { quality: 'final', shotIds: ['s010'], force: true });
     expect(retry.jobs[0].id).not.toBe(jobs[0].id);
     await vi.waitFor(() => expect(ended.filter((job) => job.kind === 'render')).toHaveLength(1), WAIT);
     expect(existsSync(pendingPath())).toBe(false);
@@ -486,17 +486,17 @@ it('refuses a sync that wins admission during the pending write without leaving 
     return write(path, ...args);
   });
   try {
-    const enqueue = enqueueBlenderRenders(id, { quality: 'final', shotIds: ['s010'] });
+    const enqueue = enqueueBlenderRenders(musicVideoFilmOwner(id), { quality: 'final', shotIds: ['s010'] });
     const refused = expect(enqueue).rejects.toMatchObject({ code: 'MUSIC_VIDEO_BLENDER_SYNC_IN_PROGRESS' });
     await vi.waitFor(() => expect(entered).toBe(true), WAIT);
     await startBlenderSync(id);
     releaseWrite();
     await refused;
     expect(existsSync(pendingPath())).toBe(false);
-    expect(listBlenderJobs(id).filter((job) => job.kind === 'render')).toHaveLength(0);
-    await cancelBlenderProjectJobs(id);
+    expect(listBlenderJobs(musicVideoFilmOwner(id)).filter((job) => job.kind === 'render')).toHaveLength(0);
+    await cancelBlenderProjectJobs(musicVideoFilmOwner(id));
     releaseSync();
-    await vi.waitFor(() => expect(listBlenderJobs(id).filter((job) => !['done', 'error', 'canceled'].includes(job.status))).toHaveLength(0), WAIT);
+    await vi.waitFor(() => expect(listBlenderJobs(musicVideoFilmOwner(id)).filter((job) => !['done', 'error', 'canceled'].includes(job.status))).toHaveLength(0), WAIT);
   } finally {
     releaseWrite();
     releaseSync();
@@ -543,11 +543,11 @@ it('plays a lead-in shot before the song and refuses a cold open that is not one
   blender.fake.control.hold = new Promise((resolve) => { release = resolve; });
   try {
     ended.length = 0;
-    const { jobs } = await enqueueBlenderRenders(id, { quality: 'final', shotIds: ['s000'] });
-    await vi.waitFor(() => expect(listBlenderJobs(id).find((job) => job.id === jobs[0].id)?.index).toBeGreaterThanOrEqual(1), WAIT);
+    const { jobs } = await enqueueBlenderRenders(musicVideoFilmOwner(id), { quality: 'final', shotIds: ['s000'] });
+    await vi.waitFor(() => expect(listBlenderJobs(musicVideoFilmOwner(id)).find((job) => job.id === jobs[0].id)?.index).toBeGreaterThanOrEqual(1), WAIT);
     const firstFrame = join(ROOT(), 'music-video', id, 'blender', 'renders', 's000', 'final', 'frames', 'frame_m000024.png');
     expect(existsSync(firstFrame)).toBe(true);
-    await cancelBlenderProjectJobs(id);
+    await cancelBlenderProjectJobs(musicVideoFilmOwner(id));
     release();
     await vi.waitFor(() => expect(ended).toContainEqual(expect.objectContaining({ id: jobs[0].id, status: 'canceled' })), WAIT);
   } finally {
@@ -579,6 +579,6 @@ it('plays a lead-in shot before the song and refuses a cold open that is not one
   expect(mux.filter((arg) => arg === '-i')).toHaveLength(3);
   expect(mux).toEqual(expect.arrayContaining(['-t', '7']));
   expect(mutateVideoHistory.mock.calls.map(([mutate]) => mutate([])).flat())
-    .toContainEqual(expect.objectContaining({ id: jobId, numFrames: 168 }));
+    .toContainEqual(expect.objectContaining({ id: jobId, numFrames: 168, songStartSec: 1, songDurationSec: 6 }));
   expect(applyFilmLookFinish).not.toHaveBeenCalled();
 });

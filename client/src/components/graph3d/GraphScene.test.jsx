@@ -1,5 +1,10 @@
 import { describe, it, expect, vi } from 'vitest';
 import { render } from '@testing-library/react';
+import { withThreeSceneDom } from '../../test/threeSceneDom';
+
+const sceneHostTypes = vi.hoisted(() => ['ambientLight', 'pointLight', 'mesh', 'meshStandardMaterial', 'meshBasicMaterial']);
+vi.mock('react/jsx-runtime', async (importOriginal) => withThreeSceneDom(await importOriginal(), sceneHostTypes));
+vi.mock('react/jsx-dev-runtime', async (importOriginal) => withThreeSceneDom(await importOriginal(), sceneHostTypes));
 
 // GraphScene renders raw react-three-fiber primitives (<mesh>, <ambientLight>,
 // ...) that only make sense inside a real WebGL canvas — this test DOM has
@@ -13,7 +18,7 @@ vi.mock('@react-three/fiber', () => ({
   useThree: () => ({ camera: {}, size: { width: 100, height: 100 } }),
 }));
 const orbitControlsSpy = vi.hoisted(() => vi.fn(() => null));
-vi.mock('@react-three/drei', () => ({ OrbitControls: orbitControlsSpy }));
+vi.mock('../../lib/threeHelpers/controls.jsx', () => ({ OrbitControls: orbitControlsSpy }));
 
 import GraphScene, { graphMotionSettings } from './GraphScene';
 

@@ -154,6 +154,24 @@ describe('client ↔ server API route parity', () => {
       .toEqual(['/api/definitely-not-mounted/:p']);
   });
 
+  it('checks every route supplied by an imported API factory callback', () => {
+    const factory = 'export function createFilmApi(pathOf) { return { render: id => request(`${pathOf(id)}/render`, { method: "POST" }) }; }';
+    const { paths, referenced, unresolved } = scanClientApiPaths({
+      sources: {
+        'apiFilm.js': factory,
+        'apiTrackFilm.js': "import { createFilmApi } from './apiFilm.js'; export const api = createFilmApi(id => `/tracks/${id}/film`);",
+        'apiShowFilm.js': "import { createFilmApi } from './apiFilm.js'; export const api = createFilmApi((id) => `/shows/${id}/film`);",
+      },
+    });
+    expect(unresolved).toEqual([]);
+    expect(referenced).toEqual([
+      { path: '/api/tracks/:p/film/render', method: 'POST' },
+      { path: '/api/shows/:p/film/render', method: 'POST' },
+    ]);
+    expect(findUnmountedClientPaths(paths, ['/api/tracks/:id/film/render']).map(site => site.path))
+      .toEqual(['/api/shows/:p/film/render']);
+  });
+
   it('builds a populated server route table covering a known route (server-extractor bypass probe)', () => {
     expect(catalog.routes.length).toBeGreaterThan(1000);
     expect(catalog.mounts).toContain('/api/sync');

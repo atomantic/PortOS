@@ -1,22 +1,25 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
-import { render, screen, act } from '@testing-library/react';
+import { render, screen, act, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
-import { MemoryRouter } from 'react-router';
+import { MemoryRouter, Route, Routes, useParams } from 'react-router';
 
-// jsdom has no WebGL context, so the three.js stack can't mount. The stub drops
-// `children` deliberately: rendering the scene would mount <mesh>/<bufferGeometry>
-// as unknown DOM elements and hand back HTMLElements where three.js objects are
-// expected. The scene's own maths are covered by goalTreeScene.test.js instead —
-// this file covers the chrome around the canvas.
-vi.mock('@react-three/fiber', () => ({
-  Canvas: () => <div data-testid="goal-tree-canvas" />,
-  useFrame: () => {},
-  useThree: () => null,
-}));
-vi.mock('@react-three/drei', () => ({
-  OrbitControls: () => null,
-  Billboard: () => null,
-  Text: () => null,
+// The DOM test environment has no WebGL context. Render the controls mock
+// alongside the canvas marker, skipping the scene's three.js host objects.
+vi.mock('@react-three/fiber', async () => {
+  const { Children } = await import('react');
+  const { OrbitControls } = await import('../../lib/threeHelpers/controls.jsx');
+  return {
+    Canvas: ({ children, frameloop }) => (
+      <div data-testid="goal-tree-canvas" data-frameloop={frameloop}>
+        {Children.toArray(children).filter(child => child.type === OrbitControls)}
+      </div>
+    ),
+    useFrame: () => {},
+    useThree: () => null,
+  };
+});
+vi.mock('../../lib/threeHelpers/controls.jsx', () => ({
+  OrbitControls: ({ enableDamping }) => <div data-testid="goal-tree-orbit" data-damping={enableDamping} />,
 }));
 
 const { toastError, organizeGoals, createGoal, providerState } = vi.hoisted(() => ({
@@ -103,10 +106,20 @@ const DATA = {
   ],
 };
 
+function RoutedTree({ data, onRefresh }) {
+  const { goalId } = useParams();
+  return <GoalsTreeView data={data} onRefresh={onRefresh} selectedGoalId={goalId} />;
+}
+
 const renderTree = async (data = DATA, selectedGoalId) => {
+  const tree = <RoutedTree data={data} onRefresh={vi.fn()} />;
+  const entry = selectedGoalId ? `/goals/tree/${selectedGoalId}` : '/goals/tree';
   render(
-    <MemoryRouter>
-      <GoalsTreeView data={data} onRefresh={vi.fn()} selectedGoalId={selectedGoalId} />
+    <MemoryRouter initialEntries={[entry]}>
+      <Routes>
+        <Route path="/goals/tree" element={tree} />
+        <Route path="/goals/tree/:goalId" element={tree} />
+      </Routes>
     </MemoryRouter>,
   );
   await act(async () => {});
@@ -145,13 +158,88 @@ describe('labels toggle', () => {
   });
 });
 
-it('opens and dismisses the create form without creating a goal', async () => {
+it.each([
+  [false, 'always', 'true'],
+  [true, 'demand', 'false'],
+])('applies the motion preference (%s) to canvas rendering and orbit damping', async (matches, frameloop, damping) => {
+  const matchMedia = vi.spyOn(window, 'matchMedia').mockReturnValue({ matches });
+  try {
+    await renderTree();
+    expect(matchMedia).toHaveBeenCalledWith('(prefers-reduced-motion: reduce)');
+    expect(screen.getByTestId('goal-tree-canvas')).toHaveAttribute('data-frameloop', frameloop);
+    expect(screen.getByTestId('goal-tree-orbit')).toHaveAttribute('data-damping', damping);
+  } finally {
+    matchMedia.mockRestore();
+  }
+});
+
+it('exposes category toggle states and updates the goal picker with filters', async () => {
   const user = userEvent.setup();
   await renderTree();
-  await user.click(screen.getByRole('button', { name: 'Add' }));
-  expect(screen.getByRole('textbox', { name: 'New goal title' })).toBeVisible();
-  await user.click(screen.getByRole('button', { name: 'Cancel' }));
+  for (const name of ['Creative', 'Family', 'Health', 'Financial', 'Legacy', 'Mastery']) {
+    expect(screen.getByRole('button', { name, pressed: true })).toHaveAttribute('type', 'button');
+  }
+
+  await user.click(screen.getByText('Browse goals'));
+  const picker = within(screen.getByRole('region', { name: 'Goals 3D tree visualization' }));
+  expect(picker.getByRole('button', { name: /restore the boat/i })).toBeVisible();
+  await user.click(screen.getByRole('button', { name: 'Creative' }));
+  expect(screen.getByRole('button', { name: 'Creative', pressed: false })).toBeVisible();
+  expect(picker.queryByRole('button', { name: /restore the boat/i })).not.toBeInTheDocument();
+  await user.type(screen.getByRole('textbox', { name: 'Search goals' }), 'celestial');
+  expect(picker.getByRole('button', { name: /learn celestial navigation/i })).toBeVisible();
+  expect(picker.queryByRole('button', { name: /sail across an ocean/i })).not.toBeInTheDocument();
+});
+
+it('selects a goal from the keyboard and returns to it when Escape closes the details', async () => {
+  const user = userEvent.setup();
+  await renderTree();
+  const browse = screen.getByText('Browse goals');
+  browse.focus();
+  await user.keyboard('{Enter}');
+  await user.tab();
+  const goal = screen.getByRole('button', { name: 'Sail across an ocean · Mastery · Lifetime' });
+  expect(goal).toHaveFocus();
+
+  await user.keyboard('{Enter}');
+  const details = screen.getByTestId('detail-panel-goal');
+  expect(details).toHaveTextContent('Sail across an ocean');
+  expect(document.activeElement).toContainElement(details);
+  expect(goal).toHaveAttribute('aria-current', 'true');
+
+  await user.keyboard('{Escape}');
+  expect(screen.queryByTestId('detail-panel-goal')).not.toBeInTheDocument();
+  expect(goal).not.toHaveAttribute('aria-current');
+  expect(goal).toHaveFocus();
+});
+
+it('exposes the Add form state and restores focus when Escape closes it', async () => {
+  const user = userEvent.setup();
+  await renderTree();
+  const add = screen.getByRole('button', { name: 'Add', expanded: false });
+  expect(add).toHaveAttribute('type', 'button');
+  add.focus();
+  await user.keyboard('{Enter}');
+  expect(add).toHaveAttribute('aria-expanded', 'true');
+  await user.tab();
+  expect(screen.getByRole('textbox', { name: 'New goal title' })).toHaveFocus();
+
+  await user.keyboard('{Escape}');
+  expect(add).toHaveAttribute('aria-expanded', 'false');
+  expect(add).toHaveFocus();
   expect(screen.queryByRole('textbox', { name: 'New goal title' })).not.toBeInTheDocument();
+  expect(createGoal).not.toHaveBeenCalled();
+});
+
+it('dismisses the Add form before clearing an existing goal selection', async () => {
+  const user = userEvent.setup();
+  await renderTree(DATA, 'g1');
+  await user.click(screen.getByRole('button', { name: 'Add' }));
+  await user.keyboard('{Escape}');
+  expect(screen.getByRole('button', { name: 'Add', expanded: false })).toHaveFocus();
+  expect(screen.getByTestId('detail-panel-goal')).toBeInTheDocument();
+  await user.keyboard('{Escape}');
+  expect(screen.queryByTestId('detail-panel-goal')).not.toBeInTheDocument();
 });
 
 describe('empty state', () => {

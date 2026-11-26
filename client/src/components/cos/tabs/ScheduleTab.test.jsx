@@ -97,7 +97,9 @@ describe('ScheduleTab on-demand feedback', () => {
       'better-complexity': { ...profile, displayName: 'Legacy complexity', legacyAuditDomain: 'code-simplification', enabledAppCount: 1 },
     } });
     render(<MemoryRouter><ScheduleTab apps={[]} providers={[]} /></MemoryRouter>);
+    expect(screen.getByRole('status')).toHaveTextContent('Loading schedule');
     expect(await screen.findByText('Code simplification')).toBeVisible();
+    expect(screen.queryByText('Loading schedule...')).not.toBeInTheDocument();
     expect(screen.getByText('Legacy complexity')).toBeVisible();
     expect(screen.queryByText('Legacy simplify')).not.toBeInTheDocument();
     await user.click(screen.getByRole('checkbox', { name: 'Show all legacy audit profiles' }));

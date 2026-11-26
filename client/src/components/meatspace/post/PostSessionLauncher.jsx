@@ -1,37 +1,28 @@
-import { useState, useEffect, useRef, useCallback } from 'react';
+import { useState, useEffect, useRef } from 'react';
 import { Link } from 'react-router';
-import { Zap, Play, Brain, Dumbbell, Timer, Target, TrendingUp, TrendingDown, Minus, Compass, ArrowRight, ChevronRight, Layers } from 'lucide-react';
-import {
-  getPostReviewReps,
-  getPostRecommendations,
-  getMorseProgress,
-  getPostProgress,
-  getPostBenchmarkProtocol,
-  getMemoryItems,
-  updatePostConfig,
-  getPostCognitiveProgress,
-} from '../../../services/apiMeatspace.js';
-import { FormField } from '../../ui/FormField';
-import Pill from '../../ui/Pill';
+import { Target, Zap } from 'lucide-react';
+import { getPostReviewReps, getPostBenchmarkProtocol, updatePostConfig } from '../../../services/apiMeatspace.js';
 import ListLoadError from '../../ui/ListLoadError';
 import toast from '../../ui/Toast';
-import { enabledApiProviderFilter } from '../../../utils/providers';
-import useProviderModels from '../../../hooks/useProviderModels.js';
-import { DOMAINS, DRILL_TO_DOMAIN, DRILL_LABELS, COGNITIVE_LADDER_TYPES, computeDomainAverages, computeGoalProgress, isTopicEnabled, selectMemoryItemForDrill, resolveTopicForDrillType } from './constants';
+import { DOMAINS, DRILL_TO_DOMAIN } from './constants';
 import { otherPostSections, TOPIC_SURFACE_SECTIONS } from './practiceCatalog';
 import { postIcon } from './postIcons';
-import BrowseCatalogLink from './BrowseCatalogLink';
-import { CognitiveDrillTutorialPreview, CognitiveDrillHowItWorksButton } from './CognitiveDrillTutorial';
-import { streakGlyph } from '../../../lib/streakGlyph.js';
+import { CognitiveDrillTutorialPreview } from './CognitiveDrillTutorial';
 import useUserTimezone from '../../../hooks/useUserTimezone.js';
 import { todayKeyInTimezone } from '../../../utils/timezone.js';
+import { normalizeQuickDurationMinutes } from '../../../lib/postQuickSession.js';
+import PostStartCard from './PostStartCard';
+import PostAnalyticsSection from './PostAnalyticsSection';
+import PostDrillsSidebar from './PostDrillsSidebar';
+import usePostLauncherData from './usePostLauncherData';
 import {
-  QUICK_DURATION_MINUTES,
-  QUICK_DURATION_TOLERANCE_SEC,
-  normalizeQuickDurationMinutes,
-  deriveQuickObservedDurations,
-  composeQuickSession,
-} from '../../../lib/postQuickSession.js';
+  buildCleanConditions, collectLauncherDrills, buildFullSessionDrills,
+  buildLauncherQuickPlan, buildQuickSessionDrills, buildFocusDrillConfig,
+} from './postLauncherBuilders';
+
+export { INTERLEAVE_DOMAIN_ORDER, interleaveByDomain, buildCleanConditions } from './postLauncherBuilders';
+export { cognitiveSummary } from './postLauncherScores';
+export { SLEEP_QUALITY_OPTIONS, CAFFEINE_OPTIONS, STRESS_OPTIONS } from './postLauncherConditions';
 
 // The launcher header's links to the rest of POST. These used to be four
 // `onView*` callback props, so the launcher could only offer whatever PostTab
@@ -45,87 +36,6 @@ const LAUNCHER_LINKS = [
   ...TOPIC_SURFACE_SECTIONS,
   ...otherPostSections('launcher').filter(s => s.id !== 'explore'),
 ];
-
-// Canonical domain visiting order for interleaved "Full POST" composition
-// (issue #2100): alternate domains — math → cognitive → memory → verbal — so a
-// session is spaced/varied rather than blocked (all math, then all cognitive).
-// Domains not listed here interleave after, in first-seen order.
-export const INTERLEAVE_DOMAIN_ORDER = ['math', 'cognitive', 'memory', 'verbal', 'wordplay', 'imagination'];
-
-/**
- * Round-robin interleave drill configs by their `domain` tag: one drill from
- * each domain per round, in INTERLEAVE_DOMAIN_ORDER, until every drill is
- * placed. Preserves per-domain input order. Pure — exported for unit tests.
- */
-export function interleaveByDomain(drills, order = INTERLEAVE_DOMAIN_ORDER) {
-  const groups = new Map();
-  for (const d of drills || []) {
-    const key = d.domain || 'other';
-    if (!groups.has(key)) groups.set(key, []);
-    groups.get(key).push(d);
-  }
-  const domainOrder = [
-    ...order.filter(k => groups.has(k)),
-    ...[...groups.keys()].filter(k => !order.includes(k)),
-  ];
-  const lengths = [...groups.values()].map(g => g.length);
-  const maxLen = lengths.length ? Math.max(...lengths) : 0;
-  const result = [];
-  for (let round = 0; round < maxLen; round++) {
-    for (const key of domainOrder) {
-      const list = groups.get(key);
-      if (round < list.length) result.push(list[round]);
-    }
-  }
-  return result;
-}
-
-const scoreColorClass = (score) =>
-  score >= 80 ? 'text-port-success' : score >= 50 ? 'text-port-warning' : 'text-port-error';
-
-// Short "at a glance" summary chip per cognitive drill type, shown next to
-// its label in the launcher sidebar. Pure — no closures over component state.
-export function cognitiveSummary(type, cfg) {
-  if (type === 'n-back') return `${cfg.n ?? 2}-back`;
-  if (type === 'digit-span') return `${cfg.startLength ?? 3}–${cfg.maxLength ?? 8}`;
-  if (type === 'schulte-table') return `${cfg.size ?? 5}×${cfg.size ?? 5}`;
-  if (type === 'stroop') return `${cfg.incongruentPct ?? 75}% conflict`;
-  if (type === 'mental-rotation') return `${cfg.optionCount ?? 4} options`;
-  if (type === 'reaction-time') return `${cfg.count ?? 15} trials (${cfg.mode ?? 'simple'})`;
-  if (type === 'task-switching') return `${cfg.ruleCount ?? 2} rules · ${cfg.switchRatePct ?? 50}% switch`;
-  if (type === 'go-no-go') return `${cfg.noGoPct ?? 25}% no-go · ${cfg.lureSimilarity ?? 'low'} similarity`;
-  if (type === 'flanker') return `${100 - (cfg.congruentPct ?? 60)}% conflict · strength ${cfg.flankerStrength ?? 2}`;
-  return cfg.count ? `${cfg.count} trials` : '';
-}
-
-// Structured session-condition options (issue #4442) — fixed enums instead
-// of free text, so values are filterable/comparable across sessions rather
-// than the prior "good/poor", "1 cup" free-text guesswork.
-export const SLEEP_QUALITY_OPTIONS = ['poor', 'fair', 'good'];
-export const CAFFEINE_OPTIONS = ['none', 'low', 'moderate', 'high'];
-export const STRESS_OPTIONS = ['low', 'moderate', 'high'];
-
-// Drives the three condition <select>s below — one entry per enum field, so
-// adding/renaming a field is a one-line change instead of a copy-pasted block.
-const CONDITION_SELECT_FIELDS = [
-  { key: 'sleepQuality', label: 'Sleep', options: SLEEP_QUALITY_OPTIONS },
-  { key: 'caffeine', label: 'Caffeine', options: CAFFEINE_OPTIONS },
-  { key: 'stress', label: 'Stress', options: STRESS_OPTIONS },
-];
-
-// Pure: sanitizes the optional conditions object before submit — drops unset
-// enum fields and an empty/whitespace-only note, so a session with nothing
-// filled in submits `{}` (server treats an empty object as "no conditions"),
-// not a placeholder-filled record. `conditions` is passed explicitly (lifted
-// from the component's `conditions` state).
-export function buildCleanConditions(conditions) {
-  const clean = {};
-  if (conditions.sleepQuality) clean.sleepQuality = conditions.sleepQuality;
-  if (conditions.caffeine) clean.caffeine = conditions.caffeine;
-  if (conditions.stress) clean.stress = conditions.stress;
-  if (conditions.note?.trim()) clean.note = conditions.note.trim();
-  return clean;
-}
 
 function AutoStartRecommendation({ action, onConsumed, onNavigate }) {
   const startedRef = useRef(false);
@@ -162,7 +72,6 @@ export default function PostSessionLauncher({
   // `conditions` lives above it, so collapsing never discards typed values.
   const [showConditions, setShowConditions] = useState(false);
   const [mode, setMode] = useState('test'); // 'test' | 'train'
-  const [quickDurationMin, setQuickDurationMin] = useState(() => normalizeQuickDurationMinutes(config?.quickDurationMin));
   const [quickDurationSaveState, setQuickDurationSaveState] = useState('idle');
   const [benchmarkState, setBenchmarkState] = useState('idle');
   const [benchmarkError, setBenchmarkError] = useState(null);
@@ -171,331 +80,29 @@ export default function PostSessionLauncher({
   // show a config snapshot that has since moved. Nothing mounts a runner, so no
   // drill timer is affected.
   const [howItWorksType, setHowItWorksType] = useState(null);
-  const [cognitiveProgress, setCognitiveProgress] = useState(null);
-
-  useEffect(() => {
-    setQuickDurationMin(normalizeQuickDurationMinutes(config?.quickDurationMin));
-  }, [config?.quickDurationMin]);
-  // `getProviders()` resolves `{ activeProvider, providers }`, not a bare array.
-  // Unwrapping it by hand here read the object as the list and threw on every
-  // mount, so the panel below never learned which provider a run would use — go
-  // through the shared hook that owns the unwrap instead of a fourth copy of it.
-  // `allowDefault` keeps it from auto-selecting a provider; this is a read-only
-  // "is anything configured" signal, not a picker.
-  const { providers } = useProviderModels({
-    filter: enabledApiProviderFilter,
-    allowDefault: true,
-    silent: true,
-  });
-  // Mastered-but-inactive skills due for a maintenance review (issue #2096) —
-  // the Quick session mixes up to 2 of these in as labeled review reps. Empty
-  // until a skill is mastered and its review interval elapses; a load failure
-  // silently degrades to a plain Quick session.
-  const [reviewReps, setReviewReps] = useState([]);
-  // A failed read must not look like "no reviews due": the Quick session and the
-  // skill-review rows both depend on it.
-  const [reviewRepsError, setReviewRepsError] = useState(null);
-  // Ordered "what to practice next" recommendations (issue #2100). A load
-  // failure silently degrades to an empty list (the panel hides). The top
-  // recommendation also biases the Quick session's drill picks.
-  const [recommendations, setRecommendations] = useState([]);
-  const [recommendationsLoaded, setRecommendationsLoaded] = useState(false);
-  // Compact multi-day practice window from the same endpoint (issue #5319), so
-  // the Quick session rotates its per-domain picks off exactly the signal the
-  // server used to order the recommendations. null = not loaded / load failed,
-  // which composeQuickSession degrades to its previous fixed ordering.
-  const [recentPractice, setRecentPractice] = useState(null);
-  // Current effective Morse WPM — fetched only when a Morse WPM goal is set, so
-  // that goal can render progress (issue #2100). null when unset/unavailable.
-  const [morseWpm, setMorseWpm] = useState(null);
-  // Today's TOTAL training minutes (scored sessions + training-log practice —
-  // Training mode, Morse, memory) for the daily-minutes goal. Fetched only when
-  // that goal is set; null falls back to the scored-session-only estimate.
-  const [todayMinutesTotal, setTodayMinutesTotal] = useState(null);
-  // Memory is opt-in for composed sessions, but its generator cannot run
-  // without an enabled item. Keep loading/error distinct from a confirmed-empty
-  // list and fail closed until the item pool is known (issue #3254).
-  const [memoryItemsState, setMemoryItemsState] = useState({ status: 'loading', items: [] });
-
-  const loadReviewReps = useCallback(() => {
-    setReviewRepsError(null);
-    getPostReviewReps(5, { silent: true })
-      .then(r => setReviewReps(r?.reps || []))
-      .catch(err => setReviewRepsError(err instanceof Error ? err : new Error('Request failed')));
-  }, []);
-
-  useEffect(() => {
-    let active = true;
-    loadReviewReps();
-    getPostRecommendations()
-      .then(r => {
-        if (!active) return;
-        setRecommendations(r?.recommendations || []);
-        setRecentPractice(r?.recentPractice || null);
-      })
-      .catch(() => {
-        if (!active) return;
-        setRecommendations([]);
-        setRecentPractice(null);
-      })
-      .finally(() => { if (active) setRecommendationsLoaded(true); });
-    getMemoryItems({ silent: true })
-      .then(items => { if (active) setMemoryItemsState({ status: 'ready', items: Array.isArray(items) ? items : [] }); })
-      .catch(() => { if (active) setMemoryItemsState({ status: 'error', items: [] }); });
-    return () => { active = false; };
-  }, [loadReviewReps]);
-
-  // Only fetch Morse progress when a Morse WPM goal exists — avoids an extra
-  // request on the common path. Effective WPM prefers the Farnsworth setting.
-  useEffect(() => {
-    if (!config?.goals?.morseWpmTarget) { setMorseWpm(null); return; }
-    let cancelled = false;
-    getMorseProgress(30, { silent: true })
-      .then(m => {
-        if (cancelled) return;
-        const wpm = m?.settings?.farnsworthWpm ?? m?.settings?.wpm ?? null;
-        setMorseWpm(typeof wpm === 'number' ? wpm : null);
-      })
-      .catch(() => { if (!cancelled) setMorseWpm(null); });
-    return () => { cancelled = true; };
-  }, [config?.goals?.morseWpmTarget]);
-
-  // Cognitive ladder rungs. Needed only so the "How it works" card describes the
-  // drill that will ACTUALLY run: while a laddered drill is progressive (the
-  // shipped default) the server overrides the stored knobs with the rung's
-  // config, so the card would otherwise teach the wrong lag / recall direction.
-  // Conditional-fetch like the goal-scoped effects above — nothing is requested
-  // on an install with no progressive cognitive drill enabled.
-  const needsCognitiveProgress = config?.cognitive?.enabled !== false
-    && COGNITIVE_LADDER_TYPES.some(type => {
-      const cfg = config?.cognitive?.drillTypes?.[type];
-      return cfg && cfg.enabled !== false && cfg.progressive !== false;
-    });
-  useEffect(() => {
-    if (!needsCognitiveProgress) { setCognitiveProgress(null); return; }
-    let cancelled = false;
-    getPostCognitiveProgress({ silent: true })
-      .then(p => { if (!cancelled) setCognitiveProgress(p || {}); })
-      // `{}` on failure, not null: null means "not fetched yet" and would leave
-      // the preview waiting forever on a rung that is never coming.
-      .catch(err => {
-        console.warn('⚠️ Failed to load cognitive progress: ' + err.message);
-        if (!cancelled) setCognitiveProgress({});
-      });
-    return () => { cancelled = true; };
-  }, [needsCognitiveProgress]);
-
-  // Today's total training minutes (incl. training-log practice) — fetched only
-  // when a daily-minutes goal is set, so that goal counts Training/Morse/memory
-  // time, not just scored sessions (issue #2100 review).
-  useEffect(() => {
-    if (!config?.goals?.dailyMinutes) { setTodayMinutesTotal(null); return; }
-    let cancelled = false;
-    getPostProgress(1, { silent: true })
-      .then(p => {
-        if (cancelled) return;
-        const t = todayKeyInTimezone(timezone);
-        const todayBucket = (p?.series?.byDay || []).find(d => d.date === t);
-        setTodayMinutesTotal(todayBucket ? todayBucket.minutes : 0);
-      })
-      .catch(() => { if (!cancelled) setTodayMinutesTotal(null); });
-    return () => { cancelled = true; };
-  }, [config?.goals?.dailyMinutes, timezone]);
+  const {
+    quickDurationMin, setQuickDurationMin, providers, reviewReps, reviewRepsError, loadReviewReps,
+    recommendations, recommendationsLoaded, recentPractice, morseWpm, todayMinutesTotal,
+    memoryItemsState, cognitiveProgress,
+  } = usePostLauncherData(config, timezone);
 
   if (!config) {
     return <div className="text-gray-500">Loading configuration...</div>;
   }
 
   const today = todayKeyInTimezone(timezone);
-  const todaySession = recentSessions?.find(s => s.date === today);
-  const lastThree = (recentSessions || []).slice(-3).reverse();
 
-  // Practice-topic gate (issue #3252). Applied at the SOURCE of every enabled-
-  // drill list so a switched-off topic disappears from composed sessions, Quick
-  // sessions, domain-focus practice, and the "Up next" actions alike — that's
-  // what makes "only Wordplay" a single toggle instead of unchecking eight
-  // individual LLM drill types. A drill type with no registry entry has no topic
-  // and is never gated.
-  const topicAllowed = (type) => isTopicEnabled(config, resolveTopicForDrillType(type)?.id);
-
-  // Maintenance review reps are drills too, so they get the same topic gate —
-  // otherwise switching Cognitive off still mixed an n-back rep into a Quick
-  // session (and the launcher still advertised it below).
-  const allowedReviewReps = reviewReps.filter(rep => topicAllowed(rep.type));
-
-  // Math honors its module-level `enabled` flag like the llmDrills/cognitive
-  // branches below — it used to ignore it, so a `mentalMath.enabled: false`
-  // config still composed every math drill.
-  const enabledMathDrills = config.mentalMath?.enabled !== false
-    ? Object.entries(config.mentalMath?.drillTypes || {}).filter(([type, cfg]) => cfg.enabled && topicAllowed(type))
-    : [];
-
-  const enabledLlmDrills = config.llmDrills?.enabled !== false
-    ? Object.entries(config.llmDrills?.drillTypes || {}).filter(([type, cfg]) => cfg.enabled !== false && topicAllowed(type))
-    : [];
-
-  const llmProviderId = config.llmDrills?.providerId || null;
-  const llmModel = config.llmDrills?.model || null;
-
-  // Deterministic cognitive drills (n-back / digit-span / stroop). No provider.
-  const enabledCognitiveDrills = config.cognitive?.enabled !== false
-    ? Object.entries(config.cognitive?.drillTypes || {}).filter(([type, cfg]) => cfg.enabled !== false && topicAllowed(type))
-    : [];
-
-  const enabledMemoryItems = memoryItemsState.status === 'ready'
-    ? memoryItemsState.items.filter(item => config.memory?.items?.[item.id]?.enabled !== false)
-    : [];
-  const enabledMemoryDrills = config.memory?.enabled !== false && enabledMemoryItems.length > 0
-    ? DOMAINS.memory.drillTypes
-      .map(type => [type, config.memory?.drillTypes?.[type]])
-      .filter(([type, cfg]) => cfg && cfg.enabled !== false && topicAllowed(type)
-        && selectMemoryItemForDrill(enabledMemoryItems, type))
-    : [];
-
-  const memoryDrillConfig = (type, count) => ({
-    count,
-    memoryItemId: selectMemoryItemForDrill(enabledMemoryItems, type)?.id,
-  });
-
-  // Only the fields each cognitive generator reads; extras are harmless.
-  // stimulusMs (n-back) / showMs (digit-span) are forwarded so that manual mode
-  // (Progressive off) actually uses the presentation-speed values the user set
-  // in PostDrillConfig.jsx (issue #2095) — under the progressive ladder the
-  // server overrides them per rung anyway, so forwarding is safe in both modes.
-  const cognitiveDrillConfig = (cfg) => ({
-    n: cfg.n,
-    length: cfg.length,
-    stimulusMs: cfg.stimulusMs,
-    direction: cfg.direction,
-    startLength: cfg.startLength,
-    maxLength: cfg.maxLength,
-    showMs: cfg.showMs,
-    count: cfg.count,
-    incongruentPct: cfg.incongruentPct,
-    size: cfg.size,
-    rotationComplexity: cfg.rotationComplexity,
-    optionCount: cfg.optionCount,
-    mode: cfg.mode,
-    minDelayMs: cfg.minDelayMs,
-    maxDelayMs: cfg.maxDelayMs,
-    choices: cfg.choices,
-    ruleCount: cfg.ruleCount,
-    switchRatePct: cfg.switchRatePct,
-    cueStimulusIntervalMs: cfg.cueStimulusIntervalMs,
-    responseDeadlineMs: cfg.responseDeadlineMs,
-    noGoPct: cfg.noGoPct,
-    lureSimilarity: cfg.lureSimilarity,
-    congruentPct: cfg.congruentPct,
-    flankerDistance: cfg.flankerDistance,
-    flankerStrength: cfg.flankerStrength,
-  });
-
-  // Composed sessions (Full POST / Quick) honor `sessionModules` (issue #2100):
-  // a module's drills are only added when it's listed. The default
-  // (mental-math + cognitive) excludes Memory and LLM drills, so both remain
-  // deliberate opt-ins and wit/verbal work
-  // is never auto-added to a default session — provider-cost consent stays
-  // opt-in (AGENTS.md AI-provider policy). An empty/absent list means "all
-  // enabled" (back-compat). Focus-practice on a specific weak domain bypasses
-  // this filter (it's an explicit user choice, not a default composition).
-  // `null` = no sessionModules set (legacy/absent) → include all enabled
-  // (back-compat). An explicit array — INCLUDING an empty one — is honored as-is:
-  // unchecking every module in Config is a deliberate "no composed sessions"
-  // choice, not the same as never having set it (issue #2100 review).
-  const sessionModules = Array.isArray(config.sessionModules) ? config.sessionModules : null;
-  const SOURCE_TO_MODULE = { math: 'mental-math', llm: 'llm-drills', cognitive: 'cognitive', memory: 'memory' };
-  const moduleAllowed = (source) => sessionModules === null || sessionModules.includes(SOURCE_TO_MODULE[source]);
+  const drillCatalog = collectLauncherDrills(config, reviewReps, memoryItemsState);
+  const {
+    topicAllowed, allowedReviewReps, allEnabledDrills, enabledDomains, sessionEnabledDomains,
+    domainCount, hasSessionDrills, compositionExcludesAll,
+  } = drillCatalog;
+  const quickPlan = buildLauncherQuickPlan(drillCatalog, { recommendations, quickDurationMin, recentSessions, recentPractice });
 
   function handleStart() {
-    const mathConfigs = (moduleAllowed('math') ? enabledMathDrills : []).map(([type, cfg]) => ({
-      type,
-      domain: DRILL_TO_DOMAIN[type],
-      config: {
-        steps: cfg.steps,
-        count: cfg.count,
-        maxDigits: cfg.maxDigits,
-        subtrahend: cfg.subtrahend,
-        startRange: cfg.startRange,
-        bases: cfg.bases,
-        maxExponent: cfg.maxExponent,
-        tolerancePct: cfg.tolerancePct,
-        difficulty: cfg.difficulty,
-        family: cfg.family,
-      },
-      timeLimitSec: cfg.timeLimitSec || 120
-    }));
-
-    const llmConfigs = (moduleAllowed('llm') ? enabledLlmDrills : []).map(([type, cfg]) => ({
-      type,
-      domain: DRILL_TO_DOMAIN[type],
-      config: { count: cfg.count || 5 },
-      timeLimitSec: cfg.timeLimitSec || 120,
-      providerId: cfg.providerId || llmProviderId,
-      model: cfg.model || llmModel
-    }));
-
-    const cognitiveConfigs = (moduleAllowed('cognitive') ? enabledCognitiveDrills : []).map(([type, cfg]) => ({
-      type,
-      domain: DRILL_TO_DOMAIN[type],
-      config: cognitiveDrillConfig(cfg)
-      // No timeLimitSec — cognitive drills are self-paced/stimulus-driven and
-      // never enforce a countdown (see PostCognitiveDrillRunner.jsx).
-    }));
-
-    const memoryConfigs = (moduleAllowed('memory') ? enabledMemoryDrills : []).map(([type, cfg]) => ({
-      type,
-      domain: 'memory',
-      config: memoryDrillConfig(type, cfg.count),
-      timeLimitSec: DOMAINS.memory.timeBudgetSec,
-    }));
-
-    // Interleave across domains (math → cognitive → memory → verbal …) rather
-    // than running each module blocked, so a full session spaces varied work
-    // for better retention (issue #2100). Full coverage is preserved — every
-    // enabled drill still runs, just reordered.
-    const drillConfigs = interleaveByDomain([...mathConfigs, ...llmConfigs, ...cognitiveConfigs, ...memoryConfigs]);
+    const drillConfigs = buildFullSessionDrills(drillCatalog);
     onStart({ drills: drillConfigs, conditions: buildCleanConditions(conditions), training: mode === 'train' });
   }
-
-  // Build domain → enabled drills map for quick session
-  const allEnabledDrills = [
-    ...enabledMathDrills.map(([type, cfg]) => ({ type, cfg, source: 'math' })),
-    ...enabledLlmDrills.map(([type, cfg]) => ({ type, cfg, source: 'llm' })),
-    ...enabledCognitiveDrills.map(([type, cfg]) => ({ type, cfg, source: 'cognitive' })),
-    ...enabledMemoryDrills.map(([type, cfg]) => ({ type, cfg, source: 'memory' })),
-  ];
-
-  const enabledDomains = {};
-  for (const { type, cfg, source } of allEnabledDrills) {
-    const domain = DRILL_TO_DOMAIN[type];
-    if (!domain) continue;
-    if (!enabledDomains[domain]) enabledDomains[domain] = [];
-    enabledDomains[domain].push({ type, cfg, source });
-  }
-
-  // Domains eligible for a COMPOSED (Full/Quick) session, after the
-  // sessionModules filter — so a default Quick session never silently pulls in
-  // an opt-out module's drills (issue #2100).
-  const sessionEnabledDomains = {};
-  for (const [domainKey, drills] of Object.entries(enabledDomains)) {
-    const allowed = drills.filter(d => moduleAllowed(d.source));
-    if (allowed.length) sessionEnabledDomains[domainKey] = allowed;
-  }
-
-  const quickMemoryItemIds = {};
-  for (const [type] of enabledMemoryDrills) {
-    quickMemoryItemIds[type] = memoryDrillConfig(type, 3).memoryItemId;
-  }
-  const quickPlan = composeQuickSession({
-    domainEntries: Object.entries(sessionEnabledDomains).map(([domain, drills]) => ({ domain, drills })),
-    recommendation: recommendations[0] || null,
-    reviewReps: allowedReviewReps.map(rep => ({ ...rep, domain: DRILL_TO_DOMAIN[rep.type] })),
-    durationMinutes: quickDurationMin,
-    toleranceSec: QUICK_DURATION_TOLERANCE_SEC,
-    observedDurations: deriveQuickObservedDurations(recentSessions),
-    memoryItemIds: quickMemoryItemIds,
-    recentPractice,
-  });
 
   function handleQuickDurationChange(event) {
     const next = normalizeQuickDurationMinutes(event.target.value);
@@ -511,44 +118,19 @@ export default function PostSessionLauncher({
   }
 
   function handleQuickSession() {
-    const drillConfigs = quickPlan.selected.map(candidate => {
-      const domain = candidate.domain || DRILL_TO_DOMAIN[candidate.type];
-      if (candidate.kind === 'review') {
-        return {
-          type: candidate.type,
-          domain,
-          config: candidate.config,
-          timeLimitSec: DOMAINS[domain]?.timeBudgetSec,
-          isReview: true,
-          reviewLabel: candidate.reviewLabel,
-          ...(candidate.providerId && { providerId: candidate.providerId }),
-          ...(candidate.model && { model: candidate.model }),
-        };
-      }
-      const drillConfig = {
-        type: candidate.type,
-        domain,
-        config: candidate.quickConfig,
-        timeLimitSec: DOMAINS[domain]?.timeBudgetSec,
-      };
-      if (candidate.source === 'llm') {
-        drillConfig.providerId = candidate.cfg?.providerId || llmProviderId;
-        drillConfig.model = candidate.cfg?.model || llmModel;
-      }
-      return drillConfig;
-    });
+    const drillConfigs = buildQuickSessionDrills(quickPlan, drillCatalog);
     if (!drillConfigs.length) return;
     onStart({
       drills: drillConfigs,
       conditions: buildCleanConditions(conditions),
       training: mode === 'train',
       plan: {
-      targetDurationSec: quickPlan.targetDurationSec,
-      estimatedDurationSec: quickPlan.estimatedDurationSec,
-      toleranceSec: quickPlan.toleranceSec,
-      omittedDomains: quickPlan.omittedDomains,
-      omittedReviews: quickPlan.omittedReviews,
-      selectedTypes: quickPlan.selected.map(candidate => candidate.type),
+        targetDurationSec: quickPlan.targetDurationSec,
+        estimatedDurationSec: quickPlan.estimatedDurationSec,
+        toleranceSec: quickPlan.toleranceSec,
+        omittedDomains: quickPlan.omittedDomains,
+        omittedReviews: quickPlan.omittedReviews,
+        selectedTypes: quickPlan.selected.map(candidate => candidate.type),
       },
     });
   }
@@ -570,54 +152,15 @@ export default function PostSessionLauncher({
           drills: drillConfigs,
           conditions: buildCleanConditions(conditions),
           benchmark: {
-          protocolId: protocol.protocolId,
-          protocolVersion: protocol.protocolVersion,
-          scorerVersion: protocol.scorerVersion,
-          formId: form.formId,
+            protocolId: protocol.protocolId,
+            protocolVersion: protocol.protocolVersion,
+            scorerVersion: protocol.scorerVersion,
+            formId: form.formId,
           },
         });
       })
       .catch(error => setBenchmarkError(error.message || 'Benchmark could not be loaded'))
       .finally(() => setBenchmarkState('idle'));
-  }
-
-  // Build a full-length (non-abbreviated) drill config for a single enabled
-  // drill, shared by domain-focus and single-drill starts. `domainKey` overrides
-  // the drill's own domain only for consistency with the caller's grouping.
-  function buildFocusDrillConfig({ type, cfg, source }, domainKey = DRILL_TO_DOMAIN[type]) {
-    const domain = DOMAINS[domainKey];
-    let focusConfig;
-    if (source === 'math') {
-      focusConfig = {
-        steps: cfg.steps,
-        count: cfg.count,
-        maxDigits: cfg.maxDigits,
-        subtrahend: cfg.subtrahend,
-        startRange: cfg.startRange,
-        bases: cfg.bases,
-        maxExponent: cfg.maxExponent,
-        tolerancePct: cfg.tolerancePct,
-        difficulty: cfg.difficulty,
-        family: cfg.family,
-      };
-    } else if (source === 'cognitive') {
-      focusConfig = cognitiveDrillConfig(cfg);
-    } else {
-      focusConfig = source === 'memory'
-        ? memoryDrillConfig(type, cfg.count || 5)
-        : { count: cfg.count || 5 };
-    }
-    const drillConfig = {
-      type,
-      domain: domainKey,
-      config: focusConfig,
-      timeLimitSec: cfg.timeLimitSec || domain?.timeBudgetSec || 120,
-    };
-    if (source === 'llm') {
-      drillConfig.providerId = cfg.providerId || llmProviderId;
-      drillConfig.model = cfg.model || llmModel;
-    }
-    return drillConfig;
   }
 
   // Focused practice on a single domain: run every enabled drill in that domain
@@ -626,7 +169,7 @@ export default function PostSessionLauncher({
   function handleFocusDomain(domainKey) {
     const drills = enabledDomains[domainKey];
     if (!drills || drills.length === 0) return;
-    onStart({ drills: drills.map(d => buildFocusDrillConfig(d, domainKey)), conditions: buildCleanConditions(conditions), training: mode === 'train' });
+    onStart({ drills: drills.map(d => buildFocusDrillConfig(d, drillCatalog, domainKey)), conditions: buildCleanConditions(conditions), training: mode === 'train' });
   }
 
   // Start a session with exactly ONE recommended drill (issue #2100): an Up next
@@ -635,7 +178,7 @@ export default function PostSessionLauncher({
   function startDrillByType(type) {
     const entry = allEnabledDrills.find(d => d.type === type);
     if (!entry) return;
-    onStart({ drills: [buildFocusDrillConfig(entry)], conditions: buildCleanConditions(conditions), training: mode === 'train' });
+    onStart({ drills: [buildFocusDrillConfig(entry, drillCatalog)], conditions: buildCleanConditions(conditions), training: mode === 'train' });
   }
 
   // Launch a single due maintenance-review rep from an "Up next" skill-review
@@ -668,19 +211,6 @@ export default function PostSessionLauncher({
     };
     onStart({ drills: [drillConfig], conditions: buildCleanConditions(conditions), training: mode === 'train' });
   }
-
-  const hasAnyDrills = enabledMathDrills.length > 0 || enabledLlmDrills.length > 0 || enabledCognitiveDrills.length > 0 || enabledMemoryDrills.length > 0;
-  // Quick-session domain count reflects the sessionModules-filtered set, so the
-  // Quick button and preview match what the composer can actually run.
-  const domainCount = Object.keys(sessionEnabledDomains).length;
-  // A COMPOSED session (Full/Quick) only has drills to run if the
-  // sessionModules-filtered set is non-empty — the buttons gate on this, not on
-  // the unfiltered `hasAnyDrills`, so selecting only empty modules disables them
-  // instead of failing with "No drills configured" (issue #2100 review).
-  const hasSessionDrills = domainCount > 0;
-  // Drills are configured/enabled but the Session Composition filter excludes
-  // them all — surface why the start buttons are disabled.
-  const compositionExcludesAll = hasAnyDrills && !hasSessionDrills;
 
   // How the launcher acts on a recommendation: either an in-page session start
   // (`onClick`) or a navigation (`to`). A rec that targets the launcher should DO
@@ -722,66 +252,6 @@ export default function PostSessionLauncher({
     : (hasSessionDrills
       ? { onClick: handleStart, label: `Start: ${mode === 'train' ? 'Full Training' : 'Full POST'}`, detail: null }
       : null);
-
-  // Count of condition fields filled in, surfaced on the collapsed disclosure so
-  // entered values aren't invisible once it's closed. Reuses the same
-  // sanitizer the submit path uses, so "filled in" can't drift from "actually
-  // sent".
-  const filledConditionCount = Object.keys(buildCleanConditions(conditions)).length;
-
-  // The CTA renders as a <Link> for a routed rec and a <button> for an in-page
-  // start, but is otherwise identical — so build the shared parts once. A
-  // navigation gets the Compass icon; a session start gets the mode's own icon.
-  const PrimaryIcon = primaryAction?.to ? Compass : (mode === 'train' ? Dumbbell : Play);
-  const primaryCtaClass = `w-full flex items-center gap-3 px-4 py-3 rounded-lg transition-colors ${
-    mode === 'train' && !primaryAction?.to
-      ? 'bg-port-accent-2 hover:bg-port-accent-2/80 text-port-on-accent-2'
-      : 'bg-port-accent hover:bg-port-accent/80 text-white'
-  }`;
-  const primaryCtaInner = primaryAction && (
-    <>
-      <PrimaryIcon size={18} className="shrink-0" />
-      <span className="min-w-0 flex-1 text-left">
-        <span className="block font-medium truncate">{primaryAction.label}</span>
-        {primaryAction.detail && <span className="block text-xs opacity-75 truncate">{primaryAction.detail}</span>}
-      </span>
-      <ArrowRight size={16} className="shrink-0" />
-    </>
-  );
-
-  // Analytics derived from the 30-day stats window. Streaks span all history.
-  const hasStats = stats && stats.sessionCount > 0;
-  const currentStreak = stats?.currentStreak ?? 0;
-  const longestStreak = stats?.longestStreak ?? 0;
-  const overall30 = stats?.overall ?? null;
-  const overall7 = statsWeek?.overall ?? null;
-  // Trend: 7-day average relative to the 30-day average. Needs both to exist.
-  const trendDelta = overall7 != null && overall30 != null ? overall7 - overall30 : null;
-
-  // Weakest domain = lowest-scoring domain that ALSO has enabled drills, so the
-  // one-click focus button always targets something the user can actually run.
-  const domainAverages = hasStats ? computeDomainAverages(stats.byDrill) : [];
-  const weakestDomain = domainAverages
-    .filter(d => enabledDomains[d.key])
-    .reduce((weakest, d) => (!weakest || d.score < weakest.score ? d : weakest), null);
-
-  // Goal progress (issue #2100). Metrics come from data already on hand — no
-  // extra fetch: today's minutes from today's sessions, week sessions from the
-  // 7-day stats window, streak from the unified streak. Morse WPM has no metric
-  // here (would need a Morse fetch), so a morseWpmTarget goal is simply omitted
-  // — computeGoalProgress skips goals whose metric is unavailable.
-  const todaysSessions = (recentSessions || []).filter(s => s.date === today);
-  // Prefer the training-log-inclusive total (fetched when a daily goal is set);
-  // fall back to the scored-session-only estimate otherwise.
-  const todayMinutes = todayMinutesTotal != null
-    ? todayMinutesTotal
-    : Math.round(todaysSessions.reduce((sum, s) => sum + (s.durationMs || 0), 0) / 60000);
-  // A stats read that failed (or never loaded) leaves these undefined so
-  // computeGoalProgress skips the row instead of showing a false 0/target; a
-  // successful payload with a real zero still renders as 0.
-  const weekSessions = statsWeek ? (statsWeek.sessionCount ?? 0) : undefined;
-  const goalStreak = stats ? currentStreak : undefined;
-  const goalRows = computeGoalProgress(config.goals, { todayMinutes, weekSessions, currentStreak: goalStreak, morseWpm });
 
   // A default/full recommendation may include memory drills, so wait until the
   // item pool is known before deciding whether its session is runnable.
@@ -838,343 +308,40 @@ export default function PostSessionLauncher({
               the recommended next action, both session starts, and the mode
               toggle; the optional Conditions form is collapsed behind a
               disclosure so it can't push the buttons below the fold. */}
-          <div className="bg-port-card border border-port-border rounded-lg p-4 space-y-3">
-            {/* Composition-excludes-everything notice — the start buttons are
-                disabled because Session Composition filtered out all enabled drills. */}
-            {compositionExcludesAll && (
-              <div className="flex items-start gap-2 px-3 py-2 rounded-lg bg-port-warning/10 border border-port-warning/30 text-sm text-port-warning">
-                <Layers size={16} className="mt-0.5 shrink-0" />
-                <span>Your Session Composition excludes every enabled drill — adjust it under Config → Session Composition to run a session.</span>
-              </div>
-            )}
-
-            {/* Recommended next action — dispatches the top "Up next" rec through
-                the SAME resolver the rec rows use, so the two can't diverge. */}
-            {primaryAction && (
-              primaryAction.to ? (
-                <Link to={primaryAction.to} className={primaryCtaClass}>{primaryCtaInner}</Link>
-              ) : (
-                <button type="button" onClick={primaryAction.onClick} className={primaryCtaClass}>{primaryCtaInner}</button>
-              )
-            )}
-
-            {/* Standard sessions */}
-            {domainCount >= 2 && (
-              <div className="bg-port-bg/50 border border-port-border rounded-lg p-3 space-y-2">
-                <div className="flex items-center justify-between gap-3 flex-wrap">
-                  <label htmlFor="post-quick-duration" className="text-sm text-gray-300">Quick session budget</label>
-                  <select
-                    id="post-quick-duration"
-                    aria-label="Quick session duration"
-                    value={quickDurationMin}
-                    onChange={handleQuickDurationChange}
-                    className="bg-port-card border border-port-border rounded px-2 py-1 text-sm text-white"
-                  >
-                    {QUICK_DURATION_MINUTES.map(minutes => (
-                      <option key={minutes} value={minutes}>{minutes} minutes</option>
-                    ))}
-                  </select>
-                </div>
-                <div className="text-xs text-gray-400" aria-label="Quick session preview">
-                  <div>
-                    Preview: {quickPlan.selected.map(candidate => candidate.reviewLabel || DRILL_LABELS[candidate.type] || candidate.type).join(' · ') || 'No drills fit this budget'}
-                  </div>
-                  <div>
-                    Estimated {Math.ceil(quickPlan.estimatedDurationSec / 60)} min of {quickDurationMin} min target.
-                  </div>
-                  {quickPlan.omittedDomains.length > 0 && (
-                    <div>Omitted domains: {quickPlan.omittedDomains.map(domain => DOMAINS[domain]?.label || domain).join(', ')}.</div>
-                  )}
-                  {quickPlan.omittedReviews.length > 0 && (
-                    <div>Omitted maintenance reviews: {quickPlan.omittedReviews.join(', ')}.</div>
-                  )}
-                  {quickDurationSaveState === 'saving' && <div>Saving budget...</div>}
-                  {quickDurationSaveState === 'saved' && <div>Budget saved.</div>}
-                  {quickDurationSaveState === 'error' && <div role="alert" className="text-port-error">Budget could not be saved; reverted.</div>}
-                </div>
-              </div>
-            )}
-            <div className="flex flex-col sm:flex-row gap-3">
-              {domainCount >= 2 && (
-                <button
-                  onClick={handleQuickSession}
-                  disabled={!quickPlan.selected.length}
-                  className={`flex-1 flex items-center justify-center gap-2 px-6 py-3 ${
-                    mode === 'train'
-                      ? 'bg-port-accent-2 hover:bg-port-accent-2/80 text-port-on-accent-2'
-                      : 'bg-port-success hover:bg-port-success/80 text-white'
-                  } disabled:opacity-50 disabled:cursor-not-allowed font-medium rounded-lg transition-colors`}
-                >
-                  <Timer size={18} />
-                  Quick {quickDurationMin} Min ({domainCount} domains)
-                </button>
-              )}
-              <button
-                onClick={handleStart}
-                disabled={!hasSessionDrills}
-                className={`flex-1 flex items-center justify-center gap-2 px-6 py-3 ${
-                  mode === 'train'
-                    ? 'bg-port-accent-2/70 hover:bg-port-accent-2/80 text-port-on-accent-2'
-                    : 'bg-port-accent hover:bg-port-accent/80 text-white'
-                } disabled:opacity-50 disabled:cursor-not-allowed font-medium rounded-lg transition-colors`}
-              >
-                {mode === 'train' ? <Dumbbell size={18} /> : <Play size={18} />}
-                {mode === 'train' ? 'Full Training' : 'Full POST'}
-              </button>
-            </div>
-
-            {mode === 'test' && (
-              <div className="border-t border-port-border pt-3 space-y-2">
-                <button
-                  type="button"
-                  onClick={handleBenchmarkSession}
-                  disabled={benchmarkState === 'loading'}
-                  className="w-full flex items-center justify-center gap-2 px-6 py-2.5 bg-port-card border border-port-accent text-port-accent hover:bg-port-accent/10 disabled:opacity-50 disabled:cursor-not-allowed font-medium rounded-lg transition-colors"
-                >
-                  <Target size={17} />
-                  {benchmarkState === 'loading' ? 'Loading Benchmark...' : 'Fixed Benchmark POST'}
-                </button>
-                <p className="text-xs text-gray-500">
-                  Versioned two-drill battery with alternating forms for comparable progress.
-                </p>
-                {benchmarkError && <p role="alert" className="text-xs text-port-error">{benchmarkError}</p>}
-              </div>
-            )}
-
-            {/* Mode toggle — compact, on the same card as the starts it governs */}
-            <div className="flex items-center gap-2">
-              <button
-                onClick={() => setMode('test')}
-                className={`flex-1 flex items-center justify-center gap-2 px-4 py-2 rounded-lg text-sm font-medium transition-colors ${
-                  mode === 'test'
-                    ? 'bg-port-accent text-white'
-                    : 'bg-port-bg border border-port-border text-gray-400 hover:text-white'
-                }`}
-              >
-                <Zap size={14} />
-                Test
-              </button>
-              <button
-                onClick={() => setMode('train')}
-                className={`flex-1 flex items-center justify-center gap-2 px-4 py-2 rounded-lg text-sm font-medium transition-colors ${
-                  mode === 'train'
-                    ? 'bg-port-accent-2 text-port-on-accent-2'
-                    : 'bg-port-bg border border-port-border text-gray-400 hover:text-white'
-                }`}
-              >
-                <Dumbbell size={14} />
-                Train
-              </button>
-            </div>
-            <p className="text-xs text-gray-500">
-              {mode === 'train'
-                ? 'Training mode: immediate feedback, hints on wrong answers. Not scored.'
-                : 'Test mode: timed drills with scoring. Saved to history.'}
-            </p>
-
-            {/* Conditions — optional session metadata, collapsed by default so it
-                can't push the start buttons below the fold. Values are held in
-                `conditions` above, so collapsing never discards what was set.
-                Fixed enums (issue #4442) instead of free text so values are
-                filterable/comparable across sessions. */}
-            {mode === 'test' && (
-              <div className="border-t border-port-border pt-3">
-                <button
-                  type="button"
-                  onClick={() => setShowConditions(v => !v)}
-                  aria-expanded={showConditions}
-                  className="w-full flex items-center gap-1.5 text-xs text-gray-500 hover:text-gray-300 transition-colors"
-                >
-                  <ChevronRight size={14} className={`transition-transform ${showConditions ? 'rotate-90' : ''}`} />
-                  Conditions (optional)
-                  {!showConditions && filledConditionCount > 0 && (
-                    <span className="text-port-accent">· {filledConditionCount} set</span>
-                  )}
-                </button>
-                {showConditions && (
-                  <div className="grid grid-cols-3 gap-3 mt-3">
-                    {CONDITION_SELECT_FIELDS.map(({ key, label, options }) => (
-                      <FormField key={key} labelClassName="text-xs text-gray-500 mb-1 block" label={label}>
-                        <select
-                          value={conditions[key]}
-                          onChange={e => setConditions(prev => ({ ...prev, [key]: e.target.value }))}
-                          className="w-full bg-port-bg border border-port-border rounded px-2 py-1.5 text-sm text-white focus:border-port-accent focus:outline-none capitalize"
-                        >
-                          <option value="">—</option>
-                          {options.map(opt => <option key={opt} value={opt}>{opt}</option>)}
-                        </select>
-                      </FormField>
-                    ))}
-                    <FormField className="col-span-3" labelClassName="text-xs text-gray-500 mb-1 block" label="Note">
-                      <input
-                        type="text"
-                        value={conditions.note}
-                        onChange={e => setConditions(prev => ({ ...prev, note: e.target.value }))}
-                        placeholder="Anything else worth remembering about this session"
-                        maxLength={500}
-                        className="w-full bg-port-bg border border-port-border rounded px-2 py-1.5 text-sm text-white placeholder-gray-600 focus:border-port-accent focus:outline-none"
-                      />
-                    </FormField>
-                  </div>
-                )}
-              </div>
-            )}
-          </div>
-
-          {/* Today's Status */}
-          <div className="bg-port-card border border-port-border rounded-lg p-4">
-            <div className="flex items-center justify-between">
-              <span className="text-gray-400 text-sm">Today's Status</span>
-              {todaySession ? (
-                <span className="text-port-success text-sm font-medium">
-                  Completed — Score: {todaySession.score}
-                </span>
-              ) : (
-                <span className="text-port-warning text-sm font-medium">Not yet completed</span>
-              )}
-            </div>
-          </div>
-
-          {/* Goals — progress vs the user's configured targets (issue #2100).
-              Hidden entirely until at least one goal is set. */}
-          {goalRows.length > 0 && (
-            <div className="bg-port-card border border-port-border rounded-lg p-4">
-              <h3 className="text-sm font-medium text-gray-400 mb-3">Goals</h3>
-              <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
-                {goalRows.map(g => (
-                  <div key={g.key}>
-                    <div className="flex items-baseline justify-between gap-1">
-                      <span className="text-xs text-gray-500 truncate">{g.label}</span>
-                      {g.met && <span className="text-xs text-port-success" aria-hidden="true">✓</span>}
-                    </div>
-                    <div className={`text-sm font-mono ${g.met ? 'text-port-success' : 'text-white'}`}>
-                      {g.current}/{g.target}{g.unit ? ` ${g.unit}` : ''}
-                    </div>
-                    <div className="h-1.5 mt-1 rounded-full bg-port-bg overflow-hidden">
-                      <div
-                        className={`h-full rounded-full ${g.met ? 'bg-port-success' : 'bg-port-accent'}`}
-                        style={{ width: `${g.pct}%` }}
-                      />
-                    </div>
-                  </div>
-                ))}
-              </div>
-            </div>
-          )}
-
-          {/* "Up next" — prioritized recommendations with deep links into the
-              exact drill/mode (issue #2100). Hidden if none loaded. */}
-          {recommendations.length > 0 && (
-            <div className="bg-port-card border border-port-border rounded-lg p-4">
-              <div className="flex items-center gap-2 mb-3">
-                <Compass size={16} className="text-port-accent" />
-                <h3 className="text-sm font-medium text-gray-300">Up next</h3>
-              </div>
-              <div className="space-y-2">
-                {recommendations.map(rec => {
-                  const rowClass = 'flex items-center gap-3 px-3 py-2 rounded-lg bg-port-bg border border-port-border hover:border-port-accent/60 transition-colors group w-full text-left';
-                  const inner = (
-                    <>
-                      <div className="min-w-0 flex-1">
-                        <div className="text-sm text-white truncate">{rec.title}</div>
-                        {rec.detail && <div className="text-xs text-gray-500 truncate">{rec.detail}</div>}
-                      </div>
-                      {/* The server sinks these to the bottom, so the badge
-                          explains the reorder. Still clickable — a second rep is
-                          allowed, just not what the routine hands you (#3563). */}
-                      {rec.practicedToday && <Pill tone="context" size="xs" className="shrink-0">Done today</Pill>}
-                      <ArrowRight size={14} className="text-gray-600 group-hover:text-port-accent shrink-0" />
-                    </>
-                  );
-                  // Resolved by the shared `recAction` helper, so an Up next row
-                  // and the Start card's CTA always do the same thing for the
-                  // same rec (issue #3249).
-                  const action = recAction(rec);
-                  if (action?.to) {
-                    return (
-                      <Link key={rec.id} to={action.to} className={rowClass}>
-                        {inner}
-                      </Link>
-                    );
-                  }
-                  return (
-                    <button key={rec.id} type="button" onClick={action?.onClick} disabled={!action} className={`${rowClass} disabled:opacity-50 disabled:cursor-not-allowed`}>
-                      {inner}
-                    </button>
-                  );
-                })}
-              </div>
-            </div>
-          )}
-
-          {/* Progress analytics — streak, 7-vs-30-day trend, weakest-domain focus.
-              Degrades to nothing until there's scored history to summarize. */}
-          {hasStats && (
-            <div className="space-y-4">
-              <div className="grid grid-cols-2 gap-3">
-                {/* Streak */}
-                <div className="bg-port-card border border-port-border rounded-lg p-4 flex items-center gap-3">
-                  <div className="text-2xl" aria-hidden="true">{streakGlyph(currentStreak)}</div>
-                  <div className="min-w-0">
-                    <div className="text-xl font-bold text-white leading-tight">
-                      {currentStreak} day{currentStreak !== 1 ? 's' : ''}
-                    </div>
-                    <div className="text-xs text-gray-500 truncate">
-                      {currentStreak > 0 ? 'Current streak' : 'No streak yet'}
-                      {longestStreak > 0 && ` · best ${longestStreak}`}
-                    </div>
-                  </div>
-                </div>
-                {/* 7-day trend vs 30-day baseline */}
-                <div className="bg-port-card border border-port-border rounded-lg p-4">
-                  <div className="flex items-center justify-between gap-2">
-                    <div className="min-w-0">
-                      <div className={`text-xl font-bold leading-tight ${overall7 != null ? scoreColorClass(overall7) : 'text-gray-500'}`}>
-                        {overall7 != null ? overall7 : '—'}
-                      </div>
-                      <div className="text-xs text-gray-500">7-day avg</div>
-                    </div>
-                    {trendDelta != null && (
-                      <div className={`flex items-center gap-0.5 text-sm font-medium shrink-0 ${
-                        trendDelta > 0 ? 'text-port-success' : trendDelta < 0 ? 'text-port-error' : 'text-gray-400'
-                      }`}>
-                        {trendDelta > 0 ? <TrendingUp size={16} /> : trendDelta < 0 ? <TrendingDown size={16} /> : <Minus size={16} />}
-                        {trendDelta > 0 ? '+' : ''}{trendDelta}
-                      </div>
-                    )}
-                  </div>
-                  {overall30 != null && (
-                    <div className="text-xs text-gray-600 mt-1">vs {overall30} over 30 days</div>
-                  )}
-                </div>
-              </div>
-
-              {/* Weakest-domain callout + one-click focused practice */}
-              {weakestDomain && (
-                <div className="bg-port-card border border-port-border rounded-lg p-4 flex flex-col sm:flex-row sm:items-center gap-3">
-                  <div className="flex items-start gap-3 min-w-0 flex-1">
-                    <Target size={18} className={`mt-0.5 shrink-0 ${DOMAINS[weakestDomain.key]?.color || 'text-port-warning'}`} />
-                    <div className="min-w-0">
-                      <div className="text-sm text-white">
-                        Lowest domain this month:{' '}
-                        <span className={`font-semibold ${DOMAINS[weakestDomain.key]?.color || 'text-white'}`}>{weakestDomain.label}</span>
-                        {' — '}
-                        <span className={`font-mono ${scoreColorClass(weakestDomain.score)}`}>{weakestDomain.score} avg</span>
-                      </div>
-                      <div className="text-xs text-gray-500">Focus a short session here to bring it up.</div>
-                    </div>
-                  </div>
-                  <button
-                    onClick={() => handleFocusDomain(weakestDomain.key)}
-                    className="shrink-0 flex items-center justify-center gap-2 px-4 py-2 bg-port-warning/20 hover:bg-port-warning/30 text-port-warning border border-port-warning/40 rounded-lg text-sm font-medium transition-colors"
-                  >
-                    <Target size={14} />
-                    Practice {weakestDomain.label}
-                  </button>
-                </div>
-              )}
-            </div>
-          )}
+          <PostStartCard
+            primaryAction={primaryAction}
+            compositionExcludesAll={compositionExcludesAll}
+            domainCount={domainCount}
+            quickPlan={quickPlan}
+            quickDurationMin={quickDurationMin}
+            quickDurationSaveState={quickDurationSaveState}
+            handleQuickDurationChange={handleQuickDurationChange}
+            handleQuickSession={handleQuickSession}
+            hasSessionDrills={hasSessionDrills}
+            handleStart={handleStart}
+            mode={mode}
+            setMode={setMode}
+            benchmarkState={benchmarkState}
+            benchmarkError={benchmarkError}
+            handleBenchmarkSession={handleBenchmarkSession}
+            conditions={conditions}
+            setConditions={setConditions}
+            showConditions={showConditions}
+            setShowConditions={setShowConditions}
+          />
+          <PostAnalyticsSection
+            today={today}
+            recentSessions={recentSessions}
+            stats={stats}
+            statsWeek={statsWeek}
+            goals={config.goals}
+            morseWpm={morseWpm}
+            todayMinutesTotal={todayMinutesTotal}
+            enabledDomains={enabledDomains}
+            handleFocusDomain={handleFocusDomain}
+            recommendations={recommendations}
+            recAction={recAction}
+          />
 
           {/* Maintenance-review nudge (issue #2096) — mastered skills due for a
               refresh, mixed into the next Quick session as labeled review reps. */}
@@ -1190,121 +357,12 @@ export default function PostSessionLauncher({
         </div>
 
         {/* Sidebar — drill summaries + recent sessions flow alongside on desktop */}
-        <div className="space-y-6 min-w-0">
-          {/* Mental Math Drills */}
-          {enabledMathDrills.length > 0 && (
-            <div className="bg-port-card border border-port-border rounded-lg p-4">
-              <h3 className="text-sm font-medium text-gray-400 mb-3">Mental Math</h3>
-              <div className="space-y-2">
-                {enabledMathDrills.map(([type, cfg]) => (
-                  <div key={type} className="flex items-center justify-between text-sm">
-                    <span className="text-white">{DRILL_LABELS[type] || type}</span>
-                    <span className="text-gray-500">
-                      {cfg.steps ? `${cfg.steps} steps` : cfg.count ? `${cfg.count} questions` : ''}
-                      {cfg.timeLimitSec ? ` · ${cfg.timeLimitSec}s` : ''}
-                    </span>
-                  </div>
-                ))}
-              </div>
-            </div>
-          )}
-
-          {/* LLM Drills */}
-          {enabledLlmDrills.length > 0 && (
-            <div className="bg-port-card border border-port-border rounded-lg p-4">
-              <div className="flex items-center gap-2 mb-3">
-                <Brain size={14} className="text-port-accent-2" />
-                <h3 className="text-sm font-medium text-gray-400">Wit & Memory</h3>
-                {(llmProviderId || providers.length > 0) && (
-                  <span className="text-xs text-gray-600 ml-auto">
-                    {llmProviderId || 'system default'}
-                  </span>
-                )}
-              </div>
-              <div className="space-y-2">
-                {enabledLlmDrills.map(([type, cfg]) => (
-                  <div key={type} className="flex items-center justify-between text-sm">
-                    <span className="text-white">{DRILL_LABELS[type] || type}</span>
-                    <span className="text-gray-500">
-                      {cfg.count ? `${cfg.count} prompts` : ''}
-                      {cfg.timeLimitSec ? ` · ${cfg.timeLimitSec}s` : ''}
-                    </span>
-                  </div>
-                ))}
-              </div>
-              {/* These are enabled but not in a default composed session — LLM
-                  drills stay opt-in for provider-cost consent (issue #2100). */}
-              {!moduleAllowed('llm') && (
-                <p className="mt-3 text-xs text-gray-500">
-                  Not in Full POST / Quick sessions. Add “Wit &amp; Memory (AI)” under Config → Session Composition to include them.
-                </p>
-              )}
-            </div>
-          )}
-
-          {/* Cognitive Drills (deterministic — no provider) */}
-          {enabledCognitiveDrills.length > 0 && (
-            <div className="bg-port-card border border-port-border rounded-lg p-4">
-              <div className="flex items-center gap-2 mb-3">
-                <Brain size={14} className="text-rose-400" />
-                <h3 className="text-sm font-medium text-gray-400">Cognitive</h3>
-              </div>
-              <div className="space-y-2">
-                {enabledCognitiveDrills.map(([type, cfg]) => (
-                  <div key={type} className="flex items-center justify-between gap-2 text-sm">
-                    <span className="flex items-center gap-1.5 min-w-0">
-                      <span className="text-white truncate">{DRILL_LABELS[type] || type}</span>
-                      {/* Re-entry to the how-to card the first-run gate showed once
-                          and never again (issue #4732). Opens a preview with no
-                          runner behind it, so no timer starts and nothing is scored. */}
-                      <CognitiveDrillHowItWorksButton type={type} onClick={() => setHowItWorksType(type)} compact />
-                    </span>
-                    <span className="text-gray-500 text-right">
-                      {cognitiveSummary(type, cfg)}
-                    </span>
-                  </div>
-                ))}
-              </div>
-            </div>
-          )}
-
-          {/* These cards list only the drills you have switched ON, so with
-              nothing enabled the sidebar would be blank and POST would look
-              empty. Point at the catalog and the plan, not just "configure". */}
-          {!hasAnyDrills && (
-            <div className="bg-port-card border border-port-border rounded-lg p-4 space-y-2">
-              <p className="text-gray-500 text-sm">No drills enabled yet.</p>
-              <BrowseCatalogLink />
-              <p className="text-xs text-gray-500">
-                Then switch on what you want in{' '}
-                <Link to="/post/plan" className="text-port-accent hover:underline">Practice Plan</Link>.
-              </p>
-            </div>
-          )}
-
-          {hasAnyDrills && <BrowseCatalogLink />}
-
-          {/* Recent Scores */}
-          {lastThree.length > 0 && (
-            <div className="bg-port-card border border-port-border rounded-lg p-4">
-              <h3 className="text-sm font-medium text-gray-400 mb-3">Recent Sessions</h3>
-              <div className="space-y-2">
-                {lastThree.map(s => (
-                  <div key={s.id} className="flex items-center justify-between text-sm">
-                    <span className="text-gray-400">{s.date}</span>
-                    <span className={`font-mono font-medium ${
-                      s.score >= 80 ? 'text-port-success' :
-                      s.score >= 50 ? 'text-port-warning' :
-                      'text-port-error'
-                    }`}>
-                      {s.score}
-                    </span>
-                  </div>
-                ))}
-              </div>
-            </div>
-          )}
-        </div>
+        <PostDrillsSidebar
+          drillCatalog={drillCatalog}
+          providers={providers}
+          recentSessions={recentSessions}
+          setHowItWorksType={setHowItWorksType}
+        />
       </div>
 
       <CognitiveDrillTutorialPreview

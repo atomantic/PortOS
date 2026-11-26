@@ -18,40 +18,38 @@ import './PreviewDock.css';
 // Three.js loads only when the greybox previz is the source being watched.
 const PrevizPlayer = lazy(() => import('./PrevizPlayer.jsx'));
 
-// A rendered file (the final render or a draft excerpt). Its clock starts at
-// the clip's own start, so a seek to song time `t` lands at `t - startSec` and
-// is ignored outside it. Back and Next step through the shots inside it.
+// Coverage is in song seconds. The file clock may begin earlier (a cold open)
+// or later (an excerpt) than the song clock.
 function VideoPreview({ source, scenes, projectName, seekRequest, collapsed, onEditShot = null }) {
   const videoRef = useRef(null);
   const [time, setTime] = useState(0);
   const [duration, setDuration] = useState(null);
   const pending = useRef(null);
   const applied = useRef(null);
-  const seekTo = (t, play = false, pause = false) => {
+  const { startSec, endSec, fps } = source;
+  const clockOffset = source.id === 'final' ? source.clockOffsetSec : startSec;
+  const songEnd = Math.min(endSec ?? Infinity, Number.isFinite(duration) ? clockOffset + duration : Infinity);
+  const seekTo = (fileTime, play = false, pause = false) => {
     const video = videoRef.current;
     if (!video) return;
-    if (video.readyState >= 1) video.currentTime = Math.min(t, video.duration || t);
-    else pending.current = t;
+    if (video.readyState >= 1) {
+      video.currentTime = Math.min(fileTime, Number.isFinite(video.duration) ? video.duration : fileTime);
+      setTime(video.currentTime);
+    } else pending.current = fileTime;
     if (play) video.play?.()?.catch?.(() => {});
     else if (pause) video.pause?.();
   };
   useEffect(() => {
     if (!seekRequest || applied.current === seekRequest.n) return;
     applied.current = seekRequest.n;
-    const t = seekRequest.t - source.startSec;
-    if (t >= 0 && (source.endSec == null || t <= source.endSec - source.startSec)) seekTo(t, !!seekRequest.play, !!seekRequest.pause);
-  }, [seekRequest, source.startSec, source.endSec]);
-  const startSec = source.startSec || 0;
-  const range = { startSec, endSec: source.endSec ?? null };
-  const songTime = startSec + time;
-  const shotStep = shotSteps(scenes, songTime, range);
-  const shot = shotStep.index;
-  const activeShot = shotStep.scene;
-  const stepFrame = (t) => {
-    videoRef.current?.pause?.();
-    seekTo(t - startSec);
-    setTime(t - startSec);
-  };
+    if (clockOffset != null && seekRequest.t >= startSec && seekRequest.t <= songEnd) {
+      seekTo(seekRequest.t - clockOffset, !!seekRequest.play, !!seekRequest.pause);
+    } else if (seekRequest.pause) videoRef.current?.pause();
+  }, [seekRequest, clockOffset, startSec, songEnd]);
+  const range = { startSec, endSec: Number.isFinite(songEnd) ? songEnd : null };
+  const songTime = time + clockOffset;
+  const { scene: activeShot, index: shot } = shotSteps(scenes, songTime, range);
+  const seekSong = (t, pause = false) => seekTo(Math.min(Math.max(t, startSec), songEnd) - clockOffset, false, pause);
   return (
     <div className={`space-y-2 ${collapsed ? 'max-xl:hidden' : ''}`}>
       {/* The height limit caps the width, not the height alone: a capped height
@@ -63,32 +61,41 @@ function VideoPreview({ source, scenes, projectName, seekRequest, collapsed, onE
         controls
         playsInline
         preload="metadata"
-        data-song-clock={startSec}
-        onLoadedMetadata={() => { if (pending.current != null) { seekTo(pending.current); pending.current = null; } }}
+        data-song-clock={clockOffset ?? ''}
+        data-song-start={startSec}
+        data-song-end={endSec ?? undefined}
+        onLoadedMetadata={(e) => {
+          setDuration(e.currentTarget.duration);
+          if (pending.current != null) { seekTo(pending.current); pending.current = null; }
+        }}
         onTimeUpdate={(e) => setTime(e.currentTarget.currentTime)}
         onSeeked={(e) => setTime(e.currentTarget.currentTime)}
-        onLoadedData={(e) => setDuration(e.currentTarget.duration)}
         aria-label={source.id === 'final' ? 'Final render preview' : 'Draft excerpt preview'}
         className="mx-auto block aspect-video w-full max-w-[calc(50vh*16/9)] rounded border border-port-border bg-black object-contain"
       />
-      <div data-preview-controls className="space-y-2">
-        <ShotStepper
-          scenes={scenes}
-          time={songTime}
-          onSeek={(t) => { seekTo(t - startSec); setTime(t - startSec); }}
-          onEditShot={onEditShot ? (sceneId) => { videoRef.current?.pause?.(); onEditShot(sceneId); } : null}
-          range={range}
-          keys
-        />
-        <FrameStepper
-          time={songTime}
-          onSeek={stepFrame}
-          maxSec={source.endSec ?? (Number.isFinite(duration) ? startSec + duration : null)}
-          capture={() => captureMediaFrame(videoRef.current)}
-          label={[projectName, activeShot ? sceneShotName(activeShot, { number: shot }) : null].filter(Boolean).join(' · ')}
-          keys
-        />
-      </div>
+      {clockOffset == null ? (
+        <p className="text-xs text-port-text-muted">Song timing is unavailable for this render. Choose another preview for song-time controls.</p>
+      ) : (
+        <div data-preview-controls className="space-y-2">
+          <ShotStepper
+            scenes={scenes}
+            time={songTime}
+            onSeek={seekSong}
+            onEditShot={onEditShot ? (sceneId) => { videoRef.current?.pause?.(); onEditShot(sceneId); } : null}
+            range={range}
+            keys
+          />
+          <FrameStepper
+            time={songTime}
+            onSeek={(t) => seekSong(t, true)}
+            fps={fps ?? undefined}
+            maxSec={range.endSec}
+            capture={() => captureMediaFrame(videoRef.current)}
+            label={[projectName, activeShot ? sceneShotName(activeShot, { number: shot }) : null].filter(Boolean).join(' · ')}
+            keys
+          />
+        </div>
+      )}
     </div>
   );
 }
@@ -138,7 +145,7 @@ function DocumentPreview({ project, playback, audioUrl, seekRequest, collapsed, 
  * playable. `seekRequest` (`{ t, n }`) is the scene-card seek. `blender` is a
  * Blender film's `useMusicVideoBlender` reading: its live composite plays the
  * shots' renders from that state, so a render that lands shows without a reload.
- * `clockRef` is filled with `() => ({ t, playing }) | null`, the playing source's time on the song.
+ * `clockRef` reads the playing source's time and coverage on the song.
  * `compact` drops the title for a page that frames the player itself (the editor).
  * `controlsBeside` keeps the play bar under the picture and stacks the other
  * controls in a column to its right, for a short, wide space (the editor). Each
@@ -182,7 +189,13 @@ export default function PreviewDock({ project, sources, audioUrl, seekRequest, c
     if (!clockRef) return undefined;
     clockRef.current = () => {
       const media = dockRef.current?.querySelector('[data-song-clock]');
-      return media ? { t: media.currentTime + (Number(media.dataset.songClock) || 0), playing: !media.paused && !media.ended } : null;
+      if (!media) return null;
+      const unknownSongOffset = media.dataset.songClock === '';
+      const offset = Number(media.dataset.songClock);
+      const start = media.dataset.songStart == null ? offset : Number(media.dataset.songStart);
+      const mediaEnd = Number.isFinite(media.duration) ? offset + media.duration : Infinity;
+      const end = Math.min(mediaEnd, media.dataset.songEnd == null ? Infinity : Number(media.dataset.songEnd));
+      return { t: unknownSongOffset ? null : media.currentTime + offset, playing: !media.paused && !media.ended, ended: media.ended, start, end, unknownSongOffset };
     };
     return () => { clockRef.current = null; };
   }, [clockRef]);
@@ -265,7 +278,7 @@ export default function PreviewDock({ project, sources, audioUrl, seekRequest, c
       {source?.kind === 'previz' && <Suspense fallback={<p className="text-xs text-port-text-muted">Loading the greybox previz…</p>}>
         <PrevizPlayer project={project} audioUrl={audioUrl} seekRequest={seekRequest} collapsed={collapsed} onEditShot={onEditShot} />
       </Suspense>}
-      {source?.kind === 'video' && <VideoPreview key={source.id} source={source} scenes={project.scenes} projectName={project.name} seekRequest={seekRequest} collapsed={collapsed} onEditShot={onEditShot} />}
+      {source?.kind === 'video' && <VideoPreview key={`${source.id}:${source.src}`} source={source} scenes={project.scenes} projectName={project.name} seekRequest={seekRequest} collapsed={collapsed} onEditShot={onEditShot} />}
     </aside>
   );
 }

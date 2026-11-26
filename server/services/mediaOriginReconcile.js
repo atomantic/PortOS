@@ -23,11 +23,12 @@ import { PATHS } from '../lib/fileUtils.js';
 import { isPlainObject } from '../lib/objects.js';
 import { isNonBlankStr } from '../lib/textUtils.js';
 import { earliestHolderOrigin, localOriginMayBeReplaced } from '../lib/mediaOriginClaim.js';
+import { mapWithConcurrency } from '../lib/mapWithConcurrency.js';
 import { sanitizeAssetFilename } from './sharing/buckets.js';
 import { getPeers, peerMayDeleteMedia } from './instances.js';
 import { peerIsPaired } from './mediaTombstoneAuthorization.js';
 import { listHostedEntries, hostedKey } from './peerHostedMedia.js';
-import { mutateVideoHistory, loadHistory, HISTORY_UNCHANGED } from './videoGen/history.js';
+import { mutateVideoHistory, loadHistory, historyRevision, HISTORY_UNCHANGED } from './videoGen/history.js';
 import { emitMediaHistoryChanged } from './peerSyncEventBus.js';
 import { getInstanceId, UNKNOWN_INSTANCE_ID } from './instanceIdentity.js';
 
@@ -40,7 +41,8 @@ const SCAN_RECHECK_MS = 10 * 60 * 1000;
 // (well inside REPORT_MAX_AGE_MS).
 const LOCAL_CLAIM_RECHECK_MS = 24 * 60 * 60 * 1000;
 const KINDS = { video: () => PATHS.videos, image: () => PATHS.images };
-// kind → { until, localClaims }: the last scan found nothing unclaimed, only (or no) local claims.
+const IMAGE_SCAN_CONCURRENCY = 16;
+// Cache the scan promise too, so overlapping sync requests share one gallery walk.
 const scanCache = new Map();
 
 /** Record one peer's inventory scope with its file times (the shared holdings record, services/mediaHolders.js). */
@@ -80,22 +82,48 @@ async function unattributedFiles(kind, localId) {
     }
     return out;
   }
-  const { readHeldImage } = await import('./imageGen/imageRecords.js');
   const { readImageSidecar } = await import('./imageGen/sidecarStore.js');
   // The whole gallery, not only collection-referenced images (#14137).
   const filenames = (await readdir(PATHS.images, { withFileTypes: true }).catch(() => []))
     .filter((e) => e.isFile() && isSafeFilename(e.name, GALLERY_IMAGE_EXTENSIONS)).map((e) => e.name);
-  for (const filename of filenames) {
-    const record = await readHeldImage(filename);
-    if (!record || isNonBlankStr(record.suppliedByInstanceId) || hosted[hostedKey('image', filename)]) continue;
-    if (isNonBlankStr(record.originInstanceId) && record.originInstanceId !== localId) continue;
+  const files = await mapWithConcurrency(filenames, IMAGE_SCAN_CONCURRENCY, async (filename) => {
+    if (hosted[hostedKey('image', filename)]) return null;
+    const { metadata } = await readImageSidecar(filename);
+    const { suppliedByInstanceId, originInstanceId, createdAt } = isPlainObject(metadata) ? metadata : {};
+    if (isNonBlankStr(suppliedByInstanceId) || (isNonBlankStr(originInstanceId) && originInstanceId !== localId)) return null;
     const mtimeMs = await mtimeOf('image', filename);
-    if (!mtimeMs) continue;
-    // The record's createdAt falls back to the file time for a local origin; the sidecar's own is the evidence.
-    const createdAt = isNonBlankStr(record.originInstanceId) ? (await readImageSidecar(filename)).metadata.createdAt : undefined;
-    if (isAttributable(record.originInstanceId, localId, mtimeMs, createdAt)) out.push(candidate({ filename, mtimeMs }, record.originInstanceId));
+    return mtimeMs && isAttributable(originInstanceId, localId, mtimeMs, createdAt)
+      ? candidate({ filename, mtimeMs }, originInstanceId) : null;
+  });
+  return files.filter(Boolean);
+}
+
+async function scanCandidates(kind, localId) {
+  const nowMs = Date.now();
+  const [dirMtimeMs, history] = await Promise.all([
+    stat(KINDS[kind]()).then((info) => info.mtimeMs, () => null),
+    kind === 'video' ? historyRevision().catch(() => null) : null,
+  ]);
+  const cached = scanCache.get(kind);
+  if (cached && cached.until > nowMs && cached.dirMtimeMs === dirMtimeMs && cached.history === history && cached.localId === localId) {
+    return cached.scan;
   }
-  return out;
+  const scan = unattributedFiles(kind, localId).then((candidates) => ({
+    candidates,
+    hasUnclaimed: candidates.some((file) => !file.replacesLocal),
+  })).catch((error) => {
+    if (scanCache.get(kind)?.scan === scan) scanCache.delete(kind);
+    throw error;
+  });
+  scanCache.set(kind, { until: nowMs + SCAN_RECHECK_MS, dirMtimeMs, history, localId, scan });
+  return scan;
+}
+
+/** Check for local work even when the incoming holdings report is unchanged. */
+export async function hasMediaOriginCandidates(kind) {
+  if (!KINDS[kind]) return false;
+  const localId = await resolveLocalId();
+  return Boolean(localId && (await scanCandidates(kind, localId)).candidates.length);
 }
 
 // Has `peerId` answered a gallery-wide library inventory recently? Only images have one.
@@ -114,14 +142,8 @@ async function libraryReportedRecently(peerId, kind, nowMs) {
 export async function hasUnattributedMedia(kind, { peerId = null } = {}) {
   if (!KINDS[kind]) return false;
   const nowMs = Date.now();
-  let cached = scanCache.get(kind);
-  if (!cached || cached.until <= nowMs) {
-    const files = await unattributedFiles(kind, await resolveLocalId());
-    if (files.some((file) => !file.replacesLocal)) return true;
-    cached = { until: nowMs + SCAN_RECHECK_MS, localClaims: files.length > 0 };
-    scanCache.set(kind, cached);
-  }
-  return cached.localClaims && isNonBlankStr(peerId) && !(await libraryReportedRecently(peerId, kind, nowMs));
+  const { candidates, hasUnclaimed } = await scanCandidates(kind, await resolveLocalId());
+  return hasUnclaimed || (candidates.length > 0 && isNonBlankStr(peerId) && !(await libraryReportedRecently(peerId, kind, nowMs)));
 }
 
 // Re-checked under the writer: a supplier recorded since the scan wins, and a
@@ -145,7 +167,10 @@ const stampVideoOrigins = async (claims, localId) => {
     });
     return changed ? next : HISTORY_UNCHANGED;
   }, { stampOrigin: false });
-  if (stamped.length > 0) emitMediaHistoryChanged({ kind: 'video', op: 'upsert', ids: stamped });
+  if (stamped.length > 0) {
+    scanCache.delete('video');
+    emitMediaHistoryChanged({ kind: 'video', op: 'upsert', ids: stamped });
+  }
   return stamped.length;
 };
 
@@ -157,6 +182,7 @@ const stampImageOrigin = async (claim, localId) => {
     metadata.originInstanceId = origin;
     return true;
   });
+  if (changed === true) scanCache.delete('image');
   return changed === true;
 };
 
@@ -169,24 +195,29 @@ export async function reconcileMediaOrigins(kind, { nowMs = Date.now() } = {}) {
   if (!KINDS[kind]) return 0;
   const localId = await resolveLocalId();
   if (!localId) return 0;
+  const { candidates } = await scanCandidates(kind, localId);
+  if (candidates.length === 0) return 0;
   const peers = (await getPeers().catch(() => [])).filter((p) => p?.enabled !== false && peerIsPaired(p) && isNonBlankStr(p.instanceId));
   if (peers.length === 0) return 0;
   const holdings = await import('./mediaHolders.js').then((m) => m.readPeerReports()).catch(() => null);
   if (!holdings) return 0;
   // Fresh scope reports per peer; one speaks for a file only if the peer examined its name.
-  const scopesOf = (peer) => Object.values(isPlainObject(holdings[peer.instanceId]?.[kind]) ? holdings[peer.instanceId][kind] : {})
-    .filter((scope) => isPlainObject(scope?.mtimes) && Array.isArray(scope.checked) && nowMs - Date.parse(scope.at) <= REPORT_MAX_AGE_MS);
-  const candidates = await unattributedFiles(kind, localId);
+  const peerScopes = peers.map((peer) => ({
+    peer,
+    scopes: Object.values(isPlainObject(holdings[peer.instanceId]?.[kind]) ? holdings[peer.instanceId][kind] : {})
+      .filter((scope) => isPlainObject(scope?.mtimes) && Array.isArray(scope.checked))
+      .map((scope) => ({ ...scope, at: Date.parse(scope.at), checked: new Set(scope.checked) }))
+      .filter((scope) => nowMs - scope.at <= REPORT_MAX_AGE_MS)
+      .sort((a, b) => b.at - a.at),
+  }));
   const claims = [];
   for (const file of candidates) {
     const holders = [];
     let covered = true;
-    for (const peer of peers) {
-      const scopes = scopesOf(peer).filter((scope) => scope.complete === true || scope.checked.includes(file.filename) || scope.mtimes[file.filename] !== undefined);
+    for (const { peer, scopes } of peerScopes) {
+      const newest = scopes.find((scope) => scope.complete === true || scope.checked.has(file.filename) || scope.mtimes[file.filename] !== undefined);
       // A peer that did not examine the file is unreported for it: nobody claims.
-      if (scopes.length === 0) { covered = false; break; }
-      // Overlapping scopes: the newest report that covers the name is the peer's current answer.
-      const newest = scopes.reduce((a, b) => (Date.parse(b.at) > Date.parse(a.at) ? b : a));
+      if (!newest) { covered = false; break; }
       if (newest.mtimes[file.filename] !== undefined) holders.push({ peerId: peer.instanceId, mtimeMs: newest.mtimes[file.filename], mayDelete: peerMayDeleteMedia(peer) });
     }
     if (!covered) continue;
@@ -195,10 +226,17 @@ export async function reconcileMediaOrigins(kind, { nowMs = Date.now() } = {}) {
     if (origin && !(file.replacesLocal && origin === localId)) claims.push({ ...file, origin });
   }
   if (claims.length === 0) return 0;
+  // Cached candidates can outlive an in-place edit to the bytes or a host handoff.
+  // Recheck only the files for which the peer evidence actually proves an origin.
+  const hosted = await listHostedEntries();
+  const current = (await mapWithConcurrency(claims, IMAGE_SCAN_CONCURRENCY, async (claim) =>
+    !hosted[hostedKey(kind, claim.filename)] && await mtimeOf(kind, claim.filename) === claim.mtimeMs ? claim : null))
+    .filter(Boolean);
+  if (current.length !== claims.length) scanCache.delete(kind);
+  if (current.length === 0) return 0;
   const stamped = kind === 'video'
-    ? await stampVideoOrigins(claims, localId)
-    : (await Promise.all(claims.map((claim) => stampImageOrigin(claim, localId)))).filter(Boolean).length;
+    ? await stampVideoOrigins(current, localId)
+    : (await mapWithConcurrency(current, IMAGE_SCAN_CONCURRENCY, (claim) => stampImageOrigin(claim, localId))).filter(Boolean).length;
   if (stamped > 0) console.log(`🧭 mediaOrigin: attributed ${stamped} ${kind}(s) to their earliest holder`);
-  scanCache.delete(kind);
   return stamped;
 }

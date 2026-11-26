@@ -73,12 +73,13 @@ vi.mock('./compositionRender.js', () => ({
 }));
 vi.mock('./projects.js', () => ({ getProject: vi.fn(), listProjects: vi.fn(async () => []), updateProject: vi.fn(async () => ({})), mutateProjectRecord: vi.fn() }));
 vi.mock('./renderCleanup.js', () => ({ cleanupSupersededFinals: vi.fn(async () => ({})) }));
+vi.mock('../mediaCollectionRules.js', () => ({ fileOwnedMediaBestEffort: vi.fn(async () => {}), videoItem: (id) => ({ id }) }));
 vi.mock('../instanceIdentity.js', () => ({ ensureInstanceId: vi.fn(async () => 'inst-self') }));
 // A composed render goes shot by shot (shotSegments.js): the segment work is
 // held open until a test settles it, or rejects on the render's abort signal.
 vi.mock('./frameHold.js', async load => ({ ...await load(), applyFrameHold: vi.fn(async () => ({ held: true })) }));
 vi.mock('./titleCardFinish.js', () => ({ applyTitleCardFinish: vi.fn(async () => true) }));
-const seg = vi.hoisted(() => ({ plans: [], render: null, stitch: vi.fn(async () => ({ durationSec: 2, songSec: 2 })) }));
+const seg = vi.hoisted(() => ({ plans: [], render: null, stitch: vi.fn(async () => ({ durationSec: 2, songSec: 2, leadSec: 0 })) }));
 vi.mock('./shotSegments.js', () => ({
   planShotSegments: vi.fn(async (project) => {
     // Planning refuses what the whole-film plan refuses (missing stills, untimed sections).
@@ -97,7 +98,7 @@ vi.mock('./shotSegments.js', () => ({
 
 import { renderMusicVideo, getRenderJobStatus, getActiveRenderJobId, cancelRender } from './render.js';
 import { findFfmpeg, generateThumbnail } from '../../lib/ffmpeg.js';
-import { loadHistory } from '../videoGen/history.js';
+import { loadHistory, mutateVideoHistory } from '../videoGen/history.js';
 import { getTrack } from '../tracks/index.js';
 import { getProject, listProjects, updateProject, mutateProjectRecord } from './projects.js';
 import { readdir, unlink } from 'fs/promises';
@@ -695,10 +696,14 @@ describe('composed render lifecycle (#8984)', () => {
     const { jobId } = await renderMusicVideo(project.id);
     await tick();
     seg.plans.at(-1).deferredTitleCard = project.titleCard;
-    seg.stitch.mockResolvedValueOnce({ durationSec: 3, songSec: 2, leadSec: 1 });
+    const leadSec = 25 / 24;
+    seg.stitch.mockResolvedValueOnce({ durationSec: 3 + leadSec, songSec: 2, leadSec });
     await finishFakeSegments();
     await expect.poll(() => getRenderJobStatus(jobId).status).toBe('complete');
-    expect(applyTitleCardFinish).toHaveBeenCalledWith(expect.objectContaining({ project, jobId, leadSec: 1, songSec: 2, fps: 24 }));
+    expect(applyTitleCardFinish).toHaveBeenCalledWith(expect.objectContaining({ project, jobId, leadSec, songSec: 2, fps: 24 }));
+    await expect(mutateVideoHistory.mock.results.at(-1).value).resolves.toContainEqual(
+      expect.objectContaining({ id: jobId, songStartSec: leadSec, songDurationSec: 2 }),
+    );
     expect(applyFrameHold.mock.invocationCallOrder.at(-1)).toBeLessThan(applyTitleCardFinish.mock.invocationCallOrder.at(-1));
     expect(applyTitleCardFinish.mock.invocationCallOrder.at(-1)).toBeLessThan(generateThumbnail.mock.invocationCallOrder.at(-1));
   });
@@ -880,7 +885,6 @@ describe('a song change during a footage render (#15154)', () => {
   });
 
   it("leaves another instance's render running, and its finished file never completes the project", async () => {
-    const { mutateVideoHistory } = await import('../videoGen/history.js');
     const pid = 'song-peer';
     prime(pid);
     const events = [];

@@ -45,7 +45,7 @@ async function createPersonaLocked({ name, description, instructions, traitAdjus
 
   meta.personas.push(persona);
   await saveMeta(meta);
-  console.log(`🎭 Created persona: ${name}`);
+  console.log(`🎭 Created persona: ${persona.id}`);
   return persona;
 }
 

@@ -400,6 +400,21 @@ describe('LocalModelAssessments', () => {
     getLocalLlmAssessments.mockResolvedValue(report({ listErrors: ['lmstudio'] }));
     await renderPanel();
     expect(await screen.findByText(/Could not list installed models for LM Studio/)).toBeInTheDocument();
+    expect(screen.getByRole('link', { name: 'View runtimes' })).toHaveAttribute('href', '/models/llms-runtimes');
+  });
+
+  it('omits inactive runtimes from the performance roster', async () => {
+    getLocalLlmAssessments.mockResolvedValue(report({
+      runtimes: [
+        { id: 'ollama', label: 'Ollama', modelCount: 1 },
+        { id: 'llama', label: 'llama.cpp', modelCount: null, inactive: true },
+        { id: 'lmstudio', label: 'LM Studio', modelCount: null, inactive: true },
+      ],
+    }));
+    await renderPanel();
+    expect(await screen.findByText('1 model')).toBeInTheDocument();
+    expect(screen.queryByText('llama.cpp')).not.toBeInTheDocument();
+    expect(screen.queryByText('LM Studio')).not.toBeInTheDocument();
   });
 
   describe('stale measurements', () => {

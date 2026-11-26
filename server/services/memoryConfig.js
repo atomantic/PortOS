@@ -9,8 +9,6 @@
 import { loadLateBoundService } from '../lib/lateBoundServices.js';
 
 export const DEFAULT_MEMORY_CONFIG = {
-  enabled: true,
-  embeddingProvider: 'lmstudio',
   embeddingEndpoint: 'http://localhost:1234/v1/embeddings',
   embeddingModel: 'text-embedding-nomic-embed-text-v2-moe',
   embeddingDimension: 768,
@@ -20,12 +18,8 @@ export const DEFAULT_MEMORY_CONFIG = {
   // backend ("input length exceeds the context length") and yields a NULL
   // embedding, so this must stay at/under the real model context.
   embeddingMaxTokens: 2048,
-  maxMemories: 10000,
   maxContextTokens: 2000,
-  minRelevanceThreshold: 0.7,
-  autoExtractEnabled: true,
-  consolidationIntervalMs: 86400000,
-  decayIntervalMs: 86400000
+  minRelevanceThreshold: 0.7
 };
 
 /**

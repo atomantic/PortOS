@@ -566,6 +566,8 @@ const COMPLETION_ARGS = new Set([
  *   a provider attr. A function is resolved against the provider that actually
  *   runs (fallbacks included), for callers whose bound depends on its type:
  *   CLI/TUI treat it as a total cap, API runs as a no-progress (stall) bound.
+ * @param {number} [args.maxTokens] — per-call API output cap or managed Splash
+ *   Claude output allowance for a pinned tool-free run.
  * @param {number} [args.outputReserveTokens=8000] — expected completion budget
  *   included in fallback context admission. Callers with a tighter known
  *   output budget may lower it.
@@ -587,6 +589,7 @@ const COMPLETION_ARGS = new Set([
  *   (#9008). A headless CLI run gets no approval-bypass flag and, where the vendor has one, its
  *   tool-disable switch (`toolFreeOneShotArgs`). Rides every fallback tier; does not reach TUI runs,
  *   so a caller that must stay tool-free gates on `isToolFreeOneShotProvider` and disables fallback.
+ * @param {boolean} [args.captureClaudeOutputLimit=false] — capture first-turn counts on a pinned tool-free Splash Claude run.
  * @param {boolean} [args.isolateMtplxOpenCode=false] — select the isolated local MTPLX recipe for a pinned tool-free CLI request.
  * @param {*} [args.responseSchema] — the caller's declared response schema (#2350): a Zod-style
  *   schema or bare predicate. Enables Tier-2: validate a SUCCESSFUL response, coerce JSON in place,
@@ -731,7 +734,8 @@ async function runPromptThroughProviderAdmitted(rawArgs) {
   // Neither enters correction/fallback, benching, or fault investigation.
   if (firstError?.code === EXECUTION_OPTIONS_ERROR) throw stripFallbackContext(firstError);
 
-  if (isRunCanceledError(firstError) || isRuntimeBudgetError(firstError) || isContentRefusalError(firstError)) {
+  if (isRunCanceledError(firstError) || isRuntimeBudgetError(firstError) || isContentRefusalError(firstError)
+    || firstError?.errorAnalysis?.category === ERROR_CATEGORIES.OUTPUT_LIMIT) {
     throw stripFallbackContext(firstError);
   }
 
@@ -1270,6 +1274,7 @@ async function executeProviderRunOnce({
   allowFallback = true,
   toolFree = false,
   isolateMtplxOpenCode = false,
+  captureClaudeOutputLimit = false,
 }) {
   if (isolateMtplxOpenCode && (!toolFree || allowFallback || provider.type !== PROVIDER_TYPES.CLI)) {
     throw new Error('The isolated OpenCode MTPLX recipe needs a pinned tool-free CLI request');
@@ -1534,6 +1539,7 @@ async function executeProviderRunOnce({
         // `usedFallback`/`fallbackProvider` unset.
         safeResolve({ text: finalText, runId, model: effectiveModel, provider: effectiveProvider,
           ...(result?.finishReason ? { finishReason: result.finishReason } : {}),
+          ...(result?.reasoningOutputLimit ? { reasoningOutputLimit: result.reasoningOutputLimit } : {}),
         });
       }
     };
@@ -1577,7 +1583,9 @@ async function executeProviderRunOnce({
       executeCliRun({
         runId, provider: providerForRun, prompt, workspacePath: effectiveCwd, screenshots,
         onData, onComplete, timeout: effectiveTimeout, toolFree,
+        ...(toolFree && !allowFallback && maxTokens != null ? { maxTokens } : {}),
         ...(isolateMtplxOpenCode ? { isolateMtplxOpenCode } : {}),
+        ...(captureClaudeOutputLimit && toolFree && !allowFallback ? { captureClaudeOutputLimit } : {}),
         ...(admitDispatch ? { beforeExecute: admitDispatch } : {}),
       }).catch(safeReject);
     } else if (effectiveProvider.type === PROVIDER_TYPES.API) {

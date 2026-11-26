@@ -1,5 +1,7 @@
 import useListResource from '../hooks/useListResource';
 import ListLoadError from '../components/ui/ListLoadError';
+import EmptyState from '../components/EmptyState';
+import PageSkeleton from '../components/ui/PageSkeleton';
 import { useState, useEffect, useMemo } from 'react';
 import { useSearchParams, Link } from 'react-router';
 import toast from '../components/ui/Toast';
@@ -264,14 +266,16 @@ export default function JiraReports() {
 
       {reportsState === 'error' && <ListLoadError what="JIRA reports" error={reportsError} onRetry={loadReports} className="mb-4" />}
       {reportsState === 'loading' && !reports.length ? (
-        <div className="flex items-center justify-center h-64">
-          <BrailleSpinner text="Loading" />
-        </div>
+        <PageSkeleton header="none" label="Loading JIRA reports" cards={3} sidebar={false} />
       ) : filteredReports.length === 0 ? reportsState === 'ready' && (
-        <div className="flex flex-col items-center justify-center h-64 text-gray-500">
-          <FileText size={48} className="mb-3 opacity-30" />
-          <p>{noJiraApps ? 'No reports yet.' : 'No reports yet. Generate your first report above.'}</p>
-        </div>
+        <EmptyState
+          icon={FileText}
+          message={noJiraApps ? 'No reports yet. Enable JIRA on an app to get started.' : 'No reports yet. Generate your first report above.'}
+          actionLabel={noJiraApps ? 'Open Apps' : 'Generate first report'}
+          actionTo="/apps"
+          onAction={noJiraApps ? undefined : () => handleGenerate(filterAppId || null)}
+          actionDisabled={generating}
+        />
       ) : (
         <div className="grid grid-cols-1 lg:grid-cols-3 gap-4">
           <div className="space-y-2 lg:col-span-1 max-h-[calc(100dvh-160px)] overflow-y-auto pr-1">

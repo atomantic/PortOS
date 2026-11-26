@@ -56,6 +56,42 @@ describe('a shot\'s References row', () => {
     expect(screen.queryByRole('list', { name: 'References to add' })).toBeNull();
   });
 
+  it('combines search with cast, environment, and object filters and adds the matching catalog image', () => {
+    const onSave = vi.fn();
+    const linked = { ...project, concept: { subjects: [
+      { id: 'guest', kind: 'character', name: 'Harbor guest', ingredientId: 'cat-guest' },
+      { id: 'street', kind: 'place', name: 'Harbor street', ingredientId: 'cat-street' },
+      { id: 'bike', kind: 'object', name: 'Harbor bicycle', ingredientId: 'cat-bike' },
+      { id: 'lamp', kind: 'object', name: 'Desk lamp', ingredientId: 'cat-lamp' },
+    ] } };
+    const castMedia = Object.fromEntries(['guest', 'street', 'bike', 'lamp']
+      .map((id) => [`cat-${id}`, [{ kind: 'portrait', mediaKey: `${id}.png` }]]));
+    render(<SceneFrameReferences project={linked} scene={scene} castMedia={castMedia} onEditLocal={vi.fn()} onSave={onSave} />);
+    fireEvent.click(screen.getByRole('button', { name: 'Add' }));
+    expect(screen.getByRole('button', { name: 'Desk lamp · Canonical image' })).toBeTruthy();
+
+    const search = screen.getByRole('searchbox', { name: 'Search references' });
+    fireEvent.change(search, { target: { value: ' HARBOR ' } });
+    expect(screen.queryByRole('button', { name: 'Desk lamp · Canonical image' })).toBeNull();
+    fireEvent.click(screen.getByRole('button', { name: 'Cast' }));
+    expect(screen.getByRole('button', { name: 'Harbor guest · Portrait' })).toBeTruthy();
+    expect(screen.queryByRole('button', { name: /^Harbor street/ })).toBeNull();
+    fireEvent.click(screen.getByRole('button', { name: 'Environments' }));
+    expect(screen.getByRole('button', { name: 'Harbor street · Canonical image' })).toBeTruthy();
+    expect(screen.queryByRole('button', { name: /^Harbor guest/ })).toBeNull();
+    fireEvent.click(screen.getByRole('button', { name: 'Objects' }));
+    fireEvent.change(search, { target: { value: 'nonexistent' } });
+    expect(screen.getByRole('status').textContent).toBe('No matching references.');
+    fireEvent.change(search, { target: { value: 'bicycle harbor' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Harbor bicycle · Canonical image' }));
+    expect(onSave).toHaveBeenCalledExactlyOnceWith('s1', { frameReferenceIds: ['r1', musicVideoLinkedReferenceId('bike.png')] });
+
+    fireEvent.click(screen.getByRole('button', { name: 'Add' }));
+    expect(screen.getByRole('searchbox').value).toBe('');
+    expect(screen.getByRole('button', { name: 'All' }).getAttribute('aria-pressed')).toBe('true');
+    expect(screen.getByRole('button', { name: 'The pier at night' })).toBeTruthy();
+  });
+
   // Uniquely catches the renderer-limit note returning to the working surface instead of the info icon.
   it('keeps the reference-order note behind a tap on the References info icon', () => {
     render(<SceneFrameReferences project={project} scene={scene} onEditLocal={vi.fn()} onSave={vi.fn()} />);

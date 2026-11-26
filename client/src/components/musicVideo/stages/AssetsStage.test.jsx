@@ -86,7 +86,7 @@ describe('Music video Assets page', () => {
   it('shows a toast with Undo when marking bad moves a shot, and clicking Undo restores it', async () => {
     api.markMusicVideoPoolAssets.mockResolvedValueOnce({
       assetMarks: { 'image:early.png': 'bad' },
-      changes: [{ sceneId: 's1', shotNumber: 1, role: 'startFrame', action: 'moved', fromAssetId: 'early.png', toAssetId: 'floor.png', previousTakeId: 'take-early' }],
+      changes: [{ sceneId: 's1', slot: 'image', action: 'moved', fromAssetId: 'early.png', toAssetId: 'floor.png', previousTakeId: 'take-early' }],
     });
     const applyPoolMarks = vi.fn();
     const applyScene = vi.fn();

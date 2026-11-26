@@ -3,7 +3,7 @@
  * in song order, and `shotSheetMapRows` resolves map-tap selections.
  */
 
-import { activeMusicVideoSubjects } from './musicVideoCastSelection.js';
+import { activeMusicVideoSubjects, omittedShotSubjectNames } from './musicVideoCastSelection.js';
 /**
  * The shot sheet: every shot's plan on one screen, read and edited without
  * rendering anything. A shot's sheet (`scene.shotSheet`) names what the shot is
@@ -88,6 +88,12 @@ function frameFreshness(project, scene) {
 export const shotSheetDrivesPrompt = (scene) => scene?.shotSheet?.promptFromSheet === true;
 
 const sheetText = (value) => (typeof value === 'string' ? value.trim() : '');
+export function shotSheetCharacterNames(project, scene) {
+  const omitted = omittedShotSubjectNames(project, scene, 'character');
+  const characters = scene?.shotSheet?.characters;
+  return (Array.isArray(characters) ? characters : []).map(sheetText).filter(name => name && !omitted.has(name.toLowerCase()));
+}
+
 const listNames = (names) => (names.length > 1 ? `${names.slice(0, -1).join(', ')} and ${names.at(-1)}` : names[0] || '');
 
 /**
@@ -110,8 +116,9 @@ export function shotSheetPromptLines(project, scene) {
   // One Camera chip: the sheet line carries the rule, so the composer does not add a second one.
   if (cameraText && camera.kind !== 'observer' && owner) cameraText += '. This camera is the one taking the picture, so it is not in the frame';
   if (cameraText && rule) cameraText += `. ${rule}`;
-  const place = [sheetText(sheet.location), sheetText(sheet.timeOfDay), sheetText(sheet.light) ? `lit by ${sheetText(sheet.light)}` : ''].filter(Boolean).join(', ');
-  const who = (Array.isArray(sheet.characters) ? sheet.characters : []).map(sheetText).filter(Boolean);
+  const location = sheetText(sheet.location);
+  const place = [omittedShotSubjectNames(project, scene, 'place').has(location.toLowerCase()) ? '' : location, sheetText(sheet.timeOfDay), sheetText(sheet.light) ? `lit by ${sheetText(sheet.light)}` : ''].filter(Boolean).join(', ');
+  const who = shotSheetCharacterNames(project, scene);
   return [
     ['camera', 'Camera', cameraText],
     ['view', 'View', sheetText(sheet.view)],

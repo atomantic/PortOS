@@ -115,7 +115,7 @@ The Quality tab plans and scores these 16 domains. CoS Schedule shows active dom
 
 ## Legacy task profiles
 
-Stored schedules keep their original task IDs, prompts, delivery modes, execution history and app overrides. Applying a new Quality plan preserves independent legacy cadences. Historical snapshots keep each profile's daily observation even when several profiles now contribute to one domain.
+Stored schedules keep their original task IDs, prompts, delivery modes, execution history and app overrides. Applying a new Quality plan disables and clears the cadence of enabled legacy profiles covered by a newly scheduled domain. Older clients can still explicitly schedule a legacy profile. Historical snapshots keep each profile's daily observation even when several profiles now contribute to one domain.
 
 | Domain | Legacy profiles |
 |---|---|

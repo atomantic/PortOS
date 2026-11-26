@@ -5,11 +5,11 @@
  * Supports structured MEMORY blocks and pattern-based extraction.
  */
 
-import { createMemory, searchMemories, getMemories } from './memoryBackend.js';
+import { createMemory, searchMemories, getMemories, withPendingMemories } from './memoryBackend.js';
 import { generateMemoryEmbedding } from './memoryEmbeddings.js';
 import { cosEvents } from './cos/cosEvents.js';
 import * as notifications from './notifications.js';
-import { classifyMemories, isAvailable as isClassifierAvailable } from './memoryClassifier.js';
+import { classifyMemories, getConfig } from './memoryClassifier.js';
 import { getDomainAutonomyMode } from './cos/cosState.js';
 import { getDomainBudgetStatus, recordDomainUsage } from './domainUsage.js';
 
@@ -196,6 +196,48 @@ async function findExistingDuplicate(embedding, content, pendingMemories) {
   return null;
 }
 
+async function publishApprovals(memories, agentId, taskId) {
+  if (!memories.length) return memories;
+  const { createMemoryApprovalItem } = await import('./review.js');
+  for (const mem of memories) {
+    await createMemoryApprovalItem(mem, agentId, taskId);
+    const alreadyExists = await notifications.exists(
+      notifications.NOTIFICATION_TYPES.MEMORY_APPROVAL,
+      'memoryId',
+      mem.id
+    );
+    if (!alreadyExists) {
+      await notifications.addNotification({
+        type: notifications.NOTIFICATION_TYPES.MEMORY_APPROVAL,
+        title: `Memory needs approval`,
+        description: (mem.summary || mem.content || '').slice(0, 300),
+        priority: notifications.PRIORITY_LEVELS.MEDIUM,
+        link: '/cos/memory',
+        metadata: {
+          memoryId: mem.id,
+          category: 'memory-approval',
+          actionKind: 'memory.approval',
+          sourceOwned: true,
+          memoryType: mem.type,
+          agentId,
+          taskId
+        }
+      });
+    }
+  }
+  cosEvents.emit('memory:approval-needed', {
+    agentId,
+    taskId,
+    memories: memories.map(m => ({
+      id: m.id,
+      type: m.type,
+      content: (m.content || '').slice(0, 500),
+      confidence: m.confidence
+    }))
+  });
+  return memories;
+}
+
 /**
  * Main extraction function
  * Processes agent output and creates memories
@@ -223,37 +265,29 @@ export async function extractAndStoreMemories(agentId, taskId, output, task = nu
   // Time the extraction (incl. the LLM classify) for the minutes budget.
   const startTime = Date.now();
   const allMemories = [];
-  let usedLLM = false;
+  let llmResult;
 
-  // Try LLM-based classification first (if available)
-  const classifierAvailable = await isClassifierAvailable().catch(() => false);
-
-  if (classifierAvailable && task) {
-    const llmResult = await classifyMemories(task, output).catch(err => {
+  if (task) {
+    llmResult = await classifyMemories(task, output).catch(err => {
       console.log(`⚠️ LLM memory classification failed: ${err.message}`);
       return null;
     });
-
-    if (llmResult?.memories?.length > 0) {
-      usedLLM = true;
-      console.log(`🧠 LLM classified ${llmResult.memories.length} memories`);
-
-      // Convert LLM results to our format
-      for (const mem of llmResult.memories) {
-        allMemories.push({
-          type: mem.type || 'observation',
-          category: mem.category || 'other',
-          content: mem.content,
-          confidence: mem.confidence || 0.7,
-          tags: mem.tags || [],
-          reasoning: mem.reasoning
-        });
-      }
-    }
   }
 
-  // Fall back to pattern-based extraction if LLM didn't produce results
-  if (!usedLLM) {
+  // A successful empty verdict is authoritative.
+  const llmSucceeded = Boolean(llmResult?.usedLLM && !llmResult?.error);
+  if (llmSucceeded) {
+    for (const mem of llmResult.memories) {
+      allMemories.push({
+        type: mem.type || 'observation',
+        category: mem.category || 'other',
+        content: mem.content,
+        confidence: mem.confidence || 0.7,
+        tags: mem.tags || [],
+        reasoning: mem.reasoning
+      });
+    }
+  } else if ((llmResult?.fallbackAvailable ?? (await getConfig()).fallbackToPatterns) !== false) {
     // Parse structured memory blocks
     const structured = parseMemoryBlocks(output);
     allMemories.push(...structured);
@@ -304,10 +338,7 @@ export async function extractAndStoreMemories(agentId, taskId, output, task = nu
     const embedding = await generateMemoryEmbedding(mem);
     const existing = await findExistingDuplicate(embedding, mem.content, pendingForDedup.memories);
     if (existing) {
-      // Active-memory hits from searchMemories() return metadata with \`summary\`
-      // but no \`content\`; pending hits carry \`content\`. Prefer whichever is present.
-      const existingText = existing.content || existing.summary || '';
-      console.log(`🧠 Skipping duplicate memory (similar to "${normalizeText(existingText).substring(0, 60)}…")`);
+      console.log(`🧠 Skipping duplicate memory (matches ${existing.id || 'existing'})`);
       skippedDuplicates++;
       return null;
     }
@@ -320,11 +351,11 @@ export async function extractAndStoreMemories(agentId, taskId, output, task = nu
   // instead routed to pending approval — nothing enters active memory without a
   // human confirm, but the extraction work is still surfaced for review.
   const created = [];
-  const pendingMemories = [];
+  const pendingIds = [];
   for (const mem of highConfidence) {
     if (mode === 'dry-run') {
       const memory = await dedupAndCreate(mem, { status: 'pending_approval' });
-      if (memory) pendingMemories.push(memory);
+      if (memory) pendingIds.push(memory.id);
     } else {
       const memory = await dedupAndCreate(mem);
       if (memory) created.push(memory);
@@ -333,49 +364,13 @@ export async function extractAndStoreMemories(agentId, taskId, output, task = nu
 
   for (const mem of mediumConfidence) {
     const memory = await dedupAndCreate(mem, { status: 'pending_approval' });
-    if (memory) pendingMemories.push(memory);
+    if (memory) pendingIds.push(memory.id);
   }
 
-  if (pendingMemories.length > 0) {
-    console.log(`🧠 ${pendingMemories.length} memories pending approval`);
-    cosEvents.emit('memory:approval-needed', {
-      agentId,
-      taskId,
-      memories: pendingMemories.map(m => ({
-        id: m.id,
-        type: m.type,
-        content: (m.content || '').slice(0, 500),
-        confidence: m.confidence
-      }))
-    });
-
-    // Create notification for user
-    for (const mem of pendingMemories) {
-      const alreadyExists = await notifications.exists(
-        notifications.NOTIFICATION_TYPES.MEMORY_APPROVAL,
-        'memoryId',
-        mem.id
-      );
-      if (!alreadyExists) {
-        await notifications.addNotification({
-          type: notifications.NOTIFICATION_TYPES.MEMORY_APPROVAL,
-          title: `Memory needs approval`,
-          description: (mem.summary || mem.content || '').slice(0, 300),
-          priority: notifications.PRIORITY_LEVELS.MEDIUM,
-          link: '/cos/memory',
-          metadata: {
-            memoryId: mem.id,
-            category: 'memory-approval',
-            actionKind: 'memory.approval',
-            sourceOwned: true,
-            memoryType: mem.type,
-            agentId,
-            taskId
-          }
-        });
-      }
-    }
-  }
+  const pendingMemories = pendingIds.length
+    ? await withPendingMemories(pendingIds, memories => publishApprovals(memories, agentId, taskId))
+    : [];
+  if (pendingMemories.length) console.log(`🧠 ${pendingMemories.length} memories pending approval`);
 
   if (skippedDuplicates > 0) {
     console.log(`🧠 Skipped ${skippedDuplicates} duplicate memories from agent ${agentId}`);

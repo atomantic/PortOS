@@ -21,6 +21,8 @@ import { Sparkles, Plus, Search, FileInput, Loader2, RefreshCw, Wand2, X, Layout
 import BrailleSpinner from '../components/BrailleSpinner';
 import Drawer from '../components/Drawer';
 import PageHeader from '../components/PageHeader';
+import EmptyState from '../components/EmptyState';
+import PageSkeleton from '../components/ui/PageSkeleton';
 import RouteTabsHeader from '../components/ui/RouteTabsHeader';
 import toast from '../components/ui/Toast';
 import {
@@ -109,6 +111,7 @@ export default function Catalog() {
 
   const [stats, setStats] = useState(null);
   const [facets, setFacets] = useState(null);
+  const [facetsError, setFacetsError] = useState(null);
 
   // Grid pagination state.
   const [items, setItems] = useState([]);
@@ -187,9 +190,13 @@ export default function Catalog() {
   }, []);
 
   const loadFacets = useCallback(() => {
+    setFacetsError(null);
     getCatalogFacets({ silent: true })
-      .then((f) => setFacets(f || null))
-      .catch(() => {});
+      .then((f) => {
+        if (!f) throw new Error('Unexpected catalog facets response');
+        setFacets(f);
+      })
+      .catch(setFacetsError);
   }, []);
 
   // Build the list-query params from the active filters. The server accepts a
@@ -865,7 +872,9 @@ export default function Catalog() {
         </form>
       )}
 
-      {view === 'albums' ? (
+      {view === 'albums' ? !facets && facetsError ? (
+        <ListLoadError what="catalog albums" error={facetsError} onRetry={loadFacets} />
+      ) : (
         <AlbumsView
           // Remount on a mutation OR any filter change so the lazy album loads
           // re-run against fresh data and honor the active filters.
@@ -878,7 +887,7 @@ export default function Catalog() {
           onConfirmDelete={albumDelete}
         />
       ) : loading ? (
-        <div className="text-gray-500 text-sm">Loading catalog…</div>
+        <PageSkeleton header="none" label="Loading catalog" cards={3} sidebar={false} layout="grid" gridColsClass="sm:grid-cols-2 lg:grid-cols-3" />
       ) : listError ? (
         <ListLoadError what="catalog ingredients" error={listError} onRetry={() => {
           loadFirstPage();
@@ -886,13 +895,15 @@ export default function Catalog() {
           if (!facets) loadFacets();
         }} />
       ) : items.length === 0 ? (
-        <div className="bg-port-card border border-port-border rounded-lg p-8 text-center">
-          <p className="text-sm text-gray-400">
-            {hasActiveFilters
-              ? 'No ingredients match the current filter.'
-              : 'Your catalog is empty. Paste a scrap on the Ingest page or create one manually.'}
-          </p>
-        </div>
+        <EmptyState
+          icon={Sparkles}
+          message={hasActiveFilters
+            ? 'No ingredients match the current filter.'
+            : 'Your catalog is empty. Paste a scrap on the Ingest page or create one manually.'}
+          actionLabel={hasActiveFilters ? 'Clear filters' : 'Ingest'}
+          onAction={hasActiveFilters ? clearFilters : undefined}
+          actionTo="/catalog/ingest"
+        />
       ) : (
         <>
           <div className="text-xs text-gray-500 mb-2">
@@ -1092,7 +1103,7 @@ export default function Catalog() {
 // server-side (decision #1), so a series-only ingredient still has a home here.
 function AlbumsView({ facets, filters = {}, selectedUniverse = '', selectedSeries = '', cardProps, onConfirmDelete }) {
   if (!facets) {
-    return <div className="text-gray-500 text-sm">Loading albums…</div>;
+    return <PageSkeleton header="none" label="Loading albums" cards={3} sidebar={false} />;
   }
   const { universes = [], series = [], unlinkedCount = 0, orphanedCount = 0 } = facets;
   const albumProps = { ...cardProps, onConfirmDelete, pageSize: PAGE_SIZE };
@@ -1142,9 +1153,12 @@ function AlbumsView({ facets, filters = {}, selectedUniverse = '', selectedSerie
   const noAlbums = universes.length === 0 && unlinkedCount === 0 && orphanedCount === 0;
   if (noAlbums) {
     return (
-      <div className="bg-port-card border border-port-border rounded-lg p-8 text-center">
-        <p className="text-sm text-gray-400">No albums yet — ingest or create ingredients to get started.</p>
-      </div>
+      <EmptyState
+        icon={Library}
+        message="No albums yet — ingest or create ingredients to get started."
+        actionLabel="Ingest"
+        actionTo="/catalog/ingest"
+      />
     );
   }
   return (

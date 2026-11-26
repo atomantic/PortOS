@@ -1,3 +1,4 @@
+// @vitest-environment node
 import { describe, it, expect } from 'vitest';
 import * as THREE from 'three';
 import { inPlaceClipName, withInPlaceClips } from './animationClips.js';

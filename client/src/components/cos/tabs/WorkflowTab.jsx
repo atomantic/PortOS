@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useId, useMemo, useRef, useState } from 'react';
 import { useSearchParams } from 'react-router';
 import { AlertTriangle, ArrowRight, Bot, CalendarDays, ChevronRight, Clock3, GitBranch, Infinity as InfinityIcon, RefreshCw, RotateCcw, TimerReset, Workflow } from 'lucide-react';
 import { getCosWorkflow } from '../../../services/apiAgents.js';
@@ -7,7 +7,7 @@ import { describeCron, describeRecurrence, summarizeAppSchedules } from '../../.
 import ScheduleEditor from './workflow/ScheduleEditor';
 import PerAppOverrideList from './schedule/PerAppOverrideList';
 import { isManualOnlyCadence } from './schedule/scheduleConstants';
-import { formatWeekdayShort, formatWeekdayTime, formatTimeOfDay } from '../../../utils/formatters';
+import { formatCount, formatWeekdayShort, formatWeekdayTime, formatTimeOfDay } from '../../../utils/formatters';
 
 const TRACK_COLORS = {
   cron: { marker: 'bg-purple-400', text: 'text-purple-300', wash: 'bg-purple-500/10' },
@@ -168,7 +168,37 @@ function TimelineRow({ node, occurrences, windows, timeline, hours, timezone, se
   const appNames = appNameLookup(node);
   const Icon = node.kind === 'job' ? Bot : GitBranch;
   const divisions = hours === 168 ? 7 : 8;
-  const dependencyWarning = node.pendingDeps?.length > 0;
+  const descriptionId = useId();
+  const dependencyCount = node.pendingDeps?.length ?? 0;
+  const markers = occurrences.map(occurrence => {
+    const meta = dueNowMeta(occurrence, node, timezone);
+    const scopedApps = occurrenceAppNames(occurrence, appNames);
+    const kind = occurrence.kind === 'recheck' ? 'Reset/recheck' : 'Launch';
+    const label = [
+      `${kind} ${formatPoint(occurrence.at, hours, timezone)}`,
+      scopedApps && `for ${scopedApps}`,
+      meta && `due now (${meta.detail})`,
+      occurrence.collision && 'another task launches within 15 minutes'
+    ].filter(Boolean).join(' · ');
+    return { occurrence, meta, scopedApps, label };
+  });
+  const drains = windows.map(bar => {
+    const live = bar.state === 'draining';
+    const start = formatPoint(bar.startAt, hours, timezone);
+    return { bar, live, label: `${live ? 'Draining since' : 'Drain starts'} ${start}` };
+  });
+  const [firstMarker, ...laterMarkers] = markers;
+  const launchSummary = firstMarker
+    ? `${formatCount(markers.length)} scheduled ${markers.length === 1 ? 'event' : 'events'}. Next: ${firstMarker.label}.`
+    : 'No scheduled launches in this window.';
+  const description = [
+    launchSummary,
+    laterMarkers.some(({ meta }) => meta) && 'Other events are due now.',
+    laterMarkers.some(({ scopedApps }) => scopedApps) && 'Other events are scheduled per app.',
+    laterMarkers.some(({ occurrence }) => occurrence.collision) && 'Other events have a launch within 15 minutes.',
+    drains[0] && `${drains[0].label}.`,
+    dependencyCount > 0 && `Waiting on ${formatCount(dependencyCount)} ${dependencyCount === 1 ? 'dependency' : 'dependencies'}.`
+  ].filter(Boolean).join(' ');
 
   // Per-app options only apply to task types (system jobs are not per-app). The
   // server's active-app counts drive the toggle + badge (single source of
@@ -179,88 +209,94 @@ function TimelineRow({ node, occurrences, windows, timeline, hours, timezone, se
 
   return (
     <div className={`border-b border-port-border/40 transition-colors last:border-b-0 ${selected ? 'bg-port-accent/8' : ''}`}>
-      <div className={`grid w-full grid-cols-[14rem_1fr] ${selected ? '' : 'hover:bg-white/[0.025]'}`}>
-        <div className="flex min-w-0 items-center gap-1.5 border-r border-port-border/50 px-3 py-2.5">
-          {canExpand ? (
-            <button
-              type="button"
-              onClick={() => onToggleExpand(node.id)}
-              aria-expanded={expanded}
-              aria-label={`${expanded ? 'Hide' : 'Show'} per-app options for ${node.label}`}
-              title={countTitle}
-              className="pointer-coarse:min-h-11 pointer-coarse:min-w-11 flex h-5 w-5 shrink-0 items-center justify-center rounded text-gray-500 hover:bg-white/10 hover:text-gray-300"
-            >
-              <ChevronRight className={`h-3.5 w-3.5 transition-transform ${expanded ? 'rotate-90' : ''}`} />
-            </button>
-          ) : (
-            <span className="h-5 w-5 shrink-0" aria-hidden="true" />
-          )}
-          <button type="button" onClick={() => onSelect(node.id)} className="flex min-w-0 flex-1 items-center gap-2 text-left">
-            <span className={`flex h-7 w-7 shrink-0 items-center justify-center rounded ${palette.wash} ${palette.text}`}><Icon className="h-3.5 w-3.5" /></span>
+      <div className={`relative ${selected ? '' : 'hover:bg-white/[0.025]'}`}>
+        {canExpand && (
+          <button
+            type="button"
+            onClick={() => onToggleExpand(node.id)}
+            aria-expanded={expanded}
+            aria-label={`${expanded ? 'Hide' : 'Show'} per-app options for ${node.label}`}
+            title={countTitle}
+            className="pointer-coarse:min-h-11 pointer-coarse:min-w-11 absolute left-3 top-1/2 z-30 flex h-5 w-5 -translate-y-1/2 items-center justify-center rounded text-gray-500 hover:bg-white/10 hover:text-gray-300"
+          >
+            <ChevronRight className={`h-3.5 w-3.5 transition-transform ${expanded ? 'rotate-90' : ''}`} />
+          </button>
+        )}
+        <button
+          type="button"
+          onClick={() => onSelect(node.id)}
+          aria-pressed={selected}
+          aria-describedby={descriptionId}
+          className="grid w-full grid-cols-[14rem_1fr] text-left focus-visible:-outline-offset-2!"
+        >
+          <span className="flex min-w-0 items-center gap-1.5 border-r border-port-border/50 px-3 py-2.5">
+            <span className={`h-5 w-5 shrink-0 ${canExpand ? 'pointer-coarse:h-11 pointer-coarse:w-11' : ''}`} aria-hidden="true" />
+            <span className={`flex h-7 w-7 shrink-0 items-center justify-center rounded ${palette.wash} ${palette.text}`}><Icon aria-hidden="true" className="h-3.5 w-3.5" /></span>
             <span className="min-w-0 flex-1">
               <span className="block truncate text-xs font-medium text-gray-200" title={node.label}>{node.label}</span>
               <span className="mt-0.5 block truncate text-[10px] text-gray-500" title={cadence.title}>{cadence.text}</span>
             </span>
-          </button>
-          {canExpand && (
-            <span className={`shrink-0 rounded-sm px-1 py-px text-[9px] font-medium ${enabledAppCount > 0 ? 'bg-port-accent/15 text-port-accent' : 'bg-white/5 text-gray-500'}`} title={countTitle}>
-              {enabledAppCount}/{totalAppCount}
-            </span>
-          )}
-          {dependencyWarning && <AlertTriangle className="h-3.5 w-3.5 shrink-0 text-port-warning" />}
-        </div>
-        <button type="button" onClick={() => onSelect(node.id)} className="relative block min-h-12 overflow-hidden text-left">
-          <TrackGrid divisions={divisions} />
-          <span className="absolute inset-y-0 left-0 z-10 border-l border-port-accent/70" />
-          {windows.map(bar => {
-            // A live drain is filled; a future recurrence is a washed-out
-            // outline, so "running now" stays distinguishable from "runs then".
-            const live = bar.state === 'draining';
-            const label = `${live ? 'Draining since' : 'Drain starts'} ${formatPoint(bar.startAt, hours, timezone)}`;
-            return (
-              // role="img" so `aria-label` is honored — ARIA prohibits naming a
-              // bare span (role generic), which would leave the bar nameless to
-              // screen readers while still satisfying a getByLabelText test.
-              <span
-                key={bar.id}
-                role="img"
-                aria-label={label}
-                className={`absolute inset-y-2 z-10 flex items-center gap-1 overflow-hidden rounded border px-1 ${live ? 'border-amber-400/50 bg-gradient-to-r from-amber-500/35 to-amber-500/10' : 'border-dashed border-amber-400/35 bg-amber-500/10'}`}
-                // `minWidth` over-constrains left/right so the box grows right
-                // from its start: an hour is ~4% of a 24h track and under 1% of
-                // a 7-day one, which would otherwise render as a hairline.
-                style={{ left: `${timelinePercent(bar.startAt, timeline)}%`, right: `${100 - timelinePercent(bar.endAt, timeline)}%`, minWidth: '1.25rem' }}
-                title={`${label} · perpetual: the bar shows a nominal hour, the drain continues while backlog remains`}
-              >
-                <InfinityIcon className="h-3 w-3 shrink-0 text-amber-200" />
-                {live && <span className="truncate text-[10px] font-medium text-amber-200">draining</span>}
+            {canExpand && (
+              <span className={`shrink-0 rounded-sm px-1 py-px text-[9px] font-medium ${enabledAppCount > 0 ? 'bg-port-accent/15 text-port-accent' : 'bg-white/5 text-gray-500'}`} title={countTitle}>
+                {enabledAppCount}/{totalAppCount}
               </span>
-            );
-          })}
-          {occurrences.map(occurrence => {
-            const meta = dueNowMeta(occurrence, node, timezone);
-            // A launch only some apps take is a circle, not a square — a free
-            // visual channel that leaves the collision ring and the due-now
-            // fill intact, so a marker can show all three states at once.
-            const scopedApps = occurrenceAppNames(occurrence, appNames);
-            // Due-now is an amber FILL, collision a warning RING — kept on separate
-            // channels so a launch that is BOTH (the common catch-up scenario, where
-            // several tasks are due at Now and therefore also collide) shows both
-            // states at once. A shared ring channel would let collision mask due-now.
-            const fill = occurrence.kind === 'recheck' ? 'rotate-45 bg-amber-300' : meta ? 'bg-amber-400' : palette.marker;
-            const ring = occurrence.collision ? 'ring-2 ring-port-warning ring-offset-1 ring-offset-port-bg' : '';
-            const shape = scopedApps ? 'rounded-full' : 'rounded-sm';
-            return (
-              <span
-                key={occurrence.id}
-                className={`absolute top-1/2 z-20 h-4 w-4 -translate-x-1/2 -translate-y-1/2 border-2 border-port-bg shadow ${shape} ${fill} ${ring}`}
-                style={{ left: `clamp(0.6rem, ${timelinePercent(occurrence.at, timeline)}%, calc(100% - 0.6rem))` }}
-                title={`${occurrence.kind === 'recheck' ? 'Reset/recheck' : 'Launch'} ${formatPoint(occurrence.at, hours, timezone)}${scopedApps ? ` · for ${scopedApps}` : ''}${meta ? ` · ${meta.detail}` : ''}${occurrence.collision ? ' · another task launches within 15 minutes' : ''}`}
-              />
-            );
-          })}
+            )}
+            {dependencyCount > 0 && <AlertTriangle aria-hidden="true" className="h-3.5 w-3.5 shrink-0 text-port-warning" />}
+          </span>
+          <span aria-hidden="true" className="relative block min-h-12 overflow-hidden">
+            <TrackGrid divisions={divisions} />
+            <span className="absolute inset-y-0 left-0 z-10 border-l border-port-accent/70" />
+            {drains.map(({ bar, live, label }) => {
+              // A live drain is filled; a future recurrence is a washed-out
+              // outline, so "running now" stays distinguishable from "runs then".
+              return (
+                <span
+                  key={bar.id}
+                  className={`absolute inset-y-2 z-10 flex items-center gap-1 overflow-hidden rounded border px-1 ${live ? 'border-amber-400/50 bg-gradient-to-r from-amber-500/35 to-amber-500/10' : 'border-dashed border-amber-400/35 bg-amber-500/10'}`}
+                  // `minWidth` over-constrains left/right so the box grows right
+                  // from its start: an hour is ~4% of a 24h track and under 1% of
+                  // a 7-day one, which would otherwise render as a hairline.
+                  style={{ left: `${timelinePercent(bar.startAt, timeline)}%`, right: `${100 - timelinePercent(bar.endAt, timeline)}%`, minWidth: '1.25rem' }}
+                  title={`${label} · perpetual: the bar shows a nominal hour, the drain continues while backlog remains`}
+                >
+                  <InfinityIcon className="h-3 w-3 shrink-0 text-amber-200" />
+                  {live && <span className="truncate text-[10px] font-medium text-amber-200">draining</span>}
+                </span>
+              );
+            })}
+            {markers.map(({ occurrence, meta, scopedApps, label }) => {
+              // A launch only some apps take is a circle, not a square — a free
+              // visual channel that leaves the collision ring and the due-now
+              // fill intact, so a marker can show all three states at once.
+              // Due-now is an amber FILL, collision a warning RING — kept on separate
+              // channels so a launch that is BOTH (the common catch-up scenario, where
+              // several tasks are due at Now and therefore also collide) shows both
+              // states at once. A shared ring channel would let collision mask due-now.
+              const fill = occurrence.kind === 'recheck' ? 'rotate-45 bg-amber-300' : meta ? 'bg-amber-400' : palette.marker;
+              const ring = occurrence.collision ? 'ring-2 ring-port-warning ring-offset-1 ring-offset-port-bg' : '';
+              const shape = scopedApps ? 'rounded-full' : 'rounded-sm';
+              return (
+                <span
+                  key={occurrence.id}
+                  className={`absolute top-1/2 z-20 h-4 w-4 -translate-x-1/2 -translate-y-1/2 border-2 border-port-bg shadow ${shape} ${fill} ${ring}`}
+                  style={{ left: `clamp(0.6rem, ${timelinePercent(occurrence.at, timeline)}%, calc(100% - 0.6rem))` }}
+                  title={label}
+                />
+              );
+            })}
+          </span>
         </button>
+        <span id={descriptionId} hidden>{description}</span>
       </div>
+      {selected && (markers.length > 0 || drains.length > 0) && (
+        <details className="border-t border-port-border/40 px-3 text-xs text-gray-300">
+          <summary className="w-fit cursor-pointer px-1">Scheduled launches and drains</summary>
+          <ul className="list-disc space-y-1 pb-3 pl-5">
+            {markers.map(({ occurrence, label }) => <li key={occurrence.id}>{label}</li>)}
+            {drains.map(({ bar, label }) => <li key={bar.id}>{label}</li>)}
+          </ul>
+        </details>
+      )}
       {canExpand && expanded && (
         <div className="border-t border-port-border/40 bg-port-bg/20 px-3 py-3">
           <AppOverridePanel node={node} apps={apps} providers={providers} providersLoaded={providersLoaded} onUpdateOverride={onUpdateOverride} onBulkToggleOverride={onBulkToggleOverride} />
@@ -413,7 +449,7 @@ export default function WorkflowTab({ apps, providers, providersLoaded }) {
           const isSelected = selectedId === node.id;
           return (
             <span key={node.id} className={`inline-flex items-center rounded border text-xs ${isSelected ? 'border-port-accent bg-port-accent/10' : 'border-port-border bg-port-bg/40'}`}>
-              <button type="button" onClick={() => setSelectedId(node.id)} className={`px-2.5 py-1.5 ${isSelected ? 'text-port-accent' : 'text-gray-400 hover:text-white'}`}>
+              <button type="button" onClick={() => setSelectedId(node.id)} aria-pressed={isSelected} className={`px-2.5 py-1.5 ${isSelected ? 'text-port-accent' : 'text-gray-400 hover:text-white'}`}>
                 {node.label} <span className="text-gray-600">· {node.schedule?.type}</span>
                 {canExpand && <span className={`ml-1 ${node.enabledAppCount > 0 ? 'text-port-accent' : 'text-gray-500'}`}>{node.enabledAppCount || 0}/{node.totalAppCount}</span>}
               </button>
@@ -459,9 +495,9 @@ export default function WorkflowTab({ apps, providers, providersLoaded }) {
           <h2 className="text-xl font-semibold text-white">Schedule Timeline</h2>
         </div>
         <div className="flex items-center gap-2">
-          <div className="flex rounded border border-port-border bg-port-card p-1">
+          <div role="group" aria-label="Timeline window" className="flex rounded border border-port-border bg-port-card p-1">
             {[[24, '24 hours'], [168, '7 days']].map(([value, label]) => (
-              <button key={value} type="button" onClick={() => setHours(value)} className={`rounded px-2.5 py-1 text-xs ${hours === value ? 'bg-port-accent/20 text-port-accent' : 'text-gray-500 hover:text-gray-300'}`}>{label}</button>
+              <button key={value} type="button" onClick={() => setHours(value)} aria-pressed={hours === value} className={`rounded px-2.5 py-1 text-xs ${hours === value ? 'bg-port-accent/20 text-port-accent' : 'text-gray-500 hover:text-gray-300'}`}>{label}</button>
             ))}
           </div>
           <button type="button" onClick={fetchGraph} disabled={loading} className="flex items-center gap-1.5 rounded border border-port-border bg-port-card px-3 py-1.5 text-xs text-gray-300 hover:border-gray-500 disabled:opacity-50">

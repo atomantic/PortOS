@@ -138,6 +138,11 @@ export async function peekMemories(ids, options) {
   return b.peekMemories(ids, options);
 }
 
+export async function withPendingMemories(ids, publish) {
+  const b = await getBackend();
+  return b.withPendingMemories(ids, publish);
+}
+
 export async function recordMemoryAccess(ids) {
   const b = await getBackend();
   return b.recordMemoryAccess(ids);
@@ -248,11 +253,6 @@ export async function linkMemories(sourceId, targetId, options) {
 export async function consolidateMemories(threshold, dryRun, options) {
   const b = await getBackend();
   return b.consolidateMemories(threshold, dryRun, options);
-}
-
-export async function applyDecay(decayRate) {
-  const b = await getBackend();
-  return b.applyDecay(decayRate);
 }
 
 export async function clearExpired() {

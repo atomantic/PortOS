@@ -3,8 +3,8 @@ import { describe, it, expect } from 'vitest';
 import { existsSync, readdirSync, readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { dirname, join } from 'node:path';
-import * as musicVideo from './apiMusicVideo.js';
-import * as film from './apiCodeAnimationFilm.js';
+import { musicVideoFilmApi } from './apiMusicVideo.js';
+import { codeAnimationFilmApi } from './apiCodeAnimationFilm.js';
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const API_REEXPORT = /\bexport\s+\*\s+(?:as\s+\w+\s+)?from\s+['"]\.\/api[A-Za-z0-9_]+(?:\.js)?['"]/g;
@@ -16,9 +16,14 @@ const sourceFiles = readdirSync(HERE).filter(
 
 describe('client/src/services/ catalog', () => {
   it('exposes the standalone film adapter independently of the Music Video transport', () => {
-    expect(typeof musicVideo.getMusicVideoBlender).toBe('function');
-    expect(typeof film.getMusicVideoBlender).toBe('function');
-    expect(film.getMusicVideoBlender).not.toBe(musicVideo.getMusicVideoBlender);
+    expect(typeof musicVideoFilmApi.getMusicVideoBlender).toBe('function');
+    expect(typeof codeAnimationFilmApi.getMusicVideoBlender).toBe('function');
+    expect(codeAnimationFilmApi.getMusicVideoBlender).not.toBe(musicVideoFilmApi.getMusicVideoBlender);
+    const mediaPath = 's010/first frame.png';
+    expect(musicVideoFilmApi.musicVideoBlenderMediaUrl('music video', mediaPath))
+      .toBe('/api/music-video/music%20video/blender/media?path=s010%2Ffirst%20frame.png');
+    expect(codeAnimationFilmApi.musicVideoBlenderMediaUrl('standalone film', mediaPath))
+      .toBe('/api/code-animation/films/standalone%20film/blender/media?path=s010%2Ffirst%20frame.png');
   });
 
   it('forbids re-introducing an all-domain services/api.js barrel (#17007)', () => {

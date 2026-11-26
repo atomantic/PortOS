@@ -486,6 +486,22 @@ describe('app pull-request routes', () => {
     expect(triggerOnDemandTask).toHaveBeenCalledWith('pr-reviewer', 'app-001', { targetPullRequest: 17 });
   });
 
+  it('restores posted feedback on the row and allows another review run', async () => {
+    getAllTasks.mockResolvedValue({ user: { tasks: [] }, cos: { tasks: [{
+      id: 'preflight-17', status: 'completed',
+      metadata: { app: 'app-001', analysisType: 'pr-reviewer', targetPullRequest: 17,
+        preflight: { outcome: 'programmatic', reason: 'patch-conflict-markers', note: 'Posted a comment review.' } },
+    }] } });
+    const listed = await request(app).get('/api/apps/app-001/pull-requests');
+    expect(listed.body.pullRequests[0].reviewAction).toEqual({
+      status: 'feedback', taskId: 'preflight-17', error: 'Posted a comment review.',
+    });
+    const retried = await request(app).post('/api/apps/app-001/pull-requests/17/review');
+    expect(retried.status).toBe(202);
+    expect(retried.body.duplicate).toBe(false);
+    expect(triggerOnDemandTask).toHaveBeenCalledWith('pr-reviewer', 'app-001', { targetPullRequest: 17 });
+  });
+
   it('queues a pr-reviewer run scoped to one request', async () => {
     const response = await request(app).post('/api/apps/app-001/pull-requests/17/review');
 

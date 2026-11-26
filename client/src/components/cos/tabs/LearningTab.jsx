@@ -458,6 +458,8 @@ export default function LearningTab() {
                 </h4>
                 {dismissed.length > 0 && (
                   <button
+                    type="button"
+                    aria-expanded={showDismissed}
                     onClick={() => setShowDismissed(prev => !prev)}
                     className="text-xs text-gray-400 hover:text-white flex items-center gap-1"
                     title={showDismissed ? 'Hide dismissed' : 'Show dismissed'}
@@ -533,6 +535,8 @@ export default function LearningTab() {
                           )}
                         </div>
                         <button
+                          type="button"
+                          aria-label={`Restore recommendation ${d.id}`}
                           onClick={() => handleRestoreRec(d.id)}
                           className="text-port-accent hover:text-port-accent/80 flex items-center gap-1 shrink-0 px-2 py-1 min-h-[40px]"
                           title="Restore this recommendation"
@@ -552,6 +556,8 @@ export default function LearningTab() {
           {confidence?.summary && (
             <div>
               <button
+                type="button"
+                aria-expanded={expandedSections.confidence}
                 onClick={() => toggleSection('confidence')}
                 className="flex items-center gap-2 w-full text-left mb-3"
               >
@@ -664,6 +670,8 @@ export default function LearningTab() {
           {/* Task Type Performance */}
           <div>
             <button
+              type="button"
+              aria-expanded={expandedSections.taskTypes}
               onClick={() => toggleSection('taskTypes')}
               className="flex items-center gap-2 w-full text-left mb-3"
             >
@@ -772,6 +780,8 @@ export default function LearningTab() {
           {skipped?.skippedCount > 0 && (
             <div>
               <button
+                type="button"
+                aria-expanded={expandedSections.skipped}
                 onClick={() => toggleSection('skipped')}
                 className="flex items-center gap-2 w-full text-left mb-3"
               >
@@ -797,6 +807,8 @@ export default function LearningTab() {
                         <div className="flex items-center gap-3">
                           <span className="text-sm text-port-error font-mono">{item.successRate}%</span>
                           <button
+                            type="button"
+                            aria-label={`Reset ${item.taskType}`}
                             onClick={() => handleResetTaskType(item.taskType)}
                             disabled={resettingType === item.taskType}
                             className="flex items-center gap-1 px-2 py-1 text-xs bg-port-accent/20 hover:bg-port-accent/30 text-port-accent rounded transition-colors disabled:opacity-50 min-h-[40px]"
@@ -821,6 +833,8 @@ export default function LearningTab() {
           {durations && Object.keys(durations).length > 1 && (
             <div>
               <button
+                type="button"
+                aria-expanded={expandedSections.durations}
                 onClick={() => toggleSection('durations')}
                 className="flex items-center gap-2 w-full text-left mb-3"
               >
@@ -834,19 +848,20 @@ export default function LearningTab() {
               {expandedSections.durations && (
                 <div className="bg-port-card border border-port-border rounded-lg overflow-x-auto">
                   <table className="w-full min-w-[460px] text-sm">
+                    <caption className="sr-only">Duration Estimates</caption>
                     <thead className="bg-port-bg">
                       <tr>
-                        <th className="text-left p-3 text-gray-500 font-medium">Task Type</th>
-                        <th className="text-right p-3 text-gray-500 font-medium">Avg</th>
-                        <th className="text-right p-3 text-gray-500 font-medium" title="P80 estimate used for progress bars">Est</th>
-                        <th className="text-right p-3 text-gray-500 font-medium">Samples</th>
-                        <th className="text-right p-3 text-gray-500 font-medium">Success</th>
+                        <th scope="col" className="text-left p-3 text-gray-500 font-medium">Task Type</th>
+                        <th scope="col" className="text-right p-3 text-gray-500 font-medium">Avg</th>
+                        <th scope="col" className="text-right p-3 text-gray-500 font-medium" title="P80 estimate used for progress bars">Est</th>
+                        <th scope="col" className="text-right p-3 text-gray-500 font-medium">Samples</th>
+                        <th scope="col" className="text-right p-3 text-gray-500 font-medium">Success</th>
                       </tr>
                     </thead>
                     <tbody>
                       {sortedDurations.map(([taskType, data], idx) => (
                         <tr key={idx} className="border-t border-port-border">
-                          <td className="p-3 text-gray-300 truncate max-w-[200px]">{taskType}</td>
+                          <th scope="row" className="p-3 text-gray-300 truncate max-w-[200px] text-left font-normal">{taskType}</th>
                           <td className="p-3 text-right text-gray-500 font-mono">
                             {data.avgDurationMs ? formatDurationMin(Math.round(data.avgDurationMs / 60000)) || '—' : '—'}
                           </td>
@@ -872,6 +887,8 @@ export default function LearningTab() {
           {learning.insights?.modelEffectiveness?.length > 0 && (
             <div>
               <button
+                type="button"
+                aria-expanded={expandedSections.models}
                 onClick={() => toggleSection('models')}
                 className="flex items-center gap-2 w-full text-left mb-3"
               >
@@ -923,6 +940,8 @@ export default function LearningTab() {
           {routing?.matrix?.length > 0 && (
             <div>
               <button
+                type="button"
+                aria-expanded={expandedSections.routing}
                 onClick={() => toggleSection('routing')}
                 className="flex items-center gap-2 w-full text-left mb-3"
               >
@@ -1005,21 +1024,22 @@ export default function LearningTab() {
                   {/* Full Matrix */}
                   <div className="bg-port-card border border-port-border rounded-lg overflow-x-auto">
                     <table className="w-full min-w-[520px] text-sm">
+                      <caption className="sr-only">Routing Accuracy</caption>
                       <thead className="bg-port-bg">
                         <tr>
-                          <th className="text-left p-3 text-gray-500 font-medium">Task Type</th>
-                          <th className="text-left p-3 text-gray-500 font-medium">Tier</th>
-                          <th className="text-right p-3 text-gray-500 font-medium">Success</th>
-                          <th className="text-right p-3 text-gray-500 font-medium">Pass</th>
-                          <th className="text-right p-3 text-gray-500 font-medium">Fail</th>
+                          <th scope="col" className="text-left p-3 text-gray-500 font-medium">Task Type</th>
+                          <th scope="col" className="text-left p-3 text-gray-500 font-medium">Tier</th>
+                          <th scope="col" className="text-right p-3 text-gray-500 font-medium">Success</th>
+                          <th scope="col" className="text-right p-3 text-gray-500 font-medium">Pass</th>
+                          <th scope="col" className="text-right p-3 text-gray-500 font-medium">Fail</th>
                         </tr>
                       </thead>
-                      <tbody>
-                        {routing.matrix.map((entry) =>
-                          entry.tiers.map((tier, tIdx) => (
+                      {routing.matrix.map((entry) => (
+                        <tbody key={entry.taskType}>
+                          {entry.tiers.map((tier, tIdx) => (
                             <tr key={`${entry.taskType}-${tier.tier}`} className="border-t border-port-border">
                               {tIdx === 0 ? (
-                                <td className="p-3 text-gray-300 max-w-[200px] align-top" rowSpan={entry.tiers.length}>
+                                <th scope="rowgroup" className="p-3 text-gray-300 max-w-[200px] align-top text-left font-normal" rowSpan={entry.tiers.length}>
                                   <div className="[overflow-wrap:anywhere]">{entry.taskType}</div>
                                   {entry.suggestion && (
                                     <div className="text-xs text-gray-500 mt-1" title={entry.suggestion.reason || undefined}>
@@ -1028,7 +1048,7 @@ export default function LearningTab() {
                                       {entry.suggestion.avoidTiers.length > 0 && <>avoid <span className="text-orange-400">{entry.suggestion.avoidTiers.join(', ')}</span></>}
                                     </div>
                                   )}
-                                </td>
+                                </th>
                               ) : null}
                               <td className="p-3 text-orange-400">{tier.tier}</td>
                               <td className={`p-3 text-right font-mono ${getSuccessRateColor(tier.successRate)}`}>
@@ -1037,9 +1057,9 @@ export default function LearningTab() {
                               <td className="p-3 text-right text-port-success">{tier.succeeded}</td>
                               <td className="p-3 text-right text-port-error">{tier.failed}</td>
                             </tr>
-                          ))
-                        )}
-                      </tbody>
+                          ))}
+                        </tbody>
+                      ))}
                     </table>
                   </div>
                 </div>
@@ -1051,6 +1071,8 @@ export default function LearningTab() {
           {learning.insights?.commonErrors?.length > 0 && (
             <div>
               <button
+                type="button"
+                aria-expanded={expandedSections.errors}
                 onClick={() => toggleSection('errors')}
                 className="flex items-center gap-2 w-full text-left mb-3"
               >
@@ -1116,6 +1138,8 @@ export default function LearningTab() {
           {learning.standingLearnings?.length > 0 && (
             <div>
               <button
+                type="button"
+                aria-expanded={expandedSections.standing}
                 onClick={() => toggleSection('standing')}
                 className="flex items-center gap-2 w-full text-left mb-3"
               >

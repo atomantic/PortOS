@@ -35,7 +35,7 @@ vi.mock('../ui/Toast', () => ({ default: toast }));
 vi.mock('../../services/socket', () => ({ default: socket }));
 
 const InboxTab = (await import('./InboxTab')).default;
-const { latestSyncAt, fetchFullToastMessage } = await import('./InboxTab');
+const { latestSyncAttempt, fetchFullToastMessage } = await import('./InboxTab');
 
 const HOUR_AGO = new Date(Date.now() - 60 * 60 * 1000).toISOString();
 
@@ -55,6 +55,7 @@ function renderInbox(accounts, { route = '/messages/inbox' } = {}) {
       <Routes>
         <Route path="/messages/inbox" element={<InboxTab accounts={accounts} />} />
         <Route path="/messages/config" element={<div>CONFIG SCREEN</div>} />
+        <Route path="/messages/sync" element={<div>SYNC SCREEN</div>} />
       </Routes>
     </MemoryRouter>,
   );
@@ -82,7 +83,21 @@ beforeEach(() => {
   api.getMessageDetail.mockResolvedValue(null);
   api.getMessageThread.mockResolvedValue({ messages: [] });
   api.getSettings.mockResolvedValue({});
-  api.syncMessageAccount.mockResolvedValue({ newMessages: 0, pruned: 0 });
+  api.syncMessageAccount.mockResolvedValue({ status: 'success', newMessages: 0, pruned: 0, total: 0 });
+});
+
+it('shows both body refresh actions only with Outlook selected', async () => {
+  const accounts = ['gmail', 'outlook', 'teams'].map(type => ({
+    ...syncedAccount, id: type, name: type, type, supportsBodyRefresh: type === 'outlook',
+  }));
+  renderInbox(accounts);
+  const picker = screen.getByRole('combobox', { name: 'Account' });
+
+  for (const selected of ['', 'gmail', 'outlook', 'teams']) {
+    await act(async () => fireEvent.change(picker, { target: { value: selected } }));
+    expect(Boolean(screen.queryByRole('button', { name: 'Fetch Full Content' }))).toBe(selected === 'outlook');
+    expect(Boolean(screen.queryByRole('button', { name: 'Re-fetch All Content' }))).toBe(selected === 'outlook');
+  }
 });
 
 describe('InboxTab sync reconciliation', () => {
@@ -129,17 +144,17 @@ describe('InboxTab sync reconciliation', () => {
   });
 });
 
-describe('latestSyncAt', () => {
+describe('latestSyncAttempt', () => {
   it('returns null when no account has ever synced', () => {
-    expect(latestSyncAt([neverSyncedAccount, { ...neverSyncedAccount, id: 'b' }])).toBeNull();
+    expect(latestSyncAttempt([neverSyncedAccount, { ...neverSyncedAccount, id: 'b' }])).toBeNull();
   });
 
   it('returns null for a missing list rather than throwing', () => {
-    expect(latestSyncAt(null)).toBeNull();
+    expect(latestSyncAttempt(null)).toBeNull();
   });
 
   it('skips an unparseable timestamp instead of reporting it as the newest sync', () => {
-    expect(latestSyncAt([{ id: 'a', lastSyncAt: 'not-a-date' }])).toBeNull();
+    expect(latestSyncAttempt([{ id: 'a', lastSyncAt: 'not-a-date' }])).toBeNull();
   });
 
   it('compares parsed dates, not raw strings, so an offset stamp sorts correctly', () => {
@@ -147,8 +162,8 @@ describe('latestSyncAt', () => {
     // though it sorts earlier lexicographically.
     const zStamp = '2026-02-01T00:00:00.000Z';
     const offsetStamp = '2026-01-31T20:00:00.000-05:00';
-    expect(latestSyncAt([{ id: 'a', lastSyncAt: zStamp }, { id: 'b', lastSyncAt: offsetStamp }]))
-      .toBe(offsetStamp);
+    expect(latestSyncAttempt([{ id: 'a', lastSyncAt: zStamp }, { id: 'b', lastSyncAt: offsetStamp }]))
+      .toEqual({ id: 'b', lastSyncAt: offsetStamp });
   });
 
   it('picks the newest timestamp and ignores accounts that never synced', () => {
@@ -159,7 +174,7 @@ describe('latestSyncAt', () => {
       neverSyncedAccount,
       { id: 'c', lastSyncAt: newer },
     ];
-    expect(latestSyncAt(accounts)).toBe(newer);
+    expect(latestSyncAttempt(accounts)).toBe(accounts[2]);
   });
 });
 
@@ -200,6 +215,62 @@ describe('InboxTab empty state', () => {
     await waitFor(() => expect(api.getMessageInbox).toHaveBeenCalledTimes(2));
     expect(toast.success).not.toHaveBeenCalled();
     expect(screen.getByText('Nothing synced yet')).toBeInTheDocument();
+  });
+
+  it.each([
+    ['auth-required', 'warning', 'Login required'],
+    ['no-browser', 'error', 'No browser tab available'],
+    ['extraction-failed', 'error', 'Could not extract messages'],
+    ['api-error', 'error', 'The provider API could not complete the sync'],
+    ['not-configured', 'error', 'not-configured'],
+    ['skipped', 'warning', 'Sync skipped'],
+  ])('reports a resolved %s response as an unfinished sync', async (status, level, message) => {
+    api.syncMessageAccount.mockResolvedValue({ status, newMessages: 0, pruned: 0, total: 0 });
+    renderInbox([neverSyncedAccount]);
+    await screen.findByText('Nothing synced yet');
+    fireEvent.click(screen.getAllByRole('button', { name: 'Sync Unread' }).at(-1));
+
+    expect(await screen.findByText('Last sync did not finish')).toBeInTheDocument();
+    expect(screen.getByText(new RegExp(`Personal: .*?${message}`))).toBeInTheDocument();
+    expect(toast[level]).toHaveBeenCalledWith(expect.stringMatching(new RegExp(`^Personal: .*?${message}`)));
+    expect(toast.success).not.toHaveBeenCalled();
+    expect(screen.queryByText('Your inbox is empty')).not.toBeInTheDocument();
+  });
+
+  it('counts successful and partial syncs while naming the account that needs login', async () => {
+    const accounts = [
+      neverSyncedAccount,
+      { ...neverSyncedAccount, id: 'work', name: 'Work' },
+      { ...neverSyncedAccount, id: 'other', name: 'Other' },
+    ];
+    api.syncMessageAccount
+      .mockResolvedValueOnce({ status: 'success', newMessages: 3, pruned: 1, total: 3 })
+      .mockResolvedValueOnce({ status: 'auth-required', newMessages: 0, pruned: 0, total: 0 })
+      .mockResolvedValueOnce({ status: 'partial', reason: 'Only one folder synced', newMessages: 2, pruned: 0, total: 2 });
+    renderInbox(accounts);
+    await screen.findByText('Nothing synced yet');
+    fireEvent.click(screen.getAllByRole('button', { name: 'Sync Unread' }).at(-1));
+
+    await waitFor(() => expect(toast.success).toHaveBeenCalledWith('Sync complete — 5 new, 1 removed'));
+    expect(toast.warning).toHaveBeenCalledWith('Work: Login required — open Browser page to authenticate');
+    expect(toast.warning).toHaveBeenCalledWith('Other: Sync incomplete: Only one folder synced');
+  });
+
+  it('shows the newest stored failure after reload and links to Sync', async () => {
+    const failedAccount = {
+      ...neverSyncedAccount, id: 'work', name: 'Work',
+      lastSyncAt: new Date().toISOString(), lastSyncStatus: 'auth-required',
+    };
+    renderInbox([syncedAccount, failedAccount]);
+
+    expect(await screen.findByText('Last sync did not finish')).toBeInTheDocument();
+    expect(screen.getByText('Work: Login required — open Browser page to authenticate')).toBeInTheDocument();
+    fireEvent.change(screen.getByRole('combobox'), { target: { value: syncedAccount.id } });
+    expect(await screen.findByText('No messages match this view')).toBeInTheDocument();
+    fireEvent.change(screen.getByRole('combobox'), { target: { value: failedAccount.id } });
+    expect(await screen.findByText('Last sync did not finish')).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: 'Open Sync' }));
+    expect(await screen.findByText('SYNC SCREEN')).toBeInTheDocument();
   });
 
   it('reports an empty result with the last sync time once a sync has run', async () => {
@@ -516,4 +587,22 @@ describe('fetchFullToastMessage', () => {
   it('says nothing to fetch when total is 0', () => {
     expect(fetchFullToastMessage({ updated: 0, total: 0 })).toBe('Nothing to fetch');
   });
+});
+
+it.each([
+  [{ type: 'teams' }, false],
+  [{ type: 'teams', actions: [] }, false],
+  [{ type: 'gmail', actions: ['archive'] }, true],
+])('renders only supported inbox actions for %j', async (capabilities, archive) => {
+  const account = { ...syncedAccount, ...capabilities };
+  const row = {
+    id: 'teams-message', accountId: account.id, source: account.type, subject: 'Example message',
+    date: HOUR_AGO, evaluation: { action: 'delete', reason: 'Example recommendation' },
+  };
+  api.getMessageInbox.mockResolvedValueOnce({ messages: [row] });
+  renderInbox([account]);
+  expect(await screen.findByText(row.subject)).toBeInTheDocument();
+  expect(Boolean(screen.queryByRole('button', { name: 'Archive' }))).toBe(archive);
+  expect(screen.queryByRole('button', { name: /delete/i })).not.toBeInTheDocument();
+  expect(screen.getByRole('button', { name: 'Review' })).toBeInTheDocument();
 });

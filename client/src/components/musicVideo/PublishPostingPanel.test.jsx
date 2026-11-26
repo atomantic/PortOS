@@ -167,15 +167,16 @@ describe('PublishPostingPanel (#9282)', () => {
     expect(publishing.prepare).toHaveBeenLastCalledWith('x', { storyImage: 't1.jpg' });
   });
 
-  it('lets the director pick which 9:16 cut a Shorts draft posts (#10150)', () => {
+  it.each([[undefined, 'fit'], ['crop', 'custom crop']])('lets the director pick the %s 9:16 kit cut for Shorts', (layout, label) => {
     const publishing = hook();
-    const p = { ...project({ master: { renderHistoryId: 'r1' }, exports: [{ kind: 'vertical-9x16', filename: 'v.mp4', startSec: 10, endSec: 40 }] }),
+    const p = { ...project({ master: { renderHistoryId: 'r1' }, exports: [{ kind: 'vertical-9x16', filename: 'v.mp4', startSec: 10, endSec: 40, layout }] }),
       renderHistoryId: 'r1', excerpts: [{ id: 'ex-1', status: 'complete', aspect: '9:16', filename: 'e.mp4', startSec: 60, endSec: 90 }, { id: 'ex-2', status: 'complete', aspect: '16:9', filename: 'w.mp4' }] };
     render(<PublishPostingPanel project={p} publishing={publishing} />);
     expandAll();
     const shorts = row('YouTube Shorts');
     const select = within(shorts).getByLabelText('Vertical cut to post');
     expect(within(select).getAllByRole('option').map((o) => o.value)).toEqual(['', 'ex-1', 'kit-vertical']);
+    expect(within(select).getByRole('option', { name: `Kit vertical (${label}) 0:10-0:40` })).toHaveValue('kit-vertical');
     fireEvent.change(select, { target: { value: 'kit-vertical' } });
     fireEvent.click(within(shorts).getByRole('button', { name: 'Fill draft' }));
     expect(publishing.prepare).toHaveBeenCalledWith('shorts', { cutId: 'kit-vertical' });

@@ -18,6 +18,7 @@ import { join } from 'path';
 import { mkdir, writeFile, readFile, rm } from 'fs/promises';
 import { createHash } from 'crypto';
 import { ownTestBodies } from '../../lib/mockPathsDataRoot.js';
+import { acquireBackupSnapshotCut, _backupSnapshotWaitersForTests } from '../../lib/backupSnapshotBoundary.js';
 import {
   capSharpThreads, lockAllAnchors, lockAllAnchorsReal, expectCarriesCorrection, normalizeManifestForComparison,
   writeCandidatePng,
@@ -594,6 +595,35 @@ describe('startWalkGeneration', () => {
     // must be ABSENT rather than 0, so "we couldn't measure it" never renders as
     // "grok returned a zero-length clip" (#3022).
     expect(runs[0]).not.toHaveProperty('sourceVideoSeconds');
+  });
+
+  it('keeps a finished Grok clip in flight through a long backup cut, then attaches it', async () => {
+    const id = await characterWithLockedAnchors(newId(), ['east']);
+    const tui = Promise.withResolvers();
+    executeTuiRun.mockReturnValueOnce(tui.promise);
+    const { runId } = await startWalkGeneration(id, { direction: 'east' });
+    const [{ workspacePath }] = executeTuiRun.mock.lastCall;
+    await writeFile(join(workspacePath, 'source-video.mp4'), 'grok-clip-bytes');
+    const release = await acquireBackupSnapshotCut();
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout', 'Date'] });
+    try {
+      tui.resolve();
+      await vi.waitFor(() => expect(_backupSnapshotWaitersForTests().publications).toBe(1));
+      // Cross both the old admission timeout and the Grok render staleness window.
+      await vi.advanceTimersByTimeAsync(32 * 60_000);
+      const { runs } = await getWalkState(id);
+      expect(runs.find(run => run.id === runId)).toMatchObject({ status: 'rendering' });
+      expect(runWalkPostprocess).not.toHaveBeenCalled();
+      expect(_backupSnapshotWaitersForTests().publications).toBe(1);
+    } finally {
+      vi.useRealTimers();
+      release();
+    }
+    await vi.waitFor(async () => {
+      const { runs } = await getWalkState(id);
+      expect(runs.find(run => run.id === runId)).toMatchObject({ status: 'candidate' });
+    });
+    expect(runWalkPostprocess).toHaveBeenCalledOnce();
   });
 
   it('stamps the DELIVERED clip length, which need not match what was requested', async ({ signal }) => {

@@ -1,4 +1,5 @@
-import { useState, useEffect, useRef, useCallback, useMemo } from 'react';
+import { useState, useEffect, useRef, useCallback, useMemo, useId } from 'react';
+import { normalizeEmail } from '../../../../server/lib/messageRecipientEmail.js';
 import { ArrowLeft, Reply, Sparkles, Send, RefreshCw, Archive, Trash2, User, ImageOff } from 'lucide-react';
 import toast from '../ui/Toast';
 import { formatCount, formatDateTime } from '../../utils/formatters';
@@ -13,6 +14,7 @@ import {
 } from '../../services/apiMessages.js';
 import useListResource from '../../hooks/useListResource';
 import ListLoadError from '../ui/ListLoadError';
+import { supportedMessageActions } from './messageActionCapabilities';
 import { useSingleFlight } from '../../hooks/useSingleFlight';
 
 // Any src/href/poster/url()/@import that points at a remote http(s) or
@@ -127,6 +129,8 @@ function SafeHtmlBody({ html }) {
 export default function MessageDetail({ message, accounts, onBack }) {
   const [showReply, setShowReply] = useState(false);
   const [replyBody, setReplyBody] = useState('');
+  const [replyEmail, setReplyEmail] = useState('');
+  const replyEmailId = useId();
   const [generating, setGenerating] = useState(false);
   const [generatedDraftId, setGeneratedDraftId] = useState(null);
   const [refreshing, setRefreshing] = useState(false);
@@ -147,12 +151,19 @@ export default function MessageDetail({ message, accounts, onBack }) {
       .catch(err => console.warn(`⚠️ Failed to load voice mode setting: ${err.message}`));
   }, []);
 
-  const account = accounts.find(a => a.id === displayedMessage.accountId) || accounts[0];
+  const messageAccount = accounts.find(a => a.id === displayedMessage.accountId);
+  const account = messageAccount || accounts[0];
+  const actions = supportedMessageActions(displayedMessage, messageAccount);
+  const senderEmail = displayedMessage.from?.email;
+  const teamsSenderEmail = account?.type === 'teams' ? normalizeEmail(senderEmail) : null;
+  const needsReplyEmail = account?.type === 'teams' && !teamsSenderEmail;
+  const recipientEmail = needsReplyEmail ? normalizeEmail(replyEmail) : teamsSenderEmail || senderEmail;
 
   // Load thread messages if this message is part of a thread. A failed read
   // falls back to the single message but says so, so a missing conversation is
   // not mistaken for a one-message thread.
   const { threadId, accountId } = message;
+  const supportsBodyRefresh = accounts.some(a => a.id === accountId && a.supportsBodyRefresh === true);
   const hasThreadRef = !!(threadId && accountId);
   const fetchThread = useCallback(
     () => getMessageThread(accountId, threadId, { silent: true }).then(data => data?.messages || []),
@@ -215,9 +226,17 @@ export default function MessageDetail({ message, accounts, onBack }) {
     }
   };
 
+  const closeReply = () => {
+    setShowReply(false);
+    setReplyBody('');
+    setReplyEmail('');
+    setGeneratedDraftId(null);
+  };
+
   const handleCreateDraft = useSingleFlight(async () => {
     if (!account) return toast.error('No account available');
-    const to = [displayedMessage.from?.email].filter(Boolean);
+    if (needsReplyEmail && !recipientEmail) return;
+    const to = recipientEmail ? [recipientEmail] : [];
     const subject = `Re: ${displayedMessage.subject || ''}`;
     const result = generatedDraftId
       ? await updateMessageDraft(generatedDraftId, { to, subject, body: replyBody }).catch(() => null)
@@ -230,9 +249,7 @@ export default function MessageDetail({ message, accounts, onBack }) {
         }).catch(() => null);
     if (!result) return;
     toast.success('Draft saved');
-    setShowReply(false);
-    setReplyBody('');
-    setGeneratedDraftId(null);
+    closeReply();
   });
 
   const handleAction = (action) => {
@@ -268,16 +285,33 @@ export default function MessageDetail({ message, accounts, onBack }) {
           <button onClick={() => setShowReply(!showReply)} aria-label="Reply" className="p-1.5 min-w-[44px] min-h-[44px] inline-flex items-center justify-center text-port-accent hover:bg-port-accent/10 rounded transition-colors" title="Reply"><Reply size={14} /></button>
           <button onClick={() => setUseVoice(v => !v)} aria-label={useVoice ? 'Conversational tone ON — private identity documents stay separate' : 'Conversational tone OFF — replies use professional tone'} className={`p-1.5 min-w-[44px] min-h-[44px] inline-flex items-center justify-center rounded transition-colors ${useVoice ? 'text-port-accent-2 bg-port-accent-2/10' : 'text-gray-500 hover:text-gray-300'}`} title={useVoice ? 'Conversational tone ON — private identity documents stay separate' : 'Conversational tone OFF — replies use professional tone'}><User size={14} /></button>
           <button onClick={handleGenerateReply} disabled={generating} aria-label="AI Reply" className="p-1.5 min-w-[44px] min-h-[44px] inline-flex items-center justify-center text-port-accent-2 hover:bg-port-accent-2/10 rounded transition-colors disabled:opacity-50" title="AI Reply"><Sparkles size={14} className={generating ? 'animate-pulse' : ''} /></button>
-          <button onClick={handleRefresh} disabled={refreshing} aria-label="Refresh" className="p-1.5 min-w-[44px] min-h-[44px] inline-flex items-center justify-center text-port-accent hover:bg-port-accent/10 rounded transition-colors disabled:opacity-50" title="Refresh"><RefreshCw size={14} className={refreshing ? 'animate-spin' : ''} /></button>
+          {supportsBodyRefresh && (
+            <button onClick={handleRefresh} disabled={refreshing} aria-label="Refresh" className="p-1.5 min-w-[44px] min-h-[44px] inline-flex items-center justify-center text-port-accent hover:bg-port-accent/10 rounded transition-colors disabled:opacity-50" title="Refresh"><RefreshCw size={14} className={refreshing ? 'animate-spin' : ''} /></button>
+          )}
           <span className="w-px h-4 bg-port-border mx-0.5" />
-          <button onClick={() => handleAction('archive')} disabled={!!actioning} aria-label="Archive" className="p-1.5 min-w-[44px] min-h-[44px] inline-flex items-center justify-center text-port-warning hover:bg-port-warning/10 rounded transition-colors disabled:opacity-50" title="Archive"><Archive size={14} /></button>
-          <button onClick={() => handleAction('delete')} disabled={!!actioning} aria-label="Delete" className="p-1.5 min-w-[44px] min-h-[44px] inline-flex items-center justify-center text-port-error hover:bg-port-error/10 rounded transition-colors disabled:opacity-50" title="Delete"><Trash2 size={14} /></button>
+          {displayedMessage.accountId && actions.includes('archive') && <button onClick={() => handleAction('archive')} disabled={!!actioning} aria-label="Archive" className="p-1.5 min-w-[44px] min-h-[44px] inline-flex items-center justify-center text-port-warning hover:bg-port-warning/10 rounded transition-colors disabled:opacity-50" title="Archive"><Archive size={14} /></button>}
+          {displayedMessage.accountId && actions.includes('delete') && <button onClick={() => handleAction('delete')} disabled={!!actioning} aria-label="Delete" className="p-1.5 min-w-[44px] min-h-[44px] inline-flex items-center justify-center text-port-error hover:bg-port-error/10 rounded transition-colors disabled:opacity-50" title="Delete"><Trash2 size={14} /></button>}
         </div>
       </div>
 
       {/* Reply composer */}
       {showReply && (
         <div className="p-4 bg-port-card rounded-lg border border-port-border space-y-3">
+          {needsReplyEmail && (
+            <div>
+              <label htmlFor={replyEmailId} className="block text-xs text-gray-400 mb-1">Recipient email</label>
+              <input
+                id={replyEmailId}
+                type="email"
+                required
+                value={replyEmail}
+                onChange={e => setReplyEmail(e.target.value)}
+                aria-describedby={`${replyEmailId}-help`}
+                className="w-full px-3 py-2 bg-port-bg border border-port-border rounded-lg text-sm text-white focus:outline-none focus:border-port-accent"
+              />
+              <p id={`${replyEmailId}-help`} className="mt-1 text-xs text-gray-400">Enter a valid email address for the Teams recipient.</p>
+            </div>
+          )}
           <textarea
             value={replyBody}
             onChange={(e) => setReplyBody(e.target.value)}
@@ -289,12 +323,13 @@ export default function MessageDetail({ message, accounts, onBack }) {
           <div className="flex gap-2">
             <button
               onClick={handleCreateDraft}
-              className="flex items-center gap-2 px-4 py-2 bg-port-accent text-white rounded-lg text-sm hover:bg-port-accent/80 transition-colors"
+              disabled={needsReplyEmail && !recipientEmail}
+              className="flex items-center gap-2 px-4 py-2 bg-port-accent text-white rounded-lg text-sm hover:bg-port-accent/80 transition-colors disabled:opacity-50"
             >
               <Send size={16} /> Save Draft
             </button>
             <button
-              onClick={() => { setShowReply(false); setReplyBody(''); setGeneratedDraftId(null); }}
+              onClick={closeReply}
               className="px-4 py-2 bg-port-border text-gray-300 rounded-lg text-sm hover:bg-port-border/80 transition-colors"
             >
               Cancel
@@ -336,7 +371,7 @@ export default function MessageDetail({ message, accounts, onBack }) {
                   <div className="whitespace-pre-wrap">{msg.bodyText || '(no content)'}</div>
                 )}
               </div>
-              {!msg.bodyFull && msg.bodyText && (
+              {supportsBodyRefresh && !msg.bodyFull && msg.bodyText && (
                 <div className="text-xs text-gray-600 italic">Preview only — re-sync for full content</div>
               )}
             </div>

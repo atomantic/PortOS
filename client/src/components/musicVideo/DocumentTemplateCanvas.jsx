@@ -4,10 +4,10 @@ import { createDocumentTemplateDrawing } from './documentTemplateDrawing.js';
 import { resolveSourceTake } from '../../../../server/lib/musicVideo/musicVideoSourceTake.js';
 import { CLIP_PRELOAD_SHOTS, shotStillIds } from './animaticTiming.js';
 import { sceneVisualLayer } from '../../lib/musicVideoLayers.js';
-import { sceneImageEffect, scenePhotoSequence, photoSequenceLayers, photoSequenceIndex } from '../../lib/musicVideoImageEffects.js';
-import { blockBox, edgeGlows, glitchFrameParams, mergeGlitchFrames, sceneImageEffectGlitchFrames, sceneShotGlitchFrames, sceneTransitionSections, transitionGlitchFrames } from '../../lib/musicVideoTransitions.js';
-import { createMusicVideoGlitchPainter } from '../../lib/musicVideoGlitchCanvas.js';
-import { compileWipeNode, createMusicVideoWipePainter, wipeDefinition } from '../../lib/musicVideoWipes.js';
+import { sceneImageEffect, scenePhotoSequence, photoSequenceLayers, photoSequenceIndex } from '../../../../server/lib/musicVideo/musicVideoImageEffects.js';
+import { blockBox, edgeGlows, glitchFrameParams, mergeGlitchFrames, sceneImageEffectGlitchFrames, sceneShotGlitchFrames, sceneTransitionSections, transitionGlitchFrames } from '../../../../server/lib/musicVideo/musicVideoTransitions.js';
+import { createMusicVideoGlitchPainter } from '../../../../server/lib/musicVideo/musicVideoGlitchCanvas.js';
+import { compileWipeNode, createMusicVideoWipePainter, wipeDefinition } from '../../../../server/lib/musicVideo/musicVideoWipes.js';
 import './documentTemplateFonts.css';
 
 const rig = globalThis.PORTOS_CAMERA_RIG;

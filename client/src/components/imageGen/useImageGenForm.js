@@ -25,7 +25,7 @@ import {
   referenceSlotsFor,
   supportsReferenceStrength,
 } from '../../lib/imageGenBackends';
-import { clampImageDimensions } from '../../lib/imageGenResolutions';
+import { clampImageDimensions, clampImageEdge, localImageResolutionBounds } from '../../lib/imageGenResolutions';
 import { peerModelRequiresInput } from '../../lib/federatedMediaReadiness.js';
 import { isHardwareCompatible } from '../../utils/systemCapabilities';
 import { resolveCleanersFromConfig } from '../../lib/imageCleaners';
@@ -508,8 +508,6 @@ export function useImageGenForm({ searchParams, setSearchParams, backend, handof
   const isEditOnlyModel = currentModel?.editOnly === true;
   const editImageMissing = isLocalMode && isEditOnlyModel && initImage.source == null;
   const isQwen21Model = currentModel?.pipelineClass === 'QwenImage21Pipeline';
-  const isFalMode = effectiveMode === IMAGE_GEN_MODE.FAL;
-  const isGoogleMode = effectiveMode === IMAGE_GEN_MODE.GOOGLE;
   // A model that declares its own reference cap (separate from any init image).
   const localDeclaredRefs = Number.isInteger(currentModel?.maxReferenceImages) && currentModel.maxReferenceImages > 0;
   const cloudModelPicker = resolveCloudModelPicker({
@@ -520,30 +518,28 @@ export function useImageGenForm({ searchParams, setSearchParams, backend, handof
       [IMAGE_GEN_MODE.FAL]: backend.falCatalog?.models,
     },
   });
-  const textOnlyCloudModel = !remoteTargetActive && isCloudMode
-    && maxInputImages(effectiveMode, cloudModelPicker.resolvedModel) === 0;
+  const cloudInputCap = isCloudMode ? maxInputImages(effectiveMode, cloudModelPicker.resolvedModel) : null;
+  const textOnlyCloudModel = !remoteTargetActive && cloudInputCap === 0;
   const i2iCapable = remoteTargetActive
     ? remoteTarget.acceptsInput('initImage') || initImage.source != null
     : !textOnlyCloudModel && isI2iCapableMode(effectiveMode) && (!isLocalMode || currentModel?.supportsImg2Img !== false);
   const referenceSlotCount = remoteTargetActive
     ? (remoteTarget.acceptsInput('referenceImages') ? 4 : 0)
     : referenceSlotsFor(effectiveMode, {
-    hasInitImage: initImage.source != null,
-    // fal.ai's edit models take 9–14 references (a mood board is the point),
-    // so it gets every form slot; the per-model cap below still bounds it.
-    maxSlots: effectiveMode === IMAGE_GEN_MODE.RUNWAY ? REFERENCE_SLOT_COUNT
-      : isLocalMode && localDeclaredRefs ? Math.min(REFERENCE_SLOT_COUNT, currentModel.maxReferenceImages)
-        : (isLocalMode && (isQwen21Model || isFlux3Model)) || isFalMode || isGoogleMode ? 10 : 4,
-    localSupportsReferences: isFlux2Model || isQwen21Model || isFlux3Model || localDeclaredRefs,
-    localInputCap: isQwen21Model || isFlux3Model ? 10 : null,
-    cloudModelId: cloudModelPicker.resolvedModel,
-  });
+      hasInitImage: initImage.source != null,
+      maxSlots: Number.isFinite(cloudInputCap) ? REFERENCE_SLOT_COUNT
+        : isLocalMode && localDeclaredRefs ? Math.min(REFERENCE_SLOT_COUNT, currentModel.maxReferenceImages)
+          : isLocalMode && (isQwen21Model || isFlux3Model) ? 10 : 4,
+      localSupportsReferences: isFlux2Model || isQwen21Model || isFlux3Model || localDeclaredRefs,
+      localInputCap: isQwen21Model || isFlux3Model ? 10 : null,
+      cloudModelId: cloudModelPicker.resolvedModel,
+    });
   const activeStylePresets = useMemo(() => [
     selectedUniverse ? withUniverseLabel(universeStylePreset(selectedUniverse)) : null,
     stylePreset,
   ].filter(Boolean), [selectedUniverse, stylePreset]);
-  const styledPrompt = useMemo(
-    () => composeStyledPrompt(prompt, negativePrompt, activeStylePresets).prompt,
+  const composedPrompt = useMemo(
+    () => composeStyledPrompt(prompt, negativePrompt, activeStylePresets),
     [prompt, negativePrompt, activeStylePresets],
   );
   const activeReferenceImages = useMemo(
@@ -559,8 +555,16 @@ export function useImageGenForm({ searchParams, setSearchParams, backend, handof
     [referenceImages, referenceSlotCount],
   );
   const unsupportedCloudInputs = textOnlyCloudModel && (initImage.source != null || droppedRefCount > 0);
-  const unsupportedLocalInputs = isLocalMode && !remoteTargetActive && currentModel?.runner === 'moss-swift'
-    && (selectedLoras.length > 0 || initImage.source != null || referenceImages.some(slot => slot.file != null));
+  const localModel = isLocalMode && !remoteTargetActive ? currentModel : null;
+  const unsupportedLocalInputs = (
+    (localModel?.supportsLoras === false && selectedLoras.length > 0)
+    || (localModel?.supportsImg2Img === false && initImage.source != null)
+    || (localModel?.supportsNegativePrompt === false && composedPrompt.negativePrompt !== '')
+    || (localModel?.runner === 'moss-swift' && referenceImages.some(slot => slot.file != null))
+  );
+  const resolutionBounds = localImageResolutionBounds(localModel?.runner);
+  const invalidLocalResolution = Boolean(resolutionBounds
+    && [width, height].some(edge => clampImageEdge(edge, resolutionBounds) !== edge));
   const remoteUnsupportedInputs = useMemo(() => {
     if (!remoteTargetActive) return null;
     const model = remoteTarget.model;
@@ -786,6 +790,7 @@ export function useImageGenForm({ searchParams, setSearchParams, backend, handof
     derived: {
       loraHandoffBlocked,
       unsupportedLocalInputs,
+      invalidLocalResolution,
       unsupportedCloudInputs,
       currentModel,
       isFlux2Model,
@@ -794,7 +799,7 @@ export function useImageGenForm({ searchParams, setSearchParams, backend, handof
       i2iCapable,
       referenceSlotCount,
       showReferenceStrength: supportsReferenceStrength(effectiveMode) && isFlux2Model,
-      styledPrompt,
+      styledPrompt: composedPrompt.prompt,
       activeStylePresets,
       populatedRefs,
       droppedRefCount,

@@ -31,7 +31,7 @@ vi.mock('../../lib/workTracker.js', async (importOriginal) => ({
 }));
 vi.mock('../../lib/primaryCheckoutGuard.js', () => ({ capturePrimaryCheckoutState: async () => null }));
 vi.mock('./agentPromptBuilder.js', () => ({
-  buildAgentPrompt: async () => f.prompt,
+  buildAgentPrompt: vi.fn(async () => f.prompt),
   getAppWorkspace: async () => '/repos/example',
   isClaimFlowTask: () => false,
   promptOpensOwnPr: () => false,
@@ -60,6 +60,7 @@ import { writeFileGuarded } from '../../lib/fileUtils.js';
 import { PRIVACY_FACTS_HEADING, PRIVACY_FACTS_NOTICE } from '../../lib/privacyPrompt.js';
 import { fenceBlock } from '../../lib/promptFencing.js';
 import { dispatchAgentRun } from './agentSpawnDispatch.js';
+import { buildAgentPrompt } from './agentPromptBuilder.js';
 import { getActiveAgentIds, protectedAgentIds, setUseRunner } from './agentState.js';
 import { spawnDirectly } from './agentCliSpawning.js';
 import { spawnTuiAgent } from './agentTuiSpawning.js';
@@ -93,17 +94,42 @@ beforeEach(() => {
 });
 
 
-it('keeps opted-in vault facts in the API dispatch only and makes its archive machine-local', async () => {
-  const fact = 'Skylar Example';
-  f.provider = { id: 'example-api', type: 'api' };
-  f.prompt = fenceBlock('Digital twin reference data', [
-    PRIVACY_FACTS_HEADING, PRIVACY_FACTS_NOTICE, `- Name — legal_name: ${fact}`, '', '---', '', 'Keep this reference.',
-  ].join('\n'), 4000);
+it('passes TUI prompt memory lineage to the run and agent records', async () => {
+  f.tui = true;
+  f.provider = { id: 'example-tui', type: 'tui', command: 'codex' };
+  const injectedMemories = [{ id: 'mem-example', version: 2, relevance: 0.8 }];
+  vi.mocked(buildAgentPrompt).mockImplementationOnce(async (_task, _config, _workspace, _worktree, { promptTrace }) => {
+    promptTrace.injectedMemories = injectedMemories;
+    return 'Prompt with retrieved memory';
+  });
   const context = newContext();
 
   await dispatchAgentRun(context);
 
-  expect(spawnDirectly).toHaveBeenCalledWith(expect.objectContaining({ prompt: f.prompt }));
+  expect(createAgentRun).toHaveBeenCalledWith(expect.objectContaining({ injectedMemories }));
+  expect(registerAgent).toHaveBeenCalledWith(context.agentId, task.id, expect.objectContaining({ injectedMemories }));
+  expect(spawnTuiAgent).toHaveBeenCalledWith(expect.objectContaining({ prompt: 'Prompt with retrieved memory' }));
+});
+
+it.each(['api', 'tui'])('archives opted-in vault facts safely for %s dispatch', async (type) => {
+  const fact = 'Skylar Example';
+  f.tui = type === 'tui';
+  f.provider = { id: 'example-provider', type, ...(f.tui ? { command: 'claude' } : {}) };
+  f.prompt = fenceBlock('Digital twin reference data', [
+    PRIVACY_FACTS_HEADING, PRIVACY_FACTS_NOTICE, `- Name — legal_name: ${fact}`, '', '---', '', 'Keep this reference.',
+  ].join('\n'), 4000);
+  const context = newContext();
+  if (f.tui) {
+    vi.mocked(buildAgentPrompt).mockResolvedValueOnce({ userPrompt: f.prompt, systemPrompt: 'Operating contract' });
+  }
+
+  await dispatchAgentRun(context);
+
+  expect(f.tui ? spawnTuiAgent : spawnDirectly).toHaveBeenCalledWith(expect.objectContaining({ prompt: f.prompt }));
+  if (f.tui) {
+    expect(buildAgentPrompt).toHaveBeenCalledWith(task, {}, '/repos/example', null, expect.objectContaining({ split: true }));
+    expect(writeFileGuarded).toHaveBeenCalledWith(expect.stringMatching(/system-prompt\.md$/), 'Operating contract');
+  }
   const [path, stored] = vi.mocked(writeFileGuarded).mock.calls[0];
   expect(path).toMatch(/prompt\.txt$/);
   expect(stored).not.toContain(fact);

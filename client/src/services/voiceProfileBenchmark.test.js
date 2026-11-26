@@ -1,3 +1,4 @@
+// @vitest-environment node
 import { afterEach, describe, expect, it, vi } from 'vitest';
 vi.mock('./apiVoice', () => ({ benchmarkProfileInteractive: vi.fn(), completeVoiceProfileInteractiveBenchmark: vi.fn() }));
 import { benchmarkProfileInteractive, completeVoiceProfileInteractiveBenchmark } from './apiVoice';

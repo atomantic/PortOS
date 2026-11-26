@@ -2,8 +2,10 @@ import http from 'node:http';
 import { once } from 'node:events';
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { PORTOS_SCHEMA_VERSIONS } from '../lib/schemaVersions.js';
+import { hasUnattributedMedia } from './mediaOriginReconcile.js';
 
 // Mock all dependencies
+vi.mock('./mediaOriginReconcile.js', () => ({ hasUnattributedMedia: vi.fn().mockResolvedValue(false) }));
 vi.mock('./instances.js', async () => ({
   // Keep the REAL resolveEffectiveCategories (and the default map it resolves
   // against): a hand-written stand-in would let the shipped defaults drift from
@@ -363,6 +365,29 @@ describe('syncOrchestrator', () => {
       expect(applyMemoryChanges).toHaveBeenCalledTimes(1);
       expect(result.brain.brainSeq).toBe(0);
       expect(result.memory.memorySeq).toBe('0');
+    });
+
+    it('replays an old reader cursor and drains a deletion-only page before the next live page', async () => {
+      const { readJSONFile } = await import('../lib/fileUtils.js');
+      readJSONFile.mockResolvedValue({ [mockPeer.instanceId]: { memorySeq: '10' } });
+      const marker = { id: '00000000-0000-4000-8000-00000000aaaa', deletedAt: '2026-01-02T00:00:00Z' };
+      const cursors = [];
+      mockFetch.mockImplementation(async (url) => {
+        if (!url.includes('/api/memory/sync')) return { ok: true, json: async () => ({}) };
+        const params = new URL(url).searchParams;
+        expect(params.get('tombstoneVersion')).toBe('1');
+        const since = params.get('since');
+        cursors.push(since);
+        const data = since === '0' ? { memories: [], deletedIds: [marker], maxSequence: '4', hasMore: true }
+          : { memories: [{ id: 'm2' }], deletedIds: [], maxSequence: '12', hasMore: false };
+        return { ok: true, json: async () => data };
+      });
+      applyMemoryChanges.mockResolvedValueOnce({ inserted: 0, updated: 0, deleted: 1 })
+        .mockResolvedValueOnce({ inserted: 1, updated: 0 });
+      const result = await syncWithPeer(mockPeer);
+      expect(cursors).toEqual(['10', '0', '4']);
+      expect(applyMemoryChanges).toHaveBeenCalledWith([], 0, [marker]);
+      expect(result.memory).toMatchObject({ memorySeq: '12', totalApplied: 2 });
     });
 
     it('advances on the numeric memory cursor older peers send', async () => {
@@ -1446,6 +1471,7 @@ describe('syncOrchestrator', () => {
       return { ok: false };
     });
     await syncWithPeer(peer);
+    expect(vi.mocked(hasUnattributedMedia).mock.calls).toEqual(kind === 'image' ? [['image', { peerId: peer.instanceId }]] : []);
     expect(dataSync.applyRemote).toHaveBeenCalledWith(category, evidence, expect.objectContaining({ peerId: peer.instanceId, inventory: true, inventoryKind: kind }));
     expect(mockFetch.mock.calls.some(([url]) => url.includes(`/${category}/snapshot`))).toBe(false);
     dataSync.applyRemote.mockClear();

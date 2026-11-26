@@ -23,6 +23,7 @@ import { isNonBlankStr, trimTo } from '../../lib/textUtils.js';
 import { UPLOAD_AUDIO_EXTENSIONS } from '../../lib/mimeTypes.js';
 import { normalizeWaveSketch } from '../../lib/waveSketch.js';
 import { withBackupAssetPublication } from '../../lib/backupSnapshotBoundary.js';
+import { FINISHED_OUTPUT_ADMISSION_MS } from '../../lib/backupPublicationWait.js';
 import { SUPPORTED_AUDIO_EXTENSIONS } from '../pipeline/musicLibrary.js';
 import { resolveMoodBoardStyleSource as resolveMoodBoard, resolveUniverseStyleSource as resolveUniverse } from '../creativeStyleSources.js';
 import {
@@ -634,6 +635,9 @@ export async function startCodeAnimationGeneration(input) {
           updatedAt: completedAt,
         });
         committed = true;
+      }, {
+        timeoutMs: FINISHED_OUTPUT_ADMISSION_MS,
+        onWait: () => console.log(`⏸️ Code animation ${id.slice(0, 8)} waiting for the backup to finish before saving`),
       });
       if (!committed) throw canceledError();
       activeJobs.delete(id);

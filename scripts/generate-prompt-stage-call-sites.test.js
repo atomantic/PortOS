@@ -203,6 +203,18 @@ describe('prompt stage call-site scanner', () => {
     expect(index['demo-alpha']).toEqual(['server/services/a.js']);
   });
 
+  it('visits JSX expressions and deduplicates repeated references within one file', () => {
+    const index = buildStageCallSites({
+      shippedStageKeys,
+      sources: [
+        src('server/services/a.js', "const view = <Panel stage={getStage('demo-alpha')}>{['demo-alpha', 'demo-alpha']}</Panel>;"),
+        src('server/services/b.js', "const STAGE = 'demo-alpha';"),
+      ],
+    });
+
+    expect(index['demo-alpha']).toEqual(['server/services/a.js', 'server/services/b.js']);
+  });
+
   it('sorts keys and paths so the manifest is byte-stable', () => {
     const index = buildStageCallSites({
       shippedStageKeys,

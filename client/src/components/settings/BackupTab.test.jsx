@@ -318,6 +318,9 @@ describe('BackupTab', () => {
       });
       render(<BackupTab />);
       await waitFor(() => expect(screen.getByText(/Failed to load backup settings/i)).toBeTruthy());
+      getSettings.mockResolvedValue({ backup: { destPath: '/backups', enabled: false, cronExpression: '0 2 * * *', excludePaths: [], disabledDefaultExcludes: [], retentionCount: null } });
+      fireEvent.click(screen.getByRole('button', { name: 'Retry' }));
+      expect(await screen.findByRole('button', { name: /^Save$/i })).toBeInTheDocument();
     });
   });
 

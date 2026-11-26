@@ -193,6 +193,7 @@ describe('createDaemonWatcher lifecycle', () => {
 
     await expect(watcher.stop({ label })).resolves.toEqual({
       success: false,
+      code: 'EXTERNAL_PROCESS_RUNNING',
       message: `An external process is listening on ${endpoint}. It was not started by PortOS and cannot be stopped here.`,
     });
     expect(execPm2).not.toHaveBeenCalled();

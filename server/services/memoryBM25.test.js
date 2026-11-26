@@ -78,10 +78,9 @@ import {
 import { search, buildInvertedIndex } from '../lib/bm25.js'
 
 describe('memoryBM25', () => {
-  beforeEach(() => {
+  beforeEach(async () => {
+    await clearIndex()
     vi.clearAllMocks()
-    // Reset the module's internal cache by clearing the index
-    clearIndex()
   })
 
   describe('buildIndexableText', () => {

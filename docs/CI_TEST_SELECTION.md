@@ -4,12 +4,19 @@ How CI selects, partitions and sizes the test suites. Split out of [GITHUB_ACTIO
 
 ## Browser workload partition
 
-The browser job uses two runners. Each receives the complete planner selection
-and `CI_SHARD`; the runner assigns files by alternating the canonical
-`BROWSER_SUITES` registry before subtracting any memo entries. Scoped selections
-keep those same owners. This separates the long document-rendering and HTML
-composition suites, which the generic Vitest hash partition clustered together.
-Unknown browser selectors fail rather than being dropped.
+The browser job uses one runner for one selected suite, two for two or three,
+and four for four or more. Each runner receives the complete planner selection
+and `CI_SHARD`. For a given shard count and profile, the registry pins suite
+owners before subtracting memo hits. The two-runner smoke profile moves GPU
+film look away from animatic capture. With four runners, both profiles separate
+those suites through the shared ownership table. Unknown browser selectors fail
+rather than being dropped.
+
+The four-runner layout spreads the expensive memo misses from hosted run
+45642241181. That run's fastest runner skipped its only suite, while the
+slowest ran template parity, production review and animatic capture. A cold
+run has a different floor. In uncached run 45038139135, document render and
+HTML composition each exceeded 115 seconds by themselves.
 
 Each shard retains the full selected browser profile, the quiet capture project,
 normal motion, fidelity assertions, process containment and the existing
@@ -28,9 +35,9 @@ are `cores / maxConcurrentAgents` from the CoS settings (`scripts/lib/cosWorkerB
 capped at 4, so concurrent worktree gates share one host budget; lower
 **max concurrent agents** in the app to ease load — no env var. A focused file
 run is not the full-suite result (`docs/CONTRIBUTING.md`). `npm run pregate`
-passes the derived value to its stages. The DOM-heavy client retains its proven two-worker override:
-four workers made its async rendering assertions timing-dependent under CI
-contention. File-level parallelism stays on; the DB suite already serializes
+passes the derived value to its stages. The client caps Vitest at three
+workers, leaving one runner core for Chromium and DOM spikes. File-level
+parallelism stays on; the DB suite already serializes
 files because those tests share one Postgres.
 
 Each test job restores Vite/Vitest transform artifacts from checkout-owned
@@ -53,14 +60,15 @@ the largest phase of the client suite. Two levers cut it, both applied.
 **Lever 1 — don't build a DOM you don't need.** A test file that never touches
 the DOM opts out with a `// @vitest-environment node` pragma on line 1, and pays
 ~0ms instead of ~0.35s (local) / ~0.7s (CI runner) for its environment. Every
-file under `client/src/{lib,utils,services}` that passes in `node` carries the
-pragma.
+pure-JavaScript test under `client/src/` that passes in `node` carries the
+pragma, including tests under `lib`, `utils`, `services`, `components`, `pages`,
+and `test`.
 
-When adding a test under `client/src/{lib,utils,services}`, default to the
-pragma and only drop it if the file (or the module it imports) genuinely needs
-`document`/`window`. The 13 files in that tree that legitimately keep a DOM do
-so because the *module under test* reaches for a browser global — e.g.
-`apiApps.js` navigates via `window.location`, `webglSupport.js` calls
+When adding a test under `client/src/`, default to the pragma and only drop it
+if the file (or the module it imports) genuinely needs `document`/`window` or
+another browser global. A test that imports a module using browser APIs stays
+in happy-dom even if the test itself never names those APIs — e.g. `apiApps.js`
+navigates via `window.location`, `webglSupport.js` calls
 `document.createElement('canvas')`.
 
 **Lever 2 — a cheaper DOM.** `client/vitest.config.js` runs on happy-dom
@@ -142,7 +150,7 @@ on its first poll).
 
 ## Reusing the client install
 
-Every client test shard, `lint` and `browser` install `client/` through the
+Every client test shard, `client-build`, `lint` and `browser` install `client/` through the
 `setup-client` action.
 `setup-node`'s `cache: npm` only preserves the tarball cache, so `npm ci` still
 wipes and repopulates a 393 MB `client/node_modules` on each. `Cache client
@@ -299,16 +307,15 @@ Windows compatibility, Linux containment or the SuperCollider live suite.
 
 ## Full-suite sharding
 
-A full plan is the slow case: on the 4-vCPU public runners the client suite
-alone took ~10 minutes (DOM setup per file dominated — the 868-file run
-spent 489 s in `environment` against 384 s in `tests` — and its worker cap is
-two, see `scripts/vitestCiPool.js`), the Windows server suite ~10 minutes
-(module import is several times slower there), and the Linux server suite ~6
-minutes. Roughly half of all PR runs went full, so most PRs waited on the
-longest of those.
+A full plan runs the broadest selection. Before sharding, the client
+suite took about 10 minutes on a 4-vCPU runner, with 489 s of cumulative DOM
+environment setup across 868 files. Sharding spreads that work across runners.
 
 Primary server/client test jobs use matrices. The impact job emits
-`server_shards` and `client_shards` from `FULL_SUITE_SHARDS` (server 2, client 4).
+`server_shards` and `client_shards` from `FULL_SUITE_SHARDS` (server 2, client 6).
+The client matrix pins five or six existing Chromium suites per shard,
+balanced against the estimated cost of its other tests. The runner hashes
+the remaining suites.
 Windows emits `[1]` for its native contract runner. `scripts/run-ci-tests.js`
 turns `CI_SHARD=<index>/<count>` into a disjoint file slice before
 launching Vitest; the union is the complete selected suite. Windows uses exact
@@ -328,14 +335,13 @@ the same extractor and resolver pregate's local selection uses.
 The summary names that reach-based fan-out. Every other scoped plan stays on one
 runner; record-aware selection ([TEST_MEMO.md](./TEST_MEMO.md#related-selection), #16424) still narrows what
 each selected suite runs. The runner slices the selection itself and never hands Vitest
-`--shard`, so a shard whose slice is empty exits green. Once-only steps — smoke boot and the client build —
-pin themselves to shard 1; lint is not among them,
-because it has its own job (see the lint job under [CI Workflow](GITHUB_ACTIONS.md#ci-workflow-ciyml)). `CI Gate` sees a matrix job as one
-`needs` result, so nothing downstream changes; public-repo runner minutes are
-free, so the fan-out costs only concurrency.
+`--shard`, so a shard whose slice is empty exits green. Server smoke boot
+runs on shard 1. The production client build and client lint each run once
+in a separate job, in parallel with the test shards. `CI Gate` checks each
+selected job and sees each test matrix as one `needs` result.
 
 `npm run pregate -- --full` reuses the same split locally: a full unit plan
-becomes one stage per shard (server 2, client 4, from `FULL_SUITE_SHARDS`), run
+becomes one stage per shard (server 2, client 6, from `FULL_SUITE_SHARDS`), run
 sequentially with the env `resolvePlanStages` builds once per scope. Each shard
 is a normal runner invocation with its own memo write, so a late failure in one
 shard leaves the earlier shards' green entries reusable on the next attempt;
@@ -343,9 +349,8 @@ nothing is certified from a failed run. Sequential execution keeps a single
 writer on each workspace's Vitest dependency record. Scoped plans, structural
 guards and the browser stage clear `CI_SHARD` and stay unsliced.
 
-`scripts/run-ci-tests.test.js` pins the wiring: every runner job builds its
-matrix from the planner, hands `CI_SHARD` to the runner, and gates its
-once-only steps on shard 1.
+`scripts/run-ci-tests.test.js` pins the matrix wiring, the server smoke
+shard, and the separate client build job's dependency on the impact plan.
 
 ## Python sidecar scripts
 

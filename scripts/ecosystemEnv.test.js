@@ -96,6 +96,14 @@ describe('ecosystem.config.cjs PostgreSQL env', () => {
     expect(server.env.PGPASSWORD).toBe('from-shell');
   });
 
+  it.each([
+    [undefined, '/example/saved/psql'],
+    ['/example/exported/psql', '/example/exported/psql'],
+  ])('passes the restore client override to portos-server with exported value %s', (exported, expected) => {
+    const { apps } = loadConfig('PORTOS_PSQL=/example/saved/psql\n', { PORTOS_PSQL: exported });
+    expect(apps.find(app => app.name === 'portos-server').env.PORTOS_PSQL).toBe(expected);
+  });
+
   it('resolves the Docker host port from PGPORT_DOCKER in .env under PGMODE=docker', () => {
     const { apps } = loadConfig('PGMODE=docker\nPGPORT_DOCKER=5570\n', clearedPgEnv);
     const server = apps.find((a) => a.name === 'portos-server');

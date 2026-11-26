@@ -49,6 +49,10 @@ vi.mock('../mtplxServerManager.js', () => ({
 const providers = {
   'example-api': { name: 'Example API', type: 'api', endpoint: 'http://127.0.0.1:8000/v1' },
   'example-cli': { name: 'Example CLI', type: 'cli', command: 'claude' },
+  'example-splash': {
+    name: 'Example Splash', type: 'cli', command: 'claude', splashBacked: true, defaultModel: 'inkling2-mini',
+    envVars: { ANTHROPIC_BASE_URL: 'http://127.0.0.1:8001' },
+  },
   'example-tui': { name: 'Example TUI', type: 'tui', command: 'claude' },
   'example-sandbox': { name: 'Example Sandbox', type: 'cli', command: 'codex' },
   'opencode-mtplx': {
@@ -177,7 +181,7 @@ describe('startRuns', () => {
     generate.mockResolvedValue({ text: 'Let me think about the <svg> and the <div> first. Then I will write the code.', timings: { completionTokens: 48_000 } });
     const [queued] = await startRuns({ models: [model], pages: PAGES.slice(0, 1) });
     const run = await settled(queued.id);
-    expect(run.pages[0]).toMatchObject({ html: '', hitTokenLimit: true });
+    expect(run.pages[0]).toMatchObject({ html: '', error: 'Model returned no HTML', hitTokenLimit: true });
     expect(run.detail.verdict).toBe('failed');
   });
 
@@ -242,6 +246,7 @@ describe('other targets', () => {
     expect(queued).toMatchObject({ backend: 'provider', modelId: 'example-default', route: { providerId, providerName: providers[providerId].name, model: 'example-default', effort: 'high' } });
     const run = await settled(queued.id);
     expect(run.pages[0]).toMatchObject({ html: goodPage, plan: PLAN });
+    expect(run).toMatchObject({ status: 'complete', error: null, detail: { verdict: 'passed', rendered: 1 } });
     // A provider route reports no token count; null, never a made-up zero.
     expect(run.pages[0]).toMatchObject({ completionTokens: null, tokensPerSecond: null });
     expect(runPromptThroughProvider.mock.calls.map(([args]) => args.prompt)).toEqual([queued.planPrompts[0], htmlPagePrompt(PAGES[0], PLAN)]);
@@ -252,11 +257,75 @@ describe('other targets', () => {
     expect(generate).not.toHaveBeenCalled();
   });
 
+  it.each(['', 'I cannot generate that page.'])('fails a provider run whose page reply has no HTML (%j)', async (reply) => {
+    runPromptThroughProvider.mockImplementation(async ({ prompt }) => ({ text: isPlanRequest(prompt) ? PLAN : reply }));
+    const [queued] = await startRuns({ routes: [{ providerId: 'example-api' }], pages: [PAGES[0]] });
+    const run = await settled(queued.id);
+    const failure = { error: 'Model returned no HTML', passed: 0, total: 6, bytes: 0 };
+    expect(run).toMatchObject({
+      status: 'failed',
+      error: failure.error,
+      pages: [{ ...failure, html: '' }],
+      detail: { verdict: 'failed', rendered: 0, pages: [failure] },
+    });
+    expect(writePageFile).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    { name: 'an exhausted first turn explains the missing page', reply: 'No page was generated.', matched: true },
+    { name: 'valid HTML wins after an exhausted first turn', reply: goodPage, matched: true },
+    { name: 'an unsupported response keeps the generic error', reply: 'I reached the token limit while thinking.', matched: false },
+  ])('uses the selected Splash route and preserves prompts when $name', async ({ reply, matched }) => {
+    const reasoningOutputLimit = matched ? { stopReason: 'max_tokens', outputTokens: 48000, thinkingTokens: 47998 } : undefined;
+    runPromptThroughProvider.mockImplementation(async ({ prompt }) => (
+      isPlanRequest(prompt) ? { text: PLAN } : { text: reply, reasoningOutputLimit }
+    ));
+    const [queued] = await startRuns({ routes: [{ providerId: 'example-splash', effort: 'xhigh' }], pages: [PAGES[0]] });
+    const run = await settled(queued.id);
+    const recovered = reply === goodPage;
+    const error = recovered ? null : matched
+      ? 'Model returned no HTML. The first turn reached the 48000-token output limit, using 47998 tokens on thinking and returning no answer text.'
+      : 'Model returned no HTML';
+    expect(run).toMatchObject({
+      status: recovered ? 'complete' : 'failed',
+      error,
+      pages: [{
+        html: recovered ? goodPage : '', plan: PLAN, error,
+        hitTokenLimit: matched && !recovered ? true : null,
+        completionTokens: matched && !recovered ? 48000 : null,
+      }],
+    });
+    const [[plan], [page]] = runPromptThroughProvider.mock.calls;
+    const routeOptions = {
+      provider: expect.objectContaining({ id: 'example-splash' }),
+      model: 'inkling2-mini', effort: 'xhigh', maxTokens: 128_000, toolFree: true, allowFallback: false,
+    };
+    expect(plan).toMatchObject({ ...routeOptions, prompt: queued.planPrompts[0] });
+    expect(plan).not.toHaveProperty('captureClaudeOutputLimit');
+    expect(page).toMatchObject({ ...routeOptions, prompt: htmlPagePrompt(PAGES[0], PLAN), captureClaudeOutputLimit: true });
+    expect(writePageFile).toHaveBeenCalledTimes(recovered ? 1 : 0);
+  });
+
+  it('keeps the successful page when another provider reply contains no HTML', async () => {
+    runPromptThroughProvider.mockImplementation(async ({ prompt }) => ({
+      text: isPlanRequest(prompt) ? PLAN : prompt === htmlPagePrompt(PAGES[1], PLAN) ? goodPage : 'No page today.',
+    }));
+    const [queued] = await startRuns({ routes: [{ providerId: 'example-api' }], pages: PAGES });
+    const run = await settled(queued.id);
+    expect(run).toMatchObject({
+      status: 'complete',
+      error: null,
+      pages: [{ html: '', error: 'Model returned no HTML', passed: 0 }, { html: goodPage, error: null, passed: 6 }],
+      detail: { verdict: 'partial', rendered: 1, complete: 1 },
+    });
+    expect(writePageFile.mock.calls).toEqual([[queued.id, 1, PAGES[1], goodPage]]);
+  });
+
   it('starts and resumes the restricted OpenCode route with the recorded selection', async () => {
     const route = { providerId: 'opencode-mtplx', model: providers['opencode-mtplx'].models[0], effort: 'xhigh' };
     runPromptThroughProvider.mockRejectedValue(new Error('CLI run timed out'));
     const [queued] = await startRuns({ routes: [route], pages: [PAGES[0]] });
-    expect((await settled(queued.id)).status).toBe('failed');
+    expect(await settled(queued.id)).toMatchObject({ status: 'failed', error: 'CLI run timed out', pages: [{ error: 'CLI run timed out', passed: 0 }] });
     expect(queued.route).toMatchObject(route);
     runPromptThroughProvider.mockImplementation(async ({ beforeExecute, prompt }) => {
       await beforeExecute();
@@ -346,6 +415,22 @@ describe('other targets', () => {
       await writeFile(join(home, 'logs', 'request-log-8000.jsonl'), `${logLine(10_000, { request_model: model })}\n`);
       const page = await runRoute({ providerId: 'opencode-mtplx', model: `mtplx/${model}` });
       expect(page.error).toContain('MTPLX generated 52256 completion tokens');
+      expect(page.html).toBe('');
+    });
+
+    it('attributes one OpenCode request that MTPLX logs as both a cancellation and a final summary', async () => {
+      timeoutError();
+      const model = providers['opencode-mtplx'].models[0];
+      const shared = { request_id: 'chatcmpl-cancelled', request_model: model };
+      await writeFile(join(home, 'logs', 'request-log-8000.jsonl'), [
+        // The just-finished plan's end timestamp is inside the clock slack,
+        // but its earlier start proves it isn't the timed-out page.
+        logLine(0, { request_model: model, request_cancelled: undefined, request_elapsed_s: 240 }),
+        logLine(10_000, { ...shared, stream_cancelled_by_client: true, completion_tokens: 52738 }),
+        logLine(10_050, { ...shared, request_cancelled: undefined, completion_tokens: 52738 }),
+      ].join('\n'));
+      const page = await runRoute({ providerId: 'opencode-mtplx', model });
+      expect(page.error).toContain('MTPLX generated 52738 completion tokens');
       expect(page.html).toBe('');
     });
 

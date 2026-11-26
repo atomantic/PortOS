@@ -284,6 +284,7 @@ export function createDaemonWatcher({
       if (await probe(resolvedEndpoint)) {
         return {
           success: false,
+          code: 'EXTERNAL_PROCESS_RUNNING',
           message: `An external process is listening on ${resolvedEndpoint}. It was not started by PortOS and cannot be stopped here.`,
         };
       }

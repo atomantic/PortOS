@@ -113,7 +113,7 @@ describe('enrichment document publication', () => {
 
   it('allows a snapshot while the provider is pending, then holds its publication outside that cut', async () => {
     const reached = deferred(); const finish = deferred();
-    state.provider = { id: 'example', defaultModel: 'example-model' };
+    state.provider = { id: 'example', enabled: true, defaultModel: 'example-model' };
     state.runProvider = async () => { reached.resolve(); await finish.promise; return { text: '# Example provider answer' }; };
     const work = processEnrichmentAnswer({ category: 'core_memories', question: 'Example?', answer: 'Example' });
     await reached.promise;

@@ -1,20 +1,9 @@
 import { useState, useRef, useEffect, useLayoutEffect, useMemo, useCallback, memo } from 'react';
 import { GripVertical, MoveDiagonal2, GripHorizontal, ChevronsDownUp } from 'lucide-react';
 import {
-  DndContext,
-  KeyboardSensor,
-  PointerSensor,
-  closestCenter,
-  useSensor,
-  useSensors,
-} from '@dnd-kit/core';
-import {
-  SortableContext,
-  arrayMove,
-  sortableKeyboardCoordinates,
-  useSortable,
-  verticalListSortingStrategy,
-} from '@dnd-kit/sortable';
+  DndContext, KeyboardSensor, PointerSensor, closestCenter, useSensor, useSensors,
+  SortableContext, arrayMove, sortableKeyboardCoordinates, useSortable, verticalListSortingStrategy,
+} from '../../lib/dnd/index.js';
 import { GRID_COLS, GRID_DEFAULT_H, WIDTH_TO_COLS, WIDGETS_BY_ID } from './widgetRegistry.jsx';
 import useContainerWidth from '../../hooks/useContainerWidth';
 import { dndTransformToCss } from '../../lib/dndTransform';
@@ -67,12 +56,12 @@ import { dndTransformToCss } from '../../lib/dndTransform';
 //
 // Below MOBILE_BREAKPOINT_PX the grid collapses to a single column, so x/w
 // have nowhere to go — but ORDER still does. There, edit mode swaps the two
-// grid handles for one reorder handle that sorts the stack via dnd-kit (the
+// grid handles for one reorder handle that sorts the stack with the shared drag sensors (the
 // same PointerSensor/KeyboardSensor pairing as every other sortable list in
 // the app); on drop the whole grid is re-flowed so its reading order matches
 // the new stack order (`reflowToOrder`). The free-form 2-D drag stays
 // hand-rolled — arbitrary grid placement isn't what a sortable list does —
-// but the 1-D case is exactly dnd-kit's job, and going through it is what
+// but the 1-D case is handled by the shared sortable list, and going through it is what
 // buys touch, keyboard, multi-pointer and edge auto-scroll for free.
 //
 // Drop policy after a move (`insertAtOrder`): the dragged cell is re-inserted
@@ -347,7 +336,7 @@ const HANDLE_KINDS = {
   },
 };
 
-// Shared drag/resize/reorder handle. `handleProps` is how dnd-kit's sortable
+// Shared drag/resize/reorder handle. `handleProps` is how the sortable
 // attributes + listeners reach the reorder variant; the two grid handles pass
 // their own onPointerDown instead. `touchAction: 'none'` is what makes any of
 // them work under a finger — without it the browser claims the pointer stream
@@ -357,7 +346,7 @@ const HANDLE_KINDS = {
 // makes them toggle buttons rather than pointer-only affordances: `aria-pressed`
 // is the idle/grabbed state, and the grid's live region narrates each step.
 // `grabbed` stays undefined on the handles that are plain buttons (auto-fit) or
-// already announce themselves through dnd-kit (reorder), so those keep their
+// already announce themselves through the keyboard sensor (reorder), so those keep their
 // unpressed semantics.
 function DragHandle({ kind, item, onPointerDown, onClick, onKeyDown, onBlur, grabbed, handleProps }) {
   const { label, Icon, size, className } = HANDLE_KINDS[kind];
@@ -735,7 +724,7 @@ export default function DashboardGrid({ items, editable, onChange, onLayoutModeC
   }, [editable, isMobile, beginGesture]);
 
   // Enter/Space lifts a handle, the arrows step it, Enter/Space drops it and
-  // Escape puts it back — the same state machine dnd-kit gives the mobile
+  // Escape puts it back — the same behavior provided by the mobile
   // reorder handle, so the two gestures feel like one feature.
   const handleKeyDown = useCallback((e, item, kind) => {
     if (!editable || isMobile) return;

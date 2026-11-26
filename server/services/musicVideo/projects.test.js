@@ -87,8 +87,8 @@ describe('musicVideo dispatcher — record-event emit (#1770)', () => {
 
     await projects.updateProject(p.id, { name: 'B' });
     await projects.setProjectAnalysis(p.id, { bpm: 120, beats: [0], downbeats: [0], sections: [], durationSec: 5 });
-    const s1 = await projects.addProjectScene(p.id, { prompt: 'one' });
-    const s2 = await projects.addProjectScene(p.id, { prompt: 'two' });
+    const { scenes: [s1] } = await projects.addProjectScenes(p.id, [{ prompt: 'one' }]);
+    const { scenes: [s2] } = await projects.addProjectScenes(p.id, [{ prompt: 'two' }]);
     await projects.updateScene(p.id, s1.sceneId, { prompt: 'one-edited' });
     await boardEdits.reorderProjectScenes(p.id, [s2.sceneId, s1.sceneId]);
     await boardEdits.deleteScene(p.id, s2.sceneId);
@@ -269,7 +269,7 @@ describe('legacy shot approvals', () => {
   it('allows automation and the director to edit and select a different clip without losing existing takes', async () => {
     const { applySceneUpdate } = await import('./projectsLogic.js');
     const p = await projects.createProject({ name: 'Legacy approvals' });
-    const scene = await projects.addProjectScene(p.id, { startSec: 0, endSec: 2, prompt: 'Original' });
+    const { scenes: [scene] } = await projects.addProjectScenes(p.id, [{ startSec: 0, endSec: 2, prompt: 'Original' }]);
     const { appended } = await projects.appendSceneTakes(p.id, scene.sceneId, [
       { kind: 'video', assetId: 'approved-clip' }, { kind: 'video', assetId: 'alternate-clip' },
     ]);
@@ -284,25 +284,32 @@ describe('legacy shot approvals', () => {
 });
 
 describe('take decisions', () => {
-  // Uniquely catches a Use/Reject/Bad click paying for the catalog check-in (every linked record
-  // read and its media stat'd) before and after its write, when it answers with scenes only.
-  it('select, reject and mark skip the catalog check-in, and still save', async () => {
+  it('selects a take for final upgrade without catalog check-in and persists board take decisions', async () => {
     const p = await projects.createProject({ name: 'Take decisions' });
-    const scene = await projects.addProjectScene(p.id, { startSec: 0, endSec: 2, prompt: 'One' });
+    const { scenes: [scene] } = await projects.addProjectScenes(p.id, [{ startSec: 0, endSec: 2, prompt: 'One' }]);
     const { appended } = await projects.appendSceneTakes(p.id, scene.sceneId, [
-      { kind: 'video', assetId: 'clip-a' }, { kind: 'video', assetId: 'clip-b' },
+      { kind: 'video', assetId: 'clip-a' }, { kind: 'video', assetId: 'clip-b' }, { kind: 'video', assetId: 'clip-c' },
     ]);
     await projects.mutateProjectRecord(p.id, current => ({ project: { ...current, castAndSets: { ...current.castAndSets, source: 'catalog' } } }));
     withCatalogCheckin.mockClear();
 
     const selected = await projects.selectSceneTake(p.id, scene.sceneId, appended[1].takeId);
     expect(selected.videoHistoryId).toBe('clip-b');
-    const reviewed = await projects.reviewSceneTake(p.id, scene.sceneId, appended[0].takeId, { status: 'rejected' });
-    expect(reviewed.takes.find(take => take.takeId === appended[0].takeId).status).toBe('rejected');
-    const marked = await projects.markMediaPoolAssets(p.id, ['video:clip-a'], 'bad');
-    expect(marked.assetMarks).toEqual({ 'video:clip-a': 'bad' });
-    await projects.rejectUnusedSceneTakes(p.id, scene.sceneId);
     expect(withCatalogCheckin).not.toHaveBeenCalled();
+
+    const { scene: reviewed, edit: reviewEdit } = await boardEdits.reviewSceneTake(p.id, scene.sceneId, appended[0].takeId, { status: 'rejected' });
+    expect(reviewed.takes.find(take => take.takeId === appended[0].takeId).status).toBe('rejected');
+    expect(reviewEdit.scenes).toContainEqual(reviewed);
+    const marked = await boardEdits.markMediaPoolAssets(p.id, ['video:clip-a'], 'bad');
+    expect(marked.assetMarks).toEqual({ 'video:clip-a': 'bad' });
+    const { scene: rejected, edit: rejectEdit, rejected: count } = await boardEdits.rejectUnusedSceneTakes(p.id, scene.sceneId);
+    expect(count).toBe(1);
+    expect(rejected.takes.find(take => take.takeId === appended[2].takeId).status).toBe('rejected');
+    expect(rejectEdit.scenes).toContainEqual(expect.objectContaining({
+      sceneId: scene.sceneId,
+      takes: expect.arrayContaining([expect.objectContaining({ takeId: appended[2].takeId, status: 'rejected' })]),
+    }));
+    withCatalogCheckin.mockClear();
 
     // An ordinary edit still resolves it under the write for the stale-pick clean-up, and only
     // there: it answers with the shot, so the saved project is not presented again (#16210).
@@ -325,7 +332,7 @@ describe('take decisions', () => {
     withCatalogCheckin.mockImplementation(async (project) => ({ ...project, castAndSets: { ...project.castAndSets, catalogCheckin: checkin } }));
     for (const name of ['frame-a.png', 'frame-b.png']) seededImages.add(name);
     const p = await projects.createProject({ name: 'Frame confirmation' });
-    const { sceneId } = await projects.addProjectScene(p.id, { startSec: 0, endSec: 2, prompt: 'One' });
+    const { scenes: [{ sceneId }] } = await projects.addProjectScenes(p.id, [{ startSec: 0, endSec: 2, prompt: 'One' }]);
     const shot = { sceneId, framePrompt: 'A rider at dusk', endFramePrompt: 'The rider gone', referenceImageId: 'frame-a.png', endImageId: 'frame-b.png',
       frameReferenceIds: ['mvr-linked-0000000000000001'], shotSheet: { characters: ['Ada'], location: 'Harbor' } };
     const presented = { concept: { subjects }, castAndSets: { source: 'catalog', catalogCheckin: checkin }, scenes: [shot] };
@@ -345,8 +352,9 @@ describe('take decisions', () => {
     const states = (scene) => scene.takes.map((take) => take.dependencyState?.status);
     expect(states((await projects.getProject(p.id)).scenes[0])).toEqual(['stale', 'current']);
 
-    const reviewed = await projects.reviewSceneTake(p.id, sceneId, 't-start', { confirmFrame: true, reviewer: { kind: 'local' } });
+    const { scene: reviewed, edit } = await boardEdits.reviewSceneTake(p.id, sceneId, 't-start', { confirmFrame: true, reviewer: { kind: 'local' } });
     expect(states(reviewed)).toEqual(['current', 'current']);
+    expect(states(edit.scenes.find((scene) => scene.sceneId === sceneId))).toEqual(['current', 'current']);
     expect(states((await projects.getProject(p.id)).scenes[0])).toEqual(['current', 'current']);
     withCatalogCheckin.mockImplementation(actual);
   });
@@ -363,7 +371,7 @@ describe('take decisions', () => {
     withCatalogCheckin.mockImplementation(async (project) => ({ ...project, castAndSets: { ...project.castAndSets, catalogCheckin: checkin } }));
     for (const name of ['frame-a.png', 'frame-b.png', 'frame-c.png']) seededImages.add(name);
     const p = await projects.createProject({ name: 'Catalog take decisions' });
-    const { sceneId } = await projects.addProjectScene(p.id, { startSec: 0, endSec: 2, prompt: 'One' });
+    const { scenes: [{ sceneId }] } = await projects.addProjectScenes(p.id, [{ startSec: 0, endSec: 2, prompt: 'One' }]);
     const shot = { sceneId, framePrompt: 'A rider at dusk', referenceImageId: 'frame-a.png', frameReferenceIds: ['mvr-linked-0000000000000001'], shotSheet: { characters: ['Ada'] } };
     const presented = { concept: { subjects }, castAndSets: { source: 'catalog', catalogCheckin: checkin }, scenes: [shot] };
     // A pre-#16274 cast stamp, narrowed by the check-in: current only when presented with it.
@@ -397,7 +405,7 @@ describe('take decisions', () => {
     const checkin = { items: [item], problems: [] };
     const p = await projects.createProject({ name: 'Catalog outage' });
     const addShot = async (clipReferenceIds) => {
-      const { sceneId } = await projects.addProjectScene(p.id, { startSec: 0, endSec: 2, prompt: 'Ada' });
+      const { scenes: [{ sceneId }] } = await projects.addProjectScenes(p.id, [{ startSec: 0, endSec: 2, prompt: 'Ada' }]);
       return { sceneId, clipReferenceIds };
     };
     const catalog = await addShot([catalogId]);
@@ -473,35 +481,32 @@ describe('take decisions', () => {
 });
 
 // Hold a public mutation immediately before the real backend acquires its write
-// queue, allowing another request to commit first. Both old direct
-// backend methods and the generic transactional path pass through this barrier.
+// queue, allowing another request to commit first.
 async function pauseSceneWrite(start) {
   const backend = await import('./projectsFile.js');
   let entered;
   let resume;
   const reached = new Promise(resolve => { entered = resolve; });
   const released = new Promise(resolve => { resume = resolve; });
-  const spies = ['mutateProjectRecord', 'updateScene', 'deleteScene', 'selectSceneTake', 'reviewSceneTake'].map(name => {
-    const original = backend[name];
-    return vi.spyOn(backend, name).mockImplementationOnce(async (...args) => {
-      entered();
-      await released;
-      return original(...args);
-    });
+  const original = backend.mutateProjectRecord;
+  const spy = vi.spyOn(backend, 'mutateProjectRecord').mockImplementationOnce(async (...args) => {
+    entered();
+    await released;
+    return original(...args);
   });
   const result = start();
   // Attach immediately: rejected service calls must not become unhandled while
   // the test is committing the intervening lock.
   const settled = result.then(value => ({ value }), error => ({ error }));
   await reached;
-  spies.forEach(spy => spy.mockRestore());
+  spy.mockRestore();
   return { settled, resume };
 }
 
 describe('scene mutation transactions', () => {
   it('marks Done against the persisted shot sheet without reverting a concurrent direction edit', async () => {
     const p = await projects.createProject({ name: 'Concurrent shot direction' });
-    const scene = await projects.addProjectScene(p.id, { prompt: 'Original' });
+    const { scenes: [scene] } = await projects.addProjectScenes(p.id, [{ prompt: 'Original' }]);
     await projects.updateScene(p.id, scene.sceneId, { shotSheet: { location: 'Park' } });
     const pending = await pauseSceneWrite(() => projects.updateScene(p.id, scene.sceneId, { shotSheet: { checked: true } }));
     try {
@@ -518,7 +523,7 @@ describe('scene mutation transactions', () => {
 
   it('applies a pending edit to the fresh scene without overwriting a concurrent edit', async () => {
     const p = await projects.createProject({ name: 'Concurrent scene edit' });
-    const scene = await projects.addProjectScene(p.id, { startSec: 0, endSec: 2, prompt: 'Original' });
+    const { scenes: [scene] } = await projects.addProjectScenes(p.id, [{ startSec: 0, endSec: 2, prompt: 'Original' }]);
     const pending = await pauseSceneWrite(() => projects.updateScene(p.id, scene.sceneId, { prompt: 'Pending edit' }));
     try {
       await projects.updateScene(p.id, scene.sceneId, { framePrompt: 'Concurrent reference direction' });

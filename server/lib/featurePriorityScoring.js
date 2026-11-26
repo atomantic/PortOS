@@ -4,8 +4,6 @@
 // Tiers describe one install's own usage. Precedence in resolveTier: a pin, then the feature-off rule, then the
 // learned tier, then P1. The learned tier needs MIN_EVIDENCE_DAYS distinct active days install-wide, so a fresh,
 // headless or rarely opened install stays at P1 instead of marking every area dormant.
-import { QUALITY_RECENCY_HALF_LIFE_DAYS } from './auditDomains.js';
-
 // Highest priority first; the index is the rank.
 export const FEATURE_PRIORITY_TIERS = Object.freeze(['P0', 'P1', 'P2', 'P3']);
 export const DEFAULT_FEATURE_PRIORITY_TIER = 'P1';
@@ -16,6 +14,7 @@ export const MIN_EVIDENCE_DAYS = 14;
 export const P0_SCORE_THRESHOLD = 6;
 export const P1_SCORE_THRESHOLD = 1.5;
 
+const ACTIVITY_HALF_LIFE_DAYS = 14;
 const DAY_MS = 24 * 60 * 60 * 1000;
 const DAY_PATTERN = /^\d{4}-\d{2}-\d{2}$/;
 
@@ -36,7 +35,7 @@ const windowAges = (days, now) => [...new Set(days ?? [])]
 
 /** Sum of `0.5 ** (ageDays / half-life)` over the distinct active days in the last 90 days. */
 export const scoreActiveDays = (days, now) => windowAges(days, now)
-  .reduce((sum, age) => sum + 0.5 ** (age / QUALITY_RECENCY_HALF_LIFE_DAYS), 0);
+  .reduce((sum, age) => sum + 0.5 ** (age / ACTIVITY_HALF_LIFE_DAYS), 0);
 
 /** Whole days since the most recent active day in the window, or null when there is none. */
 export function lastActiveAgeDays(days, now) {

@@ -10,7 +10,7 @@ import {
   useDroppable,
   useSensor,
   useSensors,
-} from '@dnd-kit/core';
+} from '../lib/dnd/index.js';
 import { GripVertical, Play } from 'lucide-react';
 import toast from './ui/Toast';
 import { createJiraTicketTask } from '../services/apiAgents.js';
@@ -170,7 +170,7 @@ const KANBAN_ACCESSIBILITY = {
   },
 };
 
-// Memoized: rendered once per ticket inside a dnd-kit board that re-renders on
+// Memoized: rendered once per ticket inside a drag-and-drop board that re-renders on
 // every pointer move during a drag. Props are a stable ticket object + a
 // primitive flag, so memo skips re-rendering cards that aren't being dragged.
 const TicketCard = memo(function TicketCard({ ticket, isDragOverlay }) {
@@ -359,7 +359,7 @@ export default function KanbanBoard({ tickets: initialTickets = [], instanceId, 
     return () => document.removeEventListener('focusin', handleFocusIn);
   }, []);
 
-  // dnd-kit restores focus as soon as the drag ends, while this board disables
+  // The drag sensor restores focus as soon as the drag ends, while this board disables
   // all handles during the async Jira transition. Re-focus the moved handle
   // after success or rollback, once the controls are enabled again.
   useEffect(() => {

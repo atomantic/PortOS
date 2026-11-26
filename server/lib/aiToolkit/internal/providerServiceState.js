@@ -2,21 +2,21 @@ import { chmod, readFile, rename } from 'fs/promises';
 import { existsSync } from 'fs';
 import { join } from 'path';
 import { atomicWrite } from './atomicWrite.js';
-import { ensureAntigravityPrintArgs, ensureAntigravityTuiArgs, ANTIGRAVITY_CLI_ID, ANTIGRAVITY_CONFIGURED_DEFAULT, ANTIGRAVITY_TUI_ID, LEGACY_GEMINI_CLI_ID, LEGACY_GEMINI_TUI_ID } from './antigravity.js';
+import { ensureAntigravityPrintArgs, ensureAntigravityTuiArgs, isAntigravityCommand, ANTIGRAVITY_CLI_ID, ANTIGRAVITY_CONFIGURED_DEFAULT, ANTIGRAVITY_TUI_ID, LEGACY_GEMINI_CLI_ID, LEGACY_GEMINI_TUI_ID } from './antigravity.js';
 import { unifyProviderModes } from './providerModes.js';
 import { modelContextWindowPatch } from './modelCatalog.js';
 import { normalizeModelAccess } from './modelAccess.js';
+import { CODEX_CLI_ID, CODEX_CONFIGURED_DEFAULT, CODEX_TUI_ID, isCodexCommand } from './codex.js';
 import { CODEX_SHIPPED_MODELS } from './codexShippedModels.js';
 import { LOCAL_RUNTIME_MARKER_KEYS } from './localRuntimeMarkers.js';
 
-const CODEX_CONFIGURED_DEFAULT = 'codex-configured-default';
 const CODEX_MODEL_KEYS = ['defaultModel', 'lightModel', 'mediumModel', 'heavyModel'];
-const CODEX_MODELS = CODEX_SHIPPED_MODELS;
-const CODEX_MODEL_DEFAULTS = {
+export const CODEX_MODEL_DEFAULTS = {
   defaultModel: 'gpt-5.6-terra',
   lightModel: 'gpt-5.6-luna',
   mediumModel: 'gpt-5.6-terra',
   heavyModel: 'gpt-5.6-sol',
+  ultraModel: 'gpt-6-astra',
 };
 const PRIOR_CODEX_MODEL_CATALOGS = [
   ['gpt-6-astra', 'gpt-5.6-sol', 'gpt-5.6-terra', 'gpt-5.6-luna', 'gpt-5.5', 'gpt-5.4', 'gpt-5.4-mini', 'gpt-5.3-codex-spark'],
@@ -25,7 +25,7 @@ const PRIOR_CODEX_MODEL_CATALOGS = [
   ['gpt-5.6-luna', 'gpt-5.6-terra', 'gpt-5.6-sol', 'gpt-5.3-codex-spark'],
 ];
 const ANTIGRAVITY_MODEL_KEYS = ['defaultModel', 'lightModel', 'mediumModel', 'heavyModel'];
-const ANTIGRAVITY_MODEL_DEFAULTS = {
+export const ANTIGRAVITY_MODEL_DEFAULTS = {
   defaultModel: 'gemini-4-neon-medium',
   lightModel: 'gemini-3.8-flash-medium',
   mediumModel: 'gemini-4-neon-medium',
@@ -42,7 +42,7 @@ const ANTIGRAVITY_MODELS = [
   'claude-sonnet-5-5-low', 'claude-sonnet-5-5-medium', 'claude-sonnet-5-5-high',
   'gpt-oss-120b-medium',
 ];
-const ANTIGRAVITY_MODEL_CATALOG = [ANTIGRAVITY_CONFIGURED_DEFAULT, ...ANTIGRAVITY_MODELS];
+export const ANTIGRAVITY_MODEL_CATALOG = [ANTIGRAVITY_CONFIGURED_DEFAULT, ...ANTIGRAVITY_MODELS];
 const PRIOR_ANTIGRAVITY_MODEL_CATALOGS = [
   [
     ANTIGRAVITY_CONFIGURED_DEFAULT,
@@ -100,9 +100,8 @@ function shouldUpgradeContextWindow(value) {
 function canonicalProviderContextWindow(provider) {
   if (provider?.type !== 'cli' && provider?.type !== 'tui') return null;
   const id = String(provider?.id || '').toLowerCase();
-  const command = String(provider?.command || '').toLowerCase();
-  if (id === 'codex' || id === 'codex-tui' || command === 'codex') return CODEX_CONTEXT_WINDOW;
-  if (id === ANTIGRAVITY_CLI_ID || id === ANTIGRAVITY_TUI_ID || command === 'agy') return GEMINI_CONTEXT_WINDOW;
+  if (id === CODEX_CLI_ID || id === CODEX_TUI_ID || isCodexCommand(provider.command)) return CODEX_CONTEXT_WINDOW;
+  if (id === ANTIGRAVITY_CLI_ID || id === ANTIGRAVITY_TUI_ID || isAntigravityCommand(provider.command)) return GEMINI_CONTEXT_WINDOW;
   return null;
 }
 
@@ -110,7 +109,7 @@ function migrateCodexProvider(data) {
   if (!data?.providers) return false;
   let changed = false;
   for (const provider of Object.values(data.providers)) {
-    const isCodexProcessProvider = (provider?.id === 'codex' || provider?.id === 'codex-tui')
+    const isCodexProcessProvider = (provider?.id === CODEX_CLI_ID || provider?.id === CODEX_TUI_ID)
       && (provider?.type === 'cli' || provider?.type === 'tui');
     if (!isCodexProcessProvider) continue;
     const isSentinelOnly = Array.isArray(provider.models)
@@ -118,10 +117,20 @@ function migrateCodexProvider(data) {
       && provider.models[0] === CODEX_CONFIGURED_DEFAULT
       && CODEX_MODEL_KEYS.every(key => provider[key] === CODEX_CONFIGURED_DEFAULT);
     const isPriorSeededList = matchesAnyExactCatalog(provider.models, PRIOR_CODEX_MODEL_CATALOGS);
-    if (!isSentinelOnly && !isPriorSeededList) continue;
-    provider.models = [...CODEX_MODELS];
-    if (isSentinelOnly) Object.assign(provider, CODEX_MODEL_DEFAULTS);
-    changed = true;
+    if (isSentinelOnly || isPriorSeededList) {
+      provider.models = [...CODEX_SHIPPED_MODELS];
+      if (isSentinelOnly) {
+        for (const key of CODEX_MODEL_KEYS) provider[key] = CODEX_MODEL_DEFAULTS[key];
+      }
+      changed = true;
+    }
+    // A narrowed custom catalog may intentionally leave out the shipped ultra model.
+    const { ultraModel } = CODEX_MODEL_DEFAULTS;
+    if ((provider.ultraModel == null || provider.ultraModel === '')
+      && Array.isArray(provider.models) && provider.models.includes(ultraModel)) {
+      provider.ultraModel = ultraModel;
+      changed = true;
+    }
   }
   return changed;
 }
@@ -301,7 +310,7 @@ export function createProviderServiceState(config = {}) {
     const migratedModes = unifyProviderModes(data);
     if (migratedModes || migratedCodex || migratedAntigravity || migratedAntigravityModels || migratedContextWindows) {
       await writeProvidersFile(data);
-      if (migratedCodex) console.log('🔧 Migrated Codex providers to the selectable model catalog');
+      if (migratedCodex) console.log('🔧 Migrated Codex provider catalogs and tier defaults');
       if (migratedAntigravity) console.log('🔧 Migrated Gemini provider config to Antigravity CLI (agy)');
       if (migratedAntigravityModels) console.log('🔧 Migrated Antigravity providers to the selectable agy model catalog');
       if (migratedContextWindows) console.log('🔧 Migrated provider context windows to current canonical values');

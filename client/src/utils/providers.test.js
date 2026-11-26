@@ -406,6 +406,7 @@ describe('Antigravity base-model split', () => {
     it('passes a non-Antigravity catalog through untouched', () => {
       const codex = { id: 'codex', command: 'codex', models: ['gpt-5', 'gpt-5-mini'] };
       expect(effortAwareModelOptions(codex, 'gpt-5')).toEqual(['gpt-5', 'gpt-5-mini']);
+      expect(effortAwareModelOptions(codex, 'saved-model')).toEqual(['gpt-5', 'gpt-5-mini', 'saved-model']);
       expect(effortAwareModelOptions(null, '')).toEqual([]);
     });
   });

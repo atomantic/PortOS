@@ -14,8 +14,10 @@ export const frameTime = (frame, fps = PREVIEW_FPS) => (Math.max(0, Math.round(f
 
 /** `m:ss:ff` for a song frame. */
 export function frameTimecode(frame, fps = PREVIEW_FPS) {
-  const whole = Math.floor(frame / fps);
-  return `${Math.floor(whole / 60)}:${String(whole % 60).padStart(2, '0')}:${String(frame % fps).padStart(String(fps - 1).length, '0')}`;
+  // Fractional encoder rates still use integer frame labels (e.g. 30 for 29.97 fps).
+  const labelFps = Math.max(1, Math.round(fps));
+  const whole = Math.floor(frame / labelFps);
+  return `${Math.floor(whole / 60)}:${String(whole % 60).padStart(2, '0')}:${String(frame % labelFps).padStart(String(labelFps - 1).length, '0')}`;
 }
 
 /**

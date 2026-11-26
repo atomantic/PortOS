@@ -1,4 +1,5 @@
 import { useState, useEffect, useCallback, useRef } from 'react';
+import { MESSAGE_SELECTOR_DEFAULTS, resolveComposeSelectors } from '../../../../server/lib/messageSelectorDefaults.js';
 import { RefreshCw, AlertCircle, CheckCircle2, Settings, Globe, Mail, MailOpen, Trash2, TestTube } from 'lucide-react';
 import toast from '../ui/Toast';
 import { FormField } from '../ui/FormField';
@@ -30,12 +31,25 @@ const TEST_STATUS_TEXT = {
   partial: 'Some selectors matched zero elements on the live page',
 };
 
-// Default selectors for supported providers — ensures editor cards always render,
-// even on fresh installs before selectors.json exists.
-const DEFAULT_SELECTORS = {
-  outlook: { messageRow: "[role='listbox'] [role='option']" },
-  teams: { messageItem: "[role='listitem']" },
-};
+const EMPTY_OVERRIDES = Object.freeze({});
+
+function SelectorFields({ values, onChange }) {
+  return Object.entries(values).map(([key, value]) => onChange ? (
+    <FormField key={key} className="flex items-center gap-2" labelClassName="text-xs text-gray-500 w-32 shrink-0" label={key}>
+      <input
+        type="text"
+        value={value}
+        onChange={(event) => onChange(key, event.target.value)}
+        className="min-w-0 flex-1 px-2 py-1 bg-port-bg border border-port-border rounded text-xs text-white font-mono focus:outline-none focus:border-port-accent"
+      />
+    </FormField>
+  ) : (
+    <div key={key} className="flex text-xs">
+      <span className="text-gray-500 w-32 shrink-0">{key}</span>
+      <span className="text-gray-400 font-mono break-all">{value}</span>
+    </div>
+  ));
+}
 
 export default function SyncTab({ accounts, onRefresh, accountsUnavailable = false }) {
   const [rawSelectors, setRawSelectors] = useState({});
@@ -43,18 +57,11 @@ export default function SyncTab({ accounts, onRefresh, accountsUnavailable = fal
   // defaults, not the saved selectors, so editing is shut until a read succeeds.
   const [selectorsState, setSelectorsState] = useState(null);
   const [editingSelector, setEditingSelector] = useState(null);
-  const [selectorForm, setSelectorForm] = useState({});
+  const [selectorForm, setSelectorForm] = useState(EMPTY_OVERRIDES);
+  const [savingSelectors, setSavingSelectors] = useState(false);
   const [testResults, setTestResults] = useState({});
   // accountId -> { current, total } from `messages:sync:progress`; cleared when a cycle starts or settles.
   const [progress, setProgress] = useState({});
-
-  // Merge fetched selectors with defaults so every supported provider always appears
-  const selectors = Object.fromEntries(
-    Object.entries(DEFAULT_SELECTORS).map(([provider, defaults]) => [
-      provider,
-      { ...defaults, ...(rawSelectors[provider] || {}) },
-    ])
-  );
 
   const selectorsRequestRef = useRef(0);
   const selectorsLoadedRef = useRef(false);
@@ -119,8 +126,11 @@ export default function SyncTab({ accounts, onRefresh, accountsUnavailable = fal
     sync(accountId, () => syncMessageAccount(accountId, mode, { silent: true }));
 
   const handleSaveSelectors = async (provider) => {
-    if (selectorsState !== 'ready') return;
-    const result = await updateMessageSelectors(provider, selectorForm).catch(() => null);
+    if (selectorsState !== 'ready' || savingSelectors) return;
+    setSavingSelectors(true);
+    const result = await updateMessageSelectors(provider, selectorForm)
+      .catch(() => null)
+      .finally(() => setSavingSelectors(false));
     if (!result) return;
     setRawSelectors((prev) => ({ ...prev, [provider]: result }));
     toast.success(`${provider} selectors updated`);
@@ -142,8 +152,15 @@ export default function SyncTab({ accounts, onRefresh, accountsUnavailable = fal
 
   const handleTestToken = async (provider) => {
     const result = await testMessageToken(provider).catch(() => null);
-    if (result?.token) toast.success(`${provider} token is valid`);
-    else toast.error(`${provider} token is invalid or expired`);
+    if (result?.api?.success === true) {
+      toast.success(`${provider} token is valid`);
+    } else {
+      const { status, error } = result?.api ?? {};
+      const details = [status && `HTTP ${status}`, error].filter(Boolean).join(' — ');
+      toast.error(details
+        ? `${provider} token test failed: ${details}`
+        : `${provider} token is invalid or expired`);
+    }
     fetchTokenStatus();
   };
 
@@ -243,7 +260,7 @@ export default function SyncTab({ accounts, onRefresh, accountsUnavailable = fal
       <div>
         <h2 className="text-lg font-semibold text-white mb-3">DOM Selectors</h2>
         <p className="text-sm text-gray-500 mb-3">
-          Playwright selectors for scraping Outlook and Teams. Edit if the DOM structure changes.
+          Selectors for Outlook and Teams. Test checks the open inbox or chat list. Edit these values if the provider changes its page.
         </p>
         <div className="space-y-4">
           {selectorsState === 'error' && (
@@ -251,98 +268,100 @@ export default function SyncTab({ accounts, onRefresh, accountsUnavailable = fal
               Failed to load saved selectors. The values shown are the built-in defaults, so editing is disabled.
             </SettingsLoadError>
           )}
-          {Object.entries(selectors).map(([provider, sels]) => (
-            <div key={provider} className="p-4 bg-port-card rounded-lg border border-port-border">
-              <div className="flex items-center justify-between mb-2">
-                <h3 className="text-sm font-medium text-white capitalize">{provider}</h3>
-                <div className="flex items-center gap-2">
-                  <button
-                    onClick={() => handleTestSelectors(provider)}
-                    disabled={testResults[provider]?.status === 'testing'}
-                    className="text-xs text-gray-400 hover:text-white transition-colors disabled:opacity-50"
-                  >
-                    {testResults[provider]?.status === 'testing' ? 'Testing…' : 'Test'}
-                  </button>
-                  <button
-                    onClick={() => {
-                      setEditingSelector(editingSelector === provider ? null : provider);
-                      setSelectorForm(sels);
-                    }}
-                    aria-label="Edit selectors"
-                    disabled={selectorsState !== 'ready'}
-                    className="pointer-coarse:min-h-11 pointer-coarse:min-w-11 text-xs text-gray-400 hover:text-white transition-colors disabled:opacity-50"
-                  >
-                    <Settings size={14} />
-                  </button>
-                </div>
-              </div>
-              {editingSelector === provider ? (
-                <div className="space-y-2">
-                  {Object.entries(selectorForm).map(([key, val]) => (
-                    <FormField key={key} className="flex items-center gap-2" labelClassName="text-xs text-gray-500 w-32 shrink-0" label={key}>
-                      <input
-                        type="text"
-                        value={val}
-                        onChange={(e) => setSelectorForm(f => ({ ...f, [key]: e.target.value }))}
-                        className="flex-1 px-2 py-1 bg-port-bg border border-port-border rounded text-xs text-white font-mono focus:outline-none focus:border-port-accent"
-                      />
-                    </FormField>
-                  ))}
-                  <div className="flex gap-2 mt-2">
+          {Object.entries(MESSAGE_SELECTOR_DEFAULTS).map(([provider, defaults]) => {
+            const saved = rawSelectors[provider] ?? EMPTY_OVERRIDES;
+            const editing = editingSelector === provider;
+            const overrides = editing ? selectorForm : saved;
+            const list = { ...defaults.list, ...Object.fromEntries(
+              Object.entries(overrides).filter(([key]) => !Object.hasOwn(defaults.compose, key))
+            ) };
+            const compose = editing
+              ? Object.fromEntries(Object.entries(defaults.compose).map(([key, value]) => [key, overrides[key] ?? value]))
+              : resolveComposeSelectors(provider, saved);
+            const updateField = editing ? (key, value) => setSelectorForm(form => ({ ...form, [key]: value })) : undefined;
+
+            return (
+              <div key={provider} className="p-4 bg-port-card rounded-lg border border-port-border">
+                <div className="flex items-center justify-between mb-2">
+                  <h3 className="text-sm font-medium text-white capitalize">{provider}</h3>
+                  <div className="flex items-center gap-2">
                     <button
-                      onClick={() => handleSaveSelectors(provider)}
-                      className="px-3 py-1 bg-port-accent text-white rounded text-xs hover:bg-port-accent/80"
+                      onClick={() => handleTestSelectors(provider)}
+                      disabled={testResults[provider]?.status === 'testing' || (editing && (savingSelectors || selectorForm !== saved))}
+                      className="text-xs text-gray-400 hover:text-white transition-colors disabled:opacity-50"
                     >
-                      Save
+                      {testResults[provider]?.status === 'testing' ? 'Testing…' : 'Test'}
                     </button>
                     <button
-                      onClick={() => setEditingSelector(null)}
-                      className="px-3 py-1 bg-port-border text-gray-300 rounded text-xs hover:bg-port-border/80"
+                      onClick={() => {
+                        setEditingSelector(editing ? null : provider);
+                        setSelectorForm(saved);
+                      }}
+                      aria-label="Edit selectors"
+                      disabled={selectorsState !== 'ready' || savingSelectors}
+                      className="pointer-coarse:min-h-11 pointer-coarse:min-w-11 text-xs text-gray-400 hover:text-white transition-colors disabled:opacity-50"
                     >
-                      Cancel
+                      <Settings size={14} />
                     </button>
                   </div>
                 </div>
-              ) : (
-                <div className="space-y-1">
-                  {Object.entries(sels).map(([key, val]) => (
-                    <div key={key} className="flex text-xs">
-                      <span className="text-gray-500 w-32 shrink-0">{key}</span>
-                      <span className="text-gray-400 font-mono truncate">{val}</span>
+                <fieldset disabled={editing && savingSelectors} className="space-y-2">
+                  <SelectorFields values={list} onChange={updateField} />
+                  <details className="border-t border-port-border pt-2">
+                    <summary className="cursor-pointer text-xs text-gray-400 hover:text-white">Browser compose selectors</summary>
+                    <div className="mt-2 space-y-2">
+                      {editing && <p className="text-xs text-gray-500">Clear a compose field to use its built-in default.</p>}
+                      <SelectorFields values={compose} onChange={updateField} />
                     </div>
-                  ))}
-                </div>
-              )}
-              {testResults[provider] && testResults[provider].status !== 'testing' && (
-                <div className={`mt-3 p-2 rounded border text-xs ${
-                  testResults[provider].status === 'ok'
-                    ? 'border-port-success/30 bg-port-success/10 text-port-success'
-                    : 'border-port-error/30 bg-port-error/10 text-port-error'
-                }`}>
-                  <div className="flex items-start justify-between gap-2">
-                    <span className="flex items-center gap-1">
-                      {testResults[provider].status === 'ok' ? <CheckCircle2 size={14} /> : <AlertCircle size={14} />}
-                      {TEST_STATUS_TEXT[testResults[provider].status] || testResults[provider].error || 'Selector test failed'}
-                    </span>
-                    {testResults[provider].status !== 'ok' && (
-                      <QueueInvestigationButton
-                        task={buildSelectorTestFailureTask({ provider, ...testResults[provider] })}
-                      />
+                  </details>
+                  {editing && (
+                    <div className="flex gap-2 mt-2">
+                      <button
+                        onClick={() => handleSaveSelectors(provider)}
+                        className="px-3 py-1 bg-port-accent text-white rounded text-xs hover:bg-port-accent/80"
+                      >
+                        {savingSelectors ? 'Saving…' : 'Save'}
+                      </button>
+                      <button
+                        onClick={() => setEditingSelector(null)}
+                        className="px-3 py-1 bg-port-border text-gray-300 rounded text-xs hover:bg-port-border/80"
+                      >
+                        Cancel
+                      </button>
+                    </div>
+                  )}
+                </fieldset>
+                {testResults[provider] && testResults[provider].status !== 'testing' && (
+                  <div className={`mt-3 p-2 rounded border text-xs ${
+                    testResults[provider].status === 'ok'
+                      ? 'border-port-success/30 bg-port-success/10 text-port-success'
+                      : 'border-port-error/30 bg-port-error/10 text-port-error'
+                  }`}>
+                    <div className="flex items-start justify-between gap-2">
+                      <span className="flex items-center gap-1">
+                        {testResults[provider].status === 'ok' ? <CheckCircle2 size={14} /> : <AlertCircle size={14} />}
+                        {TEST_STATUS_TEXT[testResults[provider].status] || testResults[provider].error || 'Selector test failed'}
+                      </span>
+                      {testResults[provider].status !== 'ok' && (
+                        <QueueInvestigationButton
+                          task={buildSelectorTestFailureTask({ provider, ...testResults[provider] })}
+                        />
+                      )}
+                    </div>
+                    {testResults[provider].results && Object.keys(testResults[provider].results).length > 0 && (
+                      <ul className="mt-1 space-y-0.5 font-mono text-gray-400">
+                        {Object.entries(testResults[provider].results).map(([key, r]) => (
+                          <li key={key} className={r.matches > 0 ? '' : 'text-port-error'}>
+                            {key}: {r.matches} match{r.matches === 1 ? '' : 'es'}
+                          </li>
+                        ))}
+                      </ul>
                     )}
                   </div>
-                  {testResults[provider].results && Object.keys(testResults[provider].results).length > 0 && (
-                    <ul className="mt-1 space-y-0.5 font-mono text-gray-400">
-                      {Object.entries(testResults[provider].results).map(([key, r]) => (
-                        <li key={key} className={r.matches > 0 ? '' : 'text-port-error'}>
-                          {key}: {r.matches} match{r.matches === 1 ? '' : 'es'}
-                        </li>
-                      ))}
-                    </ul>
-                  )}
-                </div>
-              )}
-            </div>
-          ))}
+                )}
+              </div>
+            );
+          })}
         </div>
       </div>
 

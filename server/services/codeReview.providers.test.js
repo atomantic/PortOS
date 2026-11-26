@@ -1,5 +1,7 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { access } from 'node:fs/promises';
+import { access, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { codeReviewSettingsSchema } from '../lib/cos/cosValidation.js';
 import { sanitizeTaskMetadata } from '../lib/cos/cosTaskMetadata.js';
 import { resolveReviewerConfig, buildReviewWithArgs, isReviewerConfigFault } from '../lib/reviewerConfig.js';
@@ -10,6 +12,7 @@ vi.mock('./settings.js', () => ({ getSettings: vi.fn(), settingsEvents: { on: vi
 vi.mock('./provider/providers.js', () => ({ getProviderById: vi.fn(), listProviders: vi.fn() }));
 vi.mock('../lib/aiToolkitState.js', () => ({ getAIToolkitInstance: () => ({}) }));
 vi.mock('./aiProvider.js', () => ({ callProviderAISimple: vi.fn() }));
+vi.mock('../lib/aiToolkit/internal/codexModelListProbe.js', () => ({ probeCodexModelsViaAppServer: vi.fn() }));
 vi.mock('../lib/cliProviderRun.js', () => ({ runCliProviderPrompt: vi.fn() }));
 vi.mock('./lmStudioManager.js', () => ({ getBaseUrl: vi.fn() }));
 vi.mock('./ollamaManager.js', () => ({ getBaseUrl: vi.fn(), getModelCapabilities: vi.fn() }));
@@ -184,11 +187,54 @@ describe('configured provider reviewers', () => {
   ])('reports a failed %s speed probe without returning a review verdict', async (probeFailure, action) => {
     const raw = 'synthetic private process output';
     getProviderById.mockResolvedValue({ ...provider, type: 'cli', command: 'codex', executionOptions: { serviceTier: 'fast' } });
-    runCliProviderPrompt.mockRejectedValueOnce(Object.assign(new Error(raw), { code: 'EXECUTION_OPTIONS_UNSUPPORTED', probeFailure }));
+    const stage = probeFailure === 'timeout' ? { probeStage: 'account/read' } : {};
+    runCliProviderPrompt.mockRejectedValueOnce(Object.assign(new Error(raw), { code: 'EXECUTION_OPTIONS_UNSUPPORTED', probeFailure, ...stage }));
     const result = await runLocalCodeReview({ backend, kind: 'claim-review', toolFree: true, diff: 'example diff' });
-    expect(result).toMatchObject({ ok: false, code: 'EXECUTION_OPTIONS_UNSUPPORTED', probeFailure, error: expect.stringContaining(action) });
+    expect(result).toMatchObject({ ok: false, code: 'EXECUTION_OPTIONS_UNSUPPORTED', probeFailure, ...stage, error: expect.stringContaining(action) });
+    if (stage.probeStage) expect(result.error).toContain('Last awaited RPC: account/read.');
     expect(result).not.toHaveProperty('verdict');
     expect(JSON.stringify(result)).not.toContain(raw);
+  });
+
+  it.skipIf(process.platform === 'win32')('recovers the isolated claim bridge after one delayed Codex probe and starts one pinned review', async () => {
+    const { runCliProviderPrompt: realRun } = await vi.importActual('../lib/cliProviderRun.js');
+    const { probeCodexModelsViaAppServer: probe } = await import('../lib/aiToolkit/internal/codexModelListProbe.js');
+    const fixture = await mkdtemp(join(tmpdir(), 'portos-codex-recovery-test-'));
+    const command = join(fixture, 'codex');
+    const launched = join(fixture, 'launched.jsonl');
+    const clock = vi.spyOn(Date, 'now').mockReturnValue(1_000_000);
+    try {
+      await writeFile(command, `#!${process.execPath}
+const fs = require('node:fs');
+const args = process.argv.slice(2);
+fs.appendFileSync(${JSON.stringify(launched)}, JSON.stringify({ args, cwd: process.cwd() }) + '\\n');
+process.stdin.resume();
+process.stdin.on('end', () => process.stdout.write('NO FINDINGS'));
+`, { mode: 0o755 });
+      getProviderById.mockResolvedValue({ ...provider, type: 'cli', command, codexAuthMode: 'chatgpt',
+        executionOptions: { serviceTier: 'fast' } });
+      probe.mockImplementationOnce(async (_command, _argv, _provider, { timeoutMs }) => {
+        clock.mockReturnValue(Date.now() + (timeoutMs ?? 15_000));
+        throw Object.assign(new Error('synthetic private setup'), { probeFailure: 'timeout', probeStage: 'initialize' });
+      }).mockResolvedValueOnce({
+        accountType: 'chatgpt', config: {}, requirements: null, models: [{ id: 'pinned-coder', serviceTiers: [{ id: 'fast' }] }],
+      });
+      runCliProviderPrompt.mockImplementationOnce(realRun);
+      const request = localReviewBridgeRequest({ backend, kind: 'claim-review', model: 'pinned-coder', diff: 'example diff', timeoutMs: 25_000 }, fixture);
+      const result = await runLocalCodeReview(request);
+      expect(result).toMatchObject({ ok: true, verdict: 'clean', model: 'pinned-coder' });
+      expect(probe).toHaveBeenCalledTimes(2);
+      expect(probe.mock.calls.map(call => call[3].timeoutMs)).toEqual([15_000, 10_000]);
+      expect(probe.mock.calls[1][1]).toContain('forced_login_method="chatgpt"');
+      expect(probe.mock.calls[1][3].cwd).toBe(probe.mock.calls[0][3].cwd);
+      const dispatches = (await readFile(launched, 'utf8')).trim().split('\n').map(line => JSON.parse(line));
+      expect(dispatches).toHaveLength(1);
+      expect(dispatches[0].cwd).not.toBe(fixture);
+      expect(dispatches[0].args).toEqual(expect.arrayContaining(['read-only', 'pinned-coder', 'forced_login_method="chatgpt"', 'service_tier="fast"']));
+    } finally {
+      clock.mockRestore();
+      await rm(fixture, { recursive: true, force: true });
+    }
   });
 
   it('uses only this provider default when unpinned and returns provider failure without substitution', async () => {

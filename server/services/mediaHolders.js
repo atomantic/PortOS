@@ -26,6 +26,7 @@
 import { join } from 'path';
 import { existsSync } from 'fs';
 import { lstat } from 'node:fs/promises';
+import { isDeepStrictEqual } from 'node:util';
 import { PATHS, readJSONFile, atomicWrite, sha256File } from '../lib/fileUtils.js';
 import { createFileWriteQueue } from '../lib/fileWriteQueue.js';
 import { isPlainObject } from '../lib/objects.js';
@@ -49,6 +50,8 @@ const SCHEMA_VERSION = 1;
 const KINDS = ['video', 'image'];
 const KIND_DIR = { video: () => PATHS.videos, image: () => PATHS.images };
 const MEDIA_RELEASE_QUEUE_TTL_MS = 30 * 24 * 60 * 60 * 1000;
+// Renew steady-state reports well before the origin reconciler's freshness windows.
+const REPORT_REFRESH_MS = 60 * 60 * 1000;
 const COMMAND_TIMEOUT_MS = 15_000;
 const VERIFIED_COMMAND_TIMEOUT_MS = 120_000;
 const IMAGE_PRIMARY_READ_CONCURRENCY = 16;
@@ -107,6 +110,19 @@ export async function readPeerReports() {
   return (await readStore()).reports;
 }
 
+function hasNewerConflictingReport(existing, reports) {
+  const at = Date.parse(existing.at);
+  const checked = new Set(existing.checked);
+  return Object.values(reports).some((other) => {
+    if (Date.parse(other.at) <= at) return false;
+    const otherChecked = new Set(other.checked);
+    return Object.entries(existing.mtimes).some(([name, ms]) =>
+      other.mtimes[name] !== ms && (other.complete === true || otherChecked.has(name) || Object.hasOwn(other.mtimes, name)))
+      || Object.entries(other.mtimes).some(([name]) =>
+        !Object.hasOwn(existing.mtimes, name) && (existing.complete === true || checked.has(name)));
+  });
+}
+
 /**
  * Remember what `instanceId` reported for one inventory scope (`scope`): the
  * modify times of the files it holds (`{ filename: mtimeMs }`) and the names it
@@ -120,9 +136,20 @@ export function recordPeerReport(instanceId, kind, scope, { mtimes, checked, com
   for (const [name, ms] of Object.entries(mtimes)) {
     if (typeof ms === 'number' && Number.isFinite(ms) && ms > 0 && validName(name)) clean[name] = ms;
   }
+  const cleanChecked = checked.filter(validName);
   return updateStore((store) => {
     const entry = store.reports[instanceId] ?? {};
-    store.reports[instanceId] = { ...entry, [kind]: { ...entry[kind], [scope]: { at: new Date().toISOString(), mtimes: clean, checked: checked.filter(validName), ...(complete === true && { complete: true }) } } };
+    const existing = entry[kind]?.[scope];
+    const now = Date.now();
+    if (existing) {
+      const age = now - Date.parse(existing.at);
+      // Origin reconciliation uses the newest scope that covers each file.
+      if (age >= 0 && age < REPORT_REFRESH_MS && (existing.complete === true) === (complete === true)
+        && isDeepStrictEqual(existing.mtimes, clean) && isDeepStrictEqual(existing.checked, cleanChecked)
+        && !hasNewerConflictingReport(existing, entry[kind])) return false;
+    }
+    const report = { at: new Date(now).toISOString(), mtimes: clean, checked: cleanChecked, ...(complete === true && { complete: true }) };
+    store.reports[instanceId] = { ...entry, [kind]: { ...entry[kind], [scope]: report } };
     return true;
   });
 }

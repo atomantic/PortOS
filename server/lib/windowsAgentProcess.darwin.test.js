@@ -5,6 +5,7 @@ import { existsSync } from 'node:fs';
 import { copyFile, mkdir, readFile, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { readTestProcesses, testProcessSettlement } from '../../scripts/lib/testOwnedProcesses.js';
 import { lazyTempDataRoot, makePathsProxy, cleanupTempDataRoots, ownTestBodies } from './mockPathsDataRoot.js';
 
 vi.mock('./fileUtils.js', async original => {
@@ -34,9 +35,25 @@ async function waitForFile(file) {
     await new Promise(resolve => setTimeout(resolve, 20));
   }
 }
-const alive = pid => { try { process.kill(pid, 0); return true; } catch { return false; } };
 const ps = (pid, field) => new Promise((resolve, reject) => execFile('/bin/ps', ['-o', `${field}=`, '-p', String(pid)],
   (error, stdout) => (error ? reject(error) : resolve(stdout.trim()))));
+
+// The reader treats existence as ready. An empty file would become PID zero,
+// for which kill(0, 0) probes the test runner's process group.
+function publishPid(file) {
+  return `const ready = ${JSON.stringify(file)};
+const fs = require('node:fs');
+fs.writeFileSync(ready + '.pending', String(process.pid));
+fs.renameSync(ready + '.pending', ready);`;
+}
+
+function liveIdentity(pid, records) {
+  expect(Number.isSafeInteger(pid) && pid > 0).toBe(true);
+  const record = records?.find(row => row.pid === pid);
+  expect(record?.terminal, 'fixture process must be live before release').toBe(false);
+  expect(record?.start).toEqual(expect.any(String));
+  return { pid, start: record.start };
+}
 
 function launch(run, command, args, options = {}) {
   const prepared = prepareWindowsAgentLaunch(run.id, command, args, { cwd: dir(run), env: process.env, ...options });
@@ -56,7 +73,7 @@ describe.skipIf(process.platform !== 'darwin')('macOS launchd-coalition release-
     await writeFile(script, `const fs = require('node:fs');
 const { spawn } = require('node:child_process');
 const child = process.argv[2] === 'child';
-if (child) fs.writeFileSync(${JSON.stringify(ready)}, String(process.pid));
+if (child) { ${publishPid(ready)} }
 else spawn(process.execPath, [__filename, 'child'], { stdio: 'ignore', detached: true }).unref();
 const timer = setInterval(() => { if (fs.existsSync(child ? ${JSON.stringify(childRelease)} : ${JSON.stringify(parentRelease)})) clearInterval(timer); }, 20);
 process.stdout.write('EXAMPLE_STDOUT');
@@ -71,9 +88,11 @@ setTimeout(() => process.exit(3), 20000).unref();`);
       const started = JSON.parse(await readFile(join(root, 'started.json'), 'utf8'));
       expect(started.proof).toMatchObject({ kind: 'launchd-coalition', version: 1, coalition: expect.stringMatching(/^[1-9][0-9]*$/) });
       await expect(readWindowsAgentSettlement(agent)).rejects.toMatchObject({ code: 'WINDOWS_AGENT_PROCESS_UNVERIFIED', reason: 'receipt-missing' });
+      const parent = liveIdentity(started.pid, readTestProcesses([started.pid]));
       await writeFile(parentRelease, 'release');
-      await vi.waitFor(() => expect(alive(started.pid)).toBe(false), { timeout: 5000 });
+      await vi.waitFor(() => expect(testProcessSettlement(parent, readTestProcesses([parent.pid]))).toBe('terminated'), { timeout: 5000 });
       const grandchild = Number(await readFile(ready, 'utf8'));
+      const original = liveIdentity(grandchild, readTestProcesses([grandchild]));
       // The grandchild leads its own session/process group and was never this supervisor's child.
       expect(Number(await ps(grandchild, 'pgid'))).toBe(grandchild);
       expect(Number(await ps(grandchild, 'ppid'))).not.toBe(child.pid);
@@ -82,7 +101,7 @@ setTimeout(() => process.exit(3), 20000).unref();`);
       expect(() => prepareWindowsAgentLaunch(agent.id, process.execPath, [], { cwd: root, env: process.env })).toThrow();
       await writeFile(childRelease, 'release');
       expect((await closed)[0]).toBe(0);
-      expect(alive(grandchild)).toBe(false);
+      expect(testProcessSettlement(original, readTestProcesses([grandchild]))).toBe('terminated');
       expect(output).toBe('EXAMPLE_STDOUT');
       expect(await readWindowsAgentSettlement(agent)).toMatchObject({ owner: started.owner, pid: started.pid, created: started.created,
         proof: started.proof, active: 0, exitCode: 0 });
@@ -92,7 +111,7 @@ setTimeout(() => process.exit(3), 20000).unref();`);
   it('cancels the whole coalition through the supervisor, escalating past a SIGTERM-ignoring descendant, and spares a neighbor', async () => {
     await reserveWindowsAgentProcess(agent);
     const ready = join(root, 'child-ready');
-    const descendant = `process.on('SIGTERM', () => {}); require('node:fs').writeFileSync(${JSON.stringify(ready)}, String(process.pid)); setInterval(() => {}, 1000);`;
+    const descendant = `process.on('SIGTERM', () => {}); ${publishPid(ready)} setInterval(() => {}, 1000);`;
     const rootScript = `require('node:child_process').spawn(process.execPath, ['-e', ${JSON.stringify(descendant)}], { stdio: 'ignore', detached: true }).unref(); setInterval(() => {}, 1000);`;
     const { child, closed } = launch(agent, process.execPath, ['-e', rootScript]);
     const neighbor = spawn(process.execPath, ['-e', 'setInterval(()=>{},1000)'], { stdio: 'ignore' });
@@ -100,12 +119,28 @@ setTimeout(() => process.exit(3), 20000).unref();`);
     try {
       await waitForFile(ready);
       const grandchild = Number(await readFile(ready, 'utf8'));
+      const pids = [grandchild, neighbor.pid];
+      const before = readTestProcesses(pids);
+      const original = liveIdentity(grandchild, before);
+      const bystander = liveIdentity(neighbor.pid, before);
+      await waitForFile(join(root, 'started.json'));
+      await expect(readWindowsAgentSettlement(agent)).rejects.toMatchObject({ reason: 'receipt-missing' });
       // A forced stop still reaches the supervisor as a cancellation request.
       killProcessTree(child, 'SIGKILL');
+      await waitForFile(join(root, 'settled.json'));
+      // Observe both original identities at publication, before waiting for the
+      // supervisor to close. Never give a live descendant extra time to exit.
+      const after = readTestProcesses(pids);
+      const receipt = await readWindowsAgentSettlement(agent);
+      expect({
+        descendant: testProcessSettlement(original, after),
+        neighbor: testProcessSettlement(bystander, after),
+        active: receipt.active,
+        exitCode: receipt.exitCode,
+      }, `coalition receipt published at ${receipt.settledAt}`).toEqual({
+        descendant: 'terminated', neighbor: 'running', active: 0, exitCode: 143,
+      });
       expect((await closed)[0]).toBe(143);
-      expect(alive(grandchild)).toBe(false);
-      expect(alive(neighbor.pid)).toBe(true);
-      expect(await readWindowsAgentSettlement(agent)).toMatchObject({ active: 0, exitCode: 143 });
     } finally { killProcessTree(child); neighbor.kill(); await Promise.all([closed, neighborClosed]); }
   }, 30000);
 

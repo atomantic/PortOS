@@ -12,6 +12,7 @@ import { existsSync } from 'fs'
 import { readdir, stat, copyFile, link, rm, rmdir } from 'fs/promises'
 import { dirSize, ensureDir } from '../lib/fileUtils.js'
 import { fetchWithTimeout } from '../lib/fetchWithTimeout.js'
+import { describeFetchError } from '../lib/fetchErrorChain.js'
 import {
   dirIsMlx, selectPrimaryGguf, selectProjectorGguf, isShardedGguf, lmStudioPublisherRepo, quantFromGgufFilename
 } from '../lib/localLlmDisk.js'
@@ -129,7 +130,7 @@ async function checkLMStudioAvailable(forceRefresh = false) {
     return true
   } catch (err) {
     isAvailable = false
-    status.lastError = err.message
+    status.lastError = describeFetchError(err)
     status.consecutiveErrors++
     lastCheckAt = now
     return false

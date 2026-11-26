@@ -1,4 +1,4 @@
-import { useEffect, useRef } from 'react';
+import { useId, useLayoutEffect, useRef } from 'react';
 
 // Inline "question + confirm + cancel" row for destructive actions — the
 // inline-confirmation pattern PortOS prefers over a two-click-arm button or a
@@ -41,12 +41,31 @@ export default function InlineConfirmRow({
   variant = 'box',
   className = '',
   autoFocus = false,
+  returnFocusRef,
   stacked = false,
   ...rest
 }) {
   const t = TONES[tone] || TONES.error;
   const v = VARIANTS[variant] || VARIANTS.box;
   const rowRef = useRef(null);
+  const openerRef = useRef(null);
+  const questionId = useId();
+
+  useLayoutEffect(() => {
+    const row = rowRef.current;
+    const doc = row.ownerDocument;
+    if (!row.contains(doc.activeElement) && doc.activeElement !== doc.body) {
+      openerRef.current = doc.activeElement;
+    }
+    return () => {
+      if (!row.contains(doc.activeElement)) return;
+      queueMicrotask(() => {
+        if (row.isConnected || doc.activeElement !== doc.body) return;
+        const opener = returnFocusRef?.current || openerRef.current;
+        if (opener?.isConnected) opener.focus();
+      });
+    };
+  }, [returnFocusRef]);
 
   // `autoFocus` moves focus to the row itself (not to the destructive button —
   // a stray Enter must not delete anything). Callers that reveal this row from
@@ -54,18 +73,20 @@ export default function InlineConfirmRow({
   // keyboard/screen-reader users land on, and hear, the question instead of
   // being left on a trigger whose menu just vanished. Pair it with an
   // `aria-label` naming the record so the focus move announces something.
-  useEffect(() => {
+  useLayoutEffect(() => {
     if (autoFocus) rowRef.current?.focus();
   }, [autoFocus]);
 
   return (
     <div
       ref={rowRef}
+      role="group"
+      aria-labelledby={rest['aria-label'] ? undefined : questionId}
       tabIndex={autoFocus ? -1 : undefined}
       className={`flex flex-col items-stretch gap-2 ${stacked ? '' : 'sm:flex-row sm:items-center'} ${v.frame} ${t.wrapper} focus:outline-hidden focus:ring-2 focus:ring-port-accent ${className}`.trim()}
       {...rest}
     >
-      <span className={`${v.question} text-white flex-1 min-w-0`}>{question}</span>
+      <span id={questionId} className={`${v.question} text-white flex-1 min-w-0`}>{question}</span>
       <div className={`grid grid-cols-2 gap-2 ${stacked ? '' : 'sm:flex sm:shrink-0'}`}>
         <button
           type="button"

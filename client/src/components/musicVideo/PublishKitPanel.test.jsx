@@ -5,6 +5,10 @@
  */
 import { describe, it, expect, vi } from 'vitest';
 import { render, screen, fireEvent, waitFor, act } from '@testing-library/react';
+import { useState } from 'react';
+import * as apiCore from '../../services/apiCore.js';
+import { MockEventSource, lastEventSource } from '../../test/mockEventSource.js';
+import useMusicVideoPublishKit from './stages/useMusicVideoPublishKit.js';
 
 vi.mock('../../hooks/useProviderModels.js', () => ({
   default: () => ({ providers: [], selectedProviderId: '', selectedModel: '', availableModels: [], setSelectedProviderId: vi.fn(), setSelectedModel: vi.fn() }),
@@ -61,7 +65,43 @@ describe('PublishKitPanel (#9281)', () => {
     expect(screen.getByRole('button', { name: /Build publishing kit/ })).toBeDisabled();
     rerender(<PublishKitPanel project={{ id: 'mv-1', renderHistoryId: 'rh-1' }} publishKit={k} />);
     fireEvent.click(screen.getByRole('button', { name: /Build publishing kit/ }));
-    expect(k.build).toHaveBeenCalled();
+    expect(k.build).toHaveBeenCalledWith({ loudnessPreset: 'as-mixed' });
+  });
+
+  it('requests Web mastering from the build control and reads delivered loudness beside its download', async () => {
+    const original = { id: 'mv-web', renderHistoryId: 'render-web' };
+    const completed = { ...original, publishKit: { ...built, exports: [
+      { ...built.exports[0], loudness: { integratedLufs: -17.4, truePeakDb: -2, targetLufs: -14 } },
+      { kind: 'preview-720p', filename: 'preview.mp4' },
+    ] } };
+    const request = vi.spyOn(apiCore, 'request').mockImplementation(async (path) => {
+      if (path === '/music-video/mv-web/publish-kit/build') return { jobId: 'mvpk-web' };
+      if (path === '/music-video/mv-web') return completed;
+      throw new Error(`Unexpected request to ${path}`);
+    });
+    MockEventSource.reset();
+    vi.stubGlobal('EventSource', MockEventSource);
+    function PublishRelease() {
+      const [project, replaceProject] = useState(original);
+      const publishKit = useMusicVideoPublishKit({ project, replaceProject });
+      return <PublishKitPanel project={project} publishKit={publishKit} enabledTargets={[]} />;
+    }
+    try {
+      render(<PublishRelease />);
+      const preset = screen.getByLabelText('Copy loudness');
+      expect(preset).toHaveValue('as-mixed');
+      fireEvent.change(preset, { target: { value: 'web' } });
+      fireEvent.click(screen.getByRole('button', { name: 'Build publishing kit' }));
+      expect(request).toHaveBeenCalledWith('/music-video/mv-web/publish-kit/build', { method: 'POST', silent: true, body: '{"loudnessPreset":"web"}' });
+      await waitFor(() => expect(lastEventSource()?.url).toBe('/api/music-video/publish-kit/mvpk-web/events'));
+      act(() => lastEventSource().emit({ type: 'complete', result: { projectId: original.id } }));
+      const readout = await screen.findByText('-17.4 LUFS, peak -2 dB');
+      expect(readout.closest('li').querySelector('a')).toHaveAttribute('href', '/data/videos/x.mp4');
+      expect(screen.getAllByText(/LUFS, peak/)).toHaveLength(1);
+    } finally {
+      request.mockRestore();
+      vi.unstubAllGlobals();
+    }
   });
 
   it('drafts copy from the notes, only well-formed links and only what is ticked', async () => {

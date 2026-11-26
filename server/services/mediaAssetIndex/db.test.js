@@ -193,12 +193,14 @@ describe.skipIf(!runDb)('media asset index DB round-trip', () => {
 
   it('matches legacy mixed summary semantics and expands the snapshot once, including empty pages', async () => {
     const images = [
-      { filename: `${PFX}summary-a.png`, prompt: '100% fox', createdAt: '2026-01-03', universeId: 'example-u' },
-      { filename: `${PFX}summary-b.png`, prompt: '100% fox', createdAt: '2026-01-02', hidden: true },
+      { filename: `${PFX}summary-a.png`, prompt: '100% fox', createdAt: '2026-01-03', universeId: 'example-u',
+        entryCategory: 'places', entryKind: 'canon', cleanedFrom: 'example.png' },
+      { filename: `${PFX}summary-b.png`, prompt: '100% fox', createdAt: '2026-01-02', hidden: true, cleanedFrom: 'example.png' },
     ];
     const videos = [
-      { id: `${PFX}summary-v`, prompt: '100% fox', createdAt: '2026-01-01', thumbnail: 'example.jpg' },
-      { id: `${PFX}summary-hidden`, prompt: 'fox', createdAt: 'invalid', hidden: true },
+      { id: `${PFX}summary-v`, filename: 'example.mp4', prompt: '100% fox', createdAt: '2026-01-01',
+        thumbnail: 'example.jpg', cleanedFrom: 'example.png' },
+      { id: `${PFX}summary-hidden`, prompt: 'fox', createdAt: 'invalid', thumbnail: '', hidden: true },
     ];
     for (const image of images) await db.upsertAsset({ mediaKey: `image:${image.filename}`,
       kind: 'image', ref: image.filename, data: image, createdAt: image.createdAt });
@@ -211,6 +213,10 @@ describe.skipIf(!runDb)('media asset index DB round-trip', () => {
       { excludeKeys: [keys[0], keys[2]] }, // unsorted
       { orderedKeys: [...keys].reverse() },
       { cover: true }, { universeId: 'example-u' }, { filename: images[0].filename },
+      { filename: videos[0].filename, cleanedFrom: 'example.png', compact: true },
+      { cleanedFrom: 'example.png', cover: true, compact: true, limit: 3 },
+      { entryCategory: 'places', entryKind: 'canon', compact: true },
+      { orderedKeys: [...keys].reverse(), cover: true, offset: 1, limit: 3, compact: true },
       { videos: [], mediaKeys: [], countMediaKeys: [] }, // entirely empty
       { videos: [] }, // images only
       { mediaKeys: keys.slice(2), countMediaKeys: keys.slice(2) }, // videos only
@@ -234,7 +240,11 @@ describe.skipIf(!runDb)('media asset index DB round-trip', () => {
       id: `${PFX}synthetic-${i}`, createdAt: '2026-01-01',
     }));
     query.mockClear();
-    await db.listMixedGalleryPage({ videos: syntheticVideos, limit: 1 });
+    const page = await db.listMixedGalleryPage({
+      videos: syntheticVideos, mediaKeys: keys.slice(0, 2), countMediaKeys: keys.slice(0, 2), compact: true, limit: 1, offset: 1,
+    });
+    expect(page.total).toBe(2);
+    expect(page.items).toEqual([{ kind: 'image', data: expect.objectContaining({ filename: images[1].filename, compact: true }) }]);
     const [sql, params] = query.mock.calls[0];
     const explained = await query(`EXPLAIN (ANALYZE, FORMAT JSON) ${sql}`, params);
     const nodes = [];
@@ -244,6 +254,11 @@ describe.skipIf(!runDb)('media asset index DB round-trip', () => {
     expect(expansions).toHaveLength(1);
     expect(expansions[0]['Actual Loops']).toBe(1);
     expect(expansions[0]['Actual Rows']).toBe(200);
+    // Both matching images contribute to the totals, but only the selected
+    // page image reaches the JSONB compaction function.
+    const compactions = nodes.filter(node => node['Function Name'] === 'jsonb_each');
+    expect(compactions).toHaveLength(1);
+    expect(compactions[0]['Actual Loops']).toBe(1);
     for (const image of images) await db.removeAsset(`image:${image.filename}`);
   });
 

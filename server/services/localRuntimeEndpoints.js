@@ -13,6 +13,7 @@ import {
   isEndpointRuntime,
   localRuntimeKind,
 } from '../lib/localProviderRuntime.js';
+import { getSettings } from './settings.js';
 import { listProviders } from './provider/providers.js';
 import { getLlamaServerEndpoint } from './llamaServerManager.js';
 import { getMtplxServerEndpoint, getMtplxServerStatus } from './mtplxServerManager.js';
@@ -73,28 +74,37 @@ export async function durableRuntimeModels(runtime) {
  * A managed backend has a durable catalog on disk, so its list survives the daemon being down. An
  * endpoint runtime only knows what `GET /v1/models` reports, so a stopped daemon is an ERROR, never
  * an empty catalog.
- * @returns {Promise<{models: Array<object>|null, error: string|null}>}
+ * Inactive means explicitly disabled, not configured, or connection refused. A
+ * timeout, authentication error or malformed response is not evidence of a stop.
+ * @returns {Promise<{models: Array<object>|null, error: string|null, offline?: boolean, inactive?: boolean}>}
  *   `models: null` means the list could not be read; `[]` means it was read and
  *   is genuinely empty.
  */
-export async function listRuntimeModels(runtime, { durable = true } = {}) {
+export async function listRuntimeModels(runtime, { durable = true, respectDisabled = false } = {}) {
   // `listManagedBackendModels` carries the "empty vs unreadable" sentinel for these backends.
-  if (MANAGED_ASSESSMENT_BACKENDS.includes(runtime)) return listManagedBackendModels(runtime);
+  if (MANAGED_ASSESSMENT_BACKENDS.includes(runtime)) {
+    if (respectDisabled && (await getSettings()).localLlm?.[runtime]?.disabled) {
+      return { models: null, error: null, offline: true, inactive: true };
+    }
+    const result = await listManagedBackendModels(runtime);
+    if (/\bECONNREFUSED\b/.test(result.error || '')) return { ...result, offline: true, inactive: true };
+    return result;
+  }
 
   const endpoint = await runtimeEndpoint(runtime);
-  if (!endpoint) return { models: null, error: 'no endpoint is configured for this runtime', offline: true };
+  if (!endpoint) return { models: null, error: 'no endpoint is configured for this runtime', offline: true, inactive: true };
 
   // Daemon down is common and fixable: fall back to disk and mark `offline` so consumers know
   // nothing can run until the runtime starts.
   // `durable: false` skips the disk fallback: MTPLX's status sizes its cache directory, which can take tens of
   // seconds, and a caller that cannot run a model on a stopped daemon has no use for the list.
-  const offlineListing = async (error) => {
+  const offlineListing = async (error, inactive = false) => {
     const models = durable ? await durableRuntimeModels(runtime).catch(() => []) : [];
-    return { models: models.length ? models : null, error, offline: true };
+    return { models: models.length ? models : null, error, offline: true, ...(inactive ? { inactive } : {}) };
   };
 
   const probe = await probeOpenAiModels(endpoint, { timeoutMs: 2500, apiKey: await runtimeApiKey(runtime) });
-  if (!probe.reachable) return offlineListing(`not reachable at ${endpoint} (${probe.error})`);
+  if (!probe.reachable) return offlineListing(`not reachable at ${endpoint} (${probe.error})`, probe.error === 'ECONNREFUSED');
   if (!probe.models) return offlineListing(probe.error || 'model listing was not readable');
   // Endpoint runtimes report ids only; `null` params leave the capability axis unscored.
   return { models: probe.models.map((id) => ({ id, params: null, quantization: null })), error: null };

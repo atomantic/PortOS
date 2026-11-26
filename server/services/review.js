@@ -90,77 +90,77 @@ const RETENTION_INTERVAL_MS = 24 * 60 * 60 * 1000;
 const RETENTION_AGE_MS = 30 * 24 * 60 * 60 * 1000;
 const ARCHIVE_ELIGIBLE_STATUSES = new Set(['completed', 'dismissed']);
 
-// Module-level cache of the parsed items.json, keyed on file identity (mtime +
+// Module-level caches of parsed Review files, keyed on file identity (mtime +
 // size) rather than an in-process "loaded" flag: `dataManager.js` registers
 // `review` as archivable, so `data/review/` can still be replaced out from
 // under this process while it runs (restore, or a manual delete), and a flag-based cache
-// would keep serving a since-deleted file's contents forever. `saveItems`
-// INVALIDATES the cache after every write rather than seeding it from what it
-// wrote: writes are serialized by `runMutation`, but unqueued reads (`getItems`,
+// would keep serving a since-deleted file's contents forever. Writes invalidate
+// the cache instead of seeding it from what they wrote: writes are serialized by `runMutation`, but unqueued reads (`getItems`,
 // `getPendingCounts`) can still overlap a write, and a post-write stat could
 // pin one writer's content under another turn's identity and serve it until
 // the next write. Invalidation keeps the invariant simple —
 // the cache only ever holds content read from the file under its own identity
 // — at the cost of one re-parse per write.
 //
-// `loadItems()` hands every caller a fresh shallow clone (see `cloneItems`),
-// never the cached array/objects themselves — `getItems` is a public export
-// with callers outside this module's own mutate-then-save discipline, and a
-// caller that decorated or edited a returned item in place would otherwise
-// silently pollute the cache, later persisted by the next unrelated
-// `saveItems` call. The internal mutation paths below (createItem/
-// updateItemStatus/bulkUpdateStatus/updateItem/deleteItem/
-// updateStatusByReferenceId) mutate the clone `loadItems()` gave them and
-// then immediately call `saveItems` with it — nothing they hold is ever
-// cached, so the objects those paths return to their callers are theirs to
-// mutate too.
+// Snapshots are read-only inside this module. Mutations and public read results
+// copy the records they expose so callers cannot change a later read or save.
 let itemsCache = null; // { mtimeMs, size, items }
+let archiveCache = null;
+let archiveRead = null;
 let lastRetentionAt = 0; // 0 so the first save after boot always evaluates retention
 
-const cloneItems = (items) => items.map(i => ({ ...i, metadata: { ...(i.metadata || {}) } }));
+const statReviewFile = (file) => stat(file).catch((err) => {
+  if (err.code === 'ENOENT') return null;
+  throw err;
+});
 
-/**
- * Load all review items from file, reusing the cached parse when the file's
- * mtime/size haven't changed since the last read. Always returns a clone —
- * see the cache comment above.
- */
+const matchesFileIdentity = (stats, cache) =>
+  stats && cache && stats.mtimeMs === cache.mtimeMs && stats.size === cache.size;
+
+const reviewSnapshot = (stats, items) => stats ? { mtimeMs: stats.mtimeMs, size: stats.size, items } : null;
+
 // STRICT (#4115): `getPendingCounts()` reduces this list into the Review Hub's
 // total/alert/todo/briefing/cos tiles, so a swallowed unreadable read reports a
 // confident "0 pending" that is simply false. It is also the base of every
 // read-modify-write (createItem/status updates → `saveItems`), where an
 // unreadable file collapsing to `[]` would destroy every stored review item.
-async function loadItems() {
-  const stats = await stat(ITEMS_FILE).catch((err) => {
-    if (err.code === 'ENOENT') return null;
-    throw err;
-  });
+async function loadItemsSnapshot() {
+  const stats = await statReviewFile(ITEMS_FILE);
+  if (matchesFileIdentity(stats, itemsCache)) return itemsCache.items;
 
-  if (stats && itemsCache && itemsCache.mtimeMs === stats.mtimeMs && itemsCache.size === stats.size) {
-    return cloneItems(itemsCache.items);
-  }
-
-  // A stat ENOENT is NOT collapsed to `[]` here: on win32 an `atomicWrite`
-  // swap in flight (temp file renamed over the target) reports ENOENT for a
-  // moment too, and only readJSONFile's swap-aware retry can tell that apart
-  // from a genuinely absent file (which it returns `[]` for). Short-circuiting
-  // would hand a concurrent read-modify-write (a cosEvents `task:ready` burst)
-  // an empty list to save over every stored item. Nothing is cached under an
-  // unknown identity — the next read re-stats and re-parses.
+  // On Windows an in-flight atomic swap can report ENOENT. Let readJSONFile
+  // retry that gap and avoid caching content under an unknown identity.
   const items = await readJSONFile(ITEMS_FILE, [], { strict: true });
-  itemsCache = stats ? { mtimeMs: stats.mtimeMs, size: stats.size, items } : null;
-  return cloneItems(items);
+  const snapshot = items.map(item => ({ ...item, metadata: { ...(item.metadata || {}) } }));
+  itemsCache = reviewSnapshot(stats, snapshot);
+  return snapshot;
 }
 
-/**
- * Load the archived (retired) items. Never cached — only read from the
- * history and archived item operations.
- * Strict: a caller that must not silently treat "unreadable" as "empty"
- * (`applyRetention`, before it trusts the file enough to write over it)
- * awaits this directly. A read-only view that can safely degrade instead
- * uses `loadArchiveOrEmpty`.
- */
-async function loadArchive() {
-  return readJSONFile(ARCHIVE_FILE, [], { strict: true });
+async function loadItems() {
+  return structuredClone(await loadItemsSnapshot());
+}
+
+/** Share the parsed archive across history readers and preserve strict reads for writers. */
+function loadArchive() {
+  if (archiveRead) return archiveRead;
+
+  const read = statReviewFile(ARCHIVE_FILE).then(async (stats) => {
+    if (matchesFileIdentity(stats, archiveCache)) return archiveCache.items;
+    const items = await readJSONFile(ARCHIVE_FILE, [], { strict: true });
+    // A write may have invalidated this read while it was in flight.
+    if (archiveRead === read) archiveCache = reviewSnapshot(stats, items);
+    return items;
+  }).finally(() => {
+    if (archiveRead === read) archiveRead = null;
+  });
+  archiveRead = read;
+  return read;
+}
+
+async function saveArchive(items) {
+  await atomicWrite(ARCHIVE_FILE, items);
+  archiveCache = null;
+  archiveRead = null;
 }
 
 /**
@@ -221,7 +221,7 @@ async function applyRetention(items) {
 
   const merged = new Map(archive.map(i => [i.id, i]));
   for (const item of toArchive) merged.set(item.id, item); // live copy wins
-  const archived = await atomicWrite(ARCHIVE_FILE, [...merged.values()]).then(() => true).catch((err) => {
+  const archived = await saveArchive([...merged.values()]).then(() => true).catch((err) => {
     console.error(`⚠️ Failed to write review archive, skipping retention this cycle: ${err.message}`);
     return false;
   });
@@ -248,13 +248,14 @@ async function saveItems(items) {
 async function loadItemCollection(id) {
   const items = await loadItems();
   if (items.some(item => item.id === id)) return { items, save: saveItems };
-  const archived = await loadArchive();
-  return { items: archived, save: items => atomicWrite(ARCHIVE_FILE, items) };
+  const archived = structuredClone(await loadArchive());
+  return { items: archived, save: saveArchive };
 }
 
 /**
  * Get review items sorted by type then creation date (newest first). Apply all
- * filters before returning either the full array or a requested page.
+ * filters before returning either the full array or a requested page. The
+ * optional matches predicate must treat its input as read-only.
  * A completed/dismissed or unfiltered query also merges in archive.json —
  * archive never holds a pending item, so a pending-only query skips it. A
  * corrupt archive.json degrades to "no archived items" rather than failing
@@ -264,7 +265,7 @@ async function loadItemCollection(id) {
  * mid-retention; see `applyRetention`'s doc comment.
  */
 export async function getItems({ status, type, limit, offset, matches } = {}) {
-  let items = await loadItems();
+  let items = [...await loadItemsSnapshot()];
   if (!status || ARCHIVE_ELIGIBLE_STATUSES.has(status)) {
     const archived = await loadArchiveOrEmpty('getItems');
     const liveIds = new Set(items.map(i => i.id));
@@ -276,17 +277,17 @@ export async function getItems({ status, type, limit, offset, matches } = {}) {
   items.sort((a, b) => {
     const typeOrder = ITEM_TYPES.indexOf(a.type) - ITEM_TYPES.indexOf(b.type);
     if (typeOrder !== 0) return typeOrder;
-    return new Date(b.createdAt) - new Date(a.createdAt);
+    return Date.parse(b.createdAt) - Date.parse(a.createdAt);
   });
   const page = { limit, offset };
-  return isPaginationRequested(page) ? paginateArray(items, page) : items;
+  return structuredClone(isPaginationRequested(page) ? paginateArray(items, page) : items);
 }
 
 /**
  * Get count of pending items by type
  */
 export async function getPendingCounts() {
-  const items = await loadItems();
+  const items = await loadItemsSnapshot();
   return items.reduce((acc, i) => {
     if (i.status !== 'pending') return acc;
     acc.total++;
@@ -398,18 +399,17 @@ export async function reopenItem(id) {
       return applyItemStatus(id, 'pending');
     }
 
-    const archive = await loadArchive();
-    const index = archive.findIndex((item) => item.id === id);
-    if (index === -1) {
+    const archived = (await loadArchive()).find(item => item.id === id);
+    if (!archived) {
       const err = new Error(`Review item not found: ${id}`);
       err.status = 404;
       throw err;
     }
 
-    const [item] = archive.splice(index, 1);
-    const reopened = { ...item, status: 'pending', updatedAt: new Date().toISOString() };
+    const reopened = { ...structuredClone(archived), status: 'pending', updatedAt: new Date().toISOString() };
     await saveItems([...liveItems, reopened]);
-    await atomicWrite(ARCHIVE_FILE, archive);
+    // Retention can add entries while saving the reopened live item.
+    await saveArchive((await loadArchive()).filter(entry => entry.id !== id));
     console.log(`📋 Review item reopened: ${reopened.type} (${reopened.id})`);
     return { result: reopened, events: [['item:updated', reopened]] };
   });
@@ -548,27 +548,21 @@ export async function getBriefing() {
   };
 }
 
-/**
- * Bridge CoS events into review items
- */
-cosEvents.on('memory:approval-needed', (data) => {
-  const memories = data?.memories ?? [];
-  for (const mem of memories) {
-    createItem({
-      type: 'alert',
-      title: `Memory approval: ${mem.content?.slice(0, 80) || 'New memory entry'}`,
-      description: `Type: ${mem.type ?? 'unknown'} | Confidence: ${mem.confidence ?? 'N/A'}`,
-      metadata: {
-        referenceId: mem.id,
-        category: 'memory-approval',
-        actionKind: 'memory.approval',
-        sourceOwned: true,
-        agentId: data?.agentId,
-        taskId: data?.taskId,
-      }
-    }).catch(err => console.error(`❌ Failed to create review alert: ${err.message}`));
-  }
-});
+export function createMemoryApprovalItem(mem, agentId, taskId) {
+  return createItem({
+    type: 'alert',
+    title: `Memory approval: ${mem.content?.slice(0, 80) || 'New memory entry'}`,
+    description: `Type: ${mem.type ?? 'unknown'} | Confidence: ${mem.confidence ?? 'N/A'}`,
+    metadata: {
+      referenceId: mem.id,
+      category: 'memory-approval',
+      actionKind: 'memory.approval',
+      sourceOwned: true,
+      agentId,
+      taskId,
+    }
+  });
+}
 
 // Goal-fidelity hold (#5994): a run that shipped clean, reviewed code which does
 // something other than what the task asked for. It is recorded as needs-attention
@@ -628,3 +622,21 @@ cosEvents.on('memory:approved', (data) => {
 cosEvents.on('memory:rejected', (data) => {
   if (data?.id) dismissByReferenceId(data.id).catch(err => console.error(`❌ Failed to dismiss rejected memory review item: ${err.message}`));
 });
+
+export function removeMemoryApprovalItems(referenceId) {
+  return runMutation(async () => {
+    const items = await loadItems();
+    const archive = await loadArchive();
+    const matches = item => item.metadata?.category === 'memory-approval'
+      && item.metadata.referenceId === referenceId;
+
+    const removed = [...items.filter(matches), ...archive.filter(matches)];
+    const keptArchive = archive.filter(item => !matches(item));
+    if (keptArchive.length !== archive.length) await saveArchive(keptArchive);
+    const keptItems = items.filter(item => !matches(item));
+    if (keptItems.length !== items.length) await saveItems(keptItems);
+
+    const ids = new Set(removed.map(item => item.id));
+    return { result: ids.size, events: [...ids].map(id => ['item:deleted', { id }]) };
+  });
+}

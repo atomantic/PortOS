@@ -94,17 +94,18 @@ export function extractHtmlDocument(text) {
  */
 export function scoreHtmlPage(html) {
   const doc = String(html || '');
+  const hasContent = doc.trim().length > 0;
   const external = /(?:src|href)\s*=\s*["']?(?:https?:)?\/\//i.test(doc)
     || /@import\s+(?:url\()?["']?(?:https?:)?\/\//i.test(doc)
     || /\b(?:fetch|XMLHttpRequest)\b|\bimport\s*\(/.test(doc.replace(/\/\/[^\n]*|\/\*[\s\S]*?\*\//g, ''));
   const checks = [
     { id: 'document', label: 'Complete HTML document', ok: /<html[\s>]/i.test(doc) && /<\/html>\s*$/i.test(doc) },
-    { id: 'size', label: 'More than a stub', ok: doc.length >= HTML_MIN_BYTES },
+    { id: 'size', label: 'More than a stub', ok: hasContent && doc.length >= HTML_MIN_BYTES },
     { id: 'styled', label: 'Has its own styles', ok: /<style[\s>]/i.test(doc) },
     { id: 'interactive', label: 'Has script or animation', ok: /<script[\s>]/i.test(doc) || /@keyframes|animation\s*:/i.test(doc) },
-    { id: 'self-contained', label: 'No external resources', ok: !external },
+    { id: 'self-contained', label: 'No external resources', ok: hasContent && !external },
     // A model that answers with an outline writes `<style>...</style>` and `<script>...</script>` instead of the code.
-    { id: 'real-code', label: 'Real code, not "..." placeholders', ok: !/<(style|script)\b[^>]*>\s*(?:\.{3}|…)\s*<\/\1>/i.test(doc) },
+    { id: 'real-code', label: 'Real code, not "..." placeholders', ok: hasContent && !/<(style|script)\b[^>]*>\s*(?:\.{3}|…)\s*<\/\1>/i.test(doc) },
   ];
   const passed = checks.filter((c) => c.ok).length;
   return { checks, passed, total: checks.length, bytes: doc.length };

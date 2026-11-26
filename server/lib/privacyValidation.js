@@ -165,6 +165,12 @@ export const privacyVaultListQuerySchema = z.object({
   ...paginationQueryFields,
 }).strict();
 
+export const privacyTwinHistoryCleanupSchema = z.discriminatedUnion('action', [
+  z.object({ action: z.literal('list') }).strict(),
+  z.object({ action: z.literal('scrub'), recordId: z.string().uuid() }).strict(),
+  z.object({ action: z.literal('delete'), kind: z.enum(['run', 'feedback']), id: z.string().uuid() }).strict(),
+]);
+
 export const privacyVaultIdParamsSchema = z.object({
   id: z.string().uuid(),
 }).strict();

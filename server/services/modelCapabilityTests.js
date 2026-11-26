@@ -549,7 +549,7 @@ export async function getCapabilityTestReport() {
   const providers = await listProviders();
   const [{ index, readError }, listed, drivers] = await Promise.all([
     indexResults(),
-    Promise.all(ASSESSABLE_RUNTIMES.map(async (runtime) => [runtime, await listRuntimeModels(runtime)]))
+    Promise.all(ASSESSABLE_RUNTIMES.map(async (runtime) => [runtime, await listRuntimeModels(runtime, { respectDisabled: true })]))
       .then(Object.fromEntries),
     Promise.all(ASSESSABLE_RUNTIMES.map(async (runtime) => [runtime, await agentDriverFor(runtime, providers)]))
       .then(Object.fromEntries),
@@ -617,13 +617,10 @@ export async function getCapabilityTestReport() {
       passed: countTests((t) => t.result?.verdict === 'passed'),
       failed: countTests((t) => t.result?.verdict === 'failed'),
     },
-    // Runtimes whose model list could not be read live — distinct from "listed
-    // and legitimately empty". `manageUrl` is what makes this actionable rather
-    // than just a complaint: for the runtimes PortOS can start, it points at the
-    // page that starts them. `recovered` says PortOS listed what is on disk
-    // anyway, so the user knows the models below are real and merely unreachable.
+    // Unexpected listing failures. A stopped or disabled runtime is normal;
+    // cached models for a stopped daemon remain visible but cannot be run.
     listErrors: ASSESSABLE_RUNTIMES
-      .filter((id) => listed[id].error)
+      .filter((id) => listed[id].error && !listed[id].inactive)
       .map((id) => ({
         id,
         label: runtimeLabel(id),

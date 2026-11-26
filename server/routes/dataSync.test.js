@@ -122,6 +122,10 @@ describe('POST /api/sync/tombstones/sweep', () => {
   it('rejects negative graceMs', async () => {
     const res = await request(buildApp()).post('/api/sync/tombstones/sweep').send({ graceMs: -1 });
     expect(res.status).toBe(400);
+    expect(res.body).toMatchObject({
+      code: 'VALIDATION_ERROR',
+      context: { details: [{ path: 'graceMs', message: expect.any(String) }] },
+    });
     expect(sweepTombstones).not.toHaveBeenCalled();
   });
 
@@ -377,6 +381,19 @@ describe('GET /api/sync/:category — peer-pull authorization', () => {
     settings = { federation: { strictPullAuthorization: true } };
     const res = await request(buildApp()).get('/api/sync/universe/snapshot');
     expect(res.status).toBe(403);
+  });
+
+  it('returns field details for invalid sender metadata before applying data', async () => {
+    const res = await request(buildApp()).post('/api/sync/digitalTwin/apply').send({
+      data: { a: 1 },
+      portosMeta: { schemaVersions: { digitalTwin: -1 } },
+    });
+    expect(res.status).toBe(400);
+    expect(res.body).toMatchObject({
+      code: 'VALIDATION_ERROR',
+      context: { details: [{ path: 'portosMeta.schemaVersions.digitalTwin', message: expect.any(String) }] },
+    });
+    expect(applyRemote).not.toHaveBeenCalled();
   });
 
   it('forwards populated sender metadata so apply can enforce its schema-version gate', async () => {

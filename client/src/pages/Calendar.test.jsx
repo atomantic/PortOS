@@ -230,3 +230,22 @@ it('updates a mounted day grid color and removes events after configuration chan
   expect(screen.queryByRole('button', { name: /Configured meeting/ })).toBeNull();
   expect(screen.getByText('0 accounts')).toBeVisible();
 });
+
+it('moves the Week view current-time line each minute and clears the timer on unmount', async () => {
+  api.getCalendarAccounts.mockResolvedValue([account]);
+  vi.useFakeTimers();
+  vi.setSystemTime(new Date(2026, 9, 7, 9));
+  try {
+    const { unmount } = renderCalendar('/calendar/week?week=2026-10-04');
+    await act(async () => {});
+    const currentTimeLine = screen.getByLabelText('Current time');
+    expect(currentTimeLine).toHaveStyle({ top: '720px' });
+    act(() => vi.advanceTimersByTime(60_000));
+    expect(currentTimeLine).toHaveStyle({ top: '721.3333333333334px' });
+    expect(vi.getTimerCount()).toBe(1);
+    unmount();
+    expect(vi.getTimerCount()).toBe(0);
+  } finally {
+    vi.useRealTimers();
+  }
+});

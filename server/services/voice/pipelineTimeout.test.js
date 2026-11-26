@@ -57,10 +57,10 @@ describe('runTurn LLM timeout recovery', () => {
     await expect(turn).rejects.toThrow('Voice LLM request timed out');
     await vi.waitFor(() => expect(mocks.synthesize).not.toHaveBeenCalled());
     expect(signal.aborted).toBe(false);
-    expect(events).toContainEqual({
+    expect(events.filter(({ event }) => event === 'voice:tts:cancel')).toEqual([{
       event: 'voice:tts:cancel',
       payload: { reason: 'timeout' },
-    });
+    }]);
     expect(events.some(({ event }) => event === 'voice:tts:audio')).toBe(false);
   });
 });

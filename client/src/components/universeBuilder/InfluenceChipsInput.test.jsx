@@ -2,37 +2,17 @@ import { describe, it, expect, vi } from 'vitest';
 import { render, screen, act } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 
-// `vi.hoisted` so the mock-state lives before the `vi.mock` factories below
-// (Vitest hoists `vi.mock` calls to the top of the file). NOTE: this is
-// module-scoped — if a single test ever renders two `<InfluenceChipsInput>`
-// instances, the last-rendered DndContext wins (later renders overwrite
-// `onDragEnd`). Add a per-render scope if that ever bites.
 const dndState = vi.hoisted(() => ({ onDragEnd: null }));
 
-// Stub @dnd-kit/core's DndContext so we can fire drag-end events imperatively
-// from the test. The real implementation needs DOM measurement + pointer
-// sensors, which jsdom doesn't provide reliably — but the only behavior we
-// care about here is "what does the component do when onDragEnd fires with
-// these ids," and that's all driven through the `onDragEnd` callback we
-// capture below.
-vi.mock('@dnd-kit/core', () => ({
-  DndContext: ({ children, onDragEnd }) => {
-    dndState.onDragEnd = onDragEnd;
-    return <>{children}</>;
-  },
-  KeyboardSensor: function KeyboardSensorStub() {},
-  PointerSensor: function PointerSensorStub() {},
-  closestCenter: () => null,
-  useSensor: () => null,
-  useSensors: () => [],
-}));
-
-// Keep `arrayMove` real (we want the live ordering invariant) but stub
-// `useSortable` so each chip renders without DnD lifecycle wiring.
-vi.mock('@dnd-kit/sortable', async () => {
-  const actual = await vi.importActual('@dnd-kit/sortable');
+// Exercise the component's drop handler using the real arrayMove.
+vi.mock('../../lib/dnd/index.js', async () => {
+  const actual = await vi.importActual('../../lib/dnd/index.js');
   return {
     ...actual,
+    DndContext: ({ children, onDragEnd }) => {
+      dndState.onDragEnd = onDragEnd;
+      return <>{children}</>;
+    },
     SortableContext: ({ children }) => <>{children}</>,
     useSortable: () => ({
       attributes: {},
@@ -42,8 +22,6 @@ vi.mock('@dnd-kit/sortable', async () => {
       transition: null,
       isDragging: false,
     }),
-    rectSortingStrategy: 'rect',
-    sortableKeyboardCoordinates: () => null,
   };
 });
 

@@ -14,7 +14,8 @@ vi.mock('../services/socket', () => ({
 
 const toastSpy = vi.fn();
 const dismissSpy = vi.fn();
-vi.mock('./ui/Toast', () => ({ default: Object.assign((...a) => toastSpy(...a), { dismiss: (...a) => dismissSpy(...a) }) }));
+const successSpy = vi.fn();
+vi.mock('./ui/Toast', () => ({ default: Object.assign((...a) => toastSpy(...a), { dismiss: (...a) => dismissSpy(...a), success: (...a) => successSpy(...a) }) }));
 
 const { useOnDemandTaskToast } = await import('./useOnDemandTaskToast.js');
 const fire = (payload) => handlers.get('cos:schedule:on-demand-empty')?.(payload);
@@ -28,6 +29,13 @@ describe('useOnDemandTaskToast — idle outcome', () => {
     fire({ taskType: 'pr-watcher', appName: 'App One', outcome: 'idle' });
     expect(toastSpy).toHaveBeenCalledTimes(1);
     expect(toastSpy.mock.calls[0][0]).toMatch(/nothing to do right now/);
+  });
+
+  it('toasts delivered PR feedback as a successful comment, not a warning or an agent run', () => {
+    renderHook(() => useOnDemandTaskToast());
+    fire({ taskType: 'pr-reviewer', appName: 'App One', outcome: 'idle', reason: 'patch-feedback-delivered' });
+    expect(successSpy).toHaveBeenCalledWith('Conflict-marker feedback is available in the GitHub PR reviews.');
+    expect(toastSpy).not.toHaveBeenCalled();
   });
 
   it('surfaces the actionable LI reason (api-only provider) instead of "nothing to do"', () => {

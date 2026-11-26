@@ -186,7 +186,10 @@ function lexSource(src, { keepLiteralText = false, includeCommentOnly = false } 
       }
       braceDepth -= 1;
     }
-    if (!/\s/.test(c)) prevSignificant = c;
+    // Printable ASCII is never whitespace. Keep JS whitespace semantics for
+    // the remaining code units without a regex check on every identifier.
+    const code = src.charCodeAt(i);
+    if ((code > 32 && code < 127) || !/\s/.test(c)) prevSignificant = c;
     i += 1;
   }
 

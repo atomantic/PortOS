@@ -3,11 +3,6 @@
 // nothing starts off-screen. No React / three.js imports — GoalsTreeView and the
 // tests share these, and jsdom can't run WebGL, so all the reasoning lives here.
 
-// Bundled with the app (client/public/fonts). troika (drei's <Text>) falls back
-// to a jsdelivr CDN font lookup when no `font` is given, and PortOS installs run
-// on a private network with no guaranteed internet egress — so always pass one.
-export const GOAL_LABEL_FONT_URL = '/fonts/GeistPixel-Square.ttf';
-
 const APEX_RADIUS = 1.6;
 const SUB_APEX_RADIUS = 1.1;
 const DEFAULT_URGENCY = 0.3;

@@ -39,9 +39,22 @@ const renderCard = (job) => render(
   />
 );
 
+it('labels a disabled job without dimming the card or hiding its actions', () => {
+  renderCard({ ...SCRIPT_JOB, enabled: false });
+
+  const card = screen.getByRole('group', { name: 'Job Legacy handler' });
+  expect(card.className).not.toMatch(/\bopacity-/);
+  expect(card).toContainElement(screen.getByText('Disabled'));
+  expect(card).toContainElement(screen.getByRole('button', { name: 'Enable job Legacy handler' }));
+  expect(card).toContainElement(screen.getByRole('button', { name: 'Edit' }));
+});
+
 describe('JobCard machine output', () => {
   it('wraps the read-only legacy command so a long single-line value stays fully readable', () => {
     renderCard(SCRIPT_JOB);
+    expect(screen.getByRole('group', { name: 'Job Legacy handler' })).toContainElement(
+      screen.getByRole('button', { name: 'Disable job Legacy handler' }),
+    );
     fireEvent.click(screen.getByRole('button', { name: 'Edit' }));
 
     const pre = screen.getByText(LONG_COMMAND);

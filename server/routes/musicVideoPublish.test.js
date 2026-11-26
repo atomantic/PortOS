@@ -23,6 +23,8 @@ const sinks = vi.hoisted(() => ({
   previewPublishPost: vi.fn(async () => ({ rows: [], missing: [] })),
   prepareCrossLinkEdit: vi.fn(async () => ({ target: 'youtube', links: [] })),
   capturePublishKitFrame: vi.fn(async () => ({ project: { id: 'synthetic' } })),
+  getPublishKitCropPreview: vi.fn(),
+  startPublishKitBuild: vi.fn(async () => ({ jobId: 'mvpk-synthetic' })),
   draftPublishKitCopy: vi.fn(async () => ({ project: { drafted: true } })),
   updatePublishKitCopy: vi.fn(async () => ({ project: { patched: true } })),
   buildThumbnailPaintPrompt: vi.fn(() => ({ prompt: 'synthetic prompt' })),
@@ -32,6 +34,7 @@ const sinks = vi.hoisted(() => ({
 vi.mock('../services/musicVideo/publish/index.js', async original => ({ ...await original(),
   previewPublishPost: sinks.previewPublishPost, prepareCrossLinkEdit: sinks.prepareCrossLinkEdit }));
 vi.mock('../services/musicVideo/publishKit.js', async original => ({ ...await original(),
+  getPublishKitCropPreview: sinks.getPublishKitCropPreview, startPublishKitBuild: sinks.startPublishKitBuild,
   capturePublishKitFrame: sinks.capturePublishKitFrame, draftPublishKitCopy: sinks.draftPublishKitCopy, updatePublishKitCopy: sinks.updatePublishKitCopy }));
 vi.mock('../services/musicVideo/youtubeThumbnail.js', async original => ({ ...await original(),
   buildThumbnailPaintPrompt: sinks.buildThumbnailPaintPrompt, addYoutubeThumbnailTest: sinks.addYoutubeThumbnailTest, removeYoutubeThumbnailTest: sinks.removeYoutubeThumbnailTest }));
@@ -51,6 +54,16 @@ beforeAll(async () => {
 });
 beforeEach(() => { auth.authenticated = true; vi.clearAllMocks(); });
 afterAll(cleanupTempDataRoots);
+
+it('accepts Web mastering on an explicit build and defaults a bodyless request to As mixed', async () => {
+  const path = `${base}/publish-kit/build`;
+  expect((await request(app).post(path).send({ loudnessPreset: '-14' })).status).toBe(400);
+  expect(sinks.startPublishKitBuild).not.toHaveBeenCalled();
+  expect((await request(app).post(path)).body).toEqual({ jobId: 'mvpk-synthetic' });
+  expect(sinks.startPublishKitBuild).toHaveBeenLastCalledWith(projectId, { loudnessPreset: 'as-mixed' });
+  expect((await request(app).post(path).send({ loudnessPreset: 'web' })).body).toEqual({ jobId: 'mvpk-synthetic' });
+  expect(sinks.startPublishKitBuild).toHaveBeenLastCalledWith(projectId, { loudnessPreset: 'web' });
+});
 
 describe('POST /:id/publish/:target/cross-links', () => {
   it('refuses an unauthenticated caller before touching the browser', async () => {
@@ -112,6 +125,24 @@ describe('post records and cross-link toggle', () => {
 });
 
 describe('publish kit routes', () => {
+  it('binds cropped builds to preview metadata and validates the normalized position', async () => {
+    const preview = { renderHistoryId: 'render-1', filename: 'master.mp4', width: 1920, height: 1080, startSec: 3, endSec: 30 };
+    sinks.getPublishKitCropPreview.mockResolvedValue(preview);
+    const shown = await request(app).get(`${base}/publish-kit/crop-preview`);
+    expect(shown.status).toBe(200);
+    expect(shown.body).toEqual(preview);
+    expect(sinks.getPublishKitCropPreview).toHaveBeenCalledWith(projectId);
+    const { post } = request(app);
+    expect((await post(`${base}/publish-kit/build`)).status).toBe(200);
+    expect(sinks.startPublishKitBuild).toHaveBeenLastCalledWith(projectId, { loudnessPreset: 'as-mixed' });
+    const crop = { ...shown.body, position: 0 };
+    expect((await post(`${base}/publish-kit/build`).send({ crop, loudnessPreset: 'web' })).status).toBe(200);
+    expect(sinks.startPublishKitBuild).toHaveBeenLastCalledWith(projectId, { crop, loudnessPreset: 'web' });
+    for (const invalid of [{ position: -0.01 }, { position: 1.01 }, { position: '0.5' }, { renderHistoryId: '' }, { endSec: 3 }]) {
+      expect((await post(`${base}/publish-kit/build`).send({ crop: { ...crop, ...invalid } })).status).toBe(400);
+    }
+    expect(sinks.startPublishKitBuild).toHaveBeenCalledTimes(2);
+  });
   it('answers 404 NOT_FOUND for the events of an unknown job', async () => {
     const res = await request(app).get('/api/music-video/publish-kit/mvpk-missing/events');
     expect(res.status).toBe(404);

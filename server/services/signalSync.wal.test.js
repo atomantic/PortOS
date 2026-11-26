@@ -6,15 +6,15 @@
  */
 import { createRequire } from 'node:module';
 import { createHash } from 'node:crypto';
-import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 
-const { recordEventsMock, autoLogTouchpointsMock, snapshotDirs } = vi.hoisted(() => ({
+const { recordEventsMock, autoLogTouchpointsMock, snapshotDirAttempts } = vi.hoisted(() => ({
   recordEventsMock: vi.fn(),
   autoLogTouchpointsMock: vi.fn(),
-  snapshotDirs: [],
+  snapshotDirAttempts: [],
 }));
 
 const dataRoot = vi.hoisted(() => {
@@ -44,21 +44,20 @@ vi.mock('./tribe.js', () => ({
   autoLogTouchpoints: autoLogTouchpointsMock,
 }));
 
-// Only this file's snapshot dirs. A global tmpdir scan races other Signal tests.
+// Observe directory creation attempts because successful cleanup would hide a plaintext export.
 vi.mock('node:fs/promises', async (importOriginal) => {
   const actual = await importOriginal();
   return {
     ...actual,
     mkdtemp: async (...args) => {
-      const path = await actual.mkdtemp(...args);
-      snapshotDirs.push(path);
-      return path;
+      snapshotDirAttempts.push(args[0]);
+      return actual.mkdtemp(...args);
     },
   };
 });
 
 import { SQLCIPHER_DRIVER_PACKAGE } from './signalSnapshot.js';
-import { runSync } from './signalSync.js';
+import { checkSetup, runSync } from './signalSync.js';
 
 const driverRequire = createRequire(import.meta.url);
 const Database = driverRequire(SQLCIPHER_DRIVER_PACKAGE);
@@ -73,10 +72,10 @@ function digest(path) {
   return createHash('sha256').update(readFileSync(path)).digest('hex');
 }
 
-function expectOwnSnapshotsRemoved() {
-  expect(snapshotDirs.length).toBeGreaterThan(0);
-  expect(snapshotDirs.every((path) => !existsSync(path))).toBe(true);
-}
+afterEach(() => {
+  vi.restoreAllMocks();
+  expect(snapshotDirAttempts).toEqual([]);
+});
 
 beforeAll(() => {
   writer = new Database(dbPath);
@@ -92,6 +91,8 @@ beforeAll(() => {
     CREATE TABLE messages (
       id TEXT, conversationId TEXT, type TEXT, sent_at INTEGER, received_at INTEGER, body TEXT
     );
+    CREATE TABLE sessions (id TEXT, record TEXT);
+    INSERT INTO sessions VALUES ('fixture-session', 'fixture-private-record');
     INSERT INTO conversations VALUES ('c1', '+15551230001', 'private', 'Ada', 'Ada');
     INSERT INTO messages VALUES ('m1', 'c1', 'incoming', 1700000000000, 1700000000000, 'checkpointed');
   `);
@@ -116,17 +117,32 @@ beforeEach(() => {
   autoLogTouchpointsMock.mockReset();
   recordEventsMock.mockResolvedValue({ recorded: 2, skipped: 0 });
   autoLogTouchpointsMock.mockResolvedValue({ created: 1, matched: 1 });
-  snapshotDirs.length = 0;
+  snapshotDirAttempts.length = 0;
   rmSync(join(dataRoot, 'signal-sync-state.json'), { force: true });
   writeFileSync(configPath, JSON.stringify({ key }));
 });
 
 describe('runSync WAL snapshot', () => {
+  it('checks setup against the WAL view without reading session data or writing the source', async () => {
+    const wal = `${dbPath}-wal`;
+    const before = { db: digest(dbPath), wal: digest(wal) };
+    const prepare = vi.spyOn(Database.prototype, 'prepare');
+
+    const result = await checkSetup();
+
+    expect(result).toMatchObject({ ok: true, messageCount: 2 });
+    expect(prepare.mock.calls.flat().join('\n')).not.toMatch(/\bsessions\b/i);
+    expect(digest(dbPath)).toBe(before.db);
+    expect(digest(wal)).toBe(before.wal);
+  });
+
   it('ingests both committed messages once, then stays idempotent, without writing the source', async () => {
     const wal = `${dbPath}-wal`;
     const before = { db: digest(dbPath), wal: digest(wal) };
 
+    const prepare = vi.spyOn(Database.prototype, 'prepare');
     const first = await runSync();
+    expect(prepare.mock.calls.flat().join('\n')).not.toMatch(/\bsessions\b/i);
     expect(first.ok, first.error).toBe(true);
     expect(first.scanned).toBe(2);
     expect(first.cursorRowid).toBe(2);
@@ -134,7 +150,6 @@ describe('runSync WAL snapshot', () => {
     expect(recorded).toEqual(['signal:m1', 'signal:m2']);
     expect(digest(dbPath)).toBe(before.db);
     expect(digest(wal)).toBe(before.wal);
-    expectOwnSnapshotsRemoved();
 
     const second = await runSync();
     expect(second.ok).toBe(true);
@@ -198,6 +213,5 @@ describe('runSync WAL snapshot', () => {
     const state = JSON.parse(readFileSync(join(dataRoot, 'signal-sync-state.json'), 'utf8'));
     expect(state.cursorRowid).toBe(first.cursorRowid);
     expect(recordEventsMock.mock.calls.length).toBe(calls);
-    expectOwnSnapshotsRemoved();
   });
 });

@@ -38,36 +38,36 @@ describe('commitsSince (#3637)', () => {
 
   // A repo with no commits yet makes `rev-list HEAD` exit non-zero with an empty
   // stdout — parsing that as work would launder a no-op run into a success.
-  it('is 0 on a non-zero git exit (no HEAD / broken checkout)', async () => {
+  it('is unknown on a non-zero git exit (no HEAD / broken checkout)', async () => {
     vi.mocked(execGit).mockResolvedValue({ exitCode: 128, stdout: '', stderr: 'bad revision' });
-    expect(await commitsSince('/tmp/ws', SINCE)).toBe(0);
+    expect(await commitsSince('/tmp/ws', SINCE)).toBeNull();
   });
 
-  it('is 0 (never throws) when execGit rejects', async () => {
+  it('is unknown (never throws) when execGit rejects', async () => {
     vi.mocked(execGit).mockRejectedValue(new Error('timed out'));
-    expect(await commitsSince('/tmp/ws', SINCE)).toBe(0);
+    expect(await commitsSince('/tmp/ws', SINCE)).toBeNull();
   });
 
-  it('is 0 for unparseable output', async () => {
-    vi.mocked(execGit).mockResolvedValue({ exitCode: 0, stdout: 'not-a-number\n', stderr: '' });
-    expect(await commitsSince('/tmp/ws', SINCE)).toBe(0);
+  it('is unknown for unparseable output', async () => {
+    vi.mocked(execGit).mockResolvedValue({ exitCode: 0, stdout: '1invalid\n', stderr: '' });
+    expect(await commitsSince('/tmp/ws', SINCE)).toBeNull();
   });
 
-  it('is 0 for a bad path or a non-finite timestamp without touching git', async () => {
-    expect(await commitsSince(null, SINCE)).toBe(0);
-    expect(await commitsSince('', SINCE)).toBe(0);
-    expect(await commitsSince('/tmp/ws', undefined)).toBe(0);
-    expect(await commitsSince('/tmp/ws', NaN)).toBe(0);
+  it('is unknown for a bad path or a non-finite timestamp without touching git', async () => {
+    expect(await commitsSince(null, SINCE)).toBeNull();
+    expect(await commitsSince('', SINCE)).toBeNull();
+    expect(await commitsSince('/tmp/ws', undefined)).toBeNull();
+    expect(await commitsSince('/tmp/ws', NaN)).toBeNull();
     expect(execGit).not.toHaveBeenCalled();
   });
 
   // `Number.isFinite` passes these, but `new Date(x).toISOString()` throws
   // RangeError on them — which would break the non-throwing contract on a path
   // that runs outside the request lifecycle.
-  it('is 0 (never throws) for a finite but out-of-range epoch', async () => {
+  it('is unknown (never throws) for a finite but out-of-range epoch', async () => {
     // The Date range is ±8.64e15 ms; beyond it `toISOString()` throws.
-    expect(await commitsSince('/tmp/ws', 1e16)).toBe(0);
-    expect(await commitsSince('/tmp/ws', -1e16)).toBe(0);
+    expect(await commitsSince('/tmp/ws', 1e16)).toBeNull();
+    expect(await commitsSince('/tmp/ws', -1e16)).toBeNull();
     expect(execGit).not.toHaveBeenCalled();
   });
 

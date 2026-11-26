@@ -4,7 +4,7 @@
  * Persistent Mind tool prompt, the Agent Tools MCP manifest, the voice tool
  * registry and the HTTP semantic catalog (#17395).
  *
- *   node scripts/prompt-surface.js render [--out <dir>]
+ *   node scripts/prompt-surface.js render [--out <dir> | --json]
  *   node scripts/prompt-surface.js diff <baseDir> <headDir>
  *
  * `render` imports the production assembly code with the clock pinned, a
@@ -131,6 +131,7 @@ export async function renderSnapshot(outDir) {
   };
   try {
     const files = layoutSnapshot(await collectSurfaces(), scrubber([dataRoot]));
+    if (outDir === undefined) return files;
     rmSync(outDir, { recursive: true, force: true });
     for (const [rel, text] of Object.entries(files)) {
       const target = join(outDir, rel);
@@ -205,8 +206,15 @@ export function diffSnapshots(base, head) {
 async function main(argv) {
   const [command, ...rest] = argv;
   if (command === 'render') {
+    if (rest.length === 1 && rest[0] === '--json') {
+      const files = await renderSnapshot();
+      await new Promise((resolve, reject) => {
+        process.stdout.write(JSON.stringify(files), (error) => error ? reject(error) : resolve());
+      });
+      return;
+    }
     const outIndex = rest.indexOf('--out');
-    if (rest.length && (outIndex !== 0 || !rest[1] || rest.length > 2)) throw new Error('usage: render [--out <dir>]');
+    if (rest.length && (outIndex !== 0 || !rest[1] || rest.length > 2)) throw new Error('usage: render [--out <dir> | --json]');
     const out = outIndex === 0 ? resolve(rest[1]) : DEFAULT_OUT_DIR;
     const files = await renderSnapshot(out);
     console.log(`📸 Rendered ${Object.keys(files).length} prompt-surface files to ${out === DEFAULT_OUT_DIR ? 'server/test/fixtures/prompt-surface' : out}`);

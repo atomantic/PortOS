@@ -8,7 +8,7 @@ import { EventEmitter } from 'node:events';
 import { PRIVACY_FACTS_HEADING, PRIVACY_FACTS_NOTICE } from '../../lib/privacyPrompt.js';
 import { fenceBlock } from '../../lib/promptFencing.js';
 
-const state = vi.hoisted(() => ({ beforeDownload: null, beforeWrite: null, staged: null, failIndex: false, manifestHash: '' }));
+const state = vi.hoisted(() => ({ peerFetch: vi.fn(), beforeDownload: null, beforeWrite: null, staged: null, failIndex: false, manifestHash: '' }));
 const root = await mkdtemp(join(tmpdir(), 'peer-cos-publication-'));
 const agentsDir = join(root, 'agents');
 const indexPath = join(agentsDir, 'index.json');
@@ -28,7 +28,7 @@ vi.mock('../../lib/fileUtils.js', async original => {
   } };
 });
 vi.mock('../cos/cosState.js', () => ({ AGENTS_DIR: agentsDir }));
-vi.mock('../instances.js', () => ({ getPeers: async () => [peer] }));
+vi.mock('../instances.js', () => ({ getPeers: async () => [{ ...peer, instanceId: 'offline-example', status: 'offline' }, peer] }));
 vi.mock('./peerSyncShared.js', () => ({ findPeerById: async () => peer, FORCE_REVALIDATE_EVERY: 50, peerSyncEvents: new EventEmitter() }));
 vi.mock('./peerSyncAssets.js', () => ({ inflightPulls: new Set(), inflightKey: (...parts) => parts.join(':'), ASSET_PULL_TIMEOUT_MS: 1000,
   fetchCappedAssetBuffer: async (_peer, url) => {
@@ -36,7 +36,7 @@ vi.mock('./peerSyncAssets.js', () => ({ inflightPulls: new Set(), inflightKey: (
     await state.beforeDownload?.(filename);
     return Buffer.from(files[filename]);
   } }));
-vi.mock('../../lib/peerHttpClient.js', () => ({ peerFetch: async () => ({ ok: true }),
+vi.mock('../../lib/peerHttpClient.js', () => ({ peerFetch: state.peerFetch,
   readPeerBody: async () => ({ schemaVersion: 1, manifestHash: state.manifestHash, entries }) }));
 vi.mock('../../lib/databaseMaintenanceJournal.js', () => ({ assertDatabaseAdmission() {} }));
 vi.mock('../cos/cosAgentIndex.js', async original => {
@@ -47,7 +47,7 @@ vi.mock('../cos/cosAgentIndex.js', async original => {
   } };
 });
 
-const { buildCosHistoryManifest, syncCosHistoryFromPeer } = await import('./peerCosSync.js');
+const { buildCosHistoryManifest, syncCosHistoryFromPeer, syncCosHistoryWithAllPeers, syncCosTasksWithAllPeers } = await import('./peerCosSync.js');
 const { loadAgentIndex } = await import('../cos/cosAgentIndex.js');
 const { acquireBackupSnapshotCut } = await import('../../lib/backupSnapshotBoundary.js');
 const deferred = () => { let resolve; const promise = new Promise(done => { resolve = done; }); return { promise, resolve }; };
@@ -66,6 +66,7 @@ async function seedArchive() {
 
 let caseNumber = 0;
 beforeEach(async () => {
+  state.peerFetch.mockReset().mockResolvedValue({ ok: true });
   state.beforeDownload = null; state.beforeWrite = null; state.staged = null; state.failIndex = false;
   state.manifestHash = sha(`case-${++caseNumber}`);
   await rm(agentsDir, { recursive: true, force: true }); await mkdir(agentsDir);
@@ -73,6 +74,14 @@ beforeEach(async () => {
   (await loadAgentIndex()).clear();
 });
 afterAll(async () => { await rm(root, { recursive: true, force: true }); });
+
+it('skips explicitly offline peers in both CoS sweeps', async () => {
+  state.peerFetch.mockResolvedValue({ ok: false });
+  await syncCosHistoryWithAllPeers();
+  await syncCosTasksWithAllPeers();
+  expect(state.peerFetch.mock.calls.map(([url, , source]) => [new URL(url).pathname, source.instanceId]))
+    .toEqual([['/api/peer-sync/cos-history-manifest', peer.instanceId], ['/api/peer-sync/cos-tasks', peer.instanceId]]);
+});
 
 it('omits all archive bytes for current and legacy vault-injected agents', async () => {
   await seedArchive();

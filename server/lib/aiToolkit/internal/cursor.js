@@ -1,9 +1,4 @@
-/**
- * Cursor Agent constants and catalog parsing for the aiToolkit.
- *
- * `CURSOR_COMMAND` and `isCursorCommand` are duplicated from server/lib/cursor.js
- * (see ../AGENTS.md); keep in sync. The rest is toolkit-native.
- */
+/** Cursor Agent command identity and catalog parsing. */
 
 import { commandBasename } from './commandBasename.js';
 

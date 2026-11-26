@@ -18,70 +18,63 @@
  */
 
 import { describe, it, expect } from 'vitest';
-import { readdirSync } from 'node:fs';
-import { join, relative, sep } from 'node:path';
-import { readText, REPO_ROOT } from '../../../../scripts/lib/guardCorpus.js';
+import { join } from 'node:path';
+import { readText, REPO_ROOT, workingTreeFiles } from '../../../../scripts/lib/guardCorpus.js';
 
 const SERVER_ROOT = join(REPO_ROOT, 'server');
+const SEND_SYMBOLS = ['sendOutboxEntry', 'createOutboxEntry'];
+const OUTBOX = 'services/beeper/beeperOutbox.js';
+const CLIENT = 'services/beeper/beeperClient.js';
+const SKIP_PATH = /(?:^|\/)(?:\.|node_modules(?:\/|$))/;
+const OUTBOX_IMPORT = /from '\.{1,2}\/(?:services\/)?(?:beeper\/)?beeperOutbox\.js'/;
+const CLIENT_IMPORT = /from '\.{1,2}\/(?:services\/)?(?:beeper\/)?beeperClient\.js'/;
 
-function collectSources(dir, out = []) {
-  for (const entry of readdirSync(dir, { withFileTypes: true })) {
-    if (entry.name === 'node_modules' || entry.name.startsWith('.')) continue;
-    const full = join(dir, entry.name);
-    if (entry.isDirectory()) {
-      collectSources(full, out);
-      continue;
+function scanOutboxSources() {
+  const paths = workingTreeFiles(SERVER_ROOT, ['*.js']).filter((path) => !SKIP_PATH.test(path));
+  const production = paths.filter((path) => !path.endsWith('.test.js'));
+  const importers = [];
+  const callers = [];
+  const senders = [];
+  for (const path of production) {
+    const source = readText(join(SERVER_ROOT, path));
+    if (path !== OUTBOX) {
+      if (source.includes('beeperOutbox.js') && OUTBOX_IMPORT.test(source)) importers.push(path);
+      if (SEND_SYMBOLS.some((symbol) => source.includes(symbol))) callers.push(path);
     }
-    if (!entry.name.endsWith('.js')) continue;
-    out.push({ path: relative(SERVER_ROOT, full).split(sep).join('/'), source: readText(full) });
+    if (path !== CLIENT && source.includes('beeperClient.js') && CLIENT_IMPORT.test(source)
+      && /\bsendMessage\b/.test(source)) senders.push(path);
   }
-  return out;
+  return { paths, production, importers: importers.sort(), callers, senders };
 }
 
-const SOURCES = collectSources(SERVER_ROOT);
-const PRODUCTION_SOURCES = SOURCES.filter((file) => !file.path.endsWith('.test.js'));
-
-// The send entry point, and the two service functions that reach it.
-const SEND_SYMBOLS = ['sendOutboxEntry', 'createOutboxEntry'];
-
 describe('beeper outbox has no agent-initiated send path (#36)', () => {
+  let scan;
+  const evidence = () => (scan ??= scanOutboxSources());
+
   it('scanned a recognizably complete server tree', () => {
-    expect(SOURCES.length).toBeGreaterThan(200);
-    expect(PRODUCTION_SOURCES.length).toBeGreaterThan(100);
-    expect(PRODUCTION_SOURCES.some((file) => file.path === 'services/beeper/beeperOutbox.js')).toBe(true);
+    const { paths, production } = evidence();
+    expect(paths.length).toBeGreaterThan(200);
+    expect(production.length).toBeGreaterThan(100);
+    expect(production).toContain(OUTBOX);
   });
 
   it('is imported for a send by exactly one production module: the human HTTP route', () => {
-    const importers = PRODUCTION_SOURCES
-      .filter((file) => file.path !== 'services/beeper/beeperOutbox.js')
-      .filter((file) => /from '\.{1,2}\/(?:services\/)?(?:beeper\/)?beeperOutbox\.js'/.test(file.source))
-      .map((file) => file.path)
-      .sort();
     // Two non-send importers ride alongside the route, and the test below is
     // what keeps them non-send: `beeperStatus.js` reads the breaker's state for
     // the settings card, and `bootstrap.js` calls the boot reconcile, whose two
     // arms are a state write and a re-armed LOOKUP — neither reaches
     // `sendMessage`, which is why a crash mid-send can never resend itself.
-    expect(importers).toEqual(['routes/beeper.js', 'services/beeper/beeperStatus.js', 'services/bootstrap.js']);
+    expect(evidence().importers).toEqual(['routes/beeper.js', 'services/beeper/beeperStatus.js', 'services/bootstrap.js']);
   });
 
   it('names the send functions in no production module but the route', () => {
-    const callers = PRODUCTION_SOURCES
-      .filter((file) => file.path !== 'services/beeper/beeperOutbox.js')
-      .filter((file) => SEND_SYMBOLS.some((symbol) => file.source.includes(symbol)))
-      .map((file) => file.path);
-    expect(callers).toEqual(['routes/beeper.js']);
+    expect(evidence().callers).toEqual(['routes/beeper.js']);
   });
 
   it('reaches the Beeper send API from the outbox service alone', () => {
     // Scoped to modules that import the Beeper CLIENT — `sendMessage` is a
     // common name (Telegram has its own), and this guard is about who can
     // reach `POST /v1/chats/{chatID}/messages`, not about the identifier.
-    const senders = PRODUCTION_SOURCES
-      .filter((file) => file.path !== 'services/beeper/beeperClient.js')
-      .filter((file) => /from '\.{1,2}\/(?:services\/)?(?:beeper\/)?beeperClient\.js'/.test(file.source))
-      .filter((file) => /\bsendMessage\b/.test(file.source))
-      .map((file) => file.path);
-    expect(senders).toEqual(['services/beeper/beeperOutbox.js']);
+    expect(evidence().senders).toEqual(['services/beeper/beeperOutbox.js']);
   });
 });

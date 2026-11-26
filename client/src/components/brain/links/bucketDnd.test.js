@@ -1,3 +1,4 @@
+// @vitest-environment node
 import { describe, it, expect } from 'vitest';
 import { linksCollisionDetection, linksKeyboardCoordinates, BUCKET_KIND, LINK_KIND, LINK_SLOT_KIND } from './bucketDnd';
 

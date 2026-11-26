@@ -370,11 +370,13 @@ export default function LocalLlmRuntimesView({ view } = {}) {
   // clear below is the belt for a socket that dropped mid-transfer.
   const startSlotstreamDownload = (model) => runAction(
     'slotstream-download',
-    () => downloadSlotstreamModel(model).then((r) => {
+    () => downloadSlotstreamModel(model, { silent: true }).then((r) => {
+      if (r?.cancelled === true) return r;
       if (r?.success === false) throw new Error(r.error || 'Download failed');
+      toast.success(`${r?.repo || 'Checkpoint'} downloaded`);
       return r;
     }),
-    (r) => `${r?.repo || 'Checkpoint'} downloaded`,
+    null,
     { onError: (err) => toast.error(`Slotstream download failed: ${err.message}`) },
   ).then(() => {
     clearSlotstreamDownload();
@@ -406,11 +408,7 @@ export default function LocalLlmRuntimesView({ view } = {}) {
   // only sign of life during a multi-gigabyte transfer.
   const startMtplxPull = (model) => runAction(
     model ? `mtplx-pull-${model}` : 'mtplx-pull',
-    // A failed download RESOLVES `{success: false, error}` rather than throwing
-    // (its progress already streamed), so convert it to the rejection
-    // `runAction` routes to `onError` — otherwise the success formatter runs on
-    // a failure and toasts an empty success next to the error.
-    () => pullMtplxModel(model).then((r) => {
+    () => pullMtplxModel(model, { silent: true }).then((r) => {
       if (r?.success === false) throw new Error(r.error || 'Download failed');
       return r;
     }),

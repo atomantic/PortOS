@@ -56,6 +56,7 @@ async function prepareAppRequestTask({ request, targetApp, state, cardId, lane, 
   const prepared = await prepareManagedAppImprovementTask(request.taskType, targetApp, state, {
     skipPreconditions: true,
     onDemand: true,
+    onDemandOrigin: request.origin ?? null,
     targetPullRequest: request.targetPullRequest ?? null,
     // The deterministic pre-agent work reports into the user's card as it
     // runs — this is the whole reason the card exists early.

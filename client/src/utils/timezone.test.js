@@ -1,3 +1,4 @@
+// @vitest-environment node
 import { describe, it, expect } from 'vitest';
 import { dayKeyInTimezone, todayKeyInTimezone, shiftDayKey, isValidTimezone } from './timezone.js';
 

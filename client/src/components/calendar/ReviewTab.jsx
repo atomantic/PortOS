@@ -10,6 +10,7 @@ import { usePagedCollection } from '../../hooks/usePagedCollection';
 import useUrlParams from '../../hooks/useUrlParams';
 
 const PAGE_SIZE = 200;
+const EMPTY_EDIT_FORM = { durationMinutes: '', note: '', goalId: '' };
 
 const reviewEventId = event => event.id || event.externalId;
 
@@ -20,7 +21,12 @@ export default function ReviewTab({ accounts = [] }) {
   const date = localDateKey(dateObj);
   const [confirming, setConfirming] = useState(null);
   const [editingEvent, setEditingEvent] = useState(null);
-  const [editForm, setEditForm] = useState({ durationMinutes: '', note: '', goalId: '' });
+  const [editForm, setEditForm] = useState(EMPTY_EDIT_FORM);
+
+  useEffect(() => {
+    setEditingEvent(null);
+    setEditForm(EMPTY_EDIT_FORM);
+  }, [date]);
 
   // The server pages the day's events but summarizes the whole day on every
   // page, so each page's response replaces `meta` while rows accumulate.
@@ -61,36 +67,37 @@ export default function ReviewTab({ accounts = [] }) {
   };
 
   const handleConfirm = async (event, happened) => {
-    const eventId = event.id || event.externalId;
-    setConfirming(eventId);
+    const eventId = reviewEventId(event);
+    const isEditing = editingEvent?.id === eventId;
 
-    // If event has matching goals and happened, show edit form
-    if (happened && event.matchingGoals?.length > 0 && !editingEvent) {
+    if (happened && event.matchingGoals?.length > 0 && !isEditing) {
       const startTime = event.startTime ? new Date(event.startTime) : null;
       const endTime = event.endTime ? new Date(event.endTime) : null;
       const durationMinutes = startTime && endTime && !event.isAllDay
         ? Math.round((endTime - startTime) / 60000)
         : '';
-      setEditingEvent(eventId);
+      setEditingEvent({ id: eventId });
       setEditForm({
         durationMinutes: durationMinutes || '',
         note: event.title || '',
         goalId: event.matchingGoals[0]?.goalId || ''
       });
-      setConfirming(null);
       return;
     }
 
+    setConfirming(eventId);
     const data = { eventId, happened };
-    if (happened && editingEvent === eventId) {
+    if (happened && isEditing) {
       data.goalId = editForm.goalId || undefined;
       data.durationMinutes = editForm.durationMinutes ? parseInt(editForm.durationMinutes, 10) : undefined;
       data.note = editForm.note || undefined;
     }
 
     const result = await confirmDailyReviewEvent(date, data, { silent: true }).catch(() => null);
-    setConfirming(null);
-    setEditingEvent(null);
+    setConfirming(current => current === eventId ? null : current);
+    if (isEditing) {
+      setEditingEvent(current => current === editingEvent ? null : current);
+    }
 
     if (!result) return toast.error('Failed to confirm event');
     if (result.progressEntry) {
@@ -98,27 +105,6 @@ export default function ReviewTab({ accounts = [] }) {
     } else {
       toast.success(happened ? 'Event confirmed' : 'Event skipped');
     }
-    refreshFirst();
-  };
-
-  const handleConfirmWithEdit = async (event) => {
-    const eventId = event.id || event.externalId;
-    setConfirming(eventId);
-
-    const data = {
-      eventId,
-      happened: true,
-      goalId: editForm.goalId || undefined,
-      durationMinutes: editForm.durationMinutes ? parseInt(editForm.durationMinutes, 10) : undefined,
-      note: editForm.note || undefined
-    };
-
-    const result = await confirmDailyReviewEvent(date, data, { silent: true }).catch(() => null);
-    setConfirming(null);
-    setEditingEvent(null);
-
-    if (!result) return toast.error('Failed to confirm event');
-    toast.success(result.progressEntry ? 'Event confirmed & progress logged' : 'Event confirmed');
     refreshFirst();
   };
 
@@ -235,7 +221,7 @@ export default function ReviewTab({ accounts = [] }) {
               const isConfirmed = confirmation?.happened === true;
               const isSkipped = confirmation?.happened === false;
               const isReviewed = isConfirmed || isSkipped;
-              const isEditing = editingEvent === eventId;
+              const isEditing = editingEvent?.id === eventId;
 
               return (
                 <div
@@ -365,7 +351,7 @@ export default function ReviewTab({ accounts = [] }) {
                       />
                       <div className="flex gap-1.5">
                         <button
-                          onClick={() => handleConfirmWithEdit(event)}
+                          onClick={() => handleConfirm(event, true)}
                           disabled={confirming === eventId}
                           className="pointer-coarse:min-h-11 inline-flex items-center px-2.5 py-1 text-xs rounded bg-port-success/20 text-port-success hover:bg-port-success/30"
                         >

@@ -19,7 +19,7 @@ import { execFileSync } from 'child_process';
 import { dirname, join, resolve, sep } from 'path';
 import { fileURLToPath } from 'url';
 import { prepareWindowsSafeSpawn, resolveWindowsExecutable } from '../server/lib/aiToolkit/internal/windowsSafeSpawn.js';
-import { buildCiTestPlan, getAlwaysRunTests, FULL_SUITE_SHARDS, structuralTestsFor, TOOLING_TESTS } from './ci-test-plan.js';
+import { buildCiTestPlan, getAlwaysRunTests, PROMPT_STAGE_GUARD, FULL_SUITE_SHARDS, structuralTestsFor, TOOLING_TESTS } from './ci-test-plan.js';
 import { EXCLUSIVE_TESTS } from './vitestCiPool.js';
 import { toRepoPath } from './lib/workspaceTests.js';
 import { guardRunnerFor, isGuardTest } from './lib/guardScanners.js';
@@ -179,7 +179,7 @@ export function describeStageCommand(stage) {
  *
  * Pure, so the plan -> stage mapping is testable without spawning anything.
  * The hidden-content scan always runs first, even if lint/tests select no
- * work. The shared structural guards follow it, then CI's dependency order:
+ * work. In full mode the shared structural guards follow it, then CI's dependency order:
  * lint, unit tests, the client build and its bundle pin, the boot smoke, the browser suites, and the DB suite
  * last and alone. `skip` holds the suites that stay with CI
  * (see `uncoveredSuites`); `databaseEnv` is the pinned `portos_test`
@@ -253,6 +253,7 @@ export function resolvePlanStages(plan, { skipLint = false, baseSha, baseRef, sk
       suite: scope,
       script: 'run-ci-tests.js',
       args: [scope],
+      files,
       env: {
         ...scopeEnv[scope],
         CI_TEST_MODE: scoped.mode,
@@ -969,7 +970,19 @@ function stageOutcomeVerdict(result, outcome) {
 function reportSlowGuards(result) {
   const over = overBudgetGuards(result.guardDurations);
   if (over.length > 0) {
-    console.log(`🐢 ${result.name} over the ${formatDuration(GUARD_BUDGET_MS)} per-guard target: ${describeGuardDurations(over)} (the scheduled hosted run fails a guard over ${formatDuration(CI_GUARD_BUDGET_MS)}; PR and push runs only warn).`);
+    const scheduledBudgetGuards = new Set([
+      ...getAlwaysRunTests(),
+      PROMPT_STAGE_GUARD,
+    ]);
+    const isScheduled = ({ file }) => scheduledBudgetGuards.has(file.split(' > ', 1)[0]);
+    const scheduled = over.filter(isScheduled);
+    const localOnly = over.filter(row => !isScheduled(row));
+    if (scheduled.length > 0) {
+      console.log(`🐢 ${result.name} scheduled-budget guards over the ${formatDuration(GUARD_BUDGET_MS)} local per-guard target: ${describeGuardDurations(scheduled)} (the scheduled hosted run enforces a ${formatDuration(CI_GUARD_BUDGET_MS)} budget for these guards).`);
+    }
+    if (localOnly.length > 0) {
+      console.log(`🐢 ${result.name} other guards over the ${formatDuration(GUARD_BUDGET_MS)} local per-guard target: ${describeGuardDurations(localOnly)} (these timings are local diagnostics; the scheduled hosted guard budget does not apply).`);
+    }
   }
 }
 
@@ -1129,7 +1142,8 @@ async function main() {
   }
   console.log(`📋 ${changedFiles.length} changed file(s) — ${plan.reason}.`);
 
-  const guardPlan = downgradeFullPlan(plan, trackedFiles, changedFiles);
+  const guardPlan = downgradeFullPlan(plan, downgraded ? presentFiles : trackedFiles, changedFiles);
+  const structuralFiles = new Set([...guardPlan.server.files, ...guardPlan.client.files]);
   if (options.guardsOnly) plan = { ...guardPlan, lint: { mode: 'skip', files: [] } };
   if (downgraded) {
     plan = await focusedLocalPlan(plan, presentFiles, changedFiles);
@@ -1145,7 +1159,7 @@ async function main() {
     const uncovered = uncoveredSuites(plan, { options, downgraded, prerequisites: tools });
     const skip = Object.fromEntries(uncovered.map(({ suite }) => [suite, true]));
     const stages = resolvePlanStages(plan, { skipLint: options.skipLint, baseSha, baseRef, skip, databaseEnv,
-      guardPlan: options.guardsOnly ? null : guardPlan });
+      guardPlan: options.full ? guardPlan : null });
     return { uncovered, stages: options.guardsOnly
       ? stages.filter(stage => stage.suite === 'server' || stage.suite === 'client')
         .map(stage => ({ ...stage, env: { ...stage.env, PORTOS_TEST_MEMO: 'off' } }))
@@ -1201,21 +1215,25 @@ async function main() {
       if (!result || owner.signal) break;
     }
     console.log(`▶️ ${result.name}`);
-    const durationsDir = result.guard ? mkdtempSync(join(tmpdir(), 'portos-pregate-durations-')) : null;
+    const timedGuards = new Set(result.files?.filter(file => structuralFiles.has(file) || isGuardTest(file)));
+    const durationsDir = timedGuards.size ? mkdtempSync(join(tmpdir(), 'portos-pregate-durations-')) : null;
     const durationsPath = durationsDir && join(durationsDir, 'durations.json');
     if (durationsPath) result.env = { ...result.env, PORTOS_PREGATE_DURATIONS_PATH: durationsPath };
     const started = Date.now();
     const outcome = await runStage(result, owner);
     result.durationMs = Date.now() - started;
     if (durationsDir) {
-      result.guardDurations = readGuardDurations(durationsPath);
+      // The runner reports all test durations in mixed stages. Only charge
+      // structural files and their individual runner checks to the guard budget.
+      result.guardDurations = Object.fromEntries(Object.entries(readGuardDurations(durationsPath))
+        .filter(([name]) => timedGuards.has(name.split(' > ', 1)[0])));
       rmSync(durationsDir, { recursive: true, force: true });
     }
     const verdict = stageOutcomeVerdict(result, outcome);
     if (verdict) {
       ({ failure, exitCode } = verdict);
     } else {
-      if (result.guard) reportSlowGuards(result);
+      if (durationsDir) reportSlowGuards(result);
       result.status = 'passed';
       result.exitCode = 0;
       console.log(`✔️ ${result.name} passed in ${formatDuration(result.durationMs)}.`);

@@ -359,7 +359,7 @@ export async function spawnTuiAgent({
   // this function stays orchestration. `appendLine` records a status line,
   // `pushRaw` queues a raw chunk, `drainLines`/`drainRaw` flush at finalize,
   // and `getOutputBuffer` reads the capped buffer for failure-analysis fallback.
-  const spooler = createOutputSpooler({ agentId, outputFile, rawFile });
+  const spooler = createOutputSpooler({ agentId, outputFile, rawFile, prompt });
   const { appendLine } = spooler;
 
   // The live state machine. Created BEFORE the PTY, because its `handleData` /
@@ -631,6 +631,9 @@ export async function spawnTuiAgent({
     registerSpawnedAgent(pid, {
       fullCommand: tuiConfig.commandLine,
       agentId,
+      providerCommand: provider.command,
+      providerId: provider.id,
+      providerName: provider.name,
       taskId: task.id,
       model,
       workspacePath: cwd,

@@ -65,6 +65,7 @@ vi.mock('../components/musicVideo/useMusicVideoProductionReview.js', () => ({ de
 vi.mock('../services/apiMusicVideo.js', () => ({
   // The dock asks before it plays a document; these projects stay in the isolated worker.
   getMusicVideoCompositionPlayback: vi.fn(async () => ({ native: false })),
+  mixMusicVideoColdOpenAudio: vi.fn(async () => ({})),
   // Never settles: the create drawer's character-style list is covered in TrackSelectors.test.jsx.
   listMusicVideoCharacterStyles: vi.fn(() => new Promise(() => {})),
   getMusicVideoMakingOfCatalog: vi.fn(async id => ({ project: { id, name: 'Example making-of project', version: 1 }, snapshot: 'a'.repeat(64), assets: [] })),
@@ -79,6 +80,7 @@ vi.mock('../services/apiMusicVideo.js', () => ({
   listMusicVideoProjectVersions: vi.fn(async () => []),
   getMusicVideoCatalogCompletion: vi.fn(async () => []),
   createMusicVideoProject: vi.fn(),
+  startAutonomousMusicVideo: vi.fn(),
   cloneMusicVideoProject: vi.fn(),
   updateMusicVideoProject: vi.fn(async (id, patch) => ({
     id,
@@ -218,28 +220,31 @@ vi.mock('../services/apiMusicVideo.js', () => ({
   stopMusicVideoProduction: vi.fn(),
   cancelMusicVideoProduction: vi.fn(),
   // Blender film: read only for a project in that render style; a test that opens one supplies the state.
-  getMusicVideoBlender: vi.fn(() => new Promise(() => {})),
-  saveMusicVideoBlenderSettings: vi.fn(),
-  saveMusicVideoBlenderMotionReferences: vi.fn(),
-  makeMusicVideoBlenderMotionStrip: vi.fn(),
-  createMusicVideoBlenderWorkspace: vi.fn(),
-  listMusicVideoBlenderModels: vi.fn(async () => ({ models: [] })),
-  addMusicVideoBlenderModel: vi.fn(),
-  updateMusicVideoBlenderModel: vi.fn(),
-  listMusicVideoBlenderFiles: vi.fn(async () => ({ files: [] })),
-  getMusicVideoBlenderFile: vi.fn(),
-  saveMusicVideoBlenderFile: vi.fn(),
-  deleteMusicVideoBlenderFile: vi.fn(),
-  syncMusicVideoBlender: vi.fn(),
-  renderMusicVideoBlender: vi.fn(),
-  cancelMusicVideoBlenderJob: vi.fn(),
-  cancelMusicVideoBlenderJobs: vi.fn(),
-  assembleMusicVideoBlenderCut: vi.fn(),
-  saveMusicVideoBlenderShotNote: vi.fn(),
-  openMusicVideoBlenderShot: vi.fn(),
-  getMusicVideoBlenderLog: vi.fn(),
-  getMusicVideoBlenderUsage: vi.fn(() => new Promise(() => {})),
-  clearMusicVideoBlenderFrames: vi.fn(),
+  musicVideoFilmApi: {
+    getMusicVideoBlender: vi.fn(() => new Promise(() => {})),
+    saveMusicVideoBlenderSettings: vi.fn(),
+    saveMusicVideoBlenderMotionReferences: vi.fn(),
+    makeMusicVideoBlenderMotionStrip: vi.fn(),
+    createMusicVideoBlenderWorkspace: vi.fn(),
+    listMusicVideoBlenderModels: vi.fn(async () => ({ models: [] })),
+    addMusicVideoBlenderModel: vi.fn(),
+    updateMusicVideoBlenderModel: vi.fn(),
+    listMusicVideoBlenderFiles: vi.fn(async () => ({ files: [] })),
+    getMusicVideoBlenderFile: vi.fn(),
+    saveMusicVideoBlenderFile: vi.fn(),
+    deleteMusicVideoBlenderFile: vi.fn(),
+    syncMusicVideoBlender: vi.fn(),
+    renderMusicVideoBlender: vi.fn(),
+    cancelMusicVideoBlenderJob: vi.fn(),
+    cancelMusicVideoBlenderJobs: vi.fn(),
+    assembleMusicVideoBlenderCut: vi.fn(),
+    saveMusicVideoBlenderShotNote: vi.fn(),
+    openMusicVideoBlenderShot: vi.fn(),
+    getMusicVideoBlenderLog: vi.fn(),
+    getMusicVideoBlenderUsage: vi.fn(() => new Promise(() => {})),
+    clearMusicVideoBlenderFrames: vi.fn(),
+    musicVideoBlenderMediaUrl: (id, path) => `/api/music-video/${id}/blender/media?path=${encodeURIComponent(path)}`,
+  },
   musicVideoBlenderMediaUrl: (id, path) => `/api/music-video/${id}/blender/media?path=${encodeURIComponent(path)}`,
 }));
 // Server pushes (production runs, the Cast & Sets check-in) arrive over the
@@ -288,10 +293,10 @@ vi.mock('../services/apiMoodBoard.js', () => ({
   addMoodBoardItem: vi.fn(),
   removeMoodBoardItem: vi.fn(),
 }));
-const providerModelsState = vi.hoisted(() => ({ selectedProviderId: '' }));
+const providerModelsState = vi.hoisted(() => ({ selectedProviderId: '', providers: [] }));
 vi.mock('../hooks/useProviderModels', () => ({
   default: () => ({
-    providers: [], selectedProviderId: providerModelsState.selectedProviderId, selectedModel: '', availableModels: [],
+    providers: providerModelsState.providers, selectedProviderId: providerModelsState.selectedProviderId, selectedModel: '', availableModels: [],
     setSelectedProviderId: vi.fn(), setSelectedModel: vi.fn(), loading: false,
   }),
 }));
@@ -338,9 +343,11 @@ vi.mock('../services/apiImageVideo.js', () => ({
     : [])),
   // By-id resolver behind useVideoFileSrc (#4165) — 404s (rejects) for any
   // other id, exactly as the real endpoint does.
-  getVideoHistoryItem: vi.fn(async (id) => (id === 'rh-9'
-    ? { id: 'rh-9', filename: 'final.mp4' }
-    : Promise.reject(Object.assign(new Error('Not found'), { status: 404 })))),
+  getVideoHistoryItem: vi.fn(async (id) => {
+    if (id === 'rh-9') return { id, filename: 'final.mp4' };
+    if (id === 'fixture-final') return { id, filename: 'final.mp4', songStartSec: 49 / 24, songDurationSec: 10, fps: 24 };
+    throw Object.assign(new Error('Not found'), { status: 404 });
+  }),
   // Scene refs are a projection, so the lightbox resolves variant lineage and
   // any variant it opens through the gallery rather than this page's list.
   listImageVariants: vi.fn(async () => ({ items: [] })),

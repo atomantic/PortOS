@@ -25,7 +25,7 @@ describe.skipIf(!chrome)('Blender greybox in Chromium', () => {
         configFile: false, cacheDir: join(temp, 'vite-cache'),
         root: fileURLToPath(new URL('../../..', import.meta.url)),
         resolve: { dedupe: ['three'] },
-        optimizeDeps: { entries: ['src/components/catalog/GreyboxViewer.jsx'], include: ['react', 'react-dom/client', 'three', 'three/examples/jsm/exporters/GLTFExporter.js', '@react-three/fiber', '@react-three/drei'] },
+        optimizeDeps: { entries: ['src/components/catalog/GreyboxViewer.jsx'], include: ['react', 'react-dom/client', 'three', 'three/examples/jsm/exporters/GLTFExporter.js', '@react-three/fiber'] },
         plugins: [react(), {
           name: 'greybox-glb-fixture',
           resolveId(id) { if (id === '/greybox-glb-fixture.jsx') return '\0greybox-glb-fixture.jsx'; },

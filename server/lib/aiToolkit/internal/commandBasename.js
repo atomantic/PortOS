@@ -1,11 +1,6 @@
 /**
  * Normalize a provider command to its comparable binary basename.
  *
- * A toolkit-local twin of `commandBasename` in server/lib/provider/providerModels.js —
- * the vendored toolkit may not import out to sibling PortOS modules (see
- * ../AGENTS.md), and this rule was previously inlined once per vendor predicate
- * inside `internal/`. One copy inside the boundary is unavoidable; two were not.
- *
  * Strips the directory, lowercases, and drops a Windows `.exe` suffix so a
  * provider configured as `/opt/homebrew/bin/agy`, `AGY`, or `cursor-agent.exe`
  * still matches the bare name. Deliberately does NOT strip `.cmd`/`.bat`: those

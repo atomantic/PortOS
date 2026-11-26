@@ -7,7 +7,7 @@
  */
 import { afterAll, afterEach, describe, expect, it, vi } from 'vitest';
 import { existsSync } from 'node:fs';
-import { mkdir, readFile, writeFile } from 'node:fs/promises';
+import { mkdir, readdir, readFile, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { cleanupTempDataRoots, lazyTempDataRoot, makePathsProxy } from '../../lib/mockPathsDataRoot.js';
 
@@ -25,6 +25,7 @@ const kit = await import('./publishKit.js');
 const frames = await import('./thumbnailFrames.js');
 const excerptRender = await import('./excerptRender.js');
 const { captureMusicVideoEvidence } = await import('../../lib/musicVideo/musicVideoDependencies.js');
+const { publishCropRect } = await import('../../lib/musicVideo/musicVideoPublishCrop.js');
 const validation = await import('../../lib/musicVideo/musicVideoRouteValidation.js');
 const ffmpeg = await findFfmpeg();
 const watchedBuilds = new Set();
@@ -74,12 +75,12 @@ const scene = (startSec, endSec, sectionLabel, shotMode = 'performance') => ({ s
 
 // The 25s teaser floor pins a 36s song, so the fixture shrinks per-second cost instead (#10479, #10643): 1 fps keeps
 // the 1080x1920 vertical encode to ~25 frames, and 8 kHz audio cuts the AAC re-encode every kit encode repeats.
-async function renderedProject() {
+async function renderedProject(audio = 'sine=frequency=440:duration=36:sample_rate=8000') {
   const created = await projects.createProject({ name: 'Example Song' });
   await mkdir(PATHS.videos, { recursive: true });
   const filename = `master-${created.id.slice(3, 11)}.mp4`;
   const made = await runFfmpegProcess({ bin: ffmpeg, args: ['-hide_banner', '-loglevel', 'error',
-    '-f', 'lavfi', '-i', 'testsrc2=s=320x180:r=1:d=36', '-f', 'lavfi', '-i', 'sine=frequency=440:duration=36:sample_rate=8000',
+    '-f', 'lavfi', '-i', 'testsrc2=s=320x180:r=1:d=36', '-f', 'lavfi', '-i', audio,
     '-c:v', 'libx264', '-pix_fmt', 'yuv420p', '-c:a', 'aac', '-shortest', '-y', join(PATHS.videos, filename)] });
   expect(made.ok).toBe(true);
   await saveHistory([{ id: 'render-1', filename, durationSec: 36 }]);
@@ -91,6 +92,40 @@ async function renderedProject() {
     lyricCues: [cue('first verse line', 1, 4), cue('the chorus line', 13, 16), cue('last words', 25, 28)],
   } }));
   return created.id;
+}
+
+const publishFiles = async () => Promise.all([PATHS.videos, PATHS.videoThumbnails].map(async dir => (await readdir(dir)).sort()));
+
+async function mediaTimeline(path) {
+  const bin = await ffmpegService.findFfprobe();
+  let output = '';
+  const result = await runFfmpegProcess({ bin, onStdout: b => { output += b; }, args: [
+    '-v', 'error', '-show_entries', 'stream=codec_type,start_time,duration,nb_frames', '-of', 'json', path,
+  ] });
+  expect(result.ok).toBe(true);
+  const [video, audio] = JSON.parse(output).streams;
+  return { video, audioEnd: Number(audio.start_time) + Number(audio.duration) };
+}
+
+async function deliveredAudio(path, { checkFades, startSec, endSec } = {}) {
+  const filters = [
+    ...(checkFades ? ['silencedetect=n=-24dB:d=0.01'] : []),
+    'loudnorm=print_format=json',
+  ];
+  const result = await runFfmpegProcess({ bin: ffmpeg, returnStderr: true, stderrTailBytes: 4000, args: [
+    '-hide_banner', '-nostats', '-copyts', '-i', path, '-vn', '-af', filters.join(','), '-f', 'null', '-',
+  ] });
+  expect(result.ok).toBe(true);
+  const { input_i, input_tp } = JSON.parse(result.stderr.match(/\{[^{}]*"input_i"[^{}]*\}/)[0]);
+  if (checkFades) {
+    const onsets = [...result.stderr.matchAll(/silence_end: ([\d.]+)/g)].map(m => Number(m[1]));
+    const offsets = [...result.stderr.matchAll(/silence_start: ([\d.]+)/g)].map(m => Number(m[1]));
+    expect(onsets[0]).toBeGreaterThan(startSec);
+    expect(onsets[0]).toBeLessThan(startSec + 0.08);
+    expect(offsets.at(-1)).toBeGreaterThan(endSec - 0.6);
+    expect(offsets.at(-1)).toBeLessThan(endSec - 0.01);
+  }
+  return { integratedLufs: Number(input_i), truePeakDb: Number(input_tp) };
 }
 
 describe('publishing kit build (#9281)', () => {
@@ -141,7 +176,8 @@ describe('publishing kit build (#9281)', () => {
     const id = await renderedProject();
     await projects.mutateProjectRecord(id, current => ({ project: { ...current, composition: { mode: 'blender' } } }));
     const film = await import('./blender/film.js');
-    const { blenderFramesDir, blenderFrameName } = await import('./blender/renderIndex.js');
+    const { blenderFramesDir } = await import('./blender/renderIndex.js');
+    const { blenderFrameName } = await import('../film/renderIndex.js');
     const directory = blenderFramesDir(id, 'shot-1', 'final');
     await mkdir(directory, { recursive: true });
     const original = join(directory, blenderFrameName(48, 'final'));
@@ -247,7 +283,7 @@ describe('publishing kit build (#9281)', () => {
     }
   });
 
-  it('waits out a backup cut longer than the default wait before saving a finished kit build (#18718)', async () => {
+  it.each(['complete', 'canceled'])('reports %s when a finished kit waits behind a backup cut (#18718)', async (outcome) => {
     const { acquireBackupSnapshotCut, _backupSnapshotWaitersForTests } = await import('../../lib/backupSnapshotBoundary.js');
     const { id } = await projects.createProject({ name: 'Example Backup Wait' });
     await mkdir(PATHS.videos, { recursive: true });
@@ -265,11 +301,13 @@ describe('publishing kit build (#9281)', () => {
       while (_backupSnapshotWaitersForTests().publications < 1) await new Promise(resolve => setImmediate(resolve));
       await vi.advanceTimersByTimeAsync(5 * 60 * 1000);
       expect((await projects.getProject(id)).publishKit?.exports ?? []).toEqual([]);
+      if (outcome === 'canceled') expect(kit.cancelPublishKitBuild(jobId)).toBe(true);
       releaseCut();
       await vi.advanceTimersByTimeAsync(1000);
       vi.useRealTimers();
-      expect((await ended).type).toBe('complete');
-      expect((await projects.getProject(id)).publishKit.exports.length).toBeGreaterThan(0);
+      expect((await ended).type).toBe(outcome);
+      const exports = (await projects.getProject(id)).publishKit?.exports ?? [];
+      expect(exports.length > 0).toBe(outcome === 'complete');
     } finally {
       vi.useRealTimers();
       releaseCut();
@@ -335,6 +373,162 @@ describe('publishing kit build (#9281)', () => {
     });
     return id;
   };
+
+  it.skipIf(!ffmpeg).each(['fit', 'native', 'crop'])('measures each delivered Web copy, including the %s vertical cut', { timeout: 120000 }, async (layout) => {
+    // The loud transient outside the hook limits full-length gain only.
+    const id = await renderedProject("aevalsrc=if(between(t\\,32\\,32.04)\\,0.9\\,0.045)*sin(2*PI*440*t):s=8000:d=36");
+    const source = await kit.finalRenderFile(await projects.getProject(id));
+    const master = await readFile(source.path);
+    const mix = (await projects.getProject(id)).audioAnalysis;
+    let native;
+    if (layout === 'native') {
+      await projects.mutateProjectRecord(id, current => {
+        const next = { ...current, composition: { mode: 'document', version: 'v1' } };
+        return { project: { ...next, renderDependencies: captureMusicVideoEvidence(next) } };
+      });
+      native = vi.spyOn(excerptRender, 'renderSeekedWindow').mockImplementation(async (_project, { outputPath, startSec, endSec, fade }) => {
+        expect(fade).toBe(true);
+        const duration = endSec - startSec;
+        const audioDuration = duration - 0.381;
+        const made = await runFfmpegProcess({ bin: ffmpeg, args: ['-hide_banner', '-loglevel', 'error',
+          '-f', 'lavfi', '-i', `testsrc2=s=180x320:r=1:d=${duration}`,
+          '-itsoffset', '0.375', '-f', 'lavfi', '-i', `sine=f=880:r=8000:d=${audioDuration}`,
+          '-af', `volume=0.4${ffmpegService.edgeFadeFilter(audioDuration)}`, '-c:v', 'libx264', '-c:a', 'aac', '-y', outputPath,
+        ] });
+        expect(made.ok).toBe(true);
+        return { width: 180, height: 320 };
+      });
+    }
+    try {
+      const buildOptions = layout === 'crop' ? { crop: { ...await kit.getPublishKitCropPreview(id), position: 0.85 } } : {};
+      const first = await kit.startPublishKitBuild(id, buildOptions);
+      expect((await buildEnded(first.jobId)).type).toBe('complete');
+      const previous = (await projects.getProject(id)).publishKit;
+      const timelines = new Map();
+      for (const e of previous.exports) {
+        expect(e).not.toHaveProperty('loudness');
+        timelines.set(e.kind, await mediaTimeline(join(PATHS.videos, e.filename)));
+      }
+
+      const web = await kit.startPublishKitBuild(id, { ...buildOptions, loudnessPreset: 'web' });
+      expect(await buildEnded(web.jobId)).toMatchObject({ type: 'complete' });
+      const project = await projects.getProject(id);
+      expect(project.publishKit.master).toEqual(previous.master);
+      expect(project.audioAnalysis).toEqual(mix);
+      expect(await readFile(source.path)).toEqual(master);
+      expect(project.publishKit.exports.map(e => e.kind)).toEqual(['x-1080p', 'preview-720p', 'teaser', 'vertical-9x16']);
+      for (const e of project.publishKit.exports) {
+        const path = join(PATHS.videos, e.filename);
+        const timeline = await mediaTimeline(path);
+        expect(timeline.video).toEqual(timelines.get(e.kind).video);
+        expect(timeline.audioEnd).toBeCloseTo(timelines.get(e.kind).audioEnd, 3);
+        const isNative = e.kind === 'vertical-9x16' && layout === 'native';
+        const measured = await deliveredAudio(path, { checkFades: Boolean(e.endSec), startSec: isNative ? 0.375 : 0, endSec: timeline.audioEnd });
+        expect(e.loudness.targetLufs).toBe(-14);
+        expect(e.loudness.integratedLufs).toBe(Math.round(measured.integratedLufs * 10) / 10);
+        expect(e.loudness.truePeakDb).toBe(Math.round(measured.truePeakDb * 10) / 10);
+        expect(measured.truePeakDb).toBeLessThanOrEqual(-1.5);
+        if (e.endSec) {
+          expect(e.startSec).toBeGreaterThan(0);
+          expect(measured.integratedLufs).toBeCloseTo(-14, 0);
+        } else {
+          expect(measured.integratedLufs).toBeLessThan(-16);
+        }
+      }
+      expect(project.publishKit.exports.find(e => e.kind === 'vertical-9x16').layout).toBe(layout);
+    } finally {
+      native?.mockRestore();
+    }
+  });
+
+  it.skipIf(!ffmpeg)('keeps the previous kit and removes unfinished copies when Web mastering fails or is cancelled', { timeout: 120000 }, async () => {
+    const id = await documentRendered();
+    const first = await kit.startPublishKitBuild(id);
+    expect((await buildEnded(first.jobId)).type).toBe('complete');
+    const previous = (await projects.getProject(id)).publishKit;
+    const previousFiles = await publishFiles();
+    // Three copies have already been mastered when the native cut turns out to be silent.
+    const native = vi.spyOn(excerptRender, 'renderSeekedWindow').mockImplementation(async (_project, { outputPath }) => {
+      const made = await runFfmpegProcess({ bin: ffmpeg, args: ['-hide_banner', '-loglevel', 'error',
+        '-f', 'lavfi', '-i', 'color=s=180x320:r=1:d=1', '-f', 'lavfi', '-i', 'anullsrc=r=8000:d=1',
+        '-c:v', 'libx264', '-c:a', 'aac', '-y', outputPath,
+      ] });
+      expect(made.ok).toBe(true);
+      return { width: 180, height: 320 };
+    });
+    try {
+      const { jobId } = await kit.startPublishKitBuild(id, { loudnessPreset: 'web' });
+      expect(await buildEnded(jobId)).toMatchObject({ type: 'error', error: expect.stringMatching(/Vertical.*Web mastering failed: Soundtrack is silent/) });
+      expect((await projects.getProject(id)).publishKit).toEqual(previous);
+      expect(await publishFiles()).toEqual(previousFiles);
+    } finally {
+      native.mockRestore();
+    }
+
+    const measure = vi.spyOn(ffmpegService, 'reportMasteredLoudness').mockImplementation(({ signal }) => new Promise((_, reject) => {
+      signal.addEventListener('abort', () => reject(signal.reason), { once: true });
+    }));
+    try {
+      const { jobId } = await kit.startPublishKitBuild(id, { loudnessPreset: 'web' });
+      const ended = buildEnded(jobId);
+      await vi.waitFor(() => expect(measure).toHaveBeenCalled(), { timeout: 30000 });
+      expect(kit.cancelPublishKitBuild(jobId)).toBe(true);
+      expect(await ended).toEqual({ type: 'canceled', error: 'Publishing kit build cancelled' });
+      expect((await projects.getProject(id)).publishKit).toEqual(previous);
+      expect(await publishFiles()).toEqual(previousFiles);
+    } finally {
+      measure.mockRestore();
+    }
+  });
+
+  it.skipIf(!ffmpeg)('uses the previewed hook and off-center framing in the full-bleed vertical export', { timeout: 120000 }, async () => {
+    const { id } = await projects.createProject({ name: 'Example marked frame' });
+    await mkdir(PATHS.videos, { recursive: true });
+    const filename = `crop-${id}.mp4`;
+    const masterPath = join(PATHS.videos, filename);
+    const made = await runFfmpegProcess({ bin: ffmpeg, args: ['-v', 'error', '-f', 'lavfi', '-i', 'color=black:s=320x180:r=1:d=34',
+      '-vf', "drawbox=x=260:y=50:w=30:h=80:color=red:t=fill:enable='gte(t,5)'", '-c:v', 'libx264', '-pix_fmt', 'yuv420p', '-y', masterPath] });
+    expect(made.ok).toBe(true);
+    const renderHistoryId = `render-${id}`;
+    await saveHistory([{ id: renderHistoryId, filename, durationSec: 34 }]);
+    const setHook = (startSec) => projects.mutateProjectRecord(id, current => ({ project: {
+      ...current, renderHistoryId, audioAnalysis: { durationSec: 34 }, lyricCues: [cue('Example marked frame', startSec, 32)],
+    } }));
+    await setHook(5.25);
+    const preview = await kit.getPublishKitCropPreview(id);
+    expect(preview).toEqual({ renderHistoryId, filename, width: 320, height: 180, startSec: 5, endSec: 32.35 });
+    const crop = { ...preview, position: 1 };
+    const rect = publishCropRect(preview.width, preview.height, crop.position);
+    expect(rect.x + rect.width).toBe(preview.width);
+    expect(rect.y + rect.height).toBeLessThanOrEqual(preview.height);
+    expect(rect.width / rect.height).toBe(9 / 16);
+    expect(Object.values(rect).every(value => value >= 0 && value % 2 === 0)).toBe(true);
+    expect(publishCropRect(preview.width, preview.height, 0).x).toBe(0);
+
+    await setHook(6.25);
+    await expect(kit.startPublishKitBuild(id, { crop })).rejects.toMatchObject({ status: 409, code: 'PUBLISH_CROP_PREVIEW_STALE' });
+    await projects.mutateProjectRecord(id, current => ({ project: { ...current, renderHistoryId: 'another-render' } }));
+    await expect(kit.startPublishKitBuild(id, { crop })).rejects.toMatchObject({ status: 409, code: 'PUBLISH_CROP_PREVIEW_STALE' });
+    await setHook(5.25);
+    const { jobId } = await kit.startPublishKitBuild(id, { crop });
+    expect((await buildEnded(jobId)).type).toBe('complete');
+    const saved = (await projects.getProject(id)).publishKit;
+    expect(saved.master).toEqual({ filename, renderHistoryId });
+    const vertical = saved.exports.find(e => e.kind === 'vertical-9x16');
+    expect(vertical).toMatchObject({ layout: 'crop', width: 1080, height: 1920, startSec: preview.startSec, endSec: preview.endSec });
+
+    const sharp = (await import('sharp')).default;
+    const readRedMarker = async (input, startSec, x, y) => {
+      const output = join(PATHS.videos, `pixel-${x}-${y}.png`);
+      const sample = await runFfmpegProcess({ bin: ffmpeg, args: ['-v', 'error', '-ss', String(startSec), '-i', input, '-frames:v', '1', '-y', output] });
+      expect(sample.ok).toBe(true);
+      const [red, green, blue] = await sharp(output).extract({ left: x, top: y, width: 1, height: 1 }).raw().toBuffer();
+      expect(red).toBeGreaterThan(210);
+      expect(Math.max(green, blue)).toBeLessThan(40);
+    };
+    await readRedMarker(masterPath, preview.startSec, rect.x + rect.width / 2, rect.y + rect.height / 2);
+    await readRedMarker(join(PATHS.videos, vertical.filename), 0, 540, 960);
+  });
 
   it.skipIf(!ffmpeg)('renders the 9:16 cut natively when the composition lays itself out at that frame', { timeout: 120000 }, async () => {
     const id = await documentRendered();
@@ -701,4 +895,48 @@ it.skipIf(!ffmpeg)('preserves stale kit files and retires admission after a term
     try { expect(maintenance.deferredUpdate.acquire(update.id)).toBe(true); }
     finally { maintenance.deferredUpdate.finish(update.id, false); }
   } finally { list.mockRestore(); }
+});
+
+it.each(['before commit', 'after commit'])('reconciles files after a kit record mutation fails %s', async (failure) => {
+  const { id } = await projects.createProject({ name: 'Example Publish Failure' });
+  await mkdir(PATHS.videos, { recursive: true });
+  await writeFile(join(PATHS.videos, 'publication-master.mp4'), 'synthetic master');
+  await writeFile(join(PATHS.videos, 'previous-preview.mp4'), 'synthetic previous kit');
+  await saveHistory([{ id: 'publication-render', filename: 'publication-master.mp4', durationSec: 1 }]);
+  const previous = { builtAt: '2026-01-01T00:00:00.000Z', exports: [{ filename: 'previous-preview.mp4' }] };
+  const mutateRecord = projects.mutateProjectRecord;
+  await mutateRecord(id, current => ({ project: { ...current, renderHistoryId: 'publication-render', publishKit: previous } }));
+  const find = vi.spyOn(ffmpegService, 'findFfmpeg').mockResolvedValue('example-ffmpeg');
+  const paths = [];
+  const encode = vi.spyOn(ffmpegService, 'runFfmpegProcess').mockImplementation(async ({ args }) => {
+    const path = args.at(-1);
+    await writeFile(path, 'synthetic output');
+    paths.push(path);
+    return { ok: true };
+  });
+  const mutate = vi.spyOn(projects, 'mutateProjectRecord').mockImplementationOnce(async (id, transform) => {
+    if (failure === 'after commit') await mutateRecord(id, transform);
+    else transform(await projects.getProject(id));
+    throw new Error('Synthetic mutation failure');
+  });
+  try {
+    const { jobId } = await kit.startPublishKitBuild(id);
+    expect(await buildEnded(jobId)).toEqual({ type: 'error', error: 'Synthetic mutation failure' });
+    const project = await projects.getProject(id);
+    expect(paths.length).toBeGreaterThan(0);
+    if (failure === 'after commit') {
+      expect(project.publishKit.master.renderHistoryId).toBe('publication-render');
+      for (const e of project.publishKit.exports) expect(existsSync(join(PATHS.videos, e.filename))).toBe(true);
+    } else {
+      expect(project.publishKit).toEqual(previous);
+      for (const path of paths) expect(existsSync(path)).toBe(false);
+    }
+    expect(await readFile(join(PATHS.videos, previous.exports[0].filename), 'utf8')).toBe('synthetic previous kit');
+  } finally {
+    mutate.mockRestore();
+    encode.mockRestore();
+    find.mockRestore();
+    await maintenance.finishResource('settlement', 'Output publication');
+    await maintenance.finishResource('render:music-video-publish-kit', id);
+  }
 });

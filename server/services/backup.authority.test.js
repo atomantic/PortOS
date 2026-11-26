@@ -234,6 +234,62 @@ describe('restoreSnapshot manifest verification', () => {
       });
     }
 
+    for (const withManifest of [true, false]) {
+      it(`excludes unpublished CoS recording stages from a scoped restore (manifest: ${withManifest})`, async context => {
+        await withRealRsync(context, async () => {
+          const run = 'cos/agents/2001-01-01/agent-example';
+          const stage = `${run}/raw.txt.gz.00000000-0000-4000-8000-000000000001.tmp`;
+          const nearby = `${run}/raw.txt.gz.00000000-0000-4000-8000-00000000000g.tmp`;
+          const files = {
+            [`${run}/raw.txt`]: 'published plain recording',
+            [`${run}/raw.txt.gz`]: 'published compressed recording',
+            [nearby]: 'unrelated scratch',
+          };
+          const hashes = Object.fromEntries(await Promise.all(Object.entries(files).map(async ([path, bytes]) => [
+            path, await writeSnapshotFile(path, bytes),
+          ])));
+          const staleHash = await writeSnapshotFile(stage, 'stage from an older snapshot');
+          if (withManifest) await writeManifest({ ...hashes, [stage]: staleHash });
+          await writeSnapshotFile(stage, 'disk bytes differ from the sealed stage');
+
+          const preview = await restoreSnapshot(tmpRoot, 'snap-1', { dryRun: true, subdirFilter: run });
+          expect(preview.changedFiles.some(line => line.includes(stage))).toBe(false);
+          await restoreSnapshot(tmpRoot, 'snap-1', { dryRun: false, subdirFilter: run });
+          await expect(realFs.readFile(joinPath(PATHS.data, stage))).rejects.toMatchObject({ code: 'ENOENT' });
+          for (const [path, bytes] of Object.entries(files)) {
+            expect(await realFs.readFile(joinPath(PATHS.data, path), 'utf8')).toBe(bytes);
+          }
+        });
+      });
+
+      it(`preserves local HTTPS material on full restore (manifest: ${withManifest})`, async context => {
+        await withRealRsync(context, async () => {
+          const paths = ['certs/cert.pem', 'certs/key.pem', 'certs/meta.json'];
+          const files = Object.fromEntries(await Promise.all(paths.map(async path => [
+            path, await writeSnapshotFile(path, 'snapshot HTTPS material'),
+          ])));
+          files[RECORD] = await writeSnapshotFile(RECORD, '{"value":"snapshot"}');
+          if (withManifest) await writeManifest(files);
+
+          const preview = await restoreSnapshot(tmpRoot, 'snap-1', { dryRun: true });
+          expect(preview.changedFiles.some(line => line.includes('certs/'))).toBe(false);
+          await restoreSnapshot(tmpRoot, 'snap-1', { dryRun: false });
+          expect(existsSync(joinPath(PATHS.data, 'certs'))).toBe(false);
+          expect(await realFs.readFile(joinPath(PATHS.data, RECORD), 'utf8')).toBe('{"value":"snapshot"}');
+
+          const localCertDir = joinPath(PATHS.data, 'certs');
+          await realFs.mkdir(localCertDir);
+          try {
+            for (const path of paths) await realFs.writeFile(joinPath(PATHS.data, path), 'current HTTPS material');
+            await restoreSnapshot(tmpRoot, 'snap-1', { dryRun: false });
+            for (const path of paths) expect(await realFs.readFile(joinPath(PATHS.data, path), 'utf8')).toBe('current HTTPS material');
+          } finally {
+            await realFs.rm(localCertDir, { recursive: true, force: true });
+          }
+        });
+      });
+    }
+
     for (const { name, options } of [
       { name: 'full restore', options: {} },
       { name: 'brain-scoped restore', options: { subdirFilter: 'brain' } },
@@ -312,7 +368,112 @@ describe('restoreSnapshot manifest verification', () => {
       await expect(pending).resolves.toMatchObject({ verification: { status: 'verified', checkedFiles: 1 } });
     });
 
-    for (const subdirFilter of ['database-authority.json', './database-authority.json', 'database-authority.json/', 'Database-Authority.json']) {
+    for (const withManifest of [true, false]) {
+      it(`preserves local database restore recovery with manifest=${withManifest} (#18834)`, async context => {
+        await withRealRsync(context, async () => {
+          const journal = 'database-restore-recovery.json';
+          const pending = '.database-restore-recovery-fixture.pending';
+          const protectedPaths = withManifest
+            ? ['Database-Restore-Recovery.json', '.Database-Restore-Recovery-Fixture.Pending']
+            : [journal, pending];
+          const record = '{"value":"snapshot"}';
+          const hash = await writeSnapshotFile(RECORD, record);
+          for (const path of protectedPaths) await writeSnapshotFile(path, 'obsolete snapshot recovery');
+          // The protected files are outside verification even when present in the snapshot tree.
+          if (withManifest) await writeManifest({ [RECORD]: hash });
+          try {
+            for (const scope of [{}, { subdirFilter: 'brain' }]) {
+              for (const live of [null, 'current local recovery']) {
+                for (const path of [journal, pending]) {
+                  const localPath = joinPath(PATHS.data, path);
+                  if (live === null) await realFs.rm(localPath, { force: true });
+                  else await realFs.writeFile(localPath, live);
+                }
+                const liveRecord = joinPath(PATHS.data, RECORD);
+                await realFs.rm(liveRecord, { force: true });
+                for (const dryRun of [true, false]) {
+                  const result = await restoreSnapshot(tmpRoot, 'snap-1', { ...scope, dryRun });
+                  expect(result.changedFiles).toHaveLength(1);
+                  expect(result.changedFiles[0]).toContain(RECORD);
+                  expect(existsSync(liveRecord)).toBe(!dryRun);
+                  for (const path of [journal, pending]) {
+                    const localPath = joinPath(PATHS.data, path);
+                    if (live === null) expect(existsSync(localPath)).toBe(false);
+                    else expect(await realFs.readFile(localPath, 'utf8')).toBe(live);
+                  }
+                  if (live === null) {
+                    for (const path of protectedPaths) expect(existsSync(joinPath(PATHS.data, path))).toBe(false);
+                  }
+                }
+                expect(await realFs.readFile(liveRecord, 'utf8')).toBe(record);
+              }
+            }
+          } finally {
+            for (const path of new Set([journal, pending, ...protectedPaths])) {
+              await realFs.rm(joinPath(PATHS.data, path), { force: true });
+            }
+          }
+        });
+      });
+    }
+
+    for (const withManifest of [true, false]) {
+      it(`keeps maintenance and migration fences and scratch local (manifest=${withManifest})`, async context => {
+        await withRealRsync(context, async () => {
+          const paths = [
+            'database-maintenance/operation.json',
+            'database-authority-fixture.pending',
+            withManifest ? '.peer-execution-authority-lock/owner.json' : '.peer-execution-authority-lock',
+            '.peer-execution-authority-fixture.pending',
+            '.peer-execution-adoption-fixture.pending',
+            'migrations.lock/.transition',
+            'migrations.applied.json.tmp-123',
+          ];
+          const snapshotPaths = withManifest ? paths.map(path => path.toUpperCase()) : paths;
+          const ledger = 'migrations.applied.json';
+          const nested = 'brain/migrations.lock/record.json';
+          const portablePaths = [ledger, nested];
+          const roots = [...new Set(paths.map(path => path.split('/')[0]))];
+          const hashes = {};
+          for (const path of portablePaths) hashes[path] = await writeSnapshotFile(path, 'portable snapshot bytes');
+          for (const path of snapshotPaths) await writeSnapshotFile(path, 'old machine-local bytes');
+          if (withManifest) await writeManifest(hashes);
+
+          try {
+            const preview = await restoreSnapshot(tmpRoot, 'snap-1', { dryRun: true });
+            expect(preview.changedFiles).toHaveLength(portablePaths.length);
+            await restoreSnapshot(tmpRoot, 'snap-1', { dryRun: false });
+            for (const path of [...roots, ...snapshotPaths]) {
+              expect(existsSync(joinPath(PATHS.data, path))).toBe(false);
+            }
+            for (const path of portablePaths) {
+              expect(await realFs.readFile(joinPath(PATHS.data, path), 'utf8')).toBe('portable snapshot bytes');
+            }
+
+            for (const path of paths) {
+              const localPath = joinPath(PATHS.data, path);
+              await realFs.mkdir(dirname(localPath), { recursive: true });
+              await realFs.writeFile(localPath, 'current machine-local bytes');
+            }
+            await restoreSnapshot(tmpRoot, 'snap-1', { dryRun: false });
+            for (const path of paths) {
+              expect(await realFs.readFile(joinPath(PATHS.data, path), 'utf8')).toBe('current machine-local bytes');
+            }
+          } finally {
+            for (const path of [...roots, ...portablePaths]) {
+              await realFs.rm(joinPath(PATHS.data, path), { recursive: true, force: true });
+            }
+          }
+        });
+      });
+    }
+
+    for (const subdirFilter of ['database-authority.json', './database-authority.json', 'database-authority.json/', 'Database-Authority.json', 'database-restore-recovery.json', './Database-Restore-Recovery.json/', './.Database-Restore-Recovery-Fixture.Pending', 'certs', './Certs/', 'certs/key.pem',
+      './Database-Maintenance/', 'database-maintenance/operation.json', 'Database-Authority-fixture.Pending',
+      './.Peer-Execution-Authority-Lock/', '.peer-execution-authority-lock/owner.json',
+      '.Peer-Execution-Authority-fixture.Pending', '.Peer-Execution-Adoption-fixture.Pending',
+      './Migrations.Lock/', 'migrations.lock/.transition', 'Migrations.Applied.Json.Tmp-123',
+    ]) {
       it(`refuses an explicit ${subdirFilter} selection before verification or transfer, for preview and execution alike`, async () => {
         await seedSnapshot();
         for (const dryRun of [true, false]) {

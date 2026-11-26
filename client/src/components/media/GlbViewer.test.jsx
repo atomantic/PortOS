@@ -3,6 +3,11 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { BoxGeometry, Group, Mesh, MeshStandardMaterial } from 'three';
 import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
+import { withThreeSceneDom } from '../../test/threeSceneDom';
+
+const sceneHostTypes = vi.hoisted(() => ['ambientLight', 'directionalLight']);
+vi.mock('react/jsx-runtime', async (importOriginal) => withThreeSceneDom(await importOriginal(), sceneHostTypes));
+vi.mock('react/jsx-dev-runtime', async (importOriginal) => withThreeSceneDom(await importOriginal(), sceneHostTypes));
 
 // The three.js stack can't run in jsdom (no WebGL context) and none of it is
 // under test here — this file covers the chrome AROUND the canvas (the download
@@ -18,7 +23,7 @@ import { resolve } from 'node:path';
 // <Environment>, which would stay green through the exact regression the
 // source guards against (memoizing the environment children).
 // The two failure modes are mocked separately because they behave differently:
-// `gltf.error` fails the LOADER the way drei does, mirroring suspend-react's real
+// `gltf.error` fails the LOADER, mirroring suspend-react's real
 // caching (the rejection is remembered against the URL and re-thrown from the
 // render phase until `useGLTF.clear(url)` drops it — without that, nothing could
 // tell a working Retry from one that only looks like it re-fetched), while
@@ -32,33 +37,29 @@ const { mockScene, gltf, canvas, hdri } = vi.hoisted(() => ({
   mockScene: {},
   gltf: { error: null, rejections: new Map() },
   canvas: { error: null },
-  hdri: { error: null },
+  hdri: { error: null, texture: {} },
 }));
 vi.mock('@react-three/fiber', () => ({
   Canvas: ({ children }) => {
     if (canvas.error) throw canvas.error;
     return <div data-testid="glb-canvas">{children}</div>;
   },
+  useLoader: (_loader, url) => {
+    if (hdri.error) throw hdri.error;
+    hdri.url = url;
+    return hdri.texture;
+  },
   useThree: (selector) => selector({ scene: mockScene }),
 }));
-vi.mock('@react-three/drei', () => ({
-  Canvas: () => null,
-  OrbitControls: () => null,
-  Environment: ({ background, backgroundBlurriness, files, children }) => {
-    if (hdri.error) throw hdri.error;
-    return (
-    <div
-      data-testid="glb-environment"
-      data-background={background ? 'visible' : 'hidden'}
-      data-background-blurriness={backgroundBlurriness}
-      data-files={files}
-    >
-      {children}
-    </div>
-    );
-  },
-  Bounds: ({ children }) => children,
-  useBounds: () => null,
+vi.mock('three', async importOriginal => ({
+  ...await importOriginal(),
+  PMREMGenerator: vi.fn(function () {
+    return { fromEquirectangular: texture => ({ texture, dispose() {} }), dispose() {} };
+  }),
+}));
+vi.mock('../../lib/threeHelpers/bounds.jsx', () => ({ Bounds: ({ children }) => children, useBounds: () => null }));
+vi.mock('../../lib/threeHelpers/controls.jsx', () => ({ OrbitControls: () => null }));
+vi.mock('../../lib/threeHelpers/gltf.js', () => ({
   useGLTF: Object.assign((url) => {
     if (gltf.error) gltf.rejections.set(url, gltf.error);
     const cached = gltf.rejections.get(url);
@@ -68,7 +69,7 @@ vi.mock('@react-three/drei', () => ({
 }));
 vi.mock('../../hooks/useClonedGltf', () => ({ GltfPrimitive: () => null }));
 
-import { useGLTF } from '@react-three/drei';
+import { useGLTF } from '../../lib/threeHelpers/gltf.js';
 import GlbViewer, { cloneGlbSceneWithOpaqueMaterials, highlightGlbNodes, isolateGlbNode } from './GlbViewer';
 
 const openControls = () => fireEvent.click(screen.getByLabelText('Preview display settings'));
@@ -134,15 +135,9 @@ describe('GlbViewer', () => {
     expect(ambient).toHaveValue('0.6');
     expect(key).toHaveValue('1.2');
     expect(fill).toHaveValue('0.4');
-    expect(screen.getByTestId('glb-environment')).toHaveAttribute(
-      'data-files',
-      '/hdri/studio-small-08-1k.hdr',
-    );
-    expect(screen.getByTestId('glb-environment')).toHaveAttribute('data-background', 'visible');
-    expect(screen.getByTestId('glb-environment')).toHaveAttribute(
-      'data-background-blurriness',
-      '0.2',
-    );
+    expect(hdri.url).toBe('/hdri/studio-small-08-1k.hdr');
+    expect(mockScene.background).toBe(hdri.texture);
+    expect(mockScene.backgroundBlurriness).toBe(0.2);
     expect(screen.getByLabelText('Show HDRI background')).toBeChecked();
 
     fireEvent.change(ambient, { target: { value: '1.4' } });
@@ -154,7 +149,7 @@ describe('GlbViewer', () => {
     expect(key).toHaveValue('2.2');
     expect(fill).toHaveValue('0.8');
     expect(screen.getByLabelText('Show HDRI background')).not.toBeChecked();
-    expect(screen.getByTestId('glb-environment')).toHaveAttribute('data-background', 'hidden');
+    expect(mockScene.background).toBeUndefined();
   });
 
   it('ships the referenced environment as a Radiance HDR asset', () => {
@@ -181,20 +176,13 @@ describe('GlbViewer', () => {
     expect(mockScene.environmentIntensity).toBe(0);
   });
 
-  // drei's Environment snapshots scene.environmentIntensity before we write it
-  // and restores that snapshot whenever its own effect re-runs — and toggling
-  // the HDRI background is the one thing that still re-runs it. Without a
-  // re-assert the IBL silently returns to full strength while the slider still
-  // reads the user's value. The mocked Environment can't perform the restore,
-  // so stand in for it by writing the pre-write default back onto the scene.
-  it('re-asserts the environment intensity when the HDRI background is toggled', () => {
+  it('preserves zero environment intensity when the HDRI background is toggled', () => {
     delete mockScene.environmentIntensity;
     render(<GlbViewer src="/data/models3d/robot-a1b2.glb" />);
     openControls();
     fireEvent.change(screen.getByLabelText('Environment light'), { target: { value: '0' } });
     expect(mockScene.environmentIntensity).toBe(0);
 
-    mockScene.environmentIntensity = 1; // drei restoring its pre-write snapshot
     fireEvent.click(screen.getByLabelText('Show HDRI background'));
 
     expect(mockScene.environmentIntensity).toBe(0);
@@ -331,7 +319,7 @@ describe('GlbViewer HDRI failures', () => {
     expect(screen.getByTestId('glb-canvas')).toBeInTheDocument();
     // The environment is the only thing gone — the viewer is NOT in failure
     // mode, so the controls driving the still-live canvas are still mounted.
-    expect(screen.queryByTestId('glb-environment')).not.toBeInTheDocument();
+    expect(mockScene.environment).toBeUndefined();
     expect(screen.getByLabelText('Preview display settings')).toBeInTheDocument();
     openControls();
     expect(screen.getByLabelText('Ambient light')).toBeInTheDocument();

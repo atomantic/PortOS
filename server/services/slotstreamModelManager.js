@@ -494,7 +494,14 @@ export async function downloadSlotstreamModel({ model = null, cacheDir, onProgre
       model: repo,
       message: error.message,
     });
-    return { success: false, model: repo, cancelled: slot.cancelled, error: error.message, code: error.code || null };
+    return {
+      success: false,
+      model: repo,
+      cancelled: slot.cancelled,
+      error: error.message,
+      code: error.code || null,
+      status: slot.cancelled ? null : (error.status || err?.status || 502),
+    };
   } finally {
     slot.release();
   }

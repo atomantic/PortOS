@@ -9,8 +9,8 @@
 import { shotActionContractProblem } from '../../../server/lib/musicVideo/musicVideoActionContract.js';
 import { currentPlateEvidence } from '../../../server/lib/musicVideo/musicVideoPlateEvidence.js';
 import { resolveSourceTake, scenePlayableClipId } from '../../../server/lib/musicVideo/musicVideoSourceTake.js';
-import { isEndFrameImageEffect } from './musicVideoImageEffects.js';
-import { clipLoops, clipNeedsMoreFootage, isSelfDrawnLayer, sceneVisualLayer, sceneHasAuthoredSpan, sceneUsesAuthoredTiming } from './musicVideoLayers.js';
+import { isEndFrameImageEffect } from '../../../server/lib/musicVideo/musicVideoImageEffects.js';
+import { clipLoops, clipNeedsMoreFootage, isSelfDrawnLayer, sceneEndFrameInUse, sceneTakeProblems, sceneVisualLayer, sceneHasAuthoredSpan, sceneUsesAuthoredTiming } from './musicVideoLayers.js';
 import { performanceBlockedReason, performanceCapability, planPerformanceWindow, isPerformanceScene, selectedPerformanceInstruction } from './musicVideoShotTiming.js';
 import { sceneHasPendingDecision, sceneTakeList } from './musicVideoTakes.js';
 
@@ -32,6 +32,7 @@ export const SCENE_ATTENTION_LABELS = Object.freeze({
   // The server's code for a frame or clip rendered without a character's current reference (#16473): advice, not a gate.
   'character-reference-changed': 'Older character reference',
   'bad-take': 'Selected take marked bad',
+  'clip-frame-mismatch': 'Clip was made from a different start frame',
 });
 
 // A revised song's verdict on a shot (server songRevision.js sceneReview) as its attention code.
@@ -47,14 +48,15 @@ const slotDependencyState = (scene, kind, assetId) => (
 );
 
 /** Header label for the selected frame. A stale end frame is named on its own; unknown is not ready. */
-export function selectedFrameReadiness(scene, marksOrOpts = {}) {
-  const assetMarks = marksOrOpts?.assetMarks || marksOrOpts || {};
-  const isStartBad = scene?.selectedTakeMarkedBad ||
-    (scene?.referenceImageId && assetMarks[`image:${scene.referenceImageId}`] === 'bad') ||
-    (scene?.endImageId && assetMarks[`image:${scene.endImageId}`] === 'bad');
-  if (isStartBad) return { text: 'selected take marked bad', reasons: ['Selected take marked bad'] };
+export function selectedFrameReadiness(scene, { assetMarks = {}, layered = false, usesEnd = sceneEndFrameInUse(scene, sceneVisualLayer(scene, { layered })) } = {}) {
+  if (scene?.referenceImageId && assetMarks[`image:${scene.referenceImageId}`] === 'bad') {
+    return { text: 'start frame marked bad', reasons: ['Selected start frame marked bad'] };
+  }
+  if (usesEnd && scene?.endImageId && assetMarks[`image:${scene.endImageId}`] === 'bad') {
+    return { text: 'end frame marked bad', reasons: ['Selected end frame marked bad'] };
+  }
   const start = slotDependencyState(scene, 'image', scene?.referenceImageId);
-  const end = slotDependencyState(scene, 'endImage', scene?.endImageId);
+  const end = usesEnd ? slotDependencyState(scene, 'endImage', scene?.endImageId) : null;
   if (start?.status === 'stale') return { text: 'frame out of date', reasons: start.reasons || [] };
   if (end?.status === 'stale') return { text: 'end frame out of date', reasons: end.reasons || [] };
   if (start?.status === 'unknown') return { text: 'frame not checked', reasons: [] };
@@ -113,8 +115,7 @@ export function sceneAttention(scene, ctx = {}) {
   // A return shows the source shot's frame and clip, so those count as present.
   const codeRendered = scene.codeClip && playableClipId;
   if (!isSelfDrawnLayer(layer) && !frameId && !codeRendered) codes.push('missing-frame');
-  const usesEnd = !resolved && shown.endFrameOff !== true
-    && (layer === 'footage' || (layer === 'still' && isEndFrameImageEffect(shown.imageEffect)));
+  const usesEnd = !resolved && sceneEndFrameInUse(shown, layer);
   if (!isSelfDrawnLayer(layer) && (slotDependencyState(shown, 'image', frameId)?.status === 'stale'
     || (usesEnd && slotDependencyState(shown, 'endImage', shown.endImageId)?.status === 'stale'))) codes.push('frame-stale');
   // The server presents the warning on the selected frame, end frame and clip it applies to.
@@ -135,12 +136,9 @@ export function sceneAttention(scene, ctx = {}) {
     if (currentPlateEvidence(scene, selected, ctx.project)?.verdict !== 'pass') codes.push('plate-unverified');
   }
   if (failed.frame?.[scene.sceneId] || failed.video?.[scene.sceneId]) codes.push('last-failure');
-  const badSelected = shown.selectedTakeMarkedBad || (ctx.assetMarks && (
-    (frameId && ctx.assetMarks[`image:${frameId}`] === 'bad') ||
-    (usesEnd && shown.endImageId && ctx.assetMarks[`image:${shown.endImageId}`] === 'bad') ||
-    (playableClipId && ctx.assetMarks[`video:${playableClipId}`] === 'bad')
-  ));
-  if (badSelected) codes.push('bad-take');
+  const takeProblems = sceneTakeProblems(scene, ctx);
+  if (takeProblems.bad) codes.push('bad-take');
+  if (takeProblems.clipFrameMismatch) codes.push('clip-frame-mismatch');
   return codes;
 }
 

@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import { act, fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 
 const api = vi.hoisted(() => ({
   getCosWeeklyDigest: vi.fn(), getCosWeekProgress: vi.fn(), listCosWeeklyDigests: vi.fn(), generateCosDigest: vi.fn(),
@@ -189,4 +189,41 @@ describe('CoS DigestTab ?week= deep link', () => {
     await waitFor(() => expect(screen.getByTestId('search')).toHaveTextContent(/^$/));
     expect(await screen.findByText('40')).toBeInTheDocument();
   });
+});
+
+it('reports digest disclosure state and names the task-type table', async () => {
+  api.getCosWeekProgress.mockResolvedValue(null);
+  api.listCosWeeklyDigests.mockResolvedValue({ digests: [] });
+  api.getCosWeeklyDigest.mockResolvedValue({
+    weekId: '2026-W40',
+    summary: {},
+    weekOverWeek: {},
+    insights: [{ title: 'Example insight' }],
+    accomplishments: [{ description: 'Example result', taskType: 'example-task', duration: 60000 }],
+    byTaskType: [{ type: 'example-task', completed: 1, successRate: 100, totalDurationMs: 60000 }],
+    issues: [{ error: 'Example error', count: 1 }],
+  });
+  renderTab();
+  await screen.findByRole('button', { name: /^Insights/ });
+  expect(screen.getByText('Example error').closest('li')).toBeInTheDocument();
+  expect(screen.queryByRole('alert')).not.toBeInTheDocument();
+
+  for (const [name, initiallyExpanded] of [
+    [/^Insights/, true],
+    [/^Top Accomplishments/, true],
+    [/^By Task Type/, false],
+    [/^Error Patterns/, true],
+  ]) {
+    const button = screen.getByRole('button', { name });
+    expect(button).toHaveAttribute('type', 'button');
+    expect(button).toHaveAttribute('aria-expanded', String(initiallyExpanded));
+    fireEvent.click(button);
+    expect(button).toHaveAttribute('aria-expanded', String(!initiallyExpanded));
+  }
+
+  const table = within(screen.getByRole('table', { name: 'By Task Type' }));
+  const columns = table.getAllByRole('columnheader');
+  expect(columns).toHaveLength(4);
+  columns.forEach(column => expect(column).toHaveAttribute('scope', 'col'));
+  expect(table.getByRole('rowheader', { name: 'example-task' })).toHaveAttribute('scope', 'row');
 });

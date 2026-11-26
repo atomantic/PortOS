@@ -104,8 +104,9 @@ beforeEach(async () => {
   rmSync(join(ROOT(), 'images'), { recursive: true, force: true });
   seedVideoHistory([]);
   project = await projects.createProject({ name: 'Example Video' });
-  sceneA = await projects.addProjectScene(project.id, { prompt: 'a lighthouse at dusk', framePrompt: 'lighthouse still' });
-  sceneB = await projects.addProjectScene(project.id, { prompt: 'waves crash' });
+  ({ scenes: [sceneA, sceneB] } = await projects.addProjectScenes(project.id, [
+    { prompt: 'a lighthouse at dusk', framePrompt: 'lighthouse still' }, { prompt: 'waves crash' },
+  ]));
 });
 afterAll(cleanupTempDataRoots);
 
@@ -783,6 +784,7 @@ describe('the shot asset manager', () => {
     await addTake(sceneA.sceneId, { kind: 'image', assetId: 'start-c.png', source: 'generated' });
     const unmatched = await mark('start-b.png', 'bad');
     expect(unmatched.body.scenes[0]).toMatchObject({ referenceImageId: 'start-c.png', videoHistoryId: 'clip-b', selectedTakeMarkedBad: true });
+    expect(unmatched.body.changes).toContainEqual(expect.objectContaining({ slot: 'video', action: 'flagged', reason: 'clip-frame-mismatch' }));
     await mark('start-b.png', null);
     expect((await reload()).scenes.find((scene) => scene.sceneId === sceneA.sceneId).selectedTakeMarkedBad).toBe(true);
     const restored = await request(app).post(`${base()}/scenes/${sceneA.sceneId}/takes/${b.body.take.takeId}/select`).send({ expectedSelectedAssetId: 'start-c.png' });
@@ -830,7 +832,7 @@ describe('the shot asset manager', () => {
       { id: 'clip-other-frame', filename: 'clip-o.mp4', musicVideo: { projectId: project.id, sceneId: sceneA.sceneId } },
     ]);
 
-    await addTake(sceneA.sceneId, { kind: 'image', assetId: 'start-1.png', source: 'generated' });
+    const firstFrame = await addTake(sceneA.sceneId, { kind: 'image', assetId: 'start-1.png', source: 'generated' });
     await addTake(sceneA.sceneId, { kind: 'image', assetId: 'start-2.png', source: 'generated' });
     await addTake(sceneA.sceneId, { kind: 'image', assetId: 'start-3.png', source: 'generated' });
 
@@ -842,7 +844,7 @@ describe('the shot asset manager', () => {
     expect(markRes.body.changes).toEqual([
       expect.objectContaining({
         sceneId: sceneA.sceneId,
-        shotNumber: 1,
+        previousTakeId: firstFrame.body.take.takeId,
         slot: 'image',
         action: 'moved',
         fromAssetId: 'start-1.png',
@@ -855,7 +857,7 @@ describe('the shot asset manager', () => {
     const badTake = afterFrameFallback.takes.find((t) => t.assetId === 'start-1.png');
     expect(badTake.status).toBe('rejected');
 
-    await addTake(sceneA.sceneId, { kind: 'video', assetId: 'clip-1', source: 'generated', sourceImageId: 'start-3.png' });
+    const firstClip = await addTake(sceneA.sceneId, { kind: 'video', assetId: 'clip-1', source: 'generated', sourceImageId: 'start-3.png' });
     await addTake(sceneA.sceneId, { kind: 'video', assetId: 'clip-2', source: 'generated', sourceImageId: 'start-3.png' });
     await addTake(sceneA.sceneId, { kind: 'video', assetId: 'clip-other-frame', source: 'generated', sourceImageId: 'start-2.png' });
 
@@ -867,7 +869,7 @@ describe('the shot asset manager', () => {
     expect(clipMarkRes.body.changes).toEqual([
       expect.objectContaining({
         sceneId: sceneA.sceneId,
-        shotNumber: 1,
+        previousTakeId: firstClip.body.take.takeId,
         slot: 'video',
         action: 'moved',
         fromAssetId: 'clip-1',
@@ -892,7 +894,7 @@ describe('the shot asset manager', () => {
     expect(markRes.body.changes).toEqual([
       expect.objectContaining({
         sceneId: sceneA.sceneId,
-        shotNumber: 1,
+        previousTakeId: null,
         slot: 'image',
         action: 'flagged',
         fromAssetId: 'only.png',
@@ -907,7 +909,7 @@ describe('the shot asset manager', () => {
     expect(markRes.body.scenes.find((entry) => entry.sceneId === sceneA.sceneId).selectedTakeMarkedBad).toBe(true);
 
     const { sceneRenderReady } = await import('../lib/musicVideo/musicVideoLayers.js');
-    expect(sceneRenderReady(scene)).toBe(false);
+    expect(sceneRenderReady(scene, { assetMarks: stored.assetMarks })).toBe(false);
 
     const { productionReadiness } = await import('../services/musicVideo/productionReview.js');
     const readiness = productionReadiness(stored);
@@ -976,7 +978,7 @@ describe('the shot asset manager', () => {
     // Nor a still another video's shot uses, though it sits in this video's collection.
     seedImage('shared.png');
     const other = await projects.createProject({ name: 'Second Video' });
-    const otherScene = await projects.addProjectScene(other.id, { prompt: 'an empty stage' });
+    const { scenes: [otherScene] } = await projects.addProjectScenes(other.id, [{ prompt: 'an empty stage' }]);
     await request(app).post(`/api/music-video/${other.id}/scenes/${otherScene.sceneId}/takes`).send({ kind: 'image', assetId: 'shared.png', source: 'generated' });
     const { fileMusicVideoMedia } = await import('../services/musicVideo/mediaPool.js');
     await fileMusicVideoMedia(await reload(), [{ kind: 'image', ref: 'shared.png' }]);
@@ -1101,7 +1103,7 @@ describe('pool deletion and selection admission', () => {
     let take = candidate.body.take;
     if (anotherProject) {
       owner = await projects.createProject({ name: 'Other synthetic project' });
-      shot = await projects.addProjectScene(owner.id, { prompt: 'Another shot' });
+      ({ scenes: [shot] } = await projects.addProjectScenes(owner.id, [{ prompt: 'Another shot' }]));
       await projects.appendSceneTakes(owner.id, shot.sceneId, [{ kind, assetId: keep }]);
       take = (await projects.appendSceneTakes(owner.id, shot.sceneId, [{ kind, assetId }])).appended[0];
     }
@@ -1214,7 +1216,7 @@ describe('media from an earlier draft', () => {
     seedVideoHistory([{ id: 'draft-clip', filename: 'draft-clip.mp4', prompt: 'draft motion' }]);
     await addTake(sceneA.sceneId, { kind: 'image', assetId: 'mine.png', source: 'generated' });
     const draft = await projects.createProject({ name: 'Example Draft' });
-    const draftShot = await projects.addProjectScene(draft.id, { prompt: 'an early idea' });
+    const { scenes: [draftShot] } = await projects.addProjectScenes(draft.id, [{ prompt: 'an early idea' }]);
     const draftTake = (body) => request(app).post(`/api/music-video/${draft.id}/scenes/${draftShot.sceneId}/takes`).send(body);
     await draftTake({ kind: 'image', assetId: 'draft-still.png', source: 'generated' });
     await draftTake({ kind: 'image', assetId: 'draft-floor.png', source: 'generated' });

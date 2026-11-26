@@ -22,33 +22,6 @@ const CROSS_MARK = String.fromCodePoint(0x274c);        // cross mark
 const NO_ENTRY = String.fromCodePoint(0x26d4);          // no entry
 const FAILURE_MARKERS = [CROSS_MARK, NO_ENTRY];
 
-const CONSOLE_LOG_OPEN = /\bconsole\s*\.\s*log\s*\(/g;
-
-// Four scans lex the same ~1,000 sources. One paired traversal yields both views
-// (`blanked` and comment-only `code`), memoized per source text so each file is
-// lexed once per run instead of twice per scan.
-const lexCache = new Map();
-function lexViews(src) {
-  let views = lexCache.get(src);
-  if (!views) {
-    views = blankLiterals(src, { includeCommentOnly: true });
-    lexCache.set(src, views);
-  }
-  return views;
-}
-
-// Source of each tracked file, read once and shared by every scan.
-const sourceCache = new Map();
-function readSource(root, file) {
-  const key = join(root, file);
-  let src = sourceCache.get(key);
-  if (src === undefined) {
-    src = readText(key);
-    sourceCache.set(key, src);
-  }
-  return src;
-}
-
 // 1-based line of an ascending sequence of indexes, counting newlines
 // incrementally instead of re-splitting the prefix for every match.
 function lineCounter(src) {
@@ -64,39 +37,11 @@ function lineCounter(src) {
 }
 const CONSOLE_LOG_SHAPE = /\bconsole\s*\.\s*log\s*\(/;
 
-/**
- * Every `console.log(…)` call in the covered process trees, as `{ line, args }` where `args` keeps
- * the literal text (the markers live inside template strings, which
- * `blankLiterals` would erase) but has COMMENT bodies blanked, so a marker
- * written in a comment beside the message is not read as part of it.
- *
- * Call boundaries come from the fully BLANKED copy, so a `)` inside a string or
- * a regex character class cannot end the span early and a multi-line call is
- * captured whole rather than by a fixed line window.
- */
-export function consoleLogCalls(src) {
-  const { blanked, code: codeOnly } = lexViews(src);
-  const calls = [];
-  const lineAt = lineCounter(src);
-  for (const match of blanked.matchAll(CONSOLE_LOG_OPEN)) {
-    const open = blanked.indexOf('(', match.index);
-    const close = matchBracket(blanked, open);
-    if (close === -1) continue;
-    calls.push({
-      line: lineAt(match.index),
-      // `close` is one past the matching `)`, so `close - 1` drops it. Both
-      // copies preserve length, so the span indexes either one.
-      args: codeOnly.slice(open + 1, close - 1),
-    });
-  }
-  return calls;
-}
-
 /** `line N: <excerpt>` for every console.log carrying a failure marker. */
 export function findMislabeledFailureLogs(src) {
-  return consoleLogCalls(src)
-    .filter(({ args }) => FAILURE_MARKERS.some((marker) => args.includes(marker)))
-    .map(({ line, args }) => `line ${line}: ${args.replace(/\s+/g, ' ').trim().slice(0, 120)}`);
+  return consoleCalls(src)
+    .filter(({ method, rawArgs }) => method === 'log' && FAILURE_MARKERS.some((marker) => rawArgs.includes(marker)))
+    .map(({ line, rawArgs }) => `line ${line}: ${rawArgs.replace(/\s+/g, ' ').trim().slice(0, 120)}`);
 }
 
 // info and success always reach console.log; debug does too when it is printed
@@ -127,7 +72,7 @@ function splitCallArgs(blanked, codeOnly, open, close) {
 
 /** `line N: <excerpt>` for every quiet emitLog whose message carries a failure marker. */
 export function findMislabeledEmitLogs(src) {
-  const { blanked, code: codeOnly } = lexViews(src);
+  const { blanked, code: codeOnly } = blankLiterals(src, { includeCommentOnly: true });
   const hits = [];
   const lineAt = lineCounter(src);
   for (const match of blanked.matchAll(EMIT_LOG_OPEN)) {
@@ -151,13 +96,16 @@ const BARE_ERROR_ARG = /^(?:err|error|e|ex|reason)$/;
 const LEADING_MARKER = /^\p{Extended_Pictographic}/u;
 
 /**
- * Every `console.<level>(…)` call as `{ line, method, args }`, where `args` is the
- * top-level argument list with comment bodies blanked and literal text kept.
+ * Every `console.<level>(…)` call, with both its full argument span and the
+ * top-level arguments. Both keep literal text and blank comment bodies.
  * Argument boundaries come from the fully blanked copy, so a comma inside a
  * string or template cannot split an argument.
  */
-export function consoleCalls(src) {
-  const { blanked, code: codeOnly } = lexViews(src);
+const consoleCallsBySource = new Map();
+function consoleCalls(src) {
+  const cached = consoleCallsBySource.get(src);
+  if (cached) return cached;
+  const { blanked, code: codeOnly } = blankLiterals(src, { includeCommentOnly: true });
   const calls = [];
   const lineAt = lineCounter(src);
   for (const match of blanked.matchAll(CONSOLE_CALL_OPEN)) {
@@ -167,9 +115,11 @@ export function consoleCalls(src) {
     calls.push({
       line: lineAt(match.index),
       method: match[1],
+      rawArgs: codeOnly.slice(open + 1, close - 1),
       args: splitCallArgs(blanked, codeOnly, open, close),
     });
   }
+  consoleCallsBySource.set(src, calls);
   return calls;
 }
 
@@ -201,7 +151,8 @@ const PROCESS_ROOTS = ['server/', 'autofixer/'];
 // One-shot operator CLIs print human-formatted output, and fixtures stub other
 // code; neither is a log stream a marker grep or stderr monitor reads.
 const LINE_SHAPE_EXEMPT_PREFIXES = ['server/scripts/', 'server/test/'];
-const trackedServerSources = () => trackedFiles(REPO_ROOT, ['*.js', '*.mjs', '*.cjs']).filter((f) => f && PROCESS_ROOTS.some((root) => f.startsWith(root)) && !f.includes('.test.'));
+let serverSources;
+const trackedServerSources = () => (serverSources ??= trackedFiles(REPO_ROOT, ['*.js', '*.mjs', '*.cjs']).filter((f) => f && PROCESS_ROOTS.some((root) => f.startsWith(root)) && !f.includes('.test.')));
 
 describe('failure lines log at error level (#7945)', () => {
   it('scans both long-running Node process trees', () => {
@@ -220,13 +171,13 @@ describe('failure lines log at error level (#7945)', () => {
 
   it('finds the console.log calls it is meant to read', () => {
     // Proves the extractor still recognizes real call sites — without this the
-    // scan below could go vacuously green if `consoleLogCalls` stopped matching.
+    // scan below could go vacuously green if `consoleCalls` stopped matching.
     // Most server modules do not log at all. A cheap lexical pre-filter keeps
     // this guard from lexing 30 MB of unrelated source on every worker while
-    // `consoleLogCalls` remains the authority for what counts as a call.
+    // `consoleCalls` remains the authority for what counts as a call.
     const withLogs = trackedServerSources().filter((file) => {
-      const src = readSource(REPO_ROOT, file);
-      return CONSOLE_LOG_SHAPE.test(src) && consoleLogCalls(src).length > 0;
+      const src = readText(file);
+      return CONSOLE_LOG_SHAPE.test(src) && consoleCalls(src).some(({ method }) => method === 'log');
     });
     expect(withLogs.length).toBeGreaterThan(100);
   });
@@ -234,7 +185,7 @@ describe('failure lines log at error level (#7945)', () => {
   it('has no emitLog at a non-failure level carrying a failure marker', () => {
     const violations = [];
     for (const file of trackedServerSources()) {
-      const src = readSource(REPO_ROOT, file);
+      const src = readText(file);
       if (!/\bemitLog\s*\(/.test(src)) continue;
       if (!FAILURE_MARKERS.some((marker) => src.includes(marker))) continue;
       for (const hit of findMislabeledEmitLogs(src)) violations.push(`${file} ${hit}`);
@@ -251,7 +202,7 @@ describe('failure lines log at error level (#7945)', () => {
   it('has no console.log carrying a failure marker', () => {
     const violations = [];
     for (const file of trackedServerSources()) {
-      const src = readSource(REPO_ROOT, file);
+      const src = readText(file);
       if (!CONSOLE_LOG_SHAPE.test(src)) continue;
       if (!FAILURE_MARKERS.some((marker) => src.includes(marker))) continue;
       for (const hit of findMislabeledFailureLogs(src)) violations.push(`${file} ${hit}`);
@@ -271,10 +222,11 @@ describe('failure lines log at error level (#7945)', () => {
 });
 
 describe('log lines carry a marker and no bare error object (#9951)', () => {
-  const scanned = () => trackedServerSources()
+  let consoleSources;
+  const scanned = () => (consoleSources ??= trackedServerSources()
     .filter((file) => !LINE_SHAPE_EXEMPT_PREFIXES.some((prefix) => file.startsWith(prefix)))
-    .map((file) => ({ file, src: readSource(REPO_ROOT, file) }))
-    .filter(({ src }) => /\bconsole\s*\.\s*(?:log|warn|error|info|debug)\s*\(/.test(src));
+    .map((file) => ({ file, src: readText(file) }))
+    .filter(({ src }) => src.includes('console') && /\bconsole\s*\.\s*(?:log|warn|error|info|debug)\s*\(/.test(src)));
 
   it('has no console call whose message lacks a leading marker emoji', () => {
     const violations = scanned().flatMap(({ file, src }) => findMarkerlessLogs(src).map((hit) => `${file} ${hit}`));

@@ -23,6 +23,8 @@ export default function GoalProgressLog({
           )}
         </div>
         <button
+          type="button"
+          aria-expanded={showProgressForm}
           onClick={() => setShowProgressForm(!showProgressForm)}
           className="min-h-[44px] min-w-[44px] inline-flex items-center justify-center p-0.5 text-gray-500 hover:text-port-accent"
           title="Log progress" aria-label="Log progress"
@@ -79,7 +81,7 @@ export default function GoalProgressLog({
       )}
       {goal.progressLog?.length > 0 && (
         <div className="space-y-1.5 max-h-40 overflow-y-auto">
-          {[...goal.progressLog].reverse().map(entry => (
+          {[...goal.progressLog].reverse().map((entry, index) => (
             <div key={entry.id}>
             <div className="flex items-start gap-2 text-xs group">
               <div className="flex-1 min-w-0">
@@ -97,7 +99,7 @@ export default function GoalProgressLog({
               <button
                 onClick={() => requestDelete(entry.id)}
                 className="min-h-[44px] min-w-[44px] inline-flex items-center justify-center p-0.5 text-gray-700 hover:text-red-400 opacity-40 [@media(hover:hover)]:sm:opacity-0 sm:group-hover:opacity-100 focus-visible:opacity-100 shrink-0"
-                title="Delete" aria-label="Delete"
+                title="Delete" aria-label={`Delete progress entry ${index + 1} from ${formatDateNumeric(entry.date)}`}
               >
                 <Trash2 className="w-3 h-3" />
               </button>

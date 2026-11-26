@@ -241,9 +241,9 @@ export default function AgentCard({ agent, onPause, onKill, onDelete, onResume, 
   const cleanupTracked = agent.metadata?.cleanupOutcome || agent.result?.cleanupPending;
 
   return (
-    <div className={`min-w-0 bg-port-card border rounded-lg overflow-hidden ${completed && expanded ? 'col-span-full' : ''} ${
+    <div role="group" aria-label={`Agent ${agent.id}`} className={`min-w-0 bg-port-card border rounded-lg overflow-hidden ${completed && expanded ? 'col-span-full' : ''} ${
       agent.deliveryPending ? 'border-port-warning/40' : inactive
-        ? isSystemAgent ? 'border-port-border opacity-50' : 'border-port-border opacity-75'
+        ? 'border-port-border'
         : 'border-port-accent/50'
     }`}>
       <div className={completed ? "p-3 [overflow-wrap:anywhere]" : "p-4"}>
@@ -407,7 +407,7 @@ function AgentCompletionEvidence({ agent, completed, remote, cleanupTracked }) {
               ) : agent.memoryExtraction?.pendingApproval > 0 ? (
                 <span>{agent.memoryExtraction.pendingApproval} pending</span>
               ) : (
-                <span className="opacity-50">No memories</span>
+                <span>No memories</span>
               )}
             </div>
           )}

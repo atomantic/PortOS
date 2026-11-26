@@ -1,5 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { chmodSync, mkdtempSync, rmSync, statSync, writeFileSync } from 'fs';
+import { chmodSync, linkSync, mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from 'fs';
+import { createHash } from 'crypto';
+import { readFile } from 'fs/promises';
 import { tmpdir } from 'os';
 import { join } from 'path';
 import { pinPlatform } from '../lib/testHelper.js';
@@ -14,6 +16,21 @@ vi.mock('../lib/processEnv.js', () => pathLookup);
 
 const streaming = vi.hoisted(() => ({ runStreamingCommand: vi.fn(async () => ({ success: true })) }));
 vi.mock('../lib/streamingSpawn.js', () => streaming);
+
+const buffered = vi.hoisted(() => ({ bufferedSpawnOrThrow: vi.fn() }));
+vi.mock('../lib/bufferedSpawn.js', async (importOriginal) => ({ ...(await importOriginal()), ...buffered }));
+
+const sourceFiles = vi.hoisted(() => ({
+  mkdir: vi.fn(async () => {}),
+  mkdtemp: vi.fn(),
+  rename: vi.fn(async () => {}),
+  rm: vi.fn(async () => {}),
+  writeFile: vi.fn(async () => {}),
+}));
+vi.mock('fs/promises', async (importOriginal) => {
+  const fs = await importOriginal();
+  return { ...fs, ...sourceFiles, readFile: vi.fn(fs.readFile) };
+});
 
 // The compose project on disk. Mocked so the suite never stats a real checkout.
 // PARTIAL for the rest of the module: `vllmProjectSetupState` is a pure
@@ -45,9 +62,16 @@ const providers = vi.hoisted(() => ({
 }));
 vi.mock('./provider/providers.js', () => providers);
 
-import { provisionVllmQwenProject, readVllmQwenSetupState, startVllmQwenProject, VLLM_UPSTREAM_REPO } from './vllmQwenManager.js';
+import {
+  provisionVllmQwenProject,
+  readVllmQwenSetupState,
+  startVllmQwenProject,
+  VLLM_UPSTREAM_REPO,
+  VLLM_UPSTREAM_REVISION,
+} from './vllmQwenManager.js';
 
 const DIR = '/home/example/qwen-serving';
+const STAGING = '/home/example/.portos-vllm-stage';
 /** What `wsl.exe` says on a Windows host with an ordinary distro. */
 const WSL_DIR = '\\\\wsl.localhost\\Ubuntu\\home\\example\\qwen-serving';
 const emptyProject = { dir: DIR, hasProject: false, composeFile: null, hasWeights: null, weightsRoot: null };
@@ -61,8 +85,10 @@ const dockerCalls = () => streaming.runStreamingCommand.mock.calls
 
 /** A run against a host with nothing cloned yet. */
 const stageFreshProject = () => project.inspectVllmQwenProject
-  .mockResolvedValueOnce(emptyProject)     // the provisioning step's own look
-  .mockResolvedValue(clonedProject);       // the re-read after the clone
+  .mockResolvedValueOnce(emptyProject)
+  .mockResolvedValueOnce(clonedProject)  // after the clone
+  .mockResolvedValueOnce(clonedProject)  // after populating .env
+  .mockResolvedValue(preparedProject);   // after Docker prepare
 
 const provision = async (lines = []) => provisionVllmQwenProject({
   emit: (line) => lines.push(line),
@@ -83,13 +109,16 @@ function repin(platform) {
 beforeEach(() => {
   restorePlatform = pinPlatform('linux');
   pathLookup.findCommandOnPath.mockImplementation((cmd) => (cmd === 'docker' || cmd === 'git' ? `/usr/bin/${cmd}` : null));
-  project.inspectVllmQwenProject.mockResolvedValue(preparedProject);
+  project.inspectVllmQwenProject.mockReset().mockResolvedValue(preparedProject);
   project.vllmStartBlockedReason.mockReturnValue(null);
   project.vllmProjectDirIsSettled.mockImplementation(() => Boolean(process.env.VLLM_QWEN_PROJECT_DIR));
   wsl.detectWslProjectDir.mockResolvedValue({ dir: WSL_DIR, distro: 'Ubuntu', home: '\\\\wsl.localhost\\Ubuntu\\home\\example' });
   files.tryReadFile.mockResolvedValue(null);
   providers.getAllProviders.mockResolvedValue({ activeProvider: null, providers: [] });
   streaming.runStreamingCommand.mockResolvedValue({ success: true });
+  buffered.bufferedSpawnOrThrow.mockReset().mockResolvedValue({ stdout: `${VLLM_UPSTREAM_REVISION}\n` });
+  readFile.mockReset();
+  sourceFiles.mkdtemp.mockResolvedValue(STAGING);
 });
 
 afterEach(() => {
@@ -121,25 +150,197 @@ describe('readVllmQwenSetupState', () => {
 });
 
 describe('provisionVllmQwenProject', () => {
-  it('clones, writes .env, builds, prepares — in that order', async () => {
+  it('verifies and installs the pinned checkout before writing .env, building and preparing', async () => {
     stageFreshProject();
     const lines = [];
 
     const result = await provision(lines);
 
     expect(result.success).toBe(true);
-    expect(streaming.runStreamingCommand).toHaveBeenCalledWith(
-      '/usr/bin/git',
-      ['clone', VLLM_UPSTREAM_REPO, DIR],
-      expect.any(Function),
-      expect.objectContaining({ splitRe: expect.any(RegExp) }),
+    expect(VLLM_UPSTREAM_REVISION).toMatch(/^[0-9a-f]{40}$/);
+    expect(streaming.runStreamingCommand.mock.calls.map(([cmd, args]) => [cmd, args])).toEqual([
+      ['docker', ['version', '--format', '{{.Server.Version}}']],
+      ['/usr/bin/git', ['init', STAGING]],
+      ['/usr/bin/git', ['-C', STAGING, 'fetch', '--no-tags', '--depth', '1', VLLM_UPSTREAM_REPO, VLLM_UPSTREAM_REVISION]],
+      ['/usr/bin/git', ['-C', STAGING, 'checkout', '--detach', 'FETCH_HEAD']],
+      ['docker', ['compose', 'build']],
+      ['docker', ['compose', 'run', '--rm', 'prepare']],
+    ]);
+    expect(buffered.bufferedSpawnOrThrow).toHaveBeenCalledWith(
+      '/usr/bin/git', ['-C', STAGING, 'rev-parse', 'HEAD'], expect.objectContaining({ timeoutMs: expect.any(Number) }),
     );
+    expect(buffered.bufferedSpawnOrThrow.mock.invocationCallOrder[0]).toBeGreaterThan(streaming.runStreamingCommand.mock.invocationCallOrder[3]);
+    expect(sourceFiles.writeFile).toHaveBeenCalledWith(
+      join(STAGING, 'compose.override.yaml'),
+      expect.stringContaining('127.0.0.1:${PORT:-18020}:${PORT:-18020}'),
+      { flag: 'wx' },
+    );
+    expect(sourceFiles.writeFile).toHaveBeenCalledAfter(buffered.bufferedSpawnOrThrow);
+    const staged = new Map(sourceFiles.writeFile.mock.calls.map(([path, content]) => [path, content.toString()]));
+    const override = staged.get(join(STAGING, 'compose.override.yaml'));
+    const manifest = await readFile(new URL('../../docker/vllm-qwen/manifest.sha256', import.meta.url));
+    expect(override).toContain(`image: portos-vllm-qwen:${createHash('sha256').update(manifest).digest('hex')}`);
+    expect(override).toContain('pull_policy: never');
+    const packaging = staged.get(join(STAGING, 'docker', 'portos', 'provision.patch'));
+    expect(packaging).toMatch(/^\+FROM nvidia\/cuda@sha256:[0-9a-f]{64}$/m);
+    expect(packaging).toContain('--only-binary=:all: --require-hashes -r docker/portos/requirements.lock');
+    expect(packaging).toMatch(/^\+ {2}hf download "\$HF_REPO" --revision [0-9a-f]{40} --local-dir/m);
+    expect(packaging).toMatch(/^\+\s+revision="[0-9a-f]{40}"/m);
+    expect(packaging).toMatch(/^\+revision = "[0-9a-f]{40}" if BF16 else "[0-9a-f]{40}"/m);
+    expect(packaging).toContain('+snapshot_download(REPO, revision=revision,');
+    expect(staged.get(join(STAGING, 'docker', 'portos', 'requirements.lock'))).toMatch(/^vllm==0\.27\.1 --hash=sha256:[0-9a-f]{64}$/m);
+    expect(staged.get(join(STAGING, 'docker', 'portos', 'install-apt.sh'))).toContain('sha256sum --check --strict cuda-packages.sha256');
+    expect(staged.get(join(STAGING, 'docker', 'portos', 'cuda-packages.sha256'))).toMatch(/^[0-9a-f]{64} {2}cuda-nvcc-13-0_.+_amd64\.deb$/m);
+    expect(buffered.bufferedSpawnOrThrow).toHaveBeenCalledWith(
+      '/usr/bin/git', ['-C', STAGING, 'apply', '--index', 'docker/portos/provision.patch'], expect.any(Object),
+    );
+    expect(sourceFiles.rename.mock.invocationCallOrder[0]).toBeGreaterThan(buffered.bufferedSpawnOrThrow.mock.invocationCallOrder[1]);
+    expect(sourceFiles.rename).toHaveBeenCalledWith(STAGING, DIR);
+    expect(sourceFiles.rename).toHaveBeenCalledAfter(sourceFiles.writeFile);
+    expect(files.atomicWrite).toHaveBeenCalledAfter(sourceFiles.rename);
+    expect(files.atomicWrite.mock.invocationCallOrder[0]).toBeLessThan(streaming.runStreamingCommand.mock.invocationCallOrder[4]);
+    expect(emitted(lines)).toMatch(/~9\.5 GB/);
+  });
+
+  it('refuses a mismatched HEAD before publishing the checkout, writing .env or running compose', async () => {
+    stageFreshProject();
+    buffered.bufferedSpawnOrThrow.mockResolvedValueOnce({ stdout: `${'0'.repeat(40)}\n` });
+
+    const result = await provision();
+
+    expect(result).toMatchObject({ success: false, error: expect.stringMatching(/vLLM source revision mismatch/) });
+    expect(sourceFiles.rename).not.toHaveBeenCalled();
+    expect(sourceFiles.rm).toHaveBeenCalledWith(STAGING, { recursive: true, force: true });
+    expect(files.atomicWrite).not.toHaveBeenCalled();
+    expect(dockerCalls()).toEqual(['version --format {{.Server.Version}}']);
+  });
+
+  it.each(['fetch', 'checkout'])('aborts safely when Git %s fails', async (operation) => {
+    stageFreshProject();
+    streaming.runStreamingCommand.mockImplementation(async (cmd, args) => (
+      cmd === '/usr/bin/git' && args[2] === operation ? { success: false, error: 'Git source error' } : { success: true }
+    ));
+
+    const result = await provision();
+
+    expect(result).toMatchObject({ success: false, error: expect.stringContaining('Git source error') });
+    expect(buffered.bufferedSpawnOrThrow).not.toHaveBeenCalled();
+    expect(sourceFiles.rename).not.toHaveBeenCalled();
+    expect(sourceFiles.rm).toHaveBeenCalledWith(STAGING, { recursive: true, force: true });
+    expect(files.atomicWrite).not.toHaveBeenCalled();
+    expect(dockerCalls()).toEqual(['version --format {{.Server.Version}}']);
+  });
+
+  it.each(['missing checksum', 'changed bytes', 'patch conflict'])('stops before publishing a checkout on %s', async (fault) => {
+    stageFreshProject();
+    if (fault === 'missing checksum') {
+      readFile.mockResolvedValueOnce(`# HyperQwen ${VLLM_UPSTREAM_REVISION}\n`);
+    } else if (fault === 'changed bytes') {
+      const manifest = await readFile(new URL('../../docker/vllm-qwen/manifest.sha256', import.meta.url), 'utf8');
+      readFile.mockResolvedValueOnce(manifest).mockResolvedValueOnce(Buffer.from('modified patch'));
+    } else {
+      buffered.bufferedSpawnOrThrow.mockResolvedValueOnce({ stdout: VLLM_UPSTREAM_REVISION }).mockRejectedValueOnce(new Error('patch does not apply'));
+    }
+
+    expect(await provision()).toMatchObject({ success: false, error: expect.stringMatching(/checksum mismatch for provision.patch|patch does not apply/) });
+    expect(sourceFiles.rename).not.toHaveBeenCalled();
+    expect(files.atomicWrite).not.toHaveBeenCalled();
+    expect(dockerCalls()).toEqual(['version --format {{.Server.Version}}']);
+  });
+
+  it('reuses an existing operator checkout without running Git', async () => {
+    project.inspectVllmQwenProject
+      .mockResolvedValueOnce(clonedProject)
+      .mockResolvedValueOnce(clonedProject)
+      .mockResolvedValue(preparedProject);
+
+    expect(await provision()).toEqual({ success: true });
+    expect(sourceFiles.mkdtemp).not.toHaveBeenCalled();
+    expect(sourceFiles.writeFile).not.toHaveBeenCalled();
+    expect(buffered.bufferedSpawnOrThrow).not.toHaveBeenCalled();
+    expect(streaming.runStreamingCommand.mock.calls.every(([cmd]) => cmd === 'docker')).toBe(true);
     expect(dockerCalls()).toEqual([
       'version --format {{.Server.Version}}',
       'compose build',
       'compose run --rm prepare',
     ]);
-    expect(emitted(lines)).toMatch(/~9\.5 GB/);
+  });
+
+
+  it.each([
+    ['missing shard', true, true],
+    ['unrestored shard', true, false],
+    ['healthy checkpoint', false, false],
+  ])('provisions an existing operator checkout with a %s', async (_layout, missing, restores) => {
+    const dir = mkdtempSync(join(tmpdir(), 'vllm-fast-provision-'));
+    const base = join(dir, 'models', 'Qwen3.8-27B-W4A16-AutoRound');
+    const fast = `${base}-fast`;
+    const envPath = join(dir, '.env');
+    const composePath = join(dir, 'compose.yaml');
+    const shard = 'model-00001-of-00007.safetensors';
+    const extra = 'model_extra_tensors.safetensors';
+    const settings = 'SPEC=off\nGPU_UTIL=0.9\n';
+    const compose = 'services: {}\n';
+    try {
+      const actual = await vi.importActual('../lib/vllmQwenProject.js');
+      const script = await readFile(new URL('../../docker/vllm-qwen/fast_checkpoint.py', import.meta.url), 'utf8');
+      project.inspectVllmQwenProject.mockImplementation(() => actual.inspectVllmQwenProject({
+        HOME: dir,
+        VLLM_QWEN_PROJECT_DIR: dir,
+      }));
+      writeFileSync(envPath, settings);
+      writeFileSync(composePath, compose);
+      files.tryReadFile.mockImplementation(async (path) => path === envPath ? readFileSync(path, 'utf8') : null);
+      files.atomicWrite.mockImplementation(async (path, contents) => writeFileSync(path, contents));
+
+      const header = Buffer.from(JSON.stringify({ weight: { dtype: 'U8', shape: [1], data_offsets: [0, 1] } }));
+      const length = Buffer.alloc(8);
+      length.writeBigUInt64LE(BigInt(header.length));
+      const tensor = Buffer.concat([length, header, Buffer.of(1)]);
+      for (const checkpoint of [base, fast]) {
+        mkdirSync(checkpoint, { recursive: true });
+        for (const name of ['config.json', 'tokenizer.json', 'tokenizer_config.json']) {
+          writeFileSync(join(checkpoint, name), '{}');
+        }
+        writeFileSync(join(checkpoint, 'mtp_draft_vocab_ids.pt'), 'vocab');
+      }
+      writeFileSync(join(base, shard), tensor);
+      writeFileSync(join(base, 'model.safetensors.index.json'), JSON.stringify({ weight_map: {
+        'lm_head.weight_packed': shard,
+        'model.embed_tokens.weight_packed': shard,
+        'mtp.layers.0.mlp.down_proj.weight_packed': shard,
+        'mtp.draft_lm_head.weight_packed': shard,
+      } }));
+      writeFileSync(join(fast, extra), tensor);
+      writeFileSync(join(fast, 'model.safetensors.index.json'), JSON.stringify({ weight_map: { shared: shard, fast: extra } }));
+      if (!missing) linkSync(join(base, shard), join(fast, shard));
+
+      const repair = ['compose', 'run', '--rm', '-T', '--entrypoint', '/app/venv/bin/python', 'prepare', '-c', script];
+      streaming.runStreamingCommand.mockImplementation(async (_cmd, args) => {
+        // The Docker double restores the shard only when explicit provision
+        // invokes the actual shipped script inside the existing prepare service.
+        if (restores && args.at(-1) === script) linkSync(join(base, shard), join(fast, shard));
+        return { success: true };
+      });
+
+      expect(await readVllmQwenSetupState()).toBe(missing ? 'empty' : 'ready');
+      const expectedReady = !missing || restores;
+      expect(await provision()).toEqual(expectedReady
+        ? { success: true }
+        : { success: false, error: expect.stringMatching(/selected fast checkpoint is still incomplete.*indexed shards/) });
+      expect(await readVllmQwenSetupState()).toBe(expectedReady ? 'ready' : 'empty');
+      expect(streaming.runStreamingCommand.mock.calls.map(([, args]) => args)).toEqual([
+        ['version', '--format', '{{.Server.Version}}'],
+        ...(missing ? [['compose', 'build'], ['compose', 'run', '--rm', '--env', 'FAST_VARIANT=0', 'prepare'], repair] : []),
+      ]);
+      expect(readFileSync(composePath, 'utf8')).toBe(compose);
+      expect(readFileSync(envPath, 'utf8')).toContain(settings);
+      expect(readFileSync(join(fast, extra))).toEqual(tensor);
+      expect(buffered.bufferedSpawnOrThrow).not.toHaveBeenCalled();
+    } finally {
+      files.atomicWrite.mockImplementation(async () => {});
+      rmSync(dir, { recursive: true, force: true });
+    }
   });
 
   it('writes the tool-parser line every time, and the WSL2 pair only on a WSL2 engine', async () => {
@@ -391,6 +592,16 @@ describe('provisionVllmQwenProject', () => {
     expect(dockerCalls()).not.toContain('compose run --rm prepare');
   });
 
+  it('returns a pinned-model download failure from prepare', async () => {
+    stageFreshProject();
+    streaming.runStreamingCommand.mockImplementation(async (_cmd, args) => (
+      args.includes('prepare') ? { success: false, error: 'requested revision unavailable' } : { success: true }
+    ));
+
+    expect(await provision()).toMatchObject({ success: false, error: expect.stringContaining('requested revision unavailable') });
+    expect(dockerCalls()).toEqual(['version --format {{.Server.Version}}', 'compose build', 'compose run --rm prepare']);
+  });
+
   it('cancels between steps, and never kills a build or a prepare mid-flight', async () => {
     stageFreshProject();
 
@@ -414,7 +625,7 @@ describe('startVllmQwenProject', () => {
     expect(result.success).toBe(true);
     expect(streaming.runStreamingCommand).toHaveBeenCalledWith(
       'docker',
-      ['compose', '--profile', 'single', 'up', '-d'],
+      ['compose', '--profile', 'single', 'up', '-d', '--no-deps', '--no-build', '--pull', 'never', 'single'],
       expect.any(Function),
       expect.objectContaining({ cwd: DIR }),
     );
@@ -431,7 +642,7 @@ describe('startVllmQwenProject', () => {
 
     expect(streaming.runStreamingCommand).toHaveBeenCalledWith(
       'docker',
-      ['compose', '--profile', 'single', 'up', '-d'],
+      ['compose', '--profile', 'single', 'up', '-d', '--no-deps', '--no-build', '--pull', 'never', 'single'],
       expect.any(Function),
       expect.objectContaining({ env: { PORT: '18020' } }),
     );
@@ -442,20 +653,68 @@ describe('startVllmQwenProject', () => {
 
     expect(streaming.runStreamingCommand).toHaveBeenCalledWith(
       'docker',
-      ['compose', '--profile', 'single', 'up', '-d'],
+      ['compose', '--profile', 'single', 'up', '-d', '--no-deps', '--no-build', '--pull', 'never', 'single'],
       expect.any(Function),
       expect.objectContaining({ env: { PORT: '19999' } }),
     );
   });
 
-  it('refuses to run compose when the project is not demonstrably prepared', async () => {
-    project.vllmStartBlockedReason.mockReturnValue('no Qwen weights are cached yet');
+  it.each([
+    ['missing shard', 'empty', /missing or incomplete/],
+    ['interrupted prepare', 'empty', /missing or incomplete/],
+    ['drafter only', 'empty', /missing or incomplete/],
+    ['unreadable cache', 'unknown', /VLLM_QWEN_WEIGHTS_DIR/],
+    ['prepared operator checkout', 'ready', null],
+  ])('checks %s through both setup and Start', async (layout, setup, reason) => {
+    const dir = mkdtempSync(join(tmpdir(), 'vllm-start-'));
+    try {
+      const actual = await vi.importActual('../lib/vllmQwenProject.js');
+      process.env.VLLM_QWEN_PROJECT_DIR = dir;
+      project.inspectVllmQwenProject.mockImplementation(() => actual.inspectVllmQwenProject({
+        HOME: dir,
+        VLLM_QWEN_PROJECT_DIR: dir,
+      }));
+      project.vllmStartBlockedReason.mockImplementation(actual.vllmStartBlockedReason);
+      writeFileSync(join(dir, 'compose.yaml'), 'services: {}\n');
+      const models = join(dir, 'models');
+      const model = join(models, layout === 'drafter only'
+        ? 'Qwen3.8-27B-DFlash2-W4A16' : 'Qwen3.8-27B-W4A16-AutoRound');
+      if (layout === 'unreadable cache') {
+        // A file in place of the configured directory fails readdir even as root.
+        writeFileSync(models, 'not a directory');
+      } else {
+        mkdirSync(model, { recursive: true });
+        for (const name of ['config.json', 'tokenizer.json', 'tokenizer_config.json']) {
+          writeFileSync(join(model, name), '{}');
+        }
+        const shard = 'model.safetensors';
+        const header = Buffer.from(JSON.stringify({ weight: { dtype: 'U8', shape: [1], data_offsets: [0, 1] } }));
+        const length = Buffer.alloc(8);
+        length.writeBigUInt64LE(BigInt(header.length));
+        if (layout !== 'missing shard') {
+          writeFileSync(join(model, shard), Buffer.concat([length, header, Buffer.of(1)]));
+        }
+        if (layout !== 'drafter only') {
+          const tensors = ['lm_head.weight_packed', 'model.embed_tokens.weight_packed',
+            'mtp.layers.0.mlp.down_proj.weight_packed', 'mtp.draft_lm_head.weight_packed'];
+          const weightMap = Object.fromEntries(tensors.map((name) => [name, shard]));
+          writeFileSync(join(model, 'model.safetensors.index.json'), JSON.stringify({ weight_map: weightMap }));
+          if (layout !== 'interrupted prepare') writeFileSync(join(model, 'mtp_draft_vocab_ids.pt'), 'vocab');
+        }
+      }
 
-    const result = await startVllmQwenProject({ emit: () => {}, isCancelled: () => false });
-
-    expect(result).toMatchObject({ success: false, error: expect.stringMatching(/no Qwen weights are cached/) });
-    // The whole point: a 20 GB pull is never started on the user's behalf.
-    expect(streaming.runStreamingCommand).not.toHaveBeenCalled();
+      expect(await readVllmQwenSetupState()).toBe(setup);
+      const result = await startVllmQwenProject({ emit: () => {}, isCancelled: () => false });
+      if (reason) {
+        expect(result).toMatchObject({ success: false, error: expect.stringMatching(reason) });
+        expect(streaming.runStreamingCommand).not.toHaveBeenCalled();
+      } else {
+        expect(result.success).toBe(true);
+        expect(dockerCalls()).toEqual(['compose --profile single up -d --no-deps --no-build --pull never single']);
+      }
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
   });
 
   it('settles a Windows host\'s project directory before looking for the project', async () => {

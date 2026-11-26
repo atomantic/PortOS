@@ -22,7 +22,7 @@ import { MUSIC_VIDEO_CAMERA_FRAME_ASPECTS } from './musicVideoFilmLook.js';
 import { PRODUCTION_MEDIUMS } from './musicVideoProductionMedium.js';
 import { TITLE_CARD_FONTS, TITLE_CARD_LIMITS, TITLE_CARD_POSITIONS, TITLE_CARD_SLIDES, TITLE_CARD_STYLES } from './musicVideoTitleCard.js';
 import { STATS_OUTRO_LIMITS, STATS_OUTRO_LINES } from './musicVideoStatsOutro.js';
-import { CREDITS_OUTRO_LAYOUTS, CREDITS_OUTRO_LIMITS } from './musicVideoCreditsOutro.js';
+import { CREDITS_OUTRO_COLOR_PATTERN, CREDITS_OUTRO_FONT_IDS, CREDITS_OUTRO_LAYOUTS, CREDITS_OUTRO_LIMITS } from './musicVideoCreditsOutro.js';
 import { COVER_DESIGN_OPTIONS } from './musicVideoCoverOverlay.js';
 import { DISTROKID_REMEMBERED_OPTIONS } from '../distrokidGenres.js';
 import { CROSS_LINK_EDIT_TARGETS } from './musicVideoCrossLinks.js';
@@ -642,6 +642,19 @@ export const musicVideoPromotionPlanSchema = z.object({
 }).strict();
 export const musicVideoPublishFrameSchema = z.object({ atSec: z.number().finite().min(0) }).strict();
 
+export const musicVideoPublishKitBuildSchema = z.object({
+  loudnessPreset: z.enum(['as-mixed', 'web']).default('as-mixed'),
+  crop: z.object({
+    renderHistoryId: videoHistoryIdSchema,
+    filename: z.string().min(1).max(255),
+    width: z.number().int().positive(),
+    height: z.number().int().positive(),
+    startSec: z.number().finite().min(0),
+    endSec: z.number().finite().positive(),
+    position: z.number().finite().min(0).max(1),
+  }).strict().refine(({ startSec, endSec }) => endSec > startSec, { path: ['endSec'], message: 'Must be after the start time' }).optional(),
+}).strict();
+
 
 // Release cover art: a source (a kit thumbnail or a gallery image) composed
 // with the title and artist tag, or a fresh source image from a backend.
@@ -1185,9 +1198,16 @@ const musicVideoCreditsOutroSchema = z.object({
   layout: z.enum(CREDITS_OUTRO_LAYOUTS).optional(),
   title: z.string().max(CREDITS_OUTRO_LIMITS.textMax).optional(),
   artist: z.string().max(CREDITS_OUTRO_LIMITS.textMax).optional(),
+  quoteTitle: z.boolean().optional(),
+  showPerformer: z.boolean().optional(),
+  titleFont: z.enum(CREDITS_OUTRO_FONT_IDS).optional(),
+  bodyFont: z.enum(CREDITS_OUTRO_FONT_IDS).optional(),
+  textColor: z.string().regex(CREDITS_OUTRO_COLOR_PATTERN).optional(),
+  labelColor: z.string().regex(CREDITS_OUTRO_COLOR_PATTERN).optional(),
+  backgroundColor: z.string().regex(CREDITS_OUTRO_COLOR_PATTERN).optional(),
   lines: z.array(z.object({
     role: z.string().max(CREDITS_OUTRO_LIMITS.textMax).optional(),
-    name: z.string().max(CREDITS_OUTRO_LIMITS.textMax).optional(),
+    name: z.string().max(CREDITS_OUTRO_LIMITS.blockTextMax).optional(),
   }).strict()).max(CREDITS_OUTRO_LIMITS.linesMax).optional(),
   footer: z.string().max(CREDITS_OUTRO_LIMITS.textMax).optional(),
 }).strict();

@@ -1,7 +1,8 @@
+import { MESSAGE_SELECTOR_DEFAULTS } from './messageSelectorDefaults.js';
 import vm from 'node:vm';
 import { describe, expect, it } from 'vitest';
 import {
-  COMPOSE_PHASES, COMPOSE_SELECTOR_DEFAULTS, SEND_ACK_PATTERN, SEND_REFUSAL_PATTERN, buildComposePhaseScript,
+  COMPOSE_PHASES, SEND_ACK_PATTERN, SEND_REFUSAL_PATTERN, buildComposePhaseScript,
   checkAccountIdentity, classifySendOutcome, planDelivery, recipientsMatch, resolveComposeConfig
 } from './messageBrowserCompose.js';
 
@@ -90,7 +91,7 @@ describe('resolveComposeConfig', () => {
       composeSend: ' button.send ', messageRow: 'ignored', sendAckPattern: 'delivered', sendRefusalPattern: '(unclosed'
     });
     expect(config.sels.composeSend).toBe('button.send');
-    expect(config.sels.newMail).toBe(COMPOSE_SELECTOR_DEFAULTS.outlook.newMail);
+    expect(config.sels.newMail).toBe(MESSAGE_SELECTOR_DEFAULTS.outlook.compose.newMail);
     expect(config.sels).not.toHaveProperty('messageRow');
     expect(config.ackPattern).toBe('delivered');
     expect(config.refusalPattern).toBe(SEND_REFUSAL_PATTERN);
@@ -102,10 +103,10 @@ describe('resolveComposeConfig', () => {
 // The scripts run inside the provider tab, so a syntax error or an argument that
 // escapes its JSON literal would only show up against a real mailbox.
 describe('buildComposePhaseScript', () => {
-  const args = { sels: COMPOSE_SELECTOR_DEFAULTS.outlook, token: 'attempt-1', to: ['alice@example.com'], cc: [], subject: 'Example', body: 'Example body', reply: null, ackPattern: SEND_ACK_PATTERN, refusalPattern: SEND_REFUSAL_PATTERN, timeoutMs: 1000 };
+  const args = { sels: MESSAGE_SELECTOR_DEFAULTS.outlook.compose, token: 'attempt-1', to: ['alice@example.com'], cc: [], subject: 'Example', body: 'Example body', reply: null, ackPattern: SEND_ACK_PATTERN, refusalPattern: SEND_REFUSAL_PATTERN, timeoutMs: 1000 };
 
   it.each(['outlook', 'teams'].flatMap(provider => COMPOSE_PHASES.map(phase => [provider, phase])))('%s %s compiles', (provider, phase) => {
-    const script = buildComposePhaseScript(phase, { ...args, provider, sels: COMPOSE_SELECTOR_DEFAULTS[provider] });
+    const script = buildComposePhaseScript(phase, { ...args, provider, sels: MESSAGE_SELECTOR_DEFAULTS[provider].compose });
     expect(() => new vm.Script(script)).not.toThrow();
     expect(script).toContain(`"phase":"${phase}"`);
   });
@@ -137,7 +138,7 @@ describe('Teams recipient selection in the provider page', () => {
     const input = element();
     const box = element();
     const option = { ...element(suggestion), click: () => { selected = true; } };
-    const sels = COMPOSE_SELECTOR_DEFAULTS.teams;
+    const sels = MESSAGE_SELECTOR_DEFAULTS.teams.compose;
     const matches = {
       [sels.newChat]: [element()], [sels.recipientInput]: [input],
       [sels.recipientSuggestion]: [option], [sels.composeBox]: [box],

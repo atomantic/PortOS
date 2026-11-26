@@ -19,6 +19,7 @@ import { awaitMtplxRequest, mtplxRequestLogPath } from '../../lib/mtplxRequestLo
 import { isEmbeddingModel } from '../../lib/localModelHeuristics.js';
 import { htmlPagesProviderCapability } from '../../lib/provider/htmlPagesProvider.js';
 import { bareLocalModelId } from '../../lib/provider/providerModels.js';
+import { splashHarnessTarget } from '../../lib/provider/splashHarnessContext.js';
 import {
   HTML_BRIEF_MAX_CHARS, HTML_PAGE_DEFAULT_BRIEFS, HTML_PAGES_MAX, htmlPagePlanPrompt, htmlPagePrompt, htmlPagePromptParts, extractHtmlDocument, extractHtmlPagePlan, scoreHtmlPage, scoreHtmlPages,
 } from '../../lib/htmlPageBench.js';
@@ -31,6 +32,9 @@ import { ensurePageFile, pageFileName, removeRunFiles, writePageFile } from './p
 const ACTIVE = new Set(['queued', 'generating']);
 // Thinking models spend most of their budget reasoning before the page starts (8,000 left pages cut off mid-CSS; 24,000 still cut off a 35B thinking model mid-page), and a designed page itself runs several thousand tokens. At ~70 tok/s the cap takes about 12 minutes, inside the page timeout.
 const PAGE_MAX_TOKENS = 48_000;
+// Claude Code requires a request allowance. Ask for its documented ceiling
+// for custom model IDs; Splash enforces the actual room left in context.
+const SPLASH_CLAUDE_MAX_TOKENS = 128_000;
 const PAGE_TIMEOUT_MS = 20 * 60 * 1000;
 // Within this share of the cap the model was cut off, not finished.
 const TRUNCATION_SHARE = 0.98;
@@ -274,6 +278,7 @@ async function processRun(id) {
     await mutateRun(id, (c) => ({ ...c, status: 'generating', startedAt: new Date().toISOString() }));
     console.log(`🧩 HTML pages: ${run.modelId} on ${run.route?.providerName || runtimeLabel(run.backend)} — ${run.themes.length - run.pages.length} page(s)`);
 
+    const noHtmlError = 'Model returned no HTML';
     const generatePages = async (send) => {
       for (const [index, theme] of run.themes.entries()) {
         // A resumed run keeps the pages it already finished.
@@ -296,21 +301,25 @@ async function processRun(id) {
         }
         const prompt = planPrompt ? htmlPagePrompt(theme, plan) : (run.prompts?.[index] ?? htmlPagePrompt(theme));
         const startedAt = Date.now();
-        const result = await send(prompt);
+        const result = await send(prompt, { captureOutputLimit: true });
         if (controller.signal.aborted) return;
         // Cut to the document, never repaired: a truncated page must read as truncated.
         const html = extractHtmlDocument(String(result?.text || '')).slice(0, MAX_PAGE_HTML_CHARS);
+        const limit = html ? null : result?.reasoningOutputLimit;
+        const missingHtmlError = limit
+          ? `Model returned no HTML. The first turn reached the ${limit.outputTokens}-token output limit, using ${limit.thinkingTokens} tokens on thinking and returning no answer text.`
+          : noHtmlError;
         const page = {
           theme,
           html,
           ...scoreHtmlPage(html),
-          error: result?.error || null,
+          error: result?.error || (html ? null : missingHtmlError),
           // The runtime reported using (nearly) the whole token budget: the page, or the reasoning before it, was cut off.
-          hitTokenLimit: Number.isFinite(result?.timings?.completionTokens) ? result.timings.completionTokens >= PAGE_MAX_TOKENS * TRUNCATION_SHARE : null,
+          hitTokenLimit: limit ? true : Number.isFinite(result?.timings?.completionTokens) ? result.timings.completionTokens >= PAGE_MAX_TOKENS * TRUNCATION_SHARE : null,
           elapsedMs: Math.max(0, Date.now() - startedAt),
           tokensPerSecond: result?.timings?.tokensPerSecond ?? null,
-          // What the runtime reported generating, reasoning included; null when it reported no count (a provider route). Pages stored before this field have neither it nor finishedAt.
-          completionTokens: Number.isFinite(result?.timings?.completionTokens) ? result.timings.completionTokens : null,
+          // Runtime count, or the exhausted first turn when it explains a missing page.
+          completionTokens: limit?.outputTokens ?? (Number.isFinite(result?.timings?.completionTokens) ? result.timings.completionTokens : null),
           finishedAt: new Date().toISOString(),
           // Exactly what each request sent and what the plan step returned, so both can be copied and reused on another model.
           planPrompt,
@@ -329,7 +338,7 @@ async function processRun(id) {
       temperature: PAGE_TEMPERATURE, timeoutMs: PAGE_TIMEOUT_MS, signal: controller.signal,
     });
     if (run.route) {
-      await generatePages((prompt) => generateViaProvider(run.route, prompt, controller.signal));
+      await generatePages((prompt, options) => generateViaProvider(run.route, prompt, controller.signal, options));
     } else if (isMtplxCheckpoint(run.backend, run.modelId)) {
       const { runOnMtplxCheckpoint } = await import('../mtplxServerManager.js');
       await runOnMtplxCheckpoint(run.modelId, (served) => generatePages(local(served || run.modelId)), { signal: controller.signal });
@@ -340,12 +349,12 @@ async function processRun(id) {
 
     await mutateRun(id, (c) => {
       const detail = scoreHtmlPages(c.pages);
-      const failedAll = c.pages.length > 0 && c.pages.every((p) => !p.html && p.error);
+      const failedAll = detail.rendered === 0;
       return {
         ...c,
         status: failedAll ? 'failed' : 'complete',
         detail,
-        error: failedAll ? c.pages[0].error : null,
+        error: failedAll ? (c.pages[0]?.error || noHtmlError) : null,
         finishedAt: new Date().toISOString(),
       };
     });
@@ -383,12 +392,12 @@ async function reasoningOnlyTimeoutError({ provider, route, capability, message,
 /**
  * One page through a provider route: the configured provider, model and effort exactly as picked, no fallback (the gallery must name what answered) and tool-free (the reply is the page, not files an agent wrote). Resolves to the same `{ text, error, timings }` shape `generate` does.
  */
-async function generateViaProvider(route, prompt, signal) {
+async function generateViaProvider(route, prompt, signal, { captureOutputLimit = false } = {}) {
   const [{ runPromptThroughProvider }, { stopRun }] = await Promise.all([
     import('../promptRunner.js'), import('../runner.js'),
   ]);
   // A provider can change after queueing or between the plan and page requests.
-  const { provider, capability } = await requireRouteProvider(route);
+  const { provider, capability, model } = await requireRouteProvider(route);
   signal.throwIfAborted();
   let runId = null;
   const stop = () => { if (runId) stopRun(runId).catch(() => { /* best-effort cancel */ }); };
@@ -396,6 +405,7 @@ async function generateViaProvider(route, prompt, signal) {
   const startedAtMs = Date.now();
   try {
     const isolateMtplxOpenCode = capability.kind === 'opencode-mtplx';
+    const splashClaude = splashHarnessTarget(provider, model)?.kind === 'claude';
     const result = await runPromptThroughProvider({
       // The restricted recipe is fresh. Saved argv model or variant pins
       // cannot take precedence over the run's recorded selection.
@@ -403,6 +413,7 @@ async function generateViaProvider(route, prompt, signal) {
       model: route.model || undefined, effort: route.effort || undefined, prompt,
       source: RUN_SOURCE, timeout: PAGE_TIMEOUT_MS, allowFallback: false, toolFree: true, cwd: PATHS.data,
       ...(isolateMtplxOpenCode ? { isolateMtplxOpenCode } : {}),
+      ...(splashClaude ? { maxTokens: SPLASH_CLAUDE_MAX_TOKENS, ...(captureOutputLimit ? { captureClaudeOutputLimit: true } : {}) } : {}),
       beforeExecute: async () => {
         const { provider: current } = await requireRouteProvider(route);
         if (!isDeepStrictEqual(current, provider) || current.apiKey !== provider.apiKey) {
@@ -415,7 +426,10 @@ async function generateViaProvider(route, prompt, signal) {
       onRunCreated: (createdId) => { runId = createdId; if (signal.aborted) stop(); },
     });
     // A CLI transcript can echo the prompt, whose rules mention `<!doctype html>`; drop it so only the reply is read.
-    return { text: String(result?.text || '').split(prompt).join(''), error: null, timings: null };
+    return {
+      text: String(result?.text || '').split(prompt).join(''), error: null, timings: null,
+      ...(splashClaude && captureOutputLimit ? { reasoningOutputLimit: result?.reasoningOutputLimit } : {}),
+    };
   } catch (err) {
     const message = err?.message || 'The provider run failed';
     return { text: '', error: await reasoningOnlyTimeoutError({ provider, route, capability, message, startedAtMs, aborted: signal.aborted }) ?? message, timings: null };

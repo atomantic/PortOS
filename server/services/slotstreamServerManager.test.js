@@ -1,7 +1,7 @@
 import { createHash } from 'crypto';
 import { lstat, mkdir, mkdtemp, readdir, readFile, rm, stat, symlink, writeFile } from 'fs/promises';
 import { tmpdir } from 'os';
-import { join } from 'path';
+import { dirname, join } from 'path';
 import { describe, it, expect, beforeEach, afterEach, afterAll, vi } from 'vitest';
 
 // The manager reaches settings through a dynamic `import('./settings.js')` for
@@ -37,6 +37,7 @@ import * as openAiModelsProbe from '../lib/openAiModelsProbe.js';
 import * as slotstreamModels from '../lib/slotstreamModels.js';
 import * as pm2Module from './pm2.js';
 import * as commandExistsModule from '../lib/commandExists.js';
+import * as downloadPreflight from '../lib/downloadPreflight.js';
 import * as streamingSpawn from '../lib/streamingSpawn.js';
 import { PORTS } from '../lib/ports.js';
 
@@ -104,6 +105,7 @@ describe('slotstreamServerManager', () => {
   afterEach(async () => {
     _resetSlotstreamServerStateForTests();
     vi.restoreAllMocks();
+    vi.unstubAllGlobals();
     await rm(testLogDir, { recursive: true, force: true });
     testLogDir = null;
   });
@@ -258,13 +260,17 @@ describe('slotstreamServerManager', () => {
   describe('installSlotstream', () => {
     const archiveBytes = Buffer.from('verified-slotstream-archive');
     let binDir;
-    let capturedWorkDir;
+    let download;
+    let fetchArchive;
+    const workDir = () => dirname(download.mock.calls[0][0].destPath);
     let capturedExtractDir;
     let extractSetup;
 
     beforeEach(() => {
       binDir = join(testLogDir, 'slotstream-bin');
-      capturedWorkDir = null;
+      download = vi.spyOn(downloadPreflight, 'streamResumableDownload');
+      fetchArchive = vi.fn(async () => new Response(archiveBytes));
+      vi.stubGlobal('fetch', fetchArchive);
       capturedExtractDir = null;
       extractSetup = async (extractDir) => {
         await writeFile(join(extractDir, 'slotstream'), '#!/bin/sh\necho slotstream\n', { mode: 0o644 });
@@ -277,13 +283,8 @@ describe('slotstreamServerManager', () => {
         (name, opts) => (name === join(binDir, 'slotstream') ? realFindCommandOnPath(name, opts) : null),
       );
       vi.spyOn(slotstreamModels, 'slotstreamBinDir').mockReturnValue(binDir);
-      vi.spyOn(commandExistsModule, 'commandExists').mockResolvedValue(true);
+      vi.spyOn(commandExistsModule, 'commandExists').mockResolvedValue(false);
       vi.spyOn(streamingSpawn, 'runStreamingCommand').mockImplementation(async (cmd, args) => {
-        if (cmd === 'gh') {
-          capturedWorkDir = args[args.indexOf('--dir') + 1];
-          await writeFile(join(capturedWorkDir, 'slotstream-arm64.tar.gz'), archiveBytes);
-          return { success: true };
-        }
         if (cmd === 'tar') {
           capturedExtractDir = args[args.indexOf('-C') + 1];
           await extractSetup(capturedExtractDir);
@@ -319,23 +320,18 @@ describe('slotstreamServerManager', () => {
       const result = await withPatchedArchiveDigest(digest, () => installSlotstream());
       expect(result.success).toBe(true);
 
-      const [ghCmd, ghArgs] = streamingSpawn.runStreamingCommand.mock.calls[0];
-      expect(ghCmd).toBe('gh');
-      expect(ghArgs).toEqual([
-        'release', 'download',
-        SLOTSTREAM_RELEASE_TAG,
-        '--repo', SLOTSTREAM_RELEASE_REPO,
-        '--pattern', 'slotstream-arm64.tar.gz',
-        '--dir', capturedWorkDir,
-        '--clobber',
-      ]);
-      expect(capturedWorkDir).toMatch(/^.*portos-slotstream-install-/);
-      expect(capturedWorkDir).not.toBe(binDir);
-
-      const [tarCmd, tarArgs] = streamingSpawn.runStreamingCommand.mock.calls[1];
-      expect(tarCmd).toBe('tar');
-      expect(tarArgs).toEqual(['-xzf', join(capturedWorkDir, 'slotstream-arm64.tar.gz'), '-C', capturedExtractDir]);
-      expect(capturedExtractDir.startsWith(`${capturedWorkDir}/`) || capturedExtractDir.startsWith(`${capturedWorkDir}\\`)).toBe(true);
+      expect(fetchArchive).toHaveBeenCalledExactlyOnceWith(
+        `https://github.com/${SLOTSTREAM_RELEASE_REPO}/releases/download/${SLOTSTREAM_RELEASE_TAG}/slotstream-arm64.tar.gz`,
+        expect.objectContaining({ headers: { 'Accept-Encoding': 'identity' }, redirect: 'follow' }),
+      );
+      expect(commandExistsModule.commandExists).not.toHaveBeenCalled();
+      expect(workDir()).toMatch(/^.*portos-slotstream-install-/);
+      expect(workDir()).not.toBe(binDir);
+      expect(capturedExtractDir).toBe(join(workDir(), 'extract'));
+      expect(streamingSpawn.runStreamingCommand).toHaveBeenCalledExactlyOnceWith(
+        'tar', ['-xzf', join(workDir(), 'slotstream-arm64.tar.gz'), '-C', capturedExtractDir],
+        expect.any(Function), { timeoutMs: 60_000 },
+      );
 
       expect(await readdir(binDir)).toEqual(['slotstream']);
       const installedPath = join(binDir, 'slotstream');
@@ -345,16 +341,15 @@ describe('slotstreamServerManager', () => {
       expect(installedStat.mode & 0o777).toBe(0o755);
       expect(await readFile(installedPath, 'utf8')).toBe('#!/bin/sh\necho slotstream\n');
 
-      await expect(stat(capturedWorkDir)).rejects.toMatchObject({ code: 'ENOENT' });
+      await expect(stat(workDir())).rejects.toMatchObject({ code: 'ENOENT' });
     });
 
     it('refuses a SHA-256 mismatch without extracting or writing to binDir and cleans up the temp dir', async () => {
       await expect(installSlotstream()).rejects.toMatchObject({ code: 'SLOTSTREAM_DIGEST_MISMATCH' });
 
-      expect(streamingSpawn.runStreamingCommand).toHaveBeenCalledTimes(1);
-      expect(streamingSpawn.runStreamingCommand.mock.calls[0][0]).toBe('gh');
+      expect(streamingSpawn.runStreamingCommand).not.toHaveBeenCalled();
       await expect(stat(binDir)).rejects.toMatchObject({ code: 'ENOENT' });
-      await expect(stat(capturedWorkDir)).rejects.toMatchObject({ code: 'ENOENT' });
+      await expect(stat(workDir())).rejects.toMatchObject({ code: 'ENOENT' });
     });
 
     it('rejects a symlinked slotstream entry in the archive without writing to binDir and cleans up the temp dir', async () => {
@@ -369,18 +364,16 @@ describe('slotstreamServerManager', () => {
         .rejects.toMatchObject({ code: 'SLOTSTREAM_INVALID_ARCHIVE' });
 
       await expect(stat(binDir)).rejects.toMatchObject({ code: 'ENOENT' });
-      await expect(stat(capturedWorkDir)).rejects.toMatchObject({ code: 'ENOENT' });
+      await expect(stat(workDir())).rejects.toMatchObject({ code: 'ENOENT' });
     });
 
-    it('cleans up the temp dir when gh download fails', async () => {
-      streamingSpawn.runStreamingCommand.mockImplementationOnce(async (_cmd, args) => {
-        capturedWorkDir = args[args.indexOf('--dir') + 1];
-        return { success: false, error: 'download error' };
-      });
+    it('cleans up the temp dir after an HTTP failure without extracting', async () => {
+      fetchArchive.mockResolvedValueOnce(new Response(null, { status: 404 }));
 
-      await expect(installSlotstream()).rejects.toThrow(/Slotstream install failed/);
+      await expect(installSlotstream()).rejects.toMatchObject({ code: 'DOWNLOAD_FAILED' });
+      expect(streamingSpawn.runStreamingCommand).not.toHaveBeenCalled();
       await expect(stat(binDir)).rejects.toMatchObject({ code: 'ENOENT' });
-      await expect(stat(capturedWorkDir)).rejects.toMatchObject({ code: 'ENOENT' });
+      await expect(stat(workDir())).rejects.toMatchObject({ code: 'ENOENT' });
     });
 
     it('refuses on a host that cannot run it', async () => {

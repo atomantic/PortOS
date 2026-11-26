@@ -4,7 +4,7 @@ import {
   ensureTailcatInstalled, detectTailcat, findTooOldTailcat, listTailcatInstallers,
   listCandidateTailcatBins, manualInstallHint, derpMapCachePath, primeDerpMapCache,
 } from './tailcatRuntime.js';
-import { MIN_TAILCAT_VERSION } from '../lib/tailcatVersion.js';
+import { MIN_TAILCAT_VERSION, PINNED_TAILCAT_VERSION, isTailcatVersionAtLeast, tailcatVersionTooOldMessage } from '../lib/tailcatVersion.js';
 
 // Keep installer execution mocked while exercising its real result handling.
 vi.mock('../lib/bufferedSpawn.js', async (original) => ({
@@ -189,6 +189,19 @@ describe('Tailcat CLI runtime', () => {
     expect(listTailcatInstallers({ brewBin: null, goBin: '/usr/bin/go', runInstall })
       .map((i) => i.label)).toEqual(['go install']);
     expect(listTailcatInstallers({ brewBin: null, goBin: null, runInstall })).toEqual([]);
+  });
+
+  it('installs the pinned Go release and recommends the same version for manual upgrades', async () => {
+    const runInstall = vi.fn();
+    const [go] = listTailcatInstallers({ brewBin: null, goBin: '/usr/bin/go', runInstall });
+    const target = `github.com/tailscale/tailcat/cmd/tailcat@v${PINNED_TAILCAT_VERSION}`;
+
+    await go.run();
+
+    expect(isTailcatVersionAtLeast(PINNED_TAILCAT_VERSION, MIN_TAILCAT_VERSION)).toBe(true);
+    expect(runInstall).toHaveBeenCalledExactlyOnceWith('/usr/bin/go', ['install', target]);
+    expect(tailcatVersionTooOldMessage({ platform: 'darwin' })).toContain(`go install ${target}`);
+    expect(tailcatVersionTooOldMessage({ platform: 'linux' })).toContain(`go install ${target}`);
   });
 
   it('skips Homebrew auto-update so adding a peer does not refresh the formula index', async () => {

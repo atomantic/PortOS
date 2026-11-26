@@ -29,6 +29,8 @@ vi.mock('../lib/vectorMath.js', () => ({
   clusterBySimilarity: vi.fn().mockReturnValue([])
 }));
 
+vi.mock('./review.js', () => ({ removeMemoryApprovalItems: vi.fn() }));
+
 // Mock notifications
 vi.mock('./notifications.js', () => ({
   removeByMetadata: vi.fn().mockResolvedValue(undefined)
@@ -112,7 +114,6 @@ import {
   getGraphData,
   linkMemories,
   consolidateMemories,
-  applyDecay,
   clearExpired,
   getStats,
   invalidateCaches,
@@ -180,6 +181,20 @@ describe('memory service', () => {
       expect(result.embeddingModel).toBeNull();
       expect(result.createdAt).toBeDefined();
       expect(result.updatedAt).toBeDefined();
+    });
+
+    it('logs creation metadata without memory prose', async () => {
+      const log = vi.spyOn(console, 'log').mockImplementation(() => {});
+      try {
+        const memory = await createMemory({ type: 'fact', summary: 'Example private summary', content: 'Example private content' });
+
+        expect(log.mock.calls.filter(([message]) => message.startsWith('🧠 Memory created:'))).toEqual([
+          [`🧠 Memory created: ${memory.id} (fact)`]
+        ]);
+        expect(log.mock.calls.flat().join(' ')).not.toMatch(/example private/i);
+      } finally {
+        log.mockRestore();
+      }
     });
 
     it('should create directories when they do not exist', async () => {
@@ -714,16 +729,23 @@ describe('memory service', () => {
       expect(savedMemory.status).toBe('archived');
     });
 
-    it('should purge', async () => {
+    it.each(['pending_approval', 'active', null])('purges a memory with status %s', async (status) => {
+      const memory = status ? { id: 'mem-1', status, sourceAgentId: 'agent-1' } : null;
       const mockIndex = { version: 1, lastUpdated: '', count: 1, memories: [{ id: 'mem-1', status: 'active' }] };
       const mockEmbeddings = { model: 'test', dimension: 3, vectors: { 'mem-1': [0.1, 0.2, 0.3] } };
-      readJSONFile.mockImplementation(makeReadMock(null, mockIndex, mockEmbeddings));
+      readJSONFile.mockImplementation(makeReadMock(memory, mockIndex, mockEmbeddings));
 
       const result = await purgeMemory('mem-1');
 
       expect(result).toEqual({ success: true, id: 'mem-1' });
       expect(rmGuarded).toHaveBeenCalled();
       expect(memoryBM25.removeMemoryFromIndex).toHaveBeenCalledWith('mem-1');
+      expect(notifications.removeByMetadata).toHaveBeenCalledWith('memoryId', 'mem-1');
+      if (status === 'pending_approval') {
+        expect(decrementAgentPendingApproval).toHaveBeenCalledExactlyOnceWith('agent-1');
+      } else {
+        expect(decrementAgentPendingApproval).not.toHaveBeenCalled();
+      }
     });
 
     it('should emit memory:deleted event', async () => {
@@ -885,6 +907,33 @@ describe('memory service', () => {
   // ===========================================================================
 
   describe('searchMemories', () => {
+    it('applies the prompt audience filter before limiting file-backed lists and searches', async () => {
+      const records = [
+        { id: 'owned', sourceAgentId: 'cos-persistent-mind' },
+        { id: 'name', tags: ['mind:chosen-name'] },
+        { id: 'identity', tags: ['mind:core-identity'] },
+        { id: 'important', tags: ['mind:important'] },
+        { id: 'continuation', tags: ['mind:continuation-note'] },
+        { id: 'shared', tags: null },
+      ].map((record, i) => ({ ...record, status: 'active', importance: 1 - i / 10 }));
+      const index = { version: 1, lastUpdated: '', count: records.length, memories: records };
+      const vectors = Object.fromEntries(records.map(({ id }) => [id, [0.1]]));
+      readJSONFile.mockImplementation(async (path, fallback) => {
+        if (path.includes('index.json')) return index;
+        if (path.includes('embeddings.json')) return { model: 'test', dimension: 1, vectors };
+        return fallback;
+      });
+      memoryBM25.searchBM25.mockResolvedValue(records.map(({ id }) => ({ id, score: 0.9 })));
+      findAboveThreshold.mockReturnValue(records.map(({ id }) => ({ id, similarity: 0.9 })));
+
+      const options = { excludePersistentMind: true, limit: 1 };
+      expect((await getMemories({ ...options, sortBy: 'importance' })).memories.map(m => m.id)).toEqual(['shared']);
+      expect(await countMemories(options)).toBe(1);
+      expect((await searchMemories([0.1], options)).memories.map(m => m.id)).toEqual(['shared']);
+      expect((await hybridSearchMemories('query', [0.1], options)).memories.map(m => m.id)).toEqual(['shared']);
+      expect((await hybridSearchMemories('query', null, { sourceAgentId: 'cos-persistent-mind' })).memories.map(m => m.id)).toEqual(['owned']);
+    });
+
     it('should return empty when no query embedding provided', async () => {
       const result = await searchMemories(null);
 
@@ -1618,72 +1667,21 @@ describe('memory service', () => {
   });
 
   // ===========================================================================
-  // applyDecay
+  // clearExpired
   // ===========================================================================
 
-  describe('applyDecay', () => {
-    it('preserves protected records during background decay and expiration', async () => {
+  describe('clearExpired', () => {
+    it('preserves protected records during expiration', async () => {
       const record = { id: 'protected', status: 'active', importance: 0.1, tags: ['mind:core-identity'], createdAt: '2000-01-01T00:00:00.000Z', expiresAt: '2001-01-01T00:00:00.000Z' };
       readJSONFile.mockImplementation((path, fallback) => {
         if (path.includes('index.json')) return Promise.resolve({ memories: [record], count: 1 });
         if (path.includes('memory.json')) return Promise.resolve(record);
         return Promise.resolve(fallback);
       });
-      expect(await applyDecay()).toEqual({ updated: 0 });
       expect(await clearExpired()).toEqual({ cleared: 0 });
       expect(atomicWrite).not.toHaveBeenCalled();
     });
 
-    it('should apply decay to old memories', async () => {
-      const oldDate = new Date(Date.now() - 100 * 24 * 60 * 60 * 1000).toISOString(); // 100 days ago
-      const mockIndex = {
-        version: 1, lastUpdated: '', count: 1,
-        memories: [{ id: 'm1', status: 'active' }]
-      };
-      const mockMemory = { id: 'm1', importance: 0.5, createdAt: oldDate, lastAccessed: null };
-      readJSONFile.mockImplementation((path, def) => {
-        if (path.includes('index.json')) return Promise.resolve(mockIndex);
-        if (path.includes('memory.json')) return Promise.resolve({ ...mockMemory });
-        return Promise.resolve(def);
-      });
-
-      const result = await applyDecay(0.01);
-
-      expect(result.updated).toBeGreaterThanOrEqual(0);
-    });
-
-    it('decays but never archives Persistent Mind memories (#18322)', async () => {
-      const oldDate = new Date(Date.now() - 400 * 24 * 60 * 60 * 1000).toISOString();
-      const rec = (id, sourceAgentId) => ({ id, status: 'active', importance: 0.15, createdAt: oldDate, lastAccessed: null, sourceAgentId });
-      const records = { mind: rec('mind', 'cos-persistent-mind'), other: rec('other', 'other-agent') };
-      readJSONFile.mockImplementation((path, def) => {
-        if (path.includes('index.json')) return Promise.resolve({ version: 1, lastUpdated: '', count: 2, memories: Object.values(records) });
-        const id = Object.keys(records).find(k => path.includes(`/${k}/`));
-        return Promise.resolve(id ? { ...records[id] } : def);
-      });
-      await applyDecay(0.01);
-      const archivedPaths = atomicWrite.mock.calls.filter(c => String(c[0]).endsWith('memory.json') && c[1]?.status === 'archived').map(c => String(c[0]));
-      expect(archivedPaths.some(p => p.includes('/mind/'))).toBe(false);
-      expect(archivedPaths.some(p => p.includes('/other/'))).toBe(true);
-    });
-
-    it('should return zero updates when no memories exist', async () => {
-      readJSONFile.mockImplementation((path, def) => {
-        if (path.includes('index.json')) return Promise.resolve({ version: 1, lastUpdated: '', count: 0, memories: [] });
-        return Promise.resolve(def);
-      });
-
-      const result = await applyDecay();
-
-      expect(result.updated).toBe(0);
-    });
-  });
-
-  // ===========================================================================
-  // clearExpired
-  // ===========================================================================
-
-  describe('clearExpired', () => {
     it('should clear expired memories', async () => {
       const pastDate = '2020-01-01T00:00:00.000Z';
       const mockIndex = {

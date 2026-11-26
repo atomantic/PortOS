@@ -1,6 +1,6 @@
 import {
   BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, Legend, ResponsiveContainer
-} from 'recharts';
+} from '../ui/charts';
 import BrailleSpinner from '../BrailleSpinner';
 import useChartColors from '../../hooks/useChartColors.js';
 

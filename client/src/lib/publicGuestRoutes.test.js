@@ -1,3 +1,4 @@
+// @vitest-environment node
 import { expect, it } from 'vitest';
 import { isPublicGuestRoute } from './publicGuestRoutes';
 it('skips private bootstrap only for the two standalone audience routes', () => {

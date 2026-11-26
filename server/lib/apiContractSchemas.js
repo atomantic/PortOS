@@ -42,8 +42,8 @@ export const sdapiTxt2imgBodySchema = z.object({
  * at their own boundary via `toOpenApi30Operation`; doing it here instead
  * silently corrupts the other three (see `openapiDowngrade.js`).
  */
-export const zodToOpenApiSchema = (schema) => {
-  const jsonSchema = z.toJSONSchema(schema);
+export const zodToOpenApiSchema = (schema, options) => {
+  const jsonSchema = z.toJSONSchema(schema, options);
   delete jsonSchema.$schema;
   return jsonSchema;
 };

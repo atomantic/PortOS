@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
-import { mkdir, rm, writeFile, } from 'fs/promises';
+import { mkdir, rename, rm, stat, utimes, writeFile} from 'fs/promises';
 import { existsSync } from 'fs';
 import { join } from 'path';
 import { tmpdir } from 'os';
@@ -12,7 +12,18 @@ import { createHash } from 'crypto';
 // data/cos/agents index. The heavy record-graph modules are mocked exactly as
 // peerSync.test.js does, purely so importing peerSync.js stays cheap + offline.
 
-import { PATHS } from '../../lib/fileUtils.js';
+import { isFederatableCosArchive } from '../../lib/cos/cosFederationPolicy.js';
+import { PATHS, sha256File } from '../../lib/fileUtils.js';
+
+vi.mock('../../lib/fileUtils.js', async (importOriginal) => {
+  const actual = await importOriginal();
+  return { ...actual, sha256File: vi.fn(actual.sha256File) };
+});
+
+vi.mock('../../lib/cos/cosFederationPolicy.js', async (importOriginal) => {
+  const actual = await importOriginal();
+  return { ...actual, isFederatableCosArchive: vi.fn(actual.isFederatableCosArchive) };
+});
 
 vi.mock('../instances.js', () => ({
   DEFAULT_SYNC_CATEGORIES: {},
@@ -80,6 +91,8 @@ beforeEach(async () => {
   tmp = join(tmpdir(), `portos-cos-history-${process.pid}-${Math.random().toString(36).slice(2)}`);
   PATHS.cos = tmp;
   await mkdir(join(tmp, 'agents'), { recursive: true });
+  vi.mocked(sha256File).mockClear();
+  vi.mocked(isFederatableCosArchive).mockClear();
   vi.mocked(peerFetch).mockReset();
   vi.mocked(getPeers).mockResolvedValue([PEER]);
   vi.mocked(addAgentArchivesToIndex).mockClear();
@@ -140,6 +153,77 @@ describe('buildCosHistoryManifest', () => {
     // Deterministic: a second build over the same disk yields the same hash.
     const again = await buildCosHistoryManifest();
     expect(again.manifestHash).toBe(m.manifestHash);
+  });
+
+  it('reuses manifest hashes and privacy checks across builds and receiver diffs', async () => {
+    const date = '2026-06-20';
+    const agentId = 'agent-abc';
+    await seedArchive(date, agentId, {
+      'metadata.json': '{}', 'output.txt': 'old', 'prompt.txt': 'example',
+    });
+    const original = await buildCosHistoryManifest();
+    expect(sha256File).toHaveBeenCalledTimes(3);
+    expect(isFederatableCosArchive).toHaveBeenCalledTimes(1);
+    expect(await buildCosHistoryManifest()).toEqual(original);
+    expect(await diffCosHistoryManifestAgainstLocal(original.entries)).toEqual([]);
+    expect(sha256File).toHaveBeenCalledTimes(3);
+    expect(isFederatableCosArchive).toHaveBeenCalledTimes(1);
+
+    const dir = join(tmp, 'agents', date, agentId);
+    const output = join(dir, 'output.txt');
+    const { mtime } = await stat(output);
+    await writeFile(output, 'new');
+    await utimes(output, mtime, new Date(mtime.getTime() + 1000));
+    expect(await diffCosHistoryManifestAgainstLocal(original.entries)).toEqual([
+      expect.objectContaining({ file: 'output.txt' }),
+    ]);
+    const changed = await buildCosHistoryManifest();
+    expect(changed.manifestHash).not.toBe(original.manifestHash);
+    expect(changed.entries.find(entry => entry.file === 'output.txt').sha256).toBe(sha('new'));
+    expect(sha256File).toHaveBeenCalledTimes(4);
+    expect(isFederatableCosArchive).toHaveBeenCalledTimes(1);
+
+    await rm(dir, { recursive: true });
+    expect((await buildCosHistoryManifest()).entries).toEqual([]);
+    expect(await diffCosHistoryManifestAgainstLocal(changed.entries)).toEqual(changed.entries);
+  });
+
+  it('evicts caches for archives absent during a full walk', async () => {
+    await seedArchive('2026-06-20', 'agent-abc', { 'metadata.json': '{}', 'output.txt': 'example' });
+    const original = await buildCosHistoryManifest();
+    const agents = join(tmp, 'agents');
+    const moved = join(tmp, 'moved');
+    // Moving the parent preserves the file fingerprints, so fresh reads prove eviction.
+    await rename(agents, moved);
+    expect((await buildCosHistoryManifest()).entries).toEqual([]);
+    await rename(moved, agents);
+    expect(await buildCosHistoryManifest()).toEqual(original);
+    expect(sha256File).toHaveBeenCalledTimes(4);
+    expect(isFederatableCosArchive).toHaveBeenCalledTimes(2);
+  });
+
+  it('rechecks privacy after replacing metadata and after adding a missing prompt', async () => {
+    const date = '2026-06-20';
+    const agentId = 'agent-abc';
+    await seedArchive(date, agentId, {
+      'metadata.json': '{"metadata":{"machineLocal":false}}', 'output.txt': 'example',
+    });
+    const publicManifest = await buildCosHistoryManifest();
+    expect(publicManifest.entries).toHaveLength(2);
+    await seedArchive(date, agentId, { 'prompt.txt': 'example' });
+    expect((await buildCosHistoryManifest()).entries).toHaveLength(3);
+    expect(isFederatableCosArchive).toHaveBeenCalledTimes(2);
+
+    const dir = join(tmp, 'agents', date, agentId);
+    const metadata = join(dir, 'metadata.json');
+    const replacement = join(dir, 'replacement');
+    const { mtime } = await stat(metadata);
+    await writeFile(replacement, '{"metadata":{"machineLocal":true }}');
+    await utimes(replacement, mtime, mtime);
+    await rename(replacement, metadata);
+    expect((await buildCosHistoryManifest()).entries).toEqual([]);
+    expect((await buildCosHistoryManifest()).entries).toEqual([]);
+    expect(isFederatableCosArchive).toHaveBeenCalledTimes(3);
   });
 
   it('returns an empty manifest when no archives exist', async () => {

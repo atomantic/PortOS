@@ -80,7 +80,7 @@ export async function runAdversarialTests(providerId, model, testIds = null, per
   const scenarios = await parseAdversarialSuite();
   // A persona flavors the embodied identity so the scenarios measure boundary
   // resilience *as* that persona (P7); none tests the base twin.
-  const twinContext = await getDigitalTwinForPrompt({ respectAutoInject: false, ...(personaId ? { personaId } : {}) });
+  const twinContext = await getDigitalTwinForPrompt({ respectAutoInject: false, includePrivacyContext: false, ...(personaId ? { personaId } : {}) });
 
   const provider = await getProviderById(providerId);
   if (!provider || !provider.enabled) {

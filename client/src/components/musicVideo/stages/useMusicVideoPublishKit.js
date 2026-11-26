@@ -14,10 +14,12 @@
 import { useEffect, useRef, useState } from 'react';
 import toast from '../../ui/Toast';
 import socket from '../../../services/socket';
+import { musicVideoAspect } from '../../../../../server/lib/musicVideo/musicVideoAspect.js';
 import {
   getMusicVideoProject,
   buildMusicVideoDcp, musicVideoDcpEventsUrl, cancelMusicVideoDcp,
   buildMusicVideoPublishKit,
+  getMusicVideoPublishCropPreview,
   captureMusicVideoPublishFrame,
   musicVideoPublishKitEventsUrl,
   cancelMusicVideoPublishKit,
@@ -46,6 +48,18 @@ const readPercent = (frame) => (Number.isFinite(frame.progress) ? frame.progress
  */
 export default function useMusicVideoPublishKit({ project, replaceProject } = {}) {
   const projectId = project?.id || null;
+  const renderHistoryId = project?.renderHistoryId;
+  const canCrop = !!renderHistoryId && musicVideoAspect(project) === '16:9';
+  const [cropDraft, setCrop] = useState(null);
+  const crop = cropDraft?.projectId === projectId ? cropDraft : null;
+  let cropBlockedReason = null;
+  if (crop) {
+    if (crop.error) cropBlockedReason = crop.error;
+    else if (!canCrop) cropBlockedReason = 'Crop preview needs a landscape final render.';
+    else if (crop.pending) cropBlockedReason = 'Loading crop preview…';
+    else if (crop.preview?.renderHistoryId !== renderHistoryId) cropBlockedReason = 'The master changed. Refresh the crop preview before building.';
+    else if (!crop.ready) cropBlockedReason = 'Wait for the crop preview to show the master.';
+  }
   const [capturingFrame, setCapturingFrame] = useState(false);
   const [drafting, setDrafting] = useState(false);
   const [saving, setSaving] = useState(false);
@@ -63,13 +77,32 @@ export default function useMusicVideoPublishKit({ project, replaceProject } = {}
 
   const attachedJobs = useRef(new Set());
 
+  const loadCropPreview = (position) => {
+    const pending = { projectId, position, pending: true };
+    setCrop(pending);
+    return getMusicVideoPublishCropPreview(projectId, { silent: true }).then(preview => {
+      setCrop(current => current === pending ? { projectId, position, preview } : current);
+      if (preview.renderHistoryId !== renderHistoryId) reload(projectId);
+    }).catch(error => {
+      setCrop(current => current === pending ? { projectId, position, error: error.message || 'The crop preview could not be loaded.' } : current);
+    });
+  };
+
   const job = useSseJobSlot({
-    startRequest: () => buildMusicVideoPublishKit(projectId, { silent: true }),
+    startRequest: ({ crop: draft, loudnessPreset }) => buildMusicVideoPublishKit(projectId, {
+      silent: true,
+      ...(loudnessPreset === undefined ? {} : { loudnessPreset }),
+      ...(draft ? { crop: { ...draft.preview, position: draft.position } } : {}),
+    }),
     eventsUrl: musicVideoPublishKitEventsUrl,
     cancelRequest: cancelMusicVideoPublishKit,
     readPercent,
     onComplete: (_frame, id) => reload(id),
-    onKickoffError: (err) => {
+    onKickoffError: (err, { crop: draft }) => {
+      if (err?.code === 'PUBLISH_CROP_PREVIEW_STALE') {
+        setCrop(current => draft && current?.preview === draft.preview ? { ...current, preview: null, error: err.message } : current);
+        return true;
+      }
       // A build is already running (another tab, or this one before a reload): adopt it.
       if (err?.code === 'PUBLISH_KIT_BUILD_IN_PROGRESS' && err.context?.jobId) {
         job.attach(err.context.jobId, projectId);
@@ -205,7 +238,14 @@ export default function useMusicVideoPublishKit({ project, replaceProject } = {}
     dcp: { active: dcpJob.active, stage: dcpJob.stage, build: input => dcpJob.start(input, projectId), cancel: dcpJob.cancel },
     building: job.active,
     progress: job.active ? job.percent : 0,
-    build: () => job.start({}, projectId),
+    canCrop,
+    crop,
+    cropBlockedReason,
+    setCropMode: (enabled) => enabled ? loadCropPreview(0.5) : setCrop(null),
+    refreshCropPreview: () => loadCropPreview(crop?.position ?? 0.5),
+    setCropPosition: (position) => setCrop(current => current?.preview && current.preview === crop?.preview ? { ...current, position } : current),
+    setCropMediaState: (preview, error) => setCrop(current => current?.preview === preview ? { ...current, ready: !error, error } : current),
+    build: ({ loudnessPreset } = {}) => { if (!cropBlockedReason) job.start({ crop, loudnessPreset }, projectId); },
     cancelBuild: job.cancel,
     drafting,
     saving,

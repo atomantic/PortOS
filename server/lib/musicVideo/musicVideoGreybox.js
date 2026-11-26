@@ -33,10 +33,14 @@ export const castAndSetsGreyboxPending = (stage, liveCaptures) => castAndSetsPen
 /** The greybox images a render sends, plate (or capture) first, then the optional blocking layout. */
 export const musicVideoGreyboxReferences = (greybox) => [greybox?.reference, greybox?.blocking].filter(Boolean);
 
+export function isMusicVideoSetOmitted(scene) {
+  return scene?.omittedCatalogSubjectIds?.includes(scene?.setReference?.subjectId) === true;
+}
+
 /** Resolve only the explicitly selected camera, never a replacement plate. Browser-safe. */
 export function musicVideoGreyboxReference(project, scene, places = {}) {
   const selected = scene?.setReference;
-  if (!selected?.greyboxShotId) return null;
+  if (!selected?.greyboxShotId || isMusicVideoSetOmitted(scene)) return null;
   const subject = project?.concept?.subjects?.find((s) => s.id === selected.subjectId && s.kind === 'place');
   const entry = subject?.ingredientId && places[subject.ingredientId];
   const fail = (detail) => ({ error: `Greybox reference: ${detail}. Choose another saved shot or clear the selection.` });

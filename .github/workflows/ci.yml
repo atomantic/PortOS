@@ -267,11 +267,9 @@ jobs:
         run: npm run smoke
 
   client:
-    # Sharded like the server job; the build and the bundle budget run on shard 1.
-    # Lint is deliberately NOT here — it has its own job.
-    name: Client tests and build (${{ matrix.shard }}/${{ strategy.job-total }})
+    name: Client tests (${{ matrix.shard }}/${{ strategy.job-total }})
     needs: impact
-    if: fromJSON(needs.impact.outputs.plan).client_mode != 'skip' || fromJSON(needs.impact.outputs.plan).build
+    if: fromJSON(needs.impact.outputs.plan).client_mode != 'skip'
     runs-on: ubuntu-latest
     timeout-minutes: 30
     strategy:
@@ -321,7 +319,6 @@ jobs:
       # launches a browser suite (#17750).
       - name: Restore the test memo
         id: test-memo
-        if: fromJSON(needs.impact.outputs.plan).client_mode != 'skip'
         uses: ./.github/actions/test-memo
         with:
           suite: client
@@ -329,11 +326,10 @@ jobs:
           # FULL_SUITE_SHARDS.client; scripts/ci-test-memo-cache.test.js pins it.
           # A full run executes only its own partition, so sibling lineages
           # are merged only for scoped plans (recordedReach narrowing).
-          merge-shards: ${{ fromJSON(needs.impact.outputs.plan).client_mode == 'full' && '0' || '4' }}
+          merge-shards: ${{ fromJSON(needs.impact.outputs.plan).client_mode == 'full' && '0' || '6' }}
 
       - name: Run client tests
         id: client-tests
-        if: fromJSON(needs.impact.outputs.plan).client_mode != 'skip'
         env:
           PORTOS_TEST_MEMO_DIR: ${{ runner.temp }}/portos-test-memo
           PORTOS_CI_DIAGNOSTICS_DIR: ${{ runner.temp }}/portos-ci-diagnostics
@@ -352,9 +348,22 @@ jobs:
           path: ${{ runner.temp }}/portos-test-memo
           key: ${{ steps.test-memo.outputs.key }}
 
-      - name: Build client
-        if: fromJSON(needs.impact.outputs.plan).build && matrix.shard == 1
-        run: npm run build --prefix client
+  client-build:
+    name: Build client
+    needs: impact
+    if: fromJSON(needs.impact.outputs.plan).build
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - uses: ./.github/actions/setup-client
+
+      - run: npm run build --prefix client
 
   lint:
     # Its own job rather than a step on client shard 1, for cost and latency —
@@ -526,8 +535,9 @@ jobs:
     # Owns the registered browser suites; the Linux unit job excludes that
     # exact registry. PRs run the smoke profile; scheduled, release and
     # dispatched runs run the complete profile. No Postgres: the suites run on
-    # the file backend under NODE_ENV=test. Two or more suites use two shards
-    # without changing quiet-project sequencing or the per-runner watchdog.
+    # the file backend under NODE_ENV=test. The planner keeps one-, two-, and
+    # four-shard scoped plans and gives broad plans seven runners. Quiet-project
+    # sequencing and the per-runner watchdog are unchanged.
     name: Browser suites (${{ matrix.shard }}/${{ strategy.job-total }})
     needs: impact
     if: fromJSON(needs.impact.outputs.plan).browser
@@ -551,15 +561,17 @@ jobs:
         with:
           vitest-key-suffix: -browser-${{ matrix.shard }}of${{ strategy.job-total }}
 
-      # Smoke uses both trusted full-run lineages because its shard owners
-      # differ. Per-test keys still require compatible inputs and coverage.
+      # Smoke can use every trusted full-run lineage because smaller
+      # selections can use different shard owners. Per-test keys still require
+      # compatible inputs and coverage.
       - name: Restore the test memo
         id: test-memo
         uses: ./.github/actions/test-memo
         with:
           suite: browser
           partition: browser-${{ matrix.shard }}of${{ strategy.job-total }}
-          merge-shards: ${{ env.PORTOS_BROWSER_TEST_PROFILE == 'smoke' && '4' || '0' }}
+          merge-shards: ${{ env.PORTOS_BROWSER_TEST_PROFILE == 'smoke' && '7' || '0' }}
+          legacy-shards: '4'
 
       # Plan before installing ffmpeg/client deps so shards 100% covered by the
       # memo skip both. Uses the same env keys as the test step below.
@@ -1052,7 +1064,7 @@ jobs:
   gate:
     name: CI Gate
     if: always()
-    needs: [impact, server, client, lint, database, browser, windows-server, node-minimum, linux-containment, docker-containment-live, macos-native, supercollider-live]
+    needs: [impact, server, client, client-build, lint, database, browser, windows-server, node-minimum, linux-containment, docker-containment-live, macos-native, supercollider-live]
     runs-on: ubuntu-latest
     timeout-minutes: 10
     # READ only: the reporter lists this run's jobs to name the one whose STEP
@@ -1086,6 +1098,7 @@ jobs:
           CI_GATE_RESULT_IMPACT: ${{ needs.impact.result }}
           CI_GATE_RESULT_SERVER: ${{ needs.server.result }}
           CI_GATE_RESULT_CLIENT: ${{ needs.client.result }}
+          CI_GATE_RESULT_CLIENT_BUILD: ${{ needs.client-build.result }}
           CI_GATE_RESULT_LINT: ${{ needs.lint.result }}
           CI_GATE_RESULT_DATABASE: ${{ needs.database.result }}
           CI_GATE_RESULT_BROWSER: ${{ needs.browser.result }}

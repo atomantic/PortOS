@@ -76,6 +76,7 @@ export function buildAgentRegistration({
     // must not relabel finished runs). Older records carry null, rendered as plain text.
     repoIssueUrl,
     worktreeBranch: worktreeInfo?.branchName || null,
+    worktreeBaseBranch: worktreeInfo?.baseBranch || null,
     // Keep explicit handoffs after task archival; omitted policy is not a grant.
     prCompletionPolicy: explicitPrCompletion(task),
     isWorktree: !!worktreeInfo,

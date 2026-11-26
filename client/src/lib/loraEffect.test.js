@@ -1,3 +1,4 @@
+// @vitest-environment node
 /**
  * The LoRA manager card's reading of an adapter-effect measurement (#4872).
  *

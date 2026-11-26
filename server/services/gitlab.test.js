@@ -38,10 +38,11 @@ beforeEach(() => {
 describe('findMergeRequestForBranch (#3358)', () => {
   it('reports `found` with the MR iid', async () => {
     spawnMock.mockImplementationOnce(() => glabChild({
-      stdout: '[{"iid":12,"web_url":"https://gitlab.example/g/p/-/merge_requests/12","description":"Closes #1","state":"opened"}]'
+      stdout: '[{"iid":12,"web_url":"https://gitlab.example/g/p/-/merge_requests/12","description":"Closes #1","state":"opened","source_branch":"claim/issue-1","target_branch":"trunk","source_project_id":42,"target_project_id":42}]'
     }));
     await expect(findMergeRequestForBranch('claim/issue-1', '/repo'))
-      .resolves.toMatchObject({ status: 'found', number: 12, body: 'Closes #1' });
+      .resolves.toMatchObject({ status: 'found', number: 12, body: 'Closes #1',
+        headBranch: 'claim/issue-1', baseBranch: 'trunk', sameRepository: true });
   });
 
   it('queries by source branch across every state, asking for JSON with the long --output form', async () => {

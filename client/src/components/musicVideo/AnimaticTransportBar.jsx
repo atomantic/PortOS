@@ -1,7 +1,7 @@
 import { Captions, Clapperboard, Scissors } from 'lucide-react';
 import { formatDurationSec } from '../../utils/formatters.js';
 import { sceneShotName } from '../../lib/musicVideoStages.js';
-import { MUSIC_VIDEO_CUT_EFFECT_LABELS } from '../../lib/musicVideoCutEffects.js';
+import { MUSIC_VIDEO_CUT_EFFECT_LABELS } from '../../../../server/lib/musicVideo/musicVideoCutEffects.js';
 import ShotStepper from './ShotStepper.jsx';
 import FrameStepper from './FrameStepper.jsx';
 import PreviewFilmLook from './PreviewFilmLook.jsx';

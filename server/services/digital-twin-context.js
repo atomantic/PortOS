@@ -68,7 +68,9 @@ export async function getDigitalTwinContextWithDocs(options = {}) {
   // respectAutoInject: the autoInjectToCoS setting gates CoS agent injection
   // only. User-triggered twin workflows (test suites, dynamic test generation,
   // enrichment) pass false so they keep seeing the twin when it is unchecked.
-  const { maxTokens: requestedMaxTokens, personaId, respectAutoInject = true } = options;
+  const {
+    maxTokens: requestedMaxTokens, personaId, respectAutoInject = true, includePrivacyContext = true
+  } = options;
   const meta = await loadMeta();
   // Explicit caller override wins; otherwise the saved Digital Twin setting governs.
   const maxTokens = requestedMaxTokens ?? meta.settings?.maxContextTokens ?? 4000;
@@ -101,16 +103,12 @@ export async function getDigitalTwinContextWithDocs(options = {}) {
   // Reserve space for the reference notice, fence and truncation marker.
   const maxChars = Math.max(0, maxTokens * 4 - UNTRUSTED_REFERENCE_NOTICE.length - 100); // Rough char-to-token estimate
 
-  // Privacy Vault identity dossier — opt-in TWICE: the GLOBAL gate here
-  // (includePrivacyContext, default false) plus the per-field share_with_twin
-  // gate inside getPrivacyTwinContext. Injected before documents as an
-  // authoritative identity block, counting toward the same token budget. Never
-  // cached to disk — decrypted at injection time only. Failures degrade to no
-  // block rather than failing the whole prompt (this also runs outside the
-  // request lifecycle for CoS agent spawns).
-  if (meta.settings?.includePrivacyContext === true) {
+  // Non-agent workflows opt out before decryption. Agent injection requires
+  // both the saved setting and each fact's share_with_twin flag. Retrieval
+  // failure leaves other prompt context available, including on CoS spawns.
+  if (includePrivacyContext && meta.settings?.includePrivacyContext === true) {
     const privacyBlock = await getPrivacyTwinContext()
-      .catch(err => { console.log(`⚠️ Privacy twin context retrieval failed: ${err.message}`); return ''; });
+      .catch(() => { console.log('⚠️ Privacy twin context retrieval failed'); return ''; });
     if (privacyBlock && tokenCount + privacyBlock.length + 8 <= maxChars) {
       reference += `${privacyBlock}\n\n---\n\n`;
       tokenCount += privacyBlock.length + 8;

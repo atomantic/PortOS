@@ -1,6 +1,6 @@
 import { beforeEach, afterEach, describe, expect, it, vi } from 'vitest';
 import { join } from 'node:path';
-import { readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { chmodSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { createTempDataRoot } from '../lib/mockPathsDataRoot.js';
 
 const mocks = vi.hoisted(() => ({
@@ -114,4 +114,12 @@ describe('privacy mutations serialize', () => {
     expect(mocks.deleteEvents).toHaveBeenCalledWith({ source: 'imessage', chatGuid: 'chat-1', client: { query: mocks.query } });
     expect(mocks.deleteAutoTouchpoints).toHaveBeenCalledWith({ dedupePrefix: 'imsg:chat-1:', client: { query: mocks.query } });
   });
+});
+
+it.skipIf(process.platform === 'win32')('writes the iMessage blocklist with owner-only permissions, including upgrades', async () => {
+  await setBlocklist(['blocked@example.com']);
+  expect(statSync(file()).mode & 0o777).toBe(0o600);
+  chmodSync(file(), 0o644);
+  await addToBlocklist(['other@example.com']);
+  expect(statSync(file()).mode & 0o777).toBe(0o600);
 });

@@ -1,14 +1,18 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 const mocks = vi.hoisted(() => ({
-  getAccessToken: vi.fn(), fetchWithTimeout: vi.fn(), readJSONFile: vi.fn(), ensureDir: vi.fn(), atomicWrite: vi.fn(), sleep: vi.fn(),
+  getAccessToken: vi.fn(), fetchWithTimeout: vi.fn(), readJSONFile: vi.fn(), ensureSecureDir: vi.fn(), writeSecureJson: vi.fn(), sleep: vi.fn(),
 }));
 
 vi.mock('./spotifyAuth.js', () => ({ getAccessToken: (...args) => mocks.getAccessToken(...args) }));
 vi.mock('../lib/fetchWithTimeout.js', () => ({ fetchWithTimeout: (...args) => mocks.fetchWithTimeout(...args) }));
 vi.mock('../lib/fileUtils.js', () => ({
   dataPath: (...parts) => `/tmp/${parts.join('/')}`, readJSONFile: (...args) => mocks.readJSONFile(...args),
-  ensureDir: (...args) => mocks.ensureDir(...args), atomicWrite: (...args) => mocks.atomicWrite(...args), sleep: (...args) => mocks.sleep(...args),
+  sleep: (...args) => mocks.sleep(...args),
+}));
+vi.mock('../lib/secureAuthStore.js', () => ({
+  ensureSecureDir: (...args) => mocks.ensureSecureDir(...args),
+  writeSecureJson: (...args) => mocks.writeSecureJson(...args),
 }));
 
 import { normalizeSpotifyPlaylist, normalizeSpotifyTrack, playlistSnapshotSummary, syncSpotifyPlaylists } from './spotifyPlaylists.js';
@@ -53,7 +57,8 @@ describe('syncSpotifyPlaylists', () => {
     expect(mocks.fetchWithTimeout).toHaveBeenCalledTimes(2);
     expect(mocks.fetchWithTimeout.mock.calls[0][0].toString()).toContain('/me/playlists?limit=50&offset=0');
     expect(mocks.fetchWithTimeout.mock.calls[1][0].toString()).toContain('/playlists/playlist-1/items?limit=50&offset=0');
-    expect(mocks.atomicWrite).toHaveBeenCalledWith('/tmp/spotify/playlists.json', expect.objectContaining({ schemaVersion: 1 }));
+    expect(mocks.ensureSecureDir).toHaveBeenCalledWith('/tmp/spotify');
+    expect(mocks.writeSecureJson).toHaveBeenCalledWith('/tmp/spotify/playlists.json', expect.objectContaining({ schemaVersion: 1 }));
   });
 
   it('stops pagination when Spotify returns an empty page', async () => {
@@ -125,7 +130,7 @@ describe('syncSpotifyPlaylists', () => {
     const result = await syncSpotifyPlaylists();
 
     expect(result).toMatchObject({ ok: false, status: 'list-empty', playlistCount: 1, scanned: 0 });
-    expect(mocks.atomicWrite).not.toHaveBeenCalled();
+    expect(mocks.writeSecureJson).not.toHaveBeenCalled();
   });
 
   it('stops instead of sleeping past the rate-limit wait bound', async () => {
@@ -146,6 +151,6 @@ describe('syncSpotifyPlaylists', () => {
     const result = await syncSpotifyPlaylists();
 
     expect(result).toMatchObject({ ok: false, status: 'snapshot-unreadable' });
-    expect(mocks.atomicWrite).not.toHaveBeenCalled();
+    expect(mocks.writeSecureJson).not.toHaveBeenCalled();
   });
 });

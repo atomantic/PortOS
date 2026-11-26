@@ -5,7 +5,7 @@
  * the `.env` must say; this module runs the commands (same split `mtplxServerManager.js` and
  * `llamaServerManager.js` have from `localRuntimeSetup.js`).
  *
- *   - **Provision** (`provisionVllmQwenProject`) — clone, write `.env`, build, prepare. This
+ *   - **Provision** (`provisionVllmQwenProject`) — verify source, write `.env`, build, prepare. This
  *     is the ~30 GB and runs ONLY behind the checklist's `provision-start` action, whose
  *     button names the payload. `install()` in the registry still refuses: Docker Desktop, the
  *     NVIDIA Container Toolkit and WSL2 are host-level operator decisions.
@@ -16,10 +16,12 @@
  * failure comes back as a value the caller turns into a terminal frame.
  */
 
-import { chmod } from 'fs/promises';
+import { createHash } from 'crypto';
+import { chmod, mkdir, mkdtemp, readFile, rename, rm, writeFile } from 'fs/promises';
 import { totalmem } from 'os';
-import { join } from 'path';
+import { dirname, join } from 'path';
 
+import { bufferedSpawnOrThrow } from '../lib/bufferedSpawn.js';
 import { atomicWrite, formatBytes, tryReadFile } from '../lib/fileUtils.js';
 import { runStreamingCommand } from '../lib/streamingSpawn.js';
 import { findCommandOnPath } from '../lib/processEnv.js';
@@ -48,12 +50,29 @@ import { ensureWslProjectDir } from './wslProjectPlacement.js';
 
 /** Upstream's frozen packaging of patched vLLM + the requantized checkpoint. */
 export const VLLM_UPSTREAM_REPO = 'https://github.com/syv-ai/qwen38-27b-rtx3090';
+// This revision builds vLLM 0.27.1 locally and documents the WSL2 settings PortOS supplies.
+export const VLLM_UPSTREAM_REVISION = '18db5cb3b56e63e30f64eee7901f0e97e632ab32';
+
+// Compose's image namespace is shared with other checkouts on the same daemon.
+// Start and prepare must resolve the same local build, even across a retry.
+function vllmComposeOverride(tag) {
+  return `services:
+  prepare: &built
+    image: portos-vllm-qwen:${tag}
+    pull_policy: never
+  single: &local
+    <<: *built
+    ports: !override
+      - "127.0.0.1:\${PORT:-${PORTS.VLLM_QWEN}}:\${PORT:-${PORTS.VLLM_QWEN}}"
+  batch: *local
+`;
+}
 
 /** A daemon question, and a compose `up` on an image that is already built. */
 const CONTROL_TIMEOUT_MS = 60 * 1000;
 
-/** Bound on the clone: source and a compose file; the 30 GB arrives in the two later steps. */
-const CLONE_TIMEOUT_MS = 30 * 60 * 1000;
+/** Bound on fetching source; the 30 GB arrives in the two later steps. */
+const SOURCE_FETCH_TIMEOUT_MS = 30 * 60 * 1000;
 
 /**
  * The image build and the weights prepare. Sized for a slow line: a bound that kills a 20 GB
@@ -180,8 +199,80 @@ async function applyVllmApiKeyToProviders(apiKey, emit) {
   return stored;
 }
 
+const VLLM_ARTIFACTS = new URL('../../docker/vllm-qwen/', import.meta.url);
+const FAST_CHECKPOINT_SCRIPT = 'fast_checkpoint.py';
+
+async function readVllmManifest() {
+  const manifest = await readFile(new URL('manifest.sha256', VLLM_ARTIFACTS), 'utf8');
+  if (manifest.split(/\r?\n/, 1)[0] !== `# HyperQwen ${VLLM_UPSTREAM_REVISION}`) {
+    throw new Error('vLLM artifact manifest does not match the pinned source revision.');
+  }
+  return manifest;
+}
+
+async function readVllmArtifact(manifest, name) {
+  const bytes = await readFile(new URL(name, VLLM_ARTIFACTS));
+  const digest = createHash('sha256').update(bytes).digest('hex');
+  if (!manifest.split(/\r?\n/).includes(`${digest}  ${name}`)) {
+    throw new Error(`vLLM artifact checksum mismatch for ${name}.`);
+  }
+  return bytes;
+}
+
+// Stage every build input before publishing. A retry after a bad bundle must
+// never find an apparently reusable, unpatched checkout.
+async function installVllmArtifacts(staging, git) {
+  const manifest = await readVllmManifest();
+  const destination = join(staging, 'docker', 'portos');
+  await mkdir(destination);
+  for (const name of ['provision.patch', 'install-apt.sh', 'cuda-packages.sha256', 'requirements.lock', FAST_CHECKPOINT_SCRIPT]) {
+    const bytes = await readVllmArtifact(manifest, name);
+    await writeFile(join(destination, name), bytes, { flag: 'wx' });
+  }
+  await bufferedSpawnOrThrow(git, ['-C', staging, 'apply', '--index', 'docker/portos/provision.patch'], { timeoutMs: CONTROL_TIMEOUT_MS });
+  return createHash('sha256').update(manifest).digest('hex');
+}
+
+async function checkoutVllmSource(dir, emit) {
+  const git = findCommandOnPath('git');
+  if (!git) return { success: false, error: '`git` was not found on PortOS\'s PATH, so the compose project cannot be checked out.' };
+
+  let staging;
+  try {
+    const parent = dirname(dir);
+    await mkdir(parent, { recursive: true });
+    // Inspection treats any existing project directory as operator-managed. Publish only a
+    // verified checkout so a failed provision cannot enter the reuse branch on retry.
+    staging = await mkdtemp(join(parent, '.portos-vllm-'));
+    emit(`Fetching vLLM source revision ${VLLM_UPSTREAM_REVISION} from ${VLLM_UPSTREAM_REPO} for ${dir}…`);
+    const steps = [
+      ['initialize source checkout', ['init', staging], CONTROL_TIMEOUT_MS],
+      ['fetch pinned source revision', ['-C', staging, 'fetch', '--no-tags', '--depth', '1', VLLM_UPSTREAM_REPO, VLLM_UPSTREAM_REVISION], SOURCE_FETCH_TIMEOUT_MS],
+      ['check out pinned source revision', ['-C', staging, 'checkout', '--detach', 'FETCH_HEAD'], CONTROL_TIMEOUT_MS],
+    ];
+    for (const [step, args, timeoutMs] of steps) {
+      const result = await runStreamingCommand(git, args, emit, { timeoutMs, splitRe: PROGRESS_SPLIT_RE });
+      if (!result.success) return { success: false, error: `Could not ${step}: ${result.error}` };
+    }
+    const { stdout } = await bufferedSpawnOrThrow(git, ['-C', staging, 'rev-parse', 'HEAD'], { timeoutMs: CONTROL_TIMEOUT_MS });
+    if (stdout.trim() !== VLLM_UPSTREAM_REVISION) {
+      return { success: false, error: `vLLM source revision mismatch: expected ${VLLM_UPSTREAM_REVISION}.` };
+    }
+    const imageTag = await installVllmArtifacts(staging, git);
+    await writeFile(join(staging, 'compose.override.yaml'), vllmComposeOverride(imageTag), { flag: 'wx' });
+    await rename(staging, dir);
+    return { success: true };
+  } catch (err) {
+    return { success: false, error: `Could not install verified vLLM source: ${err.message}` };
+  } finally {
+    if (staging) await rm(staging, { recursive: true, force: true }).catch((err) => {
+      emit(`Could not remove the temporary vLLM source checkout at ${staging}: ${err.message}`);
+    });
+  }
+}
+
 /**
- * Clone / build / prepare the upstream compose project, streaming every step. Each step is
+ * Check out / build / prepare the upstream compose project, streaming every step. Each step is
  * skipped once landed (upstream's `prepare` is idempotent and resumes), so a cancelled run
  * costs minutes rather than 20 GB.
  *
@@ -206,18 +297,16 @@ export async function provisionVllmQwenProject({ emit, isCancelled }) {
 
   let project = await inspectVllmQwenProject();
   const dir = project.dir;
-  const alreadyPrepared = vllmProjectSetupState(project) === 'ready';
+  const existingCheckout = project.hasProject;
+  const alreadyPrepared = project.hasWeights === true;
 
   if (!project.hasProject) {
-    const git = findCommandOnPath('git');
-    if (!git) return { success: false, error: '`git` was not found on PortOS\'s PATH, so the compose project cannot be cloned.' };
-    emit(`Cloning ${VLLM_UPSTREAM_REPO} into ${dir}…`);
-    const cloned = await runStreamingCommand(git, ['clone', VLLM_UPSTREAM_REPO, dir], emit, { timeoutMs: CLONE_TIMEOUT_MS, splitRe: PROGRESS_SPLIT_RE });
-    if (!cloned.success) return { success: false, error: `cloning ${VLLM_UPSTREAM_REPO} failed: ${cloned.error}` };
+    const checkout = await checkoutVllmSource(dir, emit);
+    if (!checkout.success) return checkout;
     project = await inspectVllmQwenProject();
   } else {
     emit(alreadyPrepared
-      ? `The project at ${dir} is already built and prepared — checking its .env, then starting it.`
+      ? `The project at ${dir} has prepared weights — checking its .env and selected model.`
       : `Reusing the existing checkout at ${dir}.`);
   }
 
@@ -231,10 +320,18 @@ export async function provisionVllmQwenProject({ emit, isCancelled }) {
   const env = await ensureVllmEnvFile(dir, emit);
   await applyVllmApiKeyToProviders(env.effective[VLLM_API_KEY_VAR], emit);
 
-  if (alreadyPrepared) return { success: true };
+  // Provisioning can add the default SPEC=dflash2 to a previously prepared
+  // operator checkout. Recheck the selection before deciding to skip prepare.
+  project = await inspectVllmQwenProject();
+  if (alreadyPrepared && project.hasWeights === true) return { success: true };
+
+  // Old prepare scripts treat the fast index as a completion marker. Let them
+  // prepare their base and drafter, then run the verified assembly in that same
+  // container configuration without touching the checkout or Compose files.
+  const repairFast = existingCheckout && project.fastWeightsIncomplete;
   if (isCancelled()) return { success: false, error: 'cancelled before the image was built' };
 
-  emit('Building the vLLM image (~9.5 GB, built here — there is no registry to pull it from).');
+  emit('Building the vLLM image locally (~9.5 GB).');
   const built = await runStreamingCommand('docker', ['compose', 'build'], emit, { timeoutMs: PROVISION_TIMEOUT_MS, cwd: dir, splitRe: PROGRESS_SPLIT_RE });
   if (!built.success) return { success: false, error: `docker compose build failed: ${built.error}` };
 
@@ -242,10 +339,33 @@ export async function provisionVllmQwenProject({ emit, isCancelled }) {
 
   if (env.wsl2) warnAboutWsl2PrepareMemory(emit);
   emit('Downloading and requantizing the weights (~20 GB). This step is idempotent and its download resumes, so it is safe to leave running.');
-  const prepared = await runStreamingCommand('docker', ['compose', 'run', '--rm', 'prepare'], emit, { timeoutMs: PROVISION_TIMEOUT_MS, cwd: dir, splitRe: PROGRESS_SPLIT_RE });
+  const runOptions = { timeoutMs: PROVISION_TIMEOUT_MS, cwd: dir, splitRe: PROGRESS_SPLIT_RE };
+  const prepareArgs = ['compose', 'run', '--rm', ...(repairFast ? ['--env', 'FAST_VARIANT=0'] : []), 'prepare'];
+  const prepared = await runStreamingCommand('docker', prepareArgs, emit, runOptions);
   if (!prepared.success) return { success: false, error: `docker compose run --rm prepare failed: ${prepared.error}` };
 
-  return { success: true };
+  if (repairFast) {
+    if (isCancelled()) return { success: false, error: 'cancelled before repairing the fast checkpoint — re-running resumes from here' };
+    emit('Restoring the incomplete fast checkpoint from the prepared base and pinned Hub files.');
+    let script;
+    try {
+      script = await readVllmArtifact(await readVllmManifest(), FAST_CHECKPOINT_SCRIPT);
+    } catch (err) {
+      return { success: false, error: `Could not load the verified vLLM fast repair script: ${err.message}` };
+    }
+    const repaired = await runStreamingCommand('docker', [
+      'compose', 'run', '--rm', '-T', '--entrypoint', '/app/venv/bin/python', 'prepare',
+      '-c', script.toString('utf8'),
+    ], emit, runOptions);
+    if (!repaired.success) return { success: false, error: `Could not repair the vLLM fast checkpoint: ${repaired.error}` };
+  }
+
+  const verified = await inspectVllmQwenProject();
+  if (verified.hasWeights === true) return { success: true };
+  const detail = verified.fastWeightsIncomplete
+    ? 'The selected fast checkpoint is still incomplete. Check its indexed shards and the prepared base.'
+    : vllmStartBlockedReason(verified);
+  return { success: false, error: `vLLM prepare finished without verifiable weights. ${detail}` };
 }
 
 /**
@@ -276,10 +396,10 @@ export async function startVllmQwenProject({ emit, endpoint, isCancelled }) {
   if (isCancelled()) return { success: false, error: 'Cancelled before the container was started.' };
   const port = localEndpointPort(endpoint) || PORTS.VLLM_QWEN;
   emit(`Starting the vLLM container from ${project.dir} (${project.composeFile}).`);
-  emit('The image and weights are already on disk — this only brings the service up.');
+  emit('The weights are ready. Starting the serving service with the local image.');
   return runStreamingCommand(
     'docker',
-    ['compose', '--profile', 'single', 'up', '-d'],
+    ['compose', '--profile', 'single', 'up', '-d', '--no-deps', '--no-build', '--pull', 'never', 'single'],
     emit,
     { timeoutMs: CONTROL_TIMEOUT_MS, cwd: project.dir, env: { PORT: String(port) } },
   );

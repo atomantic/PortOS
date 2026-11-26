@@ -5,6 +5,7 @@
  */
 
 import { z } from 'zod';
+import { presetProviderIdSchema } from './zodCompat.js';
 import { INSTANCE_FEATURE_IDS, INSTANCE_FEATURE_GROUP_IDS } from './instanceFeatureRegistry.js';
 
 // Per-API external-access flags (issue: public API surface). Stored under the
@@ -92,4 +93,9 @@ export const hideFirstRunCardSchema = z.boolean();
 export const settingsEmbeddingsSchema = z.object({
   provider: z.enum(['ollama', 'lmstudio', 'none']),
   model: z.string().trim().max(100).optional().nullable(),
+}).strict();
+
+export const memoryClassifierSettingsSchema = z.object({
+  providerId: presetProviderIdSchema.nullable().optional(),
+  model: z.string().trim().max(300).nullable().optional(),
 }).strict();

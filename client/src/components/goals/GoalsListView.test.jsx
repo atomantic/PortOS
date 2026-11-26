@@ -211,6 +211,53 @@ it('dismisses the suggestion without changing goals', async () => {
   expect(updateGoal).not.toHaveBeenCalled();
 });
 
+describe('goal row accessibility', () => {
+  it('exposes separate controls for selection, reparenting, expansion and adding a child', async () => {
+    const user = userEvent.setup();
+    const [goal, child] = GOALS;
+    const parent = { ...goal, children: [child] };
+    await renderList(vi.fn(), { data: { roots: [parent], flat: [parent, child] } });
+
+    const select = screen.getByRole('button', { name: /^Sail across an ocean/ });
+    const reparent = screen.getByRole('button', { name: 'Reparent Sail across an ocean' });
+    const collapse = screen.getByRole('button', { name: 'Collapse Sail across an ocean', expanded: true });
+    const addChild = screen.getByRole('button', { name: 'Add sub-goal under Sail across an ocean' });
+    const row = select.parentElement;
+    expect(row).not.toHaveAttribute('role');
+    expect(row).not.toHaveAttribute('tabindex');
+    for (const button of [select, collapse, addChild]) {
+      expect(button.tagName).toBe('BUTTON');
+      expect(button).toHaveAttribute('type', 'button');
+      expect(button.parentElement).toBe(row);
+    }
+    expect(reparent.parentElement).toBe(row);
+    expect(row.querySelector('button button, button [role="button"], button a, [role="button"] button, [role="button"] [role="button"], [role="button"] a')).toBeNull();
+
+    await user.click(collapse);
+    expect(screen.queryByRole('button', { name: /^Restore the boat/ })).not.toBeInTheDocument();
+    await user.click(screen.getByRole('button', { name: 'Expand Sail across an ocean', expanded: false }));
+    expect(screen.getByRole('button', { name: /^Restore the boat/ })).toBeInTheDocument();
+
+    await user.click(addChild);
+    expect(screen.getByText('New sub-goal under "Sail across an ocean"')).toBeInTheDocument();
+    expect(currentPath()).toBe('/goals/list');
+  });
+
+  it.each([
+    [0.7, '70% urgency', 'triangle-alert'],
+    [0.4, '40% urgency', 'minus'],
+    [0, '0% urgency', 'circle'],
+  ])('announces urgency %s and shows a distinct icon', async (urgency, label, icon) => {
+    const goal = { ...GOALS[0], urgency };
+    await renderList(vi.fn(), { data: { roots: [goal], flat: [goal] } });
+
+    const select = screen.getByRole('button', { name: /^Sail across an ocean.*% urgency/ });
+    const indicator = within(select).getByTitle(label);
+    expect(within(indicator).getByText(label)).toHaveClass('sr-only');
+    expect(indicator.querySelector(`svg.lucide-${icon}`)).toHaveAttribute('aria-hidden', 'true');
+  });
+});
+
 // #4121: which goal is open lives in the URL, never in local state — so a specific goal is
 // shareable, bookmarkable, reload-safe, and linkable from the Character sheet's Goals card.
 describe('routed goal selection', () => {
@@ -223,8 +270,12 @@ describe('routed goal selection', () => {
     const user = userEvent.setup();
     await renderList();
 
-    await user.click(screen.getByText('Restore the boat'));
+    const select = screen.getByRole('button', { name: /^Restore the boat/ });
+    expect(select).not.toHaveAttribute('aria-current');
+    await user.click(select);
 
+    expect(screen.getByRole('button', { name: /^Restore the boat/, current: true })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /^Sail across an ocean/ })).not.toHaveAttribute('aria-current');
     expect(currentPath()).toBe('/goals/list/g2');
     expect(screen.getByTestId('detail-panel-goal')).toHaveTextContent('Restore the boat');
   });
@@ -238,10 +289,9 @@ describe('routed goal selection', () => {
     const user = userEvent.setup();
     await renderList(vi.fn(), { path: '/goals/list/g1' });
 
-    // Click the goal row (not the panel text) to toggle it closed
-    const sailTextElements = screen.getAllByText('Sail across an ocean');
-    const listRowElement = sailTextElements.find(el => el.closest('div[role="button"]'));
-    await user.click(listRowElement);
+    const select = screen.getByRole('button', { name: /^Sail across an ocean/, current: true });
+    select.focus();
+    await user.keyboard('{Enter}');
 
     expect(currentPath()).toBe('/goals/list');
     expect(screen.queryByTestId('detail-panel-goal')).not.toBeInTheDocument();
@@ -287,8 +337,7 @@ describe('routed goal selection', () => {
     );
 
     expect(screen.getByText('Restore the boat')).toBeInTheDocument();
-    const parentRow = screen.getByText('Sail across an ocean', { selector: '[role=button] span' }).closest('[role=button]');
-    await user.click(within(parentRow).getByRole('button', { name: 'Collapse' }));
+    await user.click(screen.getByRole('button', { name: 'Collapse Sail across an ocean' }));
     await user.click(screen.getByRole('button', { name: 'start-edit' }));
     await user.click(screen.getByRole('button', { name: 'refresh-detail' }));
 
@@ -379,11 +428,7 @@ describe('GoalDetailPanel lifecycle and state reset on goal switch (#8108)', () 
     await user.click(screen.getByRole('button', { name: 'start-edit' }));
     expect(screen.getByTestId('edit-form')).toBeInTheDocument();
 
-    // Navigate to goal B by clicking it in the list
-    // Use getAllByText and get the second match (the list row, not the detail panel)
-    const boatTextElements = screen.getAllByText('Restore the boat');
-    const listRowElement = boatTextElements.find(el => el.closest('div[role="button"]'));
-    await user.click(listRowElement);
+    await user.click(screen.getByRole('button', { name: /^Restore the boat/ }));
 
     // Goal B should now be displayed, and edit form should be closed (remounted state resets)
     expect(screen.getByTestId('detail-panel-goal')).toHaveTextContent('Restore the boat');
@@ -400,10 +445,7 @@ describe('GoalDetailPanel lifecycle and state reset on goal switch (#8108)', () 
     const editInput = screen.getByTestId('edit-form-title');
     expect(editInput).toHaveValue('Sail across an ocean');
 
-    // Switch to goal B
-    const boatTextElements = screen.getAllByText('Restore the boat');
-    const listRowElement = boatTextElements.find(el => el.closest('div[role="button"]'));
-    await user.click(listRowElement);
+    await user.click(screen.getByRole('button', { name: /^Restore the boat/ }));
 
     // Now we should be viewing goal B, and edit mode should be reset
     expect(screen.getByTestId('detail-panel-goal')).toHaveTextContent('Restore the boat');
@@ -434,8 +476,22 @@ it('organizes with the chosen provider and model only after submission', async (
   expect(provider).toBeDisabled();
   expect(model).toBeDisabled();
   expect(screen.getByRole('button', { name: 'Analyzing...' })).toBeDisabled();
-  await act(async () => { finish(NEW_APEX_SUGGESTION); });
-  expect(screen.getByText('Goal Organization')).toBeInTheDocument();
+  expect(screen.queryByRole('dialog', { name: 'Goal Organization' })).not.toBeInTheDocument();
+  await act(async () => {
+    finish({
+      ...NEW_APEX_SUGGESTION,
+      suggestedSubApex: [{ title: 'Example sub-goal', description: 'An example suggestion' }],
+    });
+  });
+  const dialog = screen.getByRole('dialog', { name: 'Goal Organization' });
+  const headings = within(dialog);
+  expect(headings.getByRole('heading', { name: 'Goal Organization', level: 2 })).toHaveFocus();
+  for (const name of ['Apex Goal (North Star)', 'Proposed Hierarchy', 'Suggested Sub-Apex Goals']) {
+    expect(headings.getByRole('heading', { name, level: 3 })).toBeInTheDocument();
+  }
+  await user.keyboard('{Escape}');
+  expect(dialog).not.toBeInTheDocument();
+  expect(screen.getByRole('button', { name: 'Organize' })).toHaveFocus();
   expect(createGoal).not.toHaveBeenCalled();
 });
 

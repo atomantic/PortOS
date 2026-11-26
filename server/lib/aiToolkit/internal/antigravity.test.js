@@ -1,10 +1,8 @@
 import { describe, it, expect } from 'vitest';
 import { ANTIGRAVITY_CONFIGURED_DEFAULT, isAntigravityCommand, parseAntigravityModelList } from './antigravity.js';
-// The toolkit SOURCE may not import out to server/lib (see ../AGENTS.md); a test
-// may, and this is the only way to actually pin the duplication it documents.
 import {
-  isAntigravityCommand as upstreamIsAntigravityCommand,
-  parseAntigravityModelList as upstreamParseAntigravityModelList,
+  isAntigravityCommand as hostIsAntigravityCommand,
+  parseAntigravityModelList as hostParseAntigravityModelList,
 } from '../../antigravity.js';
 
 // Older agy builds print one bare id per line. Shape reproduced from the real
@@ -99,34 +97,9 @@ describe('parseAntigravityModelList', () => {
   });
 });
 
-describe('vendored copy stays in sync with server/lib/antigravity.js', () => {
-  it('agrees with upstream on every command-matching case', () => {
-    const cases = [
-      'agy', 'antigravity', '/opt/homebrew/bin/agy', 'C:\\Tools\\agy.exe', 'AGY',
-      'agy.cmd', 'claude', 'cursor-agent', '',
-    ];
-    for (const c of cases) {
-      expect(isAntigravityCommand(c), `disagreement on ${JSON.stringify(c)}`)
-        .toBe(upstreamIsAntigravityCommand(c));
-    }
-  });
-
-  it('agrees with upstream on every `agy models` output shape', () => {
-    // Image Gen parses `agy models` through the upstream copy and the provider
-    // catalog refresh through this one. A fix applied to only one of them is
-    // exactly how the picker went empty while the catalog still worked.
-    const cases = [
-      REAL_OUTPUT,
-      TAB_LABELLED_OUTPUT,
-      'Available models:\ngemini-3.1-pro\nTip: use --model <id>\n',
-      `${ANTIGRAVITY_CONFIGURED_DEFAULT}\ngemini-3.1-pro\n`,
-      'gemini-3.1-pro\r\nclaude-sonnet-4-6\r\n',
-      'gpt-5.2-codex\nqwen2.5:7b\nvendor/model\nnot an id\n',
-      '',
-    ];
-    for (const c of cases) {
-      expect(parseAntigravityModelList(c), `disagreement on ${JSON.stringify(c)}`)
-        .toEqual(upstreamParseAntigravityModelList(c));
-    }
+describe('host Antigravity exports', () => {
+  it('re-exports the toolkit command matcher and model parser', () => {
+    expect(hostIsAntigravityCommand).toBe(isAntigravityCommand);
+    expect(hostParseAntigravityModelList).toBe(parseAntigravityModelList);
   });
 });

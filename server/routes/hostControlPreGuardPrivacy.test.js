@@ -15,6 +15,7 @@ afterAll(cleanupTempDataRoots);
 // signed-in managed browser. The first service boundary is doubled.
 const auth = vi.hoisted(() => ({ enabled: false }));
 const effects = vi.hoisted(() => ({
+  history: vi.fn(async () => ({ candidates: [] })),
   scan: vi.fn(async () => ({ scanned: 0 })),
   optOut: vi.fn(async () => ({ submitted: 0 })),
   youtubeSync: vi.fn(async () => ({ ok: true })),
@@ -30,6 +31,7 @@ vi.mock('../services/settings.js', () => ({
   getSettings: vi.fn(async () => ({})),
   updateSettingsWith: vi.fn(),
 }));
+vi.mock('../services/privacyTwinHistory.js', () => ({ cleanHistoricalTwinArtifacts: effects.history }));
 vi.mock('../services/privacyScan.js', () => ({ runScanPass: effects.scan }));
 vi.mock('../services/privacyOptOut.js', () => ({}));
 vi.mock('../services/privacyRecheckScheduler.js', () => ({}));
@@ -47,7 +49,9 @@ vi.mock('../services/identity.js', () => ({}));
 
 const setupCheck = ['get', '/api/youtube/setup-check', undefined, effects.youtubeSetupCheck, 200];
 // One write per router plus the sensitive read: [method, path, body, effect, success status].
+const history = ['post', '/api/privacy/twin-history/cleanup', { action: 'list' }, effects.history, 200];
 const workflows = [
+  history,
   ['post', '/api/privacy/scan', {}, effects.scan, 200],
   ['post', '/api/youtube/sync', {}, effects.youtubeSync, 200],
   setupCheck,
@@ -68,6 +72,10 @@ beforeEach(() => {
 describe('privacy, YouTube and goal calendar routers behind the host-control gate (#16114)', () => {
   it('refuses the YouTube setup check to a remote password-free caller before the browser opens', async () => {
     await expectRemoteRefusal(mounts, setupCheck);
+  });
+
+  it('refuses a remote password-free cleanup before reading artifacts', async () => {
+    await expectRemoteRefusal(mounts, history);
   });
 
   it('still run for a local operator and a delegated agent session', async () => {

@@ -1,3 +1,4 @@
+// @vitest-environment node
 import { describe, it, expect } from 'vitest';
 import { PORTOS_APP_ID } from '../../lib/appIdentity';
 import { APP_DETAIL_TABS, appUsesJira, getAppFeatureOverride, isAppFeatureEnabled, isLaunchVideoDisabled } from './constants';

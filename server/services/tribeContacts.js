@@ -20,12 +20,6 @@ import { loadContactIndex } from './contactsSync.js';
 import * as tribe from './tribe.js';
 import * as humanActivity from './humanActivity.js';
 
-function personMatchKeys(person) {
-  const phones = new Set((person.phones || []).map(normalizePhone).filter(Boolean));
-  const emails = new Set((person.emails || []).map(normalizeIdentifier).filter(Boolean));
-  return { phones, emails };
-}
-
 /**
  * Match a contact to a tribe person: phone/email first, then exact unique name.
  */
@@ -46,23 +40,6 @@ export function matchContactToPerson(contact, tribeIndex) {
 }
 
 /**
- * Compute phone/email fills for one person from a matched contact.
- * Returns null when nothing new would be added.
- */
-export function computePhoneEmailFill(person, contact) {
-  const { phones: haveP, emails: haveE } = personMatchKeys(person);
-  const addPhones = (contact.phones || []).filter((p) => p && !haveP.has(p));
-  const addEmails = (contact.emails || []).filter((e) => e && !haveE.has(e));
-  if (addPhones.length === 0 && addEmails.length === 0) return null;
-  return {
-    phones: [...(person.phones || []), ...addPhones],
-    emails: [...(person.emails || []), ...addEmails],
-    addPhones,
-    addEmails,
-  };
-}
-
-/**
  * Scan Contacts cache and fill missing Tribe phones/emails.
  * `dryRun: true` returns planned changes without writing.
  */
@@ -74,6 +51,7 @@ export async function enrichTribeFromContacts({ dryRun = false } = {}) {
   const byId = new Map(people.map((p) => [p.id, p]));
 
   const planned = [];
+  let updated = 0;
   const claimed = new Set(); // personId already filled this pass
 
   for (const contact of contacts) {
@@ -81,7 +59,7 @@ export async function enrichTribeFromContacts({ dryRun = false } = {}) {
     if (!personId || claimed.has(personId)) continue;
     const person = byId.get(personId);
     if (!person) continue;
-    const fill = computePhoneEmailFill(person, contact);
+    const fill = tribe.computePhoneEmailFill(person, contact);
     if (!fill) continue;
     planned.push({
       personId,
@@ -92,19 +70,13 @@ export async function enrichTribeFromContacts({ dryRun = false } = {}) {
       addEmails: fill.addEmails,
     });
     claimed.add(personId);
-    if (!dryRun) {
-      const updated = await tribe.updatePerson(personId, {
-        phones: fill.phones,
-        emails: fill.emails,
-      });
-      if (updated) byId.set(personId, updated);
-    }
+    if (!dryRun && (await tribe.mergePersonIdentifiers(personId, fill))) updated++;
   }
 
   return {
     dryRun: Boolean(dryRun),
     matched: planned.length,
-    updated: dryRun ? 0 : planned.length,
+    updated,
     changes: planned,
   };
 }
@@ -205,29 +177,11 @@ export async function importContactToTribe({
   const personPhones = phones || contact?.phones || [];
   const personEmails = emails || contact?.emails || [];
 
-  // Refuse duplicate: if any phone/email already maps to a person, return that person.
-  const people = await tribe.listPeople();
-  const tribeIndex = buildPersonMatchIndex(people);
-  for (const p of personPhones) {
-    const id = matchPerson({ phone: p }, tribeIndex);
-    if (id) {
-      const existing = people.find((x) => x.id === id);
-      return { person: existing, created: false, reason: 'phone-match' };
-    }
-  }
-  for (const e of personEmails) {
-    const id = matchPerson({ email: e }, tribeIndex);
-    if (id) {
-      const existing = people.find((x) => x.id === id);
-      return { person: existing, created: false, reason: 'email-match' };
-    }
-  }
-
   const notes = organization || contact?.organization
     ? `Imported from Contacts${(organization || contact?.organization) ? ` (${organization || contact.organization})` : ''}`
     : 'Imported from Contacts';
 
-  const person = await tribe.createPerson({
+  return tribe.importPersonByIdentifiers({
     name: personName,
     ring,
     relationship: relationship || (organization || contact?.organization ? 'contact' : ''),
@@ -236,5 +190,4 @@ export async function importContactToTribe({
     notes,
     channel: 'iMessage',
   });
-  return { person, created: true };
 }

@@ -23,7 +23,7 @@ vi.mock('../lib/peerHttpClient.js', async () => ({
 vi.mock('../lib/trashFiles.js', () => ({ trashFiles: vi.fn(async () => {}) }));
 
 const { PATHS, atomicWrite, readJSONFile } = await import('../lib/fileUtils.js');
-const { listMediaHolders, makeMediaPrimary, recordPeerInventory } = await import('./mediaHolders.js');
+const { listMediaHolders, makeMediaPrimary, recordPeerInventory, recordPeerReport, readPeerReports } = await import('./mediaHolders.js');
 const { hostFileOn, listHostedEntries } = await import('./peerHostedMedia.js');
 
 const STORE = join(PATHS.data, 'media-holders.json');
@@ -114,5 +114,45 @@ describe('recordPeerInventory', () => {
 
     await recordPeerInventory('inst-a', 'video', [], ['kept.mp4']);
     expect(await listHostedEntries()).not.toHaveProperty(['video:kept.mp4']);
+  });
+});
+
+describe('recordPeerReport', () => {
+  it('renews identical reports after an hour and stores changes immediately', async () => {
+    vi.useFakeTimers({ toFake: ['Date'] });
+    try {
+      vi.setSystemTime(new Date('2026-05-23T00:00:00Z'));
+      const report = { mtimes: { 'v1.mp4': 123 }, checked: ['v1.mp4'] };
+      const record = (data = report) => recordPeerReport('inst-a', 'video', 'history', data);
+      expect(await record()).toBe(true);
+      vi.setSystemTime(new Date('2026-05-23T00:59:00Z'));
+      expect(await record({ mtimes: { ...report.mtimes, 'bad.mp4': -1 }, checked: [...report.checked, '../bad'] })).toBe(false);
+      vi.setSystemTime(new Date('2026-05-23T01:00:00Z'));
+      expect(await record()).toBe(true);
+      expect((await readPeerReports())['inst-a'].video.history.at).toBe('2026-05-23T01:00:00.000Z');
+      expect(await record({ ...report, complete: true })).toBe(true);
+      expect(await record({ ...report, complete: true, mtimes: { 'v1.mp4': 456 } })).toBe(true);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('renews an unchanged scope if it supersedes newer conflicting evidence', async () => {
+    vi.useFakeTimers({ toFake: ['Date'] });
+    try {
+      vi.setSystemTime(new Date('2026-05-23T00:00:00Z'));
+      const report = { mtimes: { 'cover.png': 123 }, checked: ['cover.png'] };
+      const record = () => recordPeerReport('inst-a', 'image', 'mediaCollections', report);
+      expect(await record()).toBe(true);
+      vi.setSystemTime(new Date('2026-05-23T00:01:00Z'));
+      await recordPeerReport('inst-a', 'image', 'imageLibrary', { ...report, complete: true });
+      expect(await record()).toBe(false);
+      await recordPeerReport('inst-a', 'image', 'imageLibrary', { mtimes: {}, checked: [], complete: true });
+      vi.setSystemTime(new Date('2026-05-23T00:02:00Z'));
+      expect(await record()).toBe(true);
+      expect((await readPeerReports())['inst-a'].image.mediaCollections.at).toBe('2026-05-23T00:02:00.000Z');
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });

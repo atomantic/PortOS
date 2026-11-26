@@ -53,9 +53,18 @@ import { extractFinalSummary } from './agentSummaryExtraction.js';
 import { usesCreativeDirectorScratchCwd, removeCreativeDirectorScratchCwd } from '../../lib/spawnCwd.js';
 import { isUpdateRepoRepairTask, verifyUpdateRepoRepairCompletion } from '../updateRepoRepairCompletion.js';
 import { permitsNoChangeCompletion } from '../../lib/noChangeCompletion.js';
-import { PR_OBSERVATION, PR_OBSERVATION_POLICY, prObservation, prVerdictFromObservation, observePrClaim, } from './agentPrVerification.js';
+import { PR_OBSERVATION, PR_OBSERVATION_POLICY, prObservation, prVerdictFromObservation, observePrClaim, verifyRunMergedPr, } from './agentPrVerification.js';
 import { followUpAgentGoalFidelity, reviewGoalFidelity } from './agentGoalFidelity.js';
 import { dispatchTaskOutputHookOnce, dispatchRecoveredTaskOutputHook, resolveProgrammaticIoVerdict } from './agentOutputHookDispatch.js';
+const COMMIT_PROBE_UNAVAILABLE = Symbol('commit-probe-unavailable');
+
+// The standalone learning verdict retains its boolean/null contract. Finalization
+// also needs the cause of a miss to resolve a reported delivery.
+export async function evaluateSuccessCriteria(input) {
+  const criterion = await evaluateCriterion(input);
+  return criterion === COMMIT_PROBE_UNAVAILABLE ? false : criterion;
+}
+
 /**
  * Evaluate a completed autonomous run against its DECLARED success criteria
  * (issue #2344). Distinct from the runner's exit-code `success`: it answers
@@ -77,7 +86,7 @@ import { dispatchTaskOutputHookOnce, dispatchRecoveredTaskOutputHook, resolvePro
  * success and failure — a clean exit that committed nothing is an honest miss,
  * and that is exactly the signal task-learning wants. `committedDuringRun` is
  * non-throwing and hard-timeout-bounded, so a non-repo workspace or a hung git
- * degrades to "no commit" rather than stalling finalize.
+ * produces a distinct unavailable result for settlement.
  *
  * `startedAt` (epoch ms) bounds the window. A non-finite value means we can't
  * tell this run's commits from anything already in the repo, so the criterion is
@@ -94,9 +103,9 @@ import { dispatchTaskOutputHookOnce, dispatchRecoveredTaskOutputHook, resolvePro
  * (#4107). It rides `result.validationPassed` like the boolean/null verdicts and
  * is consumed by `buildTaskTelemetryContext`; see `lib/learningVerdict.js`.
  *
- * @returns {Promise<boolean|null|'skip-learning'>}
+ * @returns {Promise<boolean|null|'skip-learning'|symbol>}
  */
-export async function evaluateSuccessCriteria({ agentId = null, task, terminatedByUser, workspacePath, startedAt = null, success = false, hookResult = null, branchProvenEmpty = false, emptyBranchInconclusiveEvidence = null, claimDisposition = null, mergedReviewFollowUp = null, retirementCompletion = null, runtimeContinuation = null, prWatcherTargetsSettled = null }) {
+async function evaluateCriterion({ agentId = null, task, terminatedByUser, workspacePath, startedAt = null, success = false, hookResult = null, branchProvenEmpty = false, emptyBranchInconclusiveEvidence = null, claimDisposition = null, mergedReviewFollowUp = null, retirementCompletion = null, runtimeContinuation = null, prWatcherTargetsSettled = null }) {
   if (terminatedByUser) return null;
   if (isUpdateRepoRepairTask(task)) return success
     && await verifyUpdateRepoRepairCompletion(task, agentId, workspacePath).catch(() => false);
@@ -185,7 +194,7 @@ export async function evaluateSuccessCriteria({ agentId = null, task, terminated
   // No usable run window means no way to attribute a commit to THIS run — the
   // sentinel, not a false verdict (#3637).
   if (!Number.isFinite(startedAt)) return null;
-  return await committedDuringRun(workspacePath, startedAt);
+  return (await committedDuringRun(workspacePath, startedAt)) ?? COMMIT_PROBE_UNAVAILABLE;
 }
 
 /**
@@ -612,6 +621,7 @@ function resolvePrEvidence({ primaryObservation, noChangeObservation }) {
     : primaryObservation;
   const evidencePolicy = PR_OBSERVATION_POLICY[evidence.outcome];
   return {
+    claimObservation: primaryObservation.outcome === PR_OBSERVATION.SKIPPED && noChangeObservation ? noChangeObservation : primaryObservation,
     completionOk: primary.completionOk,
     completionVerdict: prVerdictFromObservation(primaryObservation),
     branchProvenEmpty: provenEmpty(primaryObservation) || provenEmpty(noChangeObservation),
@@ -1305,7 +1315,10 @@ export async function applyDeliverySettlement(ctx, forgeOutcome) {
   // exit-code `success`, so task-learning telemetry can distinguish "ran clean
   // but produced nothing" from a genuine success. Best-effort — a validation
   // check failure must never block finalize (falls back to the null sentinel).
-  const validationPassed = await evaluateSuccessCriteria({
+  // An investigation reporting completed work still owes delivery evidence when
+  // the auxiliary check for a permitted no-change outcome was inconclusive.
+  const reportedInvestigationFix = reportedTaskOutcome?.status === 'completed' && isTruthyMeta(task.metadata?.isInvestigation);
+  const criterion = await evaluateCriterion({
     agentId,
     task,
     terminatedByUser,
@@ -1314,7 +1327,7 @@ export async function applyDeliverySettlement(ctx, forgeOutcome) {
     success: verdict.success,
     hookResult,
     branchProvenEmpty,
-    emptyBranchInconclusiveEvidence: prEvidence.emptyBranchInconclusiveEvidence,
+    emptyBranchInconclusiveEvidence: reportedInvestigationFix ? null : prEvidence.emptyBranchInconclusiveEvidence,
     claimDisposition,
     mergedReviewFollowUp,
     retirementCompletion,
@@ -1326,9 +1339,23 @@ export async function applyDeliverySettlement(ctx, forgeOutcome) {
       return null;
     });
 
+  let validationPassed = criterion;
+  let validationFailure = null;
+  if (criterion === COMMIT_PROBE_UNAVAILABLE) {
+    validationPassed = false;
+    if (forgeVerifiable && verdict.success && reportedTaskOutcome?.status === 'completed') {
+      const missing = await verifyRunMergedPr({
+        agent: await getAgentRecord(agentId).catch(() => null), task, workspacePath, startedAt: runStartedAt,
+        observation: prEvidence.claimObservation,
+      }).catch(() => 'The assigned PR or checkout could not be read.');
+      validationPassed = missing === null;
+      if (missing) validationFailure = { status: 'incomplete', reason: `Run-window Git commit count unavailable. ${missing}` };
+    }
+  }
+
   let taskOutcome = await resolveSettledTaskOutcome({
     agentId, task, executionSuccess, verdict, validationPassed,
-    reportedTaskOutcome, retirementCompletion, branchProvenEmpty,
+    reportedTaskOutcome: validationFailure || reportedTaskOutcome, retirementCompletion, branchProvenEmpty,
   });
   const outcomeHeld = ['blocked', 'incomplete'].includes(taskOutcome?.status);
   const deliverySuccess = verdict.success && !outcomeHeld;

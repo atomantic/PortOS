@@ -4,8 +4,11 @@ import Drawer from '../../Drawer';
 import ShotTimeline from '../ShotTimeline.jsx';
 import ShotCardHost, { blenderShotPosters, shotNamer, useLinkedStoryboard } from '../ShotCardHost.jsx';
 import { reorderedSceneIds, timelineShots } from '../../../lib/musicVideoTimeline.js';
-import { plannedTransitions } from '../../../lib/musicVideoCutEffects.js';
+import { plannedTransitions } from '../../../../../server/lib/musicVideo/musicVideoCutEffects.js';
 import { isLayeredComposition } from '../../../lib/musicVideoLayers.js';
+import { projectHasAudio } from '../../../lib/musicVideoStages.js';
+import { scenePlayableClipId } from '../../../../../server/lib/musicVideo/musicVideoSourceTake.js';
+import { songScenes } from '../../../../../server/lib/musicVideo/musicVideoColdOpen.js';
 import { MUSIC_VIDEO_SCROLL_ID } from '../MusicVideoLayout.jsx';
 import toast from '../../ui/Toast';
 import { uploadMusicVideoAudioLayer } from '../../../services/apiMusicVideo.js';
@@ -135,6 +138,11 @@ export default function EditorStage({ board }) {
   const activeScene = scenes.find((scene) => scene.sceneId === activeSceneId) || null;
   const closeShot = () => onToggleSceneExpand?.(activeSceneId, false);
   const mode = project.composition?.mode;
+  const excerpts = board.excerpts;
+  const draftUnavailable = !excerpts?.startExcerpt ? 'Draft rendering is unavailable.'
+    : !projectHasAudio(project) ? 'Attach a song to render a draft.'
+      : (!mode || mode === 'concat') && !songScenes(project).some((scene) => scenePlayableClipId(scene, scenes))
+        ? 'Generate a song shot clip to render a draft.' : null;
   // A Blender film's or a composition document's shots take their order from that source, not the board.
   const orderOwned = mode === 'blender' || (mode === 'document' && project.productionReview?.draft?.storyboardSource === 'document');
   const reorder = (fromIndex, toIndex) => {
@@ -145,12 +153,14 @@ export default function EditorStage({ board }) {
   const timeline = (
     <ShotTimeline project={project} activeSceneId={activeSceneId} songClock={board.songClock} shotName={shotName}
       posters={blenderShotPosters(project, board.blender)}
-      onSeek={(t) => board.seekToScene?.({ startSec: t })} onOpenShot={openShot}
+      onSeek={board.seekInSong} onOpenShot={openShot}
       onMoveCut={board.locked ? null : (sceneId, edge, t) => (edge === 'end' ? board.onMoveSceneEnd(sceneId, t) : board.onMoveSceneStart(sceneId, t))}
       onReorder={board.locked || orderOwned ? null : reorder}
       effectOptions={effectOptions} onEditShot={board.locked ? null : editShot}
       onSplitShot={board.locked || orderOwned || !board.onSplitScene ? null : (sceneId, atSec) => board.onSplitScene(sceneId, null, atSec)}
-      onPreview={(t, play) => board.seekToScene?.({ startSec: t }, { play, pause: !play })}
+      onPreview={(t, play, songOnly) => board.seekInSong?.(t, { play, pause: !play, songOnly })}
+      range={board.editorRange} onRangeChange={board.setEditorRange}
+      excerpts={excerpts} draftUnavailable={draftUnavailable}
       libraryEl={desktop ? libraryEl : null}
       onAddAudioLayer={board.replaceProject ? addAudioLayer : null}
       onEditAudioLayers={board.saveProjectFields ? editAudioLayers : null} />

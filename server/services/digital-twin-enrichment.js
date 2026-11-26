@@ -88,7 +88,7 @@ export async function generateEnrichmentQuestion(category, providerOverride, mod
   const fallbackAlreadyAnswered = questionsAnswered > structuredTotal;
 
   // Generate follow-up question using AI
-  const existingSoul = await getDigitalTwinForPrompt({ maxTokens: 2000, respectAutoInject: false });
+  const existingSoul = await getDigitalTwinForPrompt({ maxTokens: 2000, respectAutoInject: false, includePrivacyContext: false });
 
   const prompt = await buildPrompt('soul-enrichment', {
     category,
@@ -115,8 +115,10 @@ export async function generateEnrichmentQuestion(category, providerOverride, mod
     ? await getProviderById(providerOverride)
     : await getActiveProvider();
 
-  if (!provider) {
-    throw new Error('No AI provider available');
+  if (!provider?.enabled) {
+    throw new Error(providerOverride
+      ? `Provider ${providerOverride} not found or disabled`
+      : 'No enabled AI provider available');
   }
 
   const model = modelOverride || provider.defaultModel;
@@ -176,8 +178,8 @@ async function saveEnrichmentDocument({ targetPath, previousContent }, content, 
     try {
       if (previousContent === null) await unlink(targetPath);
       else await atomicWrite(targetPath, previousContent);
-    } catch (restoreErr) {
-      console.error(`❌ Digital twin enrichment restore failed: ${restoreErr.message}`);
+    } catch {
+      console.error('❌ Digital twin enrichment restore failed');
     }
     throw err;
   }
@@ -275,7 +277,7 @@ async function processScaleAnswerLeased(data) {
   digitalTwinEvents.emit('traits:updated', meta.traits);
   digitalTwinEvents.emit('confidence:calculated', meta.confidence);
 
-  console.log(`📊 Scale answer processed: ${scaleQuestionId}=${scaleValue} → ${scaleDef.dimension} confidence=${meta.confidence.dimensions[scaleDef.dimension]}`);
+  console.log(`📊 Scale answer processed for ${category} (${scaleDef.dimension})`);
 
   return {
     category,
@@ -303,9 +305,13 @@ export async function processEnrichmentAnswer(data) {
     ? await getProviderById(providerOverride)
     : await getActiveProvider();
 
+  if (providerOverride && !provider?.enabled) {
+    throw new Error(`Provider ${providerOverride} not found or disabled`);
+  }
+
   let formattedContent = `### ${question}\n\n${answer}\n\n`;
 
-  if (provider) {
+  if (provider?.enabled) {
     const prompt = await buildPrompt('soul-enrichment-process', {
       category,
       categoryLabel: config.label,
@@ -381,7 +387,7 @@ async function persistEnrichmentAnswer(category, config, formattedContent) {
 
   digitalTwinEvents.emit('confidence:calculated', meta.confidence);
 
-  console.log(`🧬 Enrichment answer processed for ${category}${dimension ? ` → ${dimension} confidence=${meta.confidence.dimensions[dimension]}` : ''}`);
+  console.log(`🧬 Enrichment answer processed for ${category}${dimension ? ` (${dimension})` : ''}`);
 
   return {
     category,

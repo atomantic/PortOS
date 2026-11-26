@@ -327,7 +327,16 @@ describe('pregate hidden-content invocation', () => {
       const files = JSON.parse(process.env.CI_TEST_FILES);
       // A guard wall time the case plants under the ignored cache, so it never enters the reuse key.
       if (process.env.PORTOS_PREGATE_DURATIONS_PATH && existsSync('.cache/guard-ms')) {
-        writeFileSync(process.env.PORTOS_PREGATE_DURATIONS_PATH, JSON.stringify({ 'server/lib/moduleSummaries.test.js': Number(readFileSync('.cache/guard-ms', 'utf8')) }));
+        const duration = Number(readFileSync('.cache/guard-ms', 'utf8'));
+        const durations = Object.fromEntries(files.map(file => [file, duration]));
+        const guardRunner = files.find(file => file === 'server/test/guards/repo.guard.test.js');
+        if (guardRunner) {
+          delete durations[guardRunner];
+          durations[guardRunner + ' > syntheticCheck'] = duration;
+        }
+        durations['scripts/ensure-deps.test.js'] = duration;
+        writeFileSync(process.env.PORTOS_PREGATE_DURATIONS_PATH, JSON.stringify(durations));
+        appendFileSync('.cache/timed-files', JSON.stringify(files) + '\\n');
       }
       const broad = process.env.CI_TEST_MODE !== 'files' || files.includes('server/lib/expensive.test.js');
       appendFileSync('.cache/events', JSON.stringify({ broad }) + '\\n');
@@ -479,18 +488,61 @@ describe('pregate hidden-content invocation', () => {
     expect(report.stages.every(stage => stage.status === 'passed')).toBe(true);
   });
 
-  it('runs focused guard and lint stages each time and reports slow guard passes', () => {
+  it('combines focused guards and tests per workspace and reports only guard durations', () => {
     prepareGuardFixture();
+    for (const path of [
+      'server/test/guards/modules.guard.test.js',
+      'server/test/guards/repo.guard.test.js',
+      'server/test/guards/runtime.guard.test.js',
+      'scripts/ensure-deps.test.js',
+      'scripts/ensure-deps.js',
+      'scripts/generate-prompt-stage-call-sites.test.js',
+    ]) {
+      mkdirSync(dirname(join(root, path)), { recursive: true });
+      write(path, 'export {};\n');
+    }
+    mkdirSync(join(root, 'client/src'));
+    const clientGuard = 'client/src/ui.guard.test.js';
+    const clientTest = 'client/src/helper.test.js';
+    write(clientGuard, 'export {};\n');
+    write(clientTest, 'export {};\n');
     write('server/lib/helper.js', '// Helper.\nexport const helper = 1;\n');
+    write('scripts/ensure-deps.js', 'export {};\n');
+    write('scripts/ensure-deps.js', `${readFileSync(join(root, 'scripts/ensure-deps.js'), 'utf8')} `);
+    write('server/lib/expensive.test.js', 'export const serverFixture = true;\n');
     write('.cache/guard-ms', '9000');
     for (let runNumber = 1; runNumber <= 2; runNumber += 1) {
       const result = run();
       expect(result.status, result.stderr).toBe(0);
-      expect(result.stdout).toContain('server structural guards over the 2.5s per-guard target');
+      expect(result.stdout).toContain('server tests other guards over the 2.5s local per-guard target');
+      expect(result.stdout).toContain('client tests other guards over the 2.5s local per-guard target');
+      expect(result.stdout).toContain('the scheduled hosted guard budget does not apply');
+      expect(result.stdout).toContain('server tests scheduled-budget guards over the 2.5s local per-guard target');
+      expect(result.stdout).toContain('server/test/guards/repo.guard.test.js > syntheticCheck 9.0s');
+      expect(result.stdout).toContain('the scheduled hosted run enforces a 4.0s budget for these guards');
+      expect(result.stdout).toContain('scripts/generate-prompt-stage-call-sites.test.js 9.0s');
+      expect(result.stdout).toContain('scripts/ensure-deps.test.js 9.0s');
       const report = JSON.parse(readFileSync(join(root, PREGATE_REPORT_PATH), 'utf8'));
-      expect(report.stages.find(stage => stage.guard)).toMatchObject({
-        status: 'passed', guardDurations: { 'server/lib/moduleSummaries.test.js': 9000 },
-      });
+      expect(report.stages.map(stage => stage.name)).toEqual([
+        'hidden-content scan', 'client/server lint', 'server tests', 'client tests',
+      ]);
+      const serverGuard = 'server/lib/moduleSummaries.test.js';
+      expect(report.stages.slice(-2).map(stage => stage.guardDurations)).toEqual([
+        {
+          [serverGuard]: 9000,
+          'server/test/guards/modules.guard.test.js': 9000,
+          'server/test/guards/repo.guard.test.js > syntheticCheck': 9000,
+          'server/test/guards/runtime.guard.test.js': 9000,
+          'scripts/generate-prompt-stage-call-sites.test.js': 9000,
+          'scripts/ensure-deps.test.js': 9000,
+        },
+        { [clientGuard]: 9000 },
+      ]);
+      const selections = readFileSync(join(root, '.cache/timed-files'), 'utf8').trim().split('\n').map(JSON.parse);
+      expect(selections).toHaveLength(2 * runNumber);
+      expect(selections.slice(-2).map(files => files.sort())).toEqual([
+        ['scripts/ensure-deps.test.js', 'scripts/generate-prompt-stage-call-sites.test.js', 'server/lib/expensive.test.js', serverGuard, 'server/test/guards/modules.guard.test.js', 'server/test/guards/repo.guard.test.js', 'server/test/guards/runtime.guard.test.js'], [clientTest, clientGuard],
+      ]);
       const events = readFileSync(join(root, '.cache/events'), 'utf8').trim().split('\n');
       expect(events.filter(event => event === 'catalog')).toHaveLength(runNumber);
       expect(events.filter(event => event === 'lint')).toHaveLength(runNumber);

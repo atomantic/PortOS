@@ -1,3 +1,4 @@
+import { useLayoutEffect, useRef } from 'react';
 import { Loader2 } from 'lucide-react';
 
 // Compact inline "confirm / cancel" button pair for destructive actions that
@@ -19,6 +20,18 @@ const TONES = {
   success: 'bg-port-success/20 text-port-success hover:bg-port-success/30',
 };
 
+const CONTROL_SELECTOR = ':is(button, a[href], input:not([type="hidden"]), select, textarea, summary, [tabindex]):not(:disabled):not([tabindex="-1"])';
+
+function focusFirstControl(container) {
+  if (!container) return false;
+  const controls = container.matches(CONTROL_SELECTOR) ? [container] : container.querySelectorAll(CONTROL_SELECTOR);
+  for (const control of controls) {
+    control.focus();
+    if (container.ownerDocument.activeElement === control) return true;
+  }
+  return false;
+}
+
 export default function ConfirmButtonPair({
   prompt,
   confirmText = 'Delete',
@@ -30,12 +43,36 @@ export default function ConfirmButtonPair({
   busyText,
   tone = 'error',
   ariaLabel,
+  returnFocusRef,
   confirmAriaLabel,
   cancelAriaLabel,
   className = '',
   largeTouchTargets = false,
   responsiveTouchTargets = false,
 }) {
+  const groupRef = useRef(null);
+
+  useLayoutEffect(() => {
+    const group = groupRef.current;
+    const doc = group.ownerDocument;
+    // A held Enter can activate a newly focused button. Focus the question's group instead.
+    if (doc.activeElement === doc.body) group.focus();
+
+    return () => {
+      const parent = group.parentElement;
+      if (!parent || !group.contains(doc.activeElement)) return;
+      const position = Array.from(parent.children).indexOf(group);
+      // Wait for the caller to mount the trigger that replaced the pair.
+      queueMicrotask(() => {
+        if (group.isConnected || !parent.isConnected || doc.activeElement !== doc.body) return;
+        returnFocusRef?.current?.focus();
+        if (doc.activeElement === doc.body && !focusFirstControl(parent.children[position])) {
+          focusFirstControl(parent);
+        }
+      });
+    };
+  }, [returnFocusRef]);
+
   const confirmTone = TONES[tone] || TONES.error;
   const buttonSizeClass = largeTouchTargets
     ? 'min-h-[44px] min-w-[44px] justify-center'
@@ -49,9 +86,11 @@ export default function ConfirmButtonPair({
 
   return (
     <div
+      ref={groupRef}
       role="group"
-      aria-label={ariaLabel}
-      className={`flex items-center gap-2 ${className}`.trim()}
+      tabIndex={-1}
+      aria-label={ariaLabel || prompt || `${confirmAriaLabel || confirmText}?`}
+      className={`flex items-center gap-2 focus-visible:outline-2 focus-visible:outline-port-accent ${className}`.trim()}
     >
       {prompt ? <span className="text-xs text-gray-400">{prompt}</span> : null}
       <button

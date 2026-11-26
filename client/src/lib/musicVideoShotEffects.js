@@ -9,10 +9,10 @@
  *
  * What each shot plays at its start, middle and end and how often the video uses each effect, so the Shots board can badge every card and count every option, read through the same helpers the render uses: cut transitions and in-shot glitches (musicVideoTransitions.js), a still's image effect (musicVideoImageEffects.js) and its switched-on cut effect, or the one its storyboard row plans (musicVideoCutEffects.js).
  */
-import { MUSIC_VIDEO_CUT_EFFECTS, MUSIC_VIDEO_CUT_EFFECT_LABELS, sceneCutEffect } from './musicVideoCutEffects.js';
-import { MUSIC_VIDEO_IMAGE_EFFECTS, MUSIC_VIDEO_IMAGE_EFFECT_LABELS, sceneImageEffect } from './musicVideoImageEffects.js';
-import { MUSIC_VIDEO_TRANSITIONS, MUSIC_VIDEO_TRANSITION_LABELS, applyCameraCutDefaults, sceneTransitions } from './musicVideoTransitions.js';
-import { MUSIC_VIDEO_WIPE_LABELS, MUSIC_VIDEO_WIPES } from './musicVideoWipes.js';
+import { MUSIC_VIDEO_CUT_EFFECTS, MUSIC_VIDEO_CUT_EFFECT_LABELS, sceneCutEffect } from '../../../server/lib/musicVideo/musicVideoCutEffects.js';
+import { MUSIC_VIDEO_IMAGE_EFFECTS, MUSIC_VIDEO_IMAGE_EFFECT_LABELS, sceneImageEffect } from '../../../server/lib/musicVideo/musicVideoImageEffects.js';
+import { MUSIC_VIDEO_TRANSITIONS, MUSIC_VIDEO_TRANSITION_LABELS, applyCameraCutDefaults, sceneTransitions } from '../../../server/lib/musicVideo/musicVideoTransitions.js';
+import { MUSIC_VIDEO_WIPE_LABELS, MUSIC_VIDEO_WIPES } from '../../../server/lib/musicVideo/musicVideoWipes.js';
 
 /** Where an effect plays in its shot. */
 export const SHOT_EFFECT_SLOTS = Object.freeze(['start', 'mid', 'end']);

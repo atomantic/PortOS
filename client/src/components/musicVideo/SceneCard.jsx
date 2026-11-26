@@ -4,7 +4,7 @@ import { shotSheetDrivesPrompt } from '../../../../server/lib/musicVideo/musicVi
 import { resolveSourceTake } from '../../../../server/lib/musicVideo/musicVideoSourceTake.js';
 import { isPreMusicShot } from '../../../../server/lib/musicVideo/musicVideoColdOpen.js';
 import { MUSIC_VIDEO_VISUAL_LAYERS, sceneHasAuthoredSpan, sceneVisualLayer } from '../../lib/musicVideoLayers.js';
-import { isEndFrameImageEffect } from '../../lib/musicVideoImageEffects.js';
+import { isEndFrameImageEffect } from '../../../../server/lib/musicVideo/musicVideoImageEffects.js';
 import { isPerformanceScene } from '../../lib/musicVideoShotTiming.js';
 import { sceneAttention, selectedFrameReadiness } from '../../lib/musicVideoSceneAttention.js';
 import useSceneClipPlayback from './useSceneClipPlayback.js';
@@ -226,7 +226,9 @@ export default function SceneCard({
     clipSec: playedSec, spanExtraSec, failed: media.failedScenes || {}, songReview: composition.songReview,
     videoSettings: media.falVideoSettings, scenes: project?.scenes, assetMarks: project?.assetMarks,
   });
-  const frameReadiness = selectedFrameReadiness(sourceWindow?.source && sourceWindow.referenceImageId ? sourceWindow.source : scene, project?.assetMarks);
+  const frameReadiness = selectedFrameReadiness(sourceWindow?.source && sourceWindow.referenceImageId ? sourceWindow.source : scene, {
+    assetMarks: project?.assetMarks, layered: composition.layered, ...(sourceWindow && { usesEnd: false }),
+  });
   const songChange = composition.songReview?.[scene.sceneId];
   // #10154: the server-persisted failure of the last render, shown until a
   // retry is in flight (or lands a take, which clears it server-side).

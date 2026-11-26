@@ -2,6 +2,8 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Bookmark, BookOpen, ClipboardPaste, Eraser, ExternalLink, Play, Save, Trash2, Zap } from 'lucide-react';
 import RapidReader from '../components/RapidReader';
 import PageHeader from '../components/PageHeader';
+import EmptyState from '../components/EmptyState';
+import PageSkeleton from '../components/ui/PageSkeleton';
 import { readClipboard } from '../lib/clipboard';
 import {
   clearRapidReaderProgress,
@@ -458,7 +460,18 @@ export default function RapidReaderPage() {
           <section className="bg-port-card border border-port-border rounded-lg p-4 space-y-3" aria-label="Shelf">
             <div className="flex items-center justify-between gap-3"><div><h2 className="text-sm font-medium text-gray-200">Shelf</h2><p className="text-xs text-gray-400">Saved books stay on this machine and in its backups.</p></div><button type="button" onClick={loadShelf} className="text-xs text-port-accent hover:underline">Retry</button></div>
             {shelfError && <p role="alert" className="text-xs text-red-400">{shelfError}</p>}
-            {shelfLoading ? <p className="text-xs text-gray-500">Loading shelf…</p> : shelf.length === 0 ? <p className="text-xs text-gray-500">No saved books yet.</p> : <ul className="divide-y divide-port-border">{shelf.map((entry) => <li key={entry.id} className="py-2 flex flex-wrap items-center justify-between gap-2"><button type="button" onClick={() => openShelf(entry.id)} aria-label={`Open ${entry.title}`} className="text-left min-h-10"><span className="block text-sm text-gray-200">{entry.title}</span><span className="block text-xs text-gray-500">{entry.author || entry.sourceUrl || entry.sourceType} · {entry.wordCount} words</span></button>{pendingDelete === entry.id ? <span className="flex gap-2 text-xs"><button type="button" onClick={() => deleteShelf(entry.id)} className="text-red-400">Delete</button><button type="button" onClick={() => setPendingDelete(null)} className="text-gray-400">Cancel</button></span> : <button type="button" onClick={() => setPendingDelete(entry.id)} aria-label={`Delete ${entry.title}`} className="pointer-coarse:min-h-11 pointer-coarse:min-w-11 min-h-10 px-2 text-gray-500 hover:text-red-400"><Trash2 size={15} /></button>}</li>)}</ul>}
+            {shelfLoading ? (
+              <PageSkeleton header="none" label="Loading shelf" cards={2} sidebar={false} />
+            ) : shelf.length === 0 ? !shelfError && (
+              <EmptyState
+                icon={Bookmark}
+                title="No saved books yet."
+                headingLevel={3}
+                message="Paste text and save it to the shelf, or fetch a URL to add a book."
+                actionLabel="Enter text"
+                onAction={() => textareaRef.current?.focus()}
+              />
+            ) : <ul className="divide-y divide-port-border">{shelf.map((entry) => <li key={entry.id} className="py-2 flex flex-wrap items-center justify-between gap-2"><button type="button" onClick={() => openShelf(entry.id)} aria-label={`Open ${entry.title}`} className="text-left min-h-10"><span className="block text-sm text-gray-200">{entry.title}</span><span className="block text-xs text-gray-500">{entry.author || entry.sourceUrl || entry.sourceType} · {entry.wordCount} words</span></button>{pendingDelete === entry.id ? <span className="flex gap-2 text-xs"><button type="button" onClick={() => deleteShelf(entry.id)} className="text-red-400">Delete</button><button type="button" onClick={() => setPendingDelete(null)} className="text-gray-400">Cancel</button></span> : <button type="button" onClick={() => setPendingDelete(entry.id)} aria-label={`Delete ${entry.title}`} className="pointer-coarse:min-h-11 pointer-coarse:min-w-11 min-h-10 px-2 text-gray-500 hover:text-red-400"><Trash2 size={15} /></button>}</li>)}</ul>}
           </section>
 
 

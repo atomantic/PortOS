@@ -27,7 +27,7 @@ export default function GoalLinkedCalendars({
                 onClick={() => handleUnlinkCalendar(lc.subcalendarId)}
                 disabled={pendingActions.has(`unlink-calendar:${lc.subcalendarId}`)}
                 className="min-h-[44px] min-w-[44px] inline-flex items-center justify-center p-0.5 text-gray-600 hover:text-red-400 disabled:opacity-50"
-                title="Unlink" aria-label="Unlink"
+                title="Unlink" aria-label={`Unlink ${lc.subcalendarName}`}
               >
                 <Unlink className="w-3 h-3" />
               </button>

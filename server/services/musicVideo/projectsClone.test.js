@@ -15,21 +15,22 @@ const projects = await import('./projects.js');
 const filmActions = await import('./projectFilmActions.js');
 const file = await import('./projectsFile.js');
 const { writeBlenderSong } = await import('./blender/owner.js');
-const { blenderSrcDir, blenderSongFile, blenderWorkspaceDir } = await import('./blender/workspace.js');
+const { blenderSrcDir, blenderSongFile, blenderWorkspaceDir } = await import('../film/workspace.js');
+const { musicVideoFilmOwner } = await import('./blender/owner.js');
 const { emitRecordUpdated } = await import('../sharing/recordEvents.js');
 afterAll(cleanupTempDataRoots);
 beforeEach(() => vi.clearAllMocks());
 
 async function sourceProject({ film = true } = {}) {
   const source = await projects.createProject({ name: 'Example film' });
-  const scene = await projects.addProjectScene(source.id, { prompt: 'Example shot' });
+  const { scenes: [scene] } = await projects.addProjectScenes(source.id, [{ prompt: 'Example shot' }]);
   await file.mutateProjectRecord(source.id, current => ({ project: { ...current, blender: {
     settings: { fps: 24 }, sceneMap: { example: scene.sceneId }, syncedAt: '2026-01-01T00:00:00.000Z', manifestHash: 'example-manifest',
   } } }));
   if (film) {
-    await mkdir(blenderSrcDir(source.id), { recursive: true });
-    await writeFile(join(blenderSrcDir(source.id), 'film.py'), '# Example film source');
-    await writeFile(blenderSongFile(source.id), JSON.stringify({ projectId: source.id }));
+    await mkdir(blenderSrcDir(musicVideoFilmOwner(source.id)), { recursive: true });
+    await writeFile(join(blenderSrcDir(musicVideoFilmOwner(source.id)), 'film.py'), '# Example film source');
+    await writeFile(blenderSongFile(musicVideoFilmOwner(source.id)), JSON.stringify({ projectId: source.id }));
   }
   return projects.getProject(source.id);
 }
@@ -39,8 +40,8 @@ describe('project clone film transaction', () => {
     const source = await sourceProject();
     const clone = await filmActions.cloneProject(source.id);
     expect(clone.id).not.toBe(source.id);
-    expect(await readFile(join(blenderSrcDir(clone.id), 'film.py'), 'utf8')).toBe('# Example film source');
-    expect(JSON.parse(await readFile(blenderSongFile(clone.id), 'utf8'))).toMatchObject({ projectId: clone.id, title: clone.name });
+    expect(await readFile(join(blenderSrcDir(musicVideoFilmOwner(clone.id)), 'film.py'), 'utf8')).toBe('# Example film source');
+    expect(JSON.parse(await readFile(blenderSongFile(musicVideoFilmOwner(clone.id)), 'utf8'))).toMatchObject({ projectId: clone.id, title: clone.name });
     expect(clone.blender.sceneMap.example).toBe(clone.scenes[0].sceneId);
     expect(clone.blender.sceneMap.example).not.toBe(source.scenes[0].sceneId);
     expect(emitRecordUpdated).toHaveBeenLastCalledWith('musicVideoProject', clone.id);
@@ -53,9 +54,9 @@ describe('project clone film transaction', () => {
     await expect(filmActions.cloneProject(source.id)).rejects.toThrow('Synthetic song write failure');
     const clone = writeBlenderSong.mock.calls[0][0];
     expect(await projects.getProject(clone.id)).toBeNull();
-    expect(await stat(blenderWorkspaceDir(clone.id)).catch(error => error.code)).toBe('ENOENT');
-    expect(await readFile(join(blenderSrcDir(source.id), 'film.py'), 'utf8')).toBe('# Example film source');
-    expect(JSON.parse(await readFile(blenderSongFile(source.id), 'utf8'))).toEqual({ projectId: source.id });
+    expect(await stat(blenderWorkspaceDir(musicVideoFilmOwner(clone.id))).catch(error => error.code)).toBe('ENOENT');
+    expect(await readFile(join(blenderSrcDir(musicVideoFilmOwner(source.id)), 'film.py'), 'utf8')).toBe('# Example film source');
+    expect(JSON.parse(await readFile(blenderSongFile(musicVideoFilmOwner(source.id)), 'utf8'))).toEqual({ projectId: source.id });
     expect(emitRecordUpdated).not.toHaveBeenCalled();
   });
 

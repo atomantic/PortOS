@@ -11,7 +11,7 @@
 import { useId } from 'react';
 import { sortByLabel } from '../../lib/sortByLabel.js';
 import { Dice5 } from 'lucide-react';
-import { filterResolutions, MAX_IMAGE_EDGE, MAX_IMAGE_PIXELS } from '../../lib/imageGenResolutions';
+import { clampImageEdge, filterResolutions, localImageResolutionBounds, MAX_IMAGE_EDGE, MAX_IMAGE_PIXELS } from '../../lib/imageGenResolutions';
 import { randomSeed } from '../../lib/genUtils';
 import { RUNNER_FAMILIES } from '../../lib/runnerFamilies';
 import { IMAGE_GEN_MODE, IMAGE_RUNTIME_READINESS, falImageModelGroups, imageGenReadiness, isCloudCliMode } from '../../lib/imageGenBackends';
@@ -127,12 +127,13 @@ export default function ImageGenControls({
   const runtimeRepair = runtimeIssue && onRuntimeRemedy && isSelfServeRuntimeRemedy(runtimeStatus.remedy?.kind)
     ? runtimeStatus.remedy : null;
   const isMoss = isLocal && currentModel?.runner === 'moss-swift';
+  const resolutionBounds = isLocal ? localImageResolutionBounds(currentModel?.runner) : undefined;
 
   // Filter by backend; a stale w/h (e.g. Flux 2 → Flux 1 with 1536 still set)
   // falls through to the custom inputs (rendered by ResolutionField) so the
   // value stays visible and editable until the user picks a supported preset.
   const availableResolutions = filterResolutions(mode, currentModel?.runner)
-    .filter(size => !(isMoss || isFlux3) || [size.w, size.h].every(edge => edge >= 256 && edge <= 1024 && edge % 16 === 0));
+    .filter(size => !resolutionBounds || [size.w, size.h].every(edge => clampImageEdge(edge, resolutionBounds) === edge));
 
   const inputCls = 'w-full bg-port-bg border border-port-border rounded-lg px-2 py-2 text-sm text-white focus:outline-none focus:border-port-accent disabled:opacity-50';
 
@@ -206,13 +207,15 @@ export default function ImageGenControls({
         width={width}
         height={height}
         onChange={onResolutionChange}
-        min={isMoss ? 256 : 64}
-        max={isMoss ? 1024 : MAX_IMAGE_EDGE}
-        step={isMoss ? 16 : 1}
+        min={resolutionBounds?.min ?? 64}
+        max={resolutionBounds?.max ?? MAX_IMAGE_EDGE}
+        step={resolutionBounds?.step ?? 1}
         maxPixels={MAX_IMAGE_PIXELS}
         disabled={disabled}
         inputClassName={inputCls}
-        note={isMoss ? 'MOSS requires 256–1024 pixels per side, in multiples of 16.' : `Each edge 64–${MAX_IMAGE_EDGE}px, total ≤ ${formatCount(MAX_IMAGE_PIXELS)} px. Multiples of 8 render best on local models.`}
+        note={resolutionBounds
+          ? `Each edge must be ${resolutionBounds.min}–${resolutionBounds.max}px, in multiples of ${resolutionBounds.step}.`
+          : `Each edge 64–${MAX_IMAGE_EDGE}px, total ≤ ${formatCount(MAX_IMAGE_PIXELS)} px. Multiples of 8 render best on local models.`}
       />
 
       {/* Codex's image_gen tool ignores seed/steps/guidance — only resolution

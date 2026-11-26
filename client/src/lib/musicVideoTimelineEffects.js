@@ -6,12 +6,12 @@
  * timeline and the board never disagree about what a shot plays. Markers come from the shot's saved
  * `glitches` list and keep its indexes, so a moved marker is saved back as that list with one `atSec` changed.
  */
-import { sceneCutEffect } from './musicVideoCutEffects.js';
-import { sceneImageEffect } from './musicVideoImageEffects.js';
+import { sceneCutEffect } from '../../../server/lib/musicVideo/musicVideoCutEffects.js';
+import { sceneImageEffect } from '../../../server/lib/musicVideo/musicVideoImageEffects.js';
 import { shotEffectLabel } from './musicVideoShotEffects.js';
 import {
   MUSIC_VIDEO_GLITCH_REPEAT_LIMIT, MUSIC_VIDEO_TRANSITIONS, MUSIC_VIDEO_TRANSITION_STYLES, applyCameraCutDefaults, sceneTransitions,
-} from './musicVideoTransitions.js';
+} from '../../../server/lib/musicVideo/musicVideoTransitions.js';
 
 const FPS = 24;
 const round3 = (n) => Math.round(n * 1000) / 1000;

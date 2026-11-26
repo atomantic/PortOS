@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback, useRef } from 'react';
+import { useState, useEffect, useCallback, useId, useRef } from 'react';
 import { Link } from 'react-router';
 import { Save, Mic, Play, Zap, Globe } from 'lucide-react';
 import toast from '../ui/Toast';
@@ -47,6 +47,10 @@ export function VoiceTab() {
   const [configError, setConfigError] = useState(null);
   const mountedRef = useMounted();
   const [status, setStatus] = useState(null);
+  const [refreshing, setRefreshing] = useState(false);
+  const statusProbeRef = useRef(null);
+  const [savedTts, setSavedTts] = useState(null);
+  const ttsHintId = useId();
   const [testing, setTesting] = useState(false);
   const [widgetHidden, setWidgetHidden] = useState(readVoiceHidden);
   // Persisted identity the server's /facetime/* routes actually use; form inputs may be ahead of it.
@@ -63,27 +67,41 @@ export function VoiceTab() {
     retryVoicesRef.current = fn;
   }, []);
 
-  const refreshStatus = useCallback(() => {
-    retryVoicesRef.current?.();
-    return getVoiceStatus()
-      .then(setStatus)
-      .catch(() => setStatus(null));
-  }, []);
+  const probeStatus = useCallback((silent) => {
+    if (statusProbeRef.current) return statusProbeRef.current;
+    setRefreshing(true);
+    const probe = getVoiceStatus({ silent })
+      .then((next) => { if (mountedRef.current) setStatus(next); })
+      .catch(() => { if (mountedRef.current) setStatus(null); })
+      .finally(() => {
+        statusProbeRef.current = null;
+        setRefreshing(false);
+      });
+    statusProbeRef.current = probe;
+    return probe;
+  }, [mountedRef]);
 
-  // Config and status load independently: a failed status probe only degrades
-  // the status badges, and a failed config shows a retryable error row instead
-  // of an endless spinner. Silent: ListLoadError is the failure UI.
+  const refreshStatus = () => {
+    if (statusProbeRef.current) return statusProbeRef.current;
+    retryVoicesRef.current?.();
+    return probeStatus(false);
+  };
+
+  // A failed config shows a retryable error row while the independent startup probe is silent.
   const loadConfig = useCallback(() => {
     setLoading(true);
     setConfigError(null);
-    getVoiceStatus({ silent: true })
-      .then((s) => { if (mountedRef.current) setStatus(s); })
-      .catch(() => { if (mountedRef.current) setStatus(null); });
+    probeStatus(true);
     return getVoiceConfig({ silent: true })
-      .then((config) => { if (mountedRef.current) { setCfg(config); setSavedFacetime(config?.facetime || {}); } })
+      .then((config) => {
+        if (!mountedRef.current) return;
+        setCfg(config);
+        setSavedFacetime(config?.facetime || {});
+        setSavedTts(config?.tts);
+      })
       .catch((err) => { if (mountedRef.current) setConfigError(err instanceof Error ? err : new Error('Request failed')); })
       .finally(() => { if (mountedRef.current) setLoading(false); });
-  }, [mountedRef]);
+  }, [mountedRef, probeStatus]);
 
   useEffect(() => {
     loadConfig();
@@ -114,6 +132,7 @@ export function VoiceTab() {
       const r = await updateVoiceConfig(payload, { silent: true });
       setCfg(r.config);
       setSavedFacetime(r.config?.facetime || {});
+      setSavedTts(r.config?.tts);
       traitsSyncRef.current?.clear();
       const rec = r.reconciliation || {};
       if (rec.error) {
@@ -134,13 +153,15 @@ export function VoiceTab() {
     } finally {
       setSaving(false);
     }
+    // A probe started before the save can contain pre-reconcile status.
+    await statusProbeRef.current;
     await refreshStatus();
   };
 
   const handleTest = async () => {
     setTesting(true);
     try {
-      const buf = await testTts('Voice mode is online. I am ready to help.', undefined, cfg?.tts?.engine);
+      const buf = await testTts('Voice mode is online. I am ready to help.');
       playWav(buf);
     } catch (err) {
       toast.error(`TTS test failed: ${err.message}`);
@@ -155,6 +176,7 @@ export function VoiceTab() {
   const ready = !loading && Boolean(cfg);
   const sttEngine = cfg?.stt?.engine || 'whisper';
   const ttsEngine = cfg?.tts?.engine || 'piper';
+  const ttsDirty = JSON.stringify(cfg?.tts) !== JSON.stringify(savedTts);
 
   return (
     <>
@@ -228,15 +250,18 @@ export function VoiceTab() {
                 {saving ? <BrailleSpinner /> : <Save size={14} />}
                 Save & Reconcile
               </button>
-              <button onClick={handleTest} disabled={testing} className="inline-flex items-center justify-center gap-2 min-h-[40px] px-4 py-2 bg-port-border hover:bg-port-border/70 text-white text-sm rounded-lg transition-colors disabled:opacity-50" title="Synthesize a test phrase with the active TTS engine">
+              <button onClick={handleTest} disabled={testing || saving || ttsDirty} aria-describedby={ttsDirty ? ttsHintId : undefined} className="inline-flex items-center justify-center gap-2 min-h-[40px] px-4 py-2 bg-port-border hover:bg-port-border/70 text-white text-sm rounded-lg transition-colors disabled:opacity-50" title="Synthesize a test phrase with the active TTS engine">
                 {testing ? <BrailleSpinner /> : <Play size={14} />}
                 Test voice
               </button>
-              <button onClick={refreshStatus} className="inline-flex items-center justify-center gap-2 min-h-[40px] px-4 py-2 bg-port-border hover:bg-port-border/70 text-white text-sm rounded-lg transition-colors">
-                <Zap size={14} />
-                Refresh
+              <button onClick={refreshStatus} disabled={refreshing} className="inline-flex items-center justify-center gap-2 min-h-[40px] px-4 py-2 bg-port-border hover:bg-port-border/70 text-white text-sm rounded-lg transition-colors disabled:opacity-50">
+                {refreshing ? <BrailleSpinner text="Refreshing…" /> : <><Zap size={14} /> Refresh</>}
               </button>
             </div>
+
+            {ttsDirty && (
+              <p id={ttsHintId} className="text-xs text-gray-400">Save &amp; Reconcile your text-to-speech changes before testing the voice.</p>
+            )}
 
             <details className="text-xs text-gray-500">
               <summary className="cursor-pointer">Binary + model paths</summary>

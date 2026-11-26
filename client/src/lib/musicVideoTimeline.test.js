@@ -1,3 +1,4 @@
+// @vitest-environment node
 import { describe, it, expect } from 'vitest';
 import {
   TIMELINE_MAX_PX_PER_SEC, clampPxPerSec, fitPxPerSec, lyricSpans, reorderedSceneIds, rulerStepSec, rulerTicks, shotsWithCutAt, snapCutTime,

@@ -509,7 +509,7 @@ export async function renderMissingSegments(plan, { signal, onProgress, concurre
 /**
  * Join the cached segments by stream copy and lay the song (with any sound
  * bed) under them once, silence under the outro, into `outputPath`. Resolves
- * `{ durationSec, songSec }`. `segments` (default: all, in order) joins a
+ * `{ durationSec, songSec, leadSec }`. `segments` (default: all, in order) joins a
  * leading run of them instead, with the song under just that part.
  */
 export async function stitchSegments(plan, outputPath, { signal, segments = [...plan.segments, ...(plan.outro ? [plan.outro] : [])] } = {}) {

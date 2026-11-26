@@ -102,6 +102,9 @@ const spawnedAgentCommands = new Map();
 export const registerSpawnedAgent = (pid, data) => {
   spawnedAgentCommands.set(pid, {
     fullCommand: data.fullCommand,
+    providerCommand: data.providerCommand,
+    providerId: data.providerId,
+    providerName: data.providerName,
     agentId: data.agentId,
     taskId: data.taskId,
     model: data.model,
@@ -114,6 +117,8 @@ export const registerSpawnedAgent = (pid, data) => {
 export const unregisterSpawnedAgent = (pid) => { spawnedAgentCommands.delete(pid); };
 
 export const getSpawnedAgent = (pid) => spawnedAgentCommands.get(pid);
+
+export const getSpawnedAgentPids = () => [...spawnedAgentCommands.keys()];
 
 export let useRunner = false;
 export const setUseRunner = (val) => { useRunner = val; };

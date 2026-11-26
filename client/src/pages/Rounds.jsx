@@ -8,10 +8,12 @@
  * scroll (the editor and guide still live at their own routes).
  */
 
-import { useState, useCallback } from 'react';
+import { useState, useCallback, useRef } from 'react';
 import { useNavigate, Link } from 'react-router';
 import { Music, Plus, Trash2, BookOpen, CheckCircle2, Circle, Wand2 } from 'lucide-react';
 import PageHeader from '../components/PageHeader';
+import EmptyState from '../components/EmptyState';
+import PageSkeleton from '../components/ui/PageSkeleton';
 import toast from '../components/ui/Toast';
 import ConfirmButtonPair from '../components/ui/ConfirmButtonPair';
 import ListLoadError from '../components/ui/ListLoadError';
@@ -35,6 +37,7 @@ const fetchRounds = async () => {
 export default function Rounds() {
   const navigate = useNavigate();
   const { items: rounds, setItems: setRounds, state, error, retry } = useListResource(fetchRounds);
+  const titleInput = useRef(null);
   const [title, setTitle] = useState('');
   const [artist, setArtist] = useState('');
   // Inline delete confirm (no window.confirm, no two-click-arm) — one row armed
@@ -106,6 +109,7 @@ export default function Rounds() {
           <label htmlFor="round-title" className="block text-xs text-gray-400 mb-1">Title</label>
           <input
             id="round-title"
+            ref={titleInput}
             type="text"
             value={title}
             onChange={(e) => setTitle(e.target.value)}
@@ -148,11 +152,16 @@ export default function Rounds() {
 
       {/* List */}
       {state === 'loading' ? (
-        <p className="text-sm text-gray-500">Loading rounds…</p>
+        <PageSkeleton header="none" label="Loading rounds" cards={4} sidebar={false} layout="grid" gridColsClass="sm:grid-cols-2 lg:grid-cols-3 2xl:grid-cols-4" />
       ) : state === 'error' ? (
         <ListLoadError what="rounds" error={error} onRetry={retry} />
       ) : rounds.length === 0 ? (
-        <p className="text-sm text-gray-500">No rounds yet — write your first above.</p>
+        <EmptyState
+          icon={Music}
+          message="No rounds yet — write your first above."
+          actionLabel="Write a round"
+          onAction={() => titleInput.current?.focus()}
+        />
       ) : (
         <ul className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 2xl:grid-cols-4 gap-3">
           {rounds.map((round) => {

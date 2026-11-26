@@ -98,7 +98,7 @@ describe('TasksTab spawning window', () => {
       cos: { tasks: source === 'internal' ? [task] : [] } }} agents={[{ ...owner, deliveryActivity: activity }]}
       onRefresh={vi.fn()} providers={[]} apps={[]} /></MemoryRouter>;
     const { rerender } = render(view(null));
-    fireEvent.click(await screen.findByRole('button', { name: 'Edit task' }));
+    fireEvent.click(await screen.findByRole('button', { name: `Edit task ${task.id}` }));
     fireEvent.change(screen.getByRole('textbox', { name: 'Task description' }), { target: { value: 'My unfinished edit' } });
     rerender(view({ label: 'Checking cleanup' }));
     expect(await screen.findByText('Active (1)')).toBeInTheDocument();
@@ -117,7 +117,7 @@ describe('TasksTab spawning window', () => {
     const view = activity => <MemoryRouter><TasksTab tasks={{ user: { tasks: [] }, cos: { tasks: [task] } }}
       agents={[{ ...owner, deliveryActivity: activity }]} onRefresh={vi.fn()} providers={[]} apps={[]} /></MemoryRouter>;
     const { rerender } = render(view(null));
-    fireEvent.click(await screen.findByRole('button', { name: 'Mark task as blocked' }));
+    fireEvent.click(await screen.findByRole('button', { name: `Mark task as blocked ${task.id}` }));
     fireEvent.change(screen.getByRole('textbox', { name: 'Reason this task is blocked' }), { target: { value: 'Need a review' } });
     rerender(view({ label: 'Checking cleanup' }));
     expect(await screen.findByText('Active (1)')).toBeInTheDocument();
@@ -132,8 +132,8 @@ describe('TasksTab spawning window', () => {
       agents: [{ id: 'agent-owner', taskId: held.id, status: 'completed' }] });
     const queuedRow = await screen.findByText('Queued task');
     const heldRow = screen.getByText('Held cleanup');
-    expect(within(queuedRow.closest('[data-task-group]')).getByRole('button', { name: 'Drag to reorder' })).toBeInTheDocument();
-    expect(within(heldRow.closest('[data-task-group]')).queryByRole('button', { name: 'Drag to reorder' })).toBeNull();
+    expect(within(queuedRow.closest('[data-task-group]')).getByRole('button', { name: `Drag to reorder task ${queued.id}` })).toBeInTheDocument();
+    expect(within(heldRow.closest('[data-task-group]')).queryByRole('button', { name: `Drag to reorder task ${held.id}` })).toBeNull();
   });
 
   it('shows exact retry-cleanup activity but ignores an unattributed boolean hold', async () => {

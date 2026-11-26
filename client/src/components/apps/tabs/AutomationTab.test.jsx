@@ -104,6 +104,18 @@ beforeEach(() => {
   vi.clearAllMocks();
 });
 
+it('clears the stale pause banner when automation has already resumed elsewhere', async () => {
+  api.getCosStatus.mockResolvedValueOnce({ paused: true });
+  api.resumeCos.mockResolvedValueOnce({ success: true, unchanged: true });
+  await renderTab();
+
+  expect(screen.getByText('Scheduled automation is globally paused')).toBeInTheDocument();
+  fireEvent.click(screen.getByRole('button', { name: 'Resume' }));
+
+  await waitFor(() => expect(mockToast.success).toHaveBeenCalledWith('Scheduled automation resumed'));
+  expect(screen.queryByText('Scheduled automation is globally paused')).not.toBeInTheDocument();
+});
+
 describe('AutomationTab per-app options', () => {
   it('acknowledges a slow run immediately, prevents duplicate clicks, and retains the queued receipt', async () => {
     await renderTab({ security: { enabled: true } });

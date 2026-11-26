@@ -4,7 +4,7 @@ import { it, expect, vi } from 'vitest';
 import AppQualityHistory from './AppQualityHistory';
 import { getAppQualityHistory } from '../../services/apiApps';
 vi.mock('../../services/apiApps', () => ({ getAppQualityHistory: vi.fn() }));
-vi.mock('recharts', () => ({ ResponsiveContainer: ({ children }) => <div>Chart{children}</div>, LineChart: ({ children }) => <div>{children}</div>, ReferenceLine: ({ y }) => <div data-testid="reference-line">{y}</div>, Line: () => null, XAxis: () => null, YAxis: () => null, CartesianGrid: () => null, Tooltip: () => null }));
+vi.mock('../ui/charts', () => ({ ResponsiveContainer: ({ children }) => <div>Chart{children}</div>, LineChart: ({ children }) => <div>{children}</div>, ReferenceLine: ({ y }) => <div data-testid="reference-line">{y}</div>, Line: () => null, XAxis: () => null, YAxis: () => null, CartesianGrid: () => null, Tooltip: () => null }));
 function Location() { return <output>{useLocation().search}</output>; }
 it('loads shared filters, displays category evidence, and recovers after a failed range change', async () => {
   getAppQualityHistory.mockResolvedValueOnce({ totalCategories: 25, points: [{ date: '2026-09-10', score: 80, ratedCategories: 2, categories: { security: { score: 40, coverage: 'partial', confidence: 'medium' } } }] });

@@ -17,7 +17,7 @@
  */
 
 import { ServerError } from '../lib/errorHandler.js';
-import { PERSISTENT_MIND_MEMORY_PROTECTION_TAGS, existingPersistentMindReview, createPersistentMindReview, mergePersistentMindReview, createPersistentMindReviewOrigin } from '../lib/persistent/persistentMindMemory.js';
+import { PERSISTENT_MIND_MEMORY_PROTECTION_TAGS, PERSISTENT_MIND_PRIVATE_TAGS, existingPersistentMindReview, createPersistentMindReview, mergePersistentMindReview, createPersistentMindReviewOrigin } from '../lib/persistent/persistentMindMemory.js';
 import { PERSISTENT_MIND_ID } from '../lib/persistent/persistentMindTrajectory.js';
 import { v4 as uuidv4 } from '../lib/uuid.js';
 import { query, withTransaction, pgvectorToArray, arrayToPgvector } from '../lib/db.js';
@@ -27,6 +27,8 @@ import * as notifications from './notifications.js';
 import { DEFAULT_MEMORY_CONFIG, generateSummary, decrementAgentPendingApproval } from './memoryConfig.js';
 import { getInstanceId } from './instanceIdentity.js';
 import { DEFAULT_MEMORY_LINK_TYPE, isSymmetricMemoryLinkType } from '../lib/memoryLinkTypes.js';
+import { finishMemoryPurge } from './memory/purgeEffects.js';
+import { canFederate, lockPurgeMarkers, recordDeletions } from './memory/federatedPurge.js';
 import { toPgJson } from '../lib/pgJson.js';
 
 const protectedMindMemoryTags = Object.values(PERSISTENT_MIND_MEMORY_PROTECTION_TAGS);
@@ -197,7 +199,7 @@ async function insertSymmetricRelatedLinks(client, id, relatedIds) {
 
 export async function createMemory(data, embedding = null) {
   const memory = await withTransaction(client => insertMemory(client, data, embedding));
-  console.log(`🧠 Memory created: ${memory.type} - ${memory.summary.substring(0, 50)}...`);
+  console.log(`🧠 Memory created: ${memory.id} (${memory.type})`);
   cosEvents.emit('memory:created', { id: memory.id, type: memory.type, summary: memory.summary });
   return memory;
 }
@@ -317,6 +319,19 @@ export async function peekMemory(id) {
   return rowToMemory(result.rows[0]);
 }
 
+// DELETE and status updates must wait until the file-backed approval writes settle.
+export function withPendingMemories(ids, publish) {
+  return withTransaction(async client => {
+    const unique = memoryIdList(ids);
+    const { rows } = await client.query(
+      "SELECT * FROM memories WHERE id = ANY($1::uuid[]) AND status = 'pending_approval' ORDER BY id FOR UPDATE",
+      [unique]
+    );
+    const byId = new Map(rows.map(row => [row.id, rowToMemory(row)]));
+    return publish(unique.flatMap(id => byId.has(id) ? [byId.get(id)] : []));
+  });
+}
+
 /** One SELECT for many ids. Embedding stays out unless includeEmbedding is set. */
 export async function peekMemories(ids, { includeEmbedding = false } = {}) {
   const unique = memoryIdList(ids);
@@ -387,6 +402,12 @@ export async function getMemoryVersion(id, version) {
   return result.rows[0] ?? null;
 }
 
+function excludePersistentMindWhere(params) {
+  const sourceParam = params.push(PERSISTENT_MIND_ID);
+  const tagsParam = params.push(PERSISTENT_MIND_PRIVATE_TAGS);
+  return `source_agent_id IS DISTINCT FROM $${sourceParam} AND NOT COALESCE(tags && $${tagsParam}, false)`;
+}
+
 /**
  * Build shared filters for memory list/count queries.
  */
@@ -439,6 +460,8 @@ function buildMemoryFilterWhere(options = {}) {
       params.push(options.sourceTaskId);
     }
   }
+
+  if (options.excludePersistentMind) conditions.push(excludePersistentMindWhere(params));
 
   const where = conditions.length > 0 ? `WHERE ${conditions.join(' AND ')}` : '';
   return { where, params };
@@ -601,11 +624,17 @@ export async function archiveMemory(id, options = {}) {
  * Purge a memory: DELETE the row (cascades to memory_links) and its embedding. Not restorable.
  */
 export async function purgeMemory(id) {
-  await query('DELETE FROM memories WHERE id = $1', [id]);
-
-  console.log(`🧠 Memory purged: ${id}`);
-  cosEvents.emit('memory:deleted', { id, hard: true });
-
+  const removed = await withTransaction(async client => {
+    await lockPurgeMarkers(client);
+    const { rows: [row] } = await client.query(
+      `DELETE FROM memories WHERE id = $1 RETURNING status, source_agent_id, tags,
+       GREATEST(updated_at, clock_timestamp()) AS deleted_at`, [id]);
+    if (row && canFederate(row.source_agent_id, row.tags)) {
+      await recordDeletions(client, [{ id, deletedAt: row.deleted_at.toISOString() }]);
+    }
+    return row;
+  });
+  await finishMemoryPurge(id, removed);
   return { success: true, id };
 }
 
@@ -683,6 +712,8 @@ export async function searchMemories(queryEmbedding, options = {}) {
     params.push(options.appId);
   }
 
+  if (options.excludePersistentMind) conditions.push(excludePersistentMindWhere(params));
+
   const where = conditions.join(' AND ');
 
   // Use pgvector cosine distance operator <=>
@@ -741,7 +772,10 @@ export async function hybridSearchMemories(queryText, queryEmbedding, options = 
     filterParams.push(options.sourceAgentId);
   }
 
+  if (options.excludePersistentMind) filterConditions.push(excludePersistentMindWhere(filterParams));
+
   const filterWhere = filterConditions.join(' AND ');
+  const queryParam = filterParams.length + 1;
   const fetchLimit = limit * 2;
   const searches = [];
 
@@ -751,8 +785,8 @@ export async function hybridSearchMemories(queryText, queryEmbedding, options = 
     // websearch syntax ANDs every term, so conversational text rarely matches.
     // 'any' ORs the same lexemes; ts_rank already favors covering more of them.
     const tsQuery = lexicalMatch === 'any'
-      ? `replace(plainto_tsquery('english', $${paramIdx})::text, ' & ', ' | ')::tsquery`
-      : `websearch_to_tsquery('english', $${paramIdx})`;
+      ? `replace(plainto_tsquery('english', $${queryParam})::text, ' & ', ' | ')::tsquery`
+      : `websearch_to_tsquery('english', $${queryParam})`;
     searches.push(query(
       `SELECT id, type, category, tags, summary, importance, created_at, status, source_app_id, source_agent_id,
               ts_rank(search_tsv, ${tsQuery}) AS fts_score
@@ -760,21 +794,20 @@ export async function hybridSearchMemories(queryText, queryEmbedding, options = 
        WHERE ${filterWhere}
          AND search_tsv @@ ${tsQuery}
        ORDER BY fts_score DESC
-       LIMIT $${paramIdx + 1}`,
+       LIMIT $${queryParam + 1}`,
       [...filterParams, queryText, fetchLimit]
     ).then(result => ({ kind: 'fts', rows: result.rows })));
   }
 
   if (queryEmbedding) {
-    const vecParamStart = filterParams.length + 1;
     searches.push(query(
       `SELECT id, type, category, tags, summary, importance, created_at, status, source_app_id, source_agent_id,
-              1 - (embedding <=> $${vecParamStart}) AS similarity
+              1 - (embedding <=> $${queryParam}) AS similarity
        FROM memories
        WHERE embedding IS NOT NULL AND ${filterWhere}
-         AND 1 - (embedding <=> $${vecParamStart}) >= $${vecParamStart + 1}
-       ORDER BY embedding <=> $${vecParamStart}
-       LIMIT $${vecParamStart + 2}`,
+         AND 1 - (embedding <=> $${queryParam}) >= $${queryParam + 1}
+       ORDER BY embedding <=> $${queryParam}
+       LIMIT $${queryParam + 2}`,
       [...filterParams, arrayToPgvector(queryEmbedding), minRelevance * 0.5, fetchLimit]
     ).then(result => ({ kind: 'vector', rows: result.rows })));
   }
@@ -1191,52 +1224,6 @@ export async function consolidateMemories(threshold = 0.9, dryRun = false, { rea
 }
 
 /**
- * Apply importance decay to old memories
- */
-export async function applyDecay(decayRate = 0.01) {
-  // Set-based decay: archive old low-importance memories and decay the rest in bulk
-  const archived = await withTransaction(async (client) => {
-    // Archive memories that have decayed below threshold and are older than 30 days. Mind-owned
-    // memories are exempt (ETHOS §7: pruning is self-directed); they still decay below 0.15 in the
-    // second UPDATE so selectMindMemoryForReview can surface them for the Mind's own verdict.
-    const archiveResult = await client.query(`
-      UPDATE memories SET status = 'archived',
-        importance = GREATEST(0.1,
-          importance * (1 - $1 * sqrt(EXTRACT(EPOCH FROM (NOW() - created_at)) / 86400.0))
-          + GREATEST(0, 0.1 - EXTRACT(EPOCH FROM (NOW() - COALESCE(last_accessed, created_at))) / 86400.0 * 0.001)
-        )
-      WHERE status = 'active'
-        AND NOT (COALESCE(tags, '{}'::text[]) && $2::text[])
-        AND source_agent_id IS DISTINCT FROM $3
-        AND created_at < NOW() - INTERVAL '30 days'
-        AND GREATEST(0.1,
-          importance * (1 - $1 * sqrt(EXTRACT(EPOCH FROM (NOW() - created_at)) / 86400.0))
-          + GREATEST(0, 0.1 - EXTRACT(EPOCH FROM (NOW() - COALESCE(last_accessed, created_at))) / 86400.0 * 0.001)
-        ) < 0.15
-    `, [decayRate, protectedMindMemoryTags, PERSISTENT_MIND_ID]);
-
-    // Decay importance for remaining active memories where change exceeds threshold
-    const decayResult = await client.query(`
-      UPDATE memories SET importance = GREATEST(0.1,
-        importance * (1 - $1 * sqrt(EXTRACT(EPOCH FROM (NOW() - created_at)) / 86400.0))
-        + GREATEST(0, 0.1 - EXTRACT(EPOCH FROM (NOW() - COALESCE(last_accessed, created_at))) / 86400.0 * 0.001)
-      )
-      WHERE status = 'active'
-        AND NOT (COALESCE(tags, '{}'::text[]) && $2::text[])
-        AND abs(importance - GREATEST(0.1,
-          importance * (1 - $1 * sqrt(EXTRACT(EPOCH FROM (NOW() - created_at)) / 86400.0))
-          + GREATEST(0, 0.1 - EXTRACT(EPOCH FROM (NOW() - COALESCE(last_accessed, created_at))) / 86400.0 * 0.001)
-        )) > 0.01
-    `, [decayRate, protectedMindMemoryTags]);
-
-    return archiveResult.rowCount + decayResult.rowCount;
-  });
-
-  console.log(`🧠 Decay applied to ${archived} memories`);
-  return { updated: archived };
-}
-
-/**
  * Clear expired memories
  */
 export async function clearExpired() {
@@ -1315,12 +1302,16 @@ export async function flushBM25Index() {
 }
 
 /** One fading, owned, unreviewed source; selection never records access. */
+// Keep the read-time SQL formula aligned with fadedPersistentMindMemoryImportance.
 export async function selectMindMemoryForReview(mindId) {
   const result = await query(`
     SELECT * FROM memories
     WHERE source_agent_id = $1 AND status = 'active'
       AND NOT (COALESCE(tags, '{}'::text[]) && $2::text[])
-      AND created_at < NOW() - INTERVAL '30 days' AND importance < 0.15
+      AND created_at < NOW() - INTERVAL '30 days'
+      AND importance * POWER(0.5::double precision,
+        GREATEST(0, EXTRACT(EPOCH FROM (NOW() - COALESCE(last_accessed, created_at))) / 86400.0 - 30) / 90
+      ) < 0.15
       AND NOT (last_review IS NOT NULL
         AND last_review->>'expectedVersion' = version::text
         AND last_review->>'latestVerdict' IN ('keep', 'learn', 'archive', 'defer'))

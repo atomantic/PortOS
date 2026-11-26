@@ -13,6 +13,7 @@ export const LAYA_MLX = Object.freeze({
   repository: 'aac6fef/laya-multilingual-mlx',
   revision: 'ba40c87fcb357f1643d04d71323af9cdc3b9e591',
   runtimeRevision: 'fc1df62828a3fedf4d8229fdac1cbd85f1cdf337',
+  runtimeArchiveSha256: '3b9778b0ffd8ed99e7299f70e470ac9369a18591fd7098c698acd019742b350f',
   contextTokens: 1024,
   parameters: '322M',
 });

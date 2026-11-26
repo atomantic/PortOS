@@ -10,11 +10,20 @@ import { reloadSettings, withLiveSettingsRestore } from './settings.js';
 import { invalidateAllCaches as invalidateBrainCaches } from './brainStorage.js';
 import { restoreSnapshot } from './backup.js';
 import { withLiveCosRestore } from './cos/cosState.js';
+import { RECORDING_STAGE_RSYNC_GLOB } from './cos/recordingStages.js';
 import { withLiveMediaModelsRestore } from '../lib/mediaModels.js';
 import { withLiveTaskScheduleRestore, updateSchedule } from './taskScheduleStore.js';
 import { createFileWriteQueue } from '../lib/fileWriteQueue.js';
 import { _healthRestoreDrainingForTests, ingestHealthData, withLiveHealthRestore } from './appleHealthIngest.js';
 import { meatspaceEvents } from './meatspace/meatspaceEvents.js';
+
+const machineLocalCredentialRestoreExcludes = [
+  '--exclude=/[cC][aA][lL][eE][nN][dD][aA][rR]/[gG][oO][oO][gG][lL][eE]-[aA][uU][tT][hH]',
+  '--exclude=/[sS][pP][oO][tT][iI][fF][yY]/[cC][rR][eE][dD][eE][nN][tT][iI][aA][lL][sS].[jJ][sS][oO][nN]',
+  '--exclude=/[sS][pP][oO][tT][iI][fF][yY]/[tT][oO][kK][eE][nN][sS].[jJ][sS][oO][nN]',
+  '--exclude=/[sS][pP][oO][tT][iI][fF][yY]/[cC][aA][cC][hH][eE]',
+  '--exclude=/[oO][pP][eE][nN][cC][lL][aA][wW]',
+];
 
 // snapshotId validation + rsync filter construction + settings cache re-sync.
 // restoreSnapshot writes over the user's live data/ directory, so each of these
@@ -90,6 +99,42 @@ describe('restoreSnapshot snapshotId, filter flags, and settings re-sync', () =>
   });
 
   describe('subdirFilter rsync flags', () => {
+
+    const expectedExcludes = [
+      '--exclude=.DS_Store',
+      '--exclude=.localized',
+      '--exclude=Thumbs.db',
+      '--exclude=desktop.ini',
+      '--exclude=._*',
+      '--exclude=/[cC][eE][rR][tT][sS]',
+      '--exclude=/[tT][aA][iI][lL][cC][aA][tT]-[sS][eE][rR][vV][eE].[jJ][sS][oO][nN]',
+      '--exclude=/[tT][aA][iI][lL][cC][aA][tT]-[sS][eE][rR][vV][eE].[aA][dD][dD][rR]',
+      '--exclude=/[tT][aA][iI][lL][cC][aA][tT]-[fF][oO][rR][wW][aA][rR][dD][sS].[jJ][sS][oO][nN]',
+      ...machineLocalCredentialRestoreExcludes,
+      '--exclude=/[dD][aA][tT][aA][bB][aA][sS][eE]-[aA][uU][tT][hH][oO][rR][iI][tT][yY].[jJ][sS][oO][nN]',
+      '--exclude=/[dD][aA][tT][aA][bB][aA][sS][eE]-[rR][eE][sS][tT][oO][rR][eE]-[rR][eE][cC][oO][vV][eE][rR][yY].[jJ][sS][oO][nN]',
+        '--exclude=/[dD][aA][tT][aA][bB][aA][sS][eE]-[mM][aA][iI][nN][tT][eE][nN][aA][nN][cC][eE]',
+        '--exclude=/.[pP][eE][eE][rR]-[eE][xX][eE][cC][uU][tT][iI][oO][nN]-[aA][uU][tT][hH][oO][rR][iI][tT][yY]-[lL][oO][cC][kK]',
+        '--exclude=/[mM][iI][gG][rR][aA][tT][iI][oO][nN][sS].[lL][oO][cC][kK]',
+      '--exclude=/[pP][eE][eE][rR]-[eE][xX][eE][cC][uU][tT][iI][oO][nN]',
+      '--exclude=/[pP][eE][eE][rR]-[eE][xX][eE][cC][uU][tT][iI][oO][nN]-[cC][aA][tT][aA][lL][oO][gG].[jJ][sS][oO][nN]',
+      '--exclude=/[pP][eE][eE][rR]-[eE][xX][eE][cC][uU][tT][iI][oO][nN]-[gG][rR][aA][nN][tT][sS].[jJ][sS][oO][nN]',
+      '--exclude=/[pP][eE][eE][rR]-[eE][xX][eE][cC][uU][tT][iI][oO][nN]-[aA][uU][tT][hH][oO][rR][iI][tT][yY].[jJ][sS][oO][nN]',
+      '--exclude=/[pP][eE][eE][rR]-[eE][xX][eE][cC][uU][tT][iI][oO][nN]-[rR][eE][cC][oO][vV][eE][rR][yY].[jJ][sS][oO][nN][lL]',
+      '--exclude=/[wW][oO][rR][kK][fF][lL][oO][wW]-[mM][aA][iI][nN][tT][eE][nN][aA][nN][cC][eE]',
+      '--exclude=/[bB][aA][cC][kK][uU][pP]-[aA][dD][mM][iI][sS][sS][iI][oO][nN]',
+      '--exclude=/[cC][oO][sS]/[aA][gG][eE][nN][tT][sS]/.[bB][rR][aA][nN][cC][hH]-[pP][oO][lL][iI][cC][yY]-[rR][eE][vV][iI][sS][iI][oO][nN]',
+      `--exclude=${RECORDING_STAGE_RSYNC_GLOB}`,
+      '--exclude=/[tT][aA][iI][lL][cC][aA][tT]-[sS][eE][rR][vV][eE].[jJ][sS][oO][nN].*.[tT][mM][pP]',
+      '--exclude=/[tT][aA][iI][lL][cC][aA][tT]-[fF][oO][rR][wW][aA][rR][dD][sS].[jJ][sS][oO][nN].*.[tT][mM][pP]',
+      '--exclude=/.[dD][aA][tT][aA][bB][aA][sS][eE]-[rR][eE][sS][tT][oO][rR][eE]-[rR][eE][cC][oO][vV][eE][rR][yY]-*.[pP][eE][nN][dD][iI][nN][gG]',
+        '--exclude=/[dD][aA][tT][aA][bB][aA][sS][eE]-[aA][uU][tT][hH][oO][rR][iI][tT][yY]-*.[pP][eE][nN][dD][iI][nN][gG]',
+        '--exclude=/.[pP][eE][eE][rR]-[eE][xX][eE][cC][uU][tT][iI][oO][nN]-[aA][uU][tT][hH][oO][rR][iI][tT][yY]-*.[pP][eE][nN][dD][iI][nN][gG]',
+        '--exclude=/.[pP][eE][eE][rR]-[eE][xX][eE][cC][uU][tT][iI][oO][nN]-[aA][dD][oO][pP][tT][iI][oO][nN]-*.[pP][eE][nN][dD][iI][nN][gG]',
+        '--exclude=/[mM][iI][gG][rR][aA][tT][iI][oO][nN][sS].[aA][pP][pP][lL][iI][eE][dD].[jJ][sS][oO][nN].[tT][mM][pP]-*',
+      // No snapshot instances.json was approved for install (#12596).
+      '--exclude=/[iI][nN][sS][tT][aA][nN][cC][eE][sS].[jJ][sS][oO][nN]',
+    ];
     it('reads a legacy flat snapshot when that source is explicitly selected', async () => {
       await runRestore('/dest', 'legacy-snapshot', { source: '@legacy', dryRun: true });
 
@@ -119,30 +164,8 @@ describe('restoreSnapshot snapshotId, filter flags, and settings re-sync', () =>
         '--progress',
         '-ii',
         '--checksum',
-        // OS metadata excludes come BEFORE the includes — rsync takes the first
-        // matching rule — and mirror what the integrity inventory skips.
-        '--exclude=.DS_Store',
-        '--exclude=.localized',
-        '--exclude=Thumbs.db',
-        '--exclude=desktop.ini',
-        '--exclude=._*',
-        // Machine-local admission state is never installed by a restore (#10064).
-        '--exclude=/[tT][aA][iI][lL][cC][aA][tT]-[sS][eE][rR][vV][eE].[jJ][sS][oO][nN]',
-        '--exclude=/[tT][aA][iI][lL][cC][aA][tT]-[sS][eE][rR][vV][eE].[aA][dD][dD][rR]',
-        '--exclude=/[tT][aA][iI][lL][cC][aA][tT]-[fF][oO][rR][wW][aA][rR][dD][sS].[jJ][sS][oO][nN]',
-        '--exclude=/[dD][aA][tT][aA][bB][aA][sS][eE]-[aA][uU][tT][hH][oO][rR][iI][tT][yY].[jJ][sS][oO][nN]',
-        '--exclude=/[pP][eE][eE][rR]-[eE][xX][eE][cC][uU][tT][iI][oO][nN]',
-        '--exclude=/[pP][eE][eE][rR]-[eE][xX][eE][cC][uU][tT][iI][oO][nN]-[cC][aA][tT][aA][lL][oO][gG].[jJ][sS][oO][nN]',
-        '--exclude=/[pP][eE][eE][rR]-[eE][xX][eE][cC][uU][tT][iI][oO][nN]-[gG][rR][aA][nN][tT][sS].[jJ][sS][oO][nN]',
-        '--exclude=/[pP][eE][eE][rR]-[eE][xX][eE][cC][uU][tT][iI][oO][nN]-[aA][uU][tT][hH][oO][rR][iI][tT][yY].[jJ][sS][oO][nN]',
-        '--exclude=/[pP][eE][eE][rR]-[eE][xX][eE][cC][uU][tT][iI][oO][nN]-[rR][eE][cC][oO][vV][eE][rR][yY].[jJ][sS][oO][nN][lL]',
-        '--exclude=/[wW][oO][rR][kK][fF][lL][oO][wW]-[mM][aA][iI][nN][tT][eE][nN][aA][nN][cC][eE]',
-        '--exclude=/[bB][aA][cC][kK][uU][pP]-[aA][dD][mM][iI][sS][sS][iI][oO][nN]',
-        '--exclude=/[cC][oO][sS]/[aA][gG][eE][nN][tT][sS]/.[bB][rR][aA][nN][cC][hH]-[pP][oO][lL][iI][cC][yY]-[rR][eE][vV][iI][sS][iI][oO][nN]',
-        '--exclude=/[tT][aA][iI][lL][cC][aA][tT]-[sS][eE][rR][vV][eE].[jJ][sS][oO][nN].*.[tT][mM][pP]',
-        '--exclude=/[tT][aA][iI][lL][cC][aA][tT]-[fF][oO][rR][wW][aA][rR][dD][sS].[jJ][sS][oO][nN].*.[tT][mM][pP]',
-        // No snapshot instances.json was approved for install (#12596).
-        '--exclude=/[iI][nN][sS][tT][aA][nN][cC][eE][sS].[jJ][sS][oO][nN]',
+        // These excludes must precede the includes because rsync uses the first matching rule.
+        ...expectedExcludes,
         '--dry-run',
         // Leading `/` is load-bearing: rsync matches an unanchored pattern
         // against the end of every path, so `brain/***` would also restore
@@ -163,29 +186,14 @@ describe('restoreSnapshot snapshotId, filter flags, and settings re-sync', () =>
       // The OS-metadata excludes always ride along (they mirror what the
       // integrity inventory skips); nothing else scopes an unfiltered restore.
       expect(args.filter(a => a.startsWith('--include='))).toEqual([]);
-      expect(args.filter(a => a.startsWith('--exclude='))).toEqual([
-        '--exclude=.DS_Store',
-        '--exclude=.localized',
-        '--exclude=Thumbs.db',
-        '--exclude=desktop.ini',
-        '--exclude=._*',
-        '--exclude=/[tT][aA][iI][lL][cC][aA][tT]-[sS][eE][rR][vV][eE].[jJ][sS][oO][nN]',
-        '--exclude=/[tT][aA][iI][lL][cC][aA][tT]-[sS][eE][rR][vV][eE].[aA][dD][dD][rR]',
-        '--exclude=/[tT][aA][iI][lL][cC][aA][tT]-[fF][oO][rR][wW][aA][rR][dD][sS].[jJ][sS][oO][nN]',
-        '--exclude=/[dD][aA][tT][aA][bB][aA][sS][eE]-[aA][uU][tT][hH][oO][rR][iI][tT][yY].[jJ][sS][oO][nN]',
-        '--exclude=/[pP][eE][eE][rR]-[eE][xX][eE][cC][uU][tT][iI][oO][nN]',
-        '--exclude=/[pP][eE][eE][rR]-[eE][xX][eE][cC][uU][tT][iI][oO][nN]-[cC][aA][tT][aA][lL][oO][gG].[jJ][sS][oO][nN]',
-        '--exclude=/[pP][eE][eE][rR]-[eE][xX][eE][cC][uU][tT][iI][oO][nN]-[gG][rR][aA][nN][tT][sS].[jJ][sS][oO][nN]',
-        '--exclude=/[pP][eE][eE][rR]-[eE][xX][eE][cC][uU][tT][iI][oO][nN]-[aA][uU][tT][hH][oO][rR][iI][tT][yY].[jJ][sS][oO][nN]',
-        '--exclude=/[pP][eE][eE][rR]-[eE][xX][eE][cC][uU][tT][iI][oO][nN]-[rR][eE][cC][oO][vV][eE][rR][yY].[jJ][sS][oO][nN][lL]',
-        '--exclude=/[wW][oO][rR][kK][fF][lL][oO][wW]-[mM][aA][iI][nN][tT][eE][nN][aA][nN][cC][eE]',
-        '--exclude=/[bB][aA][cC][kK][uU][pP]-[aA][dD][mM][iI][sS][sS][iI][oO][nN]',
-        '--exclude=/[cC][oO][sS]/[aA][gG][eE][nN][tT][sS]/.[bB][rR][aA][nN][cC][hH]-[pP][oO][lL][iI][cC][yY]-[rR][eE][vV][iI][sS][iI][oO][nN]',
-        '--exclude=/[tT][aA][iI][lL][cC][aA][tT]-[sS][eE][rR][vV][eE].[jJ][sS][oO][nN].*.[tT][mM][pP]',
-        '--exclude=/[tT][aA][iI][lL][cC][aA][tT]-[fF][oO][rR][wW][aA][rR][dD][sS].[jJ][sS][oO][nN].*.[tT][mM][pP]',
-        // No snapshot instances.json was approved for install (#12596).
-        '--exclude=/[iI][nN][sS][tT][aA][nN][cC][eE][sS].[jJ][sS][oO][nN]',
-      ]);
+      expect(args.filter(a => a.startsWith('--exclude='))).toEqual(expectedExcludes);
+    });
+
+    it('passes machine-local OAuth and OpenClaw exclusions to rsync restores', async () => {
+      await runRestore('/dest', 'snap-1', { dryRun: true });
+
+      const args = spawn.mock.calls[0][1];
+      expect(args).toEqual(expect.arrayContaining(machineLocalCredentialRestoreExcludes));
     });
 
     it('echoes the subdirFilter back in the result', async () => {

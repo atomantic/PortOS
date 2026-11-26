@@ -10,7 +10,8 @@
  * federated; listening evidence lives in the federated Brain activity record. No
  * sync cursor or tombstone.
  */
-import { dataPath, ensureDir, atomicWrite, readJSONFile, sleep } from '../lib/fileUtils.js';
+import { dataPath, readJSONFile, sleep } from '../lib/fileUtils.js';
+import { ensureSecureDir, writeSecureJson } from '../lib/secureAuthStore.js';
 import { fetchWithTimeout } from '../lib/fetchWithTimeout.js';
 import { getAccessToken } from './spotifyAuth.js';
 
@@ -201,8 +202,8 @@ async function doSyncSpotifyPlaylists() {
     playlists,
     warnings,
   };
-  await ensureDir(dataPath('spotify'));
-  await atomicWrite(PLAYLISTS_FILE, snapshot);
+  await ensureSecureDir(dataPath('spotify'));
+  await writeSecureJson(PLAYLISTS_FILE, snapshot);
 
   const summary = playlistSnapshotSummary(snapshot);
   const result = {

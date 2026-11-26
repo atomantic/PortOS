@@ -4,34 +4,18 @@ import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { fireEvent, render, screen } from '@testing-library/react';
 
-// Stub @dnd-kit/core's DndContext so drag-end can be fired imperatively. The
-// real implementation needs DOM measurement + pointer sensors, which jsdom
-// doesn't provide reliably — and the behavior under test is "what does the
-// grid do when onDragEnd reports these ids," which is all driven through the
-// callback captured here. Same shape as InfluenceChipsInput.test.jsx.
+// Capture completed drops while preserving the real arrayMove implementation.
 const dndState = { onDragEnd: null };
 
-vi.mock('@dnd-kit/core', () => ({
-  DndContext: ({ children, onDragEnd }) => {
-    dndState.onDragEnd = onDragEnd;
-    return <>{children}</>;
-  },
-  KeyboardSensor: function KeyboardSensorStub() {},
-  PointerSensor: function PointerSensorStub() {},
-  closestCenter: () => null,
-  useSensor: () => null,
-  useSensors: () => [],
-}));
-
-// Keep arrayMove real (the ordering invariant is the point) but stub the
-// hook + provider, which need a live DndContext.
-vi.mock('@dnd-kit/sortable', async () => {
-  const actual = await vi.importActual('@dnd-kit/sortable');
+vi.mock('../../lib/dnd/index.js', async () => {
+  const actual = await vi.importActual('../../lib/dnd/index.js');
   return {
     ...actual,
+    DndContext: ({ children, onDragEnd }) => {
+      dndState.onDragEnd = onDragEnd;
+      return <>{children}</>;
+    },
     SortableContext: ({ children }) => <>{children}</>,
-    sortableKeyboardCoordinates: () => null,
-    verticalListSortingStrategy: null,
     useSortable: ({ disabled }) => ({
       attributes: { 'data-sortable-disabled': String(Boolean(disabled)) },
       listeners: {},

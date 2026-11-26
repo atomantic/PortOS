@@ -101,6 +101,33 @@ describe('execution options at dispatch', () => {
     });
   });
 
+  it.each([
+    [false, 20_000, 'timeout', 1],
+    [true, 12_000, 'timeout', 1],
+    [true, 20_000, 'required_rpc', 1],
+    [true, 20_000, 'timeout', 2],
+  ])('bounds preparation probes (recovery=%s, deadline=%s, failure=%s)', async (retry, budget, probeFailure, calls) => {
+    const clock = vi.spyOn(Date, 'now').mockReturnValue(1_000_000);
+    try {
+      let attempt = 0;
+      probeCodexModelsViaAppServer.mockImplementation(async (_command, _args, _provider, { timeoutMs }) => {
+        attempt++;
+        clock.mockReturnValue(Date.now() + (timeoutMs ?? 15_000));
+        throw Object.assign(new Error('synthetic private path'), { probeFailure, probeStage: attempt === 1 ? 'initialize' : 'account/read' });
+      });
+      const context = retry ? { codexProbeDeadline: Date.now() + budget, reserveCodexProbeRetry: () => true } : {};
+      const error = await prepareExecutionOptions(provider, model, { serviceTier: 'fast' }, 'run', context).catch(reason => reason);
+      expect(error).toMatchObject({ code: 'EXECUTION_OPTIONS_UNSUPPORTED', probeFailure });
+      expect(error.message).not.toContain('synthetic private path');
+      if (probeFailure === 'timeout') expect(error.probeStage).toBe(calls === 2 ? 'account/read' : 'initialize');
+      else expect(error).not.toHaveProperty('probeStage');
+      expect(probeCodexModelsViaAppServer).toHaveBeenCalledTimes(calls);
+      if (calls === 2) expect(probeCodexModelsViaAppServer.mock.calls[1][3].timeoutMs).toBe(5_000);
+    } finally {
+      clock.mockRestore();
+    }
+  });
+
   it('does not treat an old runtime or unadvertised model as Fast capable', async () => {
     probeCodexModelsViaAppServer.mockResolvedValue({ accountType: 'chatgpt', config: {}, models: [{ id: model }] });
     await expect(prepareExecutionOptions(provider, model, { serviceTier: 'fast' })).rejects.toThrow('did not advertise');

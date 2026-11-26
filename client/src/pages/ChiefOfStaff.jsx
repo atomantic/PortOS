@@ -1,6 +1,6 @@
 import PageHeader from '../components/PageHeader';
 import PageLayout from '../components/PageLayout';
-import { useEffect, lazy, Suspense } from 'react';
+import { useEffect, useRef, lazy, Suspense } from 'react';
 import { Link, useLocation, useParams, useNavigate, useSearchParams } from 'react-router';
 import { useLocalStorageBool } from '../hooks/useLocalStorageBool';
 import { useValidTab } from '../hooks/useValidTab';
@@ -91,7 +91,17 @@ export default function ChiefOfStaff() {
     false,
     { format: 'true' },
   );
-  const toggleDesktopPanel = () => setDesktopPanelCollapsed((prev) => !prev);
+  const desktopPanelToggleRef = useRef(null);
+  const restoreDesktopPanelFocus = useRef(false);
+  const toggleDesktopPanel = () => {
+    restoreDesktopPanelFocus.current = true;
+    setDesktopPanelCollapsed((prev) => !prev);
+  };
+  useEffect(() => {
+    if (!restoreDesktopPanelFocus.current) return;
+    restoreDesktopPanelFocus.current = false;
+    desktopPanelToggleRef.current?.focus();
+  }, [desktopPanelCollapsed]);
 
   // Verified animated records for the avatar selector and rigged playback (#5894).
   const { records: riggedAvatars } = useAvatarCapabilities();
@@ -158,6 +168,7 @@ export default function ChiefOfStaff() {
         riggedAvatars={riggedAvatars}
         desktopCollapsed={desktopPanelCollapsed}
         onToggleDesktop={toggleDesktopPanel}
+        desktopToggleRef={desktopPanelToggleRef}
       />
 
       {/* Content Panel. Flex column so the Mind tab can fill leftover height
@@ -166,7 +177,7 @@ export default function ChiefOfStaff() {
       <div className="flex flex-1 min-h-0 min-w-0 flex-col overflow-hidden">
         {desktopPanelCollapsed && (
           <div className="hidden cos-wide:flex shrink-0 bg-port-bg items-center flex-wrap gap-3 px-3 lg:px-4 border-b border-port-border">
-            <button onClick={toggleDesktopPanel} aria-label="Expand CoS panel"
+            <button ref={desktopPanelToggleRef} type="button" onClick={toggleDesktopPanel} aria-label="Expand CoS panel"
               className="min-h-[44px] flex items-center gap-2 px-2 text-sm text-port-text">
               <PanelLeftOpen size={16} aria-hidden="true" /> CoS
             </button>

@@ -101,13 +101,13 @@ export function CosStatusPlaceholder({ failed, onRetry }) {
 }
 
 // The phone-width header that toggles the panel body.
-function MobilePanelToggle({ status, agentState, collapsed, onToggle, className = '' }) {
+function MobilePanelToggle({ status, agentState, collapsed, onToggle, controls, className = '' }) {
   return (
     <button
       onClick={onToggle}
       className={`${className ? `${className} ` : ''}flex items-center justify-between w-full px-3 py-2 bg-port-card/60 border-b border-port-accent-2/20 min-h-[40px]`}
       aria-expanded={!collapsed}
-      aria-controls="cos-agent-panel"
+      aria-controls={controls}
     >
       <div className="flex items-center gap-2">
         <h2 className="text-base font-bold" style={COS_TITLE_STYLE}>CoS</h2>
@@ -121,7 +121,7 @@ function MobilePanelToggle({ status, agentState, collapsed, onToggle, className 
   );
 }
 
-function TerminalPanel({ cos, desktopCollapsed, onToggleDesktop, mobileCollapsed, onToggleMobile }) {
+function TerminalPanel({ cos, desktopCollapsed, onToggleDesktop, desktopToggleRef, mobileCollapsed, onToggleMobile }) {
   const { status, agentState, speaking, statusMessage, eventLogs } = cos;
   const terminal = (
     <TerminalCoSPanel
@@ -143,6 +143,8 @@ function TerminalPanel({ cos, desktopCollapsed, onToggleDesktop, mobileCollapsed
       ) : (
         <div className="hidden cos-wide:block relative min-w-0 w-full max-w-full cos-wide:w-[320px] cos-wide:max-w-[320px]">
           <button
+            ref={desktopToggleRef}
+            type="button"
             onClick={onToggleDesktop}
             className="min-h-[44px] min-w-[44px] inline-flex items-center justify-center absolute top-2 right-2 z-10 p-1.5 text-gray-500 hover:text-white transition-colors rounded-md hover:bg-white/5"
             aria-label="Collapse CoS panel"
@@ -176,9 +178,9 @@ function CollapsedPanel({ cos, mobileCollapsed, onToggleMobile }) {
     <>
       <div className="hidden cos-wide:block overflow-hidden min-w-0" />
       <div className="cos-wide:hidden border-b border-port-accent-2/20 bg-gradient-to-b from-port-card/80 to-port-card/40">
-        <MobilePanelToggle status={cos.status} agentState={cos.agentState} collapsed={mobileCollapsed} onToggle={onToggleMobile} />
+        <MobilePanelToggle status={cos.status} agentState={cos.agentState} collapsed={mobileCollapsed} onToggle={onToggleMobile} controls={mobileCollapsed ? undefined : 'cos-agent-panel'} />
         {!mobileCollapsed && (
-          <div className="flex flex-1 min-w-0 p-2">
+          <div id="cos-agent-panel" className="flex flex-1 min-w-0 p-2">
             {/* Mobile Stats Grid */}
             <div className="flex-1 grid grid-cols-2 gap-1.5 relative z-10 content-center">
               <CosStatsCards cos={cos} variant="collapsed" />
@@ -190,7 +192,7 @@ function CollapsedPanel({ cos, mobileCollapsed, onToggleMobile }) {
   );
 }
 
-function FullPanel({ cos, riggedAvatars, onToggleDesktop, mobileCollapsed, onToggleMobile }) {
+function FullPanel({ cos, riggedAvatars, onToggleDesktop, desktopToggleRef, mobileCollapsed, onToggleMobile }) {
   const { status, agentState, speaking, statusMessage, eventLogs, avatarStyle } = cos;
   const hasCanvasAvatar = CANVAS_AVATAR_STYLES.has(avatarStyle) || isRiggedAvatarStyle(avatarStyle);
   const avatar = (background) => (
@@ -200,6 +202,8 @@ function FullPanel({ cos, riggedAvatars, onToggleDesktop, mobileCollapsed, onTog
     <div className="relative flex flex-col border-b cos-wide:border-b-0 cos-wide:border-r border-port-accent-2/20 bg-gradient-to-b from-port-card/80 to-port-card/40 shrink-0 w-full max-w-full min-w-0 cos-wide:w-[320px] cos-wide:max-w-[320px] overflow-x-hidden cos-wide:h-full cos-wide:overflow-y-auto scrollbar-hide">
       {/* Desktop Collapse Button */}
       <button
+        ref={desktopToggleRef}
+        type="button"
         onClick={onToggleDesktop}
         className="min-h-[44px] min-w-[44px] items-center justify-center hidden cos-wide:flex absolute top-2 right-2 z-20 p-1.5 text-gray-500 hover:text-white transition-colors rounded-md hover:bg-white/5"
         aria-label="Collapse CoS panel"
@@ -209,7 +213,7 @@ function FullPanel({ cos, riggedAvatars, onToggleDesktop, mobileCollapsed, onTog
       </button>
 
       {/* Mobile Collapse Toggle Header */}
-      <MobilePanelToggle className="cos-wide:hidden" status={status} agentState={agentState} collapsed={mobileCollapsed} onToggle={onToggleMobile} />
+      <MobilePanelToggle className="cos-wide:hidden" status={status} agentState={agentState} collapsed={mobileCollapsed} onToggle={onToggleMobile} controls="cos-agent-panel" />
 
       {/* Collapsible Content */}
       <div
@@ -295,8 +299,9 @@ function FullPanel({ cos, riggedAvatars, onToggleDesktop, mobileCollapsed, onTog
  * @param {Array} props.riggedAvatars Verified animated avatar records for rigged styles.
  * @param {boolean} props.desktopCollapsed Whether the desktop rail is collapsed (owned by the page).
  * @param {() => void} props.onToggleDesktop Toggles the desktop rail.
+ * @param {import('react').Ref<HTMLButtonElement>} props.desktopToggleRef Focus target when the desktop rail expands.
  */
-export default function CosAgentPanel({ cos, activeTab, riggedAvatars, desktopCollapsed, onToggleDesktop }) {
+export default function CosAgentPanel({ cos, activeTab, riggedAvatars, desktopCollapsed, onToggleDesktop, desktopToggleRef }) {
   // A landscape phone has no height to spare: the stacked agent panel would
   // push all tab content out of view, so short viewports start collapsed too.
   const shortViewport = useMediaQuery('(max-height: 500px)');
@@ -321,10 +326,10 @@ export default function CosAgentPanel({ cos, activeTab, riggedAvatars, desktopCo
     );
   }
   if (cos.avatarStyle === 'ascii') {
-    return <TerminalPanel cos={cos} desktopCollapsed={desktopCollapsed} onToggleDesktop={onToggleDesktop} mobileCollapsed={mobileCollapsed} onToggleMobile={onToggleMobile} />;
+    return <TerminalPanel cos={cos} desktopCollapsed={desktopCollapsed} onToggleDesktop={onToggleDesktop} desktopToggleRef={desktopToggleRef} mobileCollapsed={mobileCollapsed} onToggleMobile={onToggleMobile} />;
   }
   if (desktopCollapsed) {
     return <CollapsedPanel cos={cos} mobileCollapsed={mobileCollapsed} onToggleMobile={onToggleMobile} />;
   }
-  return <FullPanel cos={cos} riggedAvatars={riggedAvatars} onToggleDesktop={onToggleDesktop} mobileCollapsed={mobileCollapsed} onToggleMobile={onToggleMobile} />;
+  return <FullPanel cos={cos} riggedAvatars={riggedAvatars} onToggleDesktop={onToggleDesktop} desktopToggleRef={desktopToggleRef} mobileCollapsed={mobileCollapsed} onToggleMobile={onToggleMobile} />;
 }

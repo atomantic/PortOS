@@ -1,3 +1,4 @@
+// @vitest-environment node
 /**
  * App-shell (`client/index.html`) boot guards.
  *

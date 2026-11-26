@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
-import { chmodSync, mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'fs';
+import { chmodSync, mkdtempSync, mkdirSync, readFileSync, rmSync, symlinkSync, writeFileSync } from 'fs';
 import { tmpdir } from 'os';
 import { join } from 'path';
 
@@ -138,83 +138,115 @@ describe('inspectVllmQwenProject', () => {
 
     const project = await inspectVllmQwenProject(env(), envPath());
     expect(project).toMatchObject({ composeFile: 'compose.yaml', hasWeights: false });
-    expect(vllmStartBlockedReason(project)).toContain('no Qwen weights are cached');
+    expect(vllmStartBlockedReason(project)).toContain('selected Qwen weights are missing or incomplete');
   });
 
-  it('clears the block once a Qwen hub-cache entry is present', async () => {
-    mkdirSync(projectDir(), { recursive: true });
-    writeFileSync(join(projectDir(), 'docker-compose.yml'), 'services: {}\n');
-    mkdirSync(join(projectDir(), 'models', 'models--syv-ai--Qwen3.8-27B-w4a16'), { recursive: true });
+  const base = 'Qwen3.8-27B-W4A16-AutoRound';
+  const revision = '1'.repeat(40);
+  const otherRevision = '2'.repeat(40);
+  const shard = 'model-00001-of-00001.safetensors';
+  const preparedTensors = ['lm_head.weight_packed', 'model.embed_tokens.weight_packed',
+    'mtp.layers.0.mlp.down_proj.weight_packed', 'mtp.draft_lm_head.weight_packed'];
 
-    const project = await inspectVllmQwenProject(env(), envPath());
-    expect(project.hasWeights).toBe(true);
-    expect(project.weightsRoot).toBe(join(projectDir(), 'models'));
-    expect(vllmStartBlockedReason(project)).toBeNull();
+  function writeCheckpoint(dir, tensors = preparedTensors) {
+    mkdirSync(dir, { recursive: true });
+    for (const name of ['config.json', 'tokenizer.json', 'tokenizer_config.json']) {
+      writeFileSync(join(dir, name), '{}');
+    }
+    const weightMap = Object.fromEntries(tensors.map((name) => [name, shard]));
+    writeFileSync(join(dir, 'model.safetensors.index.json'), JSON.stringify({ weight_map: weightMap }));
+    writeFileSync(join(dir, 'mtp_draft_vocab_ids.pt'), 'vocab');
+    const header = Buffer.from(JSON.stringify({ weight: { dtype: 'U8', shape: [1], data_offsets: [0, 1] } }));
+    const length = Buffer.alloc(8);
+    length.writeBigUInt64LE(BigInt(header.length));
+    writeFileSync(join(dir, shard), Buffer.concat([length, header, Buffer.of(1)]));
+  }
+
+  function writeProject(settings = '') {
+    mkdirSync(projectDir(), { recursive: true });
+    writeFileSync(join(projectDir(), 'compose.yaml'), 'services: {}\n');
+    writeFileSync(join(projectDir(), '.env'), settings);
+  }
+
+  it('checks the configured models mount instead of accepting a complete default directory', async () => {
+    writeProject('MODELS_DIR="./elsewhere" # mounted by Compose\n');
+    writeCheckpoint(join(projectDir(), 'models', base));
+    const elsewhere = join(projectDir(), 'elsewhere');
+    mkdirSync(elsewhere);
+    expect((await inspectVllmQwenProject(env(), envPath())).hasWeights).toBe(false);
+
+    writeCheckpoint(join(elsewhere, base));
+    expect(await inspectVllmQwenProject(env(), envPath()))
+      .toMatchObject({ hasWeights: true, weightsRoot: elsewhere });
+
+    const override = join(root, 'override');
+    writeCheckpoint(join(override, base));
+    expect(await inspectVllmQwenProject(env({ [VLLM_WEIGHTS_DIR_ENV]: override }), envPath()))
+      .toMatchObject({ hasWeights: true, weightsRoot: override });
   });
 
-  it('clears the block for the local-dir layout upstream prepare actually writes', async () => {
-    // `docker/prepare.sh` runs `hf download … --local-dir models/<model>`, so a
-    // prepared machine has no `models--…` hub entry at all.
-    mkdirSync(projectDir(), { recursive: true });
-    writeFileSync(join(projectDir(), 'docker-compose.yml'), 'services: {}\n');
-    const model = join(projectDir(), 'models', 'Qwen3.8-27B-W4A16-AutoRound');
-    mkdirSync(model, { recursive: true });
-    writeFileSync(join(model, 'model.safetensors.index.json'), '{"weight_map":{}}\n');
+  it('honors an explicit base selection when the auto-selected fast variant is incomplete', async () => {
+    writeProject();
+    writeCheckpoint(join(projectDir(), 'models', base));
+    const fast = join(projectDir(), 'models', `${base}-fast`);
+    writeCheckpoint(fast);
+    rmSync(join(fast, shard));
+    expect((await inspectVllmQwenProject(env(), envPath())).hasWeights).toBe(false);
 
-    const project = await inspectVllmQwenProject(env(), envPath());
-    expect(project.hasWeights).toBe(true);
-    expect(project.weightsRoot).toBe(join(projectDir(), 'models'));
-    expect(vllmStartBlockedReason(project)).toBeNull();
-  });
+    writeProject(`MODEL=models/${base}\n`);
+    expect((await inspectVllmQwenProject(env(), envPath())).hasWeights).toBe(true);
 
-  it('accepts a single-file model directory (the DFlash2 drafter shape)', async () => {
-    mkdirSync(projectDir(), { recursive: true });
-    writeFileSync(join(projectDir(), 'docker-compose.yml'), 'services: {}\n');
-    const model = join(projectDir(), 'models', 'Qwen3.8-27B-DFlash2-W4A16');
-    mkdirSync(model, { recursive: true });
-    writeFileSync(join(model, 'model.safetensors'), 'tensors\n');
-
+    writeProject();
+    writeCheckpoint(fast);
     expect((await inspectVllmQwenProject(env(), envPath())).hasWeights).toBe(true);
   });
 
-  it('does not count a qwen-named directory that holds no weight file', async () => {
-    // Name matching alone would report a notes folder as a prepared model.
-    mkdirSync(projectDir(), { recursive: true });
-    writeFileSync(join(projectDir(), 'docker-compose.yml'), 'services: {}\n');
-    const notes = join(projectDir(), 'models', 'qwen-notes');
-    mkdirSync(notes, { recursive: true });
-    writeFileSync(join(notes, 'README.md'), 'not weights\n');
+  it('rejects a raw base checkpoint before prepare has finished and a truncated shard', async () => {
+    writeProject();
+    const baseDir = join(projectDir(), 'models', base);
+    writeCheckpoint(baseDir, ['lm_head.weight']);
+    expect((await inspectVllmQwenProject(env(), envPath())).hasWeights).toBe(false);
 
+    writeCheckpoint(baseDir);
+    const weightPath = join(baseDir, shard);
+    writeFileSync(weightPath, readFileSync(weightPath).subarray(0, -1));
     expect((await inspectVllmQwenProject(env(), envPath())).hasWeights).toBe(false);
   });
 
-  it('ignores a cache holding only unrelated models', async () => {
-    mkdirSync(projectDir(), { recursive: true });
-    writeFileSync(join(projectDir(), 'docker-compose.yml'), 'services: {}\n');
-    mkdirSync(join(projectDir(), 'models', 'models--meta-llama--Llama-3.1-8B'), { recursive: true });
-
+  it('requires the DFlash2 drafter when the prepared base selects it', async () => {
+    writeProject('SPEC=dflash2\n');
+    writeCheckpoint(join(projectDir(), 'models', base));
     expect((await inspectVllmQwenProject(env(), envPath())).hasWeights).toBe(false);
+
+    const draft = join(projectDir(), 'models', 'Qwen3.8-27B-DFlash2-W4A16');
+    writeCheckpoint(draft);
+    writeFileSync(join(draft, 'model.safetensors'), readFileSync(join(draft, shard)));
+    rmSync(join(draft, 'model.safetensors.index.json'));
+    expect((await inspectVllmQwenProject(env(), envPath())).hasWeights).toBe(true);
   });
 
-  it('honors the weights-directory override, for a cache PortOS cannot otherwise see', async () => {
-    mkdirSync(projectDir(), { recursive: true });
-    writeFileSync(join(projectDir(), 'docker-compose.yml'), 'services: {}\n');
-    const cache = join(root, 'elsewhere', 'hub');
-    mkdirSync(join(cache, 'models--syv-ai--qwen3.8-27b'), { recursive: true });
-
-    const project = await inspectVllmQwenProject(env({ [VLLM_WEIGHTS_DIR_ENV]: cache }), envPath());
-    expect(project).toMatchObject({ hasWeights: true, weightsRoot: cache });
-  });
-
-  it('finds an HF_HOME hub cache', async () => {
-    mkdirSync(projectDir(), { recursive: true });
-    writeFileSync(join(projectDir(), 'docker-compose.yml'), 'services: {}\n');
+  it('checks the selected Hub snapshot and follows weight blob links', async () => {
+    writeProject('MODEL=example/qwen\nHF_HUB_OFFLINE=1\nVERIFY=0\n');
     const hfHome = join(root, 'hf');
-    mkdirSync(join(hfHome, 'hub', 'models--Qwen--Qwen3.8-27B'), { recursive: true });
+    const cache = join(hfHome, 'hub');
+    const repo = join(cache, 'models--example--qwen');
+    const snapshot = join(repo, 'snapshots', revision);
+    writeCheckpoint(snapshot);
+    writeCheckpoint(join(repo, 'snapshots', otherRevision));
+    mkdirSync(join(repo, 'refs'));
+    mkdirSync(join(repo, 'blobs'));
+    writeFileSync(join(repo, 'refs', 'main'), revision);
+    const blob = join(repo, 'blobs', 'weight');
+    writeFileSync(blob, readFileSync(join(snapshot, shard)));
+    rmSync(join(snapshot, shard));
+    symlinkSync(join('..', '..', 'blobs', 'weight'), join(snapshot, shard), 'file');
 
-    const project = await inspectVllmQwenProject(env({ HF_HOME: hfHome }), envPath());
-    expect(project.hasWeights).toBe(true);
+    expect(await inspectVllmQwenProject(env({ HF_HOME: hfHome }), envPath()))
+      .toMatchObject({ hasWeights: true, weightsRoot: cache });
+    rmSync(blob);
+    expect((await inspectVllmQwenProject(env({ HF_HOME: hfHome }), envPath())).hasWeights).toBe(false);
   });
+
 });
 
 describe('vllmProjectSetupState', () => {

@@ -62,6 +62,8 @@ let skipReason = '';
 }
 
 const runDb = requireDbOrSkip('services/musicVideo/projectsDB.db.test', dbReady, skipReason);
+const { applySceneUpdate } = await import('./projectsLogic.js');
+const { appendSceneTakes } = await import('./takes.js');
 
 afterAll(() => rmSync(testState.dataRoot, { recursive: true, force: true }));
 
@@ -183,10 +185,12 @@ describe.skipIf(!runDb)('music video projects DB adapter', () => {
   it('round-trips dependency evidence and selective invalidation through PostgreSQL and peer merge', async () => {
     const created = await db.createProject({ name: 'Example dependency record' });
     await db.updateProject(created.id, { scenes: [{ sceneId: 'a', startSec: 0, endSec: 5, referenceImageId: 'plate.png', videoHistoryId: null, takes: [] }] });
-    await db.appendSceneTakes(created.id, 'a', [{ kind: 'video', assetId: 'clip-example', source: 'generated', sourceImageId: 'plate.png' }]);
+    await db.mutateProjectRecord(created.id, (current) => appendSceneTakes(current, 'a', [
+      { kind: 'video', assetId: 'clip-example', source: 'generated', sourceImageId: 'plate.png' },
+    ]));
     const before = await db.getProject(created.id);
     await db.mutateProjectRecord(created.id, (current) => ({ project: { ...current, excerpts: [{ id: 'excerpt-example', status: 'complete', dependencies: captureMusicVideoEvidence(before) }] } }));
-    await db.updateScene(created.id, 'a', { referenceImageId: 'new-plate.png' });
+    await db.mutateProjectRecord(created.id, (current) => applySceneUpdate(current, 'a', { referenceImageId: 'new-plate.png' }));
     const stale = await db.getProject(created.id);
     expect(musicVideoDependencyImpact(stale).shots.map((shot) => shot.sceneId)).toEqual(['a']);
     expect(stale.excerpts[0].dependencies.version).toBe(1);

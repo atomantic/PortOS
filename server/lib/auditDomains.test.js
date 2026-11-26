@@ -32,8 +32,8 @@ describe('isPriorityExemptAuditType', () => {
 });
 
 describe('QUALITY_RECENCY_HALF_LIFE_DAYS', () => {
-  it('stays one value shared by quality scoring and feature priority', () => {
-    expect(QUALITY_RECENCY_HALF_LIFE_DAYS).toBe(14);
+  it('uses the same seven-day decay in the quality rollup', () => {
+    expect(QUALITY_RECENCY_HALF_LIFE_DAYS).toBe(7);
     expect(qualityHalfLife).toBe(QUALITY_RECENCY_HALF_LIFE_DAYS);
   });
 });

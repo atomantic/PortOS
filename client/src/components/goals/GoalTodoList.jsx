@@ -1,3 +1,4 @@
+import { useId } from 'react';
 import { ListTodo, Check, CircleDot, Trash2 } from 'lucide-react';
 import InlineConfirmRow from '../ui/InlineConfirmRow';
 import { useConfirmDelete } from '../../hooks/useConfirmDelete';
@@ -7,6 +8,7 @@ export default function GoalTodoList({
   goal, pendingActions, newTodoTitle, setNewTodoTitle, newTodoPriority, setNewTodoPriority,
   newTodoEstimate, setNewTodoEstimate, todoSubmitting, handleAddTodo, handleToggleTodo, handleDeleteTodo
 }) {
+  const statusId = useId();
   const { isConfirming, requestDelete, cancelDelete, confirmDelete } = useConfirmDelete();
   return (
     <div>
@@ -25,7 +27,9 @@ export default function GoalTodoList({
                 type="button"
                 onClick={() => handleToggleTodo(todo)}
                 disabled={pendingActions.has(`todo:${todo.id}`)}
-                aria-label={todo.status === 'done' ? `Mark ${todo.title} as pending` : `Mark ${todo.title} as done`}
+                aria-label={`Mark ${todo.title} as done`}
+                aria-pressed={todo.status === 'done'}
+                aria-describedby={todo.status === 'in-progress' ? `${statusId}-${todo.id}` : undefined}
                 className="group/toggle pointer-coarse:min-h-11 pointer-coarse:min-w-11 flex items-center justify-center shrink-0 disabled:opacity-50"
               >
                 <span aria-hidden="true" className={`w-4 h-4 rounded border flex items-center justify-center ${
@@ -39,6 +43,9 @@ export default function GoalTodoList({
                   {todo.status === 'in-progress' && <CircleDot className="w-2.5 h-2.5" />}
                 </span>
               </button>
+              {todo.status === 'in-progress' && (
+                <span id={`${statusId}-${todo.id}`} className="sr-only">Currently in progress</span>
+              )}
               <span className={`flex-1 ${todo.status === 'done' ? 'text-gray-500 line-through' : 'text-gray-300'}`}>
                 {todo.title}
               </span>
@@ -52,7 +59,7 @@ export default function GoalTodoList({
               <button
                 onClick={() => requestDelete(todo.id)}
                 className="min-h-[44px] min-w-[44px] inline-flex items-center justify-center p-0.5 text-gray-700 hover:text-red-400 opacity-40 [@media(hover:hover)]:sm:opacity-0 sm:group-hover:opacity-100 focus-visible:opacity-100 shrink-0"
-                title="Delete" aria-label="Delete"
+                title="Delete" aria-label={`Delete todo ${todo.title}`}
               >
                 <Trash2 className="w-3 h-3" />
               </button>

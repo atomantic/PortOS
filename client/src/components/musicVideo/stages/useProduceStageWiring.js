@@ -1,3 +1,4 @@
+import { useRef } from 'react';
 import toast from '../../ui/Toast';
 import {
   addMusicVideoScene,
@@ -19,6 +20,7 @@ import useMusicVideoSceneMedia from '../../../hooks/useMusicVideoSceneMedia.js';
 import useMusicVideoTakes from './useMusicVideoTakes.js';
 import useMusicVideoRevisions from './useMusicVideoRevisions.js';
 import useMusicVideoProduction from './useMusicVideoProduction.js';
+import { createClipTimingWrites, isClipTimingPatch } from './clipTimingWrites.js';
 import { compositionDraft } from '../compositionDraft.js';
 import { isLtx2FamilyRuntime } from '../../../lib/runnerFamilies';
 import { mergeCameoScenes } from '../../../lib/musicVideoCameos.js';
@@ -45,7 +47,11 @@ export default function useProduceStageWiring({
     // Renders that finished while the socket was down missed their attach events.
     onReconciled: (projectId) => getMusicVideoProject(projectId, { silent: true }).then(replaceProject).catch(() => {}),
   });
-  const takes = useMusicVideoTakes({ project: selected, applyScenePatch: patchScene, patchProject, reloadProject: mergeFetchedProject, applyEdit });
+  const timingWrites = useRef(null);
+  timingWrites.current ??= createClipTimingWrites();
+  const takes = useMusicVideoTakes({ project: selected, applyScenePatch: patchScene, patchProject, reloadProject: mergeFetchedProject, applyEdit,
+    beforeWrite: () => timingWrites.current.settled(),
+  });
   // The page's change listener reads through it; the workspace remounts per project.
   takesRef.current = takes;
   // Selective section revision (#8987): regenerate only a draft's flagged
@@ -104,6 +110,7 @@ export default function useProduceStageWiring({
       })
       .catch((err) => {
         replaceProject(snapshot);
+        void reloadOpenProject(snapshot.id);
         toast.error(err?.message || 'Could not change the shots');
       });
   };
@@ -116,11 +123,22 @@ export default function useProduceStageWiring({
     // Reads the current project: shot sheet Apply calls this repeatedly from one retained closure.
     patchProject(selected.id, (project) => ({ scenes: project.scenes?.map((s) => (s.sceneId === sceneId ? { ...s, ...patch } : s)) }));
   };
-  const saveScene = (sceneId, patch) => {
-    return saveSceneFields(sceneId, patch)
-      .then(() => { Object.keys(patch).forEach((k) => unsavedSceneFields.current.get(sceneId)?.delete(k)); return true; })
-      .catch((err) => { toast.error(err?.message || 'Failed to save scene'); return false; });
+  const persistScene = async (sceneId, patch) => {
+    try {
+      await saveSceneFields(sceneId, patch);
+      for (const field of Object.keys(patch)) {
+        if (!timingWrites.current.hasNewerField(sceneId, field)) unsavedSceneFields.current.get(sceneId)?.delete(field);
+      }
+      return true;
+    } catch (err) {
+      toast.error(err?.message || 'Failed to save scene');
+      return false;
+    }
   };
+
+  const saveScene = (sceneId, patch) => isClipTimingPatch(patch)
+    ? timingWrites.current.enqueue(sceneId, patch, persistScene)
+    : persistScene(sceneId, patch);
 
   const setSceneDone = (sceneId, checked) => {
     const scene = selected.scenes?.find((entry) => entry.sceneId === sceneId);

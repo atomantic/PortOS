@@ -105,7 +105,7 @@ export function markPoolAssets(project, keys, mark, options = {}) {
   }
 
   const bad = new Set(keys);
-  if (options.keepInUse === true || options.modifier === 'keepInUse') {
+  if (options.keepInUse === true) {
     const changed = [];
     const scenes = (project.scenes || []).map((scene) => {
       if (!Array.isArray(scene.takes)) return scene;
@@ -121,193 +121,72 @@ export function markPoolAssets(project, keys, mark, options = {}) {
 
   const changed = [];
   const changes = [];
-  const scenes = (project.scenes || []).map((scene, sceneIndex) => {
-    let current = { ...scene };
+  const scenes = (project.scenes || []).map((scene) => {
+    const current = { ...scene };
     let takes = Array.isArray(scene.takes) ? [...scene.takes] : [];
     let modified = false;
-    let takesModified = false;
-    const shotNumber = scene.order !== undefined ? scene.order + 1 : sceneIndex + 1;
 
-    const findTake = (kind, assetId) => takes.find((t) => t.kind === kind && t.assetId === assetId);
+    const fallBackSelection = (slot, { force = false, extraCandidate, reason } = {}) => {
+      const field = TAKE_SLOT[slot];
+      const markKind = KIND_OF_SLOT[slot];
+      const fromAssetId = scene[field];
+      const newlyBad = bad.has(`${markKind}:${fromAssetId}`);
+      if (!fromAssetId || (!newlyBad && !force)) return;
 
-    // 1. Selected start frame: image
-    if (scene.referenceImageId && bad.has(`image:${scene.referenceImageId}`)) {
-      const oldAssetId = scene.referenceImageId;
-      const oldTake = findTake('image', oldAssetId);
-      const candidate = [...takes].reverse().find((t) =>
-        t.kind === 'image' &&
-        t.assetId !== oldAssetId &&
-        t.status !== 'rejected' &&
-        !bad.has(`image:${t.assetId}`) &&
-        assetMarks[`image:${t.assetId}`] !== 'bad',
+      const candidate = takes.findLast(take =>
+        take.kind === slot &&
+        take.assetId !== fromAssetId &&
+        take.status !== 'rejected' &&
+        assetMarks[`${markKind}:${take.assetId}`] !== 'bad' &&
+        (!extraCandidate || extraCandidate(take)),
       );
-
+      const previousTakeId = candidate ? takes.find(take => take.kind === slot && take.assetId === fromAssetId)?.takeId || null : null;
+      modified = true;
       if (candidate) {
-        current.referenceImageId = candidate.assetId;
-        takes = takes.map((t) => (t.kind === 'image' && t.assetId === oldAssetId ? { ...t, status: 'rejected' } : t));
-        modified = true;
-        takesModified = true;
-        changes.push({
-          sceneId: scene.sceneId,
-          shotNumber,
-          label: scene.label || null,
-          action: 'moved',
-          moved: true,
-          role: 'image',
-          slot: 'image',
-          kind: 'image',
-          fromAssetId: oldAssetId,
-          toAssetId: candidate.assetId,
-          toTakeId: candidate.takeId,
-          previousTakeId: oldTake?.takeId || null,
-        });
+        current[field] = candidate.assetId;
+        if (newlyBad) {
+          takes = takes.map(take => take.kind === slot && take.assetId === fromAssetId ? { ...take, status: 'rejected' } : take);
+        }
       } else {
         current.selectedTakeMarkedBad = true;
-        modified = true;
-        changes.push({
-          sceneId: scene.sceneId,
-          shotNumber,
-          label: scene.label || null,
-          action: 'flagged',
-          flagged: true,
-          role: 'image',
-          slot: 'image',
-          kind: 'image',
-          fromAssetId: oldAssetId,
-          toAssetId: oldAssetId,
-          assetId: oldAssetId,
-          takeId: oldTake?.takeId || null,
-        });
       }
-    }
+      changes.push({
+        sceneId: scene.sceneId,
+        label: scene.label || null,
+        action: candidate ? 'moved' : 'flagged',
+        slot,
+        fromAssetId,
+        toAssetId: candidate ? candidate.assetId : fromAssetId,
+        toTakeId: candidate?.takeId ?? null,
+        previousTakeId,
+        ...(!candidate && reason && assetMarks[`${markKind}:${fromAssetId}`] !== 'bad' && { reason }),
+      });
+    };
 
-    // 2. Selected end frame: endImage
-    if (scene.endImageId && bad.has(`image:${scene.endImageId}`)) {
-      const oldAssetId = scene.endImageId;
-      const oldTake = findTake('endImage', oldAssetId);
-      const candidate = [...takes].reverse().find((t) =>
-        t.kind === 'endImage' &&
-        t.assetId !== oldAssetId &&
-        t.status !== 'rejected' &&
-        !bad.has(`image:${t.assetId}`) &&
-        assetMarks[`image:${t.assetId}`] !== 'bad',
-      );
-
-      if (candidate) {
-        current.endImageId = candidate.assetId;
-        takes = takes.map((t) => (t.kind === 'endImage' && t.assetId === oldAssetId ? { ...t, status: 'rejected' } : t));
-        modified = true;
-        takesModified = true;
-        changes.push({
-          sceneId: scene.sceneId,
-          shotNumber,
-          label: scene.label || null,
-          action: 'moved',
-          moved: true,
-          role: 'endImage',
-          slot: 'endImage',
-          kind: 'endImage',
-          fromAssetId: oldAssetId,
-          toAssetId: candidate.assetId,
-          toTakeId: candidate.takeId,
-          previousTakeId: oldTake?.takeId || null,
-        });
-      } else {
-        current.selectedTakeMarkedBad = true;
-        modified = true;
-        changes.push({
-          sceneId: scene.sceneId,
-          shotNumber,
-          label: scene.label || null,
-          action: 'flagged',
-          flagged: true,
-          role: 'endImage',
-          slot: 'endImage',
-          kind: 'endImage',
-          fromAssetId: oldAssetId,
-          toAssetId: oldAssetId,
-          assetId: oldAssetId,
-          takeId: oldTake?.takeId || null,
-        });
-      }
-    }
-
-    // 3. Selected clip: video
-    const changedFrame = current.referenceImageId !== scene.referenceImageId;
-    const mismatchedClip = changedFrame && selectedVideoFrameMismatch({ ...current, takes });
-    if (scene.videoHistoryId && (bad.has(`video:${scene.videoHistoryId}`) || mismatchedClip)) {
-      const oldAssetId = scene.videoHistoryId;
-      const oldTake = findTake('video', oldAssetId);
-      const currentFrame = current.referenceImageId;
-      const candidate = [...takes].reverse().find((t) =>
-        t.kind === 'video' &&
-        t.assetId !== oldAssetId &&
-        t.status !== 'rejected' &&
-        !bad.has(`video:${t.assetId}`) &&
-        assetMarks[`video:${t.assetId}`] !== 'bad' &&
-        Boolean(currentFrame) &&
-        takeSourceImageId(t) === currentFrame,
-      );
-
-      if (candidate) {
-        current.videoHistoryId = candidate.assetId;
-        takes = takes.map((t) => (t.kind === 'video' && t.assetId === oldAssetId && bad.has(`video:${oldAssetId}`) ? { ...t, status: 'rejected' } : t));
-        modified = true;
-        takesModified = true;
-        changes.push({
-          sceneId: scene.sceneId,
-          shotNumber,
-          label: scene.label || null,
-          action: 'moved',
-          moved: true,
-          role: 'video',
-          slot: 'video',
-          kind: 'video',
-          fromAssetId: oldAssetId,
-          toAssetId: candidate.assetId,
-          toTakeId: candidate.takeId,
-          previousTakeId: oldTake?.takeId || null,
-        });
-      } else {
-        current.selectedTakeMarkedBad = true;
-        modified = true;
-        changes.push({
-          sceneId: scene.sceneId,
-          shotNumber,
-          label: scene.label || null,
-          action: 'flagged',
-          flagged: true,
-          role: 'video',
-          slot: 'video',
-          kind: 'video',
-          fromAssetId: oldAssetId,
-          toAssetId: oldAssetId,
-          assetId: oldAssetId,
-          takeId: oldTake?.takeId || null,
-        });
-      }
-    }
+    fallBackSelection('image');
+    fallBackSelection('endImage');
+    const currentFrame = current.referenceImageId;
+    fallBackSelection('video', {
+      force: currentFrame !== scene.referenceImageId && selectedVideoFrameMismatch({ ...current, takes }),
+      extraCandidate: take => Boolean(currentFrame) && takeSourceImageId(take) === currentFrame,
+      reason: 'clip-frame-mismatch',
+    });
 
     // 4. Reject unselected takes whose assets are bad
-    let unselectedRejected = false;
     takes = takes.map((take) => {
       const isSelected = current[TAKE_SLOT[take.kind]] === take.assetId;
       if (!isSelected && take.status !== 'rejected' && bad.has(`${KIND_OF_SLOT[take.kind]}:${take.assetId}`)) {
-        unselectedRejected = true;
+        modified = true;
         return { ...take, status: 'rejected' };
       }
       return take;
     });
-    if (unselectedRejected) {
-      modified = true;
-      takesModified = true;
-    }
 
     // 5. Clear selectedTakeMarkedBad if all selected slots are clean
     if (current.selectedTakeMarkedBad) {
       const isBad = (slot, field) => {
         const ref = current[field];
-        return Boolean(ref && (bad.has(`${KIND_OF_SLOT[slot]}:${ref}`) || assetMarks[`${KIND_OF_SLOT[slot]}:${ref}`] === 'bad'));
+        return Boolean(ref && assetMarks[`${KIND_OF_SLOT[slot]}:${ref}`] === 'bad');
       };
       const stillBad = Object.entries(TAKE_SLOT).some(([slot, field]) => isBad(slot, field)) || selectedVideoFrameMismatch({ ...current, takes });
       if (!stillBad) {
@@ -316,11 +195,6 @@ export function markPoolAssets(project, keys, mark, options = {}) {
       }
     }
 
-    if (takesModified) {
-      current.takes = takes;
-      changed.push(current);
-      return current;
-    }
     if (modified) {
       current.takes = takes;
       changed.push(current);

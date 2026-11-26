@@ -86,13 +86,50 @@ clean zero-change pass; `on-findings` requires a clean pass that added commits;
 
 Before every reviewer call, capture its exact input HEAD. After a validated clean/findings response, persist that captured SHA as `LOCAL_REVIEWED_HEAD_SHA`; retain it through remediation. Failed/unavailable attempts do not update it. If no reviewer produced a validated result, explicitly persist an empty value, which records unavailable inspection rather than inventing a reviewed commit. This is valid for availability-only `review-blocked`, or `clean` when only optional availability/inconclusive outcomes remain; any triggered stop, including `partial`, requires an actual inspection.
 
-After base preparation and only for a fresh phase, initialize `LOCAL_PHASE_START_SHA` to HEAD, `LOCAL_OVERALL_STATUS=incomplete`, `LOCAL_STOP_TRIGGERED=false`, `LOCAL_STOP_INDEX=-1`, `LOCAL_STOP_REVIEW_COMMITS=-1`, `LOCAL_PHASE_COMMITS=0`, and empty inspection/completion heads in the private state file. Stop on initialization failure; never reset a resumed phase.
+Set `REVIEW_WORKTREE` to the absolute worktree path and `REVIEW_BRANCH` to the
+branch named by the claim workflow. For ordinary review, set both from the
+checkout and branch selected for the delivery. Keep that target across shell
+calls. Set `REVIEW_LIFECYCLE` to the absolute path of the installation's
+`server/scripts/local-review-lifecycle.mjs`. Run the commands from inside the
+selected worktree. The writer checks the actual checkout and branch before
+resolving either private file.
 
-After remediation, record `LOCAL_REMEDIATED_HEAD_SHA=$(git rev-parse HEAD)` and persist all fields together (reload existing state across shell calls). Completion validates the aggregate status, exact remediation head, phase start/history and commit counts, coherent stop fields (including an explicit triggered stop for `partial`), and that the actual inspection SHA lies within the phase history. A supplied clean `portos-review-status` inspection head must agree; malformed/duplicate evidence is refused without replacing existing proof:
+After base preparation, initialize the phase only for a fresh review.
+`init-phase` refuses existing state. `init-status` creates a clean baseline only
+when status is absent, so interrupted reviews keep their recorded status.
 
 ```bash
-LOCAL_REVIEW_STATE_FILE="$(git rev-parse --git-path portos-local-review-state)"
-printf 'LOCAL_PHASE_START_SHA=%s\nLOCAL_OVERALL_STATUS=%s\nLOCAL_STOP_TRIGGERED=%s\nLOCAL_STOP_INDEX=%s\nLOCAL_STOP_REVIEW_COMMITS=%s\nLOCAL_PHASE_COMMITS=%s\nLOCAL_REVIEWED_HEAD_SHA=%s\nLOCAL_REMEDIATED_HEAD_SHA=%s\n' "$LOCAL_PHASE_START_SHA" "$LOCAL_OVERALL_STATUS" "$LOCAL_STOP_TRIGGERED" "$LOCAL_STOP_INDEX" "$LOCAL_STOP_REVIEW_COMMITS" "$LOCAL_PHASE_COMMITS" "$LOCAL_REVIEWED_HEAD_SHA" "$LOCAL_REMEDIATED_HEAD_SHA" > "$LOCAL_REVIEW_STATE_FILE"
+node "$REVIEW_LIFECYCLE" init-phase "$REVIEW_WORKTREE" "$REVIEW_BRANCH" || exit 1
+node "$REVIEW_LIFECYCLE" init-status "$REVIEW_WORKTREE" "$REVIEW_BRANCH" || exit 1
+```
+
+On resume, reuse the saved phase and reviewer outcomes. Use `write-phase` to
+update the applicable fields as each reviewer finishes. Omitted fields keep
+their saved values. Only a validated review updates `LOCAL_REVIEWED_HEAD_SHA`,
+using the SHA captured before that call. When required review is unavailable,
+record the blocked aggregate in phase state and the separate worktree status.
+
+```bash
+node "$REVIEW_LIFECYCLE" write-phase "$REVIEW_WORKTREE" "$REVIEW_BRANCH" LOCAL_OVERALL_STATUS=review-blocked || exit 1
+node "$REVIEW_LIFECYCLE" write-status "$REVIEW_WORKTREE" "$REVIEW_BRANCH" review-blocked || exit 1
+```
+
+After the required review resumes successfully, use `write-status` with
+`clean` and the recorded clean inspection SHA when available.
+
+After remediation, reload the saved phase fields, compute
+`LOCAL_PHASE_COMMITS` from the phase start, and persist the aggregate and stop
+fields with the completion head. Completion checks phase history, commit
+counts, stop fields and inspection provenance. A supplied clean status
+inspection head must agree with the phase record.
+
+```bash
+LOCAL_REMEDIATED_HEAD_SHA=$(git rev-parse HEAD) || exit 1
+node "$REVIEW_LIFECYCLE" write-phase "$REVIEW_WORKTREE" "$REVIEW_BRANCH" \
+  "LOCAL_OVERALL_STATUS=$LOCAL_OVERALL_STATUS" \
+  "LOCAL_STOP_TRIGGERED=$LOCAL_STOP_TRIGGERED" "LOCAL_STOP_INDEX=$LOCAL_STOP_INDEX" \
+  "LOCAL_STOP_REVIEW_COMMITS=$LOCAL_STOP_REVIEW_COMMITS" "LOCAL_PHASE_COMMITS=$LOCAL_PHASE_COMMITS" \
+  "LOCAL_REMEDIATED_HEAD_SHA=$LOCAL_REMEDIATED_HEAD_SHA" || exit 1
 ```
 
 A failed write blocks publication. Then use the `complete` command above with

@@ -128,6 +128,7 @@ export function pickCliProvider(providers, config = {}) {
  * @param {object|null} [args.bootstrapEnv] - Credential-command output, filtered by buildCliChildEnv.
  * @param {boolean} [args.exactPins] - Per-call model/effort selections override saved CLI argv pins.
  * @param {string} [args.safetyProfile] - Optional maintained no-tool profile. Refuses unsupported providers and extra argv; both argv and environment use the same profile.
+ * @param {() => boolean} [args.reserveCodexProbeRetry] - Claim one bounded preparation retry from the isolated review's budget.
  * @param {boolean} [args.codeReview] - Code review only, with the no-tool `safetyProfile`: the argv is the vendor's strongest enforced reviewer mode (`buildCodeReviewSpawnConfig`), or its ordinary argv when it maintains none — the caller confines that run to a scratch directory. The environment keeps the no-tool allowlist either way.
  * @returns {Promise<{ text: string, exitCode: number, stderr: string, partial: boolean, stderrTail: string } | { error: string, exitCode?: number, stderr?: string, stderrTail?: string }>}
  */
@@ -147,7 +148,13 @@ export function runCliProviderPrompt(args = {}) {
   if ((args.executionOptions !== undefined || (Object.keys(provider.executionOptions || {}).length > 0 && !provider.executionOptionAttribution))) {
     const preparationStarted = Date.now();
     return import('./provider/providerExecutionOptions.js')
-      .then(({ prepareExecutionOptions }) => prepareExecutionOptions(provider, model ?? provider.defaultModel, args.executionOptions, 'run', { cwd, timeoutMs }))
+      .then(({ prepareExecutionOptions }) => prepareExecutionOptions(provider, model ?? provider.defaultModel, args.executionOptions, 'run', {
+        cwd, timeoutMs,
+        ...(args.reserveCodexProbeRetry && codeReview && safetyProfile ? {
+          codexProbeDeadline: preparationStarted + Math.min(timeoutMs, 30_000),
+          reserveCodexProbeRetry: args.reserveCodexProbeRetry,
+        } : {}),
+      }))
       .then((prepared) => {
         const remaining = timeoutMs - (Date.now() - preparationStarted);
         if (remaining <= 0) return { error: 'Caller runtime budget exhausted before CLI dispatch', code: 'RUNTIME_BUDGET_EXHAUSTED', partial: false };

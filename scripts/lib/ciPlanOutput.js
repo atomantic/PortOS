@@ -7,6 +7,7 @@
 
 import { writeStepOutput, writeStepSummary } from './githubOutput.js';
 import { selectWorkflowFiles } from './actionlint.js';
+import { FULL_BROWSER_SHARD_COUNT } from './browserSuites.js';
 import { WINDOWS_CONTRACT_TESTS } from './ciPlanRules.js';
 
 // Explicit selectors one runner carries before its scoped plan fans out across
@@ -30,7 +31,7 @@ export const CLIENT_BROWSER_FANOUT_SUITES = 4;
 // ci.yml because a job-level `if` cannot read the matrix context, so the
 // planner emits the matrix for scoped plans too. Sizing rationale:
 // docs/CI_TEST_SELECTION.md "Full-suite sharding".
-export const FULL_SUITE_SHARDS = { server: 2, client: 4, windows: 1 };
+export const FULL_SUITE_SHARDS = { server: 2, client: 6, browser: FULL_BROWSER_SHARD_COUNT, windows: 1 };
 
 /** Matrix values for one runner: every shard on a full run, one otherwise. */
 export const shardIndexes = (mode, count) => (

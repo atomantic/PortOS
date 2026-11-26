@@ -9,12 +9,13 @@
  * remembered on the video so it is not offered again.
  */
 
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Link } from 'react-router';
 import { ArrowLeft, Import, Loader2, Sparkles } from 'lucide-react';
 import PageHeader from '../components/PageHeader';
 import MediaImage from '../components/MediaImage';
 import IngredientPicker from '../components/IngredientPicker';
+import ListLoadError from '../components/ui/ListLoadError';
 import toast from '../components/ui/Toast';
 import { previewMusicVideoCastImport, commitMusicVideoCastImport } from '../services/apiCatalog';
 import { libraryForType } from '../lib/creativeLibraries';
@@ -89,24 +90,36 @@ function ImportRow({ project, item, choice, onChange, onPick }) {
 
 export default function CreativeCastImport() {
   const [projects, setProjects] = useState(null);
+  const [previewPending, setPreviewPending] = useState(true);
+  const [previewError, setPreviewError] = useState(null);
   const [decisions, setDecisions] = useState({});
   const [importing, setImporting] = useState(false);
   const [picking, setPicking] = useState(null);
+  const previewController = useRef(null);
 
-  const load = useCallback(async (signal) => {
-    const data = await previewMusicVideoCastImport({ signal, silent: true }).catch((err) => {
-      if (err?.name !== 'AbortError') toast.error(err?.message || 'Could not load music video cast');
-      return null;
-    });
-    if (signal?.aborted) return;
-    setProjects(Array.isArray(data?.projects) ? data.projects : []);
-    setDecisions({});
+  const load = useCallback(async () => {
+    previewController.current?.abort();
+    const controller = new AbortController();
+    previewController.current = controller;
+    const { signal } = controller;
+    setPreviewPending(true);
+    try {
+      const data = await previewMusicVideoCastImport({ signal, silent: true });
+      if (signal.aborted) return;
+      if (!Array.isArray(data?.projects)) throw new Error('Invalid cast preview response');
+      setProjects(data.projects);
+      setDecisions({});
+      setPreviewError(null);
+    } catch (error) {
+      if (!signal.aborted) setPreviewError(error);
+    } finally {
+      if (!signal.aborted) setPreviewPending(false);
+    }
   }, []);
 
   useEffect(() => {
-    const controller = new AbortController();
-    load(controller.signal);
-    return () => controller.abort();
+    load();
+    return () => previewController.current?.abort();
   }, [load]);
 
   const choiceFor = (project, item) => decisions[decisionKey(project.projectId, item.subjectId)]
@@ -123,6 +136,7 @@ export default function CreativeCastImport() {
     setImporting(true);
     const result = await commitInChunks(selections)
       .catch((err) => { toast.error(err?.message || 'Import failed'); return null; });
+    if (previewController.current?.signal.aborted) return;
     setImporting(false);
     if (!result) return;
     toast.success(`Imported: ${formatCount(result.created)} new, ${formatCount(result.linked)} linked, ${formatCount(result.kept)} kept in their videos`);
@@ -141,8 +155,9 @@ export default function CreativeCastImport() {
           </Link>
         )}
       />
+      {previewError && <ListLoadError what="music video cast" error={previewError} onRetry={load} retrying={previewPending} />}
       {projects === null ? (
-        <div className="flex items-center gap-2 text-sm text-gray-400"><Loader2 size={14} className="animate-spin" aria-hidden="true" /> Reading music videos…</div>
+        !previewError && <div role="status" className="flex items-center gap-2 text-sm text-gray-400"><Loader2 size={14} className="animate-spin" aria-hidden="true" /> Reading music videos…</div>
       ) : projects.length === 0 ? (
         <div className="bg-port-card border border-port-border rounded-lg p-8 text-center text-sm text-gray-400">
           Every music video&apos;s cast, sets and props are already in the catalog.
@@ -156,7 +171,7 @@ export default function CreativeCastImport() {
             <button
               type="button"
               onClick={handleImport}
-              disabled={importing}
+              disabled={importing || previewPending || !!previewError}
               className="inline-flex items-center gap-2 px-4 py-2 min-h-[40px] rounded-lg bg-port-accent text-white text-sm font-medium disabled:opacity-50"
             >
               {importing && <Loader2 size={14} className="animate-spin" aria-hidden="true" />}

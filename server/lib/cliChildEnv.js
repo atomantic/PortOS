@@ -25,6 +25,7 @@ import {
 } from './provider/providerModels.js';
 import { isLocalInstanceEndpoint } from './localEndpoint.js';
 import { SPLASH_CONTEXT } from './splashRuntime.js';
+import { splashHarnessTarget } from './provider/splashHarnessContext.js';
 import { agentGuardEnv } from './agentGuard/index.js';
 import { join, resolve } from 'path';
 import { buildSafeCliBaseEnv, withTorchCompilerCacheEnv } from './processEnv.js';
@@ -95,19 +96,25 @@ function claudeLocalEnvDefaults(provider) {
   };
 }
 
-function claudeContextOverride(provider) {
+function claudeContextOverride(provider, model, splashClaudeMaxTokens) {
   const value = provider?.harnessContext;
-  if (!value || value.model || !Number.isSafeInteger(value.tokens) || !provider.command || !isClaudeCommand(provider.command)
-    || !(provider.envVars?.ANTHROPIC_BASE_URL || provider.envVars?.CLAUDE_CODE_MAX_CONTEXT_TOKENS)) return {};
-  const output = provider.splashBacked === true ? 8192 : isLocalBackedClaude(provider) ? Number(CLAUDE_LOCAL_MAX_OUTPUT_TOKENS) : 32000;
+  const pinnedContext = !value?.model && Number.isSafeInteger(value?.tokens) && provider?.command && isClaudeCommand(provider.command)
+    && (provider.envVars?.ANTHROPIC_BASE_URL || provider.envVars?.CLAUDE_CODE_MAX_CONTEXT_TOKENS);
+  const hasSplashBudget = Number.isSafeInteger(splashClaudeMaxTokens) && splashClaudeMaxTokens > 0
+    && splashHarnessTarget(provider, model)?.kind === 'claude';
+  if (!pinnedContext && !hasSplashBudget) return {};
+  const contextEnv = pinnedContext ? { CLAUDE_CODE_MAX_CONTEXT_TOKENS: String(value.tokens) } : {};
+  if (provider.envVars?.CLAUDE_CODE_MAX_OUTPUT_TOKENS != null) return contextEnv;
+  // Splash clamps a tool-free request to the real context left after its
+  // prompt. A harness pin is not evidence of how much the runtime is serving.
+  if (hasSplashBudget) {
+    return { ...contextEnv, CLAUDE_CODE_MAX_OUTPUT_TOKENS: String(splashClaudeMaxTokens) };
+  }
+  const defaultOutput = provider.splashBacked === true ? 8192 : isLocalBackedClaude(provider) ? Number(CLAUDE_LOCAL_MAX_OUTPUT_TOKENS) : 32000;
   const outputCap = Math.floor(value.tokens / 4);
-  // Leave at least three quarters of a chosen window for input unless the
-  // user explicitly sets a different output reserve.
   return {
-    CLAUDE_CODE_MAX_CONTEXT_TOKENS: String(value.tokens),
-    ...(provider.envVars?.CLAUDE_CODE_MAX_OUTPUT_TOKENS == null && output > outputCap
-      ? { CLAUDE_CODE_MAX_OUTPUT_TOKENS: String(outputCap) }
-      : {}),
+    ...contextEnv,
+    ...(defaultOutput > outputCap ? { CLAUDE_CODE_MAX_OUTPUT_TOKENS: String(outputCap) } : {}),
   };
 }
 
@@ -128,9 +135,10 @@ function claudeContextOverride(provider) {
  * @param {string|null} [options.safetyProfile] - a public-review execution
  *   profile, which hardens the OpenCode config (see `buildOpencodeEnvVars`).
  * @param {boolean} [options.toolFree=false] - apply OpenCode tool restrictions for a private one-shot.
+ * @param {number} [options.splashClaudeMaxTokens] - output allowance for a managed Splash Claude launch.
  * @returns {object} a fresh object holding only these layers
  */
-export function composeProviderEnv({ before = null, provider = null, model = null, extra = null, safetyProfile = null, toolFree = false } = {}) {
+export function composeProviderEnv({ before = null, provider = null, model = null, extra = null, safetyProfile = null, toolFree = false, splashClaudeMaxTokens } = {}) {
   // `authOnly` is an identity-only provider view (`cliProviderAuthDescriptor`),
   // NOT a record to generate env from: generators below sit ABOVE `before` and
   // would overwrite the already-composed env (e.g. OpenCode's declared-models map).
@@ -139,7 +147,7 @@ export function composeProviderEnv({ before = null, provider = null, model = nul
     ...(before || {}),
     ...claudeLocalEnvDefaults(provider),
     ...(provider?.envVars || {}),
-    ...claudeContextOverride(provider),
+    ...claudeContextOverride(provider, model, splashClaudeMaxTokens),
     // Rebuilds OPENCODE_CONFIG_CONTENT with a declared models map so the injected
     // namespaced `--model` is accepted; lands after provider.envVars to override
     // the provider's STATIC copy. `safetyProfile` reaches it because OpenCode's
@@ -282,6 +290,7 @@ export function buildPublicReviewActionsCliEnv(env = {}) {
  * @param {object|null} [options.extra] - see `composeProviderEnv`.
  * @param {object|null} [options.bootstrapEnv] - Explicit credential-command output; only recognized auth keys pass, in ordinary runs or an opted-in no-tool review.
  * @param {boolean} [options.toolFree=false] - see `composeProviderEnv`.
+ * @param {number} [options.splashClaudeMaxTokens] - output allowance for a managed Splash Claude launch.
  * @param {string} [options.openCodeIsolationDir] - private per-run directory for the restricted MTPLX OpenCode recipe.
  * @param {boolean} [options.guard=false] - prepend the pm2 guard shim onto the
  *   final `PATH` so an unrestricted agent can't `pm2 kill` the shared daemon.
@@ -299,11 +308,12 @@ export function buildCliChildEnv({
   bootstrapEnv = null,
   safetyProfile = null,
   toolFree = false,
+  splashClaudeMaxTokens,
   openCodeIsolationDir,
 } = {}) {
   if (toolFree && openCodeIsolationDir) return isolatedMtplxOpenCodeEnv(baseEnv, provider, model, openCodeIsolationDir, cwd);
   const composed = withTorchCompilerCacheEnv(withSpawnCwdEnv(
-    { ...buildSafeCliBaseEnv(baseEnv, provider), ...composeProviderEnv({ before, provider, model, extra, safetyProfile, toolFree }) },
+    { ...buildSafeCliBaseEnv(baseEnv, provider), ...composeProviderEnv({ before, provider, model, extra, safetyProfile, toolFree, splashClaudeMaxTokens }) },
     cwd,
   ), join(resolve(cwd || process.cwd()), '.cache'));
 

@@ -23,6 +23,7 @@ import { getCatalogIdentityAccess } from '../services/catalogDB/identityAccess.j
 import { createHash } from 'crypto';
 import { readMarker, writeMarker } from '../lib/migrationMarker.js';
 import { BIBLE_KINDS, BIBLE_FIELD } from '../lib/storyBible.js';
+import { collectUniverseCanonIngredientIds } from '../lib/catalog/catalogUniverseContext.js';
 import { listUniverses, getUniverse, updateUniverse, ERR_NOT_FOUND } from '../services/universeBuilder.js';
 import * as catalogDB from '../services/catalog/catalogDB.js';
 
@@ -186,19 +187,26 @@ async function migrateUniverse(universe) {
   // upgrade (one per universe with any new promotion), each fanning out to
   // every peer. Peers pick up the ingredient-id stamps on the next normal
   // sync cycle.
-  await updateUniverse(universe.id, (cur) => {
+  const projectionIdentityIds = [];
+  await updateUniverse(universe.id, async (cur) => {
     const patch = {};
+    const stampedIds = new Set();
     for (const { array } of KINDS) {
       const ids = newIds[array];
       if (Object.keys(ids).length === 0) continue;
       const list = Array.isArray(cur[array]) ? cur[array] : [];
       patch[array] = list.map((entry) => {
         const newId = ids[entry?.id];
-        return newId ? { ...entry, ingredientId: newId } : entry;
+        if (!newId) return entry;
+        stampedIds.add(newId);
+        return { ...entry, ingredientId: newId };
       });
     }
-    return Object.keys(patch).length > 0 ? patch : null;
-  }, { silent: true });
+    if (!stampedIds.size) return null;
+    projectionIdentityIds.push(...collectUniverseCanonIngredientIds(cur));
+    for (const id of stampedIds) projectionIdentityIds.push(id, ...await catalogDB.getIngredientIdentityIds(id));
+    return patch;
+  }, { silent: true, canonProjectionIdentityIds: projectionIdentityIds });
 
   return stats;
 }

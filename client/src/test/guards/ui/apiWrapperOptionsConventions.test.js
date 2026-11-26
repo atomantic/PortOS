@@ -116,7 +116,7 @@ function hasSilentKey(blanked, code, start, end) {
  * as a parameter owns its own contract); `api.name(…)` always counts.
  */
 export function silentCalls(src, names) {
-  if (!POSSIBLE_SILENT_KEY.test(src)) return [];
+  if (!src.includes('silent') || !POSSIBLE_SILENT_KEY.test(src)) return [];
   const { code, blanked } = measure('lex', () => blankLiterals(src, { includeCommentOnly: true }));
   const imported = new Set([...code.matchAll(/import\s*\{([^}]*)\}\s*from/g)]
     .flatMap((m) => m[1].split(',').map((part) => part.trim().split(/\s+as\s+/).pop())));

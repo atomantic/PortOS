@@ -16,7 +16,7 @@ import DocumentTemplateCanvas from './DocumentTemplateCanvas.jsx';
 import ImageEffectStill from './ImageEffectStill.jsx';
 import { shotImageUrl } from './sceneImageTreatmentUrls.js';
 import { clipOffsetSec, clipReversed, clipSpeedRate, isSelfDrawnLayer, sceneVisualLayer, stillFrameTransform } from '../../lib/musicVideoLayers.js';
-import { sceneImageEffect, scenePhotoSequence } from '../../lib/musicVideoImageEffects.js';
+import { sceneImageEffect, scenePhotoSequence } from '../../../../server/lib/musicVideo/musicVideoImageEffects.js';
 import { ANIMATIC_FPS, clipTimeAt, playedScene, releaseVideo, useSongFrames } from './animaticTiming.js';
 
 // How far a playing shot's clip may drift from the song before it is put back in step.

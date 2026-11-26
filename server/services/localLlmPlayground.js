@@ -262,11 +262,7 @@ export async function runLocalLlmTest({
       throw new Error(`Local LLM playground refused fallback provider for ${provider.id}`);
     }
 
-    // The timeout controller aborts the upstream read (its plain AbortError keeps
-    // the "Timed out after Xms" mapping below). A client disconnect — the user hit
-    // Cancel, closing the browser fetch — aborts `clientSignal`; `anyAbortSignal`
-    // composes both so whichever fires first tears down the upstream reader instead
-    // of running on to the full timeout with no one listening.
+    // Either the caller's deadline or a browser disconnect ends the upstream request.
     const timeoutHandle = setTimeout(() => timeoutController.abort(), timeoutMs);
     const signal = anyAbortSignal([clientSignal, timeoutController.signal]);
     const text = await streamChatCompletion({
@@ -310,21 +306,13 @@ export async function runLocalLlmTest({
     };
   } catch (err) {
     const endedAt = Date.now();
-    // The response-derived signal is a caller cancellation, not evidence that
-    // the provider hit its wall-clock deadline. `AbortError` is the same error
-    // Undici raises for both signals, so inspect the source controllers before
-    // labeling the run. Misclassifying a browser disconnect as a provider
-    // timeout fires the provider-failure hook and can create a spurious
-    // investigation task (the run still has partial model output).
+    // Some transports wrap a rejected fetch before headers as a status-0
+    // error. The source controller identifies our deadline even in that case.
     const timedOut = timeoutController.signal.aborted;
     const canceled = clientSignal?.aborted === true && !timedOut;
-    // Every abort that isn't the client's is this function's own deadline — the
-    // same condition that names the run "Timed out", so the label and the
-    // reporting decision below can never drift apart.
-    const deadlineHit = !canceled && err?.name === 'AbortError';
     const error = canceled
       ? 'Local LLM test canceled by client'
-      : deadlineHit ? `Timed out after ${timeoutMs}ms` : err?.message || 'Local LLM test failed';
+      : timedOut ? `Timed out after ${timeoutMs}ms` : err?.message || 'Local LLM test failed';
     // A timeout/abort mid-stream still has tokens worth keeping — surface what the
     // model already streamed (attached to the error by streamChatCompletion) instead
     // of discarding it. Persist it on the failed run record too so /runs replay shows it.
@@ -339,16 +327,9 @@ export async function runLocalLlmTest({
         success: false,
         error,
         startTime: startedAt,
-        // A run cut off by THIS function's own `timeoutMs` is the playground's
-        // measurement decision, not evidence the provider is broken: the model
-        // was streaming (the partial text proves it), the deadline is a request
-        // option the caller chose, and the caller gets the error back inline —
-        // the playground pins its provider and refuses fallback, so there is no
-        // recovery for the host hook to drive either. Firing `onRunFailed` here
-        // only filed an investigation task for a big local model that needed
-        // more than the caller allowed. Cancellation already skips the hook the
-        // same way (via the `canceled` flag), for the same reason.
-        reportFailure: !deadlineHit,
+        // The pinned playground reports caller deadlines inline. Provider
+        // recovery cannot help a run whose caller stopped waiting.
+        reportFailure: !timedOut,
         ...(canceled ? { extras: { canceled: true, completionReason: 'client-disconnect' } } : {}),
       }).catch(() => {});
     }

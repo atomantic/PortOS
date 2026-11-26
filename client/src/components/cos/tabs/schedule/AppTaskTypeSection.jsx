@@ -1,3 +1,4 @@
+import { cardRecordLabels } from '../../cardRecordLabels';
 import { useMemo, useState } from 'react';
 import { Search, X } from 'lucide-react';
 import AppTaskCard from './AppTaskCard';
@@ -20,6 +21,8 @@ export default function AppTaskTypeSection({ tasks, apps, appsStatus, providers,
     .filter(([, config]) => !label || taskLabels(config).includes(label))
     .filter(([taskType, config]) => !query || [taskType, config.displayName, config.description, ...taskLabels(config)].filter(Boolean).join(' ').toLowerCase().includes(query))
     .sort(sort === 'suggested-order' ? compareBySuggestedOrder(orderSteps) : compareByStatus);
+
+  const cardLabels = cardRecordLabels(visibleEntries.map(([type, config]) => [type, config.displayName?.trim() || type]));
 
   if (taskEntries.length === 0) return null;
 
@@ -107,6 +110,7 @@ export default function AppTaskTypeSection({ tasks, apps, appsStatus, providers,
               key={taskType}
               taskType={taskType}
               config={config}
+              recordLabel={cardLabels.get(taskType)}
               apps={apps}
               appsStatus={appsStatus}
               providers={providers}

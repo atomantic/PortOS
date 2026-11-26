@@ -22,6 +22,7 @@
  * and unit-tested without any network or filesystem access.
  */
 import { dataPath, tryReadFile } from '../lib/fileUtils.js';
+import { rm, rmdir } from 'node:fs/promises';
 import { ensureSecureDir, writeSecureJson } from '../lib/secureAuthStore.js';
 import { ServerError } from '../lib/errorHandler.js';
 import { fetchWithTimeout } from '../lib/fetchWithTimeout.js';
@@ -37,6 +38,9 @@ const TOKEN_TIMEOUT_MS = 15000;
 const AUTH_DIR = dataPath('spotify');
 const CREDENTIALS_FILE = dataPath('spotify', 'credentials.json');
 const TOKENS_FILE = dataPath('spotify', 'tokens.json');
+const PLAYLISTS_FILE = dataPath('spotify', 'playlists.json');
+const LEGACY_CACHE_DIR = dataPath('spotify', 'cache');
+const LEGACY_CACHE_FILE = dataPath('spotify', 'cache', 'recently-played.json');
 
 // These are the minimal read-only scopes for history ingestion plus the
 // playlist reference library. (`user-read-playback-state` would enable a
@@ -137,6 +141,12 @@ async function saveTokens(tokens) {
 export async function clearAuth() {
   await ensureAuthDir();
   await writeSecureJson(TOKENS_FILE, {});
+  await Promise.all([PLAYLISTS_FILE, LEGACY_CACHE_FILE].map((path) => rm(path, { force: true }).catch((error) => {
+    if (error?.code !== 'ENOENT') throw error;
+  })));
+  await rmdir(LEGACY_CACHE_DIR).catch((error) => {
+    if (error?.code !== 'ENOENT' && error?.code !== 'ENOTEMPTY') throw error;
+  });
   console.log('🎧 Spotify OAuth tokens cleared');
   return { cleared: true };
 }

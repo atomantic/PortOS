@@ -7,7 +7,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import toast from '../components/ui/Toast';
 import socket from '../services/socket';
 import { useVisibilityEvent } from './useVisibilityEvent.js';
-import * as musicVideoApi from '../services/apiMusicVideo.js';
+import { musicVideoFilmApi } from '../services/apiMusicVideo.js';
 import {
   blenderOptionChanges, blenderOptionFields, blenderRenderBlocker, blenderShotRenderBlocker, changedBlenderSettings, mergeBlenderJob,
 } from '../lib/musicVideoBlender.js';
@@ -43,7 +43,7 @@ const without = (map, key) => {
  *
  * Actions resolve to `{ ok, answer, error }`; a failure is toasted here.
  */
-export default function useMusicVideoBlender(projectId, { enabled = true, api = musicVideoApi, socketChannel = 'music-video:blender' } = {}) {
+export default function useMusicVideoBlender(projectId, { enabled = true, api = musicVideoFilmApi, socketChannel = 'music-video:blender' } = {}) {
   const {
   assembleMusicVideoBlenderCut, cancelMusicVideoBlenderJob, cancelMusicVideoBlenderJobs, clearMusicVideoBlenderFrames, createMusicVideoBlenderWorkspace,
   deleteMusicVideoBlenderFile, getMusicVideoBlender, makeMusicVideoBlenderMotionStrip, openMusicVideoBlenderShot, renderMusicVideoBlender,

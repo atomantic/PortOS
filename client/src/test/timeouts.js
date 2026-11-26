@@ -14,10 +14,9 @@
  *
  * 5000ms async: Testing Library defaults to 1000ms; this suite ran at 3000
  * (#3474) because several views debounce at 500ms and some wait on a debounce
- * plus a retry. `vitest.config.js` already documented 3s as marginal on the
- * 2-vCPU public runner — that comment is why the client worker cap is 2 — and
+ * plus a retry. Three seconds was marginal on the old 2-vCPU public runner:
  * the `await`-a-mock-call assertions that went red there passed locally every
- * time (#7448). A loaded runner should make a test SLOWER, not red.
+ * time (#7448).
  *
  * 15000ms enclosing, as 3x: headroom, not latency. It is not a guarantee that
  * the async bound always gets to speak — three sequential near-budget waits

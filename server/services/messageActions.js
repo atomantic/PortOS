@@ -1,4 +1,5 @@
 import { ServerError } from '../lib/errorHandler.js';
+import { actionsForAccountType } from '../lib/messageTransport.js';
 import { buildMessageBrowserActionScript } from '../lib/messageBrowserIdentity.js';
 import { getAccount } from './messageAccounts.js';
 import { getMessage, removeMessageFromCache } from './messageSync.js';
@@ -61,10 +62,16 @@ export async function executeAction(accountId, messageId, action) {
   const message = await getMessage(accountId, messageId);
   if (!message) throw new ServerError('Message not found', { status: 404, code: 'NOT_FOUND' });
 
+  if (!actionsForAccountType(account.type).includes(action)) {
+    throw new ServerError(`${action} not supported for ${account.type}`, {
+      status: 501, code: 'ACTION_NOT_SUPPORTED', severity: 'warning'
+    });
+  }
+
   // Gmail: use API directly instead of browser automation
   if (account.type === 'gmail' && message.apiId) {
     await executeGmailApiAction(message, action);
-  } else if (account.type === 'outlook' || account.type === 'gmail') {
+  } else {
     const page = await ensureProviderPage(account.type);
     console.log(`📧 ${action} message ${message.id} via ${account.type} browser`);
     const result = await evaluateOnPage(page, buildMessageBrowserActionScript(account.type, message, action));
@@ -78,8 +85,6 @@ export async function executeAction(accountId, messageId, action) {
         status: 409, code: 'MESSAGE_ACTION_UNCONFIRMED'
       });
     }
-  } else {
-    throw new Error(`${action} not supported for ${account.type}`);
   }
 
   // Record triage correction if user chose differently than the AI

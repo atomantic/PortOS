@@ -9,7 +9,7 @@
  */
 
 import { memo, useEffect, useRef } from 'react';
-import { useSortable } from '@dnd-kit/sortable';
+import { useSortable } from '../../lib/dnd/index.js';
 import { X, Film, Plus, Music } from 'lucide-react';
 import { dndTransformToCss } from '../../lib/dndTransform';
 import { clickableProps, onActivateKeyDown } from '../../lib/a11yKeyboard.js';
@@ -60,11 +60,11 @@ export const TimelineBlock = memo(function TimelineBlock({
     opacity: isDragging ? 0.4 : 1,
   };
   // This block is both the drag handle and the click-to-select target, and
-  // dnd-kit's keyboard activator lives on `listeners.onKeyDown` — so the
+  // the keyboard activator lives on `listeners.onKeyDown` — so the
   // `clickableProps` spread that used to sit here REPLACED that activator and
   // left the block announcing itself as draggable with no working pickup
   // (#7243). Split the keys instead: Enter selects, Space and the arrows that
-  // follow it belong to dnd-kit. The `currentTarget` guard is the one
+  // follow it belong to the drag sensor. The `currentTarget` guard is the one
   // `clickableProps` carries, so Enter on the inner Remove button still removes.
   // `role`/`tabIndex` below repeat what `attributes` already sets, so the
   // clickable-element guard reads the triple off the tag.

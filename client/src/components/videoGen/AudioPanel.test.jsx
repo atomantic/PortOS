@@ -76,6 +76,47 @@ describe('AudioPanel', () => {
     expect(URL.revokeObjectURL).toHaveBeenCalledWith('blob:audio-preview');
   });
 
+  it('waits for the current blob URL on first render and file replacement', () => {
+    const first = new File(['first'], 'first.wav', { type: 'audio/wav' });
+    const second = new File(['second'], 'second.wav', { type: 'audio/wav' });
+    const onDurationChange = vi.fn();
+    const onClear = vi.fn();
+    const panel = (audioFile) => (
+      <AudioPanel
+        audioFile={audioFile}
+        numFrames={121}
+        fps={24}
+        hasCompatibleModel
+        onDurationChange={onDurationChange}
+        onClear={onClear}
+      />
+    );
+    const previewLabel = 'Preview selected audio';
+    URL.createObjectURL.mockImplementation((file) => {
+      // The new file has committed, but its object URL is still being created.
+      expect(screen.queryByLabelText(previewLabel)).toBeNull();
+      return `blob:${file.name}`;
+    });
+    const { rerender } = render(panel(first));
+    const player = screen.getByLabelText(previewLabel);
+    expect(player).toHaveAttribute('src', 'blob:first.wav');
+    Object.defineProperty(player, 'duration', { value: 10 });
+    fireEvent.loadedMetadata(player);
+    expect(onDurationChange).toHaveBeenLastCalledWith(10);
+
+    rerender(panel(second));
+    expect(screen.getByLabelText(previewLabel)).toHaveAttribute('src', 'blob:second.wav');
+    expect(screen.getByText('Reading duration…')).toBeTruthy();
+    expect(onDurationChange).toHaveBeenLastCalledWith(null);
+    expect(URL.revokeObjectURL).toHaveBeenCalledWith('blob:first.wav');
+
+    fireEvent.click(screen.getByText('Clear'));
+    expect(onClear).toHaveBeenCalledOnce();
+    rerender(panel(null));
+    expect(screen.queryByLabelText(previewLabel)).toBeNull();
+    expect(URL.revokeObjectURL).toHaveBeenCalledWith('blob:second.wav');
+  });
+
   it('warns when no audio-to-video model is available', () => {
     render(
       <AudioPanel

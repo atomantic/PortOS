@@ -1,5 +1,5 @@
 import { createHash } from 'node:crypto';
-import { activeMusicVideoSubjects, musicVideoReferenceSubjectIds } from '../../lib/musicVideo/musicVideoCastSelection.js';
+import { activeMusicVideoSubjects, isIncludedShotReference, musicVideoReferenceSubjectIds } from '../../lib/musicVideo/musicVideoCastSelection.js';
 import { listPickableImages } from '../../lib/catalog/catalogMediaLibrary.js';
 import {
   musicVideoClipConditioningReferences, musicVideoClipReferenceChoices, musicVideoConditioningReferences,
@@ -43,11 +43,15 @@ function replacement(scene, field, current, remove, add) {
 
 function reportRows(scene, shot) {
   const prefix = `Shot ${shot}${scene.label && scene.label !== `Shot ${shot}` ? ` · ${scene.label}` : ''}`;
-  return (code, details, message, fix, patch) => ({
+  return (code, details, message, fix, patch, omit) => ({
     // Bind the action to the actual proposal so a stale click cannot select a different plate
     // or overwrite a reference edit that arrived after the report.
     id: createHash('sha256').update(JSON.stringify([scene.sceneId, code, details, patch])).digest('hex'),
     code, sceneId: scene.sceneId, shot, message: `${prefix}: ${message}`, ...(patch ? { fix, patch } : {}),
+    ...(omit ? { omit: {
+      id: createHash('sha256').update(JSON.stringify([scene.sceneId, code, details, 'omit', patch, omit.patch])).digest('hex'),
+      ...omit,
+    } } : {}),
   });
 }
 
@@ -97,7 +101,7 @@ export async function musicVideoShotReferenceChecks(project, media) {
   const byPlace = new Map();
   const shotPicks = scenes.map((scene, index) => {
     const choices = musicVideoClipReferenceChoices(project, scene, media);
-    const byId = new Map([...musicVideoPanelArtReferences(scene), ...choices].map(ref => [ref.id, ref]));
+    const byId = new Map([...musicVideoPanelArtReferences(scene), ...choices].filter(ref => isIncludedShotReference(project, scene, ref)).map(ref => [ref.id, ref]));
     const readPicks = (field, automatic) => Array.isArray(scene[field]) ? scene[field].map(id => byId.get(id)).filter(Boolean) : automatic();
     const frame = readPicks(FRAME, () => musicVideoConditioningReferences(project, scene, media));
     const clip = readPicks(CLIP, () => musicVideoClipConditioningReferences(project, scene, media));
@@ -139,11 +143,14 @@ export async function musicVideoShotReferenceChecks(project, media) {
   const sameAngle = sameAngleRows(shotPicks, subjects, ownersOf);
 
   return shotPicks.flatMap(({ scene, choices, frame, clip, shotPlates, placeIds, row }) => {
+    const omitted = scene.omittedCatalogSubjectIds || [];
+    const included = subject => !omitted.includes(subject.id);
+    const omit = subject => ({ label: `Remove ${subject.name} from shot`, patch: { omittedCatalogSubjectIds: [...omitted, subject.id] } });
     const sheet = scene.shotSheet;
     const listed = Array.isArray(sheet?.characters);
     const keys = new Set((listed ? sheet.characters : []).map(nameKey).filter(Boolean));
-    const starts = cast.filter(subject => [subject.id, subject.ingredientId, ...subject.names].some(name => keys.has(nameKey(name))));
-    const ends = scene.endFrameOff === true ? [] : cast.filter(subject => namesSubject(scene.endFramePrompt || '', subject.names));
+    const starts = cast.filter(subject => included(subject) && [subject.id, subject.ingredientId, ...subject.names].some(name => keys.has(nameKey(name))));
+    const ends = scene.endFrameOff === true ? [] : cast.filter(subject => included(subject) && namesSubject(scene.endFramePrompt || '', subject.names));
     const needed = new Set([...starts, ...ends].map(subject => subject.id));
     const missing = [...new Set([...starts, ...ends])].filter(subject => !frame.some(ref => owns(ref, subject.id)));
     const extraCast = (field, picks) => listed && Array.isArray(scene[field]) ? picks.filter(ref => ref.role === 'character'
@@ -159,7 +166,7 @@ export async function musicVideoShotReferenceChecks(project, media) {
       const swap = unexpected[0];
       const slot = starts.includes(subject) ? (ends.includes(subject) ? 'start and end frames' : 'start frame') : 'end frame';
       return row('missing-character', subject.id, `Add a character reference for ${subject.name} to the ${slot}.`,
-        swap ? `Swap in ${subject.name}` : `Add ${subject.name}`, pick && replacement(scene, FRAME, frame, swap?.id, pick.id));
+        swap ? `Swap in ${subject.name}` : `Add ${subject.name}`, pick && replacement(scene, FRAME, frame, swap?.id, pick.id), omit(subject));
     });
     for (const ref of unexpected) {
       const subject = missing.find(candidate => preferred(candidate));
@@ -173,15 +180,21 @@ export async function musicVideoShotReferenceChecks(project, media) {
     }
     const propText = [scene.framePrompt || scene.prompt, sheet?.view, sheet?.action, sheet?.notes].filter(Boolean).join(' ');
     if (Array.isArray(scene[FRAME]) || Array.isArray(scene[CLIP])) {
-      for (const subject of props.filter(subject => namesProp(propText, subject.names))) {
+      for (const subject of props.filter(subject => included(subject) && namesProp(propText, subject.names))) {
         const inFrame = frame.find(ref => owns(ref, subject.id));
         const inClip = clip.find(ref => owns(ref, subject.id));
         if (Boolean(inFrame) === Boolean(inClip)) continue;
         const field = inFrame ? CLIP : FRAME;
         const label = pickLabel[field];
         rows.push(row('missing-prop', [subject.id, field], `${subject.name} has a ${pickLabel[inFrame ? FRAME : CLIP]} reference and needs a ${label} reference.`,
-          `Add ${subject.name} to ${label}`, replacement(scene, field, inFrame ? clip : frame, null, (inFrame || inClip).id)));
+          `Add ${subject.name} to ${label}`, replacement(scene, field, inFrame ? clip : frame, null, (inFrame || inClip).id), omit(subject)));
       }
+    }
+    const place = subjects.find(subject => subject.kind === 'place' && included(subject) && subject.id === scene.setReference?.subjectId);
+    if (place && !scene.setReference.greyboxShotId && Array.isArray(scene[FRAME]) && !frame.some(ref => owns(ref, place.id))) {
+      const pick = choices.find(ref => ref.role === 'set' && owns(ref, place.id));
+      rows.push(row('missing-place', place.id, `Add an environment reference for ${place.name} to the frame.`,
+        `Add ${place.name}`, pick && replacement(scene, FRAME, frame, null, pick.id), omit(place)));
     }
     for (const { field, ref, placeId } of shotPlates) {
       const current = field === FRAME ? frame : clip;
@@ -196,7 +209,10 @@ export async function musicVideoShotReferenceChecks(project, media) {
           'Use newest plate', replacement(scene, field, current, ref.id, latest.id)));
       }
     }
-    return [...rows, ...(sameAngle.get(scene.sceneId) || [])];
+    const removed = subjects.filter(subject => omitted.includes(subject.id)).map(subject =>
+      row('omitted-subject', subject.id, `${subject.name} was removed from this shot's references.`, `Restore ${subject.name}`,
+        { omittedCatalogSubjectIds: omitted.filter(id => id !== subject.id) }));
+    return [...rows, ...(sameAngle.get(scene.sceneId) || []), ...removed];
   });
 }
 

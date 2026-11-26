@@ -219,6 +219,25 @@ const failedCodexDefaultEffortJob = {
   params: { prompt: 'a fox', mode: 'codex', model: 'gpt-5.6-luna' },
 };
 
+it.each(['reactor', 'grok'])('shows negative prompt controls only for the supported retry lane (%s)', async (mode) => {
+  const user = userEvent.setup();
+  listQueueMediaJobs.mockResolvedValue([{ id: 'hosted-retry', kind: 'video', status: 'failed', error: 'Example failure',
+    params: { prompt: 'a fox', mode, negativePrompt: 'fog' } }]);
+  render(<MediaJobsQueue kind="video" />);
+  await expandReel(user);
+  await user.click(await screen.findByLabelText('Edit and retry'));
+  if (mode === 'reactor') {
+    expect(screen.queryByLabelText('Negative Prompt')).not.toBeInTheDocument();
+    expect(screen.getByText(/Put exclusions in the main prompt/)).toBeInTheDocument();
+  } else {
+    expect(screen.getByLabelText('Negative Prompt')).toHaveValue('fog');
+    await user.clear(screen.getByLabelText('Negative Prompt'));
+    await user.type(screen.getByLabelText('Negative Prompt'), 'rain');
+  }
+  await user.click(await findEnabledByRole('button', { name: /Retry with changes/i }));
+  expect(retryMediaJob).toHaveBeenCalledWith('hosted-retry', mode === 'reactor' ? null : { negativePrompt: 'rain' }, { silent: true });
+});
+
 describe('MediaJobsQueue — image retry on shipped sizes', () => {
   // 750x1050 is a shipped preset whose edges are not on the 64+8n grid, so a
   // hand-rolled step=8 input would block the native submit even for a prompt-only edit.

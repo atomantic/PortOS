@@ -30,7 +30,8 @@ import { join } from 'path';
 import { query, withTransaction } from '../lib/db.js';
 import { ServerError } from '../lib/errorHandler.js';
 import { PATHS } from '../lib/fileUtils.js';
-import { fetchWithTimeout } from '../lib/fetchWithTimeout.js';
+import { isSafeHref } from '../lib/isSafeHref.js';
+import { fetchPublicResponse } from '../lib/safeUrlFetch.js';
 import { resolveSubjectId } from './privacySubjects.js';
 import { encryptValue, decryptValue, ensureVaultKey } from '../lib/vaultCrypto.js';
 import { toPgJson } from '../lib/pgJson.js';
@@ -179,8 +180,9 @@ function rowToBroker(row) {
   return {
     id: row.id,
     name: row.name,
-    urls: row.urls ?? {},
-    optout: row.optout ?? {},
+    // Previously imported rows may still contain feed-supplied automation.
+    urls: row.source === 'curated' ? (row.urls ?? {}) : discoveredHome(row.urls?.home),
+    optout: row.source === 'curated' ? (row.optout ?? {}) : {},
     tier: row.tier,
     disclosureFields: row.disclosure_fields ?? [],
     clusterParent: row.cluster_parent,
@@ -197,6 +199,8 @@ function rowToBroker(row) {
 
 // Slug an auto-discovered broker name into a stable id token.
 const slugify = (s) => String(s).toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '');
+
+const discoveredHome = (url) => isSafeHref(url) ? { home: url } : {};
 
 // A broker record from any source, normalized to the row shape. Defensive:
 // tolerates a sparse auto-discovered entry (BADBOOL / CA registry).
@@ -324,25 +328,38 @@ export async function setBrokerEnabled(id, enabled) {
   return rowToBroker(rows[0]);
 }
 
+function registryRows(csv) {
+  const rows = [];
+  let row = [];
+  // Match quoted cells before delimiters so commas and newlines inside a field
+  // cannot shift a search or opt-out URL into the website column.
+  const cell = /(?:[ \t]*"((?:[^"]|"")*)"[ \t]*|([^",\r\n]*))(,|\r\n?|\n|$)/gy;
+  for (const [, quoted, plain, delimiter] of csv.matchAll(cell)) {
+    row.push(quoted === undefined ? plain.trim() : quoted.replaceAll('""', '"').trim());
+    if (delimiter === ',') continue;
+    if (row.some(Boolean)) rows.push(row);
+    row = [];
+  }
+  return rows;
+}
+
 // Parse the CA Data Broker Registry CSV (id/name-bearing rows) defensively.
 // Returns [] on any shape we can't recognize rather than throwing.
 export function parseCaRegistryCsv(csv) {
   if (typeof csv !== 'string' || !csv.trim()) return [];
-  const lines = csv.split(/\r?\n/).filter((l) => l.trim());
-  if (lines.length < 2) return [];
-  const header = lines[0].split(',').map((h) => h.trim().toLowerCase());
-  const nameIdx = header.findIndex((h) => h.includes('name') || h.includes('business'));
-  const urlIdx = header.findIndex((h) => h.includes('url') || h.includes('website'));
+  const [head, ...rows] = registryRows(csv.trim());
+  if (!head) return [];
+  const header = head.map((h) => h.toLowerCase());
+  const nameIdx = header.findIndex((h) => h.includes('name') || h === 'business');
+  const urlIdx = header.findIndex((h) => /^(?:(?:business|broker|company) )?(?:website(?: url)?|url)$/.test(h));
   if (nameIdx === -1) return [];
-  return lines.slice(1).map((line) => {
-    const cols = line.split(',');
-    const name = (cols[nameIdx] || '').trim().replace(/^"|"$/g, '');
+  return rows.map((cols) => {
+    const name = cols[nameIdx];
     if (!name) return null;
-    const website = urlIdx !== -1 ? (cols[urlIdx] || '').trim().replace(/^"|"$/g, '') : '';
     return normalizeBroker({
       id: `ca-${slugify(name)}`,
       name,
-      urls: website ? { home: website } : {},
+      urls: discoveredHome(cols[urlIdx]),
       source: 'ca_registry',
       confidence: 'auto',
     });
@@ -353,13 +370,12 @@ export function parseCaRegistryCsv(csv) {
 export function parseBadboolList(payload) {
   const arr = Array.isArray(payload) ? payload : (Array.isArray(payload?.brokers) ? payload.brokers : []);
   return arr.map((b) => {
-    const name = b.name || b.id;
+    const name = b?.name || b?.id;
     if (!name) return null;
     return normalizeBroker({
       id: b.id || slugify(name),
       name,
-      urls: b.url ? { home: b.url } : (b.urls || {}),
-      optout: b.optout || {},
+      urls: discoveredHome(b.url || b.urls?.home),
       source: 'badbool',
       confidence: 'auto',
     });
@@ -375,7 +391,12 @@ const CA_REGISTRY_URL = 'https://cppa.ca.gov/data_broker_registry.csv';
 // with no brokers, never that it was unreachable (refreshBrokers reports each
 // source's outcome so a failed download cannot read as fetched-and-empty).
 async function fetchSource(url) {
-  const res = await fetchWithTimeout(url, {}, BROKER_FETCH_TIMEOUT_MS);
+  const res = await fetchPublicResponse(url, {
+    timeoutMs: BROKER_FETCH_TIMEOUT_MS,
+    blockPrivate: true,
+    throwOnUnsafe: true,
+  });
+  if (!res) throw new Error('Broker feed fetch failed or redirect was blocked');
   if (!res.ok) throw new Error(`HTTP ${res.status}`);
   return res;
 }
@@ -390,7 +411,7 @@ async function defaultFetchCaRegistry() {
   return parseCaRegistryCsv(await res.text());
 }
 
-// Test hook: the real downloaders, exercised against a stubbed fetchWithTimeout.
+// Test hook: the real downloaders, exercised against a stubbed pinned fetch.
 export const _sourceFetchers = { badbool: defaultFetchBadbool, caRegistry: defaultFetchCaRegistry };
 
 // Run one source fetcher to a { ok, count, error } outcome; rows are [] on failure.
@@ -423,9 +444,15 @@ export async function refreshBrokers({ fetchBadbool = defaultFetchBadbool, fetch
   // join a curated cluster (avoids a dangling self-FK to a non-existent parent).
   // De-dupe by id: a broker on both lists is inserted once.
   const tag = (arr, source) => arr
-    .map(normalizeBroker)
     .filter((b) => b?.id)
-    .map((b) => ({ ...b, clusterParent: null, source, confidence: 'auto' }));
+    .map((b) => ({
+      ...normalizeBroker(b),
+      urls: discoveredHome(b.url || b.urls?.home),
+      optout: {},
+      clusterParent: null,
+      source,
+      confidence: 'auto',
+    }));
   const byId = new Map();
   for (const b of [...tag(badbool, 'badbool'), ...tag(caRegistry, 'ca_registry')]) {
     if (!byId.has(b.id)) byId.set(b.id, b);

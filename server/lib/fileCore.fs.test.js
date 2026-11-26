@@ -383,6 +383,19 @@ describe('fileUtils', () => {
       expect(readdirSync(tmpRoot)).toEqual(['private.json']);
     });
 
+    it.skipIf(process.platform === 'win32')('uses the requested mode when creating a temporary replacement', async () => {
+      const target = join(tmpRoot, 'private.json');
+      writeFileSync(target, 'original');
+      await realFsPromises.chmod(target, 0o644);
+      fsPromises.writeFile.mockImplementationOnce(async (path, data, options) => {
+        expect(options.mode).toBe(0o600);
+        await realFsPromises.writeFile(path, data, options);
+        expect((await realFsPromises.stat(path)).mode & 0o077).toBe(0);
+      });
+      await atomicWrite(target, 'replacement', { mode: 0o600 });
+      expect((await realFsPromises.stat(target)).mode & 0o777).toBe(0o600);
+    });
+
     it('preserves the destination and removes the temp file when restoring its mode fails', async () => {
       const target = join(tmpRoot, 'private.json');
       writeFileSync(target, 'original', { mode: 0o600 });

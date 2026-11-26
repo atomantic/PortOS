@@ -21,8 +21,8 @@
  *     routers require host control themselves while the API is not exposed.
  *
  * Reads stay open unless listed in HOST_CONTROL_GET_ROUTES: a GET that streams
- * live capture, exports private archives or host listings, steers or reads the
- * signed-in managed browser, or runs a process per request. A GET that only
+ * live capture, reveals sealed records, exports private archives or host listings,
+ * steers or reads the signed-in managed browser, or runs a process per request. A GET that only
  * needs host control for part of its answer checks `requestHasHostControl` in
  * its handler instead (GET /api/browser strips page and download listings).
  * The socket twin is HOST_CONTROL_SOCKET_EVENTS in services/socket.js; voice and
@@ -39,9 +39,10 @@ import { API_REGISTRY } from './apiRegistry.js';
 import { escapeRegExp } from './textUtils.js';
 
 export const HOST_CONTROL_GET_ROUTES = Object.freeze([
-  // Live camera and microphone feeds (#11272).
+  // Live camera and microphone feeds (#11272) and host device enumeration (#19025).
   'GET /api/media/video',
   'GET /api/media/audio',
+  'GET /api/media/devices',
   // Tailcat serve capabilities (the remote ingress and its bearer address) and device trust.
   'GET /api/instances/peers/tailcat/serve',
   'GET /api/instances/peers/tailcat/devices',
@@ -49,6 +50,11 @@ export const HOST_CONTROL_GET_ROUTES = Object.freeze([
   'GET /api/apps/:id/forge-auth/refresh/:jobId/events',
   // Raw backup archives export private records and credentials (#8772).
   'GET /api/backup/snapshots/:snapshotId/download',
+  // Broker evidence and digest search URLs reveal sealed identity data (#18851).
+  'GET /api/privacy/broker-cases/:id/evidence',
+  'GET /api/privacy/optout/digest',
+  // Raw CoS recordings contain machine-local terminal output (#18851).
+  'GET /api/data/cos/storage/recording/:date/:id',
   // The directory picker lists any readable host directory, not a PortOS record.
   'GET /api/scaffold/directories',
   // Status of a Topaz upscale, part of the gated host upscale workflow (#11076).
@@ -90,6 +96,15 @@ export const HOST_CONTROL_GET_ROUTES = Object.freeze([
   'GET /api/apps/:id/logs',
   // Runs `brew update --quiet` and host runtime probes on `fresh=1` or cache miss (#18224).
   'GET /api/update/software/homebrew',
+  // Host runtime probes and repository inspection (#19025).
+  'GET /api/git/submodules/status',
+  'GET /api/git/:appId',
+  'GET /api/rigging/readiness',
+  'GET /api/image-gen/setup/moss-install',
+  'GET /api/voice/facetime/status',
+  'GET /api/update/software',
+  'GET /api/update/node-runtime',
+  'GET /api/docker-containment/status',
 ]);
 
 const READ_METHODS = new Set(['GET', 'HEAD', 'OPTIONS']);

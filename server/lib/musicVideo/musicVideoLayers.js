@@ -15,7 +15,8 @@
  * render preflight accepts. A return is ready when its source clip is (#15588).
  */
 
-import { isContinuingScene, scenePlayableClipId } from './musicVideoSourceTake.js';
+import { isEndFrameImageEffect } from './musicVideoImageEffects.js';
+import { isContinuingScene, resolveSourceTake, scenePlayableClipId } from './musicVideoSourceTake.js';
 
 export const MUSIC_VIDEO_VISUAL_LAYERS = ['footage', 'still', 'card', 'code'];
 
@@ -114,12 +115,35 @@ export function wordTimedScenes(project, scenes = project?.scenes) {
   return list.map((scene) => (sceneHasAuthoredSpan(scene) ? { ...scene, wordCut: true } : scene));
 }
 
+export const sceneEndFrameInUse = (scene, layer) => scene?.endFrameOff !== true
+  && (layer === 'footage' || (layer === 'still' && isEndFrameImageEffect(scene?.imageEffect)));
+
+export function sceneTakeProblems(scene, { layered = false, scenes = null, assetMarks = {} } = {}) {
+  const layer = sceneVisualLayer(scene, { layered });
+  if (!scene || isSelfDrawnLayer(layer)) return { bad: false, clipFrameMismatch: false };
+  const resolved = resolveSourceTake(scene, scenes);
+  const frameId = resolved ? resolved.referenceImageId : scene.referenceImageId;
+  const endId = !resolved && sceneEndFrameInUse(scene, layer) ? scene.endImageId : null;
+  const clipId = layer === 'footage' ? (resolved ? resolved.videoHistoryId : isContinuingScene(scene) ? null : scene.videoHistoryId) : null;
+  const bad = (kind, id) => Boolean(id && assetMarks?.[`${kind}:${id}`] === 'bad');
+  // Old records also set this bit when a bad frame was replaced but the old
+  // clip was kept. Surface that cause only on the shot that owns the clip.
+  const clip = clipId && !resolved && scene.selectedTakeMarkedBad
+    ? (scene.takes || []).find(take => take.kind === 'video' && take.assetId === clipId) : null;
+  const source = clip?.sourceImageId || clip?.dependencies?.references?.find(ref => ref?.role === 'plate')?.assetId;
+  return {
+    bad: bad('image', frameId) || bad('image', endId) || bad('video', clipId),
+    clipFrameMismatch: Boolean(source && frameId && source !== frameId),
+  };
+}
+
 /**
  * Whether the render can include this scene as-is: footage needs its clip, a
  * still needs its reference frame and a span, and a card or code shot needs only a span.
  */
-export function sceneRenderReady(scene, { layered = false, scenes = null } = {}) {
-  if (scene?.selectedTakeMarkedBad) return false;
+export function sceneRenderReady(scene, { layered = false, scenes = null, assetMarks } = {}) {
+  const problems = sceneTakeProblems(scene, { layered, scenes, assetMarks });
+  if (problems.bad || problems.clipFrameMismatch) return false;
   const layer = sceneVisualLayer(scene, { layered });
   if (layer === 'footage') {
     if (isContinuingScene(scene)) return Boolean(scenePlayableClipId(scene, scenes));

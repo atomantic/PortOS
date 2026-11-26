@@ -886,16 +886,22 @@ it('requests DB verification for the real deck, model pin and backup source cont
 
 it('keeps document generation and provider inputs out of the render-only browser closure', () => {
   const { browserDependencies } = realTree();
-  const render = browserDependencies['server/services/musicVideo/documentRender.browser.test.js'];
+  const renderSuites = [
+    'server/services/musicVideo/documentRender.browser.test.js',
+    'server/services/musicVideo/documentRenderAudioTimeline.browser.test.js',
+  ];
   const generation = browserDependencies['server/services/musicVideo/documentRenderGeneration.browser.test.js'];
   const generationInputs = [
     'server/services/musicVideo/documentGeneration.js',
     'server/lib/aiToolkit/internal/providerCatalogService.js',
     'server/lib/systemCapabilities.js',
   ];
-  expect(render).toContain('server/services/musicVideo/documentRender.js');
+  for (const suite of renderSuites) {
+    const render = browserDependencies[suite];
+    expect(render).toContain('server/services/musicVideo/documentRender.js');
+    for (const input of generationInputs) expect(render).not.toContain(input);
+  }
   expect(generation).toEqual(expect.arrayContaining(generationInputs));
-  for (const input of generationInputs) expect(render).not.toContain(input);
 });
 
 describe('late-bound hubs keep unrelated suites out of browser and DB plans (#17896)', () => {
@@ -915,7 +921,9 @@ describe('late-bound hubs keep unrelated suites out of browser and DB plans (#17
     const inputs = realTree();
     const render = 'server/services/musicVideo/documentRender.js';
     expect(planFor(render).browserFiles).toEqual(expect.arrayContaining([
-      'server/services/musicVideo/documentRender.browser.test.js', 'server/services/musicVideo/documentVignette.browser.test.js',
+      'server/services/musicVideo/documentRender.browser.test.js',
+      'server/services/musicVideo/documentRenderAudioTimeline.browser.test.js',
+      'server/services/musicVideo/documentVignette.browser.test.js',
     ]));
     // Reached only through a lazy import, several modules below the suite.
     expect(inputs.browserDependencies['server/services/musicVideo/documentVignette.browser.test.js']).toContain('server/services/htmlComposition/index.js');
@@ -2002,8 +2010,8 @@ describe('CI test impact planner', () => {
     const full = buildCiTestPlan(['server/vitest.config.js'], { trackedFiles: [...TRACKED, ...BROWSER_SUITES] });
     expect(full.shards).toEqual({
       server: shardIndexes('full', FULL_SUITE_SHARDS.server),
-      client: [1, 2, 3, 4],
-      browser: [1, 2, 3, 4],
+      client: [1, 2, 3, 4, 5, 6],
+      browser: [1, 2, 3, 4, 5, 6, 7],
       windows: shardIndexes('full', FULL_SUITE_SHARDS.windows),
     });
     const scoped = buildCiTestPlan(['server/services/auth.js'], { trackedFiles: TRACKED });
@@ -2017,6 +2025,16 @@ describe('CI test impact planner', () => {
     expect(exactWindows).toMatchObject({ windowsMode: 'files', shards: { windows: [1] } });
     const docsOnly = buildCiTestPlan(['docs/README.md'], { trackedFiles: TRACKED });
     expect(docsOnly.shards).toEqual({ server: [1], client: [1], browser: [1], windows: [1] });
+  });
+
+  it.each([
+    [0, [1]], [1, [1]], [2, [1, 2]], [3, [1, 2]],
+    [4, [1, 2, 3, 4]], [6, [1, 2, 3, 4]], [7, [1, 2, 3, 4, 5, 6, 7]],
+  ])('chooses browser runners for %i selected suites without widening coverage', (suiteCount, shards) => {
+    const browserFiles = BROWSER_SUITES.slice(0, suiteCount);
+    const plan = buildCiTestPlan(browserFiles, { trackedFiles: [...TRACKED, ...BROWSER_SUITES] });
+    expect(plan.browserFiles).toEqual([...browserFiles].sort());
+    expect(plan.shards.browser).toEqual(shards);
   });
 
   it('never selects a model-capability fixture sandbox as a suite on a feature-name match', () => {

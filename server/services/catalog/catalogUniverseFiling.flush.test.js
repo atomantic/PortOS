@@ -38,3 +38,38 @@ describe('flushCatalogUniverseFiling', () => {
     expect(loadPlacements).not.toHaveBeenCalled();
   });
 });
+
+describe('full catalog filing', () => {
+  it('shares one directory listing between both collection passes', async () => {
+    const mediaKeys = ['present.png', 'missing.png', 'broken-link.png'];
+    const readGallery = vi.fn(async () => [
+      { name: 'present.png', isSymbolicLink: () => false },
+      { name: 'broken-link.png', isSymbolicLink: () => true },
+    ]);
+    const isGalleryImage = vi.fn(async () => false);
+    const bulkUpdateCollectionItems = vi.fn(async (_, { add }) => ({ added: add.length }));
+    loadPlacements.mockResolvedValue(mediaKeys.map(mediaKey => ({ ingredientId: 'cast-1', universeId: 'world-1', mediaKey })));
+    filing.__setUniverseFilingDepsForTests({
+      loadTypePlacements: async () => [
+        ...mediaKeys.map(mediaKey => ({ type: 'character', mediaKey })),
+        { type: 'place', mediaKey: 'already-filed.png' },
+      ],
+      readGallery,
+      isGalleryImage,
+      findCollectionByUniverseId: async () => ({ id: 'universe-collection', items: [] }),
+      findCatalogTypeCollection: async (type) => ({
+        id: `type-${type}`,
+        items: type === 'place' ? [{ kind: 'image', ref: 'already-filed.png' }] : [],
+      }),
+      bulkUpdateCollectionItems,
+    });
+
+    expect(await filing.fileCatalogImages()).toEqual({ added: 2, updatedCollections: 2 });
+    expect(readGallery).toHaveBeenCalledOnce();
+    expect(isGalleryImage.mock.calls).toEqual([['broken-link.png']]);
+    expect(bulkUpdateCollectionItems).toHaveBeenCalledTimes(2);
+    for (const [, { add }] of bulkUpdateCollectionItems.mock.calls) {
+      expect(add).toEqual([{ kind: 'image', ref: 'present.png' }]);
+    }
+  });
+});

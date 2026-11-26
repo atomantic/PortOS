@@ -1,10 +1,10 @@
 import { selectXsShrinkClass as FIELD } from './controlClasses.js';
 import { useState } from 'react';
-import { MUSIC_VIDEO_TRANSITIONS, MUSIC_VIDEO_TRANSITION_LABELS } from '../../lib/musicVideoTransitions.js';
+import { MUSIC_VIDEO_TRANSITIONS, MUSIC_VIDEO_TRANSITION_LABELS } from '../../../../server/lib/musicVideo/musicVideoTransitions.js';
 import {
   MUSIC_VIDEO_EDGED_WIPES, MUSIC_VIDEO_WIPE_GROUP_LABELS, MUSIC_VIDEO_WIPE_GROUPS, MUSIC_VIDEO_WIPE_LABELS, MUSIC_VIDEO_WIPE_LENGTHS,
   MUSIC_VIDEO_WIPE_SEC, MUSIC_VIDEO_WIPES,
-} from '../../lib/musicVideoWipes.js';
+} from '../../../../server/lib/musicVideo/musicVideoWipes.js';
 
 const SIDES = Object.freeze([
   ['in', 'transitionIn', 'wipeIn', 'Effect in', 'An effect over the cut into this shot: a glitch over the cut, or a wipe from the shot before. It adds no time: the cut stays where it is.'],

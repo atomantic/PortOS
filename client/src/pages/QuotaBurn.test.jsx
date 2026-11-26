@@ -1097,7 +1097,10 @@ describe('QuotaBurn per-invocation overrides', () => {
     renderPage('/devtools/quota-burn/claude');
     await user.click(await screen.findByLabelText('Expand step 1'));
 
-    expect(await screen.findByLabelText('Model')).toHaveValue('claude-sonnet-4');
+    const model = await screen.findByLabelText('Model');
+    expect(model).toHaveValue('claude-sonnet-4');
+    expect([...model.options].map(option => option.value)).toEqual(['', 'claude-opus-4', 'claude-sonnet-4']);
+    expect(screen.getByRole('option', { name: 'Claude Sonnet 4' })).toHaveValue('claude-sonnet-4');
     const effortSelect = screen.getByLabelText('Thinking effort');
     expect(effortSelect).toHaveValue('high');
 
@@ -1126,6 +1129,7 @@ describe('QuotaBurn per-invocation overrides', () => {
     const model = await screen.findByLabelText('Model');
     expect(model).toHaveValue('');
     expect(model.querySelector('option').textContent).toBe('Inherit (claude-opus-4)');
+    expect([...model.options].map(option => option.value)).toEqual(['', 'claude-opus-4', 'claude-sonnet-4']);
     expect(screen.getByText(/claude-code · claude-opus-4/)).toBeInTheDocument();
   });
 

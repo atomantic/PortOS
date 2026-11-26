@@ -169,10 +169,15 @@ export default function ProjectWorkspace({
   const [dockExpanded, setDockExpanded] = useState(false);
   // The preview's reading of the song's clock (`PreviewDock` fills it), which the editor's playhead follows.
   const songClockRef = useRef(null);
+  // The workspace is keyed by project. Keep the range across stage changes in that session.
+  const [editorRange, setEditorRange] = useState(null);
+  const seekInSong = (t, { play = false, pause = false, songOnly = false } = {}) => {
+    setSeekRequest((prev) => ({ t, n: (prev?.n || 0) + 1, play, pause: !play && pause, songOnly }));
+  };
   // `play` starts playback from there (a storyboard row), `pause` stops it there; a scene card only cues the shot.
-  const seekToScene = (scene, { play = false, pause = false } = {}) => {
+  const seekToScene = (scene, options) => {
     if (typeof scene?.startSec !== 'number') return;
-    setSeekRequest((prev) => ({ t: shotStartFrameSec(scene.startSec), n: (prev?.n || 0) + 1, play, pause: !play && pause }));
+    seekInSong(shotStartFrameSec(scene.startSec), options);
   };
 
   // Lyric cues / phrases / pacing (#8964) and the typography manifest (#8984)
@@ -567,7 +572,10 @@ export default function ProjectWorkspace({
   const proofRequested = activeStage === 'produce' && ['#mv-review-proof', '#mv-review-render'].includes(location.hash);
   const reviewStage = selected ? (proofRequested ? 'proof' : approvalStageFor(activeStage, selected, productionReview.readiness, productionReview.proof.active)) : null;
   // `stageProject`: a Blender film's live composite is offered once the film state lists synced shots.
-  const previewSources = selected ? listPreviewSources(stageProject, { finalVideoSrc: finalVideo.src, leadWith: activeStage === 'review' ? 'drafts' : ['produce', 'editor'].includes(activeStage) ? 'storyboard' : activeStage === 'setup' ? 'lyrics' : activeStage === 'previz' ? 'previz' : 'final' }) : [];
+  const previewSources = selected ? listPreviewSources(stageProject, {
+    finalVideo,
+    leadWith: activeStage === 'review' ? 'drafts' : ['produce', 'editor'].includes(activeStage) ? 'storyboard' : activeStage === 'setup' ? 'lyrics' : activeStage === 'previz' ? 'previz' : 'final',
+  }) : [];
 
   const dock = !selected || NO_DOCK_STAGES.has(activeStage) ? null : (
     <PreviewDock
@@ -725,7 +733,7 @@ export default function ProjectWorkspace({
             {storyVisited.current && <div hidden={activeStage !== 'story'}><Suspense fallback={stageFallback}><StoryStage board={board} active={activeStage === 'story'} /><StageReady stage="story" active={activeStage === 'story'} onReady={setReadyStage} /></Suspense></div>}
             {activeStage !== 'story' && (
               <Suspense fallback={stageFallback}>
-                <StageView board={ownDock ? { ...board, previewDock: dock, songClock: () => songClockRef.current?.() ?? null } : board} />
+                <StageView board={ownDock ? { ...board, previewDock: dock, seekInSong, editorRange, setEditorRange, songClock: () => songClockRef.current?.() ?? null } : board} />
                 <StageReady key={activeStage} stage={activeStage} active onReady={setReadyStage} />
               </Suspense>
             )}

@@ -1,8 +1,8 @@
 import { MemoryRouter } from 'react-router';
-import { fireEvent, render, screen } from '@testing-library/react';
+import { fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { beforeEach, expect, it, vi } from 'vitest';
 import {
-  getInsightNarrative, getInsightThemes, getGoalScorecard,
+  getInsightNarrative, getInsightThemes, getGoalScorecard, refreshInsightThemes,
 } from '../../services/apiSystem.js';
 import { getGenomeHealthCorrelations } from '../../services/apiHealth.js';
 import CrossDomainTab from './CrossDomainTab.jsx';
@@ -10,6 +10,10 @@ import TasteIdentityTab from './TasteIdentityTab.jsx';
 import GenomeHealthTab from './GenomeHealthTab.jsx';
 import GoalScorecardTab from './GoalScorecardTab.jsx';
 import { OverviewTab } from '../../pages/Insights.jsx';
+
+import toast from '../ui/Toast';
+
+vi.mock('../ui/Toast', () => ({ default: { error: vi.fn() } }));
 
 vi.mock('../../services/apiSystem.js', () => ({
   getInsightNarrative: vi.fn(), getInsightThemes: vi.fn(), getGoalScorecard: vi.fn(),
@@ -56,4 +60,22 @@ it('overview isolates a failed read to its own card and hides that card\'s actio
   expect(screen.queryByRole('button', { name: 'Upload genome' })).toBeNull();
   expect(screen.getByRole('button', { name: 'Generate themes' })).toBeTruthy();
   expect(screen.getByRole('button', { name: 'Analyze now' })).toBeTruthy();
+});
+
+it('keeps the displayed taste themes when refresh returns an invalid response', async () => {
+  getInsightThemes.mockResolvedValue({
+    available: true,
+    themes: [{ title: 'Sparse arrangements', strength: 'tentative', narrative: '', evidence: [] }],
+  });
+  refreshInsightThemes.mockResolvedValue({ available: false, reason: 'invalid_response' });
+  render(<MemoryRouter><TasteIdentityTab /></MemoryRouter>);
+
+  expect(await screen.findByText('Sparse arrangements')).toBeVisible();
+  expect(screen.getByText('Tentative pattern')).toBeVisible();
+  fireEvent.click(screen.getByRole('button', { name: 'Refresh' }));
+
+  await waitFor(() => expect(toast.error).toHaveBeenCalledWith(
+    'The AI provider returned themes in a format PortOS could not read. Try again or pick another model.',
+  ));
+  expect(screen.getByText('Sparse arrangements')).toBeVisible();
 });

@@ -107,7 +107,7 @@ async function createDocumentLeased(data) {
     throw err;
   });
 
-  console.log(`🧬 Created soul document: ${data.filename}`);
+  console.log(`🧬 Created soul document: ${docMeta.id}`);
   return { ...docMeta, content: data.content };
 }
 
@@ -153,15 +153,15 @@ async function updateDocumentLeased(id, updates) {
     if (wroteContent) {
       if (previousContent === null) await unlink(filePath).catch(() => {});
       else {
-        await atomicWrite(filePath, previousContent).catch((restoreErr) => {
-          console.error(`❌ Digital twin document restore failed for ${docMeta.filename}: ${restoreErr.message}`);
+        await atomicWrite(filePath, previousContent).catch(() => {
+          console.error('❌ Digital twin document restore failed');
         });
       }
     }
     throw err;
   });
 
-  console.log(`🧬 Updated soul document: ${docMeta.filename}`);
+  console.log('🧬 Updated soul document');
   return await getDocumentById(id);
 }
 
@@ -186,6 +186,6 @@ async function deleteDocumentLeased(id) {
     await unlink(filePath);
   }
 
-  console.log(`🧬 Deleted soul document: ${docMeta.filename}`);
+  console.log('🧬 Deleted soul document');
   return true;
 }

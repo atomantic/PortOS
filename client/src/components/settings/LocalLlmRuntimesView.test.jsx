@@ -25,6 +25,8 @@ vi.mock('../../services/apiLocalLlm.js', () => ({
   startSlotstreamServer: vi.fn(),
   stopSlotstreamServer: vi.fn(),
   installSlotstream: vi.fn(),
+  downloadSlotstreamModel: vi.fn(),
+  cancelSlotstreamModelDownload: vi.fn(),
   searchMtplxModels: vi.fn().mockResolvedValue({ models: [], error: null }),
   pullMtplxModel: vi.fn(),
   removeMtplxModel: vi.fn(),
@@ -506,21 +508,19 @@ describe('LocalLlmRuntimesView runtime servers', () => {
   });
 
   it('reports a failed checkpoint download as one error, not an empty success', async () => {
-    // `pullMtplxModel` RESOLVES `{success: false}` for a failed download (its
-    // progress already streamed), so a formatter-only success message would fire
-    // an empty success toast alongside the real reason.
     const { getMtplxServerStatus, pullMtplxModel } = await import('../../services/apiLocalLlm.js');
     const toast = (await import('../ui/Toast')).default;
     getMtplxServerStatus.mockResolvedValue({
       installed: true, running: false, supported: true, cachedModels: [], cacheError: null,
     });
-    pullMtplxModel.mockResolvedValue({ success: false, model: null, error: 'no space left on device' });
+    pullMtplxModel.mockRejectedValue(new Error('no space left on device'));
 
     await renderRuntimes('mtplx');
     fireEvent.click(screen.getByRole('button', { name: /Download default checkpoint/ }));
     await clickStartDownload();
 
     await waitFor(() => expect(toast.error).toHaveBeenCalledWith(expect.stringMatching(/no space left on device/)));
+    expect(toast.error).toHaveBeenCalledTimes(1);
     expect(toast.success).not.toHaveBeenCalled();
   });
 
@@ -536,7 +536,40 @@ describe('LocalLlmRuntimesView runtime servers', () => {
     await clickStartDownload();
 
     // `null` (not a repo id the card invented) = MTPLX's own verified default.
-    await waitFor(() => expect(pullMtplxModel).toHaveBeenCalledWith(null));
+    await waitFor(() => expect(pullMtplxModel).toHaveBeenCalledWith(null, { silent: true }));
+  });
+
+  it('clears a cancelled Slotstream download without a failure or completion toast', async () => {
+    const { getSlotstreamServerStatus, downloadSlotstreamModel, cancelSlotstreamModelDownload } = await import('../../services/apiLocalLlm.js');
+    const toast = (await import('../ui/Toast')).default;
+    const model = 'example-org/example-model';
+    getSlotstreamServerStatus.mockResolvedValue({
+      installed: true, running: false, supported: true, cachedModels: [],
+      catalog: [{ id: model, label: 'Example', params: '30B', approxBytes: 1000 }],
+    });
+    const transfer = Promise.withResolvers();
+    downloadSlotstreamModel.mockReturnValueOnce(transfer.promise);
+    cancelSlotstreamModelDownload.mockResolvedValueOnce({ success: true, cancelled: true });
+
+    await renderRuntimes('slotstream');
+    fireEvent.change(screen.getByLabelText('Add a checkpoint'), { target: { value: model } });
+    const download = screen.getByRole('button', { name: 'Download checkpoint' });
+    fireEvent.click(download);
+    await clickStartDownload();
+
+    expect(downloadSlotstreamModel).toHaveBeenCalledWith(model, { silent: true });
+    const receiveProgress = socket.on.mock.calls.find(([event]) => event === 'slotstream:download')?.[1];
+    act(() => receiveProgress({ event: 'start', model, message: 'Starting transfer' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Cancel' }));
+    await waitFor(() => expect(toast.success).toHaveBeenCalledWith('Cancelling checkpoint download…'));
+    expect(cancelSlotstreamModelDownload).toHaveBeenCalledWith(model, { silent: true });
+
+    await act(async () => transfer.resolve({ success: false, cancelled: true, model }));
+
+    expect(screen.queryByRole('button', { name: 'Cancel' })).not.toBeInTheDocument();
+    expect(download).toBeEnabled();
+    expect(toast.error).not.toHaveBeenCalled();
+    expect(toast.success).toHaveBeenCalledTimes(1);
   });
 
   it('saves the PM2 process list so the managed daemons survive a reboot', async () => {

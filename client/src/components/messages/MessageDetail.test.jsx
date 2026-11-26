@@ -36,15 +36,88 @@ const baseMessage = {
   bodyFull: true,
 };
 
-function renderMessage(message) {
+function renderMessage(message, accounts = [{ id: 'acct-1', name: 'Personal', type: 'outlook', supportsBodyRefresh: true }]) {
   return render(
     <MessageDetail
       message={message}
-      accounts={[{ id: 'acct-1', name: 'Personal' }]}
+      accounts={accounts}
       onBack={() => {}}
     />,
   );
 }
+
+describe('MessageDetail Teams reply recipients', () => {
+  const accounts = [{ id: 'acct-1', type: 'teams' }];
+
+  beforeEach(() => vi.clearAllMocks());
+
+  it.each([
+    ['Reply', api.createMessageDraft, 'Manual reply'],
+    ['AI Reply', api.updateMessageDraft, 'Generated reply'],
+  ])('requires a valid email when saving a Teams draft from %s', async (action, saveDraft, replyBody) => {
+    if (action === 'AI Reply') api.generateMessageDraft.mockResolvedValueOnce({ id: 'draft-1', body: replyBody });
+    saveDraft.mockResolvedValueOnce({ id: 'draft-1' });
+    renderMessage({ ...baseMessage, from: { name: 'Alice', email: '' } }, accounts);
+
+    await userEvent.click(screen.getByRole('button', { name: action }));
+    const recipient = await screen.findByRole('textbox', { name: 'Recipient email' });
+    const save = screen.getByRole('button', { name: 'Save Draft' });
+    expect(save).toBeDisabled();
+    fireEvent.change(recipient, { target: { value: 'Alice' } });
+    expect(save).toBeDisabled();
+    expect(saveDraft).not.toHaveBeenCalled();
+
+    const body = screen.getByRole('textbox', { name: 'Reply message body' });
+    if (action === 'Reply') fireEvent.change(body, { target: { value: replyBody } });
+    fireEvent.change(recipient, { target: { value: 'Alice@Example.com' } });
+    await userEvent.click(save);
+    const fields = { to: ['alice@example.com'], subject: 'Re: Hello', body: replyBody };
+    if (action === 'AI Reply') expect(saveDraft).toHaveBeenCalledWith('draft-1', fields);
+    else expect(saveDraft).toHaveBeenCalledWith(expect.objectContaining({ ...fields, accountId: 'acct-1', replyToMessageId: 'msg-1' }));
+    expect(screen.queryByRole('textbox', { name: 'Recipient email' })).not.toBeInTheDocument();
+  });
+
+  it('uses a known Teams sender address without requiring manual entry', async () => {
+    api.createMessageDraft.mockResolvedValueOnce({ id: 'draft-1' });
+    renderMessage(baseMessage, accounts);
+    await userEvent.click(screen.getByRole('button', { name: 'Reply' }));
+    expect(screen.queryByRole('textbox', { name: 'Recipient email' })).not.toBeInTheDocument();
+    await userEvent.type(screen.getByRole('textbox', { name: 'Reply message body' }), 'Manual reply');
+    await userEvent.click(screen.getByRole('button', { name: 'Save Draft' }));
+    expect(api.createMessageDraft).toHaveBeenCalledWith(expect.objectContaining({ to: ['alice@example.com'] }));
+  });
+});
+
+it.each([
+  [{ type: 'teams' }, false, false],
+  [{ type: 'teams', actions: [] }, false, false],
+  [{ type: 'gmail', actions: [] }, false, false],
+  [{ type: 'gmail', actions: ['archive'] }, true, false],
+  [{ type: 'outlook' }, true, true],
+])('renders only supported detail actions for %j', async (account, archive, remove) => {
+  renderMessage(baseMessage, [{ id: 'acct-1', ...account }]);
+  await act(async () => {});
+  expect(Boolean(screen.queryByRole('button', { name: 'Archive' }))).toBe(archive);
+  expect(Boolean(screen.queryByRole('button', { name: 'Delete' }))).toBe(remove);
+});
+
+it.each([
+  ['gmail', false],
+  ['outlook', true],
+  ['teams', false],
+  ['missing', false],
+])('offers body refresh only for a supported message account (%s)', async (type, supported) => {
+  const otherAccount = { id: 'other-account', type: 'outlook', supportsBodyRefresh: true };
+  const accounts = type === 'missing' ? [otherAccount] : [
+    otherAccount,
+    { id: baseMessage.accountId, type, supportsBodyRefresh: supported },
+  ];
+  renderMessage({ ...baseMessage, bodyFull: false, bodyText: 'Message preview' }, accounts);
+  await act(async () => {});
+  expect(screen.getByText('Message preview')).toBeInTheDocument();
+  expect(Boolean(screen.queryByRole('button', { name: 'Refresh' }))).toBe(supported);
+  expect(Boolean(screen.queryByText('Preview only — re-sync for full content'))).toBe(supported);
+});
 
 // Reads the CSP directive string the iframe's own document head carries —
 // the mechanism that actually blocks the fetch, independent of whether the
@@ -118,7 +191,7 @@ describe('MessageDetail SafeHtmlBody remote content blocking', () => {
     rerender(
       <MessageDetail
         message={{ ...baseMessage, bodyHtml: '<img src="https://tracker.example/pixel.gif" alt="">' }}
-        accounts={[{ id: 'acct-1', name: 'Personal' }]}
+        accounts={[{ id: 'acct-1', name: 'Personal', type: 'outlook', supportsBodyRefresh: true }]}
         onBack={() => {}}
       />,
     );
@@ -224,7 +297,7 @@ describe('MessageDetail refresh ordering', () => {
     expect(await screen.findByText('Original message')).toBeInTheDocument();
     await userEvent.click(screen.getByRole('button', { name: 'Refresh' }));
     const next = { ...threaded, ...identity, bodyText: 'Selected thread' };
-    rerender(<MessageDetail message={next} accounts={[{ id: next.accountId }]} onBack={() => {}} />);
+    rerender(<MessageDetail message={next} accounts={[{ id: next.accountId, type: 'outlook', supportsBodyRefresh: true }]} onBack={() => {}} />);
     expect(await screen.findByText('Selected thread')).toBeInTheDocument();
     await act(async () => refresh.resolve(fresh));
     expect(screen.getByText('Selected thread')).toBeInTheDocument();

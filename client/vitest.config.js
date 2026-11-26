@@ -38,10 +38,8 @@ const config = defineConfig({
       PORTOS_TEST_MEMO_DIR: '',
       PORTOS_TEST_MEMO_READ_DIRS: '',
     },
-    // Four DOM workers exhausted Testing Library's async budget on the public
-    // runner before ChiefOfStaff's config panel settled. Keep the proven
-    // two-worker client cap; the Node/server runner uses all four CPUs.
-    ...vitestCiPool({ maxWorkers: 2 }),
+    // Leave one of the four CI cores available for Chromium and DOM spikes.
+    ...vitestCiPool({ maxWorkers: 3 }),
     // Both derived from the Testing Library async budget rather than written as
     // literals — an inner `waitFor` bound that reaches its enclosing budget can
     // never report its own failure. `hookTimeout` is set for the same reason as
