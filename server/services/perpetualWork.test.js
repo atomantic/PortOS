@@ -1,3 +1,4 @@
+// test-memo: git-fixture
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { EventEmitter } from 'events';
 
@@ -23,7 +24,7 @@ vi.mock('./cos/cosState.js', () => ({
 
 import { spawn } from '../lib/childProcess.js';
 vi.mock('../lib/windowsGitProcess.js', async importOriginal => ({
-  ...await importOriginal(), startGit: (args, options, wire) => wire(spawn('git', args, options)),
+  ...await importOriginal(), startGit: (args, options, wire) => wire(spawn('git', args, { ...options, cwd: options.cwd })),
 }));
 import { resolveForgeTokenEnv } from './forgeAuth.js';
 import {

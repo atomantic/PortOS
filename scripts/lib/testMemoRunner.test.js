@@ -827,20 +827,29 @@ describe('planTestMemo and recordTestMemo', () => {
 
     const disk = createDiskFs(repoRootDir, nodeFs, nodePath);
     const tracked = listRepositoryFiles(repoRootDir);
-    const verdict = (changed, recorded = modules) => computeTestMemoKeys([suite], {
+    const verdict = (changed, recorded = modules, appended = '\n') => computeTestMemoKeys([suite], {
       workspace: 'server', listFiles: () => tracked, records: new Map([[suite, recorded]]),
-      fs: { ...disk, read: rel => rel === changed ? Buffer.concat([disk.read(rel), Buffer.from('\n')]) : disk.read(rel) },
+      fs: { ...disk, read: rel => rel === changed ? Buffer.concat([disk.read(rel), Buffer.from(appended)]) : disk.read(rel) },
     }).get(suite).recorded;
     const baseline = verdict();
     expect(baseline, baseline.reason).toMatchObject({ memoizable: true, key: expect.any(String) });
     expect(verdict('scripts/doctor.js').key).toBe(baseline.key);
+    expect(verdict(reader).key).toBe(baseline.key);
     const changed = verdict('server/services/backup/restore.js');
     expect(changed.memoizable).toBe(true);
     expect(changed.key).not.toBe(baseline.key);
-    // Partial mocks and importActual also evaluate the implementation. A recorded
-    // reader must still fail closed when the shared fixture can replace its listing.
-    expect(verdict(null, [...modules, reader])).toMatchObject({
-      memoizable: false, reasons: expect.arrayContaining([expect.stringContaining(reader + ': relies on a directory listing')]),
+    // Partial mocks and importActual evaluate the implementation. Its scanner
+    // bounds the listing even when fs is mocked, so the runner can enter the key.
+    const withReader = [...modules, reader];
+    const evaluated = verdict(null, withReader);
+    expect(evaluated, evaluated.reason).toMatchObject({ memoizable: true, key: expect.any(String) });
+    expect(verdict(reader, withReader).key).not.toBe(evaluated.key);
+
+    // Replacing the scanner itself removes the basename guarantee.
+    const scannerMock = "\nvi.mock('../../scripts/lib/migrationFiles.js', () => ({}));\n";
+    expect(verdict(suite, withReader, scannerMock)).toMatchObject({
+      memoizable: false,
+      reasons: expect.arrayContaining([`${reader}: names a path through scripts/lib/migrationFiles.js, which the test mocks`]),
     });
   }, 150000);
 

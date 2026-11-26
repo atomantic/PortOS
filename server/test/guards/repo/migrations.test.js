@@ -4,6 +4,7 @@ import { basename, join } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { describe, expect, it } from 'vitest';
 import { guardCorpus, readText, REPO_ROOT, trackedFiles, workingTreeFiles } from '../../../../scripts/lib/guardCorpus.js';
+import { isShippedMigrationName } from '../../../../scripts/lib/migrationFiles.js';
 import * as lib from '../../../../scripts/migrations/_lib.js';
 import { sourceDeclaresPurge } from '../../../../scripts/run-migrations.js';
 
@@ -293,9 +294,6 @@ const RETIRED_MIGRATIONS = new Set([
   ...RETIRED_PROMPT_REPLACE_MIGRATIONS,
   ...RETIRED_SEED_AND_BUMP_MIGRATIONS,
 ]);
-
-// Same selection as `scanMigrationFiles` in scripts/lib/migrationFiles.js.
-const isShippedMigrationName = (name) => /^\d+-.*\.js$/.test(name) && !name.endsWith('.test.js');
 
 /** Base-branch migration filenames that no longer exist in `currentNames`. */
 function missingShippedMigrations(baseNames, currentNames, retired = RETIRED_MIGRATIONS) {

@@ -4,13 +4,13 @@ import { pathToFileURL } from 'url';
 import { randomUUID } from 'crypto';
 import { isWorktreeRoot } from '../../server/lib/dataRoot.js';
 import { isSmokeBoot } from '../../server/lib/runtimeEnv.js';
+import { scanMigrationFiles } from './migrationFiles.js';
 import {
   DEFAULT_ROOT_DIR,
   DEFAULT_MIGRATIONS_DIR,
   adoptLegacyAppliedList,
   appliedFilePath,
   readAppliedList,
-  scanMigrationFiles,
 } from './migrationLedger.js';
 
 // ---- purge-class probe (#12049) ----

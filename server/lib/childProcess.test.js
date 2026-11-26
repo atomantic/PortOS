@@ -43,56 +43,56 @@ beforeEach(() => {
 
 describe('childProcess windowsHide default', () => {
   it('injects windowsHide into every spawn family helper', () => {
-    spawn('git', ['status']);
+    spawn('example-program', ['status']);
     expect(lastOptions()).toEqual({ windowsHide: true });
 
-    spawnSync('git', ['status']);
+    spawnSync('example-program', ['status']);
     expect(lastOptions()).toEqual({ windowsHide: true });
 
     fork('./worker.js', ['--flag']);
     expect(lastOptions()).toEqual({ windowsHide: true });
 
-    execSync('git status');
+    execSync('example-program status');
     expect(lastOptions()).toEqual({ windowsHide: true });
 
-    execFileSync('git', ['status']);
+    execFileSync('example-program', ['status']);
     expect(lastOptions()).toEqual({ windowsHide: true });
 
-    exec('git status');
+    exec('example-program status');
     expect(lastOptions()).toEqual({ windowsHide: true });
 
-    execFile('git', ['status']);
+    execFile('example-program', ['status']);
     expect(lastOptions()).toEqual({ windowsHide: true });
   });
 
   it('preserves caller options alongside the injected flag', () => {
-    spawn('git', ['status'], { cwd: '/repo', stdio: 'pipe' });
+    spawn('example-program', ['status'], { cwd: '/repo', stdio: 'pipe' });
     expect(lastOptions()).toEqual({ cwd: '/repo', stdio: 'pipe', windowsHide: true });
   });
 
   it('respects an explicit windowsHide: false', () => {
     // The default fills a gap; it must never override a stated intent.
-    spawn('git', ['status'], { windowsHide: false });
+    spawn('example-program', ['status'], { windowsHide: false });
     expect(lastOptions()).toEqual({ windowsHide: false });
   });
 
   it('does not mutate the caller-supplied options object', () => {
     const options = { cwd: '/repo' };
-    spawn('git', ['status'], options);
+    spawn('example-program', ['status'], options);
     expect(options).toEqual({ cwd: '/repo' });
   });
 });
 
 describe('childProcess overload handling', () => {
   it('treats a non-array second argument as options, like node does', () => {
-    spawn('git', { cwd: '/repo' });
-    expect(calls.at(-1).args).toEqual(['git', { cwd: '/repo', windowsHide: true }]);
+    spawn('example-program', { cwd: '/repo' });
+    expect(calls.at(-1).args).toEqual(['example-program', { cwd: '/repo', windowsHide: true }]);
   });
 
   it('keeps the args array in its positional slot', () => {
-    spawn('git', ['status', '--porcelain'], { cwd: '/repo' });
+    spawn('example-program', ['status', '--porcelain'], { cwd: '/repo' });
     expect(calls.at(-1).args).toEqual([
-      'git',
+      'example-program',
       ['status', '--porcelain'],
       { cwd: '/repo', windowsHide: true },
     ]);
@@ -100,25 +100,25 @@ describe('childProcess overload handling', () => {
 
   it('handles exec(command, callback) without swallowing the callback', () => {
     const cb = () => {};
-    exec('git status', cb);
-    expect(calls.at(-1).args).toEqual(['git status', { windowsHide: true }, cb]);
+    exec('example-program status', cb);
+    expect(calls.at(-1).args).toEqual(['example-program status', { windowsHide: true }, cb]);
   });
 
   it('handles every execFile overload', () => {
     const cb = () => {};
 
-    execFile('git', cb);
-    expect(calls.at(-1).args).toEqual(['git', { windowsHide: true }, cb]);
+    execFile('example-program', cb);
+    expect(calls.at(-1).args).toEqual(['example-program', { windowsHide: true }, cb]);
 
-    execFile('git', ['status'], cb);
-    expect(calls.at(-1).args).toEqual(['git', ['status'], { windowsHide: true }, cb]);
+    execFile('example-program', ['status'], cb);
+    expect(calls.at(-1).args).toEqual(['example-program', ['status'], { windowsHide: true }, cb]);
 
-    execFile('git', { cwd: '/repo' });
-    expect(calls.at(-1).args).toEqual(['git', { cwd: '/repo', windowsHide: true }]);
+    execFile('example-program', { cwd: '/repo' });
+    expect(calls.at(-1).args).toEqual(['example-program', { cwd: '/repo', windowsHide: true }]);
 
-    execFile('git', ['status'], { cwd: '/repo' }, cb);
+    execFile('example-program', ['status'], { cwd: '/repo' }, cb);
     expect(calls.at(-1).args).toEqual([
-      'git',
+      'example-program',
       ['status'],
       { cwd: '/repo', windowsHide: true },
       cb,
