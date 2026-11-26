@@ -9,10 +9,10 @@ import { Router } from 'express';
 import { requireProductionReviewer } from '../services/musicVideo/productionReviewService.js';
 import { asyncHandler, ServerError } from '../lib/errorHandler.js';
 import { validateRequest } from '../lib/validateRequest.js';
-import { musicVideoPublishCopyPatchSchema, musicVideoPublishCopyDraftSchema, musicVideoPromotionPlanSchema, musicVideoPublishFrameSchema, musicVideoCoverArtComposeSchema, musicVideoYoutubeThumbnailComposeSchema, musicVideoYoutubeThumbnailPaintSchema, musicVideoYoutubeThumbnailPaintPreviewSchema, musicVideoCoverArtGenerateSchema, musicVideoCoverDesignSaveSchema, musicVideoArtistStyleSaveSchema, musicVideoArtistStyleDeleteSchema, musicVideoCoverArtDesignSchema, musicVideoPublishTargetSchema, musicVideoPublishPrepareSchema, musicVideoPublishPlatformsPatchSchema, musicVideoPublishPostSchema, musicVideoPublishCrossLinksSchema, musicVideoCrossLinkTargetSchema, musicVideoCrossLinkEditSchema } from '../lib/musicVideo/musicVideoRouteValidation.js';
+import { musicVideoPublishKitBuildSchema, musicVideoPublishCopyPatchSchema, musicVideoPublishCopyDraftSchema, musicVideoPromotionPlanSchema, musicVideoPublishFrameSchema, musicVideoCoverArtComposeSchema, musicVideoYoutubeThumbnailComposeSchema, musicVideoYoutubeThumbnailPaintSchema, musicVideoYoutubeThumbnailPaintPreviewSchema, musicVideoCoverArtGenerateSchema, musicVideoCoverDesignSaveSchema, musicVideoArtistStyleSaveSchema, musicVideoArtistStyleDeleteSchema, musicVideoCoverArtDesignSchema, musicVideoPublishTargetSchema, musicVideoPublishPrepareSchema, musicVideoPublishPlatformsPatchSchema, musicVideoPublishPostSchema, musicVideoPublishCrossLinksSchema, musicVideoCrossLinkTargetSchema, musicVideoCrossLinkEditSchema } from '../lib/musicVideo/musicVideoRouteValidation.js';
 import { uploadSingle } from '../lib/multipart.js';
 import { requireProject } from '../services/musicVideo/requireProject.js';
-import { startPublishKitBuild, attachPublishKitSseClient, cancelPublishKitBuild, draftPublishKitCopy, updatePublishKitCopy, finalRenderFile, capturePublishKitFrame } from '../services/musicVideo/publishKit.js';
+import { startPublishKitBuild, getPublishKitCropPreview, attachPublishKitSseClient, cancelPublishKitBuild, draftPublishKitCopy, updatePublishKitCopy, finalRenderFile, capturePublishKitFrame } from '../services/musicVideo/publishKit.js';
 import { preparePublishDraft, previewPublishPost, discardPublishDraft, listPublishDrafts, recordPublishPost, removePublishPost, prepareCrossLinkEdit, setPublishCrossLinks } from '../services/musicVideo/publish/index.js';
 import { getPublishPlatforms, updatePublishPlatforms, publishHistory } from '../services/musicVideo/publish/platforms.js';
 import { listArtistStyles, saveArtistStyle, removeArtistStyle } from '../services/musicVideo/publish/artistStyles.js';
@@ -28,6 +28,11 @@ router.get('/:id/publish-kit/video', asyncHandler(async (req, res) => {
   res.sendFile(path);
 }));
 
+router.get('/:id/publish-kit/crop-preview', asyncHandler(async (req, res) => {
+  res.set('Cache-Control', 'no-store');
+  res.json(await getPublishKitCropPreview(req.params.id));
+}));
+
 router.post('/:id/publish-kit/frame', asyncHandler(async (req, res) => {
   const { atSec } = validateRequest(musicVideoPublishFrameSchema, req.body ?? {});
   const { project } = await capturePublishKitFrame(req.params.id, atSec);
@@ -35,7 +40,8 @@ router.post('/:id/publish-kit/frame', asyncHandler(async (req, res) => {
 }));
 
 router.post('/:id/publish-kit/build', asyncHandler(async (req, res) => {
-  res.json(await startPublishKitBuild(req.params.id));
+  const input = validateRequest(musicVideoPublishKitBuildSchema, req.body ?? {});
+  res.json(await startPublishKitBuild(req.params.id, input));
 }));
 
 router.get('/publish-kit/:jobId/events', (req, res) => {

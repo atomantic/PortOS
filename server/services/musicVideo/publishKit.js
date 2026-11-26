@@ -27,6 +27,7 @@ import { listProjects, mutateProjectRecord } from './projects.js';
 import { requireProject } from './requireProject.js';
 import { kitCutWindows, SOCIAL_VIDEO_ARGS } from './socialCuts.js';
 import { musicVideoAspect } from '../../lib/musicVideo/musicVideoAspect.js';
+import { publishCropRect } from '../../lib/musicVideo/musicVideoPublishCrop.js';
 import { musicVideoDependencyChanges } from '../../lib/musicVideo/musicVideoDependencies.js';
 import { buildChapters, buildSrt, buildPublishCopyPrompt, parsePublishCopy, normalizeCopyOptions, PUBLISH_PLATFORMS } from './publishKitText.js';
 import { canonicalizeSunoUrl, isSunoShareLink } from '../sunoShareLink.js';
@@ -66,6 +67,33 @@ export async function finalRenderFile(project) {
   return resolved;
 }
 
+const staleCropPreview = () => kitError(409, 'PUBLISH_CROP_PREVIEW_STALE', 'The master or hook window changed. Refresh the crop preview before building.');
+const readPublishPlatforms = async () => (await import('./publish/platforms.js')).getPublishPlatforms().catch(() => null);
+const publishWindows = (project, platforms) => kitCutWindows(project, { sunoHook: platforms?.sunoHook?.enabled === true });
+
+async function resolveCropPreview(project, { entry, path }, expected) {
+  const [{ width, height }, durationSec] = await Promise.all([probeVideoStreamInfo(path), probeVideoDuration(path)]);
+  // Resolve the current master and hook inputs after probing, just before kickoff.
+  const [current, platforms] = await Promise.all([requireProject(project.id), readPublishPlatforms()]);
+  if (current.renderHistoryId !== project.renderHistoryId) throw staleCropPreview();
+  const windows = publishWindows(current, platforms);
+  const { vertical } = windows;
+  const endSec = Math.min(vertical?.endSec ?? 0, durationSec ?? 0);
+  if (musicVideoAspect(current) !== '16:9' || !vertical || endSec <= vertical.startSec || width <= height || !publishCropRect(width, height, 0.5)) {
+    if (expected) throw staleCropPreview();
+    throw kitError(409, 'PUBLISH_CROP_UNAVAILABLE', 'Crop preview needs a readable landscape final render and a hook window inside it.');
+  }
+  const preview = { renderHistoryId: current.renderHistoryId, filename: entry.filename, width, height, startSec: vertical.startSec, endSec };
+  if (expected && Object.entries(preview).some(([key, value]) => expected[key] !== value)) throw staleCropPreview();
+  return { preview, windows: { ...windows, vertical: { ...vertical, endSec } } };
+}
+
+export async function getPublishKitCropPreview(projectId) {
+  const project = await requireProject(projectId);
+  const { preview } = await resolveCropPreview(project, await finalRenderFile(project));
+  return preview;
+}
+
 /** A file an older build left behind, deleted only once no project's kit still names it (a clone shares the record). */
 export async function releaseKitFiles(filenames, keep = []) {
   if (!filenames.length) return;
@@ -92,7 +120,7 @@ export async function releaseKitFiles(filenames, keep = []) {
  * current final render. Returns `{ jobId }`; progress streams over SSE and the
  * record carries the result.
  */
-export async function startPublishKitBuild(projectId) {
+export async function startPublishKitBuild(projectId, { crop } = {}) {
   assertRenderCleanupIdle(projectId);
   if (projectBuilds.has(projectId)) throw kitError(409, 'PUBLISH_KIT_BUILD_IN_PROGRESS', 'A publishing kit build is already running for this project', getActivePublishKitBuild(projectId) || undefined);
   const jobId = `mvpk-${randomUUID()}`;
@@ -100,18 +128,22 @@ export async function startPublishKitBuild(projectId) {
   // another request before there is a background job to put in the registry.
   projectBuilds.set(projectId, jobId);
   try {
-    return await projectBuilds.run(projectId, () => beginPublishKitBuild(projectId, jobId));
+    return await projectBuilds.run(projectId, () => beginPublishKitBuild(projectId, jobId, crop));
   } catch (error) {
     projectBuilds.delete(projectId);
     throw error;
   }
 }
 
-async function beginPublishKitBuild(projectId, jobId) {
+async function beginPublishKitBuild(projectId, jobId, crop) {
   const project = await requireProject(projectId);
-  const { entry, path: masterPath } = await finalRenderFile(project);
+  if (crop && crop.renderHistoryId !== project.renderHistoryId) throw staleCropPreview();
+  const master = await finalRenderFile(project);
+  const { entry, path: masterPath } = master;
   const ffmpeg = await findFfmpeg();
   if (!ffmpeg) throw kitError(500, 'FFMPEG_MISSING', 'ffmpeg not found on PATH');
+  const cropPlan = crop ? await resolveCropPreview(project, master, crop) : null;
+  const rect = cropPlan ? publishCropRect(crop.width, crop.height, crop.position) : null;
   const job = { id: jobId, projectId, status: 'running', clients: [], abort: new AbortController() };
   jobs.set(jobId, job);
   const tag = jobId.slice(5, 13);
@@ -123,8 +155,7 @@ async function beginPublishKitBuild(projectId, jobId) {
     const durationSec = Number(entry.durationSec) > 0 ? Number(entry.durationSec) : await probeVideoDuration(masterPath);
     const stem = `music-video-${projectId.slice(3, 11)}-${Date.now()}`;
     // The vertical cut follows the teaser's hook unless the director posts Suno Hooks and that hook opens too late for one.
-    const platforms = await (await import('./publish/platforms.js')).getPublishPlatforms().catch(() => null);
-    const { teaser, vertical } = kitCutWindows(project, { sunoHook: platforms?.sunoHook?.enabled === true });
+    const { teaser, vertical } = cropPlan?.windows ?? publishWindows(project, await readPublishPlatforms());
     const encodes = [
       { kind: 'x-1080p', label: 'X / social up to 1080p (12 Mbps)', filename: `${stem}-x-1080p.mp4`,
         args: ['-i', masterPath, '-vf', "scale=w='min(1920,iw)':h='min(1080,ih)':force_original_aspect_ratio=decrease", ...SOCIAL_VIDEO_ARGS, ...AUDIO_ARGS] },
@@ -136,13 +167,13 @@ async function beginPublishKitBuild(projectId, jobId) {
       // #10150: Shorts/TikTok/Reels need 9:16. A composition that lays itself out at 9:16
       // (portosComposition.formats) renders the window natively; otherwise the 16:9 master's whole
       // frame is fitted over a blurred fill of itself (#10377) — a center-crop dropped off-center text.
-      ...(vertical && musicVideoAspect(project) === '16:9' ? [{ kind: 'vertical-9x16', label: `Vertical 9:16 ${Math.round(vertical.endSec - vertical.startSec)}s`, filename: `${stem}-vertical.mp4`, window: vertical,
-        layout: 'fit',
-        native: async (outputPath, onProgress) => (await import('./excerptRender.js')).renderSeekedWindow(project, {
+      ...(vertical && (rect || musicVideoAspect(project) === '16:9') ? [{ kind: 'vertical-9x16', label: `Vertical 9:16 ${Math.round(vertical.endSec - vertical.startSec)}s`, filename: `${stem}-vertical.mp4`, window: vertical,
+        layout: rect ? 'crop' : 'fit',
+        native: rect ? null : async (outputPath, onProgress) => (await import('./excerptRender.js')).renderSeekedWindow(project, {
           startSec: vertical.startSec, endSec: vertical.endSec, aspect: '9:16', fade: true, videoArgs: SOCIAL_VIDEO_ARGS, outputPath, jobId: `${jobId}-vertical`, signal: job.abort.signal, onProgress,
         }),
         args: ['-ss', String(vertical.startSec), '-t', String(vertical.endSec - vertical.startSec), '-i', masterPath,
-          '-vf', VERTICAL_FIT_FILTER, ...SOCIAL_VIDEO_ARGS,
+          '-vf', rect ? `crop=${rect.width}:${rect.height}:${rect.x}:${rect.y}:exact=1,scale=1080:1920,setsar=1` : VERTICAL_FIT_FILTER, ...SOCIAL_VIDEO_ARGS,
           '-af', `asetpts=PTS-STARTPTS${edgeFadeFilter(vertical.endSec - vertical.startSec)}`, ...AUDIO_ARGS] }] : []),
     ];
     const candidates = thumbnailCandidates(project, durationSec);

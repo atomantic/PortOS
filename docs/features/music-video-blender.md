@@ -477,8 +477,9 @@ project's final video is behind the shots (`null` when it has no final joined fr
 
 ## Limits
 
-- One film per project; the film's frame size is its own, so excerpts cannot be re-framed to another aspect (a
-  vertical social cut is fitted from the final video).
+- One film per project. Excerpts use the film's frame size. In Publish → Release assets, the vertical kit cut defaults
+  to fitting the landscape final video. Choose **Crop from master** to scrub the hook and drag the guide or use the
+  horizontal position slider before building a full-bleed cut. If the master or hook changes, refresh the preview.
 - 6 hours per shot job, 32 GiB of memory, 16 GiB per written file.
 - Blender starts fresh for every job (`--factory-startup`): no add-ons, preferences or caches carry over.
 - Frames are kept after encoding until you clear them (see Disk use and rendered frames). `renders/` is excluded
