@@ -9,8 +9,7 @@
  */
 import { createHash, randomBytes, randomUUID, timingSafeEqual } from 'node:crypto';
 import { readFile, stat } from 'node:fs/promises';
-import { dirname } from 'node:path';
-import { atomicWrite, ensureDir } from '../lib/fileCore.js';
+import { writeSecureJson } from '../lib/secureAuthStore.js';
 import { createFileWriteQueue } from '../lib/fileWriteQueue.js';
 import { ServerError } from '../lib/errorHandler.js';
 import { visitorCancellationSchema, visitorCredentialSchema, visitorAdmissionSchema, visitorScopeSchema, visitorActionSchema, visitorCredentialDocumentSchema,
@@ -62,7 +61,7 @@ export function createManagedVisitorBroker({ path, getApp, host, now = Date.now 
   async function write(document) {
     const text = JSON.stringify(visitorCredentialDocumentSchema.parse(document));
     if (Buffer.byteLength(text) > 65536) throw fail('Managed visitor credential capacity reached.');
-    await ensureDir(dirname(path)); await atomicWrite(path, text);
+    await writeSecureJson(path, text);
   }
   async function app(id) { const value = await getApp(id); if (!value || value.archived) throw fail('Managed app is unavailable.', 403); }
   async function credential(auth) {
