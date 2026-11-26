@@ -35,7 +35,7 @@ export {
   LINUX_CONTAINMENT_PATH_RE, LINUX_CONTAINMENT_TESTS, MACOS_NATIVE_PATH_RE, MACOS_NATIVE_TESTS,
   NODE_MINIMUM_PATH_RE, SERVER_SEED_OWNERS, SLASHDO_CONTRACT_TEST_FILES, SLASHDO_GITLINK_PATH,
   SUPERCOLLIDER_LIVE_ENTRIES, SUPERCOLLIDER_LIVE_PATH_RE, TOOLING_OWNER_RE, TOOLING_TESTS, WINDOWS_CONTRACT_TESTS,
-  WINDOWS_RISK_RULES, getAlwaysRunTests, getGuardTests, isRouteOnlyAppDiff, isServerSeed, serverSeedTestsFor,
+  WINDOWS_RISK_RULES, PROMPT_STAGE_GUARD, getAlwaysRunTests, getGuardTests, isRouteOnlyAppDiff, isServerSeed, serverSeedTestsFor,
   sourceReferencePattern, splitByRunner, structuralTestsFor,
 } from './lib/ciPlanRules.js';
 export {

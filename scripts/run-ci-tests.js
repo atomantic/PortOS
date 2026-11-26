@@ -24,14 +24,13 @@ import { SERVED_FILES_ENV, readServedFiles } from './lib/browserServedFiles.js';
 import { browserOwnerExcludes, TEST_SCOPES, workspaceOf } from './lib/workspaceTests.js';
 import { resolveDbTestFiles } from './lib/dbTestFiles.js';
 import { CI_GUARD_BUDGET_MS, describeGuardDurations, guardDurations, overBudgetGuards, readGuardLoads } from './lib/guardBudget.js';
-import { getAlwaysRunTests } from './lib/ciPlanRules.js';
+import { getAlwaysRunTests, PROMPT_STAGE_GUARD } from './lib/ciPlanRules.js';
 import { isClientBrowserSuite } from './lib/importReach.js';
 
 const repoRoot = join(dirname(fileURLToPath(import.meta.url)), '..');
 
 // The manifest scan is selected on relevant diffs and in the full suite.
 // Give it the scheduled guard budget without making it run on unrelated PRs.
-const PROMPT_STAGE_GUARD = 'scripts/generate-prompt-stage-call-sites.test.js';
 
 /**
  * Vitest's own signature for a worker that never returned control at all — a
