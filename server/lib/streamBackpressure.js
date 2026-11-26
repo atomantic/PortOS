@@ -2,7 +2,7 @@
 //
 // `awaitWritableDrain(res)` — park a streaming-response producer on the socket's next `drain` (or
 // `close`) when `res.write()` returned false, so SSE/NDJSON writes stay bounded for a slow reader.
-// Shared by `routes/ask.js` (SSE) and `routes/localLlm.js` (NDJSON).
+// Shared by `routes/ask.js` (SSE) and `routes/localLlm/playgroundRoutes.js` (NDJSON).
 //
 // `res.write()` returns false when the kernel/send buffer is full. A producer
 // that ignores that return value buffers the whole response in memory when the
@@ -13,7 +13,7 @@
 // Both listeners are torn down on settle so a client that hangs up mid-drain
 // can't leak a `drain`/`close` listener. Resolves immediately when the response
 // is already finished (nothing left to drain). Shared by the SSE `send` helper
-// in routes/ask.js and the NDJSON `write` helper in routes/localLlm.js.
+// in routes/ask.js and the NDJSON `write` helper in routes/localLlm/playgroundRoutes.js.
 export const awaitWritableDrain = (res) => {
   if (res.writableEnded || res.destroyed) return Promise.resolve();
   return new Promise((resolve) => {
