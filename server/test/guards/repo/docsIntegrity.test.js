@@ -612,7 +612,6 @@ const RATCHET_SLACK_BYTES = 2 * 1024;
 // a doc forces its entry down or out.
 const SIZE_RATCHET_CEILINGS = {
   'HTML_COMPOSITIONS.md': 67233,
-  'TROUBLESHOOTING.md': 46000,
   'FEDERATED_MEDIA_PROVIDERS.md': 45625,
   'QUOTA-BURN.md': 44909,
 };
