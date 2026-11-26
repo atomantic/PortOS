@@ -968,14 +968,19 @@ describe.skipIf(!runDb)('beeperTribe (#34)', () => {
       expect(byId.get('batch-beeper-only').tribePersonId).toBe(beeperUserOwner.id);
       expect(resolvedPersonIds.get('batch-unlinked-0')).toBeNull();
 
-      // logSenderTouchpoints reuses resolvedPersonIds with zero participant/identity reads.
+      // Two reads cover every sender in the transaction that inserts the touchpoint.
       sqlLog.length = 0;
       const tp = await beeperTribe.logSenderTouchpoints([
         { conversationId, senderId: 'batch-both', sentAt: '2026-10-04T12:00:00.000Z', network: 'whatsapp' },
         { conversationId, senderId: 'batch-unlinked-0', sentAt: '2026-10-04T12:05:00.000Z', network: 'whatsapp' },
-      ], { personIndex: rosterIndex, resolvedPersonIds });
+      ], { personIndex: rosterIndex });
       expect(tp).toEqual({ matched: 1, created: 1 });
-      expect(sqlLog.some((s) => s.includes('beeper_participants') || s.includes('tribe_identities'))).toBe(false);
+      expect(sqlLog.slice(0, 4)).toEqual([
+        'BEGIN', expect.stringContaining('pg_advisory_xact_lock_shared'),
+        expect.stringContaining('p.source_user_id = ANY'), expect.stringContaining('JOIN tribe_identities'),
+      ]);
+      expect(sqlLog.filter((s) => s.includes('beeper_participants') || s.includes('tribe_identities'))).toHaveLength(2);
+      expect(sqlLog.at(-1)).toBe('COMMIT');
     } finally {
       spy.mockRestore();
     }

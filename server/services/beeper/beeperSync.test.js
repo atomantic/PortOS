@@ -530,12 +530,7 @@ describe('watermark-bounded sweep', () => {
     expect(loadRosterIndexMock).not.toHaveBeenCalled();
   });
 
-  it('deduplicates roster and senders into one batched upsert and passes resolvedPersonIds to logSenderTouchpoints', async () => {
-    const resolvedMap = new Map([['user-1', 'person-1'], ['u-self', null]]);
-    upsertConversationParticipantsMock.mockResolvedValueOnce({
-      participants: [],
-      resolvedPersonIds: resolvedMap,
-    });
+  it('deduplicates roster and senders into one batched upsert and logs inbound senders only', async () => {
     installFetch({
       chatPages: [{ items: [CHAT_PAGE.items[0]], hasMore: false }],
       messagePages: {
@@ -562,10 +557,9 @@ describe('watermark-bounded sweep', () => {
       { personIndex: expect.any(Object) },
     );
     // A message the user SENT is not contact from anyone, so it never becomes a
-    // touchpoint candidate; the resolved sender->personId map rides into options.
-    const [candidates, touchpointOptions] = logSenderTouchpointsMock.mock.calls[0];
+    // touchpoint candidate.
+    const [candidates] = logSenderTouchpointsMock.mock.calls[0];
     expect(candidates.map((c) => c.senderId)).toEqual(['user-1']);
-    expect(touchpointOptions.resolvedPersonIds).toBe(resolvedMap);
   });
 });
 
