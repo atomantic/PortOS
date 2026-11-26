@@ -1,5 +1,6 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { render, screen, fireEvent, waitFor, act, within } from '@testing-library/react';
+import userEvent from '@testing-library/user-event';
 import { MemoryRouter, useLocation } from 'react-router';
 
 // Spy on navigation so the "Remix into…" handoff can assert the target route +
@@ -586,6 +587,65 @@ describe('Catalog page', () => {
       'i-2', { refKind: 'universe', refId: 'u-1', role: 'canon-place' }, { silent: true },
     );
     expect(toast.success).toHaveBeenCalledWith(expect.stringMatching(/Added 2 ingredients to Echo Saints/i));
+  });
+
+  it.each([
+    ['Remix into…', 'list', 'Remix targets'],
+    ['Set owning universe…', 'group', 'Set owning universe'],
+    ['Add to universe/series…', 'group', 'Add to universe or series'],
+  ])('toggles and dismisses %s and restores focus to its trigger', async (name, role, panelName) => {
+    const user = userEvent.setup();
+    renderCatalog();
+    await user.click(await screen.findByLabelText('Select Echo Saint'));
+    const trigger = screen.getByRole('button', { name });
+    const getPanel = () => screen.queryByRole(role, { name: panelName });
+    expect(trigger).toHaveAttribute('aria-expanded', 'false');
+
+    await user.click(trigger);
+    expect(trigger).toHaveAttribute('aria-expanded', 'true');
+    expect(trigger.parentElement).toContainElement(getPanel());
+    await user.click(trigger);
+    expect(trigger).toHaveAttribute('aria-expanded', 'false');
+    expect(getPanel()).toBeNull();
+
+    await user.click(trigger);
+    const action = await within(getPanel()).findAllByRole('button');
+    await user.tab();
+    expect(action[0]).toHaveFocus();
+    await user.keyboard('{Escape}');
+    expect(trigger).toHaveAttribute('aria-expanded', 'false');
+    expect(getPanel()).toBeNull();
+    expect(trigger).toHaveFocus();
+
+    await user.click(trigger);
+    await user.click(getPanel());
+    expect(trigger).toHaveAttribute('aria-expanded', 'true');
+    await user.click(screen.getByText('1 selected'));
+    expect(trigger).toHaveAttribute('aria-expanded', 'false');
+    expect(getPanel()).toBeNull();
+    expect(trigger).toHaveFocus();
+  });
+
+  it('switches placement modes and only shows the empty series notice for membership', async () => {
+    const user = userEvent.setup();
+    listPipelineSeriesNames.mockResolvedValue([]);
+    renderCatalog();
+    await user.click(await screen.findByLabelText('Select Echo Saint'));
+    const membership = screen.getByRole('button', { name: 'Add to universe/series…' });
+    const owner = screen.getByRole('button', { name: 'Set owning universe…' });
+
+    await user.click(membership);
+    expect(await screen.findByText('No series yet.')).toBeInTheDocument();
+    await user.click(owner);
+    expect(owner).toHaveAttribute('aria-expanded', 'true');
+    expect(membership).toHaveAttribute('aria-expanded', 'false');
+    expect(screen.queryByText(/series yet|Loading series/)).toBeNull();
+    expect(await within(screen.getByRole('group', { name: 'Set owning universe' })).findByRole('button', { name: 'Echo Saints' })).toBeInTheDocument();
+
+    await user.click(membership);
+    expect(membership).toHaveAttribute('aria-expanded', 'true');
+    expect(owner).toHaveAttribute('aria-expanded', 'false');
+    expect(await screen.findByText('No series yet.')).toBeInTheDocument();
   });
 
   it('shows and retries universe and series target read errors in the add menu', async () => {

@@ -71,7 +71,7 @@ function CreateLoopForm({ providers, onCreated, promptRef }) {
     if (!prompt.trim()) return;
     setCreating(true);
     const data = {
-      prompt: prompt.trim(),
+      prompt,
       interval: customInterval || intervalPreset,
       name: name.trim() || undefined,
       cwd: cwd.trim() || undefined,

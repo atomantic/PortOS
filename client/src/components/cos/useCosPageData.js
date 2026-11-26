@@ -725,6 +725,32 @@ export default function useCosPageData({ activeTab, selectedTask }) {
     };
     socket.on('cos:tasks:changed', handleTaskMutation);
 
+    // This queue belongs to the socket subscription and is discarded with it.
+    const pendingOutputs = new Map();
+    let outputFlushTimer = null;
+
+    const cancelOutputFlush = () => {
+      clearTimeout(outputFlushTimer);
+      outputFlushTimer = null;
+    };
+
+    const discardPendingOutput = (id) => {
+      if (pendingOutputs.delete(id) && pendingOutputs.size === 0) cancelOutputFlush();
+    };
+
+    const flushOutputs = () => {
+      outputFlushTimer = null;
+      const batch = [...pendingOutputs];
+      pendingOutputs.clear();
+      setLiveOutputs(prev => {
+        const next = { ...prev };
+        for (const [id, lines] of batch) {
+          next[id] = (prev[id] || []).concat(lines).slice(-500);
+        }
+        return next;
+      });
+    };
+
     const handleAgentSpawned = (data) => {
       if (needsRef.current.agents && data?.id) {
         agentReadRef.current?.updates.set(data.id, data);
@@ -741,6 +767,7 @@ export default function useCosPageData({ activeTab, selectedTask }) {
       // Initialize empty output buffer for new agent
       const id = data?.id || data?.agentId;
       if (needsRef.current.agents && id) {
+        discardPendingOutput(id);
         setLiveOutputs(prev => ({ ...prev, [id]: [] }));
       }
       fetchQueue();
@@ -762,13 +789,12 @@ export default function useCosPageData({ activeTab, selectedTask }) {
     socket.on('cos:agent:updated', handleAgentUpdated);
 
     const handleAgentOutput = (data) => {
-      if (needsRef.current.agents && data?.agentId && data?.line) {
-        setLiveOutputs(prev => {
-          const existing = prev[data.agentId] || [];
-          const updated = [...existing, { line: data.line, timestamp: Date.now() }];
-          return { ...prev, [data.agentId]: updated.length > 500 ? updated.slice(-500) : updated };
-        });
-      }
+      if (!needsRef.current.agents || !data?.agentId || !data?.line) return;
+
+      const { agentId, line } = data;
+      if (!pendingOutputs.has(agentId)) pendingOutputs.set(agentId, []);
+      pendingOutputs.get(agentId).push({ line, timestamp: Date.now() });
+      if (outputFlushTimer === null) outputFlushTimer = setTimeout(flushOutputs, 100);
     };
     socket.on('cos:agent:output', handleAgentOutput);
 
@@ -792,8 +818,9 @@ export default function useCosPageData({ activeTab, selectedTask }) {
       setSpeakingFor();
       // Clear active agent metadata so avatar reverts to default
       setActiveAgentMeta(null);
-      // Clean up live output buffer for completed agent to prevent memory growth
+      // Evict queued lines as well so a later flush cannot recreate this buffer.
       if (id) {
+        discardPendingOutput(id);
         setLiveOutputs(prev => {
           if (!(id in prev)) return prev;
           const { [id]: _, ...rest } = prev;
@@ -866,6 +893,8 @@ export default function useCosPageData({ activeTab, selectedTask }) {
       socket.off('cos:agent:spawned', handleAgentSpawned);
       socket.off('cos:agent:updated', handleAgentUpdated);
       socket.off('cos:agent:output', handleAgentOutput);
+      cancelOutputFlush();
+      pendingOutputs.clear();
       socket.off('cos:agent:completed', handleAgentCompleted);
       socket.off('cos:health:check', handleHealthCheck);
       socket.off('cos:log', handleCosLog);

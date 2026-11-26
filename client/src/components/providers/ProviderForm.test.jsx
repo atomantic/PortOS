@@ -46,19 +46,49 @@ describe('ProviderForm', () => {
     request.mockResolvedValue({ options: [{ key: 'serviceTier', label: 'Speed', values: ['standard', 'fast'] }] });
   });
 
+  it('closes on Escape once connection edits have been reverted', () => {
+    const onClose = vi.fn();
+    renderForm({ onClose, provider: { id: 'example', name: 'Example', type: 'cli', command: 'example' } });
+    const name = screen.getByLabelText('Name *');
+
+    fireEvent.change(name, { target: { value: 'Edited name' } });
+    fireEvent.keyDown(name, { key: 'Escape' });
+    expect(onClose).not.toHaveBeenCalled();
+
+    fireEvent.change(name, { target: { value: 'Example' } });
+    fireEvent.keyDown(name, { key: 'Escape' });
+    expect(onClose).toHaveBeenCalledTimes(1);
+  });
+
+  it('protects a draft environment variable after switching tabs', () => {
+    const onClose = vi.fn();
+    renderForm({ onClose });
+    switchTab('Environment');
+    fireEvent.change(screen.getByLabelText('New environment variable name'), { target: { value: 'EXAMPLE' } });
+    switchTab('Connection');
+
+    fireEvent.keyDown(screen.getByLabelText('Name *'), { key: 'Escape' });
+    expect(onClose).not.toHaveBeenCalled();
+  });
+
   it('sends one save for a repeated click and stays open when that save fails', async () => {
     let fail;
     api.updateProvider.mockReturnValue(new Promise((_, reject) => { fail = reject; }));
     const onSave = vi.fn();
-    renderForm({ onSave, provider: { id: 'example', name: 'Example', type: 'cli', command: 'example' } });
+    const onClose = vi.fn();
+    renderForm({ onSave, onClose, provider: { id: 'example', name: 'Example', type: 'cli', command: 'example' } });
     const save = screen.getByRole('button', { name: 'Save' });
     fireEvent.click(save);
     expect(save).toBeDisabled();
+    fireEvent.keyDown(screen.getByLabelText('Name *'), { key: 'Escape' });
+    expect(onClose).not.toHaveBeenCalled();
     fireEvent.click(save);
     await act(async () => { fail(new Error('offline')); });
     expect(api.updateProvider).toHaveBeenCalledTimes(1);
     expect(onSave).not.toHaveBeenCalled();
     expect(save).toBeEnabled();
+    fireEvent.keyDown(screen.getByLabelText('Name *'), { key: 'Escape' });
+    expect(onClose).toHaveBeenCalledTimes(1);
   });
 
   it('requires saved connection settings before offering execution capabilities and keeps old defaults clearable', async () => {

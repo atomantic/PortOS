@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { Link } from 'react-router';
 import { Gauge, RefreshCw, ExternalLink, Save, Square, Download, Terminal } from 'lucide-react';
 import BrailleSpinner from '../BrailleSpinner';
@@ -21,6 +21,7 @@ const btnClass = 'flex items-center gap-1.5 px-2.5 py-1.5 text-xs font-medium ro
 
 export default function MtplxServerCard({
   status,
+  visible = true,
   loading,
   busy,
   actionInProgress,
@@ -32,6 +33,8 @@ export default function MtplxServerCard({
   onUninstall,
   onSearchModels,
   onPullModel,
+  onCancelPull,
+  cancellingPull,
   onRemoveModel,
   download,
 }) {
@@ -39,6 +42,15 @@ export default function MtplxServerCard({
   // checklist's one-click setup does).
   const [model, setModel] = useState('');
   const [port, setPort] = useState('');
+  const [seeded, setSeeded] = useState(false);
+
+  const launch = status?.launch;
+  useEffect(() => {
+    if (seeded || !launch) return;
+    setModel(launch.model || '');
+    setPort(launch.port == null ? '' : String(launch.port));
+    setSeeded(true);
+  }, [launch, seeded]);
 
   const cached = status?.cachedModels || [];
   // Rows carry size/verification for the manage-checkpoints list; older status
@@ -174,6 +186,7 @@ export default function MtplxServerCard({
                   className="w-full bg-port-card border border-port-border rounded px-2 py-1.5 text-xs text-white"
                 >
                   <option value="">Auto — first verified checkpoint in the cache</option>
+                  {model && !cached.includes(model) && <option value={model}>{model} (saved)</option>}
                   {cached.map((id) => <option key={id} value={id}>{id}</option>)}
                 </select>
               </div>
@@ -224,6 +237,7 @@ export default function MtplxServerCard({
 
       {status?.installed && status?.supported !== false && !runtimeMissing && (
         <MtplxCheckpoints
+          visible={visible}
           cached={cachedRows}
           cacheError={status?.cacheError || null}
           download={download}
@@ -231,6 +245,8 @@ export default function MtplxServerCard({
           actionInProgress={actionInProgress}
           onSearch={onSearchModels}
           onPull={onPullModel}
+          onCancelPull={onCancelPull}
+          cancellingPull={cancellingPull}
           onRemove={onRemoveModel}
         />
       )}

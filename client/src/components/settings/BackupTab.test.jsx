@@ -663,7 +663,7 @@ describe('BackupTab', () => {
       });
 
       const [message] = toast.error.mock.calls.at(-1);
-      expect(message).toContain('docs/BACKUP_PUBLICATION_ADMISSION.md');
+      expect(message).toContain('docs/BACKUP.md');
       expect(message).toContain('Details: Timed out draining asset publications for backup. Blocking publication ownership: data/backup-admission/publications/abc (uncertain');
     });
 

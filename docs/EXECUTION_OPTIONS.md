@@ -37,7 +37,7 @@ Every shared-selector consumer below uses the legacy reference bridge unless it 
 | `client/src/components/apps/LaunchVideoPanel.jsx` | Shared structured options or saved provider reference |
 | `client/src/components/apps/SlashDoPanel.jsx` | Shared structured options or saved provider reference |
 | `client/src/components/apps/SlashDoRunDrawer.jsx` | Shared structured options or saved provider reference |
-| `client/src/components/apps/tabs/IssuesTab.jsx` | Shared structured options or saved provider reference |
+| `client/src/components/apps/tabs/IssueRunSettingsBar.jsx` | Shared structured options or saved provider reference |
 | `client/src/components/apps/tabs/PullRequestsTab.jsx` | Shared structured options or saved provider reference |
 | `client/src/components/brain/tabs/ConfigTab.jsx` | Shared structured options or saved provider reference |
 | `client/src/components/brain/tabs/DailyLogTab.jsx` | Shared structured options or saved provider reference |

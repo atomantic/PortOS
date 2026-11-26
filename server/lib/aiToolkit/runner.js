@@ -724,6 +724,8 @@ export function createRunnerService(config = {}) {
       activeRuns.set(runId, controller);
       await ownershipSaved;
 
+      // Only the streaming API runner interprets provider.timeout as a stall
+      // bound. Other provider and CLI callers can use it as a wall clock.
       const stallTimeout = timeout ?? provider.timeout ?? DEFAULT_API_RUN_TIMEOUT_MS;
       const absoluteTimeout = apiRunAbsoluteTimeoutMs(stallTimeout, absoluteTimeoutMs);
       let finalizer;
@@ -1011,6 +1013,8 @@ export function createRunnerService(config = {}) {
         });
       };
 
+      // The finalizer shares partial-output and reasoning salvage across
+      // terminal paths, and classifies stream errors using nested causes.
       processStream().catch(async err => {
         await finalizer.finalize({ type: 'stream-error', error: err });
       }).finally(async () => {

@@ -148,10 +148,8 @@ not offer to stop a process it did not start.
   runtime, starts it, stops it, logs it, and persists it across a reboot — the
   one step in the middle being a shell command was the odd one out, and the PRD
   now forbids it outright (NR-9).
-- A download started from the **MTPLX card on Models → Runtimes** keeps running if you navigate away —
-  it is a server-side `mtplx pull` with progress on a socket, not work owned by
-  the page. Only the AI Providers checklist's modal cancels on close, for the
-  reason below.
+- A download started from the **MTPLX card on Models → Runtimes** keeps running
+  if you navigate away. Use **Cancel** next to download progress to stop it.
 - Closing the checklist modal **cancels the download**. PortOS allows one local-runtime
   setup at a time, and a weights pull can run for hours, so leaving it running
   after you dismissed it would also refuse every other runtime's setup button

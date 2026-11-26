@@ -58,7 +58,7 @@ async function saveConfig(config) {
 }
 
 function hasCommand(cmd, args) {
-  try { execFileSync(cmd, args, { stdio: 'pipe' }); return true; } catch { return false; }
+  try { execFileSync(cmd, args, { stdio: 'pipe', timeout: 10_000, windowsHide: true }); return true; } catch { return false; }
 }
 
 // macOS Canary lives at the conventional `.app` bundle. Windows Canary installs

@@ -1,6 +1,6 @@
 import { Suspense, useState, useEffect, useCallback, useMemo, useRef } from 'react';
 import { useLocation, useNavigate, useParams } from 'react-router';
-import { Bot, Cpu, Gauge, Network, Package, Plug, Plus, TerminalSquare } from 'lucide-react';
+import { AlertTriangle, Bot, Cpu, Gauge, Network, Package, Plug, Plus, TerminalSquare } from 'lucide-react';
 import toast from '../components/ui/Toast';
 import { useAsyncAction } from '../hooks/useAsyncAction';
 import { getApps } from '../services/apiApps.js';
@@ -667,11 +667,12 @@ export default function AIProviders() {
   const handleAddSample = async (provider) => {
     setAddingSample(prev => ({ ...prev, [provider.id]: true }));
     try {
-      await createProvider(provider);
+      await createProvider(provider, { silent: true });
       setSampleProviders(prev => prev.filter(p => p.id !== provider.id));
       await loadData();
       toast.success(`Added ${provider.name}`);
     } catch (err) {
+      if (err?.toasted) return;
       const message = (typeof err?.message === 'string' && err.message) ||
                       (typeof err?.error === 'string' && err.error) ||
                       (typeof err === 'string' ? err : 'An unknown error occurred');
@@ -704,19 +705,29 @@ export default function AIProviders() {
 
     const succeededIds = [];
     const failedIds = [];
+    let failureAlreadyToasted = false;
 
     for (const provider of addableSamples) {
       try {
-        await createProvider(provider);
+        await createProvider(provider, { silent: true });
         succeededIds.push(provider.id);
       } catch (err) {
+        // Host-control refusals apply to every remaining create and already
+        // explain why the operator must reconnect.
+        if (err?.toasted) {
+          failureAlreadyToasted = true;
+          break;
+        }
         console.error(`Failed to add sample provider ${provider.name || provider.id}:`, err);
         failedIds.push(provider.id);
       }
     }
 
-    setSampleProviders(prev => prev.filter(p => !succeededIds.includes(p.id)));
-    await loadData();
+    if (succeededIds.length > 0) {
+      setSampleProviders(prev => prev.filter(p => !succeededIds.includes(p.id)));
+      await loadData();
+    }
+    if (failureAlreadyToasted) return;
 
     if (failedIds.length === 0) {
       toast.success(`Added ${succeededIds.length} provider${succeededIds.length === 1 ? '' : 's'}`);
@@ -924,7 +935,7 @@ export default function AIProviders() {
 
       <ModelsTabsHeader activeTab="providers" />
       {activeTab !== 'harnesses' && Object.values(observationUnavailable).some(Boolean) && (
-        <Banner variant="warning">Provider readiness status unavailable. Showing the last known state.</Banner>
+        <Banner tone="warning" icon={AlertTriangle}>Provider readiness status unavailable. Showing the last known state.</Banner>
       )}
 
       <div className={`min-h-0 min-w-0 flex-1 overflow-auto p-4 ${activeTab === 'presets' ? 'space-y-6' : ''}`}>

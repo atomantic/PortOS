@@ -1,10 +1,11 @@
 import MaintenancePanel from './MaintenancePanel.jsx';
-import { useState, useEffect, useMemo } from 'react';
+import { useState, useEffect, useMemo, useCallback, useRef } from 'react';
 import { Clock3, MapPin, Palette, Save } from 'lucide-react';
 import toast from '../ui/Toast';
 import FormField from '../ui/FormField';
 import UnsavedChangesConfirm from '../ui/UnsavedChangesConfirm';
 import BrailleSpinner from '../BrailleSpinner';
+import ListLoadError from '../ui/ListLoadError';
 import ThemePickerPanel from '../ThemePickerPanel';
 import useSettingsForm from '../../hooks/useSettingsForm';
 import useUnsavedChangesGuard from '../../hooks/useUnsavedChangesGuard';
@@ -27,8 +28,7 @@ const GENERAL_INITIAL = { timezone: '', lat: '', lon: '' };
 export function GeneralTab() {
   const [loading, setLoading] = useState(true);
   // Timezone and location save independently; `markFieldsSaved` moves one
-  // section's fields at a time. Before the load resolves nothing is editable,
-  // and a failed load leaves the empty fields as the baseline.
+  // section's fields at a time. Failed reads keep the empty baseline hidden.
   const { values, saved, isDirty: dirty, set, load, markFieldsSaved } = useSettingsForm(GENERAL_INITIAL);
   const { timezone, lat, lon } = values;
   const setTimezone = (value) => set('timezone', value);
@@ -45,26 +45,35 @@ export function GeneralTab() {
   const hasDiscardableChanges = (timezoneDirty && !saving)
     || (locationDirty && !savingLocation);
   const routeGuard = useUnsavedChangesGuard(dirty);
+  const loadGeneration = useRef(0);
 
-  useEffect(() => {
-    let current = true;
-    getSettings({ silent: true })
-      .then(settings => {
-        if (!current) return;
+  const [loadError, setLoadError] = useState(null);
+  const loadSettings = useCallback(async () => {
+    const generation = ++loadGeneration.current;
+    setLoading(true);
+    setLoadError(null);
+    try {
+      const settings = await getSettings({ silent: true });
+      if (generation === loadGeneration.current) {
         const nextTimezone = settings?.timezone || '';
         const nextLat = settings?.location?.lat != null ? String(settings.location.lat) : '';
         const nextLon = settings?.location?.lon != null ? String(settings.location.lon) : '';
         load({ timezone: nextTimezone, lat: nextLat, lon: nextLon });
-      })
-      .catch((err) => {
-        if (!current) return;
-        toast.error(failureMessage('Could not load general settings', err, 'Reload the page to retry.'));
-      })
-      .finally(() => {
-        if (current) setLoading(false);
-      });
-    return () => { current = false; };
-  }, []);
+      }
+    } catch (err) {
+      if (generation === loadGeneration.current) {
+        setLoadError(err);
+        toast.error(failureMessage('Could not load general settings', err));
+      }
+    } finally {
+      if (generation === loadGeneration.current) setLoading(false);
+    }
+  }, [load]);
+
+  useEffect(() => {
+    loadSettings();
+    return () => { loadGeneration.current += 1; };
+  }, [loadSettings]);
 
   const handleSaveLocation = async () => {
     const submittedLat = lat;
@@ -169,6 +178,7 @@ export function GeneralTab() {
   };
 
   if (loading) return <BrailleSpinner />;
+  if (loadError) return <ListLoadError what="general settings" error={loadError} onRetry={loadSettings} retrying={loading} />;
 
   return (
     <section
