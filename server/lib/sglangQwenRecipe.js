@@ -28,11 +28,10 @@
  *     you asked for. It is derived here, not defaulted.
  *
  * **What is verified and what is derived.** The `h200` cell is transcribed
- * flag-for-flag from the cookbook cell recorded in
- * `docs/research/2026-08-21-sglang-qwen38-27b.md` (`hw=h200, variant=default,
+ * flag-for-flag from the cookbook cell (`hw=h200, variant=default,
  * quant=fp8, nodes=single, spec=none, tier=low-latency, ssmDtype=float32`), and
  * `sglangQwenRecipe.test.js` pins it so changing a verified flag fails. The two
- * Blackwell cells carry only what that same note records about them (NVFP4
+ * Blackwell cells carry only the cookbook settings (NVFP4
  * quantization; `--max-running-requests 1` on a 32 GB 5090) and deliberately
  * OMIT H200's 32k prefill overrides rather than inventing a number for a cell
  * nobody has measured here — SGLang's own defaults are the honest answer, and

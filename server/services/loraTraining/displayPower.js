@@ -2,10 +2,9 @@
  * macOS display power control for LoRA training (GPU-watchdog mitigation).
  *
  * An active display makes WindowServer contend with training for the GPU, which
- * on M5-class silicon ends in a `watchdogd` reboot (upstream mlx #3267;
- * docs/research/2026-06-13-mflux-training-watchdog-panic.md). PortOS sleeps the
- * display at run start and wakes it at finish. Best-effort and macOS-only: every
- * call swallows its errors, since this runs outside the request lifecycle.
+ * on M5-class silicon ends in a `watchdogd` reboot (upstream mlx #3267).
+ * PortOS sleeps the display at run start and wakes it at finish. Every call is
+ * best-effort because it runs outside the request lifecycle.
  */
 import {
   isDisplaySleepEnabled as sharedDisplaySleepEnabled,

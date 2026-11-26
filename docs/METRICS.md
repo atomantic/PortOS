@@ -10,7 +10,7 @@ and where those numbers live*.
 
 ## Why it exists
 
-PortOS's [Layered Intelligence loop](./plans/archive/2026-07-07-layered-intelligence-loop.md)
+PortOS's Layered Intelligence loop
 perpetually reviews each managed app and files at most one high-value improvement
 proposal per run. To reason well it needs to evaluate the app against **its own**
 performance — user success, product KPIs, production telemetry — not against how

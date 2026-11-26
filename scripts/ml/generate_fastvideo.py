@@ -545,8 +545,7 @@ def build_command(args, entry_script: Path, model_root: Path, mlx_checkpoint: Pa
 
     # Both Preview and V2 use mlx_fasth3.py. V2's weights do accept a first
     # frame in ComfyUI, but this entry's generate() is still text-only, and no
-    # other MLX checkpoint is that student. See
-    # docs/research/2026-09-22-fasth3-v2-mlx-i2v.md.
+    # other MLX checkpoint is that student.
     if args.image:
         raise ValueError(
             "FastH3 MLX does not support first-frame conditioning: "

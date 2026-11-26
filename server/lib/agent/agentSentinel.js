@@ -2,10 +2,10 @@
  * The `.agent-done` completion sentinel: shared naming + parser.
  *
  * A finishing agent writes it into its workspace, named per agent instance (`.agent-done-<agentId>`) because worktree-less
- * runs share one workspace. It holds a markdown summary or, for programmatic-I/O task types
- * (docs/plans/archive/2026-07-09-programmatic-io-scheduled-tasks.md), JSON `{ summary, payload }` consumed by a
- * `processTaskOutput` hook. `parseSentinelPayload` is pure: anything not a JSON object degrades to text so markdown is
- * never misread as structured.
+ * runs share one workspace. It holds a markdown summary or, for programmatic-I/O task types,
+ * JSON `{ summary, payload }` consumed by a `processTaskOutput` hook.
+ * `parseSentinelPayload` is pure: only a JSON object is read as structured data. Other
+ * content remains text.
  */
 
 import { join } from 'path';

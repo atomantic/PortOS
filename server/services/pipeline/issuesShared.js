@@ -531,8 +531,7 @@ const sanitizeMusicTrack = (raw) => {
   return { source, trackFilename, label };
 };
 
-// Which strategy drives the episode's non-dialogue audio (whole-episode audio,
-// issue #863 / design doc 2026-06-03-whole-episode-audio-strategy.md):
+// Which strategy drives the episode's non-dialogue audio (issue #863):
 //   per-clip       — keep each stitched clip's own soundtrack (today's default)
 //   silent         — strip any bed
 //   generated      — assemble the arc-driven cues[] onto the timeline

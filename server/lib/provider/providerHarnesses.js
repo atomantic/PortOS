@@ -20,8 +20,7 @@ import { isKiloProvider } from '../kilo.js';
 import { isOpenchamberProvider } from '../openchamber.js';
 
 /**
- * The HARNESS half of the provider-connection graph proposed in
- * `docs/plans/archive/2026-09-06-provider-connections-and-harnesses.md` (#6366).
+ * The HARNESS half of the provider-connection graph (#6366).
  *
  * A harness is the agent program PortOS drives (Claude Code, OpenCode, Codex,
  * …) — stable, shipped-in-code identity, never a user-typed command fetched

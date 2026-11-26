@@ -97,8 +97,7 @@ export const LOCAL_LLM_CATEGORIES = [
 // install would look like it worked. The same applies on the MLX side: that
 // model's `mlx-2bit` pack declares a `prism_hadamard_qwen35` model type and ships
 // its own loader, and a stock MLX loader skips the activation transform and
-// returns wrong output rather than an error. See
-// docs/research/2026-09-18-ternary-bonsai-2-27b.md.
+// returns wrong output rather than an error.
 export const LOCAL_LLM_CATALOG = [
   {
     key: 'vulnllm-r-7b-gguf', name: 'VulnLLM-R 7B (GGUF)',

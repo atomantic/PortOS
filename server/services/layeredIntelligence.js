@@ -6,7 +6,6 @@
  * code here, so the model never makes direct code changes. Pure helpers are
  * unit-tested; I/O functions take injectable deps. Split into
  * ./layeredIntelligence/* (#2842); this barrel keeps old imports working.
- * Design: docs/plans/archive/2026-07-07-layered-intelligence-loop.md
  */
 
 export * from './layeredIntelligence/constants.js';
