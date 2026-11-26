@@ -11,4 +11,14 @@ Splash uses `reasoning_content` for the OpenAI-compatible tool loop, not the Oll
 
 The Splash card shows two different limits. **Splash context window** is the requested limit for the next start (64K by default). With Splash stopped, choose 64K, 128K, 256K, 512K, or 1M; saving does not restart or reconfigure a running engine. **Currently serving** is the limit advertised by the running engine at `/v1/models`, when present. The two can differ. [Splash documents](https://github.com/incoai/splash/blob/1.7.2/docs/server.md#memory-and-context) an Inkling limit of 1,010,000 tokens, not a guarantee that 1M will run well on every Mac. Bigger windows can need substantially more free memory or SSD space. Start with a smaller window and increase as needed. After a restart, new launches that follow Splash use the newly reported window. A pinned preset keeps its chosen value.
 
-Splash can be measured on **Models → Performance**, and its PM2 log (`portos-splash`) is readable through the PortOS logs API.
+The runtime card shows live model preparation progress. Choose **Cancel** to
+stop an install or update, or **View server logs** to see recent output from
+the PortOS-managed Splash process. Measure Splash on **Models → Performance**.
+
+### Removing the runtime
+
+In **Models → Runtimes**, stop Splash and choose **Uninstall** to remove the
+PortOS-installed release. The private model cache and provider presets stay
+available for reinstall. An external Splash installation is not changed.
+The same control is available for the PortOS-installed mkserve release; its
+downloaded checkpoint is also kept.

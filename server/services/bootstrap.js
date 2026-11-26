@@ -1,4 +1,5 @@
 import { withBackupAssetPublication } from '../lib/backupSnapshotBoundary.js';
+import { emitToOperatorsOn } from './socketIo.js';
 import { bindMaintenanceIo } from './maintenanceControl.js';
 import { maintenance } from '../lib/maintenanceAdmission.js';
 import { noteReadinessChanged } from './readinessSignal.js';
@@ -311,7 +312,7 @@ export const bootstrapServices = async ({ io, dataDir, dataReferenceDir, serverD
       promptsDir: 'prompts',
       screenshotsDir: join(dataDir, 'screenshots'),
       sampleProvidersFile: join(dataReferenceDir, 'providers.json'),
-      io,
+      emit: (event, ...args) => emitToOperatorsOn(io, event, ...args),
       asyncHandler,
       withAssetPublication: withBackupAssetPublication,
       redactStoredPrompt: redactStoredPrivacyPrompt,

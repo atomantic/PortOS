@@ -1,3 +1,4 @@
+import { emitToOperatorsOn } from '../services/socketIo.js';
 import { loadedObservation } from '../services/localModelObservations.js';
 import { observeModelMutations } from '../services/modelObservation.js';
 /**
@@ -11,11 +12,13 @@ import { observeModelMutations } from '../services/modelObservation.js';
  */
 
 import os from 'os'
+import { randomUUID } from 'node:crypto'
 import { jevPolicyPatchSchema, resolveUntrustedContentPolicy } from '../lib/untrustedContent.js'
 import { readSettingsStrict, updateSettingsWith } from '../services/settings.js'
 import { Router } from 'express'
 import { asyncHandler, ServerError } from '../lib/errorHandler.js'
 import { validateRequest } from '../lib/validateRequest.js'
+import { requestHasHostControl } from '../services/authGate.js'
 import {
   localLlmInstallSchema,
   localLlmModelTargetSchema,
@@ -44,6 +47,8 @@ import {
   localLlmLmStudioServiceSchema,
   localLlmMtplxStartSchema,
   managedInklingActionSchema,
+  managedInklingCancelSchema,
+  mkserveInstallSchema,
   splashContextSchema,
   localLlmSlotstreamStartSchema,
   localLlmSlotstreamDownloadSchema,
@@ -64,11 +69,11 @@ import {
   waitForLlamaServerReady,
 } from '../services/llamaServerManager.js'
 import { onDemandRuntimeAppNames } from '../lib/managedRuntimeApps.js'
-import { getMtplxServerStatus, startMtplxServer, stopMtplxServer, installMtplx, waitForMtplxReady } from '../services/mtplxServerManager.js'
+import { getMtplxServerStatus, startMtplxServer, stopMtplxServer, installMtplx, uninstallMtplx, waitForMtplxReady } from '../services/mtplxServerManager.js'
 import { getSplashRuntimeStatus } from '../services/splashRuntimeStatus.js'
-import { installSplashRuntime, saveSplashContextWindow, startSplashServer, stopSplashServer } from '../services/splashServerManager.js'
-import { getMkserveRuntimeStatus, installMkserve, startMkserveServer, stopMkserveServer } from '../services/mkserveRuntimeManager.js'
-import { getSlotstreamServerStatus, startSlotstreamServer, stopSlotstreamServer, installSlotstream, waitForSlotstreamReady } from '../services/slotstreamServerManager.js'
+import { installSplashRuntime, saveSplashContextWindow, startSplashServer, stopSplashServer, uninstallSplashRuntime } from '../services/splashServerManager.js'
+import { getMkserveRuntimeStatus, installMkserve, startMkserveServer, stopMkserveServer, uninstallMkserve } from '../services/mkserveRuntimeManager.js'
+import { getSlotstreamServerStatus, startSlotstreamServer, stopSlotstreamServer, installSlotstream, uninstallSlotstream, waitForSlotstreamReady } from '../services/slotstreamServerManager.js'
 import { cancelSlotstreamModelDownload, downloadSlotstreamModel, previewSlotstreamDownload } from '../services/slotstreamModelManager.js'
 import { searchMtplxCatalog, pullMtplxModel, previewMtplxPull, removeMtplxModel } from '../services/mtplxModelManager.js'
 import { saveProcessList } from '../services/pm2.js'
@@ -165,7 +170,7 @@ router.post('/laya-mlx/score', asyncHandler(async (req, res) => {
 
 const emitter = (req) => {
   const io = req.app.get('io')
-  return (event, message, extra) => io?.emit('localLlm:progress', { event, message, ...extra })
+  return (event, message, extra) => emitToOperatorsOn(io, 'localLlm:progress', { event, message, ...extra })
 }
 
 // After a user-triggered start, checkpoint download or removal, bring the presets fronting that runtime up to date
@@ -862,7 +867,7 @@ router.post('/assessments/run', asyncHandler(async (req, res) => {
   // renders every long local-LLM operation. The extra fields (`scope`, `backend`,
   // `modelId`, `sampleIndex`/`sampleCount`) let a listener tell an assessment
   // frame from a model pull streaming on the same event.
-  const onProgress = (frame) => io?.emit('localLlm:progress', frame)
+  const onProgress = (frame) => emitToOperatorsOn(io, 'localLlm:progress', frame)
   res.json(await runAssessment({ backend, modelId, contextTokens, tuning, signal: abortSignalFromResponse(res), onProgress }))
 }))
 
@@ -895,8 +900,8 @@ router.post('/assessments/sweep', asyncHandler(async (req, res) => {
   // count the consent gate named would stop being the count that runs.
   const status = await startSweep({
     scope, contextTokens, backend, modelId, tunings,
-    onProgress: (frame) => io?.emit('localLlm:progress', frame),
-    onChange: (state) => io?.emit('localLlm:sweep:changed', state),
+    onProgress: (frame) => emitToOperatorsOn(io, 'localLlm:progress', frame),
+    onChange: (state) => emitToOperatorsOn(io, 'localLlm:sweep:changed', state),
   })
   // A refused start (one already running, or nothing to measure) is a 409, not a
   // silent no-op that would leave the page waiting for progress that never comes.
@@ -914,8 +919,8 @@ router.post('/assessments/benchmark', asyncHandler(async (req, res) => {
   const io = req.app.get('io')
   const status = await startSweep({
     models,
-    onProgress: (frame) => io?.emit('localLlm:progress', frame),
-    onChange: (state) => io?.emit('localLlm:sweep:changed', state),
+    onProgress: (frame) => emitToOperatorsOn(io, 'localLlm:progress', frame),
+    onChange: (state) => emitToOperatorsOn(io, 'localLlm:sweep:changed', state),
   })
   if (status.rejected) throw new ServerError(status.rejected, { status: 409, context: { models: models.length } })
   res.json(status)
@@ -974,7 +979,7 @@ router.post('/capability-tests/run', asyncHandler(async (req, res) => {
   // `scope: 'capability-test'` field plus backend/model/test is what lets a
   // listener tell these frames from a model pull streaming on the same event —
   // and the `output` frames are what render the agent transcript live.
-  const onProgress = (frame) => io?.emit('localLlm:progress', frame)
+  const onProgress = (frame) => emitToOperatorsOn(io, 'localLlm:progress', frame)
   res.json(await runCapabilityTest({
     backend, modelId, testId, onProgress, signal: abortSignalFromResponse(res),
   }))
@@ -1035,7 +1040,7 @@ router.post('/llama-server/download-model', asyncHandler(async (req, res) => {
   const result = await downloadSpecDecodeModel({
     presetId,
     role,
-    onProgress: (frame) => io?.emit('llamaServer:download', frame),
+    onProgress: (frame) => emitToOperatorsOn(io, 'llamaServer:download', frame),
   })
   res.json(result)
 }))
@@ -1086,7 +1091,7 @@ router.post('/llama-server/stop', asyncHandler(async (_req, res) => {
 // platform package manager (Homebrew on macOS/Linux, winget on Windows)
 router.post('/llama-server/install', asyncHandler(async (req, res) => {
   const io = req.app.get('io')
-  const onProgress = (data) => io?.emit('localLlm:progress', data)
+  const onProgress = (data) => emitToOperatorsOn(io, 'localLlm:progress', data)
   const result = await installLlamaServer({ onProgress }).catch((err) => {
     onProgress({ event: 'error', message: `llama.cpp install failed: ${err.message}` })
     throw err
@@ -1100,7 +1105,7 @@ router.post('/llama-server/install', asyncHandler(async (req, res) => {
 // launch configuration. An externally-started process is left alone.
 router.post('/llama-server/upgrade', asyncHandler(async (req, res) => {
   const io = req.app.get('io')
-  const onProgress = (data) => io?.emit('localLlm:progress', data)
+  const onProgress = (data) => emitToOperatorsOn(io, 'localLlm:progress', data)
   const result = await upgradeLlamaServer({ onProgress }).catch((err) => {
     onProgress({ event: 'error', message: `llama.cpp update failed: ${err.message}` })
     throw err
@@ -1151,6 +1156,12 @@ router.post('/mtplx/stop', asyncHandler(async (_req, res) => {
   res.json(result)
 }))
 
+router.post('/mtplx/uninstall', asyncHandler(async (_req, res) => {
+  const result = await uninstallMtplx()
+  resetProviderReadinessCache()
+  res.json(result)
+}))
+
 // POST /api/local-llm/mtplx/install — install the private hash-locked MTPLX runtime
 router.post('/mtplx/install', asyncHandler(async (req, res) => {
   const emit = emitter(req)
@@ -1183,7 +1194,7 @@ router.get('/mtplx/models/search', asyncHandler(async (req, res) => {
 router.post('/mtplx/models/pull', asyncHandler(async (req, res) => {
   const { model } = validateRequest(localLlmMtplxPullSchema, req.body)
   const io = req.app.get('io')
-  const result = await pullMtplxModel({ model, onProgress: (frame) => io?.emit('mtplx:download', frame) })
+  const result = await pullMtplxModel({ model, onProgress: (frame) => emitToOperatorsOn(io, 'mtplx:download', frame) })
   if (!result.success) {
     throw new ServerError(result.error || 'MTPLX checkpoint pull failed', { status: 502, code: 'MTPLX_PULL_FAILED' })
   }
@@ -1207,47 +1218,68 @@ router.post('/mtplx/models/remove', asyncHandler(async (req, res) => {
 // available from Status as well as the socket, so reopening the tab is safe.
 const inklingOperations = new Map()
 const inklingErrors = new Map()
-const runtimeStatusRoute = (runtime, readStatus) => asyncHandler(async (_req, res) => {
-  const status = await readStatus()
-  res.json({ ...status, operation: inklingOperations.get(runtime) ?? null, lastError: inklingErrors.get(runtime) ?? null })
+const runtimeStatusRoute = (runtime, readStatus) => asyncHandler(async (req, res) => {
+  const status = await readStatus({ includeLogs: requestHasHostControl(req) })
+  res.json({ ...status, operation: inklingOperations.get(runtime)?.operation ?? null, lastError: inklingErrors.get(runtime) ?? null })
 })
 
-const runtimeActionRoute = (runtime, label, action, run) => asyncHandler(async (req, res) => {
-  validateRequest(managedInklingActionSchema, req.body ?? {})
+const runtimeActionRoute = (runtime, label, action, run, schema = managedInklingActionSchema) => asyncHandler(async (req, res) => {
+  const options = validateRequest(schema, req.body ?? {})
   if (inklingOperations.has(runtime)) {
     throw new ServerError(`${label} already has an operation in progress.`, { status: 409 })
   }
   const emit = emitter(req)
   const scope = { runtime }
-  const operation = { action, message: '' }
+  const controller = ['install', 'upgrade'].includes(action) ? new AbortController() : null
+  const operation = { id: randomUUID(), action: options.repair ? 'repair' : action, message: '' }
   inklingErrors.delete(runtime)
-  inklingOperations.set(runtime, operation)
+  inklingOperations.set(runtime, { operation, controller })
   const report = (progress) => {
     const message = typeof progress === 'string' ? progress : progress?.message
-    if (!message || inklingOperations.get(runtime) !== operation) return
+    if (!message || controller?.signal.aborted || inklingOperations.get(runtime)?.operation !== operation) return
     operation.message = `${label}: ${message}`
-    emit('progress', operation.message, scope)
+    emit('progress', operation.message, { ...scope, operation: { ...operation } })
   }
-  report({ install: 'Preparing installation', upgrade: 'Preparing update', start: 'Starting', stop: 'Stopping' }[action])
+  report({ install: 'Preparing installation', repair: 'Preparing repair', upgrade: 'Preparing update', start: 'Starting', stop: 'Stopping', uninstall: 'Removing runtime files' }[operation.action])
   res.status(202).json({ operation })
-  void Promise.resolve().then(() => run({ onProgress: report })).then(
+  void Promise.resolve().then(() => run({ ...options, onProgress: report, signal: controller?.signal })).then(
     () => {
       inklingOperations.delete(runtime)
       resetProviderReadinessCache()
-      const done = { install: 'installation complete', upgrade: 'update complete', start: 'start completed', stop: 'stopped' }[action]
-      emit('complete', `${label}: ${done}.`, scope)
+      const done = { install: 'installation complete', repair: 'repair complete', upgrade: 'update complete', start: 'start completed', stop: 'stopped', uninstall: 'uninstalled' }[operation.action]
+      emit('complete', `${label}: ${done}.`, { ...scope, operation: null, lastError: null })
       // Their start only resolves once the model answers, so no readiness wait.
       if (action === 'start') refreshRuntimeModels(req, runtime)
     },
     (err) => {
       inklingOperations.delete(runtime)
       resetProviderReadinessCache()
+      if (controller?.signal.aborted && (err === controller.signal.reason || err?.name === 'AbortError')) {
+        emit('cancelled', `${label}: ${operation.action === 'repair' ? 'Repair' : 'Installation'} cancelled.`, { ...scope, operation: null, lastError: null })
+        return
+      }
       const message = err instanceof ServerError ? (err.responseMessage || err.message) : 'Operation failed. See PortOS server logs for details.'
       if (!(err instanceof ServerError)) console.error(`❌ ${label} ${action} failed: ${err?.message ?? 'Unknown error'}`)
       inklingErrors.set(runtime, message)
-      emit('error', `${label}: ${message}`, scope)
+      emit('error', `${label}: ${message}`, { ...scope, operation: null, lastError: message })
     },
   )
+})
+
+const runtimeCancelRoute = (runtime, label) => asyncHandler(async (req, res) => {
+  const { operationId } = validateRequest(managedInklingCancelSchema, req.body ?? {})
+  const active = inklingOperations.get(runtime)
+  if (!active?.controller || (operationId && active.operation.id !== operationId)) {
+    return res.json({ cancelled: false })
+  }
+  const { controller, operation } = active
+  if (!controller.signal.aborted) {
+    controller.abort()
+    operation.cancelling = true
+    operation.message = `${label}: Cancelling ${operation.action === 'repair' ? 'repair' : 'installation'}…`
+    emitter(req)('progress', operation.message, { runtime, operation: { ...operation } })
+  }
+  res.json({ cancelled: true, operation })
 })
 
 router.get('/splash/status', runtimeStatusRoute('splash', getSplashRuntimeStatus))
@@ -1260,14 +1292,18 @@ router.put('/splash/context', asyncHandler(async (req, res) => {
 }))
 router.post('/splash/install', runtimeActionRoute('splash', 'Splash', 'install', installSplashRuntime))
 router.post('/splash/upgrade', runtimeActionRoute('splash', 'Splash', 'upgrade', installSplashRuntime))
+router.post('/splash/cancel', runtimeCancelRoute('splash', 'Splash'))
 router.post('/splash/start', runtimeActionRoute('splash', 'Splash', 'start', startSplashServer))
 router.post('/splash/stop', runtimeActionRoute('splash', 'Splash', 'stop', stopSplashServer))
+router.post('/splash/uninstall', runtimeActionRoute('splash', 'Splash', 'uninstall', uninstallSplashRuntime))
 
 router.get('/mkserve/status', runtimeStatusRoute('mkserve', getMkserveRuntimeStatus))
-router.post('/mkserve/install', runtimeActionRoute('mkserve', 'mkserve', 'install', installMkserve))
+router.post('/mkserve/install', runtimeActionRoute('mkserve', 'mkserve', 'install', installMkserve, mkserveInstallSchema))
 router.post('/mkserve/upgrade', runtimeActionRoute('mkserve', 'mkserve', 'upgrade', installMkserve))
+router.post('/mkserve/cancel', runtimeCancelRoute('mkserve', 'mkserve'))
 router.post('/mkserve/start', runtimeActionRoute('mkserve', 'mkserve', 'start', startMkserveServer))
 router.post('/mkserve/stop', runtimeActionRoute('mkserve', 'mkserve', 'stop', stopMkserveServer))
+router.post('/mkserve/uninstall', runtimeActionRoute('mkserve', 'mkserve', 'uninstall', uninstallMkserve))
 
 // GET /api/local-llm/slotstream/status — binary, process, memory plan, cache, logs.
 router.get('/slotstream/status', asyncHandler(async (_req, res) => {
@@ -1310,6 +1346,12 @@ router.post('/slotstream/install', asyncHandler(async (req, res) => {
   res.json(result)
 }))
 
+router.post('/slotstream/uninstall', asyncHandler(async (_req, res) => {
+  const result = await uninstallSlotstream()
+  resetProviderReadinessCache()
+  res.json(result)
+}))
+
 // POST /api/local-llm/slotstream/models/download — fetch one checkpoint into
 // Slotstream's cache. Byte progress streams over `slotstream:download`, which
 // is what the card's bar trusts: a 100 GB+ transfer outlives the request that
@@ -1319,7 +1361,7 @@ router.post('/slotstream/install', asyncHandler(async (req, res) => {
 router.post('/slotstream/models/download', asyncHandler(async (req, res) => {
   const { model } = validateRequest(localLlmSlotstreamDownloadSchema, req.body)
   const io = req.app.get('io')
-  const result = await downloadSlotstreamModel({ model, onProgress: (frame) => io?.emit('slotstream:download', frame) })
+  const result = await downloadSlotstreamModel({ model, onProgress: (frame) => emitToOperatorsOn(io, 'slotstream:download', frame) })
   if (result.cancelled === true) {
     return res.json({ success: false, cancelled: true, model: result.model })
   }

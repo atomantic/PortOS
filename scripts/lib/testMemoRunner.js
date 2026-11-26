@@ -298,7 +298,7 @@ export const SERVER_HEAVY_SHARD_OWNERS = {
   'server/services/repoRepairCompletion.test.js': 2,
   'scripts/lib/testMemoRunner.test.js': 2,
   'scripts/vitestTempRoot.test.js': 2,
-  'scripts/generate_ltx2.test.js': 2,
+  'scripts/ml/generate_ltx2.test.js': 2,
   'server/services/claimBranchCleanup.integration.test.js': 2,
   'server/routes/musicVideoBlender.test.js': 2,
   'server/services/eidoverseWorld.runtime.test.js': 2,

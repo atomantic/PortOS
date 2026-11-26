@@ -5,9 +5,10 @@ import { MANAGED_RUNTIME_APPS } from '../lib/managedRuntimeApps.js';
 import { ServerError } from '../lib/errorHandler.js';
 import { setTimeout as sleep } from 'timers/promises';
 import { isPortInUse } from '../lib/platform.js';
+import { readManagedPm2LogTail } from '../lib/managedDaemon.js';
 import { clearJlistCache, execPm2, getAppStatusStrict } from './pm2.js';
 import {
-  installPinnedSplash, probeSplashEndpoint, readInstalledSplashVersion, splashLaunchArgs, splashLaunchPrefix, SPLASH_UNSUPPORTED_REASON,
+  installPinnedSplash, probeSplashEndpoint, readInstalledSplashVersion, removeSplashRelease, splashLaunchArgs, splashLaunchPrefix, SPLASH_UNSUPPORTED_REASON,
   SPLASH_VERSION, supportsManagedSplash,
 } from './splashManagedRuntime.js';
 
@@ -29,7 +30,7 @@ async function configuredContextWindow({ forStart = false } = {}) {
 }
 
 function ownsProcess(processInfo, version) {
-  if (!version || !Number.isInteger(processInfo?.pm_id)) return false;
+  if (!version || !Number.isSafeInteger(processInfo?.pm_id) || processInfo.pm_id < 0) return false;
   const prefix = splashLaunchPrefix(version);
   // PM2 owns the OS process identity. Its app name alone is not evidence of
   // ownership when another installation or a manually created app shares PM2.
@@ -37,13 +38,14 @@ function ownsProcess(processInfo, version) {
     && prefix.every((arg, index) => processInfo.args[index] === arg);
 }
 
-export async function getSplashManagedState() {
+export async function getSplashManagedState({ includeLogs = false } = {}) {
   const [version, requestedContextWindow] = await Promise.all([readInstalledSplashVersion(), configuredContextWindow()]);
   const pm2 = version ? await getAppStatusStrict(SPLASH_APP) : null;
   const owned = ownsProcess(pm2, version);
   const repairRecommended = owned && ['errored', 'stopped'].includes(pm2.status);
   return {
     installed: Boolean(version),
+    canUninstall: Boolean(version && !operation && (pm2?.status === 'not_found' || (owned && ['stopped', 'errored'].includes(pm2.status)))),
     requestedContextWindow,
     version,
     targetVersion: SPLASH_VERSION,
@@ -52,6 +54,7 @@ export async function getSplashManagedState() {
     installing: operation === 'install',
     startTimedOut: owned && startTimedOut,
     repairRecommended,
+    recentLogs: includeLogs && owned ? await readManagedPm2LogTail(pm2.pm_id, execPm2) : [],
     ...(repairRecommended ? { reason: 'Splash exited. If its cache is incomplete, use Repair before retrying Start.' } : {}),
   };
 }
@@ -76,18 +79,20 @@ function guardedProgress(onProgress) {
   };
 }
 
-export function installSplashRuntime({ onProgress = () => {} } = {}) {
+export function installSplashRuntime({ onProgress = () => {}, signal } = {}) {
   return withOperation('install', async () => {
     const version = await readInstalledSplashVersion();
+    signal?.throwIfAborted();
     if (version) {
       const pm2 = await checkedPm2();
+      signal?.throwIfAborted();
       if (ownsProcess(pm2, version) && active.has(pm2.status)) throw fail('Stop the PortOS-managed Splash server before updating it.');
       if (ownsProcess(pm2, version)) {
         await execPm2(['delete', String(pm2.pm_id)]);
         clearJlistCache();
       }
     }
-    await installPinnedSplash({ previousVersion: version, emit: guardedProgress(onProgress) });
+    await installPinnedSplash({ previousVersion: version, emit: guardedProgress(onProgress), signal });
     return { success: true, message: `Splash ${SPLASH_VERSION} and Inkling 2 Mini are installed. Start Splash when ready.` };
   });
 }
@@ -152,6 +157,25 @@ async function waitForSplashReady(version, contextWindow) {
   // Keep ownership after a slow startup so the UI still offers Stop.
   startTimedOut = true;
   throw fail('Splash has not become ready yet. Check its status or stop the managed server to retry.', 504, 'SPLASH_START_TIMEOUT');
+}
+
+export function uninstallSplashRuntime() {
+  return withOperation('uninstall', async () => {
+    const version = await readInstalledSplashVersion();
+    if (!version) throw fail('There is no PortOS-managed Splash release to uninstall.');
+    const pm2 = await checkedPm2();
+    const stoppedOwned = ownsProcess(pm2, version) && ['stopped', 'errored'].includes(pm2.status);
+    if ((!stoppedOwned && pm2.status !== 'not_found') || await isPortInUse(PORT)) {
+      throw fail('Stop Splash and free its port before uninstalling. PortOS will not alter an external server.');
+    }
+    if (stoppedOwned) {
+      await execPm2(['delete', String(pm2.pm_id)]);
+      clearJlistCache();
+    }
+    await removeSplashRelease(version);
+    startTimedOut = false;
+    return { success: true, message: 'Splash uninstalled. Model files were kept.' };
+  });
 }
 
 export function stopSplashServer() {

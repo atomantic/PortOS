@@ -203,11 +203,11 @@ export async function checkDevCacheIsolation(expect, signal) {
         mkdirSync(cwd, { recursive: true });
         link(dependencies, join(root, 'node_modules'));
         put(join(root, 'package.json'), '{"type":"module"}');
-        for (const file of ['vite.config.js', 'vite.buildEnv.js', 'vite.chunkGroups.js']) {
+        for (const file of ['vite.config.js', 'vite.chunkGroups.js']) {
           copyFileSync(join(REPO, 'client', file), join(root, file));
         }
         put(join(parent, 'package.json'), '{"type":"module","version":"0.0.0"}');
-        for (const file of ['lib/portosAuthCore.js', 'server/lib/eidoverseProxyRoutes.js']) link(join(REPO, file), join(parent, file));
+        for (const file of ['lib/portosAuthCore.js', 'lib/viteBuildEnv.js', 'server/lib/eidoverseProxyRoutes.js']) link(join(REPO, file), join(parent, file));
         const cache = join(realpathSync(root), '.cache/vite').replaceAll('\\', '/');
         const script = join(root, 'inspect-dev.mjs');
         put(script, `import { resolveConfig } from 'vite';

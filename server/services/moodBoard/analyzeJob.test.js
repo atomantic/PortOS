@@ -16,7 +16,7 @@ vi.mock('./completePoster.js', () => ({ preparePoster, completePoster }));
 vi.mock('./index.js', () => ({ getBoard, updateBoard, updateBoardItem, backfillGalleryPrompts: backfill }));
 vi.mock('../mediaPromptFromMedia.js', () => ({ promptFromMedia }));
 vi.mock('../moodBoardCompositeStyle.js', () => ({ composeBoardPrompt }));
-vi.mock('../socketIo.js', () => ({ getIo: () => ({ emit }) }));
+vi.mock('../socketIo.js', () => ({ emitToOperators: (...args) => emit(...args) }));
 
 import { startAnalyzeJob, getAnalyzeJob, analyzeBoardForCombine } from './analyzeJob.js';
 

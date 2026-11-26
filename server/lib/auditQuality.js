@@ -10,7 +10,7 @@
 import { z } from 'zod';
 import { createHash } from 'node:crypto';
 import { CONSOLIDATED_AUDIT_DOMAINS, QUALITY_HEALTHY_THRESHOLD, QUALITY_SCORE_BANDS, QUALITY_RECENCY_HALF_LIFE_DAYS, auditDomainFor, isPriorityExemptAuditType } from './auditDomains.js';
-import { AUDIT_DEFINITIONS, AUDIT_EXECUTION_PROFILES, isAuditTaskType, normalizeAuditTaskType } from './auditCatalog.js';
+import { AUDIT_DEFINITIONS, isAuditTaskType, normalizeAuditTaskType } from './auditCatalog.js';
 import { safeJSONParse } from './jsonIo.js';
 
 const REPORT_PREFIX = 'QUALITY_AUDIT_JSON: ';
@@ -61,10 +61,45 @@ const profileDiscovery = Object.freeze({
 });
 
 export const AUDIT_DISCOVERY = Object.freeze({
-  ...profileDiscovery,
+  ...Object.fromEntries(Object.entries(profileDiscovery).filter(([id]) => auditDomainFor(id) === id)),
   ...Object.fromEntries(Object.entries(CONSOLIDATED_AUDIT_DOMAINS).map(([id, { members }]) =>
     [id, members.map(member => profileDiscovery[member]).join(' ')])),
 });
+
+// Historical series keep the label they used when measured.
+const HISTORICAL_SERIES_LABELS = {
+  'code-quality': 'Code quality',
+  'better-structural-drift': 'Structural drift & sources of truth',
+  'module-hygiene': 'Module hygiene',
+  'typing': 'Typing',
+  'simplify': 'Dead code & duplication',
+  'over-engineering': 'Over-engineering',
+  'better-complexity': 'Cyclomatic complexity',
+  'better-cognitive-load': 'Cognitive load & readability',
+  'app-bugs': 'App bugs',
+  'ui-bugs': 'UI bugs',
+  'console-errors': 'Console errors',
+  'ui-lifecycle': 'UI lifecycle & state',
+  'error-handling': 'Error handling',
+  'better-runtime-safety': 'Runtime safety & async correctness',
+  'reliability': 'Reliability & operability',
+  'workflow-recovery': 'Workflow recovery',
+  'observability': 'Logging & observability',
+  'data-safety': 'Data & upgrade safety',
+  'data-integrity': 'Data integrity & pipelines',
+  'upgrade-rehearsal': 'Upgrade & restore rehearsal',
+  'test-coverage': 'Test coverage',
+  'better-test-quality': 'Test quality',
+  'performance': 'Performance',
+  'cost-efficiency': 'Cost & resource efficiency',
+  'infrastructure': 'Infrastructure & deployment',
+  'better-dev-environment': 'Development environment',
+  'design': 'Design',
+  'ux': 'UX',
+  'mobile-responsive': 'Mobile & responsive',
+  'documentation': 'Documentation',
+  'copy': 'Copy & text clarity',
+};
 
 const MAX_DEPLOYMENT_MODEL_CHARS = 2000;
 
@@ -109,7 +144,7 @@ function featurePriorityScope(category, priorityScope) {
     ? [`- P3 areas stay fully in scope for this lane and nothing is removed from the inventory: a vulnerability or migration bug in a dormant feature still shares the server, database, credentials and host privileges. Do not skip or down-rank these paths because the feature is unused.\n${scopeAreaLines(p3)}`]
     : [
       p3.length ? `- P3, out of scope for this lane: remove every path matching these globs from the step 1 inventory before the signal scan, and never choose one as the slice or name it in AUDIT_SLICE. totalFiles and scannedFiles count only the inventory that remains, so coverage "broad" requires scanning at least ${broadCoverageMinPercent}% of that inventory. A verified defect in P3 code met while tracing something else is still filed.\n${scopeAreaLines(p3)}` : '',
-      p3.length && AUDIT_DISCOVERY[category].includes('quality:complexity') ? `- Complexity shortlist without the P3 paths (only where the repository has the quality:complexity script): npm run quality:complexity -- ${p3.flatMap(({ globs }) => globs).map(glob => `--exclude '${glob}'`).join(' ')}` : '',
+      p3.length && AUDIT_DISCOVERY[auditDomainFor(category)].includes('quality:complexity') ? `- Complexity shortlist without the P3 paths (only where the repository has the quality:complexity script): npm run quality:complexity -- ${p3.flatMap(({ globs }) => globs).map(glob => `--exclude '${glob}'`).join(' ')}` : '',
       p2.length ? `- P2: file or fix verified functional or reliability defects only. No polish, micro-optimization, refactor, copy or speculative test work.\n${scopeAreaLines(p2)}` : '',
       p0.length ? `- P0: the first tie-break after severity and user impact, ahead of churn and fan-in, and preferred when rotating slices.\n${scopeAreaLines(p0)}` : '',
       '- A path matching none of the globs above is audited as P1 under the steps above: it belongs to a normally used area or is shared code.',
@@ -133,7 +168,7 @@ export function auditQualityInstructions(taskType, app, { priorityScope = null }
 
 This contract overrides narrower slice-selection or ranking advice in the mission, including customized prompts. Preserve the selected file-issues/fix mode and documented non-issues. Read the lane-health block: do not re-file a finding it lists as reverted or not-planned without new evidence.
 1. Inventory all first-party source roots with git ls-files or rg --files, excluding vendored/generated/build/dependency output. Do a cheap repository-wide signal scan BEFORE choosing where to investigate. Do not deep-read the entire repository.
-2. Category search: ${AUDIT_DISCOVERY[category]}
+2. Category search: ${AUDIT_DISCOVERY[auditDomainFor(category)]}
 3. Rank at least the top five candidates (or all if fewer), with paths, measured signals, impact, reach, confidence and why higher candidates win. Validate the top candidates through callers, tests and relevant history before filing or fixing. Severity and user impact outrank ease, small scope and recency. Churn and fan-in break ties; inactivity alone never dismisses a severe offender. If the raw worst is exempt, already filed or not actionable, report why and continue down the ranking. Existing unresolved issues still count against quality. Never pick a nit while a verified major problem remains actionable. Before rotating to a new offender, prefer to re-verify a slice in audit-slice-history that scored below ${QUALITY_HEALTHY_THRESHOLD} once its filed issues are closed and the fixes are present in the checkout. Skip slices already re-verified since those fixes. For a re-verification, retain the same primary path or cover the original paths in AUDIT_SLICE. Otherwise, choose the highest-ranked actionable candidate.
    Proportionality check, before filing or fixing any candidate: the proposed fix must be the smallest change that removes the demonstrated harm, and should avoid unnecessary validation layers, archives, ledgers, retries, recovery workflows, extra CI stages or slower processes. A demonstrated security boundary may require a new or strengthened control; do not reject one solely because it adds validation. Speed of execution (CI time, agent turnaround, local build/test gate time) counts as a cost: a fix that slows CI or process needs a measured harm that outweighs it. Defer to the project's existing sources of truth (for example its code host or CI system, whether GitHub, GitLab or a self-hosted/enterprise instance, for branch, merge and review state; the platform toolchain for build and signing state) instead of building a parallel verification of them. If proposed process machinery lacks demonstrated harm or a reachable failure to justify it, do not file that robust-process fix; file at most one documentation or decision-gap item stating the question and the simple options, and score the slice without penalizing the gap. When the audited code is itself machinery of that kind, prefer a finding that removes or simplifies it.
    Reachability check, before ranking: apply the section below to every candidate.
@@ -499,7 +534,7 @@ function domainMemberSeries(domainId, runs, now) {
     const latest = runs.find(run => run.valid && normalizeAuditTaskType(run.record.category) === seriesId);
     return {
       id: seriesId,
-      label: seriesId === domainId ? 'Combined audit' : AUDIT_EXECUTION_PROFILES[seriesId]?.label || seriesId,
+      label: seriesId === domainId ? 'Combined audit' : HISTORICAL_SERIES_LABELS[seriesId] || seriesId,
       score: latest ? qualityRunScore(latest.report) : null,
       coverage: latest?.report.coverage ?? null,
       assessedAt: latest?.record.assessedAt ?? null,

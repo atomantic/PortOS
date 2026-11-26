@@ -37,6 +37,7 @@ export function AILoadingIndicator({ label, color = 'text-port-accent-2' }) {
 
   useEffect(() => {
     const start = Date.now();
+    // biome-ignore lint/plugin/lint-no-view-interval: Elapsed-time clock tick; no I/O.
     const timer = setInterval(() => setElapsed(Math.floor((Date.now() - start) / 1000)), 1000);
     return () => clearInterval(timer);
   }, []);

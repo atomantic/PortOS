@@ -17,7 +17,7 @@
  * When the task succeeds the thread is marked done on GitHub; when it fails
  * the thread goes back to its old decision with a failed marker for the pill.
  */
-import { query } from '../lib/db.js';
+import { query, withTransaction } from '../lib/db.js';
 import { isQueuedContinuation, isTaskDeliveryComplete } from '../lib/agent/agentOutcome.js';
 import { GENERIC_AGENT_LANE, notificationAgentAccountBinding } from '../lib/githubNotificationTriage.js';
 import { notificationHtmlUrl, repoApiPath } from '../lib/githubNotificationParse.js';
@@ -212,18 +212,29 @@ async function markResolved(taskId, agentId) {
 // Recorded once: a spawn error and the agent's own completion can both report it.
 async function markFailed(taskId, agentId, error) {
   const failed = { taskId, agentId: agentId || null, error: error ? String(error).slice(0, 300) : null, at: new Date().toISOString() };
-  const { rows } = await query(
-    `UPDATE github_notifications SET
-       decision = CASE WHEN decision = 'handed-off' THEN COALESCE(evidence->'handoff'->>'previousDecision', decision) ELSE decision END,
-       evidence = jsonb_set(evidence, '{handoff,failed}', $2::jsonb), updated_at = NOW()
-     WHERE ${HANDED_TO_TASK_SQL} AND NOT (evidence->'handoff' ? 'failed') RETURNING account_id, thread_id`,
-    [taskId, toPgJson(failed)],
-  );
-  for (const row of rows) {
-    await query(
-      "INSERT INTO github_notification_events (account_id, thread_id, actor, kind, detail) VALUES ($1, $2, 'automation', 'agent-failed', $3::jsonb)",
-      [row.account_id, row.thread_id, toPgJson({ lane: GENERIC_AGENT_LANE, taskId, agentId: failed.agentId })],
+  const rows = await withTransaction(async (client) => {
+    const { rows } = await client.query(
+      `UPDATE github_notifications SET
+         decision = CASE WHEN decision = 'handed-off' THEN COALESCE(evidence->'handoff'->>'previousDecision', decision) ELSE decision END,
+         evidence = jsonb_set(evidence, '{handoff,failed}', $2::jsonb), updated_at = NOW()
+       WHERE ${HANDED_TO_TASK_SQL} AND NOT (evidence->'handoff' ? 'failed') RETURNING account_id, thread_id`,
+      [taskId, toPgJson(failed)],
     );
+    if (rows.length) {
+      await client.query(
+        `INSERT INTO github_notification_events (account_id, thread_id, actor, kind, detail)
+         SELECT account_id, thread_id, 'automation', 'agent-failed', $3::jsonb
+         FROM unnest($1::text[], $2::text[]) AS notifications(account_id, thread_id)`,
+        [
+          rows.map((row) => row.account_id),
+          rows.map((row) => row.thread_id),
+          toPgJson({ lane: GENERIC_AGENT_LANE, taskId, agentId: failed.agentId }),
+        ],
+      );
+    }
+    return rows;
+  });
+  for (const row of rows) {
     githubNotificationEvents.emit('changed', { accountId: row.account_id });
   }
   if (rows.length) console.log(`⏭️ Agent task ${taskId} did not resolve ${rows.length} GitHub notification(s); they are back with you`);

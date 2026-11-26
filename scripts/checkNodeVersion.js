@@ -15,7 +15,7 @@
  *     it would make one dependency's narrow range break every install),
  *   - `npm run setup` / `npm start` / `npm run dev` run this file first, so an
  *     unsupported Node fails in the first second instead of the fifth minute,
- *   - scripts/node-version-drift.guard.test.js fails if any of the other sites is
+ *   - server/test/guards/repo/node-version-drift.test.js fails if any of the other sites is
  *     left behind when MIN_NODE moves.
  *
  * The current dependency intersection is `^22.22.2 || ^24.15.0 || >=26.0.0`:

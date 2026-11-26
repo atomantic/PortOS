@@ -66,9 +66,14 @@ export function isPropagationShim(src, handler) {
   return declarations.length === 1 && PROPAGATION_SHIM_HANDLER.test(declarations[0][1].trim());
 }
 
-export function isKeyboardActivatable(src, tag) {
+function hasReachableClickTarget(src, name, tag) {
   const { names, spreads } = tagAttributes(tag);
   if (!names.has('onClick')) return true;
+  // Biome's useKeyWithClickEvents already catches bare clicks on these hosts
+  // except table rows. Keep the checks that require a reachable keyboard
+  // target even if a key handler is present, or custom roles manage focus.
+  if (name !== 'tr' && !names.has('role') && !names.has('aria-hidden')
+    && !['onKeyDown', 'onKeyUp', 'onKeyPress'].some((key) => names.has(key))) return true;
   if (isPropagationShim(src, normalizedAttributeValue(attributeValue(tag, 'onClick')) ?? '')) return true;
   // `clickableProps(` is the canonical spelling.
   if (/\bclickableProps\s*\(/.test(spreads)) return true;
@@ -80,12 +85,12 @@ export function isKeyboardActivatable(src, tag) {
   return !(normalizedAttributeValue(attributeValue(tag, 'tabIndex')) ?? '').startsWith('-');
 }
 
-// Every non-interactive element in `src` carrying a mouse-only `onClick`; shared by the rule and its fixture probes.
-export function* mouseOnlyClickables(src) {
-  if (!src.includes('onClick')) return;
+// Bare table-row clicks and click targets with incomplete custom keyboard semantics.
+export function* unreachableClickTargets(src) {
+  if (!src.includes('onClick') || !/<tr(?=[\s/>{])|onKey|role\s*=|aria-hidden\s*=/.test(src)) return;
   for (const name of CLICKABLE_HOST_TAGS) {
     for (const node of forEachOpeningTag(src, name)) {
-      if (node.tag.includes('onClick') && !isKeyboardActivatable(src, node.tag)) yield node;
+      if (node.tag.includes('onClick') && !hasReachableClickTarget(src, name, node.tag)) yield node;
     }
   }
 }

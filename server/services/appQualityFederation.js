@@ -4,7 +4,8 @@ import { createHash } from 'node:crypto';
 import { z } from 'zod';
 import { query } from '../lib/db.js';
 import { PORTOS_APP_ID } from '../lib/appIdentity.js';
-import { AUDIT_EXECUTION_TASK_TYPES, LEGACY_AUDIT_TASK_TYPE_ALIASES, normalizeAuditTaskType } from '../lib/auditCatalog.js';
+import { AUDIT_DOMAIN_ALIASES } from '../lib/auditDomains.js';
+import { AUDIT_TASK_TYPE_LIST, LEGACY_AUDIT_TASK_TYPE_ALIASES, normalizeAuditTaskType } from '../lib/auditCatalog.js';
 import { auditQualityReportSchema, historicalQualityReportSchema, AUDIT_FRESHNESS_MS, numericQualityReport, QUALITY_FEDERATION_MAX_REPOSITORIES } from '../lib/auditQuality.js';
 import { PLATFORM_SCHEMA_VERSIONS } from '../lib/schemaVersions/platform.js';
 import { getOriginInfo } from '../lib/gitRemote.js';
@@ -34,7 +35,7 @@ const historicalMeasurementSchema = measurementSchema.extend({ report: numericSc
 // Everything this install can parse, sent with each request so a peer on a
 // newer catalog withholds categories this one would reject.
 const READABLE_CATEGORY_PARAM = encodeURIComponent([
-  ...AUDIT_EXECUTION_TASK_TYPES, ...Object.keys(LEGACY_AUDIT_TASK_TYPE_ALIASES),
+  ...AUDIT_TASK_TYPE_LIST, ...Object.keys(AUDIT_DOMAIN_ALIASES), ...Object.keys(LEGACY_AUDIT_TASK_TYPE_ALIASES),
 ].join(','));
 
 const payloadSchema = z.object({

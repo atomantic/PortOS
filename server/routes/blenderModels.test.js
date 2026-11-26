@@ -90,7 +90,7 @@ async function build(id, body = {}) {
   expect(started.status, JSON.stringify(started.body)).toBe(202);
   const { build: { id: buildId } } = started.body;
   await vi.waitFor(() => expect(blender.rows.get(id).builds.find((entry) => entry.id === buildId).status).not.toBe('running'), WAIT);
-  // The build prunes after it settles its row; wait for the job to be terminal too.
+  // Wait for the job transition as well as the persisted build status.
   await vi.waitFor(async () => expect((await request(app).get(api(id))).body.jobs.at(-1).status).not.toMatch(/queued|running/), WAIT);
   return { buildId, record: blender.rows.get(id).builds.find((entry) => entry.id === buildId) };
 }
@@ -207,15 +207,22 @@ describe('Blender Models: workspace, build, report, publish', () => {
     mkdirSync(join(workspace(id), 'builds', 'build-20200101T000000Z-0000abcd'), { recursive: true });
     const later = [];
     for (let index = 0; index < 6; index += 1) later.push((await build(id)).buildId);
-    const kept = blender.rows.get(id).builds.map((entry) => entry.id);
-    expect(kept.sort()).toEqual([first, ...later.slice(1)].sort());
-    expect(readdirSync(join(workspace(id), 'builds')).sort()).toEqual(kept.sort());
+    const buildDir = join(workspace(id), 'builds');
+    // Build status goes terminal before the async record and folder prune.
+    await vi.waitFor(() => {
+      const kept = [first, ...later.slice(1)].sort();
+      expect(blender.rows.get(id).builds.map((entry) => entry.id).sort()).toEqual(kept);
+      expect(readdirSync(buildDir).sort()).toEqual(kept);
+    }, WAIT);
 
     // A failed build ages the oldest kept build out too.
     blender.fake.control.crash = { message: 'RuntimeError: example failure' };
     const { buildId: crashed } = await build(id);
-    expect(blender.rows.get(id).builds.map((entry) => entry.id).sort()).toEqual([first, ...later.slice(2), crashed].sort());
-    expect(readdirSync(join(workspace(id), 'builds'))).not.toContain(later[1]);
+    await vi.waitFor(() => {
+      const kept = [first, ...later.slice(2), crashed].sort();
+      expect(blender.rows.get(id).builds.map((entry) => entry.id).sort()).toEqual(kept);
+      expect(readdirSync(buildDir).sort()).toEqual(kept);
+    }, WAIT);
   });
 
   it('refuses a build in contained mode with the same 409 as films', async () => {

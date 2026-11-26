@@ -19,7 +19,7 @@
 // component at render time.
 
 // Feature areas, keyed by a stable area id. Each `to` is a live NAV_COMMANDS path.
-export const FEATURE_AREAS = {
+export const GOAL_FEATURE_AREAS = {
   post:          { label: 'Daily POST',      to: '/post/launcher',              icon: 'Brain', feature: 'post' },
   bodyHealth:    { label: 'Body Health',     to: '/meatspace/health',           icon: 'HeartPulse' },
   writersRoom:   { label: 'Writers Room',    to: '/writers-room',               icon: 'PenLine' },
@@ -34,7 +34,7 @@ export const FEATURE_AREAS = {
 };
 
 // Every valid area id — the source of truth for the per-goal override enum.
-export const FEATURE_AREA_IDS = Object.keys(FEATURE_AREAS);
+export const FEATURE_AREA_IDS = Object.keys(GOAL_FEATURE_AREAS);
 
 // Curated category → ordered feature-area ids. A goal with no override falls
 // back to its category's default; an unknown category resolves to an empty list.
@@ -54,19 +54,19 @@ export const GOAL_CATEGORY_FEATURE_MAP = {
 // preserving the selected/default order. Returns rows with an optional feature tag.
 export function getGoalFeatureAreas(goal, isFeatureEnabled) {
   const override = Array.isArray(goal?.featureAreas)
-    ? goal.featureAreas.filter((id) => FEATURE_AREAS[id])
+    ? goal.featureAreas.filter((id) => GOAL_FEATURE_AREAS[id])
     : [];
   const categoryDefaults = GOAL_CATEGORY_FEATURE_MAP[goal?.category] || [];
   const areaIds = override.length > 0
     ? override
     : categoryDefaults;
-  const rows = areaIds.map((area) => ({ area, ...FEATURE_AREAS[area] }));
+  const rows = areaIds.map((area) => ({ area, ...GOAL_FEATURE_AREAS[area] }));
   if (typeof isFeatureEnabled !== 'function') return rows;
 
   const enabledRows = rows.filter((row) => isFeatureEnabled(row.feature));
   if (enabledRows.length > 0 || override.length === 0) return enabledRows;
 
   return categoryDefaults
-    .map((area) => ({ area, ...FEATURE_AREAS[area] }))
+    .map((area) => ({ area, ...GOAL_FEATURE_AREAS[area] }))
     .filter((row) => isFeatureEnabled(row.feature));
 }

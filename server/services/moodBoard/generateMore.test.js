@@ -27,7 +27,7 @@ vi.mock('../settings.js', () => ({ getSettings: async () => mocks.settings }));
 vi.mock('../provider/providers.js', () => ({ getProviderById: (...args) => mocks.provider(...args) }));
 vi.mock('../promptRunner.js', () => ({ runPromptThroughProvider: (...args) => mocks.run(...args) }));
 vi.mock('../aiProvider.js', () => ({ parseLLMJSON: JSON.parse }));
-vi.mock('../socketIo.js', () => ({ getIo: () => ({ emit: mocks.emit }) }));
+vi.mock('../socketIo.js', () => ({ emitToOperators: (...args) => mocks.emit(...args) }));
 vi.mock('../sharing/recordEvents.js', () => ({ emitRecordUpdated: vi.fn() }));
 vi.mock('../mediaJobQueue/index.js', () => ({
   enqueueJob: (...args) => mocks.enqueue(...args), getJob: async () => null,

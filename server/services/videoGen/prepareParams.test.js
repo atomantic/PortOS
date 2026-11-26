@@ -442,11 +442,46 @@ describe('prepareVideoGenParams', () => {
     });
   });
 
-  describe('rejected-await rollback (#3326)', () => {
-    // Each case stages a durable copy, then makes the NEXT await reject. Without
-    // the withStagedRollback guard the rejection bubbles past every explicit
-    // cleanupAllStaged() call and the durable copy is orphaned forever.
+  describe('preparation rollback', () => {
     const musicVideo = { projectId: 'proj-1', sceneId: 'scene-1' };
+
+    it('unlinks the multipart upload when the initial settings read rejects', async () => {
+      const boom = new Error('settings unavailable');
+      getSettings.mockRejectedValueOnce(boom);
+      const sourceImage = upload('sourceImage');
+
+      await expect(prepare({}, { sourceImage })).rejects.toBe(boom);
+      expect(unlink).toHaveBeenCalledExactlyOnceWith(sourceImage.path);
+      expect(copyFileMock).not.toHaveBeenCalled();
+    });
+
+    it('unlinks the multipart upload when Reactor refuses a negative prompt', async () => {
+      const sourceImage = upload('sourceImage');
+
+      await expect(prepare({ backend: 'reactor', negativePrompt: 'blur' }, { sourceImage }))
+        .rejects.toMatchObject({ status: 400, code: 'VIDEO_BACKEND_INPUT_UNSUPPORTED' });
+      expect(unlink).toHaveBeenCalledExactlyOnceWith(sourceImage.path);
+      expect(copyFileMock).not.toHaveBeenCalled();
+    });
+
+    it.each([
+      ['google', 'veo-3.1-generate-001', 'GOOGLE_VIDEO_INPUT_INVALID', 'takes either a start frame or reference images'],
+      ['higgsfield', 'bytedance/seedance-2.5', 'VALIDATION_ERROR', 'missing.png'],
+    ])('unwinds the source upload when %s refuses the supplied references', async (backend, modelId, code, message) => {
+      getSettings.mockResolvedValueOnce({
+        videoGen: { [backend]: { apiKey: 'example-key', projectId: 'example-project' } },
+      });
+      const sourceImage = upload('sourceImage');
+      if (backend === 'higgsfield') resolveGalleryImage.mockReturnValueOnce(null);
+
+      await expect(prepare({
+        backend, [`${backend}ModelId`]: modelId, referenceImageFiles: ['missing.png'],
+      }, { sourceImage })).rejects.toMatchObject({
+        status: 400, code, message: expect.stringContaining(message),
+      });
+      expect(unlinkedDurablePaths()).toEqual([expect.stringMatching(/^\/mock\/uploads\/video-source-.*\.png$/)]);
+      expect(unlink).toHaveBeenCalledWith(sourceImage.path);
+    });
 
     it('unwinds the staged source frame when the music-video project lookup rejects', async () => {
       const boom = new Error('project store unavailable');

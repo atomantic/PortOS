@@ -2,7 +2,7 @@
  * Lay the quality audits out across a week, around whatever else already runs.
  *
  * The problem this solves: an app has ~26 schedulable audit types
- * (`AUDIT_EXECUTION_PROFILES`), each of which would otherwise need a hand-picked cron
+ * (`AUDIT_DEFINITIONS`), each of which would otherwise need a hand-picked cron
  * expression, in an order that respects `AUDIT_SUGGESTED_AFTER`, in hours that
  * do not land on top of a release job. Nobody picks 26 cron expressions by
  * hand, so this module picks them: it distributes the checks over all seven
@@ -14,7 +14,7 @@
  * a repository, or the clock.
  */
 
-import { AUDIT_EXECUTION_PROFILES, AUDIT_SUGGESTED_AFTER, AUDIT_EXECUTION_TASK_TYPES, defaultFileIssuesFor } from './auditCatalog.js';
+import { AUDIT_DEFINITIONS, AUDIT_SUGGESTED_AFTER, AUDIT_TASK_TYPE_LIST, defaultFileIssuesFor } from './auditCatalog.js';
 
 /** The task types the claim drain can be run through, in preference order. */
 export const CLAIM_DRAIN_TASK_TYPES = Object.freeze(['claim-work', 'claim-issue', 'plan-task']);
@@ -59,7 +59,7 @@ const clampHour = (value, fallback) => {
  * @returns {string[]} The same types, earliest-first
  */
 export function orderQualityChecks(taskTypes) {
-  const selected = AUDIT_EXECUTION_TASK_TYPES.filter(type => taskTypes.includes(type));
+  const selected = AUDIT_TASK_TYPE_LIST.filter(type => taskTypes.includes(type));
   const pending = new Set(selected);
   const ordered = [];
   while (pending.size) {
@@ -311,7 +311,7 @@ export function planQualitySchedule({ taskTypes = [], fileIssuesByType = {}, bus
       : (typeof settings.fileIssues === 'boolean' ? settings.fileIssues : defaultFileIssuesFor(taskType));
     return {
       taskType,
-      label: AUDIT_EXECUTION_PROFILES[taskType]?.label || taskType,
+      label: AUDIT_DEFINITIONS[taskType]?.label || taskType,
       day,
       hour,
       fileIssues,

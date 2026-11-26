@@ -56,8 +56,8 @@ describe('audit applicability gate', () => {
     expect(await resolveAuditApplicability(app, 'design')).toEqual({ applicable: false, reason: expect.stringMatching(/no user interface/) });
     expect(await resolveAuditApplicability(app, 'mobile-responsive')).toEqual({ applicable: false, reason: expect.stringMatching(/no user interface/) });
     expect(await resolveAuditApplicability(app, 'reliability')).toEqual({ applicable: true, reason: null });
-    // Infrastructure needs deployment config, which this service lacks.
-    expect((await resolveAuditApplicability(app, 'infrastructure')).applicable).toBe(false);
+    // The combined environment audit applies to CI and local developer workflows, even without deployment config.
+    expect((await resolveAuditApplicability(app, 'infrastructure-environment')).applicable).toBe(true);
   });
 
   it('offers Design for a theme-free UI app and keeps the issue-filing default when scheduled', async () => {
@@ -65,7 +65,7 @@ describe('audit applicability gate', () => {
     const resolved = await resolveQualityChecks(app);
     expect(resolved.checks.find(check => check.taskType === 'design-usability')).toMatchObject({ applicable: true });
     await applyQualitySchedulePlan(app, { taskTypes: ['design'] });
-    expect(updateAppTaskTypeOverrides.mock.calls[0][1].design.taskMetadata.fileIssues).toBe(true);
+    expect(updateAppTaskTypeOverrides.mock.calls[0][1]['design-usability'].taskMetadata.fileIssues).toBe(true);
   });
 
   it('offers and schedules typing for native Swift in a JavaScript app without pretending it has TypeScript', async () => {
@@ -75,15 +75,15 @@ describe('audit applicability gate', () => {
     expect(resolved.checks.find(check => check.taskType === 'architecture-maintainability').applicable).toBe(true);
     expect(await resolveAuditApplicability(app, 'typing')).toEqual({ applicable: true, reason: null });
     const plan = await buildQualitySchedulePlan(app, { taskTypes: ['typing'] });
-    expect(plan.plan.slots.some(slot => slot.taskType === 'typing')).toBe(true);
+    expect(plan.plan.slots.some(slot => slot.taskType === 'architecture-maintainability')).toBe(true);
   });
 
   it('recognizes typed source across supported stacks but ignores vendored and built artifacts', async () => {
     for (const path of ['src/index.ts', 'src/lib.rs', 'main.go', 'src/App.java', 'src/App.kt', 'App.cs', 'main.cpp', 'main.c', 'main.scala', 'lib/main.dart', 'Program.fs']) {
-      expect((await resolveAuditApplicability(appWith([path]), 'typing')).applicable, path).toBe(true);
+      expect((await detectRepoCapabilities(appWith([path]))).capabilities.typed, path).toBe(true);
     }
     const app = appWith([...NODE_SERVICE, 'vendor/Library.swift', 'build/generated.ts', 'docs/Swift.md']);
-    expect(await resolveAuditApplicability(app, 'typing')).toEqual({ applicable: false, reason: 'no supported typed-language sources found in this repository' });
+    expect((await detectRepoCapabilities(app)).capabilities.typed).toBe(false);
   });
 
   it('recognizes deployment configuration as infrastructure', async () => {
@@ -138,12 +138,9 @@ describe('resolveQualityChecks', () => {
     expect(checks.find(check => check.taskType === 'accessibility').applicable).toBe(true);
   });
 
-  it('separates the two test lenses: coverage always applies, quality needs tests to assess', async () => {
-    const { checks } = await resolveQualityChecks(appWith(['package.json', 'src/index.js']), ['test-quality-coverage', 'test-coverage', 'better-test-quality']);
-    const byType = Object.fromEntries(checks.map(check => [check.taskType, check]));
-    expect(byType['test-quality-coverage'].applicable).toBe(true);
-    expect(byType['test-coverage'].applicable).toBe(true);
-    expect(byType['better-test-quality'].applicable).toBe(false);
+  it('keeps the combined test audit applicable even when a repository has no tests', async () => {
+    const { checks } = await resolveQualityChecks(appWith(['package.json', 'src/index.js']), ['test-quality-coverage']);
+    expect(checks[0]).toMatchObject({ taskType: 'test-quality-coverage', applicable: true });
   });
 
   it('lets an auditing agent that reported not-applicable overrule the path heuristics', async () => {
@@ -162,14 +159,10 @@ describe('resolveQualityChecks', () => {
     expect(checks.find(check => check.taskType === 'security').applicable).toBe(true);
   });
 
-  it('recognizes a retired lifecycle category in stored applicability results', async () => {
+  it('does not apply a retired profile’s not-applicable result to its whole domain', async () => {
     query.mockResolvedValue({ rows: [{ category: 'react-lifecycle', assessed_at: new Date().toISOString(), report: { coverage: 'not-applicable' } }] });
-    const { checks } = await resolveQualityChecks(appWith(['package.json', 'src/App.jsx']), ['ui-lifecycle', 'ui-runtime-bugs']);
-    expect(checks.find(check => check.taskType === 'ui-runtime-bugs').applicable).toBe(true);
-    expect(checks.find(check => check.taskType === 'ui-lifecycle')).toMatchObject({
-      applicable: false,
-      reason: 'a previous audit reported this category as not applicable here',
-    });
+    const { checks } = await resolveQualityChecks(appWith(['package.json', 'src/App.jsx']), ['ui-runtime-bugs']);
+    expect(checks[0]).toMatchObject({ taskType: 'ui-runtime-bugs', applicable: true });
   });
 
   it('treats a repository it could only skim as unknown, not as empty', async () => {
@@ -407,47 +400,21 @@ describe('saved schedule hydration', () => {
 });
 
 describe('applyQualitySchedulePlan', () => {
-  it('reuses the hours of retired legacy audits and keeps the cadences of unselected domains', async () => {
-    loadSchedule.mockResolvedValue({ tasks: {
-      simplify: { type: 'on-demand', enabled: true },
-      'better-complexity': { type: 'on-demand', enabled: true },
-      'code-quality': { type: 'on-demand', enabled: true },
-    } });
+  it('maps older selections to one canonical schedule and preserves its saved metadata', async () => {
     getAppTaskTypeOverrides.mockResolvedValue({
-      simplify: { enabled: true, interval: '0 8 * * *', providerId: 'fixture-a' },
-      'better-complexity': { enabled: true, interval: '0 18 * * *' },
-      'better-cognitive-load': { enabled: false, interval: '0 19 * * *' },
-      'code-quality': { enabled: true, interval: '0 12 * * *' },
+      'code-simplification': { enabled: true, interval: '0 8 * * *', taskMetadata: { reviewer: 'fixture-a' } },
     });
-    const app = appWith(NODE_SERVICE);
-    const built = await applyQualitySchedulePlan(app, {
-      taskTypes: ['code-simplification'], windowStartHour: 8, windowEndHour: 8, claimBetween: false,
+    const built = await applyQualitySchedulePlan(appWith(NODE_SERVICE), {
+      taskTypes: ['code-simplification', 'simplify'], windowStartHour: 8, windowEndHour: 8, claimBetween: false,
     });
 
     expect(built.checks).toHaveLength(16);
-    expect(built.busySources).toEqual([{ taskType: 'code-quality', cron: '0 12 * * *', origin: 'app' }]);
+    expect(built.busySources).toEqual([]);
     expect(built.plan.slots).toEqual([expect.objectContaining({ taskType: 'code-simplification', hour: 8 })]);
-    expect(built.plan.warnings).toEqual([]);
     const [, patches] = updateAppTaskTypeOverrides.mock.calls[0];
-    expect(patches.simplify).toEqual({ enabled: false, interval: null });
-    expect(patches['better-complexity']).toEqual({ enabled: false, interval: null });
-    expect(patches).not.toHaveProperty('better-cognitive-load');
-    expect(patches).not.toHaveProperty('code-quality');
-    expect(patches['code-simplification']).toMatchObject({ enabled: true, taskMetadata: { fileIssues: true } });
-  });
-
-  it('keeps a legacy audit scheduled when an older client explicitly requests it alongside its domain', async () => {
-    getAppTaskTypeOverrides.mockResolvedValue({
-      simplify: { enabled: true, interval: '0 8 * * *', taskMetadata: { reviewer: 'fixture-a' } },
-    });
-    const built = await applyQualitySchedulePlan(appWith(NODE_SERVICE), {
-      taskTypes: ['code-simplification', 'simplify'], claimBetween: false,
-    });
-
-    const legacySlot = built.plan.slots.find(slot => slot.taskType === 'simplify');
-    const [, patches] = updateAppTaskTypeOverrides.mock.calls[0];
-    expect(patches.simplify).toMatchObject({
-      enabled: true, interval: legacySlot.cron, taskMetadata: { reviewer: 'fixture-a' },
+    expect(patches).not.toHaveProperty('simplify');
+    expect(patches['code-simplification']).toMatchObject({
+      enabled: true, interval: built.plan.slots[0].cron, taskMetadata: { reviewer: 'fixture-a' },
     });
   });
 
@@ -514,7 +481,7 @@ describe('applyQualitySchedulePlan', () => {
     // security ships defaultFileIssues:false, ux ships true — a form-wide
     // default would have flattened both.
     expect(patches.security.taskMetadata).toEqual({ fileIssues: false });
-    expect(patches.ux.taskMetadata).toEqual({ fileIssues: true });
+    expect(patches['design-usability'].taskMetadata).toEqual({ fileIssues: true });
   });
 
   it('keeps metadata the user set elsewhere and only overwrites the delivery mode', async () => {

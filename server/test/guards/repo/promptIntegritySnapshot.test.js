@@ -2,6 +2,7 @@
 import { describe, expect, it } from 'vitest';
 import { execFileSync } from 'node:child_process';
 import { join } from 'node:path';
+import { auditDomainFor } from '../../../lib/auditDomains.js';
 import { PROMPT_VERSIONS } from '../../../services/taskPromptDefaults/versions.js';
 import { readText, REPO_ROOT } from '../../../../scripts/lib/guardCorpus.js';
 
@@ -14,10 +15,12 @@ const git = (...args) => execFileSync('git', args, {
 
 function missingRetiredHashes(base, current, versions) {
   return Object.entries(base.PREVIOUS_DEFAULT_PROMPTS).flatMap(([key, hashes]) => {
-    // Matches advancePromptIntegritySnapshot's intentional dropped-key handling.
-    if (versions[key] === undefined) return [];
-    const retained = new Set(current.PREVIOUS_DEFAULT_PROMPTS[key] ?? []);
-    return hashes.filter((hash) => !retained.has(hash)).map((hash) => `${key}: ${hash}`);
+    const target = versions[key] === undefined ? auditDomainFor(key) : key;
+    if (versions[target] === undefined) return [];
+    const retained = new Set(current.PREVIOUS_DEFAULT_PROMPTS[target] ?? []);
+    const outgoing = base.DEFAULT_TASK_PROMPTS?.[key];
+    const required = target !== key && outgoing ? [...hashes, outgoing] : hashes;
+    return required.filter((hash) => !retained.has(hash)).map((hash) => `${key}: ${hash}`);
   });
 }
 

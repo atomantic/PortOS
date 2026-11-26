@@ -1,3 +1,4 @@
+import { recordingOperatorIo } from '../../test/recordingOperatorIo.js';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 const mocks = vi.hoisted(() => ({
@@ -197,7 +198,7 @@ describe('FableLoom fal.ai browser automation', () => {
 
   it('emits only public snapshots and completes once after both durable writes settle', async () => {
     makeBrowser();
-    const io = { emit: vi.fn() };
+    const io = recordingOperatorIo();
     let save, attach;
     mocks.saveUploadedGalleryVideoBuffer.mockImplementationOnce(() => new Promise(resolve => { save = resolve; }));
     mocks.attachNodeVideo.mockImplementationOnce(() => new Promise(resolve => { attach = resolve; }));
@@ -229,7 +230,7 @@ describe('FableLoom fal.ai browser automation', () => {
 
   it('emits one failure and no completion when durable attachment rejects', async () => {
     makeBrowser();
-    const io = { emit: vi.fn() };
+    const io = recordingOperatorIo();
     mocks.attachNodeVideo.mockRejectedValueOnce(new Error('Synthetic storage failure'));
     const queued = await startFalVideoAutomation('loom-1', 'ep-1', 'node-1', { prompt: 'Example direction', io });
     const failed = await waitForTerminalJob(queued);
@@ -242,7 +243,7 @@ describe('FableLoom fal.ai browser automation', () => {
 
   it('preserves durable completion when socket delivery throws', async () => {
     makeBrowser();
-    const io = { emit: vi.fn(() => { throw new Error('Synthetic socket failure'); }) };
+    const io = recordingOperatorIo(vi.fn(() => { throw new Error('Synthetic socket failure'); }));
     const queued = await startFalVideoAutomation('loom-1', 'ep-1', 'node-1', { prompt: 'Example direction', io });
     await expect(waitForTerminalJob(queued)).resolves.toMatchObject({
       status: 'completed', videoHistoryId: 'upload-ab12cd34',
@@ -527,7 +528,7 @@ describe('FableLoom fal.ai browser automation', () => {
 
   it('cancels a queued job before it touches the browser and lets the next job run', async () => {
     const { page } = makeBrowser();
-    const io = { emit: vi.fn() };
+    const io = recordingOperatorIo();
     let releaseSave;
     mocks.saveUploadedGalleryVideoBuffer.mockImplementationOnce(() => new Promise((resolve) => { releaseSave = resolve; }));
     mocks.getLoom.mockResolvedValue({
@@ -558,7 +559,7 @@ describe('FableLoom fal.ai browser automation', () => {
     video.evaluate.mockReset().mockResolvedValue('');
     // Yield a macrotask per poll so the never-finishing render loop cannot starve timers.
     mocks.sleep.mockImplementation(() => new Promise((resolve) => setTimeout(resolve, 1)));
-    const io = { emit: vi.fn() };
+    const io = recordingOperatorIo();
     const queued = await startFalVideoAutomation('loom-1', 'ep-1', 'node-1', { prompt: 'Example', io });
     await vi.waitFor(() => expect(
       getFalVideoAutomation('loom-1', 'ep-1', 'node-1', queued.id).statusMsg,

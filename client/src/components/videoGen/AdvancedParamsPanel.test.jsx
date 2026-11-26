@@ -1,5 +1,5 @@
 import { describe, it, expect, vi } from 'vitest';
-import { render, screen, fireEvent } from '@testing-library/react';
+import { render, screen, fireEvent, within } from '@testing-library/react';
 import AdvancedParamsPanel from './AdvancedParamsPanel';
 
 // Every model reaching the client carries a server-resolved `supportedModes`
@@ -23,7 +23,43 @@ const baseProps = {
   noMusic: false, onNoMusicChange: vi.fn(),
 };
 
-const renderPanel = (props = {}) => render(<AdvancedParamsPanel {...baseProps} {...props} />);
+function panel(overrides = {}) {
+  const {
+    mode, currentModel,
+    numFrames, onNumFramesChange, chunks, onChunksChange, keyframesActive, chunkPrompts,
+    onChunkPromptChange, chainingActive, contextFrames, onContextFramesChange, fps, onFpsChange, batchSize,
+    onBatchSizeChange, seed, onSeedChange, onRandomSeed,
+    steps, onStepsChange, guidanceScale, onGuidanceScaleChange, speedProfileId, onSpeedProfileChange,
+    speedProfileStatus, onSpeedProfileDownload, width, height, onCancelSpeedProfileDownload,
+    speedProfileDownloadError, draftDecode, onDraftDecodeChange, draftDecodeLocked, streamingMode,
+    onStreamingModeChange, showStreamingMode,
+    imageStrength, onImageStrengthChange, i2vReferenceMode, onI2vReferenceModeChange,
+    effectiveImageStrength, tiling, onTilingChange, disableAudio, onDisableAudioChange, noMusic,
+    onNoMusicChange,
+  } = { ...baseProps, ...overrides };
+
+  return <AdvancedParamsPanel
+    mode={mode} currentModel={currentModel}
+    timing={{
+      numFrames, onNumFramesChange, chunks, onChunksChange, keyframesActive, chunkPrompts,
+      onChunkPromptChange, chainingActive, contextFrames, onContextFramesChange, fps, onFpsChange, batchSize,
+      onBatchSizeChange, seed, onSeedChange, onRandomSeed,
+    }}
+    speedDecode={{
+      steps, onStepsChange, guidanceScale, onGuidanceScaleChange, speedProfileId, onSpeedProfileChange,
+      speedProfileStatus, onSpeedProfileDownload, width, height, onCancelSpeedProfileDownload,
+      speedProfileDownloadError, draftDecode, onDraftDecodeChange, draftDecodeLocked, streamingMode,
+      onStreamingModeChange, showStreamingMode,
+    }}
+    conditioningAudio={{
+      imageStrength, onImageStrengthChange, i2vReferenceMode, onI2vReferenceModeChange,
+      effectiveImageStrength, tiling, onTilingChange, disableAudio, onDisableAudioChange, noMusic,
+      onNoMusicChange,
+    }}
+  />;
+}
+
+const renderPanel = (props) => render(panel(props));
 
 describe('AdvancedParamsPanel', () => {
   it('shows every sampler knob without a disclosure', () => {
@@ -429,6 +465,33 @@ describe('AdvancedParamsPanel — speed profiles', () => {
     ...extra,
   });
 
+  it('gives each mounted panel unique IDs and explicit control labels', () => {
+    const { container } = render(<>
+      <section aria-label="First panel">{panel({ currentModel: ltx25() })}</section>
+      <section aria-label="Second panel">{panel({ currentModel: ltx25() })}</section>
+    </>);
+
+    const ids = [...container.querySelectorAll('[id]')].map((control) => control.id);
+    expect(new Set(ids).size).toBe(ids.length);
+
+    for (const name of ['First panel', 'Second panel']) {
+      const controls = within(screen.getByRole('region', { name }));
+      for (const label of ['Speed', /Disable audio/, /No music/]) {
+        const element = controls.getByText(label, { selector: 'label' });
+        const control = controls.getByLabelText(label);
+        expect(control.id).toBeTruthy();
+        expect(element).toHaveAttribute('for', control.id);
+      }
+    }
+  });
+
+  it('lets the user download a cached adapter again', () => {
+    const onSpeedProfileDownload = vi.fn();
+    renderPanel({ currentModel: h3, speedProfileId: H3_PROFILE.id, speedProfileStatus: { cached: true }, onSpeedProfileDownload });
+    fireEvent.click(screen.getByRole('button', { name: 'Download adapter again' }));
+    expect(onSpeedProfileDownload).toHaveBeenCalledTimes(1);
+  });
+
   it('is hidden on a model that declares no profiles', () => {
     renderPanel();
     expect(screen.queryByLabelText('Speed')).toBeNull();
@@ -600,16 +663,16 @@ describe('AdvancedParamsPanel — draft decode', () => {
 it('offers a bounded batch selector and explains unsupported models and chaining', () => {
   const onBatchSizeChange = vi.fn();
   const props = { ...baseProps, currentModel: { ...baseProps.currentModel, supportsWarmBatch: true }, batchSize: 3, onBatchSizeChange };
-  const { rerender } = render(<AdvancedParamsPanel {...props} />);
+  const { rerender } = render(panel(props));
   const picker = screen.getByLabelText('Renders in batch');
   expect(picker.value).toBe('3');
   fireEvent.change(picker, { target: { value: '5' } });
   expect(onBatchSizeChange).toHaveBeenCalledWith(5);
   expect(screen.getByText(/Blank seed: random each time/)).toBeTruthy();
-  rerender(<AdvancedParamsPanel {...props} chainingActive />);
+  rerender(panel({ ...props, chainingActive: true }));
   expect(picker.disabled).toBe(true);
   expect(picker.value).toBe('1');
-  rerender(<AdvancedParamsPanel {...props} currentModel={baseProps.currentModel} />);
+  rerender(panel({ ...props, currentModel: baseProps.currentModel }));
   expect(picker.disabled).toBe(true);
   expect(screen.getByText(/available for local MiniMax H3/)).toBeTruthy();
 });

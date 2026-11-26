@@ -9,7 +9,9 @@ import {
   getSlotstreamServerStatus,
   installLlamaServer,
   installMtplx,
+  uninstallMtplx,
   installSlotstream,
+  uninstallSlotstream,
   startLlamaServer,
   startMtplxServer,
   startSlotstreamServer,
@@ -20,7 +22,7 @@ import {
 } from '../../services/apiLocalLlm.js';
 import { formatCount } from '../../utils/formatters';
 
-export const RUNTIME_CHANGE_LABELS = { install: 'Install', upgrade: 'Update', repair: 'Repair' };
+export const RUNTIME_CHANGE_LABELS = { install: 'Install', upgrade: 'Update', repair: 'Repair', uninstall: 'Uninstall' };
 
 /**
  * PM2 status distinguishes our own processes from external ones.
@@ -29,7 +31,7 @@ export const RUNTIME_CHANGE_LABELS = { install: 'Install', upgrade: 'Update', re
  * answers on the port means a server the user started in a terminal, which
  * PortOS must not offer to stop.
  */
-function pm2Row({ id, label, icon, status, platformReason, onStart, onStop, onInstall, onUpgrade, startBlockedReason, detail }) {
+function pm2Row({ id, label, icon, status, platformReason, onStart, onStop, onInstall, onUpgrade, onUninstall, startBlockedReason, detail }) {
   const external = status?.running && status?.managed === false;
   const updateAvailable = !platformReason && status?.installed && status?.updateAvailable === true;
   const state = !status ? 'unknown' : platformReason ? 'unsupported'
@@ -50,6 +52,7 @@ function pm2Row({ id, label, icon, status, platformReason, onStart, onStop, onIn
     onInstall: status && !platformReason && !status.installed ? onInstall : null,
     onStart: !platformReason && status?.installed && !status?.running && !startBlockedReason ? onStart : null,
     startBlockedReason: status?.installed && !status?.running ? startBlockedReason : null,
+    onUninstall: !platformReason && status?.canUninstall ? onUninstall : null,
     onStop: !external && status?.running ? onStop : null,
     model: status?.config?.model || status?.model || null,
     version: status?.version || null,
@@ -62,8 +65,8 @@ function pm2Row({ id, label, icon, status, platformReason, onStart, onStop, onIn
   };
 }
 
-const BUSY_STATES = ['installing', 'updating', 'stopping'];
-const ACTION_STATE = { install: 'installing', upgrade: 'updating', start: 'starting', stop: 'stopping' };
+const BUSY_STATES = ['installing', 'updating', 'stopping', 'uninstalling'];
+const ACTION_STATE = { install: 'installing', repair: 'installing', upgrade: 'updating', start: 'starting', stop: 'stopping', uninstall: 'uninstalling' };
 const OCCUPIED_STATES = ['external', 'unrecognized', 'not-ready', 'starting', 'running', 'online'];
 
 function bundleRow(status, action) {
@@ -94,6 +97,7 @@ function bundleRow(status, action) {
     onRepair: canChangeInstall && status.repairRecommended && !updateAvailable ? action('repair') : null,
     onUpgrade: canChangeInstall && updateAvailable ? action('upgrade') : null,
     onStart: idle && status.installed && !occupied && status.canStart !== false ? action('start') : null,
+    onUninstall: idle && !occupied && status.canUninstall ? action('uninstall') : null,
     onStop: idle && status.managed === true && occupied ? action('stop') : null,
   };
 }
@@ -105,9 +109,14 @@ function bundleApi(id) {
   return {
     status: (options) => getManagedInklingRuntimeStatus(id, options),
     install: () => controlManagedInklingRuntime(id, 'install'),
+    repair: () => id === 'mkserve'
+      ? controlManagedInklingRuntime(id, 'install', { body: JSON.stringify({ repair: true }) })
+      : controlManagedInklingRuntime(id, 'install'),
+    cancel: (operationId) => controlManagedInklingRuntime(id, 'cancel', { body: JSON.stringify({ operationId }) }),
     start: () => controlManagedInklingRuntime(id, 'start'),
     stop: () => controlManagedInklingRuntime(id, 'stop'),
     upgrade: () => controlManagedInklingRuntime(id, 'upgrade'),
+    uninstall: () => controlManagedInklingRuntime(id, 'uninstall'),
   };
 }
 
@@ -151,11 +160,13 @@ export const LOCAL_RUNTIME_DESCRIPTORS = {
     label: LOCAL_RUNTIME_LABELS.mtplx,
     icon: Gauge,
     kind: 'pm2',
-    api: { status: getMtplxServerStatus, install: installMtplx, start: startMtplxServer, stop: stopMtplxServer },
+    api: { status: getMtplxServerStatus, install: installMtplx, uninstall: uninstallMtplx, start: startMtplxServer, stop: stopMtplxServer },
     capabilities: PM2_CAPABILITIES,
     copy: {
       idleRelease: 'Minutes of PortOS inactivity after which MTPLX is stopped. The next PortOS request starts it again on the same checkpoint. 0 = keep it running.',
       install: 'MTPLX installed',
+      uninstall: (result) => result.message,
+      uninstallDetail: 'Removes the private MTPLX environment installed by PortOS. Downloaded checkpoints, provider presets, and launch settings are kept. An MTPLX installation on PATH is not removed.',
       start: (r) => r?.online ? 'MTPLX is running' : 'MTPLX is loading its checkpoint',
       stop: (r) => r?.message || 'MTPLX stopped',
     },
@@ -167,6 +178,7 @@ export const LOCAL_RUNTIME_DESCRIPTORS = {
         status,
         platformReason: status?.supported === false ? 'macOS with Apple Silicon only' : null,
         onInstall: action('install'),
+        onUninstall: action('uninstall'),
         // MTPLX can be started explicitly when a verified checkpoint is cached,
         // and is still restarted automatically before a request after an idle
         // release. Neither path downloads or guesses a model.
@@ -186,11 +198,13 @@ export const LOCAL_RUNTIME_DESCRIPTORS = {
     label: LOCAL_RUNTIME_LABELS.slotstream,
     icon: HardDrive,
     kind: 'pm2',
-    api: { status: getSlotstreamServerStatus, install: installSlotstream, start: startSlotstreamServer, stop: stopSlotstreamServer },
+    api: { status: getSlotstreamServerStatus, install: installSlotstream, uninstall: uninstallSlotstream, start: startSlotstreamServer, stop: stopSlotstreamServer },
     capabilities: PM2_CAPABILITIES,
     copy: {
       idleRelease: 'Minutes of PortOS inactivity after which Slotstream is stopped. The next PortOS request starts it again on the same checkpoint and memory cap. 0 = keep it running.',
       install: 'Slotstream installed',
+      uninstall: (result) => result.message,
+      uninstallDetail: 'Removes the Slotstream executable installed by PortOS. Downloaded checkpoints, provider presets, and launch settings are kept for reinstall. Existing Slotstream providers will not work until a server is available again.',
       start: (r) => r?.online ? 'Slotstream is running' : 'Slotstream is loading its checkpoint',
       stop: (r) => r?.message || 'Slotstream stopped',
     },
@@ -202,6 +216,7 @@ export const LOCAL_RUNTIME_DESCRIPTORS = {
         status,
         platformReason: status?.supported === false ? 'macOS with Apple Silicon only' : null,
         onInstall: action('install'),
+        onUninstall: action('uninstall'),
         onStart: status?.cachedModels?.length ? action('start') : null,
         onStop: action('stop'),
         // An unreadable cache also leaves `cachedModels` empty, so it withholds
@@ -230,6 +245,7 @@ export const LOCAL_RUNTIME_DESCRIPTORS = {
     api: bundleApi('splash'),
     capabilities: BUNDLE_CAPABILITIES,
     copy: {
+      uninstallDetail: 'Removes the PortOS-managed Splash runtime files. Downloaded models and provider presets are kept for reinstall. Existing providers for this server will not work until a server is available again.',
       requirement: 'Requires macOS 26.4 or later and an Apple M3 or newer.',
       download: 'First setup downloads about 17 GB for Inkling 2 Mini and its DFlash drafter. Leave additional room for the prepared cache.',
       provider: 'When it is ready, enable an existing Splash preset under AI Providers.',
@@ -244,8 +260,10 @@ export const LOCAL_RUNTIME_DESCRIPTORS = {
     api: bundleApi('mkserve'),
     capabilities: BUNDLE_CAPABILITIES,
     copy: {
+      uninstallDetail: 'Removes the PortOS-managed mkserve runtime files. Downloaded models and provider presets are kept for reinstall. Existing providers for this server will not work until a server is available again.',
       requirement: 'Requires macOS 26 or later and an Apple M5 Max with at least 36 GiB of unified memory.',
       download: 'Downloads about 19 GiB of Inkling 2 Mini weights, plus the runtime and its Python environment.',
+      repair: 'Clear and rebuild the mkserve engine cache using the checkpoint already on this machine.',
       provider: 'When it is ready, add an OpenAI-compatible provider using the endpoint and model ID shown here.',
     },
     toRow: bundleRow,

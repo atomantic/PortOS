@@ -112,7 +112,7 @@ describe('normalizeQuotaBurnJob', () => {
 });
 
 describe('normalizeQuotaBurnJob — scheduled-task references', () => {
-  const ref = { kind: 'builtin', taskType: 'ux', appId: 'app-1' };
+  const ref = { kind: 'builtin', taskType: 'design-usability', appId: 'app-1' };
 
   it('round-trips a reference step through save and reload unchanged', () => {
     // The whole point of the reference model: identity survives a reload, so a
@@ -133,6 +133,13 @@ describe('normalizeQuotaBurnJob — scheduled-task references', () => {
       taskRef: ref,
       overrides: { providerId: 'claude-code-tui', model: 'opus', effort: 'high', params: { fileIssues: true, maxEntries: 3 } },
     });
+  });
+
+  it('folds a saved legacy job reference while retaining its run settings', () => {
+    const step = normalizeQuotaBurnJob({ id: 'older-step', label: 'Nightly UX sweep',
+      taskRef: { ...ref, taskType: 'ux' }, overrides: { model: 'example-model', params: { fileIssues: true } } });
+    expect(step).toMatchObject({ id: 'older-step', label: 'Nightly UX sweep', taskRef: ref,
+      overrides: { model: 'example-model', params: { fileIssues: true } } });
   });
 
   it('drops a payload that names neither a reference nor a known legacy type', () => {

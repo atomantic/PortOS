@@ -14,8 +14,7 @@
  * ffprobe, the HF cache, or the history file.
  */
 
-export const UPSCALE_METHODS = Object.freeze(['lanczos', 'ltx']);
-export const DEFAULT_UPSCALE_METHOD = 'lanczos';
+export { UPSCALE_METHODS, DEFAULT_UPSCALE_METHOD } from '../../lib/videoGenRequestFields.js';
 
 // Both methods double each axis. Declared once because the plan endpoint, the
 // Lanczos entry builder and the client disclosure all quote it.

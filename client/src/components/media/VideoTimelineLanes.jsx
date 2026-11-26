@@ -8,7 +8,7 @@
  * would re-render (and, in the video lane, re-run `useSortable`) 60×/s.
  */
 
-import { memo, useEffect, useRef } from 'react';
+import { memo, useEffect, useMemo, useRef } from 'react';
 import { useSortable } from '../../lib/dnd/index.js';
 import { X, Film, Plus, Music } from 'lucide-react';
 import { dndTransformToCss } from '../../lib/dndTransform';
@@ -181,6 +181,22 @@ export const LaneBlock = memo(function LaneBlock({
 export const FloatingLane = memo(function FloatingLane({
   title, entries, emptyHint, tone, labelOf, isMissing, selectedKey, pxPerSec, width, playheadSec, onSelect, onRemove,
 }) {
+  // Only the marker moves with the playhead. Keep the blocks' element list
+  // stable during playback so selection and source checks run on actual edits.
+  const blocks = useMemo(() => entries.map((entry) => (
+    <LaneBlock
+      key={entry._key}
+      entry={entry}
+      label={labelOf(entry)}
+      tone={tone}
+      isSelected={entry._key === selectedKey}
+      isMissing={isMissing(entry)}
+      pxPerSec={pxPerSec}
+      onSelect={onSelect}
+      onRemove={onRemove}
+    />
+  )), [entries, labelOf, tone, selectedKey, isMissing, pxPerSec, onSelect, onRemove]);
+
   return (
     <>
       <div className="text-[9px] uppercase tracking-wide text-gray-600 px-0.5 pt-1">{title}</div>
@@ -188,19 +204,7 @@ export const FloatingLane = memo(function FloatingLane({
         {entries.length === 0 && (
           <span className="absolute inset-0 flex items-center pl-2 text-[10px] text-gray-600">{emptyHint}</span>
         )}
-        {entries.map((entry) => (
-          <LaneBlock
-            key={entry._key}
-            entry={entry}
-            label={labelOf(entry)}
-            tone={tone}
-            isSelected={entry._key === selectedKey}
-            isMissing={isMissing(entry)}
-            pxPerSec={pxPerSec}
-            onSelect={onSelect}
-            onRemove={onRemove}
-          />
-        ))}
+        {blocks}
         <div
           data-testid={`${title.toLowerCase()}-playhead`}
           aria-hidden="true"

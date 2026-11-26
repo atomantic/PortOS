@@ -5,7 +5,7 @@ import { execFileSync } from 'child_process';
 import { createRequire } from 'node:module';
 import { resolve } from 'path';
 
-import { resolveBundleNodeEnv } from './vite.buildEnv.js';
+import { resolveBundleNodeEnv } from '../lib/viteBuildEnv.js';
 import { CHUNK_GROUPS } from './vite.chunkGroups.js';
 import { DEV_PROXY_CLIENT_ADDRESS_HEADER, devProxyForwardedOrigin } from '../lib/portosAuthCore.js';
 import {
@@ -206,7 +206,7 @@ export default defineConfig(({ command, mode }) => {
   // inline, shipping the DEVELOPMENT react/react-dom to every user. The config
   // file is loaded BEFORE Vite derives `isProduction`, its
   // `process.env.NODE_ENV` define, and the plugin JSX runtime, so all three
-  // agree on the value set here. See client/vite.buildEnv.js.
+  // agree on the value set here. See lib/viteBuildEnv.js.
   process.env.NODE_ENV = resolveBundleNodeEnv(command, process.env.NODE_ENV);
 
   const env = loadEnv(mode, process.cwd(), 'VITE_');
@@ -260,7 +260,7 @@ export default defineConfig(({ command, mode }) => {
         // regex on purpose: Vite matches a plain context with a bare
         // `url.startsWith`, so a `'/data'` key would also swallow the `/data`
         // (Data Manager) and `/datadog` client routes and hand them the API's
-        // stale built index.html. `scripts/dev-proxy-drift.test.js` holds both
+        // stale built index.html. `server/test/guards/repo/dev-proxy-drift.test.js` holds both
         // halves of that — mounts covered, client routes untouched.
         '^/data/': {
           target: API_TARGET,

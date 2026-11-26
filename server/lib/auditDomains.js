@@ -1,4 +1,4 @@
-/** Active audit domains and the independently configured legacy task IDs whose findings they cover. */
+/** Active audit domains and the retired task IDs whose findings they cover. */
 
 /** Pragmatic healthy floor of the 85-95 target band; chasing 100/100 is discouraged. */
 export const QUALITY_HEALTHY_THRESHOLD = 85;
@@ -17,19 +17,19 @@ export const QUALITY_SCORE_BANDS = Object.freeze([
 /** A run's weight halves every this many days, so remediated pre-fix runs stop pinning the score. Feature-area usage decays on the same clock. */
 export const QUALITY_RECENCY_HALF_LIFE_DAYS = 7;
 
-// A folded task is still its own executable schedule and measurement series.
-// Mapping it into a domain for selection or scoring must never merge its cron,
-// customized prompt, app override, pending request, or same-day snapshot row.
+// Fold scheduled work into domains. Historical measurements retain their original series IDs.
 export const CONSOLIDATED_AUDIT_DOMAINS = Object.freeze({
   'architecture-maintainability': {
     label: 'Architecture and maintainability', members: ['code-quality', 'better-structural-drift', 'module-hygiene', 'typing'],
     mission: 'Find structural defects in module ownership, contracts, types and duplicated sources of truth that make real changes unreliable. End the completion summary with a ranked Recommended next audits list when another domain owns actionable follow-up. Leave local simplification of otherwise sound code to code-simplification.',
     issueLabel: 'code-quality',
+    doWorkRequiresWorktree: true,
   },
   'code-simplification': {
     label: 'Code simplification', members: ['simplify', 'over-engineering', 'better-complexity', 'better-cognitive-load'],
-    mission: 'Find dead paths, excessive branching, hard-to-follow code and abstractions whose cost exceeds the problem they solve. Preserve observable behavior.',
+    mission: 'Find dead paths, excessive branching, hard-to-follow code and abstractions whose cost exceeds the problem they solve. Preserve observable behavior. Keep comments that explain invariants, safety rationale, external contracts, and justified workarounds. Preserve licenses, tool directives, and meaningful type or JSDoc metadata.',
     issueLabel: 'code-quality',
+    doWorkRequiresWorktree: true,
   },
   'ui-runtime-bugs': {
     label: 'Application and UI runtime bugs', members: ['app-bugs', 'ui-bugs', 'console-errors', 'ui-lifecycle'],
@@ -43,7 +43,7 @@ export const CONSOLIDATED_AUDIT_DOMAINS = Object.freeze({
   },
   'data-integrity-safety': {
     label: 'Data integrity and safety', members: ['data-safety', 'data-integrity', 'upgrade-rehearsal'],
-    mission: 'Trace persisted data through writes, migrations, backup and restore. Check for loss, incorrect joins, dropped records or destructive upgrades. Use synthetic scratch installs for upgrade rehearsals and never run destructive tests against live data.',
+    mission: 'Trace persisted data through writes, migrations, backup and restore. Check for loss, incorrect joins, dropped records or destructive upgrades. For an executed upgrade or restore rehearsal, use fixture-based scratch installs and isolated test databases. Keep live data out of the rehearsal.',
     issueLabel: 'data-safety',
   },
   'test-quality-coverage': {
@@ -58,13 +58,14 @@ export const CONSOLIDATED_AUDIT_DOMAINS = Object.freeze({
   },
   'infrastructure-environment': {
     label: 'Infrastructure and development environment', members: ['infrastructure', 'better-dev-environment'],
-    mission: 'Inspect deployment, CI and developer setup for reproducible build, configuration and host-resource problems. Check deployment-only surfaces only when present.',
+    mission: 'Inspect deployment, CI and developer setup for reproducible build, configuration and host-resource problems. Check deployment-only surfaces only when present. For CI, report a sample window and count, execution frequency, summed runner time, and critical path. Attribute measured avoidable runner time to triggers, duplicate work, serialization, or cache and artifact cost. Compare representative required-check behavior and preserve essential correctness/security coverage.',
     issueLabel: 'infrastructure',
   },
   'design-usability': {
     label: 'Design and usability', members: ['design', 'ux', 'mobile-responsive'],
     mission: 'Inspect real rendered workflows at supported viewport sizes for navigation, layout, interaction and visual hierarchy problems. Verify composition with a bounded sample of up to six screenshots across representative views. Preserve authored theme identity and keep subjective aesthetic suggestions unscored. Accessibility compliance has its own audit.',
     issueLabel: 'ux',
+    requiresCapability: 'ui',
   },
   'documentation-content': {
     label: 'Documentation and product copy', members: ['documentation', 'copy'],

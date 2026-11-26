@@ -65,6 +65,7 @@ describe('prepareAgentSpawn — duplicate dispatch', () => {
     context.blockAndBail = vi.fn(async () => null);
     expect(await prepareAgentSpawn(task, context)).toBe(context);
     expect(context.claimAcquired).toBe(true);
+    expect(context.instanceId).toBe('local');
     expect(context.cleanupOnError).not.toHaveBeenCalled();
     expect(context.blockAndBail).not.toHaveBeenCalled();
   });

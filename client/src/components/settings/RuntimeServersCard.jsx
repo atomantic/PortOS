@@ -1,8 +1,9 @@
 import { useEffect, useState } from 'react';
 import { Link } from 'react-router';
-import { Cpu, Box, Play, Square, Download, ArrowUpCircle, Power, PowerOff, RefreshCw, Save, Settings2, ExternalLink, Server } from 'lucide-react';
+import { Cpu, Box, Play, Square, Download, ArrowUpCircle, Power, PowerOff, RefreshCw, Save, Settings2, ExternalLink, Server, Trash2 } from 'lucide-react';
 import BrailleSpinner from '../BrailleSpinner';
 import ContextWindowSelect from '../ui/ContextWindowSelect.jsx';
+import RuntimeLogDisclosure from './RuntimeLogDisclosure.jsx';
 import { formatContextTokens, formatCount } from '../../utils/formatters';
 import { SPLASH_CONTEXT, SPLASH_CONTEXT_WINDOWS } from '../../../../server/lib/splashRuntime.js';
 import { LOCAL_RUNTIME_LABELS } from '../../../../server/lib/modelPinMembership.js';
@@ -28,6 +29,7 @@ const STATE_META = {
   updating: { label: 'Updating', cls: 'bg-port-accent/20 text-port-accent', dot: 'bg-port-accent animate-pulse' },
   starting: { label: 'Starting', cls: 'bg-port-accent/20 text-port-accent', dot: 'bg-port-accent animate-pulse' },
   stopping: { label: 'Stopping', cls: 'bg-port-accent/20 text-port-accent', dot: 'bg-port-accent animate-pulse' },
+  uninstalling: { label: 'Uninstalling', cls: 'bg-port-accent/20 text-port-accent', dot: 'bg-port-accent animate-pulse' },
   error: { label: 'Needs attention', cls: 'bg-port-error/20 text-port-error', dot: 'bg-port-error' },
   unknown: { label: 'Status unavailable', cls: 'bg-gray-500/20 text-gray-400', dot: 'bg-gray-500' },
   running: { label: 'Running', cls: 'bg-port-success/20 text-port-success', dot: 'bg-port-success animate-pulse' },
@@ -290,6 +292,13 @@ function ServerRow({ row, busy, actionInProgress, selected, hideActions, childre
             {row.latestVersion ? `Update to v${row.latestVersion}` : 'Update'}
           </button>
         )}
+        {!hideActions && row.onUninstall && (
+          <button type="button" onClick={row.onUninstall} disabled={busy} className={neutralBtn}
+            title={`Uninstall ${row.label}`}>
+            {actionInProgress === `runtime-uninstall-${row.id}` ? <BrailleSpinner /> : <Trash2 size={12} />}
+            Uninstall
+          </button>
+        )}
         {row.updateUrl && (
           <a
             href={row.updateUrl}
@@ -515,6 +524,8 @@ function SplashContextPicker({ status, busy, onSave }) {
 
 export function ManagedInklingRuntimeCard({ descriptor, status, busy, actionInProgress, onAction, onRefresh, onSaveContext }) {
   const { id, label, copy: { requirement, download, provider } } = descriptor;
+  const operation = status?.operation;
+  const cancellable = ['install', 'upgrade', 'repair'].includes(operation?.action);
   return (
     <section className="@container bg-port-card border border-port-border rounded-xl p-4 sm:p-6 space-y-3">
       <h3 className="text-sm font-medium text-white">{label} · Inkling 2 Mini</h3>
@@ -527,8 +538,14 @@ export function ManagedInklingRuntimeCard({ descriptor, status, busy, actionInPr
         <SplashContextPicker status={status} busy={busy} onSave={onSaveContext} />
       )}
       <ServerRow row={descriptor.toRow(status, (action) => () => onAction(id, action))} busy={busy} actionInProgress={actionInProgress}>
+        {cancellable && (
+          <button type="button" onClick={() => onAction(id, 'cancel', operation.id)} disabled={busy || operation.cancelling} className={neutralBtn}>
+            {operation.cancelling ? 'Cancelling…' : 'Cancel'}
+          </button>
+        )}
         <button type="button" onClick={onRefresh} className={neutralBtn}><RefreshCw size={12} />Check {label} status</button>
       </ServerRow>
+      <RuntimeLogDisclosure logs={status?.recentLogs} />
     </section>
   );
 }

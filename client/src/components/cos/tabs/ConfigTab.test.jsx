@@ -29,7 +29,8 @@ const socket = vi.hoisted(() => {
     on: (event, handler) => { if (!handlers.has(event)) handlers.set(event, new Set()); handlers.get(event).add(handler); },
     off: (event, handler) => handlers.get(event)?.delete(handler),
     emit: vi.fn(),
-    emitServer: event => handlers.get(event)?.forEach(handler => handler()),
+    emitServer: (event, payload) => handlers.get(event)?.forEach(handler => handler(payload)),
+    listenerCount: event => handlers.get(event)?.size ?? 0,
   };
 });
 vi.mock('../../../services/socket', () => ({ default: socket }));
@@ -492,22 +493,33 @@ it('reconciles Mind status on events, reconnect and reshow without polling or re
   try {
     await act(async () => { await vi.advanceTimersByTimeAsync(60_000); });
     expect(api.getPersistentMind).toHaveBeenCalledTimes(1);
-    api.getPersistentMind.mockResolvedValue({ state: { queuedMessageCount: 9 }, profile: {} });
-    for (const event of ['cos:mind:event', 'cos:mind:status', 'connect']) {
+    const snapshot = { enabled: true, started: true, status: 'thinking', activeTurnId: 'example-turn', queuedMessageCount: 9 };
+    await act(async () => {
+      socket.emitServer('cos:mind:event', { kind: 'thought' });
+      socket.emitServer('cos:mind:status', snapshot);
+    });
+    expect(api.getPersistentMind).toHaveBeenCalledTimes(1);
+    expect(screen.getByLabelText('Queued persistent mind messages')).toHaveTextContent('9');
+    expect(screen.getByTestId('mind-thought-status')).toHaveTextContent('Thinking with gpt-5');
+
+    api.getPersistentMind.mockResolvedValue({ state: { queuedMessageCount: 4 }, profile: {} });
+    for (const event of ['cos:config:changed', 'connect']) {
       const before = api.getPersistentMind.mock.calls.length;
       await act(async () => socket.emitServer(event));
       expect(api.getPersistentMind).toHaveBeenCalledTimes(before + 1);
-      expect(screen.getByLabelText('Queued persistent mind messages')).toHaveTextContent('9');
+      expect(screen.getByLabelText('Queued persistent mind messages')).toHaveTextContent('4');
     }
     const before = api.getPersistentMind.mock.calls.length;
     Object.defineProperty(document, 'visibilityState', { configurable: true, value: 'hidden' });
     await act(async () => document.dispatchEvent(new Event('visibilitychange')));
-    await act(async () => socket.emitServer('cos:mind:status'));
+    await act(async () => socket.emitServer('cos:mind:status', snapshot));
+    expect(screen.getByLabelText('Queued persistent mind messages')).toHaveTextContent('4');
     expect(api.getPersistentMind).toHaveBeenCalledTimes(before);
     Object.defineProperty(document, 'visibilityState', { configurable: true, value: 'visible' });
     await act(async () => document.dispatchEvent(new Event('visibilitychange')));
     expect(api.getPersistentMind).toHaveBeenCalledTimes(before + 1);
     view.unmount();
+    expect(socket.listenerCount('cos:mind:status')).toBe(0);
     await act(async () => {
       socket.emitServer('connect');
       socket.emitServer('cos:mind:event');
@@ -519,4 +531,21 @@ it('reconciles Mind status on events, reconnect and reshow without polling or re
     vi.useRealTimers();
     Object.defineProperty(document, 'visibilityState', { configurable: true, value: 'visible' });
   }
+});
+
+it('retains the initial profile when a socket snapshot arrives during loading', async () => {
+  const { promise, resolve } = Promise.withResolvers();
+  api.getPersistentMind.mockReturnValueOnce(promise);
+  renderConfig();
+  expect(screen.getByText('Loading…')).toBeInTheDocument();
+  await waitFor(() => expect(api.getPersistentMind).toHaveBeenCalledTimes(1));
+
+  await act(async () => {
+    socket.emitServer('cos:mind:status', { status: 'thinking', activeTurnId: 'example-turn', started: true, queuedMessageCount: 6 });
+    resolve({ state: { status: 'waiting', queuedMessageCount: 2 }, profile: { model: 'gpt-5' } });
+  });
+
+  expect(screen.getByTestId('mind-thought-status')).toHaveTextContent('Thinking with gpt-5');
+  expect(screen.getByLabelText('Queued persistent mind messages')).toHaveTextContent('6');
+  expect(api.getPersistentMind).toHaveBeenCalledTimes(1);
 });

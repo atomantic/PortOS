@@ -544,7 +544,7 @@ app.use('/api/moa-presets', moaPresetRoutes);
 // Asset static mounts, then a terminating 404 for every server-owned prefix so
 // an extensionless `/data/…` or a mistyped `/api/…` can no longer fall through
 // to the SPA fallback below and be answered with index.html and a 200 (#4688).
-// Both lists live in lib/assetRoutePrefixes.js, which `scripts/dev-proxy-drift.test.js`
+// Both lists live in lib/assetRoutePrefixes.js, which `server/test/guards/repo/dev-proxy-drift.test.js`
 // reads as data. NOTE: this call installs a terminating 404 on `/api` and
 // `/sdapi` too, so every router above must stay above — one added BELOW it is
 // shadowed and never runs. That guard test holds the ordering.

@@ -11,6 +11,7 @@
  * found and the request goes ahead with `acknowledgeRisk` / `acknowledgeBusy`.
  * The same check-and-repair runs on its own for an upgrade made in a terminal.
  */
+import { emitToOperatorsOn } from './socketIo.js';
 import { existsSync, readdirSync, realpathSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { dirname, join } from 'node:path';
@@ -319,7 +320,7 @@ export async function startHomebrewJob({ kind, names = [], acknowledgeRisk = fal
   await assertIdle({ acknowledgeBusy, action: 'Homebrew upgrades and repairs can restart the database and tools PortOS is using' });
   if (currentJob) throw busyError();
 
-  const emit = (step, status, message, name = null) => io?.emit(HOMEBREW_PROGRESS_EVENT, { step, status, message, name, kind });
+  const emit = (step, status, message, name = null) => emitToOperatorsOn(io, HOMEBREW_PROGRESS_EVENT, { step, status, message, name, kind });
   const run = async (cmd, args, label, timeoutMs, options = {}) => {
     if (label) emit('run', 'running', label);
     let last = '';
@@ -367,7 +368,7 @@ export async function startHomebrewJob({ kind, names = [], acknowledgeRisk = fal
       statusCache = null;
       currentJob = null;
       liveRuns.delete('brew');
-      io?.emit('software:changed', { reason: 'homebrew' });
+      emitToOperatorsOn(io, 'software:changed', { reason: 'homebrew' });
     }
   });
   return { started: true, kind, names: selected.map((pkg) => pkg.name) };
@@ -387,7 +388,7 @@ export async function setHomebrewHold({ names, hold, io, deps = {} }) {
   });
   console.log(`🍺 Homebrew ${hold ? 'held' : 'released'}: ${names.join(', ')}`);
   statusCache = null;
-  io?.emit('software:changed', { reason: 'homebrew' });
+  emitToOperatorsOn(io, 'software:changed', { reason: 'homebrew' });
   return { names, held: hold };
 }
 

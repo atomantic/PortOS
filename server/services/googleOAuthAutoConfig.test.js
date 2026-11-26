@@ -1,3 +1,4 @@
+import { recordingOperatorIo } from '../test/recordingOperatorIo.js';
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 vi.mock('./messagePlaywrightSync.js', () => ({ getPages: vi.fn(), evaluateOnPage: vi.fn(), findOrOpenPage: vi.fn() }));
@@ -67,7 +68,7 @@ describe('automated setup progress wire contract', () => {
     getPages.mockResolvedValue([{ url: 'https://console.cloud.google.com/?project=synthetic-project' }]);
     navigateToUrl.mockRejectedValue(new Error('Synthetic navigation stop'));
     for (const requestId of ['invented-run-1', undefined]) {
-      const io = { emit: vi.fn() };
+      const io = recordingOperatorIo();
       await expect(runAutomatedSetup('example@example.com', io, requestId)).rejects.toThrow('Synthetic navigation stop');
       expect(io.emit).toHaveBeenCalledExactlyOnceWith('calendar:google:autoconfig', {
         step: 'enable-api', message: 'Enabling Google Calendar API...', ...(requestId ? { requestId } : {}),

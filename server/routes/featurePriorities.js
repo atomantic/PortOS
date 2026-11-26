@@ -6,6 +6,7 @@
  * Errors reach the central middleware.
  */
 
+import { emitToOperatorsOn } from '../services/socketIo.js';
 import { Router } from 'express';
 import { asyncHandler, ServerError } from '../lib/errorHandler.js';
 import { validateRequest } from '../lib/validateRequest.js';
@@ -38,7 +39,7 @@ router.put('/:areaId', asyncHandler(async (req, res) => {
   const areaId = validateRequest(featurePriorityAreaIdSchema, req.params.areaId);
   const { tier } = validateRequest(featurePriorityUpdateSchema, req.body ?? {});
   const result = await setFeaturePriorityPin(areaId, tier);
-  req.app.get('io')?.emit('feature-priorities:updated', result);
+  emitToOperatorsOn(req.app.get('io'), 'feature-priorities:updated', result);
   res.json(result);
 }));
 

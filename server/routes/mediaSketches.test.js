@@ -1,3 +1,4 @@
+import { recordingOperatorIo } from '../test/recordingOperatorIo.js';
 import { afterAll, describe, it, expect, vi } from 'vitest';
 import express from 'express';
 import { request } from '../lib/testHelper.js';
@@ -13,7 +14,7 @@ const router = (await import('./mediaSketches.js')).default;
 
 // With an io on the app the error middleware raises errorEvents 'error'; the server registers a listener at boot.
 errorEvents.on('error', () => {});
-const io = { emit: vi.fn() };
+const io = recordingOperatorIo();
 const app = express();
 app.set('io', io);
 app.use(express.json({ limit: '55mb' }));

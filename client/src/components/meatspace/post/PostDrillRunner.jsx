@@ -85,6 +85,7 @@ export default function PostDrillRunner({ session }) {
     const limit = (currentDrill.timeLimitSec || 120) * 1000;
     setTimeLeft(limit);
 
+    // biome-ignore lint/plugin/lint-no-view-interval: Drill countdown timer; no I/O.
     timerRef.current = setInterval(() => {
       const elapsed = Date.now() - startTime;
       const remaining = Math.max(0, limit - elapsed);

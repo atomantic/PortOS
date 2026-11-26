@@ -351,13 +351,13 @@ export const FIXTURE_OWNERS = [
     re: /^scripts\/setup-trellis2-mps\.sh$/,
     dir: 'scripts',
     fileRe: /^setup-trellis2-mps\.sh$/,
-    tests: ['scripts/setup-trellis2-mps.test.js', 'server/routes/imageTo3d.test.js'],
+    tests: ['scripts/ml/setup-trellis2-mps.test.js', 'server/routes/imageTo3d.test.js'],
   },
   {
     re: /^scripts\/ml\/requirements\/requirements-trellis2-mps(?:\.lock)?\.txt$/,
     dir: 'scripts/ml/requirements',
     fileRe: /^requirements-trellis2-mps(?:\.lock)?\.txt$/,
-    tests: ['scripts/setup-trellis2-mps.test.js', 'server/routes/imageTo3d.test.js'],
+    tests: ['scripts/ml/setup-trellis2-mps.test.js', 'server/routes/imageTo3d.test.js'],
   },
   // Pip pins consumed only by an explicit Install/Repair (`setup-image-video.sh`,
   // and the FLUX.3 and lyric-alignment locks read by flux3Runtime.js and
@@ -468,7 +468,7 @@ export const MACOS_NATIVE_TESTS = [
 export const MACOS_NATIVE_PATH_RE = /^(?:server\/lib\/(?:windowsAgentProcess[^/]*\.js|darwinAgentSupervisor\.py)|server\/vitest\.(?:config|setup)\.js|scripts\/vitestTempRootSetup\.js|scripts\/trusted-rebuilds\.js|server\/(?:package(?:-lock)?\.json|\.npmrc)|\.github\/workflows\/ci\.yml|\.github\/actions\/setup-server\/action\.yml)$/;
 // The `node-minimum` job installs every workspace and runs the runtime gate on
 // the oldest supported Node; only these files can change its answer.
-export const NODE_MINIMUM_PATH_RE = /^(?:(?:server\/|client\/)?(?:package(?:-lock)?\.json|\.npmrc)|\.nvmrc|scripts\/checkNodeVersion(?:\.test)?\.js|scripts\/lib\/directInvocation\.js|scripts\/node-version-drift\.guard\.test\.js|\.github\/workflows\/ci\.yml)$/;
+export const NODE_MINIMUM_PATH_RE = /^(?:(?:server\/|client\/)?(?:package(?:-lock)?\.json|\.npmrc)|\.nvmrc|scripts\/checkNodeVersion(?:\.test)?\.js|scripts\/lib\/directInvocation\.js|server\/test\/guards\/repo\/node-version-drift\.test\.js|server\/test\/guards\/repo\.guard\.test\.js|\.github\/workflows\/ci\.yml)$/;
 
 /** True when the diff reaches a gated job's inputs; null inputs fail open to running it. */
 export const touchesJobInputs = (changed, inputs, pattern) => inputs === null
@@ -603,7 +603,7 @@ const WORKSPACE_CACHE_SERVER_INPUTS = new Set([
 ]);
 const WORKSPACE_CACHE_CLIENT_INPUTS = new Set([
   'ecosystem.config.cjs', 'client/package.json', 'client/package-lock.json',
-  'client/vite.config.js', 'client/vite.buildEnv.js', 'client/vite.chunkGroups.js',
+  'client/vite.config.js', 'lib/viteBuildEnv.js', 'client/vite.chunkGroups.js',
   'client/vitest.config.js', 'client/src/test/timeouts.js',
   'scripts/dev-start.js', 'scripts/publish-client-build.js',
   'scripts/lib/envFile.cjs', 'scripts/lib/databaseSettings.cjs',

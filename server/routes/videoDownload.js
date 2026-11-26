@@ -14,6 +14,7 @@
  *   POST   /api/devtools/video-download/:jobId/cancel    → { ok }
  */
 
+import { emitToOperatorsOn } from '../services/socketIo.js';
 import { Router } from 'express';
 import { paginationQuerySchema, isPaginationRequested, paginateArray } from '../lib/queryValidation.js';
 import { asyncHandler, ServerError } from '../lib/errorHandler.js';
@@ -68,7 +69,7 @@ router.get('/yt-dlp', asyncHandler(async (_req, res) => {
 // Relay Homebrew output while the package manager is running.
 const runYtDlpAction = (action, verb) => asyncHandler(async (req, res) => {
   const io = req.app.get('io');
-  const emit = (frame) => io?.emit('ytdlp:update', frame);
+  const emit = (frame) => emitToOperatorsOn(io, 'ytdlp:update', frame);
   const result = await action({ onProgress: emit });
   if (!result.success) {
     emit({ event: 'error', message: result.error });

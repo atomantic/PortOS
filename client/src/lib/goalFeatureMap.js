@@ -12,4 +12,4 @@
  * imported rather than copied so the two runtimes cannot drift. The file stays
  * so every `lib/goalFeatureMap` import path in the client is unchanged.
  */
-export { FEATURE_AREAS, FEATURE_AREA_IDS, getGoalFeatureAreas } from '../../../server/lib/goalFeatureMap.js';
+export { GOAL_FEATURE_AREAS, FEATURE_AREA_IDS, getGoalFeatureAreas } from '../../../server/lib/goalFeatureMap.js';

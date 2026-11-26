@@ -11,9 +11,12 @@
  */
 import { createHash } from 'crypto';
 import { join } from 'path';
-import { pathToFileURL } from 'url';
-import { atomicWrite, PATHS, tryReadFile } from './fileUtils.js';
+import { fileURLToPath, pathToFileURL } from 'url';
+import { atomicWrite } from './fileCore.js';
+import { tryReadFile } from './jsonIo.js';
+import { PATHS } from './paths.js';
 
+const DEFAULT_SLASHDO_DIR = fileURLToPath(new URL('../../lib/slashdo', import.meta.url));
 const commandCache = new Map();
 const libCache = new Map();
 const stagedBodies = new Set();
@@ -22,12 +25,12 @@ const isBareName = name => typeof name === 'string'
 const normalizedSkips = names => [...new Set(Array.isArray(names)
   ? names.filter(name => typeof name === 'string' && name) : [])].sort();
 
-async function renderBundle(content, options) {
+async function renderBundle(content, options, slashdoDir = DEFAULT_SLASHDO_DIR) {
   // Load only when a command is requested; an uninitialized submodule must not
   // prevent unrelated server modules from loading. Slashdo owns reference and
   // conditional semantics for installed skills and embedded prompts alike.
-  const { default: transformer } = await import(pathToFileURL(join(PATHS.slashdo, 'src/transformer.js')).href);
-  return transformer.buildPromptBundle(content, join(PATHS.slashdo, 'lib'), options);
+  const { default: transformer } = await import(pathToFileURL(join(slashdoDir, 'src/transformer.js')).href);
+  return transformer.buildPromptBundle(content, join(slashdoDir, 'lib'), options);
 }
 
 /**
@@ -37,16 +40,16 @@ async function renderBundle(content, options) {
  * Missing top-level commands return null, matching the existing loader contract.
  */
 export async function loadSlashdoBundle(commandName, {
-  stripFrontmatter = false, skipIncludes = [], defer = true,
+  stripFrontmatter = false, skipIncludes = [], defer = true, slashdoDir = DEFAULT_SLASHDO_DIR,
 } = {}) {
   if (!isBareName(commandName)) return null;
   const skips = normalizedSkips(skipIncludes);
-  const cacheKey = JSON.stringify([commandName, stripFrontmatter, skips, defer]);
+  const cacheKey = JSON.stringify([slashdoDir, commandName, stripFrontmatter, skips, defer]);
   if (commandCache.has(cacheKey)) return commandCache.get(cacheKey);
-  let content = await tryReadFile(join(PATHS.slashdo, 'commands/do', `${commandName}.md`));
+  let content = await tryReadFile(join(slashdoDir, 'commands/do', `${commandName}.md`));
   if (!content) return null;
   if (stripFrontmatter) content = content.replace(/^---[\s\S]*?---\s*/, '');
-  const bundle = await renderBundle(content, { skipIncludes: skips, teams: false, defer });
+  const bundle = await renderBundle(content, { skipIncludes: skips, teams: false, defer }, slashdoDir);
   commandCache.set(cacheKey, bundle);
   return bundle;
 }
@@ -62,12 +65,12 @@ export async function loadSlashdoFile(commandName, options = {}) {
  * expanding see-also links pulls unrelated reviewer workflows into sanitized
  * recipes and multiplies their context. Commands use the complete graph above.
  */
-export async function loadSlashdoLib(libName, { teams = false } = {}) {
+export async function loadSlashdoLib(libName, { teams = false, slashdoDir = DEFAULT_SLASHDO_DIR } = {}) {
   if (!isBareName(libName)) return null;
-  const cacheKey = JSON.stringify([libName, teams]);
+  const cacheKey = JSON.stringify([slashdoDir, libName, teams]);
   if (libCache.has(cacheKey)) return libCache.get(cacheKey);
-  const content = await tryReadFile(join(PATHS.slashdo, 'lib', `${libName}.md`));
-  const body = content ? (await renderBundle(content, { teams, defer: false, followReferences: false })).body : null;
+  const content = await tryReadFile(join(slashdoDir, 'lib', `${libName}.md`));
+  const body = content ? (await renderBundle(content, { teams, defer: false, followReferences: false }, slashdoDir)).body : null;
   libCache.set(cacheKey, body);
   return body;
 }

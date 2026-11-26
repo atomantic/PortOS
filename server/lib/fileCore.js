@@ -663,15 +663,16 @@ export const sha256Text = (value) => createHash('sha256').update(value).digest('
  * snapshot manifest generator.
  */
 const SHA256_STREAM_THRESHOLD = 512 * 1024;
-export async function sha256File(path) {
+export async function sha256File(path, { signal } = {}) {
+  signal?.throwIfAborted();
   const info = await stat(path);
   if (info.size < SHA256_STREAM_THRESHOLD) {
-    const buf = await readFile(path);
+    const buf = await readFile(path, { signal });
     return createHash('sha256').update(buf).digest('hex');
   }
   return new Promise((resolve, reject) => {
     const hasher = createHash('sha256');
-    const stream = createReadStream(path);
+    const stream = createReadStream(path, { signal });
     stream.on('error', reject);
     stream.pipe(hasher);
     hasher.on('finish', () => resolve(hasher.digest('hex')));

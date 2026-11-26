@@ -39,10 +39,10 @@ describe('appLaneHealth', () => {
       { sha: 'aaaa111', subject: 'Revert "fix: hotspot"', body: 'This reverts commit def1234567890.' },
       { sha: 'bbbb222', subject: 'Revert "fix: path (#51)"' },
     ]);
-    const result = await collectLaneHealth(APP, { forge: GH, taskType: 'better-complexity', now: NOW, deps: { exec, runGit } });
+    const result = await collectLaneHealth(APP, { forge: GH, taskType: 'code-simplification', now: NOW, deps: { exec, runGit } });
 
     expect(exec).toHaveBeenCalledWith('gh', [
-      'issue', 'list', '--state', 'all', '--limit', '500', '--search', 'created:>=2026-07-19 sort:created-desc', '--label', 'complexity',
+      'issue', 'list', '--state', 'all', '--limit', '500', '--search', 'created:>=2026-07-19 sort:created-desc label:"code-simplification","simplify","over-engineering","complexity","cognitive-load","source:code-simplification"',
       '--json', 'number,title,labels,createdAt,closedAt,state,stateReason,body,url,closedByPullRequestsReferences',
     ], { cwd: '/repo', env: GH.env });
     // Only the PRs the revert commits name are read: #51 by number, PR 50 by the SHA its revert cites.
@@ -53,7 +53,7 @@ describe('appLaneHealth', () => {
     expect(runGit).toHaveBeenCalledWith(['log', '--since=2026-08-18T12:00:00.000Z', '-i', '--grep=^revert', '--format=%H%x1f%s%x1f%b%x1e', 'HEAD'], '/repo', expect.objectContaining({ ignoreExitCode: true }));
     expect(result).toMatchObject({ ok: true, truncated: false, partial: [], windowDays: 60, refileDays: 30 });
     expect(result.lanes).toHaveLength(1);
-    expect(result.lanes[0]).toMatchObject({ id: 'better-complexity', filed: 2, completed: 2, reverted: 2 });
+    expect(result.lanes[0]).toMatchObject({ id: 'code-simplification', filed: 2, completed: 2, reverted: 2 });
     expect(result.lanes[0].flagged.map(({ number, reasons }) => [number, reasons])).toEqual([
       [6, [{ kind: 'reverted', pullRequest: 51, commit: 'bbbb222' }]],
       [5, [{ kind: 'reverted', pullRequest: 50, commit: 'aaaa111' }]],
@@ -75,9 +75,9 @@ describe('appLaneHealth', () => {
     expect(exec).toHaveBeenCalledWith('glab', ['issue', 'list', '--all', '-P', '1000'], expect.any(Object));
     expect(exec).toHaveBeenCalledWith('glab', ['mr', 'view', '70', '--output', 'json'], expect.any(Object));
     expect(exec).not.toHaveBeenCalledWith('glab', expect.arrayContaining(['list', '--merged']), expect.anything());
-    expect(result.lanes.length).toBeGreaterThan(20);
-    expect(result.lanes.find(({ id }) => id === 'simplify')).toMatchObject({ filed: 1, completed: 1, reverted: 1 });
-    expect(result.lanes.find(({ id }) => id === 'better-complexity')).toMatchObject({ filed: 1, open: 1 });
+    expect(result.lanes).toHaveLength(16);
+    expect(result.lanes.find(({ id }) => id === 'code-simplification'))
+      .toMatchObject({ filed: 2, completed: 1, open: 1, reverted: 1 });
     const grouped = await collectLaneHealth(APP, { forge: GLAB, taskType: 'code-simplification', now: NOW, deps: { exec, runGit } });
     expect(grouped.lanes).toEqual([expect.objectContaining({ id: 'code-simplification', filed: 2, open: 1, reverted: 1 })]);
     expect(exec.mock.calls.filter(([, args]) => args[0] === 'issue').at(-1)[1]).toEqual(['issue', 'list', '--all', '-P', '1000']);
@@ -89,18 +89,18 @@ describe('appLaneHealth', () => {
       { number: 8, title: 'Oldest seen', labels: ['complexity'], createdAt: iso(20), state: 'OPEN' },
     ];
     const exec = forgeExec({ issues, pullRequests: new Error('gh: HTTP 500') });
-    const result = await collectLaneHealth(APP, { forge: GH, taskType: 'better-complexity', now: NOW, deps: { exec, runGit: vi.fn().mockResolvedValue({ exitCode: 128, stdout: '' }) } });
+    const result = await collectLaneHealth(APP, { forge: GH, taskType: 'code-simplification', now: NOW, deps: { exec, runGit: vi.fn().mockResolvedValue({ exitCode: 128, stdout: '' }) } });
     expect(result).toMatchObject({ ok: true, truncated: false, partial: ['commits'] });
 
     clearLaneHealthCache();
     const full = Array.from({ length: 500 }, (_, index) => ({ ...issues[0], number: 1000 + index, createdAt: iso(3 + index / 100) }));
-    const truncated = await collectLaneHealth(APP, { forge: GH, taskType: 'better-complexity', now: NOW, deps: { exec: forgeExec({ issues: full }), runGit: vi.fn().mockRejectedValue(new Error('timeout')) } });
+    const truncated = await collectLaneHealth(APP, { forge: GH, taskType: 'code-simplification', now: NOW, deps: { exec: forgeExec({ issues: full }), runGit: vi.fn().mockRejectedValue(new Error('timeout')) } });
     expect(truncated).toMatchObject({ ok: true, truncated: true, partial: ['commits'], from: iso(3 + 499 / 100) });
     expect(truncated.lanes[0].filed).toBe(500);
   });
 
   it('separates a failed or unusable forge from an empty one', async () => {
-    const empty = await collectLaneHealth(APP, { forge: GH, taskType: 'better-complexity', now: NOW, deps: { exec: forgeExec(), runGit: gitLog([]) } });
+    const empty = await collectLaneHealth(APP, { forge: GH, taskType: 'code-simplification', now: NOW, deps: { exec: forgeExec(), runGit: gitLog([]) } });
     expect(empty.lanes[0]).toMatchObject({ filed: 0, flagged: [] });
     const blank = vi.fn().mockResolvedValue({ code: 0, stdout: '  ' });
     expect(await collectLaneHealth(APP, { forge: GH, now: NOW, deps: { exec: blank, runGit: gitLog([]) } })).toEqual({ ok: false, reason: 'issues', error: 'gh returned no parseable list' });
@@ -138,7 +138,7 @@ describe('appLaneHealth', () => {
     const exec = forgeExec({ issues: [{ number: 5, title: 'Hotspot', labels: ['complexity'], createdAt: iso(10), state: 'OPEN' }] });
     // The grep prefilter matches a body line; only a Revert subject counts.
     const runGit = gitLog([{ sha: 'dddd444', subject: 'feat: add thing', body: 'Revert the flag default later' }]);
-    const result = await collectLaneHealth(APP, { forge: GH, taskType: 'better-complexity', now: NOW, deps: { exec, runGit } });
+    const result = await collectLaneHealth(APP, { forge: GH, taskType: 'code-simplification', now: NOW, deps: { exec, runGit } });
     expect(result).toMatchObject({ ok: true, partial: [] });
     expect(exec.mock.calls.map(([, args]) => args[0])).toEqual(['issue']);
     const unreadable = forgeExec();
@@ -152,7 +152,7 @@ describe('appLaneHealth', () => {
       pullRequests: [{ number: 12, mergeCommit: { oid: 'abc9876543210' }, commits: [], closingIssuesReferences: [], body: '' }],
     });
     const runGit = gitLog([{ sha: 'eeee555', subject: 'Revert "fix (#12)"', body: 'Refs #999' }]);
-    const result = await collectLaneHealth(APP, { forge: GH, taskType: 'better-complexity', now: NOW, deps: { exec, runGit } });
+    const result = await collectLaneHealth(APP, { forge: GH, taskType: 'code-simplification', now: NOW, deps: { exec, runGit } });
     expect(result.partial).toEqual([]);
     expect(result.lanes[0]).toMatchObject({ filed: 1, reverted: 1 });
     expect(exec.mock.calls.filter(([, args]) => args[0] === 'pr').map(([, args]) => args[2])).toEqual(expect.arrayContaining(['12', '999']));
@@ -175,7 +175,7 @@ describe('appLaneHealth', () => {
   it('names a failed targeted PR lookup as a partial read', async () => {
     const exec = vi.fn(async (_cli, args) => (args[0] === 'issue' ? { code: 0, stdout: '[]' } : { code: 1, stdout: '', stderr: 'gh: HTTP 502' }));
     const runGit = gitLog([{ sha: 'ffff666', subject: 'Revert "x (#3)"' }]);
-    const result = await collectLaneHealth(APP, { forge: GH, taskType: 'better-complexity', now: NOW, deps: { exec, runGit } });
+    const result = await collectLaneHealth(APP, { forge: GH, taskType: 'code-simplification', now: NOW, deps: { exec, runGit } });
     expect(result).toMatchObject({ ok: true, partial: ['pull-requests'] });
   });
 

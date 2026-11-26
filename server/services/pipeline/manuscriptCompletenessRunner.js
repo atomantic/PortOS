@@ -21,7 +21,7 @@ import { createSseRunner } from '../../lib/sseUtils.js';
 import { analyzeManuscriptCompleteness } from './arcPlanner.js';
 import { seedReviewFromFindings } from './manuscriptReview.js';
 import { recordTrendSnapshot } from './editorialScore.js';
-import { readReadinessGate, mergeSeverityWeights } from '../../lib/editorial/index.js';
+import { readReadinessGate, mergeSeverityWeights } from '../../lib/editorial/severityConfig.js';
 import { getSettings } from '../settings.js';
 import { getSeries } from './series.js';
 

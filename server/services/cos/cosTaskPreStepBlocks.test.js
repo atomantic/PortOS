@@ -1,19 +1,11 @@
-import { improvementSources as IMP_SRC } from '../../test/cosImprovementSources.js';
 /**
  * Tests for the CoS prompt PRE-STEP layer (`cosTaskPreStepBlocks.js`) — the
  * static prompt-fragment builders the claim prompts substitute (author filter,
  * exclude labels, swarm) and the shared perpetual-drain brakes.
  *
- * These moved here verbatim with their subjects when the pre-step layer was
- * split out of `cosTaskGenerator.js`; the assertions are unchanged. Source
- * guards that pin a call SHAPE rather than a file scan BOTH modules through
- * `LAYER_SRC`, because the generator still composes what lives here.
  */
 
 import { describe, it, expect, vi } from 'vitest';
-import { readFileSync } from 'fs';
-import { fileURLToPath } from 'url';
-import { dirname, join } from 'path';
 
 import {
   applyPerpetualDrainCap,
@@ -21,38 +13,50 @@ import {
   resolveIssueAuthorFilterBlock,
   resolveIssueExcludeLabelsBlock,
   resolveIssueMinAgeRuleBlock,
+  resolveIssueReconcileBlock,
   resolveReconcileDrainGate,
   resolveSwarmBlock,
 } from './cosTaskPreStepBlocks.js';
 import { DISPATCH_HINT_FANOUT_GUIDANCE } from '../../lib/dispatchLabels.js';
 
-const __dirname = dirname(fileURLToPath(import.meta.url));
-const GEN_SRC = readFileSync(join(__dirname, 'cosTaskGenerator.js'), 'utf-8');
-const CLAIM_SRC = readFileSync(join(__dirname, 'cosTaskClaimWork.js'), 'utf-8');
-const PRESTEP_SRC = readFileSync(join(__dirname, 'cosTaskPreStepBlocks.js'), 'utf-8');
-// The CoS task-generation layer spans the selection engine, improvement tasks,
-// the manual claim builders, and the pre-step module they compose. A guard about
-// WHERE a call sits reads one file; a guard about the call's shape reads the layer,
-// so moving code between them can neither break it nor silently disarm it.
-const LAYER_SRC = `${GEN_SRC}\n${IMP_SRC}\n${CLAIM_SRC}\n${PRESTEP_SRC}`;
+const reconcileIssues = vi.hoisted(() => vi.fn());
+const releaseAbandonedClaims = vi.hoisted(() => vi.fn(async () => 1));
+vi.mock('../issueReconcile.js', async original => ({ ...await original(), reconcile: reconcileIssues, releaseAbandonedClaims }));
+vi.mock('../blockedIssueReconcile.js', async original => ({
+  ...await original(), gatherBlockedIssueState: async () => null,
+}));
+vi.mock('../../lib/workTracker.js', async original => ({
+  ...await original(), resolveAppWorkTracker: async () => ({ resolved: 'gitlab' }),
+}));
 
-// #6112 — an abandoned volunteer claim is released deterministically, and the
-// release must happen BEFORE the "no zombies → park" early return. A repo whose
-// only stuck issues are abandoned claims has zero zombies on every pass, so a
-// release ordered after the park would never run at all.
-describe('issue-reconcile releases abandoned claims before it can park', () => {
-  it('calls the releaser ahead of every parking / dispatch return', () => {
-    const start = PRESTEP_SRC.indexOf('export async function resolveIssueReconcileBlock');
-    const body = PRESTEP_SRC.slice(start, PRESTEP_SRC.indexOf('\n}', start));
-    const releaseIdx = body.indexOf('releaseAbandonedClaims(result.abandoned');
-    expect(releaseIdx, 'the pre-step must release abandoned claims').toBeGreaterThan(-1);
-    expect(releaseIdx).toBeLessThan(body.indexOf("reason: 'no-zombie-issues'"));
-    expect(releaseIdx).toBeLessThan(body.indexOf('resolveReconcileDrainGate('));
-    // But never before the null guard: a transient/unsupported scan has no
-    // `abandoned` set to read, and must skip without writing to the forge.
-    expect(body.indexOf('if (!result) return { skip: true };')).toBeLessThan(releaseIdx);
-    // glab is cwd-routed: without the checkout path the GitLab release is a silent no-op (#16608).
-    expect(body.slice(releaseIdx, body.indexOf('})', releaseIdx))).toContain('repoPath: app.repoPath');
+describe('resolveIssueReconcileBlock', () => {
+  const app = { id: 'example', name: 'Example', repoPath: '/repos/example' };
+
+  it('releases abandoned claims using the checkout before parking a scan with no zombies', async () => {
+    const abandoned = [{ number: 42 }];
+    reconcileIssues.mockResolvedValueOnce({
+      abandoned, forge: 'gitlab', repoSpec: 'gitlab.example.com/example/repo',
+      fullName: 'example/repo', zombies: [], stalled: [], reserved: [],
+    });
+    const parkPerpetual = vi.fn(async () => { expect(releaseAbandonedClaims).toHaveBeenCalledOnce(); });
+
+    expect(await resolveIssueReconcileBlock(app, 'issue-reconcile', {}, { parkPerpetual })).toEqual({ skip: true });
+    expect(releaseAbandonedClaims).toHaveBeenCalledWith(abandoned, {
+      forge: 'gitlab', repoSpec: 'gitlab.example.com/example/repo', fullName: 'example/repo', repoPath: app.repoPath,
+    });
+    expect(parkPerpetual).toHaveBeenCalledWith('issue-reconcile', app.id, {
+      reason: 'no-zombie-issues', actionableCount: 0, signature: null,
+    });
+  });
+
+  it('skips a failed scan without releasing anything or parking', async () => {
+    releaseAbandonedClaims.mockClear();
+    reconcileIssues.mockRejectedValueOnce(new Error('forge unavailable'));
+    const parkPerpetual = vi.fn();
+
+    expect(await resolveIssueReconcileBlock(app, 'issue-reconcile', {}, { parkPerpetual })).toEqual({ skip: true });
+    expect(releaseAbandonedClaims).not.toHaveBeenCalled();
+    expect(parkPerpetual).not.toHaveBeenCalled();
   });
 });
 
@@ -90,10 +94,6 @@ describe('resolveIssueAuthorFilterBlock', () => {
       if (type === 'claim-issue') {
         expect(block).toContain('if [ "$GH_HOST" = "ssh.github.com" ]');
       }
-      // The endpoint the AGENT is told to call must be the one the work detector
-      // actually calls — otherwise the claimable count PortOS shows and the set
-      // the agent claims from silently diverge.
-      expect(readFileSync(join(__dirname, '../perpetualWork.js'), 'utf-8')).toContain(endpoint);
     }
   });
 
@@ -139,14 +139,6 @@ describe('resolveIssueExcludeLabelsBlock', () => {
     expect(resolveIssueExcludeLabelsBlock('not-an-array')).toBe(
       '`in-progress`, `blocked`, `needs-input`, `future`, `wontfix`, `question`, `discussion`'
     );
-  });
-
-  it('stays in sync with the NON_ACTIONABLE_ISSUE_LABELS set the perpetual-drain detector uses', () => {
-    expect(PRESTEP_SRC).toContain("from '../perpetualWork.js'");
-  });
-
-  it('buildClaimWorkTask threads the resolved block into the pinned-target constraint, not just the {issueExcludeLabels} placeholder', () => {
-    expect(CLAIM_SRC).toContain('appendTargetWorkItemBlock(promptTaskType, targetRef, issueExcludeLabelsBlock)');
   });
 });
 
@@ -286,19 +278,6 @@ describe('resolveSwarmBlock', () => {
   it('is a no-op for non-forge claim types (plan-task / jira have no swarm flow)', () => {
     expect(resolveSwarmBlock('plan-task', 6)).toBe('');
     expect(resolveSwarmBlock('claim-issue-jira', 6)).toBe('');
-  });
-});
-
-// Source-level guard: the swarm block must be PREPENDED at both render sites
-// (the scheduled dispatch and the manual buildClaimWorkTask), not gated behind
-// an in-template placeholder — that's what keeps it an opt-in wrapper with no
-// prompt-default version bump.
-describe('swarm block wiring', () => {
-  it('prepends resolveSwarmBlock(...) to the rendered prompt at both render sites', () => {
-    const occurrences = LAYER_SRC.match(/resolveSwarmBlock\(promptTaskType, metadata\.swarmCount, \{ leaveOpen\b/g) || [];
-    expect(occurrences.length).toBe(2);
-    expect(CLAIM_SRC).toContain('`${swarmBlock}${template}`');
-    expect(PRESTEP_SRC).toContain('`${swarmBlock}${promptTemplate}`');
   });
 });
 

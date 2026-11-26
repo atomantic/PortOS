@@ -1,19 +1,9 @@
 /**
- * Behavioral coverage for the two spawn entry points in cos.js:
- *
- *  - `dequeueNextTask` — P0 on-demand bypasses the global pause, a saturated
- *    pool short-circuits before any tier runs, and tiers drain in precedence
- *    order against one shared slot budget.
- *  - `forceSpawnTask` — "Run now" answers with an error (never a false
- *    `success`) and emits no `task:ready` for a stopped daemon, an unresolvable
- *    provider, or a full local endpoint.
- *
- * Drives the real functions; only the on-demand drain, the provider/endpoint
- * resolvers and the state/task readers are doubled. Own file because these
- * module-wide mocks would replace helpers cos.test.js exercises for real.
+ * Scheduler entry points share the same task and capacity fixtures. The tests
+ * observe task:ready dispatch, merge-sweep calls, and real tasks:changed wakes.
  */
 
-import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
+import { describe, it, expect, vi, beforeAll, beforeEach, afterEach } from 'vitest';
 
 const mocks = vi.hoisted(() => ({
   state: null,
@@ -25,11 +15,15 @@ const mocks = vi.hoisted(() => ({
   task: null,
   resolution: { ok: true, provider: { id: 'cloud-cli', type: 'cli' } },
   localCapacityError: null,
+  localEndpoint: null,
+  sweep: vi.fn(async () => ({ merged: 0, escalated: 0, timedOut: 0 })),
+  retryInvestigation: vi.fn(async () => {}),
 }));
 
 vi.mock('./cosState.js', async (importActual) => ({
   ...(await importActual()),
   isDaemonRunning: () => mocks.daemonRunning,
+  ensureDirectories: async () => {},
   loadState: async () => structuredClone(mocks.state),
   saveState: async () => {},
   withStateLock: async (fn) => fn(),
@@ -38,6 +32,11 @@ vi.mock('./cosTaskStore.js', async (importActual) => ({
   ...(await importActual()),
   getTaskById: async () => mocks.task,
   getUserTasks: async () => ({ exists: true, grouped: { pending: mocks.userPending } }),
+  getAllTasks: async () => ({
+    user: { exists: true, grouped: { pending: mocks.userPending } },
+    cos: { exists: true, autoApproved: mocks.autoApproved, grouped: { pending: mocks.autoApproved, blocked: [] } },
+  }),
+  reconcileLegacyForgeMaintenanceTasks: async () => ({ recovered: 0, retired: 0 }),
   getCosTasks: async () => ({
     exists: true,
     autoApproved: mocks.autoApproved,
@@ -62,6 +61,9 @@ vi.mock('../domainUsage.js', async (importActual) => ({
   ...(await importActual()),
   getDomainBudgetStatus: async () => ({ exceeded: null, budget: {}, usage: {} }),
 }));
+vi.mock('../decisionLog.js', async original => ({
+  ...await original(), recordDecision: vi.fn(async () => {}),
+}));
 vi.mock('../instanceIdentity.js', async (importActual) => ({
   ...(await importActual()),
   ensureInstanceId: async () => 'instance-a',
@@ -80,14 +82,23 @@ vi.mock('../agent/agentProviderResolution.js', () => ({
 vi.mock('./cosLocalEndpointSlots.js', async (importActual) => ({
   ...(await importActual()),
   buildLocalEndpointSlotContext: async () => ({
-    endpointForAgent: () => null,
-    resolveLocalEndpoint: () => null,
-    limit: Infinity,
+    endpointForAgent: () => mocks.localEndpoint,
+    resolveLocalEndpoint: () => mocks.localEndpoint,
+    limit: 1,
   }),
   localEndpointCapacityError: vi.fn(async () => mocks.localCapacityError),
 }));
 
-const { dequeueNextTask, forceSpawnTask } = await import('./cos.js');
+vi.mock('../prWatcher.js', async original => ({ ...await original(), sweepPendingMergePrs: mocks.sweep }));
+vi.mock('../investigationRetry.js', async original => ({ ...await original(), retryTasksResolvedByInvestigation: mocks.retryInvestigation }));
+vi.mock('../investigationDependencyWait.js', () => ({
+  bindInvestigationDependencyEvents: vi.fn(),
+  reconcileInvestigationDependencies: vi.fn(async () => {}),
+}));
+
+const { evaluateTasks } = await import('./cosTaskGenerator.js');
+const { maintenance } = await import('../../lib/maintenanceAdmission.js');
+const { dequeueNextTask, forceSpawnTask, init } = await import('./cos.js');
 const { cosEvents } = await import('./cosEvents.js');
 const { setUseRunner, useRunner } = await import('../agent/agentState.js');
 
@@ -100,6 +111,7 @@ const readyIds = (emit) => emit.mock.calls.filter(([event]) => event === 'task:r
 let emit;
 
 beforeEach(() => {
+  vi.clearAllMocks();
   setUseRunner(false);
   mocks.daemonRunning = true;
   mocks.drainCalls = 0;
@@ -109,6 +121,7 @@ beforeEach(() => {
   mocks.task = pendingTask('task-run-now');
   mocks.resolution = { ok: true, provider: { id: 'cloud-cli', type: 'cli' } };
   mocks.localCapacityError = null;
+  mocks.localEndpoint = null;
   mocks.state = {
     paused: false,
     agents: {},
@@ -129,13 +142,13 @@ afterEach(() => {
   setUseRunner(originalUseRunner);
 });
 
-describe('dequeueNextTask — behavior', () => {
+describe.each([['dequeueNextTask', dequeueNextTask], ['evaluateTasks', evaluateTasks]])('%s — behavior', (_name, run) => {
   it('admits tiers in precedence order: on-demand, then user, then auto-approved', async () => {
     mocks.onDemand = [pendingTask('od-1')];
     mocks.userPending = [pendingTask('user-1')];
     mocks.autoApproved = [pendingTask('sys-1', { analysisType: 'enabled' })];
 
-    await dequeueNextTask();
+    await run();
 
     expect(readyIds(emit)).toEqual(['od-1', 'user-1', 'sys-1']);
   });
@@ -146,7 +159,7 @@ describe('dequeueNextTask — behavior', () => {
     mocks.userPending = [pendingTask('user-1'), pendingTask('user-2')];
     mocks.autoApproved = [pendingTask('sys-1', { analysisType: 'enabled' })];
 
-    await dequeueNextTask();
+    await run();
 
     expect(readyIds(emit)).toEqual(['od-1', 'user-1']);
   });
@@ -157,7 +170,7 @@ describe('dequeueNextTask — behavior', () => {
     mocks.userPending = [pendingTask('user-1')];
     mocks.autoApproved = [pendingTask('sys-1', { analysisType: 'enabled' })];
 
-    await dequeueNextTask();
+    await run();
 
     expect(readyIds(emit)).toEqual(['od-1']);
   });
@@ -168,7 +181,7 @@ describe('dequeueNextTask — behavior', () => {
     mocks.onDemand = [pendingTask('od-1')];
     mocks.userPending = [pendingTask('user-1')];
 
-    await dequeueNextTask();
+    await run();
 
     expect(mocks.drainCalls).toBe(0);
     expect(readyIds(emit)).toEqual([]);
@@ -182,10 +195,65 @@ describe('dequeueNextTask — behavior', () => {
     };
     mocks.userPending = [pendingTask('user-1')];
 
-    await dequeueNextTask();
+    await run();
 
     expect(mocks.drainCalls).toBe(0);
     expect(readyIds(emit)).toEqual([]);
+  });
+
+  it('lets an eligible user task use global capacity when the project cap is unset', async () => {
+    delete mocks.state.config.maxConcurrentAgentsPerProject;
+    mocks.state.agents = { busy: { status: 'running', metadata: { taskApp: 'example' } } };
+    mocks.userPending = [pendingTask('user-1', { app: 'example' })];
+
+    await run();
+
+    expect(readyIds(emit)).toEqual(['user-1']);
+  });
+
+  it.each(['off', 'dry-run'])('allows user and on-demand work while autonomy is %s', async mode => {
+    mocks.state.config.domainAutonomy.cos = mode;
+    mocks.onDemand = [pendingTask('od-1')];
+    mocks.userPending = [
+      { ...pendingTask('held'), autoApproved: false },
+      pendingTask('elsewhere', { targetInstanceId: 'instance-b' }),
+      pendingTask('user-1'),
+    ];
+    mocks.autoApproved = [pendingTask('sys-1', { analysisType: 'enabled' })];
+
+    await run();
+
+    expect(readyIds(emit)).toEqual(['od-1', 'user-1']);
+  });
+});
+
+describe('evaluateTasks pending merges', () => {
+  it.each([
+    ['execute', false, 1], ['execute', true, 0], ['off', false, 0], ['dry-run', false, 0],
+  ])('in %s with pause=%s sweeps %i times even with a full agent pool', async (mode, paused, count) => {
+    mocks.state.config.domainAutonomy.cos = mode;
+    mocks.state.config.maxConcurrentAgents = 1;
+    mocks.state.agents = { busy: { status: 'running' } };
+    mocks.state.paused = paused;
+
+    await evaluateTasks();
+
+    expect(mocks.sweep).toHaveBeenCalledTimes(count);
+    expect(readyIds(emit)).toEqual([]);
+  });
+});
+
+describe('dequeueNextTask', () => {
+  it('holds automatic local work when the endpoint is full while handing explicit work to the spawn gate', async () => {
+    mocks.localEndpoint = 'http://localhost:11434';
+    mocks.state.agents = { busy: { status: 'running' } };
+    mocks.onDemand = [pendingTask('od-1')];
+    mocks.userPending = [pendingTask('user-1')];
+    mocks.autoApproved = [pendingTask('sys-1', { analysisType: 'enabled' })];
+
+    await dequeueNextTask();
+
+    expect(readyIds(emit)).toEqual(['od-1']);
   });
 
   it('does nothing while the daemon is stopped', async () => {
@@ -196,6 +264,53 @@ describe('dequeueNextTask — behavior', () => {
 
     expect(mocks.drainCalls).toBe(0);
     expect(readyIds(emit)).toEqual([]);
+  });
+});
+
+describe('tasks:changed scheduler wake', () => {
+  const drainCallbacks = () => new Promise(resolve => setImmediate(() => setImmediate(resolve)));
+
+  beforeAll(async () => { await init(); });
+
+  it('starts the dequeue cycle before the immediate user spawn', async () => {
+    const dequeueStarted = vi.spyOn(maintenance, 'held').mockReturnValue(true);
+    try {
+      cosEvents.emit('tasks:changed', { action: 'added', type: 'user', task: pendingTask('added') });
+      await drainCallbacks();
+
+      expect(dequeueStarted).toHaveBeenCalledOnce();
+      expect(readyIds(emit)).toEqual(['added']);
+      const dispatchedAt = emit.mock.calls.findIndex(([event]) => event === 'task:ready');
+      expect(dequeueStarted.mock.invocationCallOrder[0]).toBeLessThan(emit.mock.invocationCallOrder[dispatchedAt]);
+    } finally { dequeueStarted.mockRestore(); }
+  });
+
+  it('dispatches a task returned to pending by the requeue event', async () => {
+    const task = pendingTask('released-retry');
+    mocks.userPending = [task];
+
+    cosEvents.emit('tasks:changed', { action: 'requeued', type: 'user', previousStatus: 'in_progress', task });
+
+    await vi.waitFor(() => expect(readyIds(emit)).toEqual([task.id]));
+    expect(mocks.drainCalls).toBe(1);
+  });
+
+  it.each(['added', 'approved', 'requeued'])('leaves a suppressed %s event to its caller', async action => {
+    mocks.onDemand = [pendingTask('od-1')];
+    cosEvents.emit('tasks:changed', { action, type: 'user', suppressDequeue: true, task: pendingTask('explicit') });
+    await drainCallbacks();
+
+    expect(mocks.drainCalls).toBe(0);
+    expect(readyIds(emit)).toEqual([]);
+  });
+
+  it('only hands a transition into completed to the investigation retry service', async () => {
+    const task = { id: 'investigation', status: 'completed', metadata: { isInvestigation: true } };
+    cosEvents.emit('tasks:changed', { action: 'updated', previousStatus: 'in_progress', task });
+    cosEvents.emit('tasks:changed', { action: 'updated', previousStatus: 'completed', task });
+    await drainCallbacks();
+
+    expect(mocks.retryInvestigation).toHaveBeenCalledExactlyOnceWith(task);
   });
 });
 

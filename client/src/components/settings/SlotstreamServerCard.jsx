@@ -66,6 +66,7 @@ export default function SlotstreamServerCard({
   onStart,
   onStop,
   onInstall,
+  onUninstall,
   onDownloadModel,
   onCancelDownload,
   download,
@@ -246,6 +247,12 @@ export default function SlotstreamServerCard({
             Save configuration
           </button>
         </div>
+      )}
+
+      {status?.canUninstall && onUninstall && (
+        <button type="button" onClick={onUninstall} disabled={busy} className={`${btnClass} border border-port-border text-port-warning`}>
+          Uninstall Slotstream
+        </button>
       )}
 
       {status?.installed && status?.supported !== false && catalog.length > 0 && onDownloadModel && (

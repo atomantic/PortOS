@@ -1,3 +1,4 @@
+import { recordingOperatorIo } from '../test/recordingOperatorIo.js';
 import { EventEmitter } from 'node:events';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { ERROR_CATEGORIES } from '../lib/aiToolkit/errorDetection.js';
@@ -367,15 +368,16 @@ describe('pre-route bootstrap', () => {
   });
 
   it('opens a credential session only on demand and forwards its provider, model, and result', async () => {
-    const io = {};
+    const io = recordingOperatorIo();
     const provider = { id: 'example-cli' };
     const session = { close: vi.fn() };
     steps.openCredentialSession.mockResolvedValueOnce(session);
     await bootstrapServices({ ...paths, io });
-    const [{ hooks }] = steps.createToolkit.mock.calls[0];
+    const [{ emit, hooks }] = steps.createToolkit.mock.calls[0];
 
     expect(steps.openCredentialSession).not.toHaveBeenCalled();
-    expect(steps.createToolkit).toHaveBeenCalledWith(expect.objectContaining({ io }));
+    emit('provider:status:changed', { providerId: provider.id });
+    expect(io.emit).toHaveBeenCalledExactlyOnceWith('provider:status:changed', { providerId: provider.id });
     await expect(hooks.openCredentialSession(provider, 'example-model')).resolves.toBe(session);
     expect(steps.openCredentialSession).toHaveBeenCalledExactlyOnceWith(provider, 'example-model');
   });

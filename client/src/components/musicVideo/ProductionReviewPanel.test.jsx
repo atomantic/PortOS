@@ -27,6 +27,46 @@ function recordPlayback() {
   fireEvent.change(screen.getByLabelText('Notes (optional)'), { target: { value: NOTE } });
 }
 
+describe('Production review interactions', () => {
+  it('keeps the planning disclosure open after a deep link is cleared and lets the director close or reopen it', () => {
+    window.location.hash = '#mv-review-planning';
+    const review = reviewFixture();
+    const view = render(<ProductionReviewPanel project={project} review={review} stage="storyboard" />);
+    const summary = screen.getByText('Edit storyboard shots');
+    const disclosure = summary.closest('details');
+    expect(disclosure.open).toBe(true);
+
+    window.location.hash = '';
+    view.rerender(<ProductionReviewPanel project={project} review={{ ...review, busy: true }} stage="storyboard" />);
+    expect(disclosure.open).toBe(true);
+    fireEvent.click(summary);
+    expect(disclosure.open).toBe(false);
+
+    view.rerender(<ProductionReviewPanel project={project} review={review} stage="storyboard" />);
+    expect(disclosure.open).toBe(false);
+    fireEvent.click(summary);
+    fireEvent.change(screen.getByLabelText('Storyboard source'), { target: { value: 'document' } });
+    expect(disclosure.open).toBe(true);
+    expect(screen.getByRole('button', { name: 'Save planning edits' })).toBeEnabled();
+  });
+
+  it('submits the active feedback stage when the panel stays mounted through a stage change', async () => {
+    const review = { ...reviewFixture(), feedback: vi.fn(async () => true) };
+    const view = render(<ProductionReviewPanel project={project} review={review} stage="art" />);
+    fireEvent.click(screen.getByText('Review feedback and revision history'));
+    fireEvent.change(screen.getByLabelText('Feedback target'), { target: { value: 'Chorus' } });
+    fireEvent.change(screen.getByLabelText('Requested change'), { target: { value: 'Hold the final pose.' } });
+    fireEvent.change(screen.getByLabelText('Review decision'), { target: { value: 'comment' } });
+
+    view.rerender(<ProductionReviewPanel project={project} review={review} stage="storyboard" />);
+    fireEvent.click(screen.getByRole('button', { name: 'Save revision feedback' }));
+    expect(review.feedback).toHaveBeenCalledExactlyOnceWith({
+      stage: 'storyboard', target: 'Chorus', text: 'Hold the final pose.', decision: 'comment',
+    });
+    await waitFor(() => expect(screen.getByLabelText('Requested change')).toHaveValue(''));
+  });
+});
+
 describe('Production proof render controls', () => {
   it('links to the blocking storyboard even when a registered proof already exists', () => {
     const review = reviewFixture();

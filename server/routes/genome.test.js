@@ -1,3 +1,4 @@
+import { recordingOperatorIo } from '../test/recordingOperatorIo.js';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import express from 'express';
 import { request } from '../lib/testHelper.js';
@@ -92,7 +93,7 @@ describe('ClinVar sync progress', () => {
   it.each([undefined, { requestId: '11111111-1111-4111-8111-111111111111' }])('preserves legacy POST and correlates progress for %j', async (body) => {
     const app = makeApp();
     const emit = vi.fn();
-    app.set('io', { emit });
+    app.set('io', recordingOperatorIo(emit));
     syncClinvar.mockImplementationOnce(async (onProgress) => {
       onProgress('Indexing variants');
       return { synced: true, variantCount: 12 };

@@ -16,6 +16,7 @@
  * rendering and the export UI are tracked as follow-up issues.
  */
 
+import { emitToOperatorsOn } from './socketIo.js';
 import { createHash } from 'crypto';
 import { createZip } from '../lib/zipWriter.js';
 import { getCurrentVersion } from './updateChecker.js';
@@ -806,5 +807,5 @@ function sectionByteEstimates(files) {
 }
 
 function emit(io, event, payload) {
-  if (io && typeof io.emit === 'function') io.emit(event, payload);
+  emitToOperatorsOn(io, event, payload);
 }

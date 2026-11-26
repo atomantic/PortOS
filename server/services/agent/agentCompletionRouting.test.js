@@ -12,12 +12,7 @@
  *   3. the agent is live in `runnerAgents` → the full in-memory completion path.
  *
  * Outcome 1 is a data-loss guard: completing a paused agent cleans the worktree
- * and completes the task out from under a later resume. It used to be pinned by
- * a source-grep assertion in `agentManagement.test.js` ("`pausedAgents.has` must
- * appear before `completeAgent(` in the function's source text"), which broke the
- * moment the recovery path was extracted — the only `completeAgent(` in the
- * function moved with it. These tests drive the real exported function instead,
- * so they survive any future extraction and still fail if the guard is removed.
+ * and completes the task out from under a later resume.
  */
 
 import { describe, it, expect, vi, beforeEach } from 'vitest';
@@ -70,7 +65,7 @@ import { handleAgentCompletion } from './agentLifecycle.js';
 import { runnerAgents, completingAgents, pausedAgents } from './agentState.js';
 import { completeAgent, getAgent, getAgentRecord } from '../cos/cosAgentLifecycle.js';
 import { getTaskById, updateTask } from '../cos/cosTaskStore.js';
-import { retireDeadAgent } from './agentFinalization.js';
+import { finalizeAgent, retireDeadAgent } from './agentFinalization.js';
 import { handleOrphanedTask } from './agentManagement.js';
 
 beforeEach(() => {
@@ -112,18 +107,21 @@ describe('handleAgentCompletion — pause guard (data-loss guard)', () => {
     await handleAgentCompletion('agent-paused', 143, false, 1000);
 
     expect(getAgentRecord).not.toHaveBeenCalled();
+    expect(finalizeAgent).not.toHaveBeenCalled();
     expect(completeAgent).not.toHaveBeenCalled();
   });
 
   it('drops both map entries so the pause is consumed and the slot is reclaimable', async () => {
     pausedAgents.set('agent-paused', { pausedAt: Date.now(), reason: 'user' });
-    runnerAgents.set('agent-paused', { task: { id: 'task-1' } });
+    const releaseOllamaWork = vi.fn();
+    runnerAgents.set('agent-paused', { task: { id: 'task-1' }, releaseOllamaWork });
     const reservation = maintenance.admit('agent', 'agent-paused');
 
     await handleAgentCompletion('agent-paused', 143, false, 1000);
 
     expect(pausedAgents.has('agent-paused')).toBe(false);
     expect(runnerAgents.has('agent-paused')).toBe(false);
+    expect(releaseOllamaWork).toHaveBeenCalledOnce();
     expect(reservation.isCurrent()).toBe(false);
   });
 

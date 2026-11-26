@@ -18,6 +18,7 @@ vi.mock('../../services/apiLocalLlm.js', () => ({
   startMtplxServer: vi.fn(),
   stopMtplxServer: vi.fn(),
   installMtplx: vi.fn(),
+  uninstallMtplx: vi.fn(),
   getManagedInklingRuntimeStatus: vi.fn(),
   saveSplashContextWindow: vi.fn(),
   controlManagedInklingRuntime: vi.fn(),
@@ -25,6 +26,7 @@ vi.mock('../../services/apiLocalLlm.js', () => ({
   startSlotstreamServer: vi.fn(),
   stopSlotstreamServer: vi.fn(),
   installSlotstream: vi.fn(),
+  uninstallSlotstream: vi.fn(),
   downloadSlotstreamModel: vi.fn(),
   cancelSlotstreamModelDownload: vi.fn(),
   searchMtplxModels: vi.fn().mockResolvedValue({ models: [], error: null }),
@@ -326,6 +328,49 @@ describe('runtime selection workflow', () => {
     await waitFor(() => expect(controlManagedInklingRuntime).toHaveBeenCalledWith('splash', 'install'));
   });
 
+  it.each([['splash', 'Splash'], ['mkserve', 'mkserve']])('shows %s logs, live install progress and cancellation', async (id, label) => {
+    const installed = { supported: true, state: 'stopped', installed: true, recentLogs: ['engine startup failed'] };
+    getManagedInklingRuntimeStatus.mockImplementation(async (runtime) => runtime === id ? installed : null);
+    await renderRuntimes(id);
+    fireEvent.click(screen.getByRole('button', { name: 'View server logs (1 lines)' }));
+    expect(screen.getByText('engine startup failed')).toBeVisible();
+
+    const group = within(screen.getByRole('button', { name: `Check ${label} status` }).closest('[role="group"]'));
+    const operation = { id: 'active-operation', action: 'upgrade', message: 'Downloading checkpoint: 42%' };
+    const progress = (frame) => {
+      const listener = socket.on.mock.calls.findLast(([name]) => name === 'localLlm:progress')[1];
+      return act(async () => { listener({ runtime: id, ...frame }); });
+    };
+    await progress({ event: 'progress', message: operation.message, operation });
+    expect(group.getByText(operation.message)).toBeVisible();
+    expect(screen.getByRole('link', { name: `${label} progress` })).toHaveAttribute('href', `/models/llms-runtimes/${id}`);
+
+    const cancelling = { ...operation, message: 'Cancelling installation…', cancelling: true };
+    let resolveCancel;
+    controlManagedInklingRuntime.mockImplementationOnce(() => new Promise((resolve) => { resolveCancel = resolve; }));
+    fireEvent.click(group.getByRole('button', { name: 'Cancel' }));
+    expect(controlManagedInklingRuntime).toHaveBeenCalledWith(id, 'cancel', { body: JSON.stringify({ operationId: operation.id }) });
+    await progress({ event: 'progress', message: cancelling.message, operation: cancelling });
+    expect(group.getByRole('button', { name: 'Cancelling…' })).toBeDisabled();
+    await progress({ event: 'cancelled', message: 'Installation cancelled.', operation: null, lastError: null });
+    await act(async () => { resolveCancel({ cancelled: true, operation: cancelling }); });
+    expect(group.queryByRole('button', { name: /cancel/i })).not.toBeInTheDocument();
+    expect(screen.queryByRole('link', { name: `${label} progress` })).not.toBeInTheDocument();
+  });
+
+  it('sends an explicit mkserve repair request after confirmation', async () => {
+    getManagedInklingRuntimeStatus.mockResolvedValue({
+      supported: true, state: 'error', installed: true, repairRecommended: true,
+    });
+    controlManagedInklingRuntime.mockResolvedValue({ operation: { action: 'repair', message: 'Rebuilding engine…' } });
+    await renderRuntimes('mkserve');
+    const check = screen.getByRole('button', { name: 'Check mkserve status' });
+    fireEvent.click(within(check.closest('[role="group"]')).getByRole('button', { name: 'Repair' }));
+    const dialog = screen.getByRole('dialog', { name: 'Repair mkserve' });
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Repair' }));
+    await waitFor(() => expect(controlManagedInklingRuntime).toHaveBeenCalledWith('mkserve', 'install', { body: '{"repair":true}' }));
+  });
+
   it('opens configuration from the roster and recovers an invalid deep link', async () => {
     const { getLlamaServerStatus } = await import('../../services/apiLocalLlm.js');
     getLlamaServerStatus.mockResolvedValue({ installed: false, running: false });
@@ -537,6 +582,27 @@ describe('LocalLlmRuntimesView runtime servers', () => {
 
     // `null` (not a repo id the card invented) = MTPLX's own verified default.
     await waitFor(() => expect(pullMtplxModel).toHaveBeenCalledWith(null, { silent: true }));
+  });
+
+  it('confirms Slotstream uninstall and refreshes the runtime row without touching checkpoints', async () => {
+    const { getSlotstreamServerStatus, uninstallSlotstream } = await import('../../services/apiLocalLlm.js');
+    const idle = { supported: true, installed: true, running: false, cachedModels: ['checkpoint'], canUninstall: true };
+    getSlotstreamServerStatus.mockResolvedValue(idle);
+    uninstallSlotstream.mockImplementationOnce(async () => {
+      getSlotstreamServerStatus.mockResolvedValue({ ...idle, installed: false, canUninstall: false });
+      return { success: true, message: 'Slotstream uninstalled' };
+    });
+    await renderRuntimes();
+    const button = await screen.findByRole('button', { name: 'Uninstall' });
+    fireEvent.click(button);
+    const dialog = screen.getByRole('dialog', { name: 'Uninstall Slotstream' });
+    expect(within(dialog).getByText(/Downloaded checkpoints, provider presets, and launch settings are kept/)).toBeVisible();
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Cancel' }));
+    expect(uninstallSlotstream).not.toHaveBeenCalled();
+    fireEvent.click(button);
+    fireEvent.click(within(screen.getByRole('dialog', { name: 'Uninstall Slotstream' })).getByRole('button', { name: 'Uninstall' }));
+    await waitFor(() => expect(screen.queryByRole('button', { name: 'Uninstall' })).not.toBeInTheDocument());
+    expect(uninstallSlotstream).toHaveBeenCalledTimes(1);
   });
 
   it('clears a cancelled Slotstream download without a failure or completion toast', async () => {

@@ -93,6 +93,15 @@ export function createDaemonLogBuffer({ maxLines = DEFAULT_MAX_LINES } = {}) {
   };
 }
 
+/** Tail a verified PM2 process ID so a same-named process's output stays private. */
+export async function readManagedPm2LogTail(pmId, execPm2) {
+  const maxLines = 40;
+  const result = await execPm2(['logs', String(pmId), '--nostream', '--lines', String(maxLines)], { timeoutMs: 3000 }).catch(() => null);
+  return `${result?.stdout ?? ''}\n${result?.stderr ?? ''}`.split('\n')
+    .map((line) => line.trimEnd()).filter(Boolean).slice(-maxLines)
+    .map((line) => line.slice(-2000));
+}
+
 /**
  * The value following `flag` in a PM2 process's recorded argv, or `null`.
  *
@@ -301,8 +310,26 @@ export function createDaemonWatcher({
     return { success: true, message: `${label} stopped` };
   };
 
+  const assertStoppedForUninstall = async ({ label, codePrefix, savedPort }) => {
+    clearStatusCache();
+    const app = await getAppStatus(appName);
+    if (!app) {
+      throw new ServerError(`PortOS could not verify that ${label} is stopped. Check PM2 and retry.`, {
+        status: 503, code: `${codePrefix}_PM2_UNAVAILABLE`,
+      });
+    }
+    const inUse = () => new ServerError(`Stop ${label} and free its configured port before uninstalling.`, {
+      status: 409, code: `${codePrefix}_IN_USE`,
+    });
+    if (!['not_found', 'stopped', 'errored'].includes(app.status)) throw inUse();
+    const ports = new Set([defaultPort, savedPort, getConfig()?.port, parseConfigFromArgs(app.args)?.port].filter(Boolean));
+    const listening = await Promise.all([...ports].map((port) => isPortInUse(port)));
+    if (listening.some(Boolean)) throw inUse();
+  };
+
   return {
     appendLog: logs.append,
+    assertStoppedForUninstall,
     assertPortFree,
     endpoint,
     getStatusBase,

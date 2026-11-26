@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest';
 import {
-  FEATURE_AREAS,
+  GOAL_FEATURE_AREAS,
   FEATURE_AREA_IDS,
   GOAL_CATEGORY_FEATURE_MAP,
   getGoalFeatureAreas,
@@ -15,7 +15,7 @@ const NAV_PATHS = new Set(NAV_COMMANDS.map((c) => c.path.split('?')[0]));
 
 describe('goalFeatureMap — registry shape', () => {
   it('every feature area carries a label, deep-link, and icon name', () => {
-    for (const [id, area] of Object.entries(FEATURE_AREAS)) {
+    for (const [id, area] of Object.entries(GOAL_FEATURE_AREAS)) {
       expect(typeof area.label, `${id}.label`).toBe('string');
       expect(area.label.length, `${id}.label`).toBeGreaterThan(0);
       expect(area.to.startsWith('/'), `${id}.to`).toBe(true);
@@ -26,13 +26,13 @@ describe('goalFeatureMap — registry shape', () => {
   });
 
   it('every feature-area deep-link resolves to a real NAV_COMMANDS path', () => {
-    for (const [id, area] of Object.entries(FEATURE_AREAS)) {
+    for (const [id, area] of Object.entries(GOAL_FEATURE_AREAS)) {
       expect(NAV_PATHS.has(area.to.split('?')[0]), `${id} → ${area.to}`).toBe(true);
     }
   });
 
-  it('FEATURE_AREA_IDS matches the FEATURE_AREAS keys', () => {
-    expect([...FEATURE_AREA_IDS].sort()).toEqual(Object.keys(FEATURE_AREAS).sort());
+  it('FEATURE_AREA_IDS matches the GOAL_FEATURE_AREAS keys', () => {
+    expect([...FEATURE_AREA_IDS].sort()).toEqual(Object.keys(GOAL_FEATURE_AREAS).sort());
   });
 
   it('every goal category maps to known, non-empty area ids', () => {
@@ -40,7 +40,7 @@ describe('goalFeatureMap — registry shape', () => {
       const ids = GOAL_CATEGORY_FEATURE_MAP[category];
       expect(Array.isArray(ids), category).toBe(true);
       expect(ids.length, category).toBeGreaterThan(0);
-      for (const id of ids) expect(FEATURE_AREAS[id], `${category} → ${id}`).toBeDefined();
+      for (const id of ids) expect(GOAL_FEATURE_AREAS[id], `${category} → ${id}`).toBeDefined();
     }
   });
 });

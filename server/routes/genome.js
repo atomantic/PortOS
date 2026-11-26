@@ -1,3 +1,4 @@
+import { emitToOperatorsOn } from '../services/socketIo.js';
 import { Router } from 'express';
 import * as genomeService from '../services/genome.js';
 import * as clinvarService from '../services/clinvar.js';
@@ -106,7 +107,7 @@ router.post('/clinvar/sync', asyncHandler(async (req, res) => {
   const { requestId } = validateRequest(genomeClinvarSyncSchema, req.body ?? {});
   const io = req.app.get('io');
   const onProgress = (message) => {
-    if (io) io.emit('genome:clinvar-progress', { message, ...(requestId ? { requestId } : {}) });
+    emitToOperatorsOn(io, 'genome:clinvar-progress', { message, ...(requestId ? { requestId } : {}) });
   };
 
   const result = await clinvarService.syncClinvar(onProgress);

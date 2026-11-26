@@ -19,7 +19,8 @@ import { ORCHESTRATION_MODES, ORCHESTRATION_ROLES } from '../orchestrationProfil
 import { RUN_EVENT_READ_LIMITS } from '../agent/agentRunEvents.js';
 import { TASK_STATUS_VALUES, TASK_PRIORITY_VALUES } from '../taskParser.js';
 import { recurrenceRuleSchema } from '../recurrenceValidation.js';
-import { AUDIT_EXECUTION_TASK_TYPES, DEPFREE_MODES } from '../auditCatalog.js';
+import { AUDIT_DOMAIN_ALIASES, auditDomainFor } from '../auditDomains.js';
+import { AUDIT_TASK_TYPE_LIST, DEPFREE_MODES } from '../auditCatalog.js';
 import { CLAIM_DRAIN_TASK_TYPES } from '../qualitySchedulePlan.js';
 import { JOB_INTERVAL_VALUES } from '../autonomousJobIntervals.js';
 import { jobFormFieldsSchema, jobFormValuesSchema } from '../jobFormFields.js';
@@ -943,11 +944,16 @@ export const runEventReconcileSchema = z.object({
 // naming `do-release` would otherwise have its cadence rewritten by a form
 // that never showed it. `fileIssuesByType` is keyed the same way and read only
 // for the types actually scheduled.
+const readableAuditIds = [...AUDIT_TASK_TYPE_LIST, ...Object.keys(AUDIT_DOMAIN_ALIASES)];
+const readableAuditId = z.enum(readableAuditIds);
+export const scheduledAuditIdsSchema = z.array(readableAuditId).max(readableAuditIds.length)
+  .transform(ids => [...new Set(ids.map(auditDomainFor))]);
+
 export const qualitySchedulePlanSchema = z.object({
-  taskTypes: z.array(z.enum(AUDIT_EXECUTION_TASK_TYPES)).max(AUDIT_EXECUTION_TASK_TYPES.length).optional(),
+  taskTypes: scheduledAuditIdsSchema.optional(),
   // partialRecord, not record: a Zod 4 enum-keyed record demands EVERY key, and
   // the form only sends the checks whose mode the user actually changed.
-  fileIssuesByType: z.partialRecord(z.enum(AUDIT_EXECUTION_TASK_TYPES), z.boolean()).optional(),
+  fileIssuesByType: z.partialRecord(readableAuditId, z.boolean()).optional(),
   // null = spread the selection evenly over the week.
   checksPerDay: z.number().int().min(1).max(24).nullable().optional(),
   windowStartHour: z.number().int().min(0).max(23).optional(),
@@ -968,6 +974,45 @@ export const cosAgentFeedbackBodySchema = z.object({
   comment: nullishString,
 });
 export const cosAgentBtwBodySchema = z.object({ message: z.string().trim().min(1).max(5000) });
+
+export const cosAgentMergeHandoffSchema = z.object({
+  agentId: z.string().min(1).max(200),
+  prUrl: z.string().url().max(2048),
+  headSha: z.string().regex(/^[0-9a-fA-F]{40}$/),
+  worktreePath: z.string().min(1).max(4096).optional(),
+});
+
+// `reason` is persisted into task metadata + interpolated into logs; guard the
+// shape so a non-string body can't store `[object Object]`.
+export const cosAgentPauseBodySchema = z.object({ reason: z.string().max(500).optional() });
+
+// GET /agents/:id?lines=N — how many TAIL transcript lines to hydrate. The
+// service defaults to `AGENT_OUTPUT_TAIL_LINES` and the ceiling here keeps a
+// hand-written query from re-opening the unbounded read this cap closed (#3498).
+export const cosAgentQuerySchema = z.object({
+  lines: z.coerce.number().int().positive().max(10000).optional(),
+});
+
+// Bounded completed history, including state records not yet archived.
+export const cosAgentCompletedQuerySchema = z.object({
+  limit: z.coerce.number().int().min(1).max(100).default(25),
+  cursor: z.string().max(512).regex(/^\d{4}-\d{2}-\d{2}\|[^|]*\|[^|]+$/).optional(),
+});
+
+export const cosAgentCleanupRecheckSchema = z.object({ taskId: z.string().min(1).max(512) }).strict();
+
+export const cosAgentClaimSelectionSchema = z.object({
+  agentId: z.string().min(1).max(200),
+  issueNumber: z.number().int().positive().max(Number.MAX_SAFE_INTEGER),
+}).strict();
+
+export const cosAgentListQuerySchema = z.object({ active: z.literal('1').optional() });
+
+export const cosAgentPendingFeedbackQuerySchema = z.object({
+  countOnly: z.literal('1').optional(),
+  limit: z.coerce.number().int().min(1).max(100).optional(),
+  cursor: z.string().max(512).optional(),
+});
 
 const claimBranchSchema = z.string().min(1).max(200);
 export const claimOwnershipSchema = z.discriminatedUnion('action', [

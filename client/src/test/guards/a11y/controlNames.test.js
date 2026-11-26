@@ -6,7 +6,7 @@ import { describe, it, expect } from 'vitest';
 import { trackedJsxFiles, maskedSourceOf, rawSourceOf, openingTagAt, forEachOpeningTag, lineOf, isUnnamedIconOnlyButton } from '../../a11yScanCore.js';
 import { maskComments, isResponsiveHiddenOnlyLabelControl, } from '../../a11yScanNames.js';
 import { hasCallerSuppliedName } from '../../a11yScanWrappers.js';
-import { mouseOnlyClickables, unnamedControlAnchors, CONTROL_NAME_RULES, isNamed, namesId } from '../../a11yScanRules.js';
+import { unreachableClickTargets, unnamedControlAnchors, CONTROL_NAME_RULES, isNamed, namesId } from '../../a11yScanRules.js';
 
 describe('a11y conventions: controlNames', () => {
   it('gives every icon-only button an accessible name', () => {
@@ -86,24 +86,14 @@ describe('a11y conventions: controlNames', () => {
     expect(isResponsiveHiddenOnlyLabelControl(containerFailing, containerNode)).toBe(true);
   });
 
-  it('keyboard-activates every clickable non-interactive element', () => {
-    // Whole-tree scan (every tracked JSX file), so a contended full-suite
-    // worker can exceed the default 5s budget — runner budget, not product
-    // behavior. The assertion itself is unaffected by the timeout value.
-    // A mouse-only `onClick` on a <div>/<li>/<tr> is the most common way an
-    // otherwise-accessible view loses its keyboard users: the element never
-    // enters the tab order, so there is no keystroke that reaches the handler
-    // at all. Spread `clickableProps(handler)` from lib/a11yKeyboard.js
-    // alongside the existing onClick (components/IngredientPicker.jsx is the
-    // worked example) — or, for a surface with its own ARIA role, write
-    // role + tabIndex + onKeyDown out in full.
+  it('keeps custom click targets reachable by keyboard', () => {
+    // Biome handles bare mouse-only clicks except table rows. This scan also
+    // requires the role, tab stop and keyboard activation for custom targets.
     const offenders = [];
     for (const file of trackedJsxFiles()) {
-      // Masking only removes text, so no `onClick` in the raw source means none
-      // in the masked source; skip the per-character comment lexer.
       if (!rawSourceOf(file).includes('onClick')) continue;
       const src = maskedSourceOf(file);
-      for (const { name, index } of mouseOnlyClickables(src)) {
+      for (const { name, index } of unreachableClickTargets(src)) {
         offenders.push(`${file}:${lineOf(src, index)} <${name}>`);
       }
     }
@@ -114,19 +104,21 @@ describe('a11y conventions: controlNames', () => {
     // The rule above is green against the whole tree, so nothing in the tree
     // pins what it actually rejects. These fixtures do: one probe per branch,
     // so it cannot go vacuously green.
-    const clickables = (src) => [...mouseOnlyClickables(src)].map(({ name }) => name);
+    const clickables = (src) => [...unreachableClickTargets(src)].map(({ name }) => name);
 
-    expect(clickables('<div onClick={select}>Pick</div>')).toEqual(['div']);
-    expect(clickables('<div onClick={select} {...clickableProps(select)}>Pick</div>')).toEqual([]);
+    // Biome covers the first case but excludes table rows.
+    expect(clickables('<div onClick={select}>Pick</div>')).toEqual([]);
+    expect(clickables('<tr onClick={select}><td>Pick</td></tr>')).toEqual(['tr']);
+    expect(clickables('<div onClick={select} onKeyDown={onKey} {...clickableProps(select)}>Pick</div>')).toEqual([]);
     expect(clickables('<li onClick={select} role="option" tabIndex={0} onKeyDown={onKey}>Pick</li>')).toEqual([]);
-    expect(clickables('<div onClick={e => e.stopPropagation()}><GripVertical /></div>')).toEqual([]);
+    expect(clickables('<div onClick={e => e.stopPropagation()} onKeyDown={onKey}><GripVertical /></div>')).toEqual([]);
     // The same shim hoisted to a named const — resolved out of the source, not
     // pattern-matched off the tag, so `onClick={stopNodeActivation}` is not read
     // as a real clickable.
-    expect(clickables('const stop = (event) => event.stopPropagation();\n<div onClick={stop}><Grip /></div>')).toEqual([]);
+    expect(clickables('const stop = (event) => event.stopPropagation();\n<div onClick={stop} onKeyDown={onKey}><Grip /></div>')).toEqual([]);
     // …but a named handler that is NOT a shim stays reported, or the branch
     // above would exempt every clickable that hoists its handler.
-    expect(clickables('const stop = (event) => onSelect(event);\n<div onClick={stop}>Pick</div>')).toEqual(['div']);
+    expect(clickables('const stop = (event) => onSelect(event);\n<div onClick={stop} onKeyDown={onKey}>Pick</div>')).toEqual(['div']);
     // A scrim is outside the a11y tree and dismissed with Esc by its owner;
     // giving it a tab stop would put focus on an element AT is told to ignore.
     expect(clickables('<div className="fixed inset-0" onClick={close} aria-hidden="true" />')).toEqual([]);
@@ -137,7 +129,8 @@ describe('a11y conventions: controlNames', () => {
     // A partial triple is not the escape hatch — a role with no tab stop is
     // announced as a button the keyboard can never reach.
     expect(clickables('<div onClick={select} role="button">Pick</div>')).toEqual(['div']);
-    // …and neither is a full triple whose tab stop is programmatic-focus-only.
+    expect(clickables('<div onClick={select} role="button" tabIndex={0} onKeyUp={onKey}>Pick</div>')).toEqual(['div']);
+    // A tab stop reserved for programmatic focus is unreachable by Tab.
     expect(clickables('<div onClick={select} role="button" tabIndex={-1} onKeyDown={onKey}>Pick</div>')).toEqual(['div']);
     // A <button> activates itself; reporting one would make the rule noise.
     expect(clickables('<button onClick={select}>Pick</button>')).toEqual([]);
@@ -146,18 +139,18 @@ describe('a11y conventions: controlNames', () => {
     // off the raw tag text, so nothing quoted can forge one. Without this the
     // rule is one stray string away from exempting the elements it exists
     // for — and the string would be invisible in review.
-    expect(clickables('<div onClick={select} title="clickableProps(select)">Pick</div>')).toEqual(['div']);
+    expect(clickables('<div onClick={select} onKeyDown={onKey} title="clickableProps(select)">Pick</div>')).toEqual(['div']);
     // Nor can building the props without spreading them onto the element.
-    expect(clickables('<div onClick={() => clickableProps(select)}>Pick</div>')).toEqual(['div']);
-    expect(clickables('<div onClick={select} title=" role= tabIndex= onKeyDown=">Pick</div>')).toEqual(['div']);
+    expect(clickables('<div onClick={() => clickableProps(select)} onKeyDown={onKey}>Pick</div>')).toEqual(['div']);
+    expect(clickables('<div onClick={select} onKeyDown={onKey} title=" role= tabIndex= onKeyDown=">Pick</div>')).toEqual(['div']);
     // A name declared twice resolves to no shim: one component's
     // `e.stopPropagation()` must not exempt another's real handler.
-    expect(clickables('const stop = (e) => e.stopPropagation();\nconst stop = (e) => onSelect(e);\n<div onClick={stop}>Pick</div>')).toEqual(['div']);
+    expect(clickables('const stop = (e) => e.stopPropagation();\nconst stop = (e) => onSelect(e);\n<div onClick={stop} onKeyDown={onKey}>Pick</div>')).toEqual(['div']);
 
     // The rule reads MASKED source, so a JSX example written in a comment —
     // the shape lib/a11yKeyboard.js's own usage docblock is written in — cannot
     // fail the suite.
-    expect(clickables(maskComments('// <div onClick={select}>Pick</div>'))).toEqual([]);
+    expect(clickables(maskComments('// <tr onClick={select}><td>Pick</td></tr>'))).toEqual([]);
   });
 
   for (const { tag, listName, allowlist, issue, remedy } of CONTROL_NAME_RULES) {

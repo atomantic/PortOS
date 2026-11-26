@@ -15,7 +15,7 @@ The **Vault** is an encrypted, machine-local key-value store for sensitive perso
 - Financial identity (Bank account references, tax entity IDs)
 - Emergency contacts & private physical addresses
 
-Data in the Vault is stored encrypted at rest (`server/lib/vaultCrypto.js`) using machine-derived key material and requires standard authentication when auth is enabled.
+Data in the Vault is stored encrypted at rest (`server/lib/vaultCrypto.js`) using machine-derived key material. Reads of personal records, subject-specific counts, and saved website-login metadata require host control. A signed-in operator or a delegated agent session can read them when authentication is enabled. A password-free install allows these reads over a local connection.
 
 #### Website logins
 Website logins (`/api/privacy/logins`, type `website_login`) are origin-bound credentials for the [model-blind browser fill](./browser.md#model-blind-website-login-fill): a username, a password and an optional TOTP setup key (raw Base32 or an `otpauth://totp/...` URI), bound to one or more exact origins such as `https://example.com`. A pasted URL is reduced to its origin; there is no subdomain, suffix or scheme matching.

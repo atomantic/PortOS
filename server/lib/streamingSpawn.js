@@ -20,13 +20,14 @@ const CANCEL_POLL_MS = 1_000;
  * @param {string} cmd
  * @param {string[]} args
  * @param {(line: string) => void} [onLine] - called once per non-empty line
- * @param {{timeoutMs?: number, cwd?: string, env?: object, spawnImpl?: Function, splitRe?: RegExp, isCancelled?: () => boolean, processGroup?: boolean}} [options]
+ * @param {{timeoutMs?: number, cwd?: string, env?: object, spawnImpl?: Function, splitRe?: RegExp, isCancelled?: () => boolean, signal?: AbortSignal, processGroup?: boolean}} [options]
   *   `timeoutMs: 0` (default) means no timeout. `splitRe` goes to the line readers (pass `/[\r\n]+/` for a progress bar redrawing one line with a bare `\r`, else a multi-GB download goes silent). `isCancelled` is polled while running (see CANCEL_POLL_MS).
   *   An unset `env` inherits this process's environment, but `docker compose` substitutes `${VAR}` refs from ITS caller's env before the project's `.env`, so a compose target reusing a name PortOS sets (`PORT`, see `services/vllmQwenManager.js#startVllmQwenProject`)
   *   is silently remapped: audit a new target's variable names against `lib/ports.js`. `processGroup` spawns detached and signals the whole group on timeout/cancel, for a credential-bootstrap WRAPPER supervising the real harness (pass `needsProcessGroup(wrapped)`; a per-pid SIGKILL would leave it running, #7496); off by default.
  * @returns {Promise<{success: boolean, error?: string}>}
  */
-export function runStreamingCommand(cmd, args, onLine, { timeoutMs = 0, cwd, env, spawnImpl = spawn, splitRe, isCancelled, processGroup = false } = {}) {
+export function runStreamingCommand(cmd, args, onLine, { timeoutMs = 0, cwd, env, spawnImpl = spawn, splitRe, isCancelled, signal, processGroup = false } = {}) {
+  if (signal?.aborted) return Promise.resolve({ success: false, error: 'cancelled' });
   return new Promise((resolve) => {
     const child = spawnImpl(cmd, args, safeChildProcessOptions({
       env: env ? safeChildProcessEnv(env) : process.env,
@@ -54,6 +55,7 @@ export function runStreamingCommand(cmd, args, onLine, { timeoutMs = 0, cwd, env
       settled = true;
       if (timer) clearTimeout(timer);
       if (cancelTimer) clearInterval(cancelTimer);
+      signal?.removeEventListener('abort', abort);
       resolve(result);
     };
 
@@ -75,6 +77,10 @@ export function runStreamingCommand(cmd, args, onLine, { timeoutMs = 0, cwd, env
         finish({ success: false, error: 'cancelled' });
       }, CANCEL_POLL_MS)
       : null;
+    // Keep the caller's operation reserved until the cancelled process closes.
+    const abort = () => killProcessTree(child, 'SIGKILL', { processGroup });
+    signal?.addEventListener('abort', abort, { once: true });
+    if (signal?.aborted) abort();
 
     // ONE reader per stream, never a shared buffer: chunks arrive on arbitrary byte boundaries, so a shared carry splices a half-written stdout line onto the next stderr chunk (`npm install`'s `added 42 ` plus a mid-line warning yields one corrupt line and loses both). `streamLines.js` carries the rule.
     const readerOptions = splitRe ? { splitRe } : undefined;
@@ -88,6 +94,7 @@ export function runStreamingCommand(cmd, args, onLine, { timeoutMs = 0, cwd, env
     child.on('close', (code) => {
       stdoutReader.flush();
       stderrReader.flush();
+      if (signal?.aborted) return finish({ success: false, error: 'cancelled' });
       if (code === 0) return finish({ success: true });
       const detail = tail.text();
       finish({ success: false, error: detail ? `exit ${code}: ${detail}` : `exited with code ${code}` });

@@ -226,6 +226,40 @@ export function fixedCasting(project) {
 export const formSubjects = (project) => fixedCasting(project).filter((f) => f.kind === 'character');
 
 /**
+ * A form's subject binding a caller just set (it differs from the one `previous`
+ * held for that form id) that names no fixed-casting character of `project`.
+ * An unchanged binding whose subject was since unlinked is left for the plan
+ * to report as missing, so it never blocks an unrelated edit.
+ */
+export function newUnknownFormSubjects(project, direction, previous) {
+  const known = new Set(formSubjects(project).map((s) => s.id));
+  const before = new Map((previous?.protagonist?.forms || []).map((f) => [f.id, f.subjectId]));
+  return (direction?.protagonist?.forms || []).filter((f) => f.subjectId && f.subjectId !== before.get(f.id) && !known.has(f.subjectId));
+}
+
+/**
+ * Bind forms only to subjects the director cast: a provider's new binding to
+ * any other id is dropped (a director edit is refused before this runs), and
+ * each binding to a known subject records that subject's name, so its
+ * reference can still be kept off the present-day sheet if the subject is
+ * later removed from the video.
+ */
+export function withCheckedFormSubjects(project, direction, previous) {
+  const forms = direction?.protagonist?.forms;
+  if (!forms?.length) return direction;
+  const unknown = new Set(newUnknownFormSubjects(project, direction, previous).map((f) => f.id));
+  const names = new Map(formSubjects(project).map((s) => [s.id, s.name]));
+  const checked = forms.map((f) => {
+    if (!f.subjectId) return f;
+    const { subjectId, subjectName, ...rest } = f;
+    if (unknown.has(f.id)) return rest;
+    const name = names.get(subjectId) || subjectName;
+    return { ...rest, subjectId, ...(name ? { subjectName: name } : {}) };
+  });
+  return { ...direction, protagonist: { ...direction.protagonist, forms: checked } };
+}
+
+/**
  * The fixed-casting characters that must each appear in `direction.cast`: every
  * catalog-linked character except the protagonist, and except an age form of
  * the protagonist's own catalog record (that one belongs in protagonist.forms).

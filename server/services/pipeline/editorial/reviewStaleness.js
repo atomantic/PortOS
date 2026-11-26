@@ -8,12 +8,9 @@
  */
 
 import { contentHash as sha256 } from '../contentHash.js';
-import {
-  EDITORIAL_SOURCES,
-  comicLetteringIssues,
-  getAllChecks,
-  proseStageIssues,
-} from '../../../lib/editorial/index.js';
+import { EDITORIAL_SOURCES } from '../../../lib/editorial/checkInfra/taxonomy.js';
+import { comicLetteringIssues, proseStageIssues } from '../../../lib/editorial/checkInfra/comic.js';
+import { getAllChecks } from '../../../lib/editorial/checkRegistry.js';
 import { canonicalStringify } from '../../../lib/objects.js';
 import { renderCharacterEvolutionsForPrompt } from '../../../lib/seriesCharacterArc.js';
 import { getSettings } from '../../settings.js';

@@ -69,7 +69,7 @@ export function resolveObsidianPointer({ written, vaultId, notePath, prior }) {
 
 // Characters that are illegal or hostile in a filename on macOS/Windows, plus
 // leading dots (hidden files) and trailing dots/spaces (Windows strips them).
-export const sanitizeFilename = (name) =>
+export const sanitizeObsidianFilename = (name) =>
   String(name)
     .replace(/[/\\:*?"<>|#^[\]]/g, ' ')
     .replace(/\s+/g, ' ')
@@ -77,7 +77,7 @@ export const sanitizeFilename = (name) =>
     .slice(0, 80)
     .trim() || 'video';
 
-export const formatDuration = (sec) => {
+export const formatSecondsClock = (sec) => {
   if (!Number.isFinite(sec) || sec <= 0) return null;
   const h = Math.floor(sec / 3600);
   const m = Math.floor((sec % 3600) / 60);
@@ -96,7 +96,7 @@ export const yamlString = (value) => `"${String(value ?? '').replace(/\\/g, '\\\
  * user's own vault queries/dataview key on, so it is pinned by a test.
  */
 export function buildIngestNote({ meta, url, transcript, tags, agentPrompt, capturedAt }) {
-  const duration = formatDuration(meta.durationSec);
+  const duration = formatSecondsClock(meta.durationSec);
   const frontmatter = [
     '---',
     `title: ${yamlString(meta.title)}`,
@@ -156,7 +156,7 @@ export function buildAgentTaskContext({ meta, url, agentPrompt, transcriptPath, 
     `- **Title:** ${meta.title}`,
     ...(meta.channel ? [`- **Channel:** ${meta.channel}`] : []),
     `- **URL:** ${url}`,
-    ...(meta.durationSec ? [`- **Duration:** ${formatDuration(meta.durationSec)}`] : []),
+    ...(meta.durationSec ? [`- **Duration:** ${formatSecondsClock(meta.durationSec)}`] : []),
     ...(tags.length ? [`- **Tags:** ${tags.join(', ')}`] : []),
     ...(hasTranscript
       ? [`- **Transcript (read this first):** \`${transcriptPath}\``]

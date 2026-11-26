@@ -337,12 +337,13 @@ describe('CI-selection cuts stay cut (#12285)', () => {
       'services/fleetHostSignal.js',
       'services/provider/providerRecoveryHooks.js',
       'services/bootHookRegistry.js',
-      'services/socketIo.js',
+      'lib/socketAudience.js',
     ]) expect(importTargets(leaf), leaf).toEqual([]);
   });
 
   // Positive control: the cut callers still name the leaf, so an empty scan cannot pass.
   it('still sees the socketIo.js and film-event edges the cut callers keep (#17619)', () => {
+    expect(importTargets('services/socketIo.js')).toEqual(['lib/socketAudience.js']);
     expect(importTargets('services/backup.js')).toContain('services/socketIo.js');
     expect(importTargets('routes/commands.js')).toContain('services/socketIo.js');
     expect(importTargets('services/codeAnimation/films.js')).toContain('services/codeAnimation/events.js');
@@ -558,12 +559,13 @@ describe('server suite import growth (#7993)', () => {
 });
 
 // #16096: request validation is its own leaf. ~113 route/service files import
-// only validateRequest; if this grows past errorHandler.js, every one of them
-// pays for the new edge again.
-it('keeps the validateRequest leaf to itself and errorHandler.js', () => {
+// only validateRequest. The error handler depends on the import-free Socket.IO
+// audience filter so it can send UI frames without pulling in services.
+it('keeps the validateRequest closure limited to the error handler and audience filter', () => {
   const closure = staticImportClosure(abs('lib/validateRequest.js')).files;
   expect([...closure].map((file) => relative(SERVER_DIR, file)).sort()).toEqual([
     'lib/errorHandler.js',
+    'lib/socketAudience.js',
     'lib/validateRequest.js',
   ]);
 });

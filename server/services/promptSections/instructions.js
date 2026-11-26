@@ -7,7 +7,7 @@ import { readdir } from 'fs/promises';
 import { homedir } from 'os';
 import { PATHS, tryReadFile } from '../../lib/fileUtils.js';
 import { AGENT_INSTRUCTIONS_FILENAME, CLAUDE_BRIDGE_FILENAME } from '../../lib/agent/agentInstructionsFile.js';
-import { SELF_IMPROVEMENT_TASK_TYPES, currentTaskTypeName } from '../../lib/scheduledTaskTypes.js';
+import { SELF_IMPROVEMENT_TASK_TYPES, auditDomainFor, currentTaskTypeName } from '../../lib/scheduledTaskTypes.js';
 
 const SKILLS_DIR = join(PATHS.root, 'data/prompts/skills');
 
@@ -82,7 +82,7 @@ const skillForTaskType = (task) => {
       return TASK_TYPE_SKILL_ALIASES[normalized];
     }
     if (SKILL_NAMES.has(normalized)) return normalized;
-    if (SCHEDULED_TASK_TYPES.has(normalized)) return NO_LIFECYCLE_SKILL;
+    if (SCHEDULED_TASK_TYPES.has(auditDomainFor(normalized))) return NO_LIFECYCLE_SKILL;
   }
   return null;
 };

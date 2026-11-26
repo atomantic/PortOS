@@ -1664,6 +1664,7 @@ describe('stream error containment', () => {
     // must win over the host-shutdown gate.
     it('paused run exiting during host shutdown takes the paused path, writing no interrupted marker', async () => {
       const { pausedAgents, consumePausedAgentExit, activeAgents } = await import('./agentState.js');
+      const { finalizeAgent } = await import('./agentFinalization.js');
 
       const reservation = maintenance.admit('agent', minimalArgs.agentId);
       onTestFinished(() => reservation.finish());
@@ -1675,6 +1676,7 @@ describe('stream error containment', () => {
       await vi.waitFor(() => expect(reservation.isCurrent()).toBe(false), { interval: 5 });
       expect(consumePausedAgentExit).toHaveBeenCalledWith(minimalArgs.agentId);
       expect(activeAgents.has(minimalArgs.agentId)).toBe(false);
+      expect(finalizeAgent).not.toHaveBeenCalled();
       expect(agentStateMocks.updateAgent).not.toHaveBeenCalledWith(
         minimalArgs.agentId,
         { metadata: { phase: 'interrupted', interruptedBy: 'host-shutdown' } },
