@@ -21,7 +21,15 @@
 import { describe, it, expect, vi, beforeEach, afterEach, afterAll } from 'vitest';
 import { ChildProcess } from '../../lib/childProcess.js';
 import { pinPlatform } from '../../lib/testHelper.js';
-import { rmSync } from 'fs';
+import { EventEmitter } from 'node:events';
+import { mkdirSync, rmSync, writeFileSync } from 'fs';
+import { join } from 'path';
+import { cleanupTempDataRoots, lazyTempDataRoot, makePathsProxy } from '../../lib/mockPathsDataRoot.js';
+
+vi.mock('../../lib/paths.js', async importOriginal => makePathsProxy(await importOriginal(), {
+  dataRoot: () => lazyTempDataRoot('portos-agent-management-'),
+}));
+afterAll(cleanupTempDataRoots);
 
 // The lifecycle ledger is a real file writer (data/cos/run-events.jsonl). Mocked
 // so the sweep's telemetry lands in a spy instead of the developing install's
@@ -51,6 +59,7 @@ vi.mock('../../lib/childProcess.js', async (importOriginal) => ({
 }));
 
 vi.mock('../cos/cosEvents.js', () => ({
+  cosEvents: new EventEmitter(),
   emitLog: vi.fn()
 }));
 
@@ -1838,6 +1847,69 @@ describe('resumeAgent — requeues the paused agent\'s own task', () => {
     getAgentRecord.mockResolvedValue({ ...PAUSED_AGENT, metadata: { ...PAUSED_AGENT.metadata, configClaimFlow } });
     getTaskById.mockResolvedValue(null);
     await expect(resumeAgent('agent-paused-1')).resolves.toMatchObject({ mode: 'new-task' });
+    const [replacement, taskType] = addTask.mock.calls[0];
+    expect(taskType).toBe('user');
+    expect(replacement.metadata).not.toHaveProperty('featureAgentId');
+    expect(replacement.metadata).not.toHaveProperty('featureAgentRun');
+  });
+
+  describe('missing Feature Agent task', () => {
+    const featureAgentId = 'fa-example';
+    const ownership = { featureAgentId, featureAgentRun: true };
+    const feature = { id: featureAgentId, status: 'active', currentAgentId: PAUSED_AGENT.id };
+    const persisted = { id: 'sys-feature-replacement', status: 'pending', metadata: ownership };
+
+    function seedFeatures(agents) {
+      mkdirSync(fileUtils.PATHS.cos, { recursive: true });
+      writeFileSync(join(fileUtils.PATHS.cos, 'feature-agents.json'), JSON.stringify({ version: 1, agents }));
+    }
+
+    beforeEach(() => {
+      getAgentRecord.mockResolvedValue({ ...PAUSED_AGENT, metadata: {
+        ...PAUSED_AGENT.metadata, ...ownership, taskType: 'internal', configClaimFlow: false,
+      } });
+      getTaskById.mockResolvedValue(null);
+    });
+
+    it('dispatches the replacement through the bound Feature Agent path', async () => {
+      seedFeatures([feature]);
+      const { withFeatureAgentDispatch } = await import('../featureAgents.js');
+      addTask.mockResolvedValueOnce(persisted);
+      forceSpawnTask.mockImplementationOnce(taskId =>
+        withFeatureAgentDispatch({ ...persisted, id: taskId }, () => ({ success: true })));
+
+      await expect(resumeAgent(PAUSED_AGENT.id)).resolves.toMatchObject({
+        mode: 'new-task', spawned: true, taskId: persisted.id,
+      });
+      expect(addTask).toHaveBeenCalledWith(expect.objectContaining({
+        metadata: expect.objectContaining({ ...ownership, resumedFromAgentId: PAUSED_AGENT.id }),
+      }), 'internal', { suppressDequeue: true });
+    });
+
+    it.each([
+      ['stopped', [{ ...feature, status: 'draft', currentAgentId: null }]],
+      ['deleted', []],
+      ['reassigned', [{ ...feature, currentAgentId: 'agent-another-run' }]],
+    ])('refuses a %s feature before queuing or retiring the paused run', async (_state, agents) => {
+      seedFeatures(agents);
+      await expect(resumeAgent(PAUSED_AGENT.id)).rejects.toMatchObject({
+        status: 409, code: 'AGENT_RESUME_FEATURE_RUN_UNAVAILABLE',
+      });
+      expect(addTask).not.toHaveBeenCalled();
+      expect(forceSpawnTask).not.toHaveBeenCalled();
+      expect(markAgentComplete).not.toHaveBeenCalled();
+    });
+
+    it('refuses to bind a generic duplicate as the Feature Agent run', async () => {
+      seedFeatures([feature]);
+      addTask.mockResolvedValueOnce({ id: 'sys-unrelated', status: 'pending', duplicate: true });
+      await expect(resumeAgent(PAUSED_AGENT.id)).rejects.toMatchObject({
+        status: 409, code: 'AGENT_RESUME_FEATURE_TASK_CONFLICT',
+      });
+      const { getFeatureAgent } = await import('../featureAgents.js');
+      await expect(getFeatureAgent(featureAgentId)).resolves.toMatchObject({ currentAgentId: PAUSED_AGENT.id });
+      expect(forceSpawnTask).not.toHaveBeenCalled();
+    });
   });
 
   it('keeps a missing coordinator task a coordinator when the task record is gone', async () => {
