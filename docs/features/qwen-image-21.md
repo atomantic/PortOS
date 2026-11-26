@@ -12,7 +12,7 @@ Install or repair the shared FLUX.2 image runtime through the app, or run:
 INSTALL_FLUX2=1 bash scripts/setup-image-video.sh
 ```
 
-On Windows/Linux both run the hash-pinned CUDA lock ([FLUX2_CUDA.md](../FLUX2_CUDA.md)); the
+On Windows/Linux both run the hash-pinned CUDA lock ([shared CUDA runtime locks](../RUNTIME_LOCKS.md#windows-and-linux-cuda)); the
 in-app installer on macOS still resolves current Diffusers from git. Both need Transformers >=5.17.
 An older runtime missing `QwenImage21Pipeline` reports the repair command
 before loading weights. Setup does not download model weights; those load

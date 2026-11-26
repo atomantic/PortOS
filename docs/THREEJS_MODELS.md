@@ -255,13 +255,13 @@ in-flight run as interrupted and retryable; it never calls a provider.
 
 ## Native 3D installer dependency inventory
 
-Pixal3D CUDA uses the [locked native Linux profile](PIXAL3D_CUDA.md), with a
+Pixal3D CUDA uses the [locked native Linux profile](RUNTIME_LOCKS.md#pixal3d-cuda), with a
 separate environment and explicit lower-detail fallback without NATTEN.
-TRELLIS.2 Metal uses the [locked Metal profile](TRELLIS2_METAL.md), and TRELLIS.2
-CUDA uses the [locked Linux profile](TRELLIS2_CUDA.md). Existing runtimes remain
+TRELLIS.2 Metal uses the [locked Metal profile](RUNTIME_LOCKS.md#trellis2-metal), and TRELLIS.2
+CUDA uses the [locked Linux profile](RUNTIME_LOCKS.md#trellis2-cuda). Existing runtimes remain
 available for generation on compatible hardware.
 Pixal3D Metal offers Install and Repair through
-the [locked profile](PIXAL3D_MPS.md) shipped in
+the [locked profile](RUNTIME_LOCKS.md#pixal3d-metal) shipped in
 [#15698](https://github.com/atomantic/PortOS/pull/15698).
 
 The table records the inputs inspected on 2026-11-10 for
@@ -271,9 +271,9 @@ setup with a reproducible profile and a hardware-verified textured GLB export.
 
 | Runtime | Source inspected | Python and native dependencies |
 | --- | --- | --- |
-| [TRELLIS.2 CUDA](TRELLIS2_CUDA.md) | `scripts/ml/trellis2-cuda-profile.json`, separate runtime and build wheel locks | Conda CPython 3.11.16, Torch 2.14.1+cu126, TorchVision 0.29.1+cu126 and FlashAttention 2.8.3.post2. The Linux x86_64 profile fixes CUDA toolkit 12.6.3 (nvcc 12.6.85), GCC 11.3 and compute capability 8.6. Twenty-seven Conda artifacts plus micromamba, 70 runtime wheels, seven build wheels and 11 immutable source/submodule archives are hash-pinned. Native builds use local sources with dependency resolution disabled; Repair retains weights. |
-| [Pixal3D CUDA](PIXAL3D_CUDA.md) | `scripts/ml/pixal3d-cuda-profile.json`, separate runtime and build wheel locks | Conda CPython 3.11.16 and the TRELLIS.2 Torch/CUDA ABI, with 88 runtime wheels, eight build wheels and 15 immutable sources. Pixal3D, MoGe, pipeline, NAF and NATTEN are pinned. The verified utils3d wheel and its closure install without dependency resolution. Native Linux CC 8.6, CUDA 12.6.3 and 12 GiB VRAM are required. NAF code loads locally; NATTEN build failure uses interpolated DINO features. Native Pixal3D build/render verification remains pending. |
-| [TRELLIS.2 Metal](TRELLIS2_METAL.md) | `scripts/ml/trellis2-mps-profile.json`, `scripts/ml/requirements/requirements-trellis2-mps.lock.txt` | PortOS-owned Install/Repair on CPython 3.13, Torch 2.15.0 and TorchVision 0.29.2. The 56-wheel closure includes hash-locked build backends. Nine immutable source archives pin trellis-mac, TRELLIS.2, the four Metal packages, trellis2-apple, utils3d and the exact o-voxel Eigen submodule. Setup verifies native imports and the Metal baker, retains weights, and records the compiler and source inventory. Requires macOS 26+ and full Xcode 26+ with its Metal Toolchain. |
-| Pixal3D Metal | [Pinned Apple Silicon source](https://github.com/pawel-mazurkiewicz/Pixal3D-mac/tree/0be9e69a729432323dfb60a418801e5e9e7a1437) | PortOS builds in a private Python 3.13 venv with hash-pinned wheel and source requirements. Vendored Metal extensions build from the pinned snapshot with the locked build tools and no dependency resolution. See [the Pixal3D Metal runtime guide](PIXAL3D_MPS.md) for the Torch ABI and hardware verification. |
+| [TRELLIS.2 CUDA](RUNTIME_LOCKS.md#trellis2-cuda) | `scripts/ml/trellis2-cuda-profile.json`, separate runtime and build wheel locks | Conda CPython 3.11.16, Torch 2.14.1+cu126, TorchVision 0.29.1+cu126 and FlashAttention 2.8.3.post2. The Linux x86_64 profile fixes CUDA toolkit 12.6.3 (nvcc 12.6.85), GCC 11.3 and compute capability 8.6. Twenty-seven Conda artifacts plus micromamba, 70 runtime wheels, seven build wheels and 11 immutable source/submodule archives are hash-pinned. Native builds use local sources with dependency resolution disabled; Repair retains weights. |
+| [Pixal3D CUDA](RUNTIME_LOCKS.md#pixal3d-cuda) | `scripts/ml/pixal3d-cuda-profile.json`, separate runtime and build wheel locks | Conda CPython 3.11.16 and the TRELLIS.2 Torch/CUDA ABI, with 88 runtime wheels, eight build wheels and 15 immutable sources. Pixal3D, MoGe, pipeline, NAF and NATTEN are pinned. The verified utils3d wheel and its closure install without dependency resolution. Native Linux CC 8.6, CUDA 12.6.3 and 12 GiB VRAM are required. NAF code loads locally; NATTEN build failure uses interpolated DINO features. Native Pixal3D build/render verification remains pending. |
+| [TRELLIS.2 Metal](RUNTIME_LOCKS.md#trellis2-metal) | `scripts/ml/trellis2-mps-profile.json`, `scripts/ml/requirements/requirements-trellis2-mps.lock.txt` | PortOS-owned Install/Repair on CPython 3.13, Torch 2.15.0 and TorchVision 0.29.2. The 56-wheel closure includes hash-locked build backends. Nine immutable source archives pin trellis-mac, TRELLIS.2, the four Metal packages, trellis2-apple, utils3d and the exact o-voxel Eigen submodule. Setup verifies native imports and the Metal baker, retains weights, and records the compiler and source inventory. Requires macOS 26+ and full Xcode 26+ with its Metal Toolchain. |
+| Pixal3D Metal | [Pinned Apple Silicon source](https://github.com/pawel-mazurkiewicz/Pixal3D-mac/tree/0be9e69a729432323dfb60a418801e5e9e7a1437) | PortOS builds in a private Python 3.13 venv with hash-pinned wheel and source requirements. Vendored Metal extensions build from the pinned snapshot with the locked build tools and no dependency resolution. See [the Pixal3D Metal runtime guide](RUNTIME_LOCKS.md#pixal3d-metal) for the Torch ABI and hardware verification. |
 
 A reproducible native profile needs the exact Conda or Python build and the registry artifacts and build tools it consumes, plus source and submodule commits for each extension. CUDA profiles must also record the Torch wheel flavor, CUDA toolkit and GPU architectures. Metal profiles must record the Torch version, macOS deployment target and Xcode/Metal compiler versions. Capture those inputs alongside the final package metadata from a fresh install for each profile before using the inventory for a complete OSV/MAL audit. Native extension imports and a textured GLB export must be checked on the corresponding hardware.

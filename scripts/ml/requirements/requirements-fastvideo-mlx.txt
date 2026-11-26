@@ -21,7 +21,7 @@ pillow==13.0.0
 filelock==4.2.9
 # Upstream's <0.23 guard addressed a CLIP RobertaProcessing keyword mismatch.
 # Transformers 5.22.x uses positional arguments; validated with actual CLIP
-# load/save, offsets and attention masks (see docs/PYTHON_RUNTIME_REFRESH.md#held-back-pins).
+# load/save, offsets and attention masks (see docs/RUNTIME_LOCKS.md#held-back-pins).
 tokenizers==0.23.3
 transformers==5.22.2
 huggingface-hub[hf_xet]==2.4.0

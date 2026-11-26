@@ -1,6 +1,6 @@
 # Bounded #16047 regeneration: cutoff 2026-11-07T00:00:00Z; Transformers 5.22.2 only; retained companion versions and artifact hashes.
 # MiniMax H3 CUDA: CPython 3.11, x86_64 windows, CUDA 12.6.
-# uv 0.13.7; exclude-newer 2026-11-05T00:00:00Z; regenerate: docs/MINIMAX_H3_CUDA.md.
+# uv 0.13.7; exclude-newer 2026-11-05T00:00:00Z; regenerate: docs/RUNTIME_LOCKS.md#regenerating-locks.
 --extra-index-url https://download.pytorch.org/whl/cu126
 --index-url https://pypi.org/simple
 

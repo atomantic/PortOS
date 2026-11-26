@@ -1,7 +1,7 @@
 # Bounded #16047 regeneration: cutoff 2026-11-07T00:00:00Z; Transformers 5.22.2 only; retained companion versions and artifact hashes.
 # macOS arm64 CPython 3.11 inference dependencies.
 # uv 0.13.7, exclude-newer 2026-11-05T00:00:00Z.
-# Regenerate with the recipe in docs/MLX_VIDEO_LOCKS.md.
+# Regenerate with the recipe in docs/RUNTIME_LOCKS.md#regenerating-mlx-inference-locks.
 annotated-doc==0.0.5 \
     --hash=sha256:117bac03a25ede5df5440e855b32d556049ca169ead221505badf432fed4b101 \
     --hash=sha256:c7e58ce09192557605d8bbd92836d7e1d520ac9580096042c0bfd197efacf1bb

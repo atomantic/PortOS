@@ -121,7 +121,7 @@ decided by platform, not by the user:
 | Windows / Linux + NVIDIA | `ltx25_cuda` | `INSTALL_LTX25_CUDA=1 ./scripts/setup-image-video.sh` | `ltx25_cuda_distilled` |
 | Anything else | — | — | no generative backend; the plan says so rather than failing at render time |
 
-The CUDA runtime installs from [platform-specific SHA-256 locks](../LTX25_CUDA.md),
+The CUDA runtime installs from [platform-specific SHA-256 locks](../RUNTIME_LOCKS.md#ltx-25-cuda),
 including its immutable LTX source archives and build backend. Install/Repair
 keeps model-weight downloads separate.
 
