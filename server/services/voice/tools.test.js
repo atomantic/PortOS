@@ -6,6 +6,17 @@ vi.mock('../brain.js', () => ({
   captureThought: vi.fn(async () => ({ inboxLog: { id: 'inbox-1' }, message: 'ok' })),
   getInboxLog: vi.fn(async () => []),
 }));
+vi.mock('../auth.js', async (importOriginal) => ({
+  ...(await importOriginal()),
+  isAuthEnabled: vi.fn(async () => false),
+  verifyRequestSession: vi.fn(async () => null),
+}));
+vi.mock('../brainJournal.js', () => ({
+  getToday: vi.fn(async () => '2026-04-17'),
+  getJournal: vi.fn(async () => null),
+  resolveDate: vi.fn(async (date) => date ?? '2026-04-17'),
+  appendJournal: vi.fn(async () => ({ segments: ['Example journal entry'] })),
+}));
 vi.mock('../meatspace/meatspaceAlcohol.js', () => ({
   logDrink: vi.fn(async () => ({ standardDrinks: 1, dayTotal: 1 })),
   getAlcoholSummary: vi.fn(async () => ({ today: 0 })),
@@ -121,7 +132,8 @@ vi.mock('../imageGen/index.js', () => ({
   CLOUD_IMAGE_GEN_MODES: ['codex', 'grok'],
   IMAGE_GEN_MODES: ['external', 'local', 'codex', 'grok'],
 }));
-vi.mock('../settings.js', () => ({
+vi.mock('../settings.js', async () => ({
+  settingsEvents: new (await import('node:events')).EventEmitter(),
   getSettings: vi.fn(async () => ({
     imageGen: { codex: { enabled: codexEnabledRef.value } },
     location: settingsLocationRef.value,
@@ -212,6 +224,97 @@ const { getVoiceConfig: mockedGetVoiceConfig } = await import('./config.js');
 const { addTask: mockedAddTask } = await import('../cos/cosTaskStore.js');
 const { isRunning: mockedIsRunning } = await import('../cos/cos.js');
 const { getActiveProvider: mockedGetActiveProvider, getAllProviders: mockedGetAllProviders, getProviderById: mockedGetProviderById } = await import('../provider/providers.js');
+
+const journal = await import('../brainJournal.js');
+const alcohol = await import('../meatspace/meatspaceAlcohol.js');
+const nicotine = await import('../meatspace/meatspaceNicotine.js');
+const health = await import('../meatspace/meatspaceHealth.js');
+const goals = await import('../identity.js');
+const feeds = await import('../feeds.js');
+
+const authorizedOperator = { hasHostControl: () => true };
+
+describe('mutating tool host authority', () => {
+  const cases = [
+    ['daily_log_start_dictation', {}, journal.resolveDate],
+    ['daily_log_append', { text: 'Example journal entry' }, journal.appendJournal],
+    ['meatspace_log_drink', { name: 'beer' }, alcohol.logDrink],
+    ['meatspace_log_nicotine', { product: 'cigarette' }, nicotine.logNicotine],
+    ['meatspace_log_weight', { weight: 150 }, health.addBodyEntry],
+    ['meatspace_log_workout', { type: 'yoga' }, addWorkoutMock],
+    ['goal_update_progress', { goalQuery: 'Example project', progress: 50 }, goals.updateGoalProgress],
+    ['goal_log_note', { goalQuery: 'Example project', note: 'Draft complete' }, goals.addProgressEntry],
+    ['feeds_mark_read', { all: true }, feeds.markAllRead],
+    ['timer_set', { minutes: 1 }, scheduleTimerMock],
+  ];
+
+  it.each(cases)('%s requires host authority before execution', async (name, args, effect) => {
+    effect.mockClear();
+    const sideEffects = [];
+    const ctx = { hasHostControl: async () => false, sideEffects };
+    await expect(dispatchTool(name, args, ctx)).rejects.toMatchObject({
+      status: 403, code: 'HOST_CONTROL_FORBIDDEN',
+    });
+    expect(effect).not.toHaveBeenCalled();
+    expect(sideEffects).toEqual([]);
+
+    if (name.startsWith('goal_')) {
+      goals.getGoals.mockResolvedValueOnce({ goals: [{ id: 'example-goal', title: 'Example project' }] });
+    }
+    await expect(dispatchTool(name, args, { ...authorizedOperator, sideEffects })).resolves.toMatchObject({ ok: true });
+    expect(effect).toHaveBeenCalledTimes(1);
+    if (name === 'daily_log_start_dictation') {
+      expect(sideEffects).toContainEqual({ type: 'dictation', enabled: true, date: '2026-04-17' });
+    }
+  });
+
+  it.each([{}, { startDictation: false }])('allows opening the Daily Log for navigation with %j', async (args) => {
+    const hasHostControl = vi.fn(async () => false);
+    const sideEffects = [];
+    await expect(dispatchTool('daily_log_open', args, { hasHostControl, sideEffects }))
+      .resolves.toMatchObject({ ok: true, dictation: false });
+    expect(hasHostControl).not.toHaveBeenCalled();
+    expect(sideEffects).toEqual([{ type: 'navigate', path: '/brain/daily-log' }]);
+  });
+
+  it.each([
+    ['remote password-free', false, false, null, false],
+    ['local password-free', false, true, null, true],
+    ['delegated agent session', true, false, 'example-agent-token', true],
+    ['invalid session', true, true, null, false],
+  ])('checks the current socket authority for dictation activation with %s', async (_kind, enabled, local, session, allowed) => {
+    const { isAuthEnabled, verifyRequestSession } = await import('../auth.js');
+    const { socketHasCurrentHostControl } = await import('../authGate.js');
+    journal.getToday.mockClear();
+    isAuthEnabled.mockResolvedValueOnce(enabled);
+    if (enabled) verifyRequestSession.mockResolvedValueOnce(session);
+    const headers = enabled ? { authorization: 'Bearer example-agent-token' } : {};
+    const socket = { data: { portosLocalConnection: local }, handshake: { headers } };
+    const sideEffects = [];
+    const action = dispatchTool('daily_log_open', { startDictation: true }, {
+      hasHostControl: () => socketHasCurrentHostControl(socket),
+      sideEffects,
+    });
+
+    if (allowed) {
+      await expect(action).resolves.toMatchObject({ ok: true, dictation: true });
+      expect(sideEffects).toEqual([
+        { type: 'navigate', path: '/brain/daily-log' },
+        { type: 'dictation', enabled: true, date: '2026-04-17' },
+      ]);
+    } else {
+      await expect(action).rejects.toMatchObject({ status: 403, code: 'HOST_CONTROL_FORBIDDEN' });
+      expect(journal.getToday).not.toHaveBeenCalled();
+      expect(sideEffects).toEqual([]);
+    }
+    if (enabled) expect(verifyRequestSession).toHaveBeenLastCalledWith({ headers });
+  });
+
+  it('requires a host authority callback to activate dictation', async () => {
+    await expect(dispatchTool('daily_log_open', { startDictation: true }))
+      .rejects.toMatchObject({ status: 403, code: 'HOST_CONTROL_FORBIDDEN' });
+  });
+});
 
 describe('getToolSpecs', () => {
   it('returns OpenAI-format function specs', () => {
@@ -522,55 +625,55 @@ describe('brain_search validation', () => {
 
 describe('meatspace_log_drink validation', () => {
   it('rejects missing name', async () => {
-    await expect(dispatchTool('meatspace_log_drink', {})).rejects.toThrow(/name is required/);
+    await expect(dispatchTool('meatspace_log_drink', {}, authorizedOperator)).rejects.toThrow(/name is required/);
   });
   it('rejects negative count', async () => {
-    await expect(dispatchTool('meatspace_log_drink', { name: 'beer', count: -1 }))
+    await expect(dispatchTool('meatspace_log_drink', { name: 'beer', count: -1 }, authorizedOperator))
       .rejects.toThrow(/count must be a positive number/);
   });
   it('rejects abv over 100', async () => {
-    await expect(dispatchTool('meatspace_log_drink', { name: 'beer', abv: 500 }))
+    await expect(dispatchTool('meatspace_log_drink', { name: 'beer', abv: 500 }, authorizedOperator))
       .rejects.toThrow(/abv must be between 0 and 100/);
   });
   it('rejects oz over 128', async () => {
-    await expect(dispatchTool('meatspace_log_drink', { name: 'beer', oz: 999 }))
+    await expect(dispatchTool('meatspace_log_drink', { name: 'beer', oz: 999 }, authorizedOperator))
       .rejects.toThrow(/oz must be a positive number/);
   });
 });
 
 describe('meatspace_log_nicotine validation', () => {
   it('rejects empty product', async () => {
-    await expect(dispatchTool('meatspace_log_nicotine', { product: '   ' }))
+    await expect(dispatchTool('meatspace_log_nicotine', { product: '   ' }, authorizedOperator))
       .rejects.toThrow(/product must not be empty/);
   });
   it('rejects negative count', async () => {
-    await expect(dispatchTool('meatspace_log_nicotine', { product: 'cigarette', count: -2 }))
+    await expect(dispatchTool('meatspace_log_nicotine', { product: 'cigarette', count: -2 }, authorizedOperator))
       .rejects.toThrow(/count must be a positive number/);
   });
   it('rejects mgPerUnit over 200', async () => {
-    await expect(dispatchTool('meatspace_log_nicotine', { product: 'cigarette', mgPerUnit: 9999 }))
+    await expect(dispatchTool('meatspace_log_nicotine', { product: 'cigarette', mgPerUnit: 9999 }, authorizedOperator))
       .rejects.toThrow(/mgPerUnit must be between 0 and 200/);
   });
 });
 
 describe('goal_update_progress type guard', () => {
   it('rejects non-string goalQuery', async () => {
-    await expect(dispatchTool('goal_update_progress', { goalQuery: 42, progress: 50 }))
+    await expect(dispatchTool('goal_update_progress', { goalQuery: 42, progress: 50 }, authorizedOperator))
       .rejects.toThrow(/goalQuery is required/);
   });
   it('rejects out-of-range progress', async () => {
-    await expect(dispatchTool('goal_update_progress', { goalQuery: 'jacket', progress: 150 }))
+    await expect(dispatchTool('goal_update_progress', { goalQuery: 'jacket', progress: 150 }, authorizedOperator))
       .rejects.toThrow(/progress must be a number between 0 and 100/);
   });
 });
 
 describe('goal_log_note type guard', () => {
   it('rejects non-string goalQuery', async () => {
-    await expect(dispatchTool('goal_log_note', { goalQuery: {}, note: 'hi' }))
+    await expect(dispatchTool('goal_log_note', { goalQuery: {}, note: 'hi' }, authorizedOperator))
       .rejects.toThrow(/goalQuery is required/);
   });
   it('rejects missing note', async () => {
-    await expect(dispatchTool('goal_log_note', { goalQuery: 'jacket' }))
+    await expect(dispatchTool('goal_log_note', { goalQuery: 'jacket' }, authorizedOperator))
       .rejects.toThrow(/note is required/);
   });
 });
@@ -710,7 +813,7 @@ describe('classifyIntent — feeds regex covers mark-read phrasings', () => {
 
 describe('feeds_mark_read', () => {
   it('returns ok:false when neither query nor all is provided', async () => {
-    const r = await dispatchTool('feeds_mark_read', {});
+    const r = await dispatchTool('feeds_mark_read', {}, authorizedOperator);
     expect(r.ok).toBe(false);
     expect(r.summary).toMatch(/which item|mark all/i);
   });
@@ -718,7 +821,7 @@ describe('feeds_mark_read', () => {
   it('marks all unread when all=true', async () => {
     const feeds = await import('../feeds.js');
     feeds.markAllRead.mockResolvedValueOnce({ marked: 7 });
-    const r = await dispatchTool('feeds_mark_read', { all: true });
+    const r = await dispatchTool('feeds_mark_read', { all: true }, authorizedOperator);
     expect(r.ok).toBe(true);
     expect(r.marked).toBe(7);
     expect(r.summary).toMatch(/Marked 7 items? as read/);
@@ -728,7 +831,7 @@ describe('feeds_mark_read', () => {
   it('reports nothing-unread when markAll returns 0', async () => {
     const feeds = await import('../feeds.js');
     feeds.markAllRead.mockResolvedValueOnce({ marked: 0 });
-    const r = await dispatchTool('feeds_mark_read', { all: true });
+    const r = await dispatchTool('feeds_mark_read', { all: true }, authorizedOperator);
     expect(r.ok).toBe(true);
     expect(r.summary).toMatch(/Nothing unread/);
   });
@@ -740,7 +843,7 @@ describe('feeds_mark_read', () => {
       { id: 'f2', title: 'Daring Fireball' },
     ]);
     feeds.markAllRead.mockResolvedValueOnce({ marked: 3 });
-    const r = await dispatchTool('feeds_mark_read', { all: true, feedQuery: 'hacker' });
+    const r = await dispatchTool('feeds_mark_read', { all: true, feedQuery: 'hacker' }, authorizedOperator);
     expect(r.ok).toBe(true);
     expect(r.marked).toBe(3);
     expect(feeds.markAllRead).toHaveBeenLastCalledWith('f1');
@@ -750,7 +853,7 @@ describe('feeds_mark_read', () => {
   it('returns ok:false when feedQuery does not match any feed', async () => {
     const feeds = await import('../feeds.js');
     feeds.getFeeds.mockResolvedValueOnce([{ id: 'f1', title: 'Hacker News' }]);
-    const r = await dispatchTool('feeds_mark_read', { all: true, feedQuery: 'nothing-like-that' });
+    const r = await dispatchTool('feeds_mark_read', { all: true, feedQuery: 'nothing-like-that' }, authorizedOperator);
     expect(r.ok).toBe(false);
     expect(r.summary).toMatch(/No feed matched/);
   });
@@ -761,7 +864,7 @@ describe('feeds_mark_read', () => {
       { id: 'i1', title: 'Why React is fast', read: false },
       { id: 'i2', title: 'Tailwind v5 ships', read: false },
     ]);
-    const r = await dispatchTool('feeds_mark_read', { query: 'tailwind' });
+    const r = await dispatchTool('feeds_mark_read', { query: 'tailwind' }, authorizedOperator);
     expect(r.ok).toBe(true);
     expect(r.title).toBe('Tailwind v5 ships');
     expect(feeds.markItemRead).toHaveBeenLastCalledWith('i2');
@@ -770,13 +873,13 @@ describe('feeds_mark_read', () => {
   it('returns ok:false when no unread item matches query', async () => {
     const feeds = await import('../feeds.js');
     feeds.getItems.mockResolvedValueOnce([{ id: 'i1', title: 'Something else', read: false }]);
-    const r = await dispatchTool('feeds_mark_read', { query: 'nothing-like-that' });
+    const r = await dispatchTool('feeds_mark_read', { query: 'nothing-like-that' }, authorizedOperator);
     expect(r.ok).toBe(false);
     expect(r.summary).toMatch(/No unread item matched/);
   });
 
   it('rejects whitespace-only query without all', async () => {
-    const r = await dispatchTool('feeds_mark_read', { query: '   ' });
+    const r = await dispatchTool('feeds_mark_read', { query: '   ' }, authorizedOperator);
     expect(r.ok).toBe(false);
   });
 });
@@ -1561,19 +1664,19 @@ describe('calendar_next', () => {
 
 describe('meatspace_log_workout', () => {
   it('rejects missing type', async () => {
-    await expect(dispatchTool('meatspace_log_workout', {})).rejects.toThrow(/type is required/);
+    await expect(dispatchTool('meatspace_log_workout', {}, authorizedOperator)).rejects.toThrow(/type is required/);
   });
   it('rejects absurd duration', async () => {
-    await expect(dispatchTool('meatspace_log_workout', { type: 'run', durationMinutes: 5000 }))
+    await expect(dispatchTool('meatspace_log_workout', { type: 'run', durationMinutes: 5000 }, authorizedOperator))
       .rejects.toThrow(/durationMinutes must be a positive number/);
   });
   it('rejects invalid intensity', async () => {
-    await expect(dispatchTool('meatspace_log_workout', { type: 'run', intensity: 'extreme' }))
+    await expect(dispatchTool('meatspace_log_workout', { type: 'run', intensity: 'extreme' }, authorizedOperator))
       .rejects.toThrow(/intensity must be/);
   });
   it('logs a workout via addWorkout', async () => {
     addWorkoutMock.mockClear();
-    const r = await dispatchTool('meatspace_log_workout', { type: 'yoga', durationMinutes: 30, intensity: 'moderate' });
+    const r = await dispatchTool('meatspace_log_workout', { type: 'yoga', durationMinutes: 30, intensity: 'moderate' }, authorizedOperator);
     expect(r.ok).toBe(true);
     expect(r.type).toBe('yoga');
     expect(addWorkoutMock).toHaveBeenCalledWith(expect.objectContaining({ type: 'yoga', durationMinutes: 30, intensity: 'moderate' }));
@@ -1634,18 +1737,18 @@ describe('weather_now', () => {
 
 describe('timer_set', () => {
   it('rejects a missing/zero duration', async () => {
-    const r = await dispatchTool('timer_set', { label: 'tea' });
+    const r = await dispatchTool('timer_set', { label: 'tea' }, authorizedOperator);
     expect(r.ok).toBe(false);
     expect(r.summary).toMatch(/Tell me how long/);
   });
   it('rejects durations over 24 hours', async () => {
-    const r = await dispatchTool('timer_set', { minutes: 2000 });
+    const r = await dispatchTool('timer_set', { minutes: 2000 }, authorizedOperator);
     expect(r.ok).toBe(false);
     expect(r.summary).toMatch(/capped at 24 hours/);
   });
   it('delegates a valid timer to the persistent scheduler', async () => {
     scheduleTimerMock.mockClear();
-    const r = await dispatchTool('timer_set', { minutes: 10, label: 'call mom' });
+    const r = await dispatchTool('timer_set', { minutes: 10, label: 'call mom' }, authorizedOperator);
     expect(r.ok).toBe(true);
     expect(r.durationMs).toBe(600000);
     expect(r.summary).toMatch(/Timer set for 10 minutes/);
