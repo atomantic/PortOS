@@ -135,6 +135,8 @@ describe('restoreSnapshot snapshotId, filter flags, and settings re-sync', () =>
         '--exclude=/.[pP][eE][eE][rR]-[eE][xX][eE][cC][uU][tT][iI][oO][nN]-[aA][uU][tT][hH][oO][rR][iI][tT][yY]-*.[pP][eE][nN][dD][iI][nN][gG]',
         '--exclude=/.[pP][eE][eE][rR]-[eE][xX][eE][cC][uU][tT][iI][oO][nN]-[aA][dD][oO][pP][tT][iI][oO][nN]-*.[pP][eE][nN][dD][iI][nN][gG]',
         '--exclude=/[mM][iI][gG][rR][aA][tT][iI][oO][nN][sS].[aA][pP][pP][lL][iI][eE][dD].[jJ][sS][oO][nN].[tT][mM][pP]-*',
+      '--exclude=/[sS][eE][tT][tT][iI][nN][gG][sS].[jJ][sS][oO][nN]',
+      '--exclude=/[mM][aA][nN][aA][gG][eE][dD]-[vV][iI][sS][iI][tT][oO][rR]-[cC][rR][eE][dD][eE][nN][tT][iI][aA][lL][sS].[jJ][sS][oO][nN]',
       // No snapshot instances.json was approved for install (#12596).
       '--exclude=/[iI][nN][sS][tT][aA][nN][cC][eE][sS].[jJ][sS][oO][nN]',
     ];
