@@ -197,7 +197,7 @@ function beeperUserScopeFor(participant) {
  * When `resolvedIdentities` is omitted, combines the handle and `beeper-user`
  * `tribe_identities` lookups into a single query.
  */
-async function resolveLoadedParticipant(participant, personIndex = null, resolvedIdentities = null) {
+async function resolveLoadedParticipant(participant, personIndex = null, { resolvedIdentities, client } = {}) {
   if (!participant) return null;
 
   const scope = identityScopeFor(participant);
@@ -206,7 +206,7 @@ async function resolveLoadedParticipant(participant, personIndex = null, resolve
   if (!identities) {
     const scopes = [scope, beeperUserScope].filter(Boolean);
     identities = scopes.length > 0
-      ? await tribeIdentities.resolvePeopleByIdentities(scopes)
+      ? await tribeIdentities.resolvePeopleByIdentities(scopes, { client })
       : new Map();
   }
 
@@ -223,7 +223,7 @@ async function resolveLoadedParticipant(participant, personIndex = null, resolve
   if (participant.tribePersonId) return participant.tribePersonId;
 
   if (scope?.kind === 'phone') {
-    const index = personIndex || buildPersonMatchIndex(await tribe.listPeople());
+    const index = personIndex || await loadRosterIndex({ client });
     const viaTribePhone = matchPerson({ phone: scope.handle }, index);
     if (viaTribePhone) return viaTribePhone;
   }
@@ -233,7 +233,8 @@ async function resolveLoadedParticipant(participant, personIndex = null, resolve
 
 export async function resolveParticipantPerson({ conversationId, sourceUserId }, personIndex = null) {
   const participant = await getParticipant(conversationId, sourceUserId);
-  return resolveLoadedParticipant(participant, personIndex);
+  // getParticipant already initialized the schema for these pool reads.
+  return resolveLoadedParticipant(participant, personIndex, { client: { query } });
 }
 
 /**
@@ -242,8 +243,8 @@ export async function resolveParticipantPerson({ conversationId, sourceUserId },
  * same `personIndex` to participant upserts and touchpoint batches rather than
  * let each reload and reindex every Tribe person for itself.
  */
-export async function loadRosterIndex() {
-  return buildPersonMatchIndex(await tribe.listPeople());
+export async function loadRosterIndex({ client } = {}) {
+  return buildPersonMatchIndex(await tribe.listPeople({}, { client }));
 }
 
 const PARTICIPANT_UPSERT_CONFLICT_SQL = `ON CONFLICT (conversation_id, source_user_id)
@@ -298,47 +299,42 @@ export async function upsertParticipant({
     throw new ServerError('conversationId and sourceUserId are required', { status: 400, code: 'BAD_REQUEST' });
   }
   validateParticipantInput({ sourceUserId, observedVia });
-  await ensureReady();
-  await query(
-    `INSERT INTO beeper_participants (conversation_id, source_user_id, display_name, handle, observed_via)
-     VALUES ($1, $2, $3, $4, $5)
-     ${PARTICIPANT_UPSERT_CONFLICT_SQL}`,
-    [conversationId, sourceUserId, displayName, handle, observedVia],
-  ).catch((err) => {
-    if (err?.code === '23503') throw new ServerError('Conversation not found', { status: 404 });
-    throw err;
-  });
+  return withParticipantLinkTransaction(async (client) => {
+    await client.query(
+      `INSERT INTO beeper_participants (conversation_id, source_user_id, display_name, handle, observed_via)
+       VALUES ($1, $2, $3, $4, $5)
+       ${PARTICIPANT_UPSERT_CONFLICT_SQL}`,
+      [conversationId, sourceUserId, displayName, handle, observedVia],
+    ).catch((err) => {
+      if (err?.code === '23503') throw new ServerError('Conversation not found', { status: 404 });
+      throw err;
+    });
 
-  const participant = await getParticipant(conversationId, sourceUserId);
-  // Gated on the cache being empty only: with the `kind='beeper-user'` claim a handle-less participant is resolvable, so a
-  // hand-linked one re-fills after a purge + resweep. Cost is one combined `tribe_identities` lookup; the phone matcher
-  // (the expensive leg) still only runs for a phone-shaped handle.
-  // A soft-deleted owner is unlinked in the read model even while its raw FK
-  // remains. Apply the same rule to the write, preserving only live links.
-  if (!participant.tribePersonId) {
-    const resolved = await resolveLoadedParticipant(participant, personIndex);
-    if (resolved) {
-      const updated = await query(
-        `UPDATE beeper_participants SET tribe_person_id = $3, updated_at = NOW()
-         WHERE conversation_id = $1 AND source_user_id = $2
-           AND (tribe_person_id IS NULL OR EXISTS (
-             SELECT 1 FROM tribe_people tp
-             WHERE tp.id = beeper_participants.tribe_person_id AND tp.deleted = TRUE
-           ))
-         RETURNING tribe_person_id, updated_at`,
-        [conversationId, sourceUserId, resolved],
-      );
-      if (updated.rows[0]) return applyUpdatedCacheRow(participant, updated.rows[0]);
-      return getParticipant(conversationId, sourceUserId);
-    }
-  }
-  return participant;
+    const participant = await getParticipant(conversationId, sourceUserId, { client });
+    // A live cache survives re-sync. A soft-deleted owner reads as unlinked
+    // even while its raw foreign key remains.
+    if (participant.tribePersonId) return participant;
+    const resolved = await resolveLoadedParticipant(participant, personIndex, { client });
+    if (!resolved) return participant;
+    const updated = await client.query(
+      `UPDATE beeper_participants SET tribe_person_id = $3, updated_at = NOW()
+       WHERE conversation_id = $1 AND source_user_id = $2
+         AND (tribe_person_id IS NULL OR EXISTS (
+           SELECT 1 FROM tribe_people tp
+           WHERE tp.id = beeper_participants.tribe_person_id AND tp.deleted = TRUE
+         ))
+       RETURNING tribe_person_id, updated_at`,
+      [conversationId, sourceUserId, resolved],
+    );
+    if (updated.rows[0]) return applyUpdatedCacheRow(participant, updated.rows[0]);
+    return getParticipant(conversationId, sourceUserId, { client });
+  }, { shared: true });
 }
 
 /**
- * Batch-upsert and auto-resolve all participants for one conversation in at most
- * four queries: one UNNEST upsert, one participant SELECT, one batched
- * `tribe_identities` lookup, and one batched cache UPDATE. Preserves
+ * With a sweep roster, the locked transaction uses at most four data queries:
+ * one UNNEST upsert, one participant SELECT, one batched identity lookup,
+ * and one batched cache UPDATE. Preserves
  * handle-COALESCE, soft-delete, and `tribe_identities` precedence semantics and
  * returns `{ participants, resolvedPersonIds }` so callers (`sweepChat`) can
  * pass `resolvedPersonIds` (`Map<sourceUserId, personId | null>`) straight into
@@ -367,15 +363,22 @@ export async function upsertConversationParticipants(conversationId, participant
     });
   }
 
-  const batch = [...deduped.values()];
+  return withParticipantLinkTransaction(
+    (client) => upsertParticipantBatch(client, conversationId, [...deduped.values()], personIndex),
+    { shared: true },
+  );
+}
+
+async function upsertParticipantBatch(client, conversationId, batch, personIndex) {
   const sourceUserIds = batch.map((p) => p.sourceUserId);
 
-  await ensureReady();
-  await query(
+  // Overlapping sweeps lock rows in the same order even if their rosters differ.
+  await client.query(
     `INSERT INTO beeper_participants (conversation_id, source_user_id, display_name, handle, observed_via)
      SELECT $1::uuid, t.source_user_id, t.display_name, t.handle, t.observed_via
        FROM unnest($2::text[], $3::text[], $4::text[], $5::text[])
          AS t(source_user_id, display_name, handle, observed_via)
+      ORDER BY t.source_user_id
      ${PARTICIPANT_UPSERT_CONFLICT_SQL}`,
     [
       conversationId,
@@ -389,7 +392,7 @@ export async function upsertConversationParticipants(conversationId, participant
     throw err;
   });
 
-  const loadedResult = await query(
+  const loadedResult = await client.query(
     `SELECT p.*, c.network, c.account_id, tp.deleted AS tribe_person_deleted
      FROM beeper_participants p
      JOIN beeper_conversations c ON c.id = p.conversation_id
@@ -412,7 +415,7 @@ export async function upsertConversationParticipants(conversationId, participant
     const beeperUserScope = beeperUserScopeFor(participant);
     if (beeperUserScope) scopes.push(beeperUserScope);
   }
-  const resolvedIdentities = await tribeIdentities.resolvePeopleByIdentities(scopes);
+  const resolvedIdentities = await tribeIdentities.resolvePeopleByIdentities(scopes, { client });
 
   let batchPersonIndex = personIndex;
   if (!batchPersonIndex) {
@@ -425,13 +428,13 @@ export async function upsertConversationParticipants(conversationId, participant
       if (beeperUserScope && resolvedIdentities.has(tribeIdentities.identityLookupKey(beeperUserScope))) return false;
       return true;
     });
-    if (needsPhoneFallback) batchPersonIndex = await loadRosterIndex();
+    if (needsPhoneFallback) batchPersonIndex = await loadRosterIndex({ client });
   }
 
   const resolvedPersonIds = new Map();
   const cacheUpdates = [];
   for (const participant of loaded) {
-    const resolved = await resolveLoadedParticipant(participant, batchPersonIndex, resolvedIdentities);
+    const resolved = await resolveLoadedParticipant(participant, batchPersonIndex, { resolvedIdentities, client });
     resolvedPersonIds.set(participant.sourceUserId, resolved);
     if (!participant.tribePersonId && resolved) {
       cacheUpdates.push({ sourceUserId: participant.sourceUserId, personId: resolved });
@@ -439,7 +442,7 @@ export async function upsertConversationParticipants(conversationId, participant
   }
 
   if (cacheUpdates.length > 0) {
-    const updated = await query(
+    const updated = await client.query(
       `UPDATE beeper_participants p
           SET tribe_person_id = u.tribe_person_id, updated_at = NOW()
          FROM unnest($2::text[], $3::uuid[]) AS u(source_user_id, tribe_person_id)
@@ -542,13 +545,13 @@ async function clearIdentityCaches(personId, scope, client) {
   return clearDisplacedParticipantCaches(personId, scope, client);
 }
 
-async function withParticipantLinkTransaction(operation) {
+async function withParticipantLinkTransaction(operation, { shared = false } = {}) {
   await ensureReady();
   return withTransaction(async (client) => {
-    // A handle can be shared across conversations and accounts. Serialize
-    // explicit link edits before locking any rows so they cannot lock each
-    // other's cache rows or both report a fresh claim on the same identity.
-    await client.query('SELECT pg_advisory_xact_lock(hashtext($1))', ['portos:beeper-tribe-links']);
+    // Take the lock before any participant rows. Sweeps can resolve claims
+    // together, but an edit must see every cache filled using the old owner.
+    const lock = shared ? 'pg_advisory_xact_lock_shared' : 'pg_advisory_xact_lock';
+    await client.query(`SELECT ${lock}(hashtext($1))`, ['portos:beeper-tribe-links']);
     return operation(client);
   });
 }
