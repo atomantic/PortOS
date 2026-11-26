@@ -7,7 +7,7 @@
 import { createRequire } from 'node:module';
 import { createHash } from 'node:crypto';
 import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
-import { tmpdir } from 'node:os';
+import { homedir, tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 
@@ -123,6 +123,20 @@ beforeEach(() => {
 });
 
 describe('runSync WAL snapshot', () => {
+  it('redacts the home directory from missing Signal config errors and logs', async () => {
+    const previous = process.env.SIGNAL_CONFIG_PATH;
+    process.env.SIGNAL_CONFIG_PATH = join(homedir(), 'Library', 'Application Support', 'Signal', 'missing-config.json');
+    const errorLog = vi.spyOn(console, 'error').mockImplementation(() => {});
+    try {
+      const result = await runSync();
+      expect(result.error).toContain('~/Library/Application Support/Signal/missing-config.json');
+      expect(result.error).not.toContain(homedir());
+      expect(errorLog.mock.calls.flat().join('\n')).not.toContain(homedir());
+    } finally {
+      process.env.SIGNAL_CONFIG_PATH = previous;
+    }
+  });
+
   it('checks setup against the WAL view without reading session data or writing the source', async () => {
     const wal = `${dbPath}-wal`;
     const before = { db: digest(dbPath), wal: digest(wal) };

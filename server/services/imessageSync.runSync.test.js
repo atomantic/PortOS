@@ -13,6 +13,7 @@
  */
 import { describe, it, expect, vi, beforeAll, afterAll, beforeEach } from 'vitest';
 import { join } from 'path';
+import { homedir } from 'os';
 import { rmSync, readFileSync, writeFileSync, existsSync } from 'fs';
 import { DatabaseSync } from 'node:sqlite';
 
@@ -218,6 +219,21 @@ describe('privacy lock and blocklist fail-closed contract (#15171)', () => {
 });
 
 describe('checkSetup error classification', () => {
+  it('redacts the home directory from setup and sync errors and logs', async () => {
+    const previous = process.env.IMESSAGE_CHAT_DB;
+    process.env.IMESSAGE_CHAT_DB = join(homedir(), 'Library', 'Messages', 'missing-chat.db');
+    const setup = await checkSetup();
+    expect(setup.dbPath).toContain('~/Library/Messages/missing-chat.db');
+    expect(setup.error).not.toContain(homedir());
+    expect(setup.remediation).not.toContain(homedir());
+
+    const errorLog = vi.spyOn(console, 'error').mockImplementation(() => {});
+    const sync = await runSync();
+    expect(sync.error).not.toContain(homedir());
+    expect(errorLog.mock.calls.flat().join('\n')).not.toContain(homedir());
+    process.env.IMESSAGE_CHAT_DB = previous;
+  });
+
   it('does NOT claim Full Disk Access for a nonexistent chat.db (ENOENT)', async () => {
     const prev = process.env.IMESSAGE_CHAT_DB;
     process.env.IMESSAGE_CHAT_DB = join(dataRoot, 'does-not-exist', 'chat.db');
