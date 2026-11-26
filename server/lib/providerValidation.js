@@ -146,6 +146,13 @@ export const harnessRefreshSchema = z.object({
   runtime: z.string().trim().min(1).max(64),
 });
 
+export const harnessListQuerySchema = z.object({ fresh: z.string().optional() });
+export const harnessReviewUpdateSchema = harnessRefreshSchema.extend({
+  expectedVersion: z.string().max(100).regex(/^\d+\.\d+\.\d+(?:[-+][0-9A-Za-z.-]+)?$/),
+  candidateVersion: z.string().max(100).regex(/^\d+\.\d+\.\d+(?:[-+][0-9A-Za-z.-]+)?$/),
+  ticket: z.string().uuid(),
+});
+
 export const privateCredentialParamsSchema = z.object({ id: z.enum(CREDENTIALS.filter(entry => entry.privateStore).map(entry => entry.id)) });
 // Large enough for a Google Cloud service account JSON key (the Google credential).
 const privateCredentialInputSchema = z.object({ value: z.string().trim().max(GOOGLE_CREDENTIAL_MAX_LENGTH) }).strict();

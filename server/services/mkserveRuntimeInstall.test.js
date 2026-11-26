@@ -49,7 +49,7 @@ describe('mkserve pinned installation', () => {
       await writeFile(output, 'not a trusted archive');
       return { success: true };
     });
-    await expect(api.installPinnedMkserve(() => {}, await api.readMkserveInstall())).rejects.toThrow('failed SHA-256 verification');
+    await expect(api.installPinnedMkserve(() => {}, await api.readMkserveInstall())).rejects.toMatchObject({ status: 502, code: 'MKSERVE_INSTALL_FAILED', message: expect.stringContaining('failed SHA-256 verification') });
     expect(runStreamingCommand).toHaveBeenCalledTimes(1);
     await expect(api.readMkserveInstall()).resolves.toMatchObject(previousWithoutFiles());
     const paths = api.mkserveInstallPaths(previous.bundle, previous.revision);

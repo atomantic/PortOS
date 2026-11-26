@@ -90,7 +90,7 @@ export async function readMkserveInstall() {
   return { ...paths, bundle: record.bundle, version: record.version, revision: record.revision };
 }
 
-const runFailure = (message) => new ServerError(message, { status: 500, code: 'MKSERVE_INSTALL_FAILED' });
+const runFailure = (message) => new ServerError(message, { status: 502, code: 'MKSERVE_INSTALL_FAILED' });
 const cleanEnv = () => ({ HOME: homedir(), PATH: '/usr/bin:/bin:/usr/sbin:/sbin', PYTHONNOUSERSITE: '1' });
 export function mkserveLaunchEnvironment() {
   // Clear the environment inside the PM2-owned process, not merely the PM2
