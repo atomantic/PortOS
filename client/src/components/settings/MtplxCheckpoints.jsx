@@ -33,12 +33,19 @@ const dangerBtn = `${btn} bg-port-error/10 hover:bg-port-error/20 text-port-erro
  * (`resolving`, `verifying`) there is no total, which is exactly the shared
  * bar's `percent={null}` indeterminate case rather than a misleading 0%.
  */
-function DownloadProgress({ download }) {
+function DownloadProgress({ download, onCancel, cancelling }) {
   const { received = 0, total = 0, message } = download;
   const pct = total > 0 ? (received / total) * 100 : null;
   return (
     <div className="space-y-1">
-      <ProgressBar percent={pct} track="border" label={`Downloading ${download.model || 'MTPLX default checkpoint'}`} />
+      <div className="flex items-center gap-2">
+        <div className="min-w-0 flex-1">
+          <ProgressBar percent={pct} track="border" label={`Downloading ${download.model || 'MTPLX default checkpoint'}`} />
+        </div>
+        <button type="button" className={neutralBtn} onClick={onCancel} disabled={cancelling}>
+          {cancelling ? 'Cancelling…' : 'Cancel'}
+        </button>
+      </div>
       <p className="text-[11px] text-gray-500">
         {pct === null
           ? (message || 'Downloading…')
@@ -49,6 +56,7 @@ function DownloadProgress({ download }) {
 }
 
 export default function MtplxCheckpoints({
+  visible,
   cached,
   cacheError,
   download,
@@ -56,6 +64,8 @@ export default function MtplxCheckpoints({
   actionInProgress,
   onSearch,
   onPull,
+  onCancelPull,
+  cancellingPull,
   onRemove,
 }) {
   const [query, setQuery] = useState('');
@@ -81,19 +91,14 @@ export default function MtplxCheckpoints({
       .finally(() => setSearching(false));
   }, [onSearch]);
 
-  // Load upstream's default listing once, so an empty cache lands on something
-  // to click instead of an empty box with a search field. One HTTP call to
-  // Hugging Face — no weights, no model load.
-  //
-  // Guarded by a ref rather than by `runSearch`'s identity: the parent re-renders
-  // on every status poll, and a dep-driven effect would re-hit Hugging Face on
-  // each one.
+  // Load the catalog on first reveal. The ref keeps status refreshes and tab
+  // switches from repeating the request.
   const didInitialSearch = useRef(false);
   useEffect(() => {
-    if (didInitialSearch.current) return;
+    if (!visible || didInitialSearch.current) return;
     didInitialSearch.current = true;
     runSearch('');
-  }, [runSearch]);
+  }, [visible, runSearch]);
 
   const pulling = Boolean(download);
 
@@ -176,7 +181,7 @@ export default function MtplxCheckpoints({
           <p className="text-xs text-gray-300 truncate">
             Downloading <code className="text-port-accent">{download.model || 'MTPLX default checkpoint'}</code>
           </p>
-          <DownloadProgress download={download} />
+          <DownloadProgress download={download} onCancel={onCancelPull} cancelling={cancellingPull} />
           <p className="text-[11px] text-gray-500">This runs in the background — leaving this page won't cancel it.</p>
         </div>
       )}

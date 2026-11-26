@@ -27,7 +27,7 @@ import { syncRuntimeProviderModels } from '../services/localRuntimeProviderSync.
 import { startMtplxServer, stopMtplxServer, waitForMtplxReady } from '../services/mtplxServerManager.js';
 import { startSlotstreamServer, stopSlotstreamServer, waitForSlotstreamReady } from '../services/slotstreamServerManager.js';
 import { startLlamaServer, stopLlamaServer, waitForLlamaServerReady } from '../services/llamaServerManager.js';
-import { pullMtplxModel, removeMtplxModel } from '../services/mtplxModelManager.js';
+import { cancelMtplxModelPull, pullMtplxModel, removeMtplxModel } from '../services/mtplxModelManager.js';
 import { downloadSlotstreamModel } from '../services/slotstreamModelManager.js';
 
 const getModelAbuseGuardStatus = vi.fn(async () => ({ ready: false, modelCached: false, runtimeReady: false }));
@@ -183,6 +183,7 @@ vi.mock('../services/mtplxModelManager.js', async (importOriginal) => ({
   ...(await importOriginal()),
   searchMtplxCatalog: vi.fn(),
   pullMtplxModel: vi.fn(),
+  cancelMtplxModelPull: vi.fn(),
   previewMtplxPull: vi.fn(),
   removeMtplxModel: vi.fn(),
 }));
@@ -1503,6 +1504,18 @@ describe('managed runtime provider-model refresh after a user lifecycle action',
 
     expect(response.status).toBe(status);
     expect(response.body).toMatchObject({ error: 'Checkpoint unavailable', code });
+    expect(syncRuntimeProviderModels).not.toHaveBeenCalled();
+  });
+
+  it('acknowledges an MTPLX cancel and returns the cancelled pull without refreshing provider models', async () => {
+    cancelMtplxModelPull.mockReturnValueOnce(true).mockReturnValueOnce(false);
+    pullMtplxModel.mockResolvedValueOnce({ success: false, cancelled: true, model: MODEL });
+
+    expect((await post('mtplx/models/pull/cancel')).body).toEqual({ success: true, cancelled: true });
+    expect((await post('mtplx/models/pull/cancel')).body).toEqual({ success: true, cancelled: false });
+    const response = await post('mtplx/models/pull', { model: MODEL });
+    expect(response.status).toBe(200);
+    expect(response.body).toEqual({ success: false, cancelled: true, model: MODEL });
     expect(syncRuntimeProviderModels).not.toHaveBeenCalled();
   });
 

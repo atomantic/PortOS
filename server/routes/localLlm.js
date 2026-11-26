@@ -71,7 +71,7 @@ import { installSplashRuntime, saveSplashContextWindow, startSplashServer, stopS
 import { getMkserveRuntimeStatus, installMkserve, startMkserveServer, stopMkserveServer, uninstallMkserve } from '../services/mkserveRuntimeManager.js'
 import { getSlotstreamServerStatus, startSlotstreamServer, stopSlotstreamServer, installSlotstream, uninstallSlotstream, waitForSlotstreamReady } from '../services/slotstreamServerManager.js'
 import { cancelSlotstreamModelDownload, downloadSlotstreamModel, previewSlotstreamDownload } from '../services/slotstreamModelManager.js'
-import { searchMtplxCatalog, pullMtplxModel, previewMtplxPull, removeMtplxModel } from '../services/mtplxModelManager.js'
+import { searchMtplxCatalog, pullMtplxModel, cancelMtplxModelPull, previewMtplxPull, removeMtplxModel } from '../services/mtplxModelManager.js'
 import { saveProcessList } from '../services/pm2.js'
 import { getSpecDecodePresetStatus, downloadSpecDecodeModel, previewSpecDecodeDownload, cancelSpecDecodeModelDownload, removeSpecDecodeModel } from '../services/specDecodeModels.js'
 import { SPEC_TYPE_SUGGESTIONS } from '../lib/specDecodePresets.js'
@@ -1191,6 +1191,7 @@ router.post('/mtplx/models/pull', asyncHandler(async (req, res) => {
   const { model } = validateRequest(localLlmMtplxPullSchema, req.body)
   const io = req.app.get('io')
   const result = await pullMtplxModel({ model, onProgress: (frame) => emitToOperatorsOn(io, 'mtplx:download', frame) })
+  if (result.cancelled) return res.json(result)
   if (!result.success) {
     throw new ServerError(result.error || 'MTPLX checkpoint pull failed', { status: 502, code: 'MTPLX_PULL_FAILED' })
   }
@@ -1200,6 +1201,11 @@ router.post('/mtplx/models/pull', asyncHandler(async (req, res) => {
   res.json(result)
   refreshRuntimeModels(req, 'mtplx')
 }))
+
+// POST /api/local-llm/mtplx/models/pull/cancel — stop the active runtime-card pull.
+router.post('/mtplx/models/pull/cancel', (_req, res) => {
+  res.json({ success: true, cancelled: cancelMtplxModelPull() })
+})
 
 // POST /api/local-llm/mtplx/models/remove — delete one checkpoint from the cache
 router.post('/mtplx/models/remove', asyncHandler(async (req, res) => {
