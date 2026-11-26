@@ -64,11 +64,11 @@ async function approveBoardFixture() {
 
 describe('POST /:id/scenes/:sceneId/split', () => {
   it('splits an over-long performance shot at the lyric pauses, keeping the original id, takes and neighbours', async () => {
-    const before = await projects.addProjectScene(project.id, { label: 'Intro', startSec: 0, endSec: 30 });
-    const shot = await projects.addProjectScene(project.id, {
+    const { scenes: [before] } = await projects.addProjectScenes(project.id, [{ label: 'Intro', startSec: 0, endSec: 30 }]);
+    const { scenes: [shot] } = await projects.addProjectScenes(project.id, [{
       label: 'Verse', prompt: 'singer at the mic', startSec: 30, endSec: 86, shotMode: 'performance', performanceSpeaker: 'Example Singer', loop: false,
-    });
-    const after = await projects.addProjectScene(project.id, { label: 'Outro', startSec: 86, endSec: 100 });
+    }]);
+    const { scenes: [after] } = await projects.addProjectScenes(project.id, [{ label: 'Outro', startSec: 86, endSec: 100 }]);
     await projects.updateScene(project.id, shot.sceneId, { referenceImageId: 'singer.png', videoHistoryId: 'clip-whole-verse' });
 
     // No backend in the body: the project's pinned fal lane bounds the take.
@@ -95,7 +95,7 @@ describe('POST /:id/scenes/:sceneId/split', () => {
   });
 
   it('splits a Grok cutaway at its 15-second clip limit when the director renders on Grok', async () => {
-    const shot = await projects.addProjectScene(project.id, { label: 'Bridge', startSec: 30, endSec: 70 });
+    const { scenes: [shot] } = await projects.addProjectScenes(project.id, [{ label: 'Bridge', startSec: 30, endSec: 70 }]);
     await projects.updateScene(project.id, shot.sceneId, { videoHistoryId: 'clip-bridge' });
     const res = await split(shot.sceneId, { backend: 'grok' });
     expect(res.status).toBe(200);
@@ -110,15 +110,15 @@ describe('POST /:id/scenes/:sceneId/split', () => {
 
   it('gives a sung line held across an unavoidable cut to both pieces', async () => {
     await projects.updateProject(project.id, { lyricCues: [{ text: 'held note', startSec: 30, endSec: 50 }] });
-    const shot = await projects.addProjectScene(project.id, { startSec: 30, endSec: 50 });
+    const { scenes: [shot] } = await projects.addProjectScenes(project.id, [{ startSec: 30, endSec: 50 }]);
     const res = await split(shot.sceneId, { backend: 'grok' });
     expect(res.body.scenes.map((p) => [p.startSec, p.endSec, p.lyricText])).toEqual([[30, 40, 'held note'], [40, 50, 'held note']]);
   });
 
   it('refuses a shot that fits one take, a lane with no per-take limit, a bad backend and an unknown scene', async () => {
-    const fits = await projects.addProjectScene(project.id, { startSec: 30, endSec: 40, shotMode: 'performance' });
+    const { scenes: [fits] } = await projects.addProjectScenes(project.id, [{ startSec: 30, endSec: 40, shotMode: 'performance' }]);
     expect((await split(fits.sceneId)).body.code).toBe('MUSIC_VIDEO_SPLIT_NOT_NEEDED');
-    const cutaway = await projects.addProjectScene(project.id, { startSec: 0, endSec: 60 });
+    const { scenes: [cutaway] } = await projects.addProjectScenes(project.id, [{ startSec: 0, endSec: 60 }]);
     const unbounded = await split(cutaway.sceneId);
     expect(unbounded.status).toBe(400);
     expect(unbounded.body.code).toBe('MUSIC_VIDEO_SPLIT_NOT_NEEDED');
@@ -130,10 +130,10 @@ describe('POST /:id/scenes/:sceneId/split', () => {
   // Uniquely catches a cut at a chosen time losing the director's still locks, or a new mid-song shot landing at the end of the board.
   it('cuts a shot in two at a chosen time, keeping its still locked on both pieces and the board in song order', async () => {
     const { shotLocks } = await import('../services/musicVideo/productionReview.js');
-    const intro = await projects.addProjectScene(project.id, { label: 'Intro', startSec: 0, endSec: 10, prompt: 'Wide room' });
-    const outro = await projects.addProjectScene(project.id, { label: 'Outro', startSec: 20, endSec: 30, prompt: 'Door' });
+    const { scenes: [intro] } = await projects.addProjectScenes(project.id, [{ label: 'Intro', startSec: 0, endSec: 10, prompt: 'Wide room' }]);
+    const { scenes: [outro] } = await projects.addProjectScenes(project.id, [{ label: 'Outro', startSec: 20, endSec: 30, prompt: 'Door' }]);
     // Added after the outro but timed between the two: it goes in between.
-    const middle = await projects.addProjectScene(project.id, { label: 'Middle', startSec: 10, endSec: 20, prompt: 'Close-up' });
+    const { scenes: [middle] } = await projects.addProjectScenes(project.id, [{ label: 'Middle', startSec: 10, endSec: 20, prompt: 'Close-up' }]);
     expect((await projects.getProject(project.id)).scenes.map((s) => [s.sceneId, s.order])).toEqual([[intro.sceneId, 0], [middle.sceneId, 1], [outro.sceneId, 2]]);
     await projects.updateScene(project.id, middle.sceneId, { referenceImageId: 'singer.png' });
     // A board approved before lock removal reads every shot it covers as locked.
@@ -158,7 +158,7 @@ describe('POST /:id/scenes/:sceneId/split', () => {
     }
 
     // A shot added after the split, mid-song, keeps every lock in place.
-    const insert = await projects.addProjectScene(project.id, { label: 'Insert', startSec: 5, endSec: 6 });
+    const { scenes: [insert] } = await projects.addProjectScenes(project.id, [{ label: 'Insert', startSec: 5, endSec: 6 }]);
     const stored = await projects.getProject(project.id);
     expect(stored.scenes.map((s) => s.sceneId)).toEqual([intro.sceneId, insert.sceneId, middle.sceneId, second.sceneId, outro.sceneId]);
     expect(stored.scenes.map((s) => s.order)).toEqual([0, 1, 2, 3, 4]);
@@ -168,7 +168,7 @@ describe('POST /:id/scenes/:sceneId/split', () => {
   });
 
   it('opens the new piece when its borrowed still is replaced, while an original shot reads changed', async () => {
-    const shot = await projects.addProjectScene(project.id, { startSec: 0, endSec: 10 });
+    const { scenes: [shot] } = await projects.addProjectScenes(project.id, [{ startSec: 0, endSec: 10 }]);
     await projects.updateScene(project.id, shot.sceneId, { referenceImageId: 'singer.png' });
     await approveBoardFixture();
     const cut = await split(shot.sceneId, { atSec: 5 });
@@ -185,7 +185,7 @@ describe('POST /:id/scenes/:sceneId/split', () => {
   });
 
   it('compacts persisted legacy board-derived locks on the next write while retaining their lock states', async () => {
-    const shot = await projects.addProjectScene(project.id, { startSec: 0, endSec: 10, prompt: 'Original direction' });
+    const { scenes: [shot] } = await projects.addProjectScenes(project.id, [{ startSec: 0, endSec: 10, prompt: 'Original direction' }]);
     await approveBoardFixture();
     const cut = await split(shot.sceneId, { atSec: 5 });
     expect(cut.status).toBe(200);

@@ -57,7 +57,7 @@ beforeEach(async () => {
   history = [];
   writeFileSync(join(ROOT(), 'video-history.json'), '[]');
   project = await projects.createProject({ name: 'Example Video' });
-  scene = await projects.addProjectScene(project.id, { prompt: 'a lighthouse at dusk' });
+  ({ scenes: [scene] } = await projects.addProjectScenes(project.id, [{ prompt: 'a lighthouse at dusk' }]));
 });
 afterAll(cleanupTempDataRoots);
 

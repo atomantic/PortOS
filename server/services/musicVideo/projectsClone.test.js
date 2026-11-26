@@ -23,7 +23,7 @@ beforeEach(() => vi.clearAllMocks());
 
 async function sourceProject({ film = true } = {}) {
   const source = await projects.createProject({ name: 'Example film' });
-  const scene = await projects.addProjectScene(source.id, { prompt: 'Example shot' });
+  const { scenes: [scene] } = await projects.addProjectScenes(source.id, [{ prompt: 'Example shot' }]);
   await file.mutateProjectRecord(source.id, current => ({ project: { ...current, blender: {
     settings: { fps: 24 }, sceneMap: { example: scene.sceneId }, syncedAt: '2026-01-01T00:00:00.000Z', manifestHash: 'example-manifest',
   } } }));

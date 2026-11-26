@@ -109,7 +109,7 @@ async function approveSyntheticStoryboard(id) {
     sections: [{ startSec: 0, endSec: 20, label: 'Chorus' }] });
   await projects.updateProject(id, { lyricCues: [{ id: 'line', text: 'Rain on glass', startSec: 1, endSec: 4,
     words: [{ w: 'Rain', conf: 'matched', startSec: 1, endSec: 2 }, { w: 'on', conf: 'matched', startSec: 2, endSec: 3 }, { w: 'glass', conf: 'matched', startSec: 3, endSec: 4 }] }] });
-  const scene = await projects.addProjectScene(id, { label: 'Chorus', startSec: 0, endSec: 20, prompt: 'Paper figure in the rain' });
+  const { scenes: [scene] } = await projects.addProjectScenes(id, [{ label: 'Chorus', startSec: 0, endSec: 20, prompt: 'Paper figure in the rain' }]);
   const { saveGeneratedDevArtifact } = await import('../services/musicVideo/devArtifactService.js');
   const { artifact } = await saveGeneratedDevArtifact(id, { kind: 'cast-sets', title: 'Synthetic visual guide', html: '<html><body>Paper figure, painted rain</body></html>' });
   const base = `/api/music-video/${id}/production-review`;

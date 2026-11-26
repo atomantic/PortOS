@@ -5,10 +5,8 @@
  * storyboard in step (storyboards/followShots.js), pacing recuts and the
  * user-started plate check.
  *
- * These sit above the project store (projects.js) and import it downward. A
- * name shared with projects.js (updateProject, updateScene, selectSceneTake…)
- * is the edit-result form of that store write; the store keeps the plain one
- * for every other caller.
+ * The board writes through the project store (projects.js) and presents the
+ * resulting changes for the editing tab.
  */
 
 import { randomUUID } from 'crypto';

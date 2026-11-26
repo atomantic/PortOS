@@ -30,6 +30,7 @@ vi.mock('../../lib/fileUtils.js', async (importOriginal) => {
 });
 
 const file = await import('./projectsFile.js');
+const { addScenes, applySceneUpdate, removeScene, reorderScenes } = await import('./projectsLogic.js');
 const cj = await import('../../lib/conflictJournal.js');
 
 function reset() {
@@ -79,26 +80,26 @@ describe('projectsFile backend', () => {
 
   it('runs the full scene-board lifecycle', async () => {
     const p = await file.createProject({ name: 'A' });
-    const s1 = await file.addProjectScene(p.id, { prompt: 'one' });
-    const s2 = await file.addProjectScene(p.id, { prompt: 'two' });
+    const { scenes: [s1] } = await file.mutateProjectRecord(p.id, current => addScenes(current, [{ prompt: 'one' }]));
+    const { scenes: [s2] } = await file.mutateProjectRecord(p.id, current => addScenes(current, [{ prompt: 'two' }]));
     expect(s1.order).toBe(0);
     expect(s2.order).toBe(1);
 
-    const upd = await file.updateScene(p.id, s1.sceneId, { prompt: 'one-edited' });
+    const { updated: upd } = await file.mutateProjectRecord(p.id, current => applySceneUpdate(current, s1.sceneId, { prompt: 'one-edited' }));
     expect(upd.prompt).toBe('one-edited');
 
-    let proj = await file.reorderProjectScenes(p.id, [s2.sceneId, s1.sceneId]);
-    expect(proj.scenes.map((s) => s.sceneId)).toEqual([s2.sceneId, s1.sceneId]);
+    const { project: reordered } = await file.mutateProjectRecord(p.id, current => ({ project: reorderScenes(current, [s2.sceneId, s1.sceneId]) }));
+    expect(reordered.scenes.map((s) => s.sceneId)).toEqual([s2.sceneId, s1.sceneId]);
 
-    proj = await file.deleteScene(p.id, s2.sceneId);
+    const { project: proj } = await file.mutateProjectRecord(p.id, current => ({ project: removeScene(current, s2.sceneId) }));
     expect(proj.scenes).toHaveLength(1);
     expect(proj.scenes[0].order).toBe(0);
   });
 
   it('repairs scenes stored out of startSec order when a project loads (#16117)', async () => {
     const p = await file.createProject({ name: 'A' });
-    const a = await file.addProjectScene(p.id, { prompt: 'a', startSec: 0, endSec: 4 });
-    const b = await file.addProjectScene(p.id, { prompt: 'b', startSec: 4, endSec: 8 });
+    const { scenes: [a] } = await file.mutateProjectRecord(p.id, current => addScenes(current, [{ prompt: 'a', startSec: 0, endSec: 4 }]));
+    const { scenes: [b] } = await file.mutateProjectRecord(p.id, current => addScenes(current, [{ prompt: 'b', startSec: 4, endSec: 8 }]));
     const all = await file.loadAll();
     all[0].scenes = [{ ...all[0].scenes[1], order: 0 }, { ...all[0].scenes[0], order: 1 }];
     writeFileSync(join(TEST_DATA_ROOT, 'music-video-projects.json'), JSON.stringify(all));
@@ -118,7 +119,7 @@ describe('projectsFile backend', () => {
     const p = await file.createProject({ name: 'A' });
     await file.deleteProject(p.id);
     await expect(file.updateProject(p.id, { name: 'X' })).rejects.toThrow(/not found/i);
-    await expect(file.addProjectScene(p.id, { prompt: 'x' })).rejects.toThrow(/not found/i);
+    await expect(file.mutateProjectRecord(p.id, current => addScenes(current, [{ prompt: 'x' }]))).rejects.toThrow(/not found/i);
   });
 });
 
@@ -166,10 +167,10 @@ describe('projectsFile federation (#1770)', () => {
     expect(edited.lyricCues[2].startSec).toBe(9);
 
     // A new scene never loops by default; planned shot fields persist.
-    await file.addProjectScenes(p.id, [
+    await file.mutateProjectRecord(p.id, current => addScenes(current, [
       { label: 'Verse · 1/2', sectionLabel: 'Verse', sectionIndex: 0, startSec: 0, endSec: 4, beatAligned: true, lyricText: 'first line' },
       { label: 'Verse · 2/2', sectionLabel: 'Verse', sectionIndex: 0, startSec: 4, endSec: 8, beatAligned: true, loop: true, visualIntent: 'hold' },
-    ]);
+    ]));
     const withScenes = await file.getProject(p.id);
     expect(withScenes.scenes.map((s) => [s.loop, s.sectionIndex, s.lyricText, s.visualIntent]))
       .toEqual([[false, 0, 'first line', null], [true, 0, null, 'hold']]);
@@ -381,8 +382,8 @@ describe('projectsFile federation (#1770)', () => {
 
 it('roundtrips asset-bound plate evidence through the real serialized project store and retains it on selection', async () => {
   const project = await file.createProject({ name: 'Example Video' });
-  const scene = await file.addProjectScene(project.id, { startSec: 0, endSec: 4 });
-  await file.updateScene(project.id, scene.sceneId, { referenceImageId: 'example.png' });
+  const { scenes: [scene] } = await file.mutateProjectRecord(project.id, current => addScenes(current, [{ startSec: 0, endSec: 4 }]));
+  await file.mutateProjectRecord(project.id, current => applySceneUpdate(current, scene.sceneId, { referenceImageId: 'example.png' }));
   await file.mutateProjectRecord(project.id, (current) => {
     const live = { ...current.scenes[0], direction: { actionContract: { version: 1, purpose: 'Two people greet', activeSpeaker: 'Person A' } } };
     const evidence = plateReviewEvidence(live, 'example.png', 'run-example', JSON.stringify({ checks: plateRequirements(live).map(({ id }) => ({ id, status: 'pass', note: 'Visible' })) }));
@@ -391,7 +392,7 @@ it('roundtrips asset-bound plate evidence through the real serialized project st
   const read = await file.getProject(project.id);
   expect(selectedPlatePasses(read.scenes[0], 'run-example')).toBe(true);
   expect(read.scenes[0].takes[0].plateEvidence.assetId).toBe('example.png');
-  await file.updateScene(project.id, scene.sceneId, { referenceImageId: 'changed.png' });
+  await file.mutateProjectRecord(project.id, current => applySceneUpdate(current, scene.sceneId, { referenceImageId: 'changed.png' }));
   const changed = await file.getProject(project.id);
   expect(selectedPlatePasses(changed.scenes[0], 'run-example')).toBe(false);
   expect(changed.scenes[0].takes.find((take) => take.assetId === 'example.png').plateEvidence.verdict).toBe('pass');
@@ -401,7 +402,7 @@ describe('editable code revisions and footage variants', () => {
   it('keeps scene-based code addressable in a revision and isolates subsequent edits', async () => {
     const { prepareCodeRender } = await import('./codeRender.js');
     const source = await file.createProject({ name: 'Example Animation', trackId: 'example-track' });
-    const scene = await file.addProjectScene(source.id, { startSec: 0, endSec: 4 });
+    const { scenes: [scene] } = await file.mutateProjectRecord(source.id, current => addScenes(current, [{ startSec: 0, endSec: 4 }]));
     const originalSource = 'function render(ctx) { ctx.fillRect(0, 0, 10, 10); }';
     await file.updateProject(source.id, { composition: { mode: 'code',
       codeVideo: { sections: [{ id: scene.sceneId, source: originalSource }] },
@@ -432,8 +433,8 @@ describe('editable code revisions and footage variants', () => {
       lyricCues: [{ text: 'Example lyric', startSec: 0, endSec: 4 }],
     });
     await file.setProjectAnalysis(source.id, { durationSec: 4, bpm: 120, beats: [0, 0.5], downbeats: [0], sections: [{ label: 'Verse', startSec: 0, endSec: 4 }] });
-    const scene = await file.addProjectScene(source.id, { startSec: 0, endSec: 4, visualLayer: 'card', prompt: 'Journey home' });
-    await file.updateScene(source.id, scene.sceneId, { referenceImageId: 'source.png', videoHistoryId: 'source-video' });
+    const { scenes: [scene] } = await file.mutateProjectRecord(source.id, current => addScenes(current, [{ startSec: 0, endSec: 4, visualLayer: 'card', prompt: 'Journey home' }]));
+    await file.mutateProjectRecord(source.id, current => applySceneUpdate(current, scene.sceneId, { referenceImageId: 'source.png', videoHistoryId: 'source-video' }));
     await file.mutateProjectRecord(source.id, (project) => ({ project: { ...project,
       composition: { ...project.composition, document: { directory: `music-video/${source.id}/composition/example-version`, entry: 'index.html' } },
       castAndSets: { status: 'approved', direction: { medium: 'procedural' } },

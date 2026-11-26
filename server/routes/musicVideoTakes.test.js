@@ -104,8 +104,9 @@ beforeEach(async () => {
   rmSync(join(ROOT(), 'images'), { recursive: true, force: true });
   seedVideoHistory([]);
   project = await projects.createProject({ name: 'Example Video' });
-  sceneA = await projects.addProjectScene(project.id, { prompt: 'a lighthouse at dusk', framePrompt: 'lighthouse still' });
-  sceneB = await projects.addProjectScene(project.id, { prompt: 'waves crash' });
+  ({ scenes: [sceneA, sceneB] } = await projects.addProjectScenes(project.id, [
+    { prompt: 'a lighthouse at dusk', framePrompt: 'lighthouse still' }, { prompt: 'waves crash' },
+  ]));
 });
 afterAll(cleanupTempDataRoots);
 
@@ -977,7 +978,7 @@ describe('the shot asset manager', () => {
     // Nor a still another video's shot uses, though it sits in this video's collection.
     seedImage('shared.png');
     const other = await projects.createProject({ name: 'Second Video' });
-    const otherScene = await projects.addProjectScene(other.id, { prompt: 'an empty stage' });
+    const { scenes: [otherScene] } = await projects.addProjectScenes(other.id, [{ prompt: 'an empty stage' }]);
     await request(app).post(`/api/music-video/${other.id}/scenes/${otherScene.sceneId}/takes`).send({ kind: 'image', assetId: 'shared.png', source: 'generated' });
     const { fileMusicVideoMedia } = await import('../services/musicVideo/mediaPool.js');
     await fileMusicVideoMedia(await reload(), [{ kind: 'image', ref: 'shared.png' }]);
@@ -1102,7 +1103,7 @@ describe('pool deletion and selection admission', () => {
     let take = candidate.body.take;
     if (anotherProject) {
       owner = await projects.createProject({ name: 'Other synthetic project' });
-      shot = await projects.addProjectScene(owner.id, { prompt: 'Another shot' });
+      ({ scenes: [shot] } = await projects.addProjectScenes(owner.id, [{ prompt: 'Another shot' }]));
       await projects.appendSceneTakes(owner.id, shot.sceneId, [{ kind, assetId: keep }]);
       take = (await projects.appendSceneTakes(owner.id, shot.sceneId, [{ kind, assetId }])).appended[0];
     }
@@ -1215,7 +1216,7 @@ describe('media from an earlier draft', () => {
     seedVideoHistory([{ id: 'draft-clip', filename: 'draft-clip.mp4', prompt: 'draft motion' }]);
     await addTake(sceneA.sceneId, { kind: 'image', assetId: 'mine.png', source: 'generated' });
     const draft = await projects.createProject({ name: 'Example Draft' });
-    const draftShot = await projects.addProjectScene(draft.id, { prompt: 'an early idea' });
+    const { scenes: [draftShot] } = await projects.addProjectScenes(draft.id, [{ prompt: 'an early idea' }]);
     const draftTake = (body) => request(app).post(`/api/music-video/${draft.id}/scenes/${draftShot.sceneId}/takes`).send(body);
     await draftTake({ kind: 'image', assetId: 'draft-still.png', source: 'generated' });
     await draftTake({ kind: 'image', assetId: 'draft-floor.png', source: 'generated' });

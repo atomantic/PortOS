@@ -36,9 +36,9 @@ const preview = () => request(app).get(endpoint());
 const apply = (revision) => request(app).post(endpoint()).send({ revision });
 
 it('previews and re-cuts every long shot, preferring a lyric start to a downbeat and preserving first-piece media', async () => {
-  const first = await projects.addProjectScene(project.id, { label: 'Verse', prompt: 'Walk through the room', framePrompt: 'The room', startSec: 0, endSec: 8 });
-  const second = await projects.addProjectScene(project.id, { label: 'Chorus', prompt: 'Sing', startSec: 8, endSec: 13, shotMode: 'performance' });
-  const untimed = await projects.addProjectScene(project.id, { label: 'Untimed', prompt: 'Unchanged' });
+  const { scenes: [first] } = await projects.addProjectScenes(project.id, [{ label: 'Verse', prompt: 'Walk through the room', framePrompt: 'The room', startSec: 0, endSec: 8 }]);
+  const { scenes: [second] } = await projects.addProjectScenes(project.id, [{ label: 'Chorus', prompt: 'Sing', startSec: 8, endSec: 13, shotMode: 'performance' }]);
+  const { scenes: [untimed] } = await projects.addProjectScenes(project.id, [{ label: 'Untimed', prompt: 'Unchanged' }]);
   for (const scene of [first, second]) await projects.updateScene(project.id, scene.sceneId, { referenceImageId: 'person.png', videoHistoryId: 'clip-parent' });
   const masterPath = join(ROOT(), 'song.wav');
   writeFileSync(masterPath, 'example-song');
@@ -91,7 +91,7 @@ it('previews and re-cuts every long shot, preferring a lyric start to a downbeat
 });
 
 it('rejects a stale preview and malformed input without changing the edited project', async () => {
-  await projects.addProjectScene(project.id, { label: 'Verse', startSec: 0, endSec: 8 });
+  await projects.addProjectScenes(project.id, [{ label: 'Verse', startSec: 0, endSec: 8 }]);
   const proposal = await preview();
   await projects.updateProject(project.id, { name: 'Edited after preview' });
   const before = await projects.getProject(project.id);
@@ -101,8 +101,8 @@ it('rejects a stale preview and malformed input without changing the edited proj
 });
 
 it('refuses impossible minimums, requires a pacing ceiling and leaves cold-open shots untouched', async () => {
-  await projects.addProjectScene(project.id, { label: 'Song shot', startSec: 0, endSec: 3.5 });
-  await projects.addProjectScene(project.id, { label: 'Cold open', preMusic: { durationSec: 10 } });
+  await projects.addProjectScenes(project.id, [{ label: 'Song shot', startSec: 0, endSec: 3.5 }]);
+  await projects.addProjectScenes(project.id, [{ label: 'Cold open', preMusic: { durationSec: 10 } }]);
   await projects.updateProject(project.id, { pacing: { minShotSec: 2, maxShotSec: 3 } });
   const before = await projects.getProject(project.id);
   expect((await preview()).body.code).toBe('MUSIC_VIDEO_PACING_IMPOSSIBLE');
@@ -115,7 +115,7 @@ it('refuses impossible minimums, requires a pacing ceiling and leaves cold-open 
 
 it('reserves the minimum for every remaining piece even when a later lyric cut is tempting', async () => {
   await projects.updateProject(project.id, { pacing: { minShotSec: 1, maxShotSec: 1.5 }, lyricCues: [{ text: 'Tempting cut', startSec: 1.5, endSec: 2 }] });
-  await projects.addProjectScene(project.id, { label: 'Short verse', startSec: 0, endSec: 3.1 });
+  await projects.addProjectScenes(project.id, [{ label: 'Short verse', startSec: 0, endSec: 3.1 }]);
   const proposal = await preview();
   expect(proposal.status).toBe(200);
   const pieces = proposal.body.changes[0].pieces;
@@ -129,7 +129,7 @@ it('reserves the minimum for every remaining piece even when a later lyric cut i
 });
 
 it('refuses composition-source projects whose actual rendered cuts are not board records', async () => {
-  await projects.addProjectScene(project.id, { startSec: 0, endSec: 8 });
+  await projects.addProjectScenes(project.id, [{ startSec: 0, endSec: 8 }]);
   await projects.updateProject(project.id, { composition: { mode: 'document' } });
   const before = await projects.getProject(project.id);
   expect((await preview()).body.code).toBe('MUSIC_VIDEO_PACING_COMPOSITION');
