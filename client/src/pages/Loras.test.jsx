@@ -19,6 +19,8 @@ import {
   installLoraFromHuggingfaceStream,
   probeLoraEffect,
   previewLoraInstall,
+  getCivitaiAuth,
+  clearCivitaiAuth,
   getCivitaiSuggestions,
   installLoraFromCivitai,
   searchCivitaiLoras,
@@ -433,6 +435,26 @@ describe('Loras Civitai auth recovery through preflight', () => {
     vi.clearAllMocks();
     listLorasFull.mockResolvedValue([]);
     getCivitaiSuggestions.mockResolvedValue({ runners: {}, video: [], fetchedAt: null });
+  });
+
+  it('clears a saved Civitai key only after confirmation', async () => {
+    getCivitaiAuth.mockResolvedValueOnce({ hasKey: true, source: 'settings' });
+    clearCivitaiAuth.mockResolvedValueOnce({ hasKey: true, source: 'env' });
+    await renderDiscover();
+    fireEvent.click(await screen.findByRole('button', { name: 'Key saved' }));
+    const dialog = within(screen.getByRole('dialog', { name: 'Civitai API key' }));
+    const confirmation = () => within(dialog.getByRole('group', { name: 'Clear saved Civitai key?' }));
+
+    fireEvent.click(dialog.getByRole('button', { name: 'Clear' }));
+    expect(clearCivitaiAuth).not.toHaveBeenCalled();
+    fireEvent.click(confirmation().getByRole('button', { name: 'Cancel' }));
+    expect(clearCivitaiAuth).not.toHaveBeenCalled();
+    fireEvent.click(dialog.getByRole('button', { name: 'Clear' }));
+    fireEvent.click(confirmation().getByRole('button', { name: 'Clear key' }));
+
+    await waitFor(() => expect(clearCivitaiAuth).toHaveBeenCalledExactlyOnceWith({ silent: true }));
+    expect(await screen.findByRole('button', { name: 'Key (env)' })).toBeInTheDocument();
+    expect(dialog.queryByRole('button', { name: 'Clear' })).not.toBeInTheDocument();
   });
 
   it('routes a preflight CIVITAI_AUTH rejection into the key-entry modal, not a generic error', async () => {
