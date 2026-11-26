@@ -117,7 +117,7 @@ async function resetApplicationObjects() {
   const before = await extensionIds();
   if (before.length !== REQUIRED_DB_EXTENSIONS.length) {
     throw new Error(`${REQUIRED_DB_EXTENSIONS.join(' and ')} must be provisioned by an administrator first `
-      + `(see docs/CONTRIBUTING.md "Repairing a test database whose extensions were dropped"); found ${before.map(e => e.extname).join(', ') || 'none'}`);
+      + `(see CONTRIBUTING.md "Repairing a test database whose extensions were dropped"); found ${before.map(e => e.extname).join(', ') || 'none'}`);
   }
   await query(DROP_APPLICATION_OBJECTS);
   expect(await extensionIds()).toEqual(before);

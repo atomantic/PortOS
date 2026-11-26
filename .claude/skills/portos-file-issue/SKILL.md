@@ -7,7 +7,7 @@ description: PortOS conventions for filing GitHub issues and capturing deferred 
 
 - **Revalidate before claiming** under the root [Revalidate issues before claiming](../../../AGENTS.md) rule. Also recheck after selecting an epic child and before implementation if the base or issue changed, and record the disposition in the run summary.
 
-- **Apply the platform support boundary before filing or claiming browser work** per the root [Platform support and issue triage](../../../AGENTS.md) section and [the support and triage policy](../../../docs/CONTRIBUTING.md#platform-support-and-issue-triage), including its required report evidence fields.
+- **Apply the platform support boundary before filing or claiming browser work** per the root [Platform support and issue triage](../../../AGENTS.md) section and [the support and triage policy](../../../CONTRIBUTING.md#platform-support-and-issue-triage), including its required report evidence fields.
 
 - **Severity is never a deferral reason**: follow the root [Resolve every accepted finding](../../../AGENTS.md) rule.
 

@@ -1,53 +1,110 @@
 # Contributing to PortOS
 
-Contributions are welcome. PortOS moves fast, and issues are often resolved and
-closed quickly. Please coordinate before starting so your work does not duplicate
-something already underway.
+PortOS is a personal project that prioritizes its author's workflow. Bug fixes,
+documentation corrections, and small quality-of-life improvements are good places
+to start. Discuss larger changes in an issue before investing time. Read
+[ETHOS.md](ETHOS.md) for the design commitments and [AGENTS.md](AGENTS.md) for
+repository instructions, including the single-user security model and conventions
+for coding agents.
 
 ## Claim an issue before starting
 
-1. Find an open issue. New contributors should ideally start with one labeled
-   **`help wanted`** or **`good first issue`**.
-2. Check its labels, assignees, and recent comments. **An issue labeled
-   `in-progress` or assigned to someone is not up for grabs.** Choose another
-   issue unless the maintainer explicitly invites you to collaborate.
-3. Comment on the issue saying you would like to claim it, with a brief outline
-   of your intended approach. For example: “I'd like to claim this issue. I plan
-   to address it by …”
-4. Wait for the maintainer to confirm the claim and assign you before starting
-   implementation. A claim comment alone does not reserve the issue.
-
-Anyone is welcome to file an issue and ask to work on it. Search existing issues
-and PRs first, then describe the bug or proposed improvement and the scope you
-would like to take on. You do not need to limit yourself to labeled starter issues.
+1. Search existing issues and PRs. Open an issue if you have a clear reproduction
+   or a scoped proposal without an existing match. The `help wanted` and
+   `good first issue` labels are good starting points.
+2. Choose an open issue with no assignee or `in-progress` label. Check recent
+   comments for coordination already underway.
+3. Comment with a brief outline of your proposed approach and wait for the
+   maintainer to assign you before implementing it.
 
 If you can no longer work on a claimed issue, leave a comment so the maintainer
 can make it available again.
 
+## Platform support and issue triage
+
+macOS is the primary interactive app and browser target. Windows is secondary.
+For browser reports, include the OS and browser versions, rendering engine, and
+whether the failure occurs interactively or in a headed or headless test.
+If the only reproduction is on a Linux browser, establish either a reproduction
+on macOS or Windows or an impact on shared code, server behavior, security, or
+data integrity before claiming it. Include redacted reproduction evidence and
+the affected code or check. Investigate headless Linux CI failures for shared
+regressions or broken test contracts, and preserve required checks.
+
+## Development setup
+
+Use Git 2.43 or newer and check the `engines` field in [package.json](package.json)
+for supported Node.js and npm versions. See [the Setup Guide](docs/SETUP.md) for
+PostgreSQL prerequisites. For a fresh install, start Docker
+with Compose for the default PostgreSQL backend or set `PGMODE=native` in the root
+`.env` for native PostgreSQL. Unset a conflicting exported `PGMODE`. If you already
+run PortOS, retain the backend holding your records.
+
+```bash
+git clone --recurse-submodules https://github.com/atomantic/PortOS.git
+cd PortOS
+npm run install:all
+npm run dev
+```
+
+Vite serves the development UI on port 5554. PM2 runs the local API and workers.
+For an existing clone with missing submodules, run
+`git submodule update --init --recursive`. See [Troubleshooting](docs/TROUBLESHOOTING.md)
+if setup fails.
+
+## Testing
+
+Run the checks from the repository root.
+
+```bash
+npm test # Server, then client
+npm test --prefix server -- services/creativeDirector/videoAssembly.test.js
+```
+
+Report focused runs as coverage of the selected tests. See [Pregate](docs/PREGATE.md)
+for the focused plan, coverage limits, and full CI plan.
+
+For DB-backed checks, provision the isolated test database and run the DB suite
+after the server and client suites finish.
+
+```bash
+npm run setup:db:test
+npm run test:db
+```
+
+Only run DB-backed tests against `portos_test`. The runner serializes DB suites
+across worktrees and requires at least 2 GiB free on each observable PostgreSQL
+data and write-ahead log volume.
+
+### Repairing a test database whose extensions were dropped
+
+If a legacy test run removed `vector` or `pgcrypto`, connect to `portos_test` on
+the configured test cluster as a database administrator, then run
+`CREATE EXTENSION IF NOT EXISTS vector;` and
+`CREATE EXTENSION IF NOT EXISTS pgcrypto;`. Re-run `npm run setup:db:test` as the
+ordinary application role. Keep that role's existing privileges.
+
+### Test Strategy: Value Over Assertion Count
+
+- Test changed behavior at the highest practical public boundary. Cover success
+  and materially different failure or compatibility cases.
+- Use focused unit tests for contracts a higher-level test would cover poorly,
+  such as parsers, security and data-isolation guards, migrations, and timing.
+- Test what a boundary owns. For a route, assert validation, defaults, response
+  shaping, or emitted events as applicable. Keep the underlying behavior in
+  service tests. Prefer a real service when it is cheap and isolated.
+- Name the regression a test catches. Keep repository-wide scans in the
+  [structural guard runners](docs/CI_HIDDEN_CONTENT_GATE.md#guard-selection-and-registration).
+
 ## Submit a pull request
 
-- Work on a feature branch in your fork and open your PR against **`main`**.
-- Keep the change focused on the agreed issue. Link the issue in the PR and
-  explain what changed, why, and how you verified it. Include screenshots for
-  visible UI changes where useful.
-- Follow the [development setup and code conventions](docs/CONTRIBUTING.md) and
-  the applicable [repository instructions](AGENTS.md). Use descriptive
-  conventional commit messages.
-- Run the checks relevant to your change and report the results and any testing
-  limitations. Add regression coverage when it meaningfully protects changed
-  behavior. DB-backed tests must use the isolated test database, never your real
-  PortOS database; see the development guide for commands.
-- Respond to review feedback and keep the PR current as needed. Required CI
-  checks must pass before merge.
+- Work in a feature branch in your fork and target `main`.
+- Link the issue, explain the change and how you verified it, and include
+  screenshots when they help review a visible change. Use descriptive
+  conventional commits. Release notes are generated from commits.
+- Run `npm run pregate` before pushing and again after rebasing. On Windows,
+  use `node scripts/pregate.js`. Report testing limits and address review
+  feedback. Required hosted CI checks must pass before merge.
 
-## How PRs are accepted
-
-The maintainer reviews contributions for fit with PortOS, correctness, scope,
-and validation. Small, focused bug fixes, documentation corrections, and
-quality-of-life improvements are the easiest starting points. Discuss larger
-features in an issue before investing significant time.
-
-PortOS is a personal, opinionated project that prioritizes its author's needs.
-Claiming an issue or passing CI does not guarantee acceptance: the maintainer
-may request changes, rework a proposal, or decline a PR that does not fit the
-project. Coordinating on the issue first helps establish expectations early.
+The maintainer assesses contributions for project fit, correctness, scope, and
+validation. Claiming an issue or passing CI does not guarantee acceptance.

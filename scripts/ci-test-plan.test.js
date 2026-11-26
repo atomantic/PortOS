@@ -159,7 +159,7 @@ it('selects checkout-cache contracts only in their installed-dependency runners'
       expect(plan.client.files, input).not.toContain(serverContract);
     }
   }
-  for (const input of ['docs/CONTRIBUTING.md', 'server/services/auth.js']) {
+  for (const input of ['CONTRIBUTING.md', 'server/services/auth.js']) {
     const plan = buildCiTestPlan([input], { trackedFiles });
     expect(plan.full, input).toBe(false);
     expect(plan.server.files, input).not.toContain(serverContract);

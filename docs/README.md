@@ -22,7 +22,7 @@ Start with the [project overview and quick start](../README.md) or read the [pro
 
 ## Contribute
 
-- [Contributor guide](CONTRIBUTING.md) covers development setup, conventions, and testing.
+- [Contributor guide](../CONTRIBUTING.md) covers development setup, conventions, and testing.
 - [Architecture](ARCHITECTURE.md) and [API guide](API.md) explain the codebase and its interfaces.
 - [Hosted CI](GITHUB_ACTIONS.md) and [local pregate](PREGATE.md) explain what runs before and after pushing.
 - [Versioning and releases](VERSIONING.md) describes the release workflow.
