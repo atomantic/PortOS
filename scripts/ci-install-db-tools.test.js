@@ -72,7 +72,7 @@ function run(mirror, cache, { includePostgres = true, event = 'push', probeAvail
 echo "extract $(basename "$2")" >> '${log}'
 mkdir -p "$3/usr/bin"
 if [[ "$(basename "$2")" = '${PACKAGE_FILE}' ]]; then
-  printf '%s\n' '#!/bin/bash' '[[ "$LD_LIBRARY_PATH" = *"/usr/lib/x86_64-linux-gnu:"* && "$1" = -version ]]' > "$3/usr/bin/ffmpeg"
+  printf '%s\n' '#!/bin/bash' '[[ "$LD_LIBRARY_PATH" = *"/usr/lib/x86_64-linux-gnu:"* && "$LD_LIBRARY_PATH" = *"/usr/lib/x86_64-linux-gnu/pulseaudio:"* && "$1" = -version ]]' > "$3/usr/bin/ffmpeg"
   chmod +x "$3/usr/bin/ffmpeg"
 elif ${probeAvailable}; then
   cp "$3/usr/bin/ffmpeg" "$3/usr/bin/ffprobe"
