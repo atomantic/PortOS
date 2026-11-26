@@ -2,6 +2,8 @@ import { describe, it, expect } from 'vitest';
 import { anchorShotsToSungLyrics, dropStaleStoryboardRows, productionReadiness, productionAlignmentBasis, approveProductionStage, carryProductionApprovals, carryShotLocks, clipLocks } from './productionReview.js';
 import { addScenes, applySceneUpdate, mergeNextScene, removeScene, replaceScenes, splitScene } from './projectsLogic.js';
 
+import { summarizeMusicVideoProject } from '../../lib/musicVideo/musicVideoSummary.js';
+
 const WORD_PROBLEM = /bounded, positive-duration word timings/;
 const SHOT_PROBLEM = /^Complete timing, action, staging, camera and transition/;
 const ANCHOR_PROBLEM = /^Review lyric anchors/;
@@ -364,4 +366,17 @@ describe('readiness problem codes', () => {
     expect(byCode['shot-incomplete'].sceneId).toBe('s1');
     expect(productionReadiness(bare).proof.problemItems.map((i) => i.code)).toContain('proof-needs-storyboard');
   });
+});
+
+it('only surfaces bad-take advice for marks on media the shot uses', () => {
+  const still = { sceneId: 'still', startSec: 0, endSec: 2, visualLayer: 'still',
+    referenceImageId: 'still.png', videoHistoryId: 'old-video', selectedTakeMarkedBad: true };
+  const footage = { sceneId: 'footage', startSec: 2, endSec: 4, visualLayer: 'footage',
+    referenceImageId: 'start.png', endImageId: 'end.png', endFrameOff: true, videoHistoryId: 'video', selectedTakeMarkedBad: true };
+  const project = { composition: { mode: 'composed' }, audioAnalysis: { durationSec: 4 }, scenes: [still, footage],
+    assetMarks: { 'video:old-video': 'bad', 'image:end.png': 'bad' } };
+  expect(productionReadiness(project).selectedTakeMarkedBad).toBe(false);
+  expect(summarizeMusicVideoProject(project).selectedTakeMarkedBad).toBe(false);
+  expect(productionReadiness({ ...project, scenes: [still, { ...footage, endFrameOff: false }] }).selectedTakeMarkedBad).toBe(true);
+  expect(productionReadiness({ ...project, assetMarks: { ...project.assetMarks, 'video:video': 'bad' } }).selectedTakeMarkedBad).toBe(true);
 });

@@ -97,16 +97,38 @@ describe('sceneAttention', () => {
     const source = { ...ready, sceneId: 'src' };
     const back = { sceneId: 'back', startSec: 8, endSec: 9, sourceTake: { sceneId: 'src', offsetSec: 2 } };
     expect(sceneAttention(back, { scenes: [source, back], assetMarks: { 'video:v1': 'bad' } })).toContain('bad-take');
-    expect(sceneAttention(back, { scenes: [{ ...source, selectedTakeMarkedBad: true }, back] })).toContain('bad-take');
+    expect(sceneAttention(back, { scenes: [{ ...source, selectedTakeMarkedBad: true }, back] })).not.toContain('bad-take');
     expect(sceneAttention({ ...back, referenceImageId: 'unused.png' }, { scenes: [source, back], assetMarks: { 'image:unused.png': 'bad' } })).not.toContain('bad-take');
   });
 
   it('flags a shot whose selected take is marked bad', () => {
-    expect(sceneAttention({ ...ready, selectedTakeMarkedBad: true })).toContain('bad-take');
+    expect(sceneAttention({ ...ready, selectedTakeMarkedBad: true })).not.toContain('bad-take');
     expect(sceneAttention(ready, { assetMarks: { 'image:f.png': 'bad' } })).toContain('bad-take');
     expect(sceneAttention(ready, { assetMarks: { 'video:v1': 'bad' } })).toContain('bad-take');
     expect(sceneAttention(ready, { assetMarks: { 'image:other.png': 'bad' } })).not.toContain('bad-take');
   });
+  it('does not mark a still bad because a saved clip came from a different frame', () => {
+    const shot = { ...ready, visualLayer: 'still', selectedTakeMarkedBad: true,
+      takes: [{ kind: 'video', assetId: 'v1', sourceImageId: 'old.png' }] };
+    expect(selectedFrameReadiness(shot).text).toBe('frame ready');
+    expect(sceneAttention(shot, { layered: true, assetMarks: { 'image:old.png': 'bad' } })).toEqual([]);
+    expect(sceneRenderReady(shot, { layered: true })).toBe(true);
+    expect(sceneAttention({ ...shot, visualLayer: 'footage' }, { layered: true })).toEqual(['clip-frame-mismatch']);
+  });
+
+  it('names the actual bad frame and ignores a marked end frame while its slot is disabled', () => {
+    const shot = { ...ready, endImageId: 'end.png', endFrameOff: true, selectedTakeMarkedBad: true };
+    const assetMarks = { 'image:end.png': 'bad' };
+    expect(selectedFrameReadiness(shot, { assetMarks }).text).toBe('frame ready');
+    expect(sceneAttention(shot, { assetMarks })).toEqual([]);
+    expect(sceneRenderReady(shot, { assetMarks })).toBe(true);
+    const enabled = { ...shot, endFrameOff: false };
+    expect(selectedFrameReadiness(enabled, { assetMarks }).text).toBe('end frame marked bad');
+    expect(sceneAttention(enabled, { assetMarks })).toEqual(['bad-take']);
+    expect(sceneRenderReady(enabled, { assetMarks })).toBe(false);
+    expect(selectedFrameReadiness(ready, { assetMarks: { 'video:v1': 'bad' } }).text).toBe('frame ready');
+  });
+
 });
 
 describe('scene filters', () => {
@@ -130,8 +152,8 @@ describe('scene filters', () => {
     expect(sceneMatchesFilter(['bad-take'], 'bad-take')).toBe(true);
     expect(sceneMatchesFilter(['bad-take'], 'attention')).toBe(true);
     expect(sceneMatchesFilter(['bad-take'], 'missing')).toBe(false);
-    expect(selectedFrameReadiness({ ...ready, selectedTakeMarkedBad: true })).toEqual({ text: 'selected take marked bad', reasons: ['Selected take marked bad'] });
-    expect(selectedFrameReadiness(ready, { assetMarks: { 'image:f.png': 'bad' } })).toEqual({ text: 'selected take marked bad', reasons: ['Selected take marked bad'] });
+    expect(selectedFrameReadiness({ ...ready, selectedTakeMarkedBad: true }).text).toBe('frame ready');
+    expect(selectedFrameReadiness(ready, { assetMarks: { 'image:f.png': 'bad' } })).toEqual({ text: 'start frame marked bad', reasons: ['Selected start frame marked bad'] });
     expect(sceneMatchesFilter([], 'attention')).toBe(false);
     expect(sceneMatchesFilter([], 'all')).toBe(true);
   });
