@@ -17,7 +17,7 @@ import { isNonBlankStr, trimTo } from './textUtils.js';
 import { FILM_LOOK_CONTROLS, FILM_LOOK_PRESET_IDS } from './filmLook.js';
 import { PHOTOGRAPHY_FIELDS, VISUAL_PROFILE_TEXT_MAX } from './universeVisualProfile.js';
 
-// Version of docs/features/fableloom-runtime-v1.md, independent of package schema versions.
+// Version of server/services/fableLoom/static-player/runtime-v1.md, independent of package schema versions.
 export const FABLELOOM_RUNTIME_VERSION = '1.0.0';
 
 export const FABLELOOM_PLAYBACK_MODES = Object.freeze(['cut', 'decision']);

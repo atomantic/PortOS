@@ -37,11 +37,11 @@ const sameEndpoint = (pool, endpoint) => normalizedHost(pool.host) === normalize
   && Number(pool.port) === endpoint.port && pool.database === endpoint.database && pool.user === endpoint.user;
 
 const staleBackendError = () => Object.assign(
-  new Error('This process is connected to the database backend a completed cutover retired. Restart it with the saved configuration; see docs/DATABASE_MAINTENANCE.md (retired backend).'),
+  new Error('This process is connected to the database backend a completed cutover retired. Restart it with the saved configuration; see docs/STORAGE.md#moving-between-docker-and-native.'),
   { status: 503, code: 'DATABASE_RETIRED_BACKEND' },
 );
 const unreadableError = () => Object.assign(
-  new Error('The database authority record is unreadable. Inspect data/database-authority.json; see docs/DATABASE_MAINTENANCE.md.'),
+  new Error('The database authority record is unreadable. Inspect data/database-authority.json; see docs/STORAGE.md#cutover-recovery.'),
   { status: 503, code: 'DATABASE_MAINTENANCE' },
 );
 

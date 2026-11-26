@@ -342,7 +342,7 @@ async function restoreSnapshotAdmitted(destPath, snapshotId, { dryRun, requested
   // never promises a restore that execution would silently skip.
   if (restoreScopeIsPreservedFile(subdirFilter)) {
     throw new ServerError(
-      'The selected path is machine-local authority, recovery data or unpublished scratch and is excluded from restore. Select a backed-up application record or directory. Reconcile local authority and unresolved owners on this machine (see docs/STORAGE_RECOVERY.md).',
+      'The selected path is machine-local authority, recovery data or unpublished scratch and is excluded from restore. Select a backed-up application record or directory. Reconcile local authority and unresolved owners on this machine (see docs/STORAGE.md#workflow-maintenance-journal).',
       { status: 400, code: 'BACKUP_RESTORE_MACHINE_LOCAL' },
     );
   }
