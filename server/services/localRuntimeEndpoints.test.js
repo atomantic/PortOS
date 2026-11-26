@@ -10,6 +10,16 @@ vi.mock('./mtplxServerManager.js', () => ({
   getMtplxServerStatus: (...args) => getMtplxServerStatus(...args),
 }));
 vi.mock('./slotstreamServerManager.js', () => ({ getSlotstreamServerEndpoint: vi.fn(async () => null) }));
+const installed = vi.hoisted(() => ({
+  readInstalledSplashVersion: vi.fn(),
+  readMkserveInstall: vi.fn(),
+  listSlotstreamCachedModels: vi.fn(),
+}));
+vi.mock('./splashManagedRuntime.js', () => ({ readInstalledSplashVersion: installed.readInstalledSplashVersion }));
+vi.mock('./mkserveRuntimeInstall.js', async (importOriginal) => ({
+  ...await importOriginal(), readMkserveInstall: installed.readMkserveInstall,
+}));
+vi.mock('../lib/slotstreamModels.js', () => ({ listSlotstreamCachedModels: installed.listSlotstreamCachedModels }));
 vi.mock('./specDecodeModels.js', () => ({ getSpecDecodePresetStatus: vi.fn(async () => []) }));
 vi.mock('./localLlm.js', () => ({ listManagedBackendModels: vi.fn() }));
 vi.mock('./settings.js', () => ({ getSettings: vi.fn() }));
@@ -78,5 +88,29 @@ describe('model-list availability', () => {
     const result = await listRuntimeModels('llama');
     expect(Boolean(result.inactive)).toBe(inactive);
     expect(result.error).toContain(error);
+  });
+});
+
+describe('durable models for stopped runtimes', () => {
+  beforeEach(() => { probeOpenAiModels.mockResolvedValue({ reachable: false, models: null, error: 'ECONNREFUSED' }); });
+
+  it.each([
+    ['splash', installed.readInstalledSplashVersion, '1.7.2', 'inkling2-mini'],
+    ['mkserve', installed.readMkserveInstall, { version: 'pinned' }, 'thinkingmachines/Inkling-2-Mini'],
+    ['slotstream', installed.listSlotstreamCachedModels, { models: [{ id: 'example/checkpoint' }] }, 'example/checkpoint'],
+  ])('shows installed %s models as offline and skips the fallback for live-only consumers', async (kind, readInstall, installation, id) => {
+    readInstall.mockReset().mockResolvedValue(installation);
+    expect(await listRuntimeModels(kind, { durable: false })).toMatchObject({ models: null, offline: true });
+    expect(readInstall).not.toHaveBeenCalled();
+    expect(await listRuntimeModels(kind)).toMatchObject({ models: [{ id }], offline: true });
+  });
+
+  it.each([
+    ['splash', installed.readInstalledSplashVersion, null],
+    ['mkserve', installed.readMkserveInstall, null],
+    ['slotstream', installed.listSlotstreamCachedModels, { models: null }],
+  ])('keeps an unavailable %s install or cache out of the offline catalog', async (kind, readInstall, installation) => {
+    readInstall.mockResolvedValue(installation);
+    expect(await listRuntimeModels(kind)).toMatchObject({ models: null, inactive: true });
   });
 });
