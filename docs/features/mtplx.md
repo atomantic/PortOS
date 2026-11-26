@@ -267,7 +267,7 @@ control on the same card; LM Studio through its app).
 MTPLX 2.13 serves Inkling 2 Mini through its native MTP head
 (`Youssofal/Inkling-2-Mini-MTPLX-{Bare-Speed,Optimized-Speed,Optimized-Quality}`).
 Packs need 2.13 or newer, so the lock pins 2.13.0 as a cooldown exception
-(see `docs/PYTHON_RUNTIME_REFRESH.md`). A private runtime installed from an
+(see [held-back pins](../RUNTIME_LOCKS.md#held-back-pins)). A private runtime installed from an
 older lock keeps working; the MTPLX card shows its version beside the shipped
 one with an **Update MTPLX runtime** button, which re-syncs the private venv
 from the lock (restart a running server to pick it up). When the `mtplx` on

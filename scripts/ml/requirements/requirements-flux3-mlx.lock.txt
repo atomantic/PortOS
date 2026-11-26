@@ -13,7 +13,7 @@
 #     --upgrade-package platformdirs==4.14.3 -o scripts/ml/requirements/requirements-flux3-mlx.lock.txt
 # Then audit the entire lock with OSV, including MAL- records.
 # For the bounded dateutil 4 refresh, constrain all companion versions and
-# preserve their existing hash blocks; see docs/PYTHON_RUNTIME_REFRESH.md#selective-regeneration.
+# preserve their existing hash blocks; see docs/RUNTIME_LOCKS.md#selective-regeneration.
 annotated-doc==0.0.5 \
     --hash=sha256:117bac03a25ede5df5440e855b32d556049ca169ead221505badf432fed4b101 \
     --hash=sha256:c7e58ce09192557605d8bbd92836d7e1d520ac9580096042c0bfd197efacf1bb
