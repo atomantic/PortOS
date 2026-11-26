@@ -20,6 +20,7 @@ import { query, withTransaction } from '../../lib/db.js';
 import { ServerError } from '../../lib/errorHandler.js';
 import { PATHS } from '../../lib/paths.js';
 import { writeFileGuarded } from '../../lib/fileUtils.js';
+import { createRecordWriteQueue } from '../../lib/fileWriteQueue.js';
 import { trimTo } from '../../lib/textUtils.js';
 import { toPgJson } from '../../lib/pgJson.js';
 
@@ -186,6 +187,13 @@ export function sanitizeVoiceProfile(raw) {
 }
 
 const profileDirectory = (id) => join(PATHS.voiceProfiles, id);
+const queueProfileWrite = createRecordWriteQueue();
+
+// Training reads the row and creates its output directory under the same
+// queue as withdrawal, so a stale startup cannot recreate a deleted profile.
+export function queueVoiceProfileLifecycle(id, work) {
+  return queueProfileWrite(trimTo(id, 80), work);
+}
 
 export function profileArtifactDirectory(id) {
   if (!PROFILE_ID_RE.test(id || '')) {
@@ -245,14 +253,20 @@ export async function deleteVoiceProfile(id) {
   if (!PROFILE_ID_RE.test(profileId)) {
     throw new ServerError('Voice profile not found', { status: 404, code: 'VOICE_PROFILE_NOT_FOUND' });
   }
-  return withBackupAssetPublication(async () => {
-    const { rows } = await query('DELETE FROM voice_profiles WHERE id = $1 RETURNING id', [profileId]);
-    if (!rows.length) {
-      throw new ServerError('Voice profile not found', { status: 404, code: 'VOICE_PROFILE_NOT_FOUND' });
-    }
-    await rm(profileDirectory(profileId), { recursive: true, force: true });
-    console.log(`🗑️ voice profile deleted: ${profileId}`);
-    return { id: profileId };
+  return queueVoiceProfileLifecycle(profileId, async () => {
+    const { cancelActiveJobsForProfile } = await import('./fineTuning.js');
+    // A queued sidecar write may be waiting for backup admission. Drain it
+    // before acquiring this lease so a pending cut cannot wait on itself.
+    await cancelActiveJobsForProfile(profileId);
+    return withBackupAssetPublication(async () => {
+      const { rows } = await query('DELETE FROM voice_profiles WHERE id = $1 RETURNING id', [profileId]);
+      if (!rows.length) {
+        throw new ServerError('Voice profile not found', { status: 404, code: 'VOICE_PROFILE_NOT_FOUND' });
+      }
+      await rm(profileDirectory(profileId), { recursive: true, force: true });
+      console.log(`🗑️ voice profile deleted: ${profileId}`);
+      return { id: profileId };
+    });
   });
 }
 
@@ -473,9 +487,18 @@ export async function createClonedVoiceCandidate({
   // The source recording and the row that names it publish under one lease, so
   // a snapshot never carries a candidate whose consented recording it lacks (#9982).
   return withBackupAssetPublication(async () => {
-    await mkdir(sourceDir, { recursive: true });
-    await writeFileGuarded(safePath, audioBuffer);
-    return persist(next);
+    try {
+      await mkdir(sourceDir, { recursive: true });
+      await writeFileGuarded(safePath, audioBuffer);
+      return await persist(next);
+    } catch (error) {
+      try {
+        await rm(profileDir, { recursive: true, force: true });
+      } catch (cleanupError) {
+        throw new AggregateError([error, cleanupError], 'Voice clone upload and cleanup failed', { cause: error });
+      }
+      throw error;
+    }
   });
 }
 

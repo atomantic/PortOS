@@ -38,6 +38,7 @@ import {
   getVoiceProfileRequired,
   profileArtifactDirectory,
   promoteFineTunedProfile,
+  queueVoiceProfileLifecycle,
 } from './profiles.js';
 import { fineTuningEvents } from './fineTuningEvents.js';
 
@@ -65,6 +66,8 @@ const TRAINING_SPEAKER = 'portos_voice';
 const DATASET_MANIFEST_FILE = 'dataset.json';
 const AUDIO_FILE_RE = /\.(wav|mp3|flac|m4a)$/i;
 const STDERR_TAIL_BYTES = 8192;
+const WITHDRAWAL_TERM_GRACE_MS = 8_000;
+const WITHDRAWAL_CLOSE_TIMEOUT_MS = WITHDRAWAL_TERM_GRACE_MS + 2_000;
 // Training frames arrive every optimizer step; the UI only needs a progress
 // tick, so step progress is pushed at most this often. Status changes and
 // sealed checkpoints are always pushed immediately.
@@ -98,6 +101,7 @@ const serializableJob = ({
   child: _child,
   persistChain: _persistChain,
   finalized: _finalized,
+  withdrawn: _withdrawn,
   ...record
 }) => record;
 
@@ -158,13 +162,20 @@ const publishJob = (jobState) => {
  * cannot be admitted, but nothing names them until this write (#9982).
  */
 const persistJob = (jobState) => {
+  if (jobState.withdrawn) return jobState.persistChain;
   // Capture the durable state when this write is queued. Otherwise a checkpoint
   // write that runs after a later terminal event serializes the mutable current
   // object and can race the terminal write out of order.
   const record = structuredClone(serializableJob(jobState));
   publishJob(jobState);
-  jobState.persistChain = (jobState.persistChain || Promise.resolve())
-    .then(() => withBackupAssetPublication(() => atomicWrite(jobRecordPath(jobState.profileId, jobState.id), record)))
+  jobState.persistChain = jobState.persistChain
+    .then(() => {
+      if (jobState.withdrawn) return;
+      return withBackupAssetPublication(() => {
+        // Withdrawal may have started while this write awaited admission.
+        if (!jobState.withdrawn) return atomicWrite(jobRecordPath(jobState.profileId, jobState.id), record);
+      });
+    })
     .catch((err) => console.error(`❌ Failed to persist fine-tune job ${jobState.id}: ${err.message}`));
   return jobState.persistChain;
 };
@@ -177,7 +188,7 @@ const persistJob = (jobState) => {
  */
 async function loadJob(jobId, profileId) {
   const active = activeJobs.get(jobId);
-  if (active) return active;
+  if (active) return active.withdrawn ? null : active;
   if (!profileId || !JOB_ID_RE.test(jobId)) return null;
   const { ok, value } = await readJSONFileStrict(jobRecordPath(profileId, jobId), null);
   if (!ok || (value !== null && !isJobRecord(value))) {
@@ -200,8 +211,8 @@ async function loadJob(jobId, profileId) {
 const finalizeJob = (jobState) => {
   if (jobState.finalized) return;
   jobState.finalized = true;
-  persistJob(jobState);
-  closeJobAfterDelay(activeJobs, jobState.id);
+  // Keep the entry discoverable by withdrawal until its final write has drained.
+  void persistJob(jobState).then(() => closeJobAfterDelay(activeJobs, jobState.id));
 };
 
 // Busy until the child has exited (`finalizeJob`), not merely until the status
@@ -331,11 +342,13 @@ export async function startFineTuningJob({
     });
   }
 
-  const profile = await getVoiceProfileRequired(profileId);
-  // Two full-parameter trainings of one voice would contend for the same GPU
-  // and write competing checkpoints; refuse before any record or child exists.
-  // Checked again after the awaits below, where nothing yields until the job
-  // registers, so two overlapping starts cannot both pass.
+  return queueVoiceProfileLifecycle(profileId, async () => {
+    const profile = await getVoiceProfileRequired(profileId);
+    return launchFineTuningJob({ profile, validation, runtime, baseModel, epochs, checkpointInterval });
+  });
+}
+
+async function launchFineTuningJob({ profile, validation, runtime, baseModel, epochs, checkpointInterval }) {
   assertNoRunningJob(profile.id);
   const dataset = buildTrainingDataset(profile, validation.sourceDir);
   const jobId = randomUUID();
@@ -345,7 +358,6 @@ export async function startFineTuningJob({
   const datasetManifest = join(outputDir, DATASET_MANIFEST_FILE);
   await atomicWrite(datasetManifest, dataset);
 
-  assertNoRunningJob(profile.id);
   const jobState = {
     id: jobId,
     profileId: profile.id,
@@ -365,6 +377,7 @@ export async function startFineTuningJob({
     completedAt: null,
     error: null,
     child: null,
+    persistChain: Promise.resolve(),
     // Flipped by `finalizeJob` once the child has closed or never started.
     finalized: false,
   };
@@ -417,6 +430,7 @@ export async function startFineTuningJob({
   let lineBuffer = '';
   let lastProgressPush = 0;
   child.stdout.on('data', (chunk) => {
+    if (jobState.withdrawn) return;
     lineBuffer += chunk.toString();
     const lines = lineBuffer.split('\n');
     lineBuffer = lines.pop(); // keep remainder
@@ -545,7 +559,7 @@ export async function getFineTuningJobStatus(jobId, profileId) {
  */
 export function cancelFineTuningJob(jobId, profileId) {
   const job = activeJobs.get(jobId);
-  if (!job || (profileId && job.profileId !== profileId)) {
+  if (!job || job.withdrawn || (profileId && job.profileId !== profileId)) {
     throw new ServerError('Fine-tuning job not found', { status: 404, code: 'JOB_NOT_FOUND' });
   }
   if (job.status === 'running') {
@@ -554,6 +568,46 @@ export function cancelFineTuningJob(jobId, profileId) {
     publishJob(job);
   }
   return { ok: true, jobId, status: job.status, job: publicJob(job) };
+}
+
+async function stopWithdrawnTrainer(job) {
+  const child = job.child;
+  if (!child || job.finalized) return;
+
+  let onClose;
+  let timeout;
+  let escalation;
+  try {
+    await new Promise((resolve, reject) => {
+      onClose = resolve;
+      child.once('close', onClose);
+      timeout = setTimeout(() => reject(new ServerError('Voice trainer did not stop. Retry deleting the profile.', {
+        status: 503,
+        code: 'VOICE_TRAINER_STOP_TIMEOUT',
+      })), WITHDRAWAL_CLOSE_TIMEOUT_MS);
+      escalation = killWithEscalation(child, {
+        label: 'voice fine-tune',
+        delayMs: WITHDRAWAL_TERM_GRACE_MS,
+        stillRunning: () => !job.finalized,
+      });
+    });
+  } finally {
+    child.off('close', onClose);
+    clearTimeout(escalation);
+    clearTimeout(timeout);
+  }
+}
+
+/** Withdraw all live and flushing jobs before their profile directory is removed. */
+export async function cancelActiveJobsForProfile(profileId) {
+  const jobs = [...activeJobs.values()].filter(job => job.profileId === profileId);
+  for (const job of jobs) job.withdrawn = true;
+
+  await Promise.all(jobs.map(async (job) => {
+    await stopWithdrawnTrainer(job);
+    await job.persistChain;
+    activeJobs.delete(job.id);
+  }));
 }
 
 /**

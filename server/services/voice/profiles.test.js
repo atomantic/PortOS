@@ -247,6 +247,29 @@ describe('voice profile contract', () => {
     expect(candidate.sourceAssets[0].sha256).toMatch(/^[a-f0-9]{64}$/);
   });
 
+  it('removes failed clone uploads before returning the database error', async () => {
+    const originalError = new Error('Clone insert failed');
+    const existingDir = join(voiceProfilesRoot, 'existing-profile');
+    await mkdir(existingDir);
+    let failedProfileDir;
+    queryMock.mockImplementationOnce(async (_sql, [id]) => {
+      failedProfileDir = profileArtifactDirectory(id);
+      await access(join(failedProfileDir, 'source', 'sample.wav'));
+      throw originalError;
+    });
+
+    await expect(createClonedVoiceCandidate({
+      universeId: 'universe-1',
+      characterId: 'character-1',
+      audioBuffer: Buffer.from('RIFFmockwavheaderdata'),
+      filename: 'sample.wav',
+      performerConsentConfirmed: true,
+    })).rejects.toBe(originalError);
+
+    await expect(access(failedProfileDir)).rejects.toMatchObject({ code: 'ENOENT' });
+    await access(existingDir);
+  });
+
   it('deletes a cloned profile row and its source directory, and refuses a missing id', async () => {
     queryMock.mockResolvedValueOnce({ rows: [] });
     const candidate = await createClonedVoiceCandidate({
