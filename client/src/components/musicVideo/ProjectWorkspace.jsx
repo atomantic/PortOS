@@ -572,7 +572,10 @@ export default function ProjectWorkspace({
   const proofRequested = activeStage === 'produce' && ['#mv-review-proof', '#mv-review-render'].includes(location.hash);
   const reviewStage = selected ? (proofRequested ? 'proof' : approvalStageFor(activeStage, selected, productionReview.readiness, productionReview.proof.active)) : null;
   // `stageProject`: a Blender film's live composite is offered once the film state lists synced shots.
-  const previewSources = selected ? listPreviewSources(stageProject, { finalVideoSrc: finalVideo.src, leadWith: activeStage === 'review' ? 'drafts' : ['produce', 'editor'].includes(activeStage) ? 'storyboard' : activeStage === 'setup' ? 'lyrics' : activeStage === 'previz' ? 'previz' : 'final' }) : [];
+  const previewSources = selected ? listPreviewSources(stageProject, {
+    finalVideo,
+    leadWith: activeStage === 'review' ? 'drafts' : ['produce', 'editor'].includes(activeStage) ? 'storyboard' : activeStage === 'setup' ? 'lyrics' : activeStage === 'previz' ? 'previz' : 'final',
+  }) : [];
 
   const dock = !selected || NO_DOCK_STAGES.has(activeStage) ? null : (
     <PreviewDock

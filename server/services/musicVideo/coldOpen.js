@@ -193,7 +193,7 @@ export async function prependColdOpen({ project, coldOpen, path, ffmpeg, jobId, 
   const { width, height, fps } = geometry;
   const options = { frameGrid: true, canvas: { width, height, fps }, aspect: null };
   const { sections } = buildMusicVideoFfmpegArgs(coldOpen.clips, null, '@plan', options);
-  const leadSec = round3(sections.reduce((sum, section) => sum + section.endSec - section.startSec, 0));
+  const leadSec = sections.at(-1).endSec;
   const shots = await coldOpenAudioShots(project, cutEntries(coldOpen.clips, sections));
   const audio = `${path}.cold-open.wav`;
   const clip = `${path}.cold-open.mp4`;
@@ -204,7 +204,9 @@ export async function prependColdOpen({ project, coldOpen, path, ffmpeg, jobId, 
     signal?.throwIfAborted();
     if (!mixed.ok) throw new ServerError(`Mixing the cold open's sound failed: ${mixed.reason}`, { status: 500, code: 'PRE_MUSIC_MIX_FAILED' });
     const { args } = buildMusicVideoFfmpegArgs(coldOpen.clips, audio, clip, { ...options, audioDurationSec: leadSec });
-    const encode = await filterGraphViaFile(ffmpeg, ['-hide_banner', '-loglevel', 'error', ...args], graphPath);
+    // The mixed sound is rounded to milliseconds. Let the frame-grid picture end
+    // this encode, even when the mix is slightly shorter.
+    const encode = await filterGraphViaFile(ffmpeg, ['-hide_banner', '-loglevel', 'error', ...args.slice(0, -1), '-af', 'apad', args.at(-1)], graphPath);
     const cut = await runFfmpegProcess({ bin: ffmpeg, signal, args: encode.args });
     signal?.throwIfAborted();
     if (!cut.ok) throw new ServerError(`Cutting the cold open failed: ${cut.reason}`, { status: 500, code: 'PRE_MUSIC_CUT_FAILED' });
@@ -213,7 +215,7 @@ export async function prependColdOpen({ project, coldOpen, path, ffmpeg, jobId, 
     const join2 = await runFfmpegProcess({
       bin: ffmpeg, signal,
       args: ['-hide_banner', '-loglevel', 'error', '-i', clip, '-i', path,
-        '-filter_complex', `[0:v]${norm}[a0];[1:v]${norm}[b0];[0:a]${sound}[a1];[1:a]${sound}[b1];[a0][a1][b0][b1]concat=n=2:v=1:a=1[v][a]`,
+        '-filter_complex', `[0:v]${norm}[a0];[1:v]${norm}[b0];[0:a]${sound},apad,atrim=duration=${leadSec}[a1];[1:a]${sound}[b1];[a0][a1][b0][b1]concat=n=2:v=1:a=1[v][a]`,
         '-map', '[v]', '-map', '[a]', '-c:v', 'libx264', '-preset', 'veryfast', '-crf', '18', '-pix_fmt', 'yuv420p',
         '-c:a', 'aac', '-b:a', '192k', '-movflags', '+faststart', '-y', joined],
     });

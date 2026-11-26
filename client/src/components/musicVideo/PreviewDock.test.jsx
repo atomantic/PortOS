@@ -47,6 +47,50 @@ describe('PreviewDock video shot steps', () => {
   });
 });
 
+describe('PreviewDock final render song clock', () => {
+  const project = {
+    id: 'p', renderHistoryId: 'final', renderDependencyState: { status: 'stale' },
+    scenes: [{ sceneId: 'lead', preMusic: { durationSec: 5 } }, { startSec: 0 }, { startSec: 4 }, { startSec: 7 }, { startSec: 9 }],
+  };
+  const finalVideo = { src: '/data/videos/final.mp4', fps: 30, songDurationSec: 8 };
+  const mount = (songStartSec) => {
+    const clockRef = { current: null };
+    render(<MemoryRouter><PreviewDock project={project}
+      sources={listPreviewSources(project, { finalVideo: { ...finalVideo, songStartSec } })} clockRef={clockRef} /></MemoryRouter>);
+    const video = screen.getByLabelText('Final render preview');
+    Object.defineProperties(video, {
+      readyState: { value: 4, configurable: true },
+      duration: { value: 12, configurable: true },
+    });
+    fireEvent.loadedMetadata(video);
+    return { video, clockRef };
+  };
+
+  it.each([0, 61 / 30])('maps final shot and frame seeks with an encoded lead of %s seconds', (lead) => {
+    const { video, clockRef } = mount(lead);
+    // Start inside the song, so both cases have the same next shot.
+    video.currentTime = lead + 1;
+    fireEvent.timeUpdate(video);
+    fireEvent.click(screen.getByRole('button', { name: 'Next shot' }));
+    expect(video.currentTime).toBeCloseTo(lead + 4, 5);
+    expect(clockRef.current()).toMatchObject({ t: expect.closeTo(4, 5), start: 0, end: 8, unknownSongOffset: false });
+    expect(screen.getByText('Shot 2 / 3')).toBeInTheDocument();
+    expect(screen.getByLabelText('Frame')).toHaveValue(120);
+    fireEvent.click(screen.getByRole('button', { name: 'Forward 1 frame' }));
+    expect(video.currentTime).toBeCloseTo(lead + 121.5 / 30, 5);
+    expect(screen.getByLabelText('Frame')).toHaveValue(121);
+  });
+
+  it('retains native playback for a legacy file with no song clock', () => {
+    const { video, clockRef } = mount(undefined);
+    expect(video.controls).toBe(true);
+    video.currentTime = 5;
+    expect(clockRef.current()).toMatchObject({ t: null, unknownSongOffset: true });
+    expect(screen.getByText(/Song timing is unavailable/)).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Next shot' })).toBeNull();
+  });
+});
+
 describe('PreviewDock controls beside the picture', () => {
   it('marks the picture, its play bar and the other controls only when asked, so other pages keep the stacked player', () => {
     const project = { id: 'p', scenes: [{ startSec: 18 }, { startSec: 22 }] };

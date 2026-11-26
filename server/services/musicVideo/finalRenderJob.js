@@ -185,8 +185,9 @@ async function retireOldFinals(projectId, replacementId) {
  *   `encode` receives the result as `staged` and owns its removal.
  * - `encode({ job, signal, onProgress, checkApproval, staged })`: always called, and entered
  *   before this function resolves. Writes the film to `outputPath` and resolves to
- *   `{ width, height, fps, durationSec, posterAtSec, proofSheet? }`; a cancelled
- *   encode rejects with `renderCanceled()`. `onProgress` takes the whole job's
+ *   `{ width, height, fps, durationSec, leadSec, songSec, posterAtSec, proofSheet? }`.
+ *   The lead and song lengths describe the encoded file, excluding any outro.
+ *   A cancelled encode rejects with `renderCanceled()`. `onProgress` takes the whole job's
  *   fraction. `proofSheet(path)` writes a contact sheet the complete frame links.
  * - `onPublished({ settled, encoded })`: optional; runs once the render is published,
  *   while the slot is still held. `settled` is false when the song changed under it, so
@@ -321,6 +322,8 @@ export async function runFinalRenderJob({ projectId, project, options = {}, perm
         height: encoded.height,
         numFrames: Math.round(encoded.durationSec * encoded.fps),
         fps: encoded.fps,
+        songStartSec: encoded.leadSec,
+        songDurationSec: encoded.songSec,
         filename,
         thumbnail,
         createdAt: new Date().toISOString(),

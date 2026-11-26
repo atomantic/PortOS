@@ -12,7 +12,7 @@ const { useVideoFileSrc } = await import('./useVideoFileSrc.js');
 // filename is unrelated to its id, and a clip render, whose filename happens to
 // be `<id>.mp4`.
 const HISTORY = {
-  'final-1': { id: 'final-1', filename: 'timeline-abcd1234-1700000000000.mp4' },
+  'final-1': { id: 'final-1', filename: 'timeline-abcd1234-1700000000000.mp4', songStartSec: 2.125, songDurationSec: 10 },
   'scene-1': { id: 'scene-1', filename: 'scene-1.mp4' },
 };
 
@@ -30,7 +30,7 @@ describe('useVideoFileSrc', () => {
   it('resolves a timeline id to its real, unrelated filename', async () => {
     const { result } = renderHook(() => useVideoFileSrc('final-1'));
     await waitFor(() => expect(result.current.resolving).toBe(false));
-    expect(result.current.src).toBe('/data/videos/timeline-abcd1234-1700000000000.mp4');
+    expect(result.current).toMatchObject({ src: '/data/videos/timeline-abcd1234-1700000000000.mp4', songStartSec: 2.125, songDurationSec: 10 });
   });
 
   it('reports `resolving` synchronously on the first render, before any effect runs', async () => {
@@ -100,9 +100,9 @@ describe('useVideoFileSrc', () => {
     await waitFor(() => expect(result.current.src).toBe('/data/videos/timeline-abcd1234-1700000000000.mp4'));
 
     rerender({ id: 'scene-1' });
-    // Must not keep serving the previous id's file while the new one resolves.
-    expect(result.current.src).toBeNull();
+    expect(result.current).toMatchObject({ src: null, songStartSec: null, songDurationSec: null });
     await waitFor(() => expect(result.current.src).toBe('/data/videos/scene-1.mp4'));
+    expect(result.current).toMatchObject({ songStartSec: null, songDurationSec: null });
   });
 
   it('recovers a transiently-failed lookup via retry()', async () => {

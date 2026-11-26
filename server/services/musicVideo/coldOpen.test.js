@@ -62,12 +62,12 @@ describe.skipIf(!hasFfmpeg)('prependColdOpen', () => {
   });
 
   it('puts the shots before the song in front of the cut, on its frame, with their own sound', async () => {
-    const project = { id: 'mv-example', scenes: [{ sceneId: 'booth', order: 0, preMusic: { durationSec: 1.5, clipVolume: 1, layers: [{ effect: 'play-button', atSec: 1 }] } }] };
-    const clip = { sceneId: 'booth', videoPath: join(media, 'booth.mp4'), width: 320, height: 180, fps: 24, duration: 1.5, sourceSec: 2, inSec: 0, outSec: 1.5, loop: false, frameFit: 'fill' };
+    const project = { id: 'mv-example', scenes: [{ sceneId: 'booth', order: 0, preMusic: { durationSec: 1.54, clipVolume: 1, layers: [{ effect: 'play-button', atSec: 1 }] } }] };
+    const clip = { sceneId: 'booth', videoPath: join(media, 'booth.mp4'), width: 320, height: 180, fps: 24, duration: 1.54, sourceSec: 2, inSec: 0, outSec: 1.54, loop: false, frameFit: 'fill' };
     const lead = await prependColdOpen({ project, coldOpen: { clips: [clip] }, path: join(media, 'cut.mp4'), ffmpeg: 'ffmpeg', jobId: 'job-example' });
-    expect(lead).toBe(1.5);
+    expect(lead).toBe(37 / 24);
     const out = join(media, 'cut.mp4');
-    expect(duration(out, 'v:0')).toBeCloseTo(3.5, 1);
+    expect(duration(out, 'v:0')).toBeCloseTo(2 + lead, 4);
     expect(execFileSync('ffprobe', ['-v', 'error', '-select_streams', 'v:0', '-show_entries', 'stream=width,height', '-of', 'csv=p=0', out]).toString().trim()).toBe('640,360');
     const level = (start, filter) => Number(/mean_volume: (-?[0-9.]+) dB/.exec(spawnSync('ffmpeg', ['-hide_banner', '-ss', String(start), '-t', '0.8', '-i', out,
       '-af', `${filter}volumedetect`, '-f', 'null', '-'], { encoding: 'utf8' }).stderr)?.[1]);

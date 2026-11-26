@@ -457,7 +457,7 @@ describe('listPreviewSources', () => {
       { id: 'c', status: 'rendering', filename: null },
     ];
     const ids = (project, opts) => listPreviewSources(project, opts).map((source) => source.id);
-    expect(ids({ renderHistoryId: 'r1', composition: { mode: 'document', document: { directory: 'd' } }, excerpts }, { finalVideoSrc: '/data/videos/final.mp4' }))
+    expect(ids({ renderHistoryId: 'r1', composition: { mode: 'document', document: { directory: 'd' } }, excerpts }, { finalVideo: { src: '/data/videos/final.mp4' } }))
       .toEqual(['final', 'document', 'excerpt:b', 'excerpt:a']);
     // The final render plays only once its file has resolved. Footage keeps the live composite disabled.
     const footage = listPreviewSources({ renderHistoryId: 'r1', composition: { mode: 'concat', document: { directory: 'd' } }, excerpts });
@@ -465,8 +465,8 @@ describe('listPreviewSources', () => {
     expect(footage[0]).toMatchObject({ disabled: true, reason: expect.stringMatching(/no live composite/) });
     // Composing puts the live document ahead of an old final render, and a stale final says so.
     const stale = { renderHistoryId: 'r1', renderDependencyState: { status: 'stale' }, composition: { mode: 'document', document: { directory: 'd' } }, excerpts };
-    expect(ids(stale, { finalVideoSrc: '/data/videos/final.mp4', leadWith: 'storyboard' })).toEqual(['document', 'final', 'excerpt:b', 'excerpt:a']);
-    expect(listPreviewSources(stale, { finalVideoSrc: '/data/videos/final.mp4' })[0].label).toBe('Final render (out of date)');
+    expect(ids(stale, { finalVideo: { src: '/data/videos/final.mp4' }, leadWith: 'storyboard' })).toEqual(['document', 'final', 'excerpt:b', 'excerpt:a']);
+    expect(listPreviewSources(stale, { finalVideo: { src: '/data/videos/final.mp4' } })[0].label).toBe('Final render (out of date)');
     expect(listPreviewSources({ excerpts: [{ id: 'c', status: 'error' }] })).toMatchObject([{ id: 'composite', disabled: true }]);
     expect(listPreviewSources({ excerpts }).find((source) => source.kind === 'video')).toMatchObject({ kind: 'video', src: '/data/videos/b.mp4', startSec: 10, endSec: 20 });
   });

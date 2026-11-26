@@ -9,6 +9,8 @@ import { render, screen, fireEvent, within, act, waitFor } from '@testing-librar
 import { MemoryRouter } from 'react-router';
 import { listMusicVideoProjects, renderMusicVideoExcerpt } from '../../../services/apiMusicVideo.js';
 
+import { getVideoHistoryItem } from '../../../services/apiImageVideo.js';
+
 installMusicVideoPageHooks();
 
 const PROJECT = {
@@ -52,6 +54,42 @@ describe('MusicVideo editor page', () => {
     expect(screen.getByTestId('loc')).toHaveTextContent(/\/music-video\/mv-1\/editor$/);
     expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
     expect(screen.getByRole('region', { name: 'Timeline' })).toBeInTheDocument();
+  });
+
+  it('seeks and loops a final on its encoded song clock after the cold open', async () => {
+    const lead = 49 / 24;
+    const fixture = {
+      ...PROJECT, renderHistoryId: 'fixture-final',
+      scenes: [...PROJECT.scenes, { sceneId: 'lead', order: -1, preMusic: { durationSec: 3 }, prompt: 'Cold open' }],
+    };
+    listMusicVideoProjects.mockResolvedValue([fixture]);
+    getVideoHistoryItem.mockResolvedValueOnce({ filename: 'final.mp4', songStartSec: lead, songDurationSec: 10, fps: 24 });
+    renderAt('/music-video/mv-1/editor');
+    await screen.findByRole('option', { name: 'Final render' });
+    fireEvent.change(screen.getByLabelText('Preview source'), { target: { value: 'final' } });
+    const video = await screen.findByLabelText('Final render preview');
+    Object.defineProperties(video, {
+      readyState: { value: 4, configurable: true },
+      duration: { value: 15, configurable: true },
+    });
+    fireEvent.loadedMetadata(video);
+    const playhead = screen.getByLabelText('Playhead time');
+    const group = screen.getByRole('group', { name: 'In/out range' });
+    const next = screen.getByRole('button', { name: 'Next shot' });
+    fireEvent.click(next); // Skip the cold open to the song's first shot.
+    fireEvent.click(next);
+    expect(video.currentTime).toBeCloseTo(lead + 4, 5);
+    await waitFor(() => expect(playhead).toHaveTextContent('0:04.00'));
+    fireEvent.click(within(group).getByRole('button', { name: 'Set In' }));
+    video.currentTime = lead + 5;
+    await waitFor(() => expect(playhead).toHaveTextContent('0:05.00'));
+    fireEvent.click(within(group).getByRole('button', { name: 'Set Out' }));
+    const loop = within(group).getByRole('button', { name: 'Loop Range' });
+    await waitFor(() => expect(loop).toBeEnabled());
+    fireEvent.click(loop);
+    Object.defineProperty(video, 'paused', { value: false, configurable: true });
+    video.currentTime = lead + 5.2;
+    await waitFor(() => expect(video.currentTime).toBeCloseTo(lead + 4, 5));
   });
 
   it('sends the displayed song-time range from an offset preview and shares the render slot with Review', async () => {
