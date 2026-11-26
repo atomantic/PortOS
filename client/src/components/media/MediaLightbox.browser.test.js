@@ -122,6 +122,7 @@ describe.skipIf(!chrome)('MediaLightbox native video keyboard controls', () => {
             for (const [key, value] of Object.entries({ ...theme.colors, ...theme.tokens })) document.documentElement.style.setProperty(key, value);
             document.documentElement.dataset.portTheme = theme.id;
             document.documentElement.dataset.portThemeFamily = theme.family;
+            document.documentElement.dataset.portThemeMode = theme.mode;
             const canvas = document.createElement('canvas');
             canvas.width = 640; canvas.height = 360;
             const ctx = canvas.getContext('2d');
@@ -169,6 +170,52 @@ describe.skipIf(!chrome)('MediaLightbox native video keyboard controls', () => {
     ({ browser, origin } = fixture);
   }, BROWSER_FIXTURE_STARTUP_MS);
   afterAll(() => fixture?.close());
+
+  it.each(['kestrel-neon-day', 'kestrel-neon'])('keeps the image edit form and prompt preview readable in %s', async theme => {
+    const page = await browser.newPage();
+    try {
+      await page.route('**/api/**', route => route.fulfill({ json: { providers: [], items: [] } }));
+      await page.route('**/api/image-gen/prompt-preview', route => route.fulfill({
+        json: {
+          sentPrompt: 'Edit the sample. Keep everything else.',
+          promptAdditions: [{ id: 'preserve', label: 'Preserve the rest', text: 'Keep everything else.' }],
+          referenceInputProvenance: 'cli-attachments',
+          referenceImages: [{ filename: 'synthetic-0.png', source: 'Input image 1', status: 'included' }],
+        },
+      }));
+      await page.goto(`${origin}lightbox-test?theme=${theme}`);
+      await page.getByRole('button', { name: 'Open image gallery' }).click();
+      const dialog = page.getByRole('dialog');
+      await dialog.getByRole('button', { name: 'Edit', exact: true }).click();
+      const form = dialog.locator('form').filter({ has: page.getByLabel('What should change?') });
+      const instruction = form.getByLabel('What should change?');
+      await instruction.fill('Edit the sample');
+      const expectInk = async (locator, role, pseudo = null) => {
+        const { actual, expected } = await locator.evaluate((element, { role, pseudo }) => {
+          const ink = document.createElement('span');
+          ink.style.color = `rgb(var(--port-${role}))`;
+          element.after(ink);
+          const expected = getComputedStyle(ink).color;
+          ink.remove();
+          return { actual: getComputedStyle(element, pseudo).color, expected };
+        }, { role, pseudo });
+        expect(actual, `${role} for ${locator}`).toBe(expected);
+      };
+      await expectInk(instruction, 'text');
+      await expectInk(instruction, 'text', '::selection');
+      await expectInk(form.getByLabel('Edit with'), 'text');
+      await expectInk(form.getByText('What should change?', { exact: true }), 'text-muted');
+      await expectInk(form.getByRole('button', { name: 'Add reference' }), 'text');
+      await expectInk(form.getByRole('heading', { name: 'Reference inputs' }), 'text');
+      await expectInk(form.getByText('Input image 1', { exact: true }), 'text-muted');
+      const addition = form.getByRole('button', { name: '+ Preserve the rest' });
+      await addition.click();
+      await expectInk(addition, 'text');
+      await expectInk(form.getByText('Keep everything else.', { exact: true }), 'text');
+    } finally {
+      await page.close();
+    }
+  }, 30000);
 
   it('decodes a video frame in a card when the hosted poster times out', async () => {
     const page = await browser.newPage();

@@ -15,15 +15,15 @@ export default function ModelReferenceImages({ images, editBase, onOpenPreview, 
   const blocked = images.some((image) => !image.relative && (image.status === 'missing' || image.status === 'unsupported'));
   return (
     <section aria-label={inputProvenance ? 'Reference inputs' : 'Reference images sent'} className="space-y-2">
-      <h3 className="text-xs font-semibold text-gray-300">{inputProvenance ? 'Reference inputs' : 'Reference images sent'}</h3>
-      <p className="text-xs text-gray-500">
+      <h3 className="text-xs font-semibold text-port-text">{inputProvenance ? 'Reference inputs' : 'Reference images sent'}</h3>
+      <p className="text-xs text-port-text-muted">
         {inputProvenance === 'peer-requested' ? 'These references will be sent to the selected peer. Whether its image tool receives them is unconfirmed.'
           : inputProvenance === 'cli-attachments' ? 'These images will be attached to the Codex session. Whether its image tool receives them is unconfirmed.'
             : inputProvenance ? 'These image paths will be provided to the CLI driver. Whether its image tool receives them is unconfirmed.' : editing
           ? `The render edits the ${editBase?.scope === 'form' ? 'first image' : 'portrait'}; the other images guide likeness.`
           : intro || 'Render guides take priority; otherwise the portrait and canon images supply likeness.'}
       </p>
-      {editBase?.status === 'none' && <p role="status" className="text-xs text-gray-400">{editBase.reason}</p>}
+      {editBase?.status === 'none' && <p role="status" className="text-xs text-port-text-muted">{editBase.reason}</p>}
       {editBase?.status === 'fallback' && (
         <p role="status" className="text-xs text-port-warning">Not editing from the portrait: {editBase.reason}</p>
       )}
@@ -58,11 +58,11 @@ export default function ModelReferenceImages({ images, editBase, onOpenPreview, 
                 )
               )}
               <figcaption className="text-[11px] break-words">
-                <span className="block text-gray-300">{image.filename}</span>
-                <span className="block text-gray-500">{image.source}</span>
+                <span className="block text-port-text">{image.filename}</span>
+                <span className="block text-port-text-muted">{image.source}</span>
                 {image.role === 'edit-base' && <span className="block font-medium text-port-accent">{inputProvenance ? 'Edit base — requested as the image to edit' : 'Edit base — the render starts from this image'}</span>}
-                {typeof image.strength === 'number' && <span className="block text-gray-500">Strength {image.strength}</span>}
-                <span className={image.status === 'included' && !inputProvenance ? 'text-port-success' : image.status === 'left-out' ? 'text-gray-500' : 'text-port-warning'}>
+                {typeof image.strength === 'number' && <span className="block text-port-text-muted">Strength {image.strength}</span>}
+                <span className={image.status === 'included' && !inputProvenance ? 'text-port-success' : image.status === 'left-out' ? 'text-port-text-muted' : 'text-port-warning'}>
                   {image.status === 'included' ? inputProvenance === 'cli-attachments' ? 'Will be attached to Codex; image-tool use unconfirmed'
                     : inputProvenance === 'peer-requested' ? 'Will be sent to the peer; image-tool use unconfirmed'
                       : inputProvenance ? 'Will be requested from the CLI driver; image-tool use unconfirmed' : 'Will be sent to the model'
@@ -76,7 +76,7 @@ export default function ModelReferenceImages({ images, editBase, onOpenPreview, 
                     type="button"
                     onClick={() => onToggleLikeness(image, image.status === 'left-out')}
                     aria-label={`${image.status === 'left-out' ? 'Use for likeness' : 'Leave out'}: ${image.filename}`}
-                    className="mt-1 flex min-h-11 w-full items-center justify-center rounded border border-port-border px-2 text-xs text-gray-300 hover:border-port-accent"
+                    className="mt-1 flex min-h-11 w-full items-center justify-center rounded border border-port-border px-2 text-xs text-port-text hover:border-port-accent"
                   >
                     {image.status === 'left-out' ? 'Use for likeness' : 'Leave out'}
                   </button>
