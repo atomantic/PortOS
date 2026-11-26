@@ -71,12 +71,14 @@ function run(mirror, cache, { includePostgres = true, event = 'push', probeAvail
 [[ "$1" = --extract && "$(cat "$2")" = '${PACKAGE_BYTES}' ]] || exit 1
 echo "extract $(basename "$2")" >> '${log}'
 mkdir -p "$3/usr/bin"
+tool=ffprobe
 if [[ "$(basename "$2")" = '${PACKAGE_FILE}' ]]; then
-  printf '%s\n' '#!/bin/bash' '[[ "$LD_LIBRARY_PATH" = *"/usr/lib/x86_64-linux-gnu:"* && "$LD_LIBRARY_PATH" = *"/usr/lib/x86_64-linux-gnu/pulseaudio:"* && "$1" = -version ]]' > "$3/usr/bin/ffmpeg"
-  chmod +x "$3/usr/bin/ffmpeg"
-elif ${probeAvailable}; then
-  cp "$3/usr/bin/ffmpeg" "$3/usr/bin/ffprobe"
-fi`);
+  tool=ffmpeg
+elif ! ${probeAvailable}; then
+  exit 0
+fi
+printf '%s\n' '#!/bin/bash' '[[ "$LD_LIBRARY_PATH" = *"/usr/lib/x86_64-linux-gnu:"* && "$LD_LIBRARY_PATH" = *"/usr/lib/x86_64-linux-gnu/pulseaudio:"* && "$1" = -version ]]' > "$3/usr/bin/$tool"
+chmod +x "$3/usr/bin/$tool"`);
   // Keep the production GNU sed invocation intact while adapting its in-place
   // flag only inside this synthetic command fixture on macOS.
   fake('sed', 'if [ "$(uname -s)" = Darwin ]; then\n  [ "$1" = "-i" ] && [ "$2" = "-E" ] || exit 2\n  shift 2\n  exec /usr/bin/sed -i "" -E "$@"\nfi\nexec /usr/bin/sed -i -E "$@"');
@@ -286,7 +288,7 @@ describe.skipIf(process.platform === 'win32')('CI DB tool installation', () => {
         expect(result.downloaded).toEqual([`download ${PACKAGE_FILE}`, `download ${COMPANION_FILE}`]);
       } else {
         expect(result.restoreCalls).toEqual([]);
-        expect(result.extracted).toEqual([`extract ${PACKAGE_FILE}`, `extract ${COMPANION_FILE}`]);
+        expect(result.extracted.sort()).toEqual([`extract ${COMPANION_FILE}`, `extract ${PACKAGE_FILE}`]);
         expect(result.downloaded).toEqual([]);
         expect(result.githubPath).toMatch(/\/portos-ffmpeg\.[^/]+\/bin\n$/);
         expect(result.calls).toEqual([

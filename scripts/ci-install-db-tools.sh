@@ -81,16 +81,18 @@ bounded() {
 # avoids dpkg's serial unpack/configure cycle and scopes the library path to
 # these tools so Chrome, Node and other programs still use the runner's libraries.
 prepare_browser_runtime() {
-  local archive tool multiarch libdir library_path
+  local tool multiarch libdir library_path
   multiarch=$(dpkg-architecture -qDEB_HOST_MULTIARCH) || return
   BROWSER_RUNTIME=$(mktemp -d "${RUNNER_TEMP:-${TMPDIR:-/tmp}}/portos-ffmpeg.XXXXXXXX") || return
-  for archive in "$@"; do
-    dpkg-deb --extract "$archive" "$BROWSER_RUNTIME/payload" || return
-  done
+  mkdir "$BROWSER_RUNTIME/packages" "$BROWSER_RUNTIME/payload" "$BROWSER_RUNTIME/bin" || return
+  # Give each extractor its own tree, then assemble the runtime with hard links.
+  # shellcheck disable=SC2016 # The extractor shell expands its own arguments.
+  printf '%s\0' "$@" | xargs -0 -P 4 -n 1 bash -c \
+    'dpkg-deb --extract "$2" "$1/${2##*/}"' _ "$BROWSER_RUNTIME/packages" || return
+  cp -al -- "$BROWSER_RUNTIME/packages/"*/. "$BROWSER_RUNTIME/payload/" || return
   libdir="$BROWSER_RUNTIME/payload/usr/lib/$multiarch"
   # Ubuntu's libpulse0 places libpulsecommon in a separate loader directory.
   library_path="$libdir:$libdir/pulseaudio:$BROWSER_RUNTIME/payload/lib/$multiarch"
-  mkdir "$BROWSER_RUNTIME/bin" || return
   for tool in ffmpeg ffprobe; do
     printf '#!/bin/bash\nexport LD_LIBRARY_PATH=%q\nexec %q "$@"\n' \
       "$library_path" "$BROWSER_RUNTIME/payload/usr/bin/$tool" > "$BROWSER_RUNTIME/bin/$tool" || return
