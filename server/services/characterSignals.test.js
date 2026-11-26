@@ -11,7 +11,7 @@ vi.mock('./universeBuilder.js', () => ({
 }));
 vi.mock('./writersRoom/local.js', () => ({ countWorks: vi.fn(async () => 1) }));
 vi.mock('./catalog/catalogDB.js', () => ({ getCatalogStats: vi.fn(async () => ({ total: 2, scraps: 1 })) }));
-vi.mock('./meatspace/meatspacePost.js', () => ({
+vi.mock('./meatspace/postSessionHistory.js', () => ({
   getPostSessions: vi.fn(async () => { calls.sessions += 1; return [{ date: '2026-07-17' }]; }),
 }));
 vi.mock('./meatspace/meatspacePostTraining.js', () => ({ getAllTrainingEntries: vi.fn(async () => []) }));

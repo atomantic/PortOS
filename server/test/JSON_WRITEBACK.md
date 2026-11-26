@@ -127,7 +127,7 @@ allowlist of modules. Future service pairs are discovered directly at test time.
 | meatspaceCalendar.js | <code>ACTIVITIES_FILE</code> | Strict read | [#6981](https://github.com/atomantic/PortOS/pull/6981) |
 | meatspaceCalendar.js | <code>EVENTS_FILE</code> | Strict read | [#6981](https://github.com/atomantic/PortOS/pull/6981) |
 | meatspaceNicotine.js | <code>CUSTOM_PRODUCTS_FILE</code> | Strict read | [#6981](https://github.com/atomantic/PortOS/pull/6981) |
-| meatspacePost.js | <code>CONFIG_FILE</code> | Strict read | [#6981](https://github.com/atomantic/PortOS/pull/6981) |
+| postConfig.js | <code>CONFIG_FILE</code> | Strict read | [#6981](https://github.com/atomantic/PortOS/pull/6981) |
 | meatspacePostMemory.js | <code>MEMORY_ITEMS_FILE</code> | Strict read | [#6981](https://github.com/atomantic/PortOS/pull/6981) |
 | meatspacePostMorse.js | <code>MORSE_FILE</code> | Strict read | [#6981](https://github.com/atomantic/PortOS/pull/6981) |
 | meatspacePostReview.js | <code>REVIEW_SCHEDULE_FILE</code> | Strict read | [#6981](https://github.com/atomantic/PortOS/pull/6981) |

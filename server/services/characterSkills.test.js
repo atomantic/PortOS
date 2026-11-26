@@ -57,7 +57,7 @@ const fail = (name) => () => Promise.reject(new Error(`${name} unavailable`));
 vi.mock('./universeBuilder.js', () => ({ countUniverses: vi.fn(async () => stats.universes) }));
 vi.mock('./writersRoom/local.js', () => ({ countWorks: vi.fn(async () => stats.works) }));
 vi.mock('./catalog/catalogDB.js', () => ({ getCatalogStats: vi.fn(async () => stats.catalog) }));
-vi.mock('./meatspace/meatspacePost.js', () => ({ getPostSessions: vi.fn(async () => stats.sessions) }));
+vi.mock('./meatspace/postSessionHistory.js', () => ({ getPostSessions: vi.fn(async () => stats.sessions) }));
 vi.mock('./meatspace/meatspacePostTraining.js', () => ({ getAllTrainingEntries: vi.fn(async () => stats.training) }));
 vi.mock('./meatspace/meatspaceLoggingStats.js', () => ({ getLoggingStats: vi.fn(async () => stats.logging) }));
 vi.mock('./identity/goals.js', () => ({ getGoals: vi.fn(async () => stats.goals) }));
@@ -387,7 +387,7 @@ describe('the real read path: an unreadable file is unavailable, an absent one i
   // getters stay mocked (they need Postgres); only the file-backed graph is real,
   // which is exactly the wiring under test.
   const loadRealRegistry = async () => {
-    vi.doUnmock('./meatspace/meatspacePost.js');
+    vi.doUnmock('./meatspace/postSessionHistory.js');
     vi.doUnmock('./meatspace/meatspacePostTraining.js');
     vi.doUnmock('./meatspace/meatspaceLoggingStats.js');
     vi.doUnmock('./identity/goals.js');

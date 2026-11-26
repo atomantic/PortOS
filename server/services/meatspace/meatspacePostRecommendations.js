@@ -1,16 +1,15 @@
 /**
  * POST "what to practice next" orchestration.
  *
- * Imports the shared POST helpers from the persistence service and the derived
- * aggregates from the stats module, each named at its declaring module, so
- * persistence and recommendation policy stay independently loadable.
+ * Collects current settings, practice history, review schedules, and progress
+ * for the recommendation rules.
  */
+import { getPostConfig } from './postConfig.js';
+import { getPostSessions } from './postSessionHistory.js';
+import { getMultiplicationProgress, getPowersProgress, getCognitiveProgress } from './postProgress.js';
 import {
-  getPostConfig,
-  getPostSessions,
-  getMultiplicationProgress,
-  getPowersProgress,
-  getCognitiveProgress,
+  RECOMMENDATION_LIMIT,
+  recModuleForDrillType,
   weakestSkillsFromStats,
   stalledProgressions,
   isRecDrillRunnable,
@@ -19,23 +18,17 @@ import {
   practicedTodayFromActivity,
   memoryPracticeDeepLink,
   recentPracticeFromActivity,
-} from './meatspacePost.js';
+} from './postRecommendations.js';
 import { getPostStats } from './meatspacePostStats.js';
 import { orderByRecencyRotation, shuffleForDay } from '../../lib/postRotation.js';
 import { MASTERY_DEFAULTS } from '../../lib/postMultiplicationLadder.js';
-import { POST_TOPICS, isMemoryItemEnabled, resolveTopicForDrillType } from '../../lib/postTopics.js';
+import { POST_TOPICS, isMemoryItemEnabled } from '../../lib/postTopics.js';
 import { getDueMemoryItems, getMemoryItems, isMemoryItemDue } from './meatspacePostMemory.js';
 import { getDueReviews } from './meatspacePostReview.js';
 import { getAllTrainingEntries } from '../postTrainingLogStore.js';
 import { getMorseProgress, MAX_KOCH_LEVEL } from './meatspacePostMorse.js';
 import { todayInTimezone } from '../../lib/timezone.js';
 import { getUserTimezone } from '../userTimezone.js';
-
-const RECOMMENDATION_LIMIT = 5;
-const recModuleForDrillType = (type, fallback) => {
-  const topic = resolveTopicForDrillType(type);
-  return topic ? (topic.module || topic.id) : fallback;
-};
 
 export async function getPostRecommendations({ limit = RECOMMENDATION_LIMIT } = {}) {
   const atDate = new Date();

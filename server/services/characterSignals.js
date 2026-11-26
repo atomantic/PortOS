@@ -9,7 +9,7 @@
 import { countUniverses } from './universeBuilder.js';
 import { countWorks } from './writersRoom/local.js';
 import { getCatalogStats } from './catalog/catalogDB.js';
-import { getPostSessions } from './meatspace/meatspacePost.js';
+import { getPostSessions } from './meatspace/postSessionHistory.js';
 import { getAllTrainingEntries } from './meatspace/meatspacePostTraining.js';
 import { getLoggingStats } from './meatspace/meatspaceLoggingStats.js';
 import { getGoals } from './identity/goals.js';
@@ -30,7 +30,7 @@ export const SIGNAL_READERS = {
   postSessions: () => getPostSessions(undefined, undefined, { strict: true }),
   postTraining: () => getAllTrainingEntries({ strict: true }),
   postEnabled: () => isInstanceFeatureEnabled('post'),
-  // Today's `YYYY-MM-DD` in the USER's configured timezone, the same boundary meatspacePost.js anchors streaks to.
+  // Today's `YYYY-MM-DD` in the USER's configured timezone, the same boundary postSessionHistory.js anchors streaks to.
   postToday: () => userLocalToday(),
   // The user's IANA timezone, for consumers that re-key a stored INSTANT to the user's day
   // (`daysActive`, `postStreakDays`); keeps the day-boundary decision in ONE place.
