@@ -466,7 +466,9 @@ export async function syncAccount(accountId, io, options = {}) {
     // write against the other cache mutators so none clobbers the others.
     const result = await queueAccountWrite(accountId, providerSync).catch(async (error) => {
       console.error(`📧 Sync failed for account ${account.id} (${account.type}): ${messageLogError(error)}`);
-      await updateSyncStatus(accountId, 'error').catch(() => {});
+      await updateSyncStatus(accountId, 'error').catch((statusError) => {
+        console.error(`📧 Sync error status write failed for account ${accountId}: ${messageLogError(statusError)}`);
+      });
       emitToOperatorsOn(io, 'messages:sync:failed', { accountId, error: error.message });
       return { error: error.message, status: 502 };
     });

@@ -9,7 +9,7 @@
 
 import { randomUUID } from 'crypto';
 import { join } from 'path';
-import { PATHS, ensureDir } from '../../lib/fileUtils.js';
+import { PATHS, UUID_RE, ensureDir } from '../../lib/fileUtils.js';
 import { ServerError } from '../../lib/errorHandler.js';
 import { broadcastSse } from '../../lib/sseUtils.js';
 import { refuseRetiredTraining, assertRetiredDataAvailable } from '../../lib/retiredLoraTraining.js';
@@ -259,20 +259,25 @@ export function assertMediaQueueRoom(count = 1) {
 // memory, so admission succeeds without durability; boot already reported it.
 //
 // Bounded (#8326): at MAX_PENDING_MEDIA_JOBS waiting jobs the submission is
-// refused (429 MEDIA_QUEUE_FULL) before ANY state changes — no id, no queue
+// refused (429 MEDIA_QUEUE_FULL) before ANY queue state changes — no queue
 // entry, no SSE entry, no snapshot write. The check and the push below run in
 // one synchronous stretch, so concurrent submissions cannot overshoot it.
-export async function enqueueJob(job) {
+// Internal callers can supply their generated UUID to stage job-owned inputs
+// before admission.
+export async function enqueueJob(job, { jobId } = {}) {
+  if (jobId !== undefined && (typeof jobId !== 'string' || !UUID_RE.test(jobId) || jobId !== jobId.toLowerCase())) {
+    throw new Error('enqueueJob: invalid job ID');
+  }
   const params = job.params || {};
   const inputs = [params.initImagePath, params.sourceImagePath, params.sourceImageFile, params.lastImagePath, params.lastImageFile,
     ...(Array.isArray(params.referenceImagePaths) ? params.referenceImagePaths : []),
     ...(Array.isArray(params.remoteMedia?.inputAssets) ? params.remoteMedia.inputAssets.map(asset => asset?.path) : [])];
-  if (!params.reviewedReferenceDigest && !inputs.some(path => typeof path === 'string' && path.includes('snapshot-'))) return enqueueJobLocked(job);
+  if (!params.reviewedReferenceDigest && !inputs.some(path => typeof path === 'string' && path.includes('snapshot-'))) return enqueueJobLocked(job, jobId);
   const { withReviewedSnapshotLock } = await loadMediaRuntimeModule('reviewedReference');
-  return withReviewedSnapshotLock(() => enqueueJobLocked(job));
+  return withReviewedSnapshotLock(() => enqueueJobLocked(job, jobId));
 }
 
-async function enqueueJobLocked({ kind, params, owner = null }) {
+async function enqueueJobLocked({ kind, params, owner = null }, jobId) {
   installVideoExecutionRecorder();
   if (kind === 'training') refuseRetiredTraining();
   await assertMusicVideoJobPolicy(kind, params);
@@ -293,7 +298,7 @@ async function enqueueJobLocked({ kind, params, owner = null }) {
     });
   }
   assertMediaQueueRoom(1);
-  const id = randomUUID();
+  const id = jobId ?? randomUUID();
   let preparedParams = params;
   if (kind === 'image' && params?.reviewedReferenceDigest) {
     if (isPersistBlocked()) throw new ServerError('Reviewed edits require a writable media queue', { status: 503, code: MEDIA_QUEUE_PERSIST_FAILED });
@@ -352,6 +357,7 @@ async function enqueueJobLocked({ kind, params, owner = null }) {
     })(),
   };
   assertRetiredDataAvailable();
+  if (jobId && findJob(id)) throw new Error('enqueueJob: job ID already exists');
   job.admitting = true;
   queue.push(job);
   try {
