@@ -3,7 +3,7 @@ import { render, screen, fireEvent, within, waitFor, act } from '@testing-librar
 import ShotTimeline from './ShotTimeline.jsx';
 
 // The effect tiles paint with the render's canvas painter, which needs a real 2D canvas.
-vi.mock('../../lib/musicVideoGlitchCanvas.js', () => ({ createMusicVideoGlitchPainter: () => () => {} }));
+vi.mock('../../../../server/lib/musicVideo/musicVideoGlitchCanvas.js', () => ({ createMusicVideoGlitchPainter: () => () => {} }));
 
 const project = {
   id: 'mv-1',

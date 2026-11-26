@@ -4,7 +4,6 @@
  */
 
 import { filmLookRuntimeSource, isFilmLookNeutral, normalizeFilmLook } from '../filmLook.js';
-export { documentShotColorMatchRuntime, hasMusicVideoColorMatch } from '../shotColorMatch.js';
 
 /** Aspects a camera can play inside the video frame. The video's own aspect stays on the treatment brief. */
 export const MUSIC_VIDEO_CAMERA_FRAME_ASPECTS = Object.freeze(['16:9', '4:3', '3:2']);

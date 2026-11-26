@@ -3,6 +3,7 @@ import { useCallback, useEffect, useMemo, useRef } from 'react';
 import '../../../../server/lib/musicVideo/cameraRig.js';
 import { documentCameraCss, documentCameraView, documentSceneIndexes } from '../../../../server/lib/musicVideo/musicVideoDocumentCamera.js';
 import { templateEffects } from '../../../../server/lib/musicVideo/musicVideoTemplateEffects.js';
+import { useSongFrames } from './animaticTiming.js';
 
 // Held from module load: the script runs once per module graph, and a global read later may not carry it.
 const RIG = globalThis.PORTOS_CAMERA_RIG;
@@ -32,28 +33,6 @@ function grainTiles() {
     grainUrls.push(canvas.toDataURL('image/png'));
   }
   return grainUrls;
-}
-
-// Runs `apply(songTime)` on every animation frame while the song plays, and once when it stops.
-function useSongFrames(audioRef, apply) {
-  useEffect(() => {
-    const audio = audioRef.current;
-    if (!audio) return undefined;
-    let handle = 0;
-    const tick = () => { apply(audio.currentTime || 0); handle = requestAnimationFrame(tick); };
-    const start = () => { cancelAnimationFrame(handle); handle = requestAnimationFrame(tick); };
-    const stop = () => { cancelAnimationFrame(handle); apply(audio.currentTime || 0); };
-    audio.addEventListener('play', start);
-    audio.addEventListener('pause', stop);
-    audio.addEventListener('ended', stop);
-    if (!audio.paused) start();
-    return () => {
-      cancelAnimationFrame(handle);
-      audio.removeEventListener('play', start);
-      audio.removeEventListener('pause', stop);
-      audio.removeEventListener('ended', stop);
-    };
-  }, [audioRef, apply]);
 }
 
 /**

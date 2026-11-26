@@ -4,7 +4,7 @@ import EffectThumb from './EffectThumb.jsx';
 import SceneCutEffect from './SceneCutEffect.jsx';
 import SceneGlitches from './SceneGlitches.jsx';
 import SceneTransitions from './SceneTransitions.jsx';
-import { MUSIC_VIDEO_TRANSITIONS, MUSIC_VIDEO_TRANSITION_LABELS } from '../../lib/musicVideoTransitions.js';
+import { MUSIC_VIDEO_TRANSITIONS, MUSIC_VIDEO_TRANSITION_LABELS } from '../../../../server/lib/musicVideo/musicVideoTransitions.js';
 import { effectTimeAt, effectTrimAt, glitchesWithEdit, timelineShotEffects } from '../../lib/musicVideoTimelineEffects.js';
 
 // An effect at least this wide shows its name.

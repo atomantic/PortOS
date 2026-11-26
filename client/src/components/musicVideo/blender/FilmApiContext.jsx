@@ -1,5 +1,5 @@
 import { createContext, useContext } from 'react';
-import * as musicVideoApi from '../../../services/apiMusicVideo.js';
+import { musicVideoFilmApi } from '../../../services/apiMusicVideo.js';
 
-export const FilmApiContext = createContext(musicVideoApi);
+export const FilmApiContext = createContext(musicVideoFilmApi);
 export const useFilmApi = () => useContext(FilmApiContext);

@@ -5,11 +5,22 @@ import { blenderFilmState } from '../../test/blenderFilmFixture.js';
 
 vi.mock('../../services/socket', () => ({ default: { on: vi.fn(), off: vi.fn(), emit: vi.fn() } }));
 vi.mock('../../services/apiCodeAnimation', () => ({ getCodeAnimationProject: vi.fn() }));
-vi.mock('../../services/apiCodeAnimationFilm.js', async load => ({ ...await load(),
-  getMusicVideoBlender: vi.fn(), listMusicVideoBlenderModels: vi.fn(async () => ({ models: [] })), listMusicVideoBlenderFiles: vi.fn(), getMusicVideoBlenderFile: vi.fn(),
-  assembleMusicVideoBlenderCut: vi.fn(), patchFilm: vi.fn(),
-  promoteFilm: vi.fn(),
-}));
+vi.mock('../../services/apiCodeAnimationFilm.js', async load => {
+  const actual = await load();
+  return {
+    ...actual,
+    codeAnimationFilmApi: {
+      ...actual.codeAnimationFilmApi,
+      getMusicVideoBlender: vi.fn(),
+      listMusicVideoBlenderModels: vi.fn(async () => ({ models: [] })),
+      listMusicVideoBlenderFiles: vi.fn(),
+      getMusicVideoBlenderFile: vi.fn(),
+      assembleMusicVideoBlenderCut: vi.fn(),
+    },
+    patchFilm: vi.fn(),
+    promoteFilm: vi.fn(),
+  };
+});
 vi.mock('../../services/apiTracks.js', () => ({
   listTracks: vi.fn(),
 }));
@@ -31,10 +42,10 @@ const Location = () => <output aria-label="Location">{useLocation().pathname}</o
 beforeEach(() => {
   vi.clearAllMocks();
   getCodeAnimationProject.mockResolvedValue(project);
-  filmApi.getMusicVideoBlender.mockResolvedValue(blenderFilmState({ timeline: project.film.timeline }));
-  filmApi.listMusicVideoBlenderFiles.mockResolvedValue({ files: [{ path: 'film.py', text: true }] });
-  filmApi.getMusicVideoBlenderFile.mockResolvedValue({ path: 'film.py', content: '# example' });
-  filmApi.assembleMusicVideoBlenderCut.mockResolvedValue({ job: { id: 'cut', kind: 'cut', quality: 'final', status: 'queued' } });
+  filmApi.codeAnimationFilmApi.getMusicVideoBlender.mockResolvedValue(blenderFilmState({ timeline: project.film.timeline }));
+  filmApi.codeAnimationFilmApi.listMusicVideoBlenderFiles.mockResolvedValue({ files: [{ path: 'film.py', text: true }] });
+  filmApi.codeAnimationFilmApi.getMusicVideoBlenderFile.mockResolvedValue({ path: 'film.py', content: '# example' });
+  filmApi.codeAnimationFilmApi.assembleMusicVideoBlenderCut.mockResolvedValue({ job: { id: 'cut', kind: 'cut', quality: 'final', status: 'queued' } });
 });
 
 afterEach(() => vi.restoreAllMocks());
@@ -45,15 +56,15 @@ it('opens the URL-selected film shot, uses standalone media/files/cut APIs and p
   </MemoryRouter>);
   expect(await screen.findByRole('heading', { name: 'Silent example' })).toBeTruthy();
   await screen.findByLabelText('Preview render of First verse');
-  expect(filmApi.getMusicVideoBlender).toHaveBeenCalledWith(id, { silent: true });
+  expect(filmApi.codeAnimationFilmApi.getMusicVideoBlender).toHaveBeenCalledWith(id, { silent: true });
   expect(socket.on).toHaveBeenCalledWith('code-animation:film', expect.any(Function));
   for (const media of container.querySelectorAll('video[src], img[src]')) expect(media.getAttribute('src')).toContain(`/api/code-animation/films/${id}/blender/media`);
   fireEvent.click(screen.getByRole('tab', { name: 'Files', exact: true }));
   await waitFor(() => expect(screen.getByLabelText('Location').textContent).toBe(`/code-animation/production/films/${id}/files/s020`));
-  await waitFor(() => expect(filmApi.listMusicVideoBlenderFiles).toHaveBeenCalled());
+  await waitFor(() => expect(filmApi.codeAnimationFilmApi.listMusicVideoBlenderFiles).toHaveBeenCalled());
   fireEvent.click(screen.getByRole('tab', { name: 'Cut', exact: true }));
   fireEvent.click(await screen.findByRole('button', { name: 'Assemble final cut' }));
-  await waitFor(() => expect(filmApi.assembleMusicVideoBlenderCut).toHaveBeenCalledWith(id, { quality: 'final' }, { silent: true }));
+  await waitFor(() => expect(filmApi.codeAnimationFilmApi.assembleMusicVideoBlenderCut).toHaveBeenCalledWith(id, { quality: 'final' }, { silent: true }));
   expect(screen.queryByText('Also publish as review draft')).toBeNull();
   expect(screen.queryByText('Open Film look')).toBeNull();
 });

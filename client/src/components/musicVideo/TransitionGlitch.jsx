@@ -1,9 +1,9 @@
 import { useCallback, useEffect, useMemo, useRef } from 'react';
-import { createMusicVideoGlitchPainter } from '../../lib/musicVideoGlitchCanvas.js';
+import { createMusicVideoGlitchPainter } from '../../../../server/lib/musicVideo/musicVideoGlitchCanvas.js';
 import { drawFigurePicture, figureClipSettling } from './animaticPicture.js';
 import {
   blockBox, edgeGlows, mergeGlitchFrames, sceneImageEffectGlitchFrames, sceneShotGlitchFrames, sceneTransitionSections, transitionFrameAt, transitionGlitchFrames,
-} from '../../lib/musicVideoTransitions.js';
+} from '../../../../server/lib/musicVideo/musicVideoTransitions.js';
 
 // The canvas paints at most this wide; a glitch lasts a few frames, so detail past it is never seen.
 const MAX_CANVAS_PX = 960;

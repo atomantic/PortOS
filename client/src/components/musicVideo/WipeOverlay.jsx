@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef } from 'react';
-import { sceneWipeCuts } from '../../lib/musicVideoTransitions.js';
-import { compileWipeNode, createMusicVideoWipePainter, wipeDefinition } from '../../lib/musicVideoWipes.js';
+import { sceneWipeCuts } from '../../../../server/lib/musicVideo/musicVideoTransitions.js';
+import { compileWipeNode, createMusicVideoWipePainter, wipeDefinition } from '../../../../server/lib/musicVideo/musicVideoWipes.js';
 import { drawFigurePicture } from './animaticPicture.js';
 
 // The canvas paints at most this wide, as the glitch overlay does.

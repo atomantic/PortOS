@@ -14,7 +14,7 @@ import { blenderScratchDir } from './workspace.js';
 import { blenderNotSynced, planBlenderFinal, planBlenderWindow, readBlenderFilm } from './film.js';
 import { blenderFinishFilter } from './finishFilter.js';
 import { blenderLeadAudio } from './leadAudio.js';
-import { blenderLeadSec, blenderSongEndSec } from './manifest.js';
+import { blenderLeadSec, blenderSongEndSec } from '../../film/manifest.js';
 import { assembleBlenderVideo } from '../../film/assemble.js';
 import { blenderTitleCardPlan, withBlenderTitleCard } from './titleCard.js';
 import { announceBlenderState } from './record.js';

@@ -29,7 +29,7 @@ import { findEnabledByRole } from '../../../test/enabledBarrier.js';
 import { MemoryRouter } from 'react-router';
 import toast from '../../ui/Toast';
 import { createTestPhaseDiagnostics } from '../../../../../lib/testPhaseDiagnostics.js';
-import { addMusicVideoScene, approveMusicVideoFinal, rejectUnusedMusicVideoSceneTakes, measureMusicVideoColorMatch, listMusicVideoProjects, renderMusicVideoProject, reorderMusicVideoScenes, updateMusicVideoProject, updateMusicVideoScene, proposeMusicVideoShotSheet, splitMusicVideoScene, moveMusicVideoSceneStart, selectMusicVideoSceneTake, reviewMusicVideoSceneTake, importMusicVideoHandoff, addMusicVideoSceneTake, getMusicVideoHandoffBundle, getMusicVideoProject, startMusicVideoRevision, resumeMusicVideoRevision, cancelMusicVideoRevision, renderMusicVideoSceneFrame, getMusicVideoBlender, getMusicVideoCastAndSets } from '../../../services/apiMusicVideo.js';
+import { addMusicVideoScene, approveMusicVideoFinal, rejectUnusedMusicVideoSceneTakes, measureMusicVideoColorMatch, listMusicVideoProjects, renderMusicVideoProject, reorderMusicVideoScenes, updateMusicVideoProject, updateMusicVideoScene, proposeMusicVideoShotSheet, splitMusicVideoScene, moveMusicVideoSceneStart, selectMusicVideoSceneTake, reviewMusicVideoSceneTake, importMusicVideoHandoff, addMusicVideoSceneTake, getMusicVideoHandoffBundle, getMusicVideoProject, startMusicVideoRevision, resumeMusicVideoRevision, cancelMusicVideoRevision, renderMusicVideoSceneFrame, musicVideoFilmApi, getMusicVideoCastAndSets } from '../../../services/apiMusicVideo.js';
 import { generateImage, uploadGalleryImage } from '../../../services/apiSystem.js';
 import { generateVideo, getVideoGenModelContext, getVideoHistoryItem, previewImagePrompt, previewVideoPrompt, trimVideo } from '../../../services/apiImageVideo.js';
 import { downloadBlob } from '../../../lib/downloadBlob.js';
@@ -81,7 +81,7 @@ describe('MusicVideo selective section revision (#8987)', () => {
     startMusicVideoRevision.mockResolvedValue({ project: opened, revision: opened.revisions[0], skippedSceneIds: [] });
     resumeMusicVideoRevision.mockResolvedValue({ project: opened, revision: opened.revisions[0], needsGeneration: [{ sceneId: 's2', kind: 'video' }], generating: [], render: null });
     generateVideo.mockResolvedValue({ jobId: 'video-job-s2' });
-    await openProject(REVIEWED, 'review');
+    await renderProjectStage(REVIEWED, 'review');
 
     fireEvent.click(await findEnabledByRole('button', { name: /Revise flagged/i }));
     await waitFor(() => expect(resumeMusicVideoRevision).toHaveBeenCalledWith('mv-1', 'mvr-1', { silent: true }));
@@ -98,7 +98,7 @@ describe('MusicVideo selective section revision (#8987)', () => {
       project: { ...ready, revisions: [{ ...ready.revisions[0], status: 'rendering', renderExcerptId: 'mve-2' }] },
       revision: { ...ready.revisions[0], status: 'rendering' }, needsGeneration: [], generating: [], render: { jobId: 'mve-2', excerptId: 'mve-2' },
     });
-    await openProject(ready, 'review');
+    await renderProjectStage(ready, 'review');
 
     fireEvent.click(await findEnabledByRole('button', { name: /Render revised draft/i }));
     await waitFor(() => expect(resumeMusicVideoRevision).toHaveBeenCalledWith('mv-1', 'mvr-1', { silent: true }));
@@ -110,7 +110,7 @@ describe('MusicVideo selective section revision (#8987)', () => {
   it('cancels an open revision', async () => {
     const open = withRevision(null);
     cancelMusicVideoRevision.mockResolvedValue({ project: { ...open, revisions: [{ ...open.revisions[0], status: 'canceled' }] }, revision: { ...open.revisions[0], status: 'canceled' } });
-    await openProject(open, 'review');
+    await renderProjectStage(open, 'review');
     fireEvent.click(await findEnabledByRole('button', { name: /Cancel revision/i }));
     await waitFor(() => expect(cancelMusicVideoRevision).toHaveBeenCalledWith('mv-1', 'mvr-1', { silent: true }));
     await screen.findByText(/Revision — Cancelled/);
@@ -1336,7 +1336,7 @@ describe('MusicVideo Blender film render style', () => {
   });
   const openFilm = async (path, { project = film, state = blenderFilmState() } = {}) => {
     listMusicVideoProjects.mockResolvedValue([project]);
-    getMusicVideoBlender.mockResolvedValueOnce(state);
+    musicVideoFilmApi.getMusicVideoBlender.mockResolvedValueOnce(state);
     render(<MemoryRouter initialEntries={[path]}>{MV_ROUTES}</MemoryRouter>);
     await screen.findByRole('heading', { level: 2, name: project.name });
     await settle();
@@ -1354,8 +1354,8 @@ describe('MusicVideo Blender film render style', () => {
     const panel = await screen.findByRole('region', { name: 'Blender film' });
     expect(await within(panel).findByRole('list', { name: 'Shots' })).toBeTruthy();
     // One read for the open project; everything after it is pushed, and the live film shares it.
-    expect(getMusicVideoBlender).toHaveBeenCalledTimes(1);
-    expect(getMusicVideoBlender).toHaveBeenCalledWith('mv-test', { silent: true });
+    expect(musicVideoFilmApi.getMusicVideoBlender).toHaveBeenCalledTimes(1);
+    expect(musicVideoFilmApi.getMusicVideoBlender).toHaveBeenCalledWith('mv-test', { silent: true });
     // The step reads the same state: one of three shots has a current final render.
     expect(screen.getByText('Final render for every Blender shot (1 of 3)')).toBeTruthy();
     // The player leads the step as it does for footage: the film's shots, straight from their renders, with no cut assembled.
@@ -1407,7 +1407,7 @@ describe('MusicVideo Blender film render style', () => {
       const state = blenderFilmState();
       return { ...state, renders: { ...state.renders, s010: { ...state.renders.s010, final: { ...state.renders.s010.final, finishedAt } } } };
     };
-    getMusicVideoBlender.mockResolvedValueOnce(rerendered('2026-10-02T09:00:00.000Z'));
+    musicVideoFilmApi.getMusicVideoBlender.mockResolvedValueOnce(rerendered('2026-10-02T09:00:00.000Z'));
     await pushSocket('music-video:blender', { projectId: 'mv-test', kind: 'state' });
     await waitFor(() => expect(shotPlayer()).not.toBe(looping));
     expect(shotPlayer().hasAttribute('autoplay')).toBe(false);
@@ -1420,7 +1420,7 @@ describe('MusicVideo Blender film render style', () => {
     fireEvent.play(song);
     fireEvent.pause(song);
     const waiting = shotPlayer();
-    getMusicVideoBlender.mockResolvedValueOnce(rerendered('2026-10-02T10:00:00.000Z'));
+    musicVideoFilmApi.getMusicVideoBlender.mockResolvedValueOnce(rerendered('2026-10-02T10:00:00.000Z'));
     await pushSocket('music-video:blender', { projectId: 'mv-test', kind: 'state' });
     await waitFor(() => expect(shotPlayer()).not.toBe(waiting));
     expect(shotPlayer().hasAttribute('autoplay')).toBe(true);

@@ -49,7 +49,7 @@ const { createSession } = await import('../services/auth.js');
 const { default: musicVideoRoutes } = await import('./musicVideo.js');
 const projects = await import('../services/musicVideo/projects.js');
 const filmActions = await import('../services/musicVideo/projectFilmActions.js');
-const { unsupportedDocumentEffects, UPGRADABLE_IMAGE_EFFECT_MODULES, COMPATIBLE_IMAGE_EFFECT_MODULES } = await import('../services/musicVideo/compositionDocument.js');
+const { unsupportedDocumentEffects, UPGRADABLE_IMAGE_EFFECT_MODULES, COMPATIBLE_IMAGE_EFFECT_MODULES } = await import('../services/musicVideo/compositionDocumentRead.js');
 const { buildDocumentPreview } = await import('../services/musicVideo/documentPreview.js');
 const { captureMusicVideoEvidence, musicVideoDependencyChanges } = await import('../lib/musicVideo/musicVideoDependencies.js');
 
@@ -188,7 +188,7 @@ describe('music-video composition documents', () => {
   });
 
   it.each([
-    'musicVideoLayeredEngine.txt', 'musicVideoLayeredEngineBeforeEffects.js',
+    'musicVideoLayeredEngine.txt', 'musicVideoLayeredEngineBeforeEffects.txt',
     'musicVideoLayeredEngineBeforePlannedCameraControls.txt',
     'musicVideoLayeredEngine11319.txt', 'musicVideoLayeredEngine11406.txt', 'musicVideoLayeredEngineOctober25.txt',
   ])(
@@ -299,7 +299,7 @@ describe('music-video composition documents', () => {
   });
 
   it('retains a compatible shipped still-effect module and its extra export', async () => {
-    const legacy = await readFile(new URL('./fixtures/musicVideoLayeredEngineBeforeEffects.js', import.meta.url));
+    const legacy = await readFile(new URL('./fixtures/musicVideoLayeredEngineBeforeEffects.txt', import.meta.url));
     const effects = await readFile(new URL('./fixtures/musicVideoImageEffects14277.txt', import.meta.url));
     const imported = await uploadZip(project.id, createZip([
       { name: 'index.html', data: PAGE }, { name: 'engine.js', data: legacy },
@@ -413,7 +413,7 @@ describe('music-video composition documents', () => {
   });
 
   it('reports selected effects as unsupported until the recognized engine is explicitly updated', async () => {
-    const legacy = await readFile(new URL('./fixtures/musicVideoLayeredEngineBeforeEffects.js', import.meta.url));
+    const legacy = await readFile(new URL('./fixtures/musicVideoLayeredEngineBeforeEffects.txt', import.meta.url));
     const index = '<!doctype html><script src="portos-mv.js"></script><script src="engine.js"></script>';
     const imported = await uploadZip(project.id, createZip([{ name: 'index.html', data: index }, { name: 'engine.js', data: legacy }]));
     const original = imported.body.document.directory;
@@ -442,7 +442,7 @@ describe('music-video composition documents', () => {
   });
 
   it('only blocks a document for effect frames inside the song', async () => {
-    const legacy = await readFile(new URL('./fixtures/musicVideoLayeredEngineBeforeEffects.js', import.meta.url));
+    const legacy = await readFile(new URL('./fixtures/musicVideoLayeredEngineBeforeEffects.txt', import.meta.url));
     const index = '<!doctype html><script src="portos-mv.js"></script><script src="engine.js"></script>';
     await uploadZip(project.id, createZip([{ name: 'index.html', data: index }, { name: 'engine.js', data: legacy }]));
     const untimed = { sceneId: 'unplaced', startSec: null, endSec: null, transitionIn: 'light-leak', glitches: [{ atSec: 0.5, style: 'light-leak' }] };
@@ -467,7 +467,7 @@ describe('music-video composition documents', () => {
   });
 
   it('does not block for an end-image effect on a shot without a playable interval', async () => {
-    const legacy = await readFile(new URL('./fixtures/musicVideoLayeredEngineBeforeEffects.js', import.meta.url));
+    const legacy = await readFile(new URL('./fixtures/musicVideoLayeredEngineBeforeEffects.txt', import.meta.url));
     const index = '<!doctype html><script src="portos-mv.js"></script><script src="engine.js"></script>';
     await uploadZip(project.id, createZip([{ name: 'index.html', data: index }, { name: 'engine.js', data: legacy }]));
     await mkdir(join(ROOT(), 'images'), { recursive: true });
@@ -485,7 +485,7 @@ describe('music-video composition documents', () => {
   });
 
   it('still detects an end-image effect when a later shot has no playable interval', async () => {
-    const legacy = await readFile(new URL('./fixtures/musicVideoLayeredEngineBeforeEffects.js', import.meta.url));
+    const legacy = await readFile(new URL('./fixtures/musicVideoLayeredEngineBeforeEffects.txt', import.meta.url));
     const index = '<!doctype html><script src="portos-mv.js"></script><script src="engine.js"></script>';
     await uploadZip(project.id, createZip([{ name: 'index.html', data: index }, { name: 'engine.js', data: legacy }]));
     await mkdir(join(ROOT(), 'images'), { recursive: true });

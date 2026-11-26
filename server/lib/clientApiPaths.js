@@ -17,10 +17,9 @@
  * import a client module anyway (different workspace, different vitest env).
  * The scan therefore constant-folds those expressions: string and template
  * literals, module-local path helpers (`loomPath(id, '/episodes')`), ternaries,
- * and nested combinations of the three. Anything it cannot fold is REPORTED as
- * unresolved rather than silently dropped, so a wrapper shape this scanner
- * stops understanding surfaces as a review signal instead of shrinking the
- * guard.
+ * and path callbacks passed to shared service factories. Anything it cannot
+ * fold is reported as unresolved, so a new wrapper shape cannot quietly shrink
+ * the guard.
  *
  * The scan carries its own small lexer rather than reusing `sourceScan.js`:
  * that module's primitives exist to find CODE constructs, so `blankLiterals`
@@ -420,9 +419,50 @@ function callMethod(call, expression, argsAfterPath) {
   return readMethod(argsAfterPath[optionsAt], defaultMethod);
 }
 
-function scanFile(source, { file, forward, paths, unresolved, referenced }) {
+/**
+ * Find calls to a directly imported factory with one inline path callback.
+ * Keep unknown callbacks in
+ * the set so a partially foldable factory still reports unresolved requests.
+ */
+function apiFactoryCalls(files) {
+  const calls = new Map();
+  for (const [file, source] of files) {
+    if (!/^services\/api.*\.js$/.test(file)) continue;
+    const imports = /\bimport\s*\{\s*(create\w+)\s*\}\s*from\s*['"]\.\/(api\w+\.js)['"]/g;
+    for (const [, name, module] of source.matchAll(imports)) {
+      const key = `services/${module}:${name}`;
+      for (const call of source.matchAll(new RegExp(`(?<![.\\w$])${name}\\s*\\(`, 'g'))) {
+        const { text } = scanTo(source, call.index + call[0].length, [',']);
+        const arrow = text.trim().match(/^(?:\(\s*([\w$]+)\s*\)|([\w$]+))\s*=>\s*(.+)$/s);
+        const callback = arrow ? { parameters: [parseParameter(arrow[1] ?? arrow[2])], body: arrow[3] } : null;
+        if (!calls.has(key)) calls.set(key, []);
+        calls.get(key).push(callback);
+      }
+    }
+  }
+  return calls;
+}
+
+function apiFactoryScopes(source, file, helpers, calls) {
+  const scopes = [];
+  const factories = /^export function (create\w+)\(([\w$]+)\)\s*\{/gm;
+  for (const declaration of source.matchAll(factories)) {
+    const [, name, parameter] = declaration;
+    const callbacks = calls.get(`${file}:${name}`);
+    if (!callbacks) continue;
+    const start = declaration.index + declaration[0].length;
+    const { end } = scanTo(source, start, []);
+    const variants = callbacks.map(callback =>
+      callback ? new Map([...helpers, [parameter, callback]]) : helpers);
+    scopes.push({ start, end, variants });
+  }
+  return scopes;
+}
+
+function scanFile(source, { file, forward, paths, unresolved, referenced, factoryCalls }) {
   const helpers = parsePathHelpers(source);
   const context = { helpers, scope: API_BASE_SCOPE };
+  const factoryScopes = forward ? apiFactoryScopes(source, file, helpers, factoryCalls) : [];
 
   // Literal spans first: a call-shaped text INSIDE a string (`'api.get("/x")'` in help text or a log)
   // is a mention, so the verb scan below skips matches that start inside one.
@@ -448,9 +488,12 @@ function scanFile(source, { file, forward, paths, unresolved, referenced }) {
     const expression = text.trim();
     const usesApiBase = /\bAPI_BASE\b/.test(expression);
     const checkForward = forward && call !== 'EventSource' && (call !== 'fetch' || usesApiBase);
-    const values = resolvePathExpression(expression, context)
-      ?? (checkForward && /^[A-Za-z_$][\w$]*$/.test(expression)
-        ? resolveForwardedParameter(source, match.index, expression, context) : null);
+    const factory = factoryScopes.find(scope => match.index >= scope.start && match.index < scope.end);
+    const values = factory
+      ? factory.variants.flatMap(variant => resolvePathExpression(expression, { ...context, helpers: variant }) ?? [DYNAMIC])
+      : (resolvePathExpression(expression, context)
+        ?? (checkForward && /^[A-Za-z_$][\w$]*$/.test(expression)
+          ? resolveForwardedParameter(source, match.index, expression, context) : null));
     const directUrl = call === 'fetch' || call === 'EventSource';
     const resolved = (values ?? []).map((value) => {
       if (!directUrl) return normalizeClientPath(value);
@@ -533,15 +576,18 @@ export function scanClientApiPaths({ repoRoot, sources } = {}) {
   const files = sources
     ? Object.entries(sources).filter(([file]) => !CLIENT_TEST_FILE.test(file))
     : listClientSourceFiles(repoRoot).map((file) => [file, readFileSync(join(repoRoot, CLIENT_SRC_DIR, file), 'utf8')]);
+  // Probe sources may name a wrapper without its services/ prefix.
+  const stripped = files.map(([name, source]) => [
+    sources && !name.includes('/') ? `services/${name}` : name, stripComments(source),
+  ]);
+  const factoryCalls = apiFactoryCalls(stripped);
 
   const paths = [];
   const unresolved = [];
   const referenced = [];
-  for (const [name, source] of files) {
-    // Probe sources may name a wrapper without its services/ prefix.
-    const file = sources && !name.includes('/') ? `services/${name}` : name;
+  for (const [file, source] of stripped) {
     const forward = /^services\/api.*\.js$/.test(file) && file !== `services/${TRANSPORT_MODULE}`;
-    scanFile(stripComments(source), { file, forward, paths, unresolved, referenced });
+    scanFile(source, { file, forward, paths, unresolved, referenced, factoryCalls });
   }
 
   return { paths, unresolved, referenced };

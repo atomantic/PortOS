@@ -9,7 +9,7 @@
 import { shotActionContractProblem } from '../../../server/lib/musicVideo/musicVideoActionContract.js';
 import { currentPlateEvidence } from '../../../server/lib/musicVideo/musicVideoPlateEvidence.js';
 import { resolveSourceTake, scenePlayableClipId } from '../../../server/lib/musicVideo/musicVideoSourceTake.js';
-import { isEndFrameImageEffect } from './musicVideoImageEffects.js';
+import { isEndFrameImageEffect } from '../../../server/lib/musicVideo/musicVideoImageEffects.js';
 import { clipLoops, clipNeedsMoreFootage, isSelfDrawnLayer, sceneEndFrameInUse, sceneTakeProblems, sceneVisualLayer, sceneHasAuthoredSpan, sceneUsesAuthoredTiming } from './musicVideoLayers.js';
 import { performanceBlockedReason, performanceCapability, planPerformanceWindow, isPerformanceScene, selectedPerformanceInstruction } from './musicVideoShotTiming.js';
 import { sceneHasPendingDecision, sceneTakeList } from './musicVideoTakes.js';

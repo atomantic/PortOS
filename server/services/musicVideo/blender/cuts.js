@@ -2,14 +2,14 @@
 import { copyFile, rm } from 'node:fs/promises';
 import { existsSync } from 'node:fs';
 import { requireProject } from '../requireProject.js';
-import { blenderRefusal } from './workspace.js';
+import { blenderRefusal } from '../../film/workspace.js';
 import { blenderNotSynced, readBlenderFilm } from './film.js';
 import { blenderFinishFilter } from './finishFilter.js';
 import { blenderLeadAudio } from './leadAudio.js';
-import { blenderLeadSec, blenderSongEndSec } from './manifest.js';
+import { blenderLeadSec, blenderSongEndSec } from '../../film/manifest.js';
 import { blenderTitleCardPlan, withBlenderTitleCard } from './titleCard.js';
 import { requireFfmpeg } from '../../film/encode.js';
-import { updateBlenderJob } from './jobs.js';
+import { updateBlenderJob } from '../../film/jobs.js';
 import { startBlenderCut as startCut } from '../../film/cuts.js';
 import { musicVideoFilmOwner } from './owner.js';
 export const BLENDER_CUT_ARTIFACT_TITLE = 'Blender cut';

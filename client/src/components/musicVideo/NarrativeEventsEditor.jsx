@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react';
-import { NARRATIVE_EVENT_KINDS } from '../../lib/musicVideoNarrativeEvents.js';
+import { NARRATIVE_EVENT_KINDS } from '../../../../server/lib/musicVideo/musicVideoNarrativeEvents.js';
 import { uuidv4 } from '../../lib/uuid.js';
 
 const inputCls = 'w-full min-w-0 rounded border border-port-border bg-port-bg px-2 py-1 text-xs';

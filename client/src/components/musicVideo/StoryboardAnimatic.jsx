@@ -4,8 +4,6 @@ import { captureAnimaticFrame } from './animaticCapture.js';
 import AnimaticStage from './AnimaticStage.jsx';
 import AnimaticTransportBar from './AnimaticTransportBar.jsx';
 
-export { clipTimeAt, shotAt } from './animaticTiming.js';
-
 /**
  * Something to watch before anything is rendered: the master song under the
  * storyboard, showing each shot's selected video clip (muted, in step with the

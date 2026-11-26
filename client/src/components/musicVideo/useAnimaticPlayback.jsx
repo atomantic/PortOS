@@ -14,8 +14,8 @@ import { usePreviewFilmLook } from './PreviewFilmLook.jsx';
 import { lyricFrameCaptureBridge } from '../../lib/musicVideoFrameCapture.js';
 import { useDocumentCamera } from './DocumentTemplateLayers.jsx';
 import { isLayeredComposition, sceneVisualLayer } from '../../lib/musicVideoLayers.js';
-import { sceneImageEffect } from '../../lib/musicVideoImageEffects.js';
-import { plannedTransitions, sceneCutEffect, sceneCutEffects } from '../../lib/musicVideoCutEffects.js';
+import { sceneImageEffect } from '../../../../server/lib/musicVideo/musicVideoImageEffects.js';
+import { plannedTransitions, sceneCutEffect, sceneCutEffects } from '../../../../server/lib/musicVideo/musicVideoCutEffects.js';
 import { blenderSceneClips } from '../../lib/musicVideoBlender.js';
 import {
   ANIMATIC_FPS, CLIP_PRELOAD_SHOTS, filmScene, hasTimedLyrics,

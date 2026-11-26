@@ -19,7 +19,7 @@
  * Like LinkedIn's share box, everything goes through Playwright locators
  * (they pierce open shadow roots), never `document` queries.
  */
-import { PUBLISH_STEP_TIMEOUT_MS as T, loginRequired, step } from './browser.js';
+import { PUBLISH_STEP_TIMEOUT_MS as T, loginRequired, opening, pasteInto, step } from './browser.js';
 
 const label = 'Facebook';
 const HOME_URL = 'https://www.facebook.com/';
@@ -36,32 +36,8 @@ const AI_LABEL = /^\s*Add AI label/i;
 // A post's own page: a reel (every uploaded video), a video, a post, or a permalink.
 const POST_URL = /^https:\/\/(?:www|web|m)\.facebook\.com\/(?:reel\/\d+|[\w.-]+\/(?:posts|videos)\/[\w.-]+|permalink\.php\?[^#]*story_fbid=[\w-]+[^#]*|watch\/?\?v=\d+)/;
 
-/** The post's opening words, as the post page shows them (Facebook folds the rest under "See more"). */
-const opening = (text) => String(text || '').split('\n').map((line) => line.trim()).find(Boolean) || '';
-
 /** The last visible button named exactly `name` (its text or aria-label: Photo/video is an icon) inside `scope`. */
 const button = (scope, name) => scope.getByRole('button', { name, exact: true }).filter({ visible: true }).last();
-
-/**
- * Write `text` into the Lexical editor `locator` matches. A synthetic paste
- * keeps the line breaks (and opens no @mention picker); when Lexical ignores
- * it, the lines are typed with Enter between.
- */
-async function pasteInto(page, locator, text) {
-  await locator.click({ timeout: T });
-  await locator.evaluate((el, txt) => {
-    el.focus();
-    const data = new DataTransfer();
-    data.setData('text/plain', txt);
-    el.dispatchEvent(new ClipboardEvent('paste', { clipboardData: data, bubbles: true, cancelable: true }));
-  }, text);
-  await page.waitForTimeout(500);
-  if ((await locator.innerText()).trim()) return;
-  for (const [i, line] of String(text).split('\n').entries()) {
-    if (i > 0) await page.keyboard.press('Enter');
-    if (line) await page.keyboard.insertText(line);
-  }
-}
 
 /**
  * Whether the composer is done uploading: an "Uploaded media" section with a

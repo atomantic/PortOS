@@ -2,7 +2,8 @@ import { existsSync } from 'node:fs';
 import { join } from 'node:path';
 import { blenderShotFrameRange } from '../../lib/musicVideo/musicVideoBlender.js';
 import { readBlenderFilm } from './blender/film.js';
-import { blenderFramesDir, blenderFrameName } from './blender/renderIndex.js';
+import { blenderFramesDir } from './blender/renderIndex.js';
+import { blenderFrameName } from '../film/renderIndex.js';
 import { blenderLeadSec } from '../film/manifest.js';
 
 /** Deliberately use the current clean shot before final-video cards/overlays and encode loss.

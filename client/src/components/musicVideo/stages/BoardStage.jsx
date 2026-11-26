@@ -19,7 +19,7 @@ import { sceneClipIsFinal, sceneFinalApproved } from '../../../../../server/lib/
 import { sceneActiveEndImageId } from '../../../../../server/lib/musicVideo/musicVideoEndFrame.js';
 import ShotEffectsCard, { SceneEffectBadges } from '../ShotEffectsCard.jsx';
 import { isLayeredComposition } from '../../../lib/musicVideoLayers.js';
-import { plannedTransitions } from '../../../lib/musicVideoCutEffects.js';
+import { plannedTransitions } from '../../../../../server/lib/musicVideo/musicVideoCutEffects.js';
 import { SHOT_EFFECT_OPTIONS, shotEffectCounts, shotEffectLabel, shotEffects, shotUsesEffect } from '../../../lib/musicVideoShotEffects.js';
 import { FOOTAGE_OPTIONAL_MODES } from '../../../lib/musicVideoStages.js';
 import { parseSceneFilter, sceneAttention, sceneMatchesFilter, sceneMediaKind, SCENE_ATTENTION_LABELS, SCENE_MEDIA_LABELS } from '../../../lib/musicVideoSceneAttention.js';

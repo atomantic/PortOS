@@ -6,7 +6,7 @@ import { musicVideoBlenderMediaUrl } from '../../services/apiMusicVideo.js';
 import { previousShot, shotHandoffSource } from '../../../../server/lib/musicVideo/musicVideoHandoffFrame.js';
 import { coldOpenScenes } from '../../../../server/lib/musicVideo/musicVideoColdOpen.js';
 import { isLayeredComposition } from '../../lib/musicVideoLayers.js';
-import { musicVideoAspect } from '../../lib/musicVideoAspect.js';
+import { musicVideoAspect } from '../../../../server/lib/musicVideo/musicVideoAspect.js';
 import { FOOTAGE_OPTIONAL_MODES, sceneShotName } from '../../lib/musicVideoStages.js';
 import { getStoryboard } from '../../services/apiStoryboards.js';
 import { storyboardShotPanel } from '../../../../server/lib/storyboardFit.js';

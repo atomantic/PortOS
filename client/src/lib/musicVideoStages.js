@@ -1,6 +1,6 @@
 /** Preserves the Music Video stage API across its focused modules. */
 export {
-  changeRequestBlocker, feedbackRevisionScope, openChangeRequests, planShotRows, proofReviewInUse,
+  changeRequestBlocker, openChangeRequests, planShotRows, proofReviewInUse,
   sceneShotName, stageChecklist, stageHasChecklist, stepNotes, summarizeStoryboardProblems,
 } from './musicVideoChecklists.js';
 export {
@@ -12,7 +12,7 @@ export {
   MUSIC_VIDEO_STAGES, RESUMABLE_RUN_STATUSES, SHOT_SHEET_ANCHOR, STALE_RENDER_MESSAGE, artDirectionGaps,
   autopilotStatus, changedFieldsText, compareMusicVideoProjectsNewestFirst, currentProductionRun,
   deriveNextAction, deriveStages, describeProjectStatus, isFinalRenderCurrent, isFinalRenderStale,
-  isStageId, lyricSetupState, problemItemsOf, productionReviewStopGuidance, projectHasAudio,
-  projectServicesSummary, projectShotSummary, publishPlatformProgress, publishRowAnchor, resolveStageParam,
+  lyricSetupState, problemItemsOf, productionReviewStopGuidance, projectHasAudio,
+  projectServicesSummary, projectShotSummary, publishRowAnchor, resolveStageParam,
   staleApprovalText,
 } from './musicVideoStageProgress.js';
