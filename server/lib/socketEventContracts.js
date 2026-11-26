@@ -485,7 +485,7 @@ export const SOCKET_EVENT_CONTRACTS = Object.freeze({
   },
   'catalog:photoreal': {
     direction: 'server-to-client',
-    summary: 'An Environments photoreal (Blender) render for a place started, finished or failed; carries the job state.',
+    summary: 'An Environments photoreal (Blender) render for a place started or settled; carries the job state.',
     payloadSchema: { type: 'object', properties: { ingredientId: { type: 'string' }, job: { type: 'object' } }, required: ['ingredientId', 'job'], additionalProperties: false },
   },
   'catalog:previz-jobs': {
