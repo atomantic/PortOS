@@ -3762,6 +3762,15 @@ describe('videoGen routes', () => {
   });
 
   describe('GET /history/:id', () => {
+    it('returns the exact final file and its encoded song timing together', async () => {
+      const entry = { id: 'music-final', filename: 'final.mp4', fps: 24, songStartSec: 49 / 24, songDurationSec: 8 };
+      videoGenService.getHistoryItem.mockResolvedValue(entry);
+      const response = await request(app).get('/api/video-gen/history/music-final');
+      expect(response.status).toBe(200);
+      expect(response.body).toMatchObject(entry);
+      expect(videoGenService.getHistoryItem).toHaveBeenCalledWith('music-final');
+    });
+
     // Hosted clips lack stored geometry; the animatic needs the cadence the renderer measures.
     it('measures geometry only when requested and missing, without changing the stored entry', async () => {
       const entry = Object.freeze({ id: 'hosted', filename: 'hosted.mp4' });

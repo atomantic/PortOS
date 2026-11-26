@@ -244,7 +244,8 @@ export default function ShotTimeline({ project, activeSceneId = null, songClock 
         setPreviewMessage(message);
       }
       const rangeLoop = selected?.loop && !message && !pointUnavailable ? selected : null;
-      const outside = rangeLoop && (t < rangeLoop.start || t >= rangeLoop.end || (reading?.ended && t >= rangeLoop.end - 0.001));
+      const clockTime = reading?.t ?? t;
+      const outside = rangeLoop && (clockTime < rangeLoop.start || clockTime >= rangeLoop.end || (reading?.ended && clockTime >= rangeLoop.end - 0.001));
       if (!outside || pendingRange !== rangeLoop || (!isPlaying && !reading?.ended)) pendingRange = null;
       // A completed media element can report ended on the very frame it reaches Out.
       // Rearm as soon as the seek lands inside, even for loops shorter than the effect settle time.

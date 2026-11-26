@@ -1,5 +1,5 @@
 /**
- * `useVideoFileSrc(jobId, { enabled })` → `{ src, resolving, retry }`.
+ * `useVideoFileSrc(jobId, { enabled })` resolves the file URL and any stored playback timing from the same history entry.
  */
 
 import { useCallback, useEffect, useState } from 'react';
@@ -33,7 +33,10 @@ export function useVideoFileSrc(jobId, { enabled = true, geometry = false } = {}
       .then((entry) => {
         if (cancelled) return;
         const filename = typeof entry?.filename === 'string' ? entry.filename.trim() : '';
-        setResolved({ jobId, attempt, geometry, src: filename ? `/data/videos/${filename}` : null, fps: entry?.fps });
+        setResolved({
+          jobId, attempt, geometry, src: filename ? `/data/videos/${filename}` : null, fps: entry?.fps,
+          songStartSec: entry?.songStartSec, songDurationSec: entry?.songDurationSec,
+        });
       })
       .catch(() => { if (!cancelled) setResolved({ jobId, attempt, geometry, src: null }); });
     return () => { cancelled = true; };
@@ -43,5 +46,11 @@ export function useVideoFileSrc(jobId, { enabled = true, geometry = false } = {}
   // `<ScenePreview onRetry={retry}>` so one button recovers both layers.
   const retry = useCallback(() => setAttempt((a) => a + 1), []);
 
-  return { src: settled ? resolved.src : null, fps: settled && Number.isFinite(resolved.fps) && resolved.fps > 0 ? resolved.fps : null, resolving, retry };
+  return {
+    src: settled ? resolved.src : null,
+    fps: settled && Number.isFinite(resolved.fps) && resolved.fps > 0 ? resolved.fps : null,
+    songStartSec: settled && Number.isFinite(resolved.songStartSec) && resolved.songStartSec >= 0 ? resolved.songStartSec : null,
+    songDurationSec: settled && Number.isFinite(resolved.songDurationSec) && resolved.songDurationSec > 0 ? resolved.songDurationSec : null,
+    resolving, retry,
+  };
 }

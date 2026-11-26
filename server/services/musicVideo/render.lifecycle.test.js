@@ -67,7 +67,7 @@ vi.mock('./shotSegments.js', () => ({
     h.segments = { resolve, reject };
     signal.addEventListener('abort', () => reject(Object.assign(new Error('Render cancelled'), { code: 'CANCELED' })), { once: true });
   })),
-  stitchSegments: vi.fn(async () => ({ durationSec: 2, songSec: 2 })),
+  stitchSegments: vi.fn(async () => ({ durationSec: 2, songSec: 2, leadSec: 0 })),
   pruneSegments: vi.fn(async () => { h.timeline.push({ step: 'published', active: h.active() }); return 0; }),
 }));
 // A seeked mode whose encode a case settles by hand, registered under the `code` render style.

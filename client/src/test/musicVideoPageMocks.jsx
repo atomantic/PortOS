@@ -65,6 +65,7 @@ vi.mock('../components/musicVideo/useMusicVideoProductionReview.js', () => ({ de
 vi.mock('../services/apiMusicVideo.js', () => ({
   // The dock asks before it plays a document; these projects stay in the isolated worker.
   getMusicVideoCompositionPlayback: vi.fn(async () => ({ native: false })),
+  mixMusicVideoColdOpenAudio: vi.fn(async () => ({})),
   // Never settles: the create drawer's character-style list is covered in TrackSelectors.test.jsx.
   listMusicVideoCharacterStyles: vi.fn(() => new Promise(() => {})),
   getMusicVideoMakingOfCatalog: vi.fn(async id => ({ project: { id, name: 'Example making-of project', version: 1 }, snapshot: 'a'.repeat(64), assets: [] })),
@@ -339,9 +340,11 @@ vi.mock('../services/apiImageVideo.js', () => ({
     : [])),
   // By-id resolver behind useVideoFileSrc (#4165) — 404s (rejects) for any
   // other id, exactly as the real endpoint does.
-  getVideoHistoryItem: vi.fn(async (id) => (id === 'rh-9'
-    ? { id: 'rh-9', filename: 'final.mp4' }
-    : Promise.reject(Object.assign(new Error('Not found'), { status: 404 })))),
+  getVideoHistoryItem: vi.fn(async (id) => {
+    if (id === 'rh-9') return { id, filename: 'final.mp4' };
+    if (id === 'fixture-final') return { id, filename: 'final.mp4', songStartSec: 49 / 24, songDurationSec: 10, fps: 24 };
+    throw Object.assign(new Error('Not found'), { status: 404 });
+  }),
   // Scene refs are a projection, so the lightbox resolves variant lineage and
   // any variant it opens through the gallery rather than this page's list.
   listImageVariants: vi.fn(async () => ({ items: [] })),

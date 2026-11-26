@@ -105,11 +105,14 @@ async function seekedPipeline(projectId, project, renderer, { jobId, outputPath 
         await applyFilmLookFinish({ project, shotLooks: true, path: outputPath, jobId, signal, ...encoded.lookPassInputs,
           onProgress: (fraction) => onProgress(encodeTop + (1 - encodeTop) * fraction) });
       }
+      const leadSec = encoded.leadSec ?? 0;
       return {
         ...encoded,
+        leadSec,
+        songSec: encoded.durationSec - leadSec,
         durationSec: encoded.durationSec + outroSec,
         posterAtSec: typeof project.composition?.posterSec === 'number'
-          ? project.composition.posterSec + (encoded.leadSec || 0)
+          ? project.composition.posterSec + leadSec
           : (encoded.boundaryTimes[0] || 0),
         proofSheet: (sheetPath) => writeCodeProofSheet(outputPath, sheetPath, encoded.boundaryTimes, {
           width: encoded.width, height: encoded.height, fps: encoded.fps,
@@ -140,7 +143,7 @@ async function composedPipeline(project, options, { jobId, outputPath }) {
       // Shots take 95% of the bar; joining and laying the song under them the rest.
       await renderMissingSegments(plan, { signal, onProgress: (fraction) => onProgress(0.95 * fraction) });
       await checkApproval();
-      const { durationSec, leadSec } = await stitchSegments(plan, outputPath, { signal });
+      const { durationSec, songSec, leadSec } = await stitchSegments(plan, outputPath, { signal });
       // The stepped medium (#14244) holds the stitched cut; shot looks are already in it.
       const hold = projectFrameHold(project);
       if (hold) await applyFrameHold({ path: outputPath, sections: plan.sections, leadSec, signal, ffmpeg: plan.ffmpeg, ...hold });
@@ -148,8 +151,8 @@ async function composedPipeline(project, options, { jobId, outputPath }) {
         width: plan.width, height: plan.height, fps: plan.fps, signal, ffmpeg: plan.ffmpeg });
       onProgress(1);
       return {
-        width: plan.width, height: plan.height, fps: plan.fps, durationSec,
-        posterAtSec: posterTimeFor(project, { songSec: plan.songSec, leadSec: plan.coldOpen?.durationSec || 0 }),
+        width: plan.width, height: plan.height, fps: plan.fps, durationSec, songSec, leadSec,
+        posterAtSec: posterTimeFor(project, { songSec, leadSec }),
       };
     },
     // Older takes of each shot are dropped once the new cut is published.
@@ -259,6 +262,7 @@ async function footagePipeline(project, { jobId, outputPath }) {
         onProgress: (fraction) => onProgress(encodeTop + (1 - encodeTop) * fraction) }));
       return {
         width: canonW, height: canonH, fps: fps || 24, durationSec: leadSec + totalDuration + outroSec,
+        songSec: totalDuration, leadSec,
         posterAtSec: posterTimeFor(project, { songSec: totalDuration, leadSec }),
       };
     },

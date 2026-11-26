@@ -138,7 +138,7 @@ it('refuses the final render until every shot has a complete, current final rend
   expect(mux).toEqual(expect.arrayContaining(['-i', join(ROOT(), 'music', 'example-song.wav'), '-c:v', 'copy', '-c:a', 'aac', '-t', '6']));
   expect(mux.at(-1)).toMatch(/music-video-.*\.mp4\.part\.mp4$/);
   const history = mutateVideoHistory.mock.calls.map(([mutate]) => mutate([])).flat();
-  expect(history).toContainEqual(expect.objectContaining({ id: jobId, modelId: 'music-video-blender', width: 1920, height: 1080, fps: 24, numFrames: 144, musicVideoProjectId: id }));
+  expect(history).toContainEqual(expect.objectContaining({ id: jobId, modelId: 'music-video-blender', width: 1920, height: 1080, fps: 24, numFrames: 144, songStartSec: 0, songDurationSec: 6, musicVideoProjectId: id }));
   expect(await projects.getProject(id)).toMatchObject({ status: 'complete', renderHistoryId: jobId });
   // A neutral look leaves the joined picture untouched.
   expect(applyFilmLookFinish).not.toHaveBeenCalled();
@@ -579,6 +579,6 @@ it('plays a lead-in shot before the song and refuses a cold open that is not one
   expect(mux.filter((arg) => arg === '-i')).toHaveLength(3);
   expect(mux).toEqual(expect.arrayContaining(['-t', '7']));
   expect(mutateVideoHistory.mock.calls.map(([mutate]) => mutate([])).flat())
-    .toContainEqual(expect.objectContaining({ id: jobId, numFrames: 168 }));
+    .toContainEqual(expect.objectContaining({ id: jobId, numFrames: 168, songStartSec: 1, songDurationSec: 6 }));
   expect(applyFilmLookFinish).not.toHaveBeenCalled();
 });
