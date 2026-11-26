@@ -1,5 +1,5 @@
 import { sortByLabel } from '../../lib/sortByLabel.js';
-import { useEffect, useState } from 'react';
+import { useLayoutEffect, useRef, useState } from 'react';
 import { Loader2, Save, Sparkles } from 'lucide-react';
 import Drawer from '../Drawer';
 import MusicVideoLlmPicker from '../musicVideo/MusicVideoLlmPicker';
@@ -41,13 +41,28 @@ export default function StoryDraftDrawer({ open, onClose, library, typeMeta, uni
   const [saving, setSaving] = useState(false);
   const [preview, setPreview] = useState(null);
   const [family, setFamily] = useState([]);
+  const draftRequestRef = useRef(0);
   const relations = familyRelations(family);
 
-  useEffect(() => {
-    if (!open) return;
+  useLayoutEffect(() => {
+    if (!open) return undefined;
     setUniverseId(initialUniverseId || '');
     setStoryChoice(initialStoryKey);
-  }, [open, initialUniverseId, initialStoryKey]);
+    setPrompt('');
+    setPreview(null);
+    setFamily([]);
+    setRunning(false);
+    return () => { draftRequestRef.current += 1; };
+  }, [open, library.type, initialUniverseId, initialStoryKey]);
+
+  const changeUniverse = (next) => {
+    draftRequestRef.current += 1;
+    setUniverseId(next);
+    setStoryChoice('');
+    setPreview(null);
+    setFamily([]);
+    setRunning(false);
+  };
 
   const universeStories = stories.filter((story) => story.joinable && story.universeIds.includes(universeId));
   const story = universeStories.find((item) => storyKey(item) === storyChoice) || null;
@@ -59,19 +74,21 @@ export default function StoryDraftDrawer({ open, onClose, library, typeMeta, uni
   };
 
   const draft = async () => {
+    const requestId = ++draftRequestRef.current;
     setRunning(true);
     const res = await draftCatalogStoryMember({
       type: library.type, universeId, prompt, ...pick,
       ...(story ? { storyKind: story.kind, storyId: story.id } : {}),
       ...(relations.length ? { relations } : {}),
     }).catch(() => null);
+    if (draftRequestRef.current !== requestId) return;
     setRunning(false);
     if (res) setPreview({ ...res, name: res.draft.name, content: res.draft.content });
   };
 
   const save = async () => {
     const name = preview.name.trim();
-    if (!name || !universeId) return;
+    if (saving || running || !universeId || !name) return;
     const content = preview.content.trim();
     const contentKey = typeMeta?.primaryContentKey || 'description';
     setSaving(true);
@@ -94,12 +111,13 @@ export default function StoryDraftDrawer({ open, onClose, library, typeMeta, uni
   };
 
   return (
-    <Drawer open={open} onClose={onClose} title="New from prompt" subtitle={library.label} size="md" closeLabel="Close new from prompt">
+    <Drawer open={open} onClose={onClose} title="New from prompt" subtitle={library.label} size="md" closeLabel="Close new from prompt"
+      closeOnEsc={!preview && !running} closeOnBackdrop={!preview && !running}>
       <div className="space-y-3">
         <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
           <div>
             <label htmlFor="story-draft-universe" className={labelClass}>Universe</label>
-            <select id="story-draft-universe" value={universeId} onChange={(e) => { setUniverseId(e.target.value); setStoryChoice(''); }} className={fieldClass}>
+            <select id="story-draft-universe" value={universeId} onChange={(e) => changeUniverse(e.target.value)} className={fieldClass}>
               <option value="">Choose a universe…</option>
               {sortByLabel(universes).map((universe) => <option key={universe.id} value={universe.id}>{universe.name}</option>)}
             </select>
@@ -126,7 +144,7 @@ export default function StoryDraftDrawer({ open, onClose, library, typeMeta, uni
           onRemove={(item) => setFamily((list) => removeFamilyItem(list, item))} />}
         <MusicVideoLlmPicker idPrefix="story-draft" label="Model" value={pick} onChange={changePick}
           emptyProviderOption="Default (active provider)" fallbackName="The active provider" hint={null} />
-        <button type="button" onClick={draft} disabled={running || !prompt.trim() || over || !universeId}
+        <button type="button" onClick={draft} disabled={saving || running || !prompt.trim() || over || !universeId}
           className={`${actionButton} bg-port-accent/20 border-port-accent/50`}>
           {running ? <Loader2 size={16} className="animate-spin" aria-hidden="true" /> : <Sparkles size={16} aria-hidden="true" />}
           {running ? 'Drafting…' : 'Draft'}
@@ -147,7 +165,7 @@ export default function StoryDraftDrawer({ open, onClose, library, typeMeta, uni
               <textarea id="story-draft-content" value={preview.content} rows={6}
                 onChange={(e) => setPreview((p) => ({ ...p, content: e.target.value }))} className={fieldClass} />
             </div>
-            <button type="button" onClick={save} disabled={saving || !preview.name.trim()} className={`${actionButton} bg-port-accent/20 border-port-accent/50`}>
+            <button type="button" onClick={save} disabled={saving || running || !universeId || !preview.name.trim()} className={`${actionButton} bg-port-accent/20 border-port-accent/50`}>
               {saving ? <Loader2 size={16} className="animate-spin" aria-hidden="true" /> : <Save size={16} aria-hidden="true" />}
               {story ? `Save to ${story.name}` : `Save to ${library.label}`}
             </button>
