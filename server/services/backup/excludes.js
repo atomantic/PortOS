@@ -81,6 +81,13 @@ export const DEFAULT_EXCLUDES = [
   { path: '/tailcat-forwards.json.*.tmp', reason: 'Interrupted atomic writes of Tailcat peer forwards', overridable: false },
   { path: '/database-restore-recovery.json', reason: 'In-flight database restore recovery journal — a machine-local admission fence for one restore operation, never data to restore', overridable: false },
   { path: '/.database-restore-recovery-*.pending', reason: 'Unpublished database restore recovery journal bytes — scratch from an interrupted journal write', overridable: false },
+  { path: '/database-maintenance/', reason: 'Machine-local database cutover admission fence and active operation', overridable: false },
+  { path: '/database-authority-*.pending', reason: 'Unpublished database cutover authority writes', overridable: false },
+  { path: '/.peer-execution-authority-lock', reason: 'Machine-local peer execution authority lock or adoption intent', overridable: false },
+  { path: '/.peer-execution-authority-*.pending', reason: 'Unpublished peer execution authority writes', overridable: false },
+  { path: '/.peer-execution-adoption-*.pending', reason: 'Unpublished peer execution adoption intent writes', overridable: false },
+  { path: '/migrations.lock/', reason: 'Machine-local file migration runner lock', overridable: false },
+  { path: '/migrations.applied.json.tmp-*', reason: 'Unpublished file migration ledger writes', overridable: false },
   { path: '/model-manifest.json', reason: 'Tracked downloaded-model inventory — machine-local and re-derivable by rescanning the model stores; a restored copy would describe another machine\'s disks', overridable: false },
   { path: '/contacts-cache.json', reason: 'Regenerable macOS Contacts lookup cache — re-synced from AddressBook on demand', overridable: false },
   // Anchored, like every entry here. Readiness evidence is bound to THIS
@@ -229,7 +236,8 @@ export const OS_METADATA_RSYNC_EXCLUDES = [...OS_METADATA_FILES, '._*'].map(name
  */
 const RESTORE_PRESERVED_FILES = Object.freeze([
   'certs', 'tailcat-serve.json', 'tailcat-serve.addr', 'tailcat-forwards.json',
-  'database-authority.json', 'database-restore-recovery.json', 'peer-execution', 'peer-execution-catalog.json', 'peer-execution-grants.json', 'peer-execution-authority.json', 'peer-execution-recovery.jsonl', 'workflow-maintenance', 'backup-admission', 'cos/agents/.branch-policy-revision',
+  'database-authority.json', 'database-restore-recovery.json', 'database-maintenance',
+  '.peer-execution-authority-lock', 'migrations.lock', 'peer-execution', 'peer-execution-catalog.json', 'peer-execution-grants.json', 'peer-execution-authority.json', 'peer-execution-recovery.jsonl', 'workflow-maintenance', 'backup-admission', 'cos/agents/.branch-policy-revision',
 ]);
 // Matched case-insensitively (rsync has no such flag, so each letter becomes a
 // `[xX]` class): on a case-insensitive volume a `Database-Authority.json` entry
@@ -241,6 +249,10 @@ export const RESTORE_PRESERVED_RSYNC_EXCLUDES = [
   `--exclude=/${caseInsensitiveGlob('tailcat-serve.json.*.tmp')}`,
   `--exclude=/${caseInsensitiveGlob('tailcat-forwards.json.*.tmp')}`,
   `--exclude=/${caseInsensitiveGlob('.database-restore-recovery-*.pending')}`,
+  `--exclude=/${caseInsensitiveGlob('database-authority-*.pending')}`,
+  `--exclude=/${caseInsensitiveGlob('.peer-execution-authority-*.pending')}`,
+  `--exclude=/${caseInsensitiveGlob('.peer-execution-adoption-*.pending')}`,
+  `--exclude=/${caseInsensitiveGlob('migrations.applied.json.tmp-*')}`,
 ];
 export const isRestorePreservedPath = (relativePath) => {
   if (typeof relativePath !== 'string') return false;
@@ -248,6 +260,9 @@ export const isRestorePreservedPath = (relativePath) => {
   return RECORDING_STAGE_PATH.test(relativePath)
     || /^tailcat-(?:serve|forwards)\.json\.[^/]+\.tmp$/.test(normalized)
     || /^\.database-restore-recovery-[^/]*\.pending(?:\/|$)/.test(normalized)
+    || /^database-authority-[^/]*\.pending(?:\/|$)/.test(normalized)
+    || /^\.peer-execution-(?:authority|adoption)-[^/]*\.pending(?:\/|$)/.test(normalized)
+    || /^migrations\.applied\.json\.tmp-[^/]*(?:\/|$)/.test(normalized)
     || RESTORE_PRESERVED_FILES.some(path => normalized === path || normalized.startsWith(`${path}/`));
 };
 

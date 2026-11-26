@@ -29,3 +29,18 @@ describe('HTTPS certificate backup exclusion', () => {
     expect(computeEffectiveExcludes({ disabledDefaultExcludes: [path] })).toContain(path);
   });
 });
+
+describe('Machine-local lock and scratch backup exclusions', () => {
+  it.each([
+    '/database-maintenance/',
+    '/database-authority-*.pending',
+    '/.peer-execution-authority-lock',
+    '/.peer-execution-authority-*.pending',
+    '/.peer-execution-adoption-*.pending',
+    '/migrations.lock/',
+    '/migrations.applied.json.tmp-*',
+  ])('keeps %s out of backups even if disabled', (path) => {
+    expect(DEFAULT_EXCLUDES).toContainEqual(expect.objectContaining({ path, overridable: false }));
+    expect(computeEffectiveExcludes({ disabledDefaultExcludes: [path] })).toContain(path);
+  });
+});
