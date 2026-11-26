@@ -6,6 +6,7 @@
  * project's aspect, and the job folder is removed however the render ends.
  */
 
+import { readLayeredEngine } from './layeredEngineSource.js';
 import { afterAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import { existsSync } from 'node:fs';
 import { cp, mkdir, readdir, readFile, rm, writeFile } from 'node:fs/promises';
@@ -144,6 +145,7 @@ const scratchEntries = async () => (await readdir(join(PATHS.data, 'music-video-
 async function canonicalPreview() {
   const value = await fixture(), directory = join(PATHS.data, value.plan.directory);
   await cp(new URL('./documentTemplates/layered/', import.meta.url), directory, { recursive: true });
+  await writeFile(join(directory, 'engine.js'), await readLayeredEngine());
   await cp(new URL('./documentTemplates/shared/', import.meta.url), directory, { recursive: true });
   await cp(new URL('../../lib/musicVideo/cameraRig.js', import.meta.url), join(directory, 'cameraRig.js'));
   await cp(new URL('../../lib/musicVideo/musicVideoImageEffects.js', import.meta.url), join(directory, 'musicVideoImageEffects.js'));

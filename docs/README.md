@@ -8,7 +8,7 @@ Start with the [project overview and quick start](../README.md) or read the [pro
 - [Product surface map](features/product-surfaces.md) shows where to find features in the app.
 - [AI providers](AI_PROVIDERS.md) explains how harnesses, services, models, and presets fit together.
 - [Digital Twin](features/digital-twin.md), [Brain](features/brain-system.md), and [Privacy Center](features/privacy-center.md) cover personal context, capture, and privacy.
-- [Music Video](features/music-video-autonomous.md) walks through a project from brief and song to production.
+- [Music Video](features/music-video.md) walks through a project from brief and song to production.
 
 ## Operate an install
 
@@ -22,7 +22,7 @@ Start with the [project overview and quick start](../README.md) or read the [pro
 
 ## Contribute
 
-- [Contributor guide](CONTRIBUTING.md) covers development setup, conventions, and testing.
+- [Contributor guide](../CONTRIBUTING.md) covers development setup, conventions, and testing.
 - [Architecture](ARCHITECTURE.md) and [API guide](API.md) explain the codebase and its interfaces.
 - [Hosted CI](GITHUB_ACTIONS.md) and [local pregate](PREGATE.md) explain what runs before and after pushing.
 - [Versioning and releases](VERSIONING.md) describes the release workflow.

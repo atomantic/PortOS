@@ -208,7 +208,8 @@ export default function CollectionPickerShell({
       }}
       onClick={(e) => e.stopPropagation()}
       onKeyDown={(e) => {
-        e.stopPropagation();
+        // Tab bubbles to the document focus trap.
+        if (e.key !== 'Tab') e.stopPropagation();
         if (e.key === 'Escape') {
           e.preventDefault();
           onClose?.();

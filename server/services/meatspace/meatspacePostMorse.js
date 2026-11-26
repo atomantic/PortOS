@@ -25,6 +25,7 @@
 import { join } from 'path';
 import { randomUUID } from 'crypto';
 import { atomicWrite, PATHS, ensureDir, readJSONFile } from '../../lib/fileUtils.js';
+import { MORSE_MODE_IDS } from '../../lib/morseModes.js';
 import { todayInTimezone } from '../../lib/timezone.js';
 import { getUserTimezone, userLocalToday } from '../userTimezone.js';
 import { withDerivedDayKeys, ymdShift } from '../../lib/postStreak.js';
@@ -32,7 +33,7 @@ import { withDerivedDayKeys, ymdShift } from '../../lib/postStreak.js';
 const MEATSPACE_DIR = PATHS.meatspace;
 const MORSE_FILE = join(MEATSPACE_DIR, 'post-morse-progress.json');
 
-export const MORSE_MODES = ['copy', 'head-copy', 'send'];
+export { MORSE_MODE_IDS as MORSE_MODES };
 
 // The client's Koch pool starts at K, M (2 characters) and pickKochPrompt clamps
 // to a floor of 2, so the resolved default matches the existing client default —
@@ -130,7 +131,7 @@ export async function appendMorseRound(round) {
       id: randomUUID(),
       date: todayLocal,
       timestamp: now,
-      mode: MORSE_MODES.includes(round.mode) ? round.mode : 'copy',
+      mode: MORSE_MODE_IDS.includes(round.mode) ? round.mode : 'copy',
       kochLevel: typeof round.kochLevel === 'number' ? clampLevel(round.kochLevel) : (data.kochLevel ?? DEFAULT_KOCH_LEVEL),
       wpm: Number.isFinite(round.wpm) ? round.wpm : null,
       farnsworthWpm: Number.isFinite(round.farnsworthWpm) ? round.farnsworthWpm : null,
@@ -210,7 +211,7 @@ export async function getMorseProgress(days = 30) {
 
   // Per-mode trend series (chronological — rounds are appended in order).
   const series = {};
-  for (const mode of MORSE_MODES) series[mode] = [];
+  for (const mode of MORSE_MODE_IDS) series[mode] = [];
   for (const r of rounds) {
     if (!series[r.mode]) series[r.mode] = [];
     // Effective WPM is Farnsworth speed when set, else the raw character WPM.

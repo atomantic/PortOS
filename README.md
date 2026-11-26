@@ -44,7 +44,7 @@ flowchart TB
     cos["<b>portos-cos</b><br/>agent runner"]
     browser["<b>portos-browser</b><br/>PortOS Browser<br/>(Chrome)"]
     fixer["<b>portos-autofixer</b><br/>crash monitor + dashboard"]
-    local["<b>Local models</b><br/>LLM: Ollama · LM Studio<br/>llama.cpp · MTPLX<br/>Video: LTX-2.5 · Wan 2.2<br/>MiniMax H3 (MLX)<br/>Image: FLUX.2 · MOSS<br/>Voice: Whisper · Piper<br/>Qwen3-TTS<br/>Music: ACE-Step · MusicGen<br/>3D: TRELLIS.2"]
+    local["<b>Local models</b><br/>LLM: Ollama · LM Studio<br/>llama.cpp · MTPLX<br/>Splash · mkserve · Slotstream<br/>Video: LTX-2.5 · Wan 2.2<br/>MiniMax H3 (MLX)<br/>Image: FLUX.2/3 · MOSS<br/>Voice: Whisper · Piper<br/>Qwen3-TTS<br/>Music: ACE-Step · MusicGen<br/>3D: TRELLIS.2 · Pixal3D · Blender"]
   end
 
   subgraph out["☁️ Outside your computer"]
@@ -85,8 +85,6 @@ Ports are listed in [docs/PORTS.md](./docs/PORTS.md) and the full design in [doc
 
 The author builds PortOS by directing AI coding agents rather than typing the code, and PortOS in turn manages those agents, its own development, and the author's digital twin.
 
-> **Opinionated and personal.** PortOS assumes one person, one private network, and the author's workflow. Pull requests are welcome, but updates can break things. If one does, ask your coding agent: `"Read the vX.Y.Z notes on the PortOS GitHub Releases page and fix any migration issues in my PortOS data/ directory."`
-
 ---
 
 ## Screenshots
@@ -114,7 +112,7 @@ npm start       # builds the client and starts PortOS under PM2
 
 Open `http://localhost:5555`. **Settings → Setup** walks you through the rest: an AI provider, Tailscale, and HTTPS (`npm run setup:cert`), after which PortOS is at `https://<machine>.<tailnet>.ts.net:5555` on every device.
 
-For hot reload while developing, run `npm run dev` (UI on `:5554`). The [Setup Guide](./docs/SETUP.md) covers requirements, npm versions, native PostgreSQL, HTTPS without Tailscale, and starting on boot.
+For hot reload while developing, run `npm run dev` (UI on `:5554`). The [Setup Guide](./docs/SETUP.md) covers native PostgreSQL, HTTPS without Tailscale, and starting on boot.
 
 <details>
 <summary>PM2 commands</summary>
@@ -165,85 +163,23 @@ PortOS/
 
 ## Documentation
 
-Full catalog (including design plans, ADRs, and research notes): [docs/README.md](./docs/README.md)
+- [Setup Guide](./docs/SETUP.md) for installing PortOS, connecting over Tailscale, and enabling HTTPS.
+- [Product Surface Map](./docs/features/product-surfaces.md) for finding features and their guides.
+- [Architecture](./docs/ARCHITECTURE.md) and [Port Allocation](./docs/PORTS.md) for understanding what runs on your machine.
+- [Backup & Restore](./docs/BACKUP.md) for protecting your files and PostgreSQL data.
+- [Troubleshooting](./docs/TROUBLESHOOTING.md) for common setup and runtime problems.
+- [API Reference](./docs/API.md) for API conventions and finding endpoints in the API Explorer.
+- [ETHOS.md](./ETHOS.md) for the project's design commitments.
+- [Contributing Guide](./CONTRIBUTING.md) for claiming an issue, running checks, and opening a PR.
+- [Documentation Index](./docs/README.md) for the full catalog of guides and design notes.
 
-### Architecture & Operations
-- [Architecture Overview](./docs/ARCHITECTURE.md) — System design, data flow, and service diagram
-- [API Reference](./docs/API.md) — API conventions, route-domain index, and WebSocket events (endpoint reference: the API Explorer)
-- [API Tool Contract](./docs/API_TOOL_CONTRACT.md) — Unified semantic tool, Persistent Mind, and Agent Tools MCP contract
-- [Companion App API](./docs/COMPANION_APP_API.md) — PortDeck native mobile client discovery and HTTP API contract
-- [Setup Guide](./docs/SETUP.md) — Tailscale, MagicDNS, trusted HTTPS, launch URLs, and AI-provider readiness
-- [Remote Desktop Broker](./docs/REMOTE_DESKTOP.md) — PortDeck VNC broker security, host setup, and session flow
-- [Federated Media Providers](./docs/FEDERATED_MEDIA_PROVIDERS.md) — Authenticated, capacity-aware peer audio, image, and video provider wire contract and setup
-- [Storage Classification Contract](./docs/STORAGE.md) — when data belongs in PostgreSQL vs the filesystem, plus the new-data-store checklist
-- [Backup & Restore](./docs/BACKUP.md) — filesystem snapshots + mandatory PostgreSQL dumps and how to restore them
-- [Port Allocation](./docs/PORTS.md) — Port conventions (5553-5569) and allocation guide
-- [PM2 Configuration](./docs/PM2.md) — PM2 patterns and best practices
-- [Quota Burn Automation](./docs/QUOTA-BURN.md) — Subscription quota spending loop and window rules
-- [Three.js Models](./docs/THREEJS_MODELS.md) — Procedural Three.js scene generation and trust boundary
-- [Fork-Aware Self-Update](./docs/SELF_UPDATE.md) — Fork-aware self-update flow, release polling, and sync mechanisms
-- [Windows Console Focus](./docs/WINDOWS_CONSOLE.md) — Console window focus handling and background spawn mitigation on Windows
-- [The `METRICS.md` Convention](./docs/METRICS.md) — How a managed app declares the metrics agents should judge it by
+## Updating PortOS
 
-### Development
-- [Contributing Guide](./docs/CONTRIBUTING.md) — Development setup and code conventions
-- [GitHub Actions](./docs/GITHUB_ACTIONS.md) — CI/CD workflow patterns
-- [Versioning & Releases](./docs/VERSIONING.md) — Semantic versioning and release process
-- [Dependency Audit](./docs/DEPS.md) — Every third-party dependency and why it stays
-- [Troubleshooting](./docs/TROUBLESHOOTING.md) — Common issues and solutions
+Updates can change data layouts and schemas. Check the notes for your version
+on [GitHub Releases](https://github.com/atomantic/PortOS/releases). If an update
+breaks something, give your coding agent this prompt.
 
-### Feature Deep Dives
-
-- [Product Surface Map](./docs/features/product-surfaces.md) — Browse every user-facing PortOS surface and its canonical guide
-- [Voice Mode](./docs/features/voice.md) — local STT/TTS/LLM voice assistant setup
-- [Chief of Staff](./docs/features/chief-of-staff.md) — Autonomous agent orchestrator
-- [Operational Goals](./docs/GOALS_OPERATIONAL.md) — Runtime priorities the CoS reads when generating work
-- [Agent Tools (MCP)](./docs/features/agent-context.md) — Loopback-only bounded context plus independently granted semantic PortOS tools for local CoS agents
-- [Agent Skills](./docs/features/agent-skills.md) — Task-type-specific agent prompts
-- [Claude on Ollama](./docs/features/claude-ollama.md) — Run agent tasks on a local model
-- [Fleet LLM Host](./docs/features/fleet-llm-host.md) — Dedicated GPU host serving OpenAI-compatible models to a PortOS fleet
-- [CoS Agent Runner](./docs/features/cos-agent-runner.md) — Isolated agent process architecture
-- [MTPLX](./docs/features/mtplx.md) — Native multi-token-prediction Qwen runtime on Apple Silicon, managed as a PM2 process from Models → Runtimes
-- [Splash](./docs/features/splash.md) and [mkserve](./docs/features/mkserve.md) — Optional Inkling 2 Mini runtimes with install, update, start and stop in Models → Runtimes
-- [DFlash 2 / DSpark](./docs/features/dflash2.md) — Speculative drafting acceleration for local llama-server
-- [vLLM RTX 3090](./docs/features/qwen38-rtx3090.md) — Docker compose setup for Qwen 27B on NVIDIA RTX 3090 GPUs
-- [SGLang Qwen](./docs/features/sglang-qwen38.md) — SGLang engine configuration for Hopper/Blackwell hardware
-- [Memory System](./docs/features/memory-system.md) — Semantic memory with vector search and Persistent Mind reflection
-- [Digital Twin](./docs/features/digital-twin.md) — Genome, chronotype, taste, and mortality-aware goals
-- [Identity System](./docs/features/identity-system.md) — Extended identity modeling (P1-P3)
-- [Soul System](./docs/features/soul-system.md) — Identity scaffold with behavioral testing
-- [Privacy Center](./docs/features/privacy-center.md) — Machine-local vault, data brokers, and organization change tracking
-- [Brain System](./docs/features/brain-system.md) — Offline-first second brain
-- [POST](./docs/features/post.md) — Daily cognitive training
-- [App Wizard](./docs/features/app-wizard.md) — App registration and scaffolding
-- [Autofixer](./docs/features/autofixer.md) — Autonomous crash detection and repair
-- [Browser](./docs/features/browser.md) — Headless browser automation
-- [Eidoverse Worlds](./docs/features/eidoverse.md) — private 3D systems world and PortOS resource projection
-- [Prompt Manager](./docs/features/prompt-manager.md) — Customizable AI prompt templates
-- [JIRA Sprint Manager](./docs/features/jira-sprint-manager.md) — Autonomous JIRA triage and implementation
-- [Writers Room](./docs/features/writers-room.md) — Prose-to-media writing environment with explicit AI passes
-- [FableLoom](./docs/features/fableloom.md) — Interactive branching narrative engine and graph reader
-- [Sprite Export Contract](./docs/features/sprite-export-contract.md) — What a published sprite atlas guarantees a consuming game
-- [Video Text Encoders](./docs/features/video-text-encoders.md) — Dual-encoder memory and clip conditioning for video models
-- [Video Speed Profiles](./docs/features/video-speed-profiles.md) — Fast sampling profiles and runtime acceleration for video models
-- [Music Renderer Benchmarks](./docs/features/music-renderer-benchmarks.md) — Benchmarking profiles and listening test evidence for local renderers
-- [OpenClaw](./docs/features/openclaw-operator-chat.md) — In-app operator-agent chat
-- [Stacker News](./docs/features/stacker-news.md) — Territory management and content stewardship
-- [Messages Security Model](./docs/features/messages-security.md) — Prompt-injection boundary around untrusted message content
-- [Error Handling](./docs/features/error-handling.md) — Centralized error normalization and recovery
-
-## Contributing
-
-Read [CONTRIBUTING.md](./CONTRIBUTING.md) for issue claiming and PR acceptance.
-Comment to request an issue and wait for assignment before starting; issues
-labeled `in-progress` or already assigned are not up for grabs.
-
-Pull requests are welcome. This is a personal project, so:
-
-- **Breakage happens.** Major version bumps (e.g. v2.0.0) may rename pages, reorganize data directories, or change schemas in ways that require a migration pass on your local data. Check the relevant version on the [GitHub Releases](https://github.com/atomantic/PortOS/releases) page for what changed.
-- **Data migration.** If something stops working after an update, the fastest fix is to point your coding agent at the release notes: `"Read the vX.Y.Z notes on the PortOS GitHub Releases page and fix any migration issues in my PortOS data/ directory."` Most data issues are trivially auto-fixable this way.
-- **Opinionated by design.** Architecture decisions (single-user, auth optional and off by default, PostgreSQL + flat files over a heavy ORM, Tailscale-only networking) are intentional and will not change. PRs that add multi-user support or general-purpose hardening — CORS restrictions, rate limiting, request-level concurrency controls — will not be merged. See the Security Model section of [AGENTS.md](./AGENTS.md) for what that trust model does and does not assume.
-- **Style.** Match the existing conventions in [AGENTS.md](./AGENTS.md) before opening a PR — especially the no-try/catch route convention, emoji-prefixed logging, and Zod validation on all inputs.
+`Read the vX.Y.Z notes on the PortOS GitHub Releases page and fix any migration issues in my PortOS data/ directory.`
 
 ## License
 

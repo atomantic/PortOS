@@ -2,7 +2,7 @@ import { useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
 import { X } from 'lucide-react';
 import { useScrollLock } from '../hooks/useScrollLock';
-import useFocusTrap from '../hooks/useFocusTrap.js';
+import useFocusTrap, { FocusTrapParent } from '../hooks/useFocusTrap.js';
 import TabPills from './ui/TabPills';
 import { useEscLayer } from './ui/Modal';
 
@@ -167,10 +167,9 @@ export default function Drawer({
   // SSR / non-DOM render falls back to rendering in place — there is no <body>
   // to portal into, and the containing-block trap is a layout concern that only
   // exists in a browser anyway.
-  if (typeof document === 'undefined') return overlay;
-
-  return createPortal(
-    overlay,
-    document.body
+  return (
+    <FocusTrapParent.Provider value={panelRef}>
+      {typeof document === 'undefined' ? overlay : createPortal(overlay, document.body)}
+    </FocusTrapParent.Provider>
   );
 }

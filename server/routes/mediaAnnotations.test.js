@@ -44,6 +44,48 @@ describe('/api/media/annotations', () => {
     expect((await list())['image:a.png'].own).toMatchObject({ starred: true, note: 'keeper' });
   });
 
+  it('filters the annotation map by kind, exact keys, or their intersection', async () => {
+    const image = 'image:filter.png';
+    const video = 'video:filter.mp4';
+    const reference = 'image-ref:filter,reference.png';
+    const entries = {};
+    for (const key of [image, video, reference]) {
+      const result = await patch(encodeURIComponent(key), { starred: true });
+      expect(result.status).toBe(200);
+      entries[key] = result.body.entry;
+    }
+
+    expect(await list()).toMatchObject(entries);
+    const byKind = await request(app).get(`${BASE}?kind=image-ref`);
+    expect(byKind.status).toBe(200);
+    expect(byKind.body).toEqual({ annotations: { [reference]: entries[reference] } });
+
+    const keys = new URLSearchParams([['keys', image], ['keys', video], ['keys', 'image:missing.png']]);
+    const byKeys = await request(app).get(`${BASE}?${keys}`);
+    expect(byKeys.status).toBe(200);
+    expect(byKeys.body).toEqual({ annotations: { [image]: entries[image], [video]: entries[video] } });
+
+    const bySingleKey = await request(app).get(`${BASE}?keys=${encodeURIComponent(reference)}`);
+    expect(bySingleKey.status).toBe(200);
+    expect(bySingleKey.body).toEqual(byKind.body);
+
+    keys.set('kind', 'image');
+    const both = await request(app).get(`${BASE}?${keys}`);
+    expect(both.status).toBe(200);
+    expect(both.body).toEqual({ annotations: { [image]: entries[image] } });
+  });
+
+  it('rejects unknown kinds, invalid keys, and more than 100 keys', async () => {
+    expect((await request(app).get(`${BASE}?kind=audio`)).status).toBe(400);
+    expect((await request(app).get(`${BASE}?keys=unknown&keys=image:a.png`)).status).toBe(400);
+    const keys = new URLSearchParams(Array.from({ length: 100 }, (_, index) => ['keys', `image:bounded-${index}.png`]));
+    const withinLimit = await request(app).get(`${BASE}?${keys}`);
+    expect(withinLimit.status).toBe(200);
+    expect(withinLimit.body).toEqual({ annotations: {} });
+    keys.append('keys', 'image:one-more.png');
+    expect((await request(app).get(`${BASE}?${keys}`)).status).toBe(400);
+  });
+
   it('merges partial patches and clears the entry once nothing is set', async () => {
     await patch('video:b.mp4', { starred: true });
     await patch('video:b.mp4', { rating: 'good' });

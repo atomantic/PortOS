@@ -94,7 +94,7 @@ async function applyBaseSchema(connection, database) {
 // A database cloned from the test database carries its extensions, so the
 // ordinary application role needs only CREATEDB.
 export const TEMPLATE_DATABASE = 'portos_test';
-const REPAIR_HINT = 'run `npm run setup:db:test`, or see docs/CONTRIBUTING.md "Repairing a test database whose extensions were dropped"';
+const REPAIR_HINT = 'run `npm run setup:db:test`, or see CONTRIBUTING.md "Repairing a test database whose extensions were dropped"';
 
 // Identifiers are interpolated (DDL cannot be parameterized) only after assertScratchDbName has
 // matched the fixed pattern; the template is the TEMPLATE_DATABASE constant.

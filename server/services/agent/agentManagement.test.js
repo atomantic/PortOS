@@ -21,7 +21,15 @@
 import { describe, it, expect, vi, beforeEach, afterEach, afterAll } from 'vitest';
 import { ChildProcess } from '../../lib/childProcess.js';
 import { pinPlatform } from '../../lib/testHelper.js';
-import { rmSync } from 'fs';
+import { EventEmitter } from 'node:events';
+import { mkdirSync, rmSync, writeFileSync } from 'fs';
+import { join } from 'path';
+import { cleanupTempDataRoots, lazyTempDataRoot, makePathsProxy } from '../../lib/mockPathsDataRoot.js';
+
+vi.mock('../../lib/paths.js', async importOriginal => makePathsProxy(await importOriginal(), {
+  dataRoot: () => lazyTempDataRoot('portos-agent-management-'),
+}));
+afterAll(cleanupTempDataRoots);
 
 // The lifecycle ledger is a real file writer (data/cos/run-events.jsonl). Mocked
 // so the sweep's telemetry lands in a spy instead of the developing install's
@@ -43,14 +51,18 @@ vi.mock('../cos/cos.js', () => ({
   forceSpawnTask: vi.fn().mockResolvedValue({ success: true })
 }));
 
-// Only `exec` is replaced so the Windows tasklist cases never run a real command.
-const { execMock } = vi.hoisted(() => ({ execMock: vi.fn() }));
-vi.mock('../../lib/childProcess.js', async (importOriginal) => ({
-  ...(await importOriginal()),
-  exec: execMock
-}));
+const { execMock, taskkillMock } = vi.hoisted(() => ({ execMock: vi.fn(), taskkillMock: vi.fn() }));
+vi.mock('../../lib/childProcess.js', async (importOriginal) => {
+  const actual = await importOriginal();
+  return {
+    ...actual,
+    exec: execMock,
+    spawn: (command, ...args) => command === 'taskkill' ? taskkillMock(...args) : actual.spawn(command, ...args),
+  };
+});
 
 vi.mock('../cos/cosEvents.js', () => ({
+  cosEvents: new EventEmitter(),
   emitLog: vi.fn()
 }));
 
@@ -169,7 +181,7 @@ import { readHostShutdownMarker, clearHostShutdownMarker } from '../../lib/hostS
 import { committedDuringRun } from '../../lib/gitCommitProbe.js';
 import { holdRecoveredRunnerOllamaWork, readRunnerCompletionReceipt } from './agentRunnerSync.js';
 import { handleAgentCompletion } from './agentLifecycle.js';
-import { activeAgents, runnerAgents, completingAgents, spawningTasks, pausedAgents, consumePausedAgentExit } from './agentState.js';
+import { activeAgents, runnerAgents, completingAgents, spawningTasks, pausedAgents, consumePausedAgentExit, userTerminatedAgents } from './agentState.js';
 
 // Stamp the task as a real dispatch does and return agent metadata carrying the
 // receipt that dispatch binds. Legacy fixtures deliberately omit this helper
@@ -1838,6 +1850,69 @@ describe('resumeAgent — requeues the paused agent\'s own task', () => {
     getAgentRecord.mockResolvedValue({ ...PAUSED_AGENT, metadata: { ...PAUSED_AGENT.metadata, configClaimFlow } });
     getTaskById.mockResolvedValue(null);
     await expect(resumeAgent('agent-paused-1')).resolves.toMatchObject({ mode: 'new-task' });
+    const [replacement, taskType] = addTask.mock.calls[0];
+    expect(taskType).toBe('user');
+    expect(replacement.metadata).not.toHaveProperty('featureAgentId');
+    expect(replacement.metadata).not.toHaveProperty('featureAgentRun');
+  });
+
+  describe('missing Feature Agent task', () => {
+    const featureAgentId = 'fa-example';
+    const ownership = { featureAgentId, featureAgentRun: true };
+    const feature = { id: featureAgentId, status: 'active', currentAgentId: PAUSED_AGENT.id };
+    const persisted = { id: 'sys-feature-replacement', status: 'pending', metadata: ownership };
+
+    function seedFeatures(agents) {
+      mkdirSync(fileUtils.PATHS.cos, { recursive: true });
+      writeFileSync(join(fileUtils.PATHS.cos, 'feature-agents.json'), JSON.stringify({ version: 1, agents }));
+    }
+
+    beforeEach(() => {
+      getAgentRecord.mockResolvedValue({ ...PAUSED_AGENT, metadata: {
+        ...PAUSED_AGENT.metadata, ...ownership, taskType: 'internal', configClaimFlow: false,
+      } });
+      getTaskById.mockResolvedValue(null);
+    });
+
+    it('dispatches the replacement through the bound Feature Agent path', async () => {
+      seedFeatures([feature]);
+      const { withFeatureAgentDispatch } = await import('../featureAgents.js');
+      addTask.mockResolvedValueOnce(persisted);
+      forceSpawnTask.mockImplementationOnce(taskId =>
+        withFeatureAgentDispatch({ ...persisted, id: taskId }, () => ({ success: true })));
+
+      await expect(resumeAgent(PAUSED_AGENT.id)).resolves.toMatchObject({
+        mode: 'new-task', spawned: true, taskId: persisted.id,
+      });
+      expect(addTask).toHaveBeenCalledWith(expect.objectContaining({
+        metadata: expect.objectContaining({ ...ownership, resumedFromAgentId: PAUSED_AGENT.id }),
+      }), 'internal', { suppressDequeue: true });
+    });
+
+    it.each([
+      ['stopped', [{ ...feature, status: 'draft', currentAgentId: null }]],
+      ['deleted', []],
+      ['reassigned', [{ ...feature, currentAgentId: 'agent-another-run' }]],
+    ])('refuses a %s feature before queuing or retiring the paused run', async (_state, agents) => {
+      seedFeatures(agents);
+      await expect(resumeAgent(PAUSED_AGENT.id)).rejects.toMatchObject({
+        status: 409, code: 'AGENT_RESUME_FEATURE_RUN_UNAVAILABLE',
+      });
+      expect(addTask).not.toHaveBeenCalled();
+      expect(forceSpawnTask).not.toHaveBeenCalled();
+      expect(markAgentComplete).not.toHaveBeenCalled();
+    });
+
+    it('refuses to bind a generic duplicate as the Feature Agent run', async () => {
+      seedFeatures([feature]);
+      addTask.mockResolvedValueOnce({ id: 'sys-unrelated', status: 'pending', duplicate: true });
+      await expect(resumeAgent(PAUSED_AGENT.id)).rejects.toMatchObject({
+        status: 409, code: 'AGENT_RESUME_FEATURE_TASK_CONFLICT',
+      });
+      const { getFeatureAgent } = await import('../featureAgents.js');
+      await expect(getFeatureAgent(featureAgentId)).resolves.toMatchObject({ currentAgentId: PAUSED_AGENT.id });
+      expect(forceSpawnTask).not.toHaveBeenCalled();
+    });
   });
 
   it('keeps a missing coordinator task a coordinator when the task record is gone', async () => {
@@ -3087,6 +3162,47 @@ describe('lifecycle ledger — pause and interruption', () => {
     // projection for a run that does not exist.
     await expect(killAgent('ghost')).rejects.toMatchObject({ status: 404 });
     expect(ledgerCalls('run.interrupted')).toHaveLength(0);
+  });
+});
+
+describe('Windows force-kill in direct mode', () => {
+  it('keeps ownership and task state on spawn failure and waits for taskkill on retry', async () => {
+    const restorePlatform = pinPlatform('win32');
+    const agentId = 'windows-direct';
+    const process = Object.assign(fakeChildProcess(), { pid: 1234 });
+    const agent = { process, pid: process.pid, taskId: 'task-1' };
+    activeAgents.set(agentId, agent);
+    const failed = new EventEmitter();
+    const retry = new EventEmitter();
+    vi.clearAllMocks();
+    taskkillMock.mockReturnValueOnce(failed).mockReturnValueOnce(retry);
+    try {
+      const firstResult = killAgent(agentId);
+      const rejection = expect(firstResult).rejects.toMatchObject({ code: 'AGENT_KILL_FAILED' });
+      await vi.waitFor(() => expect(taskkillMock).toHaveBeenCalledTimes(1));
+      failed.emit('error', new Error('taskkill unavailable'));
+      await rejection;
+      expect(activeAgents.get(agentId)).toBe(agent);
+      expect(userTerminatedAgents.has(agentId)).toBe(false);
+      expect(markAgentComplete).not.toHaveBeenCalled();
+      expect(updateTask).not.toHaveBeenCalled();
+
+      const succeeded = vi.fn();
+      const retryResult = killAgent(agentId).then(succeeded);
+      await vi.waitFor(() => expect(taskkillMock).toHaveBeenCalledTimes(2));
+      expect(succeeded).not.toHaveBeenCalled();
+      expect(markAgentComplete).not.toHaveBeenCalled();
+      expect(activeAgents.get(agentId)).toBe(agent);
+      retry.emit('close', 0);
+      await retryResult;
+      expect(succeeded).toHaveBeenCalledWith({ success: true, agentId, pid: process.pid, signal: 'SIGKILL' });
+      expect(activeAgents.has(agentId)).toBe(false);
+    } finally {
+      activeAgents.delete(agentId);
+      userTerminatedAgents.delete(agentId);
+      taskkillMock.mockReset();
+      restorePlatform();
+    }
   });
 });
 

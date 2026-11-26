@@ -10,6 +10,7 @@ describe('managed-runtime wake ownership (issue #8104)', () => {
   // `providerExecutionReadiness.js` wraps into `ensureManagedRuntimeReady`.
   const GUARDED_IMPORTS = [
     { module: 'ollamaManager.js', symbol: 'ensureProviderReady' },
+    { module: 'ollama/ollamaDaemon.js', symbol: 'ensureProviderReady' },
     { module: 'mtplxServerManager.js', symbol: 'ensureMtplxProviderReady' },
     { module: 'slotstreamServerManager.js', symbol: 'ensureSlotstreamProviderReady' },
   ];

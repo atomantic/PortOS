@@ -77,6 +77,21 @@ function requireStage(project) {
   return stage;
 }
 
+// Stage updates within a phase can change timestamps, images and inspection evidence.
+// Creation time distinguishes a discarded check-in from a fresh one at revision 1.
+export function matchesCastAndSetsStage(stage, expected) {
+  return !!stage && !!expected && stage.source !== 'catalog'
+    && stage.processId === expected.processId && stage.revision === expected.revision
+    && stage.createdAt === expected.createdAt && stage.status === expected.status
+    && stage.productionRunId === expected.productionRunId
+    && stage.feedbackRenderPlan?.phase === expected.feedbackRenderPlan?.phase;
+}
+
+export const releaseCastAndSetsImage = (image) => ({ ...image, status: 'pending', jobId: null });
+
+export const releaseQueuedCastAndSetsImages = (images) => Object.fromEntries(Object.entries(images || {}).map(([key, image]) =>
+  [key, image.status === 'queued' ? releaseCastAndSetsImage(image) : image]));
+
 function write(project, stage, now) {
   return { project: { ...project, castAndSets: { ...stage, updatedAt: now }, updatedAt: now }, stage: { ...stage, updatedAt: now } };
 }
@@ -108,7 +123,7 @@ export function startCastAndSetsOnProject(project, { processId, productionRunId 
     route: current?.route || null,
     direction: current?.direction || null,
     plan: current?.plan || {},
-    images: current?.images || {},
+    images: current?.status === 'skipped' ? releaseQueuedCastAndSetsImages(current.images) : current?.images || {},
     artifactId: current?.artifactId || null,
     artifactVersion: current?.artifactVersion || null,
     notesApplied: [],

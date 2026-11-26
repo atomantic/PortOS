@@ -1,6 +1,6 @@
 /**
  * `bufferedSpawn` (non-throwing) and `bufferedSpawnOrThrow` run a child with buffered output;
- * `killProcessTree` and `terminateWithEscalation` do SIGTERM-then-SIGKILL shutdown.
+ * Process-tree helpers signal, escalate, or confirm Windows taskkill completion.
  */
 
 import { spawn, ChildProcess } from './childProcess.js';
@@ -40,6 +40,62 @@ export function prepareCliSpawn(command, args, searchEnv = process.env, isWin32 
 // Cap buffered output so a runaway child can't exhaust memory; only a tail is ever surfaced.
 export const MAX_OUTPUT_BYTES = 64 * 1024;
 
+const WINDOWS_TASKKILL_TIMEOUT_MS = 10000;
+const pendingWindowsTreeKills = new WeakMap();
+
+const taskkillArgs = pid => ['/T', '/F', '/PID', String(pid)];
+
+function isWindowsTaskkillTarget(child, isWin32) {
+  return isWin32 && child.pid && (child instanceof ChildProcess || typeof child.kill !== 'function');
+}
+
+function confirmTaskkill(child) {
+  // An exited ChildProcess still has a PID, which Windows may have recycled.
+  if (child.exitCode != null || child.signalCode != null) return Promise.resolve();
+  const { pid } = child;
+  return new Promise((resolve, reject) => {
+    const killer = spawn('taskkill', taskkillArgs(pid), {
+      stdio: 'ignore',
+      signal: AbortSignal.timeout(WINDOWS_TASKKILL_TIMEOUT_MS),
+    });
+    killer.once('error', error => reject(new Error(`Could not run taskkill for PID ${pid}: ${error.message}`, { cause: error })));
+    killer.once('close', (code, signal) => {
+      if (code === 0) return resolve();
+      if (code != null) {
+        // A nonzero exit can mean the target already went away. Access denial
+        // and other probe errors leave its liveness unknown.
+        try { process.kill(pid, 0); }
+        catch (error) { if (error.code === 'ESRCH') return resolve(); }
+      }
+      reject(new Error(`taskkill failed for PID ${pid} (${signal ?? `exit code ${code}`})`));
+    });
+  });
+}
+
+/** Awaitable taskkill for explicit CoS force-kill. Null delegates to the ordinary signal path. */
+export function confirmWindowsProcessTreeExit(child, isWin32 = process.platform === 'win32') {
+  if (!isWindowsTaskkillTarget(child, isWin32) || typeof child.requestWindowsAgentStop === 'function') return null;
+  let termination = pendingWindowsTreeKills.get(child);
+  if (!termination) {
+    termination = { confirmed: Promise.withResolvers(), attempt: null };
+    pendingWindowsTreeKills.set(child, termination);
+  }
+  termination.attempt ??= confirmTaskkill(child).then(() => {
+    child.killed = true;
+    pendingWindowsTreeKills.delete(child);
+    termination.confirmed.resolve();
+  }, error => {
+    termination.attempt = null;
+    throw error;
+  });
+  return termination.attempt;
+}
+
+/** Keep the root's close finalizer waiting through a failed attempt until a retry confirms termination. */
+export function pendingWindowsProcessTreeExit(child) {
+  return pendingWindowsTreeKills.get(child)?.confirmed.promise;
+}
+
 /**
  * Terminate a child process and its descendants.
  *
@@ -71,9 +127,9 @@ export function killProcessTree(child, signal = 'SIGTERM', { processGroup = fals
   const isChildProcess = child instanceof ChildProcess;
   // No own `.kill()`: addressable only by pid.
   const isPidOnly = !isChildProcess && typeof child.kill !== 'function';
-  if (isWin32 && child.pid && (isChildProcess || isPidOnly)) {
+  if (isWindowsTaskkillTarget(child, isWin32)) {
     child.killed = true;
-    spawn('taskkill', ['/T', '/F', '/PID', String(child.pid)], { stdio: 'ignore' })
+    spawn('taskkill', taskkillArgs(child.pid), { stdio: 'ignore' })
       .on('error', () => {})
       .unref();
     return;

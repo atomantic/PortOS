@@ -6,6 +6,7 @@
  * text byte cap is re-checked on the encoded text in the service, so the schema only bounds the JSON body.
  */
 import { z } from 'zod';
+import { BLENDER_MODEL_FIXED_VIEWS } from './blenderModelCameras.js';
 import { MUSIC_VIDEO_BLENDER_SOURCE_PATH, MUSIC_VIDEO_BLENDER_TEXT_MAX_BYTES } from './musicVideo/musicVideoBlender.js';
 
 const name = z.string().trim().min(1).max(120);
@@ -62,7 +63,7 @@ const meters = z.number().finite().min(-10_000).max(10_000);
 const fraction = z.number().min(0).max(1);
 
 const cameraLabel = oneLine.trim().min(1).max(80);
-const cameraView = z.enum(['front', 'right', 'back', 'left', 'top', 'bottom', 'three-quarter']);
+const cameraView = z.enum(Object.keys(BLENDER_MODEL_FIXED_VIEWS));
 const cameraOrbit = z.object({
   azimuth: z.number().finite().min(-360).max(360),
   elevation: z.number().finite().min(-90).max(90),

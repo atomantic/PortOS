@@ -1,3 +1,4 @@
+import { GUIDE_MIME_TYPES } from '../../../../server/lib/musicVideo/musicVideoGuideMimeTypes.js';
 import { useState } from 'react';
 import { FileText, Film, Image as ImageIcon, LayoutGrid, Users, Upload, FolderOpen, Check } from 'lucide-react';
 import Pill from '../ui/Pill.jsx';
@@ -29,9 +30,6 @@ export function devArtifactStatus(artifact, stage) {
   return DEV_ARTIFACT_STATUS[artifact.status] || DEV_ARTIFACT_STATUS.pending;
 }
 const ACCEPT = '.html,.htm,.md,.mp4,.png,.jpg,.jpeg';
-// What the production approvals accept as the visual cast/environment guide.
-const GUIDE_MIME_TYPES = ['text/html', 'image/png', 'image/jpeg'];
-
 /**
  * The project's development files ("ingredients") — the Cast & Sets sheet,
  * animatics, treatments, storyboards — with their review status. Opening one

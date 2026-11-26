@@ -4,21 +4,12 @@
 
 import { request } from './apiCore.js';
 
-// Per-content-type radio values mirror server/lib/creativeDirectorValidation.js
-// IMPORTER_CONTENT_TYPES; UI strings stay client-side.
-export const IMPORTER_CONTENT_TYPES = ['short-story', 'novel', 'screenplay', 'comic-script'];
-
-// Initial fallback for the source-char limit. The arc-role + arc-shape-id
-// lists are NOT shadowed client-side — `/importer/config` and the analyze
-// response are the source of truth (the prior `IMPORTER_ARC_ROLES_FALLBACK`
-// silently drifted from `server/lib/storyArc.js#ARC_ROLES`). Char limit
-// stays because the intake form's real-time counter needs a value before
-// the GET resolves.
-export const IMPORTER_SOURCE_CHAR_LIMIT_FALLBACK = 5_000_000;
-// Mirrors `CLASSIFY_SOURCE_HEAD_CHARS` in server/services/importer.js — the
-// classifier only reads the head; the client trims to match so we don't
-// ship up to 200K of body that gets discarded.
-export const CLASSIFY_SOURCE_HEAD_CHARS = 4_000;
+// The intake form needs a source limit before /importer/config resolves.
+export {
+  CLASSIFY_SOURCE_HEAD_CHARS,
+  IMPORTER_CONTENT_TYPES,
+  IMPORTER_SOURCE_CHAR_LIMIT as IMPORTER_SOURCE_CHAR_LIMIT_FALLBACK,
+} from '../../../server/lib/importerContentTypes.js';
 
 export const getImporterConfig = (options = {}) => request('/importer/config', options);
 

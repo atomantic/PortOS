@@ -1,14 +1,9 @@
 // Writers Room per-scene image-gen defaults + style discriminators.
 //
-// Mirror of server/lib/writersRoomStylePresets.js — kept in sync manually
-// since client and server are separate bundles. Curated preset ids come from
-// the /api/image-gen/style-presets endpoint at runtime; only the two
-// special discriminators live here.
-
 import { IMAGE_GEN_MODE, LOCAL_IMAGEGEN_DEFAULT_MODEL, installLocalModelId } from './imageGenBackends';
 
-export const STYLE_ID = Object.freeze({ NONE: 'none', CUSTOM: 'custom' });
-export const EMPTY_IMAGE_STYLE = Object.freeze({ presetId: STYLE_ID.NONE, prompt: '', negativePrompt: '' });
+// Curated preset choices are supplied by /api/image-gen/style-presets.
+export { EMPTY_IMAGE_STYLE, STYLE_ID } from '../../../server/lib/writersRoomStylePresets.js';
 
 // Defaults for the per-scene image gen pipe. Klein-4B is the fastest FLUX.2
 // variant on Apple Silicon, and 768×512 is a 3:2 aspect that suits scene work.

@@ -60,11 +60,11 @@ function readMeta() {
   return JSON.parse(readFileSync(META, 'utf8'));
 }
 
-// Once the command starts, its staging directory exists until the renewal
-// settles. Wait for cleanup instead of assuming a fixed filesystem latency.
-async function waitForRenewal(callCount = 1) {
-  await vi.waitFor(() => expect(execFile).toHaveBeenCalledTimes(callCount));
-  await vi.waitFor(() => expect(readdirSync(CERT_DIR).sort()).toEqual(expectedFiles));
+async function runInitialRenewal() {
+  const stop = initCertRenewer(server);
+  await stop();
+  expect(execFile).toHaveBeenCalledTimes(1);
+  expect(readdirSync(CERT_DIR).sort()).toEqual(expectedFiles);
 }
 
 function expectOldPair() {
@@ -96,8 +96,7 @@ describe('certRenewer', () => {
       writeStaged(args, newPair);
       cb(null, { stderr: 'Wrote public cert' });
     });
-    initCertRenewer(server);
-    await waitForRenewal();
+    await runInitialRenewal();
 
     expect(execFile.mock.calls[0][2]).toMatchObject({ timeout: 60_000 });
     expect(server.setSecureContext).toHaveBeenCalledExactlyOnceWith(newPair);
@@ -114,8 +113,7 @@ describe('certRenewer', () => {
       writeStaged(args, { cert: 'partial cert' });
       cb(new Error('timed out'));
     });
-    initCertRenewer(server);
-    await waitForRenewal();
+    await runInitialRenewal();
     expectOldPair();
   });
 
@@ -124,8 +122,7 @@ describe('certRenewer', () => {
       writeStaged(args, { cert: newPair.cert, key: problem === 'mismatched' ? oldPair.key : null });
       cb(null, { stderr: '' });
     });
-    initCertRenewer(server);
-    await waitForRenewal();
+    await runInitialRenewal();
     expectOldPair();
   });
 
@@ -141,16 +138,18 @@ describe('certRenewer', () => {
     await vi.waitFor(() => expect(execFile).toHaveBeenCalledTimes(1));
 
     const tick = setInterval.mock.calls[0][0];
-    tick();
+    const first = tick();
     expect(console.log).toHaveBeenCalledWith(expect.stringContaining('previous renewal still running'));
     expect(execFile).toHaveBeenCalledTimes(1);
 
     finish();
-    await waitForRenewal();
-    tick();
+    await first;
+    expect(readdirSync(CERT_DIR).sort()).toEqual(expectedFiles);
+    const second = tick();
     await vi.waitFor(() => expect(execFile).toHaveBeenCalledTimes(2));
     finish();
-    await waitForRenewal(2);
+    await second;
+    expect(readdirSync(CERT_DIR).sort()).toEqual(expectedFiles);
   });
 
   it('is a no-op teardown when the server cannot hot-swap, meta is absent or self-signed', () => {
@@ -177,9 +176,10 @@ describe('certRenewer', () => {
     const stop = initCertRenewer(server);
     expect(setInterval).toHaveBeenCalledWith(expect.any(Function), 24 * 60 * 60 * 1000);
     expect(timer.unref).toHaveBeenCalled();
-    stop();
+    await stop();
     expect(clearInterval).toHaveBeenCalledWith(timer);
-    await waitForRenewal();
+    expect(execFile).toHaveBeenCalledTimes(1);
+    expect(readdirSync(CERT_DIR).sort()).toEqual(expectedFiles);
   });
 
   it('does not rewrite or hot-swap the cached certificate', async () => {
@@ -188,16 +188,16 @@ describe('certRenewer', () => {
       cb(null, { stderr: '' });
     });
     const before = statSync(CERT).mtimeMs;
-    initCertRenewer(server);
-    await waitForRenewal();
+    await runInitialRenewal();
     expectOldPair();
     expect(statSync(CERT).mtimeMs).toBe(before);
   });
 
   it('skips the run entirely when the tailscale CLI is missing', async () => {
     findTailscale.mockReturnValue(null);
-    initCertRenewer(server);
-    await vi.waitFor(() => expect(console.log).toHaveBeenCalledWith(expect.stringContaining('CLI not found')));
+    const stop = initCertRenewer(server);
+    await stop();
+    expect(console.log).toHaveBeenCalledWith(expect.stringContaining('CLI not found'));
     expect(execFile).not.toHaveBeenCalled();
     expectOldPair();
   });

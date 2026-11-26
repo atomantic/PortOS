@@ -16,6 +16,7 @@ import {
   presentCastAndSets,
   addCastAndSetsFeedback,
   reconfirmCastAndSetsOnProject,
+  releaseQueuedCastAndSetsImages,
   removeCastAndSetsFeedback,
   removeCastAndSetsImageNote,
   reviseCastAndSetsOnProject,
@@ -156,9 +157,9 @@ export async function useCastAndSetsImage(projectId, { key, imageId }) {
     return { project: { ...current, castAndSets: next, visualSpec: { ...current.visualSpec, references: updated } } };
   });
   publish(projectId, out.project);
-  inBackground('The chosen image', projectId, async () => {
+  inBackground('The chosen image', projectId, out.project.castAndSets, async () => {
     await castAndSetsDeps.syncCatalogImage(projectId, key).catch((err) => console.error(`❌ Music Video Cast & Sets ${short(projectId)}: saving chosen image to the catalog failed; approval will retry: ${err.message}`));
-    await advance(projectId);
+    await advance(projectId, out.project.castAndSets);
   });
   return { project: out.project };
 }
@@ -189,7 +190,10 @@ export async function skipCastAndSets(projectId) {
     if (base.castAndSets.feedbackRenderPlan) throw new ServerError('Finish or discard the feedback plan before skipping the check-in', { status: 409, code: 'CAST_SETS_FEEDBACK_PENDING' });
     if (base.castAndSets.status === 'approved') throw new ServerError('The Cast & Sets check-in is already approved', { status: 409, code: 'CAST_SETS_EXISTS' });
     // A skip also releases work in flight for it: this process stops dispatching.
-    return settleAndRebase(setCastAndSetsStatus(refundUnusedCheckinSteps(base), 'skipped', { reason: 'Skipped by the director' }, now), now);
+    const images = releaseQueuedCastAndSetsImages(base.castAndSets.images);
+    return settleAndRebase(setCastAndSetsStatus(refundUnusedCheckinSteps(base), 'skipped', {
+      reason: 'Skipped by the director', extra: { images },
+    }, now), now);
   });
   console.log(`⏭️ Music Video Cast & Sets ${short(projectId)} skipped`);
   publish(projectId, out.project);
@@ -216,7 +220,7 @@ export async function acceptCastAndSetsImageEdit(projectId, input) {
   assertLegacyCheckin(await requireProject(projectId));
   const out = await acceptCastSetsImageEdit(projectId, input, PROCESS_ID);
   publish(projectId, out.project);
-  inBackground('The accepted image edit', projectId, () => advance(projectId));
+  inBackground('The accepted image edit', projectId, out.project.castAndSets, () => advance(projectId, out.project.castAndSets));
   return { project: out.project };
 }
 
@@ -264,9 +268,9 @@ export async function regenerateCastAndSets(projectId, { notes = null, keys = nu
   // picked, else of every image, from the current direction.
   const forceKeys = keys?.length ? [...new Set([...keys, ...Object.keys(imageNotes)])]
     : source.length ? Object.keys(imageNotes) : Object.keys(stage.plan || {});
-  inBackground('The regeneration', projectId, () => (redirect
-    ? runDirection(projectId, { providerId, model, effort, notes: directionNotes, forceKeys })
-    : writePlan(projectId, { forceKeys })));
+  inBackground('The regeneration', projectId, out.stage, () => (redirect
+    ? runDirection(projectId, out.stage, { providerId, model, effort, notes: directionNotes, forceKeys })
+    : writePlan(projectId, out.stage, { forceKeys })));
   return { project: out.project, stage: presentCastAndSets(out.stage, PROCESS_ID) };
 }
 
@@ -303,9 +307,9 @@ export async function applyCastAndSetsFeedback(projectId, { text, target = null,
   });
   console.log(`🎭 Music Video Cast & Sets ${short(projectId)} planning feedback r${out.stage.revision}`);
   publish(projectId, out.project);
-  inBackground('The feedback', projectId, () => (target
-    ? writePlan(projectId, { forceKeys: out.stage.feedbackRenderPlan.forceKeys })
-    : runDirection(projectId, { providerId, model, effort, notes: out.stage.notesApplied })));
+  inBackground('The feedback', projectId, out.stage, () => (target
+    ? writePlan(projectId, out.stage, { forceKeys: out.stage.feedbackRenderPlan.forceKeys })
+    : runDirection(projectId, out.stage, { providerId, model, effort, notes: out.stage.notesApplied })));
   return { project: out.project, stage: presentCastAndSets(out.stage, PROCESS_ID) };
 }
 
@@ -331,7 +335,7 @@ export async function renderCastAndSetsFeedback(projectId, { revision, count }) 
   });
   console.log(`🎭 Music Video Cast & Sets ${short(projectId)} rendering feedback r${revision} (${count} planned)`);
   publish(projectId, out.project);
-  inBackground('The feedback render', projectId, () => advance(projectId));
+  inBackground('The feedback render', projectId, out.stage, () => advance(projectId, out.stage));
   return { project: out.project, stage: presentCastAndSets(out.stage, PROCESS_ID) };
 }
 
@@ -351,7 +355,7 @@ export async function refreshCastAndSetsFeedbackRenderer(projectId, { revision }
     return { project: { ...current, castAndSets: next, updatedAt: now }, stage: next };
   });
   publish(projectId, out.project);
-  inBackground('The feedback renderer refresh', projectId, () => writePlan(projectId));
+  inBackground('The feedback renderer refresh', projectId, out.stage, () => writePlan(projectId, out.stage));
   return { project: out.project, stage: presentCastAndSets(out.stage, PROCESS_ID) };
 }
 
@@ -439,7 +443,7 @@ export async function editCastAndSetsDirection(projectId, edits) {
   });
   console.log(`🎭 Music Video Cast & Sets ${short(projectId)} direction edited r${out.stage.revision} (${changed.length} field(s))`);
   publish(projectId, out.project);
-  inBackground('The direction edit', projectId, () => writePlan(projectId));
+  inBackground('The direction edit', projectId, out.stage, () => writePlan(projectId, out.stage));
   return { project: out.project, stage: presentCastAndSets(out.stage, PROCESS_ID) };
 }
 

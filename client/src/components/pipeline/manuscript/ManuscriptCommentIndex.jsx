@@ -5,11 +5,11 @@
  * Accepted / Dismissed groups. A row reveals + opens that note in the manuscript.
  */
 
+import { CHECK_SEVERITIES as SEVERITIES } from '../../../../../server/lib/editorial/checkInfra/taxonomy.js';
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { ChevronDown, ChevronRight, Check, X, MapPin } from 'lucide-react';
 import { Badge, CommentCardFromProps } from './ManuscriptCommentCard';
 
-const SEVERITIES = ['high', 'medium', 'low'];
 
 function CommentRow({ comment, located, active, onReveal }) {
   const ref = useRef(null);

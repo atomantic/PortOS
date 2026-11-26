@@ -1,5 +1,5 @@
 /**
- * Cron FIELD semantics (pure, browser-safe, import-free): `matchesCronField(value, expr, fieldMin)`,
+ * Cron FIELD semantics (pure, browser-safe): `matchesCronField(value, expr, fieldMin)`,
  * `expandCronField(expr, min, max)` and `cronWeekdayHours(expr)` → `{days, hours}`.
  *
  * Sibling of `cronValidation.js` (syntax/range only). `matchesCronField` is the matcher
@@ -93,3 +93,11 @@ export function cronWeekdayHours(cronExpr) {
 
   return { days, hours };
 }
+
+// Day-of-month ranges for the first four weekday occurrences in a month.
+export const MONTHLY_DAY_RANGES = Object.freeze({
+  first: '1-7',
+  second: '8-14',
+  third: '15-21',
+  fourth: '22-28',
+});

@@ -1,5 +1,6 @@
 // Creative approval behavior is covered through production review routes and orchestration.
 vi.mock('./productionReview.js', async (load) => ({ ...await load(), assertProductionApproval: vi.fn() }));
+import { readLayeredEngine } from './layeredEngineSource.js';
 import { afterAll, beforeEach, describe, expect, it as vitestIt, vi } from 'vitest';
 import { mkdir, readFile, writeFile, unlink } from 'node:fs/promises';
 import { join } from 'node:path';
@@ -304,7 +305,7 @@ describe('treatment-driven mixed-media document authoring', () => {
     const { document } = await generateMixedMediaDocument(id);
     const root = join(PATHS.data, document.directory);
     expect(JSON.parse(await readFile(join(root, 'preview-playback.json'), 'utf8'))).toEqual({ version: 1, contract: 'portos-complete-frame-v1' });
-    expect(await readFile(join(root, 'engine-reference.js'))).toEqual(await readFile(new URL('./documentTemplates/layered/engine.js', import.meta.url)));
+    expect(await readFile(join(root, 'engine-reference.js'))).toEqual(await readLayeredEngine());
     expect(await readFile(join(root, 'generated.js'), 'utf8')).toContain(drawing);
     const native = await candidateRuntime(document), reference = await candidateRuntime(document, { reference: true });
     expect(await bindAuthoredPreviewPlayback(native.page)).toMatchObject({ supported: true, fps: 30 });
@@ -854,7 +855,7 @@ describe('treatment-driven mixed-media document authoring', () => {
     expect(result.changed).toBe(true);
     expect(await readFile(join(PATHS.data, result.document.directory, 'generated.js'))).toEqual(authored);
     expect(await readFile(join(PATHS.data, result.document.directory, 'engine-reference.js')))
-      .toEqual(await readFile(new URL('./documentTemplates/layered/engine.js', import.meta.url)));
+      .toEqual(await readLayeredEngine());
     expect((await upgradeDocumentEngine(id, result.document.directory)).changed).toBe(false);
   });
 
@@ -872,7 +873,7 @@ describe('treatment-driven mixed-media document authoring', () => {
     expect(result.changed).toBe(true);
     expect(await readFile(join(PATHS.data, result.document.directory, 'generated.js'))).toEqual(authored);
     expect(await readFile(join(PATHS.data, result.document.directory, 'engine-reference.js')))
-      .toEqual(await readFile(new URL('./documentTemplates/layered/engine.js', import.meta.url)));
+      .toEqual(await readLayeredEngine());
     expect((await upgradeDocumentEngine(id, result.document.directory)).changed).toBe(false);
   });
 
@@ -914,7 +915,7 @@ describe('treatment-driven mixed-media document authoring', () => {
     expect(result.changed).toBe(true);
     expect(await readFile(join(PATHS.data, result.document.directory, 'generated.js'))).toEqual(authored);
     expect(await readFile(join(PATHS.data, result.document.directory, 'engine.js')))
-      .toEqual(await readFile(new URL('./documentTemplates/layered/engine.js', import.meta.url)));
+      .toEqual(await readLayeredEngine());
     await expect(readFile(join(PATHS.data, result.document.directory, 'engine-reference.js'))).rejects.toMatchObject({ code: 'ENOENT' });
     expect((await upgradeDocumentEngine(id, result.document.directory)).changed).toBe(false);
   });

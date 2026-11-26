@@ -37,6 +37,7 @@ describe.skipIf(process.platform === 'win32')('scripts/db.sh pgvector commit SHA
     copyFileSync(join(here, 'lib', 'dbPgvector.sh'), join(root, 'scripts', 'lib', 'dbPgvector.sh'));
     copyFileSync(join(here, 'lib', 'envFile.cjs'), join(root, 'scripts', 'lib', 'envFile.cjs'));
     copyFileSync(join(here, 'lib', 'databaseSettings.cjs'), join(root, 'scripts', 'lib', 'databaseSettings.cjs'));
+    copyFileSync(join(here, 'lib', 'readDbCliConfig.cjs'), join(root, 'scripts', 'lib', 'readDbCliConfig.cjs'));
     writeFileSync(join(root, 'package.json'), '{"type":"module"}');
     writeFileSync(join(root, '.env'), 'PGMODE=native\n');
 

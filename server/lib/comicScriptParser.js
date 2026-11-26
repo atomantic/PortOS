@@ -144,7 +144,7 @@ export function sameComicScene(a, b) {
 // The number token that legitimately follows ISSUE/PAGE/PANEL in a header:
 // a digit run or a spelled-out number word — NOT an open word class, so prose
 // like "Page after page" / "Pages turned" isn't mistaken for a header. Shared
-// with the importer's mechanical splitter (`server/services/importer.js`
+// with the importer's mechanical splitter (`server/services/importer/importerComicSplit.js`
 // imports this) so the import-time split and the render-time parse agree on
 // what a header looks like. Roman numerals are excluded: under `/i` the class
 // matches prose words ("mild", "civic").

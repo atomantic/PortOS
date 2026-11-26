@@ -725,8 +725,7 @@ describe('Layout — dynamic third-level navigation', () => {
 
     expect(screen.getByRole('button', { name: 'Collapse Create' })).toBeInTheDocument();
     expect(screen.getByRole('link', { name: 'Catalog' })).toHaveClass('text-port-accent');
-    expect(screen.getByRole('link', { name: 'Media Studio' })).toHaveAttribute('href', '/create/media');
-    expect(screen.getByRole('link', { name: 'Story Studio' })).toHaveAttribute('href', '/create/story');
+    expect(screen.getByRole('link', { name: 'Media Gen' })).toHaveAttribute('href', '/media');
     expect(screen.getByRole('link', { name: 'Casting' })).toHaveAttribute('href', '/catalog/casting');
     expect(screen.getByRole('link', { name: 'Writers Room' })).toHaveAttribute('href', '/writers-room');
 

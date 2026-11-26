@@ -79,7 +79,7 @@ function BlenderMotionReferences({ blender, shot, sheet, still, playheadSec }) {
       const response = await fetch(musicVideoBlenderMediaUrl(projectId, still.file));
       if (!response.ok) throw new Error('The still could not be read');
       const saved = await uploadGalleryImage(new File([await response.blob()], sheetName(still.file), { type: 'image/png' }), { silent: true });
-      navigate(`/video/generate?sourceImageFile=${encodeURIComponent(saved.filename)}`);
+      navigate(`/media/video?sourceImageFile=${encodeURIComponent(saved.filename)}`);
     } catch (error) {
       toast.error(error?.message || 'Could not open Video Gen');
     } finally {

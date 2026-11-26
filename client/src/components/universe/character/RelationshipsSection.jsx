@@ -1,3 +1,4 @@
+import { RELATIONSHIP_OPPOSITION_AXES } from '../../../../../server/lib/characterFramework.js';
 import { sortByLabel } from '../../../lib/sortByLabel.js';
 import { Plus, Trash2, Users, Swords } from 'lucide-react';
 import { BIBLE_LIMITS as L } from '../../../lib/bibleLimits';
@@ -5,13 +6,6 @@ import { RELATIONSHIP_LINK_TYPES } from '../../../lib/characterFramework';
 import useFieldDraft from '../../../hooks/useFieldDraft';
 import { REL_INPUT_CLASS, REL_SELECT_CLASS } from './editorClasses';
 import BoxedSection from './BoxedSection';
-
-// Opposing-force axes (#1287) stay local: tagging a link as an opposing force
-// is Universe-editor-only, so the Writers Room row editor has no use for them.
-// The link TYPES are shared via `characterFramework`.
-const RELATIONSHIP_OPPOSITION_AXES = Object.freeze([
-  'winner/loser', 'smart/dumb', 'hunter/prey', 'predator/prey', 'custom',
-]);
 
 // Opposing-force editor (#1287) — only mounted when a link carries an
 // `opposition`, so its draft hooks stay consistent across renders. Captures the

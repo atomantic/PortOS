@@ -58,10 +58,10 @@ describe('ThreejsModels', () => {
   it('starts a model from a gallery deep link and navigates to its workspace', async () => {
     createThreejsModel.mockResolvedValue({ id: 'threejs-example', status: 'generating' });
     render(
-      <MemoryRouter initialEntries={['/media/threejs?image=example-robot.png']}>
+      <MemoryRouter initialEntries={['/3d/threejs?image=example-robot.png']}>
         <Routes>
-          <Route path="/media/threejs" element={<ThreejsModels />} />
-          <Route path="/media/threejs/:id" element={<div>Model workspace opened</div>} />
+          <Route path="/3d/threejs" element={<ThreejsModels />} />
+          <Route path="/3d/threejs/:id" element={<div>Model workspace opened</div>} />
         </Routes>
       </MemoryRouter>,
     );
@@ -87,10 +87,10 @@ describe('ThreejsModels', () => {
   it('sends the chosen subject family and shows what it narrows to', async () => {
     createThreejsModel.mockResolvedValue({ id: 'threejs-example', status: 'generating' });
     render(
-      <MemoryRouter initialEntries={['/media/threejs?image=example-robot.png']}>
+      <MemoryRouter initialEntries={['/3d/threejs?image=example-robot.png']}>
         <Routes>
-          <Route path="/media/threejs" element={<ThreejsModels />} />
-          <Route path="/media/threejs/:id" element={<div>Model workspace opened</div>} />
+          <Route path="/3d/threejs" element={<ThreejsModels />} />
+          <Route path="/3d/threejs/:id" element={<div>Model workspace opened</div>} />
         </Routes>
       </MemoryRouter>,
     );
@@ -108,7 +108,7 @@ describe('ThreejsModels', () => {
 
   it('offers a call to action that opens the image picker when no models exist', async () => {
     render(
-      <MemoryRouter initialEntries={['/media/threejs']}>
+      <MemoryRouter initialEntries={['/3d/threejs']}>
         <ThreejsModels />
       </MemoryRouter>
     );
@@ -123,7 +123,7 @@ describe('ThreejsModels', () => {
   it('shows neither the select nor an error while the taxonomy read is in flight', async () => {
     listThreejsModelFamilies.mockReturnValue(new Promise(() => {}));
     render(
-      <MemoryRouter initialEntries={['/media/threejs?image=example-robot.png']}>
+      <MemoryRouter initialEntries={['/3d/threejs?image=example-robot.png']}>
         <ThreejsModels />
       </MemoryRouter>,
     );
@@ -138,7 +138,7 @@ describe('ThreejsModels', () => {
       .mockRejectedValueOnce(new Error('offline'))
       .mockResolvedValueOnce(FAMILY_OPTIONS);
     render(
-      <MemoryRouter initialEntries={['/media/threejs?image=example-robot.png']}>
+      <MemoryRouter initialEntries={['/3d/threejs?image=example-robot.png']}>
         <ThreejsModels />
       </MemoryRouter>,
     );
@@ -158,10 +158,10 @@ describe('ThreejsModels', () => {
     listThreejsModelFamilies.mockRejectedValue(new Error('offline'));
     createThreejsModel.mockResolvedValue({ id: 'threejs-example', status: 'generating' });
     render(
-      <MemoryRouter initialEntries={['/media/threejs?image=example-robot.png']}>
+      <MemoryRouter initialEntries={['/3d/threejs?image=example-robot.png']}>
         <Routes>
-          <Route path="/media/threejs" element={<ThreejsModels />} />
-          <Route path="/media/threejs/:id" element={<div>Model workspace opened</div>} />
+          <Route path="/3d/threejs" element={<ThreejsModels />} />
+          <Route path="/3d/threejs/:id" element={<div>Model workspace opened</div>} />
         </Routes>
       </MemoryRouter>,
     );
@@ -176,9 +176,9 @@ describe('ThreejsModels', () => {
 
   it('keeps a newly picked gallery image in the shareable URL', async () => {
     render(
-      <MemoryRouter initialEntries={['/media/threejs?image=example-robot.png']}>
+      <MemoryRouter initialEntries={['/3d/threejs?image=example-robot.png']}>
         <Routes>
-          <Route path="/media/threejs" element={<><ThreejsModels /><LocationProbe /></>} />
+          <Route path="/3d/threejs" element={<><ThreejsModels /><LocationProbe /></>} />
         </Routes>
       </MemoryRouter>,
     );
@@ -200,7 +200,7 @@ describe('ThreejsModels failed list read', () => {
     listThreejsModels.mockRejectedValueOnce(new Error('503 down')).mockResolvedValue([
       { id: 'threejs-example', name: 'Example Robot', status: 'ready', createdAt: '2026-01-01T00:00:00.000Z' },
     ]);
-    render(<MemoryRouter initialEntries={['/media/threejs']}><ThreejsModels /></MemoryRouter>);
+    render(<MemoryRouter initialEntries={['/3d/threejs']}><ThreejsModels /></MemoryRouter>);
     expect(await screen.findByRole('alert')).toHaveTextContent('Could not load model workspaces');
     expect(screen.queryByText('No procedural models yet')).toBeNull();
     fireEvent.click(screen.getByRole('button', { name: 'Retry' }));

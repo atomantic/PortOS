@@ -14,11 +14,10 @@
 import { noteToFrequency } from './pitchDetect.js';
 import { getAudioContext as ctx } from './audioContext.js';
 import { createLookaheadTransport, SYNTH_TIMING } from './lookaheadTransport.js';
-import { midiToFreq } from '../../../server/lib/pitchMath.js';
+import { midiToFreq, PITCH_CLASS } from '../../../server/lib/pitchMath.js';
 
 // --- Pitch → frequency ------------------------------------------------------
 // Equal-tempered, A4 = 440 Hz. MIDI 69 == A4, so f = 440 · 2^((midi−69)/12).
-const PITCH_CLASS = { C: 0, D: 2, E: 4, F: 5, G: 7, A: 9, B: 11 };
 const ACCIDENTAL_SHIFT = { '': 0, '#': 1, '##': 2, b: -1, bb: -2, n: 0 };
 
 // MIDI note number for a parsed pitch ({ letter, accidental, octave }). C4 = 60,

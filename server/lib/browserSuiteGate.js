@@ -114,7 +114,7 @@ function runOwnedProbe(file, args, { timeoutMs, graceMs, removeProfile, env }) {
     const timers = [];
     const started = performance.now();
     const observed = { spawnMs: null, answerMs: null, exitMs: null, exitStatus: null, stdoutEndMs: null, closeMs: null,
-      term: 'not-attempted', kill: 'not-attempted', childError: 'none' };
+      exitKill: 'not-attempted', term: 'not-attempted', kill: 'not-attempted', childError: 'none' };
     const elapsed = () => Math.max(0, Math.round(performance.now() - started));
     const stamp = key => { observed[key] ??= elapsed(); };
     let stdout = '';
@@ -152,6 +152,12 @@ function runOwnedProbe(file, args, { timeoutMs, graceMs, removeProfile, env }) {
     child.on('exit', (code, signal) => {
       stamp('exitMs');
       observed.exitStatus = code ?? signal;
+      // A renderer can inherit stdout and hold it open after Chrome exits.
+      // Stop the owned group now, but drain the pipe and wait for close before
+      // accepting the verdict or removing the private profile.
+      if (!settled && processGroup && observed.stdoutEndMs === null) {
+        observed.exitKill = killProbeTree(child, 'SIGKILL', processGroup);
+      }
     });
     child.on('error', (error) => {
       observed.childError = ['ENOENT', 'ENOTDIR', 'EACCES', 'EPERM'].includes(error.code) ? error.code : 'other';

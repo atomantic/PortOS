@@ -1,14 +1,44 @@
 import { useState, useMemo, useCallback } from 'react';
+import { useMatch, useNavigate } from 'react-router';
 import PageHeader from '../components/PageHeader';
-import { Activity, Save } from 'lucide-react';
+import { Activity, Cpu, Save } from 'lucide-react';
 import ProcessesTab from '../components/apps/tabs/ProcessesTab';
 import toast from '../components/ui/Toast';
 import { getApps } from '../services/apiApps.js';
 import { executeCommand } from '../services/apiCommands.js';
 import useListResource from '../hooks/useListResource.js';
 import ListLoadError from '../components/ui/ListLoadError';
+import TabPills from '../components/ui/TabPills';
+import { buildPageNavTabs } from '../lib/pageNavTabs.js';
+import { getPageNavTabs } from '../../../server/lib/navManifest.js';
+import AgentsPage from './AgentsPage';
+
+const TABS = buildPageNavTabs(getPageNavTabs('processes'), {
+  pm2: { icon: Activity },
+  agents: { icon: Cpu },
+}, 'Processes');
 
 export function ProcessesPage() {
+  const navigate = useNavigate();
+  const agents = useMatch('/devtools/processes/agents');
+  return (
+    <div className="flex h-full min-h-0 flex-col">
+      <PageHeader icon={Activity} title="Processes" />
+      <TabPills
+        tabs={TABS}
+        activeTab={agents ? 'agents' : 'pm2'}
+        onChange={(id) => navigate(TABS.find((tab) => tab.id === id).to)}
+        ariaLabel="Process views"
+        mobileCompact
+      />
+      <div className="flex-1 min-h-0 overflow-auto p-4 md:p-6">
+        {agents ? <AgentsPage /> : <Pm2Processes />}
+      </div>
+    </div>
+  );
+}
+
+function Pm2Processes() {
   const [saving, setSaving] = useState(false);
 
   const fetchApps = useCallback(async () => {
@@ -46,35 +76,25 @@ export function ProcessesPage() {
   };
 
   return (
-    <div className="flex h-full flex-col">
-      <PageHeader
-        icon={Activity}
-        title="Processes"
-        actions={<>
+    <div className="space-y-6">
+      <div className="flex justify-end">
         <button
+          type="button"
           onClick={handlePm2Save}
           disabled={saving}
           className="px-3 sm:px-4 py-2 bg-port-accent hover:bg-port-accent/80 text-white rounded-lg transition-colors flex items-center gap-2 disabled:opacity-50 text-sm sm:text-base"
         >
           <Save size={16} className={saving ? 'animate-pulse' : ''} />
-          <span className="hidden sm:inline">{saving ? 'Saving...' : 'PM2 Save'}</span>
-          <span className="sm:hidden">{saving ? '...' : 'Save'}</span>
+          {saving ? 'Saving...' : 'PM2 Save'}
         </button>
-        </>}
-      />
-      <div className="flex-1 min-h-0 overflow-auto p-4 md:p-6">
-      <div className="space-y-6">
-
+      </div>
       {appsState === 'error' && (
         <ListLoadError what="managed apps" error={appsError} onRetry={retryApps} />
       )}
       {appsState === 'ready' && apps.length === 0 && (
         <p className="text-xs text-gray-500">No managed apps configured.</p>
       )}
-
       <ProcessesTab filterFn={isPortOSManaged} />
-    </div>
-      </div>
     </div>
   );
 }

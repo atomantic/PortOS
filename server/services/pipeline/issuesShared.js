@@ -18,6 +18,7 @@
  * data/pipeline-issues/{id}/index.json (PG-backed via the store facade).
  */
 
+import { BIBLE_KINDS } from '../../lib/universeCanon.js';
 import { getIssuesStore, stripRunHistoryFromIssue } from './issuesStore/store.js';
 import { createKeyCachedQueue } from '../../lib/createKeyCachedQueue.js';
 import { IMAGE_GEN_MODE, QUEUEABLE_IMAGE_MODES } from '../imageGen/modes.js';
@@ -224,7 +225,6 @@ const sanitizeRunHistory = (raw) => {
 };
 
 export const CANON_EXTRACTION_STATUSES = Object.freeze(['ok', 'partial', 'failed']);
-const CANON_KINDS = Object.freeze(['character', 'place', 'object']);
 
 // Normalize a canon-extraction outcome marker. Returns `null` for absent /
 // malformed input (the "never attempted" state) so the field stays falsy in
@@ -239,7 +239,7 @@ const sanitizeCanonExtraction = (raw) => {
     status: raw.status,
     error: trimTo(raw.error, STAGE_NOTES_MAX),
     failedKinds: Array.isArray(raw.failedKinds)
-      ? [...new Set(raw.failedKinds.filter((k) => CANON_KINDS.includes(k)))]
+      ? [...new Set(raw.failedKinds.filter((k) => BIBLE_KINDS.includes(k)))]
       : [],
     extracted: {
       characters: count(ex.characters),
@@ -257,7 +257,7 @@ const sanitizeCanonExtraction = (raw) => {
 // `none`/`thin` carry the nouns the manuscript couldn't (or only thinly)
 // describe so the Nouns UI can render a persistent manuscript-quality banner.
 const sanitizeDescGapList = (arr) => (Array.isArray(arr) ? arr : [])
-  .filter((g) => g && typeof g === 'object' && CANON_KINDS.includes(g.kind))
+  .filter((g) => g && typeof g === 'object' && BIBLE_KINDS.includes(g.kind))
   .slice(0, 200)
   .map((g) => ({
     id: trimTo(g.id, 80),

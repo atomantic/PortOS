@@ -15,6 +15,8 @@
  * data/ file I/O — so it cannot import back from bibleStore.js).
  */
 
+import { ATTACHMENT_ROLES, IDENTITY_ASSET_ROLES, IDENTITY_PACK_REQUIRED_ROLES } from './storyBibleRoles.js';
+import { BIBLE_FIELD, BIBLE_KEYS, BIBLE_KIND, BIBLE_KINDS } from './universeCanon.js';
 import { randomUUID } from 'crypto';
 import { LEGACY_SHEET_VARIANT_ID, readSheetPointer, listSheetPointers, applySheetPointerToCharacter } from './sheetPointers.js';
 import { normalizeSlugline } from './scenePrompt.js';
@@ -29,6 +31,7 @@ import {
   PSYCHOLOGY_ASSESSMENTS,
   PSYCHOLOGY_DRIVE_AXES,
   RELATIONSHIP_LINK_TYPES,
+  RELATIONSHIP_OPPOSITION_AXES,
 } from './characterFramework.js';
 import { sanitizeCharacterEvolution } from './characterEvolution.js';
 
@@ -43,6 +46,7 @@ export { normalizeSlugline };
 // `fileUtils` imports. Re-exported here because every sanitizer caller reaches
 // for `BIBLE_LIMITS` through `storyBible.js`.
 export { BIBLE_LIMITS };
+export { BIBLE_FIELD, BIBLE_KEYS, BIBLE_KIND, BIBLE_KINDS } from './universeCanon.js';
 
 // Portable production posture only. Performer identity, contracts, source
 // recordings, provider ids, and local artifact paths must never enter a
@@ -52,17 +56,8 @@ export const VOICE_CANON_SOURCE_POLICIES = Object.freeze([
 ]);
 const VOICE_CANON_SOURCE_POLICY_SET = new Set(VOICE_CANON_SOURCE_POLICIES);
 
-// Ordered both for the editor and for readiness output. `neutral`, `profile`,
-// and `full-body` are the minimum visual identity anchors; the other roles
-// enrich continuity without making a newly-curated character unusable.
-export const IDENTITY_ASSET_ROLES = Object.freeze([
-  'neutral', 'profile', 'full-body', 'expression-gesture', 'wardrobe',
-  'prop-scale', 'negative-identity',
-]);
+export { IDENTITY_ASSET_ROLES, IDENTITY_PACK_REQUIRED_ROLES };
 const IDENTITY_ASSET_ROLE_SET = new Set(IDENTITY_ASSET_ROLES);
-export const IDENTITY_PACK_REQUIRED_ROLES = Object.freeze([
-  'neutral', 'profile', 'full-body',
-]);
 
 // Canonical provenance vocabulary. `BIBLE_SOURCE.SERIES_EXTRACT` is the
 // default for new bible-extracted entries; `UNIVERSE_EXPAND` is stamped on
@@ -79,12 +74,6 @@ const SOURCES = new Set([
   'user', 'ai', 'imported',
 ]);
 
-export const BIBLE_KIND = Object.freeze({
-  CHARACTER: 'character',
-  PLACE: 'place',
-  OBJECT: 'object',
-});
-
 // Structured relationship-link taxonomy (#1287). `type` is the dynamic
 // between two characters and lives in the pure `characterFramework.js` leaf so
 // the browser bundle can render the picker; re-exported here for the existing
@@ -93,10 +82,7 @@ export const BIBLE_KIND = Object.freeze({
 // reverse. Both default to `custom` on an unrecognized value rather than
 // dropping the link, so a legacy/peer payload with a future type still
 // round-trips (its prose description is preserved).
-export { RELATIONSHIP_LINK_TYPES };
-export const RELATIONSHIP_OPPOSITION_AXES = Object.freeze([
-  'winner/loser', 'smart/dumb', 'hunter/prey', 'predator/prey', 'custom',
-]);
+export { RELATIONSHIP_LINK_TYPES, RELATIONSHIP_OPPOSITION_AXES };
 const RELATIONSHIP_LINK_TYPE_SET = new Set(RELATIONSHIP_LINK_TYPES);
 const RELATIONSHIP_OPPOSITION_AXIS_SET = new Set(RELATIONSHIP_OPPOSITION_AXES);
 
@@ -105,9 +91,7 @@ const RELATIONSHIP_OPPOSITION_AXIS_SET = new Set(RELATIONSHIP_OPPOSITION_AXES);
 // misses (the prose `significance`/`origin` carry the specifics). An
 // unrecognized value coerces to `custom` rather than dropping the link, so a
 // legacy/peer payload carrying a future role still round-trips with its prose.
-export const ATTACHMENT_ROLES = Object.freeze([
-  'talisman', 'macguffin', 'memento', 'tool', 'symbol', 'custom',
-]);
+export { ATTACHMENT_ROLES };
 const ATTACHMENT_ROLE_SET = new Set(ATTACHMENT_ROLES);
 
 // Enums for the location-classification fields on Place canon entries.
@@ -151,23 +135,6 @@ const trimEnum = (raw, allowed) => {
   if (allowed.has(lower)) return lower;
   return null;
 };
-
-// Canonical pluralization: pipeline series.<field>, evaluator analysis kind,
-// extractor LLM envelope key — all the same string, consolidated here.
-export const BIBLE_FIELD = Object.freeze({
-  [BIBLE_KIND.CHARACTER]: 'characters',
-  [BIBLE_KIND.PLACE]: 'places',
-  [BIBLE_KIND.OBJECT]: 'objects',
-});
-
-// Ordered list of the persisted record's bible-array keys — used by
-// store-walkers (e.g. imageRef purge across all kinds) so a future kind
-// added here flows through without touching every walker.
-export const BIBLE_KEYS = Object.freeze(Object.values(BIBLE_FIELD));
-
-// Frozen list of kind values — for route/Zod kind validation, lock-toggle
-// dispatch, and any caller that needs to enumerate kinds.
-export const BIBLE_KINDS = Object.freeze(Object.values(BIBLE_KIND));
 
 // Fields the bible-extraction prompt cares about. Routed both into the
 // `existing<X>Json` prompt variable (bibleExtractor) and into the script

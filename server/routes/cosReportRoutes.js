@@ -8,6 +8,7 @@ import { getBriefing, getLatestBriefing, getTodayActivity, getWhileAwayActivity,
 import * as claudeChangelog from '../services/claudeChangelog.js';
 import { asyncHandler, ServerError } from '../lib/errorHandler.js';
 import { validateRequest } from '../lib/validateRequest.js';
+import { paginationQuerySchema, isPaginationRequested, paginateArray } from '../lib/queryValidation.js';
 
 const router = Router();
 
@@ -27,10 +28,12 @@ const whileAwayQuerySchema = z.object({
   )
 });
 
-// GET /api/cos/briefings - List all briefings
+// GET /api/cos/briefings - List briefings with optional pagination
 router.get('/briefings', asyncHandler(async (req, res) => {
+  const page = validateRequest(paginationQuerySchema, req.query);
   const briefings = await listBriefings();
-  res.json({ briefings });
+  if (!isPaginationRequested(page)) return res.json({ briefings });
+  res.json(paginateArray(briefings, page, { maxLimit: 500 }));
 }));
 
 // GET /api/cos/briefings/latest - Get latest briefing

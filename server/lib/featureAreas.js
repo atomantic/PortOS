@@ -192,7 +192,6 @@ export const FEATURE_AREAS = Object.freeze([
     id: 'imessage', label: 'iMessage', instanceFeatureId: 'imessage',
     codeGlobs: [
       'server/{routes,services}/imessage*',
-      'client/src/pages/IMessage.jsx',
       'client/src/components/messages/IMessage*',
     ],
   }),
@@ -256,7 +255,7 @@ export const FEATURE_AREAS = Object.freeze([
   }),
   area({
     id: 'media-gen', label: 'Media generation',
-    navPathPrefixes: ['/create/media', '/media', '/video', '/html-pages', '/code-animation', '/sprites', '/3d'],
+    navPathPrefixes: ['/media', '/video', '/html-pages', '/code-animation', '/sprites', '/3d'],
     codeGlobs: [
       'server/routes/{image,media,video,htmlPages,htmlComposition,codeAnimation,sprites,threejs,loras,sdapi}*',
       'server/lib/mediaModels/**',
@@ -272,7 +271,7 @@ export const FEATURE_AREAS = Object.freeze([
   area({
     id: 'story-studio', label: 'Story studio',
     navPathPrefixes: [
-      '/create/story', '/start-story', '/story-builder', '/rounds', '/writers-room', '/pipeline', '/sharing',
+      '/start-story', '/story-builder', '/rounds', '/writers-room', '/pipeline', '/sharing',
       '/importer', '/authors', '/universes', '/decks', '/mood-boards', '/storyboards', '/voices', '/fableloom', '/game',
     ],
     codeGlobs: [
@@ -281,7 +280,7 @@ export const FEATURE_AREAS = Object.freeze([
       'server/lib/{story,storyboard,universe,fable,series,editorial,manuscript,deck,mood,pipeline,writers,rounds,bible}*',
       'server/lib/editorial/**',
       'server/services/{pipeline,rounds,writersRoom,storyBuilder,universe,storyboard,deck,mood,fableLoom,games,importer,authors,sharing,bible,series}*',
-      'server/services/{pipeline,writersRoom,storyBuilderStore,universeBuilder,storyboards,moodBoard,fableLoom,games,authors,sharing}/**',
+      'server/services/{pipeline,writersRoom,storyBuilderStore,universeBuilder,storyboards,moodBoard,fableLoom,games,importer,authors,sharing}/**',
       'client/src/pages/{Pipeline,Rounds,RoundEditor,RoundsGuide,WritersRoom,StoryBuilder,Storyboard,Universe,Deck,Mood,FableLoom,Game,Importer,Authors,Sharing,StartStory}*',
       'client/src/components/{pipeline,writers-room,storyBuilder,universe,universeBuilder,storyboards,decks,moodBoard,fableloom,games,sharing}/**',
     ],
@@ -438,12 +437,13 @@ export const FEATURE_AREAS = Object.freeze([
     navPathPrefixes: ['/ai'],
     codeGlobs: [
       'server/routes/{providers,provider,harnesses,model,lmstudio,localLlm,quotaBurn,usage,moaPresets}*',
+      'server/routes/localLlm/**',
       'server/lib/local!(Memory*)',
       'server/lib/{provider,model,quota,usage,codex,llm,ollama,vllm,sglang,mtplx,slotstream,subscription,aiToolkit}*',
       'server/lib/{aiToolkit,provider}/**',
       'server/services/{provider,aiProvider,ai,harness,model,ollama,lmStudio,llama,vllm,sglang,mtplx,slotstream,quota,usage,codex,claude,subscription,embeddings,fleet,moa}*',
       'server/services/local!(Memory*)',
-      'server/services/{provider,quotaBurn}/**',
+      'server/services/{ollama,provider,quotaBurn}/**',
       'client/src/pages/{Models,AIProviders,Local,Quota,Usage}*',
       'client/src/components/models/!(Jev*|LayaMlx*)',
       'client/src/components/{providers,localLlm,quotaBurn,usage}/**',

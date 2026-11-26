@@ -3,10 +3,7 @@
 import { describe, it, expect } from 'vitest';
 import { isTailnetPeer } from './tailnetPeer.js';
 
-// The table below is `server/lib/tailnetPeer.test.js`, case for case. Keeping
-// them identical is the whole point of the port: the previous inline copy in
-// UnattendedRenderRouting had no table of its own and had already drifted.
-describe('isTailnetPeer (client port)', () => {
+describe('routing picker tailnet eligibility', () => {
   it('accepts a MagicDNS host', () => {
     expect(isTailnetPeer({ host: 'example-host.tailnet-example.ts.net' })).toBe(true);
     expect(isTailnetPeer({ host: '  example-host.tailnet-example.ts.net  ' })).toBe(true);

@@ -8,10 +8,10 @@
  * `legacy` take rather than hiding it.
  */
 
+import { TAKE_SLOT } from '../../../server/lib/musicVideo/musicVideoLayers.js';
 import { sequenceTakeSelectionPatch } from '../../../server/lib/musicVideo/musicVideoSequenceTake.js';
 
-// `endImage` (#11173): the optional style-break end frame a fal clip ends on.
-export const TAKE_SLOT = Object.freeze({ image: 'referenceImageId', video: 'videoHistoryId', endImage: 'endImageId' });
+export { TAKE_SLOT };
 
 /** The takes of one kind for a scene, with an un-materialized selection appended. */
 export function sceneTakeList(scene, kind) {

@@ -167,6 +167,16 @@ describe('CoS Schedule Routes', () => {
       expect(maintenance.startMaintenanceRun).toHaveBeenCalledTimes(1);
     });
 
+    it('caps the maintenance run page and preserves the service order', async () => {
+      const runs = Array.from({ length: 510 }, (_, index) => ({ id: `maint-${index}` }));
+      maintenance.listMaintenanceRuns.mockResolvedValueOnce(runs);
+
+      const response = await request(app).get('/api/cos/schedule/maintenance-runs?limit=501&offset=4');
+
+      expect(response.status).toBe(200);
+      expect(response.body).toEqual({ items: runs.slice(4, 504), total: 510, limit: 500, offset: 4 });
+    });
+
     it('lists, stops and resumes runs, and 404s an unknown id', async () => {
       maintenance.listMaintenanceRuns.mockResolvedValue([{ id: 'maint-1' }]);
       expect((await request(app).get('/api/cos/schedule/maintenance-runs')).body).toEqual({ runs: [{ id: 'maint-1' }] });

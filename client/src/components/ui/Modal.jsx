@@ -45,7 +45,7 @@
 
 import { useEffect, useId, useRef } from 'react';
 import { createPortal } from 'react-dom';
-import useFocusTrap from '../../hooks/useFocusTrap.js';
+import useFocusTrap, { FocusTrapParent } from '../../hooks/useFocusTrap.js';
 
 const SIZE_CLASSES = {
   sm: 'max-w-md',
@@ -267,12 +267,10 @@ export default function Modal({
         // inside another modal/portal whose ancestor has a bubble-listening onClick
         // (e.g. MediaLightbox's `onClick={onClose}`), the click would dismiss the parent.
         onClick={(e) => e.stopPropagation()}
-        // Same swallow, minus Escape: `handleGlobalEsc` is a native `document`
-        // listener owning stack-aware precedence, and stopPropagation here would
-        // keep Escape from reaching it.
-        onKeyDown={(e) => { if (e.key !== 'Escape') e.stopPropagation(); }}
+        // Let Escape and Tab reach their stack-aware document listeners.
+        onKeyDown={(e) => { if (e.key !== 'Escape' && e.key !== 'Tab') e.stopPropagation(); }}
       >
-        {children}
+        <FocusTrapParent.Provider value={dialogRef}>{children}</FocusTrapParent.Provider>
       </div>
     </div>
   );

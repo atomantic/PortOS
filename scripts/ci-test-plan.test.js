@@ -159,7 +159,7 @@ it('selects checkout-cache contracts only in their installed-dependency runners'
       expect(plan.client.files, input).not.toContain(serverContract);
     }
   }
-  for (const input of ['docs/CONTRIBUTING.md', 'server/services/auth.js']) {
+  for (const input of ['CONTRIBUTING.md', 'server/services/auth.js']) {
     const plan = buildCiTestPlan([input], { trackedFiles });
     expect(plan.full, input).toBe(false);
     expect(plan.server.files, input).not.toContain(serverContract);
@@ -3444,7 +3444,7 @@ it('selects live restore for DB risks and its real closure, separately from gene
   const planFor = (source) => githubPlanOutput(buildCiTestPlan([source], inputs));
   for (const source of ['scripts/rehearsal-scratch-db.js', 'scripts/lib/migrationFiles.js', 'server/lib/databaseMaintenanceSchema.js',
     'server/services/backupDatabaseDump.js', 'server/services/backupDatabaseDump.restore.live.test.js', 'scripts/lib/dbImage.js',
-    'server/scripts/init-db.sql', 'server/services/backupDatabaseReset.js']) {
+    'server/scripts/init-db.sql', 'server/services/backupDatabaseReset.js', 'server/routes/catalogIngest.js']) {
     expect(planFor(source), source).toMatchObject({ full: false, db: true, db_live_restore: true });
   }
   expect(planFor('docker-compose.yml')).toMatchObject({ full: true, db: true, db_live_restore: true });

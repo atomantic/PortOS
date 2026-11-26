@@ -136,6 +136,52 @@ describe('Drawer', () => {
     });
   });
 
+  describe('Tab focus trap', () => {
+    it('recaptures Shift+Tab when removing a focused drawer control', () => {
+      const drawer = (showControl) => (
+        <Drawer open onClose={() => {}} title="Settings">
+          {showControl && <button>Temporary</button>}
+          <button>Save</button>
+        </Drawer>
+      );
+      const { rerender } = render(drawer(true));
+      screen.getByRole('button', { name: 'Temporary' }).focus();
+      rerender(drawer(false));
+      expect(document.activeElement).toBe(document.body);
+
+      expect(fireEvent.keyDown(document.body, { key: 'Tab', shiftKey: true })).toBe(false);
+      expect(document.activeElement).toBe(screen.getByRole('button', { name: 'Save' }));
+    });
+
+    it.each([false, true])('gives Tab to the nested portaled Modal (initially open: %s)', (initiallyOpen) => {
+      const tree = (modalOpen) => (
+        <Drawer open onClose={() => {}} title="Settings">
+          <button>Outer save</button>
+          <Modal open={modalOpen} usePortal ariaLabel="Confirm">
+            <button>Confirm cancel</button>
+            <button>Confirm save</button>
+          </Modal>
+        </Drawer>
+      );
+      const { rerender } = render(tree(initiallyOpen));
+      if (!initiallyOpen) rerender(tree(true));
+      const first = screen.getByRole('button', { name: 'Confirm cancel' });
+      const last = screen.getByRole('button', { name: 'Confirm save' });
+      expect(document.activeElement).toBe(first);
+      first.blur();
+
+      expect(fireEvent.keyDown(document.body, { key: 'Tab', shiftKey: true })).toBe(false);
+      expect(document.activeElement).toBe(last);
+      expect(fireEvent.keyDown(last, { key: 'Tab' })).toBe(false);
+      expect(document.activeElement).toBe(first);
+
+      rerender(tree(false));
+      document.activeElement.blur();
+      expect(fireEvent.keyDown(document.body, { key: 'Tab', shiftKey: true })).toBe(false);
+      expect(document.activeElement).toBe(screen.getByRole('button', { name: 'Outer save' }));
+    });
+  });
+
   describe('tabbed layout', () => {
     it('renders no tablist when tabs are omitted', () => {
       render(<Drawer open onClose={() => {}} title="X">b</Drawer>);

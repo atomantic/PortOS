@@ -6,7 +6,7 @@
 // owns `assertIcReferenceCount` / `describeIcReferenceRange`; the table itself is shared with the client form.
 //
 // Weights are NOT bundled; they ride the same cache-inspect / download / verify / repair surface as the model
-// weights (see routes/videoGen.js). `resolveIcLoraWeight` returns a cached file path, else the HF repo id for
+// weights (see routes/videoGenDownloads.js). `resolveIcLoraWeight` returns a cached file path, else the HF repo id for
 // ICLoraPipeline._resolve_lora_path to pull itself.
 //
 // That repo-id fallback is `snapshot_download(repo_id)`, which pulls the ENTIRE repo: fine for a single-weight
