@@ -202,11 +202,11 @@ export async function getSlotstreamServerEndpoint() {
 /**
  * Current Slotstream state: binary, process, endpoint, memory plan, cache, logs.
  */
-export async function getSlotstreamServerStatus() {
+export async function getSlotstreamServerStatus({ includeLogs } = {}) {
   const binaryPath = resolveSlotstreamBinary();
   const installed = Boolean(binaryPath);
   const supported = installed || isAppleSilicon();
-  const base = await daemon.getStatusBase({ installed });
+  const base = await daemon.getStatusBase({ installed, includeLogs });
   const ownedBinary = installed && await slotstreamInstallFile().catch(() => null);
   const saved = await savedLaunchConfig();
   const cache = installed ? await listSlotstreamCachedModels() : { models: null, error: null };

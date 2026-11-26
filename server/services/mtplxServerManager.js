@@ -310,7 +310,7 @@ export async function getMtplxServerEndpoint() {
  * binary; until then `cachedModels` stays empty with `cacheError: null` —
  * "not read", never "read and empty".
  */
-export async function getMtplxServerStatus() {
+export async function getMtplxServerStatus({ includeLogs } = {}) {
   const binaryPath = resolveMtplxBinary();
   const installed = Boolean(binaryPath);
   // The platform gate is about what PortOS may INSTALL, never about what is
@@ -319,7 +319,7 @@ export async function getMtplxServerStatus() {
   // be a false negative.
   const supported = installed || supportsMtplxInstall();
 
-  const base = await daemon.getStatusBase({ installed });
+  const base = await daemon.getStatusBase({ installed, includeLogs });
 
   // Reading the wrapper, never running it — see `lib/mtplxRuntime.js`.
   const runtime = installed ? await describeMtplxRuntime(binaryPath) : null;

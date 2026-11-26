@@ -72,6 +72,7 @@ beforeEach(async () => {
   mocks.pm2Command.mockImplementation(async (args) => {
     if (args[0] === 'start') mocks.pm2 = mockedApp({ status: 'online', pm_id: 42, args: args.slice(args.indexOf('--') + 1) });
     if (args[0] === 'delete') mocks.pm2 = mockedApp();
+    if (args[0] === 'logs') return { stdout: Array.from({ length: 110 }, (_, index) => `fixture line ${index}`).join('\n') };
   });
   mocks.download.mockResolvedValue({});
   mocks.preflight.mockResolvedValue({ verdict: 'ok' });
@@ -133,7 +134,13 @@ it('installs the verified bundle and checkpoint, starts only from cache, and sto
     'start', '/usr/bin/env', SPLASH_APP, '--offline', '--host', '127.0.0.1', '--port', '8001', '--no-autorestart', '--max-context', '65536',
   ]));
   expect(mocks.pm2.args.slice(0, 2)).toEqual(['-i', `HOME=${join(splashRoot(), 'home')}`]);
-  await expect(getSplashManagedState()).resolves.toMatchObject({ installed: true, managed: true });
+  const status = await getSplashManagedState({ includeLogs: true });
+  expect(status).toMatchObject({ installed: true, managed: true });
+  const { recentLogs } = status;
+  expect(recentLogs).toHaveLength(40);
+  expect(recentLogs[0]).toBe('fixture line 70');
+  expect(recentLogs.at(-1)).toBe('fixture line 109');
+  expect(mocks.pm2Command).toHaveBeenCalledWith(['logs', '42', '--nostream', '--lines', '40'], { timeoutMs: 3000 });
   await expect(installSplashRuntime()).rejects.toThrow('Stop the PortOS-managed Splash');
   expect(mocks.download).toHaveBeenCalledTimes(1);
   await stopSplashServer();
