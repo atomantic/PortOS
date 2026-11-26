@@ -3,7 +3,7 @@
  *
  * `pose` is `{ [clipName]: 0-1 }`, each a fraction of that clip. Every named clip plays paused at its own time on one
  * mixer. The clips a Blender model exports key disjoint nodes (one bone each), so they add up without blending. The
- * scene is drei's shared cached one: dispose puts it back as it loaded.
+ * scene is the loader's shared cached one: dispose puts it back as it loaded.
  */
 import { AnimationMixer, LoopOnce } from 'three';
 

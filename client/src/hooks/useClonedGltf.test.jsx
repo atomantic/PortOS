@@ -15,7 +15,7 @@ const mocks = vi.hoisted(() => ({
   useGLTF: vi.fn(),
 }));
 
-vi.mock('@react-three/drei', () => ({
+vi.mock('../lib/threeHelpers/gltf.js', () => ({
   useAnimations: mocks.useAnimations,
   useGLTF: mocks.useGLTF,
 }));
@@ -73,7 +73,7 @@ describe('useClonedGltf', () => {
     ));
 
     const { scene } = result.current;
-    // A real clone, not the drei-cached scene handed straight back.
+    // A real clone, not the loader-cached scene handed straight back.
     expect(scene).not.toBe(sourceScene);
     expect(scene.name).toBe('source');
 

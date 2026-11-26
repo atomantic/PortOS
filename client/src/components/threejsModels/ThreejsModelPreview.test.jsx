@@ -55,7 +55,7 @@ vi.mock('@react-three/fiber', () => ({
   },
   useFrame: vi.fn(),
 }));
-// A chainable stand-in for drei's Bounds api, so the explode re-fit is
+// A chainable stand-in for the Bounds API, so the explode re-fit is
 // observable without a real renderer.
 const boundsApi = vi.hoisted(() => {
   const api = {};
@@ -64,11 +64,11 @@ const boundsApi = vi.hoisted(() => {
   api.fit = vi.fn(() => api);
   return api;
 });
-vi.mock('@react-three/drei', () => ({
+vi.mock('../../lib/threeHelpers/bounds.jsx', () => ({
   Bounds: ({ children }) => children,
   useBounds: () => boundsApi,
-  OrbitControls: () => null,
 }));
+vi.mock('../../lib/threeHelpers/controls.jsx', () => ({ OrbitControls: () => null }));
 
 // Capture the actual geometry returned by the builder alongside its scene attachment.
 const built = vi.hoisted(() => []);

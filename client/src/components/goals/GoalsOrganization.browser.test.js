@@ -33,15 +33,12 @@ describe.skipIf(!chrome)('Goals responsive controls', () => {
           if (id === '/goals-fixture.jsx') return '\0goals-fixture.jsx';
           // The regression concerns the toolbar, not WebGL scene rendering.
           if (id === '@react-three/fiber') return '\0goals-fiber.jsx';
-          if (id === '@react-three/drei') return '\0goals-drei.js';
         },
         load(id) {
           if (id === '\0goals-fiber.jsx') return `import React from 'react';
             export const Canvas = () => React.createElement('div');
             export const useFrame = () => {};
             export const useThree = () => null;`;
-          if (id === '\0goals-drei.js') return `export const OrbitControls = () => null;
-            export const Billboard = () => null; export const Text = () => null;`;
           if (id !== '\0goals-fixture.jsx') return;
           return `
             import React from 'react';

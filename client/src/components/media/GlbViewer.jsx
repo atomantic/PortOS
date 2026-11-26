@@ -1,12 +1,9 @@
-import { Suspense, useEffect, useId, useLayoutEffect, useMemo, useRef, useState } from 'react';
+import { Suspense, useEffect, useId, useMemo, useRef, useState } from 'react';
 import { Canvas, useThree } from '@react-three/fiber';
-import {
-  Bounds,
-  Environment,
-  OrbitControls,
-  useBounds,
-  useGLTF,
-} from '@react-three/drei';
+import { Bounds, useBounds } from '../../lib/threeHelpers/bounds.jsx';
+import { Environment } from '../../lib/threeHelpers/environment.jsx';
+import { OrbitControls } from '../../lib/threeHelpers/controls.jsx';
+import { useGLTF } from '../../lib/threeHelpers/gltf.js';
 import { Box3, Color } from 'three';
 import { AlertTriangle, Download, RefreshCw, Rotate3d, SlidersHorizontal } from 'lucide-react';
 import ErrorBoundary from '../ErrorBoundary';
@@ -18,7 +15,7 @@ const DEFAULT_BACKGROUND = '#050505';
 const ENVIRONMENT_HDRI = '/hdri/studio-small-08-1k.hdr';
 const ENVIRONMENT_BACKGROUND_BLUR = 0.2;
 
-// Reusable viewer for a generated `.glb` mesh: drei `useGLTF` loads the model,
+// Reusable viewer for a generated `.glb` mesh: `useGLTF` loads the model,
 // `Bounds fit` frames it regardless of the source's scale, `OrbitControls` lets
 // the user rotate/zoom, and a Download button saves the raw `.glb`. Deliberately
 // backend-agnostic — it takes a plain `src` URL, so the image→3D generate flow
@@ -44,7 +41,7 @@ const opaqueMaterial = (material) => {
 };
 
 // GLBs generated before the server-side opaque-export fix remain in users'
-// libraries. Clone before overriding their materials so drei's URL-keyed cache
+// libraries. Clone before overriding their materials so R3F's URL-keyed cache
 // stays pristine for any other consumer that intentionally wants alpha.
 export function cloneGlbSceneWithOpaqueMaterials(scene) {
   const clone = scene.clone(true);
@@ -153,7 +150,7 @@ function NodeHighlight({ scene, nodeNames }) {
 }
 
 function GlbModel({ src, forceOpaque, onSceneLoaded, isolateNode, pose, highlightNodes }) {
-  // `useGLTF` keys drei's global cache on the URL, so a new generation (a new
+  // `useGLTF` keys the loader cache on the URL, so a new generation (a new
   // `src`) parses fresh while revisiting the same mesh reuses the cache — no
   // manual cache-clear needed (clearing on unmount would force a full multi-MB
   // re-fetch every time the viewer remounts for the same URL).
@@ -194,7 +191,7 @@ function GlbModel({ src, forceOpaque, onSceneLoaded, isolateNode, pose, highligh
 // r3f prefixes every loader failure with "Could not load <url>", so this is what
 // separates "the bytes never arrived" from a failure thrown after the mesh was
 // already parsed (context loss, a throw downstream of the load). Only the former
-// justifies evicting drei's cache on retry — see retryLoad.
+// justifies evicting the loader cache on retry — see retryLoad.
 const isLoadFailure = (error) => /^Could not load/i.test(glbErrorText(error));
 
 function GlbLoadFailure({ error, onRetry }) {
@@ -226,25 +223,6 @@ function GlbLoadFailure({ error, onRetry }) {
       </button>
     </div>
   );
-}
-
-// Own `scene.environmentIntensity` directly rather than passing drei's
-// `environmentIntensity` prop: drei applies it from an effect that doesn't
-// declare it as a dependency. drei's `applyProps` skips `undefined`, so omitting
-// the prop leaves this write untouched when its effect applies.
-//
-// `reassertOn` exists because its *cleanup* does not: drei snapshots
-// `scene.environmentIntensity` before we ever write it (so the snapshot is
-// three's default 1) and restores that snapshot unconditionally when its effect
-// re-runs. Its only remaining live dependency is `background`, so pass the same
-// toggle here — otherwise ticking "Show HDRI background" silently returns the
-// IBL to full strength while the slider still reads the user's value.
-function EnvironmentIntensity({ value, reassertOn }) {
-  const scene = useThree((state) => state.scene);
-  useLayoutEffect(() => {
-    scene.environmentIntensity = value;
-  }, [scene, value, reassertOn]);
-  return null;
 }
 
 function LightingControl({ label, max, value, onChange }) {
@@ -312,7 +290,7 @@ export default function GlbViewer({
   if (!src) return null;
   const loadError = failure?.src === src ? failure.error : null;
   const retryLoad = () => {
-    // suspend-react (under drei's useGLTF) caches the REJECTION against the URL
+    // suspend-react (under useGLTF) caches the REJECTION against the URL
     // and re-throws it on every later render, so clearing the panel alone would
     // show the same error straight back — drop the cache entry first. Dropping
     // the panel is what remounts the boundary and the canvas.
@@ -383,14 +361,12 @@ export default function GlbViewer({
                   galaxy spheremap: degrade to lights-only, keep the scene. */}
               <ErrorBoundary fallback={null} onError={() => setEnvironmentFailed(true)}>
                 <Suspense fallback={null}>
-                  {/* Keep the HDRI in public/ instead of using drei's remote presets:
-                      preview lighting and the default backdrop must work offline. */}
                   <Environment
                     files={ENVIRONMENT_HDRI}
+                    environmentIntensity={environmentIntensity}
                     background={showEnvironmentBackground}
                     backgroundBlurriness={ENVIRONMENT_BACKGROUND_BLUR}
                   />
-                  <EnvironmentIntensity value={environmentIntensity} reassertOn={showEnvironmentBackground} />
                 </Suspense>
               </ErrorBoundary>
               <Suspense fallback={null}>

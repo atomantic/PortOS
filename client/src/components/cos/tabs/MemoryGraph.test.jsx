@@ -18,7 +18,7 @@ vi.mock('@react-three/fiber', () => ({
     return <canvas data-testid="graph-canvas" data-frameloop={frameloop} />;
   },
 }));
-vi.mock('@react-three/drei', () => ({ OrbitControls: () => null }));
+vi.mock('../../../lib/threeHelpers/controls.jsx', () => ({ OrbitControls: () => null }));
 
 vi.mock('../../../services/apiMemory.js', () => ({
   getMemoryGraph: vi.fn(),

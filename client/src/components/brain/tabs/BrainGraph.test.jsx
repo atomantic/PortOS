@@ -18,7 +18,7 @@ vi.mock('@react-three/fiber', () => ({
   // but the named import has to resolve.
   useThree: () => ({ camera: null, size: { width: 0, height: 0 } }),
 }));
-vi.mock('@react-three/drei', () => ({ OrbitControls: () => null }));
+vi.mock('../../../lib/threeHelpers/controls.jsx', () => ({ OrbitControls: () => null }));
 
 // Brain-type badges grade their category hex against the ACTIVE theme mode, so
 // the mode has to be steerable per test. The real provider runs a settings

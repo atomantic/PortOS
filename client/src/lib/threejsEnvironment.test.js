@@ -96,8 +96,7 @@ describe('createSculptEnvironmentScene', () => {
     }
   });
 
-  // The reason for hand-building `studio` rather than reaching for drei's
-  // <Environment preset=…>: a conductor needs bright sources against a dark
+  // The procedural studio gives conductors bright sources against a dark
   // surround to read as metal, and PortOS must fetch no HDR to render locally.
   it('gives studio emissive panels brighter than white against a dark shell', () => {
     const scene = createSculptEnvironmentScene('studio');

@@ -7,7 +7,7 @@ import { MemoryRouter, Route, Routes, useParams } from 'react-router';
 // alongside the canvas marker, skipping the scene's three.js host objects.
 vi.mock('@react-three/fiber', async () => {
   const { Children } = await import('react');
-  const { OrbitControls } = await import('@react-three/drei');
+  const { OrbitControls } = await import('../../lib/threeHelpers/controls.jsx');
   return {
     Canvas: ({ children, frameloop }) => (
       <div data-testid="goal-tree-canvas" data-frameloop={frameloop}>
@@ -18,10 +18,8 @@ vi.mock('@react-three/fiber', async () => {
     useThree: () => null,
   };
 });
-vi.mock('@react-three/drei', () => ({
+vi.mock('../../lib/threeHelpers/controls.jsx', () => ({
   OrbitControls: ({ enableDamping }) => <div data-testid="goal-tree-orbit" data-damping={enableDamping} />,
-  Billboard: () => null,
-  Text: () => null,
 }));
 
 const { toastError, organizeGoals, createGoal, providerState } = vi.hoisted(() => ({

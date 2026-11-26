@@ -1,8 +1,10 @@
 import { Suspense, useEffect, useLayoutEffect, useMemo, useRef } from 'react';
 import * as THREE from 'three';
 import { Canvas } from '@react-three/fiber';
-import { Html, MapControls } from '@react-three/drei';
-import { GreyboxModel, PartMesh } from './GreyboxViewer.jsx';
+import { Html } from '../../lib/threeHelpers/htmlOverlay.jsx';
+import { MapControls } from '../../lib/threeHelpers/controls.jsx';
+import { GreyboxModel } from './GreyboxViewer.jsx';
+import { PartMesh } from './GreyboxSceneViewer.jsx';
 import ErrorBoundary from '../ErrorBoundary';
 import { partColor } from '../../lib/greybox';
 import { worldFill, worldSkyAt, worldSunDirection } from '../../../../server/lib/worldMap.js';

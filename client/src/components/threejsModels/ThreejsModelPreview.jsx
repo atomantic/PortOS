@@ -2,7 +2,8 @@ import { useCallback, useEffect, useId, useMemo, useRef, useState } from 'react'
 import { useSearchParams } from 'react-router';
 import { AlertTriangle, RefreshCw } from 'lucide-react';
 import { Canvas, useFrame, useThree } from '@react-three/fiber';
-import { Bounds, OrbitControls, useBounds } from '@react-three/drei';
+import { Bounds, useBounds } from '../../lib/threeHelpers/bounds.jsx';
+import { OrbitControls } from '../../lib/threeHelpers/controls.jsx';
 import * as THREE from 'three';
 import { createSculptBufferGeometry, needsSculptBufferGeometry, sculptMaterialProps } from '../../lib/threejsSculpt';
 import { createSculptEnvironmentTarget, resolveSculptEnvironment, THREEJS_RENDER_PROFILE } from '../../lib/threejsEnvironment';
@@ -300,9 +301,7 @@ function SceneLight({ light }) {
 // and iridescence do nothing — and the next refinement pass "fixes" that by
 // authoring implausible values back in.
 //
-// Assigned imperatively rather than through drei's <Environment preset=…>, which
-// fetches an HDR from a CDN: rendering a local model must make no outbound
-// request. The texture is owned here, so switching presets or unmounting
+// The procedural presets work offline. Switching presets or unmounting
 // releases the GPU memory the PMREM pass allocated.
 function SceneEnvironment({ preset }) {
   const gl = useThree((state) => state.gl);

@@ -54,7 +54,7 @@ Before removing a Tier 3 candidate, run a transitive-dep check (`npm ls <pkg>`).
 | **Client dependencies** | | | | |
 | `@dnd-kit/core` | 1 | KEEP | drag/drop | |
 | `@dnd-kit/sortable` | 1 | KEEP | drag/drop | |
-| `@react-three/drei` | 1 | KEEP | CyberCity 3D | Three.js helpers |
+| `@react-three/drei` | — | REPLACED | 3D scenes | Owned controls, local asset loaders, labels and visual effects in `client/src/lib/threeHelpers/` (#19040) |
 | `@react-three/fiber` | 1 | KEEP | CyberCity 3D | React renderer for Three |
 | `@scalar/api-reference-react` | — | REMOVED | Dev Tools → API Explorer | 2026-09-11 → native REST Reference tab (issue #7012). Was the heaviest client dep (~half the lockfile, 3.24 MB dist, Vue 3 + Vercel AI SDK). See detailed finding |
 | `@xterm/xterm` | 1 | KEEP | browser terminal | |
@@ -67,7 +67,7 @@ Before removing a Tier 3 candidate, run a transitive-dep check (`npm ls <pkg>`).
 | `recharts` | 1 | KEEP | charts | |
 | `socket.io-client` | 1 | KEEP | realtime client | |
 | `three` | 1 | KEEP | 3D | |
-| `three-stdlib` | — | REMOVED (direct) | 3D avatars | 2026-09-02 → `three/examples/jsm/utils/SkeletonUtils.js` (issue #5683). The sole direct import was `SkeletonUtils.clone`, which `three` itself ships. Still in the tree transitively via `@react-three/drei`, so this is a manifest cleanup, not a supply-chain reduction — the win is one fewer pin to Dependabot-bump and the removal of a pinned-vs-`^` drift surface against drei's own request |
+| `three-stdlib` | — | REMOVED (direct) | 3D avatars | 2026-09-02 → `three/examples/jsm/utils/SkeletonUtils.js` (issue #5683). The sole direct import was `SkeletonUtils.clone`, which `three` itself ships. Its transitive use was removed with Drei (#19040). |
 | **Client devDependencies** | | | | |
 | `@biomejs/biome` | 1 | KEEP | linting across the repo | Client owns the single installation used for local and CI linting |
 | `eslint` | — | REMOVED (client) | linting | 2026-08-04 → `@biomejs/biome`. The server later used ESLint for its complexity report until #16999 |

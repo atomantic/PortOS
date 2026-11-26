@@ -1,6 +1,6 @@
 import { createRef } from 'react';
 import { createRoot } from 'react-dom/client';
-import GreyboxViewer from './GreyboxViewer';
+import GreyboxSceneViewer from './GreyboxSceneViewer.jsx';
 
 // This entry has no app shell, API client, media loader or instance state.
 let previousRoot;
@@ -12,7 +12,7 @@ globalThis.captureGreybox = (scene, shot) => new Promise((resolve, reject) => {
     onUncaughtError: () => reject(new Error('Greybox viewer could not render')),
   });
   previousRoot = root;
-  root.render(<GreyboxViewer scene={scene} shotView={shot} activeShot={shot} aspect={shot.aspect} focalLengthMm={shot.focalLengthMm}
+  root.render(<GreyboxSceneViewer scene={scene} shotView={shot} activeShot={shot} aspect={shot.aspect} focalLengthMm={shot.focalLengthMm}
     ref={viewer} onReady={() => {
       // Let geometry effects and the initial demand frame settle before reading.
       requestAnimationFrame(() => requestAnimationFrame(() => {

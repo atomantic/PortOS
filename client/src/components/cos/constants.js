@@ -105,7 +105,7 @@ export const AGENT_STATES = {
 // FIRST entry must still be an in-place clip (it is the fallback loop, played
 // as named); the constants test asserts that.
 //
-// Consumed by MuseCoSAvatar's AnimationMixer (via drei useAnimations). Clip
+// Consumed by MuseCoSAvatar's AnimationMixer (via useAnimations). Clip
 // names are matched case-sensitively against the loaded GLB: unresolvable steps
 // are dropped, a state with none left falls back to MUSE_ANIMATION_FALLBACK,
 // and a GLB with NO clips at all falls back to the fully-procedural

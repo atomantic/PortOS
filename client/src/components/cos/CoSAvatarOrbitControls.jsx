@@ -1,4 +1,4 @@
-import { OrbitControls } from '@react-three/drei';
+import { OrbitControls } from '../../lib/threeHelpers/controls.jsx';
 
 export default function CoSAvatarOrbitControls() {
   return (
