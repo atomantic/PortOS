@@ -48,6 +48,7 @@ const resolveNicotinePreset = (product) => {
 export const MEATSPACE_TOOLS = [
   {
     name: 'meatspace_log_drink',
+    hostControl: true,
     description:
       'Log an alcoholic drink to MortalLoom / Meatspace tracking. Use when the user says things like "I had a beer", "log a glass of wine", "I just had two whiskeys". The "name" field takes free-form ("IPA", "Cabernet", "Old Fashioned") — known categories (beer/wine/whiskey/shot/cocktail) get sensible oz+ABV defaults, otherwise the user should specify oz+abv explicitly.',
     parameters: {
@@ -93,6 +94,7 @@ export const MEATSPACE_TOOLS = [
 
   {
     name: 'meatspace_log_nicotine',
+    hostControl: true,
     description:
       'Log nicotine use (cigarette, vape puff, pouch) to MortalLoom / Meatspace tracking. Use when the user says "I had a cigarette", "two pouches", "just vaped". Known categories (cigarette/vape/pouch) get sensible mgPerUnit defaults; otherwise specify mgPerUnit explicitly.',
     parameters: {
@@ -151,6 +153,7 @@ export const MEATSPACE_TOOLS = [
 
   {
     name: 'meatspace_log_weight',
+    hostControl: true,
     description:
       'Log a body weight entry to MortalLoom / Meatspace tracking. Use when the user says "log my weight at 180", "I weigh 175 today", "weigh-in at eighty kilos". Defaults to today. Unit is lb unless the user explicitly mentions kg.',
     parameters: {
@@ -186,6 +189,7 @@ export const MEATSPACE_TOOLS = [
 
   {
     name: 'meatspace_log_workout',
+    hostControl: true,
     description:
       'Log a workout / exercise session to Meatspace tracking. Use when the user says "log a workout", "I went for a 30 minute run", "did an hour of yoga", "lifted weights for 45 minutes". The `type` is free-form (run, yoga, lifting, cycling, swim, etc.). Duration and intensity are optional.',
     parameters: {
