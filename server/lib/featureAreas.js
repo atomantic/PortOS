@@ -443,7 +443,7 @@ export const FEATURE_AREAS = Object.freeze([
       'server/lib/{aiToolkit,provider}/**',
       'server/services/{provider,aiProvider,ai,harness,model,ollama,lmStudio,llama,vllm,sglang,mtplx,slotstream,quota,usage,codex,claude,subscription,embeddings,fleet,moa}*',
       'server/services/local!(Memory*)',
-      'server/services/{provider,quotaBurn}/**',
+      'server/services/{ollama,provider,quotaBurn}/**',
       'client/src/pages/{Models,AIProviders,Local,Quota,Usage}*',
       'client/src/components/models/!(Jev*|LayaMlx*)',
       'client/src/components/{providers,localLlm,quotaBurn,usage}/**',
