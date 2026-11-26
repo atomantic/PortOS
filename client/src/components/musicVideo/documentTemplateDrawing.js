@@ -1,6 +1,6 @@
 import { documentCameraView } from '../../../../server/lib/musicVideo/musicVideoDocumentCamera.js';
 import { narrativeFrameState } from '../../../../server/lib/musicVideo/musicVideoNarrativeEvents.js';
-import { imageEffectState, IMAGE_EFFECT_FOG_COLOR } from '../../lib/musicVideoImageEffects.js';
+import { imageEffectState, IMAGE_EFFECT_FOG_COLOR } from '../../../../server/lib/musicVideo/musicVideoImageEffects.js';
 import { formatPercent } from '../../utils/formatters.js';
 import { templateEffects } from '../../../../server/lib/musicVideo/musicVideoTemplateEffects.js';
 

@@ -13,39 +13,43 @@ vi.mock('../ui/Toast');
 // The shared Blender setup reads its own API; here it only needs to be present.
 vi.mock('../codeAnimation/ProductionContainment', () => ({ default: ({ onExecutionChange }) => <div data-testid="blender-setup">Blender setup<button type="button" onClick={() => onExecutionChange({ executionMode: 'trusted-local', lanes: { blender: { ready: true } } })}>Report ready Blender</button></div> }));
 vi.mock('../../services/apiMusicVideo.js', () => ({
-  getMusicVideoBlender: vi.fn(),
-  saveMusicVideoBlenderSettings: vi.fn(),
-  createMusicVideoBlenderWorkspace: vi.fn(),
-  listMusicVideoBlenderModels: vi.fn(async () => ({ models: [] })),
-  addMusicVideoBlenderModel: vi.fn(),
-  updateMusicVideoBlenderModel: vi.fn(),
-  listMusicVideoBlenderFiles: vi.fn(),
-  getMusicVideoBlenderFile: vi.fn(),
-  saveMusicVideoBlenderFile: vi.fn(),
-  deleteMusicVideoBlenderFile: vi.fn(),
-  syncMusicVideoBlender: vi.fn(),
-  renderMusicVideoBlender: vi.fn(),
-  cancelMusicVideoBlenderJob: vi.fn(),
-  cancelMusicVideoBlenderJobs: vi.fn(),
-  assembleMusicVideoBlenderCut: vi.fn(),
-  saveMusicVideoBlenderShotNote: vi.fn(),
-  saveMusicVideoBlenderMotionReferences: vi.fn(),
-  makeMusicVideoBlenderMotionStrip: vi.fn(),
-  openMusicVideoBlenderShot: vi.fn(),
-  getMusicVideoBlenderLog: vi.fn(),
-  getMusicVideoBlenderUsage: vi.fn(),
-  clearMusicVideoBlenderFrames: vi.fn(),
+  musicVideoFilmApi: {
+    getMusicVideoBlender: vi.fn(),
+    saveMusicVideoBlenderSettings: vi.fn(),
+    createMusicVideoBlenderWorkspace: vi.fn(),
+    listMusicVideoBlenderModels: vi.fn(async () => ({ models: [] })),
+    addMusicVideoBlenderModel: vi.fn(),
+    updateMusicVideoBlenderModel: vi.fn(),
+    listMusicVideoBlenderFiles: vi.fn(),
+    getMusicVideoBlenderFile: vi.fn(),
+    saveMusicVideoBlenderFile: vi.fn(),
+    deleteMusicVideoBlenderFile: vi.fn(),
+    syncMusicVideoBlender: vi.fn(),
+    renderMusicVideoBlender: vi.fn(),
+    cancelMusicVideoBlenderJob: vi.fn(),
+    cancelMusicVideoBlenderJobs: vi.fn(),
+    assembleMusicVideoBlenderCut: vi.fn(),
+    saveMusicVideoBlenderShotNote: vi.fn(),
+    saveMusicVideoBlenderMotionReferences: vi.fn(),
+    makeMusicVideoBlenderMotionStrip: vi.fn(),
+    openMusicVideoBlenderShot: vi.fn(),
+    getMusicVideoBlenderLog: vi.fn(),
+    getMusicVideoBlenderUsage: vi.fn(),
+    clearMusicVideoBlenderFrames: vi.fn(),
+    musicVideoBlenderMediaUrl: (id, path) => `/api/music-video/${id}/blender/media?path=${encodeURIComponent(path)}`,
+  },
   musicVideoBlenderMediaUrl: (id, path) => `/api/music-video/${id}/blender/media?path=${encodeURIComponent(path)}`,
 }));
 
 import BlenderFilmPanel from './BlenderFilmPanel.jsx';
 import useMusicVideoBlender from '../../hooks/useMusicVideoBlender.js';
 import toast from '../ui/Toast';
-import {
+import { musicVideoFilmApi } from '../../services/apiMusicVideo.js';
+const {
   assembleMusicVideoBlenderCut, cancelMusicVideoBlenderJob, clearMusicVideoBlenderFrames, createMusicVideoBlenderWorkspace, getMusicVideoBlender, getMusicVideoBlenderFile,
   getMusicVideoBlenderLog, getMusicVideoBlenderUsage, listMusicVideoBlenderFiles, renderMusicVideoBlender, saveMusicVideoBlenderFile, saveMusicVideoBlenderSettings,
   saveMusicVideoBlenderShotNote, saveMusicVideoBlenderMotionReferences, makeMusicVideoBlenderMotionStrip, syncMusicVideoBlender,
-} from '../../services/apiMusicVideo.js';
+} = musicVideoFilmApi;
 import { blenderFilmProject, blenderFilmState, blenderShot } from '../../test/blenderFilmFixture.js';
 
 const GIB = 1024 ** 3;

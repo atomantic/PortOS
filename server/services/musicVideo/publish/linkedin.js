@@ -17,7 +17,7 @@
  * role dialog and Quill inside an open shadow root. Locators support both,
  * including the paste, without relying on document-only queries.
  */
-import { PUBLISH_STEP_TIMEOUT_MS as T, loginRequired, step } from './browser.js';
+import { PUBLISH_STEP_TIMEOUT_MS as T, loginRequired, opening, pasteInto, step } from './browser.js';
 
 const label = 'LinkedIn';
 const SHARE_URL = 'https://www.linkedin.com/feed/?shareActive=true';
@@ -31,31 +31,8 @@ const commented = new WeakSet();
 const UPLOAD_WAIT_MS = 600_000;
 const POST_URL = /^https:\/\/www\.linkedin\.com\/feed\/update\/urn:li:(?:activity|share|ugcPost):\d+/;
 
-/** The post's opening words, as the post page shows them (its first line; LinkedIn folds the rest under "see more"). */
-const opening = (text) => String(text || '').split('\n').map((line) => line.trim()).find(Boolean) || '';
-
 /** The last visible button reading exactly `name` (a dialog stacks its own buttons last). */
 const button = (page, name) => page.locator('button:visible, [role=button]:visible', { hasText: new RegExp(`^\\s*${name}\\s*$`) }).last();
-
-/**
- * Paste into the matched rich editor; if ignored, type every newline boundary,
- * including empty lines, so blank paragraphs survive keyboard fallback.
- */
-async function pasteInto(page, locator, text) {
-  await locator.click({ timeout: T });
-  await locator.evaluate((el, txt) => {
-    el.focus();
-    const data = new DataTransfer();
-    data.setData('text/plain', txt);
-    el.dispatchEvent(new ClipboardEvent('paste', { clipboardData: data, bubbles: true, cancelable: true }));
-  }, text);
-  await page.waitForTimeout(500);
-  if ((await locator.innerText()).trim()) return;
-  for (const [i, line] of String(text).split('\n').entries()) {
-    if (i > 0) await page.keyboard.press('Enter');
-    if (line) await page.keyboard.insertText(line);
-  }
-}
 
 /** Whether the share box is done uploading: Post enabled, no progress bar or Uploading/Processing note. */
 async function uploadSettled(page) {

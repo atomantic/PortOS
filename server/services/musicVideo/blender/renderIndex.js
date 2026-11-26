@@ -1,16 +1,9 @@
-export * from '../../film/renderIndex.js';
-import * as film from '../../film/renderIndex.js';
-import { blenderFinalsSignature } from '../../film/renderIndex.js';
+import { blenderFinalsSignature, blenderFramesDir as filmFramesDir, readBlenderRenders as readFilmRenders } from '../../film/renderIndex.js';
 import { normalizeBlenderRecord, summarizeBlenderShots } from '../../../lib/musicVideo/musicVideoBlender.js';
 import { readBlenderManifest } from './manifest.js';
 import { musicVideoFilmOwner } from './owner.js';
-export const blenderRenderFile = (id, ...args) => film.blenderRenderFile(musicVideoFilmOwner(id), ...args);
-export const blenderShotVideo = (id, ...args) => film.blenderShotVideo(musicVideoFilmOwner(id), ...args);
-export const blenderShotPoster = (id, ...args) => film.blenderShotPoster(musicVideoFilmOwner(id), ...args);
-export const blenderFramesDir = (id, ...args) => film.blenderFramesDir(musicVideoFilmOwner(id), ...args);
-export const blenderStillsFile = (id, ...args) => film.blenderStillsFile(musicVideoFilmOwner(id), ...args);
-export const countBlenderFrames = (id, ...args) => film.countBlenderFrames(musicVideoFilmOwner(id), ...args);
-export const readBlenderRenders = (id, ...args) => film.readBlenderRenders(musicVideoFilmOwner(id), ...args);
+export const blenderFramesDir = (id, ...args) => filmFramesDir(musicVideoFilmOwner(id), ...args);
+const readBlenderRenders = (id, ...args) => readFilmRenders(musicVideoFilmOwner(id), ...args);
 /**
  * What a project read says about its Blender film: `shots` is how far the
  * final shots are (`{ total, finalReady, ready }`; `ready` is the Shots step:

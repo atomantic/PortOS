@@ -17,7 +17,7 @@ import {
 import { MUSIC_VIDEO_CAMERA_FRAME_ASPECTS } from '../../../../server/lib/musicVideo/musicVideoFilmLook.js';
 import { sceneClipIsFinal, sceneFinalApproved, selectedVideoTake } from '../../../../server/lib/musicVideo/musicVideoFinalApproval.js';
 import { FILM_LOOK_PRESETS, filmLookPreset } from '../../lib/filmLook.js';
-import { MUSIC_VIDEO_TRANSITIONS, MUSIC_VIDEO_TRANSITION_LABELS } from '../../lib/musicVideoTransitions.js';
+import { MUSIC_VIDEO_TRANSITIONS, MUSIC_VIDEO_TRANSITION_LABELS } from '../../../../server/lib/musicVideo/musicVideoTransitions.js';
 
 /** A text box that grows to fit its text and commits on blur, only when its text changed. */
 function SheetText({ label, value = '', rows = 2, disabled, onCommit, maxLength }) {

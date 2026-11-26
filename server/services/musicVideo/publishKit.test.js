@@ -176,7 +176,8 @@ describe('publishing kit build (#9281)', () => {
     const id = await renderedProject();
     await projects.mutateProjectRecord(id, current => ({ project: { ...current, composition: { mode: 'blender' } } }));
     const film = await import('./blender/film.js');
-    const { blenderFramesDir, blenderFrameName } = await import('./blender/renderIndex.js');
+    const { blenderFramesDir } = await import('./blender/renderIndex.js');
+    const { blenderFrameName } = await import('../film/renderIndex.js');
     const directory = blenderFramesDir(id, 'shot-1', 'final');
     await mkdir(directory, { recursive: true });
     const original = join(directory, blenderFrameName(48, 'final'));

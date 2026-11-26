@@ -4,7 +4,7 @@ import { shotSheetDrivesPrompt } from '../../../../server/lib/musicVideo/musicVi
 import { resolveSourceTake } from '../../../../server/lib/musicVideo/musicVideoSourceTake.js';
 import { isPreMusicShot } from '../../../../server/lib/musicVideo/musicVideoColdOpen.js';
 import { MUSIC_VIDEO_VISUAL_LAYERS, sceneHasAuthoredSpan, sceneVisualLayer } from '../../lib/musicVideoLayers.js';
-import { isEndFrameImageEffect } from '../../lib/musicVideoImageEffects.js';
+import { isEndFrameImageEffect } from '../../../../server/lib/musicVideo/musicVideoImageEffects.js';
 import { isPerformanceScene } from '../../lib/musicVideoShotTiming.js';
 import { sceneAttention, selectedFrameReadiness } from '../../lib/musicVideoSceneAttention.js';
 import useSceneClipPlayback from './useSceneClipPlayback.js';

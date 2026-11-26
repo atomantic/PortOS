@@ -55,8 +55,9 @@ vi.mock('../services/musicVideo/compositionRender.js', async (importOriginal) =>
 const { default: musicVideoRoutes } = await import('./musicVideo.js');
 const projects = await import('../services/musicVideo/projects.js');
 const { musicVideoEvents } = await import('../services/musicVideo/events.js');
-const { __resetBlenderJobsForTests } = await import('../services/musicVideo/blender/jobs.js');
-const { resolveBlenderMedia } = await import('../services/musicVideo/blender/workspace.js');
+const { __resetBlenderJobsForTests } = await import('../services/film/jobs.js');
+const { resolveBlenderMedia } = await import('../services/film/workspace.js');
+const { musicVideoFilmOwner } = await import('../services/musicVideo/blender/owner.js');
 const { blenderSongHash } = await import('../services/film/hashing.js');
 const { prepareBlenderFinal } = await import('../services/musicVideo/blender/finalRender.js');
 const { launchDetached } = await import('../lib/launchDetached.js');
@@ -213,8 +214,8 @@ describe('Blender film workspace and source files', () => {
     expect((await request(app).get(api('/file?path=plate.png'))).body.code).toBe('MUSIC_VIDEO_BLENDER_NOT_TEXT');
     // The route rejects traversal; the media service enforces its own renders-only contract too.
     expect((await request(app).get(api('/media?path=../src/plate.png'))).status).toBe(400);
-    await expect(resolveBlenderMedia(project.id, '../src/plate.png')).rejects.toMatchObject({ status: 404 });
-    await expect(resolveBlenderMedia(project.id, 's010/../../src/plate.png')).rejects.toMatchObject({ status: 404 });
+    await expect(resolveBlenderMedia(musicVideoFilmOwner(project.id), '../src/plate.png')).rejects.toMatchObject({ status: 404 });
+    await expect(resolveBlenderMedia(musicVideoFilmOwner(project.id), 's010/../../src/plate.png')).rejects.toMatchObject({ status: 404 });
   });
 
   // Creating a symlink needs a privilege Windows CI does not grant.

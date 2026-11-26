@@ -4,7 +4,7 @@ import { render, screen } from '@testing-library/react';
 import TransitionGlitch from './TransitionGlitch.jsx';
 
 // The glitch drawing itself is covered with the render's recipes; here it only has to run.
-vi.mock('../../lib/musicVideoGlitchCanvas.js', () => ({ createMusicVideoGlitchPainter: () => () => {} }));
+vi.mock('../../../../server/lib/musicVideo/musicVideoGlitchCanvas.js', () => ({ createMusicVideoGlitchPainter: () => () => {} }));
 
 // Uniquely catches the animatic mounting a glitch layer over a storyboard with no
 // transitions, or failing to mount one when a shot sets one.

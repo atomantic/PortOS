@@ -2,7 +2,6 @@ import * as film from '../../film/state.js';
 import { requireProject } from '../requireProject.js';
 import { blenderFinalStale } from './renderIndex.js';
 import { musicVideoFilmOwner } from './owner.js';
-export const blenderCutsFile = (id) => film.blenderCutsFile(musicVideoFilmOwner(id));
 export async function getBlenderState(id) {
   const project = await requireProject(id);
   const state = await film.getBlenderState(musicVideoFilmOwner(id));

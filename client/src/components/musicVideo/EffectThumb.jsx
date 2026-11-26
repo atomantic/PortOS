@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from 'react';
-import { createMusicVideoGlitchPainter } from '../../lib/musicVideoGlitchCanvas.js';
-import { MUSIC_VIDEO_TRANSITION_STYLES, blockBox, edgeGlows, glitchFrameParams } from '../../lib/musicVideoTransitions.js';
+import { createMusicVideoGlitchPainter } from '../../../../server/lib/musicVideo/musicVideoGlitchCanvas.js';
+import { MUSIC_VIDEO_TRANSITION_STYLES, blockBox, edgeGlows, glitchFrameParams } from '../../../../server/lib/musicVideo/musicVideoTransitions.js';
 
 // Small enough that a library of them repaints in well under a frame.
 const WIDTH = 160;

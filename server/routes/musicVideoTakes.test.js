@@ -831,7 +831,7 @@ describe('the shot asset manager', () => {
       { id: 'clip-other-frame', filename: 'clip-o.mp4', musicVideo: { projectId: project.id, sceneId: sceneA.sceneId } },
     ]);
 
-    await addTake(sceneA.sceneId, { kind: 'image', assetId: 'start-1.png', source: 'generated' });
+    const firstFrame = await addTake(sceneA.sceneId, { kind: 'image', assetId: 'start-1.png', source: 'generated' });
     await addTake(sceneA.sceneId, { kind: 'image', assetId: 'start-2.png', source: 'generated' });
     await addTake(sceneA.sceneId, { kind: 'image', assetId: 'start-3.png', source: 'generated' });
 
@@ -843,7 +843,7 @@ describe('the shot asset manager', () => {
     expect(markRes.body.changes).toEqual([
       expect.objectContaining({
         sceneId: sceneA.sceneId,
-        shotNumber: 1,
+        previousTakeId: firstFrame.body.take.takeId,
         slot: 'image',
         action: 'moved',
         fromAssetId: 'start-1.png',
@@ -856,7 +856,7 @@ describe('the shot asset manager', () => {
     const badTake = afterFrameFallback.takes.find((t) => t.assetId === 'start-1.png');
     expect(badTake.status).toBe('rejected');
 
-    await addTake(sceneA.sceneId, { kind: 'video', assetId: 'clip-1', source: 'generated', sourceImageId: 'start-3.png' });
+    const firstClip = await addTake(sceneA.sceneId, { kind: 'video', assetId: 'clip-1', source: 'generated', sourceImageId: 'start-3.png' });
     await addTake(sceneA.sceneId, { kind: 'video', assetId: 'clip-2', source: 'generated', sourceImageId: 'start-3.png' });
     await addTake(sceneA.sceneId, { kind: 'video', assetId: 'clip-other-frame', source: 'generated', sourceImageId: 'start-2.png' });
 
@@ -868,7 +868,7 @@ describe('the shot asset manager', () => {
     expect(clipMarkRes.body.changes).toEqual([
       expect.objectContaining({
         sceneId: sceneA.sceneId,
-        shotNumber: 1,
+        previousTakeId: firstClip.body.take.takeId,
         slot: 'video',
         action: 'moved',
         fromAssetId: 'clip-1',
@@ -893,7 +893,7 @@ describe('the shot asset manager', () => {
     expect(markRes.body.changes).toEqual([
       expect.objectContaining({
         sceneId: sceneA.sceneId,
-        shotNumber: 1,
+        previousTakeId: null,
         slot: 'image',
         action: 'flagged',
         fromAssetId: 'only.png',

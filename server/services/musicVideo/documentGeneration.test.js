@@ -831,7 +831,7 @@ describe('treatment-driven mixed-media document authoring', () => {
       scenes: current.scenes.map(scene => scene.sceneId === 's-still' ? { ...scene, glitches: [{ atSec: 1, style: 'light-leak' }] } : scene),
     } }));
     const first = (await generateMixedMediaDocument(id)).document;
-    const legacy = await readFile(new URL('../../routes/fixtures/musicVideoLayeredEngineBeforeEffects.js', import.meta.url));
+    const legacy = await readFile(new URL('../../routes/fixtures/musicVideoLayeredEngineBeforeEffects.txt', import.meta.url));
     await writeFile(join(PATHS.data, first.directory, 'engine-reference.js'), legacy);
     await writeFile(join(PATHS.data, first.directory, 'engine.js'), generatedCanvasPlaybackEngine(legacy));
     const before = await manifestAt(first);
@@ -845,7 +845,7 @@ describe('treatment-driven mixed-media document authoring', () => {
   it('upgrades an unchanged generated layered engine without changing authored sections', async () => {
     const id = await fixture();
     const first = (await generateMixedMediaDocument(id)).document;
-    const legacy = await readFile(new URL('../../routes/fixtures/musicVideoLayeredEngineBeforeEffects.js', import.meta.url));
+    const legacy = await readFile(new URL('../../routes/fixtures/musicVideoLayeredEngineBeforeEffects.txt', import.meta.url));
     await writeFile(join(PATHS.data, first.directory, 'engine-reference.js'), legacy);
     await writeFile(join(PATHS.data, first.directory, 'engine.js'), generatedCanvasPlaybackEngine(legacy));
     const authored = await readFile(join(PATHS.data, first.directory, 'generated.js'));
@@ -879,7 +879,7 @@ describe('treatment-driven mixed-media document authoring', () => {
   it('refuses to replace a customized generated layered engine', async () => {
     const id = await fixture();
     const first = (await generateMixedMediaDocument(id)).document;
-    const legacy = await readFile(new URL('../../routes/fixtures/musicVideoLayeredEngineBeforeEffects.js', import.meta.url));
+    const legacy = await readFile(new URL('../../routes/fixtures/musicVideoLayeredEngineBeforeEffects.txt', import.meta.url));
     const customized = Buffer.concat([generatedCanvasPlaybackEngine(legacy), Buffer.from('\n// authored customization')]);
     await writeFile(join(PATHS.data, first.directory, 'engine-reference.js'), legacy);
     await writeFile(join(PATHS.data, first.directory, 'engine.js'), customized);
@@ -904,7 +904,7 @@ describe('treatment-driven mixed-media document authoring', () => {
   it('upgrades an older generated document with a plain layered engine and no reference file', async () => {
     const id = await fixture();
     const first = (await generateMixedMediaDocument(id)).document;
-    const legacy = await readFile(new URL('../../routes/fixtures/musicVideoLayeredEngineBeforeEffects.js', import.meta.url));
+    const legacy = await readFile(new URL('../../routes/fixtures/musicVideoLayeredEngineBeforeEffects.txt', import.meta.url));
     await writeFile(join(PATHS.data, first.directory, 'engine.js'), legacy);
     await unlink(join(PATHS.data, first.directory, 'engine-reference.js'));
     await unlink(join(PATHS.data, first.directory, 'preview-playback.json'));

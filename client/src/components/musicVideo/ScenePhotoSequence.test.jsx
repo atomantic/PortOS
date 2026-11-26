@@ -3,7 +3,7 @@ import { describe, expect, it, vi } from 'vitest';
 import { fireEvent, render, screen } from '@testing-library/react';
 import ScenePhotoSequence from './ScenePhotoSequence.jsx';
 import ImageEffectStill from './ImageEffectStill.jsx';
-import { photoStackLayouts, scenePhotoSequence } from '../../lib/musicVideoImageEffects.js';
+import { photoStackLayouts, scenePhotoSequence } from '../../../../server/lib/musicVideo/musicVideoImageEffects.js';
 
 vi.mock('../imageGen/GalleryImagePicker.jsx', () => ({ default: ({ onSelect, onClose }) => <button onClick={() => { onSelect({ filename: 'picked.png' }); onClose(); }}>Choose synthetic photo</button> }));
 

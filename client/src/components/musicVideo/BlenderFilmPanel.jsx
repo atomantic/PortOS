@@ -1,4 +1,4 @@
-import * as musicVideoApi from '../../services/apiMusicVideo.js';
+import { musicVideoFilmApi } from '../../services/apiMusicVideo.js';
 import { FilmApiContext } from './blender/FilmApiContext.jsx';
 import { Activity, Clapperboard, FileCode, RefreshCw, Scissors, SlidersHorizontal } from 'lucide-react';
 import TabPills from '../ui/TabPills';
@@ -48,7 +48,7 @@ export default function BlenderFilmPanel({ board, api, tab: selectedTab, onTabCh
   const tabs = TABS.map((entry) => (entry.id === 'jobs' ? { ...entry, count: activeJobs } : entry));
 
   return (
-    <FilmApiContext.Provider value={api || musicVideoApi}><section id={BLENDER_FILM_ANCHOR} tabIndex={-1} aria-label="Blender film" className="min-w-0 space-y-2 rounded-lg border border-port-border bg-port-card p-3 focus:outline-none">
+    <FilmApiContext.Provider value={api || musicVideoFilmApi}><section id={BLENDER_FILM_ANCHOR} tabIndex={-1} aria-label="Blender film" className="min-w-0 space-y-2 rounded-lg border border-port-border bg-port-card p-3 focus:outline-none">
       <div className="flex min-w-0 flex-wrap items-center gap-x-2 gap-y-1">
         <h3 className="text-sm font-medium">Blender film</h3>
         {/* The tabs share the title row: on a laptop every row above the shot player counts. */}

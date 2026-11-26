@@ -33,7 +33,7 @@ import ProjectIndex from '../components/musicVideo/ProjectIndex.jsx';
 import useMusicVideoJobSlots from '../components/musicVideo/useMusicVideoJobSlots.js';
 import useProjectSummarySync from '../components/musicVideo/useProjectSummarySync.js';
 import { resolveStageParam, compareMusicVideoProjectsNewestFirst } from '../lib/musicVideoStages.js';
-import { applyMusicVideoEdit } from '../lib/musicVideoEditResult.js';
+import { applyMusicVideoEdit } from '../../../server/lib/musicVideo/musicVideoEditResult.js';
 import { isMusicVideoCompleted } from '../../../server/lib/musicVideo/musicVideoSummary.js';
 
 // The open-project workspace (and, through it, every stage) is its own chunk, so

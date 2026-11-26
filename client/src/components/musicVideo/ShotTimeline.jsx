@@ -10,7 +10,7 @@ import {
   timelineCuts, timelineDurationSec, timelineShotAt, timelineShots, timelineSplitAt, waveformPath,
 } from '../../lib/musicVideoTimeline.js';
 import { effectNaturalSec, effectTimeAt } from '../../lib/musicVideoTimelineEffects.js';
-import { MUSIC_VIDEO_SHOT_GLITCH_LIMIT } from '../../lib/musicVideoTransitions.js';
+import { MUSIC_VIDEO_SHOT_GLITCH_LIMIT } from '../../../../server/lib/musicVideo/musicVideoTransitions.js';
 import { NEW_GLITCH_STYLE } from './SceneGlitches.jsx';
 import FilePickerButton from '../ui/FilePickerButton.jsx';
 import { AUDIO_LAYER_ACCEPT, AUDIO_LAYER_ROW_H, TimelineAudioLayerPanel, TimelineAudioLayerRow, TimelineClipSoundRow, clipSoundShots } from './ShotTimelineAudioLayers.jsx';

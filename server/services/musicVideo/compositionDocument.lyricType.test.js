@@ -9,7 +9,8 @@ vi.mock('../../lib/paths.js', async (importOriginal) => makePathsProxy(await imp
 
 const { PATHS } = await import('../../lib/paths.js');
 const projects = await import('./projects.js');
-const { importDocumentTemplate, importDocumentDirectory, stageGeneratedDocument, readDocumentFiles, documentTemplateDirectory, readTemplateDocumentFiles } = await import('./compositionDocument.js');
+const { importDocumentTemplate, importDocumentDirectory, stageGeneratedDocument, readDocumentFiles } = await import('./compositionDocument.js');
+const { documentTemplateDirectory, readTemplateDocumentFiles } = await import('./compositionDocumentRead.js');
 
 afterAll(() => cleanupTempDataRoots());
 

@@ -2,7 +2,7 @@ import { useCallback, useEffect, useRef } from 'react';
 import { selectedPerformanceInstruction } from '../../lib/musicVideoShotTiming.js';
 import { clipOffsetSec, clipReversed, clipSpeedRate } from '../../lib/musicVideoLayers.js';
 import { resolveSourceTake } from '../../../../server/lib/musicVideo/musicVideoSourceTake.js';
-import { scenePhotoSequence } from '../../lib/musicVideoImageEffects.js';
+import { scenePhotoSequence } from '../../../../server/lib/musicVideo/musicVideoImageEffects.js';
 
 // The song frame the film look's grain and drift follow; footage renders run at 24 fps.
 export const ANIMATIC_FPS = 24;

@@ -11,7 +11,7 @@ import { checkMusicVideoOverlayText, reverifyMusicVideoAlignment, importMusicVid
   cancelMusicVideoExcerptRender, importMusicVideoProductionPlanning, bindMusicVideoProductionShot, addMusicVideoProductionFeedback, resolveMusicVideoProductionFeedback, syncMusicVideoLyricAnchors, removeMusicVideoStaleStoryboardRows, reviseMusicVideoProductionFromFeedback, revertMusicVideoProductionInput } from '../../services/apiMusicVideo.js';
 import useSseJobSlot from '../../hooks/useSseJobSlot.js';
 import { ownWrite } from '../../services/socketWriteOrigin.js';
-import { applyMusicVideoEdit } from '../../lib/musicVideoEditResult.js';
+import { applyMusicVideoEdit } from '../../../../server/lib/musicVideo/musicVideoEditResult.js';
 
 const WHOLE = Object.freeze({ whole: true });
 

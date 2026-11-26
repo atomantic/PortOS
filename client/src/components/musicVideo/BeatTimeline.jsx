@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { buildBeatGridPoints, computeDragSpan, computeSceneSpans, shouldMarkBeatAligned } from '../../lib/beatGrid.js';
 import { formatTimecode } from '../../utils/formatters.js';
-import { resolveNarrativeEvents } from '../../lib/musicVideoNarrativeEvents.js';
+import { resolveNarrativeEvents } from '../../../../server/lib/musicVideo/musicVideoNarrativeEvents.js';
 import { lyricSpans } from '../../lib/musicVideoTimeline.js';
 
 // Beat-quantized timeline arranger for a music-video project's scene board

@@ -7,7 +7,7 @@ import useMusicVideoBlender from '../../hooks/useMusicVideoBlender.js';
 import { getCodeAnimationProject } from '../../services/apiCodeAnimation';
 import { listTracks } from '../../services/apiTracks.js';
 import { uploadFile } from '../../services/apiMedia.js';
-import * as api from '../../services/apiCodeAnimationFilm.js';
+import { codeAnimationFilmApi, promoteFilm, attachAudio, patchFilm } from '../../services/apiCodeAnimationFilm.js';
 import BlenderFilmPanel from '../musicVideo/BlenderFilmPanel.jsx';
 import FilmLivePreview from '../musicVideo/blender/FilmLivePreview.jsx';
 import AlbumTrackPicker from '../music/AlbumTrackPicker';
@@ -15,6 +15,8 @@ import MediaPreview from '../media/MediaPreview.jsx';
 import useHydratedPreviewRoute from '../../hooks/useHydratedPreviewRoute.js';
 import { BLENDER_TAB_IDS, blenderStillPreviewItems } from '../../lib/musicVideoBlender.js';
 import { buttonCls, inputCls } from '../musicVideo/blender/blenderStyles.js';
+
+const api = { ...codeAnimationFilmApi, promoteFilm, attachAudio, patchFilm };
 
 const EVENTS = ['code-animation:changed'];
 

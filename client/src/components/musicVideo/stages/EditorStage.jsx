@@ -4,7 +4,7 @@ import Drawer from '../../Drawer';
 import ShotTimeline from '../ShotTimeline.jsx';
 import ShotCardHost, { blenderShotPosters, shotNamer, useLinkedStoryboard } from '../ShotCardHost.jsx';
 import { reorderedSceneIds, timelineShots } from '../../../lib/musicVideoTimeline.js';
-import { plannedTransitions } from '../../../lib/musicVideoCutEffects.js';
+import { plannedTransitions } from '../../../../../server/lib/musicVideo/musicVideoCutEffects.js';
 import { isLayeredComposition } from '../../../lib/musicVideoLayers.js';
 import { projectHasAudio } from '../../../lib/musicVideoStages.js';
 import { scenePlayableClipId } from '../../../../../server/lib/musicVideo/musicVideoSourceTake.js';

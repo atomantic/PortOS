@@ -1,9 +1,9 @@
 import { describe, it, expect, vi, afterEach } from 'vitest';
 import { render } from '@testing-library/react';
-import { glitchFrameParams } from '../../lib/musicVideoTransitions.js';
+import { glitchFrameParams } from '../../../../server/lib/musicVideo/musicVideoTransitions.js';
 
 const painted = vi.fn();
-vi.mock('../../lib/musicVideoGlitchCanvas.js', () => ({ createMusicVideoGlitchPainter: () => (...args) => painted(...args) }));
+vi.mock('../../../../server/lib/musicVideo/musicVideoGlitchCanvas.js', () => ({ createMusicVideoGlitchPainter: () => (...args) => painted(...args) }));
 const { default: EffectThumb } = await import('./EffectThumb.jsx');
 
 afterEach(() => vi.restoreAllMocks());

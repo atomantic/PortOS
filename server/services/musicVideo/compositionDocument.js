@@ -47,12 +47,7 @@ import {
   UPGRADABLE_IMAGE_EFFECT_MODULES, withSharedImageEffects, withSharedLyricType,
 } from './compositionDocumentRead.js';
 
-export {
-  availableDocumentDirectory, COMPATIBLE_IMAGE_EFFECT_MODULES, documentDirectoryForRender, documentMimeType,
-  documentTemplateDirectory, DOCUMENT_MAX_BYTES, DOCUMENT_MAX_FILES, DOCUMENT_ZIP_MAX_BYTES, isStaleShippedHelper,
-  isUpgradableLayeredEngine, readDocumentFiles, readLyricOverlayDocumentFiles, readTemplateDocumentFiles,
-  unsupportedDocumentEffects, UPGRADABLE_IMAGE_EFFECT_MODULES,
-} from './compositionDocumentRead.js';
+export { DOCUMENT_ZIP_MAX_BYTES, documentMimeType, readDocumentFiles } from './compositionDocumentRead.js';
 
 // Names the render writes next to the entry; a document may not ship them.
 export const DOCUMENT_RESERVED_FILES = Object.freeze(['portos-mv.js', 'song.json']);

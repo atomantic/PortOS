@@ -10,16 +10,20 @@ vi.mock('../../services/socket', () => ({
   },
 }));
 vi.mock('../ui/Toast');
-vi.mock('../../services/apiMusicVideo.js', async (importOriginal) => ({
-  ...await importOriginal(),
-  getMusicVideoBlender: vi.fn(),
-  getMusicVideoLyricOverlayPreview: vi.fn(() => new Promise(() => {})),
-}));
+vi.mock('../../services/apiMusicVideo.js', async (importOriginal) => {
+  const actual = await importOriginal();
+  return {
+    ...actual,
+    musicVideoFilmApi: { ...actual.musicVideoFilmApi, getMusicVideoBlender: vi.fn() },
+    getMusicVideoLyricOverlayPreview: vi.fn(() => new Promise(() => {})),
+  };
+});
 vi.mock('../../services/apiImageVideo.js', () => ({ getVideoHistoryItem: vi.fn(async (id) => ({ id, filename: `${id}.mov` })) }));
 
 import PreviewDock from './PreviewDock.jsx';
 import useMusicVideoBlender from '../../hooks/useMusicVideoBlender.js';
-import { getMusicVideoBlender } from '../../services/apiMusicVideo.js';
+import { musicVideoFilmApi } from '../../services/apiMusicVideo.js';
+const { getMusicVideoBlender } = musicVideoFilmApi;
 import { listPreviewSources } from '../../lib/musicVideoStages.js';
 import { summarizeBlenderShots } from '../../lib/musicVideoBlender.js';
 import { blenderFilmProject, blenderFilmState } from '../../test/blenderFilmFixture.js';

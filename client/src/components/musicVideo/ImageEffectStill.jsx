@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef } from 'react';
-import { IMAGE_EFFECT_FOG_COLOR, imageEffectState, photoSequenceIndex, photoSequenceLayers, photoSequenceMaxLayers } from '../../lib/musicVideoImageEffects.js';
+import { IMAGE_EFFECT_FOG_COLOR, imageEffectState, photoSequenceIndex, photoSequenceLayers, photoSequenceMaxLayers } from '../../../../server/lib/musicVideo/musicVideoImageEffects.js';
 
 const photoUrl = id => `/data/images/${encodeURIComponent(id)}`;
 

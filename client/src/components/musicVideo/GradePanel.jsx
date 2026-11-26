@@ -1,4 +1,4 @@
-import { MUSIC_VIDEO_GRADE_PRESETS, MUSIC_VIDEO_GRADE_DEFAULT_GRAIN } from '../../lib/musicVideoGrade.js';
+import { MUSIC_VIDEO_GRADE_PRESETS, MUSIC_VIDEO_GRADE_DEFAULT_GRAIN } from '../../../../server/lib/musicVideo/musicVideoGrade.js';
 import { compositionDraft } from './compositionDraft.js';
 
 const LABELS = { neutral: 'Neutral (no effect)', 'teal-night': 'Teal night', 'golden-hour': 'Golden hour', monochrome: 'Monochrome' };

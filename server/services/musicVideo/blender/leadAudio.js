@@ -5,7 +5,7 @@
 import { blenderShotFrameRange, normalizeBlenderRecord } from '../../../lib/musicVideo/musicVideoBlender.js';
 import { coldOpenAudioShots, ensureColdOpenAudio } from '../coldOpen.js';
 import { shotSegmentDir } from '../shotSegmentPaths.js';
-import { blenderLeadSec, blenderLeadShots } from './manifest.js';
+import { blenderLeadSec, blenderLeadShots } from '../../film/manifest.js';
 
 /** `{ leadSec, leadPath }` for `shots`, or a zero lead when the film starts on the song. */
 export async function blenderLeadAudio(project, shots, fps) {

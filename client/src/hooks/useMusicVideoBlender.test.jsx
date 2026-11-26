@@ -10,26 +10,29 @@ vi.mock('../services/socket', () => ({
 }));
 vi.mock('../components/ui/Toast');
 vi.mock('../services/apiMusicVideo.js', () => ({
-  getMusicVideoBlender: vi.fn(),
-  saveMusicVideoBlenderSettings: vi.fn(),
-  createMusicVideoBlenderWorkspace: vi.fn(),
-  saveMusicVideoBlenderFile: vi.fn(),
-  deleteMusicVideoBlenderFile: vi.fn(),
-  syncMusicVideoBlender: vi.fn(),
-  renderMusicVideoBlender: vi.fn(),
-  clearMusicVideoBlenderFrames: vi.fn(),
-  cancelMusicVideoBlenderJob: vi.fn(),
-  cancelMusicVideoBlenderJobs: vi.fn(),
-  assembleMusicVideoBlenderCut: vi.fn(),
-  saveMusicVideoBlenderShotNote: vi.fn(),
-  saveMusicVideoBlenderMotionReferences: vi.fn(),
-  makeMusicVideoBlenderMotionStrip: vi.fn(),
-  openMusicVideoBlenderShot: vi.fn(),
+  musicVideoFilmApi: {
+    getMusicVideoBlender: vi.fn(),
+    saveMusicVideoBlenderSettings: vi.fn(),
+    createMusicVideoBlenderWorkspace: vi.fn(),
+    saveMusicVideoBlenderFile: vi.fn(),
+    deleteMusicVideoBlenderFile: vi.fn(),
+    syncMusicVideoBlender: vi.fn(),
+    renderMusicVideoBlender: vi.fn(),
+    clearMusicVideoBlenderFrames: vi.fn(),
+    cancelMusicVideoBlenderJob: vi.fn(),
+    cancelMusicVideoBlenderJobs: vi.fn(),
+    assembleMusicVideoBlenderCut: vi.fn(),
+    saveMusicVideoBlenderShotNote: vi.fn(),
+    saveMusicVideoBlenderMotionReferences: vi.fn(),
+    makeMusicVideoBlenderMotionStrip: vi.fn(),
+    openMusicVideoBlenderShot: vi.fn(),
+  },
 }));
 
 import useMusicVideoBlender from './useMusicVideoBlender.js';
 import toast from '../components/ui/Toast';
-import { getMusicVideoBlender, renderMusicVideoBlender, syncMusicVideoBlender } from '../services/apiMusicVideo.js';
+import { musicVideoFilmApi } from '../services/apiMusicVideo.js';
+const { getMusicVideoBlender, renderMusicVideoBlender, syncMusicVideoBlender } = musicVideoFilmApi;
 import { blenderFilmState } from '../test/blenderFilmFixture.js';
 
 const push = (event, payload) => act(async () => { for (const fn of handlers.get(event) || []) fn(payload); });

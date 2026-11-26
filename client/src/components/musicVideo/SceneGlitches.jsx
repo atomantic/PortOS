@@ -4,7 +4,7 @@ import { Plus, X } from 'lucide-react';
 import {
   MUSIC_VIDEO_GLITCH_EDGES, MUSIC_VIDEO_GLITCH_LENGTHS, MUSIC_VIDEO_GLITCH_REPEAT_LIMIT, MUSIC_VIDEO_SHOT_GLITCH_LIMIT, MUSIC_VIDEO_TINTED_GLITCHES,
   MUSIC_VIDEO_TRANSITIONS, MUSIC_VIDEO_TRANSITION_LABELS,
-} from '../../lib/musicVideoTransitions.js';
+} from '../../../../server/lib/musicVideo/musicVideoTransitions.js';
 import { normalizePreMusic } from '../../../../server/lib/musicVideo/musicVideoColdOpen.js';
 
 // The time slider moves a frame at a time on the render's 24 fps grid.

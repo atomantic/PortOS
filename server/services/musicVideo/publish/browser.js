@@ -16,6 +16,29 @@ import { isVitestRunner } from '../../../lib/runtimeEnv.js';
 
 export const PUBLISH_STEP_TIMEOUT_MS = 60_000;
 
+/** The first non-empty line, which stays visible when the platform folds the post. */
+export const opening = (text) => String(text || '').split('\n').map((line) => line.trim()).find(Boolean) || '';
+
+/**
+ * Paste into the matched rich editor; if ignored, type every newline boundary,
+ * including empty lines, so blank paragraphs survive keyboard fallback.
+ */
+export async function pasteInto(page, locator, text) {
+  await locator.click({ timeout: PUBLISH_STEP_TIMEOUT_MS });
+  await locator.evaluate((el, txt) => {
+    el.focus();
+    const data = new DataTransfer();
+    data.setData('text/plain', txt);
+    el.dispatchEvent(new ClipboardEvent('paste', { clipboardData: data, bubbles: true, cancelable: true }));
+  }, text);
+  await page.waitForTimeout(500);
+  if ((await locator.innerText()).trim()) return;
+  for (const [i, line] of String(text).split('\n').entries()) {
+    if (i > 0) await page.keyboard.press('Enter');
+    if (line) await page.keyboard.insertText(line);
+  }
+}
+
 let browserTail = Promise.resolve();
 // What holds the PortOS Browser now, so a queued fill can say what it waits on.
 let activeOperation = null;
