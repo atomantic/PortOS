@@ -4,18 +4,11 @@ import { fileURLToPath } from 'node:url';
 import { installUpdateTestSupervisor } from './updateTestSupervisor.js';
 
 const sourceRoot = fileURLToPath(new URL('../../', import.meta.url));
-const shimFiles = ['update.sh', 'update.ps1'];
 
-function copyFromSource(root, path) {
-  const target = join(root, path);
-  mkdirSync(dirname(target), { recursive: true });
-  copyFileSync(join(sourceRoot, path), target);
-}
-
-/** Use actual launch shims, but substitute an updater with observable fixture-only effects. */
+/** Use the actual POSIX launch shim with an updater that reports fixture effects. */
 export function installAdmittedUpdateFixture(root, effect) {
-  copyFromSource(root, 'update.sh');
   mkdirSync(join(root, 'scripts'), { recursive: true });
+  copyFileSync(join(sourceRoot, 'update.sh'), join(root, 'update.sh'));
   writeFileSync(join(root, 'scripts', 'update.mjs'), `
 import { execFileSync } from 'node:child_process';
 import { writeFileSync } from 'node:fs';
@@ -30,9 +23,13 @@ command('--terminal', id, String(process.pid), '0');
 /** Use the actual updater and its builtin-only imports in an offline test checkout. */
 export function installUpdateContract(root) {
   installUpdateTestSupervisor(root, { standalone: true });
-  for (const path of [...shimFiles, 'scripts/update.mjs', 'scripts/lib/dependencyReceipts.js',
+  for (const path of ['update.sh', 'update.ps1', 'scripts/update.mjs', 'scripts/lib/dependencyReceipts.js',
     'scripts/lib/workspaceDependencies.js', 'server/lib/gitStaleLock.js',
-    'server/lib/homePath.js', 'server/lib/aiToolkit/internal/windowsSafeSpawn.js']) copyFromSource(root, path);
+    'server/lib/homePath.js', 'server/lib/aiToolkit/internal/windowsSafeSpawn.js']) {
+    const target = join(root, path);
+    mkdirSync(dirname(target), { recursive: true });
+    copyFileSync(join(sourceRoot, path), target);
+  }
   // This fixture stops before setup, network, or service work. No downloaded
   // dependencies or platform-specific tooling is required beyond Git + Node.
   writeFileSync(join(root, 'package.json'), JSON.stringify({ type: 'module', version: '0.0.0' }));

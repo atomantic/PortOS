@@ -2256,24 +2256,9 @@ describe('data-only JS files and bounded dynamic imports (#16902)', () => {
       ].join('\n'),
       'scripts/migrations/001-init.js': 'export async function up() {}\n',
       'scripts/migrations/001-init.test.js': "const u = getUrl();\nexport const t = () => import(u);\n",
-      'server/scripts/run-db-migrations.js': [
-        "import { join, dirname } from 'node:path';",
-        "import { fileURLToPath, pathToFileURL } from 'node:url';",
-        "import { scanDatabaseMigrationFiles } from '../../scripts/lib/migrationFiles.js';",
-        "const __dirname = dirname(fileURLToPath(import.meta.url));",
-        "const DEFAULT_MIGRATIONS_DIR = join(__dirname, 'db-migrations');",
-        "export async function runDatabaseMigrations({ migrationsDir = DEFAULT_MIGRATIONS_DIR } = {}) {",
-        "  const files = await scanDatabaseMigrationFiles(migrationsDir);",
-        "  for (const file of files) {",
-        "    if (file.endsWith('.js')) await import(pathToFileURL(join(migrationsDir, file)).href);",
-        "  }",
-        "}",
-      ].join('\n'),
-      'server/scripts/db-migrations/001-schema.js': 'export async function up() {}\n',
       'server/lib/a.test.js': [
         "import { runMigrations } from '../../scripts/run-migrations.js';",
-        "import { runDatabaseMigrations } from '../scripts/run-db-migrations.js';",
-        "export const t = [runMigrations, runDatabaseMigrations];",
+        "export const t = runMigrations;",
       ].join('\n'),
     };
     const first = analyze(files).get('server/lib/a.test.js');
@@ -2286,6 +2271,38 @@ describe('data-only JS files and bounded dynamic imports (#16902)', () => {
       'scripts/migrations/001-init.js': 'export async function up() { return 1; }\n',
     }).get('server/lib/a.test.js');
     expect(edited.floor.key).not.toBe(first.floor.key);
+  });
+
+  it('keys shipped SQL and JS migrations even when the recorded run only loads the DB runner', () => {
+    const test = 'server/lib/a.test.js';
+    const runner = 'server/scripts/run-db-migrations.js';
+    const sql = 'server/scripts/db-migrations/001-schema.sql';
+    const js = 'server/scripts/db-migrations/002-transform.js';
+    const files = {
+      ...BASE,
+      [runner]: nodeFs.readFileSync(new URL('../../server/scripts/run-db-migrations.js', import.meta.url), 'utf8'),
+      [test]: "import { runDbMigrations } from '../scripts/run-db-migrations.js';",
+      [sql]: 'SELECT 1;',
+      [js]: 'export async function up() {}',
+      'server/lib/db.js': 'export const query = () => {};',
+      'scripts/lib/migrationFiles.js': 'export async function scanDatabaseMigrationFiles() {}',
+      'scripts/lib/directInvocation.js': 'export const isDirectlyInvoked = () => false;',
+    };
+    const records = new Map([[test, [runner, 'scripts/lib/migrationFiles.js', 'scripts/lib/directInvocation.js']]]);
+    const keys = tree => {
+      const { floor, recorded } = keyOf(tree, test, { records });
+      expect(floor.memoizable).toBe(true);
+      expect(recorded.memoizable).toBe(true);
+      return [floor.key, recorded.key];
+    };
+
+    const baseline = keys(files);
+    expect(keys({ ...files, 'server/lib/other.js': 'export const other = true;' })).toEqual(baseline);
+    for (const file of [sql, js]) {
+      expect(keys({ ...files, [file]: files[file] + '\n' }).every((key, i) => key !== baseline[i])).toBe(true);
+    }
+    expect(keys({ ...files, 'server/scripts/db-migrations/003-new.sql': 'SELECT 2;' })
+      .every((key, i) => key !== baseline[i])).toBe(true);
   });
 });
 
