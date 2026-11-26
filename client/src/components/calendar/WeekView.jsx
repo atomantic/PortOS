@@ -12,6 +12,7 @@ import EmptyState from '../EmptyState';
 import { useThemeContext } from '../ThemeContext';
 import { formatMonthDay, formatWeekdayShort, formatDateShort, formatHourOfDay, formatDateFull, localDateKey } from '../../utils/formatters';
 import useUrlParams from '../../hooks/useUrlParams';
+import { useTimeTick } from '../../hooks/useTimeTick';
 
 function getWeekStart(date) {
   const d = new Date(date);
@@ -74,7 +75,7 @@ export default function WeekView({ accounts }) {
     [eventsByDay, weekDays]
   );
 
-  const now = new Date();
+  const now = new Date(useTimeTick());
   const todayStr = now.toDateString();
   const nowMinutes = now.getHours() * 60 + now.getMinutes();
   const nowTop = (nowMinutes / 60) * PX_PER_HOUR;
@@ -229,7 +230,7 @@ export default function WeekView({ accounts }) {
                     })}
                     {/* Current time line */}
                     {isToday && nowTop >= 0 && nowTop <= HOURS.length * PX_PER_HOUR && (
-                      <div className="absolute left-0 right-0 flex items-center pointer-events-none z-10" style={{ top: nowTop }}>
+                      <div className="absolute left-0 right-0 flex items-center pointer-events-none z-10" aria-label="Current time" style={{ top: nowTop }}>
                         <div className="w-1.5 h-1.5 rounded-full bg-port-error -ml-0.5" />
                         <div className="flex-1 h-px bg-port-error" />
                       </div>

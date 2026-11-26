@@ -15,7 +15,7 @@ import {
   isOpencodeLocalProvider,
   providerModeSelectionPolicy,
 } from '../../utils/providers';
-import { PR_COMPLETION_OPTIONS, prCompletionMerges, prCompletionOption } from './constants';
+import { PR_COMPLETION_OPTIONS, prCompletionMerges, prCompletionOption, reviewerLabel } from './constants';
 import { slashdoLabel } from '../../lib/slashdoCatalog';
 
 // Opt-ins for a PR that a required code-owner review blocks (server: resolveAutoApprovePR / resolveAdminMerge).
@@ -434,6 +434,7 @@ function TaskCompletionFields({ form }) {
     planOnlySupported,
     issueTargets,
     reviewerModelOptions,
+    rememberReviewerProvider,
     handlePlanOnlyChange,
   } = form;
   const notGitRepo = selectedApp?.isGitRepo === false;
@@ -604,6 +605,7 @@ function TaskCompletionFields({ form }) {
                   reviewerModels={reviewOverrides.reviewerModels ?? reviewDefaults.reviewerModels}
                   reviewerEfforts={reviewOverrides.reviewerEfforts ?? reviewDefaults.reviewerEfforts}
                   modelOptions={reviewerModelOptions}
+                  onProviderSelectionCreated={rememberReviewerProvider}
                   installed={reviewerCliInstalled}
                   providerReviewUnsupported={providerReviewUnsupported}
                   stopMode={reviewOverrides.stopMode ?? reviewDefaults.stopMode}
@@ -730,7 +732,7 @@ export default function TaskAddFormView({ form, compact = false, queueFirst = fa
             : [selectedProvider?.name || state.newTask.provider || 'Default provider', form.selectedModelOrSole || 'default model', state.newTask.effort].filter(Boolean).join(' / ')}
           {' · '}{state.planOnly ? 'Read-only planning' : state.useWorktree ? 'Worktree' : 'Direct checkout'}
           {' · '}{completion}
-          {!state.planOnly && state.openPR && state.prCompletion === 'review-then-merge' && ` · Review: ${[...reviewers, ...usernames.map((name) => '@' + name)].join(', ') || 'None'}`}
+          {!state.planOnly && state.openPR && state.prCompletion === 'review-then-merge' && ` · Review: ${[...reviewers.map(token => reviewerLabel(token, form.reviewerModelOptions.providers)), ...usernames.map((name) => '@' + name)].join(', ') || 'None'}`}
           {isFederated && ` · Instance: ${assignableInstances.find((instance) => instance.instanceId === state.targetInstanceId)?.name || state.targetInstanceId || 'Any'}`}
           {state.planOnly && ` · Issue: ${state.issueTarget}`}
           {state.createJiraTicket && !state.planOnly && ' · JIRA ticket'}

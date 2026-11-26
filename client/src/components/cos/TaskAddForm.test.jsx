@@ -236,6 +236,18 @@ describe('TaskAddForm responsive layout', () => {
     }), { silent: true });
   });
 
+  it('names known reviewer presets and uses the picker fallback for missing presets', async () => {
+    api.getCodeReviewDefaults.mockResolvedValue({
+      reviewers: ['provider:selection-example', 'provider:retired-preset'],
+    });
+    api.getProviders.mockResolvedValue({ providers: [{ id: 'selection-example', name: 'Example review preset' }] });
+    render(<MemoryRouter><TaskAddForm queueFirst providers={[]} defaultApp="example-app"
+      apps={[{ id: 'example-app', name: 'Example App', defaultUseWorktree: true, defaultOpenPR: true, defaultPrCompletion: 'review-then-merge' }]} /></MemoryRouter>);
+
+    await waitFor(() => expect(screen.getByLabelText('Task execution summary'))
+      .toHaveTextContent('Review: Example review preset, retired-preset'));
+  });
+
   // #7796: hiding configuration must not reset the draft or silently change
   // app completion defaults, and a failed submission must remain retryable.
   it('keeps queue settings inline and retains drafts across collapse and failed submission', async () => {
@@ -249,7 +261,7 @@ describe('TaskAddForm responsive layout', () => {
     render(<MemoryRouter><TaskAddForm queueFirst providers={[]} defaultApp="example-app"
       apps={[{ id: 'example-app', name: 'Example App', defaultUseWorktree: true, defaultOpenPR: true, defaultPrCompletion: 'review-then-merge' }]}
       onTaskAdded={added} /></MemoryRouter>);
-    await waitFor(() => expect(screen.getByLabelText('Task execution summary')).toHaveTextContent('Review: codex'));
+    await waitFor(() => expect(screen.getByLabelText('Task execution summary')).toHaveTextContent('Review: Codex'));
     expect(screen.queryByLabelText('AI provider')).not.toBeInTheDocument();
     expect(screen.getByLabelText('Attach screenshots')).toBeInTheDocument();
     expect(screen.getByLabelText('Attach files')).toBeInTheDocument();

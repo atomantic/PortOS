@@ -15,7 +15,7 @@ import {
   ScrollText,
   MessageCircle
 } from 'lucide-react';
-import { normalizeReviewerSlug, REVIEWER_VALUES } from '../../lib/reviewerPins';
+import { isProviderReviewer, normalizeReviewerSlug, REVIEWER_VALUES } from '../../lib/reviewerPins';
 import { AVATAR_STYLE_LABELS } from '../../lib/avatarStyles';
 import { inPlaceClipName } from '../../utils/animationClips';
 import { getNavPageForPath, getPageNavTabs } from '../../../../server/lib/navManifest.js';
@@ -349,8 +349,12 @@ export const REVIEWER_OPTIONS = REVIEWER_VALUES.map((value) => {
 // reviewer slug into prose, so a roster addition renders everywhere without a
 // literal edit. Resolves the `gemini` alias; an `@username` (or any token with no
 // option row) falls through to itself.
-export const reviewerLabel = (value) =>
-  REVIEWER_OPTIONS.find(o => o.value === normalizeReviewerSlug(value))?.label || value;
+export const reviewerLabel = (value, providers) => {
+  if (isProviderReviewer(value)) {
+    return providers?.find(provider => `provider:${provider.id}` === value)?.name || value.slice(9);
+  }
+  return REVIEWER_OPTIONS.find(o => o.value === normalizeReviewerSlug(value))?.label || value;
+};
 
 // The whole reviewer vocabulary — the roster, its aliases and defaults, the
 // review-username pattern and cap, the max-rounds ceiling, the stop-mode list,
