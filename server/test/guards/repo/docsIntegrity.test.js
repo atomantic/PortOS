@@ -512,7 +512,7 @@ describe('docs/DEPS.md', () => {
 });
 
 const MODULE_GUIDES = [
-  'server/lib/README.md', 'client/src/lib/README.md', 'client/src/hooks/README.md', 'client/src/services/README.md',
+  'server/lib/README.md', 'client/src/lib/README.md', 'client/src/hooks/README.md',
 ];
 
 // Guards "`symbol` in `path`" pointers in the instruction and catalog docs
@@ -525,6 +525,7 @@ const CODE_POINTER_DOCS = new Set([
   ...AGENT_FILES,
   '.claude/skills/portos-add-module/SKILL.md',
   '.claude/skills/portos-ship/SKILL.md',
+  'server/services/README.md',
   ...MODULE_GUIDES,
 ]);
 
@@ -886,8 +887,10 @@ describe('instruction file references', () => {
 });
 
 const ENDPOINT_DOCS = new Set([
-  ...LIVING_DOCS.filter((file) => DOC_INDEX_LINKS.has(file)), ...AGENT_FILES, ...MODULE_GUIDES, 'client/src/utils/README.md',
+  ...LIVING_DOCS.filter((file) => DOC_INDEX_LINKS.has(file)), ...AGENT_FILES, ...MODULE_GUIDES,
+  'client/src/utils/README.md', 'client/src/services/README.md',
 ]);
+// The README indexes define the supported documentation surface for link labels.
 const LINK_LABEL_DOCS = new Set([...INDEXED_DOCS, ...AGENT_FILES]);
 
 let findings;
