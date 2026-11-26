@@ -24,7 +24,7 @@ import { canRequestCancellation, snapshotCancellationIntent, applyCancellationIn
 import { MAX_PENDING_MEDIA_JOBS, MEDIA_QUEUE_PERSIST_FAILED, mediaQueueFullError } from './admission.js';
 import { jobLane, jobSwimlane, laneLimits, laneTotalLimits, refreshCodexParallelLimit, resetLimitsForTests } from './limits.js';
 import {
-  queue, cloudRunning, remoteRunning, archive, videoHolds, mediaJobEvents, recoveringJobs, terminalOperations,
+  queue, cloudRunning, remoteRunning, archive, videoHolds, mediaJobEvents, terminalOperations,
   getRunningJob, findJob, runningJobs, listJobs, isTopazUpscale, resetQueueStateForTests,
   dispatchOperations, laneOperations, recoveryState, testLifecycleDisposals,
 } from './state.js';
@@ -197,12 +197,12 @@ export async function initMediaJobQueue({ deferCompletionRecovery = false, prepa
   return recoveryState.initPromise;
 }
 
-// A queued recovery can still own a remote or detached job, and a terminal
+// A queued recovery can still own a remote job, and a terminal
 // callback can still be publishing after its visible status changed.
 export function getMediaRecoveryActivity() {
   const jobs = listJobs();
   const pending = hasPendingTransitions() || terminalOperations.size > 0 || dispatchOperations.size > 0
-    || recoveringJobs.size > 0 || jobs.some(mediaRecoveryPending);
+    || jobs.some(mediaRecoveryPending);
   return { trusted: recoveryState.inventoryReady && !isPersistBlocked(), pending };
 }
 

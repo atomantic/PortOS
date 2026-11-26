@@ -5,8 +5,8 @@
  * functions.
  *
  * Persistence: data/media-jobs.json holds queued + running + recently-finished
- * jobs. On boot, local child-process jobs fail as interrupted; detached
- * training and idempotent remote jobs reconcile against their surviving work.
+ * jobs. On boot, local child-process jobs fail as interrupted and
+ * idempotent remote jobs reconcile against their surviving work.
  * Completed/failed/canceled entries older than 24h or beyond the 500-most-
  * recent are pruned to keep the file small.
  *
@@ -32,7 +32,7 @@ import { isRemoteMediaJob } from './remoteMediaJob.js';
 import { MEDIA_QUEUE_PERSIST_FAILED } from './admission.js';
 import { snapshotQuotaCooldowns, restoreQuotaCooldowns } from './limits.js';
 import {
-  queue, cloudRunning, remoteRunning, archive, videoHolds, mediaJobEvents, recoveringJobs, terminalOperations,
+  queue, cloudRunning, remoteRunning, archive, videoHolds, mediaJobEvents, terminalOperations,
   getRunningJob, findJob, listJobs, swimlanePositions, trackTerminalOperation, isTopazUpscale,
 } from './state.js';
 import { wakeWorker } from './workerSignal.js';
@@ -88,17 +88,6 @@ async function safeUnlinkUpload(path) {
     return;
   }
   await unlink(path).catch(() => {});
-}
-
-// #1332: probe (via loraTraining, which owns the run's on-disk layout) whether
-// a training run's detached trainer survived the restart and is worth
-// re-attaching to. Loaded through the runtime registry because loraTraining
-// imports the queue (#17499). Never throws — a missing module / probe error reads
-// as "not reattachable" so the reconcile falls back to the fail path.
-async function jobHasSurvivingTrainer(runId) {
-  const mod = await loadMediaRuntimeModule('training').catch(() => null);
-  if (!mod?.hasSurvivingTrainer) return false;
-  return mod.hasSurvivingTrainer(runId).catch(() => false);
 }
 
 // Completion hooks may attach a generated artifact to a domain record after
@@ -352,15 +341,7 @@ export async function releaseStagedUploads(params) {
     .map(path => safeUnlinkUpload(path)));
 }
 
-// The same training job, flagged to re-attach, when its detached trainer survived.
-const reattachSurvivingTrainer = async j => (j.kind === 'training' && j.params?.runId && await jobHasSurvivingTrainer(j.params.runId)
-  ? { ...j, status: 'queued', params: { ...j.params, reattach: true } } : null);
-
-// What one persisted job becomes after a restart. Applies it to the queue or
-// archive and returns { failedId } / { canceled } / { reattach } for the init
-// body's SSE pre-seed and re-attach ordering. Arm order is load-bearing: a
-// maintenance hold wins over the video-production fail, and remote reconcile
-// (in restoreInterruptedRunningJob) wins over the generic interrupted fail.
+// Restore one snapshot row and collect the terminal SSE frames for queue init.
 async function restorePersistedJob(persisted) {
   // An uncertain terminal observer result is not a terminal peer result.
   // Reconcile the original idempotency key while preserving its peer slot.
@@ -382,20 +363,15 @@ async function restorePersistedJob(persisted) {
     }));
     return {};
   }
-  // Never dispatch a queued trainer after upgrade. A verified survivor below
-  // is observed to completion without launching a replacement process.
-  if (j.kind === 'training' && j.status === 'queued' && !j.params?.reattach) {
+  // Old builds may have persisted a queued reattachment or a running observer.
+  // Retire both without touching the detached process or its artifacts.
+  if (j.kind === 'training' && ['queued', 'running'].includes(j.status)) {
     archive.push({ ...j, status: 'canceled', error: TRAINING_RETIRED_MESSAGE, completedAt: new Date().toISOString() });
-    return { failedId: j.id };
+    return { canceled: { id: j.id, error: TRAINING_RETIRED_MESSAGE } };
   }
   const manualUpdate = maintenance.status().hold?.owner === 'manual-update';
   if (j.status === 'running' && maintenance.held() && !manualUpdate) {
     maintenance.recoverOwned('media', j.id);
-    const reattach = await reattachSurvivingTrainer(j);
-    if (reattach) {
-      recoveringJobs.add(j.id);
-      return { reattach };
-    }
     // Preserve uncertain work and staged inputs; no paid replay or orphan
     // kill is safe merely because the observer process restarted.
     archive.push({ ...j, params: restoredParams(j) });
@@ -457,23 +433,6 @@ async function restoreInterruptedRunningJob(j) {
     console.log(`🔁 media-job [${j.id.slice(0, 8)}] remote ${j.kind} interrupted — re-enqueued for reconciliation`);
     return {};
   }
-  // #1332: a LoRA trainer is a detached child (spawnDetached) that can
-  // SURVIVE this restart. If its run still has a live (or just-finished-
-  // but-unprocessed) trainer, re-enqueue the SAME job flagged for
-  // re-attach instead of failing it — runTraining({reattach:true}) tails
-  // the survivor's output and finalizes it, so a run that completed during
-  // the downtime still registers its LoRA. The probe lives in loraTraining
-  // (it owns the run's on-disk layout); lazy-imported to avoid a static
-  // cycle. Falls through to the fail path when nothing survived.
-  const reattach = await reattachSurvivingTrainer(j);
-  if (reattach) {
-    if (maintenance.held()) {
-      maintenance.recoverOwned('media', j.id);
-      recoveringJobs.add(j.id);
-    }
-    console.log(`🔁 media-job [${j.id.slice(0, 8)}] training survived restart — re-enqueued for re-attach`);
-    return { reattach };
-  }
   if (j.kind === 'video-sharing') {
     const { cleanupInterruptedSharingCopy } = await loadMediaRuntimeModule('sharingCopy');
     await cleanupInterruptedSharingCopy(j.id).catch(err => console.error(`❌ Interrupted sharing copy cleanup failed: ${err.message}`));
@@ -523,35 +482,23 @@ export async function restoreQueueSnapshot() {
   const persistedJobs = Array.isArray(data?.jobs) ? data.jobs : [];
   const restartedFailedIds = [];
   const restartedCanceled = [];
-  // #1332: training jobs whose detached trainer survived the restart, to be
-  // re-enqueued (flagged for re-attach) at the FRONT of the queue so they
-  // resume before any new GPU work — collected during the reconcile, unshifted
-  // after it (so the position recompute below sees them).
-  const reattachJobs = [];
   // Video renders spawn a detached child that survives a pm2 restart, so an
   // interrupted render may still be alive and holding the GPU. Reap every
   // orphan under data/videos/.detached (and clean the scratch dirs) BEFORE
   // freeing lanes below — a job-id keyed reap would miss chained renders,
   // whose live child lives under a random inner chunk id, not the outer queue
-  // job id. (Training children are handled per-job below: a survivor is
-  // re-attached (#1332), and only a genuinely-dead one is reaped+failed in
-  // initLoraTraining.) This runs before the worker starts, so every dir
-  // present is an orphan from the prior process.
+  // job id. This runs before the worker starts, so every dir present is an
+  // orphan from the prior process.
   // Acknowledged manual updates use normal restart recovery: owned orphan
   // videos are reaped and interrupted jobs fail honestly; queues survive.
   const videoReap = maintenance.held() && maintenance.status().hold?.owner !== 'manual-update' ? { reaped: 0 }
     : await reapAndCleanDetachedDirs(join(PATHS.videos, '.detached')).catch(() => ({ reaped: 0 }));
   if (videoReap.reaped) console.log(`🧹 reaped ${videoReap.reaped} surviving render(s) on boot`);
   for (const persisted of persistedJobs) {
-    const { failedId, canceled, reattach } = await restorePersistedJob(persisted);
+    const { failedId, canceled } = await restorePersistedJob(persisted);
     if (failedId) restartedFailedIds.push(failedId);
     if (canceled) restartedCanceled.push(canceled);
-    if (reattach) reattachJobs.push(reattach);
   }
-  // Re-attach jobs resume ahead of everything else (they were mid-flight), so
-  // unshift them to the front. At most one (single GPU lane), but spread keeps
-  // their relative order if that ever changes.
-  if (reattachJobs.length) queue.unshift(...reattachJobs);
   if (!persistBlocked && Array.isArray(data?.jobs)) {
     const { cleanupOrphanTopazStaging } = await loadMediaRuntimeModule('topazStaging');
     await cleanupOrphanTopazStaging(listJobs()).catch(() => console.error('❌ Topaz staging cleanup failed; owned files were retained.'));

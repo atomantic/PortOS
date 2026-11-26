@@ -74,10 +74,6 @@ export function makeGenDispatcher(emitter, job, handlers, verb) {
     const hasProgress = typeof e.progress === 'number' && Number.isFinite(e.progress);
     const hasCurrentImage = typeof e.currentImage === 'string' && e.currentImage.length > 0;
     const message = e.message !== undefined ? e.message : synthesizeMessage(e, verb);
-    // Structured step/loss ride along on the wire when the emitter supplies
-    // them (LoRA training does) so the client plots a loss curve and keys
-    // sample thumbnails by step instead of re-parsing the message string.
-    // Additive + presence-guarded — image/video gen omit them, unaffected.
     // `etaMs` (video gen, #3801) rides along the same way: a history-calibrated
     // wall-clock estimate for the whole render. Presence-guarded on purpose —
     // an install with no matching measurement emits no key at all, which the

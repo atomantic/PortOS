@@ -21,8 +21,6 @@ const effects = vi.hoisted(() => ({
   resolveConflict: vi.fn(async () => ({ resolved: true })),
   publishArtwork: vi.fn(async () => ({ published: true })),
   archive: vi.fn(async () => ({ archived: true })),
-  getRun: vi.fn(async (id) => ({ id, status: 'completed' })),
-  promote: vi.fn(async () => ({ promoted: true })),
   signalSetup: vi.fn(async () => ({ ok: true })),
   signalSync: vi.fn(async () => ({ ok: true })),
   applyRemote: vi.fn(async () => ({ applied: true })),
@@ -60,7 +58,6 @@ vi.mock('../services/conflictJournalResolver.js', () => ({
 }));
 vi.mock('../services/games/index.js', () => ({ publishGameArtwork: effects.publishArtwork }));
 vi.mock('../services/dataManager.js', () => ({ archiveCategory: effects.archive }));
-vi.mock('../services/loraTraining/index.js', () => ({ getRunRequired: effects.getRun, promoteCheckpoint: effects.promote }));
 vi.mock('../lib/pythonSetup.js', () => ({}));
 vi.mock('../services/signalSync.js', () => ({ checkSetup: effects.signalSetup, runSync: effects.signalSync }));
 vi.mock('../services/dataSync.js', () => ({ applyRemote: effects.applyRemote }));
@@ -77,7 +74,6 @@ const workflows = [
   ['post', '/api/conflict-journal/example-conflict-1/resolve', { action: 'restore-all' }, effects.resolveConflict, 200],
   ['post', `/api/games/${gameId}/artwork/artwork-1/publish`, {}, effects.publishArtwork, 200],
   ['post', '/api/data/health/archive', { daysToKeep: 365 }, effects.archive, 200],
-  ['post', '/api/lora-training/runs/run-example/promote-checkpoint', { step: 300 }, effects.promote, 200],
   ['post', '/api/signal/sync', {}, effects.signalSync, 200],
   setupCheck,
   ['post', '/api/sync/digitalTwin/apply', { data: {} }, effects.applyRemote, 200],
@@ -89,7 +85,6 @@ const mounts = [
   ['/api/conflict-journal', (await import('./conflictJournal.js')).default],
   ['/api/games', (await import('./games.js')).default],
   ['/api/data', (await import('./dataManager.js')).default],
-  ['/api/lora-training', (await import('./loraTraining.js')).default],
   ['/api/signal', (await import('./signal.js')).default],
   ['/api/sync', (await import('./dataSync.js')).default],
 ];
@@ -110,6 +105,5 @@ describe('tracks, renders, publication and host-data routers behind the host-con
       source: '{ SinOsc.ar(440) * 0.1 }', durationSec: 4,
     }) });
     expect(effects.archive).toHaveBeenLastCalledWith('health', { daysToKeep: 365 });
-    expect(effects.promote).toHaveBeenLastCalledWith('run-example', 300);
   });
 });

@@ -4,8 +4,7 @@
  * Streaming ZIP parser (`parseZip`, unzipper-style); `collectZipEntry(entry, maxBytes?)` buffers one
  * `parseZip` entry into a Buffer (size-capped); `collectZipEntries(path, { match, onMatch, maxBytes?
  * })` owns the multi-entry import lifecycle (teardown, autodrain, per-entry await) leaving callers
- * only match/parse; `isZipUpload(file)` predicate for an uploaded ZIP; `extractZipEntryToBuffer(path,
- * match)` cracks one member out to a Buffer.
+ * only match/parse; `isZipUpload(file)` detects an uploaded ZIP.
  *
  * Usage (mirrors unzipper):
  *   createReadStream(path).pipe(parseZip())
@@ -359,43 +358,5 @@ export function collectZipEntries(zipPath, { match, onMatch, maxBytes = MAX_ZIP_
       })
       .on('close', () => Promise.all(reads).then(settle(resolve)).catch(settle(reject)))
       .on('error', settle(reject));
-  });
-}
-
-/**
- * Extract the first entry whose path satisfies `match` (a predicate or a
- * substring) from a zip on disk, resolving to its decompressed Buffer (or null
- * if nothing matched). Convenience over parseZip() for the random-single-member
- * case — e.g. cracking one `*_adapter.safetensors` out of a training
- * checkpoint zip long after the trainer process is gone (loraTraining).
- * Entries before the match are drained without inflation, so reaching a late
- * member costs a sequential disk read but no needless decompression.
- */
-export function extractZipEntryToBuffer(zipPath, match) {
-  const test = typeof match === 'function' ? match : (name) => name.includes(match);
-  return new Promise((resolve, reject) => {
-    let settled = false;
-    let matched = false;
-    const done = (fn, val) => { if (!settled) { settled = true; fn(val); } };
-    const src = createReadStream(zipPath);
-    src.on('error', (err) => done(reject, err));
-    const parser = parseZip();
-    parser.on('error', (err) => done(reject, err));
-    parser.on('entry', (entry) => {
-      if (matched || !test(entry.path)) { entry.autodrain(); return; }
-      matched = true;
-      const chunks = [];
-      const sink = new Writable({
-        write(chunk, _enc, cb) { chunks.push(chunk); cb(); },
-      });
-      // The match's inflate→sink pipeline finishes asynchronously, so the
-      // parser's 'close' (source EOF) can fire first — only let 'close'
-      // resolve when nothing matched; otherwise the sink 'finish' resolves.
-      sink.on('finish', () => done(resolve, Buffer.concat(chunks)));
-      sink.on('error', (err) => done(reject, err));
-      entry.pipe(sink);
-    });
-    parser.on('close', () => { if (!matched) done(resolve, null); });
-    src.pipe(parser);
   });
 }

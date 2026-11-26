@@ -672,7 +672,6 @@ describe('runPostRouteSequence — post-route boot order', () => {
       recoverStuckClassifications: step('recoverStuckClassifications', () => Promise.resolve()),
       recoverInterruptedRepoClones: step('recoverInterruptedRepoClones', () => Promise.resolve()),
       initMediaJobQueue: step('initMediaJobQueue', () => Promise.resolve()),
-      initLoraTraining: step('initLoraTraining', () => Promise.resolve()),
       initMediaJobDependentHooks: step('initMediaJobDependentHooks'),
       recoverStoryboardRuns: step('recoverStoryboardRuns', () => Promise.resolve()),
       resumeMediaJobCompletions: step('resumeMediaJobCompletions'),
@@ -698,7 +697,6 @@ describe('runPostRouteSequence — post-route boot order', () => {
       'recoverStuckClassifications',
       'recoverInterruptedRepoClones',
       'initMediaJobQueue',
-      'initLoraTraining',
       'initMediaJobDependentHooks',
       'recoverStoryboardRuns',
       'resumeMediaJobCompletions',
@@ -716,7 +714,6 @@ describe('runPostRouteSequence — post-route boot order', () => {
     const recorder = createRecorder();
     const deps = buildDeps(recorder);
     await runPostRouteSequence(gateStepsForSmokeBoot(deps, 'postRoute', true));
-    expect(SMOKE_BOOT_DISABLED_STEPS.postRoute).toContain('initLoraTraining');
     expect(recorder.calls).toEqual([
       'ensureSelf',
       'initSyncLog',
@@ -728,7 +725,6 @@ describe('runPostRouteSequence — post-route boot order', () => {
       'backfillSeriesCoverImages',
       'startListening'
     ]);
-    expect(recorder.calls).not.toContain('initLoraTraining');
     expect(deps.onFatal).not.toHaveBeenCalled();
   });
 
@@ -901,7 +897,7 @@ describe('runPostRouteSequence — post-route boot order', () => {
     expect(recorder.calls).toContain('startListening');
     const [line] = console.log.mock.calls.at(-1);
     expect(line).not.toContain('\n');
-    expect(line).toBe('⏱️  Boot phases (ms): self=10 syncLog=0 cloneRecovery=0 mediaQueue=0 lora=0 database=10 coverBackfillLoad=0 — 20ms since process start');
+    expect(line).toBe('⏱️  Boot phases (ms): self=10 syncLog=0 cloneRecovery=0 mediaQueue=0 database=10 coverBackfillLoad=0 — 20ms since process start');
   });
 
   it('is NOT fatal when a fire-and-forget step rejects', async () => {

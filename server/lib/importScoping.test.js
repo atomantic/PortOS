@@ -287,8 +287,8 @@ const SELECTION_CUTS = [
 
 // Runtimes, helpers, and terminal hooks registered in bootHooks.js (#17499, #18217).
 // Only pure event/mode/recorder leaves from those directories may be imported by mediaJobQueue.
-const QUEUE_IMPORTING_RUNTIME = /^services\/(?:videoGen\/(?:topazJob|upscaleJob|stitchJob|verticalJob)|loraTraining\/index)\.js$/;
-const MEDIA_QUEUE_BOOT_REGISTERED = /^services\/(?:creativeDirector\/|cos\/|pipeline\/|audioGen\/(?!events\.js$)|videoGen\/(?!events\.js$|executionRecorder\.js$)|imageGen\/(?!modes\.js$)|musicVideo\/|fableLoom\/|htmlComposition\/|superColliderRender\.js$|imageVerifier\.js$|loraTraining\/(?!events\.js$))/;
+const QUEUE_IMPORTING_RUNTIME = /^services\/videoGen\/(?:topazJob|upscaleJob|stitchJob|verticalJob)\.js$/;
+const MEDIA_QUEUE_BOOT_REGISTERED = /^services\/(?:creativeDirector\/|cos\/|pipeline\/|audioGen\/(?!events\.js$)|videoGen\/(?!events\.js$|executionRecorder\.js$)|imageGen\/(?!modes\.js$)|musicVideo\/|fableLoom\/|htmlComposition\/|superColliderRender\.js$|imageVerifier\.js$)/;
 const productionModulesIn = (dir) => readdirSync(abs(dir))
   .filter(file => file.endsWith('.js') && !file.endsWith('.test.js') && !file.endsWith('.test.fixture.js'))
   .map(file => `${dir}/${file}`);

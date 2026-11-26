@@ -315,8 +315,7 @@ export async function getCategoryDetail(categoryKey, { measure = false } = {}) {
 
   const items = await Promise.all(itemPromises);
   if (categoryKey === 'cache') await Promise.all(items.map(item => describeManagedRuntime(item, dirPath)));
-  // Resolve opaque training-run folders in one bounded-to-the-list
-  // lookup, including old runs beyond the training page's recent-run limit.
+  // Resolve opaque retired training-run folders against retained Postgres records.
   if (categoryKey === 'training-runs' && items.length) {
     const { query } = await import('../lib/db.js');
     const result = await query(
@@ -329,7 +328,6 @@ export async function getCategoryDetail(categoryKey, { measure = false } = {}) {
       if (run) {
         item.label = run.name || run.character?.name || run.baseModelId || item.name;
         item.description = [run.baseModelId, run.status].filter(Boolean).join(' · ');
-        if (run.datasetId) item.sourceHref = `/models/training/${encodeURIComponent(run.datasetId)}`;
       }
       item.sourceUnavailable = result === null ? 'Source lookup unavailable' : !run ? 'Run record no longer available' : null;
     }

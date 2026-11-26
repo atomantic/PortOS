@@ -602,7 +602,7 @@ function activeQueueSnapshot(config, kinds) {
       providerActive += 1;
       if (job.status === 'running') running += 1; else queued += 1;
     }
-    // Local work of a kind this contract does not federate (LoRA training) still
+    // Local work of a kind this contract does not federate (such as video stitching) still
     // holds a lane, so it counts toward `totalActive` while having no bucket —
     // which is why the two need not sum.
     //

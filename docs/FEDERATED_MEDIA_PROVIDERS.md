@@ -526,8 +526,7 @@ carries is a local-engine render, so today that is the serialized GPU lane.
 
 `byKind` lists only the negotiated kinds currently holding a lane; with the
 block present, an absent kind is idle. It need not sum to `totalActive`, which
-also counts local work of kinds this contract does not federate (LoRA training)
-occupying the same lanes.
+also counts local work such as video stitching that occupies the same lanes.
 
 `byKind` and `totalActive` describe the whole machine, while `running`/`queued`
 describe only the federated share of it — so the UI labels the federated

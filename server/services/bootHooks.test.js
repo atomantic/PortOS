@@ -38,7 +38,6 @@ vi.mock('./universeCharacterSheet.js', () => ({ initCharacterSheetCompletionHook
 vi.mock('./videoGen/upscaleJob.js', () => ({ runVideoUpscale: () => 'ltx' }));
 vi.mock('./videoGen/stitchJob.js', () => ({ runVideoStitch: () => 'stitch' }));
 vi.mock('./videoGen/verticalJob.js', () => ({ runVideoVertical: () => 'vertical' }));
-vi.mock('./loraTraining/index.js', () => ({ runTraining: () => 'training' }));
 vi.mock('./videoGen/local.js', () => ({ generateVideo: () => 'videoLocal' }));
 vi.mock('./imageGen/local.js', () => ({ generateImage: () => 'imageLocal' }));
 vi.mock('./audioGen/local.js', () => ({ generateAudio: () => 'audioLocal' }));
@@ -49,7 +48,7 @@ vi.mock('./musicVideo/excerptRender.js', () => ({ recoverStuckMusicVideoExcerpts
 
 // The entry point the queue's runtime table invokes for each registered name.
 const ENTRY = {
-  topazUpscale: 'runVideoUpscale', ltxUpscale: 'runVideoUpscale', stitch: 'runVideoStitch', vertical: 'runVideoVertical', training: 'runTraining',
+  topazUpscale: 'runVideoUpscale', ltxUpscale: 'runVideoUpscale', stitch: 'runVideoStitch', vertical: 'runVideoVertical',
   videoLocal: 'generateVideo', imageLocal: 'generateImage', audioLocal: 'generateAudio',
   creativeDirectorVideoExecution: 'settleVideoAttempt', musicVideoProjects: 'getProject',
 };
@@ -74,7 +73,6 @@ describe('boot hook registration (#17499, #18217)', () => {
     expect(() => requireMergedBranchCleanup()).toThrow(/not registered/);
     expect(() => requireMusicVideoRecovery()).toThrow(/not registered/);
     expect(() => requireMediaJobTerminalHooks()).toThrow(/not registered/);
-    await expect(loadMediaRuntimeModule('training')).rejects.toThrow(/not registered/);
     await expect(loadMediaRuntimeModule('videoLocal')).rejects.toThrow(/not registered/);
     await expect(loadMediaRuntimeModule('creativeDirectorVideoExecution')).rejects.toThrow(/not registered/);
 
@@ -105,7 +103,7 @@ describe('boot hook registration (#17499, #18217)', () => {
     const checkedNames = [...QUEUE_IMPORTING_RUNTIMES, 'videoLocal', 'imageLocal', 'audioLocal', 'creativeDirectorVideoExecution', 'musicVideoProjects'];
     const runtimes = await Promise.all(checkedNames.map(async name => [name, (await loadMediaRuntimeModule(name))[ENTRY[name]]()]));
     expect(Object.fromEntries(runtimes)).toEqual({
-      topazUpscale: 'topaz', ltxUpscale: 'ltx', stitch: 'stitch', vertical: 'vertical', training: 'training',
+      topazUpscale: 'topaz', ltxUpscale: 'ltx', stitch: 'stitch', vertical: 'vertical',
       videoLocal: 'videoLocal', imageLocal: 'imageLocal', audioLocal: 'audioLocal',
       creativeDirectorVideoExecution: 'settle', musicVideoProjects: 'project',
     });
@@ -115,7 +113,8 @@ describe('boot hook registration (#17499, #18217)', () => {
     expect(hooks.filter(([matches]) => matches({ params: { blenderModelReference: { modelId: 'm1' } } }))).toHaveLength(1);
     expect(hooks.filter(([matches]) => matches({ params: { deckCard: { deckId: 'd1' } } }))).toHaveLength(2);
     expect(hooks.filter(([matches]) => matches({ owner: 'pipeline:issue-1:comicPages:page1:proof', params: {} }))).toHaveLength(1);
-    expect(MEDIA_RUNTIME_MODULES.length).toBeGreaterThanOrEqual(39);
+    expect(MEDIA_RUNTIME_MODULES).not.toContain('training');
+    await expect(loadMediaRuntimeModule('training')).rejects.toThrow(/not registered/);
 
     const ensureHooks = createMediaJobHookLoader();
     const job = { params: { blenderModelReference: { modelId: 'm1' } } };
@@ -154,7 +153,7 @@ describe('boot hook registration (#17499, #18217)', () => {
   });
 
   it('refuses a runtime loader set that omits a kind the queue dispatches and rejects malformed terminal hooks', () => {
-    expect(() => registerMediaRuntimeModules({ topazUpscale: () => null })).toThrow(/ltxUpscale, stitch, vertical, training/);
+    expect(() => registerMediaRuntimeModules({ topazUpscale: () => null })).toThrow(/ltxUpscale, stitch, vertical/);
     expect(() => registerMediaJobTerminalHooks('not-an-array')).toThrow(/array of \[matcher, loader\] pairs/);
   });
 });

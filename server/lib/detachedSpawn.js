@@ -1179,7 +1179,7 @@ export async function isDetachedRunning(controlDir, expectedProcess = null) {
  * with it instead of orphaning them (#6170).
  * This is the fallback when reattachDetached can't (or shouldn't) re-attach —
  * e.g. a render lane with no re-attach path, or a probe that came back
- * non-reattachable. A caller that CAN re-attach (LoRA training, #1332) should
+ * non-reattachable. A caller that can reattach should
  * prefer reattachDetached so a still-healthy run keeps going rather than being
  * checkpoint-killed.
  *

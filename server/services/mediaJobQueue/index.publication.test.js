@@ -229,11 +229,11 @@ describe('backup snapshot admission for media completion', () => {
       startBackgroundServices: noWork, ensureSelf: noWork, initSyncLog: noWork,
       recoverStuckClassifications: noWork, recoverInterruptedRepoClones: noWork,
       initMediaJobQueue: options => mediaJobQueue.initMediaJobQueue({ ...options, prepareTerminalHooks }),
-      initLoraTraining: async () => {
+      initMediaJobDependentHooks: async () => {
+        expect(loadHook).not.toHaveBeenCalled();
         await mediaJobQueue.flushMediaJobQueue();
         beforeHooks = { job: persistedJobs()[0], rowCount: rows.size };
       },
-      initMediaJobDependentHooks: () => expect(loadHook).not.toHaveBeenCalled(),
       recoverStoryboardRuns: noWork,
       resumeMediaJobCompletions: mediaJobQueue.resumeMediaJobCompletions,
       initSharing: noWork, recoverCreativeDirectorProjects: noWork,
@@ -351,7 +351,7 @@ describe('backup snapshot admission for media completion', () => {
 // declare all four; this pins what each existing kind does today, including the
 // inherited default window/verb of html-composition and supercollider.
 describe('mediaJobQueue per-kind runtime wiring', () => {
-  const WINDOWS = { VIDEO: 4000, TRAINING: 6000, AUDIO: 8000, IMAGE: 10000 };
+  const WINDOWS = { VIDEO: 4000, AUDIO: 8000, IMAGE: 10000 };
   const KIND_CASES = [
     { kind: 'video', params: {}, entry: 'generateVideo', bus: 'video', verb: 'Rendering', window: WINDOWS.VIDEO },
     { kind: 'video-upscale', params: {}, entry: 'runVideoUpscale', bus: 'video', verb: 'Upscaling', window: WINDOWS.VIDEO },
@@ -364,15 +364,14 @@ describe('mediaJobQueue per-kind runtime wiring', () => {
     { kind: 'audio', params: {}, entry: 'generateAudio', bus: 'audio', verb: 'Generating', window: WINDOWS.AUDIO },
     { kind: 'supercollider', params: {}, entry: 'renderSuperCollider', bus: 'audio', verb: 'Generating', window: WINDOWS.IMAGE },
   ];
-  const busFor = async (name) => ({
+  const busFor = (name) => ({
     video: videoGenEvents,
     image: imageGenEvents,
     audio: audioGenEvents,
-    training: (await import('../loraTraining/events.js')).trainingEvents,
   })[name];
 
-  it('covers every newly dispatchable kind; historical training is recovery-only', () => {
-    expect(KIND_CASES.map(c => c.kind).sort()).toEqual(mediaJobQueue.JOB_KINDS.filter(kind => kind !== 'training').sort());
+  it('covers every dispatchable kind', () => {
+    expect(KIND_CASES.map(c => c.kind).sort()).toEqual([...mediaJobQueue.JOB_KINDS].sort());
   });
 
   describe.each(KIND_CASES)('$kind', ({ kind, params, entry, bus, verb, window }) => {
@@ -382,19 +381,18 @@ describe('mediaJobQueue per-kind runtime wiring', () => {
       const { jobId } = await mediaJobQueue.enqueueJob({ kind, params: { prompt: 'example', ...params } });
       await waitFor(() => stubs[entry].mock.calls.length === 1);
       expect(stubs[entry]).toHaveBeenCalledWith(expect.objectContaining({ jobId }));
-      // The three other buses must not move this job; only its own does.
-      for (const other of ['video', 'image', 'audio', 'training'].filter(b => b !== bus)) {
-        (await busFor(other)).emit('progress', { generationId: jobId, progress: 0.1, step: 1, totalSteps: 4 });
+      // The other buses must not move this job; only its own does.
+      for (const other of ['video', 'image', 'audio'].filter(b => b !== bus)) {
+        busFor(other).emit('progress', { generationId: jobId, progress: 0.1, step: 1, totalSteps: 4 });
       }
       expect(mediaJobQueue.getJob(jobId).statusMsg).not.toMatch(/step/);
-      (await busFor(bus)).emit('progress', { generationId: jobId, progress: 0.5, step: 2, totalSteps: 4 });
+      busFor(bus).emit('progress', { generationId: jobId, progress: 0.5, step: 2, totalSteps: 4 });
       expect(mediaJobQueue.getJob(jobId).statusMsg).toBe(`${verb} step 2/4`);
     });
 
     it('trips the idle watchdog at its own window', async () => {
       vi.useFakeTimers();
       process.env.MEDIA_JOB_WATCHDOG_VIDEO_MS = String(WINDOWS.VIDEO);
-      process.env.MEDIA_JOB_WATCHDOG_TRAINING_MS = String(WINDOWS.TRAINING);
       process.env.MEDIA_JOB_WATCHDOG_AUDIO_MS = String(WINDOWS.AUDIO);
       process.env.MEDIA_JOB_WATCHDOG_IMAGE_MS = String(WINDOWS.IMAGE);
       await importFresh();
@@ -421,9 +419,9 @@ describe('mediaJobQueue per-kind runtime wiring', () => {
           status: 'failed', error: expect.stringMatching(/watchdog timeout/),
         }));
       } finally {
-        for (const name of ['VIDEO', 'TRAINING', 'AUDIO', 'IMAGE']) delete process.env[`MEDIA_JOB_WATCHDOG_${name}_MS`];
+        for (const name of ['VIDEO', 'AUDIO', 'IMAGE']) delete process.env[`MEDIA_JOB_WATCHDOG_${name}_MS`];
         if (jobId) {
-          for (const name of ['video', 'image', 'audio', 'training']) (await busFor(name)).emit('failed', { generationId: jobId, error: 'Fixture teardown' });
+          for (const name of ['video', 'image', 'audio']) busFor(name).emit('failed', { generationId: jobId, error: 'Fixture teardown' });
         }
         await flush();
       }

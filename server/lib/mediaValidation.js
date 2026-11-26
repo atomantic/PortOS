@@ -2,12 +2,8 @@
  * Media-generation & local-model infrastructure Zod schemas (split out of the retired
  * validation.js catch-all, issue #1831).
  *
- * Media-generation & local-model infra schemas (LoRA training, local-LLM/Ollama/LM Studio management,
- * media-collection bulk ops).
- *
- * Covers LoRA training config + run params, the local-LLM (Ollama / LM Studio)
- * backend management routes, OpenWorld snapshot config/query, and the media-
- * collection bulk add/remove payloads, plus the media sketch save body.
+ * Covers local-LLM backend management (Ollama / LM Studio), OpenWorld
+ * snapshot config/query, media-collection bulk add/remove and media sketch saves.
  */
 import { z } from 'zod';
 import { isSplashContextWindow } from './splashRuntime.js';

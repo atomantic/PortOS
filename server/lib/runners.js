@@ -103,7 +103,7 @@ export const flux2VariantFromModel = (model) => {
 };
 
 // The gated bf16 base repo per FLUX.2 Klein size: what a LoRA is trained against AND the only runtime that can load one at render time (PEFT can't inject adapters into SDNQ/int8-quantized Linear layers,
-// so a LoRA on a quantized klein silently no-ops, see scripts/lora_utils.apply_loras). The image runner routes LoRA renders onto it. Single source of truth: LoRA training (FLUX2_TRAIN_REPOS) re-exports it.
+// so a LoRA on a quantized klein silently no-ops, see scripts/lora_utils.apply_loras). The image runner routes LoRA renders onto it.
 export const FLUX2_BF16_BASE_REPOS = Object.freeze({
   '4b': 'black-forest-labs/FLUX.2-klein-4B',
   '9b': 'black-forest-labs/FLUX.2-klein-9B',

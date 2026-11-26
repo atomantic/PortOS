@@ -10,7 +10,7 @@ import {
   rateLimitWaitMessage, quotaCooldownResumeAt, QUOTA_WAIT_PATTERN, quotaWaitMessage,
 } from './limits.js';
 import {
-  queue, cloudRunning, remoteRunning, archive, videoHolds, mediaJobEvents, recoveringJobs, getRunningJob,
+  queue, cloudRunning, remoteRunning, archive, videoHolds, mediaJobEvents, getRunningJob,
   setRunningJob, runningJobs, trackOperation, trackTerminalOperation, isRemoteReconcile, isTopazUpscale,
   dispatchOperations, laneOperations,
 } from './state.js';
@@ -146,9 +146,7 @@ function startLaneJob(job, { lane, planWakeAt }, enqueueJob) {
     }
   }
   delete job.peerHold;
-  const permit = recoveringJobs.has(job.id)
-    ? maintenance.recoverOwned('media', job.id)
-    : maintenance.tryAdmit('media', job.id, { reconnect: isRemoteReconcile(job) });
+  const permit = maintenance.tryAdmit('media', job.id, { reconnect: isRemoteReconcile(job) });
   if (!permit) return false;
   queue.splice(idx, 1);
   job.status = 'running';
@@ -248,7 +246,6 @@ function startLaneJob(job, { lane, planWakeAt }, enqueueJob) {
       const { markSnapshotState, withReviewedSnapshotLock } = await loadMediaRuntimeModule('reviewedReference');
       await withReviewedSnapshotLock(() => markSnapshotState(job.params.reviewedReferenceSnapshot, 'settled')).catch(error => console.error(`❌ Reviewed image settlement retained for ${job.id}: ${error.message}`));
     }
-    recoveringJobs.delete(job.id);
     // Lifecycle evidence certifies recovery only together with this final flush.
     const release = decideOwnershipRelease({
       evidence: lifecycleEvidence, flushed: settled.ok, canCompleteRecovery: Boolean(permit.completeRecovery),
@@ -329,9 +326,8 @@ function waitForWorker(delayMs = Infinity) {
 async function drainLoop(enqueueJob) {
   while (!workerState.quiesced) {
     workerState.pendingWake = false;
-    if (!queue.length) { await waitForWorker(); continue; }
-    const held = maintenance.held();
-    const candidates = queue.filter((job) => !job.admitting && (!held || recoveringJobs.has(job.id)));
+    if (!queue.length || maintenance.held()) { await waitForWorker(); continue; }
+    const candidates = queue.filter((job) => !job.admitting);
     if (!candidates.length) { await waitForWorker(); continue; }
     await prepareQueuedVideos(candidates);
     // Shutdown may have begun while cohorts resolved; exit without promoting.

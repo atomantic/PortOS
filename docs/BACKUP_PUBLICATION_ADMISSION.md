@@ -147,14 +147,13 @@ Admission inventory (`withBackupAssetPublication`):
 | Gallery image deletion's universe canon purge (`galleryImageDeletion.js`) and character reference sheet deletion (`universeCharacterSheet.js`) | Covered from file removal through the universe pointer purge (#9982) |
 | Video-history deletion, including downloaded-video deletion (`videoGen/historyOps.js`) | Covered through file/history/index removal (#9982) |
 | Gallery video upload, download finalization and poster edits (`videoUpload.js`, `videoDownload.js`, `videoGen/poster.js`) | Covered (#9982): uploads lease byte installation through history and rollback; downloads lease poster creation through history and rollback after yt-dlp finishes; poster edits lease creation, history and cleanup |
-| Retained LoRA dataset record edits from the surviving-trainer observer (`loraDatasets.js`) | Covered through the record commit (#9982); dataset uploads, crops and deletion are retired |
 | Voice Studio audition and character assignment (`voice/studio.js`) | Covered from source-file write/copy through profile-row commit and failed-write cleanup (#9982) |
 | Music Video development artifact import/generated save and vocal-stem attachment (`musicVideo/devArtifactService.js`, `musicVideo/vocalStem.js`) | Covered from final file copy/write through project-record commit and failed-write cleanup (#9982) |
 | Music-library upload copy and deletion (`pipeline/musicLibrary.js`) | Covered (#9982): the copy and the unlink each hold one lease; the delete route intentionally leaves existing issue/project references to the removed file |
 | Voice benchmark audio and row (`voice/profileBenchmarks.js`), cloned-candidate recording and row (`voice/profiles.js`), and the fine-tune job record that names each sealed checkpoint (`voice/fineTuning.js`) | Covered (#9982); promoting a checkpoint writes only a row naming bytes the job record already named |
 | Pipeline audio stage rows: generated music, cue render and voice-over line render (`routes/pipeline/audio.js`) | Covered (#9982): the row that first names the WAV takes the lease; the sidecar or synthesizer writes the WAV before it |
 | Music-library upload attach: Music Designer upload, pipeline music upload, YouTube import and Suno import (`routes/tracks.js`, `routes/pipeline/audio.js`, `trackYoutubeImport.js`, `trackSunoImport.js`) | Reference-only: the admitted library import copies the file first and the track or issue row commits after it |
-| LoRA training and deployed LoRAs: trained-adapter registration, checkpoint promotion over the deployed adapter, the promoted-checkpoint preview copy, the progress row naming trainer-written samples and checkpoints, run deletion, and LoRA deletion from the LoRA manager or Media Models (`loraTraining/index.js`, `loras.js`) | Covered (#9982): registration and promotion hold one lease from the adapter write through the run row and dataset flag; Civitai and Hugging Face installs admit the sidecar that first names the already-linked weights |
+| Installed LoRA adapter deletion and Civitai/Hugging Face installs (`loras.js`), plus explicit removal of retired training files (`dataMaintenance.js`) | Covered. Installs admit the sidecar that names the linked weights. Retired-data removal admits the filesystem changes |
 | Music Video final and excerpt renders, publishing-kit builds and composition document versions (`musicVideo/finalRenderJob.js`, `musicVideo/excerptRender.js`, `musicVideo/publishKit.js`, `musicVideo/compositionDocument.js`) | Covered (#9982): the encoder or import writes the files in place; the history entry and project row that first name them commit under one lease |
 | Music Video excerpt deletion (`musicVideo/excerptService.js`) | Reference-only: the project row drops the excerpt before its unreferenced video and contact sheet are unlinked |
 | Music Video performance repair, MIDI transcription and the autonomous Suno song (`musicVideo/performanceRepair.js`, `audioMidiTranscription.js`, `musicVideo/autonomous/autonomousStages.js`) | Covered by #9982. Write the asset first. Its first reference (repair revision, project MIDI pointer, or track render) commits under one lease, which also covers unlinking a declined MIDI result. |
@@ -199,18 +198,6 @@ stale derived rows for reconciliation, and a delete can leave other records
 that referenced the asset. The admission timeout/failure path still refuses the
 snapshot and preserves older recovery points.
 
-LoRA datasets keep their metadata beside their images rather than in PostgreSQL.
-Their admitted workflows prevent rsync from capturing a half-applied image/record
-mutation too: upload/import normalization, reference-sheet cropping, generated
-image copies and recovery replacements, and image/dataset removal each hold one
-lease through their final metadata or file operation. Record edits acquire
-admission before joining the dataset write queue. Completion listeners acquire
-their own lease synchronously during queue fan-out; rendering, queue waits,
-captioning, and the vision crop proposal stay outside admission. Local image
-normalization/cropping and copying are included in the lease. Pending `rendering`
-entries can still name files that do not exist yet, and admission does not repair
-pre-existing missing files or make failed writes transactional.
-
 Voice Studio holds admission after inference has produced its WAV and before
 creating or copying final source assets, until the corresponding profile row
 commits or failed-write cleanup finishes. Music Video development artifacts
@@ -252,19 +239,11 @@ possibly while a cut was running, and a row that waits out the cut can only name
 audio the snapshot copied, or nothing. Music library uploads need no lease of
 their own at the row: the admitted import copies the file first.
 
-LoRA training registers its adapter, sidecar, run row and dataset flag under one
-lease, and checkpoint promotion does the same while it overwrites the deployed
-adapter in place; the completion event fires after the lease so the media
-queue's own admitted commit never borrows it. The trainer writes samples and
-checkpoints itself, so only the progress row that first names them takes the
-lease, and a progress-only update never waits out a cut. Run deletion holds one
-lease from the artifact-directory removal through the LoRA unlink, the dataset
-reset and the row delete. A LoRA deleted from the manager leaves runs and other
-records that named it pointing at the removed file, so that unlink holds the
-lease too. A downloaded LoRA is linked under its final name before its sidecar
-is written; the sidecar write takes the lease, so a snapshot can hold weights
-without their sidecar (they list with fallback metadata) but never a sidecar
-without its weights.
+Deleting an installed LoRA holds the lease through its unlink. A downloaded
+LoRA is linked under its final name before its sidecar is written. The sidecar
+write takes the lease, so a snapshot can hold weights with fallback metadata
+until their sidecar is available. Explicit removal of retired training data
+holds a lease through the filesystem operation.
 
 A Music Video render holds no lease while it encodes. Once the MP4 is on disk,
 the final render's poster, its video-history entry and the project row naming

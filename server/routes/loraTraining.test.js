@@ -1,100 +1,23 @@
-import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
+import { expect, it } from 'vitest';
 import express from 'express';
-import { tmpdir } from 'os';
-import { join } from 'path';
-import { mkdtemp, rm, writeFile } from 'fs/promises';
-import { request } from '../lib/testHelper.js';
-
-// The route module pulls in the whole training service graph at import time —
-// stub every collaborator so the suite only exercises the HTTP layer.
-const svc = vi.hoisted(() => ({ samplesDir: '' }));
-vi.mock('../services/loraTraining/index.js', () => ({
-  cancel: vi.fn(() => false),
-  getRunRequired: vi.fn(async (id) => ({ id, status: 'completed' })),
-  listCheckpoints: vi.fn(),
-  listRuns: vi.fn(),
-  promoteCheckpoint: vi.fn(),
-  runDir: vi.fn(),
-  runSamplesDir: () => svc.samplesDir,
-}));
-vi.mock('../services/settings.js', () => ({ getSettings: async () => ({}) }));
-vi.mock('../services/mediaJobQueue/index.js', () => ({
-  attachSseClient: vi.fn(),
-  cancelJob: vi.fn(),
-}));
-vi.mock('../services/loras.js', () => ({ deleteLora: vi.fn() }));
-vi.mock('../lib/pythonSetup.js', () => ({
-  resolveFlux2Python: () => null,
-  isFlux2VenvHealthy: async () => false,
-  resolveMfluxPython: () => null,
-}));
-
 import { errorMiddleware } from '../lib/errorHandler.js';
+import { request } from '../lib/testHelper.js';
 import loraTrainingRoutes from './loraTraining.js';
 
-function makeApp() {
+it.each([
+  ['post', '/runs'],
+  ['post', '/runs/example/resume'],
+  ['post', '/runs/example/cancel'],
+  ['post', '/runs/example/promote-checkpoint'],
+  ['delete', '/runs/example'],
+  ['get', '/runs/example/checkpoints'],
+  ['get', '/runs/example/samples/step-1.png'],
+])('returns the retirement response for %s %s', async (method, path) => {
   const app = express();
   app.use('/api/lora-training', loraTrainingRoutes);
   app.use(errorMiddleware);
-  return app;
-}
 
-describe('lora-training sample serving', () => {
-  let app;
-  beforeEach(async () => {
-    app = makeApp();
-    svc.samplesDir = await mkdtemp(join(tmpdir(), 'portos-lora-samples-'));
-  });
-  afterEach(async () => {
-    await rm(svc.samplesDir, { recursive: true, force: true });
-  });
-
-  it('serves an existing sample', async () => {
-    await writeFile(join(svc.samplesDir, 'step-1.png'), 'png-bytes');
-    const r = await request(app).get('/api/lora-training/runs/run-1/samples/step-1.png');
-    expect(r.status).toBe(200);
-  });
-
-  // The 404 fires from the sendFile callback, outside asyncHandler's catch —
-  // it must still carry the shared `{ error, code, timestamp }` envelope (#2845).
-  it('returns the standard error envelope when the sample is missing', async () => {
-    const r = await request(app).get('/api/lora-training/runs/run-1/samples/missing.png');
-    expect(r.status).toBe(404);
-    expect(r.body.error).toBe('Sample not found');
-    expect(r.body.code).toBe('NOT_FOUND');
-    expect(typeof r.body.timestamp).toBe('number');
-  });
-});
-
-it('retires launch, resume and legacy deletion while retaining history controls', async () => {
-  const app = makeApp();
-  for (const [method, path] of [['post', '/runs'], ['post', '/runs/example/resume'], ['delete', '/runs/example']]) {
-    const response = await request(app)[method](`/api/lora-training${path}`).send({});
-    expect(response.status).toBe(410);
-    expect(response.body.code).toBe('LORA_TRAINING_RETIRED');
-  }
-  for (const path of ['/status', '/runs/example/events', '/runs/example/samples']) {
-    expect((await request(app).get(`/api/lora-training${path}`)).status, path).toBe(404);
-  }
-});
-
-it('can explicitly cancel an observed orphan when the queue record is missing', async () => {
-  const { cancel } = await import('../services/loraTraining/index.js');
-  const { cancelJob } = await import('../services/mediaJobQueue/index.js');
-  const { getRunRequired } = await import('../services/loraTraining/index.js');
-  vi.mocked(getRunRequired).mockResolvedValueOnce({ id: 'example-run', jobId: 'example-job', status: 'running' });
-  vi.mocked(cancelJob).mockResolvedValueOnce({ ok: false, code: 'NOT_FOUND' });
-  vi.mocked(cancel).mockReturnValueOnce(true);
-  const response = await request(makeApp()).post('/api/lora-training/runs/example-run/cancel');
-  expect(response.status).toBe(200);
-  expect(response.body).toMatchObject({ ok: true, status: 'canceling', orphan: true });
-  expect(cancel).toHaveBeenCalledWith('example-job');
-});
-
-it('preserves the terminal-run cancellation contract when no queue job or observer exists', async () => {
-  const { getRunRequired } = await import('../services/loraTraining/index.js');
-  vi.mocked(getRunRequired).mockResolvedValueOnce({ id: 'example-ended', jobId: null, status: 'completed' });
-  const response = await request(makeApp()).post('/api/lora-training/runs/example-ended/cancel');
-  expect(response.status).toBe(409);
-  expect(response.body.code).toBe('ALREADY_TERMINAL');
+  const response = await request(app)[method](`/api/lora-training${path}`);
+  expect(response.status).toBe(410);
+  expect(response.body.code).toBe('LORA_TRAINING_RETIRED');
 });

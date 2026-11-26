@@ -1,9 +1,8 @@
 /**
  * Live-work probes for Data Manager category purges (issue #3342).
  *
- * Three reproducible-scratch categories must not be purged while something is USING
- * them: `image-clean-tmp` (queued/running Image Cleaner inputs), `training-runs`
- * (a LoRA trainer's checkpoints) and `update-detached` (the self-update control files).
+ * Protect scratch inputs and control files that are still in use. Retired LoRA
+ * data also needs a read-only check for detached writers from old installs.
  *
  * Each probe resolves `{ busy, reason }`; `reason` is user-facing (the 409
  * `CATEGORY_BUSY` body and the row text in place of Purge), so it names what is
@@ -23,9 +22,6 @@ import { collectActiveFederatedAssetBasenames } from './federatedMedia/assetStor
 import { isUpdateControlTracked } from './updateControlActivity.js';
 
 const IDLE = { busy: false, reason: null };
-
-// Jobs the media queue still owes work to.
-const IN_FLIGHT_STATUSES = new Set(['queued', 'running']);
 
 // A missing directory has nothing to lose (ENOENT reads as empty); any OTHER failure
 // rethrows so `resolveCategoryBusy` fails closed.
@@ -79,25 +75,8 @@ export async function federatedMediaInboxBusy({ jobs = null, entries = null } = 
   };
 }
 
-/**
- * `data/training-runs`. Two sources, because neither alone covers a restart:
- *   1. The media queue's GPU lane (`kind: 'training'`), cheaper than a Postgres round-trip.
- *   2. Each run's `.detached` control dir: a trainer survives a pm2 restart, so before
- *      `initLoraTraining()` reconciles, a live trainer can have no queue job.
- *
- * @param {{ jobs?: Array, runsDir?: string }} [state] - injected job list / runs root
- * @returns {Promise<{ busy: boolean, reason: string|null }>}
- */
-export async function trainingRunsBusy({ jobs = null, runsDir = null } = {}) {
-  const all = jobs || listJobs({ kind: 'training' });
-  const active = (Array.isArray(all) ? all : []).filter((job) => IN_FLIGHT_STATUSES.has(job?.status));
-  if (active.length > 0) {
-    return {
-      busy: true,
-      reason: `${active.length} LoRA training run(s) queued or running — purging now would delete checkpoints out from under a live trainer. Purge once training finishes.`
-    };
-  }
-
+// Older installs may still have a detached trainer writing to these directories.
+export async function trainingRunsBusy({ runsDir = null } = {}) {
   const dir = runsDir || join(PATHS.data, 'training-runs');
   const runs = (await listDirEntries(dir)).filter(e => e.isDirectory()).map(e => e.name);
   // Not caught: a probe that cannot answer must fail closed in `resolveCategoryBusy`.
@@ -107,7 +86,7 @@ export async function trainingRunsBusy({ jobs = null, runsDir = null } = {}) {
   if (!surviving.some(Boolean)) return IDLE;
   return {
     busy: true,
-    reason: 'A LoRA trainer that outlived a restart is still writing here — purge once it finishes or is cancelled.'
+    reason: 'A LoRA trainer that outlived a restart is still writing here — wait for it to finish before removing the data.'
   };
 }
 

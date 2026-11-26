@@ -186,8 +186,6 @@ export const UNCALLED_ROUTE_ALLOWLIST = Object.freeze({
     '/api/eidoverse/world/foundations/:id/adopt',
     '/api/film-styles/:id/prompt',
     '/api/git/commits',
-    '/api/lora-training/runs/:id/cancel',
-    '/api/lora-training/runs/:id/promote-checkpoint',
     '/api/managed-visitor-admin',
     '/api/managed-visitor-admin/:appId/credential',
     '/api/meatspace/post/memory-drill',
@@ -254,7 +252,6 @@ export const UNCALLED_ROUTE_ALLOWLIST = Object.freeze({
     // docs/features/tailcat-peers.md documents the operator read without the full capability.
     'GET /api/instances/peers/tailcat/devices',
     '/api/html-composition/render',
-    '/api/lora-training/runs/:id/samples/:filename',
     // docs/features/post.md documents item editing over the API.
     'PUT /api/meatspace/post/memory-items/:id',
     '/api/music-video/:id/composition/document/file',
@@ -265,7 +262,6 @@ export const UNCALLED_ROUTE_ALLOWLIST = Object.freeze({
     '/api/voice/speak',
   ]),
   'legacy-client-compat': Object.freeze([
-    '/api/lora-training/runs',
     // Universe pickers in older client builds request full records (before #17115).
     'GET /api/universe-builder',
     '/api/voice/tts/status',
