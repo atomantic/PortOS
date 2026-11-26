@@ -21,6 +21,7 @@ export default function GraphTimeline({
   // universe" at the end, so the strip always lands somewhere meaningful.
   useEffect(() => {
     if (!playing || total === 0) return undefined;
+    // biome-ignore lint/plugin/lint-no-view-interval: Advances the universe-graph playback position one issue per tick; no I/O.
     const timer = setInterval(() => {
       const next = timeIndex == null ? 0 : timeIndex + 1;
       if (next >= total) {

@@ -1256,6 +1256,7 @@ function AnalysisRunBanner({ kind, label, startedAt }) {
   useEffect(() => {
     if (!startedAt) return undefined;
     setElapsed(Math.floor((Date.now() - startedAt) / 1000));
+    // biome-ignore lint/plugin/lint-no-view-interval: Elapsed-time clock for the analysis-run banner; no I/O.
     const id = setInterval(() => {
       setElapsed(Math.floor((Date.now() - startedAt) / 1000));
     }, 1000);
