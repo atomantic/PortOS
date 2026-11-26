@@ -190,7 +190,7 @@ router.post('/goals/:id/activities', asyncHandler(async (req, res) => {
 
 // DELETE /api/digital-twin/identity/goals/:id/activities/:activityName — Unlink activity from goal
 router.delete('/goals/:id/activities/:activityName', asyncHandler(async (req, res) => {
-  const goal = await identityService.unlinkActivity(req.params.id, decodeURIComponent(req.params.activityName));
+  const goal = await identityService.unlinkActivity(req.params.id, req.params.activityName);
   if (!goal) {
     throw new ServerError('Goal not found', { status: 404, code: 'NOT_FOUND' });
   }
@@ -209,7 +209,7 @@ router.post('/goals/:id/calendars', asyncHandler(async (req, res) => {
 
 // DELETE /api/digital-twin/identity/goals/:id/calendars/:subcalendarId — Unlink calendar from goal
 router.delete('/goals/:id/calendars/:subcalendarId', asyncHandler(async (req, res) => {
-  const goal = await identityService.unlinkCalendarFromGoal(req.params.id, decodeURIComponent(req.params.subcalendarId));
+  const goal = await identityService.unlinkCalendarFromGoal(req.params.id, req.params.subcalendarId);
   if (!goal) {
     throw new ServerError('Goal not found', { status: 404, code: 'NOT_FOUND' });
   }

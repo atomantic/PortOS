@@ -8,6 +8,8 @@ vi.mock('../services/identity.js', async (importOriginal) => ({
   setBirthDate: vi.fn(),
   createGoal: vi.fn(),
   deleteGoal: vi.fn(),
+  unlinkActivity: vi.fn(),
+  unlinkCalendarFromGoal: vi.fn(),
 }));
 vi.mock('../services/goalCalendarScheduler.js', () => ({
   scheduleTimeBlocks: vi.fn(), removeScheduledEvents: vi.fn(), rescheduleTimeBlocks: vi.fn(),
@@ -52,6 +54,26 @@ describe('/api/digital-twin/identity goals', () => {
     expect((await request(app).delete(`${BASE}/goals/missing`)).status).toBe(404);
     identityService.deleteGoal.mockResolvedValue(true);
     expect((await request(app).delete(`${BASE}/goals/g1`)).status).toBe(204);
+  });
+
+  it('passes Express-decoded activity names through unchanged when unlinking', async () => {
+    identityService.unlinkActivity.mockResolvedValue({ id: 'g1' });
+
+    const percentName = await request(app).delete(`${BASE}/goals/g1/activities/100%25%20focus`);
+    expect(percentName.status).toBe(200);
+    expect(identityService.unlinkActivity).toHaveBeenCalledWith('g1', '100% focus');
+
+    const encodedName = await request(app).delete(`${BASE}/goals/g1/activities/a%2520b`);
+    expect(encodedName.status).toBe(200);
+    expect(identityService.unlinkActivity).toHaveBeenLastCalledWith('g1', 'a%20b');
+  });
+
+  it('passes Express-decoded calendar identifiers through unchanged when unlinking', async () => {
+    identityService.unlinkCalendarFromGoal.mockResolvedValue({ id: 'g1' });
+
+    const res = await request(app).delete(`${BASE}/goals/g1/calendars/calendar%25id`);
+    expect(res.status).toBe(200);
+    expect(identityService.unlinkCalendarFromGoal).toHaveBeenCalledWith('g1', 'calendar%id');
   });
 
 });

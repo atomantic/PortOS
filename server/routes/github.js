@@ -45,7 +45,7 @@ router.post('/repos/sync', asyncHandler(async (req, res) => {
  * PUT /api/github/repos/:fullName — update repo flags/secrets
  */
 router.put('/repos/:fullName', asyncHandler(async (req, res) => {
-  const fullName = decodeURIComponent(req.params.fullName);
+  const fullName = req.params.fullName;
   const body = validateRequest(githubRepoUpdateSchema, req.body);
   const repo = await githubService.updateRepoFlags(fullName, body);
   res.json(repo);
@@ -55,7 +55,7 @@ router.put('/repos/:fullName', asyncHandler(async (req, res) => {
  * POST /api/github/repos/:fullName/archive — archive a repo
  */
 router.post('/repos/:fullName/archive', asyncHandler(async (req, res) => {
-  const fullName = decodeURIComponent(req.params.fullName);
+  const fullName = req.params.fullName;
   const repo = await githubService.setRepoArchived(fullName, true);
   res.json(repo);
 }));
@@ -64,7 +64,7 @@ router.post('/repos/:fullName/archive', asyncHandler(async (req, res) => {
  * POST /api/github/repos/:fullName/unarchive — unarchive a repo
  */
 router.post('/repos/:fullName/unarchive', asyncHandler(async (req, res) => {
-  const fullName = decodeURIComponent(req.params.fullName);
+  const fullName = req.params.fullName;
   const repo = await githubService.setRepoArchived(fullName, false);
   res.json(repo);
 }));
