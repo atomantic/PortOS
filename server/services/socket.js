@@ -160,6 +160,7 @@ const PEER_RELAY_ALLOWED_EVENTS = new Set(['cos:subscribe', 'cos:unsubscribe', '
 // The HTTP twin of this set is isHostControlRoute in lib/hostControlRoutes.js.
 const HOST_CONTROL_SOCKET_EVENTS = new Set([
   'app:update', 'app:standardize', 'app:deploy', 'standardize:start', 'detect:start', 'error:recover', 'logs:subscribe',
+  'agent-processes:subscribe',
   'voice:call:attach', 'voice:call:audio', 'voice:call:hangup', 'voice:capture:start', 'voice:dictation:set',
   'voice:output:available', 'voice:output:claim',
 ]);
@@ -186,6 +187,7 @@ const hostControlRefusal = (event, payload) => {
   if (event === 'standardize:start') return ['standardize:complete', { success: false, ...refusal }];
   if (event === 'detect:start') return ['detect:complete', { success: false, ...refusal }];
   if (event === 'logs:subscribe') return ['logs:error', { ...refusal, processName: payload?.processName }];
+  if (event === 'agent-processes:subscribe') return ['agent-processes:error', refusal];
   return [`${event}:error`, { ...refusal, appId: payload?.appId }];
 };
 
