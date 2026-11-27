@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useState } from 'react';
+import { Link } from 'react-router';
 import toast from './ui/Toast';
 import ProviderModelSelector from './ProviderModelSelector';
 import ListLoadError from './ui/ListLoadError';
@@ -92,7 +93,7 @@ export default function FeatureProviderPicker({ featureKey, fallbackId = 'claude
     return (
       <div className="text-sm text-port-warning">
         No enabled CLI providers configured. Add one under{' '}
-        <a className="text-port-accent underline" href="/ai">AI Providers</a>.
+        <Link className="text-port-accent underline" to="/ai/presets">AI Providers</Link>.
       </div>
     );
   }
@@ -101,12 +102,13 @@ export default function FeatureProviderPicker({ featureKey, fallbackId = 'claude
     <div className="space-y-2">
       <ProviderModelSelector
         providers={providers}
+        compose={false}
         selectedProviderId={providerId}
         selectedModel={model}
         availableModels={availableModels}
         onProviderChange={(id) => {
           const p = providers.find((pr) => pr.id === id);
-          persist(id, p?.defaultModel || filterSelectableModels(p?.models)[0] || '');
+          if (p) persist(id, p.defaultModel || filterSelectableModels(p.models)[0] || '');
         }}
         onModelChange={(m) => persist(providerId, m)}
       />
