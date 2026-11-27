@@ -1,4 +1,5 @@
 import { acquireBackupSnapshotCut } from '../../lib/backupSnapshotBoundary.js';
+import { waitForAbort } from '../../lib/testHelper.js';
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { mkdir, rm, readFile, writeFile } from 'fs/promises';
 import { existsSync } from 'fs';
@@ -591,9 +592,11 @@ describe('imageGen/fal — generateImage', () => {
       endpoint: 'fal-ai/nano-banana-pro/edit',
       customFetch: async (url, opts) => {
         if (url === FAL_STORAGE && opts.method === 'POST') {
-          opts.signal?.addEventListener('abort', () => { abortObserved = true; });
+          const aborted = waitForAbort(opts.signal);
           uploadStartedResolve();
-          await new Promise((r) => setTimeout(r, 1000));
+          await aborted;
+          abortObserved = true;
+          opts.signal.throwIfAborted();
         }
         return undefined;
       },
@@ -651,8 +654,9 @@ describe('imageGen/fal — generateImage', () => {
           if (storagePostCount === 1) {
             return jsonResponse({ detail: 'bad reference' }, false, 400);
           }
-          opts.signal?.addEventListener('abort', () => { pendingUploadAborted = true; });
-          await new Promise((r) => setTimeout(r, 1000));
+          await waitForAbort(opts.signal);
+          pendingUploadAborted = true;
+          opts.signal.throwIfAborted();
         }
         return undefined;
       },
