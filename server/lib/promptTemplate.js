@@ -17,7 +17,7 @@
  *
  * Why this exists: the upstream toolkit engine matches `\w+` for keys, which
  * silently drops every `{{a.b}}` reference and leaves the literal text in
- * the output — a real bug today (cos-evaluate.md `{{metadata.context}}` is
+ * the output — a real bug today (`{{metadata.context}}` is
  * dead code). Routing every prompt through this engine fixes those legacy
  * templates AND lets new templates author dotted lookups directly.
  *
@@ -93,7 +93,7 @@ export function applyTemplate(template, data = {}) {
       if (value && typeof value === 'object') {
         // Object section — narrow the context by spreading the object on
         // top of the parent so dotted lookups inside still see ambient
-        // variables (matches the cos-agent-briefing pattern of opening
+        // variables (matches the CoS prompt pattern of opening
         // {{#task}} then referencing {{task.id}} or just {{id}}).
         return applyTemplate(content, { ...data, ...value });
       }

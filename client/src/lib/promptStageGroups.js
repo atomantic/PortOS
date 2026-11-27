@@ -37,8 +37,8 @@ const LOWERED_WORD_PREFIXES = STAGE_WORD_PREFIXES.map((prefix) => [prefix, prefi
 
 /**
  * The group a stage belongs to, derived from its display name (falling back to
- * its key when a stage has no name). Hyphens normalize to spaces first so a
- * name-less `cos-evaluate` still lands under CoS rather than in Other.
+ * its key when a stage has no name). Hyphens normalize to spaces first so
+ * name-less stages with known family prefixes still land in their family.
  */
 export function stageGroupLabel(displayName) {
   const name = String(displayName || '').trim();

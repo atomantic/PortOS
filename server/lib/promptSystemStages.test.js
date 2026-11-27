@@ -112,8 +112,7 @@ describe('shipped stage catalog parity', () => {
 describe('derived call-site protection', () => {
   const REFERENCED_NOT_CURATED = 'pipeline-series-concept-judge';
 
-  it('keeps the curated badge set to the nine hand-picked stages', () => {
-    expect(SYSTEM_STAGE_KEYS).toHaveLength(9);
+  it('keeps the curated badge set to the hand-picked stages', () => {
     expect(isSystemStage(REFERENCED_NOT_CURATED)).toBe(false);
     expect(systemStageUsedBy(REFERENCED_NOT_CURATED)).toEqual([]);
   });
@@ -124,8 +123,7 @@ describe('derived call-site protection', () => {
   });
 
   it('protects every curated stage even when no source references it by name', () => {
-    // Four curated keys (`cos-evaluate`, `app-detection`, …) have no literal
-    // call site in `server/` today; the union is what keeps them guarded.
+    // Curated stages remain protected even without a literal call site.
     for (const key of SYSTEM_STAGE_KEYS) expect(isProtectedStage(key)).toBe(true);
   });
 

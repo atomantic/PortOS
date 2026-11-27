@@ -78,7 +78,6 @@ describe('stage classification', () => {
 
   it('leaves infrastructure and self-analysis stages unstamped', () => {
     for (const stage of [
-      'app-detection',
       'brain-classifier',
       'cos-task-enhance',
       'memory-evaluate',

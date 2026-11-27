@@ -112,46 +112,6 @@
       "returnsJson": false,
       "variables": []
     },
-    "app-detection": {
-      "name": "App Detection",
-      "description": "Analyze a project directory and detect its configuration",
-      "model": "default",
-      "returnsJson": true,
-      "variables": [
-        "jsonOutputFormat",
-        "appDetectionSchema",
-        "portDetectionRules",
-        "pm2NamingConvention"
-      ]
-    },
-    "cos-agent-briefing": {
-      "name": "CoS Agent Briefing",
-      "description": "Unused — CoS agents are briefed by a built-in prompt; editing this template has no effect (#8200)",
-      "model": "heavy",
-      "returnsJson": false,
-      "variables": []
-    },
-    "cos-evaluate": {
-      "name": "CoS Task Evaluation",
-      "description": "Evaluate pending tasks and decide what to work on",
-      "model": "heavy",
-      "returnsJson": true,
-      "variables": []
-    },
-    "cos-report-summary": {
-      "name": "CoS Report Summary",
-      "description": "Generate daily work summary report",
-      "model": "default",
-      "returnsJson": false,
-      "variables": []
-    },
-    "cos-self-improvement": {
-      "name": "CoS Self Improvement",
-      "description": "Analyze system performance and suggest improvements",
-      "model": "heavy",
-      "returnsJson": true,
-      "variables": []
-    },
     "cos-task-enhance": {
       "name": "CoS Task Enhancement",
       "description": "Research the codebase and expand a brief task description into an executable agent prompt",
