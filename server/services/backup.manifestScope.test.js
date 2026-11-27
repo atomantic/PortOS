@@ -11,6 +11,11 @@ import * as fs from 'fs/promises';
 import { reloadSettings } from './settings.js';
 import { invalidateAllCaches as invalidateBrainCaches } from './brainStorage.js';
 import { openSnapshotStream, restoreSnapshot, deleteSnapshot } from './backup.js';
+import { createFileWriteQueue } from '../lib/fileWriteQueue.js';
+import { registerManagedVisitorCredentialRestore } from './bootHookRegistry.js';
+
+const credentialRestoreLock = vi.fn(createFileWriteQueue());
+registerManagedVisitorCredentialRestore(credentialRestoreLock);
 
 describe('restoreSnapshot manifest verification', () => {
   let tmpRoot;
@@ -528,6 +533,7 @@ describe('restoreSnapshot manifest verification', () => {
     });
 
     it('previews and restores verified credential bytes and permissions in a full restore', async () => {
+      credentialRestoreLock.mockClear();
       await writeManifest({
         [settings]: await writeLegacySnapshot(settings),
         [visitor]: await writeLegacySnapshot(visitor),
@@ -549,6 +555,7 @@ describe('restoreSnapshot manifest verification', () => {
       await expect(realFs.stat(livePath(other))).rejects.toMatchObject({ code: 'ENOENT' });
 
       const result = await restoreSnapshot(tmpRoot, 'snap-1', { dryRun: false });
+      expect(credentialRestoreLock).toHaveBeenCalledOnce();
       expect(result.changedFiles).toEqual(preview.changedFiles);
       for (const name of [settings, visitor]) {
         expect(await realFs.readFile(livePath(name), 'utf8')).toBe(snapshotBytes);
