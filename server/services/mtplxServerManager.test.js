@@ -1205,13 +1205,14 @@ describe('mtplxServerManager', () => {
 
     it('marks the daemon used, so a request resets the idle clock', async () => {
       pm2State = { name: MTPLX_APP, status: 'online', pid: 777, args: ['serve', '--port', '8000'] };
-      const { daemonLastUsedAt } = await import('../lib/managedDaemon.js');
-
-      const before = daemonLastUsedAt(MTPLX_APP);
-      await new Promise((r) => setTimeout(r, 2));
+      const { reapIdleDaemons } = await import('../lib/managedDaemon.js');
+      resetForTest({ idleMinutes: 1 });
+      const before = Date.now();
+      vi.spyOn(Date, 'now').mockReturnValue(before + 60_000);
       await ensureMtplxRunning();
 
-      expect(daemonLastUsedAt(MTPLX_APP)).toBeGreaterThan(before);
+      expect(await reapIdleDaemons(before + 60_000, { memoryStats: false })).not.toContain(MTPLX_APP);
+      expect(await reapIdleDaemons(before + 120_000, { memoryStats: false })).toContain(MTPLX_APP);
     });
   });
 

@@ -3,7 +3,6 @@ import {
   idleWindowMs,
   registerIdleDaemon,
   markDaemonUsed,
-  daemonLastUsedAt,
   reapIdleDaemons,
   startIdleReaper,
   stopIdleReaper,
@@ -94,28 +93,32 @@ describe('managedDaemon idle reaper', () => {
     const stop = vi.fn().mockResolvedValue(undefined);
     registerIdleDaemon({ name: 'daemon-a', getIdleMs: () => 30 * MINUTE, stop });
 
-    const before = daemonLastUsedAt('daemon-a');
-    await new Promise((r) => setTimeout(r, 2));
+    const before = Date.now();
+    vi.spyOn(Date, 'now').mockReturnValue(before + MINUTE);
     markDaemonUsed('daemon-a');
 
-    expect(daemonLastUsedAt('daemon-a')).toBeGreaterThan(before);
+    expect(await reapIdleDaemons(before + 30 * MINUTE, { memoryStats: false })).toEqual([]);
+    expect(await reapIdleDaemons(before + 31 * MINUTE, { memoryStats: false })).toEqual(['daemon-a']);
   });
 
-  it('ignores a mark for an unregistered daemon rather than throwing', () => {
+  it('ignores a mark for an unregistered daemon rather than throwing', async () => {
     expect(() => markDaemonUsed('never-registered')).not.toThrow();
-    expect(daemonLastUsedAt('never-registered')).toBeNull();
+    expect(await reapIdleDaemons(Date.now(), { memoryStats: false })).toEqual([]);
   });
 
   // A re-registration (a manager module reloaded under test, or re-imported)
   // must not reset a clock that is already ticking.
   it('preserves lastUsedAt across a re-registration', async () => {
+    const first = Date.now();
+    const clock = vi.spyOn(Date, 'now').mockReturnValue(first);
     registerIdleDaemon({ name: 'daemon-a', getIdleMs: () => 30 * MINUTE, stop: vi.fn() });
-    const first = daemonLastUsedAt('daemon-a');
+    clock.mockReturnValue(first + MINUTE);
 
     const stop = vi.fn().mockResolvedValue(undefined);
     registerIdleDaemon({ name: 'daemon-a', getIdleMs: () => 30 * MINUTE, stop });
 
-    expect(daemonLastUsedAt('daemon-a')).toBe(first);
+    expect(await reapIdleDaemons(first + 30 * MINUTE, { memoryStats: false })).toEqual(['daemon-a']);
+    expect(stop).toHaveBeenCalledOnce();
   });
 
   // A stop that fails leaves the daemon UP. Resetting its clock anyway would
