@@ -15,6 +15,7 @@ import {
   runModelPerformanceBenchmark,
 } from '../../services/apiModelPerformance';
 import { formatCount, formatUsd } from '../../utils/formatters';
+import InlineConfirmRow from '../ui/InlineConfirmRow';
 import toast from '../ui/Toast';
 
 const BENCHMARK_NAME = 'PortOS Task Bench v1 (deterministic)';
@@ -46,6 +47,7 @@ export default function PortosModelBenchmarkPanel() {
   const [discovering, setDiscovering] = useState(false);
   const [running, setRunning] = useState(false);
   const busy = discovering || running;
+  const [confirmRun, setConfirmRun] = useState(false);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
   const [status, setStatus] = useState('');
@@ -71,6 +73,8 @@ export default function PortosModelBenchmarkPanel() {
   const models = selectedProvider?.models || [];
   const selectedModel = models.find(entry => entry.model === model) || null;
   const efforts = selectedModel?.efforts || [];
+  const canBenchmark = Boolean(selectedProvider?.canBenchmark && selectedModel && !busy && !loading);
+  const selectionLocked = busy || loading || confirmRun;
 
   useEffect(() => {
     if (!inventory.length) return;
@@ -126,7 +130,8 @@ export default function PortosModelBenchmarkPanel() {
   };
 
   const startBenchmark = () => {
-    if (!selectedProvider?.canBenchmark || !model || busy) return;
+    if (!confirmRun || !canBenchmark || runController.current) return;
+    setConfirmRun(false);
     const controller = new AbortController();
     cancelled.current = false;
     runController.current = controller;
@@ -180,7 +185,7 @@ export default function PortosModelBenchmarkPanel() {
             PortOS runs the same deterministic tasks on models this install can use. Results stay on this machine.
           </p>
         </div>
-        <button type="button" onClick={load} disabled={loading || busy} className="inline-flex items-center gap-2 rounded-lg border border-port-border bg-port-card px-3 py-2 text-sm disabled:opacity-50">
+        <button type="button" onClick={load} disabled={selectionLocked} className="inline-flex items-center gap-2 rounded-lg border border-port-border bg-port-card px-3 py-2 text-sm disabled:opacity-50">
           <RefreshCw size={16} className={loading ? 'animate-spin' : ''} /> Refresh
         </button>
       </header>
@@ -200,26 +205,26 @@ export default function PortosModelBenchmarkPanel() {
           <div className="grid grid-cols-1 items-end gap-3 md:grid-cols-2 xl:grid-cols-[minmax(14rem,1fr)_minmax(14rem,1fr)_12rem_auto_auto]">
             <div>
               <label htmlFor="benchmark-provider" className="mb-1 block text-sm font-medium">Provider</label>
-              <select id="benchmark-provider" value={providerId} onChange={event => { setProviderId(event.target.value); setModel(''); setEffort(''); }} disabled={busy} className="w-full rounded-lg border border-port-border bg-port-bg px-3 py-2">
+              <select id="benchmark-provider" value={providerId} onChange={event => { setProviderId(event.target.value); setModel(''); setEffort(''); }} disabled={selectionLocked} className="w-full rounded-lg border border-port-border bg-port-bg px-3 py-2">
                 {inventory.map(provider => <option key={provider.id} value={provider.id}>{provider.name || provider.id} · {provider.billing}</option>)}
               </select>
             </div>
             <div>
               <label htmlFor="benchmark-model" className="mb-1 block text-sm font-medium">Model</label>
-              <select id="benchmark-model" value={model} onChange={event => { setModel(event.target.value); setEffort(''); }} disabled={busy || models.length === 0} className="w-full rounded-lg border border-port-border bg-port-bg px-3 py-2">
+              <select id="benchmark-model" value={model} onChange={event => { setModel(event.target.value); setEffort(''); }} disabled={selectionLocked || models.length === 0} className="w-full rounded-lg border border-port-border bg-port-bg px-3 py-2">
                 {models.length === 0 && <option value="">No discovered models</option>}
                 {models.map(entry => <option key={entry.model} value={entry.model}>{entry.model}</option>)}
               </select>
             </div>
             <div>
               <label htmlFor="benchmark-effort" className="mb-1 block text-sm font-medium">Reasoning effort</label>
-              <select id="benchmark-effort" value={effort} onChange={event => setEffort(event.target.value)} disabled={busy || efforts.length === 0} className="w-full rounded-lg border border-port-border bg-port-bg px-3 py-2">
+              <select id="benchmark-effort" value={effort} onChange={event => setEffort(event.target.value)} disabled={selectionLocked || efforts.length === 0} className="w-full rounded-lg border border-port-border bg-port-bg px-3 py-2">
                 <option value="">Provider default</option>
                 {efforts.map(value => <option key={value} value={value}>{value}</option>)}
               </select>
             </div>
             {selectedProvider?.canDiscover && (
-              <button type="button" onClick={discover} disabled={busy} className="inline-flex items-center justify-center gap-2 rounded-lg border border-port-border px-3 py-2 text-sm disabled:opacity-50">
+              <button type="button" onClick={discover} disabled={selectionLocked} className="inline-flex items-center justify-center gap-2 rounded-lg border border-port-border px-3 py-2 text-sm disabled:opacity-50">
                 <Search size={16} /> Discover models
               </button>
             )}
@@ -228,11 +233,23 @@ export default function PortosModelBenchmarkPanel() {
                 <Square size={15} /> Stop
               </button>
             ) : (
-              <button type="button" onClick={startBenchmark} disabled={!selectedProvider?.canBenchmark || !model || busy} className="inline-flex items-center justify-center gap-2 rounded-lg bg-port-accent px-4 py-2 font-medium text-white disabled:opacity-50">
+              <button type="button" onClick={() => setConfirmRun(true)} disabled={!canBenchmark} aria-expanded={confirmRun} aria-controls={confirmRun ? 'confirm-portos-benchmark' : undefined} className="inline-flex items-center justify-center gap-2 rounded-lg bg-port-accent px-4 py-2 font-medium text-white disabled:opacity-50">
                 <Play size={16} /> Run five tasks
               </button>
             )}
           </div>
+        )}
+        {confirmRun && (
+          <InlineConfirmRow
+            id="confirm-portos-benchmark"
+            className="mt-3 [overflow-wrap:anywhere]"
+            tone="warning"
+            question={`Send five sequential requests to ${selectedProvider?.name || providerId} for ${model} (${effort ? `${effort} effort` : 'provider default effort'})?`}
+            confirmText="Start benchmark"
+            confirmDisabled={!canBenchmark}
+            onConfirm={startBenchmark}
+            onCancel={() => setConfirmRun(false)}
+          />
         )}
         {selectedProvider && !selectedProvider.canBenchmark && <p className="mt-3 text-sm text-port-warning">{selectedProvider.benchmarkUnavailableReason}</p>}
         {selectedProvider && models.length === 0 && selectedProvider.canDiscover && <p className="mt-3 text-sm text-port-text-muted">Discover installed or advertised models for this provider to enable a run.</p>}

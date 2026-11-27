@@ -1307,7 +1307,7 @@ describe('LocalLlmRuntimesView llama-server management', () => {
     expect(removeSpecDecodeModel).not.toHaveBeenCalled();
   });
 
-  it('blocks Start while a preset GGUF is missing and names the fix', async () => {
+  it('keeps the missing GGUF guard and Download action while tuning both KV caches', async () => {
     const { getLlamaServerStatus, startLlamaServer } = await import('../../services/apiLocalLlm.js');
     getLlamaServerStatus.mockResolvedValue(llamaReady({ presets: specPresets({ baseExists: false }) }));
 
@@ -1317,6 +1317,13 @@ describe('LocalLlmRuntimesView llama-server management', () => {
     // an effect, so the Start button can render a tick before the gate that
     // disables it — asserting the button first makes this order-dependent.
     expect(await screen.findByText('Download the base model to enable Start')).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: /Advanced options/ }));
+    fireEvent.change(screen.getByLabelText('KV cache K'), { target: { value: 'q8_0' } });
+    fireEvent.change(screen.getByLabelText('KV cache V'), { target: { value: 'q4_0' } });
+
+    expect(screen.getByLabelText('Preset')).toHaveValue('qwen3.8-27b-dspark');
+    expect(screen.getByRole('button', { name: /^Download$/ })).toBeEnabled();
+    expect(screen.getByText('Download the base model to enable Start')).toBeInTheDocument();
     expect(screen.getByRole('button', { name: /Start Speculative Server/ })).toBeDisabled();
     expect(startLlamaServer).not.toHaveBeenCalled();
   });

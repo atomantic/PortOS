@@ -63,7 +63,7 @@ beforeEach(() => {
   api.getModelPerformanceBenchmarks.mockResolvedValue({ schemaVersion: 1, observations: [codexRun, localRun], inventory });
 });
 
-it('runs the explicitly selected provider, model and effort, then displays the saved result', async () => {
+it('runs the confirmed provider, model and effort, then displays the saved result', async () => {
   api.runModelPerformanceBenchmark.mockResolvedValue({ observation: codexRun, complete: true });
   render(<PortosModelBenchmarkPanel />);
 
@@ -72,12 +72,26 @@ it('runs the explicitly selected provider, model and effort, then displays the s
   await waitFor(() => expect(screen.getByLabelText('Reasoning effort')).toBeEnabled());
   fireEvent.change(screen.getByLabelText('Reasoning effort'), { target: { value: 'high' } });
   fireEvent.click(screen.getByRole('button', { name: 'Run five tasks' }));
+  expect(api.runModelPerformanceBenchmark).not.toHaveBeenCalled();
+  expect(screen.getByRole('group', { name: 'Send five sequential requests to Codex for gpt-6-luna (high effort)?' })).toBeInTheDocument();
+  expect(screen.getByLabelText('Provider')).toBeDisabled();
+  expect(screen.getByLabelText('Model')).toBeDisabled();
+  expect(screen.getByLabelText('Reasoning effort')).toBeDisabled();
+
+  fireEvent.click(screen.getByRole('button', { name: 'Cancel' }));
+  expect(api.runModelPerformanceBenchmark).not.toHaveBeenCalled();
+  expect(screen.queryByRole('button', { name: 'Start benchmark' })).not.toBeInTheDocument();
+  expect(screen.getByLabelText('Provider')).toBeEnabled();
+
+  fireEvent.click(screen.getByRole('button', { name: 'Run five tasks' }));
+  fireEvent.click(screen.getByRole('button', { name: 'Start benchmark' }));
 
   await waitFor(() => expect(api.runModelPerformanceBenchmark).toHaveBeenCalledWith(
     { providerId: 'codex', model: 'gpt-6-luna', effort: 'high' },
     expect.objectContaining({ silent: true, signal: expect.any(AbortSignal) }),
   ));
   await waitFor(() => expect(toast.success).toHaveBeenCalledWith('Benchmark saved: 80% correct'));
+  expect(api.runModelPerformanceBenchmark).toHaveBeenCalledTimes(1);
   expect(screen.getByTestId('scatter-Codex')).toHaveAttribute('data-values', '[[120,80]]');
 });
 

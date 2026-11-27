@@ -153,7 +153,7 @@ describe('LocalLlmPlayground task order', () => {
 
     // Compare mode adds the execution mode to both the summary and the panel,
     // and the values the user already set survive the switch.
-    fireEvent.click(screen.getByRole('button', { name: 'Compare' }));
+    fireEvent.click(screen.getByRole('tab', { name: 'Compare' }));
     expect(advancedToggle().textContent).toContain('round robin');
     fireEvent.click(advancedToggle());
     expect(screen.getByLabelText('Temperature').value).toBe('0.9');
@@ -165,8 +165,20 @@ describe('LocalLlmPlayground task order', () => {
     renderPlayground();
     await waitFor(() => expect(screen.getAllByText('command-r-plus:104b').length).toBeGreaterThan(0));
 
-    fireEvent.click(screen.getByRole('button', { name: 'Compare' }));
+    expect(screen.getByRole('tablist', { name: 'Playground mode' })).toBeInTheDocument();
+    const chat = screen.getByRole('tab', { name: 'Chat' });
+    const compare = screen.getByRole('tab', { name: 'Compare' });
+    expect(chat).toHaveAttribute('tabindex', '0');
+    expect(compare).toHaveAttribute('tabindex', '-1');
 
+    chat.focus();
+    fireEvent.keyDown(chat, { key: 'ArrowRight' });
+
+    expect(compare).toHaveFocus();
+    expect(compare).toHaveAttribute('aria-selected', 'true');
+    expect(compare).toHaveAttribute('tabindex', '0');
+    expect(chat).toHaveAttribute('tabindex', '-1');
+    expect(screen.getByRole('tabpanel', { name: 'Compare' })).toHaveAttribute('id', compare.getAttribute('aria-controls'));
     expect(screen.getByRole('button', { name: 'Run comparison' }).disabled).toBe(false);
     expect(screen.getByText('Runs against 1 model')).toBeTruthy();
     expect(modelsToggle()).toHaveAttribute('aria-expanded', 'false');
