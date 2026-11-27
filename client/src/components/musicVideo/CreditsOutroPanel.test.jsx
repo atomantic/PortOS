@@ -77,7 +77,7 @@ it('keeps a stale backgroundImageId visible and clearable when no shot stills ma
   expect(save).toHaveBeenLastCalledWith({ creditsOutro: expect.not.objectContaining({ backgroundImageId: expect.anything() }) });
 });
 
-it('drops a stale credits prefill response when the active project changes mid-flight', async () => {
+it('drops a stale credits prefill response even if the user switches away and returns to the original project', async () => {
   let resolvePrefill;
   getMusicVideoCreditsPrefill.mockImplementation(() => new Promise((resolve) => { resolvePrefill = resolve; }));
   const save = vi.fn();
@@ -91,8 +91,42 @@ it('drops a stale credits prefill response when the active project changes mid-f
   rerender(
     <CreditsOutroPanel project={{ id: 'mv-b', creditsOutro: null }} onEditLocal={editLocal} onSave={save} />,
   );
+  rerender(
+    <CreditsOutroPanel project={{ id: 'mv-a', creditsOutro: null }} onEditLocal={editLocal} onSave={save} />,
+  );
   resolvePrefill({ credits: { title: 'Project A Song', artist: 'Project A Artist' } });
   await waitFor(() => expect(screen.getByLabelText(/Off/i).disabled).toBe(false));
   expect(save).not.toHaveBeenCalled();
   expect(editLocal).not.toHaveBeenCalled();
+});
+
+it('flushes a pending color edit to the original project save handler on project switch or unmount', () => {
+  const saveA = vi.fn();
+  const saveB = vi.fn();
+  const editLocal = vi.fn();
+  const { rerender, unmount } = render(
+    <CreditsOutroPanel
+      project={{ id: 'mv-a', creditsOutro: { enabled: true, title: 'Song A' } }}
+      onEditLocal={editLocal}
+      onSave={saveA}
+    />,
+  );
+  fireEvent.change(screen.getByLabelText('Main text color'), { target: { value: '#123456' } });
+  expect(saveA).not.toHaveBeenCalled();
+
+  rerender(
+    <CreditsOutroPanel
+      project={{ id: 'mv-b', creditsOutro: { enabled: true, title: 'Song B' } }}
+      onEditLocal={editLocal}
+      onSave={saveB}
+    />,
+  );
+  expect(saveA).toHaveBeenCalledTimes(1);
+  expect(saveA).toHaveBeenCalledWith({ creditsOutro: expect.objectContaining({ textColor: '#123456' }) });
+  expect(saveB).not.toHaveBeenCalled();
+
+  fireEvent.change(screen.getByLabelText('Main text color'), { target: { value: '#abcdef' } });
+  unmount();
+  expect(saveB).toHaveBeenCalledTimes(1);
+  expect(saveB).toHaveBeenCalledWith({ creditsOutro: expect.objectContaining({ textColor: '#abcdef' }) });
 });

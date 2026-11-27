@@ -161,48 +161,52 @@ function CreditsSocials({ socials, id, onChange }) {
  */
 export default function CreditsOutroPanel({ project, onEditLocal, onSave, showPreview = false }) {
   const [filling, setFilling] = useState(false);
-  // A refill still in flight when this editor closes or switches projects is dropped:
-  // a reopened or switched editor is not locked by it, so its answer must not overwrite later edits.
+  // A refill still in flight when this editor closes, switches projects, or starts a newer
+  // refill is dropped so stale responses cannot overwrite later edits or unlock a newer fill.
   const mounted = useMounted();
-  const activeProjectIdRef = useRef(project.id);
-  activeProjectIdRef.current = project.id;
-  const pendingColorCreditsRef = useRef(null);
+  const prefillGenerationRef = useRef(0);
+  const pendingColorRef = useRef(null);
+  const flushPendingColor = () => {
+    const pending = pendingColorRef.current;
+    if (!pending) return;
+    pendingColorRef.current = null;
+    pending.save({ creditsOutro: pending.credits });
+  };
   useEffect(() => {
+    prefillGenerationRef.current += 1;
     setFilling(false);
-    pendingColorCreditsRef.current = null;
+    return () => {
+      prefillGenerationRef.current += 1;
+      flushPendingColor();
+    };
   }, [project.id]);
   const credits = normalizeCreditsOutro(project.creditsOutro);
   const on = !!credits?.enabled;
   const save = (next) => {
-    pendingColorCreditsRef.current = null;
+    pendingColorRef.current = null;
     onEditLocal({ creditsOutro: next });
     return onSave({ creditsOutro: next });
   };
   const commit = (patch) => save(normalizeCreditsOutro({ ...(credits || CREDITS_OUTRO_DEFAULTS), ...patch }));
-  // Color pickers fire onChange on every drag tick; update the live preview locally and persist once on blur.
+  // Color pickers fire onChange on every drag tick; update the live preview locally and persist once on blur
+  // (or when closing / switching projects, using the save handler captured for that project).
   const editColor = (patch) => {
     const next = normalizeCreditsOutro({ ...(credits || CREDITS_OUTRO_DEFAULTS), ...patch });
-    pendingColorCreditsRef.current = next;
+    pendingColorRef.current = { credits: next, save: onSave };
     onEditLocal({ creditsOutro: next });
   };
-  const commitColor = () => {
-    const pending = pendingColorCreditsRef.current;
-    if (!pending) return;
-    pendingColorCreditsRef.current = null;
-    onSave({ creditsOutro: pending });
-  };
   const fill = (keep = {}) => {
-    const targetProjectId = project.id;
+    const generation = ++prefillGenerationRef.current;
     setFilling(true);
     // A failed lookup is reported (not silent) and changes nothing.
-    return getMusicVideoCreditsPrefill(targetProjectId)
-      .then((res) => (mounted.current && activeProjectIdRef.current === targetProjectId
+    return getMusicVideoCreditsPrefill(project.id)
+      .then((res) => (mounted.current && prefillGenerationRef.current === generation
         ? save(normalizeCreditsOutro({ ...res.credits, ...keep, enabled: true }))
         : null))
       // The request and the board's save report their own failures; neither may leave the controls disabled.
       .catch(() => null)
       .finally(() => {
-        if (mounted.current && activeProjectIdRef.current === targetProjectId) setFilling(false);
+        if (mounted.current && prefillGenerationRef.current === generation) setFilling(false);
       });
   };
   const toggle = (enabled) => (enabled && !credits ? fill() : commit({ enabled }));
@@ -253,7 +257,7 @@ export default function CreditsOutroPanel({ project, onEditLocal, onSave, showPr
               </select>
             </div>
           </div>
-          <CreditsAppearance project={project} credits={credits} commit={commit} onColorEdit={editColor} onColorCommit={commitColor} id={id} />
+          <CreditsAppearance project={project} credits={credits} commit={commit} onColorEdit={editColor} onColorCommit={flushPendingColor} id={id} />
           <fieldset className="min-w-0 space-y-1">
             <legend className="mb-0.5 text-xs text-port-text-muted">Credit blocks</legend>
             <p className="text-xs text-port-text-muted">Give each block an optional heading and your own text. In Grid, each block gets its own cell.</p>
