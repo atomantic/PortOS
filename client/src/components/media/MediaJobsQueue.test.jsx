@@ -1,5 +1,6 @@
 import { describe, it, expect, vi, afterEach, beforeEach } from 'vitest';
 import { act, render, screen, waitFor, within } from '@testing-library/react';
+import { MemoryRouter } from 'react-router';
 import userEvent from '@testing-library/user-event';
 import { retypeSettled } from '../../test/settledInput';
 import { findEnabledByRole } from '../../test/enabledBarrier.js';
@@ -1033,10 +1034,34 @@ describe('MediaJobsQueue — video retry memory mode (#10742)', () => {
       queuedAt: '2026-06-19T10:00:00Z',
       params: { prompt: 'an invented memory retry', mode: 'extend', modelId: model.id, streamingMode },
     }]);
-    render(<MediaJobsQueue kind="video" />);
+    render(<MemoryRouter><MediaJobsQueue kind="video" /></MemoryRouter>);
     await expandReel(user);
     await user.click(await screen.findByLabelText('Edit and retry'));
   };
+
+  it('offers independent catalog retries and preserves prompt edits', async () => {
+    const user = userEvent.setup();
+    getVideoGenModelContext.mockRejectedValueOnce(new Error('Model catalog unavailable'))
+      .mockResolvedValue({ models: [model] });
+    listLorasFull.mockRejectedValueOnce(new Error('LoRA catalog unavailable'))
+      .mockResolvedValue([{ filename: 'example.safetensors', name: 'Example adapter', runnerFamily: 'ltx-video' }]);
+    await openEditor(user, 'resident');
+
+    const modelError = await screen.findByText(/Could not load video models/);
+    const loraError = await screen.findByText(/Could not load video LoRAs/);
+    const prompt = screen.getByLabelText('Prompt', { exact: true });
+    await user.type(prompt, ' with a revision');
+    await user.click(within(modelError.closest('[role="alert"]')).getByRole('button', { name: 'Retry' }));
+    expect(await screen.findByRole('option', { name: model.name })).toBeInTheDocument();
+    expect(loraError).toBeInTheDocument();
+    expect(listLorasFull).toHaveBeenCalledTimes(1);
+
+    await user.click(within(loraError.closest('[role="alert"]')).getByRole('button', { name: 'Retry' }));
+    expect(await screen.findByRole('checkbox', { name: /Example adapter/ })).toBeInTheDocument();
+    expect(getVideoGenModelContext).toHaveBeenCalledTimes(2);
+    expect(screen.queryByText(/Could not load video/)).not.toBeInTheDocument();
+    expect(prompt).toHaveValue('an invented memory retry with a revision');
+  });
 
   it('shows Resident and sends no memory override on an untouched retry', async () => {
     const user = userEvent.setup();
@@ -1166,16 +1191,14 @@ describe('MediaJobsQueue — hosted video retry editor (#10741)', () => {
 
   it.each(Object.keys(HOSTED_JOBS))('hides local controls on a %s job and submits no override when untouched', async (mode) => {
     const user = userEvent.setup();
-    // A healthy local catalog: the controls must stay hidden because the job is
-    // hosted, not because there is nothing to choose from.
-    getVideoGenModelContext.mockResolvedValue({ models: [{ id: 'ltx25-model', name: 'LTX-2.5', runtime: 'ltx25', supportedModes: ['text', 'image'] }] });
     listQueueMediaJobs.mockResolvedValue([HOSTED_JOBS[mode]]);
     render(<MediaJobsQueue kind="video" />);
     await expandReel(user);
     await user.click(await screen.findByLabelText('Edit and retry'));
 
     expect(await screen.findByRole('button', { name: /Retry with changes/i })).toBeInTheDocument();
-    await waitFor(() => expect(getVideoGenModelContext).toHaveBeenCalled());
+    expect(getVideoGenModelContext).not.toHaveBeenCalled();
+    expect(listLorasFull).not.toHaveBeenCalled();
     expect(screen.queryByLabelText('Model')).not.toBeInTheDocument();
     expect(screen.queryByLabelText('Reference mode')).not.toBeInTheDocument();
     expect(screen.queryByLabelText(/Steps/i)).not.toBeInTheDocument();

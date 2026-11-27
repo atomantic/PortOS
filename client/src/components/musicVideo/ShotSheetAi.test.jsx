@@ -60,6 +60,32 @@ describe('ShotSheetAi', () => {
     expect(onApply).toHaveBeenCalledWith('a', { prompt: 'My motion' });
   });
 
+  it('unlocks editing after a rejected apply and retries only unsaved proposals', async () => {
+    proposeMusicVideoShotSheet.mockResolvedValue({ shots: [
+      { sceneId: 'a', prompt: 'First motion' },
+      { sceneId: 'b', prompt: 'Second motion' },
+    ] });
+    const onApply = vi.fn().mockResolvedValueOnce(true)
+      .mockRejectedValueOnce(new Error('Save failed')).mockResolvedValueOnce(true);
+    const onApplyingChange = vi.fn();
+    const rows = [row('a', 'Shot 1', { checked: true }), row('b', 'Shot 2', { checked: true })];
+    render(<ShotSheetAi project={projectOf(rows)} disabled={false} onApply={onApply} onApplyingChange={onApplyingChange} rows={rows} />);
+    fireEvent.click(screen.getByRole('button', { name: /Propose prompts from sheet/ }));
+    fireEvent.click(await screen.findByRole('button', { name: 'Apply 2 selected' }));
+
+    expect(await screen.findByRole('alert')).toHaveTextContent('Save failed');
+    expect(onApplyingChange.mock.calls).toEqual([[true], [false]]);
+    expect(screen.queryByLabelText('Apply Shot 1')).not.toBeInTheDocument();
+    expect(screen.getByLabelText('Shot 2 Clip prompt proposed')).toBeEnabled();
+    const retry = screen.getByRole('button', { name: 'Apply 1 selected' });
+    expect(retry).toBeEnabled();
+    fireEvent.click(retry);
+
+    await waitFor(() => expect(screen.queryByLabelText('Apply Shot 2')).not.toBeInTheDocument());
+    expect(onApply.mock.calls.map(([id]) => id)).toEqual(['a', 'b', 'b']);
+    expect(screen.queryByRole('alert')).not.toBeInTheDocument();
+  });
+
   // Catches tighten skipping shots whose sheet is not done, or folding the frame prompt into the clip prompt.
   it('tightens any listed shot and applies its frame and clip prompts apart', async () => {
     proposeMusicVideoShotSheet.mockResolvedValue({ shots: [{ sceneId: 'a', framePrompt: 'Short frame', prompt: 'Short clip' }] });
