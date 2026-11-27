@@ -1,6 +1,7 @@
 import { EventEmitter } from 'events';
 import { PassThrough } from 'stream';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { markHostShuttingDown, resetHostShutdownFlagForTests } from '../lib/hostShutdown.js';
 
 const spawn = vi.hoisted(() => vi.fn());
 vi.mock('../lib/childProcess.js', async (importOriginal) => ({
@@ -14,6 +15,8 @@ function fakeProcess() {
   const proc = new EventEmitter();
   proc.stdout = new PassThrough();
   proc.stderr = new PassThrough();
+  proc.exitCode = null;
+  proc.signalCode = null;
   proc.kill = vi.fn();
   return proc;
 }
@@ -25,12 +28,54 @@ beforeEach(() => {
 });
 
 afterEach(() => {
-  vi.useRealTimers();
   mediaService.stopAll();
+  resetHostShutdownFlagForTests();
+  vi.useRealTimers();
   vi.restoreAllMocks();
 });
 
 describe('mediaService stream ownership', () => {
+  it('escalates ignored stops for active and replaced captures and spares a child that exits', async () => {
+    vi.useFakeTimers();
+    const oldVideo = fakeProcess();
+    const activeVideo = fakeProcess();
+    const oldAudio = fakeProcess();
+    const activeAudio = fakeProcess();
+    spawn.mockReturnValueOnce(oldVideo).mockReturnValueOnce(activeVideo)
+      .mockReturnValueOnce(oldAudio).mockReturnValueOnce(activeAudio);
+    const oldStream = mediaService.startVideoStream('0');
+    mediaService.startVideoStream('1');
+    mediaService.startAudioStream('0');
+    mediaService.startAudioStream('1');
+
+    mediaService.stopAll();
+    expect(oldStream.writableEnded).toBe(true);
+    expect(mediaService.isVideoStreaming()).toBe(false);
+    expect(mediaService.isAudioStreaming()).toBe(false);
+    const drained = vi.fn();
+    const stopping = mediaService.drainCaptureStops().then(drained);
+    oldAudio.signalCode = 'SIGTERM';
+    oldAudio.emit('close', null, 'SIGTERM');
+    await vi.advanceTimersByTimeAsync(999);
+    for (const child of [oldVideo, activeVideo, oldAudio, activeAudio]) {
+      expect(child.kill.mock.calls).toEqual([['SIGTERM']]);
+    }
+    expect(drained).not.toHaveBeenCalled();
+    await vi.advanceTimersByTimeAsync(1);
+    await stopping;
+    expect(oldVideo.kill.mock.calls).toEqual([['SIGTERM'], ['SIGKILL']]);
+    expect(activeVideo.kill.mock.calls).toEqual([['SIGTERM'], ['SIGKILL']]);
+    expect(activeAudio.kill.mock.calls).toEqual([['SIGTERM'], ['SIGKILL']]);
+    expect(oldAudio.kill.mock.calls).toEqual([['SIGTERM']]);
+  });
+
+  it('rejects new captures once the host is shutting down', () => {
+    markHostShuttingDown();
+    expect(() => mediaService.startVideoStream()).toThrow(expect.objectContaining({ status: 503 }));
+    expect(() => mediaService.startAudioStream()).toThrow(expect.objectContaining({ status: 503 }));
+    expect(spawn).not.toHaveBeenCalled();
+  });
+
   it('ignores a replaced video process close event', () => {
     const oldProcess = fakeProcess();
     const replacementProcess = fakeProcess();

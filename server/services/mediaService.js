@@ -1,5 +1,8 @@
 import { spawn } from '../lib/childProcess.js';
 import { PassThrough } from 'stream';
+import { ServerError } from '../lib/errorHandler.js';
+import { isHostShuttingDown } from '../lib/hostShutdown.js';
+import { createChildStopTracker } from '../lib/childStopTracker.js';
 import { safeChildProcessOptions } from '../lib/processEnv.js';
 
 let videoProcess = null;
@@ -9,6 +12,7 @@ let audioStream = null;
 let devices = { video: [], audio: [] };
 const DEVICE_PROBE_TIMEOUT_MS = 10_000;
 const MAX_DEVICE_OUTPUT_BYTES = 1024 * 1024;
+const captureStops = createChildStopTracker();
 
 async function listDevices() {
   return new Promise((resolve, reject) => {
@@ -83,6 +87,7 @@ async function listDevices() {
 }
 
 function startVideoStream(deviceId = '0') {
+  if (isHostShuttingDown()) throw new ServerError('Media capture is shutting down', { status: 503 });
   if (!/^\d+$/.test(deviceId)) throw new Error('Invalid device ID');
   if (videoProcess) {
     stopVideoStream();
@@ -129,6 +134,7 @@ function startVideoStream(deviceId = '0') {
 }
 
 function startAudioStream(deviceId = '0') {
+  if (isHostShuttingDown()) throw new ServerError('Media capture is shutting down', { status: 503 });
   if (!/^\d+$/.test(deviceId)) throw new Error('Invalid device ID');
   if (audioProcess) {
     stopAudioStream();
@@ -175,27 +181,38 @@ function startAudioStream(deviceId = '0') {
   return stream;
 }
 
+function stopCapture(proc, stream, label) {
+  if (!proc) return;
+  // Keep draining FFmpeg output during SIGTERM grace without writing into
+  // the capture stream after it has ended.
+  proc.stdout.unpipe(stream);
+  proc.stdout.resume();
+  stream.end();
+  captureStops.stop(proc, label);
+}
+
 function stopVideoStream() {
-  if (videoProcess) {
-    videoProcess.kill('SIGTERM');
-    videoStream?.end();
-    videoProcess = null;
-    videoStream = null;
-  }
+  const proc = videoProcess;
+  const stream = videoStream;
+  videoProcess = null;
+  videoStream = null;
+  stopCapture(proc, stream, 'FFmpeg video capture');
 }
 
 function stopAudioStream() {
-  if (audioProcess) {
-    audioProcess.kill('SIGTERM');
-    audioStream?.end();
-    audioProcess = null;
-    audioStream = null;
-  }
+  const proc = audioProcess;
+  const stream = audioStream;
+  audioProcess = null;
+  audioStream = null;
+  stopCapture(proc, stream, 'FFmpeg audio capture');
 }
 
 function stopAll() {
-  stopVideoStream();
-  stopAudioStream();
+  try {
+    stopVideoStream();
+  } finally {
+    stopAudioStream();
+  }
 }
 
 function isVideoStreaming() {
@@ -221,6 +238,7 @@ export default {
   stopVideoStream,
   stopAudioStream,
   stopAll,
+  drainCaptureStops: captureStops.drain,
   isVideoStreaming,
   isAudioStreaming,
   getVideoStream,

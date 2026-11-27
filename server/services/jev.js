@@ -29,6 +29,7 @@ import { promisify } from 'node:util';
 import { execFile, spawn } from '../lib/childProcess.js';
 import { ensureDir, PATHS, safeJSONParse } from '../lib/fileUtils.js';
 import { findCachedRepoFiles, getHfCacheRoot } from '../lib/hfCache.js';
+import { isHostShuttingDown } from '../lib/hostShutdown.js';
 import {
   JEV_IDLE_UNLOAD_MS,
   JEV_MAX_RESPONSE_CHARS,
@@ -45,6 +46,7 @@ import {
   normalizeJevScores,
 } from '../lib/jev.js';
 import { PORTS } from '../lib/ports.js';
+import { createChildStopTracker } from '../lib/childStopTracker.js';
 import { safeChildProcessOptions } from '../lib/processEnv.js';
 import { diagnosePythonRuntimeText } from '../lib/pythonRuntimeDiagnosis.js';
 import { createVenv, detectVenvBasePythonSync, installLockedRuntime } from '../lib/pythonSetup.js';
@@ -92,6 +94,7 @@ let idleTimer = null;
 // yet, so without this a stop during a cold start (an operator unload, a test
 // teardown) would leave a 9 GB load running with nothing holding its handle.
 let startingProc = null;
+const sidecarStops = createChildStopTracker();
 
 const failure = (code, extra = {}) => ({ ok: false, code, ...extra });
 
@@ -354,14 +357,14 @@ export function stopJevSidecar() {
   sidecar = null;
   startingProc = null;
   startInFlight = null;
-  for (const proc of [running?.proc, starting]) {
-    if (proc && proc.exitCode === null && !proc.killed) proc.kill('SIGTERM');
-  }
+  sidecarStops.stop(running?.proc, 'JEV sidecar');
+  sidecarStops.stop(starting, 'JEV sidecar');
   if (running !== null || starting !== null) notifyJevChanged('status');
   return running !== null || starting !== null;
 }
 
 export const isJevSidecarRunning = () => sidecar !== null;
+export const drainJevSidecarStops = sidecarStops.drain;
 
 function armIdleReaper() {
   clearIdleTimer();
@@ -399,7 +402,7 @@ async function startSidecar(generation) {
   const target = jevVenvSpawnTarget({ stdio: ['ignore', 'pipe', 'pipe'] });
   if (!target) return failure('jev-not-installed');
   const files = await findCachedRepoFiles(JEV_MODEL.repository, JEV_REQUIRED_FILES, { revision: JEV_MODEL.revision });
-  if (generation !== startGeneration) return failure('jev-start-failed');
+  if (generation !== startGeneration || isHostShuttingDown()) return failure('jev-start-failed');
   if (!files?.[0]) return failure('jev-not-installed');
   // Every required file sits in the pinned subfolder, so its parent IS the
   // directory `from_pretrained` loads.
@@ -460,12 +463,15 @@ async function startSidecar(generation) {
     }
     await delay(HEALTH_POLL_INTERVAL_MS);
   }
-  if (startingProc === proc) startingProc = null;
-  if (proc.exitCode === null && !proc.killed) proc.kill('SIGTERM');
+  if (startingProc === proc) {
+    startingProc = null;
+    sidecarStops.stop(proc, 'JEV sidecar');
+  }
   return failure('jev-start-failed');
 }
 
 function ensureSidecar() {
+  if (isHostShuttingDown()) return Promise.resolve(failure('jev-start-failed'));
   if (sidecar) { armIdleReaper(); return Promise.resolve({ ok: true }); }
   // Single in-flight start. Cleared in `finally` so a failed start does not
   // pin every later caller to the same rejection.
