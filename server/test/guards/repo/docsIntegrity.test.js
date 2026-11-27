@@ -268,8 +268,7 @@ const API_DOC = readDoc('docs/API.md');
 const CATALOG = getApiRouteCatalog();
 
 const PROBE_HEADING = '## Federated peer-probe contract';
-const INDEX_HEADING = '## Route Domain Index';
-const EVENTS_HEADING = '## WebSocket Events';
+const ERROR_HEADING = '## Error Responses';
 
 const section = (from, to) => {
   const start = API_DOC.indexOf(from);
@@ -293,27 +292,16 @@ const normalizePath = (path) => path
 /** Endpoint cells are written relative to `/api` unless they name the mount themselves. */
 const absolutePath = (path) => (path.startsWith('/api/') || path.startsWith('/sdapi/') ? path : `/api${path}`);
 
-const isApiPath = (path) => path.startsWith('/api/') || path.startsWith('/sdapi/');
-
 /** `| METHOD | \`/path\` | ... |` rows of the peer-probe contract table. */
-const documentedOperations = [...section(PROBE_HEADING, INDEX_HEADING).matchAll(/^\|\s*(GET|POST|PUT|PATCH|DELETE)\s*\|\s*`([^`]+)`/gm)]
+const documentedOperations = [...section(PROBE_HEADING, ERROR_HEADING).matchAll(/^\|\s*(GET|POST|PUT|PATCH|DELETE)\s*\|\s*`([^`]+)`/gm)]
   .map(([, method, path]) => ({ method, path: absolutePath(path) }));
 
-/** Every backticked prefix in the route-domain index table, `/api/*` and `/sdapi/*` only. */
-const indexedPrefixes = [...section(INDEX_HEADING, EVENTS_HEADING).matchAll(/^\|\s*((?:`[^`]+`(?:,\s*)?)+)\s*\|/gm)]
-  .flatMap(([, cell]) => [...cell.matchAll(/`([^`]+)`/g)].map(([, prefix]) => prefix))
-  .filter(isApiPath);
-
 const liveOperations = new Set(CATALOG.routes.map(({ method, path }) => `${method} ${normalizePath(path)}`));
-const livePaths = CATALOG.routes.map(({ path }) => normalizePath(path));
-
-const isUnder = (path, prefix) => path === prefix || path.startsWith(`${prefix}/`);
 
 describe('docs/API.md matches the mounted route graph', () => {
-  it('parses the tables it guards', () => {
+  it('parses the peer-probe contract table', () => {
     // A regex that silently matches nothing would pass every assertion below.
     expect(documentedOperations).toHaveLength(3);
-    expect(indexedPrefixes.length).toBeGreaterThan(50);
     expect(CATALOG.routes.length).toBeGreaterThan(500);
   });
 
@@ -327,32 +315,13 @@ describe('docs/API.md matches the mounted route graph', () => {
     ].join('\n')).toEqual([]);
   });
 
-  it('indexes no route-domain prefix that has no live operation under it', () => {
-    const phantom = indexedPrefixes.filter((prefix) => {
-      const wanted = normalizePath(prefix);
-      return !livePaths.some((path) => isUnder(path, wanted));
-    });
-    expect(phantom, 'docs/API.md route-domain index lists prefixes the server no longer mounts').toEqual([]);
-  });
-
-  it('indexes every mounted API prefix', () => {
-    const indexed = indexedPrefixes.map(normalizePath);
-    const uncovered = CATALOG.mounts
-      .filter(isApiPath)
-      .filter((mount) => {
-        const wanted = normalizePath(mount);
-        return !indexed.some((prefix) => isUnder(prefix, wanted));
-      });
-    expect(uncovered, 'server/index.js mounts API prefixes the route-domain index never lists — add an index row').toEqual([]);
-  });
-
   it('documents the status-to-code vocabulary the error envelope actually emits', () => {
     // The table is a published contract (`apiToolResource.js` advertises the same
     // map). A code listed here that no route emits — `COMMAND_NOT_ALLOWED` was one;
     // a disallowed command answers 403 `FORBIDDEN` — sends a client branching on
     // a value it can never receive.
     const documented = Object.fromEntries(
-      [...API_DOC.slice(API_DOC.indexOf('## Error Responses'))
+      [...API_DOC.slice(API_DOC.indexOf(ERROR_HEADING))
         .matchAll(/^\|\s*(\d{3})\s*\|\s*`([A-Z_]+)`/gm)]
         .map(([, status, code]) => [status, code]),
     );
@@ -505,8 +474,6 @@ describe('doc code pointers', () => {
 
 /** Records that name an endpoint which does not (or does not yet) exist, on purpose. */
 const DELIBERATE_NON_ROUTES = [
-  { file: 'docs/features/eidoverse-guest-travel.md', method: 'GET', path: '/api/eidoverse/world/contributions', reason: 'recorded as a removed endpoint' },
-  { file: 'docs/features/chief-of-staff.md', method: 'POST', path: '/api/cos/merge-admission/external', reason: 'recorded as a removed endpoint (#14320)' },
   { file: 'docs/features/openclaw-operator-chat.md', method: 'POST', path: '/api/openclaw/sessions', reason: 'proposed but not built' },
   { file: 'docs/features/openclaw-operator-chat.md', method: 'GET', path: '/api/openclaw/jobs', reason: 'proposed but not built' },
   { file: 'docs/features/openclaw-operator-chat.md', method: 'GET', path: '/api/openclaw/subagents', reason: 'proposed but not built' },

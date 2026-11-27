@@ -81,7 +81,7 @@ rollback therefore require an explicit compatibility plan before deployment:
 - Do not roll back to a strict older binary against a stamped journal. Preserve
   the journal and any transaction lock if maintenance becomes unavailable;
   restore compatible code, then use the explicitly confirmed offline
-  [transaction recovery procedure](../STORAGE_RECOVERY.md#interrupted-maintenance-transactions).
+  [transaction recovery procedure](../STORAGE.md#interrupted-maintenance-transactions).
   It archives the lock and pending evidence and retains a hold and unresolved
   ownership. There is no automatic lock repair or rollback migration.
 - Never manually delete uncertainty, operation records or a transaction lock,

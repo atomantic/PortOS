@@ -103,7 +103,7 @@ An end-to-end creative production suite for authors, worldbuilders, filmmakers, 
 | **Objects** | `/catalog/objects` | Manage reusable props and objects with visual references and links to canon. | [Catalog Creative Primitives](./catalog-primitives.md) |
 | **Catalog Ingest** | `/catalog/ingest` | Paste unstructured scraps, scenes, or notes to automatically extract structured catalog ingredients. | — |
 | **Mood Boards** | `/mood-boards` | Collect visual references, generate more images from saved descriptions, and retry failed generations. Combine the board’s visual direction into a prompt or render a poster from it. | — |
-| **Media Gen (Image & Video)** | `/media`, `/media/image`, `/media/video` | Local and federated text-to-image (Stable Diffusion, FLUX, MFLUX) and text-to-video (LTX-Video, MiniMax H3) generation. | [Video Speed Profiles](./video-speed-profiles.md), [Video Text Encoders](./video-text-encoders.md) |
+| **Media Gen (Image & Video)** | `/media`, `/media/image`, `/media/video` | Local and federated text-to-image (Stable Diffusion, FLUX, MFLUX) and text-to-video (LTX-Video, MiniMax H3) generation. | [Video generation](./video-generation.md) |
 | **Media History & Timeline** | `/media/history`, `/media/timeline` | Asset gallery, multi-track video timeline editor, clip trimming, audio overlay, and video stitching. | — |
 | **Image Annotation** | `/media/annotate` | Canvas drawing, sketch-over, visual markup, and region labeling for image conditioning. | — |
 | **Media Collections** | `/media/collections` | Visual asset organization, project stacks, and media albums. | — |

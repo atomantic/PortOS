@@ -2,7 +2,7 @@
 
 - **Date:** 2026-09-05
 - **Status:** Accepted
-- **Related:** [machine-local privacy records](./2026-08-08-privacy-records-machine-local.md), [Eidoverse](../features/eidoverse-guest-travel.md)
+- **Related:** [machine-local privacy records](./2026-08-08-privacy-records-machine-local.md), [Eidoverse](../features/eidoverse.md#federated-guest-travel)
 
 ## Context
 
