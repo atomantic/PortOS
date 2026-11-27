@@ -158,38 +158,31 @@ router.post('/drafts/generate', asyncHandler(async (req, res) => {
   const account = await messageAccounts.getAccount(data.accountId);
   if (!account) throw new ServerError('Account not found', { status: 404 });
 
-  // Fetch the original message to build AI reply
-  let replyBody = '';
+  // Fetch the required original message to build the AI reply.
   let to = [];
   let subject = '';
-  if (data.replyToMessageId) {
-    const originalMsg = await messageSync.getMessage(data.accountId, data.replyToMessageId);
-    if (!originalMsg) throw new ServerError('The message being replied to was not found', { status: 404, code: 'REPLY_ORIGINAL_NOT_FOUND' });
-    // Teams can draft without an address, which the user supplies before sending.
-    const sender = originalMsg.from?.email;
-    if (MESSAGE_ACCOUNT_TRANSPORT[account.type]?.email) {
-      if (!sender) throw new ServerError('The original message has no sender address to reply to', { status: 422, code: 'REPLY_TARGET_UNAVAILABLE' });
-      to = [sender];
-      subject = replySubject(originalMsg.subject);
-    } else if (account.type === 'teams') {
-      const recipient = normalizeEmail(sender);
-      if (recipient) to = [recipient];
-    }
-    // Load thread context if available
-    let threadMessages = null;
-    if (data.threadId) {
-      threadMessages = await messageSync.getThread(data.accountId, data.threadId).catch(() => null);
-    }
-    const aiResult = await generateReplyBody(originalMsg, data.instructions, {
-      useVoice: data.useVoice,
-      threadMessages
-    });
-    if (!aiResult?.body?.trim()) throw new ServerError('The selected model did not produce a reply draft. Check Models > LLMs > Abuse Guard.', { status: 422, code: 'UNTRUSTED_REPLY_UNAVAILABLE' });
-    replyBody = aiResult.body;
+  const originalMsg = await messageSync.getMessage(data.accountId, data.replyToMessageId);
+  if (!originalMsg) throw new ServerError('The message being replied to was not found', { status: 404, code: 'REPLY_ORIGINAL_NOT_FOUND' });
+  // Teams can draft without an address, which the user supplies before sending.
+  const sender = originalMsg.from?.email;
+  if (MESSAGE_ACCOUNT_TRANSPORT[account.type]?.email) {
+    if (!sender) throw new ServerError('The original message has no sender address to reply to', { status: 422, code: 'REPLY_TARGET_UNAVAILABLE' });
+    to = [sender];
+    subject = replySubject(originalMsg.subject);
+  } else if (account.type === 'teams') {
+    const recipient = normalizeEmail(sender);
+    if (recipient) to = [recipient];
   }
-  if (!replyBody) {
-    replyBody = `[No original message found]\n\nContext: ${data.context}\nInstructions: ${data.instructions}`;
+  // Load thread context if available
+  let threadMessages = null;
+  if (data.threadId) {
+    threadMessages = await messageSync.getThread(data.accountId, data.threadId).catch(() => null);
   }
+  const aiResult = await generateReplyBody(originalMsg, data.instructions, {
+    useVoice: data.useVoice,
+    threadMessages
+  });
+  if (!aiResult?.body?.trim()) throw new ServerError('The selected model did not produce a reply draft. Check Models > LLMs > Abuse Guard.', { status: 422, code: 'UNTRUSTED_REPLY_UNAVAILABLE' });
 
   const draft = await messageDrafts.createDraft({
     accountId: data.accountId,
@@ -197,7 +190,7 @@ router.post('/drafts/generate', asyncHandler(async (req, res) => {
     threadId: data.threadId,
     to,
     subject,
-    body: replyBody,
+    body: aiResult.body,
     generatedBy: 'ai',
     sendVia: sendViaForAccountType(account.type) ?? 'playwright'
   });

@@ -76,7 +76,7 @@ export const reconcileDraftSchema = z.object({
 
 export const generateDraftSchema = z.object({
   accountId: z.string().guid(),
-  replyToMessageId: z.string().nullish(),
+  replyToMessageId: z.string().trim().min(1),
   threadId: z.string().nullish(),
   context: z.string().optional().default(''),
   instructions: z.string().optional().default(''),
