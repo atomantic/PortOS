@@ -71,7 +71,7 @@ async function syncDirectory(dir) {
   }
 }
 
-export async function atomicWrite(filePath, data) {
+export async function atomicWrite(filePath, data, { mode } = {}) {
   // Buffer must pass through unchanged — JSON.stringify on a Buffer produces
   // `{"type":"Buffer","data":[...]}` which corrupts binary writes (PNG, etc.).
   const payload = typeof data === 'string' || Buffer.isBuffer(data) ? data : JSON.stringify(data, null, 2);
@@ -82,13 +82,14 @@ export async function atomicWrite(filePath, data) {
     if (err.code === 'ENOENT') return null;
     throw err;
   });
+  const writeMode = mode ?? existingMode;
   const tmp = `${filePath}.${process.pid}.${Date.now()}.${randomUUID()}.tmp`;
   try {
     // A failed write may already have produced partial bytes; cleanup owns the
     // entire preparation, including restoring mode bits tightened by umask.
     // `flush` fsyncs the temp file's bytes before the handle closes.
-    await writeFile(tmp, payload, { ...(existingMode !== null ? { mode: existingMode } : {}), flush: true });
-    if (existingMode !== null) await chmod(tmp, existingMode);
+    await writeFile(tmp, payload, { ...(writeMode !== null ? { mode: writeMode } : {}), flush: true });
+    if (writeMode !== null) await chmod(tmp, writeMode);
     // Persistent Windows lock: fail without moving the destination aside.
     const err = await renameWithWindowsRetries(tmp, filePath);
     if (err) throw err;

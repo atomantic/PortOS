@@ -51,16 +51,16 @@ const readProvider = (provider, providers) => (provider
   : null);
 
 export function createProviderService(config = {}) {
-  const state = createProviderServiceState(config);
   const {
     loadProviders,
     saveProviders,
+    restoreProvidersFile,
     buildProviderRecord,
     storeProviderRecords,
     sampleFile,
     cachedModelIds,
     resolveCompositeProvider,
-  } = state;
+  } = createProviderServiceState(config);
   const writes = new AsyncLocalStorage();
   let tail = Promise.resolve();
   const withProviderWrite = (work) => {
@@ -107,5 +107,6 @@ export function createProviderService(config = {}) {
       return withProviderWrite(() => operation.apply(service, args));
     };
   }
+  config.registerProviderRestore?.(restore => withProviderWrite(() => restoreProvidersFile(restore)));
   return service;
 }

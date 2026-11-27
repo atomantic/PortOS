@@ -147,7 +147,7 @@ export const savePeerAdminGrant = (input, req) => withLock(async () => {
   if (index >= 0) store.grants[index] = grant;
   else if (store.grants.length < MAX_GRANTS) store.grants.push(grant);
   else refuse('PEER_ADMIN_GRANT_LIMIT', 'The bounded grant store is full', 409);
-  await atomicWrite(grantFile(), store);
+  await atomicWrite(grantFile(), store, { mode: 0o600 });
   return describePeerAdminSetup(peer.id);
 });
 

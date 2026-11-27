@@ -119,6 +119,7 @@ describe('restoreSnapshot snapshotId, filter flags, and settings re-sync', () =>
         '--exclude=/[dD][aA][tT][aA][bB][aA][sS][eE]-[mM][aA][iI][nN][tT][eE][nN][aA][nN][cC][eE]',
         '--exclude=/.[pP][eE][eE][rR]-[eE][xX][eE][cC][uU][tT][iI][oO][nN]-[aA][uU][tT][hH][oO][rR][iI][tT][yY]-[lL][oO][cC][kK]',
         '--exclude=/[mM][iI][gG][rR][aA][tT][iI][oO][nN][sS].[lL][oO][cC][kK]',
+      '--exclude=/[pP][eE][eE][rR]-[aA][dD][mM][iI][nN]-[gG][rR][aA][nN][tT][sS].[jJ][sS][oO][nN]',
       '--exclude=/[pP][eE][eE][rR]-[eE][xX][eE][cC][uU][tT][iI][oO][nN]',
       '--exclude=/[pP][eE][eE][rR]-[eE][xX][eE][cC][uU][tT][iI][oO][nN]-[cC][aA][tT][aA][lL][oO][gG].[jJ][sS][oO][nN]',
       '--exclude=/[pP][eE][eE][rR]-[eE][xX][eE][cC][uU][tT][iI][oO][nN]-[gG][rR][aA][nN][tT][sS].[jJ][sS][oO][nN]',
@@ -130,6 +131,8 @@ describe('restoreSnapshot snapshotId, filter flags, and settings re-sync', () =>
       `--exclude=${RECORDING_STAGE_RSYNC_GLOB}`,
       '--exclude=/[tT][aA][iI][lL][cC][aA][tT]-[sS][eE][rR][vV][eE].[jJ][sS][oO][nN].*.[tT][mM][pP]',
       '--exclude=/[tT][aA][iI][lL][cC][aA][tT]-[fF][oO][rR][wW][aA][rR][dD][sS].[jJ][sS][oO][nN].*.[tT][mM][pP]',
+      '--exclude=/[pP][eE][eE][rR]-[aA][dD][mM][iI][nN]-[gG][rR][aA][nN][tT][sS].[jJ][sS][oO][nN].*.[tT][mM][pP]',
+      '--exclude=/[pP][eE][eE][rR]-[eE][xX][eE][cC][uU][tT][iI][oO][nN]-[gG][rR][aA][nN][tT][sS].[jJ][sS][oO][nN].*.[tT][mM][pP]',
       '--exclude=/.[dD][aA][tT][aA][bB][aA][sS][eE]-[rR][eE][sS][tT][oO][rR][eE]-[rR][eE][cC][oO][vV][eE][rR][yY]-*.[pP][eE][nN][dD][iI][nN][gG]',
         '--exclude=/[dD][aA][tT][aA][bB][aA][sS][eE]-[aA][uU][tT][hH][oO][rR][iI][tT][yY]-*.[pP][eE][nN][dD][iI][nN][gG]',
         '--exclude=/.[pP][eE][eE][rR]-[eE][xX][eE][cC][uU][tT][iI][oO][nN]-[aA][uU][tT][hH][oO][rR][iI][tT][yY]-*.[pP][eE][nN][dD][iI][nN][gG]',
@@ -137,7 +140,9 @@ describe('restoreSnapshot snapshotId, filter flags, and settings re-sync', () =>
         '--exclude=/[mM][iI][gG][rR][aA][tT][iI][oO][nN][sS].[aA][pP][pP][lL][iI][eE][dD].[jJ][sS][oO][nN].[tT][mM][pP]-*',
       '--exclude=/[sS][eE][tT][tT][iI][nN][gG][sS].[jJ][sS][oO][nN]',
       '--exclude=/[mM][aA][nN][aA][gG][eE][dD]-[vV][iI][sS][iI][tT][oO][rR]-[cC][rR][eE][dD][eE][nN][tT][iI][aA][lL][sS].[jJ][sS][oO][nN]',
-      // No snapshot instances.json was approved for install (#12596).
+      '--exclude=/[pP][rR][iI][vV][aA][tT][eE]/[aA][pP][iI]-[kK][eE][yY][sS].[jJ][sS][oO][nN]',
+      '--exclude=/[pP][rR][oO][vV][iI][dD][eE][rR][sS].[jJ][sS][oO][nN]',
+      // Federation identity uses the private credential writer (#19845).
       '--exclude=/[iI][nN][sS][tT][aA][nN][cC][eE][sS].[jJ][sS][oO][nN]',
     ];
     it('reads a legacy flat snapshot when that source is explicitly selected', async () => {
@@ -171,6 +176,7 @@ describe('restoreSnapshot snapshotId, filter flags, and settings re-sync', () =>
         '--checksum',
         // These excludes must precede the includes because rsync uses the first matching rule.
         ...expectedExcludes,
+        '--exclude=/[pP][rR][iI][vV][aA][tT][eE]',
         '--dry-run',
         // Leading `/` is load-bearing: rsync matches an unanchored pattern
         // against the end of every path, so `brain/***` would also restore
@@ -504,7 +510,7 @@ describe('restoreSnapshot snapshotId, filter flags, and settings re-sync', () =>
   });
 
   describe('settings restore ownership boundary', () => {
-    it.each([undefined, 'settings.json'])('holds the boundary for affected live scope %s', async subdirFilter => {
+    it.each([undefined, 'settings.json', 'private', 'private/api-keys.json'])('holds the boundary for affected live scope %s', async subdirFilter => {
       const proc = fakeProc();
       const spawned = Promise.withResolvers();
       spawn.mockImplementation(() => { spawned.resolve(); return proc; });

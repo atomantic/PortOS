@@ -91,6 +91,14 @@ export const DEFAULT_EXCLUDES = [
   { path: '/.database-restore-recovery-*.pending', reason: 'Unpublished database restore recovery journal bytes — scratch from an interrupted journal write', overridable: false },
   { path: '/database-maintenance/', reason: 'Machine-local database cutover admission fence and active operation', overridable: false },
   { path: '/database-authority-*.pending', reason: 'Unpublished database cutover authority writes', overridable: false },
+  { path: '/peer-admin-grants.json', reason: 'Machine-local peer administration grants', overridable: false },
+  { path: '/peer-execution-grants.json', reason: 'Machine-local peer execution grants', overridable: false },
+  { path: '/peer-execution-catalog.json', reason: 'Machine-local peer execution catalog', overridable: false },
+  { path: '/peer-execution-authority.json', reason: 'Machine-local peer execution authority', overridable: false },
+  { path: '/peer-execution-recovery.jsonl', reason: 'Machine-local peer execution recovery journal', overridable: false },
+  { path: '/peer-execution/', reason: 'Machine-local peer execution state', overridable: false },
+  { path: '/peer-admin-grants.json.*.tmp', reason: 'Unpublished peer administration grants', overridable: false },
+  { path: '/peer-execution-grants.json.*.tmp', reason: 'Unpublished peer execution grants', overridable: false },
   { path: '/.peer-execution-authority-lock', reason: 'Machine-local peer execution authority lock or adoption intent', overridable: false },
   { path: '/.peer-execution-authority-*.pending', reason: 'Unpublished peer execution authority writes', overridable: false },
   { path: '/.peer-execution-adoption-*.pending', reason: 'Unpublished peer execution adoption intent writes', overridable: false },
@@ -247,21 +255,26 @@ const RESTORE_PRESERVED_FILES = Object.freeze([
   'calendar/google-auth', 'spotify/credentials.json', 'spotify/tokens.json', 'spotify/cache', 'openclaw',
   'jira.json', 'datadog.json', 'auth-sessions.json',
   'database-authority.json', 'database-restore-recovery.json', 'database-maintenance',
-  '.peer-execution-authority-lock', 'migrations.lock', 'peer-execution', 'peer-execution-catalog.json', 'peer-execution-grants.json', 'peer-execution-authority.json', 'peer-execution-recovery.jsonl', 'workflow-maintenance', 'backup-admission', 'cos/agents/.branch-policy-revision',
+  '.peer-execution-authority-lock', 'migrations.lock', 'peer-admin-grants.json', 'peer-execution', 'peer-execution-catalog.json', 'peer-execution-grants.json', 'peer-execution-authority.json', 'peer-execution-recovery.jsonl', 'workflow-maintenance', 'backup-admission', 'cos/agents/.branch-policy-revision',
 ]);
 // Matched case-insensitively (rsync has no such flag, so each letter becomes a
 // `[xX]` class): on a case-insensitive volume a `Database-Authority.json` entry
 // would otherwise overwrite the destination's lowercase record.
 const caseInsensitiveGlob = (name) => name.replace(/[a-z]/gi, ch => `[${ch.toLowerCase()}${ch.toUpperCase()}]`);
 export const IDENTITY_FILE = 'instances.json';
-export const RESTORE_CREDENTIAL_FILES = Object.freeze(['settings.json', 'managed-visitor-credentials.json', IDENTITY_FILE]);
+export const RESTORE_CREDENTIAL_FILES = Object.freeze([
+  'settings.json', 'managed-visitor-credentials.json', 'private/api-keys.json', 'providers.json', IDENTITY_FILE,
+]);
 // The restore coordinator verifies these records and publishes them privately.
+export const PRIVATE_DIRECTORY_RSYNC_EXCLUDE = `--exclude=/${caseInsensitiveGlob('private')}`;
 export const RESTORE_CREDENTIAL_RSYNC_EXCLUDES = RESTORE_CREDENTIAL_FILES.map(name => `--exclude=/${caseInsensitiveGlob(name)}`);
 export const RESTORE_PRESERVED_RSYNC_EXCLUDES = [
   ...RESTORE_PRESERVED_FILES.map(name => `--exclude=/${caseInsensitiveGlob(name)}`),
   `--exclude=${RECORDING_STAGE_RSYNC_GLOB}`,
   `--exclude=/${caseInsensitiveGlob('tailcat-serve.json.*.tmp')}`,
   `--exclude=/${caseInsensitiveGlob('tailcat-forwards.json.*.tmp')}`,
+  `--exclude=/${caseInsensitiveGlob('peer-admin-grants.json.*.tmp')}`,
+  `--exclude=/${caseInsensitiveGlob('peer-execution-grants.json.*.tmp')}`,
   `--exclude=/${caseInsensitiveGlob('.database-restore-recovery-*.pending')}`,
   `--exclude=/${caseInsensitiveGlob('database-authority-*.pending')}`,
   `--exclude=/${caseInsensitiveGlob('.peer-execution-authority-*.pending')}`,
@@ -272,7 +285,7 @@ export const isRestorePreservedPath = (relativePath) => {
   if (typeof relativePath !== 'string') return false;
   const normalized = relativePath.toLowerCase();
   return RECORDING_STAGE_PATH.test(relativePath)
-    || /^tailcat-(?:serve|forwards)\.json\.[^/]+\.tmp$/.test(normalized)
+    || /^(?:tailcat-(?:serve|forwards)|peer-(?:admin|execution)-grants)\.json\.[^/]+\.tmp$/.test(normalized)
     || /^\.database-restore-recovery-[^/]*\.pending(?:\/|$)/.test(normalized)
     || /^database-authority-[^/]*\.pending(?:\/|$)/.test(normalized)
     || /^\.peer-execution-(?:authority|adoption)-[^/]*\.pending(?:\/|$)/.test(normalized)

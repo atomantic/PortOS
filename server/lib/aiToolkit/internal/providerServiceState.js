@@ -1,4 +1,4 @@
-import { chmod, readFile, rename } from 'fs/promises';
+import { readFile, rename } from 'fs/promises';
 import { existsSync } from 'fs';
 import { join } from 'path';
 import { atomicWrite } from './atomicWrite.js';
@@ -246,6 +246,7 @@ export function createProviderServiceState(config = {}) {
   let providersCache = null;
   let providersCacheAt = -Infinity;
   let providersLoadInFlight = null;
+  let providersRestoreInFlight = null;
   let cacheGeneration = 0;
 
   function refreshProvidersCache(data) {
@@ -276,11 +277,7 @@ export function createProviderServiceState(config = {}) {
   }
 
   async function writeProvidersFile(data) {
-    await atomicWrite(providersPath, data);
-    // Best-effort owner-only mode: chmod is a no-op on Windows and must not break provider saves.
-    await chmod(providersPath, 0o600).catch((err) => {
-      if (err?.code !== 'ENOENT') console.log(`⚠️ Could not set permissions on providers store (${err?.code || 'error'})`);
-    });
+    await atomicWrite(providersPath, data, { mode: 0o600 });
   }
 
   async function readProvidersFromDisk() {
@@ -320,6 +317,9 @@ export function createProviderServiceState(config = {}) {
 
   async function loadProviders() {
     if (providersCache && (Date.now() - providersCacheAt) < providersCacheTtlMs) return providersCache;
+    // A cold load can seed or normalize the store. Let a pending restore
+    // finish before reading from disk so those writes cannot overlap it.
+    while (providersRestoreInFlight) await providersRestoreInFlight.catch(() => {});
     if (providersLoadInFlight) return providersLoadInFlight;
     const generation = cacheGeneration;
     providersLoadInFlight = readProvidersFromDisk()
@@ -329,6 +329,17 @@ export function createProviderServiceState(config = {}) {
       })
       .finally(() => { providersLoadInFlight = null; });
     return providersLoadInFlight;
+  }
+
+  function restoreProvidersFile(restore) {
+    // The caller already holds the provider write queue. Drain any earlier
+    // cold load separately, as regular reads must also work inside save hooks.
+    const drained = providersLoadInFlight?.catch(() => {});
+    providersRestoreInFlight = Promise.resolve(drained).then(restore).finally(() => {
+      invalidateProvidersCache();
+      providersRestoreInFlight = null;
+    });
+    return providersRestoreInFlight;
   }
 
   async function notifyProvidersSaved(data) {
@@ -420,6 +431,7 @@ export function createProviderServiceState(config = {}) {
   return {
     loadProviders,
     saveProviders,
+    restoreProvidersFile,
     buildProviderRecord,
     storeProviderRecords,
     sampleFile,

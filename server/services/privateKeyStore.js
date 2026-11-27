@@ -79,7 +79,7 @@ export async function persistPrivateKeys(settings, dataDir, { preserveExisting =
     await chmod(directory, 0o700);
     const file = join(directory, 'api-keys.json');
     // Directory permissions protect even pre-existing files while tightened.
-    if (changed) await atomicWrite(file, { schemaVersion: 1, keys });
+    if (changed) await atomicWrite(file, { schemaVersion: 1, keys }, { mode: 0o600 });
     await chmod(file, 0o600);
   }
   return publicSettings;

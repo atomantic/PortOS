@@ -75,13 +75,15 @@ export function createAIToolkit(config = {}) {
     resolveCompositeProvider = null
   } = config;
 
+  let withLiveProvidersRestore;
   const providerService = createProviderService({
     dataDir,
     providersFile,
     sampleFile: sampleProvidersFile,
     onProvidersSaved,
     cachedModelIds,
-    resolveCompositeProvider
+    resolveCompositeProvider,
+    registerProviderRestore: restore => { withLiveProvidersRestore = restore; }
   });
 
   let providerStatusService = null;
@@ -141,6 +143,7 @@ export function createAIToolkit(config = {}) {
   }
 
   return {
+    withLiveProvidersRestore,
     services: {
       providers: providerService,
       runner: runnerService,
