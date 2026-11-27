@@ -107,17 +107,35 @@ export function verifyMortalLoomStore(value) {
 const monitoredCollections = ['goals', 'habits', 'bodyEntries', 'healthMetrics', 'alcoholDrinks',
   'nicotineEntries', 'bloodTests', 'bloodDonations', 'saunaSessions', 'eyeExams', 'epigeneticTests', 'genomeVisitNotes'];
 
+const historyCounts = z.object(Object.fromEntries(monitoredCollections.map(key => [key, z.number().int().nonnegative()]))).strict();
+const commitReceipt = z.object({
+  version: z.literal(1),
+  revision: z.string().regex(/^[a-f0-9]{64}$/),
+  recordedAt: z.number().int().positive(),
+  history: z.object({ counts: historyCounts, hasUserData: z.boolean() }).strict(),
+}).strict();
+
+export function verifiedMortalLoomCommitReceipt(value) {
+  const result = commitReceipt.safeParse(value);
+  return result.success ? result.data : null;
+}
+
+export function summarizeMortalLoomHistory(value) {
+  const counts = Object.fromEntries(monitoredCollections.map(key => [key, value[key]?.length ?? 0]));
+  const hasUserData = value.profile.birthDate != null || value.genomeScanRecord != null ||
+    monitoredCollections.some(key => key !== 'genomeVisitNotes' && counts[key] > 0);
+  return { counts, hasUserData };
+}
+
 export function suspiciousMortalLoomContraction(previous, incoming) {
   let total = 0, erased = 0, reductions = 0;
   for (const key of monitoredCollections) {
-    const before = previous[key]?.length ?? 0;
-    const after = incoming[key]?.length ?? 0;
+    const before = previous.counts[key];
+    const after = incoming.counts[key];
     total += before;
     reductions += Math.max(0, before - after);
     if (before >= 2 && after === 0) erased++;
   }
-  const hasUserData = incoming.profile.birthDate != null || incoming.genomeScanRecord != null ||
-    monitoredCollections.some(key => key !== 'genomeVisitNotes' && incoming[key]?.length);
-  return erased >= 2 || (total >= 3 && !hasUserData) || (reductions >= 10 && reductions * 2 >= total) ||
-    ((previous.goals?.length ?? 0) >= 3 && !incoming.goals?.length);
+  return erased >= 2 || (total >= 3 && !incoming.hasUserData) || (reductions >= 10 && reductions * 2 >= total) ||
+    (previous.counts.goals >= 3 && incoming.counts.goals === 0);
 }

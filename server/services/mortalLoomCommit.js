@@ -129,6 +129,38 @@ export async function readMortalLoomSnapshot(path, id) {
   return bytes;
 }
 
+const RECEIPT_NAME = 'last-committed.json';
+
+export async function readMortalLoomCommitReceipt(path) {
+  validateTarget(path);
+  const file = join(snapshotFolder(path), RECEIPT_NAME);
+  try {
+    const st = await lstat(file);
+    if (!st.isFile() || st.size > 4096) return null;
+    const raw = await readFile(file, 'utf8');
+    return raw.length <= 4096 ? JSON.parse(raw) : null;
+  } catch {
+    return null; // Without a valid receipt, compare with verified preimages.
+  }
+}
+
+/** Record only bytes that the save boundary already published and read back. */
+export async function recordMortalLoomCommit(path, receipt) {
+  validateTarget(path);
+  const folder = snapshotFolder(path);
+  const temp = join(folder, `.${randomUUID()}.receipt`);
+  try {
+    await writeFile(temp, JSON.stringify(receipt), { mode: 0o600, flag: 'wx', flush: true });
+    await rename(temp, join(folder, RECEIPT_NAME));
+  } catch {
+    // Publication has already succeeded. Do not claim failure before the
+    // commit or record any digest that never made it through readback.
+    throw storeFailure('uncertain');
+  } finally {
+    await rm(temp, { force: true }).catch(() => {});
+  }
+}
+
 async function snapshot(path, expected) {
   const folder = snapshotFolder(path);
   await mkdir(folder, { recursive: true, mode: 0o700 });

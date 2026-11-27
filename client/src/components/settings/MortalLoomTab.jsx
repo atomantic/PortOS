@@ -6,7 +6,7 @@ import ToggleSwitch from '../ToggleSwitch';
 import SettingsLoadError from '../ui/SettingsLoadError';
 import useSettingsForm from '../../hooks/useSettingsForm.js';
 import { getSettings, updateSettings } from '../../services/apiSystem.js';
-import { downloadMortalLoomRecovery, getMortalLoomStatus, importMortalLoom, restoreMortalLoom } from '../../services/apiMortalLoom.js';
+import { downloadMortalLoomRecovery, getMortalLoomStatus, importMortalLoom, previewMortalLoomRecovery, restoreMortalLoom } from '../../services/apiMortalLoom.js';
 import { downloadBlob } from '../../lib/downloadBlob.js';
 import { formatBytes, formatDateTime } from '../../utils/formatters';
 
@@ -35,10 +35,24 @@ function RecoveryCopies({ status, disabled, refreshStatus }) {
   const [selected, setSelected] = useState(null);
   const [restoring, setRestoring] = useState(false);
   const [downloading, setDownloading] = useState(false);
+  const [checkingCopy, setCheckingCopy] = useState(null);
   const snapshots = status?.recoverySnapshots ?? [];
   if (!snapshots.length) return null;
   const canRestore = Boolean(status.revision) && !disabled && !restoring;
   const confirmation = selected?.revision === status.revision ? selected : null;
+  const select = async (snapshot) => {
+    if (!canRestore || checkingCopy) return;
+    setSelected(null);
+    setCheckingCopy(snapshot.id);
+    try {
+      const summary = await previewMortalLoomRecovery(snapshot.id, { silent: true });
+      setSelected({ ...snapshot, summary, revision: status.revision });
+    } catch (error) {
+      toast.error(error.message || 'Could not verify the recovery copy');
+    } finally {
+      setCheckingCopy(null);
+    }
+  };
   const restore = async () => {
     if (!canRestore || !confirmation) return;
     setRestoring(true);
@@ -74,16 +88,16 @@ function RecoveryCopies({ status, disabled, refreshStatus }) {
         {snapshots.map(snapshot => (
           <li key={snapshot.id} className="flex flex-wrap items-center gap-3 text-sm">
             <span>{formatDateTime(snapshot.savedAt)}</span>
-            <button type="button" disabled={!canRestore || !snapshot.valid}
-              onClick={() => setSelected({ ...snapshot, revision: status.revision })}
+            <button type="button" disabled={!canRestore || !!checkingCopy}
+              onClick={() => select(snapshot)}
               className="rounded border border-port-border px-3 py-2 text-port-accent hover:border-port-accent disabled:opacity-50">
-              {snapshot.valid ? 'Select copy' : 'Unreadable copy'}
+              {checkingCopy === snapshot.id ? 'Checking copy…' : 'Select copy'}
             </button>
-            {snapshot.valid && <button type="button" onClick={() => download(snapshot.id)}
+            <button type="button" onClick={() => download(snapshot.id)}
               disabled={downloading || restoring || disabled}
               className="rounded border border-port-border px-3 py-2 hover:border-port-accent disabled:opacity-50">
               Download copy
-            </button>}
+            </button>
           </li>
         ))}
       </ul>

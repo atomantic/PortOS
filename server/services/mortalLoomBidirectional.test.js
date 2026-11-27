@@ -6,7 +6,7 @@ import { join } from 'path';
 import { EventEmitter } from 'events';
 import { _disposeMortalLoomHelperForTest, commitMortalLoomRevision, listMortalLoomSnapshots, readMortalLoomSnapshot } from './mortalLoomCommit.js';
 import { overlayMortalLoomGoals } from './mortalLoomGoals.js';
-import { exportMortalLoomRecoveryCopy, getStatus, mlApplyGoalChanges, mlUpsertHealthMetricByDate, restoreMortalLoomSnapshot } from './mortalLoomStore.js';
+import { exportMortalLoomRecoveryCopy, getStatus, mlApplyGoalChanges, mlUpsertHealthMetricByDate, previewMortalLoomRecoveryCopy, restoreMortalLoomSnapshot } from './mortalLoomStore.js';
 
 // The regular PR suite must run even in macOS sandboxes that deny IPC to
 // the coordination daemon. Set PORTOS_TEST_NATIVE_MORTALLOOM=1 outside such
@@ -112,9 +112,10 @@ describe('MortalLoom shared file contract', () => {
     await mlUpsertHealthMetricByDate('2026-01-03', { heartRate: 61 });
     const status = await getStatus();
     expect(status).toMatchObject({ state: 'ready', summary: { goals: 1 }, recoverySnapshots: [{
-      valid: true, summary: { goals: 1, healthMetrics: 0 },
+      id: expect.any(String), savedAt: expect.any(String),
     }] });
     const copy = (await listMortalLoomSnapshots(path))[0];
+    expect(await previewMortalLoomRecoveryCopy(copy.id)).toEqual({ goals: 1, healthMetrics: 0 });
     expect((await readMortalLoomSnapshot(path, copy.id)).toString('utf8')).toBe(raw);
     const snapshotRoot = join(dir, '.mortal-loom-audit-snapshots');
     const [snapshotFolder] = await readdir(snapshotRoot);
@@ -146,6 +147,73 @@ describe('MortalLoom shared file contract', () => {
     expect((await getStatus()).state).toBe('ready');
     await mlUpsertHealthMetricByDate('2026-01-04', { heartRate: 63 });
     expect(await read()).not.toHaveProperty('_mortalLoomSync');
+  });
+
+  it('recognizes a committed large deletion after restarting without trusting another reduced revision', async () => {
+    const goals = [goal('One'), goal('Two'), goal('Three')];
+    const healthMetrics = Array.from({ length: 10 }, (_, index) => ({
+      id: randomUUID(), date: `2026-01-${String(index + 1).padStart(2, '0')}`, heartRate: 60,
+    }));
+    await put(fixture({ goals, healthMetrics }));
+    await mlApplyGoalChanges(goals, []);
+    expect((await read()).goals).toEqual([]);
+    expect((await listMortalLoomSnapshots(path))).toHaveLength(1);
+
+    // Import a fresh store module to rule out relying on module/writer state.
+    vi.resetModules();
+    const restarted = await import('./mortalLoomStore.js');
+    const restartedCommit = await import('./mortalLoomCommit.js');
+    try {
+      expect((await restarted.getStatus()).state).toBe('ready');
+      // A newer, ordinary native edit after the accepted deletion is also
+      // compared with the accepted postimage, not the fuller preimage.
+      const phoneEdit = await read();
+      phoneEdit.healthMetrics[0].heartRate = 63;
+      await put(phoneEdit);
+      expect((await restarted.getStatus()).state).toBe('ready');
+      await restarted.mlUpsertHealthMetricByDate('2026-01-11', { heartRate: 62 });
+      await put(fixture());
+      expect((await restarted.getStatus()).state).toBe('reduced');
+      await expect(restarted.mlUpsertHealthMetricByDate('2026-01-12', { heartRate: 64 }))
+        .rejects.toMatchObject({ code: 'MORTALLOOM_HISTORY_REDUCED' });
+    } finally {
+      await restartedCommit._disposeMortalLoomHelperForTest();
+    }
+  });
+
+  it('does not accept a replay of a committed hash over more recent verified history', async () => {
+    await put(fixture());
+    await mlUpsertHealthMetricByDate('2026-01-01', { heartRate: 61 });
+    const oldCommit = await readFile(path);
+    await put(fixture({ goals: [goal('One'), goal('Two'), goal('Three')] }));
+    const newerHistory = await readFile(path);
+    await writeFile(path, oldCommit);
+    // PortOS read the newer history, but publication found that native sync
+    // had already replaced it. The verified recent preimage outranks the old
+    // receipt, not vice versa.
+    const date = vi.spyOn(Date, 'now').mockReturnValue(Date.now() + 1_000);
+    try {
+      await expect(commitMortalLoomRevision(path, newerHistory, Buffer.from('{}')))
+        .rejects.toMatchObject({ code: 'MORTALLOOM_REVISION_CHANGED' });
+    } finally {
+      date.mockRestore();
+    }
+    expect(await readFile(path)).toEqual(oldCommit);
+    expect((await getStatus()).state).toBe('reduced');
+  });
+
+  it('lists recovery metadata even for corrupt copies and verifies only on use', async () => {
+    await put(fixture({ goals: [goal('Previous')] }));
+    await mlUpsertHealthMetricByDate('2026-01-03', { heartRate: 61 });
+    await mlUpsertHealthMetricByDate('2026-01-04', { heartRate: 62 });
+    const [newest, older] = await listMortalLoomSnapshots(path);
+    const snapshotRoot = join(dir, '.mortal-loom-audit-snapshots');
+    const [snapshotFolder] = await readdir(snapshotRoot);
+    await writeFile(join(snapshotRoot, snapshotFolder, older.name), 'corrupt');
+    expect(await getStatus()).toMatchObject({ state: 'ready', recoverySnapshots: [newest, older].map(({ id, savedAt }) => ({ id, savedAt })) });
+    expect(await previewMortalLoomRecoveryCopy(newest.id)).toMatchObject({ goals: 1, healthMetrics: 1 });
+    await expect(previewMortalLoomRecoveryCopy(older.id)).rejects.toMatchObject({ code: 'MORTALLOOM_INVALID' });
+    await expect(exportMortalLoomRecoveryCopy(older.id)).rejects.toMatchObject({ code: 'MORTALLOOM_INVALID' });
   });
 
   it('rejects exact-byte mismatch at the commit boundary (even when data parses the same)', async () => {

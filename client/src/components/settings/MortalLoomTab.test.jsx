@@ -7,6 +7,7 @@ const api = vi.hoisted(() => ({
   getMortalLoomStatus: vi.fn(),
   importMortalLoom: vi.fn(),
   restoreMortalLoom: vi.fn(),
+  previewMortalLoomRecovery: vi.fn(),
   downloadMortalLoomRecovery: vi.fn(),
 }));
 vi.mock('../../services/apiSystem.js', () => ({ getSettings: api.getSettings, updateSettings: api.updateSettings }));
@@ -14,6 +15,7 @@ vi.mock('../../services/apiMortalLoom.js', () => ({
   getMortalLoomStatus: api.getMortalLoomStatus,
   importMortalLoom: api.importMortalLoom,
   restoreMortalLoom: api.restoreMortalLoom,
+  previewMortalLoomRecovery: api.previewMortalLoomRecovery,
   downloadMortalLoomRecovery: api.downloadMortalLoomRecovery,
 }));
 vi.mock('../ui/Toast');
@@ -113,20 +115,32 @@ describe('MortalLoom import', () => {
 });
 
 describe('MortalLoom recovery', () => {
-  const copy = { id: 'a'.repeat(64), savedAt: '2026-01-02T01:18:00Z', valid: true, summary: { goals: 3, healthMetrics: 31 } };
+  const copy = { id: 'a'.repeat(64), savedAt: '2026-01-02T01:18:00Z' };
   beforeEach(() => api.getSettings.mockResolvedValue({ mortalloom: { enabled: true } }));
 
   it('previews a copy and only restores after explicit confirmation against the checked file', async () => {
     const revision = 'b'.repeat(64);
     api.getMortalLoomStatus.mockResolvedValue({ state: 'invalid', exists: true, revision, recoverySnapshots: [copy] });
     api.restoreMortalLoom.mockResolvedValue({ ok: true });
+    api.previewMortalLoomRecovery.mockResolvedValue({ goals: 3, healthMetrics: 31 });
     render(<MortalLoomTab />);
     fireEvent.click(await screen.findByRole('button', { name: 'Select copy' }));
-    expect(screen.getByRole('alert')).toHaveTextContent('3 goals and 31 daily health records');
+    expect(api.previewMortalLoomRecovery).toHaveBeenCalledExactlyOnceWith(copy.id, { silent: true });
+    expect(await screen.findByRole('alert')).toHaveTextContent('3 goals and 31 daily health records');
     expect(api.restoreMortalLoom).not.toHaveBeenCalled();
     fireEvent.click(screen.getByRole('button', { name: 'Restore recovery copy' }));
     expect(api.restoreMortalLoom).toHaveBeenCalledExactlyOnceWith({ id: copy.id, expectedRevision: revision }, { silent: true });
     await waitFor(() => expect(screen.queryByRole('button', { name: 'Restore recovery copy' })).not.toBeInTheDocument());
+  });
+
+  it('does not show a confirmation when the selected copy cannot be verified', async () => {
+    api.getMortalLoomStatus.mockResolvedValue({ state: 'ready', exists: true, revision: 'b'.repeat(64), recoverySnapshots: [copy] });
+    api.previewMortalLoomRecovery.mockRejectedValue(new Error('Recovery copy is unreadable'));
+    render(<MortalLoomTab />);
+    fireEvent.click(await screen.findByRole('button', { name: 'Select copy' }));
+    await waitFor(() => expect(screen.getByRole('button', { name: 'Select copy' })).toBeEnabled());
+    expect(screen.queryByRole('button', { name: 'Restore recovery copy' })).not.toBeInTheDocument();
+    expect(api.restoreMortalLoom).not.toHaveBeenCalled();
   });
 
   it('shows copies without allowing an unverified or absent file to be replaced', async () => {

@@ -30,8 +30,8 @@ import { getSettings, settingsEvents } from './settings.js';
 import { isVitestRunner } from '../lib/runtimeEnv.js';
 import { canonicalizePath, isPathAtOrInsideDir } from '../lib/pathContainment.js';
 
-import { commitMortalLoomRevision, inspectMortalLoomTarget, listMortalLoomSnapshots, MORTALLOOM_MAX_BYTES, mortalLoomRevision, readMortalLoomSnapshot, storeFailure } from './mortalLoomCommit.js';
-import { suspiciousMortalLoomContraction, verifyMortalLoomStore } from './mortalLoomSchema.js';
+import { commitMortalLoomRevision, inspectMortalLoomTarget, listMortalLoomSnapshots, MORTALLOOM_MAX_BYTES, mortalLoomRevision, readMortalLoomCommitReceipt, readMortalLoomSnapshot, recordMortalLoomCommit, storeFailure } from './mortalLoomCommit.js';
+import { summarizeMortalLoomHistory, suspiciousMortalLoomContraction, verifiedMortalLoomCommitReceipt, verifyMortalLoomStore } from './mortalLoomSchema.js';
 import { applyMortalLoomGoalChanges, hasMortalLoomGoalChanges } from './mortalLoomGoals.js';
 
 const DEFAULT_ICLOUD_PATH = join(
@@ -525,24 +525,24 @@ async function getVerifiedRecoveryCopy(path, id) {
   return { bytes, data: parseWritableStore(bytes) };
 }
 
-async function contractionComparedWithRecovery(path, candidate, rows) {
+async function contractionComparedWithRecovery(path, candidate, revision, rows) {
+  const receipt = verifiedMortalLoomCommitReceipt(await readMortalLoomCommitReceipt(path));
+  const current = summarizeMortalLoomHistory(candidate);
   const copies = rows ?? await listMortalLoomSnapshots(path);
   const marker = candidate._mortalLoomSync;
-  // Only an explicitly marked replacement of the actual, preserved previous
-  // bytes is accepted. Routine writes remove obsolete markers.
-  if (marker?.kind === 'replace' && marker.version === 1 && copies[0]?.id === marker.parentSHA256) {
+  for (const { id, savedAt } of copies) {
+    // An older preimage is not the baseline after a successful PortOS
+    // deletion. On changed bytes, compare with the last committed counts or
+    // more recent verified recovery bytes, never just trust an old digest.
+    if (receipt && receipt.recordedAt >= Date.parse(savedAt)) break;
     try {
-      await readMortalLoomSnapshot(path, marker.parentSHA256);
-      return false;
-    } catch { /* keep checking other copies */ }
-  }
-  for (const { id } of copies) {
-    try {
-      const { data: baseline } = await getVerifiedRecoveryCopy(path, id);
-      return suspiciousMortalLoomContraction(baseline, candidate);
+      const bytes = await readMortalLoomSnapshot(path, id);
+      if (id === copies[0]?.id && marker?.kind === 'replace' && marker.version === 1 && id === marker.parentSHA256) return false;
+      return suspiciousMortalLoomContraction(summarizeMortalLoomHistory(parseWritableStore(bytes)), current);
     } catch { /* a corrupt preserved preimage isn't a baseline */ }
   }
-  return false;
+  if (receipt?.revision === revision) return false;
+  return receipt ? suspiciousMortalLoomContraction(receipt.history, current) : false;
 }
 
 function parseWritableStore(bytes) {
@@ -553,6 +553,9 @@ async function commitStore(path, raw, base) {
   if (await getWritablePath() !== path) throw storeFailure('revisionChanged');
   const bytes = Buffer.from(`${JSON.stringify(base, null, 2)}\n`);
   await commitMortalLoomRevision(path, raw, bytes);
+  await recordMortalLoomCommit(path, {
+    version: 1, revision: mortalLoomRevision(bytes), recordedAt: Date.now(), history: summarizeMortalLoomHistory(base),
+  });
   dashboardEvents.emit('goals:changed');
 }
 
@@ -562,7 +565,7 @@ export function updateStore(mutator) {
     const path = await getWritablePath();
     const raw = await readWritableBytes(path);
     const base = parseWritableStore(raw);
-    if (await contractionComparedWithRecovery(path, base)) throw storeFailure('reduced');
+    if (await contractionComparedWithRecovery(path, base, mortalLoomRevision(raw))) throw storeFailure('reduced');
     const before = structuredClone(base);
     for (const key of ARRAY_KEYS) {
       if (base[key] == null) base[key] = [];
@@ -604,12 +607,21 @@ export function restoreMortalLoomSnapshot({ id, expectedRevision }) {
   });
 }
 
-export async function exportMortalLoomRecoveryCopy(id) {
+async function readConfiguredRecoveryCopy(id) {
   const settings = await getSettings();
   const path = normalizePath(settings?.mortalloom?.path);
   if (!path) throw storeFailure('missing');
-  const { bytes } = await getVerifiedRecoveryCopy(path, id);
+  return getVerifiedRecoveryCopy(path, id);
+}
+
+export async function exportMortalLoomRecoveryCopy(id) {
+  const { bytes } = await readConfiguredRecoveryCopy(id);
   return bytes;
+}
+
+export async function previewMortalLoomRecoveryCopy(id) {
+  const { data } = await readConfiguredRecoveryCopy(id);
+  return { goals: data.goals?.length ?? 0, healthMetrics: data.healthMetrics?.length ?? 0 };
 }
 
 /** Uppercase UUID v4 — matches MortalLoom's iOS/macOS id format. */
@@ -883,15 +895,7 @@ export async function getStatus() {
   const path = normalizePath(s?.mortalloom?.path);
   const enabled = Boolean(s?.mortalloom?.enabled);
   const backupRows = await listMortalLoomSnapshots(path).catch(() => []);
-  const recoverySnapshots = [];
-  for (const { id, savedAt } of backupRows) {
-    try {
-      const { data } = await getVerifiedRecoveryCopy(path, id);
-      recoverySnapshots.push({ id, savedAt, valid: true, summary: { goals: data.goals?.length ?? 0, healthMetrics: data.healthMetrics?.length ?? 0 } });
-    } catch {
-      recoverySnapshots.push({ id, savedAt, valid: false });
-    }
-  }
+  const recoverySnapshots = backupRows.map(({ id, savedAt }) => ({ id, savedAt }));
   const missingResponse = {
     enabled, path, usingDefault: path === DEFAULT_ICLOUD_PATH, defaultPath: DEFAULT_ICLOUD_PATH,
     exists: false, size: 0, mtime: null, summary: null, state: 'missing', revision: null,
@@ -937,14 +941,14 @@ export async function getStatus() {
   // between the two calls — collapse to the missing response so the endpoint
   // doesn't advertise a phantom file with stale stat metadata.
   if (readEnoent) return missingResponse;
-  const parsed = raw === null ? null : safeJSONParse(raw.toString('utf8'), null);
+  const revision = raw === null ? null : mortalLoomRevision(raw);
   let state = evicted ? 'notCurrent' : oversized ? 'oversized' : raw === null ? 'unavailable' : 'ready';
   let writeReady = false;
   let data = null;
   if (state === 'ready') {
     try {
-      data = verifyMortalLoomStore(parsed);
-      if (await contractionComparedWithRecovery(path, data, backupRows)) state = 'reduced';
+      data = parseWritableStore(raw);
+      if (await contractionComparedWithRecovery(path, data, revision, backupRows)) state = 'reduced';
     } catch {
       state = 'invalid';
     }
@@ -968,7 +972,7 @@ export async function getStatus() {
   return {
     enabled, path, usingDefault: path === DEFAULT_ICLOUD_PATH, defaultPath: DEFAULT_ICLOUD_PATH,
     exists: true, size: st?.size ?? 0, mtime: st?.mtime?.toISOString() ?? null,
-    state, recoverySnapshots, revision: writeReady ? mortalLoomRevision(raw) : null,
+    state, recoverySnapshots, revision: writeReady ? revision : null,
     summary: data ? {
       goals: count('goals'),
       alcoholDrinks: count('alcoholDrinks'),

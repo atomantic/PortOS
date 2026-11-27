@@ -3,7 +3,7 @@ import { mortalLoomRecoverySchema, mortalLoomRestoreSchema } from '../lib/mortal
 import { asyncHandler } from '../lib/errorHandler.js';
 import { validateRequest } from '../lib/validateRequest.js';
 import { requireHostControl } from '../services/authGate.js';
-import { exportMortalLoomRecoveryCopy, getStatus, importToPortOS, restoreMortalLoomSnapshot } from '../services/mortalLoomStore.js';
+import { exportMortalLoomRecoveryCopy, getStatus, importToPortOS, previewMortalLoomRecoveryCopy, restoreMortalLoomSnapshot } from '../services/mortalLoomStore.js';
 
 const router = Router();
 
@@ -19,6 +19,12 @@ router.post('/import', asyncHandler(async (_req, res) => {
 
 router.post('/restore', requireHostControl, asyncHandler(async (req, res) => {
   res.json(await restoreMortalLoomSnapshot(validateRequest(mortalLoomRestoreSchema, req.body)));
+}));
+
+router.post('/recovery/preview', requireHostControl, asyncHandler(async (req, res) => {
+  const { id } = validateRequest(mortalLoomRecoverySchema, req.body);
+  const summary = await previewMortalLoomRecoveryCopy(id);
+  res.set('Cache-Control', 'no-store').json(summary);
 }));
 
 router.post('/recovery/download', requireHostControl, asyncHandler(async (req, res) => {

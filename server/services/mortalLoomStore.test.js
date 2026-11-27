@@ -33,6 +33,8 @@ vi.mock('./mortalLoomCommit.js', async importOriginal => {
     }),
     commitMortalLoomRevision: vi.fn(async (path, _before, after) => writeFileMock(path, after.toString())),
     listMortalLoomSnapshots: vi.fn(async () => []),
+    readMortalLoomCommitReceipt: vi.fn(async () => null),
+    recordMortalLoomCommit: vi.fn(async () => {}),
   };
 });
 

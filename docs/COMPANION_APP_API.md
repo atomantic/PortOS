@@ -315,8 +315,10 @@ is MortalLoom (`server/routes/mortalloom.js`, `server/services/mortalLoomStore.j
 - `POST /api/mortalloom/import` — non-destructive **by-id merge** of the shared
   iCloud JSON into `data/`. PortOS federation and this import do not publish
   changes back to MortalLoom.
-- `POST /api/mortalloom/recovery/download` — host-control-only JSON attachment
-  of a verified local recovery copy by its ID. `POST /api/mortalloom/restore`
+- `POST /api/mortalloom/recovery/preview` — host-control-only summary of a
+  verified recovery copy by ID. Status lists dates and IDs without opening each
+  copy. `POST /api/mortalloom/recovery/download` validates the selected copy
+  and returns a private JSON attachment. `POST /api/mortalloom/restore`
   explicitly restores a copy against the exact current revision shown in
   Settings → MortalLoom. Use MortalLoom's Restore from File with a downloaded
   copy if the shared file is missing or iCloud reports a conflict.
