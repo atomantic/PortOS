@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
-import { act, fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { MemoryRouter, Route, Routes, useLocation, useNavigate } from 'react-router';
 
@@ -48,6 +48,54 @@ const APP = {
   processes: [],
 };
 
+const FULL_APP = { ...APP, id: PORTOS_APP_ID, hasSubmodules: true };
+const APP_IDS = new Set([APP.id, 'app-2', PORTOS_APP_ID]);
+const APP_READS = {
+  agents: { agents: [] },
+  'claim-reviewers': { reviewers: [] },
+  documents: { documents: [], gsd: {} },
+  issues: { issues: [], reason: 'no-open-issues' },
+  'lane-health': { lanes: [] },
+  'launch-videos': { videos: [] },
+  'layered-intelligence': { layers: [] },
+  'pull-requests': { pullRequests: [], reason: 'no-open-pull-requests' },
+  'quality-history': { history: [] },
+  'reference-repos': { referenceRepos: [] },
+  'repository-sources': { sources: [] },
+  'sprite-bindings': { bindings: [] },
+  'task-types': { taskTypeOverrides: {} },
+  'work-tracker': { resolved: 'github' },
+};
+
+const API_READS = {
+  '/api/apps': [APP, FULL_APP],
+  '/api/code-review/defaults': { reviewers: [], optionalReviewers: [] },
+  '/api/cos': { paused: false },
+  '/api/cos/jobs': { jobs: [] },
+  '/api/cos/schedule': { tasks: {} },
+  '/api/cos/schedule/maintenance-runs': { runs: [] },
+  '/api/cos/templates/popular': { templates: [] },
+  '/api/datadog/instances': { instances: {} },
+  '/api/git/submodules/status': { submodules: [], defaultBranch: 'main' },
+  '/api/instances/assignable': { instances: [] },
+  '/api/jira/instances': { instances: {} },
+  '/api/local-llm/status': { ollama: { models: [] }, lmstudio: { models: [] } },
+  '/api/local-llm/tool-use-models': { models: [] },
+  '/api/providers': { providers: [] },
+  '/api/settings': {},
+  '/api/settings/orchestration-profiles': { profiles: [] },
+  '/api/update/auto': { enabled: false },
+  '/api/update/browser': { updateAvailable: false },
+  '/api/update/status': { currentVersion: '1.0.0', updateAvailable: false },
+};
+
+// Git's local discovery endpoints accept the checkout path in a POST body.
+const GIT_READS = {
+  '/api/git/branches': { branches: [] },
+  '/api/git/info': { isRepo: false },
+  '/api/git/remote-branches': { branches: [] },
+};
+
 const FEATURES = ['datadog', 'jira', 'gsd'];
 const enabledFeatures = () => FEATURES.map(id => ({ id, enabled: true }));
 let features;
@@ -55,17 +103,36 @@ beforeEach(() => {
   __resetInstanceFeatureCache();
   features = enabledFeatures();
   getProcessesList.mockResolvedValue([]);
-  vi.stubGlobal('fetch', vi.fn(async url => {
-    const { pathname } = new URL(url, 'https://example.com');
-    if (pathname === '/api/settings/features') return Response.json({ features });
-    if (pathname.endsWith('/documents')) return Response.json({ documents: [], gsd: {} });
-    if (pathname.endsWith('/pull-requests')) return Response.json({ pullRequests: [], reason: 'no-open-pull-requests' });
-    if (pathname.endsWith('/launch-videos')) return Response.json({ videos: [] });
-    if (pathname === '/api/update/node-runtime') return new Response(null, { status: 204 });
-    return Response.json({});
-  }));
+  const unhandledFetch = globalThis.fetch;
+  vi.stubGlobal('fetch', async (url, options) => {
+    const target = new URL(url, 'https://example.com');
+    const { pathname } = target;
+    const method = options?.method ?? 'GET';
+    if (target.origin === 'https://example.com' && method === 'GET') {
+      if (pathname === '/api/settings/features') return Response.json({ features });
+      if (pathname === '/api/update/node-runtime') return new Response(null, { status: 204 });
+      if (Object.hasOwn(API_READS, pathname)) return Response.json(API_READS[pathname]);
+      const appRead = pathname.match(/^\/api\/apps\/([^/]+)\/([^/]+)$/);
+      if (appRead && APP_IDS.has(appRead[1]) && Object.hasOwn(APP_READS, appRead[2])) {
+        return Response.json(APP_READS[appRead[2]]);
+      }
+    }
+    if (target.origin === 'https://example.com' && method === 'POST' && Object.hasOwn(GIT_READS, pathname)) {
+      return Response.json(GIT_READS[pathname]);
+    }
+    return unhandledFetch(url, options);
+  });
 });
-afterEach(() => vi.unstubAllGlobals());
+afterEach(async () => {
+  // A lazy tab's content can be visible before its children's mount effects run.
+  // Settle those reads while this test still owns the transport.
+  try {
+    await act(async () => {});
+  } finally {
+    cleanup();
+    vi.unstubAllGlobals();
+  }
+});
 
 const TAB_CONTENT = {
   automation: 'Scheduled Task Options',
@@ -269,7 +336,6 @@ describe('AppDetailView managed-app feature tabs', () => {
   // Tabs are lazy chunks: each one must resolve behind the Suspense boundary both
   // when the URL names it and when the tab pill is clicked from the default tab.
   describe.each(APP_DETAIL_TABS.filter(t => t.id !== 'overview'))('lazy tab $id', ({ id, label }) => {
-    const FULL_APP = { ...APP, id: PORTOS_APP_ID, hasSubmodules: true };
     const content = TAB_CONTENT[id];
 
     it('renders from a deep link', async () => {
