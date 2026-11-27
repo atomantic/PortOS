@@ -53,7 +53,7 @@ const byDate = (a, b) => (a.date || '').localeCompare(b.date || '');
 // `writeLocal` itself is NOT queued: callers already hold the queue.
 async function writeLocal(file, data) {
   await ensureDir(MEATSPACE_DIR);
-  await atomicWrite(file, data);
+  await atomicWrite(file, data, { mode: 0o600, dirMode: 0o700 });
   const resource = { [BLOOD_TESTS_FILE]: 'blood', [EPIGENETIC_TESTS_FILE]: 'epigenetic', [EYES_FILE]: 'eyes' }[file];
   if (resource) invalidateMeatspace([resource]);
 }

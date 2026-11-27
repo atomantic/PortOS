@@ -1,5 +1,5 @@
 import { afterAll, beforeEach, describe, expect, it, vi } from 'vitest';
-import { mkdtemp, mkdir, readFile, readdir, rm, writeFile } from 'node:fs/promises';
+import { mkdtemp, mkdir, readFile, readdir, rm, stat, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 
@@ -8,7 +8,7 @@ const root = await mkdtemp(join(tmpdir(), 'digital-twin-publication-'));
 vi.mock('../lib/fileUtils.js', async original => {
   const actual = await original();
   return { ...actual, PATHS: { ...actual.PATHS, digitalTwin: root },
-    atomicWrite: async (path, data) => { await state.beforeWrite?.(path); return actual.atomicWrite(path, data); } };
+    atomicWrite: async (path, ...args) => { await state.beforeWrite?.(path); return actual.atomicWrite(path, ...args); } };
 });
 vi.mock('fs/promises', async original => {
   const actual = await original();
@@ -95,6 +95,15 @@ it('replicates traits, scale answers, and editable lists through peer sync and a
 });
 
 describe('enrichment document publication', () => {
+  it.skipIf(process.platform === 'win32')('keeps newly generated Markdown owner-only', async () => {
+    const category = 'favorite_books';
+    const filename = ENRICHMENT_CATEGORIES[category].targetDoc;
+    await saveEnrichmentListDocument(category, '# Example books\n', [{ title: 'Example book' }]);
+
+    expect((await stat(join(root, filename))).mode & 0o777).toBe(0o600);
+    expect((await stat(root)).mode & 0o777).toBe(0o700);
+  });
+
   it.each(['answer', 'scale', 'list'])('drains the %s document rewrite through the saved metadata', async kind => {
     const reached = deferred(); const finish = deferred();
     state.beforeWrite = async path => { if (path.endsWith('meta.json')) { reached.resolve(); await finish.promise; } };

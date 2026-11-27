@@ -226,7 +226,7 @@ export async function readSyncState() {
 }
 
 async function writeSyncState(state) {
-  await atomicWrite(stateFilePath(), JSON.stringify(state, null, 2));
+  await atomicWrite(stateFilePath(), JSON.stringify(state, null, 2), { mode: 0o600, dirMode: 0o700 });
 }
 
 // ---------------------------------------------------------------------------

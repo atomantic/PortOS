@@ -70,7 +70,7 @@ async function loadConfig() {
 
 async function saveConfig(config) {
   await ensureMeatspaceDir();
-  await atomicWrite(CONFIG_FILE, config);
+  await atomicWrite(CONFIG_FILE, config, { mode: 0o600, dirMode: 0o700 });
   meatspaceEvents.emit('death-clock:changed', {});
   invalidateMeatspace(['overview', 'alcohol', 'calendar']);
 }

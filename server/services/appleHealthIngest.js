@@ -169,7 +169,7 @@ export async function writeDayFile(dateStr, data, changedMetrics = Object.keys(d
   await ensureDir(PATHS.health);
   data.updated = new Date().toISOString();
   const filePath = join(PATHS.health, `${dateStr}.json`);
-  await atomicWrite(filePath, data);
+  await atomicWrite(filePath, data, { mode: 0o600, dirMode: 0o700 });
   if (changedMetrics.some(name => ['body_mass', 'body_fat_percentage', 'lean_body_mass'].includes(name))) {
     invalidateMeatspace(['healthBody']);
   }

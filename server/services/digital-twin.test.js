@@ -1093,7 +1093,9 @@ Forgets the budget and recommends lodging that exceeds it.
       expect(result.category).toBe('core_memories');
       expect(result.targetDoc).toBe('MEMORIES.md');
       // Should write to the document file and save meta
-      expect(atomicWrite).toHaveBeenCalledWith(expect.stringContaining('MEMORIES.md'), expect.stringContaining('My first coding project.'));
+      expect(atomicWrite).toHaveBeenCalledWith(
+        expect.stringContaining('MEMORIES.md'), expect.stringContaining('My first coding project.'), { mode: 0o600, dirMode: 0o700 }
+      );
     });
 
     it('should throw for unknown category', async () => {

@@ -175,7 +175,7 @@ function loadSummaryCache(accountId) {
 
 async function saveCache(accountId, cache) {
   const filePath = join(CACHE_DIR, `${accountId}.json`);
-  await atomicWrite(filePath, cache);
+  await atomicWrite(filePath, cache, { mode: 0o600, dirMode: 0o700 });
   invalidateSummary(accountId);
 }
 
