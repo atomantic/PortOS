@@ -100,10 +100,13 @@ PINNED_ENCODER_SEAMS = {
 # them, where a plain ImportError/AttributeError already names what is gone.
 BORROWED_MLX_VLM_ATTRS = (
     ("mlx_vlm.models.qwen3_vl.qwen3_vl", "Model.merge_input_ids_with_image_features",
-     "a keyframe cannot be merged into the prompt"),
+     "a keyframe cannot be merged into the prompt",
+     lambda: importlib.import_module("mlx_vlm.models.qwen3_vl.qwen3_vl")),
     ("mlx_vlm.models.qwen3_vl.language", "LanguageModel.get_rope_index",
-     "a keyframe cannot be positioned in the prompt"),
-    ("mlx_vlm.utils", "sanitize_weights", "its vision tower cannot be laid out for MLX"),
+     "a keyframe cannot be positioned in the prompt",
+     lambda: importlib.import_module("mlx_vlm.models.qwen3_vl.language")),
+    ("mlx_vlm.utils", "sanitize_weights", "its vision tower cannot be laid out for MLX",
+     lambda: importlib.import_module("mlx_vlm.utils")),
 )
 
 
@@ -143,7 +146,7 @@ def verify_pinned_encode_source(encode) -> None:
         )
 
 
-def require_borrowed_attr(module_name: str, attr_path: str, consequence: str) -> None:
+def require_borrowed_attr(module_name: str, attr_path: str, consequence: str, load_module) -> None:
     """Check one borrowed mlx-vlm name resolves, without importing it to use.
 
     `attr_path` is walked a segment at a time, so `Model.merge_input_ids_with_image_features`
@@ -154,7 +157,7 @@ def require_borrowed_attr(module_name: str, attr_path: str, consequence: str) ->
     check here and then fail at the call site the check exists to protect.
     """
     try:
-        found = importlib.import_module(module_name)
+        found = load_module()
     except ImportError:
         found = None
     for part in attr_path.split("."):

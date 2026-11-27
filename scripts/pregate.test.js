@@ -244,7 +244,7 @@ describe('pregate hidden-content invocation', () => {
     // Docs-only changes select no test owners; full plans still have a native inventory.
     for (const path of [
       'lib/gitMergeTree.js', 'scripts/pregate.js', 'scripts/checkNodeVersion.js', 'scripts/scan-diff-hidden-content.js', 'scripts/lib/githubActionsApi.js',
-      'scripts/ci-test-plan.js', 'scripts/lib-catalog.js', 'scripts/ci-base-sha.js', 'server/lib/staticImportGraph.js',
+      'scripts/ci-test-plan.js', 'scripts/lib/moduleCatalog.js', 'scripts/ci-base-sha.js', 'server/lib/staticImportGraph.js',
       'scripts/lib/directInvocation.js', 'scripts/lib/serverLintSurface.js', 'scripts/lib/importReach.js', 'scripts/lib/moduleGraph.js', 'scripts/lib/ciPlanRules.js', 'server/lib/apiRouteCallerAllowlist.js', 'scripts/lib/ciPlanDependencies.js', 'scripts/lib/ciPlanOutput.js', 'scripts/lib/ciPlanInputs.js', 'scripts/lib/browserServedFiles.js', 'scripts/lib/workspaceTests.js', 'scripts/lib/browserFidelity.js', 'scripts/lib/browserTestProfiles.js', 'scripts/lib/githubOutput.js', 'scripts/lib/dbTestFiles.js', 'scripts/lib/guardScanners.js', ...TRACKED_FILES_FIXTURE,
       'scripts/lib/browserSuites.js', 'scripts/lib/sourceTokens.js', 'scripts/lib/workspaceDependencies.js', 'scripts/lib/pregateReport.js', 'scripts/lib/pregateGitState.js', 'scripts/lib/pregateProcessGroup.js', 'scripts/lib/pregateStages.js', 'scripts/lib/pregateFocusedPlan.js', 'scripts/lib/guardBudget.js', 'scripts/lib/actionlint.js', 'scripts/run-actionlint.js', 'scripts/lib/cosWorkerBudget.js', 'scripts/vitestCiPool.js',
       'scripts/migrations/shippedPromptHistory.js', 'server/lib/aiToolkit/internal/windowsSafeSpawn.js',
@@ -1399,7 +1399,7 @@ describe('the gate end to end', () => {
       git('config', 'user.email', 'contributor@example.com');
       for (const path of [
         'lib/gitMergeTree.js', 'scripts/pregate.js', 'scripts/checkNodeVersion.js', 'scripts/scan-diff-hidden-content.js',
-        'scripts/ci-test-plan.js', 'scripts/lib-catalog.js', 'scripts/ci-base-sha.js', 'server/lib/staticImportGraph.js',
+        'scripts/ci-test-plan.js', 'scripts/lib/moduleCatalog.js', 'scripts/ci-base-sha.js', 'server/lib/staticImportGraph.js',
         'scripts/lib/directInvocation.js', 'scripts/lib/serverLintSurface.js', 'scripts/lib/importReach.js', 'scripts/lib/moduleGraph.js', 'scripts/lib/ciPlanRules.js', 'server/lib/apiRouteCallerAllowlist.js', 'scripts/lib/ciPlanDependencies.js', 'scripts/lib/ciPlanOutput.js', 'scripts/lib/ciPlanInputs.js', 'scripts/lib/browserServedFiles.js', 'scripts/lib/workspaceTests.js', 'scripts/lib/browserFidelity.js', 'scripts/lib/browserTestProfiles.js', 'scripts/lib/githubOutput.js', 'scripts/lib/dbTestFiles.js', 'scripts/lib/guardScanners.js', ...TRACKED_FILES_FIXTURE,
         'scripts/lib/browserSuites.js', 'scripts/lib/sourceTokens.js', 'scripts/lib/workspaceDependencies.js', 'scripts/lib/pregateReport.js', 'scripts/lib/pregateGitState.js', 'scripts/lib/pregateProcessGroup.js', 'scripts/lib/pregateStages.js', 'scripts/lib/pregateFocusedPlan.js', 'scripts/lib/guardBudget.js', 'scripts/lib/actionlint.js', 'scripts/run-actionlint.js', 'scripts/lib/cosWorkerBudget.js', 'scripts/vitestCiPool.js',
         'scripts/migrations/shippedPromptHistory.js', 'server/lib/aiToolkit/internal/windowsSafeSpawn.js',

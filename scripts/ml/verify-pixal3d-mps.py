@@ -32,9 +32,15 @@ def main():
     assert sys.version_info[:2] == (3, 13)
     assert torch.__version__.split('+')[0] == '2.15.0'
     assert torch.backends.mps.is_available()
-    for module in ('torchvision', 'moge', 'cumesh', 'flex_gemm', 'mtlbvh',
-                   'mtldiffrast', 'o_voxel', 'natten', 'natten_mps'):
-        importlib.import_module(module)
+    importlib.import_module("torchvision")
+    importlib.import_module("moge")
+    importlib.import_module("cumesh")
+    importlib.import_module("flex_gemm")
+    importlib.import_module("mtlbvh")
+    importlib.import_module("mtldiffrast")
+    importlib.import_module("o_voxel")
+    importlib.import_module("natten")
+    importlib.import_module("natten_mps")
 
     # Harmless upstream b90c949 regression: reject bare containers while a
     # properly typed function still compiles. Never compile input/model text.
