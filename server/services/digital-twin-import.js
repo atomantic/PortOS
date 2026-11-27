@@ -3,7 +3,7 @@ import { buildPrompt } from './promptService.js';
 import { safeJSONParse } from '../lib/fileUtils.js';
 import { extractJson } from '../lib/jsonExtract.js';
 import { callProviderAI, now } from './digital-twin-helpers.js';
-import { loadMeta } from './digital-twin-meta.js';
+import { digitalTwinEvents, loadMeta } from './digital-twin-meta.js';
 import { createDocument, updateDocument } from './digital-twin-documents.js';
 import {
   getAllTwinContent,
@@ -12,7 +12,6 @@ import {
   getGapRecommendations,
   parseTraitsResponse
 } from './digital-twin-analysis.js';
-import { digitalTwinEvents } from './digital-twin-meta.js';
 import { documentFilenameSchema } from '../lib/digitalTwinSchemas.js';
 
 /**
@@ -23,23 +22,17 @@ import { documentFilenameSchema } from '../lib/digitalTwinSchemas.js';
  * Exclusive Shelf, My Review, Spoiler, Private Notes, Read Count, Owned Copies
  */
 function parseGoodreadsCSV(csvData) {
-  const lines = csvData.split('\n');
-  if (lines.length < 2) return [];
-
-  // Parse header to find column indices
-  const header = parseCSVLine(lines[0]);
+  const [header = [], ...records] = parseCSVRecords(csvData);
   const titleIdx = header.findIndex(h => h.toLowerCase() === 'title');
   const authorIdx = header.findIndex(h => h.toLowerCase() === 'author');
+  if (titleIdx < 0 || authorIdx < 0) return [];
   const ratingIdx = header.findIndex(h => h.toLowerCase() === 'my rating');
   const dateReadIdx = header.findIndex(h => h.toLowerCase() === 'date read');
   const shelvesIdx = header.findIndex(h => h.toLowerCase() === 'bookshelves');
   const reviewIdx = header.findIndex(h => h.toLowerCase() === 'my review');
 
   const books = [];
-  for (let i = 1; i < lines.length; i++) {
-    if (!lines[i].trim()) continue;
-    const cols = parseCSVLine(lines[i]);
-
+  for (const cols of records) {
     const rating = ratingIdx >= 0 ? parseInt(cols[ratingIdx], 10) : 0;
     // Only include books that were actually read (have a rating > 0 or date read)
     if (rating > 0 || (dateReadIdx >= 0 && cols[dateReadIdx])) {
@@ -58,32 +51,44 @@ function parseGoodreadsCSV(csvData) {
 }
 
 /**
- * Parse a CSV line handling quoted fields
+ * Parse CSV records while retaining line breaks inside quoted fields.
  */
-function parseCSVLine(line) {
-  const result = [];
-  let current = '';
+function parseCSVRecords(csvData) {
+  const records = [];
+  let record = [];
+  let field = '';
   let inQuotes = false;
 
-  for (let i = 0; i < line.length; i++) {
-    const char = line[i];
+  for (let i = 0; i < csvData.length; i++) {
+    const char = csvData[i];
     if (char === '"') {
-      if (inQuotes && line[i + 1] === '"') {
-        current += '"';
+      if (inQuotes && csvData[i + 1] === '"') {
+        field += '"';
         i++;
       } else {
         inQuotes = !inQuotes;
       }
-    } else if (char === ',' && !inQuotes) {
-      result.push(current.trim());
-      current = '';
-    } else {
-      current += char;
+      continue;
+    }
+    if (inQuotes || (char !== ',' && char !== '\n' && char !== '\r')) {
+      field += char;
+      continue;
+    }
+
+    record.push(field.trim());
+    field = '';
+    if (char !== ',') {
+      if (char === '\r' && csvData[i + 1] === '\n') i++;
+      if (record.length > 1 || record[0]) records.push(record);
+      record = [];
     }
   }
-  result.push(current.trim());
 
-  return result;
+  if (!inQuotes && (record.length || field.trim())) {
+    record.push(field.trim());
+    records.push(record);
+  }
+  return records;
 }
 
 /**
@@ -144,10 +149,7 @@ function parseSpotifyJSON(jsonData) {
  * Parse Letterboxd CSV export
  */
 function parseLetterboxdCSV(csvData) {
-  const lines = csvData.split('\n');
-  if (lines.length < 2) return [];
-
-  const header = parseCSVLine(lines[0]);
+  const [header = [], ...records] = parseCSVRecords(csvData);
   const nameIdx = header.findIndex(h => h.toLowerCase().includes('name') || h.toLowerCase() === 'title');
   const yearIdx = header.findIndex(h => h.toLowerCase() === 'year');
   const ratingIdx = header.findIndex(h => h.toLowerCase() === 'rating');
@@ -156,10 +158,7 @@ function parseLetterboxdCSV(csvData) {
   const tagsIdx = header.findIndex(h => h.toLowerCase() === 'tags');
 
   const films = [];
-  for (let i = 1; i < lines.length; i++) {
-    if (!lines[i].trim()) continue;
-    const cols = parseCSVLine(lines[i]);
-
+  for (const cols of records) {
     films.push({
       title: cols[nameIdx] || cols[0] || '',
       year: yearIdx >= 0 && cols[yearIdx] ? parseInt(cols[yearIdx], 10) : undefined,
@@ -545,20 +544,34 @@ export async function analyzeAssessment(content, providerId, model) {
   // 5. Create/update documents from suggestions
   const docsCreated = [];
   const docsUpdated = [];
+  const documentsSkipped = [];
   const metaBeforeDocs = await loadMeta();
   const existingFilenames = new Set(metaBeforeDocs.documents.map(d => d.filename));
-  for (const doc of (parsed.suggestedDocuments || [])) {
-    if (!doc.filename || !doc.content) continue;
-    const existsBefore = existingFilenames.has(doc.filename);
+  const suggestions = Array.isArray(parsed.suggestedDocuments) ? parsed.suggestedDocuments : [];
+  for (const doc of suggestions) {
+    const filenameResult = documentFilenameSchema.safeParse(doc?.filename);
+    if (!filenameResult.success) {
+      documentsSkipped.push({ filename: typeof doc?.filename === 'string' ? doc.filename : null, reason: 'invalid_filename' });
+      continue;
+    }
+    const filename = filenameResult.data;
+    if (typeof doc.content !== 'string' || !doc.content) {
+      documentsSkipped.push({ filename, reason: 'invalid_content' });
+      continue;
+    }
     const result = await saveImportAsDocument('interview', {
-      filename: doc.filename,
-      title: doc.title || doc.filename.replace('.md', ''),
+      filename,
+      title: doc.title || filename.replace('.md', ''),
       category: doc.category || 'enrichment',
       content: doc.content
-    });
-    if (result) {
-      (existsBefore ? docsUpdated : docsCreated).push(doc.filename);
+    }).catch(() => null);
+    if (!result) {
+      console.warn('⚠️ Digital twin assessment could not save a suggested document');
+      documentsSkipped.push({ filename, reason: 'save_failed' });
+      continue;
     }
+    (existingFilenames.has(filename) ? docsUpdated : docsCreated).push(filename);
+    existingFilenames.add(filename);
   }
 
   // 6. Recalculate confidence with updated content and traits
@@ -572,13 +585,14 @@ export async function analyzeAssessment(content, providerId, model) {
     traitsUpdated: traitUpdates,
     documentsCreated: docsCreated,
     documentsUpdated: docsUpdated,
+    documentsSkipped,
     newDimensions: parsed.newDimensions || [],
     confidenceDelta: { before: confidenceBefore, after: confidenceAfter },
     summary: parsed.summary || 'Analysis complete. Twin profile updated.'
   };
 
   digitalTwinEvents.emit('interview:analyzed', { analysisResult });
-  console.log(`🧪 [${now()}] Assessment complete: ${docsCreated.length} created, ${docsUpdated.length} updated, ${Object.keys(traitUpdates).length} trait categories`);
+  console.log(`🧪 [${now()}] Assessment complete: ${docsCreated.length} created, ${docsUpdated.length} updated, ${documentsSkipped.length} skipped, ${Object.keys(traitUpdates).length} trait categories`);
 
   return { analysisResult, gaps };
 }
