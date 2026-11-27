@@ -110,7 +110,7 @@ npm run setup   # dependencies, database, local tooling, managed browser
 npm start       # builds the client and starts PortOS under PM2
 ```
 
-Open `http://localhost:5555`. **Settings → Setup** walks you through the rest: an AI provider, Tailscale, and HTTPS (`npm run setup:cert`), after which PortOS is at `https://<machine>.<tailnet>.ts.net:5555` on every device.
+Run `npm run setup:guide` and open the URL it prints. Without a certificate, this is `http://localhost:5555`; setup can provision HTTPS automatically when Tailscale is ready. **Settings → Setup** walks you through the rest: an AI provider, Tailscale, and HTTPS (`npm run setup:cert`), after which PortOS is at `https://<machine>.<tailnet>.ts.net:5555` on your tailnet devices.
 
 For hot reload while developing, run `npm run dev` (UI on `:5554`). The [Setup Guide](./docs/SETUP.md) covers native PostgreSQL, HTTPS without Tailscale, and starting on boot.
 
