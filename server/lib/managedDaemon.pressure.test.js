@@ -4,14 +4,13 @@ import {
   formatReleaseTime,
   registerIdleDaemon,
   markDaemonUsed,
-  daemonReleaseReason,
   reapIdleDaemons,
   _resetIdleDaemonsForTests,
   DEFAULT_PRESSURE_CALM_DOWN_MS,
   createDaemonWatcher,
   createOnDemandDaemon,
-  daemonLastUsedAt,
 } from './managedDaemon.js';
+import { daemonReleaseReason } from './idleDaemonReaper.js';
 import { acquireLocalSlot, isLocalEndpointBusy, releaseLocalSlot, _resetLocalLlmSlotsForTests } from './localLlmConcurrency.js';
 
 const MINUTE = 60_000;
@@ -552,13 +551,13 @@ describe('managedDaemon memory pressure policy', () => {
         getRelaunchReadyTimeoutMs: () => 50,
         getRelaunchPollMs: () => 0,
       });
+      const seeded = Date.now();
+      const clock = vi.spyOn(Date, 'now').mockReturnValue(seeded);
       onDemand.registerIdle();
       await onDemand.ensureRunning();
-      const seeded = daemonLastUsedAt('portos-mtplx');
-      await new Promise((resolve) => { setTimeout(resolve, 5); });
+      clock.mockReturnValue(seeded + MINUTE);
       await acquireLocalSlot('localhost:8010/v1');
       try {
-        expect(daemonLastUsedAt('portos-mtplx')).toBeGreaterThan(seeded);
         const now = Date.now() + 10 * MINUTE;
         const stopped = await reapIdleDaemons(now, {
           memoryStats: { total: 32 * GB, used: 30 * GB, free: 2 * GB },
@@ -567,6 +566,10 @@ describe('managedDaemon memory pressure policy', () => {
         });
         expect(stopped).toEqual([]);
         expect(stop).not.toHaveBeenCalled();
+        // Drop the busy gate without publishing another activity event. Only
+        // the acquisition above could have refreshed the daemon's idle window.
+        _resetLocalLlmSlotsForTests();
+        expect(await reapIdleDaemons(seeded + 30 * MINUTE, { memoryStats: false })).toEqual([]);
       } finally {
         releaseLocalSlot('localhost:8010/v1');
       }
@@ -664,16 +667,17 @@ describe('managedDaemon memory pressure policy', () => {
       });
       onDemand.registerIdle();
       _resetIdleDaemonsForTests();
+      const seeded = Date.now();
+      const clock = vi.spyOn(Date, 'now').mockReturnValue(seeded);
       registerIdleDaemon({
         name: 'portos-mtplx',
         getIdleMs: () => 60 * MINUTE,
         stop: vi.fn(),
       });
-      const seeded = daemonLastUsedAt('portos-mtplx');
-      await new Promise((resolve) => { setTimeout(resolve, 5); });
+      clock.mockReturnValue(seeded + MINUTE);
       await acquireLocalSlot('http://127.0.0.1:8092/v1');
       try {
-        expect(daemonLastUsedAt('portos-mtplx')).toBe(seeded);
+        expect(await reapIdleDaemons(seeded + 60 * MINUTE, { memoryStats: false })).toEqual(['portos-mtplx']);
       } finally {
         releaseLocalSlot('http://127.0.0.1:8092/v1');
       }
