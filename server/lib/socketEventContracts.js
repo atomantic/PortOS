@@ -832,7 +832,15 @@ export const SOCKET_EVENT_CONTRACTS = Object.freeze({
         processes: { type: ['array', 'null'], items: { type: 'object', properties: {
           name: { type: 'string' }, status: { type: 'string' }, pid: { type: 'number' },
           pm_id: { type: 'number' }, cpu: { type: 'number' }, memory: { type: 'number' },
-          uptime: { type: ['number', 'null'] }, restarts: { type: 'number' }, unstableRestarts: { type: 'number' }
+          uptime: { type: ['number', 'null'] }, restarts: { type: 'number' }, unstableRestarts: { type: 'number' },
+          restartEvidence: {
+            type: 'object',
+            required: ['kind', 'instanceId', 'generationStartedAt', 'startedAt'],
+            properties: {
+              kind: { enum: ['errored', 'crashLoop'] }, instanceId: { type: ['string', 'null'] },
+              generationStartedAt: { type: ['number', 'null'] }, startedAt: { type: ['number', 'null'] }
+            }
+          }
         } } }
       }
     }

@@ -112,7 +112,8 @@ async function checkSystemHealth() {
   const processes = await listProcesses().catch(() => []);
   const alertable = (await annotateExpectedExit(processes)).filter(p => !p.expectedExit);
   for (const process of alertable) {
-    if (process.status === 'errored') {
+    const { restartEvidence } = process;
+    if (process.status === 'errored' || restartEvidence?.kind === 'errored') {
       alerts.push({
         id: alertId('process_errored', process.pm_id),
         type: 'process_error',
@@ -121,19 +122,19 @@ async function checkSystemHealth() {
         detail: 'Review the process logs and restart it after addressing the failure',
         link: '/apps',
         metadata: { processId: process.pm_id, processName: process.name, errored: 1, total: alertable.length },
-        evidence: { processId: process.pm_id, status: process.status, restarts: process.restarts || 0 },
+        evidence: { processId: process.pm_id, status: process.status, restarts: process.restarts || 0, ...restartEvidence },
       });
     }
-    if ((process.unstableRestarts || 0) > 0) {
+    if (restartEvidence?.kind === 'crashLoop') {
       alerts.push({
         id: alertId('process_crash_loop', process.pm_id),
         type: 'process_error',
         severity: 'high',
         title: `Process in crash loop: ${process.name}`,
-        detail: `${process.unstableRestarts} crash-loop restarts — review the process logs`,
+        detail: 'Repeated short-lived runs — review the process logs',
         link: '/apps',
         metadata: { processId: process.pm_id, processName: process.name, unstableRestarts: process.unstableRestarts, names: [process.name] },
-        evidence: { processId: process.pm_id, unstableRestarts: process.unstableRestarts, restarts: process.restarts || 0 },
+        evidence: { processId: process.pm_id, unstableRestarts: process.unstableRestarts, restarts: process.restarts || 0, ...restartEvidence },
       });
     }
   }
