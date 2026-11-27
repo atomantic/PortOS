@@ -274,7 +274,7 @@ describe('the timer-callback recognizer', () => {
     // The site that motivated the rule — pinned so a revert is caught here and
     // not only by the tree-wide scan.
     const src = readText(join(SERVER_ROOT, 'cos-runner/index.js'));
-    expect(src).toContain('cleanupOrphanedAgents()');
+    expect(src).toContain('lifecycle.trackWork(cleanupOrphanedAgents)');
     expect(findUnguardedTimerAwaits(src)).toEqual([]);
   });
 });

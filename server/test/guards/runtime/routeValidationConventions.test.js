@@ -203,7 +203,7 @@ export function findUnvalidatedQueryHandlers(src) {
 
 // `routes/` plus the two out-of-tree HTTP surfaces (#10024): the vendored toolkit's
 // routers and the CoS runner's standalone Express app.
-const SCANNED_PATHS = ['routes', 'lib/aiToolkit/routes', 'cos-runner/index.js'];
+const SCANNED_PATHS = ['routes', 'lib/aiToolkit/routes', 'cos-runner'];
 
 const trackedRouteSources = () => (trackedFilesCache ??= trackedFiles(SERVER_ROOT, SCANNED_PATHS).filter((f) => MODULE_SOURCE_RE.test(f) && !f.includes('.test.')));
 
@@ -347,7 +347,10 @@ describe('the unvalidated-body recognizer', () => {
   it('covers the toolkit routers and the CoS runner app (#10024)', () => {
     const files = trackedRouteSources();
     expect(files).toContain('lib/aiToolkit/routes/prompts.js');
-    expect(files).toContain('cos-runner/index.js');
+    expect(files).toEqual(expect.arrayContaining([
+      'cos-runner/agentControlRoutes.js', 'cos-runner/securityScanRoutes.js',
+      'cos-runner/spawnCliRoute.js', 'cos-runner/spawnTuiRoute.js',
+    ]));
     expect(findUnvalidatedBodyHandlers("app.post('/spawn', lifecycle.spawnRoute(async (req, res) => { const { agentId } = req.body; }));"))
       .toEqual(['POST /spawn']);
     for (const call of ['spawnBodySchema.safeParse(req.body ?? {})', "parseBody(promptStageUpdateBodySchema, req.body, 'stage data')"]) {
