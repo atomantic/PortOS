@@ -17,7 +17,7 @@
  *                           `onClose` (e.g. cancel an inline mode without
  *                           closing the editor).
  *   align='top'             top-anchored panel.
- *   usePortal               escape stacking-context ancestors.
+ *   usePortal=false         render in place instead of escaping stacking-context ancestors.
  *
  * Height: the panel is clamped to the *visible* viewport by Modal itself —
  * `max-h-dvh-cap` (index.css) minus a per-align `--dvh-inset`. Call sites must
@@ -46,6 +46,7 @@
 import { useEffect, useId, useRef } from 'react';
 import { createPortal } from 'react-dom';
 import useFocusTrap, { FocusTrapParent } from '../../hooks/useFocusTrap.js';
+import { useScrollLock } from '../../hooks/useScrollLock.js';
 
 const SIZE_CLASSES = {
   sm: 'max-w-md',
@@ -201,7 +202,7 @@ export default function Modal({
   closeOnBackdrop = true,
   closeOnEsc = true,
   align = 'center',
-  usePortal = false,
+  usePortal = true,
   zIndexClassName = 'z-50',
   backdropClassName = 'bg-black/70',
   panelClassName = '',
@@ -209,6 +210,7 @@ export default function Modal({
   ariaLabel,
   initialFocusRef,
 }) {
+  useScrollLock(open);
   const backdropRef = useRef(null);
   const dialogRef = useRef(null);
   // Trap focus inside the dialog while open and restore it to the opener
