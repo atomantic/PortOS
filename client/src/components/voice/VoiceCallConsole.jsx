@@ -1,6 +1,6 @@
-import { useEffect, useRef, useState } from 'react';
-import { AudioLines, Mic, MicOff, PhoneOff, ScanFace, Send, Square } from 'lucide-react';
-import { getVoiceOutputLevel } from '../../services/voiceClient';
+import { useState } from 'react';
+import { AudioLines, Mic, MicOff, PhoneOff, Play, ScanFace, Send, Square } from 'lucide-react';
+import VoiceCallPortrait from './VoiceCallPortrait';
 import { safeReadStorage, safeWriteStorage } from '../../lib/safeStorage';
 
 const DISPLAY_KEY = 'portos.voice.callDisplay';
@@ -13,40 +13,6 @@ const STATUS = {
   thinking: 'Thinking',
   speaking: 'Speaking',
 };
-
-function Portrait({ speaking }) {
-  const mouth = useRef(null);
-  useEffect(() => {
-    if (!speaking || window.matchMedia?.('(prefers-reduced-motion: reduce)').matches) return undefined;
-    const element = mouth.current;
-    let frame;
-    const draw = () => {
-      const level = getVoiceOutputLevel();
-      element.setAttribute('ry', (1.2 + level * 9).toFixed(2));
-      frame = requestAnimationFrame(draw);
-    };
-    frame = requestAnimationFrame(draw);
-    return () => {
-      cancelAnimationFrame(frame);
-      element.setAttribute('ry', '1.2');
-    };
-  }, [speaking]);
-
-  return (
-    <svg aria-hidden="true" viewBox="0 0 240 208" className="h-full max-h-60 w-auto max-w-full text-port-accent">
-      <circle cx="120" cy="102" r="88" fill="none" stroke="currentColor" strokeOpacity=".23" strokeDasharray="3 6" />
-      <path d="M24 60V32h28m164 28V32h-28M24 145v28h28m164-28v28h-28" fill="none" stroke="currentColor" strokeOpacity=".62" strokeWidth="2" />
-      <path d="M52 193c7-20 25-31 51-35h34c27 4 43 15 51 35Z" fill="currentColor" fillOpacity=".13" stroke="currentColor" strokeOpacity=".6" strokeWidth="2" />
-      <path d="M72 96a48 48 0 0 1 96 0" fill="none" stroke="currentColor" strokeWidth="4" strokeLinecap="round" />
-      <rect x="67" y="92" width="15" height="30" rx="6" fill="currentColor" />
-      <rect x="158" y="92" width="15" height="30" rx="6" fill="currentColor" />
-      <rect x="84" y="67" width="72" height="85" rx="28" fill="var(--color-port-card)" stroke="currentColor" strokeWidth="2" />
-      <path d="M103 100h6m22 0h6" fill="none" stroke="currentColor" strokeWidth="5" strokeLinecap="round" />
-      <ellipse ref={mouth} cx="120" cy="124" rx="12" ry="1.2" fill="currentColor" />
-      <path d="M166 125v8l-12 7h-14" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" />
-    </svg>
-  );
-}
 
 function TransmissionLog({ history, scrollRef }) {
   return (
@@ -66,7 +32,7 @@ function TransmissionLog({ history, scrollRef }) {
 
 export default function VoiceCallConsole({
   stage, history, scrollRef, interimTranscript, capturing, handsFree, canChangeMicMode,
-  draft, onDraft, onSend, onMic, onMode, onInterrupt, onEnd, voiceLabel,
+  draft, onDraft, onSend, onMic, onMode, onInterrupt, onEnd, onSample, voiceLabel,
 }) {
   const [avatar, setAvatar] = useState(() => safeReadStorage(DISPLAY_KEY) !== 'audio');
   const caption = interimTranscript || history.at(-1)?.text;
@@ -93,7 +59,7 @@ export default function VoiceCallConsole({
       <div className="relative isolate grid min-h-52 grid-rows-[minmax(9rem,1fr)_auto] overflow-hidden rounded-xl border border-port-border bg-port-bg p-3 sm:min-h-64">
         <div aria-hidden="true" className="pointer-events-none absolute inset-0 -z-10 bg-[repeating-linear-gradient(transparent_0px,transparent_3px,currentColor_4px)] text-port-accent opacity-[0.08]" />
         <div className="min-w-0 place-self-center">
-          {avatar ? <Portrait speaking={stage === 'speaking'} /> : <AudioLines aria-hidden="true" size={64} className="text-port-accent" />}
+          {avatar ? <VoiceCallPortrait speaking={stage === 'speaking'} /> : <AudioLines aria-hidden="true" size={64} className="text-port-accent" />}
         </div>
         <p aria-hidden="true" className="line-clamp-2 min-h-12 break-words rounded-md border-l-2 border-port-accent bg-port-card px-3 py-2 text-sm">
           {caption || 'Ready when you are.'}
@@ -103,7 +69,7 @@ export default function VoiceCallConsole({
       <div className="flex flex-wrap items-center gap-2 font-mono text-xs text-port-text-muted">
         <span className="min-w-0 max-w-full break-words">Voice: {voiceLabel || 'Use saved settings'}</span>
         <button type="button" onClick={toggleAvatar} aria-pressed={avatar} className={`ml-auto ${control}`}>
-          <ScanFace size={16} aria-hidden="true" /> Avatar
+          <ScanFace size={16} aria-hidden="true" /> Avatar <span aria-hidden="true">{avatar ? 'on' : 'off'}</span>
         </button>
       </div>
 
@@ -117,6 +83,9 @@ export default function VoiceCallConsole({
             Hands-free
           </button>
         )}
+        <button type="button" className={control} onClick={onSample} disabled={stage !== 'idle'}>
+          <Play size={15} aria-hidden="true" /> Play sample
+        </button>
         {stage === 'speaking' && (
           <button type="button" className={control} onClick={onInterrupt}>
             <Square size={14} aria-hidden="true" /> Interrupt

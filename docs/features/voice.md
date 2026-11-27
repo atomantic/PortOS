@@ -19,10 +19,13 @@ choose a streaming API provider (including a configured local model), model,
 speech recognition, voice, and other controls, then **Save & Reconcile**.
 No particular model is required.
 
-The optional stylized portrait animates using the local playback level, not the
-camera or microphone input. It does not fetch a model or send audio to a renderer.
-It stays still with reduced motion enabled. The **Avatar** button switches to
-audio-only display without interrupting the conversation. This is a browser
+The optional radio operator portrait was generated in PortOS Image Gen.
+Its mouth opens with the local playback level. This tests timing and
+interruption, not phoneme-level lip sync. Choose **Play sample** to test
+the portrait using your configured voice without invoking the LLM. The
+portrait needs no camera or external animation service and stays still
+when reduced motion is enabled. **Avatar** switches to audio-only display
+without interrupting the conversation. This is a browser
 surface, independent of FaceTime Audio.
 
 ## Stack

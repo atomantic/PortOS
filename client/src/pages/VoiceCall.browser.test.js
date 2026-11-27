@@ -14,9 +14,30 @@ const config = {
   enabled: true, stt: { engine: 'whisper' }, llm: { provider: 'fixture', model: 'fixture-model' },
   tts: { engine: 'piper', piper: { voice: 'fixture-voice' } },
 };
+function sampleWave() {
+  const rate = 16_000;
+  const count = 2 * rate;
+  const wave = Buffer.alloc(44 + count * 2);
+  wave.write('RIFF');
+  wave.writeUInt32LE(wave.length - 8, 4);
+  wave.write('WAVEfmt ', 8);
+  wave.writeUInt32LE(16, 16);
+  wave.writeUInt16LE(1, 20);
+  wave.writeUInt16LE(1, 22);
+  wave.writeUInt32LE(rate, 24);
+  wave.writeUInt32LE(rate * 2, 28);
+  wave.writeUInt16LE(2, 32);
+  wave.writeUInt16LE(16, 34);
+  wave.write('data', 36);
+  wave.writeUInt32LE(count * 2, 40);
+  for (let i = 0; i < count; i++) wave.writeInt16LE(Math.round(Math.sin(i * 2 * Math.PI * 220 / rate) * 8192), 44 + i * 2);
+  return wave;
+}
+
 function stubApi(page, enabled = true) {
   return page.route('**/api/**', route => {
     const path = new URL(route.request().url()).pathname;
+    if (path === '/api/voice/public/synthesize') return route.fulfill({ body: sampleWave(), contentType: 'audio/wav' });
     if (path === '/api/voice/config' && route.request().method() === 'PUT') {
       return route.fulfill({ json: { config: route.request().postDataJSON(), reconciliation: {} } });
     }
@@ -114,6 +135,39 @@ describe.skipIf(!chrome)('Voice Call console in Chrome', () => {
     }
   });
 
+  it('shows the generated portrait and animates actual audio until interrupted', async () => {
+    const page = await fixture.browser.newPage({ viewport: { width: 390, height: 800 }, reducedMotion: 'no-preference' });
+    try {
+      await stubApi(page);
+      await page.goto(`${fixture.origin}voice-console-test`);
+      const face = page.getByRole('img', { name: 'Original radio operator test portrait' });
+      await face.waitFor();
+      const faceBounds = await face.boundingBox();
+      expect(faceBounds.width).toBeGreaterThan(180);
+      expect(faceBounds.width).toBeCloseTo(faceBounds.height);
+      expect(await face.locator('image').first().evaluate(async element => {
+        const image = new Image();
+        image.src = element.getAttribute('href');
+        await image.decode();
+        return [image.naturalWidth, image.naturalHeight];
+      })).toEqual([640, 640]);
+      const mouth = face.locator('path[fill="#341b1b"]');
+      const idle = await mouth.getAttribute('transform');
+      const request = page.waitForRequest(req => req.url().endsWith('/api/voice/public/synthesize'));
+      await page.getByRole('button', { name: 'Play sample' }).click();
+      expect((await request).postDataJSON().text).toContain('PortOS radio check');
+      await page.waitForFunction(transform => {
+        const mouth = document.querySelector('path[fill="#341b1b"]');
+        return mouth?.getAttribute('transform') !== transform && mouth?.getAttribute('transform') !== 'translate(0 352) scale(1 0.00)';
+      }, idle);
+      await page.getByRole('button', { name: 'Interrupt' }).click();
+      expect(await mouth.getAttribute('transform')).toBe(idle);
+      await page.getByText('Standby', { exact: true }).waitFor();
+    } finally {
+      await page.close();
+    }
+  });
+
   it.each([[320, 'kestrel-dawn'], [390, 'kestrel-neon'], [1100, 'kestrel-neon']])('fits at %i px in %s and opens model settings', async (width, theme) => {
     const page = await fixture.browser.newPage({ viewport: { width, height: 800 }, reducedMotion: 'reduce' });
     try {
@@ -130,6 +184,7 @@ describe.skipIf(!chrome)('Voice Call console in Chrome', () => {
         });
       })).toBe(true);
       await consoleView.getByRole('button', { name: 'Avatar' }).click();
+      expect(await consoleView.getByRole('img', { name: 'Original radio operator test portrait' }).count()).toBe(0);
       expect(await consoleView.getByRole('button', { name: 'Avatar' }).getAttribute('aria-pressed')).toBe('false');
       await page.getByRole('button', { name: 'Model & voice settings' }).click();
       await page.getByLabel('LLM model', { exact: true }).waitFor();
