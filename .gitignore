@@ -17,6 +17,10 @@ node_modules
 /client/.cache/
 /server/.cache/
 
+# Default JSON reporter output from local Vitest runs.
+/client/.vitest/json/output.json
+/server/.vitest/json/output.json
+
 # Build output
 dist/
 build/
