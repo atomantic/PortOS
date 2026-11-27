@@ -30,8 +30,8 @@ const scene = blankGreybox();
 const record = { id: 'plc-1', type: 'place', name: 'Rink', payload: { description: 'Roller rink', greybox: scene } };
 const onSaved = vi.fn();
 const onCaptured = vi.fn();
-function SavedPanel(props) {
-  const [current, setCurrent] = useState(props.record || record);
+function SavedPanel({ record: initialRecord = record, ...props }) {
+  const [current, setCurrent] = useState(initialRecord);
   return <GreyboxPanel record={current} media={[]} onCaptured={onCaptured} {...props} onSaved={(next) => { setCurrent(next); onSaved(next); }} />;
 }
 const show = (props = {}) => render(
@@ -63,10 +63,72 @@ describe('GreyboxPanel', () => {
     await waitFor(() => expect(saveCatalogGreybox).toHaveBeenLastCalledWith('plc-1', scene, expect.anything()));
     fireEvent.change(screen.getByLabelText('Layout source'), { target: { value: 'glb' } });
     await waitFor(() => expect(saveCatalogGreybox).toHaveBeenLastCalledWith('plc-1', { ...scene, source: 'glb' }, expect.anything()));
+    const saveCount = saveCatalogGreybox.mock.calls.length;
     fireEvent.click(screen.getByRole('button', { name: 'Remove model' }));
+    const confirmation = screen.getByRole('group', { name: 'Remove the Blender model?' });
+    expect(screen.getByLabelText('Layout source')).toHaveValue('glb');
+    expect(detachCatalogIngredientMedia).not.toHaveBeenCalled();
+    fireEvent.click(within(confirmation).getByRole('button', { name: 'Cancel' }));
+    expect(saveCatalogGreybox).toHaveBeenCalledTimes(saveCount);
+    expect(detachCatalogIngredientMedia).not.toHaveBeenCalled();
+    fireEvent.click(screen.getByRole('button', { name: 'Remove model' }));
+    fireEvent.click(within(screen.getByRole('group', { name: 'Remove the Blender model?' })).getByRole('button', { name: 'Remove model' }));
     await waitFor(() => expect(detachCatalogIngredientMedia).toHaveBeenCalledWith('plc-1', { kind: 'model', mediaKey: 'example.glb' }, { silent: true }));
+    expect(saveCatalogGreybox.mock.invocationCallOrder.at(-1)).toBeLessThan(detachCatalogIngredientMedia.mock.invocationCallOrder[0]);
     await waitFor(() => expect(screen.getByTestId('viewer')).not.toHaveAttribute('data-model-src'));
     expect(saveCatalogGreybox).toHaveBeenLastCalledWith('plc-1', scene, expect.anything());
+  });
+
+  it('requires a new confirmation when the attached model changes', () => {
+    const model = (mediaKey) => [{ mediaKey, kind: 'model', role: 'greybox-model' }];
+    const panel = (mediaKey) => <MemoryRouter><SavedPanel media={model(mediaKey)} /></MemoryRouter>;
+    const { rerender } = render(panel('old.glb'));
+    fireEvent.click(screen.getByRole('button', { name: 'Remove model' }));
+    expect(screen.getByRole('group', { name: 'Remove the Blender model?' })).toBeInTheDocument();
+
+    rerender(panel('new.glb'));
+    expect(screen.queryByRole('group', { name: 'Remove the Blender model?' })).not.toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Remove model' })).toBeEnabled();
+    expect(detachCatalogIngredientMedia).not.toHaveBeenCalled();
+    expect(saveCatalogGreybox).not.toHaveBeenCalled();
+  });
+
+  it('requires confirmation for the selected shot and preserves the other shots', async () => {
+    const close = { ...scene.shots[0], id: 'close', label: 'Close' };
+    show({ record: { ...record, payload: { greybox: { ...scene, shots: [...scene.shots, close] } } } });
+    const savedShots = within(screen.getByRole('list', { name: 'Saved shots' }));
+    const openDelete = (label) => fireEvent.click(screen.getByRole('button', { name: `Delete shot ${label}` }));
+
+    openDelete('Wide');
+    const confirmation = screen.getByRole('group', { name: 'Delete shot “Wide”?' });
+    expect(saveCatalogGreybox).not.toHaveBeenCalled();
+    fireEvent.click(within(confirmation).getByRole('button', { name: 'Cancel' }));
+    expect(saveCatalogGreybox).not.toHaveBeenCalled();
+
+    openDelete('Wide');
+    fireEvent.click(savedShots.getByRole('button', { name: /Close/ }));
+    expect(screen.queryByRole('group', { name: 'Delete shot “Wide”?' })).not.toBeInTheDocument();
+    fireEvent.click(savedShots.getByRole('button', { name: /Wide/ }));
+    expect(screen.queryByRole('group', { name: 'Delete shot “Wide”?' })).not.toBeInTheDocument();
+    openDelete('Wide');
+    fireEvent.click(within(screen.getByRole('group', { name: 'Delete shot “Wide”?' })).getByRole('button', { name: 'Delete shot' }));
+
+    await waitFor(() => expect(savedShots.queryByRole('button', { name: /Wide/ })).not.toBeInTheDocument());
+    expect(savedShots.getByRole('button', { name: /Close/ })).toBeInTheDocument();
+    expect(saveCatalogGreybox).toHaveBeenCalledExactlyOnceWith('plc-1', { ...scene, shots: [close] }, { source: undefined, silent: true });
+  });
+
+  it('pairs each panel form label with its own unique control', () => {
+    const media = [{ mediaKey: 'example.glb', kind: 'model' }];
+    render(<MemoryRouter><SavedPanel media={media} /><SavedPanel media={media} /></MemoryRouter>);
+    const panelIds = screen.getAllByRole('region', { name: 'Greybox' }).flatMap((panel) =>
+      ['Layout source', /^Lens:/, 'Frame', 'New shot name', 'What should change?', 'Start over instead of editing the current layout'].map((label) => {
+        const control = within(panel).getByLabelText(label);
+        expect(control.labels[0].htmlFor).toBe(control.id);
+        expect(document.getElementById(control.id)).toBe(control);
+        return control.id;
+      }));
+    expect(new Set(panelIds).size).toBe(12);
   });
 
   it('replaces the attached model only after its new source is saved', async () => {
