@@ -43,6 +43,7 @@ import { PINNED_HEAD_MOVED, createWorktree, adoptWorktree, findAdoptableWorktree
 import { resolveSpawnCwd, usesCreativeDirectorScratchCwd, creativeDirectorScratchCwd } from '../../lib/spawnCwd.js';
 import { enforceSafeBranchUpstream } from '../../lib/branchUpstreamGuard.js';
 import { resolveTaskTargetBranch, resolveTaskRemoteBranch } from '../../lib/taskTargetBranch.js';
+import { canRunHostPrRemediation } from '../../lib/prHandbackPolicy.js';
 import { resolveTaskForkHead } from '../../lib/forkHead.js';
 import { getAppWorkspace, getAppDataForTask } from './agentAppWorkspace.js';
 import { createJiraTicketForTask } from '../promptSections/appContext.js';
@@ -426,6 +427,14 @@ async function admitClaimContinuation({ task, agentId, sourceWorkspace, claimWor
  * @returns {Promise<object>} discriminated outcome (see module doc)
  */
 export async function prepareAgentWorkspace({ agentId, task, inboxEnv, onPrepared = result => result }) {
+  // Recheck persisted tasks on every attempt, before a checkout or provider launch
+  // can grant a fork the ordinary host validation and CI repair path.
+  if (isTruthyMeta(task.metadata?.prRemediationFollowUp)
+    && !canRunHostPrRemediation(task.metadata.prRemediationWriteAccess, task.metadata.forkHead)) {
+    const reason = 'Local PR remediation requires a verified same-repository head. Returning the PR to its opener.';
+    await blockTask(task, reason, 'pr-validation-unavailable');
+    return onPrepared({ outcome: 'blocked', reason });
+  }
   if (isPrivateSecurityTask(task)) {
     const { privateSecurityScratchCwd } = await import('../../lib/privateSecuritySandbox.js');
     const workspacePath = privateSecurityScratchCwd(agentId);

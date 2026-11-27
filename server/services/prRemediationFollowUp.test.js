@@ -18,14 +18,13 @@ const PULL_REQUEST = {
   headRefName: 'contributor/update',
   baseRefName: 'main',
   authorLogin: 'contributor',
-  forkHead: { remoteUrl: 'https://github.com/contributor/r.git', ownerLogin: 'contributor' },
 };
 
 const spawn = (overrides = {}) => spawnPrRemediationFollowUp({
   app: APP,
   repoFullName: 'o/r',
   pullRequest: PULL_REQUEST,
-  writeAccess: 'fork-maintainer-modifiable',
+  writeAccess: 'own-repo',
   reason: 'the review reported blocking findings',
   ...overrides,
 });
@@ -45,9 +44,6 @@ describe('spawnPrRemediationFollowUp', () => {
     expect(task).toMatchObject({
       app: APP.id,
       priority: 'HIGH',
-      // PortOS provisions the worktree and attaches it to the PR's own head
-      // branch — including a fork head, via `forkHead` (#6064). The PR already
-      // exists, so cleanup must not open a second one.
       useWorktree: true,
       openPR: false,
       metadata: {
@@ -58,9 +54,8 @@ describe('spawnPrRemediationFollowUp', () => {
         // What workspace prep pins the attach to (#12486).
         prRemediationHeadSha: 'a'.repeat(40),
         prRemediationAuthorLogin: 'contributor',
-        prRemediationWriteAccess: 'fork-maintainer-modifiable',
+        prRemediationWriteAccess: 'own-repo',
         existingBranch: 'contributor/update',
-        forkHead: { remoteUrl: 'https://github.com/contributor/r.git', ownerLogin: 'contributor' },
       },
     });
     // The first line carries the PR number so addTask's per-app dedup keeps a
@@ -84,21 +79,17 @@ describe('spawnPrRemediationFollowUp', () => {
   });
 
   it('tells the agent the branch is already checked out rather than to fetch it itself', async () => {
-    // The prose worktree procedure was the workaround for a worktree layer that
-    // could not attach to a fork head. Now that it can (#6064), leaving the
-    // instructions in place would have the agent build a SECOND worktree.
     await spawn();
 
     const { context } = addTaskMock.mock.calls[0][0];
-    expect(context).toContain('with `fork/contributor/contributor/update` checked out');
-    expect(context).toContain('git push --no-follow-tags fork-contributor HEAD:refs/heads/contributor/update');
+    expect(context).toContain('with `contributor/update` checked out');
+    expect(context).toContain("Run the repo's own tests");
+    expect(context).toContain("push to the PR's own branch with `git push`");
     expect(context).toContain('ALREADY in an isolated worktree');
     expect(context).not.toContain('gh pr checkout');
     expect(context).not.toContain('worktree add');
     expect(context).not.toContain('worktree remove');
     expect(context).toContain('gh pr merge 7 --repo o/r --merge');
-    // Push rights on a fork are not permission to delete the contributor's
-    // branch — the shared merge gate must be asked for `deleteBranch: false`.
     expect(context).not.toContain('--delete-branch');
     expect(context).toContain('--add-assignee contributor');
     expect(context).toContain('UNTRUSTED DATA');
@@ -112,32 +103,6 @@ describe('spawnPrRemediationFollowUp', () => {
     const context = addTaskMock.mock.calls[0][0].context;
     expect(context.includes('mergeHandoffMinQueuedRuns')).toBe(expected);
     expect(context).toContain('Wait for CI to finish');
-  });
-
-  // A same-repo head has no contributor who "left the branch writable", so the
-  // prompt must not tell the agent one did — it names a real person.
-  it('describes push access from the head repository, not from a fork claim', async () => {
-    await spawn({ pullRequest: { ...PULL_REQUEST, forkHead: null }, writeAccess: 'own-repo' });
-    const ownRepo = addTaskMock.mock.calls[0][0].context;
-    expect(ownRepo).toContain('lives in o/r itself');
-    expect(ownRepo).not.toContain('Allow edits by maintainers');
-    expect(ownRepo).not.toContain('FORK');
-
-    addTaskMock.mockClear();
-    await spawn({ writeAccess: 'fork-maintainer-modifiable' });
-    const fork = addTaskMock.mock.calls[0][0].context;
-    expect(fork).toContain('@contributor left the head branch writable by maintainers');
-    expect(fork).toContain('lives in their FORK');
-    expect(fork).toContain('already tracks that fork');
-  });
-
-  it('carries no fork remote for a same-repo head, which origin already resolves', async () => {
-    await spawn({ pullRequest: { ...PULL_REQUEST, forkHead: null }, writeAccess: 'own-repo' });
-
-    expect(addTaskMock.mock.calls[0][0].metadata).toMatchObject({
-      existingBranch: 'contributor/update',
-      forkHead: null,
-    });
   });
 
   // The screened title/body/diff stay on the far side of the Stage 1 boundary:
@@ -170,6 +135,10 @@ describe('spawnPrRemediationFollowUp', () => {
   });
 
   it.each([
+    ['a writable fork', { writeAccess: 'fork-maintainer-modifiable' }],
+    ['an unknown head relationship', { writeAccess: null }],
+    ['inconsistent fork coordinates', { pullRequest: { ...PULL_REQUEST,
+      forkHead: { remoteUrl: 'https://github.com/contributor/r.git', ownerLogin: 'contributor' } } }],
     ['no app', { app: null }],
     ['no repository', { repoFullName: '' }],
     ['no PR number', { pullRequest: { ...PULL_REQUEST, number: null } }],

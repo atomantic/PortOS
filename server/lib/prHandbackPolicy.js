@@ -1,7 +1,10 @@
 /**
  * Who owns a public PR after the pr-reviewer coordinator has finished with it.
  *
- * "whose turn is it?", pure so a unit test and both the post-review pass and the pending-approval poller reach the same answer. Stage 3 posts the review and, when everything lines up, merges; a PR that came back with blockers, or is approved but not merge-ready (red CI, conflict, a refused rebase), was left with nobody holding it (not in anyone's assigned queue). The pivot is whether the maintainer can push to the head branch: a same-repo branch is ours, a fork branch only when the contributor left "Allow edits by maintainers" on. With write access PortOS implements its own review feedback and lands the PR; without it, the only useful action is to put the PR in the opener's queue. Fails closed on both axes: an unknown head-repository relationship means "no write access", and an unactionable review (deferred verdict, or findings not anchorable to a diff line) never becomes an agent work order.
+ * The post-review pass and pending-approval poller share this decision. A normal
+ * coding agent has host privileges. The install/validate container confines
+ * individual commands, but cannot enforce that agent's execution boundary.
+ * Forks therefore use the contributor handback, even with maintainer edits.
  */
 
 /** How many remediation agents one PR may consume before it goes back to its opener regardless of write access (three failed runs show an obstacle no agent will clear). */
@@ -47,6 +50,11 @@ export function resolvePullRequestWriteAccess(pullRequest) {
   return { canEdit: false, reason: PR_WRITE_ACCESS.UNKNOWN };
 }
 
+/** Only an explicitly same-repository head may enter the host coding workflow. */
+export function canRunHostPrRemediation(writeAccess, forkHead) {
+  return writeAccess === PR_WRITE_ACCESS.OWN_REPO && forkHead == null;
+}
+
 /**
  * Whose turn is it?
  *
@@ -58,7 +66,7 @@ export function resolvePullRequestWriteAccess(pullRequest) {
  * @param {boolean} input.downgraded - The coordinator could not anchor one or
  *   more reported findings to the diff. The posted review says so and asks the
  *   contributor to restate them; there is no reliable work order in it.
- * @param {boolean} input.canEdit - `resolvePullRequestWriteAccess().canEdit`.
+ * @param {string} input.writeAccess - The verified head relationship from the forge.
  * @param {boolean} input.remediationExhausted - Remediation already ran its
  *   attempt budget on this PR without landing it. Retrying would spend another
  *   agent on the same wall; hand it to the opener instead.
@@ -67,12 +75,12 @@ export function resolveHandbackDisposition({
   reviewOutcome = null,
   notMergeReady = false,
   downgraded = false,
-  canEdit = false,
+  writeAccess,
   remediationExhausted = false,
 } = {}) {
   if (!reviewOutcome && !notMergeReady) return PR_HANDBACK.NONE;
   // A deferred review is a hand-back but never a work order: it bars the AGENT path (no verdict to implement) without suppressing the assignment.
   const actionable = !downgraded && reviewOutcome !== PR_REVIEW_OUTCOME.DEFER;
-  if (canEdit && actionable && !remediationExhausted) return PR_HANDBACK.REMEDIATE;
+  if (canRunHostPrRemediation(writeAccess) && actionable && !remediationExhausted) return PR_HANDBACK.REMEDIATE;
   return PR_HANDBACK.ASSIGN_OPENER;
 }

@@ -42,20 +42,20 @@ describe('resolvePullRequestWriteAccess', () => {
 
 describe('resolveHandbackDisposition', () => {
   it('hands nothing back when the PR needs neither fixes nor merge work', () => {
-    expect(resolveHandbackDisposition({ canEdit: true })).toBe(PR_HANDBACK.NONE);
+    expect(resolveHandbackDisposition({ writeAccess: PR_WRITE_ACCESS.OWN_REPO })).toBe(PR_HANDBACK.NONE);
   });
 
-  it('remediates blocking findings on a writable branch', () => {
-    expect(resolveHandbackDisposition({ ...REQUEST_CHANGES, canEdit: true })).toBe(PR_HANDBACK.REMEDIATE);
+  it('remediates blocking findings on a same-repository branch', () => {
+    expect(resolveHandbackDisposition({ ...REQUEST_CHANGES, writeAccess: PR_WRITE_ACCESS.OWN_REPO })).toBe(PR_HANDBACK.REMEDIATE);
   });
 
   it('remediates an approved PR that cannot land as it stands', () => {
-    expect(resolveHandbackDisposition({ notMergeReady: true, canEdit: true })).toBe(PR_HANDBACK.REMEDIATE);
+    expect(resolveHandbackDisposition({ notMergeReady: true, writeAccess: PR_WRITE_ACCESS.OWN_REPO })).toBe(PR_HANDBACK.REMEDIATE);
   });
 
   it('assigns the opener when the branch is not writable', () => {
-    expect(resolveHandbackDisposition({ ...REQUEST_CHANGES, canEdit: false })).toBe(PR_HANDBACK.ASSIGN_OPENER);
-    expect(resolveHandbackDisposition({ notMergeReady: true, canEdit: false })).toBe(PR_HANDBACK.ASSIGN_OPENER);
+    expect(resolveHandbackDisposition({ ...REQUEST_CHANGES, writeAccess: PR_WRITE_ACCESS.FORK_LOCKED })).toBe(PR_HANDBACK.ASSIGN_OPENER);
+    expect(resolveHandbackDisposition({ notMergeReady: true, writeAccess: PR_WRITE_ACCESS.FORK_LOCKED })).toBe(PR_HANDBACK.ASSIGN_OPENER);
   });
 
   // An agent told to "implement the feedback" needs feedback it can implement.
@@ -63,18 +63,18 @@ describe('resolveHandbackDisposition', () => {
     ['findings that could not be anchored', { ...REQUEST_CHANGES, downgraded: true }],
     ['a reviewer that returned no verdict', { reviewOutcome: PR_REVIEW_OUTCOME.DEFER }],
   ])('assigns the opener rather than dispatching an agent for %s', (_label, review) => {
-    expect(resolveHandbackDisposition({ ...review, canEdit: true })).toBe(PR_HANDBACK.ASSIGN_OPENER);
+    expect(resolveHandbackDisposition({ ...review, writeAccess: PR_WRITE_ACCESS.OWN_REPO })).toBe(PR_HANDBACK.ASSIGN_OPENER);
   });
 
   // A COMMENT review counts as a review on that head, so the coordinator will
   // never revisit the revision — leaving it unassigned strands it for good.
   it('hands a deferred review to its opener even with nothing else wrong', () => {
-    expect(resolveHandbackDisposition({ reviewOutcome: PR_REVIEW_OUTCOME.DEFER, canEdit: true }))
+    expect(resolveHandbackDisposition({ reviewOutcome: PR_REVIEW_OUTCOME.DEFER, writeAccess: PR_WRITE_ACCESS.OWN_REPO }))
       .toBe(PR_HANDBACK.ASSIGN_OPENER);
   });
 
   it('stops dispatching agents once the attempt budget is spent', () => {
-    expect(resolveHandbackDisposition({ ...REQUEST_CHANGES, canEdit: true, remediationExhausted: true }))
+    expect(resolveHandbackDisposition({ ...REQUEST_CHANGES, writeAccess: PR_WRITE_ACCESS.OWN_REPO, remediationExhausted: true }))
       .toBe(PR_HANDBACK.ASSIGN_OPENER);
   });
 });

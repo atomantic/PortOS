@@ -81,18 +81,13 @@ export async function getRepositoryIdentity(ctx) {
 export async function readPullRequest(ctx, number) {
   return runJson([
     'pr', 'view', String(number), '--repo', ctx.repoSpec,
-    // `isCrossRepository`/`maintainerCanModify` decide who owns a PR the
-    // coordinator did not merge: with write access on the head branch PortOS
-    // lands it itself, without it the PR goes to the opener's queue
-    // (`prHandbackPolicy.js`). `headRepository`/`headRepositoryOwner` are where
-    // a fork's head branch actually lives, which is what lets the remediation
-    // agent's worktree attach to it at all (#6064). `assignees` keeps that
-    // assignment idempotent across scheduled sweeps. `commits` is part of the
+    // Host remediation requires a same-repository head. Assignees keep the
+    // contributor handback idempotent. `commits` is part of the
     // screened content, so `screenedPullRequestFingerprintMatches` cannot verify
     // a current-recipe stamp on a PR read without it — safe to ask for on a
     // single PR, unlike the bulk listing the preflight has to keep it out of
     // (GraphQL node budget).
-    '--json', 'id,number,title,body,url,state,isDraft,author,assignees,labels,commits,files,additions,deletions,baseRefName,baseRefOid,headRefName,headRefOid,isCrossRepository,maintainerCanModify,headRepository,headRepositoryOwner,mergeable,mergeStateStatus,statusCheckRollup',
+    '--json', 'id,number,title,body,url,state,isDraft,author,assignees,labels,commits,files,additions,deletions,baseRefName,baseRefOid,headRefName,headRefOid,isCrossRepository,maintainerCanModify,mergeable,mergeStateStatus,statusCheckRollup',
   ], ctx);
 }
 
