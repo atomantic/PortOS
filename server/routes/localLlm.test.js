@@ -5,18 +5,20 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 import express from 'express';
 import { request } from '../lib/testHelper.js';
 import localLlmRoutes from './localLlm.js';
+import { adoptJevHead } from '../services/jevHeads.js';
+import { describeLocalPersistentMindSetup } from '../services/localPersistentMindSetup.js';
 import { decide } from '../services/jev.js';
 import { installLaya, scoreLaya } from '../services/layaMlx.js';
 import { runLocalLlmTest, compareLocalLlmModels } from '../services/localLlmPlayground.js';
-import { listModels, listVisionModels, listToolUseModels, installModel, cancelModelInstall, switchBackend, migrateBackend } from '../services/localLlm.js';
-import { enrichCatalogWithVariants, applyMeasuredFit } from '../services/huggingFaceCatalog.js';
+import { listModels, listVisionModels, listToolUseModels, listContextPlans, installModel, cancelModelInstall, switchBackend, migrateBackend, controlOllamaServer, upgradeBackend } from '../services/localLlm.js';
+import { enrichCatalogWithVariants, applyMeasuredFit, searchHuggingFaceModels } from '../services/huggingFaceCatalog.js';
 import { getMeasuredFits } from '../services/localModelAssessmentStore.js';
 import { listEndpointRuntimeModels } from '../services/localRuntimeEndpoints.js';
 import { runAssessment } from '../services/localModelAssessments.js';
 import { startSweep, getSweepStatus, cancelSweep } from '../services/localModelAssessmentSweep.js';
 import { runOpenCodeAgentBenchmark } from '../services/localModelAgentBenchmark.js';
 import { getLoadedModels, unloadModel } from '../services/ollamaManager.js';
-import { getLoadedModels as getLoadedLmStudioModels, getLastLoadedModelsError as getLmStudioResidencyError } from '../services/lmStudioManager.js';
+import { getLoadedModels as getLoadedLmStudioModels, getLastLoadedModelsError as getLmStudioResidencyError, controlLmStudioServer } from '../services/lmStudioManager.js';
 import { getSettings, readSettingsStrict, updateSettingsWith } from '../services/settings.js';
 import { localLlmCompareSchema, localLlmTestSchema } from '../lib/mediaValidation.js';
 import { getSplashRuntimeStatus } from '../services/splashRuntimeStatus.js';
@@ -46,6 +48,7 @@ vi.mock('../services/localLlm.js', () => ({
   listModels: vi.fn(async () => []),
   listVisionModels: vi.fn(async () => []),
   listToolUseModels: vi.fn(async () => []),
+  listContextPlans: vi.fn(),
   installModel: vi.fn(),
   cancelModelInstall: vi.fn(),
   previewInstallModel: vi.fn(async () => ({
@@ -63,6 +66,13 @@ vi.mock('../services/localLlm.js', () => ({
 vi.mock('../services/jev.js', async (importOriginal) => ({
   ...await importOriginal(),
   decide: vi.fn(),
+}));
+
+vi.mock('../services/jevHeads.js', () => ({ adoptJevHead: vi.fn() }));
+
+vi.mock('../services/localPersistentMindSetup.js', () => ({
+  describeLocalPersistentMindSetup: vi.fn(),
+  applyLocalPersistentMindSetup: vi.fn(),
 }));
 
 vi.mock('../services/layaMlx.js', () => ({
@@ -101,6 +111,7 @@ vi.mock('../services/ollamaManager.js', () => ({
 }));
 
 vi.mock('../services/lmStudioManager.js', () => ({
+  controlLmStudioServer: vi.fn(),
   getLastLoadedModelsError: vi.fn(() => null),
   getLoadedModels: vi.fn(async () => []),
 }));
@@ -230,7 +241,6 @@ vi.mock('../services/settings.js', () => ({
   getSettings: vi.fn(async () => ({})),
   readSettingsStrict: vi.fn(),
   updateSettingsWith: vi.fn(),
-  // localPersistentMindSetup → cos → cosTaskStore → codeReview listens on boot.
   settingsEvents: { on: vi.fn(), emit: vi.fn(), setMaxListeners: vi.fn() },
 }));
 
@@ -1705,5 +1715,171 @@ it('save-startup leaves every on-demand runtime out of the boot dump', async () 
   expect(res.status).toBe(200);
   expect(saveProcessList).toHaveBeenCalledWith(null, {
     exclude: ['portos-mtplx', 'portos-slotstream', 'portos-splash', 'portos-mkserve'],
+  });
+});
+
+describe('local LLM setup and context reads', () => {
+  it('returns the checklist when local Persistent Mind setup is inapplicable', async () => {
+    const checklist = { applicable: false, recommendation: null, ready: false, steps: [{ id: 'recommendation', status: 'skipped' }] };
+    describeLocalPersistentMindSetup.mockResolvedValueOnce(checklist);
+
+    const response = await request(makeApp()).get('/api/local-llm/persistent-mind-setup');
+
+    expect(response.status).toBe(200);
+    expect(response.body).toEqual(checklist);
+  });
+
+  it('returns the installed model context recommendations', async () => {
+    const context = { plans: [{ modelId: 'example-model', recommended: 8192 }], cacheType: 'q8_0' };
+    listContextPlans.mockResolvedValueOnce(context);
+
+    const response = await request(makeApp()).get('/api/local-llm/context-plans');
+
+    expect(response.status).toBe(200);
+    expect(response.body).toEqual(context);
+  });
+});
+
+describe('local LLM service and upgrade routes', () => {
+  const progressEvents = (app) => app.get('io').emit.mock.calls
+    .filter(([topic]) => topic === 'localLlm:progress')
+    .map(([, payload]) => payload.event);
+
+  describe.each([
+    ['ollama-service', controlOllamaServer, 'enable', 'restart'],
+    ['lmstudio-service', controlLmStudioServer, 'stop', 'enable'],
+  ])('POST /%s', (path, control, action, invalidAction) => {
+    beforeEach(() => control.mockReset());
+
+    it('validates the action before invoking the service or emitting progress', async () => {
+      const app = makeApp();
+      const response = await request(app).post(`/api/local-llm/${path}`).send({ action: invalidAction });
+
+      expect(response.status).toBe(400);
+      expect(response.body.code).toBe('VALIDATION_ERROR');
+      expect(control).not.toHaveBeenCalled();
+      expect(progressEvents(app)).toEqual([]);
+    });
+
+    it('passes a supported action through and emits terminal completion', async () => {
+      const app = makeApp();
+      const result = { success: true };
+      control.mockResolvedValueOnce(result);
+
+      const response = await request(app).post(`/api/local-llm/${path}`).send({ action });
+
+      expect(response.status).toBe(200);
+      expect(response.body).toEqual(result);
+      expect(control).toHaveBeenCalledExactlyOnceWith(action);
+      expect(progressEvents(app)).toEqual(['start', 'complete']);
+    });
+
+    it('returns a service failure and emits a terminal error', async () => {
+      const app = makeApp();
+      const error = 'Service unavailable';
+      control.mockResolvedValueOnce({ success: false, error });
+
+      const response = await request(app).post(`/api/local-llm/${path}`).send({ action });
+
+      expect(response.status).toBe(502);
+      expect(response.body.error).toBe(error);
+      expect(progressEvents(app)).toEqual(['start', 'error']);
+    });
+  });
+
+  it('forwards upgrade progress and completes with the service result', async () => {
+    const app = makeApp();
+    const result = { success: true, note: 'Version updated' };
+    upgradeBackend.mockReset().mockImplementationOnce(async (_backend, progress) => {
+      progress({ event: 'start', message: 'Downloading update' });
+      return result;
+    });
+
+    const response = await request(app).post('/api/local-llm/upgrade-backend').send({ backend: 'ollama' });
+
+    expect(response.status).toBe(200);
+    expect(response.body).toEqual(result);
+    expect(upgradeBackend).toHaveBeenCalledExactlyOnceWith('ollama', expect.any(Function), expect.any(AbortSignal));
+    expect(upgradeBackend.mock.calls[0][2].aborted).toBe(false);
+    expect(app.get('io').emit.mock.calls).toEqual(expect.arrayContaining([
+      ['localLlm:progress', { event: 'start', message: 'Downloading update' }],
+      ['localLlm:progress', { event: 'complete', message: 'Ollama upgraded — Version updated' }],
+    ]));
+  });
+
+  it('returns 502 on upgrade failure and never emits completion', async () => {
+    const app = makeApp();
+    const error = 'Upgrade unavailable';
+    upgradeBackend.mockResolvedValueOnce({ success: false, error });
+
+    const response = await request(app).post('/api/local-llm/upgrade-backend').send({ backend: 'lmstudio' });
+
+    expect(response.status).toBe(502);
+    expect(response.body.error).toBe(error);
+    expect(progressEvents(app)).toEqual(['error']);
+  });
+});
+
+describe('Hugging Face catalog search', () => {
+  beforeEach(() => searchHuggingFaceModels.mockClear());
+
+  it('validates the query before searching', async () => {
+    const response = await request(makeApp()).get('/api/local-llm/huggingface-search?backend=lmstudio&limit=31');
+
+    expect(response.status).toBe(400);
+    expect(response.body.code).toBe('VALIDATION_ERROR');
+    expect(searchHuggingFaceModels).not.toHaveBeenCalled();
+  });
+
+  it('passes the installed LM Studio quantization and the numeric limit to search', async () => {
+    const id = 'example-org/model-GGUF';
+    const models = [{ id }];
+    listModels.mockResolvedValueOnce([{ id, quantization: 'Q4_K_M' }]);
+    searchHuggingFaceModels.mockResolvedValueOnce(models);
+
+    const response = await request(makeApp()).get('/api/local-llm/huggingface-search?backend=lmstudio&q=example&limit=7');
+
+    expect(response.status).toBe(200);
+    expect(response.body).toMatchObject({ backend: 'lmstudio', source: 'huggingface', models });
+    expect(searchHuggingFaceModels).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({
+      backend: 'lmstudio', query: 'example', category: 'all', limit: 7, installedIds: [`${id}@Q4_K_M`],
+    }));
+  });
+});
+
+describe('JEV head adoption', () => {
+  const decisionId = 'issue-comment-reply';
+  const adopt = (decision) => request(makeApp()).post('/api/local-llm/jev/heads/adopt').send({ decisionId: decision });
+
+  beforeEach(() => adoptJevHead.mockReset());
+
+  it('rejects unknown decisions before invoking the head store', async () => {
+    const response = await adopt('unknown-decision');
+
+    expect(response.status).toBe(400);
+    expect(response.body.code).toBe('VALIDATION_ERROR');
+    expect(adoptJevHead).not.toHaveBeenCalled();
+  });
+
+  it('surfaces the adoption gate refusal', async () => {
+    const code = 'jev-head-revision-mismatch';
+    adoptJevHead.mockResolvedValueOnce({ ok: false, code });
+
+    const response = await adopt(decisionId);
+
+    expect(response.status).toBe(400);
+    expect(response.body.code).toBe(code);
+    expect(adoptJevHead).toHaveBeenCalledExactlyOnceWith(decisionId);
+  });
+
+  it('returns only the adopted decision and its metrics', async () => {
+    const metrics = { macroF1: 0.9 };
+    adoptJevHead.mockResolvedValueOnce({ ok: true, head: { metrics, weights: [0.5] } });
+
+    const response = await adopt(decisionId);
+
+    expect(response.status).toBe(200);
+    expect(response.body).toEqual({ adopted: true, decisionId, metrics });
+    expect(adoptJevHead).toHaveBeenCalledExactlyOnceWith(decisionId);
   });
 });
