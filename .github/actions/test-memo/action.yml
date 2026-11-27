@@ -11,7 +11,7 @@ inputs:
     required: true
   partition:
     description: >-
-      The job family plus its shard (e.g. `server-1of2`), or the family alone
+      The job family plus its shard (e.g. `server-1of4`), or the family alone
       for an unsharded job. The preferred restore prefix and the saved key.
     required: true
   merge-shards:

@@ -40,7 +40,7 @@ describe('CI plan shard selection', () => {
 
     const full = buildCiTestPlan(['server/vitest.config.js'], { trackedFiles: [...TRACKED, ...BROWSER_SUITES] });
     expect(full.shards).toEqual({
-      server: shardIndexes('full', FULL_SUITE_SHARDS.server),
+      server: [1, 2, 3, 4],
       client: [1, 2, 3, 4, 5, 6],
       browser: [1, 2, 3, 4, 5, 6, 7],
       windows: shardIndexes('full', FULL_SUITE_SHARDS.windows),
@@ -85,7 +85,7 @@ describe('CI plan shard selection', () => {
       // Sharding partitions the selection; it never drops a selector.
       expect(plan.server.files).toEqual(expect.arrayContaining(tests));
       expect(plan.shards).toEqual({ server: SERVER_FANOUT, client: [1], browser: [1], windows: [1] });
-      expect(plan.suiteReasons.server).toMatch(/exceed the 125-file cap, sharded 2 ways/);
+      expect(plan.suiteReasons.server).toMatch(/exceed the 125-file cap, sharded 4 ways/);
       // A broad shared dependency can still reach the slashdo contracts.
       expect(plan.slashdo).toBe(true);
     });
@@ -142,7 +142,7 @@ describe('CI plan shard selection', () => {
       const broad = buildCiTestPlan([source], { trackedFiles, serverReach: reach(1069) });
       expect(broad.server.mode).toBe('related');
       expect(broad.shards).toEqual({ server: SERVER_FANOUT, client: [1], browser: [1], windows: [1] });
-      expect(broad.suiteReasons.server).toMatch(/related import reach of 1069 suites exceeds the 125-file cap, sharded 2 ways/);
+      expect(broad.suiteReasons.server).toMatch(/related import reach of 1069 suites exceeds the 125-file cap, sharded 4 ways/);
 
       const narrow = buildCiTestPlan([source], { trackedFiles, serverReach: reach(50) });
       expect(narrow.shards.server).toEqual([1]);

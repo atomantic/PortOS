@@ -1136,36 +1136,34 @@ describe('planTestMemo and recordTestMemo', () => {
     for (const file of browser) expect(existsSync(join(repoRootDir, file)), file).toBe(true);
   });
 
-  it('pins heavy server suites onto two shards and leaves every other file on the hash slice', () => {
+  it('pins heavy server suites on the full-width matrix and leaves all other files on their hash slices', () => {
     const heavy = Object.keys(SERVER_HEAVY_SHARD_OWNERS);
     const extras = ['server/lib/a.test.js', 'server/lib/b.test.js', 'scripts/plain.test.js'];
     const files = [...heavy, ...extras];
-    const shardOf = (slice) => serverShardSlice(files, { repoRoot: '/repo', scope: 'server', index: slice, count: 2 });
-    const slices = [shardOf(1), shardOf(2)];
+    const count = FULL_SUITE_SHARDS.server;
+    const shardOptions = (index) => ({ repoRoot: '/repo', scope: 'server', index, count });
+    const slices = shardIndexes('full', count).map((index) => serverShardSlice(files, shardOptions(index)));
     expect(slices.flat().sort()).toEqual([...files].sort());
-    expect(new Set(slices.flat()).size).toBe(files.length);
     for (const [file, owner] of Object.entries(SERVER_HEAVY_SHARD_OWNERS)) {
       expect(slices[owner - 1], file).toContain(file);
-      expect(slices[owner % 2], file).not.toContain(file);
     }
-    for (const extra of extras) {
-      const onFirst = vitestShardSlice(files, { repoRoot: '/repo', scope: 'server', index: 1, count: 2 }).includes(extra);
-      expect(slices[onFirst ? 0 : 1], extra).toContain(extra);
-    }
-    expect(serverShardSlice(files, { repoRoot: '/repo', scope: 'server', index: 2, count: 4 })).toEqual(
-      vitestShardSlice(files, { repoRoot: '/repo', scope: 'server', index: 2, count: 4 }),
-    );
-    expect(serverShardSlice(extras, { repoRoot: '/repo', scope: 'server', index: 1, count: 2 })).toEqual(
-      vitestShardSlice(extras, { repoRoot: '/repo', scope: 'server', index: 1, count: 2 }),
-    );
+    slices.forEach((slice, i) => {
+      const hashed = vitestShardSlice(files, shardOptions(i + 1)).filter((file) => !SERVER_HEAVY_SHARD_OWNERS[file]);
+      expect(slice.filter((file) => !SERVER_HEAVY_SHARD_OWNERS[file])).toEqual(hashed);
+    });
+
+    const smallerMatrix = { ...shardOptions(2), count: 2 };
+    expect(serverShardSlice(files, smallerMatrix)).toEqual(vitestShardSlice(files, smallerMatrix));
+    expect(serverShardSlice(extras, shardOptions(1))).toEqual(vitestShardSlice(extras, shardOptions(1)));
   });
 
-  it('balances pinned duration, non-capture serial suites and always-run guards in the server CI inventory', () => {
+  it('balances pinned duration, non-capture serial suites and structural guards in the server CI inventory', () => {
     const scope = 'server';
     const repoRoot = repoRootDir;
     const files = listWorkspaceTests(scope, { repoRoot, env: { PORTOS_CI_BROWSER_OWNER: 'unit' } })
       .map((file) => toRepoPath(scope, file));
-    const slices = [1, 2].map((index) => serverShardSlice(files, { repoRoot, scope, index, count: 2 }));
+    const count = FULL_SUITE_SHARDS.server;
+    const slices = shardIndexes('full', count).map((index) => serverShardSlice(files, { repoRoot, scope, index, count }));
     expect(slices.flat().sort()).toEqual([...files].sort());
 
     const heavy = Object.keys(SERVER_HEAVY_SHARD_OWNERS);
@@ -1173,57 +1171,72 @@ describe('planTestMemo and recordTestMemo', () => {
     const serial = EXCLUSIVE_TESTS.filter((file) => !EXCLUSIVE_CAPTURE_TESTS.includes(file))
       .map((file) => toRepoPath(scope, file));
     expect(heavy).toEqual(expect.arrayContaining(serial));
-    const [serial1, serial2] = slices.map((slice) => slice.filter((file) => serial.includes(file)).length);
-    expect(serial1 + serial2).toBe(serial.length);
-    expect(Math.abs(serial1 - serial2)).toBeLessThanOrEqual(1);
+    const serialCounts = slices.map((slice) => slice.filter((file) => serial.includes(file)).length);
+    expect(Math.max(...serialCounts) - Math.min(...serialCounts)).toBeLessThanOrEqual(1);
 
-    const guards = getAlwaysRunTests();
-    const [guards1, guards2] = slices.map((slice) => slice.filter((file) => guards.includes(file)).length);
-    expect(guards1 + guards2).toBe(guards.length);
-    expect(Math.abs(guards1 - guards2)).toBeLessThanOrEqual(1);
+    const guards = ['repo', 'runtime', 'modules'].map((name) => `server/test/guards/${name}.guard.test.js`);
+    expect(getAlwaysRunTests()).toEqual(expect.arrayContaining(guards));
+    guards.forEach((guard, i) => expect(slices[i]).toContain(guard));
 
-    // Hosted seconds from #17618 and #17778, plus local serial suite timings for #18336.
+    const formerlyColocated = [
+      'scripts/db-lifecycle-dispatch.test.js',
+      'scripts/vitestCiPool.test.js',
+      'server/services/backup.authority.test.js',
+      'server/services/musicVideo/autonomousService.test.js',
+      'server/services/musicVideo/documentGeneration.test.js',
+    ].map((file) => SERVER_HEAVY_SHARD_OWNERS[file]);
+    expect([...new Set(formerlyColocated)].sort()).toEqual(shardIndexes('full', count));
+
+    // Hosted cold run 45880186629, mapped onto the current inventory. Use two
+    // effective workers for the parallel file timings and count serial files
+    // in full. This estimates relative load from the fixed timing sample.
     const seconds = {
-      'server/test/guards/repo.guard.test.js': 9.1,
-      'server/scripts/run-local-code-review.test.js': 7,
-      'scripts/pregate.test.js': 25.1,
-      'scripts/setup-image-video.test.js': 19.5,
-      'scripts/lib/testMemo.test.js': 15,
-      'scripts/vitestSiblingSweep.test.js': 12.3,
-      'scripts/update-headless-recovery.test.js': 11.4,
-      'server/services/updateExecutor.deferred.test.js': 11.1,
-      'server/test/guards/modules.guard.test.js': 9.6,
-      'server/test/guards/runtime.guard.test.js': 10,
-      'scripts/ci-test-plan.test.js': 33.1,
-      'scripts/run-ci-tests.test.js': 33.2,
-      'server/services/repoRepairCompletion.test.js': 27,
-      'scripts/runCiTestsClientFixture.test.js': 20.2,
-      'scripts/lib/testMemoRunner.test.js': 11.4,
-      // #17778 hosted cold-run durations (parallel shard 1 vs shard 2 pins).
-      'server/services/musicVideo/castAndSetsService.test.js': 29.1,
-      'server/services/musicVideo/audioAnalysis.test.js': 21.3,
-      'server/lib/databaseMaintenanceWorker.test.js': 19.1,
-      'server/services/claimBranchCleanup.integration.test.js': 18.6,
-      'server/routes/musicVideoBlender.test.js': 15.7,
-      'server/services/eidoverseWorld.runtime.test.js': 13.1,
-      'scripts/setup-voice.ps1.test.js': 12.3,
-      'server/routes/musicVideoDcp.test.js': 10.1,
-      'scripts/vitestTempRoot.test.js': 18.7,
-      'scripts/ml/generate_ltx2.test.js': 19.4,
-      'server/lib/workTracker.trackerInstructions.test.js': 0.4,
-      'server/services/databaseMaintenanceCutover.test.js': 24.7,
-      'server/services/creativeDirector/videoAssembly.test.js': 6.1,
-      'scripts/workspaceCaches.test.js': 2.2,
-      'server/routes/cosAgentRoutes.ownershipResponse.test.js': 0.2,
-      'server/services/git.sharedRecovery.test.js': 12.7,
-      'server/services/musicVideo/publishKit.test.js': 15.7,
-      'server/services/musicVideo/sharingCopy.test.js': 1.8,
+      'scripts/ci-test-plan.test.js': 20.78,
+      'scripts/db-lifecycle-dispatch.test.js': 17.91,
+      'scripts/lib/testMemo.test.js': 36.50,
+      'scripts/lib/testMemoRunner.test.js': 20.02,
+      'scripts/ml/generate_ltx2.test.js': 10.08,
+      'scripts/pregate.test.js': 22.25,
+      'scripts/run-ci-tests.test.js': 39.23,
+      'scripts/runCiTestsClientFixture.test.js': 27.77,
+      'scripts/setup-image-video.test.js': 11.32,
+      'scripts/setup-voice.ps1.test.js': 17.69,
+      'scripts/update-headless-recovery.test.js': 34.48,
+      'scripts/vitestCiPool.test.js': 11.32,
+      'scripts/vitestSiblingSweep.test.js': 9.84,
+      'scripts/vitestTempRoot.test.js': 5.79,
+      'scripts/workspaceCaches.test.js': 2.66,
+      'server/lib/databaseMaintenanceWorker.test.js': 17.59,
+      'server/lib/workTracker.trackerInstructions.test.js': 0.41,
+      'server/routes/cosAgentRoutes.ownershipResponse.test.js': 0.20,
+      'server/routes/musicVideoBlender.test.js': 12.25,
+      'server/routes/musicVideoDcp.test.js': 10.14,
+      'server/scripts/run-local-code-review.test.js': 5.96,
+      'server/services/backup.authority.test.js': 9.43,
+      'server/services/claimBranchCleanup.integration.test.js': 21.19,
+      'server/services/creativeDirector/videoAssembly.test.js': 0.02,
+      'server/services/databaseMaintenanceCutover.test.js': 16.48,
+      'server/services/eidoverseWorld.runtime.test.js': 9.24,
+      'server/services/git.sharedRecovery.test.js': 2.85,
+      'server/services/musicVideo/audioAnalysis.test.js': 22.34,
+      'server/services/musicVideo/autonomousService.test.js': 9.15,
+      'server/services/musicVideo/castAndSetsService.test.js': 30.18,
+      'server/services/musicVideo/documentGeneration.test.js': 7.55,
+      'server/services/musicVideo/publishKit.test.js': 0.64,
+      'server/services/musicVideo/sharingCopy.test.js': 0.22,
+      'server/services/repoRepairCompletion.test.js': 15.20,
+      'server/services/updateExecutor.deferred.test.js': 11.62,
+      'server/test/guards/modules.guard.test.js': 3.73,
+      'server/test/guards/repo.guard.test.js': 7.54,
+      'server/test/guards/runtime.guard.test.js': 7.21,
     };
-    expect(Object.keys(seconds).sort()).toEqual(heavy.sort());
-    const pinned = (owner) => heavy.filter((file) => SERVER_HEAVY_SHARD_OWNERS[file] === owner)
-      .reduce((sum, file) => sum + seconds[file], 0);
-    const smokeBootSec = 7;
-    expect(Math.abs(pinned(1) + smokeBootSec - pinned(2))).toBeLessThanOrEqual(25);
+    expect(Object.keys(seconds).sort()).toEqual([...heavy].sort());
+    const unpinnedSeconds = [150.2, 148.6, 126.4, 131.0];
+    const smokeBootSeconds = 5;
+    const estimates = slices.map((slice, i) => slice.filter((file) => SERVER_HEAVY_SHARD_OWNERS[file])
+      .reduce((total, file) => total + seconds[file] / (serial.includes(file) ? 1 : 2),
+        unpinnedSeconds[i] + (i === 0 ? smokeBootSeconds : 0)));
+    expect(Math.max(...estimates) - Math.min(...estimates)).toBeLessThanOrEqual(25);
   });
 
   it('partitions all four Windows slices exactly like Vitest\'s sequencer', () => {
