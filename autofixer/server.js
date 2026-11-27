@@ -52,6 +52,11 @@ const MAX_DIFF_BYTES = 200 * 1024;
 const recentlyFixed = new Map();
 const FIX_COOLDOWN = 30 * 60 * 1000; // 30 minutes
 const CHECK_INTERVAL = 15 * 60 * 1000; // 15 minutes
+const SHUTDOWN_TIMEOUT_MS = 15_000;
+const GROUP_KILL_GRACE_MS = 5_000;
+// A live patch may need to finish git apply, a PM2 restart and a rollback.
+// Leave time for their existing command bounds, below PM2's 250s kill timeout.
+const PATCH_SHUTDOWN_TIMEOUT_MS = 249_000;
 let checkTimer = null;
 let shuttingDown = false;
 let stopUi;
@@ -413,6 +418,7 @@ async function fixProcess(processName, app, errorLogs, outputLogs) {
   // work from an agent that didn't finish cleanly.
   if (shuttingDown) return;
   const diff = await collectWorktreeDiff(worktreePath);
+  if (shuttingDown) return;
   const agentOk = !result.error && result.partial === false && result.exitCode === 0;
   // The live env's provider-auth values (incl. runner-injected provider.envVars
   // keys) — reject any diff that tries to write one into the repo (agent
@@ -433,6 +439,7 @@ async function fixProcess(processName, app, errorLogs, outputLogs) {
       // bubblewrap is unavailable (always on macOS). An explicit opt-in only.
       docker: { enabled: settings.instanceFeatures?.['docker-containment']?.enabled === true, settings: settings.dockerContainment ?? {} },
     });
+    if (shuttingDown) return;
     if (!verify.contained) console.warn(`🛑 [Autofixer] ${verify.output}`);
     outputBuffer.push(`\n[VERIFY exit ${verify.code}]\n${verify.output}`);
   }
@@ -469,7 +476,7 @@ async function fixProcess(processName, app, errorLogs, outputLogs) {
     return completeRepair(false, true, null);
   }
 
-  return stagedFixes.serialize(async () => {
+  return stagedFixes.serializePatch(async () => {
     const applied = await applyDiffToLive(app.repoPath, diff, AUTOFIXER_DIR);
     if (!applied.ok) {
       console.error(`❌ [Autofixer] Promotion blocked: ${applied.error}`);
@@ -573,7 +580,7 @@ async function runCheckCycle() {
         return null;
       });
       if (shuttingDown) {
-        stopUi?.();
+        await stopUi?.();
         return;
       }
     }
@@ -615,20 +622,46 @@ async function shutdown() {
     checkTimer = null;
   }
 
-  stopUi?.();
-  console.log(`\n🛑 [Autofixer] Shutting down...`);
-  // Stop the in-flight provider (its detached group) and record the attempt.
-  // Worktree removal is left to the next startup's sweep, the guarantee.
-  signalDetachedGroups('SIGTERM');
-  await stagedFixes.stopMutations();
-  if (activeRepair) {
-    const { outputBuffer, ...repair } = activeRepair;
-    await recordInterrupted({ ...repair, output: outputBuffer.join('') }).catch((err) => {
-      console.error(`❌ [Autofixer] Could not record interrupted session: ${err.message}`);
-    });
-  }
-  await historyTail;
-  process.exit(0);
+  const forceExit = () => {
+    console.error('❌ [Autofixer] Shutdown timed out, forcing exit');
+    process.exit(1);
+  };
+  const patchInProgress = stagedFixes.hasActivePatch();
+  const timeout = patchInProgress ? PATCH_SHUTDOWN_TIMEOUT_MS : SHUTDOWN_TIMEOUT_MS;
+  const deadline = performance.now() + timeout;
+  let timer = setTimeout(forceExit, timeout).unref();
+
+  console.log('🛑 [Autofixer] Shutting down...');
+  // Keep the daemon alive through the grace period even if history is flushed.
+  // The group registry drops children that close before the escalation.
+  const detachedGroupsStopped = signalDetachedGroups('SIGTERM') > 0
+    ? new Promise(resolve => setTimeout(() => {
+      signalDetachedGroups('SIGKILL');
+      resolve();
+    }, GROUP_KILL_GRACE_MS))
+    : undefined;
+
+  const drain = async () => {
+    await stagedFixes.stopMutations();
+    if (patchInProgress) {
+      clearTimeout(timer);
+      const remaining = Math.min(SHUTDOWN_TIMEOUT_MS, deadline - performance.now());
+      timer = setTimeout(forceExit, remaining).unref();
+    }
+    // Worktree removal is left to the next startup's sweep.
+    if (activeRepair) {
+      const { outputBuffer, ...repair } = activeRepair;
+      await recordInterrupted({ ...repair, output: outputBuffer.join('') }).catch((err) => {
+        console.error(`❌ [Autofixer] Could not record interrupted session: ${err.message}`);
+      });
+    }
+    await historyTail;
+  };
+  const results = await Promise.allSettled([drain(), Promise.resolve().then(() => stopUi?.()), detachedGroupsStopped]);
+  clearTimeout(timer);
+  const failure = results.find(result => result.status === 'rejected');
+  if (failure) console.error(`❌ [Autofixer] Shutdown drain failed: ${failure.reason.message}`);
+  process.exit(failure ? 1 : 0);
 }
 
 process.on('SIGINT', shutdown);
