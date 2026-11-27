@@ -52,6 +52,5 @@ Settings → Autofixer offers **Apply fixes automatically** (off by default) and
 
 ## Related Features
 
-- [Error Handling](./error-handling.md)
 - [Chief of Staff](./chief-of-staff.md)
 - [PM2 Configuration](../PM2.md)

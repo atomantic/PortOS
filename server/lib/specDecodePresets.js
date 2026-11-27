@@ -24,7 +24,7 @@
  * tokenizer-less checkpoint that has to be converted against its target) simply
  * carries no `repo` — the UI then links out to a Hugging Face search instead of
  * offering a Download button that cannot work. Pairs are the ones documented in
- * docs/features/dflash2.md.
+ * docs/features/local-llm-runtimes.md.
  */
 import { homedir } from 'node:os';
 import { join, resolve } from 'node:path';
@@ -207,7 +207,7 @@ export const SPEC_DECODE_PRESETS = Object.freeze([
  * presets), and a from-source llama.cpp can carry implementations that never
  * land upstream. The field therefore stays free text — what PortOS actually
  * reasons about is the `draft-` prefix, which is what decides whether a drafter
- * GGUF is required. Reference: llama.cpp `docs/speculative.md`.
+ * GGUF is required. See the llama-server section of the local LLM runtime guide.
  */
 export const SPEC_TYPE_SUGGESTIONS = Object.freeze([
   { id: 'none', note: 'Speculative decoding off' },

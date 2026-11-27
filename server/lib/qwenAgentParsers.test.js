@@ -76,11 +76,9 @@ describe('vllmExtraArgs', () => {
     expect(vllmExtraArgs()).toBe(parserFlagsFor('vllm').join(' '));
   });
 
-  it('matches the EXTRA_ARGS line documented in the 3090 feature doc', () => {
-    // The doc's copy-paste snippet is the de-facto install instruction until
-    // #4767 writes .env itself. If someone edits either side, this fails rather
-    // than letting the doc and the table drift into two different spellings.
-    const doc = readFileSync(join(REPO_ROOT, 'docs', 'features', 'qwen38-rtx3090.md'), 'utf8');
+  it('matches the EXTRA_ARGS line documented in the RTX 3090 setup section', () => {
+    // Operators preparing a checkout by hand use the documented parser flags.
+    const doc = readFileSync(join(REPO_ROOT, 'docs', 'features', 'local-llm-runtimes.md'), 'utf8');
     expect(doc).toContain(`EXTRA_ARGS=${vllmExtraArgs()}`);
   });
 });

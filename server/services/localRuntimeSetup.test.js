@@ -884,7 +884,7 @@ describe('sglang — a hardware gate in front of the same never-provision postur
 
     const result = await startOnLinux();
 
-    expect(result).toMatchObject({ success: false, error: expect.stringMatching(/qwen38-rtx3090/) });
+    expect(result).toMatchObject({ success: false, error: expect.stringMatching(/local-llm-runtimes\.md#vllm-on-rtx-3090/) });
     expect(streaming.runStreamingCommand).not.toHaveBeenCalled();
     expect(sglangProject.inspectSglangQwenProject).not.toHaveBeenCalled();
     restore();
@@ -994,7 +994,7 @@ describe('sglang — a hardware gate in front of the same never-provision postur
     // SGLang has no provisioner, so the refusal must NOT promise that clicking
     // again places the project — it points at the doc the operator prepares it
     // from. That clause is the one piece of this refusal that is per-stack.
-    expect(result.error).toContain('docs/features/sglang-qwen38.md');
+    expect(result.error).toContain('docs/features/local-llm-runtimes.md#sglang-on-hopper-or-blackwell');
     expect(result.error).not.toMatch(/PortOS will place the project inside it/);
     restore();
   });
