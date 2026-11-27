@@ -298,6 +298,36 @@ describe('restoreSnapshot manifest verification', () => {
         });
       });
 
+      it(`keeps platform credentials local on full restore (manifest: ${withManifest})`, async context => {
+        await withRealRsync(context, async () => {
+          const accountPath = 'agents/accounts.json';
+          const stagedPath = 'agents/Accounts.JSON.123.456.example.TMP';
+          const hashes = {
+            [accountPath]: await writeSnapshotFile(accountPath, '{"accounts":{"old":{}}}'),
+            [stagedPath]: await writeSnapshotFile(stagedPath, '{"accounts":{"staged":{}}}'),
+            [RECORD]: await writeSnapshotFile(RECORD, '{"value":"snapshot"}'),
+          };
+          if (withManifest) await writeManifest(hashes);
+
+          const livePath = joinPath(PATHS.data, accountPath);
+          const liveAccounts = '{"accounts":{"local":{}}}';
+          await realFs.mkdir(dirname(livePath), { recursive: true });
+          await realFs.writeFile(livePath, liveAccounts, { mode: 0o600 });
+
+          try {
+            const preview = await restoreSnapshot(tmpRoot, 'snap-1', { dryRun: true });
+            expect(preview.changedFiles).toContainEqual(expect.stringContaining(RECORD));
+            expect(preview.changedFiles).not.toContainEqual(expect.stringMatching(/accounts\.json/i));
+            await restoreSnapshot(tmpRoot, 'snap-1', { dryRun: false });
+            expect(await realFs.readFile(livePath, 'utf8')).toBe(liveAccounts);
+            expect(existsSync(joinPath(PATHS.data, stagedPath))).toBe(false);
+            expect(await realFs.readFile(joinPath(PATHS.data, RECORD), 'utf8')).toBe('{"value":"snapshot"}');
+          } finally {
+            await realFs.rm(livePath, { force: true });
+          }
+        });
+      });
+
       it(`preserves local HTTPS material on full restore (manifest: ${withManifest})`, async context => {
         await withRealRsync(context, async () => {
           const paths = ['certs/cert.pem', 'certs/key.pem', 'certs/meta.json'];

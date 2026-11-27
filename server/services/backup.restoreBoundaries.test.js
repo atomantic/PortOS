@@ -26,6 +26,7 @@ const machineLocalCredentialRestoreExcludes = [
   '--exclude=/[jJ][iI][rR][aA].[jJ][sS][oO][nN]',
   '--exclude=/[dD][aA][tT][aA][dD][oO][gG].[jJ][sS][oO][nN]',
   '--exclude=/[aA][uU][tT][hH]-[sS][eE][sS][sS][iI][oO][nN][sS].[jJ][sS][oO][nN]',
+  '--exclude=/[aA][gG][eE][nN][tT][sS]/[aA][cC][cC][oO][uU][nN][tT][sS].[jJ][sS][oO][nN]',
 ];
 
 // snapshotId validation + rsync filter construction + settings cache re-sync.
@@ -131,6 +132,7 @@ describe('restoreSnapshot snapshotId, filter flags, and settings re-sync', () =>
       `--exclude=${RECORDING_STAGE_RSYNC_GLOB}`,
       '--exclude=/[tT][aA][iI][lL][cC][aA][tT]-[sS][eE][rR][vV][eE].[jJ][sS][oO][nN].*.[tT][mM][pP]',
       '--exclude=/[tT][aA][iI][lL][cC][aA][tT]-[fF][oO][rR][wW][aA][rR][dD][sS].[jJ][sS][oO][nN].*.[tT][mM][pP]',
+      '--exclude=/[aA][gG][eE][nN][tT][sS]/[aA][cC][cC][oO][uU][nN][tT][sS].[jJ][sS][oO][nN].*.[tT][mM][pP]',
       '--exclude=/[pP][eE][eE][rR]-[aA][dD][mM][iI][nN]-[gG][rR][aA][nN][tT][sS].[jJ][sS][oO][nN].*.[tT][mM][pP]',
       '--exclude=/[pP][eE][eE][rR]-[eE][xX][eE][cC][uU][tT][iI][oO][nN]-[gG][rR][aA][nN][tT][sS].[jJ][sS][oO][nN].*.[tT][mM][pP]',
       '--exclude=/.[dD][aA][tT][aA][bB][aA][sS][eE]-[rR][eE][sS][tT][oO][rR][eE]-[rR][eE][cC][oO][vV][eE][rR][yY]-*.[pP][eE][nN][dD][iI][nN][gG]',
