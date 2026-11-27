@@ -1,7 +1,7 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { act, render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
-import { MemoryRouter } from 'react-router';
+import { MemoryRouter, Route, Routes } from 'react-router';
 
 vi.mock('../services/apiFableLoom.js', () => ({
   listLooms: vi.fn(),
@@ -80,6 +80,36 @@ describe('FableLoom index', () => {
     expect(screen.getByText('Audience helper')).toBeInTheDocument();
     expect(screen.getByRole('button', { name: 'sync fableLoom loom-1' })).toBeInTheDocument();
     await waitFor(() => expect(screen.getByText('Aria Verse')).toBeInTheDocument());
+  });
+
+  it('opens the loom by its link and keeps its action buttons outside the link', async () => {
+    const user = userEvent.setup();
+    render(
+      <MemoryRouter>
+        <Routes>
+          <Route path="/" element={<FableLoom />} />
+          <Route path="/fableloom/loom-1" element={<h1>Loom editor</h1>} />
+        </Routes>
+      </MemoryRouter>,
+    );
+
+    const link = await screen.findByRole('link', { name: 'The Hollow Crown' });
+    expect(link).toHaveAttribute('href', '/fableloom/loom-1');
+    const sync = screen.getByRole('button', { name: 'sync fableLoom loom-1' });
+    const remove = screen.getByRole('button', { name: 'Delete The Hollow Crown' });
+    for (const action of [sync, remove]) {
+      expect(action.parentElement.closest('a, [role="link"], [role="button"]')).toBeNull();
+    }
+
+    await user.click(sync);
+    await user.click(remove);
+    const confirm = screen.getByRole('button', { name: 'Delete' });
+    expect(confirm.parentElement.closest('a, [role="link"], [role="button"]')).toBeNull();
+    expect(link).toBeInTheDocument();
+
+    link.focus();
+    await user.keyboard('{Enter}');
+    expect(await screen.findByRole('heading', { name: 'Loom editor' })).toBeInTheDocument();
   });
 
   it('shows the empty state when there are no looms', async () => {

@@ -15,7 +15,6 @@ import Banner from '../components/ui/Banner';
 import ListLoadError from '../components/ui/ListLoadError';
 import useListResource from '../hooks/useListResource.js';
 import useLatestRequest from '../hooks/useLatestRequest.js';
-import { clickableProps, onActivateKeyDown } from '../lib/a11yKeyboard.js';
 
 export function HistoryPage() {
   const [history, setHistory] = useState([]);
@@ -63,8 +62,7 @@ export function HistoryPage() {
     loadData();
   };
 
-  const handleDelete = async (id, e) => {
-    e.stopPropagation();
+  const handleDelete = async (id) => {
     const result = await deleteHistoryEntry(id).catch(() => null);
     if (result === null) return;
     setHistory(prev => prev.filter(entry => entry.id !== id));
@@ -204,26 +202,19 @@ export function HistoryPage() {
           <div className="divide-y divide-port-border">
             {history.map(entry => (
               <div key={entry.id}>
-                <div
-                  className="p-3 sm:p-4 hover:bg-port-border/20 cursor-pointer group"
-                  onClick={() => toggleExpand(entry.id)}
-                  {...clickableProps(() => toggleExpand(entry.id))}
-                  onKeyDown={onActivateKeyDown(() => toggleExpand(entry.id))}
-                >
+                <div className="relative isolate p-3 sm:p-4 hover:bg-port-border/20 group">
+                  <button
+                    type="button"
+                    className="absolute inset-0 z-0 h-full w-full rounded focus-visible:-outline-offset-2!"
+                    onClick={() => toggleExpand(entry.id)}
+                    aria-expanded={expandedId === entry.id}
+                    aria-label={`${expandedId === entry.id ? 'Collapse' : 'Expand'} ${entry.action} details${entry.targetName ? ` for ${entry.targetName}` : ''}`}
+                  />
                   <div className="flex flex-col sm:flex-row sm:items-center gap-2 sm:gap-4">
                     <div className="flex items-center gap-3 flex-1 min-w-0">
-                      <button
-                        type="button"
-                        className="inline-flex items-center justify-center min-w-[44px] min-h-[44px] pointer-fine:lg:min-w-0 pointer-fine:lg:min-h-0 text-gray-400 hover:text-white shrink-0 focus:outline-hidden focus:ring-2 focus:ring-port-accent rounded"
-                        onClick={(event) => {
-                          event.stopPropagation();
-                          toggleExpand(entry.id);
-                        }}
-                        aria-expanded={expandedId === entry.id}
-                        aria-label={`${expandedId === entry.id ? 'Collapse' : 'Expand'} ${entry.action} details`}
-                      >
-                        <span className={`inline-block transition-transform ${expandedId === entry.id ? 'rotate-90' : ''}`} aria-hidden="true">▶</span>
-                      </button>
+                      <span className="inline-flex items-center justify-center min-w-[44px] min-h-[44px] pointer-fine:lg:min-w-0 pointer-fine:lg:min-h-0 text-gray-400 group-hover:text-white shrink-0" aria-hidden="true">
+                        <span className={`inline-block transition-transform ${expandedId === entry.id ? 'rotate-90' : ''}`}>▶</span>
+                      </span>
                       <span className="text-xl shrink-0">{getActionIcon(entry.action)}</span>
                       <div className="flex-1 min-w-0">
                         <div className="flex flex-wrap items-center gap-x-2 gap-y-1">
@@ -248,8 +239,9 @@ export function HistoryPage() {
                       />
                       <span className="text-sm text-gray-500 shrink-0">{formatTime(entry.timestamp)}</span>
                       <button
-                        onClick={(e) => handleDelete(entry.id, e)}
-                        className="min-h-[44px] min-w-[44px] inline-flex items-center justify-center p-1 text-gray-500 hover:text-port-error transition-colors [@media(hover:hover)]:sm:opacity-0 sm:group-hover:opacity-100 focus:opacity-100 focus:outline-hidden focus:ring-2 focus:ring-port-accent rounded"
+                        type="button"
+                        onClick={() => handleDelete(entry.id)}
+                        className="relative z-10 min-h-[44px] min-w-[44px] inline-flex items-center justify-center p-1 text-gray-500 hover:text-port-error transition-colors [@media(hover:hover)]:sm:opacity-0 sm:group-hover:opacity-100 focus:opacity-100 focus:outline-hidden focus:ring-2 focus:ring-port-accent rounded"
                         title="Delete entry"
                         aria-label={`Delete ${entry.action} entry from ${formatTime(entry.timestamp)}`}
                       >

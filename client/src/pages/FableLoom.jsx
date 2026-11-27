@@ -9,7 +9,7 @@
 
 import { sortByLabel } from '../lib/sortByLabel.js';
 import { useCallback, useMemo, useState } from 'react';
-import { useNavigate } from 'react-router';
+import { Link, useNavigate } from 'react-router';
 import { Plus, Sparkles, Trash2, Waypoints } from 'lucide-react';
 import PageHeader from '../components/PageHeader';
 import ProviderModelSelector from '../components/ProviderModelSelector';
@@ -295,38 +295,39 @@ export default function FableLoom() {
             {looms.map((loom) => (
               <div
                 key={loom.id}
-                className="min-w-0 bg-port-card border border-port-border rounded-lg p-4 hover:border-port-accent transition-colors cursor-pointer"
-                role="link"
-                tabIndex={0}
-                onClick={() => navigate(`/fableloom/${loom.id}`)}
-                onKeyDown={(e) => { if (e.key === 'Enter') navigate(`/fableloom/${loom.id}`); }}
+                className="relative isolate min-w-0 bg-port-card border border-port-border rounded-lg p-4 hover:border-port-accent transition-colors"
               >
                 <div className="flex min-w-0 items-start justify-between gap-2">
                   <div className="min-w-0 flex-1 break-words">
-                    <h2 className="font-medium break-words">{loom.name}</h2>
+                    <h2 className="font-medium break-words">
+                      <Link
+                        to={`/fableloom/${loom.id}`}
+                        className="after:absolute after:inset-0 after:rounded-lg"
+                      >
+                        {loom.name}
+                      </Link>
+                    </h2>
                     {loom.logline && <p className="text-xs text-port-text-muted mt-0.5 line-clamp-2 break-words">{loom.logline}</p>}
                   </div>
-                  <div className="shrink-0" onClick={(e) => e.stopPropagation()} onKeyDown={(e) => e.stopPropagation()} role="none">
-                    <div className="flex items-center gap-1">
-                      <SyncToPeerButton recordKind="fableLoom" recordId={loom.id} compact />
-                      {del.isConfirming(loom.id) ? (
-                        <ConfirmButtonPair
-                          prompt="Delete?"
-                          onConfirm={() => handleDelete(loom.id)}
-                          onCancel={del.cancelDelete}
-                          largeTouchTargets
-                        />
-                      ) : (
-                        <button
-                          type="button"
-                          aria-label={`Delete ${loom.name}`}
-                          onClick={() => del.requestDelete(loom.id)}
-                          className="min-h-[44px] min-w-[44px] inline-flex items-center justify-center text-port-text-muted hover:text-port-error p-1"
-                        >
-                          <Trash2 size={15} />
-                        </button>
-                      )}
-                    </div>
+                  <div className="relative z-10 flex shrink-0 items-center gap-1">
+                    <SyncToPeerButton recordKind="fableLoom" recordId={loom.id} compact />
+                    {del.isConfirming(loom.id) ? (
+                      <ConfirmButtonPair
+                        prompt="Delete?"
+                        onConfirm={() => handleDelete(loom.id)}
+                        onCancel={del.cancelDelete}
+                        largeTouchTargets
+                      />
+                    ) : (
+                      <button
+                        type="button"
+                        aria-label={`Delete ${loom.name}`}
+                        onClick={() => del.requestDelete(loom.id)}
+                        className="min-h-[44px] min-w-[44px] inline-flex items-center justify-center text-port-text-muted hover:text-port-error p-1"
+                      >
+                        <Trash2 size={15} />
+                      </button>
+                    )}
                   </div>
                 </div>
                 <div className="flex items-center gap-3 mt-3 text-xs text-port-text-muted flex-wrap">

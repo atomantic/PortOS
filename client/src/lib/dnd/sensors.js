@@ -17,7 +17,7 @@ export function activators(sensors, begin) {
         const native = event.nativeEvent;
         const handle = event.currentTarget;
         if (native.defaultPrevented || (kind === 'keyboard' && event.target !== handle)) return;
-        // A timeline block is both a handle and the parent of a Remove button.
+        // A control inside a drag handle still owns its activation.
         const control = event.target.closest?.('button,a,input,textarea,select,[contenteditable="true"]');
         if (control && control !== handle && handle.contains(control)) return;
         if (kind === 'keyboard') {
