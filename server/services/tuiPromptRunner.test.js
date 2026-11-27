@@ -1852,6 +1852,24 @@ describe('executeTuiRun', () => {
       }));
     });
 
+    it('keeps the PTY run and captured response intact when the streaming callback throws', async () => {
+      const run = executeTuiRun({
+        runId: 'run-output-hook', provider: { id: 'example', type: 'tui', command: 'echo' },
+        prompt: 'Example prompt', workspacePath: TEST_WORKSPACE,
+        onData() { throw new Error('Example stream failure'); },
+      });
+      await flushAsync();
+      const [pty] = ptyInstances;
+      pty.emitData('Example answer');
+      pty.emitExit({ exitCode: 0 });
+      await run;
+
+      expect(console.error).toHaveBeenCalledWith(expect.stringContaining('output hook failed'));
+      expect(runnerMocks.finalizeRunRecord).toHaveBeenCalledWith(expect.objectContaining({
+        runId: 'run-output-hook', success: true, output: 'Example answer',
+      }));
+    });
+
     it('still resolves the run promise exactly once when a step inside finish() throws synchronously', async () => {
       // unregisterExternalSession is invoked un-awaited inside finish()'s try
       // block, with no per-call try/catch of its own — unlike the PTY kill
