@@ -989,7 +989,7 @@ const _fallbackMarkAndPick = createSingleFlight();
 
 /**
  * Mark the failed provider unavailable and pick its fallback, coalescing concurrent calls for the
- * same provider id onto one shared promise. Resolves like `pickFallbackProvider` (null when none);
+ * same provider id and request capabilities onto one shared promise. Resolves like `pickFallbackProvider` (null when none);
  * the mark is skipped when no fallback exists, so a provider with no recovery path isn't benched.
  *
  * @param {object} failed — the provider that actually ran and failed
@@ -997,7 +997,8 @@ const _fallbackMarkAndPick = createSingleFlight();
  * @returns {Promise<{ provider: object, model: string|null }|null>}
  */
 function coalesceFallbackMarkAndPick(failed, firstError, requestCapabilities) {
-  const capabilityKey = `${requestCapabilities?.hasImages === true ? 'images' : 'text'}:${requestCapabilities?.requiredContextTokens || 0}`;
+  const allowedModes = [...(requestCapabilities?.allowedModes ?? [])].sort().join(',');
+  const capabilityKey = `${requestCapabilities?.hasImages === true ? 'images' : 'text'}:${requestCapabilities?.requiredContextTokens || 0}:${allowedModes}`;
   return _fallbackMarkAndPick.run(`${failed.id}:${capabilityKey}`, async () => {
     const picked = await pickFallbackProvider(failed, requestCapabilities);
     if (!picked) return null;
@@ -1345,6 +1346,7 @@ async function executeProviderRunOnce({
     effectiveModel = prepared.attribution.model || effectiveModel;
   }
   let runId = callerRunId;
+  let proactivelySwapped = false;
   if (!runId) {
     const runResult = await createRun({
       providerId: provider.id,
@@ -1358,6 +1360,7 @@ async function executeProviderRunOnce({
     });
     runId = runResult.runId;
     if (runResult.provider && runResult.provider.id !== provider.id) {
+      proactivelySwapped = true;
       effectiveProvider = runResult.provider;
       // Re-resolve against the FALLBACK provider using the configured
       // `fallbackModel` createRun surfaced — NOT the caller's `model`, which
@@ -1453,7 +1456,16 @@ async function executeProviderRunOnce({
     const ollamaRun = isOllamaBackedProvider(effectiveProvider) && effectiveProvider.type !== PROVIDER_TYPES.CLI
       ? await import('./ollamaRunWindow.js').then(({ beginOllamaRun }) => beginOllamaRun(effectiveProvider, effectiveModel))
       : null;
-    if (ollamaRun) effectiveProvider = ollamaRun.provider;
+    let dispatchMaxTokens = proactivelySwapped ? maxTokens : localBudget.maxTokens;
+    if (ollamaRun && ollamaRun.provider !== effectiveProvider) {
+      effectiveProvider = ollamaRun.provider;
+      // The resident runner has a smaller window. Reuse the planned reserve as
+      // a ceiling so a later window check can only tighten the output cap.
+      if (!proactivelySwapped && !(Number.isInteger(maxTokens) && maxTokens > 0)) {
+        dispatchMaxTokens = localOutputReserveTokens(localBudget.outputReserveTokens, knownContextWindow(effectiveProvider, effectiveModel))
+          ?? dispatchMaxTokens;
+      }
+    }
     return new Promise((resolve, reject) => {
     let text = '';
     let settled = false;
@@ -1622,7 +1634,7 @@ async function executeProviderRunOnce({
       // a per-call override (e.g. the importer's long stage timeout) governs the
       // ceiling instead of the runner's provider/default fallback — same
       // caller-override precedence CLI/TUI runs already get.
-      executeApiRun({ runId, provider: effectiveProvider, model: effectiveModel, prompt, workspacePath: effectiveCwd, screenshots: Array.isArray(screenshots) ? screenshots : [], onData, onComplete, timeout: effectiveTimeout, absoluteTimeoutMs, maxTokens: effectiveProvider === provider ? localBudget.maxTokens : maxTokens, ...(effort ? { effort } : {}), ...(admitDispatch ? { beforeExecute: admitDispatch } : {}) }).catch(safeReject);
+      executeApiRun({ runId, provider: effectiveProvider, model: effectiveModel, prompt, workspacePath: effectiveCwd, screenshots: Array.isArray(screenshots) ? screenshots : [], onData, onComplete, timeout: effectiveTimeout, absoluteTimeoutMs, maxTokens: dispatchMaxTokens, ...(effort ? { effort } : {}), ...(admitDispatch ? { beforeExecute: admitDispatch } : {}) }).catch(safeReject);
     } else if (effectiveProvider.type === PROVIDER_TYPES.TUI) {
       // `source` (e.g. 'pipeline-manuscript-completeness') labels the live,
       // interactive view this TUI run surfaces in the Shell page.
