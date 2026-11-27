@@ -21,7 +21,9 @@ const config = {
 };
 function sampleWave() {
   const rate = 16_000;
-  const count = 2 * rate;
+  // 4s keeps playback active long enough for slower CI runners to assert
+  // speaking state and click Interrupt before natural audio drain.
+  const count = 4 * rate;
   const wave = Buffer.alloc(44 + count * 2);
   wave.write('RIFF');
   wave.writeUInt32LE(wave.length - 8, 4);
@@ -345,15 +347,7 @@ describe.skipIf(!chrome)('Voice Call console in Chrome', () => {
   it('lets the user switch the voice LLM inline and streams continuous AvatarForcing idle frames', async () => {
     const page = await fixture.browser.newPage({ viewport: { width: 1100, height: 820 }, reducedMotion: 'no-preference' });
     try {
-      const avatar = { status: { supported: true, installed: true, phase: 'running' } };
-      await stubApi(page, true, avatar);
-      await page.goto(`${fixture.origin}voice-console-test`);
-      const consoleView = page.getByRole('region', { name: 'PortOS call console' });
-      await consoleView.waitFor();
-
-      // No 2D cutout overlay canvas exists; only the real 512x512 AvatarForcing canvas.
-      expect(await consoleView.locator('canvas[data-idle-portrait]').count()).toBe(0);
-      avatar.idleJpeg = await page.evaluate(() => {
+      const idleJpeg = await page.evaluate(() => {
         const tile = document.createElement('canvas');
         tile.width = tile.height = 2;
         const ctx = tile.getContext('2d');
@@ -361,6 +355,13 @@ describe.skipIf(!chrome)('Voice Call console in Chrome', () => {
         ctx.fillRect(0, 0, 2, 2);
         return tile.toDataURL('image/jpeg').split(',')[1];
       });
+      await stubApi(page, true, { status: { supported: true, installed: true, phase: 'running' }, idleJpeg });
+      await page.goto(`${fixture.origin}voice-console-test`);
+      const consoleView = page.getByRole('region', { name: 'PortOS call console' });
+      await consoleView.waitFor();
+
+      // No 2D cutout overlay canvas exists; only the real 512x512 AvatarForcing canvas.
+      expect(await consoleView.locator('canvas[data-idle-portrait]').count()).toBe(0);
       await consoleView.locator('canvas[width="512"]').waitFor({ state: 'visible' });
 
       // Inline Voice LLM picker lets the user select a model directly and offers one-click llama.cpp + Conversational Gemma setup.

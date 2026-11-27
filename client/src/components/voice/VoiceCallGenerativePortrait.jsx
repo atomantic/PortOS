@@ -79,6 +79,7 @@ export default function VoiceCallGenerativePortrait({ running, fill = false, sta
   const canvas = useRef(null);
   const idleStage = normalizeIdleStage(stage);
   const idleStageRef = useRef(idleStage);
+  const lastStartedStageRef = useRef(idleStage);
   idleStageRef.current = idleStage;
   const [unavailable, setUnavailable] = useState(false);
 
@@ -169,8 +170,12 @@ export default function VoiceCallGenerativePortrait({ running, fill = false, sta
       }).then(() => {
         if (disposed || abort.signal.aborted || speechAnimation || motion?.matches || document.hidden) return;
         idleAbort = undefined;
-        // Seamlessly continue the next 60s block (or retry briefly if yielded during speech handoff).
-        idleRetryTimer = setTimeout(startIdleStream, receivedAny ? 20 : 1200);
+        // Wait for queued frames to play out before chaining the next idle chunk
+        // so short/fast chunks never spin in a tight fetch loop.
+        const nextDelayMs = receivedAny
+          ? Math.max(350, idleQueue.length * FRAME_INTERVAL_MS)
+          : 1200;
+        idleRetryTimer = setTimeout(startIdleStream, nextDelayMs);
       }).catch(() => {
         if (disposed || abort.signal.aborted || speechAnimation || motion?.matches || document.hidden) return;
         idleAbort = undefined;
@@ -228,6 +233,7 @@ export default function VoiceCallGenerativePortrait({ running, fill = false, sta
     };
 
     target._restartIdleStage = onStageChange;
+    lastStartedStageRef.current = idleStageRef.current;
     motion?.addEventListener?.('change', onMotionChange);
     document.addEventListener('visibilitychange', onVisibilityChange);
     if (!motion?.matches && !document.hidden) {
@@ -248,10 +254,12 @@ export default function VoiceCallGenerativePortrait({ running, fill = false, sta
     };
   }, [running]);
 
-  // Restart continuous idle with updated posture/guidance when stage changes
-  // between idle, listening, and thinking.
+  // Restart continuous idle with updated posture/guidance only when stage
+  // actually transitions between idle, listening, and thinking.
   useEffect(() => {
-    if (running) canvas.current?._restartIdleStage?.();
+    if (!running || lastStartedStageRef.current === idleStage) return;
+    lastStartedStageRef.current = idleStage;
+    canvas.current?._restartIdleStage?.();
   }, [running, idleStage]);
 
   return <div className={fill ? 'w-full max-w-full' : 'w-[min(64vw,15rem)] max-w-full'}>
