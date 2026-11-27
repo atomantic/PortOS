@@ -542,6 +542,11 @@ describe('Code Animation gallery posters', () => {
     expect(before.body.items[0]).not.toHaveProperty('posterVersion');
     const missing = await request(app).get(`/api/code-animation/jobs/${id}/poster?v=1`);
     expect(missing.status).toBe(404);
+    expect(missing.body).toEqual({
+      error: 'Poster not found',
+      code: 'NOT_FOUND',
+      timestamp: expect.any(Number),
+    });
     expect(missing.headers['cache-control'] || '').not.toMatch(/immutable/);
 
     const drawn = await request(app).post(`/api/code-animation/jobs/${id}/poster`);
