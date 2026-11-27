@@ -30,7 +30,7 @@ export default function useLoomEditorialAutopilot({ loom, onLoomUpdate }) {
   const [result, setResult] = useState(null);
   const loomIdentityRef = useRef(loom.id);
   loomIdentityRef.current = loom.id;
-  const { run: autopilotRun, applyRun: setAutopilotRun } = useFableLoomRun({
+  const { run: autopilotRun, applyRun: setAutopilotRun, readState, readError, retry } = useFableLoomRun({
     loomId: loom.id,
     event: 'fableloom:editorial:run',
     loadRun: () => getLoomEditorialAutopilotStatus(loom.id, { silent: true }).then(response => response.run),
@@ -128,6 +128,9 @@ export default function useLoomEditorialAutopilot({ loom, onLoomUpdate }) {
     },
     autopilotRun,
     autopilotActive,
+    readState,
+    readError,
+    retry,
     shownRun,
     result,
   };

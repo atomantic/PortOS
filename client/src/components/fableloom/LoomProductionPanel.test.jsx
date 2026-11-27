@@ -117,11 +117,10 @@ describe('LoomProductionPanel', () => {
   it('starts batch production when button is clicked', async () => {
     render(<LoomProductionPanel loom={sampleLoom} episode={sampleEpisode} onSelectNode={vi.fn()} />);
 
-    await waitFor(() => {
-      expect(screen.getByText('Generate Storyboard Images')).toBeInTheDocument();
-    });
+    const generate = await screen.findByRole('button', { name: 'Generate Storyboard Images' });
+    await waitFor(() => expect(generate).toBeEnabled());
 
-    fireEvent.click(screen.getByText('Generate Storyboard Images'));
+    fireEvent.click(generate);
 
     await waitFor(() => {
       expect(startLoomEpisodeProductionBatch).toHaveBeenCalledWith(
@@ -129,6 +128,70 @@ describe('LoomProductionPanel', () => {
       );
       expect(screen.getByText('Cancel Production Batch')).toBeInTheDocument();
     });
+  });
+
+  it('blocks Start while checking status and recovers an active batch through Retry', async () => {
+    const initial = Promise.withResolvers();
+    const retry = Promise.withResolvers();
+    getLoomEpisodeProductionBatchStatus
+      .mockReturnValueOnce(initial.promise)
+      .mockReturnValueOnce(retry.promise);
+    render(<LoomProductionPanel loom={sampleLoom} episode={sampleEpisode} />);
+
+    const generate = await screen.findByRole('button', { name: 'Generate Storyboard Images' });
+    expect(generate).toBeDisabled();
+    expect(screen.getByRole('status')).toHaveTextContent('Checking production batch status');
+
+    await act(async () => initial.reject(new Error('Status unavailable')));
+    const error = screen.getByRole('alert');
+    expect(error).toHaveTextContent('Could not load production batch status — Status unavailable');
+    expect(generate).toBeDisabled();
+
+    await act(async () => fireEvent.click(within(error).getByRole('button', { name: 'Retry' })));
+    expect(within(error).getByRole('button', { name: 'Retrying…' })).toBeDisabled();
+    expect(generate).toBeDisabled();
+
+    await act(async () => retry.resolve({
+      run: { id: 'batch-live', loomId: 'loom-1', episodeId: 'ep-1', status: 'in_progress', revision: 1 },
+    }));
+    expect(screen.queryByRole('alert')).not.toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Cancel Production Batch' })).toBeEnabled();
+    expect(generate).not.toBeInTheDocument();
+    expect(startLoomEpisodeProductionBatch).not.toHaveBeenCalled();
+  });
+
+  it('keeps the last good run on a reconnect failure and clears the error for an unchanged snapshot', async () => {
+    const run = { id: 'batch-live', loomId: 'loom-1', episodeId: 'ep-1', status: 'in_progress', revision: 1 };
+    getLoomEpisodeProductionBatchStatus
+      .mockResolvedValueOnce({ run })
+      .mockRejectedValueOnce(new Error('Reconnect read failed'))
+      .mockResolvedValueOnce({ run });
+    render(<LoomProductionPanel loom={sampleLoom} episode={sampleEpisode} />);
+
+    expect(await screen.findByRole('button', { name: 'Cancel Production Batch' })).toBeEnabled();
+    await act(async () => { socket.on.mock.calls.filter(([name]) => name === 'connect').at(-1)[1](); });
+    expect(screen.getByRole('alert')).toHaveTextContent('Reconnect read failed');
+    expect(screen.getByRole('button', { name: 'Cancel Production Batch' })).toBeEnabled();
+
+    await act(async () => fireEvent.click(screen.getByRole('button', { name: 'Retry' })));
+    expect(screen.queryByRole('alert')).not.toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Cancel Production Batch' })).toBeEnabled();
+    expect(startLoomEpisodeProductionBatch).not.toHaveBeenCalled();
+  });
+
+  it('drops a status error from a previous episode', async () => {
+    const initial = Promise.withResolvers();
+    getLoomEpisodeProductionBatchStatus.mockReturnValueOnce(initial.promise);
+    const panel = render(<LoomProductionPanel loom={sampleLoom} episode={sampleEpisode} />);
+    await waitFor(() => expect(getLoomEpisodeProductionBatchStatus).toHaveBeenCalledWith('loom-1', 'ep-1', { silent: true }));
+
+    panel.rerender(<LoomProductionPanel loom={sampleLoom} episode={{ id: 'ep-2' }} />);
+    const generate = await screen.findByRole('button', { name: 'Generate Storyboard Images' });
+    await waitFor(() => expect(generate).toBeEnabled());
+
+    await act(async () => initial.reject(new Error('Previous episode status failed')));
+    expect(screen.queryByRole('alert')).not.toBeInTheDocument();
+    expect(generate).toBeEnabled();
   });
 
   it('blocks batch media until the ordered beat arc is ready', async () => {
@@ -289,11 +352,14 @@ describe('LoomProductionPanel', () => {
     await act(async () => emit({ ...run, attempt: 2, revision: 5, status: 'completed' }));
     expect(planLoomEpisodeProduction).toHaveBeenCalledTimes(3);
     let resolveRead;
-    getLoomEpisodeProductionBatchStatus.mockReturnValueOnce(new Promise(resolve => { resolveRead = resolve; }));
+    getLoomEpisodeProductionBatchStatus
+      .mockReturnValueOnce(new Promise(resolve => { resolveRead = resolve; }))
+      .mockResolvedValue({ run: null });
     await act(async () => { socket.on.mock.calls.filter(([name]) => name === 'connect').at(-1)[1](); });
     panel.rerender(<LoomProductionPanel loom={sampleLoom} episode={{ id: 'ep-2' }} />);
     await act(async () => resolveRead({ run }));
-    expect(screen.queryByText(/Example render failed/)).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Cancel Production Batch' })).not.toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Generate Storyboard Images' })).toBeEnabled();
     expect(getLoomEpisodeProductionBatchStatus).toHaveBeenLastCalledWith('loom-1', 'ep-2', { silent: true });
   });
 

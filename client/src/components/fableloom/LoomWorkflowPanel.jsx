@@ -3,6 +3,7 @@ import { Check, Circle, Loader2, LockKeyhole, MoveRight } from 'lucide-react';
 import { fableLoomProductionWorkflow } from '../../lib/fableLoomReadiness';
 import { useAsyncAction } from '../../hooks/useAsyncAction';
 import { useFableLoomRun } from '../../hooks/useFableLoomRun';
+import ListLoadError from '../ui/ListLoadError';
 import { getLoomEditorialAutopilotStatus, updateLoom } from '../../services/apiFableLoom.js';
 
 const ACTIVE_STATUSES = new Set(['running', 'canceling']);
@@ -39,10 +40,10 @@ export default function LoomWorkflowPanel({
   // Push, not poll: the server broadcasts every editorial run change as
   // `fableloom:editorial:run`; the hook reads once on entry, reconnect and a
   // return to a visible tab.
-  const { run: editorialRun } = useFableLoomRun({
+  const { run: editorialRun, readState, readError, retry } = useFableLoomRun({
     loomId: loom.id,
     event: 'fableloom:editorial:run',
-    loadRun: () => getLoomEditorialAutopilotStatus(loom.id, { silent: true }).then(({ run }) => run || null),
+    loadRun: () => getLoomEditorialAutopilotStatus(loom.id, { silent: true }).then(({ run }) => run),
   });
 
   const workflow = useMemo(() => fableLoomProductionWorkflow(loom, episode, {
@@ -102,6 +103,8 @@ export default function LoomWorkflowPanel({
           <div className="h-full rounded-full bg-port-accent transition-[width]" style={{ width: `${progress}%` }} />
         </div>
       </header>
+
+      {readError && <ListLoadError what="editorial autopilot status" error={readError} onRetry={retry} retrying={readState === 'loading'} />}
 
       <ol className="space-y-1.5">
         {workflow.stages.map((stage) => (
