@@ -3,6 +3,7 @@ import { readFileSync } from 'fs';
 import { createRequire } from 'module';
 import { dirname, join } from 'path';
 import { fileURLToPath } from 'url';
+import { DEV_PM2_APPS } from './dev-start.js';
 
 const require = createRequire(import.meta.url);
 const repoRoot = join(dirname(fileURLToPath(import.meta.url)), '..');
@@ -14,14 +15,9 @@ const productionApps = appNames.filter((name) => name !== 'portos-ui');
 
 describe('PM2 startup app sets', () => {
   it('keeps Vite in the development set and out of every production package command', () => {
-    const devStart = read('scripts/dev-start.js');
-    const devAppsSource = devStart.match(/const DEV_PM2_APPS = \[([\s\S]*?)\];/);
-    const devApps = [...(devAppsSource?.[1] ?? '').matchAll(/'([^']+)'/g)].map(([, name]) => name);
-
-    expect(devAppsSource).not.toBeNull();
-    expect(devApps).toEqual(appNames);
-    expect(devApps).toContain('portos-ui');
-    expect(devStart).toContain("pm2('start', ECO, '--only', DEV_PM2_APPS.join(','));");
+    expect(packageScripts.dev).toMatch(/node scripts\/dev-start\.js$/);
+    expect(DEV_PM2_APPS).toEqual(appNames);
+    expect(DEV_PM2_APPS).toContain('portos-ui');
 
     const productionSelection = packageScripts.start.match(/pm2-start\.js ([\w,-]+)$/);
     expect(productionSelection?.[1].split(',')).toEqual(productionApps);

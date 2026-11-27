@@ -1,7 +1,7 @@
 import { describe, expect, it, vi } from 'vitest';
 import { dirname, join } from 'path';
 import { fileURLToPath } from 'url';
-import { startProductionApps } from './pm2-start.js';
+import { startPm2Apps } from './pm2-start.js';
 
 const repoRoot = join(dirname(fileURLToPath(import.meta.url)), '..');
 const root = join(repoRoot, 'fixture-root');
@@ -44,7 +44,7 @@ describe('production PM2 startup', () => {
   const setup = (before, after = production(5560)) => {
     const list = vi.fn().mockResolvedValueOnce(before).mockResolvedValue(after);
     const pm2 = vi.fn();
-    return { pm2, list, start: () => startProductionApps({ expectedApps, root, list, pm2 }) };
+    return { pm2, list, start: () => startPm2Apps({ expectedApps, root, list, pm2 }) };
   };
 
   it('deletes only the current checkout dashboard by ID, restarts only Autofixer and saves', async () => {
