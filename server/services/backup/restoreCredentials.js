@@ -1,10 +1,10 @@
-/** Stage and publish the two root credential records with owner-only permissions during live restore. */
+/** Stage and publish root credential records with owner-only permissions during live restore. */
 import { constants } from 'node:fs';
 import { lstat, open, readdir } from 'node:fs/promises';
 import { basename, join } from 'node:path';
 import { atomicWrite } from '../../lib/fileCore.js';
 import { ServerError } from '../../lib/errorHandler.js';
-import { RESTORE_CREDENTIAL_FILES } from './excludes.js';
+import { IDENTITY_FILE, RESTORE_CREDENTIAL_FILES } from './excludes.js';
 
 const OWNER_ONLY = 0o600;
 const unsafeCredential = name => new ServerError(
@@ -20,18 +20,26 @@ const entryInfo = path => lstat(path).catch(error => {
 async function withCredentialFile(path, read) {
   const entry = await entryInfo(path);
   if (!entry) return null;
-  if (!entry.isFile()) throw unsafeCredential(basename(path));
+  const name = basename(path);
+  if (!entry.isFile() || (name === IDENTITY_FILE && entry.nlink !== 1)) throw unsafeCredential(name);
   // Inspect the open inode too. O_NONBLOCK avoids waiting on a FIFO if the
   // entry was replaced after lstat and O_NOFOLLOW rejects a substituted link.
-  const file = await open(path, constants.O_RDONLY | (constants.O_NOFOLLOW ?? 0) | (constants.O_NONBLOCK ?? 0));
+  const file = await open(path, constants.O_RDONLY | (constants.O_NOFOLLOW ?? 0) | (constants.O_NONBLOCK ?? 0))
+    .catch(error => {
+      if (error.code === 'ELOOP') throw unsafeCredential(name);
+      throw error;
+    });
   try {
     const info = await file.stat();
-    if (!info.isFile() || info.dev !== entry.dev || info.ino !== entry.ino) throw unsafeCredential(basename(path));
+    if (!info.isFile() || info.dev !== entry.dev || info.ino !== entry.ino
+      || (name === IDENTITY_FILE && info.nlink !== 1)) throw unsafeCredential(name);
     return await read(file, info);
   } finally {
     await file.close();
   }
 }
+
+export const readCredentialFile = path => withCredentialFile(path, file => file.readFile());
 
 export async function readSnapshotCredentials(srcDir, scope) {
   const credentials = new Map();
@@ -46,7 +54,7 @@ export async function readSnapshotCredentials(srcDir, scope) {
   for (const name of await readdir(srcDir)) {
     if (!selected.includes(name.toLowerCase())) continue;
     if (name !== name.toLowerCase() || (scope && scope !== name)) throw unsafeCredential(name);
-    const bytes = await withCredentialFile(join(srcDir, name), file => file.readFile());
+    const bytes = await readCredentialFile(join(srcDir, name));
     if (bytes === null) throw unsafeCredential(name);
     credentials.set(name, bytes);
   }
