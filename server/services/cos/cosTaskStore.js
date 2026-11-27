@@ -160,7 +160,10 @@ async function readTaskSnapshot(source) {
 }
 
 async function readTaskFile(source) {
-  const snapshot = await readTaskSnapshot(source);
+  return cloneTaskSnapshot(await readTaskSnapshot(source));
+}
+
+function cloneTaskSnapshot(snapshot) {
   const tasks = structuredClone(snapshot.tasks);
   listSnapshots.set(tasks, snapshot);
   return tasks;
@@ -182,7 +185,7 @@ async function findTaskInFile(source, taskId) {
 /**
  * Persist the queue as `tasks`: diff against the stored working set and write
  * only the rows that changed, in one transaction. Every write path in this
- * module goes through here. Resolves to whether anything was written.
+ * module goes through here. Returns the committed version, or false for no changes.
  */
 async function writeTaskList(source, tasks, original = tasks, dependencies = {}) {
   const snapshot = listSnapshots.get(original);
@@ -203,7 +206,7 @@ async function writeTaskList(source, tasks, original = tasks, dependencies = {})
   } else {
     snapshotCache.delete(source);
   }
-  return true;
+  return version;
 }
 
 /** Test hook: forget every cached working set. */
@@ -880,9 +883,9 @@ function isRuntimeVerificationRelease({ current, updates, expectedStatus, expect
 }
 
 // Caller holds withStateLock, including its status and ownership decision.
-async function writeTaskUpdateLocked(taskId, updates, taskType, { now, suppressDequeue = false, suppressCompletionWake = false, expectedStatus = null, expectedMetadata = null, expectedTask = null, recoveryOwner = null, preserveRetryBudget = false, spawnBudgetOperation = null, expectedSourceTask = null }) {
+async function writeTaskUpdateLocked(taskId, updates, taskType, options) {
   const tasks = await readTaskFile(taskType);
-  if (!matchesInvestigationSource(tasks, taskType, expectedSourceTask)) return { statusChanged: true };
+  if (!matchesInvestigationSource(tasks, taskType, options.expectedSourceTask)) return { statusChanged: true };
 
   let taskIndex = tasks.findIndex(t => t.id === taskId);
   // A history item older than the working set can still be edited or reopened:
@@ -899,14 +902,19 @@ async function writeTaskUpdateLocked(taskId, updates, taskType, { now, suppressD
     return { error: 'Task not found' };
   }
 
-  // Deterministic sweepers can retire a queued task only while it is still
-  // pending. Check under the same lock as the write so a concurrent dequeue or
-  // user action cannot be overwritten by a stale queue snapshot.
-  if (expectedStatus && tasks[taskIndex].status !== expectedStatus) {
-    return { statusChanged: true, task: tasks[taskIndex] };
-  }
+  const result = await prepareTaskUpdate(tasks[taskIndex], updates, taskType, options);
+  if (!result.change) return result;
 
-  const current = tasks[taskIndex];
+  tasks[taskIndex] = result.change.task;
+  await writeTaskList(taskType, tasks);
+  cosEvents.emit('tasks:changed', result.change);
+  return result.change.task;
+}
+
+// Build a transition and its event without saving. The caller holds the lock
+// and publishes the event only after the corresponding write succeeds.
+async function prepareTaskUpdate(current, updates, taskType, { now, suppressDequeue = false, suppressCompletionWake = false, expectedStatus = null, expectedMetadata = null, expectedTask = null, recoveryOwner = null, preserveRetryBudget = false, spawnBudgetOperation = null }) {
+  if (expectedStatus && current.status !== expectedStatus) return { statusChanged: true, task: current };
   if (updates.metadata && Object.hasOwn(updates.metadata, 'repoRepairContract')
     && !isDeepStrictEqual(updates.metadata.repoRepairContract, current.metadata?.repoRepairContract)) {
     return { error: 'Checkout repair completion contract is server-owned and immutable' };
@@ -925,7 +933,7 @@ async function writeTaskUpdateLocked(taskId, updates, taskType, { now, suppressD
   if (expectedTask && Object.entries(expectedTask).some(([key, value]) => !isDeepStrictEqual(current[key], value))) {
     return { statusChanged: true, task: current };
   }
-  if (recoveryOwner && await isStaleRecoveryOwner({ taskId, recoveryOwner })) return { statusChanged: true, task: current };
+  if (recoveryOwner && await isStaleRecoveryOwner({ taskId: current.id, recoveryOwner })) return { statusChanged: true, task: current };
   if (expectedMetadata && Object.entries(expectedMetadata).some(([key, value]) => current.metadata?.[key] !== value)) {
     return { statusChanged: true, task: current };
   }
@@ -937,7 +945,7 @@ async function writeTaskUpdateLocked(taskId, updates, taskType, { now, suppressD
   if (isRuntimeVerificationHeld(current) && updates.status && updates.status !== 'blocked' && !runtimeRelease) {
     return { error: 'Runtime verification prerequisite must be released by its server coordinator' };
   }
-  const updatedMetadata = mergeUpdateMetadata(tasks[taskIndex].metadata, updates);
+  const updatedMetadata = mergeUpdateMetadata(current.metadata, updates);
 
   applySpawnAccounting({ current, updatedMetadata, reset: spawnBudgetOperation?.kind === 'reset' });
 
@@ -947,7 +955,7 @@ async function writeTaskUpdateLocked(taskId, updates, taskType, { now, suppressD
   // clear and the claim release ended up as the same predicate written twice, and
   // how the requeue stamp and the emitted action came to key on the same edge from
   // 52 lines apart while having to agree (#6620).
-  const previousStatus = tasks[taskIndex].status;
+  const previousStatus = current.status;
   const transition = resolveTaskStatusTransition(previousStatus, updates.status);
 
   const dependencyRelease = isVerifiedDependencyRelease({ current, updates, expectedStatus, expectedTask, recoveryOwner, preserveRetryBudget });
@@ -1018,7 +1026,7 @@ async function writeTaskUpdateLocked(taskId, updates, taskType, { now, suppressD
   // against the task's CURRENT metadata so a lease-renewal heartbeat that re-includes
   // unchanged metadata doesn't read as an edit (see isContentEdit). `now` is
   // injectable for deterministic test output.
-  if (isContentEdit(updates, tasks[taskIndex].metadata)) {
+  if (isContentEdit(updates, current.metadata)) {
     updatedMetadata.updatedAt = new Date(now).toISOString();
   }
 
@@ -1032,7 +1040,7 @@ async function writeTaskUpdateLocked(taskId, updates, taskType, { now, suppressD
   // generateTasksMarkdown would leave every consumer reading the pre-repair status
   // until something re-read the file (#7239).
   const updatedTask = toRepresentableTask({
-    ...tasks[taskIndex],
+    ...current,
     ...(updates.description && { description: updates.description }),
     ...(updates.priority && {
       priority: updates.priority.toUpperCase(),
@@ -1041,10 +1049,6 @@ async function writeTaskUpdateLocked(taskId, updates, taskType, { now, suppressD
     ...(updates.status && { status: updates.status }),
     metadata: updatedMetadata
   });
-
-  tasks[taskIndex] = updatedTask;
-
-  await writeTaskList(taskType, tasks);
 
   // `transition.action` distinguishes the two flips that must WAKE the scheduler
   // from an ordinary edit. A blocked → pending flip is a revive: the task is newly
@@ -1066,8 +1070,7 @@ async function writeTaskUpdateLocked(taskId, updates, taskType, { now, suppressD
   if (suppressDequeue) change.suppressDequeue = true;
   // An explicit cleanup-only action must not itself launch dependent work.
   if (suppressCompletionWake) change.suppressCompletionWake = true;
-  cosEvents.emit('tasks:changed', change);
-  return updatedTask;
+  return { change };
 }
 
 /**
@@ -1326,70 +1329,115 @@ export async function sweepResolvedFailureTasks({
   maxAgeMs = DEFAULT_FAILURE_TASK_MAX_AGE_MS,
   limit = DEFAULT_REAP_LIMIT
 } = {}) {
-  const { user, cos } = await getAllTasks();
-  const userTasks = user?.tasks || [];
-  const cosTasks = cos?.tasks || [];
-  const tasksById = new Map([...userTasks, ...cosTasks].map((t) => [t.id, t]));
+  const snapshots = await readFailureSweepSnapshots();
+  const tasksById = indexFailureSweepTasks(snapshots);
+  const ageOptions = { now, maxAgeMs };
+  const targetsBySource = { user: [], internal: [] };
+  let targetCount = 0;
 
-  // Collect targets across both queues, tagging each with its file type so the
-  // flip writes back to the right markdown store. Bounded by `limit`.
-  const targets = [];
-  for (const [type, list] of [['user', userTasks], ['internal', cosTasks]]) {
-    for (const task of list) {
-      const reason = isReapableBlockedFailure(task, { now, maxAgeMs })
-        ? 'stale-failure-block'
-        : (isReapableInvestigation(task, tasksById) ? 'investigation-resolved' : null);
-      if (reason) targets.push({ task, type, reason });
-      if (targets.length >= limit) break;
+  for (const source of SOURCES) {
+    for (const task of snapshots[source].tasks) {
+      const reason = failureSweepReason(task, tasksById, ageOptions);
+      if (reason) {
+        targetsBySource[source].push({ task, reason });
+        targetCount++;
+      }
+      if (targetCount >= limit) break;
     }
-    if (targets.length >= limit) break;
+    if (targetCount >= limit) break;
   }
 
-  if (targets.length === 0) return { reaped: 0, staleBlocks: 0, investigations: 0 };
+  if (targetCount === 0) return { reaped: 0, staleBlocks: 0, investigations: 0 };
 
-  let staleBlocks = 0;
-  let investigations = 0;
-  for (const { task, type, reason } of targets) {
-    // Re-read BOTH queues and re-evaluate the reason under the same lock as the
-    // write. Status/metadata pins protect a target from its own stale snapshot,
-    // but an investigation also depends on its origins: one can be resumed after
-    // this sweep's snapshot while the investigation itself stays pending (#12059).
-    const updated = await withStateLock(async () => {
-      const current = await getAllTasks();
-      const currentTask = (type === 'user' ? current.user.tasks : current.cos.tasks)
-        .find((candidate) => candidate.id === task.id);
-      if (!currentTask) return { statusChanged: true };
-      const currentById = new Map([...current.user.tasks, ...current.cos.tasks].map((candidate) => [candidate.id, candidate]));
-      const currentReason = isReapableBlockedFailure(currentTask, { now, maxAgeMs })
-        ? 'stale-failure-block'
-        : (isReapableInvestigation(currentTask, currentById) ? 'investigation-resolved' : null);
-      if (currentReason !== reason) return { statusChanged: true, task: currentTask };
-
-      return writeTaskUpdateLocked(task.id, {
-        status: 'completed',
-        metadata: { resolution: 'auto-expired', autoExpiredReason: reason, autoExpiredAt: new Date(now).toISOString() }
-      }, type, {
-        now,
-        expectedStatus: task.status,
-        // A revived task can fail again before this write and return to blocked.
-        // Preserve the category and every age fallback that justified this sweep.
-        expectedMetadata: reason === 'stale-failure-block' ? {
-          blockedCategory: task.metadata?.blockedCategory,
-          blockedAt: task.metadata?.blockedAt,
-          lastFailureAt: task.metadata?.lastFailureAt,
-          updatedAt: task.metadata?.updatedAt,
-        } : null,
-      });
-    });
-    if (updated?.error || updated?.statusChanged) continue;
-    if (reason === 'stale-failure-block') staleBlocks++; else investigations++;
-  }
+  const { staleBlocks, investigations } = await withStateLock(async () => {
+    const current = await readFailureSweepSnapshots();
+    const changes = [];
+    try {
+      for (const source of SOURCES) {
+        if (targetsBySource[source].length === 0) continue;
+        changes.push(...await reapFailureQueue(source, targetsBySource[source], current, ageOptions));
+      }
+      const staleBlocks = changes.filter(({ task }) => task.metadata.autoExpiredReason === 'stale-failure-block').length;
+      return { staleBlocks, investigations: changes.length - staleBlocks };
+    } finally {
+      // Publish every committed change even if the other queue's write fails.
+      for (const change of changes) cosEvents.emit('tasks:changed', change);
+    }
+  });
 
   const reaped = staleBlocks + investigations;
   if (reaped > 0) {
     console.log(`🧹 Reaped ${reaped} resolved failure task(s): ${staleBlocks} stale block(s), ${investigations} investigation(s)`);
   }
   return { reaped, staleBlocks, investigations };
+}
+
+async function readFailureSweepSnapshots() {
+  const [user, internal] = await Promise.all(SOURCES.map(readTaskSnapshot));
+  return { user, internal };
+}
+
+function indexFailureSweepTasks(snapshots) {
+  const tasksById = new Map();
+  for (const source of SOURCES) {
+    for (const task of snapshots[source].tasks) tasksById.set(task.id, task);
+  }
+  return tasksById;
+}
+
+function failureSweepReason(task, tasksById, ageOptions) {
+  if (isReapableBlockedFailure(task, ageOptions)) return 'stale-failure-block';
+  return isReapableInvestigation(task, tasksById) ? 'investigation-resolved' : null;
+}
+
+async function reapFailureQueue(source, targets, snapshots, ageOptions) {
+  const tasks = cloneTaskSnapshot(snapshots[source]);
+  const indexes = new Map(tasks.map((task, index) => [task.id, index]));
+  const tasksById = indexFailureSweepTasks({ ...snapshots, [source]: { tasks } });
+  const changes = [];
+  const dependencies = {};
+
+  for (const { task, reason } of targets) {
+    const index = indexes.get(task.id);
+    const current = tasks[index];
+    if (!current || failureSweepReason(current, tasksById, ageOptions) !== reason) continue;
+    const { change } = await prepareTaskUpdate(current, {
+      status: 'completed',
+      metadata: { resolution: 'auto-expired', autoExpiredReason: reason, autoExpiredAt: new Date(ageOptions.now).toISOString() }
+    }, source, {
+      now: ageOptions.now,
+      expectedStatus: task.status,
+      // A revived task can fail again before this write and return to blocked.
+      // Preserve the category and every age fallback that justified this sweep.
+      expectedMetadata: reason === 'stale-failure-block' ? {
+        blockedCategory: task.metadata?.blockedCategory,
+        blockedAt: task.metadata?.blockedAt,
+        lastFailureAt: task.metadata?.lastFailureAt,
+        updatedAt: task.metadata?.updatedAt,
+      } : null,
+    });
+    if (!change) continue;
+
+    tasks[index] = change.task;
+    if (tasksById.get(task.id) === current) tasksById.set(task.id, change.task);
+    changes.push(change);
+    if (reason === 'investigation-resolved') {
+      // An origin can be resumed in either queue by a different process. Pin
+      // both versions through commit, even between the two writes (#12059).
+      const other = source === 'user' ? 'internal' : 'user';
+      dependencies[other] = snapshots[other].version;
+    }
+  }
+
+  if (changes.length === 0) return changes;
+  const version = await writeTaskList(source, tasks, tasks, dependencies).catch(error => {
+    if (error.code !== 'COS_TASK_LIST_CONFLICT') throw error;
+    return false; // The next health tick can reconsider the changed queue.
+  });
+  if (version === false) return [];
+
+  snapshots[source] = { version, tasks };
+  return changes;
 }
 
 /**
