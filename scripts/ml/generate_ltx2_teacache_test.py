@@ -399,7 +399,7 @@ class GenerateLtx2NewPinTeaCacheTest(unittest.TestCase):
     """v0.14.x deletes the `extend` module and runs extend through `retake`.
 
     The TeaCache patch must follow the guided_denoise_loop call site to the
-    retake module via _first_module_with_attr — otherwise TeaCache silently
+    retake module via the fallback imports — otherwise TeaCache silently
     no-ops on the new pin. This fakes the new-pin module shape (no `extend`,
     `retake` carries the loop) and asserts the patch lands on retake.
     """

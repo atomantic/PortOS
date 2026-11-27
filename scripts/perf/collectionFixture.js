@@ -15,6 +15,7 @@ import { isDirectlyInvoked } from '../lib/directInvocation.js';
 import { createFixtureStartup } from './collectionFixtureStartup.js';
 
 const codeRoot = resolve(dirname(fileURLToPath(import.meta.url)), '../..');
+const SOURCE_COPY_BATCH_SIZE = 16;
 
 export function validateFixtureEnvironment(env = process.env, host = '127.0.0.1') {
   if (host !== '127.0.0.1') throw new Error('Fixture bind must be 127.0.0.1');
@@ -79,11 +80,20 @@ export async function startCollectionFixture({
     // Copy code, never data, configuration, credentials, or the live checkout's
     // symlinks. A physical temp copy also preserves dataRoot's worktree guard.
     const { stdout } = await promisify(execFile)('git', ['ls-files', '-z', '--', 'server', 'lib'], { cwd: codeRoot });
-    for (const file of stdout.split('\0').filter(Boolean)) {
-      if (file === 'lib/slashdo' || file.endsWith('.test.js') || file.endsWith('.test.jsx')) continue;
-      if (!(await lstat(join(codeRoot, file))).isFile()) throw new Error('Fixture source must contain regular files');
-      await mkdir(dirname(join(root, file)), { recursive: true });
-      await cp(join(codeRoot, file), join(root, file), { dereference: false });
+    const sourceFiles = stdout.split('\0').filter(file =>
+      file && file !== 'lib/slashdo' && !file.endsWith('.test.js') && !file.endsWith('.test.jsx'));
+    for (let offset = 0; offset < sourceFiles.length; offset += SOURCE_COPY_BATCH_SIZE) {
+      const batch = sourceFiles.slice(offset, offset + SOURCE_COPY_BATCH_SIZE);
+      const copies = await Promise.allSettled(batch.map(async file => {
+        const source = join(codeRoot, file);
+        const destination = join(root, file);
+        if (!(await lstat(source)).isFile()) throw new Error('Fixture source must contain regular files');
+        await mkdir(dirname(destination), { recursive: true });
+        await cp(source, destination, { dereference: false });
+      }));
+      // Wait for every copy in flight before cleanup can remove the temp root.
+      const failure = copies.find(copy => copy.status === 'rejected');
+      if (failure) throw failure.reason;
     }
     await mkdir(join(root, 'scripts/perf'), { recursive: true });
     for (const file of ['collectionFixtureWorker.js', 'collectionFixtureData.js', 'collectionFixtureSeed.js']) {

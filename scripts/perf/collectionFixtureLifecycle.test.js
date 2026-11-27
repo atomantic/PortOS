@@ -1,4 +1,5 @@
 import { EventEmitter } from 'node:events';
+import { cp } from 'node:fs/promises';
 import { afterEach, expect, it, vi } from 'vitest';
 
 const owned = vi.hoisted(() => ({ queries: [], removed: [], child: null, ended: false }));
@@ -17,7 +18,7 @@ vi.mock('node:module', () => ({ createRequire: () => () => ({ Client: function (
 } }) }));
 vi.mock('node:child_process', () => {
   const execFile = vi.fn();
-  execFile[Symbol.for('nodejs.util.promisify.custom')] = async () => ({ stdout: 'server/package.json\0' });
+  execFile[Symbol.for('nodejs.util.promisify.custom')] = async () => ({ stdout: 'server/package.json\0lib/fixture.js\0' });
   return { execFile, fork: () => {
     const child = new EventEmitter();
     child.exitCode = null;
@@ -53,4 +54,29 @@ it('a stalled fixture rejects and removes only its owned schema, root, child and
   expect(owned.child.eventNames()).toEqual([]);
   expect(['SIGINT', 'SIGTERM'].map(signal => process.listenerCount(signal))).toEqual(beforeSignals);
   expect(vi.getTimerCount()).toBe(0);
+});
+
+it('waits for sibling source copies before removing a failed fixture', async () => {
+  const slowCopy = Promise.withResolvers();
+  const slowCopyStarted = Promise.withResolvers();
+  const previousRemovals = owned.removed.length;
+  vi.mocked(cp)
+    .mockRejectedValueOnce(new Error('source copy failed'))
+    .mockImplementationOnce(async () => {
+      slowCopyStarted.resolve();
+      await slowCopy.promise;
+    });
+
+  const result = startCollectionFixture({ env: {}, clientDist: '/synthetic-client' });
+  const failure = expect(result).rejects.toThrow('source copy failed');
+  await slowCopyStarted.promise;
+  try {
+    // Let the rejected copy propagate before checking that cleanup still waits.
+    await new Promise(resolve => setImmediate(resolve));
+    expect(owned.removed).toHaveLength(previousRemovals);
+  } finally {
+    slowCopy.resolve();
+    await failure;
+  }
+  expect(owned.removed).toHaveLength(previousRemovals + 1);
 });

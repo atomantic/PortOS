@@ -9,7 +9,7 @@
 import { dirname, join } from 'path';
 import { fileURLToPath } from 'url';
 import { OPERATOR_SCRIPT_CALLER_FILES } from '../../server/lib/apiRouteCallerAllowlist.js';
-import { CATALOG_DIRS } from '../lib-catalog.js';
+import { CATALOG_DIRS } from './moduleCatalog.js';
 import { SERVER_LINT_RE } from './serverLintSurface.js';
 import { resolveDbTestFiles } from './dbTestFiles.js';
 import { guardTestFiles, isGuardTest } from './guardScanners.js';
