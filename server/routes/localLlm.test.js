@@ -21,17 +21,9 @@ import { getLoadedModels, unloadModel } from '../services/ollamaManager.js';
 import { getLoadedModels as getLoadedLmStudioModels, getLastLoadedModelsError as getLmStudioResidencyError, controlLmStudioServer } from '../services/lmStudioManager.js';
 import { getSettings, readSettingsStrict, updateSettingsWith } from '../services/settings.js';
 import { localLlmCompareSchema, localLlmTestSchema } from '../lib/mediaValidation.js';
-import { getSplashRuntimeStatus } from '../services/splashRuntimeStatus.js';
-import { installSplashRuntime, saveSplashContextWindow, startSplashServer, stopSplashServer, uninstallSplashRuntime } from '../services/splashServerManager.js';
-import { getMkserveRuntimeStatus, installMkserve, startMkserveServer, stopMkserveServer, uninstallMkserve } from '../services/mkserveRuntimeManager.js';
 import { ServerError, errorEvents } from '../lib/errorHandler.js';
-import { saveProcessList } from '../services/pm2.js';
 import { syncRuntimeProviderModels } from '../services/localRuntimeProviderSync.js';
-import { startMtplxServer, stopMtplxServer, waitForMtplxReady } from '../services/mtplxServerManager.js';
-import { startSlotstreamServer, stopSlotstreamServer, waitForSlotstreamReady } from '../services/slotstreamServerManager.js';
 import { startLlamaServer, stopLlamaServer, waitForLlamaServerReady } from '../services/llamaServerManager.js';
-import { cancelMtplxModelPull, pullMtplxModel, removeMtplxModel } from '../services/mtplxModelManager.js';
-import { downloadSlotstreamModel, removeSlotstreamModel } from '../services/slotstreamModelManager.js';
 
 const getModelAbuseGuardStatus = vi.fn(async () => ({ ready: false, modelCached: false, runtimeReady: false }));
 const installModelAbuseGuard = vi.fn(async () => ({ ok: true, ready: true }));
@@ -1384,361 +1376,46 @@ describe('local LLM catalog and loaded query validation', () => {
   });
 });
 
-it.each([
-  ['splash', getSplashRuntimeStatus],
-  ['mkserve', getMkserveRuntimeStatus],
-])('GET /%s/status includes runtime logs for operator sessions only', async (id, readStatus) => {
-  const statusWithLogs = { supported: true, state: 'running', recentLogs: ['fixture output'] };
-  const statusWithoutLogs = { ...statusWithLogs, recentLogs: [] };
-  const path = `/api/local-llm/${id}/status`;
-  const peer = { enabled: true, authenticated: true, method: 'peer' };
-  const operator = { ...peer, method: 'session' };
-
-  readStatus.mockResolvedValueOnce(statusWithoutLogs).mockResolvedValueOnce(statusWithLogs);
-  const remote = await request(makeApp(peer)).get(path);
-  expect(remote.status).toBe(200);
-  expect(remote.body).toMatchObject(statusWithoutLogs);
-  expect(readStatus).toHaveBeenLastCalledWith({ includeLogs: false });
-
-  const delegated = await request(makeApp(operator)).get(path);
-  expect(delegated.status).toBe(200);
-  expect(delegated.body).toMatchObject(statusWithLogs);
-  expect(readStatus).toHaveBeenLastCalledWith({ includeLogs: true });
-});
-
-describe.each([
-  { id: 'splash', install: installSplashRuntime, start: startSplashServer, stop: stopSplashServer, uninstall: uninstallSplashRuntime },
-  { id: 'mkserve', install: installMkserve, start: startMkserveServer, stop: stopMkserveServer, uninstall: uninstallMkserve },
-])('$id lifecycle routes', ({ id, install, start, stop, uninstall }) => {
-  const url = `/api/local-llm/${id}`;
-  const readStatus = (app) => request(app).get(`${url}/status`);
-  const mutate = (app, action) => request(app).post(`${url}/${action}`);
-
-  it('returns immediately, reports install progress, and rejects concurrent operations', async () => {
-    const app = makeApp();
-    let finish;
-    const transfer = new Promise((resolve) => { finish = resolve; });
-    install.mockImplementationOnce(({ onProgress }) => {
-      onProgress({ event: 'download', message: 'Downloading weights' });
-      return transfer;
-    });
-    try {
-      const accepted = await mutate(app, 'install');
-      expect(accepted.status).toBe(202);
-      expect(accepted.body.operation.action).toBe('install');
-      expect((await readStatus(app)).body.operation).toMatchObject({
-        action: 'install', message: expect.stringContaining('Downloading weights'),
-      });
-      expect((await mutate(app, 'start')).status).toBe(409);
-    } finally {
-      finish();
-    }
-    expect((await readStatus(app)).body).toMatchObject({ operation: null, lastError: null });
-    expect(app.get('io').emit).toHaveBeenCalledWith(
-      'localLlm:progress', expect.objectContaining({ event: 'complete', runtime: id }),
-    );
-  });
-
-  it('routes Update and Stop to the managed service, rejecting launch overrides', async () => {
-    const app = makeApp();
-    install.mockClear().mockResolvedValueOnce({});
-    stop.mockClear().mockResolvedValueOnce({});
-    start.mockClear();
-    const invalid = await mutate(app, 'start').send({ host: '0.0.0.0' });
-    expect(invalid.status).toBe(400);
-    expect(start).not.toHaveBeenCalled();
-    expect((await mutate(app, 'upgrade')).status).toBe(202);
-    expect(install).toHaveBeenCalledOnce();
-    expect((await mutate(app, 'stop')).status).toBe(202);
-    expect(stop).toHaveBeenCalledOnce();
-  });
-
-  it('cancels only the addressed installation and keeps its slot until teardown', async () => {
-    const app = makeApp();
-    let signal;
-    let finish;
-    const transfer = new Promise((_resolve, reject) => { finish = () => reject(signal.reason); });
-    install.mockImplementationOnce((options) => {
-      signal = options.signal;
-      return transfer;
-    });
-    const accepted = await mutate(app, 'upgrade');
-    expect(accepted.status).toBe(202);
-    const { operation } = accepted.body;
-    try {
-      expect((await mutate(app, 'cancel').send({ operationId: '61d3819b-c7ab-476c-be68-81355beebdae' })).body).toEqual({ cancelled: false });
-      expect(signal.aborted).toBe(false);
-      expect((await mutate(app, 'cancel').send({ operationId: operation.id })).body).toMatchObject({
-        cancelled: true, operation: { id: operation.id, cancelling: true },
-      });
-      expect(signal.aborted).toBe(true);
-      expect((await readStatus(app)).body.operation).toMatchObject({ cancelling: true });
-      expect((await mutate(app, 'install')).status).toBe(409);
-      expect((await mutate(app, 'uninstall')).status).toBe(409);
-    } finally {
-      finish();
-    }
-    expect((await readStatus(app)).body).toMatchObject({ operation: null, lastError: null });
-    expect((await mutate(app, 'cancel')).body).toEqual({ cancelled: false });
-    expect(app.get('io').emit).toHaveBeenCalledWith(
-      'localLlm:progress', expect.objectContaining({ event: 'cancelled', runtime: id, operation: null }),
-    );
-  });
-
-  it('accepts uninstall and reports its scoped completion without launching the server', async () => {
-    const app = makeApp();
-    uninstall.mockClear().mockResolvedValueOnce({ success: true });
-    start.mockClear();
-    const response = await mutate(app, 'uninstall');
-    expect(response.status).toBe(202);
-    expect(response.body.operation.action).toBe('uninstall');
-    expect((await readStatus(app)).body).toMatchObject({ operation: null, lastError: null });
-    expect(uninstall).toHaveBeenCalledOnce();
-    expect(start).not.toHaveBeenCalled();
-    expect(app.get('io').emit).toHaveBeenCalledWith(
-      'localLlm:progress', expect.objectContaining({ event: 'complete', runtime: id, message: expect.stringContaining('uninstalled') }),
-    );
-  });
-
-  it.each(['install', 'start'])('clears a failed background %s and its error on retry', async (action) => {
-    const app = makeApp();
-    const run = { install, start }[action];
-    const message = 'Runtime is busy. Stop the external process first.';
-    const failure = Promise.withResolvers();
-    void failure.promise.catch(() => {});
-    run.mockReturnValueOnce(failure.promise);
-    try {
-      const accepted = await mutate(app, action);
-      expect(accepted.status).toBe(202);
-      expect((await readStatus(app)).body).toMatchObject({
-        operation: { id: accepted.body.operation.id, action }, lastError: null,
-      });
-    } finally {
-      failure.reject(new ServerError(message, { status: 409 }));
-    }
-
-    expect((await readStatus(app)).body).toMatchObject({ operation: null, lastError: message });
-    expect(app.get('io').emit).toHaveBeenCalledWith('localLlm:progress', expect.objectContaining({
-      event: 'error', runtime: id, operation: null, lastError: message,
-    }));
-
-    const retry = Promise.withResolvers();
-    run.mockReturnValueOnce(retry.promise);
-    try {
-      const accepted = await mutate(app, action);
-      expect(accepted.status).toBe(202);
-      expect((await readStatus(app)).body).toMatchObject({
-        operation: { id: accepted.body.operation.id, action }, lastError: null,
-      });
-    } finally {
-      retry.resolve({ success: true });
-    }
-    expect((await readStatus(app)).body).toMatchObject({ operation: null, lastError: null });
-  });
-});
-
-it('accepts the repair flag only on mkserve Install and requires operator authority for status logs', async () => {
-  const app = makeApp();
-  installMkserve.mockClear().mockResolvedValueOnce({});
-  const accepted = await request(app).post('/api/local-llm/mkserve/install').send({ repair: true });
-  expect(accepted.status).toBe(202);
-  expect(accepted.body.operation.action).toBe('repair');
-  expect(installMkserve).toHaveBeenCalledWith(expect.objectContaining({ repair: true }));
-  expect((await request(app).post('/api/local-llm/mkserve/start').send({ repair: true })).status).toBe(400);
-  expect((await request(app).post('/api/local-llm/splash/install').send({ repair: true })).status).toBe(400);
-  expect((await request(app).get('/api/local-llm/mkserve/status')).status).toBe(200);
-  expect(getMkserveRuntimeStatus).toHaveBeenLastCalledWith({ includeLogs: false });
-  const operatorApp = express();
-  operatorApp.use((req, _res, next) => {
-    req.portosAuthContext = { enabled: true, authenticated: true, method: 'session' };
-    next();
-  });
-  operatorApp.use('/api/local-llm', localLlmRoutes);
-  expect((await request(operatorApp).get('/api/local-llm/mkserve/status')).status).toBe(200);
-  expect(getMkserveRuntimeStatus).toHaveBeenLastCalledWith({ includeLogs: true });
-});
-
-
-describe('managed runtime provider-model refresh after a user lifecycle action', () => {
-  const post = (path, body = {}) => request(makeApp()).post(`/api/local-llm/${path}`).send(body);
-  const MODEL = 'example-org/example-model';
+describe('llama.cpp provider-model refresh through the mounted Local LLM router', () => {
+  const endpoint = 'http://127.0.0.1:9000/v1';
+  const post = (action, body = {}) => request(makeApp()).post(`/api/local-llm/llama-server/${action}`).send(body);
 
   beforeEach(() => {
     syncRuntimeProviderModels.mockClear();
   });
 
-  it.each([
-    ['llama', 'llama-server/start', startLlamaServer, waitForLlamaServerReady],
-    ['mtplx', 'mtplx/start', startMtplxServer, waitForMtplxReady, {}],
-    ['slotstream', 'slotstream/start', startSlotstreamServer, waitForSlotstreamReady, {}],
-  ])('%s start refreshes after the response; a server still loading waits on its readiness probe', async (kind, path, start, waitFor) => {
-    start.mockResolvedValueOnce({ success: true, online: true, endpoint: 'http://127.0.0.1:9000/v1' });
-    const body = kind === 'llama' ? { model: 'preset' } : {};
-    expect((await post(path, body)).status).toBe(200);
-    expect(syncRuntimeProviderModels).toHaveBeenCalledTimes(1);
-    expect(syncRuntimeProviderModels.mock.calls[0][0]).toMatchObject({ kind, waitForReady: null });
-    expect(syncRuntimeProviderModels.mock.calls[0][0].io).toBeTruthy();
-
-    syncRuntimeProviderModels.mockClear();
-    start.mockResolvedValueOnce({ success: true, online: false, endpoint: 'http://127.0.0.1:9000/v1' });
-    waitFor.mockResolvedValueOnce({ ready: true });
-    expect((await post(path, body)).status).toBe(200);
-    await syncRuntimeProviderModels.mock.calls[0][0].waitForReady();
-    expect(waitFor).toHaveBeenCalledWith('http://127.0.0.1:9000/v1');
-  });
-
-  it('removes a Slotstream cache entry and refreshes its provider models', async () => {
-    const model = 'example-org__example-model';
-    removeSlotstreamModel.mockResolvedValueOnce({ success: true, model });
-    const response = await post('slotstream/models/remove', { model });
-    expect(response.status).toBe(200);
-    expect(response.body).toEqual({ success: true, model });
-    expect(removeSlotstreamModel).toHaveBeenCalledWith(model);
-    expect(syncRuntimeProviderModels.mock.calls[0][0]).toMatchObject({ kind: 'slotstream' });
-  });
-
-  it('refuses a Slotstream removal that names a path, and preserves conflicts', async () => {
-    removeSlotstreamModel.mockClear();
-    expect((await post('slotstream/models/remove', { model: '../outside' })).status).toBe(400);
-    expect(removeSlotstreamModel).not.toHaveBeenCalled();
-    removeSlotstreamModel.mockRejectedValueOnce(new ServerError('Checkpoint is in use', {
-      status: 409, code: 'SLOTSTREAM_CHECKPOINT_IN_USE',
-    }));
-    const response = await post('slotstream/models/remove', { model: 'example-model' });
-    expect(response.status).toBe(409);
-    expect(response.body.code).toBe('SLOTSTREAM_CHECKPOINT_IN_USE');
-    expect(syncRuntimeProviderModels).not.toHaveBeenCalled();
-  });
-
-  it('does not wait on the refresh: the response returns while it is still pending', async () => {
-    startMtplxServer.mockResolvedValueOnce({ success: true, online: true, endpoint: 'http://127.0.0.1:8000/v1' });
-    syncRuntimeProviderModels.mockReturnValueOnce(new Promise(() => {}));
-    expect((await post('mtplx/start')).status).toBe(200);
-  });
-
-  it.each([
-    ['llama-server/start', startLlamaServer, { model: 'preset' }],
-    ['mtplx/start', startMtplxServer, {}],
-    ['slotstream/start', startSlotstreamServer, {}],
-    ['mtplx/models/pull', pullMtplxModel, { model: MODEL }],
-    ['mtplx/models/remove', removeMtplxModel, { model: MODEL }],
-    ['slotstream/models/download', downloadSlotstreamModel, { model: MODEL }],
-  ])('%s that throws refreshes nothing', async (path, action, body) => {
-    action.mockRejectedValueOnce(new ServerError('refused', { status: 400 }));
-    expect((await post(path, body)).status).toBe(400);
-    expect(syncRuntimeProviderModels).not.toHaveBeenCalled();
-  });
-
-  it.each([
-    ['mtplx', 'mtplx/models/pull', pullMtplxModel],
-    ['slotstream', 'slotstream/models/download', downloadSlotstreamModel],
-  ])('%s checkpoint download refreshes when it succeeds', async (kind, path, action) => {
-    action.mockResolvedValueOnce({ success: true });
-    expect((await post(path, { model: MODEL })).status).toBe(200);
-    expect(syncRuntimeProviderModels.mock.calls[0][0]).toMatchObject({ kind, waitForReady: null });
-  });
-
-  it.each([
-    ['mtplx/models/pull', pullMtplxModel, {}, 502, 'MTPLX_PULL_FAILED'],
-    ['slotstream/models/download', downloadSlotstreamModel, {}, 502, 'SLOTSTREAM_DOWNLOAD_FAILED'],
-    ['slotstream/models/download', downloadSlotstreamModel, { status: 401, code: 'HF_AUTH' }, 401, 'HF_AUTH'],
-    ['slotstream/models/download', downloadSlotstreamModel, { status: 422, code: 'SLOTSTREAM_NO_WEIGHTS' }, 422, 'SLOTSTREAM_NO_WEIGHTS'],
-    ['slotstream/models/download', downloadSlotstreamModel, { status: 504, code: 'SLOTSTREAM_METADATA_TIMEOUT' }, 504, 'SLOTSTREAM_METADATA_TIMEOUT'],
-  ])('%s returns a structured error and skips refresh (%#)', async (path, action, details, status, code) => {
-    action.mockResolvedValueOnce({ success: false, error: 'Checkpoint unavailable', ...details });
-
-    const response = await post(path, { model: MODEL });
-
-    expect(response.status).toBe(status);
-    expect(response.body).toMatchObject({ error: 'Checkpoint unavailable', code });
-    expect(syncRuntimeProviderModels).not.toHaveBeenCalled();
-  });
-
-  it('acknowledges an MTPLX cancel and returns the cancelled pull without refreshing provider models', async () => {
-    cancelMtplxModelPull.mockReturnValueOnce(true).mockReturnValueOnce(false);
-    pullMtplxModel.mockResolvedValueOnce({ success: false, cancelled: true, model: MODEL });
-
-    expect((await post('mtplx/models/pull/cancel')).body).toEqual({ success: true, cancelled: true });
-    expect((await post('mtplx/models/pull/cancel')).body).toEqual({ success: true, cancelled: false });
-    const response = await post('mtplx/models/pull', { model: MODEL });
-    expect(response.status).toBe(200);
-    expect(response.body).toEqual({ success: false, cancelled: true, model: MODEL });
-    expect(syncRuntimeProviderModels).not.toHaveBeenCalled();
-  });
-
-  it('returns a successful HTTP response for Slotstream cancellation and skips refresh', async () => {
-    downloadSlotstreamModel.mockResolvedValueOnce({
-      success: false, cancelled: true, model: MODEL, error: 'Cancelled', code: 'SLOTSTREAM_DOWNLOAD_CANCELLED',
+  it.each([true, false])('refreshes after a successful start (online=%s)', async (online) => {
+    startLlamaServer.mockResolvedValueOnce({ success: true, online, endpoint });
+    expect((await post('start', { model: 'preset' })).status).toBe(200);
+    expect(syncRuntimeProviderModels).toHaveBeenCalledExactlyOnceWith({
+      kind: 'llama', io: expect.any(Object), waitForReady: online ? null : expect.any(Function),
     });
+    if (!online) {
+      waitForLlamaServerReady.mockResolvedValueOnce({ ready: true });
+      await syncRuntimeProviderModels.mock.calls[0][0].waitForReady();
+      expect(waitForLlamaServerReady).toHaveBeenCalledWith(endpoint);
+    }
+  });
 
-    const response = await post('slotstream/models/download', { model: MODEL });
-
-    expect(response.status).toBe(200);
-    expect(response.body).toEqual({ success: false, cancelled: true, model: MODEL });
+  it('skips refresh when start throws', async () => {
+    startLlamaServer.mockRejectedValueOnce(new ServerError('refused', { status: 400 }));
+    expect((await post('start', { model: 'preset' })).status).toBe(400);
     expect(syncRuntimeProviderModels).not.toHaveBeenCalled();
   });
 
-  it('mtplx checkpoint removal refreshes', async () => {
-    removeMtplxModel.mockResolvedValueOnce({ success: true });
-    await post('mtplx/models/remove', { model: MODEL });
-    expect(syncRuntimeProviderModels.mock.calls[0][0]).toMatchObject({ kind: 'mtplx' });
-  });
-
-  it.each(['splash', 'mkserve'])('%s refreshes after a successful background start only', async (id) => {
-    const start = { splash: startSplashServer, mkserve: startMkserveServer }[id];
-    start.mockResolvedValueOnce({ success: true });
-    expect((await post(`${id}/start`)).status).toBe(202);
-    await vi.waitFor(() => expect(syncRuntimeProviderModels).toHaveBeenCalledTimes(1));
-    expect(syncRuntimeProviderModels.mock.calls[0][0]).toMatchObject({ kind: id, waitForReady: null });
-
-    syncRuntimeProviderModels.mockClear();
-    start.mockRejectedValueOnce(new ServerError('port in use', { status: 409 }));
-    const app = makeApp();
-    expect((await request(app).post(`/api/local-llm/${id}/start`)).status).toBe(202);
-    await vi.waitFor(async () => expect((await request(app).get(`/api/local-llm/${id}/status`)).body.lastError).toBe('port in use'));
+  it('skips refresh for a successful stop', async () => {
+    stopLlamaServer.mockResolvedValueOnce({ success: true });
+    expect((await post('stop')).status).toBe(200);
     expect(syncRuntimeProviderModels).not.toHaveBeenCalled();
   });
 
-  it.each([
-    ['llama-server/stop', stopLlamaServer],
-    ['mtplx/stop', stopMtplxServer],
-    ['slotstream/stop', stopSlotstreamServer],
-  ])('%s never refreshes: an unreachable daemon is no evidence the set changed', async (path, stop) => {
-    stop.mockResolvedValueOnce({ success: true });
-    expect((await post(path)).status).toBe(200);
-    expect(syncRuntimeProviderModels).not.toHaveBeenCalled();
-  });
-
-  it.each([
-    ['llama-server/stop', stopLlamaServer],
-    ['mtplx/stop', stopMtplxServer],
-    ['slotstream/stop', stopSlotstreamServer],
-  ])('%s reports an externally owned daemon as a conflict', async (path, stop) => {
-    stop.mockResolvedValueOnce({ success: false, message: 'An external process is listening.', code: 'EXTERNAL_PROCESS_RUNNING' });
-    const res = await request(makeApp()).post(`/api/local-llm/${path}`);
-    expect(res.status).toBe(409);
-    expect(res.body).toMatchObject({ error: 'An external process is listening.', code: 'EXTERNAL_PROCESS_RUNNING' });
-  });
-});
-
-it('validates and saves the Splash next-start context through the runtime route', async () => {
-  const app = makeApp();
-  const save = (contextWindow) => request(app).put('/api/local-llm/splash/context').send({ contextWindow });
-  expect((await save(1010000)).status).toBe(400);
-  expect((await save('1000000')).status).toBe(400);
-  expect(saveSplashContextWindow).not.toHaveBeenCalled();
-  saveSplashContextWindow.mockResolvedValueOnce({ requestedContextWindow: 1000000 });
-  const result = await save(1000000);
-  expect(result.status).toBe(200);
-  expect(result.body).toEqual({ requestedContextWindow: 1000000 });
-  expect(saveSplashContextWindow).toHaveBeenCalledWith(1000000);
-});
-
-it('save-startup leaves every on-demand runtime out of the boot dump', async () => {
-  const res = await request(makeApp()).post('/api/local-llm/save-startup');
-  expect(res.status).toBe(200);
-  expect(saveProcessList).toHaveBeenCalledWith(null, {
-    exclude: ['portos-mtplx', 'portos-slotstream', 'portos-splash', 'portos-mkserve'],
+  it('reports an externally owned daemon as a conflict', async () => {
+    stopLlamaServer.mockResolvedValueOnce({
+      success: false, message: 'An external process is listening.', code: 'EXTERNAL_PROCESS_RUNNING',
+    });
+    const response = await post('stop');
+    expect(response.status).toBe(409);
+    expect(response.body).toMatchObject({ error: 'An external process is listening.', code: 'EXTERNAL_PROCESS_RUNNING' });
   });
 });
 
