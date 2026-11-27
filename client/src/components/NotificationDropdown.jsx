@@ -120,18 +120,14 @@ export default function NotificationDropdown({
   const titleId = useId();
   const panelId = useId();
 
-  // The panel is portaled to <body> and placed in viewport coordinates. That is
-  // what keeps it on-screen from this trigger: the bell sits mid-screen in the
-  // sidebar footer, so an absolutely-positioned 320px panel ran off the right
-  // edge on a phone — titles clipped, dismiss and mark-all/clear-all controls
-  // unreachable with nothing to scroll. The hook clamps into the viewport and
-  // flips above/below, so there is no breakpoint branch to keep in sync. Height
-  // changes (expanding the list) re-measure via contentDeps.
+  // Cap the portaled panel to the space next to either bell so the history
+  // can scroll without moving the header or expansion control.
   const { triggerRef, popoverRef, style: panelStyle } = usePopoverPosition({
     open: isOpen,
     width: PANEL_WIDTH,
     minWidth: 260,
     position,
+    constrainHeight: true,
     contentDeps: [showAll, notifications.length]
   });
 
@@ -207,16 +203,17 @@ export default function NotificationDropdown({
           role="dialog"
           aria-modal="true"
           aria-labelledby={titleId}
-          className="fixed bg-port-card border border-port-border rounded-lg shadow-xl z-[100] overflow-hidden"
+          className="fixed flex flex-col bg-port-card border border-port-border rounded-lg shadow-xl z-[100] overflow-hidden"
           style={{
             left: panelStyle?.left ?? `${VIEWPORT_PADDING}px`,
             top: panelStyle?.top ?? `${VIEWPORT_PADDING}px`,
             width: panelStyle?.width ?? `${PANEL_WIDTH}px`,
+            maxHeight: panelStyle?.maxHeight,
             visibility: panelStyle ? 'visible' : 'hidden'
           }}
         >
           {/* Header */}
-          <div className="flex items-center justify-between px-4 py-3 border-b border-port-border">
+          <div className="flex shrink-0 items-center justify-between px-4 py-3 border-b border-port-border">
             <h2 id={titleId} className="font-medium text-white">Notifications</h2>
             <div className="flex items-center gap-2">
               {unreadCount > 0 && (
@@ -256,7 +253,7 @@ export default function NotificationDropdown({
           </div>
 
           {/* Notification list */}
-          <div className="max-h-[60dvh] overflow-y-auto sm:max-h-96">
+          <div className="min-h-0 max-h-[60dvh] overflow-y-auto sm:max-h-96">
             <ActionQueuePreview compact queue={actionQueue} onSelect={() => setIsOpen(false)} />
             <h2 className="px-4 py-2 text-sm text-port-text-muted">Notification history</h2>
             {notifications.length === 0 ? (
@@ -334,9 +331,8 @@ export default function NotificationDropdown({
             )}
           </div>
 
-          {/* Actionable, so the overflow is reachable rather than merely counted */}
           {hiddenCount > 0 && (
-            <div className="border-t border-port-border text-center">
+            <div className="shrink-0 border-t border-port-border text-center">
               <button
                 type="button"
                 onClick={() => setShowAll(true)}
