@@ -5,7 +5,9 @@
  */
 
 import { Router } from 'express';
+import { assertCancelResult } from '../lib/cancelResponse.js';
 import { asyncHandler } from '../lib/errorHandler.js';
+import { cancelOperationSchema } from '../lib/sharedSchemas.js';
 import { validateRequest } from '../lib/validateRequest.js';
 import {
   storyboardBeatCreateSchema, storyboardBeatUpdateSchema, storyboardCreateSchema, storyboardMoveSchema,
@@ -19,7 +21,7 @@ import {
   updateStoryboard,
 } from '../services/storyboards/index.js';
 import {
-  correctPanel, drawPanel, getMakeEmptyPlan, getPanelMake, runPanelNode, startMakeEmpty, updatePanelNode, updateRecipe,
+  cancelMakeEmpty, correctPanel, drawPanel, getMakeEmptyPlan, getPanelMake, runPanelNode, startMakeEmpty, updatePanelNode, updateRecipe,
 } from '../services/storyboards/make.js';
 import { fitMusicVideoToStoryboard, groupStoryboardBySong, updateShotFromPanel, sendShotStillToPanel } from '../services/storyboards/fitMusicVideo.js';
 import { setMusicVideoShotSync, syncMusicVideoShots } from '../services/storyboards/syncMusicVideo.js';
@@ -31,7 +33,7 @@ import { startVideoFromStoryboard } from '../services/storyboards/toVideo.js';
 import { addBeats, extractBeats } from '../services/storyboards/plot.js';
 import { deleteSavedRecipe, listSavedRecipes, saveRecipe } from '../services/storyboards/recipeLibrary.js';
 
-import { BOUNDED_PAGE_DEFAULT_LIMIT, boundedPaginationQuerySchema, isPaginationRequested, pageEnvelope } from '../lib/queryValidation.js';
+import { BOUNDED_PAGE_DEFAULT_LIMIT, boundedPaginationQuerySchema, emptyQuerySchema, isPaginationRequested, pageEnvelope } from '../lib/queryValidation.js';
 
 const router = Router();
 
@@ -230,5 +232,11 @@ router.get('/:id/make-empty', asyncHandler(async (req, res) => {
 router.post('/:id/make-empty', asyncHandler(async (req, res) => {
   res.status(202).json(await startMakeEmpty(req.params.id, validateRequest(storyboardMakeEmptySchema, req.body ?? {})));
 }));
+
+router.post('/:id/make-empty/cancel', (req, res) => {
+  validateRequest(emptyQuerySchema, req.query);
+  const { runId } = validateRequest(cancelOperationSchema, req.body ?? {});
+  res.status(202).json(assertCancelResult(cancelMakeEmpty(req.params.id, runId), { notFoundMessage: 'Active storyboard batch not found' }));
+});
 
 export default router;

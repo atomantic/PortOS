@@ -81,6 +81,8 @@ export const getStoryboardMakeEmpty = (id, options) => request(`/storyboards/${e
 // { redraw, selectNew } redraws every panel instead of only the empty ones.
 export const startStoryboardMakeEmpty = (id, body = {}, options) =>
   request(`/storyboards/${enc(id)}/make-empty`, { ...json('POST', body), ...options });
+export const cancelMakeEmptyPanels = (id, runId, options) =>
+  request(`/storyboards/${enc(id)}/make-empty/cancel`, { ...json('POST', { runId }), ...options });
 // Regroup a music video's linked board into one beat per song section.
 export const groupStoryboardBySong = (projectId, options) =>
   request(`/storyboards/group-by-song/${enc(projectId)}`, { ...json('POST', {}), ...options });
