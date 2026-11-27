@@ -939,6 +939,7 @@ describe('host control by default on /api writes (#16018)', () => {
       '/api/devtools/video-download/yt-dlp',
       '/api/midi-runtime/install',
       '/api/music/setup/runtime-install',
+      '/api/remote-desktop/status',
       '/api/html-pages/runs/example-run/pages/0/path',
     ];
     const header = authority === 'remote' ? null : await authorityHeader(authority);

@@ -2,7 +2,9 @@ import { randomBytes } from 'node:crypto';
 import { createConnection } from 'node:net';
 import { platform } from 'node:os';
 import { createWebSocketStream, WebSocketServer } from 'ws';
+import { browserRequestRefusal } from '../../lib/portosAuthCore.js';
 import { isPortReachable } from '../lib/connectivity.js';
+import { logSecurityEvent } from '../lib/securityAuditLog.js';
 import { markUpgradeClaimed } from '../lib/upgradeFallback.js';
 
 const LOOPBACK_HOST = '127.0.0.1';
@@ -112,6 +114,21 @@ export const createRemoteDesktopBroker = ({
     const onUpgrade = (request, socket, head) => {
       if (request.url?.split('?', 1)[0] !== '/remote-desktop/ws') return;
       markUpgradeClaimed(socket);
+      const browserRefusal = browserRequestRefusal(request);
+      if (browserRefusal) {
+        logSecurityEvent('remote-desktop.refused', {
+          refused: true,
+          code: browserRefusal,
+          ip: request.socket?.remoteAddress,
+          method: request.method,
+          path: '/remote-desktop/ws',
+          origin: request.headers?.origin,
+          host: request.headers?.host,
+        });
+        socket.write('HTTP/1.1 403 Forbidden\r\nConnection: close\r\n\r\n');
+        socket.destroy();
+        return;
+      }
       let url;
       try {
         url = new URL(request.url, 'http://portos.invalid');
