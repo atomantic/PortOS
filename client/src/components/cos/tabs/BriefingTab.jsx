@@ -22,8 +22,13 @@ import LoadFailedState from '../../ui/LoadFailedState';
 import ListLoadError from '../../ui/ListLoadError';
 import { useAsyncAction } from '../../../hooks/useAsyncAction';
 import { useSocketResource } from '../../../hooks/useSocketResource';
+import useUrlParams from '../../../hooks/useUrlParams';
+import socket from '../../../services/socket';
 
-const BRIEFING_EVENTS = ['cos:agent:completed'];
+const AGENT_COMPLETED = 'cos:agent:completed';
+const DAILY_BRIEFING_JOB = 'job-daily-briefing';
+const BRIEFING_EVENTS = [AGENT_COMPLETED];
+const isDailyBriefingAgent = agent => agent?.metadata?.jobId === DAILY_BRIEFING_JOB;
 
 const SECTION_ICONS = {
   'Task Queue': CheckCircle,
@@ -161,18 +166,25 @@ const renderInlineFormatting = (text) => {
 };
 
 export default function BriefingTab() {
-  const [selectedDate, setSelectedDate] = useState(null);
+  const [searchParams, updateParams] = useUrlParams();
+  const dateParam = searchParams.get('date');
+  const selectedDate = /^\d{4}-\d{2}-\d{2}$/.test(dateParam) ? dateParam : null;
   const [expandedSections, setExpandedSections] = useState({});
-  const [generationPending, setGenerationPending] = useState(false);
+  const [generation, setGeneration] = useState('idle');
+  const generationPending = generation === 'pending';
   const generationInFlightRef = useRef(false);
 
   const [generateBriefing, generatingBriefing] = useAsyncAction(async () => {
     if (generationPending || generationInFlightRef.current) return;
     generationInFlightRef.current = true;
+    // Completion can arrive while the trigger request is still in flight.
+    setGeneration('pending');
     try {
-      await triggerCosJob('job-daily-briefing', { silent: true });
-      setGenerationPending(true);
-      await refetch();
+      await triggerCosJob(DAILY_BRIEFING_JOB, { silent: true });
+      refetch();
+    } catch (error) {
+      setGeneration(previous => previous === 'pending' ? 'idle' : previous);
+      throw error;
     } finally {
       generationInFlightRef.current = false;
     }
@@ -193,18 +205,28 @@ export default function BriefingTab() {
     namespace: 'cos',
     events: BRIEFING_EVENTS,
     resourceKey: selectedDate,
-    // Daily briefings are persisted by this job's agent, not the weekly digest.
-    matchesEvent: agent => agent?.metadata?.jobId === 'job-daily-briefing',
+    matchesEvent: isDailyBriefingAgent,
   });
   const briefings = data?.briefings || [];
   const currentBriefing = data?.briefing;
 
   useEffect(() => {
+    const onCompleted = agent => {
+      if (!isDailyBriefingAgent(agent)) return;
+      setGeneration(previous => previous === 'pending'
+        ? (agent.result?.success === false ? 'failed' : 'idle')
+        : previous);
+    };
+    socket.on(AGENT_COMPLETED, onCompleted);
+    return () => socket.off(AGENT_COMPLETED, onCompleted);
+  }, []);
+
+  useEffect(() => {
     if (!currentBriefing) return;
-    setGenerationPending(false);
+    if (!selectedDate) setGeneration('idle');
     const parsed = parseBriefingMarkdown(currentBriefing.content);
     setExpandedSections(Object.fromEntries(parsed.sections.map((_section, i) => [i, true])));
-  }, [currentBriefing]);
+  }, [currentBriefing, selectedDate]);
 
   const toggleSection = (idx) => {
     setExpandedSections(prev => ({ ...prev, [idx]: !prev[idx] }));
@@ -220,19 +242,21 @@ export default function BriefingTab() {
 
   const parsed = currentBriefing ? parseBriefingMarkdown(currentBriefing.content) : null;
 
+  const generationFailed = generation === 'failed' && !parsed && !error;
+
   return (
     <div className="space-y-6">
       {/* Header with date selector */}
-      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
-        <div className="flex items-center gap-3">
+      <div className="flex flex-wrap items-center justify-between gap-4">
+        <div className="flex min-w-0 flex-wrap items-center gap-3">
           <Newspaper className="w-5 h-5 text-port-accent" />
           <h2 className="text-lg font-semibold text-white">Daily Briefing</h2>
           {briefings.length > 0 && (
             <select
               aria-label="Date"
               value={selectedDate || currentBriefing?.date || ''}
-              onChange={(e) => setSelectedDate(e.target.value)}
-              className="bg-port-card border border-port-border rounded px-2 py-1 text-sm text-gray-300"
+              onChange={(e) => updateParams({ date: e.target.value })}
+              className="max-w-full bg-port-card border border-port-border rounded px-2 py-1 text-sm text-gray-300"
             >
               {briefings.map(b => (
                 <option key={b.date} value={b.date}>
@@ -242,7 +266,7 @@ export default function BriefingTab() {
             </select>
           )}
         </div>
-        <div className="flex items-center gap-2">
+        <div className="flex flex-wrap items-center gap-2">
           {currentBriefing?.content && (
             <RapidReaderTrigger
               text={stripMarkdown(currentBriefing.content)}
@@ -251,6 +275,7 @@ export default function BriefingTab() {
             />
           )}
           <button
+            type="button"
             onClick={() => refetch()}
             className="flex items-center gap-2 px-3 py-1.5 text-sm bg-port-card border border-port-border hover:border-port-accent/50 text-gray-300 rounded-lg transition-colors"
           >
@@ -259,6 +284,12 @@ export default function BriefingTab() {
           </button>
         </div>
       </div>
+
+      {generationFailed && (
+        <p role="alert" className="rounded-lg border border-port-error/40 bg-port-card p-3 text-sm text-port-error">
+          The Daily Briefing job ended without producing a briefing.
+        </p>
+      )}
 
       {!parsed && error ? (
         // Never the "No briefing yet" state: its Generate action spends a
@@ -276,7 +307,9 @@ export default function BriefingTab() {
             message={generationPending
               ? 'Your briefing is still being generated. You can open the Daily Briefing job to check its status.'
               : 'Generate today’s briefing now, or open the Daily Briefing job to change its schedule.'}
-            actionLabel={generationPending || generatingBriefing ? 'Generating today’s briefing…' : 'Generate today’s briefing'}
+            actionLabel={generationPending || generatingBriefing
+              ? 'Generating today’s briefing…'
+              : generationFailed ? 'Retry' : 'Generate today’s briefing'}
             actionDisabled={generationPending || generatingBriefing}
             onAction={handleGenerateBriefing}
           />
