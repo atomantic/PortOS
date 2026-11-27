@@ -17,11 +17,12 @@ vi.mock('../lib/pgFileFacade.js', async (importOriginal) => {
   ) };
 });
 
-const hydration = vi.hoisted(() => []);
+const { hydration, headerQueries } = vi.hoisted(() => ({ hydration: [], headerQueries: [] }));
 vi.mock('../lib/db.js', async (importOriginal) => {
   const actual = await importOriginal();
   return { ...actual, query: async (sql, params) => {
     if (sql.startsWith('SELECT id, data FROM music_video_projects')) hydration.push(params?.[0]);
+    if (sql.startsWith('SELECT id, page_created_at')) headerQueries.push(sql);
     return actual.query(sql, params);
   } };
 });
@@ -54,7 +55,8 @@ const mark = async (id, state, status = 200) => {
 };
 
 async function page(statusFilter, cursor = '') {
-  const query = new URLSearchParams({ summary: '1', q: search.toUpperCase(), statusFilter, limit: '1', cursor });
+  const query = new URLSearchParams({ summary: '1', q: search.toUpperCase(), limit: '1', cursor });
+  if (statusFilter) query.set('statusFilter', statusFilter);
   const response = await request(app).get(`/api/music-video?${query}`);
   expect(response.status).toBe(200);
   return response.body;
@@ -101,6 +103,16 @@ describe.skipIf(!runDb)('PostgreSQL Music Video completion summaries', () => {
     await mark(completed, 'auto');
     expect(await page('in-progress')).toMatchObject({ items: [{ id: completed, isCompleted: false }], total: 2, nextCursor: '1' });
     expect(await page('completed')).toMatchObject({ items: [{ id: reopened, isCompleted: true }], total: 2, nextCursor: '1' });
+  });
+
+  it('filters and sorts a name search using project mirrors alone', async () => {
+    await seed('02', {});
+    const newest = await seed('05', {});
+    await seed('06', { name: 'Different title' });
+    headerQueries.length = 0;
+    expect(await page()).toMatchObject({ items: [{ id: newest }], total: 2, nextCursor: '1' });
+    expect(headerQueries).toHaveLength(1);
+    expect(headerQueries[0]).not.toMatch(/\bdata\b/);
   });
 
   it('keeps stale automatic renders in progress when the director clears a complete mark', async () => {

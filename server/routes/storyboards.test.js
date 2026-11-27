@@ -48,6 +48,7 @@ describe('storyboards routes', () => {
 
     const list = await api('get', '/');
     expect(list.body).toEqual([expect.objectContaining({ id, beatCount: 2, panelCount: 1, runtimeSec: 3.46, cover: { image: 'example.png', sketchKey: null } })]);
+    expect((await api('get', '/?limit=1')).body).toEqual({ items: list.body, total: 1, limit: 1, offset: 0 });
   });
 
   it('restyles a saved recipe on an art style change, keeping an edited style prompt', async () => {

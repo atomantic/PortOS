@@ -29,6 +29,18 @@ const MEDIA_ASSET_READ_COLUMNS = [
   facetColumn('entry_kind', 'entryKind'),
 ];
 
+// The typed timestamps/status are write-safe fallbacks and can differ from
+// old records' JSON values. Preserve the existing page comparator/filter inputs.
+const PROJECT_PAGE_COLUMNS = [
+  `name TEXT GENERATED ALWAYS AS (data->>'name') STORED`,
+  `page_created_at JSONB GENERATED ALWAYS AS (data->'createdAt') STORED`,
+  `page_updated_at JSONB GENERATED ALWAYS AS (data->'updatedAt') STORED`,
+  `page_status TEXT GENERATED ALWAYS AS (data->>'status') STORED`,
+];
+// Add together so PostgreSQL rewrites each existing table only once.
+const projectPageDdl = table => `ALTER TABLE ${table}
+      ${PROJECT_PAGE_COLUMNS.map(column => `ADD COLUMN IF NOT EXISTS ${column}`).join(',\n      ')}`;
+
 export const mediaDdl = [
     `CREATE TABLE IF NOT EXISTS media_prompt_examinations (
       id TEXT PRIMARY KEY,
@@ -72,7 +84,8 @@ export const mediaDdl = [
     // the live-list filter (deleted = FALSE).
     `ALTER TABLE creative_director_projects ADD COLUMN IF NOT EXISTS deleted BOOLEAN DEFAULT FALSE`,
     `ALTER TABLE creative_director_projects ADD COLUMN IF NOT EXISTS deleted_at TIMESTAMPTZ`,
-    `CREATE INDEX IF NOT EXISTS idx_creative_director_projects_live ON creative_director_projects (deleted) WHERE deleted = FALSE`,
+    projectPageDdl('creative_director_projects'),
+    `CREATE INDEX IF NOT EXISTS idx_creative_director_projects_live_created ON creative_director_projects (created_at ASC) WHERE deleted = FALSE`,
 
     // Three.js procedural models. The user-authored/generative record (gallery
     // image reference, provider/model attribution, validated scene spec, status,
@@ -163,7 +176,8 @@ export const mediaDdl = [
     )`,
     `ALTER TABLE music_video_projects ADD COLUMN IF NOT EXISTS deleted BOOLEAN DEFAULT FALSE`,
     `ALTER TABLE music_video_projects ADD COLUMN IF NOT EXISTS deleted_at TIMESTAMPTZ`,
-    `CREATE INDEX IF NOT EXISTS idx_music_video_projects_live ON music_video_projects (deleted) WHERE deleted = FALSE`,
+    projectPageDdl('music_video_projects'),
+    `CREATE INDEX IF NOT EXISTS idx_music_video_projects_live_created ON music_video_projects (created_at ASC) WHERE deleted = FALSE`,
 
     // Mood boards (issue #911). A dedicated inspiration/mood-board canvas,
     // distinct from raw Media History, for collecting visual + textual
@@ -195,7 +209,7 @@ export const mediaDdl = [
     // updated_at DESC is the board-list "recently touched" sort.
     `CREATE INDEX IF NOT EXISTS idx_mood_boards_updated ON mood_boards (updated_at DESC)`,
     // Partial index for the live-list filter (deleted = FALSE).
-    `CREATE INDEX IF NOT EXISTS idx_mood_boards_live ON mood_boards (deleted) WHERE deleted = FALSE`,
+    `CREATE INDEX IF NOT EXISTS idx_mood_boards_live_updated ON mood_boards (updated_at DESC, id ASC) WHERE deleted = FALSE`,
 
     // Storyboards (Create › Storyboards): one row per board, beats → panels →
     // art takes inline in `data` JSONB (a board is read and written whole).
@@ -212,8 +226,22 @@ export const mediaDdl = [
       deleted BOOLEAN DEFAULT FALSE,
       deleted_at TIMESTAMPTZ
     )`,
+    `ALTER TABLE storyboards ADD COLUMN IF NOT EXISTS list_summary JSONB,
+      ADD COLUMN IF NOT EXISTS list_summary_write_id UUID`,
+    // An older build can still write data without updating the projection.
+    `CREATE OR REPLACE FUNCTION invalidate_storyboard_list_summary()
+     RETURNS TRIGGER AS $$
+     BEGIN
+       NEW.list_summary := NULL;
+       RETURN NEW;
+     END;
+     $$ LANGUAGE plpgsql`,
+    `CREATE OR REPLACE TRIGGER trg_storyboards_invalidate_list_summary
+     BEFORE UPDATE OF data ON storyboards FOR EACH ROW
+     WHEN (NEW.list_summary_write_id IS NOT DISTINCT FROM OLD.list_summary_write_id)
+     EXECUTE FUNCTION invalidate_storyboard_list_summary()`,
     `CREATE INDEX IF NOT EXISTS idx_storyboards_updated ON storyboards (updated_at DESC)`,
-    `CREATE INDEX IF NOT EXISTS idx_storyboards_live ON storyboards (deleted) WHERE deleted = FALSE`,
+    `CREATE INDEX IF NOT EXISTS idx_storyboards_live_updated ON storyboards (updated_at DESC, id ASC) WHERE deleted = FALSE`,
     // Saved storyboard recipes (the Make tab's library): one named node graph
     // per row in `data` JSONB, loaded onto any board as a copy.
     `CREATE TABLE IF NOT EXISTS storyboard_recipes (

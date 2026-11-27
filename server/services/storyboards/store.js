@@ -12,12 +12,17 @@ import { PATHS } from '../../lib/fileUtils.js';
 import { createCollectionStore } from '../../lib/collectionStore.js';
 import { createRecordWriteQueue } from '../../lib/fileWriteQueue.js';
 import { createPgFileFacade, resolvePgBackend, POSTGRES_SETUP_HINT } from '../../lib/pgFileFacade.js';
+import { sanitizeStoryboard, summarizeStoryboard } from '../../lib/storyboardRecord.js';
 import { isValidStoryboardId, STORYBOARD_ID_PATTERN } from '../../lib/storyboardVocabulary.js';
 
 const TYPE_SCHEMA_VERSION = 1;
 
 function assertId(id) {
   if (!isValidStoryboardId(id)) throw new Error(`storyboards: invalid record id "${id}"`);
+}
+
+function summarizeRows(rows) {
+  return rows.map(sanitizeStoryboard).filter((board) => board && !board.deleted).map(summarizeStoryboard);
 }
 
 function makeFileBackend() {
@@ -31,10 +36,12 @@ function makeFileBackend() {
     name: 'file',
     readRaw: (id) => collection.loadOneRaw(id),
     listRaw: () => collection.loadAll(),
-    listRawPage: async ({ limit, offset }) => {
+    listSummaries: async () => summarizeRows(await collection.loadAll()),
+    listSummaryPage: async ({ limit, offset }) => {
       const live = (await collection.loadAll()).filter((r) => r && r.deleted !== true)
         .sort((a, b) => String(b.updatedAt).localeCompare(String(a.updatedAt)) || String(a.id).localeCompare(String(b.id)));
-      return { rows: live.slice(offset, offset + limit), total: live.length };
+      const items = summarizeRows(live.slice(offset, offset + limit));
+      return { items, total: live.length };
     },
     writeRaw: (id, record) => collection.saveOneNow(id, record),
     deleteRaw: (id) => collection.deleteOneNow(id),
@@ -57,7 +64,8 @@ const facade = createPgFileFacade({
       name: 'postgres',
       readRaw: db.readRaw,
       listRaw: db.listRaw,
-      listRawPage: db.listRawPage,
+      listSummaries: db.listSummaries,
+      listSummaryPage: db.listSummaryPage,
       writeRaw: db.writeRaw,
       deleteRaw: db.deleteRaw,
       listIds: db.listIds,
@@ -76,8 +84,10 @@ export const readRaw = async (id) => {
 
 export const listRaw = async () => (await facade.getBackend()).listRaw();
 
-/** `{ rows, total }` for one live page; PostgreSQL bounds it in SQL (#17475). */
-export const listRawPage = async (page) => (await facade.getBackend()).listRawPage(page);
+export const listSummaries = async () => (await facade.getBackend()).listSummaries();
+
+/** `{ items, total }` for one live page; PostgreSQL bounds it in SQL (#17475). */
+export const listSummaryPage = async (page) => (await facade.getBackend()).listSummaryPage(page);
 
 export const writeRaw = async (id, record) => {
   assertId(id);
