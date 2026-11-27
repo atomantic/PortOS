@@ -1,3 +1,4 @@
+import { Link } from 'react-router';
 import ProgressBar from '../ui/ProgressBar';
 import { formatBytes, formatCount, formatPercent } from '../../utils/formatters';
 import { DATA_KINDS, dataKindOf } from './dataKinds';
@@ -63,7 +64,7 @@ export default function DataSelectionPanel({ overview, totalFiles, selected, det
         </div>
         {!selected && (
           <p className="mt-2 text-xs leading-relaxed text-gray-400">
-            Live PostgreSQL data is not included. See <a className="text-port-accent hover:underline" href="/settings/database">Database settings</a> for database size.
+            Live PostgreSQL data is not included. See <Link className="text-port-accent hover:underline" to="/settings/database">Database settings</Link> for database size.
           </p>
         )}
         <ProgressBar percent={share} tone={kind?.tone ?? 'accent'} track="border" label="Share of data/" className="mt-2" />

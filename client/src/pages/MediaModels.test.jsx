@@ -9,7 +9,8 @@
  * only lists downloads the catalog doesn't cover.
  */
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { render, screen, waitFor, fireEvent, within } from '@testing-library/react';
+import { render as renderView, screen, waitFor, fireEvent, within } from '@testing-library/react';
+import { MemoryRouter } from 'react-router';
 import MediaModels from './MediaModels';
 import {
   setMediaModelEnabled,
@@ -19,6 +20,8 @@ import {
   deleteCachedModel,
   removeCustomMediaModel,
 } from '../services/apiImageVideo.js';
+
+const render = (ui) => renderView(ui, { wrapper: MemoryRouter });
 
 const { textEncoderDownloadId, textEncoderDownloads } = vi.hoisted(() => {
   const prefix = '__text_encoder_option__:';

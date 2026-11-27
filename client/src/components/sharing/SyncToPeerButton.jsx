@@ -1,3 +1,4 @@
+import { Link } from 'react-router';
 /**
  * SyncToPeerButton — dropdown of federated PortOS peers that toggles per-record
  * peer-sync subscriptions for supported creative records.
@@ -208,7 +209,7 @@ export default function SyncToPeerButton({
             <ListLoadError what={loadFailed === peersList ? 'peers' : 'subscriptions'} error={loadFailed.error} onRetry={retryLoad} className="m-2" />
           ) : peers.length === 0 ? (
             <div className="px-3 py-3 text-xs text-gray-500">
-              No peers configured. <a href="/instances" className="text-port-accent hover:underline">Add one</a>.
+              No peers configured. <Link to="/instances" className="text-port-accent hover:underline">Add one</Link>.
             </div>
           ) : (
             <ul className="max-h-72 overflow-y-auto">

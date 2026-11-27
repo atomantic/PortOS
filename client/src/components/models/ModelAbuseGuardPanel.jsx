@@ -1,3 +1,4 @@
+import { Link } from 'react-router';
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { CheckCircle2, Circle, Download, ExternalLink, RefreshCw, ShieldCheck } from 'lucide-react';
 import toast from '../ui/Toast';
@@ -171,7 +172,7 @@ export default function ModelAbuseGuardPanel() {
         <div className="mt-3 space-y-2 text-xs leading-relaxed text-gray-400 max-w-2xl">
           <p>Deterministic checks and a local classifier screen content before isolated, tool-free analysis and server-validated actions. A passing scan does not grant trust, prove attachments safe, or authorize private-record access. Classifiers can miss attacks and flag legitimate security examples.</p>
           <p>This installer uses the pinned Llama Prompt Guard 2 86M model for multilingual detection, scanning overlapping 512-token windows. Screening needs no chat model or cloud account. Status refreshes make no model calls.</p>
-          <p>Private message analysis also needs a local API provider. Install a text model in <a className="text-port-accent hover:underline" href="/models/llms">LLMs</a>, then choose its provider below.</p>
+          <p>Private message analysis also needs a local API provider. Install a text model in <Link className="text-port-accent hover:underline" to="/models/llms">LLMs</Link>, then choose its provider below.</p>
         </div>
       </details>
       <div className="space-y-3">

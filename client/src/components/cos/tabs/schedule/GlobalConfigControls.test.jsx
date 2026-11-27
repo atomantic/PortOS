@@ -1,5 +1,8 @@
 import { describe, it, expect, vi, afterEach } from 'vitest';
-import { render, screen, fireEvent, cleanup, act } from '@testing-library/react';
+import { render as renderView, screen, fireEvent, cleanup, act } from '@testing-library/react';
+import { MemoryRouter } from 'react-router';
+
+const render = (ui) => renderView(ui, { wrapper: MemoryRouter });
 
 // The two hooks are the component's only API callers — stub them so the test
 // exercises the config controls, not the network.

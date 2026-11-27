@@ -1,5 +1,8 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { act, fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { act, fireEvent, render as renderView, screen, waitFor } from '@testing-library/react';
+import { MemoryRouter } from 'react-router';
+
+const render = (ui) => renderView(ui, { wrapper: MemoryRouter });
 
 vi.mock('./UntrustedContentPolicyPanel.jsx', () => ({ default: () => <div>Content safety policies</div> }));
 

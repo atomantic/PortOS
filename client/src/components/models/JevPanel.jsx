@@ -2,7 +2,7 @@ import ConfirmButtonPair from '../../components/ui/ConfirmButtonPair';
 import useConfirmDelete from '../../hooks/useConfirmDelete';
 import { useEffect, useRef, useState } from 'react';
 import { CheckCircle2, Circle, Download, ExternalLink, GraduationCap, RefreshCw, Scale, Plug, BarChart3, Wrench } from 'lucide-react';
-import { useLocation, useNavigate, useParams } from 'react-router';
+import { Link, useLocation, useNavigate, useParams } from 'react-router';
 import TabPills from '../ui/TabPills';
 import toast from '../ui/Toast';
 import JevIntegrations from './JevIntegrations';
@@ -391,7 +391,7 @@ export default function JevPanel() {
               </table>
             </div>
           )}
-          <a href="/models/llms/abuse" className="text-xs text-port-accent hover:underline">Configure advanced content safety policies</a>
+          <Link to="/models/llms/abuse" className="text-xs text-port-accent hover:underline">Configure advanced content safety policies</Link>
         </div>
 
       </div>

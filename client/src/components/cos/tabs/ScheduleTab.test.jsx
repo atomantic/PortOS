@@ -1,7 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { act, render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
-import { MemoryRouter } from 'react-router';
+import { MemoryRouter, Route, Routes } from 'react-router';
 import { __resetToolUseModelIdsCache } from '../../../hooks/useToolUseModelIds.js';
 
 const toast = vi.hoisted(() => ({ success: vi.fn(), error: vi.fn() }));
@@ -87,6 +87,22 @@ describe('mergeUpdatedTaskInterval', () => {
 });
 
 describe('ScheduleTab on-demand feedback', () => {
+  it('opens CoS Config through the router when improvement is disabled', async () => {
+    const user = userEvent.setup();
+    api.getCodeReviewDefaults.mockResolvedValue({});
+    api.getCosSchedule.mockResolvedValueOnce({ improvementEnabled: false, tasks: {} });
+    render(
+      <MemoryRouter initialEntries={['/cos/schedule']}>
+        <Routes>
+          <Route path="/cos/schedule" element={<ScheduleTab apps={[]} providers={[]} />} />
+          <Route path="/cos/config" element={<h1>CoS configuration</h1>} />
+        </Routes>
+      </MemoryRouter>
+    );
+    await user.click(await screen.findByRole('link', { name: 'CoS → Config' }));
+    expect(screen.getByRole('heading', { name: 'CoS configuration' })).toBeVisible();
+  });
+
   it('renders consolidated audit domains as ordinary scheduled tasks', async () => {
     api.getCodeReviewDefaults.mockResolvedValue({});
     api.getCosSchedule.mockResolvedValueOnce({ tasks: {

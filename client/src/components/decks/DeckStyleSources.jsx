@@ -1,3 +1,4 @@
+import { Link } from 'react-router';
 import { sortByLabel } from '../../lib/sortByLabel.js';
 import { useState } from 'react';
 import { getUniverse } from '../../services/apiUniverseBuilder.js';
@@ -53,7 +54,7 @@ export default function DeckStyleSources({ deck, onPatch }) {
             <option value="">Choose a mood board</option>
             {sortByLabel(boards).map((board) => <option key={board.id} value={board.id}>{board.name}</option>)}
           </select>
-          {boards.length === 0 ? <p className="text-xs text-gray-500">No mood boards yet. <a href="/mood-boards" className="text-port-accent">Create a mood board</a> to collect style references.</p> : null}
+          {boards.length === 0 ? <p className="text-xs text-gray-500">No mood boards yet. <Link to="/mood-boards" className="text-port-accent">Create a mood board</Link> to collect style references.</p> : null}
           <MoodBoardStyleSynthesis key={boardId} boardId={boardId} universeId={deck.id} targetLabel="deck"
             styleNotes={deck.styleNotes} influences={deck.influences} saved={!importing} onAdopt={onPatch} />
         </div>

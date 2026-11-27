@@ -1,3 +1,4 @@
+import { Link } from 'react-router';
 /**
  * Media settings — the sections beside the backend config: the HuggingFace
  * token (its own validated endpoints, independent of the Media save) and the
@@ -238,7 +239,7 @@ export default function ImageGenServiceSections({ mediaTab, form }) {
         </div>
         <p className="text-xs text-gray-500">
           Send a prompt through {modeLabel(effectiveTestMode)} to verify end-to-end. For richer controls, visit the
-          <a href="/media/image" className="text-port-accent hover:underline ml-1">Image Gen</a> page.
+          <Link to="/media/image" className="text-port-accent hover:underline ml-1">Image Gen</Link> page.
         </p>
         <FormField label="Backend" labelClassName="block text-sm text-gray-300 mb-1">
           <select

@@ -1,3 +1,4 @@
+import { Link } from 'react-router';
 /**
  * ShareToButton — dropdown of registered buckets that toggles subscriptions
  * for series + universes, and does one-shot sharing for media items.
@@ -211,7 +212,7 @@ export default function ShareToButton({ kind, ids, items, label = 'Share', compa
             <ListLoadError what={loadFailed === bucketsList ? 'buckets' : 'subscriptions'} error={loadFailed.error} onRetry={retryLoad} className="m-2" />
           ) : buckets.length === 0 ? (
             <div className="px-3 py-3 text-xs text-gray-500">
-              No buckets yet. <a href="/sharing" className="text-port-accent hover:underline">Add one</a>.
+              No buckets yet. <Link to="/sharing" className="text-port-accent hover:underline">Add one</Link>.
             </div>
           ) : (
             <ul className="max-h-72 overflow-y-auto">
