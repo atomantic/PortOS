@@ -2,7 +2,9 @@ import ExecutionOptionsSelect from '../providers/ExecutionOptionsSelect.jsx';
 import { saveExecutionOptionSelection } from '../../services/apiProviders.js';
 import { useAsyncAction } from '../../hooks/useAsyncAction.js';
 import { useEffect, useId, useRef, useState } from 'react';
-import { Plus, X, ChevronUp, ChevronDown } from 'lucide-react';
+import { Plus, ChevronUp, ChevronDown } from 'lucide-react';
+import ReviewerRow, { CELL_LABEL_CLASS, HEADER_CLASS } from './ReviewerRow';
+import ReviewerModelCell, { renderNoPinCell, renderPinSelect } from './ReviewerModelCell';
 import Pill from '../ui/Pill';
 import ProviderModelSelector from '../ProviderModelSelector';
 import {
@@ -11,8 +13,6 @@ import {
   DEFAULT_REVIEW_STOP_MODE,
   MAX_REVIEW_USERNAMES,
   MAX_REVIEWER_MAX_ROUNDS,
-  MAX_REVIEWER_MODEL_LENGTH,
-  MODEL_SELECTABLE_REVIEWERS,
   cleanReviewUsername,
   normalizeReviewUsernames,
   reviewerEffortLevels,
@@ -39,27 +39,6 @@ const LOCAL_BACKEND_MANAGE_PAGES = Object.fromEntries(
 
 const normalizeReviewerValue = (value) => normalizeReviewerSlug(value);
 
-// The Model dropdown's "type an id instead" entry. Carries a `[`/`]` pair on
-// purpose: `sanitizeReviewerModelInput` strips both, so this string can never
-// arrive from the free-text input and be mistaken for a stored pin — and the
-// server drops any id containing them, so it could not have been persisted by an
-// older build either.
-const CUSTOM_MODEL_OPTION = '[custom]';
-
-// Shared row grid, one template for the header and every row so their columns
-// cannot drift apart. The wide form keeps minimum tracks for order, provider,
-// model, effort, optional, max, and remove — together ~32rem, so the collapse is
-// keyed to a CONTAINER query (`@4xl`), not a viewport one: this picker also
-// renders inside a narrow dashboard tile on a wide screen, where a viewport
-// `sm:` was unconditionally true and forced the wide grid into a ~250px column.
-// Below `@4xl` a row collapses to a stacked 2-column label/value block, so a
-// narrow container never scrolls horizontally. The header is wide-only — in the
-// stacked form each cell carries its own inline label, since a header far above
-// a stacked row doesn't associate.
-const WIDE_TRACKS = '@4xl:grid-cols-[auto_minmax(5rem,1fr)_minmax(8rem,2fr)_minmax(7rem,1fr)_auto_3.25rem_auto]';
-const ROW_CLASS = `min-w-0 grid grid-cols-[auto_minmax(0,1fr)] ${WIDE_TRACKS} items-center gap-x-2 gap-y-1 px-1.5 py-1.5 rounded border border-port-border bg-port-bg @4xl:border-transparent @4xl:bg-transparent @4xl:py-0.5 @4xl:rounded-none`;
-const CELL_LABEL_CLASS = '@4xl:hidden text-[10px] uppercase tracking-wide text-gray-400';
-const HEADER_CLASS = `hidden @4xl:grid ${WIDE_TRACKS} items-center gap-x-2 px-1.5 text-[10px] uppercase tracking-wide text-gray-400`;
 
 /**
  * Ordered multi-reviewer picker, rendered as one row per reviewer with the five
@@ -480,43 +459,6 @@ export default function ReviewerPicker({
     emit({ reviewerEfforts: level ? { ...efforts.without(token), [token]: level } : efforts.without(token) });
   };
 
-  // The "this reviewer has no such control" cell, shared by the Model and Effort
-  // columns so both read identically when the pin doesn't apply.
-  const renderNoPinCell = (title) => (
-    <span className="text-[11px] text-gray-400" title={title}>—</span>
-  );
-
-  // The closed-list pin `<select>` behind both the Effort column and the Model
-  // column's local-backend variant. They share one non-obvious contract: a stored
-  // value that is no longer in `options` (pinned on another machine, or before a
-  // CLI dropped a tier / a model was uninstalled) STILL gets an `<option>` — a
-  // select whose value isn't in its list renders blank and reads as "unset" while
-  // the value is in fact stored. `staleSuffix` names why it's absent; `setClass`
-  // differs only so the two columns stay visually distinguishable — passed as a
-  // COMPLETE class string, never interpolated, or Tailwind's scanner won't emit it.
-  //
-  // `trailingOption` appends one non-model entry after the list (the Model
-  // column's "Custom…" escape). It is a UI action, not a pin — the caller's
-  // `onChange` recognizes its sentinel value and never stores it.
-  const renderPinSelect = ({ selectId, value, options, onChange, ariaLabel, title, staleSuffix, setClass, maxWidthClass, trailingOption = null }) => (
-    <select
-      id={selectId}
-      value={value}
-      disabled={disabled}
-      onChange={(e) => onChange(e.target.value)}
-      aria-label={ariaLabel}
-      title={title}
-      className={`w-full min-w-0 ${maxWidthClass} px-1.5 py-0.5 text-[11px] font-mono rounded border bg-port-bg min-h-[28px] disabled:opacity-40 focus:outline-none focus:border-port-accent ${value
-        ? setClass
-        : 'text-gray-500 border-port-border/60'}`}
-    >
-      <option value="">— default —</option>
-      {value && !options.includes(value) && <option value={value}>{value} {staleSuffix}</option>}
-      {options.map((option) => <option key={option} value={option}>{option}</option>)}
-      {trailingOption && <option value={trailingOption.value}>{trailingOption.label}</option>}
-    </select>
-  );
-
   // The Effort cell uses the configured provider catalog for provider identities
   // and the built-in reviewer ladder for legacy CLI tokens.
   //
@@ -543,7 +485,7 @@ export default function ReviewerPicker({
     // than let the row display a tier the review will not run at.
     const cursorNeedsModel = normalizeReviewerValue(token) === 'cursor' && !models.get(token);
     return renderPinSelect({
-      selectId: `${id}-effort-${token}`,
+      disabled, selectId: `${id}-effort-${token}`,
       value: stored,
       options: levels,
       onChange: (level) => setEffort(token, level),
@@ -559,170 +501,6 @@ export default function ReviewerPicker({
       setClass: 'text-port-accent-2 border-port-accent-2/50',
       maxWidthClass: 'max-w-[8rem]'
     });
-  };
-
-  // The `~opt` non-blocking toggle rendered on every reviewer/username row.
-  // `subject` is the human name used in the aria-label; `title` is the (row-
-  // kind-specific) hover copy the caller resolves.
-  const renderOptToggle = (token, subject, title) => (
-    <button
-      type="button"
-      disabled={disabled}
-      onClick={() => toggleOptional(token)}
-      title={title}
-      className={`min-h-9 min-w-9 text-xs font-mono leading-none px-1 py-0.5 rounded border ${isOptional(token)
-        ? 'text-port-warning border-port-warning/50 bg-port-warning/10'
-        : 'text-gray-400 border-transparent hover:text-gray-300 hover:border-port-border'} disabled:opacity-40`}
-      aria-pressed={isOptional(token)}
-      aria-label={isOptional(token) ? `Make ${subject} blocking` : `Make ${subject} non-blocking`}
-    >
-      ~opt
-    </button>
-  );
-
-  // The `~max=<n>` round-cap input rendered on every reviewer/username row.
-  // Blank means "no cap" — the number input's empty string is the sentinel for an
-  // absent key, distinct from a typed `0` (loop until clean).
-  const renderMaxRounds = (token, subject) => {
-    const value = maxRounds.get(token);
-    const inputId = `${id}-max-${token}`;
-    return (
-      <input
-        id={inputId}
-        type="number"
-        inputMode="numeric"
-        min={0}
-        max={MAX_REVIEWER_MAX_ROUNDS}
-        step={1}
-        disabled={disabled}
-        value={value === undefined ? '' : value}
-        placeholder="–"
-        onChange={(e) => setMaxRounds(token, e.target.value)}
-        aria-label={`Max review rounds for ${subject}`}
-        title={value === undefined
-          ? `${subject} uses slashdo's built-in round cap. Enter a number to cap its review → fix → re-review cycles (0 = loop until clean).`
-          : value === 0
-            ? `${subject} loops until clean (~max=0), bounded by slashdo's safety guardrail. Clear to restore the built-in cap.`
-            : `${subject} runs at most ${value} review round${value === 1 ? '' : 's'} (~max=${value}). Clear to restore the built-in cap.`}
-        className={`w-12 px-1 py-0.5 text-[11px] font-mono leading-none text-center rounded border bg-port-bg min-h-[28px] disabled:opacity-40 focus:outline-none focus:border-port-accent ${value === undefined
-          ? 'text-gray-500 border-port-border/60 hover:border-port-border'
-          : 'text-port-accent-2 border-port-accent-2/50'}`}
-      />
-    );
-  };
-
-  // The Model cell. Only MODEL_SELECTABLE_REVIEWERS get one — copilot has no CLI
-  // and a `@username` reviewer is a person/bot, so neither takes a model.
-  //
-  // Every reviewer with a resolved catalog renders a `<select>`: the ids are
-  // known, and a dropdown is how the rest of this table's pins are set. What
-  // differs between the two reviewer kinds is the ESCAPE HATCH, not the control:
-  //
-  // - A probed local backend's installed-model list is authoritative (the server
-  //   asked the running daemon), so its select is closed — an id it doesn't list
-  //   isn't installed.
-  // - A CLI reviewer's catalog is a stored snapshot, and an Ollama-backed
-  //   `claude` or a Bedrock-form id can be anything the environment provides, so
-  //   its select carries a trailing "Custom…" entry that swaps the cell for a
-  //   free-text input (with the same ids offered as a `<datalist>`). Clearing
-  //   that input returns the cell to the dropdown. A CLI reviewer whose catalog
-  //   resolved EMPTY (grok/kimi/opencode ship only a configured-default sentinel)
-  //   starts in the free-text form directly — a select of nothing is a dead
-  //   control — and so does a row already pinned to an id outside the catalog, so
-  //   that pin stays editable rather than reading as an unpickable oddity.
-  //
-  // `loaded` gates the "nothing installed" messaging so a pre-fetch render
-  // doesn't accuse a healthy backend of being empty.
-  const renderModelCell = (token) => {
-    if (!MODEL_SELECTABLE_REVIEWERS.includes(token) && !isProviderReviewer(token)) return renderNoPinCell(`${labelFor(token)} takes no model`);
-    const backendPage = LOCAL_BACKEND_MANAGE_PAGES[token];
-    const subject = labelFor(token);
-    const pinnedValue = models.get(token);
-    const value = pinnedValue ?? '';
-    const defaultModel = modelOptions?.defaultModels?.[token] || '';
-    const options = modelOptions?.optionsByReviewer?.[token] || [];
-    const inputId = `${id}-model-${token}`;
-    const listId = `${id}-modellist-${token}`;
-    // Whether this reviewer may carry an id its catalog doesn't list at all.
-    const acceptsTypedId = modelOptions?.freeText?.[token] !== false;
-    // Why a local backend has no options, so the empty state says the useful
-    // thing instead of a bare "default" placeholder. Only meaningful once the
-    // probe settled — before that, an empty list is "not fetched yet", not a fact.
-    const emptyHint = (options.length === 0 && modelOptions?.loaded)
-      ? (modelOptions?.unavailable?.[token]
-          ? `${subject} isn't reachable${backendPage ? ` — start it from ${backendPage}` : ''} to list its models. You can still type an id.`
-          : `No ${subject} models listed${backendPage ? ` — add one in ${backendPage}` : ''}, or type an id.`)
-      : null;
-    // A closed select over nothing would be a dead control, so a reviewer with no
-    // resolved options falls back to free text whichever kind it is: better a
-    // typed id than no way to set one at all.
-    const freeText = acceptsTypedId
-      ? (options.length === 0 || isCustomModel(token) || (Boolean(value) && !options.includes(value)))
-      : options.length === 0;
-
-    if (!freeText) {
-      return renderPinSelect({
-        selectId: inputId,
-        value: value || (defaultModel && options.includes(defaultModel) ? defaultModel : ''),
-        options,
-        onChange: (model) => {
-          // The escape hatch is a UI mode, not an id — never store the sentinel.
-          if (model === CUSTOM_MODEL_OPTION) { setCustomModel(token, true); return; }
-          setModel(token, model);
-        },
-        ariaLabel: `Model for ${subject}`,
-        title: value
-          ? `${subject} reviews with ${value}. Choose "default" to let it pick.`
-          : defaultModel
-            ? `${subject} uses ${defaultModel} by default. Choose another model to pin it for this run.`
-          : `${subject} uses the model configured for its backend. Pick one to pin it for this run.`,
-        staleSuffix: '(not installed)',
-        setClass: 'text-port-accent border-port-accent/50',
-        maxWidthClass: 'max-w-[190px]',
-        // Only a reviewer that can run an id outside its catalog gets the escape.
-        trailingOption: acceptsTypedId ? { value: CUSTOM_MODEL_OPTION, label: 'Custom…' } : null
-      });
-    }
-
-    // "Custom…" was picked with nothing pinned yet — start empty so the field
-    // reads as the blank the user is about to fill, not as an id already in play.
-    const inputValue = value || (isCustomModel(token) ? '' : defaultModel);
-    return (
-      <>
-        <input
-          id={inputId}
-          type="text"
-          list={options.length ? listId : undefined}
-          value={inputValue}
-          disabled={disabled}
-          maxLength={MAX_REVIEWER_MODEL_LENGTH}
-          placeholder={defaultModel ? `${defaultModel} (default)` : 'default'}
-          onChange={(e) => setModel(token, e.target.value)}
-          // Leaving the field with nothing pinned is how the user backs out of
-          // Custom…: with no id to keep, the catalog dropdown is the more useful
-          // control. Deliberately on blur rather than on an empty onChange —
-          // clearing the field to retype an id would otherwise swap the control
-          // out from under the cursor mid-edit.
-          onBlur={() => { if (!value && options.length) setCustomModel(token, false); }}
-          aria-label={`Model for ${subject}`}
-          title={value
-            ? `${subject} reviews with ${value}. Clear to let it use its own default.`
-            : (options.length
-              ? `Type an id ${subject} accepts. Leave it empty to go back to its listed models.`
-              : (defaultModel
-                ? `${subject} uses ${defaultModel} by default. Type an id to pin one.`
-                : (emptyHint || `${subject} uses its own default model. Type an id to pin one.`)))}
-          className={`w-full min-w-0 max-w-[190px] px-1.5 py-0.5 text-[11px] font-mono rounded border bg-port-bg min-h-[28px] disabled:opacity-40 focus:outline-none focus:border-port-accent ${value
-            ? 'text-port-accent border-port-accent/50'
-            : 'text-gray-500 border-port-border/60'}`}
-        />
-        {options.length > 0 && (
-          <datalist id={listId}>
-            {options.map((m) => <option key={m} value={m}>{m}</option>)}
-          </datalist>
-        )}
-      </>
-    );
   };
 
   const addUsername = () => {
@@ -782,6 +560,12 @@ export default function ReviewerPicker({
     emit({ reviewers: next });
   };
 
+  const rowProps = (token, subject) => ({
+    id, token, subject, disabled, optional: isOptional(token), maxRounds: maxRounds.get(token),
+    onToggleOptional: () => toggleOptional(token),
+    onMaxRounds: (rounds) => setMaxRounds(token, rounds),
+  });
+
   return (
     <div className="@container flex flex-col gap-2 w-full">
       {showReviewers && (
@@ -833,10 +617,12 @@ export default function ReviewerPicker({
             </div>
             <div className="flex flex-col gap-1.5 @4xl:gap-0.5">
               {orderedSelected.map((value, index) => renderReviewer(value, (
-                <div
+                <ReviewerRow
                   key={value}
-                  className={ROW_CLASS}
+                  {...rowProps(value, labelFor(value))}
                   title={REVIEWER_OPTIONS.find(o => o.value === value)?.description}
+                  warning={unavailability(value)?.title}
+                  onRemove={() => remove(value)}
                 >
                   <div className="flex items-center gap-0.5 col-span-2 @4xl:col-span-1">
                     <span className="text-port-accent font-mono text-xs">{index + 1}.</span>
@@ -864,30 +650,15 @@ export default function ReviewerPicker({
                     {renderUnavailableBadge(value)}
                   </span>
                   <span className={CELL_LABEL_CLASS}>Model</span>
-                  <div className="min-w-0">{renderModelCell(value)}</div>
+                  <div className="min-w-0">
+                    <ReviewerModelCell id={id} token={value} subject={labelFor(value)} pinnedValue={models.get(value)}
+                      modelOptions={modelOptions} backendPage={LOCAL_BACKEND_MANAGE_PAGES[value]} disabled={disabled}
+                      customModel={isCustomModel(value)} onCustomModel={on => setCustomModel(value, on)}
+                      onModel={model => setModel(value, model)} />
+                  </div>
                   <span className={CELL_LABEL_CLASS}>Effort</span>
                   <div className="min-w-0">{renderEffortCell(value)}{renderExecutionOptions(value)}</div>
-                  <span className={CELL_LABEL_CLASS}>Optional</span>
-                  <div>
-                    {renderOptToggle(value, labelFor(value), isOptional(value)
-                      ? `${labelFor(value)} is non-blocking (~opt): an inconclusive verdict from it won't block the merge. Click to make it blocking.`
-                      : `${labelFor(value)} gates the merge. Click to make it non-blocking (~opt) — its inconclusive verdicts won't block the merge (a hard failure still does).`)}
-                  </div>
-                  <span className={CELL_LABEL_CLASS}>Max iterations</span>
-                  <div>{renderMaxRounds(value, labelFor(value))}</div>
-                  <div className="col-span-2 @4xl:col-span-1 justify-self-end">
-                    <button
-                      type="button"
-                      disabled={disabled}
-                      onClick={() => remove(value)}
-                      className="pointer-coarse:min-h-11 pointer-coarse:min-w-11 min-h-9 min-w-9 flex items-center justify-center text-gray-500 hover:text-port-error"
-                      aria-label={`Remove ${labelFor(value)}`}
-                    >
-                      <X size={12} />
-                    </button>
-                  </div>
-                  {unavailability(value) && <p className="col-span-2 @4xl:col-span-7 text-xs text-port-warning break-words">{unavailability(value).title}</p>}
-                </div>
+                </ReviewerRow>
               )))}
             </div>
           </>
@@ -906,35 +677,17 @@ export default function ReviewerPicker({
         {selectedUsernames.length > 0 ? (
           <div className="flex flex-col gap-1.5 @4xl:gap-0.5">
             {selectedUsernames.map((value) => (
-              <div
+              <ReviewerRow
                 key={value}
-                className={ROW_CLASS}
+                {...rowProps(`@${value}`, `@${value}`)}
                 title="GitHub/GitLab username requested as a PR/MR reviewer to gate the merge"
+                onRemove={() => removeUsername(value)}
               >
                 <span className="text-port-accent font-mono text-xs col-span-2 @4xl:col-span-1">@</span>
                 <span className="text-xs text-gray-300 col-span-2 @4xl:col-span-1 truncate">{value}</span>
                 <span className="hidden @4xl:block" />
                 <span className="hidden @4xl:block" />
-                <span className={CELL_LABEL_CLASS}>Optional</span>
-                <div>
-                  {renderOptToggle(`@${value}`, `@${value}`, isOptional(`@${value}`)
-                    ? `@${value} is non-blocking (~opt): if it never submits a review, the merge isn't blocked. Click to make it blocking.`
-                    : `@${value} gates the merge. Click to make it non-blocking (~opt) — a missing/timed-out review from it won't block the merge.`)}
-                </div>
-                <span className={CELL_LABEL_CLASS}>Max iterations</span>
-                <div>{renderMaxRounds(`@${value}`, `@${value}`)}</div>
-                <div className="col-span-2 @4xl:col-span-1 justify-self-end">
-                  <button
-                    type="button"
-                    disabled={disabled}
-                    onClick={() => removeUsername(value)}
-                    className="pointer-coarse:min-h-11 pointer-coarse:min-w-11 min-h-9 min-w-9 flex items-center justify-center text-gray-500 hover:text-port-error"
-                    aria-label={`Remove @${value}`}
-                  >
-                    <X size={12} />
-                  </button>
-                </div>
-              </div>
+              </ReviewerRow>
             ))}
           </div>
         ) : null}
