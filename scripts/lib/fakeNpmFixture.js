@@ -4,9 +4,9 @@ import { join } from 'node:path';
 
 /** Install an `npm` (POSIX shim and Windows `.cmd`) in `fixture` that runs `body` with Node. */
 export function installFakeNpm(fixture, body) {
-  const npmScript = join(fixture, 'npm.js');
+  const npmScript = join(fixture, 'npm.cjs');
   writeFileSync(npmScript, body);
-  writeFileSync(join(fixture, 'npm'), `#!${process.execPath}\n${body}`, { mode: 0o755 });
+  writeFileSync(join(fixture, 'npm'), `#!/bin/sh\nexec "${process.execPath}" "${npmScript}" "$@"\n`, { mode: 0o755 });
   writeFileSync(join(fixture, 'npm.cmd'), `@"${process.execPath}" "${npmScript}" %*\r\n`);
 }
 

@@ -161,6 +161,26 @@ it.skipIf(process.platform === 'win32')('hands the browser plan to the supervise
   }
 }, 150_000);
 
+it.skipIf(process.platform === 'win32')('runs the fake npm CommonJS payload from a checkout-local Vitest temp root', () => {
+  const checkout = mkdtempSync(join(import.meta.dirname, '.fake-npm-esm-'));
+  const fixture = join(checkout, 'temp');
+  const selectionPath = join(fixture, 'selection.json');
+  mkdirSync(fixture);
+  try {
+    writeFileSync(join(checkout, 'package.json'), JSON.stringify({ type: 'module' }));
+    writeFileSync(selectionPath, JSON.stringify({ include: ['scripts/example.test.js'], exclude: [] }));
+    installFakeNpm(fixture, REPORTING_NPM);
+    const result = spawnSync(join(fixture, 'npm'), ['run', 'test:ci', '--', '--reporter=json'], {
+      cwd: checkout, encoding: 'utf8', env: { ...process.env, PORTOS_CI_TEST_SELECTION: selectionPath },
+    });
+    expect(result.status, result.stderr).toBe(0);
+    expect(JSON.parse(result.stdout)).toEqual({ args: ['run', 'test:ci', '--', '--reporter=json'],
+      selection: { include: ['scripts/example.test.js'], exclude: [] } });
+  } finally {
+    rmSync(checkout, { recursive: true, force: true });
+  }
+});
+
 it('runs the db scope through the server workspace\'s test:db:ci script with the same selection file', () => {
   const fixture = mkdtempSync(join(tmpdir(), 'portos-db-scope-'));
   try {
