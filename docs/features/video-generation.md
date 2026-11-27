@@ -37,3 +37,18 @@ Real-ESRGAN runs the official `realesrgan-ncnn-vulkan` v0.2.5.0 release (Vulkan,
 Music Video settings include a preferred shot workflow. Choose **Grok video** for cutaway drafts, then open **Upscale** on a shot's Clip tab after reviewing its motion. New projects default to fal.ai SeedVR2 at 1080p when a fal.ai key is configured, with Lanczos as the local default. SeedVR2 uses the selected target resolution, Lanczos, local LTX and Real-ESRGAN use 2× scaling, and Topaz Labs outputs 1080p through its credit quote flow. **Upgrade drafts to final** estimates SeedVR2 spend and checks local upscaler readiness for the approved clips before submission. Completed upscales add a final take and replace the source if it is still selected.
 
 Topaz can estimate a padded 1920×1080 output without uploading the source or reserving credits. Explicit submission uses the returned one-use quote and uploads a prepared, padded copy without cropping. The queued request retains its provider identity across restarts. If local cancellation or monitoring fails, check the remote job's recorded status before starting another. The result is separate from the project master and keeps the original audio. The upscale router lives in `server/routes/videoGenUpscale.js`. See [media operation controls](media-operation-control.md) for cancellation and [API Explorer](../API.md) for current operations.
+
+## MiniMax H3 speed profiles
+
+**Quality** uses the stock sampler. To try an experimental profile, install
+or repair the pinned runtime, cache the eligible base model and explicitly
+download the profile adapter in Video Gen. PortOS verifies the adapter before
+admission. A selection or render does not start a download. The runtime's
+code dependencies are separate from weights.
+
+LightX2V has separate CUDA and MLX INT8 contracts. The MLX profile supports
+single text or first-image clips at 1344×768. Pika H3 Flex on the supported
+MLX INT8 row also offers 640×384 and 1024×576. Ineligible models, canvases,
+conditioning and continuation modes are refused. Compare actual paired
+renders on the same hardware and settings before judging speed, fidelity
+or soundtrack quality. See the [CUDA runtime setup](../RUNTIME_LOCKS.md#windows-and-linux-cuda).

@@ -56,3 +56,20 @@ Run `python3 -B -m unittest discover -s scripts/ml/avatarforcing` for the
 AvatarForcing motion and checkpoint regressions in
 `scripts/ml/avatarforcing/test_motion.py` and
 `scripts/ml/avatarforcing/test_weights.py`. The motion tests use PyTorch.
+
+## Offline greybox sequences
+
+Use `node scripts/greybox-sequence.js --input docs/examples/greybox-sequence.json
+--output <new-directory> --plan-only` to check a sequence plan. Omit
+`--plan-only` to capture the reference with installed Chrome and FFmpeg
+with libx264. The output directory must be new. The script operates on
+the explicit input file and leaves catalog records and project shots alone.
+For interactive work, use the **Greybox** tab on a catalog environment to
+start a layout, frame and save shots, and capture references.
+
+## Compare cooled runtime pins
+
+The opt-in [cooled runtime probe](../scripts/ml/cooled_runtime_probe.py)
+compares the declared baseline and candidate Python dependencies in
+isolated environments with the same fixtures. Use it as supporting
+evidence for selective lock refreshes.

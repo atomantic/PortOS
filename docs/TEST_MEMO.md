@@ -1,43 +1,56 @@
 # Test memo
 
-PortOS can skip a whole Vitest suite file when the same inputs already produced a passing, complete verdict. Failed files and partial runs never produce reusable full verdicts. Cold runs execute eligible suites normally. Use `PORTOS_TEST_MEMO=off` to disable both reads and writes. Use `PORTOS_TEST_MEMO_VERBOSE=1` to see reused files and their origins.
+PortOS can reuse a complete passing Vitest file verdict with the same
+verified inputs. Failed, partial and name-filtered runs cannot record
+full-file passes. Set `PORTOS_TEST_MEMO=off` to turn off reads and writes.
+Set `PORTOS_TEST_MEMO_VERBOSE=1` to show reused files and their origins.
 
 ## What the key covers
 
-The key includes suite content and its local static and dynamic dependency closure, runner/coverage configuration, lockfiles and runtime identity (Node, platform, architecture and relevant environment). It includes explicitly discovered non-module file inputs and scoped tree reads. Test-path and checkout-path differences are normalized only when the detector can prove equivalence. Unbounded dynamic input, unknown subprocesses, untracked live-service dependencies and machine-local reads fail closed. A dirty or newly added relevant file changes the key.
+The key covers suite content, local static and dynamic dependency closure,
+runner and coverage configuration, lockfiles, Node/platform/architecture,
+relevant environment, and known non-module file and tree inputs. Scoped
+walks need a deterministic root and provable path filters. Tests that read
+tracked membership include that membership as an input. Dirty and newly
+added relevant files change the key. Unknown subprocesses, unbounded paths
+and live-service or machine-local inputs fail closed.
 
-### Directory trees
-
-The detector distinguishes literal file reads, scoped walks with provable path filters and whole-checkout input. A deterministic tree root and finite filters may be hashed. For a variable segment, the prefix, suffix and actual path construction must bound which paths are read. Unknown filters or path construction cannot produce a narrow key. A test that depends on tracked membership must include that membership as an input, even when the contents of all existing files match.
-
-### Never memoized
-
-Always-run guards cannot earn a memo. Use `// test-memo: never` for a suite whose inputs must remain live or cannot be captured, and keep the marker near the owning input boundary. A name-pattern run cannot record reusable full-file success. Full verdict reuse is allowed for the same inputs when the requested test set is a subset. Smoke/full and browser project entries still use their respective context and strength rules.
+Always-run guards execute when the plan requires them. Use
+`// test-memo: never` near the input boundary for tests that require live
+inputs the detector cannot capture. Smoke/full and browser project entries
+preserve their own context and verdict-strength rules.
 
 ## Git fixtures
 
-Use `// test-memo: git-fixture` only when every Git command runs in a test-created fixture repository under the temp directory. Initialize that repository before any Git operation that could otherwise discover a containing checkout. Pass the fixture directory explicitly to subprocesses or wrappers. Never send Git a real checkout, reuse inherited cwd, read worktree state as an input or use unknown shell programs under this declaration.
-
-The key includes the effective Git executable/version and inheritable Git configuration, including system/global includes and configured environment overrides. Temporary repository-local configuration comes from the test itself. Unverified Git identity or a call the detector cannot prove to be fixture-scoped refuses memoization. The marker is a checkable assertion, not a bypass. Keep the checkout and fixture Git paths separate and use temporary repos for all transitive wrappers. `scripts/lib/testMemo/gitFixture.js` owns the detector.
+Use `// test-memo: git-fixture` only if every Git call runs in a temporary,
+test-created repository. Initialize it before any command could discover
+an enclosing checkout. Pass its directory explicitly through wrappers.
+The key includes the verified executable and Git version plus effective
+system/global configuration, includes and environment overrides. The
+detector in `scripts/lib/testMemo/gitFixture.js` rejects a call it cannot
+prove is fixture-scoped or a run that reads real checkout state.
 
 ## Database suites
 
-Trusted CI can reuse complete DB-suite verdicts within the separate `db` memo lineage. The key includes the DB runner config, schema setup files and each suite's tracked inputs. The workflow counts remaining DB tests before provisioning `portos_test`. The impact plan can still require the live restore probe, which runs outside the memo. Run `npm run test:db` for live verification against `portos_test`.
+Trusted CI can reuse complete verdicts in a separate `db` lineage. Inputs
+include DB config, schema setup and tracked suite dependencies. The
+collection fixture's key includes eligible tracked paths, staged identities,
+effective modes and working bytes. Use `npm run test:db` for live validation
+against `portos_test`. The impact plan can also require a live restore probe.
 
-The collection fixture copies indexed `server/` and `lib/` files from the working tree. Its memo includes eligible index membership, staged identities, effective file modes and working bytes. The analyzer refuses this special input when it cannot verify the source reader, index or physical files. Untracked files and paths excluded by the copy do not enter this input.
+## Store and seeding
 
-## Store
-
-The default local store is `~/.portos/test-memo/`. Set `PORTOS_TEST_MEMO_DIR` to isolate a run's writable store. `PORTOS_TEST_MEMO_READ_DIRS` can add read-only stores for seeded runs. Entries are keyed by the verified input closure and written after complete passing execution. Corrupt, missing or incompatible entries fall back to running the suite. A memo hit is evidence about the same keyed inputs. Verification of live behavior requires an actual run.
-
-## Shards
-
-Shard selection and memo filtering have different jobs. Shards partition suite ownership deterministically; the memo may skip a safe prior pass inside the owned set. Keep shard or browser-project identity where it affects the executed tests. See [CI test selection](CI_TEST_SELECTION.md) for the full, changed and integration plans.
+The default writable store is `~/.portos/test-memo/`. Use
+`PORTOS_TEST_MEMO_DIR` to isolate writes and `PORTOS_TEST_MEMO_READ_DIRS`
+to add read-only inputs. Hosted CI can seed from a trusted upstream store.
+Keep seeds read-only and write complete successes to the current run's
+store. A missing, corrupt, incompatible or untrusted record executes the
+suite. The report combines matching memo hits and executed verdicts for
+the selected head.
 
 ## Related selection
 
-Changed-input selection narrows suites using dependency reachability. Memo reuse validates an already-selected suite against a known passing input key. Full, changed and browser runs must preserve their selection guarantees when records are missing, incomplete or ineligible. Never-memoized structural guards still run when the configured plan requires them. See [pregate](PREGATE.md) for the local plan.
-
-## CI seeding
-
-Hosted runners can seed from a trusted upstream memo. Keep seeded directories read-only and record results for the current run in its writable store. Missing or untrusted seeds cost execution time. They cannot become passing results. Build the execution report from memo hits and actual test outcomes for the selected head. See [hosted CI](GITHUB_ACTIONS.md) for job and cache configuration.
+[CI selection](GITHUB_ACTIONS.md#test-selection) finds affected suites.
+Shards partition the planned files. Memo reuse applies within that set
+while preserving shard or browser-project identity where it affects the
+run. Its absence cannot reduce required coverage.

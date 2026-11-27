@@ -21,7 +21,7 @@ PR into `main`. Commit messages are the source for release notes. Leave
 Run `npm run pregate` before every push and again after rebasing. The
 [CI workflow](../.github/workflows/ci.yml) runs impact-scoped checks on PRs into
 `main`, broader checks after merges and on a schedule, and the full plan on PRs
-into `release`. See [native CI coverage](CI_NATIVE_JOBS.md#native-jobs-on-a-push-to-main)
+into `release`. See [native CI coverage](GITHUB_ACTIONS.md#native-jobs-on-a-push-to-main)
 and the [merge policy](../.claude/skills/portos-ship/SKILL.md#merge-authority).
 
 ### Creating a Release

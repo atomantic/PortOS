@@ -145,7 +145,7 @@ jobs:
         run: node --check server/index.js
 
   server:
-    # Sharded on a full plan — see docs/CI_TEST_SELECTION.md "Full-suite sharding".
+    # Sharded on a full plan — see docs/GITHUB_ACTIONS.md#full-suite-sharding.
     # The matrix comes from the planner; once-only steps pin to shard 1, and the
     # transform-artifact cache key carries the shard so parallel saves don't race.
     name: Server tests (${{ matrix.shard }}/${{ strategy.job-total }})

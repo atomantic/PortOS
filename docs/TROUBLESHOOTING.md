@@ -209,6 +209,19 @@ Select a backend and 768-dimensional model under **Models → Embeddings** and
 save the settings. Check the embedding status at `GET /api/memory/embeddings/status`
 if embeddings still fail.
 
+### CLI reviewer times out
+
+The default is a 30-minute inactivity window. Output renews that window
+and the shared batch deadline. A provider or request may set a different
+timeout. A timeout is inconclusive and a required review remains blocked.
+
+Look at `diagnostics.cli` in the batch coverage or reviewer health.
+`no-output` points to startup or connection checks. `output-open` means
+the process spoke and did not exit. `exit-drain` points to a process
+wrapper or descendant holding a pipe open. `closed` calls for inspection
+of the verdict or parse failure. `spawn-failed` points to launch.
+Keep raw transcripts private. Output activity alone cannot prove approval.
+
 ## PM2 Issues
 
 ### Process Keeps Restarting
