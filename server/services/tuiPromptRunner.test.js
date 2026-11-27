@@ -1,3 +1,4 @@
+import { SELF_CLEARING_RESUBMIT_INTERVAL_MS, SELF_CLEARING_RESUBMIT_ECHO_MS } from '../test/fixtures/tuiTiming.js';
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { mkdtemp, rm, writeFile } from 'fs/promises';
 import { tmpdir } from 'os';
@@ -121,7 +122,7 @@ vi.mock('../lib/fileUtils.js', async () => {
 
 import { cleanTuiResponse, resolveTuiResponseText, executeTuiRun } from './tuiPromptRunner.js';
 import { markHostShuttingDown, resetHostShutdownFlagForTests } from '../lib/hostShutdown.js';
-import { SELF_CLEARING_RESUBMIT_INTERVAL_MS, SELF_CLEARING_RESUBMIT_ECHO_MS, TUI_INPUT_READY_DEADLINE_MS } from '../lib/tuiHandshake.js';
+import { TUI_INPUT_READY_DEADLINE_MS } from '../lib/tuiHandshake.js';
 
 const makeFakePty = () => {
   const fake = {
