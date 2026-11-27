@@ -342,6 +342,19 @@ function registerAuthRevocationHandler(io) {
     console.log(`🔐 Auth state changed — disconnecting all sockets`);
     if (typeof io.disconnectSockets === 'function') io.disconnectSockets(true);
   });
+  authEvents.on('sessions:revoked', (sessionIds) => {
+    // The operator namespace is local to this server. Disconnect synchronously
+    // so passive subscribers stop receiving events as soon as revocation persists.
+    const revoked = new Set(sessionIds);
+    for (const socket of io.sockets.sockets.values()) {
+      if (!revoked.has(socket.data.portosSessionId)) continue;
+      try {
+        socket.disconnect(true);
+      } catch (err) {
+        console.error(`❌ Session socket revocation failed: ${err?.message ?? err}`);
+      }
+    }
+  });
 }
 
 const noPayload = () => ({});
@@ -508,9 +521,9 @@ function setupProactiveSpeechForwarding() {
 }
 
 // Test-only seam (mirrors the `__testing` convention in authGate.js): lets an
-// integration test wire the real per-event auth re-check onto a live
-// Socket.IO server without pulling in every other registrar's dependencies.
-export const __testing = { registerAuthHandlers, PEER_RELAY_ALLOWED_EVENTS, registerSubscriptionHandlers };
+// integration test wire auth checks, revocation and subscriptions onto a live
+// Socket.IO server without starting the other socket handlers.
+export const __testing = { registerAuthHandlers, registerAuthRevocationHandler, PEER_RELAY_ALLOWED_EVENTS, registerSubscriptionHandlers };
 
 // Broadcast to CoS subscribers only
 function broadcastToCos(event, data) {

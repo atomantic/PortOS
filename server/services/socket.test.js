@@ -193,6 +193,7 @@ describe('socket.js — initSocket', () => {
     }
     createdSockets.length = 0;
     authEvents.removeAllListeners('sessions:revoked-all');
+    authEvents.removeAllListeners('sessions:revoked');
   });
 
   it('coalesces environment changes into payload-free Mind visibility invalidations for subscribers', () => {

@@ -37,11 +37,8 @@ import { ServerError } from '../lib/errorHandler.js';
 // `secrets.auth` in settings.json so the existing GET /api/settings sanitizer
 // (which strips `secrets`) keeps them off the wire.
 
-// Event bus so the Socket.IO layer can react to auth-state changes (first-time
-// enable, password rotation, full disable) without coupling the auth service
-// to `io`. Consumers should kick every currently-connected socket and let
-// clients re-handshake — the gate then re-validates each one against the
-// fresh session store.
+// Event bus so the Socket.IO layer can react to full or targeted session
+// revocations without coupling the auth service to `io`.
 export const authEvents = new EventEmitter();
 authEvents.setMaxListeners(50);
 
@@ -112,7 +109,8 @@ const readSessions = async (stamp) => {
     // label to an ordinary (unlabeled) session and mint a fresh id so the
     // session is still addressable this run.
     const label = typeof entry.label === 'string' ? entry.label : null;
-    const id = typeof entry.id === 'string' ? entry.id : randomBytes(SESSION_ID_BYTES).toString('hex');
+    const id = typeof entry.id === 'string' ? entry.id
+      : sessions.get(entry.tokenHash)?.id ?? randomBytes(SESSION_ID_BYTES).toString('hex');
     sessions.set(entry.tokenHash, { expiresAt: entry.expiresAt, label, id });
   }
   sessionsFileStamp = stamp;
@@ -338,16 +336,26 @@ export const listSessions = async () => {
   return list;
 };
 
-// Revoke exactly one session by its opaque id — e.g. the agent's loopback
-// credential — without touching any other live session (unlike
-// `revokeSession`/`revokeAllSessions`, this does not kick connected sockets:
-// the sessions this addresses are non-interactive API credentials, not
-// browser tabs). Returns whether a matching session was found.
+const persistTargetedRevocation = async (revoked) => {
+  if (!revoked.size) return 0;
+  for (const tokenHash of revoked.keys()) sessions.delete(tokenHash);
+  try {
+    await writeSessions();
+  } catch (err) {
+    // Restore the entries so a retry can persist the revoke and close sockets.
+    for (const [tokenHash, entry] of revoked) sessions.set(tokenHash, entry);
+    throw err;
+  }
+  authEvents.emit('sessions:revoked', [...revoked.values()].map(({ id }) => id));
+  return revoked.size;
+};
+
+// Revoke exactly one session by its opaque id. Returns whether a matching
+// session was found.
 export const revokeSessionById = (id) => queueSessionMutation(async () => {
   for (const [tokenHash, entry] of sessions) {
     if (entry.id !== id) continue;
-    sessions.delete(tokenHash);
-    await writeSessions();
+    await persistTargetedRevocation(new Map([[tokenHash, entry]]));
     return true;
   }
   return false;
@@ -355,17 +363,14 @@ export const revokeSessionById = (id) => queueSessionMutation(async () => {
 
 // Revoke every session carrying `label` except the one addressed by `keepId`.
 // The local agent key (services/agent/agentKey.js) keeps exactly one live session:
-// a rotation mints the replacement first, then drops the rest here. Like
-// revokeSessionById, no socket kick — these are non-interactive credentials.
+// a rotation mints the replacement first, then drops the rest here.
 export const revokeSessionsByLabel = (label, { keepId = null } = {}) => queueSessionMutation(async () => {
-  let removed = 0;
+  const revoked = new Map();
   for (const [tokenHash, entry] of sessions) {
     if (entry.label !== label || entry.id === keepId) continue;
-    sessions.delete(tokenHash);
-    removed += 1;
+    revoked.set(tokenHash, entry);
   }
-  if (removed) await writeSessions();
-  return removed;
+  return persistTargetedRevocation(revoked);
 });
 
 // The live session a plaintext token addresses — `{ id, label, expiresAt }` —
