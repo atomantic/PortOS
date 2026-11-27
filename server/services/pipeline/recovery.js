@@ -1,3 +1,5 @@
+import { getSyncBaseHash, isBaseHashPersistBlocked } from '../../lib/conflictJournal.js';
+import { resolveEffectiveCategories } from '../../lib/instanceSyncCategories.js';
 import { listAllIssues, listIssues, updateIssue, updateStageWithLatest, TEXT_STAGE_IDS } from './issues.js';
 import { listSeries, updateSeries } from './series.js';
 
@@ -50,10 +52,10 @@ export async function recoverStuckAutoRuns() {
 }
 
 function episodeVideoRecoveryPatch(project) {
-  if (!project) {
+  if (project?.peerReplica) return null;
+  if (!project || project.deleted) {
     return { status: 'error', errorMessage: 'The linked Creative Director project was not found. Restart the episode render.' };
   }
-  if (project.peerReplica) return null;
   if (project.status === 'complete') return { status: 'ready', errorMessage: '' };
   // Stop parks legacy CD projects as paused and records the reason. A plain
   // Pause remains resumable and should keep its current stage state.
@@ -63,16 +65,31 @@ function episodeVideoRecoveryPatch(project) {
   return null;
 }
 
+async function hasPipelineFederation() {
+  const { getPeers } = await import('../instances.js');
+  return (await getPeers()).some((peer) => resolveEffectiveCategories(peer, { masterSwitch: false }).pipeline);
+}
+
 async function recoverEpisodeVideos(issues) {
   const pending = issues.filter((issue) => issue.stages.episodeVideo.status === 'generating');
   if (!pending.length) return 0;
   const projectIds = [...new Set(pending.map((issue) => issue.stages.episodeVideo.cdProjectId).filter(Boolean))];
   const { getProjectsByIds } = await import('../creativeDirector/local.js');
-  const projects = new Map((await getProjectsByIds(projectIds)).map((project) => [project.id, project]));
+  const projects = new Map((await getProjectsByIds(projectIds, { includeDeleted: true }))
+    .map((project) => [project.id, project]));
+  let pipelineFederation;
   let recovered = 0;
   for (const issue of pending) {
     const snapshot = issue.stages.episodeVideo;
     const project = projects.get(snapshot.cdProjectId);
+    if (!project) {
+      // Issues and CD projects replicate independently. A shared issue may
+      // point to a healthy project on a peer, even if a crash lost the sync
+      // base before it flushed. A local project tombstone is direct evidence.
+      if (issue.origin || await getSyncBaseHash('issue', issue.id) || await isBaseHashPersistBlocked()) continue;
+      pipelineFederation ??= hasPipelineFederation();
+      if (await pipelineFederation) continue;
+    }
     const patch = episodeVideoRecoveryPatch(project);
     if (!patch) continue;
     await updateStageWithLatest(issue.id, 'episodeVideo', (current) => {

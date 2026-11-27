@@ -12,6 +12,7 @@ tryReadFile: vi.fn().mockResolvedValue(null),
   ensureDir: vi.fn().mockResolvedValue(undefined),
   atomicWrite: vi.fn(async (path, data) => { fileStore.set(path, data); }),
   readJSONFile: vi.fn(async (path, fallback) => (fileStore.has(path) ? fileStore.get(path) : fallback)),
+  readJSONFileStrict: vi.fn(async (path, fallback) => ({ ok: true, value: fileStore.get(path) ?? fallback })),
 }));
 
 let uuidCounter = 0;
@@ -20,7 +21,7 @@ vi.mock('crypto', async () => {
   return { ...actual, randomUUID: () => `uuid-${++uuidCounter}` };
 });
 
-vi.mock('../instances.js', () => mockNoPeers());
+vi.mock('../instances.js', () => mockNoPeers({}, { getPeers: vi.fn(async () => []) }));
 vi.mock('../instanceIdentity.js', () => ({
   getInstanceId: async () => 'instance-example',
   UNKNOWN_INSTANCE_ID: 'unknown',
@@ -62,6 +63,8 @@ vi.mock('../settings.js', () => ({
   getSettings: vi.fn(async () => ({})),
 }));
 
+const { __resetBaseHashCacheForTests, getSyncBaseHash, setSyncBaseHash } = await import('../../lib/conflictJournal.js');
+const { getPeers } = await import('../instances.js');
 const svc = await import('./episodeVideo.js');
 const issuesSvc = await import('./issues.js');
 const { recoverStuckGeneratingStages } = await import('./recovery.js');
@@ -464,6 +467,7 @@ describe('pipeline episodeVideo helper', () => {
 describe('episode video boot recovery', () => {
   beforeEach(() => {
     fileStore.clear();
+    __resetBaseHashCacheForTests();
     vi.clearAllMocks();
   });
 
@@ -473,6 +477,7 @@ describe('episode video boot recovery', () => {
     ['stopped', { status: 'paused', failureReason: 'Stopped by user' }, 'error', 'Stopped by user'],
     ['missing', null, 'error', 'The linked Creative Director project was not found. Restart the episode render.'],
     ['rendering', { status: 'rendering' }, 'generating', ''],
+    ['stitching', { status: 'stitching' }, 'generating', ''],
     ['paused', { status: 'paused' }, 'generating', ''],
     ['replicated', { status: 'failed', peerReplica: true }, 'generating', ''],
   ])('reconciles a %s project and leaves subsequent recovery idempotent', async (_, project, status, errorMessage) => {
@@ -485,6 +490,45 @@ describe('episode video boot recovery', () => {
     const { stages } = await issuesSvc.getIssue(issue.id);
     expect(stages.episodeVideo).toMatchObject({ status, cdProjectId, errorMessage });
     if (status !== 'generating') expect(await recoverStuckGeneratingStages()).toBe(0);
+  });
+
+  it('leaves a replicated episode active when its project exists only on a peer', async () => {
+    const { series } = await seedSeriesAndIssue();
+    const issueId = 'iss-peer-episode';
+    const cdProjectId = 'cd-peer-project';
+    const stages = { episodeVideo: { status: 'generating', cdProjectId } };
+    await issuesSvc.mergeIssuesFromSync([{ id: issueId, seriesId: series.id, title: 'Peer episode', stages }], {
+      source: { via: 'sync', peerId: 'instance-peer' },
+    });
+    expect(await getSyncBaseHash('issue', issueId)).toBeTruthy();
+    __resetBaseHashCacheForTests();
+    const before = await issuesSvc.getIssue(issueId);
+
+    expect(await recoverStuckGeneratingStages()).toBe(0);
+    expect(await issuesSvc.getIssue(issueId)).toEqual(before);
+  });
+
+  it('keeps an unclassified missing link when pipeline sync is configured', async () => {
+    const { issue } = await seedSeriesAndIssue();
+    const cdProjectId = 'cd-peer-project';
+    await issuesSvc.updateStage(issue.id, 'episodeVideo', { status: 'generating', cdProjectId });
+    getPeers.mockResolvedValueOnce([{ syncCategories: { pipeline: true } }]);
+
+    expect(await recoverStuckGeneratingStages()).toBe(0);
+    const { stages } = await issuesSvc.getIssue(issue.id);
+    expect(stages.episodeVideo).toMatchObject({ status: 'generating', cdProjectId, errorMessage: '' });
+  });
+
+  it('uses a local project tombstone as evidence even when the issue is shared', async () => {
+    const { issue } = await seedSeriesAndIssue();
+    const cdProjectId = 'cd-deleted-project';
+    await issuesSvc.updateStage(issue.id, 'episodeVideo', { status: 'generating', cdProjectId });
+    await setSyncBaseHash('issue', issue.id, 'shared-issue-hash');
+    getProjectsByIds.mockResolvedValueOnce([{ id: cdProjectId, deleted: true }]);
+
+    expect(await recoverStuckGeneratingStages()).toBe(1);
+    const { stages } = await issuesSvc.getIssue(issue.id);
+    expect(stages.episodeVideo).toMatchObject({ status: 'error', cdProjectId });
   });
 
   it('does not treat an unsuccessful project read as confirmed absence', async () => {
@@ -505,7 +549,7 @@ describe('episode video boot recovery', () => {
     getProjectsByIds.mockReturnValueOnce(lookup.promise);
 
     const recovery = recoverStuckGeneratingStages();
-    await vi.waitFor(() => expect(getProjectsByIds).toHaveBeenCalledWith(['cd-old']));
+    await vi.waitFor(() => expect(getProjectsByIds).toHaveBeenCalledWith(['cd-old'], { includeDeleted: true }));
     await issuesSvc.updateStage(issue.id, 'episodeVideo', { status: 'generating', cdProjectId: 'cd-new' });
     lookup.resolve([{ id: 'cd-old', status: 'failed' }]);
 
