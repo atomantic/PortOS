@@ -20,10 +20,12 @@ pattern jsxDollar() {
   JsxText() as $text where { $text <: r"(?s).*\$$" }
 }
 
+// Test immediate siblings in one scan. Check the dollar marker before searching
+// the expression subtree for a wrapped toFixed call.
 pattern jsxChildren() {
-  or {
-    [..., JsxExpressionChild(expression = fixedCall()), jsxPercent(), ...],
-    [..., jsxDollar(), JsxExpressionChild(expression = contains fixedCall()), ...]
+  some or {
+    and { JsxExpressionChild(expression = fixedCall()), before jsxPercent() },
+    and { after jsxDollar(), JsxExpressionChild(expression = contains fixedCall()) }
   }
 }
 
@@ -43,9 +45,9 @@ or {
         JsTemplateExpression(elements = [templatePercent(), ...])
       }
     },
-    JsTemplateExpression(elements = or {
-      [..., JsTemplateElement(expression = fixedCall()), templatePercent(), ...],
-      [..., templateDollar(), JsTemplateElement(expression = contains fixedCall()), ...]
+    JsTemplateExpression(elements = some or {
+      and { JsTemplateElement(expression = fixedCall()), before templatePercent() },
+      and { after templateDollar(), JsTemplateElement(expression = contains fixedCall()) }
     }),
     JsxElement(elements = jsxChildren()),
     JsxFragment(elements = jsxChildren())

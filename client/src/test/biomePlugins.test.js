@@ -21,13 +21,16 @@ it('lints browser bindings, view timers, raw formats, and bare click targets', (
       'setInterval(update, 100);',
       'window.setInterval?.(update, 100);',
       "window['setInterval'](update, 100);",
+      'findDOMNode(element);',
       'amount.toLocaleString();',
       'amount?.toLocaleString?.();',
       '`${amount.toFixed(1)}% CPU`;',
       '`Cost: $${amount.toFixed(2)}`;',
+      '`Cost: $${fee}, $${Number(amount.toFixed(2))}`;',
       "amount.toFixed(1) + '%';",
       '<span>{amount?.toFixed(0)}% CPU</span>;',
       '<b>Cost: ${amount.toFixed(2)}</b>;',
+      '<b>Cost: ${fee}<i />Fee: ${Number(amount.toFixed(2))}</b>;',
       '<>Rate: {amount.toFixed(1)}%</>;',
     ];
 
@@ -39,6 +42,9 @@ it('lints browser bindings, view timers, raw formats, and bare click targets', (
       'const timerId = setTimeout(update, 100);',
       'formatPercent(amount);',
       '`${amount.toFixed(1)}s`;',
+      '`Cost: $${fee}${amount.toFixed(2)}`;',
+      '<>{amount.toFixed(1)}<b />%</>;',
+      '<>Cost: ${fee}{amount.toFixed(2)}</>;',
       '"const fetch = x; setInterval(update, 100); amount.toLocaleString();";',
       "'<span>{amount.toFixed(1)}%</span>';",
       '`const fetch = x; setInterval(update, 100); amount.toLocaleString();`;',
@@ -51,11 +57,14 @@ it('lints browser bindings, view timers, raw formats, and bare click targets', (
     const fixtureDir = join(root, 'src', 'components');
     mkdirSync(fixtureDir, { recursive: true });
     writeFileSync(join(fixtureDir, 'probe.jsx'), source.join('\n'));
+    for (const extension of ['js', 'jsx']) {
+      writeFileSync(join(fixtureDir, `probe.test.${extension}`), 'findDOMNode(element);\n');
+    }
 
     const biome = join(CLIENT_ROOT, 'node_modules', '@biomejs', 'biome', 'bin', 'biome');
     const result = spawnSync(process.execPath, [
       biome, 'lint', '--only=plugin', '--only=lint/a11y/useKeyWithClickEvents',
-      '--reporter=json', 'src/components/probe.jsx',
+      '--reporter=json', 'src/components',
     ], { cwd: root, encoding: 'utf8' });
 
     expect(result.error).toBeUndefined();

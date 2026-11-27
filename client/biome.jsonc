@@ -221,7 +221,10 @@
   // Restrict application conventions to production source, as the retired
   // Vitest guards did. The formatter wrapper owns the locale-specific calls.
   "plugins": [
-    "./lint-react-legacy-apis.grit",
+    {
+      "path": "./lint-react-legacy-apis.grit",
+      "includes": ["src/**", "!src/**/*.test.js", "!src/**/*.test.jsx"]
+    },
     {
       "path": "./lint-no-global-shadow.grit",
       "includes": ["src/**", "!src/**/*.test.js", "!src/**/*.test.jsx"]
