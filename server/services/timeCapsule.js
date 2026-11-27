@@ -297,84 +297,91 @@ function stripGenomeFromSnapshot(snapshot) {
   };
 }
 
-/**
- * Strip genome.json and genetic marker fields from all existing Time Capsule snapshots
- * and update snapshots/index.json atomically under the shared backup lease and write queue.
- */
-export async function stripGenomeFromSnapshots() {
-  return withBackupAssetPublication(() => queueIndexWrite(async () => {
-    let entries;
-    try {
-      entries = await readdir(SNAPSHOTS_DIR);
-    } catch (error) {
-      if (error.code === 'ENOENT') return { updated: 0 };
-      throw error;
-    }
+async function scrubSnapshotFiles() {
+  let entries;
+  try {
+    entries = await readdir(SNAPSHOTS_DIR);
+  } catch (error) {
+    if (error.code === 'ENOENT') return { updated: 0 };
+    throw error;
+  }
 
-    const snapshotFiles = entries.filter(name => name.endsWith('.json') && name !== 'index.json');
-    const loaded = [];
-    for (const name of snapshotFiles) {
-      const filePath = join(SNAPSHOTS_DIR, name);
-      const { ok, value } = await readJSONFileStrict(filePath, null, { logError: false });
-      if (ok && value === null) continue;
-      if (!ok || !isPlainObject(value)) throw unreadableStoreError('data/digital-twin/snapshots');
-      loaded.push({ filePath, parsed: value });
-    }
+  const snapshotFiles = entries.filter(name => name.endsWith('.json') && name !== 'index.json');
+  const loaded = [];
+  for (const name of snapshotFiles) {
+    const filePath = join(SNAPSHOTS_DIR, name);
+    const { ok, value } = await readJSONFileStrict(filePath, null, { logError: false });
+    if (ok && value === null) continue;
+    if (!ok || !isPlainObject(value)) throw unreadableStoreError('data/digital-twin/snapshots');
+    loaded.push({ filePath, parsed: value });
+  }
 
-    const updatedSnapshots = [];
-    const updatedMetaById = new Map();
-    const allMetas = [];
+  const updatedSnapshots = [];
+  const updatedMetaById = new Map();
+  const allMetas = [];
 
-    for (const { filePath, parsed } of loaded) {
-      const { changed, snapshot } = stripGenomeFromSnapshot(parsed);
-      if (changed) {
-        updatedSnapshots.push({ filePath, snapshot });
-        const meta = indexEntryFromSnapshotFile(snapshot);
-        if (meta) updatedMetaById.set(meta.id, meta);
-      }
+  for (const { filePath, parsed } of loaded) {
+    const { changed, snapshot } = stripGenomeFromSnapshot(parsed);
+    if (changed) {
+      updatedSnapshots.push({ filePath, snapshot });
       const meta = indexEntryFromSnapshotFile(snapshot);
-      if (meta) allMetas.push(meta);
+      if (meta) updatedMetaById.set(meta.id, meta);
     }
+    const meta = indexEntryFromSnapshotFile(snapshot);
+    if (meta) allMetas.push(meta);
+  }
 
-    for (const { filePath, snapshot } of updatedSnapshots) {
-      await atomicWrite(filePath, snapshot);
-    }
+  for (const { filePath, snapshot } of updatedSnapshots) {
+    await atomicWrite(filePath, snapshot);
+  }
 
-    const { ok: indexOk, value: indexValue } = await readJSONFileStrict(INDEX_FILE, null, { logError: false });
-    if (indexOk && isUsableIndex(indexValue)) {
-      const metaById = new Map(allMetas.map(meta => [meta.id, meta]));
-      let indexChanged = false;
-      const nextSnapshots = indexValue.snapshots.map(entry => {
-        if (entry && metaById.has(entry.id)) {
-          const diskMeta = metaById.get(entry.id);
-          const staleIndex = updatedMetaById.has(entry.id)
-            || entry.summary?.genomeMarkers !== diskMeta.summary?.genomeMarkers
-            || entry.dataHash !== diskMeta.dataHash
-            || entry.sizeBytes !== diskMeta.sizeBytes;
-          if (staleIndex) {
-            indexChanged = true;
-            return diskMeta;
-          }
-          return entry;
-        }
-        if (isPlainObject(entry?.summary) && entry.summary.genomeMarkers !== 0) {
+  const { ok: indexOk, value: indexValue } = await readJSONFileStrict(INDEX_FILE, null, { logError: false });
+  if (indexOk && isUsableIndex(indexValue)) {
+    const metaById = new Map(allMetas.map(meta => [meta.id, meta]));
+    let indexChanged = false;
+    const nextSnapshots = indexValue.snapshots.map(entry => {
+      if (entry && metaById.has(entry.id)) {
+        const diskMeta = metaById.get(entry.id);
+        const staleIndex = updatedMetaById.has(entry.id)
+          || entry.summary?.genomeMarkers !== diskMeta.summary?.genomeMarkers
+          || entry.dataHash !== diskMeta.dataHash
+          || entry.sizeBytes !== diskMeta.sizeBytes;
+        if (staleIndex) {
           indexChanged = true;
-          return { ...entry, summary: { ...entry.summary, genomeMarkers: 0 } };
+          return diskMeta;
         }
         return entry;
-      });
-      if (indexChanged) {
-        await saveIndex({ snapshots: nextSnapshots });
       }
-    } else if (updatedSnapshots.length > 0 || !indexOk) {
-      allMetas.sort((a, b) => String(b.createdAt || '').localeCompare(String(a.createdAt || '')));
-      await saveIndex({ snapshots: allMetas });
+      if (isPlainObject(entry?.summary) && entry.summary.genomeMarkers !== 0) {
+        indexChanged = true;
+        return { ...entry, summary: { ...entry.summary, genomeMarkers: 0 } };
+      }
+      return entry;
+    });
+    if (indexChanged) {
+      await saveIndex({ snapshots: nextSnapshots });
     }
+  } else if (updatedSnapshots.length > 0 || !indexOk) {
+    allMetas.sort((a, b) => String(b.createdAt || '').localeCompare(String(a.createdAt || '')));
+    await saveIndex({ snapshots: allMetas });
+  }
 
-    if (updatedSnapshots.length > 0) {
-      console.log(`🧬 Stripped genome data from ${updatedSnapshots.length} Time Capsule snapshot(s)`);
-    }
-    return { updated: updatedSnapshots.length };
+  if (updatedSnapshots.length > 0) {
+    console.log(`🧬 Stripped genome data from ${updatedSnapshots.length} Time Capsule snapshot(s)`);
+  }
+  return { updated: updatedSnapshots.length };
+}
+
+/**
+ * Scrub genome fields and refresh the index under the backup lease and snapshot
+ * write queue. Keep the queue through source removal so the next snapshot
+ * cannot collect the same genome metadata again.
+ */
+export async function stripGenomeFromSnapshots(removeGenomeSource) {
+  return withBackupAssetPublication(() => queueIndexWrite(async () => {
+    const result = await scrubSnapshotFiles();
+    await removeGenomeSource?.();
+    return result;
   }));
 }
 

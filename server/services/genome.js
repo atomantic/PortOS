@@ -455,14 +455,13 @@ export async function deleteGenome() {
       goals.updatedAt = new Date().toISOString();
       return goals;
     }, { localOnly: true });
-    await queueMetaWrite(() => clearCrossDomainNarrative(async () => {
-      await stripGenomeFromSnapshots();
+    await queueMetaWrite(() => clearCrossDomainNarrative(() => stripGenomeFromSnapshots(async () => {
       await unlinkGuarded(RAW_FILE).catch(error => { if (error.code !== 'ENOENT') throw error; });
       genomeRevision++;
       snpIndex = null;
       indexBuiltAt = 0;
       await unlinkGuarded(META_FILE).catch(error => { if (error.code !== 'ENOENT') throw error; });
-    }));
+    })));
   });
   noteReadinessChanged();
   console.log('🧬 Genome data deleted');
