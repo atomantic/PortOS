@@ -12,6 +12,7 @@ import { getBoard, addBoardItem } from './index.js';
 import { prepareBoardRenderParams, renderBoardItem } from './renderItem.js';
 import { CREATIVE_LATITUDE_ADDITION, withCreativeLatitude } from '../../lib/creativeLatitude.js';
 import { promptAddition } from '../../lib/modelInput.js';
+import { pruneFinishedJobs, retainFinishedJob } from './jobRetention.js';
 
 const jobs = new Map();
 const receipts = new Map();
@@ -20,6 +21,10 @@ const epoch = randomUUID();
 // Bound transient deduplication history while retaining every in-flight receipt.
 function remember(key, job) {
   receipts.set(key, job);
+  pruneReceipts();
+}
+
+function pruneReceipts() {
   if (receipts.size <= 1000) return;
   for (const [id, prior] of receipts) {
     if (prior.status !== 'running') receipts.delete(id);
@@ -38,6 +43,13 @@ function publicJob(job) {
 function update(job, patch) {
   Object.assign(job, patch, { revision: ++revision });
   const payload = publicJob(job);
+  if (job.status !== 'running') {
+    // Deliver the exact prompt to the open panel without caching it in jobs or receipts.
+    delete job.sentInput;
+    job.finishedAt = new Date().toISOString();
+    retainFinishedJob(jobs, job);
+    pruneReceipts();
+  }
   import('../socketIo.js').then(({ emitToOperators }) => emitToOperators('mood-board:generate', payload))
     .catch((err) => console.error(`❌ Mood board generation progress failed: ${err.message}`));
 }
@@ -128,11 +140,15 @@ function launch(job) {
   return publicJob(job);
 }
 
-export function getGenerateJob(boardId) { return publicJob(jobs.get(boardId)); }
+export function getGenerateJob(boardId) {
+  pruneFinishedJobs(jobs);
+  return publicJob(jobs.get(boardId));
+}
 
 export async function startGenerateJob(boardId, input) {
   // Claim synchronously before the first await: rapid clicks and separate tabs
   // join the same run. Re-delivery of the same request also joins a finished run.
+  pruneFinishedJobs(jobs);
   const key = `${boardId}:${input.requestId}`;
   const existing = jobs.get(boardId);
   const receipt = receipts.get(key);

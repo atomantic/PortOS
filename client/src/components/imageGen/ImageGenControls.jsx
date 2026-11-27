@@ -9,39 +9,15 @@
 // resolution; external swaps guidance for cfgScale; local shows guidance + quantize.
 
 import { useId } from 'react';
-import { sortByLabel } from '../../lib/sortByLabel.js';
 import { Dice5 } from 'lucide-react';
 import { clampImageEdge, filterResolutions, localImageResolutionBounds, MAX_IMAGE_EDGE, MAX_IMAGE_PIXELS } from '../../lib/imageGenResolutions';
 import { randomSeed } from '../../lib/genUtils';
 import { RUNNER_FAMILIES } from '../../lib/runnerFamilies';
-import { IMAGE_GEN_MODE, IMAGE_RUNTIME_READINESS, falImageModelGroups, imageGenReadiness, isCloudCliMode } from '../../lib/imageGenBackends';
-import { isSelfServeRuntimeRemedy } from './RuntimeRemedyModals';
+import { IMAGE_GEN_MODE, isCloudCliMode } from '../../lib/imageGenBackends';
 import { formatCount } from '../../utils/formatters';
-import ModelDownloadBadge, { deriveSizeEstimate } from '../media/ModelDownloadBadge';
 import ResolutionField from '../media/ResolutionField';
 import { FormField } from '../ui/FormField';
-import ListLoadError from '../ui/ListLoadError';
-
-function CloudModelOptions({ models, editing = false }) {
-  const option = (model) => {
-    const id = typeof model === 'string' ? model : model.id;
-    const label = typeof model === 'string' ? model : (model.label || model.id);
-    return <option key={id} value={id}>{label}</option>;
-  };
-  const featured = models.filter((model) => typeof model !== 'string' && model.featured);
-  if (!featured.length) return models.map(option);
-  if (editing) {
-    return falImageModelGroups(models.filter((model) => typeof model !== 'string'), { editing: true })
-      .map((group) => <optgroup key={group.label} label={group.label}>{group.models.map(option)}</optgroup>);
-  }
-  const rest = models.filter((model) => typeof model === 'string' || !model.featured);
-  return (
-    <>
-      <optgroup label="Featured">{featured.map(option)}</optgroup>
-      <optgroup label="All image models">{rest.map(option)}</optgroup>
-    </>
-  );
-}
+import ImageGenModelSection from './ImageGenModelSection';
 
 const QUANTIZE_OPTIONS = [
   { value: '3', label: '3-bit' },
@@ -113,19 +89,11 @@ export default function ImageGenControls({
   // Cloud-CLI backends (codex, grok) pick model/steps/seed internally — only
   // resolution + style fields apply, so the local-only knobs are hidden.
   const isCloudCli = isCloudCliMode(mode);
-  const showCloudModel = !!onCloudModelChange && cloudModels.length > 0;
 
   // A peer chooses its own model; the retained local selection cannot constrain it.
   const currentModel = remoteTargetActive ? null : models.find((m) => m.id === modelId);
   const isFlux2 = currentModel?.runner === RUNNER_FAMILIES.FLUX2;
   const isFlux3 = isLocal && currentModel?.runner === 'flux3';
-  // Only a verdict for THIS model counts: the page re-probes on every model
-  // change, and a stale answer for the previous pick must not relabel this one.
-  const runtimeIssue = runtimeStatus && runtimeStatus.modelId === modelId
-    && imageGenReadiness(runtimeStatus) === IMAGE_RUNTIME_READINESS.UNAVAILABLE
-    ? runtimeStatus.reason || 'The local runtime failed its check.' : null;
-  const runtimeRepair = runtimeIssue && onRuntimeRemedy && isSelfServeRuntimeRemedy(runtimeStatus.remedy?.kind)
-    ? runtimeStatus.remedy : null;
   const isMoss = isLocal && currentModel?.runner === 'moss-swift';
   const resolutionBounds = isLocal ? localImageResolutionBounds(currentModel?.runner) : undefined;
 
@@ -139,61 +107,30 @@ export default function ImageGenControls({
 
   return (
     <div className={className}>
-      {showModel && isLocal && modelsState === 'error' && (
-        <ListLoadError className="col-span-2 sm:col-span-3" what="the local model catalog" error={modelsError} onRetry={onRetryModels} />
-      )}
-      {showModel && isLocal && modelsState === 'ready' && models.length === 0 && (
-        <p role="status" className="col-span-2 sm:col-span-3 text-xs text-port-warning">
-          No local image models are compatible with this machine.
-        </p>
-      )}
-      {showModel && isLocal && models.length > 0 && (
-        <FormField label="Model" labelClassName="block text-xs font-medium text-gray-400 mb-1">
-          <select
-            value={modelId || ''}
-            onChange={(e) => onModelChange?.(e.target.value)}
-            disabled={disabled}
-            className={inputCls}
-          >
-            {sortByLabel(models).map((m) => <option key={m.id} value={m.id}>{m.name}</option>)}
-          </select>
-          {isFlux3 && (
-            <p className="mt-2 text-xs text-gray-400">
-              {currentModel.disclosure} <a href={currentModel.licenseUrl} target="_blank" rel="noopener noreferrer" className="text-port-accent underline">Read the FLUX Kommunity License</a>
-            </p>
-          )}
-          {onModelDownload && modelStatus && (
-            <ModelDownloadBadge
-              status={modelStatus}
-              onDownload={() => onModelDownload(modelId)}
-              onCancel={onModelDownloadCancel}
-              estimateLabel={deriveSizeEstimate(currentModel?.name)}
-              runtimeIssue={runtimeIssue}
-              onRepairRuntime={runtimeRepair ? () => onRuntimeRemedy(runtimeRepair.kind) : undefined}
-              repairLabel={runtimeRepair?.label}
-            />
-          )}
-        </FormField>
-      )}
-
-      {/* The cloud CLI's own model, overridable per queue item. Blank = inherit
-          the Settings default, so clearing the select never pins an empty id —
-          the server treats a blank `cloudModel` as "use the saved value". */}
-      {showCloudModel && (
-        <FormField label={cloudModelLabel} labelClassName="block text-xs font-medium text-gray-400 mb-1">
-          <select
-            value={cloudModel}
-            onChange={(e) => onCloudModelChange(e.target.value)}
-            disabled={disabled}
-            className={inputCls}
-          >
-            <option value="">
-              {cloudModelDefaultLabel ? `Settings default (${cloudModelDefaultLabel})` : 'Settings default'}
-            </option>
-            <CloudModelOptions models={cloudModels} editing={cloudModelEditing} />
-          </select>
-        </FormField>
-      )}
+      <ImageGenModelSection
+        mode={mode}
+        models={models}
+        modelsState={modelsState}
+        modelsError={modelsError}
+        onRetryModels={onRetryModels}
+        modelId={modelId}
+        onModelChange={onModelChange}
+        showModel={showModel}
+        currentModel={currentModel}
+        disabled={disabled}
+        inputCls={inputCls}
+        modelStatus={modelStatus}
+        onModelDownload={onModelDownload}
+        onModelDownloadCancel={onModelDownloadCancel}
+        runtimeStatus={runtimeStatus}
+        onRuntimeRemedy={onRuntimeRemedy}
+        cloudModels={cloudModels}
+        cloudModel={cloudModel}
+        onCloudModelChange={onCloudModelChange}
+        cloudModelLabel={cloudModelLabel}
+        cloudModelDefaultLabel={cloudModelDefaultLabel}
+        cloudModelEditing={cloudModelEditing}
+      />
 
       {/* Preset dropdown + arbitrary width/height. The image route accepts ANY
           integer edge in [64, 3840] with total pixels ≤ 8.29M (imageEdgeSchema
@@ -231,7 +168,7 @@ export default function ImageGenControls({
               onChange={(e) => onSeedChange?.(e.target.value)}
               disabled={disabled}
               placeholder="Random"
-              className={`flex-1 ${inputCls}`}
+              className={`min-w-0 flex-1 ${inputCls}`}
             />
             <button
               type="button"

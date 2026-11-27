@@ -6,6 +6,7 @@
 import { Router } from 'express';
 import { z } from 'zod';
 import { asyncHandler, createServiceErrorMapper } from '../lib/errorHandler.js';
+import { BOUNDED_PAGE_DEFAULT_LIMIT, BOUNDED_PAGE_MAX_LIMIT, boundedPaginationQuerySchema, isPaginationRequested, paginateArray } from '../lib/queryValidation.js';
 import { validateRequest } from '../lib/validateRequest.js';
 import { isBaseHashPersistBlocked } from '../lib/conflictJournal.js';
 import * as resolver from '../services/conflictJournalResolver.js';
@@ -25,7 +26,7 @@ const mapServiceError = createServiceErrorMapper(SERVICE_ERROR_STATUS);
 // restores/merges/discards); there is no 'dismissed' state — discard resolves
 // the entry and DELETE hard-removes it. Don't advertise a status the resolver
 // never produces.
-const listQuerySchema = z.object({
+const listQuerySchema = boundedPaginationQuerySchema.extend({
   status: z.enum(['pending', 'resolved']).optional(),
 });
 
@@ -49,14 +50,18 @@ const toListEntry = (e) => ({
 });
 
 router.get('/', asyncHandler(async (req, res) => {
-  const { status } = validateRequest(listQuerySchema, req.query ?? {});
+  const query = validateRequest(listQuerySchema, req.query ?? {});
   // #7260: while the sync base-hash file is present-but-unreadable the store is
   // latched — persistence is off and every overwrite journals fail-closed.
   // Surface the degradation so an empty `conflicts` list can't be mistaken for
   // "no conflicts"; the Conflicts tab renders this as a warning banner.
   const degraded = await isBaseHashPersistBlocked();
+  const conflicts = await resolver.listConflicts({ status: query.status ?? null });
+  const page = isPaginationRequested(query)
+    ? paginateArray(conflicts, query, { defaultLimit: BOUNDED_PAGE_DEFAULT_LIMIT, maxLimit: BOUNDED_PAGE_MAX_LIMIT })
+    : null;
   res.json({
-    conflicts: (await resolver.listConflicts({ status: status ?? null })).map(toListEntry),
+    ...(page ? { ...page, items: page.items.map(toListEntry) } : { conflicts: conflicts.map(toListEntry) }),
     conflictDetection: degraded
       ? { degraded: true, reason: 'sync_base_hashes.json is present but unreadable — repair or delete it and restart' }
       : { degraded: false },

@@ -14,7 +14,7 @@ const resolverMock = {
 };
 vi.mock('../services/conflictJournalResolver.js', () => resolverMock);
 
-// The route's only lib import is the latch flag — doubled so the payload test
+// Double the latch flag so the payload test
 // controls it without depending on a real sync_base_hashes.json on disk.
 const libMock = { isBaseHashPersistBlocked: vi.fn() };
 vi.mock('../lib/conflictJournal.js', () => libMock);
@@ -43,6 +43,19 @@ describe('conflict-journal routes', () => {
     expect(resolverMock.listConflicts).toHaveBeenCalledWith({ status: 'pending' });
     // Healthy store → the degraded flag is present and false.
     expect(res.body.conflictDetection).toEqual({ degraded: false });
+  });
+
+  it('pages the filtered listing and keeps the degradation warning on an empty page', async () => {
+    resolverMock.listConflicts.mockResolvedValue([{ id: 'resolved-entry', status: 'resolved' }]);
+    libMock.isBaseHashPersistBlocked.mockResolvedValue(true);
+    const res = await request(makeApp()).get('/api/conflict-journal?status=resolved&offset=1');
+    expect(res.status).toBe(200);
+    expect(res.body).toMatchObject({
+      items: [], limit: 100, offset: 1, total: 1, conflictDetection: { degraded: true },
+    });
+    expect(res.body).not.toHaveProperty('conflicts');
+    expect(resolverMock.listConflicts).toHaveBeenCalledWith({ status: 'resolved' });
+    expect((await request(makeApp()).get('/api/conflict-journal?offset=-1')).status).toBe(400);
   });
 
   it('GET / returns a compact projection without snapshots or per-field values; GET /:id stays full', async () => {
