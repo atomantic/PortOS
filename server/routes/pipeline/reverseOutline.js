@@ -5,23 +5,14 @@
  */
 
 import { Router } from 'express';
-import { z } from 'zod';
 import { asyncHandler, ServerError } from '../../lib/errorHandler.js';
 import { validateRequest } from '../../lib/validateRequest.js';
+import { manuscriptAnalysisGenerateSchema } from '../../lib/pipelineManuscriptValidation.js';
 import * as seriesSvc from '../../services/pipeline/series.js';
 import * as reverseOutline from '../../services/pipeline/reverseOutline.js';
 import { mapServiceError } from './shared.js';
 
 const router = Router();
-
-// Generation params — provider/model optional (falls through to the active or
-// stage-pinned provider); `force` re-segments even when the manuscript is
-// unchanged. Mirrors the editorial-analyze schema.
-const reverseOutlineGenerateSchema = z.object({
-  providerId: z.string().trim().max(80).optional(),
-  model: z.string().trim().max(200).optional(),
-  force: z.boolean().optional(),
-});
 
 // The stored outline (scenes + plotlines) with a `stale` flag.
 router.get('/series/:id/reverse-outline', asyncHandler(async (req, res) => {
@@ -31,7 +22,7 @@ router.get('/series/:id/reverse-outline', asyncHandler(async (req, res) => {
 
 // (Re)generate — batch over the whole manuscript, progress via SSE.
 router.post('/series/:id/reverse-outline/generate', asyncHandler(async (req, res) => {
-  const body = validateRequest(reverseOutlineGenerateSchema, req.body ?? {});
+  const body = validateRequest(manuscriptAnalysisGenerateSchema, req.body ?? {});
   await seriesSvc.getSeries(req.params.id).catch((err) => { throw mapServiceError(err); });
   const result = reverseOutline.startReverseOutlineRun(req.params.id, body);
   res.json({

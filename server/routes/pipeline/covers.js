@@ -7,10 +7,15 @@
  */
 
 import { Router } from 'express';
-import { z } from 'zod';
 import { asyncHandler } from '../../lib/errorHandler.js';
 import { validateRequest } from '../../lib/validateRequest.js';
-import { pipelinePdfQuerySchema } from '../../lib/pipelineValidation.js';
+import {
+  pipelinePdfQuerySchema,
+  coverRenderSchema,
+  backCoverRenderSchema,
+  volumeCoverConceptsSchema,
+  comicCoverConceptsSchema,
+} from '../../lib/pipelineMediaValidation.js';
 import * as arcPlanner from '../../services/pipeline/arcPlanner.js';
 import {
   renderComicCover,
@@ -18,61 +23,11 @@ import {
   renderVolumeCover,
   renderVolumeBackCover,
 } from '../../services/pipeline/visualStages.js';
-import { COMIC_PAGE_VARIANTS } from '../../services/pipeline/owners.js';
-import { QUEUEABLE_IMAGE_MODES } from '../../services/imageGen/modes.js';
 import { buildComicPdf } from '../../services/pipeline/comicPdf.js';
 import { buildVolumePdf } from '../../services/pipeline/volumePdf.js';
 import { mapServiceError } from './shared.js';
-import { imageEdgeSchema, refineImagePixelCap, PIXEL_CAP_MESSAGE } from '../../lib/sharedSchemas.js';
 
 const router = Router();
-
-// Render-schema factory — every cover/back-cover render route shares the
-// same shape (image-gen knobs + proof/final variant + useProofAsBase i2i),
-// differing only in the script-field name. Four routes × ~16 fields each
-// were a 60-line mirror before this factory; new fields now apply to all
-// four call sites at once. `target` is the proof/final variant; the route
-// param resolves the cover-vs-backCover slot.
-//
-// `seed` mirrors the page/panel render schemas so the shared image-gen
-// drawer flows the same render settings into the cover —
-// enqueueImageJob honors it via options.seed. `useProofAsBase` is honored by
-// local (mflux `--image-path`) and codex (gpt-image-2 image-edit via the
-// CLI's `-i <file>` flag); external SD-API has no i2i wiring and silently
-// drops the init image at the dispatcher.
-const makeCoverRenderSchema = (scriptField) => z.object({
-  [scriptField]: z.string().max(8000).optional(),
-  negativePrompt: z.string().trim().max(2000).optional(),
-  extraStyle: z.string().trim().max(2000).optional(),
-  mode: z.enum(QUEUEABLE_IMAGE_MODES).optional(),
-  modelId: z.string().trim().max(64).optional(),
-  width: imageEdgeSchema,
-  height: imageEdgeSchema,
-  steps: z.number().int().min(1).max(150).optional(),
-  cfgScale: z.number().min(0).max(30).optional(),
-  guidance: z.number().min(0).max(30).optional(),
-  seed: z.number().int().min(0).optional(),
-  target: z.enum(COMIC_PAGE_VARIANTS).optional().default('proof'),
-  useProofAsBase: z.boolean().optional().default(false),
-}).refine(refineImagePixelCap, { message: PIXEL_CAP_MESSAGE, path: ['width'] });
-
-const comicCoverRenderSchema     = makeCoverRenderSchema('coverScript');
-const comicBackCoverRenderSchema = makeCoverRenderSchema('backCoverScript');
-const volumeCoverRenderSchema    = makeCoverRenderSchema('coverScript');
-const volumeBackCoverRenderSchema = makeCoverRenderSchema('backCoverScript');
-
-const volumeCoverConceptsSchema = z.object({
-  commit: z.boolean().optional().default(false),
-  providerOverride: z.string().trim().max(80).optional(),
-  modelOverride: z.string().trim().max(200).optional(),
-});
-
-const comicCoverConceptsSchema = z.object({
-  target: z.enum(['cover', 'backCover', 'both']).optional().default('both'),
-  commit: z.boolean().optional().default(false),
-  providerOverride: z.string().trim().max(80).optional(),
-  modelOverride: z.string().trim().max(200).optional(),
-});
 
 // =====================
 // Volume (season) covers — front + back illustration on the season record.
@@ -108,13 +63,13 @@ const makeCoverRenderHandler = ({ schema, render, buildResponse }) => asyncHandl
 // (Missing series / season surface as PIPELINE_SEASON_NOT_FOUND from
 // enqueueVolumeCoverLike's loadSeasonContext, mapped to 404 by mapServiceError.)
 router.post('/series/:id/seasons/:seasonId/cover/render', makeCoverRenderHandler({
-  schema: volumeCoverRenderSchema,
+  schema: coverRenderSchema,
   render: (req, body) => renderVolumeCover(req.params.id, req.params.seasonId, body),
   buildResponse: ({ result }) => result,
 }));
 
 router.post('/series/:id/seasons/:seasonId/back-cover/render', makeCoverRenderHandler({
-  schema: volumeBackCoverRenderSchema,
+  schema: backCoverRenderSchema,
   render: (req, body) => renderVolumeBackCover(req.params.id, req.params.seasonId, body),
   buildResponse: ({ result }) => result,
 }));
@@ -160,7 +115,7 @@ router.post('/issues/:id/cover-concepts/generate', asyncHandler(async (req, res)
 // "in-flight" thumb without showing the previous render while the new job is
 // running; the filename hook stamps `filename` on completion.
 router.post('/issues/:id/stages/comicPages/cover/render', makeCoverRenderHandler({
-  schema: comicCoverRenderSchema,
+  schema: coverRenderSchema,
   render: (req, body) => renderComicCover(req.params.id, body),
   buildResponse: ({ result }) => ({ ...result, cover: result.stage.cover }),
 }));
@@ -169,7 +124,7 @@ router.post('/issues/:id/stages/comicPages/cover/render', makeCoverRenderHandler
 // differs in the prompt (no masthead, explicit no-text negative) and the
 // persisted slot (`stages.comicPages.backCover.{proofImage|finalImage}`).
 router.post('/issues/:id/stages/comicPages/back-cover/render', makeCoverRenderHandler({
-  schema: comicBackCoverRenderSchema,
+  schema: backCoverRenderSchema,
   render: (req, body) => renderComicBackCover(req.params.id, body),
   buildResponse: ({ result }) => ({ ...result, backCover: result.stage.backCover }),
 }));

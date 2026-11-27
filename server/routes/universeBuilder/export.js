@@ -7,32 +7,15 @@
  */
 
 import { Router } from 'express';
-import { universeVisualProfileSchema } from '../../lib/universeVisualProfileValidation.js';
-import { z } from 'zod';
 import { asyncHandler, failValidation, ServerError } from '../../lib/errorHandler.js';
 import { validateRequest } from '../../lib/validateRequest.js';
+import { markdownImportSchema, markdownUniversePatchSchema } from '../../lib/universeBuilderValidation.js';
 import { parseUniverseMarkdown, universeMarkdownFilename, universeToMarkdown } from '../../lib/universeMarkdown.js';
 import * as svc from '../../services/universeBuilder.js';
 import { findSameNameUniverses } from '../../services/duplicateDetection.js';
-import { canonArrayField, categoriesSchema, influencesSchema, mapServiceError } from './shared.js';
+import { mapServiceError } from './shared.js';
 
 const router = Router();
-
-const markdownImportSchema = z.object({
-  markdown: z.string().trim().min(1).max(10_000_000),
-}).strict();
-const markdownUniversePatchSchema = z.object({
-  name: z.string().trim().min(1).max(svc.NAME_MAX_LENGTH),
-  logline: z.string().trim().max(svc.LOGLINE_MAX).optional(),
-  premise: z.string().trim().max(svc.PREMISE_MAX).optional(),
-  styleNotes: z.string().trim().max(svc.STYLE_NOTES_MAX).optional(),
-  categories: categoriesSchema.optional(),
-  influences: influencesSchema.optional(),
-  visualProfile: universeVisualProfileSchema.nullable().optional(),
-  characters: canonArrayField,
-  places: canonArrayField,
-  objects: canonArrayField,
-}).strict();
 
 const categoryKey = (value) => String(value || '')
   .trim()

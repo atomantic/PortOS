@@ -10,7 +10,6 @@
  * re-exports this module so existing import paths keep working.
  */
 
-import { BIBLE_KEYS } from '../../lib/universeCanon.js';
 import { WORLD_CATEGORIES, WORLD_CATEGORY_DEFAULT_KINDS } from '../../lib/universeWorldCategories.js';
 import { normalizeUniverseVisualProfile } from '../../lib/universeVisualProfile.js';
 import { randomUUID } from 'crypto';
@@ -19,7 +18,29 @@ import { sanitizeBibleList, BIBLE_KIND, BIBLE_FIELD, BIBLE_LIMITS, BIBLE_SOURCE,
 import { sanitizeOrigin } from '../../lib/sharingOrigin.js';
 import { sanitizeSoftDeleteFields } from '../../lib/syncWire.js';
 import {
-  LOGLINE_MAX, PREMISE_MAX, STYLE_NOTES_MAX, INFLUENCE_ENTRY_MAX, INFLUENCES_PER_LIST_MAX, STYLE_REFERENCES_MAX, LOCKABLE_FIELDS,
+  CATEGORY_KINDS,
+  COMPOSITE_PROMPT_MAX,
+  COMPOSITE_SHEETS_MAX,
+  COMPOSITE_SHEET_KINDS,
+  IMAGE_REFS_PER_ENTRY_MAX,
+  IMAGE_REF_FILENAME_MAX,
+  INFLUENCES_PER_LIST_MAX,
+  INFLUENCE_ENTRY_MAX,
+  LOCKABLE_FIELDS,
+  LOGLINE_MAX,
+  MOOD_BOARD_ID_MAX,
+  NAME_MAX_LENGTH,
+  PREMISE_MAX,
+  PROMPT_FRAGMENT_MAX,
+  STARTER_PROMPT_MAX,
+  STYLE_NOTES_MAX,
+  STYLE_REFERENCES_MAX,
+  STYLE_REFERENCE_PROMPT_MAX,
+  STYLE_REFERENCE_TITLE_MAX,
+  VARIATIONS_PER_CATEGORY_MAX,
+  VARIATION_LABEL_MAX,
+  WORLD_CATEGORY_COUNT_MAX,
+  WORLD_CATEGORY_KEY_MAX,
 } from '../../lib/universeBibleLimits.js';
 import { persistedRenderPinFields } from '../../lib/renderTargets.js';
 import { isStr, trimTo } from '../../lib/textUtils.js';
@@ -52,36 +73,36 @@ export const ERR_HAS_LIVE_SERIES = 'UNIVERSE_HAS_LIVE_SERIES';
 // importer is the only caller, and it gets ids from manifests it controls.
 export const UNIVERSE_ID_RE = /^[A-Za-z0-9-]{8,80}$/;
 
-export const NAME_MAX_LENGTH = 100;
 // A render can enqueue up to 5 categories × 50 variations × 20 batchPerVariation
 // = 5000 jobs. Cap at 10k to leave headroom against future bumps to those caps.
 const MAX_RUN_JOB_IDS = 10000;
-// The starter idea is whatever the user wants to write — anything from a
-// one-line pitch to a multi-page treatment. Cap is a sanity ceiling against
-// runaway payloads, not an artificial brevity constraint.
-export const STARTER_PROMPT_MAX = 200_000;
-export const PROMPT_FRAGMENT_MAX = 2000;
-export const COMPOSITE_PROMPT_MAX = 4000;
-export const VARIATION_LABEL_MAX = 120;
-// Narrative bible fields — surfaced into the Pipeline "new series" form so a
-// universe's logline/premise/style notes can seed a production series in one click.
-// Shared limits and lockable-fields list now live in server/lib/universeBibleLimits.js
-// (imported above).
-export { LOGLINE_MAX, PREMISE_MAX, STYLE_NOTES_MAX, INFLUENCE_ENTRY_MAX, INFLUENCES_PER_LIST_MAX, STYLE_REFERENCES_MAX, LOCKABLE_FIELDS };
-// Linked mood board pointer (`mb-<uuid>`, #4188) — generous cap for the id.
-export const MOOD_BOARD_ID_MAX = 80;
-export const VARIATIONS_PER_CATEGORY_MAX = 50;
-export const COMPOSITE_SHEETS_MAX = 50;
-export const COMPOSITE_SHEET_KINDS = Object.freeze([
-  'reference_sheet',
-  'world_pitch_poster',
-]);
-export const WORLD_CATEGORY_KEY_MAX = 64;
-export const WORLD_CATEGORY_COUNT_MAX = 30;
-// Per-entry render history caps reuse the bible's existing limits so a
-// variation/sheet entry can't accrue more refs than canon already allows.
-export const IMAGE_REFS_PER_ENTRY_MAX = BIBLE_LIMITS.IMAGE_REFS_PER_ENTRY_MAX;
-export const IMAGE_REF_FILENAME_MAX = BIBLE_LIMITS.IMAGE_REF_MAX;
+
+export {
+  CATEGORY_KINDS,
+  COMPOSITE_PROMPT_MAX,
+  COMPOSITE_SHEETS_MAX,
+  COMPOSITE_SHEET_KINDS,
+  IMAGE_REFS_PER_ENTRY_MAX,
+  IMAGE_REF_FILENAME_MAX,
+  INFLUENCES_PER_LIST_MAX,
+  INFLUENCE_ENTRY_MAX,
+  LOCKABLE_FIELDS,
+  LOGLINE_MAX,
+  MOOD_BOARD_ID_MAX,
+  NAME_MAX_LENGTH,
+  PREMISE_MAX,
+  PROMPT_FRAGMENT_MAX,
+  STARTER_PROMPT_MAX,
+  STYLE_NOTES_MAX,
+  STYLE_REFERENCES_MAX,
+  STYLE_REFERENCE_PROMPT_MAX,
+  STYLE_REFERENCE_TITLE_MAX,
+  VARIATIONS_PER_CATEGORY_MAX,
+  VARIATION_LABEL_MAX,
+  WORLD_CATEGORY_COUNT_MAX,
+  WORLD_CATEGORY_KEY_MAX,
+};
+
 // `entryRef.kind` discriminator — the kind tag that universeRun job tags carry
 // so the collection hook knows which list to append the rendered filename to.
 export const ENTRY_REF_KIND = Object.freeze({
@@ -89,13 +110,6 @@ export const ENTRY_REF_KIND = Object.freeze({
   SHEET: 'sheet',
   CANON: 'canon',
 });
-
-// Influences — structured token lists that ARE the universe's style + negative
-// prompts. Surfaced in the UI as "Style prompt" (embrace) and "Negative prompt"
-// (avoid) and managed via the draggable-chip editor. Joined verbatim with the
-// per-variation prompt at render-compile time.
-export const STYLE_REFERENCE_TITLE_MAX = 120;
-export const STYLE_REFERENCE_PROMPT_MAX = 4000;
 
 // Human-readable labels for lockable fields. Single source of truth for the
 // LLM prompt builders (refine emits "starter idea", expand emits "STARTER IDEA"
@@ -124,13 +138,7 @@ export const isInfluenceLockField = (key) => INFLUENCE_LOCK_FIELDS.includes(key)
 // owns characters now; any pre-v4 variations are folded into universe.characters[].
 export { WORLD_CATEGORIES, WORLD_CATEGORY_DEFAULT_KINDS };
 
-// Valid values for a category's `kind`. Tagged onto each category so the UI
-// knows which canon trunk to render it under. `other` is the sink for
-// un-classified custom buckets; an "Auto-sort" UI action LLM-classifies them
-// into one of the 3 real kinds.
-export const CATEGORY_KINDS = Object.freeze([...BIBLE_KEYS, 'other']);
 export const DEFAULT_CATEGORY_KIND = 'other';
-
 
 // Resolve a category's kind. Precedence: explicit valid kind on the input wins;
 // otherwise the built-in default map; otherwise DEFAULT_CATEGORY_KIND.

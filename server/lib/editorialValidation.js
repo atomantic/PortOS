@@ -185,3 +185,48 @@ export const pipelineEditorialChecksSettingsSchema = z.object({
   // lib/stagePinPolicy.js.
   overrideStagePins: z.boolean().optional(),
 }).strict();
+
+// Editorial reader-emotion analysis — provider/model optional (falls through
+// to the active or stage-pinned provider); `force` re-analyzes unchanged issues.
+export const editorialAnalyzeSchema = z.object({
+  providerId: z.string().trim().max(80).optional(),
+  model: z.string().trim().max(200).optional(),
+  force: z.boolean().optional(),
+});
+
+// Calibrated LLM issue quality judge (#2167, CWQE Phase 3). Provider/model
+// optional (writer/judge split resolves from the writer stage's judgeProvider by
+// default); `stageId` forces a particular drafted stage; `force` re-judges
+// unchanged content. Runs ONLY from this explicit action (AI-provider policy).
+export const judgeIssueSchema = z.object({
+  stageId: z.enum(['prose', 'comicScript', 'teleplay']).optional(),
+  providerId: z.string().trim().max(80).optional(),
+  model: z.string().trim().max(200).optional(),
+  force: z.boolean().optional(),
+});
+
+// Optional compare-judge provider/model override + Swiss rounds. Provider/model
+// fall through to the compare stage's own config when omitted.
+export const comparativeRankRunSchema = z.object({
+  providerId: z.string().trim().max(80).optional(),
+  model: z.string().trim().max(200).optional(),
+  rounds: z.coerce.number().int().min(1).max(8).optional(),
+});
+
+// Optional free-text observation + provider/model overrides + a per-run
+// readiness-gate override + `force` (re-judge an unchanged foundation).
+export const seriesReviewRunSchema = z.object({
+  feedback: z.string().trim().max(4000).optional(),
+  providerId: z.string().trim().max(80).optional(),
+  model: z.string().trim().max(200).optional(),
+  force: z.boolean().optional(),
+  readinessGate: z.enum([...READINESS_GATES]).optional(),
+});
+
+export const seriesFixRunSchema = z.object({
+  commentIds: z.array(z.string().min(1).max(120)).max(500).optional(),
+  providerId: z.string().trim().max(80).optional(),
+  model: z.string().trim().max(200).optional(),
+});
+
+export const readinessGateSchema = z.object({ readinessGate: z.enum([...READINESS_GATES]) }).strict();

@@ -8,9 +8,18 @@
  */
 
 import { Router } from 'express';
-import { z } from 'zod';
 import { asyncHandler } from '../../lib/errorHandler.js';
 import { validateRequest } from '../../lib/validateRequest.js';
+import {
+  lockParamsSchema,
+  extractCanonSchema,
+  refineCharSchema,
+  castScopeSchema,
+  castIntegrityQuerySchema,
+  setLockSchema,
+  entryPatchSchema,
+  imageRefParamsSchema,
+} from '../../lib/universeBuilderValidation.js';
 import * as canonSvc from '../../services/universeCanon.js';
 import { expandUniverseCharacter } from '../../services/universeCharacterExpand.js';
 import {
@@ -21,17 +30,9 @@ import {
 } from '../../services/universeCastIntegrity.js';
 import { characterAugmentProposeSchema, characterAugmentApplySchema } from '../../lib/characterAugmentValidation.js';
 import { getUniverseCanonUsage, listLinkedSeriesNames } from '../../services/canonUsage.js';
-import { BIBLE_KINDS } from '../../lib/storyBible.js';
-import { mapServiceError, lockParamsSchema } from './shared.js';
+import { mapServiceError } from './shared.js';
 
 const router = Router();
-
-const extractCanonSchema = z.object({
-  corpus: z.string().trim().min(1).max(200_000),
-  kinds: z.array(z.enum(BIBLE_KINDS)).max(BIBLE_KINDS.length).optional(),
-  parallel: z.boolean().optional(),
-  providerOverride: z.string().trim().max(64).optional(),
-});
 
 // Extract characters/places/objects from a prose body into the universe's
 // canon arrays. Same LLM path as the series-side extract — just targeting a
@@ -42,11 +43,6 @@ router.post('/:id/extract-canon', asyncHandler(async (req, res) => {
     .catch((err) => { throw mapServiceError(err); });
   res.json(result);
 }));
-
-const refineCharSchema = z.object({
-  providerId: z.string().trim().max(64).optional(),
-  model: z.string().trim().max(128).optional(),
-});
 
 router.post('/:id/characters/:entryId/refine', asyncHandler(async (req, res) => {
   const body = validateRequest(refineCharSchema, req.body ?? {});
@@ -65,21 +61,6 @@ router.post('/:id/characters/:entryId/expand', asyncHandler(async (req, res) => 
     .catch((err) => { throw mapServiceError(err); });
   res.json(result);
 }));
-
-// ── Cast integrity (#6415) ───────────────────────────────────────────────
-// Character ids the caller wants scoped. Omitted entirely = the whole cast;
-// an explicit `[]` is an empty selection and reviews nobody. The two are
-// deliberately different answers, so the schema must not default it to [].
-const castScopeSchema = z.object({
-  characterIds: z.array(z.string().trim().min(1).max(120)).max(500).optional(),
-  providerId: z.string().trim().max(64).optional(),
-  model: z.string().trim().max(128).optional(),
-});
-
-// DETERMINISTIC integrity report — no provider call, safe on page load. Also
-// returns `reviewScope` (provider / model / batch size) so the UI can name what
-// a semantic review would spend BEFORE the user opts into it.
-const castIntegrityQuerySchema = z.object({ characterIds: z.string().optional() });
 
 router.get('/:id/characters/integrity', asyncHandler(async (req, res) => {
   const { characterIds: characterIdsRaw } = validateRequest(castIntegrityQuerySchema, req.query);
@@ -148,11 +129,6 @@ router.get('/:id/series-names', asyncHandler(async (req, res) => {
   res.json(result);
 }));
 
-// Lock toggle for canon entries. Locked entries are protected from AI rewrite
-// paths (refine, differentiate, re-extract field overwrites).
-const setLockSchema = z.object({
-  locked: z.boolean(),
-});
 router.patch('/:id/canon/:kind/:entryId/lock', asyncHandler(async (req, res) => {
   const { kind } = validateRequest(lockParamsSchema, req.params);
   const body = validateRequest(setLockSchema, req.body ?? {});
@@ -177,11 +153,6 @@ router.patch('/:id/canon/:kind/lock-all', asyncHandler(async (req, res) => {
   res.json(result);
 }));
 
-// Rich canon fields use the same service sanitizer as whole-array PATCHes.
-// Identity comes from the URL and cannot be changed by a field edit.
-const entryPatchSchema = z.record(z.unknown()).refine(patch => !Object.hasOwn(patch, 'id'), {
-  message: 'Canon entry identity cannot be edited',
-});
 router.patch('/:id/canon/:kind/:entryId', asyncHandler(async (req, res) => {
   const { kind } = validateRequest(lockParamsSchema, req.params);
   const patch = validateRequest(entryPatchSchema, req.body);
@@ -202,12 +173,6 @@ router.delete('/:id/canon/:kind/:entryId', asyncHandler(async (req, res) => {
   res.json(result);
 }));
 
-// Remove ONE reference image from a canon entry. PATCH can't do this: the
-// stale-write guard (`preserveImageRefsById`) restores any shorter imageRefs
-// list. The image file stays in the gallery.
-const imageRefParamsSchema = lockParamsSchema.extend({
-  filename: z.string().trim().min(1).max(512),
-});
 router.delete('/:id/canon/:kind/:entryId/image-refs/:filename', asyncHandler(async (req, res) => {
   const { kind, filename } = validateRequest(imageRefParamsSchema, req.params);
   const result = await canonSvc.removeCanonEntryImageRef(req.params.id, kind, req.params.entryId, filename)

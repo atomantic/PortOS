@@ -21,8 +21,7 @@ export {
   locateComment,
 } from './manuscriptComments.js';
 
-// Re-run modes for seedReviewFromFindings; exported so the route's Zod enum shares the source.
-export const REVIEW_RUN_MODES = Object.freeze(['merge', 'fresh']);
+export { REVIEW_RUN_MODES } from '../../lib/pipelineSeriesConfig.js';
 
 // Stable identity for a finding so a re-run doesn't duplicate a still-open comment.
 // `checkId` is part of the key so one anchor flagged by two checks stays two findings

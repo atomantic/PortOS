@@ -10,24 +10,14 @@
  */
 
 import { Router } from 'express';
-import { z } from 'zod';
 import { asyncHandler, ServerError } from '../../lib/errorHandler.js';
 import { validateRequest } from '../../lib/validateRequest.js';
+import { povRewriteSchema } from '../../lib/pipelineManuscriptValidation.js';
 import * as issuesSvc from '../../services/pipeline/issues.js';
 import * as perspectiveRewrite from '../../services/pipeline/perspectiveRewrite.js';
 import { mapServiceError } from './shared.js';
 
 const router = Router();
-
-// Rewrite request — povCharacterId required (a cast id or name); sourceStage
-// optional (defaults to prose → comic script → teleplay); provider/model
-// optional (falls through to the active or stage-pinned provider).
-const povRewriteSchema = z.object({
-  povCharacterId: z.string().trim().min(1).max(120),
-  sourceStage: z.enum(['prose', 'comicScript', 'teleplay']).optional(),
-  providerId: z.string().trim().max(80).optional(),
-  model: z.string().trim().max(200).optional(),
-});
 
 // Stored rewrites + cast (for the picker) + per-rewrite stale flags.
 router.get('/issues/:id/pov-rewrites', asyncHandler(async (req, res) => {
