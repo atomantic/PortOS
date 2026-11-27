@@ -915,8 +915,14 @@ it('keeps document generation and provider inputs out of the render-only browser
 describe('late-bound hubs keep unrelated suites out of browser and DB plans (#17896)', () => {
   const planFor = (source) => buildCiTestPlan([source], realTree());
 
-  it.each(['server/lib/eidoversePort.js', 'server/services/eidoverse.js'])('plans no DB job and no browser suite for %s', (source) => {
-    expect(planFor(source)).toMatchObject({ full: false, db: false, browserFiles: [] });
+  it('plans no DB job or browser suite for the Eidoverse installer', () => {
+    expect(planFor('server/services/eidoverse.js')).toMatchObject({ full: false, db: false, browserFiles: [] });
+  });
+
+  it('selects DB tests for the port used by managed visitor credential restore', () => {
+    expect(planFor('server/lib/eidoversePort.js')).toMatchObject({
+      full: false, db: true, dbLiveRestore: false, browserFiles: [],
+    });
   });
 
   it('plans the DB job but no media or vault browser suite for the catalog sync service', () => {

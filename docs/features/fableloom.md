@@ -14,7 +14,7 @@ Use timed shot plans before scene media production. A reactor preview is a separ
 
 ## Hosted runtime
 
-The private hosted runtime uses version 1.0.0. See the [runtime contract](../../server/services/fableLoom/static-player/runtime-v1.md) for graph and playback semantics, event payloads and conformance cases. The runtime version is independent of the export package schema version.
+The private hosted runtime uses version 1.0.0. See the [runtime contract](../../server/services/fableLoom/runtime-v1.md) for graph and playback semantics, event payloads and conformance cases. The runtime version is independent of the export package schema version.
 
 Host and audience roles have separate transport authority. Live input opens only during an eligible connected decision hold with an offscreen protagonist and speech-safe audio. An enabled interaction window can override protagonist presence. Admission checks the current scene and asset, including actual audio occupancy, and refuses concurrent turns. The turn progresses through idle, listening, thinking and speaking. Stale async work cannot commit after an episode switch, abort or teardown.
 
@@ -36,5 +36,5 @@ The package schema is 1.0.0. The ZIP contains `manifest.json`, `provenance.json`
 
 - `server/services/fableLoom/` owns authoring, hosted sessions, delivery and exports.
 - `server/lib/fableLoomPlayback.js` owns shared playback choices and live-input admission.
-- The export package's runtime contract and optional player live in `server/services/fableLoom/static-player/`.
+- The export contract lives beside the exporter. Optional browser templates live in `server/services/fableLoom/static-player/`.
 - Hosted state, generated assets and authoring records follow the [storage contract](../STORAGE.md). Export scratch and expired jobs are managed separately from authored records.
