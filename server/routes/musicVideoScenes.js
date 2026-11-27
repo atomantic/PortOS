@@ -4,8 +4,28 @@
  * against the remaining routes is unchanged.
  */
 
-import { musicVideoSceneCreateSchema, musicVideoSceneUpdateSchema } from '../lib/musicVideo/musicVideoValidation.js';
-import { musicVideoColorMatchTakePatchSchema, musicVideoContinueShotSchema, musicVideoPoolUseSchema, musicVideoSceneReorderSchema, musicVideoVaryWipesSchema, musicVideoSceneSplitSchema, musicVideoLyricCutSchema, musicVideoSceneStartSchema, musicVideoSceneEndSchema, musicVideoSceneFrameRenderSchema, musicVideoSceneClipRenderSchema, musicVideoTakeInputSchema, musicVideoTakeReviewSchema, musicVideoPerformanceRepairSchema, musicVideoApproveFinalSchema, musicVideoUpgradeSchema, musicVideoTakeSelectSchema, musicVideoTakeMoveSchema } from '../lib/musicVideo/musicVideoRouteValidation.js';
+import {
+  musicVideoApproveFinalSchema,
+  musicVideoColorMatchTakePatchSchema,
+  musicVideoContinueShotSchema,
+  musicVideoLyricCutSchema,
+  musicVideoPerformanceRepairSchema,
+  musicVideoPoolUseSchema,
+  musicVideoSceneClipRenderSchema,
+  musicVideoSceneCreateSchema,
+  musicVideoSceneEndSchema,
+  musicVideoSceneFrameRenderSchema,
+  musicVideoSceneReorderSchema,
+  musicVideoSceneSplitSchema,
+  musicVideoSceneStartSchema,
+  musicVideoSceneUpdateSchema,
+  musicVideoTakeInputSchema,
+  musicVideoTakeMoveSchema,
+  musicVideoTakeReviewSchema,
+  musicVideoTakeSelectSchema,
+  musicVideoUpgradeSchema,
+  musicVideoVaryWipesSchema,
+} from '../lib/musicVideo/routeValidation/scenes.js';
 import { renderShotDownload } from '../services/musicVideo/shotDownload.js';
 import { Router } from 'express';
 import { musicVideoImageTreatmentQuerySchema } from '../lib/musicVideo/musicVideoImageTreatmentValidation.js';

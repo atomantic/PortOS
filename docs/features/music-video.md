@@ -4,7 +4,7 @@ Music Video Studio (`/music-video`) takes a song from setup and analysis through
 art direction, storyboard, proofs, final render and release assets. Start with
 a library track or use **Autonomous** to turn a brief into a song and video.
 The [project schema](../../server/lib/musicVideo/musicVideoValidation.js),
-[request schemas](../../server/lib/musicVideo/musicVideoRouteValidation.js) and
+[request schemas](../../server/lib/musicVideo/routeValidation/) and
 [API router](../../server/routes/musicVideo.js) define supported fields and
 operations. See [agent API access](../AGENT_API_KEY.md) for session setup.
 

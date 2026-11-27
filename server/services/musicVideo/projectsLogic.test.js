@@ -7,7 +7,7 @@ import { productionReviewBasis } from './productionReview.js';
 import { treatmentBasis } from './treatment.js';
 import { canonicalSnapshotChecksum } from '../../lib/snapshotChecksum.js';
 import { musicVideoPrevizSchema, musicVideoSceneCreateSchema } from '../../lib/musicVideo/musicVideoValidation.js';
-import { musicVideoProjectCreateSchema, musicVideoProjectUpdateSchema } from '../../lib/musicVideo/musicVideoRouteValidation.js';
+import { musicVideoProjectCreateSchema, musicVideoProjectUpdateSchema } from '../../lib/musicVideo/routeValidation/project.js';
 import { DEFAULT_NEW_PROJECT_TEMPLATE_EFFECTS } from '../../lib/musicVideo/musicVideoTemplateEffects.js';
 
 const baseProject = () => buildProjectRecord({ name: 'Test MV' }, { id: 'mv-1', now: '2026-01-01T00:00:00.000Z' });

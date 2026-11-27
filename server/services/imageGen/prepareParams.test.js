@@ -44,7 +44,7 @@ const run = (data) => prepareGenerateParams({ data, files: undefined, referenceI
 // Exercises the card's request builder and the backend preparation shared by preview and render.
 it('refines an unselected take with references on or off without replacing the selection', async () => {
   const { buildSceneFrameGenerateBody } = await import('../musicVideo/sceneFrameReferences.js');
-  const { musicVideoSceneFrameRenderSchema } = await import('../../lib/musicVideo/musicVideoRouteValidation.js');
+  const { musicVideoSceneFrameRenderSchema } = await import('../../lib/musicVideo/routeValidation/scenes.js');
   const { PATHS } = await import('../../lib/paths.js');
   mkdirSync(PATHS.images, { recursive: true });
   for (const file of ['candidate.png', 'cast.png', 'panel.png', 'style.png']) writeFileSync(join(PATHS.images, file), 'fixture');

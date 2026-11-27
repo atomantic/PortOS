@@ -9,7 +9,56 @@
  */
 
 import { assertCancelResult } from '../lib/cancelResponse.js';
-import { musicVideoColorMatchMeasureSchema, musicVideoColorMatchReferenceUpdateSchema, musicVideoSongDraftSchema, musicVideoSongActionSchema, musicVideoSongSelectSchema, musicVideoSongFromTrackSchema, musicVideoSongSceneActionSchema, musicVideoMakingOfSelectionSchema, musicVideoAudioLayerUploadQuerySchema } from '../lib/musicVideo/musicVideoRouteValidation.js';
+import {
+  musicVideoAudioLayerUploadQuerySchema,
+  musicVideoAudioTimingApplySchema,
+  musicVideoAudioTimingPreviewSchema,
+  musicVideoCatalogCompletionSchema,
+  musicVideoCodeGenerateSchema,
+  musicVideoColdOpenAudioSchema,
+  musicVideoColorMatchMeasureSchema,
+  musicVideoColorMatchReferenceUpdateSchema,
+  musicVideoCompletionSchema,
+  musicVideoFinishedOutsideSchema,
+  musicVideoHandoffImportSchema,
+  musicVideoLibrarySearchQuerySchema,
+  musicVideoLyricsAlignSchema,
+  musicVideoLyricsImportSchema,
+  musicVideoLyricsImportTrackSchema,
+  musicVideoLyricsVerifySchema,
+  musicVideoMakingOfSelectionSchema,
+  musicVideoManualAnalysisSchema,
+  musicVideoPacingRecutSchema,
+  musicVideoPlanRequestSchema,
+  musicVideoPoolAddSchema,
+  musicVideoPoolDeleteSchema,
+  musicVideoPoolImportSchema,
+  musicVideoPoolMarkSchema,
+  musicVideoPoolSearchQuerySchema,
+  musicVideoProjectCloneSchema,
+  musicVideoProjectCreateSchema,
+  musicVideoProjectListQuerySchema,
+  musicVideoProjectPatchQuerySchema,
+  musicVideoProjectUpdateSchema,
+  musicVideoRenderCleanupSchema,
+  musicVideoRenderPreviewSchema,
+  musicVideoSectionsEditSchema,
+  musicVideoSequenceRenderSchema,
+  musicVideoSequenceTakeSchema,
+  musicVideoSongActionSchema,
+  musicVideoSongDraftSchema,
+  musicVideoSongFromTrackSchema,
+  musicVideoSongPrepareSchema,
+  musicVideoSongSceneActionSchema,
+  musicVideoSongSelectSchema,
+  musicVideoSongStyleSunoSchema,
+  musicVideoTakeInputSchema,
+  musicVideoTranscribeMidiRequestSchema,
+  musicVideoTreatmentApplySchema,
+  musicVideoTreatmentCompileSchema,
+  musicVideoTreatmentSyncShotSheetSchema,
+  musicVideoTreatmentUpdateSchema,
+} from '../lib/musicVideo/routeValidation/project.js';
 import { activeDcp } from '../services/musicVideo/dcp.js';
 import { pipeline } from 'stream/promises';
 import { basename } from 'path';
@@ -19,12 +68,10 @@ import festivalPacketRoutes from './musicVideoFestivalPacket.js';
 import researchSeedRoutes from './musicVideoResearchSeed.js';
 import blenderRoutes from './musicVideoBlender.js';
 import spendRoutes from './musicVideoSpend.js';
-import { musicVideoColdOpenAudioSchema, musicVideoRenderCleanupSchema, musicVideoRenderPreviewSchema, musicVideoSongStyleSunoSchema, musicVideoProjectListQuerySchema, musicVideoFinishedOutsideSchema, musicVideoCompletionSchema, musicVideoPoolMarkSchema, musicVideoPoolSearchQuerySchema, musicVideoProjectPatchQuerySchema, musicVideoPoolDeleteSchema, musicVideoPoolImportSchema, musicVideoLibrarySearchQuerySchema, musicVideoPoolAddSchema, musicVideoCatalogCompletionSchema } from '../lib/musicVideo/musicVideoRouteValidation.js';
 import { finishedOutsideBlocker } from '../lib/musicVideo/musicVideoFinishedOutside.js';
 import { musicVideoCompletionBlocker, musicVideoCompletionOverride } from '../lib/musicVideo/musicVideoCompletion.js';
 import { asyncHandler, ServerError } from '../lib/errorHandler.js';
 import { validateRequest } from '../lib/validateRequest.js';
-import { musicVideoAudioTimingPreviewSchema, musicVideoAudioTimingApplySchema, musicVideoProjectCreateSchema, musicVideoProjectCloneSchema, musicVideoProjectUpdateSchema, musicVideoPacingRecutSchema, musicVideoPlanRequestSchema, musicVideoManualAnalysisSchema, musicVideoSectionsEditSchema, musicVideoTranscribeMidiRequestSchema, musicVideoLyricsImportSchema, musicVideoLyricsImportTrackSchema, musicVideoLyricsAlignSchema, musicVideoLyricsVerifySchema, musicVideoSongPrepareSchema, musicVideoTakeInputSchema, musicVideoHandoffImportSchema, musicVideoTreatmentUpdateSchema, musicVideoTreatmentCompileSchema, musicVideoTreatmentApplySchema, musicVideoTreatmentSyncShotSheetSchema, musicVideoSequenceRenderSchema, musicVideoSequenceTakeSchema, musicVideoCodeGenerateSchema } from '../lib/musicVideo/musicVideoRouteValidation.js';
 import { recordRenderPinFields } from '../lib/sharedSchemas.js';
 import { uploadSingle } from '../lib/multipart.js';
 import { isSupportedMusicUpload, MUSIC_UPLOAD_MAX_BYTES } from '../services/pipeline/musicLibrary.js';
