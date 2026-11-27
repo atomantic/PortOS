@@ -1,3 +1,4 @@
+/** Request schemas for verified MortalLoom recovery downloads and revision-bound restores. */
 import { z } from 'zod';
 
 const revisionId = z.string().regex(/^[a-f0-9]{64}$/);
