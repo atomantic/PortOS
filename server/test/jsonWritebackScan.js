@@ -1,15 +1,8 @@
-import { parse } from '@babel/parser';
 import { posix } from 'node:path';
+import { parseGuardSource } from '../../scripts/lib/guardCorpus.js';
 
-// The wrapper registry and the per-file scan both parse every JSON-reading
-// source; parse each distinct source once (the AST is only ever read).
-const astCache = new Map();
-function parseSource(source) {
-  let ast = astCache.get(source);
-  if (!ast) {
-    ast = parse(source, { sourceType: 'module', tokens: true, attachComment: false });
-    astCache.set(source, ast);
-  }
+function strictAst(ast) {
+  if (ast.errors.length) throw ast.errors[0];
   return ast;
 }
 
@@ -136,14 +129,14 @@ function returnedExpressions(node, expressions = []) {
 }
 
 /** Derive direct returned reads, never follow another wrapper. */
-export function buildJsonReadWrapperRegistry(modules) {
+export function buildJsonReadWrapperRegistry(modules, parseModule = (_module, source) => parseGuardSource(source, { tokens: true })) {
   const registry = new Map();
   for (const [module, source] of modules) {
     // Only exported direct JSON reads or a raw read returned through the JSON
     // parser can supply wrapper descriptors. Escaped identifiers need the AST.
     if (!source.includes('export') || !(source.includes('readJSONFile') || source.includes('\\u')
       || (source.includes('safeJSONParse') && /tryReadFile|readFile/.test(source)))) continue;
-    const ast = parseSource(source);
+    const ast = strictAst(parseModule(module, source));
     const names = helperNames(ast);
     const functions = new Map();
     const constants = new Set();
@@ -214,8 +207,8 @@ export function buildJsonReadWrapperRegistry(modules) {
 }
 
 /** Same-path syntax equality plus one imported wrapper hop; no control-flow proof. */
-export function scanJsonWriteback(source, { module = '', registry = new Map() } = {}) {
-  const ast = parseSource(source);
+export function scanJsonWriteback(source, { module = '', registry = new Map(), parsed = parseGuardSource(source, { tokens: true }) } = {}) {
+  const ast = strictAst(parsed);
   const names = helperNames(ast);
   const wrappers = new Map();
   const importedPaths = new Map();

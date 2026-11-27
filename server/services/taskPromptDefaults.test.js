@@ -1145,7 +1145,7 @@ describe('taskPromptDefaults integrity snapshot', () => {
   // #4685: `glab issue list -F json` is accepted, IGNORED, and answers with the
   // human table at exit 0 (`-F` is `--output-format` there, a different flag from
   // `--output`), and `glab mr list --state <x>` does not exist at all. The tree
-  // guard in server/test/guards/runtime/gitlab.glabFlags.test.js bans both spellings everywhere — including
+  // guard in server/lint-glab-list-flags.grit bans both spellings everywhere — including
   // these bodies, which it used to exempt.
   it('claim-issue-gitlab delegates its mode-specific JSON query to the renderer', () => {
     const current = DEFAULT_TASK_PROMPTS['claim-issue-gitlab'];

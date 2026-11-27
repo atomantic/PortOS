@@ -411,6 +411,10 @@ jobs:
           CI_LINT_FILES: ${{ toJSON(fromJSON(needs.impact.outputs.plan).lint_files) }}
         run: node scripts/run-ci-lint.js
 
+      - name: Verify runtime lint fixtures
+        if: fromJSON(needs.impact.outputs.plan).lint_mode == 'full' || contains(fromJSON(needs.impact.outputs.plan).lint_files, 'scripts/fixtures/biome/runtime-lint.mjs')
+        run: node --test scripts/fixtures/biome/runtime-lint.mjs
+
       # GitHub silently skips a workflow it rejects, so a bad file never fails a
       # check; actionlint is the only pre-merge proof. The pinned version and
       # archive checksum live only in scripts/lib/actionlint.js.

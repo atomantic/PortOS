@@ -1,7 +1,7 @@
 /**
  * The `glab` argv contract. One assertion per claim the module's doc makes —
  * the tree-wide enforcement that nobody re-spells the flag lives in
- * `server/test/guards/runtime/gitlab.glabFlags.test.js`.
+ * `server/lint-glab-list-flags.grit`.
  */
 
 import { describe, it, expect } from 'vitest';

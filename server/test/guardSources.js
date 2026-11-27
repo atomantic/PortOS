@@ -9,7 +9,7 @@
  * cannot change what the next check sees.
  */
 import { join } from 'node:path';
-import { guardCorpus } from '../../scripts/lib/guardCorpus.js';
+import { guardCorpus, parseGuardSource } from '../../scripts/lib/guardCorpus.js';
 import { SERVER_DIR, collectServerSources as walkServerSources } from '../lib/testHelper.js';
 import { blankComments as lexComments, blankLiterals as lexLiterals } from '../lib/sourceScan.js';
 
@@ -34,3 +34,11 @@ export const blankLiterals = (src, { keepLiteralText = false, includeCommentOnly
 export const blankCommentBodies = (src) => views(src).code;
 /** `blankComments(src)` from lib/sourceScan.js: a fresh copy of the once-split lines, which callers may mutate. */
 export const blankComments = (src) => [...guardCorpus().derive('blankComments', src, () => lexComments(src))];
+
+/** Retain ASTs only for files that both runtime AST checks can visit. */
+export function parseRuntimeAst(path, source = guardCorpus().read(path)) {
+  // The wrapper registry gates on JSON reads and the write-back scan gates on writes.
+  // Include escaped identifiers, as both gates do.
+  return /readJSONFile|safeJSONParse|atomicWrite|writeSecureJson|\\u/.test(source)
+    ? guardCorpus().parseAst(path) : parseGuardSource(source);
+}

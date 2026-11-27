@@ -515,7 +515,7 @@ function useGitlabOrigin() {
  * exercises the GitLab→common normalizers.
  *
  * The merged/open split keys off the `--merged` presence flag; open is glab's
- * default. See server/test/guards/runtime/gitlab.glabFlags.test.js for why there is no `--state` pair.
+ * default. See server/lint-glab-list-flags.grit for why there is no `--state` pair.
  */
 function mockGlab({ issues = [], merged = [], open = [] }) {
   execGlabJson.mockImplementation(async (argv) => {
