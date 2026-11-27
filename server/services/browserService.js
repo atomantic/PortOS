@@ -491,7 +491,7 @@ const describeHopDelivery = (hop) => `no remoteIPAddress; fromServiceWorker=${ho
  * Pure + exported so the SSRF-pin decision is unit-testable without a live
  * browser. Returns `{ hops: [{ requestId, url, remoteIPAddress, status,
  * fromServiceWorker, fromDiskCache, fromPrefetchCache,
- * serviceWorkerResponseSource }], finalUrl, mainRequestIds: string[],
+ * serviceWorkerResponseSource }], finalUrl, responseStatus, mainRequestIds: string[],
  * pendingMainRequestIds: string[], pendingMainRequestUrls: string[] }` (the
  * URLs are positional to the pending ids, so a refusal can name the destination
  * without re-parsing the stream). The delivery flags ride along so the gate
@@ -533,6 +533,7 @@ export function pickMainFrameHops(messages, topFrameId = null) {
   const mainRequestUrls = new Map();
   const hops = [];
   let finalUrl = null;
+  let responseStatus = null;
   for (const msg of messages) {
     const p = msg?.params;
     if (!p) continue;
@@ -549,6 +550,7 @@ export function pickMainFrameHops(messages, topFrameId = null) {
         respondedIds.add(p.requestId);
         hops.push(toHop(p.response, p.requestId));
         finalUrl = p.response.url || finalUrl;
+        responseStatus = p.response.status ?? null;
       }
     } else if (msg.method === 'Network.loadingFailed' && mainRequestIds.has(p.requestId)) {
       // ONLY a navigation Chrome CANCELED clears the pending gate. A cancel is
@@ -569,6 +571,7 @@ export function pickMainFrameHops(messages, topFrameId = null) {
   return {
     hops,
     finalUrl,
+    responseStatus,
     mainRequestIds: [...mainRequestIds],
     pendingMainRequestIds,
     pendingMainRequestUrls: pendingMainRequestIds.map((id) => mainRequestUrls.get(id) || '(url unknown)'),
@@ -749,7 +752,7 @@ export function ssrfPinRefusalReason(messages, verifyRemoteIp, _url, topFrameId 
  *
  * The caller does NOT sleep — the settle wait happens HERE, so the DOM has had
  * `settleMs` to render (and every navigation in that window is pinned) by the
- * time this resolves. Returns `{ id, url, title, webSocketDebuggerUrl, evalResult }`.
+ * time this resolves. A DOM read also returns the final document's `responseStatus`.
  */
 export async function navigateToUrlPinned(url, {
   verifyRemoteIp,
@@ -864,8 +867,8 @@ export async function navigateToUrlPinned(url, {
         const bad = ssrfPinRefusalReason(messages, verifyRemoteIp, url, topFrameId);
         if (bad) return finish({ ok: false, reason: bad });
         const evalResult = (msg.error || msg.result?.exceptionDetails) ? null : scrubEphemeralSecretsDeep(msg.result?.result?.value ?? null);
-        const { finalUrl } = pickMainFrameHops(messages, topFrameId);
-        return finish({ ok: true, finalUrl, evalResult });
+        const { finalUrl, responseStatus } = pickMainFrameHops(messages, topFrameId);
+        return finish({ ok: true, finalUrl, responseStatus, evalResult });
       }
       if (!msg.method) return;
       messages.push(msg);
@@ -897,6 +900,7 @@ export async function navigateToUrlPinned(url, {
     title: '',
     webSocketDebuggerUrl: target.webSocketDebuggerUrl,
     evalResult: result.evalResult,
+    ...(evaluateExpression ? { responseStatus: result.responseStatus } : {}),
   };
 }
 
