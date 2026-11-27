@@ -24,24 +24,25 @@ export default function ConfirmModal({ open, onClose, titleId, icon, title, tone
       open={open}
       onClose={onClose}
       size="md"
-      align="none"
+      align="center"
       backdropClassName="bg-black/50"
-      panelClassName="bg-port-card border border-port-border rounded-xl overflow-hidden"
+      panelClassName="bg-port-card border border-port-border rounded-xl overflow-hidden flex flex-col"
       ariaLabelledBy={titleId}
     >
-      <div className="flex items-center justify-between p-4 border-b border-port-border">
+      <div className="flex items-center justify-between shrink-0 p-4 border-b border-port-border">
         <h3 id={titleId} className="font-medium text-white flex items-center gap-2">
           {icon}
           {title}
         </h3>
-        <button onClick={onClose} aria-label="Close" className="text-gray-400 hover:text-white min-h-[44px] min-w-[44px] flex items-center justify-center">×</button>
+        <button type="button" onClick={onClose} aria-label="Close" className="text-gray-400 hover:text-white min-h-[44px] min-w-[44px] flex items-center justify-center">×</button>
       </div>
-      <div className="p-4 space-y-3">{children}</div>
-      <div className="flex justify-end gap-3 p-4 border-t border-port-border">
-        <button onClick={onClose} className="px-4 py-2 text-sm text-gray-400 hover:text-white">
+      <div className="flex-1 min-h-0 overflow-y-auto p-4 space-y-3">{children}</div>
+      <div className="flex justify-end shrink-0 gap-3 p-4 border-t border-port-border">
+        <button type="button" onClick={onClose} className="px-4 py-2 text-sm text-gray-400 hover:text-white">
           Cancel
         </button>
         <button
+          type="button"
           onClick={onConfirm}
           disabled={busy}
           className={`flex items-center gap-2 px-4 py-2 ${confirmCls} text-white rounded-lg text-sm disabled:opacity-50`}
