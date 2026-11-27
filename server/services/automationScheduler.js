@@ -8,6 +8,7 @@
 import { join } from 'path';
 import { v4 as uuidv4 } from '../lib/uuid.js';
 import { PATHS, createCachedStore } from '../lib/fileUtils.js';
+import { createFileWriteQueue } from '../lib/fileWriteQueue.js';
 import * as eventScheduler from './eventScheduler.js';
 import * as agentActivity from './agent/agentActivity.js';
 import { validateScheduleOwner } from './agent/automationScheduleOwner.js';
@@ -19,7 +20,9 @@ const SCHEDULES_FILE = join(PATHS.agentPersonalities, 'schedules.json');
 const store = createCachedStore(SCHEDULES_FILE, { schedules: {} }, { context: 'automation schedules' });
 const loadSchedules = store.load;
 
-// Track active scheduled events
+// Serialize the durable mutation and its timer change together. Restore owns this
+// queue, leaving the store queue available for persisting a restored random roll.
+const queueSchedules = createFileWriteQueue();
 const activeSchedules = new Map();
 // A schedule edit can replace its event while the old handler is still running.
 const scheduleRuns = createSingleFlight();
@@ -30,7 +33,12 @@ export function registerActionExecutor(executor) {
 }
 
 export const invalidateCache = store.invalidateCache;
-export const withLiveRestore = store.withLiveRestore;
+export function withLiveRestore(restore) {
+  return queueSchedules(() => restore(async () => {
+    invalidateCache();
+    await reconcileSchedules();
+  }));
+}
 
 /**
  * Get all schedules
@@ -76,7 +84,11 @@ export async function getScheduleById(id) {
 /**
  * Create a new schedule
  */
-export async function createSchedule(scheduleData) {
+export function createSchedule(scheduleData) {
+  return queueSchedules(() => createScheduleLocked(scheduleData));
+}
+
+async function createScheduleLocked(scheduleData) {
   const id = uuidv4();
   const now = new Date().toISOString();
 
@@ -116,14 +128,16 @@ export async function createSchedule(scheduleData) {
 /**
  * Update an existing schedule
  */
-export async function updateSchedule(id, updates) {
+export function updateSchedule(id, updates) {
+  return queueSchedules(() => updateScheduleLocked(id, updates));
+}
+
+async function updateScheduleLocked(id, updates) {
   let schedule = null;
-  let wasEnabled = false;
   await store.mutate(async (data) => {
     if (!data.schedules[id]) return data;
 
     const { id: _id, createdAt: _createdAt, ...cleanUpdates } = updates;
-    wasEnabled = data.schedules[id].enabled;
 
     schedule = {
       ...data.schedules[id],
@@ -150,16 +164,8 @@ export async function updateSchedule(id, updates) {
 
   if (!schedule) return null;
 
-  // Handle enable/disable
-  if (wasEnabled && !schedule.enabled) {
-    await deactivateSchedule(id);
-  } else if (!wasEnabled && schedule.enabled) {
-    await activateSchedule(id, schedule);
-  } else if (schedule.enabled) {
-    // Schedule config changed, restart it
-    await deactivateSchedule(id);
-    await activateSchedule(id, schedule);
-  }
+  deactivateSchedule(id);
+  if (schedule.enabled) await activateSchedule(id, schedule);
 
   console.log(`📝 Updated schedule: ${schedule.action.type} (${id})`);
   return { id, ...schedule, isActive: activeSchedules.has(id) };
@@ -168,7 +174,11 @@ export async function updateSchedule(id, updates) {
 /**
  * Delete a schedule
  */
-export async function deleteSchedule(id) {
+export function deleteSchedule(id) {
+  return queueSchedules(() => deleteScheduleLocked(id));
+}
+
+async function deleteScheduleLocked(id) {
   let existed = false;
   await store.mutate((data) => {
     if (!data.schedules[id]) return data;
@@ -180,7 +190,7 @@ export async function deleteSchedule(id) {
   if (!existed) return false;
 
   // Deactivate if running
-  await deactivateSchedule(id);
+  deactivateSchedule(id);
 
   console.log(`🗑️ Deleted schedule (${id})`);
   return true;
@@ -197,16 +207,9 @@ export async function toggleSchedule(id, enabled) {
  * Activate a schedule (start the timer)
  */
 async function activateSchedule(id, schedule) {
-  // Don't double-activate
-  if (activeSchedules.has(id) && eventScheduler.getEvent(activeSchedules.get(id))) {
-    return;
-  }
-
   const eventId = `agent-schedule-${id}`;
-
-  const handler = async () => {
-    await scheduleRuns.run(id, () => executeScheduledAction(id));
-  };
+  const registration = { eventId };
+  const handler = () => scheduleRuns.run(id, () => executeScheduledAction(id, registration));
 
   // Build schedule config based on type
   const eventConfig = {
@@ -252,8 +255,18 @@ async function activateSchedule(id, schedule) {
     }
   }
 
+  // Match the inputs that determine the event and its next run. Unchanged timers
+  // retain their countdown even when a snapshot contains a never-run interval.
+  registration.inputs = JSON.stringify([eventConfig.type, eventConfig.cron, eventConfig.timezone,
+    eventConfig.intervalMs, eventConfig.metadata, schedule.schedule.type,
+    schedule.schedule.randomWindow?.minMs, schedule.schedule.randomWindow?.maxMs]);
+  registration.lastRun = schedule.lastRun ?? null;
+  const current = activeSchedules.get(id);
+  if (current?.inputs === registration.inputs && current.lastRun === registration.lastRun && eventScheduler.getEvent(eventId)) return;
+
+  if (current) deactivateSchedule(id);
   eventScheduler.schedule(eventConfig);
-  activeSchedules.set(id, eventId);
+  activeSchedules.set(id, registration);
 
   console.log(`▶️ Activated schedule: ${schedule.action.type} (${id})`);
 }
@@ -261,8 +274,8 @@ async function activateSchedule(id, schedule) {
 /**
  * Deactivate a schedule (stop the timer)
  */
-async function deactivateSchedule(id) {
-  const eventId = activeSchedules.get(id);
+function deactivateSchedule(id) {
+  const eventId = activeSchedules.get(id)?.eventId;
   if (eventId) {
     eventScheduler.cancel(eventId);
     activeSchedules.delete(id);
@@ -273,7 +286,26 @@ async function deactivateSchedule(id) {
 /**
  * Execute a scheduled action
  */
-async function executeScheduledAction(scheduleId) {
+async function executeScheduledAction(scheduleId, registration) {
+  const execution = await queueSchedules(() => {
+    if (activeSchedules.get(scheduleId) === registration) return admitScheduledAction(scheduleId, registration);
+  });
+  if (!execution) return;
+  try {
+    await execution.executor(execution.input);
+  } finally {
+    if (execution.input.schedule.schedule.type === 'random') {
+      await queueSchedules(async () => {
+        if (activeSchedules.get(scheduleId) !== registration) return;
+        deactivateSchedule(scheduleId);
+        const fresh = await getScheduleById(scheduleId);
+        if (fresh?.enabled) await activateSchedule(scheduleId, fresh);
+      });
+    }
+  }
+}
+
+async function admitScheduledAction(scheduleId, registration) {
   const schedule = await getScheduleById(scheduleId);
   if (!schedule || !schedule.enabled) {
     return;
@@ -336,32 +368,23 @@ async function executeScheduledAction(scheduleId) {
     }
   });
 
-  const execution = { scheduleId, schedule, timestamp: now };
-  try {
-    await executor(execution);
-  } finally {
-    // A terminal activity failure must not pin future runs to the old random interval.
-    if (schedule.schedule.type === 'random') {
-      await deactivateSchedule(scheduleId);
-      const freshSchedule = await getScheduleById(scheduleId);
-      if (freshSchedule && freshSchedule.enabled) {
-        await activateSchedule(scheduleId, freshSchedule);
-      }
-    }
-  }
+  registration.lastRun = now;
+  return { executor, input: { scheduleId, schedule, timestamp: now } };
 }
 
 /**
  * Manually trigger a schedule to run now
  */
 export async function runNow(scheduleId) {
-  const schedule = await getScheduleById(scheduleId);
-  if (!schedule) {
-    return null;
-  }
+  const enabled = await queueSchedules(async () => {
+    const schedule = await getScheduleById(scheduleId);
+    if (schedule?.enabled && !eventScheduler.getEvent(`agent-schedule-${scheduleId}`)) {
+      await activateSchedule(scheduleId, schedule);
+    }
+    return schedule?.enabled;
+  });
 
-  if (schedule.enabled) {
-    await activateSchedule(scheduleId, schedule);
+  if (enabled) {
     const result = await eventScheduler.triggerNow(`agent-schedule-${scheduleId}`);
     if (result === false) {
       throw new ServerError('Scheduler is shutting down', { status: 503 });
@@ -373,13 +396,20 @@ export async function runNow(scheduleId) {
 /**
  * Initialize: Load and activate all enabled schedules
  */
-export async function init() {
-  const schedules = await getAllSchedules();
+export function init() {
+  return queueSchedules(reconcileSchedules);
+}
+
+async function reconcileSchedules() {
+  const { schedules } = await loadSchedules();
+  for (const id of activeSchedules.keys()) {
+    if (!schedules[id]?.enabled) deactivateSchedule(id);
+  }
   let activatedCount = 0;
 
-  for (const schedule of schedules) {
+  for (const [id, schedule] of Object.entries(schedules)) {
     if (schedule.enabled) {
-      await activateSchedule(schedule.id, schedule);
+      await activateSchedule(id, schedule);
       activatedCount++;
     }
   }

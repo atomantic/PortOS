@@ -134,6 +134,37 @@ describe('automation execution ownership (#13910)', () => {
     expect(fakes.logActivity.mock.calls.filter(([entry]) => entry.status === 'completed')).toHaveLength(1);
   });
 
+  it('keeps a restored timer when an older random execution finishes', async () => {
+    const started = deferred();
+    const finish = deferred();
+    const executor = vi.fn(() => {
+      started.resolve();
+      return finish.promise;
+    });
+    automation.registerActionExecutor(executor);
+    const { id } = await automation.createSchedule(scheduleInput({
+      schedule: { type: 'random', randomWindow: { minMs: 120000, maxMs: 360000 } },
+    }));
+    const pending = automation.runNow(id);
+    await started.promise;
+    try {
+      await automation.withLiveRestore(async refresh => {
+        fakes.data = { schedules: { [id]: { ...scheduleInput(), lastRun: null, runCount: 7 } } };
+        await refresh();
+      });
+      const nextRun = scheduler.getEvent(`agent-schedule-${id}`).nextRunAt;
+      await vi.advanceTimersByTimeAsync(500);
+      finish.resolve();
+      await pending;
+      expect(scheduler.getEvent(`agent-schedule-${id}`).nextRunAt).toBe(nextRun);
+      expect(await automation.getScheduleById(id)).toMatchObject({ lastRun: null, runCount: 7 });
+      expect(executor).toHaveBeenCalledTimes(1);
+    } finally {
+      finish.resolve();
+      await pending;
+    }
+  });
+
   it('records uncertain write failures once without replaying them on scheduler restart', async () => {
     fakes.createPost.mockRejectedValue(new Error('Connection lost after request sent'));
     const schedule = await automation.createSchedule(scheduleInput());
