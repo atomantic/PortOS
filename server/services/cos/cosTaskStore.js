@@ -1648,8 +1648,8 @@ export async function resolveTaskChallengeWithRecheck(taskId, { recheck, resolve
     return { error: 'Re-check returned no usable findings', code: 'RECHECK_FAILED' };
   }
   const verdict = outcome === 'upheld'
-    ? `no blocking findings survived (${backend})`
-    : `a blocking finding still stands (${backend})`;
+    ? `no findings requiring resolution survived (${backend})`
+    : `a finding still requires resolution (${backend})`;
   // The resolution note is auto-generated from the re-check verdict (any caller
   // `note` is intentionally not threaded here — the machine verdict is the record).
   // `review.model` rather than `model`: the reviewer resolves an unpinned id from
