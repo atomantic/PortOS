@@ -7,7 +7,7 @@ import { fileURLToPath } from 'node:url';
 import { runInNewContext } from 'node:vm';
 import { hashPassword, hashToken } from '../lib/portosAuthCore.js';
 
-const harness = vi.hoisted(() => ({ routes: new Map(), gates: [], auth: null, listen: vi.fn(), execPm2: vi.fn(), loadApps: vi.fn(), spawn: vi.fn(), listProcessesStrict: vi.fn() }));
+const harness = vi.hoisted(() => ({ routes: new Map(), gates: [], auth: null, listen: vi.fn(), close: vi.fn(), closeAllConnections: vi.fn(), execPm2: vi.fn(), loadApps: vi.fn(), spawn: vi.fn(), listProcessesStrict: vi.fn() }));
 vi.mock('child_process', () => ({ spawn: harness.spawn }));
 vi.mock('node:module', async (original) => {
   const actual = await original();
@@ -33,6 +33,8 @@ vi.mock('../lib/tailscale-https.js', () => ({
       server.emit('listening');
     };
     server.address = () => ({ port: 5560 });
+    server.close = harness.close;
+    server.closeAllConnections = harness.closeAllConnections;
     return { server, httpsEnabled: false };
   },
   watchCertReload: vi.fn(),
@@ -52,6 +54,8 @@ beforeEach(async () => {
   dataDir = await mkdtemp(join(tmpdir(), 'autofixer-authority-'));
   harness.spawn.mockReset();
   harness.listen.mockClear();
+  harness.close.mockClear();
+  harness.closeAllConnections.mockClear();
   harness.listProcessesStrict.mockReset().mockResolvedValue([]);
   harness.execPm2.mockReset().mockResolvedValue({ stdout: 'ok', stderr: '' });
   harness.loadApps.mockReset().mockResolvedValue([{ pm2ProcessNames: ['example-process'] }]);
@@ -75,7 +79,7 @@ const loadUi = async (enabled = false, { corrupt = false } = {}) => {
   vi.resetModules();
   const { startAutofixerUi } = await import('./ui.js');
   const { createStagedFixStore } = await import('./stagedFixes.js');
-  await startAutofixerUi(createStagedFixStore({ root: dataDir, loadApps: harness.loadApps, execPm2: harness.execPm2 }));
+  return startAutofixerUi(createStagedFixStore({ root: dataDir, loadApps: harness.loadApps, execPm2: harness.execPm2 }));
 };
 
 const response = () => {
@@ -424,6 +428,44 @@ describe('Autofixer log child lifecycle and authority', () => {
     expect(initial.unref).toHaveBeenCalledOnce();
     expect(harness.spawn).toHaveBeenCalledOnce();
     expect(res.write).toHaveBeenCalledTimes(1);
+    expect(vi.getTimerCount()).toBe(0);
+  });
+
+  it('aborts active initial and live log children before closing sockets and waits for them', async () => {
+    const stopUi = await loadUi();
+    vi.useFakeTimers();
+    const initial = child();
+    const initialSpawned = nextSpawn(initial);
+    const initialRequest = openLogs();
+    await initialSpawned;
+    const snapshot = child();
+    const live = child();
+    const snapshotSpawned = nextSpawn(snapshot);
+    const liveSpawned = nextSpawn(live);
+    const liveRequest = openLogs();
+    await snapshotSpawned;
+    snapshot.emit('close', 0);
+    await liveSpawned;
+
+    const closed = vi.fn();
+    const stopped = stopUi().then(closed);
+    for (const active of [initial, live]) {
+      expect(active.kill).toHaveBeenCalledExactlyOnceWith('SIGTERM');
+      expect(active.kill.mock.invocationCallOrder[0]).toBeLessThan(harness.close.mock.invocationCallOrder[0]);
+      expect(active.kill.mock.invocationCallOrder[0]).toBeLessThan(harness.closeAllConnections.mock.invocationCallOrder[0]);
+    }
+    initial.emit('close', null);
+    await initialRequest.done;
+    expect(closed).not.toHaveBeenCalled();
+    await vi.advanceTimersByTimeAsync(1000);
+    expect(live.kill.mock.calls).toEqual([['SIGTERM'], ['SIGKILL']]);
+    live.emit('close', null);
+    await Promise.all([stopped, liveRequest.done]);
+    expect(closed).toHaveBeenCalledOnce();
+    const late = openLogs({ process: 'example-process' });
+    await late.done;
+    expect(late.res.statusCode).toBe(503);
+    expect(harness.spawn).toHaveBeenCalledTimes(3);
     expect(vi.getTimerCount()).toBe(0);
   });
 

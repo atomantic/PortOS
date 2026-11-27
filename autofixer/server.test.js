@@ -1,4 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { EventEmitter } from 'node:events';
 import { chmod, mkdir, writeFile, rename, readdir, rm } from 'node:fs/promises';
 
 const harness = vi.hoisted(() => ({
@@ -66,6 +67,7 @@ beforeEach(() => {
   harness.metadataExists = false;
   harness.sessionMetadata = {};
   readdir.mockReset().mockResolvedValue([]);
+  writeFile.mockReset().mockResolvedValue(undefined);
   rename.mockReset().mockResolvedValue(undefined);
   rm.mockClear();
   harness.verify.mockReset();
@@ -366,5 +368,97 @@ describe('Autofixer daemon repair input boundary', () => {
     await start();
     await nextCycle();
     expect(harness.provider).toHaveBeenCalledOnce();
+  });
+});
+
+describe('Autofixer daemon shutdown', () => {
+  const shutdown = () => {
+    const handle = process.on.mock.calls.find(([signal]) => signal === 'SIGTERM')[1];
+    return handle();
+  };
+  const permitPromotion = () => {
+    harness.settings = { autofixer: { autoPromote: true } };
+    harness.provider.mockResolvedValue({ partial: false, exitCode: 0 });
+    harness.validate.mockReturnValue({ ok: true, files: ['example.js'] });
+  };
+  const never = () => new Promise(() => {});
+
+  it('forces exit after 15 seconds when a non-patch mutation drain stalls', async () => {
+    const exit = vi.spyOn(process, 'exit').mockImplementation(() => {});
+    harness.apps.mockResolvedValue([]);
+    await start();
+    const [store] = harness.startUi.mock.calls[0];
+    void store.serialize(never);
+    await vi.advanceTimersByTimeAsync(0);
+
+    void shutdown();
+    await vi.advanceTimersByTimeAsync(14_999);
+    expect(exit).not.toHaveBeenCalled();
+    await vi.advanceTimersByTimeAsync(1);
+    expect(exit).toHaveBeenCalledExactlyOnceWith(1);
+  });
+
+  it('records the interrupted repair and escalates only groups still tracked at five seconds', async () => {
+    const exit = vi.spyOn(process, 'exit').mockImplementation(() => {});
+    const kill = vi.spyOn(process, 'kill').mockReturnValue(true);
+    const stopped = Object.assign(new EventEmitter(), { pid: 1234 });
+    const stubborn = Object.assign(new EventEmitter(), { pid: 5678 });
+    harness.provider.mockImplementation(async () => {
+      const { trackDetachedGroup } = await import('../server/lib/detachedProcessGroups.js');
+      trackDetachedGroup(stopped, true);
+      trackDetachedGroup(stubborn, true);
+      return never();
+    });
+    await start();
+    // The provider double imports the same registry as the daemon.
+    await vi.dynamicImportSettled();
+
+    const done = shutdown();
+    await shutdown();
+    expect(kill.mock.calls).toEqual([[-1234, 'SIGTERM'], [-5678, 'SIGTERM']]);
+    stopped.emit('close');
+    await vi.advanceTimersByTimeAsync(4_999);
+    const meta = writeFile.mock.calls.find(([file]) => file.endsWith('metadata.json.tmp'));
+    expect(JSON.parse(meta[1])).toMatchObject({ interrupted: true, processName: 'example-process' });
+    expect(exit).not.toHaveBeenCalled();
+    await vi.advanceTimersByTimeAsync(1);
+    await done;
+    expect(kill.mock.calls.at(-1)).toEqual([-5678, 'SIGKILL']);
+    expect(kill).toHaveBeenCalledTimes(3);
+    expect(exit).toHaveBeenCalledExactlyOnceWith(0);
+    expect(vi.getTimerCount()).toBe(0);
+  });
+
+  it('gives a live patch time to finish and then bounds the remaining drain to 15 seconds', async () => {
+    const exit = vi.spyOn(process, 'exit').mockImplementation(() => {});
+    const apply = Promise.withResolvers();
+    const uiDrain = vi.fn(never);
+    harness.startUi.mockResolvedValue(uiDrain);
+    permitPromotion();
+    harness.apply.mockReturnValue(apply.promise);
+    await start();
+
+    void shutdown();
+    await vi.advanceTimersByTimeAsync(20_000);
+    expect(exit).not.toHaveBeenCalled();
+    apply.resolve({ ok: true });
+    await vi.advanceTimersByTimeAsync(14_999);
+    expect(harness.pm2).toHaveBeenCalledWith(['restart', 'example-process']);
+    expect(exit).not.toHaveBeenCalled();
+    await vi.advanceTimersByTimeAsync(1);
+    expect(exit).toHaveBeenCalledExactlyOnceWith(1);
+  });
+
+  it('forces exit before PM2 does when a live patch cannot finish', async () => {
+    const exit = vi.spyOn(process, 'exit').mockImplementation(() => {});
+    permitPromotion();
+    harness.apply.mockImplementation(never);
+    await start();
+
+    void shutdown();
+    await vi.advanceTimersByTimeAsync(248_999);
+    expect(exit).not.toHaveBeenCalled();
+    await vi.advanceTimersByTimeAsync(1);
+    expect(exit).toHaveBeenCalledExactlyOnceWith(1);
   });
 });

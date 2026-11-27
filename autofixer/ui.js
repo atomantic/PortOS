@@ -40,6 +40,8 @@ async function retireLegacyDashboard() {
 export async function startAutofixerUi(stagedFixes, port = process.env.PORT || PORTS.AUTOFIXER_UI) {
   await retireLegacyDashboard();
   const app = express();
+  const logStreams = new Map();
+  let logDrain;
   const html = await readFile(UI_TEMPLATE_FILE, 'utf8');
 
   async function loadHistory() {
@@ -163,6 +165,9 @@ export async function startAutofixerUi(stagedFixes, port = process.env.PORT || P
     if (processName !== 'portos-autofixer' && !(await isRegisteredProcess(processName))) {
       return res.status(400).json({ error: 'Unknown process', code: 'UNKNOWN_PROCESS' });
     }
+    if (req.aborted || res.destroyed || res.writableEnded) return;
+    if (logDrain) return res.status(503).json({ error: 'Autofixer is shutting down', code: 'SHUTTING_DOWN' });
+
     res.setHeader('Content-Type', 'text/event-stream');
     res.setHeader('Cache-Control', 'no-cache');
     res.setHeader('Connection', 'keep-alive');
@@ -170,6 +175,8 @@ export async function startAutofixerUi(stagedFixes, port = process.env.PORT || P
     res.write(`: connected\n\n`);
 
     const controller = new AbortController();
+    const { promise, resolve } = Promise.withResolvers();
+    logStreams.set(controller, promise);
     const closed = () => controller.signal.aborted || req.aborted || res.destroyed || res.writableEnded;
     const cleanup = () => controller.abort();
     req.on('aborted', cleanup);
@@ -219,6 +226,8 @@ export async function startAutofixerUi(stagedFixes, port = process.env.PORT || P
       }
       req.removeListener('aborted', cleanup);
       res.removeListener('close', cleanup);
+      logStreams.delete(controller);
+      resolve();
       if (!closed()) res.end();
     }
   });
@@ -238,17 +247,21 @@ export async function startAutofixerUi(stagedFixes, port = process.env.PORT || P
   const { dir: CERT_DIR } = certPaths(DATA_DIR);
   const { server, httpsEnabled } = createTailscaleServers(app, { certDir: CERT_DIR, httpMirror: false });
   const scheme = httpsEnabled ? 'https' : 'http';
+  const gated = await auth.isEnabled().catch(() => true);
   const listening = once(server, 'listening');
   // PM2 can resurrect the old monitor with its saved, unused port.
   server.listen(String(port) === '5559' ? PORTS.AUTOFIXER_UI : port, '0.0.0.0');
   await listening;
   console.log(`🚀 [Autofixer UI] Running on ${scheme}://localhost:${server.address().port}`);
-  const gated = await auth.isEnabled().catch(() => true);
   console.log(`🔐 [Autofixer UI] Password gate ${gated ? 'ENABLED (PortOS password required)' : 'off (no PortOS password set)'}`);
   const stopWatching = httpsEnabled ? watchCertReload(server, CERT_DIR) : null;
   return () => {
+    if (logDrain) return logDrain;
+    logDrain = Promise.all(logStreams.values());
+    for (const controller of logStreams.keys()) controller.abort();
     stopWatching?.();
     server.close();
     server.closeAllConnections();
+    return logDrain;
   };
 }
