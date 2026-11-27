@@ -10,6 +10,7 @@ const {
   cancelSlotstreamModelDownload,
   downloadSlotstreamModel,
   previewSlotstreamDownload,
+  removeSlotstreamModel,
   isSlotstreamDownloadInFlight,
   slotstreamModelPath,
   _resetSlotstreamDownloadsForTests,
@@ -439,6 +440,7 @@ describe('downloadSlotstreamModel', () => {
     const shardPartial = join(cacheDir, DIR_NAME, 'model.safetensors.partial');
     await vi.waitFor(async () => expect((await readFile(shardPartial, 'utf8')).length).toBeGreaterThan(0));
 
+    await expect(removeSlotstreamModel(DIR_NAME, { cacheDir })).rejects.toMatchObject({ status: 409, code: 'SLOTSTREAM_DOWNLOAD_IN_PROGRESS' });
     expect(cancelSlotstreamModelDownload({ model: REPO, cacheDir })).toBe(true);
     release();
     const result = await download;

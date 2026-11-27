@@ -223,6 +223,9 @@ export const cancelSlotstreamModelDownload = (model, options) =>
     ...options,
   });
 
+export const removeSlotstreamModel = (model, options) =>
+  request('/local-llm/slotstream/models/remove', { method: 'POST', body: JSON.stringify({ model }), ...options });
+
 // MTPLX model catalog — search, download, and remove MTP checkpoints in-app.
 // `mtplx forge discover` is upstream's index of MTPLX-branded models, which is
 // exactly the set `mtplx serve` can run; an empty query returns its default list.

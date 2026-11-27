@@ -24,7 +24,7 @@
  * stay where they already were.
  */
 
-import { lstat, mkdir, readdir, readlink, rm, stat, symlink, writeFile } from 'fs/promises';
+import { lstat, mkdir, readdir, readlink, rm, stat, symlink, unlink, writeFile } from 'fs/promises';
 import { isAbsolute, join, resolve, sep } from 'path';
 import { ServerError } from '../lib/errorHandler.js';
 import { withAbortTimeout } from '../lib/abortTimeout.js';
@@ -45,8 +45,9 @@ import {
   slotstreamCatalogEntry,
   slotstreamModelDirName,
 } from '../lib/slotstreamCatalog.js';
-import { isServableCheckpoint, SLOTSTREAM_INCOMPLETE_MARKER, slotstreamCacheDir } from '../lib/slotstreamModels.js';
+import { isServableCheckpoint, isSlotstreamCheckpointId, SLOTSTREAM_INCOMPLETE_MARKER, slotstreamCacheDir } from '../lib/slotstreamModels.js';
 import { getHfToken } from './hfToken.js';
+import { withUnusedSlotstreamCheckpoint } from './slotstreamServerManager.js';
 
 export { SLOTSTREAM_CATALOG };
 
@@ -74,6 +75,15 @@ const downloadSlot = createDownloadSlot({
   // the shard in flight keeps its `.partial` the way a stall already does.
   // (Spec-decode deliberately discards instead — one GGUF the user gave up on.)
   keepPartialOnCancel: true,
+});
+
+// Downloads can replace a directory with a link. Keep that transition and
+// cache removals exclusive, including aliases on case-insensitive volumes.
+let removingCheckpoint = false;
+let downloadingCheckpoint = false;
+
+const removalInProgressError = () => new ServerError('Wait for the Slotstream checkpoint removal to finish.', {
+  status: 409, code: 'SLOTSTREAM_REMOVAL_IN_PROGRESS',
 });
 
 const cacheDirFor = (cacheDir) => cacheDir || slotstreamCacheDir();
@@ -357,6 +367,7 @@ export async function previewSlotstreamDownload({ model = null, cacheDir } = {})
 export async function downloadSlotstreamModel({ model = null, cacheDir, onProgress = () => {} } = {}) {
   const repo = requireRepo(model);
   const modelDir = slotstreamModelPath(repo, { cacheDir });
+  if (removingCheckpoint) throw removalInProgressError();
   // Claim the slot BEFORE the first await: resolving the repo is a round trip,
   // and a second press landing inside that window would clear the in-flight
   // check and start a parallel copy of the same 100 GB+ transfer.
@@ -365,6 +376,7 @@ export async function downloadSlotstreamModel({ model = null, cacheDir, onProgre
     otherBusyMessage: 'Another Slotstream checkpoint is already downloading — PortOS fetches one at a time.',
     meta: { repo },
   });
+  downloadingCheckpoint = true;
 
   const label = slotstreamCatalogEntry(repo)?.label || repo;
   try {
@@ -486,24 +498,69 @@ export async function downloadSlotstreamModel({ model = null, cacheDir, onProgre
     } else {
       console.error(`❌ Slotstream checkpoint download failed for ${repo}: ${error.message}`);
     }
+    const message = error.path
+      ? 'Could not write the Slotstream checkpoint. Check the cache permissions and free space, then retry.'
+      : error.message;
     // A cancel is not a failure the user needs a red toast for, but the bar
     // still has to come down — the card clears on any terminal frame, and
     // 'cancelled' is what tells it which happened.
     onProgress({
       event: slot.cancelled ? 'cancelled' : 'error',
       model: repo,
-      message: error.message,
+      message,
     });
     return {
       success: false,
       model: repo,
       cancelled: slot.cancelled,
-      error: error.message,
+      error: message,
       code: error.code || null,
       status: slot.cancelled ? null : (error.status || err?.status || 502),
     };
   } finally {
+    downloadingCheckpoint = false;
     slot.release();
+  }
+}
+
+export async function removeSlotstreamModel(model, { cacheDir = slotstreamCacheDir() } = {}) {
+  if (!isSlotstreamCheckpointId(model)) {
+    throw new ServerError('Choose a Slotstream checkpoint directory name.', {
+      status: 400, code: 'SLOTSTREAM_INVALID_MODEL',
+    });
+  }
+  if (removingCheckpoint) throw removalInProgressError();
+  if (downloadingCheckpoint) {
+    throw new ServerError('Wait for the Slotstream checkpoint download to finish or cancel it first.', {
+      status: 409, code: 'SLOTSTREAM_DOWNLOAD_IN_PROGRESS',
+    });
+  }
+
+  removingCheckpoint = true;
+  const modelDir = join(cacheDir, model);
+  try {
+    const entry = await lstat(modelDir).catch((err) => {
+      if (err.code === 'ENOENT') return null;
+      throw err;
+    });
+    const linked = entry?.isSymbolicLink() ?? false;
+    if (entry && !linked && !entry.isDirectory()) {
+      throw new ServerError('The selected cache entry is not a Slotstream checkpoint directory.', {
+        status: 400, code: 'SLOTSTREAM_INVALID_MODEL',
+      });
+    }
+    if (entry) {
+      await withUnusedSlotstreamCheckpoint({ model, modelDir, cacheDir, linked }, () =>
+        linked ? unlink(modelDir) : rm(modelDir, { recursive: true, force: true }));
+    }
+    return { success: true, model };
+  } catch (err) {
+    if (err instanceof ServerError) throw err;
+    throw new ServerError('Could not remove the Slotstream checkpoint. Check the cache permissions and retry.', {
+      status: 500, code: 'SLOTSTREAM_REMOVE_FAILED', cause: err,
+    });
+  } finally {
+    removingCheckpoint = false;
   }
 }
 

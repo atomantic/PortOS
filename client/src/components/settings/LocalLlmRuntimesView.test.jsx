@@ -29,6 +29,7 @@ vi.mock('../../services/apiLocalLlm.js', () => ({
   uninstallSlotstream: vi.fn(),
   downloadSlotstreamModel: vi.fn(),
   cancelSlotstreamModelDownload: vi.fn(),
+  removeSlotstreamModel: vi.fn(),
   searchMtplxModels: vi.fn().mockResolvedValue({ models: [], error: null }),
   pullMtplxModel: vi.fn(),
   cancelMtplxModelPull: vi.fn(),
@@ -656,6 +657,39 @@ describe('LocalLlmRuntimesView runtime servers', () => {
     fireEvent.click(within(screen.getByRole('dialog', { name: 'Uninstall Slotstream' })).getByRole('button', { name: 'Uninstall' }));
     await waitFor(() => expect(screen.queryByRole('button', { name: 'Uninstall' })).not.toBeInTheDocument());
     expect(uninstallSlotstream).toHaveBeenCalledTimes(1);
+  });
+
+  it('removes an unused Slotstream link only after confirmation and a successful response', async () => {
+    const { getSlotstreamServerStatus, removeSlotstreamModel } = await import('../../services/apiLocalLlm.js');
+    const model = 'unused-checkpoint';
+    const active = 'active-checkpoint';
+    const activeRow = { id: active, sizeBytes: 2048, linked: false };
+    const current = {
+      installed: true, supported: true, running: true, managed: true, config: { model: active },
+      cachedModels: [active, model],
+      cachedModelRows: [activeRow, { id: model, sizeBytes: 1024, linked: true }],
+    };
+    getSlotstreamServerStatus.mockResolvedValue(current);
+    removeSlotstreamModel.mockRejectedValueOnce(new Error('Checkpoint is in use')).mockImplementationOnce(async () => {
+      getSlotstreamServerStatus.mockResolvedValue({ ...current, cachedModels: [active], cachedModelRows: [activeRow] });
+      return { success: true, model };
+    });
+
+    await renderRuntimes('slotstream');
+    expect(screen.getByRole('button', { name: `Remove ${active}` })).toBeDisabled();
+    expect(screen.getByText(/1 KB.*Linked checkpoint/)).toBeVisible();
+    fireEvent.click(screen.getByRole('button', { name: `Remove ${model}` }));
+    expect(screen.getByText('Remove this link and keep the original files?')).toBeVisible();
+    expect(removeSlotstreamModel).not.toHaveBeenCalled();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Remove checkpoint' }));
+    await waitFor(() => expect(toast.error).toHaveBeenCalledWith('Checkpoint is in use'));
+    expect(screen.getByRole('button', { name: `Remove ${model}` })).toBeEnabled();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Remove checkpoint' }));
+    await waitFor(() => expect(screen.queryByRole('button', { name: `Remove ${model}` })).toBeNull());
+    expect(removeSlotstreamModel).toHaveBeenLastCalledWith(model, { silent: true });
+    expect(screen.getByRole('button', { name: `Remove ${active}` })).toBeDisabled();
   });
 
   it('clears a cancelled Slotstream download without a failure or completion toast', async () => {

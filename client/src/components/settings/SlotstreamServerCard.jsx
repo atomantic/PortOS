@@ -1,6 +1,8 @@
 import { useEffect, useState } from 'react';
 import { HardDrive, RefreshCw, Save, Square, Download, Terminal, X } from 'lucide-react';
 import BrailleSpinner from '../BrailleSpinner';
+import CollapsibleListItem from '../ui/CollapsibleListItem';
+import InlineConfirmRow from '../ui/InlineConfirmRow';
 import ProgressBar from '../ui/ProgressBar';
 import { formatBytes } from '../../utils/formatters';
 import { PORTS } from '../../lib/ports.js';
@@ -69,9 +71,12 @@ export default function SlotstreamServerCard({
   onUninstall,
   onDownloadModel,
   onCancelDownload,
+  onRemoveModel,
   download,
 }) {
   const [model, setModel] = useState('');
+  const [confirmRemove, setConfirmRemove] = useState(null);
+  const [exiting, setExiting] = useState(null);
   const [downloadModel, setDownloadModel] = useState('');
   const [port, setPort] = useState('');
   const [memoryGb, setMemoryGb] = useState('');
@@ -92,6 +97,11 @@ export default function SlotstreamServerCard({
   }, [launch, seeded]);
 
   const cached = status?.cachedModels || [];
+  const checkpointRows = [...(status?.cachedModelRows || [])];
+  if (exiting && !checkpointRows.some((row) => row.id === exiting.row.id)) {
+    checkpointRows.splice(exiting.index, 0, exiting.row);
+  }
+  const selectedModel = cached.includes(model) ? model : '';
   const emptyCache = Boolean(status?.installed) && cached.length === 0 && !status?.cacheError;
   const external = status?.running && status?.managed === false;
   const plan = status?.memoryPlan;
@@ -100,7 +110,7 @@ export default function SlotstreamServerCard({
   const selectedEntry = catalog.find((entry) => entry.id === downloadModel) || null;
 
   const launchPayload = () => ({
-    model: model || null,
+    model: selectedModel || null,
     ...(port ? { port: Number(port) } : {}),
     ...(memoryGb ? { memoryGb: Number(memoryGb) } : {}),
   });
@@ -177,7 +187,7 @@ export default function SlotstreamServerCard({
         <div className="bg-port-bg border border-port-border rounded-lg p-3 space-y-3">
           {emptyCache ? (
             <p className="text-xs text-port-warning">
-              No checkpoint is cached, so a start would exit before it binds a port. A start never downloads weights — pick one below and download it, or place a checkpoint directory in <code className="text-gray-300">{status.cacheDir || '~/.slotstream/models'}</code> yourself.
+              No checkpoint is ready to serve. Choose one below and select Download checkpoint.
             </p>
           ) : (
             <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
@@ -185,7 +195,7 @@ export default function SlotstreamServerCard({
                 <label htmlFor="slotstream-model" className="block text-xs text-gray-400">Checkpoint</label>
                 <select
                   id="slotstream-model"
-                  value={model}
+                  value={selectedModel}
                   onChange={(e) => setModel(e.target.value)}
                   className="w-full bg-port-card border border-port-border rounded px-2 py-1.5 text-xs text-white"
                 >
@@ -253,6 +263,60 @@ export default function SlotstreamServerCard({
         <button type="button" onClick={onUninstall} disabled={busy} className={`${btnClass} border border-port-border text-port-warning`}>
           Uninstall Slotstream
         </button>
+      )}
+
+      {checkpointRows.length > 0 && (
+        <div className="space-y-2" tabIndex={-1}>
+          <h3 className="text-xs font-medium text-gray-300">Cached checkpoints</h3>
+          <div role="list">
+            {checkpointRows.map((row, index) => {
+              const serving = status?.running && (!status.config?.model || status.config.model === row.id);
+              const removing = exiting?.row.id === row.id;
+              const disabled = busy || downloading || serving || Boolean(exiting);
+              return (
+                <CollapsibleListItem key={row.id} role="listitem" removing={removing} onExited={() => setExiting(null)}>
+                  <div className="bg-port-bg border border-port-border rounded-lg px-3 py-2">
+                    <div className="flex flex-wrap items-center justify-between gap-2">
+                      <div className="min-w-0">
+                        <p className="text-xs text-white break-all">{row.id}</p>
+                        <p className="text-[11px] text-gray-400">
+                          {row.sizeBytes == null ? 'Size unavailable' : formatBytes(row.sizeBytes)}
+                          {row.linked ? ' · Linked checkpoint' : ''}
+                          {!cached.includes(row.id) ? ' · Incomplete' : ''}
+                        </p>
+                      </div>
+                      {onRemoveModel && (
+                        <button
+                          type="button"
+                          onClick={() => setConfirmRemove(row.id)}
+                          disabled={disabled}
+                          className={`${btnClass} border border-port-error/30 text-port-error hover:bg-port-error/10`}
+                          aria-label={`Remove ${row.id}`}
+                          title={serving ? 'Stop Slotstream before removing this checkpoint' : undefined}
+                        >
+                          Remove
+                        </button>
+                      )}
+                    </div>
+                    {confirmRemove === row.id && (
+                      <InlineConfirmRow
+                        className="mt-2"
+                        question={row.linked ? 'Remove this link and keep the original files?' : 'Delete these checkpoint files from disk?'}
+                        confirmText="Remove checkpoint"
+                        confirmDisabled={disabled}
+                        onCancel={() => setConfirmRemove(null)}
+                        onConfirm={() => onRemoveModel(row.id, () => {
+                          setExiting({ row, index });
+                          setConfirmRemove(null);
+                        })}
+                      />
+                    )}
+                  </div>
+                </CollapsibleListItem>
+              );
+            })}
+          </div>
+        </div>
       )}
 
       {status?.installed && status?.supported !== false && catalog.length > 0 && onDownloadModel && (

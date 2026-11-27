@@ -16,9 +16,9 @@
  */
 
 import { randomUUID } from 'crypto';
-import { chmod, copyFile, lstat, mkdir, mkdtemp, rename, rm } from 'fs/promises';
+import { chmod, copyFile, lstat, mkdir, mkdtemp, readdir, realpath, rename, rm } from 'fs/promises';
 import { tmpdir } from 'os';
-import { dirname, join } from 'path';
+import { dirname, isAbsolute, join, relative, sep } from 'path';
 import { ServerError } from '../lib/errorHandler.js';
 import { sleep } from '../lib/fileUtils.js';
 import { LOCAL_RUNTIMES, localEndpointPort, localRuntimeForProvider, isLocalInstanceEndpoint } from '../lib/localProviderRuntime.js';
@@ -37,11 +37,12 @@ import { PORTS } from '../lib/ports.js';
 import { findCommandOnPath } from '../lib/processEnv.js';
 import { SLOTSTREAM_CATALOG } from '../lib/slotstreamCatalog.js';
 import {
+  isSlotstreamCheckpointId,
   listSlotstreamCachedModels,
   pickSlotstreamCachedModel,
   planSlotstreamMemory,
   slotstreamBinDir,
-  slotstreamCacheDir,
+  SLOTSTREAM_CACHE_DISPLAY,
 } from '../lib/slotstreamModels.js';
 import { runStreamingCommand } from '../lib/streamingSpawn.js';
 import { execPm2, getAppStatusStrict, clearJlistCache, getSavedProcessNames } from './pm2.js';
@@ -71,7 +72,7 @@ const DEFAULT_HOST = '127.0.0.1';
 const DEFAULT_PORT = Number(localEndpointPort(LOCAL_RUNTIMES.slotstream.defaultBaseUrl)) || PORTS.SLOTSTREAM;
 
 export const SLOTSTREAM_UNSUPPORTED_REASON = 'Slotstream runs only on macOS with Apple Silicon.';
-const slotstreamNoModelError = () => `Slotstream has no model weights cached, so its server would exit before it binds a port. A start never downloads weights — place a checkpoint directory in ${slotstreamCacheDir()}, then start it again.`;
+const SLOTSTREAM_NO_MODEL_ERROR = 'Slotstream has no cached checkpoint. Open Configure and select Download checkpoint before starting Slotstream.';
 const SLOTSTREAM_OLLAMA_PORT_ERROR = `Port ${OLLAMA_COLLISION_PORT} is Ollama's default and a PortOS-managed Ollama already uses it. Point Slotstream at its dedicated loopback port (${DEFAULT_PORT}) instead.`;
 
 const slotstreamLogs = createDaemonLogFiles(SLOTSTREAM_APP);
@@ -209,7 +210,7 @@ export async function getSlotstreamServerStatus({ includeLogs } = {}) {
   const base = await daemon.getStatusBase({ installed, includeLogs });
   const ownedBinary = installed && await slotstreamInstallFile().catch(() => null);
   const saved = await savedLaunchConfig();
-  const cache = installed ? await listSlotstreamCachedModels() : { models: null, error: null };
+  const cache = await listSlotstreamCachedModels({ includeRows: true });
   // The SAVED override, never the running config: `--memory-gb` is always on
   // the launch line, so reading the target back off it would report every
   // auto-sized start as an explicit cap and `auto` would never be true.
@@ -217,15 +218,17 @@ export async function getSlotstreamServerStatus({ includeLogs } = {}) {
 
   return {
     ...base,
+    config: base.config && { ...base.config, model: isSlotstreamCheckpointId(base.config.model) ? base.config.model : null },
     supported,
     canUninstall: Boolean(ownedBinary) && !installationChange && !base.running && base.managed === false,
     unsupportedReason: supported ? null : SLOTSTREAM_UNSUPPORTED_REASON,
     idleMinutes: await onDemand.idleMinutes(),
     keepLoaded: await onDemand.keepLoaded(),
-    launch: saved,
+    launch: { ...saved, model: isSlotstreamCheckpointId(saved.model) ? saved.model : null },
     memoryPlan,
     cachedModels: (cache.models || []).map((m) => m?.id).filter(Boolean),
-    cacheDir: slotstreamCacheDir(),
+    cachedModelRows: cache.rows,
+    cacheDir: SLOTSTREAM_CACHE_DISPLAY,
     cacheError: cache.error,
     // The download menu rides on the status payload rather than a route of its
     // own: it is three frozen rows, so a second fetch (and a second cache to
@@ -346,14 +349,14 @@ async function resolveStartModel(requested, emit) {
   const cache = await listSlotstreamCachedModels();
   if (cache.models === null) {
     emit(`Could not read Slotstream's model cache (${cache.error}) — refusing to start rather than fetching weights.`);
-    return { error: slotstreamNoModelError() };
+    return { error: SLOTSTREAM_NO_MODEL_ERROR };
   }
-  if (cache.models.length === 0) return { error: slotstreamNoModelError() };
+  if (cache.models.length === 0) return { error: SLOTSTREAM_NO_MODEL_ERROR };
   const model = pickSlotstreamCachedModel(cache.models, requested);
-  if (!model) return { error: slotstreamNoModelError() };
+  if (!model) return { error: SLOTSTREAM_NO_MODEL_ERROR };
   if (!cache.models.some((row) => row?.id === model)) {
     return {
-      error: `Slotstream has no cached checkpoint named "${model}". A start never downloads weights — pick one of the cached checkpoints (${cache.models.map((row) => row.id).join(', ')}) instead.`,
+      error: `The selected Slotstream checkpoint is unavailable. A start never downloads weights. Choose a cached checkpoint (${cache.models.map((row) => row.id).join(', ')}) or open Configure and select Download checkpoint.`,
     };
   }
   return { model };
@@ -367,6 +370,51 @@ async function resolveStartModel(requested, emit) {
  * @param {Parameters<typeof launchSlotstreamServer>[0]} [options]
  */
 export const startSlotstreamServer = (options = {}) => onDemand.runStart(() => launchSlotstreamServer(options));
+
+/**
+ * Share the start slot with explicit and on-demand starts so a checked
+ * checkpoint cannot disappear between model selection and launch.
+ */
+export const withUnusedSlotstreamCheckpoint = ({ model, modelDir, cacheDir, linked }, remove) => onDemand.runStart(async () => {
+  const inUse = () => new ServerError('Stop Slotstream before removing a checkpoint it may be serving.', {
+    status: 409, code: 'SLOTSTREAM_CHECKPOINT_IN_USE',
+  });
+
+  clearJlistCache();
+  const app = await getAppStatusStrict(SLOTSTREAM_APP);
+  if (!app) {
+    throw new ServerError('PortOS could not verify whether Slotstream is serving this checkpoint. Check PM2 and retry.', {
+      status: 503, code: 'SLOTSTREAM_PM2_UNAVAILABLE',
+    });
+  }
+
+  if (app.status === 'online') {
+    const active = parseConfigFromArgs(app.args)?.model;
+    if (!isSlotstreamCheckpointId(active) || active === model) throw inUse();
+    // Resolve aliases and filesystem case before removing a directory. Removing
+    // a different link leaves the weights intact, even if it shares the target.
+    const activeDir = join(cacheDir, active);
+    const actualActive = await realpath(activeDir).catch(() => null);
+    const actualCandidate = await realpath(modelDir).catch(() => null);
+    if (actualActive && actualActive === actualCandidate) {
+      const names = new Set(await readdir(cacheDir));
+      if (!linked || !names.has(model) || !names.has(active)) throw inUse();
+    }
+    if (!linked && actualActive && actualCandidate) {
+      const child = relative(actualCandidate, actualActive);
+      if (child && child !== '..' && !child.startsWith(`..${sep}`) && !isAbsolute(child)) throw inUse();
+    }
+  } else {
+    // External servers do not expose a trusted cache entry ID. Check known
+    // runtime ports even while a listener is still warming up.
+    if (!['not_found', 'stopped', 'errored'].includes(app.status)) throw inUse();
+    const saved = await savedLaunchConfig();
+    const ports = new Set([DEFAULT_PORT, saved.port, currentConfig?.port].filter(Boolean));
+    if ((await Promise.all([...ports].map((port) => isPortInUse(port)))).some(Boolean)) throw inUse();
+  }
+
+  return remove();
+});
 
 /**
  * The unserialized start behind `startSlotstreamServer`; only the on-demand

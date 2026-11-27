@@ -20,6 +20,7 @@ import {
   saveSplashContextWindow,
   downloadSlotstreamModel,
   cancelSlotstreamModelDownload,
+  removeSlotstreamModel,
   saveRuntimeStartupList,
 } from '../../services/apiLocalLlm.js';
 import { patchSettingsSlice } from '../../services/apiSystem.js';
@@ -322,6 +323,29 @@ export default function LocalLlmRuntimesView({ view } = {}) {
     (r) => (r?.cancelled ? 'Cancelling checkpoint download…' : 'No checkpoint download is running'),
     { onError: (err) => toast.error(err?.message || 'Could not cancel the checkpoint download') },
   );
+  const slotstreamRemove = (model, onRemoved) => runAction(
+    'slotstream-remove',
+    async () => {
+      const result = await removeSlotstreamModel(model, { silent: true });
+      onRemoved();
+      delete statusRequests.current.slotstream;
+      setStatuses((previous) => {
+        const current = previous.slotstream;
+        if (!current) return previous;
+        return {
+          ...previous,
+          slotstream: {
+            ...current,
+            cachedModels: current.cachedModels?.filter((id) => id !== model),
+            cachedModelRows: current.cachedModelRows?.filter((row) => row.id !== model),
+          },
+        };
+      });
+      return result;
+    },
+    `${model} removed from the Slotstream cache`,
+    { onError: (err) => toast.error(err.message) },
+  );
   // Checkpoint management (search / download / remove), owned by the MTPLX card.
   //
   // `mtplxSearch` keeps a stable identity because the checkpoint panel keys its
@@ -535,6 +559,7 @@ export default function LocalLlmRuntimesView({ view } = {}) {
           onInstall={() => runRuntimeAction('slotstream', 'install')}
           onUninstall={() => runtimeAction('slotstream', 'uninstall')}
           onDownloadModel={slotstreamDownloadModel}
+          onRemoveModel={slotstreamRemove}
           onCancelDownload={cancelSlotstreamDownload}
           download={slotstreamDownload}
         />

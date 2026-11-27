@@ -73,8 +73,7 @@ describe('SlotstreamServerCard', () => {
 
   it('does not name a terminal command when the cache is empty', () => {
     renderCard({ installed: true, running: false, supported: true, cachedModels: [], cacheError: null });
-    expect(screen.getByText(/never downloads weights/i)).toBeInTheDocument();
-    expect(screen.queryByText(/in a terminal/i)).toBeNull();
+    expect(screen.getByText(/choose one below and select download checkpoint/i)).toBeInTheDocument();
     expect(screen.getByRole('button', { name: /Save configuration/ })).toBeDisabled();
     expect(screen.queryByRole('button', { name: /Start Slotstream/ })).toBeNull();
   });

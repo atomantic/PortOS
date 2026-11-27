@@ -29,7 +29,7 @@ import { startMtplxServer, stopMtplxServer, waitForMtplxReady } from '../service
 import { startSlotstreamServer, stopSlotstreamServer, waitForSlotstreamReady } from '../services/slotstreamServerManager.js';
 import { startLlamaServer, stopLlamaServer, waitForLlamaServerReady } from '../services/llamaServerManager.js';
 import { cancelMtplxModelPull, pullMtplxModel, removeMtplxModel } from '../services/mtplxModelManager.js';
-import { downloadSlotstreamModel } from '../services/slotstreamModelManager.js';
+import { downloadSlotstreamModel, removeSlotstreamModel } from '../services/slotstreamModelManager.js';
 
 const getModelAbuseGuardStatus = vi.fn(async () => ({ ready: false, modelCached: false, runtimeReady: false }));
 const installModelAbuseGuard = vi.fn(async () => ({ ok: true, ready: true }));
@@ -192,6 +192,7 @@ vi.mock('../services/slotstreamModelManager.js', async (importOriginal) => ({
   ...(await importOriginal()),
   cancelSlotstreamModelDownload: vi.fn(),
   downloadSlotstreamModel: vi.fn(),
+  removeSlotstreamModel: vi.fn(),
   previewSlotstreamDownload: vi.fn(),
 }));
 vi.mock('../services/splashRuntimeStatus.js', () => ({
@@ -1574,6 +1575,29 @@ describe('managed runtime provider-model refresh after a user lifecycle action',
     expect((await post(path, body)).status).toBe(200);
     await syncRuntimeProviderModels.mock.calls[0][0].waitForReady();
     expect(waitFor).toHaveBeenCalledWith('http://127.0.0.1:9000/v1');
+  });
+
+  it('removes a Slotstream cache entry and refreshes its provider models', async () => {
+    const model = 'example-org__example-model';
+    removeSlotstreamModel.mockResolvedValueOnce({ success: true, model });
+    const response = await post('slotstream/models/remove', { model });
+    expect(response.status).toBe(200);
+    expect(response.body).toEqual({ success: true, model });
+    expect(removeSlotstreamModel).toHaveBeenCalledWith(model);
+    expect(syncRuntimeProviderModels.mock.calls[0][0]).toMatchObject({ kind: 'slotstream' });
+  });
+
+  it('refuses a Slotstream removal that names a path, and preserves conflicts', async () => {
+    removeSlotstreamModel.mockClear();
+    expect((await post('slotstream/models/remove', { model: '../outside' })).status).toBe(400);
+    expect(removeSlotstreamModel).not.toHaveBeenCalled();
+    removeSlotstreamModel.mockRejectedValueOnce(new ServerError('Checkpoint is in use', {
+      status: 409, code: 'SLOTSTREAM_CHECKPOINT_IN_USE',
+    }));
+    const response = await post('slotstream/models/remove', { model: 'example-model' });
+    expect(response.status).toBe(409);
+    expect(response.body.code).toBe('SLOTSTREAM_CHECKPOINT_IN_USE');
+    expect(syncRuntimeProviderModels).not.toHaveBeenCalled();
   });
 
   it('does not wait on the refresh: the response returns while it is still pending', async () => {
