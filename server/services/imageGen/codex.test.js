@@ -1013,8 +1013,9 @@ it('settles admission rejection from the actual close event and clears the activ
 // #10749 — a launch that throws must settle through the job's own finalizer,
 // not leave a phantom 'running' job, a never-terminating SSE stream and a
 // cancel that cannot find a process.
+const sseClient = () => ({ writeHead: vi.fn(), write: vi.fn(), end: vi.fn(), req: new EventEmitter() });
+
 describe('codex provider — launch refusal settlement', () => {
-  const sseClient = () => ({ writeHead: vi.fn(), write: vi.fn(), end: vi.fn(), req: new EventEmitter() });
 
   it.each([
     // Node validates argv synchronously and throws before any child exists.
@@ -1147,6 +1148,10 @@ describe('codex provider — Windows shim lifecycle', () => {
     firstChild.exitCode = 1;
     firstChild.emit('close', 1);
     expect(await failed).toMatchObject({ generationId: first.jobId, error: 'Canceled' });
+    const client = sseClient();
+    expect(codex.attachSseClient(first.jobId, client)).toBe(true);
+    expect(client.write).toHaveBeenCalledWith(`data: ${JSON.stringify({ type: 'canceled', reason: 'Canceled' })}\n\n`);
+    client.req.emit('close');
     await flush();
     expect(codex.getActiveJob()).toMatchObject({ generationId: second.jobId });
     expect(codex.cancelAll()).toBe(true);

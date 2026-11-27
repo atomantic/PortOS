@@ -98,6 +98,7 @@ export function createCliImageJobRunner({ mode, provider, logName = provider, de
   };
 
   const finalizeJobFailure = createJobFailureFinalizer({
+    emitCanceledFrame: true,
     jobs, activeJobs, activeSlots: activeProcs, label: `${mode} image generation`, events: imageGenEvents,
     failedPayload: (jobId, reason, proc) => ({
       mode, generationId: jobId, error: reason,

@@ -134,9 +134,10 @@ export function dispatchCanceledJob(job, jobId, label, emitSettlement) {
 // whose slot map has no owner identity (deletes unconditionally).
 //
 // `failedPayload(jobId, reason)` builds the `events.emit('failed', …)` body; it defaults to the video shape (`{ generationId, error }`), and image backends add `mode`
-// (read by `imageGenQuota.js`). The canceled path settles the same queue subscriber with a distinct SSE terminal.
+// (read by `imageGenQuota.js`). Hosted backends retain their error-frame cancellation contract.
+// CLI backends opt into a distinct canceled SSE frame while settling the same queue subscriber.
 export const createJobFailureFinalizer = ({
-  jobs, activeJobs, activeSlots, label, events,
+  jobs, activeJobs, activeSlots, label, events, emitCanceledFrame = false,
   failedPayload = (jobId, reason) => ({ generationId: jobId, error: reason }),
 }) => {
   const clearActive = (jobId, slotOwner) => {
@@ -163,6 +164,7 @@ export const createJobFailureFinalizer = ({
     closeJobAfterDelay(jobs, jobId);
   };
   finalize.canceled = (job, jobId, slotOwner = null) => {
+    if (!emitCanceledFrame) return finalize(job, jobId, slotOwner, 'Canceled', { force: true });
     if (job.status === 'canceled') return;
     clearActive(jobId, slotOwner);
     dispatchCanceledJob(job, jobId, label, () => events.emit('failed', failedPayload(jobId, 'Canceled', slotOwner)));

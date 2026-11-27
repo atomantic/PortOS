@@ -557,6 +557,7 @@ function noVideoReason(stdoutTail = '') {
 }
 
 const finalizeJobFailure = createJobFailureFinalizer({
+  emitCanceledFrame: true,
   jobs,
   activeJobs,
   activeSlots: activeProcs,

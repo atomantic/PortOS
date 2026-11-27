@@ -351,7 +351,7 @@ describe('createJobFailureFinalizer', () => {
 
   it('delivers cancellation to SSE and settles the queue without logging a failure', () => {
     const errors = vi.spyOn(console, 'error');
-    const { activeSlots, events, finalize } = setup();
+    const { activeSlots, events, finalize } = setup({ emitCanceledFrame: true });
     const job = { clients: [], status: 'running' };
     activeSlots.set('j1', { some: 'request-entry' });
 
