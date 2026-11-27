@@ -2,26 +2,24 @@ import CollectionPrimaryControl from '../components/media/CollectionPrimaryContr
 import MediaBatchImport from '../components/media/MediaBatchImport';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useParams, Link, useNavigate } from 'react-router';
-import { ArrowLeft, Cloud, CloudOff, CheckSquare, Copy, DatabaseZap, FolderInput, HardDriveDownload, Inbox, Lock, Pencil, ShieldCheck, Star, StarOff, Trash2, X } from 'lucide-react';
-import ShareToButton from '../components/sharing/ShareToButton';
+import { ArrowLeft, Cloud, CloudOff, CheckSquare, DatabaseZap, HardDriveDownload, Inbox, Lock, Pencil, Star } from 'lucide-react';
 import PageSkeleton from '../components/ui/PageSkeleton';
 import toast from '../components/ui/Toast';
 import MediaCard from '../components/media/MediaCard';
 import MediaPreview from '../components/media/MediaPreview';
-import BulkTargetPicker from '../components/media/BulkTargetPicker';
+import CollectionSelectToolbar from '../components/media/CollectionSelectToolbar';
 import { normalizeMediaRow } from '../components/media/normalize';
 import { useMediaAnnotations } from '../hooks/useMediaAnnotations';
 import { useAsyncAction } from '../hooks/useAsyncAction';
 import useGalleryPreviewResolver from '../hooks/useGalleryPreviewResolver';
 import { UNSORTED_ID, buildUnsortedCollection } from '../lib/unsorted';
 import { useMediaDelete } from '../hooks/useMediaDelete';
-import { verifyImageNow } from '../services/apiImageVerifier';
+import useCollectionBulkActions from '../components/media/useCollectionBulkActions';
 import {
   getMediaCollection,
   updateMediaCollection,
   listMediaCollections,
   addMediaCollectionItem,
-  removeMediaCollectionItem,
   localizeMediaCollection,
 } from '../services/apiImageVideo.js';
 import { pullMissingMetadata } from '../services/apiPeerSync.js';
@@ -101,22 +99,10 @@ function MediaCollectionDetailContent() {
   // call below, declared after `items` so the resolver can match against it.
   const [selectMode, setSelectMode] = useState(false);
   const [selected, setSelected] = useState(new Map());
-  const [bulkBusy, setBulkBusy] = useState(false);
   // 'move' = add to target + remove from current; 'copy' = add only.
   const [pickerMode, setPickerMode] = useState(null);
-  const moveBtnRef = useRef(null);
-  const copyBtnRef = useRef(null);
   const pageFocusRef = useRef(null);
   const returningBulkFocus = useRef(false);
-  // Bulk selection disables its opener, then removes that toolbar on success.
-  // The page region survives loading and selection changes as a safe fallback.
-  useEffect(() => {
-    if (!returningBulkFocus.current) return;
-    if (document.activeElement === document.body || document.activeElement?.disabled) {
-      pageFocusRef.current?.focus({ preventScroll: true });
-    }
-    if (!bulkBusy) returningBulkFocus.current = false;
-  }, [bulkBusy, loading]);
   const { annotations, toggleStar, updateAnnotation, getCardProps } = useMediaAnnotations();
 
   const page = useGalleryPage({ collectionId: id, kind: 'all' }, { media: true });
@@ -286,135 +272,20 @@ function MediaCollectionDetailContent() {
     [items, selected],
   );
 
-  // Sequential — annotations and collections both do read-modify-write of a
-  // single JSON file with no per-record lock; parallel writes lose updates.
-  const bulkStar = async (starred) => {
-    if (selectedItems.length === 0) return;
-    setBulkBusy(true);
-    let successCount = 0;
-    let failedCount = 0;
-    for (const it of selectedItems) {
-      const { ok } = await updateAnnotation(it.key, { starred }, { silent: true });
-      if (ok) successCount++; else failedCount++;
-    }
-    setBulkBusy(false);
-    const verb = starred ? 'Favorited' : 'Unfavorited';
-    if (failedCount === 0) {
-      toast.success(`${verb} ${successCount} item${successCount === 1 ? '' : 's'}`);
-    } else if (successCount === 0) {
-      toast.error(`Failed to ${starred ? 'favorite' : 'unfavorite'} items`);
-    } else {
-      toast.error(`${verb} ${successCount} item${successCount === 1 ? '' : 's'}; ${failedCount} failed`);
-    }
-  };
+  const { bulkBusy, ...bulkActions } = useCollectionBulkActions({
+    collection, setCollection, selectedItems, setSelected, updateAnnotation, isUnsorted,
+    pickerMode, setPickerMode, returningBulkFocus, exitSelectMode, refresh, refreshPage: page.refresh,
+  });
 
-  const bulkRemove = async () => {
-    if (selectedItems.length === 0) return;
-    setBulkBusy(true);
-    let lastOk = null;
-    let failed = 0;
-    for (const it of selectedItems) {
-      const r = await removeMediaCollectionItem(collection.id, it.key, { silent: true }).catch(() => null);
-      if (r) lastOk = r; else failed++;
+  // Bulk selection disables its opener, then removes that toolbar on success.
+  // The page region survives loading and selection changes as a safe fallback.
+  useEffect(() => {
+    if (!returningBulkFocus.current) return;
+    if (document.activeElement === document.body || document.activeElement?.disabled) {
+      pageFocusRef.current?.focus({ preventScroll: true });
     }
-    if (lastOk) { setCollection(lastOk); page.refresh(); }
-    setBulkBusy(false);
-    exitSelectMode();
-    if (failed) toast.error(`Removed ${selectedItems.length - failed}; ${failed} failed`);
-    else toast.success(`Removed ${selectedItems.length} item${selectedItems.length === 1 ? '' : 's'} from "${collection.name}"`);
-  };
-
-  const bulkVerify = async () => {
-    const imagesToVerify = selectedItems.filter((it) => it.kind === 'image' && it.filename);
-    if (imagesToVerify.length === 0) {
-      toast.info('No images selected for verification');
-      return;
-    }
-    setBulkBusy(true);
-    let passCount = 0;
-    let failCount = 0;
-    let errorCount = 0;
-    for (const it of imagesToVerify) {
-      try {
-        const res = await verifyImageNow({
-          filename: it.filename,
-          profileId: 'strict_anatomy',
-          prompt: it.prompt || '',
-        });
-        if (res?.verdict === 'pass') passCount++;
-        else if (res?.verdict === 'fail') failCount++;
-      } catch (err) {
-        errorCount++;
-        console.error(`Error verifying ${it.filename}:`, err);
-      }
-    }
-    setBulkBusy(false);
-    if (errorCount > 0) toast.warning(`Batch verification: ${passCount} passed, ${failCount} defect(s) flagged, ${errorCount} could not be verified.`);
-    else toast.success(`Verified ${imagesToVerify.length} images: ${passCount} passed, ${failCount} defect(s) flagged.`);
-    page.refresh();
-  };
-
-  const bulkMoveOrCopy = async (targetId, targetName) => {
-    if (selectedItems.length === 0 || !pickerMode) return;
-    const mode = pickerMode;
-    returningBulkFocus.current = true;
-    setPickerMode(null);
-    setBulkBusy(true);
-    const placedKeys = new Set();
-    let added = 0;
-    let dupes = 0;
-    for (const it of selectedItems) {
-      const ref = it.kind === 'video' ? it.id : it.filename;
-      const r = await addMediaCollectionItem(targetId, { kind: it.kind, ref }, { silent: true }).catch((err) => {
-        if (err?.code === 'DUPLICATE') { dupes++; placedKeys.add(it.key); return 'dupe'; }
-        return null;
-      });
-      if (r && r !== 'dupe') { added++; placedKeys.add(it.key); }
-    }
-    // A move is two writes: add to the target, then remove from here. When the
-    // second half fails the item now lives in BOTH collections — that is a
-    // half-completed move, not a success, so track those keys separately from
-    // the add failures and keep them selected for a retry.
-    const removeFailedKeys = new Set();
-    if (mode === 'move' && placedKeys.size > 0) {
-      if (isUnsorted) {
-        // Source is synthetic — placing items in any real collection takes
-        // them out of Unsorted automatically. Just re-derive the view.
-        await refresh();
-      } else {
-        let lastOk = null;
-        for (const it of selectedItems) {
-          if (!placedKeys.has(it.key)) continue;
-          const r = await removeMediaCollectionItem(collection.id, it.key, { silent: true }).catch(() => null);
-          if (r) lastOk = r; else removeFailedKeys.add(it.key);
-        }
-        // The last successful removal carries the authoritative server state,
-        // so a partial failure still reconciles the items that did move out.
-        if (lastOk) { setCollection(lastOk); page.refresh(); }
-      }
-    }
-    setBulkBusy(false);
-    if (removeFailedKeys.size > 0) {
-      // Stay in select mode with only the half-moved items selected so the
-      // user can re-run the move (or remove) on exactly what failed.
-      setSelected(new Map(selectedItems.filter(item => removeFailedKeys.has(item.key)).map(item => [item.key, item])));
-    } else {
-      exitSelectMode();
-    }
-    const verb = mode === 'move' ? (isUnsorted ? 'Filed' : 'Moved') : 'Copied';
-    const note = dupes > 0 ? ` (${dupes} already there)` : '';
-    const stranded = selectedItems.length - added - dupes;
-    const addNote = stranded > 0 ? `; ${stranded} failed to add` : '';
-    if (removeFailedKeys.size > 0) {
-      // Deliberately says "Copied" — calling a half-completed move a "Move"
-      // is the false success this branch exists to prevent.
-      toast.error(`Copied ${added} to "${targetName}"${note}, but ${removeFailedKeys.size} could not be removed from "${collection.name}"${addNote}`);
-    } else if (stranded > 0) {
-      toast.error(`${verb} ${added} to "${targetName}"${note}; ${stranded} failed`);
-    } else {
-      toast.success(`${verb} ${added} to "${targetName}"${note}`);
-    }
-  };
+    if (!bulkBusy) returningBulkFocus.current = false;
+  }, [bulkBusy, loading]);
 
   // Remix / SendToVideo / Continue / Clean share a single implementation
   // with MediaHistory, ImageGen, and the Universe Builder lightbox via
@@ -507,10 +378,12 @@ function MediaCollectionDetailContent() {
       />
     );
     return (
-      <button type="button" onClick={() => setEditingName(true)} className="text-xl font-semibold text-white hover:text-port-accent flex items-center gap-2">
-        {collection.name}
-        <Pencil className="w-4 h-4 text-gray-500" />
-      </button>
+      <h1 className="text-xl font-semibold text-white">
+        <button type="button" onClick={() => setEditingName(true)} className="hover:text-port-accent flex items-center gap-2 pointer-coarse:min-h-11">
+          {collection.name}
+          <Pencil className="w-4 h-4 text-gray-500" />
+        </button>
+      </h1>
     );
   };
 
@@ -584,119 +457,23 @@ function MediaCollectionDetailContent() {
       }} />
 
       {selectMode && (
-        <div className="bg-port-card border border-port-border rounded-lg px-3 py-2 flex flex-wrap items-center gap-2 sticky top-0 z-30">
-          <span className="text-xs text-gray-300">
-            <span className="text-white font-medium">{selected.size}</span> of {items.length} selected
-          </span>
-          <button
-            type="button"
-            onClick={() => setSelected(new Map(items.map((it) => [it.key, it])))}
-            disabled={bulkBusy || items.every(item => selected.has(item.key))}
-            className="px-2 py-1 text-[11px] bg-port-border hover:bg-port-border/70 text-white rounded disabled:opacity-40"
-          >
-            {page.hasMore ? 'Select loaded' : 'Select all'}
-          </button>
-          <button
-            type="button"
-            onClick={() => setSelected(new Map())}
-            disabled={bulkBusy || selected.size === 0}
-            className="px-2 py-1 text-[11px] bg-port-border hover:bg-port-border/70 text-white rounded disabled:opacity-40"
-          >
-            Clear
-          </button>
-          <div className="flex flex-wrap items-center gap-1.5 ml-auto">
-            <button
-              type="button"
-              onClick={() => bulkStar(true)}
-              disabled={bulkBusy || selected.size === 0}
-              className="px-2 py-1 text-[11px] bg-port-warning/20 hover:bg-port-warning/40 text-port-warning rounded flex items-center gap-1 disabled:opacity-40"
-              title="Favorite selected"
-            >
-              <Star className="w-3 h-3" /> Star
-            </button>
-            <button
-              type="button"
-              onClick={() => bulkStar(false)}
-              disabled={bulkBusy || selected.size === 0}
-              className="px-2 py-1 text-[11px] bg-port-border hover:bg-port-border/70 text-white rounded flex items-center gap-1 disabled:opacity-40"
-              title="Unfavorite selected"
-            >
-              <StarOff className="w-3 h-3" /> Unstar
-            </button>
-            <ShareToButton
-              kind="media"
-              items={selectedItems.map((it) => ({ kind: it.kind, ref: it.ref }))}
-              label="Share…"
-            />
-            <button
-              ref={moveBtnRef}
-              type="button"
-              onClick={() => setPickerMode((m) => (m === 'move' ? null : 'move'))}
-              disabled={bulkBusy || selected.size === 0}
-              className="px-2 py-1 text-[11px] bg-port-accent/20 hover:bg-port-accent/40 text-port-accent rounded flex items-center gap-1 disabled:opacity-40"
-              title={isUnsorted ? 'File selected into a collection' : 'Move selected to another collection'}
-            >
-              <FolderInput className="w-3 h-3" /> {isUnsorted ? 'File…' : 'Move…'}
-            </button>
-            {!isUnsorted && (
-              <>
-                <button
-                  ref={copyBtnRef}
-                  type="button"
-                  onClick={() => setPickerMode((m) => (m === 'copy' ? null : 'copy'))}
-                  disabled={bulkBusy || selected.size === 0}
-                  className="px-2 py-1 text-[11px] bg-port-accent/20 hover:bg-port-accent/40 text-port-accent rounded flex items-center gap-1 disabled:opacity-40"
-                  title="Copy selected to another collection"
-                >
-                  <Copy className="w-3 h-3" /> Copy…
-                </button>
-                <button
-                  type="button"
-                  onClick={bulkRemove}
-                  disabled={bulkBusy || selected.size === 0}
-                  className="px-2 py-1 text-[11px] bg-port-error/20 hover:bg-port-error/40 text-port-error rounded flex items-center gap-1 disabled:opacity-40"
-                  title="Remove selected from this collection"
-                >
-                  <Trash2 className="w-3 h-3" /> Remove
-                </button>
-              </>
-            )}
-            {selectedItems.some((it) => it.kind === 'image') && (
-              <button
-                type="button"
-                onClick={bulkVerify}
-                disabled={bulkBusy || selected.size === 0}
-                className="px-2 py-1 text-[11px] bg-port-accent/20 hover:bg-port-accent/40 text-port-accent rounded flex items-center gap-1 disabled:opacity-40"
-                title="Verify anatomy and quality of selected images"
-              >
-                <ShieldCheck className="w-3 h-3" /> Verify
-              </button>
-            )}
-            <button
-              type="button"
-              onClick={exitSelectMode}
-              disabled={bulkBusy}
-              className="min-h-[44px] min-w-[44px] inline-flex items-center justify-center p-1 text-gray-400 hover:text-white disabled:opacity-40"
-              title="Exit select mode"
-              aria-label="Exit select mode"
-            >
-              <X className="w-4 h-4" />
-            </button>
-          </div>
-          {pickerMode && (
-            <BulkTargetPicker
-              anchorRef={pickerMode === 'move' ? moveBtnRef : copyBtnRef}
-              excludeId={collection.id}
-              busy={bulkBusy}
-              title={`${pickerMode === 'move' ? 'Move' : 'Copy'} ${selected.size} to…`}
-              collections={collectionsState === 'ready' ? allCollections : null}
-              error={collectionsError}
-              onRetry={retryCollections}
-              onPick={bulkMoveOrCopy}
-              onClose={() => setPickerMode(null)}
-            />
-          )}
-        </div>
+        <CollectionSelectToolbar
+          items={items}
+          hasMore={page.hasMore}
+          selected={selected}
+          setSelected={setSelected}
+          selectedItems={selectedItems}
+          isUnsorted={isUnsorted}
+          collectionId={collection.id}
+          pickerMode={pickerMode}
+          setPickerMode={setPickerMode}
+          collections={collectionsState === 'ready' ? allCollections : null}
+          collectionsError={collectionsError}
+          retryCollections={retryCollections}
+          bulkBusy={bulkBusy}
+          {...bulkActions}
+          exitSelectMode={exitSelectMode}
+        />
       )}
 
       {items.length === 0 ? (
