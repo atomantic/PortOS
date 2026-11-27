@@ -46,6 +46,53 @@ function renderMessage(message, accounts = [{ id: 'acct-1', name: 'Personal', ty
   );
 }
 
+describe('MessageDetail AI Reply tone', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    api.generateMessageDraft.mockResolvedValue(undefined);
+  });
+
+  it('defers to the saved server tone during and after a failed settings read', async () => {
+    const settings = Promise.withResolvers();
+    api.getSettings.mockReturnValueOnce(settings.promise);
+    renderMessage(baseMessage);
+
+    const reply = screen.getByRole('button', { name: 'AI Reply' });
+    await userEvent.click(reply);
+    expect(api.generateMessageDraft.mock.calls[0][0]).not.toHaveProperty('useVoice');
+
+    await act(async () => settings.reject(new Error('Settings unavailable')));
+    await userEvent.click(reply);
+    expect(api.generateMessageDraft.mock.calls[1][0]).not.toHaveProperty('useVoice');
+  });
+
+  it.each([true, false])('keeps an explicit %s choice when settings arrive late', async (choice) => {
+    const settings = Promise.withResolvers();
+    api.getSettings.mockReturnValueOnce(settings.promise);
+    renderMessage(baseMessage);
+
+    await userEvent.click(screen.getByRole('button', { name: /Conversational tone OFF/ }));
+    if (!choice) await userEvent.click(screen.getByRole('button', { name: /Conversational tone ON/ }));
+    await act(async () => settings.resolve({ messages: { voiceMode: !choice } }));
+
+    expect(screen.getByRole('button', { name: new RegExp(`Conversational tone ${choice ? 'ON' : 'OFF'}`) })).toBeInTheDocument();
+    await userEvent.click(screen.getByRole('button', { name: 'AI Reply' }));
+    expect(api.generateMessageDraft).toHaveBeenCalledWith(expect.objectContaining({ useVoice: choice }));
+  });
+
+  it('uses the saved display default and clears the override for a different message', async () => {
+    api.getSettings.mockResolvedValueOnce({ messages: { voiceMode: true } });
+    const { rerender } = renderMessage(baseMessage);
+    await userEvent.click(await screen.findByRole('button', { name: /Conversational tone ON/ }));
+    expect(screen.getByRole('button', { name: /Conversational tone OFF/ })).toBeInTheDocument();
+
+    rerender(<MessageDetail message={{ ...baseMessage, id: 'msg-2' }} accounts={[{ id: 'acct-1' }]} onBack={() => {}} />);
+    expect(screen.getByRole('button', { name: /Conversational tone ON/ })).toBeInTheDocument();
+    await userEvent.click(screen.getByRole('button', { name: 'AI Reply' }));
+    expect(api.generateMessageDraft.mock.calls[0][0]).not.toHaveProperty('useVoice');
+  });
+});
+
 describe('MessageDetail Teams reply recipients', () => {
   const accounts = [{ id: 'acct-1', type: 'teams' }];
 
