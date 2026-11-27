@@ -64,4 +64,83 @@ describe('Demucs locked provisioning boundary', () => {
     expect(run.mock.calls).toHaveLength(1);
     expect(run.mock.calls[0][1][0]).toBe('-c');
   });
+
+  it('cancels one waiter while a second waiter receives progress and the finished runtime', async () => {
+    const dir = await freshDir();
+    const plan = nativePlan();
+    const started = Promise.withResolvers();
+    const finished = Promise.withResolvers();
+    const run = vi.fn(async (_bin, args, onLine, { signal }) => {
+      if (args.includes('pip')) {
+        started.resolve({ signal, onLine });
+        await finished.promise;
+      }
+      return { success: true };
+    });
+    const settings = { dir, plan, run, resolveBasePython: async () => 'python3.11' };
+    const first = new AbortController();
+    const firstProgress = vi.fn();
+    const secondProgress = vi.fn();
+    const leaving = ensureDemucsRuntime({ ...settings, signal: first.signal, onProgress: firstProgress });
+    const staying = ensureDemucsRuntime({ ...settings, onProgress: secondProgress });
+    const { signal, onLine } = await started.promise;
+
+    try {
+      first.abort();
+      await expect(leaving).rejects.toMatchObject({ name: 'AbortError' });
+      expect(signal.aborted).toBe(false);
+      firstProgress.mockClear();
+      onLine('Downloading fixture wheel');
+      expect(firstProgress).not.toHaveBeenCalled();
+      expect(secondProgress).toHaveBeenCalledWith({ stage: 'installing', detail: 'Downloading fixture wheel' });
+    } finally {
+      finished.resolve();
+      await expect(staying).resolves.toBe(pythonAt(dir));
+    }
+    expect(run.mock.calls.filter(([, args]) => args.includes('pip'))).toHaveLength(1);
+  });
+
+  it('aborts after the final predicate waiter cancels and waits for child close before retrying', async () => {
+    const dir = await freshDir();
+    const plan = nativePlan();
+    const started = Promise.withResolvers();
+    const closed = Promise.withResolvers();
+    let canceled = false;
+    const run = vi.fn(async (_bin, args, _onLine, { signal }) => {
+      if (args.includes('pip') && !canceled) {
+        started.resolve(signal);
+        await closed.promise;
+      }
+      return { success: true };
+    });
+    const settings = { dir, plan, run, resolveBasePython: async () => 'python3.11' };
+    const first = new AbortController();
+    vi.useFakeTimers();
+    try {
+      const leavingFirst = ensureDemucsRuntime({ ...settings, signal: first.signal });
+      const leavingLast = ensureDemucsRuntime({ ...settings, isCancelled: () => canceled });
+      const signal = await started.promise;
+      first.abort();
+      await expect(leavingFirst).rejects.toMatchObject({ name: 'AbortError' });
+      expect(signal.aborted).toBe(false);
+
+      canceled = true;
+      const rejected = expect(leavingLast).rejects.toMatchObject({ name: 'AbortError' });
+      await vi.advanceTimersByTimeAsync(1000);
+      await rejected;
+      expect(signal.aborted).toBe(true);
+      expect(existsSync(join(dir, 'portos-lock.sha256'))).toBe(false);
+
+      const retry = ensureDemucsRuntime(settings);
+      await vi.advanceTimersByTimeAsync(0);
+      expect(run.mock.calls.filter(([, args]) => args.includes('venv'))).toHaveLength(1);
+      closed.resolve();
+      await expect(retry).resolves.toBe(pythonAt(dir));
+      expect(run.mock.calls.filter(([, args]) => args.includes('venv'))).toHaveLength(2);
+      expect(await readFile(join(dir, 'portos-lock.sha256'), 'utf8')).toBe(plan.lockId);
+    } finally {
+      closed.resolve();
+      vi.useRealTimers();
+    }
+  });
 });
