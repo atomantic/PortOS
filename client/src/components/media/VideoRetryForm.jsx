@@ -13,6 +13,8 @@ import {
   normalizeI2vReferenceMode, resolveI2vReferenceStrength,
 } from '../../lib/videoReferenceModes';
 import { getVideoGenModelContext, listLorasFull } from '../../services/apiImageVideo.js';
+import useListResource from '../../hooks/useListResource';
+import ListLoadError from '../ui/ListLoadError';
 import ModelSelect from '../ModelSelect';
 import ResolutionField from './ResolutionField';
 import AdvancedParamsPanel from '../videoGen/AdvancedParamsPanel';
@@ -27,12 +29,19 @@ import { loraFamilyOf, videoLoraFamily } from '../../lib/runnerFamilies';
 import LoraPicker from '../imageGen/LoraPicker';
 import { buildVideoRetryOverrides, reconcileModelBoundParams } from './retryOverrides';
 
+const loadModels = async () => (await getVideoGenModelContext({ silent: true }))?.models;
+const loadLoras = () => listLorasFull({ silent: true });
+
 // The retry editor deliberately reuses the same resolution and advanced
 // controls rendered by VideoGen. Keeping the capability predicates in those
 // components means a newly-supported video knob is not silently absent here.
 export default function VideoRetryForm({ job, retrying, onSubmit, onCancel }) {
   const p = job.params || {};
-  const [models, setModels] = useState([]);
+  const isHosted = isCloudVideoMode(p.mode);
+  const modelCatalog = useListResource(loadModels, { enabled: !isHosted });
+  const loraCatalog = useListResource(loadLoras, { enabled: !isHosted });
+  const { items: models } = modelCatalog;
+  const { items: availableLoras } = loraCatalog;
   const [modelId, setModelId] = useState(p.modelId || '');
   const [prompt, setPrompt] = useState(p.retryPrompt ?? p.prompt ?? '');
   const [negativePrompt, setNegativePrompt] = useState(p.retryNegativePrompt ?? p.negativePrompt ?? '');
@@ -62,19 +71,7 @@ export default function VideoRetryForm({ job, retrying, onSubmit, onCancel }) {
   // only the render bridge decides whether its pinned pipeline can honor it.
   const [streamingMode, setStreamingMode] = useState(videoStreamingModeFromRecord(p.streamingMode));
   const [a2vLoraStageStrengths, setA2vLoraStageStrengths] = useState(p.a2vLoraStageStrengths ?? [1, 1]);
-  const [availableLoras, setAvailableLoras] = useState([]);
   const [selectedLoras, setSelectedLoras] = useState(Array.isArray(p.loras) ? p.loras : []);
-
-  useEffect(() => {
-    getVideoGenModelContext({ silent: true })
-      .then((status) => setModels(Array.isArray(status?.models) ? status.models : []))
-      .catch(() => {});
-  }, []);
-  useEffect(() => {
-    listLorasFull({ silent: true })
-      .then((loras) => setAvailableLoras(Array.isArray(loras) ? loras : []))
-      .catch(() => {});
-  }, []);
 
   const currentModel = models.find((model) => model.id === modelId) || null;
   // Models arrive asynchronously, so recorded values can only be validated once
@@ -92,7 +89,6 @@ export default function VideoRetryForm({ job, retrying, onSubmit, onCancel }) {
   // Hosted backends (grok / fal / reactor) own their params: `mode` is the
   // dispatch discriminator and `modelId` is a provider id the local catalog
   // doesn't know, so the local model / size / sampler / chaining controls don't apply.
-  const isHosted = isCloudVideoMode(p.mode);
   const isReactor = p.mode === VIDEO_GEN_MODE.REACTOR;
   const loraFamily = videoLoraFamily(currentModel);
   const videoLoras = loraFamily ? availableLoras.filter((lora) => loraFamilyOf(lora) === loraFamily) : [];
@@ -166,6 +162,15 @@ export default function VideoRetryForm({ job, retrying, onSubmit, onCancel }) {
         )}
         {!isHosted && <ResolutionField presets={resolutionOptionsForModel(currentModel)} width={width} height={height} onChange={(w, h) => { setWidth(w); setHeight(h); }} {...videoEdgeBoundsForModel(currentModel)} snapOnBlur />}
       </div>
+      {!isHosted && (modelCatalog.state === 'loading' || loraCatalog.state === 'loading') && (
+        <p role="status" className="text-xs text-port-text-muted">Loading video catalogs…</p>
+      )}
+      {!isHosted && modelCatalog.state === 'error' && (
+        <ListLoadError what="video models" error={modelCatalog.error} onRetry={modelCatalog.retry} />
+      )}
+      {!isHosted && loraCatalog.state === 'error' && (
+        <ListLoadError what="video LoRAs" error={loraCatalog.error} onRetry={loraCatalog.retry} />
+      )}
       {!isHosted && encoderOptions.length > 1 && (
         <FormField label="Text encoder" labelClassName="block text-xs font-medium text-gray-400 mb-1">
           <ModelSelect models={encoderOptions} value={textEncoderId} onChange={(e) => setTextEncoderId(e.target.value)} getLabel={(option) => option.label} />

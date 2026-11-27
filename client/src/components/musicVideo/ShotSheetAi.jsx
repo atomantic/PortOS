@@ -148,17 +148,26 @@ export default function ShotSheetAi({ project, rows, disabled, onApply, onApplyi
   };
 
   const apply = async () => {
-    setBusy(true); setApplying(true); onApplyingChange?.(true);
+    setBusy(true); setApplying(true); setError('');
     const left = [];
-    for (const item of review.items) {
-      if (!item.selected) { left.push(item); continue; }
-      const scene = sceneNow(item.sceneId);
-      const patch = scene && patchFor(item, scene);
-      // A deleted shot, or one whose columns the director has since filled, has nothing to save.
-      if (patch && !await onApply(item.sceneId, patch)) left.push(item);
+    let index = 0;
+    try {
+      onApplyingChange?.(true);
+      for (; index < review.items.length; index += 1) {
+        const item = review.items[index];
+        if (!item.selected) { left.push(item); continue; }
+        const scene = sceneNow(item.sceneId);
+        const patch = scene && patchFor(item, scene);
+        // A deleted shot, or one whose columns the director has since filled, has nothing to save.
+        if (patch && !await onApply(item.sceneId, patch)) left.push(item);
+      }
+    } catch (err) {
+      setError(err?.message || 'Could not apply the shot proposals.');
+      left.push(...review.items.slice(index));
+    } finally {
+      setReview(left.length ? { ...review, items: left } : null);
+      setBusy(false); setApplying(false); onApplyingChange?.(false);
     }
-    setBusy(false); setApplying(false); onApplyingChange?.(false);
-    setReview(left.length ? { ...review, items: left } : null);
   };
 
   const selectedCount = review?.items.filter((item) => item.selected).length || 0;
