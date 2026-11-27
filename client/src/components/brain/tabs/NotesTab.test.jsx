@@ -649,6 +649,27 @@ describe('NotesTab URL state and unavailable reads', () => {
     expect(screen.getByRole('heading', { name: 'first' })).toBeInTheDocument();
   });
 
+  it('exposes disclosure states and runs the tag search from a native button', async () => {
+    api.getNotesVaultTags.mockResolvedValueOnce({ tags: [{ tag: 'design', count: 1 }] });
+    await renderTab();
+
+    const folder = screen.getByRole('button', { name: 'Projects 1' });
+    expect(folder).toHaveAttribute('aria-expanded', 'false');
+    fireEvent.click(folder);
+    expect(folder).toHaveAttribute('aria-expanded', 'true');
+
+    const tags = screen.getByRole('button', { name: 'Tags' });
+    expect(tags).toHaveAttribute('aria-expanded', 'false');
+    await act(async () => { fireEvent.click(tags); });
+    expect(tags).toHaveAttribute('aria-expanded', 'true');
+
+    const chip = screen.getByRole('button', { name: '#design 1' });
+    expect(chip).toHaveAttribute('type', 'button');
+    await act(async () => { fireEvent.click(chip); });
+    expect(api.searchNotes).toHaveBeenCalledTimes(1);
+    expect(api.searchNotes).toHaveBeenCalledWith('vault-1', '#design', undefined, { silent: true });
+  });
+
   it('keeps tag-read failures visible through the normal API error feedback', async () => {
     api.getNotesVaultTags.mockRejectedValueOnce(new Error('tags unavailable'));
     await renderTab();
@@ -716,6 +737,20 @@ describe('NotesTab preview rendering', () => {
     api.scanNotesVault.mockResolvedValue({ notes: [note('first', ''), note('second', 'second body')], total: 2 });
     api.getNotesVaultFolders.mockResolvedValue({ folders: [] });
     api.getNotesVaultTags.mockResolvedValue({ tags: [] });
+  });
+
+  it('opens a nested note by its case-insensitive name from the inline preview', async () => {
+    const source = note('first', 'See [[SECOND|the nested note]].');
+    const target = { ...note('second', 'nested body'), path: 'Projects/Archive/second.md', folder: 'Projects/Archive' };
+    api.scanNotesVault.mockResolvedValueOnce({ notes: [source, target], total: 2 });
+    api.getNote.mockImplementation(async (_vault, path) => [source, target].find(entry => entry.path === path));
+    await renderTab('/brain/notes?vault=a&note=first.md');
+
+    await act(async () => { fireEvent.click(screen.getByRole('button', { name: 'the nested note' })); });
+
+    expect(api.getNote).toHaveBeenLastCalledWith('a', target.path, { silent: true });
+    expect(screen.getByRole('heading', { name: 'second' })).toBeInTheDocument();
+    expect(new URLSearchParams(screen.getByTestId('location').textContent).get('note')).toBe(target.path);
   });
 
   it('renders notes through the shared markdown renderer with inert unsafe hrefs and live wikilinks', async () => {
