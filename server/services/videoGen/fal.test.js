@@ -943,6 +943,43 @@ describe('standalone lip-sync take', () => {
   });
 });
 
+describe('videoGen/fal — cancel input transfer and submission', () => {
+  it.each(['hosted upload', 'queue submission'])('aborts requests during %s', async (phase) => {
+    const hosted = phase === 'hosted upload';
+    const modelId = hosted ? 'fal-ai/bytedance/omnihuman/v1.5' : 'fal-ai/x';
+    const frame = join(TEST_ROOT, 'frame.png');
+    const audio = join(TEST_ROOT, 'voice.wav');
+    if (hosted) await Promise.all([writeFile(frame, 'png'), writeFile(audio, 'wav')]);
+    const submitUrl = `https://queue.fal.run/${modelId}`;
+    const pendingSignals = [];
+    const fetchMock = vi.fn(async (url, { body, method, signal }) => {
+      if (hosted && url.startsWith('https://rest.fal.ai/storage/upload/initiate')) {
+        const { file_name: name } = JSON.parse(body);
+        return jsonResponse({ upload_url: `https://upload.example.com/${name}`, file_url: `https://cdn.example.com/${name}` });
+      }
+      if ((hosted && method === 'PUT' && url.startsWith('https://upload.example.com/')) || (!hosted && url === submitUrl && method === 'POST')) {
+        pendingSignals.push(signal);
+        return new Promise((_, reject) => {
+          signal.addEventListener('abort', () => reject(signal.reason), { once: true });
+        });
+      }
+      throw new Error(`unexpected fetch: ${url}`);
+    });
+    vi.stubGlobal('fetch', fetchMock);
+
+    const job = await fal.generateVideo({
+      apiKey: 'test-key', modelId, prompt: 'she sings',
+      ...(hosted ? { sourceImagePath: frame, audioFilePath: audio } : {}),
+    });
+    await vi.waitFor(() => expect(pendingSignals).toHaveLength(hosted ? 2 : 1));
+    expect(fal.cancel(job.jobId)).toBe(true);
+    expect(pendingSignals.every((signal) => signal.aborted)).toBe(true);
+    expect(await waitForTerminal(job.jobId)).toMatchObject({ type: 'failed', error: expect.stringMatching(/cancel/i) });
+    expect(fetchMock.mock.calls.filter(([url]) => url === submitUrl)).toHaveLength(hosted ? 0 : 1);
+    expect(await loadHistory()).toEqual([]);
+  });
+});
+
 // #11381: OmniHuman v1.5 downloads its inputs and answers a data URI with
 // "Failed to download the file", so its frame and audio go up to fal's CDN first.
 describe('hosted inputs', () => {

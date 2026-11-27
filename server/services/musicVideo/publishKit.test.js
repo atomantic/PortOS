@@ -465,6 +465,18 @@ describe('publishing kit build (#9281)', () => {
       native.mockRestore();
     }
 
+    const install = vi.spyOn(ffmpegService, 'installEncodedVideo').mockResolvedValue({
+      ok: false, reason: 'Failed to install publish-kit loudness video: file is locked',
+    });
+    try {
+      const { jobId } = await kit.startPublishKitBuild(id, { loudnessPreset: 'web' });
+      expect(await buildEnded(jobId)).toMatchObject({ type: 'error', error: expect.stringContaining('file is locked') });
+      expect((await projects.getProject(id)).publishKit).toEqual(previous);
+      expect(await publishFiles()).toEqual(previousFiles);
+    } finally {
+      install.mockRestore();
+    }
+
     const measure = vi.spyOn(ffmpegService, 'reportMasteredLoudness').mockImplementation(({ signal }) => new Promise((_, reject) => {
       signal.addEventListener('abort', () => reject(signal.reason), { once: true });
     }));
