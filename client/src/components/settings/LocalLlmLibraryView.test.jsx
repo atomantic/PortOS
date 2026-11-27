@@ -145,6 +145,16 @@ describe('LocalLlmLibraryView information architecture', () => {
     await waitFor(() => expect(getLocalLlmCatalog).toHaveBeenCalled());
   });
 
+  it('lists externally served Conversational Gemma without offering an invalid backend install', async () => {
+    await renderLibrary();
+    fireEvent.click(screen.getByText('Externally served voice models'));
+    const heading = screen.getByRole('heading', { name: 'Conversational Gemma 4 31B' });
+    const entry = heading.closest('article');
+    expect(within(entry).getByRole('link', { name: 'Model card and access' }))
+      .toHaveAttribute('href', 'https://huggingface.co/Trelis/gemma-4-31B-it-conversational');
+    expect(within(entry).queryByRole('button', { name: /install/i })).not.toBeInTheDocument();
+  });
+
   it('keeps the model-abuse guard off the catalog panel', async () => {
     await renderLibrary();
 

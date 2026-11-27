@@ -4,6 +4,7 @@ import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 // without warming the AI toolkit.
 vi.mock('../provider/providers.js', () => ({ getProviderById: vi.fn() }));
 import { getProviderById } from '../provider/providers.js';
+import { CONVERSATIONAL_GEMMA } from '../../lib/voiceModelCatalog.js';
 
 import {
   extractInlineToolCalls, isToolCapable, isReasoningModel,
@@ -343,6 +344,47 @@ describe('streamChat request lifecycle', () => {
     if (maxTokens === undefined) expect(body).not.toHaveProperty('max_tokens');
     else expect(body.max_tokens).toBe(maxTokens);
     expect(body).not.toHaveProperty('chat_template_kwargs');
+  });
+
+  it('streams a structured tool call and speaks the tool result through the exact Conversational Gemma pin', async () => {
+    const requested = CONVERSATIONAL_GEMMA.id;
+    const served = requested.toLowerCase();
+    const messages = [{ role: 'user', content: 'Is ticket B42 ready?' }];
+    const tools = [{ type: 'function', function: { name: 'lookup_repair', parameters: {
+      type: 'object', properties: { ticket: { type: 'string' } }, required: ['ticket'],
+    } } }];
+    const toolCall = {
+      id: 'call-1', type: 'function', function: { name: 'lookup_repair', arguments: JSON.stringify({ ticket: 'B42' }) },
+    };
+    const trace = [];
+    fetchMock.mockImplementation(async (url, options = {}) => {
+      if (url.endsWith('/models')) return Response.json({ data: [{ id: 'gemma4:31b' }, { id: served }] });
+      const body = JSON.parse(options.body);
+      trace.push(body);
+      const choice = body.messages.at(-1)?.role === 'tool'
+        ? { delta: { content: 'Your bike is ready to pick up.' }, finish_reason: 'stop' }
+        : { delta: { tool_calls: [{ index: 0, ...toolCall }] }, finish_reason: 'tool_calls' };
+      return new Response('data: ' + JSON.stringify({ choices: [choice] }) + '\n\ndata: [DONE]\n\n');
+    });
+
+    const first = await streamChat(messages, { provider: 'test-provider', model: requested, tools });
+    expect(first.finishReason).toBe('tool_calls');
+    expect(first.toolCalls[0]).toMatchObject(toolCall);
+    const replay = [...messages, { role: 'assistant', content: '', tool_calls: [toolCall] },
+      { role: 'tool', tool_call_id: toolCall.id, content: '{"status":"ready"}' }];
+    const onDelta = vi.fn();
+    const second = await streamChat(replay, { provider: 'test-provider', model: requested, tools, onDelta });
+    expect(second).toMatchObject({ model: served, text: 'Your bike is ready to pick up.' });
+    expect(onDelta).toHaveBeenCalledWith('Your bike is ready to pick up.');
+    expect(trace[0]).toMatchObject({ model: served, messages, tools, tool_choice: 'auto' });
+    expect(trace[1]).toMatchObject({ model: served, messages: replay, tools });
+  });
+
+  it('does not silently send a Conversational Gemma request to the base Gemma', async () => {
+    fetchMock.mockResolvedValueOnce(Response.json({ data: [{ id: 'gemma4:31b' }] }));
+    await expect(streamChat([], { provider: 'test-provider', model: CONVERSATIONAL_GEMMA.id }))
+      .rejects.toThrow('does not serve Conversational Gemma 4 31B');
+    expect(fetchMock).toHaveBeenCalledTimes(1);
   });
 
   it('lets other providers choose their output budget without sending the Ollama-only effort', async () => {
