@@ -7,6 +7,7 @@
  */
 
 import { basename, join } from 'path';
+import { finishedImageAdmission } from '../../lib/backupPublicationWait.js';
 import { withBackupAssetPublication } from '../../lib/backupSnapshotBoundary.js';
 import { atomicWrite, PATHS, unlinkGuarded } from '../../lib/fileUtils.js';
 import { detectImageFormat } from '../../lib/mimeTypes.js';
@@ -111,7 +112,7 @@ export function createHostedImageJobRunner({ mode, provider, logName = provider,
       }
       throw err;
     }
-  });
+  }, finishedImageAdmission(imageGenEvents, meta.id));
 
   /**
    * The run's catch tail. The remote request may still be queued or running, so

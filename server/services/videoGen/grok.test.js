@@ -500,7 +500,7 @@ describe('videoGen/grok — cancel', () => {
       await settlement;
       expect(existsSync(upload)).toBe(false);
       expect(failed).toHaveBeenCalledTimes(1);
-      expect(failed.mock.calls[0][0].error).toContain('Signal transport failed');
+      expect(failed.mock.calls[0][0].error).toBe('Canceled');
       expect(fixture.admission.status().state).toBe('ready');
       expect(grok.cancel(jobId)).toBe(false);
       child.emit('close', 1, null);

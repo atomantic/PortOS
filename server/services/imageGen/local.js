@@ -22,10 +22,11 @@ import { spawn } from '../../lib/childProcess.js';
 import { atomicWrite, ensureDir, PATHS, resolveImageInputPath, rmGuarded, unlinkGuarded } from '../../lib/fileUtils.js';
 import { assertLocalImageModelInputs, DEFAULT_LOCAL_IMAGE_DIMENSION } from '../../lib/localImageModelInputs.js';
 import { ServerError } from '../../lib/errorHandler.js';
+import { finishedImageAdmission } from '../../lib/backupPublicationWait.js';
 import { withBackupAssetPublication } from '../../lib/backupSnapshotBoundary.js';
 import { autoCleanGeneratedImage } from '../../lib/imageClean.js';
 import { imageGenEvents } from '../imageGenEvents.js';
-import { broadcastSse, attachSseClient as attachSse, closeJobAfterDelay, dispatchTerminalEvent } from '../../lib/sseUtils.js';
+import { broadcastSse, attachSseClient as attachSse, closeJobAfterDelay, dispatchCanceledJob, dispatchTerminalEvent } from '../../lib/sseUtils.js';
 import { FLUX2_VENV_DEFAULT, isFlux2VenvHealthy, invalidateFlux2Health } from '../../lib/pythonSetup.js';
 import { usesTorchVenv, usesMossSwift, usesFlux3, usesMinimaxH3Image } from '../../lib/imageRuntimeRemedies.js';
 import { mossChildEnv, MOSS_MANIFEST } from './mossRuntime.js';
@@ -92,6 +93,8 @@ export const cancel = () => {
   // mflux child is still running, and we lose the handle for a follow-up
   // SIGKILL. The `activeProcess === proc` guard escalates only when this is
   // still the tracked child (mflux can ignore SIGTERM mid-tensor-op).
+  const job = jobs.get(activeJob?.generationId);
+  if (job) job.canceled = true;
   killWithEscalation(proc, { label: 'image child', stillRunning: () => activeProcess === proc });
   return true;
 };
@@ -585,15 +588,21 @@ function reportLocalError({ job, jobId }, reason, lifecycleFields = {}) {
 }
 
 async function finalizeLocalExit(render, exit) {
-  const { jobId, outputPath, outputDir } = render;
+  const { jobId, job, outputPath, outputDir } = render;
   try {
-    // A successful exit can still leave an empty frame. Reject it before publishing.
-    const emptyFrame = exit.code === 0 ? await rejectDegenerateFrame(outputPath) : null;
+    if (job.canceled) {
+      dispatchCanceledJob(job, jobId, 'Image generation', () => imageGenEvents.emit('failed', {
+        mode: IMAGE_GEN_MODE.LOCAL, generationId: jobId, inputProcessSettled: true, error: 'Canceled',
+      }));
+      return;
+    }
+    if (exit.code !== 0 || exit.processError) {
+      return finalizeLocalFailure(render, { ...exit, lines: exit.readFailureLines() });
+    }
+    const emptyFrame = await rejectDegenerateFrame(outputPath);
     if (emptyFrame) {
       console.error(`❌ Image generation failed [${jobId.slice(0, 8)}]: ${emptyFrame}`);
       reportLocalError(render, emptyFrame, { inputProcessSettled: true });
-    } else if (exit.code !== 0 || exit.processError) {
-      finalizeLocalFailure(render, { ...exit, lines: exit.readFailureLines() });
     } else {
       await finalizeLocalSuccess(render);
     }
@@ -636,26 +645,23 @@ function wireLocalChild(render, child, stepwiseDir) {
   const stopWatching = startStepwiseWatcher(stepwiseDir, jobId);
   const output = wireLocalOutput(proc, render);
   proc.on('close', (code, signal) => {
-    void withBackupAssetPublication(async () => {
-      if (finalized) return;
-      finalized = true;
-      // An unterminated final line can still update the active job.
-      output.flush();
-      activeProcess = null;
-      activeJob = null;
-      void releaseHeavyClaim();
-      stopWatching();
-      void removeStepwise();
-      await finalizeLocalExit(render, { code, signal, processError, readFailureLines: output.failureLines });
-    }).catch(async (err) => {
-      // Admission refused before the finalizer ran. Settle without touching
-      // gallery bytes outside the backup publication boundary.
-      if (finalized) return;
-      finalized = true;
-      activeProcess = null;
-      activeJob = null;
-      stopWatching();
-      await Promise.all([releaseHeavyClaim(), removeStepwise()]);
+    if (finalized) return;
+    finalized = true;
+    // The last partial line still belongs to this process. Release compute and
+    // scratch independently of any backup cut holding the finished image.
+    output.flush();
+    activeProcess = null;
+    activeJob = null;
+    void releaseHeavyClaim();
+    stopWatching();
+    void removeStepwise();
+    const settle = () => finalizeLocalExit(render, { code, signal, processError, readFailureLines: output.failureLines });
+    if (code !== 0 || processError || job.canceled || !render.publicPath) {
+      void settle();
+      return;
+    }
+    void withBackupAssetPublication(settle, finishedImageAdmission(imageGenEvents, jobId)).catch(err => {
+      // Admission refused before any gallery writes were permitted.
       reportLocalError(render, err?.message || String(err), { inputProcessSettled: true });
       closeJobAfterDelay(jobs, jobId);
     });

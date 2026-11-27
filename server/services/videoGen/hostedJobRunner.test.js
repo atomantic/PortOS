@@ -107,7 +107,7 @@ function expectFailed(jobId, error, extras = {}) {
   expect(completed).not.toHaveBeenCalled();
   expect(runner.getActiveJobs()).toEqual([]);
   expect(runner.cancel(jobId)).toBe(false);
-  expect(attach(jobId).frames).toEqual([{ type: 'error', error, ...extras }]);
+  expect(attach(jobId).frames).toEqual([error === 'Canceled' ? { type: 'canceled', reason: error } : { type: 'error', error, ...extras }]);
 }
 
 describe('hosted video runner contract', () => {
@@ -174,7 +174,7 @@ describe('hosted video runner contract', () => {
     await expect(readFile(job.outputPath)).rejects.toMatchObject(missing);
     expect(await loadHistory()).toEqual([]);
     expectFailed(jobId, 'Canceled');
-    expect(frames.at(-1)).toEqual({ type: 'error', error: 'Canceled' });
+    expect(frames.at(-1)).toEqual({ type: 'canceled', reason: 'Canceled' });
   });
 
   it('discards an output when cancellation arrives during geometry probing', async () => {
