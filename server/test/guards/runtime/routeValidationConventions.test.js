@@ -34,41 +34,13 @@ const ALLOWED_UNVALIDATED = new Map([
   ['routes/pipeline/audio.js POST /issues/:id/stages/audio/music/upload', 'multipart upload: req.body only carries an optional label text field'],
 ]);
 
-// Legacy route modules still importing Zod. Remove entries as schemas move to server/lib.
+// Feature-off routes still importing Zod. Remove entries as schemas move to server/lib.
 const ALLOWED_ZOD_IMPORTS = new Set([
-  'routes/ask.js',
-  'routes/autobiography.js',
-  'routes/automationSchedules.js',
-  'routes/avatar.js',
-  'routes/beeper.js',
-  'routes/brainImport.js',
-  'routes/browser.js',
-  'routes/calendar.js',
-  'routes/character.js',
-  'routes/codeReview.js',
-  'routes/conflictJournal.js',
-  'routes/contacts.js',
-  'routes/dataMaintenance.js',
-  'routes/dataManager.js',
-  'routes/digital-twin/import.js',
-  'routes/feeds.js',
   'routes/gsd.js',
-  'routes/history.js',
-  'routes/humanActions.js',
   'routes/imessage.js',
   'routes/jira.js',
-  'routes/mindToolRecipeRoutes.js',
-  'routes/moltworldTools.js',
   'routes/openclaw.js',
-  'routes/remoteDesktopViewer.js',
-  'routes/review.js',
   'routes/rigging.js',
-  'routes/socialAccounts.js',
-  'routes/stackerNews.js',
-  'routes/systemResources.js',
-  'routes/timeline.js',
-  'routes/tools.js',
-  'routes/writersRoom.js',
 ]);
 
 const VALIDATE_CALL = /\bvalidateRequest\s*\(|\bvalidate\s*\(|\bparseBody\s*\(|\.safeParse\s*\(|[Ss]chema\w*\.parse\s*\(/g;

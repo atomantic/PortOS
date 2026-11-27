@@ -5,42 +5,21 @@
  * disk scans. Nothing runs at boot or merely because a dashboard widget polls.
  */
 
+import { duplicatePairsSchema, emptyBodySchema, systemResourceTriageSchema } from '../lib/systemResourcesValidation.js';
 import { Router } from 'express';
-import { z } from 'zod';
 import { asyncHandler } from '../lib/errorHandler.js';
 import { validateRequest } from '../lib/validateRequest.js';
-import { EFFORT_LEVELS } from '../lib/provider/providerModels.js';
 import { onClientDisconnect } from '../lib/sseDownload.js';
 import { stopRun } from '../services/runner.js';
 import { getSystemResourceReport, getTrackedModelInventory, triageSystemResources } from '../services/systemResources.js';
 import { rectifyModelDuplicates } from '../services/modelDeduplication.js';
 
 const router = Router();
-const duplicatePairsSchema = z.object({
-  pairs: z.array(z.object({
-    sourcePath: z.string().min(1).max(4096).refine((path) => !path.includes('\0'), 'Invalid model path'),
-    targetPath: z.string().min(1).max(4096).refine((path) => !path.includes('\0'), 'Invalid model path'),
-  }).strict()).min(1).max(200),
-  mode: z.enum(['hardlink', 'clone']).default('hardlink'),
-}).strict();
 
 router.post('/duplicates/rectify', asyncHandler(async (req, res) => {
   const { pairs, mode } = validateRequest(duplicatePairsSchema, req.body);
   res.json(await rectifyModelDuplicates(pairs, { mode }));
 }));
-const emptyBodySchema = z.object({}).strict();
-
-const blankToUndefined = (value) => {
-  const trimmed = (value ?? '').trim();
-  return trimmed || undefined;
-};
-
-export const systemResourceTriageSchema = z.object({
-  providerId: z.string().trim().min(1).max(128),
-  model: z.string().max(256).optional().transform(blankToUndefined),
-  effort: z.string().max(64).optional().transform(blankToUndefined)
-    .refine((value) => value === undefined || EFFORT_LEVELS.includes(value), 'Unsupported effort level'),
-}).strict();
 
 // GET, unlike everything else here, because it performs NO scan: it reads the
 // model manifest PortOS maintains at install/uninstall time. That is the whole
@@ -81,3 +60,5 @@ router.post('/triage', asyncHandler(async (req, res) => {
 }));
 
 export default router;
+
+export { systemResourceTriageSchema } from "../lib/systemResourcesValidation.js";

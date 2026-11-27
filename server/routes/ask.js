@@ -19,16 +19,15 @@
  */
 
 import { Router } from 'express';
-import { z } from 'zod';
 import { asyncHandler, ServerError } from '../lib/errorHandler.js';
 import { validateRequest } from '../lib/validateRequest.js';
 import { awaitWritableDrain } from '../lib/streamBackpressure.js';
 import { SSE_HEADERS } from '../lib/sseHeaders.js';
 import { onClientDisconnect } from '../lib/sseDownload.js';
 import * as convs from '../services/askConversations.js';
-import { resolveAskProvider, runAsk, VALID_MODES } from '../services/askService.js';
-import { ID_RE as CONV_ID_RE } from '../services/askConversations.js';
+import { resolveAskProvider, runAsk } from '../services/askService.js';
 import { promoteTurnById } from '../services/askPromote.js';
+import { idSchema, askBodySchema, promoteBodySchema, promoteTurnBodySchema } from '../lib/askValidation.js';
 
 const router = Router();
 
@@ -36,42 +35,6 @@ const router = Router();
 // conversation file keeps everything; trimming here keeps the prompt bounded
 // against multi-turn token blowup.
 const PROMPT_HISTORY_TURNS = 12;
-
-// Sourced from `askConversations.ID_RE` so the route, the storage layer, and
-// the generator are guaranteed to agree on the canonical id shape — variable-
-// width regexes here let non-canonical ids through and break listConversations'
-// lexical-sort = chronological-sort invariant.
-const idSchema = z.string().regex(CONV_ID_RE, 'invalid conversation id');
-
-const askBodySchema = z.object({
-  conversationId: idSchema.optional(),
-  question: z.string().trim().min(1).max(4000),
-  mode: z.enum([...VALID_MODES]).optional().default('ask'),
-  providerId: z.string().min(1).max(100).optional(),
-  model: z.string().min(1).max(200).optional(),
-  maxSources: z.number().int().min(1).max(50).optional().default(12),
-  timeWindow: z.object({
-    days: z.number().int().min(1).max(365).optional(),
-    startDate: z.string().datetime().optional(),
-    endDate: z.string().datetime().optional(),
-  }).refine(
-    (w) => !(w.startDate && w.endDate) || Date.parse(w.startDate) <= Date.parse(w.endDate),
-    { message: 'startDate must be <= endDate', path: ['startDate'] },
-  ).optional(),
-});
-
-const promoteBodySchema = z.object({
-  promoted: z.boolean().optional().default(true),
-});
-
-// Promote-turn payloads vary by target — keep the discriminated union narrow
-// rather than a permissive bag so the route can fail-fast on a goal target
-// missing its goalId before we touch any service.
-const promoteTurnBodySchema = z.discriminatedUnion('target', [
-  z.object({ target: z.literal('brain') }),
-  z.object({ target: z.literal('task'), priority: z.enum(['LOW', 'MEDIUM', 'HIGH']).optional().default('MEDIUM') }),
-  z.object({ target: z.literal('goal'), goalId: z.string().min(1).max(200) }),
-]);
 
 router.get('/', asyncHandler(async (_req, res) => {
   const conversations = await convs.listConversations({ limit: 100 });

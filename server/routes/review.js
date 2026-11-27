@@ -1,29 +1,22 @@
 import express from 'express';
 import { reviewItemsQuerySchema } from '../lib/queryValidation.js';
-import { z } from 'zod';
 import { asyncHandler } from '../lib/errorHandler.js';
 import { validateRequest } from '../lib/validateRequest.js';
 import * as reviewService from '../services/review.js';
 import { claimQueueDelivery } from '../services/reviewQueueDelivery.js';
-import { buildQueue, MAX_REVIEW_QUEUE_SNOOZE_MS, resolveQueueItem, triageQueueItem, promoteAskQueueItem } from '../services/reviewQueue.js';
-import { reviewQueueQuerySchema } from '../lib/reviewValidation.js';
+import { buildQueue, resolveQueueItem, triageQueueItem, promoteAskQueueItem } from '../services/reviewQueue.js';
+import {
+  reviewQueueQuerySchema,
+  createTodoSchema,
+  updateItemSchema,
+  bulkStatusSchema,
+  resolveQueueSchema,
+  deliverySchema,
+  triageQueueSchema,
+  promoteAskQueueSchema,
+} from '../lib/reviewValidation.js';
 
 const router = express.Router();
-
-const createTodoSchema = z.object({
-  title: z.string().min(1).max(500),
-  description: z.string().max(5000).optional().default('')
-});
-
-const updateItemSchema = z.object({
-  title: z.string().min(1).max(500).optional(),
-  description: z.string().max(5000).optional()
-});
-
-const bulkStatusSchema = z.object({
-  status: z.enum(['completed', 'dismissed']),
-  ids: z.array(z.string()).optional()
-});
 
 // GET /api/review/items — optional status/type filters and limit/offset pagination.
 router.get('/items', asyncHandler(async (req, res) => {
@@ -52,21 +45,6 @@ router.get('/queue', asyncHandler(async (req, res) => {
   res.json(queue);
 }));
 
-const resolveQueueSchema = z.object({
-  id: z.string().min(1).max(500),
-  operation: z.enum(['resolve', 'approve', 'reject', 'complete', 'reopen', 'rate']).optional(),
-  rating: z.enum(['positive', 'negative', 'neutral']).optional(),
-  comment: z.string().max(5000).optional(),
-}).superRefine((value, context) => {
-  if (value.operation === 'rate' && !value.rating) {
-    context.addIssue({ code: z.ZodIssueCode.custom, path: ['rating'], message: 'rating is required for the rate operation' });
-  }
-  if (value.operation !== 'rate' && (value.rating !== undefined || value.comment !== undefined)) {
-    context.addIssue({ code: z.ZodIssueCode.custom, path: ['operation'], message: 'rating and comment are only valid for the rate operation' });
-  }
-});
-
-const deliverySchema = z.object({ id: z.string().min(1).max(500) });
 router.post('/queue/delivery', asyncHandler(async (req, res) => {
   const { id } = validateRequest(deliverySchema, req.body);
   res.json(await claimQueueDelivery(id, 'toast'));
@@ -85,23 +63,6 @@ router.post('/queue/resolve', asyncHandler(async (req, res) => {
   res.json(result);
 }));
 
-const triageQueueSchema = z.object({
-  id: z.string().min(1).max(500),
-  operation: z.enum(['snooze', 'unsnooze', 'dismiss']),
-  snoozedUntil: z.string().datetime().optional(),
-}).superRefine((value, context) => {
-  if (value.operation === 'snooze' && !value.snoozedUntil) {
-    context.addIssue({ code: z.ZodIssueCode.custom, path: ['snoozedUntil'], message: 'snoozedUntil is required for the snooze operation' });
-  }
-  if (value.operation === 'snooze' && value.snoozedUntil
-    && Date.parse(value.snoozedUntil) - Date.now() > MAX_REVIEW_QUEUE_SNOOZE_MS) {
-    context.addIssue({ code: z.ZodIssueCode.custom, path: ['snoozedUntil'], message: 'snoozedUntil cannot be more than 30 days in the future' });
-  }
-  if (value.operation !== 'snooze' && value.snoozedUntil !== undefined) {
-    context.addIssue({ code: z.ZodIssueCode.custom, path: ['snoozedUntil'], message: 'snoozedUntil is only valid for the snooze operation' });
-  }
-});
-
 // POST /api/review/queue/triage — persist a presentation-only decision after
 // the queue service re-reads the source and its current capabilities.
 router.post('/queue/triage', asyncHandler(async (req, res) => {
@@ -110,17 +71,6 @@ router.post('/queue/triage', asyncHandler(async (req, res) => {
   reviewService.reviewEvents.emit('queue:changed');
   res.json(result);
 }));
-
-const promoteAskQueueSchema = z.object({
-  id: z.string().min(1).max(500),
-  target: z.enum(['brain', 'task', 'goal']),
-  // Required when target === 'goal' (cross-field rule below); the row supplies
-  // it from the goal picker. Ignored for brain/task.
-  goalId: z.string().min(1).max(200).optional()
-}).refine((v) => v.target !== 'goal' || !!v.goalId, {
-  message: 'goalId is required when target is "goal"',
-  path: ['goalId']
-});
 
 // POST /api/review/queue/promote-ask — promote an Ask row's latest assistant
 // answer into Brain, a CoS task, or a Goal's progress, in place, without

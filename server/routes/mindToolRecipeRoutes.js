@@ -1,7 +1,7 @@
 /** User-owned library management follows the existing Mind settings auth gate.
  * No manageToolRecipes grant is required for the human's own HTTP edits. */
+import { recipeIdSchema } from '../lib/mindToolRecipeRoutesValidation.js';
 import { Router } from 'express';
-import { z } from 'zod';
 import { asyncHandler } from '../lib/errorHandler.js';
 import { validateRequest } from '../lib/validateRequest.js';
 import {
@@ -10,7 +10,6 @@ import {
 } from '../lib/mindToolRecipes.js';
 
 const router = Router();
-const recipeIdSchema = z.object({ recipeId: z.uuid() });
 const service = () => import('../services/mindToolRecipes.js');
 const id = (req) => validateRequest(recipeIdSchema, req.params).recipeId;
 

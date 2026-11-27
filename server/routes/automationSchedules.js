@@ -4,18 +4,14 @@
  * Manage scheduled automation tasks for agent platform accounts.
  */
 
+import { toggleScheduleSchema } from '../lib/automationSchedulesValidation.js';
 import { Router } from 'express';
-import { z } from 'zod';
 import { asyncHandler, ServerError } from '../lib/errorHandler.js';
 import { automationSchedulesListQuerySchema, automationScheduleSchema, automationScheduleUpdateSchema } from '../lib/agent/agentValidation.js';
 import { validateRequest } from '../lib/validateRequest.js';
 import * as automationScheduler from '../services/automationScheduler.js';
 import { validateScheduleOwner } from '../services/agent/automationScheduleOwner.js';
 import { logAction } from '../services/history.js';
-
-const toggleScheduleSchema = z.object({
-  enabled: z.boolean(),
-});
 
 const router = Router();
 

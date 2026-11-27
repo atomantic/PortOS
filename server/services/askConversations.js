@@ -28,26 +28,12 @@ import { readdir, stat } from 'fs/promises';
 import { randomUUID } from 'crypto';
 import { PATHS, atomicWrite, ensureDir, readJSONFile, safeDate, unlinkGuarded } from '../lib/fileUtils.js';
 import { createKeyCachedQueue } from '../lib/createKeyCachedQueue.js';
+import { VALID_MODES, ID_RE, BASE36_TS_WIDTH } from '../lib/askConversationIds.js';
+export { VALID_MODES, ID_RE } from '../lib/askConversationIds.js';
 
 export const ASK_DIR = join(PATHS.data, 'ask-conversations');
 export const EXPIRY_DAYS = 30;
 export const TITLE_MAX_LENGTH = 120;
-// Owned here (the leaf storage module) and consumed by askService. Keeping
-// this declaration on the storage side means the persistence layer has no
-// upstream imports — a fresh test can mount this file alone without pulling
-// the retrieval/provider stack via askService.
-export const VALID_MODES = new Set(['ask', 'advise', 'draft']);
-
-// Pad base36-ms to 9 chars (36^9 > 1e14, valid until year ~5100) so
-// filename lexical order always matches chronological order — without
-// padding, a digit rollover would make a newer id sort *before* an older
-// one and the newest-first listing would silently flip. The hex suffix is
-// the first 8 chars of a UUID. The regex is locked to those exact widths
-// so non-canonical ids (which would land on disk with the wrong sort key)
-// never pass validation at any layer.
-const BASE36_TS_WIDTH = 9;
-const HEX_SUFFIX_WIDTH = 8;
-export const ID_RE = new RegExp(`^ask_[a-z0-9]{${BASE36_TS_WIDTH}}_[a-f0-9]{${HEX_SUFFIX_WIDTH}}$`);
 
 function generateId() {
   const ts = Date.now().toString(36).padStart(BASE36_TS_WIDTH, '0');

@@ -3,23 +3,13 @@
  * data, and save an analysis as a document.
  */
 
+import { importSaveSchema, spotifyBrowserImportSchema } from '../../lib/digitalTwinImportValidation.js';
 import { Router } from 'express';
-import { z } from 'zod';
 import * as digitalTwinService from '../../services/digital-twin.js';
 import { asyncHandler, ServerError } from '../../lib/errorHandler.js';
 import { validateRequest } from '../../lib/validateRequest.js';
-import { documentFilenameSchema, importDataInputSchema } from '../../lib/digitalTwinValidation.js';
+import { importDataInputSchema } from '../../lib/digitalTwinValidation.js';
 import * as spotifyBrowserImport from '../../services/spotifyBrowserImport.js';
-
-const importSaveSchema = z.object({
-  source: z.string().min(1),
-  suggestedDoc: z.object({
-    filename: documentFilenameSchema,
-    content: z.string().min(1),
-    title: z.string().optional(),
-    category: z.string().optional(),
-  }),
-});
 
 const router = Router();
 
@@ -43,11 +33,6 @@ router.get('/import/sources', asyncHandler(async (req, res) => {
 router.post('/import/spotify/browser/open', asyncHandler(async (req, res) => {
   res.json(await spotifyBrowserImport.openSpotifyBrowser());
 }));
-
-const spotifyBrowserImportSchema = z.object({
-  providerId: z.string().min(1),
-  model: z.string().min(1),
-});
 
 /**
  * POST /api/digital-twin/import/spotify/browser/import
