@@ -56,6 +56,15 @@ describe('browser shard ownership', () => {
     }
   });
 
+  it.each(['full', 'smoke'])('limits serial captures on seven-shard runners 2 and 3 in %s', profile => {
+    const selected = browserTestProfileFiles(profile, BROWSER_SUITES);
+    for (const [index, limit] of [[2, 3], [3, 2]]) {
+      const files = browserShardSlice(selected, { index, count: FULL_BROWSER_SHARD_COUNT }, profile);
+      const captures = files.filter(file => EXCLUSIVE_CAPTURE_TESTS.includes(file.slice('server/'.length)));
+      expect(captures.length).toBeLessThanOrEqual(limit);
+    }
+  });
+
   it('restores exactly the distinct full-run donors of selected moved smoke suites', () => {
     const count = FULL_BROWSER_SHARD_COUNT;
     const smoke = browserTestProfileFiles('smoke', BROWSER_SUITES);

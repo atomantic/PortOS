@@ -1,9 +1,9 @@
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import express from 'express';
-import { createServer } from 'node:http';
 import { readFileSync } from 'node:fs';
 import { chromium } from 'playwright-core';
 import { browserSuiteCanRun, resolveTestChrome } from '../lib/browserSuiteGate.js';
+import { createRecordedStaticServer } from '../../scripts/lib/browserServedFiles.js';
 import { reapOwnedBrowser } from '../../scripts/lib/ownedBrowserCleanup.js';
 import { sandboxedChromiumOptions } from '../../scripts/lib/playwrightSandbox.js';
 
@@ -94,8 +94,8 @@ describe.skipIf(!canRun)('Autofixer UI accessibility', () => {
       res.write(': connected\n\n');
     });
 
-    http = createServer(app);
-    await new Promise((resolve, reject) => { http.once('error', reject); http.listen(0, '127.0.0.1', resolve); });
+    const fixture = createRecordedStaticServer(express);
+    http = await fixture.start(app);
     origin = `http://127.0.0.1:${http.address().port}`;
     browserServer = await chromium.launchServer(sandboxedChromiumOptions({ executablePath: chrome, headless: true, timeout: 20000 }));
     browser = await chromium.connect(browserServer.wsEndpoint(), { timeout: 5000 });
