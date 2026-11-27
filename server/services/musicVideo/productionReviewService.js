@@ -4,7 +4,7 @@ import { ServerError } from '../../lib/errorHandler.js';
 import { mutateProjectRecord } from './projects.js';
 import { requireProject } from './requireProject.js';
 import { musicVideoEvents } from './events.js';
-import { shotCameraLabel } from '../../lib/cameraMovements.js';
+import { applyStoryboardReviewRevision } from './productionReviewRevisions.js';
 import { productionReadiness, boardStoryboard, seedArtDraft, productionReviewBasis, productionAlignmentBasis, alignmentBasisMatches, documentStoryboardBasis, approveProductionStage, assertProductionApproval, recordProductionFeedback, resolveProductionFeedback, revertApprovedInput, anchorShotsToSungLyrics, dropStaleStoryboardRows, carryStoryboardApproval } from './productionReview.js';
 import { sungLyricTextWithin } from '../../lib/musicVideo/musicVideoLyricAnchors.js';
 
@@ -402,15 +402,7 @@ export async function reviseProductionFromFeedback(id, { stage, ...route }) {
     const updates = await proposeShotRevisions(project, requests, route);
     const { project: next } = await mutateProjectRecord(id, current => {
       if (productionReviewBasis(current).storyboard !== basis) throw new ServerError('The storyboard changed while it was being revised. Review it and try again.', { status: 409, code: 'MUSIC_VIDEO_REVIEW_STALE' });
-      const scenes = current.scenes.map(scene => updates.has(scene.sceneId) ? { ...scene, ...updates.get(scene.sceneId) } : scene);
-      const draft = current.productionReview?.draft;
-      const storyboard = draft?.storyboard?.map(shot => {
-        const fields = updates.get(shot.sceneId);
-        return fields ? { ...shot, ...(fields.prompt ? { action: fields.prompt } : {}), ...(fields.framePrompt ? { staging: fields.framePrompt } : {}),
-          ...(fields.camera ? { camera: shotCameraLabel(fields.camera) } : {}) } : shot;
-      });
-      return { project: { ...current, scenes, updatedAt: new Date().toISOString(),
-        ...(storyboard ? { productionReview: { ...current.productionReview, draft: { ...draft, storyboard } } } : {}) } };
+      return { project: applyStoryboardReviewRevision(current, updates) };
     }, { source: 'storyboard-revision' });
     return { ...changed(next), revision: { stage, sceneIds: [...updates.keys()] } };
   }

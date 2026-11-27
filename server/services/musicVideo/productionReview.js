@@ -1,6 +1,5 @@
 /** Revision-bound creative approvals. Technical renders never imply approval. */
 import { GUIDE_MIME_TYPES } from '../../lib/musicVideo/musicVideoGuideMimeTypes.js';
-import { randomUUID } from 'node:crypto';
 import { canonicalSnapshotChecksum as hash } from '../../lib/snapshotChecksum.js';
 import { ServerError } from '../../lib/errorHandler.js';
 import { musicVideoAllowsMedia } from '../../lib/musicVideo/musicVideoMediaPolicy.js';
@@ -10,62 +9,26 @@ import { isNonBlankStr as text } from '../../lib/textUtils.js';
 import { cameraMovementFromText, getCameraMovement, shotCameraLabel } from '../../lib/cameraMovements.js';
 import { cameraVarietyReport } from './shotCamera.js';
 import { overlayTextReport } from './overlayText.js';
-import { musicVideoAspect } from '../../lib/musicVideo/musicVideoAspect.js';
 import { hasPlayableLyricWordTimings } from './timedText.js';
 import { cuesSungWithin, lyricAnchorOnset } from '../../lib/musicVideo/musicVideoLyricAnchors.js';
 import { isLayeredComposition, sceneTakeProblems, sceneVisualLayer } from '../../lib/musicVideo/musicVideoLayers.js';
 import { coldOpenScenes, songScenes } from '../../lib/musicVideo/musicVideoColdOpen.js';
 import { CHARACTER_REFERENCE_CHANGED, musicVideoSceneCharacterReferenceTakes } from '../../lib/musicVideo/musicVideoCharacterReferenceAge.js';
-const artifact = (project, id) => (project.devArtifacts || []).find(a => a.id === id && !a.deleted);
-const artifactBasis = a => a ? { id: a.id, version: a.version, file: a.file } : null;
-const source = p => {
-  const timing = p.audioTimingRevisions?.at(-1);
-  return { trackId: p.trackId, uploadedAudioFilename: p.uploadedAudioFilename,
-    duration: p.audioAnalysis?.durationSec, beats: p.audioAnalysis?.beats, sections: p.audioAnalysis?.sections,
-    // These drive authored musical actions even when the beat grid and lyrics
-    // stay unchanged. Waveform display samples and receipt timestamps do not.
-    downbeats: p.audioAnalysis?.downbeats, features: p.audioAnalysis?.features,
-    audioTiming: timing ? { version: timing.version, basis: timing.basis, input: timing.input } : null,
-    lyrics: p.lyricCues, markers: p.lyricMarkers, phrases: p.phrases };
-};
-// Lyric timing is verified against the master audio and the word times only. Section names, lyric
-// markers and the beat grid are storyboard inputs (source()); editing them moves no word.
-const alignmentSource = p => {
-  const timing = p.audioTimingRevisions?.at(-1);
-  return { trackId: p.trackId, uploadedAudioFilename: p.uploadedAudioFilename, duration: p.audioAnalysis?.durationSec,
-    audioTiming: timing ? { version: timing.version, basis: timing.basis, input: timing.input } : null,
-    lyrics: (p.lyricCues || []).map(c => ({ text: c.text, startSec: c.startSec ?? null, endSec: c.endSec ?? null,
-      words: (c.words || []).map(w => ({ w: w.w, startSec: w.startSec, endSec: w.endSec })) })) };
-};
-export const productionAlignmentBasis = project => hash({ alignment: alignmentSource(project) });
-/** Verification stored before alignment had its own basis hashed the whole storyboard source; it stays valid. */
-const legacyAlignmentBasis = project => hash(source(project));
-/** True when a stored or supplied basis names this project's current timing, under either formula. */
-export const alignmentBasisMatches = (project, basis) => !!basis
-  && (basis === productionAlignmentBasis(project) || basis === legacyAlignmentBasis(project));
 
-/** The storyboard problem raised while the lyric timing is unverified for the current master. */
-export const ALIGNMENT_UNVERIFIED_PROBLEM = 'Lyric alignment is provisional or changed. Listen and verify the current word timings.';
+import {
+  alignmentBasisMatches, ALIGNMENT_UNVERIFIED_PROBLEM, artifact, castAndSetsApprovalInputs, changedInputs,
+  documentStoryboardBasis, overlayTextBasis, pickReviewFields, productionAlignmentBasis, productionApprovalInputs,
+  productionReviewBasis, reviewInputHash, staleApproval, storyboardApprovalCurrent, withRevertible,
+} from './productionReviewBasis.js';
+import { SHOT_APPROVER_FIELDS, storeProductionApproval } from './productionReviewRecords.js';
+import { carryApprovedProductionStages, productionApprovalValues, restoreApprovedInput, unavailableRevert } from './productionReviewRevisions.js';
 
-/** A shot manifest belongs to one immutable authored document and one master timeline. */
-export const documentStoryboardBasis = project => hash({
-  document: project.composition?.document?.directory, source: source(project),
-  shots: project.productionReview?.draft?.storyboard,
-});
-
-/**
- * What an overlay text check saw (overlayTextService.js): the document, the
- * frame, the song timing and lyrics, the text cues, the type style and every
- * shot's text placement and selected take. A change to any of them makes a check stale.
- */
-export const overlayTextBasis = project => hash({
-  ...(project.lyricOverlayEnabled === false ? { lyricOverlayEnabled: false } : {}),
-  document: project.composition?.document?.directory || null, aspect: musicVideoAspect(project), source: source(project),
-  textCues: project.composition?.textCues ?? null, overlay: project.composition?.overlay ?? null, style: project.composition?.style ?? null,
-  scenes: (project.scenes || []).map(({ sceneId, startSec, endSec, textZone, lyricRole, lyricSize, lyricText, cardText, referenceImageId, videoHistoryId, performanceEdit, visualLayer, photoSequence }) =>
-    ({ sceneId, startSec, endSec, textZone, lyricRole, lyricSize, lyricText, cardText, referenceImageId, videoHistoryId, performanceEdit, visualLayer,
-      ...(photoSequence && photoSequence.enabled !== false ? { photoSequence } : {}) })),
-});
+export {
+  alignmentBasisMatches, ALIGNMENT_UNVERIFIED_PROBLEM, castAndSetsApprovalInputs, documentStoryboardBasis,
+  overlayTextBasis, productionAlignmentBasis, productionReviewBasis,
+} from './productionReviewBasis.js';
+export { productionFeedbackContext, recordProductionFeedback, resolveProductionFeedback, slimProjectReview } from './productionReviewRecords.js';
+export { carryReviewThroughSceneOrder, carryStoryboardApproval, castAndSetsApprovalValues } from './productionReviewRevisions.js';
 
 // Share the evidence contract between new decisions and persisted approvals:
 // a legacy automatic waiver must not become production-ready after an upgrade.
@@ -183,8 +146,6 @@ function stillLockBasis(project, scene) {
 }
 
 const STILL_LOCK_VERSION = 2;
-const SHOT_APPROVER_FIELDS = ['approvedAt', 'approvedBy', 'reviewer'];
-const BOARD_SHOT_LOCK_FIELDS = [...SHOT_APPROVER_FIELDS, 'fromBoardApproval', 'basis', 'v', 'inheritedStillId'];
 const stillLock = (project, scene, fields) => ({ ...fields, basis: stillLockBasis(project, scene), v: STILL_LOCK_VERSION });
 const stillLockHolds = (project, scene, approval) => approval.v === STILL_LOCK_VERSION
   ? approval.basis === stillLockBasis(project, scene) : approval.basis === shotApprovalBasis(project, scene);
@@ -282,7 +243,7 @@ export function carryShotLocks(before, after, { from = {}, inheritStillOnly = fa
   if (!locks) return after;
   const held = before.productionReview?.shotApprovals || {};
   const board = before.productionReview?.approvals?.storyboard;
-  const lockOf = scene => held[scene.sceneId] || { ...pick(board, SHOT_APPROVER_FIELDS), fromBoardApproval: true };
+  const lockOf = scene => held[scene.sceneId] || { ...pickReviewFields(board, SHOT_APPROVER_FIELDS), fromBoardApproval: true };
   const shotApprovals = { ...after.productionReview?.shotApprovals };
   let carried = false;
   for (const scene of before.scenes || []) {
@@ -303,171 +264,6 @@ export function carryShotLocks(before, after, { from = {}, inheritStillOnly = fa
   return carried ? { ...after, productionReview: { ...after.productionReview, shotApprovals } } : after;
 }
 
-/**
- * Is a storyboard approval current on this revision? Either it was given on
- * exactly this revision, or only the wording, prompts or timing of the shots
- * it covered have changed since (`shotsBasis`; approvals recorded before it
- * existed match on the exact revision only).
- */
-const storyboardApprovalCurrent = (approval, basis) => !!approval
-  && (approval.basis === basis.storyboard || (!!basis.storyboardShots && approval.shotsBasis === basis.storyboardShots));
-
-// A subject's catalog link and keep-local choice are bookkeeping saved after an
-// approval (catalogCast.js), never a change to who or what was approved.
-const CATALOG_SUBJECT_KEYS = ['ingredientId', 'castForm', 'localOnly'];
-const withoutCatalogFields = subjects => (subjects || []).map(s => (s && typeof s === 'object' ? Object.fromEntries(Object.entries(s).filter(([k]) => !CATALOG_SUBJECT_KEYS.includes(k))) : s));
-const approvalConcept = concept => (concept?.subjects ? { ...concept, subjects: withoutCatalogFields(concept.subjects) } : concept);
-// Restoring approved subjects keeps the catalog fields saved since.
-const keepCatalogFields = (subjects, current) => {
-  const byId = new Map((current || []).map(s => [s?.id, s]));
-  return (subjects || []).map(s => ({ ...s, ...Object.fromEntries(CATALOG_SUBJECT_KEYS.filter(k => byId.get(s?.id)?.[k] !== undefined).map(k => [k, byId.get(s.id)[k]])) }));
-};
-
-export function productionReviewBasis(project) {
-  const draft = project.productionReview?.draft || {};
-  const art = hash({ projectId: project.id, mediaMode: project.mediaMode, authoringRenderer: project.composition?.authoringRenderer, mode: project.composition?.mode, policy: project.productionPolicy,
-    concept: approvalConcept(project.concept), visualSpec: project.visualSpec, styleReferences: project.styleReferences,
-    direction: project.castAndSets?.direction,
-    cast: draft.cast, environments: draft.environments, visualLanguage: draft.visualLanguage,
-    motionLanguage: draft.motionLanguage, implementationPlan: draft.implementationPlan, guide: artifactBasis(artifact(project, draft.guideArtifactId)) });
-  const storyboardInputs = { art, source: source(project), lyricsMode: draft.lyricsMode,
-    timingStatus: draft.timingStatus, timingNotes: draft.timingNotes, storyboard: draft.storyboard,
-    storyboardSource: draft.storyboardSource || 'board', documentStoryboard: project.productionReview?.documentStoryboard,
-    document: draft.storyboardSource === 'document' ? project.composition?.document : null,
-    // A planned camera (#10589) joins the hash only when set, so older approvals stay current.
-    scenes: (project.scenes || []).map(({ sceneId, startSec, endSec, lyricText, visualIntent, prompt, framePrompt, camera }) =>
-      ({ sceneId, startSec, endSec, lyricText, visualIntent, prompt, framePrompt, ...(camera ? { camera } : {}) })), treatment: project.treatment };
-  const storyboard = hash(storyboardInputs);
-  // The same revision without each shot's own wording and span: a director rewording or retiming
-  // a shot keeps the board they approved, while new shots, lyrics, song or direction still stale it.
-  // A document storyboard's shots live in its source, so it has no such allowance.
-  const storyboardShots = draft.storyboardSource === 'document' ? null : hash({ ...storyboardInputs,
-    storyboard: Array.isArray(draft.storyboard) ? draft.storyboard.map(shot => shot?.sceneId ?? null) : draft.storyboard,
-    scenes: (project.scenes || []).map(({ sceneId, lyricText }) => ({ sceneId, lyricText })) });
-  const window = project.productionReview?.proof;
-  const proof = hash({ storyboard, composition: project.composition,
-    ...(project.templateEffects ? { templateEffects: project.templateEffects } : {}),
-    ...(project.lyricOverlayEnabled === false ? { lyricOverlayEnabled: false } : {}),
-    window: window && { startSec: window.startSec, endSec: window.endSec },
-    scenes: (project.scenes || []).filter(s => !window || s.startSec < window.endSec && s.endSec > window.startSec)
-      .map(({ sceneId, referenceImageId, videoHistoryId, performanceEdit, direction, visualLayer, preMusic, photoSequence, templateEffects }) =>
-        ({ sceneId, referenceImageId, videoHistoryId, performanceEdit, direction, visualLayer, ...(templateEffects ? { templateEffects } : {}), ...(preMusic ? { preMusic } : {}),
-          ...(photoSequence && photoSequence.enabled !== false ? { photoSequence } : {}) })),
-    soundBed: project.soundBed, videoSettings: project.videoSettings });
-  return { art, storyboard, storyboardShots, proof };
-}
-
-/** Labeled per-input hashes so a stale approval can name what changed since. */
-const h = v => hash(v ?? null);
-function productionApprovalInputs(project) {
-  const draft = project.productionReview?.draft || {};
-  const art = {
-    concept: h(approvalConcept(project.concept)), 'visual spec': h(project.visualSpec), 'style references': h(project.styleReferences),
-    'media mode': h([project.mediaMode, project.composition?.authoringRenderer, project.composition?.mode, project.productionPolicy]),
-    'art direction': h(project.castAndSets?.direction), cast: h(draft.cast), environments: h(draft.environments),
-    'visual language': h(draft.visualLanguage), 'motion language': h(draft.motionLanguage),
-    'implementation plan': h(draft.implementationPlan), 'visual guide': h(artifactBasis(artifact(project, draft.guideArtifactId))),
-  };
-  const scenes = {};
-  for (const [i, s] of (project.scenes || []).entries()) {
-    const n = i + 1;
-    scenes[`scene ${n} timing`] = h([s.startSec, s.endSec]);
-    scenes[`scene ${n} lyrics`] = h(s.lyricText);
-    scenes[`scene ${n} prompt`] = h([s.visualIntent, s.prompt, s.framePrompt]);
-    if (s.camera) scenes[`scene ${n} camera`] = h(s.camera);
-  }
-  const storyboard = { ...art, song: h([source(project).trackId, source(project).uploadedAudioFilename, source(project).duration, source(project).beats, source(project).sections]),
-    lyrics: h([source(project).lyrics, source(project).markers, source(project).phrases]), 'lyric timing': h([draft.lyricsMode, draft.timingStatus, draft.timingNotes]),
-    'storyboard shots': h([draft.storyboard, draft.storyboardSource, project.productionReview?.documentStoryboard]), treatment: h(project.treatment), ...scenes };
-  const window = project.productionReview?.proof;
-  const proof = { ...storyboard, composition: h(project.composition), 'proof window': h(window && [window.startSec, window.endSec]),
-    ...(project.lyricOverlayEnabled === false ? { 'automatic lyric overlays': h(false) } : {}),
-    takes: h((project.scenes || []).map(({ sceneId, referenceImageId, videoHistoryId, performanceEdit, direction, visualLayer, photoSequence }) =>
-      ({ sceneId, referenceImageId, videoHistoryId, performanceEdit, direction, visualLayer,
-        ...(photoSequence && photoSequence.enabled !== false ? { photoSequence } : {}) }))),
-    'sound bed': h(project.soundBed), 'video settings': h(project.videoSettings) };
-  return { art, storyboard, proof };
-}
-
-// The labels whose hash moved (or disappeared) between two input snapshots.
-const changedInputs = (before, now) => Object.keys(now).filter(k => before[k] !== now[k])
-  .concat(Object.keys(before).filter(k => !(k in now)));
-
-// Approved VALUES for the small text inputs a director edits by hand, stored
-// beside the hashes so a changed input can be reverted (#10241). Anything over
-// the cap, and anything that is not text (media, takes, the song), keeps only
-// its hash and so is never revertible. Absent from the record = not revertible.
-const MAX_SNAPSHOT_CHARS = 8 * 1024;
-const snapshotValue = v => {
-  const json = JSON.stringify(v);
-  return json !== undefined && json.length <= MAX_SNAPSHOT_CHARS ? JSON.parse(json) : undefined;
-};
-const snapshotAll = entries => Object.fromEntries(Object.entries(entries)
-  .map(([label, v]) => [label, snapshotValue(v)]).filter(([, v]) => v !== undefined));
-const DRAFT_FIELD_LABELS = { cast: 'cast', environments: 'environments', 'visual language': 'visualLanguage',
-  'motion language': 'motionLanguage', 'implementation plan': 'implementationPlan' };
-const SCENE_PROMPT_LABEL = /^scene \d+ prompt$/;
-const SCENE_PROMPT_KEYS = ['visualIntent', 'prompt', 'framePrompt'];
-
-/** The approved values of a production stage's revertible inputs, keyed by the same labels as its hashes. */
-function productionApprovalValues(project, stage) {
-  const draft = project.productionReview?.draft || {};
-  const entries = { concept: project.concept };
-  for (const [label, key] of Object.entries(DRAFT_FIELD_LABELS)) entries[label] = draft[key];
-  if (stage !== 'art') {
-    for (const [i, s] of (project.scenes || []).entries()) {
-      entries[`scene ${i + 1} prompt`] = { sceneId: s.sceneId, visualIntent: s.visualIntent, prompt: s.prompt, framePrompt: s.framePrompt };
-    }
-  }
-  return snapshotAll(entries);
-}
-
-const CAST_SETS_CONCEPT_STYLE_KEYS = ['style', 'universeStyle', 'moodBoardStyle'];
-const CAST_SETS_SPEC_STYLE_KEYS = ['palette', 'typography', 'cameraRules', 'moodBoardId'];
-const objectConcept = project => project.concept && typeof project.concept === 'object' ? project.concept : {};
-const pick = (obj, keys) => Object.fromEntries(keys.filter(k => obj?.[k] !== undefined).map(k => [k, obj[k]]));
-
-/** The approved values behind a Cast & Sets approval's `concept`, `style` and `subjects` hashes. */
-export function castAndSetsApprovalValues(project) {
-  const { subjects, style, universeStyle, moodBoardStyle, ...concept } = objectConcept(project);
-  return snapshotAll({ concept, subjects: subjects ?? [],
-    style: { ...pick(objectConcept(project), CAST_SETS_CONCEPT_STYLE_KEYS), ...pick(project.visualSpec, CAST_SETS_SPEC_STYLE_KEYS), styleReferences: project.styleReferences ?? null } });
-}
-
-const revertibleOf = (changedFields, values) => changedFields.filter(f => values && f in values);
-const withRevertible = (stale, values) => {
-  const revertible = revertibleOf(stale.changedFields, values);
-  return revertible.length ? { ...stale, revertible } : stale;
-};
-
-/** `{ approvedAt, changedFields, revertible? }` when a stage was approved on inputs that have since moved; null otherwise. */
-function staleApproval(project, stage, current, inputs) {
-  const approval = project.productionReview?.approvals?.[stage];
-  if (!approval || approval.basis === current) return null;
-  const before = approval.inputs;
-  const changedFields = before ? changedInputs(before, inputs[stage]) : [];
-  return withRevertible({ approvedAt: approval.approvedAt || null, changedFields: changedFields.length ? changedFields : (before ? ['proof render'] : []) }, approval.values);
-}
-
-/**
- * The labeled inputs a Cast & Sets approval rests on — the concept, its style,
- * the subjects (with the cast references the approval wrote) and the song —
- * hashed per label. Stored on the stage at approval as `approvedInputs`.
- * References hash by image only, so re-normalizing a reference's optional
- * fields is not mistaken for a new subject.
- */
-export function castAndSetsApprovalInputs(project) {
-  const { subjects, style, universeStyle, moodBoardStyle, ...concept } = project.concept || {};
-  const spec = project.visualSpec || {};
-  return {
-    concept: h(concept),
-    style: h([style || '', universeStyle || '', moodBoardStyle || '', spec.palette || [], spec.typography || '',
-      spec.cameraRules || '', spec.moodBoardId || null, project.styleReferences ?? null]),
-    subjects: h([withoutCatalogFields(subjects), (spec.references || []).map(r => r?.imageId || null)]),
-    song: h([project.trackId || null, project.uploadedAudioFilename || null]),
-  };
-}
-
 const STORY_INPUT_LABELS = { story: null, 'cast guide': 'cast', 'environment guide': 'environments', 'visual language': 'visualLanguage' };
 
 /**
@@ -478,7 +274,7 @@ const STORY_INPUT_LABELS = { story: null, 'cast guide': 'cast', 'environment gui
 export function castAndSetsStoryInputs(project) {
   const guides = directorArtGuides(project);
   return Object.fromEntries(Object.entries(STORY_INPUT_LABELS)
-    .map(([label, key]) => [label, h(key ? guides[key] || null : text(project?.storySummary) ? project.storySummary.trim() : null)]));
+    .map(([label, key]) => [label, reviewInputHash(key ? guides[key] || null : text(project?.storySummary) ? project.storySummary.trim() : null)]));
 }
 
 /**
@@ -492,7 +288,7 @@ function castAndSetsStoryStale(project) {
   const stage = project.castAndSets;
   if (!stage?.direction || stage.status === 'skipped') return null;
   const now = castAndSetsStoryInputs(project);
-  const empty = h(null);
+  const empty = reviewInputHash(null);
   const changedFields = stage.directedInputs ? changedInputs(stage.directedInputs, now)
     : stage.status === 'approved' ? [] : Object.keys(now).filter(label => now[label] !== empty);
   return changedFields.length ? { changedFields } : null;
@@ -847,54 +643,30 @@ function storyboardCameraReport(scenes, draftShots) {
   return cameraVarietyReport(shots);
 }
 
-const refuseRevert = (message, code) => new ServerError(message, { status: 409, code });
-
-function restoreScenePrompt(project, value) {
-  if (!project.scenes?.some(s => s.sceneId === value.sceneId)) throw refuseRevert('That scene no longer exists, so its prompt cannot be restored.', 'MUSIC_VIDEO_REVERT_UNAVAILABLE');
-  return { ...project, scenes: project.scenes.map(s => s.sceneId === value.sceneId ? { ...s, ...Object.fromEntries(SCENE_PROMPT_KEYS.map(k => [k, value[k]])) } : s) };
-}
-
-function restoreCastAndSets(project, field, value) {
-  const concept = objectConcept(project);
-  if (field === 'concept') return { ...project, concept: { ...value, ...pick(concept, ['subjects', ...CAST_SETS_CONCEPT_STYLE_KEYS]) } };
-  if (field === 'subjects') return { ...project, concept: { ...concept, subjects: keepCatalogFields(value, concept.subjects) } };
-  const { styleReferences, ...rest } = value;
-  const nextConcept = { ...concept };
-  for (const k of CAST_SETS_CONCEPT_STYLE_KEYS) delete nextConcept[k];
-  return { ...project, concept: { ...nextConcept, ...pick(rest, CAST_SETS_CONCEPT_STYLE_KEYS) },
-    visualSpec: { ...project.visualSpec, ...pick(rest, CAST_SETS_SPEC_STYLE_KEYS) }, styleReferences };
-}
-
 /**
  * Write one changed input back to the value an approval was granted on (#10241).
  * Refuses (409) unless the approval is stale, that input's hash moved, and a
  * value was recorded for it; a legacy approval or an oversized/media input has none.
  */
 export function revertApprovedInput(project, { stage, field }) {
-  const unavailable = reason => refuseRevert(reason, 'MUSIC_VIDEO_REVERT_UNAVAILABLE');
   const cast = stage === 'castAndSets';
   let record;
   let now;
   if (cast) {
     const approval = project.castAndSets;
-    if (approval?.status !== 'approved') throw unavailable('The Cast & Sets check-in is not approved.');
+    if (approval?.status !== 'approved') throw unavailableRevert('The Cast & Sets check-in is not approved.');
     record = { inputs: approval.approvedInputs, values: approval.approvedValues };
     now = castAndSetsApprovalInputs(project);
   } else {
     const readiness = productionReadiness(project);
-    if (readiness[stage].approved) throw unavailable('This approval is current; there is nothing to revert.');
+    if (readiness[stage].approved) throw unavailableRevert('This approval is current; there is nothing to revert.');
     record = project.productionReview?.approvals?.[stage];
     now = readiness.inputs[stage];
   }
-  if (!record?.inputs || changedInputs(record.inputs, now).includes(field) === false) throw unavailable('That input has not changed since the approval.');
+  if (!record?.inputs || changedInputs(record.inputs, now).includes(field) === false) throw unavailableRevert('That input has not changed since the approval.');
   const value = record.values?.[field];
-  if (value === undefined) throw unavailable('The approved value of that input was not kept, so it cannot be restored.');
-  if (cast) return restoreCastAndSets(project, field, value);
-  if (field === 'concept') return { ...project, concept: value?.subjects ? { ...value, subjects: keepCatalogFields(value.subjects, project.concept?.subjects) } : value };
-  if (DRAFT_FIELD_LABELS[field]) return { ...project, productionReview: { ...project.productionReview,
-    draft: { ...project.productionReview?.draft, [DRAFT_FIELD_LABELS[field]]: value } } };
-  if (SCENE_PROMPT_LABEL.test(field)) return restoreScenePrompt(project, value);
-  throw unavailable('That input cannot be reverted.');
+  if (value === undefined) throw unavailableRevert('The approved value of that input was not kept, so it cannot be restored.');
+  return restoreApprovedInput(project, field, value, cast);
 }
 
 /**
@@ -946,10 +718,7 @@ export function approveProductionStage(project, { stage, basis, proofReview, app
   const decision = { stage, basis: expected, ...(stage === 'storyboard' ? { shotsBasis: productionReviewBasis(project).storyboardShots } : {}), inputs: productionApprovalInputs(project)[stage], values: productionApprovalValues(project, stage), approvedAt: new Date().toISOString(),
     ...(approvedBy ? { approvedBy } : {}), ...(reviewer ? { reviewer: structuredClone(reviewer) } : {}),
     ...(stage === 'proof' ? { proofReview: structuredClone(proofReview) } : {}) };
-  return { ...project, productionReview: { ...project.productionReview,
-    approvalHistory: slimApprovalHistory([...(project.productionReview?.approvalHistory || []), decision].slice(-MAX_APPROVAL_HISTORY)),
-    reviewedRevisions: pruneReviewedRevisions({ ...omitKey(project.productionReview?.reviewedRevisions, basis), [basis]: { draft: structuredClone(project.productionReview?.draft || {}), scenes: reviewedScenes(project.scenes), proof: structuredClone(project.productionReview?.proof || null), capturedAt: new Date().toISOString() } }, project.productionReview?.feedback),
-    approvals: { ...project.productionReview?.approvals, [stage]: decision } } };
+  return storeProductionApproval(project, basis, decision);
 }
 
 /**
@@ -959,218 +728,8 @@ export function approveProductionStage(project, { stage, basis, proofReview, app
  * that was not approved stays as it was.
  */
 export function carryProductionApprovals(before, after, reason) {
-  const was = productionReadiness(before);
-  const basis = productionReviewBasis(after);
-  const inputs = productionApprovalInputs(after);
-  const proofExcerpt = after.excerpts?.find(e => e.id === after.productionReview?.proof?.excerptId);
-  const approvals = { ...after.productionReview?.approvals };
-  for (const stage of ['art', 'storyboard', 'proof']) {
-    if (!was[stage]?.approved || !approvals[stage]) continue;
-    const next = stage === 'proof' ? hash({ basis: basis.proof, excerptId: proofExcerpt?.id, filename: proofExcerpt?.filename }) : basis[stage];
-    approvals[stage] = { ...approvals[stage], basis: next, ...(stage === 'storyboard' ? { shotsBasis: basis.storyboardShots } : {}), inputs: inputs[stage], carriedOver: { reason, at: new Date().toISOString() } };
-  }
-  return { ...after, productionReview: { ...after.productionReview, approvals } };
+  return carryApprovedProductionStages(after, productionReadiness(before), reason);
 }
-
-/**
- * Keep a current storyboard approval across a director's own shot edit (a cut,
- * a merge, a retime or a reworded prompt): it adds no shot or lyric the
- * approval did not already cover, so the director is not asked to approve the
- * same board again. The proof stays bound to its render and stales
- * as before. Returns `after` unchanged when the storyboard was not approved on
- * `before`'s current revision.
- */
-export function carryStoryboardApproval(before, after, reason) {
-  const approval = before.productionReview?.approvals?.storyboard;
-  if (!storyboardApprovalCurrent(approval, productionReviewBasis(before))) return after;
-  const basis = productionReviewBasis(after);
-  const approvals = { ...after.productionReview?.approvals, storyboard: { ...approval,
-    basis: basis.storyboard, shotsBasis: basis.storyboardShots, inputs: productionApprovalInputs(after).storyboard,
-    carriedOver: { reason, at: new Date().toISOString() } } };
-  return { ...after, productionReview: { ...after.productionReview, approvals } };
-}
-
-// Labeled inputs and values name a shot by its board position ("scene 3 timing").
-const SCENE_POSITION_KEY = /^scene (\d+) (.+)$/;
-
-/**
- * Re-stamp the review bindings across a change that only puts the same shots in
- * time order (#16117). The bases hash `scenes` by position, so without this the
- * repair of a board stored out of time order would stale approvals and the
- * rendered proof though nothing in the cut changed. Only a binding that held on
- * `before` moves to `after`; a stale one stays stale. Position keys of an
- * approval's recorded inputs and values follow their shots, so a later
- * staleness check still names what changed since the approval.
- */
-export function carryReviewThroughSceneOrder(before, after) {
-  const review = after.productionReview;
-  if (!review) return after;
-  const was = productionReviewBasis(before);
-  const now = productionReviewBasis(after);
-  const wasInputs = productionApprovalInputs(before);
-  const nowInputs = productionApprovalInputs(after);
-  const newIndex = new Map((after.scenes || []).map((scene, i) => [scene.sceneId, i + 1]));
-  const position = new Map((before.scenes || []).map((scene, i) => [i + 1, newIndex.get(scene.sceneId) ?? i + 1]));
-  const moveKey = (key) => {
-    const match = SCENE_POSITION_KEY.exec(key);
-    return match ? `scene ${position.get(Number(match[1])) ?? match[1]} ${match[2]}` : key;
-  };
-  const moveKeys = (record) => Object.fromEntries(Object.entries(record).map(([key, value]) => [moveKey(key), value]));
-  // An order-sensitive input that held (the proof's take list) re-stamps; the rest move with their shots.
-  const carryInputs = (inputs, stage) => {
-    const moved = moveKeys(inputs);
-    for (const key of Object.keys(moved)) {
-      if (!SCENE_POSITION_KEY.test(key) && inputs[key] === wasInputs[stage][key]) moved[key] = nowInputs[stage][key];
-    }
-    return moved;
-  };
-  const carryApproval = (approval, stage) => ({ ...approval,
-    ...(approval.inputs && typeof approval.inputs === 'object' ? { inputs: carryInputs(approval.inputs, stage) } : {}),
-    ...(approval.values && typeof approval.values === 'object' ? { values: moveKeys(approval.values) } : {}) });
-  const approvals = review.approvals ? { ...review.approvals } : review.approvals;
-  const board = approvals?.storyboard;
-  if (board && (board.basis === was.storyboard || (!!was.storyboardShots && board.shotsBasis === was.storyboardShots))) {
-    approvals.storyboard = { ...carryApproval(board, 'storyboard'),
-      ...(board.basis === was.storyboard ? { basis: now.storyboard } : {}),
-      ...(board.shotsBasis && board.shotsBasis === was.storyboardShots ? { shotsBasis: now.storyboardShots } : {}) };
-  }
-  const excerpt = (after.excerpts || []).find((e) => e.id === review.proof?.excerptId);
-  const proofKey = (basis) => hash({ basis, excerptId: excerpt?.id, filename: excerpt?.filename });
-  if (approvals?.proof && excerpt && approvals.proof.basis === proofKey(was.proof)) {
-    approvals.proof = { ...carryApproval(approvals.proof, 'proof'), basis: proofKey(now.proof) };
-  }
-  const next = { ...review, ...(approvals ? { approvals } : {}) };
-  if (review.proof?.basis && review.proof.basis === was.proof) next.proof = { ...review.proof, basis: now.proof };
-  return { ...after, productionReview: next };
-}
-
-// A refreshed snapshot is re-inserted last so insertion order doubles as recency.
-const omitKey = (obj, key) => Object.fromEntries(Object.entries(obj || {}).filter(([k]) => k !== key));
-const MAX_APPROVAL_HISTORY = 50;
-const MAX_RECENT_REVISIONS = 5;
-
-/*
- * The per-shot plan a reviewed revision keeps (#16210). A snapshot rides every
- * project write, so it holds what a reviewer judged, never the render history:
- * `takes` (each with its composed prompt and plate evidence) and other render
- * bookkeeping are dropped. Nothing recomputes a basis from a snapshot (approval
- * bases hash the live project), so slimming one never changes what counts as reviewed.
- * - identity and place: sceneId, order, label, sectionIndex — which shot, in which slot
- * - timing and lyrics: startSec, endSec, lyricText, lyricAnchor — the span and words it covers
- * - wording and shot sheet: visualIntent, prompt, framePrompt, camera, shotSheet, shotMode,
- *   performanceSpeaker, coverage, transitionIn, transitionOut — what the shot shows, as reviewed
- * - references: frameReferenceIds, clipReferenceIds, setReference, characterVariant — who and where
- * - selections: referenceImageId, videoHistoryId — the frame and clip on screen when reviewed
- * - proof inputs: performanceEdit, direction, visualLayer, preMusic, photoSequence,
- *   templateEffects — the remaining per-shot fields the proof basis hashes
- *   (`productionReviewBasis`), so a snapshot still shows every shot input a review covered
- */
-const REVIEWED_SCENE_FIELDS = ['sceneId', 'order', 'label', 'sectionIndex', 'startSec', 'endSec', 'lyricText', 'lyricAnchor',
-  'visualIntent', 'prompt', 'framePrompt', 'camera', 'shotSheet', 'shotMode', 'performanceSpeaker', 'coverage', 'transitionIn', 'transitionOut',
-  'frameReferenceIds', 'clipReferenceIds', 'setReference', 'characterVariant', 'referenceImageId', 'videoHistoryId',
-  'performanceEdit', 'direction', 'visualLayer', 'preMusic', 'photoSequence', 'imageTreatments', 'templateEffects'];
-const REVIEWED_SCENE_FIELD_SET = new Set(REVIEWED_SCENE_FIELDS);
-
-/** One shot as a reviewed revision stores it: the plan a reviewer saw, without takes or render bookkeeping. */
-function reviewedSceneSnapshot(scene) {
-  if (!scene || typeof scene !== 'object') return scene;
-  return structuredClone(Object.fromEntries(REVIEWED_SCENE_FIELDS.filter(k => scene[k] !== undefined).map(k => [k, scene[k]])));
-}
-const reviewedScenes = scenes => (Array.isArray(scenes) ? scenes : []).map(reviewedSceneSnapshot);
-const sceneIsSlim = scene => !scene || typeof scene !== 'object' || Object.keys(scene).every(k => REVIEWED_SCENE_FIELD_SET.has(k));
-
-// History keeps who decided what, on which basis, and the proof evidence. The
-// per-input hashes and approved values feed the staleness report and revert,
-// which read only `approvals[stage]`; history keeps them on each stage's latest
-// entry and drops them from older ones, where they are dead weight.
-function slimApprovalHistory(history) {
-  if (!Array.isArray(history)) return history;
-  const latest = new Map();
-  history.forEach((entry, i) => latest.set(entry?.stage, i));
-  let changed = false;
-  const next = history.map((entry, i) => {
-    if (latest.get(entry?.stage) === i || !entry || typeof entry !== 'object' || !('inputs' in entry || 'values' in entry)) return entry;
-    changed = true;
-    const { inputs: _inputs, values: _values, ...kept } = entry;
-    return kept;
-  });
-  return changed ? next : history;
-}
-
-/**
- * Shrink older review records on write (#16210, #18706). Keep the reviewed
- * shot plan, drop input hashes and values from older history entries, and
- * remove copied board data from shot locks while preserving their bindings.
- */
-function slimProductionReview(review) {
-  if (!review || typeof review !== 'object') return review;
-  let revisions = review.reviewedRevisions;
-  if (revisions && typeof revisions === 'object' && Object.values(revisions).some(r => Array.isArray(r?.scenes) && !r.scenes.every(sceneIsSlim))) {
-    revisions = Object.fromEntries(Object.entries(revisions).map(([basis, r]) =>
-      [basis, Array.isArray(r?.scenes) && !r.scenes.every(sceneIsSlim) ? { ...r, scenes: reviewedScenes(r.scenes) } : r]));
-  }
-  const approvalHistory = slimApprovalHistory(review.approvalHistory);
-  let shotApprovals = review.shotApprovals;
-  for (const [id, lock] of Object.entries(review.shotApprovals || {})) {
-    if (!lock?.fromBoardApproval || Object.keys(lock).every(key => BOARD_SHOT_LOCK_FIELDS.includes(key))) continue;
-    if (shotApprovals === review.shotApprovals) shotApprovals = { ...shotApprovals };
-    shotApprovals[id] = pick(lock, BOARD_SHOT_LOCK_FIELDS);
-  }
-  if (revisions === review.reviewedRevisions && approvalHistory === review.approvalHistory && shotApprovals === review.shotApprovals) return review;
-  return { ...review, ...(revisions !== review.reviewedRevisions ? { reviewedRevisions: revisions } : {}),
-    ...(approvalHistory !== review.approvalHistory ? { approvalHistory } : {}),
-    ...(shotApprovals !== review.shotApprovals ? { shotApprovals } : {}) };
-}
-
-/** A whole project with `slimProductionReview` applied; the same object when nothing changed. */
-export function slimProjectReview(project) {
-  const review = slimProductionReview(project?.productionReview);
-  return review === project?.productionReview ? project : { ...project, productionReview: review };
-}
-
-/**
- * Bound the reviewed-revision snapshots, which ride every project write and sync:
- * keep the newest few plus every snapshot an open comment still points at.
- */
-function pruneReviewedRevisions(snapshots, feedback) {
-  const keep = new Set((feedback || []).filter(f => !f.resolvedAt).map(f => f.basis));
-  // Reversed first so a same-millisecond tie keeps the later-inserted (newer) snapshot.
-  Object.entries(snapshots).reverse().sort(([, a], [, b]) => String(b.capturedAt).localeCompare(String(a.capturedAt)))
-    .slice(0, MAX_RECENT_REVISIONS).forEach(([key]) => keep.add(key));
-  return Object.fromEntries(Object.entries(snapshots).filter(([key]) => keep.has(key)));
-}
-
-/** Comments retain the exact reviewed draft, even after a replacement import. */
-export function recordProductionFeedback(project, input) {
-  const review = project.productionReview || {};
-  const basis = productionReviewBasis(project)[input.stage];
-  if (input.basis !== basis) throw new ServerError('This revision changed. Review the current revision before commenting.', { status: 409, code: 'MUSIC_VIDEO_REVIEW_STALE' });
-  const snapshots = { ...review.reviewedRevisions };
-  if (!snapshots[basis]) snapshots[basis] = { draft: structuredClone(review.draft || {}),
-    scenes: reviewedScenes(project.scenes), capturedAt: new Date().toISOString() };
-  const entry = { id: randomUUID(), stage: input.stage, target: input.target, text: input.text,
-    decision: input.decision, basis, createdAt: new Date().toISOString() };
-  const approvals = { ...review.approvals };
-  if (input.decision === 'request-changes') {
-    for (const stage of ['art', 'storyboard', 'proof'].slice(['art', 'storyboard', 'proof'].indexOf(input.stage))) delete approvals[stage];
-  }
-  const feedback = [...(review.feedback || []), entry];
-  return { ...project, productionReview: { ...review, approvals, reviewedRevisions: pruneReviewedRevisions(snapshots, feedback), feedback } };
-}
-
-export function resolveProductionFeedback(project, { feedbackId, resolution, reviewer }) {
-  const review = project.productionReview || {};
-  const entry = review.feedback?.find(f => f.id === feedbackId);
-  if (!entry || entry.resolvedAt) throw new ServerError('Open feedback not found.', { status: 409, code: 'MUSIC_VIDEO_FEEDBACK_CLOSED' });
-  return { ...project, productionReview: { ...review, feedback: review.feedback.map(f => f.id === feedbackId
-    ? { ...f, resolution, ...(reviewer ? { resolvedBy: structuredClone(reviewer) } : {}), resolvedAt: new Date().toISOString(), resolvedBasis: productionReviewBasis(project)[f.stage] } : f) } };
-}
-
-export function productionFeedbackContext(project) {
-  const feedback = (project.productionReview?.feedback || []).filter(f => !f.resolvedAt);
-  return feedback.length ? `\nUNRESOLVED REVIEW FEEDBACK (retain until an authenticated reviewer resolves it):\n${feedback.map(f => `${f.stage} / ${f.target} / ${f.decision}: ${f.text}`).join('\n')}` : '';
-}
-
 
 /** A live capture keeps its slot; failed, canceled or missing evidence is retryable on explicit Resume. */
 export function productionProofNeedsRender(project, basis) {
