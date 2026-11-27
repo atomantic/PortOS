@@ -11,6 +11,8 @@ import { restoreSnapshot } from './backup.js';
 import * as apps from './apps.js';
 import * as notifications from './notifications.js';
 import * as feeds from './feeds.js';
+import { searchSNP, saveMarker, updateMarkerNotes } from './genome.js';
+import { getAccountById, updateAccount } from './socialAccounts.js';
 import * as personalities from './agent/agentPersonalities.js';
 import * as automation from './automationScheduler.js';
 import { cancelAll, getEvent } from './eventScheduler.js';
@@ -160,6 +162,61 @@ describe('live file restore caches', () => {
     await expect(pending).rejects.toThrow(/Some files may already have been overwritten/);
     await edit;
     expect(JSON.parse(await fs.readFile(path, 'utf8')).notifications).toEqual([{ id: 'restored', read: true }]);
+  });
+
+  it('invalidates the genome index and fences marker edits after a partial MeatSpace restore', async () => {
+    const rawPath = join(PATHS.meatspace, 'genome-raw.txt');
+    const metaPath = join(PATHS.meatspace, 'genome.json');
+    const rsid = 'rs999999999';
+    const install = async (genotype, id) => {
+      await fs.writeFile(rawPath, `${rsid}\t1\t1\t${genotype}\n`);
+      await fs.writeFile(metaPath, JSON.stringify({ uploaded: true, savedMarkers: { [id]: { rsid } } }));
+    };
+    await fs.mkdir(PATHS.meatspace, { recursive: true });
+    await install('AA', 'original');
+    await expect(searchSNP(rsid)).resolves.toMatchObject({ genotype: 'A/A' });
+
+    const proc = fakeProc();
+    spawn.mockReturnValue(proc);
+    const pending = restoreSnapshot('/dest', 'snap-1', { dryRun: false, subdirFilter: 'meatspace' });
+    await flush();
+    const staleMarker = saveMarker({ rsid });
+    const edit = updateMarkerNotes('restored', 'edited');
+    await install('CC', 'restored');
+    proc.emit('close', 1);
+
+    await expect(pending).rejects.toThrow(/Some files may already have been overwritten/);
+    await expect(staleMarker).resolves.toMatchObject({ error: expect.stringContaining('Genome data changed') });
+    await expect(edit).resolves.toMatchObject({ id: 'restored', notes: 'edited' });
+    await expect(searchSNP(rsid)).resolves.toMatchObject({ genotype: 'C/C' });
+    expect(JSON.parse(await fs.readFile(metaPath, 'utf8')).savedMarkers).toEqual({ restored: { rsid, notes: 'edited' } });
+  });
+
+  it('releases queued social account edits onto a restored account file', async () => {
+    const path = join(PATHS.digitalTwin, 'social-accounts.json');
+    const install = id => fs.writeFile(path, JSON.stringify({ accounts: { [id]: { platform: 'github', username: id } } }));
+    await fs.mkdir(PATHS.digitalTwin, { recursive: true });
+    await install('original');
+    const clock = vi.spyOn(Date, 'now').mockReturnValue(Date.now());
+    try {
+      await expect(getAccountById('original')).resolves.toMatchObject({ username: 'original' });
+      const proc = fakeProc();
+      spawn.mockReturnValue(proc);
+      const pending = restoreSnapshot('/dest', 'snap-1', { dryRun: false, subdirFilter: 'digital-twin/social-accounts.json' });
+      await flush();
+      const edit = updateAccount('restored', { notes: 'edited' });
+      await install('restored');
+      proc.emit('close', 0);
+
+      await pending;
+      await expect(edit).resolves.toMatchObject({ username: 'restored', notes: 'edited' });
+      await expect(getAccountById('original')).resolves.toBeNull();
+      const { accounts } = JSON.parse(await fs.readFile(path, 'utf8'));
+      expect(accounts).toMatchObject({ restored: { notes: 'edited' } });
+      expect(accounts).not.toHaveProperty('original');
+    } finally {
+      clock.mockRestore();
+    }
   });
 
   it('allows apps reads during a scoped restore without persisting baseline normalization', async () => {

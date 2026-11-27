@@ -58,7 +58,7 @@ const withAuthLock = createMutex();
 let authGeneration = 0;
 let refreshPromise = null;
 
-// Called under the lock after a durable grant change.
+// Called under the auth lock after credentials or tokens change on disk.
 function advanceAuthGeneration() {
   authGeneration += 1;
   refreshPromise = null;
@@ -133,6 +133,7 @@ export async function saveCredentials({ clientId, clientSecret }, options = {}) 
     await ensureAuthDir();
     const credentials = { clientId, clientSecret, redirectUri: getRedirectUri(options) };
     await writeSecureJson(CREDENTIALS_FILE, credentials);
+    advanceAuthGeneration();
     console.log('🎧 Spotify OAuth credentials saved');
     return { hasCredentials: true, redirectUri: credentials.redirectUri };
   });
@@ -245,7 +246,7 @@ async function refreshAccessToken(tokens, generation) {
     refresh_token: tokens.refresh_token,
   });
   return withAuthLock(async () => {
-    // The network request may have outlived a disconnect or a new grant.
+    // The network request may have outlived a credential or grant change.
     if (generation !== authGeneration) return null;
     const merged = withExpiry({ ...tokens, ...refreshed });
     if (!refreshed.refresh_token) merged.refresh_token = tokens.refresh_token;
