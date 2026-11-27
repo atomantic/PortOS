@@ -1340,12 +1340,17 @@ describe('mtplxServerManager', () => {
       expect(isMtplxProvider({ type: 'api', endpoint: 'http://100.64.0.5:8000/v1', id: 'mtplx', mtplxBacked: true })).toBe(false);
     });
 
-    it('does not match a CLI provider', () => {
-      expect(isMtplxProvider({ type: 'cli', endpoint: 'http://127.0.0.1:8000/v1', id: 'mtplx', mtplxBacked: true })).toBe(false);
+    it.each(['api', 'cli', 'tui'])('matches a local %s provider', (type) => {
+      expect(isMtplxProvider({ type, endpoint: 'http://127.0.0.1:8000/v1', id: 'mtplx', mtplxBacked: true })).toBe(true);
     });
 
-    it('matches an MTPLX-backed TUI provider', () => {
-      expect(isMtplxProvider({ type: 'tui', endpoint: 'http://127.0.0.1:8000/v1', id: 'mtplx-tui', mtplxBacked: true })).toBe(true);
+    it('matches an OpenCode provider whose loopback endpoint is only in its config', () => {
+      expect(isMtplxProvider({
+        type: 'cli',
+        command: 'opencode',
+        mtplxBacked: true,
+        envVars: { OPENCODE_CONFIG_CONTENT: JSON.stringify({ provider: { mtplx: { options: { baseURL: 'http://127.0.0.1:8000/v1' } } } }) },
+      })).toBe(true);
     });
 
     // Regression for #8105: `localEndpointPort` returns a STRING, and the port

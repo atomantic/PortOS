@@ -21,7 +21,7 @@ import { tmpdir } from 'os';
 import { dirname, join } from 'path';
 import { ServerError } from '../lib/errorHandler.js';
 import { sleep } from '../lib/fileUtils.js';
-import { LOCAL_RUNTIMES, localEndpointPort, localRuntimeKind, isLocalInstanceEndpoint } from '../lib/localProviderRuntime.js';
+import { LOCAL_RUNTIMES, localEndpointPort, localRuntimeForProvider, isLocalInstanceEndpoint } from '../lib/localProviderRuntime.js';
 import {
   createDaemonLogFiles,
   createDaemonWatcher,
@@ -494,9 +494,9 @@ export const waitForSlotstreamReady = (endpoint) => onDemand.waitForReady(endpoi
 export const ensureSlotstreamRunning = () => onDemand.ensureRunning();
 
 export function isSlotstreamProvider(provider) {
-  if (!provider || !['api', 'tui'].includes(provider.type)) return false;
+  if (!provider || !['api', 'cli', 'tui'].includes(provider.type)) return false;
+  if (localRuntimeForProvider(provider)?.kind === 'slotstream') return true;
   if (!isLocalInstanceEndpoint(provider.endpoint)) return false;
-  if (localRuntimeKind(provider) === 'slotstream') return true;
   return onDemand.servesPort(provider, currentConfig?.port);
 }
 
