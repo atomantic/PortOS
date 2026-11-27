@@ -9,7 +9,7 @@
 import { peerSyncEventSchema } from '../lib/peerSyncEventSchema.js';
 import { getPeers, resolveEffectiveCategories } from './instances.js';
 import { authorizeRemoteMediaTombstone } from './mediaTombstoneAuthorization.js';
-import { mergeVideoRows, applyRemoteVideoTombstones } from './dataSync.js';
+import { mergeVideoRows, applyRemoteVideoTombstones } from './dataSync/categories/videoHistory.js';
 import { mergeMediaTombstones } from './mediaTombstones.js';
 import { getHistoryItem } from './videoGen/history.js';
 import { listHostedEntries } from './peerHostedMedia.js';

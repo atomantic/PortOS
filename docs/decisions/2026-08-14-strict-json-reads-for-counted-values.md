@@ -87,8 +87,8 @@ consumers (routes, widgets, schedulers) and to any write back to the same path.
 | `services/decisionLog.js#loadDecisions` | `getDecisionSummary` divides by `recentDecisions.length` for the transparency score; `stats.totalDecisions` is a lifetime counter that `saveDecisions` writes back. |
 | `services/domainUsage.js#readFreshLedger` | The fall-through resets the day's ledger to zeros and `recordDomainUsage` writes it back — zeroing the Domain Budgets panel *and* re-opening a domain that had spent its cap. |
 | `services/videoGen/history.js#loadHistory` | Every write goes `loadHistory → mutate → saveHistory`; a swallowed read persists `[]` over the whole render history. |
-| `services/dataSync.js#getVideoHistorySnapshot` | Would publish a valid checksum over an empty set, so peers conclude this machine holds no videos and the category thrashes forever. |
-| `services/dataSync.js#applyVideoHistoryRemote` | The merge base — an empty `local` makes the merged result the remote rows alone, deleting every local-only row. |
+| `services/dataSync/categories/videoHistory.js#getVideoHistorySnapshot` | Would publish a valid checksum over an empty set, so peers conclude this machine holds no videos and the category thrashes forever. |
+| `services/dataSync/categories/videoHistory.js#applyVideoHistoryRemote` | The merge base — an empty `local` makes the merged result the remote rows alone, deleting every local-only row. |
 | `services/videoDownload.js` (×2) | Removed `.catch(() => [])` wrappers that re-swallowed `loadHistory`'s new strict signal. |
 | `services/settings.js#readSettingsStrict` | Routed onto `tryReadFileStrict`, replacing a hand-rolled `access()` re-probe. Same three-state verdict, one syscall, no window in which the probe can disagree with the read. |
 | `services/taskLearning/store.js#loadLearningData` | Every routing outcome, duration sample and failure signature is recorded by `load → mutate → saveLearningData`; the next save wrote a fresh `DEFAULT_LEARNING_DATA` over the entire learning history. The 5s cache also re-served the fabricated default. |
