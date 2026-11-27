@@ -150,51 +150,53 @@ export function ProviderQuotaSection({ billingRevision }) {
   const mountedRef = useMounted();
   const [peerBillingError, setPeerBillingError] = useState(false);
   const [peerBillingLoading, setPeerBillingLoading] = useState(false);
-  const quotaRequest = useRef(0);
   const quotaRequestOrder = useRef(0);
-  const familyRequestOrder = useRef(new Map());
-  const familyObservations = useRef(new Map());
-  const localPresence = useRef(new Map());
-  const fullInFlight = useRef(null);
-  const mounted = useRef(false);
-  const explicitRequest = useRef(0);
-  const fullRevision = useRef(0);
-  const localFullRevision = useRef(0);
-  const coverageRequest = useRef(0);
-  const imageStatusRequest = useRef(0);
-  const imageStatusApplied = useRef(0);
-  const familyRevisions = useRef(new Map());
-  const peerFamilyRevisions = useRef(new Map());
-  const activeFamilies = useRef(new Set());
-  const billingEpoch = useRef(0);
+  const fullRequest = useRef({
+    token: 0,
+    inFlight: null,
+    explicitToken: 0,
+    revision: 0,
+    localRevision: 0,
+  });
+  const familyRequests = useRef({
+    orders: new Map(),
+    observations: new Map(),
+    localPresence: new Map(),
+    revisions: new Map(),
+    peerRevisions: new Map(),
+    active: new Set(),
+  });
+  const imageStatus = useRef({ token: 0, appliedToken: 0 });
+  const fleetRequests = useRef({ coverageToken: 0, billingEpoch: 0 });
 
   const applyImageStatus = useCallback((result, token) => {
-    if (!mounted.current || token === null || token <= imageStatusApplied.current || result?.imageQuotaComplete == null) return;
-    imageStatusApplied.current = token;
+    if (!mountedRef.current || token === null || token <= imageStatus.current.appliedToken || result?.imageQuotaComplete == null) return;
+    imageStatus.current.appliedToken = token;
     setImageQuotaComplete(result.imageQuotaComplete);
     const local = result.providers?.find((card) => card.family === 'imagegen' && card.origin?.self !== false);
     setImageReadError((previous) => result.imageQuotaComplete ? null : local?.error ? local : previous);
-  }, []);
+  }, [mountedRef]);
 
   const load = useCallback(async (refresh = false) => {
-    const token = ++quotaRequest.current;
+    const families = familyRequests.current;
+    const token = ++fullRequest.current.token;
     const requestOrder = ++quotaRequestOrder.current;
-    const startingBillingEpoch = billingEpoch.current;
-    const explicitToken = refresh ? ++explicitRequest.current : null;
-    fullInFlight.current = token;
-    const coverageToken = ++coverageRequest.current;
-    const imageToken = ++imageStatusRequest.current;
-    const startingFamilies = new Map(familyRevisions.current);
+    const startingBillingEpoch = fleetRequests.current.billingEpoch;
+    const explicitToken = refresh ? ++fullRequest.current.explicitToken : null;
+    fullRequest.current.inFlight = token;
+    const coverageToken = ++fleetRequests.current.coverageToken;
+    const imageToken = ++imageStatus.current.token;
+    const startingFamilies = new Map(families.revisions);
     setLoading(true);
     setError(false);
     if (refresh) setRefreshAllError(false);
     const result = await getProviderUsage({ refresh, scope: 'instances' }).catch(() => null);
     applyImageStatus(result, imageToken);
-    const familyOrderAtCompletion = new Map(familyRequestOrder.current);
+    const familyOrderAtCompletion = new Map(families.orders);
     // Even if a socket-driven cached read overtook Refresh all, its forced
     // scrape outcomes still matter. A newer family refresh owns that family's
     // status, so do not overwrite it with an older full request's result.
-    if (refresh && mounted.current && explicitToken === explicitRequest.current) {
+    if (refresh && mountedRef.current && explicitToken === fullRequest.current.explicitToken) {
       setRefreshAllError(!result?.providers);
       const changedFamilies = new Set([...familyOrderAtCompletion]
         .filter(([, order]) => order > requestOrder).map(([family]) => family));
@@ -206,7 +208,7 @@ export function ProviderQuotaSection({ billingRevision }) {
           if (!changedFamilies.has(family) && !localFamilies.has(family) && (family !== 'imagegen' || result.imageQuotaComplete === true)) delete next[family];
         }
         for (const card of localCards.filter((item) => !changedFamilies.has(item.family))) {
-          const familyReadAt = Date.parse(familyObservations.current.get(card.family)?.fetchedAt);
+          const familyReadAt = Date.parse(families.observations.get(card.family)?.fetchedAt);
           const fullReadAt = Date.parse(card.fetchedAt);
           if (card.error && !card.refreshUnavailable && Number.isFinite(familyReadAt)
             && Number.isFinite(fullReadAt) && fullReadAt < familyReadAt) continue;
@@ -234,11 +236,11 @@ export function ProviderQuotaSection({ billingRevision }) {
         return next;
       });
     }
-    if (token !== quotaRequest.current) return;
-    fullInFlight.current = null;
+    if (token !== fullRequest.current.token) return;
+    fullRequest.current.inFlight = null;
     if (result?.providers) {
       setLocalLoaded(true);
-      const billingChanged = startingBillingEpoch !== billingEpoch.current;
+      const billingChanged = startingBillingEpoch !== fleetRequests.current.billingEpoch;
       if (!refresh) {
         // A family request only supersedes reads that began before it. A newer
         // passive failure must remain visible while an older refresh finishes.
@@ -276,25 +278,25 @@ export function ProviderQuotaSection({ billingRevision }) {
       }
       const localCards = result.providers.filter((card) => card.origin?.self !== false);
       const byFamily = new Map(localCards.map((card) => [card.family, card]));
-      const knownFamilies = new Set([...localPresence.current.keys(), ...familyRequestOrder.current.keys(), ...byFamily.keys()]);
+      const knownFamilies = new Set([...families.localPresence.keys(), ...families.orders.keys(), ...byFamily.keys()]);
       for (const family of knownFamilies) {
         // An incomplete image read says neither that the provider exists nor
         // that it was removed; keep the last definitive observation.
         if (family === 'imagegen' && result.imageQuotaComplete !== true) continue;
-        localPresence.current.set(family, { order: requestOrder, card: byFamily.get(family) || null });
+        families.localPresence.set(family, { order: requestOrder, card: byFamily.get(family) || null });
       }
-      const presence = new Map(localPresence.current);
+      const presence = new Map(families.localPresence);
       const familyOrders = familyOrderAtCompletion;
-      localFullRevision.current += 1;
+      fullRequest.current.localRevision += 1;
       if (!result.federationUnavailable && !billingChanged) {
-        fullRevision.current += 1;
+        fullRequest.current.revision += 1;
         setPeerBillingError(false);
       }
       // A family refresh can finish while this full read is in flight. Retain
       // its newer local card while still taking the full read's peer cards.
-      const active = new Set(activeFamilies.current);
+      const active = new Set(families.active);
       const preserve = new Set(active);
-      for (const [family, revision] of familyRevisions.current) {
+      for (const [family, revision] of families.revisions) {
         if (revision !== (startingFamilies.get(family) || 0)) preserve.add(family);
       }
       if (result.imageQuotaComplete === false) preserve.add('imagegen');
@@ -320,15 +322,21 @@ export function ProviderQuotaSection({ billingRevision }) {
           }),
         ];
       });
-      if (!billingChanged && coverageToken === coverageRequest.current) setCoverage(result);
+      if (!billingChanged && coverageToken === fleetRequests.current.coverageToken) setCoverage(result);
     } else {
       // Keep previously-loaded cards on a transient refresh failure.
       setError(true);
     }
     setLoading(false);
-  }, [applyImageStatus]);
+  }, [applyImageStatus, mountedRef]);
 
-  useEffect(() => { mounted.current = true; load(); return () => { mounted.current = false; quotaRequest.current += 1; fullInFlight.current = null; }; }, [load]);
+  useEffect(() => {
+    load();
+    return () => {
+      fullRequest.current.token += 1;
+      fullRequest.current.inFlight = null;
+    };
+  }, [load]);
 
   // One deadline-based timer updates the UI at the earliest known reset. A
   // longer delay is re-armed at the browser timeout limit, without polling.
@@ -355,37 +363,38 @@ export function ProviderQuotaSection({ billingRevision }) {
   // reading — and its age — untouched. A failure toasts through the request
   // helper; the catch here only clears the spinner, it owns no error UI.
   const refreshFamily = useCallback(async (family) => {
-    const startingFullRevision = fullRevision.current;
-    const startingLocalFullRevision = localFullRevision.current;
+    const families = familyRequests.current;
+    const startingFullRevision = fullRequest.current.revision;
+    const startingLocalFullRevision = fullRequest.current.localRevision;
     const requestOrder = ++quotaRequestOrder.current;
-    familyRequestOrder.current.set(family, requestOrder);
-    const startingBillingEpoch = billingEpoch.current;
-    const coverageToken = ++coverageRequest.current;
-    const imageToken = family === 'imagegen' ? ++imageStatusRequest.current : null;
-    const revision = (familyRevisions.current.get(family) || 0) + 1;
-    familyRevisions.current.set(family, revision);
-    activeFamilies.current.add(family);
+    families.orders.set(family, requestOrder);
+    const startingBillingEpoch = fleetRequests.current.billingEpoch;
+    const coverageToken = ++fleetRequests.current.coverageToken;
+    const imageToken = family === 'imagegen' ? ++imageStatus.current.token : null;
+    const revision = (families.revisions.get(family) || 0) + 1;
+    families.revisions.set(family, revision);
+    families.active.add(family);
     setRefreshingFamilies((prev) => new Set(prev).add(family));
     const result = await getProviderUsage({ refresh: true, family, scope: 'instances', silent: false }).catch(() => null);
-    if (familyRevisions.current.get(family) !== revision) return;
+    if (!mountedRef.current || families.revisions.get(family) !== revision) return;
     applyImageStatus(result, imageToken);
-    activeFamilies.current.delete(family);
+    families.active.delete(family);
     // A full read may have started after this refresh began; advancing again
     // records that its response predates the refresh completion.
-    familyRevisions.current.set(family, revision + 1);
+    families.revisions.set(family, revision + 1);
     if (result?.providers) {
       // No card back for a family we asked for means it is no longer enabled
       // (its provider was turned off) — drop it rather than leave a reading
       // that can never refresh again. `prev` is always an array here: the
       // button that got us here only renders once quotas have loaded.
-      const billingChanged = startingBillingEpoch !== billingEpoch.current;
-      const fullReadApplied = billingChanged || startingFullRevision !== fullRevision.current;
-      const localFullReadApplied = startingLocalFullRevision !== localFullRevision.current;
+      const billingChanged = startingBillingEpoch !== fleetRequests.current.billingEpoch;
+      const fullReadApplied = billingChanged || startingFullRevision !== fullRequest.current.revision;
+      const localFullReadApplied = startingLocalFullRevision !== fullRequest.current.localRevision;
       const local = result.providers.find((card) => card.family === family && card.origin?.self !== false);
-      const presence = localPresence.current.get(family);
+      const presence = families.localPresence.get(family);
       const newerRemoval = presence?.order > requestOrder && (!presence.card || presence.card.supported === false);
       if (!newerRemoval && local && !local.error && !local.refreshUnavailable && local.supported !== false && resolvesQuotaRefresh(local)) {
-        familyObservations.current.set(family, local);
+        families.observations.set(family, local);
       }
       const familyProviders = newerRemoval
         ? [...result.providers.filter((card) => card.origin?.self === false), ...(presence.card ? [presence.card] : [])]
@@ -393,7 +402,7 @@ export function ProviderQuotaSection({ billingRevision }) {
       const localUnavailable = !newerRemoval && family === 'imagegen'
         && (result.imageQuotaComplete === false || (!local && result.imageQuotaComplete !== true));
       if (!billingChanged && !result.federationUnavailable) {
-        peerFamilyRevisions.current.set(family, (peerFamilyRevisions.current.get(family) || 0) + 1);
+        families.peerRevisions.set(family, (families.peerRevisions.get(family) || 0) + 1);
       }
       const providers = billingChanged ? familyProviders.filter((card) => card.origin?.self !== false) : familyProviders;
       setQuotas((prev) => {
@@ -419,10 +428,10 @@ export function ProviderQuotaSection({ billingRevision }) {
         delete next[family];
         return next;
       });
-      if (!billingChanged && coverageToken === coverageRequest.current) setCoverage(result);
+      if (!billingChanged && coverageToken === fleetRequests.current.coverageToken) setCoverage(result);
       // The older full response may contain an older peer slot even when it
       // preserves this local refresh. Supersede it with a fresh cached read.
-      if (fullInFlight.current !== null) void load();
+      if (fullRequest.current.inFlight !== null) void load();
     } else {
       // A full read may have preserved the old card while this refresh was
       // pending. Reconcile after a failure so its newer result is not lost.
@@ -433,13 +442,13 @@ export function ProviderQuotaSection({ billingRevision }) {
       next.delete(family);
       return next;
     });
-  }, [load, applyImageStatus]);
+  }, [load, applyImageStatus, mountedRef]);
 
   // Billing invalidations carry no account data. Discard unverified peer cards
   // immediately, even when a prior peer read is still in flight.
   const invalidateBillingPeers = useCallback(() => {
-    const epoch = ++billingEpoch.current;
-    coverageRequest.current += 1;
+    const epoch = ++fleetRequests.current.billingEpoch;
+    fleetRequests.current.coverageToken += 1;
     setPeerBillingLoading(true);
     setPeerBillingError(false);
     setQuotas((previous) => previous?.filter((card) => card.origin?.self !== false) ?? previous);
@@ -449,19 +458,19 @@ export function ProviderQuotaSection({ billingRevision }) {
   // Reload only saved eligible peers; this scope never starts a CLI scrape.
   const reloadBillingPeers = useCallback(async () => {
     const epoch = invalidateBillingPeers();
-    const startingFullRevision = fullRevision.current;
-    const startingFamilies = new Map(peerFamilyRevisions.current);
-    const coverageToken = coverageRequest.current;
+    const startingFullRevision = fullRequest.current.revision;
+    const startingFamilies = new Map(familyRequests.current.peerRevisions);
+    const coverageToken = fleetRequests.current.coverageToken;
     const result = await getProviderUsage({ scope: 'peers', silent: true }).catch(() => null);
-    if (!mounted.current || epoch !== billingEpoch.current) return;
+    if (!mountedRef.current || epoch !== fleetRequests.current.billingEpoch) return;
     setPeerBillingLoading(false);
-    if (startingFullRevision !== fullRevision.current) return;
+    if (startingFullRevision !== fullRequest.current.revision) return;
     if (!result?.providers || result.federationUnavailable) {
       setPeerBillingError(true);
       return;
     }
     const changedFamilies = new Set();
-    for (const [family, revision] of peerFamilyRevisions.current) {
+    for (const [family, revision] of familyRequests.current.peerRevisions) {
       if (revision !== (startingFamilies.get(family) || 0)) changedFamilies.add(family);
     }
     setQuotas((previous) => [
@@ -469,8 +478,8 @@ export function ProviderQuotaSection({ billingRevision }) {
       ...result.providers.filter((card) => !changedFamilies.has(card.family)),
       ...(previous || []).filter((card) => card.origin?.self === false && changedFamilies.has(card.family)),
     ]);
-    if (coverageToken === coverageRequest.current) setCoverage(result);
-  }, [invalidateBillingPeers]);
+    if (coverageToken === fleetRequests.current.coverageToken) setCoverage(result);
+  }, [invalidateBillingPeers, mountedRef]);
 
   useEffect(() => { if (billingRevision) void reloadBillingPeers(); }, [billingRevision, reloadBillingPeers]);
   useSocketResource(() => reloadBillingPeers(), { events: FLEET_BILLING_EVENTS, immediate: false,
