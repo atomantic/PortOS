@@ -1,6 +1,6 @@
 // @vitest-environment node
 import { describe, expect, it } from 'vitest';
-import { buildVideoGenSubmission } from './videoGenSubmission.js';
+import { buildVideoGenPayload } from './buildVideoGenPayload.js';
 
 // #6499 — block streaming is a request-only field sent to the LOCAL backend,
 // and only when it is both a real choice (the current model actually runs on
@@ -27,15 +27,15 @@ it.each(['minimax-h3-lightx2v', 'minimax-h3-mlx-lightx2v'])('submits the %s prof
     { id: 'h3-speed', type, modes: ['text', 'image'] },
   ] };
   for (const mode of ['text', 'fflf']) {
-    const result = buildVideoGenSubmission(baseArgs({ modelId: model.id, currentModel: model,
+    const result = buildVideoGenPayload(baseArgs({ modelId: model.id, currentModel: model,
       mode, speedProfileId: 'h3-speed', steps: '8', guidanceScale: '3' }));
     expect(result).toMatchObject({ speedProfileId: 'h3-speed', steps: '', guidanceScale: '' });
   }
 });
 
-describe('buildVideoGenSubmission — block streaming request (#6499)', () => {
+describe('buildVideoGenPayload — block streaming request (#6499)', () => {
   it('sends a non-default mode when the current model runs an LTX-2/2.5 MLX runtime', () => {
-    const payload = buildVideoGenSubmission(baseArgs({
+    const payload = buildVideoGenPayload(baseArgs({
       currentModel: { runtime: 'ltx25' },
       streamingMode: 'stream',
     }));
@@ -44,7 +44,7 @@ describe('buildVideoGenSubmission — block streaming request (#6499)', () => {
   });
 
   it('omits the field for the default (auto) mode, even on an LTX-2/2.5 model', () => {
-    const payload = buildVideoGenSubmission(baseArgs({
+    const payload = buildVideoGenPayload(baseArgs({
       currentModel: { runtime: 'ltx2' },
       streamingMode: 'auto',
     }));
@@ -52,7 +52,7 @@ describe('buildVideoGenSubmission — block streaming request (#6499)', () => {
   });
 
   it('omits the field entirely when the current model does not run an LTX-2/2.5 MLX runtime', () => {
-    const payload = buildVideoGenSubmission(baseArgs({
+    const payload = buildVideoGenPayload(baseArgs({
       currentModel: { runtime: 'mlx_video' },
       streamingMode: 'stream',
     }));
@@ -60,7 +60,7 @@ describe('buildVideoGenSubmission — block streaming request (#6499)', () => {
   });
 
   it('omits the field when no model is selected yet', () => {
-    const payload = buildVideoGenSubmission(baseArgs({
+    const payload = buildVideoGenPayload(baseArgs({
       currentModel: null,
       streamingMode: 'stream',
     }));
@@ -68,18 +68,18 @@ describe('buildVideoGenSubmission — block streaming request (#6499)', () => {
   });
 });
 
-describe('buildVideoGenSubmission — fal options (#9232)', () => {
+describe('buildVideoGenPayload — fal options (#9232)', () => {
   it('carries selected resolution and provider audio only to the fal backend', () => {
     const options = { falResolution: '4k', falGenerateAudio: true };
-    expect(buildVideoGenSubmission(baseArgs({ hostedLane: 'fal', ...options })))
+    expect(buildVideoGenPayload(baseArgs({ hostedLane: 'fal', ...options })))
       .toMatchObject({ backend: 'fal', falResolution: '4k', falGenerateAudio: true });
-    const local = buildVideoGenSubmission(baseArgs(options));
+    const local = buildVideoGenPayload(baseArgs(options));
     expect(local).not.toHaveProperty('falResolution');
     expect(local).not.toHaveProperty('falGenerateAudio');
   });
 
   it('omits unset options so the server keeps its resolution and silent defaults', () => {
-    const payload = buildVideoGenSubmission(baseArgs({
+    const payload = buildVideoGenPayload(baseArgs({
       hostedLane: 'fal', falResolution: '', falGenerateAudio: false,
     }));
     expect(payload).not.toHaveProperty('falResolution');
@@ -87,51 +87,52 @@ describe('buildVideoGenSubmission — fal options (#9232)', () => {
   });
 });
 
-describe('buildVideoGenSubmission — lane dispatch', () => {
+describe('buildVideoGenPayload — lane dispatch', () => {
   it('routes each hosted lane to its own payload and null to the local one', () => {
     for (const lane of ['grok', 'fal', 'reactor', 'runway']) {
-      expect(buildVideoGenSubmission(baseArgs({ hostedLane: lane }))).toMatchObject({ backend: lane });
+      expect(buildVideoGenPayload(baseArgs({ hostedLane: lane }))).toMatchObject({ backend: lane });
     }
-    expect(buildVideoGenSubmission(baseArgs({ hostedLane: null }))).toMatchObject({ backend: 'local' });
+    expect(buildVideoGenPayload(baseArgs({ hostedLane: null }))).toMatchObject({ backend: 'local' });
   });
 });
 
-describe('buildVideoGenSubmission — hosted image-mode source', () => {
+describe('buildVideoGenPayload — hosted image-mode source', () => {
   const source = { sourceImageFile: 'frame.png', sourceImageUpload: 'data:image/png;base64,AAA' };
-  const lanes = { grok: { hostedLane: 'grok' }, fal: { hostedLane: 'fal' }, reactor: { hostedLane: 'reactor' } };
+  const lanes = ['grok', 'fal', 'reactor', 'runway', 'gemini', 'higgsfield', 'google'];
 
-  for (const [backend, flag] of Object.entries(lanes)) {
+  for (const backend of lanes) {
+    const flag = { hostedLane: backend };
     it(`${backend}: image mode copies the source, text mode sends empty strings`, () => {
-      expect(buildVideoGenSubmission(baseArgs({ ...flag, ...source, mode: 'image' })))
+      expect(buildVideoGenPayload(baseArgs({ ...flag, ...source, mode: 'image' })))
         .toMatchObject({ backend, mode: 'image', sourceImageFile: 'frame.png', sourceImage: 'data:image/png;base64,AAA' });
-      expect(buildVideoGenSubmission(baseArgs({ ...flag, ...source, mode: 'text' })))
+      expect(buildVideoGenPayload(baseArgs({ ...flag, ...source, mode: 'text' })))
         .toMatchObject({ backend, mode: 'text', sourceImageFile: '', sourceImage: '' });
       // Any non-image mode collapses to text on hosted lanes.
-      expect(buildVideoGenSubmission(baseArgs({ ...flag, ...source, mode: 'a2v' })))
+      expect(buildVideoGenPayload(baseArgs({ ...flag, ...source, mode: 'a2v' })))
         .toMatchObject({ mode: 'text', sourceImageFile: '', sourceImage: '' });
     });
 
     it(`${backend}: image mode with no source sends empty strings`, () => {
-      expect(buildVideoGenSubmission(baseArgs({ ...flag, mode: 'image' })))
+      expect(buildVideoGenPayload(baseArgs({ ...flag, mode: 'image' })))
         .toMatchObject({ mode: 'image', sourceImageFile: '', sourceImage: '' });
     });
   }
 
   it('fal and reactor never send a negative prompt; grok does', () => {
     const args = { negativePrompt: 'blurry' };
-    expect(buildVideoGenSubmission(baseArgs({ hostedLane: 'fal', ...args }))).not.toHaveProperty('negativePrompt');
-    expect(buildVideoGenSubmission(baseArgs({ hostedLane: 'reactor', ...args }))).not.toHaveProperty('negativePrompt');
-    expect(buildVideoGenSubmission(baseArgs({ hostedLane: 'grok', ...args }))).toHaveProperty('negativePrompt');
+    expect(buildVideoGenPayload(baseArgs({ hostedLane: 'fal', ...args }))).not.toHaveProperty('negativePrompt');
+    expect(buildVideoGenPayload(baseArgs({ hostedLane: 'reactor', ...args }))).not.toHaveProperty('negativePrompt');
+    expect(buildVideoGenPayload(baseArgs({ hostedLane: 'grok', ...args }))).toHaveProperty('negativePrompt');
   });
 
   it('fal omits an unset model id', () => {
-    expect(buildVideoGenSubmission(baseArgs({ hostedLane: 'fal', falModelId: '' })).falModelId).toBeUndefined();
-    expect(buildVideoGenSubmission(baseArgs({ hostedLane: 'fal', falModelId: 'm1' })).falModelId).toBe('m1');
+    expect(buildVideoGenPayload(baseArgs({ hostedLane: 'fal', falModelId: '' })).falModelId).toBeUndefined();
+    expect(buildVideoGenPayload(baseArgs({ hostedLane: 'fal', falModelId: 'm1' })).falModelId).toBe('m1');
   });
 });
 
-describe('buildVideoGenSubmission — reactor fields', () => {
-  const reactor = (o) => buildVideoGenSubmission(baseArgs({ hostedLane: 'reactor', ...o }));
+describe('buildVideoGenPayload — reactor fields', () => {
+  const reactor = (o) => buildVideoGenPayload(baseArgs({ hostedLane: 'reactor', ...o }));
 
   it('sends a seed of 0 and omits an unset seed', () => {
     expect(reactor({ reactorSeed: 0 }).reactorSeed).toBe(0);
@@ -153,9 +154,9 @@ describe('buildVideoGenSubmission — reactor fields', () => {
   });
 });
 
-describe('buildVideoGenSubmission — remote lane', () => {
+describe('buildVideoGenPayload — remote lane', () => {
   it('spreads remote fields over a text-mode local payload', () => {
-    const p = buildVideoGenSubmission(baseArgs({
+    const p = buildVideoGenPayload(baseArgs({
       remoteSubmissionFields: { modelId: 'remote-1', remoteInstanceId: 'peer' },
       steps: 0, guidanceScale: 0, seed: 0,
     }));
@@ -167,11 +168,11 @@ describe('buildVideoGenSubmission — remote lane', () => {
   });
 });
 
-describe('buildVideoGenSubmission — local frame sources', () => {
+describe('buildVideoGenPayload — local frame sources', () => {
   const ltx = { runtime: 'ltx2' };
   const other = { runtime: 'mlx_video' };
   const src = { sourceImageFile: 'a.png', sourceImageUpload: 'up', lastImageFile: 'z.png', lastImageUpload: 'zup', extendFromVideoId: 'v1', audioFile: 'a.wav' };
-  const local = (o) => buildVideoGenSubmission(baseArgs({ currentModel: other, ...src, ...o }));
+  const local = (o) => buildVideoGenPayload(baseArgs({ currentModel: other, ...src, ...o }));
 
   it('attaches the start frame for image mode', () => {
     expect(local({ mode: 'image' })).toMatchObject({ sourceImageFile: 'a.png', sourceImage: 'up', lastImageFile: '', lastImage: '', extendFromVideoId: '', audioFile: '' });
@@ -210,13 +211,13 @@ describe('buildVideoGenSubmission — local frame sources', () => {
   });
 
   it('missing sources fall back to empty strings', () => {
-    expect(buildVideoGenSubmission(baseArgs({ currentModel: other, mode: 'fflf' })))
+    expect(buildVideoGenPayload(baseArgs({ currentModel: other, mode: 'fflf' })))
       .toMatchObject({ sourceImageFile: '', sourceImage: '', lastImageFile: '', lastImage: '' });
   });
 });
 
-describe('buildVideoGenSubmission — local IC-LoRA, chunks and misc', () => {
-  const local = (o) => buildVideoGenSubmission(baseArgs({ currentModel: { runtime: 'ltx2' }, ...o }));
+describe('buildVideoGenPayload — local IC-LoRA, chunks and misc', () => {
+  const local = (o) => buildVideoGenPayload(baseArgs({ currentModel: { runtime: 'ltx2' }, ...o }));
 
   it('inactive IC mode sends empty reference fields', () => {
     expect(local({ icReferenceFile: 'r.mp4', icReferenceVideoId: 'v' })).toMatchObject({
@@ -281,42 +282,42 @@ describe('buildVideoGenSubmission — local IC-LoRA, chunks and misc', () => {
   });
 });
 
-describe('buildVideoGenSubmission — prompt additions (#11317)', () => {
+describe('buildVideoGenPayload — prompt additions (#11317)', () => {
   const preset = { label: 'Film noir', prompt: 'cinematic noir', negativePrompt: '' };
 
   it('sends the picked reference images on a Runway image render only', () => {
     const args = { hostedLane: 'runway', runwayModelId: 'seedance2_5', sourceImageFile: 'start.png', referenceImageFiles: ['one.png', ''] };
-    expect(buildVideoGenSubmission(baseArgs({ ...args, mode: 'image' })).referenceImageFiles).toEqual(['one.png']);
-    expect(buildVideoGenSubmission(baseArgs({ ...args, mode: 'text' }))).not.toHaveProperty('referenceImageFiles');
+    expect(buildVideoGenPayload(baseArgs({ ...args, mode: 'image' })).referenceImageFiles).toEqual(['one.png']);
+    expect(buildVideoGenPayload(baseArgs({ ...args, mode: 'text' }))).not.toHaveProperty('referenceImageFiles');
   });
 
   it('sends fal reference images only for a reference model, leaving one slot for a start frame', () => {
     const files = Array.from({ length: 31 }, (_, i) => `r${i}.png`);
     const args = { hostedLane: 'fal', mode: 'text', referenceImageFiles: ['one.png', ''] };
     const ref = 'bytedance/seedance-2.5/reference-to-video';
-    expect(buildVideoGenSubmission(baseArgs({ ...args, falModelId: ref })).referenceImageFiles).toEqual(['one.png']);
-    expect(buildVideoGenSubmission(baseArgs({ ...args, falModelId: 'fal-ai/minimax/hailuo-02/standard/image-to-video' }))).not.toHaveProperty('referenceImageFiles');
-    expect(buildVideoGenSubmission(baseArgs({ hostedLane: 'fal', falModelId: ref, mode: 'text', referenceImageFiles: files })).referenceImageFiles).toHaveLength(30);
-    expect(buildVideoGenSubmission(baseArgs({ hostedLane: 'fal', falModelId: ref, mode: 'image', sourceImageFile: 's.png', referenceImageFiles: files })).referenceImageFiles).toHaveLength(29);
+    expect(buildVideoGenPayload(baseArgs({ ...args, falModelId: ref })).referenceImageFiles).toEqual(['one.png']);
+    expect(buildVideoGenPayload(baseArgs({ ...args, falModelId: 'fal-ai/minimax/hailuo-02/standard/image-to-video' }))).not.toHaveProperty('referenceImageFiles');
+    expect(buildVideoGenPayload(baseArgs({ hostedLane: 'fal', falModelId: ref, mode: 'text', referenceImageFiles: files })).referenceImageFiles).toHaveLength(30);
+    expect(buildVideoGenPayload(baseArgs({ hostedLane: 'fal', falModelId: ref, mode: 'image', sourceImageFile: 's.png', referenceImageFiles: files })).referenceImageFiles).toHaveLength(29);
   });
 
   it('sends Higgsfield reference images only in Text mode on a family with a reference route', () => {
     const args = { hostedLane: 'higgsfield', mode: 'text', referenceImageFiles: ['one.png', ''] };
-    expect(buildVideoGenSubmission(baseArgs({ ...args, higgsfieldModelId: 'bytedance/seedance-2.5' })).referenceImageFiles).toEqual(['one.png']);
-    expect(buildVideoGenSubmission(baseArgs({ ...args, higgsfieldModelId: 'kling-video/v3.0/pro' }))).not.toHaveProperty('referenceImageFiles');
-    expect(buildVideoGenSubmission(baseArgs({ ...args, mode: 'image', sourceImageFile: 'start.png' }))).not.toHaveProperty('referenceImageFiles');
+    expect(buildVideoGenPayload(baseArgs({ ...args, higgsfieldModelId: 'bytedance/seedance-2.5' })).referenceImageFiles).toEqual(['one.png']);
+    expect(buildVideoGenPayload(baseArgs({ ...args, higgsfieldModelId: 'kling-video/v3.0/pro' }))).not.toHaveProperty('referenceImageFiles');
+    expect(buildVideoGenPayload(baseArgs({ ...args, mode: 'image', sourceImageFile: 'start.png' }))).not.toHaveProperty('referenceImageFiles');
   });
 
   it('sends Google Veo fields, and reference images only in Text mode on a model that takes them', () => {
     const args = { hostedLane: 'google', mode: 'text', referenceImageFiles: ['one.png', ''] };
-    const payload = buildVideoGenSubmission(baseArgs({ ...args, googleModelId: 'veo-3.1-generate-001', googleDuration: '8', googleGenerateAudio: true }));
+    const payload = buildVideoGenPayload(baseArgs({ ...args, googleModelId: 'veo-3.1-generate-001', googleDuration: '8', googleGenerateAudio: true }));
     expect(payload).toMatchObject({ backend: 'google', googleModelId: 'veo-3.1-generate-001', googleDuration: 8, googleGenerateAudio: true, referenceImageFiles: ['one.png'] });
-    expect(buildVideoGenSubmission(baseArgs({ ...args, googleModelId: 'veo-3.0-generate-001' }))).not.toHaveProperty('referenceImageFiles');
-    expect(buildVideoGenSubmission(baseArgs({ ...args, mode: 'image', sourceImageFile: 'start.png' }))).not.toHaveProperty('referenceImageFiles');
+    expect(buildVideoGenPayload(baseArgs({ ...args, googleModelId: 'veo-3.0-generate-001' }))).not.toHaveProperty('referenceImageFiles');
+    expect(buildVideoGenPayload(baseArgs({ ...args, mode: 'image', sourceImageFile: 'start.png' }))).not.toHaveProperty('referenceImageFiles');
   });
 
   it('drops carried style metadata when switching to Runway character performance', () => {
-    const payload = buildVideoGenSubmission(baseArgs({
+    const payload = buildVideoGenPayload(baseArgs({
       hostedLane: 'runway', mode: 'character-performance', runwayModelId: 'act_two',
       stylePreset: preset, negativePrompt: 'blur', noMusic: true,
     }));
@@ -325,7 +326,7 @@ describe('buildVideoGenSubmission — prompt additions (#11317)', () => {
   });
 
   it('lists the style preset, then the No music line the local lane appends', () => {
-    const payload = buildVideoGenSubmission(baseArgs({ currentModel: {}, stylePreset: preset, noMusic: true }));
+    const payload = buildVideoGenPayload(baseArgs({ currentModel: {}, stylePreset: preset, noMusic: true }));
     expect(payload.prompt).toBe('cinematic noir. a fox running through a forest\n\nno music, no soundtrack');
     expect(payload.promptAdditions).toEqual([
       { id: 'style-1', label: 'Style preset: Film noir', text: 'cinematic noir' },
@@ -334,14 +335,14 @@ describe('buildVideoGenSubmission — prompt additions (#11317)', () => {
   });
 
   it('sends no No music chip on a hosted lane, which never appends it', () => {
-    const payload = buildVideoGenSubmission(baseArgs({ hostedLane: 'fal', currentModel: {}, stylePreset: preset, noMusic: true }));
+    const payload = buildVideoGenPayload(baseArgs({ hostedLane: 'fal', currentModel: {}, stylePreset: preset, noMusic: true }));
     expect(payload.promptAdditions).toEqual([{ id: 'style-1', label: 'Style preset: Film noir', text: 'cinematic noir' }]);
   });
 });
 
-describe('buildVideoGenSubmission — extra reference images', () => {
+describe('buildVideoGenPayload — extra reference images', () => {
   it('sends the filled gallery picks, clipped to the model ceiling minus the input image', () => {
-    const payload = buildVideoGenSubmission(baseArgs({
+    const payload = buildVideoGenPayload(baseArgs({
       currentModel: { runtime: 'fastvideo', maxReferenceImages: 3 },
       referenceImageFiles: ['a.png', '', 'b.png', 'c.png'],
     }));
@@ -350,7 +351,7 @@ describe('buildVideoGenSubmission — extra reference images', () => {
 
   it('sends clips as ids and voices as indexed upload slots, clipped to the model ceilings', () => {
     const voices = [new File(['a'], 'a.wav'), new File(['b'], 'b.wav'), new File(['c'], 'c.wav')];
-    const payload = buildVideoGenSubmission(baseArgs({
+    const payload = buildVideoGenPayload(baseArgs({
       currentModel: { runtime: 'fastvideo', maxReferenceImages: 2, maxReferenceVideos: 1, maxReferenceAudios: 2 },
       referenceVideoIds: ['', 'clip-1', 'clip-2'],
       referenceAudioFiles: voices,
@@ -362,7 +363,7 @@ describe('buildVideoGenSubmission — extra reference images', () => {
   });
 
   it('never carries a stale list to a model that takes none', () => {
-    const payload = buildVideoGenSubmission(baseArgs({
+    const payload = buildVideoGenPayload(baseArgs({
       currentModel: { runtime: 'fastvideo' },
       referenceImageFiles: ['a.png'],
     }));
@@ -373,9 +374,9 @@ describe('buildVideoGenSubmission — extra reference images', () => {
 
 it('preserves explicit stage strengths through backend/model changes for visible server refusal and leaves defaults absent', () => {
   for (const lane of [null, 'grok', 'fal', 'reactor', 'runway']) {
-    const payload = buildVideoGenSubmission(baseArgs({ hostedLane: lane, a2vLoraStageStrengths: [0, 1] }));
+    const payload = buildVideoGenPayload(baseArgs({ hostedLane: lane, a2vLoraStageStrengths: [0, 1] }));
     expect(payload.a2vLoraStageStrengths).toBe('[0,1]');
   }
-  expect(buildVideoGenSubmission(baseArgs({ a2vLoraStageStrengths: [1, 1] })))
+  expect(buildVideoGenPayload(baseArgs({ a2vLoraStageStrengths: [1, 1] })))
     .not.toHaveProperty('a2vLoraStageStrengths');
 });
