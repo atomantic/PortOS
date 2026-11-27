@@ -281,7 +281,7 @@ async function resolveLocalSpeedProfile({
     sourceImagePath, uploadedTempPath, uploadedTempPaths,
     keyframes, extendFromVideoPath, audioFilePath,
   });
-  return { speedProfile, speedProfileDeclined, t2vTwoStage };
+  return { speedProfile, t2vTwoStage };
 }
 
 function logSpeedProfileSchedule({ speedProfile, jobId, steps, guidance, stage2Steps }) {
