@@ -93,6 +93,7 @@ const FOUR_SHARD_OWNERS = {
 // Cold full run 45949376269 put rich authoring and GPU capture on the
 // critical path together. Put GPU capture beside the parallel parity suite and
 // spread the audio/timeline shard's other captures onto quieter runners.
+// Run 46040128104 also put too many serial captures on shards 2 and 3.
 const FULL_SHARD_OWNERS = {
   'server/lib/filmLook.browser.test.js': 7,
   'server/lib/filmLookGpu.browser.test.js': 6,
@@ -114,18 +115,18 @@ const FULL_SHARD_OWNERS = {
   'server/services/musicVideo/documentRenderTemplates.browser.test.js': 5,
   'server/services/musicVideo/documentRenderAudioTimeline.browser.test.js': 4,
   'server/services/musicVideo/documentRenderEffects.browser.test.js': 2,
-  'server/services/musicVideo/documentRenderGeneration.browser.test.js': 3,
+  'server/services/musicVideo/documentRenderGeneration.browser.test.js': 6,
   'server/services/musicVideo/documentTemplateParity.browser.test.js': 6,
   'server/services/musicVideo/documentFilmLook.browser.test.js': 7,
   'server/services/musicVideo/documentVignette.browser.test.js': 3,
   'server/services/musicVideo/filmLookFinish.browser.test.js': 6,
-  'server/services/musicVideo/documentTemplates/layered/engine.controls.browser.test.js': 2,
+  'server/services/musicVideo/documentTemplates/layered/engine.controls.browser.test.js': 7,
   'server/services/musicVideo/documentTemplates/layered/engine.overlay.browser.test.js': 4,
   'server/services/musicVideo/documentTemplates/shared/lyricType.browser.test.js': 4,
-  'server/services/musicVideo/documentTemplates/shared/toonWorld.browser.test.js': 2,
+  'server/services/musicVideo/documentTemplates/shared/toonWorld.browser.test.js': 6,
   'server/services/musicVideo/lyricPlaythrough.browser.test.js': 3,
   'server/services/musicVideo/publish/linkedin.browser.test.js': 1,
-  'server/services/musicVideo/publish/x.browser.test.js': 6,
+  'server/services/musicVideo/publish/x.browser.test.js': 2,
   'server/services/musicVideo/publish/sunoHook.browser.test.js': 4,
   'server/routes/manualUpdateRecovery.browser.test.js': 7,
   'server/routes/autofixerUi.browser.test.js': 3,
@@ -147,7 +148,7 @@ const TWO_SHARD_SMOKE_OVERRIDES = {
 const SEVEN_SHARD_SMOKE_OVERRIDES = {
   'server/lib/filmLookGpu.browser.test.js': 5,
   'server/lib/musicVideo/musicVideoTitleCard.browser.test.js': 1,
-  'server/routes/musicVideoProductionReview.browser.test.js': 3,
+  'server/routes/musicVideoProductionReview.browser.test.js': 5,
   'server/services/codeAnimation/poster.realBrowser.test.js': 6,
   'server/services/musicVideo/documentRenderTemplates.browser.test.js': 4,
   'server/services/musicVideo/publish/sunoHook.browser.test.js': 6,

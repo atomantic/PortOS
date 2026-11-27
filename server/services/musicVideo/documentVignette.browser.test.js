@@ -44,7 +44,7 @@ describe.skipIf(!canRun)('opaque document film-look canvas with Chrome and ffmpe
     const authored = `<!doctype html><html><head><style>html,body{margin:0;width:100%;height:100%;overflow:hidden;background:#808080}button{position:fixed;left:200px;top:200px}#system{color:CanvasText;background:Canvas}</style></head><body><button>Native control</button><span id="system">System colors</span><script>window.portosComposition={width:1280,height:720,fps:24,durationSec:1,seek:async()=>{}};</script></body></html>`;
     await writeFile(path, authored);
     // Native loading keeps the actual builder's browser-inlined function sources intact.
-    const build = look => execFileSync(process.execPath, ['--input-type=module', '-e', `import { buildDocumentPreview } from ${JSON.stringify(new URL('./documentPreview.js', import.meta.url).href)}; const result=await buildDocumentPreview({id:'standalone',scenes:[],audioAnalysis:{durationSec:1},filmLook:JSON.parse(process.argv[2])},{files:new Map([['index.html',{abs:process.argv[1]}]])});process.stdout.write(result.html);`, path, JSON.stringify(look)], { encoding: 'utf8', env: { ...process.env, NODE_ENV: 'test' } });
+    const buildPreview = look => execFileSync(process.execPath, ['--input-type=module', '-e', `import { buildDocumentPreview } from ${JSON.stringify(new URL('./documentPreview.js', import.meta.url).href)}; const result=await buildDocumentPreview({id:'standalone',scenes:[],audioAnalysis:{durationSec:1},filmLook:JSON.parse(process.argv[2])},{files:new Map([['index.html',{abs:process.argv[1]}]])});process.stdout.write(result.html);`, path, JSON.stringify(look)], { encoding: 'utf8', env: { ...process.env, NODE_ENV: 'test' } });
     const browser = await chromium.launch({ executablePath: chrome, headless: true });
     const page = await browser.newPage({ viewport: { width: W, height: H } });
     const load = async html => { await page.goto('about:blank'); await page.setContent(html); };
@@ -56,14 +56,14 @@ describe.skipIf(!canRun)('opaque document film-look canvas with Chrome and ffmpe
     try {
       await load(authored);
       const originalColors = await colors();
-      const html = build({ version: 2, vignette: 0.6 });
+      const html = buildPreview({ version: 2, vignette: 0.6 });
       await load(html);
       await page.evaluate(() => globalThis.portosComposition.seek(0));
       const raw = await screenshot();
       for (const [x, y] of corners) expect(raw[(y * W + x) * 3]).toBeLessThan(raw[(H / 2 * W + W / 2) * 3] - 25);
       expect(await colors()).toEqual(originalColors);
       // The same document with the opt-in disabled is the pre-fix baseline.
-      const neutral = build({ version: 2, contrast: 0.2 });
+      const neutral = buildPreview({ version: 2, contrast: 0.2 });
       await load(neutral);
       const opaque = await screenshot();
       const legacy = neutral.replace('if (true) {\n      const filter = host.querySelector', 'if (false) {\n      const filter = host.querySelector');
@@ -72,7 +72,7 @@ describe.skipIf(!canRun)('opaque document film-look canvas with Chrome and ffmpe
       expect(await screenshot()).toEqual(opaque);
       // No-look overlays remain transparent and retain the direct globals used by capture scripts.
       await writeFile(path, authored.replace('background:#808080', 'background:transparent'));
-      await load(build(null));
+      await load(buildPreview(null));
       expect(await page.evaluate(() => ({ filter: document.documentElement.style.filter, background: getComputedStyle(document.body).backgroundColor, seek: typeof globalThis.portosComposition.seek })))
         .toEqual({ filter: '', background: 'rgba(0, 0, 0, 0)', seek: 'function' });
       const transparent = await sharp(await page.screenshot({ omitBackground: true })).ensureAlpha().raw().toBuffer();
