@@ -10,6 +10,7 @@ import {
   zodToOpenApiSchema,
 } from './apiContractSchemas.js';
 import { writersRoomWorksQuerySchema, writersRoomWorksResponseSchema } from './pipelineValidation.js';
+import { reviewQueueQuerySchema } from './reviewValidation.js';
 import { TTS_ENGINE_IDS } from './voiceEngines.js';
 import { agentContextMcpInboundSchema } from './agent/agentContextValidation.js';
 import { settingsSlicePatchSchema } from './settingsValidation.js';
@@ -132,11 +133,11 @@ export const API_OPERATION_CONTRACTS = Object.freeze({
       parameters: [
         { name: 'id', in: 'path', required: true, schema: { type: 'string' } },
         { name: 'process', in: 'query', required: false, schema: zodToOpenApiSchema(pm2ProcessNameSchema), description: 'Must belong to the app; defaults to its first PM2 process.' },
-        { name: 'lines', in: 'query', required: false, schema: { type: 'integer', default: 100 } },
+        { name: 'lines', in: 'query', required: false, schema: zodToOpenApiSchema(logsQuerySchema.shape.lines) },
       ],
       responses: {
         200: { description: 'App process log tail' },
-        400: { description: 'Missing, invalid, or foreign process', 'x-portos-error-codes': ['MISSING_PROCESS', 'INVALID_PROCESS_NAME'] },
+        400: { description: 'Missing, invalid, or foreign process', 'x-portos-error-codes': ['MISSING_PROCESS', 'INVALID_PROCESS_NAME', 'VALIDATION_ERROR'] },
         404: { description: 'App not found' },
       },
     },
@@ -207,10 +208,9 @@ export const API_OPERATION_CONTRACTS = Object.freeze({
     get: {
       summary: 'Read the cross-domain review action queue',
       description: 'Returns the canonical action projection. Passing limit opts into a short-lived snapshot; echo nextCursor unchanged for the next page. A null total means one or more sources are unavailable or bounded.',
-      parameters: [
-        { name: 'limit', in: 'query', required: false, schema: { type: 'integer', minimum: 1, maximum: 100 } },
-        { name: 'cursor', in: 'query', required: false, schema: { type: 'string', maxLength: 4096 } },
-      ],
+      parameters: Object.entries(reviewQueueQuerySchema.shape).map(([name, schema]) => ({
+        name, in: 'query', required: false, schema: zodToOpenApiSchema(schema),
+      })),
       responses: {
         200: { description: 'Canonical action rows, per-source health, totals, and an optional snapshot cursor' },
         400: { description: 'Invalid query or cursor', 'x-portos-error-codes': ['VALIDATION_ERROR', 'INVALID_CURSOR', 'CURSOR_QUERY_MISMATCH'] },
