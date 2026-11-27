@@ -4,6 +4,7 @@ import { createTailcatIngressServer } from '../services/tailcatIngress.js';
 import { Server } from 'socket.io';
 import { request } from '../lib/testHelper.js';
 import { errorMiddleware } from '../lib/errorHandler.js';
+import { cosToolRequestIdSchema } from '../lib/cos/cosToolContracts.js';
 
 const mocks = vi.hoisted(() => ({
   getAgentContextManifest: vi.fn(),
@@ -137,6 +138,38 @@ describe('agentContextMcp route', () => {
     const notification = await mcpPost({ jsonrpc: '2.0', method: 'notifications/initialized' });
     expect(notification.status).toBe(202);
     expect(notification.text).toBe('');
+  });
+
+  it('hashes quoted and base64 Idempotency-Key headers into stable schema-valid request IDs', async () => {
+    const body = {
+      jsonrpc: '2.0',
+      id: 'call-idem',
+      method: 'tools/call',
+      params: { name: 'context_profile', arguments: {} },
+    };
+    for (const key of ['"quoted value"', 'YWJj+/==']) {
+      await mcpPost(body).set('Idempotency-Key', key);
+      await mcpPost(body).set('Idempotency-Key', key);
+      const requestIds = mocks.callAgentContextTool.mock.calls
+        .slice(-2)
+        .map((call) => call[3].requestId);
+      expect(requestIds[0]).toBe(requestIds[1]);
+      expect(cosToolRequestIdSchema.safeParse(requestIds[0]).success).toBe(true);
+      expect(requestIds[0]).toMatch(/^agent-mcp:idem:[a-f0-9]{32}$/);
+    }
+  });
+
+  it('rejects oversized Idempotency-Key headers before dispatching a tool call', async () => {
+    const response = await mcpPost({
+      jsonrpc: '2.0',
+      id: 'call-too-large',
+      method: 'tools/call',
+      params: { name: 'context_profile', arguments: {} },
+    }).set('Idempotency-Key', 'x'.repeat(513));
+    expect(response.status).toBe(400);
+    expect(response.body.error).toEqual({ code: -32600, message: 'Invalid Idempotency-Key header' });
+    expect(response.body.id).toBe('call-too-large');
+    expect(mocks.callAgentContextTool).not.toHaveBeenCalled();
   });
 
   it('enforces transport headers and validated JSON-RPC envelopes', async () => {

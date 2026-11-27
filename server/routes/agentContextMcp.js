@@ -1,7 +1,7 @@
 import { isRemoteRequest } from '../lib/requestOrigin.js';
 import { isLocalConnection } from '../../lib/portosAuthCore.js';
 import { Router } from 'express';
-import { randomUUID } from 'node:crypto';
+import { createHash, randomUUID } from 'node:crypto';
 import { asyncHandler, ServerError } from '../lib/errorHandler.js';
 import {
   AGENT_CONTEXT_PROTOCOL_VERSION,
@@ -67,6 +67,14 @@ const requireEnabled = asyncHandler(async (req, _res, next) => {
 
 const jsonRpcError = (id, code, message) => ({ jsonrpc: '2.0', id: id ?? null, error: { code, message } });
 const jsonRpcResult = (id, result) => ({ jsonrpc: '2.0', id, result });
+
+const semanticRequestIdFromHeader = (headerValue) => {
+  const key = String(headerValue ?? '').trim();
+  if (!key) return { requestId: `agent-mcp:${randomUUID()}` };
+  if (key.length > 512) return { error: 'Invalid Idempotency-Key header' };
+  const digest = createHash('sha256').update(key).digest('hex').slice(0, 32);
+  return { requestId: `agent-mcp:idem:${digest}` };
+};
 
 const requireMcpAccept = (req, res) => {
   const accept = String(req.get('accept') ?? '').toLowerCase();
@@ -156,6 +164,11 @@ router.post('/mcp', asyncHandler(async (req, res) => {
       res.json(jsonRpcError(message.id, -32602, 'Invalid tools/call params'));
       return;
     }
+    const semanticRequestId = semanticRequestIdFromHeader(req.get('idempotency-key'));
+    if (semanticRequestId.error) {
+      res.status(400).json(jsonRpcError(message.id, -32600, semanticRequestId.error));
+      return;
+    }
     const result = await callAgentContextTool(params.data.name, params.data.arguments, {
       agentContext: {
         enabled: true,
@@ -164,7 +177,7 @@ router.post('/mcp', asyncHandler(async (req, res) => {
         actions: req.agentContextManifest.actions,
       },
     }, {
-      requestId: `agent-mcp:${req.get('idempotency-key') || randomUUID()}`,
+      requestId: semanticRequestId.requestId,
     });
     res.json(jsonRpcResult(message.id, result));
     return;
