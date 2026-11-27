@@ -7,7 +7,7 @@ import { fileIssuesEffective, managedAgentOptionsFor, toggleFileIssuesMetadata, 
 // writes a whole patch; both hold the parent's in-flight-save lock.
 export default function SwarmAndAgentOptionsSection({ taskType, config, updating, activeCount, onMetadataChange, runUpdate }) {
   // ON unless explicitly false, so it reads from the same rule the server's
-  // nudge gate applies (sessionController.js).
+  // nudge gate applies (ptyEventHandlers.js).
   const stallNudgeEnabled = config.taskMetadata?.stallNudge !== false;
 
   return (
