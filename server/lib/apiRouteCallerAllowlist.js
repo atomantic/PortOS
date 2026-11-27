@@ -190,7 +190,7 @@ export const UNCALLED_ROUTE_ALLOWLIST = Object.freeze({
     'PATCH /api/cos/schedule/maintenance-runs/:id/steps/:stepId',
     // docs/STORAGE.md: advisory backend migration check.
     'POST /api/database/maintenance/preflight',
-    // docs/features/eidoverse-guest-travel.md: remove an owned foundation after withdrawing its publication.
+    // docs/features/eidoverse.md: remove an owned foundation after withdrawing its publication.
     'DELETE /api/eidoverse/world/foundations/:id',
     // docs/features/managed-visitors.md: list, provision, and revoke app visitor credentials.
     'GET /api/managed-visitor-admin',

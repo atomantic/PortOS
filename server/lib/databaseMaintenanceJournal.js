@@ -11,7 +11,7 @@
  *
  * Storage: `file-primary` — machine-local, never federated. `data/database-maintenance/operation.json` must be
  * readable while either backend is unavailable, so it cannot live in PostgreSQL; its directory is the admission
- * fence. Lifecycle and recovery commands: docs/DATABASE_MAINTENANCE.md.
+ * fence. Lifecycle and recovery commands: docs/STORAGE.md#cutover-recovery.
  */
 
 import { existsSync, lstatSync, mkdirSync, linkSync, unlinkSync, openSync, closeSync, fsyncSync, readFileSync, renameSync, rmSync, writeFileSync } from 'node:fs';

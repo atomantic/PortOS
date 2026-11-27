@@ -109,9 +109,8 @@ allowlist of modules. Future service pairs are discovered directly at test time.
 | creative/creativeRunLedger.js | <code>file</code> | Strict read | [#6983](https://github.com/atomantic/PortOS/pull/6983) |
 | dailyDriver.js | <code>FILE</code> | Strict read | [#6981](https://github.com/atomantic/PortOS/pull/6981) |
 | dailyReview.js | <code>join ( REVIEW_DIR , &#96;  ${ date } .json &#96; )</code> | Strict read | [#6981](https://github.com/atomantic/PortOS/pull/6981) |
-| dataSync.js | <code>CHARACTER_FILE</code> | Strict read | [#6982](https://github.com/atomantic/PortOS/pull/6982) |
-| dataSync.js | <code>GOALS_FILE</code> | Strict read | [#6982](https://github.com/atomantic/PortOS/pull/6982) |
-| dataSync.js | <code>filePath</code> | Strict read | [#6982](https://github.com/atomantic/PortOS/pull/6982) |
+| dataSync/categories/goals.js | <code>GOALS_FILE</code> | Strict read | [#6982](https://github.com/atomantic/PortOS/pull/6982) |
+| dataSync/categories/meatspace.js | <code>filePath</code> | Strict read | [#6982](https://github.com/atomantic/PortOS/pull/6982) |
 | datadog.js | <code>DATADOG_CONFIG_FILE</code> | Strict read | [#6978](https://github.com/atomantic/PortOS/pull/6978) |
 | digital-twin-sync.js | <code>TASTE_FILE</code> | Strict read | [#6981](https://github.com/atomantic/PortOS/pull/6981) |
 | digital-twin-sync.js | <code>path</code> | Strict read | [#6981](https://github.com/atomantic/PortOS/pull/6981) |

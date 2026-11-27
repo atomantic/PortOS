@@ -48,7 +48,7 @@
  * is no literal, and whatever another program the suite starts goes on to
  * run. The marker is
  * therefore added only after the suite has been read, and reviewed as a
- * claim about it (docs/TEST_MEMO_GIT_FIXTURES.md).
+ * claim about it (docs/TEST_MEMO.md#git-fixtures).
  */
 
 import { posix } from 'node:path';

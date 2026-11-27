@@ -107,7 +107,7 @@ peer execution authority, stay with the destination install. File restore
 also preserves the destination's active database maintenance and restore
 recovery journals. Some snapshots contain machine-local records as recovery
 evidence. See
-[Database Maintenance](DATABASE_MAINTENANCE.md) for cutover and recovery.
+[Database cutover recovery](STORAGE.md#cutover-recovery) for the cutover journal and recovery commands.
 
 ## Restore PostgreSQL
 
@@ -177,5 +177,5 @@ These sources describe which changes are coordinated with snapshot cuts.
 For moving between native PostgreSQL and Docker, use the coordinated
 [database cutover](STORAGE.md#moving-between-docker-and-native). For
 maintenance fences and other storage incidents, see
-[Database Maintenance](DATABASE_MAINTENANCE.md) and
-[Storage Recovery](STORAGE_RECOVERY.md).
+[Database cutover recovery](STORAGE.md#cutover-recovery) and
+[workflow maintenance recovery](STORAGE.md#workflow-maintenance-journal).
