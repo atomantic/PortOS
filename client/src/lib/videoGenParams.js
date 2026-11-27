@@ -5,7 +5,6 @@
 // touch React state; the page and any future consumer import them directly.
 
 import { isAudioToVideoRuntime, isLtx2FamilyRuntime } from './runnerFamilies';
-import { isDeliveryVideoModel } from './videoFinish.js';
 import { DEFAULT_CONTEXT_FRAMES, resolveContextFrames } from '../../../server/lib/videoContinuity.js';
 import {
   STOCK_TEXT_ENCODER_ID, SPEED_PROFILE_DEFAULT_ID, isDefaultSpeedProfile, speedProfileAcceptsMode, videoSpeedProfiles,
@@ -235,48 +234,6 @@ export const speedProfileIdFromRecord = (value) => (
 // model does — so it must agree with what the server will resolve.
 export const selectedSpeedProfile = (id, model, mode = null) => (
   isDefaultSpeedProfileId(id) ? null : speedProfilesForMode(model, mode).find((p) => p.id === id) || null
-);
-
-// --- Draft decode (#5423) -------------------------------------------------
-// Mirrors server/lib/videoDraftDecoders.js. The OPTION LIST is server-declared
-// and rides to the client on each model entry as `draftDecodeOptions` (built by
-// `publicVideoDraftDecodeOptions`), so there is no client-side decoder table to
-// drift — only the same "absence IS full decode" sentinel rule the speed-profile
-// and text-encoder helpers above follow.
-export const DEFAULT_DRAFT_DECODE_ID = 'full';
-export const isFullDecodeId = (id) => (
-  id == null || id === '' || id === DEFAULT_DRAFT_DECODE_ID
-);
-// The decode choices this model offers, or [] when it declares no draft decoder
-// — which is the signal to render NO control rather than a one-entry select.
-export const draftDecodeOptionsForModel = (model) => (
-  Array.isArray(model?.draftDecodeOptions) ? model.draftDecodeOptions.filter((o) => o?.id) : []
-);
-export const supportsDraftDecode = (model) => draftDecodeOptionsForModel(model).length > 0;
-// Snap a selection onto what the (possibly just-switched) model declares, so
-// the <select> is never left on a value with no matching <option>.
-export const normalizeDraftDecodeForModel = (id, model) => (
-  draftDecodeOptionsForModel(model).some((o) => o.id === id) ? id : DEFAULT_DRAFT_DECODE_ID
-);
-// Read a decode out of a persisted record (a history entry, a resumed job's
-// params). Both record only a NON-default decode, so a missing field means Full
-// — and must CLEAR a leftover selection rather than carry it into a render the
-// user asked to reproduce.
-export const draftDecodeFromRecord = (value) => (
-  typeof value === 'string' && value ? value : DEFAULT_DRAFT_DECODE_ID
-);
-// The decode a request on THIS model actually resolves to. Delivery intent
-// OUTRANKS declaration, in the same order `draftDecodeDeclineReason` gates it
-// server-side: a model the finish graph names as a delivery target always
-// decodes on its own decoder, so the request snaps to Full there before the
-// question of "with which decoder?" is even asked. Every client path that
-// reconciles a decode against a model — the Video Gen form's model-switch
-// snap-back, its submit payload, and the requeue editor — goes through this, so
-// none of them can offer or POST a draft the server would decline.
-export const resolveDraftDecodeForModel = (id, model, models) => (
-  isDeliveryVideoModel(model, models)
-    ? DEFAULT_DRAFT_DECODE_ID
-    : normalizeDraftDecodeForModel(id, model)
 );
 
 // Per-edge bounds for video: mirrors the videoGen route (64..2048). The base

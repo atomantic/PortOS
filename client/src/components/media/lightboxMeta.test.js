@@ -1,6 +1,6 @@
 // @vitest-environment node
 import { describe, it, expect } from 'vitest';
-import { buildLightboxMeta, describeCleanedLineage, formatDraftDecodeLabel, formatSpeedProfileLabel } from './lightboxMeta.js';
+import { buildLightboxMeta, describeCleanedLineage, formatSpeedProfileLabel } from './lightboxMeta.js';
 
 describe('lightboxMeta', () => {
   it('drops empty rows and keeps populated ones', () => {
@@ -9,11 +9,8 @@ describe('lightboxMeta', () => {
     expect(meta.some(([k]) => k === 'Universe')).toBe(false);
   });
 
-  it('never presents an unreported speed profile or draft decode as applied', () => {
+  it('never presents an unreported speed profile as applied', () => {
     expect(formatSpeedProfileLabel({ raw: { speedProfileId: 'fast' } })).toBe('fast — outcome not reported');
-    expect(formatDraftDecodeLabel({ raw: { draftDecode: 'tae' } })).toBe('tae — outcome not reported');
-    expect(formatDraftDecodeLabel({ raw: { draftDecode: 'tae', draftDecodeApplied: { applied: false, reason: 'oom' } } }))
-      .toBe('full decoder (tae unavailable: oom)');
   });
 
   it('describes cleaned lineage variants', () => {

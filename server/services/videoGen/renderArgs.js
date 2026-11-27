@@ -22,7 +22,7 @@ export {
 export { buildMiniMaxH3Ref2vaArgs } from './renderArgs/minimaxH3.js';
 export { icLoraArgs, resolveVideoLoras } from './renderArgs/loras.js';
 
-export const buildArgs = ({ continuityStrategy, contextFrames, historyContext, upscale, pythonPath, modelId, model, wanModelPath, fastvideoModelPath, fastvideoOmniAssets, referenceImagePaths, referenceVideoPaths, referenceAudioPaths, wanRequiredWeights, ltxModelPath, ref2vaModelPath, prompt, negativePrompt, width, height, numFrames, fps, steps, stage2Steps, guidance, seed, tiling, disableAudio, sourceImagePath, lastImagePath, keyframes, extendFromVideoPath, audioFilePath, audioStartSec, mode, imageStrength, i2vReferenceMode, a2vLoraStageStrengths, textEncoderRepo, textEncoder, outputPath, previewDir, loras, icReferencePaths, icLoraWeightPath, icStrength, icAttentionStrength, icSkipStage2, speedProfile, draftDecoder, streamingMode, ffmpegPath, ffprobePath }) => {
+export const buildArgs = ({ continuityStrategy, contextFrames, historyContext, upscale, pythonPath, modelId, model, wanModelPath, fastvideoModelPath, fastvideoOmniAssets, referenceImagePaths, referenceVideoPaths, referenceAudioPaths, wanRequiredWeights, ltxModelPath, ref2vaModelPath, prompt, negativePrompt, width, height, numFrames, fps, steps, stage2Steps, guidance, seed, tiling, disableAudio, sourceImagePath, lastImagePath, keyframes, extendFromVideoPath, audioFilePath, audioStartSec, mode, imageStrength, i2vReferenceMode, a2vLoraStageStrengths, textEncoderRepo, textEncoder, outputPath, previewDir, loras, icReferencePaths, icLoraWeightPath, icStrength, icAttentionStrength, icSkipStage2, speedProfile, streamingMode, ffmpegPath, ffprobePath }) => {
   // Generative upscale (#6511) declines FIRST. It is not a text/image render:
   // it carries no video model, no prompt and no reference mode, so every guard
   // below would either dereference a model it was never given or reject it for
@@ -39,8 +39,8 @@ export const buildArgs = ({ continuityStrategy, contextFrames, historyContext, u
       || typeof historyContext.sourceVideoPath !== 'string' || !existsSync(historyContext.sourceVideoPath)
       || !Number.isSafeInteger(historyContext.endFrame) || historyContext.endFrame < contract.historyFrames
       || historyContext.frames !== contract.historyFrames || fps !== contract.fps
-      || sourceImagePath || lastImagePath || keyframes?.length || speedProfile || loras?.length || draftDecoder) {
-      throw new ServerError('H3 history requires its pinned baseline adapter, exact 17-frame video/audio interval and no image, profile, LoRA or decoder substitutions.', { status: 400, code: 'VIDEO_HISTORY_CONTRACT_INVALID' });
+      || sourceImagePath || lastImagePath || keyframes?.length || speedProfile || loras?.length) {
+      throw new ServerError('H3 history requires its pinned baseline adapter, exact 17-frame video/audio interval and no image, profile or LoRA substitutions.', { status: 400, code: 'VIDEO_HISTORY_CONTRACT_INVALID' });
     }
   }
   // Reference-mode promise (#4874) — checked HERE rather than inside
@@ -106,7 +106,7 @@ export const buildArgs = ({ continuityStrategy, contextFrames, historyContext, u
     return buildWan22CudaArgs({ model, wanModelPath, prompt, negativePrompt, width, height, numFrames, fps, steps, guidance, seed, sourceImagePath, mode, outputPath });
   }
   if (model.runtime === 'minimax_h3') {
-    return buildMiniMaxH3Args({ historyContext, speedProfile, model, prompt, negativePrompt, width, height, numFrames, fps, steps, seed, sourceImagePath, lastImagePath, keyframes, extendFromVideoPath, audioFilePath, audioStartSec, icReferencePaths, mode, tiling, disableAudio, outputPath, previewDir, loras, textEncoder, draftDecoder });
+    return buildMiniMaxH3Args({ historyContext, speedProfile, model, prompt, negativePrompt, width, height, numFrames, fps, steps, seed, sourceImagePath, lastImagePath, keyframes, extendFromVideoPath, audioFilePath, audioStartSec, icReferencePaths, mode, tiling, disableAudio, outputPath, previewDir, loras, textEncoder });
   }
   if (model.runtime === 'minimax_h3_cuda') {
     return buildMiniMaxH3CudaArgs({ historyContext, model, prompt, negativePrompt, width, height, numFrames, fps, steps, seed, sourceImagePath, lastImagePath, keyframes, extendFromVideoPath, audioFilePath, audioStartSec, icReferencePaths, mode, tiling, disableAudio, outputPath, loras, speedProfile });

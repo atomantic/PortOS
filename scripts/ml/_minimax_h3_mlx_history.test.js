@@ -40,7 +40,7 @@ with tempfile.TemporaryDirectory() as tmp:
             raise AssertionError('invalid history accepted')
         except SystemExit:
             pass
-    args.image, args.anchor, args.draft_decoder_file = ['still.png'], ['first'], []
+    args.image, args.anchor = ['still.png'], ['first']
     try:
         mlx.validate_args(args)
         raise AssertionError('keyframes accepted with history')

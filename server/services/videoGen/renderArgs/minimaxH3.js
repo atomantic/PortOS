@@ -13,7 +13,6 @@ import {
   MINIMAX_H3_HELPER_SCRIPT,
   MINIMAX_H3_REPO_DIR,
   MINIMAX_H3_ENCODER_SHIM_DIR,
-  MINIMAX_H3_DRAFT_DECODER_SHIM_DIR,
   MINIMAX_H3_PROMPT_EMBEDDING_CACHE_DIR,
   MINIMAX_H3_EXPECTED_REVISION,
   MERE_RUN_BIN,
@@ -94,7 +93,7 @@ const miniMaxH3HostMemoryArgs = (model) => {
 // Build args for PipeNetwork's pinned MiniMax H3 MLX port. The helper resolves
 // only exact, already-cached HF revisions; every network download remains an
 // explicit Video Gen UI action guarded by the model's terms acknowledgement.
-export const buildMiniMaxH3Args = ({ historyContext, speedProfile, model, prompt, negativePrompt, width, height, numFrames, fps, steps, seed, sourceImagePath, lastImagePath, keyframes, extendFromVideoPath, audioFilePath, audioStartSec, icReferencePaths, mode, tiling, disableAudio, outputPath, previewDir, loras, textEncoder, draftDecoder }) => {
+export const buildMiniMaxH3Args = ({ historyContext, speedProfile, model, prompt, negativePrompt, width, height, numFrames, fps, steps, seed, sourceImagePath, lastImagePath, keyframes, extendFromVideoPath, audioFilePath, audioStartSec, icReferencePaths, mode, tiling, disableAudio, outputPath, previewDir, loras, textEncoder }) => {
   assertMiniMaxH3Preflight({
     runtimeId: 'minimax_h3',
     repoLabel: 'transformer repo or revision',
@@ -180,20 +179,6 @@ export const buildMiniMaxH3Args = ({ historyContext, speedProfile, model, prompt
     // hidden state before it, but the pinned loader builds the full module tree
     // and refuses to load with any parameter missing.
     if (textEncoder.finalNormKey) args.push('--text-encoder-final-norm-key', textEncoder.finalNormKey);
-  }
-  // Preview-fidelity video decode (lib/videoDraftDecoders.js, #5423). Absent
-  // for every full-decode render, so the argv of a delivery render is
-  // byte-identical to what it was before this feature existed. `paths` were
-  // already resolved against the HF cache by generateVideo — the helper never
-  // downloads — and generateVideo has already refused the substitution for a
-  // model the finish graph names as a delivery target, so nothing here can put
-  // a draft decode on a delivery clip. One --draft-decoder-file per pinned
-  // file; the helper links it into a shim `source/` beside the model's own
-  // decoder config.
-  if (draftDecoder) {
-    args.push('--draft-decoder-id', draftDecoder.id);
-    for (const path of draftDecoder.paths) args.push('--draft-decoder-file', path);
-    args.push('--draft-decoder-shim-root', MINIMAX_H3_DRAFT_DECODER_SHIM_DIR);
   }
   return { bin: MINIMAX_H3_VENV_PYTHON, args };
 };

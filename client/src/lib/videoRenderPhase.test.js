@@ -19,7 +19,7 @@ describe('videoRenderStepFor', () => {
   it('absorbs unseen markers within a known family via its prefix', () => {
     expect(videoRenderStepFor('download-some-new-shard')).toBe('download');
     expect(videoRenderStepFor('load-audio-vae')).toBe('load');
-    expect(videoRenderStepFor('swap-video-decoder')).toBe('load');
+    expect(videoRenderStepFor('swap-text-encoder')).toBe('load');
     // generate_wan22.py emits STAGE:wan-i2v / STAGE:wan-t2v, never bare "wan".
     expect(videoRenderStepFor('wan-i2v')).toBe('render');
     expect(videoRenderStepFor('ref2va-mux')).toBe('render');

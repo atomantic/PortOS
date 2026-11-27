@@ -14,7 +14,7 @@ const baseArgs = (overrides = {}) => ({
   width: 768, height: 512, mode: 'text',
   numFrames: 121, fps: 24, steps: '', guidanceScale: '', seed: '', batchSize: 1,
   models: [],
-  tiling: 'auto', textEncoderId: '', speedProfileId: '', draftDecode: '',
+  tiling: 'auto', textEncoderId: '', speedProfileId: '',
   disableAudio: false, noMusic: false, imageStrength: '', i2vReferenceMode: 'anchor',
   keyframesActive: false, keyframes: [], loraFamily: null, selectedLoras: [],
   icModeActive: false, icImageKind: false, icReferenceImageFiles: [], icStrength: 1, icSkipStage2: false,

@@ -78,7 +78,7 @@ export function _createMetalBufferProfiles({ file, now = Date.now, read = readFi
 
 // Exclude content and per-job destinations from the effective argv identity.
 // Input counts and keyframe positions still participate; paths never reach disk.
-const OMIT_VALUES = new Set(['--prompt', '--negative-prompt', '--seed', '--batch-seeds', '--output', '--preview-dir', '--batch-file', '--batch-json', '--prompt-cache-dir', '--prompt-embedding-cache-dir', '--text-encoder-shim-root', '--draft-decoder-shim-root']);
+const OMIT_VALUES = new Set(['--prompt', '--negative-prompt', '--seed', '--batch-seeds', '--output', '--preview-dir', '--batch-file', '--batch-json', '--prompt-cache-dir', '--prompt-embedding-cache-dir', '--text-encoder-shim-root']);
 const INPUT_VALUES = new Set(['--image', '--last-image', '--audio', '--video', '--extend-from-video', '--ic-reference', '--reference-image', '--reference-video', '--reference-audio']);
 const REVISION = /^[a-f0-9]{40}$/i;
 
@@ -111,7 +111,7 @@ export async function metalBufferExecutionSignature({ model, encoder, runtimeInf
   const performanceEnv = Object.fromEntries(['MLX_METAL_FAST_SYNCH', 'LTX2_DIT_EVAL_EVERY', 'LTX2_GEMMA_EVAL_EVERY', 'LTX2_GEMMA_MAX_LENGTH', 'PORTOS_MLX_CACHE_LIMIT_MB'].map(key => [key, env[key] ?? null]));
   const assetPaths = [...(encoder?.paths || [])];
   for (let index = 1; index < args.length; index += 1) {
-    if (['--lora', '--text-encoder-file', '--draft-decoder-file', '--ic-lora-path', '--dev-transformer', '--distilled-lora'].includes(args[index])) assetPaths.push(args[index + 1]);
+    if (['--lora', '--text-encoder-file', '--ic-lora-path', '--dev-transformer', '--distilled-lora'].includes(args[index])) assetPaths.push(args[index + 1]);
     if (args[index] === '--user-loras') assetPaths.push(...JSON.parse(args[index + 1]).map(item => item.path));
   }
   const assets = await Promise.all(assetPaths.map(async path => {

@@ -6,7 +6,6 @@ import { universeVisualProfileSchema } from './universeVisualProfileValidation.j
 import { CODEX_EFFORT_LEVELS } from './provider/providerModels.js';
 import { I2V_REFERENCE_MODES } from './videoReferenceModes.js';
 import { VIDEO_TILING_MODES } from './videoTiling.js';
-import { DRAFT_DECODE_IDS, isFullDecode } from './videoDraftDecoders.js';
 import { VIDEO_STREAMING_MODES, isDefaultVideoStreamingMode } from './videoStreamingMode.js';
 import { imageEdgeSchema } from './sharedSchemas.js';
 import { MAX_CONTEXT_FRAMES } from './videoContinuity.js';
@@ -109,18 +108,6 @@ const RETRY_OVERRIDE_SCHEMA = z.object({
   // (resolveVideoSampler), so a retry that edits Steps on a profiled job would
   // otherwise be silently ignored. `null` clears it back to the default sampler.
   speedProfileId: z.string().max(64).nullable().optional().transform((v) => (v === '' ? null : v)),
-  // Preview-fidelity decode (#5423). Nullable for the same reason speedProfileId
-  // is: `null` clears the inherited request back to Full, which an absent key
-  // cannot express (the retry route’s drop-undefined merge would retain the old value).
-  // A closed enum, and never rejected downstream — the four gates in
-  // lib/videoDraftDecoders.js degrade a draft request to a full decode rather
-  // than failing the retry.
-  // An explicit 'full' is folded to the same clear, because absence and
-  // DRAFT_DECODE_FULL are the same request (lib/videoDraftDecoders.js) — merging
-  // it as a value would leave the requeued job carrying a knob that changed
-  // nothing, which the queue would then echo back into the next editor.
-  draftDecode: z.enum(DRAFT_DECODE_IDS).nullable().optional()
-    .transform((v) => (v === undefined ? undefined : (isFullDecode(v) ? null : v))),
   // Auto/null clears an explicit memory request; absence inherits it. The
   // render bridge still owns capability checks and refuses unsupported Stream.
   streamingMode: z.enum(VIDEO_STREAMING_MODES).nullable().optional()

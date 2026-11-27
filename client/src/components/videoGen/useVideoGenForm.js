@@ -23,8 +23,6 @@ import {
   textEncoderOptionsForModel, normalizeTextEncoderForModel,
   textEncoderIdFromRecord,
   normalizeSpeedProfileForModel, speedProfileIdFromRecord,
-  DEFAULT_DRAFT_DECODE_ID, draftDecodeOptionsForModel,
-  resolveDraftDecodeForModel, draftDecodeFromRecord,
 } from '../../lib/videoGenParams.js';
 import { videoStreamingModeFromRecord } from '../../lib/videoStreamingMode.js';
 import { falExtraReferenceLimit } from '../../lib/falVideoModels.js';
@@ -101,7 +99,7 @@ export function useVideoGenForm({
     remixModelFallback, setRemixModelFallback, staleModelToastRef,
     selectedLoras, setSelectedLoras, a2vLoraStageStrengths, setA2vLoraStageStrengths,
     textEncoderId, setTextEncoderId, speedProfileId, setSpeedProfileId,
-    draftDecode, setDraftDecode, streamingMode, setStreamingMode,
+    streamingMode, setStreamingMode,
   } = fields.model;
   const {
     width, setWidth, height, setHeight, sizeManuallySetRef,
@@ -392,26 +390,13 @@ export function useVideoGenForm({
     // profile selected that the new entry never declared, or submit would send
     // a schedule the server declines and the picker would show a phantom.
     setSpeedProfileId((current) => normalizeSpeedProfileForModel(current, currentModel));
-    // And the same for the decode: only some models declare a draft decoder, so
-    // a switch away from one must not leave "Draft" selected on a model whose
-    // renders would silently be full decodes. `resolveDraftDecodeForModel` also
-    // clamps a DELIVERY model to Full — applyFinish covers the Finish button,
-    // but a model picked by hand (or restored from history) reaches here instead.
-    setDraftDecode((current) => resolveDraftDecodeForModel(current, currentModel, models));
-  }, [currentModel, models]);
+  }, [currentModel]);
 
   // Substitutable prompt conditioners the selected model can load, straight off
   // the server-decorated entry. Empty for every runtime without substitutions,
   // which is what hides the picker — the page never re-derives that from a
   // runtime name.
   const textEncoderOptions = textEncoderOptionsForModel(currentModel);
-
-  // Decode choices the selected model declares, straight off the
-  // server-decorated entry (lib/videoDraftDecoders.js
-  // `publicVideoDraftDecodeOptions`). Empty for every model with no draft
-  // decoder, which is what hides the control — the page never re-derives that
-  // from a runtime name.
-  const draftDecodeOptions = draftDecodeOptionsForModel(currentModel);
 
   // Video-LoRA family for the selected model — 'ltx-video' on ltx2, else null.
   // When null the picker is hidden and no LoRAs ride along on submit (the
@@ -991,7 +976,6 @@ export function useVideoGenForm({
     // snaps an id this model can't load back to stock.
     setTextEncoderId(textEncoderIdFromRecord(item.textEncoderId));
     setSpeedProfileId(speedProfileIdFromRecord(item.speedProfileId));
-    setDraftDecode(draftDecodeFromRecord(item.draftDecode));
     setStreamingMode(videoStreamingModeFromRecord(item.streamingMode));
     setA2vLoraStageStrengths(item.a2vLoraStageStrengths ?? [1, 1]);
     // disableAudio: always set explicitly (true/false) so the toggle reliably
@@ -1082,13 +1066,6 @@ export function useVideoGenForm({
     setRemixModelFallback(null);
     setSteps('');
     setGuidanceScale('');
-    // Finish is the delivery render, so it always decodes on the full decoder.
-    // The server enforces the same thing from the other side — a model the
-    // finish graph names as a delivery target is declined by
-    // `draftDecodeDeclineReason`, and a Finish target is one by definition —
-    // but forcing it here means the user SEES the control agree with what will
-    // happen rather than reading Draft on a render that will ignore it.
-    setDraftDecode(DEFAULT_DRAFT_DECODE_ID);
   };
 
   // Repopulate the form from an in-flight (or queued) render restored via
@@ -1124,7 +1101,6 @@ export function useVideoGenForm({
     // Resume echoes the field only for a non-stock render, so absence is 'stock'.
     setTextEncoderId(textEncoderIdFromRecord(p.textEncoderId));
     setSpeedProfileId(speedProfileIdFromRecord(p.speedProfileId));
-    setDraftDecode(draftDecodeFromRecord(p.draftDecode));
     setStreamingMode(videoStreamingModeFromRecord(p.streamingMode));
     setA2vLoraStageStrengths(p.a2vLoraStageStrengths ?? [1, 1]);
     if (typeof p.disableAudio === 'boolean') setDisableAudio(p.disableAudio);
@@ -1225,7 +1201,7 @@ export function useVideoGenForm({
     prompt, negativePrompt, stylePreset, selectedUniverse,
     width, height, mode, sourceImageFile, sourceImageUpload,
     numFrames, fps, steps, guidanceScale, seed, batchSize,
-    currentModel, models, modelId, tiling, textEncoderId, speedProfileId, draftDecode, streamingMode,
+    currentModel, modelId, tiling, textEncoderId, speedProfileId, streamingMode,
     disableAudio, noMusic, imageStrength, i2vReferenceMode,
     keyframesActive, keyframes, loraFamily, selectedLoras, a2vLoraStageStrengths,
     lastImageFile, lastImageUpload, extendFromVideoId, audioFile,
@@ -1265,7 +1241,6 @@ export function useVideoGenForm({
       a2vLoraStageStrengths, setA2vLoraStageStrengths,
       textEncoderId, setTextEncoderId, textEncoderOptions,
       speedProfileId, setSpeedProfileId,
-      draftDecode, setDraftDecode, draftDecodeOptions,
       streamingMode, setStreamingMode,
     },
     sampler: {

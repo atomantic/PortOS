@@ -32,17 +32,6 @@ const chainRenderTiming = (videos, historyKey) => {
   return starts.every(Number.isFinite) ? renderTimingFields(Math.min(...starts)) : {};
 };
 
-// Fold the per-chunk DRAFTDECODE: reports into one claim, or none. Unanimity is
-// on the `applied` verdict rather than deep equality: two chunks that both fell
-// back agree about the clip's fidelity even if their failure reasons differ.
-const unanimousDraftDecodeOutcome = (videos) => {
-  const first = videos[0]?.draftDecodeApplied;
-  if (first === undefined) return {};
-  return videos.every((v) => v?.draftDecodeApplied?.applied === first.applied)
-    ? { draftDecodeApplied: first }
-    : {};
-};
-
 // Fold the per-chunk STREAMPOLICY: reports into one claim, or none (#6499).
 // Unanimity is on the `active` verdict — every chunk streamed, or every chunk
 // stayed resident — rather than deep equality, so a peakMb reading that
@@ -304,27 +293,12 @@ export async function stitchVideos(videoIds, opts = {}) {
           // none (resolveVideoSpeedProfileForModes), so videos[0] speaks for all.
           'speedProfileId',
           'speedProfileApplied',
-          // Draft decode REQUEST (#5423) — chain-wide by construction: every chunk
-          // is submitted with the same `draftDecode`, and the gate that resolves it
-          // is mode-independent, so videos[0] speaks for all. Inherited for the same
-          // reason as the speed profile above — the chunks are hidden, so without it
-          // the stitched record could never say the clip was decoded at preview
-          // fidelity, and a Remix would quietly revert to Full.
-          'draftDecode',
-          // Block-streaming REQUEST (#6499) — same reasoning as draftDecode above:
+          // Block-streaming request (#6499).
           // every chunk is submitted with the same streamingMode, and the chunks
           // are hidden, so without inheriting it the stitched record could never
           // show which mode the chain was rendered with.
           'streamingMode',
         ].flatMap((key) => videos[0][key] === undefined ? [] : [[key, videos[0][key]]])),
-        // The draft-decode OUTCOME is decided per child process — the runner falls
-        // back to the full decoder on any load failure — so unlike the request
-        // above, videos[0] does NOT speak for the chain. Inherited only when every
-        // chunk agrees; on a mixed chain the field is omitted, which the lightbox
-        // already renders as "outcome not reported". Asserting chunk 0's verdict
-        // over a clip whose later chunks decoded differently would be exactly the
-        // false fidelity claim this field exists to prevent.
-        ...unanimousDraftDecodeOutcome(videos),
         ...unanimousStreamingPolicyOutcome(videos),
         ...unanimousLoraStrategyOutcome(videos),
         // Inherit applied LoRAs from the first constituent clip (a chunk chain

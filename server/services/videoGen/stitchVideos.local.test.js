@@ -172,48 +172,7 @@ describe('stitchVideos — history provenance', () => {
     });
   });
 
-  // Draft decode (#5423). The REQUEST is chain-wide — every chunk is submitted
-  // with the same value — but the OUTCOME is decided per child process, because
-  // the runner falls back to the full decoder on any load failure. Claiming
-  // chunk 0's verdict over a clip whose later chunks decoded differently is
-  // exactly the false fidelity claim the field exists to prevent.
-  describe('draft-decode outcome', () => {
-    const applied = (value) => ({ draftDecode: 'draft', draftDecodeApplied: { id: 'draft', applied: value } });
-
-    it('inherits the request and a unanimous outcome', async () => {
-      const stitched = await stitchHistory(applied(true), applied(true));
-
-      expect(stitched.draftDecode).toBe('draft');
-      expect(stitched.draftDecodeApplied).toEqual({ id: 'draft', applied: true });
-    });
-
-    it('inherits a unanimous fallback outcome', async () => {
-      const stitched = await stitchHistory(
-        { ...applied(false), draftDecodeApplied: { id: 'draft', applied: false, reason: 'KeyError: a' } },
-        { ...applied(false), draftDecodeApplied: { id: 'draft', applied: false, reason: 'KeyError: b' } },
-      );
-
-      // Unanimity is on the verdict, not deep equality: two chunks that both
-      // fell back agree about the clip's fidelity whatever their reasons were.
-      expect(stitched.draftDecodeApplied.applied).toBe(false);
-    });
-
-    it('keeps the request but omits the outcome when the chunks disagree', async () => {
-      const stitched = await stitchHistory(applied(true), applied(false));
-
-      expect(stitched.draftDecode).toBe('draft');
-      expect(stitched).not.toHaveProperty('draftDecodeApplied');
-    });
-
-    it('stamps no outcome on a chain that never reported one', async () => {
-      const stitched = await stitchHistory({ draftDecode: 'draft' }, { draftDecode: 'draft' });
-
-      expect(stitched.draftDecode).toBe('draft');
-      expect(stitched).not.toHaveProperty('draftDecodeApplied');
-    });
-  });
-
-  // Block streaming (#6499). Same shape as draft-decode above: the REQUEST is
+  // Block streaming (#6499). The request is
   // chain-wide (every chunk is submitted with the same streamingMode), but the
   // OUTCOME is decided per child process — a mode that streamed on one chunk's
   // machine state and stayed resident on another's would misreport the clip.

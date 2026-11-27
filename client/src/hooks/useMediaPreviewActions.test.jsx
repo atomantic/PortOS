@@ -84,7 +84,7 @@ describe('useMediaPreviewActions.handleRemix', () => {
   // #6290: a saved video hands over its RECORD ID, not a render-settings
   // bundle. The bundle was a second restore implementation that had to be
   // extended for every new render field and wasn't — it silently dropped the
-  // conditioner, speed profile, draft decode and LoRAs — so the same clip came
+  // conditioner, speed profile and LoRAs — so the same clip came
   // back with different settings from History than from the Video Gen gallery.
   // Enumerating fields here again would re-open exactly that drift.
   it('sends a saved video back to /media/video by record id, with no settings bundle', () => {
