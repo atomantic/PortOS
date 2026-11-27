@@ -21,23 +21,22 @@ vi.mock('./privacyBrokers.js', () => ({
   getCaseForBroker: vi.fn(async () => null),
 }));
 vi.mock('./privacyVault.js', () => ({ listScanEligibleValues: vi.fn(async () => []) }));
-// #3658 consent gate — mocked so the pass runs without a DB, and so a test can
-// flip it to the refusing behaviour to prove the guard is engine-enforced.
-const SELF = '00000000-0000-4000-8000-000000000001';
-const { assertSubjectConsentMock } = vi.hoisted(() => ({
-  assertSubjectConsentMock: vi.fn(async (id) => ({ id: id || '00000000-0000-4000-8000-000000000001' })),
-}));
-vi.mock('./privacySubjects.js', () => ({
-  resolveSubjectId: (id) => id || SELF,
-  assertSubjectConsent: assertSubjectConsentMock,
-}));
-vi.mock('./privacyScan.js', async (importOriginal) => {
-  const actual = await importOriginal();
-  return { ...actual, probeBroker: vi.fn(async () => ({ skipped: true, reason: 'inconclusive' })) };
+// Exercise the real purpose checks, revocation and subject queue against synthetic grants.
+const withdrawn = new Set();
+const query = vi.fn(async (sql, [id, scope]) => {
+  if (sql.includes('FROM privacy_subjects')) return { rows: [{ id }] };
+  const key = `${id}/${scope}`;
+  if (sql.includes('UPDATE privacy_consents')) {
+    withdrawn.add(key);
+    return { rows: [{ revoked_at: 'now' }] };
+  }
+  if (sql.includes('SELECT 1 FROM privacy_consents')) return { rows: withdrawn.has(key) ? [] : [{}] };
+  throw new Error('Unexpected privacy test query');
 });
+vi.mock('../lib/db.js', async importOriginal => ({ ...await importOriginal(), query }));
 const createDraft = vi.fn(async (d) => ({ id: 'draft-1', status: 'draft', ...d }));
 const approveDraft = vi.fn(async () => ({ id: 'draft-1', status: 'approved' }));
-vi.mock('./messageDrafts.js', () => ({ createDraft, approveDraft }));
+vi.mock('./messageDrafts.js', () => ({ createDraft, approveDraft, erasePrivacyDrafts: vi.fn(async () => ({})) }));
 vi.mock('./messageAccounts.js', () => ({ listAccounts: vi.fn(async () => [{ id: 'acct-1', type: 'gmail', canSend: true }]) }));
 vi.mock('./messageSync.js', () => ({ getMessages: vi.fn(async () => ({ messages: [] })) }));
 vi.mock('./settings.js', () => ({ getSettings: vi.fn(async () => ({ privacy: { recheck: {} } })) }));
@@ -48,12 +47,13 @@ const {
   brokerDomains, scoreVerificationEmail, planOptOutActions,
   emailLane, webFormLane, runOptOutPass, runVerificationPass, getOptOutDigest,
 } = await import('./privacyOptOut.js');
-const _scan = await import('./privacyScan.js');
+const { probeBroker, scanBroker } = await import('./privacyScan.js');
+const { revokeConsent } = await import('./privacySubjects.js');
 const settings = await import('./settings.js');
 
 beforeEach(() => {
   vi.clearAllMocks();
-  assertSubjectConsentMock.mockImplementation(async (id) => ({ id: id || SELF }));
+  withdrawn.clear();
   transitionCase.mockImplementation(async (id, to, patch) => ({ id, state: to, ...patch }));
   listBrokers.mockResolvedValue([]);
   listBrokerCases.mockResolvedValue([]);
@@ -520,18 +520,8 @@ describe('getOptOutDigest', () => {
 // SERVICE layer, so a cron / direct API / agent caller is refused exactly like a
 // hidden UI button would be. Asserted here, NOT only in a UI test.
 describe('consent gate — engine-enforced (#3658, #8332)', () => {
-  // Scope-aware stand-in for the real gate: the subject holds the local-vault
-  // AND read-only scan grants but NOT broker_optout — neither may unlock a
-  // submission or its verification probes.
-  const refuse = () => {
-    assertSubjectConsentMock.mockImplementation(async (id, { scope }) => {
-      if (scope === 'pii_vault' || scope === 'broker_scan') return { id };
-      const err = new Error('no consent');
-      err.status = 403;
-      err.code = 'SUBJECT_CONSENT_REQUIRED';
-      throw err;
-    });
-  };
+  // Leave the local-vault and read-only scan grants in place.
+  const refuse = () => withdrawn.add('subject-2/broker_optout');
 
   it('runOptOutPass refuses a subject without broker_optout consent, before reading the vault', async () => {
     refuse();
@@ -555,7 +545,103 @@ describe('consent gate — engine-enforced (#3658, #8332)', () => {
   it('passes the resolved subject through to the guard and the ledger reads', async () => {
     listBrokerCases.mockResolvedValue([]);
     await runVerificationPass({ subjectId: 'subject-2' });
-    expect(assertSubjectConsentMock).toHaveBeenCalledWith('subject-2', { scope: 'broker_optout', action: 'opt-out verification pass' });
+    expect(query).toHaveBeenCalledWith(expect.stringContaining('FROM privacy_consents'), ['subject-2', 'broker_optout']);
     expect(listBrokerCases).toHaveBeenCalledWith({ subjectId: 'subject-2' });
+  });
+});
+
+describe('consent withdrawal during a broker pass', () => {
+  const subjectId = 'subject-2';
+  const options = { subjectId, scope: 'broker_optout' };
+  const broker = {
+    id: 'example', name: 'Example', urls: { search: 'https://broker.example/{first}-{last}' },
+    optout: { method: 'email', email: 'privacy@example.com' }, disclosureFields: ['full_name'],
+  };
+  const vectors = { names: [{ full: 'Example Person', firstName: 'Example', lastName: 'Person' }] };
+  const denied = { code: 'SUBJECT_CONSENT_REQUIRED' };
+
+  it('refuses draft publication and the prepared case after revocation during sender lookup', async () => {
+    const { listScanEligibleValues } = await import('./privacyVault.js');
+    const { listAccounts } = await import('./messageAccounts.js');
+    listScanEligibleValues.mockResolvedValue(SCAN_VALUES);
+    listBrokers.mockResolvedValue([broker]);
+    listBrokerCases.mockResolvedValue([{ id: 'c1', subjectId, brokerId: broker.id, state: 'found' }]);
+    const started = Promise.withResolvers();
+    const sender = Promise.withResolvers();
+    listAccounts.mockImplementationOnce(() => { started.resolve(); return sender.promise; });
+    const pass = runOptOutPass({ subjectId, runVerification: false });
+    await started.promise;
+    await revokeConsent(options);
+    sender.resolve([{ id: 'example-account', type: 'gmail', canSend: true }]);
+    await expect(pass).rejects.toMatchObject(denied);
+    expect(createDraft).not.toHaveBeenCalled();
+    expect(approveDraft).not.toHaveBeenCalled();
+    expect(transitionCase).not.toHaveBeenCalled();
+  });
+
+  it('sweeps a draft only after its associated prepared state has finished publishing', async () => {
+    const { erasePrivacyDrafts } = await import('./messageDrafts.js');
+    const publishing = Promise.withResolvers();
+    const prepared = Promise.withResolvers();
+    transitionCase.mockImplementation(async (_id, state) => {
+      if (state === 'submitted') { publishing.resolve(); await prepared.promise; }
+      return { state };
+    });
+    const publication = emailLane(broker, { id: 'c1', subjectId }, {
+      disclosedFields: ['full_name'], payload: { full_name: 'Example Person' }, autoApprove: true,
+    });
+    await publishing.promise;
+    const revoke = revokeConsent(options);
+    // A second subject can finish while this publication holds its subject queue.
+    await revokeConsent({ subjectId: 'subject-3', scope: 'broker_scan' });
+    expect(erasePrivacyDrafts).not.toHaveBeenCalled();
+    prepared.resolve();
+    await publication;
+    await revoke;
+    expect(erasePrivacyDrafts).toHaveBeenCalledOnce();
+  });
+
+  it('lets a dispatched verification finish while refusing the next broker after withdrawal', async () => {
+    getBroker.mockImplementation(async id => ({ ...broker, id }));
+    listBrokerCases.mockResolvedValue(['first', 'second'].map(id => ({ id, brokerId: id, state: 'verification_pending' })));
+    const started = Promise.withResolvers();
+    const reply = Promise.withResolvers();
+    const removalProbe = vi.fn(() => { started.resolve(); return reply.promise; });
+    const pass = runVerificationPass({ subjectId, removalProbe });
+    await started.promise;
+    await revokeConsent(options);
+    reply.resolve({ verdict: 'not_found' });
+    await expect(pass).rejects.toMatchObject(denied);
+    expect(removalProbe).toHaveBeenCalledTimes(1);
+    expect(transitionCase).toHaveBeenCalledExactlyOnceWith('first', 'confirmed_removed', expect.anything());
+  });
+
+  it.each([false, true])('refuses browser fallback after the exact grant is withdrawn (verification = %s)', async verifyingRemoval => {
+    const scope = verifyingRemoval ? 'broker_optout' : 'broker_scan';
+    const started = Promise.withResolvers();
+    const reply = Promise.withResolvers();
+    const browserFetch = vi.fn();
+    const probeDeps = {
+      urlSafe: async () => true, browserFetch,
+      fetchImpl: () => { started.resolve(); return reply.promise; },
+    };
+    const { listScanEligibleValues } = await import('./privacyVault.js');
+    listScanEligibleValues.mockResolvedValue(SCAN_VALUES);
+    getBroker.mockResolvedValue(broker);
+    listBrokerCases.mockResolvedValue([{ id: 'c1', brokerId: broker.id, state: 'verification_pending' }]);
+    const pending = verifyingRemoval
+      ? runVerificationPass({ subjectId, probeDeps })
+      : scanBroker(broker, vectors, { ...probeDeps, subjectId });
+    await started.promise;
+    await revokeConsent({ subjectId, scope });
+    reply.resolve({ status: 403, text: async () => '' });
+    await expect(pending).rejects.toMatchObject(denied);
+    expect(browserFetch).not.toHaveBeenCalled();
+
+    const fetchImpl = vi.fn(async () => ({ status: 404, text: async () => '' }));
+    const deps = { ...probeDeps, fetchImpl, subjectId, verifyingRemoval };
+    await probeBroker(broker, vectors, { ...deps, verifyingRemoval: !verifyingRemoval });
+    await probeBroker(broker, vectors, { ...deps, subjectId: 'subject-3' });
+    expect(fetchImpl).toHaveBeenCalledTimes(2);
   });
 });

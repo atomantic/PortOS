@@ -679,6 +679,7 @@ describe('navigateToUrlPinned tab ownership (closeAfterRead)', () => {
   async function startFakeCdp({ evalValue = null, remoteIPAddress = '93.184.216.34', navigateError = null } = {}) {
     const opened = [];
     const closed = [];
+    const navigations = [];
     let port = 0;
     const server = createServer((req, res) => {
       const path = req.url || '';
@@ -703,6 +704,7 @@ describe('navigateToUrlPinned tab ownership (closeAfterRead)', () => {
       ws.on('message', (raw) => {
         const msg = JSON.parse(raw.toString());
         if (msg.method === 'Page.navigate') {
+          navigations.push(msg.params.url);
           if (navigateError) {
             ws.send(JSON.stringify({ id: msg.id, error: { message: navigateError } }));
             return;
@@ -732,6 +734,7 @@ describe('navigateToUrlPinned tab ownership (closeAfterRead)', () => {
       port,
       opened,
       closed,
+      navigations,
       stop: () => new Promise((resolve) => { wss.close(() => server.close(resolve)); }),
     };
   }
@@ -777,6 +780,18 @@ describe('navigateToUrlPinned tab ownership (closeAfterRead)', () => {
     const service = await importServicePointedAtFake();
     await expect(service.navigateToUrlPinned(url, { verifyRemoteIp: () => true }))
       .rejects.toThrow('refusing to ingest: CDP rejected navigation');
+    expect(fake.closed).toEqual(['tab-1']);
+  });
+
+  it('closes the blank tab without handing off its URL when dispatch is refused', async () => {
+    fake = await startFakeCdp();
+    const service = await importServicePointedAtFake();
+    const refused = new Error('dispatch refused');
+    await expect(service.navigateToUrlPinned('https://example.com/search', {
+      verifyRemoteIp: () => true,
+      dispatchRequest: async () => { throw refused; },
+    })).rejects.toBe(refused);
+    expect(fake.navigations).toEqual([]);
     expect(fake.closed).toEqual(['tab-1']);
   });
 

@@ -14,7 +14,8 @@ vi.mock('../lib/pinnedHttpRequest.js', () => ({ pinnedHttpRequest: (...a) => fet
 vi.mock('./catalog/catalogIngestSources.js', () => ({ fetchUrlMainText: vi.fn(async () => null) }));
 vi.mock('./privacyVault.js', () => ({ listScanEligibleValues: vi.fn(async () => []) }));
 vi.mock('./privacyBrokers.js', () => ({ listBrokers: vi.fn(), listBrokerCases: vi.fn(), recordScanVerdict: vi.fn() }));
-vi.mock('./privacySubjects.js', () => ({ resolveSubjectId: (id) => id, assertSubjectConsent: vi.fn() }));
+const dispatch = vi.fn(async (_id, _purpose, start) => start());
+vi.mock('./privacySubjects.js', () => ({ dispatchWithSubjectConsent: dispatch }));
 
 const { probeBroker } = await import('./privacyScan.js');
 
@@ -33,6 +34,16 @@ describe('probeBroker default HTTP lane', () => {
       expect(res).toEqual({ skipped: true, reason: 'fetch_failed' });
     },
   );
+
+  it('checks fresh consent after resolving the redirect and before contacting its destination', async () => {
+    const denied = Object.assign(new Error('withdrawn'), { code: 'SUBJECT_CONSENT_REQUIRED' });
+    fetchMock.mockReset().mockImplementationOnce(async () => {
+      dispatch.mockRejectedValueOnce(denied);
+      return redirectTo('https://other-broker.example/followup');
+    });
+    await expect(probeBroker(broker, vectors)).rejects.toBe(denied);
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+  });
 
   it('keeps the status contract: a 404 stays inconclusive', async () => {
     fetchMock.mockReset();

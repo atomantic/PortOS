@@ -35,10 +35,13 @@
 
 import { randomUUID } from 'crypto';
 import { query, withTransaction } from '../lib/db.js';
+import { createKeyCachedQueue } from '../lib/createKeyCachedQueue.js';
 import { ServerError } from '../lib/errorHandler.js';
 import {
   PRIVACY_SELF_SUBJECT_ID, PRIVACY_CONSENT_SCOPES, PRIVACY_BROKER_CONSENT_SCOPES, PRIVACY_SENSITIVE_TYPES,
 } from '../lib/privacyConstants.js';
+
+const queueSubjectAction = createKeyCachedQueue();
 
 const SUBJECT_COLUMNS = `id, display_name, relationship, created_at, updated_at`;
 
@@ -191,14 +194,15 @@ export async function updateSubject(id, patch) {
  * `self` can never be deleted: it is the default every subject-scoped column
  * falls back to, so removing it would break every subsequent insert.
  */
-export async function deleteSubject(id) {
-  if (resolveSubjectId(id) === PRIVACY_SELF_SUBJECT_ID) {
+export async function deleteSubject(subjectId) {
+  const id = resolveSubjectId(subjectId);
+  if (id === PRIVACY_SELF_SUBJECT_ID) {
     throw new ServerError(
       'The `self` subject cannot be deleted',
       { status: 400, code: 'SELF_SUBJECT_UNDELETABLE' },
     );
   }
-  return withTransaction(async client => {
+  return queueSubjectAction(id, () => withTransaction(async client => {
     const subject = await client.query(`SELECT id FROM privacy_subjects WHERE id = $1 FOR UPDATE`, [id]);
     if (!subject.rows[0]) throw new ServerError('Privacy subject not found', { status: 404, code: 'SUBJECT_NOT_FOUND' });
     // Collect ciphertext under the same lock that excludes new FK references
@@ -216,7 +220,7 @@ export async function deleteSubject(id) {
     await client.query(`DELETE FROM privacy_subjects WHERE id = $1`, [id]);
     console.log(`🗑️ Deleted privacy subject ${id} (vault/orgs/holdings/changes/cases cascaded)`);
     return { ok: true };
-  });
+  }));
 }
 
 // ─── Consent gate (engine-enforced) ─────────────────────────────────────────
@@ -285,21 +289,23 @@ export async function revokeConsent({ subjectId, scope }) {
       { status: 400, code: 'CONSENT_SCOPE_NOT_REVOCABLE' },
     );
   }
-  const resolved = (await assertSubject(subjectId)).id;
-  const { rows } = await query(
-    `UPDATE privacy_consents SET revoked_at = NOW()
-     WHERE subject_id = $1 AND scope = $2 AND revoked_at IS NULL
-     RETURNING revoked_at`,
-    [resolved, scope],
-  );
-  const revokedAt = rows[0]?.revoked_at ?? null;
-  // Withdrawn consent must not leave queued/approved opt-out emails sendable.
-  if (scope === 'broker_optout') {
-    const { revokeOptOutDrafts } = await import('./privacyDraftErasure.js');
-    await revokeOptOutDrafts(resolved);
-  }
-  console.log(`🚫 Revoked privacy consent (subject=${resolved}, scope=${scope}, rows=${rows.length})`);
-  return { subjectId: resolved, scope, revoked: rows.length, revokedAt };
+  return queueSubjectAction(resolveSubjectId(subjectId), async () => {
+    const resolved = (await assertSubject(subjectId)).id;
+    const { rows } = await query(
+      `UPDATE privacy_consents SET revoked_at = NOW()
+       WHERE subject_id = $1 AND scope = $2 AND revoked_at IS NULL
+       RETURNING revoked_at`,
+      [resolved, scope],
+    );
+    const revokedAt = rows[0]?.revoked_at ?? null;
+    // Withdrawn consent must not leave queued/approved opt-out emails sendable.
+    if (scope === 'broker_optout') {
+      const { revokeOptOutDrafts } = await import('./privacyDraftErasure.js');
+      await revokeOptOutDrafts(resolved);
+    }
+    console.log(`🚫 Revoked privacy consent (subject=${resolved}, scope=${scope}, rows=${rows.length})`);
+    return { subjectId: resolved, scope, revoked: rows.length, revokedAt };
+  });
 }
 
 /**
@@ -322,4 +328,18 @@ export async function assertSubjectConsent(subjectId, { scope, action = 'this ac
     `Privacy subject ${subject.id} has no active ${scope} consent — ${action} refused`,
     { status: 403, code: 'SUBJECT_CONSENT_REQUIRED', context: { scope } },
   );
+}
+
+/** Serialize local publication and its consent check with subject deletion and revocation's draft sweep. */
+export function withSubjectConsent(subjectId, purpose, publish) {
+  return queueSubjectAction(resolveSubjectId(subjectId), async () => {
+    const subject = await assertSubjectConsent(subjectId, purpose);
+    return publish(subject);
+  });
+}
+
+/** Start the request under the consent gate, then release the subject while its response is outstanding. */
+export async function dispatchWithSubjectConsent(subjectId, purpose, start) {
+  const { response } = await withSubjectConsent(subjectId, purpose, () => ({ response: start() }));
+  return response;
 }

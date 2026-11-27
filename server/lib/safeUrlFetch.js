@@ -228,14 +228,14 @@ export async function assertPublicHttpUrl(target, { blockPrivate = false } = {})
 // want that); `throwOnUnsafe: false` makes it fail closed to null instead — for
 // callers (RSS feeds) whose own contract is a friendly "couldn't fetch" result
 // rather than a bubbled error.
-async function fetchGuarded(url, { timeoutMs = DEFAULT_TIMEOUT_MS, headers, blockPrivate = false, throwOnUnsafe = true, signal } = {}) {
+async function fetchGuarded(url, { timeoutMs = DEFAULT_TIMEOUT_MS, headers, blockPrivate = false, throwOnUnsafe = true, signal, dispatchRequest = start => start() } = {}) {
   signal?.throwIfAborted();
   const first = await resolvePublicHttpUrl(url, { blockPrivate });
   if (!first.safe) {
     if (throwOnUnsafe) throwUnsafeUrl();
     return null;
   }
-  const res = await pinnedFetch(url, first, headers, timeoutMs, signal);
+  const res = await dispatchRequest(() => pinnedFetch(url, first, headers, timeoutMs, signal));
   if (res && res.status >= 300 && res.status < 400) {
     const location = res.headers.get('location');
     await discardBody(res);
@@ -247,7 +247,7 @@ async function fetchGuarded(url, { timeoutMs = DEFAULT_TIMEOUT_MS, headers, bloc
     try { redirectUrl = new URL(location, url).href; } catch { return null; }
     const hop = await resolvePublicHttpUrl(redirectUrl, { blockPrivate });
     if (!hop.safe) return null;
-    const next = await pinnedFetch(redirectUrl, hop, headers, timeoutMs, signal);
+    const next = await dispatchRequest(() => pinnedFetch(redirectUrl, hop, headers, timeoutMs, signal));
     // A second Fetch redirect used to reject via redirect: 'error'.
     if (next && [301, 302, 303, 307, 308].includes(next.status)) {
       await discardBody(next);
@@ -343,8 +343,8 @@ export async function readBodyCapped(res, maxBytes) {
  * on status (privacy scan) keep it. Returns null on a network error or a
  * blocked/invalid redirect. The caller owns reading the body.
  */
-export function fetchPublicResponse(url, { timeoutMs, headers, blockPrivate = false, throwOnUnsafe = true } = {}) {
-  return fetchGuarded(url, { timeoutMs, headers, blockPrivate, throwOnUnsafe });
+export function fetchPublicResponse(url, { timeoutMs, headers, blockPrivate = false, throwOnUnsafe = true, signal, dispatchRequest } = {}) {
+  return fetchGuarded(url, { timeoutMs, headers, blockPrivate, throwOnUnsafe, signal, dispatchRequest });
 }
 
 /**

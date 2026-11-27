@@ -753,6 +753,7 @@ export function ssrfPinRefusalReason(messages, verifyRemoteIp, _url, topFrameId 
  */
 export async function navigateToUrlPinned(url, {
   verifyRemoteIp,
+  dispatchRequest,
   settleMs = 0,
   navigateTimeoutMs = NAVIGATE_TIMEOUT_MS,
   evaluateExpression = null,
@@ -824,10 +825,19 @@ export async function navigateToUrlPinned(url, {
       }));
     };
 
-    ws.on('open', () => {
-      ws.send(JSON.stringify({ id: 1, method: 'Network.enable' }));
-      PIN_SETUP_COMMANDS.forEach((cmd, i) => ws.send(JSON.stringify({ id: PIN_SETUP_ID_BASE + i, ...cmd })));
-      ws.send(JSON.stringify({ id: 2, method: 'Page.navigate', params: { url } }));
+    ws.on('open', async () => {
+      try {
+        ws.send(JSON.stringify({ id: 1, method: 'Network.enable' }));
+        PIN_SETUP_COMMANDS.forEach((cmd, i) => ws.send(JSON.stringify({ id: PIN_SETUP_ID_BASE + i, ...cmd })));
+        const navigate = () => {
+          if (!settled) ws.send(JSON.stringify({ id: 2, method: 'Page.navigate', params: { url } }));
+        };
+        // The URL stays local until the caller authorizes the handoff after blank-tab setup.
+        if (dispatchRequest) await dispatchRequest(navigate);
+        else navigate();
+      } catch (error) {
+        finish({ ok: false, error });
+      }
     });
     ws.on('message', (data) => {
       const msg = safeJSONParse(data.toString(), null, { context: 'cdp-pin' });
@@ -872,6 +882,7 @@ export async function navigateToUrlPinned(url, {
 
   if (!result.ok) {
     await closeCdpPage(target.id);
+    if (result.error) throw result.error;
     throw new Error(`refusing to ingest: ${result.reason}`);
   }
 

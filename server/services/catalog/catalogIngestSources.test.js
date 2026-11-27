@@ -112,13 +112,14 @@ function pinnedNav({ finalUrl, hops, evalResult = null }) {
 
 describe('fetchUrlMainText', () => {
   it('navigates + reads main text, returning title + text + finalUrl', async () => {
-    const out = await fetchUrlMainText('https://ex.com/a', { settleMs: 0 });
+    const dispatchRequest = start => start();
+    const out = await fetchUrlMainText('https://ex.com/a', { settleMs: 0, dispatchRequest });
     expect(out).toEqual({ text: 'Body text here.', title: 'Article A', finalUrl: 'https://ex.com/a' });
     // Navigated through the PINNED path with a remote-IP verifier predicate AND
     // the DOM-read expression (the read happens on the same pinned session).
     expect(browserService.navigateToUrlPinned).toHaveBeenCalledWith(
       'https://ex.com/a',
-      expect.objectContaining({ verifyRemoteIp: expect.any(Function), evaluateExpression: expect.any(String) }),
+      expect.objectContaining({ verifyRemoteIp: expect.any(Function), evaluateExpression: expect.any(String), dispatchRequest }),
     );
     // The read ran on that session, so the tab is scratch — every ingested URL
     // would otherwise leave one open in the user's browser. Passing
