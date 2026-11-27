@@ -1,5 +1,5 @@
 /**
- * Production PM2 startup for `npm start`.
+ * Checkout-scoped PM2 startup for `npm start` and `npm run dev`.
  *
  * `npm start` used to `pm2 delete` + `pm2 start` unconditionally, so running it
  * on a live install (after a pull, from a second terminal, from an agent)
@@ -27,6 +27,8 @@ const ROOT_DIR = join(dirname(fileURLToPath(import.meta.url)), '..');
 const PROBE_TIMEOUT_MS = 15000;
 const ECOSYSTEM = 'ecosystem.config.cjs';
 const AUTOFIXER = 'portos-autofixer';
+const COS = 'portos-cos';
+const UI = 'portos-ui';
 const DASHBOARD_PORT = String(PORTS.AUTOFIXER_UI);
 
 const normalizePath = (path) => {
@@ -48,9 +50,17 @@ const isInside = (child, root) => {
 const isAbsolutePath = (path) => typeof path === 'string' && isAbsolute(path);
 const hasCheckoutPaths = (env) => isAbsolutePath(env?.pm_exec_path) && isAbsolutePath(env.pm_cwd);
 // PortOS worktrees may be nested inside the primary checkout.
-const runsFrom = (env, root) => hasCheckoutPaths(env)
-  && normalizePath(env.pm_cwd) === normalizePath(root) && isInside(env.pm_exec_path, root);
-const isOnlineHere = ({ pm2_env: env }, root) => env?.status === 'online' && runsFrom(env, root);
+function runsFrom({ name, pm2_env: env }, root) {
+  if (!hasCheckoutPaths(env)) return false;
+  if (name === UI) {
+    // Vite's executable may resolve into shared dependencies in a linked worktree.
+    const client = join(root, 'client');
+    return normalizePath(env.pm_cwd) === normalizePath(client)
+      && normalizePath(env.pm_exec_path) === normalizePath(join(client, 'node_modules', 'vite', 'bin', 'vite.js'));
+  }
+  return normalizePath(env.pm_cwd) === normalizePath(root) && isInside(env.pm_exec_path, root);
+}
+const isOnlineHere = (proc, root) => proc.pm2_env?.status === 'online' && runsFrom(proc, root);
 
 const withTimeout = (promise, ms, label) => {
   let timer;
@@ -62,7 +72,8 @@ const withTimeout = (promise, ms, label) => {
   ]);
 };
 
-async function listProcesses(pm2) {
+export async function listPm2Processes() {
+  const pm2 = (await import('pm2')).default;
   await withTimeout(
     new Promise((resolve, reject) => pm2.connect((err) => (err ? reject(err) : resolve()))),
     PROBE_TIMEOUT_MS,
@@ -93,10 +104,11 @@ async function inspectProcesses(list) {
   }
 }
 
-export async function startProductionApps({ expectedApps, root, list, pm2 }) {
+export async function startPm2Apps({ expectedApps, root, list, pm2, development = false, restartCos = false }) {
   const processes = await inspectProcesses(list);
   const start = [];
   const restart = [];
+  const retire = [];
   let refreshMonitor = false;
   for (const name of expectedApps) {
     const matches = processes.filter(proc => proc.name === name);
@@ -110,31 +122,40 @@ export async function startProductionApps({ expectedApps, root, list, pm2 }) {
     if (matches.some(({ pm2_env: env }) => typeof env.status !== 'string' || !env.status)) {
       throw new Error(`Cannot verify status for PM2 app ${name}`);
     }
-    const online = matches.find(proc => isOnlineHere(proc, root));
-    if (online && (name !== AUTOFIXER || savedPort(online) === DASHBOARD_PORT)) continue;
+    if (development && name === COS && !restartCos) {
+      // PM2 may already be starting the worker or waiting to restart it.
+      const active = matches.some(proc => runsFrom(proc, root)
+        && !['stopped', 'errored'].includes(proc.pm2_env.status));
+      if (active) continue;
+    }
+    if (!development) {
+      const online = matches.find(proc => isOnlineHere(proc, root));
+      if (online && (name !== AUTOFIXER || savedPort(online) === DASHBOARD_PORT)) continue;
+    }
 
     // Ecosystem operations address an app by name. Refuse any name collision
     // before acting, even if the other entry is stopped.
     if (matches.length !== 1) throw new Error(`Multiple PM2 entries for ${name}; cannot safely recover it`);
     const [proc] = matches;
-    if (!runsFrom(proc.pm2_env, root)) throw new Error(`PM2 app ${name} runs from a different checkout`);
-    if (name === AUTOFIXER && savedPort(proc) !== DASHBOARD_PORT) refreshMonitor = true;
+    if (!runsFrom(proc, root)) throw new Error(`PM2 app ${name} runs from a different checkout`);
+    if (development && (name !== COS || restartCos)) {
+      // Recreate dev services from the current config, addressing the existing
+      // entries by verified ID so broad ecosystem operations cannot stop CoS.
+      retire.push(proc);
+      start.push(name);
+    } else if (name === AUTOFIXER && savedPort(proc) !== DASHBOARD_PORT) refreshMonitor = true;
     else restart.push(proc);
   }
 
   // The old UI script can be gone by the time the process is retired.
   const legacyScript = normalizePath(join(root, 'autofixer', 'ui.js'));
-  const viteScript = normalizePath(join(root, 'client', 'node_modules', 'vite', 'bin', 'vite.js'));
-  const clientDir = normalizePath(join(root, 'client'));
-  const retire = processes.filter(({ name, pm2_env: env }) => {
-    if (!isAbsolutePath(env?.pm_exec_path)) return false;
+  retire.push(...processes.filter(proc => {
+    const { name, pm2_env: env } = proc;
     if (name === 'portos-autofixer-ui' && expectedApps.includes(AUTOFIXER)) {
-      return normalizePath(env.pm_exec_path) === legacyScript;
+      return runsFrom(proc, root) && normalizePath(env.pm_exec_path) === legacyScript;
     }
-    // Vite's script can resolve into shared dependencies, so also check its cwd.
-    return name === 'portos-ui' && !expectedApps.includes(name) && isAbsolutePath(env.pm_cwd)
-      && normalizePath(env.pm_cwd) === clientDir && normalizePath(env.pm_exec_path) === viteScript;
-  });
+    return name === UI && !expectedApps.includes(name) && runsFrom(proc, root);
+  }));
   for (const { name, pm_id: id } of [...retire, ...restart]) {
     if (!Number.isSafeInteger(id) || id < 0 || processes.filter(proc => proc.pm_id === id).length !== 1) {
       throw new Error(`PM2 app ${name} has no unique valid PM2 ID`);
@@ -145,7 +166,7 @@ export async function startProductionApps({ expectedApps, root, list, pm2 }) {
   if (refreshMonitor) recovered.push({ name: AUTOFIXER });
   if (!recovered.length && !retire.length) {
     console.log('✅ PortOS is already running under PM2 — leaving the processes alone');
-    console.log('   Client build was refreshed. To load new server code run: npm run pm2:restart');
+    if (!development) console.log('   Client build was refreshed. To load new server code run: npm run pm2:restart');
     return;
   }
 
@@ -169,8 +190,10 @@ export async function startProductionApps({ expectedApps, root, list, pm2 }) {
       throw new Error(`PM2 did not retire ${name}`);
     }
   }
-  pm2('save');
-  console.log('✅ Production startup changes saved under PM2');
+  if (!development) {
+    pm2('save');
+    console.log('✅ Production startup changes saved under PM2');
+  }
 }
 
 async function runCli(argv) {
@@ -180,10 +203,10 @@ async function runCli(argv) {
     return 1;
   }
   try {
-    await startProductionApps({
+    await startPm2Apps({
       expectedApps,
       root: ROOT_DIR,
-      list: async () => listProcesses((await import('pm2')).default),
+      list: listPm2Processes,
       pm2: (...args) => execFileSync(process.execPath, [join(ROOT_DIR, 'node_modules', 'pm2', 'bin', 'pm2'), ...args], {
         cwd: ROOT_DIR, stdio: 'inherit',
       }),

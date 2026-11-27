@@ -1,19 +1,18 @@
-/**
- * Dev start script — cleanly (re)starts all PM2 processes.
- * Handles lingering processes, port conflicts, and fresh starts.
- *
- * Uses execFileSync (not execSync with string) to avoid cmd.exe on Windows,
- * which creates visible CMD windows even with windowsHide.
- */
 import { execFileSync, spawn } from 'child_process';
+import { createRequire } from 'module';
+import { constants } from 'os';
 import { dirname, join } from 'path';
 import { fileURLToPath } from 'url';
-import { createRequire } from 'module';
+import { isDirectlyInvoked } from './lib/directInvocation.js';
+import { redactPaths } from './pm2-daemon-refresh.js';
+import { listPm2Processes, startPm2Apps } from './pm2-start.js';
 
 const require = createRequire(import.meta.url);
-const __dirname = dirname(fileURLToPath(import.meta.url));
-const ECO = 'ecosystem.config.cjs';
-const DEV_PM2_APPS = [
+const scriptsDir = dirname(fileURLToPath(import.meta.url));
+const root = join(scriptsDir, '..');
+const options = { cwd: root, stdio: 'inherit', windowsHide: true };
+
+export const DEV_PM2_APPS = [
   'portos-server',
   'portos-cos',
   'portos-ui',
@@ -21,39 +20,59 @@ const DEV_PM2_APPS = [
   'portos-browser'
 ];
 
-// Ensure dependencies are installed BEFORE resolving pm2 path
-// (pm2 lives in node_modules — require.resolve fails if deps are missing)
-execFileSync(process.execPath, [join(__dirname, 'ensure-deps.js')], {
-  stdio: 'inherit',
-  windowsHide: true
-});
-
-const PM2 = join(dirname(require.resolve('pm2/package.json')), 'bin', 'pm2');
-
-function pm2(...args) {
-  execFileSync(process.execPath, [PM2, ...args], {
-    stdio: 'inherit',
-    windowsHide: true
-  });
+async function tailLogs(pm2Path, signalTarget) {
+  const child = spawn(process.execPath, [pm2Path, 'logs'], options);
+  let received;
+  const forward = (signal) => {
+    if (received) return;
+    received = signal;
+    child.kill(signal);
+  };
+  const onInterrupt = () => forward('SIGINT');
+  const onTerminate = () => forward('SIGTERM');
+  signalTarget.on('SIGINT', onInterrupt);
+  signalTarget.on('SIGTERM', onTerminate);
+  try {
+    return await new Promise((resolve, reject) => {
+      child.once('error', reject);
+      child.once('close', (code, signal) => {
+        const interruption = received ?? signal;
+        resolve(interruption ? 128 + constants.signals[interruption] : code ?? 1);
+      });
+    });
+  } finally {
+    signalTarget.off('SIGINT', onInterrupt);
+    signalTarget.off('SIGTERM', onTerminate);
+  }
 }
 
-// Ensure PostgreSQL is running (gracefully skips if Docker unavailable)
-execFileSync(process.execPath, [join(__dirname, 'setup-db.js')], {
-  stdio: 'inherit',
-  windowsHide: true
-});
+export async function runDev(argv, signalTarget = process) {
+  if (argv.some(flag => flag !== '--restart-cos')) {
+    throw new Error('Usage: npm run dev -- [--restart-cos]');
+  }
 
-// Stop and delete existing PortOS processes (ignore errors if none exist)
-try { pm2('stop', ECO); } catch {}
-try { pm2('delete', ECO); } catch {}
-try { pm2('delete', 'portos-autofixer-ui', '--silent'); } catch {}
+  // Keep Node invocations shell-free on Windows, and resolve PM2 only after
+  // ensure-deps has made its package available on a fresh install.
+  for (const script of ['ensure-deps.js', 'setup-db.js', 'setup-cert.js']) {
+    execFileSync(process.execPath, [join(scriptsDir, script)], options);
+  }
+  const pm2Path = join(dirname(require.resolve('pm2/package.json')), 'bin', 'pm2');
+  await startPm2Apps({
+    expectedApps: DEV_PM2_APPS,
+    root,
+    list: listPm2Processes,
+    pm2: (...args) => execFileSync(process.execPath, [pm2Path, ...args], options),
+    development: true,
+    restartCos: argv.includes('--restart-cos')
+  });
+  return tailLogs(pm2Path, signalTarget);
+}
 
-// Brief pause for port release
-await new Promise(r => setTimeout(r, 1500));
-
-// Start the full development set, including Vite on :5554, and tail logs.
-pm2('start', ECO, '--only', DEV_PM2_APPS.join(','));
-spawn(process.execPath, [PM2, 'logs'], {
-  stdio: 'inherit',
-  windowsHide: true
-});
+if (isDirectlyInvoked(import.meta.url)) {
+  try {
+    process.exitCode = await runDev(process.argv.slice(2));
+  } catch (err) {
+    console.error(`❌ Dev startup failed: ${redactPaths(err.message)}`);
+    process.exitCode = 1;
+  }
+}

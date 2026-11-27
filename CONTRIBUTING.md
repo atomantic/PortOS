@@ -48,6 +48,8 @@ npm run dev
 ```
 
 Vite serves the development UI on port 5554. PM2 runs the local API and workers.
+`npm run dev` preserves an active CoS worker and its agent sessions. To
+intentionally restart the worker, use `npm run dev -- --restart-cos`.
 For an existing clone with missing submodules, run
 `git submodule update --init --recursive`. See [Troubleshooting](docs/TROUBLESHOOTING.md)
 if setup fails.
