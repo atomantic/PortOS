@@ -26,12 +26,13 @@
  * Completion (or a proven rollback) removes the file and syncs its directory
  * before reopening admission.
  */
-import { closeSync, fsyncSync, linkSync, lstatSync, openSync, readFileSync, renameSync, unlinkSync, writeFileSync } from 'node:fs';
+import { linkSync, lstatSync, readFileSync, renameSync, unlinkSync } from 'node:fs';
 import { join } from 'node:path';
 import { randomUUID } from 'node:crypto';
 import { z } from 'zod';
 import { PATHS } from './paths.js';
 import { assertNotRealDataWrite } from './testDataIsolation.js';
+import { syncDirectorySync, writeDurableExclusiveSync } from './fileCore.js';
 
 export const DATABASE_RESTORE_RECOVERY_FILE = 'database-restore-recovery.json';
 export const DATABASE_RESTORE_RECOVERY_STAGES = Object.freeze(['replaying', 'repairing']);
@@ -55,23 +56,6 @@ export const databaseRestoreRecoveryError = () => Object.assign(
   new Error('A committed database restore is awaiting recovery. Finish it from Settings > Backup (or restart PortOS to retry automatically) before using the database.'),
   { status: 503, code: 'DATABASE_RESTORE_RECOVERY' },
 );
-
-function syncDirectory(path) {
-  // Windows does not expose directory fsync through Node.
-  if (process.platform === 'win32') return;
-  const fd = openSync(path, 'r');
-  try { fsyncSync(fd); } finally { closeSync(fd); }
-}
-
-function writeDurableExclusive(path, value) {
-  const fd = openSync(path, 'wx', 0o600);
-  try {
-    writeFileSync(fd, JSON.stringify(value, null, 2) + '\n');
-    fsyncSync(fd);
-  } finally {
-    closeSync(fd);
-  }
-}
 
 export function createDatabaseRestoreRecovery(dataDir = PATHS.data) {
   const recordPath = join(dataDir, DATABASE_RESTORE_RECOVERY_FILE);
@@ -120,7 +104,7 @@ export function createDatabaseRestoreRecovery(dataDir = PATHS.data) {
       snapshotId, dumpSha256, feedPositions,
     });
     const pending = pendingPath();
-    writeDurableExclusive(pending, record);
+    writeDurableExclusiveSync(pending, record);
     try {
       linkSync(pending, recordPath);
     } catch (err) {
@@ -129,7 +113,7 @@ export function createDatabaseRestoreRecovery(dataDir = PATHS.data) {
     } finally {
       unlinkSync(pending);
     }
-    syncDirectory(dataDir);
+    syncDirectorySync(dataDir);
     return record;
   };
 
@@ -142,9 +126,9 @@ export function createDatabaseRestoreRecovery(dataDir = PATHS.data) {
     if (current.stage === 'repairing') return current;
     const next = recordSchema.parse({ ...current, stage: 'repairing' });
     const pending = pendingPath();
-    writeDurableExclusive(pending, next);
+    writeDurableExclusiveSync(pending, next);
     renameSync(pending, recordPath);
-    syncDirectory(dataDir);
+    syncDirectorySync(dataDir);
     return next;
   };
 
@@ -159,7 +143,7 @@ export function createDatabaseRestoreRecovery(dataDir = PATHS.data) {
       // locally until the directory sync succeeds, including across retries.
       pendingRelease = current;
     }
-    syncDirectory(dataDir);
+    syncDirectorySync(dataDir);
     pendingRelease = null;
   };
 

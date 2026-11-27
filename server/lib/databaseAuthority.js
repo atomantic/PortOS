@@ -6,12 +6,13 @@
  * (enforced at boot and on every pooled operation).
  */
 
-import { closeSync, fsyncSync, lstatSync, mkdirSync, openSync, readFileSync, renameSync, statSync, writeFileSync } from 'node:fs';
+import { lstatSync, mkdirSync, readFileSync, renameSync, statSync } from 'node:fs';
 import { join } from 'node:path';
 import { randomUUID } from 'node:crypto';
 import { z } from 'zod';
 import { PATHS } from './paths.js';
 import { assertNotRealDataWrite } from './testDataIsolation.js';
+import { syncDirectorySync, writeDurableExclusiveSync } from './fileCore.js';
 
 // Same shape as the maintenance journal's endpoint identity (kept local so the
 // journal can depend on this module without a cycle).
@@ -44,12 +45,6 @@ const unreadableError = () => Object.assign(
   new Error('The database authority record is unreadable. Inspect data/database-authority.json; see docs/STORAGE.md#cutover-recovery.'),
   { status: 503, code: 'DATABASE_MAINTENANCE' },
 );
-
-function syncDirectory(path) {
-  if (process.platform === 'win32') return;
-  const fd = openSync(path, 'r');
-  try { fsyncSync(fd); } finally { closeSync(fd); }
-}
 
 /**
  * The backend a verified cutover released admission to, and the one it
@@ -90,15 +85,9 @@ export function createDatabaseAuthority(dataDir = PATHS.data) {
     if (existing?.operationId === operationId) return existing;
     mkdirSync(dataDir, { recursive: true });
     const pending = join(dataDir, `database-authority-${randomUUID()}.pending`);
-    const fd = openSync(pending, 'wx', 0o600);
-    try {
-      writeFileSync(fd, JSON.stringify(value, null, 2) + '\n');
-      fsyncSync(fd);
-    } finally {
-      closeSync(fd);
-    }
+    writeDurableExclusiveSync(pending, value);
     renameSync(pending, recordPath);
-    syncDirectory(dataDir);
+    syncDirectorySync(dataDir);
     return read();
   };
 

@@ -7,7 +7,7 @@
  * tail reads/watchers), time/format helpers, directory sizing, and SHA-256 helpers.
  */
 import { access, appendFile, chmod, copyFile, lstat, mkdir, open, readFile, readdir, stat, writeFile, rename, unlink, rm } from 'fs/promises';
-import { createReadStream, createWriteStream, existsSync, statSync, watch as watchFileSystem } from 'fs';
+import { closeSync, createReadStream, createWriteStream, existsSync, fsyncSync, openSync, statSync, watch as watchFileSystem, writeFileSync } from 'fs';
 import { createHash, randomUUID } from 'crypto';
 import { basename, dirname, extname, join } from 'path';
 import { promisify } from 'util';
@@ -74,18 +74,38 @@ export function setAtomicWriteDurabilityForTests(durable) {
  * Best-effort once the rename is visible: the bytes are already in place, so a
  * filesystem that cannot sync its directory degrades to the pre-#12025
  * guarantee with one warning rather than failing a write that succeeded.
- * Windows cannot open a directory for fsync, so it is skipped there.
+ * Strict callers require durability and propagate I/O failures. Windows
+ * cannot open a directory for fsync, so it is skipped there.
  */
-async function syncDirectory(dir) {
+export async function syncDirectory(dir, { strict = false } = {}) {
   if (isWindows()) return;
   try {
     const handle = await open(dir, 'r');
     try { await handle.sync(); } finally { await handle.close(); }
   } catch (err) {
-    if (!err?.code) throw err;
+    if (strict || !err?.code) throw err;
     if (unsyncableDirs.has(dir)) return;
     unsyncableDirs.add(dir);
     console.warn(`⚠️ Directory fsync unavailable for ${dir} (${err.code}); renames there are not crash-durable`);
+  }
+}
+
+/** Flush directory metadata, propagating I/O failures on platforms that support it. */
+export function syncDirectorySync(dir) {
+  // Node cannot fsync directory handles on Windows.
+  if (isWindows()) return;
+  const fd = openSync(dir, 'r');
+  try { fsyncSync(fd); } finally { closeSync(fd); }
+}
+
+/** Create and flush a private JSON file without replacing an existing path. */
+export function writeDurableExclusiveSync(path, value, { indent = 2 } = {}) {
+  const fd = openSync(path, 'wx', 0o600);
+  try {
+    writeFileSync(fd, JSON.stringify(value, null, indent) + '\n');
+    fsyncSync(fd);
+  } finally {
+    closeSync(fd);
   }
 }
 
