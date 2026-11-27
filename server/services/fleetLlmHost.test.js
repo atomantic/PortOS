@@ -43,7 +43,7 @@ vi.mock('../lib/openAiModelsProbe.js', () => ({ probeOpenAiModels: async () => (
 vi.mock('../lib/streamingSpawn.js', () => ({ runStreamingCommand: vi.fn(async () => ({ success: true })) }));
 vi.mock('./vllmQwenManager.js', () => ({ ensureVllmProjectDir: async () => null, provisionVllmQwenProject: async () => ({ success: true }) }));
 vi.mock('./provider/providers.js', () => ({ getAllProviders: async () => ({ providers: state.providers }), createProvider: async (record) => state.providers.push(record), updateProvider: async (id, patch) => Object.assign(state.providers.find(p => p.id === id), patch) }));
-vi.mock('./fleetLlmGateway.js', () => ({ createFleetLlmGateway: () => ({ server: { once(_evt, fail) { this.fail = fail; }, on() {}, listen(_port, _host, done) { if (state.listenError) this.fail(state.listenError); else done(); } }, status: () => ({ active: 0, queued: 0 }), close: async () => {} }) }));
+vi.mock('./fleetLlmGateway.js', () => ({ createFleetLlmGateway: vi.fn(() => ({ server: { once(_evt, fail) { this.fail = fail; }, on() {}, listen(_port, _host, done) { if (state.listenError) this.fail(state.listenError); else done(); } }, status: () => ({ active: 0, queued: 0 }), close: async () => {} })) }));
 import { configureFleetLlmHost, describeFleetHostError, disableFleetLlmHost, startFleetLlmHost, getFleetLlmHostStatus, getFleetPeerHosts, revealFleetPeerHostKey, stopFleetLlmHost } from './fleetLlmHost.js';
 import { runStreamingCommand } from '../lib/streamingSpawn.js';
 beforeEach(async () => { await stopFleetLlmHost(); state.writes = []; state.chmods = []; state.enabled = ''; state.loginTaskRemoved = false; state.providers = []; state.servedModels = ['qwen3.8-27b']; state.peers = []; state.peerResponses.clear(); vi.clearAllMocks(); });
@@ -74,6 +74,13 @@ describe('dedicated host setup workflow', () => {
     const status = await getFleetLlmHostStatus();
     expect(status).toMatchObject({ serving: true, model: 'example-org/other-model' });
     expect(status.checks.find((check) => check.id === 'runtime')).toMatchObject({ ok: true, detail: 'example-org/other-model' });
+  });
+  it('skips malformed OpenCode config while still creating the host provider', async () => {
+    state.providers = [{ id: 'broken', vllmBacked: true, endpoint: 'http://127.0.0.1:8000/v1', envVars: { OPENCODE_CONFIG_CONTENT: '{not json' } }];
+    const warning = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    await expect(configureFleetLlmHost()).resolves.toEqual({ success: true });
+    expect(warning).toHaveBeenCalledWith('⚠️ Skipping malformed OpenCode config for provider broken');
+    expect(state.providers.at(-1)).toMatchObject({ type: 'api', enabled: true });
   });
   it('is not serving while the runtime answers with no model loaded', async () => {
     await configureFleetLlmHost();
@@ -218,5 +225,16 @@ describe('dedicated host startup failures', () => {
     state.readError = new Error('permission denied\nVLLM_API_KEY=example-api-key-with-32-characters');
     const err = await startFleetLlmHost().catch((e) => e);
     expect(describeFleetHostError(err)).toBe('permission denied');
+  });
+  it('shares concurrent startup so the gateway binds only once', async () => {
+    let binds = 0;
+    const { createFleetLlmGateway } = await import('./fleetLlmGateway.js');
+    vi.mocked(createFleetLlmGateway).mockImplementation(() => ({ server: {
+      once(_event, fail) { this.fail = fail; },
+      on() {},
+      listen(_port, _host, done) { binds += 1; setTimeout(done, 10); },
+    }, status: () => ({ active: 0, queued: 0 }), close: async () => {} }));
+    await Promise.all([startFleetLlmHost(), startFleetLlmHost()]);
+    expect(binds).toBe(1);
   });
 });
