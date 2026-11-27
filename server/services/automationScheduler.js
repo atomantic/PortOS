@@ -30,6 +30,7 @@ export function registerActionExecutor(executor) {
 }
 
 export const invalidateCache = store.invalidateCache;
+export const withLiveRestore = store.withLiveRestore;
 
 /**
  * Get all schedules

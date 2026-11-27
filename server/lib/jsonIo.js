@@ -434,7 +434,7 @@ export async function writeJSONLines(filePath, values) {
  * @param {number} [options.ttl=2000] - Cache TTL in milliseconds
  * @param {string} [options.context=''] - Context label for error logging
  * @param {number|null} [options.mode=null] - Optional POSIX file mode (e.g. 0o600) applied after writes
- * @returns {{ load, save, mutate, invalidateCache }}
+ * @returns {{ load, save, mutate, invalidateCache, withLiveRestore }}
  *
  * `load()` is STRICT: a present-but-unreadable or corrupt file rejects, because
  * `mutate` persists whatever `load` returned and a swallowed default would
@@ -496,9 +496,14 @@ export function createCachedStore(filePath, defaultValue, { ttl = 2000, context 
   });
 
   const invalidateCache = () => {
+    writeSeq += 1;
     cache = null;
     cacheTimestamp = 0;
   };
 
-  return { load, save, mutate, invalidateCache };
+  // Hold mutations until the restore has reconciled the cache, even if the
+  // transfer only replaced some files before failing.
+  const withLiveRestore = (restore) => queueWrite(() => restore(invalidateCache));
+
+  return { load, save, mutate, invalidateCache, withLiveRestore };
 }
