@@ -8,6 +8,7 @@ import react from '@vitejs/plugin-react';
 import { chromium } from 'playwright-core';
 import { BROWSER_FIXTURE_STARTUP_MS, startBrowserFixture } from '../test/browserFixture.js';
 import { resolveTestChrome } from '../../../scripts/lib/testChrome.js';
+import { TEST_TIMEOUT_MS } from '../test/timeouts.js';
 
 const chrome = resolveTestChrome();
 // Optional developer smoke against a running runtime on a separate loopback test server.
@@ -56,7 +57,8 @@ function stubApi(page, enabled = true, avatar = {}) {
       return route.fulfill({ json: avatar.status });
     }
     if (path === '/api/voice/avatar/frames' || path === '/api/voice/avatar/idle') {
-      const frame = path === '/api/voice/avatar/idle' ? (avatar.idleJpeg ?? avatar.jpeg) : avatar.jpeg;
+      const { jpeg, idleJpeg = jpeg } = avatar;
+      const frame = path === '/api/voice/avatar/idle' ? idleJpeg : jpeg;
       if (!frame) return route.fulfill({ status: 503, json: { error: 'Renderer unavailable' } });
       const count = path === '/api/voice/avatar/idle' ? 10 : 50;
       const body = Array.from({ length: count }, (_, index) => JSON.stringify({ index, timeMs: index * 40, jpeg: frame })).join('\n');
@@ -206,69 +208,119 @@ describe.skipIf(!chrome)('Voice Call console in Chrome', () => {
   });
 
   it('streams continuous idle and speech frames when running, and stops on reduced motion or runtime stop', async () => {
-    const page = await fixture.browser.newPage({ viewport: { width: 390, height: 800 }, reducedMotion: 'no-preference' });
-    try {
-      const avatar = {};
-      await stubApi(page, true, avatar);
-      await page.goto(`${fixture.origin}voice-console-test`);
-      await page.getByText('AvatarForcing live', { exact: true }).waitFor();
-      const canvas = page.locator('canvas[width="512"]');
-      await expect(canvas.count()).resolves.toBe(1);
-      expect(await canvas.isVisible()).toBe(false);
-      if (!avatarTarget) {
-        await page.getByRole('button', { name: 'Play sample' }).click();
-        await page.getByText('No avatar frames arrived.', { exact: false }).waitFor();
-        await page.getByRole('button', { name: 'Interrupt' }).click();
-        expect(await canvas.isVisible()).toBe(false);
+    // Keep a shared deadline so several slow steps still leave Vitest time to report the active one.
+    const deadline = performance.now() + TEST_TIMEOUT_MS - 2500;
+    async function step(name, run) {
+      const timeoutMs = Math.min(4000, deadline - performance.now());
+      const failure = new Error(`Voice Call timed out waiting for ${name}`);
+      if (timeoutMs <= 0) throw failure;
+      let timer;
+      try {
+        return await Promise.race([
+          new Promise((_, reject) => { timer = setTimeout(() => reject(failure), timeoutMs); }),
+          run(),
+        ]);
+      } finally {
+        clearTimeout(timer);
       }
-      avatar.jpeg = await page.evaluate(() => {
+    }
+
+    const page = await step('a Chrome page', () => fixture.browser.newPage({
+      viewport: { width: 390, height: 800 }, reducedMotion: 'no-preference',
+    }));
+    const waitForPost = (path, phase) => step(`POST ${path} ${phase}`, () =>
+      page.waitForRequest(req => req.method() === 'POST' && req.url().endsWith(path)));
+    const button = name => page.getByRole('button', { name, exact: true });
+    const status = text => page.getByText(text, { exact: true });
+    async function clickAndWaitForPost(name, path, phase) {
+      const [request] = await Promise.all([
+        waitForPost(path, phase),
+        step(`the ${name} click ${phase}`, () => button(name).click()),
+      ]);
+      return request;
+    }
+    async function playSampleWithoutAvatar(phase) {
+      const requests = [];
+      const recordAvatarRequest = req => {
+        if (req.url().endsWith('/api/voice/avatar/frames') || req.url().endsWith('/api/voice/avatar/idle')) requests.push(req.url());
+      };
+      page.on('request', recordAvatarRequest);
+      try {
+        await step(`Speaking ${phase} with the canvas hidden`, async () => {
+          await button('Play sample').click();
+          await status('Speaking').waitFor();
+          expect(requests).toEqual([]);
+          expect(await canvas.isVisible()).toBe(false);
+        });
+      } finally {
+        page.off('request', recordAvatarRequest);
+      }
+      await step(`Interrupt to end the sample ${phase}`, () => button('Interrupt').click());
+    }
+    const canvas = page.locator('canvas[width="512"]');
+    try {
+      // Serve speech first so an idle retry cannot satisfy the speech canvas assertion.
+      const avatar = { idleJpeg: null };
+      await step('the AvatarForcing live status', async () => {
+        await stubApi(page, true, avatar);
+        await page.goto(`${fixture.origin}voice-console-test`);
+        await status('AvatarForcing live').waitFor();
+        expect(await canvas.count()).toBe(1);
+        expect(await canvas.isVisible()).toBe(false);
+      });
+      const noFrames = page.getByText('No avatar frames arrived.', { exact: false });
+      if (!avatarTarget) {
+        await clickAndWaitForPost('Play sample', '/api/voice/avatar/frames', 'with the renderer unavailable');
+        await step('the No avatar frames arrived warning', () => noFrames.waitFor());
+        await step('Interrupt to end the unavailable-renderer sample', async () => {
+          await button('Interrupt').click();
+          expect(await canvas.isVisible()).toBe(false);
+        });
+      }
+      avatar.jpeg = await step('the synthetic speech JPEG', () => page.evaluate(() => {
         const tile = document.createElement('canvas');
         tile.width = tile.height = 2;
         const ctx = tile.getContext('2d');
         ctx.fillStyle = 'red';
         ctx.fillRect(0, 0, 2, 2);
         return tile.toDataURL('image/jpeg').split(',')[1];
+      }));
+      const request = await clickAndWaitForPost('Play sample', '/api/voice/avatar/frames', 'with speech frames available');
+      expect(request.postDataBuffer().subarray(0, 4).toString()).toBe('RIFF');
+      await step('a visible canvas painted with speech frames', async () => {
+        await canvas.waitFor({ state: 'visible' });
+        expect(await noFrames.count()).toBe(0);
+        expect(await canvas.evaluate(el => el.getContext('2d').getImageData(256, 256, 1, 1).data[3])).toBe(255);
       });
-      const request = page.waitForRequest(req => req.url().endsWith('/api/voice/avatar/frames'));
-      await page.getByRole('button', { name: 'Play sample' }).click();
-      expect((await request).postDataBuffer().subarray(0, 4).toString()).toBe('RIFF');
-      await canvas.waitFor({ state: 'visible' });
-      expect(await page.getByText('No avatar frames arrived.', { exact: false }).count()).toBe(0);
-      expect(await canvas.evaluate(el => el.getContext('2d').getImageData(256, 256, 1, 1).data[3])).toBe(255);
-      // Interrupt stops speech playback and seamlessly keeps continuous AvatarForcing alive.
-      const idleResumed = page.waitForRequest(req => req.url().endsWith('/api/voice/avatar/idle'));
-      await page.getByRole('button', { name: 'Interrupt' }).click();
-      await page.getByText('Standby', { exact: true }).waitFor();
-      await idleResumed;
-      expect(await canvas.isVisible()).toBe(true);
 
-      await page.emulateMedia({ reducedMotion: 'reduce' });
-      await canvas.waitFor({ state: 'hidden' });
-      const seen = [];
-      page.on('request', req => {
-        if (req.url().endsWith('/api/voice/avatar/frames') || req.url().endsWith('/api/voice/avatar/idle')) seen.push(req.url());
+      // Interrupt stops speech playback and seamlessly keeps continuous AvatarForcing alive.
+      avatar.idleJpeg = avatar.jpeg;
+      await clickAndWaitForPost('Interrupt', '/api/voice/avatar/idle', 'during speech playback');
+      await step('Standby with the idle canvas visible after Interrupt', async () => {
+        await status('Standby').waitFor();
+        expect(await canvas.isVisible()).toBe(true);
       });
-      await page.getByRole('button', { name: 'Play sample' }).click();
-      await page.getByText('Speaking', { exact: true }).waitFor();
-      expect(seen).toEqual([]);
-      expect(await canvas.isVisible()).toBe(false);
-      await page.getByRole('button', { name: 'Interrupt' }).click();
-      await page.emulateMedia({ reducedMotion: 'no-preference' });
+
+      await step('the canvas to hide when reduced motion is enabled', async () => {
+        await page.emulateMedia({ reducedMotion: 'reduce' });
+        await canvas.waitFor({ state: 'hidden' });
+      });
+      await playSampleWithoutAvatar('with reduced motion enabled');
+      await Promise.all([
+        waitForPost('/api/voice/avatar/idle', 'after restoring motion'),
+        step('motion preferences to be restored', () => page.emulateMedia({ reducedMotion: 'no-preference' })),
+      ]);
 
       if (!avatarTarget) {
-        await page.getByRole('button', { name: 'Avatar settings', exact: true }).click();
-        await page.getByRole('button', { name: 'Stop', exact: true }).click();
-        await page.getByText('Still portrait', { exact: true }).waitFor();
-        await canvas.waitFor({ state: 'hidden' });
-        const afterStop = [];
-        page.on('request', req => {
-          if (req.url().endsWith('/api/voice/avatar/frames') || req.url().endsWith('/api/voice/avatar/idle')) afterStop.push(req.url());
+        await step('the idle canvas to become visible after restoring motion', () => canvas.waitFor({ state: 'visible' }));
+        await step('Avatar settings to open', () => button('Avatar settings').click());
+        const stop = await clickAndWaitForPost('Stop', '/api/voice/avatar/runtime', 'with the runtime running');
+        expect(stop.postDataJSON()).toEqual({ action: 'stop' });
+        await step('Still portrait with the canvas hidden after runtime Stop', async () => {
+          await status('Still portrait').waitFor();
+          await canvas.waitFor({ state: 'hidden' });
         });
-        await page.getByRole('button', { name: 'Play sample' }).click();
-        await page.getByText('Speaking', { exact: true }).waitFor();
-        expect(afterStop).toEqual([]);
-        expect(await canvas.isVisible()).toBe(false);
-        await page.getByRole('button', { name: 'Interrupt' }).click();
+        await playSampleWithoutAvatar('after runtime Stop');
       }
     } finally {
       await page.close();
