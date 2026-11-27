@@ -9,6 +9,7 @@
  */
 
 import { z } from 'zod';
+import { paginationQuerySchema } from './queryValidation.js';
 import { isShotSpeakerCue } from './fableLoomShots.js';
 import { LOOM_LIMITS } from './fableLoomLimits.js';
 import { characterEvolutionListSchema } from './characterEvolutionValidation.js';
@@ -181,7 +182,7 @@ const storyOutline = z.object({
 // pipeline series (the series detail page's "Branching narratives" card). An
 // empty value is a no-op filter, not a 400 — a UI that builds the query from a
 // possibly-unset id should not have to branch on it.
-export const loomListQuerySchema = z.object({
+export const loomListQuerySchema = paginationQuerySchema.extend({
   seriesId: z.string().max(LOOM_LIMITS.REF_ID_MAX).optional(),
 });
 

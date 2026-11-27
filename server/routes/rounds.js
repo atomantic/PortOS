@@ -18,6 +18,7 @@ import { z } from 'zod';
 import { assertCancelResult } from '../lib/cancelResponse.js';
 import { asyncHandler, ServerError } from '../lib/errorHandler.js';
 import { validateRequest } from '../lib/validateRequest.js';
+import { isPaginationRequested, paginateArray, paginationQuerySchema } from '../lib/queryValidation.js';
 import * as svc from '../services/rounds.js';
 import { generateRound, evaluateRound, deriveRoundParts } from '../services/roundsAI.js';
 import {
@@ -224,8 +225,9 @@ const mapRoundError = (err) => {
 const rethrowRoundError = (err) => { throw mapRoundError(err); };
 
 router.get('/', asyncHandler(async (req, res) => {
+  const query = validateRequest(paginationQuerySchema, req.query);
   const rounds = await svc.listRounds();
-  res.json({ rounds });
+  res.json(isPaginationRequested(query) ? paginateArray(rounds, query, { maxLimit: 500 }) : { rounds });
 }));
 
 router.get('/:id', asyncHandler(async (req, res) => {

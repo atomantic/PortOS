@@ -75,6 +75,19 @@ Use an exact filename to resolve a deep-linked preview or
 `POST /api/image-gen/gallery/lookup` to resolve a list of up to 200 filenames.
 The API Explorer supplies the live filter and action schemas.
 
+## Opt-in list pagination
+
+Pass `limit` or `offset` to `GET /api/tribe/people`, `GET /api/decks`,
+`GET /api/rounds` or `GET /api/fableloom` for `{ items, total, limit, offset }`.
+Paging uses a default limit of 50 and caps it at 500. Filters apply before
+paging, and `total` counts all matching records. Without paging parameters, decks
+and looms return arrays, and Tribe and rounds return `{ people }` and `{ rounds }`.
+
+## Operator workspace status
+
+Use `POST /api/git/status` in the API Explorer with a JSON `path` field to
+inspect the working tree of an allowed workspace by path.
+
 ## Error Responses
 
 All errors return JSON with consistent structure:

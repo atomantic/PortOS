@@ -77,6 +77,18 @@ describe('deck routes', () => {
     });
   });
 
+  it('returns the legacy list or a page when requested', async () => {
+    const records = [{ id: 'first' }, { id: 'second' }, { id: 'third' }];
+    svc.listDecks.mockResolvedValueOnce(records).mockResolvedValueOnce(records);
+    const list = await request(makeApp()).get('/api/decks');
+    expect(list.status).toBe(200);
+    expect(list.body).toEqual(records);
+    const page = await request(makeApp()).get('/api/decks?limit=1&offset=1');
+    expect(page.status).toBe(200);
+    expect(page.body).toEqual({ items: [records[1]], total: 3, limit: 1, offset: 1 });
+    expect((await request(makeApp()).get('/api/decks?limit=1&limit=2')).status).toBe(400);
+  });
+
   it('validates the create body and returns 201', async () => {
     svc.createDeck.mockResolvedValueOnce({ id: 'd1' });
     const res = await request(makeApp()).post('/api/decks').send({ name: 'X', kind: 'playing', universeId: 'u1' });

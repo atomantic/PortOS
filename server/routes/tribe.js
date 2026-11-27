@@ -1,6 +1,6 @@
 import { emitToOperatorsOn } from '../services/socketIo.js';
 import { Router } from 'express';
-import { paginationQuerySchema, parsePagination } from '../lib/queryValidation.js';
+import { isPaginationRequested, paginateArray, paginationQuerySchema, parsePagination } from '../lib/queryValidation.js';
 import { z } from 'zod';
 
 import { asyncHandler, ServerError } from '../lib/errorHandler.js';
@@ -112,7 +112,7 @@ const outreachDraftSchema = z.object({
   { message: 'An outreach draft needs one of threadId, chatGuid, conversationId, or handle' },
 );
 
-const listQuerySchema = z.object({
+const listQuerySchema = paginationQuerySchema.extend({
   search: z.string().max(200).optional(),
   ring: ringSchema.or(z.literal('all')).optional(),
 });
@@ -131,12 +131,13 @@ router.param('memoryId', guidParam('memory id'));
 router.param('identityId', guidParam('identity id'));
 
 router.get('/people', asyncHandler(async (req, res) => {
-  const { search, ring } = validateRequest(listQuerySchema, req.query);
+  const query = validateRequest(listQuerySchema, req.query);
+  const { search, ring } = query;
   const people = await tribe.listPeople({
     search: search || undefined,
     ring: ring || undefined,
   });
-  res.json({ people });
+  res.json(isPaginationRequested(query) ? paginateArray(people, query, { maxLimit: 500 }) : { people });
 }));
 
 // Care summary — overdue-contact status computed server-side (single source of
