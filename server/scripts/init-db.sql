@@ -1418,7 +1418,13 @@ ALTER TABLE creative_director_projects ADD COLUMN IF NOT EXISTS deleted BOOLEAN 
 
 ALTER TABLE creative_director_projects ADD COLUMN IF NOT EXISTS deleted_at TIMESTAMPTZ;
 
-CREATE INDEX IF NOT EXISTS idx_creative_director_projects_live ON creative_director_projects (deleted) WHERE deleted = FALSE;
+ALTER TABLE creative_director_projects
+      ADD COLUMN IF NOT EXISTS name TEXT GENERATED ALWAYS AS (data->>'name') STORED,
+      ADD COLUMN IF NOT EXISTS page_created_at JSONB GENERATED ALWAYS AS (data->'createdAt') STORED,
+      ADD COLUMN IF NOT EXISTS page_updated_at JSONB GENERATED ALWAYS AS (data->'updatedAt') STORED,
+      ADD COLUMN IF NOT EXISTS page_status TEXT GENERATED ALWAYS AS (data->>'status') STORED;
+
+CREATE INDEX IF NOT EXISTS idx_creative_director_projects_live_created ON creative_director_projects (created_at ASC) WHERE deleted = FALSE;
 
 CREATE TABLE IF NOT EXISTS threejs_models (
       id TEXT PRIMARY KEY,
@@ -1487,7 +1493,13 @@ ALTER TABLE music_video_projects ADD COLUMN IF NOT EXISTS deleted BOOLEAN DEFAUL
 
 ALTER TABLE music_video_projects ADD COLUMN IF NOT EXISTS deleted_at TIMESTAMPTZ;
 
-CREATE INDEX IF NOT EXISTS idx_music_video_projects_live ON music_video_projects (deleted) WHERE deleted = FALSE;
+ALTER TABLE music_video_projects
+      ADD COLUMN IF NOT EXISTS name TEXT GENERATED ALWAYS AS (data->>'name') STORED,
+      ADD COLUMN IF NOT EXISTS page_created_at JSONB GENERATED ALWAYS AS (data->'createdAt') STORED,
+      ADD COLUMN IF NOT EXISTS page_updated_at JSONB GENERATED ALWAYS AS (data->'updatedAt') STORED,
+      ADD COLUMN IF NOT EXISTS page_status TEXT GENERATED ALWAYS AS (data->>'status') STORED;
+
+CREATE INDEX IF NOT EXISTS idx_music_video_projects_live_created ON music_video_projects (created_at ASC) WHERE deleted = FALSE;
 
 CREATE TABLE IF NOT EXISTS mood_boards (
       id TEXT PRIMARY KEY,
@@ -1505,7 +1517,7 @@ ALTER TABLE mood_boards ADD COLUMN IF NOT EXISTS deleted_at TIMESTAMPTZ;
 
 CREATE INDEX IF NOT EXISTS idx_mood_boards_updated ON mood_boards (updated_at DESC);
 
-CREATE INDEX IF NOT EXISTS idx_mood_boards_live ON mood_boards (deleted) WHERE deleted = FALSE;
+CREATE INDEX IF NOT EXISTS idx_mood_boards_live_updated ON mood_boards (updated_at DESC, id ASC) WHERE deleted = FALSE;
 
 CREATE TABLE IF NOT EXISTS storyboards (
       id TEXT PRIMARY KEY,
@@ -1518,9 +1530,25 @@ CREATE TABLE IF NOT EXISTS storyboards (
       deleted_at TIMESTAMPTZ
     );
 
+ALTER TABLE storyboards ADD COLUMN IF NOT EXISTS list_summary JSONB,
+      ADD COLUMN IF NOT EXISTS list_summary_write_id UUID;
+
+CREATE OR REPLACE FUNCTION invalidate_storyboard_list_summary()
+     RETURNS TRIGGER AS $$
+     BEGIN
+       NEW.list_summary := NULL;
+       RETURN NEW;
+     END;
+     $$ LANGUAGE plpgsql;
+
+CREATE OR REPLACE TRIGGER trg_storyboards_invalidate_list_summary
+     BEFORE UPDATE OF data ON storyboards FOR EACH ROW
+     WHEN (NEW.list_summary_write_id IS NOT DISTINCT FROM OLD.list_summary_write_id)
+     EXECUTE FUNCTION invalidate_storyboard_list_summary();
+
 CREATE INDEX IF NOT EXISTS idx_storyboards_updated ON storyboards (updated_at DESC);
 
-CREATE INDEX IF NOT EXISTS idx_storyboards_live ON storyboards (deleted) WHERE deleted = FALSE;
+CREATE INDEX IF NOT EXISTS idx_storyboards_live_updated ON storyboards (updated_at DESC, id ASC) WHERE deleted = FALSE;
 
 CREATE TABLE IF NOT EXISTS storyboard_recipes (
       id TEXT PRIMARY KEY,

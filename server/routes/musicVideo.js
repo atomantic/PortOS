@@ -166,7 +166,10 @@ router.get('/', asyncHandler(async (req, res) => {
       ? (project) => (musicVideoCompletionOverride(project) ?? (project.status === 'complete' && !stale?.has(project.id))) === (query.statusFilter === 'completed')
       : null;
     const filter = matchesStatus || matchesName ? (project) => (!matchesStatus || matchesStatus(project)) && (!matchesName || matchesName(project)) : undefined;
-    const page = await listProjectPage({ ...paging, ...(summary ? { compare: compareMusicVideoProjectsNewestFirst, filter } : {}) });
+    const page = await listProjectPage({
+      ...paging,
+      ...(summary ? { compare: compareMusicVideoProjectsNewestFirst, filter, filterNeedsExtraHeaders: Boolean(matchesStatus) } : {}),
+    });
     const presented = await Promise.all(page.items.map((project) => presentProjectForRead(project)));
     const items = summary ? presented.map(project => summarizeMusicVideoProject(project, project.productionReadiness)) : presented;
     // A deletion between header selection and hydration still consumes its slot.

@@ -85,18 +85,28 @@ export function createProjectDbStore({ table, kind, idPrefix, logEmoji, logLabel
     return result.rows.map(rowToProject);
   }
 
-  // Sort the small headers with the caller's legacy comparator before loading
-  // detail JSONB. Timestamp fallbacks need not match the mirrored SQL columns.
-  async function listProjectPage({ includeDeleted = false, limit = 50, offset = 0, compare, filter } = {}) {
-    const where = includeDeleted ? '' : ' WHERE deleted = FALSE';
-    const { rows } = await query(`SELECT id, data->'createdAt' AS "createdAt", data->'updatedAt' AS "updatedAt", data->>'status' AS status, data->>'name' AS name${filter ? extraHeaderColumns : ''}
+  async function readProjectPage({ where, limit, offset, compare, filter, filterNeedsExtraHeaders }) {
+    if (!compare && !filter) {
+      const { rows: [{ ids, total }] } = await query(`
+        SELECT ARRAY(SELECT id FROM ${table}${where} ORDER BY created_at ASC LIMIT $1 OFFSET $2) AS ids,
+               (SELECT COUNT(*)::int FROM ${table}${where}) AS total`, [limit, offset]);
+      return { ids, total };
+    }
+    // The caller's comparator may fall back to a different timestamp than
+    // the write-safe SQL columns. These mirrors retain the original values.
+    const { rows } = await query(`SELECT id, page_created_at AS "createdAt", page_updated_at AS "updatedAt",
+      page_status AS status, name${filter && filterNeedsExtraHeaders ? extraHeaderColumns : ''}
       FROM ${table}${where} ORDER BY created_at ASC`);
     const headers = filter ? rows.filter(filter) : rows;
     if (compare) headers.sort(compare);
-    const page = headers.slice(offset, offset + limit);
-    const projects = new Map((await getProjectsByIds(page.map(({ id }) => id), { includeDeleted }))
-      .map(project => [project.id, project]));
-    return { items: page.map(({ id }) => projects.get(id)).filter(Boolean), total: headers.length, limit, offset };
+    return { ids: headers.slice(offset, offset + limit).map(({ id }) => id), total: headers.length };
+  }
+
+  async function listProjectPage({ includeDeleted = false, limit = 50, offset = 0, compare, filter, filterNeedsExtraHeaders = true } = {}) {
+    const where = includeDeleted ? '' : ' WHERE deleted = FALSE';
+    const { ids, total } = await readProjectPage({ where, limit, offset, compare, filter, filterNeedsExtraHeaders });
+    const projects = new Map((await getProjectsByIds(ids, { includeDeleted })).map(project => [project.id, project]));
+    return { items: ids.map(id => projects.get(id)).filter(Boolean), total, limit, offset };
   }
 
   async function getProject(id, { includeDeleted = false } = {}) {
@@ -125,7 +135,7 @@ export function createProjectDbStore({ table, kind, idPrefix, logEmoji, logLabel
 
   // Live `{ id, name }` rows without loading the JSONB bodies (sidebar nav).
   async function listProjectNames() {
-    const result = await query(`SELECT id, data->>'name' AS name FROM ${table} WHERE deleted = FALSE ORDER BY created_at ASC`);
+    const result = await query(`SELECT id, name FROM ${table} WHERE deleted = FALSE ORDER BY created_at ASC`);
     return result.rows.map(({ id, name }) => ({ id, name: name ?? null }));
   }
 
