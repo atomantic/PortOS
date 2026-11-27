@@ -10,7 +10,7 @@ vi.mock('./compositionDocumentRead.js', () => ({
   isStaleShippedHelper: (_rel, bytes) => bytes.toString().startsWith('// older shipped helper'),
 }));
 import { adaptStagedDocumentPreview, shippedLayeredDocument } from './documentPreviewPlayback.js';
-import { installLayeredPreviewPlayback } from './previewPlaybackRuntime.js';
+import { layeredPreviewPlaybackSource } from './previewPlaybackRuntime.js';
 import { imageEffectState, IMAGE_EFFECT_FOG_COLOR, photoSequenceIndex, photoSequenceLayers, scenePhotoSequence } from '../../lib/musicVideo/musicVideoImageEffects.js';
 
 const roots = [];
@@ -381,7 +381,7 @@ function player({ hold = false, quantized = false, inSec = 0, outSec = 5, cutAt 
   });
   const sandbox = { setTimeout, clearTimeout, __bridge: bridge, performance: { now: () => clock }, requestAnimationFrame: callback => { frame = callback; return 1; }, cancelAnimationFrame: () => { frame = null; },
     window: { postMessage: message => events.push(message) }, portosComposition: {} };
-  runInNewContext(`(${installLayeredPreviewPlayback.toString()})(__bridge)`, sandbox);
+  runInNewContext(`(${layeredPreviewPlaybackSource})(__bridge)`, sandbox);
   const elapse = (ms) => { const elapsed = (ms - clock) / 1000; if (!video.paused) time += elapsed * video.playbackRate; clock = ms; };
   return { api: sandbox.portosComposition.previewPlayback, video, events, paints, modes, sourceTimes, heldFor, present,
     pendingCallback: () => callbacks.values().next().value,
@@ -417,7 +417,7 @@ describe('cooperative preview public runtime lifecycle', () => {
       dispose() {} };
     const sandbox = { setTimeout, clearTimeout, __bridge: bridge, performance: { now: () => clock }, requestAnimationFrame: callback => { frame = callback; return 1; }, cancelAnimationFrame: () => { frame = null; },
       window: { postMessage: message => events.push(message) }, portosComposition: {} };
-    runInNewContext(`(${installLayeredPreviewPlayback.toString()})(__bridge)`, sandbox);
+    runInNewContext(`(${layeredPreviewPlaybackSource})(__bridge)`, sandbox);
     const api = sandbox.portosComposition.previewPlayback;
     const tick = (ms) => { clock = ms; const callback = frame; frame = null; callback?.(); };
     await api.prepare({ epoch: 1, t: 0 });

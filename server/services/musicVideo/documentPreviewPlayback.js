@@ -4,7 +4,7 @@ import { readFile, writeFile } from 'node:fs/promises';
 import { basename, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { isStaleShippedHelper, isUpgradableLayeredEngine } from './compositionDocumentRead.js';
-import { installLayeredPreviewPlayback } from './previewPlaybackRuntime.js';
+import { layeredPreviewPlaybackSource } from './previewPlaybackRuntime.js';
 
 const ROOT = fileURLToPath(new URL('./documentTemplates/', import.meta.url));
 const SHARED_BROWSER_ROOT = fileURLToPath(new URL('../../lib/musicVideo/', import.meta.url));
@@ -15,7 +15,7 @@ const read = (directory, name) => readFile(join(directory, name));
 const BRIDGE = `
   let previewBack = null, previewHeld = null;
   const heldFits = (scene, held) => held?.scene === scene && held.canvas.width === W && held.canvas.height === H;
-  (${installLayeredPreviewPlayback.toString()})({
+  (${layeredPreviewPlaybackSource})({
     ready, duration: DURATION, fps: FPS,
     state: eventState, scene: sceneAt,
     source(scene, t) {
