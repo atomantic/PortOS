@@ -18,6 +18,8 @@ Manage servers in **Models → Runtimes** and enable presets in **AI Providers**
 
 **Idle release** stops PortOS's process after the configured idle window. The next PortOS request loads the saved checkpoint again. Direct clients neither reset that timer nor start the process, so set the window to `0` if they need continuous access. MTPLX starts on demand and **Save PM2 list for reboot** excludes it. An external server appears as **Running (external)** and remains under its operator's control.
 
+**Start with PortOS** (llama.cpp, in the Voice Brain picker) replays the last launch line PortOS started when PortOS boots, independent of the PM2 dump. Each explicit start or alias relaunch saves that line to `settings.localLlm.llama.launch`; tuning sweeps do not. Switching it on while the server is stopped starts it immediately, and switching it off leaves a running server alone. One-click Conversational Gemma setup turns it on.
+
 ## vLLM on RTX 3090
 
 1. Use Compose 2.24.4+ and the NVIDIA Container Toolkit (driver 580+). On Windows, enable Docker Desktop integration and keep the project and weights in a Linux WSL2 distro.

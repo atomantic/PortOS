@@ -10,6 +10,7 @@
  *   3. Start `llama-server` with the Conversational Gemma preset.
  *   4. Enable the `llama-server` API provider and select Conversational Gemma
  *      as the active Voice Brain LLM.
+ *   5. Turn on Start with PortOS so the server comes back after a restart.
  */
 
 import { access, mkdir, stat } from 'node:fs/promises';
@@ -283,6 +284,11 @@ async function runSetupPipeline(signal, deps = {}) {
 
   publish({ phase: 'starting', detail: 'Enabling llama.cpp provider and selecting Conversational Gemma for Voice…', percent: 97 });
   await ensureLlamaProviderAndVoiceConfig(deps);
+  // The voice brain should survive a reboot or redeploy, so one-click setup
+  // also turns on Start with PortOS (the user can switch it off beside the picker).
+  const setAutoStart = deps.setLlamaServerAutoStart
+    || (await import('../llamaServerAutoStart.js')).setLlamaServerAutoStart;
+  await setAutoStart(true);
   publish({
     phase: 'ready',
     detail: 'Conversational Gemma 4 31B is running via llama.cpp and active for Voice.',

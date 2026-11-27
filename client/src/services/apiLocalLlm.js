@@ -282,6 +282,11 @@ export const startLlamaServer = managedRuntimeRequests.llama.start;
 export const stopLlamaServer = managedRuntimeRequests.llama.stop;
 export const installLlamaServer = managedRuntimeRequests.llama.install;
 
+// Start with PortOS: replay the last explicit launch line at boot. Turning it on
+// while the server is down starts it now; the response carries fresh status.
+export const setLlamaServerAutoStart = (enabled, options) =>
+  request('/local-llm/llama-server/auto-start', { ...options, method: 'PUT', body: JSON.stringify({ enabled: enabled === true }) });
+
 // Upgrade a package-manager-installed binary. The server restarts a managed
 // llama-server using its existing launch configuration.
 export const upgradeLlamaServer = () => managedRuntimeRequests.llama.upgrade();

@@ -147,6 +147,14 @@ async function configuredSleepIdleMinutes() {
   return Number.isFinite(raw) && raw > 0 ? Math.floor(raw) : 0;
 }
 
+/** Boot auto-start toggle and the launch line it would replay (llamaServerAutoStart.js). */
+async function configuredAutoStart() {
+  const settings = await import('./settings.js').then((m) => m.getSettings()).catch(() => null);
+  const llama = settings?.localLlm?.llama;
+  // The whole line, so a Start button elsewhere (Voice) can replay it as-is.
+  return { autoStart: llama?.autoStart === true, savedLaunch: llama?.launch?.model ? llama.launch : null };
+}
+
 async function configuredSleepIdleKeepLoaded() {
   if (sleepIdleKeepLoadedOverride !== null) return sleepIdleKeepLoadedOverride;
   const settings = await import('./settings.js').then((m) => m.getSettings()).catch(() => null);
@@ -304,6 +312,7 @@ export async function getLlamaServerStatus({ includeLogs } = {}) {
     // next start, because this is a launch flag.
     idleMinutes: await configuredSleepIdleMinutes(),
     keepLoaded: await configuredSleepIdleKeepLoaded(),
+    ...await configuredAutoStart(),
   };
 }
 

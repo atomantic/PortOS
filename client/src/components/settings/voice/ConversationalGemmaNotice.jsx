@@ -156,9 +156,9 @@ export default function ConversationalGemmaNotice({
             {running
               ? (setup.detail || 'Setting up llama.cpp + Conversational Gemma 4 31B…')
               : ggufReady
-                ? 'Local Q8_0 GGUF ready. Launch llama.cpp and switch Voice Brain automatically.'
+                ? 'Model is on disk. Starts llama.cpp and selects it here.'
                 : canAutoSetup
-                  ? 'One-click local Apple Silicon setup: installs llama.cpp, converts Q8_0 GGUF, starts the server, and selects it here.'
+                  ? 'Local voice model. One tap installs llama.cpp, downloads the model, starts it with PortOS and selects it here.'
                   : 'Connect an external OpenAI-compatible server hosting this checkpoint.'}
           </p>
         </div>

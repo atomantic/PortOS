@@ -11,3 +11,6 @@ export const CONVERSATIONAL_GEMMA = Object.freeze({
 });
 
 export const isConversationalGemma = id => typeof id === 'string' && id.toLowerCase() === CONVERSATIONAL_GEMMA.id.toLowerCase();
+
+/** A model id as voice pickers show it: the curated name for a catalog model, else the raw id. */
+export const voiceModelDisplayName = id => (isConversationalGemma(id) ? CONVERSATIONAL_GEMMA.name : id);

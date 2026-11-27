@@ -628,6 +628,9 @@ if (!isSmokeBoot()) {
   // Reminders for scheduled human action steps (Brain threads); zero provider calls.
   import('./services/humanActionReminders.js').then(({ initHumanActionReminders }) => initHumanActionReminders())
     .catch((err) => console.error(`❌ Human action reminders could not start: ${err.message}`));
+  // Opt-in (Start with PortOS): replays the saved llama-server launch line; a local process start, no model call.
+  import('./services/llamaServerAutoStart.js').then(({ autoStartLlamaServer }) => autoStartLlamaServer())
+    .catch((err) => console.error(`❌ llama-server auto-start could not load: ${err.message}`));
   import('./services/fleetLlmHost.js').then(({ startFleetLlmHost, describeFleetHostError }) => startFleetLlmHost().catch((err) => {
     console.error(`❌ Dedicated model host listener could not start (${describeFleetHostError(err)}); open AI Providers → Model host setup.`);
   }))

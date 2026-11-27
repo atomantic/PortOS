@@ -1,5 +1,6 @@
 import { describe, it, expect, beforeAll, afterAll, beforeEach, afterEach, vi } from 'vitest';
 import {
+  persistRunningLlamaLaunch,
   getLlamaServerStatus,
   getLlamaServerEndpoint,
   startLlamaServer,
@@ -21,6 +22,7 @@ import * as childProcess from '../lib/childProcess.js';
 import * as platform from '../lib/platform.js';
 import * as openAiModelsProbe from '../lib/openAiModelsProbe.js';
 import * as pm2Module from './pm2.js';
+import * as settingsModule from './settings.js';
 import * as bufferedSpawnModule from '../lib/bufferedSpawn.js';
 import * as streamingSpawnModule from '../lib/streamingSpawn.js';
 import { PORTS } from '../lib/ports.js';
@@ -95,6 +97,7 @@ describe('llamaServerManager', () => {
   // the number of reads to fail, or `Infinity` for a PM2 that never answers
   // again; `count` is what a retry assertion reads.
   let pm2Reads = { failures: 0, count: 0 };
+  let settingsStore = {};
 
   beforeAll(async () => {
     modelDir = await mkdtemp(join(tmpdir(), 'portos-llama-'));
@@ -125,6 +128,13 @@ describe('llamaServerManager', () => {
     // here, and a suite must not sit through the production backoff to see them.
     resetForTest();
     vi.restoreAllMocks();
+    // Starts persist their launch line; keep it in memory, off the install's settings.
+    settingsStore = {};
+    vi.spyOn(settingsModule, 'getSettings').mockImplementation(async () => settingsStore);
+    vi.spyOn(settingsModule, 'updateSettingsWith').mockImplementation(async (mutate) => {
+      settingsStore = await mutate(settingsStore);
+      return settingsStore;
+    });
     pm2State = null;
     execPm2Calls = [];
     pm2Reads = { failures: 0, count: 0 };
@@ -421,6 +431,21 @@ describe('llamaServerManager', () => {
     expect(startCall).not.toContain('--model-draft');
     expect(startCall.slice(startCall.indexOf('--spec-type'), startCall.indexOf('--spec-type') + 2))
       .toEqual(['--spec-type', 'ngram-map-k']);
+  });
+
+  it('saves the launch line of an explicit start for the boot auto-start to replay', async () => {
+    vi.spyOn(processEnv, 'findCommandOnPath').mockReturnValue('/usr/local/bin/llama-server');
+    settingsStore = { localLlm: { llama: { autoStart: true, idleMinutes: 15 } } };
+
+    await startLlamaServer({ model: modelPath, specType: 'ngram-map-k', alias: 'voice', ctxSize: 4096 });
+
+    expect(settingsStore.localLlm.llama).toMatchObject({
+      autoStart: true,
+      idleMinutes: 15,
+      launch: { model: modelPath, specType: 'ngram-map-k', alias: 'voice', ctxSize: 4096 },
+    });
+    // The idle window stays the setting's to decide, not a snapshot of it.
+    expect(settingsStore.localLlm.llama.launch).not.toHaveProperty('sleepIdleMinutes');
   });
 
   it('passes a combined drafter + ngram spec type through as one comma-separated flag', async () => {
@@ -1145,6 +1170,21 @@ describe('llamaServerManager', () => {
       expect(args[args.indexOf('--alias') + 1]).toBe('qwen3.8-27b-dflash2');
       // The weights never move — that is what makes this cheap.
       expect(args[args.indexOf('-m') + 1]).toBe(modelPath);
+    });
+
+    it('saves the new id as the boot launch line after a rename', async () => {
+      await startedAs('dflash');
+      await relaunchLlamaServerWithAlias('example-org/renamed');
+      expect(settingsStore.localLlm.llama.launch).toMatchObject({ model: modelPath, alias: 'example-org/renamed' });
+    });
+
+    it('saves the line PM2 is running when asked to record it without a start', async () => {
+      await startedAs('example-org/served');
+      settingsStore = {};
+
+      await expect(persistRunningLlamaLaunch()).resolves.toBe(true);
+
+      expect(settingsStore.localLlm.llama.launch).toMatchObject({ model: modelPath, alias: 'example-org/served' });
     });
 
     // `null`, not `true`: nothing was restarted, and a toast claiming a restart
