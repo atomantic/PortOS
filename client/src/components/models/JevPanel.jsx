@@ -1,3 +1,5 @@
+import ConfirmButtonPair from '../../components/ui/ConfirmButtonPair';
+import useConfirmDelete from '../../hooks/useConfirmDelete';
 import { useEffect, useRef, useState } from 'react';
 import { CheckCircle2, Circle, Download, ExternalLink, GraduationCap, RefreshCw, Scale, Plug, BarChart3, Wrench } from 'lucide-react';
 import { useLocation, useNavigate, useParams } from 'react-router';
@@ -66,6 +68,7 @@ const readHeads = ({ signal }) => getJevHeads({ silent: true, signal });
 const JEV_PATH = '/models/decision-classifiers/jev';
 
 export default function JevPanel() {
+  const { isConfirming, requestDelete, cancelDelete, confirmDelete } = useConfirmDelete();
   const { taskView } = useParams();
   const { features, error: featureError } = useInstanceFeatures();
   const feature = features?.find(item => item.id === 'jev');
@@ -452,13 +455,23 @@ export default function JevPanel() {
                               Adopt
                             </button>
                           )}
-                          <button
-                            type="button"
-                            onClick={() => discardHead(row.decisionId, row.adopted)}
-                            className="px-2 py-0.5 text-[11px] border border-port-border text-gray-300 rounded"
-                          >
-                            Discard
-                          </button>
+                          {isConfirming(`${row.decisionId}-${row.adopted}`) ? (
+                            <ConfirmButtonPair
+                              prompt="Discard head?"
+                              confirmText="Discard"
+                              onConfirm={() => confirmDelete(() => discardHead(row.decisionId, row.adopted))}
+                              onCancel={cancelDelete}
+                              className="flex-wrap"
+                            />
+                          ) : (
+                            <button
+                              type="button"
+                              onClick={() => requestDelete(`${row.decisionId}-${row.adopted}`)}
+                              className="pointer-coarse:min-h-11 pointer-coarse:min-w-11 px-2 py-0.5 text-[11px] border border-port-border text-gray-300 rounded"
+                            >
+                              Discard
+                            </button>
+                          )}
                         </div>
                         {row.ok && row.blocker && (
                           <p className="text-[11px] text-port-warning mt-1 max-w-xs">{jevHeadBlockerLabel(row.blocker)}</p>

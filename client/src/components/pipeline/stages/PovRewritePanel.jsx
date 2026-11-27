@@ -8,6 +8,8 @@
  * artifacts server-side; the canonical draft is never touched here.
  */
 
+import ConfirmButtonPair from '../../../components/ui/ConfirmButtonPair';
+import useConfirmDelete from '../../../hooks/useConfirmDelete';
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { Loader2, Sparkles, Trash2, ChevronDown, ChevronRight, Drama } from 'lucide-react';
 import BrailleSpinner from '../../BrailleSpinner';
@@ -36,6 +38,7 @@ function AnalysisList({ title, items }) {
 }
 
 function RewriteCard({ issue, rewrite, onDelete }) {
+  const { isConfirming, requestDelete, cancelDelete, confirmDelete } = useConfirmDelete();
   const [open, setOpen] = useState(false);
   const original = (issue.stages?.[rewrite.sourceStage]?.output || '').trim();
   const analysis = rewrite.analysis || {};
@@ -56,7 +59,7 @@ function RewriteCard({ issue, rewrite, onDelete }) {
 
   return (
     <div className="border border-port-border rounded-lg bg-port-bg">
-      <div className="flex items-center justify-between gap-2 p-3">
+      <div className="flex flex-wrap items-center justify-between gap-2 p-3">
         <button
           type="button"
           onClick={() => setOpen((v) => !v)}
@@ -72,17 +75,26 @@ function RewriteCard({ issue, rewrite, onDelete }) {
             <span className="text-[10px] uppercase tracking-wider text-port-warning shrink-0" title="The source draft changed since this rewrite was generated">stale</span>
           ) : null}
         </button>
-        <div className="flex items-center gap-2 shrink-0">
+        <div className="flex flex-wrap items-center gap-2 min-w-0">
           <span className="text-[10px] text-gray-600">{timeAgo(rewrite.createdAt)}</span>
-          <button
-            type="button"
-            onClick={handleDelete}
-            disabled={deleting}
-            aria-label="Delete rewrite"
-            className="min-h-[44px] min-w-[44px] inline-flex items-center justify-center p-1 text-gray-500 hover:text-port-error disabled:opacity-40"
-          >
-            {deleting ? <Loader2 size={14} className="animate-spin" /> : <Trash2 size={14} />}
-          </button>
+          {isConfirming(rewrite.id) ? (
+            <ConfirmButtonPair
+              prompt="Delete rewrite?"
+              onConfirm={() => confirmDelete(handleDelete)}
+              onCancel={cancelDelete}
+              className="flex-wrap"
+            />
+          ) : (
+            <button
+              type="button"
+              onClick={() => requestDelete(rewrite.id)}
+              disabled={deleting}
+              aria-label="Delete rewrite"
+              className="min-h-[44px] min-w-[44px] inline-flex items-center justify-center p-1 text-gray-500 hover:text-port-error disabled:opacity-40"
+            >
+              {deleting ? <Loader2 size={14} className="animate-spin" /> : <Trash2 size={14} />}
+            </button>
+          )}
         </div>
       </div>
 

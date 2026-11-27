@@ -702,6 +702,8 @@ describe('TaskAddForm quick templates', () => {
     expect(apply.parentElement).not.toHaveAttribute('role');
 
     await user.click(remove);
+    expect(api.deleteCosTaskTemplate).not.toHaveBeenCalled();
+    await user.click(screen.getByRole('button', { name: 'Delete' }));
     await waitFor(() => expect(apply).not.toBeInTheDocument());
     expect(api.deleteCosTaskTemplate).toHaveBeenCalledWith('user-abc', { silent: true });
     expect(api.applyCosTaskTemplate).not.toHaveBeenCalled();

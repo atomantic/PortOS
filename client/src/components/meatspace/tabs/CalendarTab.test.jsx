@@ -13,10 +13,9 @@ vi.mock('../../../services/apiMeatspace.js', () => ({
 // Chart-like panels need layout and are not part of the delete path.
 vi.mock('./calendar/LifeGrid', () => ({ default: () => null }));
 vi.mock('./calendar/TimeStats', () => ({ default: () => null }));
-vi.mock('./calendar/LifeEventsPanel', () => ({ default: () => null }));
 vi.mock('./calendar/AddActivityForm', () => ({ default: () => null }));
 
-import { getLifeCalendar, removeActivity } from '../../../services/apiMeatspace.js';
+import { getLifeCalendar, removeActivity, removeLifeEvent } from '../../../services/apiMeatspace.js';
 import CalendarTab from './CalendarTab';
 
 const renderTab = () => render(<MemoryRouter><CalendarTab /></MemoryRouter>);
@@ -40,6 +39,12 @@ const CALENDAR = {
 };
 
 const removeButtons = () => screen.getAllByRole('button', { name: 'Remove activity' });
+const confirmRemoval = () => screen.getByRole('button', { name: 'Remove' });
+
+async function removeActivityAt(index) {
+  fireEvent.click(removeButtons()[index]);
+  await act(async () => { fireEvent.click(confirmRemoval()); });
+}
 
 beforeEach(() => {
   getLifeCalendar.mockResolvedValue(structuredClone(CALENDAR));
@@ -57,10 +62,16 @@ describe('CalendarTab activity removal', () => {
     await act(async () => { renderTab(); });
     await screen.findByText('Showers');
 
-    // Two clicks before React re-renders, as a fast double-click produces.
     const trash = removeButtons()[1];
     fireEvent.click(trash);
-    fireEvent.click(trash);
+    expect(removeActivity).not.toHaveBeenCalled();
+    fireEvent.click(screen.getByRole('button', { name: 'Cancel' }));
+    expect(removeActivity).not.toHaveBeenCalled();
+    fireEvent.click(removeButtons()[1]);
+    const confirm = confirmRemoval();
+    fireEvent.click(confirm);
+    // A repeated activation of the old confirmation must not send another request.
+    fireEvent.click(confirm);
     expect(removeActivity).toHaveBeenCalledTimes(1);
     expect(removeActivity).toHaveBeenCalledWith(1, { id: 'a-showers' }, { silent: true });
     expect(removeButtons()[1].disabled).toBe(true);
@@ -83,8 +94,8 @@ describe('CalendarTab activity removal', () => {
     await act(async () => { renderTab(); });
     await screen.findByText('Showers');
 
-    await act(async () => { fireEvent.click(removeButtons()[1]); });
-    await act(async () => { fireEvent.click(removeButtons()[0]); });
+    await removeActivityAt(1);
+    await removeActivityAt(0);
     // Showers moved up to index 0 when Coffees was removed; it must still be the disabled row.
     expect(removeButtons()[0].disabled).toBe(true);
     expect(removeButtons()[1].disabled).toBe(false);
@@ -96,7 +107,7 @@ describe('CalendarTab activity removal', () => {
     await act(async () => { renderTab(); });
     await screen.findByText('Books');
 
-    await act(async () => { fireEvent.click(removeButtons()[2]); });
+    await removeActivityAt(2);
     await screen.findByText('Books');
     expect(getLifeCalendar).toHaveBeenCalledTimes(2);
     expect(screen.getByText('Coffees')).toBeInTheDocument();
@@ -115,8 +126,8 @@ describe('CalendarTab activity removal', () => {
     await act(async () => { renderTab(); });
     await screen.findByText('Books');
 
-    await act(async () => { fireEvent.click(removeButtons()[2]); });
-    await act(async () => { fireEvent.click(removeButtons()[1]); });
+    await removeActivityAt(2);
+    await removeActivityAt(1);
     expect(screen.queryByText('Showers')).toBeNull();
 
     // The read that the 409 started finally lands with the pre-delete snapshot.
@@ -144,7 +155,7 @@ describe('CalendarTab activity removal', () => {
     await act(async () => { renderTab(); });
     await screen.findAllByText('Walks');
 
-    await act(async () => { fireEvent.click(removeButtons()[1]); });
+    await removeActivityAt(1);
     expect(removeActivity).toHaveBeenCalledWith(1, { id: 'w2' }, { silent: true });
     expect(removeButtons().map(b => b.disabled)).toEqual([false, true]);
 
@@ -162,8 +173,23 @@ describe('CalendarTab activity removal', () => {
     await act(async () => { renderTab(); });
     await screen.findByText('Showers');
 
-    await act(async () => { fireEvent.click(removeButtons()[1]); });
+    await removeActivityAt(1);
     expect(removeActivity).toHaveBeenCalledWith(1, { name: 'Showers' }, { silent: true });
     expect(screen.queryByText('Showers')).toBeNull();
   });
+});
+
+it('removes the selected life event only after confirmation', async () => {
+  getLifeCalendar.mockResolvedValueOnce({
+    ...structuredClone(CALENDAR),
+    events: [{ id: 'event-1', name: 'Example event', enabled: true, type: 'holiday', recurrence: 'once', date: '2030-01-01' }],
+  });
+  removeLifeEvent.mockResolvedValue({ success: true });
+  renderTab();
+
+  fireEvent.click(await screen.findByRole('button', { name: /Life Events/i }));
+  fireEvent.click(screen.getByRole('button', { name: 'Remove Example event' }));
+  expect(removeLifeEvent).not.toHaveBeenCalled();
+  await act(async () => { fireEvent.click(confirmRemoval()); });
+  expect(removeLifeEvent).toHaveBeenCalledExactlyOnceWith('event-1');
 });
