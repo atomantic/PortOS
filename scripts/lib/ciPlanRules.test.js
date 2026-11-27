@@ -24,6 +24,7 @@ it('selects checkout-cache contracts only in their installed-dependency runners'
     'server/lib/mockPathsDataRoot.js',
   ];
   const server = [
+    '.github/actions/server-vitest-cache/action.yml',
     'server/package.json', 'server/package-lock.json',
     'server/vitest.config.js', 'server/vitest.config.db.js', 'server/vitest.setup.js',
     'server/test/admissionSetup.js', 'server/test/mediaRegistryEnvironment.js',

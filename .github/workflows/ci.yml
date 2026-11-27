@@ -178,6 +178,7 @@ jobs:
       - uses: ./.github/actions/diff-base
 
       - uses: ./.github/actions/setup-server
+      - uses: ./.github/actions/server-vitest-cache
         with:
           vitest-key-suffix: -${{ matrix.shard }}of${{ strategy.job-total }}
 
@@ -478,6 +479,7 @@ jobs:
           persist-credentials: false
 
       - uses: ./.github/actions/setup-server
+      - uses: ./.github/actions/server-vitest-cache
 
       # The Postgres schema is not visible to a cache key; scripts/lib/testMemo.js
       # lists the tracked files that build it as db base inputs.
@@ -573,8 +575,6 @@ jobs:
           persist-credentials: false
 
       - uses: ./.github/actions/setup-server
-        with:
-          vitest-key-suffix: -browser-${{ matrix.shard }}of${{ strategy.job-total }}
 
       # Wide smoke restores its own full-run lineage and the lineages of
       # selected suites that move between profiles. Smaller plans merge all.
@@ -641,6 +641,12 @@ jobs:
           PORTOS_TEST_QUIET: 1
           PORTOS_CI_PREPLANNED_RUN: ${{ runner.temp }}/portos-browser-run.json
         run: node scripts/run-ci-tests.js server --check-remaining
+
+      # Transform artifacts are needed only when the final plan runs Vitest.
+      - uses: ./.github/actions/server-vitest-cache
+        if: fromJSON(steps.browser-recheck.outputs.remaining || steps.browser-plan.outputs.remaining) > 0
+        with:
+          vitest-key-suffix: -browser-${{ matrix.shard }}of${{ strategy.job-total }}
 
       # The test runner reads the runner's Chrome tree into the page cache
       # (scripts/ci-warm-test-chrome.sh, #9641) only when a suite will run (#17750).
@@ -736,6 +742,7 @@ jobs:
       - uses: ./.github/actions/diff-base
 
       - uses: ./.github/actions/setup-server
+      - uses: ./.github/actions/server-vitest-cache
         with:
           vitest-key-suffix: -${{ matrix.shard }}of${{ strategy.job-total }}
 
@@ -914,6 +921,7 @@ jobs:
       # The PTY cases need node-pty's native addon, which only setup-server's
       # trusted rebuild builds.
       - uses: ./.github/actions/setup-server
+      - uses: ./.github/actions/server-vitest-cache
         with:
           vitest-key-suffix: -macos-native
 

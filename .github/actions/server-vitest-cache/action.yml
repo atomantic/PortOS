@@ -1,0 +1,44 @@
+name: Cache server Vitest transform artifacts
+description: Restore server Vitest transforms and save them outside pull requests.
+
+inputs:
+  vitest-key-suffix:
+    description: >-
+      Appended to the transform-artifact cache key so jobs and shards that run
+      in parallel never race on one save (e.g. `-1of2`, `-browser-1of2`).
+    required: false
+    default: ''
+
+runs:
+  using: composite
+  steps:
+    # Reuse Vite/Vitest artifacts from checkout-owned .cache paths, outside
+    # node_modules (which may be shared by worktrees). Unlike the installed
+    # dependency tree, these artifacts can safely use a near-miss
+    # restore and stay warm across a lockfile bump. Both server Vitest configs
+    # are hashed for every job, so one key shape serves the unit, DB, browser,
+    # Windows and macOS jobs; the suffix keeps their parallel saves apart.
+    # A PR-saved cache is private to its merge ref and never read again, so PRs only restore.
+    - name: Cache Vitest transform artifacts (restore only on pull requests)
+      if: github.event_name == 'pull_request'
+      uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+      with:
+        path: |
+          server/.cache/vitest
+          server/.cache/vitest-db
+        key: vitest-server-${{ runner.os }}-${{ hashFiles('server/package-lock.json', 'server/vitest.config.js', 'server/vitest.config.db.js', 'scripts/vitestCiPool.js') }}${{ inputs.vitest-key-suffix }}
+        restore-keys: |
+          vitest-server-${{ runner.os }}-${{ hashFiles('server/package-lock.json') }}-
+          vitest-server-${{ runner.os }}-
+
+    - name: Cache Vitest transform artifacts
+      if: github.event_name != 'pull_request'
+      uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+      with:
+        path: |
+          server/.cache/vitest
+          server/.cache/vitest-db
+        key: vitest-server-${{ runner.os }}-${{ hashFiles('server/package-lock.json', 'server/vitest.config.js', 'server/vitest.config.db.js', 'scripts/vitestCiPool.js') }}${{ inputs.vitest-key-suffix }}
+        restore-keys: |
+          vitest-server-${{ runner.os }}-${{ hashFiles('server/package-lock.json') }}-
+          vitest-server-${{ runner.os }}-

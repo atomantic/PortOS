@@ -900,6 +900,7 @@ describe('path-gated single-purpose jobs', () => {
       'server/lib/windowsAgentProcess.js', 'server/lib/windowsAgentProcess.darwin.test.js', 'server/lib/darwinAgentSupervisor.py',
       'server/vitest.config.js', 'server/package-lock.json', 'server/.npmrc',
       'scripts/trusted-rebuilds.js', '.github/workflows/ci.yml', '.github/actions/setup-server/action.yml',
+      '.github/actions/server-vitest-cache/action.yml',
     ]) expect(buildCiTestPlan([file]).macosNative, file).toBe(true);
     for (const file of [
       'server/lib/windowsAgentSupervisor.ps1', 'server/lib/linuxAgentSupervisor.py', 'server/lib/bufferedSpawn.js',

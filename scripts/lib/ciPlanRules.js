@@ -471,9 +471,9 @@ export const MACOS_NATIVE_TESTS = [
   'server/lib/windowsAgentProcess.darwin.test.js',
 ];
 // The supervision path itself, the dependency manifests and Vitest harness the
-// job installs and loads, and ci.yml plus the setup-server action it installs
-// through, so a workflow edit proves the job runs.
-export const MACOS_NATIVE_PATH_RE = /^(?:server\/lib\/(?:windowsAgentProcess[^/]*\.js|darwinAgentSupervisor\.py)|server\/vitest\.(?:config|setup)\.js|scripts\/vitestTempRootSetup\.js|scripts\/trusted-rebuilds\.js|server\/(?:package(?:-lock)?\.json|\.npmrc)|\.github\/workflows\/ci\.yml|\.github\/actions\/setup-server\/action\.yml)$/;
+// job installs and loads, plus the workflow and the server setup and cache
+// actions the macOS job uses.
+export const MACOS_NATIVE_PATH_RE = /^(?:server\/lib\/(?:windowsAgentProcess[^/]*\.js|darwinAgentSupervisor\.py)|server\/vitest\.(?:config|setup)\.js|scripts\/vitestTempRootSetup\.js|scripts\/trusted-rebuilds\.js|server\/(?:package(?:-lock)?\.json|\.npmrc)|\.github\/workflows\/ci\.yml|\.github\/actions\/(?:setup-server|server-vitest-cache)\/action\.yml)$/;
 // The `node-minimum` job installs every workspace and runs the runtime gate on
 // the oldest supported Node; only these files can change its answer.
 export const NODE_MINIMUM_PATH_RE = /^(?:(?:server\/|client\/)?(?:package(?:-lock)?\.json|\.npmrc)|\.nvmrc|scripts\/checkNodeVersion(?:\.test)?\.js|scripts\/lib\/directInvocation\.js|server\/test\/guards\/repo\/node-version-drift\.test\.js|server\/test\/guards\/repo\.guard\.test\.js|\.github\/workflows\/ci\.yml)$/;
@@ -605,6 +605,7 @@ const WORKSPACE_CACHE_COMMON_INPUTS = new Set([
   'server/lib/mockPathsDataRoot.js',
 ]);
 const WORKSPACE_CACHE_SERVER_INPUTS = new Set([
+  '.github/actions/server-vitest-cache/action.yml',
   'server/package.json', 'server/package-lock.json',
   'server/vitest.config.js', 'server/vitest.config.db.js', 'server/vitest.setup.js',
   'server/test/admissionSetup.js', 'server/test/mediaRegistryEnvironment.js',
