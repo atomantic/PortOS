@@ -142,11 +142,12 @@ export default function JevPanel() {
       });
   };
 
-  const cancel = () => cancelJevInstall({ silent: true }).then(loadStatus).catch(() => null);
+  const cancel = () => cancelJevInstall({ silent: true }).then(loadStatus)
+    .catch((error) => toast.error(error?.message || 'Could not cancel the jev installation'));
 
   const unload = () => unloadJev({ silent: true }).then(() => {
     setStatus(current => current ? { ...current, resident: false } : current);
-  }).catch(() => null);
+  }).catch((error) => toast.error(error?.message || 'Could not unload jev'));
 
   const hypotheses = parseHypotheses(hypothesesText);
   const canScore = status?.ready === true && premise.trim().length > 0 && hypotheses.length >= 2;

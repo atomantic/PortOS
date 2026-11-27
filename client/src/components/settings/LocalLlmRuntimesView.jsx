@@ -243,19 +243,16 @@ export default function LocalLlmRuntimesView({ view } = {}) {
     { start: 'Ollama is running', stop: 'Ollama stopped', enable: 'Ollama will run at login', disable: 'Ollama background service disabled' }[action],
     { ollamaService: true }
   );
-  // Not silent: a failed stop must say so, and this row has no banner of its
-  // own to put it in. The two-step "confirm — disconnect peers now" gate lives
-  // on the host setup page, which is also where the inbound-usage report shows
-  // who would be cut off; this row is the same one-click Stop the other
-  // runtimes on this card offer.
   const stopFleetHost = () => runAction(
     'runtime-stop-fleet-host',
-    () => stopFleetLlmHost(),
-    (result) => (result?.error
-      ? result.error
-      : result?.containerStopped
+    async () => {
+      const result = await stopFleetLlmHost();
+      if (result?.error) toast.error(result.error);
+      else toast.success(result?.containerStopped
         ? 'Dedicated Qwen host stopped and its container removed'
-        : 'Dedicated Qwen host disabled'),
+        : 'Dedicated Qwen host disabled');
+      return result;
+    },
   ).then(loadFleetHostStatus);
   // The roster's update action; same endpoint and toast as the Ollama detail card's button.
   const runtimeUpgradeOllama = () => runAction(
@@ -317,12 +314,10 @@ export default function LocalLlmRuntimesView({ view } = {}) {
   // A 100 GB+ transfer that is merely SLOW never trips the idle watchdog, so
   // without this the only way out was to wait it out. The bar comes down on the
   // 'cancelled' frame the server emits, not here.
-  const cancelSlotstreamDownload = (model) => runAction(
-    'slotstream-download-cancel',
-    () => cancelSlotstreamModelDownload(model, { silent: true }),
-    (r) => (r?.cancelled ? 'Cancelling checkpoint download…' : 'No checkpoint download is running'),
-    { onError: (err) => toast.error(err?.message || 'Could not cancel the checkpoint download') },
-  );
+  const [cancelSlotstreamDownload, cancellingSlotstreamDownload] = useAsyncAction(async (model) => {
+    const result = await cancelSlotstreamModelDownload(model, { silent: true });
+    toast.info(result?.cancelled ? 'Cancelling checkpoint download…' : 'No checkpoint download is running');
+  }, { errorMessage: 'Could not cancel the checkpoint download' });
   const slotstreamRemove = (model, onRemoved) => runAction(
     'slotstream-remove',
     async () => {
@@ -561,6 +556,7 @@ export default function LocalLlmRuntimesView({ view } = {}) {
           onDownloadModel={slotstreamDownloadModel}
           onRemoveModel={slotstreamRemove}
           onCancelDownload={cancelSlotstreamDownload}
+          cancelling={cancellingSlotstreamDownload}
           download={slotstreamDownload}
         />
       </div>

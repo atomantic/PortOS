@@ -43,20 +43,25 @@ function HubBlobClones({ hub, locked, onRefresh }) {
     if (busyRef.current || !pending || !armed) return;
     busyRef.current = true;
     setBusy(true);
-    const pairs = pending.flatMap((group) => group.replacements.map((replacement) => ({
-      sourcePath: group.sourcePath,
-      targetPath: replacement.path,
-    })));
-    const outcome = await applyCloneBatches(pairs);
-    setPending(null);
-    setArmed(false);
-    if (outcome.failure) toast.error(outcome.failure.message || 'Could not clone hub blobs');
-    else if (typeof outcome.physicalReclaimedBytes === 'number') {
-      toast.success(`Cloned hub blobs · ${formatBytes(outcome.physicalReclaimedBytes)} physical free space recovered`);
-    } else toast.success(`Cloned hub blobs · ${formatBytes(outcome.reclaimedBytes)} logical`);
-    await onRefresh();
-    busyRef.current = false;
-    setBusy(false);
+    try {
+      const pairs = pending.flatMap((group) => group.replacements.map((replacement) => ({
+        sourcePath: group.sourcePath,
+        targetPath: replacement.path,
+      })));
+      const outcome = await applyCloneBatches(pairs);
+      setPending(null);
+      setArmed(false);
+      if (outcome.failure) toast.error(outcome.failure.message || 'Could not clone hub blobs');
+      else if (typeof outcome.physicalReclaimedBytes === 'number') {
+        toast.success(`Cloned hub blobs · ${formatBytes(outcome.physicalReclaimedBytes)} physical free space recovered`);
+      } else toast.success(`Cloned hub blobs · ${formatBytes(outcome.reclaimedBytes)} logical`);
+      await onRefresh();
+    } catch (error) {
+      toast.error(error?.message || 'Could not clone hub blobs or refresh the report');
+    } finally {
+      busyRef.current = false;
+      setBusy(false);
+    }
   };
   return (
     <section className="rounded-2xl border border-port-border bg-port-card p-4 space-y-3">
@@ -117,27 +122,32 @@ export default function DuplicateModelWeights({ duplicates, locked, onRefresh })
     if (busyRef.current || !pending) return;
     busyRef.current = true;
     setBusy(true);
-    const pairs = pending.map(({ sourcePath, targetPath }) => ({ sourcePath, targetPath }));
-    let reclaimedBytes = 0;
-    let failure = null;
-    for (let offset = 0; offset < pairs.length; offset += 200) {
-      const batch = pairs.slice(offset, offset + 200);
-      const outcome = await rectifyModelDuplicates({ pairs: batch, mode: 'hardlink' }, { silent: true })
-        .then((value) => ({ value }), (error) => ({ error }));
-      if (outcome.error) {
-        failure = outcome.error;
-        break;
+    try {
+      const pairs = pending.map(({ sourcePath, targetPath }) => ({ sourcePath, targetPath }));
+      let reclaimedBytes = 0;
+      let failure = null;
+      for (let offset = 0; offset < pairs.length; offset += 200) {
+        const batch = pairs.slice(offset, offset + 200);
+        const outcome = await rectifyModelDuplicates({ pairs: batch, mode: 'hardlink' }, { silent: true })
+          .then((value) => ({ value }), (error) => ({ error }));
+        if (outcome.error) {
+          failure = outcome.error;
+          break;
+        }
+        reclaimedBytes += outcome.value.reclaimedBytes;
+        setCompleted((previous) => new Set([...previous, ...batch.map((pair) => pair.targetPath)]));
       }
-      reclaimedBytes += outcome.value.reclaimedBytes;
-      setCompleted((previous) => new Set([...previous, ...batch.map((pair) => pair.targetPath)]));
+      setPending(null);
+      if (failure) toast.error(failure.message || 'Could not link model weights');
+      else toast.success(`Linked model weights · ${formatBytes(reclaimedBytes)} reclaimed`);
+      // Refresh even on failure: a batch may have completed earlier replacements.
+      await onRefresh();
+    } catch (error) {
+      toast.error(error?.message || 'Could not link model weights or refresh the report');
+    } finally {
+      busyRef.current = false;
+      setBusy(false);
     }
-    setPending(null);
-    if (failure) toast.error(failure.message || 'Could not link model weights');
-    else toast.success(`Linked model weights · ${formatBytes(reclaimedBytes)} reclaimed`);
-    // Refresh even on failure: a batch may have completed earlier replacements.
-    await onRefresh();
-    busyRef.current = false;
-    setBusy(false);
   };
   return (
     <>

@@ -344,7 +344,7 @@ export const localLlmSettingsSchema = z.object({
     // something they didn't pick.
     launch: z.object({
       model: z.string().trim().max(300).nullable().optional(),
-      port: z.number().int().min(1).max(65535).optional(),
+      port: z.number().int().min(1).max(65535).nullable().optional(),
     }).strict().optional(),
   }).strict().optional(),
   slotstream: z.object({
