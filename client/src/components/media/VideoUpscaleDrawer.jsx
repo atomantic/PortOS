@@ -6,31 +6,25 @@
  * available), `ltx` (the LTX-2.5 generative adapter, gated on a supported
  * BYOV runtime plus a cached adapter — #6509's plan endpoint) and `realesrgan`
  * (the opt-in Real-ESRGAN runtime, #19985); plus the fal SeedVR2 and Topaz
- * cloud upscalers. Opening the drawer fetches ONLY the read-only LTX plan
- * (`GET .../plan?method=ltx`); the other plans load when their method is
- * picked. Nothing is queued and nothing is downloaded until the user presses
- * Upscale or an explicit install/download button.
+ * cloud upscalers. Opening the drawer checks LTX readiness. SeedVR2 and
+ * Real-ESRGAN plans load when selected, and Topaz requires an explicit estimate.
+ * Upscale, install and download actions each require their own button press.
  *
  * Shared by VideoGen.jsx and MediaHistory.jsx — both pages own the item that
  * opens the drawer and get the finished entry back via `onUpscaled` for their
  * existing reactive local-state update (no refetch).
  */
-import { useState, useEffect, useCallback, useRef } from 'react';
-import { DEFAULT_FAL_SEEDVR2_TARGET_RESOLUTION, DEFAULT_REALESRGAN_MODEL, FAL_SEEDVR2_TARGET_RESOLUTIONS } from '../../../../server/lib/videoGenRequestFields.js';
+import { useState, useEffect, useCallback } from 'react';
+import { DEFAULT_FAL_SEEDVR2_TARGET_RESOLUTION, DEFAULT_REALESRGAN_MODEL } from '../../../../server/lib/videoGenRequestFields.js';
 import { Loader2 } from 'lucide-react';
 import Drawer from '../Drawer';
 import toast from '../ui/Toast';
-import { formatBytes, formatUsd } from '../../utils/formatters';
-import { isHardwareAvailable, hardwareUnavailableReason } from '../../utils/systemCapabilities';
-import { useSseProgress } from '../../hooks/useSseProgress';
-import { upscaleVideo, getUpscalePlan, upscaleAdapterDownloadUrl, quoteTopazUpscale, startTopazUpscale } from '../../services/apiImageVideo';
-import RealesrganInstallButton from './RealesrganInstallButton';
-
-// The Real-ESRGAN weights the server can run (`REALESRGAN_MODEL_IDS`), in picker order.
-const REALESRGAN_MODEL_OPTIONS = Object.freeze([
-  { id: 'realesrgan-x4plus', label: 'General footage (x4plus)' },
-  { id: 'realesr-animevideov3', label: 'Animation (animevideov3)' },
-]);
+import { upscaleVideo, startTopazUpscale } from '../../services/apiImageVideo';
+import FalSeedvr2UpscalePanel from './FalSeedvr2UpscalePanel';
+import LtxUpscaleOption, { LtxUpscaleDetails } from './LtxUpscaleOption';
+import RealesrganUpscalePanel from './RealesrganUpscalePanel';
+import TopazUpscalePanel from './TopazUpscalePanel';
+import useUpscalePlan from './useUpscalePlan';
 
 export default function VideoUpscaleDrawer({
   item, onClose, onUpscaled, onQueued, musicVideo = null, defaultMethod = 'lanczos',
@@ -42,166 +36,34 @@ export default function VideoUpscaleDrawer({
   const initialMethod = defaultMethod === 'local-ltx25' ? 'ltx' : defaultMethod === 'fal-topaz' ? 'topaz' : defaultMethod;
   const [method, setMethod] = useState(initialMethod);
   const [targetResolution, setTargetResolution] = useState(defaultTargetResolution);
-  const [plan, setPlan] = useState(null);
-  const [planLoading, setPlanLoading] = useState(false);
-  const [planError, setPlanError] = useState(null);
-  const [falPlan, setFalPlan] = useState(null);
-  const [falPlanLoading, setFalPlanLoading] = useState(false);
-  const [falPlanError, setFalPlanError] = useState(null);
   const [realesrganModel, setRealesrganModel] = useState(DEFAULT_REALESRGAN_MODEL);
-  const [realesrganPlan, setRealesrganPlan] = useState(null);
-  const [realesrganPlanLoading, setRealesrganPlanLoading] = useState(false);
-  const [realesrganPlanError, setRealesrganPlanError] = useState(null);
   const [submitting, setSubmitting] = useState(false);
-  const [topazModel, setTopazModel] = useState('proteus');
-  const [quote, setQuote] = useState(null);
-  const [quoteError, setQuoteError] = useState(null);
-  const [quoting, setQuoting] = useState(false);
-  const [downloadItemId, setDownloadItemId] = useState(null);
-  const downloading = open && downloadItemId === itemId;
-  const planRequestRef = useRef(0);
-  const quoteIdentityRef = useRef({ itemId, open, generation: 0 });
-  if (quoteIdentityRef.current.itemId !== itemId || quoteIdentityRef.current.open !== open) {
-    quoteIdentityRef.current = { itemId, open, generation: quoteIdentityRef.current.generation + 1 };
-  }
 
-  // Fresh state per open (and per item, in case a second card is picked
-  // before the drawer fully unmounts) so a stale method/plan never carries
-  // over onto a different clip.
   useEffect(() => {
-    ++planRequestRef.current;
     setMethod(initialMethod);
     setTargetResolution(defaultTargetResolution);
-    setPlan(null);
-    setPlanError(null);
-    setFalPlan(null);
-    setFalPlanError(null);
-    setFalPlanLoading(false);
     setRealesrganModel(DEFAULT_REALESRGAN_MODEL);
-    setRealesrganPlan(null);
-    setRealesrganPlanError(null);
-    setRealesrganPlanLoading(false);
-    setTopazModel('proteus');
-    setQuote(null);
-    setQuoteError(null);
-    setQuoting(false);
-    setDownloadItemId(null);
   }, [open, itemId, initialMethod, defaultTargetResolution]);
 
-  // The generative plan drives the radio's disabled state AND its disclosure
-  // once picked, so fetch it as soon as the drawer opens rather than waiting
-  // for the user to select "generative" first — otherwise there's no way to
-  // show it disabled up front. Read-only: never queues a job, never pulls a
-  // weight (#6509).
-  useEffect(() => {
-    if (!open || !itemId) return undefined;
-    let cancelled = false;
-    setPlanLoading(true);
-    setPlanError(null);
-    getUpscalePlan(itemId, 'ltx')
-      .then((res) => { if (!cancelled) setPlan(res?.plan || null); })
-      .catch((err) => { if (!cancelled) setPlanError(err.message || 'Could not check generative upscale readiness'); })
-      .finally(() => { if (!cancelled) setPlanLoading(false); });
-    return () => { cancelled = true; };
-  }, [open, itemId]);
+  const { ltx, fal, realesrgan, topaz } = useUpscalePlan(open, itemId, method, {
+    initialMethod, defaultTargetResolution, targetResolution, realesrganModel, musicVideo,
+  });
+  const { quote, quoting } = topaz;
+  const methodUnavailable = (method === 'ltx' && !ltx.ready)
+    || (method === 'fal-seedvr2' && !fal.ready)
+    || (method === 'realesrgan' && !realesrgan.ready);
 
-  useEffect(() => {
-    if (!open || !itemId || method !== 'fal-seedvr2') return undefined;
-    let cancelled = false;
-    setFalPlanLoading(true);
-    setFalPlanError(null);
-    setFalPlan(null);
-    getUpscalePlan(itemId, 'fal-seedvr2', { targetResolution })
-      .then((res) => { if (!cancelled) setFalPlan(res?.plan || null); })
-      .catch((err) => { if (!cancelled) setFalPlanError(err.message || 'Could not check fal.ai SeedVR2 readiness'); })
-      .finally(() => { if (!cancelled) setFalPlanLoading(false); });
-    return () => { cancelled = true; };
-  }, [open, itemId, method, targetResolution]);
+  const changeTargetResolution = (resolution) => {
+    fal.clearPlan();
+    setTargetResolution(resolution);
+  };
 
-  // Read-only like the others: the plan stats the Real-ESRGAN install and its
-  // receipt, and never downloads; only the Install button below does (#19985).
-  // Keyed by weights, so switching the picker re-reads that weight's readiness.
-  useEffect(() => {
-    if (!open || !itemId || method !== 'realesrgan' || realesrganPlan?.runtime?.model?.id === realesrganModel) return undefined;
-    let cancelled = false;
-    setRealesrganPlanLoading(true);
-    setRealesrganPlanError(null);
-    getUpscalePlan(itemId, 'realesrgan', { realesrganModel })
-      .then((res) => { if (!cancelled) setRealesrganPlan(res?.plan || null); })
-      .catch((err) => { if (!cancelled) setRealesrganPlanError(err.message || 'Could not check Real-ESRGAN readiness'); })
-      .finally(() => { if (!cancelled) setRealesrganPlanLoading(false); });
-    return () => { cancelled = true; };
-  }, [open, itemId, method, realesrganModel, realesrganPlan]);
-  const refreshRealesrganPlan = useCallback(() => setRealesrganPlan(null), []);
-
-  const falSeedvr2Ready = falPlan?.runtime?.installed === true && falPlan?.alreadyUpscaled !== true
-    && falPlan?.targetResolution === targetResolution && (musicVideo == null || falPlan.estimatedCostUsd != null);
-  const realesrganRuntime = realesrganPlan?.runtime?.model?.id === realesrganModel ? realesrganPlan.runtime : null;
-  const realesrganReady = realesrganRuntime?.installed === true && realesrganPlan?.alreadyUpscaled !== true;
   const shotTarget = musicVideo?.projectId;
   const sceneId = musicVideo?.sceneId;
-  const runtimeReady = plan?.runtime?.installed === true;
-  const adapterReady = plan?.adapter?.cached === true;
-  // The base checkpoint is a third readiness axis (#6512): the venv and the
-  // 327 MB adapter can both be present while the ~68 GB LTX-2.5 pack is not,
-  // and the runner is handed a resolved snapshot path rather than resolving
-  // (and silently downloading) one itself. Without this the button would read
-  // ready for a job the dispatch refuses.
-  const baseModelReady = plan?.baseModel?.cached === true;
-  // The host itself is a FOURTH axis (#6537): the machine can have the venv,
-  // the adapter and the whole 68 GB pack and still sit below what the pack needs
-  // of it (the CUDA pack asks for 64 GB of system memory). The dispatch refuses
-  // that host, so offering the button would promise a job that fails. Read
-  // through the shared helper, which already treats an absent annotation — a
-  // plan from an older server — as compatible rather than newly disabling it.
-  // Ordered ahead of the two "not downloaded" reasons because it outranks them:
-  // downloading 72 GB onto a machine that cannot run it helps nobody.
-  const hostReady = isHardwareAvailable(plan?.baseModel);
-  const generativeReady = runtimeReady && hostReady && adapterReady && baseModelReady;
-  const adapterMissing = !!plan && runtimeReady && hostReady && !adapterReady;
-  const generativeDisabledReason = !plan
-    ? null
-    : !runtimeReady
-      ? plan.runtime.reason
-      : !hostReady
-        ? hardwareUnavailableReason(plan.baseModel?.name || 'The LTX-2.5 pack', plan.baseModel?.hardwareCompatibility)
-        : !adapterReady
-          ? `The ${plan.adapter?.label || 'generative upscale'} adapter is not downloaded yet.`
-          : !baseModelReady
-            ? plan.baseModel?.reason || 'The LTX-2.5 model pack for this backend is not downloaded yet.'
-            : null;
-
-  // Inline adapter download (#6510 item 4) — the same provisioning surface
-  // every IC-LoRA weight rides (#3100), just triggered from here instead of a
-  // separate models page, since no such page manages this non-remix weight.
-  const adapterKey = plan?.adapter?.key || null;
-  const downloadUrl = downloading ? upscaleAdapterDownloadUrl(adapterKey) : null;
-  const dl = useSseProgress(downloadUrl, { enabled: !!downloadUrl, method: 'POST' });
-
-  useEffect(() => {
-    if (!downloading || !dl.closed || !dl.latest) return;
-    // A request-generation ref, not a `let active` flag: `downloading` is in this
-    // effect's own dependency array, so the write below re-runs the effect
-    // immediately and a lifetime-scoped flag would be flipped by its own
-    // cleanup before the response landed. The re-run early-returns without
-    // bumping, so the in-flight request stays current and only a genuinely
-    // newer one supersedes it.
-    if (dl.latest.type === 'complete') {
-      const req = ++planRequestRef.current;
-      setDownloadItemId(null);
-      // Re-probe so `adapter.cached` flips and the option re-enables.
-      getUpscalePlan(itemId, 'ltx').then((res) => { if (req === planRequestRef.current) setPlan(res?.plan || null); }).catch(() => {});
-    } else if (dl.latest.type === 'error') {
-      setDownloadItemId(null);
-      toast.error(dl.latest.message || 'Adapter download failed');
-    }
-  }, [dl.closed, dl.latest, downloading, itemId]);
 
   const handleSubmit = useCallback(async () => {
     if (!itemId || submitting || item?.upscaledFrom) return;
-    if (method === 'ltx' && !generativeReady) return;
-    if (method === 'fal-seedvr2' && !falSeedvr2Ready) return;
-    if (method === 'realesrgan' && !realesrganReady) return;
+    if (methodUnavailable) return;
     setSubmitting(true);
     toast.loading(method === 'topaz'
       ? 'Queueing Topaz upscale…'
@@ -241,23 +103,7 @@ export default function VideoUpscaleDrawer({
       toast.success('Upscaled 2×');
       onClose();
     }
-  }, [itemId, item?.upscaledFrom, method, quote, submitting, generativeReady, falSeedvr2Ready, realesrganReady, realesrganModel, shotTarget, sceneId, targetResolution, onUpscaled, onQueued, onClose]);
-
-  const getQuote = async () => {
-    setQuoting(true);
-    setQuote(null);
-    setQuoteError(null);
-    const requestId = ++planRequestRef.current;
-    const identity = quoteIdentityRef.current.generation;
-    const current = () => requestId === planRequestRef.current && identity === quoteIdentityRef.current.generation;
-    await quoteTopazUpscale(itemId, topazModel, { silent: true })
-      .then(result => { if (current()) setQuote(result.quote); })
-      .catch(error => { if (current()) setQuoteError(error.message || 'Could not get a Topaz estimate'); });
-    if (current()) setQuoting(false);
-  };
-
-  const dlFrame = dl.latest;
-  const dlPct = typeof dlFrame?.progress === 'number' ? Math.round(dlFrame.progress * 100) : null;
+  }, [itemId, item?.upscaledFrom, method, quote, submitting, methodUnavailable, realesrganModel, shotTarget, sceneId, targetResolution, onUpscaled, onQueued, onClose]);
 
   return (
     <Drawer open={open} onClose={onClose} title="Upscale video" size="sm">
@@ -284,54 +130,7 @@ export default function VideoUpscaleDrawer({
             </span>
           </label>
 
-          <label
-            htmlFor="upscale-method-ltx"
-            className={`flex items-start gap-2 p-2 border rounded ${
-              generativeReady ? 'border-port-border hover:border-port-accent/60 cursor-pointer' : 'border-port-border/50 opacity-80'
-            }`}
-          >
-            <input
-              type="radio"
-              id="upscale-method-ltx"
-              name="upscale-method"
-              value="ltx"
-              checked={method === 'ltx'}
-              disabled={!generativeReady}
-              onChange={() => setMethod('ltx')}
-              className="mt-0.5"
-              aria-describedby={generativeDisabledReason ? 'upscale-method-ltx-reason' : undefined}
-            />
-            <span className="flex-1 min-w-0">
-              <span className="block text-sm text-white">LTX-2.5 generative (synthesizes detail)</span>
-              <span className="block text-[11px] text-gray-500">2× via a GPU model — adds detail rather than resizing pixels.</span>
-              {planLoading && <span className="block text-[11px] text-gray-500 mt-1">Checking readiness…</span>}
-              {planError && <span role="status" className="block text-[11px] text-port-error mt-1">{planError}</span>}
-              {generativeDisabledReason && (
-                <span id="upscale-method-ltx-reason" className="block text-[11px] text-port-warning mt-1">
-                  {generativeDisabledReason}
-                  {adapterMissing && (
-                    <>
-                      {' '}
-                      {downloading ? (
-                        <span className="text-gray-400">
-                          {dlFrame?.type === 'verify' ? 'Verifying…' : 'Downloading…'}
-                          {dlPct != null ? ` ${dlPct}%` : ''}
-                        </span>
-                      ) : (
-                        <button
-                          type="button"
-                          onClick={() => setDownloadItemId(itemId)}
-                          className="text-port-accent hover:text-white underline"
-                        >
-                          Download adapter{plan.adapter?.sizeBytes ? ` (${formatBytes(plan.adapter.sizeBytes)})` : ''}
-                        </button>
-                      )}
-                    </>
-                  )}
-                </span>
-              )}
-            </span>
-          </label>
+          <LtxUpscaleOption selected={method === 'ltx'} onSelect={() => setMethod('ltx')} readiness={ltx} />
 
           <label htmlFor="upscale-method-realesrgan" className="flex items-start gap-2 p-2 border border-port-border rounded cursor-pointer hover:border-port-accent/60">
             <input type="radio" id="upscale-method-realesrgan" name="upscale-method" value="realesrgan" checked={method === 'realesrgan'} onChange={() => setMethod('realesrgan')} className="mt-0.5" />
@@ -353,128 +152,18 @@ export default function VideoUpscaleDrawer({
         </fieldset>
 
         {method === 'fal-seedvr2' && (
-          <div className="p-2 border border-port-border rounded space-y-1 text-[11px] text-gray-400">
-            <label htmlFor="upscale-target-resolution" className="text-xs font-medium text-white">Target resolution</label>
-            <select id="upscale-target-resolution" value={targetResolution} onChange={(event) => {
-              setFalPlan(null);
-              setTargetResolution(event.target.value);
-            }} className="ml-2 rounded border border-port-border bg-port-bg p-1">
-              {FAL_SEEDVR2_TARGET_RESOLUTIONS.map((resolution) => <option key={resolution}>{resolution}</option>)}
-            </select>
-            {falPlanLoading && <p>Checking fal.ai readiness…</p>}
-            {falPlanError && <p role="alert" className="text-port-error">{falPlanError}</p>}
-            {falPlan && !falPlan.runtime?.installed && (
-              <p role="alert" className="text-port-warning">{falPlan.runtime?.reason || 'Configure FAL_KEY in Settings → Credentials.'}</p>
-            )}
-            {musicVideo && falPlan?.runtime?.installed && falPlan.estimatedCostUsd == null && (
-              <p role="alert" className="text-port-warning">The selected clip could not be measured for a cost estimate.</p>
-            )}
-            {falPlan && falPlan.runtime?.installed && (
-              <>
-                <p>Model: <span className="text-white">fal-ai/seedvr/upscale/video</span></p>
-                <p>
-                  Target size:{' '}
-                  <span className="text-white">
-                    {falPlan.target?.width ?? '?'}×{falPlan.target?.height ?? '?'}
-                  </span>
-                  {falPlan.target?.frameCount ? `, ${falPlan.target.frameCount} frames` : ''}
-                </p>
-                {falPlan.estimatedCostUsd != null && (
-                  <p>Estimated cost: <span className="text-white">{formatUsd(falPlan.estimatedCostUsd)}</span> ($0.001/MP billed to fal.ai)</p>
-                )}
-              </>
-            )}
-          </div>
+          <FalSeedvr2UpscalePanel
+            targetResolution={targetResolution}
+            onTargetResolutionChange={changeTargetResolution}
+            musicVideo={musicVideo}
+            readiness={fal}
+          />
         )}
-
         {method === 'realesrgan' && (
-          <div className="p-2 border border-port-border rounded space-y-1 text-[11px] text-gray-400">
-            <p className="text-xs font-medium text-white">Before you submit</p>
-            <label htmlFor="realesrgan-model" className="block">Weights</label>
-            <select
-              id="realesrgan-model"
-              value={realesrganModel}
-              onChange={(event) => setRealesrganModel(event.target.value)}
-              className="bg-port-bg border border-port-border rounded p-1 text-xs"
-            >
-              {REALESRGAN_MODEL_OPTIONS.map((option) => <option key={option.id} value={option.id}>{option.label}</option>)}
-            </select>
-            {realesrganPlanLoading && <p>Checking Real-ESRGAN readiness…</p>}
-            {realesrganPlanError && <p role="alert" className="text-port-error">{realesrganPlanError}</p>}
-            {realesrganRuntime && (
-              <>
-                {realesrganRuntime.installTarget && (
-                  <p>
-                    Runtime: <span className="text-white">{realesrganRuntime.label} {realesrganRuntime.installTarget.version}</span>
-                    {' '}({realesrganRuntime.installTarget.archive}, SHA-256 pinned, from{' '}
-                    <a className="underline text-port-accent" href={realesrganRuntime.installTarget.releasePage} target="_blank" rel="noreferrer">the official release</a>)
-                  </p>
-                )}
-                <p>
-                  Target size:{' '}
-                  <span className="text-white">{realesrganPlan.target?.width ?? '?'}×{realesrganPlan.target?.height ?? '?'}</span>
-                  {realesrganPlan.target?.frameCount ? `, ${realesrganPlan.target.frameCount} frames` : ''}
-                  {realesrganPlan.source?.fps ? ` at ${Math.round(realesrganPlan.source.fps * 1000) / 1000} fps` : ''}
-                </p>
-                {realesrganRuntime.installed ? (
-                  <p className="text-port-success">Installed and checked{realesrganRuntime.gpu ? ` on ${realesrganRuntime.gpu}` : ''}.</p>
-                ) : (
-                  <p role="alert" className="text-port-warning">
-                    {realesrganRuntime.reason}
-                    {realesrganRuntime.supported && (
-                      <>
-                        {' '}
-                        <RealesrganInstallButton installTarget={realesrganRuntime.installTarget} onInstalled={refreshRealesrganPlan} />
-                      </>
-                    )}
-                  </p>
-                )}
-                <p>The original clip stays unchanged; the upscale lands as a new video.</p>
-              </>
-            )}
-          </div>
+          <RealesrganUpscalePanel model={realesrganModel} onModelChange={setRealesrganModel} readiness={realesrgan} />
         )}
-
-        {method === 'topaz' && (
-          <div className="p-2 border border-port-border rounded space-y-2 text-xs text-gray-400">
-            <label htmlFor="topaz-model" className="block">Model</label>
-            <select id="topaz-model" value={topazModel} onChange={event => { setTopazModel(event.target.value); setQuote(null); setQuoteError(null); ++planRequestRef.current; setQuoting(false); }} className="bg-port-bg border border-port-border rounded p-1">
-              <option value="proteus">Proteus (precision)</option>
-              <option value="starlight">Starlight Fast 2 (generative)</option>
-            </select>
-            {topazModel === 'starlight' && <p className="text-port-warning">Generative enhancement can change details in the video.</p>}
-            <p>Delivery target: 1920 × 1080. The full frame is preserved with square-pixel normalization and black padding when needed. The original master stays unchanged.</p>
-            <p>Topaz reserves credits when the job starts and says it automatically reloads credits at the plan rate when they run out. Your balance, dollar cost and reload charge are unknown here. Review <a className="underline text-port-accent" href="https://www.topazlabs.com/api" target="_blank" rel="noreferrer">Topaz pricing and terms</a>.</p>
-            <p>Configure your key in Settings → Credentials. Canceling locally may not stop remote processing or charges until Topaz confirms cancellation.</p>
-            <button type="button" onClick={getQuote} disabled={quoting} className="border border-port-border rounded px-2 py-1.5 disabled:opacity-50">{quoting ? 'Getting estimate…' : 'Get free estimate'}</button>
-            {quoteError && <p role="alert" className="text-port-error">{quoteError}</p>}
-            {quote && <p role="status">Source {quote.source.resolution.width} × {quote.source.resolution.height}; square-pixel frame {quote.normalized.width} × {quote.normalized.height}; padded to {quote.padding.width} × {quote.padding.height}; target {quote.target.width} × {quote.target.height}. Estimated {quote.credits[0]}–{quote.credits[1]} credits.</p>}
-          </div>
-        )}
-
-        {method === 'ltx' && plan && (
-          <div className="p-2 border border-port-border rounded space-y-1 text-[11px] text-gray-400">
-            <p className="text-xs font-medium text-white">Before you submit</p>
-            <p>Model: <span className="text-white">{plan.adapter?.label || 'LTX-2.5 Pixel Spatial Upscaler'}</span></p>
-            <p>
-              Target size:{' '}
-              <span className="text-white">
-                {plan.target?.width ?? '?'}×{plan.target?.height ?? '?'}
-              </span>
-              {plan.target?.frameCount ? `, ${plan.target.frameCount} frames` : ''}
-            </p>
-            {plan.alignment && plan.alignment.conforming === false && (
-              <p>
-                Padding: source pads to {plan.alignment.paddedSource?.width}×{plan.alignment.paddedSource?.height}
-                {plan.alignment.padFrames ? `, +${plan.alignment.padFrames} frame(s)` : ''} to fit the model grid
-                (cropped back off the output — nothing is trimmed).
-              </p>
-            )}
-            <p className="text-port-warning">
-              Details are synthesized, not pixel-faithfully refined — the result will not exactly match the source.
-            </p>
-          </div>
-        )}
+        {method === 'topaz' && <TopazUpscalePanel estimate={topaz} />}
+        {method === 'ltx' && ltx.plan && <LtxUpscaleDetails plan={ltx.plan} />}
 
         {item?.upscaledFrom && <p role="alert" className="text-xs text-port-warning">This clip is already upscaled. Select the original take to use a different method.</p>}
         <div className="flex justify-end gap-2 pt-2">
@@ -488,7 +177,7 @@ export default function VideoUpscaleDrawer({
           <button
             type="button"
             onClick={handleSubmit}
-            disabled={submitting || !!item?.upscaledFrom || (method === 'ltx' && !generativeReady) || (method === 'fal-seedvr2' && !falSeedvr2Ready) || (method === 'realesrgan' && !realesrganReady) || (method === 'topaz' && (!quote || quoting))}
+            disabled={submitting || !!item?.upscaledFrom || methodUnavailable || (method === 'topaz' && (!quote || quoting))}
             className="px-3 py-1.5 text-xs rounded bg-port-accent text-white hover:bg-port-accent/80 disabled:opacity-50 disabled:cursor-not-allowed flex items-center gap-1.5"
           >
             {submitting && <Loader2 className="w-3.5 h-3.5 animate-spin" />}
