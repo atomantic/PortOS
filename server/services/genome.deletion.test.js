@@ -8,15 +8,19 @@ vi.mock('../lib/paths.js', async importOriginal => {
   const { makePathsProxy, lazyTempDataRoot } = await import('../lib/mockPathsDataRoot.js');
   return makePathsProxy(await importOriginal(), { dataRoot: () => lazyTempDataRoot('portos-genome-deletion-') });
 });
+vi.mock('../lib/fileUtils.js', async importOriginal => {
+  const actual = await importOriginal();
+  return { ...actual, tryReadFile: vi.fn(actual.tryReadFile) };
+});
 vi.mock('./mortalLoomStore.js', () => ({
   isMortalLoomEnabled: vi.fn(async () => false),
   mlArrayIfEnabled: vi.fn(async () => null),
 }));
 
 const { cleanupTempDataRoots } = await import('../lib/mockPathsDataRoot.js');
-const { PATHS, atomicWrite } = await import('../lib/fileUtils.js');
+const { PATHS, atomicWrite, tryReadFile } = await import('../lib/fileUtils.js');
 const { holdsBackupAssetPublication, acquireBackupSnapshotCut } = await import('../lib/backupSnapshotBoundary.js');
-const { deleteGenome, getGenomeSummary, getSnpIndex } = await import('./genome.js');
+const { deleteGenome, getGenomeSummary, getSnpIndex, saveMarker, scanCuratedMarkers } = await import('./genome.js');
 const { deriveChronotype, getChronotype } = await import('./identity/chronotype.js');
 const { deriveLongevity, getLongevity } = await import('./identity/longevity.js');
 const { CHRONOTYPE_FILE, LONGEVITY_FILE, GOALS_FILE } = await import('./identity/store.js');
@@ -114,6 +118,42 @@ describe('genome deletion erases derived identity', () => {
     await expect(deleteGenome()).rejects.toThrow();
     expect((await getGenomeSummary()).uploaded).toBe(true);
     await rm(rawFile, { recursive: true });
+  });
+
+  it.each([
+    ['marker save', () => saveMarker({ rsid: 'rs4753426', name: 'Synthetic marker', category: 'test' })],
+    ['curated scan', scanCuratedMarkers],
+  ])('rejects a %s that read the raw genome before deletion', async (_label, mutate) => {
+    // Reset the cache first, then reinstate the synthetic fixture on disk so
+    // the mutation opens a cold read that can finish after genome deletion.
+    const rawFile = join(PATHS.meatspace, 'genome-raw.txt');
+    const metaFile = join(PATHS.meatspace, 'genome.json');
+    const [raw, meta] = await Promise.all([readFile(rawFile, 'utf8'), readJSON(metaFile)]);
+    await deleteGenome();
+    await atomicWrite(rawFile, raw);
+    await atomicWrite(metaFile, meta);
+
+    const opened = Promise.withResolvers();
+    const finish = Promise.withResolvers();
+    tryReadFile.mockImplementationOnce(async path => {
+      const content = await readFile(path, 'utf8');
+      opened.resolve();
+      await finish.promise;
+      return content;
+    });
+
+    const mutation = mutate();
+    try {
+      await opened.promise;
+      await expect(deleteGenome()).resolves.toEqual({ success: true });
+    } finally {
+      finish.resolve();
+      await mutation;
+    }
+    await expect(mutation).resolves.toEqual({ error: expect.stringMatching(/No genome data uploaded/) });
+    await expect(getGenomeSummary()).resolves.toEqual({ uploaded: false });
+    await expect(getSnpIndex()).resolves.toBeNull();
+    expect(existsSync(metaFile)).toBe(false);
   });
 
   it('retains the source genome when a derived snapshot cannot be written', async () => {

@@ -14,6 +14,7 @@
 import { join } from 'path';
 import { insightThemeSchema } from '../lib/insightsValidation.js';
 import { atomicWrite, PATHS, ensureDir, readJSONFile, unlinkGuarded } from '../lib/fileUtils.js';
+import { createFileWriteQueue } from '../lib/fileWriteQueue.js';
 import { getGenomeSummary } from './genome.js';
 import { getBloodTests } from './meatspace/meatspaceHealth.js';
 import { MARKER_CATEGORIES, CURATED_MARKERS } from '../lib/curatedGenomeMarkers.js';
@@ -27,6 +28,8 @@ const MARKER_BY_RSID = new Map(CURATED_MARKERS.map(m => [m.rsid, m]));
 const INSIGHTS_DIR = join(PATHS.data, 'insights');
 const THEMES_FILE = join(INSIGHTS_DIR, 'themes.json');
 const NARRATIVE_FILE = join(INSIGHTS_DIR, 'narrative.json');
+const queueNarrativeWrite = createFileWriteQueue();
+let narrativeEpoch = 0;
 
 // =============================================================================
 // CATEGORY → BLOOD ANALYTE MAPPING
@@ -420,10 +423,15 @@ export async function getCrossDomainNarrative() {
 /**
  * INS-04: Remove the cached cross-domain narrative (e.g. when genome data is deleted).
  * Idempotent: ignores ENOENT and rethrows unexpected filesystem errors.
+ * When supplied, afterClear removes the source data while new refreshes wait.
  */
-export async function clearCrossDomainNarrative() {
-  await unlinkGuarded(NARRATIVE_FILE).catch(error => {
-    if (error.code !== 'ENOENT') throw error;
+export function clearCrossDomainNarrative(afterClear) {
+  return queueNarrativeWrite(async () => {
+    narrativeEpoch++;
+    await unlinkGuarded(NARRATIVE_FILE).catch(error => {
+      if (error.code !== 'ENOENT') throw error;
+    });
+    await afterClear?.();
   });
 }
 
@@ -440,8 +448,11 @@ export async function clearCrossDomainNarrative() {
  * @param {string} [model] - Optional model override
  */
 export async function refreshCrossDomainNarrative(providerId, model) {
-  // Load existing narrative for diff support
-  const existingNarrative = await readJSONFile(NARRATIVE_FILE, null, { strict: true });
+  // Capture the epoch and diff baseline together, after any pending deletion.
+  const { epoch, existingNarrative } = await queueNarrativeWrite(async () => ({
+    epoch: narrativeEpoch,
+    existingNarrative: await readJSONFile(NARRATIVE_FILE, null, { strict: true })
+  }));
 
   const provider = providerId
     ? await getProviderById(providerId)
@@ -510,17 +521,21 @@ Respond with only the narrative text, no JSON, no headings, no markdown.`;
 
   const newText = stripCodeFences(result.text);
 
-  await ensureDir(INSIGHTS_DIR);
-  const output = {
-    text: newText,
-    previousText: existingNarrative?.text ?? null,
-    generatedAt: new Date().toISOString(),
-    previousGeneratedAt: existingNarrative?.generatedAt ?? null,
-    model: selectedModel
-  };
-  await atomicWrite(NARRATIVE_FILE, output, { mode: 0o600, dirMode: 0o700 });
+  return queueNarrativeWrite(async () => {
+    // The provider ran outside the queue. Recheck inside it before writing or
+    // returning text (including the prior narrative used for comparison).
+    if (epoch !== narrativeEpoch) return { available: false, reason: 'not_generated' };
 
-  console.log(`🔮 Cross-domain narrative generated (${newText.length} chars)`);
+    const output = {
+      text: newText,
+      previousText: existingNarrative?.text ?? null,
+      generatedAt: new Date().toISOString(),
+      previousGeneratedAt: existingNarrative?.generatedAt ?? null,
+      model: selectedModel
+    };
+    await atomicWrite(NARRATIVE_FILE, output, { mode: 0o600, dirMode: 0o700 });
 
-  return { ...output, available: true };
+    console.log(`🔮 Cross-domain narrative generated (${newText.length} chars)`);
+    return { ...output, available: true };
+  });
 }

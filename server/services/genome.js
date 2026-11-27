@@ -1,7 +1,7 @@
 import { noteReadinessChanged } from './readinessSignal.js';
 import { join } from 'path';
 import { randomUUID } from 'crypto';
-import { atomicWrite, PATHS, ensureDir, safeJSONParse, tryReadFile, tryReadFileStrict, unlinkGuarded, unreadableStoreError } from '../lib/fileUtils.js';
+import { atomicWrite, PATHS, ensureDir, pathExists, safeJSONParse, tryReadFile, tryReadFileStrict, unlinkGuarded, unreadableStoreError } from '../lib/fileUtils.js';
 import { createFileWriteQueue } from '../lib/fileWriteQueue.js';
 import { isPlainObject } from '../lib/objects.js';
 import { withBackupAssetPublication } from '../lib/backupSnapshotBoundary.js';
@@ -10,10 +10,13 @@ import { CURATED_MARKERS, MARKER_CATEGORIES, classifyGenotype, formatGenotype, r
 const GENOME_DIR = PATHS.meatspace;
 const RAW_FILE = join(GENOME_DIR, 'genome-raw.txt');
 const META_FILE = join(GENOME_DIR, 'genome.json');
+const NO_GENOME_ERROR = 'No genome data uploaded. Upload a genome file first.';
+const GENOME_CHANGED_ERROR = 'Genome data changed. Refresh and try again.';
 
 // In-memory index: Map<rsid, { chromosome, position, genotype }>
 let snpIndex = null;
 let indexBuiltAt = 0;
+let genomeRevision = 0;
 const INDEX_TTL_MS = 60 * 60 * 1000; // 1 hour cache
 
 // Serializes every load→mutate→save cycle on META_FILE so overlapping writers cannot drop each other's changes.
@@ -115,7 +118,10 @@ export async function getSnpIndex() {
     return snpIndex;
   }
 
+  const revision = genomeRevision;
   const content = await tryReadFile(RAW_FILE);
+  // A read opened before deletion or replacement must not repopulate the index.
+  if (revision !== genomeRevision) return snpIndex;
   if (!content) {
     snpIndex = null;
     return null;
@@ -156,6 +162,7 @@ async function storeGenomeUnqueued(content, filename, index, build) {
   await atomicWrite(RAW_FILE, content, { mode: 0o600 });
 
   // Cache the index
+  genomeRevision++;
   snpIndex = index;
   indexBuiltAt = Date.now();
 
@@ -211,16 +218,19 @@ export async function getGenomeSummary() {
  * Scan all curated markers against the genome, classify genotypes, and auto-save results.
  */
 export async function scanCuratedMarkers() {
+  const revision = genomeRevision;
   const index = await getSnpIndex();
   if (!index) {
-    return { error: 'No genome data uploaded. Upload a genome file first.' };
+    return { error: NO_GENOME_ERROR };
   }
 
-  return queueMetaWrite(() => scanWithIndex(index));
+  return queueMetaWrite(() => scanWithIndex(index, revision));
 }
 
-async function scanWithIndex(index) {
+async function scanWithIndex(index, revision) {
   const meta = await loadMeta({ forWrite: true });
+  if (meta.uploaded !== true || !(await pathExists(RAW_FILE))) return { error: NO_GENOME_ERROR };
+  if (revision !== genomeRevision) return { error: GENOME_CHANGED_ERROR };
   const results = [];
 
   for (const marker of CURATED_MARKERS) {
@@ -334,6 +344,7 @@ export async function searchSNP(rsid) {
  */
 export async function saveMarker(data) {
   // Resolve the genotype first: a cold index parse must not hold up the write queue.
+  const revision = genomeRevision;
   let genotype = data.genotype || null;
   let chromosome = data.chromosome || '';
   let position = data.position || '';
@@ -352,6 +363,8 @@ export async function saveMarker(data) {
 
   return queueMetaWrite(async () => {
     const meta = await loadMeta({ forWrite: true });
+    if (meta.uploaded !== true) return { error: NO_GENOME_ERROR };
+    if (revision !== genomeRevision) return { error: GENOME_CHANGED_ERROR };
     const id = randomUUID();
     const marker = {
       rsid: data.rsid,
@@ -383,7 +396,7 @@ export async function saveMarker(data) {
 export async function updateMarkerNotes(id, notes) {
   return queueMetaWrite(async () => {
     const meta = await loadMeta({ forWrite: true });
-    if (!meta.savedMarkers[id]) {
+    if (meta.uploaded !== true || !meta.savedMarkers?.[id]) {
       return { error: 'Marker not found' };
     }
 
@@ -401,7 +414,7 @@ export async function updateMarkerNotes(id, notes) {
 export async function deleteMarker(id) {
   return queueMetaWrite(async () => {
     const meta = await loadMeta({ forWrite: true });
-    if (!meta.savedMarkers[id]) {
+    if (meta.uploaded !== true || !meta.savedMarkers?.[id]) {
       return { error: 'Marker not found' };
     }
 
@@ -442,12 +455,14 @@ export async function deleteGenome() {
       goals.updatedAt = new Date().toISOString();
       return goals;
     }, { localOnly: true });
-    await clearCrossDomainNarrative();
-    await stripGenomeFromSnapshots();
-    await unlinkGuarded(RAW_FILE).catch(error => { if (error.code !== 'ENOENT') throw error; });
-    await unlinkGuarded(META_FILE).catch(error => { if (error.code !== 'ENOENT') throw error; });
-    snpIndex = null;
-    indexBuiltAt = 0;
+    await queueMetaWrite(() => clearCrossDomainNarrative(async () => {
+      await stripGenomeFromSnapshots();
+      await unlinkGuarded(RAW_FILE).catch(error => { if (error.code !== 'ENOENT') throw error; });
+      genomeRevision++;
+      snpIndex = null;
+      indexBuiltAt = 0;
+      await unlinkGuarded(META_FILE).catch(error => { if (error.code !== 'ENOENT') throw error; });
+    }));
   });
   noteReadinessChanged();
   console.log('🧬 Genome data deleted');
