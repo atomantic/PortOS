@@ -1,8 +1,8 @@
+import { viewerQuerySchema } from '../lib/remoteDesktopViewerValidation.js';
 import express from 'express';
 import { readFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { z } from 'zod';
 import { failValidation } from '../lib/errorHandler.js';
 import { remoteDesktopBroker } from '../services/remoteDesktop.js';
 
@@ -10,9 +10,6 @@ const __dirname = dirname(fileURLToPath(import.meta.url));
 const viewerTemplate = readFileSync(join(__dirname, '..', 'views', 'remote-desktop.html'), 'utf8');
 const vendorRoot = join(__dirname, '..', 'node_modules', '@novnc', 'novnc');
 const router = express.Router();
-// A repeated `token` parameter arrives as an array; refuse it rather than let
-// the broker see a non-string.
-const viewerQuerySchema = z.object({ token: z.string().max(512).optional() });
 
 router.use('/vendor', express.static(vendorRoot, {
   index: false,

@@ -53,8 +53,6 @@ const askPromote = vi.hoisted(() => ({
 vi.mock('../services/askPromote.js', () => askPromote);
 
 const askConversations = vi.hoisted(() => ({
-  ID_RE: /^[a-z0-9-]+$/,
-  VALID_MODES: ['ask'],
   listConversations: vi.fn().mockResolvedValue([]),
   getConversation: vi.fn(),
   deleteConversation: vi.fn(),
@@ -63,13 +61,14 @@ const askConversations = vi.hoisted(() => ({
 vi.mock('../services/askConversations.js', () => askConversations);
 vi.mock('../services/askService.js', () => ({
   runAsk: vi.fn(),
-  VALID_MODES: askConversations.VALID_MODES,
 }));
 
 const { PATHS } = await import('../lib/fileUtils.js');
 import updateRoutes from './update.js';
 import brainLinksRoutes from './brainLinks.js';
 import askRoutes from './ask.js';
+
+const conversationId = 'ask_000000001_deadbeef';
 
 const mounts = [
   ['/api/update', updateRoutes],
@@ -86,8 +85,8 @@ describe('host-control gate on update, brain-link and ask promote writes (#8742,
       localPath: join(PATHS.repos, 'example-owner', 'example-repo'), cloneStatus: 'idle',
     });
     repoCloner.pullRepo.mockResolvedValue({ updated: true });
-    askConversations.getConversation.mockResolvedValue({ id: 'conv-1' });
-    askConversations.setPromoted.mockResolvedValue({ id: 'conv-1', promoted: true });
+    askConversations.getConversation.mockResolvedValue({ id: conversationId });
+    askConversations.setPromoted.mockResolvedValue({ id: conversationId, promoted: true });
     askPromote.promoteTurnById.mockResolvedValue({ target: 'task', taskId: 'task-1' });
   });
 
@@ -98,8 +97,8 @@ describe('host-control gate on update, brain-link and ask promote writes (#8742,
   it('keeps the pull, the turn promote and the flag-only conversation promote working for local and agent callers', async () => {
     await expectAuthorizedWorkflows({ auth, mounts, workflows: [
       ['post', '/api/brain/links/link-1/pull', {}, repoCloner.pullRepo, 200],
-      ['post', '/api/ask/conv-1/turns/turn-1/promote', { target: 'task' }, askPromote.promoteTurnById, 200],
-      ['post', '/api/ask/conv-1/promote', {}, askConversations.setPromoted, 200],
+      ['post', `/api/ask/${conversationId}/turns/turn-1/promote`, { target: 'task' }, askPromote.promoteTurnById, 200],
+      ['post', `/api/ask/${conversationId}/promote`, {}, askConversations.setPromoted, 200],
     ] });
     // The conversation-level promote is a flag write, not a turn promotion.
     expect(askPromote.promoteTurnById).toHaveBeenCalledTimes(2);

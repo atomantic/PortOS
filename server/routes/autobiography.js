@@ -8,57 +8,22 @@
  * - Manual prompt trigger
  */
 
+import {
+  saveStorySchema,
+  generateFollowUpsSchema,
+  weaveNarrativeSchema,
+  updateStorySchema,
+  evaluateStorySchema,
+  nextPromptQuerySchema,
+  storiesQuerySchema,
+  updateConfigSchema,
+} from '../lib/autobiographyValidation.js';
 import { Router } from 'express';
-import { z } from 'zod';
 import * as autobiographyService from '../services/autobiography.js';
 import { asyncHandler, ServerError } from '../lib/errorHandler.js';
 import { validateRequest } from '../lib/validateRequest.js';
-import { HHMM_STRICT_RE } from '../lib/timezone.js';
 
 const router = Router();
-
-// Validation schemas
-const saveStorySchema = z.object({
-  // Either a bank prompt id, `followup-<id>`, or the `custom` sentinel when the
-  // user wrote their own question — in which case `customPromptText` carries it.
-  promptId: z.string().min(1),
-  content: z.string().min(1).max(50000),
-  parentStoryId: z.string().optional(),
-  customPromptText: z.string().max(500).optional()
-}).refine(
-  (v) => v.promptId !== autobiographyService.CUSTOM_PROMPT_ID || !!v.customPromptText?.trim(),
-  { message: 'customPromptText is required when promptId is "custom"', path: ['customPromptText'] }
-);
-
-const generateFollowUpsSchema = z.object({
-  providerId: z.string().optional()
-});
-
-const weaveNarrativeSchema = z.object({
-  providerId: z.string().optional()
-});
-
-const updateStorySchema = z.object({
-  content: z.string().min(1).max(50000)
-});
-
-const evaluateStorySchema = z.object({
-  providerId: z.string().optional()
-});
-
-const nextPromptQuerySchema = z.object({ exclude: z.string().min(1).max(200).optional() });
-const storiesQuerySchema = z.object({ theme: z.string().min(1).max(100).optional() });
-
-const updateConfigSchema = z.object({
-  enabled: z.boolean().optional(),
-  intervalHours: z.number().min(1).max(168).optional(),
-  reminder: z.object({
-    enabled: z.boolean().optional(),
-    // Strict "HH:MM" — the scheduler refuses to register anything else, so a
-    // malformed time has to fail here rather than silently disable the cron.
-    time: z.string().regex(HHMM_STRICT_RE, 'Expected a 24-hour HH:MM time').optional()
-  }).optional()
-});
 
 // =============================================================================
 // STATS & CONFIG

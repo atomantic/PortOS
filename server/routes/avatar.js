@@ -1,5 +1,5 @@
+import { avatarModelQuerySchema } from '../lib/voiceValidation.js';
 import { Router } from 'express';
-import { z } from 'zod';
 import { validateRequest } from '../lib/validateRequest.js';
 import { createReadStream } from 'fs';
 import { stat } from 'fs/promises';
@@ -72,8 +72,6 @@ router.head('/model.glb', async (req, res) => {
   res.set('Cache-Control', 'public, max-age=60');
   return res.status(200).end();
 });
-
-const avatarModelQuerySchema = z.object({ variant: z.string().optional() });
 
 router.get('/model.glb', asyncHandler(async (req, res) => {
   const { variant } = validateRequest(avatarModelQuerySchema, req.query);

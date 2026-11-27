@@ -1,6 +1,5 @@
 import { emitToOperatorsOn } from '../services/socketIo.js';
 import express from 'express';
-import { z } from 'zod';
 import { asyncHandler, ServerError } from '../lib/errorHandler.js';
 import { validateRequest } from '../lib/validateRequest.js';
 import { limitQuerySchema, oauthCallbackQuerySchema, parsePagination } from '../lib/queryValidation.js';
@@ -16,45 +15,19 @@ import * as googleOAuthAutoConfig from '../services/googleOAuthAutoConfig.js';
 import { getToken, getTokenStatus, clearTokenCache } from '../services/messageTokenExtractor.js';
 import { getUserTimezone } from '../services/userTimezone.js';
 import { localDayWindowUtc } from '../lib/timezone.js';
-import { calendarAutoConfigureBodySchema, dailyReviewQuerySchema } from '../lib/calendarValidation.js';
+import {
+  calendarAutoConfigureBodySchema,
+  dailyReviewQuerySchema,
+  createAccountSchema,
+  updateAccountSchema,
+  updateSubcalendarsSchema,
+  confirmEventSchema,
+  eventsQuerySchema,
+  googleCalendarCredentialsSchema,
+  googleCalendarAuthUrlQuerySchema,
+} from '../lib/calendarValidation.js';
 
 const router = express.Router();
-
-// === Validation Schemas ===
-const createAccountSchema = z.object({
-  name: z.string().min(1),
-  type: z.enum(['outlook-calendar', 'google-calendar']),
-  email: z.union([z.string().email(), z.literal('')]).optional().default('')
-});
-
-const updateAccountSchema = z.object({
-  name: z.string().min(1).optional(),
-  email: z.union([z.string().email(), z.literal('')]).optional(),
-  enabled: z.boolean().optional(),
-  syncMethod: z.enum(['claude-mcp', 'google-api']).optional()
-});
-
-const subcalendarSchema = z.object({
-  calendarId: z.string().min(1),
-  name: z.string().min(1),
-  color: z.string().optional().default(''),
-  enabled: z.boolean().optional().default(true),
-  dormant: z.boolean().optional().default(false),
-  goalIds: z.array(z.string()).optional().default([]),
-  addedAt: z.string().optional()
-});
-
-const updateSubcalendarsSchema = z.object({
-  subcalendars: z.array(subcalendarSchema)
-});
-
-const confirmEventSchema = z.object({
-  eventId: z.string().min(1),
-  happened: z.boolean(),
-  goalId: z.string().optional(),
-  durationMinutes: z.number().int().min(1).max(1440).optional(),
-  note: z.string().max(1000).optional()
-});
 
 // === Account Routes ===
 router.get('/accounts', asyncHandler(async (req, res) => {
@@ -140,15 +113,6 @@ router.get('/agenda', asyncHandler(async (req, res) => {
   });
 }));
 
-const eventsQuerySchema = z.object({
-  accountId: z.string().optional(),
-  search: z.string().optional(),
-  startDate: z.string().optional(),
-  endDate: z.string().optional(),
-  limit: z.string().optional(),
-  offset: z.string().optional(),
-});
-
 router.get('/events', asyncHandler(async (req, res) => {
   const query = validateRequest(eventsQuerySchema, req.query);
   const { accountId, search, startDate, endDate } = query;
@@ -218,11 +182,7 @@ router.get('/google/auth/status', asyncHandler(async (req, res) => {
 }));
 
 router.post('/google/auth/credentials', asyncHandler(async (req, res) => {
-  const schema = z.object({
-    clientId: z.string().min(1),
-    clientSecret: z.string().min(1)
-  });
-  const data = validateRequest(schema, req.body);
+  const data = validateRequest(googleCalendarCredentialsSchema, req.body);
   const result = await googleAuth.saveCredentials(data);
   res.set('Cache-Control', 'no-store');
   res.json(result);
@@ -230,7 +190,7 @@ router.post('/google/auth/credentials', asyncHandler(async (req, res) => {
 
 router.post('/google/auth/url', asyncHandler(async (req, res) => {
   const { returnTo } = validateRequest(
-    z.object({ returnTo: z.enum(['calendar', 'messages']).optional().default('calendar') }),
+    googleCalendarAuthUrlQuerySchema,
     req.query
   );
   const result = await googleAuth.getAuthUrl(returnTo);

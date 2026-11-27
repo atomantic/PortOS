@@ -3,10 +3,10 @@
  * journal. Surfaced in the client's Sharing → Conflicts tab.
  */
 
+import { listQuerySchema, resolveSchema } from '../lib/conflictJournalValidation.js';
 import { Router } from 'express';
-import { z } from 'zod';
 import { asyncHandler, createServiceErrorMapper } from '../lib/errorHandler.js';
-import { BOUNDED_PAGE_DEFAULT_LIMIT, BOUNDED_PAGE_MAX_LIMIT, boundedPaginationQuerySchema, isPaginationRequested, paginateArray } from '../lib/queryValidation.js';
+import { BOUNDED_PAGE_DEFAULT_LIMIT, BOUNDED_PAGE_MAX_LIMIT, isPaginationRequested, paginateArray } from '../lib/queryValidation.js';
 import { validateRequest } from '../lib/validateRequest.js';
 import { isBaseHashPersistBlocked } from '../lib/conflictJournal.js';
 import * as resolver from '../services/conflictJournalResolver.js';
@@ -21,19 +21,6 @@ const SERVICE_ERROR_STATUS = {
   [resolver.ERR_TARGET_GONE]: 409,
 };
 const mapServiceError = createServiceErrorMapper(SERVICE_ERROR_STATUS);
-
-// Entries are only ever 'pending' (on archive) or 'resolved' (after the user
-// restores/merges/discards); there is no 'dismissed' state — discard resolves
-// the entry and DELETE hard-removes it. Don't advertise a status the resolver
-// never produces.
-const listQuerySchema = boundedPaginationQuerySchema.extend({
-  status: z.enum(['pending', 'resolved']).optional(),
-});
-
-const resolveSchema = z.object({
-  action: z.enum(['restore-all', 'merge-fields', 'discard']),
-  fields: z.array(z.string().min(1).max(64)).max(50).optional(),
-});
 
 // The list needs only the collapsed-row fields. Snapshots and per-field values
 // (often MBs per entry) load on demand through GET /:id.

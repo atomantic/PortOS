@@ -1,5 +1,11 @@
+import {
+  recordingLocator,
+  recordingOffsetQuerySchema,
+  recordingPurgeSchema,
+  recordingPinSchema,
+  storageMeasureQuerySchema,
+} from '../lib/dataManagerValidation.js';
 import { Router } from 'express';
-import { z } from 'zod';
 import { asyncHandler, ServerError } from '../lib/errorHandler.js';
 import { validateRequest } from '../lib/validateRequest.js';
 import {
@@ -25,22 +31,21 @@ router.put('/cos/storage/policy', asyncHandler(async (req, res) => {
 }));
 router.post('/cos/storage/preview', asyncHandler(async (req, res) => {
   const service = await import('../services/cos/cosAgentStorage.js');
-  const { offset } = validateRequest(z.object({ offset: z.coerce.number().int().min(0).max(10000000).default(0) }), req.query);
+  const { offset } = validateRequest(recordingOffsetQuerySchema, req.query);
   res.json(await service.previewAgentStorage(validateRequest(service.agentStorageFilterSchema, req.body), { offset }));
 }));
 router.post('/cos/storage/run', asyncHandler(async (req, res) => {
   const service = await import('../services/cos/cosAgentStorage.js');
-  const input = validateRequest(z.object({ token: z.string().uuid(), confirmation: z.literal('PURGE RAW RECORDINGS').optional() }).strict(), req.body);
+  const input = validateRequest(recordingPurgeSchema, req.body);
   res.json(await service.startAgentStorage(input));
 }));
 router.post('/cos/storage/cancel', asyncHandler(async (req, res) => {
   const service = await import('../services/cos/cosAgentStorage.js');
   res.json(await service.cancelAgentStorage());
 }));
-const recordingLocator = z.object({ date: z.string().regex(/^\d{4}-\d{2}-\d{2}$/), id: z.string().regex(/^[a-zA-Z0-9_-]+$/) });
 router.put('/cos/storage/pin', asyncHandler(async (req, res) => {
   const service = await import('../services/cos/cosAgentStorage.js');
-  res.json(await service.pinAgentRecording(validateRequest(recordingLocator.extend({ pinned: z.boolean() }).strict(), req.body)));
+  res.json(await service.pinAgentRecording(validateRequest(recordingPinSchema, req.body)));
 }));
 router.get('/cos/storage/recording/:date/:id', asyncHandler(async (req, res) => {
   const service = await import('../services/cos/cosAgentStorage.js');
@@ -63,7 +68,7 @@ router.get('/backups', asyncHandler(async (req, res) => {
 
 // GET /api/data/:category — detailed breakdown of a category
 router.get('/:category', asyncHandler(async (req, res) => {
-  const { measure } = validateRequest(z.object({ measure: z.literal('1').optional() }), req.query);
+  const { measure } = validateRequest(storageMeasureQuerySchema, req.query);
   const detail = await getCategoryDetail(req.params.category, { measure: measure === '1' });
   if (!detail) throw new ServerError('Category not found', { status: 404, code: 'NOT_FOUND' });
   res.json(detail);

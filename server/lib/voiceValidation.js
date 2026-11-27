@@ -219,3 +219,5 @@ export const voiceStudioProfilesQuerySchema = z.object({
   limit: z.coerce.number().int().min(1).max(100).default(30),
   cursor: z.string().max(512).optional(),
 }).strict();
+
+export const avatarModelQuerySchema = z.object({ variant: z.string().optional() });

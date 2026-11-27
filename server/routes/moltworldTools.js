@@ -5,8 +5,8 @@
  * joining/moving, building, exploring, and status checks.
  */
 
+import { accountQuerySchema } from '../lib/moltworldToolsValidation.js';
 import { Router } from 'express';
-import { z } from 'zod';
 import { asyncHandler, ServerError } from '../lib/errorHandler.js';
 import { validateRequest } from '../lib/validateRequest.js';
 import { moltworldBuildSchema, moltworldExploreSchema, moltworldThinkSchema, moltworldSaySchema, moltworldQueueAddSchema } from '../lib/agent/agentValidation.js';
@@ -18,8 +18,6 @@ import * as moltworldQueue from '../services/moltworldQueue.js';
 import { moltworldQueueFailBodySchema } from '../lib/moltworldValidation.js';
 
 const router = Router();
-
-const accountQuerySchema = z.object({ accountId: z.string().min(1).max(200) });
 
 /**
  * Get an authenticated Moltworld client for an account
