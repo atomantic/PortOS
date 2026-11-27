@@ -53,6 +53,8 @@ import { summarizeTranscriptDays, mergeModelRows } from './claudeCodeModelReport
 import { getAllProviders } from './provider/providers.js';
 import { nativeUsageSignature, withNativeUsage } from './nativeUsageHistory.js';
 import { readRenderProjectionRows, summarizeRenderReceipts } from './imageRenderUsage.js';
+import { todayInTimezone } from '../lib/timezone.js';
+import { getUserTimezone } from './userTimezone.js';
 
 const PEER_USAGE_FILE = join(PATHS.data, 'peer-usage.json');
 const PROVIDERS_FILE = join(PATHS.data, 'providers.json');
@@ -779,6 +781,7 @@ export async function getFleetUsage({ from = null, to = null, providers = [], ap
     const undated = report.totals.sessions - activity.reduce((sum, item) => sum + item.sessions, 0);
     if (undated > 0) activity.push({ date: 'undated', label: 'Undated', sessions: undated });
   }
+  const today = todayInTimezone(await getUserTimezone());
   return {
     instances: peers.length ? rows : [],
     totals: peers.length ? sumFleetTotals(included) : null,
@@ -790,7 +793,7 @@ export async function getFleetUsage({ from = null, to = null, providers = [], ap
     subscriptionFirstActivityDay: earliestDay(subscriptionSources
       .map(({ activity }) => ({ daily: activity.dailyActivity, monthly: activity.monthlyActivity }))),
     activity,
-    last7Days: fleetPeriodActivity(sources, { from: utcDay(Date.now() - 6 * DAY_MS), to: utcDay(Date.now()) })
+    last7Days: fleetPeriodActivity(sources, { from: utcDay(dayMs(today) - 6 * DAY_MS), to: today })
       .map((day) => ({ ...day, label: new Date(`${day.date}T00:00:00Z`).toLocaleDateString('en-US', { weekday: 'short', timeZone: 'UTC' }) })),
     totalToolCalls: from || to ? null : sources.reduce((sum, source) => sum + (source.activity.totalToolCalls || 0), 0),
     monthly: fleetPeriodMonthly(sources, { from, to }, providers),
