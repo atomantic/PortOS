@@ -4,38 +4,55 @@ import { checkWorkspaceCacheIsolation } from './lib/workspaceCacheFixture.js';
 import { readCiJobs } from './lib/ciWorkflowJobs.js';
 import { createTestPhaseDiagnostics } from '../lib/testPhaseDiagnostics.js';
 
+const vitestCacheSteps = body => body.split(/\n {6}- /).filter(step => step.startsWith('name: Cache Vitest transform artifacts'))
+  .map(step => step.split(/\n {6}#/)[0]);
 
 describe('checkout-owned server Vite caches with shared dependencies', () => {
   it('keeps CI artifact-cache restores pointed at the owned test cache roots', () => {
-    // Every job that runs Vitest restores transform artifacts, the server
-    // ones through the setup-server action.
     const jobs = readCiJobs();
-    const runners = ['server', 'client', 'database', 'browser', 'windows-server', 'macos-native'];
-    for (const id of runners) expect(jobs[id], id).toContain('- name: Cache Vitest transform artifacts');
-    const caches = runners.map(id => jobs[id].split('- name: Cache Vitest transform artifacts')[1].split('\n      - name:')[0]);
-    for (const cache of caches) {
-      expect(cache).not.toContain('node_modules/.vite');
-      if (cache.includes('key: vitest-server-')) {
+    const shardSuffix = '-${{ matrix.shard }}of${{ strategy.job-total }}';
+    const serverKey = "vitest-server-${{ runner.os }}-${{ hashFiles('server/package-lock.json', 'server/vitest.config.js', 'server/vitest.config.db.js', 'scripts/vitestCiPool.js') }}";
+    const fallbacks = [
+      "vitest-server-${{ runner.os }}-${{ hashFiles('server/package-lock.json') }}-",
+      'vitest-server-${{ runner.os }}-',
+    ];
+    for (const [id, suffix] of [
+      ['server', shardSuffix], ['database', ''], ['browser', `-browser${shardSuffix}`],
+      ['windows-server', shardSuffix], ['macos-native', '-macos-native'],
+    ]) {
+      const caches = vitestCacheSteps(jobs[id]);
+      expect(caches, id).toHaveLength(2);
+      for (const cache of caches) {
+        expect(cache).not.toContain('node_modules/.vite');
         expect(cache).toContain('server/.cache/vitest\n');
         expect(cache).toContain('server/.cache/vitest-db\n');
-      } else expect(cache).toContain('client/.cache/vitest\n');
+        expect(cache).toContain(`key: ${serverKey}${suffix}\n`);
+        expect(cache.split('restore-keys: |\n')[1].trim().split('\n').map(line => line.trim())).toEqual(fallbacks);
+      }
+    }
+    const clientCaches = vitestCacheSteps(jobs.client);
+    expect(clientCaches).toHaveLength(2);
+    for (const cache of clientCaches) {
+      expect(cache).not.toContain('node_modules/.vite');
+      expect(cache).toContain('client/.cache/vitest\n');
     }
   });
 
   it('saves Vitest transform and APT caches only outside pull requests', () => {
     // A PR-saved entry is scoped to its merge ref, so nothing reads it again.
     const jobs = readCiJobs();
-    const bodies = [...['client', 'server', 'database', 'browser', 'windows-server', 'macos-native'].map(id => jobs[id]), readFileSync(new URL('../.github/actions/db-tools/action.yml', import.meta.url), 'utf8')];
-    for (const body of bodies) {
-      const steps = body.split(/\n\s*- name: /).filter(step => /^Cache (Vitest transform|APT package)/.test(step));
-      expect(steps.length).toBeGreaterThan(0);
-      for (const step of steps) {
-        if (step.includes('actions/cache/restore@')) expect(step).toContain("github.event_name == 'pull_request'");
-        else {
-          expect(step).toContain('actions/cache@');
-          expect(step).toContain("github.event_name != 'pull_request'");
-        }
-      }
+    const dbTools = readFileSync(new URL('../.github/actions/db-tools/action.yml', import.meta.url), 'utf8');
+    const aptSteps = dbTools.split(/\n\s*- name: /).filter(step => step.startsWith('Cache APT package'));
+    const cachePairs = [
+      ...['client', 'server', 'database', 'browser', 'windows-server', 'macos-native'].map(id => vitestCacheSteps(jobs[id])),
+      aptSteps,
+    ];
+    for (const steps of cachePairs) {
+      expect(steps).toHaveLength(2);
+      const restore = steps.find(step => step.includes('actions/cache/restore@'));
+      const save = steps.find(step => step.includes('actions/cache@'));
+      expect(restore).toContain("github.event_name == 'pull_request'");
+      expect(save).toContain("github.event_name != 'pull_request'");
     }
   });
 

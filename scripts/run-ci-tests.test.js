@@ -951,19 +951,21 @@ describe('ci.yml shard wiring', () => {
     const planIndex = body.indexOf('- name: Check remaining browser suites');
     const toolsIndex = body.indexOf('- name: Install audio verification tools');
     const recheckIndex = body.indexOf('- name: Recheck browser suites after audio setup');
+    const cacheIndex = body.indexOf('uses: ./.github/actions/server-vitest-cache');
     const clientIndex = body.indexOf('uses: ./.github/actions/setup-client');
     expect(memoIndex).toBeGreaterThan(0);
     expect(memoIndex).toBeLessThan(planIndex);
     expect(planIndex).toBeLessThan(toolsIndex);
     expect(toolsIndex).toBeLessThan(recheckIndex);
-    expect(recheckIndex).toBeLessThan(clientIndex);
+    expect(recheckIndex).toBeLessThan(cacheIndex);
+    expect(cacheIndex).toBeLessThan(clientIndex);
     expect(clientIndex).toBeLessThan(start);
     const planStep = body.slice(planIndex, toolsIndex);
     expect(planStep).toContain('id: browser-plan');
     expect(planStep).toContain('run: node scripts/run-ci-tests.js server --check-remaining');
     expect(planStep).toContain("PORTOS_CI_BEFORE_AUDIO_SETUP: '1'");
     expect(body.slice(toolsIndex, recheckIndex)).toContain('if: fromJSON(steps.browser-plan.outputs.remaining) > 0');
-    const recheckStep = body.slice(recheckIndex, clientIndex);
+    const recheckStep = body.slice(recheckIndex, cacheIndex);
     expect(recheckStep).toContain("if: steps.browser-plan.outputs.recheck == 'true'");
     expect(recheckStep).toContain('run: node scripts/run-ci-tests.js server --check-remaining');
     expect(step).toContain('PORTOS_CI_PREPLANNED_RUN: ${{ runner.temp }}/portos-browser-run.json');
@@ -975,7 +977,9 @@ describe('ci.yml shard wiring', () => {
       expect(recheckStep).toContain(envLine);
     }
     const gate = 'if: fromJSON(steps.browser-recheck.outputs.remaining || steps.browser-plan.outputs.remaining) > 0';
-    expect(body.slice(clientIndex, start)).toContain(gate);
+    for (const jobStep of [body.slice(cacheIndex, clientIndex), body.slice(clientIndex, start)]) {
+      expect(jobStep.split('\n')[1].trim()).toBe(gate);
+    }
     expect(step).toContain(gate);
   });
 
