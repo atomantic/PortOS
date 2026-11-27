@@ -72,7 +72,7 @@ describe('every cwd-passing spawn pins PWD', () => {
   // helper, with the reason they cannot call it.
   const INLINE_PIN = new Map([
     ['lib/aiToolkit/internal/codexModelListProbe.js', 'vendored toolkit metadata probe — must not import host modules'],
-    ['lib/aiToolkit/runner.js', 'vendored toolkit — must not import out to other PortOS modules'],
+    ['lib/aiToolkit/internal/cliExecutor.js', 'vendored toolkit — must not import out to other PortOS modules'],
   ]);
 
   const SPAWN_CALL_RE = /\b(?:spawn|ptySpawn|spawnImpl|pty\.spawn|bufferedSpawn|execFile|execAsync)\s*\(/g;
