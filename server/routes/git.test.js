@@ -1,3 +1,5 @@
+import { join, resolve } from 'path';
+import { homedir } from 'os';
 import { describe, it, expect, vi, beforeEach, } from 'vitest';
 import express from 'express';
 import { request } from '../lib/testHelper.js';
@@ -46,32 +48,28 @@ vi.mock('../services/cos/cosAgentLifecycle.js', () => ({
   getAgents: vi.fn().mockResolvedValue([])
 }));
 
-// Mock workspace-roots so we control which paths are "allowed" without
-// touching the real filesystem.
-vi.mock('../lib/workspaceRoots.js', () => ({
-  isWithinAllowedRoots: vi.fn(),
-  outsideAllowedRootsMessage: vi.fn((realPath, { field = 'path' } = {}) => `${field} is outside allowed directories: ${realPath}`)
-}));
-
-// Mock fs functions used by assertAllowedWorkspace.
+// Mock file metadata and symlink resolution while exercising the real allowlist.
 vi.mock('fs', async (importOriginal) => {
   const actual = await importOriginal();
   return {
     ...actual,
     existsSync: vi.fn(),
     statSync: vi.fn(),
-    realpathSync: vi.fn()
+    realpathSync: vi.fn(path => path)
   };
 });
 
 import { existsSync, statSync, realpathSync } from 'fs';
-import { isWithinAllowedRoots, outsideAllowedRootsMessage } from '../lib/workspaceRoots.js';
 import * as cosAgentLifecycleService from '../services/cos/cosAgentLifecycle.js';
 import * as gitStatusService from '../services/git/status.js';
 import * as gitSyncService from '../services/git/sync.js';
 import * as gitCleanupService from '../services/git/cleanup.js';
 const gitService = { ...gitStatusService, ...gitSyncService, ...gitCleanupService };
 import * as gitSubmoduleService from '../services/gitSubmodules.js';
+
+const OUTSIDE_PATH = process.platform === 'win32'
+  ? resolve(`${process.env.SystemDrive || 'C:'}/Windows`)
+  : '/etc';
 
 function makeApp() {
   const app = express();
@@ -100,15 +98,14 @@ describe('git routes — workspace root validation', () => {
     ])('%s', async (_label, route, body) => {
       existsSync.mockReturnValue(true);
       statSync.mockReturnValue({ isDirectory: () => true });
-      realpathSync.mockReturnValue(body.path);
-      isWithinAllowedRoots.mockReturnValue(false);
+      realpathSync.mockReturnValue(OUTSIDE_PATH);
 
       const app = makeApp();
       const res = await request(app).post(`/api/git${route}`).send(body);
 
       expect(res.status).toBe(403);
       expect(res.body.code).toBe('FORBIDDEN');
-      expect(outsideAllowedRootsMessage).toHaveBeenCalledWith(body.path);
+      expect(res.body.error).toBe('path is outside allowed directories');
     });
   });
 
@@ -123,8 +120,7 @@ describe('git routes — workspace root validation', () => {
     ])('%s', async (_label, route, body) => {
       existsSync.mockReturnValue(true);
       statSync.mockReturnValue({ isDirectory: () => true });
-      realpathSync.mockReturnValue(body.path);
-      isWithinAllowedRoots.mockReturnValue(true);
+      realpathSync.mockReturnValue(join(homedir(), 'example-project'));
 
       const app = makeApp();
       const res = await request(app).post(`/api/git${route}`).send(body);
@@ -160,11 +156,10 @@ describe('git routes — workspace root validation', () => {
 });
 
 // Helper: configure the workspace mocks to allow a path through
-function allowWorkspace(path = '/Users/me/project') {
+function allowWorkspace() {
   existsSync.mockReturnValue(true);
   statSync.mockReturnValue({ isDirectory: () => true });
-  realpathSync.mockReturnValue(path);
-  isWithinAllowedRoots.mockReturnValue(true);
+  realpathSync.mockReturnValue(join(homedir(), 'example-project'));
 }
 
 describe('git routes — active agent branch exclusion', () => {
@@ -172,7 +167,7 @@ describe('git routes — active agent branch exclusion', () => {
 
   beforeEach(() => {
     vi.clearAllMocks();
-    allowWorkspace(WORKSPACE);
+    allowWorkspace();
   });
 
   describe('POST /api/git/cleanup-merged — active agent branches are passed to service', () => {
@@ -381,7 +376,7 @@ describe('git routes — submodules', () => {
 
   beforeEach(() => {
     vi.clearAllMocks();
-    allowWorkspace(WORKSPACE);
+    allowWorkspace();
   });
 
   it('GET /submodules/status without repoPath reads the PortOS checkout', async () => {
@@ -409,8 +404,7 @@ describe('git routes — submodules', () => {
   });
 
   it('GET /submodules/status rejects a repoPath outside allowed roots', async () => {
-    isWithinAllowedRoots.mockReturnValue(false);
-    realpathSync.mockReturnValue('/etc');
+    realpathSync.mockReturnValue(OUTSIDE_PATH);
 
     const app = makeApp();
     const res = await request(app)
@@ -483,8 +477,7 @@ describe('git routes — submodules', () => {
   });
 
   it('POST /submodules/update rejects a repoPath outside allowed roots', async () => {
-    isWithinAllowedRoots.mockReturnValue(false);
-    realpathSync.mockReturnValue('/etc');
+    realpathSync.mockReturnValue(OUTSIDE_PATH);
 
     const app = makeApp();
     const res = await request(app)
