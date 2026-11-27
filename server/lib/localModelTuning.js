@@ -75,7 +75,7 @@
  * three universally compiled in, since an unsupported type makes the server exit
  * on launch. Ollama's `OLLAMA_KV_CACHE_TYPE` takes the same spellings.
  */
-const CACHE_TYPES = ['f16', 'q8_0', 'q4_0'];
+export const CACHE_TYPES = Object.freeze(['f16', 'q8_0', 'q4_0']);
 
 /**
  * The command a `cli` knob's flag lands on, per runtime; the note must name the

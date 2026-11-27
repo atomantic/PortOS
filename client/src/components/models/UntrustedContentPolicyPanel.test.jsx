@@ -5,19 +5,19 @@ vi.mock('../../services/apiSystem.js', () => ({
   getSettings: vi.fn(),
   updateSettings: vi.fn(),
 }));
-vi.mock('../../hooks/useProviderModels', () => ({ default: () => ({
-  providers: [
-    { id: 'local-api', name: 'Local example', type: 'api', endpoint: 'http://127.0.0.1:11434/v1', models: ['example-model'] },
-    { id: 'cloud-api', name: 'Cloud example', type: 'api', endpoint: 'https://example.com/v1', models: ['example-model'], defaultModel: 'example-model' },
-  ], loading: false,
-}) }));
+vi.mock('../../services/apiProviders.js', () => ({ getProviders: vi.fn() }));
 vi.mock('../ui/Toast');
 
+import { getProviders } from '../../services/apiProviders.js';
 import { getSettings, updateSettings } from '../../services/apiSystem.js';
 import UntrustedContentPolicyPanel from './UntrustedContentPolicyPanel';
 
 beforeEach(() => {
   vi.clearAllMocks();
+  getProviders.mockResolvedValue({ providers: [
+    { id: 'local-api', name: 'Local example', type: 'api', endpoint: 'http://127.0.0.1:11434/v1', models: ['example-model'] },
+    { id: 'cloud-api', name: 'Cloud example', type: 'api', endpoint: 'https://example.com/v1', models: ['example-model'], defaultModel: 'example-model' },
+  ] });
   getSettings.mockResolvedValue({ untrustedContent: {
     defaults: { classifierMode: 'required', minBenignScore: 0.95 },
     sources: { 'github-pr': { maxInputChars: 50000 } },
@@ -48,11 +48,44 @@ describe('content safety policy configuration', () => {
   it('shows what Automatic resolves to, skipping an eligible provider without a default model', async () => {
     render(<UntrustedContentPolicyPanel />);
     fireEvent.change(await screen.findByLabelText('Source'), { target: { value: 'github-pr' } });
-    expect(screen.getByText(/Resolves to Cloud example with model example-model/)).toBeInTheDocument();
+    expect(await screen.findByText(/Resolves to Cloud example with model example-model/)).toBeInTheDocument();
     fireEvent.change(screen.getByLabelText('Source'), { target: { value: 'email' } });
     expect(screen.getByRole('status')).toHaveTextContent('No eligible API provider has a default model');
     fireEvent.change(screen.getByLabelText('Analysis API provider'), { target: { value: 'local-api' } });
     expect(screen.getByRole('status')).toHaveTextContent('The pinned provider has no default model');
+  });
+
+  it('uses the model-specific window for Automatic and keeps private sources on loopback', async () => {
+    getProviders.mockResolvedValueOnce({ providers: [
+      {
+        id: 'local-api', name: 'Local example', type: 'api', endpoint: 'http://127.0.0.1:11434/v1',
+        defaultModel: 'small', models: ['small', 'wide'],
+        untrustedContentWindows: { defaultWindow: 4_096, byModel: { wide: 32_768 } },
+      },
+      {
+        id: 'cloud-api', name: 'Cloud example', type: 'api', endpoint: 'https://example.com/v1',
+        defaultModel: 'large', untrustedContentWindows: { defaultWindow: 32_768, byModel: {} },
+      },
+    ] });
+    getSettings.mockResolvedValueOnce({ untrustedContent: { sources: { 'github-issue': { model: 'wide' } } } });
+    render(<UntrustedContentPolicyPanel />);
+    const source = await screen.findByLabelText('Source');
+    fireEvent.change(source, { target: { value: 'github-pr' } });
+    expect(await screen.findByText('Resolves to Cloud example with model large.')).toBeInTheDocument();
+    fireEvent.change(source, { target: { value: 'github-issue' } });
+    expect(screen.getByText('Resolves to Local example with model wide.')).toBeInTheDocument();
+    fireEvent.change(source, { target: { value: 'email' } });
+    expect(screen.getByText('Resolves to Local example with model small.')).toBeInTheDocument();
+  });
+
+  it('offers a provider-list retry after a failed read', async () => {
+    getProviders.mockRejectedValueOnce(new Error('unavailable'));
+    render(<UntrustedContentPolicyPanel />);
+    const error = await screen.findByRole('alert');
+    expect(error).toHaveTextContent('Could not load analysis providers');
+    expect(screen.queryByRole('status')).not.toBeInTheDocument();
+    fireEvent.click(within(error).getByRole('button', { name: 'Retry' }));
+    expect(await screen.findByText('Resolves to Cloud example with model example-model.')).toBeInTheDocument();
   });
 
   it('requires loaded settings before editing and supports a failed-read retry', async () => {

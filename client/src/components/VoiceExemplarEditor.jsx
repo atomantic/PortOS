@@ -7,11 +7,14 @@
 // Used by BOTH the series style-guide editor (PipelineSeries) and the Writers
 // Room work voice drawer (WorkEditor) so a freeform work anchors its voice the
 // same way a series does — one component, no drift between the two surfaces.
-// Caps mirror STYLE_GUIDE_LIMITS in server/lib/styleGuide.js.
 
-export const VOICE_EXEMPLARS_MAX = 3;
-export const VOICE_EXEMPLAR_PASSAGE_MAX = 2000;
-export const VOICE_EXEMPLAR_NOTE_MAX = 200;
+import { STYLE_GUIDE_LIMITS } from '../../../server/lib/styleGuide.js';
+
+export const {
+  EXEMPLARS_MAX: VOICE_EXEMPLARS_MAX,
+  EXEMPLAR_PASSAGE_MAX: VOICE_EXEMPLAR_PASSAGE_MAX,
+  EXEMPLAR_NOTE_MAX: VOICE_EXEMPLAR_NOTE_MAX,
+} = STYLE_GUIDE_LIMITS;
 
 export default function VoiceExemplarEditor({ idPrefix, title, hint, notePlaceholder, entries, onChange }) {
   const list = Array.isArray(entries) ? entries : [];

@@ -11,10 +11,7 @@ import { useModelInputPreview } from '../../hooks/useModelInputPreview';
 import { LOOK_ROLE_PREFIX, lookIdOf, isGoodReference } from '../../lib/creativeLibraries';
 import { uuidv4 } from '../../lib/uuid';
 import { previewCatalogSheet, renderCatalogSheet } from '../../services/apiCatalog';
-
-// Mirrors BIBLE_LIMITS.WARDROBE_NAME_MAX / WARDROBE_DESCRIPTION_MAX.
-const NAME_MAX = 120;
-const DESCRIPTION_MAX = 800;
+import { BIBLE_LIMITS } from '../../../../server/lib/bibleLimits.js';
 
 const inputClass = 'w-full px-2 py-2 bg-port-bg border border-port-border rounded text-sm text-white focus:outline-none focus:border-port-accent';
 const smallIconButton = 'inline-flex items-center justify-center min-h-[44px] min-w-[44px] rounded border border-port-border text-xs text-gray-300 hover:text-white hover:border-port-accent disabled:opacity-50 disabled:cursor-not-allowed';
@@ -32,12 +29,12 @@ function LookForm({ formId, initial, busy, onSubmit, onCancel }) {
     <form onSubmit={submit} className="space-y-2 rounded border border-port-border bg-port-bg/40 p-3">
       <div>
         <label htmlFor={`${formId}-name`} className="block text-xs uppercase tracking-wider text-gray-500 mb-1">Look name</label>
-        <input id={`${formId}-name`} type="text" value={name} maxLength={NAME_MAX} onChange={(e) => setName(e.target.value)}
+        <input id={`${formId}-name`} type="text" value={name} maxLength={BIBLE_LIMITS.WARDROBE_NAME_MAX} onChange={(e) => setName(e.target.value)}
           placeholder="Travel coat" className={inputClass} />
       </div>
       <div>
         <label htmlFor={`${formId}-description`} className="block text-xs uppercase tracking-wider text-gray-500 mb-1">Outfit description</label>
-        <textarea id={`${formId}-description`} value={description} maxLength={DESCRIPTION_MAX} rows={3}
+        <textarea id={`${formId}-description`} value={description} maxLength={BIBLE_LIMITS.WARDROBE_DESCRIPTION_MAX} rows={3}
           onChange={(e) => setDescription(e.target.value)}
           placeholder="Long grey wool coat, red scarf, scuffed boots" className={inputClass} />
       </div>
