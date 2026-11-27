@@ -36,7 +36,7 @@ Signed-By: /usr/share/keyrings/ubuntu-archive-keyring.gpg
 // Inject a Bash clock and watchdog instead of sleeping against 1–3 second
 // budgets: startup/source rewriting consumed those budgets under load, and
 // macOS does not ship GNU timeout. The real script still computes deadlines.
-function run(mirror, cache, { includePostgres = true, event = 'push', probeAvailable = true } = {}) {
+function run(mirror, cache, { includePostgres = true, event = 'push', missingTool } = {}) {
   const dir = mkdtempSync(join(tmpdir(), 'ci-db-tools-'));
   const bin = join(dir, 'bin');
   const root = join(dir, 'root');
@@ -70,15 +70,27 @@ function run(mirror, cache, { includePostgres = true, event = 'push', probeAvail
   fake('dpkg-deb', `
 [[ "$1" = --extract && "$(cat "$2")" = '${PACKAGE_BYTES}' ]] || exit 1
 echo "extract $(basename "$2")" >> '${log}'
-mkdir -p "$3/usr/bin"
-tool=ffprobe
+write_tool() {
+  local tool="$1" destination="$2" version_flag="$3"
+  [[ "$tool" != '${missingTool ?? ''}' ]] || return 0
+  mkdir -p "$destination"
+  {
+    printf '%s\\n' '#!/bin/bash' '[[ "$LD_LIBRARY_PATH" = *"/usr/lib/x86_64-linux-gnu:"* && "$LD_LIBRARY_PATH" = *"/usr/lib/x86_64-linux-gnu/pulseaudio:"* ]] || exit 1'
+    printf '[[ "$1" = %q ]] || exit 1\\n' "$version_flag"
+    printf "echo 'version %s' >> '%s'\\n" "$tool" '${log}'
+  } > "$destination/$tool"
+  chmod +x "$destination/$tool"
+}
 if [[ "$(basename "$2")" = '${PACKAGE_FILE}' ]]; then
-  tool=ffmpeg
-elif ! ${probeAvailable}; then
-  exit 0
-fi
-printf '%s\n' '#!/bin/bash' '[[ "$LD_LIBRARY_PATH" = *"/usr/lib/x86_64-linux-gnu:"* && "$LD_LIBRARY_PATH" = *"/usr/lib/x86_64-linux-gnu/pulseaudio:"* && "$1" = -version ]]' > "$3/usr/bin/$tool"
-chmod +x "$3/usr/bin/$tool"`);
+  write_tool ffmpeg "$3/usr/bin" -version
+else
+  write_tool ffprobe "$3/usr/bin" -version
+  if ${includePostgres}; then
+    for tool in psql pg_dump pg_restore pg_isready; do
+      write_tool "$tool" "$3/usr/lib/postgresql/$PG_MAJOR/bin" --version
+    done
+  fi
+fi`);
   // Keep the production GNU sed invocation intact while adapting its in-place
   // flag only inside this synthetic command fixture on macOS.
   fake('sed', 'if [ "$(uname -s)" = Darwin ]; then\n  [ "$1" = "-i" ] && [ "$2" = "-E" ] || exit 2\n  shift 2\n  exec /usr/bin/sed -i "" -E "$@"\nfi\nexec /usr/bin/sed -i -E "$@"');
@@ -176,6 +188,7 @@ fi`);
     checksumCalls: read(log).split('\n').filter(line => line === 'sha256sum').length,
     restoreCalls: read(log).split('\n').filter(line => line.startsWith('restore ')),
     extracted: read(log).split('\n').filter(line => line.startsWith('extract ')),
+    verifiedTools: read(log).split('\n').filter(line => line.startsWith('version ')).map(line => line.slice('version '.length)),
     stageCalls: read(log).split('\n').filter(line => line.startsWith('stage ')),
     cachedPackage: read(join(packageCache, PACKAGE_FILE)),
     cachedPartial: existsSync(join(packageCache, 'unfinished.deb')),
@@ -267,15 +280,16 @@ describe.skipIf(process.platform === 'win32')('CI DB tool installation', () => {
     expect(warm.status, warm.stderr).toBe(0);
     expect(warm.downloaded).toEqual([]);
     expect(warm.checksumCalls).toBe(1);
-    expect(warm.restoreCalls).toEqual(['restore 2 files']);
+    expect(warm.restoreCalls).toEqual([]);
+    expect(warm.extracted.sort()).toEqual([`extract ${COMPANION_FILE}`, `extract ${PACKAGE_FILE}`]);
+    expect(warm.verifiedTools).toEqual(['ffmpeg', 'ffprobe', 'psql', 'pg_dump', 'pg_restore', 'pg_isready']);
+    expect(warm.githubPath).toMatch(/\/portos-ci-tools\.[^/]+\/bin\n$/);
     expect(warm.stdout).toContain(`Reused verified APT package ${PACKAGE_FILE}`);
     expect(warm.calls).toEqual([
       'apt-get update',
       'apt-get --print-uris install -y --no-install-recommends postgresql-client-17 ffmpeg',
-      'apt-get install -y --no-install-recommends --download-only postgresql-client-17 ffmpeg',
-      INSTALL_FROM_CACHE,
     ]);
-    expect(warm.budgets).toEqual([45, 45, 45]);
+    expect(warm.budgets).toEqual([45, 45]);
     expect(warm.pgdg).toContain('[signed-by=');
   });
 
@@ -292,7 +306,8 @@ describe.skipIf(process.platform === 'win32')('CI DB tool installation', () => {
         expect(result.restoreCalls).toEqual([]);
         expect(result.extracted.sort()).toEqual([`extract ${COMPANION_FILE}`, `extract ${PACKAGE_FILE}`]);
         expect(result.downloaded).toEqual([]);
-        expect(result.githubPath).toMatch(/\/portos-ffmpeg\.[^/]+\/bin\n$/);
+        expect(result.verifiedTools).toEqual(['ffmpeg', 'ffprobe']);
+        expect(result.githubPath).toMatch(/\/portos-ci-tools\.[^/]+\/bin\n$/);
         expect(result.calls).toEqual([
           'apt-get update',
           'apt-get --print-uris install -y --no-install-recommends ffmpeg',
@@ -302,7 +317,7 @@ describe.skipIf(process.platform === 'win32')('CI DB tool installation', () => {
   });
 
   it('uses system APT if the private runtime cannot execute both tools', () => {
-    const result = run('ok', 'warm', { includePostgres: false, probeAvailable: false });
+    const result = run('ok', 'warm', { includePostgres: false, missingTool: 'ffprobe' });
     expect(result.status, result.stderr).toBe(0);
     expect(result.extracted).toHaveLength(2);
     expect(result.restoreCalls).toEqual(['restore 2 files']);
@@ -310,10 +325,20 @@ describe.skipIf(process.platform === 'win32')('CI DB tool installation', () => {
     expect(result.githubPath).toBe('');
   });
 
+  it('uses system APT if any PostgreSQL tool fails private-runtime verification', () => {
+    const result = run('ok', 'warm', { missingTool: 'pg_isready' });
+    expect(result.status, result.stderr).toBe(0);
+    expect(result.verifiedTools).toEqual(['ffmpeg', 'ffprobe', 'psql', 'pg_dump', 'pg_restore']);
+    expect(result.restoreCalls).toEqual(['restore 2 files']);
+    expect(result.calls.at(-1)).toBe(INSTALL_FROM_CACHE);
+    expect(result.githubPath).toBe('/usr/lib/postgresql/17/bin\n');
+  });
+
   it('downloads a replacement for a same-size cache entry that fails signed-index hash verification', () => {
     const result = run('ok', 'corrupt');
     expect(result.status, result.stderr).toBe(0);
     expect(result.downloaded).toEqual([`download ${PACKAGE_FILE}`]);
+    expect(result.extracted).toEqual([]);
     expect(result.checksumCalls).toBe(1);
     expect(result.restoreCalls).toEqual(['restore 1 files']);
     expect(result.stdout).toContain('Ignoring invalid cached APT package');
