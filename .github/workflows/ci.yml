@@ -460,11 +460,12 @@ jobs:
           POSTGRES_DB: portos
         ports:
           - 5432:5432
+        # Probe the final TCP listener, not the socket-only bootstrap server.
         options: >-
-          --health-cmd "pg_isready -U portos"
-          --health-interval 10s
+          --health-cmd "pg_isready -h 127.0.0.1 -U portos"
+          --health-interval 2s
           --health-timeout 5s
-          --health-retries 5
+          --health-retries 25
     env:
       PGHOST: localhost
       PGPORT: 5432
