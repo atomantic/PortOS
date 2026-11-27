@@ -32,6 +32,47 @@ when reduced motion is enabled. **Avatar** switches to audio-only display
 without interrupting the conversation. This is a browser
 surface, independent of FaceTime Audio.
 
+### Optional generated avatar: AvatarForcing
+
+On a macOS 26+ Apple Silicon host, open **Voice Call → Model & voice settings → AvatarForcing**.
+Accept the checkpoint terms and choose **Install AvatarForcing**, then **Start** and
+**Use generated avatar in this browser**. **Play sample** tests the configured voice
+without making an LLM request. **Stop** releases the GPU worker; **Update** replaces
+the isolated Python environment when its lock or checkpoint recipe changes.
+**Uninstall and remove weights** removes this runtime's downloads, not voice settings
+or the built-in portrait. Other devices using the same PortOS host can opt in
+separately. The worker does not auto-start, and animation is off by default.
+
+The host turns assistant-output WAV into timed frames for the built-in portrait.
+Nothing from the microphone or camera is sent to the renderer. Neither the audio
+nor frames are saved. The browser follows its playback clock and drops late
+frames; if the GPU is busy, the worker is off, or reduced motion is enabled,
+the portrait can remain still while normal voice audio continues. This is
+experimental: it animates up to 16 seconds per synthesized segment and isn't
+a promise of real-time performance on every Mac.
+
+The [AvatarForcing paper](https://arxiv.org/abs/2601.00664) describes the model.
+The checkpoint terms are documented in the pinned
+[Apple Silicon reference's notice](https://github.com/johnrobinsn/avatarforcing-mlx/blob/d83df52b1d891cae7d12d68b247af7be6e6def07/NOTICE):
+noncommercial use, with an additional research-use restriction on the motion
+checkpoint. PortOS ships its own renderer, not the reference runner or weights.
+It downloads about 1.17 GB of pinned tensors, plus the Python wheels.
+The two community-mirrored AvatarForcing weight files are verified against
+their pinned Hub hashes, not independently attested to the authors' original
+Drive copies. The Wav2Vec2 encoder comes from Meta's pinned Hub repository.
+
+Developer entry points are
+[`scripts/ml/avatarforcing/stream.py`](../../scripts/ml/avatarforcing/stream.py)
+for the offline worker and
+[`scripts/ml/avatarforcing/render.py`](../../scripts/ml/avatarforcing/render.py)
+for a diagnostic MP4. The installer uses
+[`weights.py`](../../scripts/ml/avatarforcing/weights.py) and
+[`convert.py`](../../scripts/ml/avatarforcing/convert.py) to verify original
+bytes and convert only tensors, with writes confined to the weights folder.
+The worker loads only safetensors and has no network access or listener of its own.
+`python3 -B -m unittest discover -s scripts/ml/avatarforcing` runs the
+`test_motion.py` and `test_weights.py` regressions (motion tests use PyTorch).
+
 ## Stack
 
 | Stage | Default engine | Alternatives | Local? |

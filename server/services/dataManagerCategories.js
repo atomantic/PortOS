@@ -51,6 +51,7 @@ const CACHE_ENTRIES = {
   'huggingface-repos.json': { label: 'Hugging Face catalog cache', type: 'file', description: 'Rebuilt by fetching repository metadata again.' },
   'codex-usage-inventory': { label: 'Codex usage scan cache', type: 'directory', description: 'Rebuilt from Codex session logs. Clearing it does not delete those logs or saved PortOS usage records, but the next scan takes longer.' },
   runtimes: { label: 'Local model runtimes and weights', description: 'Runtime installations and downloaded models, not temporary files. Open this entry to manage the runtime installations.', sourceHref: '/models/llms-runtimes' },
+  avatarforcing: { label: 'Voice Call avatar runtime and weights', description: 'Manage AvatarForcing in Voice Call settings.', sourceHref: '/voice/call' },
   mkserve: { label: 'mkserve runtime and weights', description: 'Runtime installation and downloaded models. Manage them on the mkserve card.', sourceHref: '/models/llms-runtimes/mkserve' },
   'runtime-update-review.json': { label: 'Runtime update review state', description: 'PortOS uses this to track runtime update reviews. Kept by Data Manager.' },
 };

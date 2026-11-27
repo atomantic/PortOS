@@ -68,6 +68,7 @@ vi.mock('../../services/voiceClient', () => ({
   startContinuous: mocks.startContinuous,
   stopContinuous: mocks.stopContinuous,
   isContinuous: mocks.isContinuous,
+  whenVoiceTurnAudioDrained: vi.fn(async () => true),
   whenPlaybackDrained: vi.fn(() => Promise.resolve(true)),
   getVadLevel: vi.fn(() => 0),
   getVoiceOutputLevel: vi.fn(() => 0),

@@ -11,6 +11,7 @@ import { voiceEngineQuerySchema } from '../lib/queryValidation.js';
  */
 
 import { Router } from 'express';
+import voiceAvatarRoutes from './voiceAvatar.js';
 import { TTS_ENGINE_IDS, TTS_ENGINE_CONFIG_KEYS } from '../lib/voiceEngines.js';
 import { z } from 'zod';
 import { asyncHandler, ServerError } from '../lib/errorHandler.js';
@@ -46,6 +47,7 @@ import { HHMM_RE, MAX_PROACTIVE_TEXT_LEN } from '../services/voice/proactiveSpee
 import { voicePiperFetchBodySchema } from '../lib/voiceValidation.js';
 
 const router = Router();
+router.use('/avatar', voiceAvatarRoutes);
 router.use(observeModelMutations('voice-readiness'));
 
 const facetimeActionSchema = z.object({}).strict();

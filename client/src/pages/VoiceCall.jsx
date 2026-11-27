@@ -3,6 +3,7 @@ import { AudioLines, Settings2 } from 'lucide-react';
 import Drawer from '../components/Drawer';
 import PageHeader from '../components/PageHeader';
 import PageLayout from '../components/PageLayout';
+import AvatarRuntimeSettings from '../components/voice/AvatarRuntimeSettings';
 import { VoiceTab } from '../components/settings/VoiceTab';
 import { useVoiceConsole, useVoiceEnabled } from '../components/voice/VoiceWidgetGate';
 
@@ -29,7 +30,7 @@ export default function VoiceCall() {
       </div>
       <Drawer open={showSettings} onClose={() => setShowSettings(false)} title="Model & voice settings"
         subtitle="Changes apply to PortOS Voice on this instance, not just this call." size="xl">
-        {showSettings && <VoiceTab showCallLink={false} />}
+        {showSettings && <div className="space-y-4"><AvatarRuntimeSettings /><VoiceTab showCallLink={false} /></div>}
       </Drawer>
     </PageLayout>
   );
