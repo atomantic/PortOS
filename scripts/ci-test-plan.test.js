@@ -411,9 +411,9 @@ describe('late-bound hubs keep unrelated suites out of browser and DB plans (#17
     expect(planFor('server/services/eidoverse.js')).toMatchObject({ full: false, db: false, browserFiles: [] });
   });
 
-  it('selects DB tests for the port used by managed visitor credential restore', () => {
+  it('keeps DB and browser jobs isolated from the late-bound managed visitor credential restore port', () => {
     expect(planFor('server/lib/eidoversePort.js')).toMatchObject({
-      full: false, db: true, dbLiveRestore: false, browserFiles: [],
+      full: false, db: false, dbLiveRestore: false, browserFiles: [],
     });
   });
 
