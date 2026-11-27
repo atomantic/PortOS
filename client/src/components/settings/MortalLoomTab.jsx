@@ -6,7 +6,8 @@ import ToggleSwitch from '../ToggleSwitch';
 import SettingsLoadError from '../ui/SettingsLoadError';
 import useSettingsForm from '../../hooks/useSettingsForm.js';
 import { getSettings, updateSettings } from '../../services/apiSystem.js';
-import { getMortalLoomStatus, importMortalLoom } from '../../services/apiMortalLoom.js';
+import { downloadMortalLoomRecovery, getMortalLoomStatus, importMortalLoom, restoreMortalLoom } from '../../services/apiMortalLoom.js';
+import { downloadBlob } from '../../lib/downloadBlob.js';
 import { formatBytes, formatDateTime } from '../../utils/formatters';
 
 // The server reports a machine-readable `reason`; these are the ones worth
@@ -17,6 +18,88 @@ const IMPORT_FAILURE_MESSAGES = {
   'mortalloom-file-not-found': 'MortalLoom.json was not found at the configured path.',
   'mortalloom-file-unreadable': 'MortalLoom.json is in iCloud but has not been downloaded to this Mac yet. A download was requested — try again shortly.',
 };
+
+const STATUS_MESSAGES = {
+  missing: 'File not found. Check the path or use Restore from File in MortalLoom. PortOS will not create a replacement automatically.',
+  notCurrent: 'iCloud has not finished syncing this file. Wait, then check again before editing.',
+  conflicted: 'iCloud has conflicting versions. Keep both copies and resolve the conflict in MortalLoom before editing in PortOS.',
+  reduced: 'This file has substantially less history than a verified recovery copy. Edits are paused. Review the copies before continuing.',
+  invalid: 'MortalLoom cannot safely read this file. Edits are paused. Restore a known-good copy below or in MortalLoom.',
+  helperUnavailable: 'Editing the iCloud file requires the macOS Command Line Tools (xcode-select --install).',
+  oversized: 'This file is too large for PortOS to safely replace. Export a backup from MortalLoom before editing.',
+  unsupported: 'Editing the shared iCloud file requires PortOS on a Mac.',
+  unavailable: 'PortOS could not verify the shared file. Check the path and retry before editing.',
+};
+
+function RecoveryCopies({ status, disabled, refreshStatus }) {
+  const [selected, setSelected] = useState(null);
+  const [restoring, setRestoring] = useState(false);
+  const [downloading, setDownloading] = useState(false);
+  const snapshots = status?.recoverySnapshots ?? [];
+  if (!snapshots.length) return null;
+  const canRestore = Boolean(status.revision) && !disabled && !restoring;
+  const confirmation = selected?.revision === status.revision ? selected : null;
+  const restore = async () => {
+    if (!canRestore || !confirmation) return;
+    setRestoring(true);
+    try {
+      await restoreMortalLoom({ id: confirmation.id, expectedRevision: confirmation.revision }, { silent: true });
+      toast.success('MortalLoom recovery copy restored');
+    } catch (error) {
+      toast.error(error.message || 'Could not restore MortalLoom');
+    } finally {
+      setSelected(null);
+      await refreshStatus();
+      setRestoring(false);
+    }
+  };
+  const download = async (id) => {
+    if (downloading) return;
+    setDownloading(true);
+    try {
+      const blob = await downloadMortalLoomRecovery(id, { silent: true });
+      downloadBlob(blob, 'MortalLoom-Recovery.json');
+    } catch (error) {
+      toast.error(error.message || 'Could not download the recovery copy');
+    } finally {
+      setDownloading(false);
+    }
+  };
+  return (
+    <section className="space-y-2 border-t border-port-border pt-3">
+      <h4 className="text-sm font-semibold">Private recovery copies</h4>
+      <p className="text-xs text-gray-400">PortOS keeps the previous file before each save. Restoring replaces the shared file, not just one record.</p>
+      {!status.revision && <p className="text-xs text-port-warning">PortOS cannot verify that it is safe to replace the shared file. Download a verified copy and use Restore from File in MortalLoom, or recheck sync here.</p>}
+      <ul className="space-y-1">
+        {snapshots.map(snapshot => (
+          <li key={snapshot.id} className="flex flex-wrap items-center gap-3 text-sm">
+            <span>{formatDateTime(snapshot.savedAt)}</span>
+            <button type="button" disabled={!canRestore || !snapshot.valid}
+              onClick={() => setSelected({ ...snapshot, revision: status.revision })}
+              className="rounded border border-port-border px-3 py-2 text-port-accent hover:border-port-accent disabled:opacity-50">
+              {snapshot.valid ? 'Select copy' : 'Unreadable copy'}
+            </button>
+            {snapshot.valid && <button type="button" onClick={() => download(snapshot.id)}
+              disabled={downloading || restoring || disabled}
+              className="rounded border border-port-border px-3 py-2 hover:border-port-accent disabled:opacity-50">
+              Download copy
+            </button>}
+          </li>
+        ))}
+      </ul>
+      {confirmation && (
+        <div role="alert" className="space-y-2 text-sm text-port-warning">
+          <p>Replace the shared file with the {formatDateTime(confirmation.savedAt)} copy? It has {confirmation.summary.goals} goals and {confirmation.summary.healthMetrics} daily health records. The current file will also be backed up.</p>
+          <button type="button" onClick={restore} disabled={!canRestore}
+            className="me-3 rounded border border-port-warning px-3 py-2 disabled:opacity-50">
+            {restoring ? 'Restoring…' : 'Restore recovery copy'}
+          </button>
+          <button type="button" onClick={() => setSelected(null)} disabled={restoring} className="px-3 py-2">Cancel</button>
+        </div>
+      )}
+    </section>
+  );
+}
 
 export function MortalLoomTab() {
   const icloudPathId = useId();
@@ -61,7 +144,7 @@ export function MortalLoomTab() {
   useEffect(() => { loadAll(); }, [loadAll]);
 
   const saveDisabled = saving || importing || loadError || checkingStatus;
-  const importDisabled = saveDisabled || !saved.enabled || isDirty || !status?.exists;
+  const importDisabled = saveDisabled || !saved.enabled || isDirty || (status?.state ? status.state !== 'ready' : !status?.exists);
 
   const handleSave = async () => {
     if (saveDisabled) return;
@@ -106,6 +189,7 @@ export function MortalLoomTab() {
   if (loading) return <BrailleSpinner text="Loading MortalLoom settings" />;
 
   const effectivePath = status?.path || saved.path.trim() || status?.defaultPath || '';
+  const fileState = status?.state ?? (status?.exists ? 'ready' : 'missing');
 
   return (
     <div className="space-y-5">
@@ -116,7 +200,7 @@ export function MortalLoomTab() {
           <p className="text-sm text-gray-400">
             Share Goals and Meatspace data with the MortalLoom iOS/macOS app. MortalLoom writes
             a canonical <code className="text-port-accent">MortalLoom.json</code> to its iCloud
-            container &mdash; enabling this lets PortOS read from and import into the same file.
+            container &mdash; enabling this lets you view and edit supported records from either app.
           </p>
           <a
             href="https://apps.apple.com/app/id6760883701"
@@ -187,7 +271,13 @@ export function MortalLoomTab() {
       </div>
 
       <div className="bg-port-card border border-port-border rounded-xl p-4 sm:p-6 space-y-3">
-        <h3 className="text-sm font-semibold text-white">iCloud file status</h3>
+        <div className="flex flex-wrap items-center justify-between gap-2">
+          <h3 className="text-sm font-semibold text-white">iCloud file status</h3>
+          {status && <button type="button" disabled={saveDisabled} onClick={refreshStatus}
+            className="rounded border border-port-border px-3 py-2 text-xs hover:border-port-accent disabled:opacity-50">
+            Recheck status
+          </button>}
+        </div>
         {checkingStatus && <BrailleSpinner text="Checking iCloud file status" />}
         {!checkingStatus && statusError && (loadError
           ? <p className="text-xs text-port-warning">MortalLoom file status is unavailable.</p>
@@ -196,7 +286,7 @@ export function MortalLoomTab() {
         {!checkingStatus && status && (
           <div className="text-xs text-gray-400 space-y-1 font-mono">
             <div className="flex items-start gap-2">
-              {status?.exists ? (
+              {status?.exists && (!status.state || status.state === 'ready') ? (
                 <CheckCircle2 size={14} className="text-port-success mt-0.5 shrink-0" />
               ) : (
                 <AlertCircle size={14} className="text-port-warning mt-0.5 shrink-0" />
@@ -209,9 +299,8 @@ export function MortalLoomTab() {
                 <div>Modified: {status.mtime ? formatDateTime(status.mtime) : '—'}</div>
                 {lastImport && <div>Last import: {formatDateTime(lastImport)}</div>}
               </>
-            ) : status.exists === false && (
-              <div className="text-port-warning">File not found. Open MortalLoom on iPhone/Mac to create it, or verify the path.</div>
-            )}
+            ) : null}
+            {STATUS_MESSAGES[fileState] && <div className="text-port-warning">{STATUS_MESSAGES[fileState]}</div>}
           </div>
         )}
         {!checkingStatus && status?.summary && (
@@ -228,6 +317,7 @@ export function MortalLoomTab() {
             <div>Genome: <span className="text-white">{status.summary.hasGenome ? 'yes' : 'no'}</span></div>
           </div>
         )}
+        {!checkingStatus && <RecoveryCopies status={status} disabled={saveDisabled || isDirty} refreshStatus={refreshStatus} />}
       </div>
     </div>
   );

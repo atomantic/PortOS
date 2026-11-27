@@ -7,7 +7,7 @@ vi.mock('../../lib/fileUtils.js', async importOriginal =>
 vi.mock('../mortalLoomStore.js', () => ({
   isMortalLoomEnabled: async () => false,
   mlArrayIfEnabled: async () => null,
-  mlReplace: async () => {},
+  mlApplyGoalChanges: async () => {},
 }));
 vi.mock('../genome.js', () => ({ getGenomeSummary: async () => null }));
 vi.mock('../meatspace/meatspaceCalendar.js', () => ({ getActivities: async () => [] }));

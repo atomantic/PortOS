@@ -87,5 +87,5 @@ export async function applyGoalsRemote(remoteData) {
       return { applied: true, count: mergedGoals.length };
     }
     return { applied: false, count: 0 };
-  });
+  }, { localOnly: true });
 }

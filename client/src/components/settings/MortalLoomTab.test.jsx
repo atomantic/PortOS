@@ -6,11 +6,15 @@ const api = vi.hoisted(() => ({
   updateSettings: vi.fn(),
   getMortalLoomStatus: vi.fn(),
   importMortalLoom: vi.fn(),
+  restoreMortalLoom: vi.fn(),
+  downloadMortalLoomRecovery: vi.fn(),
 }));
 vi.mock('../../services/apiSystem.js', () => ({ getSettings: api.getSettings, updateSettings: api.updateSettings }));
 vi.mock('../../services/apiMortalLoom.js', () => ({
   getMortalLoomStatus: api.getMortalLoomStatus,
   importMortalLoom: api.importMortalLoom,
+  restoreMortalLoom: api.restoreMortalLoom,
+  downloadMortalLoomRecovery: api.downloadMortalLoomRecovery,
 }));
 vi.mock('../ui/Toast');
 
@@ -105,5 +109,31 @@ describe('MortalLoom import', () => {
     expect(screen.queryByText(/file status is unavailable/)).not.toBeInTheDocument();
     expect(api.getSettings).toHaveBeenCalledTimes(1);
     expect(api.getMortalLoomStatus).toHaveBeenLastCalledWith({ silent: true });
+  });
+});
+
+describe('MortalLoom recovery', () => {
+  const copy = { id: 'a'.repeat(64), savedAt: '2026-01-02T01:18:00Z', valid: true, summary: { goals: 3, healthMetrics: 31 } };
+  beforeEach(() => api.getSettings.mockResolvedValue({ mortalloom: { enabled: true } }));
+
+  it('previews a copy and only restores after explicit confirmation against the checked file', async () => {
+    const revision = 'b'.repeat(64);
+    api.getMortalLoomStatus.mockResolvedValue({ state: 'invalid', exists: true, revision, recoverySnapshots: [copy] });
+    api.restoreMortalLoom.mockResolvedValue({ ok: true });
+    render(<MortalLoomTab />);
+    fireEvent.click(await screen.findByRole('button', { name: 'Select copy' }));
+    expect(screen.getByRole('alert')).toHaveTextContent('3 goals and 31 daily health records');
+    expect(api.restoreMortalLoom).not.toHaveBeenCalled();
+    fireEvent.click(screen.getByRole('button', { name: 'Restore recovery copy' }));
+    expect(api.restoreMortalLoom).toHaveBeenCalledExactlyOnceWith({ id: copy.id, expectedRevision: revision }, { silent: true });
+    await waitFor(() => expect(screen.queryByRole('button', { name: 'Restore recovery copy' })).not.toBeInTheDocument());
+  });
+
+  it('shows copies without allowing an unverified or absent file to be replaced', async () => {
+    api.getMortalLoomStatus.mockResolvedValue({ state: 'missing', exists: false, revision: null, recoverySnapshots: [copy] });
+    render(<MortalLoomTab />);
+    expect(await screen.findByRole('button', { name: 'Select copy' })).toBeDisabled();
+    expect(screen.getByText(/cannot verify that it is safe/)).toBeVisible();
+    expect(screen.getByRole('button', { name: 'Download copy' })).toBeEnabled();
   });
 });
