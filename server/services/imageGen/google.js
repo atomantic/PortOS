@@ -103,7 +103,9 @@ async function encodeInputImage(filePath, reviewedBytes = null) {
   const { default: sharp } = await import('sharp');
   const metadata = await sharp(input).metadata();
   const longSide = Math.max(metadata.width || 0, metadata.height || 0);
-  if (longSide <= INPUT_MAX_LONG_SIDE && input.length <= INPUT_MAX_BYTES && ['png', 'jpeg', 'webp'].includes(metadata.format)) {
+  // Removing EXIF is safe only once the stored pixels already match the displayed orientation.
+  const isUpright = !metadata.orientation || metadata.orientation === 1;
+  if (isUpright && longSide <= INPUT_MAX_LONG_SIDE && input.length <= INPUT_MAX_BYTES && ['png', 'jpeg', 'webp'].includes(metadata.format)) {
     return googleInlineImage(stripImageMetadata(input).data);
   }
   const resized = sharp(input).rotate()
@@ -189,6 +191,7 @@ async function runGoogle(job, jobId, {
   const entry = runner.track(jobId, { controller: new AbortController() });
   // The activity ping keeps the media queue's idle watchdog quiet during one long synchronous call.
   const heartbeat = setInterval(() => imageGenEvents.emit('activity', { generationId: jobId }), 5000);
+  heartbeat.unref?.();
   try {
     const signal = entry.controller.signal;
     // A reviewed edit's snapshot replaces the first input's bytes (assertSnapshotForAdapter).
