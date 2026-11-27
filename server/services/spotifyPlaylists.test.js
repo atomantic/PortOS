@@ -145,6 +145,18 @@ describe('syncSpotifyPlaylists', () => {
     expect(mocks.sleep).not.toHaveBeenCalled();
   });
 
+  it.each([
+    [Object.assign(new Error('Revoked grant'), { code: 'INVALID_GRANT' }), { needsAuth: true }],
+    [new Error('Refresh timeout'), { needsAuth: false, error: 'Could not refresh Spotify authorization. Try syncing playlists again.' }],
+  ])('reports authorization refresh failures without writing a snapshot', async (error, failure) => {
+    mocks.getAccessToken.mockRejectedValueOnce(error);
+
+    const result = await syncSpotifyPlaylists();
+
+    expect(result).toMatchObject({ ok: false, ...failure });
+    expect(mocks.writeSecureJson).not.toHaveBeenCalled();
+  });
+
   it('does not overwrite an unreadable prior snapshot', async () => {
     mocks.readJSONFile.mockRejectedValueOnce(new Error('EIO'));
 

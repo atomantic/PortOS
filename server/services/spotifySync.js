@@ -256,6 +256,7 @@ async function doRunSync() {
   } catch (err) {
     console.error(`❌ Spotify activity record failed: ${err?.message || err}`);
     return fail({
+      status: 'persist-failed',
       error: 'Persistence failed — cursor held so the batch retries next sync',
       cursorAfter: state.cursorAfter,
       scanned,
