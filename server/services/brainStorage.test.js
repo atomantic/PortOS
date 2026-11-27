@@ -64,7 +64,7 @@ beforeEach(() => {
 
 const ISO = (s) => new Date(s).toISOString();
 
-it('refreshes search and graph projections after a live file restore', async () => {
+it('refreshes projections, settings and digest logs after a live file restore', async () => {
   const journalId = 'restore-journal';
   const personId = 'restore-person';
   await brainStorage.upsertWithId('journals', journalId, { content: 'Before restore' });
@@ -72,11 +72,20 @@ it('refreshes search and graph projections after a live file restore', async () 
   expect((await getBrainProjections('journals')).find(row => row.id === journalId)?.summary).toBe('Before restore');
   expect((await getBrainProjections('people')).find(row => row.id === personId)?.name).toBe('Before restore');
 
+  const digest = await brainStorage.createDigest({ summary: 'Before restore' });
+  expect(await brainStorage.getLatestDigest()).toEqual(digest);
+  expect((await brainStorage.loadMeta()).lastDailyDigest).toBe(digest.generatedAt);
+
   // Backup restores replace files directly, without per-record write events.
   writeFileSync(join(getTempRoot(), 'brain', 'journals', journalId, 'index.json'), JSON.stringify({ id: journalId, content: 'Restored journal' }));
   writeFileSync(join(getTempRoot(), 'brain', 'people', personId, 'index.json'), JSON.stringify({ id: personId, name: 'Restored person' }));
+  const restoredDigest = { ...digest, summary: 'Restored digest', generatedAt: '2020-01-01T00:00:00.000Z' };
+  writeFileSync(join(getTempRoot(), 'brain', 'digests.jsonl'), JSON.stringify(restoredDigest) + '\n');
+  writeFileSync(join(getTempRoot(), 'brain', 'meta.json'), JSON.stringify({ lastDailyDigest: restoredDigest.generatedAt }));
   brainStorage.invalidateAllCaches();
 
+  expect(await brainStorage.getLatestDigest()).toEqual(restoredDigest);
+  expect((await brainStorage.getSummary()).lastDailyDigest).toBe(restoredDigest.generatedAt);
   expect((await getBrainProjections('journals')).find(row => row.id === journalId)?.summary).toBe('Restored journal');
   expect((await getBrainProjections('people')).find(row => row.id === personId)?.name).toBe('Restored person');
 });
