@@ -81,7 +81,7 @@ export const CONNECTION_CREDENTIAL_ENV_VARS = Object.freeze([
 ]);
 
 /**
- * The value `server/routes/providers.js` substitutes for a secret on the way
+ * The value `server/routes/providers/presenter.js` substitutes for a secret on the way
  * out. A profile carrying it was built from a SANITIZED record, which can never
  * be trusted to prove two connections are the same.
  */
