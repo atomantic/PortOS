@@ -343,7 +343,7 @@ describe('bootstrap wiring', () => {
   // `createToolkit` has no unit harness — building it arms the whole toolkit —
   // so the fact the audit depends on is asserted against the source.
   const SRC = stripCommentsAndNormalize(
-    readFileSync(join(dirname(fileURLToPath(import.meta.url)), 'bootstrap.js'), 'utf-8'),
+    readFileSync(join(dirname(fileURLToPath(import.meta.url)), 'bootstrap/servicesPhase.js'), 'utf-8'),
   );
 
   it('runs the pin audit from the providers-saved hook alongside the graph reconcile', () => {

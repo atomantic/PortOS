@@ -497,6 +497,7 @@ export const FEATURE_AREAS = Object.freeze([
       'server/services/auth!(ors*)',
       'server/services/{settings,backup,database,db,cert,credential,update,instanceFeatures,instanceIdentity,bootstrap,boot,software,autoUpdate,ports}*',
       'server/services/backup/**',
+      'server/services/bootstrap/**',
       'client/src/pages/{Settings,Login,Capability,SystemHealth}*',
       'client/src/components/settings/!(DockerContainment*|Rigging*|MortalLoom*|voice)',
       'client/src/components/settings/{assessments,library}/**',

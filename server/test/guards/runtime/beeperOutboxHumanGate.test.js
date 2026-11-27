@@ -61,10 +61,10 @@ describe('beeper outbox has no agent-initiated send path (#36)', () => {
   it('is imported for a send by exactly one production module: the human HTTP route', () => {
     // Two non-send importers ride alongside the route, and the test below is
     // what keeps them non-send: `beeperStatus.js` reads the breaker's state for
-    // the settings card, and `bootstrap.js` calls the boot reconcile, whose two
+    // the settings card, and `bootstrap/schedulersPhase.js` calls the boot reconcile, whose two
     // arms are a state write and a re-armed LOOKUP — neither reaches
     // `sendMessage`, which is why a crash mid-send can never resend itself.
-    expect(evidence().importers).toEqual(['routes/beeper.js', 'services/beeper/beeperStatus.js', 'services/bootstrap.js']);
+    expect(evidence().importers).toEqual(['routes/beeper.js', 'services/beeper/beeperStatus.js', 'services/bootstrap/schedulersPhase.js']);
   });
 
   it('names the send functions in no production module but the route', () => {
