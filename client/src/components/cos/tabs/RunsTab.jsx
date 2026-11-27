@@ -41,6 +41,7 @@ export default function RunsTab() {
   const deepLinkRunId = searchParams.get('run');
   const [expandedId, setExpandedId] = useState(null);
   const [expandedDetails, setExpandedDetails] = useState({});
+  const detailRequests = useRef(new Map());
   const [sourceFilter, setSourceFilter] = useState('all');
   const [statusFilter, setStatusFilter] = useState('all');
   const { isConfirming, requestDelete, cancelDelete, confirmDelete } = useConfirmDelete();
@@ -181,21 +182,32 @@ export default function RunsTab() {
     });
   };
 
-  const expandRun = useCallback(async (id) => {
-    setExpandedId(id);
+  const loadRunDetails = useCallback((id, { force = false } = {}) => {
+    const pending = detailRequests.current.get(id);
+    if (pending) return pending;
+    const cached = expandedDetails[id];
+    if (cached && !force) return Promise.resolve(cached);
 
-    // Load full prompt and output if not already loaded
-    if (!expandedDetails[id]) {
-      const [prompt, output] = await Promise.all([
-        getRunPrompt(id).catch(() => ''),
-        getRunOutput(id).catch(() => '')
-      ]);
-      setExpandedDetails(prev => ({
-        ...prev,
-        [id]: { prompt, output }
-      }));
-    }
+    setExpandedDetails(prev => ({ ...prev, [id]: { status: 'loading' } }));
+    const request = Promise.all([
+      getRunPrompt(id, { silent: true }),
+      getRunOutput(id, { silent: true }),
+    ]).then(
+      ([prompt, output]) => ({ status: 'ready', prompt, output }),
+      error => ({ status: 'error', error }),
+    ).then(detail => {
+      setExpandedDetails(prev => ({ ...prev, [id]: detail }));
+      detailRequests.current.delete(id);
+      return detail;
+    });
+    detailRequests.current.set(id, request);
+    return request;
   }, [expandedDetails]);
+
+  const expandRun = useCallback((id) => {
+    setExpandedId(id);
+    loadRunDetails(id);
+  }, [loadRunDetails]);
 
   const toggleExpand = (id) => {
     if (expandedId === id) {
@@ -299,20 +311,16 @@ export default function RunsTab() {
   refreshPinnedRef.current = refreshPinned;
 
   const handleResume = async (run) => {
-    // Fetch details if not already loaded
-    let details = expandedDetails[run.id];
-    if (!details) {
-      const [prompt, output] = await Promise.all([
-        getRunPrompt(run.id).catch(() => ''),
-        getRunOutput(run.id).catch(() => '')
-      ]);
-      details = { prompt, output };
+    const details = await loadRunDetails(run.id);
+    if (details.status !== 'ready') {
+      setExpandedId(run.id);
+      return;
     }
     navigate('/devtools/runner', {
       state: {
         continueFrom: {
-          prompt: details.prompt || run.prompt,
-          output: details.output || '',
+          prompt: details.prompt,
+          output: details.output,
           runId: run.id,
           providerId: run.providerId,
           providerName: run.providerName,
@@ -366,6 +374,7 @@ export default function RunsTab() {
   };
 
   const renderRun = (run) => {
+    const detail = expandedDetails[run.id];
     const expanded = expandedId === run.id;
     const detailsId = `run-details-${run.id}`;
     const runLabel = [run.providerName, run.model, `(${run.id})`].filter(Boolean).join(' ');
@@ -592,28 +601,35 @@ export default function RunsTab() {
               </div>
             )}
 
-            {/* Prompt */}
-            <div>
-              <div className="text-xs text-gray-500 uppercase tracking-wide mb-2">Prompt</div>
-              <div className="bg-port-card border border-port-border rounded-lg p-3 max-h-48 overflow-auto">
-                <pre className="text-sm text-gray-300 font-mono whitespace-pre-wrap break-all">
-                  {expandedDetails[run.id]?.prompt || run.prompt || <BrailleSpinner text="Loading prompt" />}
-                </pre>
-              </div>
-            </div>
-
-            {/* Output - show for all completed runs */}
-            {run.success !== null && (
-              <div>
-                <div className="text-xs text-gray-500 uppercase tracking-wide mb-2">Output</div>
-                <div className="bg-port-card border border-port-border rounded-lg p-3 max-h-64 overflow-auto">
-                  <pre className="text-xs text-gray-300 font-mono whitespace-pre-wrap break-all">
-                    {expandedDetails[run.id]?.output !== undefined
-                      ? (expandedDetails[run.id].output || '(no output)')
-                      : 'Loading output...'}
-                  </pre>
+            {detail?.status === 'loading' && <BrailleSpinner text="Loading run details" />}
+            {detail?.status === 'error' && (
+              <ListLoadError
+                what="run details"
+                error={detail.error}
+                onRetry={() => loadRunDetails(run.id, { force: true })}
+              />
+            )}
+            {detail?.status === 'ready' && (
+              <>
+                <div>
+                  <div className="text-xs text-gray-500 uppercase tracking-wide mb-2">Prompt</div>
+                  <div className="bg-port-card border border-port-border rounded-lg p-3 max-h-48 overflow-auto">
+                    <pre className="text-sm text-gray-300 font-mono whitespace-pre-wrap break-all">
+                      {detail.prompt || '(no prompt)'}
+                    </pre>
+                  </div>
                 </div>
-              </div>
+                {run.success !== null && (
+                  <div>
+                    <div className="text-xs text-gray-500 uppercase tracking-wide mb-2">Output</div>
+                    <div className="bg-port-card border border-port-border rounded-lg p-3 max-h-64 overflow-auto">
+                      <pre className="text-xs text-gray-300 font-mono whitespace-pre-wrap break-all">
+                        {detail.output || '(no output)'}
+                      </pre>
+                    </div>
+                  </div>
+                )}
+              </>
             )}
           </div>
         </div>
