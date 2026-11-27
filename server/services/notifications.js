@@ -24,6 +24,7 @@ export const notificationEvents = new EventEmitter();
 
 // In-memory cache
 let notificationsCache = null;
+let cacheGeneration = 0;
 
 export { NOTIFICATION_TYPES } from '../lib/notificationTypes.js';
 
@@ -50,6 +51,7 @@ async function ensureDirectory() {
 async function loadNotifications() {
   if (notificationsCache) return notificationsCache;
 
+  const generation = cacheGeneration;
   await ensureDirectory();
 
   // STRICT (#4115): this feeds `getUnreadCount()`, the bell badge served by
@@ -57,8 +59,10 @@ async function loadNotifications() {
   // also the base of every read-modify-write (`saveNotifications`), so a
   // swallowed unreadable read would let the next markAsRead truncate the file.
   // `ensureDirectory()` above can already reject, so callers tolerate a throw.
-  notificationsCache = await readJSONFile(NOTIFICATIONS_FILE, { version: 1, notifications: [] }, { strict: true });
-  return notificationsCache;
+  const data = await readJSONFile(NOTIFICATIONS_FILE, { version: 1, notifications: [] }, { strict: true });
+  if (generation !== cacheGeneration) return loadNotifications();
+  notificationsCache = data;
+  return data;
 }
 
 /**
@@ -67,6 +71,7 @@ async function loadNotifications() {
 async function saveNotifications(data) {
   await ensureDirectory();
   await atomicWrite(NOTIFICATIONS_FILE, data);
+  cacheGeneration += 1;
   notificationsCache = data;
 }
 
@@ -326,5 +331,9 @@ export async function exists(type, metadataField, metadataValue) {
  * Invalidate cache (call after external changes)
  */
 export function invalidateCache() {
+  cacheGeneration += 1;
   notificationsCache = null;
 }
+
+/** Hold mutations through live backup transfer and cache reconciliation. */
+export const withLiveRestore = (restore) => withLock(() => restore(invalidateCache));

@@ -602,6 +602,15 @@ async function snapshotLegacyCosConfig(srcDir, scope) {
   return config && typeof config === 'object' && !Array.isArray(config) ? config : null;
 }
 
+function cachedStoreOwner(path, loadOwner) {
+  return {
+    name: path,
+    refreshLabel: `${path} cache invalidation`,
+    appliesTo: scope => !scope || path === scope.toLowerCase() || path.startsWith(`${scope.toLowerCase()}/`),
+    hold: async inner => (await loadOwner()).withLiveRestore(inner),
+  };
+}
+
 /**
  * Owners a live file restore holds, OUTERMOST FIRST — this array order IS the
  * acquisition order, and each owner is released in reverse after everything
@@ -615,6 +624,7 @@ async function snapshotLegacyCosConfig(srcDir, scope) {
  *
  * - The snapshot cut drains in-flight asset publications BEFORE any domain
  *   queue they may need to finish, and keeps admission closed throughout.
+ * - App edits can await the task schedule queue, so apps precede that queue.
  * - Schedule mutations can await CoS state, so their queue precedes CoS.
  * - The settings queue stays held through CoS reconciliation.
  * - The visitor credential queue drains writes and holds them through publication.
@@ -639,6 +649,7 @@ const LIVE_FILE_RESTORE_OWNERS = Object.freeze([
       }
     },
   },
+  cachedStoreOwner('apps.json', () => import('../apps.js')),
   {
     name: 'task schedule',
     appliesTo: scope => !scope || scope === 'cos' || scope === 'cos/task-schedule.json',
@@ -701,6 +712,10 @@ const LIVE_FILE_RESTORE_OWNERS = Object.freeze([
       return withLiveVoiceTimersRestore(inner);
     },
   },
+  cachedStoreOwner('notifications.json', () => import('../notifications.js')),
+  cachedStoreOwner('feeds.json', () => import('../feeds.js')),
+  cachedStoreOwner('agents/schedules.json', () => import('../automationScheduler.js')),
+  cachedStoreOwner('agents/agents.json', () => import('../agent/agentPersonalities.js')),
   {
     name: 'Apple Health day files',
     appliesTo: scope => !scope || scope === 'health' || scope.startsWith('health/'),

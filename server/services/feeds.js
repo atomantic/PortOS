@@ -38,9 +38,15 @@ const dedupeByLink = (items, seen = new Set()) =>
 
 // Sort runs on writes only; getItems trusts the invariant. Legacy unsorted
 // state on disk gets normalized once on first read (see ensureItemsSorted).
-// The invariant assumes this module owns all writes to feeds.json — out-of-band
-// edits while the process is running won't retrigger normalization.
+// A live restore resets the invariant before queued mutations can run.
 let _itemsSorted = false;
+
+export function invalidateCache() {
+  store.invalidateCache();
+  _itemsSorted = false;
+}
+
+export const withLiveRestore = (restore) => store.withLiveRestore(() => restore(invalidateCache));
 const sortItemsNewestFirst = (items) => {
   items.sort(compareItemsNewestFirst);
   _itemsSorted = true;
