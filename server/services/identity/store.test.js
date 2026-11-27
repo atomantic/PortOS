@@ -22,7 +22,7 @@ const ml = vi.hoisted(() => ({ goals: null }));
 vi.mock('../mortalLoomStore.js', () => ({
   isMortalLoomEnabled: vi.fn(async () => ml.goals !== null),
   mlArrayIfEnabled: vi.fn(async (key) => (key === 'goals' ? ml.goals : null)),
-  mlReplace: vi.fn(async () => {}),
+  mlApplyGoalChanges: vi.fn(async () => {}),
 }));
 
 // getIdentityStatus is the real strict `status === 'active'` consumer these tests reach through
@@ -267,7 +267,7 @@ describe('mutateGoals — serialized read-modify-write (#8755)', () => {
       goals.goals.push({ id: 'g1' });
       return goals;
     });
-    const { mlReplace } = await import('../mortalLoomStore.js');
-    expect(mlReplace).toHaveBeenCalledWith('goals', [expect.objectContaining({ id: 'g1' })]);
+    const { mlApplyGoalChanges } = await import('../mortalLoomStore.js');
+    expect(mlApplyGoalChanges).toHaveBeenCalledWith([], [expect.objectContaining({ id: 'g1' })]);
   });
 });

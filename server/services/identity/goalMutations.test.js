@@ -23,7 +23,7 @@ vi.mock('../../lib/fileUtils.js', () => ({
 vi.mock('../mortalLoomStore.js', () => ({
   isMortalLoomEnabled: async () => h.mirror !== null,
   mlArrayIfEnabled: async () => structuredClone(h.mirror),
-  mlReplace: vi.fn(async (_key, goals) => { h.mirror = structuredClone(goals); })
+  mlApplyGoalChanges: vi.fn(async (_before, goals) => { h.mirror = structuredClone(goals); })
 }));
 vi.mock('../userTimezone.js', () => ({ userLocalToday: async () => '2026-01-01' }));
 vi.mock('../meatspace/meatspaceCalendar.js', () => ({ getActivities: async () => [] }));
@@ -85,7 +85,7 @@ describe('shared goal document writers', () => {
     expect(h.document.goals[0]).toMatchObject({ todos: [], progress: 60 });
   });
 
-  it('re-reads lazy normalization after a concurrent progress write and then stays read-only', async () => {
+  it('never writes stale normalization over a concurrent goal edit', async () => {
     h.readBarrier = barrier();
     const held = h.readBarrier;
     const reading = goals.getGoals();
@@ -93,9 +93,10 @@ describe('shared goal document writers', () => {
     await goals.addProgressEntry('example', { date: '2026-01-01', note: 'Retain me' });
     await goals.updateGoal('example', { title: 'Retain title' });
     held.release.resolve();
-    expect((await reading).goals[0]).toMatchObject({ title: 'Retain title', progressLog: [{ note: 'Retain me' }], tags: [] });
+    expect((await reading).goals[0]).toMatchObject({ title: 'Example goal', tags: [] });
+    expect(atomicWrite).toHaveBeenCalledTimes(2);
     atomicWrite.mockClear();
-    await goals.getGoals();
+    expect((await goals.getGoals()).goals[0]).toMatchObject({ title: 'Retain title', progressLog: [{ note: 'Retain me' }], tags: [] });
     expect(atomicWrite).not.toHaveBeenCalled();
   });
 

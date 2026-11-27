@@ -22,7 +22,6 @@ vi.mock('../lib/fileUtils.js', async original => {
 vi.mock('./mortalLoomStore.js', () => ({
   isMortalLoomEnabled: async () => false,
   mlArrayIfEnabled: async () => null,
-  mlReplace: vi.fn()
 }));
 vi.mock('./calendarSync.js', () => ({
   getEvents: async ({ limit = 50, offset = 0 }) => {

@@ -30,6 +30,10 @@ import { getSettings, settingsEvents } from './settings.js';
 import { isVitestRunner } from '../lib/runtimeEnv.js';
 import { canonicalizePath, isPathAtOrInsideDir } from '../lib/pathContainment.js';
 
+import { commitMortalLoomRevision, inspectMortalLoomTarget, listMortalLoomSnapshots, MORTALLOOM_MAX_BYTES, mortalLoomRevision, readMortalLoomCommitReceipt, readMortalLoomSnapshot, recordMortalLoomCommit, storeFailure } from './mortalLoomCommit.js';
+import { summarizeMortalLoomHistory, suspiciousMortalLoomContraction, verifiedMortalLoomCommitReceipt, verifyMortalLoomStore } from './mortalLoomSchema.js';
+import { applyMortalLoomGoalChanges, hasMortalLoomGoalChanges } from './mortalLoomGoals.js';
+
 const DEFAULT_ICLOUD_PATH = join(
   homedir(),
   'Library/Mobile Documents/iCloud~net~shadowpuppet~MeatSpaceTracker/Documents/MortalLoom.json'
@@ -485,80 +489,140 @@ export async function readStore() {
   return readStoreAtPath(await resolvePath());
 }
 
-async function writeStoreAtPath(path, data) {
-  await withTransientRetry(() => atomicWrite(path, data));
+// One in-process tail plus a cross-process revision check at the storage boundary.
+const queueStoreWrite = createFileWriteQueue();
+
+async function getWritablePath() {
+  const settings = await getSettings();
+  const path = normalizePath(settings?.mortalloom?.path);
+  if (!path) throw new Error('MortalLoom tests must configure an isolated temporary store');
+  if (!settings?.mortalloom?.enabled) throw storeFailure('disabled');
+  return path;
+}
+
+async function readWritableBytes(path) {
+  try {
+    await inspectMortalLoomTarget(path);
+  } catch (error) {
+    if (error.code === 'MORTALLOOM_NOT_CURRENT') requestMaterialization(path, { label: 'MortalLoom store' });
+    throw error;
+  }
+  const load = () => withTransientRetry(() => readIfMaterialized(path, { encoding: null, label: 'MortalLoom store' }));
+  let bytes;
+  try { bytes = await load(); }
+  catch (error) {
+    if (error.code === ICLOUD_NOT_MATERIALIZED && await materializeNow(path)) {
+      bytes = await load().catch(() => { throw storeFailure('notCurrent'); });
+    } else {
+      throw storeFailure(error.code === 'ENOENT' ? 'missing' : error.code === ICLOUD_NOT_MATERIALIZED ? 'notCurrent' : 'unavailable');
+    }
+  }
+  return Buffer.isBuffer(bytes) ? bytes : Buffer.from(bytes);
+}
+
+async function getVerifiedRecoveryCopy(path, id) {
+  const bytes = await readMortalLoomSnapshot(path, id);
+  return { bytes, data: parseWritableStore(bytes) };
+}
+
+async function contractionComparedWithRecovery(path, candidate, revision, rows) {
+  const receipt = verifiedMortalLoomCommitReceipt(await readMortalLoomCommitReceipt(path));
+  const current = summarizeMortalLoomHistory(candidate);
+  const copies = rows ?? await listMortalLoomSnapshots(path);
+  const marker = candidate._mortalLoomSync;
+  const replaces = digest => marker?.version === 1 && marker.kind === 'replace' && marker.parentSHA256 === digest;
+  for (const { id, savedAt } of copies) {
+    // An older preimage is not the baseline after a successful PortOS
+    // deletion. On changed bytes, compare with the last committed counts or
+    // more recent verified recovery bytes, never just trust an old digest.
+    if (receipt && receipt.recordedAt >= Date.parse(savedAt)) break;
+    try {
+      const bytes = await readMortalLoomSnapshot(path, id);
+      if (id === copies[0]?.id && replaces(id)) return false;
+      return suspiciousMortalLoomContraction(summarizeMortalLoomHistory(parseWritableStore(bytes)), current);
+    } catch { /* a corrupt preserved preimage isn't a baseline */ }
+  }
+  if (receipt && (receipt.revision === revision || replaces(receipt.revision))) return false;
+  return receipt ? suspiciousMortalLoomContraction(receipt.history, current) : false;
+}
+
+function parseWritableStore(bytes) {
+  return verifyMortalLoomStore(safeJSONParse(bytes.toString('utf8'), null));
+}
+
+async function commitStore(path, raw, base) {
+  if (await getWritablePath() !== path) throw storeFailure('revisionChanged');
+  const bytes = Buffer.from(`${JSON.stringify(base, null, 2)}\n`);
+  await commitMortalLoomRevision(path, raw, bytes);
+  await recordMortalLoomCommit(path, {
+    version: 1, revision: mortalLoomRevision(bytes), recordedAt: Date.now(), history: summarizeMortalLoomHistory(base),
+  });
   dashboardEvents.emit('goals:changed');
 }
 
-// One tail for the whole store file: overlapping read → mutate → write cycles
-// would otherwise read the same pre-image and drop each other's mutations.
-const queueStoreWrite = createFileWriteQueue();
-
-/** Atomic read → mutate → write, serialized per store. Ensures all array keys are initialized. */
+/** Never initialize, normalize damaged sections, or republish an unchanged canonical file. */
 export function updateStore(mutator) {
-  return queueStoreWrite(() => updateStoreUnqueued(mutator));
+  return queueStoreWrite(async () => {
+    const path = await getWritablePath();
+    const raw = await readWritableBytes(path);
+    const base = parseWritableStore(raw);
+    if (await contractionComparedWithRecovery(path, base, mortalLoomRevision(raw))) throw storeFailure('reduced');
+    const before = structuredClone(base);
+    for (const key of ARRAY_KEYS) {
+      if (base[key] == null) base[key] = [];
+    }
+    const result = await mutator(base);
+    // Native optional sections not touched by this edit stay absent/null.
+    for (const key of ARRAY_KEYS) {
+      if (before[key] == null && Array.isArray(base[key]) && base[key].length === 0) {
+        if (Object.hasOwn(before, key)) base[key] = before[key];
+        else delete base[key];
+      }
+    }
+    if (canonicalStringify(base) === canonicalStringify(before)) return result;
+    verifyMortalLoomStore(base);
+    delete base._mortalLoomSync;
+    await commitStore(path, raw, base);
+    invalidateMortalLoomChanges(before, base);
+    return result;
+  });
 }
 
-async function updateStoreUnqueued(mutator) {
-  // Resolve the path once and pass it through to both read and write — settings
-  // could change mid-call, so we'd otherwise risk reading from one path and
-  // writing to another (or the overwrite-guard's existsSync looking at a
-  // different file than the read).
-  const path = await resolvePath();
-  if (!path) throw new Error('MortalLoom tests must configure an isolated temporary store');
-  let store = await readStoreAtPath(path);
-  // The overwrite guard is based solely on post-read state, not a pre-read
-  // snapshot. readStoreAtPath returns null for several reasons; we only care
-  // about the *currently observable* state when deciding whether it's safe
-  // to write:
-  //   (1) file does not exist now → safe to seed a fresh store (whether it was
-  //       absent the whole time, disappeared mid-call, or never appeared in the
-  //       first place). An absent path is unambiguously absent: the only eviction
-  //       representation that would hide real data behind a false `existsSync` is
-  //       the pre-APFS `.icloud` placeholder, which does not occur (#3716).
-  //   (2) file exists now but parsed to a non-plain-object value → unreadable
-  //       (transient iCloud read failure, corrupt JSON, or unexpected shape
-  //       like a top-level array which JSON.stringify would silently drop).
-  // For (2) the most common cause on macOS is iCloud eviction
-  // (Optimize-Mac-Storage made the file dataless and the sub-200ms transient
-  // retry isn't long enough to materialize it). Before refusing — which blocks
-  // the user's write — force a BLOCKING `brctl download` and re-read once. This
-  // is the on-demand pre-warm the fire-and-forget boot pin can't guarantee
-  // hours after boot, when the file has been re-evicted under disk pressure.
-  // Only genuinely corrupt JSON / unexpected shapes / offline-evicted files
-  // survive to the throw. Without this guard, the iCloud transient-failure
-  // tolerance in readStoreAtPath would let updateStore silently truncate a
-  // momentarily unreadable iCloud file.
-  const unsafeToSeed = existsSync(path) && !isPlainObject(store);
-  if (unsafeToSeed) {
-    // `materializeNow` resolving `true` only means brctl ACCEPTED the download
-    // request (exit 0), NOT that the bytes are local — see its docblock. Do NOT
-    // remove the re-read's screening on the strength of that `true`: `readStoreAtPath`
-    // → `readStoreAtPathResult` calls `readIfMaterialized`, which REJECTS instead of
-    // issuing a blocking read for a file it can't safely read — a still-dataless file
-    // rejects on the `stat()` re-screen — and `readStoreAtPathResult` catches that
-    // and returns `store: null`. Either way store stays null and we refuse rather
-    // than reading blindly (which is what would risk stranding a threadpool slot).
-    const materialized = await materializeNow(path);
-    if (materialized) {
-      store = await readStoreAtPath(path);
-      console.log(`📥 MortalLoom store iCloud download requested before write: ${path}`);
-    }
-    if (!isPlainObject(store)) {
-      // Log the resolved path server-side for diagnostics; keep the thrown
-      // message path-free so it doesn't get echoed back to the UI (route
-      // errors serialize as `error: error.message`).
-      console.error(`❌ MortalLoom store at ${path} is unreadable${materialized ? ' even after iCloud materialize' : ''}; refusing to overwrite`);
-      throw new Error('MortalLoom store is unreadable; refusing to overwrite');
-    }
-  }
-  const base = store || {};
-  for (const k of ARRAY_KEYS) if (!Array.isArray(base[k])) base[k] = [];
-  const before = structuredClone(base);
-  const result = await mutator(base);
-  await writeStoreAtPath(path, base);
-  invalidateMortalLoomChanges(before, base);
-  return result;
+/** Project only changed shared fields; never copy PortOS's goal model wholesale. */
+export async function mlApplyGoalChanges(before, after) {
+  if (!hasMortalLoomGoalChanges(before, after)) return false;
+  return updateStore(base => applyMortalLoomGoalChanges(base.goals, before, after));
+}
+
+/** An explicit user-confirmed recovery; the preview's exact revision is required. */
+export function restoreMortalLoomSnapshot({ id, expectedRevision }) {
+  return queueStoreWrite(async () => {
+    const path = await getWritablePath();
+    const raw = await readWritableBytes(path);
+    if (mortalLoomRevision(raw) !== expectedRevision) throw storeFailure('revisionChanged');
+    const { data: candidate } = await getVerifiedRecoveryCopy(path, id);
+    candidate._mortalLoomSync = { version: 1, parentSHA256: expectedRevision, kind: 'replace' };
+    await commitStore(path, raw, candidate);
+    invalidateMortalLoomChanges(null, candidate);
+    return { ok: true };
+  });
+}
+
+async function readConfiguredRecoveryCopy(id) {
+  const settings = await getSettings();
+  const path = normalizePath(settings?.mortalloom?.path);
+  if (!path) throw storeFailure('missing');
+  return getVerifiedRecoveryCopy(path, id);
+}
+
+export async function exportMortalLoomRecoveryCopy(id) {
+  const { bytes } = await readConfiguredRecoveryCopy(id);
+  return bytes;
+}
+
+export async function previewMortalLoomRecoveryCopy(id) {
+  const { data } = await readConfiguredRecoveryCopy(id);
+  return { goals: data.goals?.length ?? 0, healthMetrics: data.healthMetrics?.length ?? 0 };
 }
 
 /** Uppercase UUID v4 — matches MortalLoom's iOS/macOS id format. */
@@ -602,10 +666,6 @@ export async function mlRemoveWhere(key, predicate) {
     });
     return removed;
   });
-}
-
-export async function mlReplace(key, array) {
-  await updateStore(store => { store[key] = array; });
 }
 
 // === Profile (HealthProfile mirror: biologicalSex, birthDate, lifestyle, …) ===
@@ -835,9 +895,12 @@ export async function getStatus() {
   const s = await getSettings();
   const path = normalizePath(s?.mortalloom?.path);
   const enabled = Boolean(s?.mortalloom?.enabled);
+  const backupRows = await listMortalLoomSnapshots(path).catch(() => []);
+  const recoverySnapshots = backupRows.map(({ id, savedAt }) => ({ id, savedAt }));
   const missingResponse = {
     enabled, path, usingDefault: path === DEFAULT_ICLOUD_PATH, defaultPath: DEFAULT_ICLOUD_PATH,
-    exists: false, size: 0, mtime: null, summary: null, appStoreUrl: MORTALLOOM_APP_STORE_URL,
+    exists: false, size: 0, mtime: null, summary: null, state: 'missing', revision: null,
+    recoverySnapshots, appStoreUrl: MORTALLOOM_APP_STORE_URL,
   };
   if (!path || !existsSync(path)) return missingResponse;
   // Same transient-iCloud-failure tolerance as readStoreAtPath() — surface a
@@ -869,7 +932,8 @@ export async function getStatus() {
     warnEvictedOnce(`status summary unavailable: ${path}`);
     requestMaterialization(path, { label: 'MortalLoom store' });
   }
-  const raw = st && !evicted ? await withTransientRetry(() => readIfMaterialized(path, { label: 'MortalLoom store' })).catch((err) => {
+  const oversized = (st?.size ?? 0) > MORTALLOOM_MAX_BYTES;
+  const raw = st && !evicted && !oversized ? await withTransientRetry(() => readIfMaterialized(path, { encoding: null, label: 'MortalLoom store' })).catch((err) => {
     if (err.code === 'ENOENT') { readEnoent = true; return null; }
     console.warn(`⚠️ MortalLoom status read unavailable (${err.code || err.errno || 'unknown'}): ${path}`);
     return null;
@@ -878,16 +942,38 @@ export async function getStatus() {
   // between the two calls — collapse to the missing response so the endpoint
   // doesn't advertise a phantom file with stale stat metadata.
   if (readEnoent) return missingResponse;
-  const parsed = raw === null ? null : safeJSONParse(raw, null);
-  // Only compute a summary when the top-level JSON is a plain `{…}` shape.
-  // An unexpected top-level array would otherwise pass `typeof === 'object'`
-  // and we'd render a misleading 0-count summary instead of `null` (which
-  // the UI distinguishes as "store unavailable").
-  const data = isPlainObject(parsed) ? parsed : null;
+  const revision = raw === null ? null : mortalLoomRevision(raw);
+  let state = evicted ? 'notCurrent' : oversized ? 'oversized' : raw === null ? 'unavailable' : 'ready';
+  let writeReady = false;
+  let data = null;
+  if (state === 'ready') {
+    try {
+      data = parseWritableStore(raw);
+      if (await contractionComparedWithRecovery(path, data, revision, backupRows)) state = 'reduced';
+    } catch {
+      state = 'invalid';
+    }
+  }
+  if (enabled && raw !== null) {
+    try {
+      await inspectMortalLoomTarget(path);
+      writeReady = true;
+    } catch (error) {
+      state = {
+        MORTALLOOM_NOT_CURRENT: 'notCurrent',
+        MORTALLOOM_CONFLICT: 'conflicted',
+        MORTALLOOM_HELPER_UNAVAILABLE: 'helperUnavailable',
+        MORTALLOOM_UNSUPPORTED: 'unsupported',
+      }[error.code] ?? 'unavailable';
+      if (state === 'notCurrent') requestMaterialization(path, { label: 'MortalLoom store' });
+    }
+  }
+
   const count = k => Array.isArray(data?.[k]) ? data[k].length : 0;
   return {
     enabled, path, usingDefault: path === DEFAULT_ICLOUD_PATH, defaultPath: DEFAULT_ICLOUD_PATH,
     exists: true, size: st?.size ?? 0, mtime: st?.mtime?.toISOString() ?? null,
+    state, recoverySnapshots, revision: writeReady ? revision : null,
     summary: data ? {
       goals: count('goals'),
       alcoholDrinks: count('alcoholDrinks'),

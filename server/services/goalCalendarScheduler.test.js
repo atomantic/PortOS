@@ -25,7 +25,6 @@ vi.mock('../lib/fileUtils.js', async (importOriginal) =>
 vi.mock('./mortalLoomStore.js', () => ({
   isMortalLoomEnabled: vi.fn(async () => false),
   mlArrayIfEnabled: vi.fn(async () => null),
-  mlReplace: vi.fn(async () => {}),
 }));
 
 const insertedEvents = [];

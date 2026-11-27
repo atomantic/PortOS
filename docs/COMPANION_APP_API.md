@@ -313,7 +313,23 @@ is MortalLoom (`server/routes/mortalloom.js`, `server/services/mortalLoomStore.j
 
 - `GET /api/mortalloom/status` — store status.
 - `POST /api/mortalloom/import` — non-destructive **by-id merge** of the shared
-  iCloud JSON into `data/`.
+  iCloud JSON into `data/`. PortOS federation and this import do not publish
+  changes back to MortalLoom.
+- `POST /api/mortalloom/recovery/preview` — host-control-only summary of a
+  verified recovery copy by ID. Status lists dates and IDs without opening each
+  copy. `POST /api/mortalloom/recovery/download` validates the selected copy
+  and returns a private JSON attachment. `POST /api/mortalloom/restore`
+  explicitly restores a copy against the exact current revision shown in
+  Settings → MortalLoom. Use MortalLoom's Restore from File with a downloaded
+  copy if the shared file is missing or iCloud reports a conflict.
+
+Normal edits update only the supported native fields and keep PortOS-only goal
+planning metadata local. On Mac the bundled Swift helper requires the macOS
+Command Line Tools. It coordinates a local exact-revision check before
+replacing the file; this is not a cross-device transaction. If iCloud reports
+a conflict or incomplete download, or a verified local copy reveals substantial
+missing history, PortOS pauses shared writes. Recovery copies stay outside the
+served and federated PortOS data folders.
 
 A POST-progress iCloud reconciliation endpoint would need an explicit privacy
 design before it can mirror this precedent. Until then there is no cross-instance

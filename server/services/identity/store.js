@@ -1,16 +1,17 @@
 /**
  * Identity goal and longevity store — normalization and serialized file writes.
  *
- * Storage: `file-primary` (`data/digital-twin/goals.json`, mirrored to MortalLoom) —
- * federated through the dataSync `goals` category. Progress entries may carry an
- * optional daily-review `sourceKey`; mutations replace only matching entries, and
+ * PortOS-only planning data is file-primary (`data/digital-twin/goals.json`) and
+ * federated through the dataSync `goals` category. Shared fields use MortalLoom
+ * when enabled. Progress entries may carry an optional daily-review `sourceKey`; mutations replace only matching entries, and
  * legacy entries get no backfill because their provenance cannot be assigned safely.
  */
 import { meatspaceEvents } from '../meatspace/meatspaceEvents.js';
 import { dashboardEvents } from '../dashboardEvents.js';
 import { join } from 'path';
 import { atomicWrite, PATHS, ensureDir, readJSONFileStrict, readJSONFile } from '../../lib/fileUtils.js';
-import { isMortalLoomEnabled, mlArrayIfEnabled, mlReplace } from '../mortalLoomStore.js';
+import { isMortalLoomEnabled, mlArrayIfEnabled, mlApplyGoalChanges } from '../mortalLoomStore.js';
+import { nativeGoalId, overlayMortalLoomGoals } from '../mortalLoomGoals.js';
 import { createKeyCachedQueue } from '../../lib/createKeyCachedQueue.js';
 
 // === Goal normalization defaults ===
@@ -142,7 +143,7 @@ export async function loadJSON(filePath, defaultVal, { strict = false } = {}) {
     // store with no `goals` key returns null (not a throw) and falls through to
     // the local mirror below — see mlArrayIfEnabled's semantic note.
     mlGoals = await mlArrayIfEnabled('goals', { strict });
-    if (mlGoals) data.goals = mlGoals.map(normalizeGoal);
+    if (mlGoals) data.goals = overlayMortalLoomGoals(mlGoals, data.goals).map(normalizeGoal);
   }
   // Strictness gates on the source that actually supplies the counted array, which
   // is why this sits AFTER the MortalLoom probe. On an ML-backed install the local
@@ -159,15 +160,20 @@ export async function loadJSON(filePath, defaultVal, { strict = false } = {}) {
   return data;
 }
 
-export async function saveJSON(filePath, data, { mirrorGoals = true } = {}) {
+export async function saveJSON(filePath, data) {
   await ensureIdentityDir();
   await atomicWrite(filePath, data);
   if (filePath === LONGEVITY_FILE) meatspaceEvents.emit('death-clock:changed', {});
-  // Mirror goals array into MortalLoom.json so iOS/macOS app sees the change.
-  if (filePath === GOALS_FILE && mirrorGoals && (await isMortalLoomEnabled()) && Array.isArray(data.goals)) {
-    await mlReplace('goals', data.goals);
-  }
   if (filePath === GOALS_FILE) dashboardEvents.emit('goals:changed');
+}
+
+function retainedLocalGoals(local, before, next) {
+  // Native deletes must not be resurrected just because a local planning
+  // overlay survives, but avoid erasing unrelated locally-created/federated
+  // work when refreshing the overlay for the matching cloud records.
+  const shared = new Set([...before.goals, ...next.goals].map(goal => nativeGoalId(goal.id) ?? goal.id));
+  const kept = (local.goals ?? []).filter(goal => !shared.has(nativeGoalId(goal.id) ?? goal.id));
+  return { ...next, goals: [...kept, ...next.goals] };
 }
 
 // Shared by local derivations and peer sync, including the reads that inform their writes.
@@ -188,20 +194,21 @@ const goalsQueue = createKeyCachedQueue();
  *   loaded goals document (post any earlier slow work in the caller) and returns
  *   the document to persist. Run serialized against every other `mutateGoals`
  *   call so two in-flight mutations can't race a load/save pair.
- * Unchanged documents are not written or mirrored. `localOnly` is reserved for
- * MortalLoom's explicit import: merge into the local mirror without sourcing
- * from, or replacing, the imported iCloud store. It still shares the same queue.
+ * Unchanged documents are not written. `localOnly` is for imports and
+ * federation, neither of which owns a native iCloud edit.
  * @returns {Promise<object>} the saved goals document.
  */
 export function mutateGoals(fn, { localOnly = false } = {}) {
   return goalsQueue('goals', async () => {
-    const goals = localOnly
-      ? await readJSONFile(GOALS_FILE, structuredClone(DEFAULT_GOALS), { strict: true })
-      : await loadJSON(GOALS_FILE, DEFAULT_GOALS, { strict: true });
-    const before = JSON.stringify(goals);
+    const local = await readJSONFile(GOALS_FILE, structuredClone(DEFAULT_GOALS), { strict: true });
+    const synced = !localOnly && (await isMortalLoomEnabled());
+    const goals = synced ? await loadJSON(GOALS_FILE, DEFAULT_GOALS, { strict: true }) : local;
+    const before = structuredClone(goals);
     const next = await fn(goals);
-    if (JSON.stringify(next) !== before) {
-      await saveJSON(GOALS_FILE, next, { mirrorGoals: !localOnly });
+    if (JSON.stringify(next) !== JSON.stringify(before)) {
+      const goalsChanged = JSON.stringify(before.goals) !== JSON.stringify(next.goals);
+      if (synced && goalsChanged) await mlApplyGoalChanges(before.goals, next.goals);
+      await saveJSON(GOALS_FILE, synced ? retainedLocalGoals(local, before, next) : next);
     }
     return next;
   });

@@ -48,18 +48,18 @@ vi.mock('./notifications.js', () => ({
   NOTIFICATION_TYPES: { HEALTH_ISSUE: 'health_issue' },
 }));
 
-// MortalLoom is the swappable "active source" the mirror-on-save test drives —
+// MortalLoom is the swappable active source for our goal updates —
 // `ml.enabled` toggles isMortalLoomEnabled() without touching a real iCloud path.
 const ml = vi.hoisted(() => ({ enabled: false }));
 vi.mock('./mortalLoomStore.js', () => ({
   isMortalLoomEnabled: vi.fn(async () => ml.enabled),
   mlArrayIfEnabled: vi.fn(async () => null),
-  mlReplace: vi.fn(async () => {}),
+  mlApplyGoalChanges: vi.fn(async () => {}),
 }));
 
 import { runGoalCheckIn } from './goalCheckIn.js';
 import { addProgressEntry } from './identity/goals.js';
-import { mlReplace } from './mortalLoomStore.js';
+import { mlApplyGoalChanges } from './mortalLoomStore.js';
 import { callProviderAISimple } from './aiProvider.js';
 import { dashboardEvents } from './dashboardEvents.js';
 
@@ -135,7 +135,7 @@ describe('runGoalCheckIn concurrency and MortalLoom mirroring (#8755)', () => {
     mkdirSync(join(getTempRoot(), 'digital-twin'), { recursive: true });
     vi.spyOn(console, 'log').mockImplementation(() => {});
     ml.enabled = false;
-    vi.mocked(mlReplace).mockClear();
+    vi.mocked(mlApplyGoalChanges).mockClear();
   });
 
   it('keeps a progress entry added while the LLM call is in flight', async () => {
@@ -165,7 +165,7 @@ describe('runGoalCheckIn concurrency and MortalLoom mirroring (#8755)', () => {
     expect(goal.progressLog[0].note).toBe('did the thing');
   });
 
-  it('mirrors the check-in to MortalLoom and emits goals:changed when enabled', async () => {
+  it('retains the AI check-in locally and emits goals:changed when MortalLoom is enabled', async () => {
     ml.enabled = true;
     writeFileSync(goalsFile(), JSON.stringify({ goals: [activeGoal] }));
 
@@ -173,10 +173,10 @@ describe('runGoalCheckIn concurrency and MortalLoom mirroring (#8755)', () => {
     const result = await runGoalCheckIn();
     expect(result.checked).toBe(1);
 
-    expect(mlReplace).toHaveBeenCalledWith('goals', expect.arrayContaining([
-      expect.objectContaining({ id: 'g1', checkIns: expect.arrayContaining([expect.objectContaining({ assessment: 'ok' })]) })
-    ]));
+    const written = JSON.parse(readFileSync(goalsFile(), 'utf8'));
+    expect(written.goals[0].checkIns).toMatchObject([{ assessment: 'ok' }]);
     await changed;
+    ml.enabled = false;
   });
 });
 
@@ -192,7 +192,7 @@ describe('runGoalCheckIn dates by the user-local day', () => {
     vi.useFakeTimers({ toFake: ['Date'] });
     vi.setSystemTime(new Date('2026-11-07T01:30:00Z'));
   });
-  afterEach(() => vi.useRealTimers());
+  afterEach(() => { ml.enabled = false; vi.useRealTimers(); });
 
   it('stamps the check-in with the configured timezone day', async () => {
     writeFileSync(goalsFile(), JSON.stringify({ goals: [{

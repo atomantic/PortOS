@@ -1,4 +1,5 @@
 import { describe, it, expect, vi, beforeAll, afterAll, beforeEach, afterEach } from 'vitest';
+import { randomUUID } from 'crypto';
 import { EventEmitter } from 'events';
 import { homedir, tmpdir } from 'os';
 import { join } from 'path';
@@ -15,6 +16,28 @@ const statMock = vi.fn();
 const writeFileMock = vi.fn();
 const spawnMock = vi.fn();
 
+const fixture = (fields = {}) => ({
+  profile: { lifestyle: { smokingStatus: 'never', dietQuality: 'good', stressLevel: 'low', exerciseMinutesPerWeek: 0, sleepHoursPerNight: 8 } },
+  alcoholDrinks: [], alcoholPresets: [], nicotineEntries: [], nicotinePresets: [], bloodTests: [], eyeExams: [], epigeneticTests: [],
+  ...fields,
+});
+const nativeGoal = title => ({ id: randomUUID(), title, createdDate: '2026-01-01' });
+const nativeDrink = name => ({ id: randomUUID(), name, date: '2024-06-02', oz: 10, abv: 5, count: 1 });
+
+vi.mock('./mortalLoomCommit.js', async importOriginal => {
+  const real = await importOriginal();
+  return {
+    ...real,
+    inspectMortalLoomTarget: vi.fn(async () => {
+      if (!existsResult) throw real.storeFailure('missing');
+    }),
+    commitMortalLoomRevision: vi.fn(async (path, _before, after) => writeFileMock(path, after.toString())),
+    listMortalLoomSnapshots: vi.fn(async () => []),
+    readMortalLoomCommitReceipt: vi.fn(async () => null),
+    recordMortalLoomCommit: vi.fn(async () => {}),
+  };
+});
+
 vi.mock('fs', async importOriginal => ({
   ...(await importOriginal()),
   existsSync: vi.fn(() => (existsQueue.length ? existsQueue.shift() : existsResult)),
@@ -26,7 +49,8 @@ vi.mock('fs/promises', () => ({
   stat: (...args) => statMock(...args),
 }));
 
-vi.mock('../lib/childProcess.js', () => ({
+vi.mock('../lib/childProcess.js', async importOriginal => ({
+  ...(await importOriginal()),
   spawn: (...args) => spawnMock(...args),
 }));
 
@@ -54,10 +78,6 @@ vi.mock('../lib/fileUtils.js', () => ({
     const { writeFile } = await import('fs/promises');
     return writeFile(filePath, payload);
   }),
-}));
-
-vi.mock('../lib/objects.js', () => ({
-  isPlainObject: (v) => typeof v === 'object' && v !== null && !Array.isArray(v),
 }));
 
 const store = await import('./mortalLoomStore.js');
@@ -282,243 +302,52 @@ describe('readDailyLogIfEnabled strict (#2742)', () => {
 });
 
 describe('updateStore', () => {
-  // updateStore now force-materializes an evicted iCloud file (brctl download)
-  // before refusing to overwrite. These baseline tests assert the refuse/seed
-  // semantics WITHOUT the materialize path interfering, so pin the platform to
-  // linux — materializeNow() short-circuits to `false` off darwin, leaving the
-  // pre-existing guard behavior exactly as it was. The darwin materialize
-  // behavior gets its own describe block below. (process.platform overrides
-  // aren't restored by vi.restoreAllMocks(), so capture+restore explicitly.)
-  let restorePlatform = () => {};
-  beforeEach(() => {
-    restorePlatform = pinPlatform('linux');
-  });
-  afterEach(() => restorePlatform());
-
   it('serializes overlapping mutations so none is lost (#10097)', async () => {
-    let disk = JSON.stringify({ goals: [] });
-    // Yield between read and write so unserialized cycles would share a pre-image.
-    readFileMock.mockImplementation(async () => { const snap = disk; await new Promise((r) => setTimeout(r, 5)); return snap; });
-    writeFileMock.mockImplementation(async (_p, payload) => { disk = payload; });
-    await Promise.all(['a', 'b', 'c'].map((id) => store.updateStore((s) => { s.goals.push({ id }); })));
-    expect(JSON.parse(disk).goals.map((g) => g.id)).toEqual(['a', 'b', 'c']);
-  });
-
-  it('seeds a fresh store when the file does not exist', async () => {
-    existsResult = false;
-    writeFileMock.mockResolvedValue(undefined);
-    const result = await store.updateStore((s) => {
-      s.goals.push({ id: 'new-1' });
-      return s.goals[0];
-    });
-    expect(result).toEqual({ id: 'new-1' });
-    expect(writeFileMock).toHaveBeenCalledTimes(1);
-    const written = JSON.parse(writeFileMock.mock.calls[0][1]);
-    expect(written.goals).toEqual([{ id: 'new-1' }]);
-  });
-
-  it('refuses to overwrite when file exists but read fails (regression: no silent truncation)', async () => {
-    existsResult = true;
-    readFileMock.mockRejectedValue(Object.assign(new Error('boom'), { code: 'EAGAIN' }));
-    writeFileMock.mockResolvedValue(undefined);
-    await expect(
-      store.updateStore((s) => { s.goals.push({ id: 'should-not-write' }); })
-    ).rejects.toThrow(/unreadable; refusing to overwrite/);
-    expect(writeFileMock).not.toHaveBeenCalled();
-  });
-
-  it('throws a path-free message so route handlers do not leak the iCloud path to clients', async () => {
-    existsResult = true;
-    readFileMock.mockRejectedValue(Object.assign(new Error('boom'), { code: 'EAGAIN' }));
-    writeFileMock.mockResolvedValue(undefined);
-    let caught;
-    await store.updateStore((s) => { s.goals.push({ id: 'x' }); }).catch((err) => { caught = err; });
-    expect(caught).toBeDefined();
-    expect(caught.message).not.toContain(TEST_STORE_PATH);
-    expect(caught.message).not.toContain('/');
-    // The full path still goes to server logs for diagnostics.
-    expect(console.error).toHaveBeenCalledWith(
-      expect.stringContaining(TEST_STORE_PATH)
-    );
-  });
-
-  it('refuses to overwrite when file exists but JSON is corrupt', async () => {
-    existsResult = true;
-    readFileMock.mockResolvedValue('{not json');
-    writeFileMock.mockResolvedValue(undefined);
-    await expect(
-      store.updateStore((s) => { s.goals.push({ id: 'should-not-write' }); })
-    ).rejects.toThrow(/unreadable; refusing to overwrite/);
-    expect(writeFileMock).not.toHaveBeenCalled();
-  });
-
-  it('refuses to overwrite when file parses as an array (truncation guard)', async () => {
-    existsResult = true;
-    readFileMock.mockResolvedValue(JSON.stringify(['unexpected', 'array', 'shape']));
-    writeFileMock.mockResolvedValue(undefined);
-    await expect(
-      store.updateStore((s) => { s.goals.push({ id: 'should-not-write' }); })
-    ).rejects.toThrow(/unreadable; refusing to overwrite/);
-    expect(writeFileMock).not.toHaveBeenCalled();
-  });
-
-  it('seeds a fresh store when the file disappears between existsSync and read (ENOENT race)', async () => {
-    // The read is attempted unconditionally (no existsSync gate — see
-    // readStoreAtPathResult) and reports ENOENT, so updateStore's guard makes the
-    // only existsSync call in the path: → false (file vanished). The post-read
-    // recheck must discriminate this from a transient/corrupt case so we don't
-    // reject a legitimate seed.
-    existsQueue.push(false);
-    readFileMock.mockRejectedValue(Object.assign(new Error('ENOENT'), { code: 'ENOENT' }));
-    writeFileMock.mockResolvedValue(undefined);
-    const result = await store.updateStore((s) => {
-      s.goals.push({ id: 'seeded' });
-      return s.goals[0];
-    });
-    expect(result).toEqual({ id: 'seeded' });
-    expect(writeFileMock).toHaveBeenCalledTimes(1);
-  });
-
-  it('refuses to overwrite when file was absent initially but appears unreadable mid-call (reverse race)', async () => {
-    // The read runs first and finds nothing (file absent at the start of the
-    // read); updateStore's guard then makes the only existsSync call → true
-    // (iCloud just finished downloading the file). Even though we'd be happy to
-    // seed a fresh store, the now-present file's content is unknown, so we must
-    // not blindly clobber it.
-    existsQueue.push(true);
-    writeFileMock.mockResolvedValue(undefined);
-    await expect(
-      store.updateStore((s) => { s.goals.push({ id: 'should-not-write' }); })
-    ).rejects.toThrow(/unreadable; refusing to overwrite/);
-    expect(writeFileMock).not.toHaveBeenCalled();
-  });
-});
-
-describe('updateStore — iCloud on-demand materialize (darwin)', () => {
-  // A fake brctl child shaped for the shared bufferedSpawn helper, which reads
-  // child.stdout/stderr and resolves on the `close` event. Its handler fires
-  // asynchronously with the given exit code; the optional onClose hook lets a
-  // test flip a flag (e.g. "now the file is materialized") atomically with the
-  // close so the post-materialize re-read sees fresh state.
-  const makeMaterializeChild = (exitCode, onClose) => {
-    const noopStream = { on: vi.fn() };
-    const child = {
-      stdout: noopStream,
-      stderr: noopStream,
-      pid: 4242,
-      on: vi.fn(function (evt, cb) {
-        if (evt === 'close') setTimeout(() => { onClose?.(); cb(exitCode, null); }, 0);
-        return child;
-      }),
-      kill: vi.fn(),
-      unref: vi.fn(),
-    };
-    return child;
-  };
-
-  let restorePlatform = () => {};
-  let originalTimeout;
-  beforeEach(() => {
-    restorePlatform = pinPlatform('darwin');
-    originalTimeout = store.MATERIALIZE_TIMEOUT_MS;
-    store._setMaterializeTimeoutForTest(50);
-    store._resetMortalLoomInitForTest();
-    writeFileMock.mockResolvedValue(undefined);
-  });
-  afterEach(() => {
-    restorePlatform();
-    store._setMaterializeTimeoutForTest(originalTimeout);
-  });
-
-  it('materializes an evicted dataless file then writes (the reported bug)', async () => {
-    // File exists (dataless placeholder) but reads EAGAIN until brctl download
-    // materializes it. updateStore must recover and write instead of refusing.
-    existsResult = true;
-    const eagain = Object.assign(new Error('EAGAIN'), { code: 'EAGAIN', errno: -11 });
-    let materialized = false;
+    let disk = JSON.stringify(fixture({ goals: [] }));
     readFileMock.mockImplementation(async () => {
-      if (!materialized) throw eagain;
-      return JSON.stringify({ goals: [{ id: 'existing' }] });
+      const snap = disk;
+      await new Promise(resolve => setTimeout(resolve, 5));
+      return snap;
     });
-    spawnMock.mockReturnValue(makeMaterializeChild(0, () => { materialized = true; }));
-
-    const result = await store.updateStore((s) => {
-      s.goals.push({ id: 'added-after-materialize' });
-      return s.goals.length;
-    });
-
-    expect(spawnMock).toHaveBeenCalledWith('brctl', ['download', TEST_STORE_PATH], expect.objectContaining({ shell: false }));
-    expect(result).toBe(2);
-    expect(writeFileMock).toHaveBeenCalledTimes(1);
-    const written = JSON.parse(writeFileMock.mock.calls[0][1]);
-    expect(written.goals).toEqual([{ id: 'existing' }, { id: 'added-after-materialize' }]);
+    writeFileMock.mockImplementation(async (_p, payload) => { disk = payload; });
+    await Promise.all(['a', 'b', 'c'].map(title => store.updateStore(s => s.goals.push(nativeGoal(title)))));
+    expect(JSON.parse(disk).goals.map(g => g.title)).toEqual(['a', 'b', 'c']);
   });
 
-  it('still refuses when brctl exits non-zero (offline/evicted, materialize failed)', async () => {
-    existsResult = true;
-    readFileMock.mockRejectedValue(Object.assign(new Error('EAGAIN'), { code: 'EAGAIN', errno: -11 }));
-    spawnMock.mockReturnValue(makeMaterializeChild(1));
-
-    await expect(
-      store.updateStore((s) => { s.goals.push({ id: 'should-not-write' }); })
-    ).rejects.toThrow(/unreadable; refusing to overwrite/);
-    expect(spawnMock).toHaveBeenCalledTimes(1);
-    expect(writeFileMock).not.toHaveBeenCalled();
-  });
-
-  it('refuses with an "even after materialize" diagnostic when JSON is still corrupt post-download', async () => {
-    // brctl succeeds (file materialized) but the bytes are genuinely corrupt —
-    // not an eviction problem. Refuse, and make the log distinguish this from
-    // the never-materialized case.
-    existsResult = true;
-    readFileMock.mockResolvedValue('{ truncated json');
-    spawnMock.mockReturnValue(makeMaterializeChild(0));
-
-    await expect(
-      store.updateStore((s) => { s.goals.push({ id: 'should-not-write' }); })
-    ).rejects.toThrow(/unreadable; refusing to overwrite/);
-    expect(writeFileMock).not.toHaveBeenCalled();
-    expect(console.error).toHaveBeenCalledWith(
-      expect.stringContaining('even after iCloud materialize')
-    );
-  });
-
-  it('seeds an absent path without a second existsSync probe for an `.icloud` placeholder (#3716)', async () => {
-    // The overwrite guard used to fall back to `existsSync(.MortalLoom.json.icloud)`
-    // whenever the real path was absent, and refuse the seed (paying a brctl
-    // download) if that sibling existed. That representation does not occur on
-    // supported macOS, so the probe is gone and an absent path just seeds.
-    //
-    // existsSync consumption is the assertion. The guard now makes exactly ONE
-    // call (path → false, seed). The old code made three — a placeholder probe in
-    // the read path, the guard's path check, then the guard's placeholder probe —
-    // so it would consume the queued `true` last, refuse the seed and spawn brctl.
-    // Restoring the old ternary makes this test fail (spawn called, no write),
-    // which is what makes it a bypass probe rather than a restatement.
-    existsQueue.push(false, false, true);
-    readFileMock.mockRejectedValue(Object.assign(new Error('ENOENT'), { code: 'ENOENT' }));
-    writeFileMock.mockResolvedValue(undefined);
-
-    const result = await store.updateStore((s) => {
-      s.goals.push({ id: 'seeded' });
-      return s.goals.length;
-    });
-
-    expect(result).toBe(1);
-    expect(spawnMock).not.toHaveBeenCalled();
-    expect(writeFileMock).toHaveBeenCalledTimes(1);
-    const written = JSON.parse(writeFileMock.mock.calls[0][1]);
-    expect(written.goals).toEqual([{ id: 'seeded' }]);
-  });
-
-  it('does not materialize (no spawn) when seeding a genuinely new file', async () => {
-    // No real file and no placeholder — a first-ever write. Must seed without
-    // paying a brctl download.
+  it('does not seed a fresh store when the file is missing', async () => {
     existsResult = false;
-    const result = await store.updateStore((s) => { s.goals.push({ id: 'first' }); return 'ok'; });
-    expect(result).toBe('ok');
-    expect(spawnMock).not.toHaveBeenCalled();
-    expect(writeFileMock).toHaveBeenCalledTimes(1);
+    await expect(store.updateStore(vi.fn())).rejects.toMatchObject({ code: 'MORTALLOOM_MISSING' });
+    expect(writeFileMock).not.toHaveBeenCalled();
+  });
+
+  it('refuses a file that disappears after inspection (ENOENT race)', async () => {
+    readFileMock.mockRejectedValue(Object.assign(new Error('ENOENT'), { code: 'ENOENT' }));
+    await expect(store.updateStore(vi.fn())).rejects.toMatchObject({ code: 'MORTALLOOM_MISSING' });
+    expect(writeFileMock).not.toHaveBeenCalled();
+  });
+
+  it('refuses an unreadable file and does not disclose its path', async () => {
+    readFileMock.mockRejectedValue(Object.assign(new Error(TEST_STORE_PATH), { code: 'EAGAIN' }));
+    const error = await store.updateStore(vi.fn()).catch(result => result);
+    expect(error).toMatchObject({ code: 'MORTALLOOM_UNAVAILABLE' });
+    expect(error.message).not.toContain(TEST_STORE_PATH);
+    expect(writeFileMock).not.toHaveBeenCalled();
+  });
+
+  it.each(['{not json', '[]', JSON.stringify(fixture({ goals: {} })), JSON.stringify(fixture({ goals: [{ id: 'goal-bad' }] }))])(
+    'refuses corrupt native data without replacing it with an empty collection', async raw => {
+      readFileMock.mockResolvedValue(raw);
+      const mutator = vi.fn();
+      await expect(store.updateStore(mutator)).rejects.toMatchObject({ code: 'MORTALLOOM_INVALID' });
+      expect(mutator).not.toHaveBeenCalled();
+      expect(writeFileMock).not.toHaveBeenCalled();
+    },
+  );
+
+  it('does not republish a canonical file for a no-op', async () => {
+    readFileMock.mockResolvedValue(JSON.stringify(fixture({ futureField: { keep: true } })));
+    expect(await store.updateStore(() => 'unchanged')).toBe('unchanged');
+    expect(writeFileMock).not.toHaveBeenCalled();
   });
 });
 
@@ -575,11 +404,10 @@ describe('getStatus', () => {
 
   it('returns counts when file readable', async () => {
     statMock.mockResolvedValue({ size: 42, mtime: new Date('2026-01-01T00:00:00Z') });
-    readFileMock.mockResolvedValue(JSON.stringify({
-      goals: [{ id: 'g1' }],
-      alcoholDrinks: [{ id: 'a1' }, { id: 'a2' }],
-      profile: { biologicalSex: 'm' },
-    }));
+    readFileMock.mockResolvedValue(JSON.stringify(fixture({
+      goals: [nativeGoal('Example')],
+      alcoholDrinks: [nativeDrink('Example'), nativeDrink('Another example')],
+    })));
     const status = await store.getStatus();
     expect(status.exists).toBe(true);
     expect(status.size).toBe(42);
@@ -1113,7 +941,7 @@ describe('overview invalidation from MortalLoom', () => {
     const changed = vi.fn();
     meatspaceEvents.on('changed', changed);
     try {
-      readFileMock.mockResolvedValue(JSON.stringify({ bloodTests: [] }));
+      readFileMock.mockResolvedValue(JSON.stringify(fixture()));
       let persist;
       writeFileMock.mockImplementationOnce(() => new Promise(resolve => { persist = resolve; }));
       const writing = store.mlPush('bloodTests', { date: '2026-01-01', markers: { example: 1 } });
@@ -1124,7 +952,7 @@ describe('overview invalidation from MortalLoom', () => {
       expect(changed).toHaveBeenCalledWith({ resources: ['blood'] });
       changed.mockClear();
       writeFileMock.mockRejectedValueOnce(new Error('write failed'));
-      await expect(store.mlPush('bloodTests', { date: '2026-01-02' })).rejects.toThrow('write failed');
+      await expect(store.mlPush('bloodTests', { date: '2026-01-02', markers: {} })).rejects.toThrow('write failed');
       expect(changed).not.toHaveBeenCalled();
     } finally { meatspaceEvents.off('changed', changed); }
   });
@@ -1212,24 +1040,26 @@ describe('overview invalidation from MortalLoom', () => {
 
 
 it('atomically guards dated event edits and deletes after a date move while preserving ordinary ID callers', async () => {
-  let persisted = { alcoholDrinks: [{ id: 'target', date: '2024-06-02', name: 'Example' }] };
+  const row = nativeDrink('Example');
+  let persisted = fixture({ alcoholDrinks: [row] });
   readFileMock.mockImplementation(async () => JSON.stringify(persisted));
   writeFileMock.mockImplementation(async (_path, content) => { persisted = JSON.parse(content); });
-  expect(await store.mlPatchById('alcoholDrinks', 'target', { name: 'Wrong' }, { expectedDate: '2024-06-01' })).toBeNull();
-  expect(await store.mlRemoveById('alcoholDrinks', 'target', { expectedDate: '2024-06-01' })).toBeNull();
-  expect(persisted.alcoholDrinks).toEqual([{ id: 'target', date: '2024-06-02', name: 'Example' }]);
-  expect(await store.mlPatchById('alcoholDrinks', 'target', { name: 'Updated' }, { expectedDate: '2024-06-02' })).toMatchObject({ name: 'Updated' });
-  expect(await store.mlRemoveById('alcoholDrinks', 'target')).toMatchObject({ id: 'target', name: 'Updated' });
+  expect(await store.mlPatchById('alcoholDrinks', row.id, { name: 'Wrong' }, { expectedDate: '2024-06-01' })).toBeNull();
+  expect(await store.mlRemoveById('alcoholDrinks', row.id, { expectedDate: '2024-06-01' })).toBeNull();
+  expect(persisted.alcoholDrinks).toEqual([row]);
+  expect(await store.mlPatchById('alcoholDrinks', row.id, { name: 'Updated' }, { expectedDate: '2024-06-02' })).toMatchObject({ name: 'Updated' });
+  expect(await store.mlRemoveById('alcoholDrinks', row.id)).toMatchObject({ id: row.id, name: 'Updated' });
   expect(persisted.alcoholDrinks).toEqual([]);
 });
 
 it('clears blood-pressure fields the date upsert would skip when passed null', async () => {
-  let persisted = {
+  const [id1, id2] = [randomUUID(), randomUUID()];
+  let persisted = fixture({
     healthMetrics: [
-      { id: 'M1', date: '2026-04-02', bloodPressureSystolic: 118, bloodPressureDiastolic: 76, heartRate: 60 },
-      { id: 'M2', date: '2026-04-03', bloodPressureSystolic: 120, bloodPressureDiastolic: 80 },
+      { id: id1, date: '2026-04-02', bloodPressureSystolic: 118, bloodPressureDiastolic: 76, heartRate: 60 },
+      { id: id2, date: '2026-04-03', bloodPressureSystolic: 120, bloodPressureDiastolic: 80 },
     ],
-  };
+  });
   readFileMock.mockImplementation(async () => JSON.stringify(persisted));
   writeFileMock.mockImplementation(async (_path, content) => { persisted = JSON.parse(content); });
   await store.mlUpsertHealthMetricByDate('2026-04-02', { bloodPressureSystolic: null, bloodPressureDiastolic: null });
@@ -1238,7 +1068,7 @@ it('clears blood-pressure fields the date upsert would skip when passed null', a
   });
   expect(await store.mlClearHealthMetricFields('2026-04-02', ['bloodPressureSystolic', 'bloodPressureDiastolic']))
     .toMatchObject({ date: '2026-04-02', bloodPressureSystolic: 118, bloodPressureDiastolic: 76 });
-  expect(persisted.healthMetrics.find(row => row.date === '2026-04-02')).toEqual({ id: 'M1', date: '2026-04-02', heartRate: 60 });
+  expect(persisted.healthMetrics.find(row => row.date === '2026-04-02')).toEqual({ id: id1, date: '2026-04-02', heartRate: 60 });
   await store.mlClearHealthMetricFields('2026-04-03', ['bloodPressureSystolic', 'bloodPressureDiastolic']);
   expect(persisted.healthMetrics.find(row => row.date === '2026-04-03')).toBeUndefined();
   expect(await store.mlClearHealthMetricFields('2026-04-09', ['bloodPressureSystolic', 'bloodPressureDiastolic'])).toBeNull();
@@ -1250,7 +1080,7 @@ describe('external store test isolation', () => {
       settings = { mortalloom: { enabled: true, path } };
       expect(await store.isMortalLoomEnabled()).toBe(false);
       expect(await store.readStore()).toBeNull();
-      await expect(store.mlReplace('goals', [])).rejects.toThrow('isolated temporary store');
+      await expect(store.mlUpsertHealthMetricByDate('2026-01-01', { steps: 10 })).rejects.toThrow('isolated temporary store');
       expect(readFileMock).not.toHaveBeenCalled();
       expect(writeFileMock).not.toHaveBeenCalled();
     });
@@ -1262,7 +1092,7 @@ describe('external store test isolation', () => {
       const outside = join(scratch, 'outside');
       await symlink(homedir(), outside, 'junction');
       settings = { mortalloom: { enabled: true, path: join(outside, 'MortalLoom.json') } };
-      await expect(store.mlReplace('goals', [])).rejects.toThrow('isolated temporary store');
+      await expect(store.mlUpsertHealthMetricByDate('2026-01-01', { steps: 10 })).rejects.toThrow('isolated temporary store');
       expect(readFileMock).not.toHaveBeenCalled();
       expect(writeFileMock).not.toHaveBeenCalled();
     } finally {
