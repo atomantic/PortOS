@@ -282,7 +282,7 @@ export async function revealValue(id) {
 export async function listScanEligibleValues({ subjectId } = {}) {
   const resolvedSubjectId = resolveSubjectId(subjectId);
   const { rows } = await query(
-    `SELECT id, type, value_enc, status,
+    `SELECT id, xmin::text AS version, type, value_enc, status,
        to_char(valid_from, 'YYYY-MM-DD') AS valid_from,
        to_char(valid_to, 'YYYY-MM-DD') AS valid_to
      FROM privacy_vault_records
@@ -293,6 +293,7 @@ export async function listScanEligibleValues({ subjectId } = {}) {
   const values = rows.map((row) => ({
     id: row.id,
     type: row.type,
+    version: row.version,
     value: decryptValue(row.value_enc),
     status: row.status,
     validFrom: row.valid_from ?? null,

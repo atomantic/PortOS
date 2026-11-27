@@ -481,12 +481,13 @@ export async function runVerificationPass({
         } else if (c.state === 'confirmed_removed') {
           // A blocked/unknown result is inconclusive; only exposure reopens a case.
           if (probed.verdict === 'found' || probed.verdict === 'indirect_exposure') {
-            await transitionCase(c.id, 'reappeared', {
+            const result = await transitionCase(c.id, 'reappeared', {
+              subjectId: resolvedSubjectId, scanSources: vectors.sources,
               viaRescan: true, found: probed.found, reason: null,
               evidence: { ...(c.evidence || {}), ...(probed.evidence || {}), verificationRechecks: 0 },
               now,
             });
-            reappeared.push({ caseId: c.id, brokerId: c.brokerId });
+            if (!result.skipped) reappeared.push({ caseId: c.id, brokerId: c.brokerId });
           }
         } else {
           // Still listed (verdict === 'found' or similar). Track recheck count.

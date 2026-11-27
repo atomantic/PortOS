@@ -76,17 +76,22 @@ export function buildSearchVectors(scanValues = []) {
   const emails = [];
   const phones = [];
   const locations = [];
+  const sources = [];
   for (const v of scanValues) {
     if (!v || typeof v.value !== 'string' || !v.value.trim()) continue;
-    if (v.type === 'legal_name') names.push({ full: v.value.trim(), ...splitName(v.value) });
-    else if (v.type === 'email') emails.push(v.value.trim());
+    if (v.type === 'legal_name') {
+      names.push({ full: v.value.trim(), ...splitName(v.value) });
+      sources.push({ id: v.id, version: v.version });
+    } else if (v.type === 'email') emails.push(v.value.trim());
     else if (v.type === 'phone') phones.push(v.value.trim());
     else if (v.type === 'address') {
       const { city, state } = parseCityState(v.value);
-      if (city || state) locations.push({ city, state, status: v.status ?? 'current' });
+      if (!city && !state) continue;
+      locations.push({ city, state, status: v.status ?? 'current' });
+      sources.push({ id: v.id, version: v.version });
     }
   }
-  return { names, emails, phones, locations };
+  return { names, emails, phones, locations, sources };
 }
 
 const enc = (s) => encodeURIComponent(String(s ?? '').trim());
@@ -302,7 +307,7 @@ export async function scanBroker(broker, vectors, {
   const probed = await probeBroker(broker, vectors, { fetchImpl, browserFetch, urlSafe, subjectId: resolvedSubjectId });
   if (probed.skipped) return { skipped: true, reason: probed.reason };
   const kase = await recordScanVerdict(broker.id, probed.verdict, {
-    evidence: probed.evidence, found: probed.found ?? null, now, subjectId: resolvedSubjectId,
+    evidence: probed.evidence, found: probed.found ?? null, scanSources: vectors.sources, now, subjectId: resolvedSubjectId,
   });
   return kase;
 }

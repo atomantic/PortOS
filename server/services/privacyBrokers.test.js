@@ -302,6 +302,7 @@ describe('recordScanVerdict — 23505 unique constraint fallback (#4021)', () =>
     };
     withTransactionMock.mockImplementation(async (fn) => fn(clientMock));
 
+    clientMock.query.mockResolvedValueOnce({ rowCount: 1 }); // current vault source locked
     // 1. SELECT broker -> found
     clientMock.query.mockResolvedValueOnce({ rows: [{ id: 'spokeo' }] });
     // 2. SELECT existing case -> none found initially
@@ -333,7 +334,7 @@ describe('recordScanVerdict — 23505 unique constraint fallback (#4021)', () =>
     };
     clientMock.query.mockResolvedValueOnce({ rows: [mockCaseRow] });
 
-    const result = await recordScanVerdict('spokeo', 'found');
+    const result = await recordScanVerdict('spokeo', 'found', { scanSources: [{ id: 'name-id', version: '1' }] });
     expect(result).toBeDefined();
     expect(result.id).toBe('case-123');
     expect(result.state).toBe('found');
