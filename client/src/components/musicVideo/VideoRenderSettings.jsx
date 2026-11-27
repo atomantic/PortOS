@@ -131,7 +131,7 @@ export default function VideoRenderSettings({ videoSettings, generating, project
           <select id="mv-upscale-method" value={upscale.upscaleMethod} onChange={(event) => change({ upscaleMethod: event.target.value })}
             className="min-h-[44px] w-full rounded border border-port-border bg-port-bg p-1.5 text-sm pointer-fine:sm:min-h-0">
             {Object.entries(MUSIC_VIDEO_UPSCALERS).map(([method, label]) => (
-              <option key={method} value={method} disabled={method === 'realesrgan'}>{label}{method === 'realesrgan' ? ' (unavailable)' : ''}</option>
+              <option key={method} value={method}>{label}</option>
             ))}
           </select>
         </div>

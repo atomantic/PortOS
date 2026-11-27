@@ -24,8 +24,9 @@ import {
   UPSCALE_METHODS, DEFAULT_UPSCALE_METHOD, DEFAULT_FAL_SEEDVR2_TARGET_RESOLUTION,
   UPSCALE_SCALE, LANCZOS_RUNTIME_ID, FAL_SEEDVR2_RUNTIME_ID, FAL_SEEDVR2_MODEL_ID,
   LTX_UPSCALE_WEIGHT_KEY, ltxUpscaleRuntimeId, ltxUpscaleBaseModelId,
-  planLtxAlignment, planTargetDimensions, estimateFalSeedvr2CostUsd,
+  planLtxAlignment, planTargetDimensions, estimateFalSeedvr2CostUsd, DEFAULT_REALESRGAN_MODEL,
 } from './upscalePlan.js';
+import { describeRealesrganRuntime } from './realesrganRuntime.js';
 import { getSettings } from '../settings.js';
 import { resolveFalApiKey } from '../falQueue.js';
 
@@ -209,17 +210,22 @@ export async function planUpscaleHistoryItem(historyId, options = {}) {
   const alignment = method === 'ltx' ? planLtxAlignment(source) : null;
   const target = planTargetDimensions({ method, ...source, alignment, targetResolution });
   const falConfigured = method === 'fal-seedvr2' ? Boolean(resolveFalApiKey(await getSettings())) : false;
-  const runtime = method === 'ltx'
-    ? describeLtxRuntime()
-    : method === 'fal-seedvr2'
-      ? {
+  const describeRuntime = async () => {
+    if (method === 'ltx') return describeLtxRuntime();
+    // Stats files and reads the install receipt only — no spawn, no download (#19985).
+    if (method === 'realesrgan') return describeRealesrganRuntime(options?.realesrganModel || DEFAULT_REALESRGAN_MODEL);
+    if (method === 'fal-seedvr2') {
+      return {
         id: FAL_SEEDVR2_RUNTIME_ID,
         label: 'fal.ai SeedVR2',
         supported: true,
         installed: falConfigured,
         reason: falConfigured ? null : 'Configure FAL_KEY in Settings → Credentials to use fal.ai SeedVR2 upscaling.',
-      }
-      : { id: LANCZOS_RUNTIME_ID, label: 'ffmpeg (Lanczos)', supported: true, installed: true, reason: null };
+      };
+    }
+    return { id: LANCZOS_RUNTIME_ID, label: 'ffmpeg (Lanczos)', supported: true, installed: true, reason: null };
+  };
+  const runtime = await describeRuntime();
   const [adapter, baseModel] = method === 'ltx'
     ? await Promise.all([describeLtxAdapter(), describeLtxBaseModel(runtime.id)])
     : [null, null];
@@ -250,8 +256,8 @@ export async function planUpscaleHistoryItem(historyId, options = {}) {
 //
 // `options.method` selects the pass: `'lanczos'` (the default, and what every
 // pre-#6509 caller gets by omitting the bag) runs the historical ffmpeg filter
-// inline. `'ltx'` and `'fal-seedvr2'` belong to the queued dispatch paths
-// (upscaleJob.js / falUpscaleJob.js) and are refused here rather than silently falling back.
+// inline. `'ltx'`, `'fal-seedvr2'` and `'realesrgan'` belong to the queued dispatch paths
+// (upscaleJob.js / falUpscaleJob.js / realesrganUpscaleJob.js) and are refused here rather than silently falling back.
 //
 // Returns the new history entry on success; throws ServerError on any
 // missing-input / ffmpeg / file-system failure so the route can map it to
@@ -262,7 +268,7 @@ export async function upscaleHistoryItem(historyId, options = {}) {
   if (item.upscaledFrom) {
     throw new ServerError('Cannot upscale an already-upscaled video', { status: 400, code: 'ALREADY_UPSCALED' });
   }
-  if (method === 'ltx' || method === 'fal-seedvr2') {
+  if (method !== 'lanczos') {
     throw new ServerError(
       'Generative upscale runs through the media job queue — submit it with its queue helper, not the inline pass.',
       { status: 400, code: 'UPSCALE_METHOD_NOT_INLINE' },

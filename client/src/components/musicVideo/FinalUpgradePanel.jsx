@@ -7,6 +7,7 @@ import { MUSIC_VIDEO_UPSCALERS } from '../../../../server/lib/musicVideo/musicVi
 import { quoteTopazUpscale } from '../../services/apiImageVideo.js';
 import { formatUsd } from '../../utils/formatters.js';
 import toast from '../ui/Toast';
+import RealesrganInstallButton from '../media/RealesrganInstallButton';
 
 const UPGRADE_METHODS = Object.freeze([
   { id: 'upscale', label: 'Upscale the draft', help: 'Upscales the approved clip with the project’s preferred method and selects the result when it lands.' },
@@ -49,12 +50,13 @@ export default function FinalUpgradePanel({ project, shotName, disabled = false,
   const [results, setResults] = useState(null);
   const [approving, setApproving] = useState(false);
   const [topaz, setTopaz] = useState(null);
+  const [installs, setInstalls] = useState(0);
   const scenes = project?.scenes || [];
   const counts = finalTierCounts(scenes);
   const drafts = scenes.filter((scene) => selectedVideoTake(scene) && !sceneClipIsFinal(scene));
   const approved = drafts.filter(sceneFinalApproved);
   // The dry run answers these approvals under this method; any change to them asks again.
-  const planKey = JSON.stringify([project?.id, method, approved.map((scene) => [scene.sceneId, scene.finalApproval?.takeId, scene.finalApproval?.revision]), project?.videoSettings]);
+  const planKey = JSON.stringify([project?.id, method, installs, approved.map((scene) => [scene.sceneId, scene.finalApproval?.takeId, scene.finalApproval?.revision]), project?.videoSettings]);
 
   const plan = open && planned?.key === planKey ? planned.plan : null;
   useEffect(() => {
@@ -80,6 +82,9 @@ export default function FinalUpgradePanel({ project, shotName, disabled = false,
   // Until the dry run answers, the button counts the ticks; after, the shots it will actually upgrade.
   const upgradeCount = plan ? ready.length : approved.length;
   const usesTopaz = plan?.upscaleMethod === 'fal-topaz';
+  const realesrganInstallable = plan?.upscaleMethod === 'realesrgan'
+    ? plan.shots?.find((shot) => shot.status === 'upscale-blocked' && shot.upscalerSupported !== false && shot.upscalerInstallTarget)
+    : null;
   const topazQuote = topaz?.plan === plan ? topaz : null;
   const requestTopazQuotes = async () => {
     setTopaz({ plan, pending: true });
@@ -171,6 +176,12 @@ export default function FinalUpgradePanel({ project, shotName, disabled = false,
         {!approved.length && <p className="text-port-text-muted">Tick at least one draft shot to upgrade it.</p>}
         {planError && <p role="alert" className="text-port-error">{planError}</p>}
         {upscaleMethod && <p className="text-port-text-muted">{MUSIC_VIDEO_UPSCALERS[upscaleMethod]} · {upscaleSize}</p>}
+        {realesrganInstallable && (
+          <div role="alert" className="flex min-w-0 flex-wrap items-center gap-2 text-port-warning">
+            <span>{realesrganInstallable.reason}</span>
+            <RealesrganInstallButton installTarget={realesrganInstallable.upscalerInstallTarget} onInstalled={() => setInstalls((n) => n + 1)} />
+          </div>
+        )}
         {plan && (
           <ul className="space-y-0.5" data-testid="final-upgrade-plan">
             {plan.shots.map((shot) => (

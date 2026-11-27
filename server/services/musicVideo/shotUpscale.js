@@ -10,7 +10,7 @@ import { musicVideoEvents } from './events.js';
 const submitting = new Set();
 
 export async function submitShotUpscale(projectId, sceneId, historyId, {
-  method, targetResolution, topazToken, requireApproval = false,
+  method, targetResolution, realesrganModel, topazToken, requireApproval = false,
 }) {
   const key = JSON.stringify([projectId, sceneId]);
   const pendingError = () => new ServerError('An upscale is already in progress for this shot.', { status: 409, code: 'UPSCALE_PENDING' });
@@ -35,6 +35,10 @@ export async function submitShotUpscale(projectId, sceneId, historyId, {
     if (method === 'local-ltx25') {
       const { enqueueLtxUpscale } = await import('../videoGen/upscaleJob.js');
       return { job: await enqueueLtxUpscale(historyId, { musicVideo }) };
+    }
+    if (method === 'realesrgan') {
+      const { enqueueRealesrganUpscale } = await import('../videoGen/realesrganUpscaleJob.js');
+      return { job: await enqueueRealesrganUpscale(historyId, { realesrganModel, musicVideo }) };
     }
     if (method === 'fal-topaz') {
       if (!topazToken) throw new ServerError('Request and confirm a Topaz credit estimate first.', { status: 400, code: 'TOPAZ_QUOTE_REQUIRED' });

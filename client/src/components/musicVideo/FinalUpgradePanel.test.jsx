@@ -5,6 +5,9 @@ import { finalApprovalPatch } from '../../../../server/lib/musicVideo/musicVideo
 const upgradeMusicVideoShots = vi.fn();
 vi.mock('../../services/apiMusicVideo.js', () => ({ upgradeMusicVideoShots: (...args) => upgradeMusicVideoShots(...args) }));
 vi.mock('../ui/Toast');
+vi.mock('../media/RealesrganInstallButton', () => ({
+  default: ({ onInstalled }) => <button type="button" onClick={onInstalled}>Install Real-ESRGAN</button>,
+}));
 
 const { default: FinalUpgradePanel } = await import('./FinalUpgradePanel.jsx');
 
@@ -111,4 +114,33 @@ it('displays the SeedVR2 estimate and tracks the queued upscale', async () => {
   expect(upgradeMusicVideoShots).toHaveBeenLastCalledWith('p1', {
     method: 'upscale', sceneIds: ['s0'], upscaleMethod: 'fal-seedvr2', upscaleTargetResolution: '1440p',
   }, { silent: true });
+});
+
+it('offers the Real-ESRGAN install in place while blocked and queues once installed', async () => {
+  const blocked = {
+    dryRun: true, method: 'upscale', upscaleMethod: 'realesrgan', upscaleTargetResolution: '1080p', totalCostUsd: 0,
+    shots: [{
+      sceneId: 's0', status: 'upscale-blocked', method: 'upscale', upscaleMethod: 'realesrgan',
+      upscalerSupported: true, upscalerInstallTarget: { version: 'v0.2.5.0', sizeBytes: 51_817_124 },
+      reason: 'Real-ESRGAN (ncnn Vulkan) is not installed on this machine.',
+    }],
+  };
+  const ready = {
+    dryRun: true, method: 'upscale', upscaleMethod: 'realesrgan', upscaleTargetResolution: '1080p', totalCostUsd: 0,
+    shots: [{ sceneId: 's0', status: 'ready', method: 'upscale', upscaleMethod: 'realesrgan', costUsd: 0 }],
+  };
+  upgradeMusicVideoShots
+    .mockResolvedValueOnce(blocked)
+    .mockResolvedValueOnce(ready)
+    .mockResolvedValueOnce({ results: [{ sceneId: 's0', method: 'upscale', ok: true, jobId: 'realesrgan-s0' }] });
+  const onUpscaleQueued = vi.fn();
+  render(<FinalUpgradePanel project={{ id: 'p1', videoSettings: { upscaleMethod: 'realesrgan' }, scenes: [approve(shot(0))] }} shotName={shotName} onUpscaleQueued={onUpscaleQueued} />);
+  openPanel();
+  expect(await screen.findByText('Real-ESRGAN · 2×')).toBeInTheDocument();
+  expect(screen.getByTestId('final-upgrade-run').disabled).toBe(true);
+  fireEvent.click(screen.getByRole('button', { name: 'Install Real-ESRGAN' }));
+  await waitFor(() => expect(screen.getByTestId('final-upgrade-run').disabled).toBe(false));
+  fireEvent.click(screen.getByTestId('final-upgrade-run'));
+  expect(await screen.findByText(/Shot 0: upscale queued/)).toBeInTheDocument();
+  expect(onUpscaleQueued).toHaveBeenCalledWith('realesrgan-s0', 's0');
 });

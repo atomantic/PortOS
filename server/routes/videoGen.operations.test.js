@@ -17,6 +17,8 @@ import { invalidateSetupCheck } from '../services/imageGen/setup.js';
 import * as videoGenService from '../services/videoGen/local.js';
 import * as mediaRemoteDelete from '../services/mediaRemoteDelete.js';
 import * as upscaleJobService from '../services/videoGen/upscaleJob.js';
+import * as realesrganJobService from '../services/videoGen/realesrganUpscaleJob.js';
+import * as realesrganRuntimeService from '../services/videoGen/realesrganRuntime.js';
 import * as stitchJobService from '../services/videoGen/stitchJob.js';
 import { enqueueVertical } from '../services/videoGen/verticalJob.js';
 import { trimHistoryItem } from '../services/videoGen/trim.js';
@@ -1258,9 +1260,37 @@ describe('videoGen routes', () => {
     });
 
     it('rejects an unknown method with a 400 and never reaches the service', async () => {
-      const r = await request(app).post(`/api/video-gen/upscale/${validHistoryId}`).send({ method: 'realesrgan' });
+      const r = await request(app).post(`/api/video-gen/upscale/${validHistoryId}`).send({ method: 'bogus' });
       expect(r.status).toBe(400);
       expect(videoGenService.upscaleHistoryItem).not.toHaveBeenCalled();
+    });
+
+    // #19985: Real-ESRGAN is a queued local GPU job carrying the selected weights
+    // and any project attribution, never the inline pass.
+    it('queues the Real-ESRGAN method with its weights and Music Video attribution', async () => {
+      realesrganJobService.enqueueRealesrganUpscale.mockResolvedValue({ jobId: 'job-2', position: 1, status: 'queued' });
+      const r = await request(app).post(`/api/video-gen/upscale/${validHistoryId}`)
+        .send({ method: 'realesrgan', realesrganModel: 'realesr-animevideov3', musicVideoProjectId: 'mv-1' });
+      expect(r.status).toBe(200);
+      expect(r.body).toEqual({ ok: true, job: { jobId: 'job-2', position: 1, status: 'queued' } });
+      expect(realesrganJobService.enqueueRealesrganUpscale).toHaveBeenCalledWith(validHistoryId, {
+        realesrganModel: 'realesr-animevideov3', musicVideoProjectId: 'mv-1', sceneId: undefined,
+      });
+      expect(videoGenService.upscaleHistoryItem).not.toHaveBeenCalled();
+    });
+
+    it('rejects unknown Real-ESRGAN weights before queueing', async () => {
+      const r = await request(app).post(`/api/video-gen/upscale/${validHistoryId}`).send({ method: 'realesrgan', realesrganModel: 'not-a-weight' });
+      expect(r.status).toBe(400);
+      expect(realesrganJobService.enqueueRealesrganUpscale).not.toHaveBeenCalled();
+    });
+
+    it('streams the explicit Real-ESRGAN install over SSE', async () => {
+      const r = await request(app).post('/api/video-gen/upscale/realesrgan/install');
+      expect(r.status).toBe(200);
+      expect(r.headers['content-type']).toMatch(/text\/event-stream/);
+      expect(r.text).toContain('"type":"complete"');
+      expect(realesrganRuntimeService.streamRealesrganInstall).toHaveBeenCalledOnce();
     });
 
     it('surfaces the 501 capability error the service raises for an unavailable runtime', async () => {
@@ -1297,8 +1327,15 @@ describe('videoGen routes', () => {
       expect(videoGenService.planUpscaleHistoryItem).toHaveBeenCalledWith(validHistoryId, { method: 'ltx' });
     });
 
+    it('forwards the Real-ESRGAN weights to the read-only plan', async () => {
+      videoGenService.planUpscaleHistoryItem.mockResolvedValue({ method: 'realesrgan' });
+      await request(app).get(`/api/video-gen/upscale/${validHistoryId}/plan?method=realesrgan&realesrganModel=realesr-animevideov3`);
+      expect(videoGenService.planUpscaleHistoryItem).toHaveBeenCalledWith(validHistoryId, { method: 'realesrgan', realesrganModel: 'realesr-animevideov3' });
+      expect(realesrganRuntimeService.streamRealesrganInstall).not.toHaveBeenCalled();
+    });
+
     it('rejects an unknown method with a 400', async () => {
-      const r = await request(app).get(`/api/video-gen/upscale/${validHistoryId}/plan?method=realesrgan`);
+      const r = await request(app).get(`/api/video-gen/upscale/${validHistoryId}/plan?method=bogus`);
       expect(r.status).toBe(400);
       expect(videoGenService.planUpscaleHistoryItem).not.toHaveBeenCalled();
     });

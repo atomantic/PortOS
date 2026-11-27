@@ -80,6 +80,7 @@ const MEDIA_JOB_RUNTIME = Object.freeze({
     modules: {
       topaz: () => loadMediaRuntimeModule('topazUpscale'),
       fal: () => loadMediaRuntimeModule('falUpscale'),
+      realesrgan: () => loadMediaRuntimeModule('realesrganUpscale'),
       default: () => loadMediaRuntimeModule('ltxUpscale'),
     },
     invoke: (mod, request) => mod.runVideoUpscale(request),

@@ -57,8 +57,14 @@ describe('finalizeUpscaleOutput', () => {
 
   it('crops the padding back off at the origin it was added and trims the tail', async () => {
     await finalize();
-    expect(argFor('-filter_complex')).toBe('[0:v]crop=1536:1024:0:0[v]');
-    expect(argFor('-frames:v')).toBe('121');
+    expect(argFor('-filter_complex')).toBe('[0:v]trim=end_frame=121,crop=1536:1024:0:0[v]');
+  });
+
+  // #19985: `-frames:v` finishes the whole output file once the video hits it,
+  // which cut the copied audio off at the last frame. The bound lives in the graph.
+  it('bounds the frame count inside the filter graph so the copied audio is not cut', async () => {
+    await finalize();
+    expect(ffmpeg.runs.at(-1).args).not.toContain('-frames:v');
   });
 
   // #6514: an AAC track a few ms short of its video must not trim it — the

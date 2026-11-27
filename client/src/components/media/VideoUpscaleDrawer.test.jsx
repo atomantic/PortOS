@@ -9,6 +9,7 @@ vi.mock('../../services/apiImageVideo', () => ({
   upscaleAdapterDownloadUrl: vi.fn(() => null),
   quoteTopazUpscale: vi.fn(),
   startTopazUpscale: vi.fn(),
+  realesrganInstallUrl: vi.fn(() => '/api/video-gen/upscale/realesrgan/install'),
 }));
 
 vi.mock('../ui/Toast');
@@ -294,6 +295,60 @@ describe('VideoUpscaleDrawer', () => {
     expect(screen.getByText(/\$0\.37/)).toBeInTheDocument();
     fireEvent.click(screen.getByRole('button', { name: 'Start SeedVR2 upscale' }));
     await waitFor(() => expect(upscaleVideo).toHaveBeenCalledWith('video-1', { method: 'fal-seedvr2', targetResolution: '1080p', silent: true }));
+    expect(onClose).toHaveBeenCalled();
+  });
+
+  // #19985: the opt-in local Real-ESRGAN lane.
+  const realesrganPlan = (model, runtime = {}) => ({
+    id: 'video-1',
+    method: 'realesrgan',
+    alreadyUpscaled: false,
+    source: { width: 848, height: 480, fps: 24, frameCount: 121, durationSeconds: 5, hasAudio: true },
+    target: { width: 1696, height: 960, frameCount: 121 },
+    runtime: {
+      id: 'realesrgan-ncnn-vulkan', label: 'Real-ESRGAN (ncnn Vulkan)', supported: true, installed: true, verified: true, reason: null, gpu: 'Example GPU',
+      installTarget: { version: 'v0.2.5.0', archive: 'realesrgan-ncnn-vulkan-20220424-macos.zip', sizeBytes: 51_817_124, releasePage: 'https://github.com/xinntao/Real-ESRGAN/releases/tag/v0.2.5.0' },
+      model: { id: model, label: model, nativeScale: model === 'realesrgan-x4plus' ? 4 : 2 },
+      ...runtime,
+    },
+  });
+
+  it('shows the Real-ESRGAN install target and blocks submit until it is installed', async () => {
+    getUpscalePlan.mockImplementation(async (_id, method, options) => ({
+      plan: method === 'realesrgan'
+        ? realesrganPlan(options.realesrganModel, { installed: false, verified: false, reason: 'Real-ESRGAN (ncnn Vulkan) is not installed on this machine.' })
+        : READY_PLAN,
+    }));
+    render(<VideoUpscaleDrawer item={ITEM} onClose={vi.fn()} onUpscaled={vi.fn()} />);
+    await waitFor(() => expect(getUpscalePlan).toHaveBeenCalledWith('video-1', 'ltx'));
+    // Nothing about Real-ESRGAN is read until it is picked.
+    expect(getUpscalePlan).not.toHaveBeenCalledWith('video-1', 'realesrgan', expect.anything());
+    fireEvent.click(screen.getByLabelText(/Real-ESRGAN \(local GPU/));
+    await waitFor(() => expect(getUpscalePlan).toHaveBeenCalledWith('video-1', 'realesrgan', { realesrganModel: 'realesrgan-x4plus' }));
+    expect(await screen.findByText(/not installed on this machine/)).toBeInTheDocument();
+    expect(screen.getByText(/realesrgan-ncnn-vulkan-20220424-macos\.zip/)).toBeInTheDocument();
+    expect(screen.getByText(/1696×960/)).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /Install Real-ESRGAN/ })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Start Real-ESRGAN upscale' })).toBeDisabled();
+    expect(upscaleVideo).not.toHaveBeenCalled();
+  });
+
+  it('queues Real-ESRGAN with the selected weights and Music Video attribution', async () => {
+    const onClose = vi.fn();
+    getUpscalePlan.mockImplementation(async (_id, method, options) => ({
+      plan: method === 'realesrgan' ? realesrganPlan(options.realesrganModel) : READY_PLAN,
+    }));
+    upscaleVideo.mockResolvedValue({ ok: true, job: { jobId: 'job-resr-1', status: 'queued' } });
+    render(<VideoUpscaleDrawer item={ITEM} onClose={onClose} onUpscaled={vi.fn()} musicVideo={{ projectId: 'mv-1', sceneId: 'mvs-1' }} />);
+    fireEvent.click(screen.getByLabelText(/Real-ESRGAN \(local GPU/));
+    expect(await screen.findByText(/Installed and checked on Example GPU/)).toBeInTheDocument();
+    fireEvent.change(screen.getByLabelText('Weights'), { target: { value: 'realesr-animevideov3' } });
+    await waitFor(() => expect(getUpscalePlan).toHaveBeenCalledWith('video-1', 'realesrgan', { realesrganModel: 'realesr-animevideov3' }));
+    await waitFor(() => expect(screen.getByRole('button', { name: 'Start Real-ESRGAN upscale' })).not.toBeDisabled());
+    fireEvent.click(screen.getByRole('button', { name: 'Start Real-ESRGAN upscale' }));
+    await waitFor(() => expect(upscaleVideo).toHaveBeenCalledWith('video-1', {
+      method: 'realesrgan', realesrganModel: 'realesr-animevideov3', musicVideoProjectId: 'mv-1', sceneId: 'mvs-1', silent: true,
+    }));
     expect(onClose).toHaveBeenCalled();
   });
 });

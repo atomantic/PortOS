@@ -5,8 +5,13 @@
 
 export const MAX_VIDEO_BATCH_SIZE = 20;
 
-export const UPSCALE_METHODS = Object.freeze(['lanczos', 'ltx', 'fal-seedvr2']);
+export const UPSCALE_METHODS = Object.freeze(['lanczos', 'ltx', 'fal-seedvr2', 'realesrgan']);
 export const DEFAULT_UPSCALE_METHOD = 'lanczos';
+// Real-ESRGAN weights the bundled ncnn runtime can run as a 2x video pass:
+// the general photo model (a 4x network downscaled to 2x per frame) and the
+// native-2x animation-video model.
+export const REALESRGAN_MODEL_IDS = Object.freeze(['realesrgan-x4plus', 'realesr-animevideov3']);
+export const DEFAULT_REALESRGAN_MODEL = 'realesrgan-x4plus';
 export const FAL_SEEDVR2_TARGET_RESOLUTIONS = Object.freeze(['720p', '1080p', '1440p', '2160p']);
 export const DEFAULT_FAL_SEEDVR2_TARGET_RESOLUTION = '1080p';
 

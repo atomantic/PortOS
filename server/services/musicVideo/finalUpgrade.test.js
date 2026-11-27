@@ -7,10 +7,12 @@ const appendSceneTakes = vi.fn();
 const planUpscaleHistoryItem = vi.fn();
 const enqueueFalSeedvr2Upscale = vi.fn();
 const enqueueTopazUpscale = vi.fn();
+const enqueueRealesrganUpscale = vi.fn();
 const listInFlightSceneJobs = vi.fn(() => []);
 vi.mock('./sceneJobs.js', () => ({ listInFlightSceneJobs }));
 vi.mock('../videoGen/falUpscaleJob.js', () => ({ enqueueFalSeedvr2Upscale }));
 vi.mock('../videoGen/topazJob.js', () => ({ enqueueTopazUpscale }));
+vi.mock('../videoGen/realesrganUpscaleJob.js', () => ({ enqueueRealesrganUpscale }));
 const renderSceneClips = vi.fn();
 const upscaleHistoryItem = vi.fn();
 vi.mock('./projects.js', () => ({ updateScene: (...a) => updateScene(...a), appendSceneTakes: (...a) => appendSceneTakes(...a) }));
@@ -90,6 +92,31 @@ describe('final upgrade', () => {
     const queued = await upgradeApproved('p1', { method: 'upscale', topazQuotes: { a: 'confirmed-quote' } });
     expect(queued.results[0]).toMatchObject({ ok: true, jobId: 'topaz-upscale', status: 'queued' });
     expect(enqueueTopazUpscale).toHaveBeenCalledWith('vid-a', 'confirmed-quote', {
+      musicVideo: { projectId: 'p1', sceneId: 'a', tier: 'final', selectOnComplete: true },
+    });
+  });
+
+  it('plans Real-ESRGAN readiness read-only and queues attributed jobs once installed', async () => {
+    state.project.videoSettings.upscaleMethod = 'realesrgan';
+    planUpscaleHistoryItem.mockResolvedValueOnce({
+      runtime: { supported: true, installed: false, reason: 'Real-ESRGAN (ncnn Vulkan) is not installed on this machine.', installTarget: { version: 'v0.2.5.0', sizeBytes: 51_817_124 } },
+    });
+    const blocked = await upgradeApproved('p1', { method: 'upscale', dryRun: true });
+    expect(blocked.shots).toEqual([expect.objectContaining({
+      sceneId: 'a', status: 'upscale-blocked', upscaleMethod: 'realesrgan', upscalerSupported: true,
+      upscalerInstallTarget: { version: 'v0.2.5.0', sizeBytes: 51_817_124 },
+      reason: expect.stringMatching(/not installed/),
+    })]);
+    expect(enqueueRealesrganUpscale).not.toHaveBeenCalled();
+
+    planUpscaleHistoryItem.mockResolvedValue({ runtime: { supported: true, installed: true, reason: null } });
+    enqueueRealesrganUpscale.mockResolvedValue({ jobId: 'realesrgan-a', status: 'queued' });
+    const ready = await upgradeApproved('p1', { method: 'upscale', dryRun: true });
+    expect(ready.shots).toEqual([expect.objectContaining({ sceneId: 'a', status: 'ready', upscaleMethod: 'realesrgan', costUsd: 0 })]);
+    const queued = await upgradeApproved('p1', { method: 'upscale' });
+    expect(queued.results).toEqual([{ sceneId: 'a', ok: true, method: 'upscale', jobId: 'realesrgan-a', status: 'queued' }]);
+    expect(enqueueRealesrganUpscale).toHaveBeenCalledWith('vid-a', {
+      realesrganModel: undefined,
       musicVideo: { projectId: 'p1', sceneId: 'a', tier: 'final', selectOnComplete: true },
     });
   });

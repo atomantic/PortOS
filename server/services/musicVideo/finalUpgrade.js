@@ -51,7 +51,21 @@ async function planShot(project, scene, method, upscale) {
   if (!sceneFinalApproved(scene)) return { sceneId: scene.sceneId, status: 'not-approved' };
   if (method === 'upscale') {
     const shot = { sceneId: scene.sceneId, status: 'ready', method, ...upscale };
-    if (upscale.upscaleMethod === 'realesrgan') return { ...shot, status: 'upscaler-unavailable' };
+    if (upscale.upscaleMethod === 'realesrgan') {
+      const { planUpscaleHistoryItem } = await import('../videoGen/upscaleVideo.js');
+      const plan = await planUpscaleHistoryItem(scene.videoHistoryId, { method: 'realesrgan' })
+        .catch((error) => ({ error: error.message }));
+      if (plan.error || plan.alreadyUpscaled || !plan.runtime.installed) {
+        const reason = plan.error || (plan.alreadyUpscaled ? 'The selected clip is already upscaled.' : plan.runtime.reason);
+        return {
+          ...shot,
+          status: 'upscale-blocked',
+          reason,
+          ...(plan.runtime ? { upscalerSupported: plan.runtime.supported, upscalerInstallTarget: plan.runtime.installTarget ?? null } : {}),
+        };
+      }
+      return { ...shot, costUsd: 0 };
+    }
     if (upscale.upscaleMethod === 'fal-topaz') return { ...shot, historyId: scene.videoHistoryId, costUsd: null };
     if (upscale.upscaleMethod !== 'fal-seedvr2') return { ...shot, costUsd: 0 };
     const { planUpscaleHistoryItem } = await import('../videoGen/upscaleVideo.js');

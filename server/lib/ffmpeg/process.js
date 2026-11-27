@@ -42,6 +42,10 @@ export const safeUnder = (root, name) => {
  * - `onLifecycle`: synchronous observer of fixed process phases and the
  *   owned child PID. A signal attempt is reported before delivery.
  *
+ * - `label`: the program name failure reasons start with. The lifecycle is not
+ *   ffmpeg-specific, so another media CLI (the Real-ESRGAN frame pass) reuses it
+ *   under its own name.
+ *
  * - `timeoutMs`: optional wall-clock ceiling for a stalled ffmpeg (unreadable
  *   input, evicted cloud file, dead network mount). On expiry the child gets
  *   SIGTERM, then SIGKILL after `FFMPEG_KILL_GRACE_MS`, and the result is
@@ -59,7 +63,7 @@ export const FFMPEG_KILL_GRACE_MS = 5000;
 export const FFMPEG_FRAME_TIMEOUT_MS = 2 * 60 * 1000;
 export const FFMPEG_SCAN_TIMEOUT_MS = 15 * 60 * 1000;
 
-export function runFfmpegProcess({ bin, args, signal, timeoutMs, stderrTailBytes = 2000, returnStderr = false, env, onStdout, onLifecycle } = {}) {
+export function runFfmpegProcess({ bin, args, signal, timeoutMs, stderrTailBytes = 2000, returnStderr = false, env, onStdout, onLifecycle, label = 'ffmpeg' } = {}) {
   if (!bin || typeof bin !== 'string') {
     return Promise.resolve({ ok: false, reason: 'invalid ffmpeg binary' });
   }
@@ -133,12 +137,12 @@ export function runFfmpegProcess({ bin, args, signal, timeoutMs, stderrTailBytes
         return;
       }
       if (processError || signal?.aborted) {
-        settle({ ok: false, reason: processError ? `ffmpeg process error: ${processError.message}` : 'cancelled' });
+        settle({ ok: false, reason: processError ? `${label} process error: ${processError.message}` : 'cancelled' });
         return;
       }
       if (code !== 0) {
         const tail = stderrTail.split(/\r?\n/).slice(-4).join(' | ');
-        settle({ ok: false, reason: tail ? `ffmpeg exit ${code}: ${tail}` : `ffmpeg exit ${code}` });
+        settle({ ok: false, reason: tail ? `${label} exit ${code}: ${tail}` : `${label} exit ${code}` });
         return;
       }
       settle(returnStderr ? { ok: true, stderr: stderrTail } : { ok: true });

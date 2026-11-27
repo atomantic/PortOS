@@ -171,6 +171,18 @@ vi.mock('../services/videoGen/upscaleJob.js', () => ({
   enqueueLtxUpscale: vi.fn(),
 }));
 
+// The opt-in local Real-ESRGAN lane (#19985): a queued job and an explicit SSE install.
+vi.mock('../services/videoGen/realesrganUpscaleJob.js', () => ({
+  enqueueRealesrganUpscale: vi.fn(),
+}));
+vi.mock('../services/videoGen/realesrganRuntime.js', async (importOriginal) => ({
+  ...await importOriginal(),
+  streamRealesrganInstall: vi.fn(async ({ send, safeEnd }) => {
+    send({ type: 'complete', message: 'Real-ESRGAN (ncnn Vulkan) ready' });
+    safeEnd();
+  }),
+}));
+
 // Stitch is queued as a media job (#13000); the route reaches it directly.
 vi.mock('../services/videoGen/stitchJob.js', () => ({
   enqueueStitch: vi.fn(),

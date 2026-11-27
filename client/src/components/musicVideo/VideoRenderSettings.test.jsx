@@ -97,4 +97,8 @@ it('offers the saved draft backend and SeedVR2 resolution in the preferred workf
   expect(target).toHaveValue('1080p');
   fireEvent.change(target, { target: { value: '1440p' } });
   expect(change).toHaveBeenCalledWith({ upscaleTargetResolution: '1440p' });
+  const upscaler = screen.getByRole('combobox', { name: 'Clip upscaler' });
+  expect(screen.getByRole('option', { name: 'Real-ESRGAN' }).disabled).toBe(false);
+  fireEvent.change(upscaler, { target: { value: 'realesrgan' } });
+  expect(change).toHaveBeenLastCalledWith({ upscaleMethod: 'realesrgan' });
 });
