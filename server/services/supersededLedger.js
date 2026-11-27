@@ -15,7 +15,8 @@
  */
 
 import { PATHS, tryReadFile, safeJSONParse, atomicWrite } from '../lib/fileUtils.js';
-import { join } from 'node:path';
+import { join, resolve } from 'node:path';
+import { createKeyCachedQueue } from '../lib/createKeyCachedQueue.js';
 import { isAgentScratchPath } from '../lib/agent/agentScratchPaths.js';
 
 export const LEDGER_VERSION = 1;
@@ -44,10 +45,17 @@ export async function readVerdictLedger(cosDir = PATHS.cos) {
   return Array.isArray(entries) ? entries.filter((e) => e && typeof e.branch === 'string') : [];
 }
 
-/** Persist the full entry list. */
-export async function writeVerdictLedger(entries, cosDir = PATHS.cos) {
+const queueLedgerWrite = createKeyCachedQueue();
+
+async function persistLedger(entries, cosDir) {
   await atomicWrite(ledgerPath(cosDir), { version: LEDGER_VERSION, entries });
   return entries;
+}
+
+/** Persist the full entry list. */
+export function writeVerdictLedger(entries, cosDir = PATHS.cos) {
+  cosDir = resolve(cosDir);
+  return queueLedgerWrite(cosDir, () => persistLedger(entries, cosDir));
 }
 
 /**
@@ -55,13 +63,16 @@ export async function writeVerdictLedger(entries, cosDir = PATHS.cos) {
  * one ledger serves every managed app, and a branch name alone does not identify
  * a branch across them. `entry` needs at minimum { branch, repoPath, verdict, tip }.
  */
-export async function recordVerdict(entry, cosDir = PATHS.cos) {
-  const existing = await readVerdictLedger(cosDir);
-  const isSame = (e) => e.branch === entry.branch && e.repoPath === entry.repoPath;
-  return writeVerdictLedger(
-    [...existing.filter((e) => !isSame(e)), { decidedAt: new Date().toISOString(), ...entry }],
-    cosDir
-  );
+export function recordVerdict(entry, cosDir = PATHS.cos) {
+  cosDir = resolve(cosDir);
+  return queueLedgerWrite(cosDir, async () => {
+    const existing = await readVerdictLedger(cosDir);
+    const isSame = (e) => e.branch === entry.branch && e.repoPath === entry.repoPath;
+    return persistLedger([
+      ...existing.filter((e) => !isSame(e)),
+      { decidedAt: new Date().toISOString(), ...entry },
+    ], cosDir);
+  });
 }
 
 /**

@@ -29,6 +29,7 @@
  */
 
 import { join } from 'path';
+import { createFileWriteQueue } from '../../lib/fileWriteQueue.js';
 import { atomicWrite, PATHS, ensureDir, readJSONFile } from '../../lib/fileUtils.js';
 
 const MEATSPACE_DIR = PATHS.meatspace;
@@ -57,6 +58,8 @@ function intervalForStage(stage) {
 // =============================================================================
 // STORE
 // =============================================================================
+
+const queueReviewScheduleWrite = createFileWriteQueue();
 
 async function loadReviewSchedule() {
   const data = await readJSONFile(REVIEW_SCHEDULE_FILE, { skills: {} }, { allowArray: false, strict: true });
@@ -221,6 +224,10 @@ export function applyPractice(entry, now = new Date()) {
  * @returns {Promise<{added:number, reviewed:number, refreshed:number}>}
  */
 export async function applySessionToReviewSchedule({ masteredSkills = [], practicedSkillIds = [], reviewResults = [], now = new Date() } = {}) {
+  return queueReviewScheduleWrite(() => updateReviewSchedule(masteredSkills, practicedSkillIds, reviewResults, now));
+}
+
+async function updateReviewSchedule(masteredSkills, practicedSkillIds, reviewResults, now) {
   const schedule = await loadReviewSchedule();
   const skills = schedule.skills;
   let added = 0;

@@ -15,7 +15,7 @@
  * Relations written by scrap commits are only the reviewed edges, atomic with the batch.
  */
 
-import { query } from '../../lib/db.js';
+import { query, withTransaction } from '../../lib/db.js';
 import { resolveRefs } from '../catalog/catalogRefResolver.js';
 import { assertCatalogIdentityWritable, assertCatalogAssociationRemovable, assertCatalogRelationRemovable } from './identityAccess.js';
 import { announceAssetsChanged, rowToRef, rowToSource, rowToIngredient, MEMBERS_CTE } from './shared.js';
@@ -119,15 +119,20 @@ export async function linkIngredientToRef(ingredientId, refKind, refId, role, { 
 // ingredients to a series shares one role vocabulary instead of inlining its own.
 export const seriesRefRoleForType = (type) => catalogReferenceRole(type, 'series');
 
-// Link a batch of already-resolved catalog ingredients to a series via
-// catalog_ingredient_refs (#1761) — the convergence contract's single data
-// model. The inserts are mutually independent, so they fan out. Returns the
-// ingredients actually linked (those with an id).
-export async function linkIngredientsToSeries(seriesId, ingredients = []) {
+// Link the resolved ingredients atomically, keeping their input order in the result.
+async function linkIngredientsToRef(refKind, refId, ingredients, roleForType) {
   const list = Array.isArray(ingredients) ? ingredients.filter((ing) => ing && ing.id) : [];
   if (list.length === 0) return [];
-  await Promise.all(list.map((ing) => linkIngredientToRef(ing.id, 'series', seriesId, seriesRefRoleForType(ing.type))));
+  await withTransaction(async (client) => {
+    for (const ing of list) {
+      await linkIngredientToRef(ing.id, refKind, refId, roleForType(ing.type), { client });
+    }
+  });
   return list;
+}
+
+export function linkIngredientsToSeries(seriesId, ingredients = []) {
+  return linkIngredientsToRef('series', seriesId, ingredients, seriesRefRoleForType);
 }
 
 // Catalog ingredient `type` → Creative Director ref role (#1808). CD projects
@@ -152,16 +157,8 @@ export const universeRefRoleForType = (type) => catalogReferenceRole(type, 'univ
 export const musicVideoRefRoleForType = (type) => catalogReferenceRole(type, 'music-video');
 
 
-// Link a batch of already-resolved catalog ingredients to a Creative Director
-// project via catalog_ingredient_refs with ref_kind='creative-director' (#1808)
-// — the reserved-but-previously-unwritten ref kind. Mirrors
-// linkIngredientsToSeries; the inserts are independent so they fan out. Returns
-// the ingredients actually linked (those with an id).
-export async function linkIngredientsToCreativeDirector(projectId, ingredients = []) {
-  const list = Array.isArray(ingredients) ? ingredients.filter((ing) => ing && ing.id) : [];
-  if (list.length === 0) return [];
-  await Promise.all(list.map((ing) => linkIngredientToRef(ing.id, 'creative-director', projectId, cdRefRoleForType(ing.type))));
-  return list;
+export function linkIngredientsToCreativeDirector(projectId, ingredients = []) {
+  return linkIngredientsToRef('creative-director', projectId, ingredients, cdRefRoleForType);
 }
 
 export async function unlinkIngredientFromRef(ingredientId, refKind, refId, role, { client } = {}) {

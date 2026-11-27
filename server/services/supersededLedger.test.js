@@ -84,6 +84,21 @@ describe('readVerdictLedger', () => {
 });
 
 describe('writeVerdictLedger / recordVerdict', () => {
+  it('serializes replacement and overlapping verdicts for the same ledger', async () => {
+    const original = entry();
+    const other = entry({ repoPath: '/other-app' });
+    const updated = entry({ tip: 'new-tip' });
+    await Promise.all([
+      writeVerdictLedger([original]),
+      recordVerdict(other),
+      recordVerdict(updated),
+    ]);
+    expect(await readVerdictLedger()).toEqual([
+      expect.objectContaining(other),
+      expect.objectContaining(updated),
+    ]);
+  });
+
   it('round-trips through the versioned wrapper', async () => {
     await writeVerdictLedger([entry()]);
     expect(JSON.parse(files.get(PATH)).version).toBe(1);
