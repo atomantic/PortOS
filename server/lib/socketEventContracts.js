@@ -583,19 +583,20 @@ export const SOCKET_EVENT_CONTRACTS = Object.freeze({
   },
   'storyboard:make-batch': {
     direction: 'server-to-client',
-    summary: 'Make empty panels (or Redraw all) progress on a storyboard: panels finished of the total, and when the batch is done.',
+    summary: 'Make empty panels (or Redraw all) progress, completion, and cancellation on a storyboard.',
     payloadSchema: {
       type: 'object',
       properties: {
         storyboardId: { type: 'string' },
-        status: { type: 'string', enum: ['running', 'done'] },
+        runId: { type: 'string', format: 'uuid' },
+        status: { type: 'string', enum: ['running', 'canceling', 'canceled', 'done'] },
         redraw: { type: 'boolean' },
         total: { type: 'number' },
         done: { type: 'number' },
         failed: { type: 'number' },
         startedAt: { type: 'string' },
       },
-      required: ['storyboardId', 'status', 'total', 'done', 'failed'],
+      required: ['storyboardId', 'runId', 'status', 'total', 'done', 'failed'],
       additionalProperties: false,
     },
   },

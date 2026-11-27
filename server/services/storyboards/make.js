@@ -148,11 +148,12 @@ export async function updatePanelNode(storyboardId, panelId, nodeId, patch) {
 }
 
 /** Run a node for one panel. Resolves to the board with the node's new state. */
-export async function runPanelNode(storyboardId, panelId, nodeId) {
+export async function runPanelNode(storyboardId, panelId, nodeId, { batch } = {}) {
   const board = await getStoryboard(storyboardId);
+  if (batch?.status === 'canceling') return board;
   const { node } = recipeNode(board, nodeId);
-  if (node.type === 'llm') return runLlmNode(board, panelId, node);
-  if (node.type === 'image') return runImageNode(board, panelId, node);
+  if (node.type === 'llm') return runLlmNode(board, panelId, node, { batch });
+  if (node.type === 'image') return runImageNode(board, panelId, node, { batch });
   throw refuse(`A ${node.title} node has nothing to run; it passes its value along.`);
 }
 
@@ -171,7 +172,7 @@ function correctionText({ current, note }) {
   ].join('\n');
 }
 
-async function runLlmNode(board, panelId, node, { correction = null } = {}) {
+async function runLlmNode(board, panelId, node, { correction = null, batch } = {}) {
   const recipe = effectiveRecipe(board);
   const context = inputContext(board, panelId);
   const prompt = nodeInputValue(recipe, node.id, 'prompt', context).trim();
@@ -181,6 +182,7 @@ async function runLlmNode(board, panelId, node, { correction = null } = {}) {
   const correcting = correction ? correctionText(correction) : '';
 
   const { provider, selectedModel } = await deps.resolveProvider({ providerId: node.settings.providerId || null, model: node.settings.model || null });
+  if (batch?.status === 'canceling') return board;
   if (!provider) throw refuse('No AI provider is set up; pick one in the node settings.', 'NO_PROVIDER', 503);
   if (provider.enabled === false) throw refuse(`Provider "${provider.name || provider.id}" is disabled; enable it in Settings › Providers first.`, 'PROVIDER_DISABLED');
 
@@ -225,7 +227,7 @@ async function runLlmNode(board, panelId, node, { correction = null } = {}) {
  * as written, then a correction note when there is one, then the style (its
  * Style input); each block PortOS adds is listed with the sent prompt.
  */
-async function runImageNode(board, panelId, node, { frameRef = null, count: frames = null, selectOnLand = false, note = '' } = {}) {
+async function runImageNode(board, panelId, node, { frameRef = null, count: frames = null, selectOnLand = false, note = '', batch } = {}) {
   const recipe = effectiveRecipe(board);
   const { panel } = locate(board, panelId);
   const context = inputContext(board, panelId, await resolveLinkedRefs(panel));
@@ -252,6 +254,7 @@ async function runImageNode(board, panelId, node, { frameRef = null, count: fram
     [STORYBOARD_PANEL_RENDER_TAG]: { storyboardId: board.id, panelId, nodeId: node.id, runId },
   };
   const resolvedParams = await deps.imageParams(settings, { mode: node.settings.imageMode, model: node.settings.imageModelId }, common);
+  if (batch?.status === 'canceling') return board;
   // Keep the leading refs the resolved backend accepts, so the run records what
   // was sent rather than relying on the queue's silent backstop trim (#14381).
   const cap = maxInputImages(resolvedParams.mode, resolvedParams.modelId ?? resolvedParams.model ?? null);
@@ -268,6 +271,9 @@ async function runImageNode(board, panelId, node, { frameRef = null, count: fram
   const jobIds = [];
   let enqueueError = null;
   for (let i = 0; i < count && !enqueueError; i += 1) {
+    // The first frame belongs to the run we just persisted. Stop queuing the
+    // remaining frames at the next boundary and settle against the actual count.
+    if (i > 0 && batch?.status === 'canceling') break;
     const queued = await deps.enqueue({ kind: 'image', params, owner: `storyboard:${board.id}` }).catch((err) => { enqueueError = err; return null; });
     if (queued?.jobId) jobIds.push(queued.jobId);
   }
@@ -476,11 +482,12 @@ const idlePanelIds = (board, steps) => board.beats.flatMap((beat) => beat.panels
 export async function getMakeEmptyPlan(storyboardId) {
   const board = await getStoryboard(storyboardId);
   const steps = runnableSteps(board);
+  const labels = await Promise.all(steps.map(stepLabel));
   return {
     batch: batchView(storyboardId, batches.get(storyboardId)),
     panelCount: emptyPanelIds(board, steps).length,
     allCount: idlePanelIds(board, steps).length,
-    steps: await Promise.all(steps.map(stepLabel)),
+    steps: labels,
   };
 }
 
@@ -502,22 +509,36 @@ export async function startMakeEmpty(storyboardId, { redraw = false, selectNew =
   if (!panelIds.length) throw refuse(redraw ? 'Every panel is already drawing.' : 'Every panel already has art.');
   // Re-checked after the read: two quick taps (or two tabs) both passed the first check.
   if (batches.has(storyboardId)) throw refuse('This board is already making its empty panels.', 'STORYBOARD_BATCH_RUNNING', 409);
-  const batch = { status: 'running', redraw, total: panelIds.length, done: 0, failed: 0, startedAt: new Date().toISOString() };
+  const batch = { runId: randomUUID(), status: 'running', redraw, total: panelIds.length, done: 0, failed: 0, startedAt: new Date().toISOString() };
   batches.set(storyboardId, batch);
   deps.emitBatch(batchView(storyboardId, batch));
   console.log(`🎬 Storyboard ${storyboardId.slice(0, 11)} ${redraw ? 'redrawing' : 'making'} ${panelIds.length} panel(s)`);
-  runBatch(storyboardId, panelIds, batch, { redraw, selectNew })
+  runBatch(storyboardId, panelIds, { batch, redraw, selectNew })
     .catch((err) => console.error(`❌ Storyboard ${storyboardId.slice(0, 11)} empty-panel batch stopped: ${err.message}`))
     .finally(() => {
       batches.delete(storyboardId);
-      deps.emitBatch(batchView(storyboardId, { ...batch, status: 'done' }));
+      deps.emitBatch(batchView(storyboardId, { ...batch, status: batch.status === 'canceling' ? 'canceled' : 'done' }));
     });
   return { batch: batchView(storyboardId, batch) };
 }
 
-async function runBatch(storyboardId, panelIds, batch, options) {
+export function cancelMakeEmpty(storyboardId, runId) {
+  const batch = batches.get(storyboardId);
+  if (!batch || (runId && batch.runId !== runId)) return false;
+  if (batch.status === 'running') {
+    // Keep the board reserved until the in-flight step has settled.
+    batch.status = 'canceling';
+    deps.emitBatch(batchView(storyboardId, batch));
+  }
+  return { ok: true, batch: batchView(storyboardId, batch) };
+}
+
+async function runBatch(storyboardId, panelIds, options) {
+  const { batch } = options;
   for (const panelId of panelIds) {
+    if (batch.status === 'canceling') break;
     const ok = await makePanel(storyboardId, panelId, options);
+    if (batch.status === 'canceling') break;
     batch.done += 1;
     if (!ok) batch.failed += 1;
     deps.emitBatch(batchView(storyboardId, batch));
@@ -530,13 +551,15 @@ async function runBatch(storyboardId, panelIds, batch, options) {
  * otherwise a prompt already written is kept and the image node makes its
  * usual count. Resolves to the board; a failed step throws its reason.
  */
-async function runPanelSteps(storyboardId, panelId, steps, { redraw = false, selectNew = false } = {}) {
+async function runPanelSteps(storyboardId, panelId, steps, { redraw = false, selectNew = false, batch } = {}) {
   let next = await getStoryboard(storyboardId);
   for (const node of steps) {
+    if (batch?.status === 'canceling') break;
     if (!redraw && node.type === 'llm' && panelNodeState(locate(next, panelId).panel, node.id).text.trim()) continue;
     next = redraw && node.type === 'image'
-      ? await runImageNode(await getStoryboard(storyboardId), panelId, node, { count: 1, selectOnLand: selectNew })
-      : await runPanelNode(storyboardId, panelId, node.id);
+      ? await runImageNode(await getStoryboard(storyboardId), panelId, node, { count: 1, selectOnLand: selectNew, batch })
+      : await runPanelNode(storyboardId, panelId, node.id, { batch });
+    if (batch?.status === 'canceling') break;
     const state = panelNodeState(locate(next, panelId).panel, node.id);
     if (state.status === 'failed') throw refuse(`${node.title} failed: ${state.error || 'no reason given'}`, 'STORYBOARD_DRAW_FAILED', 502);
   }
