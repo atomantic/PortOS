@@ -37,6 +37,7 @@ describe.skipIf(!runDb)('privacy opt-out engine DB round-trip', () => {
   let svc; // privacyOptOut
   let brokers; // privacyBrokers
   let vault;
+  let scanSources;
   const brokerId = 'test-optout-broker';
   const emailBrokerId = 'test-optout-email';
   const createdVaultIds = [];
@@ -76,6 +77,8 @@ describe.skipIf(!runDb)('privacy opt-out engine DB round-trip', () => {
     createdVaultIds.push(rec.id);
     const addr = await vault.createVaultRecord({ type: 'address', label: 'Home', value: 'Portland, OR', useForScans: true });
     createdVaultIds.push(addr.id);
+    const { buildSearchVectors } = await import('./privacyScan.js');
+    scanSources = buildSearchVectors(await vault.listScanEligibleValues()).sources;
   });
 
   afterAll(async () => {
@@ -92,7 +95,7 @@ describe.skipIf(!runDb)('privacy opt-out engine DB round-trip', () => {
   });
 
   it('keeps a found case unchanged in the ledger when auto-approve has no send-capable account', async () => {
-    const kase = await brokers.recordScanVerdict(emailBrokerId, 'found', { evidence: {}, found: true });
+    const kase = await brokers.recordScanVerdict(emailBrokerId, 'found', { scanSources, evidence: {}, found: true });
     const broker = await brokers.getBroker(emailBrokerId);
     const draftCount = drafts.length;
     const res = await svc.emailLane(broker, kase, {
@@ -109,7 +112,7 @@ describe.skipIf(!runDb)('privacy opt-out engine DB round-trip', () => {
   });
 
   it('emailLane drives a found case found → submitted in the ledger', async () => {
-    const kase = await brokers.recordScanVerdict(emailBrokerId, 'found', { evidence: { listing_urls: ['https://test-optout.example/p/jane'] }, found: true });
+    const kase = await brokers.recordScanVerdict(emailBrokerId, 'found', { scanSources, evidence: { listing_urls: ['https://test-optout.example/p/jane'] }, found: true });
     const broker = await brokers.getBroker(emailBrokerId);
     const payload = { full_name: 'Jane Q Testcase', email: 'jane@example.com', city: 'Portland', state: 'OR' };
     const disclosed = svc.computeDisclosedFields(broker, payload, { listingUrls: ['https://test-optout.example/p/jane'] });
@@ -125,7 +128,7 @@ describe.skipIf(!runDb)('privacy opt-out engine DB round-trip', () => {
   });
 
   it('webFormLane default (auto-submit off) queues a human task in the ledger', async () => {
-    const kase = await brokers.recordScanVerdict(brokerId, 'found', { evidence: {}, found: true });
+    const kase = await brokers.recordScanVerdict(brokerId, 'found', { scanSources, evidence: {}, found: true });
     const broker = await brokers.getBroker(brokerId);
     const res = await svc.webFormLane(broker, kase, {
       disclosedFields: ['full_name'], payload: { full_name: 'Jane Q Testcase' }, listingUrls: [], autoSubmit: false,

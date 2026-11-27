@@ -408,6 +408,8 @@ describe('runVerificationPass', () => {
     const now = new Date('2026-11-04T12:00:00Z');
     const broker = { id: 'spokeo' };
     getBroker.mockResolvedValue(broker);
+    const vault = await import('./privacyVault.js');
+    vault.listScanEligibleValues.mockResolvedValueOnce([{ id: 'name-id', version: '7', type: 'legal_name', value: 'Example Person' }]);
     const kase = { id: 'removed', brokerId: broker.id, state: 'confirmed_removed', nextRecheckAt: now.toISOString(), evidence: { verificationRechecks: 3 } };
     listBrokerCases.mockResolvedValue([kase]);
     const evidence = { listing_urls: ['https://www.spokeo.com/example'], match_basis: 'name_location' };
@@ -418,6 +420,7 @@ describe('runVerificationPass', () => {
     expect(result.reappeared).toEqual([{ caseId: 'removed', brokerId: broker.id }]);
     expect(listBrokerCases).toHaveBeenCalledWith({ subjectId: 'subject-2' });
     expect(transitionCase).toHaveBeenCalledExactlyOnceWith('removed', 'reappeared', {
+      subjectId: 'subject-2', scanSources: [{ id: 'name-id', version: '7' }],
       viaRescan: true, found: verdict === 'found' ? true : null, reason: null,
       evidence: { ...evidence, verificationRechecks: 0 }, now,
     });
