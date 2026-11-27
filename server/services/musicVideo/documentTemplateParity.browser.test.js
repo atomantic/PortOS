@@ -110,7 +110,7 @@ function App(){const[value,setValue]=useState(null);window.show=(project,data,t)
       await writeFile(join(dir, 'index.html'), '<html><head><style>figure{border:0!important;border-radius:0!important}</style></head><body style="margin:0"><div id="root"></div><script type="module" src="/entry.jsx"></script></body></html>');
     });
     await phase('bundle', async () => {
-      const { build } = await import(bundlers[0]); const { default: react } = await import(bundlers[1]); const { default: tailwind } = await import(bundlers[2]);
+      const { build, react, tailwind } = await import('../../../client/src/test/clientBundler.js');
       await buildRecordedViteFixture({
         build,
         recordedRoot: client,

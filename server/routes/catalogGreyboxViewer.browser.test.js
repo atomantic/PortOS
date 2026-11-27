@@ -292,9 +292,7 @@ describe.skipIf(!canRun)('Environment greybox in Chromium', () => {
   // delaying the next. Warmup compiles the lazy chunk without mounting a canvas.
   beforeEach(async () => {
     fixture = undefined;
-    const { createServer } = await import(bundler[0]);
-    const { default: react } = await import(bundler[1]);
-    const { default: tailwind } = await import(bundler[2]);
+    const { createServer, react, tailwind } = await import('../../client/src/test/clientBundler.js');
     fixture = await startBrowserFixture({
       name: 'catalog-greybox', createServer, chromium,
       launchOptions: { executablePath: chrome, args: ['--mute-audio', '--use-angle=swiftshader', '--enable-unsafe-swiftshader'] },
