@@ -327,6 +327,31 @@ describe('streamChat request lifecycle', () => {
     vi.unstubAllGlobals();
   });
 
+  it.each([undefined, 240])('sets Ollama Inkling thinking off and preserves only an explicit maxTokens (%s)', async maxTokens => {
+    const model = 'inkling-2-mini:26b-a5b-nvfp4';
+    const messages = [{ role: 'system', content: 'Keep replies short.' }];
+    const tools = [{ type: 'function', function: { name: 'read_clock' } }];
+    getProviderById.mockResolvedValue({ ...provider, id: 'ollama', defaultModel: model });
+    installFetch(() => Promise.resolve(new Response(
+      'data: {"choices":[{"delta":{"content":"Hello."},"finish_reason":"stop"}]}\n\ndata: [DONE]\n\n',
+    )));
+
+    await expect(streamChat(messages, { provider: 'ollama', model: 'auto', tools, maxTokens }))
+      .resolves.toMatchObject({ text: 'Hello.', finishReason: 'stop' });
+    const body = JSON.parse(fetchMock.mock.lastCall[1].body);
+    expect(body).toMatchObject({ model, messages, reasoning_effort: 'none', tools, tool_choice: 'auto' });
+    if (maxTokens === undefined) expect(body).not.toHaveProperty('max_tokens');
+    else expect(body.max_tokens).toBe(maxTokens);
+    expect(body).not.toHaveProperty('chat_template_kwargs');
+  });
+
+  it('lets other providers choose their output budget without sending the Ollama-only effort', async () => {
+    installFetch(() => Promise.resolve(new Response('data: [DONE]\n\n')));
+    await streamChat([], { provider: 'test-provider', model: 'test-model' });
+    expect(JSON.parse(fetchMock.mock.lastCall[1].body)).not.toHaveProperty('max_tokens');
+    expect(JSON.parse(fetchMock.mock.lastCall[1].body)).not.toHaveProperty('reasoning_effort');
+  });
+
   it('aborts a provider request that never returns headers', async () => {
     installFetch(({ signal }) => pendingUntilAbort(signal));
     const onTimeout = vi.fn();
