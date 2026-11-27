@@ -398,6 +398,54 @@ describe('BackupTab', () => {
       expect(toast.success).toHaveBeenCalledWith('Database restored from snap-2026-06-09', { icon: '💾' });
     });
 
+    it.each(['success', 'failure'])('locks snapshot actions during preview and restore through %s', async (outcome) => {
+      getBackupSnapshots.mockResolvedValue([{ id: 'snap-first' }, { id: 'snap-second' }]);
+      const preview = Promise.withResolvers();
+      const restore = Promise.withResolvers();
+      restoreDatabase.mockReturnValueOnce(preview.promise).mockReturnValueOnce(restore.promise);
+      await renderTab();
+
+      const restores = screen.getAllByRole('button', { name: 'Restore DB' });
+      const deletes = screen.getAllByRole('button', { name: /Delete snapshot/ });
+      const actions = [...restores, ...deletes];
+      fireEvent.click(restores[0]);
+
+      expect(screen.getByRole('status', { name: 'Preparing database restore preview for snap-first…' })).toBeVisible();
+      for (const action of actions) {
+        expect(action).toBeDisabled();
+        fireEvent.click(action);
+      }
+      expect(restoreDatabase).toHaveBeenCalledTimes(1);
+      expect(deleteBackupSnapshot).not.toHaveBeenCalled();
+
+      await act(async () => { preview.resolve({ status: 'ok', sizeBytes: 2048, tableCount: 12 }); });
+      expect(screen.queryByRole('status', { name: /Preparing database restore preview/ })).not.toBeInTheDocument();
+      const dialog = screen.getByRole('dialog', { name: 'Restore database' });
+      const confirm = within(dialog).getByRole('button', { name: 'Restore' });
+      const cancel = within(dialog).getByRole('button', { name: 'Cancel' });
+      fireEvent.click(confirm);
+
+      expect(within(dialog).getByRole('status', { name: 'Restoring database…' })).toBeVisible();
+      expect(confirm).toBeDisabled();
+      expect(cancel).toBeDisabled();
+      for (const action of actions) expect(action).toBeDisabled();
+      fireEvent.click(confirm);
+      fireEvent.click(cancel);
+      fireEvent.keyDown(dialog, { key: 'Escape' });
+      fireEvent.click(dialog.parentElement);
+      expect(dialog).toBeVisible();
+      expect(restoreDatabase).toHaveBeenCalledTimes(2);
+      expect(restoreDatabase).toHaveBeenLastCalledWith({ snapshotId: 'snap-first', dryRun: false }, { silent: true });
+      expect(deleteBackupSnapshot).not.toHaveBeenCalled();
+
+      await act(async () => {
+        if (outcome === 'failure') restore.reject(new Error('Connection closed'));
+        else restore.resolve({ status: 'ok' });
+      });
+      expect(dialog).not.toBeInTheDocument();
+      for (const action of actions) expect(action).toBeEnabled();
+    });
+
     // #9725: a committed restore whose repair failed stays fenced server-side;
     // the tab must offer to RESUME it (never to repeat the restore).
     it('surfaces a committed restore awaiting recovery and resumes exactly that operation', async () => {
@@ -976,6 +1024,21 @@ describe('BackupTab', () => {
       fireEvent.click(disclosure);
       expect(disclosure.getAttribute('aria-expanded')).toBe('true');
       expect(screen.getByRole('switch', { name: /Disable default exclusion \/models/i })).toBeTruthy();
+    });
+
+    it('names each custom exclusion removal button and removes the selected path', async () => {
+      getSettings.mockResolvedValue({
+        backup: { destPath: '/backups', enabled: false, cronExpression: '0 2 * * *', retentionCount: null, excludePaths: ['/first/', '/second/'] },
+      });
+      await renderTab();
+
+      const first = screen.getByRole('button', { name: 'Remove exclude path /first/' });
+      const second = screen.getByRole('button', { name: 'Remove exclude path /second/' });
+      expect(first).toHaveAttribute('type', 'button');
+      expect(second).toHaveAttribute('type', 'button');
+      fireEvent.click(first);
+      expect(screen.queryByRole('button', { name: 'Remove exclude path /first/' })).not.toBeInTheDocument();
+      expect(screen.getByRole('button', { name: 'Remove exclude path /second/' })).toBeInTheDocument();
     });
 
     // #7241: a bare directory name is an rsync any-depth filter, so the chip has
