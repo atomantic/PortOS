@@ -141,14 +141,14 @@ const requestScreenshot = (emit, state, timeoutMs, signal) => new Promise((resol
 // default. Prefer an explicit `cfg.llm.visionModel` when set; otherwise pass
 // undefined so describeImageDataUrl falls back to the provider's defaultModel
 // (which is vision-capable for vision-capable providers).
-const describeScreenshot = async (dataUrl, prompt, cfg) => {
+const describeScreenshot = async (dataUrl, prompt, cfg, hasHostControl) => {
   const { describeImageDataUrl } = await import('../visionTest.js');
   const providerId = cfg?.llm?.provider || 'lmstudio';
   const visionModel = cfg?.llm?.visionModel;
   const model = typeof visionModel === 'string' && visionModel && visionModel !== 'auto'
     ? visionModel
     : undefined;
-  return describeImageDataUrl({ dataUrl, prompt, providerId, model });
+  return describeImageDataUrl({ dataUrl, prompt, providerId, model, hasHostControl });
 };
 
 // Lazily fetch the page's visible text from the client. The client ships the
@@ -485,7 +485,7 @@ const executeTurnToolCall = async ({ tc, cfg, emit, state, signal, hasHostContro
     // describe it via the voice provider's vision endpoint. Provided here
     // so tools.js stays free of socket/vision coupling.
     captureScreenshot: () => requestScreenshot(emit, state, 15000, signal),
-    describeImage: (dataUrl, prompt) => describeScreenshot(dataUrl, prompt, cfg),
+    describeImage: (dataUrl, prompt) => describeScreenshot(dataUrl, prompt, cfg, hasHostControl),
     requestUiText: () => requestUiText(state, emit, signal),
   };
   try {

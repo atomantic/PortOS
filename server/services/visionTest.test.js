@@ -356,12 +356,22 @@ describe('Vision Test Service', () => {
     it('delegates a CLI provider to the CLI vision path (not the API call)', async () => {
       getProviderById.mockResolvedValue({ id: 'codex', type: 'cli', command: 'codex', defaultModel: 'gpt-5' });
       describeImageViaCli.mockResolvedValue({ text: 'a portrait', finishReason: null, usage: null, reasoning: '' });
-      const out = await describeImageDataUrlDetailed({ dataUrl: DATA_URL, prompt: 'caption', providerId: 'codex' });
+      const out = await describeImageDataUrlDetailed({
+        dataUrl: DATA_URL, prompt: 'caption', providerId: 'codex', hasHostControl: async () => true,
+      });
       expect(out.text).toBe('a portrait');
       expect(describeImageViaCli).toHaveBeenCalledWith(expect.objectContaining({
         provider: expect.objectContaining({ id: 'codex' }), dataUrl: DATA_URL, prompt: 'caption',
       }));
       expect(global.fetch).not.toHaveBeenCalled();
+    });
+
+    it.each([undefined, true, async () => 1])('refuses CLI vision without verified host control (%s)', async (hasHostControl) => {
+      getProviderById.mockResolvedValue({ id: 'codex', type: 'cli', command: 'codex' });
+      await expect(describeImageDataUrlDetailed({
+        dataUrl: DATA_URL, prompt: 'caption', providerId: 'codex', hasHostControl,
+      })).rejects.toMatchObject({ status: 403, code: 'HOST_CONTROL_FORBIDDEN' });
+      expect(describeImageViaCli).not.toHaveBeenCalled();
     });
 
     it('still rejects a non-api / non-cli provider (e.g. tui)', async () => {
@@ -373,7 +383,9 @@ describe('Vision Test Service', () => {
     it('forwards the CLI provider timeout to the CLI vision path', async () => {
       getProviderById.mockResolvedValue({ id: 'codex', type: 'cli', command: 'codex', timeout: 300000 });
       describeImageViaCli.mockResolvedValue({ text: 'ok', finishReason: null, usage: null, reasoning: '' });
-      await describeImageDataUrlDetailed({ dataUrl: DATA_URL, prompt: 'caption', providerId: 'codex' });
+      await describeImageDataUrlDetailed({
+        dataUrl: DATA_URL, prompt: 'caption', providerId: 'codex', hasHostControl: () => true,
+      });
       expect(describeImageViaCli).toHaveBeenCalledWith(expect.objectContaining({ timeout: 300000 }));
     });
 
