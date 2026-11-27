@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
-import { mkdtempSync, rmSync, writeFileSync, chmodSync, utimesSync, statSync, mkdirSync, existsSync } from 'fs';
+import { mkdtempSync, rmSync, writeFileSync, chmodSync, utimesSync, statSync, mkdirSync, existsSync, readFileSync } from 'fs';
 import { tmpdir } from 'os';
 import { join } from 'path';
 import { pinPlatform } from './testHelper.js';
@@ -13,6 +13,8 @@ import {
   trimVideoFromFrame,
   upscaleVideo2x,
   runFfmpegProcess,
+  supportsSetparamsFilter,
+  vfrSyncArgs,
 } from './ffmpeg.js';
 import { padSourceForUpscale, finalizeUpscaleOutput } from '../services/videoGen/upscaleFfmpeg.js';
 import { stitchVideos } from '../services/videoGen/stitchVideos.js';
@@ -54,6 +56,21 @@ describe('ffmpeg codec selection & required-encoder discovery (#13616)', () => {
     chmodSync(scriptPath, 0o755);
     return scriptPath;
   };
+
+  it('rechecks VFR and setparams support after an in-place upgrade and cache reset', async () => {
+    const bin = createScript('ffmpeg', 'echo "-vsync  video sync method"');
+    __setPlatformCandidatesForTest([bin]);
+
+    expect(await vfrSyncArgs(bin)).toEqual(['-vsync', 'vfr']);
+    expect(await supportsSetparamsFilter()).toBe(false);
+
+    createScript('ffmpeg', 'echo "-fps_mode  set framerate mode"; echo " ... setparams V->V"');
+    resetFfmpegCache();
+    __setPlatformCandidatesForTest([bin]);
+
+    expect(await vfrSyncArgs(bin)).toEqual(['-fps_mode', 'vfr']);
+    expect(await supportsSetparamsFilter()).toBe(true);
+  });
 
   describe('candidate enumeration and platform names', () => {
     it('enumerates POSIX platform candidates in precedence order', async () => {
@@ -351,6 +368,29 @@ exit 0
       const res = await upscaleVideo2x(vid);
       expect(res.ok).toBe(false);
       expect(res.reason).toMatch(/libx264/);
+    });
+
+    it('upscaleVideo2x surfaces the exit status and diagnostic while preserving the source', async () => {
+      const bin = createScript('ffmpeg', `
+case "$2" in
+  -encoders) echo " V..... libx264"; exit 0 ;;
+  -filters) echo " ... setparams V->V"; exit 0 ;;
+esac
+for arg in "$@"; do last="$arg"; done
+touch "$last"
+echo "synthetic upscale diagnostic" >&2
+exit 17
+`);
+      __setPlatformCandidatesForTest([bin]);
+      const video = join(tmpDir, 'video.mp4');
+      writeFileSync(video, 'original');
+
+      expect(await upscaleVideo2x(video)).toEqual({
+        ok: false,
+        reason: expect.stringMatching(/ffmpeg exit 17: synthetic upscale diagnostic/),
+      });
+      expect(readFileSync(video, 'utf8')).toBe('original');
+      expect(existsSync(`${video}.up2x.mp4`)).toBe(false);
     });
 
     it('padSourceForUpscale and finalizeUpscaleOutput report prerequisite error when libx264 is unavailable', async () => {

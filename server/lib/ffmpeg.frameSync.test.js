@@ -5,7 +5,7 @@ vi.mock('./childProcess.js', async original => ({
   ...await original(),
   execFile: Object.assign(() => {}, { [Symbol.for('nodejs.util.promisify.custom')]: probe }),
 }));
-import { vfrSyncArgs } from './ffmpeg.js';
+import { resetFfmpegCache, vfrSyncArgs } from './ffmpeg.js';
 
 describe('VFR output synchronization capability', () => {
   it('uses the current per-output option, sharing one probe across concurrent callers', async () => {
@@ -30,5 +30,19 @@ describe('VFR output synchronization capability', () => {
     expect(await vfrSyncArgs(kind)).toEqual(['-fps_mode', 'vfr']);
     probe.mockResolvedValueOnce({ stdout: '-vsync  video sync method' });
     expect(await vfrSyncArgs(kind)).toEqual(['-vsync', 'vfr']);
+  });
+
+  it('keeps fresh VFR support when an earlier probe fails after a reset', async () => {
+    const pending = Promise.withResolvers();
+    probe.mockReturnValueOnce(pending.promise);
+    const oldResult = vfrSyncArgs('upgraded');
+
+    resetFfmpegCache();
+    probe.mockResolvedValueOnce({ stdout: '-vsync  video sync method' });
+    expect(await vfrSyncArgs('upgraded')).toEqual(['-vsync', 'vfr']);
+
+    pending.reject(new Error('old binary exited during upgrade'));
+    await oldResult;
+    expect(await vfrSyncArgs('upgraded')).toEqual(['-vsync', 'vfr']);
   });
 });
