@@ -27,63 +27,26 @@
  */
 
 import { query, withTransaction } from '../../lib/db.js';
+import { createJsonbLeafDb } from '../../lib/jsonbLeafDb.js';
 import { LOGLINE_MAX } from '../../lib/universeBibleLimits.js';
 import { mirrorTimestamp } from '../../lib/pgTimestamp.js';
 import { toPgJson } from '../../lib/pgJson.js';
+
+export const { readRaw, listRaw, listIds, listLiveIds, listTombstoneIdsBefore, writeRaw, deleteRaw } = createJsonbLeafDb({
+  table: 'universes',
+  softDelete: {},
+  mirrorColumns: {
+    name: record => typeof record?.name === 'string' ? record.name : '',
+    schema_version: record => Number.isInteger(record?.schemaVersion) ? record.schemaVersion : 5,
+    ephemeral: record => record?.ephemeral === true,
+  },
+});
 
 // Keep the runs[] log bounded to the most-recent 200 — matches the file
 // backend's cap (universeBuilder.recordRun) so behavior is identical.
 const RUN_CAP = 200;
 
 // --- Universe records ---
-
-/** Raw on-disk-equivalent record (the `data` JSONB), or null. No sanitize. */
-export async function readRaw(id, { client } = {}) {
-  const exec = client ? client.query.bind(client) : query;
-  const { rows } = await exec(`SELECT data FROM universes WHERE id = $1`, [id]);
-  return rows[0]?.data ?? null;
-}
-
-/** Every universe id (live, ephemeral, AND tombstones) — the service filters. */
-export async function listIds() {
-  const { rows } = await query(`SELECT id FROM universes`);
-  return rows.map((r) => r.id);
-}
-
-/**
- * Live (non-deleted) universe ids only — id-only projection hitting
- * idx_universes_live. Backs tombstoneGc's LIVE_ID_LISTERS (the base-hash
- * orphan sweep), so a record stops protecting its base hash the moment it's
- * tombstoned without the sweep ever reading a universe's JSONB body.
- */
-export async function listLiveIds() {
-  const { rows } = await query(`SELECT id FROM universes WHERE deleted = FALSE`);
-  return rows.map((r) => r.id);
-}
-
-/**
- * Tombstoned universe ids whose deletedAt is older than `beforeMs` (epoch ms) —
- * the GC candidate scan for `pruneTombstonedUniverses`. An id-only projection:
- * the sweep almost never finds a tombstone, so the common case must not pay
- * for a single universe's JSONB body, let alone every one of them.
- */
-export async function listTombstoneIdsBefore(beforeMs) {
-  const cutoffIso = new Date(beforeMs).toISOString();
-  const { rows } = await query(
-    `SELECT id FROM universes WHERE deleted = TRUE AND deleted_at IS NOT NULL AND deleted_at < $1`,
-    [cutoffIso],
-  );
-  return rows.map((r) => r.id);
-}
-
-/**
- * Every record's raw `data` JSONB in one query (live/ephemeral/tombstones).
- * The bulk read behind listUniverses — one SELECT instead of N per-id reads.
- */
-export async function listRaw() {
-  const { rows } = await query(`SELECT data FROM universes`);
-  return rows.map((r) => r.data);
-}
 
 /**
  * Live universes projected down to `{ id, name }`, unordered — the rows behind
@@ -201,49 +164,6 @@ export async function countUniverses({ includeDeleted = false } = {}) {
     ? await query(`SELECT COUNT(*) AS count FROM universes`)
     : await query(`SELECT COUNT(*) AS count FROM universes WHERE deleted = FALSE`);
   return parseInt(rows[0].count, 10);
-}
-
-/**
- * Upsert one record. `data` is written verbatim (lossless); the typed mirror
- * columns are bind-sanitized so a hand-edited/legacy record with a malformed
- * timestamp or missing field can't make the write throw (which, during the boot
- * warm/import, would block the whole backend). `created_at` is preserved on
- * conflict — only the first INSERT sets it.
- */
-export async function writeRaw(id, record, { client } = {}) {
-  const now = new Date().toISOString();
-  const createdAt = mirrorTimestamp(record?.createdAt, now);
-  const schemaVersion = Number.isInteger(record?.schemaVersion) ? record.schemaVersion : 5;
-  const exec = client ? client.query.bind(client) : query;
-  await exec(
-    `INSERT INTO universes (id, name, data, schema_version, ephemeral, created_at, updated_at, deleted, deleted_at)
-     VALUES ($1, $2, $3::jsonb, $4, $5, $6, $7, $8, $9)
-     ON CONFLICT (id) DO UPDATE SET
-       name = EXCLUDED.name,
-       data = EXCLUDED.data,
-       schema_version = EXCLUDED.schema_version,
-       ephemeral = EXCLUDED.ephemeral,
-       updated_at = EXCLUDED.updated_at,
-       deleted = EXCLUDED.deleted,
-       deleted_at = EXCLUDED.deleted_at`,
-    [
-      id,
-      typeof record?.name === 'string' ? record.name : '',
-      toPgJson(record),
-      schemaVersion,
-      record?.ephemeral === true,
-      createdAt,
-      mirrorTimestamp(record?.updatedAt, createdAt),
-      record?.deleted === true,
-      mirrorTimestamp(record?.deletedAt, null),
-    ],
-  );
-  return record;
-}
-
-/** Hard-delete a record (tombstone GC). Idempotent — missing row is a no-op. */
-export async function deleteRaw(id) {
-  await query(`DELETE FROM universes WHERE id = $1`, [id]);
 }
 
 // --- Render-history runs (local-only) ---
