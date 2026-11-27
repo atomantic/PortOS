@@ -16,7 +16,7 @@ import { recordVideoExecution, recordVideoExecutionDiagnostics } from './executi
 import { ServerError } from '../../lib/errorHandler.js';
 import { videoGenEvents } from './events.js';
 import {
-  broadcastSse, closeJobAfterDelay, PYTHON_NOISE_RE,
+  broadcastSse, dispatchCanceledJob, closeJobAfterDelay, PYTHON_NOISE_RE,
 } from '../../lib/sseUtils.js';
 import { hfChildEnv } from '../hfToken.js';
 import { safeChildProcessEnv } from '../../lib/processEnv.js';
@@ -897,14 +897,19 @@ export async function spawnAndWatchVideo({
     stopAbandonedChild(firstProc);
     if (videoJobState.activeProcess === firstProc) videoJobState.activeProcess = null;
     await cleanupFailedRender();
-    await persistTermination(null, null, 'refused');
-    job.status = 'error';
-    const reason = err.message || 'Video generation failed before the render child was wired';
-    const refused = err.status >= 400 && err.status < 500;
-    const log = refused ? console.log : console.error;
-    log(`${refused ? '🚫' : '❌'} Video generation setup error [${jobId.slice(0, 8)}]: ${reason}`);
-    broadcastSse(job, { type: 'error', error: reason });
-    videoGenEvents.emit('failed', { generationId: jobId, error: reason, failure: normalizeVideoFailure(err, { prompts: [meta?.prompt, meta?.negativePrompt] }) });
+    const canceled = preparation?.wasCanceled();
+    await persistTermination(null, null, canceled ? 'canceled' : 'refused');
+    if (canceled) {
+      dispatchCanceledJob(job, jobId, 'Video preparation', () => videoGenEvents.emit('failed', { generationId: jobId, error: 'Canceled' }));
+    } else {
+      job.status = 'error';
+      const reason = err.message || 'Video generation failed before the render child was wired';
+      const refused = err.status >= 400 && err.status < 500;
+      const log = refused ? console.log : console.error;
+      log(`${refused ? '🚫' : '❌'} Video generation setup error [${jobId.slice(0, 8)}]: ${reason}`);
+      broadcastSse(job, { type: 'error', error: reason });
+      videoGenEvents.emit('failed', { generationId: jobId, error: reason, failure: normalizeVideoFailure(err, { prompts: [meta?.prompt, meta?.negativePrompt] }) });
+    }
     closeJobAfterDelay(videoJobState.jobs, jobId);
   };
 

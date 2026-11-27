@@ -317,7 +317,8 @@ export const mediaModelsFactory = async () => {
 });
 };
 
-export const sseUtilsFactory = () => ({
+export const sseUtilsFactory = async () => ({
+  dispatchCanceledJob: (await vi.importActual('../../lib/sseUtils.js')).dispatchCanceledJob,
   broadcastSse: vi.fn(),
   attachSseClient: vi.fn(() => true),
   closeJobAfterDelay: vi.fn(),

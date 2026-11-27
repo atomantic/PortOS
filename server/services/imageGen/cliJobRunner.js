@@ -5,6 +5,7 @@
 
 import { open, stat } from 'fs/promises';
 import { isAbsolute, join, resolve, sep } from 'path';
+import { finishedImageAdmission } from '../../lib/backupPublicationWait.js';
 import { withBackupAssetPublication } from '../../lib/backupSnapshotBoundary.js';
 import { bufferedSpawn, killProcessTree, prepareCliSpawn } from '../../lib/bufferedSpawn.js';
 import { spawn } from '../../lib/childProcess.js';
@@ -97,6 +98,7 @@ export function createCliImageJobRunner({ mode, provider, logName = provider, de
   };
 
   const finalizeJobFailure = createJobFailureFinalizer({
+    emitCanceledFrame: true,
     jobs, activeJobs, activeSlots: activeProcs, label: `${mode} image generation`, events: imageGenEvents,
     failedPayload: (jobId, reason, proc) => ({
       mode, generationId: jobId, error: reason,
@@ -266,17 +268,20 @@ export function createCliImageJobRunner({ mode, provider, logName = provider, de
     const finish = async ({ image, error, canceled }) => {
       if (job.status !== 'running') return;
       try {
-        if (image) error = await publishStagedImage(job, image, publication);
+        if (image) {
+          // Once the gallery commit starts, the exited child can no longer accept cancellation.
+          if (activeProcs.get(jobId) === proc) activeProcs.delete(jobId);
+          error = await publishStagedImage(job, image, publication);
+        }
       } catch (err) {
         error = `${provider} post-exit handler failed: ${err?.message || err}`;
       } finally {
         void removeScratchDirectory(scratchDir, extraCleanup);
       }
-      if (canceled) return finalizeJobFailure.canceled(job, jobId, proc);
+      if (canceled || job.canceled) return finalizeJobFailure.canceled(job, jobId, proc);
       if (error) return finalizeJobFailure(job, jobId, proc, error);
 
       job.status = 'complete';
-      if (activeProcs.get(jobId) === proc) activeProcs.delete(jobId);
       activeJobs.delete(jobId);
       console.log(`✅ Image generated [${jobId.slice(0, 8)}]: ${filename} (${mode})`);
       const result = { filename, path: `/data/images/${filename}` };
@@ -303,27 +308,30 @@ export function createCliImageJobRunner({ mode, provider, logName = provider, de
         return finish({ error: `Failed to spawn ${bin}: ${err?.message || err}` });
       }
       const { code, signal, setupError, processError, spawnError, stdoutTail, stderrTail } = await exited;
+      if (job.canceled) return finish({ canceled: true });
       if (spawnError) return finish({ error: `Failed to spawn ${bin}: ${spawnError.message}` });
 
-      const retry = await withBackupAssetPublication(async () => {
-        if (setupError) {
-          return finish({ error: `${provider} launch setup failed: ${setupError?.message || setupError}` });
-        }
-        if (code !== 0 || processError) {
-          const reason = processError?.message || (signal ? `Killed by signal ${signal}` : `Exit code ${code}`);
-          const tail = stderrTail.trim().split('\n').slice(-6).join('\n');
-          return finish({ error: `${provider} generation failed: ${reason}\n${tail}` });
-        }
+      if (setupError) {
+        return finish({ error: `${provider} launch setup failed: ${setupError?.message || setupError}` });
+      }
+      if (code !== 0 || processError) {
+        const reason = processError?.message || (signal ? `Killed by signal ${signal}` : `Exit code ${code}`);
+        const tail = stderrTail.trim().split('\n').slice(-6).join('\n');
+        return finish({ error: `${provider} generation failed: ${reason}\n${tail}` });
+      }
 
+      const retry = await withBackupAssetPublication(async () => {
+        if (job.canceled) return finish({ canceled: true });
         let image;
         try {
           image = await invocation.discover({ attempt, stdoutTail, stderrTail });
         } catch (err) {
           return finish({ error: `${provider} post-exit handler failed: ${err?.message || err}` });
         }
+        if (job.canceled) return finish({ canceled: true });
         if (image.retry) return true;
         return finish(image.error ? { error: image.error } : { image });
-      }).catch(err => finish({ error: `${provider} publication admission failed: ${err?.message || err}` }));
+      }, finishedImageAdmission(imageGenEvents, jobId)).catch(err => finish({ error: `${provider} publication admission failed: ${err?.message || err}` }));
       if (!retry) return;
     }
   }

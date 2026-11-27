@@ -28,7 +28,7 @@ import {
   isDefaultI2vReferenceMode, normalizeI2vReferenceMode, resolveI2vReferenceStrength,
 } from '../../lib/videoReferenceModes.js';
 import { videoGenEvents } from './events.js';
-import { broadcastSse, closeJobAfterDelay } from '../../lib/sseUtils.js';
+import { broadcastSse, dispatchCanceledJob, closeJobAfterDelay } from '../../lib/sseUtils.js';
 import { getVideoModels, getTextEncoderRepo } from '../../lib/mediaModels.js';
 import { hardwareUnavailableReason, isHardwareCompatible } from '../../lib/systemCapabilities.js';
 import { resolveVideoModelSelection } from './modelSelection.js';
@@ -935,12 +935,10 @@ async function startPreparedLocalVideo({
     });
   } catch (err) {
     if (handedOff) throw err;
+    const canceled = preparation.wasCanceled();
     await recordVideoExecutionDiagnostics(jobId, { termination: {
-      exitCode: null, signal: null, reason: preparation.wasCanceled() ? 'canceled' : 'refused', observedAt: new Date().toISOString(),
+      exitCode: null, signal: null, reason: canceled ? 'canceled' : 'refused', observedAt: new Date().toISOString(),
     } }, ...(executionParent ? [executionParent] : [])).catch(error => console.error(`❌ Video preparation evidence persistence failed [${jobId.slice(0, 8)}]: ${error.message}`));
-    job.status = 'error';
-    const reason = err.message || 'Failed to prepare video generation';
-    console.error(`❌ Video generation preparation error [${jobId.slice(0, 8)}]: ${reason}`);
     const cleanup = await Promise.allSettled([
       cleanupTempFiles({ includeUploads: true, includeUntrackedAudio: true }),
       stepwiseDir ? rmGuarded(stepwiseDir, { recursive: true, force: true }) : undefined,
@@ -949,8 +947,15 @@ async function startPreparedLocalVideo({
       maintenance.markCurrentUnsettled();
       maintenance.markResourceUnsettled('media', jobId);
     }
-    broadcastSse(job, { type: 'error', error: reason });
-    videoGenEvents.emit('failed', { generationId: jobId, error: reason, failure: normalizeVideoFailure(err, { prompts: [meta.prompt, meta.negativePrompt] }) });
+    if (canceled) {
+      dispatchCanceledJob(job, jobId, 'Video preparation', () => videoGenEvents.emit('failed', { generationId: jobId, error: 'Canceled' }));
+    } else {
+      job.status = 'error';
+      const reason = err.message || 'Failed to prepare video generation';
+      console.error(`❌ Video generation preparation error [${jobId.slice(0, 8)}]: ${reason}`);
+      broadcastSse(job, { type: 'error', error: reason });
+      videoGenEvents.emit('failed', { generationId: jobId, error: reason, failure: normalizeVideoFailure(err, { prompts: [meta.prompt, meta.negativePrompt] }) });
+    }
     closeJobAfterDelay(videoJobState.jobs, jobId);
     throw err;
   }

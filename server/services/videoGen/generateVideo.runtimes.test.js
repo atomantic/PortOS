@@ -342,6 +342,8 @@ describe('generateVideo — MiniMax H3 MLX contract', () => {
   it('cancel() while first-run weights are still preparing answers pending and never spawns', async () => {
     const { spawnDetached } = await import('../../lib/detachedSpawn.js');
     const { cancel } = await import('./local.js');
+    const { videoJobState } = await import('./jobState.js');
+    const errors = vi.spyOn(console, 'error');
     vi.mocked(spawnDetached).mockClear();
     let release;
     const gate = new Promise((resolve) => { release = resolve; });
@@ -367,7 +369,12 @@ describe('generateVideo — MiniMax H3 MLX contract', () => {
       expect(cancel()).toBe('pending');
       release();
       await refused;
+      expect(videoJobState.jobs.get('h3-cancel-while-preparing')).toMatchObject({
+        status: 'canceled', lastPayload: { type: 'canceled', reason: 'Canceled' },
+      });
+      expect(errors).not.toHaveBeenCalled();
     } finally {
+      errors.mockRestore();
       mockFindCachedRepoFile.mockImplementation(async (_repo, filename) => join('/mock/hf/snap', filename));
     }
     expect(spawnDetached).not.toHaveBeenCalled();

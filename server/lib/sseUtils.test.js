@@ -349,14 +349,18 @@ describe('createJobFailureFinalizer', () => {
     expect(events.emit).toHaveBeenCalledWith('failed', { mode: 'grok', generationId: 'j1', error: 'boom' });
   });
 
-  it('.canceled forces a "Canceled" failure past the idempotency guard (fal.js/reactor.js cancel path)', () => {
-    const { activeSlots, events, finalize } = setup();
+  it('delivers cancellation to SSE and settles the queue without logging a failure', () => {
+    const errors = vi.spyOn(console, 'error');
+    const { activeSlots, events, finalize } = setup({ emitCanceledFrame: true });
     const job = { clients: [], status: 'running' };
     activeSlots.set('j1', { some: 'request-entry' });
 
     finalize.canceled(job, 'j1');
 
-    expect(job.status).toBe('error');
+    expect(job.status).toBe('canceled');
+    expect(job.lastPayload).toEqual({ type: 'canceled', reason: 'Canceled' });
+    expect(errors).not.toHaveBeenCalled();
+    errors.mockRestore();
     expect(activeSlots.has('j1')).toBe(false);
     expect(events.emit).toHaveBeenCalledWith('failed', { generationId: 'j1', error: 'Canceled' });
   });

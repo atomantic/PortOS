@@ -4,10 +4,11 @@ import { join } from 'path';
 import os, { tmpdir } from 'os';
 import { EventEmitter } from 'node:events';
 
-const admissionFault = vi.hoisted(() => ({ error: null }));
+const admissionFault = vi.hoisted(() => ({ error: null, options: null }));
 vi.mock('../../lib/backupSnapshotBoundary.js', async original => {
   const actual = await original();
   return { ...actual, withBackupAssetPublication: (...args) => {
+    admissionFault.options = args[1];
     if (admissionFault.error) return Promise.reject(admissionFault.error);
     return actual.withBackupAssetPublication(...args);
   } };
@@ -1582,6 +1583,42 @@ it('drains a snapshot through local upscale and the sidecar naming the delivered
   } finally { release(); }
 });
 
+
+it.each(['success', 'failure', 'cancel'])('releases local compute during a backup on %s', async outcome => {
+  mockResolveFlux2Python.mockReturnValue('/fake/venv-flux2/bin/python3');
+  mockIsFlux2VenvHealthy.mockResolvedValue(true);
+  const child = new EventEmitter();
+  child.kill = vi.fn();
+  child.stdout = new EventEmitter();
+  child.stderr = new EventEmitter();
+  mockSpawn.mockReturnValue(child);
+  const { acquireBackupSnapshotCut } = await import('../../lib/backupSnapshotBoundary.js');
+  const { FINISHED_OUTPUT_ADMISSION_MS } = await import('../../lib/backupPublicationWait.js');
+  const { imageGenEvents } = await import('../imageGenEvents.js');
+  const { getActiveJob, cancel } = await import('./local.js');
+  const job = await generateImage({ modelId: 'qwen-image-2.1', prompt: 'example' });
+  const before = releaseClaim.mock.calls.length;
+  const releaseCut = await acquireBackupSnapshotCut();
+  const settled = new Promise(resolve => imageGenEvents.once(outcome === 'success' ? 'completed' : 'failed', resolve));
+  admissionFault.options = null;
+  try {
+    if (outcome === 'cancel') expect(cancel()).toBe(true);
+    child.emit('close', outcome === 'success' ? 0 : 1);
+    expect(getActiveJob()).toBeNull();
+    await vi.waitFor(() => expect(releaseClaim).toHaveBeenCalledTimes(before + 1));
+    if (outcome !== 'success') {
+      const error = outcome === 'cancel' ? 'Canceled' : expect.stringContaining('Exit code 1');
+      expect(await settled).toMatchObject({ generationId: job.jobId, error });
+      expect(admissionFault.options).toBeNull();
+    } else {
+      expect(admissionFault.options).toMatchObject({ timeoutMs: FINISHED_OUTPUT_ADMISSION_MS, onWait: expect.any(Function) });
+      const activity = new Promise(resolve => imageGenEvents.once('activity', resolve));
+      admissionFault.options.onWait();
+      expect(await activity).toEqual({ generationId: job.jobId });
+    }
+  } finally { releaseCut(); }
+  await settled;
+});
 
 it('settles a refused close-event publication and releases the process and heavy claim', async () => {
   mockResolveFlux2Python.mockReturnValue('/fake/venv-flux2/bin/python3');
