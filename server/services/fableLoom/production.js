@@ -968,6 +968,12 @@ async function advanceRun(runId) {
     asset.effectiveParameters = effectiveParameters(job.params);
     asset.status = 'queued';
     _jobToAsset.set(enqueued.jobId, { runId, assetId: asset.id });
+    // Bulk cancellation can withdraw the job during admission, before this
+    // batch owns its queue event.
+    if (enqueued.status === 'canceled') {
+      await handleJobTerminal('canceled', { id: enqueued.jobId });
+      return run;
+    }
   }
   touchRun(run);
   return run;
@@ -998,9 +1004,8 @@ async function handleJobTerminal(event, job) {
   touchRun(run);
   if (run.status === 'in_progress' && event === 'completed') await advanceRun(run.id);
   if (run.status === 'in_progress' && event === 'canceled') {
-    run.status = 'canceled';
     run.cancelRequested = true;
-    touchRun(run);
+    await stopCanceledBatch(run);
   }
   if (run.status === 'in_progress' && event === 'failed') {
     run.status = 'failed';
@@ -1262,6 +1267,20 @@ export function getEpisodeProductionBatch(runId) {
   return _batchRuns.get(runId) || null;
 }
 
+async function stopCanceledBatch(run) {
+  if (run.status !== 'in_progress') return run;
+  await cancelActiveBatchJobs(run);
+  for (const asset of run.assets) {
+    if (asset.status === 'pending' || asset.status === 'preparing') {
+      asset.status = 'canceled';
+      asset.error = 'Canceled before start.';
+    }
+  }
+  run.status = 'canceled';
+  touchRun(run);
+  return run;
+}
+
 /** Cancel an in-flight batch run and its queued/running media jobs. */
 export async function cancelEpisodeProductionBatch(runId) {
   const run = _batchRuns.get(runId);
@@ -1270,19 +1289,7 @@ export async function cancelEpisodeProductionBatch(runId) {
   // Flag synchronously so an in-flight advanceRun stops enqueueing, then run the
   // teardown on the run's queue so it waits for that enqueue step to drain.
   run.cancelRequested = true;
-  const teardown = async () => {
-    if (run.status !== 'in_progress') return run;
-    await cancelActiveBatchJobs(run);
-    for (const asset of run.assets) {
-      if (asset.status === 'pending' || asset.status === 'preparing') {
-        asset.status = 'canceled';
-        asset.error = 'Canceled by the user.';
-      }
-    }
-    run.status = 'canceled';
-    touchRun(run);
-    return run;
-  };
+  const teardown = () => stopCanceledBatch(run);
   const scheduled = await scheduleRun(runId, teardown);
   return scheduled || teardown();
 }

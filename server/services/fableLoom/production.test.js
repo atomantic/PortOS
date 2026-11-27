@@ -849,6 +849,18 @@ describe('fableLoom production service', () => {
     expect(run.assets.every((asset) => !asset.jobId || asset.jobId !== 'late-100' || asset.status !== 'queued')).toBe(true);
   });
 
+  it('settles the batch when the queue cancels admission before enqueue returns', async () => {
+    queueMocks.enqueueJob.mockImplementationOnce(() => {
+      queueMocks.mediaJobEvents.emit('canceled', { id: 'job-1', error: 'Canceled before start' });
+      return { jobId: 'job-1', status: 'canceled' };
+    });
+    const run = await startEpisodeProductionBatch('loom-1', 'ep-1', { mode: 'current_canon' });
+    await vi.waitFor(() => expect(getEpisodeProductionBatch(run.id).status).toBe('canceled'));
+    expect(run.assets.find((asset) => asset.jobId === 'job-1')).toMatchObject({ status: 'canceled' });
+    expect(run.summary).toMatchObject({ pending: 0, preparing: 0, queued: 0 });
+    expect(queueMocks.enqueueJob).toHaveBeenCalledTimes(1);
+  });
+
   it('cancels sibling jobs when one asset in a stage fails and lets resume advance', async () => {
     const run = await reachMultiAssetStage();
     const queued = run.assets.filter((asset) => asset.status === 'queued');
