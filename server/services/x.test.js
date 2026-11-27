@@ -487,6 +487,40 @@ describe('openApprovedDraft approval gates', () => {
   });
 });
 
+describe('updateAccount', () => {
+  beforeEach(() => {
+    query.mockReset();
+  });
+
+  it('preserves concurrent patches to different fields in a single statement per patch', async () => {
+    const row = { id: 'a', username: 'example_user', label: 'Example', enabled: true, notes: 'Old notes' };
+    query.mockImplementation(async (sql, params) => {
+      // Apply the UPDATE assignments to the current row, as PostgreSQL does.
+      expect(sql).toMatch(/^UPDATE x_accounts SET .* WHERE id = \$1 RETURNING \*$/);
+      expect(params[0]).toBe(row.id);
+      for (const [, column, parameter] of sql.matchAll(/(\w+) = \$(\d+)/g)) {
+        if (column !== 'id') row[column] = params[Number(parameter) - 1];
+      }
+      return { rows: [{ ...row }] };
+    });
+
+    const [disabled, cleared] = await Promise.all([
+      updateAccount('a', { enabled: false }),
+      updateAccount('a', { notes: '' }),
+    ]);
+
+    expect(query.mock.calls.map(([, params]) => params)).toEqual([['a', false], ['a', '']]);
+    expect(disabled).toMatchObject({ enabled: false });
+    expect(cleared).toMatchObject({ enabled: false, notes: '', label: 'Example', username: 'example_user' });
+  });
+
+  it('returns null when the update matches no account', async () => {
+    query.mockResolvedValueOnce({ rows: [] });
+    await expect(updateAccount('missing', { label: 'Example' })).resolves.toBeNull();
+    expect(query).toHaveBeenCalledTimes(1);
+  });
+});
+
 describe('X service refusals are 4xx, not 500', () => {
   beforeEach(() => {
     vi.clearAllMocks();
@@ -502,7 +536,6 @@ describe('X service refusals are 4xx, not 500', () => {
       message: 'An X account with that username already exists',
     });
 
-    query.mockResolvedValueOnce({ rows: [{ id: 'a', username: 'example_user' }] });
     query.mockRejectedValueOnce(Object.assign(new Error('violates foreign key constraint "x_accounts_pkey"'), { code: '23503' }));
     await expect(updateAccount('a', { label: 'B' })).rejects.toMatchObject({ status: 404, message: 'X account not found' });
   });
