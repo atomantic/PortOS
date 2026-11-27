@@ -98,6 +98,7 @@ const EXCLUDED_PREFIXES = [
 // `AGENTS.md` on the same line.
 const DUAL_NAME_IMPLEMENTATION = [
   'server/services/agent/agentPromptBuilder.test.js',
+  'server/services/agent/agentPromptBuilder.delivery.test.js',
   'server/services/promptSections/instructions.js',
   'server/lib/agent/agentInstructionsFile.js',
   'server/lib/agent/agentInstructionsFile.test.js',
