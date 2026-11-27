@@ -17,68 +17,26 @@ import ProviderEnvVars from './ProviderEnvVars';
 import RetiredModelPinsPanel from './RetiredModelPinsPanel';
 
 export default function ProviderPresetsTab({
-  providers,
-  providersById,
-  presetSections,
-  cardStateByProviderId,
-  runtimeByProviderId,
-  readiness,
-  statuses,
-  activeProviderId,
-  defaultProvider,
-  runnerAllowedCommands,
-  testResults,
-  refreshing,
-  refreshNotice = {},
-  recovering,
-  addingTuiMode,
-  servingModel,
-  codex,
-  loadError,
-  modelPinReloadKey,
-  showSamples,
-  setShowSamples,
-  loadingSamples,
-  samplesState,
-  samplesError,
-  retrySamples,
-  sampleProviders,
-  addableSamples,
-  addingSample,
-  onAddSample,
-  onAddAllSamples,
-  showRunPanel,
-  apps,
-  appsState,
-  appsError,
-  retryApps,
-  selectedWorkspace,
-  setSelectedWorkspace,
-  runPrompt,
-  setRunPrompt,
-  activeRun,
-  runOutput,
-  runProviderIsTui,
-  onExecuteRun,
-  startingRun,
-  onStopRun,
-  compositionCatalog,
-  onCompose,
-  onScrollToDefaultCard,
-  onReload,
-  onTest,
-  onRefreshModels,
-  onToggleEnabled,
-  onSetActive,
-  onEdit,
-  onDelete,
-  onAddTuiMode,
-  onRecover,
-  onInstallRuntime,
-  onAutoSetupRuntime,
-  onUseServedModel,
-  onServeWantedModel,
+  catalog, cardState, codex, quickRun, samples, actions,
 }) {
+  const {
+    providers, providersById, presetSections, cardStateByProviderId, runtimeByProviderId, readiness,
+    statuses, activeProviderId, defaultProvider, runnerAllowedCommands, loadError, modelPinReloadKey, compositionCatalog,
+  } = catalog;
+  const { testResults, refreshing, refreshNotice = {}, recovering, addingTuiMode, servingModel } = cardState;
+  const {
+    showSamples, setShowSamples, loadingSamples, samplesState, samplesError, retrySamples,
+    sampleProviders, addableSamples, addingSample, onAddSample, onAddAllSamples,
+  } = samples;
+  const {
+    showRunPanel, apps, appsState, appsError, retryApps, selectedWorkspace, setSelectedWorkspace,
+    runPrompt, setRunPrompt, activeRun, runOutput, runProviderIsTui, onExecuteRun, startingRun, onStopRun,
+  } = quickRun;
+  const {
+    onCompose, onScrollToDefaultCard, onReload, onTest, onRefreshModels, onToggleEnabled,
+    onSetActive, onEdit, onDelete, onAddTuiMode, onRecover, onInstallRuntime, onAutoSetupRuntime,
+    onUseServedModel, onServeWantedModel,
+  } = actions;
   return (
     <>
       {!loadError && (
