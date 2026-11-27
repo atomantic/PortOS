@@ -18,15 +18,14 @@
  * Only the shape of the swept path itself says it never curves.
  */
 
+import { isThreejsAttachmentAnchored, resolveThreejsAttachments } from './threejsModel.js';
 import {
   CURVED_OUTLINE_MIN_CONCAVE_TURN_DEGREES,
   SWEPT_ARC_MIN_SPAN_DEGREES,
   collectDeclaredCurvedParts,
   evaluateSweptGeometryCurvature,
-  isThreejsAttachmentAnchored,
-  listSpecNames,
-  resolveThreejsAttachments,
-} from './threejsModel.js';
+} from './threejsModelCurvature.js';
+import { listSpecNames } from './threejsModelSpecNames.js';
 import {
   MAX_CLIP_AUDIT_POSES,
   MAX_LISTED_OMITTED_TIMES,

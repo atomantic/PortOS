@@ -8,16 +8,11 @@ import { ServerError } from '../../lib/errorHandler.js';
 import { PATHS, resolveGalleryImage } from '../../lib/fileUtils.js';
 import { runPromptThroughProvider } from '../promptRunner.js';
 import { extractJson } from '../../lib/jsonExtract.js';
-import {
-  buildThreejsFactorySource,
-  buildThreejsFlatnessFeedback,
-  buildThreejsMaterialFeedback,
-  evaluateThreejsFlatness,
-  evaluateThreejsMaterialPlausibility,
-  threejsSculptSpecSchema,
-} from '../../lib/threejsModel.js';
+import { buildThreejsFactorySource, threejsSculptSpecSchema } from '../../lib/threejsModel.js';
 import { buildThreejsAnimationFeedback, summarizeThreejsAnimation } from '../../lib/threejsModelAnimation.js';
 import { buildThreejsCoverageFeedback, evaluateThreejsPartCoverage } from '../../lib/threejsModelCoverage.js';
+import { buildThreejsFlatnessFeedback, evaluateThreejsFlatness } from '../../lib/threejsModelFlatness.js';
+import { buildThreejsMaterialFeedback, evaluateThreejsMaterialPlausibility } from '../../lib/threejsModelMaterialAudit.js';
 import { buildThreejsPenetrationFeedback, evaluateThreejsPenetration } from '../../lib/threejsModelPenetration.js';
 import { buildThreejsPhysicalAuditFeedback, evaluateThreejsPhysicalAudit } from '../../lib/threejsModelPhysicalAudit.js';
 import { evaluateThreejsRigReadiness } from '../../lib/threejsModelRig.js';

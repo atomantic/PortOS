@@ -53,7 +53,8 @@
  *   reference being followed, not a mistake.
  */
 
-import { listSpecNames, resolveThreejsAttachments } from './threejsModel.js';
+import { resolveThreejsAttachments } from './threejsModel.js';
+import { listSpecNames } from './threejsModelSpecNames.js';
 import {
   MAX_CLIP_AUDIT_POSES,
   MAX_LISTED_OMITTED_TIMES,
