@@ -118,7 +118,7 @@ export const buildClaimEpicSection = (forge, leaveOpen) => (forge === 'github' ?
 
 // Handing an issue to a human volunteer writes the SAME forge state the
 // issue-watcher's deterministic pass writes when it resolves the same comment
-// first (issueWatcher.js#assignVolunteer) — one policy, rendered here as shell.
+// first (issueWatcher/handbackAndVolunteers.js#assignVolunteer) — one policy, rendered here as shell.
 // `${CANDIDATE}` is likewise literal shell text set by the agent's own script.
 const VOLUNTEER_CLAIM_GH = formatVolunteerClaimCommands('"${CANDIDATE}"').join('\n   ');
 

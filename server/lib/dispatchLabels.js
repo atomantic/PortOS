@@ -524,7 +524,7 @@ export function formatContributorLabelReleaseCommands(issueRef, { cli = 'gh' } =
  * The forge state a VOLUNTEER claim writes — one policy, shared by both paths
  * that observe the same event (a human comment on an unassigned issue saying
  * they intend to do the work): the issue-watcher's deterministic gather pass
- * (`issueWatcher.js#assignVolunteer`) and the claim agent's Phase 1 handoff.
+ * (`issueWatcher/handbackAndVolunteers.js#assignVolunteer`) and the claim agent's Phase 1 handoff.
  *
  * A volunteer claim IS a claim: assignee + `in-progress` + the contributor
  * invitations retired. `in-progress` is what the Issues tab hides on and what
