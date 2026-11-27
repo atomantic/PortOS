@@ -83,6 +83,23 @@ describe.skipIf(!chrome)('command palette viewport and keyboard layout', () => {
         await page.getByRole('option').first().waitFor();
         const count = await page.getByRole('option').count();
         expect(count).toBeGreaterThan(6);
+        const activeOutline = async () => page.evaluate(() => {
+          const input = document.querySelector('[role="combobox"]');
+          const active = document.getElementById(input.getAttribute('aria-activedescendant'));
+          return {
+            activeId: active.id,
+            activeOutline: getComputedStyle(active).outlineStyle,
+            activeWidth: getComputedStyle(active).outlineWidth,
+            activeColor: getComputedStyle(active).outlineColor,
+            inactiveOutline: getComputedStyle(document.querySelector(`[role="option"]:not(#${CSS.escape(active.id)})`)).outlineStyle,
+          };
+        });
+        await page.emulateMedia({ forcedColors: 'active' });
+        const forcedIndicator = await activeOutline();
+        expect(forcedIndicator.activeOutline).toBe('solid');
+        expect(forcedIndicator.activeWidth).toBe('2px');
+        expect(forcedIndicator.activeColor).not.toBe('rgba(0, 0, 0, 0)');
+        await page.emulateMedia({ forcedColors: 'none' });
         for (let i = 0; i < count; i += 1) {
           if (i) {
             const previous = await input.getAttribute('aria-activedescendant');
@@ -95,6 +112,10 @@ describe.skipIf(!chrome)('command palette viewport and keyboard layout', () => {
             const list = document.querySelector('[role="listbox"]').parentElement.getBoundingClientRect();
             return active.top >= list.top - 1 && active.bottom <= list.bottom + 1;
           });
+          const indicator = await activeOutline();
+          expect(indicator.activeOutline).toBe('solid');
+          expect(indicator.activeWidth).toBe('2px');
+          expect(indicator.inactiveOutline).toBe('none');
           const geometry = await page.getByRole('dialog').evaluate(dialog => {
             const rect = el => { const r = el.getBoundingClientRect(); return { top: r.top, bottom: r.bottom, height: r.height }; };
             const list = dialog.querySelector('[role="listbox"]').parentElement;
