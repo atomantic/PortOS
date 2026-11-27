@@ -67,7 +67,7 @@ const REVIEW_QUEUE_MAX_SNAPSHOTS = 100;
 export const MAX_REVIEW_QUEUE_SNOOZE_MS = 30 * 24 * 60 * 60 * 1000;
 
 // One process-wide deadline replaces browser polling for clock-only changes.
-// It carries no source records, and is armed only after an explicit queue read.
+// Queue reads and snooze mutations can arm it with their next known deadline.
 let clockInvalidation = null;
 let clockInvalidationAt = Infinity;
 function scheduleQueueClockInvalidation(at) {
@@ -1128,9 +1128,13 @@ function pruneQueueSnapshots(now = Date.now()) {
   }
 }
 
+function invalidateQueueSnapshots() {
+  queueSnapshots.clear();
+}
+
 // Test seam: snapshots are intentionally process-local and short-lived.
 export function __resetQueueSnapshots() {
-  queueSnapshots.clear();
+  invalidateQueueSnapshots();
   clearTimeout(clockInvalidation);
   clockInvalidation = null;
   clockInvalidationAt = Infinity;
@@ -1293,7 +1297,7 @@ export async function resolveQueueItem(queueItemId, operation = 'resolve', input
     if (result == null) {
       throw new ServerError(`${source} item not found: ${rawId}`, { status: 404, code: 'NOT_FOUND' });
     }
-    await clearQueueTriageMarkersForItem(queueItemId);
+    await clearQueueTriageMarkersForItem(queueItemId).finally(invalidateQueueSnapshots);
     return { source, id: queueItemId, operation, resolved: true };
   }
 
@@ -1307,7 +1311,7 @@ export async function resolveQueueItem(queueItemId, operation = 'resolve', input
   if (result == null) {
     throw new ServerError(`${producer.label} item not found: ${rawId}`, { status: 404, code: 'NOT_FOUND' });
   }
-  await clearQueueTriageMarkersForItem(queueItemId);
+  await clearQueueTriageMarkersForItem(queueItemId).finally(invalidateQueueSnapshots);
   return { source, id: queueItemId, resolved: true };
 }
 
@@ -1385,16 +1389,16 @@ export async function triageQueueItem(queueItemId, operation, input = {}, { now:
   }
 
   const { source } = queueSourceAndRawId(queueItemId);
-  const queue = await gatherFullQueue({}, { applyTriageState: false, now, onlySources: triageProducerSources(source) });
-  const sourceDescriptor = queue.sources[source];
-  if (sourceDescriptor?.error) {
-    throw new ServerError(`Cannot triage ${source} while its source is unavailable`, {
-      status: 503,
-      code: 'SOURCE_UNAVAILABLE',
-    });
-  }
+  const producerSources = triageProducerSources(source);
+  const queue = await gatherFullQueue({}, { applyTriageState: false, now, onlySources: producerSources });
   const item = queue.items.find((candidate) => candidate.id === queueItemId);
   if (!item) {
+    if ([...producerSources].some((producerSource) => queue.sources[producerSource]?.error)) {
+      throw new ServerError(`Cannot triage ${source} while a backing source is unavailable`, {
+        status: 503,
+        code: 'SOURCE_UNAVAILABLE',
+      });
+    }
     throw new ServerError(`Review queue item not found: ${queueItemId}`, { status: 404, code: 'NOT_FOUND' });
   }
   if (operation === 'dismiss' && item.isRecommendation !== true) {
@@ -1426,7 +1430,8 @@ export async function triageQueueItem(queueItemId, operation, input = {}, { now:
   } else {
     await reviewQueueTriageStore.upsertReviewQueueTriage(next);
   }
-  __resetQueueSnapshots();
+  invalidateQueueSnapshots();
+  if (operation === 'snooze' && !next.dismissed) scheduleQueueClockInvalidation(Date.parse(next.snoozedUntil));
 
   return {
     id: queueItemId,
@@ -1474,7 +1479,7 @@ export async function promoteAskQueueItem(queueItemId, target, goalId) {
 
   const { promoteLatestAssistantTurn } = await import('./askPromote.js');
   const result = await promoteLatestAssistantTurn({ conversationId, target, goalId });
-  await clearQueueTriageMarkersForItem(queueItemId);
+  await clearQueueTriageMarkersForItem(queueItemId).finally(invalidateQueueSnapshots);
   return { source, id: queueItemId, promoted: true, target: result.target, ref: result.ref };
 }
 
