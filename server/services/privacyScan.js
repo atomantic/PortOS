@@ -242,7 +242,7 @@ export async function probeBroker(broker, vectors, {
   if (needsBrowser) {
     const browsed = await dispatchRequest(() => browserFetch
       ? browserFetch(url)
-      : fetchUrlMainText(url, { dispatchRequest })).catch(onBrokerFetchFailure);
+      : fetchUrlMainText(url, { dispatchRequest, disposableContext: true })).catch(onBrokerFetchFailure);
     if (browsed) {
       const rendered = classifyScanResult({ status: browsed.status, html: browsed.text, vectors, broker });
       if (rendered.verdict) classified = rendered;

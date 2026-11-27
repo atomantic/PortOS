@@ -18,6 +18,7 @@ const dispatch = vi.fn(async (_id, _purpose, start) => start());
 vi.mock('./privacySubjects.js', () => ({ dispatchWithSubjectConsent: dispatch }));
 
 const { probeBroker } = await import('./privacyScan.js');
+const { fetchUrlMainText } = await import('./catalog/catalogIngestSources.js');
 
 const broker = { id: 'b1', urls: { search: 'https://broker.example.com/{first}-{last}' } };
 const vectors = { names: [{ full: 'Jane Doe', firstName: 'Jane', lastName: 'Doe' }], locations: [] };
@@ -43,6 +44,15 @@ describe('probeBroker default HTTP lane', () => {
     });
     await expect(probeBroker(broker, vectors)).rejects.toBe(denied);
     expect(fetchMock).toHaveBeenCalledTimes(1);
+  });
+
+  it('uses a disposable context for the default browser fallback', async () => {
+    fetchMock.mockReset().mockResolvedValueOnce({ status: 403, text: async () => 'blocked' });
+    await probeBroker({ ...broker, urls: { search: 'https://broker.example.com/{firstName}-{lastName}' } }, vectors);
+    expect(fetchUrlMainText).toHaveBeenCalledWith(
+      'https://broker.example.com/Jane-Doe',
+      expect.objectContaining({ disposableContext: true, dispatchRequest: expect.any(Function) }),
+    );
   });
 
   it('keeps the status contract: a 404 stays inconclusive', async () => {

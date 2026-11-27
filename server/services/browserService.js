@@ -708,6 +708,32 @@ export function ssrfPinRefusalReason(messages, verifyRemoteIp, _url, topFrameId 
   return null;
 }
 
+async function withDisposableBrowserTarget(read, commandTimeoutMs) {
+  const version = await getCdpVersion();
+  const browser = await openCdpSession(version?.webSocketDebuggerUrl, { commandTimeoutMs });
+  let browserContextId;
+  try {
+    ({ browserContextId } = await browser.send('Target.createBrowserContext', { disposeOnDetach: true }));
+    if (!browserContextId) throw new Error('CDP did not return a disposable browser context');
+    const { targetId } = await browser.send('Target.createTarget', {
+      url: 'about:blank', browserContextId, hidden: true, background: true,
+    });
+    if (!targetId) throw new Error('CDP did not create a disposable page target');
+    const target = (await listCdpPages({ strict: true })).find(page => page.id === targetId);
+    if (!target?.webSocketDebuggerUrl) throw new Error('CDP did not return a disposable page target');
+    return await read(target);
+  } finally {
+    try {
+      if (browserContextId) await browser.send('Target.disposeBrowserContext', { browserContextId });
+    } catch {
+      // Chrome also disposes this context when its owning session detaches.
+      console.warn('⚠️ CDP could not explicitly dispose the temporary browser context');
+    } finally {
+      browser.close();
+    }
+  }
+}
+
 /**
  * Navigate to a URL in a fresh tab and verify — against Chrome's OWN reported
  * connection IP — that EVERY main-frame hop connected to an allowed address:
@@ -744,6 +770,8 @@ export function ssrfPinRefusalReason(messages, verifyRemoteIp, _url, topFrameId 
  * deliverable (a browser handoff, `POST /api/browser/navigate`) — gets a tab
  * back to close on its own schedule. Pass `closeAfterRead: false` to read AND
  * keep the tab; passing it explicitly decides teardown either way.
+ * `disposableContext` uses an off-the-record context without profile history or
+ * existing sign-ins. It always disposes the entire context before returning.
  *
  * Because of that, `id` / `webSocketDebuggerUrl` in the return value name a
  * CLOSED tab whenever this function performed the read. They are still returned
@@ -762,10 +790,16 @@ export async function navigateToUrlPinned(url, {
   evaluateExpression = null,
   evaluateTimeoutMs = CDP_EVALUATE_TIMEOUT_MS,
   closeAfterRead = Boolean(evaluateExpression),
+  disposableContext = false,
 } = {}) {
   if (typeof verifyRemoteIp !== 'function') {
     throw new Error('navigateToUrlPinned requires a verifyRemoteIp(ip) predicate');
   }
+
+  const read = target => readPinnedTarget(target, url, {
+    verifyRemoteIp, dispatchRequest, settleMs, navigateTimeoutMs, evaluateExpression, evaluateTimeoutMs,
+  });
+  if (disposableContext) return withDisposableBrowserTarget(read, navigateTimeoutMs);
 
   // Open a BLANK tab first so Network listeners attach BEFORE the target URL is
   // fetched — `/json/new?<url>` would navigate immediately and we'd miss the
@@ -781,6 +815,20 @@ export async function navigateToUrlPinned(url, {
     throw new Error('CDP open-blank returned a malformed response');
   }
 
+  let keepTab = false;
+  try {
+    const page = await read(target);
+    keepTab = !closeAfterRead;
+    return page;
+  } finally {
+    if (keepTab) browserEvents.emit('pages:changed');
+    else await closeCdpPage(target.id);
+  }
+}
+
+async function readPinnedTarget(target, url, {
+  verifyRemoteIp, dispatchRequest, settleMs, navigateTimeoutMs, evaluateExpression, evaluateTimeoutMs,
+}) {
   const READ_ID = 3;
   const { default: WebSocket } = await import('ws');
   const messages = [];
@@ -884,15 +932,9 @@ export async function navigateToUrlPinned(url, {
   });
 
   if (!result.ok) {
-    await closeCdpPage(target.id);
     if (result.error) throw result.error;
     throw new Error(`refusing to ingest: ${result.reason}`);
   }
-
-  // The read (if any) already happened on this session, so the tab has served
-  // its purpose — tear it down here rather than trusting every call site to.
-  if (closeAfterRead) await closeCdpPage(target.id);
-  else browserEvents.emit('pages:changed');
 
   return {
     id: target.id,

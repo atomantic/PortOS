@@ -676,13 +676,21 @@ describe('navigateToUrlPinned tab ownership (closeAfterRead)', () => {
   // Minimal CDP: PUT /json/new hands out a blank tab, /json/close/<id> is
   // recorded, and the socket answers Page.navigate with a frameId + a pinned
   // main-frame Document response, then Runtime.evaluate with `evalValue`.
-  async function startFakeCdp({ evalValue = null, remoteIPAddress = '93.184.216.34', navigateError = null, status = 200 } = {}) {
+  async function startFakeCdp({ evalValue = null, remoteIPAddress = '93.184.216.34', navigateError = null, status = 200, createTargetError = false } = {}) {
+    const contextCommands = [];
     const opened = [];
     const closed = [];
     const navigations = [];
     let port = 0;
     const server = createServer((req, res) => {
       const path = req.url || '';
+      if (path === '/json/version' || path === '/json/list') {
+        res.writeHead(200, { 'content-type': 'application/json' });
+        res.end(JSON.stringify(path === '/json/version'
+          ? { webSocketDebuggerUrl: `ws://127.0.0.1:${port}/devtools/browser/example` }
+          : [{ id: 'private-tab', webSocketDebuggerUrl: `ws://127.0.0.1:${port}/devtools/page/private-tab` }]));
+        return;
+      }
       if (req.method === 'PUT' && path.startsWith('/json/new')) {
         const id = `tab-${opened.length + 1}`;
         opened.push(id);
@@ -700,9 +708,23 @@ describe('navigateToUrlPinned tab ownership (closeAfterRead)', () => {
       res.end('');
     });
     const wss = new WebSocketServer({ server });
-    wss.on('connection', (ws) => {
+    wss.on('connection', (ws, req) => {
       ws.on('message', (raw) => {
         const msg = JSON.parse(raw.toString());
+        if (req.url.startsWith('/devtools/browser/')) {
+          contextCommands.push([msg.method, msg.params]);
+          if (msg.method === 'Target.createTarget' && createTargetError) {
+            ws.send(JSON.stringify({ id: msg.id, error: { message: 'target unavailable' } }));
+            return;
+          }
+          const result = {
+            'Target.createBrowserContext': { browserContextId: 'private-context' },
+            'Target.createTarget': { targetId: 'private-tab' },
+            'Target.disposeBrowserContext': {},
+          }[msg.method];
+          ws.send(JSON.stringify({ id: msg.id, result }));
+          return;
+        }
         if (msg.method === 'Page.navigate') {
           navigations.push(msg.params.url);
           if (navigateError) {
@@ -735,6 +757,7 @@ describe('navigateToUrlPinned tab ownership (closeAfterRead)', () => {
       opened,
       closed,
       navigations,
+      contextCommands,
       stop: () => new Promise((resolve) => { wss.close(() => server.close(resolve)); }),
     };
   }
@@ -772,6 +795,28 @@ describe('navigateToUrlPinned tab ownership (closeAfterRead)', () => {
     } finally {
       log.mockRestore();
     }
+  });
+
+  it.each(['success', 'pin refusal', 'target setup failure'])('disposes the off-the-record context after %s', async (outcome) => {
+    fake = await startFakeCdp({ evalValue: 'read-body', createTargetError: outcome === 'target setup failure' });
+    const service = await importServicePointedAtFake();
+    const url = 'https://example.com/search?name=Sample+Person&city=Example';
+    const navigation = service.navigateToUrlPinned(url, {
+      disposableContext: true,
+      verifyRemoteIp: () => outcome !== 'pin refusal',
+      evaluateExpression: 'document.body.innerText',
+    });
+    if (outcome === 'success') await expect(navigation).resolves.toMatchObject({ id: 'private-tab', evalResult: 'read-body' });
+    else await expect(navigation).rejects.toThrow(outcome === 'pin refusal' ? 'refusing to ingest' : 'CDP Target.createTarget failed');
+
+    expect(fake.opened).toEqual([]);
+    expect(fake.closed).toEqual([]);
+    expect(fake.navigations).toEqual(outcome === 'target setup failure' ? [] : [url]);
+    expect(fake.contextCommands).toEqual([
+      ['Target.createBrowserContext', { disposeOnDetach: true }],
+      ['Target.createTarget', { url: 'about:blank', browserContextId: 'private-context', hidden: true, background: true }],
+      ['Target.disposeBrowserContext', { browserContextId: 'private-context' }],
+    ]);
   });
 
   it('does not promote CDP error payloads into thrown errors and closes the failed tab', async () => {
