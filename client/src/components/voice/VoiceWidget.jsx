@@ -762,18 +762,52 @@ export default function VoiceWidget({ config, claimHeld, consoleHost }) {
     (next === 'input' ? inputRef : fabRef).current?.focus();
   }, [expanded]);
 
+  const sampleRef = useRef(null);
+  const stopSample = useCallback(() => {
+    const sample = sampleRef.current;
+    if (!sample) return false;
+    sampleRef.current = null;
+    sample.abort();
+    return true;
+  }, []);
+  const playCallSample = async () => {
+    if (stage !== 'idle' || sampleRef.current) return;
+    prepareVoicePlayback();
+    const sample = new AbortController();
+    sampleRef.current = sample;
+    setStage('thinking');
+    try {
+      const queued = await speakSynthesized('PortOS radio check. One, two, three. How do you read me?', {
+        ...ttsRef.current, signal: sample.signal,
+      });
+      if (!queued || sampleRef.current !== sample) return;
+      setStage('speaking');
+      await whenPlaybackDrained();
+    } catch (err) {
+      if (sampleRef.current === sample) toast.error(`Voice sample: ${err.message}`);
+    } finally {
+      if (sampleRef.current === sample) {
+        sampleRef.current = null;
+        setStage('idle');
+      }
+    }
+  };
+
   const sendFromConsole = () => {
     if (!draft.trim()) return;
+    if (stopSample()) interrupt();
     prepareVoicePlayback();
     handleSend();
   };
 
   const toggleConsoleMic = () => {
+    if (stopSample()) interrupt();
     prepareVoicePlayback();
     toggleCapture();
   };
 
   const endCall = useCallback(() => {
+    stopSample();
     turnGenerationRef.current += 1;
     engageSeqRef.current += 1;
     pendingEngageRef.current = false;
@@ -783,7 +817,9 @@ export default function VoiceWidget({ config, claimHeld, consoleHost }) {
     interrupt();
     setInterimTranscript('');
     setStage('idle');
-  }, []);
+  }, [stopSample]);
+
+  useEffect(() => () => { stopSample(); }, [stopSample]);
 
   // Leaving the dedicated call console stops its microphone and cancels
   // playback; switching surfaces never mounts a second capture engine.
@@ -799,7 +835,7 @@ export default function VoiceWidget({ config, claimHeld, consoleHost }) {
       <VoiceCallConsole stage={stage} history={history} scrollRef={scrollRef} interimTranscript={interimTranscript}
         capturing={ACTIVE_STAGES.has(stage) || isWebSpeechCapturing()} handsFree={!useWebSpeech && handsFree}
         canChangeMicMode={!useWebSpeech} draft={draft} onDraft={setDraft} onSend={sendFromConsole} onMic={toggleConsoleMic}
-        onMode={toggleHandsFree} onInterrupt={interrupt} onEnd={endCall}
+        onMode={toggleHandsFree} onInterrupt={() => sampleRef.current ? endCall() : interrupt()} onEnd={endCall} onSample={playCallSample}
         voiceLabel={tts?.voice || tts?.engine} />,
       consoleHost,
     );
