@@ -114,15 +114,15 @@
     "server/services/digital-twin-multi-turn-testing.js"
   ],
   "pipeline-arc-overview": [
-    "server/services/pipeline/arcPlanner/arcCore.js",
+    "server/services/pipeline/arcPlanner/arcGenerateVerify.js",
     "server/services/pipeline/foundationJudge.js",
     "server/services/pipeline/seriesReview.js"
   ],
   "pipeline-arc-resolve": [
-    "server/services/pipeline/arcPlanner/arcCore.js"
+    "server/services/pipeline/arcPlanner/arcResolveEdits.js"
   ],
   "pipeline-arc-verify": [
-    "server/services/pipeline/arcPlanner/arcCore.js"
+    "server/services/pipeline/arcPlanner/arcGenerateVerify.js"
   ],
   "pipeline-audio-cues": [
     "server/services/pipeline/audioCues.js"
@@ -381,7 +381,7 @@
     "server/services/pipeline/arcPlanner/coverConcepts.js"
   ],
   "pipeline-volume-verify": [
-    "server/services/pipeline/arcPlanner/arcCore.js"
+    "server/services/pipeline/arcPlanner/arcGenerateVerify.js"
   ],
   "soul-contradiction-detector": [
     "server/services/digital-twin-analysis.js"
@@ -402,16 +402,16 @@
     "server/services/digital-twin-analysis.js"
   ],
   "story-builder-arc-refine": [
-    "server/services/pipeline/arcPlanner/arcCore.js"
+    "server/services/pipeline/arcPlanner/arcGenerateVerify.js"
   ],
   "story-builder-idea-expand": [
     "server/services/storyBuilder.js"
   ],
   "story-builder-reader-map": [
-    "server/services/pipeline/arcPlanner/arcCore.js"
+    "server/services/pipeline/arcPlanner/arcGenerateVerify.js"
   ],
   "story-builder-reader-map-refine": [
-    "server/services/pipeline/arcPlanner/arcCore.js"
+    "server/services/pipeline/arcPlanner/arcGenerateVerify.js"
   ],
   "twin-confidence-analyzer": [
     "server/services/digital-twin-analysis.js"
