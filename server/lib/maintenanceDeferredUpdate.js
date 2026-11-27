@@ -9,25 +9,64 @@
 import { join } from 'node:path';
 
 const record = value => value && typeof value === 'object' && !Array.isArray(value);
-const uuid = value => typeof value === 'string' && /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(value);
-const pid = value => Number.isSafeInteger(value) && value > 0;
-const date = value => typeof value === 'string' && Number.isFinite(Date.parse(value));
+const isUpdateId = value => typeof value === 'string' && /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(value);
+const isProcessId = value => Number.isSafeInteger(value) && value > 0;
+const isTimestamp = value => typeof value === 'string' && Number.isFinite(Date.parse(value));
 const parseOperation = value => {
   if (!record(value) || Object.keys(value).some(key => !['id', 'ownerPid', 'phase', 'childPid', 'holdId', 'requestedAt', 'terminal'].includes(key))
-    || !uuid(value.id) || !pid(value.ownerPid) || !['waiting', 'starting', 'running'].includes(value.phase)
-    || (value.childPid !== null && !pid(value.childPid)) || (value.holdId !== null && !uuid(value.holdId)) || !date(value.requestedAt)
+    || !isUpdateId(value.id) || !isProcessId(value.ownerPid) || !['waiting', 'starting', 'running'].includes(value.phase)
+    || (value.childPid !== null && !isProcessId(value.childPid)) || (value.holdId !== null && !isUpdateId(value.holdId)) || !isTimestamp(value.requestedAt)
     || (value.terminal !== undefined && (!record(value.terminal) || Object.keys(value.terminal).length !== 1 || typeof value.terminal.success !== 'boolean'))) {
     throw new Error('Invalid deferred update owner');
   }
   return value;
 };
 const parseResult = value => {
-  if (!record(value) || Object.keys(value).length !== 4 || !uuid(value.id)
-    || typeof value.success !== 'boolean' || typeof value.interrupted !== 'boolean' || !date(value.completedAt)) {
+  if (!record(value) || Object.keys(value).length !== 4 || !isUpdateId(value.id)
+    || typeof value.success !== 'boolean' || typeof value.interrupted !== 'boolean' || !isTimestamp(value.completedAt)) {
     throw new Error('Invalid deferred update result');
   }
   return value;
 };
+
+function inspectDeferredOperation(state, error) {
+  const rows = state.operations.filter(op => op.kind === 'deferred-update');
+  if (rows.length > 1) throw error('MAINTENANCE_UNAVAILABLE', 'Multiple deferred update owners need recovery.');
+  const row = rows[0];
+  return row ? parseOperation({ ...JSON.parse(row.resource), id: row.id, ownerPid: row.pid, requestedAt: row.startedAt }) : null;
+}
+
+function saveDeferredOperation(state, operation) {
+  const { id, ownerPid, requestedAt, ...details } = operation;
+  const row = { id, kind: 'deferred-update', pid: ownerPid, startedAt: requestedAt, resource: JSON.stringify(details) };
+  const index = state.operations.findIndex(op => op.id === id);
+  if (index < 0) state.operations.push(row);
+  else state.operations[index] = row;
+}
+
+function createUpdateReceipts({ directory, io, syncDirectory, makeId }) {
+  const resultPath = join(directory, 'update-result.json');
+  const writeExclusive = (path, value) => {
+    const fd = io.openSync(path, 'wx', 0o600);
+    try { io.writeFileSync(fd, JSON.stringify(value) + '\n'); io.fsyncSync(fd); }
+    finally { io.closeSync(fd); }
+  };
+  const publishReceipt = (name, value) => {
+    writeExclusive(join(directory, name), value);
+    syncDirectory(directory, io);
+  };
+  const readResult = () => {
+    try { return parseResult(JSON.parse(io.readFileSync(resultPath, 'utf8'))); }
+    catch (err) { if (err.code === 'ENOENT') return null; throw err; }
+  };
+  const writeResult = result => {
+    const pending = join(directory, `update-result-${makeId()}.json`);
+    writeExclusive(pending, result);
+    io.renameSync(pending, resultPath);
+    syncDirectory(directory, io);
+  };
+  return { readResult, writeResult, publishReceipt };
+}
 
 // Only ESRCH proves absence. Permission failures, reused PIDs and unavailable
 // process-group probes must never reopen work while an update may still run.
@@ -51,32 +90,8 @@ export async function reconcileReusedLaunch(admission, snapshot) {
 
 /** Local updates share the exact transaction that admits agents and renders. */
 export function createDeferredUpdateAdmission({ transaction, read, makeId, error, now, directory, io, syncDirectory, lockExists = () => false }) {
-  const kind = 'deferred-update';
-  const resultPath = join(directory, 'update-result.json');
-  const inspect = state => {
-    const rows = state.operations.filter(op => op.kind === kind);
-    if (rows.length > 1) throw error('MAINTENANCE_UNAVAILABLE', 'Multiple deferred update owners need recovery.');
-    const row = rows[0];
-    return row ? parseOperation({ ...JSON.parse(row.resource), id: row.id, ownerPid: row.pid, requestedAt: row.startedAt }) : null;
-  };
-  const save = (state, operation) => {
-    const { id, ownerPid, requestedAt, ...details } = operation;
-    const row = { id, kind, pid: ownerPid, startedAt: requestedAt, resource: JSON.stringify(details) };
-    const index = state.operations.findIndex(op => op.id === id);
-    if (index < 0) state.operations.push(row);
-    else state.operations[index] = row;
-  };
-  const readResult = () => {
-    try { return parseResult(JSON.parse(io.readFileSync(resultPath, 'utf8'))); }
-    catch (err) { if (err.code === 'ENOENT') return null; throw err; }
-  };
-  const writeResult = result => {
-    const pending = join(directory, `update-result-${makeId()}.json`);
-    const fd = io.openSync(pending, 'wx', 0o600);
-    try { io.writeFileSync(fd, JSON.stringify(result) + '\n'); io.fsyncSync(fd); } finally { io.closeSync(fd); }
-    io.renameSync(pending, resultPath);
-    syncDirectory(directory, io);
-  };
+  const inspect = state => inspectDeferredOperation(state, error);
+  const { readResult, writeResult, publishReceipt } = createUpdateReceipts({ directory, io, syncDirectory, makeId });
   const stale = () => { throw error('MAINTENANCE_STALE', 'The deferred update ownership changed.'); };
   const current = (state, id) => { const operation = inspect(state); return operation?.id === id ? operation : stale(); };
   const settle = (state, operation, success, interrupted) => {
@@ -94,12 +109,8 @@ export function createDeferredUpdateAdmission({ transaction, read, makeId, error
     const previous = inspect(state);
     if (!previous) return null;
     if (previous.phase !== 'waiting' || previous.childPid || previous.holdId || state.hold || state.exclusive) stale();
-    const receipt = join(directory, `update-handoff-${nextId}.json`);
-    const fd = io.openSync(receipt, 'wx', 0o600);
-    try { io.writeFileSync(fd, JSON.stringify({ version: 1, previous, successorId: nextId,
-      disposition: 'waiting-update-replaced', at: new Date(now()).toISOString() }) + '\n'); io.fsyncSync(fd); }
-    finally { io.closeSync(fd); }
-    syncDirectory(directory, io);
+    publishReceipt(`update-handoff-${nextId}.json`, { version: 1, previous, successorId: nextId,
+      disposition: 'waiting-update-replaced', at: new Date(now()).toISOString() });
     settle(state, previous, false, true);
     return previous.requestedAt;
   };
@@ -109,7 +120,7 @@ export function createDeferredUpdateAdmission({ transaction, read, makeId, error
   const reconcile = ({ absent = processAbsent, platform = process.platform, obsoleteLaunch = null } = {}) => {
     const pending = launch();
     const pendingChild = pending?.resource ? JSON.parse(pending.resource).childPid ?? null : null;
-    if (pendingChild !== null && !pid(pendingChild)) throw error('MAINTENANCE_UNAVAILABLE', 'Invalid deferred update launch identity.');
+    if (pendingChild !== null && !isProcessId(pendingChild)) throw error('MAINTENANCE_UNAVAILABLE', 'Invalid deferred update launch identity.');
     if (pending && (absent(pending.pid) || (pendingChild && absent(pendingChild))
       || (obsoleteLaunch && JSON.stringify(pending) === JSON.stringify(obsoleteLaunch)))) transaction(state => {
       const index = state.operations.findIndex(op => op.id === pending.id && op.kind === 'deferred-update-launch');
@@ -135,7 +146,7 @@ export function createDeferredUpdateAdmission({ transaction, read, makeId, error
     const id = makeId();
     const requestedAt = recoverWaiting ? replaceWaiting(state, id) : null;
     const operation = { id, ownerPid: process.pid, phase: 'waiting', childPid: null, holdId: null, requestedAt: requestedAt ?? new Date(now()).toISOString() };
-    save(state, operation);
+    saveDeferredOperation(state, operation);
     return { ...operation };
   });
   // A launch ticket allows a timed-out parent to cancel a late supervisor
@@ -145,7 +156,7 @@ export function createDeferredUpdateAdmission({ transaction, read, makeId, error
     return transaction(state => {
       if (expectedRefusalId !== undefined) {
         const result = readResult();
-        if (!uuid(expectedRefusalId) || result?.id !== expectedRefusalId || result.success || result.interrupted || inspect(state)) stale();
+        if (!isUpdateId(expectedRefusalId) || result?.id !== expectedRefusalId || result.success || result.interrupted || inspect(state)) stale();
       }
       if (state.hold || state.exclusive || (!recoverWaiting && inspect(state))
         || state.operations.some(op => ['deferred-update-launch', 'harness-action', 'harness-action-wake'].includes(op.kind))) stale();
@@ -162,13 +173,13 @@ export function createDeferredUpdateAdmission({ transaction, read, makeId, error
     if (index < 0 || inspect(state)) stale();
     const [ticket] = state.operations.splice(index, 1);
     const requestedAt = ticket.resource ? JSON.parse(ticket.resource).requestedAt : null;
-    if (requestedAt != null && !date(requestedAt)) stale();
+    if (requestedAt != null && !isTimestamp(requestedAt)) stale();
     const claimed = { id, ownerPid: process.pid, phase: 'waiting', childPid: null, holdId: null, requestedAt: requestedAt ?? ticket.startedAt };
-    save(state, claimed);
+    saveDeferredOperation(state, claimed);
     return { ...claimed };
   });
   const bindLaunch = (id, childPid) => transaction(state => {
-    if (!pid(childPid)) throw error('MAINTENANCE_STALE', 'Invalid update supervisor identity.');
+    if (!isProcessId(childPid)) throw error('MAINTENANCE_STALE', 'Invalid update supervisor identity.');
     const pending = state.operations.find(op => op.id === id && op.kind === 'deferred-update-launch' && op.pid === process.pid);
     if (!pending) return false;
     pending.resource = JSON.stringify({ ...(pending.resource ? JSON.parse(pending.resource) : {}), childPid });
@@ -183,29 +194,30 @@ export function createDeferredUpdateAdmission({ transaction, read, makeId, error
     if (result?.id === id) return { state: 'finished', result };
     return { state: 'unknown' };
   });
+  // The initial observation avoids a write for a blocked poll. The locked
+  // snapshot must satisfy the same ownership and restore checks before launch.
+  const waitingState = (state, id, drainsAfterShutdown, externalWorkPending) => {
+    const operation = current(state, id);
+    if (operation.phase !== 'waiting' || operation.ownerPid !== process.pid) stale();
+    if (state.hold) throw error('MAINTENANCE_HELD', 'Another maintenance request superseded the waiting update.');
+    if (drainsAfterShutdown && state.operations.some(op => op.kind === 'backup' && /^restore(?:-db|-recovery)?:/.test(op.resource)))
+      throw error('MAINTENANCE_HELD', 'A database restore is active; finish or recover it before updating.');
+    return { operation, blocked: externalWorkPending || (!drainsAfterShutdown && state.operations.some(op => op.id !== id)) || state.exclusive };
+  };
   const acquire = (id, { externalWorkPending = false, checkExternal = () => false, interrupt = false, stopFirst = false } = {}) => {
-    // A blocked poll need not rewrite the journal every second. The transaction
-    // below still rechecks everything when this read sees an idle candidate.
-    const observed = read();
-    const pending = current(observed, id);
-    if (pending.phase !== 'waiting' || pending.ownerPid !== process.pid) stale();
-    if (observed.hold) throw error('MAINTENANCE_HELD', 'Another maintenance request superseded the waiting update.');
-    const restorePending = state => state.operations.some(op => op.kind === 'backup' && /^restore(?:-db|-recovery)?:/.test(op.resource));
     const drainsAfterShutdown = interrupt || stopFirst;
-    if (drainsAfterShutdown && restorePending(observed)) throw error('MAINTENANCE_HELD', 'A database restore is active; finish or recover it before updating.');
-    if ((externalWorkPending || (!drainsAfterShutdown && observed.operations.some(op => op.id !== id)) || observed.exclusive) && !lockExists()) return false;
+    const observed = read();
+    const { blocked } = waitingState(observed, id, drainsAfterShutdown, externalWorkPending);
+    if (blocked && !lockExists()) return false;
     return transaction(state => {
-      const operation = current(state, id);
-      if (operation.phase !== 'waiting' || operation.ownerPid !== process.pid) stale();
-      if (state.hold) throw error('MAINTENANCE_HELD', 'Another maintenance request superseded the waiting update.');
-      if (drainsAfterShutdown && restorePending(state)) throw error('MAINTENANCE_HELD', 'A database restore is active; finish or recover it before updating.');
-      if (externalWorkPending || (!drainsAfterShutdown && state.operations.some(op => op.id !== id)) || state.exclusive || checkExternal()) return false;
+      const { operation, blocked } = waitingState(state, id, drainsAfterShutdown, externalWorkPending);
+      if (blocked || checkExternal()) return false;
       operation.phase = 'starting';
       operation.holdId = makeId();
       state.hold = { id: operation.holdId, revision: state.revision + 1,
         reason: interrupt ? 'Manual update: interrupting work and restarting PortOS' : stopFirst ? 'Manual update: restarting PortOS' : 'Applying a deferred PortOS update',
         owner: drainsAfterShutdown ? 'manual-update' : 'deferred-update', requestedAt: new Date(now()).toISOString() };
-      save(state, operation);
+      saveDeferredOperation(state, operation);
       return true;
     });
   };
@@ -215,7 +227,7 @@ export function createDeferredUpdateAdmission({ transaction, read, makeId, error
       || state.hold?.id !== operation.holdId || (state.hold.owner !== 'manual-update' && state.operations.some(op => op.id !== id))) stale();
     operation.phase = 'running';
     operation.childPid = childPid;
-    save(state, operation);
+    saveDeferredOperation(state, operation);
   });
   // Called after shutdown. Ordinary abandoned rows are bookkeeping, not an
   // update veto; their domain outputs are never marked successful here.
@@ -232,7 +244,7 @@ export function createDeferredUpdateAdmission({ transaction, read, makeId, error
     const operation = current(state, id);
     if (operation.phase !== 'running' || operation.childPid !== childPid || operation.terminal) stale();
     operation.terminal = { success };
-    save(state, operation);
+    saveDeferredOperation(state, operation);
   });
   // Only the owning supervisor calls this after its child closes and its
   // process group drains. A crashed supervisor uses reconcile(), never age.
@@ -242,10 +254,7 @@ export function createDeferredUpdateAdmission({ transaction, read, makeId, error
     if (errorCode === 'UPDATE_INTERRUPTION_REQUIRED') {
       // Per-attempt metadata keeps the four-field result readable by older
       // running servers during a bootstrap update.
-      const fd = io.openSync(join(directory, `update-refusal-${id}.json`), 'wx', 0o600);
-      try { io.writeFileSync(fd, JSON.stringify({ id, code: errorCode }) + '\n'); io.fsyncSync(fd); }
-      finally { io.closeSync(fd); }
-      syncDirectory(directory, io);
+      publishReceipt(`update-refusal-${id}.json`, { id, code: errorCode });
     }
     return settle(state, operation, success, false);
   });

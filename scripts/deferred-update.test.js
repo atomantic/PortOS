@@ -350,7 +350,7 @@ describe('deferred update admission', () => {
       job.result.topazUncertain = false;
       writeFileSync(mediaPath, JSON.stringify({ jobs: [job] }));
     });
-    await expect(runDeferredUpdate({ admission, launch, wait, absent: () => true, emit: vi.fn() })).resolves.toBe(0);
+    await expect(runDeferredUpdate({ admission, launch, wait, legacyRunning: async () => false, absent: () => true, emit: vi.fn() })).resolves.toBe(0);
     expect(wait).toHaveBeenCalledOnce();
   });
   it('leaves the journal usable if saved media changes before the locked check', async () => {
