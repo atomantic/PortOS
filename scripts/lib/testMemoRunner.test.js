@@ -295,8 +295,8 @@ describe('planTestMemo and recordTestMemo', () => {
     expect(record(check()).unrecorded).toEqual([]);
     expect(check().run).toEqual([]);
 
-    // The suite starts reading this checkout: the declaration falls, the old entry no longer matches, and no new one is written.
-    writeRepo(root, { [fixture]: `${source}\nit('reads the checkout', () => { git(process.cwd(), 'rev-parse', 'HEAD'); });\n` });
+    // A direct spawn from the checkout contradicts the declaration and prevents recording a new entry.
+    writeRepo(root, { [fixture]: `${source}\nit('reads the checkout', () => { execFileSync('git', ['rev-parse', 'HEAD'], { cwd: process.cwd() }); });\n` });
     const contradicted = check();
     expect(contradicted.run).toEqual([fixture]);
     const refused = 'spawns git (git-fixture declaration refused: hands git a path in this repository (server))';

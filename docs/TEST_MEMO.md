@@ -26,9 +26,13 @@ Use `// test-memo: git-fixture` only if every Git call runs in a temporary,
 test-created repository. Initialize it before any command could discover
 an enclosing checkout. Pass its directory explicitly through wrappers.
 The key includes the verified executable and Git version plus effective
-system/global configuration, includes and environment overrides. The
-detector in `scripts/lib/testMemo/gitFixture.js` rejects a call it cannot
-prove is fixture-scoped or a run that reads real checkout state.
+system/global configuration, includes and environment overrides. The marker
+is a reviewed claim. Review every route to Git, including wrapper calls and
+repository paths passed through arguments or environment variables. The
+declaration checker inspects direct spawn calls for a literal Git program
+with separate arguments and an explicit `cwd` or leading `-C`. It rejects
+a directory that resolves to the checkout or home, or is spelled as a
+relative or nullish value.
 
 ## Database suites
 
