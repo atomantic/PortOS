@@ -1,7 +1,6 @@
-import { useState, useEffect, useCallback, useMemo, useRef } from 'react';
+import { useState } from 'react';
 import { Beer, Plus, Trash2, AlertTriangle, TrendingDown, TrendingUp, Pencil, Check, X, Settings } from 'lucide-react';
 import { pluralize } from '../../../lib/textUtils';
-import toast from '../../ui/Toast';
 import {
   getCustomDrinks,
   getAlcoholSummary,
@@ -13,19 +12,17 @@ import {
   updateCustomDrink,
   removeCustomDrink,
 } from '../../../services/apiMeatspace.js';
-import { getAppleHealthCorrelation } from '../../../services/apiHealth.js';
 import BrailleSpinner from '../../BrailleSpinner';
 import LoadFailureNotice from '../LoadFailureNotice';
 import ConfirmButtonPair from '../../ui/ConfirmButtonPair';
 import { FormField } from '../../ui/FormField';
-import { useConfirmDelete } from '../../../hooks/useConfirmDelete';
 import AlcoholChart from '../AlcoholChart';
 import AlcoholHrvCorrelation from '../AlcoholHrvCorrelation';
 import StandardDrinkCalculator from '../StandardDrinkCalculator';
 import { dayOfWeek } from '../constants';
 import { localDateKey } from '../../../utils/formatters';
-import { useSingleFlight } from '../../../hooks/useSingleFlight';
 import DraftNumber from '../../ui/DraftNumber';
+import useSubstanceLog from '../useSubstanceLog';
 
 const ML_PER_OZ = 29.5735;
 
@@ -43,254 +40,64 @@ const RISK_BG = {
   high: 'bg-port-error/10 border-port-error/30'
 };
 
-const DAYS_PER_PAGE = 50;
-
 function computeStdDrinks(oz, abv, count) {
   const pureOz = (oz || 0) * (count || 1) * ((abv || 0) / 100);
   return Math.round((pureOz / 0.6) * 100) / 100;
 }
 
+const roundedOz = (value, unit) => Math.round(toOz(parseFloat(value), unit) * 100) / 100;
+const toDrinkPayload = ({ name, oz, abv, volumeUnit }) => ({ name, oz: roundedOz(oz, volumeUnit), abv: parseFloat(abv) });
+
+const alcoholLog = {
+  getSummary: getAlcoholSummary,
+  entry: {
+    read: getDailyAlcohol,
+    add: logAlcoholDrink,
+    update: updateAlcoholDrink,
+    remove: removeAlcoholDrink,
+    emptyDraft: { name: '', oz: '', abv: '', count: 1 },
+    canAdd: ({ oz, abv }) => Boolean(oz && abv),
+    toPayload: toDrinkPayload,
+    fromRecord: drink => ({ name: drink.name || '', oz: String(drink.oz || ''), abv: String(drink.abv || ''), volumeUnit: 'oz' }),
+    fromButton: ({ name, oz, abv }) => ({ name, oz, abv })
+  },
+  button: {
+    read: getCustomDrinks,
+    add: (...args) => addCustomDrink(...args),
+    update: (...args) => updateCustomDrink(...args),
+    remove: removeCustomDrink,
+    label: 'drink',
+    emptyDraft: { name: '', oz: '', abv: '', volumeUnit: 'oz' },
+    toPayload: toDrinkPayload,
+    fromRecord: drink => ({ name: drink.name, oz: String(drink.oz), abv: String(drink.abv), volumeUnit: 'oz' }),
+    validate: ({ name, oz, abv, volumeUnit }) => {
+      const parsedVol = parseFloat(oz);
+      const parsedAbv = parseFloat(abv);
+      if (!name) return 'Name is required';
+      const maxVol = volumeUnit === 'ml' ? Math.round(1000 * ML_PER_OZ) : 1000;
+      if (isNaN(parsedVol) || parsedVol < 0.1 || parsedVol > maxVol) return `Volume must be between 0.1 and ${maxVol} ${volumeUnit}`;
+      if (isNaN(parsedAbv) || parsedAbv < 0 || parsedAbv > 100) return 'ABV must be between 0 and 100';
+      return null;
+    }
+  }
+};
+
 export default function AlcoholTab() {
-  const [summary, setSummary] = useState(null);
-  const [allEntries, setAllEntries] = useState(null);
-  const [loading, setLoading] = useState(true);
-  const [loadFailed, setLoadFailed] = useState(false);
-  const [logging, setLogging] = useState(false);
-  const [refreshKey, setRefreshKey] = useState(0);
-  const [visibleDays, setVisibleDays] = useState(DAYS_PER_PAGE);
-  const { isConfirming, requestDelete, cancelDelete, confirmDelete } = useConfirmDelete();
-
-  // Custom drink buttons
-  // null = not loaded or the read failed; the server seeds its own defaults.
-  const [drinkButtons, setDrinkButtons] = useState(null);
-  const [buttonsFailed, setButtonsFailed] = useState(false);
-  const buttonsReadSeq = useRef(0);
-  const [managingButtons, setManagingButtons] = useState(false);
-  const [editingButtonIdx, setEditingButtonIdx] = useState(null);
-  const [buttonForm, setButtonForm] = useState({ name: '', oz: '', abv: '' });
-  const [buttonVolumeUnit, setButtonVolumeUnit] = useState('oz');
-
-  // Form state
-  const [name, setName] = useState('');
-  const [oz, setOz] = useState('');
-  const [abv, setAbv] = useState('');
-  const [count, setCount] = useState(1);
-  const [date, setDate] = useState(localDateKey());
+  const {
+    summary, loading, loadFailed, logging, refreshKey, fetchData,
+    totalDays, visibleEntries, remainingDays, loadMoreDays,
+    chartView, setChartView, correlationData,
+    entryForm: { name, oz, abv, count }, setEntryForm, editingKey, editForm, setEditForm,
+    handleQuickAdd, handleCustomAdd, handleRemove, startEdit, cancelEdit, saveEdit,
+    buttons: drinkButtons, buttonsFailed, fetchButtons, managingButtons, setManagingButtons,
+    editingButtonIdx, buttonForm, setButtonForm, handleAddButton,
+    startEditButton, saveEditButton, cancelEditButton, handleRemoveButton,
+    isConfirming, requestDelete, cancelDelete, confirmDelete
+  } = useSubstanceLog(alcoholLog);
+  const [date, setDate] = useState(localDateKey);
   const [volumeUnit, setVolumeUnit] = useState('oz');
-
-  // Inline edit state
-  const [editingKey, setEditingKey] = useState(null); // "date:index"
-  const [editForm, setEditForm] = useState({ name: '', oz: '', abv: '', count: 1 });
-  const [editVolumeUnit, setEditVolumeUnit] = useState('oz');
-
-  // Correlation chart state
-  const [chartView, setChartView] = useState('30d');
-  const [correlationData, setCorrelationData] = useState(null);
-
-  // Buttons are edited and removed by position, so a failed read must not leave
-  // a list (built-in or stale) whose positions differ from the stored one, and an
-  // older read must not land after a newer one.
-  const fetchDrinkButtons = useCallback(async () => {
-    const seq = ++buttonsReadSeq.current;
-    const buttons = await getCustomDrinks({ silent: true }).catch(() => null);
-    if (seq !== buttonsReadSeq.current) return;
-    const ok = Array.isArray(buttons);
-    setDrinkButtons(ok ? buttons : null);
-    setButtonsFailed(!ok);
-    if (!ok) {
-      // The edit row and the Add form share this draft; drop it with the edit.
-      setEditingButtonIdx(null);
-      setButtonForm({ name: '', oz: '', abv: '' });
-      setButtonVolumeUnit('oz');
-    }
-  }, []);
-
-  const fetchData = useCallback(async () => {
-    const [summaryResult, entriesResult] = await Promise.allSettled([
-      getAlcoholSummary({ silent: true }),
-      getDailyAlcohol(undefined, undefined, { silent: true })
-    ]);
-    // A rejected read keeps what is already shown and raises the notice, so a
-    // transient failure never renders as an empty history.
-    if (summaryResult.status === 'fulfilled') setSummary(summaryResult.value);
-    if (entriesResult.status === 'fulfilled') setAllEntries(entriesResult.value);
-    setLoadFailed(summaryResult.status === 'rejected' || entriesResult.status === 'rejected');
-    setLoading(false);
-  }, []);
-
-  useEffect(() => {
-    fetchDrinkButtons();
-  }, [fetchDrinkButtons]);
-
-  useEffect(() => {
-    fetchData();
-  }, [fetchData, refreshKey]);
-
-  // Fetch correlation data for HRV chart
-  const { correlationFrom, correlationTo } = useMemo(() => {
-    const days = { '7d': 7, '30d': 30, '90d': 90 }[chartView] || 30;
-    const d = new Date();
-    d.setDate(d.getDate() - days);
-    return { correlationFrom: localDateKey(d), correlationTo: localDateKey() };
-  }, [chartView]);
-
-  useEffect(() => {
-    let active = true;
-    getAppleHealthCorrelation(correlationFrom, correlationTo)
-      .then(data => { if (active) setCorrelationData(data); })
-      .catch(() => { if (active) setCorrelationData(null); });
-    return () => { active = false; };
-  }, [correlationFrom, correlationTo]);
-
-  const handleQuickAdd = async (drink) => {
-    setLogging(true);
-    await logAlcoholDrink({
-      name: drink.name,
-      oz: drink.oz,
-      abv: drink.abv,
-      count: 1,
-      date: date || undefined
-    }).catch(() => null);
-    setLogging(false);
-    setRefreshKey(k => k + 1);
-  };
-
-  const handleCustomAdd = async (e) => {
-    e.preventDefault();
-    if (!oz || !abv) return;
-    setLogging(true);
-    const result = await logAlcoholDrink({
-      name: name || '',
-      oz: Math.round(toOz(parseFloat(oz), volumeUnit) * 100) / 100,
-      abv: parseFloat(abv),
-      count: count || 1,
-      date: date || undefined
-    }).catch(() => null);
-    setLogging(false);
-    // request() already toasts. A rejected log must keep the draft; clearing
-    // here used to drop the dose the person just typed.
-    if (!result) return;
-    setName('');
-    setOz('');
-    setAbv('');
-    setCount(1);
-    setRefreshKey(k => k + 1);
-  };
-
-  const handleRemove = async (entryDate, index, id) => {
-    await removeAlcoholDrink(entryDate, index, id).catch(() => null);
-    setRefreshKey(k => k + 1);
-  };
-
-  const startEdit = (entryDate, index, drink) => {
-    setEditingKey(`${entryDate}:${index}`);
-    setEditVolumeUnit('oz');
-    setEditForm({
-      id: drink.id,
-      name: drink.name || '',
-      oz: String(drink.oz || ''),
-      abv: String(drink.abv || ''),
-      count: drink.count || 1,
-      date: entryDate
-    });
-  };
-
-  const cancelEdit = () => {
-    setEditingKey(null);
-  };
-
-  const saveEdit = async () => {
-    if (!editingKey) return;
-    const [entryDate, indexStr] = editingKey.split(':');
-    const index = parseInt(indexStr, 10);
-    const result = await updateAlcoholDrink(entryDate, index, {
-      id: editForm.id,
-      name: editForm.name,
-      oz: Math.round(toOz(parseFloat(editForm.oz), editVolumeUnit) * 100) / 100,
-      abv: parseFloat(editForm.abv),
-      count: parseInt(editForm.count, 10) || 1,
-      date: editForm.date !== entryDate ? editForm.date : undefined
-    }).catch(() => null);
-    // A failed edit stays open. Refreshing here would also replace the row
-    // under the draft with the last server list.
-    if (!result) return;
-    setEditingKey(null);
-    setRefreshKey(k => k + 1);
-  };
-
-  // === Custom drink button management ===
-
-  const validateDrinkButton = (form) => {
-    const parsedVol = parseFloat(form.oz);
-    const parsedAbv = parseFloat(form.abv);
-    if (!form.name) return 'Name is required';
-    const maxVol = buttonVolumeUnit === 'ml' ? Math.round(1000 * ML_PER_OZ) : 1000;
-    if (isNaN(parsedVol) || parsedVol < 0.1 || parsedVol > maxVol) return `Volume must be between 0.1 and ${maxVol} ${buttonVolumeUnit}`;
-    if (isNaN(parsedAbv) || parsedAbv < 0 || parsedAbv > 100) return 'ABV must be between 0 and 100';
-    return null;
-  };
-
-  const handleAddButton = useSingleFlight(async (e) => {
-    e.preventDefault();
-    const error = validateDrinkButton(buttonForm);
-    if (error) { toast.error(error); return; }
-    const parsedOz = Math.round(toOz(parseFloat(buttonForm.oz), buttonVolumeUnit) * 100) / 100;
-    const parsedAbv = parseFloat(buttonForm.abv);
-    const result = await addCustomDrink({ name: buttonForm.name, oz: parsedOz, abv: parsedAbv }, { silent: true }).catch(() => null);
-    if (!result) { toast.error('Failed to add drink button'); return; }
-    setButtonForm({ name: '', oz: '', abv: '' });
-    setButtonVolumeUnit('oz');
-    // Drop any in-flight list read: it predates this mutation. An unloaded list
-    // (failed read) can't take a positional patch, so it re-reads instead.
-    buttonsReadSeq.current += 1;
-    if (Array.isArray(drinkButtons)) setDrinkButtons(prev => [...prev, result]);
-    else fetchDrinkButtons();
-  });
-
-  const startEditButton = (idx) => {
-    const btn = drinkButtons[idx];
-    setEditingButtonIdx(idx);
-    setButtonVolumeUnit('oz');
-    setButtonForm({ name: btn.name, oz: String(btn.oz), abv: String(btn.abv) });
-  };
-
-  const saveEditButton = async () => {
-    if (editingButtonIdx === null) return;
-    const error = validateDrinkButton(buttonForm);
-    if (error) { toast.error(error); return; }
-    const parsedOz = Math.round(toOz(parseFloat(buttonForm.oz), buttonVolumeUnit) * 100) / 100;
-    const parsedAbv = parseFloat(buttonForm.abv);
-    const result = await updateCustomDrink(editingButtonIdx, { name: buttonForm.name, oz: parsedOz, abv: parsedAbv }, { silent: true }).catch(() => null);
-    if (!result) { toast.error('Failed to update drink button'); return; }
-    setEditingButtonIdx(null);
-    setButtonForm({ name: '', oz: '', abv: '' });
-    setButtonVolumeUnit('oz');
-    buttonsReadSeq.current += 1;
-    const editedIdx = editingButtonIdx;
-    setDrinkButtons(prev => prev && prev.map((btn, idx) => (idx === editedIdx ? result : btn)));
-  };
-
-  const cancelEditButton = () => {
-    setEditingButtonIdx(null);
-    setButtonForm({ name: '', oz: '', abv: '' });
-    setButtonVolumeUnit('oz');
-  };
-
-  const handleRemoveButton = async (idx) => {
-    const removed = await removeCustomDrink(idx).catch(() => null);
-    if (!removed) return;
-    buttonsReadSeq.current += 1;
-    setDrinkButtons(prev => prev && prev.filter((_, buttonIdx) => buttonIdx !== idx));
-    // Positions shift under the draft: keep editing the same button, or drop
-    // the draft when that button is the one removed.
-    if (editingButtonIdx === idx) {
-      setEditingButtonIdx(null);
-      setButtonForm({ name: '', oz: '', abv: '' });
-      setButtonVolumeUnit('oz');
-    } else if (editingButtonIdx !== null && editingButtonIdx > idx) {
-      setEditingButtonIdx(editingButtonIdx - 1);
-    }
-  };
+  const buttonVolumeUnit = buttonForm.volumeUnit;
+  const editVolumeUnit = editForm.volumeUnit;
 
   if (loading) {
     return (
@@ -299,9 +106,6 @@ export default function AlcoholTab() {
       </div>
     );
   }
-
-  const visibleEntries = allEntries?.slice(0, visibleDays) || [];
-  const hasMore = allEntries?.length > visibleDays;
 
   return (
     <div className="space-y-4">
@@ -381,7 +185,7 @@ export default function AlcoholTab() {
 
         {buttonsFailed && (
           <div className="mb-4">
-            <LoadFailureNotice message="Could not load your quick-add drink buttons." onRetry={fetchDrinkButtons} />
+            <LoadFailureNotice message="Could not load your quick-add drink buttons." onRetry={fetchButtons} />
           </div>
         )}
 
@@ -391,7 +195,7 @@ export default function AlcoholTab() {
             {drinkButtons.map((drink, idx) => (
               <button
                 key={`${drink.name}-${idx}`}
-                onClick={() => handleQuickAdd(drink)}
+                onClick={() => handleQuickAdd(drink, date)}
                 disabled={logging}
                 className="flex items-center gap-1 px-3 py-2 min-h-[40px] text-xs bg-port-border/50 text-gray-300 rounded-lg hover:bg-port-accent/10 hover:text-port-accent transition-colors disabled:opacity-50"
               >
@@ -429,7 +233,7 @@ export default function AlcoholTab() {
                     />
                     <button
                       type="button"
-                      onClick={() => setButtonVolumeUnit(u => u === 'oz' ? 'ml' : 'oz')}
+                      onClick={() => setButtonForm(f => ({ ...f, volumeUnit: f.volumeUnit === 'oz' ? 'ml' : 'oz' }))}
                       className="px-1.5 py-1 text-[10px] pointer-coarse:min-h-11 font-medium rounded bg-port-border/50 text-gray-400 hover:text-port-accent hover:bg-port-accent/10 transition-colors"
                       aria-label={`Switch drink button volume unit, currently ${buttonVolumeUnit}`}
                     >
@@ -501,7 +305,7 @@ export default function AlcoholTab() {
                 />
                 <button
                   type="button"
-                  onClick={() => setButtonVolumeUnit(u => u === 'oz' ? 'ml' : 'oz')}
+                  onClick={() => setButtonForm(f => ({ ...f, volumeUnit: f.volumeUnit === 'oz' ? 'ml' : 'oz' }))}
                   aria-label={`Switch new drink button volume unit, currently ${buttonVolumeUnit}`}
                   className="px-1.5 py-1 text-[10px] pointer-coarse:min-h-11 font-medium rounded bg-port-border/50 text-gray-400 hover:text-port-accent hover:bg-port-accent/10 transition-colors"
                 >
@@ -532,12 +336,12 @@ export default function AlcoholTab() {
         )}
 
         {/* Custom entry form */}
-        <form onSubmit={handleCustomAdd} className="grid grid-cols-2 sm:grid-cols-[1fr_5rem_5rem_4rem_9rem_auto] items-end gap-3">
+        <form onSubmit={e => handleCustomAdd(e, date, { volumeUnit })} className="grid grid-cols-2 sm:grid-cols-[1fr_5rem_5rem_4rem_9rem_auto] items-end gap-3">
           <FormField className="col-span-2 sm:col-span-1" label="Name (optional)" labelClassName="text-xs text-gray-500 block mb-1">
             <input
               type="text"
               value={name}
-              onChange={e => setName(e.target.value)}
+              onChange={e => setEntryForm(f => ({ ...f, name: e.target.value }))}
               placeholder="e.g., Hazy IPA"
               className="w-full px-3 py-2 bg-port-bg border border-port-border rounded-lg text-sm text-white placeholder-gray-600"
             />
@@ -559,7 +363,7 @@ export default function AlcoholTab() {
               step="0.1"
               min="0.1"
               value={oz}
-              onChange={e => setOz(e.target.value)}
+              onChange={e => setEntryForm(f => ({ ...f, oz: e.target.value }))}
               required
               placeholder={volumeUnit === 'oz' ? '12' : '355'}
               className="w-full px-3 py-2 bg-port-bg border border-port-border rounded-lg text-sm text-white placeholder-gray-600"
@@ -572,13 +376,13 @@ export default function AlcoholTab() {
               min="0"
               max="100"
               value={abv}
-              onChange={e => setAbv(e.target.value)}
+              onChange={e => setEntryForm(f => ({ ...f, abv: e.target.value }))}
               required
               placeholder="5"
               className="w-full px-3 py-2 bg-port-bg border border-port-border rounded-lg text-sm text-white placeholder-gray-600"
             />
           </FormField>
-          <DraftNumber integer min={1} max={20} value={count} onCommit={setCount}>
+          <DraftNumber integer min={1} max={20} value={count} onCommit={value => setEntryForm(f => ({ ...f, count: value }))}>
             {(field) => (
               <FormField label="Count" labelClassName="text-xs text-gray-500 block mb-1">
                 <input type="number" className="w-full px-3 py-2 bg-port-bg border border-port-border rounded-lg text-sm text-white" {...field} />
@@ -605,10 +409,10 @@ export default function AlcoholTab() {
       </div>
 
       {/* All Drink Entries */}
-      {allEntries?.length > 0 && (
+      {totalDays > 0 && (
         <div className="bg-port-card border border-port-border rounded-xl p-4">
           <h2 className="text-sm font-medium text-gray-400 uppercase tracking-wider mb-3">
-            All Drink Entries ({pluralize(allEntries.length, 'day')})
+            All Drink Entries ({pluralize(totalDays, 'day')})
           </h2>
           <div className="max-h-dvh-cap [--dvh-cap:70dvh] overflow-x-auto overflow-y-auto rounded-lg border border-port-border">
             <table className="w-full text-sm min-w-[600px]">
@@ -684,7 +488,7 @@ export default function AlcoholTab() {
                                 />
                                 <button
                                   type="button"
-                                  onClick={() => setEditVolumeUnit(u => u === 'oz' ? 'ml' : 'oz')}
+                                  onClick={() => setEditForm(f => ({ ...f, volumeUnit: f.volumeUnit === 'oz' ? 'ml' : 'oz' }))}
                                   className="px-1 py-0.5 text-[10px] pointer-coarse:min-h-11 font-medium rounded bg-port-border/50 text-gray-400 hover:text-port-accent hover:bg-port-accent/10 transition-colors"
                                   aria-label={`Switch entry volume unit, currently ${editVolumeUnit}`}
                                 >
@@ -782,12 +586,12 @@ export default function AlcoholTab() {
               </tbody>
             </table>
           </div>
-          {hasMore && (
+          {remainingDays > 0 && (
             <button
-              onClick={() => setVisibleDays(v => v + DAYS_PER_PAGE)}
+              onClick={loadMoreDays}
               className="mt-3 w-full py-2 text-sm text-port-accent hover:text-port-accent/80 border border-port-border rounded-lg hover:bg-port-border/20 transition-colors"
             >
-              Load More ({pluralize(allEntries.length - visibleDays, 'day')} remaining)
+              Load More ({pluralize(remainingDays, 'day')} remaining)
             </button>
           )}
         </div>
