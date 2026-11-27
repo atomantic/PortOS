@@ -214,6 +214,13 @@ describe.skipIf(!chrome)('Voice Call console in Chrome', () => {
         await page.getByText('No avatar frames arrived.', { exact: false }).waitFor();
         await page.getByRole('button', { name: 'Interrupt' }).click();
         expect(await canvas.isVisible()).toBe(false);
+
+        await page.getByRole('button', { name: 'Avatar settings', exact: true }).click();
+        const generatedAvatar = page.getByLabel('Use generated avatar in this browser');
+        await generatedAvatar.uncheck();
+        await generatedAvatar.check();
+        expect(await page.getByText('No avatar frames arrived.', { exact: false }).count()).toBe(0);
+        await page.getByRole('button', { name: 'Hide avatar settings' }).click();
       }
       avatar.jpeg = await page.evaluate(() => {
         const tile = document.createElement('canvas');

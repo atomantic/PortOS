@@ -67,7 +67,9 @@ export default function VoiceCallConsole({
       <div className="relative isolate grid min-h-52 grid-rows-[minmax(9rem,1fr)_auto] overflow-hidden rounded-xl border border-port-border bg-port-bg p-3 sm:min-h-64">
         <div aria-hidden="true" className="pointer-events-none absolute inset-0 -z-10 bg-[repeating-linear-gradient(transparent_0px,transparent_3px,currentColor_4px)] text-port-accent opacity-[0.08]" />
         <div className="min-w-0 place-self-center">
-          {avatar ? <VoiceCallGenerativePortrait running={runningAvatar} /> : <AudioLines aria-hidden="true" size={64} className="text-port-accent" />}
+          {avatar
+            ? <VoiceCallGenerativePortrait key={runningAvatar ? 'animated' : 'still'} running={runningAvatar} />
+            : <AudioLines aria-hidden="true" size={64} className="text-port-accent" />}
         </div>
         <p aria-hidden="true" className="line-clamp-2 min-h-12 break-words rounded-md border-l-2 border-port-accent bg-port-card px-3 py-2 text-sm">
           {caption || 'Ready when you are.'}
