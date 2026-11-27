@@ -222,11 +222,13 @@ export async function deleteFalRequestPayloads({ apiKey, requestId }) {
  * rest of the run needs, falling back to the documented URL shapes when a
  * receipt omits one.
  */
-export async function submitFalRequest({ apiKey, modelId, body }) {
+export async function submitFalRequest({ apiKey, modelId, body, signal }) {
+  signal?.throwIfAborted();
   const res = await fetchWithTimeout(`${FAL_QUEUE_BASE}/${modelId}`, {
     method: 'POST',
     headers: { Authorization: `Key ${assertHeaderSafeKey(apiKey, 'fal.ai')}`, 'Content-Type': 'application/json' },
     body: JSON.stringify(body),
+    ...(signal ? { signal } : {}),
   }, FAL_SUBMIT_TIMEOUT_MS).catch(err => {
     // A lost POST response is not proof that the paid request was rejected.
     maintenance.markCurrentUnsettled();

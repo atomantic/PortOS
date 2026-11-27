@@ -7,15 +7,12 @@ import { existsSync } from 'fs';
 import { join, basename } from 'path';
 import { tmpdir } from 'os';
 import { randomUUID } from 'crypto';
-import { spawn } from '../../lib/childProcess.js';
 import { PATHS, writeFileGuarded, unlinkGuarded } from '../../lib/fileUtils.js';
 import { ServerError } from '../../lib/errorHandler.js';
 import {
   findFfmpeg, safeUnder, generateThumbnail, optimizeForStreaming,
-  hasAudioStream, buildTrimConcatArgs, bt709TagFilter,
+  hasAudioStream, buildTrimConcatArgs, bt709TagFilter, runFfmpegProcess,
 } from '../../lib/ffmpeg.js';
-import { safeChildProcessOptions } from '../../lib/processEnv.js';
-import { killWithEscalation } from '../../lib/killWithEscalation.js';
 import { renderTimingFields } from '../../lib/renderTiming.js';
 import { sanitizeContinuation } from '../../lib/videoContinuationProvenance.js';
 import { loadHistory, mutateVideoHistory } from './history.js';
@@ -178,30 +175,17 @@ export async function stitchVideos(videoIds, opts = {}) {
   const outFilename = `${filenamePrefix}-${id}.mp4`;
   const outPath = join(PATHS.videos, outFilename);
 
-  // `captureStderr` keeps the last line of ffmpeg's own diagnostics on the
-  // error, so a failure reads as something other than a bare "Stitch failed" —
-  // which can't tell a filter-graph parse error from a full disk. Split on \r
-  // as well as \n: ffmpeg separates its progress lines with a bare carriage
-  // return, so a failure mid-encode would otherwise trail a run of them behind
-  // the line that matters.
-  const runFfmpeg = (args, { captureStderr = false } = {}) => new Promise((resolve, reject) => {
-    if (signal?.aborted) {
-      reject(new ServerError('Stitch canceled', { status: 499, code: 'STITCH_CANCELED' }));
-      return;
-    }
-    const proc = spawn(ffmpeg, args, safeChildProcessOptions({ stdio: captureStderr ? ['ignore', 'ignore', 'pipe'] : 'ignore' }));
-    const onAbort = () => killWithEscalation(proc, { label: 'stitch ffmpeg child', stillRunning: () => true });
-    signal?.addEventListener('abort', onAbort, { once: true });
-    proc.on('close', () => signal?.removeEventListener('abort', onAbort));
-    let tail = '';
-    proc.stderr?.on('data', (d) => { tail = `${tail}${d}`.slice(-400); });
-    proc.on('close', (code) => {
-      if (signal?.aborted) return reject(new ServerError('Stitch canceled', { status: 499, code: 'STITCH_CANCELED' }));
-      if (code === 0) return resolve();
-      const detail = tail ? `: ${tail.split(/[\r\n]+/).filter(Boolean).pop()?.trim() || ''}` : '';
-      reject(new ServerError(`Stitch failed${detail}`, { status: 500, code: 'FFMPEG_FAILED' }));
-    });
-    proc.on('error', (err) => reject(new ServerError(`ffmpeg failed to spawn: ${err.message}`, { status: 500, code: 'FFMPEG_FAILED' })));
+  const canceled = () => new ServerError('Stitch canceled', { status: 499, code: 'STITCH_CANCELED' });
+  let encodeStarted = false;
+  const runFfmpeg = async (args) => {
+    if (signal?.aborted) throw canceled();
+    encodeStarted = true;
+    const result = await runFfmpegProcess({ bin: ffmpeg, args: ['-hide_banner', '-loglevel', 'error', ...args], signal });
+    if (signal?.aborted) throw canceled();
+    if (!result.ok) throw new ServerError(`Stitch failed: ${result.reason}`, { status: 500, code: 'FFMPEG_FAILED' });
+  };
+  const unlinkUnpublishedOutput = () => unlinkGuarded(outPath).catch((error) => {
+    if (error.code !== 'ENOENT') console.error(`❌ Video stitch [${id.slice(0, 8)}] could not remove its output: ${error.message}`);
   });
 
   // Inputs with a real cut, as opposed to the measurement-only entries. Zero
@@ -232,7 +216,7 @@ export async function stitchVideos(videoIds, opts = {}) {
         colorTagFilter: await bt709TagFilter(),
       });
       const failure = args
-        ? await runFfmpeg(args, { captureStderr: true }).then(() => null, (err) => err)
+        ? await runFfmpeg(args).then(() => null, (err) => err)
         : new Error('could not build the concat filter graph');
       if (failure) {
         if (requireExactTrims || signal?.aborted) throw failure;
@@ -246,27 +230,26 @@ export async function stitchVideos(videoIds, opts = {}) {
     }
     if (!trimsApplied) {
       await writeConcatList();
-      // This one is fatal — its rejection is what the caller surfaces — so it
-      // needs the cause even more than the survivable run above does.
-      await runFfmpeg(['-f', 'concat', '-safe', '0', '-i', listFile, '-c', 'copy', '-y', outPath], { captureStderr: true });
+      await runFfmpeg(['-f', 'concat', '-safe', '0', '-i', listFile, '-c', 'copy', '-y', outPath]);
     }
     await optimizeForStreaming(outPath);
-    if (signal?.aborted) throw new ServerError('Stitch canceled', { status: 499, code: 'STITCH_CANCELED' });
+    if (signal?.aborted) throw canceled();
   } catch (err) {
-    // Failed exact delivery and canceled encodes own no published output.
-    if (signal?.aborted || requireExactTrims) await unlinkGuarded(outPath).catch(() => {});
+    if (encodeStarted && !err.backupPublicationUncertain) await unlinkUnpublishedOutput();
     throw err;
   } finally {
     if (listFileWritten) await unlinkGuarded(listFile).catch(() => {});
   }
 
-  const safeContinuation = sanitizeContinuation(continuation);
+  let publicationStarted = false;
   return withBackupAssetPublication(async () => {
+    publicationStarted = true;
     let committed = false;
     try {
-      if (signal?.aborted) throw new ServerError('Stitch canceled', { status: 499, code: 'STITCH_CANCELED' });
+      if (signal?.aborted) throw canceled();
+      const safeContinuation = sanitizeContinuation(continuation);
       const thumb = await generateThumbnail(outPath, id);
-      if (signal?.aborted) throw new ServerError('Stitch canceled', { status: 499, code: 'STITCH_CANCELED' });
+      if (signal?.aborted) throw canceled();
       const stitchedMeta = {
         id,
         prompt: promptOverride != null
@@ -357,7 +340,7 @@ export async function stitchVideos(videoIds, opts = {}) {
       // list inside the mutator) so a concurrent download/render write can't drop
       // this stitched entry.
       await mutateVideoHistory((history) => {
-        if (signal?.aborted) throw new ServerError('Stitch canceled', { status: 499, code: 'STITCH_CANCELED' });
+        if (signal?.aborted) throw canceled();
         history.unshift(stitchedMeta);
         return history;
       });
@@ -365,7 +348,7 @@ export async function stitchVideos(videoIds, opts = {}) {
       console.log(`🎬 Stitched ${videos.length} videos → ${outFilename}`);
       return stitchedMeta;
     } catch (error) {
-      if (!committed) await discardUnpublishedVideo({ jobId: id, outputPath: outPath });
+      if (!committed && !error.backupPublicationUncertain) await discardUnpublishedVideo({ jobId: id, outputPath: outPath });
       throw error;
     }
   }, {
@@ -374,5 +357,9 @@ export async function stitchVideos(videoIds, opts = {}) {
       console.log(`⏸️ Video stitch [${id.slice(0, 8)}] waiting for the backup to finish before saving`);
       videoGenEvents.emit('activity', { generationId: id });
     },
+  }).catch(async (error) => {
+    // Admission can fail before the callback owns cleanup.
+    if (!publicationStarted) await unlinkUnpublishedOutput();
+    throw error;
   });
 }

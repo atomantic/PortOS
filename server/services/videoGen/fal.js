@@ -312,6 +312,7 @@ async function runFalVideo(job, jobId, {
   const { entry, finishFailure, publish, fail } = runner.begin(job, createFalRequestEntry(apiKey), {
     inputs: [uploadedTempPath, audioFilePath, ...(Array.isArray(uploadedTempPaths) ? uploadedTempPaths : [])],
   });
+  const { signal } = entry.controller;
   const deadline = Date.now() + FAL_RENDER_TIMEOUT_MS;
   try {
     // A Music Video clip's frames are cropped to its project's aspect, since
@@ -327,13 +328,13 @@ async function runFalVideo(job, jobId, {
       meta.frameConformed = { aspect: frameAspect, ...(frame?.conformed ? { start: frame.conformed } : {}), ...(endFrame?.conformed ? { end: endFrame.conformed } : {}) };
     }
     const audioDataUri = audioFilePath
-      ? `data:${audioMimeType(audioFilePath)};base64,${(await readFile(audioFilePath)).toString('base64')}`
+      ? `data:${audioMimeType(audioFilePath)};base64,${(await readFile(audioFilePath, { signal })).toString('base64')}`
       : null;
     // Most routes read inputs inline; a model that downloads them gets fal-hosted URLs.
     const hosted = getFalVideoModel(modelId)?.hostedInputs === true;
-    const host = (dataUri, name) => (hosted && dataUri ? hostFalDataUri({ apiKey, dataUri, fileName: `${jobId}-${name}` }) : dataUri);
+    const host = (dataUri, name) => (hosted && dataUri ? hostFalDataUri({ apiKey, dataUri, fileName: `${jobId}-${name}`, signal }) : dataUri);
     // An extend render continues the source clip, hosted like any other input.
-    const videoDataUri = sourceVideoPath ? `data:video/mp4;base64,${(await readFile(sourceVideoPath)).toString('base64')}` : null;
+    const videoDataUri = sourceVideoPath ? `data:video/mp4;base64,${(await readFile(sourceVideoPath, { signal })).toString('base64')}` : null;
     const [imageUrl, endImageUrl, audioUrl, videoUrl, ...referenceImageUrls] = await Promise.all([
       host(imageDataUri, 'start'), host(endImageDataUri, 'end'), host(audioDataUri, 'audio'), host(videoDataUri, 'source'),
       // A storyboard panel and its references go in uncropped: none is a frame of the clip.
@@ -348,7 +349,7 @@ async function runFalVideo(job, jobId, {
     // Cancelled while the inputs were being read: nothing was submitted, so
     // there is nothing to pay for or cancel remotely.
     if (entry.aborted) return finishFailure('Canceled');
-    const submitted = await submitFalRequest({ apiKey, modelId, body });
+    const submitted = await submitFalRequest({ apiKey, modelId, body, signal });
     entry.cancelUrl = submitted.cancel_url;
     meta.falRequestId = submitted.request_id;
     const responseUrl = submitted.response_url;
@@ -367,16 +368,16 @@ async function runFalVideo(job, jobId, {
     if (polled.outcome === 'failed') return finishFailure(polled.reason);
 
     const buffer = await withAbortTimeout(FAL_DOWNLOAD_TIMEOUT_MS, async (timeoutSignal) => {
-      const signal = anyAbortSignal([timeoutSignal, entry.controller.signal]);
+      const downloadSignal = anyAbortSignal([timeoutSignal, signal]);
       const retrievalDeadline = Date.now() + FAL_DOWNLOAD_TIMEOUT_MS;
-      const result = await readCompletedFalResult(responseUrl, { apiKey, signal, deadline: retrievalDeadline });
+      const result = await readCompletedFalResult(responseUrl, { apiKey, signal: downloadSignal, deadline: retrievalDeadline });
       const videoUrl = result?.video?.url || result?.video_url || result?.output?.video?.url;
       if (typeof videoUrl !== 'string' || !videoUrl.trim()) {
         throw new Error('fal.ai completed but returned no video URL');
       }
       emitCloudRenderStatus(job, jobId, CLOUD_RENDER_PHASE.FETCH, 'Downloading video…');
       return Buffer.from(await readCompletedFalResult(videoUrl, {
-        signal, deadline: retrievalDeadline, binary: true, binaryTimeoutMs: FAL_DOWNLOAD_TIMEOUT_MS, label: 'video download',
+        signal: downloadSignal, deadline: retrievalDeadline, binary: true, binaryTimeoutMs: FAL_DOWNLOAD_TIMEOUT_MS, label: 'video download',
       }));
     });
     if (entry.aborted) return finishFailure('Canceled');
