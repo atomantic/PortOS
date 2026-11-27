@@ -14,12 +14,19 @@
       "lib/**/*.mjs",
       "autofixer/**/*.js",
       "autofixer/**/*.mjs",
+      "autofixer/**/*.cjs",
       "!lib/slashdo",
       "!lib/slashdo/**",
       "!**/node_modules",
       "!**/node_modules/**"
     ]
   },
+  "plugins": [
+    {
+      "path": "./lint-no-raw-pm2-jlist.grit",
+      "includes": ["autofixer/**/*.{js,mjs,cjs}", "!autofixer/shared.js", "!**/*.test.*"]
+    }
+  ],
   "formatter": { "enabled": false },
   "assist": { "enabled": false },
   "linter": {

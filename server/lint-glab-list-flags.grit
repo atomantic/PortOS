@@ -1,0 +1,31 @@
+language js
+
+pattern issueJsonArgs() {
+  [..., `"-F"`, `"json"`, ...]
+}
+
+pattern mrStateArgs() {
+  [..., `"mr"`, `"list"`, ..., `"--state"`, ...]
+}
+
+file(body = $body) where {
+  $body <: r"(?s).*(?:glab|-F|--state).*",
+  $body <: contains (
+    // Keep the argv checks separate from shell text in live prompt literals.
+    or {
+      JsArrayExpression(elements = or { issueJsonArgs(), mrStateArgs() }),
+      JsCallArguments(args = or { issueJsonArgs(), mrStateArgs() }),
+      or { JsStringLiteralExpression(), JsTemplateExpression() } as $text where {
+        $text <: r"(?s).*(?:glab\s+issue\s+ls?i?s?t?\b[^\n]*?\s-F\s+json|glab\s+mr\s+ls?i?s?t?\b[^\n]*?--state\b).*"
+      }
+    } as $trap where {
+      register_diagnostic(
+        span = $trap,
+        message = "Use withGlabJson()/execGlabJson from lib/glabArgs.js for JSON and select MR state with --merged, --closed or --all.",
+        severity = "error"
+      ),
+      // Continue the subtree search after reporting this match.
+      false
+    }
+  )
+}

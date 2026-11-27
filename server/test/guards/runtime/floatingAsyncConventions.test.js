@@ -6,20 +6,10 @@
  */
 import { describe, it, expect } from 'vitest';
 import { dirname, join, relative, resolve } from 'path';
-import { parse } from '@babel/parser';
-import { guardCorpus, readText, REPO_ROOT, trackedFiles } from '../../../../scripts/lib/guardCorpus.js';
+import { guardCorpus, parseGuardSource, readText, REPO_ROOT, trackedFiles } from '../../../../scripts/lib/guardCorpus.js';
+import { parseRuntimeAst } from '../../guardSources.js';
 
 const SERVER_ROOT = join(REPO_ROOT, 'server');
-
-// Only diagnostics need a line number. Babel's node offsets let us compute it
-// on a hit without allocating a location object for every node in the tree.
-const parseSource = (src) => parse(src, {
-  sourceType: 'module',
-  errorRecovery: true,
-  allowReturnOutsideFunction: true,
-  attachComment: false,
-  locations: false,
-});
 
 const isAsyncInit = (node) => (
   (node?.type === 'ArrowFunctionExpression' || node?.type === 'FunctionExpression') && node.async === true
@@ -81,8 +71,7 @@ function moduleBindings(body, dir) {
   return { local, exported, imports };
 }
 
-function summarizeSource(src, dir) {
-  const { program } = parseSource(src);
+function summarizeSource(src, dir, { program } = parseGuardSource(src)) {
   return { ...moduleBindings(program.body, dir), program, src };
 }
 
@@ -117,7 +106,8 @@ function relativeLiteralValues(src) {
 
 // Import spellings share a binding summary. Only a caller visit walks its
 // program, which is then discarded while the async exports stay cached.
-function createFloatingAsyncScanner(readSource = (file) => readText(file), onParsed = () => {}) {
+function createFloatingAsyncScanner(readSource = readText, onParsed = () => {}) {
+  const parseFile = readSource === readText ? parseRuntimeAst : (_file, src) => parseGuardSource(src);
   const summaries = new Map();
   const resolutions = new Map();
   const summaryOf = (file) => {
@@ -125,7 +115,7 @@ function createFloatingAsyncScanner(readSource = (file) => readText(file), onPar
       const src = readSource(file);
       // Nothing here is async; a visit still needs the text to check what it imports.
       if (ASYNC_KEYWORD.test(src)) {
-        summaries.set(file, summarizeSource(src, dirname(file)));
+        summaries.set(file, summarizeSource(src, dirname(file), parseFile(file, src)));
         onParsed(file);
       } else {
         summaries.set(file, { exported: NO_EXPORTS, src });
@@ -189,7 +179,7 @@ function createFloatingAsyncScanner(readSource = (file) => readText(file), onPar
           summaries.set(file, { exported: summary.exported, hits: [] });
           return [];
         }
-        summary = summarizeSource(summary.src, dirname(file));
+        summary = summarizeSource(summary.src, dirname(file), parseFile(file, summary.src));
       }
       const hits = findCalls(summary, dirname(file));
       // After visiting a file, only its exports and verdict can be needed again.
@@ -210,8 +200,8 @@ function scanFiles(files, readSource) {
   const scanner = createFloatingAsyncScanner(readSource, (file) => {
     if (remaining.has(file)) pending.push(file);
   });
-  // Give parsed imports their own caller visit promptly so their programs
-  // do not accumulate in memory while waiting for filename order.
+  // Give parsed imports their own caller visit promptly so programs only used
+  // here do not accumulate in memory while waiting for filename order.
   const visit = (file) => {
     if (remaining.delete(file)) scanner.findInFile(file);
   };

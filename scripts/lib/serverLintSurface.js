@@ -9,4 +9,4 @@
  * those tests replace with a stub.
  */
 
-export const SERVER_LINT_RE = /^(?:server\/(?!node_modules\/)|scripts\/(?!node_modules\/)|autofixer\/(?!node_modules\/)|lib\/(?!slashdo\/)).*\.(?:m?js)$|^(?:server\/)?biome\.jsonc$/i;
+export const SERVER_LINT_RE = /^(?:(?:server|autofixer)\/(?!node_modules\/).*\.[cm]?js|(?:scripts\/(?!node_modules\/)|lib\/(?!slashdo\/)).*\.m?js|(?:server\/)?(?:biome\.jsonc|lint-[^/]+\.grit))$/i;
