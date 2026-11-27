@@ -39,7 +39,7 @@ const ServiceBadge = ({ label, probe }) => {
 
 const inputCls = 'w-full bg-port-bg border border-port-border rounded-lg px-3 py-2 text-sm text-white focus:outline-none focus:border-port-accent';
 
-export function VoiceTab() {
+export function VoiceTab({ showCallLink = true } = {}) {
   const { isFeatureEnabled } = useInstanceFeatures();
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
@@ -187,9 +187,12 @@ export function VoiceTab() {
       <div className={ready ? 'bg-port-card border border-port-border rounded-xl p-4 sm:p-6 space-y-6' : undefined}>
         {ready && (
           <>
-            <div className="flex items-center gap-2 text-white">
-              <Mic size={18} />
-              <h2 className="text-lg font-semibold">Local Voice Chief-of-Staff</h2>
+            <div className="flex flex-wrap items-center justify-between gap-2 text-white">
+              <div className="flex items-center gap-2">
+                <Mic size={18} aria-hidden="true" />
+                <h2 className="text-lg font-semibold">Local Voice Chief-of-Staff</h2>
+              </div>
+              {showCallLink && <Link to="/voice/call" className="inline-flex min-h-11 items-center text-sm text-port-accent hover:underline">Open call console</Link>}
             </div>
             <p className="text-xs text-gray-500 -mt-4">
               Hands-free or push-to-talk voice. Whisper (STT) + local TTS + your chosen LLM

@@ -31,6 +31,9 @@ const DISABLED_CONFIG = {
 };
 
 const VoiceEnabledContext = createContext(false);
+const VoiceConsoleContext = createContext(null);
+
+export const useVoiceConsole = () => useContext(VoiceConsoleContext);
 
 /** Whether voice mode is on. False until the gate's config read answers. */
 export const useVoiceEnabled = () => useContext(VoiceEnabledContext);
@@ -76,6 +79,7 @@ const loadVoiceWidget = () => importWithRetry(() => import('./VoiceWidget'));
 export default function VoiceWidgetGate({ children }) {
   const [config, setConfig] = useState(DISABLED_CONFIG);
   const [Widget, setWidget] = useState(null);
+  const [consoleHost, setConsoleHost] = useState(null);
   const mountedRef = useMounted();
   const loadRequestedRef = useRef(false);
   // What the widget missed while its chunk was loading, kept as two separate
@@ -215,8 +219,10 @@ export default function VoiceWidgetGate({ children }) {
 
   return (
     <VoiceEnabledContext.Provider value={enabled}>
-      {children}
-      {Widget && <Widget config={config} claimHeld={claimHeld} />}
+      <VoiceConsoleContext.Provider value={setConsoleHost}>
+        {children}
+      </VoiceConsoleContext.Provider>
+      {Widget && <Widget config={config} claimHeld={claimHeld} consoleHost={consoleHost} />}
     </VoiceEnabledContext.Provider>
   );
 }

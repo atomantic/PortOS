@@ -70,6 +70,7 @@ vi.mock('../../services/voiceClient', () => ({
   isContinuous: mocks.isContinuous,
   whenPlaybackDrained: vi.fn(() => Promise.resolve(true)),
   getVadLevel: vi.fn(() => 0),
+  getVoiceOutputLevel: vi.fn(() => 0),
   webSpeechSupported: true,
   startWebSpeechCapture: mocks.startWebSpeechCapture,
   stopWebSpeechCapture: mocks.stopWebSpeechCapture,
@@ -108,9 +109,9 @@ vi.mock('../../services/uiInteract', () => ({
   doSetCheckbox: vi.fn(() => ({ ok: true })),
 }));
 vi.mock('../micrographics', () => ({ MicroGlyph: () => null }));
-vi.mock('react-router', () => ({ useNavigate: () => vi.fn() }));
+vi.mock('react-router', () => ({ useNavigate: () => vi.fn(), Link: ({ to, children }) => <a href={to}>{children}</a> }));
 
-import VoiceWidgetGate from './VoiceWidgetGate';
+import VoiceWidgetGate, { useVoiceConsole } from './VoiceWidgetGate';
 import VoiceToggleButton from './VoiceToggleButton';
 import * as voiceClientMock from '../../services/voiceClient';
 import { ENGAGE_EVENT, DISENGAGE_EVENT } from '../../services/voiceVisibility';
@@ -223,5 +224,45 @@ describe('VoiceWidget async lifecycle', () => {
     expect(mocks.startContinuous).not.toHaveBeenCalled();
     expect(voiceClientMock.startCapture).not.toHaveBeenCalled();
     expect(mocks.startWebSpeechCapture).not.toHaveBeenCalled();
+  });
+});
+
+describe('Voice Call console', () => {
+  function ConsoleHost() {
+    const ref = useVoiceConsole();
+    return <main ref={ref} />;
+  }
+
+  it('opens microphone only on request, uses the existing turn and transcript, and ends cleanly', async () => {
+    localStorage.setItem(HIDDEN_KEY, '1');
+    localStorage.setItem('portos.voice.handsFree', '1');
+    const { rerender } = render(<VoiceWidgetGate><ConsoleHost /></VoiceWidgetGate>);
+    const consoleView = await screen.findByRole('region', { name: 'PortOS call console' });
+    const ui = within(consoleView);
+    expect(voiceClientMock.startContinuous).not.toHaveBeenCalled();
+    fireEvent.click(ui.getByRole('button', { name: 'Open mic' }));
+    expect(voiceClientMock.startContinuous).toHaveBeenCalledTimes(1);
+    expect(ui.getByRole('status')).toHaveTextContent('Mic open');
+
+    fireEvent.change(ui.getByRole('textbox'), { target: { value: 'Hello' } });
+    fireEvent.click(ui.getByRole('button', { name: 'Send', exact: true }));
+    expect(voiceClientMock.sendText).toHaveBeenCalledWith('Hello');
+    act(() => mocks.events.get('voice:llm:delta')?.({ delta: 'Hi back' }));
+    expect(ui.getByRole('log')).toHaveTextContent('Hi back');
+
+    const avatar = ui.getByRole('button', { name: 'Avatar' });
+    expect(avatar).toHaveAttribute('aria-pressed', 'true');
+    fireEvent.click(avatar);
+    expect(avatar).toHaveAttribute('aria-pressed', 'false');
+
+    fireEvent.click(ui.getByRole('button', { name: 'End' }));
+    expect(voiceClientMock.disposeCaptureOwner).toHaveBeenCalledTimes(1);
+    expect(voiceClientMock.interrupt).toHaveBeenCalled();
+    expect(ui.getByRole('status')).toHaveTextContent('Standby');
+
+    fireEvent.click(ui.getByRole('button', { name: 'Open mic' }));
+    rerender(<VoiceWidgetGate><main /></VoiceWidgetGate>);
+    expect(voiceClientMock.disposeCaptureOwner).toHaveBeenCalledTimes(2);
+    expect(screen.queryByRole('region', { name: 'PortOS call console' })).not.toBeInTheDocument();
   });
 });

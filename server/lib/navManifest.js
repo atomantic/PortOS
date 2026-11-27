@@ -421,6 +421,7 @@ const RAW_NAV_COMMANDS = [
   { id: 'nav.settings.telegram', path: '/settings/telegram', label: 'Telegram', section: 'Settings', tabId: 'telegram', navGroup: 'Integrations' },
   { id: 'nav.settings.voice', path: '/settings/voice', label: 'Voice', section: 'Settings', tabId: 'voice', navGroup: 'Integrations' },
   { id: 'nav.settings.facetime', path: '/settings/voice', label: 'FaceTime Audio', section: 'Settings', feature: 'facetime' },
+  { id: 'nav.settings.voice-call', path: '/voice/call', label: 'Voice Call', section: 'Settings' },
   { id: 'nav.settings.call-host', path: '/voice/call-host', label: 'Call Host', section: 'Settings', feature: 'facetime' },
 
   { id: 'nav.ambient', path: '/ambient', label: 'Ambient', section: 'Dev Tools' },

@@ -26,6 +26,7 @@ const { socket, listeners, audio, FakeAudioContext } = vi.hoisted(() => {
       this.destination = {};
       this.state = 'running';
       this.sampleRate = 48_000;
+      this.currentTime = 2;
       this.audioWorklet = { addModule: vi.fn(() => Promise.resolve()) };
     }
 
@@ -180,6 +181,22 @@ describe('voice playback cancellation', () => {
 
   afterAll(() => {
     vi.unstubAllGlobals();
+  });
+
+  it('samples the current played buffer for the avatar and returns silence on interrupt', async () => {
+    const samples = new Float32Array(800);
+    samples.fill(0.15);
+    audio.decodeImpl = () => Promise.resolve({
+      numberOfChannels: 1,
+      duration: 0.5,
+      sampleRate: 1600,
+      getChannelData: () => samples,
+    });
+    expect(voiceClient.getVoiceOutputLevel()).toBe(0);
+    await voiceClient.playWav(new ArrayBuffer(8));
+    expect(voiceClient.getVoiceOutputLevel()).toBeCloseTo(0.6);
+    voiceClient.interrupt();
+    expect(voiceClient.getVoiceOutputLevel()).toBe(0);
   });
 
   it('stops active and queued audio when a provider timeout is signaled', async () => {
