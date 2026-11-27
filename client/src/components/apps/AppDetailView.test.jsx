@@ -1,78 +1,42 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
-import { act, fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { MemoryRouter, Route, Routes, useLocation, useNavigate } from 'react-router';
 
-const socketHandlers = new Map();
-const instanceFeatureMock = vi.hoisted(() => ({
-  features: [
-    { id: 'datadog', enabled: true },
-    { id: 'jira', enabled: true },
-    { id: 'gsd', enabled: true },
-  ],
-  error: null,
-}));
+const { socketHandlers, handlersFor } = vi.hoisted(() => {
+  const socketHandlers = new Map();
+  return { socketHandlers, handlersFor: event => socketHandlers.get(event) ?? new Set() };
+});
+const emitSocket = (event, payload) => handlersFor(event).forEach(handler => handler(payload));
 
-vi.mock('../../services/apiCore.js', () => ({
-  PORTOS_APP_ID: 'portos-default',
-}));
-vi.mock('../../services/apiApps.js', () => ({
+vi.mock('../../services/apiApps.js', async importOriginal => ({
+  ...await importOriginal(),
   getApp: vi.fn(),
   launchNativeApp: vi.fn(),
   buildApp: vi.fn(),
   stopApp: vi.fn(),
-  restartApp: vi.fn(),
-  startApp: vi.fn(),
 }));
-vi.mock('../../services/apiCommands.js', () => ({
+vi.mock('../../services/apiCommands.js', async importOriginal => ({
+  ...await importOriginal(),
   getProcessesList: vi.fn(),
 }));
-
 vi.mock('../../services/socket', () => ({
   default: {
     emit: vi.fn(),
-    on: vi.fn((event, handler) => socketHandlers.set(event, handler)),
-    off: vi.fn((event, handler) => {
-      if (socketHandlers.get(event) === handler) socketHandlers.delete(event);
-    }),
+    on: (event, handler) => {
+      const handlers = handlersFor(event);
+      handlers.add(handler);
+      socketHandlers.set(event, handlers);
+    },
+    off: (event, handler) => handlersFor(event).delete(handler),
   },
 }));
-
-vi.mock('../../hooks/useInstanceFeatures.js', () => ({
-  useInstanceFeatures: () => instanceFeatureMock,
-}));
-
-vi.mock('../../services/appUrls', () => ({
-  getLaunchUrls: vi.fn(() => ({ https: null, http: null, dev: null })),
-}));
-
-vi.mock('../ui/Toast');
-vi.mock('../BrailleSpinner', () => ({ default: () => null }));
-vi.mock('../StatusBadge', () => ({ default: () => null }));
-vi.mock('./DeployPanel', () => ({ default: () => null }));
-vi.mock('./EditAppDrawer', () => ({ default: ({ onClose }) => <button onClick={onClose}>Close edit drawer</button> }));
-vi.mock('./DesktopLaunchProgress', () => ({ default: ({ online }) => <output data-testid="native-state">{online ? 'Running' : 'Exited'}</output> }));
-vi.mock('./tabs/OverviewTab', () => ({ default: ({ app }) => <output data-testid="overview-app">{app.id}</output> }));
-vi.mock('./tabs/TasksTab', () => ({ default: () => <div data-testid="tab-tasks" /> }));
-vi.mock('./tabs/AutomationTab', () => ({ default: () => <div data-testid="tab-automation" /> }));
-vi.mock('./tabs/DocumentsTab', () => ({ default: () => <div data-testid="tab-documents" /> }));
-vi.mock('./tabs/GitTab', () => ({ default: () => <div data-testid="tab-git" /> }));
-vi.mock('./tabs/GsdTab', () => ({ default: () => <div data-testid="tab-gsd" /> }));
-vi.mock('./tabs/IssuesTab', () => ({ default: () => <div data-testid="tab-issues" /> }));
-vi.mock('./tabs/JiraTab', () => ({ default: () => <div data-testid="tab-jira" /> }));
-vi.mock('./tabs/ProcessesTab', () => ({ default: () => <div data-testid="tab-processes" /> }));
-vi.mock('./tabs/ReferencesTab', () => ({ default: () => <div data-testid="tab-references" /> }));
-vi.mock('./tabs/SubmodulesTab', () => ({ default: () => <div data-testid="tab-submodules" /> }));
-vi.mock('./tabs/DatadogTab', () => ({ default: () => <div data-testid="tab-datadog" /> }));
-vi.mock('./tabs/PullRequestsTab', () => ({ default: () => <div data-testid="tab-pull-requests" /> }));
-vi.mock('./tabs/QualityTab', () => ({ default: () => <div data-testid="tab-quality" /> }));
-vi.mock('./LaunchVideoPanel', () => ({ default: () => <div data-testid="tab-launch-video" /> }));
-vi.mock('./tabs/UpdateTab', () => ({ default: () => <div data-testid="tab-update" /> }));
 
 import { getApp, launchNativeApp, buildApp, stopApp } from '../../services/apiApps.js';
 import { getProcessesList } from '../../services/apiCommands.js';
 import AppDetailView, { APP_DETAIL_TAB_ICONS } from './AppDetailView';
 import { APP_DETAIL_TABS } from './constants';
+import { __resetInstanceFeatureCache } from '../../hooks/useInstanceFeatures.js';
 import { PORTOS_APP_ID } from '../../lib/appIdentity.js';
 
 const APP = {
@@ -82,6 +46,110 @@ const APP = {
   repoPath: '/mock/example-app',
   pm2ProcessNames: [],
   processes: [],
+};
+
+const FULL_APP = { ...APP, id: PORTOS_APP_ID, hasSubmodules: true };
+const APP_IDS = new Set([APP.id, 'app-2', PORTOS_APP_ID]);
+const APP_READS = {
+  agents: { agents: [] },
+  'claim-reviewers': { reviewers: [] },
+  documents: { documents: [], gsd: {} },
+  issues: { issues: [], reason: 'no-open-issues' },
+  'lane-health': { lanes: [] },
+  'launch-videos': { videos: [] },
+  'layered-intelligence': { layers: [] },
+  'pull-requests': { pullRequests: [], reason: 'no-open-pull-requests' },
+  'quality-history': { history: [] },
+  'reference-repos': { referenceRepos: [] },
+  'repository-sources': { sources: [] },
+  'sprite-bindings': { bindings: [] },
+  'task-types': { taskTypeOverrides: {} },
+  'work-tracker': { resolved: 'github' },
+};
+
+const API_READS = {
+  '/api/apps': [APP, FULL_APP],
+  '/api/code-review/defaults': { reviewers: [], optionalReviewers: [] },
+  '/api/cos': { paused: false },
+  '/api/cos/jobs': { jobs: [] },
+  '/api/cos/schedule': { tasks: {} },
+  '/api/cos/schedule/maintenance-runs': { runs: [] },
+  '/api/cos/templates/popular': { templates: [] },
+  '/api/datadog/instances': { instances: {} },
+  '/api/git/submodules/status': { submodules: [], defaultBranch: 'main' },
+  '/api/instances/assignable': { instances: [] },
+  '/api/jira/instances': { instances: {} },
+  '/api/local-llm/status': { ollama: { models: [] }, lmstudio: { models: [] } },
+  '/api/local-llm/tool-use-models': { models: [] },
+  '/api/providers': { providers: [] },
+  '/api/settings': {},
+  '/api/settings/orchestration-profiles': { profiles: [] },
+  '/api/update/auto': { enabled: false },
+  '/api/update/browser': { updateAvailable: false },
+  '/api/update/status': { currentVersion: '1.0.0', updateAvailable: false },
+};
+
+// Git's local discovery endpoints accept the checkout path in a POST body.
+const GIT_READS = {
+  '/api/git/branches': { branches: [] },
+  '/api/git/info': { isRepo: false },
+  '/api/git/remote-branches': { branches: [] },
+};
+
+const FEATURES = ['datadog', 'jira', 'gsd'];
+const enabledFeatures = () => FEATURES.map(id => ({ id, enabled: true }));
+let features;
+beforeEach(() => {
+  __resetInstanceFeatureCache();
+  features = enabledFeatures();
+  getProcessesList.mockResolvedValue([]);
+  const unhandledFetch = globalThis.fetch;
+  vi.stubGlobal('fetch', async (url, options) => {
+    const target = new URL(url, 'https://example.com');
+    const { pathname } = target;
+    const method = options?.method ?? 'GET';
+    if (target.origin === 'https://example.com' && method === 'GET') {
+      if (pathname === '/api/settings/features') return Response.json({ features });
+      if (pathname === '/api/update/node-runtime') return new Response(null, { status: 204 });
+      if (Object.hasOwn(API_READS, pathname)) return Response.json(API_READS[pathname]);
+      const appRead = pathname.match(/^\/api\/apps\/([^/]+)\/([^/]+)$/);
+      if (appRead && APP_IDS.has(appRead[1]) && Object.hasOwn(APP_READS, appRead[2])) {
+        return Response.json(APP_READS[appRead[2]]);
+      }
+    }
+    if (target.origin === 'https://example.com' && method === 'POST' && Object.hasOwn(GIT_READS, pathname)) {
+      return Response.json(GIT_READS[pathname]);
+    }
+    return unhandledFetch(url, options);
+  });
+});
+afterEach(async () => {
+  // A lazy tab's content can be visible before its children's mount effects run.
+  // Settle those reads while this test still owns the transport.
+  try {
+    await act(async () => {});
+  } finally {
+    cleanup();
+    vi.unstubAllGlobals();
+  }
+});
+
+const TAB_CONTENT = {
+  automation: 'Scheduled Task Options',
+  datadog: 'DataDog monitoring is not configured for this app.',
+  documents: 'No documents found',
+  git: /Not a git repository/,
+  gsd: 'GSD Project Setup',
+  issues: 'No open issues on this tracker.',
+  'pull-requests': 'No open pull requests or merge requests.',
+  jira: 'JIRA Configuration',
+  'launch-video': 'Launch videos',
+  processes: 'No PM2 processes found',
+  quality: 'Quality: not assessed',
+  references: 'No reference repos configured.',
+  submodules: 'No git submodules found in this repository.',
+  tasks: 'Recent Agent Tasks',
+  update: 'Current Version',
 };
 
 function LocationProbe() {
@@ -108,13 +176,6 @@ function renderDetail(initialEntry = '/apps/app-1/overview') {
 describe('AppDetailView app-removal socket handling', () => {
   beforeEach(() => {
     vi.clearAllMocks();
-    socketHandlers.clear();
-    instanceFeatureMock.features = [
-      { id: 'datadog', enabled: true },
-      { id: 'jira', enabled: true },
-      { id: 'gsd', enabled: true },
-    ];
-    instanceFeatureMock.error = null;
     getApp.mockResolvedValue(APP);
   });
 
@@ -122,11 +183,10 @@ describe('AppDetailView app-removal socket handling', () => {
     renderDetail();
 
     await screen.findByRole('heading', { name: 'Example App' });
-    const handleAppsChanged = socketHandlers.get('apps:changed');
-    expect(handleAppsChanged).toBeTypeOf('function');
+    expect(handlersFor('apps:changed').size).toBeGreaterThan(0);
 
     await act(async () => {
-      handleAppsChanged({ action: 'delete', appId: 'app-1' });
+      emitSocket('apps:changed', { action: 'delete', appId: 'app-1' });
     });
 
     expect(screen.getByTestId('location')).toHaveTextContent('/apps');
@@ -137,7 +197,6 @@ describe('AppDetailView app-removal socket handling', () => {
 describe('AppDetailView header title', () => {
   beforeEach(() => {
     vi.clearAllMocks();
-    socketHandlers.clear();
   });
 
   // A truncated h1 is the ONLY place the app name appears on this route, and
@@ -165,8 +224,8 @@ describe('AppDetailView header title', () => {
     getApp.mockResolvedValue(APP);
     renderDetail('/apps/app-1/overview?appTab=intelligence');
 
-    fireEvent.click(await screen.findByRole('button', { name: 'Close edit drawer' }));
-    await waitFor(() => expect(screen.queryByRole('button', { name: 'Close edit drawer' })).toBeNull());
+    fireEvent.click(await screen.findByRole('button', { name: 'Close settings' }));
+    await waitFor(() => expect(screen.queryByRole('button', { name: 'Close settings' })).toBeNull());
     expect(screen.getByTestId('location')).toHaveTextContent('/apps/app-1/overview');
     expect(screen.getByTestId('location')).not.toHaveTextContent('appTab');
   });
@@ -223,12 +282,11 @@ describe('AppDetailView Stop action', () => {
 describe('AppDetailView managed-app feature tabs', () => {
   beforeEach(() => {
     vi.clearAllMocks();
-    socketHandlers.clear();
     getApp.mockResolvedValue(APP);
   });
 
   it('hides globally disabled feature tabs', async () => {
-    instanceFeatureMock.features = [
+    features = [
       { id: 'datadog', enabled: false },
       { id: 'jira', enabled: false },
       { id: 'gsd', enabled: false },
@@ -243,7 +301,7 @@ describe('AppDetailView managed-app feature tabs', () => {
   });
 
   it('lets app overrides show or hide tabs independently of global settings', async () => {
-    instanceFeatureMock.features = [
+    features = [
       { id: 'datadog', enabled: false },
       { id: 'jira', enabled: false },
       { id: 'gsd', enabled: true },
@@ -262,7 +320,7 @@ describe('AppDetailView managed-app feature tabs', () => {
   });
 
   it('keeps a disabled feature tab reachable from a direct URL', async () => {
-    instanceFeatureMock.features = [
+    features = [
       { id: 'datadog', enabled: false },
       { id: 'jira', enabled: false },
       { id: 'gsd', enabled: false },
@@ -272,36 +330,27 @@ describe('AppDetailView managed-app feature tabs', () => {
 
     await screen.findByRole('heading', { name: 'Example App' });
     expect(screen.queryByRole('tab', { name: 'DataDog' })).toBeNull();
-    expect(await screen.findByTestId('tab-datadog')).toBeInTheDocument();
+    expect(await screen.findByText(TAB_CONTENT.datadog)).toBeInTheDocument();
   });
 
   // Tabs are lazy chunks: each one must resolve behind the Suspense boundary both
   // when the URL names it and when the tab pill is clicked from the default tab.
   describe.each(APP_DETAIL_TABS.filter(t => t.id !== 'overview'))('lazy tab $id', ({ id, label }) => {
-    const FULL_APP = { ...APP, id: PORTOS_APP_ID, hasSubmodules: true };
-    const testId = `tab-${id}`;
-
-    beforeEach(() => {
-      instanceFeatureMock.features = [
-        { id: 'datadog', enabled: true },
-        { id: 'jira', enabled: true },
-        { id: 'gsd', enabled: true },
-      ];
-    });
+    const content = TAB_CONTENT[id];
 
     it('renders from a deep link', async () => {
       getApp.mockResolvedValue(FULL_APP);
       renderDetail(`/apps/${FULL_APP.id}/${id}`);
-      expect(await screen.findByTestId(testId)).toBeInTheDocument();
-      expect(screen.queryByTestId('overview-app')).toBeNull();
+      expect(await screen.findByText(content)).toBeInTheDocument();
+      expect(screen.queryByText('Repository Path')).toBeNull();
     });
 
     it('renders after a tab click from Overview', async () => {
       getApp.mockResolvedValue(FULL_APP);
       renderDetail(`/apps/${FULL_APP.id}/overview`);
-      expect(await screen.findByTestId('overview-app')).toBeInTheDocument();
+      expect(await screen.findByText(APP.repoPath)).toBeInTheDocument();
       fireEvent.click(screen.getByRole('tab', { name: label }));
-      expect(await screen.findByTestId(testId)).toBeInTheDocument();
+      expect(await screen.findByText(content)).toBeInTheDocument();
       expect(screen.getByTestId('location')).toHaveTextContent(`/${id}`);
     });
   });
@@ -316,7 +365,6 @@ describe('AppDetailView managed-app feature tabs', () => {
 describe('AppDetailView fetch lifecycle', () => {
   beforeEach(() => {
     vi.clearAllMocks();
-    socketHandlers.clear();
     getApp.mockReset();
   });
 
@@ -353,34 +401,34 @@ describe('AppDetailView fetch lifecycle', () => {
       .mockImplementationOnce(() => new Promise(resolve => { resolveNew = resolve; }));
     renderDetail();
     await screen.findByRole('heading', { name: APP.name });
-    await act(async () => socketHandlers.get('apps:changed')({ appId: APP.id }));
+    await act(async () => emitSocket('apps:changed', { appId: APP.id }));
     fireEvent.click(screen.getByRole('button', { name: 'View second app' }));
-    expect(screen.queryByTestId('overview-app')).toBeNull();
+    expect(screen.queryByText('Repository Path')).toBeNull();
     await act(async () => {});
-    await act(async () => resolveNew({ ...APP, id: 'app-2', name: 'Second App' }));
-    expect(screen.getByTestId('overview-app')).toHaveTextContent('app-2');
+    await act(async () => resolveNew({ ...APP, id: 'app-2', name: 'Second App', repoPath: '/mock/second-app' }));
+    expect(screen.getByText('/mock/second-app')).toBeInTheDocument();
     await act(async () => resolveOld(APP));
-    expect(screen.getByRole('heading', { name: 'Second App' })).toBeInTheDocument();
-    expect(screen.getByTestId('overview-app')).toHaveTextContent('app-2');
+    expect(screen.getByRole('heading', { name: 'Second App', repoPath: '/mock/second-app' })).toBeInTheDocument();
+    expect(screen.getByText('/mock/second-app')).toBeInTheDocument();
   });
 
   it('ignores a failed previous-route request and recovers from a current-app failed refresh', async () => {
     let rejectOld;
     getApp.mockImplementationOnce(() => new Promise((_, reject) => { rejectOld = reject; }))
-      .mockResolvedValueOnce({ ...APP, id: 'app-2', name: 'Second App' });
+      .mockResolvedValueOnce({ ...APP, id: 'app-2', name: 'Second App', repoPath: '/mock/second-app' });
     renderDetail();
     // The read starts on a microtask; let the first route's request go out before navigating away.
     await act(async () => {});
     fireEvent.click(screen.getByRole('button', { name: 'View second app' }));
-    await screen.findByRole('heading', { name: 'Second App' });
+    await screen.findByRole('heading', { name: 'Second App', repoPath: '/mock/second-app' });
     await act(async () => rejectOld(new Error('Old request failed')));
-    expect(screen.getByTestId('overview-app')).toHaveTextContent('app-2');
+    expect(screen.getByText('/mock/second-app')).toBeInTheDocument();
 
     getApp.mockRejectedValueOnce(new Error('Refresh failed'));
-    await act(async () => socketHandlers.get('apps:changed')({ appId: 'app-2' }));
-    expect(screen.queryByTestId('overview-app')).toBeNull();
+    await act(async () => emitSocket('apps:changed', { appId: 'app-2' }));
+    expect(screen.queryByText('Repository Path')).toBeNull();
     getApp.mockResolvedValueOnce({ ...APP, id: 'app-2', name: 'Recovered App' });
-    await act(async () => socketHandlers.get('apps:changed')({ appId: 'app-2' }));
+    await act(async () => emitSocket('apps:changed', { appId: 'app-2' }));
     expect(screen.getByRole('heading', { name: 'Recovered App' })).toBeInTheDocument();
   });
 
@@ -391,7 +439,7 @@ describe('AppDetailView fetch lifecycle', () => {
       .mockResolvedValueOnce({ ...APP, name: 'Updated App' });
     renderDetail();
     await screen.findByRole('heading', { name: APP.name });
-    const changed = socketHandlers.get('apps:changed');
+    const changed = payload => emitSocket('apps:changed', payload);
     await act(async () => {
       changed({ action: 'update', appId: 'app-2' });
       changed({ action: 'delete', appId: 'app-2' });
@@ -417,29 +465,29 @@ describe('native launch realtime status', () => {
   afterEach(() => vi.useRealTimers());
   it('applies process pushes without polling and reconciles reconnect/reshow once', async () => {
     vi.clearAllMocks();
-    socketHandlers.clear();
     vi.useFakeTimers();
     getApp.mockResolvedValue({ ...APP, nativeLaunch: { label: 'Native', processName: 'example-native' } });
     launchNativeApp.mockResolvedValue({ processName: 'example-native' });
     getProcessesList.mockResolvedValue([{ name: 'example-native', status: 'online' }]);
+    const initialConnectHandlers = handlersFor('connect').size;
     const view = renderDetail();
     await act(async () => {});
     await act(async () => fireEvent.click(screen.getByRole('button', { name: 'Launch Native for Example App' })));
-    expect(screen.getByTestId('native-state')).toHaveTextContent('Running');
+    expect(screen.getByText('Running — example-native')).toBeInTheDocument();
     expect(getProcessesList).toHaveBeenCalledTimes(1);
     await act(async () => vi.advanceTimersByTimeAsync(15000));
     expect(getProcessesList).toHaveBeenCalledTimes(1);
-    await act(async () => socketHandlers.get('processes:changed')({ appIds: [APP.id], processes: null }));
-    expect(screen.getByTestId('native-state')).toHaveTextContent('Running');
-    await act(async () => socketHandlers.get('processes:changed')({ appIds: [APP.id], processes: [{ name: 'example-native', status: 'stopped' }] }));
-    expect(screen.getByTestId('native-state')).toHaveTextContent('Exited');
-    await act(async () => socketHandlers.get('connect')());
+    await act(async () => emitSocket('processes:changed', { appIds: [APP.id], processes: null }));
+    expect(screen.getByText('Running — example-native')).toBeInTheDocument();
+    await act(async () => emitSocket('processes:changed', { appIds: [APP.id], processes: [{ name: 'example-native', status: 'stopped' }] }));
+    expect(screen.getByText('Exited — example-native')).toBeInTheDocument();
+    await act(async () => emitSocket('connect'));
     expect(getProcessesList).toHaveBeenCalledTimes(2);
     await act(async () => document.dispatchEvent(new Event('visibilitychange')));
     expect(getProcessesList).toHaveBeenCalledTimes(3);
     view.unmount();
-    expect(socketHandlers.has('processes:changed')).toBe(false);
-    expect(socketHandlers.has('connect')).toBe(false);
+    expect(handlersFor('processes:changed').size).toBe(0);
+    expect(handlersFor('connect').size).toBe(initialConnectHandlers);
   });
 });
 

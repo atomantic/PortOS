@@ -2,65 +2,45 @@ import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from 'vites
 import { mkdir, readFile, rm, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 
-const fixture = vi.hoisted(() => ({ records: new Map(), tasks: [], trace: [], quality: [], serial: 0, completions: 0, retirements: [] }));
-vi.mock('../../lib/fileUtils.js', async importOriginal => {
+const fixture = vi.hoisted(() => ({ trace: [], quality: [], serial: 0, completions: 0, retirements: [] }));
+vi.mock('../../lib/paths.js', async importOriginal => {
   const { makePathsProxy, lazyTempDataRoot } = await import('../../lib/mockPathsDataRoot.js');
   return makePathsProxy(await importOriginal(), {
     dataRoot: () => lazyTempDataRoot('portos-recovered-audit-'),
     extraOverrides: root => ({ root: join(root, 'primary') }),
   });
 });
-// backupSharedAdmission imports PATHS from paths.js directly, bypassing the fileUtils redirect.
-vi.mock('../../lib/paths.js', async importOriginal => {
-  const { makePathsProxy, lazyTempDataRoot } = await import('../../lib/mockPathsDataRoot.js');
-  return makePathsProxy(await importOriginal(), { dataRoot: () => lazyTempDataRoot('portos-recovered-audit-') });
-});
 vi.mock('../../lib/maintenanceAdmission.js', () => ({ maintenance: {
   continueSettlement: fn => fn(), recoverOwned: vi.fn(), withResource: (_kind, _id, fn) => fn(), finishResource: vi.fn(), markResourceUnsettled: vi.fn(),
   operations: () => [],
 } }));
-vi.mock('../deadOwnerReservations.js', () => ({ reconcileDeadOwnerReservations: vi.fn() }));
 vi.mock('../cos/cosTaskGenerator.js', () => ({ evaluateTasks: vi.fn(async () => {}) }));
 vi.mock('../cos/cosRunnerClient.js', () => ({
   getActiveAgentsFromRunner: vi.fn(), connectTuiSessionViaRunner: vi.fn(),
   spawnAgentViaRunner: vi.fn(), getRunnerHealth: vi.fn(), classifyRunnerSpawnFailure: vi.fn(),
 }));
 vi.mock('../shell.js', () => ({ getSession: vi.fn(() => ({})) }));
-vi.mock('../cos/cosAgentLifecycle.js', async importOriginal => ({
-  ...(await importOriginal()),
-  readAgentRecordOrUnreadable: vi.fn(),
-  getAgents: vi.fn(async () => [...fixture.records.values()]),
-  getAgent: vi.fn(async id => fixture.records.get(id)),
-  getAgentRecord: vi.fn(async id => fixture.records.get(id)),
-  updateAgent: vi.fn(async (id, update) => {
-    const record = fixture.records.get(id);
-    Object.assign(record, { ...update, metadata: { ...record.metadata, ...update.metadata } });
-    if (update.metadata?.auditFindings) fixture.trace.push('findings');
-    return record;
-  }),
-  recordCompletionCleanup: async (id, startedAt, patch) => {
-    const record = fixture.records.get(id);
-    if (record?.status !== 'completed' || record.startedAt !== startedAt) return false;
-    const prior = record.metadata.completionCleanup || {};
-    record.metadata.completionCleanup = { ...prior, ...patch, stages: { ...prior.stages, ...patch.stages } };
-    return true;
-  },
-  completeAgent: vi.fn(async (id, result) => {
-    fixture.trace.push('complete');
-    Object.assign(fixture.records.get(id), { status: 'completed', result });
-  }),
-}));
-vi.mock('../cos/cosTaskStore.js', () => ({
-  getAllTasks: vi.fn(async () => ({ user: { grouped: {} }, cos: { grouped: { active: fixture.tasks } } })),
-  getTaskById: vi.fn(async id => fixture.tasks.find(t => t.id === id)),
-  updateTask: vi.fn(async (id, update) => Object.assign(fixture.tasks.find(t => t.id === id), update)),
-  addTask: vi.fn(), reviveBlockedTask: vi.fn(),
-}));
-vi.mock('../cos/cosImprovementTasks.js', () => ({ checkStagePrecondition: vi.fn() }));
+vi.mock('../cos/cosAgentLifecycle.js', async importOriginal => {
+  const actual = await importOriginal();
+  return {
+    ...actual,
+    readAgentRecordOrUnreadable: vi.fn(actual.readAgentRecordOrUnreadable),
+    updateAgent: async (id, update) => {
+      const record = await actual.updateAgent(id, update);
+      if (update.metadata?.auditFindings) fixture.trace.push('findings');
+      return record;
+    },
+    completeAgent: async (...args) => {
+      const record = await actual.completeAgent(...args);
+      fixture.trace.push('complete');
+      return record;
+    },
+  };
+});
 vi.mock('./agentWorktreeCleanup.js', () => ({
   cleanupAgentWorktree: vi.fn(async id => {
     fixture.trace.push('cleanup');
-    const record = fixture.records.get(id);
+    const record = await getAgentRecord(id);
     // Model the destructive boundary only; real finalization must save both
     // receipts before the checkout disappears.
     expect(record.metadata.auditFindings.status).toBe('complete');
@@ -76,9 +56,6 @@ vi.mock('../../lib/db.js', () => ({ ensureSchema: vi.fn(), query: vi.fn(async (_
   fixture.quality.push({ category: values[1], agentId: values[2], report: JSON.parse(values[4]) });
   return { rows: [] };
 }) }));
-vi.mock('../appQualityFederation.js', () => ({
-  collectAppQuality: vi.fn(), qualityRecord: vi.fn(), readQualityRecords: vi.fn(), readReleaseQuality: vi.fn(),
-}));
 vi.mock('../apps.js', () => ({ getAppById: vi.fn(async () => null) }));
 vi.mock('../codeReview.js', () => ({
   getGoalFidelityConfig: vi.fn(async () => null), runLocalGoalFidelityReview: vi.fn(),
@@ -94,30 +71,12 @@ vi.mock('./agentErrorAnalysis.js', async importOriginal => ({
   ...(await importOriginal()), resolveFailedTaskUpdate: vi.fn(async () => ({ status: 'blocked' })),
 }));
 vi.mock('../cos/cosEvents.js', () => ({ emitLog: vi.fn(), cosEvents: { emit: vi.fn(), on: vi.fn() } }));
-vi.mock('./agentRunEventLog.js', () => ({ appendRunEvent: vi.fn() }));
 vi.mock('./agentRunTracking.js', () => ({ completeAgentRun: vi.fn() }));
 vi.mock('./agentProcessProbe.js', async importOriginal => ({
   ...(await importOriginal()),
   isPidAlive: vi.fn(async () => false),
 }));
-vi.mock('./agentCompletion.js', () => ({ processAgentCompletion: vi.fn() }));
-vi.mock('../taskSchedule.js', () => ({ recordTaskTypeSuccess: vi.fn(async () => null), recordTaskTypeFailure: vi.fn(async () => null) }));
-vi.mock('./agentSpawnPreparation.js', () => ({ createAgentSpawnContext: vi.fn(), prepareAgentSpawn: vi.fn() }));
-vi.mock('./agentSpawnDispatch.js', () => ({ dispatchAgentRun: vi.fn() }));
 vi.mock('./agentManagement.js', () => ({ handleOrphanedTask: vi.fn() }));
-vi.mock('./agentCliSpawning.js', () => ({ isClaudeCliProvider: vi.fn(), getClaudeSettingsEnv: vi.fn() }));
-vi.mock('../forgeAuth.js', () => ({ resolveForgeTokenEnv: vi.fn() }));
-vi.mock('./agentApiAuth.js', () => ({ resolveAgentApiEnv: vi.fn() }));
-vi.mock('../provider/providers.js', () => ({ getActiveProvider: vi.fn() }));
-vi.mock('../provider/providerStatus.js', () => ({ markProviderUsageLimit: vi.fn(), markProviderUnavailable: vi.fn() }));
-vi.mock('../updateChecker.js', () => ({ isUpdateInProgress: vi.fn(() => false) }));
-vi.mock('../jira.js', () => ({}));
-vi.mock('../git/status.js', () => ({}));
-vi.mock('../git/branchEvidence.js', () => ({}));
-vi.mock('../git/sync.js', () => ({}));
-vi.mock('../git/prs.js', () => ({}));
-vi.mock('../git/cleanup.js', () => ({}));
-vi.mock('../issueReconcile.js', () => ({ issueNumberFromRef: vi.fn() }));
 // handleAgentCompletion launches retirement from its finally block without
 // returning it; keep the real work but own the promise so teardown can drain it.
 vi.mock('./agentRepoStateVerification.js', async importOriginal => {
@@ -131,7 +90,11 @@ vi.mock('./agentRepoStateVerification.js', async importOriginal => {
 
 import { PATHS } from '../../lib/fileUtils.js';
 import { cleanupTempDataRoots } from '../../lib/mockPathsDataRoot.js';
-import { AGENT_RECORD_UNREADABLE, readAgentRecordOrUnreadable } from '../cos/cosAgentLifecycle.js';
+import { storedForm } from '../../lib/cos/cosTaskRows.js';
+import { __resetCosTaskRepository, applyTaskListSave, readTaskListVersion } from '../cos/cosTaskRepository.js';
+import { __resetTaskCache, getTaskById } from '../cos/cosTaskStore.js';
+import { loadState, saveState } from '../cos/cosState.js';
+import { AGENT_RECORD_UNREADABLE, getAgentRecord, readAgentRecordOrUnreadable, updateAgent } from '../cos/cosAgentLifecycle.js';
 import { getActiveAgentsFromRunner } from '../cos/cosRunnerClient.js';
 import { cleanupAgentWorktree } from './agentWorktreeCleanup.js';
 import { bindCompletionTaskDispatch } from './agentCompletionTaskHandoff.js';
@@ -152,8 +115,11 @@ const sentinel = (findings = report, score = 82) => JSON.stringify({ summary:
 
 beforeEach(async () => {
   vi.clearAllMocks();
-  fixture.records.clear();
-  fixture.tasks.length = 0;
+  __resetTaskCache();
+  __resetCosTaskRepository();
+  const state = await loadState();
+  state.agents = {};
+  await saveState(state);
   fixture.trace.length = 0;
   fixture.quality.length = 0;
   runnerAgents.clear();
@@ -172,6 +138,17 @@ afterEach(async () => {
 });
 afterAll(cleanupTempDataRoots);
 
+async function seedRun(task, record) {
+  await applyTaskListSave('internal', {
+    upserts: [{ task: storedForm(task, 'internal'), position: 0 }],
+    deletes: [],
+    expectedVersions: { internal: await readTaskListVersion('internal') },
+  });
+  const state = await loadState();
+  state.agents[record.id] = record;
+  await saveState(state);
+}
+
 const complete = agentId => {
   fixture.completions++;
   return handleAgentCompletion(agentId, 0, true, 1000);
@@ -183,16 +160,14 @@ describe('dead agent recovery (#3182, #8440)', () => {
     { mode: 'untracked completion', exitCode: 0, success: true, taskStatus: 'completed' },
   ])('settles the saved output and task through $mode', async ({ mode, exitCode, success, taskStatus }) => {
     const startedAt = '2026-10-01T12:00:00.000Z';
-    const task = { id: 'sys-example-recovery', taskType: 'internal', status: 'in_progress',
+    const task = { id: 'sys-example-recovery', taskType: 'internal', status: 'in_progress', priority: 'MEDIUM', description: 'Synthetic recovery task',
       metadata: { claimedBy: 'example-install', lastSpawnedAt: startedAt, totalSpawnCount: 1 } };
     const record = { id: 'agent-example-recovery', taskId: task.id, status: 'running', pid: 12345, startedAt,
       metadata: { runId: 'run-example-recovery' }, output: ['Synthetic output', { line: 'Saved before restart' }] };
-    fixture.tasks.push(task);
-    fixture.records.set(record.id, record);
+    await seedRun(task, record);
     expect(await bindCompletionTaskDispatch(record.id, task)).toBe(true);
 
     if (mode === 'orphan sweep') {
-      readAgentRecordOrUnreadable.mockResolvedValueOnce(record);
       getActiveAgentsFromRunner.mockResolvedValueOnce([]);
       cleanupAgentWorktree.mockResolvedValueOnce([]);
       vi.useFakeTimers({ toFake: ['setTimeout'] });
@@ -209,8 +184,8 @@ describe('dead agent recovery (#3182, #8440)', () => {
       'Synthetic output\nSaved before restart', exitCode, expect.any(Number),
       expect.objectContaining({ category: success ? undefined : 'orphaned' }),
       success ? null : false, expect.objectContaining({ executionSuccess: success }));
-    expect(record).toMatchObject({ status: 'completed', result: { orphaned: true, exitCode, success } });
-    expect(task.status).toBe(taskStatus);
+    expect(await getAgentRecord(record.id)).toMatchObject({ status: 'completed', result: { orphaned: true, exitCode, success } });
+    expect((await getTaskById(task.id)).status).toBe(taskStatus);
   });
 });
 
@@ -220,14 +195,13 @@ async function recoveredRun({ primary = false, missingPath = false, unreadable =
   const workspacePath = primary ? primaryPath : join(PATHS.data, `worktree-${fixture.serial}`);
   await mkdir(primaryPath, { recursive: true });
   await mkdir(workspacePath, { recursive: true });
-  const task = { id: `app-improve-example-${fixture.serial}`, taskType: 'internal', status: 'in_progress',
+  const task = { id: `app-improve-example-${fixture.serial}`, taskType: 'internal', status: 'in_progress', priority: 'MEDIUM', description: 'Synthetic recovery task',
     metadata: { analysisType: 'observability', auditDispositionVersion: '1', app: 'example-app', repoPath: primaryPath, openPR: false } };
   const record = { id: agentId, taskId: task.id, status: 'running', startedAt: '2026-10-01T12:00:00.000Z',
     metadata: { auditDispositionVersion: 1, runId: `run-example-${fixture.serial}`,
       ...(!missingPath && !unreadable ? { workspacePath } : {}) } };
-  fixture.records.set(agentId, record);
-  fixture.tasks.push(task);
-  readAgentRecordOrUnreadable.mockResolvedValue(unreadable ? AGENT_RECORD_UNREADABLE : record);
+  await seedRun(task, record);
+  if (unreadable) readAgentRecordOrUnreadable.mockResolvedValueOnce(AGENT_RECORD_UNREADABLE);
   getActiveAgentsFromRunner.mockResolvedValue([{ id: agentId, taskId: task.id, kind: 'tui',
     processActive: true, liveness: 'pty', startedAt: Date.parse(record.startedAt),
     ...(!missingPath ? { workspacePath } : {}) }]);
@@ -235,7 +209,7 @@ async function recoveredRun({ primary = false, missingPath = false, unreadable =
   await writeFile(join(workspacePath, `.agent-done-${agentId}`), sentinel());
   await writeFile(join(workspacePath, `.agent-audit-findings-${agentId}.json`), JSON.stringify(report));
   await syncRunnerAgents();
-  return { agentId, task, record, primaryPath, workspacePath };
+  return { agentId, primaryPath, workspacePath };
 }
 
 describe('recovered runner audit completion (#11526)', () => {
@@ -246,8 +220,8 @@ describe('recovered runner audit completion (#11526)', () => {
     if (mode === 'old entry without cwd') delete runnerAgents.get(run.agentId).workspacePath;
     if (mode === 'stale primary cwd') runnerAgents.get(run.agentId).workspacePath = run.primaryPath;
     await complete(run.agentId);
-    expect(run.record.metadata.auditFindings).toMatchObject({ status: 'complete', report });
-    expect(run.record.result).toMatchObject({ success: true, executionSuccess: true, taskOutcome: null, auditAssessment: { status: 'recorded' } });
+    expect((await getAgentRecord(run.agentId)).metadata.auditFindings).toMatchObject({ status: 'complete', report });
+    expect((await getAgentRecord(run.agentId)).result).toMatchObject({ success: true, executionSuccess: true, taskOutcome: null, auditAssessment: { status: 'recorded' } });
     expect(fixture.quality).toEqual([{ category: 'observability', agentId: run.agentId, report: quality(82) }]);
     expect(fixture.trace.indexOf('findings')).toBeLessThan(fixture.trace.indexOf('quality'));
     expect(fixture.trace.indexOf('quality')).toBeLessThan(fixture.trace.indexOf('complete'));
@@ -261,7 +235,7 @@ describe('recovered runner audit completion (#11526)', () => {
   it('also records an explicitly registered primary-checkout audit', async () => {
     const run = await recoveredRun({ primary: true });
     await complete(run.agentId);
-    expect(run.record.metadata.auditFindings).toMatchObject({ status: 'complete', report });
+    expect((await getAgentRecord(run.agentId)).metadata.auditFindings).toMatchObject({ status: 'complete', report });
     expect(fixture.quality[0].report.score).toBe(82);
   });
 
@@ -269,16 +243,16 @@ describe('recovered runner audit completion (#11526)', () => {
     const run = await recoveredRun({ unreadable: true });
     expect(runnerAgents.get(run.agentId).workspacePath).toBe(run.workspacePath);
     // The durable registration becomes readable again before completion.
-    run.record.metadata.workspacePath = run.workspacePath;
+    await updateAgent(run.agentId, { metadata: { workspacePath: run.workspacePath } });
     await complete(run.agentId);
-    expect(run.record.metadata.auditFindings).toMatchObject({ status: 'complete', report });
+    expect((await getAgentRecord(run.agentId)).metadata.auditFindings).toMatchObject({ status: 'complete', report });
   });
 
   it('does not borrow primary artifacts when neither registration nor runner knows the workspace', async () => {
     const run = await recoveredRun({ missingPath: true });
     await complete(run.agentId);
-    expect(run.record.result).toMatchObject({ success: false, completionReason: 'audit-disposition-incomplete' });
-    expect(run.record.metadata.auditFindings).toMatchObject({ status: 'incomplete', finalReportReceived: false, report: { version: 1, findings: [] } });
+    expect((await getAgentRecord(run.agentId)).result).toMatchObject({ success: false, completionReason: 'audit-disposition-incomplete' });
+    expect((await getAgentRecord(run.agentId)).metadata.auditFindings).toMatchObject({ status: 'incomplete', finalReportReceived: false, report: { version: 1, findings: [] } });
     expect(fixture.quality).toEqual([]);
     expect(cleanupAgentWorktree).not.toHaveBeenCalled();
     expect(await readFile(join(run.workspacePath, `.agent-done-${run.agentId}`), 'utf8')).toBe(sentinel());
@@ -291,8 +265,8 @@ describe('recovered runner audit completion (#11526)', () => {
     if (kind === 'missing') await rm(donePath);
     else await writeFile(donePath, sentinel({ version: 1, findings: [{ invalid: true }] }));
     await complete(run.agentId);
-    expect(run.record.result).toMatchObject({ success: false, completionReason: 'audit-disposition-incomplete' });
-    expect(run.record.metadata.auditFindings).toMatchObject({ status: 'incomplete', finalReportReceived: false, report });
+    expect((await getAgentRecord(run.agentId)).result).toMatchObject({ success: false, completionReason: 'audit-disposition-incomplete' });
+    expect((await getAgentRecord(run.agentId)).metadata.auditFindings).toMatchObject({ status: 'incomplete', finalReportReceived: false, report });
     expect(cleanupAgentWorktree).not.toHaveBeenCalled();
     expect(await readFile(join(run.workspacePath, `.agent-audit-findings-${run.agentId}.json`), 'utf8')).toBe(JSON.stringify(report));
     if (kind === 'malformed') expect(await readFile(donePath, 'utf8')).toBe(sentinel({ version: 1, findings: [{ invalid: true }] }));
