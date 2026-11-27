@@ -6,7 +6,7 @@ import { ensureDir, PATHS, readJSONFileStrict, unreadableStoreError, atomicWrite
 import { isPlainObject } from '../lib/objects.js';
 import { createMutex } from '../lib/asyncMutex.js';
 import { messageLogError } from '../lib/messageLogError.js';
-import { MESSAGE_SELECTOR_DEFAULTS } from '../lib/messageSelectorDefaults.js';
+import { MESSAGE_COMPOSE_PATTERN_DEFAULTS, MESSAGE_SELECTOR_DEFAULTS } from '../lib/messageSelectorDefaults.js';
 import {
   COMPOSE_PROVIDER_LABEL, SUBMIT_EVALUATE_TIMEOUT_MS, SUBMIT_OBSERVE_MS, buildComposePhaseScript, checkAccountIdentity, classifySendOutcome,
   describeComposeFailure, planDelivery, recipientsMatch, resolveComposeConfig
@@ -654,7 +654,7 @@ export async function testSelectors(provider) {
 
   for (const [name, selector] of Object.entries(sels)) {
     // Compose controls need a compose view. Test checks the current list page.
-    if (Object.hasOwn(compose, name) || name === 'sendAckPattern' || name === 'sendRefusalPattern') continue;
+    if (Object.hasOwn(compose, name) || Object.hasOwn(MESSAGE_COMPOSE_PATTERN_DEFAULTS, name)) continue;
     const script = provider === 'outlook' && name === 'messageRow'
       ? `(function() {
           const context = (${outlookRowContext.toString()})(${JSON.stringify(selector)}, false);

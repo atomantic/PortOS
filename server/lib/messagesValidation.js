@@ -1,6 +1,7 @@
 // Zod schemas for the message inbox, accounts, drafts, sync, actions, and token providers.
 
 import { z } from 'zod';
+import { isValidComposePattern, MESSAGE_COMPOSE_PATTERN_DEFAULTS } from './messageSelectorDefaults.js';
 import { MESSAGE_ACCOUNT_TYPES } from './messageTransport.js';
 
 // Express turns a repeated `?k=a&k=b` into an array; every field must be scalar
@@ -89,7 +90,13 @@ export const evaluateMessagesSchema = z.object({
 });
 
 export const updateSelectorsSchema = z.object({
-  selectors: z.record(z.string())
+  selectors: z.record(z.string()).superRefine((selectors, ctx) => {
+    for (const key of Object.keys(MESSAGE_COMPOSE_PATTERN_DEFAULTS)) {
+      if (Object.hasOwn(selectors, key) && !isValidComposePattern(selectors[key])) {
+        ctx.addIssue({ code: 'custom', path: [key], message: 'Enter a valid regular expression.' });
+      }
+    }
+  })
 });
 
 export const draftListQuerySchema = z.object({ accountId: z.string().optional(), status: z.string().optional() });

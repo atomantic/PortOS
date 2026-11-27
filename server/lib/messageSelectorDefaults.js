@@ -32,6 +32,21 @@ export const MESSAGE_SELECTOR_DEFAULTS = Object.freeze({
   })
 });
 
+// Match fresh live-region text after submit. Teams uses the rendered chat message for acknowledgement.
+export const MESSAGE_COMPOSE_PATTERN_DEFAULTS = Object.freeze({
+  sendAckPattern: '(^|\\b)(message sent|your message (was|has been) sent|sent successfully)\\b',
+  sendRefusalPattern: "couldn.?t send|could not send|failed to send|unable to send|didn.?t send|wasn.?t sent|not sent|try again"
+});
+
+export function isValidComposePattern(value) {
+  try {
+    new RegExp(value.trim(), 'i');
+    return true;
+  } catch {
+    return false;
+  }
+}
+
 export function resolveComposeSelectors(provider, stored) {
   return Object.fromEntries(Object.entries(MESSAGE_SELECTOR_DEFAULTS[provider].compose).map(([key, value]) => [
     key, (typeof stored?.[key] === 'string' && stored[key].trim()) || value
