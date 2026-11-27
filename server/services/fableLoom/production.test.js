@@ -883,6 +883,27 @@ describe('fableLoom production service', () => {
     expect(queueMocks.enqueueJob.mock.calls.length).toBeGreaterThan(enqueuedBefore);
   });
 
+  it.each(['canceling', 'rejected', 'finishing'])('waits for a %s queue job before resuming the batch', async (outcome) => {
+    const run = await startEpisodeProductionBatch('loom-1', 'ep-1', { mode: 'current_canon' });
+    await vi.waitFor(() => expect(run.summary.queued).toBe(1));
+    const asset = run.assets.find((item) => item.jobId === 'job-1');
+    if (outcome === 'rejected') queueMocks.cancelJob.mockRejectedValueOnce(new Error('Queue unavailable'));
+    else if (outcome === 'finishing') queueMocks.cancelJob.mockResolvedValueOnce({ ok: false, code: 'ALREADY_TERMINAL', status: 'running' });
+    else queueMocks.cancelJob.mockResolvedValueOnce({ ok: true, status: 'canceling' });
+
+    await cancelEpisodeProductionBatch(run.id);
+    expect(run.status).toBe('canceled');
+    expect(() => resumeEpisodeProductionBatch(run.id)).toThrow(/previous media jobs/i);
+    expect(queueMocks.enqueueJob).toHaveBeenCalledTimes(1);
+
+    queueMocks.mediaJobEvents.emit('completed', { id: 'job-1', result: { filename: 'existing.png' } });
+    await vi.waitFor(() => expect(asset).toMatchObject({ status: 'completed', result: { filename: 'existing.png' } }));
+    resumeEpisodeProductionBatch(run.id);
+    await vi.waitFor(() => expect(queueMocks.enqueueJob.mock.calls.length).toBeGreaterThan(1));
+    const [original, ...resumedJobs] = queueMocks.enqueueJob.mock.calls;
+    expect(resumedJobs.some(([job]) => job.owner === original[0].owner)).toBe(false);
+  });
+
   it('cancels already-enqueued siblings when enqueueJob throws mid-stage', async () => {
     let calls = 0;
     queueMocks.enqueueJob.mockImplementation(() => {

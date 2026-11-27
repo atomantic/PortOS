@@ -838,22 +838,22 @@ async function prepareJob(run, asset) {
   return prepareVideoJob(run, asset);
 }
 
-/**
- * Cancel every queued/running media job of a run and drop its job mappings so
- * the terminal events they emit are ignored. Leaves no asset in
- * ACTIVE_ASSET_STATUSES with a live job, which would otherwise stall resume.
- */
-async function cancelActiveBatchJobs(run, { status = 'canceled', error = 'Canceled by the user.' } = {}) {
+/** Request cancellation, retaining ownership of jobs that can still finish. */
+async function cancelActiveBatchJobs(run, { error = 'Canceled by the user.' } = {}) {
   const active = run.assets.filter((asset) => asset.jobId && ['queued', 'running'].includes(asset.status));
-  for (const asset of active) {
-    _jobToAsset.delete(asset.jobId);
-    asset.status = status;
-    asset.error = error;
-  }
   const results = await Promise.allSettled(active.map((asset) => cancelJob(asset.jobId)));
   results.forEach((result, index) => {
+    const asset = active[index];
     if (result.status === 'rejected') {
-      console.error(`❌ FableLoom could not cancel media job ${active[index].jobId}: ${errorMessage(result.reason)}`);
+      console.error(`❌ FableLoom could not cancel media job ${asset.jobId}: ${errorMessage(result.reason)}`);
+    } else if (result.value.status === 'canceled') {
+      _jobToAsset.delete(asset.jobId);
+      asset.status = 'canceled';
+      asset.error = error;
+    } else if (result.value.code === 'NOT_FOUND') {
+      _jobToAsset.delete(asset.jobId);
+      asset.status = 'failed';
+      asset.error = result.value.error;
     }
   });
 }
@@ -952,14 +952,6 @@ async function advanceRun(runId) {
       params: job.params,
       owner: `fableloom:${run.loomId}:${run.episodeId}:${asset.id}`,
     });
-    // Canceled while enqueueJob was suspended: the job exists but the run no
-    // longer owns it, so revoke it rather than recording it as queued.
-    if (run.cancelRequested || run.status !== 'in_progress') {
-      await cancelJob(enqueued.jobId).catch((error) => {
-        console.error(`❌ FableLoom could not cancel late-enqueued job ${enqueued.jobId}: ${errorMessage(error)}`);
-      });
-      break;
-    }
     asset.jobId = enqueued.jobId;
     asset.provider = job.provider || (job.kind === 'image' ? IMAGE_GEN_MODE.LOCAL : VIDEO_GEN_MODE.LOCAL);
     asset.modelId = job.modelId || null;
@@ -974,6 +966,8 @@ async function advanceRun(runId) {
       await handleJobTerminal('canceled', { id: enqueued.jobId });
       return run;
     }
+    // The queued teardown owns this job even if cancel arrived during enqueue.
+    if (run.cancelRequested) break;
   }
   touchRun(run);
   return run;
@@ -1299,6 +1293,12 @@ export function resumeEpisodeProductionBatch(runId) {
   const run = _batchRuns.get(runId);
   if (!run) throw new ServerError('Batch run not found', { status: 404, code: 'NOT_FOUND' });
   if (!['failed', 'canceled'].includes(run.status)) return run;
+  if (run.assets.some((asset) => ACTIVE_ASSET_STATUSES.has(asset.status))) {
+    throw new ServerError('Wait for the previous media jobs to finish or cancel them in the Media Queue, then resume the batch.', {
+      status: 409,
+      code: 'PRODUCTION_JOBS_SETTLING',
+    });
+  }
   for (const asset of run.assets) {
     if (asset.status === 'failed' || asset.status === 'blocked' || asset.status === 'canceled') {
       asset.status = 'pending';
