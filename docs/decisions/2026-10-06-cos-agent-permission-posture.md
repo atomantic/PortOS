@@ -33,7 +33,7 @@ failed run.
 - **Codex's `--approve-for-me` runs in a workspace-write sandbox**, which
   withholds the network the agent needs for `gh`, `git push`, and installs.
   Claude's sandbox posture is already used where it fits: the *public-review*
-  recipes (`CLAUDE_PUBLIC_REVIEW_*` in `server/lib/provider/providerVendors.js`) pin
+  recipes (`CLAUDE_PUBLIC_REVIEW_*` in `server/lib/provider/providerVendorRegistry.js`) pin
   `plan`/`acceptEdits` plus an OS sandbox because that stage handles untrusted
   PR content and needs no network.
 - **Auto mode is not universally available.** Claude's classifier depends on
