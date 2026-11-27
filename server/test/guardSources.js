@@ -35,10 +35,24 @@ export const blankCommentBodies = (src) => views(src).code;
 /** `blankComments(src)` from lib/sourceScan.js: a fresh copy of the once-split lines, which callers may mutate. */
 export const blankComments = (src) => [...guardCorpus().derive('blankComments', src, () => lexComments(src))];
 
-/** Retain ASTs only for files that both runtime AST checks can visit. */
+export const SOCKET_SERVER_HANDLES = new Set(['io', 'ioInstance', 'boundIo', 'providersIo', 'ioRef', 'ns']);
+const SOCKET_RECEIVER = new RegExp(`\\b(?:${[...SOCKET_SERVER_HANDLES, 'getIo'].join('|')})\\b`);
+const JSON_AST_CANDIDATE = /readJSONFile|safeJSONParse|atomicWrite|writeSecureJson|\\u/;
+
+// Keep the prefilters shared so a new consumer cannot silently cause a reparse.
+export const mayHaveSocketBroadcast = (source) =>
+  /\\[ux]/.test(source) || (source.includes('emit') && SOCKET_RECEIVER.test(source));
+export const mayHavePm2LogRead = (source) => source.includes('getLogs') || source.includes('\\u');
+
+/** Retain ASTs only for sources that more than one guard can visit. */
 export function parseRuntimeAst(path, source = guardCorpus().read(path)) {
-  // The wrapper registry gates on JSON reads and the write-back scan gates on writes.
-  // Include escaped identifiers, as both gates do.
-  return /readJSONFile|safeJSONParse|atomicWrite|writeSecureJson|\\u/.test(source)
+  return JSON_AST_CANDIDATE.test(source) || mayHaveSocketBroadcast(source) || mayHavePm2LogRead(source)
     ? guardCorpus().parseAst(path) : parseGuardSource(source);
+}
+
+/** Consumers that used strict Babel parsing must also reject recovered errors. */
+export function parseStrictRuntimeAst(path, source) {
+  const ast = path === null ? parseGuardSource(source) : parseRuntimeAst(path, source);
+  if (ast.errors.length) throw ast.errors[0];
+  return ast;
 }

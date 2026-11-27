@@ -133,12 +133,12 @@ const INHERITED_ENV = {
  * DIRECTORY on disk (mode 160000), which would blow the reader up. Its contents
  * are not tracked in this repo anyway.
  */
-const trackedFiles = (...pathspecs) => guardCorpus().indexed(pathspecs)
-  .filter(({ path, mode }) => mode !== '160000' && guardCorpus().lstat(path) !== null)
+const trackedFiles = (pathspecs, includes) => guardCorpus().indexed(pathspecs)
+  .filter(({ path, mode }) => mode !== '160000' && includes(path) && guardCorpus().lstat(path) !== null)
   .map(({ path }) => path);
 
 /** Tracked, non-test server RUNTIME modules — the forward-scan surface. */
-const serverRuntimeSources = () => trackedFiles('server').filter((f) => (
+const serverRuntimeSources = () => trackedFiles(['server'], (f) => (
   /\.(?:js|mjs|cjs)$/.test(f) && !f.includes('.test.') && !f.startsWith('server/scripts/')
 ));
 
@@ -155,7 +155,7 @@ const CODE_EXT = /\.(?:js|mjs|cjs|ts|tsx|jsx|sh|ps1|bat|cmd|py|rb|swift|yml|yaml
  * `PORTOS_UI_MAX_MEMORY` in its header and would otherwise vouch for the dead
  * key it was written to catch — and `.env.example`, which would document itself.
  */
-const runtimeCodeSources = () => trackedFiles().filter((f) => (
+const runtimeCodeSources = () => trackedFiles([], (f) => (
   f !== '.env.example' && !f.includes('.test.') && (CODE_EXT.test(f) || !f.includes('.'))
 ));
 

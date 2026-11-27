@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { readdirSync } from 'node:fs';
 import { join } from 'node:path';
-import { parse } from '@babel/parser';
+import { mayHavePm2LogRead, parseStrictRuntimeAst } from '../../guardSources.js';
 import { readText, REPO_ROOT } from '../../../../scripts/lib/guardCorpus.js';
 
 const routeFiles = (directory) => readdirSync(directory, { withFileTypes: true }).flatMap((entry) => {
@@ -24,9 +24,8 @@ const nodesWithin = (node) => {
   return nodes;
 };
 
-const unvalidatedPm2LogReads = (source) => {
-  const ast = parse(source, { sourceType: 'unambiguous' });
-  return nodesWithin(ast).flatMap((node) => {
+const unvalidatedPm2LogReads = (program) => {
+  return nodesWithin(program).flatMap((node) => {
     if (node.type !== 'CallExpression'
       || node.callee?.type !== 'MemberExpression'
       || node.callee.property?.name !== 'get'
@@ -52,17 +51,24 @@ const unvalidatedPm2LogReads = (source) => {
   });
 };
 
+const scanSource = (source, path = null) =>
+  unvalidatedPm2LogReads(parseStrictRuntimeAst(path, source).program);
+
 describe('PM2 log route validation', () => {
   it('validates the bounded lines query in every route handler that reads PM2 logs', () => {
     const routesDirectory = join(REPO_ROOT, 'server/routes');
     const files = routeFiles(routesDirectory);
+    let candidates = 0;
     const callSites = files.flatMap((filepath) => {
       const source = readText(filepath);
-      return unvalidatedPm2LogReads(source).map(({ start }) => ({
+      if (!mayHavePm2LogRead(source)) return [];
+      candidates += 1;
+      return scanSource(source, filepath).map(({ start }) => ({
         file: filepath.slice(routesDirectory.length), start,
       }));
     });
 
+    expect(candidates).toBeGreaterThan(0);
     expect(callSites).toEqual([]);
   });
 
@@ -85,7 +91,7 @@ describe('PM2 log route validation', () => {
       }));
     `;
 
-    expect(unvalidatedPm2LogReads(precedingValidatedRoute)).toHaveLength(1);
-    expect(unvalidatedPm2LogReads(validationAfterRead)).toHaveLength(1);
+    expect(scanSource(precedingValidatedRoute)).toHaveLength(1);
+    expect(scanSource(validationAfterRead)).toHaveLength(1);
   });
 });
