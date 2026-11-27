@@ -5,6 +5,7 @@ import userEvent from '@testing-library/user-event';
 vi.mock('../../../services/apiDigitalTwin.js', () => ({
   getTasteProfile: vi.fn(),
   getTasteNextQuestion: vi.fn(),
+  skipTasteFollowUp: vi.fn(),
   getPersonalizedTasteQuestion: vi.fn(),
   submitTasteAnswer: vi.fn(),
   getTasteSectionResponses: vi.fn(),
@@ -23,6 +24,7 @@ import {
   getTasteNextQuestion,
   getTasteProfile,
   getTasteSectionResponses,
+  skipTasteFollowUp,
   submitTasteAnswer,
 } from '../../../services/apiDigitalTwin.js';
 import { getProviders } from '../../../services/apiProviders.js';
@@ -30,7 +32,8 @@ import toast from '../../ui/Toast';
 import TasteTab from './TasteTab';
 
 const PROVIDER = { id: 'test-api', type: 'api', enabled: true, defaultModel: 'test-model' };
-const MOVIE = { questionId: 'movie-question', text: 'Favorite film?', isFollowUp: true };
+const MOVIE = { questionId: 'movies-fu-visual', text: 'Favorite film framing?', isFollowUp: true };
+const MOVIE_CORE = { questionId: 'movies-core-2', text: 'Which genres do you avoid?' };
 const MUSIC = { questionId: 'music-question', text: 'Favorite album?' };
 
 beforeEach(() => {
@@ -80,9 +83,33 @@ describe('TasteTab session transitions', () => {
     expect(submitTasteAnswer).toHaveBeenCalledWith('music', MUSIC.questionId, 'Example album', {}, { silent: true });
   });
 
+  it.each([MOVIE_CORE, null])('advances from the rendered Skip action to %j', async (nextQuestion) => {
+    const user = userEvent.setup();
+    getTasteNextQuestion.mockResolvedValueOnce(MOVIE);
+    skipTasteFollowUp.mockResolvedValueOnce({ nextQuestion });
+    render(<TasteTab />);
+
+    await openMovies(user);
+    await user.type(await screen.findByRole('textbox', { name: 'Your answer' }), 'My draft');
+    await user.click(screen.getByRole('button', { name: 'Skip' }));
+
+    expect(skipTasteFollowUp).toHaveBeenCalledExactlyOnceWith('movies', MOVIE.questionId, { silent: true });
+    expect(getTasteNextQuestion).toHaveBeenCalledTimes(1);
+    expect(submitTasteAnswer).not.toHaveBeenCalled();
+    expect(screen.queryByRole('heading', { name: MOVIE.text })).not.toBeInTheDocument();
+    if (nextQuestion) {
+      expect(await screen.findByRole('heading', { name: nextQuestion.text })).toBeInTheDocument();
+      expect(screen.getByRole('textbox', { name: 'Your answer' })).toHaveValue('');
+      expect(screen.getByRole('button', { name: 'Skip' })).toBeDisabled();
+    } else {
+      expect(await screen.findByText('All questions for this section are complete.')).toBeInTheDocument();
+    }
+  });
+
   it('reports a Skip failure and preserves the question and draft for retry', async () => {
     const user = userEvent.setup();
-    getTasteNextQuestion.mockResolvedValueOnce(MOVIE).mockRejectedValueOnce(new Error('network unavailable'));
+    getTasteNextQuestion.mockResolvedValueOnce(MOVIE);
+    skipTasteFollowUp.mockRejectedValueOnce(new Error('network unavailable'));
     render(<TasteTab />);
 
     await openMovies(user);
@@ -99,13 +126,14 @@ describe('TasteTab session transitions', () => {
   it('discards a late Skip result after switching sections', async () => {
     const user = userEvent.setup();
     const pending = Promise.withResolvers();
-    getTasteNextQuestion.mockResolvedValueOnce(MOVIE).mockReturnValueOnce(pending.promise).mockResolvedValueOnce(MUSIC);
+    getTasteNextQuestion.mockResolvedValueOnce(MOVIE).mockResolvedValueOnce(MUSIC);
+    skipTasteFollowUp.mockReturnValueOnce(pending.promise);
     render(<TasteTab />);
 
     await openMovies(user);
     await user.click(await screen.findByRole('button', { name: 'Skip' }));
     await switchToMusic(user);
-    await act(async () => pending.resolve(null));
+    await act(async () => pending.resolve({ nextQuestion: null }));
 
     expect(screen.getByRole('heading', { name: MUSIC.text })).toBeInTheDocument();
   });

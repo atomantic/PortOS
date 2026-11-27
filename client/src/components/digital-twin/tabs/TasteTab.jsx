@@ -3,6 +3,7 @@ import BrailleSpinner from '../../BrailleSpinner';
 import {
   getTasteProfile,
   getTasteNextQuestion,
+  skipTasteFollowUp,
   submitTasteAnswer,
   getPersonalizedTasteQuestion,
   getTasteSectionResponses,
@@ -174,24 +175,26 @@ export default function TasteTab({ onRefresh }) {
   };
 
   const skipQuestion = async () => {
+    if (!currentQuestion?.isFollowUp || currentQuestion.isPersonalized || loadingQuestion || submitting) return;
+
     const request = ++questionRequestRef.current;
     setLoadingQuestion(true);
     try {
-      const question = await getTasteNextQuestion(activeSection, { silent: true });
-      if (questionRequestRef.current !== request) return;
-      if (question?.questionId === currentQuestion.questionId) {
-        toast('The current question could not be skipped', { icon: '⚠️' });
-        return;
+      const { nextQuestion } = await skipTasteFollowUp(activeSection, currentQuestion.questionId, { silent: true });
+      if (questionRequestRef.current === request) {
+        setCurrentQuestion(nextQuestion);
+        setAnswer('');
       }
-      setCurrentQuestion(question);
-      setAnswer('');
     } catch (err) {
       if (questionRequestRef.current === request) {
         toast.error(err?.message ? `Failed to skip question: ${err.message}` : 'Failed to skip question');
       }
+      return;
     } finally {
       if (questionRequestRef.current === request) setLoadingQuestion(false);
     }
+    await loadProfile();
+    onRefresh?.();
   };
 
   const handleGoDeeper = async () => {

@@ -27,7 +27,7 @@ vi.mock('../../services/digital-twin.js', () => fnMap([
   'saveImportAsDocument',
 ]));
 vi.mock('../../services/taste-questionnaire.js', () => fnMap([
-  'TASTE', 'getNextQuestion', 'submitAnswer', 'getTasteProfile', 'getSectionResponses', 'generateSectionSummary',
+  'TASTE', 'getNextQuestion', 'skipFollowUp', 'submitAnswer', 'getTasteProfile', 'getSectionResponses', 'generateSectionSummary',
   'generateOverallSummary', 'resetSection', 'generatePersonalizedTasteQuestion',
 ]));
 vi.mock('../../services/feedbackLoop.js', () => fnMap([
