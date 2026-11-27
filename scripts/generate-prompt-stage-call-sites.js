@@ -42,6 +42,7 @@ import { createRequire } from 'node:module';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { isDirectlyInvoked } from './lib/directInvocation.js';
+import { escapeRegExp } from '../server/lib/textUtils.js';
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 
@@ -138,6 +139,7 @@ const STAGE_CALL_NAMES = new Set([
   'resolveStageContext',
   'resolveJudgeForStage',
 ]);
+const STAGE_CALL_RE = new RegExp([...STAGE_CALL_NAMES].join('|'));
 
 /**
  * A static hyphenated prefix immediately before an interpolation —
@@ -190,7 +192,7 @@ const LEAF_NODE_TYPES = new Set([
   'NullLiteral', 'NumericLiteral', 'RegExpLiteral', 'StringLiteral', 'TemplateElement',
 ]);
 
-/** Visit each node once without materializing or retaining the corpus's ASTs. */
+/** Visit each node in one traversal without building a flat node list. */
 function walkNodes(root, visit) {
   const pending = [root];
   while (pending.length) {
@@ -211,18 +213,16 @@ function walkNodes(root, visit) {
 }
 
 /**
- * Parse one source; the caller drops the AST after extracting references.
+ * Parse a candidate source.
  *
- * A source that will not parse throws, naming the file: contributing nothing
- * would silently drop every call site in it, which is the exact failure this
- * rewrite exists to end.
+ * A candidate that fails to parse throws with the file name so the scan
+ * cannot silently drop its possible references.
  */
 function parseSource(path, source) {
-  // Outside any request lifecycle, and babel's message names a line/column but
-  // not the file — which of 500 sources broke is the only useful half.
+  // Babel's error location omits the source path.
   try {
     // References come from syntax nodes, so attaching comments to them is wasted work.
-    return parse(source, { sourceType: 'module', plugins: ['jsx'], attachComment: false }).program;
+    return parse(source, { sourceType: 'module', plugins: ['jsx'], attachComment: false, locations: false }).program;
   } catch (err) {
     throw new Error(`${path}: ${err.message}`, { cause: err });
   }
@@ -233,6 +233,25 @@ function calleeName(callee) {
   if (callee?.type === 'Identifier') return callee.name;
   if (callee?.type === 'MemberExpression' && !callee.computed) return callee.property?.name ?? null;
   return null;
+}
+
+const STRING_ESCAPE_RE = /\\(?:u\{[\da-fA-F]+\}|u[\da-fA-F]{4}|x[\da-fA-F]{2}|\r\n|[\s\S])/g;
+const SIMPLE_ESCAPES = new Map([
+  ['0', '\0'], ['b', '\b'], ['f', '\f'], ['n', '\n'], ['r', '\r'], ['t', '\t'], ['v', '\v'],
+  ['\r', ''], ['\n', ''], ['\r\n', ''], ['\u2028', ''], ['\u2029', ''],
+]);
+
+// Decode potential string escapes for the prefilter only. Running across the
+// whole source can add candidates, since only Babel decides which text is code.
+function decodeSourceEscapes(source) {
+  return source.replace(STRING_ESCAPE_RE, (match) => {
+    const sequence = match.slice(1);
+    if (sequence.length === 1 || sequence === '\r\n') return SIMPLE_ESCAPES.get(sequence) ?? sequence;
+
+    const hex = sequence.startsWith('u{') ? sequence.slice(2, -1) : sequence.slice(1);
+    const point = Number.parseInt(hex, 16);
+    return point <= 0x10ffff ? String.fromCodePoint(point) : match;
+  });
 }
 
 /**
@@ -261,15 +280,59 @@ export function buildStageCallSites({ shippedStageKeys, sources, diagnostics = c
   let nodes = 0;
   let scannedSources = 0;
   diagnostics.checkpoint({ sources: sources.length, sourceBytes: sources.reduce((n, { source }) => n + Buffer.byteLength(source), 0) });
-  for (const { path, source } of sources) {
+  // Discover all unshipped keys first, retaining candidate ASTs for pass two.
+  const candidatesWithCalls = new Map();
+  const parseCandidate = ({ path, source }) => {
     const ast = diagnostics.measure('parse', () => parseSource(path, source));
+    scannedSources += 1;
+    return ast;
+  };
+  for (const entry of sources) {
+    const { source } = entry;
+    // An escaped identifier can name a resolver without spelling it in source.
+    if (!STAGE_CALL_RE.test(source)
+      && !(source.includes('\\u') && STAGE_CALL_RE.test(decodeSourceEscapes(source)))) continue;
+    const ast = parseCandidate(entry);
+    candidatesWithCalls.set(entry, ast);
+    diagnostics.measure('discover', () => walkNodes(ast, (node) => {
+      nodes += 1;
+      if (node.type !== 'CallExpression' || !STAGE_CALL_NAMES.has(calleeName(node.callee))) return;
+      const [first] = node.arguments;
+      if (first?.type === 'StringLiteral') keys.add(first.value);
+    }));
+    diagnostics.checkpoint({ nodes, scannedSources });
+  }
+
+  // Quote boundaries avoid parsing files that only mention a key as a substring.
+  const quote = /['"`]/.source;
+  const keyPattern = keys.size
+    ? new RegExp(`${quote}(?:${[...keys].map(escapeRegExp).join('|')})${quote}`)
+    : /(?!)/;
+  const hasTemplatePrefix = (source) => {
+    if (!source.includes('-${')) return false;
+    for (const [, prefix] of source.matchAll(TEMPLATE_PREFIX_RE)) {
+      for (const key of keys) {
+        if (key.length > prefix.length && key.startsWith(prefix)) return true;
+      }
+    }
+    return false;
+  };
+  for (const entry of sources) {
+    const { path, source } = entry;
+    const astWithCalls = candidatesWithCalls.get(entry);
+    if (!astWithCalls && !diagnostics.measure('prefilter', () =>
+      keyPattern.test(source) || hasTemplatePrefix(source)
+      // JSX attribute entity references are cooked by Babel as string literals.
+      || /&(?:#\w+|[A-Za-z]+);/.test(source)
+      || ((source.includes('\\') || source.includes('\r'))
+        && keyPattern.test(decodeSourceEscapes(source.replace(/\r\n?/g, '\n'))))
+    )) continue;
+
+    const ast = astWithCalls ?? parseCandidate(entry);
+    candidatesWithCalls.delete(entry);
     diagnostics.measure('walk', () => walkNodes(ast, (node) => {
       nodes += 1;
-      if (node.type === 'CallExpression' && STAGE_CALL_NAMES.has(calleeName(node.callee))) {
-        const [first] = node.arguments;
-        if (first?.type === 'StringLiteral') keys.add(first.value);
-      }
-      if (node.type === 'StringLiteral') {
+      if (node.type === 'StringLiteral' && keys.has(node.value)) {
         record(literals, node.value, path);
         return;
       }
@@ -278,7 +341,7 @@ export function buildStageCallSites({ shippedStageKeys, sources, diagnostics = c
       // A template with no interpolation is just a string spelled differently.
       if (node.expressions.length === 0) {
         const only = node.quasis[0]?.value?.cooked;
-        if (only != null) record(literals, only, path);
+        if (keys.has(only)) record(literals, only, path);
         return;
       }
 
@@ -290,11 +353,10 @@ export function buildStageCallSites({ shippedStageKeys, sources, diagnostics = c
         record(prefixes, prefix, path);
       }
     }));
-    diagnostics.checkpoint({ nodes, scannedSources: ++scannedSources });
+    diagnostics.checkpoint(astWithCalls ? { nodes } : { nodes, scannedSources });
   }
 
-  // Resolve only after discovering every key, including calls in later files.
-  // Keep strings/prefixes and paths between sources, never their AST nodes.
+  // Combine exact literal matches with interpolated prefix references.
   return diagnostics.measure('resolve', () => {
     const index = new Map();
     for (const key of keys) {
