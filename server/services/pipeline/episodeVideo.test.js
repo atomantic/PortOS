@@ -1,5 +1,6 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { mockNoPeerSync, mockNoPeers } from '../../lib/mockPathsDataRoot.js';
+import { getProjectsByIds } from '../creativeDirector/local.js';
 import { requestCreativeDirectorProjectStart } from '../creativeDirector/projectStartSink.js';
 
 const fileStore = new Map();
@@ -20,11 +21,16 @@ vi.mock('crypto', async () => {
 });
 
 vi.mock('../instances.js', () => mockNoPeers());
+vi.mock('../instanceIdentity.js', () => ({
+  getInstanceId: async () => 'instance-example',
+  UNKNOWN_INSTANCE_ID: 'unknown',
+}));
 vi.mock('../sharing/peerSync.js', () => mockNoPeerSync());
 
 const cdCreated = [];
 const cdTreatments = [];
 vi.mock('../creativeDirector/local.js', () => ({
+  getProjectsByIds: vi.fn(async () => []),
   createProject: vi.fn(async (input) => {
     const project = { id: `cd-uuid-${++uuidCounter}`, ...input, treatment: null };
     cdCreated.push(project);
@@ -58,6 +64,7 @@ vi.mock('../settings.js', () => ({
 
 const svc = await import('./episodeVideo.js');
 const issuesSvc = await import('./issues.js');
+const { recoverStuckGeneratingStages } = await import('./recovery.js');
 const seriesSvc = await import('./series.js');
 const settingsMod = await import('../settings.js');
 
@@ -310,6 +317,34 @@ describe('pipeline episodeVideo helper', () => {
     expect(requestCreativeDirectorProjectStart).toHaveBeenCalledWith(result.cdProjectId);
   });
 
+  it('persists a kickoff rejection on the episode stage', async () => {
+    const { issue } = await seedSeriesAndIssue({ scenes: [{ description: 'one' }] });
+    requestCreativeDirectorProjectStart.mockRejectedValueOnce(new Error('Render queue unavailable'));
+
+    const { cdProjectId } = await svc.startEpisodeVideoForIssue(issue.id);
+
+    await vi.waitFor(async () => {
+      const { stages } = await issuesSvc.getIssue(issue.id);
+      expect(stages.episodeVideo).toMatchObject({
+        status: 'error', cdProjectId, errorMessage: 'Render queue unavailable',
+      });
+    });
+  });
+
+  it('ignores a kickoff rejection from a replaced project', async () => {
+    const { issue } = await seedSeriesAndIssue({ scenes: [{ description: 'one' }] });
+    const kickoff = Promise.withResolvers();
+    requestCreativeDirectorProjectStart.mockReturnValueOnce(kickoff.promise);
+
+    await svc.startEpisodeVideoForIssue(issue.id);
+    const { cdProjectId } = await svc.startEpisodeVideoForIssue(issue.id, { force: true });
+    kickoff.reject(new Error('Old kickoff failed'));
+    await new Promise((resolve) => setImmediate(resolve));
+
+    const { stages } = await issuesSvc.getIssue(issue.id);
+    expect(stages.episodeVideo).toMatchObject({ status: 'generating', cdProjectId, errorMessage: '' });
+  });
+
   it('startEpisodeVideoForIssue persists user-overridden aspectRatio + quality on the stage', async () => {
     const { issue } = await seedSeriesAndIssue({
       scenes: [{ description: 'foo' }],
@@ -423,5 +458,59 @@ describe('pipeline episodeVideo helper', () => {
     const { issue } = await seedSeriesAndIssue({ scenes: [] });
     await expect(svc.startEpisodeVideoForIssue(issue.id))
       .rejects.toMatchObject({ code: svc.ERR_NO_STORYBOARDS });
+  });
+});
+
+describe('episode video boot recovery', () => {
+  beforeEach(() => {
+    fileStore.clear();
+    vi.clearAllMocks();
+  });
+
+  it.each([
+    ['complete', { status: 'complete', finalVideoId: 'video-example' }, 'ready', ''],
+    ['failed', { status: 'failed', failureReason: 'Every scene failed' }, 'error', 'Every scene failed'],
+    ['stopped', { status: 'paused', failureReason: 'Stopped by user' }, 'error', 'Stopped by user'],
+    ['missing', null, 'error', 'The linked Creative Director project was not found. Restart the episode render.'],
+    ['rendering', { status: 'rendering' }, 'generating', ''],
+    ['paused', { status: 'paused' }, 'generating', ''],
+    ['replicated', { status: 'failed', peerReplica: true }, 'generating', ''],
+  ])('reconciles a %s project and leaves subsequent recovery idempotent', async (_, project, status, errorMessage) => {
+    const { issue } = await seedSeriesAndIssue();
+    const cdProjectId = 'cd-example';
+    await issuesSvc.updateStage(issue.id, 'episodeVideo', { status: 'generating', cdProjectId });
+    getProjectsByIds.mockResolvedValueOnce(project ? [{ ...project, id: cdProjectId }] : []);
+
+    expect(await recoverStuckGeneratingStages()).toBe(status === 'generating' ? 0 : 1);
+    const { stages } = await issuesSvc.getIssue(issue.id);
+    expect(stages.episodeVideo).toMatchObject({ status, cdProjectId, errorMessage });
+    if (status !== 'generating') expect(await recoverStuckGeneratingStages()).toBe(0);
+  });
+
+  it('does not treat an unsuccessful project read as confirmed absence', async () => {
+    const { issue } = await seedSeriesAndIssue();
+    const cdProjectId = 'cd-example';
+    await issuesSvc.updateStage(issue.id, 'episodeVideo', { status: 'generating', cdProjectId });
+    getProjectsByIds.mockRejectedValueOnce(new Error('Creative Director store unavailable'));
+
+    await expect(recoverStuckGeneratingStages()).rejects.toThrow('Creative Director store unavailable');
+    const { stages } = await issuesSvc.getIssue(issue.id);
+    expect(stages.episodeVideo).toMatchObject({ status: 'generating', cdProjectId, errorMessage: '' });
+  });
+
+  it('ignores a project replaced while recovery reads the old one', async () => {
+    const { issue } = await seedSeriesAndIssue();
+    await issuesSvc.updateStage(issue.id, 'episodeVideo', { status: 'generating', cdProjectId: 'cd-old' });
+    const lookup = Promise.withResolvers();
+    getProjectsByIds.mockReturnValueOnce(lookup.promise);
+
+    const recovery = recoverStuckGeneratingStages();
+    await vi.waitFor(() => expect(getProjectsByIds).toHaveBeenCalledWith(['cd-old']));
+    await issuesSvc.updateStage(issue.id, 'episodeVideo', { status: 'generating', cdProjectId: 'cd-new' });
+    lookup.resolve([{ id: 'cd-old', status: 'failed' }]);
+
+    expect(await recovery).toBe(0);
+    const { stages } = await issuesSvc.getIssue(issue.id);
+    expect(stages.episodeVideo).toMatchObject({ status: 'generating', cdProjectId: 'cd-new', errorMessage: '' });
   });
 });

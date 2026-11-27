@@ -1,4 +1,4 @@
-import { listIssues, updateIssue, updateStageWithLatest, TEXT_STAGE_IDS } from './issues.js';
+import { listAllIssues, listIssues, updateIssue, updateStageWithLatest, TEXT_STAGE_IDS } from './issues.js';
 import { listSeries, updateSeries } from './series.js';
 
 // A recovery read can overlap a newly admitted generation. Keep the ownership check shared.
@@ -49,13 +49,50 @@ export async function recoverStuckAutoRuns() {
   return stuck.length;
 }
 
-/** Only this install's abandoned generations may be demoted; legacy ownership is unknown. */
+function episodeVideoRecoveryPatch(project) {
+  if (!project) {
+    return { status: 'error', errorMessage: 'The linked Creative Director project was not found. Restart the episode render.' };
+  }
+  if (project.peerReplica) return null;
+  if (project.status === 'complete') return { status: 'ready', errorMessage: '' };
+  // Stop parks legacy CD projects as paused and records the reason. A plain
+  // Pause remains resumable and should keep its current stage state.
+  if (project.status === 'failed' || (project.status === 'paused' && project.failureReason === 'Stopped by user')) {
+    return { status: 'error', errorMessage: project.failureReason || 'Creative Director episode render failed.' };
+  }
+  return null;
+}
+
+async function recoverEpisodeVideos(issues) {
+  const pending = issues.filter((issue) => issue.stages.episodeVideo.status === 'generating');
+  if (!pending.length) return 0;
+  const projectIds = [...new Set(pending.map((issue) => issue.stages.episodeVideo.cdProjectId).filter(Boolean))];
+  const { getProjectsByIds } = await import('../creativeDirector/local.js');
+  const projects = new Map((await getProjectsByIds(projectIds)).map((project) => [project.id, project]));
+  let recovered = 0;
+  for (const issue of pending) {
+    const snapshot = issue.stages.episodeVideo;
+    const project = projects.get(snapshot.cdProjectId);
+    const patch = episodeVideoRecoveryPatch(project);
+    if (!patch) continue;
+    await updateStageWithLatest(issue.id, 'episodeVideo', (current) => {
+      if (current.status !== 'generating' || current.cdProjectId !== snapshot.cdProjectId
+        || current.updatedAt !== snapshot.updatedAt) return {};
+      recovered += 1;
+      return patch;
+    });
+  }
+  return recovered;
+}
+
+/** Repair locally abandoned text generations and reconcile episode video handoffs. */
 export async function recoverStuckGeneratingStages() {
   const { getInstanceId, UNKNOWN_INSTANCE_ID } = await import('../instanceIdentity.js');
   const instanceId = await getInstanceId();
-  if (!instanceId || instanceId === UNKNOWN_INSTANCE_ID) return 0;
+  const issues = await listAllIssues({ withHistory: false });
+  if (!instanceId || instanceId === UNKNOWN_INSTANCE_ID) return recoverEpisodeVideos(issues);
   let recovered = 0;
-  for (const issue of await listIssues({ withHistory: false })) {
+  for (const issue of issues) {
     for (const stageId of TEXT_STAGE_IDS) {
       const snapshot = issue.stages[stageId];
       if (snapshot.status !== 'generating' || snapshot.generation?.instanceId !== instanceId) continue;
@@ -68,5 +105,5 @@ export async function recoverStuckGeneratingStages() {
       });
     }
   }
-  return recovered;
+  return recovered + await recoverEpisodeVideos(issues);
 }
