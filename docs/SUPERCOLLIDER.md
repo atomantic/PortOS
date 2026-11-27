@@ -1,6 +1,6 @@
 # SuperCollider runtime
 
-PortOS can render [SuperCollider](https://supercollider.github.io/) source offline for the Music Designer. Generated `.scd` code is untrusted: `sclang` can run shell commands and load startup files. PortOS therefore compiles and renders it only inside a disposable, locked-down Docker container built from a PortOS-owned recipe. There is no native fallback. Design record: [ADR 2026-10-01](./decisions/2026-10-01-supercollider-code-audio.md), epic #9407.
+PortOS can render [SuperCollider](https://supercollider.github.io/) source offline for the Music Designer. Generated `.scd` code is untrusted: `sclang` can run shell commands and load startup files. PortOS therefore compiles and renders it only inside a disposable, locked-down Docker container built from a PortOS-owned recipe. There is no native fallback. Implementation epic #9407.
 
 This page covers the managed runtime: the image, its setup command and its readiness contract.
 
