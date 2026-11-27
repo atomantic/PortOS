@@ -203,7 +203,9 @@ async function ensureLlamaProviderAndVoiceConfig(deps = {}) {
 
 async function runSetupPipeline(signal, deps = {}) {
   const llamaInstallMod = deps.llamaInstallMod || await import('../llamaServerInstall.js');
-  const llamaLifecycleMod = deps.llamaLifecycleMod || await import('../llamaServerLifecycle.js');
+  // The manager, not the lifecycle module: only the manager exports the
+  // serialized `startLlamaServer` (the lifecycle module has the unlocked body).
+  const llamaLifecycleMod = deps.llamaLifecycleMod || await import('../llamaServerManager.js');
 
   const llamaBin = await llamaInstallMod.resolveLlamaServerBinary();
   if (!llamaBin) {

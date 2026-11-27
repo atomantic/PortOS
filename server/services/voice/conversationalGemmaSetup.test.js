@@ -1,8 +1,14 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 vi.mock('../socketIo.js', () => ({ emitToOperators: vi.fn() }));
+vi.mock('../llamaServerManager.js', () => ({
+  getLlamaServerStatus: vi.fn(),
+  startLlamaServer: vi.fn(),
+  stopLlamaServer: vi.fn(),
+}));
 
 import { emitToOperators } from '../socketIo.js';
+import { getLlamaServerStatus, startLlamaServer as managedStartLlamaServer } from '../llamaServerManager.js';
 import { CONVERSATIONAL_GEMMA } from '../../lib/voiceModelCatalog.js';
 import {
   _resetConversationalGemmaSetupForTests,
@@ -160,6 +166,32 @@ describe('conversationalGemmaSetup', () => {
     expect(updateVoiceConfig).toHaveBeenCalledWith({
       llm: { provider: 'llama-server', model: CONVERSATIONAL_GEMMA.id },
     });
+    expect(status.phase).toBe('ready');
+  });
+
+  it('launches llama-server through the serialized manager when no lifecycle double is injected', async () => {
+    getLlamaServerStatus.mockResolvedValue({ running: false });
+    managedStartLlamaServer.mockResolvedValue({ running: true });
+
+    const status = await startConversationalGemmaSetup({
+      supported: true,
+      awaitCompletion: true,
+      resolveLlamaServerBinary: vi.fn().mockReturnValue('/opt/homebrew/bin/llama-server'),
+      readGgufStat: vi.fn().mockResolvedValue({ size: 33_000_000_000 }),
+      getHfToken: vi.fn().mockResolvedValue(null),
+      llamaInstallMod: {
+        resolveLlamaServerBinary: vi.fn().mockReturnValue('/opt/homebrew/bin/llama-server'),
+        installLlamaServer: vi.fn(),
+      },
+      providersMod: {
+        getProviderById: vi.fn().mockResolvedValue(null),
+        createProvider: vi.fn().mockResolvedValue({}),
+        updateProvider: vi.fn(),
+      },
+      voiceConfigMod: { updateVoiceConfig: vi.fn().mockResolvedValue({}) },
+    });
+
+    expect(managedStartLlamaServer).toHaveBeenCalledWith(expect.objectContaining({ alias: CONVERSATIONAL_GEMMA.id }));
     expect(status.phase).toBe('ready');
   });
 
