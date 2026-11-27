@@ -1,5 +1,6 @@
 // @vitest-environment node
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { createServer } from 'vite';
@@ -9,6 +10,10 @@ import { BROWSER_FIXTURE_STARTUP_MS, startBrowserFixture } from '../test/browser
 import { resolveTestChrome } from '../../../scripts/lib/testChrome.js';
 
 const chrome = resolveTestChrome();
+// Optional developer smoke against a running runtime on a separate loopback test server.
+const avatarTarget = /^\d{1,5}$/.test(process.env.PORTOS_TEST_AVATAR_PORT ?? '')
+  ? 'http://127.0.0.1:' + process.env.PORTOS_TEST_AVATAR_PORT : null;
+const avatarWav = avatarTarget && process.env.PORTOS_TEST_AVATAR_WAV ? readFileSync(process.env.PORTOS_TEST_AVATAR_WAV) : null;
 const root = fileURLToPath(new URL('../..', import.meta.url));
 const config = {
   enabled: true, stt: { engine: 'whisper' }, llm: { provider: 'fixture', model: 'fixture-model' },
@@ -34,15 +39,21 @@ function sampleWave() {
   return wave;
 }
 
-function stubApi(page, enabled = true) {
+function stubApi(page, enabled = true, avatar = {}) {
   return page.route('**/api/**', route => {
     const path = new URL(route.request().url()).pathname;
-    if (path === '/api/voice/public/synthesize') return route.fulfill({ body: sampleWave(), contentType: 'audio/wav' });
+    if (path === '/api/voice/public/synthesize') return route.fulfill({ body: avatarWav || sampleWave(), contentType: 'audio/wav' });
+    if (path.startsWith('/api/voice/avatar/') && avatarTarget) return route.continue();
+    if (path === '/api/voice/avatar/frames' && avatar.jpeg) {
+      const body = Array.from({ length: 50 }, (_, index) => JSON.stringify({ index, timeMs: index * 40, jpeg: avatar.jpeg })).join('\n');
+      return route.fulfill({ body: body + '\n', contentType: 'application/x-ndjson' });
+    }
     if (path === '/api/voice/config' && route.request().method() === 'PUT') {
       return route.fulfill({ json: { config: route.request().postDataJSON(), reconciliation: {} } });
     }
     const responses = {
       '/api/voice/config': { ...config, enabled },
+      '/api/voice/avatar/status': { supported: true, installed: true, phase: 'running' },
       '/api/voice/status': { services: {} },
       '/api/providers': { providers: [{ id: 'fixture', name: 'Test provider', type: 'api', models: ['fixture-model', 'fixture-alternate'] }] },
       '/api/settings/features': { features: [] },
@@ -102,7 +113,7 @@ describe.skipIf(!chrome)('Voice Call console in Chrome', () => {
               res.end(await vite.transformIndexHtml('/voice-console-test', '<meta name="viewport" content="width=device-width, initial-scale=1"><div id="root" style="height:100dvh"></div><script type="module" src="/voice-console-fixture.jsx"></script>'));
             });
           },
-        }], server: { host: '127.0.0.1', port: 0 },
+        }], server: { host: '127.0.0.1', port: 0, ...(avatarTarget && { proxy: { '/api/voice/avatar': avatarTarget } }) },
       }),
     });
   }, BROWSER_FIXTURE_STARTUP_MS);
@@ -163,6 +174,47 @@ describe.skipIf(!chrome)('Voice Call console in Chrome', () => {
       await page.getByRole('button', { name: 'Interrupt' }).click();
       expect(await mouth.getAttribute('transform')).toBe(idle);
       await page.getByText('Standby', { exact: true }).waitFor();
+    } finally {
+      await page.close();
+    }
+  });
+
+  it('opts into generated frames, follows playback, and stops showing frames on interrupt', async () => {
+    const page = await fixture.browser.newPage({ viewport: { width: 390, height: 800 }, reducedMotion: 'no-preference' });
+    try {
+      const avatar = {};
+      await stubApi(page, true, avatar);
+      await page.goto(`${fixture.origin}voice-console-test`);
+      await page.getByRole('button', { name: 'Model & voice settings' }).click();
+      await page.getByLabel('Use generated avatar in this browser').check();
+      await page.getByRole('button', { name: 'Close settings' }).click();
+      const canvas = page.locator('canvas[width="512"]');
+      await expect(canvas.count()).resolves.toBe(1);
+      expect(await canvas.isVisible()).toBe(false);
+      avatar.jpeg = await page.evaluate(() => {
+        const tile = document.createElement('canvas');
+        tile.width = tile.height = 2;
+        const ctx = tile.getContext('2d');
+        ctx.fillStyle = 'red';
+        ctx.fillRect(0, 0, 2, 2);
+        return tile.toDataURL('image/jpeg').split(',')[1];
+      });
+      const request = page.waitForRequest(req => req.url().endsWith('/api/voice/avatar/frames'));
+      await page.getByRole('button', { name: 'Play sample' }).click();
+      expect((await request).postDataBuffer().subarray(0, 4).toString()).toBe('RIFF');
+      await canvas.waitFor({ state: 'visible' });
+      expect(await canvas.evaluate(el => el.getContext('2d').getImageData(256, 256, 1, 1).data[3])).toBe(255);
+      await page.getByRole('button', { name: 'Interrupt' }).click();
+      await canvas.waitFor({ state: 'hidden' });
+      await page.getByText('Standby', { exact: true }).waitFor();
+      await page.emulateMedia({ reducedMotion: 'reduce' });
+      const seen = [];
+      page.on('request', req => { if (req.url().endsWith('/api/voice/avatar/frames')) seen.push(req.url()); });
+      await page.getByRole('button', { name: 'Play sample' }).click();
+      await page.getByText('Speaking', { exact: true }).waitFor();
+      expect(seen).toEqual([]);
+      expect(await canvas.isVisible()).toBe(false);
+      await page.getByRole('button', { name: 'Interrupt' }).click();
     } finally {
       await page.close();
     }

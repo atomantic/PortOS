@@ -152,6 +152,7 @@ export const HOST_CONTROL_GET_ROUTES = Object.freeze([
   'GET /api/rigging/readiness',
   'GET /api/image-gen/setup/moss-install',
   'GET /api/voice/facetime/status',
+  'GET /api/voice/avatar/status',
   'GET /api/update/software',
   'GET /api/update/node-runtime',
   'GET /api/docker-containment/status',

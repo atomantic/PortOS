@@ -1,0 +1,7 @@
+# Voice Call's PortOS-owned AvatarForcing runner on macOS/arm64.
+torch==2.15.0
+transformers==5.22.2
+scipy==1.15.3
+numpy==2.2.6
+safetensors==0.8.0
+pillow==13.0.0

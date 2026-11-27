@@ -5,7 +5,7 @@ import VoiceCallConsole from './VoiceCallConsole';
 import { Mic, MicOff, Brain, Volume2, VolumeX, Square, Trash2, ChevronDown, ChevronUp, Send, Infinity as InfinityIcon, NotebookPen, X, EyeOff, Monitor, MonitorOff } from 'lucide-react';
 import {
   startCapture, stopCapture, interrupt, resetConversation, sendText, onVoiceEvent, isCapturing,
-  startContinuous, stopContinuous, isContinuous, whenPlaybackDrained, getVadLevel,
+  startContinuous, stopContinuous, isContinuous, whenPlaybackDrained, whenVoiceTurnAudioDrained, getVadLevel,
   webSpeechSupported, startWebSpeechCapture, stopWebSpeechCapture, isWebSpeechCapturing,
   disposeCaptureOwner,
   onProactiveSpeech, captureScreenForVision, sendScreenshotResult,
@@ -234,7 +234,7 @@ export default function VoiceWidget({ config, claimHeld, consoleHost }) {
         // playback may still be running. Wait for drain so stage doesn't
         // flip off 'speaking' while audio is still playing.
         if (d?.reason === 'reset') setHistory([]);
-        whenPlaybackDrained().then(() => {
+        whenVoiceTurnAudioDrained().then(() => {
           if (disposedRef.current) return;
           setStage((current) => (ACTIVE_STAGES.has(current) ? current : restState()));
         });
@@ -383,7 +383,7 @@ export default function VoiceWidget({ config, claimHeld, consoleHost }) {
       interrupt();
       setHistory((h) => [...h, { role: 'assistant', text: line }].slice(-MAX_HISTORY));
       setStage('speaking');
-      speakSynthesized(line, ttsRef.current)
+      speakSynthesized(line, { ...ttsRef.current, animate: true })
         .catch(() => {})
         .finally(() => whenPlaybackDrained().then(() => {
           if (disposedRef.current) return;
@@ -778,7 +778,7 @@ export default function VoiceWidget({ config, claimHeld, consoleHost }) {
     setStage('thinking');
     try {
       const queued = await speakSynthesized('PortOS radio check. One, two, three. How do you read me?', {
-        ...ttsRef.current, signal: sample.signal,
+        ...ttsRef.current, signal: sample.signal, animate: true,
       });
       if (!queued || sampleRef.current !== sample) return;
       setStage('speaking');

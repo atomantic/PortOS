@@ -352,6 +352,29 @@ describe('voice playback cancellation', () => {
     expect(drained).toHaveBeenCalledWith(true);
   });
 
+  it('lets call animation prepare and cancels it without playing a stale output', async () => {
+    const { promise: ready, resolve: resume } = Promise.withResolvers();
+    const animation = { ready, start: vi.fn(), stop: vi.fn() };
+    const prepare = vi.fn(() => animation);
+    const unbind = voiceClient.bindVoiceOutputVisualizer(prepare);
+    try {
+      trigger('voice:transcript');
+      emitTtsAudio('assistant audio');
+      await vi.waitFor(() => expect(prepare).toHaveBeenCalledTimes(1));
+      expect(audio.sources).toHaveLength(0);
+      voiceClient.interrupt();
+      expect(animation.stop).toHaveBeenCalledOnce();
+      resume();
+      await voiceClient.whenVoiceTurnAudioDrained();
+      expect(animation.start).not.toHaveBeenCalled();
+      expect(audio.sources).toHaveLength(0);
+      await voiceClient.playWav(new ArrayBuffer(4));
+      expect(prepare).toHaveBeenCalledTimes(1);
+    } finally {
+      unbind();
+    }
+  });
+
   it('suppresses Web Speech during playback and the 700ms tail, and clears the tail on cancellation', async () => {
     let now = 1000;
     vi.spyOn(performance, 'now').mockImplementation(() => now);

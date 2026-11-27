@@ -244,7 +244,7 @@ async function installCheckpoint(weights, emit, signal) {
   }
 }
 
-async function installUv(work, emit, signal) {
+export async function installPinnedAppleUv(work, emit, signal) {
   const archive = join(work, 'uv.tar.gz');
   await downloadArchive({
     url: 'https://github.com/astral-sh/uv/releases/download/' + UV_VERSION + '/uv-aarch64-apple-darwin.tar.gz',
@@ -259,7 +259,7 @@ async function installUv(work, emit, signal) {
 async function installRuntime(paths, emit, signal) {
   if (await sha256File(LOCK, { signal }) !== WHEEL_LOCK_SHA256) throw runFailure('The shipped mkserve wheel lock does not match its pinned digest. Update PortOS and retry.');
   await mkdir(paths.work, { recursive: true });
-  const uv = await installUv(paths.work, emit, signal);
+  const uv = await installPinnedAppleUv(paths.work, emit, signal);
   const archive = join(paths.work, 'source.tar.gz');
   await downloadArchive({
     url: 'https://codeload.github.com/dangxingyu/megakernel-zoo/tar.gz/' + MKSERVE_VERSION,
