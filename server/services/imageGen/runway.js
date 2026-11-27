@@ -1,7 +1,7 @@
 import { readFile } from 'fs/promises';
 import { basename } from 'path';
 import { ensureDir, PATHS } from '../../lib/fileUtils.js';
-import { stripImageMetadata } from '../../lib/imageClean.js';
+import { stripImageMetadataPreservingOrientation } from '../../lib/imageClean.js';
 import { detectImageFormat } from '../../lib/mimeTypes.js';
 import { ServerError } from '../../lib/errorHandler.js';
 import {
@@ -65,7 +65,7 @@ export function assertRunwayImagePromptLength(fullPrompt, authoredLength, limit)
 
 async function encodeInputImage(path, reviewedBytes = null) {
   const raw = reviewedBytes || await readFile(path);
-  const bytes = stripImageMetadata(raw).data;
+  const { data: bytes } = await stripImageMetadataPreservingOrientation(raw);
   const mime = detectImageFormat(bytes)?.mime;
   const uri = mime ? `data:${mime};base64,${bytes.toString('base64')}` : null;
   // Runway's 5 MB ceiling applies to the encoded URI, including base64 overhead.

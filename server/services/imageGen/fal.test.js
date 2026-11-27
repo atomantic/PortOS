@@ -255,6 +255,24 @@ describe('imageGen/fal — generateImage', () => {
     expect(sent.subarray(sent.indexOf(sosMarker)).equals(source.subarray(source.indexOf(sosMarker)))).toBe(true);
   });
 
+  it('rotates an in-budget EXIF portrait before sending its JPEG bytes to fal', async () => {
+    const source = await sharp(await noiseImage(96, 64))
+      .withMetadata({ orientation: 6 })
+      .jpeg()
+      .toBuffer();
+    await writeFile(join(FAKE_IMAGES_DIR, 'portrait.jpg'), source);
+    const { calls } = fakeFal({ endpoint: 'fal-ai/nano-banana-pro/edit', output: await noiseImage(16, 16) });
+
+    const job = await fal.generateImage({ prompt: 'edit photo', referenceImagePaths: ['portrait.jpg'] });
+    expect((await waitForTerminal(job.jobId)).type).toBe('completed');
+
+    const putCall = calls.find((c) => c.method === 'PUT' && c.url.startsWith('https://fal.media/upload/'));
+    expect(putCall.headers['Content-Type']).toBe('image/jpeg');
+    const sentMeta = await sharp(Buffer.from(putCall.body)).metadata();
+    expect(sentMeta).toMatchObject({ width: 64, height: 96 });
+    expect(sentMeta).not.toHaveProperty('exif');
+  });
+
   it('strips a PNG eXIf chunk on the in-budget pass-through path', async () => {
     const source = await sharp(await noiseImage(64, 64, 'png'))
       .withExif({ IFD0: { Make: 'TestPhone' }, IFD3: { GPSLatitudeRef: 'N' } })
