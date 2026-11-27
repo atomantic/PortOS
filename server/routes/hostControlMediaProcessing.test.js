@@ -20,6 +20,7 @@ const effects = vi.hoisted(() => ({
   startLyricVerify: vi.fn(async () => ({ jobId: 'verify-1' })),
   probeLoraEffect: vi.fn(async () => ({ status: 'active' })),
   renderTimelineProject: vi.fn(async () => ({ jobId: 'render-1' })),
+  cancelTimelineRender: vi.fn(() => true),
   addCoverFont: vi.fn(async () => ({ id: 'font-1' })),
 }));
 
@@ -131,7 +132,7 @@ vi.mock('../services/videoTimeline/local.js', () => ({
   deleteProject: vi.fn(async () => ({})),
   renderProject: effects.renderTimelineProject,
   attachSseClient: vi.fn(() => true),
-  cancelRender: vi.fn(() => true),
+  cancelRender: effects.cancelTimelineRender,
 }));
 
 vi.mock('../services/loras.js', () => ({
@@ -185,6 +186,12 @@ describe('media process execution operator authority', () => {
       auth: state, mounts,
       workflows: routes.map(([path, body, effect]) => ['post', path, body, effect, path.endsWith('/render') || path.endsWith('/effect') ? 200 : 202]),
     });
+  });
+
+  it('requires operator authority to cancel a Video Timeline render', async () => {
+    const workflow = ['post', '/api/video-timeline/render-1/cancel', undefined, effects.cancelTimelineRender, 200];
+    await expectRemoteRefusal(mounts, workflow);
+    await expectAuthorizedWorkflows({ auth: state, mounts, workflows: [workflow] });
   });
 
   it('reaches the cover font upload handler for a local caller (#12493)', async () => {

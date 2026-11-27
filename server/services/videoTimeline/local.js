@@ -28,9 +28,10 @@ import { randomUUID } from 'crypto';
 import { ensureDir, PATHS, readJSONFile, atomicWrite } from '../../lib/fileUtils.js';
 import { ServerError } from '../../lib/errorHandler.js';
 import { broadcastSse, attachSseClient as attachSse, closeJobAfterDelay } from '../../lib/sseUtils.js';
-import { findFfmpeg, findFfprobe, safeUnder, generateThumbnail, probeVideoDuration, BT709_CONTAINER_ARGS, bt709TagFilter } from '../../lib/ffmpeg.js';
+import { findFfmpeg, hasAudioStream, safeUnder, generateThumbnail, probeVideoDuration, BT709_CONTAINER_ARGS, bt709TagFilter } from '../../lib/ffmpeg.js';
 import { safeChildProcessOptions } from '../../lib/processEnv.js';
 import { killWithEscalation } from '../../lib/killWithEscalation.js';
+import { CANCEL_ALREADY_TERMINAL } from '../../lib/cancelResponse.js';
 import { attachFfmpegRenderGuard } from '../../lib/ffmpegRenderGuard.js';
 import { mapWithConcurrency } from '../../lib/mapWithConcurrency.js';
 import { createFileWriteQueue } from '../../lib/fileWriteQueue.js';
@@ -61,8 +62,8 @@ const PROBE_CONCURRENCY = 8;
 const DEFAULT_CANVAS = { width: 1280, height: 720, fps: 24 };
 
 // Per-project render mutex map. Keyed by projectId so two different projects
-// can render in parallel; same project re-render returns 409 with the
-// existing jobId so the UI can attach SSE instead of getting a stale failure.
+// can render in parallel. A reserved ID has no jobs entry until setup succeeds,
+// so conflicts include the job ID only once SSE can attach.
 const jobs = new Map();
 const projectRenders = trackedRenderMap('video-timeline', { noun: 'video timeline render', link: (projectId) => `/media/timeline/${encodeURIComponent(projectId)}` }); // projectId → jobId
 
@@ -241,35 +242,13 @@ async function deleteProjectNow(id) {
 // Render pipeline
 // =====================================================================
 
-// ffprobe a clip to find out whether it has an audio stream. Used to decide
-// whether to wire the clip's audio through trim/aresample chain or to insert
-// an anullsrc silent input. Falls back to false when ffprobe is missing so
-// the render can still proceed (silent track inserted for every clip).
-const probeAudio = async (videoPath) => {
-  const ffprobe = await findFfprobe();
-  if (!ffprobe) return false;
-  return new Promise((resolve) => {
-    const proc = spawn(ffprobe, [
-      '-v', 'error',
-      '-select_streams', 'a:0',
-      '-show_entries', 'stream=codec_type',
-      '-of', 'default=nw=1:nk=1',
-      videoPath,
-    ], safeChildProcessOptions({ stdio: ['ignore', 'pipe', 'ignore'] }));
-    let out = '';
-    proc.stdout.on('data', (c) => { out += c.toString(); });
-    proc.on('close', () => resolve(out.trim() === 'audio'));
-    proc.on('error', () => resolve(false));
-  });
-};
-
 // Run `probe` over the DISTINCT paths in `paths`, bounded by PROBE_CONCURRENCY,
 // and return a path → result map. Deduping here rather than at the call site
 // keeps a timeline that reuses one source from spawning an ffprobe per
 // placement.
 const probeByPath = async (paths, probe) => {
   const distinct = [...new Set(paths)];
-  const results = await mapWithConcurrency(distinct, PROBE_CONCURRENCY, probe);
+  const results = await mapWithConcurrency(distinct, PROBE_CONCURRENCY, (path) => probe(path));
   return new Map(distinct.map((p, i) => [p, results[i]]));
 };
 
@@ -349,7 +328,7 @@ export async function resolveTimeline(rawProject) {
   // wall clock — each stays capped at PROBE_CONCURRENCY on its own.
   const clipEntries = prepared.filter((p) => p.kind === 'clip');
   const [audioFlagByPath, durationByPath] = await Promise.all([
-    probeByPath(clipEntries.map((p) => p.videoPath), probeAudio),
+    probeByPath(clipEntries.map((p) => p.videoPath), hasAudioStream),
     probeByPath(audioTracks.map((tr) => tr.assetPath), probeVideoDuration),
   ]);
 
@@ -583,62 +562,66 @@ export function buildFfmpegArgs(timeline, outputPath, { colorTagFilter = null } 
 
 export function cancelRender(jobId) {
   const job = jobs.get(jobId);
-  if (!job || !job.process) return false;
+  if (!job) return false;
   const proc = job.process;
+  if (!proc || proc.exitCode != null || proc.signalCode != null) return CANCEL_ALREADY_TERMINAL;
+  // ffmpeg can handle SIGTERM itself and report an exit code with no signal.
+  job.cancelRequested = true;
   killWithEscalation(proc, { label: 'ffmpeg render', stillRunning: () => job.process === proc });
   return true;
 }
 
 export async function renderProject(projectId, options = {}) {
   const permit = maintenance.admit('timeline', projectId, { continuation: true, parentKinds: ['media'] });
-  try { return await permit.run(() => renderAdmittedProject(projectId, options, permit)); }
-  catch (err) { permit.finish(); throw err; }
+  const jobId = randomUUID();
+  const releaseSlot = () => {
+    if (projectRenders.get(projectId) === jobId) projectRenders.delete(projectId);
+    permit.finish();
+  };
+  try {
+    const existingJobId = projectRenders.get(projectId);
+    if (existingJobId) {
+      throw new ServerError('Render already in progress for this project', {
+        status: 409,
+        code: 'RENDER_IN_PROGRESS',
+        context: jobs.has(existingJobId) ? { jobId: existingJobId } : undefined,
+      });
+    }
+    projectRenders.set(projectId, jobId);
+    return await permit.run(() => renderAdmittedProject(projectId, jobId, options, permit, releaseSlot));
+  } catch (err) {
+    releaseSlot();
+    throw err;
+  }
 }
 
-async function renderAdmittedProject(projectId, { posterSec } = {}, permit) {
+async function renderAdmittedProject(projectId, jobId, { posterSec } = {}, permit, releaseSlot) {
   const project = await getProject(projectId);
   if (!project) throw new ServerError('Project not found', { status: 404, code: 'NOT_FOUND' });
-
-  // Per-project mutex — return the existing jobId so the UI can re-attach
-  // SSE instead of getting a stale 500. A different project can render in
-  // parallel; only same-project re-entry is blocked.
-  const existingJob = projectRenders.get(projectId);
-  if (existingJob && jobs.has(existingJob)) {
-    throw new ServerError('Render already in progress for this project', {
-      status: 409, code: 'RENDER_IN_PROGRESS', context: { jobId: existingJob },
-    });
-  }
 
   const ffmpeg = await findFfmpeg();
   if (!ffmpeg) throw new ServerError('ffmpeg not found on PATH', { status: 500, code: 'FFMPEG_MISSING' });
 
-  // Resolve every lane and build args BEFORE claiming the mutex — if either
-  // step throws (missing clips or assets, validation), a stale projectRenders
-  // entry would permanently block future renders of this project.
   const timeline = await resolveTimeline(project);
   await ensureDir(PATHS.videos);
   await ensureDir(PATHS.videoThumbnails);
 
-  const jobId = randomUUID();
   const filename = `timeline-${projectId.slice(0, 8)}-${Date.now()}.mp4`;
   const outputPath = join(PATHS.videos, filename);
   const { args, totalDuration, canonW, canonH, fps } = buildFfmpegArgs(timeline, outputPath, { colorTagFilter: await bt709TagFilter() });
 
+  const proc = spawn(ffmpeg, args, safeChildProcessOptions({ stdio: ['ignore', 'ignore', 'pipe'] }));
   const job = {
     id: jobId,
     projectId,
     status: 'running',
     clients: [],
-    process: null,
+    process: proc,
     totalDuration,
   };
   jobs.set(jobId, job);
-  projectRenders.set(projectId, jobId);
 
   console.log(`🎞️ Rendering timeline [${jobId.slice(0, 8)}]: project=${projectId.slice(0, 8)} segments=${timeline.segments.length} overlays=${timeline.overlays.length} beds=${timeline.audioTracks.length} duration=${totalDuration.toFixed(2)}s`);
-
-  const proc = spawn(ffmpeg, args, safeChildProcessOptions({ stdio: ['ignore', 'ignore', 'pipe'] }));
-  job.process = proc;
 
   // ffmpeg's -progress pipe:2 emits key=value lines, one per line, every
   // few hundred ms. The relevant key is `out_time_us` (microseconds of
@@ -688,9 +671,8 @@ async function renderAdmittedProject(projectId, { posterSec } = {}, permit) {
       job.lastError = reason;
       console.error(`❌ Timeline render spawn error [${jobId.slice(0, 8)}]: ${reason}`);
       broadcastSse(job, { type: 'error', error: reason });
-      projectRenders.delete(projectId);
+      releaseSlot();
       closeJobAfterDelay(jobs, jobId);
-      permit.finish();
     },
     onClose: async (code, signal) => {
       // Runs outside the request lifecycle — an uncaught throw from
@@ -698,8 +680,8 @@ async function renderAdmittedProject(projectId, { posterSec } = {}, permit) {
       // wrap the body and surface the failure over SSE instead.
       try {
         job.process = null;
-        if (code !== 0) {
-          const canceled = signal === 'SIGTERM' || signal === 'SIGKILL';
+        const canceled = job.cancelRequested || signal === 'SIGTERM' || signal === 'SIGKILL';
+        if (canceled || code !== 0) {
           // 'canceled' (single l) matches every other SSE emitter in the app —
           // useSseProgress treats it as terminal.
           job.status = canceled ? 'canceled' : 'error';
@@ -712,9 +694,6 @@ async function renderAdmittedProject(projectId, { posterSec } = {}, permit) {
           logClose(`${canceled ? '🛑' : '❌'} Timeline render ${canceled ? 'cancelled' : 'failed'} [${jobId.slice(0, 8)}]: ${reason}`);
           await unlink(outputPath).catch((err) => { if (err.code !== 'ENOENT') maintenance.markCurrentUnsettled(); });
           broadcastSse(job, { type: canceled ? 'canceled' : 'error', error: reason });
-          projectRenders.delete(projectId);
-          closeJobAfterDelay(jobs, jobId);
-          permit.finish();
           return;
         }
         const thumb = await withBackupAssetPublication(async () => {
@@ -756,9 +735,6 @@ async function renderAdmittedProject(projectId, { posterSec } = {}, permit) {
         job.status = 'complete';
         console.log(`✅ Timeline rendered [${jobId.slice(0, 8)}]: ${filename}`);
         broadcastSse(job, { type: 'complete', result: { id: jobId, filename, thumbnail: thumb, path: `/data/videos/${filename}` } });
-        projectRenders.delete(projectId);
-        closeJobAfterDelay(jobs, jobId);
-        permit.finish();
       } catch (err) {
         permit.markUnsettled();
         const reason = `Post-render failed: ${err.message}`;
@@ -766,9 +742,9 @@ async function renderAdmittedProject(projectId, { posterSec } = {}, permit) {
         job.lastError = reason;
         console.error(`❌ Timeline render post-processing error [${jobId.slice(0, 8)}]: ${reason}`);
         broadcastSse(job, { type: 'error', error: reason });
-        projectRenders.delete(projectId);
+      } finally {
+        releaseSlot();
         closeJobAfterDelay(jobs, jobId);
-        permit.finish();
       }
     },
   });

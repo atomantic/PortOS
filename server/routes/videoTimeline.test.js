@@ -1,6 +1,7 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import express from 'express';
 import { request } from '../lib/testHelper.js';
+import { CANCEL_ALREADY_TERMINAL } from '../lib/cancelResponse.js';
 import { errorMiddleware } from '../lib/errorHandler.js';
 
 vi.mock('../services/videoTimeline/local.js', () => ({
@@ -148,6 +149,25 @@ describe('videoTimeline routes', () => {
       const r = await request(app).post('/api/video-timeline/projects/p1/render').send({});
       expect(r.status).toBe(200);
       expect(svc.renderProject.mock.calls[0][0]).toBe('p1');
+    });
+  });
+
+  describe('POST /:jobId/cancel', () => {
+    it('accepts cancellation for an active render', async () => {
+      const r = await request(app).post('/api/video-timeline/job-123/cancel');
+      expect(r.status).toBe(200);
+      expect(r.body).toEqual({ ok: true });
+      expect(svc.cancelRender).toHaveBeenCalledWith('job-123');
+    });
+
+    it.each([
+      [false, 404, 'NOT_FOUND'],
+      [CANCEL_ALREADY_TERMINAL, 409, 'ALREADY_TERMINAL'],
+    ])('maps %j to HTTP %i', async (result, status, code) => {
+      svc.cancelRender.mockReturnValueOnce(result);
+      const r = await request(app).post('/api/video-timeline/job-123/cancel');
+      expect(r.status).toBe(status);
+      expect(r.body.code).toBe(code);
     });
   });
 
