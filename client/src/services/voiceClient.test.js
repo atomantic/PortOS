@@ -1010,3 +1010,32 @@ describe('speakSynthesized error envelope handling', () => {
     });
   });
 });
+
+describe('voiceClient output volume and mute controls', () => {
+  it('clamps volume, persists preferences, notifies subscribers, and routes playback through gain', async () => {
+    const snapshots = [];
+    const unsub = voiceClient.onVoiceAudioPrefs((prefs) => snapshots.push(prefs));
+    try {
+      voiceClient.setVoiceVolume(0.4);
+      expect(voiceClient.getVoiceVolume()).toBe(0.4);
+      expect(localStorage.getItem('portos.voice.volume')).toBe('0.4');
+
+      voiceClient.setVoiceVolume(2.5);
+      expect(voiceClient.getVoiceVolume()).toBe(1);
+
+      voiceClient.setVoiceMuted(true);
+      expect(voiceClient.isVoiceMuted()).toBe(true);
+      expect(localStorage.getItem('portos.voice.muted')).toBe('1');
+      expect(voiceClient.getVoiceOutputLevel()).toBe(0);
+
+      voiceClient.setVoiceMuted(false);
+      expect(voiceClient.isVoiceMuted()).toBe(false);
+      expect(localStorage.getItem('portos.voice.muted')).toBe('0');
+      expect(snapshots.at(-1)).toEqual({ volume: 1, muted: false });
+    } finally {
+      unsub();
+      voiceClient.setVoiceVolume(0.85);
+      voiceClient.setVoiceMuted(false);
+    }
+  });
+});

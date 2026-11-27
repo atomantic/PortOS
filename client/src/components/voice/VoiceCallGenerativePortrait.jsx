@@ -57,7 +57,7 @@ function animateWav(canvas, wav, onStop, onUnavailable) {
   };
 }
 
-export default function VoiceCallGenerativePortrait({ running }) {
+export default function VoiceCallGenerativePortrait({ running, fill = false }) {
   const canvas = useRef(null);
   const [unavailable, setUnavailable] = useState(false);
   useEffect(() => {
@@ -80,12 +80,12 @@ export default function VoiceCallGenerativePortrait({ running }) {
     };
   }, [running]);
 
-  return <div className="w-[min(64vw,15rem)] max-w-full">
-    <div className="relative aspect-square overflow-hidden rounded-lg bg-port-card shadow-lg">
+  return <div className={fill ? 'w-full max-w-full' : 'w-[min(64vw,15rem)] max-w-full'}>
+    <div className={`relative aspect-square overflow-hidden bg-port-card ${fill ? 'w-full' : 'rounded-lg shadow-lg'}`}>
       <img src={portraitUrl} alt="Radio operator portrait" className="block size-full object-cover" />
       <canvas ref={canvas} role="presentation" width={512} height={512} style={{ visibility: 'hidden' }} className="pointer-events-none absolute inset-0 size-full" />
     </div>
-    {running && unavailable && <p role="status" className="pt-1 text-center text-xs text-port-text-muted">
+    {running && unavailable && <p role="status" className="px-2 pt-1.5 pb-1 text-center font-mono text-[11px] text-port-text-muted">
       No avatar frames arrived. Voice audio still works.
     </p>}
   </div>;

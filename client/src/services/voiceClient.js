@@ -13,6 +13,7 @@ import { subscribeVisibility } from '../hooks/useVisibilityEvent.js';
 import { sleep } from '../utils/sleep.js';
 import { resumeAudioContext, acquireAudioSession } from '../lib/audioContext.js';
 import { blobToWav16k, float32ToWav16k, MAX_VOICE_AUDIO_BYTES, RECORDING_TOO_LONG_MESSAGE } from '../lib/audioRecorder.js';
+import { safeReadStorage, safeWriteStorage } from '../lib/safeStorage.js';
 import { ECHO_WINDOW_MS, MIN_TOKENS_FOR_ECHO_CHECK, MIN_SHARED_TRIGRAMS, tokenize, trigramsOf } from '../../../server/lib/voiceEcho.js';
 
 // iOS audio-session claims held while a mic stream is open — one per capture
@@ -32,6 +33,82 @@ let recorderGeneration = 0;
 let recorderStartPendingGeneration = null;
 let recorderSessionGeneration = null;
 let audioCtx = null;
+let outputGain = null;
+let outputAnalyser = null;
+let outputAnalyserBuf = null;
+
+const VOLUME_KEY = 'portos.voice.volume';
+const MUTED_KEY = 'portos.voice.muted';
+const DEFAULT_VOICE_VOLUME = 0.85;
+
+const readStoredVolume = () => {
+  const raw = safeReadStorage(VOLUME_KEY);
+  if (raw === null) return DEFAULT_VOICE_VOLUME;
+  const parsed = Number.parseFloat(raw);
+  return Number.isFinite(parsed) ? Math.max(0, Math.min(1, parsed)) : DEFAULT_VOICE_VOLUME;
+};
+
+let voiceVolume = readStoredVolume();
+let voiceMuted = safeReadStorage(MUTED_KEY) === '1';
+const audioPrefsListeners = new Set();
+
+const applyOutputGain = () => {
+  if (!outputGain?.gain) return;
+  outputGain.gain.value = voiceMuted ? 0 : voiceVolume;
+};
+
+const notifyAudioPrefs = () => {
+  const snapshot = { volume: voiceVolume, muted: voiceMuted };
+  for (const fn of audioPrefsListeners) fn(snapshot);
+};
+
+export const getVoiceVolume = () => voiceVolume;
+
+export const setVoiceVolume = (next) => {
+  const numeric = Number(next);
+  if (!Number.isFinite(numeric)) return voiceVolume;
+  const clamped = Math.round(Math.max(0, Math.min(1, numeric)) * 100) / 100;
+  if (clamped === voiceVolume) return voiceVolume;
+  voiceVolume = clamped;
+  safeWriteStorage(VOLUME_KEY, String(clamped));
+  applyOutputGain();
+  notifyAudioPrefs();
+  return voiceVolume;
+};
+
+export const isVoiceMuted = () => voiceMuted;
+
+export const setVoiceMuted = (next) => {
+  const flag = Boolean(next);
+  if (flag === voiceMuted) return voiceMuted;
+  voiceMuted = flag;
+  safeWriteStorage(MUTED_KEY, flag ? '1' : '0');
+  applyOutputGain();
+  notifyAudioPrefs();
+  return voiceMuted;
+};
+
+export const onVoiceAudioPrefs = (handler) => {
+  audioPrefsListeners.add(handler);
+  handler({ volume: voiceVolume, muted: voiceMuted });
+  return () => audioPrefsListeners.delete(handler);
+};
+
+// Live RMS amplitude (0..1) of currently-playing assistant TTS output for the
+// transceiver signal meter. Returns 0 when idle, muted, or analyser unavailable.
+export const getVoiceOutputLevel = () => {
+  if (!outputAnalyser || !outputAnalyserBuf || !isTtsActive() || voiceMuted) return 0;
+  if (typeof outputAnalyser.getFloatTimeDomainData === 'function') {
+    outputAnalyser.getFloatTimeDomainData(outputAnalyserBuf);
+    let sum = 0;
+    for (let i = 0; i < outputAnalyserBuf.length; i += 1) {
+      const sample = outputAnalyserBuf[i];
+      sum += sample * sample;
+    }
+    return Math.min(1, Math.sqrt(sum / outputAnalyserBuf.length) * 2.2);
+  }
+  return 0;
+};
 
 // Capture engines are module-level because the widget can be hidden and shown
 // without recreating the browser resources. The widget itself is not immortal:
@@ -65,11 +142,36 @@ const pickMime = () => {
   return 'audio/webm';
 };
 
+const ensureOutputGraph = (ctx) => {
+  if (outputGain && outputGain._ctx === ctx) return outputGain;
+  outputGain = null;
+  outputAnalyser = null;
+  outputAnalyserBuf = null;
+  if (typeof ctx.createGain !== 'function') return null;
+  const gain = ctx.createGain();
+  gain._ctx = ctx;
+  gain.gain.value = voiceMuted ? 0 : voiceVolume;
+  if (typeof ctx.createAnalyser === 'function') {
+    const analyser = ctx.createAnalyser();
+    analyser.fftSize = 256;
+    analyser.smoothingTimeConstant = 0.6;
+    gain.connect(analyser);
+    analyser.connect(ctx.destination);
+    outputAnalyser = analyser;
+    outputAnalyserBuf = new Float32Array(analyser.fftSize);
+  } else {
+    gain.connect(ctx.destination);
+  }
+  outputGain = gain;
+  return outputGain;
+};
+
 const ensureCtx = () => {
   if (!audioCtx) {
     const Ctor = window.AudioContext || window.webkitAudioContext;
     audioCtx = new Ctor();
   }
+  ensureOutputGraph(audioCtx);
   // Fire-and-forget so ensureCtx stays sync — TTS playback schedules against the
   // context a beat later. Covers iOS's `'interrupted'`, not just `'suspended'`.
   resumeAudioContext(audioCtx).catch(() => {});
@@ -138,7 +240,8 @@ async function playDecodedVoice(buffer, bytes, ctx, generation, animate) {
   if (generation !== playback.decodeGeneration) return;
   const src = ctx.createBufferSource();
   src.buffer = buffer;
-  src.connect(ctx.destination);
+  const sink = ensureOutputGraph(ctx) || ctx.destination;
+  src.connect(sink);
   playback.source = src;
   playback.startedAt = ctx.currentTime;
   animation?.start(() => ctx.currentTime - playback.startedAt);
