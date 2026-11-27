@@ -253,6 +253,36 @@ function App(){const[value,setValue]=useState(null);window.show=(project,data,t)
     await compare(base({ ...still, camera: { move: 'dutch-roll', speed: 'fast', onBeat: true } }), 1.25, { name: 'beat-snap' });
     await compare(base({ ...still, visualLayer: 'footage', videoHistoryId: 'clip' }), 1.25, { name: 'footage-breathing' });
   });
+  it('holds the last clip picture instead of flashing its reference still during a paused frame step', async () => {
+    const value = base({ ...still, visualLayer: 'footage', videoHistoryId: 'clip' });
+    await compare(value, 1.25);
+    const before = await native.evaluate(() => {
+      const canvas = document.querySelector('[data-testid="document-template-canvas"]');
+      const clip = document.querySelector('video[data-document-scene]');
+      Object.defineProperty(clip, 'seeking', { configurable: true, get: () => true });
+      return { frame: Number(canvas.dataset.songFrame), pixels: canvas.toDataURL() };
+    });
+    try {
+      await native.getByRole('button', { name: 'Forward 1 frame', exact: true }).click();
+      await native.waitForFunction(frame => Math.round(document.querySelector('audio').currentTime * 24) >= frame, before.frame + 1);
+      const during = await native.evaluate(async () => {
+        await new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve)));
+        const canvas = document.querySelector('[data-testid="document-template-canvas"]');
+        return { frame: Number(canvas.dataset.songFrame), pixels: canvas.toDataURL() };
+      });
+      expect(during.frame).toBe(before.frame);
+      expect(during.pixels === before.pixels).toBe(true);
+    } finally {
+      await native.evaluate(() => {
+        const clip = document.querySelector('video[data-document-scene]');
+        delete clip.seeking;
+        clip.dispatchEvent(new Event('seeked'));
+      });
+    }
+    await native.waitForFunction(frame => document.querySelector('[data-testid="document-template-canvas"]').dataset.songFrame === String(frame), before.frame + 1);
+    await compare(value, (before.frame + 1) / 24, { reuse: true });
+  });
+
   it('repaints paused footage when presentation follows the seeked paint', async () => {
     // Pin the observed ordering without sleeps: seeked/readyState can precede
     // the drawable frame. Release the real compositor callbacks only after the
