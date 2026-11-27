@@ -6,6 +6,7 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { join } from 'path';
 import { tmpdir } from 'os';
+import { EventEmitter } from 'node:events';
 
 // vi.mock factories are hoisted above imports; the shared fixtures module is
 // loaded the same way so its state objects outlive vi.resetModules().
@@ -266,6 +267,43 @@ describe('extractLastFrame — anchor selection', () => {
     expect(vi.mocked(unlink)).toHaveBeenCalledWith(sidecarPath);
     const sidecar = JSON.parse(vi.mocked(writeFile).mock.calls.at(-1)[1]);
     expect(sidecar).toMatchObject({ extractedAt: 'last-frame' });
+  });
+
+  it('terminates a hung end seek and removes its partial anchor', async () => {
+    await seedHistory();
+    fsState.missOnce = [ANCHOR];
+    anchorPick.best = null;
+    const { spawn } = await import('../../lib/childProcess.js');
+    const { unlink } = await import('fs/promises');
+    const child = Object.assign(new EventEmitter(), {
+      exitCode: null,
+      signalCode: null,
+      kill: vi.fn(signal => {
+        if (signal === 'SIGKILL') child.emit('close', null, signal);
+      }),
+    });
+    const { promise: started, resolve: markStarted } = Promise.withResolvers();
+    vi.mocked(spawn).mockImplementationOnce(() => fx.makeProc()).mockImplementationOnce(() => {
+      // Leave the scan and fixture I/O on the real clock.
+      vi.useFakeTimers();
+      markStarted();
+      return child;
+    });
+    const result = expect(extractLastFrame(ID)).rejects.toMatchObject({ code: 'FFMPEG_FAILED' });
+    try {
+      await started;
+      await vi.advanceTimersByTimeAsync(29_999);
+      expect(child.kill).not.toHaveBeenCalled();
+      await vi.advanceTimersByTimeAsync(1);
+      expect(child.kill.mock.calls).toEqual([['SIGTERM']]);
+      const { FFMPEG_KILL_GRACE_MS } = await import('../../lib/ffmpeg/process.js');
+      await vi.advanceTimersByTimeAsync(FFMPEG_KILL_GRACE_MS);
+      await result;
+      expect(child.kill.mock.calls).toEqual([['SIGTERM'], ['SIGKILL']]);
+      expect(unlink).toHaveBeenCalledWith(join(MOCK_PATHS.images, ANCHOR));
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it('falls back to the end seek when no candidate is usable', async () => {

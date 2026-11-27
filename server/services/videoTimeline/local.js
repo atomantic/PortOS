@@ -328,7 +328,7 @@ export async function resolveTimeline(rawProject) {
   // wall clock — each stays capped at PROBE_CONCURRENCY on its own.
   const clipEntries = prepared.filter((p) => p.kind === 'clip');
   const [audioFlagByPath, durationByPath] = await Promise.all([
-    probeByPath(clipEntries.map((p) => p.videoPath), hasAudioStream),
+    probeByPath(clipEntries.map((p) => p.videoPath), path => hasAudioStream(path, { timeoutMs: 15_000 })),
     probeByPath(audioTracks.map((tr) => tr.assetPath), probeVideoDuration),
   ]);
 

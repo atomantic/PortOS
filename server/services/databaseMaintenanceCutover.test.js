@@ -13,6 +13,13 @@ import { STUB_DUMP_COMPLETE, installDatabaseStubs } from '../test/fixtures/datab
 import { installCutoverStubs, restartedServerEndpoint } from '../test/fixtures/databaseCutoverStubs.js';
 import { snapshotProcesses } from '../lib/detachedSpawn.js';
 
+vi.mock('../lib/bufferedSpawn.js', async original => {
+  const actual = await original();
+  return { ...actual, bufferedSpawn: vi.fn(actual.bufferedSpawn) };
+});
+const { bufferedSpawn } = await import('../lib/bufferedSpawn.js');
+const { bufferedSpawn: realBufferedSpawn } = await vi.importActual('../lib/bufferedSpawn.js');
+
 const context = vi.hoisted(() => ({ root: undefined, list: null, stop: null, restart: null }));
 vi.mock('../lib/paths.js', async original => {
   const actual = await original();
@@ -104,6 +111,7 @@ afterEach(async () => {
   for (const key of Object.keys(process.env)) if (!(key in savedEnv)) delete process.env[key];
   Object.assign(process.env, savedEnv);
   await cutover?.stopSurrogates();
+  bufferedSpawn.mockReset();
   context.root = undefined;
   rmSync(root, { recursive: true, force: true });
 });
@@ -288,6 +296,24 @@ describe.skipIf(process.platform === 'win32')('offline database cutover', () => 
     expect(context.restart.mock.calls.filter(([name]) => name === 'portos-server')).toHaveLength(1);
     expect(stubs.invocations('pg_dump')).toHaveLength(1);
     expect(stubs.invocations('psql')).toHaveLength(1);
+  }, 60_000);
+
+  it('keeps maintenance fenced when the saved endpoint probe times out', async () => {
+    begin();
+    writeFileSync(join(root, 'ecosystem.config.cjs'), 'setInterval(() => {}, 1000);');
+    let probe;
+    bufferedSpawn.mockImplementation(async (bin, args, options) => {
+      if (bin !== process.execPath || args[0] !== '-e') return realBufferedSpawn(bin, args, options);
+      expect(options).toMatchObject({ cwd: root, timeoutMs: 15_000, processGroup: true });
+      probe = await realBufferedSpawn(bin, args, { ...options, timeoutMs: 250, killGraceMs: 250 });
+      return probe;
+    });
+
+    await expect(run()).rejects.toMatchObject({ code: 'DATABASE_CUTOVER' });
+    expect(probe).toMatchObject({ timedOut: true });
+    expect(journal.read()).toMatchObject({ stage: 'committing' });
+    expect(journal.isFenced()).toBe(true);
+    expect(context.restart).not.toHaveBeenCalled();
   }, 60_000);
 
   it.each(['before', 'after', 'reverted'])('recovers a mode commit interrupted %s the .env write without guessing or reversing', async (point) => {
