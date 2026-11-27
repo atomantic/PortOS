@@ -11,6 +11,7 @@ const api = vi.hoisted(() => ({
   getCosLearningDurations: vi.fn(),
   recheckCosAgentCleanup: vi.fn(),
   updateCosTask: vi.fn(),
+  reorderCosTasks: vi.fn(),
 }));
 const toast = vi.hoisted(() => ({ success: vi.fn(), info: vi.fn(), error: vi.fn() }));
 
@@ -19,11 +20,25 @@ vi.mock('../../../services/apiAgents.js', () => ({
   getCosLearningDurations: api.getCosLearningDurations,
   recheckCosAgentCleanup: api.recheckCosAgentCleanup,
   updateCosTask: api.updateCosTask,
+  reorderCosTasks: api.reorderCosTasks,
 }));
 vi.mock('../../ui/Toast', () => ({ default: toast }));
 // TaskAddForm pulls in provider/model plumbing not under test — stub it out.
 vi.mock('./AgentCard', () => ({ default: ({ agent, liveOutput }) => <div>Active agent {agent.id}{liveOutput?.map((entry, i) => <p key={i}>{entry.line}</p>)}</div> }));
 vi.mock('../TaskAddForm', () => ({ default: () => null }));
+
+const drag = vi.hoisted(() => ({ onDragEnd: null }));
+vi.mock('../../../lib/dnd/index.js', async importOriginal => {
+  const actual = await importOriginal();
+  const RealDndContext = actual.DndContext;
+  return {
+    ...actual,
+    DndContext: props => {
+      drag.onDragEnd = props.onDragEnd;
+      return <RealDndContext {...props} />;
+    },
+  };
+});
 
 const TasksTab = (await import('./TasksTab')).default;
 
@@ -37,6 +52,37 @@ const renderTab = (props = {}, route = '/cos/tasks') => render(
 beforeEach(() => {
   vi.clearAllMocks();
   api.getCosLearningDurations.mockResolvedValue(null);
+});
+
+it('ignores a drop whose source or target was removed from the current queue', async () => {
+  const pendingTask = id => ({ id, description: `Queue task ${id}`, status: 'pending', metadata: {} });
+  const first = pendingTask('first');
+  const second = pendingTask('second');
+  const removed = pendingTask('removed');
+  const onRefresh = vi.fn();
+  api.reorderCosTasks.mockResolvedValue({ success: true });
+  const view = tasks => (
+    <MemoryRouter><TasksTab tasks={{ user: { tasks }, cos: { tasks: [] } }} onRefresh={onRefresh} providers={[]} apps={[]} /></MemoryRouter>
+  );
+  const { rerender } = render(view([first, second, removed]));
+  expect(await screen.findByText('Queue task removed')).toBeInTheDocument();
+  rerender(view([first, second]));
+  await waitFor(() => expect(screen.queryByText('Queue task removed')).not.toBeInTheDocument());
+
+  const drop = (active, over) => act(async () => {
+    await drag.onDragEnd({ active: { id: active }, over: { id: over } });
+  });
+  const queueOrder = () => screen.getAllByRole('button', { name: /Drag to reorder task/ }).map(button => button.getAttribute('aria-label'));
+  await drop(removed.id, first.id);
+  await drop(first.id, removed.id);
+
+  expect(api.reorderCosTasks).not.toHaveBeenCalled();
+  expect(queueOrder()).toEqual(['Drag to reorder task first', 'Drag to reorder task second']);
+
+  await drop(first.id, second.id);
+  expect(api.reorderCosTasks).toHaveBeenCalledWith([second.id, first.id], { silent: true });
+  expect(queueOrder()).toEqual(['Drag to reorder task second', 'Drag to reorder task first']);
+  expect(onRefresh).toHaveBeenCalledTimes(1);
 });
 
 it('opens and focuses the task identified by the queue deep link', async () => {
