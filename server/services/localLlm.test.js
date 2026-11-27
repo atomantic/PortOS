@@ -134,6 +134,7 @@ const mocks = vi.hoisted(() => ({
     getBaseUrl: vi.fn(() => 'http://localhost:11434'),
     getInstalledModels: vi.fn(async () => []),
     getModelCapabilities: vi.fn(async () => []),
+    getModelLayout: vi.fn(async () => ({ modelInfo: null, runner: null })),
     pullModel: vi.fn(async (id) => ({ success: true, modelId: id })),
     deleteModel: vi.fn(async (id) => ({ success: true, modelId: id })),
     getLoadedModels: vi.fn(async () => []),
