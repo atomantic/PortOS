@@ -58,9 +58,7 @@ av==18.1.1 ; python_full_version < '3.12' and platform_machine == 'arm64' and sy
     --hash=sha256:c3a3bb19b3d570fada856e58a67628436e0530d65f8668a45c8c22dfed699b7a \
     --hash=sha256:e0b7d988e5013866426fb6ab5b06c7797f80d6e2c04ff72aaf71121e93d5a670 \
     --hash=sha256:e3bddd6bb9873e87e9e9217e2ebc454700a67b0728368901620fc7ae86d601d7
-    # via
-    #   -r requirements-auk-mlx.txt
-    #   qwen-omni-utils
+    # via qwen-omni-utils, -r requirements-auk-mlx.txt
 av==19.0.2 ; python_full_version >= '3.12' and platform_machine == 'arm64' and sys_platform == 'darwin' \
     --hash=sha256:04c8e412642c652cb2b1997a9cb2114546ee7d894600c631f4be8ceb26a0d0d2 \
     --hash=sha256:0e425d631510ca21e47c58f3837a9dceae0453c24e926408c8a12b95239cbbd6 \
