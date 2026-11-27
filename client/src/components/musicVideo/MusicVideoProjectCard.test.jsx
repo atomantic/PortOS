@@ -45,7 +45,7 @@ describe('MusicVideoProjectCard', () => {
   it('offers a distinct review action for an existing final render', () => {
     const onSelect = vi.fn(), onReview = vi.fn();
     render(<MusicVideoProjectCard project={{ ...BASE_PROJECT, renderHistoryId: 'example-final' }} onSelect={onSelect} onReview={onReview} />);
-    fireEvent.click(screen.getByRole('button', { name: 'Review video' }));
+    fireEvent.click(screen.getByRole('button', { name: `Review video ${BASE_PROJECT.name}` }));
     expect(onReview).toHaveBeenCalledTimes(1);
     expect(onSelect).not.toHaveBeenCalled();
   });
@@ -66,7 +66,7 @@ describe('MusicVideoProjectCard', () => {
     expect(screen.getByText('Ready to review')).toBeInTheDocument();
     fireEvent.error(container.querySelector('video'));
     expect(screen.queryByText('Ready to review')).toBeNull();
-    fireEvent.click(screen.getByRole('button', { name: 'Play Imported draft · v2' }));
+    fireEvent.click(screen.getByRole('button', { name: `Play Imported draft · v2 for ${project.name}` }));
     await waitFor(() => expect(container.querySelector('video')?.getAttribute('src')).toContain(src));
     fireEvent.error(container.querySelector('video'));
     fireEvent.click(screen.getByRole('button', { name: 'Retry' }));
@@ -148,7 +148,7 @@ describe('MusicVideoProjectCard', () => {
       expect(screen.getByRole('heading', { name: 'Cyber Horizon' })).toBeInTheDocument();
       expect(screen.queryByRole('button', { name: 'Cyber Horizon' })).toBeNull();
       expect(screen.queryByRole('button', { name: /Open project/ })).toBeNull();
-      const entry = screen.getByRole('button', { name: /^(Open|Review video|Review draft)\b/ });
+      const entry = screen.getByRole('button', { name: /^(Open|Review video|Review draft) Cyber Horizon$/ });
       fireEvent.click(entry);
       const expected = name === 'final' || name === 'imported' ? onReview : onSelect;
       expect(expected).toHaveBeenCalledTimes(1);
@@ -195,7 +195,7 @@ describe('MusicVideoProjectCard', () => {
     );
 
     // Fork
-    fireEvent.click(screen.getByRole('button', { name: /Fork/i }));
+    fireEvent.click(screen.getByRole('button', { name: `Fork ${BASE_PROJECT.name}` }));
     expect(onClone).toHaveBeenCalledTimes(1);
 
     // Delete request
@@ -245,9 +245,9 @@ describe('MusicVideoProjectCard run pill and version switcher', () => {
     );
     expect(screen.getByTestId('mv-run-pill-mv-card-1').textContent).toBe('Needs you');
     expect(screen.getByText('v2 of 3')).toBeTruthy();
-    fireEvent.click(screen.getByLabelText('Older version'));
+    fireEvent.click(screen.getByRole('button', { name: `Older version of ${BASE_PROJECT.name}` }));
     expect(onVersionStep).toHaveBeenCalledWith(1);
-    expect(screen.getByLabelText('Newer version').disabled).toBe(true);
+    expect(screen.getByRole('button', { name: `Newer version of ${BASE_PROJECT.name}` }).disabled).toBe(true);
   });
 });
 

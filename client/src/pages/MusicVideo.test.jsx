@@ -270,7 +270,7 @@ describe('MusicVideo project status filter', () => {
     fireEvent.click(screen.getByRole('button', { name: 'All' }));
     expect(await screen.findByRole('heading', { name: 'Working' })).toBeInTheDocument();
     expect(screen.getByRole('heading', { name: 'Finished' })).toBeInTheDocument();
-    fireEvent.click(within(screen.getByTestId('mv-project-card-mv-2')).getByRole('button', { name: 'Open' }));
+    fireEvent.click(within(screen.getByTestId('mv-project-card-mv-2')).getByRole('button', { name: 'Open Finished' }));
     await waitFor(() => expect(screen.getByTestId('loc')).toHaveTextContent('/music-video/mv-2'));
     expect(updateMusicVideoProject).not.toHaveBeenCalled();
   });
@@ -1285,7 +1285,7 @@ describe('MusicVideo main page project cards', () => {
     renderMV();
 
     const card = await screen.findByTestId(`mv-project-card-${PROJECT_WITH_CLIP.id}`);
-    const openBtn = within(card).getByRole('button', { name: /^Open$/i });
+    const openBtn = within(card).getByRole('button', { name: `Open ${PROJECT_WITH_CLIP.name}` });
 
     await act(async () => {
       fireEvent.click(openBtn);
@@ -1316,7 +1316,7 @@ describe('MusicVideo main page project cards', () => {
     listMusicVideoProjects.mockResolvedValue([project]);
     render(<MemoryRouter initialEntries={['/music-video']}><LocationProbe />{MV_ROUTES}</MemoryRouter>);
     const card = await screen.findByTestId(`mv-project-card-${project.id}`);
-    await act(async () => fireEvent.click(within(card).getByRole('button', { name: 'Review video' })));
+    await act(async () => fireEvent.click(within(card).getByRole('button', { name: `Review video ${project.name}` })));
     expect(screen.getByTestId('loc')).toHaveTextContent(`/music-video/${project.id}/review`);
     expect(screen.getByRole('tab', { name: /^Final render/ })).toHaveAttribute('aria-selected', 'true');
   });

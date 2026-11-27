@@ -1,7 +1,7 @@
 import { compactButtonClass as buttonCls, inputXsClass as inputCls } from './controlClasses.js';
 import { supportsToolFreeOneShot, toolFreeOneShotSelectionPolicy } from '../../utils/providerSelection.js';
 import { musicVideoDocumentRenderer } from '../../../../server/lib/musicVideo/musicVideoMediaPolicy.js';
-import { useEffect, useState, useRef } from 'react';
+import { useEffect, useState, useRef, useId } from 'react';
 import ConfirmButtonPair from '../ui/ConfirmButtonPair.jsx';
 import { useTimeTick } from '../../hooks/useTimeTick.js';
 import FilePickerButton from '../ui/FilePickerButton.jsx';
@@ -40,6 +40,7 @@ const keyframesOf = (value) => linesOf(value)
  * edit locally and persist on blur, replacing the whole manifest.
  */
 function OverlayEditor({ project, onSave }) {
+  const hudId = useId();
   const composition = compositionDraft(project);
   const overlay = composition.overlay || null;
   const [draft, setDraft] = useState(() => ({
@@ -65,34 +66,34 @@ function OverlayEditor({ project, onSave }) {
     <details className="rounded border border-port-border p-2 text-xs">
       <summary className="cursor-pointer select-none text-port-text-muted min-h-[44px] pointer-fine:sm:min-h-0 flex items-center">HUD overlay — {overlay?.enabled === false || !overlay ? 'off' : 'on'} (drawn by the layered template)</summary>
       <div className="mt-2 flex flex-wrap items-center gap-3">
-        <label htmlFor="mv-doc-hud-on" className="flex items-center gap-1 min-h-[44px] pointer-fine:sm:min-h-0">
-          <input id="mv-doc-hud-on" type="checkbox" checked={Boolean(overlay) && overlay.enabled !== false} onChange={(e) => save({ enabled: e.target.checked })} /> Show HUD
+        <label htmlFor={`${hudId}-on`} className="flex items-center gap-1 min-h-[44px] pointer-fine:sm:min-h-0">
+          <input id={`${hudId}-on`} type="checkbox" checked={Boolean(overlay) && overlay.enabled !== false} onChange={(e) => save({ enabled: e.target.checked })} /> Show HUD
         </label>
-        <label htmlFor="mv-doc-hud-tc" className="flex items-center gap-1 min-h-[44px] pointer-fine:sm:min-h-0">
-          <input id="mv-doc-hud-tc" type="checkbox" checked={overlay?.timecode ?? true} onChange={(e) => save({ timecode: e.target.checked })} /> Timecode
+        <label htmlFor={`${hudId}-tc`} className="flex items-center gap-1 min-h-[44px] pointer-fine:sm:min-h-0">
+          <input id={`${hudId}-tc`} type="checkbox" checked={overlay?.timecode ?? true} onChange={(e) => save({ timecode: e.target.checked })} /> Timecode
         </label>
-        <label htmlFor="mv-doc-hud-tc-start" className="flex items-center gap-1">
+        <label htmlFor={`${hudId}-tc-start`} className="flex items-center gap-1">
           Timecode starts at (s)
-          <input id="mv-doc-hud-tc-start" type="number" min={0} step={1} className={`${inputCls} w-24`} defaultValue={overlay?.timecodeStartSec ?? 0}
+          <input id={`${hudId}-tc-start`} type="number" min={0} step={1} className={`${inputCls} w-24`} defaultValue={overlay?.timecodeStartSec ?? 0}
             onBlur={(e) => save({ timecodeStartSec: Math.max(0, Number(e.target.value) || 0) })} />
         </label>
       </div>
       <div className="mt-2 grid grid-cols-1 gap-2 md:grid-cols-2">
         <div>
-          <label htmlFor="mv-doc-hud-title" className="block text-port-text-muted mb-0.5">Title lines (up to 4)</label>
-          <textarea id="mv-doc-hud-title" rows={3} className={`${inputCls} w-full`} {...field('titleLines')} />
+          <label htmlFor={`${hudId}-title`} className="block text-port-text-muted mb-0.5">Title lines (up to 4)</label>
+          <textarea id={`${hudId}-title`} rows={3} className={`${inputCls} w-full`} {...field('titleLines')} />
         </div>
         <div>
-          <label htmlFor="mv-doc-hud-ticker" className="block text-port-text-muted mb-0.5">Ticker (one item per line)</label>
-          <textarea id="mv-doc-hud-ticker" rows={3} className={`${inputCls} w-full`} {...field('ticker')} />
+          <label htmlFor={`${hudId}-ticker`} className="block text-port-text-muted mb-0.5">Ticker (one item per line)</label>
+          <textarea id={`${hudId}-ticker`} rows={3} className={`${inputCls} w-full`} {...field('ticker')} />
         </div>
         <div>
-          <label htmlFor="mv-doc-hud-meter" className="block text-port-text-muted mb-0.5">Meter label</label>
-          <input id="mv-doc-hud-meter" type="text" maxLength={40} className={`${inputCls} w-full`} {...field('meterLabel')} />
+          <label htmlFor={`${hudId}-meter`} className="block text-port-text-muted mb-0.5">Meter label</label>
+          <input id={`${hudId}-meter`} type="text" maxLength={40} className={`${inputCls} w-full`} {...field('meterLabel')} />
         </div>
         <div>
-          <label htmlFor="mv-doc-hud-keys" className="block text-port-text-muted mb-0.5">Meter keyframes (seconds = percent, one per line)</label>
-          <textarea id="mv-doc-hud-keys" rows={3} placeholder={'0 = 100\n60 = 40'} className={`${inputCls} w-full`} {...field('keyframes')} />
+          <label htmlFor={`${hudId}-keys`} className="block text-port-text-muted mb-0.5">Meter keyframes (seconds = percent, one per line)</label>
+          <textarea id={`${hudId}-keys`} rows={3} placeholder={'0 = 100\n60 = 40'} className={`${inputCls} w-full`} {...field('keyframes')} />
         </div>
       </div>
     </details>
@@ -105,6 +106,7 @@ function DocumentFiles({ projectId, directory }) {
   const [error, setError] = useState('');
   const load = (open) => {
     if (!open || manifest) return;
+    setError('');
     getMusicVideoCompositionDocument(projectId, { silent: true })
       .then(setManifest)
       .catch((err) => setError(err?.message || 'Could not list the document files'));
@@ -139,6 +141,7 @@ function ElapsedSeconds() {
  * edited.
  */
 export default function DocumentCompositionPanel({ project, audioUrl, onProject, onSave }) {
+  const folderId = useId();
   const [confirmDiscard, setConfirmDiscard] = useState(false);
   const doc = project.composition?.document || null;
   const [busy, setBusy] = useState(null);
@@ -263,11 +266,11 @@ export default function DocumentCompositionPanel({ project, audioUrl, onProject,
             title="A .zip whose root (or single top folder) holds index.html">
             <FileArchive size={14} aria-hidden="true" /> {busy === 'zip' ? 'Importing…' : 'Import zip'}
           </FilePickerButton>
-          <div className="flex items-end gap-1">
-            <div>
-              <label htmlFor="mv-doc-folder" className="block text-xs text-port-text-muted mb-0.5">Folder inside data/</label>
-              <input id="mv-doc-folder" type="text" value={folder} onChange={(e) => setFolder(e.target.value)} placeholder="compositions/my-video"
-                className={`${inputCls} w-48`} />
+          <div className="flex min-w-0 items-end gap-1">
+            <div className="min-w-0 flex-1">
+              <label htmlFor={folderId} className="block text-xs text-port-text-muted mb-0.5">Folder inside data/</label>
+              <input id={folderId} type="text" value={folder} onChange={(e) => setFolder(e.target.value)} placeholder="compositions/my-video"
+                className={`${inputCls} w-full sm:w-48`} />
             </div>
             <button type="button" className={buttonCls} disabled={!!busy || !folder.trim()} onClick={importFolder}>
               <FolderInput size={14} /> {busy === 'folder' ? 'Importing…' : 'Import folder'}

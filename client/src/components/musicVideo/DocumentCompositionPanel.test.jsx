@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { act, fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 
 const api = vi.hoisted(() => ({
   getMusicVideoCompositionDocument: vi.fn(),
@@ -170,6 +170,33 @@ describe('DocumentCompositionPanel', () => {
     expect(api.detachMusicVideoCompositionDocument).not.toHaveBeenCalled();
     fireEvent.click(screen.getByRole('button', { name: /Click again to detach/ }));
     await waitFor(() => expect(onProject).toHaveBeenLastCalledWith(bare));
+  });
+
+  it('associates each HUD label with the field in its own panel', async () => {
+    const props = { project: attached, onProject: vi.fn(), onSave: vi.fn() };
+    render(<><DocumentCompositionPanel {...props} /><DocumentCompositionPanel {...props} /></>);
+    const panels = screen.getAllByRole('region', { name: 'Composition document' });
+    const hudInputs = panels.map((panel) => within(panel).getByLabelText('Show HUD'));
+    expect(hudInputs[0].id).not.toBe(hudInputs[1].id);
+    for (const input of hudInputs) expect(input.labels[0]).toHaveAttribute('for', input.id);
+    await act(async () => {});
+  });
+
+  it('clears a file-list error as soon as the files section is reopened', async () => {
+    let resolveRetry;
+    api.getMusicVideoCompositionDocument.mockRejectedValueOnce(new Error('Could not read files'))
+      .mockImplementationOnce(() => new Promise((resolve) => { resolveRetry = resolve; }));
+    render(<DocumentCompositionPanel project={attached} onProject={vi.fn()} onSave={vi.fn()} />);
+    const summary = screen.getByText('Files');
+    fireEvent.click(summary);
+    expect(await screen.findByText('Could not read files')).toBeInTheDocument();
+
+    fireEvent.click(summary);
+    await waitFor(() => expect(summary.closest('details')).not.toHaveAttribute('open'));
+    fireEvent.click(summary);
+    await waitFor(() => expect(screen.queryByText('Could not read files')).toBeNull());
+    await act(async () => resolveRetry({ available: true, files: [{ path: 'index.html', bytes: 16 }] }));
+    expect(screen.getByText('index.html')).toBeInTheDocument();
   });
 
   it('updates the existing layered engine against its selected document revision', async () => {
