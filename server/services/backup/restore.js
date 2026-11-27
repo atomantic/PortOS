@@ -699,6 +699,16 @@ const LIVE_FILE_RESTORE_OWNERS = Object.freeze([
     },
   },
   {
+    name: 'genome',
+    refreshLabel: 'genome index invalidation',
+    // Marker writes can depend on both the raw SNP data and its metadata.
+    appliesTo: scope => !scope || ['meatspace', 'meatspace/genome-raw.txt', 'meatspace/genome.json'].includes(scope),
+    hold: async inner => {
+      const { withLiveGenomeRestore } = await import('../genome.js');
+      return withLiveGenomeRestore(inner);
+    },
+  },
+  {
     name: 'digital twin',
     refreshLabel: 'digital twin cache invalidation',
     appliesTo: scope => !scope || scope === 'digital-twin' || scope.startsWith('digital-twin/'),
@@ -707,6 +717,7 @@ const LIVE_FILE_RESTORE_OWNERS = Object.freeze([
       return metaMutex(() => inner(invalidateDigitalTwinCaches));
     },
   },
+  cachedStoreOwner('digital-twin/social-accounts.json', () => import('../socialAccounts.js')),
   {
     name: 'voice timers',
     refreshLabel: 'voice timers reload',

@@ -22,6 +22,16 @@ const INDEX_TTL_MS = 60 * 60 * 1000; // 1 hour cache
 // Serializes every load→mutate→save cycle on META_FILE so overlapping writers cannot drop each other's changes.
 const queueMetaWrite = createFileWriteQueue();
 
+function invalidateSnpIndex() {
+  genomeRevision++;
+  snpIndex = null;
+  indexBuiltAt = 0;
+}
+
+export function withLiveGenomeRestore(restore) {
+  return queueMetaWrite(() => restore(invalidateSnpIndex));
+}
+
 const DEFAULT_META = {
   uploaded: false,
   uploadedAt: null,
@@ -120,7 +130,7 @@ export async function getSnpIndex() {
 
   const revision = genomeRevision;
   const content = await tryReadFile(RAW_FILE);
-  // A read opened before deletion or replacement must not repopulate the index.
+  // A read opened before deletion, replacement, or restore must not repopulate the index.
   if (revision !== genomeRevision) return snpIndex;
   if (!content) {
     snpIndex = null;
@@ -457,9 +467,7 @@ export async function deleteGenome() {
     }, { localOnly: true });
     await queueMetaWrite(() => clearCrossDomainNarrative(() => stripGenomeFromSnapshots(async () => {
       await unlinkGuarded(RAW_FILE).catch(error => { if (error.code !== 'ENOENT') throw error; });
-      genomeRevision++;
-      snpIndex = null;
-      indexBuiltAt = 0;
+      invalidateSnpIndex();
       await unlinkGuarded(META_FILE).catch(error => { if (error.code !== 'ENOENT') throw error; });
     })));
   });

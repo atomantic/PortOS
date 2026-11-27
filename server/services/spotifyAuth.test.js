@@ -44,7 +44,7 @@ vi.mock('../lib/httpsState.js', () => ({
   getHttpsEnabledAtBoot: (...args) => mocks.getHttpsEnabledAtBoot(...args),
 }));
 
-import { isTokenExpired, withExpiry, getRedirectUri, getAuthStatus, getAccessToken, getAuthUrl, handleCallback, clearAuth, SPOTIFY_SCOPES } from './spotifyAuth.js';
+import { isTokenExpired, withExpiry, getRedirectUri, getAuthStatus, getAccessToken, getAuthUrl, handleCallback, clearAuth, saveCredentials, SPOTIFY_SCOPES } from './spotifyAuth.js';
 
 describe('clearAuth', () => {
   it('removes playlist data and legacy raw cache idempotently', async () => {
@@ -255,6 +255,26 @@ describe('getAccessToken', () => {
     response.resolve({ ok: true, json: async () => ({ access_token: 'stale', expires_in: 3600 }) });
     await expect(refresh).resolves.toBeNull();
     expect(mocks.writeSecureJson.mock.calls).toEqual([['/tmp/spotify/tokens.json', expectedTokens]]);
+  });
+
+  it('discards a pending refresh when its Spotify app credentials are replaced', async () => {
+    routeReads();
+    mocks.writeSecureJson.mockClear();
+    const response = Promise.withResolvers();
+    const started = Promise.withResolvers();
+    mocks.fetchWithTimeout.mockImplementationOnce(() => {
+      started.resolve();
+      return response.promise;
+    });
+
+    const refresh = getAccessToken();
+    await started.promise;
+    const replacement = { clientId: 'new-id', clientSecret: 'new-secret' };
+    const { redirectUri } = await saveCredentials(replacement);
+
+    response.resolve({ ok: true, json: async () => ({ access_token: 'stale', expires_in: 3600 }) });
+    await expect(refresh).resolves.toBeNull();
+    expect(mocks.writeSecureJson.mock.calls).toEqual([['/tmp/spotify/credentials.json', { ...replacement, redirectUri }]]);
   });
 
   it('clears the single-flight guard so a later refresh can run again', async () => {

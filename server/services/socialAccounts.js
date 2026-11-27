@@ -133,6 +133,7 @@ export const loadAccounts = store.load;
 export const saveAccounts = store.save;
 export const mutateAccounts = store.mutate;
 export const invalidateCache = store.invalidateCache;
+export const withLiveRestore = store.withLiveRestore;
 
 export function notifyChanged(action = 'update', accountId = null) {
   socialAccountEvents.emit('changed', { action, accountId, timestamp: Date.now() });
