@@ -1,4 +1,5 @@
 /** Disposition of inactive admission records; it never rewrites work outcomes. */
+import { isPidAlive, isPidConfirmedDead } from '../lib/processLiveness.js';
 import * as fs from 'node:fs';
 import { randomUUID } from 'node:crypto';
 import { dirname, join } from 'node:path';
@@ -29,12 +30,6 @@ const requestSchema = z.union([
 const refuse = message => { throw Object.assign(new Error(message), { code: 'MAINTENANCE_STALE' }); };
 const MISSING = Symbol('missing evidence');
 const MALFORMED = Symbol('malformed evidence');
-const dead = pid => {
-  try { process.kill(pid, 0); return false; } catch (error) { return error.code === 'ESRCH'; }
-};
-const alive = pid => {
-  try { process.kill(pid, 0); return true; } catch { return false; }
-};
 const inactiveOwner = (op, isDead, processes, gate) => {
   if (gate.isLocallyFinished?.(op)) return true;
   if (isDead(op.pid)) return true;
@@ -203,7 +198,7 @@ export async function inspectLiveActivity({ hold, apiOrigin, runnerOrigin, token
   return activity;
 }
 
-export async function inspectInactiveReservations({ gate, operator, reason, checkActivity, isDead = dead }) {
+export async function inspectInactiveReservations({ gate, operator, reason, checkActivity, isDead = isPidConfirmedDead }) {
   const status = gate.status();
   if (!status.hold || status.state === 'unavailable' || !['Local operator', 'Operator session'].includes(status.hold.owner))
     refuse('Begin a normal operator maintenance hold before inspection.');
@@ -223,7 +218,7 @@ export async function inspectInactiveReservations({ gate, operator, reason, chec
 }
 
 /** Publish a durable receipt before retiring exactly the inspected records. */
-export async function disposeInactiveReservations(input, { gate, operator, checkActivity, isDead = dead, isAlive = alive, isEnabled = () => true, io = fs, requireMediaInventory = false }) {
+export async function disposeInactiveReservations(input, { gate, operator, checkActivity, isDead = isPidConfirmedDead, isAlive = isPidAlive, isEnabled = () => true, io = fs, requireMediaInventory = false }) {
   requestSchema.parse(input);
   // Preserve the inspected records exactly; the transaction checks every field.
   const request = input;
@@ -313,7 +308,7 @@ export async function disposeInactiveReservations(input, { gate, operator, check
 }
 
 /** Reconcile only while this exact supervisor is waiting to acquire admission. */
-export async function reconcileWaitingUpdate({ gate, checkActivity, isDead = dead, isAlive = alive, isEnabled = () => true }) {
+export async function reconcileWaitingUpdate({ gate, checkActivity, isDead = isPidConfirmedDead, isAlive = isPidAlive, isEnabled = () => true }) {
   const status = gate.status();
   const owner = status.deferredUpdate;
   if (status.hold || !owner || owner.phase !== 'waiting' || owner.childPid || owner.holdId) return null;

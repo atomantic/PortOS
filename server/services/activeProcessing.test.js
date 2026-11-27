@@ -66,6 +66,26 @@ describe('active processing snapshot', () => {
     expect(kinds).toEqual(['media-running:image', 'image-to-3d', 'agents-running', 'mind-thinking', 'llm-running', 'backup-running']);
   });
 
+  it('blocks manual update when a tracked PID exists but signaling is denied', async () => {
+    const { getObservedUpdateActivity } = await import('./activeProcessing.js');
+    const { activeAgents } = await import('./agent/agentState.js');
+    const kill = vi.spyOn(process, 'kill').mockImplementation(() => {
+      throw Object.assign(new Error('Permission denied'), { code: 'EPERM' });
+    });
+    activeAgents.set('protected-agent', { pid: 4321 });
+    activeAgents.set('invalid-agent', { pid: -1 });
+    try {
+      expect(manualUpdateBlockers(await getObservedUpdateActivity())).toEqual([
+        expect.objectContaining({ kind: 'agents-running', count: 1 }),
+      ]);
+      expect(kill.mock.calls).toEqual([[4321, 0]]);
+    } finally {
+      activeAgents.delete('protected-agent');
+      activeAgents.delete('invalid-agent');
+      kill.mockRestore();
+    }
+  });
+
   it('counts a verified legacy trainer as active without creating a media queue row', async () => {
     deps.jobs.mockReturnValue([]); deps.models.mockResolvedValue([]); deps.tasks.mockResolvedValue([]); deps.agents.mockResolvedValue([]);
     deps.retiredTrainer.mockResolvedValueOnce({ pid: 777, run: 'private-run-path' });

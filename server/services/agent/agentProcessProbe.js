@@ -2,6 +2,7 @@
  * Checks agent process liveness and resource use across direct and runner-hosted agents.
  */
 
+import { isPidAlive as probePid } from '../../lib/processLiveness.js';
 import { activeAgents, runnerAgents, useRunner } from './agentState.js';
 import { exec } from '../../lib/childProcess.js';
 
@@ -97,11 +98,5 @@ export async function getAgentProcessStats(agentId) {
  * Check if a process is running by PID.
  */
 export async function isPidAlive(pid) {
-  if (!pid) return false;
-  try {
-    process.kill(pid, 0);
-    return true;
-  } catch {
-    return false;
-  }
+  return probePid(pid);
 }

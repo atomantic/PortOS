@@ -28,6 +28,7 @@
  * warm — the first caller — sees migrated records.
  */
 
+import { createIdValidator } from '../../lib/recordIdValidation.js';
 import { join } from 'path';
 import { PATHS } from '../../lib/fileUtils.js';
 import { createCollectionStore } from '../../lib/collectionStore.js';
@@ -51,12 +52,7 @@ const TYPE_SCHEMA_VERSION = 5;
 const ID_PATTERN = /^[A-Za-z0-9_-]{1,128}$/;
 /** True when `id` matches the universe record-id allowlist (collectionStore parity). */
 export const isValidUniverseId = (id) => typeof id === 'string' && ID_PATTERN.test(id);
-const isValidId = isValidUniverseId;
-function assertValidId(id) {
-  if (!isValidId(id)) {
-    throw new Error(`universeStore: invalid record id "${id}" — must match ${ID_PATTERN}`);
-  }
-}
+const assertValidId = createIdValidator('universeStore', ID_PATTERN);
 
 // --- Mutation epoch (the dataSync federation-invisibility fix, #1031) ---
 // Backed by the shared change-token registry (../changeToken.js) — a single

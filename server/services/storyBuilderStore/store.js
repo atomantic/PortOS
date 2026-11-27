@@ -27,6 +27,7 @@
  * data/story-builder file store into the table (migrateStoryBuilderToDB).
  */
 
+import { createIdValidator } from '../../lib/recordIdValidation.js';
 import { join } from 'path';
 import { PATHS } from '../../lib/fileUtils.js';
 import { createCollectionStore } from '../../lib/collectionStore.js';
@@ -40,11 +41,7 @@ import { bumpChangeToken, getChangeToken } from '../changeToken.js';
 const TYPE_SCHEMA_VERSION = 1;
 const ID_PATTERN = /^stb-[A-Za-z0-9-]+$/;
 
-function assertValidId(id) {
-  if (typeof id !== 'string' || !ID_PATTERN.test(id)) {
-    throw new Error(`storyBuilderStore: invalid record id "${id}" — must match ${ID_PATTERN}`);
-  }
-}
+const assertValidId = createIdValidator('storyBuilderStore', ID_PATTERN);
 
 // --- Mutation epoch (the dataSync federation-invisibility fix, #1031) ---
 // Backed by the shared change-token registry (../changeToken.js) — a single

@@ -1,3 +1,4 @@
+import { isPidAlive } from '../lib/processLiveness.js';
 import { getCudaCapability, getCudaUtilization } from '../lib/cudaCapability.js';
 import { summarizeSystemActivity } from '../lib/systemIdle.js';
 import { runningAgentsByTaskId, unclaimedTaskIds } from '../lib/cos/cosSpawnWindow.js';
@@ -49,8 +50,7 @@ export async function getObservedUpdateActivity(retiredTrainerActivity) {
   const agentIds = new Set();
   for (const [id, entry] of activeAgents) {
     const pid = entry.pid ?? entry.process?.pid;
-    if (!Number.isSafeInteger(pid) || pid <= 0 || entry.process?.exitCode != null) continue;
-    try { process.kill(pid, 0); agentIds.add(id); } catch { /* Unavailable or stale is not observed work. */ }
+    if (entry.process?.exitCode == null && isPidAlive(pid)) agentIds.add(id);
   }
   for (const agent of Array.isArray(runner) ? runner : []) if (agent.processActive === true) agentIds.add(agent.id);
   const jobs = Object.entries(capacity?.byKind ?? {}).flatMap(([kind, lane]) =>
