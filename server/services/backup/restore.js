@@ -29,6 +29,7 @@ import {
 } from './excludes.js';
 import { BACKUP_PROCESS_IDLE_TIMEOUT_MS, runRsync } from './rsync.js';
 import { readSnapshotCredentials, transferWithCredentials } from './restoreCredentials.js';
+import { requireManagedVisitorCredentialRestore } from '../bootHookRegistry.js';
 
 // `-ii` heartbeats once per file rsync finishes deciding about, so a single
 // file whose `--checksum` digest outlasts the idle deadline still emits
@@ -633,10 +634,7 @@ const LIVE_FILE_RESTORE_OWNERS = Object.freeze([
   {
     name: 'managed visitor credentials',
     appliesTo: scope => !scope || scope === 'managed-visitor-credentials.json',
-    hold: async inner => {
-      const { getManagedVisitorBroker } = await import('../managedVisitors.js');
-      return getManagedVisitorBroker().withLiveCredentialRestore(inner);
-    },
+    hold: inner => requireManagedVisitorCredentialRestore()(inner),
   },
   {
     name: 'CoS config and runtime',

@@ -198,6 +198,8 @@ const SELECTION_CUTS = [
   // #17692: boot recovery must not pull the render pipeline into the static closure or into this file's import list.
   ['services/bootstrap.js', /^services\/musicVideo\/(?:render|excerptRender)\.js$/,
     'recovers stuck renders through loaders registerBootHooks() registers in bootHookRegistry.js'],
+  ['services/backup/restore.js', 'services/managedVisitors.js',
+    'acquires the managed visitor credential restore lock through bootHookRegistry.js'],
   ['services/worktreeManager.js', /^services\/(?:git|prProbe|repoBranchSnapshot|branchReconcile)\.js$/,
     'only re-exports services/worktree/*, which keeps these reads as non-inverting lazy imports'],
   ['services/cos/cosClaimOwnership.js', 'services/branchReconcile.js',

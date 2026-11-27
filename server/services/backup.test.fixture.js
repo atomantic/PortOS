@@ -14,6 +14,12 @@ import { createReadStream, existsSync, mkdirSync, mkdtempSync, readFileSync, rmS
 import { tmpdir } from 'os';
 import { dirname, join as joinPath } from 'path';
 import { makePathsProxy, ownTestBodies } from '../lib/mockPathsDataRoot.js';
+import { createFileWriteQueue } from '../lib/fileWriteQueue.js';
+import { registerManagedVisitorCredentialRestore } from './bootHookRegistry.js';
+
+// Backup restore tests run without full server bootstrap; preserve the same
+// serialized credential-write boundary while keeping the broker lazy.
+registerManagedVisitorCredentialRestore(createFileWriteQueue());
 
 // Fail-fast/timeout settles Vitest's wrapper before its async body. These
 // real-rsync cases also seed the source between restores; own the whole body

@@ -45,12 +45,13 @@ function init({ dir, env }, name) {
   return repo;
 }
 
-function run({ env }, repo, timeout = 30_000) {
+function run({ env }, repo, { timeout = 30_000, automatic = true } = {}) {
   const childEnv = { ...env, PORTOS_DATA_ROOT: repo };
   delete childEnv.VITEST; // isolate the standalone install from Vitest's fixture write guard
+  const args = automatic ? ['--automatic'] : [];
   const result = spawnSync(windows ? 'powershell' : 'bash', windows
-    ? ['-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-File', join(repo, 'update.ps1'), '--automatic']
-    : [join(repo, 'update.sh'), '--automatic'],
+    ? ['-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-File', join(repo, 'update.ps1'), ...args]
+    : [join(repo, 'update.sh'), ...args],
   { cwd: repo, encoding: 'utf8', timeout, env: childEnv });
   if (result.error) {
     throw new Error(`${result.error.message}\n${result.stdout}${result.stderr}${readUpdateLog(repo)}`, { cause: result.error });
@@ -100,7 +101,7 @@ describe.skipIf(SKIP_HEAVY_INTEGRATION)('updater submodule and dirty-checkout be
     const target = commit(fixture, parent, 'Switch module URL and pin', newPin);
 
     // Git for Windows fans out into several processes per submodule operation.
-    const result = run(fixture, checkout, windows ? 60_000 : 30_000);
+    const result = run(fixture, checkout, { timeout: windows ? 60_000 : 30_000 });
     expect(result.status, result.stdout + result.stderr + readUpdateLog(checkout)).toBe(19);
     expect(recordedSteps(result).filter(step => step !== 'waiting:running')).toEqual([
       'waiting:done', 'git-pull:running', 'git-pull:done',
@@ -113,6 +114,44 @@ describe.skipIf(SKIP_HEAVY_INTEGRATION)('updater submodule and dirty-checkout be
     expect(git(localModule, env, 'rev-parse', 'HEAD')).not.toBe(unreviewed);
     expect(normalize(git(localModule, env, 'remote', 'get-url', 'origin'))).toBe(normalize(replacement));
   }, windows ? 90_000 : 45_000);
+
+  it('restores the local commit before restarting after a pull conflict', () => {
+    const fixture = sandbox();
+    const { dir, env } = fixture;
+    const parent = init(fixture, 'parent');
+    installUpdateContract(parent);
+    writeFileSync(join(parent, 'tracked'), 'base');
+    writeFileSync(join(parent, 'scripts', 'verify-server-health.js'), 'process.exit(0);\n');
+    commit(fixture, parent, 'Initial parent');
+
+    const checkout = join(dir, 'checkout');
+    git(dir, env, 'clone', parent, checkout);
+    writeFileSync(join(checkout, 'tracked'), 'local edit');
+    const local = commit(fixture, checkout, 'Local update');
+    writeFileSync(join(parent, 'tracked'), 'remote edit');
+    commit(fixture, parent, 'Upstream update');
+    git(checkout, env, 'config', 'user.name', 'Fixture');
+    git(checkout, env, 'config', 'user.email', 'fixture@example.invalid');
+
+    const pm2 = join(checkout, 'node_modules', 'pm2', 'bin', 'pm2');
+    mkdirSync(join(pm2, '..'), { recursive: true });
+    writeFileSync(pm2, `
+      const { execFileSync } = require('node:child_process');
+      if (process.argv[2] === 'start') {
+        const git = (...args) => execFileSync('git', args, { encoding: 'utf8' }).trim();
+        if (git('rev-parse', 'HEAD') !== ${JSON.stringify(local)} || git('status', '--porcelain')) process.exit(6);
+      }
+    `);
+
+    const result = run(fixture, checkout, { automatic: false });
+    expect(result.status, result.stdout + result.stderr + readUpdateLog(checkout)).not.toBe(0);
+    expect(result.stdout).toContain('STEP:git-pull:failed:Pull conflicted; rebase aborted and checkout restored');
+    expect(recordedSteps(result)).toContain('restart:warning');
+    expect(git(checkout, env, 'symbolic-ref', '--short', 'HEAD')).toBe('main');
+    expect(git(checkout, env, 'rev-parse', 'HEAD')).toBe(local);
+    expect(git(checkout, env, 'status', '--porcelain')).toBe('');
+    expect(existsSync(join(checkout, '.git', 'REBASE_HEAD'))).toBe(false);
+  }, 45_000);
 
   it('refuses a dirty working tree without stashing or advancing it', () => {
     const fixture = sandbox();
