@@ -407,19 +407,22 @@ describe('Messages Routes', () => {
   });
 
   describe('POST /api/messages/drafts/generate', () => {
-    it('should generate a draft', async () => {
-      const account = { id: VALID_UUID, type: 'outlook', provider: 'playwright' };
-      const created = { id: DRAFT_UUID, generatedBy: 'ai', status: 'draft' };
-
-      messageAccounts.getAccount.mockResolvedValue(account);
-      messageDrafts.createDraft.mockResolvedValue(created);
-
+    it.each([
+      ['missing', {}],
+      ['empty', { replyToMessageId: '' }],
+    ])('rejects a generation request with an %s original message ID without side effects', async (_label, fields) => {
+      const emit = vi.fn();
+      app.set('io', recordingOperatorIo(emit));
       const response = await request(app)
         .post('/api/messages/drafts/generate')
-        .send({ accountId: VALID_UUID, context: 'meeting follow-up' });
+        .send({ accountId: VALID_UUID, ...fields });
 
-      expect(response.status).toBe(201);
-      expect(response.body.generatedBy).toBe('ai');
+      expect(response.status).toBe(400);
+      expect(messageAccounts.getAccount).not.toHaveBeenCalled();
+      expect(messageSync.getMessage).not.toHaveBeenCalled();
+      expect(generateReplyBody).not.toHaveBeenCalled();
+      expect(messageDrafts.createDraft).not.toHaveBeenCalled();
+      expect(emit).not.toHaveBeenCalledWith('messages:draft:created', expect.anything());
     });
 
     it('returns screening/setup failures without persisting or announcing a fake AI draft', async () => {
@@ -478,12 +481,21 @@ describe('Messages Routes', () => {
       expect(messageDrafts.createDraft).not.toHaveBeenCalled();
     });
 
+    it('leaves standalone manual draft creation available', async () => {
+      messageAccounts.getAccount.mockResolvedValue({ id: VALID_UUID, type: 'gmail', provider: 'api' });
+      messageDrafts.createDraft.mockImplementation(async (draft) => ({ id: DRAFT_UUID, ...draft }));
+      const response = await request(app).post('/api/messages/drafts').send({ accountId: VALID_UUID, body: 'Manual note' });
+      expect(response.status).toBe(201);
+      expect(response.body.body).toBe('Manual note');
+      expect(response.body.generatedBy).toBe('manual');
+    });
+
     it('should return 404 if account not found', async () => {
       messageAccounts.getAccount.mockResolvedValue(null);
 
       const response = await request(app)
         .post('/api/messages/drafts/generate')
-        .send({ accountId: VALID_UUID });
+        .send({ accountId: VALID_UUID, replyToMessageId: 'message-example' });
 
       expect(response.status).toBe(404);
       expect(response.body.error).toBe('Account not found');
