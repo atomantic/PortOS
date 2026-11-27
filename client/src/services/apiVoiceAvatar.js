@@ -2,8 +2,8 @@
 import { request, throwApiError } from './apiCore';
 
 export const fetchVoiceAvatar = options => request('/voice/avatar/status', { signal: options?.signal, silent: true, hostControlOptional: true });
-export const changeVoiceAvatar = (action) => request('/voice/avatar/runtime', {
-  method: 'POST', body: JSON.stringify({ action }), silent: true,
+export const changeVoiceAvatar = (action, acceptTerms) => request('/voice/avatar/runtime', {
+  method: 'POST', body: JSON.stringify({ action, ...(acceptTerms ? { acceptTerms: true } : {}) }), silent: true,
 });
 
 export async function streamVoiceAvatar(wav, { signal, onFrame }) {

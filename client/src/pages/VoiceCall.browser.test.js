@@ -45,7 +45,8 @@ function stubApi(page, enabled = true, avatar = {}) {
     if (path === '/api/voice/public/synthesize') return route.fulfill({ body: avatarWav || sampleWave(), contentType: 'audio/wav' });
     if (path.startsWith('/api/voice/avatar/') && avatarTarget) return route.continue();
     if (path === '/api/voice/avatar/runtime') {
-      const { action } = route.request().postDataJSON();
+      const { action, acceptTerms } = route.request().postDataJSON();
+      if (action === 'install' && !acceptTerms) return route.fulfill({ status: 400 });
       if (action === 'install') avatar.status = { supported: true, installed: true, phase: 'stopped' };
       else if (action === 'start') avatar.status = { ...avatar.status, phase: 'running' };
       else return route.fulfill({ status: 400 });
@@ -162,7 +163,8 @@ describe.skipIf(!chrome)('Voice Call console in Chrome', () => {
       const setup = page.getByRole('region', { name: 'Voice avatar model' });
       await setup.getByRole('heading', { name: /Avatar setup/ }).waitFor();
       await setup.getByRole('link', { name: 'checkpoint terms' }).waitFor();
-      expect(await setup.getByRole('checkbox').count()).toBe(0);
+      const installButton = setup.getByRole('button', { name: 'Install AvatarForcing' });
+      expect(await installButton.isEnabled()).toBe(false);
 
       const face = page.getByRole('img', { name: 'Radio operator portrait' });
       await face.waitFor();
@@ -183,23 +185,27 @@ describe.skipIf(!chrome)('Voice Call console in Chrome', () => {
       expect(await page.locator('canvas[width="512"]').isVisible()).toBe(false);
       await page.getByRole('button', { name: 'Interrupt' }).click();
 
+      await setup.getByLabel(/I accept the checkpoint terms/).check();
       const install = page.waitForRequest(req => req.url().endsWith('/api/voice/avatar/runtime'));
-      await setup.getByRole('button', { name: 'Install AvatarForcing' }).click();
-      expect((await install).postDataJSON()).toEqual({ action: 'install' });
+      await installButton.click();
+      expect((await install).postDataJSON()).toEqual({ action: 'install', acceptTerms: true });
       await setup.getByRole('button', { name: 'Start AvatarForcing' }).click();
-      await setup.getByRole('heading', { name: /AvatarForcing ready/ }).waitFor();
+      await setup.getByText('Running', { exact: true }).waitFor();
+      expect(await setup.getByLabel('Use generated avatar in this browser').isChecked()).toBe(false);
     } finally {
       await page.close();
     }
   });
 
-  it('uses generated frames when ready and stops showing frames on interrupt', async () => {
+  it('uses generated frames after opt-in and stops showing frames on interrupt', async () => {
     const page = await fixture.browser.newPage({ viewport: { width: 390, height: 800 }, reducedMotion: 'no-preference' });
     try {
       const avatar = {};
       await stubApi(page, true, avatar);
       await page.goto(`${fixture.origin}voice-console-test`);
+      await page.getByLabel('Use generated avatar in this browser').check();
       await page.getByRole('heading', { name: /AvatarForcing ready/ }).waitFor();
+      await page.getByRole('button', { name: 'Hide avatar settings' }).click();
       const canvas = page.locator('canvas[width="512"]');
       await expect(canvas.count()).resolves.toBe(1);
       expect(await canvas.isVisible()).toBe(false);

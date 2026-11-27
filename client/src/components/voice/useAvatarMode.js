@@ -3,7 +3,7 @@ import { safeReadStorage, safeWriteStorage } from '../../lib/safeStorage';
 
 const KEY = 'portos.voice.generativeAvatar';
 const listeners = new Set();
-let selected = safeReadStorage(KEY) !== 'off';
+let selected = safeReadStorage(KEY) === 'on';
 const getMode = () => selected;
 const subscribe = callback => {
   listeners.add(callback);

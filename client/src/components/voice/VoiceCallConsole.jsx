@@ -40,7 +40,7 @@ export default function VoiceCallConsole({
   const [avatar, setAvatar] = useState(() => safeReadStorage(DISPLAY_KEY) !== 'audio');
   const generativeAvatar = useAvatarMode();
   const { data, error, updateData, refetch } = useAvatarRuntime(avatar);
-  const runningAvatar = generativeAvatar && !error && data?.phase === 'running';
+  const runningAvatar = generativeAvatar && !error && data?.supported && data.phase === 'running';
   const caption = interimTranscript || history.at(-1)?.text;
   const openMic = handsFree || !canChangeMicMode;
   const micText = capturing ? (openMic ? 'Close mic' : 'Send voice') : (openMic ? 'Open mic' : 'Talk');

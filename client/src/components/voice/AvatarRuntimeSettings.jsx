@@ -4,15 +4,15 @@ import { setAvatarMode, useAvatarMode } from './useAvatarMode';
 
 const button = 'min-h-11 rounded-lg border border-port-border px-3 text-sm hover:border-port-accent disabled:opacity-50';
 
-function AvatarActions({ data, ask, pending }) {
-  const action = (name, label) => <button type="button" className={button}
-    onClick={() => ask(name)} disabled={pending}>{label}</button>;
+function AvatarActions({ data, ask, terms, pending }) {
+  const action = (name, label, enabled = true) => <button type="button" className={button}
+    onClick={() => ask(name)} disabled={pending || !enabled}>{label}</button>;
   if (data.phase === 'installing') return action('cancel', 'Cancel install');
   if (['running', 'starting'].includes(data.phase)) return action('stop', 'Stop');
   if (data.phase === 'stopping') return null;
-  if (!data.installed) return action('install', 'Install AvatarForcing');
+  if (!data.installed) return action('install', 'Install AvatarForcing', terms);
   return <>
-    {data.updateAvailable ? action('update', 'Update AvatarForcing') : action('start', 'Start AvatarForcing')}
+    {data.updateAvailable ? action('update', 'Update AvatarForcing', terms) : action('start', 'Start AvatarForcing')}
     {action('uninstall', 'Uninstall and remove weights')}
   </>;
 }
@@ -20,6 +20,7 @@ function AvatarActions({ data, ask, pending }) {
 export default function AvatarRuntimeSettings({ data, error, updateData, refetch }) {
   const useGenerativeAvatar = useAvatarMode();
   const [showControls, setShowControls] = useState(false);
+  const [terms, setTerms] = useState(false);
   const [pending, setPending] = useState(false);
   const [failure, setFailure] = useState('');
   const [confirmRemove, setConfirmRemove] = useState(false);
@@ -28,7 +29,9 @@ export default function AvatarRuntimeSettings({ data, error, updateData, refetch
     setPending(true);
     setFailure('');
     try {
-      updateData(await changeVoiceAvatar(action));
+      const downloading = action === 'install' || action === 'update';
+      updateData(await changeVoiceAvatar(action, downloading && terms));
+      if (downloading) setTerms(false);
       refetch();
     } catch (err) {
       setFailure(err.message);
@@ -37,7 +40,7 @@ export default function AvatarRuntimeSettings({ data, error, updateData, refetch
     }
   };
 
-  const running = data?.phase === 'running' && !error;
+  const running = data?.supported && data.phase === 'running' && !error;
 
   return <section aria-label="Voice avatar model" className="space-y-3 rounded-xl border border-port-border bg-port-card p-4 text-port-text">
     <div className="flex flex-wrap items-center justify-between gap-2">
@@ -50,13 +53,17 @@ export default function AvatarRuntimeSettings({ data, error, updateData, refetch
     {error && <button type="button" className={button} onClick={refetch}>Retry status</button>}
     {data && !data.supported && <p className="text-sm">This runtime needs an Apple Silicon host running macOS 26 or later.</p>}
     {!error && data?.supported && (!running || showControls || !useGenerativeAvatar) && <>
-      {!data.installed || data.updateAvailable ? <p className="text-sm text-port-text-muted">
-        See the <a href="https://github.com/johnrobinsn/avatarforcing-mlx/blob/d83df52b1d891cae7d12d68b247af7be6e6def07/NOTICE"
-          target="_blank" rel="noreferrer" className="underline">checkpoint terms</a> (noncommercial; motion checkpoint has research-use restrictions). Model downloads use about 1.17 GB before conversion and Python dependencies.
-      </p> : null}
+      {!data.installed || data.updateAvailable ? <label className="flex items-start gap-2 text-sm">
+        <input type="checkbox" checked={terms} disabled={pending} onChange={event => setTerms(event.target.checked)} className="mt-0.5" />
+        <span>I accept the <a href="https://github.com/johnrobinsn/avatarforcing-mlx/blob/d83df52b1d891cae7d12d68b247af7be6e6def07/NOTICE"
+          target="_blank" rel="noreferrer" className="underline">checkpoint terms</a> (noncommercial; motion checkpoint has research-use restrictions). Model downloads use about 1.17 GB before conversion and Python dependencies.</span>
+      </label> : null}
       {data.installed && <label className="flex items-center gap-2 text-sm">
         <input type="checkbox" checked={useGenerativeAvatar}
-          onChange={event => setAvatarMode(event.target.checked)} />
+          onChange={event => {
+            setShowControls(true);
+            setAvatarMode(event.target.checked);
+          }} />
         Use generated avatar in this browser
       </label>}
       <p role="status" className="text-sm text-port-text-muted">
@@ -67,7 +74,7 @@ export default function AvatarRuntimeSettings({ data, error, updateData, refetch
         {confirmRemove ? <>
           <button type="button" className={button} onClick={() => setConfirmRemove(false)}>Keep model</button>
           <button type="button" className={button} onClick={() => { setConfirmRemove(false); act('uninstall'); }}>Remove model and runtime</button>
-        </> : <AvatarActions data={data} pending={pending}
+        </> : <AvatarActions data={data} terms={terms} pending={pending}
           ask={action => action === 'uninstall' ? setConfirmRemove(true) : act(action)} />}
       </div>
     </>}

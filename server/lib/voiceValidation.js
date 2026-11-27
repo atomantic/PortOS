@@ -15,7 +15,6 @@ export const voicePiperFetchBodySchema = z.object({ voice: nonEmptyString });
 
 export const voiceAvatarCommandSchema = z.object({
   action: z.enum(['install', 'update', 'cancel', 'start', 'stop', 'uninstall']),
-  // Ignore the opt-in field sent by older browser sessions.
   acceptTerms: z.literal(true).optional(),
 }).strict();
 
