@@ -42,6 +42,8 @@ const asNullable = (value) => {
   return trimmed || null;
 };
 
+const validationError = (message) => new ServerError(message, { status: 400, code: 'VALIDATION_ERROR' });
+
 const pickModelOptions = (provider) => {
   const raw = Array.isArray(provider?.models) ? provider.models : [];
   const ids = raw.map((m) => (typeof m === 'string' ? m : m?.id)).filter(Boolean);
@@ -117,382 +119,493 @@ const patchSettingsPath = async (path, value) => {
   await updateSettings({ [top]: root });
 };
 
+const automationSettingsHandlers = [
+  { key: 'autofixer', label: 'Autofixer', link: '/settings/autofixer' },
+  { key: 'calendarSync', label: 'Calendar Sync', link: '/calendar/config' },
+].map(({ key, label, link }) => ({
+  id: `settings.${key}`,
+  collect: ({ settings }, id) => ({
+    area: 'Automation',
+    assignmentType: 'Agents & automation',
+    label,
+    source: id,
+    providerId: settings[key]?.providerId,
+    model: settings[key]?.model,
+    ...agentEntry,
+    notes: 'Requires a CLI/TUI provider because it runs agentic tool work.',
+    link,
+  }),
+  update: ({ providerId, model }) => updateSettings({ [key]: { providerId, model } }),
+}));
+
+const creativeDirectorHandlers = [
+  {
+    stage: 'treatment',
+    label: 'Treatment generation model',
+    notes: 'Agent model that turns a project brief into a treatment and scene plan. Blank = system default provider and model. Each Creative Director project can override this from its Models drawer.',
+  },
+  {
+    stage: 'plan',
+    label: 'Production planning model',
+    notes: 'Agent model that converts a production directive into an executable plan. Blank = system default provider and model. Each Creative Director project can override this from its Models drawer.',
+  },
+  {
+    stage: 'evaluation',
+    label: 'Scene evaluation vision model',
+    notes: 'Vision model that judges each rendered scene. Use a local Ollama or LM Studio VLM here. Blank = auto-pick an installed local vision model; if none is available it falls back to the coding agent. Each Creative Director project can override this from its Models drawer.',
+  },
+].map(({ stage, label, notes }) => ({
+  id: `settings.creativeDirector.${stage}`,
+  collect: ({ settings }, id) => ({
+    area: 'Creative Director',
+    assignmentType: 'Creative workflows',
+    label,
+    source: id,
+    providerId: settings.creativeDirector?.[stage]?.providerId,
+    model: settings.creativeDirector?.[stage]?.model,
+    ...(stage === 'evaluation'
+      ? { providerTypes: apiProviderTypes, modelFilter: 'vision' }
+      : { ...agentEntry, effort: settings.creativeDirector?.[stage]?.effort, effortEditable: true }),
+    notes,
+    link: '/creative-director',
+  }),
+  update: ({ providerId, model, effortPatch }) => patchSettingsPath(`creativeDirector.${stage}`, {
+    providerId, model, ...(stage === 'evaluation' ? {} : effortPatch),
+  }),
+}));
+
+const messageHandlers = ['triage', 'reply'].map(action => ({
+  id: `settings.messages.${action}`,
+  collect: ({ messages }, id) => ({
+    area: 'Messages',
+    assignmentType: 'Voice & messaging',
+    label: `${action[0].toUpperCase()}${action.slice(1)} assistant`,
+    source: id,
+    providerId: messages[action]?.providerId || messages.providerId,
+    model: messages[action]?.model || messages.model,
+    link: '/messages/config',
+  }),
+  update: async ({ providerId, model }) => {
+    const settings = await getSettings();
+    const messages = isPlainObject(settings.messages) ? { ...settings.messages } : {};
+    const current = isPlainObject(messages[action]) ? messages[action] : {};
+    messages[action] = { ...current, providerId, model };
+    await updateSettings({ messages });
+  },
+}));
+
+const codeReviewHandlers = ['lmstudio', 'ollama'].map(backend => ({
+  id: `settings.codeReview.${backend}`,
+  collect: ({ settings }) => ({
+    area: 'Review Loop',
+    label: `${backend === 'lmstudio' ? 'LM Studio' : 'Ollama'} reviewer model`,
+    source: `settings.codeReview.${backend}Model`,
+    providerId: backend,
+    model: settings.codeReview?.[`${backend}Model`],
+    providerEditable: false,
+    providerTypes: [],
+    notes: 'Model used when the local reviewer is in the default review chain.',
+    link: '/ai',
+  }),
+  update: ({ model }) => patchSettingsPath(`codeReview.${backend}Model`, model),
+}));
+
+const settingsHandlers = [
+  {
+    id: 'settings.embeddings',
+    collect: ({ settings }, id) => ({
+      area: 'Memory & Catalog',
+      label: 'Vector embeddings',
+      source: id,
+      providerId: settings.embeddings?.provider || 'none',
+      model: settings.embeddings?.model || null,
+      providerOptions: embeddingProviders,
+      providerTypes: [],
+      notes: 'Powers semantic search for the creative catalog and memory (Brain, Chief of Staff retrieval). Until saved, memory keeps the legacy Chief of Staff embedding config.',
+      link: '/models/embeddings',
+    }),
+    update: ({ providerId, model }) => updateSettings({ embeddings: { provider: providerId || 'none', model } }),
+  },
+  {
+    id: 'settings.memoryClassifier',
+    collect: ({ settings, providers }, id) => ({
+      area: 'Memory & Catalog',
+      label: 'Memory extraction model',
+      source: id,
+      providerId: settings.memoryClassifier?.providerId,
+      model: settings.memoryClassifier?.model,
+      providerOptions: [
+        { id: 'none', name: 'Disabled' },
+        ...providers.filter(isToolFreeOneShotProvider).map(p => ({
+          id: p.id, name: p.name, enabled: p.enabled !== false,
+        })),
+      ],
+      providerPlaceholder: 'Legacy LM Studio',
+      providerTypes: ['api', 'cli'],
+      notes: 'Classifies agent output using a provider that can run without tools. Disabled skips AI classification and keeps the configured pattern fallback.',
+    }),
+    update: async ({ providerId, model }) => {
+      const assignment = validateRequest(memoryClassifierSettingsSchema, {
+        providerId,
+        model: providerId && providerId !== 'none' ? model : null,
+      });
+      if (assignment.providerId && assignment.providerId !== 'none') {
+        const provider = await getProviderById(assignment.providerId);
+        if (!isToolFreeOneShotProvider(provider) || provider.enabled === false) {
+          throw validationError('Choose an enabled provider that can run without tools');
+        }
+      }
+      await updateSettings({ memoryClassifier: assignment });
+    },
+  },
+  ...automationSettingsHandlers,
+  ...creativeDirectorHandlers,
+  {
+    id: 'settings.voice.llm',
+    collect: ({ voice }, id) => ({
+      area: 'Voice',
+      assignmentType: 'Voice & messaging',
+      label: 'Conversational LLM',
+      source: id,
+      providerId: voice.llm?.provider || null,
+      model: voice.llm?.model || null,
+      providerTypes: apiProviderTypes,
+      link: '/settings/voice',
+    }),
+    update: ({ providerId, model }) => updateVoiceConfig({ llm: { provider: providerId || '', model: model || '' } }),
+  },
+  {
+    id: 'settings.voice.vision',
+    collect: ({ voice }, id) => ({
+      area: 'Voice',
+      assignmentType: 'Voice & messaging',
+      label: 'Screen vision model',
+      source: 'settings.voice.llm.visionModel',
+      providerId: voice.llm?.provider || null,
+      model: voice.llm?.visionModel || null,
+      providerEditable: false,
+      providerTypes: apiProviderTypes,
+      link: '/settings/voice',
+    }),
+    update: ({ model }) => updateVoiceConfig({ llm: { visionModel: model || '' } }),
+  },
+  {
+    id: 'settings.voice.codeAgent',
+    collect: ({ voice }, id) => ({
+      area: 'Voice',
+      assignmentType: 'Voice & messaging',
+      label: 'Delegated coding agent',
+      source: 'settings.voice.llm.codeAgent',
+      providerId: voice.llm?.codeAgent?.provider || null,
+      model: voice.llm?.codeAgent?.model || null,
+      ...agentEntry,
+      link: '/settings/voice',
+    }),
+    update: ({ providerId, model }) => updateVoiceConfig({ llm: { codeAgent: { provider: providerId || '', model: model || '' } } }),
+  },
+  ...messageHandlers,
+  ...codeReviewHandlers,
+];
+
 const addSettingsEntries = async (entries, providers) => {
   const settings = await getSettings();
   const voice = await getVoiceConfig().catch(() => settings.voice || {});
-  const messages = settings.messages || {};
-
-  entries.push(makeEntry({
-    id: 'settings.embeddings',
-    area: 'Memory & Catalog',
-    label: 'Vector embeddings',
-    source: 'settings.embeddings',
-    providerId: settings.embeddings?.provider || 'none',
-    model: settings.embeddings?.model || null,
-    providerOptions: embeddingProviders,
-    providerTypes: [],
-    notes: 'Powers semantic search for the creative catalog and memory (Brain, Chief of Staff retrieval). Until saved, memory keeps the legacy Chief of Staff embedding config.',
-    link: '/models/embeddings',
-  }));
-
-  entries.push(makeEntry({
-    id: 'settings.memoryClassifier',
-    area: 'Memory & Catalog',
-    label: 'Memory extraction model',
-    source: 'settings.memoryClassifier',
-    providerId: settings.memoryClassifier?.providerId,
-    model: settings.memoryClassifier?.model,
-    providerOptions: [
-      { id: 'none', name: 'Disabled' },
-      ...providers.filter(isToolFreeOneShotProvider).map(p => ({
-        id: p.id, name: p.name, enabled: p.enabled !== false,
-      })),
-    ],
-    providerPlaceholder: 'Legacy LM Studio',
-    providerTypes: ['api', 'cli'],
-    notes: 'Classifies agent output using a provider that can run without tools. Disabled skips AI classification and keeps the configured pattern fallback.',
-  }));
-
-  for (const [key, label] of [
-    ['autofixer', 'Autofixer'],
-    ['calendarSync', 'Calendar Sync'],
-  ]) {
-    entries.push(makeEntry({
-      id: `settings.${key}`,
-      area: 'Automation',
-      assignmentType: 'Agents & automation',
-      label,
-      source: `settings.${key}`,
-      providerId: settings[key]?.providerId || null,
-      model: settings[key]?.model || null,
-      ...agentEntry,
-      notes: 'Requires a CLI/TUI provider because it runs agentic tool work.',
-      link: key === 'autofixer' ? '/settings/autofixer' : '/calendar/config',
-    }));
-  }
-
-  entries.push(makeEntry({
-    id: 'settings.creativeDirector.treatment',
-    area: 'Creative Director',
-    assignmentType: 'Creative workflows',
-    label: 'Treatment generation model',
-    source: 'settings.creativeDirector.treatment',
-    providerId: settings.creativeDirector?.treatment?.providerId || null,
-    model: settings.creativeDirector?.treatment?.model || null,
-    effort: settings.creativeDirector?.treatment?.effort || null,
-    effortEditable: true,
-    ...agentEntry,
-    notes: 'Agent model that turns a project brief into a treatment and scene plan. Blank = system default provider and model. Each Creative Director project can override this from its Models drawer.',
-    link: '/creative-director',
-  }));
-
-  entries.push(makeEntry({
-    id: 'settings.creativeDirector.plan',
-    area: 'Creative Director',
-    assignmentType: 'Creative workflows',
-    label: 'Production planning model',
-    source: 'settings.creativeDirector.plan',
-    providerId: settings.creativeDirector?.plan?.providerId || null,
-    model: settings.creativeDirector?.plan?.model || null,
-    effort: settings.creativeDirector?.plan?.effort || null,
-    effortEditable: true,
-    ...agentEntry,
-    notes: 'Agent model that converts a production directive into an executable plan. Blank = system default provider and model. Each Creative Director project can override this from its Models drawer.',
-    link: '/creative-director',
-  }));
-
-  entries.push(makeEntry({
-    id: 'settings.creativeDirector.evaluation',
-    area: 'Creative Director',
-    assignmentType: 'Creative workflows',
-    label: 'Scene evaluation vision model',
-    source: 'settings.creativeDirector.evaluation',
-    providerId: settings.creativeDirector?.evaluation?.providerId || null,
-    model: settings.creativeDirector?.evaluation?.model || null,
-    providerTypes: apiProviderTypes,
-    // Scene evaluation is a vision call — restrict local Ollama/LM Studio
-    // model pickers to VLMs so a text-only default can't be selected by mistake.
-    modelFilter: 'vision',
-    notes: 'Vision model that judges each rendered scene. Use a local Ollama or LM Studio VLM here. Blank = auto-pick an installed local vision model; if none is available it falls back to the coding agent. Each Creative Director project can override this from its Models drawer.',
-    link: '/creative-director',
-  }));
-
-  entries.push(makeEntry({
-    id: 'settings.voice.llm',
-    area: 'Voice',
-    assignmentType: 'Voice & messaging',
-    label: 'Conversational LLM',
-    source: 'settings.voice.llm',
-    providerId: voice.llm?.provider || null,
-    model: voice.llm?.model || null,
-    providerTypes: apiProviderTypes,
-    link: '/settings/voice',
-  }));
-  entries.push(makeEntry({
-    id: 'settings.voice.vision',
-    area: 'Voice',
-    assignmentType: 'Voice & messaging',
-    label: 'Screen vision model',
-    source: 'settings.voice.llm.visionModel',
-    providerId: voice.llm?.provider || null,
-    model: voice.llm?.visionModel || null,
-    providerEditable: false,
-    providerTypes: apiProviderTypes,
-    link: '/settings/voice',
-  }));
-  entries.push(makeEntry({
-    id: 'settings.voice.codeAgent',
-    area: 'Voice',
-    assignmentType: 'Voice & messaging',
-    label: 'Delegated coding agent',
-    source: 'settings.voice.llm.codeAgent',
-    providerId: voice.llm?.codeAgent?.provider || null,
-    model: voice.llm?.codeAgent?.model || null,
-    ...agentEntry,
-    link: '/settings/voice',
-  }));
-
-  for (const action of ['triage', 'reply']) {
-    const cfg = messages[action] || {};
-    entries.push(makeEntry({
-      id: `settings.messages.${action}`,
-      area: 'Messages',
-      assignmentType: 'Voice & messaging',
-      label: `${action[0].toUpperCase()}${action.slice(1)} assistant`,
-      source: `settings.messages.${action}`,
-      providerId: cfg.providerId || messages.providerId || null,
-      model: cfg.model || messages.model || null,
-      link: '/messages/config',
-    }));
-  }
-
-  for (const backend of ['lmstudio', 'ollama']) {
-    entries.push(makeEntry({
-      id: `settings.codeReview.${backend}`,
-      area: 'Review Loop',
-      label: `${backend === 'lmstudio' ? 'LM Studio' : 'Ollama'} reviewer model`,
-      source: `settings.codeReview.${backend}Model`,
-      providerId: backend,
-      model: settings.codeReview?.[`${backend}Model`] || null,
-      providerEditable: false,
-      providerTypes: [],
-      notes: 'Model used when the local reviewer is in the default review chain.',
-      link: '/ai',
-    }));
+  const context = { settings, providers, voice, messages: settings.messages || {} };
+  for (const { id, collect } of settingsHandlers) {
+    entries.push(makeEntry({ id, ...collect(context, id) }));
   }
 };
 
-const addRecordEntries = async (entries) => {
-  const [
-    brainMeta,
-    universes,
-    storySessions,
-    series,
-    schedule,
-    loops,
-    featureAgents,
-    socialAgents,
-    autonomousJobs,
-  ] = await Promise.all([
-    brainService.loadMeta().catch(() => null),
-    universeService.listUniverses().catch(() => []),
-    storyBuilderService.listStorySessions().catch(() => []),
-    pipelineSeriesService.listSeries().catch(() => []),
-    taskScheduleService.getScheduleStatus().catch(() => null),
-    loopsService.getLoops().catch(() => []),
-    featureAgentsService.getAllFeatureAgents().catch(() => []),
-    agentPersonalitiesService.getAllAgents().catch(() => []),
-    autonomousJobsService.getAllJobs().catch(() => []),
-  ]);
+const providerModelFields = ['defaultModel', 'lightModel', 'mediumModel', 'heavyModel'];
+// Provider registry entries have their own editor. Keep these write IDs for existing clients.
+const providerHandlers = [
+  {
+    id: 'provider.active',
+    update: ({ providerId }) => {
+      if (!providerId) throw validationError('System default provider is required');
+      return setActiveProvider(providerId);
+    },
+  },
+  {
+    prefix: 'provider.model.',
+    update: async ({ model }, suffix) => {
+      // A provider ID can contain dots. Model field names are dotless.
+      const lastDot = suffix.lastIndexOf('.');
+      const field = suffix.slice(lastDot + 1);
+      if (lastDot <= 0 || !providerModelFields.includes(field)) throw validationError('Invalid provider model assignment');
+      const id = suffix.slice(0, lastDot);
+      const provider = await getProviderById(id);
+      if (!provider) throw new ServerError(`Provider not found: ${id}`, { status: 404, code: 'NOT_FOUND' });
+      await updateProvider(id, { [field]: model });
+    },
+  },
+  {
+    prefix: 'provider.fallback.',
+    update: ({ providerId }, id) => updateProvider(id, { fallbackProvider: providerId }),
+  },
+];
 
-  if (brainMeta) {
-    entries.push(makeEntry({
-      id: 'brain.default',
+const worldRecordHandlers = [
+  {
+    prefix: 'universe.',
+    area: 'Universe Builder',
+    load: () => universeService.listUniverses(),
+    updateRecord: (id, patch) => universeService.updateUniverse(id, patch),
+    label: (record) => record.name,
+    source: (id) => `universe ${id}.llm`,
+    link: (id) => `/universes/${id}`,
+  },
+  {
+    prefix: 'story.',
+    area: 'Story Builder',
+    load: () => storyBuilderService.listStorySessions(),
+    updateRecord: (id, patch) => storyBuilderService.updateStorySession(id, patch),
+    label: (record) => record.title,
+    source: (id) => `story session ${id}.llm`,
+    link: (id) => `/story-builder/${id}`,
+  },
+  {
+    prefix: 'pipeline.series.',
+    area: 'Pipeline',
+    load: () => pipelineSeriesService.listSeries(),
+    updateRecord: (id, patch) => pipelineSeriesService.updateSeries(id, patch),
+    label: (record) => record.name,
+    source: (id) => `pipeline series ${id}.llm`,
+    link: (id) => `/pipeline/series/${id}`,
+  },
+].map(({ prefix, area, load, updateRecord, label, source, link }) => ({
+  prefix,
+  load: () => load().catch(() => []),
+  collect: (records) => records.filter(({ llm }) => llm?.provider || llm?.model).map(record => ({
+    id: `${prefix}${record.id}`,
+    area,
+    assignmentType: 'World & story building',
+    label: label(record),
+    source: source(record.id),
+    providerId: record.llm.provider,
+    model: record.llm.model,
+    scope: 'record',
+    link: link(record.id),
+  })),
+  update: ({ providerId, model }, id) => updateRecord(id, { llm: { provider: providerId, model } }),
+}));
+
+const hasScheduledAssignment = (config) => Boolean(config?.providerId || config?.model || config?.effort);
+
+const scheduledEntry = ({ providerId, model, effort }, metadata) => ({
+  area: 'Chief of Staff',
+  assignmentType: 'Scheduled tasks',
+  providerId,
+  model,
+  effort,
+  effortEditable: true,
+  scope: 'record',
+  ...metadata,
+});
+
+const updateScheduledStage = async (id, suffix, updateStage) => {
+  const [taskType, indexRaw] = suffix.split('.');
+  const index = Number(indexRaw);
+  const task = await taskScheduleService.getTaskInterval(taskType);
+  const stages = [...(task.taskMetadata?.pipeline?.stages || [])];
+  if (!stages[index]) throw new ServerError(`Stage not found: ${id}`, { status: 404, code: 'NOT_FOUND' });
+  stages[index] = updateStage(stages[index]);
+  await taskScheduleService.updateTaskInterval(taskType, {
+    taskMetadata: { ...(task.taskMetadata || {}), pipeline: { ...(task.taskMetadata?.pipeline || {}), stages } },
+  });
+};
+
+const scheduledStageHandlers = [
+  {
+    prefix: 'cos.taskStage.',
+    collect: (stage, taskType, index, prefix) => {
+      if (!hasScheduledAssignment(stage)) return null;
+      return scheduledEntry(stage, {
+        id: `${prefix}${taskType}.${index}`,
+        label: `${taskType} stage: ${stage.name || index + 1}`,
+        source: `cos task ${taskType}.taskMetadata.pipeline.stages[${index}]`,
+        ...agentEntry,
+        link: '/cos/config',
+      });
+    },
+    update: ({ providerId, model, effortPatch }, suffix, id) =>
+      updateScheduledStage(id, suffix, stage => ({ ...stage, providerId, model, ...effortPatch })),
+  },
+  {
+    prefix: 'cos.taskStageFallback.',
+    collect: (stage, taskType, index, prefix) => {
+      if (!hasScheduledAssignment(stage?.largeInputFallback)) return null;
+      return scheduledEntry(stage.largeInputFallback, {
+        id: `${prefix}${taskType}.${index}`,
+        label: `${taskType} stage: ${stage.name || index + 1} (large-input fallback)`,
+        source: `cos task ${taskType}.taskMetadata.pipeline.stages[${index}].largeInputFallback`,
+        providerTypes: cliProviderTypes,
+        notes: 'Requires a tool-free public-review provider and a model with enough context for the complete input. Configure eligible choices in the scheduled task options.',
+        link: '/cos/config',
+      });
+    },
+    update: ({ providerId, model, effortPatch }, suffix, id) =>
+      updateScheduledStage(id, suffix, stage => {
+        if (!isPlainObject(stage.largeInputFallback)) {
+          throw new ServerError(`Fallback not found: ${id}`, { status: 404, code: 'NOT_FOUND' });
+        }
+        const fallback = { ...stage.largeInputFallback, providerId, model, ...effortPatch };
+        for (const key of ['providerId', 'model', 'effort']) {
+          if (fallback[key] == null) delete fallback[key];
+        }
+        return { ...stage, largeInputFallback: fallback };
+      }),
+  },
+];
+
+const socialAgentKeys = ['default', 'content', 'engagement'];
+
+const recordHandlers = [
+  {
+    id: 'brain.default',
+    load: () => brainService.loadMeta().catch(() => null),
+    collect: (meta, id) => meta ? [{
+      id,
       area: 'Brain',
       label: 'Default classifier and digest model',
       source: 'brain/meta.json',
-      providerId: brainMeta.defaultProvider || null,
-      model: brainMeta.defaultModel || null,
+      providerId: meta.defaultProvider,
+      model: meta.defaultModel,
       link: '/brain/config',
-    }));
-  }
-
-  for (const universe of universes) {
-    if (universe.llm?.provider || universe.llm?.model) {
-      entries.push(makeEntry({
-        id: `universe.${universe.id}`,
-        area: 'Universe Builder',
-        assignmentType: 'World & story building',
-        label: universe.name,
-        source: `universe ${universe.id}.llm`,
-        providerId: universe.llm?.provider || null,
-        model: universe.llm?.model || null,
-        scope: 'record',
-        link: `/universes/${universe.id}`,
-      }));
-    }
-  }
-
-  for (const session of storySessions) {
-    if (session.llm?.provider || session.llm?.model) {
-      entries.push(makeEntry({
-        id: `story.${session.id}`,
-        area: 'Story Builder',
-        assignmentType: 'World & story building',
-        label: session.title,
-        source: `story session ${session.id}.llm`,
-        providerId: session.llm?.provider || null,
-        model: session.llm?.model || null,
-        scope: 'record',
-        link: `/story-builder/${session.id}`,
-      }));
-    }
-  }
-
-  for (const s of series) {
-    if (s.llm?.provider || s.llm?.model) {
-      entries.push(makeEntry({
-        id: `pipeline.series.${s.id}`,
-        area: 'Pipeline',
-        assignmentType: 'World & story building',
-        label: s.name,
-        source: `pipeline series ${s.id}.llm`,
-        providerId: s.llm?.provider || null,
-        model: s.llm?.model || null,
-        scope: 'record',
-        link: `/pipeline/series/${s.id}`,
-      }));
-    }
-  }
-
-  for (const [taskType, task] of Object.entries(schedule?.tasks || {})) {
-    if (task.providerId || task.model || task.effort) {
-      entries.push(makeEntry({
-        id: `cos.task.${taskType}`,
-        area: 'Chief of Staff',
-        assignmentType: 'Scheduled tasks',
-        label: `Scheduled task: ${taskType}`,
-        source: `cos task-schedule ${taskType}`,
-        providerId: task.providerId || null,
-        model: task.model || null,
-        effort: task.effort || null,
-        effortEditable: true,
-        scope: 'record',
-        ...agentEntry,
-        link: '/cos/config',
-      }));
-    }
-    for (const [index, stage] of (task.taskMetadata?.pipeline?.stages || []).entries()) {
-      if (stage?.providerId || stage?.model || stage?.effort) {
-        entries.push(makeEntry({
-          id: `cos.taskStage.${taskType}.${index}`,
-          area: 'Chief of Staff',
-          assignmentType: 'Scheduled tasks',
-          label: `${taskType} stage: ${stage.name || index + 1}`,
-          source: `cos task ${taskType}.taskMetadata.pipeline.stages[${index}]`,
-          providerId: stage.providerId || null,
-          model: stage.model || null,
-          effort: stage.effort || null,
-          effortEditable: true,
-          scope: 'record',
-          ...agentEntry,
-          link: '/cos/config',
-        }));
+    }] : [],
+    update: ({ providerId, model }) => brainService.updateMeta({ defaultProvider: providerId, defaultModel: model }),
+  },
+  ...worldRecordHandlers,
+  {
+    prefix: 'cos.task.',
+    load: () => taskScheduleService.getScheduleStatus().catch(() => null),
+    collect: (schedule, prefix) => {
+      const entries = [];
+      for (const [taskType, task] of Object.entries(schedule?.tasks || {})) {
+        if (hasScheduledAssignment(task)) {
+          entries.push(scheduledEntry(task, {
+            id: `${prefix}${taskType}`,
+            label: `Scheduled task: ${taskType}`,
+            source: `cos task-schedule ${taskType}`,
+            ...agentEntry,
+            link: '/cos/config',
+          }));
+        }
+        for (const [index, stage] of (task.taskMetadata?.pipeline?.stages || []).entries()) {
+          for (const handler of scheduledStageHandlers) {
+            const entry = handler.collect(stage, taskType, index, handler.prefix);
+            if (entry) entries.push(entry);
+          }
+        }
       }
-      const fallback = stage?.largeInputFallback;
-      if (fallback?.providerId || fallback?.model || fallback?.effort) {
-        entries.push(makeEntry({
-          id: `cos.taskStageFallback.${taskType}.${index}`,
-          area: 'Chief of Staff',
-          assignmentType: 'Scheduled tasks',
-          label: `${taskType} stage: ${stage.name || index + 1} (large-input fallback)`,
-          source: `cos task ${taskType}.taskMetadata.pipeline.stages[${index}].largeInputFallback`,
-          providerId: fallback.providerId,
-          model: fallback.model,
-          effort: fallback.effort,
-          effortEditable: true,
-          providerTypes: cliProviderTypes,
-          scope: 'record',
-          notes: 'Requires a tool-free public-review provider and a model with enough context for the complete input. Configure eligible choices in the scheduled task options.',
-          link: '/cos/config',
-        }));
-      }
-    }
-  }
-
-  for (const loop of loops) {
-    if (loop.providerId) {
-      entries.push(makeEntry({
-        id: `loop.${loop.id}`,
-        area: 'Loops',
-        assignmentType: 'Agents & automation',
-        label: loop.name || loop.id,
-        source: `loop ${loop.id}.providerId`,
-        providerId: loop.providerId || null,
-        model: null,
-        scope: 'record',
-        modelEditable: false,
-        ...agentEntry,
-        link: '/loops',
-      }));
-    }
-  }
-
-  for (const agent of featureAgents) {
-    if (agent.providerId || agent.model) {
-      entries.push(makeEntry({
-        id: `featureAgent.${agent.id}`,
-        area: 'Feature Agents',
-        assignmentType: 'Agents & automation',
-        label: agent.name,
-        source: `feature agent ${agent.id}`,
-        providerId: agent.providerId || null,
-        model: agent.model || null,
-        scope: 'record',
-        ...agentEntry,
-        link: `/feature-agents/${agent.id}/config`,
-      }));
-    }
-  }
-
-  for (const agent of socialAgents) {
-    const configs = [];
-    if (agent.aiConfig?.providerId || agent.aiConfig?.model) configs.push(['default', agent.aiConfig]);
-    for (const key of ['content', 'engagement']) {
-      if (agent.aiConfig?.[key]?.providerId || agent.aiConfig?.[key]?.model) configs.push([key, agent.aiConfig[key]]);
-    }
-    for (const [key, cfg] of configs) {
-      entries.push(makeEntry({
-        id: `socialAgent.${agent.id}.${key}`,
-        area: 'Social Agents',
-        assignmentType: 'Agents & automation',
-        label: `${agent.name} ${key}`,
-        source: `agent personality ${agent.id}.aiConfig.${key}`,
-        providerId: cfg.providerId || null,
-        model: cfg.model || null,
-        scope: 'record',
-        link: `/agents/${agent.id}/overview`,
-      }));
-    }
-  }
-
-  for (const job of autonomousJobs) {
-    // Legacy/custom jobs omitted `type`; execution treats those as agent jobs.
-    if ((job.type || 'agent') !== 'agent' || (!job.providerId && !job.model && !job.effort)) continue;
-    entries.push(makeEntry({
-      id: `cos.job.${job.id}`,
-      area: 'Chief of Staff',
-      assignmentType: 'Scheduled tasks',
-      label: `Scheduled job: ${job.name}`,
-      source: `cos autonomous job ${job.id}`,
-      providerId: job.providerId || null,
-      model: job.model || null,
-      effort: job.effort || null,
-      effortEditable: true,
+      return entries;
+    },
+    update: async ({ providerId, model, effortPatch }, taskType) => {
+      // The schedule writer creates missing tasks; this editor only updates existing ones.
+      const status = await taskScheduleService.getScheduleStatus();
+      if (!status?.tasks?.[taskType]) throw new ServerError(`Scheduled task not found: ${taskType}`, { status: 404, code: 'NOT_FOUND' });
+      await taskScheduleService.updateTaskInterval(taskType, { providerId, model, ...effortPatch });
+    },
+  },
+  {
+    prefix: 'loop.',
+    load: () => loopsService.getLoops().catch(() => []),
+    collect: (loops, prefix) => loops.filter(loop => loop.providerId).map(loop => ({
+      id: `${prefix}${loop.id}`,
+      area: 'Loops',
+      assignmentType: 'Agents & automation',
+      label: loop.name || loop.id,
+      source: `loop ${loop.id}.providerId`,
+      providerId: loop.providerId,
+      scope: 'record',
+      modelEditable: false,
+      ...agentEntry,
+      link: '/loops',
+    })),
+    update: ({ providerId }, id) => loopsService.updateLoop(id, { providerId }),
+  },
+  {
+    prefix: 'featureAgent.',
+    load: () => featureAgentsService.getAllFeatureAgents().catch(() => []),
+    collect: (agents, prefix) => agents.filter(agent => agent.providerId || agent.model).map(agent => ({
+      id: `${prefix}${agent.id}`,
+      area: 'Feature Agents',
+      assignmentType: 'Agents & automation',
+      label: agent.name,
+      source: `feature agent ${agent.id}`,
+      providerId: agent.providerId,
+      model: agent.model,
       scope: 'record',
       ...agentEntry,
-      link: '/cos/jobs',
-    }));
+      link: `/feature-agents/${agent.id}/config`,
+    })),
+    update: async ({ providerId, model }, id) => {
+      const updated = await featureAgentsService.updateFeatureAgent(id, { providerId, model });
+      if (!updated) throw new ServerError(`Feature agent not found: ${id}`, { status: 404, code: 'NOT_FOUND' });
+    },
+  },
+  {
+    prefix: 'socialAgent.',
+    load: () => agentPersonalitiesService.getAllAgents().catch(() => []),
+    collect: (agents, prefix) => agents.flatMap(agent => {
+      const entries = [];
+      for (const key of socialAgentKeys) {
+        const config = key === 'default' ? agent.aiConfig : agent.aiConfig?.[key];
+        if (!config?.providerId && !config?.model) continue;
+        entries.push({
+          id: `${prefix}${agent.id}.${key}`,
+          area: 'Social Agents',
+          assignmentType: 'Agents & automation',
+          label: `${agent.name} ${key}`,
+          source: `agent personality ${agent.id}.aiConfig.${key}`,
+          providerId: config.providerId,
+          model: config.model,
+          scope: 'record',
+          link: `/agents/${agent.id}/overview`,
+        });
+      }
+      return entries;
+    }),
+    update: async ({ providerId, model }, suffix) => {
+      const parts = suffix.split('.');
+      const [agentId, key] = parts;
+      if (parts.length !== 2 || !agentId.trim() || !socialAgentKeys.includes(key)) {
+        throw validationError('Invalid social agent assignment');
+      }
+      const agent = await agentPersonalitiesService.getAgentById(agentId);
+      if (!agent) throw new ServerError(`Agent not found: ${agentId}`, { status: 404, code: 'NOT_FOUND' });
+      const aiConfig = isPlainObject(agent.aiConfig) ? { ...agent.aiConfig } : {};
+      const assignment = { providerId: providerId || undefined, model: model || undefined };
+      if (key === 'default') Object.assign(aiConfig, assignment);
+      else aiConfig[key] = { ...(isPlainObject(aiConfig[key]) ? aiConfig[key] : {}), ...assignment };
+      await agentPersonalitiesService.updateAgent(agentId, { aiConfig });
+    },
+  },
+  {
+    prefix: 'cos.job.',
+    load: () => autonomousJobsService.getAllJobs().catch(() => []),
+    // Legacy/custom jobs without a type still execute as agent jobs.
+    collect: (jobs, prefix) => jobs.filter(job => (job.type || 'agent') === 'agent' && hasScheduledAssignment(job)).map(job =>
+      scheduledEntry(job, {
+        id: `${prefix}${job.id}`,
+        label: `Scheduled job: ${job.name}`,
+        source: `cos autonomous job ${job.id}`,
+        ...agentEntry,
+        link: '/cos/jobs',
+      })),
+    update: async ({ providerId, model, effortPatch }, id) => {
+      const updated = await autonomousJobsService.updateJob(id, { providerId, model, ...effortPatch });
+      if (!updated) throw new ServerError(`Scheduled job not found: ${id}`, { status: 404, code: 'NOT_FOUND' });
+    },
+  },
+];
+
+const assignmentHandlers = [...providerHandlers, ...settingsHandlers, ...recordHandlers, ...scheduledStageHandlers];
+
+const addRecordEntries = async (entries) => {
+  const records = await Promise.all(recordHandlers.map(({ load }) => load()));
+  for (const [index, { id, prefix, collect }] of recordHandlers.entries()) {
+    for (const entry of collect(records[index], id ?? prefix)) entries.push(makeEntry(entry));
   }
 };
 
@@ -537,196 +650,18 @@ export async function getAiAssignments() {
 }
 
 export async function updateAiAssignment(id, payload = {}) {
+  if (typeof id !== 'string') throw validationError('AI assignment ID must be a string');
+  const handler = assignmentHandlers.find(({ id: exactId, prefix }) =>
+    exactId === id || (prefix && id.startsWith(prefix)));
+  if (!handler) throw validationError(`Unknown AI assignment: ${id}`);
+
   const { providerId, model, effort } = payload;
-  const nextProviderId = asNullable(providerId);
-  const nextModel = asNullable(model);
-  const nextEffort = asNullable(effort);
-  // Older clients only send provider/model. Preserve a saved effort unless the
-  // caller explicitly supplies the field (null is the intentional clear).
-  const effortPatch = Object.hasOwn(payload, 'effort') ? { effort: nextEffort } : {};
-
-  if (id === 'provider.active') {
-    if (!nextProviderId) throw new ServerError('System default provider is required', { status: 400, code: 'VALIDATION_ERROR' });
-    await setActiveProvider(nextProviderId);
-    return getAiAssignments();
-  }
-
-  if (id.startsWith('provider.model.')) {
-    // field is a fixed dotless suffix (defaultModel/lightModel/...); parse it
-    // from the last dot so a provider id containing a '.' still targets the
-    // right provider (mirrors the replace-based fallback handler below).
-    const rest = id.slice('provider.model.'.length);
-    const lastDot = rest.lastIndexOf('.');
-    const providerIdPart = rest.slice(0, lastDot);
-    const field = rest.slice(lastDot + 1);
-    const provider = await getProviderById(providerIdPart);
-    if (!provider) throw new ServerError(`Provider not found: ${providerIdPart}`, { status: 404, code: 'NOT_FOUND' });
-    await updateProvider(providerIdPart, { [field]: nextModel });
-    return getAiAssignments();
-  }
-
-  if (id.startsWith('provider.fallback.')) {
-    const providerIdPart = id.replace('provider.fallback.', '');
-    await updateProvider(providerIdPart, { fallbackProvider: nextProviderId });
-    return getAiAssignments();
-  }
-
-  if (id === 'settings.embeddings') {
-    await updateSettings({ embeddings: { provider: nextProviderId || 'none', model: nextModel } });
-    return getAiAssignments();
-  }
-
-  if (id === 'settings.memoryClassifier') {
-    const assignment = validateRequest(memoryClassifierSettingsSchema, {
-      providerId: nextProviderId,
-      model: nextProviderId && nextProviderId !== 'none' ? nextModel : null,
-    });
-    if (assignment.providerId && assignment.providerId !== 'none') {
-      const provider = await getProviderById(assignment.providerId);
-      if (!isToolFreeOneShotProvider(provider) || provider.enabled === false) {
-        throw new ServerError('Choose an enabled provider that can run without tools', { status: 400, code: 'VALIDATION_ERROR' });
-      }
-    }
-    await updateSettings({ memoryClassifier: assignment });
-    return getAiAssignments();
-  }
-
-  if (id === 'settings.autofixer' || id === 'settings.calendarSync') {
-    const key = id.split('.')[1];
-    await updateSettings({ [key]: { providerId: nextProviderId, model: nextModel } });
-    return getAiAssignments();
-  }
-
-  if (id.startsWith('settings.creativeDirector.')) {
-    const stage = id.slice('settings.creativeDirector.'.length);
-    if (!['treatment', 'plan', 'evaluation'].includes(stage)) {
-      throw new ServerError(`Unknown Creative Director assignment: ${id}`, { status: 400, code: 'VALIDATION_ERROR' });
-    }
-    await patchSettingsPath(`creativeDirector.${stage}`, { providerId: nextProviderId, model: nextModel, ...(stage !== 'evaluation' ? effortPatch : {}) });
-    return getAiAssignments();
-  }
-
-  if (id === 'settings.voice.llm') {
-    await updateVoiceConfig({ llm: { provider: nextProviderId || '', model: nextModel || '' } });
-    return getAiAssignments();
-  }
-
-  if (id === 'settings.voice.vision') {
-    await updateVoiceConfig({ llm: { visionModel: nextModel || '' } });
-    return getAiAssignments();
-  }
-
-  if (id === 'settings.voice.codeAgent') {
-    await updateVoiceConfig({ llm: { codeAgent: { provider: nextProviderId || '', model: nextModel || '' } } });
-    return getAiAssignments();
-  }
-
-  if (id === 'settings.messages.triage' || id === 'settings.messages.reply') {
-    const action = id.split('.')[2];
-    const settings = await getSettings();
-    const messages = isPlainObject(settings.messages) ? { ...settings.messages } : {};
-    messages[action] = { ...(isPlainObject(messages[action]) ? messages[action] : {}), providerId: nextProviderId, model: nextModel };
-    await updateSettings({ messages });
-    return getAiAssignments();
-  }
-
-  if (id.startsWith('settings.codeReview.')) {
-    const backend = id.split('.')[2];
-    await patchSettingsPath(`codeReview.${backend}Model`, nextModel);
-    return getAiAssignments();
-  }
-
-  if (id === 'brain.default') {
-    await brainService.updateMeta({ defaultProvider: nextProviderId, defaultModel: nextModel });
-    return getAiAssignments();
-  }
-
-  if (id.startsWith('universe.')) {
-    await universeService.updateUniverse(id.replace('universe.', ''), { llm: { provider: nextProviderId, model: nextModel } });
-    return getAiAssignments();
-  }
-
-  if (id.startsWith('story.')) {
-    await storyBuilderService.updateStorySession(id.replace('story.', ''), { llm: { provider: nextProviderId, model: nextModel } });
-    return getAiAssignments();
-  }
-
-  if (id.startsWith('pipeline.series.')) {
-    await pipelineSeriesService.updateSeries(id.replace('pipeline.series.', ''), { llm: { provider: nextProviderId, model: nextModel } });
-    return getAiAssignments();
-  }
-
-  if (id.startsWith('cos.taskStage.') || id.startsWith('cos.taskStageFallback.')) {
-    const [, , taskType, indexRaw] = id.split('.');
-    const index = Number(indexRaw);
-    const task = await taskScheduleService.getTaskInterval(taskType);
-    const stages = [...(task.taskMetadata?.pipeline?.stages || [])];
-    if (!stages[index]) throw new ServerError(`Stage not found: ${id}`, { status: 404, code: 'NOT_FOUND' });
-    if (id.startsWith('cos.taskStageFallback.')) {
-      if (!isPlainObject(stages[index].largeInputFallback)) throw new ServerError(`Fallback not found: ${id}`, { status: 404, code: 'NOT_FOUND' });
-      const fallback = { ...stages[index].largeInputFallback, providerId: nextProviderId, model: nextModel, ...effortPatch };
-      for (const key of ['providerId', 'model', 'effort']) {
-        if (fallback[key] == null) delete fallback[key];
-      }
-      stages[index] = { ...stages[index], largeInputFallback: fallback };
-    } else {
-      stages[index] = { ...stages[index], providerId: nextProviderId, model: nextModel, ...effortPatch };
-    }
-    await taskScheduleService.updateTaskInterval(taskType, {
-      taskMetadata: { ...(task.taskMetadata || {}), pipeline: { ...(task.taskMetadata?.pipeline || {}), stages } },
-    });
-    return getAiAssignments();
-  }
-
-  if (id.startsWith('cos.task.')) {
-    const taskType = id.replace('cos.task.', '');
-    // updateTaskInterval is create-if-missing, so an unknown taskType would
-    // write a junk schedule record — gate on the existing task set first.
-    const status = await taskScheduleService.getScheduleStatus();
-    if (!status?.tasks?.[taskType]) throw new ServerError(`Scheduled task not found: ${taskType}`, { status: 404, code: 'NOT_FOUND' });
-    await taskScheduleService.updateTaskInterval(taskType, { providerId: nextProviderId, model: nextModel, ...effortPatch });
-    return getAiAssignments();
-  }
-
-  if (id.startsWith('cos.job.')) {
-    const jobId = id.replace('cos.job.', '');
-    const updated = await autonomousJobsService.updateJob(jobId, {
-      providerId: nextProviderId,
-      model: nextModel,
-      ...effortPatch,
-    });
-    if (!updated) throw new ServerError(`Scheduled job not found: ${jobId}`, { status: 404, code: 'NOT_FOUND' });
-    return getAiAssignments();
-  }
-
-  if (id.startsWith('loop.')) {
-    await loopsService.updateLoop(id.replace('loop.', ''), { providerId: nextProviderId });
-    return getAiAssignments();
-  }
-
-  if (id.startsWith('featureAgent.')) {
-    const agentId = id.replace('featureAgent.', '');
-    // updateFeatureAgent returns null (not throw) for an unknown id; surface it
-    // so a stale edit doesn't report success while nothing changed.
-    const updated = await featureAgentsService.updateFeatureAgent(agentId, { providerId: nextProviderId, model: nextModel });
-    if (!updated) throw new ServerError(`Feature agent not found: ${agentId}`, { status: 404, code: 'NOT_FOUND' });
-    return getAiAssignments();
-  }
-
-  if (id.startsWith('socialAgent.')) {
-    const [, agentId, key] = id.split('.');
-    const agent = await agentPersonalitiesService.getAgentById(agentId);
-    if (!agent) throw new ServerError(`Agent not found: ${agentId}`, { status: 404, code: 'NOT_FOUND' });
-    const aiConfig = isPlainObject(agent.aiConfig) ? { ...agent.aiConfig } : {};
-    if (key === 'default') {
-      aiConfig.providerId = nextProviderId || undefined;
-      aiConfig.model = nextModel || undefined;
-    } else {
-      aiConfig[key] = { ...(isPlainObject(aiConfig[key]) ? aiConfig[key] : {}), providerId: nextProviderId || undefined, model: nextModel || undefined };
-    }
-    await agentPersonalitiesService.updateAgent(agentId, { aiConfig });
-    return getAiAssignments();
-  }
-
-  throw new ServerError(`Unknown AI assignment: ${id}`, { status: 400, code: 'VALIDATION_ERROR' });
+  // Older clients only send provider/model. Preserve saved effort when omitted.
+  const effortPatch = Object.hasOwn(payload, 'effort') ? { effort: asNullable(effort) } : {};
+  await handler.update({
+    providerId: asNullable(providerId),
+    model: asNullable(model),
+    effortPatch,
+  }, handler.prefix ? id.slice(handler.prefix.length) : id, id);
+  return getAiAssignments();
 }
