@@ -5,7 +5,7 @@
  * reviewer's context is assembled, and every calibration task is handed one of
  * those addresses as its starting point. They are PROSE — nothing compiles
  * against them — so a rename of `evaluateGoalFidelity`, a move of
- * `GOAL_FIDELITY_SYSTEM_PROMPT` out of `codeReview.js`, or a file split leaves
+ * `GOAL_FIDELITY_SYSTEM_PROMPT` out of `goalFidelityReview.js`, or a file split leaves
  * the table silently pointing at nothing, in a task whose whole value
  * proposition is "here is the shortest path to the code" and whose reader is an
  * unattended agent that will act on it.
