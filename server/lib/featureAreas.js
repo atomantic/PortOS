@@ -419,7 +419,7 @@ export const FEATURE_AREAS = Object.freeze([
     codeGlobs: [
       'server/routes/{scaffold,git,github,history,loops,instances,dataManager,dataMaintenance,dataSync,referenceRepos,workspaceContexts,managed,apiDocs}*',
       'server/routes/apps/**',
-      'server/services/git/**',
+      'server/services/{git,instances}/**',
       'server/services/app!(leHealth*)',
       'server/services/{git,forge,repo,pm2,loops,instances,dataManager,managed,xcode,workspaceContext}*',
       'server/lib/app!(leHealth*)',
