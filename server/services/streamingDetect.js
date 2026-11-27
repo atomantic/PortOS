@@ -127,7 +127,7 @@ export function detectGodotNativeLaunch(dirPath) {
 
 /**
  * Ecosystem config filenames in the order they're resolved. The READER
- * (parseEcosystemFromPath) and the WRITER (writeEcosystemPorts) must agree on
+ * (parseEcosystemFromPath) and the WRITER (writeEcosystemPortEdits) must agree on
  * this order: if a repo has both, the writer has to rewrite the same file the
  * reader derives ports from, or a port edit lands in a file detection ignores
  * and silently reverts on the next refresh.
@@ -208,23 +208,18 @@ export async function parseEcosystemFromPath(dirPath) {
   return { processes: [], pm2Home: null };
 }
 
-export async function writeEcosystemPorts(repoPath, remap) {
-  const { file, changed } = await writeEcosystemPortEdits(repoPath, remap, []);
-  return { file, changed };
-}
-
 /** Plan every requested process/label against one original snapshot, then write once. */
-export async function writeEcosystemPortEdits(repoPath, remap, edits) {
+export async function writeEcosystemPortEdits(repoPath, edits) {
   for (const name of ECOSYSTEM_CONFIG_FILENAMES) {
     const filePath = join(repoPath, name);
     if (!existsSync(filePath)) continue;
     const content = await readFile(filePath, 'utf-8');
-    const { content: updated, ...result } = planEcosystemPortEdits(content, remap, edits);
+    const { content: updated, ...result } = planEcosystemPortEdits(content, edits);
     const changed = updated !== content;
     if (changed) await atomicWrite(filePath, updated);
     return { file: name, changed, ...result };
   }
-  return { file: null, changed: false, remapApplied: false, applied: [], unapplied: edits || [] };
+  return { file: null, changed: false, applied: [], unapplied: edits || [] };
 }
 
 // Each detection step mutates the shared `result` and emits its own `detect:step`
