@@ -315,7 +315,6 @@ export const sendCosAgentBtw = (id, message, options = {}) => request(`/cos/agen
   body: JSON.stringify({ message }),
   ...options
 });
-export const getCosFeedbackStats = (options = {}) => request('/cos/feedback/stats', options);
 
 // CoS Briefings
 export const getCosBriefings = (options = {}) => request('/cos/briefings', options);
@@ -333,14 +332,9 @@ export const getCosWhileAwayActivity = (since, options) =>
 export const getCosLearning = (options = {}) => request('/cos/learning', options);
 export const getCosLearningDashboard = (options = {}) => request('/cos/learning/dashboard', options);
 export const getCosLearningDurations = (options = {}) => request('/cos/learning/durations', options);
-export const getCosLearningSkipped = (options = {}) => request('/cos/learning/skipped', options);
-export const getCosLearningPerformance = (options = {}) => request('/cos/learning/performance', options);
-export const getCosLearningRouting = (options = {}) => request('/cos/learning/routing', options);
 export const getCosLearningSummary = (options) => request('/cos/learning/summary', options);
-export const getCosLearningConfidence = (options = {}) => request('/cos/learning/confidence', options);
 export const backfillCosLearning = () => request('/cos/learning/backfill', { method: 'POST' });
 export const resetCosTaskTypeLearning = (taskType) => request(`/cos/learning/reset/${encodeURIComponent(taskType)}`, { method: 'POST' });
-export const getDismissedCosRecommendations = (options = {}) => request('/cos/learning/recommendations/dismissed', options);
 export const dismissCosRecommendation = (id, snapshot) => request('/cos/learning/recommendations/dismiss', {
   method: 'POST',
   body: JSON.stringify({ id, snapshot })

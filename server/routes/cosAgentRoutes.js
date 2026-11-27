@@ -8,7 +8,7 @@ import { requireCosOrphanRecoveryHandlers } from '../services/bootHookRegistry.j
 import { getTaskView } from '../services/cos/cosTaskStore.js';
 import { clearCompletedAgents } from '../services/cos/cosAgentArchive.js';
 import { getCompletedAgentPage } from '../services/cos/cosAgentIndex.js';
-import { getFeedbackStats, getPendingAgentFeedback, getPendingAgentFeedbackCount, getPendingAgentFeedbackPage, submitAgentFeedback } from '../services/cos/cosAgentFeedback.js';
+import { getPendingAgentFeedback, getPendingAgentFeedbackCount, getPendingAgentFeedbackPage, submitAgentFeedback } from '../services/cos/cosAgentFeedback.js';
 import { getHealthStatus, runHealthCheck } from '../services/cos/cosHealthMonitor.js';
 // Lifecycle transitions go through the facade (#3450).
 import * as agentOrchestrator from '../services/agent/agentOrchestrator.js';
@@ -295,12 +295,6 @@ router.post('/agents/:id/btw', asyncHandler(async (req, res) => {
   // result-shape string-matching here.
   const result = await sendBtwToAgent(req.params.id, message);
   res.json(result);
-}));
-
-// GET /api/cos/feedback/stats - Get feedback statistics
-router.get('/feedback/stats', asyncHandler(async (req, res) => {
-  const stats = await getFeedbackStats();
-  res.json(stats);
 }));
 
 export default router;

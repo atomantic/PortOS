@@ -31,9 +31,10 @@
  *
  * 1. The forward check reads request, api.<verb> and API_BASE fetch calls in
  *    client/src/services/api*.js. It reports paths it cannot fold as unresolved.
- * 2. The reverse check reads all client sources. It matches each call by path
- *    and method, and treats standalone URL literals as references with an
- *    unknown method. These wider references cannot fail the forward check.
+ * 2. The reverse check reads all client sources. It ignores API wrapper exports
+ *    that production code never imports or references, then matches calls by
+ *    path and method. Standalone URL literals count with an unknown method.
+ *    These wider references cannot fail the forward check.
  *
  * How the reverse check tells a call site from a mention: comments are blanked first, test
  * files are never read, and a literal counts only when the whole literal IS the URL
@@ -49,8 +50,9 @@
  * computed fresh in the test and used only to name a failing call site.
  */
 
+import { parse } from '@babel/parser';
 import { readdirSync, readFileSync } from 'node:fs';
-import { join, sep } from 'node:path';
+import { join, posix, sep } from 'node:path';
 import { escapeRegExp } from './textUtils.js';
 
 /** The reference pass reads every non-test source file under here. */
@@ -63,6 +65,8 @@ const CLIENT_TEST_FILE = /(?:\.(?:test|spec)\.[jt]sx?$|(?:^|\/)(?:__tests__|__mo
  * caller-supplied path by design, so scanning it would only produce noise.
  */
 const TRANSPORT_MODULE = 'apiCore.js';
+const API_MODULE = /^services\/api.*\.js$/;
+const isScannedWrapper = (file) => API_MODULE.test(file) && file !== `services/${TRANSPORT_MODULE}`;
 
 /** Calls whose first argument may identify a PortOS API route. */
 const REQUEST_CALL = /(?<![.\w$])(request|fetch|EventSource|api\.(?:get|post|put|patch|delete))\s*\(/g;
@@ -427,7 +431,7 @@ function callMethod(call, expression, argsAfterPath) {
 function apiFactoryCalls(files) {
   const calls = new Map();
   for (const [file, source] of files) {
-    if (!/^services\/api.*\.js$/.test(file)) continue;
+    if (!API_MODULE.test(file)) continue;
     const imports = /\bimport\s*\{\s*(create\w+)\s*\}\s*from\s*['"]\.\/(api\w+\.js)['"]/g;
     for (const [, name, module] of source.matchAll(imports)) {
       const key = `services/${module}:${name}`;
@@ -462,7 +466,7 @@ function apiFactoryScopes(source, file, helpers, calls) {
 function scanFile(source, { file, forward, paths, unresolved, referenced, factoryCalls }) {
   const helpers = parsePathHelpers(source);
   const context = { helpers, scope: API_BASE_SCOPE };
-  const factoryScopes = forward ? apiFactoryScopes(source, file, helpers, factoryCalls) : [];
+  const factoryScopes = isScannedWrapper(file) ? apiFactoryScopes(source, file, helpers, factoryCalls) : [];
 
   // Literal spans first: a call-shaped text INSIDE a string (`'api.get("/x")'` in help text or a log)
   // is a mention, so the verb scan below skips matches that start inside one.
@@ -492,7 +496,7 @@ function scanFile(source, { file, forward, paths, unresolved, referenced, factor
     const values = factory
       ? factory.variants.flatMap(variant => resolvePathExpression(expression, { ...context, helpers: variant }) ?? [DYNAMIC])
       : (resolvePathExpression(expression, context)
-        ?? (checkForward && /^[A-Za-z_$][\w$]*$/.test(expression)
+        ?? (isScannedWrapper(file) && /^[A-Za-z_$][\w$]*$/.test(expression)
           ? resolveForwardedParameter(source, match.index, expression, context) : null));
     const directUrl = call === 'fetch' || call === 'EventSource';
     const resolved = (values ?? []).map((value) => {
@@ -565,6 +569,148 @@ const listClientSourceFiles = (repoRoot) => readdirSync(join(repoRoot, CLIENT_SR
   .sort();
 
 /**
+ * Find local wrapper declarations with no production import, re-export or
+ * same-module reference. Namespace property reads identify their export. A
+ * namespace passed around as a value or obtained by dynamic import can reach any export.
+ * The path scanner can then ignore a dead wrapper's calls AND URL literals
+ * without changing how it folds a live request.
+ */
+function unusedApiDeclarations(files) {
+  const wrapperFiles = new Set(files.map(([file]) => file).filter(isScannedWrapper));
+  const imports = new Map();
+  const declarations = new Map();
+  const reexports = [];
+
+  for (const [file, source] of files) {
+    const wrapper = wrapperFiles.has(file);
+    // Only relative specifiers ending in an API module name can reach these files.
+    if (!wrapper && !/['"]\.[^'"\n]*\/api[^/'"\n]*['"]/.test(source)) continue;
+    const { program, tokens } = parse(source, { sourceType: 'module', sourceFilename: file, plugins: ['jsx'], tokens: wrapper, attachComment: false });
+    const resolveModule = (specifier) => {
+      if (!specifier?.startsWith('.')) return null;
+      const target = posix.normalize(posix.join(posix.dirname(file), specifier));
+      return target.endsWith('.js') ? target : `${target}.js`;
+    };
+    const recordImport = (target, name) => {
+      if (!wrapperFiles.has(target)) return;
+      if (!imports.has(target)) imports.set(target, new Set());
+      imports.get(target).add(name);
+    };
+
+    const locals = new Map();
+    const exports = new Map();
+    const namespaces = new Map();
+    for (const statement of program.body) {
+      if (statement.source) {
+        const target = resolveModule(statement.source.value);
+        if (!wrapperFiles.has(target)) continue;
+        if (statement.type === 'ExportAllDeclaration') {
+          recordImport(target, '*');
+          continue;
+        }
+        for (const specifier of statement.specifiers) {
+          if (specifier.type === 'ImportNamespaceSpecifier') {
+            namespaces.set(specifier.local.name, target);
+            continue;
+          }
+          const binding = specifier.imported ?? specifier.local;
+          const name = specifier.type === 'ImportDefaultSpecifier' ? 'default' : binding?.name ?? binding?.value ?? '*';
+          if (wrapper && specifier.exported) {
+            reexports.push({ file, exported: specifier.exported.name ?? specifier.exported.value, target, name });
+          } else {
+            recordImport(target, name);
+          }
+        }
+        continue;
+      }
+      if (!wrapper) continue;
+      const exportNamed = statement.type === 'ExportNamedDeclaration';
+      const exportDefault = statement.type === 'ExportDefaultDeclaration';
+      const declaration = exportNamed || exportDefault ? statement.declaration : statement;
+      if (exportDefault) {
+        exports.set('default', declaration.type === 'Identifier'
+          ? { local: declaration.name }
+          : { span: declaration, local: declaration.id?.name });
+      }
+      for (const binding of declaration?.declarations ?? [declaration]) {
+        if (binding?.id?.type !== 'Identifier') continue;
+        locals.set(binding.id.name, binding);
+        if (exportNamed) exports.set(binding.id.name, { local: binding.id.name });
+      }
+      for (const { exported, local } of statement.specifiers ?? []) {
+        exports.set(exported.name ?? exported.value, { local: local.name });
+      }
+    }
+
+    function visit(node, parent) {
+      if (!node?.type || node.type === 'ImportDeclaration') return;
+      if (node.type === 'ImportExpression') recordImport(resolveModule(node.source.value), '*');
+      if (node.type === 'Identifier' && namespaces.has(node.name)) {
+        const member = parent.type === 'MemberExpression' || parent.type === 'OptionalMemberExpression';
+        if (member && parent.object === node) {
+          const key = parent.computed ? (parent.property.type === 'StringLiteral' ? parent.property.value : '*') : parent.property.name;
+          recordImport(namespaces.get(node.name), key);
+        } else if (!member || parent.computed) {
+          recordImport(namespaces.get(node.name), '*');
+        }
+      }
+      for (const child of Object.values(node)) {
+        if (Array.isArray(child)) child.forEach(item => visit(item, node));
+        else visit(child, node);
+      }
+    }
+    if (namespaces.size || /\bimport\s*\(/.test(source)) visit(program);
+
+    if (!wrapper) continue;
+    const exportLists = program.body.filter(statement =>
+      statement.type === 'ExportNamedDeclaration' && !statement.declaration
+      || statement.type === 'ExportDefaultDeclaration' && statement.declaration.type === 'Identifier');
+    const identifiers = new Map();
+    for (const token of tokens) {
+      if (token.type.label !== 'name' || !locals.has(token.value)) continue;
+      if (exportLists.some(statement => token.start >= statement.start && token.start < statement.end)) continue;
+      if (!identifiers.has(token.value)) identifiers.set(token.value, []);
+      identifiers.get(token.value).push(token.start);
+    }
+    declarations.set(file, [...exports].flatMap(([name, { span: explicitSpan, local }]) => {
+      const span = explicitSpan ?? locals.get(local);
+      if (!span || identifiers.get(local)?.some(start => start < span.start || start >= span.end)) return [];
+      return [{ name, start: span.start, end: span.end }];
+    }));
+  }
+
+  // Propagate live named re-exports through wrapper barrels.
+  let changed;
+  do {
+    changed = false;
+    for (const { file, exported, target, name } of reexports) {
+      const through = imports.get(file);
+      if (!through?.has('*') && !through?.has(exported)) continue;
+      if (!imports.has(target)) imports.set(target, new Set());
+      const names = imports.get(target);
+      if (names.has(name)) continue;
+      names.add(name);
+      changed = true;
+    }
+  } while (changed);
+
+  return new Map([...declarations].map(([file, bindings]) => {
+    const imported = imports.get(file);
+    const liveStarts = new Set(bindings.filter(({ name }) => imported?.has(name)).map(({ start }) => start));
+    return [file, imported?.has('*') ? [] : bindings.filter(({ start }) => !liveStarts.has(start))];
+  }));
+}
+
+function blankUnusedDeclarations(source, declarations) {
+  let result = source;
+  const spans = new Map(declarations.map(({ start, end }) => [start, end]));
+  for (const [start, end] of spans) {
+    result = result.slice(0, start) + source.slice(start, end).replace(/[^\r\n]/g, ' ') + result.slice(end);
+  }
+  return result;
+}
+
+/**
  * Scan the client and return the `/api/...` paths its service modules request
  * (`paths`, `unresolved`) and the wider set any client file references (`referenced`).
  *
@@ -577,17 +723,31 @@ export function scanClientApiPaths({ repoRoot, sources } = {}) {
     ? Object.entries(sources).filter(([file]) => !CLIENT_TEST_FILE.test(file))
     : listClientSourceFiles(repoRoot).map((file) => [file, readFileSync(join(repoRoot, CLIENT_SRC_DIR, file), 'utf8')]);
   // Probe sources may name a wrapper without its services/ prefix.
-  const stripped = files.map(([name, source]) => [
-    sources && !name.includes('/') ? `services/${name}` : name, stripComments(source),
+  const normalized = files.map(([name, source]) => [
+    sources && !name.includes('/') ? `services/${name}` : name, source,
   ]);
+  const unused = unusedApiDeclarations(normalized);
+  const stripped = normalized.map(([file, source]) => [file, stripComments(source)]);
+  const liveSources = new Map(stripped.map(([file, source]) =>
+    [file, blankUnusedDeclarations(source, unused.get(file) ?? [])]));
   const factoryCalls = apiFactoryCalls(stripped);
+  const liveFactoryCalls = apiFactoryCalls(liveSources);
+  const sameFactories = JSON.stringify([...factoryCalls]) === JSON.stringify([...liveFactoryCalls]);
 
   const paths = [];
   const unresolved = [];
   const referenced = [];
   for (const [file, source] of stripped) {
-    const forward = /^services\/api.*\.js$/.test(file) && file !== `services/${TRANSPORT_MODULE}`;
-    scanFile(source, { file, forward, paths, unresolved, referenced, factoryCalls });
+    const liveSource = liveSources.get(file);
+    const scannedWrapper = isScannedWrapper(file);
+    const needsSeparateForward = scannedWrapper && (liveSource !== source || !sameFactories);
+    if (needsSeparateForward) {
+      scanFile(source, { file, forward: true, paths, unresolved, referenced: [], factoryCalls });
+    }
+    scanFile(liveSource, {
+      file, forward: scannedWrapper && !needsSeparateForward,
+      paths, unresolved, referenced, factoryCalls: liveFactoryCalls,
+    });
   }
 
   return { paths, unresolved, referenced };

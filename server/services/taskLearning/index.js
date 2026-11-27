@@ -15,11 +15,9 @@
  *   - correlationQuality.js   — enriched-signal ↔ outcome correlation window
  *   - durations.js            — duration estimates + queue completion
  *   - insights.js             — insights view, recommendations, dismissals
- *   - promptRecommendations.js — prompt-improvement suggestions
  *   - lifecycle.js            — init wiring + history backfill
  *
- * This barrel preserves the original public API of `taskLearning.js` so
- * every existing importer is unaffected.
+ * This barrel is the shared entry point for callers of `taskLearning.js`.
  */
 
 export {
@@ -63,11 +61,8 @@ export {
 export {
   suggestModelTier,
   deriveFailureSignalAvoidance,
-  getRoutingAccuracy,
   getPerformanceSummary,
-  getSkippedTaskTypes,
-  getTaskTypeConfidence,
-  getConfidenceLevels
+  getTaskTypeConfidence
 } from './routing.js';
 
 export {
@@ -88,15 +83,10 @@ export {
   dismissRecommendation,
   restoreRecommendation,
   clearDismissedRecommendations,
-  getDismissedRecommendations,
   recordLearningInsight,
   getRecentInsights,
   getLearningSummary
 } from './insights.js';
-
-export {
-  getPromptImprovementRecommendations
-} from './promptRecommendations.js';
 
 export {
   classifySafetyKind,

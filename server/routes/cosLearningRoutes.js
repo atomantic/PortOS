@@ -59,11 +59,6 @@ router.post('/learning/backfill', asyncHandler(async (req, res) => {
   res.json({ success: true, backfilledCount: count });
 }));
 
-// GET /api/cos/learning/skipped - Get historical low-success recommendations (legacy endpoint name)
-router.get('/learning/skipped', asyncHandler(async (req, res) => {
-  res.json(lowSuccessResponse(await taskLearning.getSkippedTaskTypes()));
-}));
-
 function lowSuccessResponse(skipped) {
   return {
     advisoryOnly: true,
@@ -88,18 +83,6 @@ router.post('/learning/reset/:taskType', asyncHandler(async (req, res) => {
   }
   import('../services/reviewQueue.js').then(m => m.__resetAlertsCache?.()).catch(() => {});
   res.json(result);
-}));
-
-// GET /api/cos/learning/routing - Get routing accuracy metrics (task type × model tier)
-router.get('/learning/routing', asyncHandler(async (req, res) => {
-  const routing = await taskLearning.getRoutingAccuracy();
-  res.json(routing);
-}));
-
-// GET /api/cos/learning/performance - Get performance summary
-router.get('/learning/performance', asyncHandler(async (req, res) => {
-  const summary = await taskLearning.getPerformanceSummary();
-  res.json(summary);
 }));
 
 // GET /api/cos/learning/summary - Get lightweight learning health summary for dashboard
@@ -132,12 +115,6 @@ router.post('/learning/insights', asyncHandler(async (req, res) => {
   res.json({ success: true, insight });
 }));
 
-// GET /api/cos/learning/recommendations/dismissed - List dismissed AI recommendations
-router.get('/learning/recommendations/dismissed', asyncHandler(async (req, res) => {
-  const dismissed = await taskLearning.getDismissedRecommendations();
-  res.json({ count: dismissed.length, dismissed });
-}));
-
 // POST /api/cos/learning/recommendations/dismiss - Dismiss an AI recommendation
 router.post('/learning/recommendations/dismiss', asyncHandler(async (req, res) => {
   const parsedDismiss = dismissRecommendationSchema.safeParse(req.body || {});
@@ -160,24 +137,6 @@ router.post('/learning/recommendations/restore', asyncHandler(async (req, res) =
 router.post('/learning/recommendations/clear-dismissed', asyncHandler(async (req, res) => {
   const result = await taskLearning.clearDismissedRecommendations();
   res.json(result);
-}));
-
-// GET /api/cos/learning/recommendations/:taskType - Get detailed recommendations for specific task type
-router.get('/learning/recommendations/:taskType', asyncHandler(async (req, res) => {
-  const { taskType } = req.params;
-  if (!taskType) {
-    throw new ServerError('Task type is required', { status: 400, code: 'VALIDATION_ERROR' });
-  }
-  const recommendations = await taskLearning.getPromptImprovementRecommendations(taskType);
-  res.json(recommendations);
-}));
-
-// GET /api/cos/learning/confidence - Get confidence levels for all task types
-router.get('/learning/confidence', asyncHandler(async (req, res) => {
-  const state = await loadState();
-  const thresholds = state.config?.confidenceAutoApproval ?? {};
-  const confidence = await taskLearning.getConfidenceLevels(thresholds);
-  res.json(confidence);
 }));
 
 // ============================================================

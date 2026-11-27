@@ -159,7 +159,7 @@ import { clearCompletedAgents } from '../services/cos/cosAgentArchive.js';
 import { evaluateTasks } from '../services/cos/cosTaskGenerator.js';
 import { getBriefing, getWhileAwayActivity, listBriefings, } from '../services/cos/cosReports.js';
 import { getCompletedAgentPage } from '../services/cos/cosAgentIndex.js';
-import { getFeedbackStats, getPendingAgentFeedback, submitAgentFeedback } from '../services/cos/cosAgentFeedback.js';
+import { getPendingAgentFeedback, submitAgentFeedback } from '../services/cos/cosAgentFeedback.js';
 import { getHealthStatus, runHealthCheck } from '../services/cos/cosHealthMonitor.js';
 import { pause, resume, start, stop, updateConfig } from '../services/cos/cos.js';
 import * as agentOrchestrator from '../services/agent/agentOrchestrator.js';
@@ -1679,17 +1679,6 @@ describe('CoS Routes', () => {
 
       expect(response.status).toBe(400);
       expect(response.body.code).toBe('INVALID_STATE');
-    });
-  });
-
-  describe('GET /api/cos/feedback/stats', () => {
-    it('should return feedback statistics', async () => {
-      getFeedbackStats.mockResolvedValue({ total: 10, positive: 7, negative: 2, neutral: 1 });
-
-      const response = await request(app).get('/api/cos/feedback/stats');
-
-      expect(response.status).toBe(200);
-      expect(response.body.total).toBe(10);
     });
   });
 
