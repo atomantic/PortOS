@@ -106,7 +106,7 @@ export default { up({ rootDir }) { writeFileSync(join(rootDir, 'data', 'later-ma
     });
     expect(result.migrations).toEqual({ ...preview.migrations, status: 'applied' });
     expect(result.stores.map(({ store, status }) => [store, status])).toEqual([
-      ['brain/people', 'converted'], ['brain/journals', 'converted'], ['brain/inbox', 'converted'],
+      ['brain/journals', 'converted'], ['brain/inbox', 'converted'],
     ]);
     // The replay stops at the split; the next boot runs what follows.
     await expect(listPendingMigrations({ rootDir: liveRoot, migrationsDir })).resolves.toEqual([LATER]);

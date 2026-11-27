@@ -9,8 +9,9 @@ import { spawn } from '../lib/childProcess.js';
 import { PATHS } from '../lib/fileUtils.js';
 import * as fs from 'fs/promises';
 import { reloadSettings } from './settings.js';
-import { invalidateAllCaches as invalidateBrainCaches } from './brainStorage.js';
+import { getById, invalidateAllCaches as invalidateBrainCaches } from './brainStorage.js';
 import { openSnapshotStream, restoreSnapshot, deleteSnapshot } from './backup.js';
+import { DEFAULT_MIGRATIONS_DIR, scanMigrationFiles } from '../../scripts/lib/migrationLedger.js';
 import { createFileWriteQueue } from '../lib/fileWriteQueue.js';
 import { createProviderService } from '../lib/aiToolkit/providers.js';
 import { setAIToolkitInstance } from '../lib/aiToolkitState.js';
@@ -96,43 +97,64 @@ describe('restoreSnapshot manifest verification', () => {
       await realFs.rm(live('cos', 'example.json'), { force: true });
     });
 
-    it('replays the adopted ledger through the split and reports it in preview and result (#12813)', async () => {
+    it('replays snapshot-backed Brain stores and preserves live-only people and songs', async () => {
       const ledgerPath = live('migrations.applied.json');
-      const legacyLedgerPath = live('migrations', '.applied.json');
       const split = '200-split-brain-stores-to-per-record.js';
+      const pending = ['081-brain-daily-log-inbox-sync.js', '190-seed-songbook-songs.js', split];
+      const applied = (await scanMigrationFiles(DEFAULT_MIGRATIONS_DIR)).filter(name => name < split && !pending.includes(name));
       const journals = JSON.stringify({ records: { '2025-03-01': { id: 'jrnl-example', date: '2025-03-01' } } });
-      await seedSnapshot({ 'brain/journals.json': journals, 'migrations/.applied.json': JSON.stringify(['001-example.js']) });
-      await realFs.writeFile(ledgerPath, JSON.stringify(['001-example.js', split]));
+      const inbox = JSON.stringify({ id: 'example-entry', capturedAt: '2025-03-01T12:00:00.000Z', text: 'Example capture' });
+      const files = { 'brain/journals.json': journals, 'brain/inbox_log.jsonl': inbox, 'migrations/.applied.json': JSON.stringify(applied) };
+      await seedSnapshot(files);
+      await realFs.writeFile(ledgerPath, JSON.stringify([...applied, ...pending]));
+      await realFs.mkdir(live('brain', 'inbox'));
+      await realFs.writeFile(live('brain', 'inbox', 'index.json'), '{"schemaVersion":1}');
+      await realFs.mkdir(live('brain', 'songs', 'example-song'), { recursive: true });
+      await realFs.writeFile(live('brain', 'songs', 'index.json'), '{"schemaVersion":1}');
+      await realFs.writeFile(live('brain', 'songs', 'example-song', 'index.json'), '{"title":"Live song"}');
+      const seedDir = live('..', 'data.reference', 'brain');
+      await realFs.mkdir(seedDir, { recursive: true });
+      await realFs.writeFile(joinPath(seedDir, 'songs.json'), '{"records":{"starter":{"title":"Seed song"}}}');
       try {
         const preview = await finishRestore({ dryRun: true });
-        expect(preview.restoredLegacyMigrations).toMatchObject({ status: 'pending', through: split });
-        expect(preview.restoredLegacyMigrations.names).toContain('081-brain-daily-log-inbox-sync.js');
-        expect(preview.restoredLegacyMigrations.names.at(-1)).toBe(split);
-        expect(preview.restoredLegacyStores.map(entry => entry.store)).toEqual(['brain/people', 'brain/journals']);
+        expect(preview.restoredLegacyMigrations).toEqual({ status: 'pending', through: split, names: pending });
+        expect(preview.restoredLegacyStores.map(entry => entry.store)).toEqual(['brain/journals', 'brain/inbox']);
 
-        // rsync is faked, so stand in for its transfer of the snapshot files.
-        await realFs.writeFile(live('brain', 'journals.json'), journals);
-        await realFs.mkdir(live('migrations'), { recursive: true });
-        await realFs.writeFile(legacyLedgerPath, JSON.stringify(['001-example.js']));
-        runFileMigrations.mockImplementationOnce(async ({ through }) => {
-          // The replay must read the snapshot's ledger, so adoption runs first.
-          expect(JSON.parse(await realFs.readFile(ledgerPath, 'utf8'))).toEqual(['001-example.js']);
-          await realFs.writeFile(ledgerPath, JSON.stringify(['001-example.js', through]));
-        });
+        // Stand in for rsync, then let the real runner adopt the restored ledger's pending work.
+        for (const [path, body] of Object.entries(files)) {
+          await realFs.mkdir(joinPath(live(path), '..'), { recursive: true });
+          await realFs.writeFile(live(path), body);
+        }
+        const { runMigrations } = await vi.importActual('../../scripts/run-migrations.js');
+        runFileMigrations.mockImplementationOnce(runMigrations);
         spawn.mockReset();
         const result = await finishRestore({ dryRun: false });
 
-        expect(runFileMigrations).toHaveBeenCalledWith(expect.objectContaining({ through: split }));
         expect(result.restoredLegacyLedger).toMatchObject({ status: 'adopted' });
         expect(result.restoredLegacyMigrations).toEqual({ ...preview.restoredLegacyMigrations, status: 'applied' });
-        expect(existsSync(live('brain', 'people', 'live-1'))).toBe(false);
+        expect(result.restoredLegacyStores.map(entry => entry.store)).toEqual(['brain/journals', 'brain/inbox']);
+        expect(await getById('people', 'live-1')).toMatchObject({ name: 'Live Person' });
+        expect(await getById('songs', 'example-song')).toMatchObject({ title: 'Live song' });
+        expect(await getById('inbox', 'example-entry')).toMatchObject({ text: 'Example capture', createdAt: '2025-03-01T12:00:00.000Z' });
+        expect(await getById('journals', '2025-03-01')).toMatchObject({ id: '2025-03-01', createdAt: expect.any(String) });
       } finally {
         runFileMigrations.mockReset();
         await realFs.rm(live('migrations'), { recursive: true, force: true });
+        await realFs.rm(seedDir, { recursive: true, force: true });
         for (const name of await realFs.readdir(PATHS.data)) {
           if (name.startsWith('migrations.applied.json')) await realFs.rm(live(name), { force: true });
         }
       }
+    });
+
+    it('leaves a split inbox active when the snapshot already applied its JSONL migration', async () => {
+      await realFs.mkdir(live('brain', 'inbox'));
+      await realFs.writeFile(live('brain', 'inbox', 'index.json'), '{"schemaVersion":1}');
+      await seedSnapshot({
+        'brain/inbox_log.jsonl': '{"id":"old-entry"}',
+        'migrations.applied.json': JSON.stringify(['081-brain-daily-log-inbox-sync.js']),
+      });
+      expect(await finishRestore({ dryRun: true })).not.toHaveProperty('restoredLegacyStores');
     });
 
     it('never parks the live store for a monolith the split would refuse', async () => {
