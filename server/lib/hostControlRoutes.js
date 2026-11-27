@@ -66,6 +66,7 @@ export const HOST_CONTROL_GET_ROUTES = Object.freeze([
   'GET /api/devtools/video-download/yt-dlp',
   'GET /api/midi-runtime/install',
   'GET /api/music/setup/runtime-install',
+  'GET /api/remote-desktop/status',
   // Materializes generated HTML on demand and returns its host path.
   'GET /api/html-pages/runs/:id/pages/:index/path',
   // Raw backup archives export private records and credentials (#8772).
