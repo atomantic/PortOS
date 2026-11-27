@@ -37,8 +37,7 @@ function fakeSpawnProcess() {
 }
 
 // A real child emits 'exit' and then 'close' (once stdio has flushed). Mirror
-// both so the mocks stay honest for either listener: `brew install` is awaited
-// on 'exit', while the `brew link` step waits for 'close' to capture output.
+// both so the command helpers can capture output through 'close'.
 function endProcess(child, code) {
   child.emit('exit', code);
   child.emit('close', code);
@@ -678,12 +677,69 @@ describe('llamaServerManager', () => {
     const failure = expect(install).rejects.toThrow('spawn failed');
     await Promise.resolve();
 
-    child.stdout.emit('data', 'before failure');
+    child.stdout.emit('data', 'before failure\n');
     child.emit('error', new Error('spawn failed'));
     await failure;
-    child.stderr.emit('data', 'late output');
+    child.stderr.emit('data', 'late output\n');
+    endProcess(child, 1);
 
     expect(onProgress.mock.calls.map(([frame]) => frame.event)).toEqual(['start', 'progress']);
+  });
+
+  it('rejects concurrent installs and releases the lock after terminating a timed-out install', async () => {
+    vi.useFakeTimers();
+    try {
+      const probe = vi.spyOn(commandExistsModule, 'commandExists').mockResolvedValue(true);
+      vi.spyOn(processEnv, 'findCommandOnPath').mockReturnValue('/opt/homebrew/bin/llama-server');
+      const child = fakeSpawnProcess();
+      child.kill = vi.fn();
+      const retryChild = fakeSpawnProcess();
+      const spawn = vi.spyOn(childProcess, 'spawn').mockReturnValueOnce(child).mockReturnValueOnce(retryChild);
+
+      const install = installLlamaServer();
+      const failure = expect(install).rejects.toMatchObject({ status: 502, message: expect.stringContaining('timed out') });
+      await expect(installLlamaServer()).rejects.toMatchObject({ status: 409, code: 'LLAMA_INSTALL_IN_PROGRESS' });
+      expect(probe).toHaveBeenCalledTimes(1);
+      expect(spawn).toHaveBeenCalledTimes(1);
+
+      await vi.advanceTimersByTimeAsync(30 * 60 * 1000);
+      await failure;
+      expect(child.kill).toHaveBeenCalledWith('SIGKILL');
+
+      const retry = installLlamaServer();
+      await Promise.resolve();
+      endProcess(retryChild, 0);
+      await expect(retry).resolves.toMatchObject({ success: true });
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('terminates a stalled brew link and reports the timeout', async () => {
+    vi.useFakeTimers();
+    try {
+      vi.spyOn(commandExistsModule, 'commandExists').mockResolvedValue(true);
+      vi.spyOn(processEnv, 'findCommandOnPath').mockReturnValue(null);
+      const installChild = fakeSpawnProcess();
+      const linkChild = fakeSpawnProcess();
+      linkChild.kill = vi.fn();
+      const spawn = vi.spyOn(childProcess, 'spawn').mockReturnValueOnce(installChild).mockReturnValueOnce(linkChild);
+
+      const install = installLlamaServer();
+      const failure = expect(install).rejects.toMatchObject({ status: 502, message: expect.stringContaining('brew link timed out after 60s') });
+      await Promise.resolve();
+      endProcess(installChild, 0);
+      await Promise.resolve();
+      expect(spawn).toHaveBeenCalledTimes(2);
+      await expect(installLlamaServer()).rejects.toMatchObject({ status: 409, code: 'LLAMA_INSTALL_IN_PROGRESS' });
+
+      await vi.advanceTimersByTimeAsync(60_000);
+      await failure;
+      expect(linkChild.kill).toHaveBeenCalledWith('SIGTERM');
+      endProcess(linkChild, 1);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it('rejects install when Homebrew is missing', async () => {
@@ -741,9 +797,6 @@ describe('llamaServerManager', () => {
   });
 
   it('rejects instead of hanging when the link spawn throws synchronously', async () => {
-    // The exit listener is async and lives inside a Promise executor, so an
-    // unguarded throw would escape as an unhandled rejection while the install
-    // request never settled.
     vi.spyOn(commandExistsModule, 'commandExists').mockImplementation(async (cmd) => cmd === 'brew');
     vi.spyOn(processEnv, 'findCommandOnPath').mockReturnValue(null);
 

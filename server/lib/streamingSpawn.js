@@ -44,7 +44,7 @@ export function runStreamingCommand(cmd, args, onLine, { timeoutMs = 0, cwd, env
     const tail = createOutputTail();
 
     const safeLine = (line) => {
-      if (!line) return;
+      if (settled || !line) return;
       tail.remember(line);
       if (typeof onLine !== 'function') return;
       try { onLine(line); } catch (err) { console.error(`⚠️ streaming output hook failed: ${err.message}`); }

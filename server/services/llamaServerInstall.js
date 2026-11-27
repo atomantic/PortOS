@@ -4,7 +4,6 @@
 
 import { realpath } from 'fs/promises';
 import { bufferedSpawn } from '../lib/bufferedSpawn.js';
-import { spawn } from '../lib/childProcess.js';
 import { commandExists } from '../lib/commandExists.js';
 import { ServerError } from '../lib/errorHandler.js';
 import {
@@ -15,7 +14,7 @@ import {
   parseWingetPackageFields,
   wingetLinkDirs,
 } from '../lib/llamaCppInstall.js';
-import { adoptPathDirs, findCommandOnPath, safeChildProcessEnv, safeChildProcessOptions } from '../lib/processEnv.js';
+import { adoptPathDirs, findCommandOnPath, safeChildProcessEnv } from '../lib/processEnv.js';
 import { runStreamingCommand } from '../lib/streamingSpawn.js';
 
 const VERSION_PROBE_TIMEOUT_MS = 5000;
@@ -23,11 +22,13 @@ const BREW_INFO_TIMEOUT_MS = 15_000;
 // winget rebuilds its source index on the first query of a session, which takes
 // longer than any single `brew info`.
 const WINGET_LIST_TIMEOUT_MS = 60_000;
+const BREW_LINK_TIMEOUT_MS = 60_000;
 const UPGRADE_TIMEOUT_MS = 30 * 60 * 1000;
 
 // Which package manager PortOS drives for llama.cpp. Only the test seam writes
 // it, so both the Homebrew and the winget path stay coverable from either OS.
 let platformOverride = null;
+let installInProgress = false;
 export const getLlamaServerInstallPlan = () => llamaCppInstallPlan(platformOverride || process.platform);
 
 export function _setLlamaInstallPlatformForTests(platform) {
@@ -296,25 +297,20 @@ export async function updateLlamaServerPackage(plan, onProgress) {
  * captured output is what makes a failure diagnosable ("Could not symlink…",
  * a permissions error on the prefix); discarding it left the caller guessing.
  */
-function linkLlamaCpp(env) {
-  return new Promise((resolve) => {
-    const spawnOpts = safeChildProcessOptions({
-      env,
-      shell: false,
-      stdio: ['ignore', 'pipe', 'pipe'],
-    });
-    const child = spawn('brew', ['link', '--overwrite', LLAMA_CPP_BREW_FORMULA], spawnOpts);
-    let output = '';
-    const collect = (chunk) => { output += chunk.toString(); };
-    child.stdout?.on('data', collect);
-    child.stderr?.on('data', collect);
-    child.on('error', (err) => resolve({ linked: false, output: err.message }));
-    // 'close' rather than 'exit': 'exit' fires the moment the process ends, with
-    // stdio possibly still buffered, which would hand back a truncated (often
-    // empty) `output` exactly when a failure needs explaining. `brew link` is a
-    // short, single-process command, so waiting for the pipes to close is safe.
-    child.on('close', (code) => resolve({ linked: code === 0, output: output.trim() }));
+async function linkLlamaCpp(env) {
+  const result = await bufferedSpawn('brew', ['link', '--overwrite', LLAMA_CPP_BREW_FORMULA], {
+    env,
+    shell: false,
+    processGroup: true,
+    timeoutMs: BREW_LINK_TIMEOUT_MS,
   });
+  const diagnostics = [result.stderr, result.stdout].filter(Boolean).join('\n').trim();
+  return {
+    linked: result.success,
+    output: result.timedOut
+      ? `brew link timed out after ${BREW_LINK_TIMEOUT_MS / 1000}s`
+      : result.error?.message || diagnostics,
+  };
 }
 
 /**
@@ -369,69 +365,49 @@ async function repairBinaryOnPath(plan, env, onProgress) {
  * macOS/Linux, winget on Windows.
  */
 export async function installLlamaServer({ onProgress = () => {} } = {}) {
-  const plan = getLlamaServerInstallPlan();
-  const managerExists = await commandExists(plan.manager, ['--version']);
-  if (!managerExists) {
-    throw new ServerError(plan.missingManagerError, { status: 400 });
+  if (installInProgress) {
+    throw new ServerError('A llama.cpp install is already in progress.', {
+      status: 409,
+      code: 'LLAMA_INSTALL_IN_PROGRESS',
+    });
   }
+  installInProgress = true;
+  try {
+    const plan = getLlamaServerInstallPlan();
+    if (!(await commandExists(plan.manager, ['--version']))) {
+      throw new ServerError(plan.missingManagerError, { status: 400 });
+    }
 
-  onProgress({ event: 'start', message: `Installing llama.cpp via ${plan.managerLabel}…` });
-  const env = safeChildProcessEnv();
-  const spawnOpts = safeChildProcessOptions({
-    env,
-    shell: false,
-    stdio: ['ignore', 'pipe', 'pipe'],
-  });
+    onProgress({ event: 'start', message: `Installing llama.cpp via ${plan.managerLabel}…` });
+    const env = safeChildProcessEnv();
+    const installed = await runStreamingCommand(
+      plan.manager,
+      plan.installArgs,
+      (message) => onProgress({ event: 'progress', message }),
+      { env, timeoutMs: UPGRADE_TIMEOUT_MS, processGroup: process.platform !== 'win32' },
+    );
+    if (!installed.success) {
+      throw new ServerError(`${plan.installCommand} failed: ${installed.error}`, { status: 502, code: 'INTERNAL_ERROR' });
+    }
 
-  const child = spawn(plan.manager, plan.installArgs, spawnOpts);
-
-  return new Promise((resolve, reject) => {
-    // Error and exit can both fire. The first owns settlement, and late
-    // process output must not replace a terminal progress frame.
-    let settled = false;
-    const reportOutput = (data) => {
-      if (!settled) onProgress({ event: 'progress', message: data.toString().trim() });
-    };
-    child.stdout?.on('data', reportOutput);
-    child.stderr?.on('data', reportOutput);
-    child.on('error', (err) => {
-      if (settled) return;
-      settled = true;
-      reject(new ServerError(`Failed to run ${plan.manager}: ${err.message}`, { status: 502, code: 'INTERNAL_ERROR' }));
-    });
-    // Async listener on a child-process event: it runs outside the Express
-    // lifecycle AND outside this Promise executor's own throw path, so an
-    // unguarded throw here would surface as an unhandled rejection while the
-    // install request hung forever. Route every failure to `reject`.
-    child.on('exit', async (code) => {
-      if (settled) return;
-      settled = true;
-      try {
-        let binaryPath = resolveLlamaServerBinary();
-        // The manager reported success but PATH finds nothing — an unlinked keg
-        // or a Links directory this process has not picked up. Repair it rather
-        // than leaving that as a dead end for the caller.
-        let repairDetail = null;
-        if (!binaryPath && code === 0) {
-          const repair = await repairBinaryOnPath(plan, env, onProgress);
-          repairDetail = repair.detail;
-          if (repair.repaired) binaryPath = resolveLlamaServerBinary();
-        }
-
-        if (binaryPath) {
-          onProgress({ event: 'complete', message: `llama.cpp installed successfully (${binaryPath})` });
-          resolve({ success: true, message: 'llama.cpp installed successfully' });
-          return;
-        }
-
-        const hint = repairDetail ? `${plan.manager} said: ${repairDetail}` : plan.pathRepairHint;
-        const msg = code === 0
-          ? `${plan.manager} completed but llama-server was not found on PATH — ${hint}`
-          : `${plan.installCommand} failed (exit code ${code})`;
-        reject(new ServerError(msg, { status: 502, code: 'INTERNAL_ERROR' }));
-      } catch (err) {
-        reject(new ServerError(`Failed to verify the llama.cpp install: ${err.message}`, { status: 502, code: 'INTERNAL_ERROR' }));
-      }
-    });
-  });
+    let binaryPath = resolveLlamaServerBinary();
+    let hint = plan.pathRepairHint;
+    if (!binaryPath) {
+      const repair = await repairBinaryOnPath(plan, env, onProgress).catch((err) => {
+        throw new ServerError(`Failed to verify the llama.cpp install: ${err.message}`, { status: 502, code: 'INTERNAL_ERROR' });
+      });
+      if (repair.detail) hint = `${plan.manager} said: ${repair.detail}`;
+      if (repair.repaired) binaryPath = resolveLlamaServerBinary();
+    }
+    if (!binaryPath) {
+      throw new ServerError(`${plan.manager} completed but llama-server was not found on PATH — ${hint}`, {
+        status: 502,
+        code: 'INTERNAL_ERROR',
+      });
+    }
+    onProgress({ event: 'complete', message: `llama.cpp installed successfully (${binaryPath})` });
+    return { success: true, message: 'llama.cpp installed successfully' };
+  } finally {
+    installInProgress = false;
+  }
 }
