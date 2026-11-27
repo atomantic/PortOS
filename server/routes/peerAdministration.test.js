@@ -51,22 +51,27 @@ const { default: peerAdminOperatorRoutes } = await import('./peerAdminOperator.j
 const { errorMiddleware } = await import('../lib/errorHandler.js');
 const { query } = await import('../lib/db.js');
 const { derivePeerAuthToken, peerFetch } = await import('../lib/peerHttpClient.js');
+const consumer = await import('../services/peerAdminConsumer.js');
+const catalogInstaller = await import('../services/peerCatalogInstaller.js');
+const executionRuntime = await import('../services/peerExecutionRuntime.js');
 // Fixture peers sign the wire envelope independently of the receiving service.
 const signPeerAdmin = (peer, purpose, payload) => createHmac('sha256', peer.syncSecret)
   .update(`portos-peer-admin:v1:${purpose}:${JSON.stringify(payload)}`).digest('hex');
 
 const ROOT = '/api/federation/admin/v1';
+const OPERATOR_ROOT = '/api/peer-administration';
 let identity;
-const app = express();
-app.use((req, _res, next) => {
+const simulateRemoteConnection = (req, _res, next) => {
   Object.defineProperty(req.socket, 'remoteAddress', { value: '192.0.2.20', configurable: true });
   next();
-});
+};
+const app = express();
+app.use(simulateRemoteConnection);
 app.use(express.json());
 app.use(authGate);
 app.use(hostControlRouteGate);
 app.use(ROOT, receiver);
-app.use('/api/peer-administration', peerAdminOperatorRoutes);
+app.use(OPERATOR_ROOT, peerAdminOperatorRoutes);
 app.post('/api/update/execute', (_req, res) => res.json({ unexpected: true }));
 app.use(errorMiddleware);
 
@@ -108,6 +113,137 @@ beforeEach(() => {
   writeFileSync(join(tempRoot, 'peer-admin-grants.json'), JSON.stringify({ schemaVersion: 1, grants: [] }));
 });
 afterAll(cleanup);
+
+describe('privileged peer administration execution routes', () => {
+  // Exercise the router's own requireHostControl even on routes also covered
+  // by the application-wide host-control gate.
+  const operatorApp = express();
+  operatorApp.use(simulateRemoteConnection, express.json(), authGate);
+  operatorApp.use(OPERATOR_ROOT, peerAdminOperatorRoutes);
+  operatorApp.use(errorMiddleware);
+
+  const saveGrant = vi.fn();
+  const describeExecution = vi.fn();
+  let prepare;
+  let dispatch;
+  let status;
+  let listReviews;
+  let grantInput;
+  let previewInput;
+  let dispatchInput;
+  let statusInput;
+  let preflight;
+  let dispatchReceipt;
+  let statusReceipt;
+  let executionSetup;
+  const reviews = { candidates: [{ catalogKey: 'example-model', backend: 'lmstudio', name: 'Example model' }], reviews: [] };
+
+  beforeEach(() => {
+    const [peer] = identity.peers;
+    const { self } = identity;
+    const requestId = randomUUID();
+    grantInput = {
+      peerId: peer.id, action: intent.action, confirmedHostInstanceId: self.instanceId,
+      confirmedPeerInstanceId: peer.instanceId, previousGrantId: null, expiresInMinutes: 60,
+      allowExecution: true, confirmation: 'execution-v1',
+    };
+    previewInput = { peerId: peer.id, intent };
+    preflight = {
+      payload: {
+        protocolVersion: 1, scope: 'execution-v1', senderInstanceId: self.instanceId,
+        targetInstanceId: peer.instanceId, requestId, grantId: randomUUID(), intent,
+        grantGeneration: 1, evidenceDigest: 'a'.repeat(64), executionEpoch: randomUUID(),
+        version: '1.0.0', expiresAt: Date.now() + 60_000,
+      },
+      signature: 'b'.repeat(64),
+    };
+    dispatchInput = { peerId: peer.id, preflight };
+    statusInput = { peerId: peer.id, requestId };
+    dispatchReceipt = {
+      payload: {
+        protocolVersion: 1, scope: 'execution-v1', senderInstanceId: self.instanceId,
+        targetInstanceId: peer.instanceId, requestId, operationId: randomUUID(), state: 'queued',
+        revision: 1, code: null,
+      },
+      signature: 'c'.repeat(64),
+    };
+    statusReceipt = {
+      ...dispatchReceipt, payload: { ...dispatchReceipt.payload, state: 'succeeded', revision: 2 },
+    };
+    executionSetup = { scope: 'execution-v1', actions: [{ action: intent.action, active: true }] };
+    describeExecution.mockResolvedValue(executionSetup);
+    vi.spyOn(executionRuntime, 'peerExecutionRuntime').mockResolvedValue({ saveGrant, describe: describeExecution });
+    prepare = vi.spyOn(consumer, 'preparePeerExecution').mockResolvedValue(preflight);
+    dispatch = vi.spyOn(consumer, 'dispatchPeerExecution').mockResolvedValue(dispatchReceipt);
+    status = vi.spyOn(consumer, 'getPeerExecutionStatus').mockResolvedValue(statusReceipt);
+    listReviews = vi.spyOn(catalogInstaller, 'listPeerCatalogReviews').mockResolvedValue(reviews);
+  });
+
+  const post = (endpoint, body) => request(operatorApp).post(`${OPERATOR_ROOT}/${endpoint}`).send(body);
+  const catalogReviews = () => request(operatorApp).get(`${OPERATOR_ROOT}/catalog-reviews`);
+  const authorize = req => req.set('Authorization', 'Bearer test-operator');
+
+  it('saves an execution grant with operator authority and returns updated setup without caching', async () => {
+    const response = await authorize(post('execution-grants', grantInput));
+    expect(response.status).toBe(200);
+    expect(response.headers['cache-control']).toBe('no-store');
+    expect(response.body).toMatchObject({ peerId: grantInput.peerId, paired: true, execution: executionSetup });
+    expect(saveGrant).toHaveBeenCalledExactlyOnceWith(grantInput, expect.objectContaining({
+      portosAuthContext: expect.objectContaining({ authenticated: true, method: 'session' }),
+    }));
+    expect(describeExecution).toHaveBeenCalledExactlyOnceWith(grantInput.peerId);
+  });
+
+  it.each([
+    ['execution-preview', () => previewInput, () => prepare, () => preflight],
+    ['execution-dispatch', () => dispatchInput, () => dispatch, () => dispatchReceipt],
+    ['execution-status', () => statusInput, () => status, () => statusReceipt],
+  ])('returns the %s result without caching', async (endpoint, input, service, result) => {
+    const response = await authorize(post(endpoint, input()));
+    expect(response.status).toBe(200);
+    expect(response.headers['cache-control']).toBe('no-store');
+    expect(response.body).toEqual(result());
+    expect(service()).toHaveBeenCalledExactlyOnceWith(input());
+  });
+
+  it('lists catalog review candidates and reviews without caching', async () => {
+    const response = await authorize(catalogReviews());
+    expect(response.status).toBe(200);
+    expect(response.headers['cache-control']).toBe('no-store');
+    expect(response.body).toEqual(reviews);
+    expect(listReviews).toHaveBeenCalledExactlyOnceWith();
+  });
+
+  it.each([
+    ['execution-grants', () => ({ ...grantInput, confirmation: 'planning-v1' }), () => saveGrant],
+    ['execution-preview', () => ({ ...previewInput, intent: {} }), () => prepare],
+    ['execution-dispatch', () => ({ ...dispatchInput, preflight: { ...preflight, signature: '' } }), () => dispatch],
+    ['execution-status', () => ({ ...statusInput, requestId: 'invalid' }), () => status],
+  ])('rejects invalid %s input before calling the service', async (endpoint, input, service) => {
+    const response = await authorize(post(endpoint, input()));
+    expect(response.status).toBe(400);
+    expect(response.body.code).toBe('VALIDATION_ERROR');
+    expect(service()).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    ['execution-grants', () => post('execution-grants', grantInput), () => saveGrant],
+    ['execution-preview', () => post('execution-preview', previewInput), () => prepare],
+    ['execution-dispatch', () => post('execution-dispatch', dispatchInput), () => dispatch],
+    ['execution-status', () => post('execution-status', statusInput), () => status],
+    ['catalog-reviews', catalogReviews, () => listReviews],
+  ])('requires host control for %s with or without a configured password', async (_endpoint, send, service) => {
+    const basic = await send().set('Authorization', 'Basic OnBhc3M=');
+    expect(basic.status).toBe(403);
+    expect(basic.body.code).toBe('HOST_CONTROL_FORBIDDEN');
+
+    auth.enabled = false;
+    const remote = await send();
+    expect(remote.status).toBe(403);
+    expect(remote.body.code).toBe('HOST_CONTROL_FORBIDDEN');
+    expect(service()).not.toHaveBeenCalled();
+  });
+});
 
 describe('bounded administration through the real authority boundary', () => {
   it('keeps planning grants powerless on the independently authenticated execution surface', async () => {
