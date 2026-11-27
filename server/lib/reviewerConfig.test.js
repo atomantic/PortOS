@@ -979,16 +979,18 @@ describe('REVIEW_UNAVAILABLE_REPORTING_NOTE', () => {
   // The rule reaches ~10 prompt sites. Spelled out at each one it drifts, and a
   // site that drifts back into "post a comment" silently reinstates the PR
   // noise this constant exists to remove. A first version of this guard banned
-  // only one phrasing and missed the claim-flow bullet in completion.js, which
+  // only one phrasing and missed the claim-flow completion bullet, which
   // still ordered the comment in words of its own — so it now asserts the
   // SEMANTICS over whole prompt bullets: no bullet that leaves a PR open for a
   // review that could not answer may also order a comment about it.
-  const promptSections = ['services/promptSections/completion.js', 'services/promptSections/reviewLifecycle.js'];
+  const sectionsPath = 'services/promptSections/';
   const catalogPath = 'services/taskPromptDefaults/catalog/';
-  const sites = [...promptSections, ...readdirSync(new URL('../' + catalogPath, import.meta.url))
-    .filter(file => file.endsWith('.js')).map(file => catalogPath + file)];
-  const requiredReferences = [...promptSections, ...['guidance.js', 'planTask.js', 'claimJira.js']
-    .map(file => catalogPath + file)];
+  const sites = [sectionsPath, catalogPath].flatMap(dir => readdirSync(new URL('../' + dir, import.meta.url))
+    .filter(file => file.endsWith('.js') && !file.endsWith('.test.js')).map(file => dir + file));
+  const requiredReferences = [
+    ...['completionCli.js', 'completionTui.js', 'completionPullRequest.js', 'reviewLifecycle.js'].map(file => sectionsPath + file),
+    ...['guidance.js', 'planTask.js', 'claimJira.js'].map(file => catalogPath + file),
+  ];
   // How a prompt bullet refers to a review that could not answer, including the
   // consequence clause ("left open ... until the required review completes") —
   // the claim-flow miss named only the consequence, never `review-blocked`.
@@ -1030,7 +1032,7 @@ describe('REVIEW_UNAVAILABLE_REPORTING_NOTE', () => {
     const { fileURLToPath } = await import('node:url');
     for (const site of requiredReferences) {
       const raw = await readFile(fileURLToPath(new URL('../', import.meta.url)) + site, 'utf8');
-      expect(raw, site).toContain('REVIEW_UNAVAILABLE_REPORTING_NOTE');
+      expect(raw, site).toContain('${REVIEW_UNAVAILABLE_REPORTING_NOTE}');
     }
   });
 
