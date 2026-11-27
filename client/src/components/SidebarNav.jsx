@@ -147,7 +147,7 @@ function PinButton({ label, pinned, onTogglePin }) {
 // pin; recent rows reveal the pin affordance on hover/focus.
 // Labels wrap (no truncate) so long app/series names stay readable in the
 // narrow rail; the pin is absolutely positioned so it doesn't steal label width.
-function WorkingSetRow({ entry, pinned, onTogglePin, onNavigate, isActive }) {
+function WorkingSetRow({ entry, pinned, onTogglePin, onNavigate, navigationState, isActive }) {
   const Icon = entry.icon;
   return (
     <div className="group relative mx-2 min-w-0 min-h-[44px] pointer-fine:lg:min-h-0">
@@ -155,6 +155,7 @@ function WorkingSetRow({ entry, pinned, onTogglePin, onNavigate, isActive }) {
         to={entry.path}
         end={entry.end}
         onClick={onNavigate}
+        state={navigationState}
         title={entry.label}
         className={`flex items-center min-h-[44px] lg:min-h-0 pointer-coarse:min-h-11 gap-3 px-3 py-2 pr-9 rounded-lg text-sm transition-colors min-w-0 ${
           isActive ? 'bg-port-accent/10 text-port-accent' : 'text-gray-400 hover:text-white hover:bg-port-border/50'
@@ -177,7 +178,7 @@ function WorkingSetRow({ entry, pinned, onTogglePin, onNavigate, isActive }) {
 // pin/unpin affordance as WorkingSetRow so these destinations can be pinned too;
 // the pin button is omitted in the collapsed rail, mirroring the Pinned/Recent
 // sections which only render when the sidebar is expanded.
-export function SingleNavRow({ item, collapsed, active, pinned, onTogglePin, onNavigate }) {
+export function SingleNavRow({ item, collapsed, active, pinned, onTogglePin, onNavigate, navigationState }) {
   const Icon = item.icon;
   return (
     <div className={`group relative min-w-0 mx-2 min-h-[44px] pointer-fine:lg:min-h-0 ${collapsed ? 'lg:flex lg:justify-center' : ''}`}>
@@ -185,6 +186,7 @@ export function SingleNavRow({ item, collapsed, active, pinned, onTogglePin, onN
         to={item.to}
         end={item.to === '/'}
         onClick={onNavigate}
+        state={navigationState}
         className={`flex items-center min-h-[44px] lg:min-h-0 pointer-coarse:min-h-11 gap-3 px-3 py-2.5 rounded-lg text-sm font-medium transition-colors min-w-0 ${
           collapsed ? 'lg:justify-center lg:px-2' : 'pr-9'
         } ${
@@ -224,6 +226,9 @@ export default function SidebarNav({ collapsed, setCollapsed, mobileOpen, closeM
   const sidebarRef = useRef(null);
   const sidebarCollapsed = collapsed && !mobileOpen;
   const mobileNavActive = mobileOpen && !desktopNav;
+  // Attach the focus request to the navigation so it survives a delayed commit.
+  // Close immediately to let the current page show an unsaved-changes confirmation.
+  const mobileNavState = mobileNavActive ? { mobileNavSourceKey: location.key } : undefined;
   useFocusTrap(mobileNavActive, sidebarRef);
   useEscLayer(mobileNavActive, closeMobileNav);
 
@@ -553,7 +558,8 @@ export default function SidebarNav({ collapsed, setCollapsed, mobileOpen, closeM
           active={isActive(item.to)}
           pinned={singlePinned}
           onTogglePin={() => (singlePinned ? unpin(item.to) : pin(item.to))}
-          onNavigate={() => closeMobileNav()}
+          onNavigate={closeMobileNav}
+          navigationState={mobileNavState}
         />
       );
     }
@@ -565,7 +571,7 @@ export default function SidebarNav({ collapsed, setCollapsed, mobileOpen, closeM
 
     const navigateToSection = () => {
       if (defaultChildPath) {
-        navigate(defaultChildPath);
+        navigate(defaultChildPath, { state: mobileNavState });
         // Ensure the section is expanded so the user can see siblings
         if (item.children?.length && !expandedSections[item.label] && !sidebarCollapsed) {
           toggleSection(item.label);
@@ -623,7 +629,8 @@ export default function SidebarNav({ collapsed, setCollapsed, mobileOpen, closeM
                 entry={{ path: child.to, label: child.label, icon: ChildIcon, end: child.end }}
                 pinned={childIsPinned}
                 onTogglePin={() => (childIsPinned ? unpin(child.to) : pin(child.to))}
-                onNavigate={() => closeMobileNav()}
+                onNavigate={closeMobileNav}
+                navigationState={mobileNavState}
                 isActive={childActive}
               />
             </div>
@@ -653,7 +660,8 @@ export default function SidebarNav({ collapsed, setCollapsed, mobileOpen, closeM
                   <NavLink
                     key={gc.to}
                     to={gc.to}
-                    onClick={() => closeMobileNav()}
+                    onClick={closeMobileNav}
+                    state={mobileNavState}
                     title={gc.title || gc.label}
                     className={`min-h-[44px] flex items-center lg:min-h-0 lg:block pointer-coarse:min-h-11 pointer-coarse:flex pointer-coarse:items-center px-2 py-1 rounded text-xs transition-colors min-w-0 break-words leading-snug ${
                       gcActive
@@ -809,7 +817,7 @@ export default function SidebarNav({ collapsed, setCollapsed, mobileOpen, closeM
                 <div className="mb-2" data-testid="pinned-section">
                   <div className="px-4 py-1 text-[10px] font-semibold uppercase tracking-wide text-gray-500">Pinned</div>
                   {pinned.map((entry) => (
-                    <WorkingSetRow key={`pin-${entry.path}`} entry={entry} pinned onTogglePin={() => unpin(entry.path)} onNavigate={closeMobileNav} isActive={entry.end ? location.pathname === entry.path : isActive(entry.path)} />
+                    <WorkingSetRow key={`pin-${entry.path}`} entry={entry} pinned onTogglePin={() => unpin(entry.path)} onNavigate={closeMobileNav} navigationState={mobileNavState} isActive={entry.end ? location.pathname === entry.path : isActive(entry.path)} />
                   ))}
                 </div>
               )}
@@ -817,7 +825,7 @@ export default function SidebarNav({ collapsed, setCollapsed, mobileOpen, closeM
                 <div className="mb-2" data-testid="recent-section">
                   <div className="px-4 py-1 text-[10px] font-semibold uppercase tracking-wide text-gray-500">Recent</div>
                   {recent.map((entry) => (
-                    <WorkingSetRow key={`recent-${entry.path}`} entry={entry} pinned={false} onTogglePin={() => pin(entry.path)} onNavigate={closeMobileNav} isActive={entry.end ? location.pathname === entry.path : isActive(entry.path)} />
+                    <WorkingSetRow key={`recent-${entry.path}`} entry={entry} pinned={false} onTogglePin={() => pin(entry.path)} onNavigate={closeMobileNav} navigationState={mobileNavState} isActive={entry.end ? location.pathname === entry.path : isActive(entry.path)} />
                   ))}
                 </div>
               )}

@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { Link, Outlet, useLocation } from 'react-router';
+import { Link, Outlet, useLocation, useNavigationType } from 'react-router';
 import { Menu, Mic, Search } from 'lucide-react';
 import { safeReadStorage, safeWriteStorage } from '../lib/safeStorage';
 import { useErrorNotifications } from './useErrorNotifications';
@@ -28,6 +28,8 @@ const SIDEBAR_KEY = 'portos-sidebar-collapsed';
 
 export default function Layout() {
   const location = useLocation();
+  const navigationType = useNavigationType();
+  const previousLocation = useRef(location);
   const [collapsed, setCollapsed] = useState(() => safeReadStorage(SIDEBAR_KEY) === 'true');
   const [mobileOpen, setMobileOpen] = useState(false);
   const [desktopNav, setDesktopNav] = useState(() => window.matchMedia('(min-width: 1024px)').matches);
@@ -45,6 +47,15 @@ export default function Layout() {
   }, []);
   const closeMobileNav = useCallback(() => setMobileOpen(false), []);
   useEffect(closeMobileNav, [location.pathname, closeMobileNav]);
+  useEffect(() => {
+    // Wait until main is no longer inert and the sidebar trap has restored focus.
+    if (mobileNavActive) return;
+    const previous = previousLocation.current;
+    previousLocation.current = location;
+    if (navigationType !== 'POP' && location.pathname !== previous.pathname && location.state?.mobileNavSourceKey === previous.key) {
+      document.getElementById('main-content')?.focus();
+    }
+  }, [location, mobileNavActive, navigationType]);
   useEffect(() => { safeWriteStorage(SIDEBAR_KEY, String(collapsed)); }, [collapsed]);
   const sidebarCollapsed = collapsed && !mobileOpen;
   const sidebarContext = useMemo(() => ({ collapsed: sidebarCollapsed, desktop: desktopNav }), [sidebarCollapsed, desktopNav]);
