@@ -5,6 +5,7 @@ import { RefreshCw, Network, ZoomIn, ZoomOut } from 'lucide-react';
 import { WIKI_CATEGORIES } from '../constants.jsx';
 import BrailleSpinner from '../../BrailleSpinner';
 import OfflineNotesNotice from '../../OfflineNotesNotice.jsx';
+import useChartColors from '../../../hooks/useChartColors.js';
 import useLatestRequest from '../../../hooks/useLatestRequest.js';
 
 // Pointer travel under this is a tap (open note) rather than a pan.
@@ -24,6 +25,7 @@ export default function GraphTab({ vaultId }) {
   const canvasRef = useRef(null);
   const [graphData, setGraphData] = useState(null);
   const [loading, setLoading] = useState(true);
+  const [viewport, setViewport] = useState(null);
   const [zoom, setZoom] = useState(1);
   const [offset, setOffset] = useState({ x: 0, y: 0 });
   const [hoveredNode, setHoveredNode] = useState(null);
@@ -31,6 +33,8 @@ export default function GraphTab({ vaultId }) {
   const gestureRef = useRef(null);
   const connectionCountsRef = useRef(new Map());
   const beginLoad = useLatestRequest();
+  const { text: labelColor, axis: mutedLabelColor } = useChartColors();
+  const hasGraph = !loading && Boolean(graphData?.totalNodes);
 
   const loadGraph = useCallback(async () => {
     const isCurrent = beginLoad();
@@ -95,22 +99,53 @@ export default function GraphTab({ vaultId }) {
     nodesRef.current = positioned;
   };
 
-  // Render graph on canvas
+  // The canvas is mounted only when there is a graph to show.
+  useEffect(() => {
+    if (!hasGraph) return;
+    const canvas = canvasRef.current;
+    const measure = () => {
+      const { width, height } = canvas.getBoundingClientRect();
+      const dpr = window.devicePixelRatio || 1;
+      setViewport(prev => prev?.width === width && prev.height === height && prev.dpr === dpr
+        ? prev
+        : { width, height, dpr });
+    };
+    const wheelZoom = (event) => {
+      event.preventDefault();
+      setZoom(z => Math.max(0.3, Math.min(3, z - event.deltaY * 0.001)));
+    };
+    measure();
+    const observer = new ResizeObserver(measure);
+    observer.observe(canvas);
+    window.addEventListener('resize', measure);
+    canvas.addEventListener('wheel', wheelZoom, { passive: false });
+    return () => {
+      canvas.removeEventListener('wheel', wheelZoom);
+      window.removeEventListener('resize', measure);
+      observer.disconnect();
+    };
+  }, [hasGraph]);
+
+  // Layout, interaction and drawing use CSS pixels. Scale only the backing store.
   useEffect(() => {
     const canvas = canvasRef.current;
-    if (!canvas || !graphData || nodesRef.current.length === 0) return;
+    if (!hasGraph || !canvas || !viewport?.width || !viewport.height || nodesRef.current.length === 0) return;
 
     const ctx = canvas.getContext('2d');
-    const rect = canvas.parentElement.getBoundingClientRect();
-    canvas.width = rect.width;
-    canvas.height = rect.height;
+    if (!ctx) return;
+    const { width, height, dpr } = viewport;
+    const pixelWidth = Math.max(1, Math.round(width * dpr));
+    const pixelHeight = Math.max(1, Math.round(height * dpr));
+    if (canvas.width !== pixelWidth) canvas.width = pixelWidth;
+    if (canvas.height !== pixelHeight) canvas.height = pixelHeight;
 
     const nodes = nodesRef.current;
     const nodeMap = new Map(nodes.map(n => [n.path, n]));
 
-    ctx.clearRect(0, 0, canvas.width, canvas.height);
+    ctx.setTransform(pixelWidth / width, 0, 0, pixelHeight / height, 0, 0);
+    ctx.clearRect(0, 0, width, height);
     ctx.save();
-    ctx.translate(offset.x + canvas.width / 2 - 400, offset.y + canvas.height / 2 - 300);
+    ctx.translate(offset.x + width / 2 - 400, offset.y + height / 2 - 300);
     ctx.scale(zoom, zoom);
 
     // Draw edges
@@ -153,22 +188,22 @@ export default function GraphTab({ vaultId }) {
       // Label
       if (isHovered || zoom > 0.8) {
         ctx.font = `${isHovered ? 'bold ' : ''}${11 / zoom}px system-ui`;
-        ctx.fillStyle = isHovered ? '#ffffff' : '#9ca3af';
+        ctx.fillStyle = isHovered ? labelColor : mutedLabelColor;
         ctx.textAlign = 'center';
         ctx.fillText(node.name, node.x, node.y + nodeRadius + 12 / zoom);
       }
     }
 
     ctx.restore();
-  }, [graphData, zoom, offset, hoveredNode]);
+  }, [hasGraph, graphData, viewport, zoom, offset, hoveredNode, labelColor, mutedLabelColor]);
 
   // Graph-space hit test at a viewport point; null when no node is within reach.
   const hitTest = useCallback((clientX, clientY) => {
     const canvas = canvasRef.current;
     if (!canvas || nodesRef.current.length === 0) return null;
     const rect = canvas.getBoundingClientRect();
-    const mx = (clientX - rect.left - offset.x - canvas.width / 2 + 400) / zoom;
-    const my = (clientY - rect.top - offset.y - canvas.height / 2 + 300) / zoom;
+    const mx = (clientX - rect.left - offset.x - rect.width / 2 + 400) / zoom;
+    const my = (clientY - rect.top - offset.y - rect.height / 2 + 300) / zoom;
 
     let closest = null;
     let minDist = 20;
@@ -273,7 +308,7 @@ export default function GraphTab({ vaultId }) {
     );
   }
 
-  if (!graphData || graphData.totalNodes === 0) {
+  if (!hasGraph) {
     return (
       <div className="flex flex-col items-center justify-center h-64 text-gray-500">
         <Network size={32} className="mb-2 opacity-30" />
@@ -285,32 +320,34 @@ export default function GraphTab({ vaultId }) {
   return (
     <div className="relative -m-4" style={{ height: 'calc(100dvh - 220px)' }}>
       {/* Controls */}
-      <div className="absolute top-4 right-4 z-10 flex items-center gap-2">
-        <span className="text-xs text-gray-500">{graphData.totalNodes} nodes, {graphData.totalEdges} edges</span>
-        <OfflineNotesNotice count={graphData.skippedUnavailable} className="w-full mt-2" />
-        <button
-          onClick={() => setZoom(z => Math.min(z + 0.2, 3))}
-          aria-label="Zoom in"
-          className="min-h-[44px] min-w-[44px] inline-flex items-center justify-center p-1.5 rounded bg-port-card border border-port-border text-gray-400 hover:text-white"
-        >
-          <ZoomIn size={14} />
-        </button>
-        <button
-          onClick={() => setZoom(z => Math.max(z - 0.2, 0.3))}
-          aria-label="Zoom out"
-          className="min-h-[44px] min-w-[44px] inline-flex items-center justify-center p-1.5 rounded bg-port-card border border-port-border text-gray-400 hover:text-white"
-        >
-          <ZoomOut size={14} />
-        </button>
-        <button
-          onClick={() => { setZoom(1); setOffset({ x: 0, y: 0 }); }}
-          className="px-2 py-1 rounded bg-port-card border border-port-border text-gray-400 hover:text-white text-xs"
-        >
-          Reset
-        </button>
-        <button onClick={loadGraph} aria-label="Refresh" className="min-h-[44px] min-w-[44px] inline-flex items-center justify-center p-1.5 rounded bg-port-card border border-port-border text-gray-400 hover:text-white">
-          <RefreshCw size={14} />
-        </button>
+      <div className="absolute inset-x-4 top-4 z-10 flex flex-col items-end gap-2 pointer-events-none">
+        <div className="flex flex-wrap items-center justify-end gap-2 max-w-full pointer-events-auto">
+          <span className="text-xs text-gray-500">{graphData.totalNodes} nodes, {graphData.totalEdges} edges</span>
+          <button
+            onClick={() => setZoom(z => Math.min(z + 0.2, 3))}
+            aria-label="Zoom in"
+            className="min-h-[44px] min-w-[44px] inline-flex items-center justify-center p-1.5 rounded bg-port-card border border-port-border text-gray-400 hover:text-white"
+          >
+            <ZoomIn size={14} />
+          </button>
+          <button
+            onClick={() => setZoom(z => Math.max(z - 0.2, 0.3))}
+            aria-label="Zoom out"
+            className="min-h-[44px] min-w-[44px] inline-flex items-center justify-center p-1.5 rounded bg-port-card border border-port-border text-gray-400 hover:text-white"
+          >
+            <ZoomOut size={14} />
+          </button>
+          <button
+            onClick={() => { setZoom(1); setOffset({ x: 0, y: 0 }); }}
+            className="min-h-[44px] px-2 py-1 rounded bg-port-card border border-port-border text-gray-400 hover:text-white text-xs"
+          >
+            Reset
+          </button>
+          <button onClick={loadGraph} aria-label="Refresh" className="min-h-[44px] min-w-[44px] inline-flex items-center justify-center p-1.5 rounded bg-port-card border border-port-border text-gray-400 hover:text-white">
+            <RefreshCw size={14} />
+          </button>
+        </div>
+        <OfflineNotesNotice count={graphData.skippedUnavailable} className="w-full max-w-md pointer-events-auto" />
       </div>
 
       {/* Legend */}
@@ -335,16 +372,12 @@ export default function GraphTab({ vaultId }) {
         role="application"
         aria-label="Knowledge graph. Arrow keys pan, plus and minus zoom, zero resets, left and right brackets cycle pages, Enter opens the selected page."
         onKeyDown={handleKeyDown}
-        className="w-full h-full touch-none"
+        className="block w-full h-full touch-none"
         onPointerDown={handlePointerDown}
         onPointerMove={handlePointerMove}
         onPointerUp={handlePointerUp}
         onPointerCancel={handlePointerCancel}
         onPointerLeave={(e) => { if (e.pointerType === 'mouse') setHoveredNode(null); }}
-        onWheel={(e) => {
-          e.preventDefault();
-          setZoom(z => Math.max(0.3, Math.min(3, z - e.deltaY * 0.001)));
-        }}
       />
     </div>
   );
