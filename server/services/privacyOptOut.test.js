@@ -36,7 +36,7 @@ const query = vi.fn(async (sql, [id, scope]) => {
 vi.mock('../lib/db.js', async importOriginal => ({ ...await importOriginal(), query }));
 const createDraft = vi.fn(async (d) => ({ id: 'draft-1', status: 'draft', ...d }));
 const approveDraft = vi.fn(async () => ({ id: 'draft-1', status: 'approved' }));
-vi.mock('./messageDrafts.js', () => ({ createDraft, approveDraft, erasePrivacyDrafts: vi.fn(async () => ({})) }));
+vi.mock('./messageDrafts.js', () => ({ createDraft, approveDraft, listDrafts: vi.fn(async () => []), erasePrivacyDrafts: vi.fn(async () => ({})) }));
 vi.mock('./messageAccounts.js', () => ({ listAccounts: vi.fn(async () => [{ id: 'acct-1', type: 'gmail', canSend: true }]) }));
 vi.mock('./messageSync.js', () => ({ getMessages: vi.fn(async () => ({ messages: [] })) }));
 vi.mock('./settings.js', () => ({ getSettings: vi.fn(async () => ({ privacy: { recheck: {} } })) }));
@@ -284,20 +284,20 @@ describe('buildDisclosureSelection', () => {
 describe('emailLane', () => {
   const broker = { id: 'mylife', name: 'MyLife', optout: { method: 'email', email: 'privacy@mylife.com' }, disclosureFields: ['full_name', 'email'] };
   const payload = { full_name: 'Jane Q Doe', email: 'jane@example.com' };
-  it('creates a draft locked to the broker address and transitions to submitted', async () => {
+  it('creates a draft locked to the broker address and keeps the case in progress', async () => {
     const res = await emailLane(broker, { id: 'c1', subjectId: 'sub-1' }, { disclosedFields: ['full_name', 'email'], payload, vaultRecordIds: ['n1', 'e1'], autoApprove: false });
-    expect(res.outcome).toBe('submitted');
+    expect(res.outcome).toBe('optout_in_progress');
     expect(createDraft.mock.calls.at(-1)[0].privacyMeta).toEqual({ subjectId: 'sub-1', vaultRecordIds: ['n1', 'e1'], caseId: 'c1' });
     expect(createDraft).toHaveBeenCalledWith(expect.objectContaining({ to: ['privacy@mylife.com'], generatedBy: 'privacy-optout' }));
     expect(approveDraft).not.toHaveBeenCalled();
     const states = transitionCase.mock.calls.map((c) => c[1]);
-    expect(states).toEqual(['optout_in_progress', 'submitted']);
+    expect(states).toEqual(['optout_in_progress']);
   });
   it('auto-approve approves the draft but never sends it', async () => {
     approveDraft.mockClear();
     const res = await emailLane(broker, { id: 'c1' }, { disclosedFields: ['full_name', 'email'], payload, autoApprove: true });
     expect(approveDraft).toHaveBeenCalledWith('draft-1');
-    expect(res).toMatchObject({ outcome: 'submitted', autoApproved: true });
+    expect(res).toMatchObject({ outcome: 'optout_in_progress', autoApproved: true });
     expect(res).not.toHaveProperty('sent');
     const evidence = transitionCase.mock.calls.at(-1)[2].evidence;
     expect(evidence).toMatchObject({ autoApproved: true });
@@ -353,7 +353,7 @@ describe('runOptOutPass', () => {
     listBrokerCases.mockResolvedValue([{ id: 'c1', brokerId: 'mylife', state: 'found', evidence: {} }]);
     const res = await runOptOutPass({ runVerification: false });
     expect(res.submitted[0].lane).toBe('email');
-    expect(res.submitted[0].outcome).toBe('submitted');
+    expect(res.submitted[0].outcome).toBe('optout_in_progress');
   });
   it('reads the auto-approve toggle from settings', async () => {
     const vault = await import('./privacyVault.js');
@@ -367,29 +367,55 @@ describe('runOptOutPass', () => {
 });
 
 describe('runVerificationPass', () => {
-  it('advances submitted → verification_pending on a trusted confirmation', async () => {
-    const broker = { id: 'spokeo', urls: { home: 'https://www.spokeo.com' }, optout: { url: 'https://www.spokeo.com/optout' } };
-    getBroker.mockResolvedValue(broker);
-    listBrokerCases
-      .mockResolvedValueOnce([{ id: 'c1', brokerId: 'spokeo', state: 'submitted', evidence: {} }])
-      .mockResolvedValueOnce([]); // no verification_pending/awaiting to re-scan
-    const messagesProvider = vi.fn(async () => ({ messages: [{ id: 'm1', subject: 'Confirm your opt-out', body: 'Click https://www.spokeo.com/confirm to complete removal.' }] }));
-    const res = await runVerificationPass({ messagesProvider });
-    expect(res.advanced).toHaveLength(1);
-    expect(transitionCase).toHaveBeenCalledWith('c1', 'verification_pending', expect.anything());
+  const kase = { id: 'case-1', brokerId: 'broker', subjectId: 'subject-1', channel: 'email', state: 'submitted', evidence: { draftId: 'draft-1', to: 'broker@example.com' } };
+  const draft = {
+    id: 'draft-1', generatedBy: 'privacy-optout', sendVia: 'api', status: 'sent', accountId: 'acct-1', to: ['broker@example.com'], cc: [],
+    privacyMeta: { caseId: 'case-1', subjectId: 'subject-1' }, sendAttemptId: 'attempt-1',
+    sendAttempts: [{ id: 'attempt-1', outcome: 'sent', finishedAt: '2026-01-02T00:00:00Z' }],
+  };
+  const confirmation = {
+    id: 'm1', accountId: 'acct-1', labels: ['INBOX'], inReplyTo: '<portos-optout-attempt-1@requests.invalid>',
+    date: '2026-01-02T00:01:00Z', subject: 'Confirm your opt-out', bodyText: 'Click https://example.com/confirm?t=token to complete removal.',
+  };
+  async function verifyEmail({ cases = [kase], drafts = [draft], messages = [confirmation] } = {}) {
+    getBroker.mockResolvedValue({ id: 'broker', urls: { home: 'https://example.com' } });
+    listBrokerCases.mockResolvedValueOnce(cases).mockResolvedValueOnce([]);
+    const messagesProvider = vi.fn(async () => ({ messages }));
+    const result = await runVerificationPass({ draftsProvider: async () => drafts, messagesProvider });
+    return { result, messagesProvider };
+  }
+
+  it('seals only the direct confirmation of the delivered request, even with a second request at the same broker', async () => {
+    const otherCase = { ...kase, id: 'case-2', subjectId: 'subject-2', evidence: { ...kase.evidence, draftId: 'draft-2' } };
+    const otherDraft = { ...draft, id: 'draft-2', privacyMeta: { caseId: 'case-2', subjectId: 'subject-2' },
+      sendAttemptId: 'attempt-2', sendAttempts: [{ ...draft.sendAttempts[0], id: 'attempt-2' }] };
+    const { result, messagesProvider } = await verifyEmail({ cases: [otherCase, kase], drafts: [draft, otherDraft] });
+    expect(messagesProvider.mock.calls).toEqual([[{ accountId: 'acct-1', limit: 200 }]]);
+    expect(result.advanced).toEqual([{ caseId: kase.id, brokerId: kase.brokerId }]);
+    expect(transitionCase.mock.calls).toEqual([[kase.id, 'verification_pending', expect.objectContaining({
+      evidence: { ...kase.evidence, verification: { messageId: 'm1', score: 1 }, verification_url: 'https://example.com/confirm?t=token' },
+    })]]);
   });
-  it('hands the confirmation link over as sealed verification_url, keeping only messageId/score in plain verification (#17758)', async () => {
-    getBroker.mockResolvedValue({ id: 'spokeo', urls: { home: 'https://www.spokeo.com' }, optout: { url: 'https://www.spokeo.com/optout' } });
-    listBrokerCases
-      .mockResolvedValueOnce([{ id: 'c1', brokerId: 'spokeo', state: 'submitted', evidence: {} }])
-      .mockResolvedValueOnce([]);
-    transitionCase.mockClear();
-    const messagesProvider = vi.fn(async () => ({ messages: [{ id: 'm1', subject: 'Confirm your opt-out', body: 'Click https://www.spokeo.com/confirm?t=tok to complete removal.' }] }));
-    await runVerificationPass({ messagesProvider });
-    const { evidence } = transitionCase.mock.calls[0][2];
-    expect(evidence.verification).toEqual({ messageId: 'm1', score: expect.any(Number) });
-    expect(evidence.verification).not.toHaveProperty('url');
-    expect(evidence.verification_url).toBe('https://www.spokeo.com/confirm?t=tok');
+
+  it.each([
+    ['unsent draft', { drafts: [{ ...draft, status: 'approved' }] }],
+    ['unreconciled attempt', { drafts: [{ ...draft, sendAttempts: [{ ...draft.sendAttempts[0], outcome: 'delivery_unknown' }] }] }],
+    ['browser delivery', { drafts: [{ ...draft, sendVia: 'playwright' }] }],
+    ['redirected recipient', { drafts: [{ ...draft, to: ['other@example.com'] }] }],
+    ['legacy case', { cases: [{ ...kase, evidence: {} }] }],
+    ['wrong subject', { cases: [{ ...kase, subjectId: 'subject-2' }] }],
+    ['wrong case', { cases: [{ ...kase, id: 'case-2' }] }],
+    ['stale reply', { messages: [{ ...confirmation, date: '2026-01-01T23:59:59Z' }] }],
+    ['undated reply', { messages: [{ ...confirmation, date: null }] }],
+    ['other account', { messages: [{ ...confirmation, accountId: 'acct-2' }] }],
+    ['another request', { messages: [{ ...confirmation, inReplyTo: '<portos-optout-attempt-2@requests.invalid>' }] }],
+    ['uncorrelated message', { messages: [{ ...confirmation, inReplyTo: '' }] }],
+    ['outbound message', { messages: [{ ...confirmation, labels: ['INBOX', 'SENT'] }] }],
+    ['foreign link', { messages: [{ ...confirmation, bodyText: 'Click https://other.example/confirm' }] }],
+  ])('leaves the case and evidence unchanged for %s', async (_label, options) => {
+    const { result } = await verifyEmail(options);
+    expect(result.advanced).toEqual([]);
+    expect(transitionCase).not.toHaveBeenCalled();
   });
   it('confirms removal only when a read-only re-scan returns not_found', async () => {
     const broker = { id: 'spokeo', urls: { search: 'https://www.spokeo.com/{firstName}-{lastName}/{state}' } };
@@ -587,7 +613,7 @@ describe('consent withdrawal during a broker pass', () => {
     const publishing = Promise.withResolvers();
     const prepared = Promise.withResolvers();
     transitionCase.mockImplementation(async (_id, state) => {
-      if (state === 'submitted') { publishing.resolve(); await prepared.promise; }
+      if (state === 'optout_in_progress') { publishing.resolve(); await prepared.promise; }
       return { state };
     });
     const publication = emailLane(broker, { id: 'c1', subjectId }, {
