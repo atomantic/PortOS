@@ -31,7 +31,6 @@
 import { randomUUID } from 'crypto';
 import { query, withTransaction } from '../lib/db.js';
 import { ServerError } from '../lib/errorHandler.js';
-import { parseCityState } from '../lib/cityState.js';
 import {
   encryptValue, decryptValue, ensureVaultKey, isVaultKeyConfigured, maskValue,
 } from '../lib/vaultCrypto.js';
@@ -171,15 +170,8 @@ async function scrubVaultRecord(row) {
 // the full address alone matches nothing there: add the parsed city and
 // "city, state" forms. Sensitive types are never rendered into drafts.
 async function draftScrubNeedles(row) {
-  if (PRIVACY_SENSITIVE_TYPES.includes(row.type)) return [];
-  const { decryptForScrub } = await import('./privacyDraftErasure.js');
-  const needles = decryptForScrub([row.value_enc]);
-  if (row.type === 'address') {
-    const { city, state } = parseCityState(needles[0]);
-    if (city) needles.push(city);
-    if (city && state) needles.push(`${city}, ${state}`);
-  }
-  return needles;
+  const { draftScrubNeedlesForRows } = await import('./privacyDraftErasure.js');
+  return draftScrubNeedlesForRows([row]);
 }
 
 export async function updateVaultRecord(id, patch) {
