@@ -23,7 +23,7 @@ export default {
       return { success: true, skipped: 'recovery copy already parked' };
     }
 
-    await atomicWrite(recovery, value);
+    await atomicWrite(recovery, value, { mode: 0o600, dirMode: 0o700 });
     const count = Object.keys(value.providers || {}).length;
     console.log(`🔗 Parked a pre-graph copy of ${count} provider records; the graph import runs at boot`);
     return { success: true };
