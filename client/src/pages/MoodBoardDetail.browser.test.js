@@ -91,9 +91,10 @@ describe.skipIf(!chrome)('mood board in Chromium', () => {
             if (importer?.endsWith('/MoodBoardAnalyzeSection.jsx') && id.endsWith('/ProviderModelSelector')) {
               return '\0board-empty';
             }
+            if (importer?.endsWith('/useMoodBoardData.js') && id === '../../services/socket') return '\0board-socket';
+            if (importer?.endsWith('/MoodBoardAddPanel.jsx') && /Gallery(Image|Video)Picker/.test(id)) return '\0board-empty';
             if (!importer?.endsWith('/MoodBoardDetail.jsx')) return;
-            if (id === '../services/socket') return '\0board-socket';
-            if (/MoodBoard(Generate|Collage)Panel|Gallery(Image|Video)Picker|VideoFramePicker|MediaLightbox/.test(id)) return '\0board-empty';
+            if (/MoodBoard(Generate|Collage)Panel|VideoFramePicker|MediaLightbox/.test(id)) return '\0board-empty';
             if (id.endsWith('/PromptFromMedia')) return '\0board-prompt';
           },
           load(id) {
@@ -152,6 +153,32 @@ describe.skipIf(!chrome)('mood board in Chromium', () => {
     expect(await field.inputValue()).toBe('Unsaved direction');
     expect(await field.isVisible()).toBe(true);
     await page.close();
+  });
+
+  it('keeps the tool draft when dismissing the drawer and resizing to the rail', async () => {
+    const { page, state } = await openBoard(fixture, { width: 390, height: 844 });
+    try {
+      const drawer = page.getByRole('dialog', { name: 'Board tools' });
+      const opener = page.getByRole('navigation', { name: 'Board tools' }).getByRole('button', { name: 'Add', exact: true });
+      const draft = 'https://example.com/draft.png';
+      await drawer.getByLabel('Image URL').fill(draft);
+      const bounds = await drawer.boundingBox();
+      expect(bounds.x).toBe(0);
+      expect(bounds.width).toBe(390);
+      expect(bounds.y + bounds.height).toBe(844);
+      await page.keyboard.press('Escape');
+      await drawer.waitFor({ state: 'hidden' });
+      await expect.poll(() => opener.evaluate(element => document.activeElement === element)).toBe(true);
+
+      await opener.click();
+      expect(await drawer.getByLabel('Image URL').inputValue()).toBe(draft);
+      await page.setViewportSize({ width: 1440, height: 900 });
+      const rail = page.getByRole('complementary', { name: 'Board tools' });
+      await rail.getByLabel('Image URL').waitFor();
+      expect(await rail.getByLabel('Image URL').inputValue()).toBe(draft);
+      expect(await drawer.count()).toBe(0);
+      expect(state.errors).toEqual([]);
+    } finally { await page.close(); }
   });
 
   it('collapses item prompts independently and preserves edits and source URLs', async () => {
@@ -217,7 +244,7 @@ describe.skipIf(!chrome)('mood board in Chromium', () => {
       const { page, state } = await openBoard(fixture, { width, height: 900 }, undefined, [item]);
       try {
         if (width < 896) await page.getByRole('button', { name: 'Close board tools' }).click();
-        const trigger = page.getByRole('button', { name: 'Remove item', exact: true });
+        const trigger = page.getByRole('button', { name: /^Remove image 1/ });
         await trigger.click();
         const confirmation = page.getByRole('group', { name: 'Remove this mood board item?' });
         const bounds = await confirmation.boundingBox();
@@ -346,7 +373,7 @@ describe.skipIf(!chrome)('mood board in Chromium', () => {
       await page.getByRole('button', { name: 'Import pins', exact: true }).click();
       await vi.waitFor(() => expect(boards.a.items).toHaveLength(1));
       expect(boards.a.items[0].source).toBe(pinUrl);
-      const preview = page.getByRole('button', { name: 'Preview image', exact: true });
+      const preview = page.getByRole('button', { name: /^Preview image 1/ });
       await preview.waitFor();
       for (const constrained of [false, true]) {
         if (constrained) await preview.evaluate(button => {
