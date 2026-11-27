@@ -261,7 +261,7 @@ export const FEATURE_AREAS = Object.freeze([
       'server/lib/mediaModels/**',
       'server/lib/{image,media,video,threejs,sprite,html,lora,flux,runway,higgsfield,grok,fal,photoreal}*',
       'server/services/{image,media,video,htmlPages,codeAnimation,lora,sprite,threejs,runway,higgsfield,fal,grok}*',
-      'server/services/{imageGen,imageTo3d,mediaJobQueue,mediaAssetIndex,videoGen,videoTimeline,htmlPages,htmlComposition,codeAnimation,sprites,threejsModels,blenderModels,blenderWorkspace,generatedPreview}/**',
+      'server/services/{imageGen,imageTo3d,mediaCollections,mediaJobQueue,mediaAssetIndex,videoGen,videoTimeline,htmlPages,htmlComposition,codeAnimation,sprites,threejsModels,blenderModels,blenderWorkspace,generatedPreview}/**',
       'server/services/blenderInstaller*',
       'client/src/pages/{Media,Image,Video,HtmlPages,CodeAnimation,Sprites,Threejs,Loras,PromptFromMedia}*',
       'client/src/components/{imageGen,videoGen,media,htmlPages,codeAnimation,sprites,threejsModels,graph3d,loras,blenderModels,video}/**',
