@@ -25,7 +25,7 @@ const STEP_SCRIPTS = [
   'setup-data.js', 'setup-db.js', 'setup-llm.js', 'setup-browser.js', 'setup-cert.js',
   'ensure-ffmpeg.js', 'install-slashdo.js', 'setup-guide.js'
 ];
-const WORKSPACE_LABELS = ['root', 'client', 'server'];
+const WORKSPACE_LABELS = ['client', 'server'];
 
 /** The full ordered call log of a successful run, shared by the in-process and CLI tests. */
 const EXPECTED_ORDER = [
@@ -108,13 +108,13 @@ describe('runSetup step order', () => {
         writeFileSync(join(root, label, 'package.json'), `{"name":"${label}"}\n`);
         writeFileSync(join(root, label, 'package-lock.json'), `{"name":"${label}-lock"}\n`);
       }
-      writeFileSync(join(root, 'package-lock.json'), '{"name":"root-lock"}\n');
       expect(run({ failing: ['install server'], root }).code).not.toBe(0);
       expect(existsSync(receipt)).toBe(false);
       expect(run({ root }).code).toBe(0);
       const hashes = JSON.parse(readFileSync(receipt, 'utf8'));
-      for (const label of ['root', 'client', 'server']) {
-        const dir = label === 'root' ? root : join(root, label);
+      expect(hashes).not.toHaveProperty('root');
+      for (const label of WORKSPACE_LABELS) {
+        const dir = join(root, label);
         const hash = createHash('sha256').update(readFileSync(join(dir, 'package.json'))).update('\0');
         hash.update(readFileSync(join(dir, 'package-lock.json')));
         expect(hashes[label]).toBe(`v2:${hash.digest('hex')}`);
@@ -219,9 +219,7 @@ describe.skipIf(process.platform === 'win32')('node scripts/setup.js', () => {
       ]);
       expect(f.logged().join('\n')).not.toContain('--prefix');
       const hashes = JSON.parse(readFileSync(join(f.root, 'data', 'deps-hashes.json'), 'utf8'));
-      const hash = createHash('sha256').update(readFileSync(join(f.root, 'package.json'))).update('\0');
-      hash.update('<no-lockfile>');
-      expect(hashes.root).toBe(`v2:${hash.digest('hex')}`);
+      expect(hashes).not.toHaveProperty('root');
     } finally {
       rmSync(f.root, { recursive: true, force: true });
     }

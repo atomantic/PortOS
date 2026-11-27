@@ -7,22 +7,13 @@ import { DEV_PM2_APPS, runDev } from './dev-start.js';
 import { listPm2Processes } from './pm2-start.js';
 
 vi.mock('child_process', () => ({ execFileSync: vi.fn(), spawn: vi.fn() }));
-vi.mock('module', () => ({
-  createRequire: () => ({
-    resolve(specifier) {
-      if (specifier === 'pm2/package.json') return pm2Manifest;
-      throw new Error(`Unexpected package resolution: ${specifier}`);
-    }
-  })
-}));
 vi.mock('./pm2-start.js', async (importOriginal) => ({
   ...await importOriginal(),
   listPm2Processes: vi.fn()
 }));
 
 const root = join(dirname(fileURLToPath(import.meta.url)), '..');
-const pm2Manifest = join(root, 'fixture', 'pm2', 'package.json');
-const pm2Path = join(dirname(pm2Manifest), 'bin', 'pm2');
+const pm2Path = join(root, 'server', 'node_modules', 'pm2', 'bin', 'pm2');
 const foreignRoot = join(root, 'data', 'cos', 'worktrees', 'fixture');
 const cos = 'portos-cos';
 const ui = 'portos-ui';
@@ -80,6 +71,7 @@ describe('development PM2 startup', () => {
     await expect(done).resolves.toBe(0);
     expect(commands()).toEqual([...startupScripts, ...deletes([...registered, oldDashboard]), ecosystemStart(services)]);
     expect(execFileSync.mock.invocationCallOrder[2]).toBeLessThan(listPm2Processes.mock.invocationCallOrder[0]);
+    for (const [, [script]] of execFileSync.mock.calls.slice(startupScripts.length)) expect(script).toBe(pm2Path);
     expect(spawn).toHaveBeenCalledWith(process.execPath, [pm2Path, 'logs'],
       expect.objectContaining({ cwd: root, windowsHide: true }));
   });

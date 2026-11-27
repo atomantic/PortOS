@@ -790,7 +790,6 @@ jobs:
       # job into a second application test suite.
       - name: Install all workspaces
         run: |
-          npm ci --ignore-scripts
           npm ci --ignore-scripts --prefix client
           npm ci --ignore-scripts --prefix server
 
@@ -934,9 +933,7 @@ jobs:
         with:
           node-version: 26.x
           cache: npm
-          cache-dependency-path: |
-            package-lock.json
-            server/package-lock.json
+          cache-dependency-path: server/package-lock.json
 
       - name: Verify the native Docker host
         run: |
@@ -961,9 +958,6 @@ jobs:
         with:
           path: server/node_modules
           key: supercollider-server-ignore-scripts-${{ matrix.arch }}-${{ steps.supercollider-node.outputs.node-version }}-${{ hashFiles('server/package-lock.json', 'server/.npmrc') }}
-
-      - name: Install root dependencies without lifecycle scripts
-        run: npm ci --ignore-scripts
 
       - name: Install server dependencies without lifecycle scripts
         if: steps.supercollider-dependencies.outputs.cache-hit != 'true'

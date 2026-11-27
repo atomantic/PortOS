@@ -1,3 +1,4 @@
+import { PM2_BIN } from '../../scripts/lib/pm2Resolve.js';
 import { join } from 'node:path';
 import { PATHS } from '../lib/fileUtils.js';
 import { commandOutput } from '../lib/commandExists.js';
@@ -5,7 +6,7 @@ import { runStreamingCommand } from '../lib/streamingSpawn.js';
 
 export async function installFleetHostLoginTask() {
   if (process.platform !== 'win32') return { success: true };
-  const saved = await runStreamingCommand(process.execPath, [join(PATHS.root, 'node_modules/pm2/bin/pm2'), 'save'], undefined, { timeoutMs: 15000 });
+  const saved = await runStreamingCommand(process.execPath, [PM2_BIN, 'save'], undefined, { timeoutMs: 15000 });
   if (!saved.success) return saved;
   const quote = (value) => `'${value.replaceAll("'", "''")}'`;
   const script = join(PATHS.root, 'scripts', 'resume-fleet-host.js');

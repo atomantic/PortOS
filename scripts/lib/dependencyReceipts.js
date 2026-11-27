@@ -52,7 +52,7 @@ export function saveDependencyHashes(root, hashes) {
 
 export function writeDependencyHashes(root) {
   // Project npm configuration is separate evidence, added without changing
-  // the legacy root/client/server fields. Null records an absent .npmrc.
+  // the client/server digests. Null records an absent .npmrc.
   const hashes = { npmrc: {} };
   for (const { dir, label } of dependencyWorkspaces(root)) {
     const hash = dependencyHash(dir);

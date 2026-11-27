@@ -4,7 +4,6 @@ import { discoverWorkspaces } from '../../../../scripts/trusted-rebuilds.js';
 import { guardCorpus, readText, REPO_ROOT } from '../../../../scripts/lib/guardCorpus.js';
 
 const MANIFESTS = [
-  'package.json',
   'server/package.json',
   'client/package.json'
 ];
@@ -180,7 +179,7 @@ describe('dependency override parity across manifests (#2848)', () => {
   // PortOS dropped its local braces depth guard (#9906) once pm2 7.1.0 stopped
   // pulling braces in. A dependency that brings it back would run unguarded, so
   // the guard has to return with it.
-  it.each(['package.json', 'server/package.json'])('%s resolves no braces install', rel => {
+  it.each(MANIFESTS)('%s resolves no braces install', rel => {
     const resolved = Object.keys(readLockPackages(lockfileFor(rel)))
       .filter((path) => packageNameFromLockPath(path) === 'braces');
     expect(resolved).toEqual([]);

@@ -1,13 +1,12 @@
 import { execFileSync, spawn } from 'child_process';
-import { createRequire } from 'module';
 import { constants } from 'os';
 import { dirname, join } from 'path';
 import { fileURLToPath } from 'url';
 import { isDirectlyInvoked } from './lib/directInvocation.js';
+import { PM2_BIN } from './lib/pm2Resolve.js';
 import { redactPaths } from './pm2-daemon-refresh.js';
 import { listPm2Processes, startPm2Apps } from './pm2-start.js';
 
-const require = createRequire(import.meta.url);
 const scriptsDir = dirname(fileURLToPath(import.meta.url));
 const root = join(scriptsDir, '..');
 const options = { cwd: root, stdio: 'inherit', windowsHide: true };
@@ -20,8 +19,8 @@ export const DEV_PM2_APPS = [
   'portos-browser'
 ];
 
-async function tailLogs(pm2Path, signalTarget) {
-  const child = spawn(process.execPath, [pm2Path, 'logs'], options);
+async function tailLogs(signalTarget) {
+  const child = spawn(process.execPath, [PM2_BIN, 'logs'], options);
   let received;
   const forward = (signal) => {
     if (received) return;
@@ -51,21 +50,20 @@ export async function runDev(argv, signalTarget = process) {
     throw new Error('Usage: npm run dev -- [--restart-cos]');
   }
 
-  // Keep Node invocations shell-free on Windows, and resolve PM2 only after
-  // ensure-deps has made its package available on a fresh install.
+  // Keep Node invocations shell-free on Windows and install the server's PM2
+  // before using it on a fresh checkout.
   for (const script of ['ensure-deps.js', 'setup-db.js', 'setup-cert.js']) {
     execFileSync(process.execPath, [join(scriptsDir, script)], options);
   }
-  const pm2Path = join(dirname(require.resolve('pm2/package.json')), 'bin', 'pm2');
   await startPm2Apps({
     expectedApps: DEV_PM2_APPS,
     root,
     list: listPm2Processes,
-    pm2: (...args) => execFileSync(process.execPath, [pm2Path, ...args], options),
+    pm2: (...args) => execFileSync(process.execPath, [PM2_BIN, ...args], options),
     development: true,
     restartCos: argv.includes('--restart-cos')
   });
-  return tailLogs(pm2Path, signalTarget);
+  return tailLogs(signalTarget);
 }
 
 if (isDirectlyInvoked(import.meta.url)) {

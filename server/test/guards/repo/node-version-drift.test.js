@@ -41,7 +41,7 @@ function pinSatisfiesSupportedRange(pin) {
 }
 
 const MANIFESTS = ['package.json', 'client/package.json', 'server/package.json'];
-const LOCKFILES = ['package-lock.json', 'client/package-lock.json', 'server/package-lock.json'];
+const LOCKFILES = ['client/package-lock.json', 'server/package-lock.json'];
 const NPMRCS = ['.npmrc', 'client/.npmrc', 'server/.npmrc'];
 const SUPPORTED_NODE_POINTS = [MIN_NODE, MIN_NODE_24, '26.0.0'];
 const REQUIRED_DEPENDENCIES = [

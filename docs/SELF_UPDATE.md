@@ -38,6 +38,8 @@ Renders and jobs, running or queued CoS work, Persistent Mind turns/messages, ap
 
 The Update tab reports the running Node version and supported alternatives, plus the shipped, daemon and global PM2 versions. An authorized Node switch requires idle state, pins the selected interpreter in `PORTOS_NODE_INTERPRETER` and uses the normal detached refresh path. The PM2 sync action aligns an older daemon or global CLI to the shipped version.
 
+The server workspace supplies PM2 for startup, updates and the root `pm2:*` commands. During the first update from an older release, the updater can create a compatibility link at the previous CLI location so it can complete the restart with the server copy.
+
 Workspace dependencies can be reused when the install receipt, manifests, lockfile, project npm configuration and installed packages agree. Stale or unknown state triggers repair. Trusted native rebuilds, client build, restart and verification still run. A primary-install update is separate from dependency linking in a CoS worktree.
 
 ## Image-bearing Persistent Mind work must drain before source transitions

@@ -10,7 +10,6 @@
  */
 import { afterEach, describe, it, expect, vi } from 'vitest';
 import {
-  existsSync,
   mkdirSync,
   mkdtempSync,
   readFileSync,
@@ -214,18 +213,14 @@ describe('the floor is declared where npm itself reads it', () => {
   // The three scripts above cover `npm run setup|start|dev` and nothing else.
   // Direct `cd client && npm install` and `npm i <pkg>` are how lockfile churn
   // still gets introduced; only `engines.npm` reaches those authoring paths.
-  const MANIFESTS = ['package.json', 'client/package.json', 'server/package.json'];
+  const LOCKED_MANIFESTS = ['client/package.json', 'server/package.json'];
 
-  it.each(MANIFESTS)('%s declares engines.npm = the floor', (rel) => {
+  it.each(['package.json', ...LOCKED_MANIFESTS])('%s declares engines.npm = the floor', (rel) => {
     expect(readJson(rel).engines?.npm).toBe(`>=${MIN_NPM}`);
-    expect(readJson(rel.replace('package.json', 'package-lock.json')).packages[''].engines?.npm).toBe(`>=${MIN_NPM}`);
   });
 
-  it.each(MANIFESTS)('%s ships a lockfile that the floor protects', (rel) => {
-    // If a workspace stops carrying a lockfile, its engines.npm entry is just
-    // noise — this is what would say so.
-    const lockfile = join(REPO_ROOT, rel.replace(/package\.json$/, 'package-lock.json'));
-    expect(existsSync(lockfile), `${rel} declares engines.npm but ships no lockfile`).toBe(true);
+  it.each(LOCKED_MANIFESTS)('%s records the same floor in its lockfile', (rel) => {
+    expect(readJson(rel.replace('package.json', 'package-lock.json')).packages[''].engines?.npm).toBe(`>=${MIN_NPM}`);
   });
 
   it.each(['.npmrc', 'client/.npmrc', 'server/.npmrc'])(
