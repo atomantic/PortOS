@@ -16,6 +16,8 @@ import { browserSuiteCanRun, resolveTestChrome, resolveClientBundler } from '../
 import { findFfmpeg } from '../../lib/ffmpeg.js';
 import { narrativeFrameState } from '../../lib/musicVideo/musicVideoNarrativeEvents.js';
 import { buildDocumentData, documentRenderClock, documentRenderInitScripts, documentAspect, DOCUMENT_FRAME_SIZES } from './documentRender.js';
+import { imageTreatmentDefaults, shotImageTreatmentAspect } from '../../lib/musicVideo/musicVideoImageTreatments.js';
+import { renderImageTreatment } from './imageTreatments.js';
 import { buildLyricPlaythroughPreview } from './lyricPlaythrough.js';
 
 // Bundled StoryboardAnimatic.jsx, DocumentTemplateCanvas.jsx, documentTemplateDrawing.js,
@@ -30,6 +32,10 @@ const still = { sceneId: 'still', order: 0, label: 'Example still', startSec: 0,
 const base = (scene = still, extra = {}) => ({ id: 'native-parity-fixture', name: 'Example song', scenes: [scene],
   audioAnalysis: { durationSec: 4, beats: [0.5, 1, 2, 3], downbeats: [1, 3], sections: [{ startSec: 0, endSec: 4, label: 'Verse' }] },
   composition: { mode: 'document', document: { directory: 'fixture' } }, ...extra });
+const stampedStill = { ...still, endSec: 2, imageTreatments: [{ ...imageTreatmentDefaults('quartz', still.referenceImageId), size: 0.12 }] };
+const treatmentProject = base(stampedStill, { scenes: [stampedStill, { ...still, sceneId: 'plain', order: 1, startSec: 2 }] });
+const stampedPath = `/api/music-video/${treatmentProject.id}/scenes/${stampedStill.sceneId}/image-treatment`;
+const stampedUrl = `${stampedPath}?${new URLSearchParams({ treatment: JSON.stringify(stampedStill.imageTreatments[0]) })}`;
 const clipHistory = Object.fromEntries(['clip', 'uniform'].map(id => [
   id, { id, filename: `${id}.webm`, fps: 24, width: 240, height: 240, numFrames: 96 },
 ]));
@@ -121,6 +127,9 @@ function App(){const[value,setValue]=useState(null);window.show=(project,data,t)
     await phase('media', async timeout => {
       const svg = '<svg width="960" height="540" xmlns="http://www.w3.org/2000/svg"><rect width="960" height="540" fill="#174280"/><path d="M0 0H180V540H0zM400 0H600V540H400zM820 0H960V540H820z" fill="#e96531"/><circle cx="650" cy="130" r="95" fill="#eaeaea"/><path d="M0 400H960V480H0z" fill="#32d96c"/></svg>';
       await sharp(Buffer.from(svg)).png().toFile(join(dir, 'grid.png'));
+      await writeFile(join(dir, 'stamped.png'), await renderImageTreatment(await readFile(join(dir, 'grid.png')), stampedStill.imageTreatments[0], {
+        aspect: shotImageTreatmentAspect(treatmentProject, stampedStill, still.referenceImageId),
+      }));
       await sharp({ create: { width: 200, height: 400, channels: 3, background: '#f215cd' } }).png().toFile(join(dir, 'end.png'));
       execFileSync(ffmpeg, ['-v', 'error', '-y', '-loop', '1', '-i', join(dir, 'grid.png'), '-vf', 'crop=540:540,scale=240:240,format=yuv420p', '-t', '4', '-r', '24', '-c:v', 'libvpx', '-threads', '1', join(dir, 'clip.webm')], { timeout, killSignal: 'SIGKILL' });
       execFileSync(ffmpeg, ['-v', 'error', '-y', '-f', 'lavfi', '-i', 'color=c=cyan:s=240x240:r=24:d=4', '-c:v', 'libvpx', '-threads', '1', join(dir, 'uniform.webm')], { timeout, killSignal: 'SIGKILL' });
@@ -135,12 +144,13 @@ function App(){const[value,setValue]=useState(null);window.show=(project,data,t)
       app.get('/engine/media/:file', (req, res) => {
         const scene = engineData.scenes.find(s => s.media?.src === `media/${req.params.file}`);
         const selected = current.scenes.find(s => s.sceneId === scene?.sceneId);
-        const name = req.params.file.endsWith('.webm') ? selected?.videoHistoryId === 'uniform' ? 'uniform.webm' : 'clip.webm' : req.params.file.includes('-end.') ? 'end.png' : selected?.referenceImageId || 'grid.png';
+        const name = req.params.file.endsWith('.webm') ? selected?.videoHistoryId === 'uniform' ? 'uniform.webm' : 'clip.webm' : req.params.file.includes('-end.') ? 'end.png' : selected?.imageTreatments?.[0] === stampedStill.imageTreatments[0] ? 'stamped.png' : selected?.referenceImageId || 'grid.png';
         res.sendFile(join(dir, name));
       });
       app.use('/engine', staticFiles.serve(join(templates, 'layered')), staticFiles.serve(join(templates, 'shared')), staticFiles.serve(join(root, 'server/lib/musicVideo')));
       app.get('/api/video-gen/history/:id', (req, res) => res.json({ ...clipHistory[req.params.id === 'uniform' ? 'uniform' : 'clip'], id: req.params.id }));
       app.get('/api/music-video/:id/lyrics/overlay/preview', async (_req, res, next) => { await buildLyricPlaythroughPreview(current, { overlay: true }).then(value => res.json(value)).catch(next); });
+      app.get(stampedPath, (req, res) => req.originalUrl === stampedUrl ? res.sendFile(join(dir, 'stamped.png')) : res.sendStatus(404));
       app.get('/data/images/:file', (req, res) => res.sendFile(join(dir, req.params.file)));
       app.get('/data/videos/:file', (req, res) => res.sendFile(join(dir, req.params.file === 'uniform.webm' ? 'uniform.webm' : 'clip.webm')));
       app.get('/song.wav', (_req, res) => res.sendFile(join(dir, 'song.wav')));
@@ -164,6 +174,7 @@ function App(){const[value,setValue]=useState(null);window.show=(project,data,t)
         const files = [
           ...clips.map(({ filename }) => ({ filename, path: `/data/videos/${filename}`, type: 'video/webm' })),
           ...['grid.png', 'end.png'].map(filename => ({ filename, path: `/data/images/${filename}`, type: 'image/png' })),
+          { filename: 'stamped.png', path: stampedUrl, type: 'image/png' },
           { filename: 'song.wav', path: '/song.wav', type: 'audio/wav' },
         ];
         const assets = await Promise.all(files.map(async ({ filename, path, type }) => ({
@@ -247,6 +258,10 @@ function App(){const[value,setValue]=useState(null);window.show=(project,data,t)
   }
 
   // Each case catches a named omission of the native player, through its rendered surface.
+  it('matches a date-stamped snapshot and a later untreated use of the same photo', async () => {
+    await compare(treatmentProject, 0.75, { name: 'stamped-snapshot' });
+    await compare(treatmentProject, 2.75, { name: 'untreated-snapshot', reuse: true });
+  });
   it('matches the constant vignette and grain', async () => { await compare(base(), 0.75); });
   it('matches hold, push, pan, a planned rotating beat snap and cover-fitted footage breathing', async () => {
     for (const move of ['hold', 'push', 'pan']) await compare(base({ ...still, stillMove: move }), 1.25, { name: move });
