@@ -833,17 +833,14 @@ async function runAdmittedPersistentMindTurn() {
 // applies — so they are decided together here and the `catch` only acts on the
 // result.
 //
-// Persistent Mind has no automatic provider fallback pool. A hard usage-limit /
-// quota exhaustion would otherwise climb failureCount and keep burning
-// scheduled wakes; it autopauses and probes for recovery (transient
-// rate-limits / network blips stay on the interrupted + backoff path).
+// Only the home profile autopauses and probes for quota recovery. A temporary
+// profile belongs to its wake, which retires on quota exhaustion even when the
+// adapter encounters the limit during preparation.
 // Local context-budget / known-window-below-request failures are not
 // transient either: retrying the same wake only climbs failureCount, so they
 // autopause with an actionable reason until the operator raises the window or
-// shrinks mind context. A refusal already named its own cause and the status it
-// belongs under; only a revoked temporary route retires the wake, exactly as
-// the pre-turn resolution does.
-function classifyPersistentMindTurnFailure(error, { signal, runStartedAt }) {
+// shrinks mind context. Call denials carry their own status and disposition.
+function classifyPersistentMindTurnFailure(error, { signal, runStartedAt, profile }) {
   const denied = isPersistentMindCallDenial(error);
   const aborted = signal.aborted;
   const detail = aborted
@@ -857,12 +854,12 @@ function classifyPersistentMindTurnFailure(error, { signal, runStartedAt }) {
     message: detail,
     status: held ? 'paused' : ((denied && error.deniedStatus) || 'interrupted'),
     consumedAttempt: runStartedAt != null,
-    retireWake: denied && error.requiresResubmission === true,
+    retireWake: (denied && error.requiresResubmission === true) || (usageLimit && profile?.temporary === true),
     retryAt: denied && error.retryDisposition === 'reset-wait' ? error.retryAt : null,
     markUsageLimit: usageLimit,
     logMessage: `Persistent mind turn ${denied ? 'refused a further provider call' : 'interrupted'}: ${detail}`,
   };
-  if (usageLimit) {
+  if (usageLimit && profile?.ok && !profile.temporary) {
     return {
       ...base,
       message: PROVIDER_USAGE_LIMIT_PAUSE_REASON,
@@ -913,9 +910,7 @@ function turnThinkingSelection(wake) {
 // allowed while deciding whether the pinned mind can wake. A preset that has
 // since been removed, retired, or narrowed is a refusal — never a silent
 // return to the default route.
-async function resolveTurnRoute({ turn, signal, alive }) {
-  const thinking = turnThinkingSelection(turn.wake);
-  const profile = await resolveTurnProfile({ ...thinking, config: (await loadState()).config });
+async function resolveTurnRoute({ turn, thinking, profile, signal, alive }) {
   if (!profile.ok) return parkRefusedProfile(profile);
   // Adapters receive the exact profile. They may prepare their text
   // transport, but cannot substitute a fallback provider/model/effort.
@@ -1132,8 +1127,11 @@ async function runClaimedPersistentMindTurn(turn, mind, globalSlot) {
   let release = () => {};
   let runStartedAt = null;
   let callBoundary = null;
+  let profile = null;
   try {
-    const route = await resolveTurnRoute({ turn, signal: controller.signal, alive });
+    const thinking = turnThinkingSelection(turn.wake);
+    profile = await resolveTurnProfile({ ...thinking, config: (await loadState()).config });
+    const route = await resolveTurnRoute({ turn, thinking, profile, signal: controller.signal, alive });
     if (!route.ok) return await settleStoppedTurn(turn.id, route);
     const admission = await admitTurn({ turn, route, globalSlot, alive, holdSlot: (fn) => { release = fn; } });
     if (!admission.ok) return await settleStoppedTurn(turn.id, admission);
@@ -1149,21 +1147,20 @@ async function runClaimedPersistentMindTurn(turn, mind, globalSlot) {
     });
   } catch (error) {
     if (generation === runtimeGeneration) {
-      const failure = classifyPersistentMindTurnFailure(error, { signal: controller.signal, runStartedAt });
+      const failure = classifyPersistentMindTurnFailure(error, { signal: controller.signal, runStartedAt, profile });
       await parkActiveTurn(turn.id, failure.message, failure.status, {
         consumedAttempt: failure.consumedAttempt,
         retireWake: failure.retireWake,
         retryAt: failure.retryAt,
       });
       if (failure.markUsageLimit) {
-        const providerId = (await loadState()).config?.persistentMindProfile?.providerId
-          || null;
+        const providerId = profile?.provider?.id;
         if (typeof providerId === 'string' && providerId) {
           await markProviderUsageLimit(providerId, { message: errorMessage(error) }).catch((markError) => {
             console.error(`❌ Failed to mark provider usage limit for mind probe: ${markError.message}`);
           });
         }
-        scheduleUsageLimitProbe(0);
+        if (failure.status === 'paused') scheduleUsageLimitProbe(0);
       }
       emitLog('warn', failure.logMessage, { turnId: turn.id });
     }
@@ -1382,6 +1379,14 @@ export async function stopPersistentMind({ waitForTurn = false } = {}) {
   return { success: true };
 }
 
+async function probeMessageImageProfile(profile) {
+  if (!profile) return null;
+  const { providerId, model } = profile;
+  const provider = providerId ? await getProviderById(providerId) : null;
+  const capability = await resolvePersistentMindImageCapability({ provider, model });
+  return { providerId, model, allowed: imageCapabilityAllowsAttempt(capability, provider), reason: capability.reason };
+}
+
 export async function enqueuePersistentMindMessage({
   id = randomUUID(),
   text,
@@ -1407,7 +1412,21 @@ export async function enqueuePersistentMindMessage({
     ? new Date(createdAt).toISOString()
     : nowIso();
   await cleanupPersistentMindAttachments();
-  const result = await mutateMindState(async (mind, root) => {
+  const currentPreset = (config) => presetId
+    ? findPersistentMindThinkingPreset(config?.persistentMindThinkingPresets, presetId)
+    : null;
+  let imageProfile = null;
+  if (attachmentIds.length > 0 && !isUpdateInProgress()) {
+    const snapshot = await loadState();
+    const mind = normalizePersistentMindState(snapshot.persistentMind);
+    if (!findMessageById(mind, messageId) && !mind.recentMessageIds.includes(messageId)) {
+      imageProfile = presetId
+        ? currentPreset(snapshot.config)
+        : normalizePersistentMindProfile(snapshot.config?.persistentMindProfile);
+      if (submittedSelection && !samePersistentMindThinkingSelection(submittedSelection, imageProfile)) imageProfile = null;
+    }
+  }
+  const admitMessage = (imageCheck) => mutateMindState(async (mind, root) => {
     if (attachmentIds.length > 0 && isUpdateInProgress()) {
       return {
         mind,
@@ -1509,9 +1528,7 @@ export async function enqueuePersistentMindMessage({
     }
     // Resolve new admissions inside the same state update that accepts them.
     // Matching retries above use their receipt, even if the preset was revoked.
-    const selection = presetId
-      ? findPersistentMindThinkingPreset(root.config?.persistentMindThinkingPresets, presetId)
-      : null;
+    const selection = currentPreset(root.config);
     if (presetId && !selection) {
       return { mind, value: attachmentFailure('The temporary thinking preset is unavailable', {
         code: 'THINKING_PRESET_UNAVAILABLE', status: 422,
@@ -1524,10 +1541,11 @@ export async function enqueuePersistentMindMessage({
     }
     if (attachmentIds.length > 0) {
       const profile = selection || normalizePersistentMindProfile(root.config?.persistentMindProfile);
-      const provider = profile.providerId ? await getProviderById(profile.providerId) : null;
-      const capability = await resolvePersistentMindImageCapability({ provider, model: profile.model });
-      if (!imageCapabilityAllowsAttempt(capability, provider)) {
-        return { mind, value: attachmentFailure(capability.reason, { code: 'IMAGE_CAPABILITY_UNSUPPORTED', status: 422 }) };
+      if (!imageCheck || imageCheck.providerId !== profile.providerId || imageCheck.model !== profile.model) {
+        return { mind, value: { retryImageProfile: profile } };
+      }
+      if (!imageCheck.allowed) {
+        return { mind, value: attachmentFailure(imageCheck.reason, { code: 'IMAGE_CAPABILITY_UNSUPPORTED', status: 422 }) };
       }
     }
     if (claimedRecords.length > 0 && !sameAttachmentIds(
@@ -1592,6 +1610,15 @@ export async function enqueuePersistentMindMessage({
       value: { success: true, duplicate: false, messageId, acceptedMessage: message },
     };
   });
+  let result = await admitMessage(await probeMessageImageProfile(imageProfile));
+  if (result.value.retryImageProfile) {
+    result = await admitMessage(await probeMessageImageProfile(result.value.retryImageProfile));
+    if (result.value.retryImageProfile) {
+      return attachmentFailure('The image route changed during admission; retry this message', {
+        code: 'IMAGE_PROFILE_CHANGED', status: 409,
+      });
+    }
+  }
   if (result.value.success) {
     // Retry the stable event id even when the mutable queue already saw this
     // message. The ledger deduplicates a healthy first append; if the first
