@@ -36,6 +36,15 @@ describe('ImageGenControls — fal edit highlight', () => {
   });
 });
 
+it('spans the custom grid for catalog messages and lets the seed input shrink', () => {
+  const props = baseProps({ models: [], showSeed: true, className: 'grid grid-cols-2 sm:grid-cols-4' });
+  const { rerender } = render(<ImageGenControls {...props} modelsState="error" modelsError="Unavailable" />);
+  expect(screen.getByRole('alert')).toHaveClass('col-span-full');
+  rerender(<ImageGenControls {...props} modelsState="ready" />);
+  expect(screen.getByRole('status')).toHaveClass('col-span-full');
+  expect(screen.getByLabelText('Seed')).toHaveClass('min-w-0');
+});
+
 describe('ImageGenControls — custom dimensions', () => {
 
   it('renders before the caller supplies a model or runtime status', () => {

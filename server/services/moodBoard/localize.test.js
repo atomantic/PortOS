@@ -6,6 +6,7 @@ vi.mock('../../lib/safeUrlFetch.js', () => net);
 const writeSidecar = vi.fn(async () => true);
 vi.mock('../imageGen/imageRecords.js', () => ({ writeLocalImageSidecarIfMissing: (...args) => writeSidecar(...args) }));
 vi.mock('./db.js', () => ({ getBoard: vi.fn() }));
+vi.mock('../externalMediaCollection.js', () => ({ fileExternalMedia: vi.fn() }));
 vi.mock('../sharing/recordEvents.js', () => ({ emitRecordUpdated: vi.fn() }));
 vi.mock('../../lib/backupSnapshotBoundary.js', () => ({ withBackupAssetPublication: (fn) => fn() }));
 vi.mock('../../lib/fileUtils.js', async (importOriginal) => ({

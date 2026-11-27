@@ -57,6 +57,30 @@ describe('board analyze job', () => {
     await vi.waitFor(() => expect(emit).toHaveBeenCalledWith('mood-board:analyze', expect.objectContaining({ boardId: 'mb-run' })));
   });
 
+  it('retains the latest 100 finished statuses for 30 minutes without expiring active work', async () => {
+    const startedAt = new Date('2026-11-01T00:00:00Z');
+    vi.useFakeTimers({ toFake: ['Date'] });
+    vi.setSystemTime(startedAt);
+    const board = { id: 'example-board', items: [{ id: 'saved', type: 'image', analysis: { prompt: 'ink' } }] };
+    let finish;
+    backfill.mockReturnValueOnce(new Promise(resolve => { finish = resolve; }));
+    backfill.mockResolvedValue(board);
+    getBoard.mockResolvedValue(board);
+    const active = analyzeBoardForCombine('active-board');
+    try {
+      await Promise.all(Array.from({ length: 101 }, (_, index) => analyzeBoardForCombine(`finished-${index}`)));
+      expect(getAnalyzeJob('finished-0')).toBeNull();
+      expect(getAnalyzeJob('finished-1')).toMatchObject({ status: 'done' });
+      vi.setSystemTime(startedAt.getTime() + 30 * 60 * 1000);
+      expect(getAnalyzeJob('finished-100')).toBeNull();
+      expect(getAnalyzeJob('active-board')).toMatchObject({ status: 'running' });
+    } finally {
+      finish(board);
+      await active;
+      vi.useRealTimers();
+    }
+  });
+
   it('fails without composing when no pin could be analyzed', async () => {
     const items = [{ id: 'a', type: 'image', mediaKey: 'image:a.png' }];
     backfill.mockResolvedValue({ id: 'mb-fail', items });

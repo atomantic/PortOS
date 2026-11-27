@@ -20,6 +20,7 @@ const store = {
 vi.mock('./db.js', () => store);
 const net = { fetchPublicText: vi.fn(), fetchPublicBinary: vi.fn() };
 vi.mock('../../lib/safeUrlFetch.js', () => net);
+vi.mock('../externalMediaCollection.js', () => ({ fileExternalMedia: vi.fn() }));
 vi.mock('../sharing/recordEvents.js', () => ({
   emitRecordUpdated: vi.fn(),
   emitRecordDeleted: vi.fn(),

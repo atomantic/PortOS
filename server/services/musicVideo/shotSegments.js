@@ -816,7 +816,7 @@ export function shotSegmentFile(projectId, name) {
 // each look's settings (its files are found again from the plan).
 const LOOKS_FILE = 'looks.json';
 const filmLookId = (look) => hash({ look });
-const lookWrites = new Map();
+const lookWrites = createKeyCachedQueue();
 
 async function readFilmLooks(dir) {
   const raw = await readFile(join(dir, LOOKS_FILE), 'utf8').catch(() => null);
@@ -826,15 +826,12 @@ async function readFilmLooks(dir) {
 
 // One read-modify-write at a time per project: shots finish in parallel.
 function updateFilmLooks(dir, change) {
-  const run = (lookWrites.get(dir) || Promise.resolve()).then(async () => {
+  return lookWrites(dir, async () => {
     const looks = await readFilmLooks(dir);
     if (change(looks) === false) return;
     await mkdir(dir, { recursive: true });
     await atomicWrite(join(dir, LOOKS_FILE), { looks });
-  });
-  const settled = run.catch((err) => console.warn(`⚠️ Music-video film look list not saved: ${err.message}`));
-  lookWrites.set(dir, settled);
-  return settled;
+  }).catch((err) => console.warn(`⚠️ Music-video film look list not saved: ${err.message}`));
 }
 
 const rememberFilmLook = (dir, look) => updateFilmLooks(dir, (looks) => {
