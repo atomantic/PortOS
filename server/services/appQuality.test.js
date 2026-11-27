@@ -418,7 +418,8 @@ describe('scheduled audit measurement workflow', () => {
     const [enriched] = await enrichAppsWithQuality([{ id: 'portos-default' }], {
       now, query, getPeers: async () => [], readFile: async () => null,
     });
-    expect(query.mock.calls[0][0]).toMatch(/SELECT app_id, category, agent_id, assessed_at, report, slice/);
+    expect(query.mock.calls[0][0]).toMatch(/SELECT [^\n]*measurement\.report, measurement\.slice/);
+    expect(query.mock.calls[0][0]).toMatch(/SELECT app_id, category, agent_id, assessed_at,\s+row_number\(\)/);
     expect(enriched.quality.categories.find(c => c.id === 'security')).toMatchObject({ score: 90, window: { runs: 1, worstSeverity: 1 } });
 
     const localRecords = await readQualityRecords('portos-default', 30, now, { query });

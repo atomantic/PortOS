@@ -157,6 +157,8 @@ CREATE TABLE IF NOT EXISTS app_quality_measurements (
 
 CREATE INDEX IF NOT EXISTS idx_app_quality_history ON app_quality_measurements (app_id, assessed_at DESC);
 
+CREATE INDEX IF NOT EXISTS idx_app_quality_app_category_assessed ON app_quality_measurements (app_id, category, assessed_at DESC, agent_id DESC);
+
 ALTER TABLE app_quality_measurements ADD COLUMN IF NOT EXISTS slice TEXT;
 
 ALTER TABLE memories ADD COLUMN IF NOT EXISTS sync_sequence BIGSERIAL;
