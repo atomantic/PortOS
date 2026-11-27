@@ -9,7 +9,14 @@ const harness = ({ llama = {}, status = { installed: true, running: false }, sta
     getSettings: vi.fn(async () => store),
     updateSettingsWith: vi.fn(async (mutate) => { store = await mutate(store); return store; }),
   };
-  const manager = { getLlamaServerStatus: vi.fn().mockResolvedValue(status), startLlamaServer: start };
+  const manager = {
+    getLlamaServerStatus: vi.fn().mockResolvedValue(status),
+    startLlamaServer: start,
+    persistRunningLlamaLaunch: vi.fn(async () => {
+      store = { localLlm: { llama: { ...store.localLlm.llama, launch: LAUNCH } } };
+      return true;
+    }),
+  };
   return { deps: { settings, manager }, manager, read: () => store };
 };
 
@@ -42,6 +49,20 @@ describe('llamaServerAutoStart', () => {
     await expect(setLlamaServerAutoStart(true, deps)).resolves.toMatchObject({ autoStart: true, started: true });
     expect(read().localLlm.llama).toMatchObject({ autoStart: true, idleMinutes: 10, launch: LAUNCH });
     expect(manager.startLlamaServer).toHaveBeenCalledTimes(1);
+  });
+
+  it('saves the running launch line when switched on while PortOS already serves it', async () => {
+    const { deps, manager, read } = harness({ llama: {}, status: { installed: true, running: true, managed: true } });
+    await expect(setLlamaServerAutoStart(true, deps)).resolves.toMatchObject({ autoStart: true, started: false, reason: 'running' });
+    expect(read().localLlm.llama).toMatchObject({ autoStart: true, launch: LAUNCH });
+    expect(manager.persistRunningLlamaLaunch).toHaveBeenCalledTimes(1);
+    expect(manager.startLlamaServer).not.toHaveBeenCalled();
+  });
+
+  it('does not claim a server someone else runs', async () => {
+    const { deps, manager } = harness({ llama: { launch: LAUNCH }, status: { installed: true, running: true, managed: false } });
+    await setLlamaServerAutoStart(true, deps);
+    expect(manager.persistRunningLlamaLaunch).not.toHaveBeenCalled();
   });
 
   it('leaves a running server alone when switched off', async () => {

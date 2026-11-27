@@ -56,6 +56,7 @@ export async function autoStartLlamaServer(deps = {}) {
 /**
  * Save the toggle, then reconcile: turning it on while the server is down starts
  * it now, so the switch and the process agree without waiting for a reboot.
+ * Turning it on while PortOS already runs it saves that running line instead.
  * Turning it off leaves a running server alone. A failed start rejects (the
  * setting stays saved), so the caller can show why.
  */
@@ -69,6 +70,11 @@ export async function setLlamaServerAutoStart(enabled, deps = {}) {
       llama: { ...current?.localLlm?.llama, autoStart: on },
     },
   }));
-  const reconcile = on ? await runAutoStart(deps) : { started: false, reason: 'disabled' };
-  return { autoStart: on, ...reconcile };
+  if (!on) return { autoStart: false, started: false, reason: 'disabled' };
+  // Already running under PortOS: record what it is serving, so the boot
+  // replay brings back THIS line rather than nothing or an older one.
+  const manager = deps.manager || await loadManager();
+  const status = await manager.getLlamaServerStatus();
+  if (status?.running && status.managed) await manager.persistRunningLlamaLaunch();
+  return { autoStart: true, ...await runAutoStart({ ...deps, manager }) };
 }

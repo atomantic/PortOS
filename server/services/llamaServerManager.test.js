@@ -1,5 +1,6 @@
 import { describe, it, expect, beforeAll, afterAll, beforeEach, afterEach, vi } from 'vitest';
 import {
+  persistRunningLlamaLaunch,
   getLlamaServerStatus,
   getLlamaServerEndpoint,
   startLlamaServer,
@@ -1169,6 +1170,21 @@ describe('llamaServerManager', () => {
       expect(args[args.indexOf('--alias') + 1]).toBe('qwen3.8-27b-dflash2');
       // The weights never move — that is what makes this cheap.
       expect(args[args.indexOf('-m') + 1]).toBe(modelPath);
+    });
+
+    it('saves the new id as the boot launch line after a rename', async () => {
+      await startedAs('dflash');
+      await relaunchLlamaServerWithAlias('example-org/renamed');
+      expect(settingsStore.localLlm.llama.launch).toMatchObject({ model: modelPath, alias: 'example-org/renamed' });
+    });
+
+    it('saves the line PM2 is running when asked to record it without a start', async () => {
+      await startedAs('example-org/served');
+      settingsStore = {};
+
+      await expect(persistRunningLlamaLaunch()).resolves.toBe(true);
+
+      expect(settingsStore.localLlm.llama.launch).toMatchObject({ model: modelPath, alias: 'example-org/served' });
     });
 
     // `null`, not `true`: nothing was restarted, and a toast claiming a restart
