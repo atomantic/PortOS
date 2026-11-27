@@ -20,52 +20,18 @@
  */
 
 import { query } from '../../../lib/db.js';
-import { mirrorTimestamp } from '../../../lib/pgTimestamp.js';
-import { toPgJson } from '../../../lib/pgJson.js';
+import { createJsonbLeafDb } from '../../../lib/jsonbLeafDb.js';
 
-/** Raw on-disk-equivalent record (the `data` JSONB), or null. No sanitize. */
-export async function readRaw(id) {
-  const { rows } = await query(`SELECT data FROM pipeline_series WHERE id = $1`, [id]);
-  return rows[0]?.data ?? null;
-}
-
-/** Every series id (live, ephemeral, AND tombstones) — the service filters. */
-export async function listIds() {
-  const { rows } = await query(`SELECT id FROM pipeline_series`);
-  return rows.map((r) => r.id);
-}
-
-/**
- * Live (non-deleted) series ids only — id-only projection. Backs
- * tombstoneGc's LIVE_ID_LISTERS (the base-hash orphan sweep), so a record
- * stops protecting its base hash the moment it's tombstoned without the
- * sweep ever reading a series' JSONB body.
- */
-export async function listLiveIds() {
-  const { rows } = await query(`SELECT id FROM pipeline_series WHERE deleted = FALSE`);
-  return rows.map((r) => r.id);
-}
-
-/**
- * Tombstoned series ids whose deletedAt is older than `beforeMs` (epoch ms) —
- * the GC candidate scan for `pruneTombstonedSeries`. An id-only projection:
- * the sweep almost never finds a tombstone, so the common case must not pay
- * for a single series' JSONB body, let alone every one of them.
- */
-export async function listTombstoneIdsBefore(beforeMs) {
-  const cutoffIso = new Date(beforeMs).toISOString();
-  const { rows } = await query(
-    `SELECT id FROM pipeline_series WHERE deleted = TRUE AND deleted_at IS NOT NULL AND deleted_at < $1`,
-    [cutoffIso],
-  );
-  return rows.map((r) => r.id);
-}
-
-/** Every record's raw `data` JSONB in one query (live/ephemeral/tombstones). */
-export async function listRaw() {
-  const { rows } = await query(`SELECT data FROM pipeline_series`);
-  return rows.map((r) => r.data);
-}
+export const { readRaw, listRaw, listIds, listLiveIds, listTombstoneIdsBefore, writeRaw, deleteRaw } = createJsonbLeafDb({
+  table: 'pipeline_series',
+  softDelete: {},
+  mirrorColumns: {
+    name: record => typeof record?.name === 'string' ? record.name : '',
+    universe_id: record => typeof record?.universeId === 'string' && record.universeId ? record.universeId : null,
+    writers_room_work_id: record => typeof record?.writersRoomWorkId === 'string' && record.writersRoomWorkId ? record.writersRoomWorkId : null,
+    ephemeral: record => record?.ephemeral === true,
+  },
+});
 
 /** Names and ordering only: no JSONB body is read for sidebar navigation. */
 export async function listNames() {
@@ -87,47 +53,4 @@ export async function listSummaries() {
        FROM pipeline_series WHERE deleted = FALSE`,
   );
   return rows;
-}
-
-/**
- * Upsert one record. `data` is written verbatim (lossless); the typed mirror
- * columns are bind-sanitized so a hand-edited/legacy record with a malformed
- * timestamp or missing field can't make the write throw (which, during the boot
- * warm/import, would block the whole backend). `created_at` is preserved on
- * conflict — only the first INSERT sets it.
- */
-export async function writeRaw(id, record) {
-  const now = new Date().toISOString();
-  const createdAt = mirrorTimestamp(record?.createdAt, now);
-  await query(
-    `INSERT INTO pipeline_series (id, name, universe_id, writers_room_work_id, data, ephemeral, created_at, updated_at, deleted, deleted_at)
-     VALUES ($1, $2, $3, $4, $5::jsonb, $6, $7, $8, $9, $10)
-     ON CONFLICT (id) DO UPDATE SET
-       name = EXCLUDED.name,
-       universe_id = EXCLUDED.universe_id,
-       writers_room_work_id = EXCLUDED.writers_room_work_id,
-       data = EXCLUDED.data,
-       ephemeral = EXCLUDED.ephemeral,
-       updated_at = EXCLUDED.updated_at,
-       deleted = EXCLUDED.deleted,
-       deleted_at = EXCLUDED.deleted_at`,
-    [
-      id,
-      typeof record?.name === 'string' ? record.name : '',
-      typeof record?.universeId === 'string' && record.universeId ? record.universeId : null,
-      typeof record?.writersRoomWorkId === 'string' && record.writersRoomWorkId ? record.writersRoomWorkId : null,
-      toPgJson(record),
-      record?.ephemeral === true,
-      createdAt,
-      mirrorTimestamp(record?.updatedAt, createdAt),
-      record?.deleted === true,
-      mirrorTimestamp(record?.deletedAt, null),
-    ],
-  );
-  return record;
-}
-
-/** Hard-delete a record (tombstone GC). Idempotent — missing row is a no-op. */
-export async function deleteRaw(id) {
-  await query(`DELETE FROM pipeline_series WHERE id = $1`, [id]);
 }

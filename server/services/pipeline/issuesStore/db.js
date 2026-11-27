@@ -15,9 +15,22 @@
  */
 
 import { query } from '../../../lib/db.js';
-import { mirrorTimestamp } from '../../../lib/pgTimestamp.js';
+import { createJsonbLeafDb } from '../../../lib/jsonbLeafDb.js';
 import { PIPELINE_STAGE_IDS } from '../../../lib/pipelineStages.js';
-import { toPgJson } from '../../../lib/pgJson.js';
+
+const leaf = createJsonbLeafDb({
+  table: 'pipeline_issues',
+  softDelete: {},
+  mirrorColumns: {
+    series_id: record => typeof record?.seriesId === 'string' ? record.seriesId : '',
+    season_id: record => typeof record?.seasonId === 'string' && record.seasonId ? record.seasonId : null,
+    number: record => Number.isFinite(record?.number) ? Math.floor(record.number) : null,
+    status: record => typeof record?.status === 'string' && record.status ? record.status.slice(0, 32) : null,
+    ephemeral: record => record?.ephemeral === true,
+  },
+});
+
+export const { readRaw, listIds, listTombstoneIdsBefore, writeRaw, deleteRaw } = leaf;
 
 // Only trusted, closed stage IDs form SQL paths. PostgreSQL removes history
 // before serializing JSONB for Node; every other field remains lossless.
@@ -27,28 +40,6 @@ const LEAN_DATA = PIPELINE_STAGE_IDS.reduce(
     WHEN jsonb_typeof(data->'stages'->'${stageId}') = 'object'
     THEN '{stages,${stageId},runHistory}'::text[] ELSE '{}'::text[] END`, 'data',
 );
-
-/** Raw on-disk-equivalent record (the `data` JSONB), or null. No sanitize. */
-export async function readRaw(id) {
-  const { rows } = await query(`SELECT data FROM pipeline_issues WHERE id = $1`, [id]);
-  return rows[0]?.data ?? null;
-}
-
-/**
- * Issue ids only — SELECT id, never the `data` JSONB (each issue can carry up to
- * ~12MB of stage runHistory, so an id sweep that loaded `data` would move the
- * whole table into memory just to read the ids, #2540). Default returns every
- * id (live, ephemeral, AND tombstones) — the "the service filters" contract the
- * facade relies on. `includeDeleted: false` scopes to non-tombstoned rows via
- * the mirrored `deleted` column so a live-membership sweep (tombstoneGc) skips
- * the whole-record load entirely.
- */
-export async function listIds({ includeDeleted = true } = {}) {
-  const { rows } = includeDeleted
-    ? await query(`SELECT id FROM pipeline_issues`)
-    : await query(`SELECT id FROM pipeline_issues WHERE deleted = false`);
-  return rows.map((r) => r.id);
-}
 
 /** Global id conflict check for imports. A missing row has no deletion status. */
 export async function getDeletionStatus(id) {
@@ -69,11 +60,6 @@ export async function listLiveIssueSeriesIds() {
 
 const OLD_TOMBSTONE = 'deleted = TRUE AND deleted_at IS NOT NULL AND deleted_at < $1';
 
-export async function listTombstoneIdsBefore(beforeMs) {
-  const { rows } = await query(`SELECT id FROM pipeline_issues WHERE ${OLD_TOMBSTONE}`, [new Date(beforeMs)]);
-  return rows.map((r) => r.id);
-}
-
 // Check the mirrored columns again in the delete itself so resurrection or a
 // newer tombstone between the candidate scan and the queued prune wins.
 export async function deleteTombstonesBefore(ids, beforeMs) {
@@ -86,7 +72,8 @@ export async function deleteTombstonesBefore(ids, beforeMs) {
 
 /** Every record's raw `data` JSONB in one query (live/ephemeral/tombstones). */
 export async function listRaw({ withHistory = true } = {}) {
-  const { rows } = await query(`SELECT ${withHistory ? 'data' : LEAN_DATA} AS data FROM pipeline_issues`);
+  if (withHistory) return leaf.listRaw();
+  const { rows } = await query(`SELECT ${LEAN_DATA} AS data FROM pipeline_issues`);
   return rows.map((r) => r.data);
 }
 
@@ -113,47 +100,4 @@ export async function listRawBySeriesIds(seriesIds, { withHistory = true } = {})
     [seriesIds],
   );
   return rows.map((r) => r.data);
-}
-
-/**
- * Upsert one record. `data` is written verbatim (lossless); the typed mirror
- * columns are bind-sanitized so a hand-edited/legacy record can't make the
- * write throw. `created_at` preserved on conflict.
- */
-export async function writeRaw(id, record) {
-  const now = new Date().toISOString();
-  const createdAt = mirrorTimestamp(record?.createdAt, now);
-  await query(
-    `INSERT INTO pipeline_issues (id, series_id, season_id, number, status, data, ephemeral, created_at, updated_at, deleted, deleted_at)
-     VALUES ($1, $2, $3, $4, $5, $6::jsonb, $7, $8, $9, $10, $11)
-     ON CONFLICT (id) DO UPDATE SET
-       series_id = EXCLUDED.series_id,
-       season_id = EXCLUDED.season_id,
-       number = EXCLUDED.number,
-       status = EXCLUDED.status,
-       data = EXCLUDED.data,
-       ephemeral = EXCLUDED.ephemeral,
-       updated_at = EXCLUDED.updated_at,
-       deleted = EXCLUDED.deleted,
-       deleted_at = EXCLUDED.deleted_at`,
-    [
-      id,
-      typeof record?.seriesId === 'string' ? record.seriesId : '',
-      typeof record?.seasonId === 'string' && record.seasonId ? record.seasonId : null,
-      Number.isFinite(record?.number) ? Math.floor(record.number) : null,
-      typeof record?.status === 'string' && record.status ? record.status.slice(0, 32) : null,
-      toPgJson(record),
-      record?.ephemeral === true,
-      createdAt,
-      mirrorTimestamp(record?.updatedAt, createdAt),
-      record?.deleted === true,
-      mirrorTimestamp(record?.deletedAt, null),
-    ],
-  );
-  return record;
-}
-
-/** Hard-delete a record (tombstone GC). Idempotent — missing row is a no-op. */
-export async function deleteRaw(id) {
-  await query(`DELETE FROM pipeline_issues WHERE id = $1`, [id]);
 }

@@ -23,27 +23,17 @@
  */
 
 import { query } from '../../lib/db.js';
-import { mirrorTimestamp } from '../../lib/pgTimestamp.js';
-import { toPgJson } from '../../lib/pgJson.js';
+import { createJsonbLeafDb } from '../../lib/jsonbLeafDb.js';
 
-/** Raw stored record (the `data` JSONB), or null. Live only unless includeDeleted. */
-export async function readRaw(id, { includeDeleted = false } = {}) {
-  const { rows } = await query(
-    includeDeleted
-      ? `SELECT data FROM commission_feedback WHERE id = $1`
-      : `SELECT data FROM commission_feedback WHERE id = $1 AND deleted = FALSE`,
-    [id],
-  );
-  return rows[0]?.data ?? null;
-}
-
-/** Every LIVE feedback record's raw `data` JSONB, oldest reaction first. */
-export async function listRaw({ includeDeleted = false } = {}) {
-  const { rows } = await query(
-    `SELECT data FROM commission_feedback ${includeDeleted ? '' : 'WHERE deleted = FALSE'} ORDER BY created_at ASC, id ASC`,
-  );
-  return rows.map((r) => r.data);
-}
+export const { readRaw, listRaw, listIds, writeRaw } = createJsonbLeafDb({
+  table: 'commission_feedback',
+  orderBy: [['created_at', 'ASC'], ['id', 'ASC']],
+  softDelete: { includeDeletedByDefault: false, fillDeletedAt: true },
+  mirrorColumns: {
+    commission_id: record => typeof record?.commissionId === 'string' && record.commissionId ? record.commissionId : null,
+    run_id: record => typeof record?.runId === 'string' && record.runId ? record.runId : null,
+  },
+});
 
 /** Every LIVE feedback record for one commission, oldest reaction first. */
 export async function listRawByCommission(commissionId) {
@@ -54,51 +44,6 @@ export async function listRawByCommission(commissionId) {
     [commissionId],
   );
   return rows.map((r) => r.data);
-}
-
-/** Every feedback id — live only by default, or all (incl. tombstones) when asked. */
-export async function listIds({ includeDeleted = false } = {}) {
-  const { rows } = await query(
-    includeDeleted
-      ? `SELECT id FROM commission_feedback`
-      : `SELECT id FROM commission_feedback WHERE deleted = FALSE`,
-  );
-  return rows.map((r) => r.id);
-}
-
-/**
- * Upsert one feedback record. `data` is written verbatim (lossless); the typed
- * mirror columns are bind-sanitized. `created_at` is preserved on conflict (only
- * the first INSERT sets it), so a re-rating (deterministic id) keeps the original
- * creation moment while `updated_at`/`data` reflect the new reaction.
- */
-export async function writeRaw(id, record) {
-  const now = new Date().toISOString();
-  const createdAt = mirrorTimestamp(record?.createdAt, now);
-  const deleted = record?.deleted === true;
-  const deletedAt = deleted ? mirrorTimestamp(record?.deletedAt, now) : null;
-  await query(
-    `INSERT INTO commission_feedback (id, commission_id, run_id, data, created_at, updated_at, deleted, deleted_at)
-     VALUES ($1, $2, $3, $4::jsonb, $5, $6, $7, $8)
-     ON CONFLICT (id) DO UPDATE SET
-       commission_id = EXCLUDED.commission_id,
-       run_id = EXCLUDED.run_id,
-       data = EXCLUDED.data,
-       updated_at = EXCLUDED.updated_at,
-       deleted = EXCLUDED.deleted,
-       deleted_at = EXCLUDED.deleted_at`,
-    [
-      id,
-      typeof record?.commissionId === 'string' && record.commissionId ? record.commissionId : null,
-      typeof record?.runId === 'string' && record.runId ? record.runId : null,
-      toPgJson(record),
-      createdAt,
-      mirrorTimestamp(record?.updatedAt, createdAt),
-      deleted,
-      deletedAt,
-    ],
-  );
-  return record;
 }
 
 /** Hard-remove tombstoned rows whose `deleted_at` is older than the cutoff; returns their ids. */
