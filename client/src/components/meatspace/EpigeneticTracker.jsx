@@ -1,4 +1,5 @@
 import { useState, useEffect, useCallback } from 'react';
+import { clampPercent } from '../ui/ProgressBar';
 import toast from '../ui/Toast';
 import { useAsyncAction } from '../../hooks/useAsyncAction';
 import {Plus, Trash2, ChevronDown, ChevronRight,
@@ -246,7 +247,14 @@ export default function EpigeneticTracker({ markerCategories = [] }) {
             <div key={id} className="p-3 rounded bg-port-card border border-port-border">
               <div className="text-xs text-gray-500 truncate">{s.name}</div>
               <div className="flex items-center gap-2 mt-1">
-                <div className="flex-1 h-1.5 bg-port-bg rounded-full overflow-hidden">
+                <div
+                  className="flex-1 h-1.5 bg-port-bg rounded-full overflow-hidden"
+                  role="progressbar"
+                  aria-label={`${s.name} compliance`}
+                  aria-valuenow={clampPercent(Math.round(s.compliance * 100))}
+                  aria-valuemin={0}
+                  aria-valuemax={100}
+                >
                   <div
                     className={`h-full rounded-full transition-all ${
                       s.compliance >= 0.8 ? 'bg-port-success' :
