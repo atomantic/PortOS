@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 
-import { spawnSync } from 'child_process';
+import { spawn } from 'child_process';
 import { existsSync } from 'fs';
 import { dirname, join } from 'path';
 import { fileURLToPath } from 'url';
@@ -47,22 +47,24 @@ export function buildLintArgs({ mode, clientFiles = [] }) {
   // added later without an explicit severity would otherwise slip through CI.
   const base = ['lint', '--error-on-warnings'];
   if (mode === 'full') return [...base, 'src'];
-  // A changed-files run can name a path that biome.jsonc's `files.includes`
-  // excludes, or one the PR deleted. Biome treats "no files processed" as an
-  // error by default, which would fail CI for a PR that only removes files.
+  // The CI plan excludes deleted paths. A remaining path can still be excluded
+  // by biome.jsonc's `files.includes`, which can leave Biome with no files.
   return [...base, '--no-errors-on-unmatched', ...clientFiles];
 }
 
 function runBiome(args, cwd) {
-  const result = spawnSync(process.execPath, [BIOME_BIN, ...args], { cwd, stdio: 'inherit', env: process.env });
-  if (result.error) {
-    console.error(result.error.message);
-    return 1;
-  }
-  return result.status ?? 1;
+  return new Promise(resolve => {
+    const child = spawn(process.execPath, [BIOME_BIN, ...args], { cwd, stdio: ['ignore', 'pipe', 'pipe'] });
+    const stdout = [];
+    const stderr = [];
+    child.stdout.on('data', chunk => stdout.push(chunk));
+    child.stderr.on('data', chunk => stderr.push(chunk));
+    child.on('error', error => stderr.push(Buffer.from(`${error.message}\n`)));
+    child.on('close', status => resolve({ status: status ?? 1, stdout, stderr }));
+  });
 }
 
-function main() {
+async function main() {
   const mode = process.env.CI_LINT_MODE || 'full';
   if (!LINT_MODES.includes(mode)) {
     console.error(`Unsupported CI lint mode: ${mode}`);
@@ -83,18 +85,31 @@ function main() {
     process.exit(1);
   }
 
-  let status = 0;
+  const checks = [];
   if (lintClient) {
-    console.log(`Running client lint in ${mode} mode${mode === 'files' ? ` (${clientFiles.length} file(s))` : ''}.`);
-    status = runBiome(buildLintArgs({ mode, clientFiles }), join(repoRoot, 'client')) || status;
+    const scope = mode === 'files' ? ` (${clientFiles.length} file(s))` : '';
+    checks.push({
+      heading: `Running client lint in ${mode} mode${scope}.`,
+      result: runBiome(buildLintArgs({ mode, clientFiles }), join(repoRoot, 'client')),
+    });
   }
   if (lintServer) {
-    console.log('Running server lint (whole tree).');
-    status = runBiome(SERVER_LINT_ARGS, join(repoRoot, 'server')) || status;
-    console.log('Running scripts, lib, and autofixer lint.');
-    status = runBiome(SHARED_LINT_ARGS, repoRoot) || status;
+    checks.push(
+      { heading: 'Running server lint (whole tree).', result: runBiome(SERVER_LINT_ARGS, join(repoRoot, 'server')) },
+      { heading: 'Running scripts, lib, and autofixer lint.', result: runBiome(SHARED_LINT_ARGS, repoRoot) },
+    );
   }
-  process.exit(status);
+
+  // The processes are already running. Emit complete workspace reports in order.
+  let status = 0;
+  for (const check of checks) {
+    const result = await check.result;
+    console.log(check.heading);
+    process.stdout.write(Buffer.concat(result.stdout));
+    process.stderr.write(Buffer.concat(result.stderr));
+    status = result.status || status;
+  }
+  process.exitCode = status;
 }
 
-if (isDirectlyInvoked(import.meta.url)) main();
+if (isDirectlyInvoked(import.meta.url)) await main();

@@ -7,7 +7,70 @@ import { describe, expect, it } from 'vitest';
 
 import { BIOME_BIN, LINT_MODES, SERVER_LINT_ARGS, SHARED_LINT_ARGS, buildLintArgs, selectClientFiles, touchesServer } from './run-ci-lint.js';
 
-describe('CI client lint runner', () => {
+describe('CI lint runner', () => {
+  it('runs the workspaces concurrently and reports each result in order', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'biome-runner-'));
+    try {
+      for (const file of ['run-ci-lint.js', 'lib/directInvocation.js', 'lib/serverLintSurface.js']) {
+        cpSync(join(import.meta.dirname, file), join(dir, 'scripts', file));
+      }
+
+      const fakeBiome = join(dir, 'client', 'node_modules', '@biomejs', 'biome', 'bin', 'biome');
+      mkdirSync(dirname(fakeBiome), { recursive: true });
+      mkdirSync(join(dir, 'server'));
+      writeFileSync(fakeBiome, `
+        const { readdirSync, writeFileSync } = require('node:fs');
+        const { basename, join } = require('node:path');
+        const { setTimeout: sleep } = require('node:timers/promises');
+
+        async function main() {
+          const workspace = basename(process.cwd());
+          const scope = ['client', 'server'].includes(workspace) ? workspace : 'shared';
+          const root = process.env.LINT_FIXTURE_ROOT;
+          console.log(scope + ' started');
+          writeFileSync(join(root, scope + '.ready'), '');
+          // No workspace can finish until all three have started.
+          const deadline = Date.now() + 5500;
+          while (readdirSync(root).filter(name => name.endsWith('.ready')).length < 3) {
+            if (Date.now() >= deadline) throw new Error('Lint workspaces did not start together.');
+            await sleep(10);
+          }
+          console.log(scope + ' finished');
+          if (scope === 'server') {
+            console.error('server lint failure');
+            process.exitCode = 7;
+          }
+        }
+
+        main();
+      `);
+
+      const result = spawnSync(process.execPath, [join(dir, 'scripts', 'run-ci-lint.js')], {
+        cwd: dir,
+        env: { ...process.env, CI_LINT_MODE: 'full', CI_LINT_FILES: '[]', LINT_FIXTURE_ROOT: dir },
+        encoding: 'utf8',
+        timeout: 7_000,
+      });
+
+      expect(result.error).toBeUndefined();
+      expect(result.status, result.stderr).toBe(7);
+      expect(result.stderr.trim()).toBe('server lint failure');
+      expect(result.stdout.trim().split(/\r?\n/)).toEqual([
+        'Running client lint in full mode.',
+        'client started',
+        'client finished',
+        'Running server lint (whole tree).',
+        'server started',
+        'server finished',
+        'Running scripts, lib, and autofixer lint.',
+        'shared started',
+        'shared finished',
+      ]);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  }, 8_000);
+
   it('lints the whole client src tree in full mode', () => {
     expect(buildLintArgs({ mode: 'full' })).toEqual(['lint', '--error-on-warnings', 'src']);
   });
