@@ -530,6 +530,7 @@ async function contractionComparedWithRecovery(path, candidate, revision, rows) 
   const current = summarizeMortalLoomHistory(candidate);
   const copies = rows ?? await listMortalLoomSnapshots(path);
   const marker = candidate._mortalLoomSync;
+  const replaces = digest => marker?.version === 1 && marker.kind === 'replace' && marker.parentSHA256 === digest;
   for (const { id, savedAt } of copies) {
     // An older preimage is not the baseline after a successful PortOS
     // deletion. On changed bytes, compare with the last committed counts or
@@ -537,11 +538,11 @@ async function contractionComparedWithRecovery(path, candidate, revision, rows) 
     if (receipt && receipt.recordedAt >= Date.parse(savedAt)) break;
     try {
       const bytes = await readMortalLoomSnapshot(path, id);
-      if (id === copies[0]?.id && marker?.kind === 'replace' && marker.version === 1 && id === marker.parentSHA256) return false;
+      if (id === copies[0]?.id && replaces(id)) return false;
       return suspiciousMortalLoomContraction(summarizeMortalLoomHistory(parseWritableStore(bytes)), current);
     } catch { /* a corrupt preserved preimage isn't a baseline */ }
   }
-  if (receipt?.revision === revision) return false;
+  if (receipt && (receipt.revision === revision || replaces(receipt.revision))) return false;
   return receipt ? suspiciousMortalLoomContraction(receipt.history, current) : false;
 }
 

@@ -181,10 +181,23 @@ describe('MortalLoom shared file contract', () => {
     }
   });
 
+  it('accepts a native explicit replacement of the exact latest PortOS commit', async () => {
+    await put(fixture({ goals: [goal('One'), goal('Two'), goal('Three')] }));
+    await mlUpsertHealthMetricByDate('2026-01-01', { heartRate: 61 });
+    const { revision } = await getStatus();
+    expect((await listMortalLoomSnapshots(path)).map(row => row.id)).not.toContain(revision);
+    // Matches the paired Swift app's confirmed replacement wire contract.
+    await put(fixture({ _mortalLoomSync: { version: 1, kind: 'replace', parentSHA256: revision } }));
+    expect((await getStatus()).state).toBe('ready');
+    await mlUpsertHealthMetricByDate('2026-01-02', { heartRate: 62 });
+    expect((await read())._mortalLoomSync).toBeUndefined();
+  });
+
   it('does not accept a replay of a committed hash over more recent verified history', async () => {
     await put(fixture());
     await mlUpsertHealthMetricByDate('2026-01-01', { heartRate: 61 });
     const oldCommit = await readFile(path);
+    const { revision: oldRevision } = await getStatus();
     await put(fixture({ goals: [goal('One'), goal('Two'), goal('Three')] }));
     const newerHistory = await readFile(path);
     await writeFile(path, oldCommit);
@@ -199,6 +212,8 @@ describe('MortalLoom shared file contract', () => {
       date.mockRestore();
     }
     expect(await readFile(path)).toEqual(oldCommit);
+    expect((await getStatus()).state).toBe('reduced');
+    await put(fixture({ _mortalLoomSync: { version: 1, kind: 'replace', parentSHA256: oldRevision } }));
     expect((await getStatus()).state).toBe('reduced');
   });
 
