@@ -20,7 +20,7 @@ import { maintenance } from '../../lib/maintenanceAdmission.js';
  *
  * The live session state machine — session phase, prompt delivery and its retry
  * ladder, the sentinel watcher, the provider-signal/idle gates, and the single
- * teardown path — lives in `agentTuiSpawning/sessionController.js` (#8021).
+ * teardown path — is wired by `agentTuiSpawning/sessionController.js` (#8021).
  * Output spooling (`outputSpooler.js`) and failure analysis
  * (`finalizeHelpers.js`) are the earlier extractions from #2833.
  */

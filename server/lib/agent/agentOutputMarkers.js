@@ -69,7 +69,7 @@ export const LIFECYCLE_LINES = Object.freeze({
   // Ollama context warnings (lib/ollamaContext.js, services/ollamaAgentContext.js)
   ollamaContextTooSmall: lifecycleLine`⚠️ ${'who'} is running on an Ollama window of ${'runtime'} — below the ${'minimum'} an agent harness usually needs. Set "Local num_ctx" in AI Providers to reload Ollama at a larger window (VRAM permitting), or the run will fail partway through.`,
   ollamaReloadFailed: lifecycleLine`⚠️ Could not reload Ollama at a ${'contextLength'}-token window (${'error'}) — ${'who'} continues on the current window.`,
-  // Prompt delivery (services/agentTuiSpawning/sessionController.js)
+  // Prompt delivery (services/agentTuiSpawning/promptDelivery.js)
   promptPasted: lifecycleLine`📟 Prompt pasted into TUI session ${'session'} (${'reason'})${'attemptSuffix'}`,
   pasteRetrying: lifecycleLine`⚠️ Paste verification failed — prompt text not found in buffer, retrying in ${'delayMs'}ms${'bootNote'}`,
   pasteNeverLandedMcpBoot: lifecycleLine`❌ Paste never landed after ${'seconds'}s of waiting for MCP servers to boot — prompt never rendered`,
