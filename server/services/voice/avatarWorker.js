@@ -32,6 +32,7 @@ export function openAvatarWorker(python, onClose, launch = spawn) {
     startError = avatarError('AvatarForcing did not finish warming up. Start it again.', 503);
     terminate();
   }, 90_000);
+  warmTimer.unref?.();
   child.stderr.resume(); // Do not log speech, subprocess paths or model diagnostics to server logs.
   child.stdin.on('error', terminate);
   child.on('error', () => { startError = avatarError('Could not launch the offline AvatarForcing worker.', 503); });
@@ -83,9 +84,13 @@ export function openAvatarWorker(python, onClose, launch = spawn) {
       const id = randomUUID();
       const abort = () => {
         send({ type: 'cancel', id });
-        if (active?.id === id) active.cancelTimer = setTimeout(terminate, 3_000);
+        if (active?.id === id) {
+          active.cancelTimer = setTimeout(terminate, 3_000);
+          active.cancelTimer.unref?.();
+        }
       };
       active = { id, promise, resolve, reject, signal, onFrame, abort, next: 0, timer: setTimeout(terminate, 35_000) };
+      active.timer.unref?.();
       signal.addEventListener('abort', abort, { once: true });
       send({ type: 'speak', id, wav: wav.toString('base64') });
       await promise;

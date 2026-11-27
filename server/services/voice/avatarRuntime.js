@@ -3,6 +3,7 @@ import { readFile, rm } from 'node:fs/promises';
 import { release } from 'node:os';
 import { avatarBundle, avatarFilesPresent, avatarMarker, avatarPython, avatarRoot, installAvatar } from './avatarInstall.js';
 import { avatarError, openAvatarWorker } from './avatarWorker.js';
+import { isHostShuttingDown } from '../../lib/hostShutdown.js';
 import { emitToOperators } from '../socketIo.js';
 
 const supported = process.platform === 'darwin' && process.arch === 'arm64' && Number.parseInt(release(), 10) >= 25;
@@ -33,7 +34,12 @@ function publish(next, message = '') {
   emitToOperators('voice:avatar:changed');
 }
 
+function assertAvatarCanLaunch() {
+  if (isHostShuttingDown()) throw avatarError('PortOS is shutting down.', 503);
+}
+
 function install() {
+  assertAvatarCanLaunch();
   installer = new AbortController();
   const { signal } = installer;
   publish('installing', 'Preparing model install…');
@@ -45,7 +51,19 @@ function install() {
   ).finally(() => { installer = undefined; });
 }
 
+function stopWorker() {
+  if (!worker || phase === 'stopping') return;
+  publish('stopping');
+  worker.stop();
+}
+
+export function stopAvatarForShutdown() {
+  installer?.abort();
+  stopWorker();
+}
+
 function start(bundle) {
+  assertAvatarCanLaunch();
   publish('starting', 'Warming the avatar model…');
   const owned = openAvatarWorker(avatarPython(bundle), expected => {
     if (worker !== owned) return;
@@ -69,10 +87,7 @@ export async function manageAvatar(action) {
   busy = true;
   try {
     if (action === 'stop') {
-      if (worker) {
-        publish('stopping');
-        worker.stop();
-      }
+      stopWorker();
     } else {
       if (worker) throw avatarError('Stop AvatarForcing before making this change.');
       const bundle = await installation();

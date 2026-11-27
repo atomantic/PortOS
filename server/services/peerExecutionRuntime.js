@@ -24,7 +24,10 @@ let io;
 let watcher;
 export function bindPeerExecutionIo(socketIo) { io = socketIo; }
 export function peerExecutionRuntime() {
-  singleton ??= compose();
+  singleton ??= compose().catch(error => {
+    singleton = undefined;
+    throw error;
+  });
   return singleton;
 }
 async function compose() {

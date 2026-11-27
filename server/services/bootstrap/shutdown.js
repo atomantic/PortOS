@@ -13,6 +13,7 @@ import { stopAutomaticUpdateReservationRecovery } from '../automaticUpdateReserv
 import { activeAgents, dispatchingAgentIds } from '../agent/agentState.js';
 import { flushSettingsLedger } from '../settings.js';
 import { drainJevSidecarStops, stopJevSidecar } from '../jev.js';
+import { stopAvatarForShutdown } from '../voice/avatarRuntime.js';
 import mediaService from '../mediaService.js';
 import { stopBeeperSocket } from '../beeper/beeperSocket.js';
 import { flushAutoSync as flushIdeaLoomAutoSync } from '../idealoomAutoSync.js';
@@ -201,6 +202,8 @@ export const registerShutdownHandlers = ({ io, httpServer, localHttpServer }, {
     await Promise.all([
       Promise.resolve().then(stopJevSidecar)
         .catch((err) => logBootstrapFailure('❌ JEV sidecar shutdown failed', err)),
+      Promise.resolve().then(stopAvatarForShutdown)
+        .catch((err) => logBootstrapFailure('❌ AvatarForcing shutdown failed', err)),
       Promise.resolve().then(() => mediaService.stopAll())
         .catch((err) => logBootstrapFailure('❌ Media capture shutdown failed', err)),
     ]);
