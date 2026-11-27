@@ -21,12 +21,17 @@ vi.mock('./instanceIdentity.js', async () => ({
   loadData: vi.fn(async () => ({ peers: configuredPeers })),
 }));
 
+vi.mock('./userTimezone.js', () => ({
+  getUserTimezone: vi.fn().mockResolvedValue('UTC'),
+}));
+
 let localUsage;
 vi.mock('./usage.js', async () => {
   const actual = await vi.importActual('./usage.js');
   return { ...actual, getUsage: () => localUsage };
 });
 
+const { getUserTimezone } = await import('./userTimezone.js');
 const { buildUsageDigest, buildUsageReport } = await import('./usage.js');
 const { familyForProviderId } = await import('../lib/provider/providerFamilies.js');
 const {
@@ -436,6 +441,23 @@ describe('fleet report', () => {
       instances: [], totals: null, report: { totals: { sessions: 2 } },
       coverage: { instanceCount: 1, missingInstances: [] },
     });
+  });
+
+  it('ends the local-only fleet trend on the configured calendar day', async () => {
+    vi.useFakeTimers({ toFake: ['Date'] });
+    vi.setSystemTime(new Date('2026-08-31T02:00:00Z'));
+    getUserTimezone.mockResolvedValue('America/Los_Angeles');
+    try {
+      const { last7Days } = await getFleetUsage();
+      expect(last7Days).toHaveLength(7);
+      expect(last7Days[0].date).toBe('2026-08-24');
+      expect(last7Days.at(-1)).toEqual({
+        date: '2026-08-30', label: 'Sun', sessions: 2, messages: 5, tokens: 1000
+      });
+    } finally {
+      getUserTimezone.mockResolvedValue('UTC');
+      vi.useRealTimers();
+    }
   });
 
   it('reports one row per instance plus the combined totals', async () => {

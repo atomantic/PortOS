@@ -957,9 +957,9 @@ function applyMessageUsage(providerId, rawModel, messageCount, outputTokens, inp
   }));
   providerTotal.messages += messageCount;
   providerTotal.tokens = (providerTotal.tokens || 0) + outputTokens;
-  if (model && Object.hasOwn(usageData.byModel, model)) {
+  if (model) {
     const byModel = mutableUsageChild(usageData, 'byModel');
-    const modelTotal = mutableUsageChild(byModel, model);
+    const modelTotal = mutableUsageChild(byModel, model, () => ({ sessions: 0, messages: 0, tokens: 0 }));
     modelTotal.messages += messageCount;
     modelTotal.tokens = (modelTotal.tokens || 0) + outputTokens;
   }
@@ -1210,14 +1210,16 @@ export function providerVolumeSinceBlock(dailyActivity, monthlyActivity, provide
 export { buildUsageReport };
 
 /** The trailing seven calendar days, oldest first, each filled from `dailyActivity` (zeros when absent). */
-function buildLast7Days(dailyActivity) {
+function buildLast7Days(dailyActivity, today) {
   const last7Days = [];
-  for (let i = 6; i >= 0; i--) {
-    const date = new Date();
-    date.setDate(date.getDate() - i);
-    const dateStr = date.toISOString().split('T')[0];
+  // Encode the local calendar date in UTC for day arithmetic across DST.
+  const date = new Date(`${today}T00:00:00Z`);
+  date.setUTCDate(date.getUTCDate() - 6);
+  for (let i = 0; i < 7; i++) {
+    const dateStr = date.toISOString().slice(0, 10);
     const { sessions = 0, messages = 0, tokens = 0 } = dailyActivity?.[dateStr] || {};
-    last7Days.push({ date: dateStr, label: date.toLocaleDateString('en-US', { weekday: 'short' }), sessions, messages, tokens });
+    last7Days.push({ date: dateStr, label: date.toLocaleDateString('en-US', { weekday: 'short', timeZone: 'UTC' }), sessions, messages, tokens });
+    date.setUTCDate(date.getUTCDate() + 1);
   }
   return last7Days;
 }
@@ -1228,10 +1230,11 @@ function buildLast7Days(dailyActivity) {
  * live `providers` config list for free-classification.
  */
 export function getUsageSummary({ from = null, to = null, providers = [] } = {}) {
+  const today = todayInTimezone(dayKeyTimezone);
   const usageData = withNativeUsage(committedUsage, providers);
   if (!usageData) {
     const empty = getEmptyUsage();
-    const last7Days = buildLast7Days({});
+    const last7Days = buildLast7Days({}, today);
     return {
       ...empty,
       last7Days,
@@ -1244,7 +1247,7 @@ export function getUsageSummary({ from = null, to = null, providers = [] } = {})
   }
 
   const cacheKey = JSON.stringify({
-    day: new Date().toISOString().split('T')[0],
+    day: today,
     from,
     to,
     native: nativeUsageSignature(),
@@ -1258,7 +1261,7 @@ export function getUsageSummary({ from = null, to = null, providers = [] } = {})
   const cached = summaryCache.get(cacheKey);
   if (cached) return cached;
 
-  const last7Days = buildLast7Days(usageData.dailyActivity);
+  const last7Days = buildLast7Days(usageData.dailyActivity, today);
 
   const report = buildUsageReport(usageData.dailyActivity, {
     from,
@@ -1394,6 +1397,7 @@ export function buildUsageDigest(source = getUsage(), { retentionDays = DIGEST_D
 export async function loadUsage({ includeRepairEvidence = false } = {}) {
   closeRunBatch();
   return queueUsageWrite(async () => {
+    await refreshDayKeyTimezone();
     return transactUsage(async () => {
       await loadUsageDraft();
       // Only the server loads this ledger. Import bridge-written request
