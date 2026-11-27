@@ -26,4 +26,4 @@ Start with the [project overview and quick start](../README.md) or read the [pro
 - [Architecture](ARCHITECTURE.md) and [API guide](API.md) explain the codebase and its interfaces.
 - [Hosted CI](GITHUB_ACTIONS.md) and [local pregate](PREGATE.md) explain what runs before and after pushing.
 - [Versioning and releases](VERSIONING.md) describes the release workflow.
-- [Architecture decisions](decisions/README.md), [configuration examples](examples/README.md), and [theme specs](themes/README.md) provide targeted references.
+- [Architecture decisions](decisions/README.md) and [configuration examples](examples/) provide targeted references.

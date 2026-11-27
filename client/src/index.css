@@ -1490,8 +1490,7 @@ html[data-port-theme="blueprint-ops-day"] header :is(h1, h2, h3) {
 
 /* === Theme effects layer ===
    A theme opts into full-screen effects by listing them in `effects` in
-   portosThemes.js (registry: THEME_EFFECTS; catalogue and tokens:
-   docs/themes/README.md). useTheme publishes that list as
+   portosThemes.js (registry: THEME_EFFECTS). useTheme publishes that list as
    html[data-port-theme-effects="scanlines vignette …"], and each block below
    keys on the ~= attribute selector, parameterized by --port-fx-* tokens the
    theme declares (defaults here).

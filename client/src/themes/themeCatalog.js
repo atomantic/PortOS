@@ -7,7 +7,7 @@ export const DEFAULT_THEME_ID = 'kestrel-neon';
 
 // Full-screen effects a theme composes by listing them in `effects`; each is
 // a shared block in index.css ("Theme effects layer") tuned by --port-fx-*
-// tokens. Catalogue and tokens: docs/themes/README.md, "Effects".
+// tokens declared in portosThemes.js.
 export const THEME_EFFECTS = Object.freeze(['scanlines', 'vignette', 'sweep', 'grid-floor', 'glitch', 'aurora', 'grain']);
 
 export const THEME_METADATA = {
