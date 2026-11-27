@@ -1,6 +1,6 @@
 /** Media collection storage, canonical record shapes and inventory reads. */
 
-import { MEDIA_COLLECTION_ITEMS_MAX, REF_MAX_LENGTH, itemKey, ITEM_KIND, parseKey } from '../../lib/mediaItemKey.js';
+import { REF_MAX_LENGTH, itemKey, ITEM_KIND, parseKey } from '../../lib/mediaItemKey.js';
 import { codedError } from '../../lib/codedError.js';
 import { sanitizeOrigin } from '../../lib/sharingOrigin.js';
 import { parseTsMs } from '../../lib/lwwTimestamp.js';
@@ -8,15 +8,13 @@ import { join } from 'path';
 import { PATHS } from '../../lib/fileUtils.js';
 import { createCollectionStore } from '../../lib/collectionStore.js';
 import { emitRecordUpdated, autoSubscribeRecordToAllPeers } from '../sharing/recordEvents.js';
+import { NAME_MAX_LENGTH, DESCRIPTION_MAX_LENGTH, COLLECTION_SOURCES, ITEMS_MAX } from '../../lib/mediaCollectionConstraints.js';
+export { NAME_MAX_LENGTH, DESCRIPTION_MAX_LENGTH, COLLECTION_SOURCES, ITEMS_MAX } from '../../lib/mediaCollectionConstraints.js';
 
 export const ERR_NOT_FOUND = 'NOT_FOUND';
 export const ERR_DUPLICATE = 'DUPLICATE';
 export const ERR_VALIDATION = 'VALIDATION_ERROR';
 export const ERR_INCOMPLETE_INVENTORY = 'MEDIA_COLLECTION_INVENTORY_INCOMPLETE';
-
-export const NAME_MAX_LENGTH = 80;
-export const DESCRIPTION_MAX_LENGTH = 500;
-export const ITEMS_MAX = MEDIA_COLLECTION_ITEMS_MAX;
 
 // Bounded fan-out for the multi-record snapshot-merge / GC-sweep loops. Distinct
 // record ids ride distinct per-record write queues, so these are safe to run
@@ -119,26 +117,6 @@ export const stampAfter = (ts) => new Date(Math.max(Date.now(), (parseTsMs(ts) ?
 export const UNIVERSE_ID_MAX = 80;
 export const SERIES_ID_MAX = 80;
 
-// Provenance stamp (#3311). `'auto'` = minted by a machine flow (Creative
-// Director project, Writers Room work, universe/series render bucket);
-// `'user'` = the person created it through the API. The grid uses it to sort
-// auto-generated empties last and to badge the card.
-//
-// **LOCAL-ONLY.** `sanitizeRecordForWire` strips it, so provenance never
-// crosses to a peer — see the rationale there (an emitted field would leave an
-// upgraded peer permanently checksum-mismatched against an older one, and
-// gating it behind a `schemaVersions` bump would pause all collection sync).
-// Every install derives its own: the creators below stamp at mint time and
-// `scripts/migrations/220-backfill-media-collection-source.js` classifies
-// whatever was already on disk when the install upgraded.
-//
-// **Absent is a THIRD state, not a synonym for `'user'`.** A record written
-// before this field shipped, or received from a peer after this install's
-// migration ran, carries no stamp at all — the client falls back to its marker
-// heuristic for those rather than mislabeling them user-made. So the sanitizer
-// OMITS the key entirely rather than defaulting it (same posture as
-// `sanitizeItem`'s optional `origin`).
-export const COLLECTION_SOURCES = Object.freeze(['auto', 'user']);
 const sanitizeSource = (raw) => (COLLECTION_SOURCES.includes(raw) ? raw : null);
 export const sanitizePrimaryInstanceId = (raw) => typeof raw === 'string' && raw.length > 0 && raw.length <= 128 ? raw : null;
 

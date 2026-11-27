@@ -3,8 +3,8 @@
  * of exactly what a render would send, and the render itself.
  */
 
+import { removePointerSheetQuerySchema } from '../lib/catalogSheetsValidation.js';
 import { Router } from 'express';
-import { z } from 'zod';
 import { asyncHandler, ServerError } from '../lib/errorHandler.js';
 import { validateRequest } from '../lib/validateRequest.js';
 import { catalogSheetRenderSchema } from '../lib/catalog/catalogValidation.js';
@@ -56,13 +56,6 @@ router.post('/ingredients/:id/sheets', asyncHandler(async (req, res) => {
   res.json(await renderCatalogSheet(req.params.id, options));
 }));
 
-// Remove a universe-canon sheet pointer (the catalog-media sheets detach like
-// any other media row). `variant` and the confirmed `filename` ride in the
-// query string like the universe sheet DELETE.
-const removePointerSheetQuerySchema = z.object({
-  variant: z.string().trim().min(1).max(48).optional(),
-  filename: z.string().trim().min(1).max(255).optional(),
-});
 router.delete('/ingredients/:id/sheets/pointer', asyncHandler(async (req, res) => {
   const options = validateRequest(removePointerSheetQuerySchema, req.query ?? {});
   res.json(await removeCatalogPointerSheet(req.params.id, options));

@@ -9,31 +9,17 @@
  */
 
 import { randomInt } from 'node:crypto';
-
-/** Sampler steps per flow phase; runtime is ~linear in steps, so the cap bounds a mistyped value. */
-export const RENDER_STEPS_MIN = 1;
-export const RENDER_STEPS_MAX = 64;
-
-/** int32: both lanes hand seeds to torch generators (narrower than `MAX_SEED` in client genUtils). */
-export const RENDER_SEED_MAX = 2147483647;
+import { RENDER_STEPS_MIN, RENDER_STEPS_MAX, RENDER_SEED_MAX, DETAIL_TIERS, ALPHA_MODES, SUBJECT_SCALE_MIN_EXCLUSIVE, SUBJECT_SCALE_MAX } from '../../lib/imageTo3dRenderLimits.js';
+export { RENDER_STEPS_MIN, RENDER_STEPS_MAX, RENDER_SEED_MAX, DETAIL_TIERS, ALPHA_MODES, SUBJECT_SCALE_MIN_EXCLUSIVE, SUBJECT_SCALE_MAX } from '../../lib/imageTo3dRenderLimits.js';
 
 /** A fresh random seed for an unpinned run. */
 export function randomRenderSeed() {
   return randomInt(0, RENDER_SEED_MAX + 1);
 }
 
-/** Abstract tiers mapped per target by `detailTiers` (lane vocabularies differ). `'auto'` is a real value, not null. */
-export const DETAIL_TIERS = ['auto', 'fast', 'balanced', 'max'];
 export const DEFAULT_DETAIL_TIER = 'auto';
 
 export const isValidDetailTier = (value) => DETAIL_TIERS.includes(value);
-
-/**
- * glTF alpha modes a caller may request for the exported material.
- *
- * `'auto'` defers to the exporter's heuristic; `null` = "don't ask" (see `glbMaterials.js`).
- */
-export const ALPHA_MODES = ['OPAQUE', 'auto', 'BLEND', 'MASK'];
 
 export const isValidAlphaMode = (value) => ALPHA_MODES.includes(value);
 
@@ -45,12 +31,6 @@ export const isValidRenderSteps = (value) => intInRange(value, RENDER_STEPS_MIN,
 
 export const isValidRenderSeed = (value) => intInRange(value, 0, RENDER_SEED_MAX);
 
-/**
- * Subject framing: fraction of the square canvas the source's longest side occupies. `1` is the
- * identity; below 1 gives extremities margin. Open at 0, closed at 1.
- */
-export const SUBJECT_SCALE_MIN_EXCLUSIVE = 0;
-export const SUBJECT_SCALE_MAX = 1;
 export const DEFAULT_SUBJECT_SCALE = 1;
 
 export const isValidSubjectScale = (value) => (

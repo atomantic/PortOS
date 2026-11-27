@@ -10,14 +10,22 @@
  * allowlist live in `services/imageGen/setup.js`.
  */
 
+import {
+  hfTokenSchema,
+  checkSchema,
+  venvSchema,
+  installSchema,
+  installQuerySchema,
+  flux3RuntimeQuerySchema,
+  mossRuntimeQuerySchema,
+} from '../lib/imageGenSetupValidation.js';
 import { Router } from 'express';
-import { z } from 'zod';
 import { join } from 'node:path';
 import { realpathSync } from 'node:fs';
 import { asyncHandler, ServerError } from '../lib/errorHandler.js';
 import { validateRequest } from '../lib/validateRequest.js';
 import { getSettings, updateSettingsWith } from '../services/settings.js';
-import { getHfToken, getHfTokenInfo, HF_TOKEN_REGEX } from '../services/hfToken.js';
+import { getHfToken, getHfTokenInfo } from '../services/hfToken.js';
 import { getImageModels, isFlux2 } from '../lib/mediaModels.js';
 import { createInstallLogger } from '../lib/installLogger.js';
 import {
@@ -54,18 +62,18 @@ export async function streamMossAction(req, res, start, installer = 'MOSS Swift'
 }
 
 router.post('/flux3-install', asyncHandler(async (req, res) => {
-  validateRequest(z.object({ runtime: z.literal('flux3') }).strict(), req.query);
+  validateRequest(flux3RuntimeQuerySchema, req.query);
   await streamMossAction(req, res, installFlux3Runtime, 'FLUX.3 Klein');
 }));
 
 router.get('/moss-install', asyncHandler(async (_req, res) => res.json(await diagnoseMossRuntime())));
 router.post('/moss-install', asyncHandler(async (req, res) => {
-  validateRequest(z.object({ runtime: z.literal('moss-swift').optional() }).strict(), req.query);
+  validateRequest(mossRuntimeQuerySchema, req.query);
   await streamMossAction(req, res, installMossRuntime);
 }));
 router.get('/moss-weights', asyncHandler(async (_req, res) => res.json(await mossModelCacheStatus('moss-image-sft-bf16'))));
 router.post('/moss-weights', asyncHandler(async (req, res) => {
-  validateRequest(z.object({ runtime: z.literal('moss-swift').optional() }).strict(), req.query);
+  validateRequest(mossRuntimeQuerySchema, req.query);
   await streamMossAction(req, res, downloadMossWeights);
 }));
 
@@ -256,13 +264,6 @@ router.get('/hf-token-status', asyncHandler(async (_req, res) => {
   res.json({ hfTokenPresent: !!token, source });
 }));
 
-// Save the HF token from the inline form on the Image Gen page. settings.json
-// is the canonical location (single-user app behind Tailscale — see AGENTS.md).
-// Same endpoint serves FLUX.2 and legacy mflux gated models — the token is
-// global (HF_TOKEN env in spawn).
-const hfTokenSchema = z.object({
-  token: z.string().regex(HF_TOKEN_REGEX, 'Token must look like `hf_…`').max(200),
-});
 router.post('/hf-token', asyncHandler(async (req, res) => {
   const { token } = validateRequest(hfTokenSchema, req.body || {});
   await updateSettingsWith((settings) => ({
@@ -283,8 +284,6 @@ router.delete('/hf-token', asyncHandler(async (_req, res) => {
   res.json({ ok: true, hfTokenPresent: !!token, source });
 }));
 
-const checkSchema = z.object({ pythonPath: z.string().min(1) });
-
 const sendSetupCheck = async (req, res) => {
   const { pythonPath } = validateRequest(checkSchema, req.query);
   if (!isAllowedPython(pythonPath)) {
@@ -298,10 +297,6 @@ const sendSetupCheck = async (req, res) => {
 };
 
 router.get('/check', asyncHandler(sendSetupCheck));
-
-const venvSchema = z.object({
-  basePython: z.string().min(1).optional(),
-});
 
 router.post('/create-venv', asyncHandler(async (req, res) => {
   const { basePython } = validateRequest(venvSchema, req.body || {});
@@ -324,13 +319,6 @@ router.post('/create-venv', asyncHandler(async (req, res) => {
   invalidateSetupCheck(venvPython);
   res.json({ pythonPath: venvPython, target });
 }));
-
-const installSchema = z.object({
-  pythonPath: z.string().min(1),
-  packages: z.array(z.string().min(1)).min(1).max(40),
-});
-
-const installQuerySchema = z.object({ pythonPath: z.string().optional(), packages: z.string().optional() });
 
 // Backward-compatible read surface for stale installer URLs. It returns the
 // same setup status as /check and never starts pip.

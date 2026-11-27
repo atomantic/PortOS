@@ -12,9 +12,9 @@
  * image-ref is a /data/image-refs file (see mediaAnnotationKey on the client).
  */
 
+import { patchSchema } from '../lib/mediaAnnotationsValidation.js';
 import { emitToOperatorsOn } from '../services/socketIo.js';
 import { Router } from 'express';
-import { z } from 'zod';
 import { asyncHandler, createServiceErrorMapper } from '../lib/errorHandler.js';
 import { validateRequest } from '../lib/validateRequest.js';
 import { mediaAnnotationsQuerySchema } from '../lib/mediaValidation.js';
@@ -27,12 +27,6 @@ const SERVICE_ERROR_STATUS = {
 };
 
 const mapServiceError = createServiceErrorMapper(SERVICE_ERROR_STATUS);
-
-const patchSchema = z.object({
-  starred: z.boolean().optional(),
-  rating: z.enum(svc.MEDIA_RATINGS).nullable().optional(),
-  note: z.string().max(svc.NOTE_MAX_LENGTH).optional(),
-}).refine((p) => Object.keys(p).length > 0, { message: 'patch must include starred, rating and/or note' });
 
 router.get('/', asyncHandler(async (req, res) => {
   const query = validateRequest(mediaAnnotationsQuerySchema, req.query);

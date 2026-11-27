@@ -553,3 +553,11 @@ export const mediaAnnotationsQuerySchema = z.object({
 export const mediaCollectionPrimarySchema = z.object({
   instanceId: z.string().trim().min(1).max(128),
 }).strict();
+
+// Validation schemas
+export const startMediaSchema = z.object({
+  videoDeviceId: z.string().optional(),
+  audioDeviceId: z.string().optional(),
+  video: z.boolean().default(true),
+  audio: z.boolean().default(true)
+});

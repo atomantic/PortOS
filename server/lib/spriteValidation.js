@@ -484,3 +484,7 @@ export const spriteWalkTrimSchema = z.object({
   fps: z.number().int().min(1).max(60).optional(),
   slug: z.string().regex(/^[a-z0-9][a-z0-9-]{0,79}$/).optional(),
 });
+
+export const spriteAssetPromptQuerySchema = z.object({ path: z.string().min(1) });
+
+export const spritePublishBindingBodySchema = z.object({ binding: spritePublishBindingSchema });
