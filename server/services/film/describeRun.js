@@ -9,47 +9,40 @@
 import { lstat, mkdir, readFile, rm, writeFile } from 'node:fs/promises';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { spawn } from '../../lib/childProcess.js';
-import { safeChildProcessOptions, whichFirst, withoutServerSecretsEnv } from '../../lib/processEnv.js';
-import { withSpawnCwdEnv } from '../../lib/spawnCwd.js';
+import { bufferedSpawn } from '../../lib/bufferedSpawn.js';
+import { stripDebugMallocEnv, whichFirst, withoutServerSecretsEnv } from '../../lib/processEnv.js';
+import { DESCRIBE_LIMITS } from './limits.js';
 import { parseBlenderDriverLine } from './protocol.js';
 import { blenderRefusal, blenderScratchDir, blenderSrcDir } from './workspace.js';
 
 const PY_DIR = fileURLToPath(new URL('./py/', import.meta.url));
 const DESCRIBE_SCRIPT = join(PY_DIR, 'portos_film_describe.py');
 const SCAN_SCRIPT = join(PY_DIR, 'portos_film_import_scan.py');
+const IMPORT_SCAN_TIMEOUT_MS = 10_000;
 const MANIFEST_MAX_BYTES = 4 * 1024 * 1024;
+
+function filmPythonEnv() {
+  return {
+    ...stripDebugMallocEnv(withoutServerSecretsEnv()),
+    PYTHONNOUSERSITE: '1',
+    PYTHONDONTWRITEBYTECODE: '1',
+  };
+}
 
 /**
  * `blender`, `python`, or null when the scan could not be read. The scanner
  * parses the film; it does not run it. Null stays on the Blender gate.
  */
-function scanFilmImports(python, src) {
-  return new Promise((resolve) => {
-    let settled = false;
-    const finish = (answer) => { if (!settled) { settled = true; resolve(answer); } };
-    const chunks = [];
-    let child;
-    try {
-      const cwd = dirname(SCAN_SCRIPT);
-      const env = withSpawnCwdEnv(withoutServerSecretsEnv(process.env), cwd);
-      env.PYTHONNOUSERSITE = '1';
-      env.PYTHONDONTWRITEBYTECODE = '1';
-      child = spawn(python, [SCAN_SCRIPT, src], safeChildProcessOptions({
-        cwd, env, stdio: ['ignore', 'pipe', 'pipe'],
-      }));
-    } catch {
-      finish(null);
-      return;
-    }
-    child.stdout.on('data', (chunk) => { if (chunks.length < 8) chunks.push(chunk); });
-    child.stderr.on('data', () => {});
-    child.on('error', () => finish(null));
-    child.on('close', (code) => {
-      const answer = Buffer.concat(chunks).toString('utf8').trim();
-      finish(code === 0 && (answer === 'blender' || answer === 'python') ? answer : null);
-    });
-  });
+async function scanFilmImports(python, src) {
+  const result = await bufferedSpawn(python, [SCAN_SCRIPT, src], {
+    cwd: dirname(SCAN_SCRIPT),
+    env: filmPythonEnv(),
+    timeoutMs: IMPORT_SCAN_TIMEOUT_MS,
+    processGroup: true,
+  }).catch(() => null);
+  if (!result?.success) return null;
+  const answer = result.stdout.trim();
+  return answer === 'blender' || answer === 'python' ? answer : null;
 }
 
 /**
@@ -102,42 +95,29 @@ export async function runPythonDescribe({ owner, song, signal, onLog = () => {},
   await writeFile(jobPath, JSON.stringify({ ...job, manifestOut: manifestPath }));
   const lines = [];
   let failure = null;
-  // Pin PWD to the spawn cwd. A child that reads PWD instead of its real
-  // working directory would otherwise describe the film from the server's
-  // checkout (#3193).
-  const cwd = dirname(DESCRIBE_SCRIPT);
-  const env = withSpawnCwdEnv(withoutServerSecretsEnv(process.env), cwd);
-  env.PYTHONPATH = PY_DIR;
-  env.PYTHONNOUSERSITE = '1';
-  env.PYTHONDONTWRITEBYTECODE = '1';
-  const run = () => new Promise((resolve) => {
-    let settled = false;
-    const finish = (result) => { if (!settled) { settled = true; resolve(result); } };
-    let child;
-    try {
-      child = spawn(python, [DESCRIBE_SCRIPT, '--', jobPath], safeChildProcessOptions({
-        cwd, env, signal, stdio: ['ignore', 'pipe', 'pipe'],
-      }));
-    } catch (error) {
-      finish({ code: 1, error });
-      return;
-    }
-    child.stdout.on('data', (chunk) => takeLines(chunk, onLog, lines));
-    child.stderr.on('data', (chunk) => takeLines(chunk, onLog, lines));
-    child.on('error', (error) => finish({ code: 1, error }));
-    child.on('close', (code, killSignal) => finish({ code: code ?? 1, killSignal }));
-  });
   try {
-    if (signal?.aborted) return { ok: false, canceled: true, error: 'Canceled', traceback: null, manifest: null, events: {} };
-    const result = await run();
+    const result = await bufferedSpawn(python, [DESCRIBE_SCRIPT, '--', jobPath], {
+      cwd: dirname(DESCRIBE_SCRIPT),
+      env: { ...filmPythonEnv(), PYTHONPATH: PY_DIR },
+      timeoutMs: DESCRIBE_LIMITS.wallSeconds * 1000,
+      processGroup: true,
+      signal,
+      onOutput: (chunk) => takeLines(chunk, onLog, lines),
+    }).catch((error) => ({ error }));
+    const canceled = signal?.aborted || result.aborted || result.signal === 'SIGTERM' || result.signal === 'SIGKILL';
+    if (canceled) return { ok: false, canceled: true, error: 'Canceled', traceback: null, manifest: null, events: {} };
+    if (result.timedOut) {
+      return {
+        ok: false, canceled: false, error: `The film exceeded the ${DESCRIBE_LIMITS.wallSeconds}s limit for listing shots`,
+        traceback: null, manifest: null, events: {},
+      };
+    }
     for (const line of lines) {
       const event = parseBlenderDriverLine(line);
       if (event?.event === 'error') failure = event;
     }
-    const canceled = signal?.aborted || result.killSignal === 'SIGTERM' || result.killSignal === 'SIGKILL';
-    if (canceled) return { ok: false, canceled: true, error: 'Canceled', traceback: null, manifest: null, events: {} };
     const info = await lstat(manifestPath).catch(() => null);
-    if (result.code === 0 && info?.isFile() && info.size <= MANIFEST_MAX_BYTES) {
+    if (result.success && info?.isFile() && info.size <= MANIFEST_MAX_BYTES) {
       const manifest = await readFile(manifestPath, 'utf8').then((text) => JSON.parse(text)).catch(() => null);
       if (manifest) return { ok: true, canceled: false, error: null, traceback: null, manifest, events: {} };
     }
