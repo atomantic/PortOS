@@ -27,6 +27,7 @@ const signals = { SIGTERM: 143, SIGINT: 130, SIGHUP: 129 };
 let stopped = false;
 let signalCode = 0;
 let recovering = false;
+let restartBlockedByRebase = false;
 let logFd;
 let entered = false;
 
@@ -86,6 +87,10 @@ const pm2 = (...args) => run(pm2Local[0], [...pm2Local.slice(1), ...args]);
 async function recover(code) {
   if (!stopped) return;
   stopped = false;
+  if (restartBlockedByRebase) {
+    step('restart', 'error', 'Restore the checkout before restarting PortOS');
+    return;
+  }
   const [command, ...prefix] = pm2RecoveryCommand();
   log(`⚠️  Update is exiting (status ${code}) with PortOS's apps deleted — restarting them so the install isn't left headless.`);
   step('restart', 'running', "Update failed — restarting PortOS so it isn't left down...");
@@ -147,8 +152,25 @@ async function preflight(target) {
   } finally { rmSync(scratch, { recursive: true, force: true }); }
 }
 
+async function pullRebasePaths() {
+  const { code, stdout } = await capture('git', ['rev-parse', '--path-format=absolute',
+    '--git-path', 'REBASE_HEAD', '--git-path', 'rebase-merge', '--git-path', 'rebase-apply']);
+  if (code) {
+    step('git-pull', 'failed', 'Unable to locate Git rebase state');
+    fail(code);
+  }
+  const paths = stdout.split(/\r?\n/);
+  if (paths.some(path => existsSync(path))) {
+    restartBlockedByRebase = true;
+    step('git-pull', 'failed', 'An existing rebase or patch application must be resolved before updating');
+    fail();
+  }
+  return paths;
+}
+
 async function pull() {
   step('git-pull', 'running', 'Pulling latest changes...');
+  const rebasePaths = peerTarget ? [] : await pullRebasePaths();
   const origin = (await capture('git', ['remote', 'get-url', 'origin'])).stdout;
   if (origin) {
     const safe = `🌐 Pulling from origin: ${origin.replace(/:\/\/[^@/]+@/, '://***@')}`;
@@ -179,7 +201,28 @@ async function pull() {
   if (!peerTarget) await git('fetch');
   await preflight(peerTarget || (await capture('git', ['rev-parse', '-q', '--verify', '@{upstream}^{commit}'])).stdout);
   const previous = await head();
-  await required(peerTarget ? git('merge', '--ff-only', peerTarget) : git('pull', '--rebase'));
+  if (peerTarget) await required(git('merge', '--ff-only', peerTarget));
+  else {
+    // Inspect Git's result and finish any rollback before handling a signal.
+    const { code } = await run('git', ['pull', '--rebase'], { checkSignalAfter: false });
+    if (code) {
+      let message = 'Pull failed; see the update log';
+      if (rebasePaths.some(path => existsSync(path))) {
+        restartBlockedByRebase = true;
+        const abort = await run('git', ['rebase', '--abort'], { checkSignalAfter: false });
+        if (abort.code) {
+          log(`❌ git rebase --abort failed (status ${abort.code}); see the update log`);
+          message = 'Pull conflicted; rebase abort failed';
+        } else {
+          restartBlockedByRebase = false;
+          message = 'Pull conflicted; rebase aborted and checkout restored';
+        }
+      }
+      step('git-pull', 'failed', message);
+      fail(code);
+    }
+    checkSignal();
+  }
   step('git-pull', 'done', 'Latest changes pulled');
   return previous;
 }
