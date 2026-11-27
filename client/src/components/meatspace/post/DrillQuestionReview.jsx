@@ -112,11 +112,11 @@ function GenericReview({ questions, missed, type, config }) {
       <TableShell>
         <thead>
           <tr className="text-gray-500 text-left border-b border-port-border">
-            <th className="py-1 pr-2 font-medium">Prompt</th>
-            <th className="py-1 pr-2 font-medium">Your answer</th>
-            <th className="py-1 pr-2 font-medium">Expected</th>
-            <th className="py-1 pr-2 font-medium text-center">Result</th>
-            <th className="py-1 pl-2 font-medium text-right">Time</th>
+            <th scope="col" className="py-1 pr-2 font-medium">Prompt</th>
+            <th scope="col" className="py-1 pr-2 font-medium">Your answer</th>
+            <th scope="col" className="py-1 pr-2 font-medium">Expected</th>
+            <th scope="col" className="py-1 pr-2 font-medium text-center">Result</th>
+            <th scope="col" className="py-1 pl-2 font-medium text-right">Time</th>
           </tr>
         </thead>
         <tbody>
@@ -257,12 +257,12 @@ function DigitSpanReview({ questions, missed, drillData }) {
       <TableShell>
         <thead>
           <tr className="text-gray-500 text-left border-b border-port-border">
-            <th className="py-1 pr-2 font-medium">Round</th>
-            <th className="py-1 pr-2 font-medium">Shown</th>
-            {isBackward && <th className="py-1 pr-2 font-medium">Expected</th>}
-            <th className="py-1 pr-2 font-medium">Recalled</th>
-            <th className="py-1 pr-2 font-medium text-center">Result</th>
-            <th className="py-1 pl-2 font-medium text-right">Time</th>
+            <th scope="col" className="py-1 pr-2 font-medium">Round</th>
+            <th scope="col" className="py-1 pr-2 font-medium">Shown</th>
+            {isBackward && <th scope="col" className="py-1 pr-2 font-medium">Expected</th>}
+            <th scope="col" className="py-1 pr-2 font-medium">Recalled</th>
+            <th scope="col" className="py-1 pr-2 font-medium text-center">Result</th>
+            <th scope="col" className="py-1 pl-2 font-medium text-right">Time</th>
           </tr>
         </thead>
         <tbody>
@@ -310,11 +310,11 @@ function StroopReview({ questions, missed, drillData }) {
       <TableShell>
         <thead>
           <tr className="text-gray-500 text-left border-b border-port-border">
-            <th className="py-1 pr-2 font-medium">Word</th>
-            <th className="py-1 pr-2 font-medium">Ink color</th>
-            <th className="py-1 pr-2 font-medium">Your answer</th>
-            <th className="py-1 pr-2 font-medium text-center">Result</th>
-            <th className="py-1 pl-2 font-medium text-right">Time</th>
+            <th scope="col" className="py-1 pr-2 font-medium">Word</th>
+            <th scope="col" className="py-1 pr-2 font-medium">Ink color</th>
+            <th scope="col" className="py-1 pr-2 font-medium">Your answer</th>
+            <th scope="col" className="py-1 pr-2 font-medium text-center">Result</th>
+            <th scope="col" className="py-1 pl-2 font-medium text-right">Time</th>
           </tr>
         </thead>
         <tbody>
@@ -373,11 +373,11 @@ function TimingReview({ questions, missed, type }) {
       <TableShell>
         <thead>
           <tr className="text-gray-500 text-left border-b border-port-border">
-            <th className="py-1 pr-2 font-medium">{isReaction ? '#' : 'Attempt'}</th>
-            {!isReaction && <th className="py-1 pr-2 font-medium">Target</th>}
-            {!isReaction && <th className="py-1 pr-2 font-medium">Selected</th>}
-            <th className="py-1 pr-2 font-medium">Status</th>
-            <th className="py-1 pl-2 font-medium text-right">Time</th>
+            <th scope="col" className="py-1 pr-2 font-medium">{isReaction ? '#' : 'Attempt'}</th>
+            {!isReaction && <th scope="col" className="py-1 pr-2 font-medium">Target</th>}
+            {!isReaction && <th scope="col" className="py-1 pr-2 font-medium">Selected</th>}
+            <th scope="col" className="py-1 pr-2 font-medium">Status</th>
+            <th scope="col" className="py-1 pl-2 font-medium text-right">Time</th>
           </tr>
         </thead>
         <tbody>

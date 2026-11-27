@@ -21,6 +21,7 @@ describe('DrillQuestionReview — generic (math/memory/fallback)', () => {
   it('renders every question with prompt, answered, and expected', () => {
     const { container } = render(<DrillQuestionReview type="multiplication" questions={questions} />);
     const table = within(container.querySelector('table'));
+    expect(table.getByRole('columnheader', { name: 'Prompt' })).toHaveAttribute('scope', 'col');
     expect(table.getByText('6 x 7')).toBeInTheDocument();
     expect(table.getByText('41')).toBeInTheDocument();
     expect(table.getByText('42')).toBeInTheDocument();
