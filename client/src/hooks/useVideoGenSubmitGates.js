@@ -9,7 +9,7 @@
 import { useMemo } from 'react';
 import { REACTOR_MAX_PROMPT_LENGTH } from '../lib/reactorVideoClip.js';
 import { videoGenEnqueuePolicy } from '../lib/videoGenEnqueuePolicy.js';
-import { styledVideoPrompt } from '../lib/videoGenSubmission.js';
+import { styledVideoPrompt } from '../lib/buildVideoGenPayload.js';
 import { peerModelRequiresInput } from '../lib/federatedMediaReadiness.js';
 
 /**
@@ -95,7 +95,7 @@ export function useVideoGenSubmitGates({
 
   // reactor.inc rejects a prompt over 800 characters outright, and the limit
   // applies to what PortOS SUBMITS — style presets prefix the user's text, so
-  // the counter measures the same string buildVideoGenSubmission builds rather
+  // the counter measures the same string buildVideoGenPayload builds rather
   // than the textarea. Gating Generate on it turns a post-click 400 into a
   // number the user can watch while writing.
   // Runway caps the prompt per model; the server refuses an over-cap prompt

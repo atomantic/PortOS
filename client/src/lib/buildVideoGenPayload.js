@@ -1,5 +1,5 @@
 /**
- * Builds the local, Grok, and federated video-generation request bodies from validated form state,
+ * Builds the local, hosted, and federated video-generation request bodies from validated form state,
  * including prompt envelopes and empty-value wire sentinels.
  */
 
@@ -25,8 +25,6 @@ import { HIGGSFIELD_DEFAULT_VIDEO_MODEL, getHiggsfieldVideoModel } from './higgs
 import { falExtraReferenceLimit, getFalVideoModel } from './falVideoModels.js';
 import { GOOGLE_DEFAULT_VIDEO_MODEL, getGoogleVideoModel } from './googleVideoModels.js';
 
-// The form owns state transitions and validation. This module owns the three
-// request contracts the video route accepts: Grok, federated, and local.
 const stylePresetsFor = (selectedUniverse, stylePreset) => [
   selectedUniverse ? withUniverseLabel(universeStylePreset(selectedUniverse)) : null,
   stylePreset,
@@ -430,7 +428,7 @@ const HOSTED_VIDEO_SUBMISSIONS = {
   google: googleVideoSubmission,
 };
 
-export function buildVideoGenSubmission(args) {
+export function buildVideoGenPayload(args) {
   const {
     hostedLane, remoteSubmissionFields,
     prompt, negativePrompt, stylePreset, selectedUniverse,
