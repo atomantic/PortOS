@@ -1,4 +1,5 @@
 /** Music Video project creation, patching, storage and peer merge shared by both stores. */
+import { DEFAULT_FAL_SEEDVR2_TARGET_RESOLUTION } from '../../lib/videoGenRequestFields.js';
 import { festivalPacketSchema } from '../../lib/musicVideo/musicVideoFestivalPacket.js';
 import { normalizeBlenderRecord } from '../../lib/musicVideo/musicVideoBlender.js';
 import { musicVideoMediaMode, assertMusicVideoMediaSelections } from '../../lib/musicVideo/musicVideoMediaPolicy.js';
@@ -81,6 +82,7 @@ function normalizeVisualSpec(patch, base = null) {
 
 const DEFAULT_VIDEO_SETTINGS = Object.freeze({
   backend: 'local',
+  upscaleTargetResolution: DEFAULT_FAL_SEEDVR2_TARGET_RESOLUTION,
   modelId: null,
   grokDuration: 10,
   falDuration: null,
@@ -103,7 +105,7 @@ const OPTIONAL_VIDEO_SETTINGS = [
   'renderPool',
   'higgsfieldModelId', 'higgsfieldDuration', 'higgsfieldResolution',
   'googleModelId', 'googleDuration', 'googleResolution',
-  'draftResolution', 'finalResolution',
+  'draftResolution', 'finalResolution', 'upscaleMethod',
 ];
 
 function normalizeVideoSettings(input, base) {

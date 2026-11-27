@@ -15,13 +15,13 @@ export default function SceneHeaderControls({
   scene, project, posterSrc, shotName, fieldId,
   frameReadiness, clipPlayback, attention,
   locked, doneSaving, onSetDone, onToggleDone, onUndoBoardEdit = null, undoingBoard = false, stepShot, onClose,
-  generatingLane, generatingFrame, generatingVideo, frameProgress, clipJobs,
+  generatingLane, generatingFrame, generatingVideo, frameProgress, clipJobs, upscaleJobs,
 }) {
   const { clipId, clipSec } = clipPlayback;
   const boardUndo = project?.boardUndo || null;
   const hasSpan = typeof scene.startSec === 'number' && typeof scene.endSec === 'number';
   const videoReady = clipId && project?.assetMarks?.[`video:${clipId}`] !== 'bad';
-  const showProgress = generatingLane || generatingFrame || generatingVideo;
+  const showProgress = generatingLane || generatingFrame || generatingVideo || upscaleJobs.length > 0;
 
   return (
     <header className="port-opaque-surface sticky -top-4 z-10 -mx-4 -mt-4 mb-3 flex flex-wrap items-center gap-3 border-b border-port-border px-4 py-2">
@@ -93,6 +93,9 @@ export default function SceneHeaderControls({
             </span>
           )}
           <SceneRenderProgress kind="Frame" generating={generatingFrame} progress={frameProgress} />
+          {upscaleJobs.map((job) => (
+            <SceneRenderProgress key={job.key} kind="Upscale" generating progress={job.running ? { progress: job.progress } : null} />
+          ))}
           {clipJobs.map((job) => (
             <SceneRenderProgress key={job.key} kind={job.label ? `Video (${job.label})` : 'Video'} generating
               progress={job.running ? { progress: job.progress } : null} retry={job.retry} />

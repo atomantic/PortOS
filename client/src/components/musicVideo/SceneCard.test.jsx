@@ -6,13 +6,13 @@ vi.mock('../../hooks/useFilmLookPresets.js', () => ({ default: () => ({ presets:
 vi.mock('../../hooks/useVideoFileSrc.js', () => ({ useVideoFileSrc: vi.fn(() => ({})) }));
 vi.mock('../../services/apiMusicVideo.js', async (importOriginal) => ({ ...(await importOriginal()), getMusicVideoMediaPool: vi.fn(async () => ({ items: [] })) }));
 vi.mock('../../services/apiImageVideo.js', async (importOriginal) => ({
-  ...(await importOriginal()), getVideoHistoryItem: vi.fn(async () => null), previewImagePrompt: vi.fn(async (body) => ({ sentPrompt: body.prompt, promptAdditions: [] })), previewVideoPrompt: vi.fn(async () => ({ backend: 'grok', sentPrompt: 'Cast reference preview', promptAdditions: [] })),
+  ...(await importOriginal()), getVideoHistoryItem: vi.fn(async () => null), getUpscalePlan: vi.fn(async () => ({})), upscaleVideo: vi.fn(), previewImagePrompt: vi.fn(async (body) => ({ sentPrompt: body.prompt, promptAdditions: [] })), previewVideoPrompt: vi.fn(async () => ({ backend: 'grok', sentPrompt: 'Cast reference preview', promptAdditions: [] })),
 }));
 vi.mock('../../services/apiTracks.js', async (importOriginal) => ({ ...(await importOriginal()), listTracks: vi.fn(async () => []) }));
 import SceneCard from './SceneCard.jsx';
 import { GROK_VIDEO_DURATIONS } from '../../lib/grokVideoClip.js';
 import { useVideoFileSrc } from '../../hooks/useVideoFileSrc.js';
-import { previewVideoPrompt } from '../../services/apiImageVideo.js';
+import { getUpscalePlan, getVideoHistoryItem, previewVideoPrompt, upscaleVideo } from '../../services/apiImageVideo.js';
 import { warmSceneCard } from './sceneCardTestWarmup.jsx';
 beforeAll(warmSceneCard, 30000);
 
@@ -1658,6 +1658,33 @@ it('lets a document shot opt out of the video look and return to inheritance', a
   fireEvent.change(screen.getByLabelText('Film look'), { target: { value: 'video' } });
   await waitFor(() => expect(onSave).toHaveBeenLastCalledWith('s1', { filmLook: null }));
   expect(screen.queryByRole('button', { name: 'Render shot' })).toBeNull();
+});
+
+it('opens the selected shot take in the upscale drawer with its saved defaults and shows upscale progress', async () => {
+  const scene = { sceneId: 's1', prompt: 'A boat turns', startSec: 0, endSec: 4, videoHistoryId: 'draft-clip', takes: [] };
+  const project = { id: 'mv-example', scenes: [scene], videoSettings: { upscaleMethod: 'fal-seedvr2', upscaleTargetResolution: '1440p' } };
+  const onUpscaleQueued = vi.fn();
+  getVideoHistoryItem.mockResolvedValueOnce({ id: scene.videoHistoryId, filename: 'draft-clip.mp4' });
+  getUpscalePlan.mockImplementation(async (_id, method) => method === 'fal-seedvr2' ? {
+    plan: { targetResolution: '1440p', estimatedCostUsd: 0.49, runtime: { installed: true }, target: { width: 2560, height: 1440 } },
+  } : {});
+  upscaleVideo.mockResolvedValueOnce({ job: { jobId: 'test-upscale', status: 'queued' } });
+  const props = { project, scene, index: 0, expanded: true, onUpscaleQueued, onEditLocal: vi.fn(), onSave: vi.fn() };
+  const { rerender } = render(<SceneCard {...props} />);
+  show('Clip');
+  fireEvent.click(screen.getByRole('button', { name: 'Upscale' }));
+  expect(await screen.findByRole('combobox', { name: 'Target resolution' })).toHaveValue('1440p');
+  expect(screen.getByLabelText(/SeedVR2 cloud/i)).toBeChecked();
+  const submit = screen.getByRole('button', { name: 'Start SeedVR2 upscale' });
+  await waitFor(() => expect(submit).toBeEnabled());
+  fireEvent.click(submit);
+  await waitFor(() => expect(onUpscaleQueued).toHaveBeenCalledWith('test-upscale', 's1'));
+  expect(upscaleVideo).toHaveBeenCalledWith('draft-clip', {
+    method: 'fal-seedvr2', targetResolution: '1440p', musicVideoProjectId: 'mv-example', sceneId: 's1', silent: true,
+  });
+  rerender(<SceneCard {...props} upscaleJobs={[{ key: 'upscale', running: true, progress: 0.5 }]} />);
+  expect(screen.getByRole('progressbar', { name: 'Upscale render progress' })).toHaveAttribute('aria-valuenow', '50');
+  expect(screen.getByRole('button', { name: 'Upscale' })).toBeDisabled();
 });
 
 // Uniquely catches a clip in flight blocking another render on the shot, or its placeholder take

@@ -17,6 +17,12 @@ import { applyMusicVideoEdit } from '../lib/musicVideo/musicVideoEditResult.js';
 const ROOT = () => lazyTempDataRoot('mv-edit-result-');
 vi.mock('../lib/paths.js', async (original) => makePathsProxy(await original(), { dataRoot: ROOT }));
 vi.mock('../services/settings.js', () => ({ getSettings: vi.fn(async () => ({})) }));
+const queueSeedvr2 = vi.fn();
+const planUpscale = vi.fn();
+vi.mock('../services/videoGen/falUpscaleJob.js', () => ({ enqueueFalSeedvr2Upscale: queueSeedvr2 }));
+vi.mock('../services/videoGen/upscaleVideo.js', async (original) => ({
+  ...await original(), planUpscaleHistoryItem: planUpscale,
+}));
 const { default: router } = await import('./musicVideo.js');
 const projects = await import('../services/musicVideo/projects.js');
 const boardEdits = await import('../services/musicVideo/projectBoardEdits.js');
@@ -65,6 +71,34 @@ async function expectReloadParity(send, status = 200) {
   expect(applyMusicVideoEdit(before, reply.body.edit)).toEqual(after);
   return { before, after, reply: reply.body };
 }
+
+it('persists the preferred workflow and prices and queues only an approved shot through upgrade', async () => {
+  const videoSettings = { backend: 'grok', upscaleMethod: 'fal-seedvr2', upscaleTargetResolution: '1440p' };
+  const saved = await request(app).patch(base()).send({ videoSettings });
+  expect(saved.status).toBe(200);
+  expect((await read()).videoSettings).toMatchObject(videoSettings);
+  const approval = await request(app).post(`${base()}/scenes/approve-final`).send({ sceneIds: ['a'], approved: true });
+  expect(approval.status).toBe(200);
+  planUpscale.mockResolvedValue({ runtime: { installed: true }, estimatedCostUsd: 0.492 });
+  queueSeedvr2.mockResolvedValue({ jobId: 'upscale-a', status: 'queued' });
+  const invalid = await request(app).post(`${base()}/upgrade`).send({ method: 'upscale', upscaleTargetResolution: '320p' });
+  expect(invalid.status).toBe(400);
+  const dryRun = await request(app).post(`${base()}/upgrade`).send({ method: 'upscale', dryRun: true });
+  expect(dryRun.status).toBe(200);
+  expect(dryRun.body).toMatchObject({
+    upscaleMethod: 'fal-seedvr2', upscaleTargetResolution: '1440p', totalCostUsd: 0.492,
+    shots: [{ sceneId: 'a', status: 'ready', costUsd: 0.492 }],
+  });
+  expect(planUpscale).toHaveBeenCalledWith('clip-a', { method: 'fal-seedvr2', targetResolution: '1440p' });
+  expect(queueSeedvr2).not.toHaveBeenCalled();
+
+  const run = await request(app).post(`${base()}/upgrade`).send({ method: 'upscale', upscaleTargetResolution: '1080p' });
+  expect(run.status).toBe(200);
+  expect(run.body.results).toEqual([{ sceneId: 'a', method: 'upscale', ok: true, jobId: 'upscale-a', status: 'queued' }]);
+  expect(queueSeedvr2).toHaveBeenCalledWith('clip-a', {
+    targetResolution: '1080p', musicVideo: { projectId: project.id, sceneId: 'a', tier: 'final', selectOnComplete: true },
+  });
+});
 
 describe('board edit replies carry what a reload would show', () => {
   it('a prompt edit sends only that shot, with its frame take now stale', async () => {

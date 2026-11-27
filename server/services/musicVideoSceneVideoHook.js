@@ -5,7 +5,7 @@
  * `params.musicVideo`, appends the resulting history id to that project scene's
  * immutable takes (#8965) — server-side, independent of any mounted client. The
  * take becomes the scene's `videoHistoryId` only while that slot is still
- * unselected; it never replaces a clip the director already selected. This is the
+ * unselected. An explicitly requested upscale can replace its source clip. This is the
  * i2v counterpart to the Phase 1b reference-frame hook
  * (`musicVideoSceneImageHook`): a scene's video is generated from its chosen
  * reference frame via the video route's `image` (i2v) mode, and a long local/
@@ -72,10 +72,10 @@ const hook = createMediaJobImageHook({
   // History id = the completed video job's id (or `result.id` for video-upscale jobs,
   // which mint a new history id distinct from the queue job id).
   extractResult: (job) => {
-    const videoHistoryId = (job.kind === 'video-upscale' && typeof job.result?.id === 'string' && job.result.id)
-      || (typeof job.result?.generationId === 'string' && job.result.generationId)
-      || (typeof job.id === 'string' ? job.id : null);
-    return videoHistoryId ? { videoHistoryId } : null;
+    const videoHistoryId = job.kind === 'video-upscale'
+      ? job.result?.id
+      : job.result?.generationId || job.id;
+    return typeof videoHistoryId === 'string' && videoHistoryId ? { videoHistoryId } : null;
   },
   // Require both ids; the tag is otherwise ambiguous about which scene to file.
   identify: (tag) => (tag?.projectId && tag.sceneId
@@ -86,11 +86,17 @@ const hook = createMediaJobImageHook({
   // backend) and the later write would clobber the earlier scene's
   // `videoHistoryId`. Different projects still attach concurrently.
   serializeKey: ({ projectId }) => projectId,
-  // No newest-render-wins guard (#8965): out-of-order clips are all kept as
-  // takes, and none of them can displace a selection.
+  // Keep every out-of-order clip as a take. A requested upscale may replace only its source.
   describe: ({ projectId, sceneId }) => `${projectId}/${sceneId}`,
   // A deleted project/scene 404s here, so a late completion can't resurrect it.
   attach: async ({ projectId, sceneId, videoHistoryId, job }) => {
+    if (job.kind === 'video-upscale' && job.params.musicVideo?.selectOnComplete) {
+      return appendSceneTakes(projectId, sceneId, [{
+        kind: 'video', assetId: videoHistoryId, source: 'generated', provider: 'portos',
+        upscaledFrom: job.params.historyId, tier: 'final', jobId: job.id,
+        costUsd: job.params.musicVideoCostUsd, costModelId: job.params.musicVideoCostModelId,
+      }]);
+    }
     const firstFrame = storyboardFirstFrameFile(job.result);
     const extend = await extendRecord(job.params?.musicVideoExtend, videoHistoryId);
     return appendSceneTakes(projectId, sceneId, [
@@ -150,7 +156,8 @@ const hook = createMediaJobImageHook({
   },
   // A render that FAILED (a cancel is not a failure) is recorded on the scene
   // so the board can say which scene failed and why, including after a reload.
-  onTerminal: (ctx, status, job) => recordSceneLastFailure(ctx, status, job, 'video'),
+  onTerminal: (ctx, status, job) => job.kind === 'video-upscale' && job.params?.musicVideo?.selectOnComplete
+    ? null : recordSceneLastFailure(ctx, status, job, 'video'),
 });
 
 export function initMusicVideoSceneVideoHook() {

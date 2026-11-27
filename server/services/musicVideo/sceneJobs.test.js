@@ -12,6 +12,7 @@ describe('listInFlightSceneJobs (#10154)', () => {
     jobs.list = [
       job({ id: 'a', status: 'running' }),
       job({ id: 'b', kind: 'video', status: 'queued', params: { musicVideo: { projectId: 'p1', sceneId: 's2' } } }),
+      job({ id: 'upscale', kind: 'video-upscale' }),
       job({ id: 'done', status: 'completed' }),
       job({ id: 'failed', status: 'failed' }),
       job({ id: 'other-project', params: { musicVideo: { projectId: 'p2', sceneId: 's1' } } }),
@@ -22,6 +23,7 @@ describe('listInFlightSceneJobs (#10154)', () => {
     expect(listInFlightSceneJobs('p1')).toEqual([
       { jobId: 'a', lane: 'image', sceneId: 's1', status: 'running' },
       { jobId: 'b', lane: 'video', sceneId: 's2', status: 'queued', label: 'local' },
+      { jobId: 'upscale', lane: 'upscale', sceneId: 's1', status: 'running' },
     ]);
   });
 

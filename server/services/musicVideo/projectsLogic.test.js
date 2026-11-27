@@ -422,6 +422,7 @@ describe('applyProjectPatch', () => {
       backend: 'grok',
       modelId: null,
       grokDuration: 6,
+      upscaleTargetResolution: '1080p',
       falDuration: null,
       falModelId: null,
       falResolution: null,
@@ -445,6 +446,7 @@ describe('applyProjectPatch', () => {
       backend: 'local',
       modelId: 'ltx23_distilled_q4',
       grokDuration: 6,
+      upscaleTargetResolution: '1080p',
       falDuration: null,
       falModelId: null,
       falResolution: null,
@@ -1267,6 +1269,8 @@ it('preserves optional project moodboard uploads through create, patch and clone
 // the builder. A new schema key without a sample here fails the first assertion.
 describe('create-schema parity', () => {
   const VIDEO_SETTING_SAMPLES = {
+    upscaleMethod: 'fal-seedvr2',
+    upscaleTargetResolution: '1440p',
     renderPool: { mode: 'peers', peers: [{ peerId: '3f1c2b8e-9d4a-4f6b-8c2e-1a2b3c4d5e6f', modelId: 'peer-model' }] },
     backend: 'runway',
     modelId: 'local-model',

@@ -16,6 +16,8 @@ import { filmLookSchema } from '../filmLookValidation.js';
 import { TEMPLATE_EFFECT_CONTROLS } from './musicVideoTemplateEffects.js';
 import { IMAGE_REFERENCE_REQUEST_LIMIT, MUSIC_VIDEO_RESEARCH_REFERENCE_LIMIT, MUSIC_VIDEO_CLIP_REFERENCE_REQUEST_LIMIT } from '../referenceLimits.js';
 import { z } from 'zod';
+import { MUSIC_VIDEO_UPSCALERS } from './musicVideoUpscale.js';
+import { FAL_SEEDVR2_TARGET_RESOLUTIONS } from '../videoGenRequestFields.js';
 import { musicVideoImageTreatmentsSchema } from './musicVideoImageTreatmentValidation.js';
 
 export const musicVideoTemplateEffectsSchema = z.object(Object.fromEntries(TEMPLATE_EFFECT_CONTROLS.map(({ id }) => [id, z.number().min(0).max(1).nullable().optional()]))).strict();
@@ -94,7 +96,13 @@ export const musicVideoConceptSchema = z.object({
 // A tier ceiling is a resolution label every catalog ranks ('480p', '768P', '2K', '4k').
 const musicVideoTierResolution = z.string().trim().regex(/^(\d{3,4}p|\d(\.\d)?k)$/i, 'Use a resolution such as 480p, 1080p or 4k');
 
+export const musicVideoUpscaleFields = {
+  upscaleMethod: z.enum(Object.keys(MUSIC_VIDEO_UPSCALERS)).optional(),
+  upscaleTargetResolution: z.enum(FAL_SEEDVR2_TARGET_RESOLUTIONS).optional(),
+};
+
 export const musicVideoVideoSettingsSchema = z.object({
+  ...musicVideoUpscaleFields,
   renderPool: z.object({
     mode: z.enum(['local', 'peers', 'both']),
     peers: z.array(z.object({ peerId: z.string().uuid(), modelId: z.string().trim().min(1).max(256) }).strict()).max(12),

@@ -993,7 +993,10 @@ describe('MusicVideo stage tabs (#9243)', () => {
     const settings = {
       // The render style and the image/video services are set once, here.
       Project: {
-        'Render style': () => document.getElementById('mv-toolbar-render-style'), 'Scene video renderer': (root) => root.queryByLabelText('Scene video renderer'),
+        'Render style': () => document.getElementById('mv-toolbar-render-style'),
+        'Draft clip backend': (root) => root.queryByLabelText('Draft clip backend'),
+        'Clip upscaler': (root) => root.queryByLabelText('Clip upscaler'),
+        'SeedVR2 target resolution': (root) => root.queryByLabelText('SeedVR2 target resolution'),
         Media: (root) => root.queryByLabelText('Design and composition media'),
       },
       Audio: { MIDI: (root) => root.queryByRole('button', { name: /^MIDI$/ }) },

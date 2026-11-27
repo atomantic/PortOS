@@ -257,7 +257,7 @@ export default function SceneCard({
           onUndoBoardEdit={actions.onUndoBoardEdit} undoingBoard={actions.undoingBoard}
           stepShot={position.stepShot} onClose={actions.onClose}
           generatingLane={renderPlan.generatingLane} generatingFrame={media.generatingFrame}
-          generatingVideo={media.generatingVideo} frameProgress={media.frameProgress} clipJobs={renderPlan.clipJobs}
+          generatingVideo={media.generatingVideo} frameProgress={media.frameProgress} clipJobs={renderPlan.clipJobs} upscaleJobs={media.upscaleJobs}
         />
         <div className="space-y-3">
           <SceneAboveBodyNotices

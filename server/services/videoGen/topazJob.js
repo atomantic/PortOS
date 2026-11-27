@@ -66,7 +66,7 @@ export function assertNoPendingTopaz(historyId) {
   if (pending || admitting.has(historyId)) throw new ServerError('A Topaz request for this video is still running or has an uncertain outcome. Check the existing request before starting another.', { status: 409, code: 'TOPAZ_PENDING' });
 }
 
-export async function enqueueTopazUpscale(historyId, token) {
+export async function enqueueTopazUpscale(historyId, token, { musicVideo } = {}) {
   assertNoPendingTopaz(historyId);
   admitting.add(historyId);
   try {
@@ -78,7 +78,7 @@ export async function enqueueTopazUpscale(historyId, token) {
     await cleanupTopazStaging(quote.preparedId).catch(() => { throw new ServerError('Could not clean Topaz staging.', { status: 500, code: 'TOPAZ_CLEANUP_FAILED' }); });
     throw new ServerError('The source changed after the estimate. Request a new estimate.', { status: 409, code: 'TOPAZ_SOURCE_CHANGED' });
   }
-  return await enqueueJob({ kind: 'video-upscale', params: { mode: 'topaz', ...quote, prompt: 'Topaz video upscale', width: 1920, height: 1080 } })
+  return await enqueueJob({ kind: 'video-upscale', params: { mode: 'topaz', ...quote, ...(musicVideo ? { musicVideo } : {}), prompt: 'Topaz video upscale', width: 1920, height: 1080 } })
     .then(result => { releaseTopazStaging(quote.preparedId); return result; })
     .catch(async error => { await cleanupTopazStaging(quote.preparedId).catch(() => { throw new ServerError('Could not clean Topaz staging.', { status: 500, code: 'TOPAZ_CLEANUP_FAILED' }); }); throw error; });
   } finally { admitting.delete(historyId); }

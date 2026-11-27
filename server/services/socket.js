@@ -956,10 +956,10 @@ function setupMediaGenEventForwarding() {
   // media queue also runs `training` (LoRA) jobs, which have their own UI and NO
   // `*-gen:*` listener — so they must NOT be forwarded onto the image channel
   // (returning null skips them) rather than falling through to `image-gen:*`.
-  const genEvtPrefix = (kind) =>
-    kind === 'video' ? 'video-gen'
-      : kind === 'image' ? 'image-gen'
-        : kind === 'audio' ? 'audio-gen'
+  const genEvtPrefix = (job) =>
+    job.kind === 'video' || (job.kind === 'video-upscale' && job.params?.musicVideo?.sceneId) ? 'video-gen'
+      : job.kind === 'image' ? 'image-gen'
+        : job.kind === 'audio' ? 'audio-gen'
           : null;
 
   spriteEvents.on('changed', ({ recordId }) => {
@@ -1001,7 +1001,7 @@ function setupMediaGenEventForwarding() {
 
   mediaJobEvents.on('canceled', (job) => {
     if (!getIo() || !job?.id) return;
-    const prefix = genEvtPrefix(job.kind);
+    const prefix = genEvtPrefix(job);
     if (!prefix) return;
     emitToOperators(`${prefix}:canceled`, { generationId: job.id });
   });
@@ -1018,7 +1018,7 @@ function setupMediaGenEventForwarding() {
   // settle the spinner to 'failed' and the handler is idempotent.
   mediaJobEvents.on('failed', (job) => {
     if (!getIo() || !job?.id) return;
-    const prefix = genEvtPrefix(job.kind);
+    const prefix = genEvtPrefix(job);
     if (!prefix) return;
     emitToOperators(`${prefix}:failed`, { generationId: job.id, error: job.error });
   });

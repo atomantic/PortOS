@@ -48,7 +48,7 @@ it('prices each method with a dry run before the upgrade runs, then reports each
 
   fireEvent.click(screen.getByTestId('final-upgrade-run'));
   await screen.findByTestId('final-upgrade-results');
-  expect(upgradeMusicVideoShots).toHaveBeenLastCalledWith('p1', { method: 'rerender' }, { silent: true });
+  expect(upgradeMusicVideoShots).toHaveBeenLastCalledWith('p1', { method: 'rerender', sceneIds: ['s0'] }, { silent: true });
   expect(screen.getByTestId('final-upgrade-results').textContent).toContain('Shot 0: final render queued; it lands beside the draft');
 });
 
@@ -91,4 +91,24 @@ it('drops the plan when an approval stops matching, so a stale price is never of
   rerender(<FinalUpgradePanel project={{ id: 'p1', scenes: [{ ...approved, prompt: 'a new prompt' }] }} shotName={shotName} onApprove={vi.fn()} />);
   expect(screen.queryByTestId('final-upgrade-plan')).toBeNull();
   expect(screen.queryByTestId('final-upgrade-run')).toBeNull();
+});
+
+it('displays the SeedVR2 estimate and tracks the queued upscale', async () => {
+  const plan = {
+    ...planFor({ method: 'upscale' }), upscaleMethod: 'fal-seedvr2', upscaleTargetResolution: '1440p',
+    totalCostUsd: 0.49, shots: [{ sceneId: 's0', status: 'ready', method: 'upscale', costUsd: 0.49 }],
+  };
+  upgradeMusicVideoShots.mockResolvedValueOnce(plan).mockResolvedValueOnce({
+    results: [{ sceneId: 's0', method: 'upscale', ok: true, jobId: 'upscale-s0' }],
+  });
+  const onUpscaleQueued = vi.fn();
+  render(<FinalUpgradePanel project={{ id: 'p1', scenes: [approve(shot(0))] }} shotName={shotName} onUpscaleQueued={onUpscaleQueued} />);
+  openPanel();
+  expect(await screen.findByText('fal.ai SeedVR2 · 1440p')).toBeInTheDocument();
+  fireEvent.click(screen.getByRole('button', { name: 'Upgrade approved (1) · $0.49' }));
+  expect(await screen.findByText(/Shot 0: upscale queued/)).toBeInTheDocument();
+  expect(onUpscaleQueued).toHaveBeenCalledWith('upscale-s0', 's0');
+  expect(upgradeMusicVideoShots).toHaveBeenLastCalledWith('p1', {
+    method: 'upscale', sceneIds: ['s0'], upscaleMethod: 'fal-seedvr2', upscaleTargetResolution: '1440p',
+  }, { silent: true });
 });

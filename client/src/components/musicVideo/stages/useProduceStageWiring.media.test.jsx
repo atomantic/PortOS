@@ -46,7 +46,7 @@ describe('MusicVideo project video renderer', () => {
     });
     await openSettings('Project');
 
-    expect(await screen.findByLabelText('Scene video renderer')).toHaveProperty('value', '');
+    expect(await screen.findByLabelText('Draft clip backend')).toHaveProperty('value', '');
     closeSettings();
     await openStage('produce');
     fireEvent.click(screen.getByRole('button', { name: /^Render$/ }));
@@ -59,7 +59,7 @@ describe('MusicVideo project video renderer', () => {
     await openProject(PROJECT_NO_CLIP);
     await openSettings('Project');
 
-    fireEvent.change(await screen.findByLabelText('Scene video renderer'), {
+    fireEvent.change(await screen.findByLabelText('Draft clip backend'), {
       target: { value: '' },
     });
 
@@ -181,7 +181,7 @@ describe('MusicVideo project video renderer', () => {
     await openProject(PROJECT_NO_CLIP);
     await openSettings('Project');
 
-    fireEvent.change(await screen.findByLabelText('Scene video renderer'), {
+    fireEvent.change(await screen.findByLabelText('Draft clip backend'), {
       target: { value: 'fal' },
     });
     await waitFor(() => expect(updateMusicVideoProject).toHaveBeenCalledWith(
@@ -345,7 +345,7 @@ describe('MusicVideo project video renderer', () => {
       await openProject(performanceProject({ backend: 'grok', grokDuration: 6 }));
       await openSettings('Project');
 
-      expect(await screen.findByRole('option', { name: 'Grok video (cutaway only)' })).toBeTruthy();
+      expect(await screen.findByRole('option', { name: 'Grok video (recommended for cutaways)' })).toBeTruthy();
       closeSettings();
       await openStage('produce');
       expect(await screen.findByText(/Grok video is cutaway-only/)).toBeTruthy();
