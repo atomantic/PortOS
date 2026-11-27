@@ -18,6 +18,8 @@
  * artifact and must not be read as dead.
  */
 
+import { isPidPossiblyAlive } from './processLiveness.js';
+
 export const RUNNER_LIVENESS_PID = 'pid';
 export const RUNNER_LIVENESS_PTY = 'pty';
 
@@ -61,18 +63,7 @@ export function runnerAgentLivenessFields(agent, stats) {
  * `pidIsAlive` is injected so callers reuse their existing probe; awaited so
  * both sync and async probes work.
  */
-const defaultPidIsAlive = (pid) => {
-  const n = Number.parseInt(pid, 10);
-  if (!Number.isInteger(n) || n <= 0) return false;
-  try {
-    process.kill(n, 0);
-    return true;
-  } catch (err) {
-    return err?.code === 'EPERM';
-  }
-};
-
-export async function runnerEntryShieldsRunningRecord(entry, pidIsAlive = defaultPidIsAlive) {
+export async function runnerEntryShieldsRunningRecord(entry, pidIsAlive = isPidPossiblyAlive) {
   if (!entry || typeof entry !== 'object') return false;
   if (entry.liveness === RUNNER_LIVENESS_PTY) {
     return entry.processActive === true;

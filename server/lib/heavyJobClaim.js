@@ -11,6 +11,7 @@
  * reclaimed on the next acquisition, so a crash cannot wedge local rendering.
  */
 
+import { isPidPossiblyAlive as isPidAlive } from './processLiveness.js';
 import { randomUUID } from 'crypto';
 import { link, mkdir, open, readFile, readdir, unlink } from 'fs/promises';
 import { constants, existsSync, readFileSync, realpathSync, unlinkSync } from 'fs';
@@ -50,15 +51,7 @@ const lockMutation = async claimPath => {
   }
 };
 
-export function isPidAlive(pid) {
-  if (!Number.isInteger(pid) || pid <= 0) return false;
-  try {
-    process.kill(pid, 0);
-    return true;
-  } catch (err) {
-    return err?.code === 'EPERM';
-  }
-}
+export { isPidAlive };
 
 const parseHolder = (raw) => {
   try {

@@ -15,6 +15,7 @@
  * harnesses publish no equivalent registry, so they are not detected here.
  */
 
+import { isPidPossiblyAlive } from '../lib/processLiveness.js';
 import { readdir, readFile, realpath } from 'node:fs/promises';
 import { homedir } from 'node:os';
 import { join, sep } from 'node:path';
@@ -31,17 +32,6 @@ const REFLOG_SCAN_LIMIT = 50;
 
 const defaultSessionsDir = () => join(homedir(), '.claude', 'sessions');
 
-// EPERM means the process exists under another user, so it is still alive.
-function isPidAlive(pid) {
-  if (!Number.isInteger(pid) || pid <= 0) return false;
-  try {
-    process.kill(pid, 0);
-    return true;
-  } catch (err) {
-    return err?.code === 'EPERM';
-  }
-}
-
 const resolveReal = (path) => realpath(path).catch(() => null);
 
 async function gitOut(args, dir) {
@@ -54,7 +44,7 @@ async function gitOut(args, dir) {
  * A cwd inside a linked worktree nested under the checkout (CoS worktrees live
  * under the PortOS root) belongs to that worktree, not this checkout.
  */
-async function listCheckoutSessions(dir, { sessionsDir = defaultSessionsDir(), pidAlive = isPidAlive } = {}) {
+async function listCheckoutSessions(dir, { sessionsDir = defaultSessionsDir(), pidAlive = isPidPossiblyAlive } = {}) {
   const root = await resolveReal(dir);
   if (!root) return [];
   const names = await readdir(sessionsDir).catch(() => []);

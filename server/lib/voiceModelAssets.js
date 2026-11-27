@@ -29,8 +29,8 @@
 // The scripts (setup-voice.sh / .ps1, via scripts/voice-asset.js) additionally
 // re-verify sha256 so a same-size replacement cannot keep a valid receipt.
 
-import { createHash } from 'crypto';
-import { createReadStream, existsSync, readFileSync, renameSync, statSync, writeFileSync, unlinkSync } from 'fs';
+import { sha256File } from './fileCore.js';
+import { existsSync, readFileSync, renameSync, statSync, writeFileSync, unlinkSync } from 'fs';
 import { basename, dirname, join, resolve } from 'path';
 
 export const VOICE_ASSET_RECEIPT_VERSION = 1;
@@ -121,14 +121,6 @@ export const isVoiceAssetUsable = (state) => state === 'verified' || state === '
  */
 export const isManagedVoiceAsset = (path, managedDir) => !!path && !!managedDir
   && resolve(dirname(path)) === resolve(managedDir);
-
-const sha256File = (path) => new Promise((resolveHash, reject) => {
-  const hash = createHash('sha256');
-  createReadStream(path)
-    .on('error', reject)
-    .on('data', (chunk) => hash.update(chunk))
-    .on('end', () => resolveHash(hash.digest('hex')));
-});
 
 /**
  * Full verification used by the setup scripts: everything inspectVoiceAsset

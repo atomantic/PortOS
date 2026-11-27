@@ -2,6 +2,7 @@
  * Keep immutable dispatches after completion: queue history retention is not an
  * idempotency boundary, and a failed run does not unpublish a release.
  */
+import { isPidConfirmedDead } from '../lib/processLiveness.js';
 import { isDeepStrictEqual } from 'node:util';
 import { createHash } from 'node:crypto';
 import { resolve } from 'node:path';
@@ -192,7 +193,7 @@ async function releaseOwnersIdle(entry, ignoreAgentId = null, observed = null) {
     for (const owner of owners) if (!await readWindowsAgentSettlement(owner).catch(() => null)) return false;
   } else if (process.platform !== 'win32') {
     for (const owner of owners.filter(value => Number.isSafeInteger(value.pid) && value.pid > 0)) {
-      try { process.kill(owner.pid, 0); return false; } catch (error) { if (error.code !== 'ESRCH') return false; }
+      if (!isPidConfirmedDead(owner.pid)) return false;
     }
   }
   return { owners, runnerAgents, safeOthers: observed?.safeOthers || safeOthers };

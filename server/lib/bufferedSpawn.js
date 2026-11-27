@@ -3,6 +3,7 @@
  * Process-tree helpers signal, escalate, or confirm Windows taskkill completion.
  */
 
+import { isPidConfirmedDead } from './processLiveness.js';
 import { spawn, ChildProcess } from './childProcess.js';
 import { resolveWindowsExecutable, prepareWindowsSafeSpawn, resolveCmdShimLaunch } from './aiToolkit/internal/windowsSafeSpawn.js';
 
@@ -64,8 +65,7 @@ function confirmTaskkill(child) {
       if (code != null) {
         // A nonzero exit can mean the target already went away. Access denial
         // and other probe errors leave its liveness unknown.
-        try { process.kill(pid, 0); }
-        catch (error) { if (error.code === 'ESRCH') return resolve(); }
+        if (isPidConfirmedDead(pid)) return resolve();
       }
       reject(new Error(`taskkill failed for PID ${pid} (${signal ?? `exit code ${code}`})`));
     });
