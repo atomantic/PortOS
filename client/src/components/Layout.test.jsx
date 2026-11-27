@@ -540,6 +540,9 @@ describe('Layout — persistent mobile touch targets', () => {
     expect(searchButtons).toHaveLength(2);
     searchButtons.forEach(expectAtLeast44px);
     expect(within(screen.getByRole('banner')).getByRole('button', { name: 'Open command palette' })).toBeInTheDocument();
+    const voiceCall = within(screen.getByRole('banner')).getByRole('link', { name: 'Open Voice Call' });
+    expectAtLeast44px(voiceCall);
+    expect(voiceCall).toHaveAttribute('href', '/voice/call');
     expect(screen.queryByRole('link', { name: 'Ambient display' })).not.toBeInTheDocument();
 
     const themeToggles = screen.getAllByRole('button', { name: 'Toggle day/night mode' });

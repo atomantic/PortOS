@@ -6,8 +6,9 @@ PortOS includes an optional voice assistant with support for fully local operati
 
 ## Browser call console
 
-Open **Voice Call** from the command palette or **Open call console** in the floating
-voice widget or Voice settings. The console uses the same microphone, agent, voice, tools, and
+Open **Voice Call** from the mobile top bar or command palette. On desktop,
+**Open call console** is also available in the floating widget and Voice
+settings. The console uses the same microphone, agent, voice, tools, and
 conversation as the widget; it does not start a second voice session. **Open mic**
 or **Talk** starts capture, and **End** stops the microphone and interrupts output
 without submitting an unfinished recording. Leaving the console also ends active

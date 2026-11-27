@@ -74,6 +74,13 @@ const ensureCtx = () => {
   return audioCtx;
 };
 
+// Call synchronously from the user's tap/submit so WebKit can start playback
+// before the asynchronous reply arrives. This never opens the microphone.
+export function prepareVoicePlayback() {
+  if (!window.AudioContext && !window.webkitAudioContext) return;
+  try { ensureCtx(); } catch { /* Native audio unavailable; don't block the typed turn. */ }
+}
+
 const cancelVoicePlayback = () => {
   playback.decodeGeneration += 1;
   if (playback.source) {

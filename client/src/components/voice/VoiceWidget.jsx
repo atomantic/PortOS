@@ -10,7 +10,7 @@ import {
   disposeCaptureOwner,
   onProactiveSpeech, captureScreenForVision, sendScreenshotResult,
   enableVisionCapture, disableVisionCapture, isVisionCaptureEnabled, onVisionCaptureEnded,
-  speakSynthesized, onVoiceOutputPrimary, claimVoiceOutput,
+  speakSynthesized, onVoiceOutputPrimary, claimVoiceOutput, prepareVoicePlayback,
 } from '../../services/voiceClient';
 import { resolveTurn, buildRouterSystemPrompt, TIER } from '../../services/voiceFastPath';
 import { warmNano } from '../../services/browserLlm';
@@ -762,6 +762,17 @@ export default function VoiceWidget({ config, claimHeld, consoleHost }) {
     (next === 'input' ? inputRef : fabRef).current?.focus();
   }, [expanded]);
 
+  const sendFromConsole = () => {
+    if (!draft.trim()) return;
+    prepareVoicePlayback();
+    handleSend();
+  };
+
+  const toggleConsoleMic = () => {
+    prepareVoicePlayback();
+    toggleCapture();
+  };
+
   const endCall = useCallback(() => {
     turnGenerationRef.current += 1;
     engageSeqRef.current += 1;
@@ -787,7 +798,7 @@ export default function VoiceWidget({ config, claimHeld, consoleHost }) {
     return createPortal(
       <VoiceCallConsole stage={stage} history={history} scrollRef={scrollRef} interimTranscript={interimTranscript}
         capturing={ACTIVE_STAGES.has(stage) || isWebSpeechCapturing()} handsFree={!useWebSpeech && handsFree}
-        canChangeMicMode={!useWebSpeech} draft={draft} onDraft={setDraft} onSend={handleSend} onMic={toggleCapture}
+        canChangeMicMode={!useWebSpeech} draft={draft} onDraft={setDraft} onSend={sendFromConsole} onMic={toggleConsoleMic}
         onMode={toggleHandsFree} onInterrupt={interrupt} onEnd={endCall}
         voiceLabel={tts?.voice || tts?.engine} />,
       consoleHost,

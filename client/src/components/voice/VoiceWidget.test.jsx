@@ -71,6 +71,7 @@ vi.mock('../../services/voiceClient', () => ({
   whenPlaybackDrained: vi.fn(() => Promise.resolve(true)),
   getVadLevel: vi.fn(() => 0),
   getVoiceOutputLevel: vi.fn(() => 0),
+  prepareVoicePlayback: vi.fn(),
   webSpeechSupported: true,
   startWebSpeechCapture: mocks.startWebSpeechCapture,
   stopWebSpeechCapture: mocks.stopWebSpeechCapture,
@@ -240,13 +241,16 @@ describe('Voice Call console', () => {
     const consoleView = await screen.findByRole('region', { name: 'PortOS call console' });
     const ui = within(consoleView);
     expect(voiceClientMock.startContinuous).not.toHaveBeenCalled();
+    expect(voiceClientMock.prepareVoicePlayback).not.toHaveBeenCalled();
     fireEvent.click(ui.getByRole('button', { name: 'Open mic' }));
+    expect(voiceClientMock.prepareVoicePlayback).toHaveBeenCalledTimes(1);
     expect(voiceClientMock.startContinuous).toHaveBeenCalledTimes(1);
     expect(ui.getByRole('status')).toHaveTextContent('Mic open');
 
     fireEvent.change(ui.getByRole('textbox'), { target: { value: 'Hello' } });
     fireEvent.click(ui.getByRole('button', { name: 'Send', exact: true }));
     expect(voiceClientMock.sendText).toHaveBeenCalledWith('Hello');
+    expect(voiceClientMock.prepareVoicePlayback).toHaveBeenCalledTimes(2);
     act(() => mocks.events.get('voice:llm:delta')?.({ delta: 'Hi back' }));
     expect(ui.getByRole('log')).toHaveTextContent('Hi back');
 

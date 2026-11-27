@@ -213,7 +213,7 @@ export function VoiceTab({ showCallLink = true } = {}) {
               <input type="checkbox" checked={!widgetHidden} onChange={(e) => toggleWidgetHidden(!e.target.checked)} className="w-4 h-4 mt-0.5 shrink-0" />
               <div className="flex flex-col sm:flex-row sm:flex-wrap sm:items-baseline gap-x-3 gap-y-0.5 min-w-0 flex-1">
                 <span className="text-sm text-white">Show floating voice widget</span>
-                <span className="text-xs text-gray-500">(per-browser preference — Safari on iPhone does not support the mic APIs this widget uses)</span>
+                <span className="text-xs text-gray-500">(per-browser preference; does not hide the Voice Call screen)</span>
               </div>
             </label>
 
