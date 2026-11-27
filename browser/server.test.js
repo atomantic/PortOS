@@ -12,7 +12,12 @@ const SERVER_MODULE_URL = new URL('./server.js', import.meta.url).href;
 const SERVER_PATH = fileURLToPath(SERVER_MODULE_URL);
 
 const LAUNCH_POLL_MS = 500;
-const PROFILE_ERROR = 'Chrome profile folder /tmp/portos-browser-profile-fixture is unavailable: folder unavailable';
+const PROFILE_ERROR = 'Chrome profile setup failed (headless=true, profile=configured, download=configured, code=EACCES)';
+const CONFIGURED_LOCATIONS = {
+  userDataDir: '/Users/example-user/ChromeProfile',
+  downloadDir: '/Users/example-user/DownloadsOverride',
+  chromePath: '/Users/example-user/bin/chrome',
+};
 const CDP_UP = { webSocketDebuggerUrl: 'ws://127.0.0.1/devtools/browser/fixture' };
 
 function fakeChild() {
@@ -133,7 +138,11 @@ describe('browser Chrome supervise loop', () => {
     current = null;
   });
 
-  function start({ checkCdp, mkdir, bindSignals = false }) {
+  function start({
+    checkCdp, mkdir, ensureDirectory, bindSignals = false,
+    config = { headless: true, ...CONFIGURED_LOCATIONS },
+    applyDownloadDirPreference = async () => false,
+  }) {
     const sleeper = createSleeper();
     const spawn = vi.fn(() => fakeChild());
     const sockets = [];
@@ -150,14 +159,10 @@ describe('browser Chrome supervise loop', () => {
       checkCdp,
       spawn,
       mkdir,
+      ensureDirectory,
       sleep: sleeper.sleep,
-      loadConfig: async () => ({
-        headless: true,
-        downloadDir: '/tmp/portos-browser-download-fixture',
-        userDataDir: '/tmp/portos-browser-profile-fixture',
-        chromePath: '/opt/example/chrome',
-      }),
-      applyDownloadDirPreference: async () => false,
+      loadConfig: async () => config,
+      applyDownloadDirPreference,
       platform: 'linux',
       healthPort: 0,
       WebSocket: FakeWebSocket,
@@ -195,7 +200,7 @@ describe('browser Chrome supervise loop', () => {
     releasePending(session.sleeper);
     expect(await waitForSleep(session.sleeper)).toBe(LAUNCH_POLL_MS);
     expect(session.spawn).toHaveBeenCalledTimes(1);
-    expect(session.spawn.mock.calls[0][0]).toBe('/opt/example/chrome');
+    expect(session.spawn.mock.calls[0][0]).toBe(CONFIGURED_LOCATIONS.chromePath);
     expect(session.spawn.mock.calls[0][2]).toMatchObject({ windowsHide: true });
     expect(logSpy).toHaveBeenCalledWith('🔁 Relaunching Chrome (attempt 1)');
 
@@ -220,7 +225,7 @@ describe('browser Chrome supervise loop', () => {
       ),
       mkdir: async () => {
         mkdirCalls += 1;
-        if (mkdirMode === 'fail') throw new Error('folder unavailable');
+        if (mkdirMode === 'fail') throw Object.assign(new Error(`mkdir ${CONFIGURED_LOCATIONS.userDataDir}`), { code: 'EACCES' });
       },
     });
     await session.supervisor.ready;
@@ -233,7 +238,7 @@ describe('browser Chrome supervise loop', () => {
       attempt: 1,
       lastError: PROFILE_ERROR,
     });
-    expect(errorSpy).toHaveBeenCalledWith(`❌ Chrome launch failed: ${PROFILE_ERROR}`);
+    expect(errorSpy).toHaveBeenCalledWith(`❌ ${PROFILE_ERROR}`);
     expect(session.spawn).not.toHaveBeenCalled();
 
     const waits = [2000];
@@ -274,16 +279,49 @@ describe('browser Chrome supervise loop', () => {
     const session = start({
       checkCdp: async () => (session.spawn.mock.calls.length > 0 ? CDP_UP : null),
       mkdir: async (path) => {
-        if (path.includes('download')) throw new Error('drive not connected');
+        if (path === CONFIGURED_LOCATIONS.downloadDir) throw new Error('drive not connected');
       },
     });
     await session.supervisor.ready;
     expect(await advanceToSuperviseSleep(session.sleeper)).toBe(2000);
     expect(session.spawn).toHaveBeenCalledTimes(1);
-    expect(logSpy).toHaveBeenCalledWith(expect.stringContaining('Download folder /tmp/portos-browser-download-fixture is unavailable'));
+    expect(logSpy).toHaveBeenCalledWith(expect.stringContaining('Chrome download folder setup failed (download=configured, code=UNKNOWN)'));
     const port = session.supervisor.healthServer.address().port;
     expect(await readHealth(port)).toMatchObject({ statusCode: 200, body: { status: 'healthy', lastError: null } });
     expect(session.loopError).toBeNull();
+  });
+
+  it.each([
+    ['configured', { headless: true, ...CONFIGURED_LOCATIONS }],
+    ['default', { headless: false }],
+  ])('keeps %s Chrome locations out of startup and profile failure diagnostics', async (source, config) => {
+    const ensureDirectory = vi.fn(async (path) => {
+      if (ensureDirectory.mock.calls.length === 1) {
+        throw Object.assign(new Error(`mkdir ${path}`), { code: 'EACCES' });
+      }
+    });
+    const session = start({
+      config,
+      checkCdp: async () => (session.spawn.mock.calls.length > 0 ? CDP_UP : null),
+      ensureDirectory,
+      applyDownloadDirPreference: async () => true,
+    });
+    await session.supervisor.ready;
+    const port = session.supervisor.healthServer.address().port;
+    await advanceToSuperviseSleep(session.sleeper);
+    const health = await readHealth(port);
+    expect(health.statusCode).toBe(503);
+    const settings = `headless=${config.headless}, profile=${source}, download=${source}`;
+    expect(health.body.lastError).toBe(`Chrome profile setup failed (${settings}, code=EACCES)`);
+    expect(errorSpy).toHaveBeenCalledWith(`❌ ${health.body.lastError}`);
+
+    releasePending(session.sleeper);
+    await advanceToSuperviseSleep(session.sleeper);
+    expect(logSpy).toHaveBeenCalledWith(expect.stringContaining(`Launching Chrome (${settings})`));
+    expect(logSpy).toHaveBeenCalledWith(`📥 Chrome download preference set (download=${source})`);
+    const logs = [logSpy, errorSpy, warnSpy].flatMap(spy => spy.mock.calls.flat()).join('\n');
+    const paths = [...ensureDirectory.mock.calls.map(([path]) => path), session.spawn.mock.calls[0][0]];
+    for (const path of paths) expect(logs).not.toContain(path);
   });
 
   it('stops a still-running Chrome before the next launch attempt', async () => {
@@ -311,7 +349,7 @@ describe('browser Chrome supervise loop', () => {
     const session = start({
       bindSignals: true,
       checkCdp: async () => null,
-      mkdir: async () => { throw new Error('folder unavailable'); },
+      mkdir: async () => { throw Object.assign(new Error(`mkdir ${CONFIGURED_LOCATIONS.userDataDir}`), { code: 'EACCES' }); },
     });
     await session.supervisor.ready;
     const port = session.supervisor.healthServer.address().port;
