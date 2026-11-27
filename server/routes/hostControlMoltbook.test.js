@@ -254,6 +254,10 @@ describe('Moltbook publication behind the default-deny gate (#16114)', () => {
     for (const path of ['/schedules/example-schedule', '/personalities/example-agent']) {
       expect((await call(app, ['delete', path, {}])).status).toBe(200);
     }
+    const [agentsFile, schedulesFile] = await savedState();
+    expect(Object.keys(JSON.parse(agentsFile).agents)).toEqual(['other-agent']);
+    expect(JSON.parse(schedulesFile).schedules).toEqual({});
+
     for (const fn of [effects.createPost, effects.createComment, effects.replyToComment, effects.upvote, effects.upvoteComment]) {
       expect(fn).not.toHaveBeenCalled();
     }

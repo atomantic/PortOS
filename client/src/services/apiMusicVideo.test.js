@@ -1,7 +1,7 @@
 // @vitest-environment node
 import { expect, it, vi } from 'vitest';
 import { request } from './apiCore.js';
-import { markMusicVideoPoolAssets, selectMusicVideoSceneTake } from './apiMusicVideo.js';
+import { buildMusicVideoPublishKit, markMusicVideoPoolAssets, selectMusicVideoSceneTake } from './apiMusicVideo.js';
 
 vi.mock('./apiCore.js', () => ({ request: vi.fn() }));
 
@@ -15,4 +15,13 @@ it('serializes conditional Undo guards while preserving unguarded take calls', a
   expect(request.mock.calls[1][1]).not.toHaveProperty('expectedSelectedAssetId');
   await selectMusicVideoSceneTake('video', 'scene', 'take', { silent: true });
   expect(request.mock.calls[2][1]).not.toHaveProperty('body');
+});
+
+it('serializes vertical frame options in buildMusicVideoPublishKit body', async () => {
+  request.mockClear();
+  const vertical = { mode: 'framed', span: 'full', theme: 'cinema-matte', title: 'Example', showLyrics: true };
+  await buildMusicVideoPublishKit('mv-1', { loudnessPreset: 'as-mixed', vertical, silent: true });
+  expect(request).toHaveBeenCalledWith('/music-video/mv-1/publish-kit/build', expect.objectContaining({ method: 'POST', silent: true }));
+  expect(JSON.parse(request.mock.calls[0][1].body)).toEqual({ loudnessPreset: 'as-mixed', vertical });
+  expect(request.mock.calls[0][1]).not.toHaveProperty('vertical');
 });
