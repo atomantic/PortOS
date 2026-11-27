@@ -128,7 +128,7 @@ describe('SpotifyTab failure rendering', () => {
     expect(screen.queryByText(/Sync failed/)).toBeNull();
   });
 
-  it('shows server error toast instead of generic connect message when tokens exist on sync now failure', async () => {
+  it('shows the server error and reconnect action when sync now fails', async () => {
     api.getSpotifyStatus.mockResolvedValue({
       state: { cursorAfter: 1234 },
       auth: { hasTokens: true, hasCredentials: true },
@@ -138,15 +138,15 @@ describe('SpotifyTab failure rendering', () => {
 
     await screen.findByRole('button', { name: /Sync now/i });
 
-    api.syncSpotify.mockResolvedValue({
-      ok: false,
-      needsAuth: true,
-      error: 'Spotify rejected the saved authorization — reconnect Spotify.',
-    });
+    api.syncSpotify.mockRejectedValueOnce(Object.assign(
+      new Error('Spotify rejected the saved authorization — reconnect Spotify.'),
+      { code: 'SPOTIFY_SYNC_FAILED', status: 409, context: { needsAuth: true } },
+    ));
 
     fireEvent.click(screen.getByRole('button', { name: /Sync now/i }));
 
     await screen.findByText('Spotify rejected the saved authorization — reconnect Spotify.');
+    expect(screen.getByRole('button', { name: /Reconnect Spotify/ })).toBeInTheDocument();
     expect(toast.error).toHaveBeenCalledWith('Spotify rejected the saved authorization — reconnect Spotify.');
   });
 });
@@ -160,6 +160,22 @@ describe('SpotifyTab load errors and disconnect (#17971)', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Retry' }));
     expect(await screen.findByText(/grant playlist access to build/)).toBeTruthy();
     expect(screen.queryByText(/Could not load Spotify playlists/)).toBeNull();
+  });
+
+  it('surfaces playlist sync errors and keeps the loaded snapshot', async () => {
+    api.getSpotifyStatus.mockResolvedValue({ state: {}, auth: { hasTokens: true, scope: 'playlist-read-private' } });
+    api.getSpotifyPlaylists.mockResolvedValue({ snapshot: { playlists: [{ id: 'p1', name: 'Saved mix', tracks: [] }] } });
+    const error = 'Could not read the stored Spotify playlist snapshot';
+    api.syncSpotifyPlaylists.mockRejectedValueOnce(Object.assign(new Error(error), {
+      code: 'SPOTIFY_PLAYLIST_SYNC_FAILED', status: 500, context: { status: 'snapshot-unreadable' },
+    }));
+    render(<MemoryRouter><SpotifyTab /></MemoryRouter>);
+    expect(await screen.findByText('Saved mix')).toBeInTheDocument();
+    await act(async () => { fireEvent.click(screen.getByRole('button', { name: 'Sync playlists' })); });
+
+    expect(toast.error).toHaveBeenCalledWith(error);
+    expect(screen.getByText('Saved mix')).toBeInTheDocument();
+    expect(api.getSpotifyPlaylists).toHaveBeenCalledTimes(1);
   });
 
   it('requires confirmation before clearing Spotify auth', async () => {

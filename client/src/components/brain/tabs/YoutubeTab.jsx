@@ -18,6 +18,17 @@ import {
 
 const NEEDS_OPERATOR_NOTE = 'Setup check needs an operator session, or a local connection when no password is set.';
 
+function syncFailureReport(error, fallback) {
+  const { status, needsAuth, remediation } = error?.context || {};
+  return { ok: false, error: error?.message || fallback, status, needsAuth, remediation };
+}
+
+function syncFailureMessage(result, fallback) {
+  return result?.remediation
+    || (result?.needsAuth ? 'Log into YouTube in the managed browser first' : result?.error)
+    || fallback;
+}
+
 // Brain → YouTube (#2153). Opt-in, machine-local ingestion of YouTube watch
 // history into the activity timeline. OFF by default — the YouTube watch-history
 // API is gone, so this scrapes the signed-in history page in the managed browser.
@@ -75,28 +86,27 @@ export function YoutubeTab() {
 
   const handleSyncNow = async () => {
     setSyncing(true);
-    const result = await syncYoutube({ silent: true }).catch(() => ({ ok: false, error: 'Sync failed' }));
+    const result = await syncYoutube({ silent: true }).catch((error) => syncFailureReport(error, 'Sync failed'));
     setSyncing(false);
     if (result?.ok) {
       toast.success(`Scraped ${result.scanned} entr${result.scanned === 1 ? 'y' : 'ies'} — ${result.recorded} new watch(es)`);
       setStatus((prev) => ({ ...(prev || {}), state: { ...(prev?.state || {}), lastResult: result, lastRunAt: new Date().toISOString() } }));
     } else {
-      toast.error(result?.needsAuth ? 'Log into YouTube in the managed browser first' : (result?.error || 'Sync failed'));
+      toast.error(syncFailureMessage(result, 'Sync failed'));
+      setStatus((prev) => ({ ...(prev || {}), state: { ...(prev?.state || {}), lastResult: result } }));
     }
   };
 
   const handleSyncPlaylists = async () => {
     setPlaylistsSyncing(true);
-    const result = await syncYoutubePlaylists({ silent: true }).catch(() => ({ ok: false, error: 'Playlist sync failed' }));
+    const result = await syncYoutubePlaylists({ silent: true }).catch((error) => syncFailureReport(error, 'Playlist sync failed'));
     setPlaylistsSyncing(false);
-    if (!result?.ok && result?.error) {
-      toast.error(result.error);
-    } else if (result?.playlistCount !== undefined) {
+    if (result?.playlistCount !== undefined && !result.error) {
       await loadPlaylists();
       if (result.ok) toast.success(`Synced ${result.playlistCount} playlist(s) and ${result.videoCount} video(s)`);
       else toast.error(`Playlist sync completed with ${result.failed || 0} warning(s)`);
     } else {
-      toast.error(result?.needsAuth ? 'Log into YouTube in the managed browser first' : (result?.error || 'Playlist sync failed'));
+      toast.error(syncFailureMessage(result, 'Playlist sync failed'));
     }
   };
 

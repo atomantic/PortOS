@@ -6,6 +6,7 @@ import { errorMiddleware } from '../lib/errorHandler.js';
 const mocks = vi.hoisted(() => ({
   getRedirectUri: vi.fn(({ origin } = {}) => `${origin || 'http://localhost:5555'}/api/spotify/oauth/callback`),
   getStatus: vi.fn(async () => ({ auth: {} })),
+  runSync: vi.fn(async () => ({ ok: true, recorded: 1 })),
   getAuthUrl: vi.fn(async () => ({ url: 'https://accounts.spotify.com/authorize' })),
   saveCredentials: vi.fn(async (_data, options) => ({ redirectUri: mocks.getRedirectUri(options) })),
   handleCallback: vi.fn(async () => ({ success: true })),
@@ -25,7 +26,7 @@ vi.mock('../services/spotifyAuth.js', () => ({
 
 vi.mock('../services/spotifySync.js', () => ({
   getStatus: (...args) => mocks.getStatus(...args),
-  runSync: vi.fn(),
+  runSync: (...args) => mocks.runSync(...args),
 }));
 
 vi.mock('../services/spotifyPlaylists.js', () => ({
@@ -110,5 +111,42 @@ describe('Spotify routes', () => {
     expect(sync.status).toBe(200);
     expect(sync.body).toMatchObject({ ok: true, playlistCount: 1, trackCount: 2 });
     expect(mocks.syncSpotifyPlaylists).toHaveBeenCalledTimes(1);
+  });
+
+  it.each([
+    [409, { needsAuth: true }, { needsAuth: true }],
+    [502, { status: 429 }, { needsAuth: false, status: 429 }],
+    [500, { status: 'persist-failed' }, { needsAuth: false, status: 'persist-failed' }],
+  ])('returns an HTTP %i envelope for an unsuccessful history sync', async (status, report, context) => {
+    mocks.runSync.mockResolvedValueOnce({ ok: false, error: 'Spotify sync failed', ...report });
+
+    const res = await request(makeApp()).post('/api/spotify/sync');
+
+    expect(res.status).toBe(status);
+    expect(res.body).toMatchObject({ code: 'SPOTIFY_SYNC_FAILED', error: 'Spotify sync failed', context });
+  });
+
+  it.each([
+    [409, { needsAuth: true }, { needsAuth: true }],
+    [502, {}, { needsAuth: false }],
+    [502, { status: 'list-empty', playlistCount: 1 }, { needsAuth: false, status: 'list-empty' }],
+    [500, { status: 'snapshot-unreadable' }, { needsAuth: false, status: 'snapshot-unreadable' }],
+  ])('returns an HTTP %i envelope when playlist sync could not save a snapshot', async (status, report, context) => {
+    mocks.syncSpotifyPlaylists.mockResolvedValueOnce({ ok: false, error: 'Spotify playlists failed', ...report });
+
+    const res = await request(makeApp()).post('/api/spotify/playlists/sync');
+
+    expect(res.status).toBe(status);
+    expect(res.body).toMatchObject({ code: 'SPOTIFY_PLAYLIST_SYNC_FAILED', error: 'Spotify playlists failed', context });
+  });
+
+  it('returns a saved playlist snapshot with warnings as HTTP 200', async () => {
+    const report = { ok: false, playlistCount: 2, trackCount: 4, warnings: ['One playlist failed'], failed: 1 };
+    mocks.syncSpotifyPlaylists.mockResolvedValueOnce(report);
+
+    const res = await request(makeApp()).post('/api/spotify/playlists/sync');
+
+    expect(res.status).toBe(200);
+    expect(res.body).toEqual(report);
   });
 });

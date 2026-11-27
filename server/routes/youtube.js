@@ -3,6 +3,7 @@ import { Router } from 'express';
 import { asyncHandler } from '../lib/errorHandler.js';
 import * as youtubeSync from '../services/youtubeSync.js';
 import * as youtubePlaylists from '../services/youtubePlaylists.js';
+import { requireSyncResult } from './mediaSyncResult.js';
 
 const router = Router();
 
@@ -31,14 +32,15 @@ router.get('/playlists', asyncHandler(async (_req, res) => {
 // Explicit user action — scrape playlists and their video rows in the managed
 // browser. Downloading a video remains a separate, explicit downloader action.
 router.post('/playlists/sync', asyncHandler(async (_req, res) => {
-  res.json(await youtubePlaylists.syncYoutubePlaylists());
+  const result = await youtubePlaylists.syncYoutubePlaylists();
+  // The service returns warnings only after writing the playlist snapshot.
+  res.json(result.warnings?.length ? result : requireSyncResult(result, 'YOUTUBE_PLAYLIST_SYNC_FAILED'));
 }));
 
-// Run one scrape pass now (explicit user action). Returns the pass summary, or a
-// status report when the browser isn't running / is signed out.
+// Run one scrape pass now (explicit user action).
 router.post('/sync', asyncHandler(async (req, res) => {
   const result = await youtubeSync.runSync();
-  res.json(result);
+  res.json(requireSyncResult(result, 'YOUTUBE_SYNC_FAILED'));
 }));
 
 export default router;

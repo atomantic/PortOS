@@ -143,6 +143,15 @@ describe('POST /api/instances/peers/:id/reciprocate', () => {
     expect(res.body).toMatchObject({ code, context: { reason } });
   });
 
+  it.each([undefined, null])('returns HTTP 502 for an absent result (%s)', async (result) => {
+    instances.enqueueReciprocalSync.mockResolvedValueOnce(result);
+
+    const res = await request(buildApp()).post('/api/instances/peers/peer-1/reciprocate');
+
+    expect(res.status).toBe(502);
+    expect(res.body).toMatchObject({ code: 'PEER_RECIPROCATE_FAILED', context: { reason: 'no-result' } });
+  });
+
   it('passes successful reciprocation through as 200 JSON', async () => {
     instances.enqueueReciprocalSync.mockResolvedValueOnce({ ok: true });
 
