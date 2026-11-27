@@ -1,6 +1,6 @@
 import { describe, it, expect, vi } from 'vitest';
 import {
-  render, screen, act, fireEvent, cleanup, waitFor,
+  render, screen, act, fireEvent, cleanup, waitFor, within,
 } from '@testing-library/react';
 import { MemoryRouter } from 'react-router';
 
@@ -20,7 +20,7 @@ vi.mock('../../services/apiSprites.js', () => ({
 
 import WalkWorkflow from './WalkWorkflow';
 import {
-  postprocessSpriteWalk, reopenSpriteWalk, setSpriteWalkTarget, unlockSpriteWalk,
+  approveSpriteWalk, postprocessSpriteWalk, reopenSpriteWalk, setSpriteWalkTarget, unlockSpriteWalk,
 } from '../../services/apiSprites.js';
 
 const CELL_PX = 96;
@@ -613,7 +613,28 @@ describe('WalkWorkflow cycle-target drift', () => {
   });
 });
 
-describe('WalkWorkflow reprocess + reopen', () => {
+describe('WalkWorkflow candidate and reopen actions', () => {
+  it('approves the candidate for this direction only after inline confirmation', async () => {
+    const onChanged = vi.fn();
+    renderRun({ id: 'run-east', direction: 'east', status: 'candidate' }, { onChanged });
+
+    fireEvent.click(screen.getByRole('button', { name: 'Approve' }));
+    const confirmation = screen.getByRole('group', { name: 'Confirm approve east' });
+    fireEvent.click(within(confirmation).getByRole('button', { name: 'Cancel' }));
+    expect(approveSpriteWalk).not.toHaveBeenCalled();
+    expect(screen.queryByRole('group', { name: 'Confirm approve east' })).toBeNull();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Approve' }));
+    await act(async () => {
+      const group = screen.getByRole('group', { name: 'Confirm approve east' });
+      fireEvent.click(within(group).getByRole('button', { name: 'Approve' }));
+    });
+    expect(approveSpriteWalk).toHaveBeenCalledExactlyOnceWith(
+      'example-walker', { direction: 'east', runId: 'run-east' }, { silent: true },
+    );
+    expect(onChanged).toHaveBeenCalledOnce();
+  });
+
   it('reprocesses a candidate from its on-disk clip, letting the server apply the set target', async () => {
     renderRun({
       id: 'walk-east-abc12345', direction: 'east', status: 'candidate',
