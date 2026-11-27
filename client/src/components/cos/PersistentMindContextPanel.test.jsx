@@ -2,10 +2,9 @@ import { beforeEach, expect, it, vi } from 'vitest';
 import { act, render, screen, waitFor } from '@testing-library/react';
 import { MemoryRouter } from 'react-router';
 import PersistentMindContextPanel from './PersistentMindContextPanel';
-import { getPersistentMindContext, getPersistentMindReflection } from '../../services/apiAgents.js';
+import { getPersistentMindReflection } from '../../services/apiAgents.js';
 
 vi.mock('../../services/apiAgents.js', () => ({
-  getPersistentMindContext: vi.fn(),
   getPersistentMindReflection: vi.fn(),
 }));
 vi.mock('./PersistentMindMaintainerControls', () => ({ default: () => null }));
@@ -15,6 +14,9 @@ const handlers = new Map();
 const emitServer = (event, payload) => handlers.get(event)?.forEach(handler => handler(payload));
 const source = { id: 'example-source', version: 3, content: '  Exact source wording.  ', status: 'active', protection: 'standard' };
 
+const renderContext = (data = { memories: [], prompt: {}, preview: {} }) =>
+  render(<MemoryRouter><PersistentMindContextPanel context={{ data }} /></MemoryRouter>);
+
 beforeEach(() => {
   vi.clearAllMocks();
   handlers.clear();
@@ -23,12 +25,11 @@ beforeEach(() => {
     handlers.get(event).add(handler);
   });
   socket.off.mockImplementation((event, handler) => handlers.get(event)?.delete(handler));
-  getPersistentMindContext.mockResolvedValue({ memories: [], prompt: {}, preview: {} });
   getPersistentMindReflection.mockResolvedValue({ state: 'pending', source, inspected: null });
 });
 
 it('shows inspect-only pending prose, then its real provenance and lesson after a persisted memory review', async () => {
-  const { unmount } = render(<MemoryRouter><PersistentMindContextPanel view="context" /></MemoryRouter>);
+  const { unmount } = renderContext();
   expect(await screen.findByText('Pending · optional', { exact: false })).toBeInTheDocument();
   expect(screen.getByText('Exact source wording.').textContent).toBe(source.content);
   expect(screen.getByRole('link', { name: 'Source memory' })).toHaveAttribute('href', '/cos/memory/example-source');
@@ -57,7 +58,7 @@ it('shows inspect-only pending prose, then its real provenance and lesson after 
 
 it('distinguishes a store failure from an honest empty reflection', async () => {
   getPersistentMindReflection.mockResolvedValue({ state: 'unavailable', source: null });
-  render(<MemoryRouter><PersistentMindContextPanel view="context" /></MemoryRouter>);
+  renderContext();
   expect(await screen.findByText('Reflection unavailable')).toBeInTheDocument();
   expect(screen.queryByText('No eligible memory awaiting reflection.')).not.toBeInTheDocument();
   getPersistentMindReflection.mockResolvedValue({ state: 'empty', source: null });
@@ -67,11 +68,10 @@ it('distinguishes a store failure from an honest empty reflection', async () => 
 
 it('shows the mind-authored continuation note read-only with factual provenance', async () => {
   getPersistentMindReflection.mockResolvedValue({ state: 'empty', source: null });
-  getPersistentMindContext.mockResolvedValue({ memories: [], prompt: {}, preview: { continuationNote: {
+  renderContext({ memories: [], prompt: {}, preview: { continuationNote: {
     state: 'omitted-budget', memoryId: 'note-1', version: 2, content: 'Next: read the reply.', updatedAt: '2026-01-02T00:00:00.000Z',
     provenance: { turnId: 'turn-7', providerId: 'provider-b', model: 'model-b', at: '2026-01-02T00:00:00.000Z' },
   } } });
-  render(<MemoryRouter><PersistentMindContextPanel view="context" /></MemoryRouter>);
   const note = (await screen.findByRole('heading', { name: 'Continuation note' })).closest('section');
   expect(note).toHaveTextContent('Next: read the reply.');
   expect(note).toHaveTextContent('provider-b / model-b');
@@ -82,18 +82,17 @@ it('shows the mind-authored continuation note read-only with factual provenance'
 
 it('does not attribute an unattested note to the mind', async () => {
   getPersistentMindReflection.mockResolvedValue({ state: 'empty', source: null });
-  getPersistentMindContext.mockResolvedValue({ memories: [], prompt: {}, preview: { continuationNote: {
+  renderContext({ memories: [], prompt: {}, preview: { continuationNote: {
     state: 'included', memoryId: 'note-1', version: 1, content: 'Legacy text', updatedAt: null, provenance: null,
   } } });
-  render(<MemoryRouter><PersistentMindContextPanel view="context" /></MemoryRouter>);
   const note = (await screen.findByRole('heading', { name: 'Continuation note' })).closest('section');
   expect(note).toHaveTextContent('Author unknown');
   expect(note).not.toHaveTextContent('Written by the mind');
 });
 
-it('renders the context window breakdown bar, provenance badges and pin notice without polling', async () => {
+it('renders the context window breakdown bar, provenance badges and pin notice', async () => {
   getPersistentMindReflection.mockResolvedValue({ state: 'empty', source: null });
-  getPersistentMindContext.mockResolvedValue({
+  renderContext({
     memories: [], prompt: {}, preview: {},
     breakdown: {
       contextUsed: 9000, contextMax: 10000, contextPercent: 92, highOccupancy: true,
@@ -106,18 +105,16 @@ it('renders the context window breakdown bar, provenance badges and pin notice w
       ],
     },
   });
-  render(<MemoryRouter><PersistentMindContextPanel view="context" /></MemoryRouter>);
   expect(await screen.findByText('Estimated')).toBeInTheDocument();
   expect(screen.getByText('Pinned window')).toBeInTheDocument();
   expect(screen.getByText(/differs from the model's advertised window/)).toBeInTheDocument();
   expect(screen.getByText('Context window nearly full')).toBeInTheDocument();
   expect(screen.getAllByText('Tool definitions').length).toBeGreaterThan(0);
   expect(screen.getByText(/recipes \(2 tools\)/)).toBeInTheDocument();
-  expect(getPersistentMindContext).toHaveBeenCalledTimes(1);
 });
 
 it('reconciles reflection on memory and config changes, reconnect and reshow', async () => {
-  const { unmount } = render(<MemoryRouter><PersistentMindContextPanel view="context" /></MemoryRouter>);
+  const { unmount } = renderContext();
   await screen.findByText('Pending · optional', { exact: false });
   expect(getPersistentMindReflection).toHaveBeenCalledTimes(1);
 

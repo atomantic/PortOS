@@ -22,6 +22,7 @@ const api = vi.hoisted(() => ({
   getProviders: vi.fn(),
   updateCosConfig: vi.fn(),
   getPersistentMindContext: vi.fn(),
+  getPersistentMindReflection: vi.fn(),
   getPersistentMindMaintainer: vi.fn().mockResolvedValue({
     role: { schemaVersion: 1, enabled: false, appIds: [], intervalMinutes: 60 },
     apps: [], availableApps: [], prerequisites: [], instructions: '',
@@ -38,10 +39,13 @@ const api = vi.hoisted(() => ({
 const socket = vi.hoisted(() => {
   const handlers = new Map();
   return {
-    on: vi.fn((event, handler) => handlers.set(event, handler)),
-    off: vi.fn((event) => handlers.delete(event)),
+    on: vi.fn((event, handler) => {
+      if (!handlers.has(event)) handlers.set(event, new Set());
+      handlers.get(event).add(handler);
+    }),
+    off: vi.fn((event, handler) => handlers.get(event)?.delete(handler)),
     emit: vi.fn(),
-    emitServer: (event, data) => handlers.get(event)?.(data),
+    emitServer: (event, data) => handlers.get(event)?.forEach(handler => handler(data)),
     reset: () => handlers.clear(),
   };
 });
@@ -65,6 +69,7 @@ vi.mock('../../../services/apiAgents.js', () => ({
   promotePersistentMindEvent: api.promotePersistentMindEvent,
   updateCosConfig: api.updateCosConfig,
   getPersistentMindContext: api.getPersistentMindContext,
+  getPersistentMindReflection: api.getPersistentMindReflection,
   getPersistentMindMaintainer: api.getPersistentMindMaintainer,
   getPersistentMindTools: api.getPersistentMindTools,
   getMindRecipes: api.getMindRecipes,
@@ -77,6 +82,7 @@ vi.mock('../../../services/apiAgents.js', () => ({
 vi.mock('../../../services/apiProviders.js', () => ({ getProviders: api.getProviders }));
 vi.mock('../../../services/apiLocalLlm', () => localLlm);
 vi.mock('../../../hooks/useSocket', () => ({ useSocket: () => socket }));
+vi.mock('../../../services/socket', () => ({ default: socket }));
 
 import MindTab from './MindTab';
 
@@ -234,6 +240,7 @@ describe('MindTab', () => {
     api.updateCosConfig.mockResolvedValue({ success: true });
     localLlm.getLocalLlmStatus.mockResolvedValue({ ollama: { models: [] }, lmstudio: { models: [] } });
     localLlm.getToolUseModels.mockResolvedValue({ models: [] });
+    api.getPersistentMindReflection.mockResolvedValue({ state: 'empty' });
     api.getPersistentMindContext.mockResolvedValue({
       prompt: { schemaVersion: 1, identity: 'Resident mind', instructions: 'Stay grounded.' },
       preview: { text: '# Effective context', chars: 19, approximateTokens: 5, summaryState: 'empty' },
@@ -448,6 +455,26 @@ describe('MindTab', () => {
     await user.click(screen.getByRole('button', { name: 'Draft repair request' }));
     expect(screen.getByPlaceholderText('Message Persistent Mind').value).toContain('app ID: example-app');
     expect(api.sendPersistentMindMessage).not.toHaveBeenCalled();
+  });
+
+  it('enables the saved AI profile without starting a wake', async () => {
+    const user = userEvent.setup();
+    api.getPersistentMind.mockResolvedValue(response({
+      state: { enabled: false, started: false, status: 'idle' },
+      profile: { enabled: false },
+    }));
+    renderTab('/cos/mind?panel=settings');
+
+    const toggle = await findEnabledByRole('checkbox', { name: 'Enable persistent mind profile' });
+    expect(toggle).not.toBeChecked();
+    await user.click(toggle);
+
+    expect(api.updateCosConfig).toHaveBeenCalledWith(
+      { persistentMindProfile: expect.objectContaining({ enabled: true, thinkingInterface: 'text' }) },
+      { silent: true },
+    );
+    expect(api.startPersistentMind).not.toHaveBeenCalled();
+    expect(api.wakePersistentMind).not.toHaveBeenCalled();
   });
 
   it('puts the AI profile controls before start and starts only after the profile save finishes', async () => {
@@ -958,7 +985,7 @@ describe('MindTab', () => {
     expect(await screen.findByRole('heading', { name: 'Identity and operating prompt' })).toBeInTheDocument();
     expect(screen.getByLabelText('Identity')).toHaveValue('Resident mind');
     expect(screen.getByText('# Effective context')).toBeInTheDocument();
-    expect(api.getPersistentMindContext).toHaveBeenCalledWith({ silent: true });
+    expect(api.getPersistentMindContext).toHaveBeenCalledWith(expect.objectContaining({ silent: true }));
   });
 
   it('keeps conversation central while exposing created and accessible memories', async () => {
@@ -975,6 +1002,55 @@ describe('MindTab', () => {
     expect(screen.getByRole('tab', { name: 'Memories' })).toHaveAttribute('aria-selected', 'true');
     expect(await screen.findByRole('heading', { name: 'Curated memories' })).toBeInTheDocument();
     expect(screen.getByText('Delivery preference')).toBeInTheDocument();
+  });
+
+  it('shares one context read across Context and Memories and mounts reflection only in Context', async () => {
+    const user = userEvent.setup();
+    renderTab('/cos/mind?panel=context');
+
+    expect(await screen.findByRole('heading', { name: 'Memory reflection' })).toBeInTheDocument();
+    expect(api.getPersistentMindContext).toHaveBeenCalledTimes(1);
+    expect(api.getPersistentMindReflection).toHaveBeenCalledTimes(1);
+
+    await user.click(screen.getByRole('tab', { name: 'Memories' }));
+    expect(await screen.findByRole('heading', { name: 'Curated memories' })).toBeInTheDocument();
+    expect(document.querySelector('#mind-reflection-heading')).toBeNull();
+    expect(api.getPersistentMindContext).toHaveBeenCalledTimes(1);
+    expect(api.getPersistentMindReflection).toHaveBeenCalledTimes(1);
+
+    await user.click(screen.getByRole('tab', { name: 'Context' }));
+    expect(await screen.findByRole('heading', { name: 'Memory reflection' })).toBeInTheDocument();
+    expect(document.querySelectorAll('#mind-reflection-heading')).toHaveLength(1);
+    expect(api.getPersistentMindContext).toHaveBeenCalledTimes(1);
+  });
+
+  it.each(['version', 'updatedAt'])('loads saved and socket revisions keyed by %s into an open memory editor', async (revisionField) => {
+    const user = userEvent.setup();
+    const revision = (value) => revisionField === 'version' ? value : `2026-01-0${value}T00:00:00.000Z`;
+    const memory = {
+      id: 'example-memory', [revisionField]: revision(1), content: 'Initial content.', summary: 'Example record',
+      type: 'fact', category: 'other', tags: [], importance: 0.5,
+    };
+    let current = memory;
+    api.getPersistentMindContext.mockImplementation(async () => ({ memories: [current], preview: {} }));
+    api.updatePersistentMindMemory.mockImplementation(async () => {
+      current = { ...memory, [revisionField]: revision(2), content: 'Canonical saved content.' };
+      return { success: true, memory: current };
+    });
+    renderTab('/cos/mind?panel=memories');
+
+    await user.click(await screen.findByText('Example record'));
+    const editor = screen.getByText('Example record').closest('details');
+    const content = () => within(editor).getByLabelText('Content');
+    await user.type(content(), ' Local edit.');
+    await user.click(within(editor).getByRole('button', { name: 'Save memory' }));
+    await waitFor(() => expect(content()).toHaveValue('Canonical saved content.'));
+    expect(editor.open).toBe(true);
+
+    current = { ...current, [revisionField]: revision(3), content: 'Newer revision.' };
+    await act(async () => socket.emitServer('cos:memory:updated', { id: memory.id }));
+    expect(content()).toHaveValue('Newer revision.');
+    expect(editor.open).toBe(true);
   });
 
   it('lets the user protect a memory and makes bulk cleanup retention explicit', async () => {
@@ -1024,7 +1100,7 @@ describe('MindTab', () => {
     expect(memory.protection).toBe('important');
   });
 
-  it('retains unsaved context drafts across panels and allows dismissal when idle', async () => {
+  it('resets unsaved context drafts across panels and allows dismissal when idle', async () => {
     const user = userEvent.setup();
     renderTab('/cos/mind?panel=context');
 
@@ -1045,7 +1121,7 @@ describe('MindTab', () => {
     api.getPersistentMindContext.mockImplementation(() => Promise.resolve({
       prompt: { schemaVersion: 1, identity: 'Resident mind', instructions: 'Stay grounded.' },
       preview: {
-        text: api.getPersistentMindContext.mock.calls.length > 2 ? '# Context with new memory' : '# Original context',
+        text: api.getPersistentMindContext.mock.calls.length > 1 ? '# Context with new memory' : '# Original context',
         chars: 24,
         approximateTokens: 6,
         summaryState: 'ready',
@@ -1058,7 +1134,7 @@ describe('MindTab', () => {
 
     await user.type(await screen.findByLabelText('Add a durable memory'), 'A newly curated fact');
     await user.click(screen.getByRole('button', { name: 'Add memory' }));
-    await waitFor(() => expect(api.getPersistentMindContext.mock.calls.length).toBeGreaterThanOrEqual(2));
+    await waitFor(() => expect(api.getPersistentMindContext).toHaveBeenCalledTimes(2));
     await user.click(screen.getByRole('tab', { name: 'Context' }));
 
     expect(await screen.findByText('# Context with new memory')).toBeInTheDocument();

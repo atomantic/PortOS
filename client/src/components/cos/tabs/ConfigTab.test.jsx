@@ -21,16 +21,7 @@ const embeddingsApi = vi.hoisted(() => ({
 vi.mock('../../../services/apiSystem', () => ({ updateSettings: embeddingsApi.updateSettings }));
 vi.mock('../../../services/apiMemory', () => ({ getEmbeddingConfig: embeddingsApi.getEmbeddingConfig }));
 
-const socket = vi.hoisted(() => {
-  const handlers = new Map();
-  return {
-    on: (event, handler) => { if (!handlers.has(event)) handlers.set(event, new Set()); handlers.get(event).add(handler); },
-    off: (event, handler) => handlers.get(event)?.delete(handler),
-    emit: vi.fn(),
-    emitServer: (event, payload) => handlers.get(event)?.forEach(handler => handler(payload)),
-    listenerCount: event => handlers.get(event)?.size ?? 0,
-  };
-});
+const socket = vi.hoisted(() => ({ on: vi.fn(), off: vi.fn(), emit: vi.fn() }));
 vi.mock('../../../services/socket', () => ({ default: socket }));
 
 vi.mock('../../../services/apiAgents.js', () => ({
@@ -40,19 +31,6 @@ vi.mock('../../../services/apiAgents.js', () => ({
 }));
 vi.mock('../../../services/apiLocalLlm', () => localLlm);
 vi.mock('../../ui/Toast', () => ({ default: toast }));
-// PersistentMindProfileControls picks a provider over the network — stub the
-// hook so the test exercises only the config screen's own behavior.
-vi.mock('../../../hooks/useProviderModels', () => ({
-  default: () => ({
-    providers: [{ id: 'codex', name: 'Codex', models: ['gpt-5'], defaultModel: 'gpt-5' }],
-    availableModels: ['gpt-5'],
-    setSelectedProviderId: () => {},
-    setSelectedModel: () => {},
-    selectedProviderId: '',
-    selectedModel: '',
-  }),
-}));
-
 const ConfigTab = (await import('./ConfigTab')).default;
 
 const config = {
@@ -86,18 +64,6 @@ beforeEach(() => {
   api.getCosBudgetUsage.mockResolvedValue({ usage: {} });
   localLlm.getLocalLlmStatus.mockResolvedValue({ ollama: { models: [] }, lmstudio: { models: [] } });
   localLlm.getToolUseModels.mockResolvedValue({ models: [] });
-  api.getPersistentMind.mockResolvedValue({
-    state: {
-      enabled: true,
-      started: true,
-      status: 'waiting',
-      queuedMessageCount: 2,
-      lastCompletedAt: null,
-      lastError: null,
-      pauseReason: null,
-    },
-    profile: { enabled: true, providerId: 'codex', model: 'gpt-5' },
-  });
 });
 
 describe('ConfigTab autosave', () => {
@@ -105,7 +71,6 @@ describe('ConfigTab autosave', () => {
     api.updateCosConfig.mockResolvedValue({ ...config, autonomousJobsEnabled: false });
     const onUpdate = vi.fn();
     renderConfig({ onUpdate });
-    await screen.findByText('Waiting for the next wake');
 
     expect(screen.queryByRole('button', { name: /Edit settings/i })).not.toBeInTheDocument();
     const scheduledJobs = screen.getByRole('checkbox', { name: /Scheduled agent jobs/i });
@@ -124,7 +89,6 @@ describe('ConfigTab autosave', () => {
   it('commits numeric fields on blur and discards an incomplete value', async () => {
     api.updateCosConfig.mockResolvedValue({ ...config, maxTotalProcesses: 64 });
     renderConfig();
-    await screen.findByText('Waiting for the next wake');
 
     const processCount = screen.getByRole('spinbutton', { name: 'Process count alert' });
     fireEvent.change(processCount, { target: { value: '' } });
@@ -171,7 +135,6 @@ describe('ConfigTab autosave', () => {
       .mockImplementationOnce(() => new Promise((resolve) => { resolveFirst = resolve; }))
       .mockResolvedValue({ ...config, autonomousJobsEnabled: true });
     renderConfig();
-    await screen.findByText('Waiting for the next wake');
 
     const scheduledJobs = screen.getByRole('checkbox', { name: /Scheduled agent jobs/i });
     fireEvent.click(scheduledJobs);
@@ -196,8 +159,7 @@ describe('ConfigTab autosave', () => {
 describe('Force Evaluate button', () => {
   it('invokes the page handler once per click and explains what it does', async () => {
     const onEvaluate = vi.fn();
-    renderConfig({ onEvaluate });
-    await screen.findByText('Waiting for the next wake');
+    await act(async () => { renderConfig({ onEvaluate }); });
 
     const button = screen.getByRole('button', { name: /Force Evaluate/i });
     expect(button).toHaveAttribute('title', 'Immediately check for pending tasks and spawn eligible agents');
@@ -214,8 +176,7 @@ describe('Force Evaluate button', () => {
 
   it('stays available alongside the editable settings', async () => {
     const onEvaluate = vi.fn();
-    renderConfig({ onEvaluate });
-    await screen.findByText('Waiting for the next wake');
+    await act(async () => { renderConfig({ onEvaluate }); });
 
     expect(screen.getByRole('checkbox', { name: /Scheduled agent jobs/i })).toBeInTheDocument();
     fireEvent.click(screen.getByRole('button', { name: /Force Evaluate/i }));
@@ -223,30 +184,10 @@ describe('Force Evaluate button', () => {
   });
 });
 
-describe('persistent mind profile', () => {
-  it('starts disabled and saving its toggle sends a default-safe profile without starting a mind', async () => {
-    api.updateCosConfig.mockResolvedValue({ success: true });
-    renderConfig();
-
-    const toggle = screen.getByRole('checkbox', { name: 'Enable persistent mind profile' });
-    expect(toggle).not.toBeChecked();
-    fireEvent.click(toggle);
-
-    await waitFor(() => expect(api.updateCosConfig).toHaveBeenCalledWith(
-      expect.objectContaining({
-        persistentMindProfile: expect.objectContaining({ enabled: true, thinkingInterface: 'text' }),
-      }),
-      { silent: true },
-    ));
-    expect(screen.getByText(/never starts a turn or downloads a model/i)).toBeInTheDocument();
-  });
-});
-
 describe('Default Avatar Style dropdown', () => {
   it('is immediately editable and saves the selected avatar style', async () => {
     api.updateCosConfig.mockResolvedValue({ ...config, avatarStyle: 'cyber' });
     renderConfig({ config: { ...config, avatarStyle: 'svg' } });
-    await screen.findByText('Waiting for the next wake');
 
     const select = screen.getByRole('combobox', { name: 'Default avatar' });
     expect(select).toBeEnabled();
@@ -282,8 +223,7 @@ describe('Rigged avatar records in the Default Avatar dropdown', () => {
   }];
 
   it('offers verified animated records alongside the built-in styles', async () => {
-    renderConfig({ config: { ...config, avatarStyle: 'svg' }, riggedAvatars });
-    await screen.findByText('Waiting for the next wake');
+    await act(async () => { renderConfig({ config: { ...config, avatarStyle: 'svg' }, riggedAvatars }); });
 
     const select = screen.getByRole('combobox', { name: 'Default avatar' });
     const labels = [...select.options].map((option) => option.text);
@@ -294,7 +234,6 @@ describe('Rigged avatar records in the Default Avatar dropdown', () => {
   it('shows the coverage note and saves a selected rigged record', async () => {
     api.updateCosConfig.mockResolvedValue({ ...config, avatarStyle: 'rigged-image3d-1' });
     renderConfig({ config: { ...config, avatarStyle: 'svg' }, riggedAvatars });
-    await screen.findByText('Waiting for the next wake');
 
     const select = screen.getByRole('combobox', { name: 'Default avatar' });
     fireEvent.change(select, { target: { value: 'rigged-image3d-1' } });
@@ -309,27 +248,30 @@ describe('Rigged avatar records in the Default Avatar dropdown', () => {
   });
 
   it('warns when the saved rigged record is no longer offered', async () => {
-    renderConfig({ config: { ...config, avatarStyle: 'rigged-image3d-gone' }, riggedAvatars });
-    await screen.findByText('Waiting for the next wake');
+    await act(async () => { renderConfig({ config: { ...config, avatarStyle: 'rigged-image3d-gone' }, riggedAvatars }); });
 
     expect(screen.getByText(/no longer available/)).toBeInTheDocument();
   });
 });
 
 describe('persistent mind status', () => {
-  it('shows the live supervisor state and links to the full mind workspace', async () => {
-    renderConfig();
+  it('summarizes the saved profile and links to Mind Settings without attaching a second Mind subscriber', async () => {
+    await act(async () => {
+      renderConfig({
+        config: { ...config, persistentMindProfile: { enabled: true, providerId: 'example-provider', model: 'example-model' } },
+      });
+    });
 
-    expect(await screen.findByText('Waiting for the next wake')).toBeInTheDocument();
-    expect(screen.getByText('Started')).toBeInTheDocument();
-    expect(screen.getByLabelText('Queued persistent mind messages')).toHaveTextContent('2');
-    expect(screen.getByRole('link', { name: /Open mind/i })).toHaveAttribute('href', '/cos/mind');
+    expect(screen.getByText('AI profile · example-provider / example-model')).toBeInTheDocument();
+    expect(screen.getByRole('link', { name: 'Open Mind Settings' })).toHaveAttribute('href', '/cos/mind?panel=settings');
+    expect(screen.queryByRole('checkbox', { name: 'Enable persistent mind profile' })).not.toBeInTheDocument();
+    expect(api.getPersistentMind).not.toHaveBeenCalled();
+    expect(socket.on).not.toHaveBeenCalledWith('cos:mind:status', expect.any(Function));
   });
 
   it('does not expose the retired global autonomy presets', async () => {
-    renderConfig();
+    await act(async () => { renderConfig(); });
 
-    await screen.findByText('Waiting for the next wake');
     expect(screen.queryByRole('button', { name: 'Standby' })).not.toBeInTheDocument();
     expect(screen.queryByRole('button', { name: 'YOLO' })).not.toBeInTheDocument();
     expect(screen.getByText('Automation guardrails')).toBeInTheDocument();
@@ -340,7 +282,6 @@ describe('domain guardrails and embeddings', () => {
   it('saves an autonomy mode change immediately', async () => {
     api.updateCosConfig.mockResolvedValue({ ...config, domainAutonomy: { cos: 'off' } });
     renderConfig();
-    await screen.findByText('Waiting for the next wake');
 
     fireEvent.click(within(screen.getByRole('group', { name: 'CoS auto-run mode' })).getByRole('button', { name: 'Off' }));
 
@@ -409,7 +350,6 @@ describe('domain guardrails and embeddings', () => {
     const { rerender } = renderConfig({
       config: { ...config, domainAutonomy: { cos: 'dry-run' } },
     });
-    await screen.findByText('Waiting for the next wake');
 
     const group = screen.getByRole('group', { name: 'Creative orchestrator mode' });
     const inheritButton = within(group).getByRole('button', { name: 'Inherit CoS auto-run' });
@@ -438,7 +378,6 @@ describe('domain guardrails and embeddings', () => {
     localLlm.installLocalLlmModel.mockResolvedValue({ success: true });
     embeddingsApi.updateSettings.mockResolvedValue({});
     renderConfig();
-    await screen.findByText('Waiting for the next wake');
 
     // The section shows the resolved backend and links to its one editor.
     expect(await screen.findByText(/legacy Chief of Staff embedding provider/)).toBeInTheDocument();
@@ -460,7 +399,6 @@ describe('domain guardrails and embeddings', () => {
   it('saves a budget cap when its number field loses focus', async () => {
     api.updateCosConfig.mockResolvedValue({ ...config, domainBudgets: { brain: { maxActionsPerDay: 5 } } });
     renderConfig();
-    await screen.findByText('Waiting for the next wake');
 
     const actionsPerDay = screen.getAllByRole('spinbutton', { name: 'Actions/day' })[0];
     fireEvent.change(actionsPerDay, { target: { value: '5' } });
@@ -614,68 +552,4 @@ describe('boot startup compatibility', () => {
       { silent: true },
     ));
   });
-});
-
-it('reconciles Mind status on events, reconnect and reshow without polling or reads after unmount', async () => {
-  const view = renderConfig();
-  await screen.findByText('Waiting for the next wake');
-  vi.useFakeTimers();
-  try {
-    await act(async () => { await vi.advanceTimersByTimeAsync(60_000); });
-    expect(api.getPersistentMind).toHaveBeenCalledTimes(1);
-    const snapshot = { enabled: true, started: true, status: 'thinking', activeTurnId: 'example-turn', queuedMessageCount: 9 };
-    await act(async () => {
-      socket.emitServer('cos:mind:event', { kind: 'thought' });
-      socket.emitServer('cos:mind:status', snapshot);
-    });
-    expect(api.getPersistentMind).toHaveBeenCalledTimes(1);
-    expect(screen.getByLabelText('Queued persistent mind messages')).toHaveTextContent('9');
-    expect(screen.getByTestId('mind-thought-status')).toHaveTextContent('Thinking with gpt-5');
-
-    api.getPersistentMind.mockResolvedValue({ state: { queuedMessageCount: 4 }, profile: {} });
-    for (const event of ['cos:config:changed', 'connect']) {
-      const before = api.getPersistentMind.mock.calls.length;
-      await act(async () => socket.emitServer(event));
-      expect(api.getPersistentMind).toHaveBeenCalledTimes(before + 1);
-      expect(screen.getByLabelText('Queued persistent mind messages')).toHaveTextContent('4');
-    }
-    const before = api.getPersistentMind.mock.calls.length;
-    Object.defineProperty(document, 'visibilityState', { configurable: true, value: 'hidden' });
-    await act(async () => document.dispatchEvent(new Event('visibilitychange')));
-    await act(async () => socket.emitServer('cos:mind:status', snapshot));
-    expect(screen.getByLabelText('Queued persistent mind messages')).toHaveTextContent('4');
-    expect(api.getPersistentMind).toHaveBeenCalledTimes(before);
-    Object.defineProperty(document, 'visibilityState', { configurable: true, value: 'visible' });
-    await act(async () => document.dispatchEvent(new Event('visibilitychange')));
-    expect(api.getPersistentMind).toHaveBeenCalledTimes(before + 1);
-    view.unmount();
-    expect(socket.listenerCount('cos:mind:status')).toBe(0);
-    await act(async () => {
-      socket.emitServer('connect');
-      socket.emitServer('cos:mind:event');
-      document.dispatchEvent(new Event('visibilitychange'));
-      await vi.advanceTimersByTimeAsync(60_000);
-    });
-    expect(api.getPersistentMind).toHaveBeenCalledTimes(before + 1);
-  } finally {
-    vi.useRealTimers();
-    Object.defineProperty(document, 'visibilityState', { configurable: true, value: 'visible' });
-  }
-});
-
-it('retains the initial profile when a socket snapshot arrives during loading', async () => {
-  const { promise, resolve } = Promise.withResolvers();
-  api.getPersistentMind.mockReturnValueOnce(promise);
-  renderConfig();
-  expect(screen.getByText('Loading…')).toBeInTheDocument();
-  await waitFor(() => expect(api.getPersistentMind).toHaveBeenCalledTimes(1));
-
-  await act(async () => {
-    socket.emitServer('cos:mind:status', { status: 'thinking', activeTurnId: 'example-turn', started: true, queuedMessageCount: 6 });
-    resolve({ state: { status: 'waiting', queuedMessageCount: 2 }, profile: { model: 'gpt-5' } });
-  });
-
-  expect(screen.getByTestId('mind-thought-status')).toHaveTextContent('Thinking with gpt-5');
-  expect(screen.getByLabelText('Queued persistent mind messages')).toHaveTextContent('6');
-  expect(api.getPersistentMind).toHaveBeenCalledTimes(1);
 });

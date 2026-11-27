@@ -1,5 +1,6 @@
 import { useEffect, useId, useMemo, useState } from 'react';
 import { Check, Pencil, Plus, Trash2, X } from 'lucide-react';
+import { useConfirmDelete } from '../../hooks/useConfirmDelete';
 import useProviderModels from '../../hooks/useProviderModels';
 import { updateCosConfig } from '../../services/apiAgents.js';
 import { listMoaPresets } from '../../services/apiMoaPresets.js';
@@ -7,6 +8,7 @@ import { moaProviderOptions } from '../../lib/moaProviderOptions.js';
 import { classifyMindRouteBilling, formatMindRoute, mintMindPresetId } from '../../lib/mindThinkingPresets.js';
 import MindRouteBadge, { BILLING_TONE } from './MindRouteBadge.jsx';
 import ProviderModelSelector from '../ProviderModelSelector';
+import ConfirmButtonPair from '../ui/ConfirmButtonPair';
 import toast from '../ui/Toast';
 
 const MAX_PRESETS = 20;
@@ -60,6 +62,7 @@ export default function PersistentMindThinkingPresets({
   const [draft, setDraft] = useState(emptyDraft);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState(null);
+  const { isConfirming, requestDelete, cancelDelete, confirmDelete } = useConfirmDelete();
 
   const editingPreset = editingPresetId && editingPresetId !== 'new'
     ? presets.find((candidate) => candidate.id === editingPresetId) || null
@@ -157,7 +160,7 @@ export default function PersistentMindThinkingPresets({
   };
 
   const remove = async (preset) => {
-    if (saving) return;
+    if (disabled || saving) return;
     if (await persist(presets.filter((candidate) => candidate.id !== preset.id), 'Thinking preset removed')) {
       if (editingPresetId === preset.id) onEditPreset?.(null);
     }
@@ -206,7 +209,7 @@ export default function PersistentMindThinkingPresets({
                   <p className="truncate text-sm font-medium text-port-text">{preset.label}</p>
                   <MindRouteBadge route={preset} provider={provider} className="mt-0.5" />
                 </div>
-                <div className="flex shrink-0 gap-2">
+                <div className="flex flex-wrap gap-2">
                   <button
                     type="button"
                     onClick={() => onEditPreset?.(preset.id)}
@@ -216,15 +219,25 @@ export default function PersistentMindThinkingPresets({
                   >
                     <Pencil size={14} aria-hidden="true" />
                   </button>
-                  <button
-                    type="button"
-                    onClick={() => remove(preset)}
-                    disabled={disabled || saving}
-                    aria-label={`Remove ${preset.label}`}
-                    className="pointer-coarse:min-h-11 pointer-coarse:min-w-11 flex min-h-[36px] min-w-[36px] items-center justify-center rounded border border-port-border text-port-error hover:bg-port-error/10 disabled:opacity-50"
-                  >
-                    <Trash2 size={14} aria-hidden="true" />
-                  </button>
+                  {isConfirming(preset.id) && !disabled && !saving ? (
+                    <ConfirmButtonPair
+                      confirmText="Remove"
+                      confirmAriaLabel={`Confirm removal of ${preset.label}`}
+                      cancelAriaLabel={`Cancel removal of ${preset.label}`}
+                      onConfirm={() => confirmDelete(() => remove(preset))}
+                      onCancel={cancelDelete}
+                    />
+                  ) : (
+                    <button
+                      type="button"
+                      onClick={() => requestDelete(preset.id)}
+                      disabled={disabled || saving}
+                      aria-label={`Remove ${preset.label}`}
+                      className="pointer-coarse:min-h-11 pointer-coarse:min-w-11 flex min-h-[36px] min-w-[36px] items-center justify-center rounded border border-port-border text-port-error hover:bg-port-error/10 disabled:opacity-50"
+                    >
+                      <Trash2 size={14} aria-hidden="true" />
+                    </button>
+                  )}
                 </div>
               </li>
             );

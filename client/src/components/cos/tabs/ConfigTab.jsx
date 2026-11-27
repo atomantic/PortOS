@@ -11,11 +11,7 @@ import {
   Sparkles,
 } from 'lucide-react';
 import toast from '../../ui/Toast';
-import { updateCosConfig, getCosBudgetUsage, getPersistentMind } from '../../../services/apiAgents.js';
-import { useSocketResource } from '../../../hooks/useSocketResource.js';
-import socket from '../../../services/socket';
-import PersistentMindProfileControls from '../PersistentMindProfileControls';
-import { PersistentMindThoughtStatus } from '../PersistentMindRuntimePanel';
+import { updateCosConfig, getCosBudgetUsage } from '../../../services/apiAgents.js';
 import ConfigRow from './ConfigRow';
 import MemoryEmbeddingRecommendation from '../MemoryEmbeddingRecommendation';
 import {
@@ -34,7 +30,6 @@ import {
 import EmbeddingSourceNotice from '../../settings/EmbeddingSourceNotice';
 import { updateSettings } from '../../../services/apiSystem';
 import { coverageSummary, isRiggedAvatarStyle, riggedRecordForStyle } from '../../../hooks/useAvatarCapabilities';
-import { timeAgo } from '../../../utils/formatters';
 
 const DOMAIN_MODE_COLORS = {
   off: {
@@ -228,52 +223,6 @@ const getSavedDomainSelection = (config, domainId) => (
   domainId === CREATIVE_DOMAIN.id ? getCreativeAutonomyOverride(config) : getDomainMode(config, domainId)
 );
 
-const MIND_STATUS_EVENTS = ['cos:config:changed'];
-
-function PersistentMindStatus({ mind, loaded, error }) {
-  const state = mind?.state;
-  const model = mind?.profile?.model;
-  const supervisor = !loaded
-    ? 'Loading…'
-    : error ? 'Unavailable'
-      : state?.started ? 'Started'
-        : state?.enabled ? 'Ready, not started'
-          : 'Disabled';
-
-  return (
-    <div className="rounded-lg border border-port-border bg-port-card p-4">
-      <div className="flex flex-wrap items-center justify-between gap-2">
-        <PersistentMindThoughtStatus state={state} model={model} />
-        <Link to="/cos/mind" className="inline-flex items-center gap-1 text-xs font-medium text-port-accent hover:underline">
-          Open mind <ExternalLink size={13} aria-hidden="true" />
-        </Link>
-      </div>
-      <div className="mt-4 grid grid-cols-3 gap-2">
-        <div className="rounded-md bg-port-bg p-2.5">
-          <span className="block text-[10px] font-medium uppercase tracking-wide text-port-text-muted">Supervisor</span>
-          <span className="mt-1 block text-xs font-semibold text-port-text">{supervisor}</span>
-        </div>
-        <div className="rounded-md bg-port-bg p-2.5">
-          <span className="block text-[10px] font-medium uppercase tracking-wide text-port-text-muted">Queued</span>
-          <span aria-label="Queued persistent mind messages" className="mt-1 block text-xs font-semibold text-port-text">{loaded && !error ? state?.queuedMessageCount || 0 : '—'}</span>
-        </div>
-        <div className="rounded-md bg-port-bg p-2.5">
-          <span className="block text-[10px] font-medium uppercase tracking-wide text-port-text-muted">Last turn</span>
-          <span className="mt-1 block text-xs font-semibold text-port-text">{state?.lastCompletedAt ? timeAgo(state.lastCompletedAt) : 'None yet'}</span>
-        </div>
-      </div>
-      {(error || state?.lastError || state?.pauseReason) && (
-        <p role="status" className="mt-3 rounded-md border border-port-warning/30 bg-port-warning/10 px-3 py-2 text-xs text-port-warning">
-          {error || [state.pauseReason, state.lastError && state.lastError !== state.pauseReason ? `Last wake: ${state.lastError}` : null].filter(Boolean).join(' · ')}
-        </p>
-      )}
-      <p className="mt-3 text-xs leading-relaxed text-port-text-muted">
-        Enabling a profile only configures its reasoning lane. Starting, pausing, conversation, context, and task access remain on the Persistent Mind page.
-      </p>
-    </div>
-  );
-}
-
 export default function ConfigTab({ config, onUpdate, onEvaluate, avatarStyle, riggedAvatars = [] }) {
   const [confirmedConfig, setConfirmedConfig] = useState(config);
   const confirmedConfigRef = useRef(config);
@@ -281,7 +230,6 @@ export default function ConfigTab({ config, onUpdate, onEvaluate, avatarStyle, r
   const [domainAutonomyOverrides, setDomainAutonomyOverrides] = useState({});
   const [domainBudgetOverrides, setDomainBudgetOverrides] = useState({});
   const [saveStatus, setSaveStatus] = useState('idle');
-  const [profileSaving, setProfileSaving] = useState(false);
   const [budgetUsage, setBudgetUsage] = useState({});
   // Remounts the embeddings notice after the recommendation saves, so it
   // re-reads the backend it just switched to.
@@ -392,33 +340,6 @@ export default function ConfigTab({ config, onUpdate, onEvaluate, avatarStyle, r
       .catch(() => {})
   ), []);
 
-  const mindRead = useRef(null);
-  const { data: mindData, loading: mindLoading, error: mindError, refetch: refreshMindStatus, updateData: updateMindStatus } = useSocketResource(
-    async ({ signal }) => {
-      const read = { state: null };
-      mindRead.current = read;
-      try {
-        const data = await getPersistentMind({ limit: 1 }, { signal, silent: true });
-        return read.state ? { ...data, state: read.state } : data;
-      } finally {
-        if (mindRead.current === read) mindRead.current = null;
-      }
-    },
-    { namespace: 'cos', events: MIND_STATUS_EVENTS },
-  );
-  const mindStatus = { data: mindData, loaded: !mindLoading, error: mindError ? mindError.message || 'Persistent mind status is unavailable' : null };
-
-  useEffect(() => {
-    const applyStatus = state => {
-      if (document.visibilityState === 'hidden' || typeof state?.status !== 'string') return;
-      // Keep the profile read alive when a status snapshot arrives mid-read.
-      if (mindRead.current) mindRead.current.state = state;
-      else updateMindStatus(previous => ({ ...previous, state }));
-    };
-    socket.on('cos:mind:status', applyStatus);
-    return () => socket.off('cos:mind:status', applyStatus);
-  }, [updateMindStatus]);
-
   useEffect(() => { void refreshBudgetUsage(); }, [refreshBudgetUsage]);
 
   // Built-in styles plus the install's verified animated records (#5894). A
@@ -452,7 +373,6 @@ export default function ConfigTab({ config, onUpdate, onEvaluate, avatarStyle, r
     return saveConfigPatch(() => ({ domainAutonomy: { [domainId]: mode } }), {
       key: `domainAutonomy:${domainId}`,
       clearOverride: () => setDomainAutonomyOverrides((current) => removeOverride(current, domainId)),
-      onSuccess: refreshMindStatus,
     });
   };
 
@@ -476,9 +396,7 @@ export default function ConfigTab({ config, onUpdate, onEvaluate, avatarStyle, r
     });
   };
 
-  const displayedSaveStatus = saveStatus === 'error'
-    ? 'error'
-    : saveStatus === 'saving' || profileSaving ? 'saving' : saveStatus;
+  const mindProfile = confirmedConfig?.persistentMindProfile;
 
   return (
     <div className="mx-auto max-w-6xl space-y-7 pb-6">
@@ -490,10 +408,10 @@ export default function ConfigTab({ config, onUpdate, onEvaluate, avatarStyle, r
           </p>
         </div>
         <div className="flex flex-wrap items-center gap-3">
-          <span data-testid="config-save-status" role={displayedSaveStatus === 'error' ? 'alert' : 'status'} aria-live="polite" className={`text-xs ${displayedSaveStatus === 'error' ? 'text-port-error' : 'text-port-text-muted'}`}>
-            {displayedSaveStatus === 'saving' ? 'Saving changes…'
-              : displayedSaveStatus === 'error' ? 'Some changes could not be saved. Change those settings to retry.'
-                : displayedSaveStatus === 'saved' ? 'All changes saved'
+          <span data-testid="config-save-status" role={saveStatus === 'error' ? 'alert' : 'status'} aria-live="polite" className={`text-xs ${saveStatus === 'error' ? 'text-port-error' : 'text-port-text-muted'}`}>
+            {saveStatus === 'saving' ? 'Saving changes…'
+              : saveStatus === 'error' ? 'Some changes could not be saved. Change those settings to retry.'
+                : saveStatus === 'saved' ? 'All changes saved'
                   : 'Changes save automatically'}
           </span>
           <button
@@ -512,21 +430,20 @@ export default function ConfigTab({ config, onUpdate, onEvaluate, avatarStyle, r
           <SectionHeading
             icon={Brain}
             title="Persistent Mind"
-            description="Live supervisor status beside the pinned provider profile used for every wake."
+            description="The saved profile determines which provider and model the Mind uses on each wake."
           />
         </div>
-        <div className="grid gap-3 lg:grid-cols-[minmax(0,0.9fr)_minmax(0,1.1fr)]">
-          <PersistentMindStatus mind={mindStatus.data} loaded={mindStatus.loaded} error={mindStatus.error} />
-          <div className="rounded-lg border border-port-border bg-port-card p-4">
-            <PersistentMindProfileControls
-              profile={config?.persistentMindProfile}
-              onSavingChange={setProfileSaving}
-              onSaved={() => {
-                onUpdate();
-                void refreshMindStatus();
-              }}
-            />
-          </div>
+        <div className="flex flex-wrap items-center justify-between gap-3 rounded-lg border border-port-border bg-port-card p-4">
+          <p className="min-w-0 max-w-full break-words text-sm text-port-text">
+            {!mindProfile?.enabled
+              ? 'AI profile disabled'
+              : mindProfile.providerId && mindProfile.model
+                ? `AI profile · ${mindProfile.providerId} / ${mindProfile.model}`
+                : 'AI profile enabled · select a provider and model'}
+          </p>
+          <Link to="/cos/mind?panel=settings" className="inline-flex items-center gap-1 text-xs font-medium text-port-accent hover:underline">
+            Open Mind Settings <ExternalLink size={13} aria-hidden="true" />
+          </Link>
         </div>
       </section>
 
