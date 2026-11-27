@@ -20,7 +20,7 @@ const DATA_FILE = join(PATHS.digitalTwin, 'social-accounts.json');
 // removed (#3532). Peer sync unions accounts add-only, so without them a machine
 // that still has the account re-adds it forever. No migration is needed: an
 // existing file simply has no key, and every reader treats that as an empty list.
-const store = createCachedStore(DATA_FILE, { accounts: {}, deletedAccounts: [] }, { context: 'socialAccounts' });
+const store = createCachedStore(DATA_FILE, { accounts: {}, deletedAccounts: [] }, { context: 'socialAccounts', mode: 0o600, dirMode: 0o700 });
 
 export const socialAccountEvents = new EventEmitter();
 

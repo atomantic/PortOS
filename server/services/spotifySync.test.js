@@ -322,6 +322,7 @@ describe('runSync failure persistence and error handling', () => {
     expect(mocks.atomicWrite).toHaveBeenCalledWith(
       expect.stringContaining('sync-state.json'),
       expect.stringContaining('"cursorAfter": 12345'),
+      { mode: 0o600, dirMode: 0o700 },
     );
     const saved = JSON.parse(mocks.atomicWrite.mock.calls.find((call) => call[0].endsWith('sync-state.json'))[1]);
     expect(saved.cursorAfter).toBe(12345);
