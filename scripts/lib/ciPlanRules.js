@@ -15,6 +15,7 @@ import { resolveDbTestFiles } from './dbTestFiles.js';
 import { guardTestFiles, isGuardTest } from './guardScanners.js';
 import { BROWSER_SUITES } from './browserSuites.js';
 import { DEPENDENCY_MANIFEST_RE, describeDependencyVerdict, escalated, windowsInstalls } from './ciPlanDependencies.js';
+import { escapeRegExp } from '../../server/lib/textUtils.js';
 
 const TEST_FILE_RE = /\.(?:test|spec)\.[cm]?[jt]sx?$/i;
 // `git grep` pathspecs matching every extension TEST_FILE_RE recognizes. A
@@ -47,9 +48,9 @@ const PYTHON_SCRIPT_RE = /^scripts\/(?:ml\/)?[^/]+\.py$/;
 // either. `collectPlanInputs()` finds the tests naming a changed file's basename,
 // the same mechanism the python case above uses, and generalizes
 // it to every changed source — not only `.py` (issue #6363).
-/** `git grep -E` pattern for a test that names this one source file by basename. */
+/** Matches a test that names this source file by its literal basename. */
 export const sourceReferencePattern = (sourcePath) => (
-  `(^|[^A-Za-z0-9_])${sourcePath.slice(sourcePath.lastIndexOf('/') + 1).replace(/[.]/g, '\\.')}([^A-Za-z0-9_]|$)`
+  `(^|[^A-Za-z0-9_])${escapeRegExp(sourcePath.slice(sourcePath.lastIndexOf('/') + 1))}([^A-Za-z0-9_]|$)`
 );
 
 // A full primary plan selects the Windows native job only when its execution

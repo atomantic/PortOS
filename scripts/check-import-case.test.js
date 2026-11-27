@@ -133,14 +133,28 @@ describe('checkImportCase against a repository', () => {
       // Only the new module is examined against the base: the latent mismatch
       // in an untouched file is not this pull request's to answer for.
       expect(checkImportCase({ cwd: root, baseSha: base })).toEqual({ checked: 1, mismatches: [] });
+      // The last green push commit can be disconnected in a shallow checkout.
+      const gatedBaseSha = git('commit-tree', `${base}^{tree}`, '-m', 'disconnected green base');
+      expect(checkImportCase({ cwd: root, gatedBaseSha })).toEqual({ checked: 1, mismatches: [] });
+      expect(checkImportCase({ cwd: root, baseSha: base, gatedBaseSha })).toEqual({ checked: 1, mismatches: [] });
       // Without a base every tracked module is examined.
       const whole = checkImportCase({ cwd: root });
       expect(whole.checked).toBe(3);
+      expect(checkImportCase({ cwd: root, gatedBaseSha: 'unavailable' })).toEqual(whole);
       expect(whole.mismatches).toEqual([{ file: 'src/old.js', specifier: './foo.js', resolved: 'src/foo.js', tracked: 'src/Foo.js' }]);
+      // Renaming a target by case alone can break an unchanged importer.
+      const beforeRename = git('rev-parse', 'HEAD');
+      git('mv', 'src/Foo.js', 'src/temporary.js');
+      git('mv', 'src/temporary.js', 'src/FOO.js');
+      git('commit', '-qm', 'rename by case');
+      expect(checkImportCase({ cwd: root, gatedBaseSha: beforeRename }).mismatches.map((match) => match.file))
+        .toEqual(['src/new.js', 'src/old.js']);
       // A changed module with the mismatch fails the scoped check.
       write('src/new.js', "import { foo } from './foo.js';\n");
       git('commit', '-qam', 'regress');
       expect(checkImportCase({ cwd: root, baseSha: base }).mismatches.map((m) => m.file)).toEqual(['src/new.js']);
+      expect(checkImportCase({ cwd: root, gatedBaseSha: git('rev-parse', 'HEAD^') }).mismatches.map((m) => m.file))
+        .toEqual(['src/new.js']);
     } finally {
       rmSync(root, { recursive: true, force: true });
     }

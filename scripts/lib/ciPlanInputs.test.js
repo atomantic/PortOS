@@ -1,4 +1,4 @@
-import { expect, it } from 'vitest';
+import { expect, it, vi } from 'vitest';
 import { execFileSync } from 'node:child_process';
 import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
@@ -48,7 +48,7 @@ it('narrows a shared basename to tests that can mean the changed copy, and keeps
   }
 });
 
-it('looks tests up by source basename from one indexed read, with git grep semantics (#14866)', () => {
+it('prefilters small CI diffs once and keeps the full index for large diffs (#14866)', () => {
   const root = mkdtempSync(join(tmpdir(), 'portos-ci-reference-index-'));
   const trace = `${root}.git-trace`;
   const git = (...args) => execFileSync('git', args, { cwd: root, encoding: 'utf8' }).trim();
@@ -58,35 +58,41 @@ it('looks tests up by source basename from one indexed read, with git grep seman
   };
   const sources = {
     unique: 'server/lib/uniqueHelper.js',
-    punctuated: 'server/lib/file-name.v2.js',
+    punctuated: 'server/lib/file-name[2]+.js',
     python: 'scripts/render_clip.py',
     orphan: 'server/lib/neverNamed.js',
+  };
+  const commit = (message) => {
+    git('add', '--all');
+    git('-c', 'user.name=Example Contributor', '-c', 'user.email=contributor@example.com',
+      '-c', 'commit.gpgsign=false', 'commit', '-qm', message);
   };
   const tests = {
     testVariant: ['server/lib/uniqueHelper.test.js', "readFileSync(join(lib, 'uniqueHelper.js'));\n"],
     specVariant: ['client/src/mirror.spec.jsx', 'const mirrored = "uniqueHelper.js";\n'],
-    nestedTestDir: ['server/x.test.d/helper.js', "'file-name.v2.js'\n"],
-    punctuated: ['server/lib/punctuated.test.js', "path.join('lib', 'file-name.v2.js')\n"],
+    nestedTestDir: ['server/x.test.d/helper.js', "'file-name[2]+.js'\n"],
+    punctuated: ['server/lib/punctuated.test.js', "path.join('lib', 'file-name[2]+.js')\n"],
     python: ['scripts/render.test.js', "readFileSync('scripts/render_clip.py', 'utf8');\n"],
     // Names that only look similar: wrong boundary on either side, or another extension.
-    prefixed: ['server/lib/prefixed.test.js', "'myuniqueHelper.js' 'uniqueHelper.json' 'file-name_v2.js' 'file-name.v2xjs'\n"],
+    prefixed: ['server/lib/prefixed.test.js', "'myuniqueHelper.js' 'uniqueHelper.json' 'file-name-2.js' 'file-name[2]+xjs'\n"],
     notATest: ['server/lib/uniqueHelper.notes.js', "'uniqueHelper.js'\n"],
   };
   try {
     git('init', '-q');
-    for (const path of Object.values(sources)) write(path, 'export const value = 1;\n');
+    git('config', 'core.hooksPath', join(root, 'empty-hooks'));
     for (const [path, body] of Object.values(tests)) write(path, body);
-    git('add', '--all');
+    commit('base');
+    const baseSha = git('rev-parse', 'HEAD');
+    for (const path of Object.values(sources)) write(path, 'export const value = 1;\n');
+    commit('small diff');
 
     writeFileSync(trace, '');
-    process.env.GIT_TRACE = trace;
+    vi.stubEnv('GIT_TRACE', trace);
     let pathContractTests;
     try {
-      ({ pathContractTests } = collectPlanInputs({
-        baseSha: 'HEAD', changedFiles: Object.values(sources), cwd: root,
-      }));
+      ({ pathContractTests } = collectPlanInputs({ baseSha, cwd: root }));
     } finally {
-      delete process.env.GIT_TRACE;
+      vi.unstubAllEnvs();
     }
 
     expect(pathContractTests).toEqual({
@@ -95,8 +101,21 @@ it('looks tests up by source basename from one indexed read, with git grep seman
       [sources.python]: [tests.python[0]],
       [sources.orphan]: [],
     });
-    // Four changed sources, zero per-source repository scans.
-    expect(readFileSync(trace, 'utf8')).not.toMatch(/\bgit grep\b|built-in: git grep/);
+    const smallDiffTrace = readFileSync(trace, 'utf8');
+    expect(smallDiffTrace.match(/built-in: git grep\b/g)).toHaveLength(1);
+    expect(smallDiffTrace).toContain('git ls-files --stage');
+
+    for (let index = 0; index < 17; index += 1) write(`scripts/extra${index}.js`, 'export {};');
+    commit('large diff');
+    writeFileSync(trace, '');
+    vi.stubEnv('GIT_TRACE', trace);
+    try {
+      const large = collectPlanInputs({ baseSha, cwd: root }).pathContractTests;
+      for (const source of Object.values(sources)) expect(large[source]).toEqual(pathContractTests[source]);
+    } finally {
+      vi.unstubAllEnvs();
+    }
+    expect(readFileSync(trace, 'utf8')).not.toMatch(/built-in: git grep\b/);
   } finally {
     rmSync(trace, { force: true });
     rmSync(root, { recursive: true, force: true });

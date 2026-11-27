@@ -25,6 +25,8 @@ import { MODULE_SOURCE_RE, createModuleGraph, resolveModuleCandidates } from './
 import { isDirectlyInvoked } from './directInvocation.js';
 import { globToRegExp, toWorkspacePath, workspaceTestGlobs } from './workspaceTests.js';
 
+const importEdgesByGraph = new WeakMap();
+
 /**
  * Resolved repo-relative edges for every module of `graph` (`createModuleGraph`).
  * A module that cannot be read or tokenized has no entry and is listed in
@@ -34,6 +36,9 @@ import { globToRegExp, toWorkspacePath, workspaceTestGlobs } from './workspaceTe
  * @returns {{ edges: Map<string, { static: Set<string>, dynamic: Set<string> }>, uninspected: string[] }}
  */
 export function importEdges(graph) {
+  const cached = importEdgesByGraph.get(graph);
+  if (cached) return cached;
+
   const edges = new Map();
   const uninspected = [];
   for (const file of graph.files) {
@@ -52,7 +57,9 @@ export function importEdges(graph) {
       .filter((target) => target !== file && !staticTargets.has(target)));
     edges.set(file, { static: staticTargets, dynamic: dynamicTargets });
   }
-  return { edges, uninspected };
+  const inspected = { edges, uninspected };
+  importEdgesByGraph.set(graph, inspected);
+  return inspected;
 }
 
 function reverseEdges(graph, dynamic) {

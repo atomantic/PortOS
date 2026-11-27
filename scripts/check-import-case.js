@@ -16,7 +16,7 @@
  * case-insensitively is a mismatch; one that matches nothing at all is left
  * to the module loader (an alias, a generated file, a package path).
  *
- *   node scripts/check-import-case.js [--base <sha>]   # default: $CI_BASE_SHA
+ *   node scripts/check-import-case.js [--base <sha>]   # default: $CI_BASE_SHA, then $CI_GATED_BASE_SHA
  *
  * ZERO external dependencies — this runs before `npm ci` in the impact job.
  */
@@ -24,7 +24,7 @@
 import { dirname, posix } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { createGuardCorpus } from '../lib/guardCorpus.js';
-import { readWorktreeGit } from '../lib/gitWorktree.js';
+import { readWorktreeGit, runWorktreeGit } from '../lib/gitWorktree.js';
 import { staticImportSpecifiersFromSource } from '../server/lib/staticImportGraph.js';
 import { isDirectlyInvoked } from './lib/directInvocation.js';
 
@@ -216,22 +216,42 @@ export function foldTracked(tracked) {
   return folded;
 }
 
-const gitOutput = (args, cwd) => readWorktreeGit(cwd, args, { encoding: 'utf8', maxBuffer: 64 * 1024 * 1024 });
-const gitLines = (args, cwd) => gitOutput(args, cwd).split('\n').filter(Boolean);
+const gitOptions = { encoding: 'utf8', maxBuffer: 64 * 1024 * 1024 };
+const gitPaths = (args, cwd) => readWorktreeGit(cwd, args, gitOptions).split('\0').filter(Boolean);
+
+function gatedChangedPaths(gatedBaseSha, cwd, folded) {
+  // The green push base may be a disconnected shallow commit. Compare the
+  // two trees directly, without asking git to find a merge base.
+  const diff = runWorktreeGit(cwd, ['diff', '--name-status', '-z', '--no-renames', `${gatedBaseSha}..HEAD`, '--'], gitOptions);
+  if (diff.error || diff.status !== 0) return null;
+  const fields = diff.stdout.split('\0');
+  const changed = [];
+  for (let index = 0; index + 1 < fields.length; index += 2) {
+    const [status, path] = [fields[index], fields[index + 1]];
+    if (status === 'D') {
+      // A case-only target move can break an unchanged importer. Check the
+      // entire tree when a removed spelling still resolves case-insensitively.
+      if (folded.has(path.toLowerCase())) return null;
+    } else {
+      changed.push(path);
+    }
+  }
+  return changed;
+}
 
 /**
  * Check the changed modules (or every tracked module) of a checkout.
  *
- * @param {{cwd?: string, baseSha?: string|null}} [options]
+ * @param {{cwd?: string, baseSha?: string|null, gatedBaseSha?: string|null}} [options]
  * @returns {{checked: number, mismatches: Array<object>}}
  */
-export function checkImportCase({ cwd = process.cwd(), baseSha = null } = {}) {
-  const tracked = new Set(gitOutput(['ls-files', '-z'], cwd).split('\0').filter(Boolean));
+export function checkImportCase({ cwd = process.cwd(), baseSha = null, gatedBaseSha = null } = {}) {
+  const tracked = new Set(gitPaths(['ls-files', '-z'], cwd));
   const folded = foldTracked(tracked);
   const changed = baseSha
-    ? gitLines(['diff', '--name-only', '--diff-filter=ACMR', `${baseSha}...HEAD`], cwd).filter((path) => tracked.has(path))
-    : [...tracked];
-  const modules = changed.filter((path) => MODULE_RE.test(path) && !path.includes('/node_modules/'));
+    ? gitPaths(['diff', '--name-only', '-z', '--diff-filter=ACMR', `${baseSha}...HEAD`, '--'], cwd)
+    : gatedBaseSha ? gatedChangedPaths(gatedBaseSha, cwd, folded) : null;
+  const modules = (changed ?? [...tracked]).filter((path) => tracked.has(path) && MODULE_RE.test(path) && !path.includes('/node_modules/'));
   const { read } = createGuardCorpus(cwd);
   const mismatches = modules.flatMap((file) => {
     let source;
@@ -246,10 +266,14 @@ export function checkImportCase({ cwd = process.cwd(), baseSha = null } = {}) {
 }
 
 function parseArgs(argv) {
-  const options = { baseSha: process.env.CI_BASE_SHA || null };
+  const options = {
+    baseSha: process.env.CI_BASE_SHA || null,
+    gatedBaseSha: process.env.CI_GATED_BASE_SHA || null,
+  };
   for (let index = 0; index < argv.length; index += 1) {
     if (argv[index] === '--base') {
       options.baseSha = argv[index + 1] || null;
+      options.gatedBaseSha = null;
       index += 1;
     } else {
       throw new Error(`Unknown option: ${argv[index]}.`);
@@ -259,15 +283,15 @@ function parseArgs(argv) {
 }
 
 function main() {
-  const { baseSha } = parseArgs(process.argv.slice(2));
-  const { checked, mismatches } = checkImportCase({ cwd: dirname(dirname(fileURLToPath(import.meta.url))), baseSha });
+  const options = parseArgs(process.argv.slice(2));
+  const { checked, mismatches } = checkImportCase({ ...options, cwd: dirname(dirname(fileURLToPath(import.meta.url))) });
   if (mismatches.length > 0) {
     console.error(`❌ ${mismatches.length} import path(s) differ from the tracked file only in case — Linux cannot resolve them:`);
     for (const { file, specifier, tracked } of mismatches) console.error(`  ${file}: '${specifier}' → tracked as ${tracked}`);
     process.exitCode = 1;
     return;
   }
-  console.log(`✅ Import case check: ${checked} module(s) ${baseSha ? 'changed since the base' : 'tracked'}, every relative import matches the tracked spelling.`);
+  console.log(`✅ Import case check: checked ${checked} module(s), every relative import matches the tracked spelling.`);
 }
 
 if (isDirectlyInvoked(import.meta.url)) main();
