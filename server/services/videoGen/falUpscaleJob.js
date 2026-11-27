@@ -76,8 +76,10 @@ export async function enqueueFalSeedvr2Upscale(historyId, {
     throw new ServerError('The selected clip could not be measured for a cost estimate.', { status: 422, code: 'UPSCALE_GEOMETRY_UNKNOWN' });
   }
   const item = await getHistoryItem(historyId);
-  const musicVideo = shot ?? (musicVideoProjectId
-    ? { projectId: musicVideoProjectId, ...(sceneId ? { sceneId } : {}), tier: 'final' }
+  const resolvedProjectId = musicVideoProjectId ?? item?.musicVideo?.projectId ?? null;
+  const resolvedSceneId = sceneId ?? (resolvedProjectId === item?.musicVideo?.projectId ? item?.musicVideo?.sceneId : null);
+  const musicVideo = shot ?? (resolvedProjectId
+    ? { projectId: resolvedProjectId, ...(resolvedSceneId ? { sceneId: resolvedSceneId } : {}), tier: 'final' }
     : null);
 
   return enqueueJob({
