@@ -61,7 +61,7 @@ async function makeSandbox({
   mkdirSync(join(repo, 'scripts'), { recursive: true });
   if (!withoutDeps) mkdirSync(join(repo, 'server', 'node_modules', 'pm2', 'bin'), { recursive: true });
 
-  installUpdateTestSupervisor(repo);
+  installUpdateTestSupervisor(repo, { traceDir: lockfileOnly ? scratch : null });
   for (const file of ['update.sh', 'update.ps1', 'scripts/update.mjs', 'scripts/lib/dependencyReceipts.js', 'scripts/lib/dependencyReconcile.js',
     'scripts/lib/workspaceDependencies.js', 'scripts/lib/pm2Resolve.js', 'server/lib/aiToolkit/internal/windowsSafeSpawn.js']) {
     mkdirSync(dirname(join(repo, file)), { recursive: true });
@@ -258,6 +258,17 @@ if (${pm2StartFailure} && args.startsWith('start') && !fs.existsSync(${JSON.stri
     `);
     flags.push(`--import=${pathToFileURL(preload).href}`);
   }
+  if (lockfileOnly) {
+    const preload = join(scratch, 'trace-updater-exit.mjs');
+    writeFileSync(preload, `
+      import { basename } from 'node:path';
+      import { writeFileSync } from 'node:fs';
+      if (basename(process.argv[1] ?? '') === 'update.mjs') {
+        process.on('exit', code => writeFileSync(${JSON.stringify(join(scratch, 'updater-exit'))}, String(code)));
+      }
+    `);
+    flags.push(`--import=${pathToFileURL(preload).href}`);
+  }
   if (nodeOptions) flags.push(nodeOptions);
   if (unknownPrevious) {
     const preload = join(scratch, 'unknown-previous.mjs');
@@ -316,7 +327,7 @@ function runUpdate(sandbox, { onStart, automatic = false, operationId } = {}) {
     let stdout = '';
     child.stdout.on('data', (d) => { stdout += d; });
     child.stderr.on('data', (d) => { stdout += d; });
-    child.on('close', (status) => resolve({ status, stdout }));
+    child.on('close', (status, signal) => resolve({ status, signal, stdout }));
     onStart?.(child);
   });
 }
@@ -639,7 +650,23 @@ describe.skipIf(SKIP_HEAVY_INTEGRATION)('shared updater headless-install guard',
     });
     try {
       const result = await runUpdate(box);
-      expect(result.status, result.stdout).toBe(0);
+      // Each file contains only a fixture-owned exit code or settlement observation.
+      const observation = name => {
+        try { return JSON.parse(readFileSync(join(box.scratch, name), 'utf8')); }
+        catch (error) { return error.code === 'ENOENT' ? 'unobserved' : 'unreadable'; }
+      };
+      const handoff = {
+        completion: result.stdout.includes('Update Complete!'),
+        updater: observation('updater-exit'),
+        innerShell: observation('inner-shell'),
+        supervisor: observation('supervisor-exit'),
+        outerShell: { code: result.status, signal: result.signal },
+      };
+      expect(result.status, JSON.stringify(handoff)).toBe(0);
+      expect(handoff).toEqual({
+        completion: true, updater: 0, innerShell: { code: 0, signal: null, terminal: true },
+        supervisor: 0, outerShell: { code: 0, signal: null },
+      });
       expect(installCalls(box)).toEqual(['client install --no-save']);
       expect(result.stdout).toContain('🧹 client package-lock.json changed in this update — clean reinstall (wiping node_modules)');
       expect(result.stdout).not.toContain('🧹 server ');
