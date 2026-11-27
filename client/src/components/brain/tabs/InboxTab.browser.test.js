@@ -118,7 +118,7 @@ describe.skipIf(!chrome)('Brain inbox capture geometry', () => {
   }, BROWSER_FIXTURE_STARTUP_MS);
   afterAll(() => fixture?.close(), 60000);
 
-  it.each([[360, 800], [390, 844], [768, 1024], [1440, 900]])(
+  it.each([[320, 844], [390, 844], [768, 1024], [1440, 900]])(
     'keeps the complete capture form usable at %ix%i', async (width, height) => {
       const page = await browser.newPage({ viewport: { width, height }, hasTouch: true });
       page.setDefaultTimeout(5000);
@@ -160,6 +160,16 @@ describe.skipIf(!chrome)('Brain inbox capture geometry', () => {
         }));
         await page.getByText('Loading inbox history').waitFor({ state: 'hidden' });
         expect(await page.getByText('An example thought', { exact: true }).count()).toBe(1);
+        // A desktop sidebar or embedded panel can leave only 240px for the Inbox.
+        const narrowPanel = width === 320 ? await page.addStyleTag({ content: '#root { max-width: 272px; }' }) : null;
+        const catalogAction = page.getByRole('button', { name: 'Send to Catalog' });
+        expect(await catalogAction.evaluate(button => {
+          const banner = button.parentElement.getBoundingClientRect();
+          const action = button.getBoundingClientRect();
+          return action.left >= banner.left && action.right <= banner.right
+            && banner.right <= document.documentElement.clientWidth - 16;
+        })).toBe(true);
+        await narrowPanel?.evaluate(style => style.remove());
         await input.fill('https://example.com');
         await page.getByRole('textbox', { name: /Why are you saving this link/ }).fill('Example note');
         expect(await creative.isDisabled()).toBe(true);
