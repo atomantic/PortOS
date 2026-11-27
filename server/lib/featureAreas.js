@@ -491,6 +491,7 @@ export const FEATURE_AREAS = Object.freeze([
       'server/routes/auth!(ors*)',
       'server/routes/{settings,backup,database,capabilities,update,network,ports,platform,notifications}*',
       'server/lib/{backup,database,pg,settings,credential,security,secret,update,ports,instance}*',
+      'server/lib/databaseMaintenance/**',
       'server/lib/db/extensions.js',
       'server/lib/db/schema/{core,index,syncFeed}.*',
       'server/services/auth!(ors*)',
