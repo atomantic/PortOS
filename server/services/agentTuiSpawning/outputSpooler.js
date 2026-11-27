@@ -161,7 +161,7 @@ export function createOutputSpooler({ agentId, outputFile, rawFile, prompt = '' 
   // debounce window AND while an appendFile is in-flight (the next
   // scheduleRawFlush is gated by rawFlushing); join() runs once per flush
   // tick, so peak in-memory raw data is bounded by one debounce-plus-IO
-  // window of TUI output (at most a few MB on a chatty agent).
+  // window of TUI output (typically a few MB on a chatty agent).
   const writeRawBatch = (batch, truncate, final) => withRuntimeFileTurn(rawFile, async () => {
     const next = rawRecording.prepare(batch, final, truncate ? RAW_SPOOL_MAX_BYTES : Infinity);
     const batchBytes = Buffer.byteLength(next.output);
