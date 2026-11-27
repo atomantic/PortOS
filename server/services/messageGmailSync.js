@@ -12,7 +12,7 @@ import { getAuthenticatedClient } from './googleAuth.js';
 import { createGmailApi } from './gmailApi.js';
 import { htmlToText as sharedHtmlToText } from '../lib/htmlToText.js';
 import { ServerError } from '../lib/errorHandler.js';
-import { cleanMessageId } from '../lib/emailMessageId.js';
+import { cleanMessageId, optOutMessageId } from '../lib/emailMessageId.js';
 import { gmailConversationThreadKey } from '../lib/gmailThreadKey.js';
 
 function makeExternalId(gmailId) {
@@ -352,6 +352,7 @@ export async function syncGmail(account, cache, io, options = {}) {
       const from = parseSender(getHeader(headers, 'From'));
       const labelIds = data.labelIds || [];
       const body = extractBody(data.payload);
+      const inReplyTo = getHeader(headers, 'In-Reply-To').trim();
 
       messages.push({
         id: uuidv4(),
@@ -364,6 +365,8 @@ export async function syncGmail(account, cache, io, options = {}) {
         cc: parseRecipients(getHeader(headers, 'Cc')),
         subject: getHeader(headers, 'Subject'),
         rfcMessageId: cleanMessageId(getHeader(headers, 'Message-ID')),
+        // Without a provider receipt time the fallback display date cannot order a reply.
+        ...(data.internalDate && inReplyTo && { inReplyTo }),
         bodyText: body.text,
         bodyHtml: body.html || undefined,
         bodyFull: !!(body.text || body.html),
@@ -535,6 +538,9 @@ export async function sendGmail(account, draft, delivery = null) {
     'Content-Type: text/plain; charset=utf-8',
     'MIME-Version: 1.0'
   ];
+  if (draft.generatedBy === 'privacy-optout' && draft.sendAttemptId) {
+    lines.push(`Message-ID: ${optOutMessageId(draft.sendAttemptId)}`);
+  }
   if (draft.cc) {
     const ccLine = Array.isArray(draft.cc) ? draft.cc.join(', ') : draft.cc;
     lines.push(`Cc: ${ccLine}`);

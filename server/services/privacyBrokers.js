@@ -817,6 +817,11 @@ export async function transitionCase(caseId, toState, patch = {}) {
       `SELECT id, state, evidence FROM privacy_broker_cases WHERE id = $1 FOR UPDATE`, [caseId],
     );
     if (!existing.rows[0]) throw new ServerError('Case not found', { status: 404, code: 'NOT_FOUND' });
+    // A delayed mailbox read must not write evidence onto a reopened case's next request.
+    if (patch.expectedDraftId && (existing.rows[0].state !== patch.expectedState
+      || parseEvidence(existing.rows[0].evidence).draftId !== patch.expectedDraftId)) {
+      return { skipped: true, reason: 'optout_request_changed' };
+    }
     assertTransition(existing.rows[0].state, toState, { viaRescan });
     const sets = ['state = $1', 'next_recheck_at = $2', 'updated_at = NOW()'];
     const params = [toState, computeNextRecheckAt(toState, now)];
