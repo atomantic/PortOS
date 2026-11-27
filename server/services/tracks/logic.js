@@ -61,6 +61,8 @@ import { normalizeSunoSongId } from '../../lib/sunoSong.js';
 import { isStr, trimTo } from '../../lib/textUtils.js';
 import { promptAdditionsSchema } from '../../lib/modelInput.js';
 import { TITLE_MAX, ALBUM_ID_MAX, ARTIST_ID_MAX, ARTIST_NAME_MAX, CONCEPT_MAX, LYRICS_MAX, PROMPT_MAX, ENGINE_MAX, MODEL_ID_MAX, EXECUTION_PROFILE_MAX, AUDIO_FILENAME_MAX, RENDER_ID_MAX, RENDER_SOURCE_MAX, RENDERS_MAX } from '../../lib/trackLimits.js';
+import { DURATION_MIN_SEC, DURATION_MAX_SEC } from '../../lib/trackLimits.js';
+export { RENDER_SOURCES, DURATION_MIN_SEC, DURATION_MAX_SEC } from '../../lib/trackLimits.js';
 export { TITLE_MAX, ALBUM_ID_MAX, ARTIST_ID_MAX, ARTIST_NAME_MAX, CONCEPT_MAX, LYRICS_MAX, PROMPT_MAX, ENGINE_MAX, MODEL_ID_MAX, EXECUTION_PROFILE_MAX, AUDIO_FILENAME_MAX, RENDER_ID_MAX, RENDER_SOURCE_MAX, RENDERS_MAX };
 
 export const TRACK_ID_RE = /^track-[A-Za-z0-9-]{1,64}$/;
@@ -69,14 +71,6 @@ export const TRACK_ID_RE = /^track-[A-Za-z0-9-]{1,64}$/;
 // closed enum so a later import source is a value, not a sanitizer change; the
 // routes that WRITE a source validate it against the sources they support.
 const RENDER_SOURCE_RE = /^[a-z0-9-]{1,40}$/;
-export const RENDER_SOURCES = Object.freeze({ UPLOAD: 'upload', SUNO: 'suno', YOUTUBE: 'youtube' });
-// Cap the render history per track so a runaway generate loop can't grow the
-// record unboundedly. Oldest renders fall off first (slice(-RENDERS_MAX)); the
-// audio bytes stay in the shared library (they may be referenced elsewhere).
-// A track clip's usable duration band — wide enough for a long-form generation,
-// bounded so a garbage value can't poison the record.
-export const DURATION_MIN_SEC = 1;
-export const DURATION_MAX_SEC = 3600;
 
 const RENDER_ID_RE = /^[A-Za-z0-9_-]{1,80}$/;
 

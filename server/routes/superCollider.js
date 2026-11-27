@@ -12,14 +12,13 @@
  * nothing here calls an AI provider, and setup/render each need the user's request.
  */
 
+import { setupSchema, renderSchema } from '../lib/superColliderValidation.js';
 import { Router } from 'express';
 import { randomInt } from 'crypto';
-import { z } from 'zod';
 import { asyncHandler, ServerError } from '../lib/errorHandler.js';
 import { validateRequest } from '../lib/validateRequest.js';
 import { openSseStream } from '../lib/sseDownload.js';
 import { SUPERCOLLIDER_RENDER } from '../lib/superColliderRuntime.js';
-import { MUSIC_CODE_MAX } from '../services/musicCode.js';
 import { getSuperColliderStatus, setupSuperColliderRuntime } from '../services/superColliderRuntime.js';
 import { readSuperColliderPreview, superColliderSourceHash } from '../services/superColliderRender.js';
 import { attachSseClient, cancelJob, enqueueJob, getJob } from '../services/mediaJobQueue/index.js';
@@ -29,8 +28,6 @@ const router = Router();
 router.get('/status', asyncHandler(async (_req, res) => {
   res.json(await getSuperColliderStatus());
 }));
-
-const setupSchema = z.object({ rebuild: z.boolean().optional().default(false) });
 
 // The build compiles SuperCollider from source (10–30 minutes on first run), so
 // progress streams as SSE log lines. Concurrent requests share one run, and the
@@ -47,12 +44,6 @@ router.post('/setup', asyncHandler(async (req, res) => {
     : { type: 'error', outcome: result.outcome, message: result.error || result.status?.message || 'SuperCollider setup failed', status: result.status });
   safeEnd();
 }));
-
-const renderSchema = z.object({
-  code: z.string().max(MUSIC_CODE_MAX).refine((code) => code.trim().length > 0, 'code is required'),
-  durationSec: z.number().int().min(SUPERCOLLIDER_RENDER.minDurationSec).max(SUPERCOLLIDER_RENDER.maxDurationSec),
-  seed: z.number().int().min(0).max(SUPERCOLLIDER_RENDER.maxSeed).optional(),
-}).strict();
 
 // Refuse up front when the runtime is not ready, so the user is told what to
 // set up instead of queuing a job that can only fail. The job still re-checks
