@@ -12,7 +12,7 @@
  */
 
 import { Router } from 'express';
-import { z } from 'zod';
+import { forgeAuthRefreshBodySchema, forgeAuthJobParamsSchema } from '../../lib/appValidation.js';
 import { asyncHandler, ServerError } from '../../lib/errorHandler.js';
 import { validateRequest } from '../../lib/validateRequest.js';
 import { resolveAppForgeTarget } from '../../lib/workTracker.js';
@@ -27,14 +27,9 @@ import { loadApp } from './shared.js';
 
 const router = Router();
 
-const refreshBodySchema = z.object({
-  scopes: z.array(z.string().regex(/^[a-z][a-z0-9:_.-]*$/i)).min(1).max(8),
-});
-const jobParamsSchema = z.object({ id: z.string().min(1), jobId: z.string().uuid() });
-
 router.post('/:id/forge-auth/refresh', loadApp, asyncHandler(async (req, res) => {
   const app = req.loadedApp;
-  const { scopes } = validateRequest(refreshBodySchema, req.body ?? {});
+  const { scopes } = validateRequest(forgeAuthRefreshBodySchema, req.body ?? {});
 
   const { target } = await resolveAppForgeTarget(app);
   if (!target || target.forge !== 'github') {
@@ -63,14 +58,14 @@ router.post('/:id/forge-auth/refresh', loadApp, asyncHandler(async (req, res) =>
 }));
 
 router.get('/:id/forge-auth/refresh/:jobId/events', asyncHandler(async (req, res) => {
-  const { jobId } = validateRequest(jobParamsSchema, req.params);
+  const { jobId } = validateRequest(forgeAuthJobParamsSchema, req.params);
   if (!hasForgeScopeRefresh(jobId) || !attachForgeScopeRefreshClient(jobId, res)) {
     throw new ServerError('No such refresh in progress', { status: 404, code: 'NOT_FOUND' });
   }
 }));
 
 router.post('/:id/forge-auth/refresh/:jobId/cancel', asyncHandler(async (req, res) => {
-  const { jobId } = validateRequest(jobParamsSchema, req.params);
+  const { jobId } = validateRequest(forgeAuthJobParamsSchema, req.params);
   res.json({ canceled: cancelForgeScopeRefresh(jobId) });
 }));
 

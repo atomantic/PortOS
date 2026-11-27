@@ -9,12 +9,13 @@
  */
 
 import { currentTaskTypeName } from '../../lib/scheduledTaskTypes.js';
+import { OUTWARD_SAFETY_KINDS } from '../../lib/cos/cosSafetyKinds.js';
+
+export { OUTWARD_SAFETY_KINDS };
 
 /** Reversible internal work — retains today's confidence success-rate gate. */
 export const REVERSIBLE_SAFETY_KIND = 'reversible';
 
-/** Outward-facing kinds that always require approval; tunable via `config.safetyKindApproval.alwaysApproveKinds`. */
-export const OUTWARD_SAFETY_KINDS = Object.freeze(['content', 'publish', 'federation', 'external-pr']);
 export const DEFAULT_ALWAYS_APPROVE_KINDS = Object.freeze([...OUTWARD_SAFETY_KINDS]);
 
 const OUTWARD_KIND_SET = new Set(OUTWARD_SAFETY_KINDS);

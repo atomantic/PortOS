@@ -1,6 +1,13 @@
 import { emitToOperatorsOn } from '../services/socketIo.js';
 import { Router } from 'express';
-import { z } from 'zod';
+import {
+  loginSchema,
+  setPasswordSchema,
+  clearPasswordSchema,
+  revokeSessionsQuerySchema,
+  sessionIdParamSchema,
+  agentKeyToggleSchema,
+} from '../lib/authValidation.js';
 import {
   getPasswordRiskStatus,
   buildClearCookie,
@@ -31,17 +38,6 @@ import { logSecurityEvent } from '../lib/securityAuditLog.js';
 import { isRemoteRequest } from '../lib/requestOrigin.js';
 
 const router = Router();
-
-const loginSchema = z.object({ password: z.string().min(1).max(256) }).strict();
-const setPasswordSchema = z.object({
-  newPassword: z.string().min(8).max(256),
-  currentPassword: z.string().max(256).optional(),
-}).strict();
-const clearPasswordSchema = z.object({ currentPassword: z.string().min(1).max(256) }).strict();
-// Batch revoke is label-scoped so it can only ever drop non-interactive
-// credentials (never the caller's browser session, which carries no label).
-const revokeSessionsQuerySchema = z.object({ label: z.literal('agent') }).strict();
-const sessionIdParamSchema = z.object({ id: z.string().min(1).max(64).regex(/^[a-f0-9]+$/) }).strict();
 
 // Whether the request reached us over HTTPS (so the cookie should carry the
 // Secure flag). `req.secure` reflects the actual socket; we don't trust
@@ -231,8 +227,6 @@ router.delete('/sessions/:id', asyncHandler(async (req, res) => {
 // a mode-0600 file so an agent PortOS did not spawn can call the API. GET shows
 // state only — never the token. Turning it on or rotating it mints an operator
 // session, so both sit on the host-control list beside POST /password.
-const agentKeyToggleSchema = z.object({ enabled: z.boolean() }).strict();
-
 router.get('/agent-key', asyncHandler(async (_req, res) => {
   res.json(await getAgentKeyStatus());
 }));

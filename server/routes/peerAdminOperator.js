@@ -1,8 +1,15 @@
 import { Router } from 'express';
-import { z } from 'zod';
+import {
+  peerAdminPeerSchema,
+  peerAdminGrantSchema,
+  peerAdminRemotePlanSchema,
+  peerExecutionGrantSchema,
+  peerExecutionRemoteDispatchSchema,
+  peerExecutionRemoteStatusSchema,
+  peerCatalogReviewTargetSchema,
+} from '../lib/peerAdminValidation.js';
 import { asyncHandler } from '../lib/errorHandler.js';
 import { validateRequest } from '../lib/validateRequest.js';
-import { peerAdminPeerSchema, peerAdminGrantSchema, peerAdminRemotePlanSchema, peerCatalogKeySchema, peerExecutionGrantSchema, peerExecutionRemoteDispatchSchema, peerExecutionRemoteStatusSchema } from '../lib/peerAdminValidation.js';
 import { requireHostControl } from '../services/authGate.js';
 import { describePeerAdminSetup, savePeerAdminGrant } from '../services/peerAdministration.js';
 import { planPeerAdministration, preparePeerExecution, dispatchPeerExecution, getPeerExecutionStatus } from '../services/peerAdminConsumer.js';
@@ -46,9 +53,8 @@ router.post('/execution-status', asyncHandler(async (req, res) => {
   const input = validateRequest(peerExecutionRemoteStatusSchema, req.body);
   res.set('Cache-Control', 'no-store').json(await getPeerExecutionStatus(input));
 }));
-const catalogQuerySchema = z.object({ backend: z.literal('lmstudio'), catalogKey: peerCatalogKeySchema }).strict();
 router.get('/catalog-review', asyncHandler(async (req, res) => {
-  const input = validateRequest(catalogQuerySchema, req.query);
+  const input = validateRequest(peerCatalogReviewTargetSchema, req.query);
   const { describePeerCatalogReview } = await import('../services/peerCatalogInstaller.js');
   res.set('Cache-Control', 'no-store').json(await describePeerCatalogReview(input));
 }));

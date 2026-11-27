@@ -19,8 +19,7 @@ vi.mock('../../services/apps.js', () => ({
 }));
 
 vi.mock('../../services/xcodeScripts.js', () => ({
-  installScripts: vi.fn(),
-  XCODE_SCRIPT_NAMES: ['deploy.sh', 'take_screenshots.sh', 'take_screenshots_macos.sh']
+  installScripts: vi.fn()
 }));
 
 import * as appsService from '../../services/apps.js';

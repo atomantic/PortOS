@@ -39,6 +39,9 @@ import { parseTsMs, compareNewerWins } from './lwwTimestamp.js';
 // retention, in which case a resurrection is the lesser evil vs. unbounded meta).
 export const DEFAULT_TOMBSTONE_LIMIT = 200;
 
+// Default federation GC delay and upper bound for an operator-triggered sweep.
+export const TOMBSTONE_GRACE_MS = 24 * 60 * 60 * 1000;
+
 function sortTombstones(list, keyField) {
   return [...list].sort((a, b) => {
     const am = parseTsMs(a.deletedAt) ?? 0;

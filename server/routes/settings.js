@@ -1,6 +1,26 @@
 import { PRIVATE_CREDENTIALS, putCredential } from '../services/privateKeyStore.js';
 import { Router } from 'express';
-import { z } from 'zod';
+import {
+  settingsPutSchema,
+  settingsSlicePatchSchema,
+  autoUpdateSettingsSchema,
+  featureProviderConfigSchema,
+  autofixerSettingsSchema,
+  localLlmSettingsSchema,
+  creativeDirectorSettingsSchema,
+  musicSettingsSchema,
+  seriesAutopilotSettingsSchema,
+  imageGenGrokSettingsSchema,
+  imageGenAgySettingsSchema,
+  imageGenFalSettingsSchema,
+  imageGenRunwaySettingsSchema,
+  imageGenHiggsfieldSettingsSchema,
+  imageGenGoogleSettingsSchema,
+  renderDefaultsSettingsSchema,
+  videoGenSettingsSchema,
+  aiAssignmentUpdateSchema,
+  eidoverseRepoSchema,
+} from '../lib/settingsValidation.js';
 import { getSettings, updateSettingsWith } from '../services/settings.js';
 import { getAiAssignments, updateAiAssignment } from '../services/aiAssignments.js';
 import { saveSubscriptionCosts } from '../services/subscriptionCosts.js';
@@ -18,7 +38,6 @@ import { assertConfiguredEidoverseInstalled, getInstanceFeatures, updateEidovers
 import { getCredentialInventory } from '../services/credentialInventory.js';
 import { installEidoverse } from '../services/eidoverse.js';
 import { ensureEidoverseHost } from '../services/eidoverseHost.js';
-import { isGitHubRepoUrl } from '../lib/repoUrl.js';
 import { asyncHandler, ServerError } from '../lib/errorHandler.js';
 import { isAllowedPython } from '../lib/pythonSetup.js';
 import { CLOUD_IMAGE_GEN_MODES, CLOUD_VIDEO_GEN_MODES, HOSTED_MEDIA_BACKENDS, IMAGE_GEN_MODE } from '../lib/generationModes.js';
@@ -29,7 +48,6 @@ import { storableAutoUpdateConfig } from '../lib/sharedSchemas.js';
 import { DEFAULT_UNTRUSTED_CONTENT_POLICY, untrustedContentSettingsSchema } from '../lib/untrustedContent.js';
 import { skillsSettingsSchema } from '../lib/skillsValidation.js';
 import { agentContextSettingsSchema } from '../lib/agent/agentContextValidation.js';
-import { EFFORT_LEVELS } from '../lib/provider/providerModels.js';
 import { federationSettingsSchema } from '../lib/federatedMediaValidation.js';
 import { validateRequest } from '../lib/validateRequest.js';
 import { codeReviewSettingsSchema, namedOrchestrationProfileSchema, orchestrationProfilesSettingsSchema } from '../lib/cos/cosValidation.js';
@@ -39,13 +57,6 @@ import { privacySettingsSchema } from '../lib/privacyValidation.js';
 import { filmLookSavedPresetsSchema } from '../lib/filmLookValidation.js';
 import { dockerContainmentSettingsSchema } from '../lib/dockerContainmentValidation.js';
 import { codeAnimationExecutionArmedSchema } from '../lib/codeAnimationContainment.js';
-import {
-  settingsPutSchema, settingsSlicePatchSchema, autoUpdateSettingsSchema, featureProviderConfigSchema, autofixerSettingsSchema,
-  localLlmSettingsSchema, creativeDirectorSettingsSchema, musicSettingsSchema, seriesAutopilotSettingsSchema,
-  imageGenGrokSettingsSchema, imageGenAgySettingsSchema, imageGenFalSettingsSchema,
-  imageGenRunwaySettingsSchema, imageGenHiggsfieldSettingsSchema, imageGenGoogleSettingsSchema,
-  renderDefaultsSettingsSchema, videoGenSettingsSchema
-} from '../lib/settingsValidation.js';
 import {
   privateCredentialParamsSchema, privateCredentialInputSchemaFor, harnessSettingsSchema,
   credentialBootstrapsSettingsSchema
@@ -62,17 +73,6 @@ import { layeredIntelligenceSettingsSchema } from '../lib/appValidation.js';
 import { subscriptionCostsMapSchema, subscriptionPlanTiersMapSchema, usageApiBilledInstanceIdsSchema } from '../lib/usageValidation.js';
 
 const router = Router();
-
-const aiAssignmentUpdateSchema = z.object({
-  providerId: z.string().trim().max(128).nullable().optional(),
-  model: z.string().trim().max(300).nullable().optional(),
-  effort: z.enum(EFFORT_LEVELS).nullable().optional(),
-}).strict();
-
-const eidoverseRepoSchema = z.object({
-  worldsRepoUrl: z.string().trim().max(500).refine(isGitHubRepoUrl, 'Must be a GitHub repository URL'),
-  worldsBranch: z.string().trim().max(255).regex(/^[^\u0000-\u001f\u007f]*$/).optional(),
-}).strict();
 
 // Server-authoritative bounds the client UI can render directly so the form
 // clamp never drifts away from what the queue actually enforces. Stitched

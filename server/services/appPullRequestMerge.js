@@ -17,8 +17,9 @@ import { resolveForgeExecOptions } from './forgeExecOptions.js';
 import { resolveAppForgeTarget } from '../lib/workTracker.js';
 import { PROTECTED_BRANCHES } from '../lib/gitArgs.js';
 import { forgeMissingScopesOf } from '../lib/forgeAccessErrors.js';
+import { MERGE_METHODS } from '../lib/prDisposition.js';
 
-export const MERGE_METHODS = Object.freeze(['merge', 'squash', 'rebase']);
+export { MERGE_METHODS };
 export const DEFAULT_MERGE_METHOD = 'merge';
 
 // A merge can sit behind the forge's own mergeability recompute; the list

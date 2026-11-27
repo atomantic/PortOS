@@ -1,59 +1,34 @@
-import { executionOptionsSchema } from '../lib/aiToolkit/internal/executionOptionsValidation.js';
-import { PR_COMPLETION_VALUES } from '../lib/prDisposition.js';
 /**
  * CoS Task Schedule Routes
  */
 
 import { Router } from 'express';
-import { z } from 'zod';
+import {
+  effortUpdateSchema,
+  taskDataInputsSchema,
+  cosScheduleTriggerBodySchema,
+  heldCheckoutRetireBodySchema,
+  releaseSynchronizationResetBodySchema,
+  releaseDeliveryVerificationBodySchema,
+  promptSourceSchema,
+  PROMPT_SOURCES,
+  scheduleExecutionFieldsSchema,
+  scheduleLabelsSchema,
+  suggestedAfterSchema,
+  maintenanceRunStartSchema,
+  maintenanceRunArchiveSchema,
+} from '../lib/cos/cosValidation.js';
 import * as taskSchedule from '../services/taskSchedule.js';
 import { logCosScheduleUpdate } from '../services/userActionScheduleLog.js';
 import { asyncHandler, ServerError } from '../lib/errorHandler.js';
 import { limitQuerySchema, parsePagination, paginationQuerySchema, isPaginationRequested, paginateArray } from '../lib/queryValidation.js';
-import { effortUpdateSchema, scheduledAuditIdsSchema, taskDataInputsSchema, cosScheduleTriggerBodySchema, heldCheckoutRetireBodySchema, releaseSynchronizationResetBodySchema, releaseDeliveryVerificationBodySchema } from '../lib/cos/cosValidation.js';
 import { sanitizeTaskMetadata } from '../lib/cos/cosTaskMetadata.js';
 import { validateRequest } from '../lib/validateRequest.js';
-import { promptSourceSchema, PROMPT_SOURCES, scheduleExecutionFieldsSchema } from '../lib/cos/cosValidation.js';
 import { EFFORT_LEVELS } from '../lib/provider/providerModels.js';
 import { INTERVAL_TYPES, decodeIntervalType, isCronExpression, isKnownIntervalType } from '../services/taskScheduleConstants.js';
 import { normalizeSuggestedAfter, SUGGESTED_AFTER_MAX } from '../lib/scheduleRunOrder.js';
 import { findCronExpressionError } from '../lib/cronValidation.js';
 import { setMaintenanceRunArchived, updateMaintenanceStep, listMaintenanceRuns, resumeMaintenanceRun, startMaintenanceRun, stopMaintenanceRun } from '../services/maintenanceRun.js';
-
-const scheduleLabelsSchema = z.array(z.string().trim().min(1).max(40)).max(20)
-  .transform(labels => [...new Set(labels.map(label => label.toLowerCase()))]);
-
-// Shape only — normalizeSuggestedAfter does the trimming, self-drop and dedupe
-// so the storage rules live with the field's own helper, not in the route.
-const suggestedAfterSchema = z.array(z.string()).max(SUGGESTED_AFTER_MAX);
-
-// A manual maintenance run names the app, the provider and the model up front
-// (AGENTS.md AI-policy: the click IS the consent). Any enabled CLI/TUI provider
-// is accepted — one outside every subscription family runs unfamilied, see
-// `maintenanceRun.js#manualBurnFamily` — so the family check belongs to the
-// service's live provider gate, not to this schema. Blank effort inherits each
-// scheduled task's saved effort.
-const maintenanceRunStartSchema = z.object({
-  taskTypes: scheduledAuditIdsSchema.refine(ids => ids.length > 0, 'Select at least one audit').optional(),
-  // The user named these checks one by one (the Quality tab's per-category Run),
-  // so each runs even where the repository scan says it cannot apply.
-  explicitCheck: z.boolean().optional(),
-  mode: z.enum(['file-issues', 'fix']).optional(),
-  auditDepth: z.enum(['quick', 'deep']).optional(),
-  prCompletion: z.enum([...PR_COMPLETION_VALUES, 'inherit']).optional(),
-  claimBetweenAudits: z.boolean().optional(),
-  claimHandler: z.object({
-    providerId: z.string().trim().min(1),
-    model: z.string().trim().min(1),
-    effort: z.enum(EFFORT_LEVELS).nullable().optional(),
-  executionOptions: executionOptionsSchema.optional(),
-  }).nullable().optional(),
-  appId: z.string().trim().min(1),
-  providerId: z.string().trim().min(1),
-  model: z.string().trim().min(1),
-  effort: z.enum(EFFORT_LEVELS).nullable().optional(),
-  executionOptions: executionOptionsSchema.optional(),
-}).strict();
 
 const router = Router();
 
@@ -351,7 +326,7 @@ router.patch('/schedule/maintenance-runs/:id/steps/:stepId', asyncHandler(async 
 }));
 
 router.patch('/schedule/maintenance-runs/:id/archive', asyncHandler(async (req, res) => {
-  const body = validateRequest(z.object({ appId: z.string().min(1), archived: z.boolean() }).strict(), req.body || {});
+  const body = validateRequest(maintenanceRunArchiveSchema, req.body || {});
   const run = await setMaintenanceRunArchived(req.params.id, body);
   if (!run) throw new ServerError('Maintenance run not found for this app', { status: 404, code: 'NOT_FOUND' });
   res.json({ run });
