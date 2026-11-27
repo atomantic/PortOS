@@ -19,7 +19,7 @@ import { stat } from 'fs/promises';
 import { existsSync } from 'fs';
 import { invalidateMeatspace, invalidateMortalLoomChanges } from './meatspace/meatspaceEvents.js';
 import { randomUUID } from 'crypto';
-import { atomicWrite, safeJSONParse, readJSONFile, dataPath, ensureDir, sleep } from '../lib/fileUtils.js';
+import { atomicWrite, safeJSONParse, readJSONFile, dataPath, sleep } from '../lib/fileUtils.js';
 import { ICLOUD_NOT_MATERIALIZED, isEvictedStats, materializeAndWait, readIfMaterialized, requestMaterialization } from '../lib/icloudFile.js';
 import { canonicalStringify, isPlainObject } from '../lib/objects.js';
 import { createFileWriteQueue } from '../lib/fileWriteQueue.js';
@@ -1165,8 +1165,7 @@ export async function importToPortOS() {
     }
     if (added > 0) {
       rows.sort((a, b) => (a.date || '').localeCompare(b.date || ''));
-      await ensureDir(dataPath('meatspace'));
-      await atomicWrite(localPath, arrayKey ? { ...document, [arrayKey]: rows } : rows);
+      await atomicWrite(localPath, arrayKey ? { ...document, [arrayKey]: rows } : rows, { mode: 0o600, dirMode: 0o700 });
     }
     return { added, skipped };
   });

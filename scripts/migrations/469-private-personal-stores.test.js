@@ -3,6 +3,7 @@ import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import migration from './469-private-personal-stores.js';
+import repairRemnants from './472-private-personal-store-remnants.js';
 
 let rootDir;
 const dataPath = rel => join(rootDir, 'data', rel);
@@ -34,6 +35,29 @@ describe.skipIf(process.platform === 'win32')('personal-store permission repair'
 
     await migration.up({ rootDir });
     await migration.up({ rootDir });
+
+    for (const file of files) {
+      expect(await mode(file)).toBe(0o600);
+      expect(await mode(dirname(file))).toBe(0o700);
+      expect(await readFile(file, 'utf8')).toBe(payload);
+    }
+    expect(await mode(unrelated)).toBe(0o644);
+  });
+
+  it('repairs the remaining legacy stores on installs that already ran migration 469', async () => {
+    const files = [
+      'digital-twin/meta.json', 'digital-twin/social-accounts.json',
+      'meatspace/epigenetic.json', 'meatspace/genome.json', 'meatspace/genome-raw.txt',
+      'spotify/sync-state.json',
+      'spotify/sync-state.json.12.1740000000000.11111111-2222-3333-4444-555555555555.tmp',
+    ].map(dataPath);
+    for (const file of files) await fixture(file);
+    const unrelated = dataPath('spotify/example.json');
+    await fixture(unrelated);
+
+    await migration.up({ rootDir });
+    await repairRemnants.up({ rootDir });
+    await repairRemnants.up({ rootDir });
 
     for (const file of files) {
       expect(await mode(file)).toBe(0o600);

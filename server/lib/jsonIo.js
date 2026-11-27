@@ -6,7 +6,7 @@
  * `load()` is strict (#4115) so a corrupt file rejects instead of being overwritten by the next
  * `mutate`.
  */
-import { chmod, open, readFile, readdir, stat } from 'fs/promises';
+import { open, readFile, readdir, stat } from 'fs/promises';
 import { basename, dirname } from 'path';
 import { appendFileGuarded, atomicWrite, ensureDir, sleep } from './fileCore.js';
 import { createFileWriteQueue } from './fileWriteQueue.js';
@@ -433,7 +433,8 @@ export async function writeJSONLines(filePath, values) {
  * @param {Object} options
  * @param {number} [options.ttl=2000] - Cache TTL in milliseconds
  * @param {string} [options.context=''] - Context label for error logging
- * @param {number|null} [options.mode=null] - Optional POSIX file mode (e.g. 0o600) applied after writes
+ * @param {number} [options.mode] - POSIX mode for atomic writes (e.g. 0o600)
+ * @param {number} [options.dirMode] - POSIX mode for the store directory (e.g. 0o700)
  * @returns {{ load, save, mutate, invalidateCache, withLiveRestore }}
  *
  * `load()` is STRICT: a present-but-unreadable or corrupt file rejects, because
@@ -447,7 +448,7 @@ export async function writeJSONLines(filePath, values) {
  * pair has no such guarantee; use `mutate()` when the new value depends on the
  * current one.
  */
-export function createCachedStore(filePath, defaultValue, { ttl = 2000, context = '', mode = null } = {}) {
+export function createCachedStore(filePath, defaultValue, { ttl = 2000, context = '', mode, dirMode } = {}) {
   let cache = null;
   let cacheTimestamp = 0;
   let writeSeq = 0;
@@ -459,7 +460,7 @@ export function createCachedStore(filePath, defaultValue, { ttl = 2000, context 
     const now = Date.now();
     if (cache && (now - cacheTimestamp) < ttl) return cache;
     const readSeq = writeSeq;
-    await ensureDir(dir);
+    await ensureDir(dir, { mode: dirMode });
     // Strict: a present-but-unreadable file must reject, not read as the default and be overwritten by the next write.
     const { ok, value } = await readJSONFileStrict(filePath, null, { logError: true });
     if (!ok) {
@@ -474,12 +475,7 @@ export function createCachedStore(filePath, defaultValue, { ttl = 2000, context 
 
   // Shared write body; callers go through the serialized `save`/`mutate`.
   const persist = async (data) => {
-    await atomicWrite(filePath, data);
-    if (mode != null) {
-      await chmod(filePath, mode).catch((err) => {
-        if (err?.code !== 'ENOENT') console.log(`⚠️ Could not set permissions on ${context || basename(filePath)} (${err?.code || 'error'})`);
-      });
-    }
+    await atomicWrite(filePath, data, { mode, dirMode });
     writeSeq += 1;
     cache = data;
     cacheTimestamp = Date.now();

@@ -42,7 +42,7 @@ export const TIMER_TOOLS = [
       const human = totalSecs >= 60
         ? `${Math.round(totalSecs / 60)} minute${Math.round(totalSecs / 60) === 1 ? '' : 's'}`
         : `${totalSecs} second${totalSecs === 1 ? '' : 's'}`;
-      console.log(`⏰ Timer set for ${human}: "${trimmedLabel}"${scheduled?.deduped ? ' (deduped — already armed)' : ''}`);
+      console.log(`⏰ Timer set for ${human} (label chars=${trimmedLabel.length})${scheduled?.deduped ? ' (deduped — already armed)' : ''}`);
       return {
         ok: true,
         durationMs: totalMs,
