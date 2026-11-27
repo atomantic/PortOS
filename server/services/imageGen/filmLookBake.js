@@ -92,19 +92,25 @@ export async function applyFilmLookBake({ filename, sourceMeta, look: input, sig
   const scratch = join(PATHS.data, FILM_LOOK_SCRATCH_DIR, id);
   let page;
   let png;
+  let rendered = false;
+  let cleanupFailure;
   let cleanupUncertain = false;
-  const recordCleanupFailure = () => {
+  const markCleanupUncertain = () => {
     if (cleanupUncertain) return;
     cleanupUncertain = true;
     maintenance.markCurrentUnsettled();
-    onCleanupFailure?.();
+    try {
+      onCleanupFailure?.();
+    } catch {
+      console.error('❌ Film look cleanup failure notification failed');
+    }
   };
   try {
     await mkdir(scratch, { recursive: true });
     const src = `source${ext}`;
     await copyFile(sourcePath, join(scratch, src));
     await writeFile(join(scratch, 'index.html'), filmLookBakePage(look, { width, height, src }));
-    page = await openComposition(`${FILM_LOOK_SCRATCH_DIR}/${id}`, { signal, ownedBrowser: true, onOwnerCleanupFailure: recordCleanupFailure });
+    page = await openComposition(`${FILM_LOOK_SCRATCH_DIR}/${id}`, { signal, ownedBrowser: true, onOwnerCleanupFailure: markCleanupUncertain });
     await page.send('Emulation.setDeviceMetricsOverride', { width, height, deviceScaleFactor: 1, mobile: false });
     if (look.version === 2) await page.send('Emulation.setDefaultBackgroundColorOverride', { color: { r: 0, g: 0, b: 0, a: 0 } });
     // The resize relays out the page; the screenshot waits for the paint after it.
@@ -112,12 +118,27 @@ export async function applyFilmLookBake({ filename, sourceMeta, look: input, sig
     page.check();
     ({ data: png } = await page.send('Page.captureScreenshot', { format: 'png', fromSurface: true, captureBeyondViewport: false }));
     page.check();
-    await page.close({ verify: true });
-    page = null;
+    rendered = true;
   } finally {
-    if (page) await page.close().catch(error => { recordCleanupFailure(); throw error; });
-    if (!cleanupUncertain) await rm(scratch, { recursive: true, force: true }).catch(error => { recordCleanupFailure(); throw error; });
+    try {
+      await page?.close({ verify: rendered });
+    } catch (error) {
+      console.error('❌ Film look browser close failed');
+      cleanupFailure = { error };
+    }
+    // A context close can fail even when its owned process has settled.
+    // Only the owner cleanup callback signals that the scratch must stay.
+    if (!cleanupUncertain) {
+      try {
+        await rm(scratch, { recursive: true, force: true });
+      } catch (error) {
+        console.error('❌ Film look scratch removal failed');
+        markCleanupUncertain();
+        cleanupFailure ??= { error };
+      }
+    }
   }
+  if (cleanupFailure) throw cleanupFailure.error;
   const data = Buffer.from(png, 'base64');
 
   const base = filename.slice(0, -ext.length);
