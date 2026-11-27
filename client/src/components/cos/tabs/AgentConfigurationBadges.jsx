@@ -1,5 +1,6 @@
 import { Eye, GitBranch, GitPullRequest, RefreshCw, Sparkles } from 'lucide-react';
-import { DEFAULT_REVIEWER, normalizeReviewers } from '../constants';
+import { DEFAULT_REVIEWER, normalizeReviewers, reviewerLabel } from '../constants';
+import { isProviderReviewer } from '../../../lib/reviewerPins.js';
 import { harnessLabel, providerHarnessId } from '../../../utils/providerHarnesses';
 import { isFalsyMeta, isTruthyMeta } from '../../../../../server/lib/metadataFlags.js';
 
@@ -124,7 +125,7 @@ function buildProviderConfigBadges(metadata = {}) {
   ].filter(Boolean);
 }
 
-export default function AgentConfigurationBadges({ agent }) {
+export default function AgentConfigurationBadges({ agent, providers }) {
   const providerConfigBadges = buildProviderConfigBadges(agent.metadata);
 
   return (
@@ -206,11 +207,12 @@ export default function AgentConfigurationBadges({ agent }) {
               reviewer: agent.metadata.configReviewer
             });
             const isDefault = reviewers.length === 1 && reviewers[0] === DEFAULT_REVIEWER;
+            const labels = reviewers.map(reviewer => isProviderReviewer(reviewer) ? reviewerLabel(reviewer, providers) : reviewer);
             return (
-              <span className="flex items-center gap-1 px-1.5 py-0.5 text-[11px] rounded bg-indigo-500/15 text-indigo-400"
-                    title={`Review loop enabled — agent will iterate on PR feedback (reviewers: ${reviewers.join(' → ')})`}>
-                <RefreshCw size={10} aria-hidden="true" />
-                Review{isDefault ? '' : `: ${reviewers.join(', ')}`}
+              <span className="flex items-center gap-1 min-w-0 max-w-full [overflow-wrap:anywhere] px-1.5 py-0.5 text-[11px] rounded bg-indigo-500/15 text-indigo-400"
+                    title={`Review loop enabled — agent will iterate on PR feedback (reviewers: ${labels.join(' → ')})`}>
+                <RefreshCw size={10} className="shrink-0" aria-hidden="true" />
+                Review{isDefault ? '' : `: ${labels.join(', ')}`}
               </span>
             );
           })()}

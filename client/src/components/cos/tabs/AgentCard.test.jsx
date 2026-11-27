@@ -705,6 +705,23 @@ describe('AgentCard responsive header', () => {
     expect(screen.queryByLabelText('Execution options used')).not.toBeInTheDocument();
   });
 
+  it.each([
+    [['provider:example-gpu'], undefined, 'example-gpu', 'example-gpu'],
+    [['provider:example-gpu', 'codex'], [{ id: 'example-gpu', name: 'Example GPU' }], 'Example GPU, codex', 'Example GPU → codex'],
+  ])('shows configured reviewers %j on the review badge', (configReviewers, providers, text, sequence) => {
+    render(
+      <MemoryRouter>
+        <AgentCard
+          agent={{ ...agent, metadata: { ...agent.metadata, configReviewLoop: true, configReviewers } }}
+          providers={providers}
+          completed
+        />
+      </MemoryRouter>
+    );
+
+    expect(screen.getByText(`Review: ${text}`)).toHaveAttribute('title', expect.stringContaining(`(reviewers: ${sequence})`));
+  });
+
   it('shows provider route provenance on active and completed cards', () => {
     const routeMetadata = {
       providerId: 'claude-ollama',

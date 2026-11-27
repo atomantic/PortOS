@@ -283,7 +283,7 @@ export default function AgentsTab({ agentsLoaded = true, agentsError = null, onR
     <div className="space-y-6">
       {agentId && <section aria-label="Selected agent" className="space-y-2">
         <h3 className="text-lg font-semibold">Selected agent</h3>
-        {selectedAgent ? <AgentCard key={agentId} agent={selectedAgent}
+        {selectedAgent ? <AgentCard key={agentId} agent={selectedAgent} providers={providers}
           initiallyExpanded liveOutput={liveOutputs[agentId]} completed={selectedAgent.status === 'completed'}
           paused={selectedAgent.status === 'paused'} durations={durations} onFeedbackChange={handleFeedbackChange}
           onPause={handlePause} onKill={handleKill} onResume={selectedAgent.deliveryPending ? undefined : handleResumeClick}
@@ -320,6 +320,7 @@ export default function AgentsTab({ agentsLoaded = true, agentsError = null, onR
               <AgentCard
                 key={agent.id}
                 agent={agent}
+                providers={providers}
                 onPause={handlePause}
                 onKill={handleKill}
                 onRelaunch={handleRelaunchClick}
@@ -343,6 +344,7 @@ export default function AgentsTab({ agentsLoaded = true, agentsError = null, onR
               <AgentCard
                 key={agent.id}
                 agent={agent}
+                providers={providers}
                 paused
                 onDelete={handleDelete}
                 onResume={handleResumeClick}
@@ -450,7 +452,7 @@ export default function AgentsTab({ agentsLoaded = true, agentsError = null, onR
           )}
           <div className="grid grid-cols-1 items-start gap-3 xl:grid-cols-[repeat(auto-fit,minmax(32rem,1fr))]">
             {filteredCompleted.map(agent => (
-              <AgentCard key={agent.id} agent={agent} completed durations={durations}
+              <AgentCard key={agent.id} agent={agent} providers={providers} completed durations={durations}
                 onDelete={agent.deliveryPending ? undefined : handleDelete}
                 onResume={agent.deliveryPending ? undefined : handleResumeClick} onFeedbackChange={handleFeedbackChange} />
             ))}

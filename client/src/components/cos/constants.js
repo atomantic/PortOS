@@ -316,8 +316,6 @@ export function pinnedPrCompletion(metadata) {
 // PortOS's `POST /api/code-review/local` endpoint, which runs the model
 // configured on the Models → Code Reviewers page.
 //
-// Copy only — the ROSTER is `REVIEWER_VALUES` in `client/src/lib/reviewerPins.js`,
-// which the server suite pins against the server's own enum.
 const CODE_REVIEWERS_PAGE = getNavPageForPath('/models/code-reviewers')?.breadcrumb || 'its management page';
 const REVIEWER_COPY = {
   pi: { label: 'Pi', description: 'Pi Coding Agent CLI reviews the supplied diff without tools' },
@@ -356,13 +354,7 @@ export const reviewerLabel = (value, providers) => {
   return REVIEWER_OPTIONS.find(o => o.value === normalizeReviewerSlug(value))?.label || value;
 };
 
-// The whole reviewer vocabulary — the roster, its aliases and defaults, the
-// review-username pattern and cap, the max-rounds ceiling, the stop-mode list,
-// and the per-reviewer pin vocabularies — lives in `client/src/lib/reviewerPins.js`
-// and is re-exported here so existing imports keep working. It is NOT defined in
-// this file because the server suite pins the mirror against the server's own
-// constants, and this module's `lucide-react` icon import isn't installed in that
-// workspace — see the leaf module's header for the full rationale.
+// Keep the existing component imports for shared vocabulary and UI pin controls.
 export {
   REVIEWER_VALUES,
   REVIEWER_ALIASES,
