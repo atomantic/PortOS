@@ -5,10 +5,10 @@
  */
 
 import { Router } from 'express';
-import { z } from 'zod';
+import { xcodeInstallScriptsSchema } from '../../lib/appValidation.js';
 import { validateRequest } from '../../lib/validateRequest.js';
 import { asyncHandler, ServerError } from '../../lib/errorHandler.js';
-import { installScripts, XCODE_SCRIPT_NAMES } from '../../services/xcodeScripts.js';
+import { installScripts } from '../../services/xcodeScripts.js';
 import { loadApp, pathExists } from './shared.js';
 
 const router = Router();
@@ -16,11 +16,8 @@ const router = Router();
 // POST /api/apps/:id/xcode-scripts/install - Install missing management scripts
 // Restrict the request payload to the known, fixed set of script names so that
 // arbitrary or oversized arrays are rejected at the validation layer.
-const installScriptsSchema = z.object({
-  scripts: z.array(z.enum(XCODE_SCRIPT_NAMES)).min(1).max(XCODE_SCRIPT_NAMES.length)
-});
 router.post('/:id/xcode-scripts/install', loadApp, asyncHandler(async (req, res) => {
-  const { scripts } = validateRequest(installScriptsSchema, req.body);
+  const { scripts } = validateRequest(xcodeInstallScriptsSchema, req.body);
   if (!req.loadedApp.repoPath || !await pathExists(req.loadedApp.repoPath)) {
     throw new ServerError('App repository path not found', { status: 400, code: 'PATH_NOT_FOUND' });
   }

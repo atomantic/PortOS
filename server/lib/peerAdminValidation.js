@@ -17,6 +17,10 @@ export const peerAdminPeerSchema = z.object({ peerId }).strict();
 // ever an exact lookup into LOCAL_LLM_CATALOG, never a path segment.
 export const PEER_CATALOG_KEY_RE = /^[a-z0-9][a-z0-9.-]*$/;
 export const peerCatalogKeySchema = z.string().min(1).max(100).regex(PEER_CATALOG_KEY_RE);
+export const peerCatalogReviewTargetSchema = z.object({
+  backend: z.literal('lmstudio'),
+  catalogKey: peerCatalogKeySchema,
+}).strict();
 export const peerAdminGrantSchema = z.object({
   peerId,
   action: peerAdminActionSchema,

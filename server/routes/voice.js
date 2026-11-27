@@ -12,8 +12,28 @@ import { voiceEngineQuerySchema } from '../lib/queryValidation.js';
 
 import { Router } from 'express';
 import voiceAvatarRoutes from './voiceAvatar.js';
-import { TTS_ENGINE_IDS, TTS_ENGINE_CONFIG_KEYS } from '../lib/voiceEngines.js';
-import { z } from 'zod';
+import { TTS_ENGINE_CONFIG_KEYS } from '../lib/voiceEngines.js';
+import {
+  voicePiperFetchBodySchema,
+  facetimeActionSchema,
+  voiceConfigPatchSchema,
+  voiceProfileListSchema,
+  promotePresetProfileSchema,
+  voiceDesignCandidateSchema,
+  voiceCloneCandidateSchema,
+  promoteProfileSchema,
+  interactiveBenchmarkSchema,
+  interactivePlaybackReceiptSchema,
+  fineTuneStartSchema,
+  fineTuneJobParamsSchema,
+  fineTunePromoteSchema,
+  profileIdParamsSchema,
+  studioDesignSchema,
+  studioAssignmentSchema,
+  voiceTestBodySchema,
+  whisperActionSchema,
+  voiceStudioProfilesQuerySchema,
+} from '../lib/voiceValidation.js';
 import { asyncHandler, ServerError } from '../lib/errorHandler.js';
 import { validateRequest } from '../lib/validateRequest.js';
 import { MAX_BASE64_UPLOAD_BYTES } from '../lib/uploadLimits.js';
@@ -43,18 +63,12 @@ import {
   promoteCheckpoint,
 } from '../services/voice/fineTuning.js';
 import { findPiperVoice } from '../services/voice/piper-voices.js';
-import { HHMM_RE, MAX_PROACTIVE_TEXT_LEN } from '../services/voice/proactiveSpeech.js';
-import { voicePiperFetchBodySchema } from '../lib/voiceValidation.js';
 
 const router = Router();
 router.use('/avatar', voiceAvatarRoutes);
 router.use(observeModelMutations('voice-readiness'));
 
-const facetimeActionSchema = z.object({}).strict();
-
 const validEngine = (v) => VALID_ENGINES.has(v) ? v : undefined;
-
-const MAX_VOICE_TEXT_LEN = MAX_PROACTIVE_TEXT_LEN;
 
 // Older clients/configs still send `trigger`; it was never read, so drop it
 // before .strict() validation instead of 400ing them.
@@ -63,94 +77,6 @@ const stripLegacyTrigger = (body) => {
   const { trigger: _trigger, ...rest } = body;
   return rest;
 };
-
-const voiceConfigPatchSchema = z.object({
-  enabled: z.boolean().optional(),
-  hotkey: z.string().max(32).optional(),
-  facetime: z.object({
-    maxCallMinutes: z.number().int().min(1).max(120).optional(),
-    targetHandle: z.string().trim().max(254).refine((value) => value === '' || /^\+?[1-9]\d{6,14}$/.test(value) || z.string().email().safeParse(value).success, 'Must be an E.164 phone number or email address').optional(),
-    targetName: z.string().trim().max(120).optional(),
-    blackHole2chLabel: z.string().trim().min(1).max(120).optional(),
-    blackHole16chLabel: z.string().trim().min(1).max(120).optional(),
-    escalateCritical: z.boolean().optional(),
-    escalateAfterMinutes: z.number().int().min(1).max(1440).optional(),
-    autoAnswer: z.boolean().optional(),
-  }).partial().optional(),
-  stt: z.object({
-    engine: z.enum(['whisper', 'web-speech']).optional(),
-    endpoint: z.string().url().optional(),
-    model: z.string().max(64).optional(),
-    modelPath: z.string().max(512).optional(),
-    language: z.string().max(16).optional(),
-    coreml: z.boolean().optional(),
-    vocabularyPrompt: z.string().max(4000).optional(),
-  }).partial().optional(),
-  tts: z.object({
-    engine: z.enum([...TTS_ENGINE_IDS, 'kokoro']).optional(),
-    retiredEngine: z.literal('kokoro').optional(),
-    rate: z.number().min(0.25).max(4).optional(),
-    kokoro: z.object({
-      modelId: z.string().max(128).optional(),
-      dtype: z.enum(['fp32', 'fp16', 'q8', 'q4', 'q4f16']).optional(),
-      voice: z.string().max(64).optional(),
-    }).partial().optional(),
-    piper: z.object({
-      voice: z.string().max(128).optional(),
-      voicePath: z.string().max(512).optional(),
-      speakerId: z.number().int().nullable().optional(),
-    }).partial().optional(),
-    qwen3: z.object({
-      modelId: z.string().max(128).optional(),
-      voice: z.string().max(128).optional(),
-    }).partial().optional(),
-  }).partial().optional(),
-  llm: z.object({
-    provider: z.string().max(80).optional(),
-    model: z.string().max(128).optional(),
-    visionModel: z.string().max(128).optional(),
-    systemPrompt: z.string().max(4000).optional(),
-    usePersonality: z.boolean().optional(),
-    personality: z.object({
-      name: z.string().max(64).optional(),
-      role: z.string().max(128).optional(),
-      traits: z.array(z.string().max(64)).max(20).optional(),
-      speechStyle: z.string().max(256).optional(),
-      customPrompt: z.string().max(2000).optional(),
-    }).partial().optional(),
-    tools: z.object({
-      enabled: z.boolean().optional(),
-      maxIterations: z.number().int().min(1).max(10).optional(),
-    }).partial().optional(),
-    codeAgent: z.object({
-      enabled: z.boolean().optional(),
-      provider: z.string().max(80).optional(),
-      model: z.string().max(128).optional(),
-      announceOnComplete: z.boolean().optional(),
-    }).partial().optional(),
-    proactive: z.object({
-      enabled: z.boolean().optional(),
-      quietHours: z.object({
-        enabled: z.boolean().optional(),
-        start: z.string().regex(HHMM_RE).optional(),
-        end: z.string().regex(HHMM_RE).optional(),
-      }).partial().optional(),
-    }).partial().optional(),
-    fastPath: z.object({
-      enabled: z.boolean().optional(),
-      triggers: z.boolean().optional(),
-      browserLlm: z.boolean().optional(),
-      browser: z.object({
-        temperature: z.number().min(0).max(2).optional(),
-        topK: z.number().int().min(1).max(128).optional(),
-      }).partial().optional(),
-    }).partial().optional(),
-  }).partial().optional(),
-  vad: z.object({
-    endOfSpeechMs: z.number().int().min(100).max(5000).optional(),
-    minUtteranceMs: z.number().int().min(50).max(5000).optional(),
-  }).partial().optional(),
-}).strict();
 
 // GET /api/voice/config — current merged voice settings
 router.get('/config', asyncHandler(async (_req, res) => {
@@ -241,97 +167,6 @@ router.get('/voices', asyncHandler(async (req, res) => {
   res.json(await listVoices(validEngine(validateRequest(voiceEngineQuerySchema, req.query).engine)));
 }));
 
-const voiceProfileListSchema = z.object({
-  universeId: z.string().trim().min(1).max(160).optional(),
-  characterId: z.string().trim().min(1).max(160).optional(),
-}).strict();
-
-const promotePresetProfileSchema = z.object({
-  universeId: z.string().trim().min(1).max(160),
-  characterId: z.string().trim().min(1).max(160),
-  characterName: z.string().trim().max(160).optional(),
-  voiceId: z.string().trim().min(1).max(160),
-}).strict();
-
-const voiceDesignCandidateSchema = z.object({
-  universeId: z.string().trim().min(1).max(160),
-  characterId: z.string().trim().min(1).max(160),
-  characterName: z.string().trim().max(160).optional(),
-  instructions: z.string().trim().max(2000).optional(),
-  seed: z.number().int().optional(),
-  modelId: z.string().trim().max(160).optional(),
-  rate: z.number().min(0.25).max(4).optional(),
-}).strict();
-
-const voiceCloneCandidateSchema = z.object({
-  universeId: z.string().trim().min(1).max(160),
-  characterId: z.string().trim().min(1).max(160),
-  characterName: z.string().trim().max(160).optional(),
-  filename: z.string().trim().min(1).max(160),
-  audioBase64: z.string().min(1),
-  transcript: z.string().trim().max(4000).optional(),
-  performerConsentConfirmed: z.boolean(),
-  licensePosture: z.string().trim().max(160).optional(),
-  modelId: z.string().trim().max(160).optional(),
-  rate: z.number().min(0.25).max(4).optional(),
-}).strict();
-
-const promoteProfileSchema = z.object({
-  routes: z.object({
-    studio: z.object({ enabled: z.boolean().optional() }).partial().optional(),
-    interactive: z.object({
-      enabled: z.boolean().optional(),
-      maxFirstAudioMs: z.number().min(50).max(5000).optional(),
-    }).partial().optional(),
-  }).partial().optional(),
-}).strict();
-
-const interactiveBenchmarkSchema = z.object({
-  maxFirstAudioMs: z.number().min(50).max(5000).optional(),
-}).strict();
-
-const interactivePlaybackReceiptSchema = z.object({
-  benchmarkId: z.string().uuid(),
-  renderRequestLatencyMs: z.number().min(0).max(3600000),
-  playbackStartupMs: z.number().min(0).max(30000),
-}).strict();
-
-const fineTuneStartSchema = z.object({
-  epochs: z.number().int().min(1).max(50).optional(),
-  checkpointInterval: z.number().int().min(10).max(500).optional(),
-  baseModel: z.string().trim().max(160).optional(),
-}).strict();
-
-const fineTuneJobParamsSchema = z.object({
-  id: z.string().trim().regex(/^[a-z0-9][a-z0-9-]{0,79}$/),
-  // Job ids are minted with randomUUID and are joined into a filesystem path
-  // when the run is resolved from its on-disk record, so anything that could
-  // carry a separator or `..` is rejected here.
-  jobId: z.string().trim().uuid(),
-}).strict();
-
-const fineTunePromoteSchema = z.object({
-  checkpointId: z.string().trim().min(1).max(160),
-}).strict();
-
-const profileIdParamsSchema = z.object({
-  id: z.string().trim().regex(/^[a-z0-9][a-z0-9-]{0,79}$/),
-}).strict();
-
-const studioDesignSchema = z.object({
-  label: z.string().trim().min(1).max(160),
-  instructions: z.string().trim().min(1).max(2000),
-  text: z.string().trim().min(1).max(400),
-  seed: z.number().int().min(0).max(2147483647).default(42),
-  rate: z.number().min(0.5).max(2).default(1),
-  pitchSemitones: z.number().int().min(-12).max(12).default(0),
-  genSeconds: z.number().min(2).max(6).default(4),
-}).strict();
-const studioAssignmentSchema = z.object({
-  enableInteractive: z.boolean().default(false),
-  universeId: z.string().trim().min(1).max(160),
-  characterId: z.string().trim().min(1).max(160),
-}).strict();
 const notifyStudio = req => emitToOperatorsOn(req.app.get('io'), 'voice-studio:changed', {});
 // Include legacy character-editor mutations so an open library stays current.
 router.use('/profiles', (req, res, next) => {
@@ -342,10 +177,7 @@ router.use('/profiles', (req, res, next) => {
 });
 
 router.get('/studio/profiles', asyncHandler(async (req, res) => {
-  const filters = validateRequest(z.object({
-    limit: z.coerce.number().int().min(1).max(100).default(30),
-    cursor: z.string().max(512).optional(),
-  }).strict(), req.query);
+  const filters = validateRequest(voiceStudioProfilesQuerySchema, req.query);
   res.json(await listStudioProfiles(filters));
 }));
 router.get('/profiles/:id', asyncHandler(async (req, res) => {
@@ -527,11 +359,6 @@ router.post('/piper/fetch', asyncHandler(async (req, res) => {
 }));
 
 // POST /api/voice/test
-const voiceTestBodySchema = z.object({
-  text: z.string().trim().min(1).max(MAX_VOICE_TEXT_LEN),
-  voice: z.string().trim().default(''),
-  engine: z.string().trim().default(''),
-});
 router.post('/test', asyncHandler(async (req, res) => {
   const { text, voice: requestedVoice, engine: requestedEngine } = validateRequest(voiceTestBodySchema, req.body ?? {});
   const voice = requestedVoice || undefined;
@@ -542,9 +369,6 @@ router.post('/test', asyncHandler(async (req, res) => {
   res.send(wav);
 }));
 
-const whisperActionSchema = z.object({
-  action: z.enum(['start', 'stop']),
-});
 router.post('/whisper', asyncHandler(async (req, res) => {
   const parsed = whisperActionSchema.safeParse(req.body || {});
   if (!parsed.success) {

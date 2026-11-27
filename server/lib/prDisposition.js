@@ -23,6 +23,9 @@ export const PR_COMPLETIONS = Object.freeze({
 
 export const PR_COMPLETION_VALUES = Object.freeze(Object.values(PR_COMPLETIONS));
 
+// Direct forge merge methods are separate from the task's completion policy.
+export const MERGE_METHODS = Object.freeze(['merge', 'squash', 'rebase']);
+
 const PR_COMPLETION_SET = new Set(PR_COMPLETION_VALUES);
 
 // New PR tasks default to PortOS-coordinated review and automatic merge; stored task records keep their legacy resolution and app defaults never rewrite a run's pinned policy.

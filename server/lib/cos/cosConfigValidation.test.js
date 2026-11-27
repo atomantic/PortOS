@@ -1,15 +1,6 @@
-import { describe, it, expect, vi } from 'vitest';
-
-// The schema is the save-path gate for avatar styles: pin that a rigged
-// record spelling persists while traversal-shaped values still 400. The
-// service graph behind the route is stubbed — only the exported schema is
-// under test here.
-vi.mock('../services/cos/cos.js', () => ({}));
-vi.mock('../services/domainUsage.js', () => ({ getAllDomainUsageToday: vi.fn() }));
-vi.mock('../services/memoryEmbeddings.js', () => ({ reinitialize: vi.fn() }));
-
-import { cosConfigSchema } from './cosStatusRoutes.js';
-import { AVATAR_STYLE_IDS } from '../lib/avatarStyles.js';
+import { describe, it, expect } from 'vitest';
+import { cosConfigSchema } from './cosConfigValidation.js';
+import { AVATAR_STYLE_IDS } from '../avatarStyles.js';
 
 describe('cosConfigSchema avatarStyle', () => {
   it('accepts every style in the shared registry, so a style added there is never a settings 400', () => {

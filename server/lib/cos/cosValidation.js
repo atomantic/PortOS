@@ -23,6 +23,7 @@ import { AUDIT_DOMAIN_ALIASES, auditDomainFor } from '../auditDomains.js';
 import { AUDIT_TASK_TYPE_LIST, DEPFREE_MODES } from '../auditCatalog.js';
 import { CLAIM_DRAIN_TASK_TYPES } from '../qualitySchedulePlan.js';
 import { JOB_INTERVAL_VALUES } from '../autonomousJobIntervals.js';
+import { SUGGESTED_AFTER_MAX } from '../scheduleRunOrder.js';
 import { jobFormFieldsSchema, jobFormValuesSchema } from '../jobFormFields.js';
 import { TASK_DATA_INPUT_IDS } from '../taskDataInputCatalog.js';
 import { GOAL_FIDELITY_FOLLOW_UP_TRIGGERS } from '../goalFidelityFollowUp.js';
@@ -1057,4 +1058,80 @@ export const heldCheckoutRetireBodySchema = z.object({
   branch: z.string().min(1).nullable(),
   locked: z.boolean(),
   lockReason: z.string().nullable(),
+});
+
+export const scheduleLabelsSchema = z.array(z.string().trim().min(1).max(40)).max(20)
+  .transform(labels => [...new Set(labels.map(label => label.toLowerCase()))]);
+
+// Shape only — normalizeSuggestedAfter does the trimming, self-drop and dedupe
+// so the storage rules live with the field's own helper, not in the route.
+export const suggestedAfterSchema = z.array(z.string()).max(SUGGESTED_AFTER_MAX);
+
+// A manual maintenance run names the app, the provider and the model up front
+// (AGENTS.md AI-policy: the click IS the consent). Any enabled CLI/TUI provider
+// is accepted — one outside every subscription family runs unfamilied, see
+// `maintenanceRun.js#manualBurnFamily` — so the family check belongs to the
+// service's live provider gate, not to this schema. Blank effort inherits each
+// scheduled task's saved effort.
+export const maintenanceRunStartSchema = z.object({
+  taskTypes: scheduledAuditIdsSchema.refine(ids => ids.length > 0, 'Select at least one audit').optional(),
+  // The user named these checks one by one (the Quality tab's per-category Run),
+  // so each runs even where the repository scan says it cannot apply.
+  explicitCheck: z.boolean().optional(),
+  mode: z.enum(['file-issues', 'fix']).optional(),
+  auditDepth: z.enum(['quick', 'deep']).optional(),
+  prCompletion: z.enum([...PR_COMPLETION_VALUES, 'inherit']).optional(),
+  claimBetweenAudits: z.boolean().optional(),
+  claimHandler: z.object({
+    providerId: z.string().trim().min(1),
+    model: z.string().trim().min(1),
+    effort: z.enum(EFFORT_LEVELS).nullable().optional(),
+    executionOptions: executionOptionsSchema.optional(),
+  }).nullable().optional(),
+  appId: z.string().trim().min(1),
+  providerId: z.string().trim().min(1),
+  model: z.string().trim().min(1),
+  effort: z.enum(EFFORT_LEVELS).nullable().optional(),
+  executionOptions: executionOptionsSchema.optional(),
+}).strict();
+
+export const maintenanceRunArchiveSchema = z.object({ appId: z.string().min(1), archived: z.boolean() }).strict();
+
+export const enhanceTaskSchema = z.object({
+  description: z.string().min(1),
+  context: z.string().optional(),
+});
+
+// One-off "implement THIS JIRA ticket" task (the per-card play button on the
+// app overview's sprint board). `ticketKey` is a JIRA key like `PROJ-1234`.
+export const jiraTicketTaskSchema = z.object({
+  app: z.string().min(1),
+  ticketKey: z.string().trim().regex(/^[A-Za-z][A-Za-z0-9]*-\d+$/, 'Invalid JIRA ticket key'),
+});
+
+export const cosTaskListQuerySchema = z.object({
+  view: z.enum(['queue', 'completed', 'full']).optional(),
+  source: z.enum(['user', 'internal']).default('user'),
+  selected: z.string().max(512).optional(),
+  cursor: z.string().max(512).optional(),
+});
+
+export const cosTaskCompletedQuerySchema = z.object({ limit: z.coerce.number().int().min(1).max(100).default(25) });
+
+export const cosCachedHealthQuerySchema = z.object({ cachedHealth: z.literal('1').optional() });
+
+export const cosBriefingDateParamsSchema = z.object({
+  date: z.string().regex(/^\d{4}-\d{2}-\d{2}$/, 'date must be YYYY-MM-DD')
+});
+
+// `since` is the client's last-visit marker (ISO-8601). Optional and tolerant:
+// `getWhileAwayActivity` already clamps an absent/garbage/future marker to a
+// 24h fallback, so a malformed value preprocesses to `undefined` (let the
+// service apply its fallback) rather than 400-ing the dashboard card into a
+// blank state. A valid datetime string passes through unchanged.
+export const whileAwayQuerySchema = z.object({
+  since: z.preprocess(
+    (v) => (typeof v === 'string' && !Number.isNaN(Date.parse(v)) ? v : undefined),
+    z.string().optional()
+  )
 });

@@ -13,12 +13,11 @@ import { sha256File, syncDirectory } from '../lib/fileCore.js';
 import { canonicalStringify } from '../lib/objects.js';
 import { assertNotRealDataWrite } from '../lib/testDataIsolation.js';
 import { assertPeerExecutionCapability } from '../lib/maintenanceExclusive.js';
-import { PEER_CATALOG_KEY_RE, peerCatalogKeySchema } from '../lib/peerAdminValidation.js';
+import { PEER_CATALOG_KEY_RE, peerCatalogReviewTargetSchema } from '../lib/peerAdminValidation.js';
 
 const digest = z.string().regex(/^[a-f0-9]{64}$/);
 const bytes = z.number().int().min(16).max(512 * 1024 ** 3).safe();
-export const peerCatalogReviewTargetSchema = z.object({ backend: z.literal('lmstudio'),
-  catalogKey: peerCatalogKeySchema }).strict();
+export { peerCatalogReviewTargetSchema };
 export const peerCatalogReviewSchema = peerCatalogReviewTargetSchema.extend({
   sourceRevision: z.string().regex(/^[a-f0-9]{40}$/),
   fileName: z.string().max(180).regex(/^[A-Za-z0-9][A-Za-z0-9_.-]*\.gguf$/)

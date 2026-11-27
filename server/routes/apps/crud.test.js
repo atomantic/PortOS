@@ -74,8 +74,7 @@ vi.mock('../../services/appIconDetect.js', () => ({
 }));
 
 vi.mock('../../services/xcodeScripts.js', () => ({
-  checkScripts: vi.fn().mockReturnValue({ missing: [], present: [] }),
-  XCODE_SCRIPT_NAMES: ['deploy.sh', 'take_screenshots.sh', 'take_screenshots_macos.sh']
+  checkScripts: vi.fn().mockReturnValue({ missing: [], present: [] })
 }));
 
 import * as appsService from '../../services/apps.js';

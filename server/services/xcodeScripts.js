@@ -2,6 +2,7 @@ import { existsSync } from 'fs';
 import { readFile, writeFile } from 'fs/promises';
 import { join } from 'path';
 import { exec, execFile } from '../lib/childProcess.js';
+import { XCODE_SCRIPT_NAME } from '../lib/xcodeScriptNames.js';
 import { promisify } from 'util';
 import { activateAppLine, osascriptSystemEvents } from './xcodeScriptBuilders.js';
 
@@ -977,19 +978,19 @@ echo "If sidebar navigation failed, grant Accessibility permission to your termi
  */
 export const XCODE_MANAGEMENT_SCRIPTS = [
   {
-    name: 'deploy.sh',
+    name: XCODE_SCRIPT_NAME.deploy,
     description: 'TestFlight deployment',
     generator: generateDeployScript,
     appTypes: ['xcode', 'ios-native', 'macos-native']
   },
   {
-    name: 'take_screenshots.sh',
+    name: XCODE_SCRIPT_NAME.screenshots,
     description: 'iOS/iPad screenshot automation',
     generator: generateScreenshotScript,
     appTypes: ['xcode', 'ios-native']
   },
   {
-    name: 'take_screenshots_macos.sh',
+    name: XCODE_SCRIPT_NAME.macScreenshots,
     description: 'macOS screenshot automation',
     generator: generateMacScreenshotScript,
     appTypes: ['xcode', 'macos-native']
@@ -1002,13 +1003,6 @@ export const XCODE_MANAGEMENT_SCRIPTS = [
 export function scriptsForAppType(appType) {
   return XCODE_MANAGEMENT_SCRIPTS.filter(s => s.appTypes.includes(appType));
 }
-
-/**
- * The set of script names installable via the API. Used by route validation
- * to fail fast on bogus payloads instead of relying on installScripts to
- * report unknowns one-by-one.
- */
-export const XCODE_SCRIPT_NAMES = XCODE_MANAGEMENT_SCRIPTS.map(s => s.name);
 
 /**
  * Check which management scripts are missing from an Xcode app's repo.
