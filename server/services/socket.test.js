@@ -37,6 +37,8 @@ vi.mock('./streamingDetect.js', () => ({ streamDetection: vi.fn() }));
 vi.mock('./cos/cosEvents.js', () => ({ cosEvents: { on: vi.fn((...args) => queueListeners.cos.push(args)) }, emitLog: vi.fn() }));
 vi.mock('./apps.js', () => ({ appsEvents: { on: vi.fn() }, getAppById: vi.fn(), notifyAppsChanged: vi.fn(), updateApp: vi.fn() }));
 vi.mock('./appProcessStatus.js', () => ({ resolvePm2HomeForProcess: vi.fn() }));
+const processHandlers = vi.hoisted(() => ({ register: vi.fn((socket) => socket.on('processes:subscribe', vi.fn())) }));
+vi.mock('../sockets/processes.js', () => ({ registerProcessHandlers: processHandlers.register }));
 // logAction appends to the real history file — mock it or this suite writes to data/.
 vi.mock('./history.js', () => ({ logAction: vi.fn(async () => {}) }));
 vi.mock('../lib/errorHandler.js', () => ({ errorEvents: { on: vi.fn((...args) => queueListeners.errors.push(args)) } }));
@@ -1894,6 +1896,52 @@ describe('agent-processes:subscribe host-control boundary (#19170)', () => {
     vi.mocked(verifyRequestSession).mockImplementation(async (request) => request.headers === headers);
     const agent = connectedSocket({ headers });
     expect(await agent.runEvent('agent-processes:subscribe')).toHaveBeenCalled();
+  });
+});
+
+describe('processes:subscribe host-control boundary (#19729)', () => {
+  let io;
+  const connectedSocket = ({ local = false, headers = {} } = {}) => {
+    const socket = makeSocket();
+    socket.data.portosLocalConnection = local;
+    socket.handshake.headers = headers;
+    socket.use = (fn) => { socket.middleware = fn; };
+    socket.runEvent = async (event) => {
+      const next = vi.fn();
+      await socket.middleware([event], next);
+      if (next.mock.calls.length) await socket.handlers[event]();
+      return next;
+    };
+    io.connect(socket);
+    return socket;
+  };
+
+  beforeEach(() => {
+    io = makeIo();
+    initSocket(io);
+    processHandlers.register.mockClear();
+    vi.mocked(isAuthEnabled).mockResolvedValue(false);
+    vi.mocked(verifyRequestSession).mockResolvedValue(false);
+  });
+
+  it('refuses remote password-free subscriptions before starting process sampling', async () => {
+    const remote = connectedSocket();
+    const next = await remote.runEvent('processes:subscribe');
+    expect(next).not.toHaveBeenCalled();
+    expect(remote.emitted).toContainEqual(['processes:error', expect.objectContaining({ code: 'HOST_CONTROL_FORBIDDEN' })]);
+    expect(processHandlers.register).toHaveBeenCalledTimes(1);
+    expect(remote.handlers['processes:subscribe']).not.toHaveBeenCalled();
+  });
+
+  it('allows local operators and authenticated delegated agent sessions', async () => {
+    const local = connectedSocket({ local: true });
+    expect(await local.runEvent('processes:subscribe')).toHaveBeenCalled();
+
+    vi.mocked(isAuthEnabled).mockResolvedValue(true);
+    const headers = { authorization: 'Bearer example-agent-session' };
+    vi.mocked(verifyRequestSession).mockImplementation(async (request) => request.headers === headers);
+    const agent = connectedSocket({ headers });
+    expect(await agent.runEvent('processes:subscribe')).toHaveBeenCalled();
   });
 });
 

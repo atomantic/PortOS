@@ -94,6 +94,15 @@ export const HOST_CONTROL_GET_ROUTES = Object.freeze([
   'GET /api/data/cos/storage/recording/:date/:id',
   // The directory picker lists any readable host directory, not a PortOS record.
   'GET /api/scaffold/directories',
+  // Obsidian vault reads scan arbitrary host directories and return note contents (#19729).
+  'GET /api/notes/detect',
+  'GET /api/notes/vaults',
+  'GET /api/notes/vaults/:id/scan',
+  'GET /api/notes/vaults/:id/note',
+  'GET /api/notes/vaults/:id/search',
+  'GET /api/notes/vaults/:id/tags',
+  'GET /api/notes/vaults/:id/folders',
+  'GET /api/notes/vaults/:id/graph',
   // Status of a Topaz upscale, part of the gated host upscale workflow (#11076).
   'GET /api/video-gen/upscale/topaz/jobs/:jobId/status',
   // DCP packaging progress, reports and the package's host location.
