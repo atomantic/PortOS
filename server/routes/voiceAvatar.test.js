@@ -24,16 +24,16 @@ beforeEach(() => {
   manageAvatar.mockResolvedValue(canned);
 });
 
-it('requires host control and explicit weight terms without exposing paths or commands', async () => {
+it('requires host control and allows explicit install and update actions without a local terms flag', async () => {
   expect(isHostControlRoute('GET', base + '/status')).toBe(true);
   expect(isHostControlRoute('POST', base + '/runtime')).toBe(true);
   expect(isHostControlRoute('POST', base + '/frames')).toBe(true);
   expect((await request(app).get(base + '/status')).body).toEqual(canned);
-  expect((await request(app).post(base + '/runtime').send({ action: 'install' })).status).toBe(400);
   expect((await request(app).post(base + '/runtime').send({ action: 'start', binary: '/bin/sh' })).status).toBe(400);
   expect(manageAvatar).not.toHaveBeenCalled();
-  expect((await request(app).post(base + '/runtime').send({ action: 'install', acceptTerms: true })).status).toBe(200);
-  expect(manageAvatar).toHaveBeenCalledWith('install');
+  expect((await request(app).post(base + '/runtime').send({ action: 'install' })).status).toBe(200);
+  expect((await request(app).post(base + '/runtime').send({ action: 'update' })).status).toBe(200);
+  expect(manageAvatar.mock.calls).toEqual([['install'], ['update']]);
 });
 
 it('accepts binary output WAV and incrementally serializes only the timestamped frames', async () => {

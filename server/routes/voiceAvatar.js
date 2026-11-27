@@ -5,15 +5,11 @@ import { validateRequest } from '../lib/validateRequest.js';
 import { getAvatarStatus, manageAvatar, renderAvatar } from '../services/voice/avatarRuntime.js';
 import { MAX_AVATAR_WAV_BYTES } from '../lib/uploadLimits.js';
 import { voiceAvatarCommandSchema, voiceAvatarWaveSchema } from '../lib/voiceValidation.js';
-import { avatarError } from '../services/voice/avatarWorker.js';
 
 const router = Router();
 router.get('/status', asyncHandler(async (_req, res) => { res.json(await getAvatarStatus()); }));
 router.post('/runtime', asyncHandler(async (req, res) => {
-  const { action, acceptTerms } = validateRequest(voiceAvatarCommandSchema, req.body);
-  if (['install', 'update'].includes(action) && !acceptTerms) {
-    throw avatarError('Accept the checkpoint terms before downloading the model.', 400);
-  }
+  const { action } = validateRequest(voiceAvatarCommandSchema, req.body);
   res.json(await manageAvatar(action));
 }));
 router.post('/frames', express.raw({ type: 'audio/wav', limit: MAX_AVATAR_WAV_BYTES, inflate: false }), asyncHandler(async (req, res) => {

@@ -44,7 +44,15 @@ function stubApi(page, enabled = true, avatar = {}) {
     const path = new URL(route.request().url()).pathname;
     if (path === '/api/voice/public/synthesize') return route.fulfill({ body: avatarWav || sampleWave(), contentType: 'audio/wav' });
     if (path.startsWith('/api/voice/avatar/') && avatarTarget) return route.continue();
-    if (path === '/api/voice/avatar/frames' && avatar.jpeg) {
+    if (path === '/api/voice/avatar/runtime') {
+      const { action } = route.request().postDataJSON();
+      if (action === 'install') avatar.status = { supported: true, installed: true, phase: 'stopped' };
+      else if (action === 'start') avatar.status = { ...avatar.status, phase: 'running' };
+      else return route.fulfill({ status: 400 });
+      return route.fulfill({ json: avatar.status });
+    }
+    if (path === '/api/voice/avatar/frames') {
+      if (!avatar.jpeg) return route.fulfill({ status: 503, json: { error: 'Renderer unavailable' } });
       const body = Array.from({ length: 50 }, (_, index) => JSON.stringify({ index, timeMs: index * 40, jpeg: avatar.jpeg })).join('\n');
       return route.fulfill({ body: body + '\n', contentType: 'application/x-ndjson' });
     }
@@ -53,7 +61,7 @@ function stubApi(page, enabled = true, avatar = {}) {
     }
     const responses = {
       '/api/voice/config': { ...config, enabled },
-      '/api/voice/avatar/status': { supported: true, installed: true, phase: 'running' },
+      '/api/voice/avatar/status': avatar.status ?? { supported: true, installed: true, phase: 'running' },
       '/api/voice/status': { services: {} },
       '/api/providers': { providers: [{ id: 'fixture', name: 'Test provider', type: 'api', models: ['fixture-model', 'fixture-alternate'] }] },
       '/api/settings/features': { features: [] },
@@ -146,51 +154,61 @@ describe.skipIf(!chrome)('Voice Call console in Chrome', () => {
     }
   });
 
-  it('shows the generated portrait and animates actual audio until interrupted', async () => {
+  it.skipIf(avatarTarget)('shows install and start at the call, with a still portrait before setup', async () => {
     const page = await fixture.browser.newPage({ viewport: { width: 390, height: 800 }, reducedMotion: 'no-preference' });
     try {
-      await stubApi(page);
+      await stubApi(page, true, { status: { supported: true, installed: false, phase: 'stopped' } });
       await page.goto(`${fixture.origin}voice-console-test`);
-      const face = page.getByRole('img', { name: 'Original radio operator test portrait' });
+      const setup = page.getByRole('region', { name: 'Voice avatar model' });
+      await setup.getByRole('heading', { name: /Avatar setup/ }).waitFor();
+      await setup.getByRole('link', { name: 'checkpoint terms' }).waitFor();
+      expect(await setup.getByRole('checkbox').count()).toBe(0);
+
+      const face = page.getByRole('img', { name: 'Radio operator portrait' });
       await face.waitFor();
       const faceBounds = await face.boundingBox();
       expect(faceBounds.width).toBeGreaterThan(180);
       expect(faceBounds.width).toBeCloseTo(faceBounds.height);
-      expect(await face.locator('image').first().evaluate(async element => {
-        const image = new Image();
-        image.src = element.getAttribute('href');
-        await image.decode();
-        return [image.naturalWidth, image.naturalHeight];
+      expect(await face.evaluate(async element => {
+        await element.decode();
+        return [element.naturalWidth, element.naturalHeight];
       })).toEqual([640, 640]);
-      const mouth = face.locator('path[fill="#341b1b"]');
-      const idle = await mouth.getAttribute('transform');
-      const request = page.waitForRequest(req => req.url().endsWith('/api/voice/public/synthesize'));
+      const requests = [];
+      page.on('request', req => { if (req.url().endsWith('/api/voice/avatar/frames')) requests.push(req.url()); });
+      const speech = page.waitForRequest(req => req.url().endsWith('/api/voice/public/synthesize'));
       await page.getByRole('button', { name: 'Play sample' }).click();
-      expect((await request).postDataJSON().text).toContain('PortOS radio check');
-      await page.waitForFunction(transform => {
-        const mouth = document.querySelector('path[fill="#341b1b"]');
-        return mouth?.getAttribute('transform') !== transform && mouth?.getAttribute('transform') !== 'translate(0 352) scale(1 0.00)';
-      }, idle);
+      expect((await speech).postDataJSON().text).toContain('PortOS radio check');
+      await page.getByText('Speaking', { exact: true }).waitFor();
+      expect(requests).toEqual([]);
+      expect(await page.locator('canvas[width="512"]').isVisible()).toBe(false);
       await page.getByRole('button', { name: 'Interrupt' }).click();
-      expect(await mouth.getAttribute('transform')).toBe(idle);
-      await page.getByText('Standby', { exact: true }).waitFor();
+
+      const install = page.waitForRequest(req => req.url().endsWith('/api/voice/avatar/runtime'));
+      await setup.getByRole('button', { name: 'Install AvatarForcing' }).click();
+      expect((await install).postDataJSON()).toEqual({ action: 'install' });
+      await setup.getByRole('button', { name: 'Start AvatarForcing' }).click();
+      await setup.getByRole('heading', { name: /AvatarForcing ready/ }).waitFor();
     } finally {
       await page.close();
     }
   });
 
-  it('opts into generated frames, follows playback, and stops showing frames on interrupt', async () => {
+  it('uses generated frames when ready and stops showing frames on interrupt', async () => {
     const page = await fixture.browser.newPage({ viewport: { width: 390, height: 800 }, reducedMotion: 'no-preference' });
     try {
       const avatar = {};
       await stubApi(page, true, avatar);
       await page.goto(`${fixture.origin}voice-console-test`);
-      await page.getByRole('button', { name: 'Model & voice settings' }).click();
-      await page.getByLabel('Use generated avatar in this browser').check();
-      await page.getByRole('button', { name: 'Close settings' }).click();
+      await page.getByRole('heading', { name: /AvatarForcing ready/ }).waitFor();
       const canvas = page.locator('canvas[width="512"]');
       await expect(canvas.count()).resolves.toBe(1);
       expect(await canvas.isVisible()).toBe(false);
+      if (!avatarTarget) {
+        await page.getByRole('button', { name: 'Play sample' }).click();
+        await page.getByText('No avatar frames arrived.', { exact: false }).waitFor();
+        await page.getByRole('button', { name: 'Interrupt' }).click();
+        expect(await canvas.isVisible()).toBe(false);
+      }
       avatar.jpeg = await page.evaluate(() => {
         const tile = document.createElement('canvas');
         tile.width = tile.height = 2;
@@ -203,6 +221,7 @@ describe.skipIf(!chrome)('Voice Call console in Chrome', () => {
       await page.getByRole('button', { name: 'Play sample' }).click();
       expect((await request).postDataBuffer().subarray(0, 4).toString()).toBe('RIFF');
       await canvas.waitFor({ state: 'visible' });
+      expect(await page.getByText('No avatar frames arrived.', { exact: false }).count()).toBe(0);
       expect(await canvas.evaluate(el => el.getContext('2d').getImageData(256, 256, 1, 1).data[3])).toBe(255);
       await page.getByRole('button', { name: 'Interrupt' }).click();
       await canvas.waitFor({ state: 'hidden' });
@@ -210,6 +229,14 @@ describe.skipIf(!chrome)('Voice Call console in Chrome', () => {
       await page.emulateMedia({ reducedMotion: 'reduce' });
       const seen = [];
       page.on('request', req => { if (req.url().endsWith('/api/voice/avatar/frames')) seen.push(req.url()); });
+      await page.getByRole('button', { name: 'Play sample' }).click();
+      await page.getByText('Speaking', { exact: true }).waitFor();
+      expect(seen).toEqual([]);
+      expect(await canvas.isVisible()).toBe(false);
+      await page.getByRole('button', { name: 'Interrupt' }).click();
+      await page.emulateMedia({ reducedMotion: 'no-preference' });
+      await page.getByRole('button', { name: 'Avatar settings', exact: true }).click();
+      await page.getByLabel('Use generated avatar in this browser').uncheck();
       await page.getByRole('button', { name: 'Play sample' }).click();
       await page.getByText('Speaking', { exact: true }).waitFor();
       expect(seen).toEqual([]);
@@ -235,9 +262,9 @@ describe.skipIf(!chrome)('Voice Call console in Chrome', () => {
           return box.left >= frame.left && box.right <= frame.right;
         });
       })).toBe(true);
-      await consoleView.getByRole('button', { name: 'Avatar' }).click();
-      expect(await consoleView.getByRole('img', { name: 'Original radio operator test portrait' }).count()).toBe(0);
-      expect(await consoleView.getByRole('button', { name: 'Avatar' }).getAttribute('aria-pressed')).toBe('false');
+      await consoleView.getByRole('button', { name: 'Avatar', exact: true }).click();
+      expect(await consoleView.getByRole('img', { name: 'Radio operator portrait' }).count()).toBe(0);
+      expect(await consoleView.getByRole('button', { name: 'Avatar', exact: true }).getAttribute('aria-pressed')).toBe('false');
       await page.getByRole('button', { name: 'Model & voice settings' }).click();
       await page.getByLabel('LLM model', { exact: true }).waitFor();
       const model = page.getByLabel('LLM model', { exact: true });

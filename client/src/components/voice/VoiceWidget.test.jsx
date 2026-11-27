@@ -71,7 +71,6 @@ vi.mock('../../services/voiceClient', () => ({
   whenVoiceTurnAudioDrained: vi.fn(async () => true),
   whenPlaybackDrained: vi.fn(() => Promise.resolve(true)),
   getVadLevel: vi.fn(() => 0),
-  getVoiceOutputLevel: vi.fn(() => 0),
   prepareVoicePlayback: vi.fn(),
   webSpeechSupported: true,
   startWebSpeechCapture: mocks.startWebSpeechCapture,
@@ -99,6 +98,9 @@ vi.mock('../../services/voiceFastPath', () => ({
 vi.mock('../../services/browserLlm', () => ({ warmNano: vi.fn() }));
 vi.mock('../../services/apiPalette', () => ({ getPaletteManifest: vi.fn() }));
 vi.mock('../../services/apiVoice', () => ({ getVoiceConfig: mocks.getVoiceConfig }));
+vi.mock('../../services/apiVoiceAvatar', () => ({
+  fetchVoiceAvatar: vi.fn(async () => ({ supported: false })),
+}));
 vi.mock('../ui/Toast', () => ({ default: mocks.toast }));
 vi.mock('./useVoiceUiSync', () => ({
   useVoiceUiSync: vi.fn(),

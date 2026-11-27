@@ -1,10 +1,9 @@
-import { useEffect, useRef } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import portraitUrl from './call-portrait.webp';
 import { bindVoiceOutputVisualizer } from '../../services/voiceClient';
 import { streamVoiceAvatar } from '../../services/apiVoiceAvatar';
-import { useAvatarRuntime } from './useAvatarRuntime';
 
-function animateWav(canvas, wav, onStop) {
+function animateWav(canvas, wav, onStop, onUnavailable) {
   const abort = new AbortController();
   const frames = new Map();
   const { promise: ready, resolve: primed } = Promise.withResolvers();
@@ -19,7 +18,10 @@ function animateWav(canvas, wav, onStop) {
       latest = index;
       primed();
     }
-  } }).catch(() => {}).finally(primed);
+  } }).catch(() => {}).finally(() => {
+    if (!ended && latest < 0) onUnavailable();
+    primed();
+  });
 
   const draw = (clock) => {
     const target = Math.floor(clock() * 25);
@@ -55,18 +57,18 @@ function animateWav(canvas, wav, onStop) {
   };
 }
 
-export default function VoiceCallGenerativePortrait() {
+export default function VoiceCallGenerativePortrait({ running }) {
   const canvas = useRef(null);
-  const { data } = useAvatarRuntime();
-  const running = data?.phase === 'running';
+  const [unavailable, setUnavailable] = useState(false);
   useEffect(() => {
     if (!running) return undefined;
     const motion = window.matchMedia('(prefers-reduced-motion: reduce)');
     let animation;
     const detach = bindVoiceOutputVisualizer(wav => {
+      setUnavailable(false);
       if (motion.matches) return undefined;
       animation?.stop();
-      animation = animateWav(canvas.current, wav, () => { animation = undefined; });
+      animation = animateWav(canvas.current, wav, () => { animation = undefined; }, () => setUnavailable(true));
       return animation;
     });
     const reduce = () => { if (motion.matches) animation?.stop(); };
@@ -78,8 +80,13 @@ export default function VoiceCallGenerativePortrait() {
     };
   }, [running]);
 
-  return <div className="relative aspect-square w-[min(64vw,15rem)] max-w-full overflow-hidden rounded-lg bg-port-card shadow-lg">
-    <img src={portraitUrl} alt="Radio operator portrait" className="block size-full object-cover" />
-    <canvas ref={canvas} role="presentation" width={512} height={512} style={{ visibility: 'hidden' }} className="pointer-events-none absolute inset-0 size-full" />
+  return <div className="w-[min(64vw,15rem)] max-w-full">
+    <div className="relative aspect-square overflow-hidden rounded-lg bg-port-card shadow-lg">
+      <img src={portraitUrl} alt="Radio operator portrait" className="block size-full object-cover" />
+      <canvas ref={canvas} role="presentation" width={512} height={512} style={{ visibility: 'hidden' }} className="pointer-events-none absolute inset-0 size-full" />
+    </div>
+    {running && unavailable && <p role="status" className="pt-1 text-center text-xs text-port-text-muted">
+      No avatar frames arrived. Voice audio still works.
+    </p>}
   </div>;
 }
