@@ -676,7 +676,7 @@ describe('navigateToUrlPinned tab ownership (closeAfterRead)', () => {
   // Minimal CDP: PUT /json/new hands out a blank tab, /json/close/<id> is
   // recorded, and the socket answers Page.navigate with a frameId + a pinned
   // main-frame Document response, then Runtime.evaluate with `evalValue`.
-  async function startFakeCdp({ evalValue = null, remoteIPAddress = '93.184.216.34', navigateError = null } = {}) {
+  async function startFakeCdp({ evalValue = null, remoteIPAddress = '93.184.216.34', navigateError = null, status = 200 } = {}) {
     const opened = [];
     const closed = [];
     const navigations = [];
@@ -717,7 +717,7 @@ describe('navigateToUrlPinned tab ownership (closeAfterRead)', () => {
           }));
           ws.send(JSON.stringify({
             method: 'Network.responseReceived',
-            params: { requestId: 'R1', loaderId: 'R1', frameId: 'F1', type: 'Document', response: { url, remoteIPAddress, status: 200 } },
+            params: { requestId: 'R1', loaderId: 'R1', frameId: 'F1', type: 'Document', response: { url, remoteIPAddress, status } },
           }));
           return;
         }
@@ -796,13 +796,14 @@ describe('navigateToUrlPinned tab ownership (closeAfterRead)', () => {
   });
 
   it('tears down the tab it read from when evaluateExpression was supplied', async () => {
-    fake = await startFakeCdp({ evalValue: 'read-body' });
+    fake = await startFakeCdp({ evalValue: 'read-body', status: 503 });
     const service = await importServicePointedAtFake();
     const page = await service.navigateToUrlPinned('https://ex.com/a', {
       verifyRemoteIp: () => true,
       evaluateExpression: 'document.body.innerText',
     });
     expect(page.evalResult).toBe('read-body');
+    expect(page.responseStatus).toBe(503);
     expect(fake.closed).toEqual(fake.opened);
   });
 

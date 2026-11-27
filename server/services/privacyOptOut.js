@@ -506,39 +506,39 @@ export async function runVerificationPass({
       // without touching the case. `not_found` is the ONLY path to confirmed.
       const probed = await dispatchWithSubjectConsent(resolvedSubjectId, purpose, () =>
         removalProbe(broker, vectors, { ...probeDeps, subjectId: resolvedSubjectId, verifyingRemoval: true }).catch(onBrokerFetchFailure));
-      if (probed && !probed.skipped) {
-        if (probed.verdict === 'not_found') {
-          await transitionCase(c.id, 'confirmed_removed', { viaRescan: true, evidence: { ...(c.evidence || {}), verifiedRemovedAt: now.toISOString() }, now });
-          confirmed.push({ caseId: c.id, brokerId: c.brokerId });
-        } else if (c.state === 'confirmed_removed') {
-          // A blocked/unknown result is inconclusive; only exposure reopens a case.
-          if (probed.verdict === 'found' || probed.verdict === 'indirect_exposure') {
-            const result = await transitionCase(c.id, 'reappeared', {
-              subjectId: resolvedSubjectId, scanSources: vectors.sources,
-              viaRescan: true, found: probed.found, reason: null,
-              evidence: { ...(c.evidence || {}), ...(probed.evidence || {}), verificationRechecks: 0 },
-              now,
-            });
-            if (!result.skipped) reappeared.push({ caseId: c.id, brokerId: c.brokerId });
-          }
-        } else {
-          // Still listed (verdict === 'found' or similar). Track recheck count.
-          const currentRechecks = c.evidence?.verificationRechecks ?? c.evidence?.recheckCount ?? 0;
-          const rechecks = currentRechecks + 1;
-          if (rechecks >= maxVerificationRechecks) {
-            await transitionCase(c.id, 'human_task_queued', {
-              reason: 'optout_unfulfilled',
-              evidence: { ...(c.evidence || {}), verificationRechecks: rechecks, unfulfilledAt: now.toISOString() },
-              now,
-            });
-            unfulfilled.push({ caseId: c.id, brokerId: c.brokerId });
-          } else {
-            await transitionCase(c.id, 'awaiting_processing', {
-              evidence: { ...(c.evidence || {}), verificationRechecks: rechecks },
-              now,
-            });
-          }
-        }
+      if (!probed || probed.skipped) continue;
+      if (probed.verdict === 'not_found') {
+        await transitionCase(c.id, 'confirmed_removed', { viaRescan: true, evidence: { ...(c.evidence || {}), verifiedRemovedAt: now.toISOString() }, now });
+        confirmed.push({ caseId: c.id, brokerId: c.brokerId });
+        continue;
+      }
+      // The recheck limit counts observed exposure. Blocked or unknown probes
+      // preserve the entire case, including its evidence and next recheck date.
+      if (probed.verdict !== 'found' && probed.verdict !== 'indirect_exposure') continue;
+      if (c.state === 'confirmed_removed') {
+        const result = await transitionCase(c.id, 'reappeared', {
+          subjectId: resolvedSubjectId, scanSources: vectors.sources,
+          viaRescan: true, found: probed.found, reason: null,
+          evidence: { ...(c.evidence || {}), ...(probed.evidence || {}), verificationRechecks: 0 },
+          now,
+        });
+        if (!result.skipped) reappeared.push({ caseId: c.id, brokerId: c.brokerId });
+        continue;
+      }
+      const currentRechecks = c.evidence?.verificationRechecks ?? c.evidence?.recheckCount ?? 0;
+      const rechecks = currentRechecks + 1;
+      if (rechecks >= maxVerificationRechecks) {
+        await transitionCase(c.id, 'human_task_queued', {
+          reason: 'optout_unfulfilled',
+          evidence: { ...(c.evidence || {}), verificationRechecks: rechecks, unfulfilledAt: now.toISOString() },
+          now,
+        });
+        unfulfilled.push({ caseId: c.id, brokerId: c.brokerId });
+      } else {
+        await transitionCase(c.id, 'awaiting_processing', {
+          evidence: { ...(c.evidence || {}), verificationRechecks: rechecks },
+          now,
+        });
       }
     }
   }

@@ -425,10 +425,44 @@ describe('runVerificationPass', () => {
     listBrokerCases
       .mockResolvedValueOnce([]) // no submitted
       .mockResolvedValueOnce([{ id: 'c2', brokerId: 'spokeo', state: 'awaiting_processing', evidence: {} }]);
-    const removalProbe = vi.fn(async () => ({ verdict: 'not_found' }));
-    const res = await runVerificationPass({ removalProbe });
+    const res = await runVerificationPass({
+      probeDeps: {
+        fetchImpl: async () => ({ status: 200, text: async () => 'Loading…' }),
+        browserFetch: async () => ({ status: 200, text: 'No results found' }),
+        urlSafe: async () => true,
+      },
+    });
     expect(res.confirmed).toHaveLength(1);
     expect(transitionCase).toHaveBeenCalledWith('c2', 'confirmed_removed', expect.objectContaining({ viaRescan: true }));
+  });
+  it.each([
+    ['HTTP 429', 429, 'Try again later', null, false],
+    ['HTTP 400', 400, 'Bad request', null, false],
+    ['HTTP 206', 206, 'No results found', null, false],
+    ['unavailable browser', 200, 'Loading…', null, true],
+    ['rendered loading shell', 200, 'Loading…', { status: 200, text: 'Results for your search\nLoading…' }, true],
+    ['rendered HTTP error', 200, 'Loading…', { status: 503, text: 'No results found' }, true],
+    ['unknown browser status', 200, 'Loading…', { text: 'No results found' }, true],
+    ['loading shell with embedded empty-state copy', 200, '<script>const empty = "No results found"</script><main>Loading…</main>', null, true],
+    ['unrecognized HTTP 200 page', 200, 'Welcome to our directory. '.repeat(30), null, false],
+  ])('preserves pending cases and recheck limits after %s', async (_label, status, html, rendered, browsed) => {
+    const broker = { id: 'spokeo', urls: { search: 'https://broker.example.com/{firstName}-{lastName}/{state}' } };
+    getBroker.mockResolvedValue(broker);
+    const vault = await import('./privacyVault.js');
+    vault.listScanEligibleValues.mockResolvedValue(SCAN_VALUES);
+    listBrokerCases.mockResolvedValue(['verification_pending', 'awaiting_processing'].map(state => ({
+      id: state, brokerId: broker.id, state,
+      evidence: { verificationRechecks: 2, listing_urls: ['https://broker.example.com/listing'] },
+    })));
+    const browserFetch = vi.fn(async () => rendered);
+    const result = await runVerificationPass({
+      maxVerificationRechecks: 3,
+      probeDeps: { fetchImpl: async () => ({ status, text: async () => html }), browserFetch, urlSafe: async () => true },
+    });
+
+    expect(browserFetch).toHaveBeenCalledTimes(browsed ? 2 : 0);
+    expect(transitionCase).not.toHaveBeenCalled();
+    expect(result).toEqual({ advanced: [], confirmed: [], unfulfilled: [], reappeared: [] });
   });
   it.each(['found', 'indirect_exposure'])('reopens due removed listings on %s and makes them submittable (#14905)', async (verdict) => {
     const now = new Date('2026-11-04T12:00:00Z');
@@ -488,14 +522,14 @@ describe('runVerificationPass', () => {
     expect(transitionCase).not.toHaveBeenCalled();
     expect(result).toEqual({ advanced: [], confirmed: [], unfulfilled: [], reappeared: [] });
   });
-  it('increments recheck count and moves verification_pending to awaiting_processing when still found (#4020)', async () => {
+  it.each(['found', 'indirect_exposure'])('increments exposure rechecks for %s (#4020)', async (verdict) => {
     getBroker.mockResolvedValue({ id: 'spokeo', urls: { search: 'https://www.spokeo.com/{firstName}/{state}' } });
     const vault = await import('./privacyVault.js');
     vault.listScanEligibleValues.mockResolvedValue(SCAN_VALUES);
     listBrokerCases
       .mockResolvedValueOnce([])
       .mockResolvedValueOnce([{ id: 'c3', brokerId: 'spokeo', state: 'verification_pending', evidence: {} }]);
-    const removalProbe = vi.fn(async () => ({ verdict: 'found', found: true }));
+    const removalProbe = vi.fn(async () => ({ verdict, found: verdict === 'found' ? true : null }));
     const res = await runVerificationPass({ removalProbe });
     expect(res.confirmed).toHaveLength(0);
     expect(transitionCase).toHaveBeenCalledWith('c3', 'awaiting_processing', expect.objectContaining({

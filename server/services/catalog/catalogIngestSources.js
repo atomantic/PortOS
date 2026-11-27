@@ -109,7 +109,7 @@ async function assertIngestUrlSafe(target) {
  * agree. The pin owns the settle wait, so there is no separate stale-DNS re-vet
  * (which would itself be rebindable) after it returns.
  *
- * Returns `{ text, title, finalUrl }`. Throws when the browser can't reach
+ * Returns `{ text, title, finalUrl, status }`. Throws when the browser can't reach
  * the page or extracts nothing usable, so the route surfaces a clean 4xx/5xx.
  */
 export async function fetchUrlMainText(url, { settleMs = PAGE_SETTLE_MS, dispatchRequest } = {}) {
@@ -146,7 +146,7 @@ export async function fetchUrlMainText(url, { settleMs = PAGE_SETTLE_MS, dispatc
   const parsed = page.evalResult ? safeJSONParse(page.evalResult, null) : null;
   const text = clampText(parsed?.text || '');
   if (!text.trim()) throw new Error('no readable text extracted from page');
-  return { text, title: parsed?.title || page.title || '', finalUrl: page.url || url };
+  return { text, title: parsed?.title || page.title || '', finalUrl: page.url || url, status: page.responseStatus };
 }
 
 /**
