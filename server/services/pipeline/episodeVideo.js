@@ -19,7 +19,7 @@
  * surface the final stitched video when complete.
  */
 import { composeVisualPrompt } from './visualStages.js';
-import { getIssue, updateStage, assertStageUnlocked } from './issues.js';
+import { getIssue, updateStage, updateStageWithLatest, assertStageUnlocked } from './issues.js';
 import { getSeries } from './series.js';
 import { getSeriesCanon } from './seriesCanon.js';
 import { createProject as createCDProject, setTreatment as setCDTreatment } from '../creativeDirector/local.js';
@@ -240,12 +240,14 @@ export async function startEpisodeVideoForIssue(issueId, options = {}) {
     errorMessage: '',
   });
 
-  // Kick off the orchestrator — fire-and-forget so the route can return
-  // immediately. Failures land on the CD project's `failureReason` field
-  // and surface via the UI's CD project poll, not via this Promise.
-  requestCreativeDirectorProjectStart(project.id).catch((err) =>
-    console.log(`⚠️ Pipeline episode CD start failed for ${project.id}: ${err.message}`),
-  );
+  // The route returns immediately. A rejected kickoff may leave the CD project
+  // without a failure reason, so record the error on the stage that owns it.
+  requestCreativeDirectorProjectStart(project.id)
+    .catch((error) => updateStageWithLatest(issueId, 'episodeVideo', (current) =>
+      current.status === 'generating' && current.cdProjectId === project.id
+        ? { status: 'error', errorMessage: error?.message || String(error) }
+        : {}))
+    .catch((error) => console.error(`❌ Pipeline episode CD start failure could not be saved: ${error.message}`));
 
   console.log(`🎬 Pipeline episode video — issue=${issueId.slice(0, 8)} cdProject=${project.id.slice(0, 8)} scenes=${treatment.scenes.length}`);
   return { cdProjectId: project.id, scenes: treatment.scenes.length, reused: false };
