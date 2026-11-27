@@ -100,7 +100,7 @@ it('shows both body refresh actions only with Outlook selected', async () => {
   }
 });
 
-describe('InboxTab sync reconciliation', () => {
+describe('InboxTab socket reconciliation', () => {
   const rows = Array.from({ length: 50 }, (_, i) => ({
     id: `synthetic-${i}`, externalId: `external-${i}`, accountId: syncedAccount.id,
     subject: `Synthetic summary ${i}`, from: { name: 'Example Sender' }, date: HOUR_AGO, preview: 'Compact preview',
@@ -120,6 +120,30 @@ describe('InboxTab sync reconciliation', () => {
     await waitFor(() => expect(screen.getAllByText(/^Synthetic updated /)).toHaveLength(50));
     expect(api.getMessageInbox).toHaveBeenCalledTimes(2);
     expect(api.getMessageInbox).toHaveBeenLastCalledWith({ summary: true }, expect.objectContaining({ silent: true }));
+    expect(api.getMessageDetail).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    ['aggregate', ''],
+    ['account-filtered', syncedAccount.id],
+  ])('refreshes the %s inbox after a cache change with an empty payload', async (_view, accountId) => {
+    const [row] = rows;
+    api.getMessageInbox.mockResolvedValue({ messages: [row] });
+    renderInbox([syncedAccount]);
+    expect(await screen.findByText(row.subject)).toBeInTheDocument();
+    if (accountId) {
+      await act(async () => fireEvent.change(screen.getByRole('combobox', { name: 'Account' }), { target: { value: accountId } }));
+      expect(screen.getByText(row.subject)).toBeInTheDocument();
+    }
+
+    const changed = socket.on.mock.calls.filter(([event]) => event === 'messages:changed').at(-1)?.[1];
+    expect(changed).toBeTypeOf('function');
+    api.getMessageInbox.mockClear().mockResolvedValue({ messages: [] });
+    await act(async () => { changed({}); });
+
+    expect(screen.queryByText(row.subject)).not.toBeInTheDocument();
+    const params = accountId ? { summary: true, accountId } : { summary: true };
+    expect(api.getMessageInbox).toHaveBeenCalledExactlyOnceWith(params, expect.objectContaining({ silent: true }));
     expect(api.getMessageDetail).not.toHaveBeenCalled();
   });
 
