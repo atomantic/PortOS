@@ -11,7 +11,6 @@ import { getVideoModels, getDefaultVideoModelId } from '../../lib/mediaModels.js
 import { supportsWarmVideoBatch } from './batch.js';
 import { a2vLoraStageCapable, byovRuntimeLoraCapable, modelAnchorsLastFrame, runtimeUsesMlx } from './runtimes.js';
 import { publicVideoTextEncoderOptions } from '../../lib/videoTextEncoders.js';
-import { publicVideoDraftDecodeOptions } from '../../lib/videoDraftDecoders.js';
 import { publicContinuationCapability } from '../../lib/videoContinuity.js';
 
 // Attach the runtime capabilities a model entry can't express on its own:
@@ -36,10 +35,6 @@ const decorateVideoModel = (m) => (m ? {
   lastFrameAnchored: modelAnchorsLastFrame(m),
   runtimeLoraCapable: byovRuntimeLoraCapable(m.runtime),
   textEncoderOptions: publicVideoTextEncoderOptions(m),
-  // The preview-fidelity decode choices this entry offers
-  // (lib/videoDraftDecoders.js). Empty for every model that declares no draft
-  // decoder, so the client renders no control instead of a one-entry select.
-  draftDecodeOptions: publicVideoDraftDecodeOptions(m),
   // Does a render on this model put the display to sleep? An MLX render must
   // (spawnWatch.js sleeps it so WindowServer stops contending with Metal and
   // tripping the Apple GPU watchdog), and a user who is not told that reads the

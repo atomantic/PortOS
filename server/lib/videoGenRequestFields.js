@@ -27,10 +27,8 @@ export const VIDEO_GEN_LOCAL_ONLY_FIELDS = Object.freeze({
   TILING: 'tiling',
   TEXT_ENCODER_ID: 'textEncoderId',
   SPEED_PROFILE_ID: 'speedProfileId',
-  DRAFT_DECODE: 'draftDecode',
   // Block-streaming request (#6499) — an LTX-2/2.5 MLX-only knob, so it makes
-  // no sense on a Grok/fal/reactor render and stays local-only for the same
-  // reason speedProfileId/draftDecode do.
+  // no sense on a Grok/fal/reactor render.
   STREAMING_MODE: 'streamingMode',
   CONTINUITY_STRATEGY: 'continuityStrategy',
 });

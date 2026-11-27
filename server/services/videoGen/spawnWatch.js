@@ -292,7 +292,6 @@ export async function spawnAndWatchVideo({
     // died can never be read as the replacement child's state.
     job.promptEncodePhase = null;
     job.speedProfile = null;
-    job.draftDecode = null;
     job.streamingPolicy = null;
     // Panel-side completion watchdog. Armed once we see the render's completion
     // marker on stdout; SIGKILLs the child if it hasn't exited after the grace
@@ -511,9 +510,8 @@ export async function spawnAndWatchVideo({
     const renderStillOwned = (cancelEpochAtClose) => ownershipSettled
       && videoJobState.cancelEpoch === cancelEpochAtClose && !preparation?.wasCanceled();
 
-    // Did the runner actually apply the requested speed profile / draft decoder?
-    const profileConfirmed = () => (!speedProfileId || (job.speedProfile?.id === speedProfileId && job.speedProfile.degraded?.length === 0))
-      && (!args.includes('--draft-decoder-id') || job.draftDecode?.applied === true);
+    // Did the runner actually apply the requested speed profile?
+    const profileConfirmed = () => !speedProfileId || (job.speedProfile?.id === speedProfileId && job.speedProfile.degraded?.length === 0);
 
     // A Metal recovery profile is learned only from a clean, fully published,
     // verified, still-owned render that ran under the reactive retry.

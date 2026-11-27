@@ -10,7 +10,6 @@ import { useRef, useState } from 'react';
 import { DEFAULT_I2V_REFERENCE_MODE } from '../../lib/videoReferenceModes.js';
 import {
   DEFAULT_CONTEXT_FRAMES,
-  DEFAULT_DRAFT_DECODE_ID,
   DEFAULT_SPEED_PROFILE_ID,
   STOCK_TEXT_ENCODER_ID,
 } from '../../lib/videoGenParams.js';
@@ -52,7 +51,6 @@ export function useVideoGenFieldState({
   const [tiling, setTiling] = useState('auto');
   const [textEncoderId, setTextEncoderId] = useState(STOCK_TEXT_ENCODER_ID);
   const [speedProfileId, setSpeedProfileId] = useState(DEFAULT_SPEED_PROFILE_ID);
-  const [draftDecode, setDraftDecode] = useState(DEFAULT_DRAFT_DECODE_ID);
   const [streamingMode, setStreamingMode] = useState(DEFAULT_VIDEO_STREAMING_MODE);
   const [disableAudio, setDisableAudio] = useState(false);
   const [selectedLoras, setSelectedLoras] = useState([]);
@@ -103,7 +101,6 @@ export function useVideoGenFieldState({
       a2vLoraStageStrengths, setA2vLoraStageStrengths,
       textEncoderId, setTextEncoderId,
       speedProfileId, setSpeedProfileId,
-      draftDecode, setDraftDecode,
       streamingMode, setStreamingMode,
     },
     sampler: {

@@ -24,7 +24,6 @@ import {
   FAL_SEEDVR2_TARGET_RESOLUTIONS,
 } from './videoGenRequestFields.js';
 import { IC_LORA_MODE_VALUES, listIcLoraRemixModes } from './icLoraWeights.js';
-import { DRAFT_DECODE_IDS } from './videoDraftDecoders.js';
 import { VIDEO_STREAMING_MODES } from './videoStreamingMode.js';
 import { FEDERATED_MEDIA_MAX_VIDEO_FRAMES } from './federatedMediaWire.js';
 import { promptAdditionsSchema } from './modelInput.js';
@@ -116,16 +115,7 @@ export const LOCAL_ONLY_VIDEO_PARAMS = Object.freeze({
   // per-MODEL. Legacy LTX profiles retain their disclosed fallback. H3's typed
   // adapter/schedule contract refuses incompatible requests before admission.
   [VIDEO_GEN_LOCAL_ONLY_FIELDS.SPEED_PROFILE_ID]: z.string().min(1).max(64).optional(),
-  // Decode this render's latents on the model's own decoder or on its declared
-  // preview-fidelity one (lib/videoDraftDecoders.js). A closed enum, unlike the
-  // two ids above, because there is at most ONE draft decoder per model — the
-  // request selects between "the model's decoder" and "the draft decoder this
-  // model declares", not from a per-model list. Never rejected downstream
-  // either: an unsupported model, an old runner checkout, a missing download or
-  // a delivery render all fall back to the full decoder with the reason logged.
-  [VIDEO_GEN_LOCAL_ONLY_FIELDS.DRAFT_DECODE]: z.enum(DRAFT_DECODE_IDS).optional(),
-  // Block-streaming request for LTX-2/2.5 MLX renders (#6499). Unlike
-  // draftDecode/speedProfileId this is NOT a "degrade, never reject" knob:
+  // Block-streaming request for LTX-2/2.5 MLX renders (#6499).
   // scripts/ml/generate_ltx2.py#resolve_streaming_policy() refuses an explicit
   // 'stream' request before loading weights when the mode's pinned pipeline
   // has no streaming parameter (Extend), so this stays a validated pass-

@@ -183,10 +183,6 @@ const ACTIVE_JOB_PARAM_FIELDS = [
   // Likewise a registry id — the sampler schedule the in-flight render picked,
   // so a reloading page restores the picker instead of snapping back to Quality.
   'speedProfileId',
-  // Likewise a closed enum with no path — the decode the in-flight render
-  // picked, so a reloading page restores the control instead of snapping back
-  // to Full.
-  'draftDecode',
   // Block-streaming request (#6499) — a closed enum with no path, safe to
   // echo so a reloading page restores the picker instead of snapping back to
   // Auto.

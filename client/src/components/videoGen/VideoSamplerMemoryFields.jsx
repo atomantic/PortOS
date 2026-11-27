@@ -3,84 +3,9 @@ import ModelDownloadBadge from '../media/ModelDownloadBadge.jsx';
 import { formatDownloadGb } from '../../utils/formatters.js';
 import {
   isMiniMaxH3SpeedProfile, DEFAULT_SPEED_PROFILE_ID, speedProfilesForMode, videoChainChunkModes,
-  DEFAULT_DRAFT_DECODE_ID, draftDecodeOptionsForModel,
 } from '../../lib/videoGenParams.js';
 import { isLtx2FamilyRuntime } from '../../lib/runnerFamilies';
 import { DEFAULT_VIDEO_STREAMING_MODE, VIDEO_STREAMING_MODE_OPTIONS } from '../../lib/videoStreamingMode.js';
-
-function VideoDecodeFields({
-  currentModel, inputCls,
-  draftDecode = DEFAULT_DRAFT_DECODE_ID, onDraftDecodeChange, draftDecodeLocked = false,
-  streamingMode = DEFAULT_VIDEO_STREAMING_MODE, onStreamingModeChange,
-  showStreamingMode = isLtx2FamilyRuntime(currentModel?.runtime),
-}) {
-  // Preview-fidelity decode (#5423). The option list is server-declared and
-  // rides on the model entry, so a model with no draft decoder yields [] and
-  // renders NO control rather than a select with one real choice.
-  // A model the finish graph names as a DELIVERY target always decodes on its
-  // own decoder — `draftDecodeDeclineReason` refuses a draft request there
-  // before it even asks which decoder was meant. The caller reads that off the
-  // model list (`isDeliveryVideoModel`) and passes it down, so the control shows
-  // Full and says why rather than offering a choice the server would decline.
-  const draftDecodeOptions = draftDecodeOptionsForModel(currentModel);
-  const effectiveDraftDecode = draftDecodeLocked ? DEFAULT_DRAFT_DECODE_ID : draftDecode;
-  const activeDraftDecode = draftDecodeOptions.find((o) => o.id === effectiveDraftDecode) || null;
-
-  return (
-    <>
-      {draftDecodeOptions.length > 0 && (
-        <FormField label="Decode" labelClassName="block text-xs font-medium text-gray-400 mb-1">
-          <select
-            value={activeDraftDecode ? effectiveDraftDecode : DEFAULT_DRAFT_DECODE_ID}
-            disabled={draftDecodeLocked}
-            onChange={(e) => onDraftDecodeChange?.(e.target.value)}
-            className={inputCls}
-          >
-            {draftDecodeOptions.map((option) => (
-              <option key={option.id} value={option.id}>
-                {option.label}{option.sizeLabel ? ` · ${option.sizeLabel}` : ''}
-              </option>
-            ))}
-          </select>
-          <p className="mt-1 text-xs text-gray-500">
-            {draftDecodeLocked
-              ? `${currentModel?.name || 'This model'} is a delivery model — final and Finish renders always decode on the full decoder.`
-              : (
-                <>
-                  {activeDraftDecode?.description || ''}
-                  {activeDraftDecode && activeDraftDecode.id !== DEFAULT_DRAFT_DECODE_ID
-                    ? ' Finish and delivery renders always use the full decoder.'
-                    : ''}
-                </>
-              )}
-          </p>
-        </FormField>
-      )}
-
-      {/* Block streaming (#6499) — LTX-2/2.5 MLX only, every other runtime
-          ignores the flag by construction. Auto initially streams on a
-          tight-memory machine; the render bridge inspects the pinned
-          pipeline and this machine's physical RAM, so the client offers no
-          per-model capability table for it. */}
-      {showStreamingMode && (
-        <FormField label="Memory" labelClassName="block text-xs font-medium text-gray-400 mb-1">
-          <select
-            value={streamingMode}
-            onChange={(e) => onStreamingModeChange?.(e.target.value)}
-            className={inputCls}
-          >
-            {VIDEO_STREAMING_MODE_OPTIONS.map((option) => (
-              <option key={option.value} value={option.value}>{option.label}</option>
-            ))}
-          </select>
-          <p className="mt-1 text-xs text-gray-500">
-            {VIDEO_STREAMING_MODE_OPTIONS.find((o) => o.value === streamingMode)?.description || ''}
-          </p>
-        </FormField>
-      )}
-    </>
-  );
-}
 
 function VideoSpeedAdapter({ profile, status, onDownload, onCancel, downloadError }) {
   const estimate = formatDownloadGb(Number((profile.adapter.sizeBytes / 1e9).toFixed(2)));
@@ -124,7 +49,7 @@ function getSpeedProfiles({ currentModel, mode, chainingActive, contextFrames, w
   return { speedProfiles, visibleSpeedProfiles, showSpeedProfiles, activeSpeedProfile, incompatibleH3Profile };
 }
 
-export default function VideoSpeedDecodeFields({
+export default function VideoSamplerMemoryFields({
   mode, currentModel, fieldId, inputCls,
   chainingActive, contextFrames,
   steps, onStepsChange,
@@ -132,8 +57,8 @@ export default function VideoSpeedDecodeFields({
   speedProfileId = DEFAULT_SPEED_PROFILE_ID, onSpeedProfileChange,
   speedProfileStatus, onSpeedProfileDownload, onCancelSpeedProfileDownload, speedProfileDownloadError,
   width, height,
-  draftDecode, onDraftDecodeChange, draftDecodeLocked,
-  streamingMode, onStreamingModeChange, showStreamingMode,
+  streamingMode = DEFAULT_VIDEO_STREAMING_MODE, onStreamingModeChange,
+  showStreamingMode = isLtx2FamilyRuntime(currentModel?.runtime),
 }) {
   const { steps: modelSteps, guidance: modelGuidance, samplerNote } = currentModel ?? {};
   const samplerLocked = currentModel?.samplerLocked === true;
@@ -157,11 +82,22 @@ export default function VideoSpeedDecodeFields({
           The selected speed profile requires a single text/image clip at {incompatibleH3Profile.canvases.map(([w, h]) => `${w}×${h}`).join(', ')}. Change the mode/canvas or select Quality before rendering.
         </p>
       )}
-      <VideoDecodeFields
-        currentModel={currentModel} inputCls={inputCls}
-        draftDecode={draftDecode} onDraftDecodeChange={onDraftDecodeChange} draftDecodeLocked={draftDecodeLocked}
-        streamingMode={streamingMode} onStreamingModeChange={onStreamingModeChange} showStreamingMode={showStreamingMode}
-      />
+      {showStreamingMode && (
+        <FormField label="Memory" labelClassName="block text-xs font-medium text-gray-400 mb-1">
+          <select
+            value={streamingMode}
+            onChange={(e) => onStreamingModeChange?.(e.target.value)}
+            className={inputCls}
+          >
+            {VIDEO_STREAMING_MODE_OPTIONS.map((option) => (
+              <option key={option.value} value={option.value}>{option.label}</option>
+            ))}
+          </select>
+          <p className="mt-1 text-xs text-gray-500">
+            {VIDEO_STREAMING_MODE_OPTIONS.find((o) => o.value === streamingMode)?.description || ''}
+          </p>
+        </FormField>
+      )}
       {showSpeedProfiles && (
         <FormField label="Speed" labelClassName="block text-xs font-medium text-gray-400 mb-1">
           <select

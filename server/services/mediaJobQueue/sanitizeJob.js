@@ -13,11 +13,7 @@ export const PARAM_ALLOWLIST = new Set([
   'width', 'height', 'numFrames', 'fps', 'steps', 'guidanceScale',
   'batchSize', 'seed', 'tiling', 'disableAudio', 'mode', 'imageStrength',
   'i2vReferenceMode',
-  // Sampler/decoder knobs the retry editor re-offers. 'draftDecode' (#5423) is
-  // the preview-fidelity decode REQUEST the job was submitted with — projected
-  // so the requeue editor can seed its picker from what the job actually asked
-  // for instead of snapping every requeue back to Full.
-  'textEncoderId', 'speedProfileId', 'draftDecode', 'streamingMode', 'a2vLoraStageStrengths',
+  'textEncoderId', 'speedProfileId', 'streamingMode', 'a2vLoraStageStrengths',
   'chunks', 'chunkPrompts', 'contextFrames', 'loras',
   'cfgScale', 'guidance', 'quantize',
   'runId', 'runtime', 'datasetId', 'characterId', 'characterName',

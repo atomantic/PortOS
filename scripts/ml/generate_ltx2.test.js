@@ -1756,9 +1756,7 @@ describe.skipIf(!pyBin)('generate_ltx2.py block streaming (#6499)', () => {
     expect(output.trim()).toBe('done');
   });
 
-  // report_streaming_policy prints on the same STDERR channel as SPEEDPROFILE:
-  // / DRAFTDECODE: (see generateVideoHelpers.js), so these capture stderr the
-  // same way the "reports the effective policy" MLX-cache test above does.
+  // report_streaming_policy reports on stderr, as does the MLX-cache policy report above.
   it('reports the resident case with no peak-memory reading', () => {
     const result = runJson([
       'import contextlib, io, json',

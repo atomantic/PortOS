@@ -16,9 +16,9 @@ import {
  *
  * Media History used to hand /media/video a field-by-field URL bundle built by
  * `useMediaPreviewActions`, a second restore implementation that fell behind the
- * page's own `applyRemix`: the conditioner, speed profile, draft decode and the
+ * page's own `applyRemix`: the conditioner, speed profile and
  * LoRA arrays were all missing from it, so the same saved clip came back with
- * stock/Quality/Full/no-LoRA settings from History and with its real settings
+ * stock/Quality/no-LoRA settings from History and with its real settings
  * from the gallery — a different render at a different compute cost. The handoff
  * is now the RECORD ID, resolved here against the page's own history load and
  * replayed through the one restore implementation.
@@ -39,7 +39,6 @@ const MODEL = videoGenModel('example-ltx', {
     { id: 'example-substitute', label: 'Example substitute' },
   ],
   speedProfiles: [{ id: 'turbo', label: 'Turbo', steps: 4, guidance: 1 }],
-  draftDecodeOptions: [{ id: 'example-draft', label: 'Example draft decoder' }],
 });
 
 const LORA = { filename: 'lora-example.safetensors', name: 'Example LoRA', loraCompatKey: 'ltx-video' };
@@ -66,7 +65,6 @@ const RECORD = {
   disableAudio: true,
   textEncoderId: 'example-substitute',
   speedProfileId: 'turbo',
-  draftDecode: 'example-draft',
   loraFilenames: [LORA.filename],
   loraScales: [0.7],
   chainedFrom: ['vid-example-a', 'vid-example-b'],
@@ -102,10 +100,9 @@ const readRestoredForm = () => ({
   numFrames: state.advancedParams?.timing.numFrames,
   fps: state.advancedParams?.timing.fps,
   seed: state.advancedParams?.timing.seed,
-  steps: state.advancedParams?.speedDecode.steps,
-  guidanceScale: state.advancedParams?.speedDecode.guidanceScale,
-  speedProfileId: state.advancedParams?.speedDecode.speedProfileId,
-  draftDecode: state.advancedParams?.speedDecode.draftDecode,
+  steps: state.advancedParams?.samplerMemory.steps,
+  guidanceScale: state.advancedParams?.samplerMemory.guidanceScale,
+  speedProfileId: state.advancedParams?.samplerMemory.speedProfileId,
   tiling: state.advancedParams?.conditioningAudio.tiling,
   disableAudio: state.advancedParams?.conditioningAudio.disableAudio,
   chunks: state.advancedParams?.timing.chunks,
@@ -138,7 +135,6 @@ describe('VideoGen cross-page Remix handoff', () => {
     // still fails this test rather than comparing two blank forms.
     expect(fromHistory.textEncoderId).toBe('example-substitute');
     expect(fromHistory.speedProfileId).toBe('turbo');
-    expect(fromHistory.draftDecode).toBe('example-draft');
     expect(fromHistory.loras).toEqual(['lora-example.safetensors@0.7']);
     expect(fromHistory.chunks).toBe(2);
     expect(fromHistory.chunkPrompts).toEqual(RECORD.chunkPrompts);
@@ -166,7 +162,6 @@ describe('VideoGen cross-page Remix handoff', () => {
     const restored = readRestoredForm();
     expect(restored.textEncoderId).toBe('stock');
     expect(restored.speedProfileId).toBe('quality');
-    expect(restored.draftDecode).toBe('full');
     expect(restored.loras).toEqual([]);
     expect(restored.negativePrompt).toBe('');
     expect(restored.steps).toBe('');

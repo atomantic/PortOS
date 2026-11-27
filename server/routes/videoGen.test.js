@@ -161,11 +161,8 @@ describe('videoGen routes', () => {
         // assertion can't cover either. Their own cases are below.
         'textEncoderId',
         'speedProfileId',
-        'draftDecode',
         // Not in the it.each table above: the route deliberately DROPS the
-        // 'auto' default from persisted params, same reason as draftDecode's
-        // full-decode default — the generic round-trip can't cover it. Its
-        // own case is below.
+        // 'auto' default from persisted params. Its own case is below.
         'streamingMode',
         'continuityStrategy',
       ]);
@@ -178,43 +175,7 @@ describe('videoGen routes', () => {
       expect(call[0].params[param]).toBe(value);
     });
 
-    // grok has no conditioner knob, so naming one must keep the render local —
-    // even for the stock id, which the route then drops from persisted params
-    // (an unswapped render's job params stay byte-identical to a request that
-    // never sent the field). Both halves matter: keeping it local without
-    // dropping it would persist a knob that never applied.
-    // Same contract for the decode knob (#5423): grok has no decoder choice, so
-    // naming one keeps the render local — and the default value is dropped from
-    // persisted params so a full-decode render's job params stay byte-identical
-    // to a request that never sent the field.
-    it('keeps draftDecode on the local path under a grok pin, without persisting the full value', async () => {
-      const { getSettings } = await import('../services/settings.js');
-      getSettings.mockResolvedValueOnce({ imageGen: grokReady, videoGen: { mode: 'grok' } });
-      const r = await request(app).post('/api/video-gen/').send({ prompt: 'a fox', draftDecode: 'full' });
-      expect(r.status).toBe(200);
-      const [call] = mediaJobQueue.enqueueJob.mock.calls;
-      expect(call[0].params.mode).not.toBe('grok');
-      expect(call[0].params.draftDecode).toBeUndefined();
-    });
-
-    it('persists a non-default draftDecode on the local path', async () => {
-      const { getSettings } = await import('../services/settings.js');
-      getSettings.mockResolvedValueOnce({ imageGen: grokReady, videoGen: { mode: 'grok' } });
-      const r = await request(app).post('/api/video-gen/').send({ prompt: 'a fox', draftDecode: 'draft' });
-      expect(r.status).toBe(200);
-      const [call] = mediaJobQueue.enqueueJob.mock.calls;
-      expect(call[0].params.draftDecode).toBe('draft');
-    });
-
-    // A closed enum, unlike textEncoderId/speedProfileId — there is at most one
-    // draft decoder per model, so an unknown value is a client bug, not a
-    // per-model option the route can't enumerate.
-    it.each(['turbo', 'DRAFT', ''])('rejects the draftDecode value %p', async (draftDecode) => {
-      const r = await request(app).post('/api/video-gen/').send({ prompt: 'a fox', draftDecode });
-      expect(r.status).toBe(400);
-    });
-
-    // Same contract for block streaming (#6499): grok has no such knob, so
+    // Block streaming (#6499): grok has no such knob, so
     // naming one keeps the render local — and 'auto' (the bridge's own
     // default) is dropped from persisted params so an unswapped render's job
     // params stay byte-identical to a request that never sent the field.

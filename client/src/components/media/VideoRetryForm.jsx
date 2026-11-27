@@ -20,10 +20,9 @@ import { resolutionOptionsForModel } from '../../lib/videoGenResolutions';
 import {
   videoEdgeBoundsForModel, textEncoderOptionsForModel, STOCK_TEXT_ENCODER_ID,
   normalizeTextEncoderForModel, normalizeSpeedProfileForModel, speedProfileIdFromRecord,
-  resolveDraftDecodeForModel, draftDecodeFromRecord, selectedContextFramesForModel,
+  selectedContextFramesForModel,
 } from '../../lib/videoGenParams';
 import { isDefaultVideoStreamingMode, videoStreamingModeFromRecord } from '../../lib/videoStreamingMode';
-import { isDeliveryVideoModel } from '../../lib/videoFinish';
 import { loraFamilyOf, videoLoraFamily } from '../../lib/runnerFamilies';
 import LoraPicker from '../imageGen/LoraPicker';
 import { buildVideoRetryOverrides, reconcileModelBoundParams } from './retryOverrides';
@@ -59,10 +58,6 @@ export default function VideoRetryForm({ job, retrying, onSubmit, onCancel }) {
   // picker reports what the render actually used rather than always reading
   // "Quality", and so an unchanged retry re-submits the same schedule.
   const [speedProfileId, setSpeedProfileId] = useState(speedProfileIdFromRecord(p.speedProfileId));
-  // The decode the job was submitted with (#5423, #5449). Seeded from its params
-  // for the same reason the schedule above is: an untouched requeue must
-  // re-submit what the original render asked for, not snap silently back to Full.
-  const [draftDecode, setDraftDecode] = useState(draftDecodeFromRecord(p.draftDecode));
   // Keep a recorded explicit memory request editable until the catalog loads;
   // only the render bridge decides whether its pinned pipeline can honor it.
   const [streamingMode, setStreamingMode] = useState(videoStreamingModeFromRecord(p.streamingMode));
@@ -88,13 +83,12 @@ export default function VideoRetryForm({ job, retrying, onSubmit, onCancel }) {
   // it is idempotent, so re-running as the draft settles cannot loop.
   useEffect(() => {
     if (!currentModel) return;
-    const next = reconcileModelBoundParams(currentModel, models, { contextFrames, i2vReferenceMode, textEncoderId, speedProfileId, draftDecode });
+    const next = reconcileModelBoundParams(currentModel, { contextFrames, i2vReferenceMode, textEncoderId, speedProfileId });
     setContextFrames(next.contextFrames);
     setI2vReferenceMode(next.i2vReferenceMode);
     setTextEncoderId(next.textEncoderId);
     setSpeedProfileId(next.speedProfileId);
-    setDraftDecode(next.draftDecode);
-  }, [currentModel, models, contextFrames, i2vReferenceMode, textEncoderId, speedProfileId, draftDecode]);
+  }, [currentModel, contextFrames, i2vReferenceMode, textEncoderId, speedProfileId]);
   // Hosted backends (grok / fal / reactor) own their params: `mode` is the
   // dispatch discriminator and `modelId` is a provider id the local catalog
   // doesn't know, so the local model / size / sampler / chaining controls don't apply.
@@ -105,22 +99,6 @@ export default function VideoRetryForm({ job, retrying, onSubmit, onCancel }) {
   const encoderOptions = textEncoderOptionsForModel(currentModel);
   const originalEncoder = normalizeTextEncoderForModel(p.textEncoderId || STOCK_TEXT_ENCODER_ID, currentModel);
   const originalSpeedProfileForModel = normalizeSpeedProfileForModel(speedProfileIdFromRecord(p.speedProfileId), currentModel);
-  // Preview-fidelity decode (#5449). A model the finish graph names as a
-  // DELIVERY target always decodes on its own decoder, so the picker is locked
-  // to Full there rather than offering a draft the server would decline — the
-  // same reset the Video Gen form makes when Finish switches models.
-  const deliveryModel = isDeliveryVideoModel(currentModel, models);
-  const recordedDraftDecode = draftDecodeFromRecord(p.draftDecode);
-  // What an UNTOUCHED requeue would re-submit. Two deliberate readings:
-  //   - until `models` resolves, an unknown model means "not known yet", never
-  //     "no draft decoder", so the baseline stays the recorded value and a
-  //     requeue submitted mid-load still sends no decode override at all;
-  //   - on a delivery model it ALSO stays the recorded value, so the lock's
-  //     reset to Full counts as a change and clears the stale request rather
-  //     than silently re-inheriting a decode the render can never perform.
-  const originalDraftDecode = (currentModel && !deliveryModel)
-    ? resolveDraftDecodeForModel(recordedDraftDecode, currentModel, models)
-    : recordedDraftDecode;
   // Multi-keyframe inputs are not exposed in the sanitized queue projection,
   // but FFLF is their persisted semantic mode. IC/a2v conditioning also pins
   // a single render, so keep the shared chaining controls consistent with the
@@ -148,11 +126,11 @@ export default function VideoRetryForm({ job, retrying, onSubmit, onCancel }) {
     prompt, negativePrompt: isReactor ? (p.retryNegativePrompt ?? p.negativePrompt ?? '') : negativePrompt,
     modelId, width, height, numFrames, fps, chunks, chunkPrompts, seed, steps,
     guidanceScale, imageStrength, i2vReferenceMode, tiling, disableAudio, textEncoderId, speedProfileId,
-    draftDecode, a2vLoraStageStrengths, streamingMode, selectedLoras,
+    a2vLoraStageStrengths, streamingMode, selectedLoras,
   };
   const overrides = buildVideoRetryOverrides(draft, p, {
     currentModel, isHosted, chainingActive, displayedContextFrames,
-    originalEncoder, originalSpeedProfileForModel, originalDraftDecode,
+    originalEncoder, originalSpeedProfileForModel,
   });
   const fetchPreview = useCallback((body, options) => previewMediaJobRetry(job.id, body, options), [job.id]);
   const modelInputPreview = useModelInputPreview(fetchPreview, overrides, { enabled: !continuationPending });
@@ -215,11 +193,10 @@ export default function VideoRetryForm({ job, retrying, onSubmit, onCancel }) {
             seed, onSeedChange: setSeed,
             onRandomSeed: () => setSeed(Math.floor(Math.random() * 2147483647)),
           }}
-          speedDecode={{
+          samplerMemory={{
             steps, onStepsChange: setSteps,
             guidanceScale, onGuidanceScaleChange: setGuidanceScale,
             speedProfileId, onSpeedProfileChange: setSpeedProfileId, width, height,
-            draftDecode, onDraftDecodeChange: setDraftDecode, draftDecodeLocked: deliveryModel,
             streamingMode, onStreamingModeChange: setStreamingMode,
             showStreamingMode: currentModel ? undefined : !isDefaultVideoStreamingMode(p.streamingMode),
           }}

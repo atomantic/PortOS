@@ -74,22 +74,6 @@ export function formatSpeedProfileLabel(item) {
     : id;
 }
 
-// Which decoder produced these pixels (#5423). Same "the request is not the
-// outcome" rule as the speed profile above: the record carries the decode
-// that survived every server-side gate, and the runner's own report says
-// whether the decoder actually loaded. A draft record with no report — or a
-// report saying it fell back — must never read as a draft decode, because the
-// whole point of the row is that a preview-fidelity clip is labelled as one.
-export function formatDraftDecodeLabel(item) {
-  const id = item.raw?.draftDecode;
-  if (!id) return null;
-  const applied = item.raw?.draftDecodeApplied;
-  if (!applied) return `${id} — outcome not reported`;
-  return applied.applied
-    ? `${id} — preview fidelity`
-    : `full decoder (${id} unavailable${applied.reason ? `: ${applied.reason}` : ''})`;
-}
-
 // Map raw `entryKind` tokens to user-facing labels — the sidecar stores
 // 'canon' / 'variation' / 'sheet' (ENTRY_REF_KIND values) for parity with
 // the server contract; users shouldn't see the wire tokens.
@@ -124,7 +108,6 @@ export function buildLightboxMeta(item, isVideo) {
     ['Model', item.modelId],
     ['Resolution', formatResolution(item, isVideo)],
     ['Speed profile', formatSpeedProfileLabel(item)],
-    ['Decode', formatDraftDecodeLabel(item)],
     ['Steps', item.steps],
     ['Guidance', item.guidance],
     ['CFG', item.raw?.cfgScale ?? item.raw?.cfg_scale],

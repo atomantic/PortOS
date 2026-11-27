@@ -252,7 +252,7 @@ async function buildRetryJob(job, body) {
       throw new ServerError(PIXEL_CAP_MESSAGE, { status: 400, code: 'VALIDATION_ERROR' });
     }
   }
-  for (const key of ['seed', 'steps', 'guidanceScale', 'imageStrength', 'i2vReferenceMode', 'speedProfileId', 'draftDecode', 'streamingMode', 'a2vLoraStageStrengths']) {
+  for (const key of ['seed', 'steps', 'guidanceScale', 'imageStrength', 'i2vReferenceMode', 'speedProfileId', 'streamingMode', 'a2vLoraStageStrengths']) {
     if (rawOverrides[key] === null) delete params[key];
   }
   if (job.kind === 'image' && !CLOUD_IMAGE_GEN_MODES.includes(params.mode) && !isRemoteMediaJob(job)) {

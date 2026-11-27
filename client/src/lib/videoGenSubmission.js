@@ -18,8 +18,6 @@ import {
   STOCK_TEXT_ENCODER_ID,
   selectedSpeedProfile,
   videoChainChunkModes,
-  DEFAULT_DRAFT_DECODE_ID,
-  resolveDraftDecodeForModel,
   selectedContextFramesForModel,
 } from './videoGenParams.js';
 import { isDefaultVideoStreamingMode } from './videoStreamingMode.js';
@@ -337,7 +335,7 @@ function chunkFields({ chainingActive, chunks, beats, contextFrames, currentMode
 
 // Request-only knobs whose absence (undefined) means "server default".
 function localOptionalFields({
-  currentModel, models, textEncoderId, speedProfileId, draftDecode, streamingMode,
+  currentModel, textEncoderId, speedProfileId, streamingMode,
   mode, chainingActive, contextFrames,
 }) {
   return {
@@ -348,14 +346,6 @@ function localOptionalFields({
       ? speedProfileId : selectedSpeedProfile(speedProfileId, currentModel, videoChainChunkModes({
       model: currentModel, mode, chaining: chainingActive, contextFrames,
     }))?.id,
-    // Preview-fidelity decode (#5423). Sent only when it is a real, still-valid
-    // choice on THIS model — a stale selection carried across a model switch, or
-    // one aimed at a DELIVERY model, would otherwise POST a knob the server
-    // declines and logs. Absence is a full decode, so an unswapped render's
-    // payload is unchanged.
-    draftDecode: resolveDraftDecodeForModel(draftDecode, currentModel, models) === DEFAULT_DRAFT_DECODE_ID
-      ? undefined
-      : draftDecode,
     // Block-streaming request (#6499). Sent only when it is both a real
     // choice (this model's runtime is LTX-2/2.5 MLX — every other runtime
     // ignores the flag by construction, so sending it there would just be a

@@ -140,7 +140,6 @@ describe('sanitizeJob', () => {
         modelId: 'example-video-model',
         textEncoderId: 'example-encoder',
         speedProfileId: 'fast',
-        draftDecode: 'draft',
         chunks: 2,
         chunkPrompts: ['opening', 'climax'],
         contextFrames: 12,
@@ -156,10 +155,6 @@ describe('sanitizeJob', () => {
       // display an unused `steps` value and the retry editor would have no way
       // to see (or drop) the schedule actually driving the render.
       speedProfileId: 'fast',
-      // #5449 — the requeue editor seeds its decode picker from this. Hidden,
-      // every requeue would silently snap back to Full instead of re-submitting
-      // the preview-fidelity decode the job actually asked for.
-      draftDecode: 'draft',
       chunks: 2,
       chunkPrompts: ['opening', 'climax'],
       contextFrames: 12,

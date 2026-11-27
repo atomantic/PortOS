@@ -22,7 +22,6 @@ export const videoExecutionParametersSchema = z.object({
   audioConditioning: federatedSourceAudioSchema.optional(),
   textEncoderId: identifier.optional(),
   speedProfileId: identifier.optional(),
-  draftDecode: identifier.optional(),
   streamingMode: identifier.optional(),
 });
 
