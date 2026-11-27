@@ -1,4 +1,4 @@
-import { useState, useRef } from 'react';
+import { useEffect, useState, useRef } from 'react';
 import { RefreshCw, Search, MapPin, Users, Clock } from 'lucide-react';
 import {
   getCalendarEvents,
@@ -9,6 +9,7 @@ import {
 import { useSocketResource } from '../../hooks/useSocketResource';
 import { useAccountSyncStatus } from '../../hooks/useAccountSyncStatus';
 import EventDetail from './EventDetail';
+import { allDayCalendarDate } from './calendarUtils';
 import { formatCount, formatTimeOfDay as formatTime, formatWeekdayDate, localDateKey } from '../../utils/formatters';
 import BrailleSpinner from '../BrailleSpinner';
 import EmptyState from '../EmptyState';
@@ -32,10 +33,12 @@ function formatDayHeader(dateStr) {
   return formatWeekdayDate(date);
 }
 
+const eventStart = event => event.isAllDay ? allDayCalendarDate(event.startTime) : new Date(event.startTime);
+
 function groupEventsByDay(events) {
   const groups = {};
   for (const event of events) {
-    const dayKey = new Date(event.startTime).toDateString();
+    const dayKey = eventStart(event).toDateString();
     if (!groups[dayKey]) groups[dayKey] = [];
     groups[dayKey].push(event);
   }
@@ -43,7 +46,7 @@ function groupEventsByDay(events) {
     .sort(([a], [b]) => new Date(a) - new Date(b))
     .map(([dayKey, dayEvents]) => ({
       date: dayKey,
-      events: dayEvents.sort((a, b) => new Date(a.startTime) - new Date(b.startTime))
+      events: dayEvents.sort((a, b) => eventStart(a) - eventStart(b))
     }));
 }
 
@@ -56,6 +59,7 @@ const dedupeEvents = list => [...new Map(list.map(event => [`${event.accountId}:
 
 export default function AgendaTab({ accounts }) {
   const [search, setSearch] = useState('');
+  const [debouncedSearch, setDebouncedSearch] = useState('');
   const [accountFilter, setAccountFilter] = useState('');
   const [searchParams, updateParams] = useUrlParams();
   const [syncing, setSyncing] = useState(false);
@@ -70,10 +74,15 @@ export default function AgendaTab({ accounts }) {
   const [moreFailed, setMoreFailed] = useState(false);
   const loadedCount = useRef(0);
 
+  useEffect(() => {
+    const timeout = setTimeout(() => setDebouncedSearch(search), 250);
+    return () => clearTimeout(timeout);
+  }, [search]);
+
   const readPage = (offset, limit) => {
     const params = { startDate: new Date(`${fromDate}T00:00:00`).toISOString(), limit, offset };
     if (accountFilter) params.accountId = accountFilter;
-    if (search) params.search = search;
+    if (debouncedSearch) params.search = debouncedSearch;
     // The API owns the error toast; retain loaded pages and offer a retry.
     return getCalendarEvents(params);
   };
@@ -92,7 +101,7 @@ export default function AgendaTab({ accounts }) {
       if (batch.length === 0 || loaded.length >= total) break;
     }
     return { events: dedupeEvents(loaded), total };
-  }, { events: CALENDAR_EVENTS, resourceKey: `${fromDate}|${accountFilter}|${search}` });
+  }, { events: CALENDAR_EVENTS, resourceKey: `${fromDate}|${accountFilter}|${debouncedSearch}` });
   const events = data?.events ?? EMPTY_EVENTS;
   const total = data?.total ?? 0;
   loadedCount.current = events.length;
@@ -140,7 +149,7 @@ export default function AgendaTab({ accounts }) {
   const grouped = groupEventsByDay(events);
   const selectedEventKey = searchParams.get('event');
   const selectedEvent = events.find((event) => `${event.accountId}:${event.id}` === selectedEventKey) || null;
-  const hasActiveFilter = Boolean(search || accountFilter);
+  const hasActiveFilter = Boolean(debouncedSearch || accountFilter);
 
   return (
     <div className="space-y-4">
@@ -156,6 +165,7 @@ export default function AgendaTab({ accounts }) {
             className="min-w-0 px-3 py-2 bg-port-card border border-port-border rounded-lg text-sm text-white"
           />
           <button
+            type="button"
             onClick={() => updateParams({ from: null })}
             className="px-3 py-2 text-port-accent rounded-lg text-sm hover:bg-port-accent/10"
           >
@@ -187,6 +197,7 @@ export default function AgendaTab({ accounts }) {
           </select>
         )}
         <button
+          type="button"
           onClick={handleSync}
           disabled={syncing || enabledAccounts.length === 0}
           className="flex items-center gap-2 px-3 py-2 bg-port-accent/10 text-port-accent rounded-lg text-sm hover:bg-port-accent/20 transition-colors disabled:opacity-50"
@@ -248,6 +259,7 @@ export default function AgendaTab({ accounts }) {
               <div className="space-y-1">
                 {group.events.map((event) => (
                   <button
+                    type="button"
                     key={`${event.accountId}-${event.id}`}
                     onClick={() => updateParams({ event: `${event.accountId}:${event.id}` })}
                     className="w-full text-left flex items-center gap-3 p-3 bg-port-card rounded-lg border border-port-border hover:border-port-accent/50 transition-colors"
@@ -300,6 +312,7 @@ export default function AgendaTab({ accounts }) {
           <p role="status" className="text-sm text-gray-400">{formatCount(events.length)} of {formatCount(total)} events loaded</p>
           {events.length < total && (
             <button
+              type="button"
               onClick={loadMore}
               disabled={loadingMore}
               className="px-3 py-2 bg-port-accent/10 text-port-accent rounded-lg text-sm hover:bg-port-accent/20 disabled:opacity-50"
