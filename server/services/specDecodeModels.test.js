@@ -223,6 +223,24 @@ describe('getSpecDecodePresetStatus', () => {
     await rm(hub, { recursive: true, force: true });
   });
 
+  it('offers the locally converted Gemma preset only when the local file exists', async () => {
+    const key = 'conversational-gemma-local';
+    const expectedPath = specDecodePresets.findSpecDecodePreset(key).model.path;
+    const temp = join(hub, 'fixture-converted.gguf');
+    const realResolve = resolveSpecModelPath;
+    const pathSpy = vi.spyOn(specDecodePresets, 'resolveSpecModelPath').mockImplementation(path =>
+      path === expectedPath ? temp : realResolve(path));
+    try {
+      expect((await getSpecDecodePresetStatus()).some(preset => preset.id === key)).toBe(false);
+      await writeFile(temp, 'fixture weights');
+      const preset = (await getSpecDecodePresetStatus()).find(entry => entry.id === key);
+      expect(preset).toMatchObject({ localBuild: true, alias: 'Trelis/gemma-4-31B-it-conversational',
+        ctxSize: 4096, specType: 'none', model: { path: expectedPath, exists: true, downloadable: false } });
+    } finally {
+      pathSpy.mockRestore();
+    }
+  });
+
   it('reports each preset file as on-disk or not, without reaching Hugging Face', async () => {
     const fetchSpy = vi.spyOn(globalThis, 'fetch');
     const presets = await getSpecDecodePresetStatus();

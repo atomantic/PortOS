@@ -11,10 +11,16 @@ import { captureSystemCapabilities, isHardwareCompatible, withHardwareCompatibil
 import { searchHuggingFaceModels, enrichCatalogWithVariants, applyMeasuredFit } from '../../services/huggingFaceCatalog.js'
 import { getMeasuredFits } from '../../services/localModelAssessmentStore.js'
 import { listModels, listVisionModels, listToolUseModels, listContextPlans } from '../../services/localLlm.js'
+import { checkConversationalGemmaAccess } from '../../services/voice/conversationalGemmaAccess.js'
 import { listUserModels } from '../../services/audioModels.js'
 import { ENGINES } from '../../services/pipeline/musicGen.js'
 
 const router = Router()
+
+// Explicit operator action only; opening the model catalog never probes credentials.
+router.post('/conversational-gemma/access', asyncHandler(async (_req, res) => {
+  res.json(await checkConversationalGemmaAccess())
+}))
 
 // GET /api/local-llm/vision-models — vision-capable installed models across
 // both backends, tagged with the provider id that serves them. Powers the

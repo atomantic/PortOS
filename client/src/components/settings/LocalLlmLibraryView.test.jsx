@@ -5,6 +5,7 @@ import { MemoryRouter, useLocation } from 'react-router';
 vi.mock('../../services/apiLocalLlm.js', () => ({
   getLocalLlmStatus: vi.fn(),
   getLocalLlmCatalog: vi.fn(),
+  checkConversationalGemmaAccess: vi.fn(),
   getLocalLlmHuggingFaceSearch: vi.fn(),
   installLocalLlmModel: vi.fn(),
   cancelLocalLlmInstall: vi.fn(),
@@ -61,6 +62,7 @@ import {
   deleteLocalLlmModel,
   getLocalLlmStatus,
   getLocalLlmCatalog,
+  checkConversationalGemmaAccess,
   getLocalLlmHuggingFaceSearch,
   installLocalLlmBackend,
   installLocalLlmModel,
@@ -153,6 +155,21 @@ describe('LocalLlmLibraryView information architecture', () => {
     expect(within(entry).getByRole('link', { name: 'Model card and access' }))
       .toHaveAttribute('href', 'https://huggingface.co/Trelis/gemma-4-31B-it-conversational');
     expect(within(entry).queryByRole('button', { name: /install/i })).not.toBeInTheDocument();
+  });
+
+  it('offers terms and retries the download access check without starting a download', async () => {
+    checkConversationalGemmaAccess.mockResolvedValueOnce({ status: 'terms-required' })
+      .mockResolvedValueOnce({ status: 'ready' });
+    await renderLibrary();
+    fireEvent.click(screen.getByText('Externally served voice models'));
+    expect(checkConversationalGemmaAccess).not.toHaveBeenCalled();
+    fireEvent.click(screen.getByRole('button', { name: 'Check download access' }));
+    expect(await screen.findByLabelText('Hugging Face read token')).toBeInTheDocument();
+    expect(screen.getByText(/Hugging Face denied access/)).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: 'Recheck download access' }));
+    expect(await screen.findByText('Hugging Face confirmed access to the checkpoint.')).toBeInTheDocument();
+    expect(screen.queryByLabelText('Hugging Face read token')).not.toBeInTheDocument();
+    expect(installLocalLlmModel).not.toHaveBeenCalled();
   });
 
   it('keeps the model-abuse guard off the catalog panel', async () => {
