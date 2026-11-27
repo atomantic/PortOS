@@ -7,7 +7,7 @@ vi.mock('../../lib/fileUtils.js', () => ({
   atomicWrite: vi.fn((path, data) => { store = data; return Promise.resolve(); }),
   PATHS: { meatspace: '/tmp/test-meatspace' },
   ensureDir: vi.fn().mockResolvedValue(undefined),
-  readJSONFile: vi.fn(() => Promise.resolve(store)),
+  readJSONFile: vi.fn(() => Promise.resolve(structuredClone(store))),
 }));
 
 import {
@@ -21,6 +21,7 @@ import {
   applyPractice,
   retentionForEntry,
   applySessionToReviewSchedule,
+  getReviewSchedule,
   getDueReviews,
   getRetentionReport,
 } from './meatspacePostReview.js';
@@ -159,6 +160,24 @@ describe('retentionForEntry — 90-day retention %', () => {
 });
 
 describe('applySessionToReviewSchedule — session sync', () => {
+  it('preserves overlapping mastery additions and reviews', async () => {
+    const now = new Date('2026-07-01T00:00:00.000Z');
+    const first = skill();
+    const second = skill({ skillId: 'multiplication:L1' });
+    await applySessionToReviewSchedule({ masteredSkills: [first], now });
+
+    const reviewResults = [{ skillId: first.skillId, passed: true }];
+    await Promise.all([
+      applySessionToReviewSchedule({ masteredSkills: [second], reviewResults, now }),
+      applySessionToReviewSchedule({ reviewResults, now }),
+    ]);
+
+    expect(await getReviewSchedule()).toEqual(expect.arrayContaining([
+      expect.objectContaining({ skillId: first.skillId, reviewsTaken: 2 }),
+      expect.objectContaining({ skillId: second.skillId, reviewsTaken: 0 }),
+    ]));
+  });
+
   it('upserts newly-mastered skills (fresh installs: nothing tracked until first mastery)', async () => {
     expect(await getDueReviews(new Date())).toEqual([]); // fresh install → nothing
     const res = await applySessionToReviewSchedule({ masteredSkills: [skill()], now: new Date('2026-07-01T00:00:00.000Z') });
