@@ -39,11 +39,11 @@ export const getContextPlans = (options) => request('/local-llm/context-plans', 
 // per HF-backed entry) — the recommended-models picker wants it. Callers that only
 // need catalog metadata (e.g. the playground decorating installed models) omit it
 // to keep the response fast and fully local.
-export const checkConversationalGemmaAccess = options =>
-  request('/local-llm/conversational-gemma/access', { ...options, method: 'POST' });
-
 export const getLocalLlmCatalog = (backend, q = '', { variants = false, silent } = {}) =>
   request(`/local-llm/catalog?backend=${encodeURIComponent(backend)}${q ? `&q=${encodeURIComponent(q)}` : ''}${variants ? '&variants=1' : ''}`, { silent });
+
+export const checkConversationalGemmaAccess = options =>
+  request('/local-llm/conversational-gemma/access', { ...options, method: 'POST' });
 
 export const getModelAbuseGuardStatus = (options) =>
   request('/local-llm/security-guard/status', options);
