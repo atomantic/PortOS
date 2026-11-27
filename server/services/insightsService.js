@@ -397,7 +397,7 @@ Example format:
     generatedAt: new Date().toISOString(),
     model: selectedModel
   };
-  await atomicWrite(THEMES_FILE, output);
+  await atomicWrite(THEMES_FILE, output, { mode: 0o600, dirMode: 0o700 });
 
   console.log(`🧠 Taste-identity themes generated: ${themes.length} themes`);
 
@@ -518,7 +518,7 @@ Respond with only the narrative text, no JSON, no headings, no markdown.`;
     previousGeneratedAt: existingNarrative?.generatedAt ?? null,
     model: selectedModel
   };
-  await atomicWrite(NARRATIVE_FILE, output);
+  await atomicWrite(NARRATIVE_FILE, output, { mode: 0o600, dirMode: 0o700 });
 
   console.log(`🔮 Cross-domain narrative generated (${newText.length} chars)`);
 

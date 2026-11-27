@@ -170,14 +170,14 @@ async function readTargetForAppend(config, formattedContent) {
 }
 
 async function saveEnrichmentDocument({ targetPath, previousContent }, content, meta) {
-  await atomicWrite(targetPath, content);
+  await atomicWrite(targetPath, content, { mode: 0o600, dirMode: 0o700 });
   try {
     await saveMeta(meta);
   } catch (err) {
     // A stranded answer would look like a duplicate on retry.
     try {
       if (previousContent === null) await unlink(targetPath);
-      else await atomicWrite(targetPath, previousContent);
+      else await atomicWrite(targetPath, previousContent, { mode: 0o600, dirMode: 0o700 });
     } catch {
       console.error('❌ Digital twin enrichment restore failed');
     }

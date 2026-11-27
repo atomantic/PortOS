@@ -74,7 +74,7 @@ async function loadDrafts({ ensure = true } = {}) {
 }
 
 async function saveDrafts(drafts) {
-  await atomicWrite(DRAFTS_FILE, drafts);
+  await atomicWrite(DRAFTS_FILE, drafts, { mode: 0o600, dirMode: 0o700 });
 }
 
 // Boot and request-time recovery share the same queue and active-attempt guard.

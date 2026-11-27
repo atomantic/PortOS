@@ -202,7 +202,7 @@ export async function createConversation({ mode = 'ask', title = '' } = {}) {
     promoted: false,
     turns: [],
   };
-  await atomicWrite(pathFor(conv.id), conv);
+  await atomicWrite(pathFor(conv.id), conv, { mode: 0o600, dirMode: 0o700 });
   return conv;
 }
 
@@ -241,7 +241,7 @@ async function appendTurnUnlocked(conversationId, turn) {
     conv.title = truncateTitle(stamped.content);
   }
   conv.updatedAt = stamped.createdAt;
-  await atomicWrite(pathFor(conversationId), conv);
+  await atomicWrite(pathFor(conversationId), conv, { mode: 0o600, dirMode: 0o700 });
   return { conversation: conv, turn: stamped };
 }
 
@@ -260,7 +260,7 @@ export function setPromoted(id, promoted) {
     if (!conv) return null;
     conv.promoted = !!promoted;
     conv.updatedAt = new Date().toISOString();
-    await atomicWrite(pathFor(id), conv);
+    await atomicWrite(pathFor(id), conv, { mode: 0o600, dirMode: 0o700 });
     return conv;
   });
 }

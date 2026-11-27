@@ -5,7 +5,7 @@
  * between still stops a peer that has the file from resurrecting it.
  */
 import { describe, it, expect, vi, beforeEach, afterAll } from 'vitest';
-import { existsSync, rmSync, readFileSync } from 'fs';
+import { existsSync, rmSync, readFileSync, statSync } from 'fs';
 import { basename, join } from 'path';
 import { createTempDataRoot, makePathsProxy } from '../lib/mockPathsDataRoot.js';
 
@@ -19,11 +19,11 @@ vi.mock('../lib/fileUtils.js', async () => {
   return new Proxy(proxied, {
     get(target, prop, receiver) {
       if (prop === 'atomicWrite') {
-        return async (path, data) => {
+        return async (path, data, options) => {
           if (state.failMetaWrite && basename(String(path)) === 'meta.json') {
             throw new Error('injected meta failure');
           }
-          return actual.atomicWrite(path, data);
+          return actual.atomicWrite(path, data, options);
         };
       }
       return Reflect.get(target, prop, receiver);
@@ -72,6 +72,22 @@ beforeEach(async () => {
 afterAll(() => rmSync(tempRoot, { recursive: true, force: true }));
 
 describe('digital twin document metadata before bytes (#14158)', () => {
+  it.skipIf(process.platform === 'win32')('creates Markdown documents in an owner-only directory', async () => {
+    await newDoc();
+    expect(statSync(docPath).mode & 0o777).toBe(0o600);
+    expect(statSync(twinDir).mode & 0o777).toBe(0o700);
+  });
+
+  it.skipIf(process.platform === 'win32')('keeps a first federated autobiography write owner-only', async () => {
+    await applyDigitalTwinRemote({
+      autobiography: { stories: { stories: [{ id: 'example-story', content: 'Example story' }] } },
+    });
+
+    const directory = join(twinDir, 'autobiography');
+    expect(statSync(join(directory, 'stories.json')).mode & 0o777).toBe(0o600);
+    expect(statSync(directory).mode & 0o777).toBe(0o700);
+  });
+
   it('leaves the markdown and meta.json unchanged when a delete cannot save metadata', async () => {
     const created = await newDoc();
     const before = structuredClone(await loadMeta());

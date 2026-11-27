@@ -36,6 +36,7 @@ function mockIdentityStorage() {
 
 function makeFsPromisesStore() {
   const store = {};
+  const directories = new Map();
   return {
     readFile: vi.fn(async (path) => {
       if (path in store) return store[path];
@@ -53,16 +54,23 @@ function makeFsPromisesStore() {
       delete store[from];
     }),
     unlink: vi.fn(async (path) => { delete store[path]; }),
-    mkdir: vi.fn(async () => {}),
+    mkdir: vi.fn(async (path, { mode = 0o755 } = {}) => {
+      if (!directories.has(path)) directories.set(path, mode);
+    }),
+    lstat: vi.fn(async (path) => {
+      if (!directories.has(path)) throw Object.assign(new Error('ENOENT'), { code: 'ENOENT' });
+      return { mode: directories.get(path), isDirectory: () => true };
+    }),
     // atomicWrite stats the destination to mirror its mode onto the temp file
     // before renaming (#1837). The in-memory store doesn't track modes, so
-    // report a default for existing paths and ENOENT for absent ones; chmod is
-    // a no-op here.
+    // report a default for existing files and ENOENT for absent ones.
     stat: vi.fn(async (path) => {
       if (!(path in store)) throw Object.assign(new Error('ENOENT'), { code: 'ENOENT' });
       return { mode: 0o644 };
     }),
-    chmod: vi.fn(async () => {}),
+    chmod: vi.fn(async (path, mode) => {
+      if (directories.has(path)) directories.set(path, mode);
+    }),
     // atomicWrite fsyncs the parent directory after the rename (#12025); the
     // in-memory store has nothing to flush, so hand back an inert handle.
     open: vi.fn(async () => ({ sync: async () => {}, close: async () => {} })),

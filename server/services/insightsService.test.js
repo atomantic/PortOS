@@ -186,7 +186,7 @@ describe('insightsService generation', () => {
     const stored = { ...content, generatedAt: expect.any(String), model: 'model-1' };
     expect(response.status).toBe(200);
     expect(response.body).toEqual({ ...stored, available: true });
-    expect(atomicWrite).toHaveBeenCalledExactlyOnceWith(expect.any(String), stored);
+    expect(atomicWrite).toHaveBeenCalledExactlyOnceWith(expect.any(String), stored, { mode: 0o600, dirMode: 0o700 });
   });
 });
 

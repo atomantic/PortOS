@@ -380,7 +380,7 @@ export async function applyMeatspaceRemote(remoteData) {
         const local = await readJSONFile(filePath, null, { strict: true });
         const merged = mergeDailyLogFile(local, remoteFile);
         if (canonicalStringify(merged) === canonicalStringify(local)) return false;
-        await atomicWrite(filePath, merged);
+        await atomicWrite(filePath, merged, { mode: 0o600, dirMode: 0o700 });
         return true;
       });
       if (written) totalApplied++;
@@ -394,7 +394,7 @@ export async function applyMeatspaceRemote(remoteData) {
         const local = await readJSONFile(filePath, null, { strict: true });
         const { merged, changed } = mergeObjectLWW(local, remoteFile, 'updatedAt');
         if (!changed) return false;
-        await atomicWrite(filePath, merged);
+        await atomicWrite(filePath, merged, { mode: 0o600, dirMode: 0o700 });
         return true;
       });
       if (written) {
@@ -408,7 +408,7 @@ export async function applyMeatspaceRemote(remoteData) {
         // A peer with nothing to add must not create the file here.
         if (local === null && merged[config.arrayKey].length === 0 && !merged[ROW_TOMBSTONES_KEY]) return false;
         if (canonicalStringify(merged) === canonicalStringify(local)) return false;
-        await atomicWrite(filePath, merged);
+        await atomicWrite(filePath, merged, { mode: 0o600, dirMode: 0o700 });
         return true;
       });
       if (written) totalApplied++;
