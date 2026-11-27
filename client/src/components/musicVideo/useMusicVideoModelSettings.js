@@ -25,6 +25,58 @@ const isLtx23 = (model) => !!model
   && model.runtime === 'ltx2'
   && /ltx.?2\.3|ltx23/i.test(`${model.id} ${model.name || ''} ${model.repo || ''}`);
 
+function normalizeVideoSettings(project) {
+  const saved = project?.videoSettings;
+  return {
+    renderPool: saved?.renderPool,
+    // Empty means this peer resolves its own configured Video Gen default.
+    // Synced projects intentionally arrive without another install's backend
+    // pin, so do not turn that absence into an explicit local override.
+    backend: saved?.backend || '',
+    // Empty is an intentional "follow the local Video Gen default" choice,
+    // distinct from pinning the model that happens to be default today.
+    modelId: saved?.modelId || '',
+    grokDuration: saved?.grokDuration || 10,
+    // null/absent means "use fal's model default duration" — distinct from an
+    // explicit pin, same null-means-unset contract as modelId above.
+    falDuration: saved?.falDuration ?? null,
+    // fal cutaway model / its resolution, and the lip-sync take resolution —
+    // null means "the default" (Hailuo-02 image-to-video / that model's own /
+    // MUSIC_VIDEO_LIPSYNC_DEFAULT_RESOLUTION), resolved by falSceneTake.
+    falModelId: saved?.falModelId ?? null,
+    falResolution: saved?.falResolution ?? null,
+    // Upgrade model for end-frame shots only; null = they use falModelId.
+    falEndFrameModelId: saved?.falEndFrameModelId ?? null,
+    falLipSyncResolution: saved?.falLipSyncResolution ?? null,
+    // false = lip-sync without transcript guidance (null/absent = on).
+    falLipSyncTranscription: saved?.falLipSyncTranscription ?? null,
+    // Audio-to-video model / resolution for music-driven performance takes —
+    // null means FAL_MUSIC_VIDEO_DEFAULT_MODEL (MiniMax H3 Max reference) at its own default size, resolved by falSceneTake.
+    falMusicModelId: saved?.falMusicModelId ?? null,
+    falMusicResolution: saved?.falMusicResolution ?? null,
+    // Runway cutaway model / clip length / size — null means the catalog
+    // default (RUNWAY_DEFAULT_IMAGE_VIDEO_MODEL, the shot's covering length,
+    // the project aspect), resolved by runwaySceneTake.
+    higgsfieldModelId: saved?.higgsfieldModelId ?? null,
+    higgsfieldDuration: saved?.higgsfieldDuration ?? null,
+    higgsfieldResolution: saved?.higgsfieldResolution ?? null,
+    googleModelId: saved?.googleModelId ?? null,
+    googleDuration: saved?.googleDuration ?? null,
+    googleResolution: saved?.googleResolution ?? null,
+    runwayModelId: saved?.runwayModelId ?? null,
+    runwayDuration: saved?.runwayDuration ?? null,
+    runwayResolution: saved?.runwayResolution ?? null,
+    // #16136: ceilings for the shot card's Render draft / Render final; null = the model's lowest / highest tier.
+    draftResolution: saved?.draftResolution ?? null,
+    finalResolution: saved?.finalResolution ?? null,
+    upscaleMethod: saved?.upscaleMethod,
+    upscaleTargetResolution: saved?.upscaleTargetResolution,
+    generationMode: saved?.generationMode || 'image',
+    audioReactiveLora: saved?.audioReactiveLora || '',
+    audioReactiveScale: saved?.audioReactiveScale ?? 1.2,
+  };
+}
+
 /**
  * A music-video project's saved render pins — the video backend/model/LoRA the
  * scene clips are generated with, plus the image-side frame pin (#3231 Phase 4).
@@ -96,54 +148,7 @@ export default function useMusicVideoModelSettings({ project, onProjectPatch } =
   const catalogStatus = combinedStatus(statusRead, loraRead);
   const modelsLoading = statusRead === 'loading';
 
-  const settings = {
-    renderPool: project?.videoSettings?.renderPool,
-    // Empty means this peer resolves its own configured Video Gen default.
-    // Synced projects intentionally arrive without another install's backend
-    // pin, so do not turn that absence into an explicit local override.
-    backend: project?.videoSettings?.backend || '',
-    // Empty is an intentional "follow the local Video Gen default" choice,
-    // distinct from pinning the model that happens to be default today.
-    modelId: project?.videoSettings?.modelId || '',
-    grokDuration: project?.videoSettings?.grokDuration || 10,
-    // null/absent means "use fal's model default duration" — distinct from an
-    // explicit pin, same null-means-unset contract as modelId above.
-    falDuration: project?.videoSettings?.falDuration ?? null,
-    // fal cutaway model / its resolution, and the lip-sync take resolution —
-    // null means "the default" (Hailuo-02 image-to-video / that model's own /
-    // MUSIC_VIDEO_LIPSYNC_DEFAULT_RESOLUTION), resolved by falSceneTake.
-    falModelId: project?.videoSettings?.falModelId ?? null,
-    falResolution: project?.videoSettings?.falResolution ?? null,
-    // Upgrade model for end-frame shots only; null = they use falModelId.
-    falEndFrameModelId: project?.videoSettings?.falEndFrameModelId ?? null,
-    falLipSyncResolution: project?.videoSettings?.falLipSyncResolution ?? null,
-    // false = lip-sync without transcript guidance (null/absent = on).
-    falLipSyncTranscription: project?.videoSettings?.falLipSyncTranscription ?? null,
-    // Audio-to-video model / resolution for music-driven performance takes —
-    // null means FAL_MUSIC_VIDEO_DEFAULT_MODEL (MiniMax H3 Max reference) at its own default size, resolved by falSceneTake.
-    falMusicModelId: project?.videoSettings?.falMusicModelId ?? null,
-    falMusicResolution: project?.videoSettings?.falMusicResolution ?? null,
-    // Runway cutaway model / clip length / size — null means the catalog
-    // default (RUNWAY_DEFAULT_IMAGE_VIDEO_MODEL, the shot's covering length,
-    // the project aspect), resolved by runwaySceneTake.
-    higgsfieldModelId: project?.videoSettings?.higgsfieldModelId ?? null,
-    higgsfieldDuration: project?.videoSettings?.higgsfieldDuration ?? null,
-    higgsfieldResolution: project?.videoSettings?.higgsfieldResolution ?? null,
-    googleModelId: project?.videoSettings?.googleModelId ?? null,
-    googleDuration: project?.videoSettings?.googleDuration ?? null,
-    googleResolution: project?.videoSettings?.googleResolution ?? null,
-    runwayModelId: project?.videoSettings?.runwayModelId ?? null,
-    runwayDuration: project?.videoSettings?.runwayDuration ?? null,
-    runwayResolution: project?.videoSettings?.runwayResolution ?? null,
-    // #16136: ceilings for the shot card's Render draft / Render final; null = the model's lowest / highest tier.
-    draftResolution: project?.videoSettings?.draftResolution ?? null,
-    finalResolution: project?.videoSettings?.finalResolution ?? null,
-    upscaleMethod: project?.videoSettings?.upscaleMethod,
-    upscaleTargetResolution: project?.videoSettings?.upscaleTargetResolution,
-    generationMode: project?.videoSettings?.generationMode || 'image',
-    audioReactiveLora: project?.videoSettings?.audioReactiveLora || '',
-    audioReactiveScale: project?.videoSettings?.audioReactiveScale ?? 1.2,
-  };
+  const settings = normalizeVideoSettings(project);
   const effectiveModelId = settings.modelId || defaultModel;
   const activeModel = models.find((model) => model.id === effectiveModelId) || null;
   const audioReactiveModels = models.filter(isLtx23);
@@ -161,6 +166,13 @@ export default function useMusicVideoModelSettings({ project, onProjectPatch } =
   const ltxReferencesModels = models.filter(isLtx25Model);
   const ltxReferencesSelected = settings.backend === 'local' && settings.generationMode === LTX_REFERENCES_GENERATION_MODE;
 
+  const cloudReadiness = new Map([
+    ['fal', { enabled: falEnabled, reason: 'No fal.ai API key configured — set it in Settings → Credentials (or the FAL_KEY env var) first' }],
+    ['runway', { enabled: runwayEnabled, reason: 'No Runway API key configured — set it in Settings → Credentials (or the RUNWAYML_API_SECRET env var) first' }],
+    ['higgsfield', { enabled: higgsfieldEnabled, reason: 'No Higgsfield credential configured — set it in Settings → Credentials first' }],
+    ['google', { enabled: googleEnabled, reason: 'No Google credential configured — set it in Settings → Credentials first' }],
+  ]);
+
   // One reason string for every scene-video kickoff gate, so the disabled
   // buttons, their tooltips, and the toast a blocked call raises all say the
   // same resolvable thing. `null` means nothing is blocking. The fal.ai check
@@ -171,28 +183,21 @@ export default function useMusicVideoModelSettings({ project, onProjectPatch } =
   // While the catalog read is pending or failed the answer is unknown, so the
   // reason names that state instead of claiming a key or LoRA is missing.
   const blockedReasonFor = (pick) => {
-    const reads = pick.backend === 'local' && pick.generationMode === 'audioReactive'
-      ? combinedStatus(statusRead, loraRead)
-      : pick.backend === 'fal' || pick.backend === 'runway' || pick.backend === 'higgsfield' || pick.backend === 'google'
-        || (pick.backend === 'local' && pick.generationMode === LTX_REFERENCES_GENERATION_MODE) ? statusRead : 'ready';
+    const cloud = cloudReadiness.get(pick.backend);
+    const localMode = pick.backend === 'local' ? pick.generationMode : null;
+    let reads = 'ready';
+    if (localMode === 'audioReactive') reads = combinedStatus(statusRead, loraRead);
+    else if (cloud || localMode === LTX_REFERENCES_GENERATION_MODE) reads = statusRead;
     if (reads === 'error') return "Couldn't read Video Gen status — retry before rendering";
     if (reads === 'loading') return 'Checking Video Gen status…';
-    if (pick.backend === 'local' && pick.generationMode === 'audioReactive' && !audioReactiveReady) {
+    if (localMode === 'audioReactive' && !audioReactiveReady) {
       return 'Audio-reactive generation requires an installed LTX-2.3 audio-reactive LoRA and an LTX-2.3 local model';
     }
-    if (pick.backend === 'local' && pick.generationMode === LTX_REFERENCES_GENERATION_MODE) {
+    if (localMode === LTX_REFERENCES_GENERATION_MODE) {
       const pickedModel = models.find((model) => model.id === (pick.modelId || defaultModel));
       if (!isLtx25Model(pickedModel)) return 'LTX 2.5 References requires an LTX 2.5 local model';
     }
-    if (pick.backend === 'fal' && !falEnabled) {
-      return 'No fal.ai API key configured — set it in Settings → Credentials (or the FAL_KEY env var) first';
-    }
-    if (pick.backend === 'runway' && !runwayEnabled) {
-      return 'No Runway API key configured — set it in Settings → Credentials (or the RUNWAYML_API_SECRET env var) first';
-    }
-    if (pick.backend === 'higgsfield' && !higgsfieldEnabled) return 'No Higgsfield credential configured — set it in Settings → Credentials first';
-    if (pick.backend === 'google' && !googleEnabled) return 'No Google credential configured — set it in Settings → Credentials first';
-    return null;
+    return cloud && !cloud.enabled ? cloud.reason : null;
   };
   const videoBlockedReason = blockedReasonFor(settings);
 

@@ -583,55 +583,69 @@ async function prepareImageJob(run, asset) {
     ? await replayAuthoredImageInputs(run, asset, recordedConditioning, { mode, settings, requestedModel })
     : { replayInputs: null, conditioned: await conditionRequest(run, asset, 'image', capability) };
   if (run.mode === 'exact_inputs') assertExactConditioning(recordedConditioning, conditioned?.visualConditioning);
-  const referenceImagePaths = conditioned?.referenceImagePaths || [];
-  const localInitImagePath = replayInputs ? replayInputs.init : conditioned?.sourceImagePath || referenceImagePaths[0] || null;
-  const geometry = renderGeometry(run, recordedConditioning);
-  const replayParameters = exactRenderParameters(run, recordedConditioning);
-
+  const shared = buildSharedImageParams(run, asset, conditioned, recordedConditioning, replayInputs);
   if (mode === IMAGE_GEN_MODE.LOCAL) {
-    const selectedIsEditOnly = isEditOnly(provisionalModel);
-    // An edit-only model takes the lead reference as its init image, so a fresh
-    // (non-replay) render must not send that frame twice.
-    const dropLeadReference = !replayInputs && selectedIsEditOnly;
-    const params = applyImageVisualProfile({
-      prompt: conditioned?.prompt ?? asset.prompt,
-      ...(conditioned?.promptAdditions?.length ? { promptAdditions: conditioned.promptAdditions } : {}),
-      negativePrompt: conditioned?.negativePrompt || '',
-      // Conditioning and sampler defaults belong to the same model the job validates.
-      modelId: requestedModel || provisionalModel?.id,
-      width: geometry.width,
-      height: geometry.height,
-      aspectRatio: geometry.aspectRatio,
-      steps: settings.imageGen?.local?.steps ?? provisionalModel?.steps,
-      guidance: settings.imageGen?.local?.guidance ?? provisionalModel?.guidance,
-      quantize: settings.imageGen?.local?.quantize ?? '8',
-      seed: randomInt(0, 2_147_483_647),
-      ...replayParameters,
-      ...((replayInputs || selectedIsEditOnly) && localInitImagePath ? { initImagePath: localInitImagePath } : {}),
-      ...(replayInputs?.initStrength != null ? { initImageStrength: replayInputs.initStrength } : {}),
-      referenceImagePaths: dropLeadReference ? referenceImagePaths.slice(1) : referenceImagePaths,
-      referenceImageStrengths: (conditioned?.referenceImageStrengths || []).slice(dropLeadReference ? 1 : 0),
-      loraFilenames: conditioned?.loraFilenames || [],
-      loraPaths: conditioned?.loraPaths || [],
-      loraScales: conditioned?.loraScales || [],
-      ...jobProvenanceFields(run, asset, conditioned),
-    }, conditioned?.visualProfile);
-    const local = resolveLocalImageModel(settings, params);
-    if (!local.selectedModel) {
-      throw new ServerError('No compatible local image model is available.', {
-        status: 409,
-        code: 'IMAGE_GEN_UNKNOWN_MODEL',
-      });
-    }
-    return {
-      kind: 'image',
-      provider: mode,
-      modelId: local.selectedModel.id,
-      modelRevision: local.selectedModel.revision || null,
-      params: { ...params, modelId: local.selectedModel.id, pythonPath: local.pythonPath },
-    };
+    return finalizeLocalImageJob({ mode, settings, provisionalModel, requestedModel, conditioned, replayInputs, shared });
   }
+  return finalizeCloudImageJob({ mode, cloud, capability, effort: run.render.effort, conditioned, replayInputs, shared });
+}
 
+function buildSharedImageParams(run, asset, conditioned, recordedConditioning, replayInputs) {
+  const geometry = renderGeometry(run, recordedConditioning);
+  return {
+    prompt: conditioned?.prompt ?? asset.prompt,
+    ...(conditioned?.promptAdditions?.length ? { promptAdditions: conditioned.promptAdditions } : {}),
+    negativePrompt: conditioned?.negativePrompt || '',
+    width: geometry.width,
+    height: geometry.height,
+    aspectRatio: geometry.aspectRatio,
+    ...exactRenderParameters(run, recordedConditioning),
+    ...(replayInputs?.initStrength != null ? { initImageStrength: replayInputs.initStrength } : {}),
+    referenceImagePaths: conditioned?.referenceImagePaths || [],
+    referenceImageStrengths: conditioned?.referenceImageStrengths || [],
+    loraFilenames: conditioned?.loraFilenames || [],
+    loraPaths: conditioned?.loraPaths || [],
+    loraScales: conditioned?.loraScales || [],
+    ...jobProvenanceFields(run, asset, conditioned),
+  };
+}
+
+function finalizeLocalImageJob({ mode, settings, provisionalModel, requestedModel, conditioned, replayInputs, shared }) {
+  const { referenceImagePaths } = shared;
+  const localInitImagePath = replayInputs ? replayInputs.init : conditioned?.sourceImagePath || referenceImagePaths[0] || null;
+  const selectedIsEditOnly = isEditOnly(provisionalModel);
+  // An edit-only model takes the lead reference as its init image, so a fresh
+  // (non-replay) render must not send that frame twice.
+  const dropLeadReference = !replayInputs && selectedIsEditOnly;
+  const params = applyImageVisualProfile({
+    // Conditioning and sampler defaults belong to the same model the job validates.
+    modelId: requestedModel || provisionalModel?.id,
+    steps: settings.imageGen?.local?.steps ?? provisionalModel?.steps,
+    guidance: settings.imageGen?.local?.guidance ?? provisionalModel?.guidance,
+    quantize: settings.imageGen?.local?.quantize ?? '8',
+    seed: randomInt(0, 2_147_483_647),
+    ...shared,
+    ...((replayInputs || selectedIsEditOnly) && localInitImagePath ? { initImagePath: localInitImagePath } : {}),
+    referenceImagePaths: dropLeadReference ? referenceImagePaths.slice(1) : referenceImagePaths,
+    referenceImageStrengths: shared.referenceImageStrengths.slice(dropLeadReference ? 1 : 0),
+  }, conditioned?.visualProfile);
+  const local = resolveLocalImageModel(settings, params);
+  if (!local.selectedModel) {
+    throw new ServerError('No compatible local image model is available.', {
+      status: 409,
+      code: 'IMAGE_GEN_UNKNOWN_MODEL',
+    });
+  }
+  return {
+    kind: 'image',
+    provider: mode,
+    modelId: local.selectedModel.id,
+    modelRevision: local.selectedModel.revision || null,
+    params: { ...params, modelId: local.selectedModel.id, pythonPath: local.pythonPath },
+  };
+}
+
+function finalizeCloudImageJob({ mode, cloud, capability, effort, conditioned, replayInputs, shared }) {
   if (!cloud?.enabled) {
     throw cloud?.disabledError || new ServerError('Image provider is disabled.', {
       status: 400,
@@ -640,7 +654,7 @@ async function prepareImageJob(run, asset) {
   }
   const providerParams = {
     ...cloud.providerParams,
-    ...(mode === IMAGE_GEN_MODE.CODEX && run.render.effort ? { effort: run.render.effort } : {}),
+    ...(mode === IMAGE_GEN_MODE.CODEX && effort ? { effort } : {}),
   };
   return {
     kind: 'image',
@@ -650,21 +664,8 @@ async function prepareImageJob(run, asset) {
     params: applyImageVisualProfile({
       mode,
       ...providerParams,
-      prompt: conditioned?.prompt ?? asset.prompt,
-      ...(conditioned?.promptAdditions?.length ? { promptAdditions: conditioned.promptAdditions } : {}),
-      negativePrompt: conditioned?.negativePrompt || '',
-      width: geometry.width,
-      height: geometry.height,
-      aspectRatio: geometry.aspectRatio,
-      ...replayParameters,
+      ...shared,
       initImagePath: replayInputs ? replayInputs.init : conditioned?.sourceImagePath || null,
-      ...(replayInputs?.initStrength != null ? { initImageStrength: replayInputs.initStrength } : {}),
-      referenceImagePaths,
-      referenceImageStrengths: conditioned?.referenceImageStrengths || [],
-      loraFilenames: conditioned?.loraFilenames || [],
-      loraPaths: conditioned?.loraPaths || [],
-      loraScales: conditioned?.loraScales || [],
-      ...jobProvenanceFields(run, asset, conditioned),
     }, conditioned?.visualProfile),
   };
 }
