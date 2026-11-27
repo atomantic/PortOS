@@ -1,5 +1,8 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import { fireEvent, render, screen, waitFor, within } from '@testing-library/react';
+import { fireEvent, render as renderView, screen, waitFor, within } from '@testing-library/react';
+import { MemoryRouter } from 'react-router';
+
+const render = (ui) => renderView(ui, { wrapper: MemoryRouter });
 
 vi.mock('../../services/apiSystem.js', () => ({
   getSettings: vi.fn(),

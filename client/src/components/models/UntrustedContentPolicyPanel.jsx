@@ -1,3 +1,4 @@
+import { Link } from 'react-router';
 import { useEffect, useState } from 'react';
 import { getSettings, updateSettings } from '../../services/apiSystem.js';
 import { getProviders } from '../../services/apiProviders.js';
@@ -141,7 +142,7 @@ export default function UntrustedContentPolicyPanel() {
                 </div>
               </div>
               {effectiveValue('jevMode') === 'only' && <p className="text-xs text-port-warning">Only skips an item the scorer cannot separate instead of calling a provider. Skipped items are reported, never treated as &ldquo;no action needed&rdquo;.</p>}
-              <p className="text-xs text-gray-500">The margin raises the bar for every decision on this source; it cannot lower a decision&rsquo;s own floor, so a destructive recommendation keeps deferring to the provider. <a href="/models/decision-classifiers/jev" className="text-port-accent hover:underline">Install and measure jev</a></p>
+              <p className="text-xs text-gray-500">The margin raises the bar for every decision on this source; it cannot lower a decision&rsquo;s own floor, so a destructive recommendation keeps deferring to the provider. <Link to="/models/decision-classifiers/jev" className="text-port-accent hover:underline">Install and measure jev</Link></p>
             </div>
             <div className="border-t border-port-border pt-4 space-y-3">
               <h4 className="text-sm font-medium text-white">Analysis provider</h4>
@@ -164,7 +165,7 @@ export default function UntrustedContentPolicyPanel() {
               {providerState === 'ready' && (resolution.code
                 ? <p role="status" className="text-xs text-port-warning">Analysis is not ready for {source === 'defaults' ? 'sources that use shared defaults' : 'this source'}: {problem}</p>
                 : <p className="text-xs text-gray-400">Resolves to {resolution.provider.name || resolution.provider.id} with model {resolution.model}.</p>)}
-              <p className="text-xs text-gray-500">{isPrivate ? 'Only local API endpoints are eligible for private messages. Cloud APIs, CLI agents, and provider fallback are blocked.' : 'Choose an API provider for text analysis. Automatic selection uses an eligible API provider; a failed provider never falls back. Cloud APIs may receive public sources.'} <a href="/ai" className="text-port-accent hover:underline">Configure providers</a></p>
+              <p className="text-xs text-gray-500">{isPrivate ? 'Only local API endpoints are eligible for private messages. Cloud APIs, CLI agents, and provider fallback are blocked.' : 'Choose an API provider for text analysis. Automatic selection uses an eligible API provider; a failed provider never falls back. Cloud APIs may receive public sources.'} <Link to="/ai" className="text-port-accent hover:underline">Configure providers</Link></p>
             </div>
             <details className="rounded-lg border border-port-border p-3">
               <summary className="cursor-pointer text-sm text-port-accent">Advanced screening limits</summary>

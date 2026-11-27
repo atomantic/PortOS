@@ -1,3 +1,4 @@
+import { Link } from 'react-router';
 import Banner from '../../ui/Banner';
 import ListLoadError from '../../ui/ListLoadError';
 
@@ -12,9 +13,9 @@ export default function TasteProviderNotice({ providersResource, selectedProvide
       {!selectedProvider && providersResource.state === 'ready' && (
         <Banner tone="warning" size="lg" className="mb-4">
           No API-based provider configured — {actionLabel}.{' '}
-          <a href="/ai" className="underline hover:text-yellow-300">
+          <Link to="/ai" className="underline hover:text-yellow-300">
             Open AI Providers
-          </a>{' '}
+          </Link>{' '}
           and add LM Studio, OpenAI, or Anthropic to enable AI generation.
         </Banner>
       )}

@@ -1,9 +1,12 @@
-import { act, fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { act, fireEvent, render as renderView, screen, waitFor } from '@testing-library/react';
+import { MemoryRouter } from 'react-router';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import DeckStyleSources from './DeckStyleSources';
 import { getUniverse } from '../../services/apiUniverseBuilder.js';
 import { listMoodBoardNames, synthesizeMoodBoardStyle } from '../../services/apiMoodBoard.js';
 import toast from '../ui/Toast';
+
+const render = (ui) => renderView(ui, { wrapper: MemoryRouter });
 
 vi.mock('../../services/apiUniverseBuilder.js', () => ({
   getUniverse: vi.fn(),

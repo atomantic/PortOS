@@ -1,6 +1,9 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { render, screen, waitFor } from '@testing-library/react';
+import { render as renderView, screen, waitFor } from '@testing-library/react';
+import { MemoryRouter } from 'react-router';
 import userEvent from '@testing-library/user-event';
+
+const render = (ui) => renderView(ui, { wrapper: MemoryRouter });
 
 vi.mock('../../services/apiSystem.js', () => ({
   getInstances: vi.fn(),

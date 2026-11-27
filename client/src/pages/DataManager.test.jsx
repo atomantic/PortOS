@@ -1,10 +1,13 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { render, screen, waitFor, fireEvent, act, within } from '@testing-library/react';
+import { render as renderView, screen, waitFor, fireEvent, act, within } from '@testing-library/react';
+import { MemoryRouter } from 'react-router';
 import DataManager from './DataManager';
 import { formatBytes } from '../utils/formatters';
 vi.mock('../components/dataManager/CosStoragePanel', () => ({ default: ({ onMaintenanceComplete }) => <button onClick={onMaintenanceComplete}>Complete recording cleanup</button> }));
 import socket from '../services/socket';
 import { getTombstoneSweepStatus, sweepTombstonesNow } from '../services/apiPeerSync.js';
+
+const render = (ui) => renderView(ui, { wrapper: MemoryRouter });
 
 // A directory with no server-side CATEGORIES entry comes back `classified: false`
 // with both permission flags off. The row must explain *why* Archive/Purge are

@@ -1,3 +1,4 @@
+import { Link } from 'react-router';
 import { useCallback } from 'react';
 import { useSearchParams } from 'react-router';
 import { AlertCircle, RefreshCw } from 'lucide-react';
@@ -195,7 +196,7 @@ export default function ScheduleTab({ apps, appsStatus, onReadApps, providers, p
         <Banner size="md" icon={AlertCircle} title="Improvement is disabled">
           <div className="text-xs text-port-warning/80 mt-1">
             No scheduled or on-demand improvement tasks will run. Enable the <span className="font-mono">Improve</span> toggle in
-            {' '}<a href="/cos/config" className="underline hover:text-port-warning">CoS → Config</a> to use this page.
+            {' '}<Link to="/cos/config" className="underline hover:text-port-warning">CoS → Config</Link> to use this page.
           </div>
         </Banner>
       )}

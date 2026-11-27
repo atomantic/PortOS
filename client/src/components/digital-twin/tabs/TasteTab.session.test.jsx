@@ -1,6 +1,9 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import { act, render, screen } from '@testing-library/react';
+import { act, render as renderView, screen } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
+import { MemoryRouter } from 'react-router';
+
+const render = (ui) => renderView(ui, { wrapper: MemoryRouter });
 
 vi.mock('../../../services/apiDigitalTwin.js', () => ({
   getTasteProfile: vi.fn(),
