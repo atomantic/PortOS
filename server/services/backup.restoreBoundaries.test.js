@@ -142,7 +142,7 @@ describe('restoreSnapshot snapshotId, filter flags, and settings re-sync', () =>
       '--exclude=/[mM][aA][nN][aA][gG][eE][dD]-[vV][iI][sS][iI][tT][oO][rR]-[cC][rR][eE][dD][eE][nN][tT][iI][aA][lL][sS].[jJ][sS][oO][nN]',
       '--exclude=/[pP][rR][iI][vV][aA][tT][eE]/[aA][pP][iI]-[kK][eE][yY][sS].[jJ][sS][oO][nN]',
       '--exclude=/[pP][rR][oO][vV][iI][dD][eE][rR][sS].[jJ][sS][oO][nN]',
-      // No snapshot instances.json was approved for install (#12596).
+      // Federation identity uses the private credential writer (#19845).
       '--exclude=/[iI][nN][sS][tT][aA][nN][cC][eE][sS].[jJ][sS][oO][nN]',
     ];
     it('reads a legacy flat snapshot when that source is explicitly selected', async () => {

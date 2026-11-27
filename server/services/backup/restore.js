@@ -6,7 +6,7 @@
 
 import { lstat, readdir, rename, stat } from 'fs/promises';
 import { basename, dirname, join, resolve, relative, isAbsolute } from 'path';
-import { PATHS, readJSONFileStrict, sha256File, sha256Text } from '../../lib/fileUtils.js';
+import { PATHS, readJSONFileStrict, safeJSONParse, sha256File, sha256Text } from '../../lib/fileUtils.js';
 import { acquireBackupSnapshotCut } from '../../lib/backupSnapshotBoundary.js';
 import { APPLIED_LEDGER_RELPATH, LEGACY_APPLIED_LEDGER_RELPATH } from '../../../scripts/lib/migrationLedger.js';
 import { ServerError } from '../../lib/errorHandler.js';
@@ -24,12 +24,12 @@ import {
   legacyDbMetadataMessage, manifestDataEntries, resolveSnapshotPath, usesFileEscapeHatch, withSnapshotRead,
 } from './snapshots.js';
 import {
-  IDENTITY_FILE, IDENTITY_RSYNC_EXCLUDE, OS_METADATA_RSYNC_EXCLUDES, PRIVATE_DIRECTORY_RSYNC_EXCLUDE, RESTORE_CREDENTIAL_FILES,
+  IDENTITY_FILE, OS_METADATA_RSYNC_EXCLUDES, PRIVATE_DIRECTORY_RSYNC_EXCLUDE, RESTORE_CREDENTIAL_FILES,
   RESTORE_CREDENTIAL_RSYNC_EXCLUDES, RESTORE_PRESERVED_RSYNC_EXCLUDES, isIdentityPath,
   isOsMetadataFile, isRestorePreservedPath, restoreScopeIsPreservedFile,
 } from './excludes.js';
 import { BACKUP_PROCESS_IDLE_TIMEOUT_MS, runRsync } from './rsync.js';
-import { readSnapshotCredentials, scopeTouchesPrivateDirectory, transferWithCredentials } from './restoreCredentials.js';
+import { readCredentialFile, readSnapshotCredentials, scopeTouchesPrivateDirectory, transferWithCredentials } from './restoreCredentials.js';
 import { requireManagedVisitorCredentialRestore } from '../bootHookRegistry.js';
 
 // `-ii` heartbeats once per file rsync finishes deciding about, so a single
@@ -111,13 +111,13 @@ async function reconcileLiveFileRestore(subdirFilter) {
     );
   }
 }
-const IDENTITY_ABSENT = Symbol('identity-absent');
+const IDENTITY_UNREADABLE = Symbol('identity-unreadable');
 
-async function readIdentityFile(path) {
-  const { ok, value } = await readJSONFileStrict(path, IDENTITY_ABSENT, { logError: false });
-  if (ok && value === IDENTITY_ABSENT) return { present: false, readable: true, instanceId: null };
-  const instanceId = ok ? value?.self?.instanceId : null;
-  return { present: true, readable: ok, instanceId: typeof instanceId === 'string' && instanceId ? instanceId : null };
+function parseIdentityId(bytes) {
+  const value = safeJSONParse(bytes.toString('utf8'), IDENTITY_UNREADABLE);
+  if (value === IDENTITY_UNREADABLE) return value;
+  const id = value?.self?.instanceId;
+  return typeof id === 'string' && id ? id : null;
 }
 
 /**
@@ -126,17 +126,23 @@ async function readIdentityFile(path) {
  * unreadable live file counts as an identity (fail closed): only adoption
  * replaces it, since its owner cannot be known.
  */
-async function resolveIdentityRestore(srcDir, subdirFilter, adoptIdentity) {
+async function resolveIdentityRestore(snapshotBytes, adoptIdentity) {
   const notInstalled = { installs: false, preserved: null, adopted: null };
-  if (subdirFilter && !isIdentityPath(subdirFilter)) return notInstalled;
-  const snapshot = await readIdentityFile(join(srcDir, IDENTITY_FILE));
-  if (!snapshot.present) return notInstalled;
-  const live = await readIdentityFile(join(PATHS.data, IDENTITY_FILE));
-  const liveHasIdentity = live.present && (live.instanceId !== null || !live.readable);
-  if (!liveHasIdentity || (live.instanceId !== null && live.instanceId === snapshot.instanceId)) {
+  if (!snapshotBytes) return notInstalled;
+  const snapshotId = parseIdentityId(snapshotBytes);
+  const liveId = await readCredentialFile(join(PATHS.data, IDENTITY_FILE))
+    .then(bytes => bytes && parseIdentityId(bytes))
+    .catch(error => {
+      if (error.code === 'BACKUP_RESTORE_UNSAFE_CREDENTIAL') throw error;
+      return IDENTITY_UNREADABLE;
+    });
+  if (liveId !== IDENTITY_UNREADABLE && (liveId === null || liveId === snapshotId)) {
     return { installs: true, preserved: null, adopted: null };
   }
-  const ids = { liveInstanceId: live.instanceId, snapshotInstanceId: snapshot.instanceId };
+  const ids = {
+    liveInstanceId: liveId === IDENTITY_UNREADABLE ? null : liveId,
+    snapshotInstanceId: snapshotId === IDENTITY_UNREADABLE ? null : snapshotId,
+  };
   return adoptIdentity
     ? { installs: true, preserved: null, adopted: ids }
     : { ...notInstalled, preserved: ids };
@@ -360,16 +366,17 @@ async function restoreSnapshotAdmitted(destPath, snapshotId, { dryRun, requested
 async function restoreHeldSnapshot({ snapshotDir, currentSource }, snapshotId, { dryRun, subdirFilter, adoptIdentity }) {
   await assertSnapshotRestorable(snapshotDir, snapshotId, currentSource);
   const srcDir = join(snapshotDir, 'data');
-  const identity = await resolveIdentityRestore(srcDir, subdirFilter, adoptIdentity);
-  // Keyed on the approval, not on a mismatch: a snapshot instances.json that
-  // appears after the check must not reach the live file unfenced.
-  const preserveIdentity = !identity.installs;
 
   // Run the preflight independently for preview and execution. A preview is an
   // aid to confirmation, not an integrity lease: snapshot bytes may change
   // between requests, especially on removable or network-backed destinations.
   const credentials = await readSnapshotCredentials(srcDir, subdirFilter);
-  const verification = await verifySnapshotFiles(snapshotDir, srcDir, snapshotId, subdirFilter, { preserveIdentity, credentials });
+  // Decide adoption from the same bytes integrity verification and publication
+  // use. The identity fence rechecks the live side against those staged bytes.
+  const snapshotIdentity = credentials.get(IDENTITY_FILE);
+  const identity = await resolveIdentityRestore(snapshotIdentity, adoptIdentity);
+  if (!identity.installs) credentials.delete(IDENTITY_FILE);
+  const verification = await verifySnapshotFiles(snapshotDir, srcDir, snapshotId, subdirFilter, { preserveIdentity: !identity.installs, credentials });
   // A full restore installs the snapshot's ledger too, so the next boot re-runs
   // whatever it lacks; only a folder restore can leave restored files behind
   // migrations the live ledger already records.
@@ -418,7 +425,6 @@ async function restoreHeldSnapshot({ snapshotDir, currentSource }, snapshotId, {
   // inventory and are excluded here because they have their own writer.
   const flags = ['-ii', '--checksum', ...OS_METADATA_RSYNC_EXCLUDES, ...RESTORE_PRESERVED_RSYNC_EXCLUDES,
     ...RESTORE_CREDENTIAL_RSYNC_EXCLUDES,
-    ...(preserveIdentity ? [IDENTITY_RSYNC_EXCLUDE] : []),
     // The directory-wide include for a selective restore also matches parent
     // metadata. Keep private directory permissions outside unrelated scopes.
     ...(!scopeTouchesPrivateDirectory(subdirFilter) ? [PRIVATE_DIRECTORY_RSYNC_EXCLUDE] : [])];
@@ -469,7 +475,7 @@ async function restoreHeldSnapshot({ snapshotDir, currentSource }, snapshotId, {
       const changed = await transferWithIdentityFence({
         installsIdentity: identity.installs,
         assertIdentityUnchanged: async () => {
-          const current = await resolveIdentityRestore(srcDir, subdirFilter, adoptIdentity);
+          const current = await resolveIdentityRestore(snapshotIdentity, adoptIdentity);
           if (JSON.stringify(current) !== JSON.stringify(identity)) throw identityChangedError();
         },
         transferFiles,

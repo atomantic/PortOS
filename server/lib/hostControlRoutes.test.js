@@ -92,6 +92,7 @@ describe('isHostControlRoute (#16018)', () => {
       '/api/update/software',
       '/api/update/node-runtime',
       '/api/docker-containment/status',
+      '/api/remote-desktop/status',
       '/api/privacy/broker-cases/example-case/evidence',
       '/api/privacy/optout/digest',
       '/api/data/cos/storage/recording/2020-01-02/example-agent',

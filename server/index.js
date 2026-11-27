@@ -37,6 +37,7 @@ import './services/serviceLoaders.js';
 import './services/localModelObservations.js';
 import { initSocket } from './services/socket.js';
 import { remoteDesktopBroker } from './services/remoteDesktop.js';
+import { revokeAllHostedSessions } from './services/fableLoom/hostedSession.js';
 import { authEvents } from './services/auth.js';
 import { mountEidoverseOnServer } from './services/eidoverseHost.js';
 import { closeEidoverseProxySockets } from './services/eidoverseProxy.js';
@@ -259,6 +260,13 @@ remoteDesktopBroker.mountWebSocket(httpServer);
 remoteDesktopBroker.mountWebSocket(localHttpServer);
 // Viewer tokens obey the same revocation contract as every other session credential.
 authEvents.on('sessions:revoked-all', () => remoteDesktopBroker.revokeAll('PortOS sessions revoked'));
+authEvents.on('sessions:revoked-all', () => {
+  try {
+    revokeAllHostedSessions({ io });
+  } catch (err) {
+    console.error(`❌ FableLoom hosted-session revocation failed: ${err.message}`);
+  }
+});
 // Eidoverse same-origin path + root allowlist (active only after the on-demand
 // host starts). Upgrade for `/ws` and `/eidoverse-host/**` on both listeners.
 mountEidoverseOnServer(null, [httpServer, localHttpServer]);

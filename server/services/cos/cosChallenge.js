@@ -13,6 +13,16 @@
  * merge's content signature, so it federates across peers with no bespoke wire field (#1712).
  */
 
+import { REVIEW_FINDING_HEADINGS, REVIEW_FINDING_HEADING_SUFFIX } from '../../lib/codeReviewVerdict.js';
+
+const RECHECK_FINDING_HEADINGS = new Set([
+  ...Object.values(REVIEW_FINDING_HEADINGS).flatMap(heading => [
+    heading.toLowerCase(),
+    `${heading}${REVIEW_FINDING_HEADING_SUFFIX}`.toLowerCase(),
+  ]),
+  'blocking',
+]);
+
 // Hard cap, not a knob: one dispute per task, enforced in one place.
 export const MAX_CHALLENGES_PER_TASK = 1;
 
@@ -80,26 +90,24 @@ export function buildChallengeResolutionPatch({ outcome, note, resolvedBy, now =
 }
 
 /**
- * Classify a re-check reviewer's fresh findings into a resolution outcome (#2471).
- * Only a `## Blocking` section gates a merge (`## Recommended` never does); the local-LLM reviewer emits the
- * exact `No findings.` sentinel for a clean diff (codeReview.js CODE_REVIEW_SYSTEM_PROMPT).
- *   - `upheld`: no blocking finding survives, so the rejection is overturned and work re-queues.
- *   - `escalated`: a blocking finding still stands, so surface the dispute to the user.
- * Returns `null` for unusable input so a failed re-check is an error, not a silent escalation/overturn on no signal.
+ * A clean re-check overturns the rejection. Any finding that still requires
+ * resolution sends the dispute to the operator. Unusable replies leave it open.
  */
 export function classifyRecheckOutcome(findings) {
   if (typeof findings !== 'string') return null;
   const trimmed = findings.trim();
-  if (!trimmed) return null;
-  // Exact clean sentinel: the diff is clean across all severities.
   if (/^no findings\.?$/i.test(trimmed)) return 'upheld';
-  // A `## Blocking` section only sustains the rejection when it carries a finding: a noisy reviewer's bare
-  // Blocking header must NOT trigger the expensive user escalation, so require non-empty body text.
-  const blockingMatch = trimmed.match(/^\s*#{1,6}\s*blocking\b[^\n]*\n?([\s\S]*)$/im);
-  if (blockingMatch) {
-    // Body = text after the Blocking header up to the next heading (or EOF).
-    const body = blockingMatch[1].split(/^\s*#{1,6}\s/m)[0];
-    if (body.trim()) return 'escalated';
+
+  let inFindingSection = false;
+  let hasFindingHeading = false;
+  for (const line of trimmed.split(/\r?\n/)) {
+    const heading = /^[ \t]*#{1,6}[ \t]+(.+?)\s*$/.exec(line);
+    if (heading) {
+      inFindingSection = RECHECK_FINDING_HEADINGS.has(heading[1].toLowerCase());
+      hasFindingHeading ||= inFindingSection;
+    } else if (inFindingSection && line.trim()) {
+      return 'escalated';
+    }
   }
-  return 'upheld';
+  return hasFindingHeading ? 'upheld' : null;
 }

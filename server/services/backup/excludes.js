@@ -261,7 +261,10 @@ const RESTORE_PRESERVED_FILES = Object.freeze([
 // `[xX]` class): on a case-insensitive volume a `Database-Authority.json` entry
 // would otherwise overwrite the destination's lowercase record.
 const caseInsensitiveGlob = (name) => name.replace(/[a-z]/gi, ch => `[${ch.toLowerCase()}${ch.toUpperCase()}]`);
-export const RESTORE_CREDENTIAL_FILES = Object.freeze(['settings.json', 'managed-visitor-credentials.json', 'private/api-keys.json', 'providers.json']);
+export const IDENTITY_FILE = 'instances.json';
+export const RESTORE_CREDENTIAL_FILES = Object.freeze([
+  'settings.json', 'managed-visitor-credentials.json', 'private/api-keys.json', 'providers.json', IDENTITY_FILE,
+]);
 // The restore coordinator verifies these records and publishes them privately.
 export const PRIVATE_DIRECTORY_RSYNC_EXCLUDE = `--exclude=/${caseInsensitiveGlob('private')}`;
 export const RESTORE_CREDENTIAL_RSYNC_EXCLUDES = RESTORE_CREDENTIAL_FILES.map(name => `--exclude=/${caseInsensitiveGlob(name)}`);
@@ -306,8 +309,6 @@ export const restoreScopeIsPreservedFile = (subdirFilter) => {
  * other's pair credentials (#12596). A restore therefore installs it only when
  * the identities match, the live install has none, or the operator adopts the
  * snapshot's identity (replacing a retired machine). Otherwise it is preserved
- * through the same three places as RESTORE_PRESERVED_FILES.
+ * during restore. When installed, it goes through the private credential writer.
  */
-export const IDENTITY_FILE = 'instances.json';
-export const IDENTITY_RSYNC_EXCLUDE = `--exclude=/${caseInsensitiveGlob(IDENTITY_FILE)}`;
 export const isIdentityPath = relativePath => typeof relativePath === 'string' && relativePath.toLowerCase() === IDENTITY_FILE;

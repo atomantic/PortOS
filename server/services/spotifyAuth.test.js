@@ -228,6 +228,35 @@ describe('getAccessToken', () => {
     expect(mocks.fetchWithTimeout).toHaveBeenCalledTimes(1);
   });
 
+  it.each(['disconnect', 'reconnect'])('discards a pending refresh after %s', async (action) => {
+    routeReads();
+    mocks.writeSecureJson.mockClear();
+    const response = Promise.withResolvers();
+    const started = Promise.withResolvers();
+    mocks.fetchWithTimeout.mockImplementationOnce(() => {
+      started.resolve();
+      return response.promise;
+    });
+
+    const refresh = getAccessToken();
+    await started.promise;
+    let expectedTokens = {};
+    if (action === 'disconnect') {
+      await expect(clearAuth()).resolves.toEqual({ cleared: true });
+    } else {
+      const { url } = await getAuthUrl();
+      const state = new URL(url).searchParams.get('state');
+      const newTokens = { access_token: 'new-grant', refresh_token: 'new-refresh', expires_in: 3600 };
+      mocks.fetchWithTimeout.mockResolvedValueOnce({ ok: true, json: async () => newTokens });
+      await expect(handleCallback({ code: 'new-code', state })).resolves.toEqual({ success: true });
+      expectedTokens = expect.objectContaining(newTokens);
+    }
+
+    response.resolve({ ok: true, json: async () => ({ access_token: 'stale', expires_in: 3600 }) });
+    await expect(refresh).resolves.toBeNull();
+    expect(mocks.writeSecureJson.mock.calls).toEqual([['/tmp/spotify/tokens.json', expectedTokens]]);
+  });
+
   it('clears the single-flight guard so a later refresh can run again', async () => {
     routeReads();
     mocks.fetchWithTimeout

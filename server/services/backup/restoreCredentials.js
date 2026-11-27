@@ -1,7 +1,7 @@
 /** Stage verified credential records and publish them with owner-only permissions during live restore. */
 import { constants } from 'node:fs';
 import { lstat, mkdir, open, readdir } from 'node:fs/promises';
-import { join } from 'node:path';
+import { basename, join } from 'node:path';
 import { atomicWrite } from '../../lib/fileCore.js';
 import { ServerError } from '../../lib/errorHandler.js';
 import { RESTORE_CREDENTIAL_FILES } from './excludes.js';
@@ -44,6 +44,9 @@ async function withCheckedEntry(path, name, accepts, use) {
   }
 }
 
+export const readCredentialFile = (path, name = basename(path)) =>
+  withCheckedEntry(path, name, isCredentialFile, file => file.readFile());
+
 export function scopeTouchesPrivateDirectory(scope) {
   const normalized = scope?.toLowerCase();
   return !normalized || normalized === PRIVATE_DIRECTORY || normalized.startsWith(`${PRIVATE_DIRECTORY}/`);
@@ -79,12 +82,12 @@ export async function readSnapshotCredentials(srcDir, scope) {
   // the staged copy, including its parent and any scope selecting the record.
   for (const name of selected) {
     const privateRecord = name === PRIVATE_API_KEYS;
-    const basename = privateRecord ? 'api-keys.json' : name;
+    const filename = privateRecord ? 'api-keys.json' : name;
     const entries = privateRecord ? privateEntries : rootEntries;
     for (const entry of entries) {
-      if (entry.toLowerCase() !== basename) continue;
-      if (entry !== basename || (scope && scope !== scope.toLowerCase())) throw unsafeCredential(name);
-      const bytes = await withCheckedEntry(join(srcDir, name), name, isCredentialFile, file => file.readFile());
+      if (entry.toLowerCase() !== filename) continue;
+      if (entry !== filename || (scope && scope !== scope.toLowerCase())) throw unsafeCredential(name);
+      const bytes = await readCredentialFile(join(srcDir, name), name);
       if (bytes === null) throw unsafeCredential(name);
       credentials.set(name, bytes);
     }

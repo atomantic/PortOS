@@ -525,6 +525,32 @@ describe('persistent mind supervisor', () => {
     });
   });
 
+  it.each([false, true])('rechecks a changed image route outside the CoS lock (changes again: %s)', async (changesAgain) => {
+    const { withStateLock } = await import('../cos/cosState.js');
+    const { resolvePersistentMindImageCapability } = await import('./persistentMindImageCapability.js');
+    let locked = false;
+    const observed = [];
+    const probe = async ({ model }) => {
+      observed.push({ model, locked });
+      if (observed.length === 1 || changesAgain) mock.root.config.persistentMindProfile.model += '-changed';
+      return observed.length === 1
+        ? { status: 'supported', reason: 'Old route accepts images' }
+        : { status: 'unsupported', reason: 'New route is text-only' };
+    };
+    const lockedCall = async (fn) => {
+      locked = true;
+      try { return await fn(); } finally { locked = false; }
+    };
+    await withStateLock.withImplementation(lockedCall, () => resolvePersistentMindImageCapability.withImplementation(probe, async () => {
+      const result = await supervisor.enqueuePersistentMindMessage({ id: 'image-route-change', images: ['attachment-example'] });
+      expect(result).toMatchObject(changesAgain
+        ? { success: false, code: 'IMAGE_PROFILE_CHANGED', status: 409 }
+        : { success: false, code: 'IMAGE_CAPABILITY_UNSUPPORTED', status: 422 });
+    }));
+    expect(observed).toEqual([{ model: 'example-model', locked: false }, { model: 'example-model-changed', locked: false }]);
+    expect(mock.root.persistentMind.queuedMessages).toEqual([]);
+  });
+
   it('rejects new image messages while a source transition is in progress', async () => {
     mock.updateInProgress = true;
 
@@ -1643,6 +1669,27 @@ describe('persistent mind supervisor', () => {
 
   describe('provider usage-limit autopause', () => {
     const echoProfileAdapter = () => vi.fn(async ({ profile }) => ({ ok: true, provider: profile.provider }));
+
+    it.each(['prepare', 'run'])('retires a temporary quota failure during %s and marks only its provider', async (phase) => {
+      withDeepPreset();
+      const { markProviderUsageLimit } = await import('../provider/providerStatus.js');
+      markProviderUsageLimit.mockClear();
+      const quota = vi.fn(async () => { throw new Error("You've hit your usage limit Get Cursor Pro to keep going."); });
+      await supervisor.registerPersistentMindTurnAdapter({
+        prepare: phase === 'prepare' ? quota : echoProfileAdapter(),
+        run: phase === 'run' ? quota : vi.fn(),
+      });
+      await supervisor.enqueuePersistentMindMessage({ id: 'quota-preset', text: 'Think.', thinkingPresetId: 'deep' });
+      await supervisor.enqueuePersistentMindMessage({ id: 'home-message', text: 'Next.' });
+      await supervisor.drainPersistentMind();
+
+      expect(quota).toHaveBeenCalledOnce();
+      expect(markProviderUsageLimit).toHaveBeenCalledExactlyOnceWith('example-alt', expect.any(Object));
+      expect(mock.root.persistentMind).toMatchObject({ status: 'interrupted', activeTurn: null, recentMessageIds: ['quota-preset'] });
+      expect(mock.root.persistentMind.queuedMessages.map((message) => message.id)).toEqual(['home-message']);
+      expect(mock.scheduled.has(supervisor.PERSISTENT_MIND_USAGE_LIMIT_PROBE_EVENT_ID)).toBe(false);
+      expect(mock.scheduled.has(supervisor.PERSISTENT_MIND_WAKE_EVENT_ID)).toBe(true);
+    });
 
     it('autopauses on a hard Cursor usage-limit error instead of climbing failureCount', async () => {
       const priorFailures = 2;

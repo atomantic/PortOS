@@ -18,7 +18,8 @@ import { browserRequestRefusal, isSessionCookieName, parseCookie } from '../../l
 import { PORTS } from '../lib/ports.js';
 import { logSecurityEvent } from '../lib/securityAuditLog.js';
 import { markUpgradeClaimed } from '../lib/upgradeFallback.js';
-import { EIDOVERSE_PORT } from './eidoverse.js';
+import { EIDOVERSE_PORT } from '../lib/eidoversePort.js';
+import { proxyGuestWebSocket } from './eidoverse/guestWebSocket.js';
 
 export { EIDOVERSE_HOST_PATH_PREFIX, isEidoverseRootProxyPath, stripEidoverseHostPrefix };
 
@@ -138,12 +139,15 @@ export const authorizeEidoverseProxyRequest = async (req) => {
   try {
     // Deferred so suites that only reach the proxy don't load the settings store.
     const { isAuthEnabled, verifyRequestSession } = await import('./auth.js');
-    if (!await isAuthEnabled() || await verifyRequestSession(req)) return ADMITTED;
+    const guestTicket = parseCookie(req.headers?.cookie, EIDOVERSE_GUEST_COOKIE_NAME);
+    const authEnabled = await isAuthEnabled();
+    if ((!authEnabled && !guestTicket) || await verifyRequestSession(req)) return ADMITTED;
     // Deferred: travel reaches this module again through the host bridge, and
     // only a request that presents a guest ticket needs its session table.
-    if (parseCookie(req.headers?.cookie, EIDOVERSE_GUEST_COOKIE_NAME)) {
-      const { hasValidEidoverseGuestCookie } = await import('./eidoverseTravel.js');
-      if (await hasValidEidoverseGuestCookie(req)) return { refusal: null, guest: true };
+    if (guestTicket) {
+      const { getEidoverseGuestSession } = await import('./eidoverseTravel.js');
+      const session = await getEidoverseGuestSession(req);
+      if (session?.identity) return { refusal: null, guest: true, guestIdentity: session.identity };
     }
   } catch (error) {
     console.error(`❌ Eidoverse admission check failed: ${error.message}`);
@@ -163,10 +167,25 @@ const stopRefusedHttp = (res, { refusal }) => {
   return true;
 };
 
+// Some sequencer control routes also accept GET (notably logout). Match the
+// upstream URL parser, including dot segments, before forwarding a guest read.
+const guestControlPaths = new Set(['/upload', '/auth', '/logout', '/seat-profile', '/perflog']);
+const guestReadAllowed = ({ req, pathOverride }) => {
+  if (req.method !== 'GET' && req.method !== 'HEAD') return false;
+  const path = pathOverride ?? req.url;
+  const url = URL.parse(path, 'http://sequencer.invalid');
+  return url?.origin === 'http://sequencer.invalid' && !guestControlPaths.has(requestPathname(url.pathname));
+};
+
 /** Gate + terminate/proxy one HTTP request (see handleEidoverseHttp for options). */
 export const handleGatedEidoverseHttp = async (options) => {
   const admission = await authorizeEidoverseProxyRequest(options.req);
-  if (!stopRefusedHttp(options.res, admission)) handleEidoverseHttp(options);
+  if (stopRefusedHttp(options.res, admission)) return;
+  if (admission.guest && !guestReadAllowed(options)) {
+    writePlainText(options.res, 403, 'Visitor access is read-only.', { 'cache-control': 'no-store' });
+    return;
+  }
+  handleEidoverseHttp(options);
 };
 
 // Live upgraded client sockets. An upgrade is admitted once, so a revoked
@@ -185,7 +204,7 @@ export const handleGatedEidoverseUpgrade = async (options) => {
   // during admission would otherwise be an uncaught 'error'.
   markUpgradeClaimed(clientSocket);
   clientSocket.on('error', () => clientSocket.destroy());
-  const { refusal, guest } = await authorizeEidoverseProxyRequest(req);
+  const { refusal, guest, guestIdentity } = await authorizeEidoverseProxyRequest(req);
   if (clientSocket.destroyed) return;
   if (refusal) {
     const { status, reason, message } = refusal;
@@ -204,6 +223,8 @@ export const handleGatedEidoverseUpgrade = async (options) => {
       clientSocket.destroy();
       return;
     }
+    proxyGuestWebSocket(options, guestIdentity);
+    return;
   }
   proxyUpgradeToEidoverse(options);
 };

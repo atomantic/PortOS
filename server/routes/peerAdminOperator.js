@@ -32,7 +32,7 @@ router.post('/execution-grants', asyncHandler(async (req, res) => {
   const input = validateRequest(peerExecutionGrantSchema, req.body);
   const { peerExecutionRuntime } = await import('../services/peerExecutionRuntime.js');
   await (await peerExecutionRuntime()).saveGrant(input, req);
-  res.json(await setup(input.peerId));
+  res.set('Cache-Control', 'no-store').json(await setup(input.peerId));
 }));
 router.post('/execution-preview', asyncHandler(async (req, res) => {
   const input = validateRequest(peerAdminRemotePlanSchema, req.body);

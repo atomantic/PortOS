@@ -165,6 +165,67 @@ describe('googleAuth token refresh', () => {
     }));
   });
 
+  it('does not restore refreshed tokens when disconnect overlaps an in-flight token write', async () => {
+    let storedTokens = expiredTokens();
+    tryReadFile.mockImplementation(async (file) => {
+      if (file.endsWith('credentials.json')) return JSON.stringify(CREDENTIALS);
+      if (file.endsWith('tokens.json')) return storedTokens ? JSON.stringify(storedTokens) : null;
+      return null;
+    });
+    const client = await getAuthenticatedClient();
+    const writeStarted = Promise.withResolvers();
+    const releaseWrite = Promise.withResolvers();
+    atomicWrite.mockImplementation(async (file, value) => {
+      if (!file.endsWith('tokens.json')) return;
+      writeStarted.resolve();
+      await releaseWrite.promise;
+      storedTokens = value;
+    });
+
+    client.emit('tokens', { access_token: 'late-refresh', expiry_date: Date.now() + 3_600_000 });
+    await writeStarted.promise;
+
+    const clearing = clearAuth();
+    releaseWrite.resolve();
+    await clearing;
+
+    expect(storedTokens).toEqual({});
+    expect(lastTokenWrite()).toEqual({});
+  });
+
+  it('serializes concurrent refresh merges against the latest stored tokens', async () => {
+    let storedTokens = expiredTokens();
+    tryReadFile.mockImplementation(async (file) => {
+      if (file.endsWith('credentials.json')) return JSON.stringify(CREDENTIALS);
+      if (file.endsWith('tokens.json')) return JSON.stringify(storedTokens);
+      return null;
+    });
+    const client = await getAuthenticatedClient();
+    const writeStarted = Promise.withResolvers();
+    const releaseWrite = Promise.withResolvers();
+    let firstWrite = true;
+    atomicWrite.mockImplementation(async (file, value) => {
+      if (!file.endsWith('tokens.json')) return;
+      if (firstWrite) {
+        firstWrite = false;
+        writeStarted.resolve();
+        await releaseWrite.promise;
+      }
+      storedTokens = value;
+    });
+
+    client.emit('tokens', { access_token: 'rotated-access' });
+    await writeStarted.promise;
+    client.emit('tokens', { expiry_date: 1_900_000_000_000 });
+    releaseWrite.resolve();
+
+    await vi.waitFor(() => expect(lastTokenWrite()).toMatchObject({
+      access_token: 'rotated-access',
+      expiry_date: 1_900_000_000_000,
+      refresh_token: 'durable-refresh',
+    }));
+  });
+
   it('rejects and persists nothing when the token endpoint refuses the refresh', async () => {
     stubFiles({ tokens: expiredTokens() });
     tokenResponse = { status: 400, body: { error: 'invalid_grant', error_description: 'Token has been revoked.' } };
@@ -260,5 +321,12 @@ describe('googleAuth credentials and disconnect', () => {
     stubFiles({ tokens: null });
     await clearAuth();
     expect(fetchWithTimeout).not.toHaveBeenCalled();
+  });
+
+  it('clearAuth propagates a local token write failure', async () => {
+    stubFiles({ tokens: { access_token: 'only-access' } });
+    atomicWrite.mockRejectedValueOnce(new Error('disk write failed'));
+
+    await expect(clearAuth()).rejects.toThrow('disk write failed');
   });
 });

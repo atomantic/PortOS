@@ -1,3 +1,8 @@
+import { once } from 'node:events';
+import { readFileSync } from 'node:fs';
+import { createServer } from 'node:http';
+import { Server } from 'socket.io';
+import { Manager } from 'socket.io-client';
 import { describe, it, expect, afterEach, beforeEach, vi } from 'vitest';
 import {
   _getInternalSession,
@@ -13,6 +18,7 @@ import {
   processHostedUtterance,
   releaseHostedSpeechOutput,
   revalidateLiveConversationGate,
+  revokeAllHostedSessions,
   startHostedListening,
   startHostedSessionSweep,
   stopHostedSessionSweep,
@@ -29,6 +35,7 @@ import * as tts from '../voice/tts.js';
 import * as stt from '../voice/stt.js';
 import * as voiceProfiles from '../voice/profiles.js';
 import * as universeBuilder from '../universeBuilder.js';
+import { registerFableLoomHostedNamespace } from '../../sockets/fableLoomHosted.js';
 
 describe('fableLoom hostedSession', () => {
   const mockLoom = {
@@ -118,6 +125,7 @@ describe('fableLoom hostedSession', () => {
       of: () => ({
         to: (room) => ({
           emit: (event, payload) => emits.push({ room, event, payload }),
+          disconnectSockets: vi.fn(),
         }),
       }),
     };
@@ -973,6 +981,92 @@ describe('fableLoom hostedSession', () => {
   });
 
   describe('session teardown', () => {
+    it('ends only the selected room and revokes all remaining hosted sessions on auth invalidation', async () => {
+      const http = createServer();
+      const io = new Server(http);
+      registerFableLoomHostedNamespace(io);
+      const clients = [];
+      const nextEvent = (client, event) => once(client, event, { signal: AbortSignal.timeout(3000) });
+      try {
+        http.listen(0, '127.0.0.1');
+        await once(http, 'listening');
+        const origin = `http://127.0.0.1:${http.address().port}`;
+        const manager = () => new Manager(origin, { autoConnect: false, reconnection: false });
+        const connect = async (manager, namespace, auth) => {
+          const socket = manager.socket(namespace, { auth });
+          clients.push(socket);
+          const connected = nextEvent(socket, 'connect');
+          socket.connect();
+          await connected;
+          return socket;
+        };
+        const connectHosted = (manager, { session, token, hostToken }, role) => connect(manager, '/fableloom-hosted', {
+          sessionId: session.id,
+          token: role === 'host' ? hostToken : token,
+          role,
+        });
+        const expectClosed = async (socket, sessionId, reason) => {
+          const [ended] = await Promise.all([
+            nextEvent(socket, 'hosted:session:ended'),
+            nextEvent(socket, 'disconnect'),
+          ]);
+          expect(ended).toEqual([{ sessionId, reason }]);
+          expect(socket.connected).toBe(false);
+        };
+
+        const first = await createHostedSession('loom-1', 'ep-1');
+        const second = await createHostedSession('loom-1', 'ep-1');
+        const third = await createHostedSession('loom-1', 'ep-1');
+        const idle = await createHostedSession('loom-1', 'ep-1');
+        const hostManager = manager();
+        const dashboard = await connect(hostManager, '/');
+        const host = await connectHosted(hostManager, first, 'host');
+        const audience = await connectHosted(manager(), second, 'audience');
+        const otherHost = await connectHosted(manager(), third, 'host');
+
+        const firstClosed = expectClosed(host, first.session.id, 'host_ended');
+        endHostedSession(first.session.id, { reason: 'host_ended', io });
+        await firstClosed;
+        expect(dashboard.connected).toBe(true);
+        expect(audience.connected).toBe(true);
+        expect(otherHost.connected).toBe(true);
+        expect(verifyHostedHostToken(first.session.id, first.hostToken)).toBe(false);
+
+        const revoked = Promise.all([
+          expectClosed(audience, second.session.id, 'sessions_revoked'),
+          expectClosed(otherHost, third.session.id, 'sessions_revoked'),
+        ]);
+        revokeAllHostedSessions({ io });
+        await revoked;
+        for (const { session, token, hostToken } of [second, third, idle]) {
+          expect(getHostedSession(session.id)).toBeNull();
+          expect(verifyHostedToken(session.id, token)).toBe(false);
+          expect(verifyHostedHostToken(session.id, hostToken)).toBe(false);
+        }
+      } finally {
+        clients.forEach((client) => client.disconnect());
+        await io.close();
+      }
+    });
+
+    it('prevents pending session creation from crossing the revocation boundary', async () => {
+      const loomRead = deferred();
+      vi.mocked(records.getLoom).mockReturnValueOnce(loomRead.promise);
+
+      const creating = createHostedSession('loom-1', 'ep-1');
+      revokeAllHostedSessions();
+      loomRead.resolve(mockLoom);
+
+      await expect(creating).rejects.toMatchObject({ code: 'HOSTED_SESSION_REVOKED', status: 409 });
+      const fresh = await createHostedSession('loom-1', 'ep-1');
+      expect(verifyHostedHostToken(fresh.session.id, fresh.hostToken)).toBe(true);
+    });
+
+    it('wires PortOS session revocation to hosted-session teardown at boot', () => {
+      const source = readFileSync(new URL('../../index.js', import.meta.url), 'utf8');
+      expect(source).toMatch(/authEvents\.on\('sessions:revoked-all',[^;]*revokeAllHostedSessions\(\{ io \}\)/);
+    });
+
     it('ends hosted session cleanly', async () => {
       const { session } = await createHostedSession('loom-1', 'ep-1');
       expect(getHostedSession(session.id)).not.toBeNull();

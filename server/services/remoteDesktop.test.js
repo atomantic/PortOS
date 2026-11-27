@@ -3,7 +3,10 @@ import { createServer } from 'node:net';
 import { createServer as createHttpServer } from 'node:http';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { WebSocket } from 'ws';
+import { logSecurityEvent } from '../lib/securityAuditLog.js';
 import { createRemoteDesktopBroker } from './remoteDesktop.js';
+
+vi.mock('../lib/securityAuditLog.js', () => ({ logSecurityEvent: vi.fn() }));
 
 const servers = [];
 
@@ -62,6 +65,38 @@ describe('remote desktop broker', () => {
     await expect(broker.createSession()).rejects.toMatchObject({ code: 'VNC_NOT_CONFIGURED' });
   });
 
+  it.each([
+    ['localhost', 'https://example.invalid', 'CROSS_ORIGIN_BLOCKED'],
+    ['example.invalid', 'https://example.invalid', 'HOST_NOT_ALLOWED'],
+  ])('refuses browser upgrades for Host %s and Origin %s before session lookup', async (host, origin, code) => {
+    const now = vi.fn(() => 1000);
+    const connect = vi.fn();
+    const broker = createRemoteDesktopBroker({ connect, now, probeFn: async () => true });
+    const { viewerPath } = await broker.createSession();
+    const token = new URL(viewerPath, 'http://portos.invalid').searchParams.get('token');
+    const server = createHttpServer();
+    const unmount = broker.mountWebSocket(server);
+    const socket = { write: vi.fn(), destroy: vi.fn() };
+    now.mockClear();
+
+    server.emit('upgrade', {
+      url: `/remote-desktop/ws?token=${token}`,
+      method: 'GET',
+      headers: { host, origin },
+      socket,
+    }, socket, Buffer.alloc(0));
+    unmount();
+
+    expect(socket.portosUpgradeClaimed).toBe(true);
+    expect(socket.write).toHaveBeenCalledWith('HTTP/1.1 403 Forbidden\r\nConnection: close\r\n\r\n');
+    expect(socket.destroy).toHaveBeenCalledOnce();
+    expect(now).not.toHaveBeenCalled();
+    expect(connect).not.toHaveBeenCalled();
+    expect(logSecurityEvent).toHaveBeenLastCalledWith('remote-desktop.refused', {
+      refused: true, code, ip: undefined, method: 'GET', path: '/remote-desktop/ws', origin, host,
+    });
+  });
+
   it('bridges binary WebSocket frames to the loopback VNC socket', async () => {
     const vncServer = createServer((socket) => socket.pipe(socket));
     servers.push(vncServer);
@@ -72,7 +107,8 @@ describe('remote desktop broker', () => {
     const httpServer = createHttpServer();
     broker.mountWebSocket(httpServer);
     await new Promise((resolve) => httpServer.listen(0, '127.0.0.1', resolve));
-    const client = new WebSocket(`ws://127.0.0.1:${httpServer.address().port}/remote-desktop/ws?token=${token}`);
+    const host = `127.0.0.1:${httpServer.address().port}`;
+    const client = new WebSocket(`ws://${host}/remote-desktop/ws?token=${token}`, { origin: `http://${host}` });
     await new Promise((resolve, reject) => {
       client.once('open', resolve);
       client.once('error', reject);

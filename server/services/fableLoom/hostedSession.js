@@ -51,6 +51,7 @@ const protagonistVoiceCharacter = (loom, universe) => loom.protagonistCharacterI
 
 // Active hosted sessions in memory (ephemeral, machine-local)
 const activeSessions = new Map();
+let revocationGeneration = 0;
 
 // Default session time-to-live: 30 minutes
 export const DEFAULT_SESSION_TTL_MINUTES = 30;
@@ -254,6 +255,7 @@ export async function createHostedSession(loomId, episodeId, {
   ttlMinutes = DEFAULT_SESSION_TTL_MINUTES,
   baseUrl,
 } = {}) {
+  const generation = revocationGeneration;
   const loom = await getLoom(loomId);
   if (!loom) {
     throw new ServerError('Loom not found', { status: 404, code: 'NOT_FOUND' });
@@ -265,6 +267,14 @@ export async function createHostedSession(loomId, episodeId, {
 
   // Run preflight readiness
   const preflight = await checkHostedSessionReadiness({ loomId, episodeId, loom, episode });
+  // Preflight awaits disk and network state. A request admitted before a
+  // revocation must not mint credentials after it.
+  if (generation !== revocationGeneration) {
+    throw new ServerError('PortOS sessions were revoked while preparing hosted play', {
+      status: 409,
+      code: 'HOSTED_SESSION_REVOKED',
+    });
+  }
   if (!preflight.ready) {
     throw new ServerError(`Hosted session preflight failed: ${preflight.errors.join('; ')}`, {
       status: 412,
@@ -568,30 +578,39 @@ function commitHostedEpisodeSwitch(session, sessionId, episodeId, startNode, { i
 }
 
 /**
- * End a hosted session and notify connected clients.
+ * End a hosted session, notify connected clients and close its room.
  */
 export function endHostedSession(sessionId, { reason = 'ended', io } = {}) {
   const session = activeSessions.get(sessionId);
   if (!session) return { ok: true };
 
-  // Take the timer before the session leaves the map. A timeout that fires
-  // after `hosted:session:ended` must not emit a transition into a dead room.
+  session.status = 'ended';
+  session.turnPhase = 'ended';
+  activeSessions.delete(sessionId);
+
   takePendingSpeech(session);
   if (session.activeTurn?.abortController) {
     session.activeTurn.abortController.abort(reason);
     session.activeTurn = null;
   }
 
-  session.status = 'ended';
-  session.turnPhase = 'ended';
-
   if (io) {
-    const ns = io.of('/fableloom-hosted');
-    ns.to(`session:${sessionId}`).emit('hosted:session:ended', { sessionId, reason });
+    const room = io.of('/fableloom-hosted').to(`session:${sessionId}`);
+    room.emit('hosted:session:ended', { sessionId, reason });
+    // Keep any dashboard sockets sharing this client's transport connected.
+    room.disconnectSockets(false);
   }
 
-  activeSessions.delete(sessionId);
   return { ok: true };
+}
+
+/** Revoke hosted credentials and close any remaining hosted sockets. */
+export function revokeAllHostedSessions({ reason = 'sessions_revoked', io } = {}) {
+  revocationGeneration += 1;
+  for (const id of activeSessions.keys()) {
+    endHostedSession(id, { reason, io });
+  }
+  if (io) io.of('/fableloom-hosted').disconnectSockets(true);
 }
 
 /**
