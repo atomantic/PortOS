@@ -534,7 +534,7 @@ html[data-port-theme] select {
 
 html[data-port-theme] input::placeholder,
 html[data-port-theme] textarea::placeholder {
-  color: rgb(var(--port-text-muted) / 0.62);
+  color: rgb(var(--port-text-muted));
 }
 
 html[data-port-theme] button,
