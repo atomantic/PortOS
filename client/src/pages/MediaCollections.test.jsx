@@ -1,5 +1,5 @@
-import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { render, screen, waitFor, within } from '@testing-library/react';
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
+import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { MemoryRouter, Routes, Route, useLocation, useNavigate } from 'react-router';
 import { typeSettled } from '../test/settledInput';
@@ -108,6 +108,7 @@ function renderPage(entry = '/media/collections') {
 }
 
 describe('MediaCollections', () => {
+  afterEach(() => { vi.useRealTimers(); });
   beforeEach(() => {
     vi.clearAllMocks();
     cancelQueryMirrorSpy.mockClear();
@@ -281,22 +282,22 @@ describe('MediaCollections', () => {
     // than relying on that unmount race to resolve in its favor.
     const { createMediaCollection } = await import('../services/apiImageVideo.js');
     createMediaCollection.mockResolvedValueOnce({ id: 'col-4', name: 'Fresh Bucket', items: [] });
-    const user = userEvent.setup();
+    vi.useFakeTimers();
     // An active search keeps the mirror's debounce genuinely armed (a
     // change from the mounted `?q=alpha`) at the moment create fires.
-    renderPage('/media/collections?q=alpha');
-    await waitFor(() => screen.getByText('Alpha'));
+    await act(async () => { renderPage('/media/collections?q=alpha'); });
+    expect(screen.getByText('Alpha')).toBeInTheDocument();
+    fireEvent.change(screen.getByLabelText('Search collections'), { target: { value: 'alph' } });
     expect(cancelQueryMirrorSpy).not.toHaveBeenCalled();
-    await typeSettled(user, screen.getByLabelText('New collection name'), 'Fresh Bucket');
-    await user.click(screen.getByRole('button', { name: /create/i }));
-    await waitFor(() => expect(screen.getByTestId('pathname')).toHaveTextContent('/media/collections/col-4'));
+    fireEvent.change(screen.getByLabelText('New collection name'), { target: { value: 'Fresh Bucket' } });
+    await act(async () => fireEvent.click(screen.getByRole('button', { name: /create/i })));
+    expect(screen.getByTestId('pathname')).toHaveTextContent('/media/collections/col-4');
     expect(cancelQueryMirrorSpy).toHaveBeenCalled();
 
     // The cancel call is only meaningful if it actually stops the mirror
-    // from firing — wait past its 300ms delay (real timers; the mock above
-    // wraps the REAL hook) and confirm the detail route is still current
+    // from firing — advance past its 300ms delay and confirm the detail route is still current
     // rather than having been clobbered back to the list route.
-    await new Promise((resolve) => { setTimeout(resolve, 350); });
+    await act(() => vi.advanceTimersByTimeAsync(350));
     expect(screen.getByTestId('pathname')).toHaveTextContent('/media/collections/col-4');
   });
 

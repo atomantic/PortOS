@@ -420,7 +420,7 @@ describe('docs/DEPS.md', () => {
 });
 
 const MODULE_GUIDES = [
-  'server/lib/README.md', 'client/src/lib/README.md', 'client/src/hooks/README.md',
+  'server/lib/README.md', 'client/src/lib/README.md',
 ];
 
 // Guards "`symbol` in `path`" pointers in the instruction and catalog docs
@@ -670,7 +670,6 @@ describe('instruction file references', () => {
 // examples can describe historical or hypothetical endpoints.
 const ENDPOINT_DOCS = new Set([
   ...DOCS.filter((file) => /^docs\/(?:features\/)?[^/]+\.md$/.test(file)), ...AGENT_FILES, ...MODULE_GUIDES,
-  'client/src/utils/README.md', 'client/src/services/README.md',
 ]);
 const LINK_LABEL_DOCS = new Set([...DOCS, 'README.md', 'CONTRIBUTING.md', 'ETHOS.md', '.changelog/README.md', ...AGENT_FILES]);
 

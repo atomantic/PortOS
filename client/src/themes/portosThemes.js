@@ -103,7 +103,6 @@ const kestrelShellTokens = {
 const THEME_PALETTES = {
   'classic-midnight': {
     concept: 'The existing PortOS interface, kept as the stable baseline.',
-    doc: '/docs/themes/classic-midnight.md',
     colors: {
       '--port-bg': '15 15 15',
       '--port-card': '30 30 30',
@@ -169,7 +168,6 @@ const THEME_PALETTES = {
 
   'classic-noon': {
     concept: 'Classic Midnight reflected to a clean white workspace — same blue accent, daylight legibility.',
-    doc: '/docs/themes/classic-midnight.md',
     colors: {
       '--port-bg': '240 240 240',
       '--port-card': '255 255 255',
@@ -248,7 +246,6 @@ const THEME_PALETTES = {
 
   'lumen-glass': {
     concept: 'A translucent local-first command deck with layered glass panes and soft luminous depth.',
-    doc: '/docs/themes/lumen-glass.md',
     // The night pane finally gets the ambient depth its day partner always had
     // (which drifts on its own body::before/::after): two slow blooms behind
     // the glass, plus edge falloff so the stack reads as lit from the middle.
@@ -343,7 +340,6 @@ const THEME_PALETTES = {
 
   'lumen-glass-day': {
     concept: 'Lumen Glass at noon — cream-and-cyan glass panels floating on a sunlit drifting mesh.',
-    doc: '/docs/themes/lumen-glass.md',
     // The drifting mesh stays on this theme's own body pseudo-elements; grain
     // is what turns its white panes from flat fill into frosted glass.
     colors: {
@@ -425,7 +421,6 @@ const THEME_PALETTES = {
 
   'black-ice-terminal': {
     concept: 'A dense cyberpunk terminal interface for agents, logs, orchestration, and system control.',
-    doc: '/docs/themes/black-ice-terminal.md',
     // A cyberpunk CRT was already scanlined but otherwise inert: the phosphor
     // sweep, the tube's edge falloff, and the title glitch are the rest of the
     // same monitor.
@@ -527,7 +522,6 @@ const THEME_PALETTES = {
 
   'black-ice-terminal-day': {
     concept: 'Black ICE Terminal printed on cream paper — green ink, pixel grid, line-printer report aesthetic.',
-    doc: '/docs/themes/black-ice-terminal.md',
     // Paper tooth moved off --port-body-texture (where a 400-char inline SVG
     // sat behind the app backdrop) and onto the shared grain effect, which
     // blends over the whole page the way real stock does. Vignette is the
@@ -622,7 +616,6 @@ const THEME_PALETTES = {
 
   'blueprint-ops': {
     concept: 'A systems-map aesthetic with drafting-grid structure, annotated panels, and calm operational contrast.',
-    doc: '/docs/themes/blueprint-ops.md',
     // A drafting table is lit from above: the sheet falls off toward its edges.
     colors: {
       '--port-bg': '11 16 32',
@@ -710,7 +703,6 @@ const THEME_PALETTES = {
 
   'blueprint-ops-day': {
     concept: 'Blueprint Ops on white drafting paper — pale cyan grid, navy accents, amber annotations.',
-    doc: '/docs/themes/blueprint-ops.md',
     // Vellum tooth over the printed grid — the day sheet's counterpart to the
     // night table's edge falloff.
     colors: {
@@ -795,7 +787,6 @@ const THEME_PALETTES = {
   },
   'kestrel-neon': {
     concept: 'A CRT boot terminal at midnight — cyan wireframes and magenta panel labels over a scanlined void with a perspective grid floor.',
-    doc: '/docs/themes/kestrel-neon.md',
     colors: {
       '--port-bg': '5 6 10',
       '--port-card': '22 26 50',
@@ -861,7 +852,6 @@ const THEME_PALETTES = {
 
   'kestrel-neon-day': {
     concept: 'Kestrel Neon at first light — holographic white panels, teal and magenta ink, the CRT grid faded to a watermark.',
-    doc: '/docs/themes/kestrel-neon.md',
     colors: {
       '--port-bg': '234 236 246',
       '--port-card': '255 255 255',

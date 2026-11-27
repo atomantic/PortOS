@@ -2,7 +2,7 @@
  * Media and stage interaction cases from the Music Video page suite for `useProduceStageWiring`.
  * Drives the real page through the shared scaffold in `test/musicVideoPageMocks.jsx`.
  */
-import { describe, it, expect, vi, beforeAll } from 'vitest';
+import { describe, it, expect, vi, beforeAll, afterEach } from 'vitest';
 // The scaffold registers the mocks, so it loads before any mocked module.
 import {
   PROJECT_WITH_CLIP,
@@ -558,7 +558,7 @@ describe('take decisions then shot edits keep the takes as the server holds them
   const openShot = async (name, project = board) => {
     await asThisTab();
     await renderProjectStage(project, 'produce');
-    const thumbnails = within(screen.getByLabelText('Storyboard thumbnails'));
+    const thumbnails = within(await screen.findByLabelText('Storyboard thumbnails'));
     await act(async () => fireEvent.click(thumbnails.getByRole('button', { name })));
   };
   const markDone = async () => {
@@ -696,6 +696,8 @@ describe('take decisions then shot edits keep the takes as the server holds them
 
   // #16306: the Cast & Sets check re-reads only after an edit that can change it, once, after the reply applied.
   describe('Cast & Sets reads', () => {
+    afterEach(() => { vi.useRealTimers(); });
+
     const catalogBoard = {
       ...board,
       castAndSets: { source: 'catalog', status: 'approved' },
@@ -708,50 +710,61 @@ describe('take decisions then shot edits keep the takes as the server holds them
     };
     const checkinReads = () => getMusicVideoCastAndSets.mock.calls.length;
     // Past the read's settle window (useCatalogCastSetsCheckin CHECKIN_INPUT_SETTLE_MS), so a read it would send has been sent.
-    const pastSettle = () => act(() => new Promise((resolve) => { setTimeout(resolve, 700); }));
+    const pastSettle = () => act(() => vi.advanceTimersByTimeAsync(700));
+    const useFakeClock = () => vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
+    const openCatalogShot = async () => {
+      fakeServer(catalogBoard);
+      await openShot(/^Open Shot 1/, catalogBoard);
+      await waitFor(() => expect(checkinReads()).toBe(1));
+      useFakeClock();
+    };
+    const showCatalogFrames = async () => {
+      const show = screen.getByRole('group', { name: 'Show' });
+      await act(async () => fireEvent.click(within(show).getByRole('button', { name: /^(Still|Frames)$/ })));
+    };
     const deferredReply = (mock) => {
       const real = mock.getMockImplementation();
       let answer;
       mock.mockImplementationOnce((...args) => new Promise((resolve) => { answer = () => resolve(real(...args)); }));
       // The take chain starts the request a microtask after the click.
       return async () => {
-        await waitFor(() => expect(answer).toBeTypeOf('function'));
+        await settle();
+        expect(answer).toBeTypeOf('function');
         await act(async () => answer());
       };
     };
 
     // Uniquely catches a take decision or Done re-reading the whole-video check, and Reject unused looking unchanged while it waits.
     it('Reject unused shows it is saving, ignores a second press, and with Done sends no cast and sets read', async () => {
-      fakeServer(catalogBoard);
-      await openShot(/^Open Shot 1/, catalogBoard);
-      await waitFor(() => expect(checkinReads()).toBe(1));
+      await openCatalogShot();
       const answer = deferredReply(rejectUnusedMusicVideoSceneTakes);
       fireEvent.click(screen.getByRole('button', { name: 'Reject unused (2)' }));
       fireEvent.click(screen.getByRole('button', { name: 'Reject 2' }));
       const saving = screen.getByRole('button', { name: 'Rejecting 2 unused takes…' });
       expect(saving).toBeDisabled();
-      await waitFor(() => expect(rejectUnusedMusicVideoSceneTakes).toHaveBeenCalledTimes(1));
+      await settle();
+      expect(rejectUnusedMusicVideoSceneTakes).toHaveBeenCalledTimes(1);
       fireEvent.click(saving);
       await settle();
       expect(rejectUnusedMusicVideoSceneTakes).toHaveBeenCalledTimes(1);
       await answer();
-      await waitFor(() => expect(unusedControl()).toBeNull());
-      await markDone();
+      expect(unusedControl()).toBeNull();
+      const done = screen.getByRole('checkbox', { name: 'Done', exact: true });
+      await act(async () => fireEvent.click(done));
+      expect(done).toBeChecked();
       await pastSettle();
       expect(checkinReads()).toBe(1);
     });
 
     it('Use shows the take saving until its reply, and sends no cast and sets read', async () => {
-      fakeServer(catalogBoard);
-      await openShot(/^Open Shot 1/, catalogBoard);
-      await waitFor(() => expect(checkinReads()).toBe(1));
-      await showFrames();
+      await openCatalogShot();
+      await showCatalogFrames();
       const answer = deferredReply(selectMusicVideoSceneTake);
       const take = () => within(screen.getByRole('list', { name: /Frame takes/ })).getAllByRole('listitem')[1];
       fireEvent.click(within(take()).getByRole('button', { name: /Use/ }));
       expect(within(take()).getByRole('status')).toHaveTextContent('Saving…');
       await answer();
-      await waitFor(() => expect(within(take()).queryByRole('status')).toBeNull());
+      expect(within(take()).queryByRole('status')).toBeNull();
       await pastSettle();
       expect(selectMusicVideoSceneTake).toHaveBeenCalledTimes(1);
       expect(checkinReads()).toBe(1);
@@ -759,37 +772,34 @@ describe('take decisions then shot edits keep the takes as the server holds them
 
     // The clip prompt is text the check reads (a subject it names), so its edit reads once, after the reply.
     it('a clip prompt edit reads the check once, after its reply', async () => {
-      fakeServer(catalogBoard);
-      await openShot(/^Open Shot 1/, catalogBoard);
-      await waitFor(() => expect(checkinReads()).toBe(1));
+      await openCatalogShot();
       const prompt = screen.getByLabelText(/^(Clip|Shot) prompt$/);
       fireEvent.change(prompt, { target: { value: 'Lead waves, at dusk' } });
-      fireEvent.blur(prompt);
-      await waitFor(() => expect(updateMusicVideoScene).toHaveBeenCalledWith('mv-2', 's1', { prompt: 'Lead waves, at dusk' }, expect.anything()));
-      await waitFor(() => expect(checkinReads()).toBe(2));
+      await act(async () => fireEvent.blur(prompt));
+      expect(updateMusicVideoScene).toHaveBeenCalledWith('mv-2', 's1', { prompt: 'Lead waves, at dusk' }, expect.anything());
+      await pastSettle();
+      expect(checkinReads()).toBe(2);
       await pastSettle();
       expect(checkinReads()).toBe(2);
     });
 
     it('a reference pick reads the check once', async () => {
-      fakeServer(catalogBoard);
-      await openShot(/^Open Shot 1/, catalogBoard);
-      await waitFor(() => expect(checkinReads()).toBe(1));
-      await showFrames();
-      fireEvent.click(within(screen.getByRole('group', { name: 'References selected for the frames' })).getByRole('button', { name: "Don't send Pier" }));
-      await waitFor(() => expect(updateMusicVideoScene).toHaveBeenCalledWith('mv-2', 's1', { frameReferenceIds: ['r1'] }, expect.anything()));
-      await waitFor(() => expect(checkinReads()).toBe(2));
+      await openCatalogShot();
+      await showCatalogFrames();
+      await act(async () => fireEvent.click(within(screen.getByRole('group', { name: 'References selected for the frames' })).getByRole('button', { name: "Don't send Pier" })));
+      expect(updateMusicVideoScene).toHaveBeenCalledWith('mv-2', 's1', { frameReferenceIds: ['r1'] }, expect.anything());
+      await pastSettle();
+      expect(checkinReads()).toBe(2);
       await pastSettle();
       expect(checkinReads()).toBe(2);
     });
 
     it('a shot sheet cast change reads the check once', async () => {
-      fakeServer(catalogBoard);
-      await openShot(/^Open Shot 1/, catalogBoard);
-      await waitFor(() => expect(checkinReads()).toBe(1));
-      fireEvent.click(within(screen.getByRole('group', { name: 'Who' })).getByRole('button', { name: 'Lead' }));
-      await waitFor(() => expect(updateMusicVideoScene).toHaveBeenCalledWith('mv-2', 's1', { shotSheet: expect.objectContaining({ characters: ['Lead'] }) }, expect.anything()));
-      await waitFor(() => expect(checkinReads()).toBe(2));
+      await openCatalogShot();
+      await act(async () => fireEvent.click(within(screen.getByRole('group', { name: 'Who' })).getByRole('button', { name: 'Lead' })));
+      expect(updateMusicVideoScene).toHaveBeenCalledWith('mv-2', 's1', { shotSheet: expect.objectContaining({ characters: ['Lead'] }) }, expect.anything());
+      await pastSettle();
+      expect(checkinReads()).toBe(2);
       await pastSettle();
       expect(checkinReads()).toBe(2);
     });
@@ -801,19 +811,24 @@ describe('take decisions then shot edits keep the takes as the server holds them
       let answerProject;
       getMusicVideoProject.mockImplementationOnce(() => new Promise((resolve) => { answerProject = () => resolve(catalogBoard); }));
       listMusicVideoProjects.mockResolvedValue([catalogBoard]);
-      renderMV('/music-video/mv-2/produce/scene/s1');
-      await waitFor(() => expect(getMusicVideoProject).toHaveBeenCalled());
+      useFakeClock();
+      await act(async () => { renderMV('/music-video/mv-2/produce/scene/s1'); });
+      expect(getMusicVideoProject).toHaveBeenCalled();
       await pastSettle();
       expect(checkinReads()).toBe(0);
       expect(previewImagePrompt).not.toHaveBeenCalled();
-      await act(async () => answerProject());
-      await screen.findByRole('heading', { level: 2, name: catalogBoard.name });
-      await waitFor(() => expect(checkinReads()).toBe(1));
-      await screen.findByRole('group', { name: 'Show' });
+      await act(async () => {
+        answerProject();
+        await vi.dynamicImportSettled();
+      });
+      await act(() => vi.dynamicImportSettled());
       await pastSettle();
+      expect(screen.getByRole('heading', { level: 2, name: catalogBoard.name })).toBeInTheDocument();
+      expect(checkinReads()).toBe(1);
       expect(previewImagePrompt).not.toHaveBeenCalled();
-      await showFrames();
-      await waitFor(() => expect(previewImagePrompt).toHaveBeenCalled());
+      await showCatalogFrames();
+      await pastSettle();
+      expect(previewImagePrompt).toHaveBeenCalled();
     });
   });
 });
