@@ -109,7 +109,8 @@ const noBackEdgeRules = (graph) => [
   {
     why: 'extracted agent leaves exist only to be depended on (#2837); the TUI session controller takes its collaborators as arguments so it never needs a spawner (#8021)',
     from: [
-      'agent/agentFinalization.js', 'agent/agentPrVerification.js', 'agent/agentGoalFidelity.js', 'agent/agentOutputHookDispatch.js', 'agent/agentRunFinalize.js', 'agent/agentSummaryExtraction.js', 'agent/agentRunnerSync.js', 'agent/agentRunnerOutputBatchers.js',
+      'agent/agentFinalization.js', 'agent/agentSuccessCriteria.js', 'agent/agentRetirement.js', 'agent/agentForgeSettlement.js', 'agent/agentDeliveryRecovery.js',
+      'agent/agentPrVerification.js', 'agent/agentGoalFidelity.js', 'agent/agentOutputHookDispatch.js', 'agent/agentRunFinalize.js', 'agent/agentSummaryExtraction.js', 'agent/agentRunnerSync.js', 'agent/agentRunnerOutputBatchers.js',
       ...Array.from(graph.keys()).filter(file => file.startsWith('agentTuiSpawning/')),
     ],
     to: AGENT_ORCHESTRATORS,
