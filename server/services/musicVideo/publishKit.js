@@ -29,6 +29,7 @@ import { requireProject } from './requireProject.js';
 import { kitCutWindows, SOCIAL_VIDEO_ARGS } from './socialCuts.js';
 import { musicVideoAspect } from '../../lib/musicVideo/musicVideoAspect.js';
 import { publishCropRect } from '../../lib/musicVideo/musicVideoPublishCrop.js';
+import { defaultVerticalFrameOptions, projectTimedLyricLines } from '../../lib/musicVideo/musicVideoVerticalFrame.js';
 import { musicVideoDependencyChanges } from '../../lib/musicVideo/musicVideoDependencies.js';
 import { buildChapters, buildSrt, buildPublishCopyPrompt, parsePublishCopy, normalizeCopyOptions, PUBLISH_PLATFORMS } from './publishKitText.js';
 import { canonicalizeSunoUrl, isSunoShareLink } from '../sunoShareLink.js';
@@ -157,7 +158,7 @@ async function masterPublishCopy(bin, path, signal) {
  * current final render. Returns `{ jobId }`; progress streams over SSE and the
  * record carries the result.
  */
-export async function startPublishKitBuild(projectId, { crop, loudnessPreset = 'as-mixed' } = {}) {
+export async function startPublishKitBuild(projectId, { crop, loudnessPreset = 'as-mixed', vertical } = {}) {
   assertRenderCleanupIdle(projectId);
   if (projectBuilds.has(projectId)) throw kitError(409, 'PUBLISH_KIT_BUILD_IN_PROGRESS', 'A publishing kit build is already running for this project', getActivePublishKitBuild(projectId) || undefined);
   const jobId = `mvpk-${randomUUID()}`;
@@ -165,14 +166,14 @@ export async function startPublishKitBuild(projectId, { crop, loudnessPreset = '
   // another request before there is a background job to put in the registry.
   projectBuilds.set(projectId, jobId);
   try {
-    return await projectBuilds.run(projectId, () => beginPublishKitBuild(projectId, jobId, { crop, loudnessPreset }));
+    return await projectBuilds.run(projectId, () => beginPublishKitBuild(projectId, jobId, { crop, loudnessPreset, vertical }));
   } catch (error) {
     projectBuilds.delete(projectId);
     throw error;
   }
 }
 
-async function beginPublishKitBuild(projectId, jobId, { crop, loudnessPreset }) {
+async function beginPublishKitBuild(projectId, jobId, { crop, loudnessPreset, vertical: verticalOptions }) {
   const project = await requireProject(projectId);
   if (crop && crop.renderHistoryId !== project.renderHistoryId) throw staleCropPreview();
   const master = await finalRenderFile(project);
@@ -194,7 +195,14 @@ async function beginPublishKitBuild(projectId, jobId, { crop, loudnessPreset }) 
     const durationSec = Number(entry.durationSec) > 0 ? Number(entry.durationSec) : await probeVideoDuration(masterPath);
     const stem = `music-video-${projectId.slice(3, 11)}-${Date.now()}-${tag}`;
     // The vertical cut follows the teaser's hook unless the director posts Suno Hooks and that hook opens too late for one.
-    const { teaser, vertical } = cropPlan?.windows ?? publishWindows(project, await readPublishPlatforms());
+    const { teaser, vertical: hookVertical } = cropPlan?.windows ?? publishWindows(project, await readPublishPlatforms());
+    const fullVertical = verticalOptions?.span === 'full' && durationSec > 0;
+    const framedVertical = verticalOptions?.mode === 'framed' && musicVideoAspect(project) === '16:9';
+    const vertical = fullVertical ? { startSec: 0, endSec: durationSec } : hookVertical;
+    const verticalFade = !fullVertical;
+    const verticalLabel = vertical
+      ? (fullVertical ? `Vertical 9:16 full (${Math.round(vertical.endSec - vertical.startSec)}s)` : `Vertical 9:16 ${Math.round(vertical.endSec - vertical.startSec)}s`)
+      : '';
     const encodes = [
       { kind: 'x-1080p', label: 'X / social up to 1080p (12 Mbps)', filename: `${stem}-x-1080p.mp4`,
         args: ['-i', masterPath, '-vf', "scale=w='min(1920,iw)':h='min(1080,ih)':force_original_aspect_ratio=decrease", ...SOCIAL_VIDEO_ARGS, ...AUDIO_ARGS] },
@@ -203,17 +211,34 @@ async function beginPublishKitBuild(projectId, jobId, { crop, loudnessPreset }) 
       ...(teaser ? [{ kind: 'teaser', label: `Teaser ${Math.round(teaser.endSec - teaser.startSec)}s`, filename: `${stem}-teaser.mp4`, window: teaser,
         args: ['-ss', String(teaser.startSec), '-t', String(teaser.endSec - teaser.startSec), '-i', masterPath, ...SOCIAL_VIDEO_ARGS,
           '-af', `asetpts=PTS-STARTPTS${edgeFadeFilter(teaser.endSec - teaser.startSec)}`, ...AUDIO_ARGS] }] : []),
-      // #10150: Shorts/TikTok/Reels need 9:16. A composition that lays itself out at 9:16
-      // (portosComposition.formats) renders the window natively; otherwise the 16:9 master's whole
-      // frame is fitted over a blurred fill of itself (#10377) — a center-crop dropped off-center text.
-      ...(vertical && (rect || musicVideoAspect(project) === '16:9') ? [{ kind: 'vertical-9x16', label: `Vertical 9:16 ${Math.round(vertical.endSec - vertical.startSec)}s`, filename: `${stem}-vertical.mp4`, window: vertical,
-        layout: rect ? 'crop' : 'fit',
-        native: rect ? null : async (outputPath, onProgress) => (await import('./excerptRender.js')).renderSeekedWindow(project, {
+      // #10150: Shorts/TikTok/Reels need 9:16. Supports framed 16:9 (header + footer inside TikTok safe zone),
+      // custom horizontal crop, native 9:16 composition reflow, or blurred-fit fallback (#10377).
+      ...(vertical && (framedVertical || rect || musicVideoAspect(project) === '16:9') ? [{
+        kind: 'vertical-9x16', label: verticalLabel, filename: `${stem}-vertical.mp4`, window: vertical,
+        layout: framedVertical ? 'framed' : rect ? 'crop' : 'fit',
+        framed: framedVertical ? async (outputPath, onProgress) => {
+          const { renderVerticalFramedVideo } = await import('./verticalFrameRender.js');
+          const defaults = defaultVerticalFrameOptions(project);
+          await renderVerticalFramedVideo({
+            ffmpeg, masterPath, outputPath,
+            startSec: vertical.startSec, endSec: vertical.endSec,
+            frameOptions: { ...defaults, ...verticalOptions },
+            lyrics: projectTimedLyricLines(project),
+            beats: project?.audioAnalysis?.beats || [],
+            videoArgs: SOCIAL_VIDEO_ARGS, audioArgs: AUDIO_ARGS,
+            fade: verticalFade, signal, onProgress,
+          });
+        } : null,
+        native: (framedVertical || rect || fullVertical) ? null : async (outputPath, onProgress) => (await import('./excerptRender.js')).renderSeekedWindow(project, {
           startSec: vertical.startSec, endSec: vertical.endSec, aspect: '9:16', fade: true, videoArgs: SOCIAL_VIDEO_ARGS, outputPath, jobId: `${jobId}-vertical`, signal, onProgress,
         }),
-        args: ['-ss', String(vertical.startSec), '-t', String(vertical.endSec - vertical.startSec), '-i', masterPath,
+        args: [
+          ...(vertical.startSec > 0 ? ['-ss', String(vertical.startSec)] : []),
+          '-t', String(vertical.endSec - vertical.startSec), '-i', masterPath,
           '-vf', rect ? `crop=${rect.width}:${rect.height}:${rect.x}:${rect.y}:exact=1,scale=1080:1920,setsar=1` : VERTICAL_FIT_FILTER, ...SOCIAL_VIDEO_ARGS,
-          '-af', `asetpts=PTS-STARTPTS${edgeFadeFilter(vertical.endSec - vertical.startSec)}`, ...AUDIO_ARGS] }] : []),
+          '-af', `asetpts=PTS-STARTPTS${verticalFade ? edgeFadeFilter(vertical.endSec - vertical.startSec) : ''}`, ...AUDIO_ARGS,
+        ],
+      }] : []),
     ];
     const candidates = thumbnailCandidates(project, durationSec);
     const total = encodes.length + candidates.length;
@@ -248,7 +273,11 @@ async function beginPublishKitBuild(projectId, jobId, { crop, loudnessPreset }) 
       signal.throwIfAborted();
       const out = join(PATHS.videos, encode.filename);
       pendingFiles.add(out);
-      if (!(encode.native && await renderNative(encode, out))) {
+      if (encode.framed) {
+        const slot = done;
+        const progress = (fraction) => broadcastSse(job, { type: 'progress', progress: Math.min(0.99, (slot + Math.max(0, Math.min(1, fraction))) / total) });
+        await encode.framed(out, progress);
+      } else if (!(encode.native && await renderNative(encode, out))) {
         const result = await runFfmpegProcess({ bin: ffmpeg, signal, args: ['-hide_banner', '-loglevel', 'error', ...encode.args, '-y', out] });
         if (!result.ok) throw new Error(`${encode.label} encode failed: ${result.reason || 'ffmpeg error'}`);
       }

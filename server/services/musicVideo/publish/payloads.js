@@ -48,7 +48,8 @@ function verticalCuts(project) {
     .map((e) => ({ id: e.id ?? null, filename: e.filename, startSec: e.startSec, endSec: e.endSec, layout: 'native', stale: musicVideoDependencyChanges(project, e.dependencies).length > 0 }));
   const crop = (kit.exports || []).find((e) => e.kind === 'vertical-9x16' && e.filename);
   if (crop && (kit.master?.renderHistoryId ?? null) === (project?.renderHistoryId ?? null)) {
-    cuts.unshift({ id: 'kit-vertical', filename: crop.filename, startSec: crop.startSec ?? 0, endSec: crop.endSec ?? 0, layout: crop.layout === 'native' ? 'native' : 'fit', stale: false });
+    const layout = ['native', 'framed', 'crop'].includes(crop.layout) ? crop.layout : 'fit';
+    cuts.unshift({ id: 'kit-vertical', filename: crop.filename, startSec: crop.startSec ?? 0, endSec: crop.endSec ?? 0, layout, stale: false });
   }
   return cuts;
 }
