@@ -20,7 +20,7 @@ function decodeAndPaint(canvas, jpeg, isStillValid, onPainted) {
   }).catch(() => {});
 }
 
-function animateWav(canvas, wav, { keepFrameOnStop, onPainted, onStop, onUnavailable }) {
+function animateWav(canvas, wav, { stopForReducedMotion, keepFrameOnStop, onPainted, onStop, onUnavailable }) {
   const abort = new AbortController();
   const frames = new Map();
   const { promise: ready, resolve: primed } = Promise.withResolvers();
@@ -41,6 +41,7 @@ function animateWav(canvas, wav, { keepFrameOnStop, onPainted, onStop, onUnavail
   });
 
   const draw = (clock) => {
+    if (stopForReducedMotion()) return;
     const target = Math.floor(clock() * 25);
     const index = Math.min(target, latest);
     if (target - drawn > 5 && !keepFrameOnStop()) canvas.style.visibility = 'hidden';
@@ -49,7 +50,7 @@ function animateWav(canvas, wav, { keepFrameOnStop, onPainted, onStop, onUnavail
       decodeAndPaint(
         canvas,
         frames.get(index),
-        () => !ended && Math.floor(clock() * 25) - index <= 5,
+        () => !ended && !stopForReducedMotion() && Math.floor(clock() * 25) - index <= 5,
         () => {
           drawn = index;
           onPainted?.();
@@ -125,8 +126,18 @@ export default function VoiceCallGenerativePortrait({ running, fill = false, sta
       stopIdlePlayback();
     };
 
+    // Paint and decode callbacks can observe the preference before its change event.
+    const stopForReducedMotion = () => {
+      if (!motion?.matches) return false;
+      stopIdleStream();
+      speechAnimation?.stop();
+      hasPaintedFrame = false;
+      target.style.visibility = 'hidden';
+      return true;
+    };
+
     const paintIdleTick = (now) => {
-      if (disposed || speechAnimation || motion?.matches || document.hidden) {
+      if (disposed || speechAnimation || stopForReducedMotion() || document.hidden) {
         idleRaf = 0;
         return;
       }
@@ -137,7 +148,7 @@ export default function VoiceCallGenerativePortrait({ running, fill = false, sta
         decodeAndPaint(
           target,
           jpeg,
-          () => !disposed && !speechAnimation && !motion?.matches,
+          () => !disposed && !speechAnimation && !stopForReducedMotion(),
           () => { hasPaintedFrame = true; },
         ).finally(() => { idleLoading = false; });
       }
@@ -149,7 +160,7 @@ export default function VoiceCallGenerativePortrait({ running, fill = false, sta
     };
 
     const startIdleStream = () => {
-      if (disposed || speechAnimation || motion?.matches || document.hidden) return;
+      if (disposed || speechAnimation || stopForReducedMotion() || document.hidden) return;
       stopIdleStream();
       const abort = new AbortController();
       idleAbort = abort;
@@ -187,10 +198,11 @@ export default function VoiceCallGenerativePortrait({ running, fill = false, sta
 
     const detach = bindVoiceOutputVisualizer(wav => {
       setUnavailable(false);
-      if (motion?.matches) return undefined;
+      if (stopForReducedMotion()) return undefined;
       speechAnimation?.stop();
       stopIdleStream();
       const anim = animateWav(target, wav, {
+        stopForReducedMotion,
         keepFrameOnStop: canKeepCanvas,
         onPainted: () => { hasPaintedFrame = true; },
         onStop: () => {
@@ -208,12 +220,7 @@ export default function VoiceCallGenerativePortrait({ running, fill = false, sta
     });
 
     const onMotionChange = () => {
-      if (motion?.matches) {
-        stopIdleStream();
-        speechAnimation?.stop();
-        hasPaintedFrame = false;
-        target.style.visibility = 'hidden';
-      } else if (!speechAnimation && !document.hidden) {
+      if (!stopForReducedMotion() && !speechAnimation && !document.hidden) {
         startIdleStream();
       }
     };
@@ -265,7 +272,7 @@ export default function VoiceCallGenerativePortrait({ running, fill = false, sta
   return <div className={fill ? 'w-full max-w-full' : 'w-[min(64vw,15rem)] max-w-full'}>
     <div className={`relative aspect-square overflow-hidden bg-port-card ${fill ? 'w-full' : 'rounded-lg shadow-lg'}`}>
       <img src={portraitUrl} alt="Radio operator portrait" className="block size-full object-cover" />
-      <canvas ref={canvas} role="presentation" width={512} height={512} style={{ visibility: 'hidden' }} className="pointer-events-none absolute inset-0 size-full" />
+      <canvas ref={canvas} role="presentation" width={512} height={512} style={{ visibility: 'hidden' }} className="pointer-events-none absolute inset-0 size-full motion-reduce:invisible!" />
     </div>
     {running && unavailable && <p role="status" className="px-2 pt-1.5 pb-1 text-center font-mono text-[11px] text-port-text-muted">
       No avatar frames arrived. Voice audio still works.

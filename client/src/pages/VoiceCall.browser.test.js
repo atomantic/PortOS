@@ -327,6 +327,37 @@ describe.skipIf(!chrome)('Voice Call console in Chrome', () => {
     }
   });
 
+  it.skipIf(avatarTarget)('hides the idle avatar when a reduced-motion change event is missed', async () => {
+    const page = await fixture.browser.newPage({ reducedMotion: 'no-preference' });
+    try {
+      await page.addInitScript(() => {
+        const matchMedia = window.matchMedia.bind(window);
+        window.matchMedia = query => {
+          const media = matchMedia(query);
+          if (query === '(prefers-reduced-motion: reduce)') {
+            media.addEventListener('change', event => event.stopImmediatePropagation());
+          }
+          return media;
+        };
+      });
+      const idleJpeg = await page.evaluate(() => {
+        const tile = document.createElement('canvas');
+        tile.width = tile.height = 2;
+        return tile.toDataURL('image/jpeg').split(',')[1];
+      });
+      await stubApi(page, true, { idleJpeg });
+      await page.goto(`${fixture.origin}voice-console-test`);
+      const canvas = page.locator('canvas[width="512"]');
+      await canvas.waitFor({ state: 'visible' });
+      await page.emulateMedia({ reducedMotion: 'reduce' });
+      // Check the inline state too, so CSS alone cannot satisfy the playback fallback.
+      await page.waitForFunction(() => document.querySelector('canvas[width="512"]')?.style.visibility === 'hidden');
+      await canvas.waitFor({ state: 'hidden' });
+    } finally {
+      await page.close();
+    }
+  });
+
   it.each([[320, 'kestrel-dawn'], [390, 'kestrel-neon'], [1100, 'kestrel-neon']])('fits at %i px in %s and opens model settings', async (width, theme) => {
     const page = await fixture.browser.newPage({ viewport: { width, height: 800 }, reducedMotion: 'reduce' });
     try {
