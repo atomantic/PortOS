@@ -5,7 +5,7 @@
  *
  * Storage: `file-primary` — machine-local, never federated or restored. `data/workflow-maintenance/state.json`
  * must fence the API and CoS runner before PostgreSQL is usable; snapshots copy the subtree as evidence only.
- * Operator recovery: docs/STORAGE_RECOVERY.md.
+ * Operator recovery: docs/STORAGE.md#workflow-maintenance-journal.
  */
 import * as fs from 'node:fs';
 import { join } from 'node:path';

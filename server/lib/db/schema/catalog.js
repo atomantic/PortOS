@@ -109,7 +109,7 @@ export const catalogDdl = [
     // v2 rewrite deliberately accepts that boot-time lock: Postgres cannot alter
     // a STORED generation expression in place, and the catalog schema must be
     // complete before the server becomes ready. Operators with unusually large
-    // catalogs should schedule that upgrade as maintenance; see docs/STORAGE_RECOVERY.md
+    // catalogs should schedule that upgrade as maintenance; see docs/STORAGE.md#catalog-generated-column-rewrite
     // ("Catalog generated-column rewrite") for the decision and runbook.
     // Fresh installs (no column yet) fall through to the ADD IF NOT EXISTS
     // below and skip the DROP entirely.

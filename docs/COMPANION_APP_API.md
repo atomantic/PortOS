@@ -22,7 +22,7 @@ over Tailscale. Each install:
 - Has an **optional single password** gate. When off, the app needs no
   credential to read; when on, every `/api/*` request needs credentials. Either
   way, every write needs an **operator session** (see
-  [Authentication](#authentication)), so a passwordless install is read-only to
+  [Authentication](#2-authentication)), so a passwordless install is read-only to
   a remote app (#16018).
 
 The app therefore treats each instance as `{ scheme, host, port: 5555, password? }`
@@ -331,6 +331,6 @@ POST reconciliation — a companion app reads and writes each instance's
 
 ## See also
 
-- [API.md](./API.md) — full REST/WebSocket reference and route-domain index.
+- [API.md](./API.md) — API conventions and live REST and Socket.IO inventories.
 - [PORTS.md](./PORTS.md) — port allocation and HTTP/HTTPS scheme.
 - Machine-readable spec: `GET /api/api-docs/openapi.json` (public-API surface only).

@@ -130,7 +130,8 @@ describe('startup dependency reconciliation', () => {
       import { mkdirSync, writeFileSync, readFileSync } from 'fs';
       import { join } from 'path';
       const dir = process.cwd();
-      for (const file of ['pm2/package.json', 'vite/bin/vite.js', 'express/package.json', 'pg/package.json']) {
+      const files = dir.endsWith('client') ? ['vite/bin/vite.js'] : ['pm2/bin/pm2', 'express/package.json', 'pg/package.json'];
+      for (const file of files) {
         mkdirSync(join(dir, 'node_modules', file, '..'), { recursive: true });
         writeFileSync(join(dir, 'node_modules', file), '{}');
       }
@@ -138,10 +139,10 @@ describe('startup dependency reconciliation', () => {
       writeFileSync(join(dir, 'node_modules', '.package-lock.json'), '{}');
       writeFileSync(join(dir, 'node_modules', 'npm-ran'), '1');
     `);
-    for (const label of ['root', 'client', 'server']) {
-      const dir = label === 'root' ? root : join(root, label);
+    for (const label of ['client', 'server']) {
+      const dir = join(root, label);
       mkdirSync(dir, { recursive: true });
-      if (label !== 'root') writeFileSync(join(dir, 'package.json'), label === 'server' ? '{"type":"module"}' : '{}');
+      writeFileSync(join(dir, 'package.json'), label === 'server' ? '{"type":"module"}' : '{}');
       writeFileSync(join(dir, 'package-lock.json'), '{"version":"old"}');
     }
     return {
@@ -166,15 +167,14 @@ describe('startup dependency reconciliation', () => {
       const target = state === 'dangling' ? join(f.root, 'absent-deps') : shared;
       symlinkSync(target, modules, process.platform === 'win32' ? 'junction' : 'dir');
 
-      // root is visited before server: a per-workspace check inside the repair
-      // loop would already destroy this tree and start npm before refusing.
-      writeFileSync(join(f.root, 'package-lock.json'), '{"version":"new"}');
-      writeFileSync(join(f.root, 'node_modules', 'keep'), 'original');
+      // Client is visited before server and must be left alone on refusal.
+      writeFileSync(join(f.client, 'package-lock.json'), '{"version":"new"}');
+      writeFileSync(join(f.client, 'node_modules', 'keep'), 'original');
       const receipt = readFileSync(f.receipt, 'utf8');
 
       expect(f.run).toThrow(/Refusing dependency repair.*server.*node_modules.*linked/);
       expect(lstatSync(modules).isSymbolicLink()).toBe(true);
-      expect(readFileSync(join(f.root, 'node_modules', 'keep'), 'utf8')).toBe('original');
+      expect(readFileSync(join(f.client, 'node_modules', 'keep'), 'utf8')).toBe('original');
       expect(readFileSync(f.receipt, 'utf8')).toBe(receipt);
       expect(readFileSync(join(shared, 'installed-lock.json'), 'utf8')).toBe('{"version":"old"}');
       if (state === 'missing-package') expect(existsSync(join(shared, 'pg'))).toBe(false);
@@ -239,7 +239,7 @@ describe('startup dependency reconciliation', () => {
     try {
       f.run();
       writeFileSync(join(f.client, '.npmrc'), 'ignore-scripts=true\n');
-      for (const dir of [f.root, f.client, join(f.root, 'server')]) {
+      for (const dir of [f.client, join(f.root, 'server')]) {
         rmSync(join(dir, 'node_modules', 'npm-ran'));
       }
       expect(f.run()).toContain('client dependency inputs changed');
@@ -257,13 +257,13 @@ describe('startup dependency reconciliation', () => {
   it('performs zero installs when writeDependencyHashes matches the installed inputs', () => {
     const f = fixture();
     try {
-      for (const label of ['root', 'client', 'server']) {
-        const dir = label === 'root' ? f.root : join(f.root, label);
+      for (const label of ['client', 'server']) {
+        const dir = join(f.root, label);
         execFileSync(process.execPath, [join(f.root, 'fake-npm.js')], { cwd: dir });
       }
       const hashes = writeDependencyHashes(f.root);
-      for (const label of ['root', 'client', 'server']) {
-        const dir = label === 'root' ? f.root : join(f.root, label);
+      for (const label of ['client', 'server']) {
+        const dir = join(f.root, label);
         const hash = createHash('sha256').update(readFileSync(join(dir, 'package.json'))).update('\0');
         hash.update(readFileSync(join(dir, 'package-lock.json')));
         expect(hashes[label]).toBe(`v2:${hash.digest('hex')}`);
@@ -272,11 +272,11 @@ describe('startup dependency reconciliation', () => {
       expect(JSON.parse(readFileSync(f.receipt, 'utf8'))).toEqual(hashes);
       const output = f.run();
       expect(output).not.toMatch(/reinstall|installing/i);
-      for (const label of ['root', 'client', 'server']) {
-        const dir = label === 'root' ? f.root : join(f.root, label);
+      for (const label of ['client', 'server']) {
+        const dir = join(f.root, label);
         expect(existsSync(join(dir, 'node_modules', 'npm-ran'))).toBe(false);
-        expect(existsSync(join(dir, 'node_modules', 'pm2', 'package.json'))).toBe(true);
       }
+      expect(existsSync(join(f.root, 'server', 'node_modules', 'pm2', 'bin', 'pm2'))).toBe(true);
     } finally {
       rmSync(f.root, { recursive: true, force: true });
     }

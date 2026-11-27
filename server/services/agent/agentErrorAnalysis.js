@@ -323,7 +323,7 @@ export const COMPLETION_REASON_ANALYSES = {
   'runner-pty-unavailable': {
     category: 'spawn-error',
     actionable: true,
-    escalation: 'Repair the runner host, then approve the retry: run `node scripts/ensure-deps.js` in the PRIMARY checkout and `node ./node_modules/pm2/bin/pm2 restart portos-cos`. Every agent spawn fails until this is fixed, so expect other tasks to be blocked on it too.',
+    escalation: 'Repair the runner host, then approve the retry: run `node scripts/ensure-deps.js` in the PRIMARY checkout and `node ./server/node_modules/pm2/bin/pm2 restart portos-cos`. Every agent spawn fails until this is fixed, so expect other tasks to be blocked on it too.',
     message: 'The runner could not open a PTY',
     suggestedFix: 'No agent process was created and no retry can change that: node-pty could not fork even a known-good command, so the PTY layer is unusable for every task. The usual cause is an emptied or partially installed `server/node_modules` — node-pty execs its `spawn-helper` binary from disk on every spawn, and an `npm ci` run inside a CoS worktree deletes it through the symlinked `node_modules`. Run `node scripts/ensure-deps.js` in the primary checkout (plain `npm install` leaves node-pty unbuilt under `ignore-scripts=true`) and restart the runner.'
   },

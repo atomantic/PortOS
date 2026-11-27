@@ -48,11 +48,8 @@ describe('every cwd-passing spawn pins PWD', () => {
   const EXEMPT = new Map([
     ['lib/windowsGitProcess.js', 'Git supervisor and its system compiler resolve paths from the actual cwd'],
     ['lib/planIds.js', 'git only'],
-    ['services/repoCloner.js', 'git clone/fetch only'],
     ['services/gitlab.js', 'glab only'],
-    ['services/pm2Standardizer.js', 'git + pm2 only'],
     ['services/pm2.js', 'pm2 only'],
-    ['services/appDeployer.js', 'deploy shell commands, not an AI CLI'],
     ['services/xcodeScripts.js', 'xcodebuild/ls, not an AI CLI'],
     ['services/imageTo3d/laneRunner.js', 'git/bash/python install + render steps inside a target install root, not an AI CLI'],
     ['services/dbAdmin.js', 'psql/pg_dump, not an AI CLI'],
@@ -65,6 +62,8 @@ describe('every cwd-passing spawn pins PWD', () => {
   // pins, so they need no call of their own.
   const DELEGATES = new Map([
     ['services/appBuilder.js', 'bufferedSpawn'],
+    ['services/appDeployer.js', 'bufferedSpawn'],
+    ['services/repoCloner.js', 'bufferedSpawn'],
   ]);
 
   // Files that pin by inlining the assignment instead of calling the shared

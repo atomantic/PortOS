@@ -111,6 +111,55 @@ describe('Modal accessibility', () => {
   });
 });
 
+describe('Modal placement and scroll lock', () => {
+  it('portals outside the owning card and restores body overflow when closed', () => {
+    const initialOverflow = document.body.style.overflow;
+    document.body.style.overflow = 'auto';
+    const ui = (open) => (
+      <section className="bg-port-card">
+        <Modal open={open} ariaLabel="Test dialog"><p>body</p></Modal>
+      </section>
+    );
+    const { rerender } = render(ui(true));
+    try {
+      expect(screen.getByRole('dialog').parentElement.parentElement).toBe(document.body);
+      expect(document.body.style.overflow).toBe('hidden');
+
+      rerender(ui(false));
+      expect(document.body.style.overflow).toBe('auto');
+    } finally {
+      cleanup();
+      document.body.style.overflow = initialOverflow;
+    }
+  });
+
+  it('supports rendering in place while retaining the scroll lock', () => {
+    render(
+      <section data-testid="owner">
+        <Modal open usePortal={false} ariaLabel="Test dialog"><p>body</p></Modal>
+      </section>
+    );
+    expect(screen.getByTestId('owner')).toContainElement(screen.getByRole('dialog'));
+    expect(document.body.style.overflow).toBe('hidden');
+  });
+
+  it('keeps scroll locked until the last overlay closes', () => {
+    const initialOverflow = document.body.style.overflow;
+    const ui = (nestedOpen) => (
+      <>
+        <Modal open ariaLabel="Base dialog"><p>base</p></Modal>
+        <Modal open={nestedOpen} ariaLabel="Nested dialog"><p>nested</p></Modal>
+      </>
+    );
+    const { rerender, unmount } = render(ui(true));
+
+    rerender(ui(false));
+    expect(document.body.style.overflow).toBe('hidden');
+    unmount();
+    expect(document.body.style.overflow).toBe(initialOverflow);
+  });
+});
+
 // The overlay is `fixed inset-0` — the *small* viewport under iOS Safari's
 // retractable chrome — and centres with `items-center`, so an unclamped panel
 // has its overflow split top and bottom and loses both its title and its

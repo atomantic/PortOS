@@ -48,7 +48,7 @@ export const LTX25_ENCODER_SHIM_DIR = join(homedir(), '.portos', 'ltx25-encoder-
 // runtime rather than another mode flag on the generation script. Both runners
 // have landed (#6512 MLX / #6513 CUDA) and share one argv contract
 // (`scripts/ml/_upscale_contract.py`); per-backend verification status lives in
-// `docs/features/video-upscale.md` "Readiness". An install with neither
+// `docs/features/video-generation.md` "Video upscale". An install with neither
 // runtime's venv present still has no generative upscale, which is what gates
 // the feature off per host.
 export const LTX25_UPSCALE_HELPER_SCRIPT = join(PATHS.root, 'scripts', 'ml', 'upscale_ltx25.py');

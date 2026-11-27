@@ -10,9 +10,9 @@
  * digests) is narrowed: lazy `import()` edges count only where the record
  * cannot vouch for them (`recordedReach`), so a hub's lazy fan-out no longer
  * selects every suite. The planner's explicit files are always added. A
- * gate-tooling test (`TOOLING_TESTS`) can never earn a record, so it is kept
- * from the walk only when a changed source reaches its closure; otherwise the
- * planner selects it through the tooling owner paths.
+ * gate-tooling test stays in a related walk only when a changed source
+ * reaches its real inputs. The planner may also select heavyweight tooling
+ * suites explicitly through their owner paths.
  * Vitest then receives the exact list through a selection file
  * (`vitestRunnerSelection` in `scripts/vitestCiPool.js`).
  *
@@ -45,7 +45,7 @@ import { homedir, tmpdir } from 'node:os';
 import * as nodePath from 'node:path';
 import { dirname, isAbsolute, join, relative, sep } from 'node:path';
 import { resolveTestChrome } from './testChrome.js';
-import { TOOLING_TESTS, getAlwaysRunTests } from './ciPlanRules.js';
+import { getAlwaysRunTests, isGateToolingTest } from './ciPlanRules.js';
 import { FULL_SUITE_SHARDS } from './ciPlanOutput.js';
 import { isGuardTest } from './guardScanners.js';
 import { NEVER_MARKER, TEST_MEMO_NEVER, WORKSPACE_BASE_INPUTS, WORKSPACE_SETUP_ENTRIES, createDiskFs, createTestMemoAnalyzer, relatedTests } from './testMemo.js';
@@ -181,11 +181,11 @@ export function planTestMemo({ scope, mode, repoFiles, repoSources, memoDir, rep
   if (mode === 'related') {
     const ownedTests = new Set(owned);
     const explicit = repoFiles.filter((test) => ownedTests.has(test));
-    // A gate-tooling test never earns a narrowing record, so the walk would select it on any
-    // diff (an unresolved edge or open read fails closed). It stays only when a changed
-    // source is in its closure or inputs; otherwise the planner's explicit files carry it.
+    // An unresolved edge or open read would select a tooling test on any diff.
+    // Include it in the related walk only if the diff reaches its real inputs.
+    // The heavyweight suites also have explicit selectors from the planner.
     const reached = relatedTests(verdicts, repoSources)
-      .filter((test) => !TOOLING_TESTS.includes(test) || reachesClosure(verdicts.get(test), repoSources));
+      .filter((test) => !isGateToolingTest(test) || reachesClosure(verdicts.get(test), repoSources));
     selected = uniqueSorted([...reached, ...explicit]);
   }
   const slice = mode === 'related' ? selected : owned;

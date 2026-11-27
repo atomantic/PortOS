@@ -16,7 +16,7 @@
 import { warmModuleLoads } from '../lib/moduleWarmup.js';
 import {
   registerCosOrphanRecoveryHandlers, registerMediaJobTerminalHooks, registerMediaRuntimeModules,
-  registerMergedBranchCleanup, registerMusicVideoRecovery,
+  registerManagedVisitorCredentialRestore, registerMergedBranchCleanup, registerMusicVideoRecovery,
 } from './bootHookRegistry.js';
 import { parseComicPagesOwner, parseSeasonCoverOwner, parseStoryboardsShotOwner } from './pipeline/owners.js';
 import './featureAgents.js';
@@ -110,6 +110,10 @@ export const warmMediaBootHooks = () => warmModuleLoads([
 
 export function registerBootHooks() {
   registerAutoReviewCompletionListeners();
+  registerManagedVisitorCredentialRestore(async operation => {
+    const { getManagedVisitorBroker } = await import('./managedVisitors.js');
+    return getManagedVisitorBroker().withLiveCredentialRestore(operation);
+  });
   registerCosOrphanRecoveryHandlers({
     cleanupOrphanedAgents: async (...args) => (await agentManagement()).cleanupOrphanedAgents(...args),
     handleOrphanedTask: async (...args) => (await agentManagement()).handleOrphanedTask(...args),

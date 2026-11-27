@@ -193,8 +193,8 @@ async function readPackageVersion(packageJsonPath) {
   }
 }
 
-/** The pm2 PortOS ships (its pinned root dependency). */
-const shippedPm2Version = () => readPackageVersion(join(PATHS.root, 'node_modules', 'pm2', 'package.json'));
+/** The pm2 PortOS ships (its pinned server dependency). */
+const shippedPm2Version = () => readPackageVersion(join(PATHS.root, 'server', 'node_modules', 'pm2', 'package.json'));
 
 /**
  * npm's global prefix for a node binary. Homebrew runs node from its Cellar

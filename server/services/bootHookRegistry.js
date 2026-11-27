@@ -115,3 +115,17 @@ export function requireMusicVideoRecovery() {
   if (!musicVideoRecovery) throw notRegistered('Music Video recovery');
   return musicVideoRecovery;
 }
+
+let managedVisitorCredentialRestore = null;
+
+/** @param {(operation: () => Promise<unknown>) => Promise<unknown>} withRestoreLock */
+export function registerManagedVisitorCredentialRestore(withRestoreLock) {
+  if (typeof withRestoreLock !== 'function') throw new Error('Managed visitor credential restore lock missing');
+  managedVisitorCredentialRestore = withRestoreLock;
+}
+
+/** Credential restore must share the broker's write queue; an empty slot is a wiring defect. */
+export function requireManagedVisitorCredentialRestore() {
+  if (!managedVisitorCredentialRestore) throw notRegistered('Managed visitor credential restore lock');
+  return managedVisitorCredentialRestore;
+}

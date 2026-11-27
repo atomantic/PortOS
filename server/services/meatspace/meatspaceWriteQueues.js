@@ -1,6 +1,6 @@
 /**
  * Write queues shared between the local MeatSpace writers and the federation
- * snapshot apply (`dataSync.js#applyMeatspaceRemote`).
+ * snapshot apply (`dataSync/categories/meatspace.js#applyMeatspaceRemote`).
  *
  * A sync apply is a read -> merge -> atomicWrite cycle on the same file a local
  * add/edit is rewriting, so both sides must run on the SAME queue or a peer

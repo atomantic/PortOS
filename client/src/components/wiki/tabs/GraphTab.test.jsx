@@ -1,4 +1,4 @@
-import { render, screen, fireEvent, waitFor } from '@testing-library/react';
+import { act, cleanup, createEvent, render, screen, fireEvent, waitFor } from '@testing-library/react';
 import { MemoryRouter, useLocation } from 'react-router';
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import GraphTab from './GraphTab';
@@ -14,12 +14,13 @@ function LocationProbe() {
 // One node lays out at graph (615, 300); with an 800x600 canvas that is client (615, 300) at zoom 1, offset 0.
 const NODE_POINT = { clientX: 615, clientY: 300 };
 
-async function renderCanvas() {
+async function renderCanvas(graph = {}) {
   getNotesVaultGraph.mockResolvedValue({
     nodes: [{ path: 'wiki/alpha.md', name: 'alpha', folder: 'wiki' }],
     edges: [],
     totalNodes: 1,
     totalEdges: 0,
+    ...graph,
   });
   const { container } = render(
     <MemoryRouter initialEntries={['/wiki/graph']}>
@@ -28,32 +29,40 @@ async function renderCanvas() {
     </MemoryRouter>
   );
   await screen.findByText('1 nodes, 0 edges');
-  // The render effect sizes the canvas from getBoundingClientRect (mocked 800x600) after the
-  // count text appears; hitTest maps pointers through canvas.width/height, so wait for it.
   const canvas = container.querySelector('canvas');
-  await waitFor(() => expect(canvas.width).toBe(800));
+  await waitFor(() => expect(canvas.width).toBe(800 * window.devicePixelRatio));
   return canvas;
 }
 
 const touch = (extra) => ({ pointerId: 1, pointerType: 'touch', button: 0, ...extra });
 
-describe('GraphTab touch gestures', () => {
-  let rectSpy;
-  let ctxSpy;
-  beforeEach(() => {
-    vi.clearAllMocks();
-    rectSpy = vi.spyOn(Element.prototype, 'getBoundingClientRect')
-      .mockReturnValue({ left: 0, top: 0, right: 800, bottom: 600, width: 800, height: 600 });
-    ctxSpy = vi.spyOn(HTMLCanvasElement.prototype, 'getContext').mockReturnValue(new Proxy({}, {
-      get: () => () => {},
-      set: () => true,
-    }));
+let rectSpy;
+let context;
+let labels;
+beforeEach(() => {
+  vi.clearAllMocks();
+  rectSpy = vi.spyOn(Element.prototype, 'getBoundingClientRect')
+    .mockReturnValue({ left: 0, top: 0, width: 800, height: 600 });
+  labels = vi.fn();
+  context = new Proxy({
+    setTransform: vi.fn(),
+    fillText(name) { labels(name, this.fillStyle); },
+  }, {
+    get: (target, key) => target[key] ?? (() => {}),
   });
-  afterEach(() => {
-    rectSpy.mockRestore();
-    ctxSpy.mockRestore();
-  });
+  vi.spyOn(HTMLCanvasElement.prototype, 'getContext').mockReturnValue(context);
+});
+afterEach(() => {
+  cleanup();
+  vi.restoreAllMocks();
+  vi.unstubAllGlobals();
+  const root = document.documentElement;
+  root.removeAttribute('data-port-theme');
+  root.style.removeProperty('--port-text');
+  root.style.removeProperty('--port-text-muted');
+});
 
+describe('GraphTab touch gestures', () => {
   it('pans on a touch drag without opening the note under the finger', async () => {
     const canvas = await renderCanvas();
     fireEvent.pointerDown(canvas, touch(NODE_POINT));
@@ -79,22 +88,6 @@ describe('GraphTab touch gestures', () => {
 });
 
 describe('GraphTab keyboard access', () => {
-  let rectSpy;
-  let ctxSpy;
-  beforeEach(() => {
-    vi.clearAllMocks();
-    rectSpy = vi.spyOn(Element.prototype, 'getBoundingClientRect')
-      .mockReturnValue({ left: 0, top: 0, right: 800, bottom: 600, width: 800, height: 600 });
-    ctxSpy = vi.spyOn(HTMLCanvasElement.prototype, 'getContext').mockReturnValue(new Proxy({}, {
-      get: () => () => {},
-      set: () => true,
-    }));
-  });
-  afterEach(() => {
-    rectSpy.mockRestore();
-    ctxSpy.mockRestore();
-  });
-
   it('is focusable with an accessible name', async () => {
     const canvas = await renderCanvas();
     expect(canvas.tabIndex).toBe(0);
@@ -121,6 +114,67 @@ describe('GraphTab keyboard access', () => {
     expect(status.getAttribute('aria-live')).toBe('polite');
     expect(status.textContent).toMatch(/alpha, root, 0 connections/);
     fireEvent.keyDown(canvas, { key: 'Enter' });
+    expect(screen.getByTestId('location').textContent).toBe('/wiki/browse?note=wiki%2Falpha.md');
+  });
+});
+
+describe('GraphTab viewport and controls', () => {
+  it('cancels wheel scrolling and moves the interactive node with zoom', async () => {
+    const canvas = await renderCanvas();
+    const wheel = createEvent.wheel(canvas, { cancelable: true, deltaY: -200 });
+    fireEvent(canvas, wheel);
+    expect(wheel.defaultPrevented).toBe(true);
+
+    const zoomedPoint = { clientX: 738, clientY: 360 };
+    fireEvent.pointerDown(canvas, touch(zoomedPoint));
+    fireEvent.pointerUp(canvas, touch(zoomedPoint));
+    expect(screen.getByTestId('location').textContent).toBe('/wiki/browse?note=wiki%2Falpha.md');
+  });
+
+  it('redraws on resize at device resolution and opens the note at its CSS pixel location', async () => {
+    let resize;
+    vi.stubGlobal('ResizeObserver', function (callback) {
+      resize = callback;
+      return { observe: vi.fn(), disconnect: vi.fn() };
+    });
+    vi.stubGlobal('devicePixelRatio', 2);
+    const canvas = await renderCanvas();
+
+    rectSpy.mockReturnValue({ left: 20, top: 25, width: 500, height: 400 });
+    act(() => resize());
+    expect(canvas.width).toBe(1000);
+    expect(canvas.height).toBe(800);
+    expect(context.setTransform).toHaveBeenLastCalledWith(2, 0, 0, 2, 0, 0);
+
+    const resizedPoint = { clientX: 485, clientY: 225 };
+    fireEvent.pointerDown(canvas, touch(resizedPoint));
+    fireEvent.pointerUp(canvas, touch(resizedPoint));
+    expect(screen.getByTestId('location').textContent).toBe('/wiki/browse?note=wiki%2Falpha.md');
+  });
+
+  it('redraws labels from the active theme when its text colors change', async () => {
+    const canvas = await renderCanvas();
+    const root = document.documentElement;
+    await act(async () => {
+      root.style.setProperty('--port-text', '35 35 40');
+      root.style.setProperty('--port-text-muted', '82 82 91');
+      root.setAttribute('data-port-theme', 'classic-day');
+      await Promise.resolve();
+    });
+
+    expect(labels).toHaveBeenLastCalledWith('alpha', 'rgb(82, 82, 91)');
+    fireEvent.pointerMove(canvas, { pointerId: 1, pointerType: 'mouse', ...NODE_POINT });
+    expect(labels).toHaveBeenLastCalledWith('alpha', 'rgb(35, 35, 40)');
+  });
+
+  it('keeps the offline notice outside the zoom controls and resets the view', async () => {
+    const canvas = await renderCanvas({ skippedUnavailable: 2 });
+    const reset = screen.getByRole('button', { name: 'Reset' });
+    expect(reset.parentElement).not.toContainElement(screen.getByText(/2 notes are stored in iCloud/));
+    fireEvent.click(screen.getByRole('button', { name: 'Zoom in' }));
+    fireEvent.click(reset);
+    fireEvent.pointerDown(canvas, touch(NODE_POINT));
+    fireEvent.pointerUp(canvas, touch(NODE_POINT));
     expect(screen.getByTestId('location').textContent).toBe('/wiki/browse?note=wiki%2Falpha.md');
   });
 });

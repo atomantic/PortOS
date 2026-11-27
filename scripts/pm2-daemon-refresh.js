@@ -27,11 +27,13 @@
  * fork a single app.
  */
 
-import { readFileSync, realpathSync } from 'fs';
+import { existsSync, lstatSync, mkdirSync, readFileSync, realpathSync, symlinkSync } from 'fs';
 import { homedir } from 'os';
 import { dirname, join } from 'path';
 import { fileURLToPath } from 'url';
 import { isDirectlyInvoked } from './lib/directInvocation.js';
+import { importPm2, PM2_BIN_PATH, PM2_DIR } from './lib/pm2Resolve.js';
+import { readDependencyHashes } from './lib/dependencyReceipts.js';
 
 const ROOT_DIR = join(dirname(fileURLToPath(import.meta.url)), '..');
 
@@ -156,15 +158,32 @@ export function redactPaths(message) {
     .join('~');
 }
 
+// An updater loaded from the previous checkout writes a root install receipt and
+// still invokes the root CLI after pulling this file. Give that process a link
+// to the server package so it can finish restarting with the same local PM2.
+export function linkLegacyUpdaterPm2(root) {
+  if (!readDependencyHashes(root).root || existsSync(join(root, 'package-lock.json'))) return;
+  const bin = join(root, PM2_BIN_PATH);
+  if (!existsSync(bin)) return;
+  const modules = join(root, 'node_modules');
+  const legacy = join(modules, 'pm2');
+  const existingModules = lstatSync(modules, { throwIfNoEntry: false });
+  if ((existingModules && !existingModules.isDirectory()) || lstatSync(legacy, { throwIfNoEntry: false })) return;
+  mkdirSync(modules, { recursive: true });
+  symlinkSync(dirname(dirname(bin)), legacy, 'junction');
+}
+
 async function runCli() {
   let verdict = { needed: true, reason: 'could not inspect the running daemon' };
   try {
-    const pm2Dir = join(ROOT_DIR, 'node_modules', 'pm2');
-    const { default: pm2 } = await import('pm2');
+    if (process.env.PORTOS_DEFERRED_UPDATE_ID || process.env.PORTOS_PEER_UPDATE_OPERATION_ID) {
+      linkLegacyUpdaterPm2(ROOT_DIR);
+    }
+    const pm2 = await importPm2();
     verdict = daemonNeedsRefresh({
       report: await fetchReport(pm2),
-      expectedEntry: join(pm2Dir, 'lib', 'Daemon.js'),
-      expectedVersion: JSON.parse(readFileSync(join(pm2Dir, 'package.json'), 'utf8')).version,
+      expectedEntry: join(PM2_DIR, 'lib', 'Daemon.js'),
+      expectedVersion: JSON.parse(readFileSync(join(PM2_DIR, 'package.json'), 'utf8')).version,
       // launchUpdate exports the pin and puts its bin first on PATH, so this
       // process already runs on the pinned Node.
       expectedNodeVersion: process.env.PORTOS_NODE_INTERPRETER ? process.versions.node : null,

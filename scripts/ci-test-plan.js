@@ -17,9 +17,9 @@ import {
   DB_RISK_RULES, DOCKER_CONTAINMENT_LIVE_PATH_RE, LINUX_CONTAINMENT_PATH_RE, MACOS_NATIVE_PATH_RE,
   MAX_CHANGED_CODE_FILES, NODE_MINIMUM_PATH_RE, SLASHDO_CONTRACT_SOURCE_FILES, SLASHDO_CONTRACT_TEST_FILES,
   SLASHDO_GITLINK_PATH, SUPERCOLLIDER_LIVE_PATH_RE, browserSuitesIn, featureDirectory, fixtureOwnerFor,
-  fullTriggersFor, getAlwaysRunTests, hasWindowsRiskFile, isDocumentationOnly, isExecutable, isGeneratedData,
+  fullTriggersFor, getAlwaysRunTests, hasWindowsRiskFile, isDocumentationOnly, isExecutable, isGateToolingTest, isGeneratedData,
   isLintSurface, isPythonScript, isRouteOnlyAppDiff, isServerRunnerFile, isServerSeed, isSharedClientDependency,
-  isTestFile, TOOLING_TESTS, pathMatchesFeature, runnerForTest, serverSeedTestsFor, splitByRunner,
+  isTestFile, pathMatchesFeature, runnerForTest, serverSeedTestsFor, splitByRunner,
   structuralTestsFor, toolingTestsFor, touchesJobInputs, uniqueSorted, windowsContractTests, windowsSelectionFor,
 } from './lib/ciPlanRules.js';
 import {
@@ -431,7 +431,7 @@ function collectExplicitTests({
   // closure are the selectors that actually own them.
   for (const source of jsSources) {
     const namedTests = (pathContractTests[source] || [])
-      .filter((path) => trackedSet.has(path) && runnerForTest(path) && !TOOLING_TESTS.includes(path));
+      .filter((path) => trackedSet.has(path) && runnerForTest(path) && !isGateToolingTest(path));
     selectedTests.push(...namedTests);
   }
 

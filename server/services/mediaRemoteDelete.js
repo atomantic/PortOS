@@ -129,7 +129,7 @@ const MEDIA = {
     setPending: setVideoPending,
     hide: async (key) => (await import('./videoGen/historyOps.js')).setHistoryItemHidden(key, true),
     deleteHere: async (key, opts) => (await import('./videoGen/historyOps.js')).deleteHistoryItem(key, opts),
-    applyTombstone: async (tombstone, opts) => (await import('./dataSync.js')).applyRemoteVideoTombstones([tombstone], opts),
+    applyTombstone: async (tombstone, opts) => (await import('./dataSync/categories/videoHistory.js')).applyRemoteVideoTombstones([tombstone], opts),
   },
   image: {
     label: 'Image',

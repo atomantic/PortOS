@@ -9,7 +9,7 @@
  * repos are inherently filesystem-oriented and re-cloneable.
  */
 
-import { spawn } from '../lib/childProcess.js';
+import { bufferedSpawn } from '../lib/bufferedSpawn.js';
 import { existsSync } from 'fs';
 import { access, mkdtemp, readdir, rename, rm } from 'fs/promises';
 import { dirname, join, resolve } from 'path';
@@ -126,44 +126,15 @@ export async function cloneRepo(url, options = {}) {
 
   console.log(`📥 Cloning ${owner}/${repo}...`);
 
-  const clone = new Promise((resolve, reject) => {
-    const child = spawn('git', args, {
-      env: process.env,
-      shell: false
-    });
-
-    let stderr = '';
-
-    child.stderr.on('data', (data) => {
-      stderr += data.toString();
-    });
-
-    const timeout = setTimeout(() => {
-      child.kill();
-      reject(new Error('Clone timed out after 5 minutes'));
-    }, 300000);
-
-    child.on('close', (code) => {
-      clearTimeout(timeout);
-      if (code === 0) {
-        resolve();
-      } else {
-        console.error(`❌ Failed to clone ${owner}/${repo}: ${stderr}`);
-        reject(new Error(`Git clone failed: ${stderr || `exit code ${code}`}`));
-      }
-    });
-
-    child.on('error', (err) => {
-      clearTimeout(timeout);
-      console.error(`❌ Git clone error: ${err.message}`);
-      reject(err);
-    });
-  });
-
   const cleanupStaging = () => rm(stagingRoot, { recursive: true, force: true })
     .catch(err => console.error(`❌ Failed to clean clone staging directory: ${err.message}`));
 
-  return clone.then(async () => {
+  try {
+    const result = await bufferedSpawn('git', args, { shell: false, timeoutMs: 300_000, processGroup: true });
+    if (result.timedOut) throw new Error('Clone timed out after 5 minutes');
+    if (result.error) throw result.error;
+    if (!result.success) throw new Error(`Git clone failed: ${result.stderr || `exit code ${result.code}`}`);
+
     // A concurrent attempt may have won while this one was cloning. Keep the
     // completed checkout and discard only this attempt's private staging dir.
     if (existsSync(join(localPath, '.git'))) {
@@ -174,10 +145,11 @@ export async function cloneRepo(url, options = {}) {
     await cleanupStaging();
     console.log(`✅ Cloned ${owner}/${repo} to ${localPath}`);
     return { localPath, owner, repo, alreadyCloned: false };
-  }).catch(async (err) => {
+  } catch (err) {
     await cleanupStaging();
+    console.error(`❌ Failed to clone ${owner}/${repo}: ${err.message}`);
     throw err;
-  });
+  }
 }
 
 /**
@@ -243,56 +215,15 @@ export async function pullRepo(localPath) {
 
   console.log(`🔄 Pulling latest for ${localPath}...`);
 
-  return new Promise((resolve, reject) => {
-    let settled = false;
-
-    const child = spawn('git', ['pull', '--ff-only'], {
-      cwd: localPath,
-      env: process.env,
-      shell: false
-    });
-
-    let stdout = '';
-    let stderr = '';
-
-    child.stdout.on('data', (data) => {
-      stdout += data.toString();
-    });
-
-    child.stderr.on('data', (data) => {
-      stderr += data.toString();
-    });
-
-    const timeout = setTimeout(() => {
-      if (!settled) {
-        settled = true;
-        child.kill();
-        reject(new Error('Pull timed out after 2 minutes'));
-      }
-    }, 120000);
-
-    timeout.unref?.();
-
-    child.on('close', (code) => {
-      clearTimeout(timeout);
-      if (!settled) {
-        settled = true;
-        if (code === 0) {
-          console.log(`✅ Pulled latest for ${localPath}`);
-          resolve({ stdout, stderr, success: true });
-        } else {
-          console.error(`❌ Failed to pull ${localPath}: ${stderr}`);
-          reject(new Error(`Git pull failed: ${stderr || `exit code ${code}`}`));
-        }
-      }
-    });
-
-    child.on('error', (err) => {
-      clearTimeout(timeout);
-      if (!settled) {
-        settled = true;
-        reject(err);
-      }
-    });
+  const { success, code, stdout, stderr, timedOut, error } = await bufferedSpawn('git', ['pull', '--ff-only'], {
+    cwd: localPath, shell: false, timeoutMs: 120_000, processGroup: true,
   });
+  if (timedOut) throw new Error('Pull timed out after 2 minutes');
+  if (error) throw error;
+  if (!success) {
+    console.error(`❌ Failed to pull ${localPath}: ${stderr}`);
+    throw new Error(`Git pull failed: ${stderr || `exit code ${code}`}`);
+  }
+  console.log(`✅ Pulled latest for ${localPath}`);
+  return { stdout, stderr, success: true };
 }

@@ -81,13 +81,15 @@ describe.skipIf(!chrome)('mood board in Chromium', () => {
           name: 'mood-board-upload-fixture', enforce: 'pre',
           resolveId(id, importer) {
             if (id === '/board-fixture.jsx') return '\0board-fixture.jsx';
-            if (importer?.endsWith('/MoodBoardStylePanel.jsx')) {
+            if (importer?.endsWith('/useMoodBoardStyleActions.js')) {
               if (id === '../../services/socket') return '\0board-socket';
               if (id.endsWith('/useVisionModelIds')) return '\0board-vision';
               if (id.endsWith('/useProviderModels')) return '\0board-providers';
               if (id.endsWith('/useImageRenderSettings')) return '\0board-render-settings';
               if (id.endsWith('/useSingleImageRender')) return '\0board-render';
-              if (id.endsWith('/ProviderModelSelector')) return '\0board-empty';
+            }
+            if (importer?.endsWith('/MoodBoardAnalyzeSection.jsx') && id.endsWith('/ProviderModelSelector')) {
+              return '\0board-empty';
             }
             if (!importer?.endsWith('/MoodBoardDetail.jsx')) return;
             if (id === '../services/socket') return '\0board-socket';

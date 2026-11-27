@@ -9,6 +9,7 @@ import { fileURLToPath } from 'node:url';
 import { getAlwaysRunTests, structuralTestsFor, TOOLING_TESTS } from '../ci-test-plan.js';
 import { EXCLUSIVE_TESTS } from '../vitestCiPool.js';
 import { BROWSER_SUITES } from './browserSuites.js';
+import { isGateToolingTest } from './ciPlanRules.js';
 import { resolveDbTestFiles } from './dbTestFiles.js';
 import { guardRunnerFor, isGuardTest } from './guardScanners.js';
 import { moduleSpecifiers, resolveModuleCandidates } from './moduleGraph.js';
@@ -256,9 +257,10 @@ export async function focusedLocalPlan(plan, trackedFiles, changedFiles, readTex
   }
   // Text selector: tests that read a changed non-module file leave no import edge, so they are
   // found by the file's spelled path or name instead (#16866). Runs after the import hops, so a
-  // suite selected for an import never counts against it.
+  // suite selected for an import never counts against it. Planner fixtures
+  // can name changed paths without reading them.
   if (changedData.length) {
-    const candidates = candidateTests().filter(test => !HEAVY_SUITES.has(test));
+    const candidates = candidateTests().filter(test => !HEAVY_SUITES.has(test) && !isGateToolingTest(test));
     const found = await textReaders(changedData, candidates, readWithTestMemo);
     for (const [source, tests] of found) addCapped(source, tests, 'text');
   }

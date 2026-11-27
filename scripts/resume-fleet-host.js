@@ -1,6 +1,6 @@
 // Invoked by the dedicated host's Windows login task; never generates tokens.
 import { join } from 'node:path';
-import { PATHS } from '../server/lib/fileUtils.js';
+import { PM2_BIN } from './lib/pm2Resolve.js';
 import { readPortosEnvValue } from '../server/lib/portosEnv.js';
 import { commandOutput } from '../server/lib/commandExists.js';
 import { runStreamingCommand } from '../server/lib/streamingSpawn.js';
@@ -9,7 +9,7 @@ import { ensureFleetDockerIntegration } from '../server/services/fleetLlmDocker.
 import { PORTS } from '../server/lib/ports.js';
 
 if (readPortosEnvValue('PORTOS_FLEET_LLM_ENABLED') === '1') {
-  const restored = await runStreamingCommand(process.execPath, [join(PATHS.root, 'node_modules/pm2/bin/pm2'), 'resurrect'], undefined, { timeoutMs: 60000 });
+  const restored = await runStreamingCommand(process.execPath, [PM2_BIN, 'resurrect'], undefined, { timeoutMs: 60000 });
   if (!restored.success) throw new Error('Could not restore PortOS processes.');
   let dockerReady = false;
   for (let attempt = 0; attempt < 60 && !dockerReady; attempt++) {

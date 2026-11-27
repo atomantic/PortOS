@@ -29,6 +29,7 @@ import {
 } from './excludes.js';
 import { BACKUP_PROCESS_IDLE_TIMEOUT_MS, runRsync } from './rsync.js';
 import { readSnapshotCredentials, transferWithCredentials } from './restoreCredentials.js';
+import { requireManagedVisitorCredentialRestore } from '../bootHookRegistry.js';
 
 // `-ii` heartbeats once per file rsync finishes deciding about, so a single
 // file whose `--checksum` digest outlasts the idle deadline still emits
@@ -342,7 +343,7 @@ async function restoreSnapshotAdmitted(destPath, snapshotId, { dryRun, requested
   // never promises a restore that execution would silently skip.
   if (restoreScopeIsPreservedFile(subdirFilter)) {
     throw new ServerError(
-      'The selected path is machine-local authority, recovery data or unpublished scratch and is excluded from restore. Select a backed-up application record or directory. Reconcile local authority and unresolved owners on this machine (see docs/STORAGE_RECOVERY.md).',
+      'The selected path is machine-local authority, recovery data or unpublished scratch and is excluded from restore. Select a backed-up application record or directory. Reconcile local authority and unresolved owners on this machine (see docs/STORAGE.md#workflow-maintenance-journal).',
       { status: 400, code: 'BACKUP_RESTORE_MACHINE_LOCAL' },
     );
   }
@@ -633,10 +634,7 @@ const LIVE_FILE_RESTORE_OWNERS = Object.freeze([
   {
     name: 'managed visitor credentials',
     appliesTo: scope => !scope || scope === 'managed-visitor-credentials.json',
-    hold: async inner => {
-      const { getManagedVisitorBroker } = await import('../managedVisitors.js');
-      return getManagedVisitorBroker().withLiveCredentialRestore(inner);
-    },
+    hold: inner => requireManagedVisitorCredentialRestore()(inner),
   },
   {
     name: 'CoS config and runtime',

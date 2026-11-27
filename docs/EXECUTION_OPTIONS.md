@@ -42,7 +42,9 @@ Every shared-selector consumer below uses the legacy reference bridge unless it 
 | `client/src/components/brain/tabs/ConfigTab.jsx` | Shared structured options or saved provider reference |
 | `client/src/components/brain/tabs/DailyLogTab.jsx` | Shared structured options or saved provider reference |
 | `client/src/components/catalog/CatalogDesignPanel.jsx` | Request-local provider reference forwarded unchanged to the face-design writing request; nothing is persisted |
+| `client/src/components/codeAnimation/BriefInputSection.jsx` | Request-local provider, model and effort sent to the brief writer. The editable brief is saved in the draft. |
 | `client/src/components/codeAnimation/CodeAnimationCodeScore.jsx` | Shared structured options or saved provider reference |
+| `client/src/components/codeAnimation/GenerationOutputSection.jsx` | Provider, model and effort go on the generation request. Reopening a job restores its selection. |
 | `client/src/components/codeAnimation/ProductionProjectForm.jsx` | Shared structured options or saved provider reference |
 | `client/src/components/cos/AgentJobProviderFields.jsx` | Shared structured options or saved provider reference |
 | `client/src/components/cos/AppProviderPin.jsx` | Shared structured options or saved provider reference |
@@ -92,8 +94,8 @@ Every shared-selector consumer below uses the legacy reference bridge unless it 
 | `client/src/components/models/ProviderFallbacks.jsx` | Shared structured options or saved provider reference |
 | `client/src/components/models/UntrustedContentPolicyPanel.jsx` | Shared structured options or saved provider reference |
 | `client/src/components/moodBoard/CombineMoodBoards.jsx` | Request-local provider reference forwarded unchanged to source analysis and style composition; no recurring configuration is saved |
+| `client/src/components/moodBoard/MoodBoardAnalyzeSection.jsx` | Request-local provider, model and effort go to board analysis or style composition. Saved style metadata records provider and model. |
 | `client/src/components/moodBoard/MoodBoardGeneratePanel.jsx` | Shared structured options or saved provider reference |
-| `client/src/components/moodBoard/MoodBoardStylePanel.jsx` | Shared structured options or saved provider reference |
 | `client/src/components/music/ChiptunePanel.jsx` | Shared structured options or saved provider reference |
 | `client/src/components/music/MusicDesigner.jsx` | Shared structured options or saved provider reference |
 | `client/src/components/music/TrackWaveformHost.jsx` | Shared structured options or saved provider reference |
@@ -134,7 +136,6 @@ Every shared-selector consumer below uses the legacy reference bridge unless it 
 | `client/src/components/universeBuilder/UniverseBibleTab.jsx` | Shared structured options or saved provider reference |
 | `client/src/components/writers-room/StagePromptModelPicker.jsx` | Shared structured options or saved provider reference |
 | `client/src/pages/CatalogIngest.jsx` | Shared structured options or saved provider reference |
-| `client/src/pages/CodeAnimation.jsx` | Shared structured options or saved provider reference |
 | `client/src/pages/FableLoom.jsx` | Shared structured options or saved provider reference |
 | `client/src/pages/HtmlPages.jsx` | Per-run provider reference (preset or composite id, model, effort) recorded on the run it starts; no selection is saved for the next visit |
 | `client/src/pages/Importer.jsx` | Shared structured options or saved provider reference |
