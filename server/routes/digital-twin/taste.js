@@ -12,6 +12,7 @@ import { asyncHandler, ServerError } from '../../lib/errorHandler.js';
 import { validateRequest } from '../../lib/validateRequest.js';
 import {
   tasteAnswerInputSchema,
+  tasteSkipInputSchema,
   tasteSummaryInputSchema,
   tasteSectionEnum,
   tastePersonalizedQuestionInputSchema,
@@ -42,6 +43,22 @@ router.get('/taste/:section/next', asyncHandler(async (req, res) => {
   }
   const question = await tasteService.getNextQuestion(parsed.data);
   res.json(question);
+}));
+
+/**
+ * POST /api/digital-twin/taste/:section/skip
+ * Skip the current triggered follow-up
+ */
+router.post('/taste/:section/skip', asyncHandler(async (req, res) => {
+  const parsed = tasteSectionEnum.safeParse(req.params.section);
+  if (!parsed.success) {
+    throw new ServerError(`Invalid taste section: ${req.params.section}`, {
+      status: 400,
+      code: 'VALIDATION_ERROR'
+    });
+  }
+  const { questionId } = validateRequest(tasteSkipInputSchema, req.body);
+  res.json(await tasteService.skipFollowUp(parsed.data, questionId));
 }));
 
 /**

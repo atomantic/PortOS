@@ -26,6 +26,7 @@ vi.mock('../../services/digital-twin.js', () => ({
 vi.mock('../../services/taste-questionnaire.js', () => ({
   getTasteProfile: vi.fn(),
   getNextQuestion: vi.fn(),
+  skipFollowUp: vi.fn(),
   submitAnswer: vi.fn(),
   getSectionResponses: vi.fn(),
   generateSectionSummary: vi.fn(),
@@ -142,6 +143,7 @@ describe('Digital Twin taste routes', () => {
   };
   const sectionRoutes = [
     { method: 'get', suffix: '/next', service: taste.getNextQuestion },
+    { method: 'post', suffix: '/skip', service: taste.skipFollowUp },
     { method: 'get', suffix: '/responses', service: taste.getSectionResponses },
     { method: 'post', suffix: '/personalized-question', service: taste.generatePersonalizedTasteQuestion },
     { method: 'delete', suffix: '', service: taste.resetSection },
@@ -182,6 +184,14 @@ describe('Digital Twin taste routes', () => {
     expect(taste.submitAnswer).toHaveBeenCalledExactlyOnceWith(section, questionId, answer, provenance);
   });
 
+  it.each([{ questionId: 'music-fu-energy' }, null])('POST /taste/music/skip returns the next question %j', async (nextQuestion) => {
+    taste.skipFollowUp.mockResolvedValueOnce({ nextQuestion });
+    const response = await request(app).post(base + '/taste/music/skip').send({ questionId: 'music-fu-focus' });
+    expect(response.status).toBe(200);
+    expect(response.body).toEqual({ nextQuestion });
+    expect(taste.skipFollowUp).toHaveBeenCalledExactlyOnceWith(section, 'music-fu-focus');
+  });
+
   it.each([
     { scope: 'section', input: { ...picker, section }, service: taste.generateSectionSummary, args: [section, ...pickerArgs] },
     { scope: 'overall', input: picker, service: taste.generateOverallSummary, args: pickerArgs },
@@ -214,6 +224,7 @@ describe('Digital Twin taste routes', () => {
 
   it.each([
     { path: '/taste/answer', input: { section, questionId, answer: '' }, services: [taste.submitAnswer] },
+    { path: '/taste/music/skip', input: { questionId: ' ' }, services: [taste.skipFollowUp] },
     { path: '/taste/summary', input: { ...picker, section: 'unsupported' }, services: [taste.generateSectionSummary, taste.generateOverallSummary] },
     { path: '/taste/music/personalized-question', input: { ...picker, model: '' }, services: [taste.generatePersonalizedTasteQuestion] },
   ])('POST $path rejects an invalid body before calling the service', async ({ path, input, services }) => {

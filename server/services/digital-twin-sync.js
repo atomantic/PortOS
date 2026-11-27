@@ -292,10 +292,10 @@ function mergeFeedback(local, remote) {
 
 /**
  * Merge taste profiles. Within each section, responses union by questionId
- * (LWW on updatedAt||answeredAt) so answers given on either machine survive;
- * section status takes the more-complete value; a missing local summary is
- * filled from remote. Top-level profileSummary/lastSessionAt are LWW on the
- * file's updatedAt.
+ * (LWW on updatedAt||answeredAt) so answers given on either machine survive.
+ * Skipped follow-up IDs also union. Section status takes the more-complete
+ * value; a missing local summary is filled from remote. Top-level
+ * profileSummary/lastSessionAt are LWW on the file's updatedAt.
  */
 export function mergeTaste(local, remote) {
   if (!isPlainObject(remote)) return { merged: local, changed: false };
@@ -331,8 +331,19 @@ export function mergeTaste(local, remote) {
 
     const status = pickStatus(localSec.status, remoteSec.status);
     const summary = localSec.summary ?? remoteSec.summary ?? null;
-    if (secChanged || status !== localSec.status || summary !== localSec.summary) {
-      sections[secId] = { ...localSec, responses: mergedResponses, status, summary };
+    const localSkips = Array.isArray(localSec.skippedFollowUpIds) ? localSec.skippedFollowUpIds : [];
+    const remoteSkips = Array.isArray(remoteSec.skippedFollowUpIds) ? remoteSec.skippedFollowUpIds : [];
+    const skippedFollowUpIds = [...new Set([...localSkips, ...remoteSkips].filter(id => typeof id === 'string'))].sort();
+    const skipsChanged = skippedFollowUpIds.length !== localSkips.length ||
+      skippedFollowUpIds.some((id, index) => id !== localSkips[index]);
+    if (secChanged || skipsChanged || status !== localSec.status || summary !== localSec.summary) {
+      sections[secId] = {
+        ...localSec,
+        responses: mergedResponses,
+        status,
+        summary,
+        ...(skipsChanged ? { skippedFollowUpIds } : {}),
+      };
       changed = true;
     }
   }

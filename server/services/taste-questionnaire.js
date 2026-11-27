@@ -557,15 +557,23 @@ function buildQuestionProgress(config, sectionData, coreQuestion) {
 
 /**
  * Get the next question for a section.
- * Returns core questions first, then triggered follow-ups based on previous answers.
+ * Returns core questions in order, interleaved with pending triggered follow-ups.
  */
 export async function getNextQuestion(sectionId) {
-  const config = TASTE_SECTIONS[sectionId];
-  if (!config) return null;
+  if (!TASTE_SECTIONS[sectionId]) return null;
+  return getNextQuestionInternal(sectionId, await loadTasteProfile());
+}
 
-  const profile = await loadTasteProfile();
-  const sectionData = profile.sections[sectionId] || { status: 'pending', responses: [], summary: null };
+function getSkippedFollowUpIds(section) {
+  return Array.isArray(section?.skippedFollowUpIds) ? section.skippedFollowUpIds : [];
+}
+
+function getNextQuestionInternal(sectionId, profile) {
+  const config = TASTE_SECTIONS[sectionId];
+
+  const sectionData = profile.sections[sectionId] || { responses: [] };
   const answeredIds = new Set(sectionData.responses.map(r => r.questionId));
+  const skippedIds = new Set(getSkippedFollowUpIds(sectionData));
 
   // First: serve unanswered core questions in order
   for (const q of config.questions) {
@@ -586,7 +594,7 @@ export async function getNextQuestion(sectionId) {
     if (!coreResponse) continue;
 
     for (const fu of q.followUps) {
-      if (answeredIds.has(fu.id)) continue;
+      if (answeredIds.has(fu.id) || skippedIds.has(fu.id)) continue;
       const pattern = new RegExp(fu.trigger, 'i');
       if (pattern.test(coreResponse.answer)) {
         return {
@@ -603,7 +611,6 @@ export async function getNextQuestion(sectionId) {
     }
   }
 
-  // All questions answered for this section
   return null;
 }
 
@@ -641,17 +648,7 @@ export async function submitAnswer(sectionId, questionId, answer, { source, gene
     if (!profile.createdAt) profile.createdAt = now();
     profile.lastSessionAt = now();
 
-    // Update section status
-    const answeredCoreIds = new Set(
-      section.responses
-        .filter(r => r.questionId.includes('-core-'))
-        .map(r => r.questionId)
-    );
-    const allCoreAnswered = config.questions.every(q => answeredCoreIds.has(q.id));
-
-    // Once every core question is in, the section completes when no triggered
-    // follow-up is still waiting.
-    section.status = allCoreAnswered && !getNextQuestionInternal(sectionId, profile) ? 'completed' : 'in_progress';
+    section.status = getNextQuestionInternal(sectionId, profile) ? 'in_progress' : 'completed';
 
     await writeTasteProfile(profile);
 
@@ -664,9 +661,7 @@ export async function submitAnswer(sectionId, questionId, answer, { source, gene
 
   console.log(`🎨 Taste answer submitted: ${sectionId}/${questionId} (${totalResponses} responses)`);
 
-  // Get the next question to return inline
   const nextQuestion = await getNextQuestion(sectionId);
-
   return {
     section: sectionId,
     questionId,
@@ -677,29 +672,34 @@ export async function submitAnswer(sectionId, questionId, answer, { source, gene
 }
 
 /**
- * Internal version that operates on an already-loaded profile object
+ * Skip the pending triggered follow-up without recording an answer.
  */
-function getNextQuestionInternal(sectionId, profile) {
-  const config = TASTE_SECTIONS[sectionId];
-  if (!config) return null;
-
-  const sectionData = profile.sections[sectionId] || { status: 'pending', responses: [] };
-  const answeredIds = new Set(sectionData.responses.map(r => r.questionId));
-
-  for (const q of config.questions) {
-    if (!answeredIds.has(q.id)) return q;
-
-    const coreResponse = sectionData.responses.find(r => r.questionId === q.id);
-    if (!coreResponse) continue;
-
-    for (const fu of q.followUps) {
-      if (answeredIds.has(fu.id)) continue;
-      const pattern = new RegExp(fu.trigger, 'i');
-      if (pattern.test(coreResponse.answer)) return fu;
-    }
+export async function skipFollowUp(sectionId, questionId) {
+  if (!findQuestionDef(sectionId, questionId)?.trigger) {
+    throw new ServerError('Only triggered follow-up questions can be skipped', {
+      status: 400,
+      code: 'VALIDATION_ERROR'
+    });
   }
+  return mutateTasteProfile(async (profile) => {
+    const section = profile.sections[sectionId];
+    const skippedIds = getSkippedFollowUpIds(section);
+    const pending = getNextQuestionInternal(sectionId, profile);
+    if (skippedIds.includes(questionId)) return { nextQuestion: pending };
+    if (pending?.questionId !== questionId) {
+      throw new ServerError('This follow-up is no longer the current question. Reopen the section to continue.', {
+        status: 409,
+        code: 'TASTE_QUESTION_STALE'
+      });
+    }
 
-  return null;
+    section.skippedFollowUpIds = [...skippedIds, questionId];
+    const nextQuestion = getNextQuestionInternal(sectionId, profile);
+    section.status = nextQuestion ? 'in_progress' : 'completed';
+    profile.lastSessionAt = now();
+    await writeTasteProfile(profile);
+    return { nextQuestion };
+  });
 }
 
 /**
