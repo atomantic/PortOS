@@ -10,6 +10,8 @@ const machineLocalCredentialPaths = [
   '/jira.json',
   '/datadog.json',
   '/auth-sessions.json',
+  '/agents/accounts.json',
+  '/agents/accounts.json.*.tmp',
 ];
 
 describe('Machine-local OAuth and OpenClaw backup exclusions (#19173)', () => {
