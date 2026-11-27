@@ -209,7 +209,7 @@ Unified communication channels, local voice assistant, community stewardship, an
 
 | Surface / Page | Route(s) | Key Capabilities & Workflows | Related Guides |
 |---|---|---|---|
-| **Comms Inbox & Drafts** | `/messages/inbox`, `/messages/drafts`, `/messages/sync` | Centralized message triage, drafting assistant, and cross-channel message synchronization. | [Messages Security](./messages-security.md) |
+| **Comms Inbox & Drafts** | `/messages/inbox`, `/messages/drafts`, `/messages/sync` | Inbox and triage for connected Gmail, Outlook, and Teams accounts, with email drafts held for review before sending. | [Messages Security](./messages-security.md) |
 | **iMessage Sync & Contacts** | `/messages/imessage`, `/messages/imessage?settings=1`, `/messages/contacts` | Local macOS `chat.db` SQLite ingestion, sender identity resolution, spam filtering, and address book contact merging. | [Messages Security](./messages-security.md) |
 | **Messages Setup** | `/messages/config` | Connect email accounts, complete Gmail authorization, and configure how messages sync. | [Messages Security](./messages-security.md) |
 | **Signal Integration** | `/messages/signal` | Read-only SQLCipher snapshot of the local Signal Desktop database, including committed WAL messages, into Tribe and the activity timeline. Fails setup instead of ingesting a partial copy when the bundled driver cannot capture a consistent view. | [Messages Security](./messages-security.md) |

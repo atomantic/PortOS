@@ -111,8 +111,11 @@ See [GOALS.md](./GOALS.md#core-goals) for the core goals and objectives.
 |---|---|---|---|
 | FR-33 | The system MUST support a voice agent with TTS and STT (Whisper) for spoken interaction. | Must | A spoken query is transcribed, processed, and answered with synthesized speech in one round trip. |
 | FR-34 | The system MUST support Telegram and OpenClaw (operator chat) as additional interaction surfaces over the same agent/task backend. | Must | A command issued via Telegram produces the same class of result (task created, question answered) as the equivalent web-UI action. |
-| FR-35 | The system MUST support a unified messages inbox across email/SMS/iMessage/Signal accounts with triage rules and a review-before-send outbox. | Must | An outbound AI-drafted message sits in the outbox until explicitly approved and sent — never auto-sent without review. |
+| FR-35 | The system MUST provide an account-based inbox for connected Gmail, Outlook, and Teams accounts, with triage and a review-before-send email outbox. | Must | Messages from configured accounts appear in the Inbox; an AI-drafted email stays in the outbox until explicitly approved and sent. |
+
 | FR-36 | The system SHOULD support multi-account social posting (X/Twitter) with a draft-review workflow. | Should | A scheduled post is held as a draft until approved, then published to the correct configured account. |
+
+The shipped Inbox does not unify SMS, iMessage, or Signal with those accounts, and does not provide cross-channel triage or programmatic sending for those sources. Browse iMessage under Messages → iMessage; imported Signal activity appears in the Activity Timeline and Tribe. A unified cross-channel inbox remains a future requirement, not a shipped capability.
 
 ### Knowledge Legacy
 
