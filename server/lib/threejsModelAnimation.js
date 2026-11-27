@@ -22,7 +22,7 @@
  * answer, and a deliberately odd clip is the author's to keep.
  */
 
-import { listSpecNames } from './threejsModel.js';
+import { listSpecNames } from './threejsModelSpecNames.js';
 
 // Channels a part authors in `parts`, so a clip's opening pose can be compared
 // against what the assembly actually builds. `opacity` and `visible` have no
