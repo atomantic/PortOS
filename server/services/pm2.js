@@ -664,18 +664,51 @@ export async function restartMaintenanceProducer(name, env = process.env) {
   return { success: true };
 }
 
+function getRestartEvidence(env, uptime) {
+  const evidence = {
+    instanceId: env.unique_id ?? null,
+    generationStartedAt: env.created_at ?? null,
+    startedAt: env.pm_uptime ?? null,
+  };
+  if (env.status === 'errored') return { ...evidence, kind: 'errored' };
+
+  const waiting = env.status === 'waiting restart';
+  // PM2 clears created_at on restart overlimit, but when a delay is configured
+  // it can overwrite the terminal "errored" status with "waiting restart".
+  if (waiting && env.created_at === null && uptime !== null) return { ...evidence, kind: 'errored' };
+  if (!Number.isInteger(env.unstable_restarts) || env.unstable_restarts < 2 || uptime === null) return null;
+  if (!waiting && env.status !== 'online' && env.status !== 'launching') return null;
+
+  // An explicit restart resets PM2's instability counter before stopping the
+  // old worker, so even a clean short run can leave one unstable restart.
+  // Repeated short runs must still be within the current stability window or
+  // an active restart delay. PM2 keeps the raw count after a worker stabilizes.
+  const minUptime = env.min_uptime ?? 1_000;
+  const delay = Math.max(0, env.prev_restart_delay ?? env.restart_delay ?? 0);
+  if (uptime < 0 || uptime >= minUptime + (waiting ? delay : 0)) return null;
+  // PM2 only counts short exits inside this window after a start or reset.
+  // A later process start outside it can still carry that historical count.
+  const sinceReset = env.pm_uptime - env.created_at;
+  if (sinceReset < 0 || !(sinceReset < minUptime * (env.max_restarts ?? 16) + delay)) return null;
+  return { ...evidence, kind: 'crashLoop' };
+}
+
 // Shared shaping for listProcesses / listProcessesStrict so the two never drift.
 function mapProcess(proc) {
+  const env = proc.pm2_env ?? {};
+  const uptime = env.pm_uptime ? Date.now() - env.pm_uptime : null;
+  const restartEvidence = getRestartEvidence(env, uptime);
   return {
     name: proc.name,
-    status: proc.pm2_env?.status || 'unknown',
+    status: env.status || 'unknown',
     pid: proc.pid,
     pm_id: proc.pm_id,
     cpu: proc.monit?.cpu || 0,
     memory: proc.monit?.memory || 0,
-    uptime: proc.pm2_env?.pm_uptime ? Date.now() - proc.pm2_env.pm_uptime : null,
-    restarts: proc.pm2_env?.restart_time || 0,
-    unstableRestarts: proc.pm2_env?.unstable_restarts || 0
+    uptime,
+    restarts: env.restart_time || 0,
+    unstableRestarts: env.unstable_restarts || 0,
+    ...(restartEvidence && { restartEvidence }),
   };
 }
 

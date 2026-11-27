@@ -155,11 +155,11 @@ async function deriveProcessStats(pm2Processes) {
       total: pm2Processes.length,
       online: annotated.filter(p => p.status === 'online').length,
       stopped: supervised.filter(p => p.status === 'stopped').length,
-      errored: supervised.filter(p => p.status === 'errored').length,
+      errored: supervised.filter(p => p.status === 'errored' || p.restartEvidence?.kind === 'errored').length,
       // A desktop app that exited (cleanly as `stopped`, or `errored` on a
       // force-quit) — reported on its own rather than as a failure.
       desktopExited: annotated.filter(
-        p => p.expectedExit && ['errored', 'stopped'].includes(p.status)
+        p => p.expectedExit && (['errored', 'stopped'].includes(p.status) || p.restartEvidence?.kind === 'errored')
       ).length,
       totalMemory: sum(pm2Processes, 'memory'),
       totalCpu: sum(pm2Processes, 'cpu'),
@@ -209,13 +209,12 @@ function processWarnings(processStats, supervised) {
   if (processStats.errored > 0) {
     warnings.push({ type: 'process', severity: 'critical', message: `${processStats.errored} process(es) errored` });
   }
-  if (processStats.unstableRestarts > 0) {
-    const crashing = supervised.filter(p => (p.unstableRestarts || 0) > 0).map(p => p.name);
-    const plural = processStats.unstableRestarts === 1 ? '' : 's';
+  const crashing = supervised.filter(p => p.restartEvidence?.kind === 'crashLoop').map(p => p.name);
+  if (crashing.length > 0) {
     warnings.push({
       type: 'restarts',
       severity: 'warning',
-      message: `${processStats.unstableRestarts} crash-loop restart${plural} (${crashing.join(', ')})`
+      message: `Possible crash-loop activity (${crashing.join(', ')})`
     });
   }
   return warnings;

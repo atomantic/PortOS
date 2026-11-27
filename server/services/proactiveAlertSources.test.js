@@ -18,7 +18,18 @@ vi.mock('./identity.js', () => ({ getGoals: vi.fn(async () => ({ goals: mock.goa
 vi.mock('./taskLearning.js', () => ({
   getPerformanceSummary: vi.fn(async () => mock.performance)
 }));
-vi.mock('./pm2.js', () => ({ listProcesses: vi.fn(async () => mock.processes) }));
+vi.mock('pm2', () => ({
+  default: { custom: function () {
+    return {
+      disconnect: callback => callback(null),
+      Client: {
+        launchRPC: callback => callback(null),
+        client_sock: { connected: true },
+        client: { call: (_method, _data, callback) => callback(null, mock.processes) },
+      },
+    };
+  } },
+}));
 // Mirrors the real annotateExpectedExit, including its fail-open behavior: a
 // registry read failure marks nothing expected, so nothing is exempted.
 vi.mock('./appProcessStatus.js', () => ({
@@ -34,9 +45,13 @@ vi.mock('./tribeOutreach.js', () => ({ findUnansweredTribeThreads: vi.fn(async (
 vi.mock('../lib/memoryStats.js', () => ({
   getMemoryStats: vi.fn(async () => mock.memory)
 }));
-vi.mock('os', () => ({ default: { loadavg: () => [100], cpus: () => [{}] } }));
+vi.mock('os', async original => {
+  const os = await original();
+  return { ...os, default: { ...os.default, loadavg: () => [100], cpus: () => [{}] } };
+});
 
 import { generateNonProductAlerts, resolveHealthAlert } from './proactiveAlertSources.js';
+import { clearJlistCache, listProcesses } from './pm2.js';
 import { getPerformanceSummary } from './taskLearning.js';
 import { getUsage } from './usage.js';
 
@@ -45,10 +60,32 @@ const processAlerts = async () => {
   return alerts.filter(a => a.type === 'process_error');
 };
 
+function pm2Row(id, name, status, fields = {}) {
+  return { pm_id: id, name, pm2_env: { status, ...fields } };
+}
+
+function setProcesses(...rows) {
+  mock.processes = rows;
+  clearJlistCache();
+}
+
+function shortRuns(instanceId, fields = {}) {
+  return {
+    unique_id: instanceId,
+    created_at: Date.now() - 3_000,
+    pm_uptime: Date.now() - 500,
+    unstable_restarts: 3,
+    restart_time: 3,
+    min_uptime: 10_000,
+    exit_code: 1,
+    ...fields,
+  };
+}
+
 describe('proactive alert sources — desktop (GUI) process exemption (#2991)', () => {
   beforeEach(() => {
     vi.clearAllMocks();
-    mock.processes = [];
+    setProcesses();
     mock.desktopProcessNames = new Set();
     mock.desktopLookupError = null;
     mock.performance = { needsAttention: [], skipped: [] };
@@ -57,14 +94,14 @@ describe('proactive alert sources — desktop (GUI) process exemption (#2991)', 
   it('does not alert when the only errored process is a quit game window', async () => {
     // Force-quitting a game leaves PM2 `errored`; that is a normal end to a play
     // session, not a failure to notify about.
-    mock.processes = [{ pm_id: 1, name: 'game', status: 'errored' }];
+    setProcesses(pm2Row(1, 'game', 'errored'));
     mock.desktopProcessNames = new Set(['game']);
 
     expect(await processAlerts()).toEqual([]);
   });
 
   it('still alerts on a genuinely errored web process', async () => {
-    mock.processes = [{ pm_id: 0, name: 'web', status: 'errored' }];
+    setProcesses(pm2Row(0, 'web', 'errored'));
 
     const alerts = await processAlerts();
     expect(alerts).toHaveLength(1);
@@ -72,11 +109,11 @@ describe('proactive alert sources — desktop (GUI) process exemption (#2991)', 
   });
 
   it('excludes the desktop process from both the count and the total', async () => {
-    mock.processes = [
-      { pm_id: 1, name: 'game', status: 'errored' },
-      { pm_id: 0, name: 'web', status: 'errored' },
-      { pm_id: 2, name: 'api', status: 'online' }
-    ];
+    setProcesses(
+      pm2Row(1, 'game', 'errored'),
+      pm2Row(0, 'web', 'errored'),
+      pm2Row(2, 'api', 'online'),
+    );
     mock.desktopProcessNames = new Set(['game']);
 
     const alerts = await processAlerts();
@@ -87,44 +124,28 @@ describe('proactive alert sources — desktop (GUI) process exemption (#2991)', 
   });
 
   it('does not report a desktop app restart loop as crashing', async () => {
-    mock.processes = [{ pm_id: 1, name: 'game', status: 'online', unstableRestarts: 3 }];
+    setProcesses(pm2Row(1, 'game', 'online', shortRuns('game-instance')));
     mock.desktopProcessNames = new Set(['game']);
 
     expect(await processAlerts()).toEqual([]);
   });
 
-  it('still reports unstable restarts for a non-desktop process', async () => {
-    mock.processes = [{ pm_id: 0, name: 'web', status: 'online', unstableRestarts: 3 }];
-
-    const alerts = await processAlerts();
-    expect(alerts).toHaveLength(1);
-  });
-
   it('keeps per-process condition IDs through reorder, renaming and recovery', async () => {
-    mock.processes = [
-      { pm_id: 0, name: 'web', status: 'errored', unstableRestarts: 3 },
-      { pm_id: 2, name: 'api', status: 'errored' }
-    ];
+    setProcesses(pm2Row(0, 'web', 'errored'), pm2Row(2, 'api', 'errored'));
     const first = await processAlerts();
-    expect(first.map(a => a.id).sort()).toEqual([
-      'process_crash_loop:0', 'process_errored:0', 'process_errored:2'
-    ]);
-    mock.processes = [
-      { pm_id: 2, name: 'renamed api', status: 'errored' },
-      { pm_id: 0, name: 'web', status: 'online', unstableRestarts: 4 }
-    ];
+    expect(first.map(a => a.id).sort()).toEqual(['process_errored:0', 'process_errored:2']);
+    setProcesses(pm2Row(2, 'renamed api', 'errored'), pm2Row(0, 'web', 'online', shortRuns('web-instance')));
     const second = await processAlerts();
     expect(second.map(a => a.id).sort()).toEqual(['process_crash_loop:0', 'process_errored:2']);
-    expect(second.find(a => a.id === 'process_crash_loop:0').metadata.unstableRestarts).toBe(4);
   });
 
   it('reports missing process identity as unavailable rather than inventing a key', async () => {
-    mock.processes = [{ name: 'web', status: 'errored' }];
+    setProcesses(pm2Row(undefined, 'web', 'errored'));
     await expect(generateNonProductAlerts()).rejects.toThrow('Alert resource identity is unavailable');
   });
 
   it('alerts normally when the registry read fails (exempts nothing)', async () => {
-    mock.processes = [{ pm_id: 0, name: 'web', status: 'errored' }];
+    setProcesses(pm2Row(0, 'web', 'errored'));
     mock.desktopLookupError = new Error('registry unreadable');
 
     const alerts = await processAlerts();
@@ -132,10 +153,76 @@ describe('proactive alert sources — desktop (GUI) process exemption (#2991)', 
   });
 });
 
+describe('PM2 crash-loop alerts', () => {
+  beforeEach(() => {
+    mock.resolutions = [];
+    mock.desktopProcessNames = new Set();
+    mock.desktopLookupError = null;
+  });
+
+  it.each([500, 12_000])('keeps a clean explicit restart as telemetry at %i ms uptime', async uptime => {
+    setProcesses(pm2Row(0, 'worker', 'online', shortRuns('clean-worker', {
+      pm_uptime: Date.now() - uptime,
+      created_at: Date.now() - uptime - 200,
+      unstable_restarts: 1,
+      restart_time: 1,
+      exit_code: 0,
+    })));
+    expect(await processAlerts()).toEqual([]);
+    expect(await listProcesses()).toEqual([expect.objectContaining({ restarts: 1, unstableRestarts: 1 })]);
+  });
+
+  it('alerts on repeated short runs, then clears the alert after a stable run', async () => {
+    const evidence = shortRuns('flaky-worker', { restart_delay: 5_000 });
+    setProcesses(pm2Row(0, 'worker', 'waiting restart', evidence));
+    expect(await processAlerts()).toEqual([expect.objectContaining({
+      id: 'process_crash_loop:0', severity: 'high',
+      evidence: expect.objectContaining({ unstableRestarts: 3, instanceId: 'flaky-worker' }),
+    })]);
+    setProcesses(pm2Row(0, 'worker', 'online', shortRuns('flaky-worker', {
+      created_at: Date.now() - 15_000, pm_uptime: Date.now() - 12_000,
+    })));
+    expect(await processAlerts()).toEqual([]);
+  });
+
+  it('recognizes PM2 restart exhaustion when restart delay masks the errored state', async () => {
+    setProcesses(pm2Row(0, 'worker', 'waiting restart', shortRuns('flaky-worker', {
+      created_at: null, unstable_restarts: 0, restart_delay: 5_000,
+    })));
+    expect(await processAlerts()).toEqual([expect.objectContaining({ id: 'process_errored:0', severity: 'high' })]);
+  });
+
+  it('does not reuse historic unstable counts after the generation’s counting window', async () => {
+    setProcesses(pm2Row(0, 'worker', 'online', shortRuns('worker-instance', {
+      created_at: Date.now() - 200_000,
+    })));
+    expect(await processAlerts()).toEqual([]);
+  });
+
+  it('reopens on new restart evidence and isolates reused PM2 IDs', async () => {
+    const initial = shortRuns('original');
+    setProcesses(pm2Row(0, 'worker', 'online', initial));
+    expect(await resolveHealthAlert('process_crash_loop:0')).toEqual({ resolved: true });
+    expect(await processAlerts()).toEqual([]);
+
+    const repeated = { ...initial, restart_time: 4, unstable_restarts: 4, pm_uptime: initial.pm_uptime + 100 };
+    setProcesses(pm2Row(0, 'worker', 'online', repeated));
+    expect(await processAlerts()).toHaveLength(1);
+    expect(await resolveHealthAlert('process_crash_loop:0')).toEqual({ resolved: true });
+
+    setProcesses(pm2Row(0, 'worker', 'online', { ...repeated, unique_id: 'replacement', unstable_restarts: 0 }));
+    expect(await processAlerts()).toEqual([]);
+    setProcesses(pm2Row(0, 'worker', 'online', { ...repeated, unique_id: 'replacement' }));
+    expect(await processAlerts()).toEqual([expect.objectContaining({
+      evidence: expect.objectContaining({ instanceId: 'replacement' }),
+    })]);
+  });
+});
+
 describe('proactive alert sources — current task performance', () => {
   beforeEach(() => {
     vi.clearAllMocks();
-    mock.processes = [];
+    setProcesses();
     mock.desktopProcessNames = new Set();
     mock.desktopLookupError = null;
     mock.performance = { needsAttention: [], skipped: [] };
@@ -199,7 +286,7 @@ describe('proactive alert sources — current task performance', () => {
 
 describe('proactive alert sources — resource identities', () => {
   it('keys goals and resource conditions independently of their presentation', async () => {
-    mock.processes = [];
+    setProcesses();
     mock.performance = { needsAttention: [], skipped: [] };
     mock.goals = [
       { id: 'example:one', title: 'Same title', status: 'active', createdAt: '2020-01-01' },
@@ -245,7 +332,7 @@ describe('health alert resolution', () => {
     mock.performance = { needsAttention: [], skipped: [] };
     mock.desktopProcessNames = new Set();
     mock.desktopLookupError = null;
-    mock.processes = [{ pm_id: 7, name: 'example-service', status: 'errored', restarts: 3 }];
+    setProcesses(pm2Row(7, 'example-service', 'errored', { restart_time: 3 }));
   });
 
   it('keeps corrected evidence quiet and permits a new failure', async () => {
@@ -253,7 +340,7 @@ describe('health alert resolution', () => {
     expect(await processAlerts()).toEqual([]);
     expect(mock.resolutions[0]).toMatchObject({ actionKey: 'health.resolved:process_errored:7', dismissed: true });
     expect(mock.resolutions[0].revision).toMatch(/^[a-f0-9]{64}$/);
-    mock.processes[0].restarts++;
+    setProcesses(pm2Row(7, 'example-service', 'errored', { restart_time: 4 }));
     expect(await processAlerts()).toHaveLength(1);
   });
 

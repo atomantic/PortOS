@@ -5,7 +5,7 @@ import { Link, Navigate, useParams } from 'react-router';
 import { Activity, AlertTriangle, HardDrive, Cpu, Database, ListOrdered, RefreshCw, ServerCog, X, Zap } from 'lucide-react';
 import { getSystemHealth, updateHealthThresholds } from '../services/apiSystem.js';
 import toast from '../components/ui/Toast';
-import { formatPercent } from '../utils/formatters';
+import { formatCount, formatPercent } from '../utils/formatters';
 import PageSkeleton from '../components/ui/PageSkeleton';
 import Banner from '../components/ui/Banner';
 import { useSocketResource } from '../hooks/useSocketResource';
@@ -310,7 +310,7 @@ function SystemHealthOverview() {
                   <span className="text-gray-400 tabular-nums">{formatPercent(p.cpu, { decimals: 0 })} CPU</span>
                   <span className="text-gray-100 tabular-nums w-24 text-right">{p.memoryFormatted}</span>
                   {p.unstableRestarts > 0 && (
-                    <span className="text-port-warning text-xs">{p.unstableRestarts} crash-loop</span>
+                    <span className="text-gray-400 text-xs">{formatCount(p.unstableRestarts)} unstable {p.unstableRestarts === 1 ? 'restart' : 'restarts'}</span>
                   )}
                 </div>
               ))}

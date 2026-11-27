@@ -379,18 +379,19 @@ describe('System Health Routes', () => {
     }
   });
 
-  it('does not warn on cumulative restart_time (developer-driven restarts)', async () => {
+  it('keeps raw restart counts as telemetry without warning about past restarts', async () => {
     listProcessesStrict.mockResolvedValueOnce([
-      { name: 'portos', status: 'online', restarts: 97, unstableRestarts: 0, cpu: 0, memory: 0 }
+      { name: 'portos', status: 'online', restarts: 97, unstableRestarts: 1, cpu: 0, memory: 0 }
     ]);
     const response = await request(app).get('/api/system/health/details');
     const restartWarnings = (response.body.warnings || []).filter(w => w.type === 'restarts');
     expect(restartWarnings).toHaveLength(0);
+    expect(response.body.processes).toMatchObject({ totalRestarts: 97, unstableRestarts: 1 });
   });
 
-  it('warns when a process has unstable_restarts (real crash loop)', async () => {
+  it('warns on current crash-loop evidence', async () => {
     listProcessesStrict.mockResolvedValueOnce([
-      { name: 'flaky-svc', status: 'online', restarts: 5, unstableRestarts: 3, cpu: 0, memory: 0 }
+      { name: 'flaky-svc', status: 'online', restarts: 5, unstableRestarts: 3, restartEvidence: { kind: 'crashLoop' }, cpu: 0, memory: 0 }
     ]);
     const response = await request(app).get('/api/system/health/details');
     const restartWarnings = (response.body.warnings || []).filter(w => w.type === 'restarts');
