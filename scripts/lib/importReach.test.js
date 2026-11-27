@@ -33,6 +33,15 @@ const SOURCES = new Map([
 const isTest = (rel) => rel.endsWith('.test.js');
 const { edges: graph } = importEdges(createModuleGraph([...SOURCES.keys()], (rel) => SOURCES.get(rel) ?? null));
 
+it('reuses the inspected edges within a graph and inspects a new graph independently', () => {
+  const moduleGraph = createModuleGraph([...SOURCES.keys()], (rel) => SOURCES.get(rel) ?? null);
+  const inspected = importEdges(moduleGraph);
+  expect(importEdges(moduleGraph)).toBe(inspected);
+
+  const otherGraph = createModuleGraph(['other.js'], () => 'export {};');
+  expect([...importEdges(otherGraph).edges.keys()]).toEqual(['other.js']);
+});
+
 describe('importReachReport', () => {
   it('counts a dynamic edge for selection while the static view stops at it', () => {
     expect([...graph.get('svc/caller.js').dynamic]).toEqual(['svc/heavy.js', 'svc/lazyLeaf.js', 'svc/taggedLeaf.js', 'svc/genLeaf.js']);

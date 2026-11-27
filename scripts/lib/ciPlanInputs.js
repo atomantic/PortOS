@@ -7,6 +7,7 @@
  */
 
 import { execFileSync } from 'child_process';
+import { runWorktreeGit } from '../../lib/gitWorktree.js';
 import { existsSync, readFileSync } from 'fs';
 import { join, posix } from 'path';
 import { escapeRegExp } from '../../server/lib/textUtils.js';
@@ -51,28 +52,51 @@ export const collectDockerContainmentLiveInputs = (cwd, graph = trackedModuleGra
 
 // Git's display output quotes non-ASCII/control characters; trimming also
 // changes valid paths. Read raw NUL-delimited paths so selectors stay exact.
-const gitPaths = (args, cwd) => execFileSync('git', args, { cwd, encoding: 'utf8' })
+const gitPaths = (args, cwd) => execFileSync('git', args, { cwd, encoding: 'utf8', maxBuffer: 64 * 1024 * 1024 })
   .split('\0')
   .filter(Boolean);
+
+const TEST_REFERENCE_GREP_LIMIT = 20;
+const testReferencePaths = (cwd, changedSources) => {
+  if (changedSources.length > 0 && changedSources.length <= TEST_REFERENCE_GREP_LIMIT) {
+    const basenames = new Set(changedSources.map(basenameOf));
+    const grep = runWorktreeGit(cwd, [
+      'grep', '-F', '-l', '-z', '--no-textconv', '--no-recurse-submodules',
+      ...[...basenames].flatMap((name) => ['-e', name]), '--', ...TEST_FILE_GLOBS,
+    ], { encoding: 'utf8' });
+    // Git grep exits 1 on a successful search with no hits. Other failures
+    // leave the candidate set unknown, so fall back to the tracked-file scan.
+    if (!grep.error && !grep.stderr && (grep.status === 0 || grep.status === 1)) {
+      const hits = new Set(grep.stdout.split('\0'));
+      return gitPaths(['ls-files', '--stage', '-z', '--', ...TEST_FILE_GLOBS], cwd)
+        .flatMap((entry) => {
+          const path = entry.slice(entry.indexOf('\t') + 1);
+          return !entry.startsWith('100') || hits.has(path) ? [path] : [];
+        });
+    }
+  }
+  return gitPaths(['ls-files', '-z', '--', ...TEST_FILE_GLOBS], cwd);
+};
 
 const WORD_RUN_RE = /[A-Za-z0-9_]+/g;
 const wordRuns = (text) => text.match(WORD_RUN_RE) ?? [];
 
 /**
- * Tracked test files, read once, answering the reference lookups that used to
- * be one repository-wide `git grep` per changed source (#14866: ~600 sources
- * took minutes). Matching semantics are those of the old `git grep -E`: the
- * same patterns run over the working-tree text of tracked files whose path
- * contains `.test.` / `.spec.` (the `*` in a git pathspec crosses `/`).
+ * Tracked test files, read once. Small CI diffs use one Git grep to find
+ * candidates containing any changed basename, then apply the same exact
+ * word-boundary checks. Large diffs and local working-tree overrides read all
+ * tracked tests, without a repository-wide search per source (#14866).
+ * Non-regular tracked entries also need the exact scan: Git grep skips
+ * symlinks, but the working-tree reader can follow them.
  *
  * Each test also keeps its set of maximal word runs. Every pattern here is a
  * word-boundary-delimited literal, so each word run of that literal must
  * appear whole in any file it matches — a necessary condition that rejects
  * nearly every file before the regex runs.
  */
-const createTestReferenceIndex = (cwd) => {
+const createTestReferenceIndex = (cwd, changedSources) => {
   const byPath = new Map();
-  for (const path of gitPaths(['ls-files', '-z', '--', ...TEST_FILE_GLOBS], cwd)) {
+  for (const path of testReferencePaths(cwd, changedSources)) {
     let text;
     try {
       text = readFileSync(join(cwd, path), 'utf8');
@@ -229,7 +253,7 @@ export function collectPlanInputs({ baseSha, forceFull = false, changedFiles, ga
   // narrowSharedBasenameHits (#11870).
   const changedSources = collectedChangedFiles.filter((path) => isExecutable(path) && !isTestFile(path));
   const sharedBasenames = changedSources.length > 0 ? sharedSourceBasenames(presentFiles) : new Set();
-  const testIndex = changedSources.length > 0 ? createTestReferenceIndex(cwd) : null;
+  const testIndex = changedSources.length > 0 ? createTestReferenceIndex(cwd, hasChangedFilesOverride ? [] : changedSources) : null;
   const pathContractTests = Object.fromEntries(changedSources.map((path) => {
     const hits = testIndex.referencing(path);
     return [path, sharedBasenames.has(basenameOf(path)) ? narrowSharedBasenameHits(path, hits, testIndex) : hits];
