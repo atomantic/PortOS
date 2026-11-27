@@ -68,6 +68,21 @@ describe('PublishKitPanel (#9281)', () => {
     expect(k.build).toHaveBeenCalledWith({ loudnessPreset: 'as-mixed' });
   });
 
+  it('names the platform on repeated copy actions and offers a touch-sized build cancel', () => {
+    const cancelBuild = vi.fn();
+    const k = hook({ building: true, cancelBuild });
+    render(<PublishKitPanel project={{ id: 'mv-1', renderHistoryId: 'rh-1', publishKit: built }} publishKit={k} />);
+    expandAll();
+    for (const name of ['Copy Title for YouTube', 'Copy Title for YouTube Shorts', 'Copy Description for YouTube',
+      'Copy Description for YouTube Shorts', 'Copy Caption for TikTok', 'Copy Caption for Instagram Reels']) {
+      expect(screen.getByRole('button', { name })).toHaveClass('pointer-coarse:min-h-11', 'pointer-coarse:min-w-11');
+    }
+    const cancel = screen.getByRole('button', { name: 'Cancel build' });
+    expect(cancel).toHaveClass('min-h-11', 'min-w-11');
+    fireEvent.click(cancel);
+    expect(cancelBuild).toHaveBeenCalledOnce();
+  });
+
   it('requests Web mastering from the build control and reads delivered loudness beside its download', async () => {
     const original = { id: 'mv-web', renderHistoryId: 'render-web' };
     const completed = { ...original, publishKit: { ...built, exports: [

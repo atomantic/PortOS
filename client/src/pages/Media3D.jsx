@@ -271,7 +271,8 @@ export default function Media3D() {
                         key={t.id}
                         type="button"
                         onClick={() => updateParams({ target: t.id })}
-                        className={`rounded-lg border px-3 py-1.5 text-xs ${active
+                        aria-pressed={active}
+                        className={`pointer-coarse:min-h-11 pointer-coarse:min-w-11 rounded-lg border px-3 py-1.5 text-xs ${active
                           ? 'border-port-accent bg-port-accent/10 text-white'
                           : 'border-port-border bg-port-bg text-gray-300 hover:border-port-accent'}`}
                       >
@@ -297,7 +298,7 @@ export default function Media3D() {
                   : <><Sparkles className="h-4 w-4" /> Generate 3D</>}
               </button>
               {genError ? (
-                <p className="flex items-start gap-1.5 text-xs text-port-error">
+                <p role="alert" className="flex items-start gap-1.5 text-xs text-port-error">
                   <AlertTriangle className="mt-0.5 h-3.5 w-3.5 shrink-0" /> {genError}
                 </p>
               ) : (

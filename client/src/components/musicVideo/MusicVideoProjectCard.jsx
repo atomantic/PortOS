@@ -47,6 +47,8 @@ export default function MusicVideoProjectCard({
   const preview = project.preview || selectMusicVideoPreview(project);
   const [draftMedia, setDraftMedia] = useState(null);
   const importedDraft = preview.source === 'animatic';
+  const entryLabel = importedDraft ? 'Review draft' : preview.source === 'final' ? 'Review video' : 'Open';
+  const forkLabel = cloning ? 'Forking…' : 'Fork';
   const draftAvailable = draftMedia?.src === preview.src && draftMedia?.available;
 
   // When preview target changes, stop playing
@@ -113,7 +115,7 @@ export default function MusicVideoProjectCard({
                   type="button"
                   onClick={() => onVersionStep?.(1)}
                   disabled={versionIndex >= versionCount - 1}
-                  aria-label="Older version"
+                  aria-label={`Older version of ${project.name}`}
                   className="pointer-coarse:min-h-11 pointer-coarse:min-w-11 disabled:opacity-30"
                 ><ChevronLeft size={12} aria-hidden="true" /></button>
                 <span>v{project.version || 1} of {versionCount}</span>
@@ -121,7 +123,7 @@ export default function MusicVideoProjectCard({
                   type="button"
                   onClick={() => onVersionStep?.(-1)}
                   disabled={versionIndex <= 0}
-                  aria-label="Newer version"
+                  aria-label={`Newer version of ${project.name}`}
                   className="pointer-coarse:min-h-11 pointer-coarse:min-w-11 disabled:opacity-30"
                 ><ChevronRight size={12} aria-hidden="true" /></button>
               </span>
@@ -176,7 +178,7 @@ export default function MusicVideoProjectCard({
             <button
               type="button"
               onClick={() => setPlaying(true)}
-              aria-label={`Play ${preview.label}`}
+              aria-label={`Play ${preview.label} for ${project.name}`}
               title={`Play ${preview.label}`}
               className="port-media-overlay-strong absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 w-11 h-11 flex items-center justify-center rounded-full hover:scale-105 transition-all shadow-lg focus:outline-none focus:ring-2 focus:ring-port-accent"
             >
@@ -334,18 +336,20 @@ export default function MusicVideoProjectCard({
           <button
             type="button"
             onClick={onReview || onSelect}
+            aria-label={`${entryLabel} ${project.name}`}
             className="bg-port-accent hover:bg-port-accent/80 text-white rounded px-2.5 py-1 text-xs font-medium flex items-center gap-1 min-h-[44px] transition-colors"
           >
-            {importedDraft ? 'Review draft' : preview.source === 'final' ? 'Review video' : 'Open'} <ArrowUpRight size={13} aria-hidden="true" />
+            {entryLabel} <ArrowUpRight size={13} aria-hidden="true" />
           </button>
           <button
             type="button"
             onClick={() => onClone?.()}
             disabled={cloning}
+            aria-label={`${forkLabel} ${project.name}`}
             title="Fork this project version"
             className="bg-port-bg border border-port-border hover:bg-port-border/40 text-port-text rounded px-2 py-1 text-xs flex items-center gap-1 min-h-[44px] disabled:opacity-50 transition-colors"
           >
-            <Copy size={13} aria-hidden="true" /> {cloning ? 'Forking…' : 'Fork'}
+            <Copy size={13} aria-hidden="true" /> {forkLabel}
           </button>
         </div>
 

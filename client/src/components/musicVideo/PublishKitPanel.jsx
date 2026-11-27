@@ -50,7 +50,7 @@ const fieldValue = (copy, platform, field) => {
   return typeof v === 'string' ? v : '';
 };
 
-function CopyField({ id, field, initial, onSave }) {
+function CopyField({ id, field, platformLabel, initial, onSave }) {
   const [value, setValue] = useState(initial);
   const over = field.max && value.length > field.max;
   const commit = () => {
@@ -65,7 +65,7 @@ function CopyField({ id, field, initial, onSave }) {
         <div className="flex items-center gap-2">
           {field.max && <span className={`text-[10px] font-mono ${over ? 'text-port-error' : 'text-port-text-muted'}`}>{value.length}/{field.max}</span>}
           <button type="button" onClick={() => copyToClipboard(value, `${field.label} copied`)} disabled={!value}
-            aria-label={`Copy ${field.label}`} className="pointer-coarse:min-h-11 pointer-coarse:min-w-11 text-port-text-muted disabled:opacity-40 min-h-[44px] sm:min-h-0 px-1"><Copy size={12} /></button>
+            aria-label={`Copy ${field.label} for ${platformLabel}`} className="pointer-coarse:min-h-11 pointer-coarse:min-w-11 text-port-text-muted disabled:opacity-40 min-h-[44px] sm:min-h-0 px-1"><Copy size={12} /></button>
         </div>
       </div>
       <Input id={id} value={value} rows={field.multiline ? 4 : undefined}
@@ -228,7 +228,7 @@ export default function PublishKitPanel({ project, publishKit, enabledTargets })
             <div className="h-1.5 bg-port-bg rounded overflow-hidden"><div className="h-full bg-port-accent transition-all" style={{ width: `${publishKit.progress}%` }} /></div>
             <div className="flex items-center justify-between">
               <p className="text-xs text-port-text-muted">Encoding — {Math.round(publishKit.progress)}%</p>
-              <button type="button" onClick={publishKit.cancelBuild} className="text-xs text-port-text-muted hover:text-port-text-base px-2 py-1">Cancel</button>
+              <button type="button" onClick={publishKit.cancelBuild} aria-label="Cancel build" className="min-h-11 min-w-11 pointer-fine:sm:min-h-0 pointer-fine:sm:min-w-0 text-xs text-port-text-muted hover:text-port-text-base px-2 py-1">Cancel</button>
             </div>
           </div>
         )}
@@ -363,7 +363,7 @@ export default function PublishKitPanel({ project, publishKit, enabledTargets })
               <fieldset key={platform} className="space-y-1.5 rounded border border-port-border p-2">
                 <legend className="px-1 text-[11px] font-medium">{label}</legend>
                 {fields.map((field) => (
-                  <CopyField key={field.key} id={idFor(`${platform}-${field.key}`)} field={field}
+                  <CopyField key={field.key} id={idFor(`${platform}-${field.key}`)} field={field} platformLabel={label}
                     initial={fieldValue(kit.copy, platform, field)}
                     onSave={(value) => save({ [platform]: { [field.key]: value } })} />
                 ))}
