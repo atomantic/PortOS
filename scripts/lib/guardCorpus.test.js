@@ -35,7 +35,7 @@ const REPO_SPECS = [
   ['.claude'], ['.github/workflows', '.github/actions'], ['server/**/*.test.js', ':!server/lib/browserSuiteGate*.test.js', ':!server/test/guards'],
   ['.'], ['./server'], ['server/'], ['q?.js'], ['[aq]*.js'], ['weird[[]name].js'], [':(exclude)*.md'], ['dir with space'],
 ];
-const SERVER_SPECS = [['*.js', '*.mjs', '*.cjs'], ['*.js', '*.mjs'], ['*.js'], ['routes', 'lib/aiToolkit/routes', 'cos-runner/index.js'], []];
+const SERVER_SPECS = [['*.js', '*.mjs', '*.cjs'], ['*.js', '*.mjs'], ['*.js'], ['routes', 'lib/aiToolkit/routes', 'cos-runner'], []];
 const CLIENT_SPECS = [['src'], []];
 // Shapes the matcher declines: the corpus must hand them to git rather than guess.
 const UNSUPPORTED = [[':(glob)**/*.js'], [':(icase)agents.md'], ['../a.js'], ['weird\\[name].js'], ['[[:alpha:]]*.js']];

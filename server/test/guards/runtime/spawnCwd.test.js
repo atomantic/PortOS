@@ -188,7 +188,8 @@ describe('every cwd-passing spawn pins PWD', () => {
     // If this ever collapses toward zero the scan broke (a rename, a new spawn
     // wrapper) and every assertion below would pass for the wrong reason.
     expect(found.length, 'expected the scan to still find the known spawn sites').toBeGreaterThan(10);
-    expect(found).toContain('cos-runner/index.js');
+    expect(found).toContain('cos-runner/spawnCliRoute.js');
+    expect(found).toContain('cos-runner/spawnTuiRoute.js');
     expect(found).toContain('services/shell.js');
     // The forwarding-wrapper shape specifically — this one is invisible to a
     // scan that only reads inline `cwd:` literals, and missing it is what let an

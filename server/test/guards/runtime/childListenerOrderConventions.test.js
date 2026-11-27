@@ -216,7 +216,7 @@ describe('spawned children get a terminal listener before the next await (#11761
     // renames the spawn helpers.
     const { sites } = scanTree();
     expect(sites).toEqual(expect.arrayContaining([
-      'cos-runner/index.js',
+      'cos-runner/spawnCliRoute.js',
       'services/imageGen/local.js',
       'services/videoGen/spawnWatch.js',
       'services/videoGen/metalWatchdog.js',
