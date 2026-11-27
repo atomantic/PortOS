@@ -5,7 +5,7 @@ import { join } from 'path';
 import { spawn, execFile, execFileSync } from 'node:child_process';
 import { promisify } from 'node:util';
 import { createInterface } from 'node:readline';
-import { describe, expect, it, vi } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import { __cleanupHeldClaims, findSurvivingTrainer, __publishClaim, claimHeavyLocalJob, HEAVY_LOCAL_JOB_STALE_MS } from './heavyJobClaim.js';
 import { maintenance } from './maintenanceAdmission.js';
 
@@ -20,6 +20,8 @@ const withClaimPath = async (run) => {
 };
 
 describe('claimHeavyLocalJob', () => {
+  afterEach(() => vi.useRealTimers());
+
   it('publishes no partial claim while another process writes its candidate', async () => {
     await withClaimPath(async claimPath => {
       const entered = Promise.withResolvers();
@@ -267,18 +269,22 @@ describe('claimHeavyLocalJob', () => {
     });
   });
   it('retries an unstarted claim after both unlink and completion-marker writes fail', async () => {
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
     await withClaimPath(async claimPath => {
       let scans = 0;
       await expect(claimHeavyLocalJob({ kind: 'image', id: 'image', claimPath, survivorCheck: async () => ++scans > 1,
         unlinkClaim: async () => { throw new Error('busy'); }, writeCompletion: async () => { throw new Error('unwritable'); },
         wait: async () => {} })).rejects.toThrow('unwritable');
-      await vi.waitFor(() => expect(existsSync(claimPath)).toBe(false), { timeout: 3000 });
+      expect(existsSync(claimPath)).toBe(true);
+      await vi.advanceTimersToNextTimerAsync();
+      await vi.waitFor(() => expect(existsSync(claimPath)).toBe(false));
       const next = await claimHeavyLocalJob({ kind: 'image', id: 'next', claimPath, survivorCheck: async () => false });
       expect(next.ok).toBe(true);
       await next.release();
     });
   });
   it('retries cleanup when a competing local removal fails after its timer fires', async () => {
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
     await withClaimPath(async claimPath => {
       let scans = 0;
       await expect(claimHeavyLocalJob({ kind: 'image', id: 'first', claimPath, survivorCheck: async () => ++scans > 1,
@@ -289,10 +295,15 @@ describe('claimHeavyLocalJob', () => {
       const second = claimHeavyLocalJob({ kind: 'image', id: 'second', claimPath, survivorCheck: async () => false,
         unlinkClaim: async () => { entered.resolve(); await resume.promise; throw new Error('still busy'); } });
       await entered.promise;
-      try { await new Promise(resolve => setTimeout(resolve, 1200)); }
-      finally { resume.resolve(); }
+      try {
+        await vi.advanceTimersToNextTimerAsync();
+      } finally {
+        resume.resolve();
+      }
       await expect(second).rejects.toThrow('still busy');
-      await vi.waitFor(() => expect(existsSync(claimPath)).toBe(false), { timeout: 4000 });
+      expect(existsSync(claimPath)).toBe(true);
+      await vi.advanceTimersToNextTimerAsync();
+      await vi.waitFor(() => expect(existsSync(claimPath)).toBe(false));
     });
   });
   it('preserves the claim of a live child when the server exits', async () => {

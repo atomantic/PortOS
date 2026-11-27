@@ -83,16 +83,27 @@ describe.skipIf(!runDb)('ensureSchema() boot DDL advisory lock (#5977)', () => {
     let resolved = false;
     let schemaPromise;
 
-    await withLockHolder(async (holder) => {
-      await holder.query('SELECT pg_advisory_lock($1)', [SCHEMA_DDL_ADVISORY_LOCK_KEY]);
+    try {
+      await withLockHolder(async (holder) => {
+        await holder.query('SELECT pg_advisory_lock($1)', [SCHEMA_DDL_ADVISORY_LOCK_KEY]);
 
-      schemaPromise = ensureSchema({ force: true }).then(() => { resolved = true; });
+        schemaPromise = ensureSchema({ force: true });
+        void schemaPromise.then(() => { resolved = true; }, () => {});
 
-      await new Promise((resolve) => setTimeout(resolve, 300));
-      expect(resolved).toBe(false);
-    });
+        await vi.waitFor(async () => {
+          const { rows } = await holder.query(`
+            SELECT pid FROM pg_locks
+            WHERE locktype = 'advisory' AND classid = 0 AND objid = $1::oid AND objsubid = 1
+              AND NOT granted AND pg_backend_pid() = ANY(pg_blocking_pids(pid))
+          `, [SCHEMA_DDL_ADVISORY_LOCK_KEY]);
+          expect(rows).toHaveLength(1);
+        }, { interval: 20, timeout: 5000 });
+        expect(resolved).toBe(false);
+      });
+    } finally {
+      await schemaPromise;
+    }
 
-    await schemaPromise;
     expect(resolved).toBe(true);
   });
 
