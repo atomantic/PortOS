@@ -293,30 +293,40 @@ describe('WalkWorkflow render-lane picker (#4876)', () => {
 
 describe('WalkWorkflow idle anchor preview', () => {
   it('shows the locked directional anchor until the direction has a packaged animation', () => {
+    const onGenerate = vi.fn();
+    const onSubmit = vi.fn((event) => event.preventDefault());
     render(
       <MemoryRouter>
-        <WalkWorkflow
-          record={{ id: 'example-walker' }}
-          reference={{
-            manifest: {
-              mainReference: { locked: true },
-              anchors: [{ direction: 'north-east', status: 'locked', path: 'reference/example-walker-north-east-v1.png' }],
-            },
-          }}
-          walk={{ runs: [], selection: { directions: {} }, walkSet: null }}
-          renders={noRenders()}
-          duration={6}
-          onDurationChange={vi.fn()}
-          onGenerate={vi.fn()}
-          onChanged={vi.fn()}
-        />
+        <form onSubmit={onSubmit}>
+          <WalkWorkflow
+            record={{ id: 'example-walker' }}
+            reference={{
+              manifest: {
+                mainReference: { locked: true },
+                anchors: [{ direction: 'north-east', status: 'locked', path: 'reference/example-walker-north-east-v1.png' }],
+              },
+            }}
+            walk={{ runs: [], selection: { directions: {} }, walkSet: null }}
+            renders={noRenders()}
+            duration={6}
+            onDurationChange={vi.fn()}
+            onGenerate={onGenerate}
+            onChanged={vi.fn()}
+          />
+        </form>
       </MemoryRouter>,
     );
 
     const idle = screen.getByRole('img', { name: 'north-east reference idle pose' });
     expect(idle.getAttribute('src')).toBe('/data/sprites/example-walker/reference/example-walker-north-east-v1.png');
-    expect(screen.getByText('reference idle')).toBeInTheDocument();
-    expect(screen.getByRole('button', { name: 'Generate walk' })).toBeEnabled();
+    expect(screen.getByText('reference idle')).toHaveClass('text-xs', 'text-gray-400');
+    const generate = screen.getByRole('button', { name: 'Generate walk' });
+    expect(generate).toBeEnabled();
+    expect(generate).toHaveAttribute('type', 'button');
+    expect(generate).toHaveClass('pointer-coarse:min-h-11');
+    fireEvent.click(generate);
+    expect(onGenerate).toHaveBeenCalledWith('north-east');
+    expect(onSubmit).not.toHaveBeenCalled();
   });
 
   it('replaces the idle anchor with the packaged walk preview', () => {
