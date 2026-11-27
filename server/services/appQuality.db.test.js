@@ -2,6 +2,7 @@
 import { afterAll, describe, expect, it } from 'vitest';
 import { checkHealth, ensureSchema, query, close } from '../lib/db.js';
 import { requireDbOrSkip } from '../lib/dbTestGate.js';
+import { AUDIT_FRESHNESS_MS } from '../lib/auditQuality.js';
 import { recordAuditQuality, enrichAppsWithQuality, getAppQualityHistory } from './appQuality.js';
 import { buildQualitySnapshot, exportPortosQuality, readDailyQualityRecords, readQualityRecords } from './appQualityFederation.js';
 import { serializeQualitySnapshot } from './appQualitySnapshotFormat.js';
@@ -72,6 +73,13 @@ describe.skipIf(!runDb)('app quality persistence', () => {
     expect(dailyAll.map(row => row.report.score).sort()).toEqual([50, 70, 80]);
     const dailyRecent = await readDailyQualityRecords(`${appId}-history`, 30, now);
     expect(dailyRecent.map(row => row.report.score).sort()).toEqual([70, 80]);
+    const [enriched] = await enrichAppsWithQuality([{ id: `${appId}-history` }], {
+      now: now + AUDIT_FRESHNESS_MS,
+      getPeers: async () => [],
+    });
+    expect(enriched.quality.categories.find(category => category.id === 'privacy')).toMatchObject({
+      agentId: 'tie-b', score: 80, stale: true,
+    });
   });
 
   it('keeps same-day slice re-verifications and qualifying broad runs consistent across live summary, history, and snapshot exports', async () => {
