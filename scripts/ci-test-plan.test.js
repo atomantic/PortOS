@@ -389,6 +389,7 @@ it('keeps document generation and provider inputs out of the render-only browser
   const renderSuites = [
     'server/services/musicVideo/documentRender.browser.test.js',
     'server/services/musicVideo/documentRenderAudioTimeline.browser.test.js',
+    'server/services/musicVideo/documentRenderEffects.browser.test.js',
   ];
   const generation = browserDependencies['server/services/musicVideo/documentRenderGeneration.browser.test.js'];
   const generationInputs = [
@@ -429,6 +430,7 @@ describe('late-bound hubs keep unrelated suites out of browser and DB plans (#17
     expect(planFor(render).browserFiles).toEqual(expect.arrayContaining([
       'server/services/musicVideo/documentRender.browser.test.js',
       'server/services/musicVideo/documentRenderAudioTimeline.browser.test.js',
+      'server/services/musicVideo/documentRenderEffects.browser.test.js',
       'server/services/musicVideo/documentVignette.browser.test.js',
     ]));
     // Reached only through a lazy import, several modules below the suite.
