@@ -11,6 +11,7 @@ import { killWithEscalation } from '../../lib/killWithEscalation.js';
 import { withBackupAssetPublication } from '../../lib/backupSnapshotBoundary.js';
 import { maintenance } from '../../lib/maintenanceAdmission.js';
 import { ServerError } from '../../lib/errorHandler.js';
+import { createRevisionCache } from '../../lib/fileRevisionCache.js';
 import { getProject, listProjects, mutateProjectRecord } from './projects.js';
 import { requireProject } from './requireProject.js';
 import { getHistoryItem } from '../videoGen/history.js';
@@ -36,17 +37,31 @@ async function ownedVideo(filename) {
   return actual;
 }
 
+// A final render can exceed a gigabyte, and every status read, prepare and
+// download verifies it. `fileVersion` already decides whether a file changed
+// during verification, so an unchanged file keeps its hash. A file written in the
+// last few seconds is always re-read: coarse filesystem timestamps could let it
+// change again under the same version.
+const verifiedHashes = createRevisionCache(64);
+const SETTLED_FILE_MS = 2000;
+
 async function fileHash(path, retainedFile = null) {
   // Do not follow a leaf symlink installed after the ownership lookup.
   const file = retainedFile || await open(path, constants.O_RDONLY | (constants.O_NOFOLLOW || 0)).catch(missingFile);
   try {
     const before = await file.stat();
     if (!before.isFile()) throw fail('Unsafe video file');
-    const hash = createHash('sha256');
-    for await (const chunk of file.createReadStream({ autoClose: false, start: 0 })) hash.update(chunk);
+    const version = fileVersion(before);
+    let digest = verifiedHashes.get(path, version);
+    if (!digest) {
+      const hash = createHash('sha256');
+      for await (const chunk of file.createReadStream({ autoClose: false, start: 0 })) hash.update(chunk);
+      digest = hash.digest('hex');
+    }
     const after = await lstat(path).catch(missingFile);
-    if (!after.isFile() || fileVersion(before) !== fileVersion(after)) throw fail('The video file changed during verification; prepare again');
-    return { hash: hash.digest('hex'), version: fileVersion(after) };
+    if (!after.isFile() || version !== fileVersion(after)) throw fail('The video file changed during verification; prepare again');
+    if (Date.now() - Math.max(after.mtimeMs, after.ctimeMs) > SETTLED_FILE_MS) verifiedHashes.set(path, version, digest);
+    return { hash: digest, version };
   } finally { if (!retainedFile) await file.close(); }
 }
 
