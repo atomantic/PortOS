@@ -42,8 +42,9 @@ export const MULTI_TURN_SUITE_FILE = 'MULTI_TURN_SUITE.md';
  *   <what contradicting/caving/forgetting looks like>
  */
 export async function parseMultiTurnSuite() {
-  if (cache.multiTurnTests.data && (Date.now() - cache.multiTurnTests.timestamp) < CACHE_TTL_MS) {
-    return cache.multiTurnTests.data;
+  const entry = cache.multiTurnTests;
+  if (entry.data && (Date.now() - entry.timestamp) < CACHE_TTL_MS) {
+    return entry.data;
   }
 
   const suiteFile = join(DIGITAL_TWIN_DIR, MULTI_TURN_SUITE_FILE);
@@ -70,8 +71,8 @@ export async function parseMultiTurnSuite() {
     });
   }
 
-  cache.multiTurnTests.data = scenarios;
-  cache.multiTurnTests.timestamp = Date.now();
+  entry.data = scenarios;
+  entry.timestamp = Date.now();
 
   return scenarios;
 }

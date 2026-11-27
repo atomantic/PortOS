@@ -25,20 +25,24 @@ export function createPromptsService(config = {}) {
     return existsSync(path) ? JSON.parse(await readFile(path, 'utf-8')) : fallback;
   }
 
-  function loadPrompts() {
-    if (initPromise) return initPromise;
+  async function readPrompts() {
+    const nextConfig = await readState(configPath, { stages: {} });
+    const nextVariables = await readState(variablesPath, { variables: {} });
+    stageConfig = nextConfig;
+    variables = nextVariables;
+    console.log(`📝 Loaded ${Object.keys(stageConfig.stages || {}).length} prompt stages`);
+  }
 
-    // A reload reads after previously queued writes and before new writes on either file.
-    initPromise = Promise.all([configWriteTail, variablesWriteTail]).then(async () => {
-      const nextConfig = await readState(configPath, { stages: {} });
-      const nextVariables = await readState(variablesPath, { variables: {} });
-      stageConfig = nextConfig;
-      variables = nextVariables;
-      console.log(`📝 Loaded ${Object.keys(stageConfig.stages || {}).length} prompt stages`);
-    }).finally(() => {
-      initPromise = undefined;
-    });
-    configWriteTail = variablesWriteTail = initPromise.catch(() => {});
+  function withBothWriteQueues(fn) {
+    const result = Promise.all([configWriteTail, variablesWriteTail]).then(fn);
+    configWriteTail = variablesWriteTail = result.catch(() => {});
+    return result;
+  }
+
+  function loadPrompts() {
+    if (!initPromise) {
+      initPromise = withBothWriteQueues(readPrompts).finally(() => { initPromise = undefined; });
+    }
     return initPromise;
   }
 
@@ -128,6 +132,14 @@ export function createPromptsService(config = {}) {
   return {
     async init() {
       await loadPrompts();
+    },
+
+    withLiveRestore(operation) {
+      return withBothWriteQueues(() => operation(async () => {
+        // A failed read must never leave the old state available to a writer.
+        stageConfig = variables = null;
+        await readPrompts();
+      }));
     },
 
     getStages() {

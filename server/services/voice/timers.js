@@ -31,16 +31,12 @@ const DEDUP_WINDOW_MS = 10_000;
 // between a fire (remove) and a schedule (add) can't drop a timer.
 const active = new Map();
 
-// Serialize snapshot writes onto a single tail so a fire and a schedule can't
-// clobber each other's atomicWrite. The snapshot is taken synchronously at call
-// time; only the write is deferred onto the queue.
+// Hold the complete mutation through persistence, including live file transfers.
 const queueWrite = createFileWriteQueue();
 function persist() {
   const timers = [...active.values()].map(({ handle, ...rec }) => rec);
-  return queueWrite(() =>
-    atomicWrite(STORE_PATH, { version: 1, timers }).catch((err) =>
-      console.error(`❌ voice-timer persist failed: ${err.message}`)
-    )
+  return atomicWrite(STORE_PATH, { version: 1, timers }).catch((err) =>
+    console.error(`❌ voice-timer persist failed: ${err.message}`)
   );
 }
 
@@ -63,6 +59,8 @@ function notify(timer, { overdue = false } = {}) {
 // Fire a timer: drop it from state first (so any concurrent persist reflects the
 // removal), then notify.
 async function fire(timer) {
+  // A timeout queued during a restore belongs to the superseded record.
+  if (active.get(timer.id) !== timer) return;
   active.delete(timer.id);
   await persist();
   await notify(timer);
@@ -77,7 +75,7 @@ async function fire(timer) {
 function arm(timer) {
   const delay = Math.max(0, timer.fireAt - Date.now());
   timer.handle = setTimeout(() => {
-    fire(timer).catch((err) => console.error(`❌ voice-timer fire failed: ${err.message}`));
+    queueWrite(() => fire(timer)).catch((err) => console.error(`❌ voice-timer fire failed: ${err.message}`));
   }, delay);
   timer.handle.unref?.();
   active.set(timer.id, timer);
@@ -101,19 +99,20 @@ export async function scheduleTimer({ totalMs, label } = {}) {
   if (!Number.isFinite(totalMs) || totalMs < 1000 || totalMs > MAX_DURATION_MS) return null;
   // A new snapshot must include restored timers; a failed restore must not
   // arm new work or overwrite the unreadable store. Retry after repair.
-  await initVoiceTimers();
-  const fireAt = Date.now() + totalMs;
-  const dup = findDuplicate(label, fireAt);
-  if (dup) return { id: dup.id, fireAt: dup.fireAt, deduped: true };
-  const timer = { id: randomUUID(), label, fireAt, createdAt: Date.now() };
-  arm(timer);
-  await persist();
-  return { id: timer.id, fireAt, deduped: false };
+  return queueWrite(async () => {
+    await initializeTimers();
+    const fireAt = Date.now() + totalMs;
+    const dup = findDuplicate(label, fireAt);
+    if (dup) return { id: dup.id, fireAt: dup.fireAt, deduped: true };
+    const timer = { id: randomUUID(), label, fireAt, createdAt: Date.now() };
+    arm(timer);
+    await persist();
+    return { id: timer.id, fireAt, deduped: false };
+  });
 }
 
 // Idempotency guard so a double-call (re-init, tests) can't double-arm.
 let initialized = false;
-let initPromise = null;
 
 /**
  * Re-arm persisted timers at boot. Any that came due while the process was down
@@ -121,16 +120,21 @@ let initPromise = null;
  * is then rewritten with only the still-pending timers.
  */
 export async function initVoiceTimers() {
+  return queueWrite(initializeTimers);
+}
+
+async function initializeTimers() {
   if (initialized) return { skipped: true };
-  if (!initPromise) {
-    initPromise = restoreTimers().then((result) => {
-      initialized = true;
-      return result;
-    }).finally(() => {
-      initPromise = null;
-    });
-  }
-  return initPromise;
+  const result = await restoreTimers();
+  initialized = true;
+  return result;
+}
+
+export function withLiveVoiceTimersRestore(operation) {
+  return queueWrite(() => operation(async () => {
+    resetTimers();
+    await initializeTimers();
+  }));
 }
 
 async function restoreTimers() {
@@ -177,10 +181,10 @@ async function restoreTimers() {
   return { armed, fired };
 }
 
-// Test helper — clear all in-memory timers + handles and reset the init guard.
-export function __resetVoiceTimers() {
+function resetTimers() {
   for (const t of active.values()) clearTimeout(t.handle);
   active.clear();
   initialized = false;
-  initPromise = null;
 }
+
+export { resetTimers as __resetVoiceTimers };
