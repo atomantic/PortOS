@@ -9,6 +9,17 @@ FRAMES_PER_SECOND = 25
 SAMPLE_RATE = 16_000
 WINDOW = 50
 BLOCK = 10
+CLEAN = WINDOW - BLOCK
+
+# Stage-specific flow-matching parameters for continuous non-speaking presence:
+# (guidance_scale toward real Wav2Vec2 silence conditioning, latent noise_scale).
+# Stronger silence guidance keeps lips naturally closed while preserving organic
+# neural blinking, breathing, gaze shifts, and subtle head movement.
+IDLE_STAGE_PARAMS = {
+    "idle": (1.8, 1.0),
+    "listening": (1.4, 1.05),
+    "thinking": (1.6, 0.95),
+}
 
 
 def split_heads(tensor, heads):
@@ -99,43 +110,137 @@ def predict(weights, latents, reference, cond, steps, phase):
     return affine("final_layer.linear", modulation(x, shift, gain))
 
 
-def sample(weights, audio, ref_motion, steps=8, seed=66, cancelled=lambda: False):
-    """Yield completed latent blocks; recompute a rolling window (no KV optimization)."""
+def rope_phase(device):
+    positions = torch.arange(WINDOW, device=device, dtype=torch.float32)
+    inv_rope = 10000 ** (-torch.arange(0, 128, 2, device=device, dtype=torch.float32) / 128)
+    angles = positions[:, None] * inv_rope
+    return angles.cos(), angles.sin()
+
+
+def tail_context(motion, audio_window, end_index):
+    """Extract the CLEAN-frame motion and audio suffix ending at end_index."""
+    if end_index >= CLEAN:
+        start = end_index - CLEAN
+        return motion[:, start:end_index].clone(), audio_window[:, start:end_index].clone()
+    pad = CLEAN - end_index
+    m = torch.cat((motion[:, :1].expand(-1, pad, -1), motion[:, :end_index]), dim=1)
+    a = torch.cat((audio_window[:, :1].expand(-1, pad, -1), audio_window[:, :end_index]), dim=1)
+    return m.clone(), a.clone()
+
+
+def denoise_window(weights, audio_window, ref, phase, timeline, generator, clean, history_tail,
+                   guidance=2.0, noise_scale=1.0, cond=None, cancelled=lambda: False):
+    if cond is None:
+        cond = conditioning(weights, torch.cat((torch.zeros_like(audio_window), audio_window), dim=0))
+    noise = torch.randn((1, WINDOW - clean, 512), generator=generator).to(audio_window.device, audio_window.dtype)
+    if noise_scale != 1.0:
+        noise = noise * noise_scale
+    motion = torch.cat((history_tail, noise), dim=1) if clean else noise
+    for current, following in zip(timeline, timeline[1:]):
+        if cancelled():
+            return None
+        t = audio_window.new_zeros((2, WINDOW), dtype=torch.float32)
+        t[:, clean:] = current
+        predicted = predict(weights, motion.expand(2, -1, -1), ref, cond, t, phase)
+        base, guided = predicted.chunk(2, dim=0)
+        field = base + guidance * (guided - base)
+        # For linear flow matching the closed-form step simplifies to
+        # x_next = x + (sigma_next - sigma_current) * v.
+        motion[:, clean:] += ((round(following) - round(current)) / 1000) * field[:, clean:]
+    return motion
+
+
+def sample(weights, audio, ref_motion, steps=8, seed=66, cancelled=lambda: False,
+           state=None, guidance=2.0, on_state=None):
+    """Yield completed latent blocks; recompute a rolling window (no KV optimization).
+
+    When `state=(history_tail, audio_tail)` is provided (each shape `(1, CLEAN, 512)`),
+    prepends `audio_tail` to `audio` so frame 0 of `audio` aligns smoothly onto the
+    previous 40 clean motion frames with no pose snap and exact lip-sync alignment.
+    """
     generator = torch.Generator(device="cpu").manual_seed(seed)
     count = audio.shape[1]
-    positions = torch.arange(WINDOW, device=audio.device, dtype=torch.float32)
-    inv_rope = 10000 ** (-torch.arange(0, 128, 2, device=audio.device, dtype=torch.float32) / 128)
-    angles = positions[:, None] * inv_rope
-    phase = angles.cos(), angles.sin()
+    phase = rope_phase(audio.device)
     # The checkpoint uses unshifted flow matching. Round fractional times to
     # the nearest training sigma (with zero handled explicitly).
     timeline = [1000 * (steps - n) / steps for n in range(steps + 1)]
     ref = ref_motion.expand(2, -1)
-    history = None
+
+    if state is not None:
+        history_tail, audio_tail = state
+        padded = torch.cat((audio_tail.to(audio.device, audio.dtype), audio), dim=1)
+        for offset in range(0, count, BLOCK):
+            audio_window = padded[:, offset:offset + WINDOW]
+            if audio_window.shape[1] < WINDOW:
+                audio_window = torch.cat((audio_window,
+                    audio_window[:, -1:].expand(-1, WINDOW - audio_window.shape[1], -1)), dim=1)
+            motion = denoise_window(weights, audio_window, ref, phase, timeline, generator,
+                                    CLEAN, history_tail, guidance=guidance, cancelled=cancelled)
+            if motion is None:
+                return
+            take = min(BLOCK, count - offset)
+            history_tail, audio_tail = tail_context(motion, audio_window, CLEAN + take)
+            if on_state is not None:
+                on_state((history_tail, audio_tail))
+            yield motion[:, CLEAN:CLEAN + take]
+        return
+
+    history_tail = None
     for start in range(0, max(WINDOW, count) - WINDOW + BLOCK, BLOCK):
-        if start and start + WINDOW - BLOCK >= count:
+        if start and start + CLEAN >= count:
             break
         audio_window = audio[:, start:start + WINDOW]
         if audio_window.shape[1] < WINDOW:
             audio_window = torch.cat((audio_window,
                 audio_window[:, -1:].expand(-1, WINDOW - audio_window.shape[1], -1)), dim=1)
-        cond = conditioning(weights, torch.cat((torch.zeros_like(audio_window), audio_window), dim=0))
-        clean = WINDOW - BLOCK if history is not None else 0
-        noise = torch.randn((1, WINDOW - clean, 512), generator=generator).to(audio.device, audio.dtype)
-        motion = torch.cat((history[:, -clean:], noise), dim=1) if clean else noise
-        for current, following in zip(timeline, timeline[1:]):
-            if cancelled():
-                return
-            t = audio.new_zeros((2, WINDOW), dtype=torch.float32)
-            t[:, clean:] = current
-            predicted = predict(weights, motion.expand(2, -1, -1), ref, cond, t, phase)
-            base, guided = predicted.chunk(2, dim=0)
-            field = base + 2 * (guided - base)
-            # For linear flow matching the closed-form step simplifies to
-            # x_next = x + (sigma_next - sigma_current) * v.
-            motion[:, clean:] += ((round(following) - round(current)) / 1000) * field[:, clean:]
-        history = motion
-        yield motion[:, clean:min(WINDOW, count - start)]
+        clean = CLEAN if history_tail is not None else 0
+        motion = denoise_window(weights, audio_window, ref, phase, timeline, generator,
+                                clean, history_tail, guidance=guidance, cancelled=cancelled)
+        if motion is None:
+            return
+        end_index = min(WINDOW, count - start)
+        history_tail, audio_tail = tail_context(motion, audio_window, end_index)
+        if on_state is not None:
+            on_state((history_tail, audio_tail))
+        yield motion[:, clean:end_index]
+
+
+def idle_blocks(weights, silence_window, ref_motion, *, steps=8, seed=66, stage="idle",
+                cancelled=lambda: False, state=None, max_blocks=150, on_state=None):
+    """Continuously yield non-speaking neural motion blocks conditioned on silence."""
+    guidance, noise_scale = IDLE_STAGE_PARAMS.get(stage, IDLE_STAGE_PARAMS["idle"])
+    generator = torch.Generator(device="cpu").manual_seed(seed)
+    phase = rope_phase(silence_window.device)
+    timeline = [1000 * (steps - n) / steps for n in range(steps + 1)]
+    ref = ref_motion.expand(2, -1)
+    silence_cond = conditioning(weights, torch.cat((torch.zeros_like(silence_window), silence_window), dim=0))
+    silence_block = silence_window[:, -BLOCK:]
+
+    history_tail, audio_tail = state if state is not None else (None, None)
+    # Count how many trailing blocks of prior speech audio remain before audio_tail
+    # is purely silence and can reuse the cached `silence_cond` directly.
+    transition_blocks = (CLEAN // BLOCK) if audio_tail is not None else 0
+
+    for _ in range(max_blocks):
+        if cancelled():
+            return
+        if history_tail is not None and audio_tail is not None and transition_blocks > 0:
+            audio_window = torch.cat((audio_tail.to(silence_window.device, silence_window.dtype), silence_block), dim=1)
+            cond = None
+            transition_blocks -= 1
+        else:
+            audio_window = silence_window
+            cond = silence_cond
+        clean = CLEAN if history_tail is not None else 0
+        motion = denoise_window(weights, audio_window, ref, phase, timeline, generator,
+                                clean, history_tail, guidance=guidance, noise_scale=noise_scale,
+                                cond=cond, cancelled=cancelled)
+        if motion is None:
+            return
+        history_tail, audio_tail = tail_context(motion, audio_window, WINDOW)
+        if on_state is not None:
+            on_state((history_tail, audio_tail))
+        yield motion[:, clean:WINDOW]
 
 
 def audio_latents(model, waveform, weights):

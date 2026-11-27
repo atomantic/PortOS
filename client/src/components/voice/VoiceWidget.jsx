@@ -3,7 +3,6 @@ import { createPortal } from 'react-dom';
 import { Link, useNavigate } from 'react-router';
 import VoiceCallConsole from './VoiceCallConsole';
 import SatPhoneHandset from './SatPhoneHandset';
-import { useAvatarMode } from './useAvatarMode';
 import { useAvatarRuntime } from './useAvatarRuntime';
 import { useSidebarContext } from '../SidebarContext';
 import { Mic, MicOff, Brain, Volume2, VolumeX, Square, Trash2, ChevronDown, ChevronUp, Send, Infinity as InfinityIcon, NotebookPen, X, EyeOff, Monitor, MonitorOff, Radio, Maximize2 } from 'lucide-react';
@@ -388,7 +387,6 @@ export default function VoiceWidget({ config, claimHeld, consoleHost }) {
     };
   }, []);
 
-  const generativeAvatar = useAvatarMode();
   const floatingFullVisible = enabled && !hidden && !consoleHost && visualMode === 'full';
   const {
     data: floatingAvatarData,
@@ -396,7 +394,7 @@ export default function VoiceWidget({ config, claimHeld, consoleHost }) {
     updateData: updateFloatingAvatarData,
     refetch: refetchFloatingAvatar,
   } = useAvatarRuntime(floatingFullVisible && floatingAvatar);
-  const runningFloatingAvatar = generativeAvatar && !floatingAvatarError && floatingAvatarData?.supported && floatingAvatarData.phase === 'running';
+  const runningFloatingAvatar = Boolean(!floatingAvatarError && floatingAvatarData?.supported && floatingAvatarData.phase === 'running');
 
   // Auto-scroll to bottom on new content
   useEffect(() => {

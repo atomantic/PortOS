@@ -207,8 +207,11 @@ export default function VoiceLlmSection({ cfg, patch, inputCls, traitsSyncRef })
             patch('llm.model', modelId);
             patch('llm.visionModel', 'auto');
           }}
-          onRefresh={!providerMissing && apiProviders.length > 0 ? () => handleRefreshModels(llmProvider) : undefined}
-          refreshing={refreshingModels}
+          onSetupComplete={({ provider: nextProvider, model: nextModel }) => {
+            patch('llm.provider', nextProvider);
+            patch('llm.model', nextModel);
+            patch('llm.visionModel', 'auto');
+          }}
         />
       </div>
 

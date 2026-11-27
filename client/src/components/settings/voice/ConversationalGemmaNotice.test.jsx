@@ -1,13 +1,23 @@
 import { describe, it, expect, beforeEach, vi } from 'vitest';
-import { fireEvent, render, screen } from '@testing-library/react';
+import { fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { MemoryRouter } from 'react-router';
 
 const mocks = vi.hoisted(() => ({
-  checkConversationalGemmaAccess: vi.fn(),
+  getConversationalGemmaSetupStatus: vi.fn(),
+  startConversationalGemmaSetup: vi.fn(),
+  cancelConversationalGemmaSetup: vi.fn(),
 }));
 
 vi.mock('../../../services/apiLocalLlm.js', () => ({
-  checkConversationalGemmaAccess: mocks.checkConversationalGemmaAccess,
+  getConversationalGemmaSetupStatus: mocks.getConversationalGemmaSetupStatus,
+  startConversationalGemmaSetup: mocks.startConversationalGemmaSetup,
+  cancelConversationalGemmaSetup: mocks.cancelConversationalGemmaSetup,
+}));
+vi.mock('../../../hooks/useSocketResource.js', () => ({
+  useSocketResource: vi.fn((_fetcher, opts) => {
+    const data = opts?.enabled ? mocks.getConversationalGemmaSetupStatus() : null;
+    return { data, updateData: vi.fn() };
+  }),
 }));
 vi.mock('../../imageGen/HfTokenBanner.jsx', () => ({
   default: () => <div data-testid="hf-token-banner">HF Token Banner</div>,
@@ -18,10 +28,26 @@ import ConversationalGemmaNotice from './ConversationalGemmaNotice';
 describe('ConversationalGemmaNotice', () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    mocks.getConversationalGemmaSetupStatus.mockReturnValue({
+      supported: true,
+      llamaInstalled: false,
+      ggufExists: false,
+      running: false,
+      phase: 'idle',
+      detail: '',
+      error: '',
+      accessStatus: null,
+    });
   });
 
-  it('shows actionable local and external install steps plus HF access check when no provider serves it', async () => {
-    mocks.checkConversationalGemmaAccess.mockResolvedValue({ status: 'ready' });
+  it('offers one-click automated llama.cpp + Conversational Gemma setup when no provider serves it', async () => {
+    mocks.startConversationalGemmaSetup.mockResolvedValue({
+      supported: true,
+      running: true,
+      phase: 'installing-llama',
+      detail: 'Installing llama.cpp…',
+      percent: 10,
+    });
     render(
       <MemoryRouter>
         <ConversationalGemmaNotice
@@ -32,12 +58,54 @@ describe('ConversationalGemmaNotice', () => {
       </MemoryRouter>,
     );
 
-    expect(screen.getByText(/How to install & enable Conversational Gemma 4 31B/)).toBeInTheDocument();
-    expect(screen.getByRole('link', { name: 'llama.cpp runtime' })).toHaveAttribute('href', '/models/llms-runtimes');
-    expect(screen.getByRole('link', { name: 'Local LLMs' })).toHaveAttribute('href', '/models/llms');
+    const btn = screen.getByRole('button', { name: 'Use llama.cpp + Conversational Gemma 4 31B' });
+    fireEvent.click(btn);
+    await waitFor(() => expect(mocks.startConversationalGemmaSetup).toHaveBeenCalledTimes(1));
+    await waitFor(() => expect(btn).not.toBeDisabled());
+  });
 
-    fireEvent.click(screen.getByRole('button', { name: 'Check Hugging Face access' }));
-    expect(await screen.findByText(/Hugging Face confirmed download access/)).toBeInTheDocument();
+  it('shows Start shortcut when local Q8_0 GGUF already exists on disk', () => {
+    mocks.getConversationalGemmaSetupStatus.mockReturnValue({
+      supported: true,
+      llamaInstalled: true,
+      ggufExists: true,
+      running: false,
+      phase: 'idle',
+    });
+    render(
+      <MemoryRouter>
+        <ConversationalGemmaNotice
+          apiProviders={[{ id: 'ollama', name: 'Ollama', models: [] }]}
+          selectedProviderId="ollama"
+          selectedModelId="auto"
+        />
+      </MemoryRouter>,
+    );
+
+    expect(screen.getByRole('button', { name: 'Start llama.cpp + Conversational Gemma' })).toBeInTheDocument();
+  });
+
+  it('renders inline HF token banner when setup needs gated checkpoint access', () => {
+    mocks.getConversationalGemmaSetupStatus.mockReturnValue({
+      supported: true,
+      llamaInstalled: true,
+      ggufExists: false,
+      running: false,
+      phase: 'failed',
+      error: 'Save a Hugging Face read token.',
+      accessStatus: 'token-required',
+    });
+    render(
+      <MemoryRouter>
+        <ConversationalGemmaNotice
+          apiProviders={[{ id: 'ollama', name: 'Ollama', models: [] }]}
+          selectedProviderId="ollama"
+          selectedModelId="auto"
+        />
+      </MemoryRouter>,
+    );
+
+    expect(screen.getByTestId('hf-token-banner')).toBeInTheDocument();
   });
 
   it('offers a one-click provider switch when another connected API provider serves it', () => {
@@ -47,7 +115,7 @@ describe('ConversationalGemmaNotice', () => {
         <ConversationalGemmaNotice
           apiProviders={[
             { id: 'lmstudio', name: 'LM Studio', models: ['gemma4:31b'] },
-            { id: 'local-llama', name: 'Local llama.cpp', models: ['Trelis/gemma-4-31B-it-conversational'] },
+            { id: 'llama-server', name: 'llama.cpp (local)', models: ['Trelis/gemma-4-31B-it-conversational'] },
           ]}
           selectedProviderId="lmstudio"
           selectedModelId="auto"
@@ -56,8 +124,8 @@ describe('ConversationalGemmaNotice', () => {
       </MemoryRouter>,
     );
 
-    fireEvent.click(screen.getByRole('button', { name: 'Switch to Local llama.cpp' }));
-    expect(onSwitch).toHaveBeenCalledWith('local-llama', 'Trelis/gemma-4-31B-it-conversational');
+    fireEvent.click(screen.getByRole('button', { name: 'Switch to llama.cpp (local)' }));
+    expect(onSwitch).toHaveBeenCalledWith('llama-server', 'Trelis/gemma-4-31B-it-conversational');
   });
 
   it('offers one-click selection when the selected provider serves it', () => {
@@ -66,9 +134,9 @@ describe('ConversationalGemmaNotice', () => {
       <MemoryRouter>
         <ConversationalGemmaNotice
           apiProviders={[
-            { id: 'local-llama', name: 'Local llama.cpp', models: ['trelis/gemma-4-31b-it-conversational'] },
+            { id: 'llama-server', name: 'llama.cpp (local)', models: ['trelis/gemma-4-31b-it-conversational'] },
           ]}
-          selectedProviderId="local-llama"
+          selectedProviderId="llama-server"
           selectedModelId="auto"
           onSelectModel={onSelect}
         />

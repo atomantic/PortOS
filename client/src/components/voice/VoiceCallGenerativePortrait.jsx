@@ -1,15 +1,26 @@
 import { useEffect, useRef, useState } from 'react';
 import portraitUrl from './call-portrait.webp';
 import { bindVoiceOutputVisualizer } from '../../services/voiceClient';
-import { streamVoiceAvatar } from '../../services/apiVoiceAvatar';
-import {
-  PORTRAIT_SIZE,
-  createIdleMotionState,
-  stepIdleMotion,
-  renderLivingPortrait,
-} from './avatarIdleAnimator';
+import { streamVoiceAvatar, streamVoiceAvatarIdle } from '../../services/apiVoiceAvatar';
 
-function animateWav(canvas, wav, onStop, onUnavailable) {
+const IDLE_STAGES = new Set(['idle', 'listening', 'thinking']);
+const FRAME_INTERVAL_MS = 40; // 25 fps
+const MAX_IDLE_QUEUE = 20;
+
+const normalizeIdleStage = (stage) => (IDLE_STAGES.has(stage) ? stage : 'idle');
+
+function decodeAndPaint(canvas, jpeg, isStillValid, onPainted) {
+  const image = new Image();
+  image.src = 'data:image/jpeg;base64,' + jpeg;
+  return image.decode().then(() => {
+    if (!isStillValid()) return;
+    canvas.getContext('2d')?.drawImage(image, 0, 0, 512, 512);
+    canvas.style.visibility = 'visible';
+    onPainted?.();
+  }).catch(() => {});
+}
+
+function animateWav(canvas, wav, { keepFrameOnStop, onPainted, onStop, onUnavailable }) {
   const abort = new AbortController();
   const frames = new Map();
   const { promise: ready, resolve: primed } = Promise.withResolvers();
@@ -32,18 +43,19 @@ function animateWav(canvas, wav, onStop, onUnavailable) {
   const draw = (clock) => {
     const target = Math.floor(clock() * 25);
     const index = Math.min(target, latest);
-    if (target - drawn > 5) canvas.style.visibility = 'hidden';
+    if (target - drawn > 5 && !keepFrameOnStop()) canvas.style.visibility = 'hidden';
     if (!loading && index > drawn && target - index <= 3 && frames.has(index)) {
-      const image = new Image();
       loading = true;
-      image.src = 'data:image/jpeg;base64,' + frames.get(index);
-      image.decode().then(() => {
-        if (ended || Math.floor(clock() * 25) - index > 5) return;
-        canvas.getContext('2d')?.drawImage(image, 0, 0, 512, 512);
-        canvas.style.visibility = 'visible';
-        drawn = index;
-        for (const key of frames.keys()) if (key <= index) frames.delete(key);
-      }).catch(() => {}).finally(() => { loading = false; });
+      decodeAndPaint(
+        canvas,
+        frames.get(index),
+        () => !ended && Math.floor(clock() * 25) - index <= 5,
+        () => {
+          drawn = index;
+          onPainted?.();
+          for (const key of frames.keys()) if (key <= index) frames.delete(key);
+        },
+      ).finally(() => { loading = false; });
     }
     frame = requestAnimationFrame(() => draw(clock));
   };
@@ -57,128 +69,194 @@ function animateWav(canvas, wav, onStop, onUnavailable) {
       abort.abort();
       primed();
       cancelAnimationFrame(frame);
-      canvas.style.visibility = 'hidden';
+      if (!keepFrameOnStop()) canvas.style.visibility = 'hidden';
       onStop();
     },
   };
 }
 
 export default function VoiceCallGenerativePortrait({ running, fill = false, stage = 'idle' }) {
-  const imgRef = useRef(null);
-  const idleCanvas = useRef(null);
   const canvas = useRef(null);
-  const stageRef = useRef(stage);
-  stageRef.current = stage;
-  const speechActiveRef = useRef(false);
+  const idleStage = normalizeIdleStage(stage);
+  const idleStageRef = useRef(idleStage);
+  idleStageRef.current = idleStage;
   const [unavailable, setUnavailable] = useState(false);
 
-  // Living idle portrait loop: breathing, periodic sighs, natural blinking,
-  // subtle eye gaze saccades, and stage-aware posture while not actively
-  // streaming AvatarForcing speech frames. Respects prefers-reduced-motion.
+  // Drive continuous real AvatarForcing neural frames whenever the model is
+  // running (idle, listening, thinking, and speaking) on the same 512x512 canvas.
+  // Speech immediately preempts idle and resumes continuous idle seamlessly
+  // afterward with zero snap back to the static placeholder image.
   useEffect(() => {
-    const target = idleCanvas.current;
-    const img = imgRef.current;
-    if (!target || !img) return undefined;
+    const target = canvas.current;
+    if (!running || !target) {
+      setUnavailable(false);
+      if (target) target.style.visibility = 'hidden';
+      return undefined;
+    }
+
     const motion = window.matchMedia?.('(prefers-reduced-motion: reduce)');
-    const ctx = target.getContext?.('2d');
-    if (!ctx) return undefined;
-
-    const idleState = createIdleMotionState();
-    let rafId = 0;
-    let lastTs = 0;
     let disposed = false;
+    let speechAnimation;
+    let idleAbort;
+    let idleRetryTimer;
+    let idleRaf = 0;
+    let idleLoading = false;
+    let lastIdleDrawAt = 0;
+    let hasPaintedFrame = false;
+    const idleQueue = [];
 
-    const stopLoop = () => {
-      if (rafId) {
-        cancelAnimationFrame(rafId);
-        rafId = 0;
+    const stopIdlePlayback = () => {
+      if (idleRaf) {
+        cancelAnimationFrame(idleRaf);
+        idleRaf = 0;
       }
-      lastTs = 0;
+      idleQueue.length = 0;
+      idleLoading = false;
     };
 
-    const tick = (ts) => {
-      if (disposed) return;
-      if (motion?.matches) {
-        target.style.visibility = 'hidden';
-        stopLoop();
+    const stopIdleStream = () => {
+      clearTimeout(idleRetryTimer);
+      idleRetryTimer = undefined;
+      if (idleAbort) {
+        idleAbort.abort();
+        idleAbort = undefined;
+      }
+      stopIdlePlayback();
+    };
+
+    const paintIdleTick = (now) => {
+      if (disposed || speechAnimation || motion?.matches || document.hidden) {
+        idleRaf = 0;
         return;
       }
-      if (!document.hidden && !speechActiveRef.current && img.complete && img.naturalWidth > 0) {
-        const dt = lastTs ? Math.min(0.1, (ts - lastTs) / 1000) : 0.016;
-        lastTs = ts;
-        const pose = stepIdleMotion(idleState, dt, stageRef.current);
-        renderLivingPortrait(ctx, img, pose);
-        if (target.style.visibility !== 'visible') target.style.visibility = 'visible';
+      if (!idleLoading && idleQueue.length > 0 && now - lastIdleDrawAt >= FRAME_INTERVAL_MS - 4) {
+        const jpeg = idleQueue.shift();
+        idleLoading = true;
+        lastIdleDrawAt = now;
+        decodeAndPaint(
+          target,
+          jpeg,
+          () => !disposed && !speechAnimation && !motion?.matches,
+          () => { hasPaintedFrame = true; },
+        ).finally(() => { idleLoading = false; });
+      }
+      if (idleAbort || idleQueue.length > 0) {
+        idleRaf = requestAnimationFrame(paintIdleTick);
       } else {
-        lastTs = ts;
+        idleRaf = 0;
       }
-      rafId = requestAnimationFrame(tick);
     };
 
-    const syncMotion = () => {
-      if (disposed) return;
+    const startIdleStream = () => {
+      if (disposed || speechAnimation || motion?.matches || document.hidden) return;
+      stopIdleStream();
+      const abort = new AbortController();
+      idleAbort = abort;
+      let receivedAny = false;
+      if (!idleRaf) idleRaf = requestAnimationFrame(paintIdleTick);
+
+      streamVoiceAvatarIdle({
+        stage: idleStageRef.current,
+        signal: abort.signal,
+        onFrame: ({ jpeg }) => {
+          if (abort.signal.aborted || typeof jpeg !== 'string') return;
+          receivedAny = true;
+          setUnavailable(false);
+          if (idleQueue.length >= MAX_IDLE_QUEUE) idleQueue.shift();
+          idleQueue.push(jpeg);
+          if (!idleRaf) idleRaf = requestAnimationFrame(paintIdleTick);
+        },
+      }).then(() => {
+        if (disposed || abort.signal.aborted || speechAnimation || motion?.matches || document.hidden) return;
+        idleAbort = undefined;
+        // Seamlessly continue the next 60s block (or retry briefly if yielded during speech handoff).
+        idleRetryTimer = setTimeout(startIdleStream, receivedAny ? 20 : 1200);
+      }).catch(() => {
+        if (disposed || abort.signal.aborted || speechAnimation || motion?.matches || document.hidden) return;
+        idleAbort = undefined;
+        idleRetryTimer = setTimeout(startIdleStream, 2000);
+      });
+    };
+
+    const canKeepCanvas = () => !disposed && !motion?.matches && hasPaintedFrame;
+
+    const detach = bindVoiceOutputVisualizer(wav => {
+      setUnavailable(false);
+      if (motion?.matches) return undefined;
+      speechAnimation?.stop();
+      stopIdleStream();
+      const anim = animateWav(target, wav, {
+        keepFrameOnStop: canKeepCanvas,
+        onPainted: () => { hasPaintedFrame = true; },
+        onStop: () => {
+          if (speechAnimation === anim) speechAnimation = undefined;
+          if (!disposed && !motion?.matches && !document.hidden) {
+            startIdleStream();
+          }
+        },
+        onUnavailable: () => {
+          setUnavailable(true);
+        },
+      });
+      speechAnimation = anim;
+      return anim;
+    });
+
+    const onMotionChange = () => {
       if (motion?.matches) {
+        stopIdleStream();
+        speechAnimation?.stop();
+        hasPaintedFrame = false;
         target.style.visibility = 'hidden';
-        stopLoop();
-      } else if (!rafId) {
-        rafId = requestAnimationFrame(tick);
+      } else if (!speechAnimation && !document.hidden) {
+        startIdleStream();
       }
     };
 
-    const onLoad = () => syncMotion();
-    img.addEventListener('load', onLoad);
-    motion?.addEventListener?.('change', syncMotion);
-    syncMotion();
+    const onVisibilityChange = () => {
+      if (document.hidden) {
+        stopIdleStream();
+      } else if (!speechAnimation && !motion?.matches) {
+        startIdleStream();
+      }
+    };
+
+    const onStageChange = () => {
+      if (!speechAnimation && !motion?.matches && !document.hidden) {
+        startIdleStream();
+      }
+    };
+
+    target._restartIdleStage = onStageChange;
+    motion?.addEventListener?.('change', onMotionChange);
+    document.addEventListener('visibilitychange', onVisibilityChange);
+    if (!motion?.matches && !document.hidden) {
+      startIdleStream();
+    } else {
+      target.style.visibility = 'hidden';
+    }
 
     return () => {
       disposed = true;
-      stopLoop();
-      img.removeEventListener('load', onLoad);
-      motion?.removeEventListener?.('change', syncMotion);
-    };
-  }, []);
-
-  // AvatarForcing live speech frame stream layered above the living idle canvas
-  useEffect(() => {
-    if (!running) {
-      speechActiveRef.current = false;
-      return undefined;
-    }
-    const motion = window.matchMedia('(prefers-reduced-motion: reduce)');
-    let animation;
-    const detach = bindVoiceOutputVisualizer(wav => {
-      setUnavailable(false);
-      if (motion.matches) return undefined;
-      animation?.stop();
-      speechActiveRef.current = true;
-      animation = animateWav(
-        canvas.current,
-        wav,
-        () => {
-          animation = undefined;
-          speechActiveRef.current = false;
-        },
-        () => {
-          speechActiveRef.current = false;
-          setUnavailable(true);
-        },
-      );
-      return animation;
-    });
-    const reduce = () => { if (motion.matches) animation?.stop(); };
-    motion.addEventListener('change', reduce);
-    return () => {
+      delete target._restartIdleStage;
       detach();
-      motion.removeEventListener('change', reduce);
-      animation?.stop();
-      speechActiveRef.current = false;
+      motion?.removeEventListener?.('change', onMotionChange);
+      document.removeEventListener('visibilitychange', onVisibilityChange);
+      stopIdleStream();
+      speechAnimation?.stop();
+      target.style.visibility = 'hidden';
     };
   }, [running]);
 
+  // Restart continuous idle with updated posture/guidance when stage changes
+  // between idle, listening, and thinking.
+  useEffect(() => {
+    if (running) canvas.current?._restartIdleStage?.();
+  }, [running, idleStage]);
+
   return <div className={fill ? 'w-full max-w-full' : 'w-[min(64vw,15rem)] max-w-full'}>
     <div className={`relative aspect-square overflow-hidden bg-port-card ${fill ? 'w-full' : 'rounded-lg shadow-lg'}`}>
-      <img ref={imgRef} src={portraitUrl} alt="Radio operator portrait" className="block size-full object-cover" />
-      <canvas ref={idleCanvas} role="presentation" data-idle-portrait width={PORTRAIT_SIZE} height={PORTRAIT_SIZE} style={{ visibility: 'hidden' }} className="pointer-events-none absolute inset-0 size-full" />
+      <img src={portraitUrl} alt="Radio operator portrait" className="block size-full object-cover" />
       <canvas ref={canvas} role="presentation" width={512} height={512} style={{ visibility: 'hidden' }} className="pointer-events-none absolute inset-0 size-full" />
     </div>
     {running && unavailable && <p role="status" className="px-2 pt-1.5 pb-1 text-center font-mono text-[11px] text-port-text-muted">

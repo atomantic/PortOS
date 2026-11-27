@@ -170,8 +170,11 @@ export default function VoiceLlmQuickPicker({
         selectedModelId={model}
         onSelectModel={(modelId) => saveLlm(provider, modelId)}
         onSwitchProviderAndModel={(providerId, modelId) => saveLlm(providerId, modelId)}
-        onRefresh={!providerMissing && apiProviders.length > 0 ? handleRefreshModels : undefined}
-        refreshing={refreshing}
+        onSetupComplete={(next) => {
+          loadProviders();
+          onSaved?.(next);
+          toast.success(`Voice LLM set to ${CONVERSATIONAL_GEMMA.name}`);
+        }}
       />
     </section>
   );

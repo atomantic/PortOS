@@ -48,6 +48,11 @@ const mocks = vi.hoisted(() => {
 });
 
 vi.mock('../../services/socket', () => ({ default: mocks.socket }));
+vi.mock('../../services/apiLocalLlm.js', () => ({
+  getConversationalGemmaSetupStatus: vi.fn().mockResolvedValue({ supported: true, llamaInstalled: false, ggufExists: false, running: false, phase: 'idle' }),
+  startConversationalGemmaSetup: vi.fn(),
+  cancelConversationalGemmaSetup: vi.fn(),
+}));
 vi.mock('../../utils/lazyWithReload', () => ({ importWithRetry: (load) => mocks.loadWidget(load) }));
 vi.mock('../../utils/staleChunkReload', () => ({
   isStaleChunkError: (err) => err?.message === 'Failed to fetch dynamically imported module',

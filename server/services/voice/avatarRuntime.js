@@ -111,3 +111,8 @@ export function renderAvatar(wav, options) {
   if (!worker || phase !== 'running') throw avatarError('Start AvatarForcing before animating.', 503);
   return worker.render(wav, options);
 }
+
+export function renderAvatarIdle(options) {
+  if (!worker || phase !== 'running') throw avatarError('Start AvatarForcing before animating.', 503);
+  return worker.renderIdle(options);
+}

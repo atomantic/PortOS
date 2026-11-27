@@ -12,6 +12,11 @@ import { searchHuggingFaceModels, enrichCatalogWithVariants, applyMeasuredFit } 
 import { getMeasuredFits } from '../../services/localModelAssessmentStore.js'
 import { listModels, listVisionModels, listToolUseModels, listContextPlans } from '../../services/localLlm.js'
 import { checkConversationalGemmaAccess } from '../../services/voice/conversationalGemmaAccess.js'
+import {
+  cancelConversationalGemmaSetup,
+  getConversationalGemmaSetupStatus,
+  startConversationalGemmaSetup,
+} from '../../services/voice/conversationalGemmaSetup.js'
 import { listUserModels } from '../../services/audioModels.js'
 import { ENGINES } from '../../services/pipeline/musicGen.js'
 
@@ -20,6 +25,20 @@ const router = Router()
 // Explicit operator action only; opening the model catalog never probes credentials.
 router.post('/conversational-gemma/access', asyncHandler(async (_req, res) => {
   res.json(await checkConversationalGemmaAccess())
+}))
+
+// Machine-local disk/binary status for automated llama.cpp + Conversational Gemma setup.
+router.get('/conversational-gemma/status', asyncHandler(async (_req, res) => {
+  res.json(await getConversationalGemmaSetupStatus())
+}))
+
+// One-click install/convert/start/select for Conversational Gemma 4 31B via llama.cpp.
+router.post('/conversational-gemma/setup', asyncHandler(async (_req, res) => {
+  res.json(await startConversationalGemmaSetup())
+}))
+
+router.post('/conversational-gemma/cancel', asyncHandler(async (_req, res) => {
+  res.json(await cancelConversationalGemmaSetup())
 }))
 
 // GET /api/local-llm/vision-models — vision-capable installed models across

@@ -95,7 +95,7 @@ describe('provider sample generator', () => {
       'codex', 'codex-tui', 'codex-ollama', 'codex-lmstudio',
       'claude-code-tui', 'claude-code-tui-bedrock',
       'antigravity-tui', 'antigravity-cli',
-      'cerebras', 'lmstudio', 'ollama', 'mtplx', 'mkserve', 'splash', 'slotstream',
+      'cerebras', 'lmstudio', 'ollama', 'mtplx', 'mkserve', 'splash', 'slotstream', 'llama-server',
       'grok', 'grok-cli', 'grok-tui', 'kimi-cli', 'kimi-tui', 'cursor-cli', 'cursor-tui',
     ];
     expect([...PROVIDER_ORDER].sort()).toEqual([...SHIPPED_IDS].sort());

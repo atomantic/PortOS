@@ -1330,6 +1330,20 @@
       "envVars": {},
       "secretEnvVars": []
     },
+    "llama-server": {
+      "id": "llama-server",
+      "name": "llama.cpp (local)",
+      "type": "api",
+      "endpoint": "http://127.0.0.1:5568/v1",
+      "apiKey": "",
+      "llamaBacked": true,
+      "models": [],
+      "defaultModel": null,
+      "timeout": 300000,
+      "enabled": false,
+      "envVars": {},
+      "secretEnvVars": []
+    },
     "grok": {
       "id": "grok",
       "name": "xAI Grok",

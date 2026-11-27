@@ -3,7 +3,7 @@ import { getHfToken } from '../hfToken.js';
 import { ServerError } from '../../lib/errorHandler.js';
 import { CONVERSATIONAL_GEMMA } from '../../lib/voiceModelCatalog.js';
 
-const REVISION = '29055ace878329e2f8b216ecd7edcaefccb27969';
+const REVISION = CONVERSATIONAL_GEMMA.revision;
 
 export async function checkConversationalGemmaAccess({ readToken = getHfToken, fetchHead = fetch } = {}) {
   const token = await readToken();

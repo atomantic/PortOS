@@ -22,6 +22,10 @@ export const voiceAvatarWaveSchema = z.custom(wav => Buffer.isBuffer(wav) && wav
   wav.length <= MAX_AVATAR_WAV_BYTES && wav.toString('ascii', 0, 4) === 'RIFF' &&
   wav.toString('ascii', 8, 12) === 'WAVE', 'Expected PCM WAV audio.');
 
+export const voiceAvatarIdleSchema = z.object({
+  stage: z.enum(['idle', 'listening', 'thinking']).default('idle'),
+}).strict();
+
 export const facetimeActionSchema = z.object({}).strict();
 
 export const voiceConfigPatchSchema = z.object({

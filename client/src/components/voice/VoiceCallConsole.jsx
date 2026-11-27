@@ -4,7 +4,6 @@ import AvatarRuntimeSettings from './AvatarRuntimeSettings';
 import SatPhoneHandset from './SatPhoneHandset';
 import VoiceLlmQuickPicker from './VoiceLlmQuickPicker';
 import { useAvatarRuntime } from './useAvatarRuntime';
-import { useAvatarMode } from './useAvatarMode';
 import { safeReadStorage, safeWriteStorage } from '../../lib/safeStorage';
 
 const DISPLAY_KEY = 'portos.voice.callDisplay';
@@ -21,7 +20,7 @@ function StationTelemetry({
   onToggleAvatarSettings,
 }) {
   const captureMode = !canChangeMicMode ? 'Web Speech' : handsFree ? 'Hands-free (VOX)' : 'Push-to-talk';
-  const avatarStatus = !avatar ? 'Audio only' : runningAvatar ? 'AvatarForcing' : 'Living portrait';
+  const avatarStatus = !avatar ? 'Audio only' : runningAvatar ? 'AvatarForcing live' : 'Still portrait';
 
   return (
     <div className="grid grid-cols-1 gap-2 sm:grid-cols-3">
@@ -79,9 +78,8 @@ export default function VoiceCallConsole({
 }) {
   const [avatar, setAvatar] = useState(() => safeReadStorage(DISPLAY_KEY) !== 'audio');
   const [showAvatarSettings, setShowAvatarSettings] = useState(false);
-  const generativeAvatar = useAvatarMode();
   const { data, error, updateData, refetch } = useAvatarRuntime(avatar);
-  const runningAvatar = generativeAvatar && !error && data?.supported && data.phase === 'running';
+  const runningAvatar = Boolean(!error && data?.supported && data.phase === 'running');
 
   const toggleAvatar = () => {
     safeWriteStorage(DISPLAY_KEY, avatar ? 'audio' : 'avatar');

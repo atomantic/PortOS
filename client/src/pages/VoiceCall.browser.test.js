@@ -48,13 +48,16 @@ function stubApi(page, enabled = true, avatar = {}) {
       const { action, acceptTerms } = route.request().postDataJSON();
       if (action === 'install' && !acceptTerms) return route.fulfill({ status: 400 });
       if (action === 'install') avatar.status = { supported: true, installed: true, phase: 'stopped' };
-      else if (action === 'start') avatar.status = { ...avatar.status, phase: 'running' };
+      else if (action === 'start') avatar.status = { ...(avatar.status ?? { supported: true, installed: true }), phase: 'running' };
+      else if (action === 'stop') avatar.status = { ...(avatar.status ?? { supported: true, installed: true }), phase: 'stopped' };
       else return route.fulfill({ status: 400 });
       return route.fulfill({ json: avatar.status });
     }
-    if (path === '/api/voice/avatar/frames') {
-      if (!avatar.jpeg) return route.fulfill({ status: 503, json: { error: 'Renderer unavailable' } });
-      const body = Array.from({ length: 50 }, (_, index) => JSON.stringify({ index, timeMs: index * 40, jpeg: avatar.jpeg })).join('\n');
+    if (path === '/api/voice/avatar/frames' || path === '/api/voice/avatar/idle') {
+      const frame = path === '/api/voice/avatar/idle' ? (avatar.idleJpeg ?? avatar.jpeg) : avatar.jpeg;
+      if (!frame) return route.fulfill({ status: 503, json: { error: 'Renderer unavailable' } });
+      const count = path === '/api/voice/avatar/idle' ? 10 : 50;
+      const body = Array.from({ length: count }, (_, index) => JSON.stringify({ index, timeMs: index * 40, jpeg: frame })).join('\n');
       return route.fulfill({ body: body + '\n', contentType: 'application/x-ndjson' });
     }
     if (path === '/api/voice/config' && route.request().method() === 'PUT') {
@@ -65,6 +68,7 @@ function stubApi(page, enabled = true, avatar = {}) {
       '/api/voice/config': { ...config, enabled },
       '/api/voice/avatar/status': avatar.status ?? { supported: true, installed: true, phase: 'running' },
       '/api/voice/status': { services: {} },
+      '/api/local-llm/conversational-gemma/status': { supported: true, llamaInstalled: false, ggufExists: false, running: false, phase: 'idle' },
       '/api/providers': { providers: [{ id: 'fixture', name: 'Test provider', type: 'api', models: ['fixture-model', 'fixture-alternate'] }] },
       '/api/settings/features': { features: [] },
     };
@@ -177,7 +181,9 @@ describe.skipIf(!chrome)('Voice Call console in Chrome', () => {
         return [element.naturalWidth, element.naturalHeight];
       })).toEqual([640, 640]);
       const requests = [];
-      page.on('request', req => { if (req.url().endsWith('/api/voice/avatar/frames')) requests.push(req.url()); });
+      page.on('request', req => {
+        if (req.url().endsWith('/api/voice/avatar/frames') || req.url().endsWith('/api/voice/avatar/idle')) requests.push(req.url());
+      });
       const speech = page.waitForRequest(req => req.url().endsWith('/api/voice/public/synthesize'));
       await page.getByRole('button', { name: 'Play sample' }).click();
       expect((await speech).postDataJSON().text).toContain('PortOS radio check');
@@ -191,22 +197,19 @@ describe.skipIf(!chrome)('Voice Call console in Chrome', () => {
       await installButton.click();
       expect((await install).postDataJSON()).toEqual({ action: 'install', acceptTerms: true });
       await setup.getByRole('button', { name: 'Start AvatarForcing' }).click();
-      await setup.getByText('Running', { exact: true }).waitFor();
-      expect(await setup.getByLabel('Use generated avatar in this browser').isChecked()).toBe(false);
+      await page.getByText('AvatarForcing live', { exact: true }).waitFor();
     } finally {
       await page.close();
     }
   });
 
-  it('uses generated frames after opt-in and stops showing frames on interrupt', async () => {
+  it('streams continuous idle and speech frames when running, and stops on reduced motion or runtime stop', async () => {
     const page = await fixture.browser.newPage({ viewport: { width: 390, height: 800 }, reducedMotion: 'no-preference' });
     try {
       const avatar = {};
       await stubApi(page, true, avatar);
       await page.goto(`${fixture.origin}voice-console-test`);
-      await page.getByLabel('Use generated avatar in this browser').check();
-      await page.getByRole('heading', { name: /AvatarForcing ready/ }).waitFor();
-      await page.getByRole('button', { name: 'Hide avatar settings' }).click();
+      await page.getByText('AvatarForcing live', { exact: true }).waitFor();
       const canvas = page.locator('canvas[width="512"]');
       await expect(canvas.count()).resolves.toBe(1);
       expect(await canvas.isVisible()).toBe(false);
@@ -215,13 +218,6 @@ describe.skipIf(!chrome)('Voice Call console in Chrome', () => {
         await page.getByText('No avatar frames arrived.', { exact: false }).waitFor();
         await page.getByRole('button', { name: 'Interrupt' }).click();
         expect(await canvas.isVisible()).toBe(false);
-
-        await page.getByRole('button', { name: 'Avatar settings', exact: true }).click();
-        const generatedAvatar = page.getByLabel('Use generated avatar in this browser');
-        await generatedAvatar.uncheck();
-        await generatedAvatar.check();
-        expect(await page.getByText('No avatar frames arrived.', { exact: false }).count()).toBe(0);
-        await page.getByRole('button', { name: 'Hide avatar settings' }).click();
       }
       avatar.jpeg = await page.evaluate(() => {
         const tile = document.createElement('canvas');
@@ -237,25 +233,41 @@ describe.skipIf(!chrome)('Voice Call console in Chrome', () => {
       await canvas.waitFor({ state: 'visible' });
       expect(await page.getByText('No avatar frames arrived.', { exact: false }).count()).toBe(0);
       expect(await canvas.evaluate(el => el.getContext('2d').getImageData(256, 256, 1, 1).data[3])).toBe(255);
+      // Interrupt stops speech playback and seamlessly keeps continuous AvatarForcing alive.
+      const idleResumed = page.waitForRequest(req => req.url().endsWith('/api/voice/avatar/idle'));
       await page.getByRole('button', { name: 'Interrupt' }).click();
-      await canvas.waitFor({ state: 'hidden' });
       await page.getByText('Standby', { exact: true }).waitFor();
+      await idleResumed;
+      expect(await canvas.isVisible()).toBe(true);
+
       await page.emulateMedia({ reducedMotion: 'reduce' });
+      await canvas.waitFor({ state: 'hidden' });
       const seen = [];
-      page.on('request', req => { if (req.url().endsWith('/api/voice/avatar/frames')) seen.push(req.url()); });
+      page.on('request', req => {
+        if (req.url().endsWith('/api/voice/avatar/frames') || req.url().endsWith('/api/voice/avatar/idle')) seen.push(req.url());
+      });
       await page.getByRole('button', { name: 'Play sample' }).click();
       await page.getByText('Speaking', { exact: true }).waitFor();
       expect(seen).toEqual([]);
       expect(await canvas.isVisible()).toBe(false);
       await page.getByRole('button', { name: 'Interrupt' }).click();
       await page.emulateMedia({ reducedMotion: 'no-preference' });
-      await page.getByRole('button', { name: 'Avatar settings', exact: true }).click();
-      await page.getByLabel('Use generated avatar in this browser').uncheck();
-      await page.getByRole('button', { name: 'Play sample' }).click();
-      await page.getByText('Speaking', { exact: true }).waitFor();
-      expect(seen).toEqual([]);
-      expect(await canvas.isVisible()).toBe(false);
-      await page.getByRole('button', { name: 'Interrupt' }).click();
+
+      if (!avatarTarget) {
+        await page.getByRole('button', { name: 'Avatar settings', exact: true }).click();
+        await page.getByRole('button', { name: 'Stop', exact: true }).click();
+        await page.getByText('Still portrait', { exact: true }).waitFor();
+        await canvas.waitFor({ state: 'hidden' });
+        const afterStop = [];
+        page.on('request', req => {
+          if (req.url().endsWith('/api/voice/avatar/frames') || req.url().endsWith('/api/voice/avatar/idle')) afterStop.push(req.url());
+        });
+        await page.getByRole('button', { name: 'Play sample' }).click();
+        await page.getByText('Speaking', { exact: true }).waitFor();
+        expect(afterStop).toEqual([]);
+        expect(await canvas.isVisible()).toBe(false);
+        await page.getByRole('button', { name: 'Interrupt' }).click();
+      }
     } finally {
       await page.close();
     }
@@ -330,30 +342,35 @@ describe.skipIf(!chrome)('Voice Call console in Chrome', () => {
     }
   });
 
-  it('lets the user switch the voice LLM inline and animates the living idle portrait when not speaking', async () => {
+  it('lets the user switch the voice LLM inline and streams continuous AvatarForcing idle frames', async () => {
     const page = await fixture.browser.newPage({ viewport: { width: 1100, height: 820 }, reducedMotion: 'no-preference' });
     try {
-      await stubApi(page, true, { status: { supported: true, installed: false, phase: 'stopped' } });
+      const avatar = { status: { supported: true, installed: true, phase: 'running' } };
+      await stubApi(page, true, avatar);
       await page.goto(`${fixture.origin}voice-console-test`);
       const consoleView = page.getByRole('region', { name: 'PortOS call console' });
       await consoleView.waitFor();
 
-      // Living idle portrait canvas animates automatically while waiting (without reduced motion)
-      const idleCanvas = consoleView.locator('canvas[data-idle-portrait]');
-      await idleCanvas.waitFor({ state: 'visible' });
+      // No 2D cutout overlay canvas exists; only the real 512x512 AvatarForcing canvas.
+      expect(await consoleView.locator('canvas[data-idle-portrait]').count()).toBe(0);
+      avatar.idleJpeg = await page.evaluate(() => {
+        const tile = document.createElement('canvas');
+        tile.width = tile.height = 2;
+        const ctx = tile.getContext('2d');
+        ctx.fillStyle = 'green';
+        ctx.fillRect(0, 0, 2, 2);
+        return tile.toDataURL('image/jpeg').split(',')[1];
+      });
+      await consoleView.locator('canvas[width="512"]').waitFor({ state: 'visible' });
 
-      // Inline Voice LLM picker lets the user select a model directly and explains Conversational Gemma setup
+      // Inline Voice LLM picker lets the user select a model directly and offers one-click llama.cpp + Conversational Gemma setup.
       const quickModel = consoleView.getByLabel('Voice LLM model', { exact: true });
       await quickModel.waitFor();
       expect(await quickModel.inputValue()).toBe('fixture-model');
       const save = page.waitForRequest(req => req.url().endsWith('/api/voice/config') && req.method() === 'PUT');
       await quickModel.selectOption('fixture-alternate');
       expect((await save).postDataJSON().llm.model).toBe('fixture-alternate');
-      await consoleView.getByText(/How to install & enable Conversational Gemma 4 31B/).waitFor();
-
-      // Reduced motion disables the idle portrait animation cleanly
-      await page.emulateMedia({ reducedMotion: 'reduce' });
-      await idleCanvas.waitFor({ state: 'hidden' });
+      await consoleView.getByRole('button', { name: /Use llama\.cpp \+ Conversational Gemma/ }).waitFor();
     } finally {
       await page.close();
     }

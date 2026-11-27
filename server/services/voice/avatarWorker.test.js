@@ -63,3 +63,39 @@ it('fails incomplete playback if the worker exits instead of holding a render op
   await expect(render).rejects.toThrow('stopped before it finished');
   expect(close).toHaveBeenCalledWith(false);
 });
+
+it('streams continuous idle frames and preempts idle immediately when speech arrives', async () => {
+  const { worker, messages, send } = workerFixture();
+  try {
+    await worker.warmed;
+    const onIdleFrame = vi.fn();
+    const idle = worker.renderIdle({ stage: 'listening', onFrame: onIdleFrame, signal: new AbortController().signal });
+    expect(messages[0]).toMatchObject({ type: 'idle', stage: 'listening' });
+    const idleId = messages[0].id;
+    send({ type: 'frame', id: idleId, index: 0, timeMs: 0, jpeg: 'idle0' });
+    expect(onIdleFrame).toHaveBeenCalledExactlyOnceWith({ index: 0, timeMs: 0, jpeg: 'idle0' });
+
+    // Speech immediately cancels idle, waits for its cancelled ack, and starts speak.
+    const onSpeakFrame = vi.fn();
+    const speak = worker.render(Buffer.from('speech'), { onFrame: onSpeakFrame, signal: new AbortController().signal });
+    expect(messages[1]).toEqual({ type: 'cancel', id: idleId });
+    send({ type: 'frame', id: idleId, index: 1, timeMs: 40, jpeg: 'late-idle' });
+    send({ type: 'cancelled', id: idleId });
+    await idle;
+    await vi.waitFor(() => expect(messages[2]?.type).toBe('speak'));
+    const speakId = messages[2].id;
+
+    // An idle request arriving while speech is active backs off without disturbing speech.
+    const onIgnoredIdle = vi.fn();
+    await worker.renderIdle({ stage: 'idle', onFrame: onIgnoredIdle, signal: new AbortController().signal });
+    expect(onIgnoredIdle).not.toHaveBeenCalled();
+
+    send({ type: 'frame', id: speakId, index: 0, timeMs: 0, jpeg: 'speech0' });
+    send({ type: 'done', id: speakId });
+    await speak;
+    expect(onIdleFrame).toHaveBeenCalledTimes(1);
+    expect(onSpeakFrame).toHaveBeenCalledExactlyOnceWith({ index: 0, timeMs: 0, jpeg: 'speech0' });
+  } finally {
+    worker.stop();
+  }
+});
