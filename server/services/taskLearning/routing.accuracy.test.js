@@ -20,15 +20,10 @@ vi.mock('../../lib/fileUtils.js', () => fx.fileUtilsFactory());
 
 import { readFile } from 'fs/promises';
 import { clearLearningCache } from './store.js';
-import { getRoutingAccuracy, getTaskTypeConfidence, getConfidenceLevels } from './routing.js';
+import { summarizeRoutingAccuracy, getTaskTypeConfidence, summarizeConfidenceLevels } from './routing.js';
 
-describe('TaskLearning - getRoutingAccuracy', () => {
-  beforeEach(() => {
-    vi.clearAllMocks();
-    clearLearningCache();
-  });
-
-  it('should return routing accuracy matrix with misroutes', async () => {
+describe('TaskLearning - summarizeRoutingAccuracy', () => {
+  it('should return routing accuracy matrix with misroutes', () => {
     const data = makeLearningData({
       routingAccuracy: {
         'self-improve:ui': {
@@ -40,9 +35,7 @@ describe('TaskLearning - getRoutingAccuracy', () => {
         }
       }
     });
-    readFile.mockResolvedValue(JSON.stringify(data));
-
-    const result = await getRoutingAccuracy();
+    const result = summarizeRoutingAccuracy(data);
 
     expect(result.matrix).toHaveLength(2);
     expect(result.totalMisroutes).toBe(1); // self-improve:ui on light (10% success, 10 attempts)
@@ -57,17 +50,15 @@ describe('TaskLearning - getRoutingAccuracy', () => {
     expect(result.tierOverview.length).toBeGreaterThan(0);
   });
 
-  it('should return empty results when no routing data exists', async () => {
-    readFile.mockResolvedValue(JSON.stringify(makeLearningData()));
-
-    const result = await getRoutingAccuracy();
+  it('should return empty results when no routing data exists', () => {
+    const result = summarizeRoutingAccuracy(makeLearningData());
 
     expect(result.matrix).toHaveLength(0);
     expect(result.misroutes).toHaveLength(0);
     expect(result.totalMisroutes).toBe(0);
   });
 
-  it('should sort matrix tiers by success rate descending', async () => {
+  it('should sort matrix tiers by success rate descending', () => {
     const data = makeLearningData({
       routingAccuracy: {
         'user-task': {
@@ -77,9 +68,7 @@ describe('TaskLearning - getRoutingAccuracy', () => {
         }
       }
     });
-    readFile.mockResolvedValue(JSON.stringify(data));
-
-    const result = await getRoutingAccuracy();
+    const result = summarizeRoutingAccuracy(data);
 
     const tiers = result.matrix[0].tiers;
     expect(tiers[0].tier).toBe('heavy');   // 90%
@@ -87,7 +76,7 @@ describe('TaskLearning - getRoutingAccuracy', () => {
     expect(tiers[2].tier).toBe('light');   // 20%
   });
 
-  it('reports the learned tier advice per task type, and omits it where history says nothing', async () => {
+  it('reports the learned tier advice per task type, and omits it where history says nothing', () => {
     const data = makeLearningData({
       byTaskType: {
         'self-improve:ui': {
@@ -106,16 +95,14 @@ describe('TaskLearning - getRoutingAccuracy', () => {
         }
       }
     });
-    readFile.mockResolvedValue(JSON.stringify(data));
-
-    const result = await getRoutingAccuracy();
+    const result = summarizeRoutingAccuracy(data);
     const byType = Object.fromEntries(result.matrix.map((entry) => [entry.taskType, entry]));
 
     expect(byType['self-improve:ui'].suggestion.avoidTiers).toContain('light');
     expect(byType['user-task'].suggestion).toBeUndefined();
   });
 
-  it('advises only pinnable tiers: retired thinking-level names map to their tier, user-specified never appears', async () => {
+  it('advises only pinnable tiers: retired thinking-level names map to their tier, user-specified never appears', () => {
     const outcome = { completed: 15, succeeded: 12, failed: 3, totalDurationMs: 1500000, avgDurationMs: 100000, successRate: 80 };
     const data = makeLearningData({
       byTaskType: { 'legacy-high': outcome, 'pinned-only': outcome },
@@ -124,9 +111,7 @@ describe('TaskLearning - getRoutingAccuracy', () => {
         'pinned-only': { 'user-specified': { succeeded: 9, failed: 1, lastAttempt: '2026-01-26T00:00:00.000Z' } }
       }
     });
-    readFile.mockResolvedValue(JSON.stringify(data));
-
-    const result = await getRoutingAccuracy();
+    const result = summarizeRoutingAccuracy(data);
     const byType = Object.fromEntries(result.matrix.map((entry) => [entry.taskType, entry]));
 
     expect(byType['legacy-high'].suggestion.tier).toBe('heavy');
@@ -229,13 +214,8 @@ describe('TaskLearning - getTaskTypeConfidence', () => {
   });
 });
 
-describe('TaskLearning - getConfidenceLevels', () => {
-  beforeEach(() => {
-    vi.clearAllMocks();
-    clearLearningCache();
-  });
-
-  it('should group task types into correct tiers', async () => {
+describe('TaskLearning - summarizeConfidenceLevels', () => {
+  it('should group task types into correct tiers', () => {
     const data = makeLearningData({
       byTaskType: {
         'high-type':   { completed: 10, succeeded: 9, failed: 1, successRate: 90 },
@@ -244,16 +224,14 @@ describe('TaskLearning - getConfidenceLevels', () => {
         'new-type':    { completed: 2,  succeeded: 2, failed: 0, successRate: 100 }
       }
     });
-    readFile.mockResolvedValue(JSON.stringify(data));
-
-    const result = await getConfidenceLevels();
+    const result = summarizeConfidenceLevels(data);
     expect(result.levels.high.map(t => t.taskType)).toContain('high-type');
     expect(result.levels.medium.map(t => t.taskType)).toContain('medium-type');
     expect(result.levels.low.map(t => t.taskType)).toContain('low-type');
     expect(result.levels.new.map(t => t.taskType)).toContain('new-type');
   });
 
-  it('should return correct summary counts', async () => {
+  it('should return correct summary counts', () => {
     const data = makeLearningData({
       byTaskType: {
         'h1': { completed: 10, succeeded: 9, failed: 1, successRate: 90 },
@@ -262,9 +240,7 @@ describe('TaskLearning - getConfidenceLevels', () => {
         'l1': { completed: 10, succeeded: 3, failed: 7, successRate: 30 }
       }
     });
-    readFile.mockResolvedValue(JSON.stringify(data));
-
-    const result = await getConfidenceLevels();
+    const result = summarizeConfidenceLevels(data);
     expect(result.summary.high).toBe(2);
     expect(result.summary.medium).toBe(1);
     expect(result.summary.low).toBe(1);
@@ -272,7 +248,7 @@ describe('TaskLearning - getConfidenceLevels', () => {
     expect(result.summary.requireApproval).toBe(1);
   });
 
-  it('should sort tiers by successRate descending', async () => {
+  it('should sort tiers by successRate descending', () => {
     const data = makeLearningData({
       byTaskType: {
         'a': { completed: 10, succeeded: 8, failed: 2, successRate: 80 },
@@ -280,26 +256,20 @@ describe('TaskLearning - getConfidenceLevels', () => {
         'c': { completed: 10, succeeded: 8, failed: 2, successRate: 80 }
       }
     });
-    readFile.mockResolvedValue(JSON.stringify(data));
-
-    const result = await getConfidenceLevels();
+    const result = summarizeConfidenceLevels(data);
     const highRates = result.levels.high.map(t => t.successRate);
     expect(highRates).toEqual([...highRates].sort((a, b) => b - a));
   });
 
-  it('should reflect threshold overrides in returned thresholds', async () => {
+  it('should reflect threshold overrides in returned thresholds', () => {
     const data = makeLearningData({ byTaskType: {} });
-    readFile.mockResolvedValue(JSON.stringify(data));
-
-    const result = await getConfidenceLevels({ highThreshold: 90, lowThreshold: 60, minSamples: 3 });
+    const result = summarizeConfidenceLevels(data, { highThreshold: 90, lowThreshold: 60, minSamples: 3 });
     expect(result.thresholds).toEqual({ highThreshold: 90, lowThreshold: 60, minSamples: 3 });
   });
 
-  it('should return empty levels when no task types exist', async () => {
+  it('should return empty levels when no task types exist', () => {
     const data = makeLearningData({ byTaskType: {} });
-    readFile.mockResolvedValue(JSON.stringify(data));
-
-    const result = await getConfidenceLevels();
+    const result = summarizeConfidenceLevels(data);
     expect(result.summary.total).toBe(0);
     expect(result.levels.high).toHaveLength(0);
     expect(result.levels.low).toHaveLength(0);

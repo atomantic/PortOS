@@ -1,7 +1,7 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import {
   deriveFailureSignalAvoidance,
-  getSkippedTaskTypes,
+  findLowSuccessTaskTypes,
   getTaskTypeConfidence,
   suggestModelTier,
   getPerformanceSummary
@@ -249,21 +249,21 @@ describe('windowed-rate decisions (issue #2617)', () => {
     vi.mocked(loadLearningData).mockReset();
   });
 
-  describe('getSkippedTaskTypes', () => {
-    it('drops a recovered type from the skip list but keeps a still-failing one', async () => {
-      loadLearningData.mockResolvedValue(learningWith({
+  describe('findLowSuccessTaskTypes', () => {
+    it('drops a recovered type from the skip list but keeps a still-failing one', () => {
+      const data = learningWith({
         'recovered': recoveredMetrics(),
         'still-broken': stillFailingMetrics(),
         'thin-window': thinWindowMetrics()
-      }));
-      const skipped = await getSkippedTaskTypes();
+      });
+      const skipped = findLowSuccessTaskTypes(data);
       const types = skipped.map(s => s.taskType);
       expect(types).not.toContain('recovered');
       expect(types).toContain('still-broken');
       expect(types).toContain('thin-window'); // lifetime fallback still applies
     });
 
-    it('lists a windowed-driven skip and never mutates the learning store', async () => {
+    it('lists a windowed-driven skip and never mutates the learning store', () => {
       const tenDaysAgo = Date.now() - 10 * 24 * 60 * 60 * 1000;
       const healthyBurst = {
         completed: 200, succeeded: 190, failed: 10, successRate: 95,
@@ -272,8 +272,7 @@ describe('windowed-rate decisions (issue #2617)', () => {
       };
       const data = learningWith({ 'healthy-burst': healthyBurst });
       const before = JSON.stringify(data);
-      loadLearningData.mockResolvedValue(data);
-      expect((await getSkippedTaskTypes()).map(s => s.taskType)).toContain('healthy-burst');
+      expect(findLowSuccessTaskTypes(data).map(s => s.taskType)).toContain('healthy-burst');
       expect(JSON.stringify(data)).toBe(before);
     });
   });

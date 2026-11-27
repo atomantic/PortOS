@@ -289,10 +289,6 @@ export async function clearDismissedRecommendations() {
 /**
  * List dismissed recommendations as an array sorted by dismissedAt desc.
  */
-export async function getDismissedRecommendations() {
-  return listDismissedRecommendations(await loadDismissedRecommendations());
-}
-
 export function listDismissedRecommendations(map) {
   return Object.entries(map)
     .map(([id, entry]) => ({ id, ...entry }))

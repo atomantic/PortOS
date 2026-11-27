@@ -1,7 +1,7 @@
 /**
  * routing.skipped.test.js
  *
- * Behavior of routing.js skip-candidate selection (getSkippedTaskTypes). Split from taskLearning.test.js (#16214); shared mocks live in
+ * Behavior of routing.js skip-candidate selection (findLowSuccessTaskTypes). Split from taskLearning.test.js (#16214); shared mocks live in
  * taskLearning.testFixtures.js.
  */
 import { describe, it, expect, vi, beforeEach } from 'vitest';
@@ -20,30 +20,26 @@ vi.mock('../../lib/fileUtils.js', () => fx.fileUtilsFactory());
 
 import { readFile } from 'fs/promises';
 import { atomicWrite } from '../../lib/fileUtils.js';
-import { clearLearningCache } from './store.js';
+import { clearLearningCache, loadLearningData } from './store.js';
 import { resetTaskTypeLearning } from './reset.js';
-import { getSkippedTaskTypes } from './routing.js';
+import { findLowSuccessTaskTypes } from './routing.js';
 
-describe('TaskLearning - getSkippedTaskTypes', () => {
+describe('TaskLearning - findLowSuccessTaskTypes', () => {
   beforeEach(() => {
     vi.clearAllMocks();
     clearLearningCache();
   });
 
-  it('should return task types with <30% success and 5+ attempts', async () => {
-    readFile.mockResolvedValue(JSON.stringify(makeLearningData()));
-
-    const skipped = await getSkippedTaskTypes();
+  it('should return task types with <30% success and 5+ attempts', () => {
+    const skipped = findLowSuccessTaskTypes(makeLearningData());
 
     expect(skipped).toHaveLength(1);
     expect(skipped[0].taskType).toBe('self-improve:ui');
     expect(skipped[0].successRate).toBe(5);
   });
 
-  it('should not include task types with >= 30% success', async () => {
-    readFile.mockResolvedValue(JSON.stringify(makeLearningData()));
-
-    const skipped = await getSkippedTaskTypes();
+  it('should not include task types with >= 30% success', () => {
+    const skipped = findLowSuccessTaskTypes(makeLearningData());
 
     const userTask = skipped.find(s => s.taskType === 'user-task');
     expect(userTask).toBeUndefined();
@@ -73,7 +69,7 @@ describe('TaskLearning - getSkippedTaskTypes', () => {
     });
 
     await resetTaskTypeLearning('self-improve:ui');
-    const skipped = await getSkippedTaskTypes();
+    const skipped = findLowSuccessTaskTypes(await loadLearningData());
 
     expect(skipped).toHaveLength(0);
   });

@@ -21,7 +21,7 @@ vi.mock('../../lib/fileUtils.js', () => fx.fileUtilsFactory());
 import { readFile } from 'fs/promises';
 import { atomicWrite } from '../../lib/fileUtils.js';
 import { clearLearningCache } from './store.js';
-import { dismissRecommendation, restoreRecommendation, getDismissedRecommendations, clearDismissedRecommendations, getLearningInsights } from './insights.js';
+import { dismissRecommendation, restoreRecommendation, clearDismissedRecommendations, getLearningInsights } from './insights.js';
 
 describe('TaskLearning - recommendation dismissal', () => {
   let writes;
@@ -95,18 +95,6 @@ describe('TaskLearning - recommendation dismissal', () => {
     expect(result).toEqual({ cleared: true });
     const saved = Object.entries(writes).find(([p]) => p.endsWith('dismissed-recommendations.json'))?.[1];
     expect(saved).toEqual({});
-  });
-
-  it('getDismissedRecommendations sorts by dismissedAt desc', async () => {
-    setupFiles({
-      dismissed: {
-        'older': { dismissedAt: '2026-05-01T00:00:00.000Z' },
-        'newer': { dismissedAt: '2026-05-07T00:00:00.000Z' }
-      }
-    });
-
-    const list = await getDismissedRecommendations();
-    expect(list.map(d => d.id)).toEqual(['newer', 'older']);
   });
 
   it('getLearningInsights filters dismissed rate-based recommendation permanently', async () => {

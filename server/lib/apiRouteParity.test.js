@@ -153,7 +153,7 @@ describe('client ↔ server API route parity', () => {
   it('has a client caller or a justified allowlist entry for every mounted method', () => {
     expect(
       uncalledRoutes.filter((route) => !allowlistEntries.some((entry) => covers(entry, route))).map(routeKey),
-      'mounted methods nothing calls: delete the handler or cite its caller in apiRouteCallerAllowlist.js',
+      'mounted methods with no production caller: delete the handler and any unused wrapper, or cite its caller in apiRouteCallerAllowlist.js',
     ).toEqual([]);
   });
 
@@ -221,8 +221,13 @@ describe('client ↔ server API route parity', () => {
     const { paths, referenced, unresolved } = scanClientApiPaths({
       sources: {
         'apiFilm.js': factory,
-        'apiTrackFilm.js': "import { createFilmApi } from './apiFilm.js'; export const api = createFilmApi(id => `/tracks/${id}/film`);",
-        'apiShowFilm.js': "import { createFilmApi } from './apiFilm.js'; export const api = createFilmApi((id) => `/shows/${id}/film`);",
+        'apiTrackFilm.js': "import { createFilmApi } from './apiFilm.js'; export const tracks = createFilmApi(id => `/tracks/${id}/film`);",
+        'apiShowFilm.js': "import { createFilmApi } from './apiFilm.js'; export const shows = createFilmApi((id) => `/shows/${id}/film`);",
+        'pages/Probe.jsx': [
+          "import { tracks } from '../services/apiTrackFilm.js';",
+          "import { shows } from '../services/apiShowFilm.js';",
+          'tracks.render(id); shows.render(id);',
+        ].join('\n'),
       },
     });
     expect(unresolved).toEqual([]);
@@ -272,11 +277,13 @@ describe('client ↔ server API route parity', () => {
         "export const sendProbe = (id) => api.post(`/probe-verb/${id}/send`, {});",
       ].join('\n'),
       'components/ProbePanel.jsx': [
+        "import { probeStreamUrl, sendProbe } from '../services/apiProbe';",
         "const load = () => fetch('/api/probe-component/list');",
         'const open = (id) => new EventSource(`/api/probe-events/${id}`);',
         "const ask = () => request('/probe-request/ask');",
         'const icon = (base, id) => `${base}/api/probe-icon/${id}`;',
         "const forward = () => api.get('/probe-page/read');",
+        'const render = id => sendProbe(probeStreamUrl(id));',
       ].join('\n'),
     });
     expect(scanned.referenced.map(({ path }) => path)).toEqual(expect.arrayContaining([
@@ -292,6 +299,31 @@ describe('client ↔ server API route parity', () => {
     ];
     expect(findUncalledServerRoutes(server, scanned.referenced).map((route) => route.path))
       .toEqual(['/api/probe-never-called']);
+  });
+
+  it('does not let unused exports supply a caller for a mounted method', () => {
+    const probe = [
+      { method: 'GET', path: '/api/probe/dead' },
+      { method: 'GET', path: '/api/probe/dead-url' },
+      { method: 'GET', path: '/api/probe/helper' },
+      { method: 'GET', path: '/api/probe/called' },
+    ];
+    const { referenced, paths } = scanProbe({
+      'apiProbe.js': [
+        "const requestProbe = (path) => request(path);",
+        "export const dead = () => requestProbe('/probe/dead');",
+        "export const deadUrl = () => '/api/probe/dead-url';",
+        "export function helper() { return request('/probe/helper'); }",
+        "export const live = () => Promise.all([helper(), request('/probe/called')]);",
+      ].join('\n'),
+      'apiProbeBarrel.js': "export { live as load, dead } from './apiProbe.js';",
+      'pages/Probe.jsx': "import * as probe from '../services/apiProbeBarrel'; probe.load();",
+      'pages/Probe.test.jsx': "import { dead } from '../services/apiProbe'; dead();",
+    });
+
+    expect(findUncalledServerRoutes(probe, referenced).map(({ path }) => path))
+      .toEqual(['/api/probe/dead', '/api/probe/dead-url']);
+    expect(paths.map(({ path }) => path)).toContain('/api/probe/dead');
   });
 
   it.each([
