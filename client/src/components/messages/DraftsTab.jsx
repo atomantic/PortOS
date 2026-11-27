@@ -32,6 +32,10 @@ function parseRecipientList(value) {
   return value.split(',').map(part => part.trim()).filter(Boolean);
 }
 
+function formatRecipientList(recipients) {
+  return Array.isArray(recipients) ? recipients.join(', ') : recipients ?? '';
+}
+
 function DeliveryReconciliation({ draft, onReconciled }) {
   const [checkedMailbox, setCheckedMailbox] = useState(false);
   const [pending, setPending] = useState(false);
@@ -94,7 +98,7 @@ export default function DraftsTab({ accounts }) {
   const [sendingIds, setSendingIds] = useState(new Set());
   const [copiedId, setCopiedId] = useState(null);
   const [editingId, setEditingId] = useState(null);
-  const [editForm, setEditForm] = useState({ to: '', subject: '', body: '' });
+  const [editForm, setEditForm] = useState({ to: '', cc: '', subject: '', body: '' });
   const savingEditRef = useRef(false);
   const [savingEdit, setSavingEdit] = useState(false);
   const [expandedIds, setExpandedIds] = useState(() => new Set());
@@ -146,11 +150,20 @@ export default function DraftsTab({ accounts }) {
   const startEdit = (draft) => {
     setEditingId(draft.id);
     setEditForm({
-      to: (draft.to || []).join(', '),
+      to: formatRecipientList(draft.to),
+      cc: formatRecipientList(draft.cc),
       subject: draft.subject || '',
       body: draft.body || '',
     });
   };
+
+  const editingDraft = drafts.find(draft => draft.id === editingId);
+  const editingAccount = accounts.find(account => account.id === editingDraft?.accountId);
+  // Outlook replies use the recipients already set by the provider.
+  const canEditCc = editingAccount?.canSend !== false && (
+    (editingAccount?.type === 'gmail' && editingDraft?.sendVia === 'api') ||
+    (editingAccount?.type === 'outlook' && editingDraft?.sendVia === 'playwright' && !editingDraft.replyToMessageId)
+  );
 
   const handleSaveEdit = async (event) => {
     event.preventDefault();
@@ -160,6 +173,7 @@ export default function DraftsTab({ accounts }) {
     // The response is the draft after the server drops approval when content changed.
     const result = await updateMessageDraft(editingId, {
       to: parseRecipientList(editForm.to),
+      ...(canEditCc && { cc: parseRecipientList(editForm.cc) }),
       subject: editForm.subject,
       body: editForm.body,
     }).catch(() => null).finally(() => {
@@ -350,6 +364,17 @@ export default function DraftsTab({ accounts }) {
                   : 'Choose Edit and enter a valid Teams recipient email in the To field before approval or sending.'}
               </p>
             )}
+            {editingId !== draft.id && (
+              <>
+                <div className="text-sm text-white">{draft.subject || '(no subject)'}</div>
+                {draft.to?.length > 0 && (
+                  <div className="text-xs text-gray-500 break-words">To: {formatRecipientList(draft.to)}</div>
+                )}
+              </>
+            )}
+            {draft.cc?.length > 0 && (editingId !== draft.id || !canEditCc) && (
+              <div className="text-xs text-gray-500 break-words">Cc: {formatRecipientList(draft.cc)}</div>
+            )}
             {editingId === draft.id ? (
               <form onSubmit={handleSaveEdit} className="space-y-2">
                 <div>
@@ -363,6 +388,19 @@ export default function DraftsTab({ accounts }) {
                     className={draftFieldClass}
                   />
                 </div>
+                {canEditCc && (
+                  <div>
+                    <label htmlFor={`draft-cc-${draft.id}`} className="block text-xs text-gray-400 mb-1">Cc</label>
+                    <input
+                      id={`draft-cc-${draft.id}`}
+                      value={editForm.cc}
+                      onChange={event => setEditForm(prev => ({ ...prev, cc: event.target.value }))}
+                      placeholder="one@example.com, two@example.com"
+                      disabled={savingEdit}
+                      className={draftFieldClass}
+                    />
+                  </div>
+                )}
                 <div>
                   <label htmlFor={`draft-subject-${draft.id}`} className="block text-xs text-gray-400 mb-1">Subject</label>
                   <input
@@ -405,10 +443,6 @@ export default function DraftsTab({ accounts }) {
               </form>
             ) : (
               <>
-                <div className="text-sm text-white">{draft.subject || '(no subject)'}</div>
-                {draft.to?.length > 0 && (
-                  <div className="text-xs text-gray-500">To: {draft.to.join(', ')}</div>
-                )}
                 {/* Review-only drafts are sent by hand, so show the full body (not
                     clamped) — it's the text the user copies into their messaging app. */}
                 <div
