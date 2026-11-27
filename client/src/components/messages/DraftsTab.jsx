@@ -14,6 +14,7 @@ import {
 } from '../../services/apiMessages.js';
 import InlineConfirmRow from '../ui/InlineConfirmRow';
 import { useConfirmDelete } from '../../hooks/useConfirmDelete';
+import { formatDateTime } from '../../utils/formatters';
 import { copyToClipboard } from '../../lib/clipboard.js';
 import BrailleSpinner from '../BrailleSpinner';
 import ListLoadError from '../ui/ListLoadError';
@@ -39,6 +40,7 @@ function formatRecipientList(recipients) {
 }
 
 function DeliveryReconciliation({ draft, onReconciled }) {
+  const startedAt = draft.sendAttempts?.find(attempt => attempt.id === draft.sendAttemptId)?.startedAt;
   const [checkedMailbox, setCheckedMailbox] = useState(false);
   const [pending, setPending] = useState(false);
   const pendingRef = useRef(false);
@@ -68,6 +70,7 @@ function DeliveryReconciliation({ draft, onReconciled }) {
         confirmed it. It may already have reached the recipient. Check your sent mailbox
         or conversation before recording the outcome. PortOS will not resend it automatically.
       </p>
+      {draft.privacyErased && startedAt && <p>Send attempt started {formatDateTime(startedAt)}.</p>}
       <label className="flex items-start gap-2" htmlFor={`checked-mailbox-${draft.id}`}>
         <input id={`checked-mailbox-${draft.id}`} type="checkbox"
           checked={checkedMailbox} disabled={pending}
@@ -86,7 +89,9 @@ function DeliveryReconciliation({ draft, onReconciled }) {
           Confirm not sent
         </button>
       </div>
-      <p className="text-gray-400">Confirmed sent is final. Confirmed not sent restores a draft that needs fresh approval before sending.</p>
+      <p className="text-gray-400">{draft.privacyErased
+        ? 'This draft was erased. Either choice records the outcome and keeps the draft closed.'
+        : 'Confirmed sent is final. Confirmed not sent restores a draft that needs fresh approval before sending.'}</p>
       {error && <p role="alert" className="text-port-error">{error}</p>}
     </div>
   );
@@ -250,8 +255,8 @@ export default function DraftsTab({ accounts }) {
     return account.name;
   };
 
-  const isCopyOnly = draft => draft.sendVia === 'review' ||
-    accounts.find(account => account.id === draft.accountId)?.canSend === false;
+  const isCopyOnly = draft => !draft.privacyErased && (draft.sendVia === 'review' ||
+    accounts.find(account => account.id === draft.accountId)?.canSend === false);
 
   const needsTeamsRecipient = draft =>
     accounts.find(account => account.id === draft.accountId)?.type === 'teams' &&
@@ -259,6 +264,7 @@ export default function DraftsTab({ accounts }) {
 
   const statusColors = {
     draft: 'bg-gray-700 text-gray-300',
+    erased: 'bg-gray-700 text-gray-300',
     pending_review: 'bg-port-warning/20 text-port-warning',
     approved: 'bg-port-success/20 text-port-success',
     sending: 'bg-port-accent/20 text-port-accent',
@@ -370,7 +376,7 @@ export default function DraftsTab({ accounts }) {
                 {/* Review-only drafts never reach a 'sent' state (there's no send
                     channel), so keep Delete available at any status — otherwise an
                     approved iMessage/Signal draft would be stuck with no action. */}
-                {(['draft', 'pending_review', 'failed'].includes(draft.status) || isCopyOnly(draft)) && (
+                {(['draft', 'pending_review', 'failed', 'erased'].includes(draft.status) || isCopyOnly(draft)) && (
                   <button
                     onClick={() => requestDelete(draft.id)}
                     className="min-h-[44px] min-w-[44px] inline-flex items-center justify-center p-1 text-gray-400 hover:text-port-error transition-colors"
@@ -388,7 +394,7 @@ export default function DraftsTab({ accounts }) {
                   : 'Choose Edit and enter a valid Teams recipient email in the To field before approval or sending.'}
               </p>
             )}
-            {editingId !== draft.id && (
+            {(draft.privacyErased || editingId !== draft.id) && (
               <>
                 <div className="text-sm text-white">{draft.subject || '(no subject)'}</div>
                 {draft.to?.length > 0 && (
@@ -399,7 +405,7 @@ export default function DraftsTab({ accounts }) {
             {draft.cc?.length > 0 && (editingId !== draft.id || !canEditCc) && (
               <div className="text-xs text-gray-500 break-words">Cc: {formatRecipientList(draft.cc)}</div>
             )}
-            {editingId === draft.id ? (
+            {!draft.privacyErased && editingId === draft.id ? (
               <form onSubmit={handleSaveEdit} className="space-y-2">
                 <div>
                   <label htmlFor={`draft-to-${draft.id}`} className="block text-xs text-gray-400 mb-1">To</label>

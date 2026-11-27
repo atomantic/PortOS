@@ -22,6 +22,7 @@ const MISSING_STORE = Symbol('missing drafts');
 const draftStoreSchema = z.array(z.object({
   id: z.string().min(1),
   status: z.string().min(1),
+  privacyErased: z.literal(true).optional(),
   sendAttemptId: z.string().min(1).nullish(),
   sendAttempts: z.array(z.object({ id: z.string().min(1) }).passthrough()).nullish()
 }).passthrough().refine(draft => draft.status !== 'delivery_unknown'
@@ -140,7 +141,8 @@ export async function updateDraft(id, updates) {
     const drafts = await loadDrafts();
     const idx = drafts.findIndex(d => d.id === id);
     if (idx === -1) return null;
-    if (['sending', 'delivery_unknown', 'sent'].includes(drafts[idx].status) || ['sending', 'delivery_unknown', 'sent', 'failed'].includes(updates.status)) {
+    if (drafts[idx].privacyErased || ['sending', 'delivery_unknown', 'sent'].includes(drafts[idx].status)
+      || ['sending', 'delivery_unknown', 'sent', 'failed', 'erased'].includes(updates.status)) {
       throw new ServerError('Draft cannot be edited in its current send state', { status: 409, code: 'DRAFT_STATE_CONFLICT' });
     }
     // Approval is send intent for the content the approver saw (#13055): an
@@ -165,7 +167,7 @@ export async function claimDraftForSend(id, validateClaim) {
     const drafts = await loadDrafts();
     const draft = drafts.find(d => d.id === id);
     if (!draft) throw new ServerError('Draft not found', { status: 404, code: 'DRAFT_NOT_FOUND' });
-    if (draft.status !== 'approved') {
+    if (draft.privacyErased || draft.status !== 'approved') {
       throw new ServerError('Draft must be approved and not already sending or sent', { status: 409, code: 'DRAFT_STATE_CONFLICT' });
     }
     validateClaim?.(draft);
@@ -193,10 +195,11 @@ export async function finishDraftSend(id, attemptId, outcome) {
     if (draft.status !== 'sending' || draft.sendAttemptId !== attemptId || activeAttempts.get(id) !== attemptId) {
       throw new ServerError('Draft is not sending', { status: 409, code: 'DRAFT_STATE_CONFLICT' });
     }
-    draft.status = outcome === 'delivery_unknown' ? 'delivery_unknown' : outcome === true ? 'sent' : 'failed';
+    const deliveryStatus = outcome === 'delivery_unknown' ? 'delivery_unknown' : outcome === true ? 'sent' : 'failed';
+    draft.status = draft.privacyErased && deliveryStatus === 'failed' ? 'erased' : deliveryStatus;
     draft.updatedAt = new Date().toISOString();
     const attempt = draft.sendAttempts.find(a => a.id === attemptId);
-    attempt.outcome = draft.status;
+    attempt.outcome = deliveryStatus;
     attempt.finishedAt = draft.updatedAt;
     await saveDrafts(drafts);
     return draft;
@@ -224,7 +227,7 @@ export async function reconcileDraftSend(id, { attemptId, outcome }) {
     const attempt = draft.sendAttempts.find(a => a.id === attemptId);
     attempt.reconciliation = outcome;
     attempt.reconciledAt = now;
-    draft.status = outcome === 'sent' ? 'sent' : 'draft';
+    draft.status = outcome === 'sent' ? 'sent' : draft.privacyErased ? 'erased' : 'draft';
     draft.updatedAt = now;
     await saveDrafts(drafts);
     return draft;
@@ -266,42 +269,47 @@ export async function deleteDraft(id) {
 
 // Privacy Center drafts hold decrypted vault PII in plaintext (#17233).
 const PRIVACY_GENERATORS = ['privacy-optout', 'privacy-change'];
-const UNSENT_STATUSES = ['draft', 'approved', 'failed'];
+const UNSENT_STATUSES = ['draft', 'pending_review', 'approved', 'failed'];
 export const PRIVACY_DRAFT_REDACTION_NOTICE = '[Privacy draft body redacted after erasure]';
 // Opt-out templates put the subject's legal name in the Subject line.
 export const PRIVACY_DRAFT_SUBJECT_REDACTION_NOTICE = '[Privacy draft subject redacted after erasure]';
 
 const isPrivacyDraft = d => PRIVACY_GENERATORS.includes(d.generatedBy);
-// sending/delivery_unknown drafts are owned by the send lifecycle: never touch them.
 const isSendLocked = d => ['sending', 'delivery_unknown'].includes(d.status);
+const ATTEMPT_AUDIT_FIELDS = ['id', 'startedAt', 'outcome', 'finishedAt', 'interruptedAt', 'reconciliation', 'reconciledAt'];
 
-/**
- * Erase privacy-originated drafts selected by `predicate`: unsent ones are
- * deleted (so they cannot be sent after erasure/consent withdrawal), sent ones
- * keep their audit trail with the body and subject replaced by fixed notices. `onlyUnsent`
- * (consent revocation) leaves sent drafts alone. Send-locked drafts are skipped.
- */
+// Keep only the mailbox and attempt metadata needed to resolve delivery. A live
+// dispatcher owns the snapshot returned at claim time and finishes by attempt ID.
+function erasedPrivacyDraft(draft) {
+  return {
+    id: draft.id, accountId: draft.accountId, status: draft.status, generatedBy: draft.generatedBy,
+    sendAttemptId: draft.sendAttemptId,
+    sendAttempts: draft.sendAttempts?.map(attempt =>
+      Object.fromEntries(Object.entries(attempt).filter(([key]) => ATTEMPT_AUDIT_FIELDS.includes(key)))),
+    createdAt: draft.createdAt, updatedAt: new Date().toISOString(), privacyErased: true,
+    to: [], cc: [], subject: PRIVACY_DRAFT_SUBJECT_REDACTION_NOTICE, body: PRIVACY_DRAFT_REDACTION_NOTICE
+  };
+}
+
+/** Delete queued matches, redact outstanding attempts, and keep settled sent drafts on consent withdrawal. */
 export async function erasePrivacyDrafts(predicate, { onlyUnsent = false, generatedBy = PRIVACY_GENERATORS } = {}) {
   return queueWrite(async () => {
     const drafts = await loadDrafts({ ensure: false });
     const result = { deleted: 0, redacted: 0, skipped: 0 };
     const remaining = [];
     for (const d of drafts) {
-      if (!isPrivacyDraft(d) || !generatedBy.includes(d.generatedBy) || !predicate(d)) { remaining.push(d); continue; }
-      if (isSendLocked(d)) { result.skipped += 1; remaining.push(d); continue; }
+      if (d.privacyErased || !isPrivacyDraft(d) || !generatedBy.includes(d.generatedBy) || !predicate(d)) { remaining.push(d); continue; }
       if (UNSENT_STATUSES.includes(d.status)) { result.deleted += 1; continue; }
-      if (!onlyUnsent && d.status === 'sent'
-        && (d.body !== PRIVACY_DRAFT_REDACTION_NOTICE || d.subject !== PRIVACY_DRAFT_SUBJECT_REDACTION_NOTICE)) {
-        d.body = PRIVACY_DRAFT_REDACTION_NOTICE;
-        d.subject = PRIVACY_DRAFT_SUBJECT_REDACTION_NOTICE;
-        d.updatedAt = new Date().toISOString();
+      if (!onlyUnsent || isSendLocked(d)) {
+        remaining.push(erasedPrivacyDraft(d));
         result.redacted += 1;
+      } else {
+        remaining.push(d);
       }
-      remaining.push(d);
     }
     if (result.deleted || result.redacted) {
       await saveDrafts(remaining);
-      console.log(`🗑️ Privacy draft erasure: deleted=${result.deleted} redacted=${result.redacted} skipped=${result.skipped}`);
+      console.log(`🗑️ Privacy draft erasure: deleted=${result.deleted} redacted=${result.redacted}`);
     }
     return result;
   });
@@ -321,16 +329,28 @@ export async function scrubLegacyPrivacyDraftValues(values) {
   return queueWrite(async () => {
     const drafts = await loadDrafts({ ensure: false });
     let changed = 0;
-    for (const d of drafts) {
-      if (!isPrivacyDraft(d) || isSendLocked(d)) continue;
-      const body = typeof d.body === 'string' ? d.body.replace(pattern, '[redacted]') : d.body;
-      const subject = typeof d.subject === 'string' ? d.subject.replace(pattern, '[redacted]') : d.subject;
-      if (body === d.body && subject === d.subject) continue;
-      d.body = body;
-      d.subject = subject;
+    const scrub = value => typeof value === 'string' ? value.replace(pattern, '[redacted]') : value;
+    // An edited recipient can carry the erased value. Remove matching
+    // addresses altogether because partial redaction leaves an invalid target.
+    const scrubRecipients = recipients => {
+      if (Array.isArray(recipients)) return recipients.filter(value => scrub(value) === value);
+      return scrub(recipients) === recipients ? recipients : [];
+    };
+    for (const [index, d] of drafts.entries()) {
+      if (d.privacyErased || !isPrivacyDraft(d)) continue;
+      const body = scrub(d.body);
+      const subject = scrub(d.subject);
+      const to = scrubRecipients(d.to);
+      const cc = scrubRecipients(d.cc);
+      if (body === d.body && subject === d.subject && isDeepStrictEqual(to, d.to) && isDeepStrictEqual(cc, d.cc)) continue;
+      changed += 1;
+      if (isSendLocked(d)) {
+        drafts[index] = erasedPrivacyDraft(d);
+        continue;
+      }
+      Object.assign(d, { body, subject, to, cc });
       d.updatedAt = new Date().toISOString();
       if (d.status === 'approved') d.status = 'draft';
-      changed += 1;
     }
     if (changed) await saveDrafts(drafts);
     return changed;

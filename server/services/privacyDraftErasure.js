@@ -1,6 +1,7 @@
 /**
  * Privacy Center draft erasure: removes or redacts the plaintext email drafts Privacy Center renders from vault values when a subject, vault record, case evidence or opt-out consent goes away.
  */
+import { emitToOperators } from './socketIo.js';
 import { decryptValue } from '../lib/vaultCrypto.js';
 import { parseCityState } from '../lib/cityState.js';
 import { PRIVACY_SENSITIVE_TYPES } from '../lib/privacyConstants.js';
@@ -28,24 +29,28 @@ export function draftScrubNeedlesForRows(rows) {
   });
 }
 
-export async function eraseSubjectDrafts(subjectId, legacyValues = []) {
-  const { erasePrivacyDrafts, scrubLegacyPrivacyDraftValues } = await drafts();
-  await erasePrivacyDrafts(d => metaOf(d).subjectId === subjectId);
-  await scrubLegacyPrivacyDraftValues(legacyValues);
+async function eraseSelectedDrafts(predicate, options, legacyValues) {
+  const store = await drafts();
+  const result = await store.erasePrivacyDrafts(predicate, options);
+  // Invalidate open Comms views after each durable change, including when
+  // the subsequent scrub of drafts without provenance fails.
+  if (result.deleted || result.redacted) emitToOperators('messages:changed', {});
+  if (legacyValues && await store.scrubLegacyPrivacyDraftValues(legacyValues)) emitToOperators('messages:changed', {});
+  return result;
 }
 
-export async function revokeOptOutDrafts(subjectId) {
-  const { erasePrivacyDrafts } = await drafts();
-  return erasePrivacyDrafts(d => metaOf(d).subjectId === subjectId, { onlyUnsent: true, generatedBy: ['privacy-optout'] });
+export function eraseSubjectDrafts(subjectId, legacyValues = []) {
+  return eraseSelectedDrafts(d => metaOf(d).subjectId === subjectId, undefined, legacyValues);
 }
 
-export async function eraseVaultRecordDrafts(vaultRecordId, legacyValues = []) {
-  const { erasePrivacyDrafts, scrubLegacyPrivacyDraftValues } = await drafts();
-  await erasePrivacyDrafts(d => (metaOf(d).vaultRecordIds || []).includes(vaultRecordId));
-  await scrubLegacyPrivacyDraftValues(legacyValues);
+export function revokeOptOutDrafts(subjectId) {
+  return eraseSelectedDrafts(d => metaOf(d).subjectId === subjectId, { onlyUnsent: true, generatedBy: ['privacy-optout'] });
 }
 
-export async function eraseCaseDrafts(caseId, draftId = null) {
-  const { erasePrivacyDrafts } = await drafts();
-  await erasePrivacyDrafts(d => metaOf(d).caseId === caseId || (draftId && d.id === draftId), { generatedBy: ['privacy-optout'] });
+export function eraseVaultRecordDrafts(vaultRecordId, legacyValues = []) {
+  return eraseSelectedDrafts(d => (metaOf(d).vaultRecordIds || []).includes(vaultRecordId), undefined, legacyValues);
+}
+
+export function eraseCaseDrafts(caseId, draftId = null) {
+  return eraseSelectedDrafts(d => metaOf(d).caseId === caseId || (draftId && d.id === draftId), { generatedBy: ['privacy-optout'] });
 }

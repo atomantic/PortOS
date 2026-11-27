@@ -171,6 +171,22 @@ describe('DraftsTab interrupted delivery', () => {
     expect(getMessageDrafts).toHaveBeenCalledTimes(1);
   });
 
+  it('records nondelivery of an erased draft without offering to edit, approve or resend it', async () => {
+    const erased = {
+      ...unknown, privacyErased: true, subject: '', body: '',
+      sendAttempts: [{ id: unknown.sendAttemptId, startedAt: '2026-01-01T12:00:00Z' }]
+    };
+    getMessageDrafts.mockResolvedValue([erased]);
+    reconcileMessageDraft.mockResolvedValueOnce({ ...erased, status: 'erased' });
+    render(<DraftsTab accounts={[]} />);
+    expect(await screen.findByText(/Either choice records the outcome and keeps the draft closed/)).toBeInTheDocument();
+    expect(screen.getByText(/Send attempt started/)).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('checkbox'));
+    fireEvent.click(screen.getByRole('button', { name: 'Confirm not sent' }));
+    expect(await screen.findByText('erased')).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: /^(Edit|Approve|Send)$/ })).not.toBeInTheDocument();
+  });
+
   it('keeps uncertainty visible on conflict and makes confirmed delivery terminal', async () => {
     getMessageDrafts.mockResolvedValue([unknown]);
     reconcileMessageDraft.mockRejectedValueOnce(new Error('Draft state conflict'));
