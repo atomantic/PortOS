@@ -56,8 +56,10 @@ describe('toolkit prompts routes validate their bodies', () => {
     const app = appFor('/api/prompts', createPromptsRoutes(svc));
 
     expect((await request(app).put('/api/prompts/stages/x').send({ config: { model: 'm' }, template: 't' })).status).toBe(200);
-    expect(svc.updateStageConfig).toHaveBeenCalledWith('x', { model: 'm' });
-    expect(svc.updateStageTemplate).toHaveBeenCalledWith('x', 't');
+    expect(svc.updateStageConfig).toHaveBeenCalledWith('x', { model: 'm' }, 't');
+    expect(svc.updateStageTemplate).not.toHaveBeenCalled();
+    expect((await request(app).put('/api/prompts/stages/x').send({ template: 'standalone' })).status).toBe(200);
+    expect(svc.updateStageTemplate).toHaveBeenCalledWith('x', 'standalone');
 
     expect((await request(app).post('/api/prompts/stages/x/preview').send({ a: 1 })).status).toBe(200);
     expect(svc.previewPrompt).toHaveBeenCalledWith('x', { a: 1 });

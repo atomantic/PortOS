@@ -43,11 +43,11 @@ export function createPromptsRoutes(promptsService, options = {}) {
   router.put('/stages/:name', asyncHandler(async (req, res) => {
     const { config, template } = parseBody(promptStageUpdateBodySchema, req.body, 'stage data');
 
-    if (config) {
+    if (config && template) {
+      await promptsService.updateStageConfig(req.params.name, config, template);
+    } else if (config) {
       await promptsService.updateStageConfig(req.params.name, config);
-    }
-
-    if (template) {
+    } else if (template) {
       await promptsService.updateStageTemplate(req.params.name, template);
     }
 
