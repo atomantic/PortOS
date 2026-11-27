@@ -21,9 +21,12 @@ const { hydration, headerQueries } = vi.hoisted(() => ({ hydration: [], headerQu
 vi.mock('../lib/db.js', async (importOriginal) => {
   const actual = await importOriginal();
   return { ...actual, query: async (sql, params) => {
-    if (sql.startsWith('SELECT id, data FROM music_video_projects')) hydration.push(params?.[0]);
+    const result = await actual.query(sql, params);
+    if (/\bFROM music_video_projects\b/.test(sql) && result.fields.some(({ name }) => name === 'data')) {
+      hydration.push(result.rows.map(({ id, data }) => ({ id, productionReview: data.productionReview })));
+    }
     if (sql.startsWith('SELECT id, page_created_at')) headerQueries.push(sql);
-    return actual.query(sql, params);
+    return result;
   } };
 });
 
@@ -81,7 +84,12 @@ describe.skipIf(!runDb)('PostgreSQL Music Video completion summaries', () => {
   });
 
   it('applies manual marks before searching and paginating, then falls back to automatic status on clear', async () => {
-    const reopened = await seed('05', { status: 'complete', renderHistoryId: 'render-reopened' });
+    const approvals = { art: { basis: 'reviewed-art' } };
+    const reopened = await seed('05', { status: 'complete', renderHistoryId: 'render-reopened', productionReview: {
+      approvals,
+      reviewedRevisions: { 'reviewed-art': { draft: { visualLanguage: 'Example direction' } } },
+      approvalHistory: [{ stage: 'art', basis: 'reviewed-art' }],
+    } });
     const completed = await seed('04', { renderHistoryId: 'render-manual' });
     const noFinal = await seed('03', { completion: { state: 'complete', markedAt: '2026-01-03' } });
     const automatic = await seed('02', { status: 'complete', renderHistoryId: 'render-auto' });
@@ -97,7 +105,8 @@ describe.skipIf(!runDb)('PostgreSQL Music Video completion summaries', () => {
     expect(await page('completed')).toMatchObject({ items: [{ id: completed, isCompleted: true }], total: 2, offset: 0, nextCursor: '1' });
     expect(await page('completed', '1')).toMatchObject({ items: [{ id: automatic, isCompleted: true }], total: 2, offset: 1, nextCursor: null });
     expect(await page('completed', '2')).toMatchObject({ items: [], total: 2, offset: 2, nextCursor: null });
-    expect(hydration).toEqual([[reopened], [noFinal], [completed], [automatic]]);
+    expect(hydration.map(rows => rows.map(({ id }) => id))).toEqual([[reopened], [noFinal], [completed], [automatic]]);
+    expect(hydration[0]).toEqual([{ id: reopened, productionReview: { approvals } }]);
 
     await mark(reopened, 'auto');
     await mark(completed, 'auto');
