@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 vi.mock('../socketIo.js', () => ({ emitToOperators: vi.fn() }));
+vi.mock('../llamaServerAutoStart.js', () => ({ setLlamaServerAutoStart: vi.fn() }));
 vi.mock('../llamaServerManager.js', () => ({
   getLlamaServerStatus: vi.fn(),
   startLlamaServer: vi.fn(),
@@ -9,6 +10,7 @@ vi.mock('../llamaServerManager.js', () => ({
 
 import { emitToOperators } from '../socketIo.js';
 import { getLlamaServerStatus, startLlamaServer as managedStartLlamaServer } from '../llamaServerManager.js';
+import { setLlamaServerAutoStart } from '../llamaServerAutoStart.js';
 import { CONVERSATIONAL_GEMMA } from '../../lib/voiceModelCatalog.js';
 import {
   _resetConversationalGemmaSetupForTests,
@@ -192,6 +194,7 @@ describe('conversationalGemmaSetup', () => {
     });
 
     expect(managedStartLlamaServer).toHaveBeenCalledWith(expect.objectContaining({ alias: CONVERSATIONAL_GEMMA.id }));
+    expect(setLlamaServerAutoStart).toHaveBeenCalledWith(true);
     expect(status.phase).toBe('ready');
   });
 

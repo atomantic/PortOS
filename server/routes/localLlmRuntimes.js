@@ -3,7 +3,7 @@ import { Router } from 'express'
 import { asyncHandler, ServerError } from '../lib/errorHandler.js'
 import { validateRequest } from '../lib/validateRequest.js'
 import {
-  localLlmLlamaServerStartSchema, localLlmMtplxStartSchema, localLlmSlotstreamStartSchema,
+  localLlmLlamaAutoStartSchema, localLlmLlamaServerStartSchema, localLlmMtplxStartSchema, localLlmSlotstreamStartSchema,
   managedInklingActionSchema, managedInklingCancelSchema, mkserveInstallSchema, splashContextSchema, localLlmSpecModelDownloadSchema,
   localLlmMtplxSearchSchema, localLlmMtplxPullSchema, localLlmMtplxRemoveSchema, localLlmSlotstreamDownloadSchema, localLlmSlotstreamRemoveSchema,
 } from '../lib/mediaValidation.js'
@@ -16,6 +16,7 @@ import {
   upgradeLlamaServer,
   waitForLlamaServerReady,
 } from '../services/llamaServerManager.js'
+import { setLlamaServerAutoStart } from '../services/llamaServerAutoStart.js'
 import { onDemandRuntimeAppNames } from '../lib/managedRuntimeApps.js'
 import { getMtplxServerStatus, startMtplxServer, stopMtplxServer, installMtplx, uninstallMtplx, waitForMtplxReady } from '../services/mtplxServerManager.js'
 import { getSplashRuntimeStatus } from '../services/splashRuntimeStatus.js'
@@ -235,6 +236,14 @@ router.get('/llama-server/status', statusRoute('llama'))
 router.post('/llama-server/start', startRoute('llama'))
 router.post('/llama-server/stop', stopRoute('llama'))
 router.post('/llama-server/install', installRoute('llama'))
+// Saving the toggle reconciles at once: on while stopped starts the saved launch line now.
+router.put('/llama-server/auto-start', asyncHandler(async (req, res) => {
+  const { enabled } = validateRequest(localLlmLlamaAutoStartSchema, req.body)
+  const { launched, ...result } = await setLlamaServerAutoStart(enabled)
+  if (result.started) resetProviderReadinessCache()
+  res.json({ ...result, status: await runtimeAdapters.llama.status({ includeLogs: false }) })
+  if (result.started) refreshRuntimeModels(req, 'llama', launched, waitForLlamaServerReady)
+}))
 
 router.get('/mtplx/status', statusRoute('mtplx'))
 router.post('/mtplx/start', startRoute('mtplx'))

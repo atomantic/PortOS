@@ -14,6 +14,9 @@ import { saveProcessList } from '../services/pm2.js';
 import { resetProviderReadinessCache } from '../services/provider/providerReadiness.js';
 import { syncRuntimeProviderModels } from '../services/localRuntimeProviderSync.js';
 import { recordingOperatorIo } from '../test/recordingOperatorIo.js';
+import { getLlamaServerStatus, waitForLlamaServerReady } from '../services/llamaServerManager.js';
+import { setLlamaServerAutoStart } from '../services/llamaServerAutoStart.js';
+import { getSpecDecodePresetStatus } from '../services/specDecodeModels.js';
 import localLlmRuntimes from './localLlmRuntimes.js';
 
 vi.mock('../services/llamaServerManager.js', () => ({
@@ -25,6 +28,7 @@ vi.mock('../services/llamaServerManager.js', () => ({
   upgradeLlamaServer: vi.fn(),
   waitForLlamaServerReady: vi.fn(),
 }));
+vi.mock('../services/llamaServerAutoStart.js', () => ({ setLlamaServerAutoStart: vi.fn() }));
 vi.mock('../services/specDecodeModels.js', () => ({
   getSpecDecodePresetStatus: vi.fn(),
   downloadSpecDecodeModel: vi.fn(),
@@ -111,6 +115,32 @@ function makeApp(auth = operator) {
     put: (path, body) => request(app).put(`${base}/${path}`).send(body),
   };
 }
+
+describe('PUT /llama-server/auto-start', () => {
+  it('saves the toggle, refreshes readiness after a toggle-time start, and returns fresh status', async () => {
+    const launched = { online: false, endpoint };
+    setLlamaServerAutoStart.mockResolvedValue({ autoStart: true, started: true, reason: 'started', launched });
+    getLlamaServerStatus.mockResolvedValue({ installed: true, running: true, autoStart: true });
+    getSpecDecodePresetStatus.mockResolvedValue([]);
+
+    const res = await makeApp().put('llama-server/auto-start', { enabled: true });
+
+    expect(res.status).toBe(200);
+    expect(res.body).toMatchObject({ autoStart: true, started: true, status: { running: true, autoStart: true } });
+    expect(res.body).not.toHaveProperty('launched');
+    expect(setLlamaServerAutoStart).toHaveBeenCalledWith(true);
+    expect(resetProviderReadinessCache).toHaveBeenCalledTimes(1);
+    expect(syncRuntimeProviderModels).toHaveBeenCalledWith(expect.objectContaining({ kind: 'llama' }));
+    await syncRuntimeProviderModels.mock.calls[0][0].waitForReady();
+    expect(waitForLlamaServerReady).toHaveBeenCalledWith(endpoint);
+  });
+
+  it('rejects a malformed body without touching the setting', async () => {
+    const res = await makeApp().put('llama-server/auto-start', { enabled: 'yes' });
+    expect(res.status).toBe(400);
+    expect(setLlamaServerAutoStart).not.toHaveBeenCalled();
+  });
+});
 
 it.each([
   ['mtplx', mtplx.getMtplxServerStatus],

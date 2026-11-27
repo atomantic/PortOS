@@ -2,7 +2,7 @@ import {
   Mic, MicOff, Monitor, MonitorOff, PhoneOff, Play, Radio, ScanFace, Square, Volume2, VolumeX,
 } from 'lucide-react';
 import SatPhoneRotaryDial from './SatPhoneRotaryDial';
-import { CONVERSATIONAL_GEMMA, isConversationalGemma } from '../../../../server/lib/voiceModelCatalog.js';
+import { voiceModelDisplayName } from '../../../../server/lib/voiceModelCatalog.js';
 
 const keyBase = 'satphone-key inline-flex min-h-10 pointer-coarse:min-h-11 items-center justify-center gap-1 rounded-lg border px-2 py-1.5 font-mono text-[10px] font-semibold uppercase tracking-wider disabled:opacity-45';
 
@@ -120,7 +120,7 @@ export function SatPhoneTelemetry({
 }) {
   const modeBadge = !canChangeMicMode ? 'WEB' : handsFree ? 'VOX' : 'PTT';
   const llmDisplay = llmModel && llmModel !== 'auto'
-    ? (isConversationalGemma(llmModel) ? CONVERSATIONAL_GEMMA.name : llmModel)
+    ? voiceModelDisplayName(llmModel)
     : (llmProvider ? `${llmProvider} · auto` : null);
   const lcdSubline = [voiceLabel || 'Saved voice', llmDisplay].filter(Boolean).join(' · ');
 
