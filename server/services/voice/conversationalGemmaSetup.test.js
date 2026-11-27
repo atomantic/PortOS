@@ -24,7 +24,7 @@ describe('conversationalGemmaSetup', () => {
   it('reports local disk and llama-server binary readiness without network probes', async () => {
     const status = await getConversationalGemmaSetupStatus({
       supported: true,
-      resolveLlamaServerBinary: vi.fn().mockResolvedValue('/opt/homebrew/bin/llama-server'),
+      resolveLlamaServerBinary: vi.fn().mockReturnValue('/opt/homebrew/bin/llama-server'),
       readGgufStat: vi.fn().mockResolvedValue({ size: 33_000_000_000 }),
       getHfToken: vi.fn().mockResolvedValue('hf_test'),
     });
@@ -48,11 +48,11 @@ describe('conversationalGemmaSetup', () => {
     const status = await startConversationalGemmaSetup({
       supported: true,
       awaitCompletion: true,
-      resolveLlamaServerBinary: vi.fn().mockResolvedValue('/opt/homebrew/bin/llama-server'),
+      resolveLlamaServerBinary: vi.fn().mockReturnValue('/opt/homebrew/bin/llama-server'),
       readGgufStat: vi.fn().mockResolvedValue({ size: 33_000_000_000 }),
       getHfToken: vi.fn().mockResolvedValue(null),
       llamaInstallMod: {
-        resolveLlamaServerBinary: vi.fn().mockResolvedValue('/opt/homebrew/bin/llama-server'),
+        resolveLlamaServerBinary: vi.fn().mockReturnValue('/opt/homebrew/bin/llama-server'),
         installLlamaServer: vi.fn(),
       },
       llamaLifecycleMod: {
@@ -96,12 +96,12 @@ describe('conversationalGemmaSetup', () => {
     const status = await startConversationalGemmaSetup({
       supported: true,
       awaitCompletion: true,
-      resolveLlamaServerBinary: vi.fn().mockResolvedValue(null),
+      resolveLlamaServerBinary: vi.fn().mockReturnValue(null),
       readGgufStat: vi.fn().mockResolvedValue(null),
       getHfToken: vi.fn().mockResolvedValue(null),
       checkAccess: vi.fn().mockResolvedValue({ status: 'token-required' }),
       llamaInstallMod: {
-        resolveLlamaServerBinary: vi.fn().mockResolvedValue(null),
+        resolveLlamaServerBinary: vi.fn().mockReturnValue(null),
         installLlamaServer,
       },
       llamaLifecycleMod: {
@@ -128,13 +128,13 @@ describe('conversationalGemmaSetup', () => {
     const status = await startConversationalGemmaSetup({
       supported: true,
       awaitCompletion: true,
-      resolveLlamaServerBinary: vi.fn().mockResolvedValue('/opt/homebrew/bin/llama-server'),
+      resolveLlamaServerBinary: vi.fn().mockReturnValue('/opt/homebrew/bin/llama-server'),
       readGgufStat: vi.fn().mockResolvedValue(null),
       getHfToken: vi.fn().mockResolvedValue('hf_secret'),
       checkAccess: vi.fn().mockResolvedValue({ status: 'ready' }),
       convertModel,
       llamaInstallMod: {
-        resolveLlamaServerBinary: vi.fn().mockResolvedValue('/opt/homebrew/bin/llama-server'),
+        resolveLlamaServerBinary: vi.fn().mockReturnValue('/opt/homebrew/bin/llama-server'),
         installLlamaServer: vi.fn(),
       },
       llamaLifecycleMod: {
@@ -166,7 +166,7 @@ describe('conversationalGemmaSetup', () => {
   it('cancels safely when idle', async () => {
     const status = await cancelConversationalGemmaSetup({
       supported: true,
-      resolveLlamaServerBinary: vi.fn().mockResolvedValue(null),
+      resolveLlamaServerBinary: vi.fn().mockReturnValue(null),
       readGgufStat: vi.fn().mockResolvedValue(null),
       getHfToken: vi.fn().mockResolvedValue(null),
     });

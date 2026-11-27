@@ -75,8 +75,10 @@ export async function getConversationalGemmaSetupStatus(deps = {}) {
   const resolveBinary = deps.resolveLlamaServerBinary
     || (await import('../llamaServerInstall.js')).resolveLlamaServerBinary;
   const readToken = deps.getHfToken || getHfToken;
+  // resolveLlamaServerBinary is a synchronous PATH probe; wrap it so a sync
+  // throw (or an async injected double) both degrade to "not installed".
   const [llamaBin, gguf, token] = await Promise.all([
-    resolveBinary().catch(() => null),
+    Promise.resolve().then(resolveBinary).catch(() => null),
     deps.readGgufStat ? deps.readGgufStat() : readGgufStat(),
     readToken().catch(() => null),
   ]);
