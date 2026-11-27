@@ -141,6 +141,9 @@ vi.mock('../services/jev.js', () => ({
   installJev: vi.fn(),
   stopJevSidecar: vi.fn(),
 }));
+vi.mock('../services/jevTraining.js', () => ({
+  cancelJevTraining: vi.fn(() => ({ cancelled: true })),
+}));
 vi.mock('../services/jevRouter.js', () => ({
   readJevDecisionStats: vi.fn(),
 }));
@@ -160,6 +163,7 @@ vi.mock('../services/localModelAssessmentSweep.js', () => ({
 }));
 vi.mock('../services/localModelAgentBenchmark.js', () => ({
   runOpenCodeAgentBenchmark: vi.fn(),
+  cancelOpenCodeAgentBenchmark: vi.fn(() => ({ cancelled: true })),
 }));
 vi.mock('../services/modelCapabilityTests.js', () => ({
   getCapabilityTestReport: vi.fn(),
@@ -200,7 +204,8 @@ import { updateConfig, launchBrowser } from '../services/browserService.js';
 import { streamHarnessAction } from '../services/harnessActionStream.js';
 import { listHarnesses } from '../services/harnesses.js';
 import { installBackend, getStatus, listModels, installModel } from '../services/localLlm.js';
-import { runOpenCodeAgentBenchmark } from '../services/localModelAgentBenchmark.js';
+import { cancelOpenCodeAgentBenchmark, runOpenCodeAgentBenchmark } from '../services/localModelAgentBenchmark.js';
+import { cancelJevTraining } from '../services/jevTraining.js';
 import { updateSettingsWith } from '../services/settings.js';
 import { runLocalLlmTest } from '../services/localLlmPlayground.js';
 import { runCapabilityTest } from '../services/modelCapabilityTests.js';
@@ -214,7 +219,11 @@ const mounts = [
 
 const mtplxCancel = ['post', '/api/local-llm/mtplx/models/pull/cancel', undefined, cancelMtplxModelPull];
 const slotstreamRemoval = ['post', '/api/local-llm/slotstream/models/remove', { model: 'example-model' }, removeSlotstreamModel];
+const benchmarkCancel = ['post', '/api/local-llm/assessments/agent-benchmark/cancel', undefined, cancelOpenCodeAgentBenchmark];
+const trainingCancel = ['post', '/api/local-llm/jev/heads/train/cancel', undefined, cancelJevTraining];
 const writes = [
+  benchmarkCancel,
+  trainingCancel,
   slotstreamRemoval,
   mtplxCancel,
   ['post', '/api/local-llm/capability-tests/run', { backend: 'ollama', modelId: 'example-model', testId: 'sandbox-repair' }, runCapabilityTest],
@@ -248,6 +257,8 @@ describe('operator authority for browser, harness and local-runtime management',
     await expectRemoteRefusal(mounts, ['post', '/api/local-llm/slotstream/uninstall', {}, uninstallSlotstream]);
     await expectRemoteRefusal(mounts, mtplxCancel);
     await expectRemoteRefusal(mounts, slotstreamRemoval);
+    await expectRemoteRefusal(mounts, benchmarkCancel);
+    await expectRemoteRefusal(mounts, trainingCancel);
   });
 
   it('preserves local and delegated-agent runtime management and inference', async () => {

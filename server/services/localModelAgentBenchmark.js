@@ -31,7 +31,7 @@ import { claimHeavyLocalJob } from '../lib/heavyJobClaim.js';
 import { getProviderById } from './provider/providers.js';
 import { ensureProviderReadyForExecution } from './provider/providerExecutionReadiness.js';
 import { executeTuiRun } from './tuiPromptRunner.js';
-import { getRunsPath } from './runner.js';
+import { getRunsPath, stopRun } from './runner.js';
 import { runOnMtplxCheckpoint } from './mtplxServerManager.js';
 
 export const buildOpenCodeAgentBenchmarkPrompt = (benchmarkFilePath = 'PORTOS_AGENT_BENCHMARK.txt') => [
@@ -43,6 +43,13 @@ export const buildOpenCodeAgentBenchmarkPrompt = (benchmarkFilePath = 'PORTOS_AG
 ].join(' ');
 
 const DEFAULT_TIMEOUT_MS = 10 * 60 * 1000;
+let activeBenchmark = null;
+
+export function cancelOpenCodeAgentBenchmark() {
+  if (!activeBenchmark) return { cancelled: false };
+  activeBenchmark.abort();
+  return { cancelled: true };
+}
 
 const targetFor = (backend, modelId) => {
   const target = Object.hasOwn(LOCAL_TUI_AGENT_BENCHMARK_TARGETS, backend) && LOCAL_TUI_AGENT_BENCHMARK_TARGETS[backend];
@@ -85,14 +92,35 @@ const validateProvider = (provider, target, backend) => {
  */
 export async function runOpenCodeAgentBenchmark({ backend, modelId, timeoutMs = DEFAULT_TIMEOUT_MS } = {}) {
   const target = targetFor(backend, modelId);
+  if (activeBenchmark) {
+    throw new ServerError('A local TUI agent benchmark is already running', { status: 409, code: 'HEAVY_LOCAL_JOB_BUSY' });
+  }
+  const controller = new AbortController();
+  activeBenchmark = controller;
+  const { signal } = controller;
+  try {
+    const result = await runBenchmark({ backend, modelId, timeoutMs, target, signal });
+    return signal.aborted ? { completed: false, cancelled: true } : result;
+  } catch (error) {
+    if (!signal.aborted) throw error;
+    return { completed: false, cancelled: true };
+  } finally {
+    activeBenchmark = null;
+  }
+}
+
+async function runBenchmark({ backend, modelId, timeoutMs, target, signal }) {
   const provider = await getProviderById(target.providerId);
+  signal.throwIfAborted();
   validateProvider(provider, target, backend);
 
-  const claim = await claimHeavyLocalJob({ kind: 'local-model agent benchmark', id: `${backend}/${modelId}` });
+  const claim = await claimHeavyLocalJob({ kind: 'local-model agent benchmark', id: `${backend}/${modelId}`, signal });
   if (!claim.ok) {
+    signal.throwIfAborted();
     throw new ServerError(claim.message, { status: 409, code: 'HEAVY_LOCAL_JOB_BUSY', context: { holder: claim.holder } });
   }
   try {
+    signal.throwIfAborted();
     const startedAt = Date.now();
     // Keep the shipped served-id target callable for existing installs. Other
     // MTPLX targets are cache repo IDs and can require changing the checkpoint.
@@ -108,26 +136,33 @@ export async function runOpenCodeAgentBenchmark({ backend, modelId, timeoutMs = 
         const envVars = { ...provider.envVars };
         envVars.OPENCODE_CONFIG_CONTENT = JSON.stringify(config);
         return executeBenchmark({
-          backend, modelId, timeoutMs, target, servedModelId, startedAt,
+          backend, modelId, timeoutMs, target, servedModelId, startedAt, signal,
           provider: { ...provider, endpoint, envVars },
         });
-      }, { requireCached: true });
+      }, { requireCached: true, signal });
     }
-    return await executeBenchmark({ backend, modelId, timeoutMs, target, provider, startedAt });
+    return await executeBenchmark({ backend, modelId, timeoutMs, target, provider, startedAt, signal });
   } finally {
     await claim.release();
   }
 }
 
-async function executeBenchmark({ backend, modelId, timeoutMs, target, provider, startedAt, servedModelId = modelId }) {
+async function executeBenchmark({ backend, modelId, timeoutMs, target, provider, startedAt, signal, servedModelId = modelId }) {
   const scratchDir = await mkdtemp(join(tmpdir(), 'portos-opencode-agent-benchmark-'));
   const runId = `portos-opencode-agent-benchmark-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`;
   const benchmarkFilePath = join(scratchDir, 'PORTOS_AGENT_BENCHMARK.txt');
+  const stopTui = () => {
+    stopRun(runId).catch((error) => {
+      console.error(`❌ Local LLM: could not stop the OpenCode benchmark — ${error.message}`);
+    });
+  };
   try {
+    signal.throwIfAborted();
     // This benchmark uses the direct PTY runner instead of
     // runPromptThroughProvider, so wake a stopped local daemon before spawning
     // OpenCode. MTPLX releases its checkpoint after the idle window.
     const ready = await ensureProviderReadyForExecution(provider);
+    signal.throwIfAborted();
     if (!ready.success) {
       return {
         backend,
@@ -152,25 +187,31 @@ async function executeBenchmark({ backend, modelId, timeoutMs, target, provider,
     // response-file completion, cancellation and run-record cleanup semantics.
     // Clone only the model pin: the provider's endpoint, env and permissions
     // stay exactly as the user configured them.
-    const completion = await new Promise((resolve) => {
-      executeTuiRun({
-        runId,
-        provider: { ...provider, defaultModel: servedModelId },
-        prompt: buildOpenCodeAgentBenchmarkPrompt(benchmarkFilePath),
-        workspacePath: scratchDir,
-        timeout: timeoutMs,
-        label: `local-model-benchmark:${backend}`,
-        guard: true,
-        // This run is a PROBE — measuring whether a local model can drive an
-        // agentic task is the whole point, so "it couldn't" is the result, and
-        // it is already reported in `error` below. Left reporting, every failed
-        // benchmark also queued a CoS "Investigate AI provider failure" task
-        // against a provider nobody claimed was healthy — and pointed it at a
-        // run record this function's `finally` had already deleted.
-        reportFailure: false,
-        onComplete: resolve,
-      }).catch((err) => resolve({ success: false, exitCode: 1, error: err?.message || 'OpenCode TUI failed' }));
-    });
+    let completion;
+    await executeTuiRun({
+      runId,
+      provider: { ...provider, defaultModel: servedModelId },
+      prompt: buildOpenCodeAgentBenchmarkPrompt(benchmarkFilePath),
+      workspacePath: scratchDir,
+      timeout: timeoutMs,
+      label: `local-model-benchmark:${backend}`,
+      guard: true,
+      // This run is a PROBE — measuring whether a local model can drive an
+      // agentic task is the whole point, so "it couldn't" is the result, and
+      // it is already reported in `error` below. Left reporting, every failed
+      // benchmark also queued a CoS "Investigate AI provider failure" task
+      // against a provider nobody claimed was healthy — and pointed it at a
+      // run record this function's `finally` had already deleted.
+      reportFailure: false,
+      beforeExecute: () => signal.throwIfAborted(),
+      onReady: () => {
+        signal.addEventListener('abort', stopTui, { once: true });
+        if (signal.aborted) stopTui();
+      },
+      onComplete: (result) => { completion = result; },
+    }).catch((err) => { completion = { success: false, exitCode: 1, error: err?.message || 'OpenCode TUI failed' }; });
+    signal.throwIfAborted();
+    completion ??= { success: false, error: 'OpenCode TUI did not report a result' };
     const sentinel = await readFile(benchmarkFilePath, 'utf8')
       .then((value) => value.trim())
       .catch(() => '');
@@ -205,6 +246,7 @@ async function executeBenchmark({ backend, modelId, timeoutMs, target, provider,
       // a transcript that could contain user data.
     };
   } finally {
+    signal.removeEventListener('abort', stopTui);
     await rm(scratchDir, { recursive: true, force: true }).catch((err) => {
       console.error(`⚠️ Local LLM: could not remove the OpenCode benchmark scratch directory — ${err.message}`);
     });

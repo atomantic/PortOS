@@ -6,6 +6,7 @@ vi.mock('../../services/apiLocalLlm.js', () => ({
   getJevDecisionStats: vi.fn(),
   installJev: vi.fn(),
   cancelJevInstall: vi.fn(),
+  cancelJevTraining: vi.fn(),
   scoreJev: vi.fn(),
   unloadJev: vi.fn(),
   getJevHeads: vi.fn(),
@@ -27,6 +28,7 @@ vi.mock('../ui/Toast');
 import {
   adoptJevHead,
   cancelJevInstall,
+  cancelJevTraining,
   discardJevHead,
   getJevDecisionStats,
   getJevHeads,
@@ -68,6 +70,7 @@ beforeEach(() => {
   getJevDecisionStats.mockResolvedValue({ updatedAt: null, decisions: [] });
   installJev.mockResolvedValue({ ok: true, ready: true });
   cancelJevInstall.mockResolvedValue({ cancelled: true });
+  cancelJevTraining.mockResolvedValue({ cancelled: true });
   unloadJev.mockResolvedValue({ unloaded: true });
   getJevHeads.mockResolvedValue({ heads: [], training: false });
   trainJevHead.mockResolvedValue({ ok: true });
@@ -377,6 +380,26 @@ describe('JevPanel project head', () => {
     expect(trainJevHead).toHaveBeenCalledWith({ architecture: 'linear' }, { silent: true });
     // Training NEVER promotes: the run's only follow-up is re-reading state.
     expect(adoptJevHead).not.toHaveBeenCalled();
+  });
+
+  it('cancels in-progress training and enables a fresh run when it settles', async () => {
+    getJevStatus.mockResolvedValue(status({ ready: true, setupState: 'ready', stages: stages(true) }));
+    const { promise: training, resolve: finish } = Promise.withResolvers();
+    trainJevHead.mockReturnValueOnce(training);
+    await renderPanel();
+    const start = screen.getByRole('button', { name: 'Train a project head' });
+    await waitFor(() => expect(start).toBeEnabled());
+    fireEvent.click(start);
+
+    const cancel = await screen.findByRole('button', { name: 'Cancel training' });
+    await act(async () => { fireEvent.click(cancel); });
+    expect(cancelJevTraining).toHaveBeenCalledExactlyOnceWith({ silent: true });
+    expect(screen.getByRole('button', { name: 'Training…' })).toBeDisabled();
+    await act(async () => finish({ ok: false, cancelled: true, code: 'jev-head-training-cancelled' }));
+
+    expect(screen.queryByRole('button', { name: 'Cancel training' })).not.toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Train a project head' })).toBeEnabled();
+    expect(screen.queryByRole('alert')).not.toBeInTheDocument();
   });
 
   it('reports a failed training run beside the scores rather than as a toast', async () => {

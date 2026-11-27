@@ -136,8 +136,13 @@ router.post('/jev/heads/train', asyncHandler(async (req, res) => {
   const { architecture } = validateRequest(jevHeadTrainRequestSchema, req.body || {})
   const { trainScopeAdherenceHead } = await jevTrainer()
   const result = await trainScopeAdherenceHead({ architecture })
-  if (!result?.ok) throw new ServerError('Training a project head failed.', { status: 502, code: result?.code || 'jev-head-training-failed' })
+  if (!result?.ok && !result?.cancelled) throw new ServerError('Training a project head failed.', { status: 502, code: result?.code || 'jev-head-training-failed' })
   res.json(result)
+}))
+
+router.post('/jev/heads/train/cancel', asyncHandler(async (_req, res) => {
+  const { cancelJevTraining } = await jevTrainer()
+  res.json(cancelJevTraining())
 }))
 
 // THE ADOPTION GATE is in `adoptJevHead`, not here: a head that does not beat

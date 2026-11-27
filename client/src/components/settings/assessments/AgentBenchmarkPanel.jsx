@@ -4,7 +4,7 @@ import { Play, Terminal } from 'lucide-react';
 import toast from '../../ui/Toast';
 import { useAsyncAction } from '../../../hooks/useAsyncAction';
 import { formatDurationMs } from '../../../utils/formatters';
-import { getMtplxServerStatus, runOpenCodeAgentBenchmark } from '../../../services/apiLocalLlm.js';
+import { cancelOpenCodeAgentBenchmark, getMtplxServerStatus, runOpenCodeAgentBenchmark } from '../../../services/apiLocalLlm.js';
 import { LOCAL_TUI_AGENT_BENCHMARK_TARGETS } from '../../../../../server/lib/localAgentBenchmarkTargets.js';
 import { LOCAL_RUNTIME_MANAGE_URLS } from '../../../../../server/lib/modelPinMembership.js';
 import { modelKey } from './assessmentDetails';
@@ -18,6 +18,10 @@ export default function AgentBenchmarkPanel({ active, disabled }) {
   const [activeTargetKey, setActiveTargetKey] = useState(null);
   const [runAgentBenchmark, agentBenchmarkRunning] = useAsyncAction(async (target) => {
     const result = await runOpenCodeAgentBenchmark({ backend: target.backend, modelId: target.modelId }, { silent: true });
+    if (result?.cancelled) {
+      toast.success('Agent task check cancelled');
+      return result;
+    }
     setAgentBenchmarkResults((previous) => ({ ...previous, [modelKey(target)]: result }));
     if (result?.completed) {
       toast.success(`${target.label}: agent task completed`);
@@ -27,7 +31,11 @@ export default function AgentBenchmarkPanel({ active, disabled }) {
     return result;
   }, { errorMessage: 'OpenCode agent benchmark failed' });
 
-  const running = agentBenchmarkRunning || disabled;
+  const [cancelBenchmark, cancelling] = useAsyncAction(
+    () => cancelOpenCodeAgentBenchmark({ silent: true }),
+    { errorMessage: 'Could not cancel the agent task check' },
+  );
+  const running = agentBenchmarkRunning || cancelling || disabled;
 
   const runTarget = async (target) => {
     const targetKey = modelKey(target);
@@ -134,6 +142,16 @@ export default function AgentBenchmarkPanel({ active, disabled }) {
               >
                 <Play size={10} /> {activeTargetKey === modelKey(target) ? 'Running…' : 'Run task check'}
               </button>
+              {activeTargetKey === modelKey(target) && (
+                <button
+                  type="button"
+                  disabled={cancelling}
+                  onClick={cancelBenchmark}
+                  className="w-full px-2 py-1 text-[10px] pointer-coarse:min-h-11 rounded border border-port-border text-gray-300 hover:border-port-accent disabled:opacity-50"
+                >
+                  {cancelling ? 'Cancelling…' : 'Cancel task check'}
+                </button>
+              )}
             </div>
           );
         })}
