@@ -1,6 +1,7 @@
 import ConfirmButtonPair from '../../../components/ui/ConfirmButtonPair';
 import useConfirmDelete from '../../../hooks/useConfirmDelete';
 import { useState, useEffect, useCallback, useRef } from 'react';
+import { clampPercent } from '../../ui/ProgressBar';
 import { Calendar, Trash2 } from 'lucide-react';
 import { Link } from 'react-router';
 import toast from '../../ui/Toast';
@@ -203,7 +204,14 @@ export default function CalendarTab() {
               <span>Life Progress</span>
               <span className={pctColor}>{formatPercent(pctSpent)}</span>
             </div>
-            <div className="h-2 bg-port-bg rounded-full overflow-hidden">
+            <div
+              className="h-2 bg-port-bg rounded-full overflow-hidden"
+              role="progressbar"
+              aria-label="Life progress"
+              aria-valuenow={clampPercent(pctSpent)}
+              aria-valuemin={0}
+              aria-valuemax={100}
+            >
               <div
                 className={`h-full rounded-full transition-all ${
                   pctSpent < 50 ? 'bg-port-accent' : pctSpent < 75 ? 'bg-port-warning' : 'bg-port-error'

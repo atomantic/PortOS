@@ -1,4 +1,5 @@
 import { useNavigate } from 'react-router';
+import { clampPercent } from '../../ui/ProgressBar';
 import { Beer, Scale, HeartPulse, Dna, Eye, Dumbbell, Database, Rocket, Calendar } from 'lucide-react';
 import { getLatestHealthMetrics } from '../../../services/apiHealth.js';
 import {
@@ -82,7 +83,14 @@ function CompactCountdown({ deathDate, lifeExpectancy, percentComplete, lev }) {
             <span>Life progress</span>
             <span>{percentComplete}%</span>
           </div>
-          <div className="h-1.5 bg-port-border rounded-full overflow-hidden">
+          <div
+            className="h-1.5 bg-port-border rounded-full overflow-hidden"
+            role="progressbar"
+            aria-label="Life progress"
+            aria-valuenow={clampPercent(percentComplete)}
+            aria-valuemin={0}
+            aria-valuemax={100}
+          >
             <div
               className="h-full rounded-full transition-all duration-1000"
               style={{

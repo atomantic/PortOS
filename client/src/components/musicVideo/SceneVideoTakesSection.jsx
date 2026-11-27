@@ -339,8 +339,9 @@ export default function SceneVideoTakesSection({
   clipReferenceSaveState, setClipReferenceSaveState, setSpeakerDirty, setSpeakerSaving,
   shotSaves, shotMoves, failedDownloadFields,
   applyPatch, markDirty, clearDirty, saveIfDirty, saveShot,
-  generateVideo, generateStoryboardClip, withFrameTarget, setSwapKind,
+  generateVideo, generateStoryboardClip, withFrameTarget, setSwapKind, previewGlitches = null,
 }) {
+  const previewScene = previewGlitches ? { ...scene, glitches: previewGlitches } : scene;
   return (
     <section aria-label="Render" className="min-w-0 space-y-2">
       {/* A clip, the still, or the still playing a code-drawn image effect (no model call). */}
@@ -348,7 +349,7 @@ export default function SceneVideoTakesSection({
         <SceneImageEffect fieldId={fieldId} scene={scene} onChange={applyPatch} beats={project?.audioAnalysis?.beats} fps={photoFps} />
       )}
       {stillPicture ? (
-        <ScenePicturePreview scene={scene} projectId={project?.id} beats={project?.audioAnalysis?.beats} fps={photoFps} />
+        <ScenePicturePreview scene={previewScene} projectId={project?.id} beats={project?.audioAnalysis?.beats} fps={photoFps} cameras={project?.cameras} />
       ) : (
         <>
           <SceneClipMediaPreview

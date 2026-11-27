@@ -22,7 +22,7 @@ import { sceneWipe, wipeCuts } from './musicVideoWipes.js';
 import { sceneCutEffect } from './musicVideoCutEffects.js';
 
 export const MUSIC_VIDEO_TRANSITIONS = Object.freeze(['vhs-glitch', 'channel-change', 'vhs-tracking', 'vhs-dropout', 'camera-flash', 'color-block', 'vhs-rewind',
-  'film-burn', 'light-leak', 'gate-jump', 'shutter', 'film-scratches', 'color-split']);
+  'film-burn', 'light-leak', 'light-bleed', 'corner-flare', 'edge-fog', 'light-streak', 'overexpose', 'gate-jump', 'shutter', 'film-scratches', 'color-split']);
 
 export const MUSIC_VIDEO_TRANSITION_LABELS = Object.freeze({
   'vhs-glitch': 'VHS glitch',
@@ -34,6 +34,11 @@ export const MUSIC_VIDEO_TRANSITION_LABELS = Object.freeze({
   'vhs-rewind': 'Rewind / fast-forward',
   'film-burn': 'Film burn',
   'light-leak': 'Light leak',
+  'light-bleed': 'Light bleed',
+  'corner-flare': 'Corner flare',
+  'edge-fog': 'Edge fog',
+  'light-streak': 'Light streak',
+  'overexpose': 'Overexpose',
   'gate-jump': 'Gate jump',
   'shutter': 'Shutter',
   'film-scratches': 'Film scratches',
@@ -54,7 +59,15 @@ export const MUSIC_VIDEO_GLITCH_REPEAT_LIMIT = 64;
 export const MUSIC_VIDEO_GLITCH_REPEAT_SEC = Object.freeze({ min: 0.125, max: 30 });
 export const MUSIC_VIDEO_GLITCH_EDGES = Object.freeze(['left', 'right', 'top', 'bottom']);
 // The styles that take a color and an entry edge.
-export const MUSIC_VIDEO_TINTED_GLITCHES = Object.freeze(['light-leak']);
+export const MUSIC_VIDEO_TINTED_GLITCHES = Object.freeze(['light-leak', 'light-bleed', 'corner-flare', 'edge-fog', 'light-streak', 'overexpose']);
+export const MUSIC_VIDEO_TINTED_GLITCH_DEFAULT_COLORS = Object.freeze({
+  'light-leak': '#ff4f8a',
+  'light-bleed': '#ff5a1f',
+  'corner-flare': '#ff9e2c',
+  'edge-fog': '#e83814',
+  'light-streak': '#ffae38',
+  'overexpose': '#ffb85c',
+});
 
 // Each style's frames, in order, and how many of them come before the cut
 // (`lead`, the outgoing shot's last frames). Per frame:
@@ -189,6 +202,61 @@ export const MUSIC_VIDEO_TRANSITION_STYLES = Object.freeze({
       bright: 1 + alpha * 0.3, sat: 1.05,
     })),
   },
+  // Heavy 35mm light bleed: wide saturated optical wash with a blazing hot inner edge core.
+  'light-bleed': {
+    lead: 5,
+    frames: [0.22, 0.42, 0.62, 0.78, 0.9, 0.92, 0.88, 0.74, 0.56, 0.36, 0.18].map((alpha) => ({
+      glows: [
+        { side: 'left', size: 0.82, color: 'ff5a1f', alpha, blend: 'screen' },
+        { side: 'left', size: 0.36, color: 'ffd88a', alpha: Math.min(1, alpha * 0.95), blend: 'screen' },
+      ],
+      bright: 1 + alpha * 0.32, sat: 1 + alpha * 0.18,
+    })),
+  },
+  // Organic radial optical flare blooming from a corner (like a passing streetlight hitting a lens).
+  'corner-flare': {
+    lead: 5,
+    frames: [0.2, 0.38, 0.58, 0.76, 0.86, 0.88, 0.82, 0.68, 0.5, 0.32, 0.14].map((alpha, i) => ({
+      glows: [
+        { shape: 'radial', x: 0.06 + i * 0.008, y: 0.12 + i * 0.008, rx: 0.68, ry: 0.86, color: 'ff9e2c', alpha, blend: 'screen' },
+        { shape: 'radial', x: 0.04 + i * 0.006, y: 0.1 + i * 0.006, rx: 0.28, ry: 0.38, color: 'fff0b8', alpha: Math.min(1, alpha * 1.05), blend: 'screen' },
+      ],
+      bright: 1 + alpha * 0.22, sat: 1.08,
+    })),
+  },
+  // Damaged 35mm roll-end / leaky camera back: tight saturated crimson-amber band with a hot sprocket rim.
+  'edge-fog': {
+    lead: 5,
+    frames: [0.45, 0.72, 0.88, 0.92, 0.95, 0.94, 0.92, 0.86, 0.72, 0.52, 0.28].map((alpha) => ({
+      glows: [
+        { side: 'left', size: 0.32, color: 'e83814', alpha, blend: 'screen' },
+        { side: 'left', size: 0.1, color: 'ffe08a', alpha: Math.min(1, alpha * 0.98), blend: 'screen' },
+      ],
+      bright: 1 + alpha * 0.12, sat: 1.12, noise: 0.18,
+    })),
+  },
+  // Warm anamorphic / dirty-lens streetlight streak sweeping across the frame.
+  'light-streak': {
+    lead: 5,
+    frames: [0.2, 0.42, 0.64, 0.8, 0.88, 0.86, 0.76, 0.6, 0.42, 0.26, 0.12].map((alpha, i) => ({
+      glows: [
+        { shape: 'radial', x: 0.08 + i * 0.044, y: 0.34, rx: 0.9, ry: 0.15, color: 'ffae38', alpha, blend: 'screen' },
+        { shape: 'radial', x: 0.08 + i * 0.044, y: 0.34, rx: 0.42, ry: 0.06, color: 'fff3c4', alpha: Math.min(1, alpha * 1.05), blend: 'screen' },
+      ],
+      bright: 1 + alpha * 0.18, sat: 1.06,
+    })),
+  },
+  // Sticky-shutter / bad-exposure warm emulsion bloom lifting dark shadows and settling back.
+  overexpose: {
+    lead: 5,
+    frames: [0.18, 0.36, 0.56, 0.74, 0.86, 0.88, 0.78, 0.62, 0.44, 0.26, 0.12].map((alpha) => ({
+      glows: [
+        { shape: 'radial', x: 0.42, y: 0.38, rx: 0.95, ry: 0.95, color: 'ffb85c', alpha: alpha * 0.72, blend: 'screen' },
+        { side: 'top', size: 0.65, color: 'ffe6b0', alpha: alpha * 0.5, blend: 'screen' },
+      ],
+      bright: 1 + alpha * 0.55, sat: 1 + alpha * 0.12, noise: 0.12,
+    })),
+  },
   // The film slipping in a projector gate: the picture jumps up a frame line,
   // its black frame bar showing, and drops back into place.
   'gate-jump': {
@@ -293,6 +361,15 @@ function scaledGlitchParams(p, k) {
   return out;
 }
 
+function placeGlowOnEdge(glow, edge) {
+  if (!edge) return glow;
+  if (glow.shape !== 'radial') return { ...glow, side: edge };
+  if (edge === 'left') return glow;
+  if (edge === 'right') return { ...glow, x: 1 - glow.x };
+  if (edge === 'top') return { ...glow, x: glow.y, y: glow.x, rx: glow.ry, ry: glow.rx };
+  return { ...glow, x: glow.y, y: 1 - glow.x, rx: glow.ry, ry: glow.rx };
+}
+
 /**
  * The parameters one glitch frame paints (`{ frame, style, index, strength?,
  * color?, edge? }`): the style's frame as declared, with a light leak's color
@@ -304,7 +381,13 @@ export function glitchFrameParams(g) {
   let p = base;
   if ((g.color || g.edge) && p.glows) {
     // The leak's own color at its strongest wash and a paler core beside it, both from its edge.
-    p = { ...p, glows: p.glows.map((glow, i) => ({ ...glow, ...(g.edge ? { side: g.edge } : {}), ...(g.color ? { color: i === 0 ? g.color : lighten(g.color, 0.45) } : {}) })) };
+    p = {
+      ...p,
+      glows: p.glows.map((glow, i) => ({
+        ...placeGlowOnEdge(glow, g.edge),
+        ...(g.color ? { color: i === 0 ? g.color : lighten(g.color, 0.45) } : {}),
+      })),
+    };
   }
   return Number.isFinite(g.strength) && g.strength < 1 ? scaledGlitchParams(p, Math.max(0, g.strength)) : p;
 }
@@ -397,10 +480,27 @@ export function transitionGlitchFrames(sections, { totalFrames = null } = {}) {
   return [...taken.values()].sort((a, b) => a.frame - b.frame);
 }
 
-/** The glitch parameters to paint on `frame`, or null when that frame plays clean. */
+/** The glitch parameters to paint on `frame` (stacking overlapping effects via `{ layers }`), or null when that frame plays clean. */
 export function transitionFrameAt(glitches, frame) {
-  const hit = (glitches || []).find((g) => g.frame === frame);
-  return hit ? { ...hit, params: glitchFrameParams(hit) } : null;
+  const hits = (glitches || []).filter((g) => g.frame === frame);
+  if (!hits.length) return null;
+  if (hits.length === 1) return { ...hits[0], params: glitchFrameParams(hits[0]) };
+  const layers = hits.map(glitchFrameParams).filter(Boolean);
+  return layers.length ? { ...hits[0], params: layers.length === 1 ? layers[0] : { layers } } : null;
+}
+
+/** Collapse stacked glitches per frame into `[{ frame, params }]` (using `{ layers }` when multiple effects share a frame). */
+export function groupedEffectFrames(glitches) {
+  const byFrame = new Map();
+  for (const g of glitches || []) {
+    const params = glitchFrameParams(g);
+    if (!params) continue;
+    if (!byFrame.has(g.frame)) byFrame.set(g.frame, []);
+    byFrame.get(g.frame).push(params);
+  }
+  return [...byFrame.entries()]
+    .sort(([a], [b]) => a - b)
+    .map(([frame, list]) => ({ frame, params: list.length === 1 ? list[0] : { layers: list } }));
 }
 
 /**
@@ -467,27 +567,65 @@ export function blockBox(x, y, w, h, width, height) {
 }
 
 /**
- * A style frame's glows, `{ side, size, color, alpha }`: light at `alpha` on its
- * `side` edge that fades evenly to nothing `size` (a fraction of the frame) in.
- * Both players paint each as one smooth ramp, so a glow looks the same in each.
+ * A style frame's glows, either linear edge ramps (`{ side, size, color, alpha, blend? }`)
+ * or radial optical flares (`{ shape: 'radial', x, y, rx, ry, color, alpha, blend? }`).
+ * Both players paint each with matching geometry and blend mode.
  */
 export function edgeGlows(glows) {
   return (Array.isArray(glows) ? glows : [])
-    .map((g) => ({ side: g.side, size: Math.min(1, Math.max(0, g.size || 0)), color: g.color, alpha: Math.min(1, Math.max(0, g.alpha || 0)) }))
-    .filter((g) => g.size > 0 && g.alpha > 0);
+    .map((g) => {
+      const alpha = Math.min(1, Math.max(0, g.alpha || 0));
+      const blend = g.blend === 'screen' ? 'screen' : undefined;
+      if (g.shape === 'radial') {
+        return {
+          shape: 'radial',
+          x: Number.isFinite(g.x) ? g.x : 0.5,
+          y: Number.isFinite(g.y) ? g.y : 0.5,
+          rx: Math.min(2, Math.max(0, g.rx || 0)),
+          ry: Math.min(2, Math.max(0, g.ry || 0)),
+          color: g.color,
+          alpha,
+          ...(blend ? { blend } : {}),
+        };
+      }
+      return {
+        side: g.side,
+        size: Math.min(1, Math.max(0, g.size || 0)),
+        color: g.color,
+        alpha,
+        ...(blend ? { blend } : {}),
+      };
+    })
+    .filter((g) => (g.shape === 'radial' ? g.rx > 0 && g.ry > 0 : g.size > 0) && g.alpha > 0);
 }
 
-// One `geq` per glow: each pixel moves toward the glow's color by the ramp's strength there.
-// The color goes in as limited-range BT.601 YUV, as drawbox paints it.
-function glowFilter({ side, size, color, alpha }) {
+// One `geq` per glow: linear edge ramp or quadratic radial flare, blended via alpha lerp
+// (default) or optical screen (`blend: 'screen'`). Colors use limited-range BT.601 YUV.
+function glowFilter(glow) {
+  const { color, alpha, blend } = glow;
   const [r, g, b] = [0, 2, 4].map((i) => parseInt(color.slice(i, i + 2), 16) / 255);
   const yuv = [
     16 + 65.481 * r + 128.553 * g + 24.966 * b,
     128 - 37.797 * r - 74.203 * g + 112 * b,
     128 + 112 * r - 93.786 * g - 18.214 * b,
   ].map((v) => Math.round(v));
-  const from = side === 'left' ? 'X/W' : side === 'right' ? '(W-1-X)/W' : side === 'top' ? 'Y/H' : '(H-1-Y)/H';
-  const strength = `${num(alpha)}*max(0,1-${from}/${num(size)})`;
+  let strength;
+  if (glow.shape === 'radial') {
+    const dx = `(X/W-${num(glow.x)})/${num(glow.rx)}`;
+    const dy = `(Y/H-${num(glow.y)})/${num(glow.ry)}`;
+    strength = `${num(alpha)}*pow(max(0,1-hypot(${dx},${dy})),2)`;
+  } else {
+    const from = glow.side === 'left' ? 'X/W' : glow.side === 'right' ? '(W-1-X)/W' : glow.side === 'top' ? 'Y/H' : '(H-1-Y)/H';
+    const ramp = `max(0,1-${from}/${num(glow.size)})`;
+    strength = blend === 'screen' ? `${num(alpha)}*pow(${ramp},2)` : `${num(alpha)}*${ramp}`;
+  }
+  if (blend === 'screen') {
+    const yNorm = num(Math.max(0, Math.min(1, (yuv[0] - 16) / 219)));
+    const lum = `'clip(p(X,Y)+(235-p(X,Y))*${yNorm}*${strength},16,235)'`;
+    const cb = `'clip(p(X,Y)+(${yuv[1]}-p(X,Y))*${strength},16,240)'`;
+    const cr = `'clip(p(X,Y)+(${yuv[2]}-p(X,Y))*${strength},16,240)'`;
+    return `geq=lum=${lum}:cb=${cb}:cr=${cr}`;
+  }
   const [lum, cb, cr] = yuv.map((v) => `'p(X,Y)+(${v}-p(X,Y))*${strength}'`);
   return `geq=lum=${lum}:cb=${cb}:cr=${cr}`;
 }
@@ -515,8 +653,13 @@ function framesExpr(frames) {
 export function musicVideoTransitionFilter(glitches, { width, height }) {
   if (!Array.isArray(glitches) || glitches.length === 0) return null;
   const groups = new Map();
+  const seen = new Map();
   for (const g of glitches) {
-    const key = `${g.style}:${g.index}:${g.strength ?? 1}:${g.color || ''}:${g.edge || ''}`;
+    const baseKey = `${g.style}:${g.index}:${g.strength ?? 1}:${g.color || ''}:${g.edge || ''}`;
+    const frameKey = `${g.frame}:${baseKey}`;
+    const pass = seen.get(frameKey) || 0;
+    seen.set(frameKey, pass + 1);
+    const key = pass ? `${baseKey}#${pass}` : baseKey;
     if (!groups.has(key)) groups.set(key, { params: glitchFrameParams(g), frames: [] });
     groups.get(key).frames.push(g.frame);
   }
@@ -693,9 +836,9 @@ export function sceneShotGlitchFrames(scenes, fps, { endSec = null, cameras = nu
   return shotGlitchFrames(sceneTransitionSections(scenes, fps, { endSec, cameras }), fps);
 }
 
-/** Glitch frame lists as one, sorted by frame: an earlier list keeps a frame two of them reach. */
+/** Glitch frame lists as one, sorted by frame; overlapping effects on the same frame stack in order. */
 export function mergeGlitchFrames(...lists) {
-  const taken = new Map();
-  for (const list of lists) for (const g of list || []) if (!taken.has(g.frame)) taken.set(g.frame, g);
-  return [...taken.values()].sort((a, b) => a.frame - b.frame);
+  const out = [];
+  for (const list of lists) for (const g of list || []) out.push(g);
+  return out.sort((a, b) => a.frame - b.frame);
 }

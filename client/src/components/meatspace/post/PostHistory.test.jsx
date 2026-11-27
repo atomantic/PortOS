@@ -84,6 +84,8 @@ describe('PostHistory analytics dashboard', () => {
     // Per-drill labels render inside the breakdown.
     expect(screen.getByText('Multiplication')).toBeTruthy();
     expect(screen.getByText('Pun & Wordplay')).toBeTruthy();
+    expect(screen.getByRole('progressbar', { name: 'Multiplication score' })).toHaveAttribute('aria-valuenow', '85');
+    expect(screen.getByRole('columnheader', { name: 'Score' })).toHaveAttribute('scope', 'col');
   });
 
   it('reloads stats when the range selector changes', async () => {

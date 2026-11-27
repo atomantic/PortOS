@@ -46,6 +46,8 @@ export default function LifeEventsPanel({ events, onAdd, onToggle, onRemove }) {
   return (
     <div className="bg-port-card border border-port-border rounded-lg overflow-hidden">
       <button
+        type="button"
+        aria-expanded={expanded}
         onClick={() => { cancelDelete(); setExpanded(!expanded); }}
         className="w-full flex items-center justify-between p-4 text-left hover:bg-port-bg/30 transition-colors"
       >

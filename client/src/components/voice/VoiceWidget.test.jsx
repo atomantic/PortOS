@@ -87,6 +87,12 @@ vi.mock('../../services/voiceClient', () => ({
   speakSynthesized: mocks.speakSynthesized,
   onVoiceOutputPrimary: vi.fn((handler) => { handler(true); return vi.fn(); }),
   claimVoiceOutput: vi.fn(),
+  getVoiceVolume: vi.fn(() => 0.85),
+  setVoiceVolume: vi.fn(),
+  isVoiceMuted: vi.fn(() => false),
+  setVoiceMuted: vi.fn(),
+  onVoiceAudioPrefs: vi.fn((handler) => { handler({ volume: 0.85, muted: false }); return vi.fn(); }),
+  getVoiceOutputLevel: vi.fn(() => 0),
 }));
 
 vi.mock('../../services/voiceFastPath', () => ({
@@ -113,14 +119,16 @@ vi.mock('../../services/uiInteract', () => ({
   doSetCheckbox: vi.fn(() => ({ ok: true })),
 }));
 vi.mock('../micrographics', () => ({ MicroGlyph: () => null }));
-vi.mock('react-router', () => ({ useNavigate: () => vi.fn(), Link: ({ to, children }) => <a href={to}>{children}</a> }));
+vi.mock('react-router', () => ({ useNavigate: () => vi.fn(), Link: ({ to, children, ...rest }) => <a href={to} {...rest}>{children}</a> }));
 
 import VoiceWidgetGate, { useVoiceConsole } from './VoiceWidgetGate';
 import VoiceToggleButton from './VoiceToggleButton';
+import SidebarContext from '../SidebarContext';
 import * as voiceClientMock from '../../services/voiceClient';
 import { ENGAGE_EVENT, DISENGAGE_EVENT } from '../../services/voiceVisibility';
 
 const HIDDEN_KEY = 'portos.voice.hidden';
+const VISUAL_MODE_KEY = 'portos.voice.visualMode';
 const settle = () => act(async () => {});
 
 const renderWidget = async () => {
@@ -132,6 +140,7 @@ const renderWidget = async () => {
 
 beforeEach(() => {
   vi.clearAllMocks();
+  localStorage.clear();
   mocks.events.clear();
   mocks.socketHandlers.clear();
   mocks.loadWidget.mockImplementation((load) => load());
@@ -271,5 +280,63 @@ describe('Voice Call console', () => {
     rerender(<VoiceWidgetGate><main /></VoiceWidgetGate>);
     expect(voiceClientMock.disposeCaptureOwner).toHaveBeenCalledTimes(2);
     expect(screen.queryByRole('region', { name: 'PortOS call console' })).not.toBeInTheDocument();
+  });
+});
+
+describe('VoiceWidget sat-phone visual mode & bottom-left placement', () => {
+  it('starts automatically in full transceiver mode in the bottom-left and persists compact preference', async () => {
+    localStorage.setItem(HIDDEN_KEY, '0');
+    const { unmount } = render(
+      <SidebarContext.Provider value={{ collapsed: false, desktop: true }}>
+        <VoiceWidgetGate><VoiceToggleButton /></VoiceWidgetGate>
+      </SidebarContext.Provider>,
+    );
+    await settle();
+    const widget = await screen.findByRole('complementary', { name: 'Voice assistant' });
+    const ui = within(widget);
+
+    // Bottom-left offset clears expanded desktop sidebar
+    expect(widget.className).toContain('left-[17rem]');
+    expect(widget.className).not.toContain('right-4');
+
+    // Full visual handset is active by default with portrait, volume dial, and link to /voice/call
+    expect(ui.getByRole('img', { name: 'Radio operator portrait' })).toBeInTheDocument();
+    expect(ui.getByRole('slider', { name: 'Output volume' })).toBeInTheDocument();
+    expect(ui.getByRole('link', { name: 'Open full-page Voice Call' })).toHaveAttribute('href', '/voice/call');
+
+    // Real controls wire through to voiceClient & localStorage
+    fireEvent.keyDown(ui.getByRole('slider', { name: 'Output volume' }), { key: 'ArrowUp' });
+    expect(voiceClientMock.setVoiceVolume).toHaveBeenCalledWith(0.9);
+    fireEvent.click(ui.getByRole('button', { name: 'Mute' }));
+    expect(voiceClientMock.setVoiceMuted).toHaveBeenCalledWith(true);
+    const sfx = ui.getByRole('button', { name: 'SFX' });
+    expect(sfx).toHaveAttribute('aria-pressed', 'true');
+    fireEvent.click(sfx);
+    expect(sfx).toHaveAttribute('aria-pressed', 'false');
+    expect(localStorage.getItem('portos.voice.sfx')).toBe('0');
+
+    // Switching to compact bar hides the handset and saves the preference in localStorage
+    fireEvent.click(ui.getByRole('button', { name: 'Switch to compact voice bar' }));
+    expect(localStorage.getItem(VISUAL_MODE_KEY)).toBe('compact');
+    expect(ui.queryByRole('img', { name: 'Radio operator portrait' })).not.toBeInTheDocument();
+    expect(ui.getByRole('button', { name: 'Show transceiver handset' })).toBeInTheDocument();
+    expect(ui.getByRole('link', { name: 'Open full-page Voice Call' })).toHaveAttribute('href', '/voice/call');
+    unmount();
+
+    // Next launch remembers compact mode from localStorage and lets user restore the handset
+    render(
+      <SidebarContext.Provider value={{ collapsed: true, desktop: true }}>
+        <VoiceWidgetGate><VoiceToggleButton /></VoiceWidgetGate>
+      </SidebarContext.Provider>,
+    );
+    await settle();
+    const reopened = await screen.findByRole('complementary', { name: 'Voice assistant' });
+    expect(reopened.className).toContain('left-20');
+    expect(within(reopened).queryByRole('img', { name: 'Radio operator portrait' })).not.toBeInTheDocument();
+
+    fireEvent.click(within(reopened).getByRole('button', { name: 'Show transceiver handset' }));
+    await settle();
+    expect(localStorage.getItem(VISUAL_MODE_KEY)).toBe('full');
+    expect(within(reopened).getByRole('img', { name: 'Radio operator portrait' })).toBeInTheDocument();
   });
 });

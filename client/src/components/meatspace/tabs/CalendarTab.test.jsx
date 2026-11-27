@@ -55,6 +55,25 @@ afterEach(() => {
   vi.resetAllMocks();
 });
 
+it('announces life progress and the Life Events disclosure state', async () => {
+  renderTab();
+  const progress = await screen.findByRole('progressbar', { name: 'Life progress' });
+  expect(progress).toHaveAttribute('aria-valuenow', '46.75');
+  expect(progress).toHaveAttribute('aria-valuemin', '0');
+  expect(progress).toHaveAttribute('aria-valuemax', '100');
+
+  const disclosure = screen.getByRole('button', { name: /Life Events/i });
+  expect(disclosure).toHaveAttribute('type', 'button');
+  expect(disclosure).toHaveAttribute('aria-expanded', 'false');
+  expect(screen.queryByRole('button', { name: 'Add Event' })).not.toBeInTheDocument();
+  fireEvent.click(disclosure);
+  expect(disclosure).toHaveAttribute('aria-expanded', 'true');
+  expect(screen.getByRole('button', { name: 'Add Event' })).toBeInTheDocument();
+  fireEvent.click(disclosure);
+  expect(disclosure).toHaveAttribute('aria-expanded', 'false');
+  expect(screen.queryByRole('button', { name: 'Add Event' })).not.toBeInTheDocument();
+});
+
 describe('CalendarTab activity removal', () => {
   it('sends the row id, ignores a second click while in flight, and drops only that row locally', async () => {
     let resolveRemoval;

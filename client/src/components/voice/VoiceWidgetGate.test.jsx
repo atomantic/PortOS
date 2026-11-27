@@ -87,6 +87,13 @@ vi.mock('../../services/voiceClient', () => ({
   speakSynthesized: mocks.speakSynthesized,
   onVoiceOutputPrimary: vi.fn((handler) => { handler(false); return vi.fn(); }),
   claimVoiceOutput: vi.fn(),
+  prepareVoicePlayback: vi.fn(),
+  getVoiceVolume: vi.fn(() => 0.85),
+  setVoiceVolume: vi.fn(),
+  isVoiceMuted: vi.fn(() => false),
+  setVoiceMuted: vi.fn(),
+  onVoiceAudioPrefs: vi.fn((handler) => { handler({ volume: 0.85, muted: false }); return vi.fn(); }),
+  getVoiceOutputLevel: vi.fn(() => 0),
 }));
 
 vi.mock('../../services/voiceFastPath', () => ({
@@ -98,6 +105,9 @@ vi.mock('../../services/voiceFastPath', () => ({
 vi.mock('../../services/browserLlm', () => ({ warmNano: vi.fn() }));
 vi.mock('../../services/apiPalette', () => ({ getPaletteManifest: vi.fn() }));
 vi.mock('../../services/apiVoice', () => ({ getVoiceConfig: mocks.getVoiceConfig }));
+vi.mock('../../services/apiVoiceAvatar', () => ({
+  fetchVoiceAvatar: vi.fn(async () => ({ supported: false })),
+}));
 vi.mock('../ui/Toast', () => ({ default: mocks.toast }));
 vi.mock('./useVoiceUiSync', () => ({
   useVoiceUiSync: vi.fn(),
@@ -110,7 +120,7 @@ vi.mock('../../services/uiInteract', () => ({
   doSetCheckbox: vi.fn(() => ({ ok: true })),
 }));
 vi.mock('../micrographics', () => ({ MicroGlyph: () => null }));
-vi.mock('react-router', () => ({ useNavigate: () => vi.fn(), Link: ({ to, children }) => <a href={to}>{children}</a> }));
+vi.mock('react-router', () => ({ useNavigate: () => vi.fn(), Link: ({ to, children, ...rest }) => <a href={to} {...rest}>{children}</a> }));
 
 import { warmNano } from '../../services/browserLlm';
 import VoiceWidgetGate from './VoiceWidgetGate';

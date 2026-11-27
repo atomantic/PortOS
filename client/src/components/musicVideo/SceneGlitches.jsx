@@ -3,7 +3,7 @@ import { useEffect, useState } from 'react';
 import { Plus, X } from 'lucide-react';
 import {
   MUSIC_VIDEO_GLITCH_EDGES, MUSIC_VIDEO_GLITCH_LENGTHS, MUSIC_VIDEO_GLITCH_REPEAT_LIMIT, MUSIC_VIDEO_SHOT_GLITCH_LIMIT, MUSIC_VIDEO_TINTED_GLITCHES,
-  MUSIC_VIDEO_TRANSITIONS, MUSIC_VIDEO_TRANSITION_LABELS,
+  MUSIC_VIDEO_TINTED_GLITCH_DEFAULT_COLORS, MUSIC_VIDEO_TRANSITIONS, MUSIC_VIDEO_TRANSITION_LABELS,
 } from '../../../../server/lib/musicVideo/musicVideoTransitions.js';
 import { normalizePreMusic } from '../../../../server/lib/musicVideo/musicVideoColdOpen.js';
 
@@ -18,14 +18,14 @@ export const NEW_GLITCH_STYLE = 'color-block';
 const DEFAULT_LEAK_COLOR = '#ff4f8a';
 const round3 = (n) => Math.round(n * 1000) / 1000;
 /** One glitch: its style, when it hits (a slider over the shot), how long and strong it is, and how often it repeats. */
-function GlitchRow({ fieldId, index, glitch, spanSec, onCommit, onRemove, disabled }) {
+function GlitchRow({ fieldId, index, glitch, spanSec, onCommit, onPreview, onRemove, disabled }) {
   // The sliders and color keep their own value while dragging and save once let go.
   const [atSec, setAtSec] = useState(glitch.atSec);
   useEffect(() => { setAtSec(glitch.atSec); }, [glitch.atSec]);
   const savedStrength = glitch.strength ?? 1;
   const [strength, setStrength] = useState(savedStrength);
   useEffect(() => { setStrength(savedStrength); }, [savedStrength]);
-  const savedColor = glitch.color || DEFAULT_LEAK_COLOR;
+  const savedColor = glitch.color || MUSIC_VIDEO_TINTED_GLITCH_DEFAULT_COLORS[glitch.style] || DEFAULT_LEAK_COLOR;
   const [color, setColor] = useState(savedColor);
   useEffect(() => { setColor(savedColor); }, [savedColor]);
   const commitTime = () => { if (atSec !== glitch.atSec) onCommit({ atSec: round3(atSec) }); };
@@ -47,7 +47,7 @@ function GlitchRow({ fieldId, index, glitch, spanSec, onCommit, onRemove, disabl
         <span className="flex min-w-[8rem] flex-1 items-center gap-1">
           <label htmlFor={id('at')} className="shrink-0 tabular-nums text-port-text-muted">at {atSec.toFixed(2)}s</label>
           <input id={id('at')} type="range" min="0" max={spanSec} step={STEP_SEC} value={Math.min(atSec, spanSec)} disabled={disabled}
-            onChange={(e) => setAtSec(Number(e.target.value))}
+            onChange={(e) => { const next = Number(e.target.value); setAtSec(next); onPreview?.({ atSec: round3(next) }); }}
             onPointerUp={commitTime} onKeyUp={commitTime} onBlur={commitTime}
             className="min-w-0 flex-1 accent-port-accent min-h-[44px] pointer-fine:sm:min-h-0" />
         </span>
@@ -70,7 +70,7 @@ function GlitchRow({ fieldId, index, glitch, spanSec, onCommit, onRemove, disabl
           </label>
           <input id={id('strength')} type="range" min="0" max="1" step="0.05" value={strength} disabled={disabled}
             title="0 switches the effect off and keeps its settings"
-            onChange={(e) => setStrength(Number(e.target.value))}
+            onChange={(e) => { const next = Number(e.target.value); setStrength(next); onPreview?.({ strength: next === 1 ? undefined : next }); }}
             onPointerUp={commitStrength} onKeyUp={commitStrength} onBlur={commitStrength}
             className="min-w-0 flex-1 accent-port-accent min-h-[44px] pointer-fine:sm:min-h-0" />
         </span>
@@ -97,7 +97,7 @@ function GlitchRow({ fieldId, index, glitch, spanSec, onCommit, onRemove, disabl
           <>
             <label htmlFor={id('color')} className="sr-only">Effect {index + 1} leak color</label>
             <input id={id('color')} type="color" value={color} disabled={disabled}
-              onChange={(e) => setColor(e.target.value)} onBlur={commitColor}
+              onChange={(e) => { const next = e.target.value; setColor(next); onPreview?.({ color: next }); }} onBlur={commitColor}
               className="h-8 w-10 shrink-0 rounded border border-port-border bg-port-bg disabled:opacity-50" />
             <label htmlFor={id('edge')} className="sr-only">Effect {index + 1} leak edge</label>
             <select id={id('edge')} value={glitch.edge ?? ''} disabled={disabled} title="Where the stray light washes in from"
@@ -136,13 +136,18 @@ function homeMovieGlitches(spanSec) {
  * no time and never changes a lock. Continuous weave and flicker live in the
  * film look; these are the moments on top of it.
  */
-export default function SceneGlitches({ fieldId, scene, onChange, disabled = false }) {
+export default function SceneGlitches({ fieldId, scene, onChange, onPreview = null, disabled = false }) {
   const glitches = Array.isArray(scene.glitches) ? scene.glitches : [];
+  useEffect(() => () => onPreview?.(null), [onPreview]);
   // A shot before the song spans its own length, not its old place on the song.
   const coldOpen = normalizePreMusic(scene.preMusic);
   const spanSec = coldOpen ? coldOpen.durationSec : Number.isFinite(scene.startSec) && Number.isFinite(scene.endSec) && scene.endSec > scene.startSec
     ? round3(scene.endSec - scene.startSec) : 10;
-  const save = (next) => onChange({ glitches: next.length ? next : null });
+  const save = (next) => {
+    onPreview?.(null);
+    onChange({ glitches: next.length ? next : null });
+  };
+  const previewRow = (index, patch) => onPreview?.(glitches.map((g, i) => (i === index ? withPatch(g, patch) : g)));
   // A new glitch lands halfway through the shot, where it is easy to find and move.
   const add = () => save([...glitches, { atSec: round3(Math.round(spanSec / 2 / STEP_SEC) * STEP_SEC), style: NEW_GLITCH_STYLE }]);
   const recipe = homeMovieGlitches(spanSec);
@@ -168,6 +173,7 @@ export default function SceneGlitches({ fieldId, scene, onChange, disabled = fal
           {glitches.map((glitch, index) => (
             <GlitchRow key={index} fieldId={fieldId} index={index} glitch={glitch} spanSec={spanSec} disabled={disabled}
               onCommit={(patch) => save(glitches.map((g, i) => (i === index ? withPatch(g, patch) : g)))}
+              onPreview={onPreview ? (patch) => previewRow(index, patch) : null}
               onRemove={() => save(glitches.filter((_, i) => i !== index))} />
           ))}
         </ul>

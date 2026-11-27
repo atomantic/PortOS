@@ -127,6 +127,12 @@ export default function SceneCard({
   const [doneSaving, setDoneSaving] = useState(false);
   const doneSavePending = useRef(false);
   const [greyboxSaving, setGreyboxSaving] = useState(false);
+  // Live drag preview of in-shot glitches (at/strength/color) before pointer-up/blur saves them.
+  const [previewGlitches, setPreviewGlitches] = useState(null);
+  const onPreviewGlitches = useCallback((glitches) => {
+    setPreviewGlitches(glitches ? { sceneId: scene.sceneId, glitches } : null);
+  }, [scene.sceneId]);
+  const activePreviewGlitches = previewGlitches?.sceneId === scene.sceneId ? previewGlitches.glitches : null;
   // Where this shot's clip renders: the last pick made on this device, else the project's saved renderer.
   const [initialRender] = useState(() => lastRenderTarget({ performance: isPerformanceScene(scene), saved: media.falVideoSettings || {} }));
   const [renderPick, setRenderPick] = useState(initialRender.pick);
@@ -324,6 +330,7 @@ export default function SceneCard({
                           applyPatch={applyPatch} markDirty={markDirty} clearDirty={clearDirty} saveIfDirty={saveIfDirty} saveShot={saveShot}
                           generateVideo={generateVideo} generateStoryboardClip={generateStoryboardClip}
                           withFrameTarget={withFrameTarget} setSwapKind={setSwapKind}
+                          previewGlitches={activePreviewGlitches}
                         />
                       </div>
                     </>
@@ -336,6 +343,7 @@ export default function SceneCard({
                   applyPatch={applyPatch} applySaved={applySaved} markDirty={markDirty} saveIfDirty={saveIfDirty} saveShot={saveShot}
                   moveStart={moveStart} moveEnd={moveEnd}
                   setSpeakerDirty={setSpeakerDirty} setSpeakerSaving={setSpeakerSaving}
+                  onPreviewGlitches={onPreviewGlitches}
                 /></Suspense>
               </div>
             </div>
