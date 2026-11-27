@@ -1,10 +1,11 @@
-import { readFileSync } from 'node:fs';
+import { EventEmitter, once } from 'node:events';
 import { createServer } from 'node:net';
 import { createServer as createHttpServer } from 'node:http';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { WebSocket } from 'ws';
 import { logSecurityEvent } from '../lib/securityAuditLog.js';
 import { createRemoteDesktopBroker } from './remoteDesktop.js';
+import { registerSessionRevocation } from '../sessionRevocation.js';
 
 vi.mock('../lib/securityAuditLog.js', () => ({ logSecurityEvent: vi.fn() }));
 
@@ -157,46 +158,52 @@ describe('remote desktop broker', () => {
     await new Promise((resolve) => httpServer.close(resolve));
   });
 
-  it('revokeAll drops every token and closes live bridges, refusing reconnects', async () => {
+  it('drops every token and closes live bridges when PortOS sessions are revoked', async () => {
     const vncSockets = [];
     const vncServer = createServer((socket) => { vncSockets.push(socket); socket.pipe(socket); });
     servers.push(vncServer);
     await new Promise((resolve) => vncServer.listen(0, '127.0.0.1', resolve));
-    const broker = createRemoteDesktopBroker({ port: vncServer.address().port });
+    const broker = createRemoteDesktopBroker({ port: vncServer.address().port, probeFn: async () => true });
     const tokenOf = async () => new URL((await broker.createSession()).viewerPath, 'http://portos.invalid').searchParams.get('token');
     const liveToken = await tokenOf();
     const idleToken = await tokenOf();
     const httpServer = createHttpServer();
-    broker.mountWebSocket(httpServer);
+    servers.push(httpServer);
+    const unmount = broker.mountWebSocket(httpServer);
     await new Promise((resolve) => httpServer.listen(0, '127.0.0.1', resolve));
+
+    const nextEvent = (client, event) => once(client, event, { signal: AbortSignal.timeout(3000) });
     const url = (token) => `ws://127.0.0.1:${httpServer.address().port}/remote-desktop/ws?token=${token}`;
-    const client = new WebSocket(url(liveToken));
-    await new Promise((resolve, reject) => { client.once('open', resolve); client.once('error', reject); });
-    const probeCount = vncSockets.length;
-    await vi.waitFor(() => expect(vncSockets).toHaveLength(probeCount + 1));
-    const bridgeVnc = vncSockets[probeCount];
+    try {
+      const client = new WebSocket(url(liveToken));
+      await nextEvent(client, 'open');
+      await vi.waitFor(() => expect(vncSockets).toHaveLength(1));
+      const [bridgeVnc] = vncSockets;
 
-    const closed = new Promise((resolve) => client.once('close', (code) => resolve(code)));
-    broker.revokeAll('PortOS sessions revoked');
+      const authEvents = new EventEmitter();
+      registerSessionRevocation({ authEvents, remoteDesktopBroker: broker, revokeAllHostedSessions: vi.fn() });
+      const closed = nextEvent(client, 'close');
+      authEvents.emit('sessions:revoked-all');
 
-    expect(await closed).toBe(1008);
-    expect(broker.hasSession(liveToken)).toBe(false);
-    expect(broker.hasSession(idleToken)).toBe(false);
-    await vi.waitFor(() => expect(bridgeVnc.destroyed).toBe(true));
-    const rejected = new WebSocket(url(liveToken));
-    const status = await new Promise((resolve) => rejected.once('unexpected-response', (_req, res) => resolve(res.statusCode)));
-    expect(status).toBe(401);
+      const [code, reason] = await closed;
+      expect(code).toBe(1008);
+      expect(reason.toString()).toBe('PortOS sessions revoked');
+      expect(broker.hasSession(liveToken)).toBe(false);
+      expect(broker.hasSession(idleToken)).toBe(false);
+      await vi.waitFor(() => expect(bridgeVnc.destroyed).toBe(true));
 
-    const fresh = await tokenOf();
-    const reopened = new WebSocket(url(fresh));
-    await new Promise((resolve, reject) => { reopened.once('open', resolve); reopened.once('error', reject); });
-    reopened.close();
-    await new Promise((resolve) => reopened.once('close', resolve));
-    await new Promise((resolve) => httpServer.close(resolve));
-  });
+      const rejected = new WebSocket(url(liveToken));
+      const [, response] = await nextEvent(rejected, 'unexpected-response');
+      response.resume();
+      expect(response.statusCode).toBe(401);
 
-  it('server boot revokes the broker whenever PortOS sessions are revoked', () => {
-    const source = readFileSync(new URL('../index.js', import.meta.url), 'utf8');
-    expect(source).toMatch(/authEvents\.on\('sessions:revoked-all',[^;]*remoteDesktopBroker\.revokeAll\(/);
+      const reopened = new WebSocket(url(await tokenOf()));
+      await nextEvent(reopened, 'open');
+      const reopenedClosed = nextEvent(reopened, 'close');
+      reopened.close();
+      await reopenedClosed;
+    } finally {
+      unmount();
+    }
   });
 });

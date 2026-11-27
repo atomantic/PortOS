@@ -7,12 +7,14 @@
  * on every run. The shipped "System Health Check" job runs exactly that, so a
  * Windows install logged the failure every 15 minutes forever.
  *
- * These tests pin the fix: the command goes through `prepareCliSpawn` against
- * the CHILD's env before `spawn()` sees it, and POSIX behavior is unchanged.
+ * These tests exercise the resolver and process-tree teardown at the shell
+ * job boundary without starting a process.
  */
 
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import { EventEmitter } from 'events'
+import { killProcessTree, prepareCliSpawn } from '../../lib/bufferedSpawn.js'
+import { saveJobs } from './store.js'
 
 const spawnMock = vi.fn()
 
@@ -21,6 +23,11 @@ const spawnMock = vi.fn()
 vi.mock('../../lib/childProcess.js', async (importOriginal) => ({
   ...(await importOriginal()),
   spawn: (...args) => spawnMock(...args),
+}))
+vi.mock('../../lib/bufferedSpawn.js', async (importOriginal) => ({
+  ...(await importOriginal()),
+  prepareCliSpawn: vi.fn(),
+  killProcessTree: vi.fn(),
 }))
 vi.mock('./store.js', () => ({
   loadJobs: vi.fn(async () => ({ jobs: [{ id: 'job-1', name: 'System Health Check' }] })),
@@ -37,16 +44,17 @@ function fakeChild(exitCode = 0) {
   child.stderr = new EventEmitter()
   child.exitCode = null
   child.kill = vi.fn()
-  setImmediate(() => child.emit('close', exitCode, null))
+  if (exitCode !== null) setImmediate(() => child.emit('close', exitCode, null))
   return child
 }
 
 describe('executeShellJob — Windows CLI shim resolution', () => {
   beforeEach(() => {
-    spawnMock.mockReset()
+    vi.clearAllMocks()
     spawnMock.mockImplementation(() => fakeChild())
+    prepareCliSpawn.mockImplementation((command, args) => ({ command, args }))
   })
-  afterEach(() => vi.unstubAllEnvs())
+  afterEach(() => vi.useRealTimers())
 
   it('spawns the command WITHOUT a shell (the injection guard stays intact)', async () => {
     await executeShellJob({ id: 'job-1', name: 'System Health Check', command: 'pm2 jlist' })
@@ -54,53 +62,38 @@ describe('executeShellJob — Windows CLI shim resolution', () => {
     expect(opts.shell).toBe(false)
   })
 
-  it('resolves the command against the CHILD env, not process.env', async () => {
-    // The env handed to spawn must be the same object PATH was resolved from,
-    // so a PATH override in the child env is honored rather than silently
-    // resolved against a different PATH.
+  it('passes the child environment to the resolver and spawns the resolved command and args', async () => {
+    const resolvedArgs = ['/c', 'pm2.cmd', 'jlist']
+    prepareCliSpawn.mockReturnValueOnce({ command: 'cmd.exe', args: resolvedArgs })
+
     await executeShellJob({ id: 'job-1', name: 'System Health Check', command: 'pm2 jlist' })
-    const [, , opts] = spawnMock.mock.calls[0]
-    expect(opts.env).toBeTruthy()
-    // withSpawnCwdEnv pins PWD to the spawn cwd.
+
+    expect(spawnMock).toHaveBeenCalledTimes(1)
+    const [command, args, opts] = spawnMock.mock.calls[0]
+    expect(command).toBe('cmd.exe')
+    expect(args).toEqual(resolvedArgs)
+    expect(prepareCliSpawn).toHaveBeenCalledExactlyOnceWith('pm2', ['jlist'], opts.env)
+    expect(prepareCliSpawn.mock.calls[0][2]).toBe(opts.env)
     expect(opts.env.PWD).toBe(opts.cwd)
   })
 
-  it('passes parsed args through to spawn', async () => {
-    await executeShellJob({ id: 'job-1', name: 'System Health Check', command: 'pm2 jlist' })
-    const [command, args] = spawnMock.mock.calls[0]
-    // On POSIX prepareCliSpawn is a no-op, so this is the bare pair. On Windows
-    // the pair may be rewritten to `cmd.exe /c <resolved.cmd> …` — in both
-    // cases the original argv must still be reachable in the final command line.
-    expect([command, ...args].join(' ')).toMatch(/pm2.*jlist/)
-  })
+  it('terminates the process tree and records a failed execution on timeout', async () => {
+    vi.useFakeTimers()
+    const child = fakeChild(null)
+    spawnMock.mockReturnValueOnce(child)
 
-  it('routes the spawn through prepareCliSpawn (source contract)', async () => {
-    // prepareCliSpawn is a pure filesystem-backed resolver that no-ops off
-    // win32, so a POSIX CI run can't observe the rewrite behaviorally. Pin the
-    // wiring instead: a future edit that reintroduces `spawn(validation.baseCommand)`
-    // would restore the ENOENT bug with every other test still green.
-    const { readFileSync } = await import('fs')
-    const { fileURLToPath } = await import('url')
-    const src = readFileSync(fileURLToPath(new URL('./execution.js', import.meta.url)), 'utf-8')
-    expect(src).toMatch(/import\s*\{[^}]*\bprepareCliSpawn\b[^}]*\}\s*from\s*'\.\.\/\.\.\/lib\/bufferedSpawn\.js'/)
-    expect(src).toMatch(
-      /const\s*\{\s*command:\s*spawnCommand,\s*args:\s*spawnArgs\s*\}\s*=\s*\n?\s*prepareCliSpawn\(\s*validation\.baseCommand,\s*validation\.args \|\| \[\],\s*childEnv\s*\)/
-    )
-    // The resolved pair must be what spawn() actually receives.
-    expect(src).toMatch(/spawn\(\s*spawnCommand,\s*spawnArgs,/)
-  })
+    const result = executeShellJob({ id: 'job-1', name: 'System Health Check', command: 'pm2 jlist' })
+    const timedOut = expect(result).rejects.toMatchObject({ code: 'JOB_EXECUTION_FAILED', exitCode: -1 })
+    // On Windows the real command is a grandchild of its CLI shim.
+    await vi.advanceTimersByTimeAsync(5 * 60 * 1000)
+    child.emit('close', null, 'SIGKILL')
 
-  it('kills the process TREE on timeout, not just the direct child', async () => {
-    // The Windows spawn is `cmd.exe /c <cmd> <args>`, so the real command is a
-    // grandchild; Windows has no process groups, so a bare child.kill() would
-    // orphan a hung pm2/npm/docker past the timeout. Pin the tree-kill wiring.
-    const { readFileSync } = await import('fs')
-    const { fileURLToPath } = await import('url')
-    const src = readFileSync(fileURLToPath(new URL('./execution.js', import.meta.url)), 'utf-8')
-    expect(src).toMatch(/import\s*\{[^}]*\bkillProcessTree\b[^}]*\}\s*from\s*'\.\.\/\.\.\/lib\/bufferedSpawn\.js'/)
-    expect(src).toMatch(/killProcessTree\(\s*child,\s*'SIGKILL'\s*\)/)
-    expect(src, 'the timeout path must not bare-kill the direct child')
-      .not.toMatch(/child\.kill\('SIGKILL'\)/)
+    expect(killProcessTree).toHaveBeenCalledExactlyOnceWith(child, 'SIGKILL')
+    expect(child.kill).not.toHaveBeenCalled()
+    await timedOut
+    expect(saveJobs).toHaveBeenCalledExactlyOnceWith({ jobs: [expect.objectContaining({
+      id: 'job-1', lastExitCode: -1, lastResult: 'timeout',
+    })] })
   })
 
   it('preserves a nonzero exit code on the job execution failure', async () => {
