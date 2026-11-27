@@ -1,7 +1,6 @@
 /**
- * Shared mocks, controllable test doubles and helpers for the seriesAutopilot
- * leaf suites (session, config, stepResolver, state, dryRun, convergence,
- * orchestrator.*). Split from seriesAutopilot.test.js (#16214).
+ * Shared mocks and fixtures for the series autopilot orchestrator suites.
+ * Split from seriesAutopilot.test.js (#16214).
  *
  * `vi.mock` calls are hoisted per test file, so each suite declares them and
  * delegates the factories here. Values the tests reassign (`cosMode`,
@@ -33,6 +32,7 @@ export const cryptoFactory = async () => {
   return { ...actual, randomUUID: () => `uuid-${++state.uuidCounter}` };
 };
 
+// textStages imports identity; keep these runs independent of this install's identity file.
 export const instanceIdentityFactory = () => ({ getInstanceId: vi.fn(async () => 'test-instance'), UNKNOWN_INSTANCE_ID: 'unknown' });
 export const instancesFactory = () => mockNoPeers();
 export const peerSyncFactory = () => mockNoPeerSync();
@@ -162,10 +162,6 @@ export const settingsFactory = async (importOriginal) => ({
   ...(await importOriginal()),
   getSettings: vi.fn(async () => ({})),
 });
-export const manuscriptFixFactory = () => ({
-  generateManuscriptFix: vi.fn(async () => ({})),
-  acceptManuscriptFix: vi.fn(async () => ({})),
-});
 
 export const visualSpies = {
   enqueueComicCover: vi.fn(async () => ({ jobId: 'job-cover', prompt: 'p', variant: 'proof', fromProof: false })),
@@ -276,7 +272,7 @@ export const seedComplete = async ({ script = VALID_SCRIPT } = {}) => {
   return { seriesId: series.id, seasonId, issueId: issue.id };
 };
 
-/** The `beforeEach` body shared by every suite; takes the mocked bindings the suite imported. */
+/** The `beforeEach` body shared by the orchestrator suites; takes the mocked bindings the suite imported. */
 export const resetFixtures = ({ autopilot, getDomainBudgetStatus, getSettings }) => {
   fileStore.clear();
   state.uuidCounter = 0;
