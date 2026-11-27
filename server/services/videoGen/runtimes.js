@@ -149,18 +149,25 @@ export const WAN22_CUDA_HELPER_SCRIPT = join(PATHS.root, 'scripts', 'ml', 'gener
 // its fingerprint definition with the inline render-time emit (_runner_common).
 const RUNTIME_FINGERPRINT_SCRIPT = join(PATHS.root, 'scripts', 'ml', 'runtime_fingerprint.py');
 
-// These locks contain a flat set of pins for arm64 CPython 3.11. A checkout at
-// the expected revision can still have the old upstream dependency versions.
-const mlxVideoCurrencyProbe = (profile) => ['-I', '-c', String.raw`import importlib.metadata as metadata
+// LTX and Wan have flat arm64 CPython 3.11 locks. FastVideo has a
+// universal lock, so only pins active in the target venv count.
+const mlxVideoCurrencyProbe = (profile, pythonVersionCheck = 'sys.version_info[:2] == (3, 11)') => ['-I', '-c', String.raw`import importlib.metadata as metadata
 from pathlib import Path
 import platform, re, sys
 
-if sys.version_info[:2] != (3, 11) or platform.machine() != 'arm64':
+if platform.machine() != 'arm64'${pythonVersionCheck ? ` or not (${pythonVersionCheck})` : ''}:
     sys.exit(78)
-pins = re.findall(r'^([a-z0-9-]+)==([^\s]+)', Path(sys.argv[1]).read_text(encoding='utf-8'), re.M)
+pins = re.findall(r'^([a-z0-9-]+)==([^\s;]+)(?:[ \t]*;[ \t]*([^\\\r\n]+))?', Path(sys.argv[1]).read_text(encoding='utf-8'), re.M)
 assert pins, 'empty runtime lock'
+if any(marker for _, _, marker in pins):
+    try:
+        from packaging.markers import Marker
+    except ModuleNotFoundError:
+        sys.exit(78)
+    pins = [(name, version, marker) for name, version, marker in pins
+            if not marker or Marker(marker).evaluate()]
 try:
-    current = all(metadata.version(name) == version for name, version in pins)
+    current = bool(pins) and all(metadata.version(name) == version for name, version, _ in pins)
 except metadata.PackageNotFoundError:
     current = False
 sys.exit(0 if current else 78)
@@ -217,6 +224,8 @@ export const BYOV_RUNTIME_INFO = Object.freeze({
     // package is clean so a modified/untracked module cannot shadow the pin.
     sourcePath: 'minimax_h3_mlx',
     pinEnvVar: 'MINIMAX_H3_PIN',
+    // Setup defaults to 3.11 and can reuse a compatible pre-existing venv.
+    currencyProbeArgs: mlxVideoCurrencyProbe('minimax-h3', null),
     // The port is source-only rather than pip-installed. The dedicated probe
     // registers only the source package namespace; it never prepends the whole
     // checkout, where an untracked root module could shadow a locked venv dep.
@@ -376,6 +385,7 @@ sys.exit(0 if current else 78)
     repoUrl: 'https://github.com/hao-ai-lab/FastVideo',
     pinEnvVar: 'FASTVIDEO_PIN',
     expectedRevision: 'fa2d1324c60050cd65209c6aaeac470e7fb412f5',
+    currencyProbeArgs: mlxVideoCurrencyProbe('fastvideo', 'sys.version_info[:2] >= (3, 11)'),
     importProbe: 'import fastvideo; import mlx.core',
     fingerprintPackages: ['fastvideo', 'mlx', 'mlx_metal', 'torch', 'transformers', 'huggingface-hub'],
   },
