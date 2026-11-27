@@ -7,7 +7,7 @@ import { isAppInstalled as isLmStudioAppInstalled } from './lmStudioManager.js';
 
 const detectors = {
   mtplx: ({ findCommand }) => findCommand('mtplx', resolveMtplxBinary),
-  slotstream: async () => (await import('./slotstreamServerManager.js')).resolveSlotstreamBinary(),
+  slotstream: ({ findCommand }) => findCommand('slotstream', async () => (await import('./slotstreamServerManager.js')).resolveSlotstreamBinary()),
   splash: async () => (await import('./splashManagedRuntime.js')).readInstalledSplashVersion(),
   mkserve: async () => (await import('./mkserveRuntimeInstall.js')).readMkserveInstall(),
 };

@@ -46,14 +46,14 @@ describe('MtplxServerCard', () => {
   });
 
   it.each([
-    ['Port', '8011', { model: 'Example/Qwen-MTP', port: 8011 }],
-    ['Checkpoint', 'Example/Other-MTP', { model: 'Example/Other-MTP', port: 8010 }],
+    ['Port', '8011', { model: 'Example/Qwen-MTP', port: 8011, tuning: { draftTokens: 4 } }],
+    ['Checkpoint', 'Example/Other-MTP', { model: 'Example/Other-MTP', port: 8010, tuning: { draftTokens: 4 } }],
   ])('hydrates once when status arrives and preserves the saved field when editing %s', async (field, value, payload) => {
     const onSaveLaunch = vi.fn();
     const onSearchModels = vi.fn().mockResolvedValue({ models: [], error: null });
     const status = {
       installed: true, supported: true, cachedModels: ['Example/Qwen-MTP', 'Example/Other-MTP'],
-      launch: { model: 'Example/Qwen-MTP', port: 8010 },
+      launch: { model: 'Example/Qwen-MTP', port: 8010, tuning: { draftTokens: 4 } },
     };
     const card = (runtimeStatus) => (
       <MemoryRouter>

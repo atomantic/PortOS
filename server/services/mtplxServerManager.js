@@ -369,7 +369,7 @@ export async function getMtplxServerStatus({ includeLogs } = {}) {
     keepLoaded: await onDemand.keepLoaded(),
     // What a lazy start will launch on, so the card's fields show the saved
     // choice rather than resetting to "Auto" on every page load.
-    launch: await onDemand.savedLaunch().then(({ model, port }) => ({ model, port })),
+    launch: await onDemand.savedLaunch().then(({ model, port, tuning }) => ({ model, port, tuning })),
     cachedModels: (cache.models || []).map((m) => m?.repo_id).filter(Boolean),
     // The same cache, with what the manage-checkpoints UI needs to let a user
     // free the disk: how big each pack is, and whether it is actually servable
