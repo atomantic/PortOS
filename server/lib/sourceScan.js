@@ -59,52 +59,39 @@ const KEYWORDS_BEFORE_REGEX = new Set([
 const IDENTIFIER_CHAR = /[\p{ID_Continue}$]/u;
 
 /**
- * The identifier ending at `end` (exclusive) in the character ARRAY `chars`, or
- * '' when what ends there is not a bare identifier. Reads the PARTIALLY
- * BLANKED output, so a keyword spelled inside an already-blanked string or
- * comment is invisible here — which is the point.
+ * A slash can start a regex after an operator, opening delimiter, statement
+ * boundary or bare keyword. Identically spelled property names are values.
  */
-function wordEndingAt(chars, end) {
-  let start = end;
-  while (start > 0 && IDENTIFIER_CHAR.test(chars[start - 1])) start -= 1;
-  // `obj.return` is a property read and `this.#return` a private field: both
-  // are VALUES, so a `/` after one divides. Reading either as the keyword lexes
-  // that division as a regex opener and blanks the rest of the line.
-  if (start > 0 && (chars[start - 1] === '.' || chars[start - 1] === '#')) return '';
-  return chars.slice(start, end).join('');
-}
-
-/**
- * True when a `/` at this position opens a regex literal rather than division.
- * A regex can only follow a position where an operand cannot: an operator, an
- * opening bracket, a statement boundary, a keyword, or the start of the file.
- */
-function regexCanStartAfter(prev, chars, at) {
+function regexCanStartAfter(prev, src, end) {
   if (prev === '' || '(,=:[!&|?{};+-*%~^<>'.includes(prev)) return true;
   if (!IDENTIFIER_CHAR.test(prev)) return false;
-  // Step back over the whitespace between the keyword and the `/`.
-  let end = at;
-  while (end > 0 && /\s/.test(chars[end - 1])) end -= 1;
-  return KEYWORDS_BEFORE_REGEX.has(wordEndingAt(chars, end));
+  let start = end;
+  while (start > 0 && IDENTIFIER_CHAR.test(src[start - 1])) start -= 1;
+  if (src[start - 1] === '.' || src[start - 1] === '#') return false;
+  return KEYWORDS_BEFORE_REGEX.has(src.slice(start, end));
 }
 
-// One state machine for both public modes and the paired-view scan. Only the
-// paired view assembles the comment-only output from spans; legacy callers
-// keep one output array.
+// Copy unmasked source by spans and preserve offsets and newlines in each blank.
 function lexSource(src, { keepLiteralText = false, includeCommentOnly = false } = {}) {
-  const out = src.split('');
+  const output = [];
   const comments = includeCommentOnly ? [] : null;
+  let outputEnd = 0;
   let commentEnd = 0;
   const n = src.length;
-  const blank = (i) => { if (i < n && src[i] !== '\n') out[i] = ' '; };
-  const recordComment = (start, end) => {
-    if (!comments) return;
+  const blank = (start, end, isComment = false) => {
+    if (!isComment && keepLiteralText) return;
     const until = Math.min(end, n);
-    comments.push(src.slice(commentEnd, start), out.slice(start, until).join(''));
-    commentEnd = until;
+    const masked = src.slice(start, until);
+    const spaces = masked.includes('\n')
+      ? masked.replace(/[^\n]+/g, (part) => ' '.repeat(part.length))
+      : ' '.repeat(masked.length);
+    output.push(src.slice(outputEnd, start), spaces);
+    outputEnd = until;
+    if (isComment && comments) {
+      comments.push(src.slice(commentEnd, start), spaces);
+      commentEnd = until;
+    }
   };
-  // Blanks a character belonging to a LITERAL rather than to a comment.
-  const blankLit = keepLiteralText ? () => {} : blank;
   // Brace depths of the code regions opened by `${` inside template literals,
   // so a nested template resumes correctly at its closing `}`.
   const templateStack = [];
@@ -114,63 +101,84 @@ function lexSource(src, { keepLiteralText = false, includeCommentOnly = false } 
   // significant character is the standard heuristic and is what keeps a
   // character class like /["']/ from being read as a string opener.
   let prevSignificant = '';
+  // Keep the preceding code position across comments and whitespace.
+  let significantEnd = 0;
+  // Skip plain code and whitespace in batches. Only delimiters below can
+  // affect how we mask the source or disambiguate the next slash.
+  const codeRun = /[^{}/"'`]+/y;
   let i = 0;
 
   while (i < n) {
     const c = src[i];
 
     if (inTemplate) {
-      if (c === '\\') { blankLit(i); blankLit(i + 1); i += 2; continue; }
-      if (c === '`') { blankLit(i); i += 1; inTemplate = false; prevSignificant = '`'; continue; }
-      if (c === '$' && src[i + 1] === '{') {
-        blankLit(i); blankLit(i + 1); i += 2;
-        templateStack.push(braceDepth);
-        braceDepth = 0;
-        inTemplate = false;
-        prevSignificant = '{';
-        continue;
+      const start = i;
+      while (i < n) {
+        if (src[i] === '\\') {
+          i += 2;
+          continue;
+        }
+        if (src[i] === '`') {
+          i += 1;
+          inTemplate = false;
+          prevSignificant = '`';
+          break;
+        }
+        if (src[i] === '$' && src[i + 1] === '{') {
+          i += 2;
+          templateStack.push(braceDepth);
+          braceDepth = 0;
+          inTemplate = false;
+          prevSignificant = '{';
+          break;
+        }
+        i += 1;
       }
-      blankLit(i); i += 1; continue;
+      blank(start, i);
+      continue;
     }
 
     if (c === '/' && src[i + 1] === '/') {
       const start = i;
-      while (i < n && src[i] !== '\n') { blank(i); i += 1; }
-      recordComment(start, i);
+      const newline = src.indexOf('\n', i + 2);
+      i = newline === -1 ? n : newline;
+      blank(start, i, true);
       continue;
     }
     if (c === '/' && src[i + 1] === '*') {
       const start = i;
-      while (i < n && !(src[i] === '*' && src[i + 1] === '/')) { blank(i); i += 1; }
-      blank(i); blank(i + 1); i += 2;
-      recordComment(start, i);
+      const close = src.indexOf('*/', i + 1);
+      i = close === -1 ? n : close + 2;
+      blank(start, i, true);
       continue;
     }
     if (c === "'" || c === '"') {
-      const quote = c;
-      blankLit(i); i += 1;
-      while (i < n && src[i] !== quote) {
-        if (src[i] === '\\') { blankLit(i); i += 1; }
-        blankLit(i); i += 1;
+      const start = i;
+      i += 1;
+      while (i < n && src[i] !== c) {
+        i += src[i] === '\\' ? 2 : 1;
       }
-      blankLit(i); i += 1;
-      prevSignificant = quote;
+      i += 1;
+      blank(start, i);
+      prevSignificant = c;
       continue;
     }
-    if (c === '`') { blankLit(i); i += 1; inTemplate = true; continue; }
-    if (c === '/' && regexCanStartAfter(prevSignificant, out, i)) {
-      blankLit(i); i += 1;
+    if (c === '`') { blank(i, i + 1); i += 1; inTemplate = true; continue; }
+    if (c === '/' && regexCanStartAfter(prevSignificant, src, significantEnd)) {
+      const start = i;
+      i += 1;
       let inClass = false;
       while (i < n && src[i] !== '\n') {
-        if (src[i] === '\\') { blankLit(i); blankLit(i + 1); i += 2; continue; }
+        if (src[i] === '\\') { i += 2; continue; }
         if (src[i] === '[') inClass = true;
         else if (src[i] === ']') inClass = false;
         else if (src[i] === '/' && !inClass) break;
-        blankLit(i); i += 1;
+        i += 1;
       }
-      blankLit(i); i += 1;
+      i += 1;
       // Blank the flags too so `gi` can't be read as an identifier.
-      while (i < n && /[a-z]/.test(src[i])) { blankLit(i); i += 1; }
+      while (i < n && /[a-z]/.test(src[i])) i += 1;
+      blank(start, i);
       prevSignificant = ')';
       continue;
     }
@@ -179,21 +187,30 @@ function lexSource(src, { keepLiteralText = false, includeCommentOnly = false } 
     else if (c === '}') {
       if (braceDepth === 0 && templateStack.length > 0) {
         // Closes a `${…}` hole, so it is part of the template literal.
-        blankLit(i); i += 1;
+        blank(i, i + 1); i += 1;
         braceDepth = templateStack.pop();
         inTemplate = true;
         continue;
       }
       braceDepth -= 1;
     }
-    // Printable ASCII is never whitespace. Keep JS whitespace semantics for
-    // the remaining code units without a regex check on every identifier.
-    const code = src.charCodeAt(i);
-    if ((code > 32 && code < 127) || !/\s/.test(c)) prevSignificant = c;
-    i += 1;
+    codeRun.lastIndex = i;
+    if (codeRun.test(src)) {
+      let end = codeRun.lastIndex;
+      while (end > i && /\s/.test(src[end - 1])) end -= 1;
+      if (end > i) {
+        prevSignificant = src[end - 1];
+        significantEnd = end;
+      }
+      i = codeRun.lastIndex;
+    } else {
+      prevSignificant = c;
+      i += 1;
+      significantEnd = i;
+    }
   }
 
-  const blanked = out.join('');
+  const blanked = output.join('') + src.slice(outputEnd);
   return comments ? { blanked, code: comments.join('') + src.slice(commentEnd) } : blanked;
 }
 
