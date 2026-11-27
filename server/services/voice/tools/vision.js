@@ -44,9 +44,13 @@ export const VISION_TOOLS = [
           summary: "I couldn't capture the screen — the browser may have blocked screen capture. Try again and allow it.",
         };
       }
-      const description = await ctx.describeImage(dataUrl, prompt).catch((err) => ({ __error: err?.message || String(err) }));
-      if (description?.__error) {
-        return { ok: false, error: description.__error, summary: `I captured the screen but the vision model failed: ${description.__error}` };
+      let description;
+      try {
+        description = await ctx.describeImage(dataUrl, prompt);
+      } catch (err) {
+        if (err?.code === 'HOST_CONTROL_FORBIDDEN') throw err;
+        const error = err?.message || String(err);
+        return { ok: false, error, summary: `I captured the screen but the vision model failed: ${error}` };
       }
       const text = typeof description === 'string' ? description.trim() : '';
       if (!text) {
