@@ -1046,7 +1046,7 @@ describe('supportsModelRefresh', () => {
       'claude-sglang', 'claude-sglang-tui', 'claude-splash', 'codex', 'codex-lmstudio',
       'codex-ollama', 'codex-tui',
       'cursor-cli',
-      'cursor-tui', 'grok', 'lmstudio', 'mkserve', 'mtplx', 'nvidia-nim', 'ollama',
+      'cursor-tui', 'grok', 'llama-server', 'lmstudio', 'mkserve', 'mtplx', 'nvidia-nim', 'ollama',
       'opencode-llama-tui',
       'opencode-lmstudio', 'opencode-lmstudio-tui',
       'opencode-mkserve', 'opencode-mkserve-tui', 'opencode-mtplx', 'opencode-mtplx-tui',
