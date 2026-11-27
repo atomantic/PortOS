@@ -1,5 +1,6 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { render, screen, fireEvent, waitFor, within } from '@testing-library/react';
+import userEvent from '@testing-library/user-event';
 
 const api = vi.hoisted(() => ({
   getHistory: vi.fn(),
@@ -44,6 +45,40 @@ describe('HistoryPage list resources (#12171)', () => {
     const select = screen.getByLabelText('Filter by action type');
     expect(within(select).getByRole('option', { name: 'start' })).toBeInTheDocument();
     expect(within(select).getByRole('option', { name: 'stop' })).toBeInTheDocument();
+  });
+
+  it('gives row disclosure and deletion independent keyboard controls', async () => {
+    api.getHistoryActions.mockResolvedValue(['command']);
+    api.getHistory.mockResolvedValue({
+      entries: [{
+        id: 'example-1', action: 'command', targetName: 'Example target',
+        success: true, timestamp: '2026-08-20T00:00:00Z', details: { output: 'Example output' },
+      }],
+    });
+    api.deleteHistoryEntry.mockResolvedValueOnce(null);
+    const user = userEvent.setup();
+    render(<HistoryPage />);
+
+    const disclosure = await screen.findByRole('button', { name: 'Expand command details for Example target' });
+    const remove = screen.getByRole('button', { name: /^Delete command entry/ });
+    for (const action of [disclosure, remove]) {
+      expect(action.parentElement.closest('button, [role="button"], [role="link"]')).toBeNull();
+    }
+    expect(disclosure).toHaveAttribute('aria-expanded', 'false');
+    disclosure.focus();
+    await user.keyboard('{Enter}');
+    expect(disclosure).toHaveAttribute('aria-expanded', 'true');
+    expect(screen.getByText('Example output')).toBeInTheDocument();
+
+    remove.focus();
+    await user.keyboard('{Enter}');
+    expect(api.deleteHistoryEntry).toHaveBeenCalledExactlyOnceWith('example-1');
+    expect(disclosure).toHaveAttribute('aria-expanded', 'true');
+
+    disclosure.focus();
+    await user.keyboard('[Space]');
+    expect(disclosure).toHaveAttribute('aria-expanded', 'false');
+    expect(screen.queryByText('Example output')).not.toBeInTheDocument();
   });
 
   it('shows empty option when history actions list is empty', async () => {

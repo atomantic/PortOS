@@ -20,7 +20,7 @@ vi.mock('../components/ui/Toast');
 
 import Loops from './Loops';
 import socket from '../services/socket';
-import { createLoop, deleteLoop, getLoops, stopLoop } from '../services/apiLoops.js';
+import { createLoop, deleteLoop, getLoops, stopLoop, triggerLoop } from '../services/apiLoops.js';
 import toast from '../components/ui/Toast';
 
 describe('Loops action feedback (#8621)', () => {
@@ -28,6 +28,36 @@ describe('Loops action feedback (#8621)', () => {
     id: 'loop-1', name: 'Example loop', isRunning: true, intervalMs: 60_000,
     currentIteration: 0, lastRun: null,
   };
+
+  it('exposes expanded state and keeps row actions outside its disclosure button', async () => {
+    getLoops.mockResolvedValueOnce([runningLoop]);
+    const user = userEvent.setup();
+    render(<Loops />);
+
+    const disclosure = await screen.findByRole('button', { name: /^Example loop/ });
+    const run = screen.getByRole('button', { name: 'Run now' });
+    for (const action of [
+      disclosure, run, screen.getByRole('button', { name: 'Stop' }),
+      screen.getByRole('button', { name: 'Delete' }),
+    ]) {
+      expect(action.parentElement.closest('button, [role="button"], [role="link"]')).toBeNull();
+    }
+    expect(disclosure).toHaveAttribute('aria-expanded', 'false');
+    disclosure.focus();
+    await user.keyboard('[Space]');
+    expect(disclosure).toHaveAttribute('aria-expanded', 'true');
+    expect(screen.getByText('Live Output')).toBeInTheDocument();
+
+    run.focus();
+    await user.keyboard('{Enter}');
+    expect(triggerLoop).toHaveBeenCalledExactlyOnceWith('loop-1');
+    expect(disclosure).toHaveAttribute('aria-expanded', 'true');
+
+    disclosure.focus();
+    await user.keyboard('{Enter}');
+    expect(disclosure).toHaveAttribute('aria-expanded', 'false');
+    expect(screen.queryByText('Live Output')).not.toBeInTheDocument();
+  });
 
   it('requires confirmation before deleting a loop and leaves its details collapsed', async () => {
     getLoops.mockResolvedValueOnce([runningLoop]);

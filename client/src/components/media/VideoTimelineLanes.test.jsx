@@ -1,5 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { fireEvent, render, screen } from '@testing-library/react';
+import userEvent from '@testing-library/user-event';
 
 // The editor's MouseSensor / TouchSensor activators.
 const dndMouseDown = vi.hoisted(() => vi.fn());
@@ -65,7 +66,10 @@ describe('TimelineBlock — remove control', () => {
 
   it('removes without starting a drag or selecting the parent timeline block', () => {
     const { onSelect, onRemove } = renderBlock();
+    const select = screen.getByRole('button', { name: /A dramatic sunrise 2.00s/ });
     const remove = screen.getByRole('button', { name: 'Remove A dramatic sunrise from timeline' });
+    expect(remove.parentElement).toBe(select.parentElement);
+    expect(remove.parentElement.closest('button, [role="button"], [role="link"]')).toBeNull();
 
     fireEvent.mouseDown(remove);
     fireEvent.touchStart(remove);
@@ -76,6 +80,13 @@ describe('TimelineBlock — remove control', () => {
     expect(onSelect).not.toHaveBeenCalled();
     expect(onRemove).toHaveBeenCalledOnce();
     expect(onRemove).toHaveBeenCalledWith('clip-key');
+
+    fireEvent.mouseDown(select);
+    fireEvent.touchStart(select);
+    fireEvent.click(select);
+    expect(dndMouseDown).toHaveBeenCalledOnce();
+    expect(dndTouchStart).toHaveBeenCalledOnce();
+    expect(onSelect).toHaveBeenCalledExactlyOnceWith('clip-key');
   });
 });
 
@@ -168,23 +179,31 @@ describe('LaneBlock — free-floating overlay/bed placement', () => {
     expect(screen.queryByText('gone.png')).not.toBeInTheDocument();
   });
 
-  it('provides a 44px remove target without selecting a normal-width block', () => {
+  it('provides an independent 44px remove control on a normal-width block', async () => {
     const onSelect = vi.fn();
     const onRemove = vi.fn();
     render(
       <LaneBlock entry={entry} label="logo.png" tone="" isSelected={false} isMissing={false} pxPerSec={40} onSelect={onSelect} onRemove={onRemove} />,
     );
 
+    const select = screen.getByRole('button', { name: 'logo.png' });
     const remove = screen.getByRole('button', { name: 'Remove logo.png from timeline' });
+    expect(remove.parentElement).toBe(select.parentElement);
+    expect(remove.parentElement.closest('button, [role="button"], [role="link"]')).toBeNull();
     expect(remove.className).toContain('min-w-[44px]');
     expect(remove.className).toContain('min-h-[44px]');
 
-    fireEvent.pointerDown(remove);
-    fireEvent.click(remove);
+    const user = userEvent.setup();
+    remove.focus();
+    await user.keyboard('{Enter}');
 
     expect(onSelect).not.toHaveBeenCalled();
     expect(onRemove).toHaveBeenCalledOnce();
     expect(onRemove).toHaveBeenCalledWith('ov-1');
+
+    select.focus();
+    await user.keyboard('[Space]');
+    expect(onSelect).toHaveBeenCalledExactlyOnceWith('ov-1');
   });
 
   it('keeps compact entries selectable without turning the block into a delete target', () => {
@@ -199,7 +218,7 @@ describe('LaneBlock — free-floating overlay/bed placement', () => {
     expect(block).toHaveStyle({ width: '28px' });
     expect(screen.queryByRole('button', { name: 'Remove logo.png from timeline' })).not.toBeInTheDocument();
 
-    fireEvent.click(block);
+    fireEvent.click(screen.getByRole('button', { name: 'logo.png' }));
     expect(onSelect).toHaveBeenCalledWith('ov-1');
 
     rerender(
@@ -208,7 +227,7 @@ describe('LaneBlock — free-floating overlay/bed placement', () => {
     expect(screen.queryByRole('button', { name: 'Remove logo.png from timeline' })).not.toBeInTheDocument();
 
     onSelect.mockClear();
-    fireEvent.click(block);
+    fireEvent.click(screen.getByRole('button', { name: 'logo.png' }));
 
     expect(onSelect).toHaveBeenCalledWith('ov-1');
     expect(onRemove).not.toHaveBeenCalled();
