@@ -7,6 +7,9 @@ const auth = vi.hoisted(() => ({ enabled: false, session: false }));
 vi.mock('../services/auth.js', () => ({
   isAuthEnabled: vi.fn(async () => auth.enabled),
   verifyRequestSession: vi.fn(async () => auth.session),
+  verifyRequestSessionIdentity: vi.fn(async () => auth.session
+    ? { kind: 'session', sessionId: 'example-session', label: null }
+    : null),
   verifyPassword: vi.fn(async () => true),
 }));
 vi.mock('../services/settings.js', () => ({

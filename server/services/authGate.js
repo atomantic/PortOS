@@ -1,5 +1,5 @@
 import { createHash, timingSafeEqual } from 'node:crypto';
-import { isAuthEnabled, verifyPassword, verifyRequestSession } from './auth.js';
+import { isAuthEnabled, verifyPassword, verifyRequestSession, verifyRequestSessionIdentity } from './auth.js';
 // Shared with sidecar processes (lib/sidecarAuthGate.js) so the Autofixer UI
 // on :5560 applies byte-identical credential extraction and CSRF rules.
 import { browserRequestRefusal, isLocalConnection, isOriginlessCrossSiteBrowserRequest, extractBasicPassword } from '../../lib/portosAuthCore.js';
@@ -366,8 +366,10 @@ export const socketAuthGate = async (socket, next) => {
   }
   const enabled = await isAuthEnabled();
   if (!enabled) return next();
-  if (await verifyRequestSession(fakeReq)) {
+  const session = await verifyRequestSessionIdentity(fakeReq);
+  if (session) {
     markAuthMethod(socket, 'session');
+    socket.data.portosSessionId = session.sessionId;
     return next();
   }
   // Peer relay connections: the paired peer token, else legacy Basic. Neither
