@@ -12,6 +12,6 @@ function publishExportDimensions(asset) {
 
 export function publishExportLabel(asset) {
   const label = asset?.kind === 'x-1080p' ? 'X / social up to 1080p (12 Mbps)' : asset?.label;
-  const layout = asset?.layout === 'crop' ? ' · Custom crop' : '';
+  const layout = asset?.layout === 'crop' ? ' · Custom crop' : asset?.layout === 'framed' ? ' · Framed 16:9' : '';
   return `${label || 'Video export'}${layout} · ${publishExportDimensions(asset)}`;
 }
