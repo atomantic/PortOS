@@ -2,9 +2,10 @@
  * Shared allow-list for routes that take a caller-supplied filesystem path.
  */
 
-import { realpathSync } from 'fs';
+import { existsSync, realpathSync, statSync } from 'fs';
 import { resolve, relative, isAbsolute, delimiter, basename } from 'path';
 import { homedir, tmpdir } from 'os';
+import { ServerError } from './errorHandler.js';
 
 // Allowed workspace roots shared by routes that accept a caller-supplied
 // filesystem path: command execution (`routes/commands.js`), scaffolding
@@ -170,4 +171,40 @@ export function outsideAllowedRootsMessage(realPath, { field = 'path' } = {}) {
   const roots = ALLOWED_WORKSPACE_ROOTS.map(formatLogPath);
   if (IS_WINDOWS) roots.push('any non-system drive');
   return `${singleLine(field)} is outside allowed directories: ${formatLogPath(realPath)} (allowed: ${roots.join(', ')})`;
+}
+
+/**
+ * Check a validated request path against the workspace allowlist after resolving symlinks.
+ * Routes retain their existing error contracts through the options.
+ */
+export function assertAllowedWorkspaceDir(rawPath, {
+  field = 'path',
+  outsideStatus = 403,
+  invalidCode = 'INVALID_PATH',
+  missingMessage = `${field} does not exist`,
+  checkRawPath = false,
+} = {}) {
+  const resolvedPath = resolve(rawPath);
+  const invalid = { status: 400, code: invalidCode };
+  if (!existsSync(checkRawPath ? rawPath : resolvedPath)) {
+    throw new ServerError(missingMessage, invalid);
+  }
+  let isDirectory;
+  let realPath;
+  try {
+    isDirectory = statSync(resolvedPath).isDirectory();
+    if (isDirectory) realPath = realpathSync(resolvedPath);
+  } catch {
+    throw new ServerError(`${field} is not accessible`, invalid);
+  }
+  if (!isDirectory) {
+    throw new ServerError(`${field} is not a directory`, invalid);
+  }
+  if (!isWithinAllowedRoots(realPath)) {
+    console.error(`❌ ${outsideAllowedRootsMessage(realPath, { field })}`);
+    throw new ServerError(`${field} is outside allowed directories`, {
+      status: outsideStatus,
+      code: outsideStatus === 403 ? 'FORBIDDEN' : invalidCode,
+    });
+  }
 }

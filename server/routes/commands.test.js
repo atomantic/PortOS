@@ -1,6 +1,7 @@
+import { homedir } from 'os';
 import { recordingOperatorIo } from '../test/recordingOperatorIo.js';
 import { EventEmitter } from 'events';
-import { resolve } from 'path';
+import { join, resolve } from 'path';
 import express from 'express';
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import { request } from '../lib/testHelper.js';
@@ -38,18 +39,13 @@ vi.mock('../services/pm2.js', () => ({
   clearJlistCache: vi.fn(),
 }));
 
-vi.mock('../lib/workspaceRoots.js', () => ({
-  isWithinAllowedRoots: vi.fn(),
-  outsideAllowedRootsMessage: vi.fn((realPath) => `workspacePath is outside allowed directories: ${realPath}`),
-}));
-
 vi.mock('fs', async (importOriginal) => {
   const actual = await importOriginal();
   return {
     ...actual,
     existsSync: vi.fn(),
     statSync: vi.fn(),
-    realpathSync: vi.fn(),
+    realpathSync: vi.fn(path => path),
   };
 });
 
@@ -78,11 +74,12 @@ import { broadcastToCommandSubscribers } from '../services/socketIo.js';
 import { logAction } from '../services/history.js';
 import { isAuthEnabled } from '../services/auth.js';
 import { existsSync, realpathSync, statSync } from 'fs';
-import { isWithinAllowedRoots } from '../lib/workspaceRoots.js';
 import commandsRoutes from './commands.js';
 
-const WORKSPACE_PATH = resolve('fixtures', 'command-workspace');
-const OUTSIDE_PATH = resolve('fixtures', '..', 'outside-workspace');
+const WORKSPACE_PATH = join(homedir(), 'command-workspace');
+const OUTSIDE_PATH = process.platform === 'win32'
+  ? resolve(`${process.env.SystemDrive || 'C:'}/Windows`)
+  : '/etc';
 
 function createChildProcess() {
   const child = new EventEmitter();
@@ -116,7 +113,6 @@ function allowWorkspace(realPath = WORKSPACE_PATH) {
   existsSync.mockReturnValue(true);
   statSync.mockReturnValue({ isDirectory: () => true });
   realpathSync.mockReturnValue(realPath);
-  isWithinAllowedRoots.mockReturnValue(true);
 }
 
 describe('commands routes', () => {
@@ -342,7 +338,6 @@ describe('commands routes', () => {
       existsSync.mockReturnValue(true);
       statSync.mockReturnValue({ isDirectory: () => true });
       realpathSync.mockReturnValue(OUTSIDE_PATH);
-      isWithinAllowedRoots.mockReturnValue(false);
       vi.spyOn(console, 'error').mockImplementation(() => {});
       const { app } = createApp();
 
@@ -353,7 +348,6 @@ describe('commands routes', () => {
       expect(response.status).toBe(400);
       expect(response.body.code).toBe('INVALID_PATH');
       expect(realpathSync).toHaveBeenCalledWith(WORKSPACE_PATH);
-      expect(isWithinAllowedRoots).toHaveBeenCalledWith(OUTSIDE_PATH);
       expect(spawnMock).not.toHaveBeenCalled();
     });
 

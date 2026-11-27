@@ -1,6 +1,6 @@
 import { Router } from 'express';
 import { writeFile, readdir, stat, rm } from 'fs/promises';
-import { existsSync, realpathSync } from 'fs';
+import { existsSync } from 'fs';
 import { join, dirname, resolve, sep } from 'path';
 import { fileURLToPath } from 'url';
 import { exec } from '../lib/childProcess.js';
@@ -12,7 +12,7 @@ import { allocatePorts } from '../services/ports.js';
 import { asyncHandler, ServerError } from '../lib/errorHandler.js';
 import { validateRequest } from '../lib/validateRequest.js';
 import { ensureDir, expandHome } from '../lib/fileUtils.js';
-import { isWithinAllowedRoots, outsideAllowedRootsMessage } from '../lib/workspaceRoots.js';
+import { assertAllowedWorkspaceDir } from '../lib/workspaceRoots.js';
 import { scaffoldVite } from './scaffoldVite.js';
 import { scaffoldExpress } from './scaffoldExpress.js';
 import { scaffoldXcode } from '../services/xcodeScaffold.js';
@@ -229,26 +229,13 @@ async function scaffoldApp(req, res) {
   const dirName = name.toLowerCase().replace(/[^a-z0-9-]/g, '-');
   const repoPath = join(parentDir, dirName);
 
-  // Check parent exists
-  if (!existsSync(parentDir)) {
-    throw new ServerError('Parent directory does not exist', {
-      status: 400,
-      code: 'INVALID_PARENT'
-    });
-  }
-
-  // Assert parentDir resolves within an allowed workspace root (mirrors commands.js pattern).
-  // realpathSync throws on permission/TOCTOU edges — convert to a clean 400.
-  let realParentDir;
-  try {
-    realParentDir = realpathSync(resolve(parentDir));
-  } catch {
-    throw new ServerError('parentDir is not accessible', { status: 400, code: 'INVALID_PARENT' });
-  }
-  if (!isWithinAllowedRoots(realParentDir)) {
-    console.error(`❌ ${outsideAllowedRootsMessage(realParentDir, { field: 'parentDir' })}`);
-    throw new ServerError('parentDir is outside allowed directories', { status: 403, code: 'FORBIDDEN' });
-  }
+  assertAllowedWorkspaceDir(parentDir, {
+    field: 'parentDir',
+    invalidCode: 'INVALID_PARENT',
+    missingMessage: 'Parent directory does not exist',
+    // Scaffolding also passes the original parent to template builders.
+    checkRawPath: true,
+  });
 
   // Check target doesn't exist
   if (existsSync(repoPath)) {
