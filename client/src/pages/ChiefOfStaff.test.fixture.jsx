@@ -30,7 +30,6 @@ const api = vi.hoisted(() => ({
   updateCosConfig: vi.fn(),
   // HealthTab (rendered by the manual "Run Check" test) + its ProviderStatusCard.
   getCosTodayActivity: vi.fn(),
-  getCosLearning: vi.fn(),
   getProviderStatuses: vi.fn(),
   // TasksTab + TaskAddForm, rendered by the task-event tests below.
   getCosLearningDurations: vi.fn(),
@@ -83,7 +82,6 @@ vi.mock('../services/apiAgents.js', () => ({
   forceHealthCheck: api.forceHealthCheck,
   updateCosConfig: api.updateCosConfig,
   getCosTodayActivity: api.getCosTodayActivity,
-  getCosLearning: api.getCosLearning,
   getCosLearningDurations: api.getCosLearningDurations,
   getCosPopularTemplates: api.getCosPopularTemplates,
   getCosCompletedAgents: api.getCosCompletedAgents,
@@ -240,7 +238,6 @@ function installChiefOfStaffHooks() {
     api.forceHealthCheck.mockResolvedValue({ metrics: { timestamp: 1 }, issues: [] });
     api.updateCosTask.mockResolvedValue({ id: 'task-updated', status: 'pending', metadata: {} });
     api.getCosTodayActivity.mockResolvedValue({ isRunning: false, stats: { completed: 0 } });
-    api.getCosLearning.mockResolvedValue(null);
     api.getProviderStatuses.mockResolvedValue({ providers: {} });
     api.getCosBudgetUsage.mockResolvedValue({ usage: {} });
     api.getPersistentMind.mockResolvedValue({

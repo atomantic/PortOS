@@ -243,6 +243,8 @@ export const UNCALLED_ROUTE_ALLOWLIST = Object.freeze({
     'POST /api/openclaw/sessions/:id/messages',
   ]),
   'legacy-client-compat': Object.freeze([
+    // CoS Health in older client builds requests standalone learning insights (before #19849).
+    'GET /api/cos/learning',
     // Universe pickers in older client builds request full records (before #17115).
     'GET /api/universe-builder',
   ]),

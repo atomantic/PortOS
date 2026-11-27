@@ -191,6 +191,7 @@ export default function LearningTab() {
   }, []);
 
   const hasData = learning?.totals?.completed > 0;
+  const skippedCount = skipped?.skippedCount ?? 0;
   const sectionFailures = [
     confidence === null && 'confidence',
     feedback === null && 'feedback',
@@ -296,11 +297,11 @@ export default function LearningTab() {
 
             <div className="bg-port-card border border-port-border rounded-lg p-4">
               <div className="flex items-center gap-2 mb-1">
-                <SkipForward size={14} className={skipped?.skippedCount > 0 ? 'text-port-warning' : 'text-gray-500'} />
+                <SkipForward size={14} className={skippedCount > 0 ? 'text-port-warning' : 'text-gray-500'} />
                 <span className="text-xs text-gray-500">Low-Success Types</span>
               </div>
-              <div className={`text-2xl font-bold ${skipped?.skippedCount > 0 ? 'text-port-warning' : 'text-gray-500'}`}>
-                {skipped.skippedCount}
+              <div className={`text-2xl font-bold ${skippedCount > 0 ? 'text-port-warning' : 'text-gray-500'}`}>
+                {skippedCount}
               </div>
               <div className="text-xs text-gray-500">due to low success</div>
             </div>

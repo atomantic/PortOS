@@ -122,6 +122,16 @@ describe('LearningTab failed reads', () => {
   });
 });
 
+it.each([null, undefined])('keeps analytics visible when low-success history is %s', async (skipped) => {
+  dashboard.skipped = skipped;
+  renderTab();
+
+  expect(await screen.findByText('Tasks Analyzed')).toBeInTheDocument();
+  const lowSuccessCard = screen.getByText('Low-Success Types').parentElement.parentElement;
+  expect(within(lowSuccessCard).getByText('0')).toBeInTheDocument();
+  expect(screen.queryByRole('button', { name: /^Low-Success History/ })).not.toBeInTheDocument();
+});
+
 it('labels low success as historical advice rather than automatic skipping', async () => {
   dashboard.skipped = {
     skippedCount: 1, skippedTypes: [{ taskType: 'pr-watcher', successRate: 13, completed: 8 }]

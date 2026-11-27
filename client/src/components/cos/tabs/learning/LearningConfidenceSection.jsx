@@ -1,6 +1,39 @@
+import { useState } from 'react';
 import { Check, ChevronDown, ChevronRight, Shield, ShieldCheck, ShieldAlert, ShieldQuestion } from 'lucide-react';
-import { runsLabel } from './learningPresentation';
 import { Link } from 'react-router';
+import ConfirmButtonPair from '../../../ui/ConfirmButtonPair';
+import { runsLabel } from './learningPresentation';
+
+function ResolveAllButton({ resettingType, resettingAll, onResetAll }) {
+  const [confirming, setConfirming] = useState(false);
+
+  return confirming ? (
+    <ConfirmButtonPair
+      prompt="Re-enable auto-approval?"
+      confirmText="Reset and resolve all"
+      tone="warning"
+      busy={resettingAll || !!resettingType}
+      busyText={resettingAll ? 'Resolving all…' : undefined}
+      onCancel={() => setConfirming(false)}
+      onConfirm={async () => {
+        await onResetAll();
+        setConfirming(false);
+      }}
+      className="flex-wrap self-start sm:self-auto"
+    />
+  ) : (
+    <button
+      type="button"
+      onClick={() => setConfirming(true)}
+      disabled={resettingAll || !!resettingType}
+      className="inline-flex items-center gap-1.5 px-2.5 py-1 text-xs bg-port-success/10 hover:bg-port-success/20 text-port-success border border-port-success/30 rounded transition-colors disabled:opacity-50 shrink-0 self-start sm:self-auto min-h-[32px] pointer-coarse:min-h-11"
+      title="Mark all resolved — reset learning data to re-enable auto-approval"
+    >
+      <Check size={12} aria-hidden="true" />
+      Mark all resolved
+    </button>
+  );
+}
 
 export default function LearningConfidenceSection({ confidence, expanded, onToggle, resettingType, resettingAll, onResetTaskType, onResetAll }) {
   if (!confidence?.summary) return null;
@@ -75,17 +108,7 @@ export default function LearningConfidenceSection({ confidence, expanded, onTogg
                   </p>
                 </div>
                 {title === 'Requires Approval' && items.length > 1 && (
-                  <button
-                    type="button"
-                    onClick={onResetAll}
-                    disabled={resettingAll || !!resettingType}
-                    className="inline-flex items-center gap-1.5 px-2.5 py-1 text-xs bg-port-success/10 hover:bg-port-success/20 text-port-success border border-port-success/30 rounded transition-colors disabled:opacity-50 shrink-0 self-start sm:self-auto min-h-[32px]"
-                    title="Mark all resolved — reset learning data to re-enable auto-approval"
-                    aria-label="Mark all resolved"
-                  >
-                    <Check size={12} className={resettingAll ? 'animate-spin' : ''} />
-                    {resettingAll ? 'Resolving all…' : 'Mark all resolved'}
-                  </button>
+                  <ResolveAllButton resettingType={resettingType} resettingAll={resettingAll} onResetAll={onResetAll} />
                 )}
               </div>
               <div className="divide-y divide-port-border">

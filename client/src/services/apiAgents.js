@@ -323,7 +323,6 @@ export const getCosWhileAwayActivity = (since, options) =>
   request(`/cos/activity/while-away${since ? `?since=${encodeURIComponent(since)}` : ''}`, options);
 
 // CoS Learning
-export const getCosLearning = (options = {}) => request('/cos/learning', options);
 export const getCosLearningDashboard = (options = {}) => request('/cos/learning/dashboard', options);
 export const getCosLearningDurations = (options = {}) => request('/cos/learning/durations', options);
 export const getCosLearningSummary = (options) => request('/cos/learning/summary', options);
