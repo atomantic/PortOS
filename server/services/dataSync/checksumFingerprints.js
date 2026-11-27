@@ -38,18 +38,24 @@ async function fingerprintDirTwoLevels(dirPath) {
   return segments.join('|') || 'empty';
 }
 
-export async function readFingerprintMap({ checksumPaths, checksumEpochs = {} }) {
+// `checksumDirStats` are directories whose files are added or removed but never
+// edited in place, so the directory's own stat moves on every change and walking
+// a large one would only add a stat per file to every probe.
+export async function readFingerprintMap({ checksumPaths, checksumDirStats = [], checksumEpochs = {} }) {
   // Capture store epochs before awaiting file stats, alongside the file fingerprint read.
   const out = Object.fromEntries(Object.entries(checksumEpochs).map(([name, readEpoch]) => [name, readEpoch()]));
-  await Promise.all(checksumPaths.map(async (p) => {
-    const s = await stat(p).catch(() => null);
-    if (!s) { out[p] = null; return; }
-    if (s.isDirectory()) {
-      out[p] = await fingerprintDirTwoLevels(p);
-      return;
-    }
-    out[p] = fingerprintEntry(s);
-  }));
+  await Promise.all([
+    ...checksumPaths.map(async (p) => {
+      const s = await stat(p).catch(() => null);
+      if (!s) { out[p] = null; return; }
+      if (s.isDirectory()) {
+        out[p] = await fingerprintDirTwoLevels(p);
+        return;
+      }
+      out[p] = fingerprintEntry(s);
+    }),
+    ...checksumDirStats.map(async (p) => { out[p] = fingerprintEntry(await stat(p).catch(() => null)); }),
+  ]);
   return out;
 }
 

@@ -5,7 +5,7 @@ import { PATHS } from '../../lib/fileUtils.js';
 import { RECORD_KIND_SCHEMA_CATEGORIES } from '../../lib/schemaVersions.js';
 import { getChangeToken } from '../changeToken.js';
 import { DIGITAL_TWIN_CHECKSUM_PATHS, getDigitalTwinSnapshot, applyDigitalTwinRemote } from '../digital-twin-sync.js';
-import { USAGE_CHECKSUM_PATHS, getUsageSnapshot, getUsageManifest, applyUsageRemote } from '../peerUsage.js';
+import { USAGE_CHECKSUM_PATHS, USAGE_CHECKSUM_DIR_STATS, getUsageSnapshot, getUsageManifest, applyUsageRemote } from '../peerUsage.js';
 import { getStoryBuilderMutationEpoch } from '../storyBuilderStore/store.js';
 import { GOALS_FILE, getGoalsSnapshot, applyGoalsRemote } from './categories/goals.js';
 import { getCharacterSnapshot, applyCharacterRemote } from './categories/character.js';
@@ -101,6 +101,7 @@ export const CATEGORIES = {
     getManifest: getUsageManifest,
     applyRemote: applyUsageRemote,
     checksumPaths: USAGE_CHECKSUM_PATHS,
+    checksumDirStats: USAGE_CHECKSUM_DIR_STATS,
     checksumRevision: () => getChangeToken('usage'),
     checksumMaxAgeMs: 5000,
     schemaKeys: [],
