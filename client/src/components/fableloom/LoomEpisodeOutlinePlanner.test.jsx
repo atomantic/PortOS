@@ -25,7 +25,7 @@ vi.mock('../../services/apiFableLoom.js', () => ({
 
 vi.mock('../../services/socket', () => ({ default: { on: vi.fn(), off: vi.fn(), emit: vi.fn() } }));
 import socket from '../../services/socket';
-import { updateLoomEpisode, validateLoomEpisodeOutline, startLoomEpisodeShotRun } from '../../services/apiFableLoom.js';
+import { generateLoomEpisodeOutline, updateLoomEpisode, validateLoomEpisodeOutline, startLoomEpisodeShotRun } from '../../services/apiFableLoom.js';
 import LoomEpisodeOutlinePlanner from './LoomEpisodeOutlinePlanner';
 
 const outline = {
@@ -110,6 +110,61 @@ describe('LoomEpisodeOutlinePlanner', () => {
 
     expect(summary).toHaveValue('A signal arrives. It names a ship.');
     expect(screen.getByRole('button', { name: 'Save & validate' })).toBeEnabled();
+  });
+
+  it('preserves unsaved beat and path edits when an AI refresh is canceled', async () => {
+    const user = userEvent.setup();
+    const onLoomUpdate = vi.fn();
+    render(<LoomEpisodeOutlinePlanner open loom={loom} episode={episode} onLoomUpdate={onLoomUpdate} />);
+
+    await user.click(screen.getByTestId('outline-beat-s1').querySelector('button'));
+    const summary = screen.getByRole('textbox', { name: 'Log-line / summary' });
+    await user.type(summary, ' It names a ship.');
+    await user.click(screen.getByRole('button', { name: '+ Add path' }));
+    const path = screen.getByRole('textbox', { name: 'Path 2 choice label for Signal' });
+    await user.type(path, 'look aboard');
+
+    await user.click(screen.getByRole('button', { name: 'Refresh with AI' }));
+    expect(screen.getByRole('group', { name: 'Replace the saved outline and discard your unsaved edits?' })).toBeInTheDocument();
+    expect(generateLoomEpisodeOutline).not.toHaveBeenCalled();
+    await user.click(screen.getByRole('button', { name: 'Cancel' }));
+
+    expect(summary).toHaveValue('A signal arrives. It names a ship.');
+    expect(path).toHaveValue('look aboard');
+    expect(screen.getByRole('button', { name: 'Save outline' })).toBeEnabled();
+    expect(screen.getByRole('button', { name: 'Refresh with AI' })).toHaveFocus();
+    expect(generateLoomEpisodeOutline).not.toHaveBeenCalled();
+    expect(onLoomUpdate).not.toHaveBeenCalled();
+  });
+
+  it('only replaces a saved outline after the refresh is confirmed', async () => {
+    const user = userEvent.setup();
+    const nextOutline = { ...outline, scenes: [{ ...outline.scenes[0], title: 'New beat' }] };
+    const nextLoom = { ...loom, episodes: [{ ...episode, storyOutline: nextOutline }] };
+    const { promise, resolve } = Promise.withResolvers();
+    generateLoomEpisodeOutline.mockReturnValueOnce(promise);
+    const onLoomUpdate = vi.fn();
+    render(<LoomEpisodeOutlinePlanner open loom={loom} episode={episode} onLoomUpdate={onLoomUpdate} />);
+
+    await user.click(screen.getByTestId('outline-beat-s1').querySelector('button'));
+    const playback = screen.getByRole('combobox', { name: 'Playback' });
+    const audience = screen.getByRole('combobox', { name: 'Audience channel' });
+    expect(playback).toHaveValue('cut');
+    expect(audience).toHaveValue('disconnected');
+
+    await user.click(screen.getByRole('button', { name: 'Refresh with AI' }));
+    expect(screen.getByRole('group', { name: 'Replace the saved outline with a new AI draft?' })).toBeInTheDocument();
+    expect(generateLoomEpisodeOutline).not.toHaveBeenCalled();
+    await user.click(screen.getByRole('button', { name: 'Replace outline' }));
+
+    expect(playback).toBeDisabled();
+    expect(audience).toBeDisabled();
+    expect(screen.getByRole('button', { name: 'Refreshing…' })).toBeDisabled();
+    await act(async () => resolve({ outline: nextOutline, loom: nextLoom }));
+    expect(screen.getByText('New beat')).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Refresh with AI' })).toBeEnabled();
+    expect(generateLoomEpisodeOutline).toHaveBeenCalledTimes(1);
+    expect(onLoomUpdate).toHaveBeenCalledWith(nextLoom);
   });
 
   it('saves edited log-lines before the deterministic validation request', async () => {
