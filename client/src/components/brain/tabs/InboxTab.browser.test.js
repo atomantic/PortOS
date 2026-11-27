@@ -154,6 +154,7 @@ describe.skipIf(!chrome)('Brain inbox capture geometry', () => {
         await page.waitForFunction(() => window.captures?.length === 1);
         expect(await page.evaluate(() => window.captures[0][0])).toBe('An example thought');
         expect(await page.evaluate(() => window.captures[0][3].creative)).toBe(true);
+        await page.waitForFunction(() => typeof window.resolveInboxHistory === 'function');
         await page.evaluate(() => window.resolveInboxHistory({
           entries: [{ id: 'example-thought', status: 'filed', capturedText: 'An example thought', creative: true }],
           counts: { filed: 1 },
@@ -198,6 +199,7 @@ describe.skipIf(!chrome)('Brain inbox capture geometry', () => {
       ];
       try {
         await page.goto(`${origin}inbox-test`, { timeout: 15000 });
+        await page.waitForFunction(() => typeof window.resolveInboxHistory === 'function');
         await page.evaluate(data => {
           window.inboxEntries = data;
           window.resolveInboxHistory({ entries: data, total: data.length, counts: { filed: 3, needs_review: 2 } });
