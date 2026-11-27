@@ -1,4 +1,11 @@
 import {
+  SUBMIT_ENTER_ATTEMPTS,
+  SUBMIT_ENTER_SPACING_MS,
+  STALL_NUDGE_IDLE_MS,
+  PROMPT_WORK_EVIDENCE_MS,
+  UNSUBMITTED_PROMPT_SETTLE_MS,
+} from '../../test/fixtures/tuiTiming.js';
+import {
   flushMicrotasks,
   sessionCallbacks,
   SESSION_ID,
@@ -33,13 +40,7 @@ import { beginOllamaAgentWork, ensureOllamaAgentContext } from '../ollamaAgentCo
 import * as cosAgentLifecycle from '../cos/cosAgentLifecycle.js';
 import * as gitStatusService from '../git/status.js';
 import * as forgeAuthService from '../forgeAuth.js';
-import {
-  STALL_NUDGE_IDLE_MS,
-  STALL_NUDGE_MAX_ATTEMPTS,
-  PROMPT_WORK_EVIDENCE_MS,
-  UNSUBMITTED_PROMPT_SETTLE_MS,
-  UNSUBMITTED_PROMPT_ENTER_MAX_ATTEMPTS,
-} from '../../lib/tuiHandshake.js';
+import { PASTE_TO_ENTER_FALLBACK_MS, STALL_NUDGE_MAX_ATTEMPTS, UNSUBMITTED_PROMPT_ENTER_MAX_ATTEMPTS } from '../../lib/tuiHandshake.js';
 
 const gitService = { ...gitStatusService, ...forgeAuthService };
 
@@ -1549,8 +1550,6 @@ describe('spawnTuiAgent runtime', () => {
   // the paste settles. Asserts the bracketed paste is written once and `\r` is
   // written exactly SUBMIT_ENTER_ATTEMPTS times.
   it('submit-enter: writes the bracketed paste once and retries the submit Enter SUBMIT_ENTER_ATTEMPTS times', async () => {
-    const { SUBMIT_ENTER_ATTEMPTS, SUBMIT_ENTER_SPACING_MS, PASTE_TO_ENTER_FALLBACK_MS } =
-      await vi.importActual('../../lib/tuiHandshake.js');
 
     runSpawn({ prompt: 'paste me into the box' });
     await flushMicrotasks();

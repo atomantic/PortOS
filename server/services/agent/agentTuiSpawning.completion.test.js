@@ -1,3 +1,4 @@
+import { STALL_NUDGE_IDLE_MS } from '../../test/fixtures/tuiTiming.js';
 import {
   appendRunEvent,
   flushMicrotasks,
@@ -16,7 +17,7 @@ import * as agentLifecycle from './agentFinalization.js';
 import * as cosAgentLifecycle from '../cos/cosAgentLifecycle.js';
 import { probePrForBranch } from '../prProbe.js';
 import { activeAgents, userTerminatedAgents, pausedAgents, consumePausedAgentExit } from './agentState.js';
-import { STALL_NUDGE_IDLE_MS, STALL_NUDGE_MAX_ATTEMPTS } from '../../lib/tuiHandshake.js';
+import { STALL_NUDGE_MAX_ATTEMPTS } from '../../lib/tuiHandshake.js';
 import { markHostShuttingDown, resetHostShutdownFlagForTests } from '../../lib/hostShutdown.js';
 import { emitLog } from '../cos/cosEvents.js';
 

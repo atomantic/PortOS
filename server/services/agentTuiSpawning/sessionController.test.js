@@ -1,3 +1,4 @@
+import { STALL_NUDGE_IDLE_MS } from '../../test/fixtures/tuiTiming.js';
 /**
  * Session-controller teardown contract (#8021).
  *
@@ -18,7 +19,7 @@
  */
 
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
-import { STALL_NUDGE_IDLE_MS, STALL_NUDGE_TEXT } from '../../lib/tuiHandshake.js';
+import { STALL_NUDGE_TEXT } from '../../lib/tuiHandshake.js';
 
 vi.mock('../cos/cosEvents.js', () => ({ emitLog: vi.fn() }));
 
