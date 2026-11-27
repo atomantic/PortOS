@@ -134,6 +134,26 @@ describe('enqueueFalSeedvr2Upscale', () => {
       }),
     });
   });
+
+  it('inherits source Music Video attribution without leaking its scene to another explicit project', async () => {
+    await enqueueFalSeedvr2Upscale(SOURCE_ID, { targetResolution: '1080p' });
+    expect(mocks.enqueueJob).toHaveBeenLastCalledWith({
+      kind: 'video-upscale',
+      params: expect.objectContaining({
+        musicVideoProjectId: 'mv-old',
+        musicVideo: { projectId: 'mv-old', sceneId: 'mvs-old', tier: 'final' },
+      }),
+    });
+
+    await enqueueFalSeedvr2Upscale(SOURCE_ID, { targetResolution: '1080p', musicVideoProjectId: 'mv-new' });
+    expect(mocks.enqueueJob).toHaveBeenLastCalledWith({
+      kind: 'video-upscale',
+      params: expect.objectContaining({
+        musicVideoProjectId: 'mv-new',
+        musicVideo: { projectId: 'mv-new', tier: 'final' },
+      }),
+    });
+  });
 });
 
 describe('runVideoUpscale & spend accounting', () => {
