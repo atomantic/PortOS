@@ -468,6 +468,10 @@ export const renderTimelineProject = (id, options = {}) => request(`/video-timel
   method: 'POST',
   ...options,
 });
+export const cancelTimelineRender = (jobId, options = {}) => request(`/video-timeline/${encodeURIComponent(jobId)}/cancel`, {
+  method: 'POST',
+  ...options,
+});
 
 // Media collections — user-named buckets that can hold any mix of images
 // and videos. An item key is "<kind>:<ref>" (e.g. "image:foo.png" or

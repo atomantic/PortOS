@@ -47,6 +47,7 @@ const api = vi.hoisted(() => ({
   galleryThrows: false,
   updateTimelineProject: vi.fn(async () => ({ updatedAt: 'u2' })),
   renderTimelineProject: vi.fn(),
+  cancelTimelineRender: vi.fn(),
   listHistory: vi.fn(),
   listMusic: vi.fn(),
 }));
@@ -62,6 +63,7 @@ vi.mock('../services/apiImageVideo', () => ({
   getGalleryImages: (...args) => api.getGalleryImages(...args),
   updateTimelineProject: (...args) => api.updateTimelineProject(...args),
   renderTimelineProject: (...args) => api.renderTimelineProject(...args),
+  cancelTimelineRender: (...args) => api.cancelTimelineRender(...args),
 }));
 
 const VideoTimelineEditor = (await import('./VideoTimelineEditor')).default;
@@ -101,6 +103,7 @@ beforeEach(() => {
   });
   api.updateTimelineProject.mockReset().mockResolvedValue({ updatedAt: 'u2' });
   api.renderTimelineProject.mockReset().mockResolvedValue({ jobId: 'j1' });
+  api.cancelTimelineRender.mockReset().mockResolvedValue({ ok: true });
 });
 
 const renderEditorRoute = ({ strict = false } = {}) => {
@@ -272,14 +275,24 @@ describe('timeline render jobs', () => {
       act(() => lastEventSource().emit({ type: 'progress', progress: 0.42 }));
       expect(screen.getByRole('button', { name: 'Rendering 42%' })).toBeDisabled();
 
+      await act(async () => { fireEvent.click(screen.getByRole('button', { name: 'Cancel render' })); });
+      expect(api.cancelTimelineRender).toHaveBeenCalledWith('j1', expect.objectContaining({ silent: true }));
+      expect(screen.getByRole('button', { name: 'Canceling…' })).toBeDisabled();
+      expect(screen.getByRole('button', { name: 'Rendering 42%' })).toBeDisabled();
+
       act(() => lastEventSource().emit({ type: 'canceled' }));
       fireEvent.click(screen.getByRole('button', { name: 'Render' }));
       await waitFor(() => expect(lastEventSource()?.url).toBe('/api/video-timeline/j2/events'));
       expect(screen.getByRole('button', { name: 'Rendering 0%' })).toBeDisabled();
 
+      api.cancelTimelineRender.mockRejectedValueOnce(Object.assign(new Error('Already finishing'), { code: 'ALREADY_TERMINAL' }));
+      await act(async () => { fireEvent.click(screen.getByRole('button', { name: 'Cancel render' })); });
+      await waitFor(() => expect(api.cancelTimelineRender).toHaveBeenLastCalledWith('j2', expect.anything()));
+
       act(() => lastEventSource().emit({ type: 'complete', result: { id: 'rendered-clip' } }));
       expect(await screen.findByText('Media History')).toBeInTheDocument();
       expect(router.state.location.search).toBe('?focus=rendered-clip');
+      expect(toastError).not.toHaveBeenCalled();
     } finally {
       vi.unstubAllGlobals();
     }

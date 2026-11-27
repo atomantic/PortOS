@@ -29,7 +29,7 @@ function TimelineProjectEditor({ projectId }) {
   } = useTimelineProjectData(projectId);
   const { saveError, savePending, routeGuard, retrySave, discardAndExit, flushForRender } = save;
   const { segments, overlays, audio } = lanes;
-  const { handleRender, renderJobId, renderProgress } = useTimelineRenderJob({
+  const { handleRender, handleCancel, renderJobId, renderProgress, canceling } = useTimelineRenderJob({
     projectId, hasSegments: segments.length > 0, flushForRender, navigate,
   });
   const [showLibrary, setShowLibrary] = useState(desktopTimelineLayout);
@@ -144,7 +144,7 @@ function TimelineProjectEditor({ projectId }) {
                   {segments.length} segments · {overlays.length} overlays · {audio.tracks.length} beds · {formatTimecode(total)}
                 </span>
               </div>
-              <div className="flex items-center gap-2">
+              <div className="flex flex-wrap items-center gap-2">
                 <button
                   type="button"
                   onClick={() => setShowLibrary((v) => !v)}
@@ -163,6 +163,16 @@ function TimelineProjectEditor({ projectId }) {
                   {renderJobId ? <Loader2 className="w-4 h-4 animate-spin" /> : <Save className="w-4 h-4" />}
                   {renderJobId ? `Rendering ${formatPercent(renderProgress * 100, { decimals: 0 })}` : 'Render'}
                 </button>
+                {renderJobId && (
+                  <button
+                    type="button"
+                    onClick={handleCancel}
+                    disabled={canceling}
+                    className="px-3 py-1.5 border border-port-border rounded-md text-sm text-gray-300 hover:text-white disabled:opacity-40 disabled:cursor-not-allowed"
+                  >
+                    {canceling ? 'Canceling…' : 'Cancel render'}
+                  </button>
+                )}
               </div>
             </div>
           </>

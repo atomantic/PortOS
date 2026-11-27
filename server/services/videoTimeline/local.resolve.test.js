@@ -30,22 +30,9 @@ vi.mock('../../lib/ffmpeg.js', async () => {
   const actual = await vi.importActual('../../lib/ffmpeg.js');
   return {
     ...actual,
-    findFfprobe: async () => '/usr/bin/ffprobe',
+    hasAudioStream: async () => h.hasAudio,
     probeVideoDuration: async () => h.probedDuration,
   };
-});
-
-// probeAudio spawns ffprobe itself; stub the child so the flag is ours to set.
-vi.mock('../../lib/childProcess.js', async () => {
-  const actual = await vi.importActual('../../lib/childProcess.js');
-  return { ...actual, spawn: () => {
-    const listeners = {};
-    const proc = {
-      stdout: { on: (ev, fn) => { if (ev === 'data') fn(Buffer.from(h.hasAudio ? 'audio\n' : '\n')); } },
-      on: (ev, fn) => { listeners[ev] = fn; if (ev === 'close') setImmediate(() => fn(0)); return proc; },
-    };
-    return proc;
-  } };
 });
 
 const { resolveTimeline } = await import('./local.js');
