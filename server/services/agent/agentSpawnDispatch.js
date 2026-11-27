@@ -489,8 +489,11 @@ async function launchPreparedAgent(d, prep, runtime, registered, dispatchedTask)
   });
 
   context.handedOff = true;
+  const startedAt = Date.now();
+  const claimProject = shouldGroupCodexClaim(d, prep, runProvider);
+  let launched;
   if (!spawnHeadless) {
-    return await spawnTuiAgent({
+    launched = await spawnTuiAgent({
       agentId,
       task: dispatchedTask,
       prompt,
@@ -506,21 +509,39 @@ async function launchPreparedAgent(d, prep, runtime, registered, dispatchedTask)
       safetyProfile,
       securityScanGrant,
     });
+  } else if (dispatchUseRunner) {
+    launched = await spawnViaRunner(agentId, dispatchedTask, { prompt, workspacePath, model: selectedModel, provider: runProvider, runId, cliConfig, securityScanGrant });
+  } else {
+    launched = await spawnDirectly({
+      agentId,
+      task: dispatchedTask,
+      prompt,
+      workspacePath,
+      model: selectedModel,
+      provider: runProvider,
+      runId,
+      cliConfig,
+      agentDir,
+      prOpenedBy,
+      safetyProfile,
+    });
   }
-  if (dispatchUseRunner) {
-    return await spawnViaRunner(agentId, dispatchedTask, { prompt, workspacePath, model: selectedModel, provider: runProvider, runId, cliConfig, securityScanGrant });
+  if (launched && claimProject) {
+    // Sidebar grouping is best-effort metadata. Never block, retry or move the
+    // claim itself if the installed Codex does not yet support the project API.
+    void import('../codexAppServer.js')
+      .then(({ groupCodexIssueClaim }) => groupCodexIssueClaim({
+        ...claimProject, startedAt, sourceKind: spawnHeadless ? 'exec' : 'cli',
+      }))
+      .catch(() => {});
   }
-  return await spawnDirectly({
-    agentId,
-    task: dispatchedTask,
-    prompt,
-    workspacePath,
-    model: selectedModel,
-    provider: runProvider,
-    runId,
-    cliConfig,
-    agentDir,
-    prOpenedBy,
-    safetyProfile,
-  });
+  return launched;
+}
+
+function shouldGroupCodexClaim(d, prep, provider) {
+  if (d.publicReview || !isCodexProvider(provider) || !prep.claimCheckout || !prep.resolvedAppName) return null;
+  // The local app server operates on PortOS's inherited Codex home only.
+  // Never search a different profile's threads by changing auth/config.
+  if (provider.envVars?.CODEX_HOME !== undefined && provider.envVars.CODEX_HOME !== process.env.CODEX_HOME) return null;
+  return { repoPath: prep.claimCheckout.repoPath, workspacePath: prep.workspacePath, appName: prep.resolvedAppName };
 }
