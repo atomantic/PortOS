@@ -15,7 +15,7 @@ import {
 } from '../../lib/mediaValidation.js'
 import { getAssessmentReport, runAssessment, deleteAssessment } from '../../services/localModelAssessments.js'
 import { startSweep, getSweepStatus, cancelSweep } from '../../services/localModelAssessmentSweep.js'
-import { runOpenCodeAgentBenchmark } from '../../services/localModelAgentBenchmark.js'
+import { cancelOpenCodeAgentBenchmark, runOpenCodeAgentBenchmark } from '../../services/localModelAgentBenchmark.js'
 import { getCapabilityTestReport, getCapabilityTestResult, runCapabilityTest } from '../../services/modelCapabilityTests.js'
 import { deleteResult as deleteCapabilityTestResult } from '../../services/modelCapabilityTestStore.js'
 import { abortSignalFromResponse } from '../../lib/requestAbort.js'
@@ -62,6 +62,10 @@ router.post('/assessments/run', asyncHandler(async (req, res) => {
 router.post('/assessments/agent-benchmark', asyncHandler(async (req, res) => {
   const { backend, modelId, timeoutMs } = validateRequest(localLlmAgentBenchmarkSchema, req.body)
   res.json(await runOpenCodeAgentBenchmark({ backend, modelId, timeoutMs }))
+}))
+
+router.post('/assessments/agent-benchmark/cancel', asyncHandler(async (_req, res) => {
+  res.json(cancelOpenCodeAgentBenchmark())
 }))
 
 // POST /api/local-llm/assessments/sweep — measure EVERY model the scope covers,

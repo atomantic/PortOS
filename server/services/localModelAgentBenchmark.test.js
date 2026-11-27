@@ -4,7 +4,7 @@ import { readFileSync } from 'node:fs';
 vi.mock('./provider/providers.js', () => ({ getProviderById: vi.fn() }));
 vi.mock('./provider/providerExecutionReadiness.js', () => ({ ensureProviderReadyForExecution: vi.fn().mockResolvedValue({ success: true }) }));
 vi.mock('./tuiPromptRunner.js', () => ({ executeTuiRun: vi.fn() }));
-vi.mock('./runner.js', () => ({ getRunsPath: vi.fn(() => '/tmp/portos-benchmark-runs') }));
+vi.mock('./runner.js', () => ({ getRunsPath: vi.fn(() => '/tmp/portos-benchmark-runs'), stopRun: vi.fn(async () => true) }));
 vi.mock('../lib/heavyJobClaim.js', () => ({ claimHeavyLocalJob: vi.fn() }));
 vi.mock('./mtplxServerManager.js', () => ({ runOnMtplxCheckpoint: vi.fn() }));
 
@@ -12,9 +12,11 @@ import { claimHeavyLocalJob } from '../lib/heavyJobClaim.js';
 import { getProviderById } from './provider/providers.js';
 import { ensureProviderReadyForExecution } from './provider/providerExecutionReadiness.js';
 import { runOnMtplxCheckpoint } from './mtplxServerManager.js';
+import { stopRun } from './runner.js';
 import { executeTuiRun } from './tuiPromptRunner.js';
 import {
   buildOpenCodeAgentBenchmarkPrompt,
+  cancelOpenCodeAgentBenchmark,
   runOpenCodeAgentBenchmark,
   summarizeOpenCodeEvents,
 } from './localModelAgentBenchmark.js';
@@ -179,10 +181,53 @@ describe('runOpenCodeAgentBenchmark', () => {
     await expect(runOpenCodeAgentBenchmark({ backend: 'mtplx', modelId })).resolves.toMatchObject({
       backend: 'mtplx', modelId, completed: true,
     });
-    expect(runOnMtplxCheckpoint).toHaveBeenCalledWith(modelId, expect.any(Function), { requireCached: true });
+    expect(runOnMtplxCheckpoint).toHaveBeenCalledWith(modelId, expect.any(Function), { requireCached: true, signal: expect.any(AbortSignal) });
     const { provider } = executeTuiRun.mock.calls[0][0];
     expect(provider).toMatchObject({ defaultModel: servedModelId, endpoint });
     expect(JSON.parse(provider.envVars.OPENCODE_CONFIG_CONTENT).provider.mtplx.options.baseURL).toBe(endpoint);
+    expect(release).toHaveBeenCalledOnce();
+  });
+
+  it('stops the registered benchmark PTY and holds the claim until cleanup', async () => {
+    const { promise: ready, resolve: markReady } = Promise.withResolvers();
+    const { promise: exited, resolve: confirmExit } = Promise.withResolvers();
+    executeTuiRun.mockImplementationOnce(async ({ onReady, onComplete, runId }) => {
+      onReady();
+      markReady(runId);
+      await exited;
+      onComplete({ success: false, exitCode: 130, canceled: true });
+    });
+
+    const target = { backend: 'llama', modelId: 'dflash' };
+    expect(cancelOpenCodeAgentBenchmark()).toEqual({ cancelled: false });
+    const run = runOpenCodeAgentBenchmark(target);
+    const runId = await ready;
+    expect(cancelOpenCodeAgentBenchmark()).toEqual({ cancelled: true });
+    expect(stopRun).toHaveBeenCalledExactlyOnceWith(runId);
+    expect(release).not.toHaveBeenCalled();
+    await expect(runOpenCodeAgentBenchmark(target)).rejects.toMatchObject({ code: 'HEAVY_LOCAL_JOB_BUSY' });
+
+    confirmExit();
+    await expect(run).resolves.toEqual({ completed: false, cancelled: true });
+    expect(release).toHaveBeenCalledOnce();
+    expect(cancelOpenCodeAgentBenchmark()).toEqual({ cancelled: false });
+    await expect(runOpenCodeAgentBenchmark(target)).resolves.toMatchObject({ completed: true });
+  });
+
+  it('skips the PTY when cancelled during runtime readiness', async () => {
+    const { promise: started, resolve: markStarted } = Promise.withResolvers();
+    const { promise: runtimeReady, resolve: finishReadiness } = Promise.withResolvers();
+    ensureProviderReadyForExecution.mockImplementationOnce(() => {
+      markStarted();
+      return runtimeReady;
+    });
+    const run = runOpenCodeAgentBenchmark({ backend: 'llama', modelId: 'dflash' });
+    await started;
+    expect(cancelOpenCodeAgentBenchmark()).toEqual({ cancelled: true });
+    finishReadiness({ success: true });
+
+    await expect(run).resolves.toMatchObject({ cancelled: true });
+    expect(executeTuiRun).not.toHaveBeenCalled();
     expect(release).toHaveBeenCalledOnce();
   });
 

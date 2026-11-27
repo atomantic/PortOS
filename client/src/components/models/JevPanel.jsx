@@ -13,6 +13,7 @@ import { formatBytes, formatCount, formatPercent } from '../../utils/formatters'
 import {
   adoptJevHead,
   cancelJevInstall,
+  cancelJevTraining,
   discardJevHead,
   getJevDecisionStats,
   getJevHeads,
@@ -93,6 +94,7 @@ export default function JevPanel() {
   const [scoring, setScoring] = useState(false);
   const [decision, setDecision] = useState(null);
   const [training, setTraining] = useState(false);
+  const [cancellingTraining, setCancellingTraining] = useState(false);
   const [headError, setHeadError] = useState('');
   // `linear` is the honest default: a 3-way logistic regression over a frozen
   // 4B encoder. `mlp1` buys one hidden layer for a corpus large enough to
@@ -184,8 +186,17 @@ export default function JevPanel() {
 
   const runTraining = () => {
     setTraining(true);
-    return runHeadAction(trainJevHead({ architecture }, { silent: true }), 'Training failed.')
+    return runHeadAction(trainJevHead({ architecture }, { silent: true }).then((result) => {
+      if (result?.cancelled) toast.success('Project head training cancelled');
+      return result;
+    }), 'Training failed.')
       .finally(() => setTraining(false));
+  };
+
+  const cancelTraining = () => {
+    setCancellingTraining(true);
+    return runHeadAction(cancelJevTraining({ silent: true }), 'Could not cancel training.')
+      .finally(() => setCancellingTraining(false));
   };
 
   const adoptHead = (decisionId) => runHeadAction(
@@ -495,7 +506,7 @@ export default function JevPanel() {
             <button
               type="button"
               onClick={runTraining}
-              disabled={!ready || trainingActive || !headState || headStatusError}
+              disabled={!ready || trainingActive || cancellingTraining || !headState || headStatusError}
               className="px-2.5 py-1 text-xs bg-port-accent/20 hover:bg-port-accent/30 text-port-accent rounded disabled:opacity-50 disabled:cursor-not-allowed flex items-center gap-1"
             >
               <GraduationCap size={12} /> {trainingActive ? 'Training…' : 'Train a project head'}
@@ -513,9 +524,19 @@ export default function JevPanel() {
             </select>
             {!ready && <span className="text-xs text-gray-500">Install jev first.</span>}
             {trainingActive && (
-              <span className="flex items-center gap-1.5 text-xs text-gray-300">
-                <BrailleSpinner /> Reading this repository&rsquo;s history and encoding it once — minutes on a cold cache, seconds after.
-              </span>
+              <>
+                <span className="flex items-center gap-1.5 text-xs text-gray-300">
+                  <BrailleSpinner /> Reading this repository&rsquo;s history and encoding it once — minutes on a cold cache, seconds after.
+                </span>
+                <button
+                  type="button"
+                  onClick={cancelTraining}
+                  disabled={cancellingTraining}
+                  className="rounded border border-port-border px-2.5 py-1 text-xs text-gray-300 hover:border-port-accent disabled:opacity-50"
+                >
+                  {cancellingTraining ? 'Cancelling…' : 'Cancel training'}
+                </button>
+              </>
             )}
             <span className="text-[11px] text-gray-500">Trains {TRAINABLE_DECISION_ID}. Never adopts on its own.</span>
           </div>

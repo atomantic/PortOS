@@ -97,6 +97,9 @@ export const getJevHeads = (options) => request('/local-llm/jev/heads', options)
 export const trainJevHead = (body = {}, options) =>
   request('/local-llm/jev/heads/train', { method: 'POST', body: JSON.stringify(body), ...options });
 
+export const cancelJevTraining = (options) =>
+  request('/local-llm/jev/heads/train/cancel', { method: 'POST', ...options });
+
 // Refused server-side unless the head beats BOTH the stock zero-shot and the
 // majority-class baseline — a disabled button is a suggestion, not the gate.
 export const adoptJevHead = (decisionId, options) =>
@@ -403,6 +406,9 @@ export const runLocalLlmAssessment = (payload, options) =>
 // This measures tool-loop completion separately from direct decoder throughput.
 export const runOpenCodeAgentBenchmark = (payload, options) =>
   request('/local-llm/assessments/agent-benchmark', { method: 'POST', body: JSON.stringify(payload), ...options });
+
+export const cancelOpenCodeAgentBenchmark = (options) =>
+  request('/local-llm/assessments/agent-benchmark/cancel', { method: 'POST', ...options });
 
 // === The overnight sweep =====================================================
 // Measure every model the scope covers, in one server-side queue. Unlike
