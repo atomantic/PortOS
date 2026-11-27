@@ -13,9 +13,9 @@ import { ServerError } from '../../lib/errorHandler.js';
 import { getAIToolkitInstance } from '../../lib/aiToolkitState.js';
 import { isSafeSubdirFilter } from '../../lib/sharedSchemas.js';
 import { reloadSettings, withLiveSettingsRestore } from '../settings.js';
-import { invalidateAllCaches as invalidateBrainCaches } from '../brainStorage.js';
+import { BRAIN_STORE_SCHEMA_VERSION, invalidateAllCaches as invalidateBrainCaches } from '../brainStorage.js';
 import {
-  convertRestoredLegacySplitStores, describeLegacySplitStores, snapshotLegacySplitStores,
+  convertRestoredLegacySplitStores, describeLegacySplitStores, hasUnrestorableScopedInbox, snapshotLegacySplitStores,
 } from '../backupLegacyStores.js';
 import { maintenance } from '../../lib/maintenanceAdmission.js';
 import { resetInstanceIdCache } from '../instanceIdentity.js';
@@ -404,6 +404,15 @@ async function restoreHeldSnapshot({ snapshotDir, currentSource }, snapshotId, {
   const legacyStores = await snapshotLegacySplitStores(srcDir, effectiveFilter, {
     ledger: effectiveFilter ? null : await readSnapshotMigrationLedger(srcDir),
   });
+  if (await hasUnrestorableScopedInbox(srcDir, effectiveFilter, legacyStores, BRAIN_STORE_SCHEMA_VERSION)) {
+    throw new ServerError(
+      'The selected scope contains brain/inbox_log.jsonl without a usable newer Brain inbox. '
+      + 'A scoped restore keeps the live migration ledger, so it cannot convert these captures. '
+      + 'If the snapshot has a readable ledger with migrations 081 and 200 pending, preview a full file restore to replay them in order. '
+      + 'For a scoped recovery, upgrade a disposable copy of the snapshot first, then restore from a fresh snapshot of that copy.',
+      { status: 409, code: 'BACKUP_RESTORE_LEGACY_BRAIN_INBOX' },
+    );
+  }
   const legacyLedger = await snapshotLegacyLedger(srcDir, effectiveFilter);
   const restoreNotes = (restoredLegacy, restoredLegacyLedger = legacyLedger) => ({
     ...(ledgerGap !== undefined && { ledgerGap }),

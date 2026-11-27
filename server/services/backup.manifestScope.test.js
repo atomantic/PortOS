@@ -97,14 +97,87 @@ describe('restoreSnapshot manifest verification', () => {
       await realFs.rm(live('cos', 'example.json'), { force: true });
     });
 
+    const rawInboxPath = 'brain/inbox_log.jsonl';
+    const rawInbox = JSON.stringify({ id: 'example-entry', capturedAt: '2025-03-01T12:00:00.000Z', text: 'Example capture' });
+    const newerInbox = { records: { 'example-entry': { text: 'Example capture', createdAt: '2025-03-01T12:00:00.000Z' } } };
+
+    it.each([
+      { subdirFilter: 'brain', snapshotInbox: {} },
+      { subdirFilter: rawInboxPath, snapshotInbox: {} },
+      { subdirFilter: rawInboxPath, snapshotInbox: { 'brain/inbox.json': JSON.stringify(newerInbox) } },
+      { subdirFilter: 'brain', snapshotInbox: { 'brain/inbox.json': '{"records":[]}' } },
+      { subdirFilter: 'brain', snapshotInbox: { 'brain/inbox/index.json': '{"schemaVersion":0}' } },
+    ])('refuses $subdirFilter before transfer without a usable selected inbox ($snapshotInbox)', async ({ subdirFilter, snapshotInbox }) => {
+      const ledgerPath = live('migrations.applied.json');
+      const liveLedger = JSON.stringify(['081-brain-daily-log-inbox-sync.js', '200-split-brain-stores-to-per-record.js']);
+      const liveInboxPath = live('brain', 'inbox', 'live-capture', 'index.json');
+      const liveCapture = '{"text":"Live capture"}';
+      const liveJournal = '{"records":{"2025-03-01":{"id":"live-journal"}}}';
+      await realFs.mkdir(live('brain', 'inbox', 'live-capture'), { recursive: true });
+      await realFs.writeFile(live('brain', 'inbox', 'index.json'), '{"schemaVersion":1}');
+      await realFs.writeFile(liveInboxPath, liveCapture);
+      await realFs.writeFile(live('brain/journals.json'), liveJournal);
+      await realFs.writeFile(ledgerPath, liveLedger);
+      try {
+        await seedSnapshot({
+          [rawInboxPath]: rawInbox,
+          'brain/journals.json': '{"records":{"2025-03-01":{"id":"snapshot-journal"}}}',
+          'migrations/.applied.json': '["080-brain-tombstone-and-synclog-cleanup.js"]',
+          ...snapshotInbox,
+        });
+        for (const dryRun of [true, false]) {
+          await expect(restoreSnapshot(tmpRoot, 'snap-1', { dryRun, subdirFilter })).rejects.toMatchObject({
+            status: 409,
+            code: 'BACKUP_RESTORE_LEGACY_BRAIN_INBOX',
+            message: expect.stringMatching(/full file restore.*disposable copy/),
+          });
+        }
+        expect(spawn).not.toHaveBeenCalled();
+        expect(existsSync(live(rawInboxPath))).toBe(false);
+        expect(await readLive('brain', 'inbox', 'index.json')).toEqual({ schemaVersion: 1 });
+        expect(await realFs.readFile(liveInboxPath, 'utf8')).toBe(liveCapture);
+        expect(await realFs.readFile(live('brain/journals.json'), 'utf8')).toBe(liveJournal);
+        expect(await realFs.readFile(ledgerPath, 'utf8')).toBe(liveLedger);
+      } finally {
+        await realFs.rm(ledgerPath, { force: true });
+      }
+    });
+
+    it.each([
+      { layout: 'monolith', files: { 'brain/inbox.json': JSON.stringify(newerInbox) } },
+      { layout: 'split store', files: {
+        'brain/inbox/index.json': '{"schemaVersion":1}',
+        'brain/inbox/example-entry/index.json': JSON.stringify(newerInbox.records['example-entry']),
+      } },
+    ])('restores a Brain snapshot with a usable $layout alongside the raw inbox', async ({ files }, context) => {
+      if (process.platform === 'win32' && spawnSync('rsync', ['--version']).error?.code === 'ENOENT') {
+        context.skip('Windows runner has no rsync executable; real rsync remains required on Linux/macOS.');
+        return;
+      }
+      await seedSnapshot({ [rawInboxPath]: rawInbox, ...files });
+      const previousRsync = process.env.PORTOS_RSYNC;
+      delete process.env.PORTOS_RSYNC;
+      spawn.mockImplementation((...args) => spawnChild(...args));
+      try {
+        const options = { subdirFilter: 'brain' };
+        const preview = await restoreSnapshot(tmpRoot, 'snap-1', { ...options, dryRun: true });
+        expect(preview.verification.status).toBe('verified');
+        await restoreSnapshot(tmpRoot, 'snap-1', { ...options, dryRun: false });
+        expect(await getById('inbox', 'example-entry')).toMatchObject(newerInbox.records['example-entry']);
+      } finally {
+        if (previousRsync === undefined) delete process.env.PORTOS_RSYNC;
+        else process.env.PORTOS_RSYNC = previousRsync;
+        spawn.mockReset();
+      }
+    });
+
     it('replays snapshot-backed Brain stores and preserves live-only people and songs', async () => {
       const ledgerPath = live('migrations.applied.json');
       const split = '200-split-brain-stores-to-per-record.js';
       const pending = ['081-brain-daily-log-inbox-sync.js', '190-seed-songbook-songs.js', split];
       const applied = (await scanMigrationFiles(DEFAULT_MIGRATIONS_DIR)).filter(name => name < split && !pending.includes(name));
       const journals = JSON.stringify({ records: { '2025-03-01': { id: 'jrnl-example', date: '2025-03-01' } } });
-      const inbox = JSON.stringify({ id: 'example-entry', capturedAt: '2025-03-01T12:00:00.000Z', text: 'Example capture' });
-      const files = { 'brain/journals.json': journals, 'brain/inbox_log.jsonl': inbox, 'migrations/.applied.json': JSON.stringify(applied) };
+      const files = { 'brain/journals.json': journals, [rawInboxPath]: rawInbox, 'migrations/.applied.json': JSON.stringify(applied) };
       await seedSnapshot(files);
       await realFs.writeFile(ledgerPath, JSON.stringify([...applied, ...pending]));
       await realFs.mkdir(live('brain', 'inbox'));
