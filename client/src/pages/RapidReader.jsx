@@ -3,6 +3,8 @@ import { Bookmark, BookOpen, ClipboardPaste, Eraser, ExternalLink, Play, Save, T
 import RapidReader from '../components/RapidReader';
 import PageHeader from '../components/PageHeader';
 import EmptyState from '../components/EmptyState';
+import CollapsibleListItem from '../components/ui/CollapsibleListItem';
+import ConfirmButtonPair from '../components/ui/ConfirmButtonPair';
 import PageSkeleton from '../components/ui/PageSkeleton';
 import { readClipboard } from '../lib/clipboard';
 import {
@@ -49,10 +51,16 @@ export default function RapidReaderPage() {
   const [bookError, setBookError] = useState('');
   const [shelf, setShelf] = useState([]);
   const [shelfError, setShelfError] = useState('');
+  const [shelfListError, setShelfListError] = useState('');
   const [shelfLoading, setShelfLoading] = useState(true);
   const [saveTitle, setSaveTitle] = useState('');
   const [url, setUrl] = useState('');
   const [pendingDelete, setPendingDelete] = useState(null);
+  const [deletingId, setDeletingId] = useState(null);
+  const [removedId, setRemovedId] = useState(null);
+  const deletingIdRef = useRef(null);
+  const currentShelfId = useRef(shelfId);
+  currentShelfId.current = shelfId;
   const [bookText, setBookText] = useState('');
   const [bookSections, setBookSections] = useState([]);
   const textareaRef = useRef(null);
@@ -73,8 +81,8 @@ export default function RapidReaderPage() {
   }, [documentText, documentIdentity]);
 
   const loadShelf = useCallback(async () => {
-    setShelfLoading(true); setShelfError('');
-    const entries = await listRapidReaderLibrary({ silent: true }).catch((error) => { setShelfError(error?.message || 'Could not load shelf'); return null; });
+    setShelfLoading(true); setShelfListError('');
+    const entries = await listRapidReaderLibrary({ silent: true }).catch((error) => { setShelfListError(error?.message || 'Could not load shelf'); return null; });
     if (entries) setShelf(entries);
     setShelfLoading(false);
   }, []);
@@ -117,19 +125,24 @@ export default function RapidReaderPage() {
   // the effect below is the single place that loads the record's text. Closing
   // the reader leaves the URL on its entry, so clicking that entry again has
   // nowhere to navigate and re-runs the load instead.
+  const [openingShelfId, setOpeningShelfId] = useState(null);
   const [openNonce, setOpenNonce] = useState(0);
   const openShelf = (id) => (id === shelfId ? setOpenNonce((value) => value + 1) : navigate(`/rapid-reader/${id}`));
   // A book's text is large and its request slow, so the user can pick another
   // shelf entry (or leave the route) before this one resolves. The guard drops a
   // superseded response so it can't open the wrong book under the current URL.
   useEffect(() => {
+    setOpeningShelfId(shelfId ?? null);
     if (!shelfId) return undefined;
+    setShelfError('');
     let current = true;
     getRapidReaderLibraryEntry(shelfId, { silent: true })
       .catch((error) => { if (current) setShelfError(error?.message || 'Could not open shelf entry'); return null; })
       .then((entry) => {
         const entryText = entry?.text?.trim();
-        if (!current || !entryText) return;
+        if (!current) return;
+        setOpeningShelfId(null);
+        if (!entryText) return;
         // Progress is keyed by the reader's own word count; the record's
         // `wordCount` is a plain whitespace split and differs on punctuation.
         const identity = { documentId: rapidReaderDocumentId(entryText), wordCount: rapidReaderWords(entryText).length };
@@ -156,9 +169,30 @@ export default function RapidReaderPage() {
     if (entry) { addToShelf(entry); setUrl(''); }
   });
   const deleteShelf = async (id) => {
-    const deleted = await deleteRapidReaderLibraryEntry(id, { silent: true }).then(() => true, (error) => { setShelfError(error?.message || 'Could not delete shelf entry'); return false; });
-    if (deleted) { setShelf((previous) => previous.filter((entry) => entry.id !== id)); setPendingDelete(null); }
+    if (deletingIdRef.current !== null) return;
+    deletingIdRef.current = id;
+    setDeletingId(id);
+    setShelfError('');
+    const deleted = await deleteRapidReaderLibraryEntry(id, { silent: true }).then(() => true, (error) => {
+      setShelfError(error?.message || 'Could not delete shelf entry');
+      return false;
+    });
+    if (deleted) {
+      if (currentShelfId.current === id) navigate('/rapid-reader', { replace: true });
+      setRemovedId(id);
+    }
+    deletingIdRef.current = null;
+    setDeletingId(null);
   };
+
+  const finishDelete = useCallback((id) => {
+    setShelf((previous) => previous.filter((entry) => entry.id !== id));
+    setPendingDelete(null);
+    setRemovedId(null);
+  }, []);
+  useEffect(() => {
+    if (active && removedId) finishDelete(removedId);
+  }, [active, removedId, finishDelete]);
 
   const startAt = (wordIndex, saved = null) => {
     if (!documentText) return;
@@ -221,6 +255,9 @@ export default function RapidReaderPage() {
       />
 
       <div className="flex-1 overflow-auto p-3 sm:p-4 space-y-6">
+      {openingShelfId && openingShelfId === shelfId && (
+        <p role="status" className="text-sm text-gray-400">Opening shelf entry…</p>
+      )}
       {active ? (
         <div className="space-y-4">
           <RapidReader
@@ -370,6 +407,7 @@ export default function RapidReaderPage() {
                 <div className="flex border border-port-border rounded-md overflow-hidden">
                   <button
                     type="button"
+                    aria-pressed={chunkSize === 1}
                     onClick={() => setChunkSize(1)}
                     className={`flex-1 min-h-10 px-3 text-sm ${chunkSize === 1 ? 'bg-port-accent/20 text-port-accent' : 'text-gray-400 hover:text-white'}`}
                   >
@@ -377,6 +415,7 @@ export default function RapidReaderPage() {
                   </button>
                   <button
                     type="button"
+                    aria-pressed={chunkSize === 2}
                     onClick={() => setChunkSize(2)}
                     className={`flex-1 min-h-10 px-3 text-sm border-l border-port-border ${chunkSize === 2 ? 'bg-port-accent/20 text-port-accent' : 'text-gray-400 hover:text-white'}`}
                   >
@@ -395,7 +434,8 @@ export default function RapidReaderPage() {
                       onClick={() => setFocalColor(c.value)}
                       title={c.label}
                       aria-label={`Focal ${c.label}`}
-                      className={`w-9 h-9 rounded-md border-2 transition-colors ${focalColor === c.value ? 'border-white' : 'border-port-border hover:border-gray-400'}`}
+                      aria-pressed={focalColor === c.value}
+                      className={`w-9 h-9 pointer-coarse:min-h-11 pointer-coarse:min-w-11 rounded-md border-2 transition-colors ${focalColor === c.value ? 'border-white' : 'border-port-border hover:border-gray-400'}`}
                       style={{ backgroundColor: c.value }}
                     />
                   ))}
@@ -458,11 +498,25 @@ export default function RapidReaderPage() {
           </div>
 
           <section className="bg-port-card border border-port-border rounded-lg p-4 space-y-3" aria-label="Shelf">
-            <div className="flex items-center justify-between gap-3"><div><h2 className="text-sm font-medium text-gray-200">Shelf</h2><p className="text-xs text-gray-400">Saved books stay on this machine and in its backups.</p></div><button type="button" onClick={loadShelf} className="text-xs text-port-accent hover:underline">Retry</button></div>
+            <div className="flex items-center justify-between gap-3">
+              <div>
+                <h2 className="text-sm font-medium text-gray-200">Shelf</h2>
+                <p className="text-xs text-gray-400">Saved books stay on this machine and in its backups.</p>
+              </div>
+              {!shelfListError && (
+                <button type="button" onClick={loadShelf} disabled={shelfLoading || !!deletingId || !!removedId} className="min-h-10 px-3 border border-port-border rounded-md text-xs text-port-accent hover:border-port-accent disabled:opacity-50">Refresh</button>
+              )}
+            </div>
+            {shelfListError && (
+              <div className="flex flex-wrap items-center gap-2">
+                <p role="alert" className="text-xs text-red-400">{shelfListError}</p>
+                <button type="button" onClick={loadShelf} disabled={!!deletingId || !!removedId} className="min-h-10 px-3 border border-port-border rounded-md text-xs text-port-accent hover:border-port-accent disabled:opacity-50">Retry</button>
+              </div>
+            )}
             {shelfError && <p role="alert" className="text-xs text-red-400">{shelfError}</p>}
             {shelfLoading ? (
               <PageSkeleton header="none" label="Loading shelf" cards={2} sidebar={false} />
-            ) : shelf.length === 0 ? !shelfError && (
+            ) : shelf.length === 0 ? !shelfListError && (
               <EmptyState
                 icon={Bookmark}
                 title="No saved books yet."
@@ -471,7 +525,36 @@ export default function RapidReaderPage() {
                 actionLabel="Enter text"
                 onAction={() => textareaRef.current?.focus()}
               />
-            ) : <ul className="divide-y divide-port-border">{shelf.map((entry) => <li key={entry.id} className="py-2 flex flex-wrap items-center justify-between gap-2"><button type="button" onClick={() => openShelf(entry.id)} aria-label={`Open ${entry.title}`} className="text-left min-h-10"><span className="block text-sm text-gray-200">{entry.title}</span><span className="block text-xs text-gray-500">{entry.author || entry.sourceUrl || entry.sourceType} · {entry.wordCount} words</span></button>{pendingDelete === entry.id ? <span className="flex gap-2 text-xs"><button type="button" onClick={() => deleteShelf(entry.id)} className="text-red-400">Delete</button><button type="button" onClick={() => setPendingDelete(null)} className="text-gray-400">Cancel</button></span> : <button type="button" onClick={() => setPendingDelete(entry.id)} aria-label={`Delete ${entry.title}`} className="pointer-coarse:min-h-11 pointer-coarse:min-w-11 min-h-10 px-2 text-gray-500 hover:text-red-400"><Trash2 size={15} /></button>}</li>)}</ul>}
+            ) : (
+              <div role="list" aria-label="Saved books">
+                {shelf.map((entry) => (
+                  <CollapsibleListItem key={entry.id} role="listitem" removing={removedId === entry.id} onExited={() => finishDelete(entry.id)} spacing="0">
+                    <div className="border-b border-port-border py-2 flex flex-wrap items-center gap-2">
+                      <button
+                        type="button"
+                        onClick={() => openShelf(entry.id)}
+                        disabled={openingShelfId === entry.id || deletingId === entry.id}
+                        aria-label={`Open ${entry.title}`}
+                        className="text-left min-h-10 min-w-0 flex-1 disabled:opacity-50"
+                      >
+                        <span className="block truncate text-sm text-gray-200">{entry.title}</span>
+                        <span className="block truncate text-xs text-gray-500">{entry.author || entry.sourceUrl || entry.sourceType} · {entry.wordCount} words</span>
+                      </button>
+                      {pendingDelete === entry.id ? (
+                        <ConfirmButtonPair
+                          onConfirm={() => deleteShelf(entry.id)}
+                          onCancel={() => setPendingDelete(null)}
+                          busy={deletingId === entry.id || removedId === entry.id}
+                          busyText="Deleting"
+                        />
+                      ) : (
+                        <button type="button" onClick={() => setPendingDelete(entry.id)} disabled={!!deletingId || !!removedId} aria-label={`Delete ${entry.title}`} className="pointer-coarse:min-h-11 pointer-coarse:min-w-11 min-h-10 px-2 text-gray-500 hover:text-red-400 disabled:opacity-50"><Trash2 size={15} /></button>
+                      )}
+                    </div>
+                  </CollapsibleListItem>
+                ))}
+              </div>
+            )}
           </section>
 
 

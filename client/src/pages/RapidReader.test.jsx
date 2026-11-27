@@ -1,6 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { act, fireEvent, render, screen, waitFor } from '@testing-library/react';
-import { MemoryRouter, Route, Routes } from 'react-router';
+import { MemoryRouter, Route, Routes, useLocation } from 'react-router';
 
 const api = vi.hoisted(() => ({
   ACCELERANDO_LICENSE_URL: 'https://creativecommons.org/licenses/by-nc-nd/2.5/',
@@ -27,9 +27,12 @@ vi.mock('../services/apiRapidReader.js', () => ({
 const RapidReaderPage = (await import('./RapidReader')).default;
 const { writeRapidReaderProgress } = await import('../lib/rapidReaderPosition');
 
+const CurrentPath = () => <span data-testid="current-path">{useLocation().pathname}</span>;
+
 const renderPage = async (path = '/rapid-reader') => {
   const result = render(
     <MemoryRouter initialEntries={[path]}>
+      <CurrentPath />
       <Routes>
         <Route path="/rapid-reader" element={<RapidReaderPage />} />
         <Route path="/rapid-reader/:id" element={<RapidReaderPage />} />
@@ -191,6 +194,25 @@ describe('RapidReader shelf', () => {
     expect(api.getRapidReaderLibraryEntry).toHaveBeenCalledWith('shelf-1', { silent: true });
   });
 
+  it('shows a book opening status and prevents repeated opens until the download settles', async () => {
+    api.listRapidReaderLibrary.mockResolvedValue([ENTRY]);
+    const download = Promise.withResolvers();
+    api.getRapidReaderLibraryEntry.mockReturnValueOnce(download.promise);
+    await renderPage();
+
+    const open = screen.getByRole('button', { name: 'Open Saved Article' });
+    fireEvent.click(open);
+    expect(screen.getByRole('status')).toHaveTextContent('Opening shelf entry');
+    expect(open).toBeDisabled();
+    fireEvent.click(open);
+    expect(api.getRapidReaderLibraryEntry).toHaveBeenCalledTimes(1);
+
+    await act(async () => download.resolve({ ...ENTRY, text: 'alpha bravo charlie delta' }));
+
+    expect(screen.queryByText('Opening shelf entry…')).not.toBeInTheDocument();
+    expect(screen.getByText(/1\/4 words/)).toBeInTheDocument();
+  });
+
   it('drops a superseded entry response so the slow earlier load cannot replace the newer pick', async () => {
     const SECOND = { ...ENTRY, id: 'shelf-2', title: 'Second Article', wordCount: 3 };
     api.listRapidReaderLibrary.mockResolvedValue([ENTRY, SECOND]);
@@ -281,6 +303,29 @@ describe('RapidReader shelf', () => {
     expect(api.deleteRapidReaderLibraryEntry).toHaveBeenCalledWith('shelf-1', { silent: true });
   });
 
+  it('replaces the active shelf URL only after deletion succeeds and prevents duplicate confirms', async () => {
+    api.listRapidReaderLibrary.mockResolvedValue([ENTRY]);
+    api.getRapidReaderLibraryEntry.mockResolvedValue({ ...ENTRY, text: 'alpha bravo charlie delta' });
+    const deletion = Promise.withResolvers();
+    api.deleteRapidReaderLibraryEntry.mockReturnValueOnce(deletion.promise);
+    await renderPage('/rapid-reader/shelf-1');
+
+    fireEvent.click(screen.getByRole('button', { name: 'Close' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Delete Saved Article' }));
+    const confirm = screen.getByRole('button', { name: 'Delete' });
+    fireEvent.click(confirm);
+    expect(confirm).toBeDisabled();
+    fireEvent.click(confirm);
+    expect(api.deleteRapidReaderLibraryEntry).toHaveBeenCalledTimes(1);
+    expect(screen.getByTestId('current-path')).toHaveTextContent(/^\/rapid-reader\/shelf-1$/);
+
+    await act(async () => deletion.resolve());
+
+    expect(screen.getByTestId('current-path')).toHaveTextContent(/^\/rapid-reader$/);
+    await waitFor(() => expect(screen.queryByRole('button', { name: 'Open Saved Article' })).not.toBeInTheDocument());
+    expect(api.listRapidReaderLibrary).toHaveBeenCalledTimes(1);
+  });
+
   it('keeps pasting usable when the shelf list fails, and retries', async () => {
     api.listRapidReaderLibrary.mockRejectedValueOnce(new Error('Shelf unavailable')).mockResolvedValueOnce([ENTRY]);
     await renderPage();
@@ -291,5 +336,24 @@ describe('RapidReader shelf', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Retry' }));
 
     expect(await screen.findByRole('button', { name: 'Open Saved Article' })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Refresh' })).toBeEnabled();
+    expect(screen.queryByRole('button', { name: 'Retry' })).not.toBeInTheDocument();
   });
+});
+
+it('exposes the selected chunk size and focal color as pressed', async () => {
+  await renderPage();
+  const one = screen.getByRole('button', { name: '1 word' });
+  const two = screen.getByRole('button', { name: '2 words' });
+  const red = screen.getByRole('button', { name: 'Focal Red' });
+  const blue = screen.getByRole('button', { name: 'Focal Blue' });
+
+  expect(one).toHaveAttribute('aria-pressed', 'true');
+  expect(red).toHaveAttribute('aria-pressed', 'true');
+  fireEvent.click(two);
+  fireEvent.click(blue);
+  expect(two).toHaveAttribute('aria-pressed', 'true');
+  expect(blue).toHaveAttribute('aria-pressed', 'true');
+  expect(one).toHaveAttribute('aria-pressed', 'false');
+  expect(red).toHaveAttribute('aria-pressed', 'false');
 });
