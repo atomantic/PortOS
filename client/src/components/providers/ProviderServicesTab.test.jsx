@@ -193,6 +193,26 @@ describe('ProviderServicesTab', () => {
     expect(await screen.findByText('Key stored on this service')).toBeInTheDocument();
   });
 
+  it('clears a service key only after confirmation', async () => {
+    api.getProviderServices.mockResolvedValue({ services: [{ ...nvidia, hasCredentials: true, credentialSource: 'settings' }] });
+    api.updateProviderService.mockResolvedValue({ service: { ...nvidia, revision: 4 } });
+    renderTab('/ai/services/nvidia-nim');
+    const card = within(await screen.findByRole('article', { name: /NVIDIA NIM/ }));
+    const confirmation = () => within(card.getByRole('group', { name: 'Clear the NVIDIA NIM key?' }));
+
+    fireEvent.click(card.getByRole('button', { name: 'Clear key' }));
+    expect(api.updateProviderService).not.toHaveBeenCalled();
+    fireEvent.click(confirmation().getByRole('button', { name: 'Cancel' }));
+    expect(api.updateProviderService).not.toHaveBeenCalled();
+    fireEvent.click(card.getByRole('button', { name: 'Clear key' }));
+    fireEvent.click(confirmation().getByRole('button', { name: 'Clear key' }));
+
+    await waitFor(() => expect(api.updateProviderService).toHaveBeenCalledExactlyOnceWith('nvidia-nim', {
+      expectedRevision: 3, credentials: { apiKey: null },
+    }, { silent: true }));
+    expect(await card.findByText('No key')).toBeInTheDocument();
+  });
+
   it('adds a pooled key, shows only its fingerprint, and carries the bumped revision into the next save', async () => {
     const added = poolEntry({ id: 'key-1', label: 'Second key', priority: 1, fingerprint: 'nvapi-…0002' });
     api.addServiceCredentialPoolKey.mockResolvedValue(poolOf([added], { revision: 4 }));

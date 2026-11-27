@@ -27,7 +27,7 @@
  *   persist to `settings.music.designer` too.
  */
 
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useLayoutEffect, useRef, useState } from 'react';
 import { Navigate, useNavigate, useParams, useSearchParams } from 'react-router';
 import {
   AudioLines, AudioWaveform, Brush, ChevronDown, ChevronUp, Code2, FileText, Lightbulb, Loader2, Mic2, Sparkles, Wand2,
@@ -38,6 +38,7 @@ import WaveformPanel from './WaveformPanel';
 import { FIELD_CLASS, GHOST_BTN, LABEL_CLASS, PRIMARY_BTN } from './designerStyles';
 import ProviderModelSelector from '../ProviderModelSelector';
 import ListLoadError from '../ui/ListLoadError';
+import LoadFailedState from '../ui/LoadFailedState';
 import TabPills from '../ui/TabPills';
 import SentPromptPanel from '../media/SentPromptPanel';
 import toast from '../ui/Toast';
@@ -92,7 +93,6 @@ export default function MusicDesigner() {
   const requestedTrackId = searchParams.get('trackId') || '';
   const renderEngine = ENGINE_IDS.includes(searchParams.get('engine')) ? searchParams.get('engine') : DEFAULT_ENGINE;
   const LlmEnginePanel = LLM_ENGINE_PANELS[renderEngine];
-  const storedDraftId = requestedTrackId || safeReadStorage(ACTIVE_DRAFT_KEY) || '';
 
   // Wizard text — lifted here so MusicGenPanel (which never writes back to
   // prompt/lyrics) can be re-hosted under step 4 unchanged, and so edits
@@ -111,6 +111,9 @@ export default function MusicDesigner() {
   const [draftLoading, setDraftLoading] = useState(true);
   const [loadError, setLoadError] = useState(null);
   const [reloadKey, setReloadKey] = useState(0);
+  const sessionRef = useRef(0);
+  const canonicalTrackRef = useRef(null);
+  const setSearchParamsRef = useRef(setSearchParams);
   const draftSaveTailRef = useRef(Promise.resolve());
 
   // Meta-prompt overrides. Blank = "use the shipped default" (resolved
@@ -129,63 +132,90 @@ export default function MusicDesigner() {
 
   const stepFromUrl = STEP_IDS.includes(id) ? id : FIRST_STEP;
 
-  const hydrateDraft = (track) => {
-    setTrackId(track.id);
-    if (track.title === DRAFT_TITLE) safeWriteStorage(ACTIVE_DRAFT_KEY, track.id);
-    else if (safeReadStorage(ACTIVE_DRAFT_KEY) === track.id) safeRemoveStorage(ACTIVE_DRAFT_KEY);
-    setConcept(track.concept || '');
-    setDescription(track.prompt || '');
-    setLyrics(track.lyrics || '');
-    setTitle(track.title === DRAFT_TITLE ? '' : (track.title || ''));
-  };
+  useLayoutEffect(() => {
+    setSearchParamsRef.current = setSearchParams;
+  }, [setSearchParams]);
 
-  // Create the persisted record before the first designer action. Its id is
-  // carried in the URL so step navigation and browser-history returns resolve
-  // the same draft instead of starting a second in-memory wizard.
-  useEffect(() => {
+  // Reset the editing session before the new URL can show the previous track's
+  // fields. Step and engine changes within a track keep the same session.
+  useLayoutEffect(() => {
+    const canonicalTrack = canonicalTrackRef.current;
+    canonicalTrackRef.current = null;
+    if (canonicalTrack?.id === requestedTrackId && canonicalTrack.reloadKey === reloadKey) return;
+
+    sessionRef.current += 1;
     let cancelled = false;
-    const createDraft = async () => {
-      const created = await createTrack({ title: DRAFT_TITLE }, { silent: true }).catch((err) => {
-        if (mountedRef.current) toast.error(err?.message || 'Could not create a music draft');
-        return null;
-      });
-      if (cancelled || !mountedRef.current) return;
-      if (created) {
-        hydrateDraft(created);
-        navigate(`/music/generate/${stepFromUrl}?trackId=${encodeURIComponent(created.id)}`, { replace: true });
-      }
+    setDraftLoading(true);
+    setLoadError(null);
+    setTrackId('');
+    setConcept('');
+    setConceptGuidance('');
+    setDescription('');
+    setLyricsGuidance('');
+    setLyrics('');
+    setDescribeSent(null);
+    setLyricsSent(null);
+    setTitle('');
+    setDescribing(false);
+    setWriting(false);
+
+    const hydrateDraft = (track) => {
+      setTrackId(track.id);
+      if (track.title === DRAFT_TITLE) safeWriteStorage(ACTIVE_DRAFT_KEY, track.id);
+      else if (safeReadStorage(ACTIVE_DRAFT_KEY) === track.id) safeRemoveStorage(ACTIVE_DRAFT_KEY);
+      setConcept(track.concept || '');
+      setDescription(track.prompt || '');
+      setLyrics(track.lyrics || '');
+      setTitle(track.title === DRAFT_TITLE ? '' : (track.title || ''));
       setDraftLoading(false);
+      if (!requestedTrackId) {
+        canonicalTrackRef.current = { id: track.id, reloadKey };
+        setSearchParamsRef.current((params) => {
+          const next = new URLSearchParams(params);
+          next.set('trackId', track.id);
+          return next;
+        }, { replace: true });
+      }
     };
 
-    if (storedDraftId) {
-      setDraftLoading(true);
-      setLoadError(null);
-      getTrack(storedDraftId, { silent: true }).then((track) => {
-        if (cancelled || !mountedRef.current) return;
-        if (track) {
-          hydrateDraft(track);
-          if (!requestedTrackId) {
-            navigate(`/music/generate/${stepFromUrl}?trackId=${encodeURIComponent(track.id)}`, { replace: true });
-          }
-          setDraftLoading(false);
-        } else if (requestedTrackId) {
-          setLoadError({ notFound: true });
-        } else {
-          createDraft();
+    const storedDraftId = requestedTrackId || safeReadStorage(ACTIVE_DRAFT_KEY);
+    const loadDraft = async () => {
+      if (cancelled) return;
+      if (storedDraftId) {
+        const read = await getTrack(storedDraftId, { silent: true }).then(
+          (track) => ({ track }),
+          (error) => ({ error }),
+        );
+        if (cancelled) return;
+        if (read.track) {
+          hydrateDraft(read.track);
+          return;
         }
-      }).catch((err) => {
-        if (cancelled || !mountedRef.current) return;
-        // Only a stored draft that was deleted (404) is replaced. An explicit
-        // ?trackId= 404 and every other failure keep the id and URL: a blank
-        // draft would silently displace the track being edited.
-        if (err?.status === 404 && !requestedTrackId) createDraft();
-        else setLoadError({ notFound: err?.status === 404, error: err });
-      });
-    } else {
-      createDraft();
-    }
+        const notFound = !read.error || read.error.status === 404;
+        // A missing resume hint can be replaced. An explicit link keeps its id.
+        if (!notFound || requestedTrackId) {
+          setLoadError({ notFound, error: read.error });
+          setDraftLoading(false);
+          return;
+        }
+        safeRemoveStorage(ACTIVE_DRAFT_KEY);
+      }
+
+      try {
+        const created = await createTrack({ title: DRAFT_TITLE }, { silent: true });
+        if (cancelled) return;
+        if (!created?.id) throw new Error('The server did not return a track ID');
+        hydrateDraft(created);
+      } catch (error) {
+        if (cancelled) return;
+        setLoadError({ creating: true, error });
+        setDraftLoading(false);
+      }
+    };
+    // Let a discarded effect setup cancel before it can create a record.
+    queueMicrotask(loadDraft);
     return () => { cancelled = true; };
-  }, [reloadKey]);
+  }, [requestedTrackId, reloadKey]);
 
   const {
     providers, selectedProviderId, selectedModel, availableModels,
@@ -262,6 +292,8 @@ export default function MusicDesigner() {
 
   const runDescribe = async ({ advance }) => {
     if (!concept.trim()) { toast.error('Describe the vibe (or name a reference) first'); return; }
+    const session = sessionRef.current;
+    const isCurrent = () => mountedRef.current && sessionRef.current === session;
     saveDraft({ concept });
     setDescribing(true);
     const res = await describeMusic({
@@ -271,11 +303,14 @@ export default function MusicDesigner() {
       providerId: selectedProviderId || undefined,
       model: selectedModel || undefined,
       effort: effort || undefined,
-    }, { silent: true }).catch((err) => { toast.error(err?.message || 'Could not describe the music'); return null; });
-    if (mountedRef.current) setDescribing(false);
+    }, { silent: true }).catch((err) => {
+      if (isCurrent()) toast.error(err?.message || 'Could not describe the music');
+      return null;
+    });
+    if (!isCurrent()) return;
+    setDescribing(false);
     if (!res?.description) return;
     saveDraft({ concept, prompt: res.description });
-    if (!mountedRef.current) return;
     setDescription(res.description);
     setDescribeSent(typeof res.sentPrompt === 'string' ? { sentPrompt: res.sentPrompt, additions: res.promptAdditions || [] } : null);
     persistDesignerPrefs({ providerId: selectedProviderId || '', model: selectedModel || '', effort: effort || '' });
@@ -284,6 +319,8 @@ export default function MusicDesigner() {
 
   const runLyrics = async () => {
     if (!description.trim()) { toast.error('Write the musical description first'); return; }
+    const session = sessionRef.current;
+    const isCurrent = () => mountedRef.current && sessionRef.current === session;
     saveDraft({ prompt: description });
     setWriting(true);
     const res = await generateLyrics({
@@ -293,11 +330,14 @@ export default function MusicDesigner() {
       providerId: selectedProviderId || undefined,
       model: selectedModel || undefined,
       effort: effort || undefined,
-    }, { silent: true }).catch((err) => { toast.error(err?.message || 'Could not write the lyrics'); return null; });
-    if (mountedRef.current) setWriting(false);
+    }, { silent: true }).catch((err) => {
+      if (isCurrent()) toast.error(err?.message || 'Could not write the lyrics');
+      return null;
+    });
+    if (!isCurrent()) return;
+    setWriting(false);
     if (!res?.lyrics) return;
     saveDraft({ lyrics: res.lyrics });
-    if (!mountedRef.current) return;
     setLyrics(res.lyrics);
     setLyricsSent(typeof res.sentPrompt === 'string' ? { sentPrompt: res.sentPrompt, additions: res.promptAdditions || [] } : null);
     persistDesignerPrefs({ providerId: selectedProviderId || '', model: selectedModel || '', effort: effort || '' });
@@ -329,10 +369,10 @@ export default function MusicDesigner() {
   const step = id || FIRST_STEP;
   if (!STEP_IDS.includes(step)) return <Navigate to={`/music/generate/${FIRST_STEP}`} replace />;
 
+  const retryDraft = () => setReloadKey((k) => k + 1);
   const startNewTrack = () => {
-    setLoadError(null);
+    safeRemoveStorage(ACTIVE_DRAFT_KEY);
     navigate(`/music/generate/${stepFromUrl}`, { replace: true });
-    setReloadKey((k) => k + 1);
   };
   const loadFailed = loadError && (
     loadError.notFound ? (
@@ -340,8 +380,10 @@ export default function MusicDesigner() {
         <span>Track not found.</span>
         <button type="button" onClick={startNewTrack} className={GHOST_BTN}>Start a new track</button>
       </div>
+    ) : loadError.creating ? (
+      <LoadFailedState title="Could not create a music draft" hint={loadError.error?.message} onRetry={retryDraft} />
     ) : (
-      <ListLoadError what="this track" error={loadError.error} onRetry={() => setReloadKey((k) => k + 1)} />
+      <ListLoadError what="this track" error={loadError.error} onRetry={retryDraft} />
     )
   );
 
@@ -655,11 +697,11 @@ export default function MusicDesigner() {
               className={FIELD_CLASS}
             />
           </label>
-          {LlmEnginePanel ? (
+          {draftReady && (LlmEnginePanel ? (
             <LlmEnginePanel
               key={trackId}
               trackId={trackId}
-              disabled={!draftReady || busy}
+              disabled={busy}
               description={description}
               lyrics={lyrics}
               title={title}
@@ -671,13 +713,14 @@ export default function MusicDesigner() {
             />
           ) : (
             <MusicGenPanel
-              track={trackId ? { id: trackId } : undefined}
+              key={trackId}
+              track={{ id: trackId }}
               title={title}
               prompt={description}
               lyrics={lyrics}
               onGenerated={openTrack}
             />
-          )}
+          ))}
         </div>
       )}
       </>)}

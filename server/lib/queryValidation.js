@@ -10,6 +10,7 @@ import { z } from 'zod';
 import { ServerError } from './errorHandler.js';
 
 const scalar = z.string().optional();
+export const emptyQuerySchema = z.strictObject({});
 
 /** `?limit=&offset=` as read by `parsePagination` / `isPaginationRequested` / `paginateArray`. */
 export const paginationQuerySchema = z.object({ limit: scalar, offset: scalar });

@@ -7,9 +7,11 @@
 
 import { join } from 'path';
 import { ensureDir, PATHS, readJSONFile, atomicWrite } from '../lib/fileUtils.js';
+import { createFileWriteQueue } from '../lib/fileWriteQueue.js';
 
 const DATA_DIR = PATHS.cos;
 const ACTIVITY_FILE = join(DATA_DIR, 'app-activity.json');
+const queueActivityWrite = createFileWriteQueue();
 
 const DEFAULT_ACTIVITY = {
   apps: {},
@@ -41,8 +43,7 @@ export async function loadAppActivity() {
 /**
  * Save app activity data
  */
-export async function saveAppActivity(activity) {
-  await ensureDir(DATA_DIR);
+async function saveAppActivity(activity) {
   await atomicWrite(ACTIVITY_FILE, activity);
 }
 
@@ -58,22 +59,24 @@ export async function getAppActivityById(appId) {
  * Update activity for a specific app
  */
 export async function updateAppActivity(appId, updates) {
-  const activity = await loadAppActivity();
+  return queueActivityWrite(async () => {
+    const activity = await loadAppActivity();
 
-  if (!activity.apps[appId]) {
-    activity.apps[appId] = {
-      lastReviewedAt: null,
-      lastTaskCompletedAt: null,
-      activeAgentId: null,
-      cooldownUntil: null,
-      lastImprovementType: null  // Track last self-improvement analysis type
-    };
-  }
+    if (!activity.apps[appId]) {
+      activity.apps[appId] = {
+        lastReviewedAt: null,
+        lastTaskCompletedAt: null,
+        activeAgentId: null,
+        cooldownUntil: null,
+        lastImprovementType: null  // Track last self-improvement analysis type
+      };
+    }
 
-  activity.apps[appId] = { ...activity.apps[appId], ...updates };
-  await saveAppActivity(activity);
+    activity.apps[appId] = { ...activity.apps[appId], ...updates };
+    await saveAppActivity(activity);
 
-  return activity.apps[appId];
+    return activity.apps[appId];
+  });
 }
 
 /**
@@ -149,10 +152,14 @@ const SYNTHETIC_REVIEW_AGENT_RE = /^(idle-review|on-demand)-/;
  */
 export async function releaseAppReviewMarker(appId) {
   if (!appId) return null;
-  const activity = await loadAppActivity();
-  const app = activity.apps?.[appId];
-  if (!SYNTHETIC_REVIEW_AGENT_RE.test(app?.activeAgentId || '')) return null;
-  return updateAppActivity(appId, { activeAgentId: null });
+  return queueActivityWrite(async () => {
+    const activity = await loadAppActivity();
+    const app = activity.apps?.[appId];
+    if (!SYNTHETIC_REVIEW_AGENT_RE.test(app?.activeAgentId || '')) return null;
+    app.activeAgentId = null;
+    await saveAppActivity(activity);
+    return app;
+  });
 }
 
 /**
@@ -169,18 +176,20 @@ export async function releaseAppReviewMarker(appId) {
  */
 export async function clearStaleActiveAgents(liveAgentIds) {
   const live = liveAgentIds instanceof Set ? liveAgentIds : new Set(liveAgentIds || []);
-  const activity = await loadAppActivity();
-  const cleared = [];
-  for (const [appId, app] of Object.entries(activity.apps || {})) {
-    if (app.activeAgentId && !live.has(app.activeAgentId)) {
-      cleared.push(appId);
-      app.activeAgentId = null;
+  return queueActivityWrite(async () => {
+    const activity = await loadAppActivity();
+    const cleared = [];
+    for (const [appId, app] of Object.entries(activity.apps || {})) {
+      if (app.activeAgentId && !live.has(app.activeAgentId)) {
+        cleared.push(appId);
+        app.activeAgentId = null;
+      }
     }
-  }
-  if (cleared.length > 0) {
-    await saveAppActivity(activity);
-  }
-  return { cleared };
+    if (cleared.length > 0) {
+      await saveAppActivity(activity);
+    }
+    return { cleared };
+  });
 }
 
 /**

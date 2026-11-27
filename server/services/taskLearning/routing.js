@@ -240,7 +240,7 @@ function tiersWithRecentFailures(data, taskType, { now = Date.now(), maxAgeMs = 
  * Enhanced with negative signal awareness: avoids tiers that consistently fail
  * and prefers tiers with proven success for the task type.
  *
- * ADVISORY ONLY (#8149): surfaced per task type by `getRoutingAccuracy` for the
+ * ADVISORY ONLY (#8149): surfaced per task type by `summarizeRoutingAccuracy` for the
  * CoS Learning view. Dispatch never reads it — a tier the user did not ask for
  * silently replaced a task's configured default model (#8148).
  */
@@ -253,7 +253,7 @@ export async function suggestModelTier(taskType) {
 }
 
 // `suggestModelTier` over an already-loaded snapshot, so a caller walking every
-// task type (getRoutingAccuracy) loads — and clones — the store once, not per row.
+// task type (summarizeRoutingAccuracy) loads — and clones — the store once, not per row.
 function suggestModelTierFrom(data, taskType) {
   if (isSandboxedTaskType(taskType)) return null;
 
@@ -398,8 +398,7 @@ function suggestModelTierFrom(data, taskType) {
  * Get routing accuracy metrics showing which model tiers succeed/fail for each task type
  * Returns a matrix suitable for display in the Learning tab UI
  */
-export async function getRoutingAccuracy() {
-  const data = await loadLearningData();
+export function summarizeRoutingAccuracy(data) {
   const routingData = data.routingAccuracy || {};
 
   const matrix = [];
@@ -488,9 +487,11 @@ export async function getRoutingAccuracy() {
  * Get a performance summary for logging during task evaluation
  * Provides insights about how different task types are performing
  */
-export async function getPerformanceSummary({ sinceByTaskType = {}, since = null } = {}) {
-  const data = await loadLearningData();
+export async function getPerformanceSummary(options) {
+  return summarizePerformance(await loadLearningData(), options);
+}
 
+export function summarizePerformance(data, { sinceByTaskType = {}, since = null } = {}) {
   const summary = {
     totalCompleted: data.totals.completed,
     overallSuccessRate: data.totals.completed > 0
@@ -533,7 +534,7 @@ export async function getPerformanceSummary({ sinceByTaskType = {}, since = null
       summary.topPerformers.push(entry);
     } else if (successRate !== null && successRate < 50 && metrics.completed >= 5) {
       summary.needsAttention.push(entry);
-      // Also mark as skipped if very low (same predicate as getSkippedTaskTypes)
+      // Also mark as skipped if very low (same predicate as findLowSuccessTaskTypes)
       if (isSkipCandidate(alertMetrics)) {
         summary.skipped.push(entry);
       }
@@ -548,11 +549,9 @@ export async function getPerformanceSummary({ sinceByTaskType = {}, since = null
 }
 
 /**
- * Get all task types that should be skipped due to poor performance
- * Useful for filtering out problematic task types in evaluateTasks
+ * Find low-success task types for the Learning dashboard advisory.
  */
-export async function getSkippedTaskTypes() {
-  const data = await loadLearningData();
+export function findLowSuccessTaskTypes(data) {
   const skipped = [];
 
   for (const [taskType, metrics] of Object.entries(data.byTaskType)) {
@@ -580,7 +579,7 @@ export async function getSkippedTaskTypes() {
 /**
  * Pure classifier — returns { tier, autoApprove, successRate, rateSource } for
  * a given metrics object. Shared by getTaskTypeConfidence() and
- * getConfidenceLevels() so the auto-approve gate and the Learning tab display
+ * summarizeConfidenceLevels() so the auto-approve gate and the Learning tab display
  * always agree. Classifies on the EFFECTIVE success rate (issue #2617):
  * windowed when the outcome ring has enough samples, else lifetime — so a type
  * with a poor lifetime rate but a healthy recent window regains auto-approval.
@@ -644,11 +643,11 @@ export async function getTaskTypeConfidence(taskType, thresholds = {}) {
  * Get confidence levels for all tracked task types.
  * Returns a summary suitable for display in the Learning tab UI.
  *
+ * @param {Object} data - Learning snapshot
  * @param {Object} [thresholds] - Override default thresholds
- * @returns {Promise<Object>} All task types grouped by confidence tier
+ * @returns {Object} All task types grouped by confidence tier
  */
-export async function getConfidenceLevels(thresholds = {}) {
-  const data = await loadLearningData();
+export function summarizeConfidenceLevels(data, thresholds = {}) {
   const levels = { high: [], medium: [], low: [], new: [] };
 
   for (const [taskType, metrics] of Object.entries(data.byTaskType)) {

@@ -41,6 +41,7 @@ export function createAIToolkit(config = {}) {
     screenshotsDir = './data/screenshots',
     sampleProvidersFile = null,
     io = null,
+    emit = io?.emit?.bind(io),
     // Standalone, fall back to the toolkit's own JSON-serializing handler so
     // thrown errors still produce the canonical envelope (not Express 5's HTML
     // error page). PortOS injects its own asyncHandler (→ errorMiddleware).
@@ -74,13 +75,15 @@ export function createAIToolkit(config = {}) {
     resolveCompositeProvider = null
   } = config;
 
+  let withLiveProvidersRestore;
   const providerService = createProviderService({
     dataDir,
     providersFile,
     sampleFile: sampleProvidersFile,
     onProvidersSaved,
     cachedModelIds,
-    resolveCompositeProvider
+    resolveCompositeProvider,
+    registerProviderRestore: restore => { withLiveProvidersRestore = restore; }
   });
 
   let providerStatusService = null;
@@ -92,7 +95,7 @@ export function createAIToolkit(config = {}) {
       prerequisitesMet,
       getFallbackChain,
       onStatusChange: (eventData) => {
-        io?.emit('provider:status:changed', eventData);
+        emit?.('provider:status:changed', eventData);
       }
     });
 
@@ -112,7 +115,7 @@ export function createAIToolkit(config = {}) {
     hooks: {
       ...hooks,
       onProviderError: (providerId, errorAnalysis, output) => {
-        io?.emit('provider:error', { providerId, errorAnalysis });
+        emit?.('provider:error', { providerId, errorAnalysis });
         hooks.onProviderError?.(providerId, errorAnalysis, output);
       }
     },
@@ -131,7 +134,7 @@ export function createAIToolkit(config = {}) {
   // `ServerError: undefined` lets the router's own default (ToolkitHttpError)
   // apply — destructuring defaults fire for undefined values.
   const providersRouter = createProvidersRoutes(providerService, { asyncHandler, ServerError });
-  const runsRouter = createRunsRoutes(runnerService, { asyncHandler, io, ServerError, withRunAdmission });
+  const runsRouter = createRunsRoutes(runnerService, { asyncHandler, emit, ServerError, withRunAdmission });
   const promptsRouter = createPromptsRoutes(promptsService, { asyncHandler, ServerError });
 
   let providerStatusRouter = null;
@@ -140,6 +143,7 @@ export function createAIToolkit(config = {}) {
   }
 
   return {
+    withLiveProvidersRestore,
     services: {
       providers: providerService,
       runner: runnerService,

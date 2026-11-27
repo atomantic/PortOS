@@ -1,4 +1,4 @@
-import { expect, it, vi } from 'vitest';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 vi.mock('fs', () => ({ existsSync: vi.fn(() => false) }));
 // These boot-flow tests model "the file is there" through the fs mock; asset
@@ -11,7 +11,11 @@ vi.mock('../../lib/voiceModelAssets.js', async (importOriginal) => {
   };
 });
 vi.mock('../../lib/processEnv.js', () => ({ whichFirst: vi.fn(async () => null) }));
-vi.mock('../pm2.js', () => ({ execPm2: vi.fn(async () => ({})), getAppStatus: vi.fn(async () => null) }));
+vi.mock('../pm2.js', () => ({
+  clearJlistCache: vi.fn(),
+  execPm2: vi.fn(async () => ({})),
+  getAppStatusStrict: vi.fn(async () => ({ status: 'not_found' })),
+}));
 vi.mock('../../lib/fetchWithTimeout.js', () => ({ fetchWithTimeout: vi.fn(async () => ({})) }));
 vi.mock('net', () => ({ createServer: () => {
   const handlers = {};
@@ -33,12 +37,13 @@ vi.mock('../settings.js', () => ({ getSettings: vi.fn(), updateSettings: vi.fn()
 
 import { existsSync } from 'fs';
 const { whichFirst } = await import('../../lib/processEnv.js');
-const { execPm2 } = await import('../pm2.js');
+const { clearJlistCache, execPm2, getAppStatusStrict } = await import('../pm2.js');
 const { execFile } = await import('../../lib/childProcess.js');
+const { fetchWithTimeout } = await import('../../lib/fetchWithTimeout.js');
 const { getProviderById } = await import('../provider/providers.js');
 const { VOICE_DEFAULTS } = await import('./config.js');
 const { getVoiceProvisioner } = await import('./modelProvisioners.js');
-const { reconcile, ensureToolCapableModel, preloadModel } = await import('./bootstrap.js');
+const { reconcile, startWhisper, stopWhisper, ensureToolCapableModel, preloadModel } = await import('./bootstrap.js');
 
 // A provisioner double: every primitive is a spy so a test can assert that an
 // unreachable backend short-circuits BEFORE any install is attempted.
@@ -77,6 +82,49 @@ it('starts provisioned Whisper while deferring missing Piper setup and LLM prelo
   expect(execPm2).toHaveBeenCalledWith(expect.arrayContaining(['start', '/usr/bin/whisper-server']));
   expect(execFile).not.toHaveBeenCalled();
   expect(getProviderById).not.toHaveBeenCalled();
+});
+
+describe('Voice reconciliation model provisioning', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    existsSync.mockReturnValue(true);
+    whichFirst.mockImplementation(async (bin) => `/usr/bin/${bin}`);
+  });
+
+  const cfg = toolsOn({ stt: { ...VOICE_DEFAULTS.stt, engine: 'whisper' } });
+
+  it.each([
+    { scenario: 'cold model', installed: ['small:1b'] },
+    { scenario: 'no models', installed: [] },
+  ])(
+    'starts installed Whisper at boot without probing the provider ($scenario)',
+    async ({ installed }) => {
+      const backend = fakeBackend({
+        listModels: vi.fn(async () => installed),
+        isToolCapable: vi.fn(async () => true),
+      });
+      getVoiceProvisioner.mockReturnValue(backend);
+
+      await expect(reconcile(cfg, { allowSetup: false })).resolves.toMatchObject({ name: 'portos-whisper' });
+
+      expect(execPm2).toHaveBeenCalledWith(expect.arrayContaining(['start', '/usr/bin/whisper-server']));
+      expect(execFile).not.toHaveBeenCalled();
+      expect(getVoiceProvisioner).not.toHaveBeenCalled();
+    },
+  );
+
+  it('installs and preloads a model when Save & Reconcile requests setup', async () => {
+    const backend = fakeBackend({
+      listModels: vi.fn().mockResolvedValueOnce([]).mockResolvedValue(['small:1b']),
+      isToolCapable: vi.fn(async () => true),
+    });
+    getVoiceProvisioner.mockReturnValue(backend);
+
+    await expect(reconcile(cfg)).resolves.toMatchObject({ name: 'portos-whisper' });
+
+    await vi.waitFor(() => expect(backend.load).toHaveBeenCalledExactlyOnceWith('small:1b'));
+    expect(backend.install).toHaveBeenCalledExactlyOnceWith('small:1b');
+  });
 });
 
 // Voice OFF must never reach `lms get`. `reconcile` already returns early, so
@@ -173,4 +221,124 @@ it('skips the preload when the chosen model is already resident', async () => {
   getVoiceProvisioner.mockReturnValue(backend);
   await expect(preloadModel(toolsOn())).resolves.toEqual({ skipped: 'already-loaded', model: 'small:1b' });
   expect(backend.load).not.toHaveBeenCalled();
+});
+
+describe('Whisper shutdown', () => {
+  beforeEach(() => vi.clearAllMocks());
+
+  it('rejects a failed status read without issuing a delete', async () => {
+    getAppStatusStrict.mockResolvedValueOnce(null);
+    await expect(stopWhisper()).rejects.toMatchObject({
+      code: 'WHISPER_PM2_UNAVAILABLE',
+      message: expect.stringContaining('Check that the PM2 daemon is running and retry'),
+    });
+    expect(execPm2).not.toHaveBeenCalled();
+  });
+
+  it('skips a delete when Whisper is confirmed absent', async () => {
+    await expect(stopWhisper()).resolves.toEqual({ skipped: true });
+    expect(execPm2).not.toHaveBeenCalled();
+  });
+
+  it('deletes a registered Whisper process when disabling Voice', async () => {
+    getAppStatusStrict.mockResolvedValueOnce({ status: 'waiting restart' });
+    await expect(reconcile({ enabled: false })).resolves.toEqual({ stopped: true });
+    expect(execPm2).toHaveBeenCalledExactlyOnceWith(['delete', 'portos-whisper']);
+  });
+
+  it.each([{ status: 'online' }, null])('rejects disabling Voice after an unconfirmed delete (%j)', async (after) => {
+    getAppStatusStrict.mockResolvedValueOnce({ status: 'online' }).mockResolvedValueOnce(after);
+    execPm2.mockRejectedValueOnce(new Error('PM2 delete failed'));
+    await expect(reconcile({ enabled: false })).rejects.toMatchObject({
+      code: 'WHISPER_STOP_FAILED',
+      message: expect.stringContaining('Check PM2 logs for portos-whisper and retry'),
+    });
+    expect(getAppStatusStrict).toHaveBeenCalledTimes(2);
+    expect(clearJlistCache.mock.invocationCallOrder[1]).toBeLessThan(getAppStatusStrict.mock.invocationCallOrder[1]);
+  });
+
+  it('accepts confirmed absence after an ambiguous delete', async () => {
+    getAppStatusStrict.mockResolvedValueOnce({ status: 'online' });
+    execPm2.mockRejectedValueOnce(new Error('PM2 delete timed out'));
+    await expect(stopWhisper()).resolves.toEqual({ stopped: true });
+    expect(getAppStatusStrict).toHaveBeenCalledTimes(2);
+  });
+
+  it('propagates a shutdown error when Web Speech replaces Whisper during reconciliation', async () => {
+    getAppStatusStrict.mockResolvedValueOnce(null);
+    const cfg = {
+      ...VOICE_DEFAULTS, enabled: true,
+      stt: { ...VOICE_DEFAULTS.stt, engine: 'web-speech' },
+      tts: { ...VOICE_DEFAULTS.tts, engine: 'qwen3-tts' },
+    };
+    await expect(reconcile(cfg)).rejects.toMatchObject({ code: 'WHISPER_PM2_UNAVAILABLE' });
+  });
+});
+
+it('finishes Whisper readiness before overlapping stop and reconcile requests mutate PM2', async () => {
+  vi.clearAllMocks();
+  existsSync.mockImplementation(() => true);
+  whichFirst.mockResolvedValue('/usr/bin/whisper-server');
+  const cfg = toolsOn({
+    stt: { ...VOICE_DEFAULTS.stt, engine: 'whisper' },
+    llm: { model: 'explicit' },
+    tts: { ...VOICE_DEFAULTS.tts, engine: 'qwen3-tts' },
+  });
+  getAppStatusStrict.mockResolvedValueOnce({ status: 'online' });
+  const probeStarted = Promise.withResolvers();
+  const finishProbe = Promise.withResolvers();
+  fetchWithTimeout.mockImplementationOnce(() => {
+    probeStarted.resolve();
+    return finishProbe.promise;
+  });
+
+  const start = startWhisper(cfg);
+  await probeStarted.promise;
+  const stop = stopWhisper();
+  const reconciled = reconcile(cfg);
+  await new Promise(setImmediate);
+  const commandsWhileProbing = execPm2.mock.calls.map(([[command]]) => command);
+  finishProbe.resolve({});
+
+  await expect(Promise.all([start, stop, reconciled])).resolves.toMatchObject([
+    { name: 'portos-whisper' }, { stopped: true }, { name: 'portos-whisper' },
+  ]);
+  expect(commandsWhileProbing).toEqual(['delete', 'start']);
+  expect(execPm2.mock.calls.map(([[command]]) => command)).toEqual(['delete', 'start', 'delete', 'delete', 'start']);
+});
+
+it('coalesces overlapping reconciles to the latest config while the model load is in flight', async () => {
+  vi.clearAllMocks();
+  const loadStarted = Promise.withResolvers();
+  const finishLoad = Promise.withResolvers();
+  const resident = new Set();
+  const backend = fakeBackend({
+    id: 'lmstudio',
+    listModels: vi.fn(async () => ['small:1b']),
+    isToolCapable: vi.fn(async () => true),
+    loadedModels: vi.fn(async () => resident),
+    load: vi.fn(async (model) => {
+      loadStarted.resolve();
+      await finishLoad.promise;
+      resident.add(model);
+      return { ok: true };
+    }),
+  });
+  getVoiceProvisioner.mockReturnValue(backend);
+  const cfg = toolsOn({
+    stt: { ...VOICE_DEFAULTS.stt, engine: 'web-speech' },
+    tts: { ...VOICE_DEFAULTS.tts, engine: 'qwen3-tts' },
+    llm: { provider: 'lmstudio' },
+  });
+
+  await reconcile(cfg);
+  await loadStarted.promise;
+  await Promise.all([reconcile(toolsOn({ ...cfg, llm: { provider: 'ollama' } })), reconcile(cfg)]);
+  const providersWhileLoading = getVoiceProvisioner.mock.calls.map(([provider]) => provider);
+  finishLoad.resolve();
+
+  await vi.waitFor(() => expect(backend.loadedModels).toHaveBeenCalledTimes(2));
+  expect(providersWhileLoading).toEqual(['lmstudio', 'lmstudio']);
+  expect(getVoiceProvisioner.mock.calls).toEqual([['lmstudio'], ['lmstudio'], ['lmstudio'], ['lmstudio']]);
+  expect(backend.load).toHaveBeenCalledExactlyOnceWith('small:1b');
 });

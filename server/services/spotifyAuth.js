@@ -2,7 +2,7 @@
  * Spotify OAuth (#2152) — authorization-code flow with refresh tokens for the
  * machine-local Spotify listening-history ingestion (see spotifySync.js).
  *
- * Design constraints (docs/plans/archive/2026-07-04-human-activity-tracking.md):
+ * Design constraints:
  *
  * - **Zero new dependencies.** Spotify has no first-party Node SDK we need — the
  *   token exchange is two `fetch` POSTs to `accounts.spotify.com`, so we own the
@@ -29,6 +29,7 @@ import { fetchWithTimeout } from '../lib/fetchWithTimeout.js';
 import { getSelfHost } from '../lib/peerSelfHost.js';
 import { getHttpsEnabledAtBoot } from '../lib/httpsState.js';
 import { createOAuthStateStore, INVALID_OAUTH_STATE_MESSAGE } from '../lib/oauthState.js';
+import { createMutex } from '../lib/asyncMutex.js';
 import { PORTS } from '../lib/ports.js';
 
 // Cap on each token-endpoint round-trip so a hung accounts.spotify.com can't
@@ -53,6 +54,15 @@ export const SPOTIFY_SCOPES = [
 
 const ACCOUNTS_BASE = 'https://accounts.spotify.com';
 const oauthState = createOAuthStateStore();
+const withAuthLock = createMutex();
+let authGeneration = 0;
+let refreshPromise = null;
+
+// Called under the lock after a durable grant change.
+function advanceAuthGeneration() {
+  authGeneration += 1;
+  refreshPromise = null;
+}
 
 // ---------------------------------------------------------------------------
 // Pure helpers (exported for unit tests — no network, no filesystem).
@@ -119,11 +129,13 @@ export async function getCredentials() {
 }
 
 export async function saveCredentials({ clientId, clientSecret }, options = {}) {
-  await ensureAuthDir();
-  const credentials = { clientId, clientSecret, redirectUri: getRedirectUri(options) };
-  await writeSecureJson(CREDENTIALS_FILE, credentials);
-  console.log('🎧 Spotify OAuth credentials saved');
-  return { hasCredentials: true, redirectUri: credentials.redirectUri };
+  return withAuthLock(async () => {
+    await ensureAuthDir();
+    const credentials = { clientId, clientSecret, redirectUri: getRedirectUri(options) };
+    await writeSecureJson(CREDENTIALS_FILE, credentials);
+    console.log('🎧 Spotify OAuth credentials saved');
+    return { hasCredentials: true, redirectUri: credentials.redirectUri };
+  });
 }
 
 export async function getTokens() {
@@ -139,16 +151,18 @@ async function saveTokens(tokens) {
 }
 
 export async function clearAuth() {
-  await ensureAuthDir();
-  await writeSecureJson(TOKENS_FILE, {});
-  await Promise.all([PLAYLISTS_FILE, LEGACY_CACHE_FILE].map((path) => rm(path, { force: true }).catch((error) => {
-    if (error?.code !== 'ENOENT') throw error;
-  })));
-  await rmdir(LEGACY_CACHE_DIR).catch((error) => {
-    if (error?.code !== 'ENOENT' && error?.code !== 'ENOTEMPTY') throw error;
+  return withAuthLock(async () => {
+    await saveTokens({});
+    advanceAuthGeneration();
+    await Promise.all([PLAYLISTS_FILE, LEGACY_CACHE_FILE].map((path) => rm(path, { force: true }).catch((error) => {
+      if (error?.code !== 'ENOENT') throw error;
+    })));
+    await rmdir(LEGACY_CACHE_DIR).catch((error) => {
+      if (error?.code !== 'ENOENT' && error?.code !== 'ENOTEMPTY') throw error;
+    });
+    console.log('🎧 Spotify OAuth tokens cleared');
+    return { cleared: true };
   });
-  console.log('🎧 Spotify OAuth tokens cleared');
-  return { cleared: true };
 }
 
 // ---------------------------------------------------------------------------
@@ -210,32 +224,35 @@ export async function handleCallback({ code, state, error }) {
   if (!pending) return { error: INVALID_OAUTH_STATE_MESSAGE };
   if (error || !code) return { error: error || 'Missing authorization code' };
 
+  const generation = authGeneration;
   const tokens = await requestToken({
     grant_type: 'authorization_code',
     code,
     redirect_uri: pending.redirectUri,
   });
-  await saveTokens(withExpiry(tokens));
-  console.log('🎧 Spotify OAuth callback processed, tokens stored');
-  return { success: true };
+  return withAuthLock(async () => {
+    if (generation !== authGeneration) return { error: INVALID_OAUTH_STATE_MESSAGE };
+    await saveTokens(withExpiry(tokens));
+    advanceAuthGeneration();
+    console.log('🎧 Spotify OAuth callback processed, tokens stored');
+    return { success: true };
+  });
 }
 
-// Single-flight guard: while one refresh is in flight, concurrent callers await
-// the same promise instead of each POSTing their own refresh (Spotify rotates
-// the grant, so a double-refresh means the loser writes a stale token — classic
-// last-write-wins). Cleared in `finally` so a failed refresh can be retried.
-let refreshPromise = null;
-
-async function refreshAccessToken(tokens) {
+async function refreshAccessToken(tokens, generation) {
   const refreshed = await requestToken({
     grant_type: 'refresh_token',
     refresh_token: tokens.refresh_token,
   });
-  const merged = withExpiry({ ...tokens, ...refreshed });
-  if (!refreshed.refresh_token) merged.refresh_token = tokens.refresh_token;
-  await saveTokens(merged);
-  console.log('🎧 Spotify OAuth access token refreshed');
-  return merged.access_token;
+  return withAuthLock(async () => {
+    // The network request may have outlived a disconnect or a new grant.
+    if (generation !== authGeneration) return null;
+    const merged = withExpiry({ ...tokens, ...refreshed });
+    if (!refreshed.refresh_token) merged.refresh_token = tokens.refresh_token;
+    await saveTokens(merged);
+    console.log('🎧 Spotify OAuth access token refreshed');
+    return merged.access_token;
+  });
 }
 
 /**
@@ -251,17 +268,22 @@ async function refreshAccessToken(tokens) {
  * module-level `refreshPromise` (single-flight), so the grant is rotated once.
  */
 export async function getAccessToken() {
-  const tokens = await getTokens();
-  if (!tokens?.access_token && !tokens?.refresh_token) return null;
-  if (!isTokenExpired(tokens)) return tokens.access_token;
-  if (!tokens?.refresh_token) return null;
+  const { accessToken } = await withAuthLock(async () => {
+    const tokens = await getTokens();
+    if (!tokens?.access_token && !tokens?.refresh_token) return { accessToken: null };
+    if (!isTokenExpired(tokens)) return { accessToken: tokens.access_token };
+    if (!tokens?.refresh_token) return { accessToken: null };
 
-  if (!refreshPromise) {
-    refreshPromise = refreshAccessToken(tokens).finally(() => {
-      refreshPromise = null;
-    });
-  }
-  return refreshPromise;
+    if (!refreshPromise) {
+      const pending = refreshAccessToken(tokens, authGeneration).finally(() => {
+        if (refreshPromise === pending) refreshPromise = null;
+      });
+      refreshPromise = pending;
+    }
+    // Release the lock before awaiting the refresh, which needs it to commit.
+    return { accessToken: refreshPromise };
+  });
+  return accessToken;
 }
 
 export async function getAuthStatus(options = {}) {

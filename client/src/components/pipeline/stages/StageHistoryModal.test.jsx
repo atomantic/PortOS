@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { render, screen } from '@testing-library/react';
+import { render, screen, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 
 vi.mock('../../../services/apiPipeline.js', () => ({
@@ -47,7 +47,7 @@ describe('StageHistoryModal', () => {
       makeEntry('run-2', 'middle beats', 2),
       makeEntry('run-1', 'oldest beats', 3),
     ];
-    const { container } = render(
+    render(
       <StageHistoryModal
         open
         onClose={() => {}}
@@ -64,9 +64,9 @@ describe('StageHistoryModal', () => {
     expect(screen.getByText('run run-1').textContent).toContain('run-1');
     // Header echoes the current runId.
     expect(screen.getByText(/run run-cur/)).toBeInTheDocument();
-    // The diff is rendered (some red/green spans must exist since "newest" → "current").
-    expect(container.querySelector('.text-port-error')).toBeInTheDocument();
-    expect(container.querySelector('.text-port-success')).toBeInTheDocument();
+    const historyDialog = within(screen.getByRole('dialog', { name: 'Stage version history' }));
+    expect(historyDialog.getByText('newest', { selector: 'del' })).toHaveClass('text-port-error');
+    expect(historyDialog.getByText('current', { selector: 'ins' })).toHaveClass('text-port-success');
   });
 
   it('switches the diff when a different version is selected', async () => {

@@ -1,11 +1,17 @@
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { recordingOperatorIo } from '../test/recordingOperatorIo.js';
+import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import express from 'express';
 import { request } from '../lib/testHelper.js';
-import { errorMiddleware } from '../lib/errorHandler.js';
+import { errorEvents, errorMiddleware } from '../lib/errorHandler.js';
+
+const observeError = vi.fn();
+beforeAll(() => errorEvents.on('error', observeError));
+afterAll(() => errorEvents.off('error', observeError));
 
 const x = vi.hoisted(() => ({
   createAccount: vi.fn(),
   deleteAccount: vi.fn(),
+  deleteDraft: vi.fn(),
   getAccount: vi.fn(),
   listAccounts: vi.fn(),
   listDrafts: vi.fn(),
@@ -16,6 +22,7 @@ const x = vi.hoisted(() => ({
   syncAccount: vi.fn(),
   updateAccount: vi.fn(),
   createDraft: vi.fn(),
+  updateDraft: vi.fn(),
 }));
 vi.mock('../services/x.js', () => x);
 
@@ -60,6 +67,49 @@ describe('X routes', () => {
     expect((await request(app).post(`/api/x/drafts/${id}/open`).send({})).status).toBe(404);
     x.openApprovedDraft.mockResolvedValueOnce(null);
     expect((await request(app).post(`/api/x/drafts/${id}/open`).send({})).status).toBe(409);
+  });
+
+  it('validates edits, returns the updated draft, and broadcasts the affected account', async () => {
+    const id = '00000000-0000-4000-8000-000000000010';
+    const accountId = '00000000-0000-4000-8000-000000000001';
+    const emit = vi.fn();
+    app.set('io', recordingOperatorIo(emit));
+    const updated = { id, accountId, body: 'Revised draft', state: 'draft' };
+    x.updateDraft.mockResolvedValueOnce(updated);
+    const response = await request(app).patch(`/api/x/drafts/${id}`).send({ body: ' Revised draft ' });
+    expect(response.status).toBe(200);
+    expect(response.body).toEqual(updated);
+    expect(x.updateDraft).toHaveBeenCalledWith(id, { body: 'Revised draft' });
+    expect(emit).toHaveBeenCalledWith('x:changed', { accountId });
+
+    for (const payload of [{}, { body: ' ' }, { body: 'x'.repeat(4001) }, { body: 'Hi', state: 'approved' }]) {
+      expect((await request(app).patch(`/api/x/drafts/${id}`).send(payload)).status).toBe(400);
+    }
+    expect((await request(app).patch('/api/x/drafts/invalid').send({ body: 'Hi' })).status).toBe(400);
+    expect(x.updateDraft).toHaveBeenCalledTimes(1);
+    expect(emit.mock.calls.filter(([event]) => event === 'x:changed')).toEqual([['x:changed', { accountId }]]);
+  });
+
+  it('returns a conflict for a draft in a state that forbids editing', async () => {
+    x.updateDraft.mockResolvedValueOnce(null);
+    const response = await request(app).patch('/api/x/drafts/00000000-0000-4000-8000-000000000010').send({ body: 'Hi' });
+    expect(response.status).toBe(409);
+  });
+
+  it('deletes a local draft with an empty response and broadcasts only on success', async () => {
+    const id = '00000000-0000-4000-8000-000000000010';
+    const accountId = '00000000-0000-4000-8000-000000000001';
+    const emit = vi.fn();
+    app.set('io', recordingOperatorIo(emit));
+    x.deleteDraft.mockResolvedValueOnce(accountId).mockResolvedValueOnce(null);
+
+    expect((await request(app).delete('/api/x/drafts/invalid')).status).toBe(400);
+    const response = await request(app).delete(`/api/x/drafts/${id}`);
+    expect(response.status).toBe(204);
+    expect(response.text).toBe('');
+    expect((await request(app).delete(`/api/x/drafts/${id}`)).status).toBe(404);
+    expect(x.deleteDraft.mock.calls).toEqual([[id], [id]]);
+    expect(emit.mock.calls.filter(([event]) => event === 'x:changed')).toEqual([['x:changed', { accountId }]]);
   });
 
   it.each(['posts', 'drafts'])('404s %s for an unknown account and 200s an empty list for a real one', async (kind) => {

@@ -2,6 +2,20 @@ import { describe, expect, it } from 'vitest';
 import { hostControlGetRouteFor, isHostControlRoute } from './hostControlRoutes.js';
 
 describe('isHostControlRoute (#16018)', () => {
+  it.each(['config', 'logs', 'update-preflight'])('classifies managed browser %s reads as host control', (endpoint) => {
+    const path = `/api/browser/${endpoint}`;
+    expect(hostControlGetRouteFor('GET', path)).toBe(`GET ${path}`);
+    expect(isHostControlRoute('HEAD', path)).toBe(true);
+  });
+
+  it('matches nested repository document paths on GET and HEAD (#19495)', () => {
+    const route = 'GET /api/apps/:id/documents/*docPath';
+    const path = '/API/Apps/example-app/Documents/docs/guide.md';
+    expect(hostControlGetRouteFor('GET', path)).toBe(route);
+    expect(hostControlGetRouteFor('HEAD', path + '//')).toBe(route);
+    expect(hostControlGetRouteFor('GET', '/api/apps/example-app/documents-preview')).toBeNull();
+  });
+
   it('gates every /api write by default, whatever its family or spelling', () => {
     for (const [method, path] of [
       ['POST', '/api/apps/example-app/start'],
@@ -18,7 +32,7 @@ describe('isHostControlRoute (#16018)', () => {
   });
 
   it('leaves writes outside /api to their own routers', () => {
-    expect(isHostControlRoute('POST', '/sdapi/v1/txt2img')).toBe(false);
+    expect(isHostControlRoute('POST', '/outside-api/example')).toBe(false);
     expect(isHostControlRoute('POST', '/apix/example')).toBe(false);
   });
 
@@ -62,6 +76,8 @@ describe('isHostControlRoute (#16018)', () => {
     expect(hostControlGetRouteFor('GET', '/api/browser/logs')).toBe('GET /api/browser/logs');
     expect(hostControlGetRouteFor('GET', '/api/apps/app-001/logs')).toBe('GET /api/apps/:id/logs');
     expect(hostControlGetRouteFor('GET', '/api/update/software/homebrew')).toBe('GET /api/update/software/homebrew');
+    expect(hostControlGetRouteFor('GET', '/api/agents')).toBe('GET /api/agents');
+    expect(hostControlGetRouteFor('GET', '/api/agents/4242')).toBe('GET /api/agents/:pid');
     for (const path of [
       '/api/logs/portos-server',
       '/api/browser/logs',
@@ -76,6 +92,7 @@ describe('isHostControlRoute (#16018)', () => {
       '/api/update/software',
       '/api/update/node-runtime',
       '/api/docker-containment/status',
+      '/api/remote-desktop/status',
       '/api/privacy/broker-cases/example-case/evidence',
       '/api/privacy/optout/digest',
       '/api/data/cos/storage/recording/2020-01-02/example-agent',

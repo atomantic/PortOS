@@ -31,7 +31,7 @@ describe('taskDataInputs', () => {
     const resolveTokenEnv = vi.fn().mockResolvedValue({ GH_TOKEN: 'test-token' });
     const collectLaneHealth = vi.fn().mockResolvedValue({
       ok: true, windowDays: 60, refileDays: 30, from: '2026-08-18T12:00:00.000Z', to: '2026-10-17T12:00:00.000Z', truncated: false, partial: [],
-      lanes: [{ id: 'better-complexity', label: 'Cyclomatic complexity', metricLabel: 'complexity', filed: 12, completed: 9, notPlanned: 2, open: 1, reverted: 1, refiled: 1, flaggedTotal: 3, flagged: [
+      lanes: [{ id: 'code-simplification', label: 'Code simplification', metricLabel: 'code-simplification', filed: 12, completed: 9, notPlanned: 2, open: 1, reverted: 1, refiled: 1, flaggedTotal: 3, flagged: [
         { number: 31, title: 'Dispatcher branches on every provider', url: null, reasons: [{ kind: 're-filed', of: 20, path: 'server/services/dispatch.js' }] },
         { number: 28, title: 'Contact alice@example.com about the hotspot', url: null, reasons: [{ kind: 'reverted', pullRequest: 90 }] },
         { number: 25, title: 'Nested ternary', url: null, reasons: [{ kind: 'not-planned' }] },
@@ -41,7 +41,7 @@ describe('taskDataInputs', () => {
     const [section] = await resolveTaskDataInputs(['lane-health'], options);
     expect(section.label).toBe('Lane health');
     expect(collectLaneHealth).toHaveBeenCalledWith(APP, { forge: expect.objectContaining({ cli: 'gh', env: expect.objectContaining({ GH_TOKEN: 'test-token' }) }), taskType: 'better-complexity' });
-    expect(section.content).toContain('This lane (`complexity` issues) over the last 60 days: filed 12, completed 9, not planned 2, open 1, fixes reverted 1, re-filed within 30 days of a closed finding on the same file 1.');
+    expect(section.content).toContain('This lane (`code-simplification` issues) over the last 60 days: filed 12, completed 9, not planned 2, open 1, fixes reverted 1, re-filed within 30 days of a closed finding on the same file 1.');
     expect(section.content).toContain('Findings this lane got wrong or repeated:');
     expect(section.content).toContain('- #31 Dispatcher branches on every provider — re-filed after #20 on server/services/dispatch.js');
     expect(section.content).toContain('- #28 Contact <email> about the hotspot — fix reverted (PR #90)');
@@ -49,7 +49,7 @@ describe('taskDataInputs', () => {
     expect(appendTaskDataInputs('Audit.', [section])).toContain('### Lane health');
 
     collectLaneHealth.mockResolvedValueOnce({ ok: true, windowDays: 60, refileDays: 30, from: '2026-09-20T00:00:00.000Z', to: '2026-10-17T12:00:00.000Z', truncated: true, partial: ['commits'],
-      lanes: [{ id: 'better-complexity', metricLabel: 'complexity', filed: 0, completed: 0, notPlanned: 0, open: 0, reverted: 0, refiled: 0, flaggedTotal: 0, flagged: [] }] });
+      lanes: [{ id: 'code-simplification', metricLabel: 'code-simplification', filed: 0, completed: 0, notPlanned: 0, open: 0, reverted: 0, refiled: 0, flaggedTotal: 0, flagged: [] }] });
     const [clean] = await resolveTaskDataInputs(['lane-health'], options);
     expect(clean.content).toContain('the issue read was truncated; the window starts 2026-09-20');
     expect(clean.content).toContain('Revert detection is incomplete this run (commits could not be read)');

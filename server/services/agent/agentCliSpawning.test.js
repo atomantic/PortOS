@@ -4,7 +4,7 @@ vi.mock('../../lib/windowsAgentProcess.js', () => ({
   prepareWindowsAgentLaunch: (_agentId, command, args) => ({ command, args }),
   watchWindowsAgentProcess: child => child,
 }));
-import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
+import { describe, it, expect, vi, beforeEach, afterEach, onTestFinished } from 'vitest';
 import { EventEmitter } from 'events';
 import { join } from 'path';
 
@@ -139,6 +139,7 @@ vi.mock('../../lib/backupSnapshotBoundary.js', async (importActual) => {
   };
 });
 
+import { maintenance } from '../../lib/maintenanceAdmission.js';
 import { buildCliSpawnConfig, spawnDirectly } from './agentCliSpawning.js';
 import { promptOpensOwnPr } from '../promptSections/completion.js';
 import { runSpawnerCompletionCleanup } from './agentCompletionCleanup.js';
@@ -586,10 +587,14 @@ describe('stream error containment', () => {
     });
 
     it('settles with a startup failure when the provider CLI is missing', async () => {
+      const reservation = maintenance.admit('agent', minimalArgs.agentId);
+      onTestFinished(() => reservation.finish());
       fakeProcess = failedSpawn();
 
       await expect(spawnDirectly(minimalArgs)).resolves.toBe('agent-test');
       await waitForSpawnFailure();
+
+      expect(reservation.isCurrent()).toBe(false);
 
       expect(agentStateMocks.completeAgent).toHaveBeenCalledWith(
         'agent-test',
@@ -1475,13 +1480,15 @@ describe('stream error containment', () => {
       metadata: { openPR: true, reviewers: ['codex', 'antigravity'], reviewStopMode: 'on-clean' },
     };
 
-    spawnDirectly({ ...minimalArgs, task, prOpenedBy: stampPrOpenedBy(task) });
-    await new Promise((r) => setTimeout(r, 10));
+    const reservation = maintenance.admit('agent', minimalArgs.agentId);
+    onTestFinished(() => reservation.finish());
+    await spawnDirectly({ ...minimalArgs, task, prOpenedBy: stampPrOpenedBy(task) });
     fakeProcess.stdout.emit('data', Buffer.from('{"type":"result","result":"ok"}\n'));
     await new Promise((r) => setTimeout(r, 50));
     fakeProcess.emit('close', 0);
     // spawnDirectly returns before the close handler's async cleanup finishes.
-    await vi.waitFor(() => expect(runSpawnerCompletionCleanup).toHaveBeenCalledTimes(1), { interval: 5 });
+    await vi.waitFor(() => expect(reservation.isCurrent()).toBe(false), { interval: 5 });
+    expect(runSpawnerCompletionCleanup).toHaveBeenCalledTimes(1);
 
     // A claude-code CLI both owns its PR workflow and can type `/do:pr`, so
     // finalize was expected to verify the claim (its mock here verified none).
@@ -1507,6 +1514,26 @@ describe('stream error containment', () => {
     await vi.waitFor(() => expect(runSpawnerCompletionCleanup).toHaveBeenCalledTimes(1));
     expect(runSpawnerCompletionCleanup).toHaveBeenCalledWith(expect.objectContaining({
       prOwnership: { taskOpenPR: true, prOpenedBy: 'portos', agentOpensOwnPr: false, prClaimExpected: true },
+    }));
+  });
+
+  it.each([
+    ['downgraded success', { success: false }, false, false],
+    ['proven empty branch', { success: true, branchProvenEmpty: true }, true, true],
+  ])('hands the finalize verdict to cleanup for %s', async (_case, verdict, success, branchProvenEmpty) => {
+    const { finalizeAgent } = await import('./agentFinalization.js');
+    finalizeAgent.mockClear();
+    finalizeAgent.mockResolvedValueOnce(verdict);
+
+    const spawnPromise = spawnDirectly(minimalArgs);
+    await vi.waitFor(() => expect(fakeProcess.listenerCount('close')).toBeGreaterThan(0), { interval: 5 });
+    fakeProcess.emit('close', 0);
+    await spawnPromise;
+    await vi.waitFor(() => expect(runSpawnerCompletionCleanup).toHaveBeenCalledOnce(), { interval: 5 });
+
+    expect(finalizeAgent).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({ success: true }));
+    expect(runSpawnerCompletionCleanup).toHaveBeenCalledWith(expect.objectContaining({
+      agentId: minimalArgs.agentId, success, branchProvenEmpty,
     }));
   });
 
@@ -1637,15 +1664,19 @@ describe('stream error containment', () => {
     // must win over the host-shutdown gate.
     it('paused run exiting during host shutdown takes the paused path, writing no interrupted marker', async () => {
       const { pausedAgents, consumePausedAgentExit, activeAgents } = await import('./agentState.js');
+      const { finalizeAgent } = await import('./agentFinalization.js');
 
-      spawnDirectly({ ...minimalArgs });
-      await new Promise((r) => setTimeout(r, 10));
+      const reservation = maintenance.admit('agent', minimalArgs.agentId);
+      onTestFinished(() => reservation.finish());
+      await spawnDirectly({ ...minimalArgs });
       pausedAgents.set(minimalArgs.agentId, true);
       markHostShuttingDown();
       fakeProcess.emit('close', 0);
 
-      await vi.waitFor(() => expect(consumePausedAgentExit).toHaveBeenCalledWith(minimalArgs.agentId), { interval: 5 });
+      await vi.waitFor(() => expect(reservation.isCurrent()).toBe(false), { interval: 5 });
+      expect(consumePausedAgentExit).toHaveBeenCalledWith(minimalArgs.agentId);
       expect(activeAgents.has(minimalArgs.agentId)).toBe(false);
+      expect(finalizeAgent).not.toHaveBeenCalled();
       expect(agentStateMocks.updateAgent).not.toHaveBeenCalledWith(
         minimalArgs.agentId,
         { metadata: { phase: 'interrupted', interruptedBy: 'host-shutdown' } },

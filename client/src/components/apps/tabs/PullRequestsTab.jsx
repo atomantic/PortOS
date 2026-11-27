@@ -706,8 +706,15 @@ export default function PullRequestsTab({ appId, appName }) {
       )}
 
       {filteredPullRequests.length === 0 && total > 0 && (
-        <div className="px-3 py-2 text-sm text-gray-500 bg-port-card border border-port-border rounded-lg">
-          No open {requestNoun} match &ldquo;{query}&rdquo;.
+        <div className="px-3 py-2 text-sm text-gray-500 bg-port-card border border-port-border rounded-lg flex flex-wrap items-center gap-3">
+          <span>No open {requestNoun} match &ldquo;{query}&rdquo;.</span>
+          <button
+            type="button"
+            onClick={() => setQuery('')}
+            className="px-2.5 py-1 rounded border border-port-border text-gray-300 hover:text-white hover:bg-port-border/60"
+          >
+            Clear search
+          </button>
         </div>
       )}
 

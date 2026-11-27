@@ -20,6 +20,7 @@ import {
 import { applyFreshTimeHorizons, deriveLongevity } from './longevity.js';
 import { tombstoneGoal } from './goalTombstones.js';
 import { getActiveProvider, getProviderById } from '../provider/providers.js';
+import { getHorizonYears } from './goalHorizons.js';
 
 /**
  * Read the longevity snapshot with `timeHorizons` re-derived against today (#4122).
@@ -31,11 +32,6 @@ async function loadLongevityFor(goals) {
 }
 
 // === Pure Functions (exported for testing) ===
-
-function getHorizonYears(horizon, timeHorizons) {
-  const map = { '1-year': 1, '3-year': 3, '5-year': 5, '10-year': 10, '20-year': 20, 'lifetime': timeHorizons.yearsRemaining };
-  return map[horizon] ?? 5;
-}
 
 /**
  * Compute time feasibility for a goal based on its linked activities.
@@ -223,25 +219,19 @@ function normalizeGoals(data) {
  *   (#2726). Off by default — every existing caller wants the empty fallback.
  */
 export async function getGoals(options) {
-  let data = await loadJSON(GOALS_FILE, DEFAULT_GOALS, options);
+  const data = await loadJSON(GOALS_FILE, DEFAULT_GOALS, options);
   // A goals.json that parsed but carries no goals array is as untrustworthy as one
   // that failed to parse — validate before the count downstream trusts it. Only
   // under strict: the non-strict path keeps its existing behavior for this shape.
   if (options?.strict && !Array.isArray(data?.goals)) {
     throw new Error(`Goals malformed: ${GOALS_FILE}`);
   }
-  if (normalizeGoals(data)) {
-    // Re-read under the writer queue; never save the snapshot from this read.
-    data = await mutateGoals(fresh => {
-      normalizeGoals(fresh);
-      return fresh;
-    });
-  }
+  // Normalize the read result only; a GET never writes the shared file.
+  normalizeGoals(data);
 
   // Urgency is only *persisted* when a goal is written or a birth date is set, so the
   // stored value is as old as that write — and it ranks off `timeHorizons.yearsRemaining`,
-  // which drifts every day. Re-derive it here (after the migration save, so this read-path
-  // refresh never triggers a write of its own) against today's horizons, so every consumer
+  // which drifts every day. Re-derive it here against today's horizons so every consumer
   // of getGoals — jobGates, goalCheckIn, telegram — sees a current number (#4122).
   // Left alone when the horizons can't be recomputed: an install with no birth date keeps
   // whatever it had rather than having its urgencies silently blanked.

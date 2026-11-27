@@ -21,22 +21,15 @@
 import { describe, it, expect, vi, beforeEach, afterEach, afterAll } from 'vitest';
 import { ChildProcess } from '../../lib/childProcess.js';
 import { pinPlatform } from '../../lib/testHelper.js';
-import { readFileSync, rmSync } from 'fs';
-import { fileURLToPath } from 'url';
-import { dirname, join } from 'path';
+import { EventEmitter } from 'node:events';
+import { mkdirSync, rmSync, writeFileSync } from 'fs';
+import { join } from 'path';
+import { cleanupTempDataRoots, lazyTempDataRoot, makePathsProxy } from '../../lib/mockPathsDataRoot.js';
 
-const __dirname = dirname(fileURLToPath(import.meta.url));
-// Normalize CRLF→LF so the fixed char-window slices below stay deterministic on
-// Windows checkouts (CRLF inflates byte offsets and can push a matched anchor
-// past the window, producing a spurious failure).
-const normalizeEol = (s) => s.replace(/\r\n/g, '\n');
-const AGENT_CLI_SRC = normalizeEol(readFileSync(join(__dirname, 'agentCliSpawning.js'), 'utf-8'));
-// The TUI `finish()` lives in the extracted session controller (#8021);
-// `agentTuiSpawning.js` is the adapter that wires it to the PTY.
-const AGENT_TUI_SRC = normalizeEol(readFileSync(join(__dirname, '../agentTuiSpawning/sessionController.js'), 'utf-8'));
-const AGENT_LIFECYCLE_SRC = normalizeEol(readFileSync(join(__dirname, 'agentLifecycle.js'), 'utf-8'));
-const AGENT_RUN_FINALIZE_SRC = normalizeEol(readFileSync(join(__dirname, 'agentRunFinalize.js'), 'utf-8'));
-const AGENT_MANAGEMENT_SRC = normalizeEol(readFileSync(join(__dirname, 'agentManagement.js'), 'utf-8'));
+vi.mock('../../lib/paths.js', async importOriginal => makePathsProxy(await importOriginal(), {
+  dataRoot: () => lazyTempDataRoot('portos-agent-management-'),
+}));
+afterAll(cleanupTempDataRoots);
 
 // The lifecycle ledger is a real file writer (data/cos/run-events.jsonl). Mocked
 // so the sweep's telemetry lands in a spy instead of the developing install's
@@ -58,14 +51,18 @@ vi.mock('../cos/cos.js', () => ({
   forceSpawnTask: vi.fn().mockResolvedValue({ success: true })
 }));
 
-// Only `exec` is replaced so the Windows tasklist cases never run a real command.
-const { execMock } = vi.hoisted(() => ({ execMock: vi.fn() }));
-vi.mock('../../lib/childProcess.js', async (importOriginal) => ({
-  ...(await importOriginal()),
-  exec: execMock
-}));
+const { execMock, taskkillMock } = vi.hoisted(() => ({ execMock: vi.fn(), taskkillMock: vi.fn() }));
+vi.mock('../../lib/childProcess.js', async (importOriginal) => {
+  const actual = await importOriginal();
+  return {
+    ...actual,
+    exec: execMock,
+    spawn: (command, ...args) => command === 'taskkill' ? taskkillMock(...args) : actual.spawn(command, ...args),
+  };
+});
 
 vi.mock('../cos/cosEvents.js', () => ({
+  cosEvents: new EventEmitter(),
   emitLog: vi.fn()
 }));
 
@@ -142,6 +139,7 @@ afterAll(() => {
   rmSync(maintenanceTestDir, { recursive: true, force: true });
 });
 
+vi.mock('./agentMaintenanceReservations.js', { spy: true });
 vi.mock('../deadOwnerReservations.js', () => ({
   reconcileDeadOwnerReservations: vi.fn(() => ({ marked: 0, released: 0 })),
 }));
@@ -164,10 +162,12 @@ vi.mock('../creativeDirector/planAdvance.js', () => ({ advanceAfterPlanStepSettl
 vi.mock('../creativeDirector/completionHook.js', () => ({ advanceAfterSceneSettled: vi.fn().mockResolvedValue(undefined) }));
 
 import { handleOrphanedTask, pauseAgent, resumeAgent, relaunchAgent, settleOrphanedCreativeDirectorRun, cleanupOrphanedAgents, killAgent, getAgentProcessStats } from './agentManagement.js';
+import { flushRunnerOutputBatcher } from './agentRunnerOutputBatchers.js';
 import { completeAgentRun } from './agentRunTracking.js';
 import * as fileUtils from '../../lib/fileUtils.js';
 import { retireDeadAgent, stampLiExecutionVerdict } from './agentFinalization.js';
 import { maintenance } from '../../lib/maintenanceAdmission.js';
+import { reconcileStaleAgentReservations } from './agentMaintenanceReservations.js';
 import { cleanupAgentWorktree, resolveTaskResumePatch } from './agentWorktreeCleanup.js';
 import { getAgents, updateAgent, getAgentRecord, readAgentRecordOrUnreadable, AGENT_RECORD_UNREADABLE, completeAgent as markAgentComplete } from '../cos/cosAgentLifecycle.js';
 import { updateRun, getProject } from '../creativeDirector/local.js';
@@ -181,7 +181,7 @@ import { readHostShutdownMarker, clearHostShutdownMarker } from '../../lib/hostS
 import { committedDuringRun } from '../../lib/gitCommitProbe.js';
 import { holdRecoveredRunnerOllamaWork, readRunnerCompletionReceipt } from './agentRunnerSync.js';
 import { handleAgentCompletion } from './agentLifecycle.js';
-import { activeAgents, runnerAgents, completingAgents, spawningTasks, pausedAgents, consumePausedAgentExit } from './agentState.js';
+import { activeAgents, runnerAgents, completingAgents, spawningTasks, pausedAgents, consumePausedAgentExit, userTerminatedAgents } from './agentState.js';
 
 // Stamp the task as a real dispatch does and return agent metadata carrying the
 // receipt that dispatch binds. Legacy fixtures deliberately omit this helper
@@ -244,6 +244,7 @@ describe('cleanupOrphanedAgents — startup recovery coordination', () => {
     releaseProbe([]);
     await Promise.all([first, second]);
     expect(getAgents).toHaveBeenCalledTimes(1);
+    expect(reconcileStaleAgentReservations).toHaveBeenCalledExactlyOnceWith({ agents: [] });
   });
 
   it('does not reap runner-owned agents while the runner probe is unavailable', async () => {
@@ -1849,6 +1850,69 @@ describe('resumeAgent — requeues the paused agent\'s own task', () => {
     getAgentRecord.mockResolvedValue({ ...PAUSED_AGENT, metadata: { ...PAUSED_AGENT.metadata, configClaimFlow } });
     getTaskById.mockResolvedValue(null);
     await expect(resumeAgent('agent-paused-1')).resolves.toMatchObject({ mode: 'new-task' });
+    const [replacement, taskType] = addTask.mock.calls[0];
+    expect(taskType).toBe('user');
+    expect(replacement.metadata).not.toHaveProperty('featureAgentId');
+    expect(replacement.metadata).not.toHaveProperty('featureAgentRun');
+  });
+
+  describe('missing Feature Agent task', () => {
+    const featureAgentId = 'fa-example';
+    const ownership = { featureAgentId, featureAgentRun: true };
+    const feature = { id: featureAgentId, status: 'active', currentAgentId: PAUSED_AGENT.id };
+    const persisted = { id: 'sys-feature-replacement', status: 'pending', metadata: ownership };
+
+    function seedFeatures(agents) {
+      mkdirSync(fileUtils.PATHS.cos, { recursive: true });
+      writeFileSync(join(fileUtils.PATHS.cos, 'feature-agents.json'), JSON.stringify({ version: 1, agents }));
+    }
+
+    beforeEach(() => {
+      getAgentRecord.mockResolvedValue({ ...PAUSED_AGENT, metadata: {
+        ...PAUSED_AGENT.metadata, ...ownership, taskType: 'internal', configClaimFlow: false,
+      } });
+      getTaskById.mockResolvedValue(null);
+    });
+
+    it('dispatches the replacement through the bound Feature Agent path', async () => {
+      seedFeatures([feature]);
+      const { withFeatureAgentDispatch } = await import('../featureAgents.js');
+      addTask.mockResolvedValueOnce(persisted);
+      forceSpawnTask.mockImplementationOnce(taskId =>
+        withFeatureAgentDispatch({ ...persisted, id: taskId }, () => ({ success: true })));
+
+      await expect(resumeAgent(PAUSED_AGENT.id)).resolves.toMatchObject({
+        mode: 'new-task', spawned: true, taskId: persisted.id,
+      });
+      expect(addTask).toHaveBeenCalledWith(expect.objectContaining({
+        metadata: expect.objectContaining({ ...ownership, resumedFromAgentId: PAUSED_AGENT.id }),
+      }), 'internal', { suppressDequeue: true });
+    });
+
+    it.each([
+      ['stopped', [{ ...feature, status: 'draft', currentAgentId: null }]],
+      ['deleted', []],
+      ['reassigned', [{ ...feature, currentAgentId: 'agent-another-run' }]],
+    ])('refuses a %s feature before queuing or retiring the paused run', async (_state, agents) => {
+      seedFeatures(agents);
+      await expect(resumeAgent(PAUSED_AGENT.id)).rejects.toMatchObject({
+        status: 409, code: 'AGENT_RESUME_FEATURE_RUN_UNAVAILABLE',
+      });
+      expect(addTask).not.toHaveBeenCalled();
+      expect(forceSpawnTask).not.toHaveBeenCalled();
+      expect(markAgentComplete).not.toHaveBeenCalled();
+    });
+
+    it('refuses to bind a generic duplicate as the Feature Agent run', async () => {
+      seedFeatures([feature]);
+      addTask.mockResolvedValueOnce({ id: 'sys-unrelated', status: 'pending', duplicate: true });
+      await expect(resumeAgent(PAUSED_AGENT.id)).rejects.toMatchObject({
+        status: 409, code: 'AGENT_RESUME_FEATURE_TASK_CONFLICT',
+      });
+      const { getFeatureAgent } = await import('../featureAgents.js');
+      await expect(getFeatureAgent(featureAgentId)).resolves.toMatchObject({ currentAgentId: PAUSED_AGENT.id });
+      expect(forceSpawnTask).not.toHaveBeenCalled();
+    });
   });
 
   it('keeps a missing coordinator task a coordinator when the task record is gone', async () => {
@@ -2292,165 +2356,6 @@ describe('pause-release adapter registration', () => {
     getAgentRecord.mockResolvedValue({ ...PAUSED_AGENT, status: 'completed' });
     await retirePausedAgent('agent-paused-9', 'task-xyz', null);
     expect(markAgentComplete).not.toHaveBeenCalled();
-  });
-});
-
-// ─── Close-handler skip-finalization contract ─────────────────────────────────
-//
-// When a pausedAgents-flagged agent's process exits, the close handlers in
-// agentCliSpawning.js (CLI), agentTuiSpawning.js (TUI), and
-// agentLifecycle.js (runner handleAgentCompletion) must guard with
-// `pausedAgents.has(agentId)` and return BEFORE calling finalizeAgent /
-// cleanupWorktreeFn — so the worktree and task are preserved for a later resume.
-//
-// These tests use source-level assertions (matching the agentLifecycle.test.js
-// convention) to lock the structural contract without requiring the full
-// async dep chain to be wired up in this test suite.
-
-describe('close-handler skip-finalization — source contract', () => {
-  // Helper: extract the body of a function from source text.
-  // Returns everything from the function's opening brace to its matched closing brace.
-  // `bodyAnchor` (optional) is a substring searched forward from the signature;
-  // the body's opening brace is the first `{` after IT rather than after the
-  // signature. Needed for a function whose parameter list is destructured — its
-  // `{` would otherwise brace-match as the whole body.
-  function extractFunctionBody(src, fnSignatureSubstring, bodyAnchor = null) {
-    const fnStart = src.indexOf(fnSignatureSubstring);
-    if (fnStart === -1) return null;
-    const searchFrom = bodyAnchor ? src.indexOf(bodyAnchor, fnStart) : fnStart;
-    if (searchFrom === -1) return null;
-    const braceStart = src.indexOf('{', searchFrom);
-    let depth = 0;
-    for (let i = braceStart; i < src.length; i++) {
-      if (src[i] === '{') depth++;
-      else if (src[i] === '}') { depth--; if (depth === 0) return src.slice(braceStart, i + 1); }
-    }
-    return null;
-  }
-
-  // The pause guard moved out of both spawners into `finalizeAgentRunCommon`
-  // (#6619) — they used to hold two hand-mirrored copies of it, running their
-  // paused and host-shutdown gates in OPPOSITE order. The behavioral counterpart
-  // of these checks is the paired 'shared finalize sequence (#6619)' suite in
-  // agentCliSpawning.test.js / agentTuiSpawning.test.js, which drives a real
-  // paused exit through both spawners. What only a source check can pin is the
-  // ORDERING — that each spawner consults the shared sequence and bails on its
-  // 'paused' verdict BEFORE it can reach finalizeAgent.
-  // Each row carries the call spellings its own module uses: the TUI controller
-  // reaches both through the `finalization` seam it is constructed with (#8021),
-  // so a bare `finalizeAgentRunCommon(` would indexOf → -1 there and the row
-  // would fail for the wrong reason. Spelled out per row rather than matched
-  // loosely, so a seam RENAME surfaces here instead of going quietly vacuous.
-  for (const [label, src, signature, bodyAnchor, sequenceCall, finalizeCall] of [
-    ['CLI close handler', AGENT_CLI_SRC, 'async function handleDirectCliClose(ctx, code)', null, 'finalizeAgentRunCommon(', 'finalizeAgent('],
-    ['TUI finish()', AGENT_TUI_SRC, 'const finish = async', '=> ', 'finalization.finalizeRunCommon(', 'finalization.finalizeAgent('],
-  ]) {
-    it(`${label} routes through the shared finalize sequence and returns on its paused verdict before finalizeAgent`, () => {
-      const body = extractFunctionBody(src, signature, bodyAnchor);
-      expect(body, `${label} body must be extractable`).toBeTruthy();
-
-      const sequencePos = body.indexOf(sequenceCall);
-      expect(sequencePos, `${label} must run the shared finalize sequence via ${sequenceCall}`).toBeGreaterThan(-1);
-
-      const finalizePos = body.indexOf(finalizeCall);
-      expect(finalizePos, `${label} must still call ${finalizeCall}`).toBeGreaterThan(-1);
-      expect(sequencePos, 'shared finalize sequence must precede finalizeAgent').toBeLessThan(finalizePos);
-
-      // The paused verdict is handled with an early return, before finalize.
-      const window = body.slice(sequencePos, finalizePos);
-      expect(window, `${label} must bail on the 'paused' outcome`).toMatch(/'paused'[\s\S]*?\breturn\b/);
-    });
-  }
-
-  // The canonical order the extraction made explicit: the paused return runs
-  // BEFORE the host-shutdown abandon gate: abandoning a paused run would skip the
-  // bookkeeping that the paused path owns. Nothing enforced this while the
-  // sequence was mirrored.
-  it('finalizeAgentRunCommon checks pausedAgents before the abandon gate', () => {
-    const body = extractFunctionBody(AGENT_RUN_FINALIZE_SRC, 'export function finalizeAgentRunCommon(', '}) ');
-    expect(body, 'finalizeAgentRunCommon must exist and be extractable').toBeTruthy();
-
-    const guardPos = body.indexOf('pausedAgents.has(agentId)');
-    expect(guardPos, 'pause guard must be present').toBeGreaterThan(-1);
-
-    const pos = body.indexOf('shouldAbandonAgentRun(');
-    expect(pos, 'shouldAbandonAgentRun( must exist in finalizeAgentRunCommon').toBeGreaterThan(-1);
-    expect(guardPos, 'pause guard must precede the host-shutdown abandon gate').toBeLessThan(pos);
-    expect(body.slice(guardPos, pos), 'pause guard must return before the host-shutdown abandon gate').toMatch(/\breturn\b/);
-  });
-
-  // The behavioral counterpart of this guard lives in
-  // `agentCompletionRouting.test.js` — it calls the real `handleAgentCompletion`
-  // with a paused agent and asserts nothing is completed. That is the durable
-  // form (it survives extraction); this source check only pins the ORDERING
-  // inside the router, which has no behavioral seam of its own.
-  //
-  // The window is the router's own brace-balanced body, and the assertion is
-  // that the guard precedes BOTH ways out of it — the post-restart recovery
-  // hand-off and the live in-memory path — rather than a bare `completeAgent(`,
-  // which moved into `completeUntrackedAgentFromCosState` in #3872 and would
-  // silently make this test vacuous (indexOf → -1) if it were still named here.
-  it('runner handleAgentCompletion guards with pausedAgents.has and returns before either completion path', () => {
-    const fnBody = extractFunctionBody(AGENT_LIFECYCLE_SRC, 'async function handleAdmittedAgentCompletion');
-    expect(fnBody, 'handleAgentCompletion must exist and be extractable').toBeTruthy();
-
-    // Guard present
-    expect(fnBody).toMatch(/pausedAgents\.has\(agentId\)/);
-
-    const guardPos = fnBody.indexOf('pausedAgents.has(agentId)');
-    for (const [label, dispatch] of [
-      ['post-restart recovery hand-off', 'completeUntrackedAgentFromCosState('],
-      ['live in-memory completion path', 'withRunnerAgentCleanup('],
-    ]) {
-      const dispatchPos = fnBody.indexOf(dispatch);
-      expect(dispatchPos, `${label} (${dispatch}) must exist in handleAgentCompletion`).toBeGreaterThan(-1);
-      expect(guardPos, `pause guard must precede the ${label}`).toBeLessThan(dispatchPos);
-      // There is a return inside the guard block (early exit before either path)
-      expect(fnBody.slice(guardPos, dispatchPos)).toMatch(/\breturn\b/);
-    }
-  });
-
-  it('runner pause guard also cleans up runnerAgents entry before returning', () => {
-    // After returning early, the runner agent map entry must not be leaked.
-    const fnBody = extractFunctionBody(AGENT_LIFECYCLE_SRC, 'async function handleAdmittedAgentCompletion');
-
-    const guardPos = fnBody.indexOf('pausedAgents.has(agentId)');
-    const returnAfterGuard = fnBody.indexOf('return', guardPos);
-    // Between the guard and the early return, dropRunnerAgent (which also
-    // releases the in-flight Ollama hold) must be called
-    const guardToReturn = fnBody.slice(guardPos, returnAfterGuard + 10);
-    expect(guardToReturn).toMatch(/dropRunnerAgent\(agentId\)/);
-  });
-});
-
-describe('kill drains batched output before completion — source contract', () => {
-  function fnBody(src, signature) {
-    const start = src.indexOf(signature);
-    if (start === -1) return '';
-    const braceStart = src.indexOf('{', start);
-    let depth = 0;
-    for (let i = braceStart; i < src.length; i++) {
-      if (src[i] === '{') depth++;
-      else if (src[i] === '}') { depth--; if (depth === 0) return src.slice(braceStart, i + 1); }
-    }
-    return '';
-  }
-
-  it('terminateRunnerAgent flushes the runner output batcher before completeAgent', () => {
-    const body = fnBody(AGENT_MANAGEMENT_SRC, 'async function terminateRunnerAgent');
-    expect(body).toMatch(/flushRunnerOutputBatcher\(agentId\)/);
-    const flushPos = body.indexOf('flushRunnerOutputBatcher(agentId)');
-    const completePos = body.indexOf('completeAgent(');
-    expect(flushPos, 'runner batcher must drain before completeAgent').toBeGreaterThan(-1);
-    expect(flushPos).toBeLessThan(completePos);
-  });
-
-  it('killAgent (direct) drains agent.flushOutput before completeAgent', () => {
-    const body = fnBody(AGENT_MANAGEMENT_SRC, 'export async function killAgent');
-    expect(body).toMatch(/agent\.flushOutput\?\.\(\)/);
-    const flushPos = body.indexOf('agent.flushOutput?.()');
-    const completePos = body.indexOf('completeAgent(');
-    expect(flushPos).toBeLessThan(completePos);
   });
 });
 
@@ -3221,6 +3126,7 @@ describe('lifecycle ledger — pause and interruption', () => {
 
     await killAgent('runner-1');
 
+    expect(maintenance.finishResource).toHaveBeenCalledExactlyOnceWith('agent', 'runner-1');
     expect(ledgerCalls('run.interrupted')).toEqual([expect.objectContaining({
       runId: 'run-9', agentId: 'runner-1', data: expect.objectContaining({ mode: 'runner' })
     })]);
@@ -3229,11 +3135,74 @@ describe('lifecycle ledger — pause and interruption', () => {
     expect(releaseOllamaWork).toHaveBeenCalledTimes(1);
   });
 
+  it.each(['runner', 'direct'])('awaits the %s output flush before completing a killed agent', async mode => {
+    const agentId = 'agent-flush';
+    const flushed = vi.fn();
+    const flush = async () => {
+      await Promise.resolve();
+      flushed();
+    };
+    if (mode === 'runner') {
+      runnerAgents.set(agentId, {});
+      killAgentViaRunner.mockResolvedValueOnce({ success: true });
+      flushRunnerOutputBatcher.mockImplementationOnce(flush);
+    } else {
+      activeAgents.set(agentId, { process: fakeChildProcess(), flushOutput: flush });
+    }
+
+    await killAgent(agentId);
+
+    expect(flushed).toHaveBeenCalledOnce();
+    expect(markAgentComplete).toHaveBeenCalledWith(agentId, expect.objectContaining({ success: false }));
+    expect(flushed.mock.invocationCallOrder[0]).toBeLessThan(markAgentComplete.mock.invocationCallOrder[0]);
+  });
+
   it('writes nothing for a kill aimed at an agent that is already gone', async () => {
     // Nothing live to interrupt — minting an event here would create a
     // projection for a run that does not exist.
     await expect(killAgent('ghost')).rejects.toMatchObject({ status: 404 });
     expect(ledgerCalls('run.interrupted')).toHaveLength(0);
+  });
+});
+
+describe('Windows force-kill in direct mode', () => {
+  it('keeps ownership and task state on spawn failure and waits for taskkill on retry', async () => {
+    const restorePlatform = pinPlatform('win32');
+    const agentId = 'windows-direct';
+    const process = Object.assign(fakeChildProcess(), { pid: 1234 });
+    const agent = { process, pid: process.pid, taskId: 'task-1' };
+    activeAgents.set(agentId, agent);
+    const failed = new EventEmitter();
+    const retry = new EventEmitter();
+    vi.clearAllMocks();
+    taskkillMock.mockReturnValueOnce(failed).mockReturnValueOnce(retry);
+    try {
+      const firstResult = killAgent(agentId);
+      const rejection = expect(firstResult).rejects.toMatchObject({ code: 'AGENT_KILL_FAILED' });
+      await vi.waitFor(() => expect(taskkillMock).toHaveBeenCalledTimes(1));
+      failed.emit('error', new Error('taskkill unavailable'));
+      await rejection;
+      expect(activeAgents.get(agentId)).toBe(agent);
+      expect(userTerminatedAgents.has(agentId)).toBe(false);
+      expect(markAgentComplete).not.toHaveBeenCalled();
+      expect(updateTask).not.toHaveBeenCalled();
+
+      const succeeded = vi.fn();
+      const retryResult = killAgent(agentId).then(succeeded);
+      await vi.waitFor(() => expect(taskkillMock).toHaveBeenCalledTimes(2));
+      expect(succeeded).not.toHaveBeenCalled();
+      expect(markAgentComplete).not.toHaveBeenCalled();
+      expect(activeAgents.get(agentId)).toBe(agent);
+      retry.emit('close', 0);
+      await retryResult;
+      expect(succeeded).toHaveBeenCalledWith({ success: true, agentId, pid: process.pid, signal: 'SIGKILL' });
+      expect(activeAgents.has(agentId)).toBe(false);
+    } finally {
+      activeAgents.delete(agentId);
+      userTerminatedAgents.delete(agentId);
+      taskkillMock.mockReset();
+      restorePlatform();
+    }
   });
 });
 

@@ -113,13 +113,11 @@ export default function useMusicVideoRenderJob({ project, onRendered, onFailed, 
     if (!jobId || cancelRequestedFor === jobId) return;
     setCancelRequestedFor(jobId);
     cancelMusicVideoRender(jobId, { silent: true })
-      .then((res) => {
-        if (res?.ok) return;
-        setCancelRequestedFor(null);
-        toast.error('This render can no longer be stopped — it may be finishing');
-      })
       .catch((err) => {
-        setCancelRequestedFor(null);
+        setCancelRequestedFor((current) => current === jobId ? null : current);
+        if ((err?.status === 404 || err?.status === 409) && slotRef.current.jobId === jobId) {
+          onSettled?.('cancel-rejected', slot.context);
+        }
         toast.error(err?.message || 'Could not stop the render');
       });
   };

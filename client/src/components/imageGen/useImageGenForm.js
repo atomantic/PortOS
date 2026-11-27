@@ -230,7 +230,7 @@ export function useImageGenForm({ searchParams, setSearchParams, backend, handof
       return;
     }
     if (!availableBackends.some((entry) => entry.id === IMAGE_GEN_MODE.LOCAL)) {
-      fail('LoRA Test needs a local image backend. Configure one in Settings → Media, then try Test again.');
+      fail('LoRA Test needs a local image backend. Configure one in Media Gen Settings → Local, then try Test again.');
       return;
     }
     const compatible = models.filter((model) => model.enabled !== false
@@ -263,7 +263,7 @@ export function useImageGenForm({ searchParams, setSearchParams, backend, handof
         }, { replace: true });
         return;
       }
-      fail('No compatible local image runtime is ready for this LoRA. Set up a matching model in Settings → Media, then try Test again.');
+      fail('No compatible local image runtime is ready for this LoRA. Set up a matching model in Media Gen Settings → Local, then try Test again.');
     };
     resolve();
   }, [loraHandoff, savedLocalModelId, modelsLoaded, lorasLoaded, settingsLoadFailed,

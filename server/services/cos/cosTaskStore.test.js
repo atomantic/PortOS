@@ -18,6 +18,8 @@ import * as repository from './cosTaskRepository.js';
 const actualRepository = await vi.importActual('./cosTaskRepository.js');
 import { resolveReviewerConfig, buildReviewerEffortNote } from '../../lib/reviewerConfig.js';
 import { planListSave } from '../../lib/cos/cosTaskRows.js';
+import { normalizeCodeReviewVerdict } from '../../lib/codeReviewVerdict.js';
+import { classifyRecheckOutcome } from './cosChallenge.js';
 
 vi.mock('../prWatcher.js', () => ({ persistPrWatcherState: vi.fn(async () => ({})) }));
 import { persistPrWatcherState } from '../prWatcher.js';
@@ -30,6 +32,7 @@ const mock = vi.hoisted(() => ({
   writeFailure: null,
   // Called with the source after each committed write; a truthy return clears it.
   afterWrite: null,
+  beforeLock: null,
   // Counts real working-set loads so the cache tests can prove a hit did no work.
   loads: 0,
   state: null,
@@ -58,11 +61,19 @@ vi.mock('./cosTaskRepository.js', async (importOriginal) => {
   };
 });
 
-vi.mock('./cosState.js', async () => ({
-  loadState: vi.fn(async () => mock.state),
-  readAgentsStateForSafetyCheck: vi.fn(async () => ({ trusted: true, agents: mock.state.agents })),
-  withStateLock: (await import('../../lib/fileWriteQueue.js')).createFileWriteQueue(),
-}));
+vi.mock('./cosState.js', async () => {
+  const withStateLock = (await import('../../lib/fileWriteQueue.js')).createFileWriteQueue();
+  return {
+    loadState: vi.fn(async () => mock.state),
+    readAgentsStateForSafetyCheck: vi.fn(async () => ({ trusted: true, agents: mock.state.agents })),
+    withStateLock: async (callback) => {
+      const beforeLock = mock.beforeLock;
+      mock.beforeLock = null;
+      if (beforeLock) await withStateLock(beforeLock);
+      return withStateLock(callback);
+    },
+  };
+});
 
 vi.mock('./cos.js', () => ({
   isRunning: vi.fn(() => false),
@@ -144,6 +155,7 @@ const stored = async (source) => (await actualRepository.loadTaskWorkingSet(sour
 beforeEach(() => {
   mock.writeFailure = null;
   mock.afterWrite = null;
+  mock.beforeLock = null;
   mock.loads = 0;
   // Both the repository's backend and the store's cache are module-level state;
   // a leftover entry from the previous test would answer for tasks it never created.
@@ -2525,23 +2537,13 @@ const __dirname = dirname(fileURLToPath(import.meta.url));
 const STORE_SRC = realReadFileSync(join(__dirname, 'cosTaskStore.js'), 'utf-8');
 
 describe('working-set cache — no bypass (source guards, #3497)', () => {
-  // Everything outside the cache accessors. Any direct repository load or save
-  // the rest of the module makes is a bypass by definition.
-  const ACCESSOR_START = 'async function readTaskSnapshot';
-  const ACCESSOR_END = '/** Test hook: forget every cached working set. */';
-  const outsideAccessors = (() => {
-    const start = STORE_SRC.indexOf(ACCESSOR_START);
-    const end = STORE_SRC.indexOf(ACCESSOR_END);
-    if (start === -1 || end <= start) return null; // asserted below, not thrown here
-    return (STORE_SRC.slice(0, start) + STORE_SRC.slice(end))
-      .split('\n')
-      .filter(line => !line.trim().startsWith('//') && !line.trim().startsWith('*'));
-  })();
-
-  it('locates the cache accessors it is guarding', () => {
-    // If this fails the guards below are vacuous — the anchors drifted.
-    expect(outsideAccessors, `anchors "${ACCESSOR_START}" / "${ACCESSOR_END}" not found in order`).not.toBeNull();
-  });
+  const readSource = name => realReadFileSync(join(__dirname, name), 'utf-8');
+  const codeLines = source => source.split('\n')
+    .filter(line => !line.trim().startsWith('//') && !line.trim().startsWith('*'));
+  const workingSet = codeLines(readSource('cosTaskWorkingSet.js')).join('\n');
+  const outsideAccessors = [
+    STORE_SRC, readSource('cosTaskViews.js'), readSource('cosTaskReaper.js'), readSource('cosTaskChallenges.js'),
+  ].flatMap(codeLines);
 
   it('every working-set read goes through the snapshot cache', () => {
     // A read path calling the repository directly still works, but skips the
@@ -2549,6 +2551,8 @@ describe('working-set cache — no bypass (source guards, #3497)', () => {
     // in-place mutations out of the cache.
     const bypasses = outsideAccessors.filter(line => /\b(loadTaskWorkingSet|readTaskListVersion)\(/.test(line));
     expect(bypasses, `direct repository read(s): ${bypasses.join(' | ')}`).toEqual([]);
+    expect(workingSet.match(/\bloadTaskWorkingSet\(/g)).toHaveLength(1);
+    expect(workingSet.match(/\breadTaskListVersion\(/g)).toHaveLength(1);
   });
 
   it('every list save goes through writeTaskList', () => {
@@ -2557,12 +2561,12 @@ describe('working-set cache — no bypass (source guards, #3497)', () => {
     // one-field change a one-row write.
     const bypasses = outsideAccessors.filter(line => /\bapplyTaskListSave\(/.test(line));
     expect(bypasses, `direct applyTaskListSave call(s): ${bypasses.join(' | ')}`).toEqual([]);
+    expect(workingSet.match(/\bapplyTaskListSave\(/g)).toHaveLength(1);
   });
 
   it('writeTaskList persists a row diff, never the whole queue', () => {
-    const code = STORE_SRC.split('\n').filter(line => !line.trim().startsWith('//') && !line.trim().startsWith('*')).join('\n');
-    expect(code).toMatch(/planListSave\(\{ previous: snapshot\.rows, next: tasks, source \}\)/);
-    expect(code).not.toMatch(/generateTasksMarkdown|parseTasksMarkdown|atomicWrite/);
+    expect(workingSet).toMatch(/planListSave\(\{ previous: snapshot\.rows, next: tasks, source \}\)/);
+    expect([workingSet, ...outsideAccessors].join('\n')).not.toMatch(/generateTasksMarkdown|parseTasksMarkdown|atomicWrite/);
   });
 });
 
@@ -2997,21 +3001,16 @@ describe('cosTaskStore — stale failure-artifact reaper (#2619)', () => {
       expect(after.tasks.find(t => t.id === 'sys-running').status).toBe('in_progress');
     });
 
-    it('does not auto-expire a target that was revived between the snapshot and its flip', async () => {
+    it('does not auto-expire a target that was revived before taking the sweep lock', async () => {
       await addTask({ description: 'stale one', id: 'task-race1', priority: 'HIGH' }, 'user', { now: NOW });
       await addTask({ description: 'stale two', id: 'task-race2', priority: 'HIGH' }, 'user', { now: NOW });
       for (const id of ['task-race1', 'task-race2']) {
         await updateTask(id, { status: 'blocked', metadata: { blockedCategory: 'max-retries', blockedAt: daysAgo(20) } }, 'user', { now: NOW });
       }
-      // After the first flip lands, the user revives the second target (Resume
-      // → in_progress). Its flip was planned from the pre-revive snapshot.
-      mock.afterWrite = async (source) => {
-        if (source !== 'user') return false;
-        // Revive whichever target the sweep has not flipped yet.
+      // A resume queued ahead of the sweep commits after the candidate scan.
+      mock.beforeLock = async () => {
         const tasks = await stored('user');
-        const target = tasks.find(task => task.status === 'blocked' && task.id.startsWith('task-race'));
-        await seed('user', tasks.map(task => (task === target ? { ...task, status: 'in_progress' } : task)));
-        return true;
+        await seed('user', tasks.map(task => (task.id === 'task-race2' ? { ...task, status: 'in_progress' } : task)));
       };
       const res = await sweepResolvedFailureTasks({ now: NOW });
       expect(res).toMatchObject({ reaped: 1, staleBlocks: 1 });
@@ -3034,9 +3033,8 @@ describe('cosTaskStore — stale failure-artifact reaper (#2619)', () => {
         affectedTasks: ['task-race-origin'],
       }, 'internal', { now: NOW });
 
-      // The first user-queue flip lands before the investigation's planned
-      // internal-queue flip. Resume the origin in that gap; the investigation
-      // must be checked against this fresh origin state, not the sweep snapshot.
+      // Another process resumes the origin after the user batch commits.
+      // The internal save must reject its stale origin queue version.
       mock.afterWrite = async (source) => {
         if (source !== 'user') return false;
         const tasks = await stored('user');
@@ -3059,14 +3057,12 @@ describe('cosTaskStore — stale failure-artifact reaper (#2619)', () => {
           status: 'blocked', metadata: { blockedCategory: 'max-retries', blockedAt: daysAgo(20) },
         }, 'user', { now: NOW });
       }
-      mock.afterWrite = async (source) => {
-        if (source !== 'user') return false;
-        // Model a fresh failure or user-decision hold after the snapshot, with
-        // the same status as before. The completed first row stays untouched.
+      mock.beforeLock = async () => {
+        // The fresh failure or user-decision hold keeps the same status.
         const tasks = await stored('user');
-        const held = tasks.find(task => task.status === 'blocked');
-        await seed('user', tasks.map(task => (task === held ? { ...task, metadata: { ...task.metadata, [key]: value } } : task)));
-        return true;
+        await seed('user', tasks.map(task => (task.id === 'task-episode2'
+          ? { ...task, metadata: { ...task.metadata, [key]: value } }
+          : task)));
       };
       expect(await sweepResolvedFailureTasks({ now: NOW })).toMatchObject({ reaped: 1, staleBlocks: 1 });
       const tasks = (await getUserTasks()).tasks;
@@ -3087,10 +3083,44 @@ describe('cosTaskStore — stale failure-artifact reaper (#2619)', () => {
       expect(after.tasks.filter(t => t.status === 'blocked')).toHaveLength(2);
     });
 
-    it('is a no-op returning zeroed counts when nothing is reapable', async () => {
-      await addTask({ description: 'plain pending', id: 'task-p', priority: 'LOW' }, 'user', { now: NOW });
-      const res = await sweepResolvedFailureTasks({ now: NOW });
-      expect(res).toEqual({ reaped: 0, staleBlocks: 0, investigations: 0 });
+    it('scans an idle sweep without cloning or writing either queue', async () => {
+      await seed('user', [{ description: 'plain pending', id: 'task-p', priority: 'LOW', status: 'pending', metadata: {} }]);
+      const write = vi.mocked(repository.applyTaskListSave).mockClear();
+      const clone = vi.spyOn(globalThis, 'structuredClone');
+      try {
+        expect(await sweepResolvedFailureTasks({ now: NOW })).toEqual({ reaped: 0, staleBlocks: 0, investigations: 0 });
+        expect(clone).not.toHaveBeenCalled();
+        expect(write).not.toHaveBeenCalled();
+      } finally {
+        clone.mockRestore();
+      }
+    });
+
+    it('commits one write per queue for 50 targets and emits every completion', async () => {
+      const failure = (id) => ({
+        id, description: 'stale failure', status: 'blocked', priority: 'HIGH',
+        metadata: { blockedCategory: 'max-retries', blockedAt: daysAgo(20) },
+      });
+      await seed('user', [
+        ...Array.from({ length: 25 }, (_, i) => failure(`task-old-${i}`)),
+        { id: 'task-origin', description: 'resolved origin', status: 'completed', priority: 'HIGH', metadata: {} },
+      ]);
+      await seed('internal', [
+        ...Array.from({ length: 24 }, (_, i) => failure(`sys-old-${i}`)),
+        { id: 'sys-inv', description: 'investigation', status: 'pending', priority: 'HIGH',
+          metadata: { isInvestigation: true, affectedTasks: ['task-origin'] } },
+      ]);
+      const write = vi.mocked(repository.applyTaskListSave).mockClear();
+
+      expect(await sweepResolvedFailureTasks({ now: NOW })).toEqual({ reaped: 50, staleBlocks: 49, investigations: 1 });
+      expect(write.mock.calls.map(([source, plan]) => [source, plan.upserts.length])).toEqual([['user', 25], ['internal', 25]]);
+      const changes = mock.events.filter(({ name }) => name === 'tasks:changed').map(({ payload }) => payload);
+      expect(changes).toHaveLength(50);
+      expect(new Set(changes.map(({ task }) => task.id)).size).toBe(50);
+      expect(changes.every(({ task }) => task.status === 'completed')).toBe(true);
+      expect(changes.find(({ task }) => task.id === 'sys-inv')).toMatchObject({ previousStatus: 'pending', type: 'internal' });
+      expect((await stored('user')).every(task => task.status === 'completed')).toBe(true);
+      expect((await stored('internal')).every(task => task.status === 'completed')).toBe(true);
     });
   });
 });
@@ -3201,6 +3231,30 @@ describe('cosTaskStore.resolveTaskChallengeWithRecheck (#2471)', () => {
     expect(resolved.status).toBe('blocked');
     expect(resolved.metadata.challengeResolution.outcome).toBe('escalated');
     expect(mock.reviewCalls[0].model).toBe('coder-7b');
+  });
+
+  it.each(['blocking', 'recommended'])('escalates normalized %s findings', async (severity) => {
+    const id = await seedChallenged();
+    const { verdict } = normalizeCodeReviewVerdict(JSON.stringify({
+      verdict: 'findings',
+      findings: [{ severity, location: 'example.js:4', outcome: 'A failed save loses the edit.', fix: 'Retain the edit when saving fails.' }],
+    }));
+    expect(classifyRecheckOutcome(verdict.findings)).toBe('escalated');
+    mock.review = { ok: true, ...verdict };
+
+    const resolved = await resolveTaskChallengeWithRecheck(id, { recheck: { backend: 'ollama', diff: 'diff' } });
+    expect(resolved.status).toBe('blocked');
+    expect(resolved.metadata.challengeResolution.outcome).toBe('escalated');
+    expect(resolved.metadata.challengeResolution.note).toContain('a finding still requires resolution');
+  });
+
+  it('keeps the task challenged when a successful request returns unusable findings', async () => {
+    const id = await seedChallenged();
+    mock.review = { ok: true, findings: 'Review interrupted' };
+
+    const result = await resolveTaskChallengeWithRecheck(id, { recheck: { backend: 'ollama', diff: 'diff' } });
+    expect(result.code).toBe('RECHECK_FAILED');
+    expect((await getTaskById(id)).status).toBe('challenged');
   });
 
   // The model read is keyed off `<backend>Model`, not an ollama-or-lmstudio

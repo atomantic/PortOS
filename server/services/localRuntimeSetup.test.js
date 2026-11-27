@@ -1,5 +1,17 @@
-import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { join } from 'node:path';
+import { rm } from 'node:fs/promises';
+import { recordingOperatorIo } from '../test/recordingOperatorIo.js';
+import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { pinPlatform } from '../lib/testHelper.js';
+import { slotstreamBinDir } from '../lib/slotstreamModels.js';
+import { getModelManifest, resetModelManifestCache } from './modelManifest.js';
+
+const { tempRoot, makeProxy, cleanup } = await vi.hoisted(async () => {
+  const { mockPathsDataRoot } = await import('../lib/mockPathsDataRoot.js');
+  return mockPathsDataRoot({ prefix: 'portos-local-runtime-setup-' });
+});
+vi.mock('../lib/fileUtils.js', async (importOriginal) => makeProxy(await importOriginal()));
+afterAll(cleanup);
 
 const probe = vi.hoisted(() => ({ probeOpenAiModels: vi.fn() }));
 vi.mock('../lib/openAiModelsProbe.js', () => probe);
@@ -26,7 +38,8 @@ const localLlm = vi.hoisted(() => ({
   controlOllamaServer: vi.fn(async () => ({ success: true })),
 }));
 vi.mock('./localLlm.js', () => localLlm);
-vi.mock('./lmStudioManager.js', () => ({ isAppInstalled: () => false }));
+const lmStudio = vi.hoisted(() => ({ isAppInstalled: vi.fn(() => false) }));
+vi.mock('./lmStudioManager.js', () => lmStudio);
 // MTPLX's model cache — this module reads it directly (the checklist's refusals
 // and its `pull-start` download button are phrased for THIS surface, so the
 // reading happens here rather than inside the manager).
@@ -53,6 +66,29 @@ const vllmManager = vi.hoisted(() => ({
   startVllmQwenProject: vi.fn(async () => ({ success: true })),
 }));
 vi.mock('./vllmQwenManager.js', () => vllmManager);
+const slotstream = vi.hoisted(() => ({
+  installSlotstream: vi.fn(async () => ({ success: true })),
+  startSlotstreamServer: vi.fn(async () => ({ success: true })),
+}));
+vi.mock('./slotstreamServerManager.js', async (importOriginal) => ({ ...(await importOriginal()), ...slotstream }));
+const splash = vi.hoisted(() => ({
+  supportsManagedSplash: vi.fn(),
+  readInstalledSplashVersion: vi.fn(),
+  SPLASH_UNSUPPORTED_REASON: 'Splash requires macOS 26.4 or later and an Apple M3 or newer.',
+  installSplashRuntime: vi.fn(),
+  startSplashServer: vi.fn(),
+}));
+vi.mock('./splashManagedRuntime.js', () => splash);
+vi.mock('./splashServerManager.js', () => splash);
+const mkserve = vi.hoisted(() => ({
+  supportsMkserve: vi.fn(),
+  readMkserveInstall: vi.fn(),
+  MKSERVE_UNSUPPORTED_REASON: 'mkserve requires Apple M5 Max.',
+  installMkserve: vi.fn(),
+  startMkserveServer: vi.fn(),
+}));
+vi.mock('./mkserveRuntimeInstall.js', () => mkserve);
+vi.mock('./mkserveRuntimeManager.js', () => mkserve);
 const providerSync = vi.hoisted(() => ({ syncRuntimeProviderModels: vi.fn(async () => false) }));
 vi.mock('./localRuntimeProviderSync.js', () => providerSync);
 // The SGLang project on disk, and the CUDA probe its start row consults BEFORE
@@ -104,19 +140,22 @@ beforeEach(() => {
   mtplx.startMtplxServer.mockResolvedValue({ success: true, endpoint: 'http://127.0.0.1:8000/v1' });
 });
 
-afterEach(() => {
+afterEach(async () => {
   vi.clearAllMocks();
   pathLookup.findCommandOnPath.mockReturnValue(null);
+  lmStudio.isAppInstalled.mockReturnValue(false);
   commands.commandExists.mockResolvedValue(true);
   streaming.runStreamingCommand.mockResolvedValue({ success: true });
   // The placement loop writes this on a Windows host so the rest of the run
   // resolves the detected directory; it must not leak into the next test.
   delete process.env.SGLANG_QWEN_PROJECT_DIR;
+  await rm(join(tempRoot, 'model-manifest.json'), { force: true });
+  resetModelManifestCache();
 });
 
 describe('describeRuntimeSetup', () => {
   it('covers every runtime the readiness checklist can report', () => {
-    expect([...SETUP_RUNTIME_KINDS].sort()).toEqual(['llama', 'lmstudio', 'mtplx', 'ollama', 'sglang', 'slotstream', 'vllm']);
+    expect([...SETUP_RUNTIME_KINDS].sort()).toEqual(['llama', 'lmstudio', 'mkserve', 'mtplx', 'ollama', 'sglang', 'slotstream', 'splash', 'vllm']);
   });
 
   it('offers install AND start when nothing is there yet', () => {
@@ -266,6 +305,16 @@ describe('runLocalRuntimeSetup', () => {
     expect(result).toMatchObject({ success: true, message: expect.stringContaining('qwen3') });
   });
 
+  it('recognizes the installed LM Studio app and explains how to enable its CLI', async () => {
+    lmStudio.isAppInstalled.mockReturnValue(true);
+    probe.probeOpenAiModels.mockResolvedValue(unreachable);
+    expect(await runLocalRuntimeSetup('lmstudio', { action: 'start' })).toMatchObject({
+      success: false, error: expect.stringContaining('lms bootstrap'),
+    });
+    expect(localLlm.installBackend).not.toHaveBeenCalled();
+    expect(streaming.runStreamingCommand).not.toHaveBeenCalled();
+  });
+
   it('starts an installed-but-stopped Ollama', async () => {
     pathLookup.findCommandOnPath.mockReturnValue('/opt/homebrew/bin/ollama');
     probe.probeOpenAiModels
@@ -322,7 +371,7 @@ describe('runLocalRuntimeSetup', () => {
 
   it('refreshes the presets fronting a managed runtime once its start is confirmed, and only then', async () => {
     pathLookup.findCommandOnPath.mockReturnValue('/opt/homebrew/bin/mtplx');
-    const io = { emit: vi.fn() };
+    const io = recordingOperatorIo();
     const restore = pinPlatform('darwin');
     probe.probeOpenAiModels.mockResolvedValueOnce(unreachable).mockResolvedValueOnce(unreachable).mockResolvedValueOnce(reachable(['mtplx']));
     await runLocalRuntimeSetup('mtplx', { endpoint: 'http://127.0.0.1:8000/v1', io });
@@ -374,26 +423,66 @@ describe('runLocalRuntimeSetup', () => {
     // The other half of the fix: the button the checklist now offers actually
     // fetches the weights, so the user is not sent to a terminal.
     pathLookup.findCommandOnPath.mockReturnValue('/opt/homebrew/bin/mtplx');
-    // The cache is read by the START step, which runs AFTER the pull — so what
-    // it reports here is what the download just landed.
-    mtplxCache.listMtplxCachedModels
-      .mockResolvedValueOnce(cachedModels([{ repo_id: 'Example/Fresh', validation: { ok: true } }]));
+    mtplxCache.listMtplxCachedModels.mockResolvedValue(cachedModels([
+      { repo_id: 'Example/Partial', validation: { ok: false } },
+      { repo_id: 'Example/Fresh', validation: { ok: true }, has_runtime_contract: true },
+      { repo_id: 'Example/Existing', validation: { ok: true } },
+    ]));
+    streaming.runStreamingCommand.mockImplementationOnce(async (_binary, _args, onLine) => {
+      onLine('Downloading checkpoint files');
+      onLine('model: Example/Fresh');
+      return { success: true };
+    });
     probe.probeOpenAiModels
       .mockResolvedValueOnce(unreachable)
       .mockResolvedValueOnce(unreachable)
       .mockResolvedValueOnce(reachable(['mtplx']));
     const restore = pinPlatform('darwin');
 
-    const result = await runLocalRuntimeSetup('mtplx', { endpoint: 'http://127.0.0.1:8000/v1', action: 'pull-start' });
+    const beforePull = Date.now();
+    const emit = vi.fn();
+    const result = await runLocalRuntimeSetup('mtplx', { endpoint: 'http://127.0.0.1:8000/v1', action: 'pull-start', emit });
     restore();
 
     expect(streaming.runStreamingCommand).toHaveBeenCalledWith(
       '/opt/homebrew/bin/mtplx', ['pull'], expect.any(Function), expect.objectContaining({ splitRe: expect.any(RegExp) }),
     );
+    expect(emit).toHaveBeenCalledWith('Downloading checkpoint files');
     // The checkpoint the pull just landed is handed to the manager, so it does
     // not walk the same cache a second time for one start.
     expect(mtplx.startMtplxServer).toHaveBeenCalledWith(expect.objectContaining({ port: 8000, model: 'Example/Fresh' }));
     expect(result.success).toBe(true);
+    const manifest = await getModelManifest();
+    expect(manifest.reconciledAt).toBeNull();
+    expect(manifest.models).toEqual([expect.objectContaining({
+      id: 'mtplx:Example--Fresh',
+      name: 'Example/Fresh',
+      source: 'download',
+    })]);
+    expect(Date.parse(manifest.models[0].installedAt)).toBeGreaterThanOrEqual(beforePull);
+    expect(Date.parse(manifest.models[0].installedAt)).toBeLessThanOrEqual(Date.now());
+  });
+
+  it('records the checkpoint before a subsequent start fails', async () => {
+    pathLookup.findCommandOnPath.mockReturnValue('/opt/homebrew/bin/mtplx');
+    probe.probeOpenAiModels.mockResolvedValue(unreachable);
+    mtplxCache.listMtplxCachedModels.mockResolvedValue(cachedModels([{ repo_id: 'Example/Downloaded', validation: { ok: true } }]));
+    const manifestAtStart = vi.fn();
+    mtplx.startMtplxServer.mockImplementation(async () => {
+      manifestAtStart(await getModelManifest());
+      throw new Error('Port is already in use');
+    });
+    const restore = pinPlatform('darwin');
+
+    const result = await runLocalRuntimeSetup('mtplx', { endpoint: 'http://127.0.0.1:8000/v1', action: 'pull-start' });
+    restore();
+
+    expect(result).toMatchObject({ success: false, error: expect.stringContaining('Port is already in use') });
+    expect(manifestAtStart).toHaveBeenCalledWith({
+      reconciledAt: null,
+      models: [expect.objectContaining({ id: 'mtplx:Example--Downloaded', source: 'download' })],
+    });
+    expect((await getModelManifest()).models).toHaveLength(1);
   });
 
   it('never downloads weights behind an explicit plain start', async () => {
@@ -422,7 +511,7 @@ describe('runLocalRuntimeSetup', () => {
     pathLookup.findCommandOnPath.mockReturnValue('/opt/homebrew/bin/mtplx');
     mtplxCache.listMtplxCachedModels
       .mockResolvedValueOnce(cachedModels([]))
-      .mockResolvedValueOnce(cachedModels([{ repo_id: 'Example/Fresh', validation: { ok: true } }]));
+      .mockResolvedValue(cachedModels([{ repo_id: 'Example/Fresh', validation: { ok: true } }]));
     probe.probeOpenAiModels
       .mockResolvedValueOnce(unreachable)
       .mockResolvedValueOnce(unreachable)
@@ -494,17 +583,30 @@ describe('runLocalRuntimeSetup', () => {
     expect(mtplxCache.listMtplxCachedModels).not.toHaveBeenCalled();
   });
 
-  it('stops at a failed download rather than starting a server that cannot serve', async () => {
-    streaming.runStreamingCommand.mockResolvedValue({ success: false, error: 'exit 1: connection reset' });
+  it.each([
+    ['failed', 'exit 1: connection reset'],
+    ['cancelled', 'cancelled'],
+  ])('neither records nor starts after a %s download', async (outcome, error) => {
+    let cancelled = false;
+    streaming.runStreamingCommand.mockImplementationOnce(async (_binary, _args, onLine, options) => {
+      cancelled = outcome === 'cancelled';
+      onLine('model: Example/Interrupted');
+      return options.isCancelled() || outcome === 'failed'
+        ? { success: false, error }
+        : { success: true };
+    });
     pathLookup.findCommandOnPath.mockReturnValue('/opt/homebrew/bin/mtplx');
     probe.probeOpenAiModels.mockResolvedValue(unreachable);
     const restore = pinPlatform('darwin');
 
-    const result = await runLocalRuntimeSetup('mtplx', { endpoint: 'http://127.0.0.1:8000/v1', action: 'pull-start' });
+    const result = await runLocalRuntimeSetup('mtplx', {
+      endpoint: 'http://127.0.0.1:8000/v1', action: 'pull-start', isCancelled: () => cancelled,
+    });
     restore();
 
     expect(mtplx.startMtplxServer).not.toHaveBeenCalled();
-    expect(result).toMatchObject({ success: false, error: expect.stringContaining('connection reset') });
+    expect(result).toMatchObject({ success: false, error: expect.stringContaining(error) });
+    expect((await getModelManifest()).models).toEqual([]);
   });
 
   it('announces the cached checkpoint once, not once per layer', async () => {
@@ -782,7 +884,7 @@ describe('sglang — a hardware gate in front of the same never-provision postur
 
     const result = await startOnLinux();
 
-    expect(result).toMatchObject({ success: false, error: expect.stringMatching(/qwen38-rtx3090/) });
+    expect(result).toMatchObject({ success: false, error: expect.stringMatching(/local-llm-runtimes\.md#vllm-on-rtx-3090/) });
     expect(streaming.runStreamingCommand).not.toHaveBeenCalled();
     expect(sglangProject.inspectSglangQwenProject).not.toHaveBeenCalled();
     restore();
@@ -892,7 +994,7 @@ describe('sglang — a hardware gate in front of the same never-provision postur
     // SGLang has no provisioner, so the refusal must NOT promise that clicking
     // again places the project — it points at the doc the operator prepares it
     // from. That clause is the one piece of this refusal that is per-stack.
-    expect(result.error).toContain('docs/features/sglang-qwen38.md');
+    expect(result.error).toContain('docs/features/local-llm-runtimes.md#sglang-on-hopper-or-blackwell');
     expect(result.error).not.toMatch(/PortOS will place the project inside it/);
     restore();
   });
@@ -909,4 +1011,94 @@ describe('sglang — a hardware gate in front of the same never-provision postur
     expect(streaming.runStreamingCommand).not.toHaveBeenCalled();
     restore();
   });
+});
+
+describe.each([
+  {
+    kind: 'splash', installation: '1.7.2', download: '~17 GB', installed: splash.readInstalledSplashVersion,
+    supported: splash.supportsManagedSplash, install: splash.installSplashRuntime, start: splash.startSplashServer,
+    progress: 'Loading Splash',
+  },
+  {
+    kind: 'mkserve', installation: { version: 'pinned' }, download: '~19 GiB', installed: mkserve.readMkserveInstall,
+    supported: mkserve.supportsMkserve, install: mkserve.installMkserve, start: mkserve.startMkserveServer,
+    progress: { message: 'Loading mkserve' },
+  },
+])('one-click $kind setup', ({ kind, installation, download, installed, supported, install, start, progress }) => {
+  beforeEach(() => {
+    supported.mockReturnValue(true);
+    installed.mockResolvedValue(null);
+    install.mockResolvedValue({ success: true });
+    start.mockImplementation(async ({ onProgress }) => {
+      onProgress(progress);
+      return { success: true };
+    });
+    probe.probeOpenAiModels.mockResolvedValueOnce(unreachable).mockResolvedValueOnce(unreachable).mockResolvedValue(reachable());
+  });
+
+  it('offers the bundled model download when missing and starts after an explicit install', async () => {
+    expect(describeRuntimeSetup(kind, { installed: false, running: false })).toMatchObject({
+      action: 'install-start',
+      actionLabel: expect.stringContaining(download),
+      provisions: true,
+    });
+
+    // An unmanaged command on PATH must not make the bundled install look present.
+    pathLookup.findCommandOnPath.mockReturnValue('/usr/local/bin/example');
+    const emit = vi.fn();
+    expect(await runLocalRuntimeSetup(kind, { action: 'install-start', emit })).toMatchObject({ success: true });
+    expect(install).toHaveBeenCalledOnce();
+    expect(start).toHaveBeenCalledOnce();
+    expect(install.mock.invocationCallOrder[0]).toBeLessThan(start.mock.invocationCallOrder[0]);
+    expect(emit).toHaveBeenCalledWith(typeof progress === 'string' ? progress : progress.message);
+  });
+
+  it('starts the managed install without reinstalling it', async () => {
+    installed.mockResolvedValue(installation);
+    expect(await runLocalRuntimeSetup(kind, { action: 'start' })).toMatchObject({ success: true });
+    expect(install).not.toHaveBeenCalled();
+    expect(start).toHaveBeenCalledOnce();
+  });
+
+  it('refuses to download weights if the install has disappeared since Start was shown', async () => {
+    expect(await runLocalRuntimeSetup(kind, { action: 'start' })).toMatchObject({
+      success: false,
+      error: expect.stringContaining(download),
+    });
+    expect(install).not.toHaveBeenCalled();
+    expect(start).not.toHaveBeenCalled();
+  });
+
+  it('refuses setup when the manager cannot run on this host', async () => {
+    supported.mockReturnValue(false);
+    expect(await runLocalRuntimeSetup(kind, { action: 'install-start' })).toMatchObject({
+      success: false,
+      error: expect.stringContaining('requires'),
+    });
+    expect(install).not.toHaveBeenCalled();
+    expect(start).not.toHaveBeenCalled();
+  });
+
+  it('refuses setup for a custom port the managed server cannot bind', async () => {
+    expect(await runLocalRuntimeSetup(kind, {
+      action: 'install-start', endpoint: 'http://127.0.0.1:9100/v1',
+    })).toMatchObject({ success: false, error: expect.stringContaining('Use that endpoint') });
+    expect(install).not.toHaveBeenCalled();
+    expect(start).not.toHaveBeenCalled();
+  });
+});
+
+it('starts a release-installed Slotstream binary without reinstalling', async () => {
+  const restore = pinPlatform('darwin');
+  try {
+    const executable = join(slotstreamBinDir(), 'slotstream');
+    pathLookup.findCommandOnPath.mockImplementation((command) => command === executable ? executable : null);
+    probe.probeOpenAiModels.mockResolvedValueOnce(unreachable).mockResolvedValueOnce(unreachable).mockResolvedValue(reachable());
+    expect(await runLocalRuntimeSetup('slotstream', { action: 'start' })).toMatchObject({ success: true });
+    expect(slotstream.installSlotstream).not.toHaveBeenCalled();
+    expect(slotstream.startSlotstreamServer).toHaveBeenCalledOnce();
+    expect(pathLookup.findCommandOnPath).toHaveBeenCalledWith(executable);
+  } finally {
+    restore();
+  }
 });

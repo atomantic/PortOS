@@ -7,7 +7,7 @@ const getAccount = vi.fn();
 const listTerritories = vi.fn();
 const syncAccount = vi.fn();
 const emit = vi.fn();
-vi.mock('./socketIo.js', () => ({ getIo: () => ({ emit }) }));
+vi.mock('./socketIo.js', () => ({ emitToOperators: (...args) => emit(...args) }));
 vi.mock('./eventScheduler.js', () => ({ schedule, cancel }));
 vi.mock('./stackerNews.js', () => ({ listAccounts, getAccount, listTerritories, syncAccount }));
 const { reconcileStackerNewsSchedulers, stopStackerNewsSchedulers } = await import('./stackerNewsScheduler.js');

@@ -1,3 +1,4 @@
+import { SELF_CLEARING_RESUBMIT_INTERVAL_MS, SELF_CLEARING_RESUBMIT_ECHO_MS } from '../test/fixtures/tuiTiming.js';
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { mkdtemp, rm, writeFile } from 'fs/promises';
 import { tmpdir } from 'os';
@@ -121,7 +122,7 @@ vi.mock('../lib/fileUtils.js', async () => {
 
 import { cleanTuiResponse, resolveTuiResponseText, executeTuiRun } from './tuiPromptRunner.js';
 import { markHostShuttingDown, resetHostShutdownFlagForTests } from '../lib/hostShutdown.js';
-import { SELF_CLEARING_RESUBMIT_INTERVAL_MS, SELF_CLEARING_RESUBMIT_ECHO_MS, TUI_INPUT_READY_DEADLINE_MS } from '../lib/tuiHandshake.js';
+import { TUI_INPUT_READY_DEADLINE_MS } from '../lib/tuiHandshake.js';
 
 const makeFakePty = () => {
   const fake = {
@@ -1849,6 +1850,24 @@ describe('executeTuiRun', () => {
         exitCode: 0,
         error: null,
         extras: expect.objectContaining({ completionReason: 'exit' }),
+      }));
+    });
+
+    it('keeps the PTY run and captured response intact when the streaming callback throws', async () => {
+      const run = executeTuiRun({
+        runId: 'run-output-hook', provider: { id: 'example', type: 'tui', command: 'echo' },
+        prompt: 'Example prompt', workspacePath: TEST_WORKSPACE,
+        onData() { throw new Error('Example stream failure'); },
+      });
+      await flushAsync();
+      const [pty] = ptyInstances;
+      pty.emitData('Example answer');
+      pty.emitExit({ exitCode: 0 });
+      await run;
+
+      expect(console.error).toHaveBeenCalledWith(expect.stringContaining('output hook failed'));
+      expect(runnerMocks.finalizeRunRecord).toHaveBeenCalledWith(expect.objectContaining({
+        runId: 'run-output-hook', success: true, output: 'Example answer',
       }));
     });
 

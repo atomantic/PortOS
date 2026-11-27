@@ -2,23 +2,21 @@
  * Media-generation & local-model infrastructure Zod schemas (split out of the retired
  * validation.js catch-all, issue #1831).
  *
- * Media-generation & local-model infra schemas (LoRA training, local-LLM/Ollama/LM Studio management,
- * media-collection bulk ops).
- *
- * Covers LoRA training config + run params, the local-LLM (Ollama / LM Studio)
- * backend management routes, OpenWorld snapshot config/query, and the media-
- * collection bulk add/remove payloads, plus the media sketch save body.
+ * Covers local-LLM backend management (Ollama / LM Studio), OpenWorld
+ * snapshot config/query, media-collection bulk add/remove and media sketch saves.
  */
 import { z } from 'zod';
 import { isSplashContextWindow } from './splashRuntime.js';
 import { PORTS } from './ports.js';
+import { LOCAL_TUI_AGENT_BENCHMARK_TARGETS } from './localAgentBenchmarkTargets.js';
 import { ASSESSABLE_RUNTIMES } from './localProviderRuntime.js';
 import { BENCHMARK_PROFILE, SWEEP_SCOPES } from './localModelAssessment.js';
 import { CAPABILITY_TEST_IDS } from './modelCapabilityTests.js';
 import { HF_REPO_ID_RE } from './huggingfaceLora.js';
+import { isSlotstreamCheckpointId } from './slotstreamModels.js';
 import { SPEC_MODEL_ROLES } from './specDecodePresets.js';
 import { isLoopbackHostname, parseBrowserOrigin } from './beeperOAuthOrigin.js';
-import { MEDIA_COLLECTION_BULK_MAX } from './mediaItemKey.js';
+import { ANNOTATION_KINDS, isValidAnnotationKey, MEDIA_COLLECTION_BULK_MAX } from './mediaItemKey.js';
 
 // iMessage ingestion config (#2151) — the `settings.imessage` slice. Sync is OFF
 // by default and only reads chat.db when enabled (needs macOS Full Disk Access).
@@ -169,19 +167,29 @@ export const localLlmBackendSchema = z.enum(['ollama', 'lmstudio']);
 export const localLlmModelIdSchema = z.string().min(1).max(256)
   .refine((v) => !v.startsWith('-'), { message: 'modelId may not start with "-"' })
   .refine((v) => !/[\0\r\n]/.test(v), { message: 'modelId may not contain control characters (NUL, CR, LF)' });
-export const localLlmInstallSchema = z.object({
+export const localLlmModelTargetSchema = z.object({
   backend: localLlmBackendSchema,
   modelId: localLlmModelIdSchema,
+});
+export const localLlmInstallSchema = localLlmModelTargetSchema.extend({
   // Re-pull even when the model is already on disk. Needed when a publisher
   // replaces GGUF files in place (e.g. Unsloth Dynamic 3.0) under the same id.
   force: z.boolean().optional(),
 });
-export const localLlmDeleteSchema = localLlmInstallSchema;
-// Memory-management unload: same `backend` + `modelId` shape as install/delete
-// so the validator catches the same set of malformed ids (no leading dash,
-// no control chars) — those reach Ollama via `/api/generate` body fields and
-// then echo into PortOS's emoji-prefixed unload log line.
-export const localLlmUnloadSchema = localLlmInstallSchema;
+export const localLlmDeleteSchema = localLlmModelTargetSchema;
+// Memory-management unload targets Ollama only. Keep model-id validation shared
+// because the value reaches Ollama's API and PortOS's unload log line.
+export const localLlmUnloadSchema = localLlmModelTargetSchema.extend({ backend: z.literal('ollama') });
+const localLlmBooleanQuerySchema = z.enum(['0', '1', 'true', 'false']);
+export const localLlmCatalogQuerySchema = z.object({
+  backend: localLlmBackendSchema,
+  q: z.string().max(160).optional().default(''),
+  variants: localLlmBooleanQuerySchema.optional(),
+});
+export const localLlmLoadedQuerySchema = z.object({ fresh: localLlmBooleanQuerySchema.optional() });
+export const manualGuardScanSchema = z.object({
+  content: z.string().min(1).max(2_000_000).refine(value => value.trim().length > 0),
+}).strict();
 export const localLlmSwitchSchema = z.object({ to: localLlmBackendSchema });
 // Migrate moves models from the OTHER backend onto `to` (bidirectional, never
 // flips the default marker). `mode` picks how the GGUF lands on disk: 'link'
@@ -206,6 +214,8 @@ export const localLlmLmStudioServiceSchema = z.object({ action: z.enum(['start',
 // These curated runtimes never accept a host, port, executable, or artifact
 // override from an HTTP request.
 export const managedInklingActionSchema = z.strictObject({});
+export const mkserveInstallSchema = z.strictObject({ repair: z.boolean().optional() });
+export const managedInklingCancelSchema = z.strictObject({ operationId: z.uuid().optional() });
 
 export const splashContextSchema = z.strictObject({
   contextWindow: z.number().refine(isSplashContextWindow, 'Choose a supported Splash context window'),
@@ -234,6 +244,9 @@ export const localLlmSlotstreamStartSchema = z.object({
 // no "download whatever" default for a transfer this size.
 const slotstreamModelSchema = z.string().trim().min(1).max(200);
 export const localLlmSlotstreamDownloadSchema = z.object({ model: slotstreamModelSchema });
+export const localLlmSlotstreamRemoveSchema = z.object({
+  model: z.string().refine(isSlotstreamCheckpointId, 'model must be a checkpoint directory name'),
+});
 // MTPLX model catalog. `mtplx forge discover` is upstream's own index of
 // MTPLX-branded MTP checkpoints; an empty query means its default listing.
 export const localLlmMtplxSearchSchema = z.object({
@@ -402,11 +415,10 @@ export const localLlmAssessmentBenchmarkSchema = z.object({
 export const localLlmAssessmentIntentSchema = z.object({
   intent: z.enum(['balanced', 'smartest', 'fastest', 'lightweight']).optional().default('balanced'),
 });
-// One explicit local-TUI task through each configured Qwen runtime preset. The
-// service still restricts the model id and provider to the named target for that
-// backend, so this endpoint cannot become an arbitrary CLI launcher.
+// One explicit local-TUI task. The service restricts execution to the
+// configured local runtime presets and checks MTPLX cache membership.
 export const localLlmAgentBenchmarkSchema = z.object({
-  backend: z.enum(['ollama', 'ollama-coder', 'mtplx', 'llama', 'claude-ollama']),
+  backend: z.enum(Object.keys(LOCAL_TUI_AGENT_BENCHMARK_TARGETS)),
   modelId: localLlmModelIdSchema,
   timeoutMs: z.coerce.number().int().min(10000).max(600000).optional().default(600000),
 });
@@ -525,6 +537,16 @@ export const mediaSketchSaveSchema = z.object({
   // Flattened raster (image + strokes) as a PNG data URL. Optional so a caller
   // can persist just the vector layer; the service decodes + stores the bytes.
   png: z.string().startsWith('data:image/png;base64,').optional()
+});
+
+// GET /api/media/annotations accepts one key or a repeated keys query param.
+const annotationKeySchema = z.string().refine(isValidAnnotationKey, 'Invalid annotation key');
+export const mediaAnnotationsQuerySchema = z.object({
+  kind: z.enum(ANNOTATION_KINDS).optional(),
+  keys: z.union([
+    annotationKeySchema.transform(key => [key]),
+    z.array(annotationKeySchema).min(1).max(100),
+  ]).optional(),
 });
 
 // POST /api/media/collections/:id/primary

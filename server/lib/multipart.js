@@ -131,7 +131,6 @@ function streamMultipart(req, boundary, acceptedNames, maxSize, fileFilter, next
   let currentFilename = null;
   let isMatchingFile = false;     // true when current part is one of acceptedNames
   let writeStream = null;
-  let writePath = null;
   let bytesWritten = 0;
   let textBuf = null;             // Buffer when current part is a text field
 
@@ -145,11 +144,7 @@ function streamMultipart(req, boundary, acceptedNames, maxSize, fileFilter, next
     if (done) return;
     done = true;
     state = STATE_DONE;
-    if (writeStream) {
-      writeStream.destroy();
-      // Best-effort cleanup of the partially-written file.
-      if (writePath) unlink(writePath).catch(() => {});
-    }
+    writeStream?.destroy();
     // Also drop any already-finalized files — a fail mid-request must not
     // leak completed uploads to the OS temp dir.
     for (const f of Object.values(fileResults)) {
@@ -166,19 +161,10 @@ function streamMultipart(req, boundary, acceptedNames, maxSize, fileFilter, next
     // accepting a partial upload (could matter for a 2GB Apple Health
     // import that gets cut off mid-stream).
     if (state !== STATE_DONE) {
-      // Clean up any partially-written file before failing.
-      if (writeStream) writeStream.destroy();
-      if (writePath) unlink(writePath).catch(() => {});
-      // Also drop any files already finalized before the truncation.
-      for (const f of Object.values(fileResults)) {
-        if (f?.path) unlink(f.path).catch(() => {});
-      }
-      done = true;
       const err = new Error('Truncated multipart request — never reached terminal boundary');
       err.code = 'INVALID_MULTIPART';
       err.status = 400;
-      next(err);
-      return;
+      return fail(err);
     }
     done = true;
     req.body = body;
@@ -208,7 +194,7 @@ function streamMultipart(req, boundary, acceptedNames, maxSize, fileFilter, next
       const mimeMatch = headerStr.match(/Content-Type:\s*([^\r\n]+)/i);
       currentFileMimetype = mimeMatch ? mimeMatch[1].trim() : 'application/octet-stream';
       if (isMatchingFile) {
-        // `fieldname` matches multer's API contract — videoGen.js's filter
+        // `fieldname` matches multer's API contract — videoGenRender.js's filter
         // dispatches on it to enforce per-field MIME rules (image/* on
         // sourceImage|lastImage, audio/* on audioFile).
         const fileMeta = { fieldname: currentName, originalname: currentFilename, mimetype: currentFileMimetype };
@@ -219,7 +205,7 @@ function streamMultipart(req, boundary, acceptedNames, maxSize, fileFilter, next
           // body and can't pause headers indefinitely without buffering
           // unbounded bytes for the next part. (multer's docs allow async
           // filters, but in this codebase all callers — appleHealth.js
-          // and videoGen.js — are sync. We surface a clear error if a
+          // and videoGenRender.js — are sync. We surface a clear error if a
           // future async filter slips in instead of crashing on `fr.err`
           // dereference.)
           let fr = null;
@@ -243,9 +229,17 @@ function streamMultipart(req, boundary, acceptedNames, maxSize, fileFilter, next
 
         const rawExt = currentFilename.match(/\.[^.]+$/)?.[0] || '';
         const ext = rawExt.replace(/[^a-zA-Z0-9.]/g, '');
-        writePath = join(tmpdir(), `upload-${randomUUID()}${ext}`);
-        writeStream = createWriteStream(writePath);
-        writeStream.on('error', fail);
+        const path = join(tmpdir(), `upload-${randomUUID()}${ext}`);
+        const stream = createWriteStream(path, { mode: 0o600, flags: 'wx' });
+        writeStream = stream;
+        // A failed exclusive open owns no file. Wait for close so an abort
+        // during open still cleans up a file the stream successfully created.
+        let opened = false;
+        stream.once('open', () => { opened = true; });
+        stream.once('close', () => {
+          if (opened && stream === writeStream) unlink(path).catch(() => {});
+        });
+        stream.on('error', fail);
         bytesWritten = 0;
       }
       // Non-matching file part: no buffer, no stream — bytes are silently
@@ -304,15 +298,16 @@ function streamMultipart(req, boundary, acceptedNames, maxSize, fileFilter, next
     if (currentFilename != null && currentFilename !== '') {
       if (isMatchingFile && writeStream) {
         const ws = writeStream;
-        const path = writePath;
+        const path = ws.path;
         const size = bytesWritten;
         const filename = currentFilename;
         const mimetype = currentFileMimetype || 'application/octet-stream';
         const fieldName = currentName;
-        writeStream = null;
-        writePath = null;
         pendingFlush += 1;
-        ws.end(() => {
+        ws.end((err) => {
+          if (err) return fail(err);
+          if (done) return;
+          writeStream = null;
           // Defensive: a malformed/malicious request can include the same
           // field name twice. Drop the prior temp file before overwriting
           // so it doesn't leak in os.tmpdir().
@@ -348,10 +343,7 @@ function streamMultipart(req, boundary, acceptedNames, maxSize, fileFilter, next
 
   const tick = () => {
     if (done) return;
-    // Defer while a file flush is in flight: state is still STATE_BODY but
-    // writeStream has been nulled by endPart. Re-entering tick (e.g. from
-    // req.on('end')) would crash on writeStream.write. The endPart callback
-    // re-invokes tick once state has advanced.
+    // The flush callback resumes parsing once the current file is finalized.
     if (pendingFlush > 0) return;
 
     while (true) {
@@ -414,13 +406,6 @@ function streamMultipart(req, boundary, acceptedNames, maxSize, fileFilter, next
         // Found end of part. Emit everything before the boundary, then advance.
         if (!writePartChunk(buf.slice(0, idx))) return;
         buf = buf.slice(idx + PART_DELIM.length);
-        // Transition state SYNCHRONOUSLY before endPart's async ws.end() runs.
-        // endPart sets writeStream = null synchronously, but its file-flush
-        // callback (which used to set this state) may not fire before
-        // req.on('end') re-enters tick. Without this sync transition, tick
-        // would re-process buf (which now contains the NEXT part) as if we
-        // were still inside the previous part's body and crash on
-        // writeStream.write(chunk) with writeStream === null.
         state = STATE_AFTER_BOUNDARY;
         // endPart may still be async (file flush) — pause the request,
         // resume after the flush completes.

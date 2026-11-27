@@ -5,7 +5,7 @@ import { execFileSync } from 'child_process';
 import { createRequire } from 'node:module';
 import { resolve } from 'path';
 
-import { resolveBundleNodeEnv } from './vite.buildEnv.js';
+import { resolveBundleNodeEnv } from '../lib/viteBuildEnv.js';
 import { CHUNK_GROUPS } from './vite.chunkGroups.js';
 import { DEV_PROXY_CLIENT_ADDRESS_HEADER, devProxyForwardedOrigin } from '../lib/portosAuthCore.js';
 import {
@@ -25,6 +25,28 @@ export function resolveBuildOutDir(env, configDir) {
   return env.PORTOS_CLIENT_BUILD_OUT_DIR || resolve(configDir, '.dist-adhoc');
 }
 const BUILD_OUT_DIR = resolveBuildOutDir(process.env, CONFIG_DIR);
+
+function guardInitialApiBundle() {
+  // Legacy client navigation also contains /universe-builder/ and /cos/tools.
+  // Check the rendered API modules so those redirects can stay in the shell.
+  const lazyApiModules = /[\\/]services[\\/]api(?:Agents|Apps|SyncReview|System|UniverseBuilder)\.js$/;
+  const lazyEndpoints = ['/image-gen/generate', '/cos/mind/runtime', '/update/execute'];
+  return {
+    name: 'portos-initial-api-guard',
+    apply: (config, { command }) => command === 'build' && resolve(config.root ?? process.cwd()) === CONFIG_DIR,
+    generateBundle(_options, bundle) {
+      const initial = Object.values(bundle).find((output) => output.type === 'chunk' && output.name === 'app-initial');
+      if (!initial) this.error('Expected the app-initial chunk for the lazy API bundle check');
+
+      const modules = Object.entries(initial.modules)
+        .filter(([id, module]) => module.renderedLength > 0 && lazyApiModules.test(id))
+        .map(([id]) => id.split(/[\\/]/).at(-1));
+      const endpoints = lazyEndpoints.filter((endpoint) => initial.code.includes(endpoint));
+      const matches = [...modules, ...endpoints];
+      if (matches.length) this.error(`Lazy APIs in app-initial: ${matches.join(', ')}`);
+    },
+  };
+}
 
 function primaryCheckoutDir(configDir) {
   try {
@@ -206,7 +228,7 @@ export default defineConfig(({ command, mode }) => {
   // inline, shipping the DEVELOPMENT react/react-dom to every user. The config
   // file is loaded BEFORE Vite derives `isProduction`, its
   // `process.env.NODE_ENV` define, and the plugin JSX runtime, so all three
-  // agree on the value set here. See client/vite.buildEnv.js.
+  // agree on the value set here. See lib/viteBuildEnv.js.
   process.env.NODE_ENV = resolveBundleNodeEnv(command, process.env.NODE_ENV);
 
   const env = loadEnv(mode, process.cwd(), 'VITE_');
@@ -223,6 +245,7 @@ export default defineConfig(({ command, mode }) => {
     },
     plugins: [
       react(),
+      guardInitialApiBundle(),
       command === 'build' && ANALYZE_BUNDLE && requireFromConfig('./vite.bundleReport.js').bundleReport(),
     ].filter(Boolean),
     resolve: {
@@ -260,7 +283,7 @@ export default defineConfig(({ command, mode }) => {
         // regex on purpose: Vite matches a plain context with a bare
         // `url.startsWith`, so a `'/data'` key would also swallow the `/data`
         // (Data Manager) and `/datadog` client routes and hand them the API's
-        // stale built index.html. `scripts/dev-proxy-drift.test.js` holds both
+        // stale built index.html. `server/test/guards/repo/dev-proxy-drift.test.js` holds both
         // halves of that — mounts covered, client routes untouched.
         '^/data/': {
           target: API_TARGET,

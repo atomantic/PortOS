@@ -1,3 +1,4 @@
+import { recordingOperatorIo } from '../test/recordingOperatorIo.js';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import express from 'express';
 import { request } from '../lib/testHelper.js';
@@ -5,6 +6,7 @@ import { errorMiddleware } from '../lib/errorHandler.js';
 
 vi.mock('../services/genome.js', () => ({
   deleteGenome: vi.fn(async () => undefined),
+  saveMarker: vi.fn(),
 }));
 
 vi.mock('../services/clinvar.js', () => ({
@@ -26,7 +28,7 @@ vi.mock('../services/epigenetic.js', () => ({
   })),
 }));
 
-const { deleteGenome } = await import('../services/genome.js');
+const { deleteGenome, saveMarker } = await import('../services/genome.js');
 const { deleteClinvar, syncClinvar } = await import('../services/clinvar.js');
 const { logEntry, getRecommendations, getComplianceSummary } = await import('../services/epigenetic.js');
 const { default: genomeRoutes } = await import('./genome.js');
@@ -54,6 +56,16 @@ describe('genome deletion routes', () => {
     expect(deleteGenome.mock.invocationCallOrder[0]).toBeLessThan(deleteClinvar.mock.invocationCallOrder[0]);
   });
 
+});
+
+it('returns an error when a marker save loses its genome upload', async () => {
+  saveMarker.mockResolvedValueOnce({ error: 'No genome data uploaded. Upload a genome file first.' });
+  const response = await request(makeApp()).post('/api/meatspace/genome/markers').send({
+    rsid: 'rs123', name: 'Synthetic marker', category: 'other',
+  });
+
+  expect(response.status).toBe(400);
+  expect(response.body.code).toBe('GENOME_MARKER_SAVE_ERROR');
 });
 
 describe('POST /api/meatspace/genome/epigenetic/:id/log', () => {
@@ -92,7 +104,7 @@ describe('ClinVar sync progress', () => {
   it.each([undefined, { requestId: '11111111-1111-4111-8111-111111111111' }])('preserves legacy POST and correlates progress for %j', async (body) => {
     const app = makeApp();
     const emit = vi.fn();
-    app.set('io', { emit });
+    app.set('io', recordingOperatorIo(emit));
     syncClinvar.mockImplementationOnce(async (onProgress) => {
       onProgress('Indexing variants');
       return { synced: true, variantCount: 12 };

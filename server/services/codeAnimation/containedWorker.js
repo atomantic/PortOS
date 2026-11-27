@@ -7,7 +7,8 @@
  * trusted-local entry point requires explicit server-side operator authorization;
  * it reuses supervision but provides no host filesystem/network boundary.
  */
-import { constants, readdirSync, readFileSync } from 'node:fs';
+import { isPidPossiblyAlive, isLinuxZombieState, readLinuxProcessStat } from '../../lib/processLiveness.js';
+import { constants, readdirSync } from 'node:fs';
 import { access, lstat, mkdir, open, readFile, readdir, realpath, rm } from 'node:fs/promises';
 import { join } from 'node:path';
 import { randomUUID } from 'node:crypto';
@@ -143,23 +144,8 @@ async function residentBytes(pid, processGroup = false) {
   return Number.isFinite(kib) ? kib * 1024 : 0;
 }
 
-// Linux: [state, pgrp] of a host-visible pid, or null when it is gone or unreadable.
-function procStat(pid) {
-  try {
-    const fields = readFileSync(`/proc/${pid}/stat`, 'utf8').replace(/^.*\)\s+/s, '').split(' ');
-    return [fields[0], Number(fields[2])];
-  } catch { return null; }
-}
-// A reaped-but-unwaited child is a zombie: it holds a pid slot, not a process.
-// Under a PID 1 that never wait()s (a container without an init), killed
-// workers linger as zombies forever, so they must not count as alive.
-const isZombie = (state) => state === 'Z' || state === 'X';
-
 export function processAlive(pid) {
-  try { process.kill(pid, 0); } catch (error) { return error.code === 'EPERM'; }
-  if (process.platform !== 'linux') return true;
-  const stat = procStat(pid);
-  return !stat || !isZombie(stat[0]);
+  return isPidPossiblyAlive(pid, { ignoreLinuxZombies: true });
 }
 
 // macOS reports EPERM for a group whose members are all exiting or zombies, so
@@ -182,8 +168,8 @@ export async function groupAlive(pgid, { kill = process.kill.bind(process), plat
   let pids;
   try { pids = readdirSync('/proc').filter((name) => /^\d+$/.test(name)); } catch { return true; }
   return pids.some((pid) => {
-    const stat = procStat(pid);
-    return stat && stat[1] === pgid && !isZombie(stat[0]);
+    const stat = readLinuxProcessStat(Number(pid));
+    return stat && stat.group === pgid && !isLinuxZombieState(stat.state);
   });
 }
 

@@ -71,17 +71,27 @@ describe('restoreSnapshot manifest verification', () => {
           const identityPath = joinPath(PATHS.data, 'instances.json');
           await realFs.rm(path, { force: true });
           await realFs.rm(identityPath, { force: true });
-          if (live) await realFs.writeFile(identityPath, live);
+          if (live) await realFs.writeFile(identityPath, live, { mode: 0o644 });
           try {
             const authority = createPeerExecutionAuthority(PATHS.data);
             const before = authority.initialize();
-            const identity = '{"self":{"instanceId":"00000000-0000-4000-8000-000000000001"},"peers":[]}';
+            const identity = '{"self":{"instanceId":"00000000-0000-4000-8000-000000000001"},"peers":[{"id":"example-peer","syncSecret":"example-secret"}]}';
             const hash = await writeSnapshotFile('instances.json', identity);
+            const snapshotPath = joinPath(snapshotDataDir, 'instances.json');
+            await realFs.chmod(snapshotPath, 0o644);
             await writeManifest({ 'instances.json': hash });
-            const result = await restoreSnapshot(tmpRoot, 'snap-1', { dryRun: false, subdirFilter: 'instances.json' });
+            const subdirFilter = 'instances.json';
+            const preview = await restoreSnapshot(tmpRoot, 'snap-1', { subdirFilter });
+            expect(preview.changedFiles).toEqual([expect.stringContaining(subdirFilter)]);
+            const result = await restoreSnapshot(tmpRoot, 'snap-1', { dryRun: false, subdirFilter });
             expect(result).not.toHaveProperty('identityPreserved');
+            expect(result.changedFiles).toEqual(preview.changedFiles);
             expect(authority.read().epoch).not.toBe(before.epoch);
             expect(await realFs.readFile(identityPath, 'utf8')).toBe(identity);
+            if (process.platform !== 'win32') {
+              expect((await realFs.stat(identityPath)).mode & 0o777).toBe(0o600);
+              expect((await realFs.stat(snapshotPath)).mode & 0o777).toBe(0o644);
+            }
           } finally {
             await realFs.rm(path, { force: true });
             await realFs.rm(identityPath, { force: true });
@@ -119,6 +129,32 @@ describe('restoreSnapshot manifest verification', () => {
           resetInstanceIdCache();
         }
       });
+
+      for (const [side, link] of [
+        ['source', 'symlink'], ['destination', 'symlink'],
+        ['source', 'hard link'], ['destination', 'hard link'],
+      ]) {
+        it(`refuses a ${side} identity ${link} before transferring`, async context => {
+          if (process.platform === 'win32' && link === 'symlink') {
+            context.skip('Windows symlink creation requires privileges unavailable on some runners.');
+            return;
+          }
+          const target = joinPath(snapshotDir, 'identity-target.json');
+          const source = joinPath(snapshotDataDir, 'instances.json');
+          await realFs.writeFile(target, OTHER_IDENTITY, { mode: 0o600 });
+          if (side === 'destination') await writeSnapshotFile('instances.json', OTHER_IDENTITY);
+          const path = side === 'source' ? source : identityPath();
+          if (link === 'symlink') await realFs.symlink(target, path);
+          else await realFs.link(target, path);
+
+          for (const dryRun of [true, false]) {
+            await expect(restoreSnapshot(tmpRoot, 'snap-1', { dryRun, adoptIdentity: true, subdirFilter: 'instances.json' }))
+              .rejects.toMatchObject({ code: 'BACKUP_RESTORE_UNSAFE_CREDENTIAL' });
+          }
+          expect(spawn).not.toHaveBeenCalled();
+          expect(await realFs.readFile(target, 'utf8')).toBe(OTHER_IDENTITY);
+        });
+      }
 
       for (const { name, options } of [
         { name: 'full restore', options: {} },
@@ -258,6 +294,36 @@ describe('restoreSnapshot manifest verification', () => {
           await expect(realFs.readFile(joinPath(PATHS.data, stage))).rejects.toMatchObject({ code: 'ENOENT' });
           for (const [path, bytes] of Object.entries(files)) {
             expect(await realFs.readFile(joinPath(PATHS.data, path), 'utf8')).toBe(bytes);
+          }
+        });
+      });
+
+      it(`keeps platform credentials local on full restore (manifest: ${withManifest})`, async context => {
+        await withRealRsync(context, async () => {
+          const accountPath = 'agents/accounts.json';
+          const stagedPath = 'agents/Accounts.JSON.123.456.example.TMP';
+          const hashes = {
+            [accountPath]: await writeSnapshotFile(accountPath, '{"accounts":{"old":{}}}'),
+            [stagedPath]: await writeSnapshotFile(stagedPath, '{"accounts":{"staged":{}}}'),
+            [RECORD]: await writeSnapshotFile(RECORD, '{"value":"snapshot"}'),
+          };
+          if (withManifest) await writeManifest(hashes);
+
+          const livePath = joinPath(PATHS.data, accountPath);
+          const liveAccounts = '{"accounts":{"local":{}}}';
+          await realFs.mkdir(dirname(livePath), { recursive: true });
+          await realFs.writeFile(livePath, liveAccounts, { mode: 0o600 });
+
+          try {
+            const preview = await restoreSnapshot(tmpRoot, 'snap-1', { dryRun: true });
+            expect(preview.changedFiles).toContainEqual(expect.stringContaining(RECORD));
+            expect(preview.changedFiles).not.toContainEqual(expect.stringMatching(/accounts\.json/i));
+            await restoreSnapshot(tmpRoot, 'snap-1', { dryRun: false });
+            expect(await realFs.readFile(livePath, 'utf8')).toBe(liveAccounts);
+            expect(existsSync(joinPath(PATHS.data, stagedPath))).toBe(false);
+            expect(await realFs.readFile(joinPath(PATHS.data, RECORD), 'utf8')).toBe('{"value":"snapshot"}');
+          } finally {
+            await realFs.rm(livePath, { force: true });
           }
         });
       });

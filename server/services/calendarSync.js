@@ -1,3 +1,4 @@
+import { emitToOperatorsOn } from './socketIo.js';
 import { readdir, unlink } from 'fs/promises';
 import { join } from 'path';
 import { atomicWrite, ensureDir, filterBySearch as genericFilterBySearch, PATHS, readJSONFile, UUID_RE } from '../lib/fileUtils.js';
@@ -70,7 +71,7 @@ export async function loadCache(accountId) {
 async function saveCache(accountId, cache) {
   await ensureDir(CACHE_DIR);
   const filePath = join(CACHE_DIR, `${accountId}.json`);
-  await atomicWrite(filePath, cache);
+  await atomicWrite(filePath, cache, { mode: 0o600, dirMode: 0o700 });
 }
 
 // Account deletion removes metadata before queueing deleteCache. Keep sync's
@@ -258,7 +259,7 @@ async function runAccountSync(accountId, io, options) {
   if (!account) throw new ServerError('Account not found', { status: 404 });
   if (!account.enabled) throw new ServerError('Account is disabled', { status: 400 });
 
-  io?.emit('calendar:sync:started', { accountId });
+  emitToOperatorsOn(io, 'calendar:sync:started', { accountId });
   console.log(`📅 Starting calendar sync for account ${accountId} (${account.type})`);
 
   const providerSync = async () => {
@@ -266,7 +267,7 @@ async function runAccountSync(accountId, io, options) {
     // Every started event needs a terminal event: clients flip to 'syncing' on
     // calendar:sync:started and only leave it on completed/failed.
     const noOpSync = status => {
-      io?.emit('calendar:sync:completed', { accountId, newEvents: 0, pruned: 0, status });
+      emitToOperatorsOn(io, 'calendar:sync:completed', { accountId, newEvents: 0, pruned: 0, status });
       return { newEvents: 0, pruned: 0, total: cache.events.length, status };
     };
     let providerResult;
@@ -332,7 +333,7 @@ async function runAccountSync(accountId, io, options) {
       return { newCount: uniqueNew.length, pruned, total: cache.events.length };
     }, { status: providerStatus, events: newEvents });
 
-    io?.emit('calendar:sync:completed', { accountId, newEvents: newCount, pruned, status: providerStatus });
+    emitToOperatorsOn(io, 'calendar:sync:completed', { accountId, newEvents: newCount, pruned, status: providerStatus });
     console.log(`📅 Sync complete for account ${accountId}: ${newCount} new, ${pruned} pruned, status=${providerStatus}`);
 
     return { newEvents: newCount, pruned, total, status: providerStatus };
@@ -341,7 +342,7 @@ async function runAccountSync(accountId, io, options) {
   const result = await providerSync().catch(async (error) => {
     console.error(`📅 Sync failed for account ${accountId} (${account.type}) status=${error.status ?? 502}${error.code ? ` code=${error.code}` : ''}`);
     await updateSyncStatus(accountId, 'error').catch(() => {});
-    io?.emit('calendar:sync:failed', { accountId, error: error.message });
+    emitToOperatorsOn(io, 'calendar:sync:failed', { accountId, error: error.message });
     throw error instanceof ServerError ? error : new ServerError(error.message, { status: 502 });
   });
 

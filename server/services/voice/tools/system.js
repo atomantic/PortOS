@@ -110,6 +110,7 @@ export const SYSTEM_TOOLS = [
 
   {
     name: 'feeds_mark_read',
+    hostControl: true,
     description:
       'Mark RSS feed items as read. Use when the user says "mark that one read", "mark this read", "I read the second one", or "mark them all read". ' +
       'Pass `query` with a distinctive phrase from the item\'s title (the LLM should reuse a title it just spoke from feeds_digest). ' +

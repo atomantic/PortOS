@@ -40,6 +40,7 @@ import {
   deleteRaw,
   isValidLoomId,
   listRaw,
+  listSummaries,
   listTombstoneIdsBefore,
   queueLoomWrite,
   readRaw,
@@ -312,19 +313,42 @@ export function fableLoomEvolutionEvidenceRefs(loom) {
   return { episodeIds: new Set(episodes.map((episode) => episode.id)), sceneKeys };
 }
 
-export function sanitizeLoom(raw) {
-  if (!raw || typeof raw !== 'object') return null;
-  if (!isStr(raw.id) || !raw.id) return null;
+function sanitizeLoomHeader(raw) {
+  if (!raw || typeof raw !== 'object' || !isStr(raw.id) || !raw.id) return null;
   const name = trimTo(raw.name, LOOM_LIMITS.NAME_MAX);
   if (!name) return null;
   const now = new Date().toISOString();
-  const { deleted, deletedAt } = sanitizeSoftDeleteFields(raw);
-  const participationMode = asFableLoomParticipationMode(raw.participationMode);
-  const episodes = (Array.isArray(raw.episodes) ? raw.episodes : [])
+  return {
+    id: raw.id,
+    name,
+    logline: trimTo(raw.logline, LOOM_LIMITS.LOGLINE_MAX),
+    format: asLoomFormat(raw.format),
+    participationMode: asFableLoomParticipationMode(raw.participationMode),
+    audienceCommunicationMedium: trimTo(
+      raw.audienceCommunicationMedium,
+      LOOM_LIMITS.AUDIENCE_COMMUNICATION_MEDIUM_MAX,
+    ),
+    universeId: nullableRef(raw.universeId),
+    seriesId: nullableRef(raw.seriesId),
+    createdAt: isStr(raw.createdAt) && raw.createdAt ? raw.createdAt : now,
+    updatedAt: isStr(raw.updatedAt) && raw.updatedAt ? raw.updatedAt : now,
+  };
+}
+
+function sanitizeLoomEpisodes(raw, participationMode) {
+  return (Array.isArray(raw) ? raw : [])
     .map((episode) => sanitizeEpisode(episode, participationMode))
     .filter(Boolean)
     .slice(0, LOOM_LIMITS.EPISODES_MAX)
     .sort((a, b) => a.number - b.number || a.createdAt.localeCompare(b.createdAt));
+}
+
+export function sanitizeLoom(raw) {
+  const header = sanitizeLoomHeader(raw);
+  if (!header) return null;
+  const { deleted, deletedAt } = sanitizeSoftDeleteFields(raw);
+  const { participationMode } = header;
+  const episodes = sanitizeLoomEpisodes(raw.episodes, participationMode);
   const seriesPlan = sanitizeSeriesPlan(raw.seriesPlan, episodes);
   for (const episode of episodes) {
     if (episode.storyOutline?.validation?.status !== 'valid') continue;
@@ -364,18 +388,10 @@ export function sanitizeLoom(raw) {
       deliveryApprovedAt: null,
     };
   return {
-    id: raw.id,
+    ...header,
     schemaVersion: 3,
-    name,
-    logline: trimTo(raw.logline, LOOM_LIMITS.LOGLINE_MAX),
     premise: trimTo(raw.premise, LOOM_LIMITS.PREMISE_MAX),
     styleNotes: trimTo(raw.styleNotes, LOOM_LIMITS.STYLE_NOTES_MAX),
-    participationMode,
-    audienceCommunicationMedium: trimTo(
-      raw.audienceCommunicationMedium,
-      LOOM_LIMITS.AUDIENCE_COMMUNICATION_MEDIUM_MAX,
-    ),
-    format: asLoomFormat(raw.format),
     // The loom's route pin for the play stage — which provider/model/effort
     // turns a reader's free text into a path. An unset dimension stays null
     // ('fall through to the stage pin / active provider').
@@ -384,13 +400,9 @@ export function sanitizeLoom(raw) {
     protagonistCharacterId,
     protagonistWardrobeId,
     protagonistWardrobeLocked: Boolean(protagonistWardrobeId && raw.protagonistWardrobeLocked !== false),
-    universeId: nullableRef(raw.universeId),
-    seriesId: nullableRef(raw.seriesId),
     seriesPlan,
     productionStatus,
     episodes,
-    createdAt: isStr(raw.createdAt) && raw.createdAt ? raw.createdAt : now,
-    updatedAt: isStr(raw.updatedAt) && raw.updatedAt ? raw.updatedAt : now,
     deleted,
     deletedAt,
   };
@@ -496,10 +508,13 @@ const requireLoomRaw = async (id) => {
   return loom;
 };
 
+// Keep the established JS collation and raw timestamp string ordering.
+const compareLooms = (a, b) => b.updatedAt.localeCompare(a.updatedAt) || a.name.localeCompare(b.name);
+
 export async function listLooms({ includeDeleted = false } = {}) {
   const records = (await listRaw()).map(sanitizeLoom).filter(Boolean);
   const visible = includeDeleted ? records : records.filter((loom) => !loom.deleted);
-  return visible.sort((a, b) => b.updatedAt.localeCompare(a.updatedAt) || a.name.localeCompare(b.name));
+  return visible.sort(compareLooms);
 }
 
 /**
@@ -511,27 +526,21 @@ export async function listLooms({ includeDeleted = false } = {}) {
  * a soft ref, so a series that no longer exists simply matches nothing — this
  * never throws on a dangling id.
  */
-export async function listLoomSummaries({ seriesId: scopeSeriesId } = {}) {
-  const looms = await listLooms();
-  const scoped = scopeSeriesId ? looms.filter((loom) => loom.seriesId === scopeSeriesId) : looms;
-  return scoped.map(({
-    id, name, logline, format, participationMode, audienceCommunicationMedium,
-    universeId, seriesId, createdAt, updatedAt, episodes,
-  }) => ({
-    id,
-    name,
-    logline,
-    format,
-    participationMode,
-    audienceCommunicationMedium,
-    universeId,
-    seriesId,
-    createdAt,
-    updatedAt,
-    episodeCount: episodes.length,
-    sceneCount: episodes.reduce((sum, e) => sum + e.nodes.length, 0),
-    endingCount: episodes.reduce((sum, e) => sum + e.nodes.filter((n) => n.isEnding).length, 0),
-  }));
+export async function listLoomSummaries({ seriesId } = {}) {
+  const rows = await listSummaries({ seriesId });
+  return rows.flatMap(({ header, fileRecord, ...counts }) => {
+    const summary = sanitizeLoomHeader(header ?? fileRecord);
+    if (!summary || fileRecord?.deleted === true || (seriesId && summary.seriesId !== seriesId)) return [];
+    if (!fileRecord) return [{ ...summary, ...counts }];
+
+    const episodes = sanitizeLoomEpisodes(fileRecord.episodes, summary.participationMode);
+    return [{
+      ...summary,
+      episodeCount: episodes.length,
+      sceneCount: episodes.reduce((sum, e) => sum + e.nodes.length, 0),
+      endingCount: episodes.reduce((sum, e) => sum + e.nodes.filter((n) => n.isEnding).length, 0),
+    }];
+  }).sort(compareLooms);
 }
 
 export async function getLoom(id, { includeDeleted = false } = {}) {

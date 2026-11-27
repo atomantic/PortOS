@@ -9,6 +9,7 @@
  * independent of whether the initiating client stays mounted.
  */
 
+import { emitToOperatorsOn } from '../socketIo.js';
 import { randomUUID } from 'node:crypto';
 import { ServerError } from '../../lib/errorHandler.js';
 import { sleep } from '../../lib/fileUtils.js';
@@ -21,7 +22,9 @@ import {
 import { trackedRenderMap } from '../renderActivity.js';
 import { attachNodeVideo, getLoom } from './records.js';
 
-export const FAL_H3_MAX_FREE_URL = 'https://fal.ai/tools/minimax-h3-max';
+import { FAL_H3_MAX_FREE_URL } from '../../lib/falVideoConstants.js';
+
+export { FAL_H3_MAX_FREE_URL };
 
 const FAL_RENDER_TIMEOUT_MS = 20 * 60 * 1000;
 const FAL_CONTROL_TIMEOUT_MS = 2 * 60 * 1000;
@@ -68,7 +71,7 @@ const publicJob = (job) => ({
 // or break the serialized browser queue. Disconnected clients recover by GET.
 const emitJob = (job) => {
   try {
-    job.io?.emit('fableloom:fal-video:changed', publicJob(job));
+    emitToOperatorsOn(job.io, 'fableloom:fal-video:changed', publicJob(job));
   } catch {
     console.error('❌ Could not broadcast fal.ai browser job status');
   }

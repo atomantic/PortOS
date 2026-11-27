@@ -1,4 +1,4 @@
-import { spawn } from '../lib/childProcess.js';
+import { bufferedSpawn, MAX_OUTPUT_BYTES } from '../lib/bufferedSpawn.js';
 import { existsSync } from 'fs';
 import { join } from 'path';
 import { NON_PM2_TYPES } from './appProcessTypes.js';
@@ -17,7 +17,7 @@ const DEPLOY_TIMEOUT_MS = 10 * 60 * 1000; // 10 minutes
 const DEPLOY_KILL_DELAY_MS = 10 * 1000;   // 10 seconds after SIGTERM
 
 // Per-app lock to prevent concurrent deploys
-const deployingApps = new Set();
+const deployingApps = new Map();
 
 /**
  * Check whether an app has a deploy.sh script
@@ -37,89 +37,73 @@ export function hasDeployScript(app) {
  * @param {function} emit - Callback (type, data) for streaming output
  * @returns {Promise<{success: boolean, code: number}>}
  */
-export function deployApp(app, flags, emit) {
+export async function deployApp(app, flags, emit) {
   const dir = app.repoPath;
-
+  const send = (type, payload) => {
+    try { emit(type, payload); }
+    catch (err) { console.error(`❌ Deploy output hook failed: ${err.message}`); }
+  };
   if (deployingApps.has(dir)) {
-    emit('error', { message: 'Deploy already in progress for this app' });
-    return Promise.resolve({ success: false, code: -1 });
+    send('error', { message: 'Deploy already in progress for this app' });
+    return { success: false, code: -1 };
   }
 
   const safeFlags = flags.filter(f => VALID_FLAGS.has(f));
+  const controller = new AbortController();
+  deployingApps.set(dir, { appId: app.id, controller });
+  send('status', { message: 'Starting deploy...', phase: 'start' });
 
-  deployingApps.add(dir);
-  emit('status', { message: 'Starting deploy...', phase: 'start' });
-
-  // Buffer output and flush periodically to reduce socket message volume
-  let stdoutBuf = '';
-  let stderrBuf = '';
+  // Batch socket output and retain only a bounded tail between flushes.
+  const output = { stdout: '', stderr: '' };
   const flushOutput = () => {
-    if (stdoutBuf) { emit('output', { text: stdoutBuf, stream: 'stdout' }); stdoutBuf = ''; }
-    if (stderrBuf) { emit('output', { text: stderrBuf, stream: 'stderr' }); stderrBuf = ''; }
+    for (const stream of ['stdout', 'stderr']) {
+      if (!output[stream]) continue;
+      send('output', { text: output[stream], stream });
+      output[stream] = '';
+    }
   };
   const flushTimer = setInterval(flushOutput, FLUSH_INTERVAL_MS);
 
-  const finish = (success, code) => {
+  let result;
+  try {
+    // Avoid resolving a Windows PM2 deploy to WSL's Linux toolchain.
+    result = await bufferedSpawn(resolveBashBinary(), ['deploy.sh', ...safeFlags], {
+      cwd: dir,
+      shell: false,
+      env: { ...withoutServerSecretsEnv(process.env), FORCE_COLOR: '0' },
+      timeoutMs: DEPLOY_TIMEOUT_MS,
+      killGraceMs: DEPLOY_KILL_DELAY_MS,
+      processGroup: true,
+      signal: controller.signal,
+      onOutput: (chunk, stream) => { output[stream] = (output[stream] + chunk.toString()).slice(-MAX_OUTPUT_BYTES); },
+    });
+  } finally {
     clearInterval(flushTimer);
     flushOutput();
     deployingApps.delete(dir);
-    return { success, code };
-  };
+  }
 
-  return new Promise((resolve) => {
-    // Not a bare `bash`: under PM2 on Windows that often resolves to WSL, which
-    // would run the app's deploy against a Linux toolchain (see bashResolver.js).
-    const child = spawn(resolveBashBinary(), ['deploy.sh', ...safeFlags], {
-      cwd: dir,
-      shell: false,
-      env: { ...withoutServerSecretsEnv(process.env), FORCE_COLOR: '0' }
-    });
-
-    // Guard against a hung deploy.sh holding the lock forever.
-    // After DEPLOY_TIMEOUT_MS: SIGTERM the child; escalate to SIGKILL after
-    // DEPLOY_KILL_DELAY_MS if it hasn't exited. The 'close' handler below
-    // handles lock release and result resolution for both normal and timed-out
-    // exits, so we only need to kill here.
-    let killTimer = null;
-    const deployTimer = setTimeout(() => {
-      console.error(`❌ Deploy timed out after ${DEPLOY_TIMEOUT_MS / 1000}s — killing child process`);
-      emit('error', { message: 'Deploy timed out' });
-      child.kill('SIGTERM');
-      killTimer = setTimeout(() => {
-        child.kill('SIGKILL');
-      }, DEPLOY_KILL_DELAY_MS);
-    }, DEPLOY_TIMEOUT_MS);
-
-    child.stdout.on('data', (data) => { stdoutBuf += data.toString(); });
-    child.stderr.on('data', (data) => { stderrBuf += data.toString(); });
-
-    let spawnedError = null;
-    child.on('close', (code) => {
-      clearTimeout(deployTimer);
-      clearTimeout(killTimer);
-      const success = code === 0 && !spawnedError;
-      const exitCode = spawnedError && code === 0 ? -1 : code;
-      const result = finish(success, exitCode);
-      emit('status', {
-        message: success ? 'Deploy complete' : `Deploy failed (exit code ${exitCode})`,
-        phase: 'complete',
-        success,
-        code: exitCode
-      });
-      resolve(result);
-    });
-
-    child.on('error', (err) => {
-      emit('error', { message: err.message });
-      // A failed kill can report an error after spawn while the deploy is
-      // still running. Its close event owns cleanup in that case.
-      if (child.pid) { spawnedError = err; return; }
-      clearTimeout(deployTimer);
-      clearTimeout(killTimer);
-      const result = finish(false, -1);
-      resolve(result);
-    });
+  const reason = result.aborted ? 'Deploy cancelled' : result.timedOut ? 'Deploy timed out' : result.error?.message;
+  if (reason) send('error', { message: reason });
+  const { success, code } = result;
+  send('status', {
+    message: reason || (success ? 'Deploy complete' : `Deploy failed (exit code ${code})`),
+    phase: 'complete',
+    success,
+    code
   });
+  return { success, code };
+}
+
+/** Request teardown of the active deploy for this app, if any. */
+export function cancelDeploy(appId) {
+  if (!appId) return false;
+  for (const deploy of deployingApps.values()) {
+    if (deploy.appId !== appId || deploy.controller.signal.aborted) continue;
+    deploy.controller.abort();
+    return true;
+  }
+  return false;
 }
 
 /**

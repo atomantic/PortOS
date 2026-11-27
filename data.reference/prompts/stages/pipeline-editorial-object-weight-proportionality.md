@@ -39,11 +39,7 @@ on-page or recorded lineage is a candidate for under-establishment.
 {{objects}}
 ```
 
-## Manuscript
-
-The manuscript is stitched from the drafted issues. Each section begins with a
-header like `# Issue 3 — Title (prose)`; use the issue number in that header to
-attribute each finding to its `issueNumber`.
+{{> editorial-manuscript-preamble }}
 
 {{#finalPart}}
 You are seeing the FINAL part of the manuscript, so the whole story is now in
@@ -94,14 +90,7 @@ prose by design.
 Be specific and cite the text. If every object's weight is proportionate to its
 prominence, return an empty `findings` array — do not invent issues.
 
-## Output contract
-
-Return ONLY valid JSON matching this shape — no prose, no markdown fence, no
-commentary:
-
-```json
-{
-  "findings": [
+{{> editorial-findings-contract }}
     {
       "severity": "high|medium|low",
       "issueNumber": 3,

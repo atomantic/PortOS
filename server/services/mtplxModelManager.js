@@ -27,7 +27,7 @@ import { ServerError } from '../lib/errorHandler.js';
 import { assessDownloadPreflight, assertDownloadFits } from '../lib/downloadPreflight.js';
 import { safeJSONParse } from '../lib/fileUtils.js';
 import { modelStoreInventoryRow } from '../lib/modelInventory.js';
-import { listMtplxCachedModels } from '../lib/mtplxModels.js';
+import { listMtplxCachedModels, servableMtplxCachedModels } from '../lib/mtplxModels.js';
 import { recordModelInstall, recordModelUninstall } from './modelManifest.js';
 import { resolveMtplxBinary } from '../lib/mtplxRuntime.js';
 import { fetchRepoPublishedDates } from './huggingFaceMetadata.js';
@@ -194,6 +194,31 @@ export function parseMtplxPullFrame(line, model) {
   };
 }
 
+// The progress channel and cache are shared, so only one Models → Runtimes
+// pull can own them at a time.
+let activePull = null;
+
+export function cancelMtplxModelPull() {
+  if (!activePull?.cancellable || activePull.controller.signal.aborted) return false;
+  activePull.controller.abort();
+  return true;
+}
+
+/** Record a successful pull under the checkpoint's MTPLX store identity. */
+export async function registerMtplxDownload(repo, models) {
+  // With no repo in the pull output, only an unambiguous usable cache entry
+  // can identify the default checkpoint.
+  if (!repo) {
+    const candidates = servableMtplxCachedModels(models === undefined ? (await listMtplxCachedModels()).models : models);
+    if (candidates.length !== 1) return;
+    repo = candidates[0].repo_id;
+  }
+  await recordModelInstall({
+    ...modelStoreInventoryRow({ backend: 'mtplx', key: mtplxCheckpointKey(repo), name: repo, detail: 'MTPLX checkpoint', sizeBytes: null }),
+    source: 'download',
+  });
+}
+
 /**
  * Download one MTP checkpoint into MTPLX's cache.
  *
@@ -201,13 +226,8 @@ export function parseMtplxPullFrame(line, model) {
  * provider-readiness checklist's "Download the default model & start MTPLX"
  * fetches, so the two surfaces cannot pull different weights.
  *
- * Never throws for a failed download: this runs behind a request that has
- * already streamed progress, so the outcome is a value (`{ success, error }`)
- * the route reports rather than a rejection mid-stream.
- *
- * There is deliberately no cancellation hook: a pull is a server-side download
- * the user is told keeps running when they navigate away, so nothing here is
- * tied to the lifetime of the request that started it.
+ * A pull belongs to the server so it survives navigation. The progress channel
+ * shows one transfer, and only an explicit cancellation stops it.
  *
  * @param {{model?: string|null, onProgress?: (frame: object) => void}} [options]
  */
@@ -220,49 +240,55 @@ export async function pullMtplxModel({ model = null, onProgress = () => {} } = {
     expectedBytes: UNKNOWN_MTPLX_BYTES,
   }));
 
-  onProgress({ event: 'start', model: repo, message: `Downloading ${label}. This is a multi-gigabyte download and can take a while.` });
-  console.log(`⬇️  MTPLX pull started for ${label}`);
-
-  const args = ['pull', ...(repo ? [repo] : []), '--progress-json'];
-  const result = await runStreamingCommand(
-    binary,
-    args,
-    (line) => {
-      const frame = parseMtplxPullFrame(line, repo);
-      // `complete`/`result` are upstream's own terminal frames — the caller's
-      // own completion frame below is the one the client acts on, so don't let
-      // an early one tear the progress bar down before the process exits.
-      if (frame && frame.event !== 'complete' && frame.event !== 'result') onProgress(frame);
-    },
-    { timeoutMs: PULL_TIMEOUT_MS }
-  );
-
-  if (!result.success) {
-    console.error(`❌ MTPLX pull failed for ${label}: ${result.error}`);
-    onProgress({ event: 'error', model: repo, message: result.error });
-    return { success: false, model: repo, error: result.error };
+  if (activePull) {
+    throw new ServerError('An MTPLX checkpoint pull is already running.', { status: 409, code: 'MTPLX_PULL_BUSY' });
   }
 
-  // Report what actually landed rather than what was asked for: an interrupted
-  // pull can exit 0 with an incomplete pack, and the cache listing is the only
-  // honest answer to "can this be served now".
-  const cache = await listMtplxCachedModels();
-  const cached = (cache.models || []).map((m) => m?.repo_id).filter(Boolean);
-  console.log(`✅ MTPLX pull complete for ${label} (${cached.length} checkpoint(s) cached)`);
-  // A pull lands in MTPLX's own store (see `mtplxCachePath`), which Models → Status
-  // inventories as the `mtplx` backend. Recording it HERE rather than at
-  // the callers covers both entry points — the model-pull route and the
-  // readiness checklist's default-checkpoint fetch — with one seam. A named pull
-  // records itself; the default pull has no repo to name, so the cache listing is
-  // the only thing that knows what arrived.
-  for (const repoId of repo ? [repo] : cached) {
-    await recordModelInstall({
-      ...modelStoreInventoryRow({ backend: 'mtplx', key: mtplxCheckpointKey(repoId), name: repoId, detail: 'MTPLX checkpoint', sizeBytes: null }),
-      source: 'download',
-    });
+  const controller = new AbortController();
+  const transfer = { controller, cancellable: true };
+  activePull = transfer;
+  try {
+    onProgress({ event: 'start', model: repo, message: `Downloading ${label}. This is a multi-gigabyte download and can take a while.` });
+    console.log(`⬇️  MTPLX pull started for ${label}`);
+
+    const args = ['pull', ...(repo ? [repo] : []), '--progress-json'];
+    let checkpoint = repo;
+    const result = await runStreamingCommand(
+      binary,
+      args,
+      (line) => {
+        if (!transfer.cancellable || controller.signal.aborted) return;
+        const frame = parseMtplxPullFrame(line, repo);
+        if (frame?.event === 'result' && isMtplxRepoId(frame.model)) checkpoint = frame.model;
+        // Upstream's terminal frames can arrive before the child exits. The
+        // client clears the progress bar only when PortOS reports the outcome.
+        if (frame && !['complete', 'error', 'result'].includes(frame.event)) onProgress(frame);
+      },
+      { timeoutMs: PULL_TIMEOUT_MS, processGroup: true, isCancelled: () => controller.signal.aborted }
+    );
+
+    transfer.cancellable = false;
+    if (!result.success && controller.signal.aborted) {
+      console.log(`🛑 MTPLX pull cancelled for ${label}`);
+      onProgress({ event: 'cancelled', model: repo, message: 'Checkpoint download cancelled' });
+      return { success: false, cancelled: true, model: repo };
+    }
+
+    if (!result.success) {
+      console.error(`❌ MTPLX pull failed for ${label}: ${result.error}`);
+      onProgress({ event: 'error', model: repo, message: result.error });
+      return { success: false, model: repo, error: result.error };
+    }
+
+    const { models } = await listMtplxCachedModels();
+    const cached = (models || []).map((model) => model?.repo_id).filter(Boolean);
+    await registerMtplxDownload(checkpoint, models);
+    console.log(`✅ MTPLX pull complete for ${label} (${cached.length} checkpoint(s) cached)`);
+    onProgress({ event: 'complete', model: repo, message: `${label} downloaded` });
+    return { success: true, model: repo, cachedModels: cached };
+  } finally {
+    activePull = null;
   }
-  onProgress({ event: 'complete', model: repo, message: `${label} downloaded` });
-  return { success: true, model: repo, cachedModels: cached };
 }
 
 /**
@@ -293,7 +319,7 @@ export async function removeMtplxModel(model) {
     }
     throw new ServerError(
       `Failed to remove ${repo}: ${spawnFailureDetail(result, `mtplx exited with code ${result.code}`)}`,
-      { status: 500 }
+      { status: 502, code: 'INTERNAL_ERROR' }
     );
   }
 

@@ -62,8 +62,8 @@ describe('RunsTab ?run= deep link', () => {
     renderTab('/cos/runs?run=run-b');
 
     expect(await screen.findByText('full output for run-b')).toBeInTheDocument();
-    expect(api.getRunPrompt).toHaveBeenCalledWith('run-b');
-    expect(api.getRunOutput).toHaveBeenCalledWith('run-b');
+    expect(api.getRunPrompt).toHaveBeenCalledWith('run-b', { silent: true });
+    expect(api.getRunOutput).toHaveBeenCalledWith('run-b', { silent: true });
   });
 
   it('shows Claude sign-in renewal guidance on a successful run without opening its logs', async () => {
@@ -156,7 +156,7 @@ describe('RunsTab ?run= deep link', () => {
     expect(within(pinned).getByText('old prompt')).toBeInTheDocument();
     expect(api.getRun).toHaveBeenCalledTimes(1);
     expect(api.getRun.mock.calls[0][0]).toBe('run-old');
-    expect(api.getRunPrompt).toHaveBeenCalledWith('run-old');
+    expect(api.getRunPrompt).toHaveBeenCalledWith('run-old', { silent: true });
   });
 
   it('keeps a failed by-id read distinct from a missing run and retries it', async () => {

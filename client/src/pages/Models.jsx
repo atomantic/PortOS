@@ -39,8 +39,7 @@ const MediaModels = lazyWithReload(() => import('./MediaModels'));
  * What deliberately stayed OUT is output rather than weights: Three.js Models is
  * a gallery of generated meshes, and `/3d` is the render flow that consumes the
  * runtimes listed here. Audio models stayed in the Music studio too — their
- * picker is not separable from the generate form. Design record:
- * `docs/plans/archive/2026-08-21-models-navigation.md`.
+ * picker is not separable from the generate form.
  *
  * `?tab` is a route param, not local state, so every one is deep-linkable and
  * reachable from ⌘K and voice (`client/src/AGENTS.md`).

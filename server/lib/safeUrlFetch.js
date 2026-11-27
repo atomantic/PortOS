@@ -24,9 +24,8 @@
  */
 
 import dns from 'dns/promises';
-import { Agent, Dispatcher1Wrapper } from 'undici';
 import { ServerError } from './errorHandler.js';
-import { fetchWithTimeout } from './fetchWithTimeout.js';
+import { pinnedHttpRequest } from './pinnedHttpRequest.js';
 
 const DEFAULT_TIMEOUT_MS = 15000;
 const DEFAULT_MAX_BYTES = 12 * 1024 * 1024; // 12 MB — generous for a single image/feed
@@ -187,20 +186,7 @@ export async function isPublicHttpUrlSafe(target, { blockPrivate = false } = {})
   return (await resolvePublicHttpUrl(target, { blockPrivate })).safe;
 }
 
-/**
- * net.lookup-compatible function that ALWAYS yields the SSRF-vetted IP, ignoring
- * the hostname undici would otherwise re-resolve. This is what closes the
- * rebinding TOCTOU: undici's connector calls this instead of DNS, so the socket
- * goes to exactly the address the guard approved, while Host header + TLS SNI
- * stay the original hostname (undici's connector derives `servername` from the
- * requested host, not from the resolved address), so cert validation is
- * unaffected. undici asks with `all: true`, so honor both the array and
- * single-address callback shapes.
- *
- * undici 8 kept `connect.lookup` on the built-in connector — the v8 port did not
- * change how the pin itself is expressed, only how the dispatcher is handed to
- * fetch (see buildPinnedDispatcher).
- */
+// Supply the vetted address in either lookup callback shape used by node:net.
 export function buildPinnedLookup(address, family) {
   const fam = family || (address.includes(':') ? 6 : 4);
   return (_hostname, options, callback) => {
@@ -210,37 +196,13 @@ export function buildPinnedLookup(address, family) {
   };
 }
 
-/**
- * One-shot dispatcher that pins every connection to the vetted IP. Created
- * per-request and left for GC after the body is consumed (single-user,
- * low-volume tool — a pooled keep-alive agent would only hold a stale socket).
- *
- * The `Dispatcher1Wrapper` is REQUIRED, not decorative. We hand this dispatcher
- * to the runtime's global `fetch` (via fetchWithTimeout), and Node's *bundled*
- * undici drives a dispatcher with whichever request-handler contract that Node
- * version speaks. undici 8 dropped v7's implicit wrapping of the legacy
- * (onConnect/onHeaders/onComplete) handler shape, so a bare undici-8 `Agent`
- * handed to the built-in fetch of any Node that still bundles undici 7 (22, 24,
- * 25 — including the 22.22.2 minimum CI job) throws `InvalidArgumentError: invalid
- * onRequestStart method` and the request never leaves. Since fetchGuarded
- * swallows network errors to null, that failure would be SILENT: every guarded
- * fetch would return null rather than fall back to an unpinned connect, but the
- * feature would be dead. `Dispatcher1Wrapper` is undici 8's documented adapter
- * for exactly this (the same one `setGlobalDispatcher` mirrors for Node's
- * built-in fetch) and is accepted by both the legacy and the v8 handler
- * contracts, so one build works across Node 22→26.
- */
-export function buildPinnedDispatcher(address, family) {
-  return new Dispatcher1Wrapper(new Agent({ connect: { lookup: buildPinnedLookup(address, family) } }));
+function pinnedFetch(url, resolved, headers, timeoutMs, signal) {
+  const lookup = resolved.address ? buildPinnedLookup(resolved.address, resolved.family) : undefined;
+  return pinnedHttpRequest(url, { headers, lookup, signal }, timeoutMs).catch(() => null);
 }
 
-// Fetch the URL with its connection pinned to the SSRF-vetted address (when we
-// have one), falling back to the runtime's own resolution otherwise.
-function pinnedFetch(url, resolved, options, timeoutMs) {
-  const fetchOptions = resolved.address
-    ? { ...options, dispatcher: buildPinnedDispatcher(resolved.address, resolved.family) }
-    : options;
-  return fetchWithTimeout(url, fetchOptions, timeoutMs).catch(() => null);
+function discardBody(res) {
+  return res.body?.cancel().catch(() => {});
 }
 
 function throwUnsafeUrl() {
@@ -266,15 +228,17 @@ export async function assertPublicHttpUrl(target, { blockPrivate = false } = {})
 // want that); `throwOnUnsafe: false` makes it fail closed to null instead — for
 // callers (RSS feeds) whose own contract is a friendly "couldn't fetch" result
 // rather than a bubbled error.
-async function fetchGuarded(url, { timeoutMs = DEFAULT_TIMEOUT_MS, headers, blockPrivate = false, throwOnUnsafe = true } = {}) {
+async function fetchGuarded(url, { timeoutMs = DEFAULT_TIMEOUT_MS, headers, blockPrivate = false, throwOnUnsafe = true, signal } = {}) {
+  signal?.throwIfAborted();
   const first = await resolvePublicHttpUrl(url, { blockPrivate });
   if (!first.safe) {
     if (throwOnUnsafe) throwUnsafeUrl();
     return null;
   }
-  const res = await pinnedFetch(url, first, { redirect: 'manual', headers }, timeoutMs);
+  const res = await pinnedFetch(url, first, headers, timeoutMs, signal);
   if (res && res.status >= 300 && res.status < 400) {
     const location = res.headers.get('location');
+    await discardBody(res);
     if (!location) return null;
     // A malformed Location must fail closed to null (not throw) so the
     // throwOnUnsafe:false contract holds for the redirect hop too — same
@@ -283,7 +247,13 @@ async function fetchGuarded(url, { timeoutMs = DEFAULT_TIMEOUT_MS, headers, bloc
     try { redirectUrl = new URL(location, url).href; } catch { return null; }
     const hop = await resolvePublicHttpUrl(redirectUrl, { blockPrivate });
     if (!hop.safe) return null;
-    return pinnedFetch(redirectUrl, hop, { redirect: 'error', headers }, timeoutMs);
+    const next = await pinnedFetch(redirectUrl, hop, headers, timeoutMs, signal);
+    // A second Fetch redirect used to reject via redirect: 'error'.
+    if (next && [301, 302, 303, 307, 308].includes(next.status)) {
+      await discardBody(next);
+      return null;
+    }
+    return next;
   }
   return res;
 }
@@ -308,11 +278,11 @@ export async function resolvePublicUrl(url, {
     const resolved = await resolvePublicHttpUrl(target.href, { blockPrivate });
     const remainingMs = deadline - Date.now();
     if (!resolved.safe || remainingMs <= 0) return null;
-    const res = await pinnedFetch(target.href, resolved, { redirect: 'manual', headers }, remainingMs);
+    const res = await pinnedFetch(target.href, resolved, headers, remainingMs);
     if (!res) return null;
     // Headers are all we need; do not download a Pinterest page (or retain a
     // redirect response's socket) just to learn its destination.
-    await res.body?.cancel().catch(() => {});
+    await discardBody(res);
     if (res.ok) return target.href;
     if (res.status < 300 || res.status >= 400 || redirects === maxRedirects) return null;
     const location = res.headers.get('location');
@@ -334,7 +304,10 @@ export async function resolvePublicUrl(url, {
  */
 export async function readBodyCapped(res, maxBytes) {
   const declared = Number(res.headers.get('content-length'));
-  if (maxBytes && Number.isFinite(declared) && declared > maxBytes) return null;
+  if (maxBytes && Number.isFinite(declared) && declared > maxBytes) {
+    await discardBody(res);
+    return null;
+  }
 
   if (!res.body || typeof res.body.getReader !== 'function') {
     // No readable stream (some runtimes / test doubles) — fall back to a
@@ -386,7 +359,11 @@ export function fetchPublicResponse(url, { timeoutMs, headers, blockPrivate = fa
  */
 export async function fetchPublicText(url, { timeoutMs, headers, maxBytes, blockPrivate = false, throwOnUnsafe = true } = {}) {
   const res = await fetchGuarded(url, { timeoutMs, headers, blockPrivate, throwOnUnsafe });
-  if (!res?.ok) return null;
+  if (!res) return null;
+  if (!res.ok) {
+    await discardBody(res);
+    return null;
+  }
   if (!maxBytes) return res.text();
   const buffer = await readBodyCapped(res, maxBytes);
   return buffer === null ? null : buffer.toString('utf-8');
@@ -397,9 +374,13 @@ export async function fetchPublicText(url, { timeoutMs, headers, maxBytes, block
  * within the size cap, or null on any failure (see readBodyCapped for the
  * streaming peak-memory bound).
  */
-export async function fetchPublicBinary(url, { timeoutMs, headers, maxBytes = DEFAULT_MAX_BYTES, blockPrivate = false, throwOnUnsafe = true } = {}) {
-  const res = await fetchGuarded(url, { timeoutMs, headers, blockPrivate, throwOnUnsafe });
-  if (!res?.ok) return null;
+export async function fetchPublicBinary(url, { timeoutMs, headers, maxBytes = DEFAULT_MAX_BYTES, blockPrivate = false, throwOnUnsafe = true, signal } = {}) {
+  const res = await fetchGuarded(url, { timeoutMs, headers, blockPrivate, throwOnUnsafe, signal });
+  if (!res) return null;
+  if (!res.ok) {
+    await discardBody(res);
+    return null;
+  }
   const contentType = res.headers.get('content-type') || '';
   const buffer = await readBodyCapped(res, maxBytes);
   return buffer === null ? null : { buffer, contentType };

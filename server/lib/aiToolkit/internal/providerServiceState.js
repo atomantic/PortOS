@@ -1,4 +1,5 @@
-import { chmod, readFile, rename } from 'fs/promises';
+import { AsyncLocalStorage } from 'node:async_hooks';
+import { readFile, rename } from 'fs/promises';
 import { existsSync } from 'fs';
 import { join } from 'path';
 import { atomicWrite } from './atomicWrite.js';
@@ -245,23 +246,48 @@ export function createProviderServiceState(config = {}) {
   const providersPath = join(dataDir, providersFile);
   let providersCache = null;
   let providersCacheAt = -Infinity;
-  let providersLoadInFlight = null;
-  let cacheGeneration = 0;
+  const writes = new AsyncLocalStorage();
+  const rootQueue = { tail: Promise.resolve(), loadInFlight: null };
+  let activeWrite = null;
+  let restoring = false;
 
-  function refreshProvidersCache(data) {
+  function currentQueue() {
+    const lease = writes.getStore();
+    return lease?.active ? lease : rootQueue;
+  }
+
+  function withProvidersWrite(work, { serveCommittedReads = true } = {}) {
+    const queue = currentQueue();
+    const pending = queue.tail.then(() => {
+      // Save hooks may call back into the service. Give their work a child
+      // queue so it can finish inside this write, still one operation at a time.
+      const lease = { active: true, tail: Promise.resolve(), loadInFlight: null };
+      if (queue === rootQueue && serveCommittedReads) activeWrite = lease;
+      return writes.run(lease, async () => {
+        try {
+          return await work();
+        } finally {
+          lease.active = false;
+          await lease.tail;
+          if (queue === rootQueue) activeWrite = null;
+        }
+      });
+    });
+    queue.tail = pending.catch(() => {});
+    return pending;
+  }
+
+  function normalizeProviderMap(data) {
     if (data?.providers && Object.getPrototypeOf(data.providers) !== null) {
       data.providers = Object.assign(Object.create(null), data.providers);
     }
-    providersCache = data;
-    providersCacheAt = Date.now();
-    cacheGeneration += 1;
     return data;
   }
 
-  function invalidateProvidersCache() {
-    providersCache = null;
-    providersCacheAt = -Infinity;
-    cacheGeneration += 1;
+  function refreshProvidersCache(data) {
+    providersCache = normalizeProviderMap(data);
+    providersCacheAt = Date.now();
+    return providersCache;
   }
 
   async function parseOrRescue(content, source) {
@@ -276,11 +302,7 @@ export function createProviderServiceState(config = {}) {
   }
 
   async function writeProvidersFile(data) {
-    await atomicWrite(providersPath, data);
-    // Best-effort owner-only mode: chmod is a no-op on Windows and must not break provider saves.
-    await chmod(providersPath, 0o600).catch((err) => {
-      if (err?.code !== 'ENOENT') console.log(`⚠️ Could not set permissions on providers store (${err?.code || 'error'})`);
-    });
+    await atomicWrite(providersPath, data, { mode: 0o600 });
   }
 
   async function readProvidersFromDisk() {
@@ -318,17 +340,42 @@ export function createProviderServiceState(config = {}) {
     return data;
   }
 
-  async function loadProviders() {
-    if (providersCache && (Date.now() - providersCacheAt) < providersCacheTtlMs) return providersCache;
-    if (providersLoadInFlight) return providersLoadInFlight;
-    const generation = cacheGeneration;
-    providersLoadInFlight = readProvidersFromDisk()
-      .then(data => {
-        if (cacheGeneration === generation) return refreshProvidersCache(data);
-        return providersCache ?? data;
-      })
-      .finally(() => { providersLoadInFlight = null; });
-    return providersLoadInFlight;
+  const hasFreshCache = () => providersCache && Date.now() - providersCacheAt < providersCacheTtlMs;
+
+  function loadProviders() {
+    if (hasFreshCache()) return Promise.resolve(providersCache);
+    const queue = currentQueue();
+    // A save hook may wait on host work that reads providers from another
+    // async context. Keep these reads on the committed snapshot while a
+    // transaction owns the queue, or share its initial load at startup.
+    if (queue === rootQueue && activeWrite && !restoring) {
+      if (providersCache) return Promise.resolve(providersCache);
+      if (activeWrite.loadInFlight) return activeWrite.loadInFlight;
+    }
+    // A cold read may seed, migrate, or rename providers.json. Recheck the
+    // cache once admitted so it cannot write over a newer transaction.
+    queue.loadInFlight ??= withProvidersWrite(async () => (
+      hasFreshCache() ? providersCache : refreshProvidersCache(await readProvidersFromDisk())
+    ), { serveCommittedReads: false }).finally(() => { queue.loadInFlight = null; });
+    return queue.loadInFlight;
+  }
+
+  async function loadProvidersForWrite() {
+    // The committed cache stays readable during an atomic write and survives
+    // a failed write unchanged. Preserve the map's reserved-key protection.
+    return normalizeProviderMap(structuredClone(await loadProviders()));
+  }
+
+  function restoreProvidersFile(restore) {
+    return withProvidersWrite(async () => {
+      restoring = true;
+      try {
+        return await restore();
+      } finally {
+        providersCache = null;
+        restoring = false;
+      }
+    });
   }
 
   async function notifyProvidersSaved(data) {
@@ -341,7 +388,6 @@ export function createProviderServiceState(config = {}) {
   }
 
   async function saveProviders(data) {
-    invalidateProvidersCache();
     await writeProvidersFile(data);
     refreshProvidersCache(data);
     await notifyProvidersSaved(data);
@@ -419,7 +465,10 @@ export function createProviderServiceState(config = {}) {
 
   return {
     loadProviders,
+    loadProvidersForWrite,
+    withProvidersWrite,
     saveProviders,
+    restoreProvidersFile,
     buildProviderRecord,
     storeProviderRecords,
     sampleFile,

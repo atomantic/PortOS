@@ -3,9 +3,8 @@ import { Edit3, Plus, Trash2 } from 'lucide-react';
 import { getCosJobNotepad, setCosJobNote, deleteCosJobNote, clearCosJobNotepad } from '../../services/apiAgents.js';
 import { formatCount } from '../../utils/formatters';
 import InlineConfirmRow from '../ui/InlineConfirmRow';
+import { MAX_KEY_CHARS, NOTE_KEY_PATTERN } from '../../../../server/lib/autonomousJobNotepadLimits.js';
 
-// Mirrors the server caps in server/lib/autonomousJobNotepad.js; the server is authoritative.
-const KEY_PATTERN = /^[a-zA-Z0-9._:-]+$/;
 const ICON_BUTTON_CLASS = 'inline-flex items-center justify-center min-h-[44px] min-w-[44px] text-gray-400 hover:text-white transition-colors';
 
 // The notepad is fetched once when the section opens; each mutation
@@ -31,15 +30,16 @@ function NotepadBody({ jobId, jobName }) {
 
   const apply = (call) => call.then((result) => { setPad(result); return true; }).catch(() => false);
 
+  const key = draftKey.trim();
+  const keyValid = NOTE_KEY_PATTERN.test(key) && key.length <= MAX_KEY_CHARS;
   const save = async (event) => {
     event.preventDefault();
     setSaving(true);
-    const ok = await apply(setCosJobNote(jobId, draftKey.trim(), draftValue));
+    const ok = await apply(setCosJobNote(jobId, key, draftValue));
     setSaving(false);
     if (ok) { setDraftKey(''); setDraftValue(''); }
   };
 
-  const keyValid = KEY_PATTERN.test(draftKey.trim()) && draftKey.trim().length <= 128;
   const idBase = `job-notepad-${jobId}`;
 
   return (
@@ -89,7 +89,7 @@ function NotepadBody({ jobId, jobName }) {
             id={`${idBase}-key`}
             value={draftKey}
             onChange={(e) => setDraftKey(e.target.value)}
-            maxLength={128}
+            maxLength={MAX_KEY_CHARS}
             className="w-full px-2 py-1.5 bg-port-bg border border-port-border rounded font-mono text-gray-200"
             placeholder="last-processed-pr"
           />

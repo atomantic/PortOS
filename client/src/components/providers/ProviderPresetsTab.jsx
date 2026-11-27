@@ -1,6 +1,6 @@
 import { Link } from 'react-router';
 import ProviderModelSelector from '../ProviderModelSelector';
-import { filterSelectableModels, isApiProvider, isCodexSubscriptionProvider, isLocalEndpoint, isProcessProvider, providerTypeClass } from '../../utils/providers';
+import { filterSelectableModels, isApiProvider, isCodexSubscriptionProvider, isLocalEndpoint, isProcessProvider, providerTypeClass, runtimeBadgeMeta } from '../../utils/providers';
 import { formatCount } from '../../utils/formatters';
 import ListLoadError from '../ui/ListLoadError';
 import EmptyState from '../EmptyState';
@@ -10,84 +10,33 @@ import LocalPersistentMindSetupCard from '../settings/LocalPersistentMindSetupCa
 import DefaultProviderHelper from './DefaultProviderHelper';
 import FleetHostSetup from './FleetHostSetup';
 import ProviderCard from './ProviderCard';
+import ProviderRuntimeBadge from './ProviderRuntimeBadge.jsx';
 import ProviderCompatibilityMatrix from './ProviderCompatibilityMatrix';
 import MoaPresetsSection from './MoaPresetsSection';
 import ProviderEnvVars from './ProviderEnvVars';
 import RetiredModelPinsPanel from './RetiredModelPinsPanel';
 
 export default function ProviderPresetsTab({
-  providers,
-  providersById,
-  presetSections,
-  cardStateByProviderId,
-  runtimeByProviderId,
-  readiness,
-  statuses,
-  activeProviderId,
-  defaultProvider,
-  runnerAllowedCommands,
-  testResults,
-  refreshing,
-  refreshNotice = {},
-  recovering,
-  addingTuiMode,
-  servingModel,
-  codexAccount,
-  codexModels,
-  codexAccountLoading,
-  codexLoginLoading,
-  loadError,
-  modelPinReloadKey,
-  showSamples,
-  setShowSamples,
-  loadingSamples,
-  samplesState,
-  samplesError,
-  retrySamples,
-  sampleProviders,
-  addableSamples,
-  addingSample,
-  onAddSample,
-  onAddAllSamples,
-  showRunPanel,
-  apps,
-  appsState,
-  appsError,
-  retryApps,
-  selectedWorkspace,
-  setSelectedWorkspace,
-  runPrompt,
-  setRunPrompt,
-  activeRun,
-  runOutput,
-  runProviderIsTui,
-  onExecuteRun,
-  startingRun,
-  onStopRun,
-  compositionCatalog,
-  onCompose,
-  onScrollToDefaultCard,
-  onReload,
-  onTest,
-  onRefreshModels,
-  onToggleEnabled,
-  onSetActive,
-  onEdit,
-  onDelete,
-  onAddTuiMode,
-  onRecover,
-  onInstallRuntime,
-  onAutoSetupRuntime,
-  onUseServedModel,
-  onServeWantedModel,
-  onCodexCheckAccount,
-  onCodexSignIn,
-  onCodexCancelLogin,
-  onCodexLogout,
-  onCodexRefreshModels,
-  onCodexCopyCode,
-  onCodexEnable,
+  catalog, cardState, codex, quickRun, samples, actions,
 }) {
+  const {
+    providers, providersById, presetSections, cardStateByProviderId, runtimeByProviderId, readiness,
+    statuses, activeProviderId, defaultProvider, runnerAllowedCommands, loadError, modelPinReloadKey, compositionCatalog,
+  } = catalog;
+  const { testResults, refreshing, refreshNotice = {}, recovering, addingTuiMode, servingModel } = cardState;
+  const {
+    showSamples, setShowSamples, loadingSamples, samplesState, samplesError, retrySamples,
+    sampleProviders, addableSamples, addingSample, onAddSample, onAddAllSamples,
+  } = samples;
+  const {
+    showRunPanel, apps, appsState, appsError, retryApps, selectedWorkspace, setSelectedWorkspace,
+    runPrompt, setRunPrompt, activeRun, runOutput, runProviderIsTui, onExecuteRun, startingRun, onStopRun,
+  } = quickRun;
+  const {
+    onCompose, onScrollToDefaultCard, onReload, onTest, onRefreshModels, onToggleEnabled,
+    onSetActive, onEdit, onDelete, onAddTuiMode, onRecover, onInstallRuntime, onAutoSetupRuntime,
+    onUseServedModel, onServeWantedModel,
+  } = actions;
   return (
     <>
       {!loadError && (
@@ -150,26 +99,7 @@ export default function ProviderPresetsTab({
                       <span className={`text-xs px-2 py-0.5 rounded ${providerTypeClass(provider.type)}`}>
                         {provider.type.toUpperCase()}
                       </span>
-                      {provider.llamaBacked && (
-                        <span className="text-xs px-2 py-0.5 rounded bg-purple-500/20 text-purple-300 border border-purple-500/30">
-                          LLAMA.CPP / DFLASH
-                        </span>
-                      )}
-                      {provider.vllmBacked && (
-                        <span className="text-xs px-2 py-0.5 rounded bg-emerald-500/20 text-emerald-300 border border-emerald-500/30">
-                          vLLM / DFLASH2
-                        </span>
-                      )}
-                      {provider.sglangBacked && (
-                        <span className="text-xs px-2 py-0.5 rounded bg-amber-500/20 text-amber-300 border border-amber-500/30">
-                          SGLANG
-                        </span>
-                      )}
-                      {provider.mtplxBacked && (
-                        <span className="text-xs px-2 py-0.5 rounded bg-blue-500/20 text-blue-300 border border-blue-500/30">
-                          MTPLX
-                        </span>
-                      )}
+                      <ProviderRuntimeBadge meta={runtimeBadgeMeta(provider)} />
                       {!provider.enabled && (
                         <span className="text-xs px-2 py-0.5 rounded bg-gray-500/20 text-gray-400">
                           DISABLED
@@ -390,17 +320,7 @@ export default function ProviderPresetsTab({
                       onUseServedModel={onUseServedModel}
                       onServeWantedModel={onServeWantedModel}
                       servingModel={Boolean(servingModel[provider.id])}
-                      codexAccount={isCodexSubscriptionProvider(provider) ? codexAccount : undefined}
-                      codexModels={codexModels}
-                      codexAccountLoading={codexAccountLoading}
-                      codexLoginLoading={codexLoginLoading}
-                      onCodexCheckAccount={onCodexCheckAccount}
-                      onCodexSignIn={onCodexSignIn}
-                      onCodexCancelLogin={onCodexCancelLogin}
-                      onCodexLogout={onCodexLogout}
-                      onCodexRefreshModels={onCodexRefreshModels}
-                      onCodexCopyCode={onCodexCopyCode}
-                      onCodexEnable={() => onCodexEnable(provider)}
+                      codex={isCodexSubscriptionProvider(provider) ? codex : undefined}
                     />
                   ))}
                 </CollapsibleSection>

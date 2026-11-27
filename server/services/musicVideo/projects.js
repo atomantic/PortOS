@@ -29,6 +29,8 @@ import { emitRecordUpdated, emitRecordDeleted, autoSubscribeRecordToAllPeers } f
 import { RENDER_TARGET } from '../../lib/renderTargets.js';
 import { VIDEO_GEN_MODE, resolveVideoMode } from '../videoGen/modes.js';
 import { getSettings } from '../settings.js';
+import { resolveFalApiKey } from '../falQueue.js';
+import { defaultMusicVideoUpscaler } from '../../lib/musicVideo/musicVideoUpscale.js';
 import { withStyleSnapshots } from './styleSnapshots.js';
 import { queueProjectCatalogLinkSync } from './catalogLinks.js';
 import { labelProjectReferences } from './referenceLabels.js';
@@ -160,16 +162,19 @@ import { getTrack } from '../tracks/index.js';
 import { parseLyricCues } from './timedText.js';
 import { setSceneLastFailure, appendSceneTakes as appendTakes, appendTakesAcrossScenes as appendTakesAcross, selectSceneTake as selectTake } from './takes.js';
 
-// resolveVideoMode usability-gates the pin (a disabled grok pin seeds local);
-// an input that names a backend explicitly wins untouched.
-async function seedVideoBackendDefault(input) {
-  if (input?.videoSettings?.backend) return input;
+async function seedVideoSettingsDefaults(input) {
+  const videoSettings = input.videoSettings || {};
+  if (videoSettings.backend && videoSettings.upscaleMethod) return input;
   const settings = await getSettings().catch(() => null);
-  if (!settings) return input;
-  const backend = resolveVideoMode(null, settings, { target: RENDER_TARGET.MUSIC_VIDEO });
-  // Local is buildProjectRecord's own default — leave the input byte-identical.
-  if (backend === VIDEO_GEN_MODE.LOCAL) return input;
-  return { ...input, videoSettings: { ...(input?.videoSettings || {}), backend } };
+  const backend = videoSettings.backend || (settings && resolveVideoMode(null, settings, { target: RENDER_TARGET.MUSIC_VIDEO }));
+  return {
+    ...input,
+    videoSettings: {
+      ...videoSettings,
+      ...(backend && backend !== VIDEO_GEN_MODE.LOCAL ? { backend } : {}),
+      upscaleMethod: videoSettings.upscaleMethod ?? defaultMusicVideoUpscaler(resolveFalApiKey(settings)),
+    },
+  };
 }
 
 // Automatically read lyrics and creative context from the linked music track
@@ -249,7 +254,7 @@ async function seedTrackMetadataOnUpdate(id, patch) {
 
 export async function createProject(input) {
   assertMusicVideoMediaSelections(input);
-  const seeded = await seedTrackMetadata(await seedVideoBackendDefault(input));
+  const seeded = await seedTrackMetadata(await seedVideoSettingsDefaults(input));
   const snapshotted = await withStyleSnapshots(seeded);
   const project = await (await selectBackend()).createProject(snapshotted);
   announceNewProject(project.id);
@@ -276,7 +281,7 @@ async function admitNewProject(create, { finish = null, rollback = null } = {}) 
 
 /** Create a seeded project; the backend runs `prepare({ id })` inside its create and stores what it returns. */
 export async function createProjectWith(input, { prepare, finish, rollback } = {}) {
-  const seeded = await seedTrackMetadata(await seedVideoBackendDefault(input));
+  const seeded = await seedTrackMetadata(await seedVideoSettingsDefaults(input));
   return admitNewProject((backend) => backend.createProject(seeded, prepare), { finish, rollback });
 }
 
@@ -350,6 +355,7 @@ export async function deleteProject(id) {
   syncCatalogLinks(id);
   // Its cached shot segments are regenerable, and only this machine's. The leaf loads only on this
   // rare path, keeping it out of the boot closure (importScoping.test.js).
+  await import('./boardUndo.js').then(({ clearBoardUndo }) => clearBoardUndo(id)).catch(() => {});
   await import('./shotSegmentPaths.js').then(({ removeProjectSegments }) => removeProjectSegments(id)).catch((err) => {
     console.warn(`⚠️ Music Video ${id.slice(0, 8)}: could not remove its cached shot segments: ${err.message}`);
   });

@@ -42,6 +42,9 @@ export const getContextPlans = (options) => request('/local-llm/context-plans', 
 export const getLocalLlmCatalog = (backend, q = '', { variants = false, silent } = {}) =>
   request(`/local-llm/catalog?backend=${encodeURIComponent(backend)}${q ? `&q=${encodeURIComponent(q)}` : ''}${variants ? '&variants=1' : ''}`, { silent });
 
+export const checkConversationalGemmaAccess = options =>
+  request('/local-llm/conversational-gemma/access', { ...options, method: 'POST' });
+
 export const getModelAbuseGuardStatus = (options) =>
   request('/local-llm/security-guard/status', options);
 
@@ -148,19 +151,21 @@ const managedRuntimeRequests = {
   llama: {
     status: (options) => request('/local-llm/llama-server/status', options),
     install: (options) => request('/local-llm/llama-server/install', { ...options, method: 'POST' }),
-    start: (config) => request('/local-llm/llama-server/start', { method: 'POST', body: JSON.stringify(config) }),
+    start: (config, options) => request('/local-llm/llama-server/start', { ...options, method: 'POST', body: JSON.stringify(config) }),
     stop: (options) => request('/local-llm/llama-server/stop', { ...options, method: 'POST' }),
     upgrade: (options) => request('/local-llm/llama-server/upgrade', { ...options, method: 'POST' }),
   },
   mtplx: {
     status: (options) => request('/local-llm/mtplx/status', options),
     install: (options) => request('/local-llm/mtplx/install', { ...options, method: 'POST' }),
+    uninstall: () => request('/local-llm/mtplx/uninstall', { method: 'POST' }),
     start: (config = {}) => request('/local-llm/mtplx/start', { method: 'POST', body: JSON.stringify(config) }),
     stop: (options) => request('/local-llm/mtplx/stop', { ...options, method: 'POST' }),
   },
   slotstream: {
     status: (options) => request('/local-llm/slotstream/status', options),
     install: (options) => request('/local-llm/slotstream/install', { ...options, method: 'POST' }),
+    uninstall: () => request('/local-llm/slotstream/uninstall', { method: 'POST' }),
     start: (config = {}) => request('/local-llm/slotstream/start', { method: 'POST', body: JSON.stringify(config) }),
     stop: (options) => request('/local-llm/slotstream/stop', { ...options, method: 'POST' }),
   },
@@ -169,14 +174,18 @@ const managedRuntimeRequests = {
     install: (options) => request('/local-llm/splash/install', { ...options, method: 'POST' }),
     start: (options) => request('/local-llm/splash/start', { ...options, method: 'POST' }),
     stop: (options) => request('/local-llm/splash/stop', { ...options, method: 'POST' }),
+    uninstall: (options) => request('/local-llm/splash/uninstall', { ...options, method: 'POST' }),
     upgrade: (options) => request('/local-llm/splash/upgrade', { ...options, method: 'POST' }),
+    cancel: (options) => request('/local-llm/splash/cancel', { ...options, method: 'POST' }),
   },
   mkserve: {
     status: (options) => request('/local-llm/mkserve/status', options),
     install: (options) => request('/local-llm/mkserve/install', { ...options, method: 'POST' }),
     start: (options) => request('/local-llm/mkserve/start', { ...options, method: 'POST' }),
     stop: (options) => request('/local-llm/mkserve/stop', { ...options, method: 'POST' }),
+    uninstall: (options) => request('/local-llm/mkserve/uninstall', { ...options, method: 'POST' }),
     upgrade: (options) => request('/local-llm/mkserve/upgrade', { ...options, method: 'POST' }),
+    cancel: (options) => request('/local-llm/mkserve/cancel', { ...options, method: 'POST' }),
   },
 };
 
@@ -192,12 +201,14 @@ export const controlManagedInklingRuntime = (runtime, action, options) =>
 export const getMtplxServerStatus = managedRuntimeRequests.mtplx.status;
 export const startMtplxServer = managedRuntimeRequests.mtplx.start;
 export const stopMtplxServer = () => managedRuntimeRequests.mtplx.stop();
+export const uninstallMtplx = managedRuntimeRequests.mtplx.uninstall;
 export const installMtplx = () => managedRuntimeRequests.mtplx.install();
 
 export const getSlotstreamServerStatus = managedRuntimeRequests.slotstream.status;
 export const startSlotstreamServer = managedRuntimeRequests.slotstream.start;
 export const stopSlotstreamServer = () => managedRuntimeRequests.slotstream.stop();
 export const installSlotstream = () => managedRuntimeRequests.slotstream.install();
+export const uninstallSlotstream = managedRuntimeRequests.slotstream.uninstall;
 
 // Fetch one checkpoint into Slotstream's cache. `model` is a catalog id from
 // the status payload, or a Hugging Face `owner/name`. Byte progress arrives on
@@ -215,6 +226,9 @@ export const cancelSlotstreamModelDownload = (model, options) =>
     ...options,
   });
 
+export const removeSlotstreamModel = (model, options) =>
+  request('/local-llm/slotstream/models/remove', { method: 'POST', body: JSON.stringify({ model }), ...options });
+
 // MTPLX model catalog — search, download, and remove MTP checkpoints in-app.
 // `mtplx forge discover` is upstream's index of MTPLX-branded models, which is
 // exactly the set `mtplx serve` can run; an empty query returns its default list.
@@ -230,6 +244,9 @@ export const searchMtplxModels = (params = {}, options) => {
 // a multi-GB transfer resolves only when the weights are on disk.
 export const pullMtplxModel = (model = null, options) =>
   request('/local-llm/mtplx/models/pull', { method: 'POST', body: JSON.stringify(model ? { model } : {}), ...options });
+
+export const cancelMtplxModelPull = (options) =>
+  request('/local-llm/mtplx/models/pull/cancel', { method: 'POST', ...options });
 
 export const removeMtplxModel = (model) =>
   request('/local-llm/mtplx/models/remove', { method: 'POST', body: JSON.stringify({ model }) });
@@ -250,8 +267,8 @@ export const getLlamaServerUpdateStatus = (options) =>
   request('/local-llm/llama-server/update-status', options);
 
 export const startLlamaServer = managedRuntimeRequests.llama.start;
-export const stopLlamaServer = () => managedRuntimeRequests.llama.stop();
-export const installLlamaServer = () => managedRuntimeRequests.llama.install();
+export const stopLlamaServer = managedRuntimeRequests.llama.stop;
+export const installLlamaServer = managedRuntimeRequests.llama.install;
 
 // Upgrade a package-manager-installed binary. The server restarts a managed
 // llama-server using its existing launch configuration.

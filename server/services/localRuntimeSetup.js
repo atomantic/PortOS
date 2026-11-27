@@ -2,8 +2,7 @@
  * One-click "make this local runtime work" for the provider readiness checklist: install the daemon, start it and
  * confirm the endpoint answers, from the button next to the failing check (`providerReadiness.js` answers WHAT is missing).
  *
- * Every command comes from the fixed table below. A request names a runtime *kind* (`mtplx` / `llama` / `ollama` /
- * `lmstudio` / `vllm` / `sglang`) and nothing else; no package, URL, port or argument from the request reaches a shell word.
+ * Every command comes from the fixed table below. No package, URL, port or argument directly from the request reaches a shell word.
  *
  * Three deliberate limits:
  *
@@ -11,6 +10,7 @@
  *     no runtime's *model* check is auto-fixed by a start: a multi-gigabyte download is a decision (the Models → Runtimes
  *     page owns it with a picker). `start` runs MTPLX on a checkpoint ALREADY in its cache (`lib/mtplxModels.js`); an
  *     empty or half-pulled cache is a SEPARATE, named action (`pull-start`, "Download the default model & start MTPLX").
+ *     Splash and mkserve package a checkpoint with the runtime, so their Install & start buttons name that download.
  *   - **MTPLX's privileged paths are never touched.** The optional `mtplx max --install` fan-control helper (sudo) stays
  *     an operator action outside PortOS. Install and start are delegated to `mtplxServerManager.js`, so a server started
  *     here is the same PM2 process (`portos-mtplx`) the Models → Runtimes page can stop, log and persist.
@@ -37,12 +37,12 @@ import { runStreamingCommand } from '../lib/streamingSpawn.js';
 import { installLlamaServer } from './llamaServerManager.js';
 import { installMtplx, startMtplxServer, MTPLX_UNSUPPORTED_REASON } from './mtplxServerManager.js';
 import { installSlotstream, startSlotstreamServer, SLOTSTREAM_UNSUPPORTED_REASON } from './slotstreamServerManager.js';
-import { previewMtplxPull } from './mtplxModelManager.js';
+import { isMtplxRepoId, previewMtplxPull, registerMtplxDownload } from './mtplxModelManager.js';
 import { MANAGED_RUNTIME_APPS } from '../lib/managedRuntimeApps.js';
 import { syncRuntimeProviderModels } from './localRuntimeProviderSync.js';
 import { assertDownloadFits } from '../lib/downloadPreflight.js';
 import { controlOllamaServer, installBackend } from './localLlm.js';
-import { isAppInstalled as isLmStudioAppInstalled } from './lmStudioManager.js';
+import { detectRuntimeInstallation } from './localRuntimeInstallation.js';
 import { provisionVllmQwenProject, readVllmQwenSetupState, startVllmQwenProject } from './vllmQwenManager.js';
 
 /** A short command that only asks a running daemon to do something. */
@@ -63,7 +63,7 @@ const PROBE_TIMEOUT_MS = 2_000;
 const CONFIRM_TIMEOUT_MS = 5_000;
 
 /**
- * Why an installed MTPLX still cannot be started: weights stay the user's decision (`docs/features/mtplx.md`), so a plain
+ * Why an installed MTPLX still cannot be started: weights stay the user's decision (`docs/features/local-llm-runtimes.md`), so a plain
  * Start names the button that fetches them plus the in-app card for a non-default checkpoint.
  */
 const MTPLX_NO_MODEL_ERROR = expandPageToken('no model weights are cached, so its server exits before it binds a port. Close this window — the checklist now offers “Download the default model & start MTPLX”, which fetches MTPLX\'s own verified checkpoint (a multi-gigabyte download) and then starts the server. To use a different MTP checkpoint instead, search for one on the MTPLX card in {page}, download it there, then click Start MTPLX again.', LOCAL_RUNTIMES.mtplx);
@@ -152,7 +152,24 @@ async function pullMtplxDefaultCheckpoint({ emit, isCancelled }) {
   emit('Downloading MTPLX\'s default verified checkpoint. This is a multi-gigabyte download and can take a long while — leave this window open to watch it.');
   // `mtplx pull` redraws one line with a bare `\r`, so split on it. `isCancelled` is load-bearing: this step can run for HOURS
   // while the route holds its single-setup lock, so closing the modal must stop the download.
-  return runStreamingCommand(binary, ['pull'], emit, { timeoutMs: WEIGHTS_TIMEOUT_MS, splitRe: PROGRESS_SPLIT_RE, isCancelled });
+  let checkpoint = null;
+  const result = await runStreamingCommand(binary, ['pull'], (line) => {
+    // MTPLX's plain-text pull summary names the resolved Hugging Face repo.
+    const repoId = line.startsWith('model: ') ? line.slice(7) : null;
+    if (isMtplxRepoId(repoId)) checkpoint = repoId;
+    emit(line);
+  }, { timeoutMs: WEIGHTS_TIMEOUT_MS, splitRe: PROGRESS_SPLIT_RE, isCancelled });
+  if (result.success) await registerMtplxDownload(checkpoint);
+  return result;
+}
+
+async function runManagedStep(run, { emit, isCancelled }, onProgress = emit) {
+  if (isCancelled()) return { success: false, error: 'Setup was cancelled.' };
+  try {
+    return await run({ onProgress });
+  } catch (error) {
+    return { success: false, error: error.message };
+  }
 }
 
 /**
@@ -233,6 +250,38 @@ const SETUP_ROWS = Object.freeze({
     },
   }),
 
+  splash: Object.freeze({
+    installDownload: 'Inkling 2 Mini (~17 GB)',
+    async hostBlock() {
+      const { supportsManagedSplash, SPLASH_UNSUPPORTED_REASON } = await import('./splashManagedRuntime.js');
+      return await supportsManagedSplash() ? null : SPLASH_UNSUPPORTED_REASON;
+    },
+    async install(ctx) {
+      const { installSplashRuntime } = await import('./splashServerManager.js');
+      return runManagedStep(installSplashRuntime, ctx);
+    },
+    async start(ctx) {
+      const { startSplashServer } = await import('./splashServerManager.js');
+      return runManagedStep(startSplashServer, ctx);
+    },
+  }),
+
+  mkserve: Object.freeze({
+    installDownload: 'Inkling 2 Mini (~19 GiB)',
+    async hostBlock() {
+      const { supportsMkserve, MKSERVE_UNSUPPORTED_REASON } = await import('./mkserveRuntimeManager.js');
+      return supportsMkserve() ? null : MKSERVE_UNSUPPORTED_REASON;
+    },
+    async install(ctx) {
+      const { installMkserve } = await import('./mkserveRuntimeManager.js');
+      return runManagedStep(installMkserve, ctx, ({ message }) => ctx.emit(message));
+    },
+    async start(ctx) {
+      const { startMkserveServer } = await import('./mkserveRuntimeManager.js');
+      return runManagedStep(startMkserveServer, ctx, ({ message }) => ctx.emit(message));
+    },
+  }),
+
   vllm: Object.freeze({
     // CUDA + Marlin + FlashInfer in a Linux container; macOS has no card and DFlash 2 on Apple Silicon is unproven here.
     platforms: ['linux', 'win32'],
@@ -241,7 +290,7 @@ const SETUP_ROWS = Object.freeze({
       // Never installs: Docker Desktop / NVIDIA toolkit / WSL2 are host-level operator decisions and the payload is ~9.5 GB.
       return {
         success: false,
-        error: 'PortOS does not install this stack. On the RTX 3090 host, set up WSL2 (or Linux) with Docker and the NVIDIA Container Toolkit — then the checklist can clone, build and prepare the compose project for you (see docs/features/qwen38-rtx3090.md).',
+        error: 'PortOS does not install this stack. On the RTX 3090 host, set up WSL2 (or Linux) with Docker and the NVIDIA Container Toolkit — then the checklist can clone, build and prepare the compose project for you (see docs/features/local-llm-runtimes.md#vllm-on-rtx-3090).',
       };
     },
     // On-disk state in the four-state vocabulary; `'empty'` makes the checklist offer `provision-start`, which `vllmProjectSetupState` reports only where cloning/building IS the fix.
@@ -261,7 +310,7 @@ const SETUP_ROWS = Object.freeze({
       // Never installs, same reasons as vLLM (host-level operator decisions).
       return {
         success: false,
-        error: 'PortOS does not install this stack. On the Hopper or Blackwell host, set up Docker with the NVIDIA Container Toolkit, then follow docs/features/sglang-qwen38.md — it carries the compose file (with the verified launch line) and the one-time weight download.',
+        error: 'PortOS does not install this stack. On the Hopper or Blackwell host, set up Docker with the NVIDIA Container Toolkit, then follow docs/features/local-llm-runtimes.md#sglang-on-hopper-or-blackwell — it carries the compose file (with the verified launch line) and the one-time weight download.',
       };
     },
     async start({ emit, isCancelled }) {
@@ -353,6 +402,17 @@ function platformSupported(row) {
   return !row.platforms || row.platforms.includes(process.platform);
 }
 
+/** Managed Splash and mkserve always bind the shipped loopback endpoint. */
+export async function runtimeSetupBlockedReason(runtime) {
+  const row = SETUP_ROWS[runtime.kind];
+  if (!row?.hostBlock) return null;
+  const endpoint = runtime.endpoint.replace('http://localhost:', 'http://127.0.0.1:');
+  if (endpoint !== runtime.defaultBaseUrl) {
+    return `The managed ${runtime.label} server listens at ${runtime.defaultBaseUrl}. Use that endpoint to start it here.`;
+  }
+  return row.hostBlock();
+}
+
 /**
  * What (if anything) a "set this up for me" button should offer for one runtime. Pure: the client renders it straight from
  * the readiness payload. Returns `null` when there is nothing to offer (unknown runtime, unsupported platform, already
@@ -361,10 +421,10 @@ function platformSupported(row) {
  * `weights` is what the caller learned about the local model cache; only `'empty'`/`'partial'` change the answer (a Start
  * CANNOT work, so the button becomes the download). `'unknown'` keeps the default: an unreadable cache is not an empty one.
  *
- * @param {string} kind - `mtplx` | `llama` | `ollama` | `lmstudio` | `vllm` | `sglang`
- * @param {{installed: boolean, running: boolean, weights?: 'unknown'|'empty'|'partial'|'ready'}} state
+ * @param {string} kind - a key in SETUP_ROWS
+ * @param {{installed: boolean, running: boolean, weights?: 'unknown'|'empty'|'partial'|'ready', blockedReason?: string|null}} state
  */
-export function describeRuntimeSetup(kind, { installed, running, weights = 'unknown' }) {
+export function describeRuntimeSetup(kind, { installed, running, weights = 'unknown', blockedReason = null }) {
   const row = SETUP_ROWS[kind];
   const runtime = LOCAL_RUNTIMES[kind];
   if (!row || !runtime) return null;
@@ -373,8 +433,9 @@ export function describeRuntimeSetup(kind, { installed, running, weights = 'unkn
   const needsStart = !running && Boolean(row.start);
   if (!needsInstall && !needsStart) return null;
 
-  if (!platformSupported(row)) {
-    return { runtime: kind, label: runtime.label, action: null, actionLabel: null, provisions: false, blockedReason: row.unsupportedReason };
+  blockedReason ||= platformSupported(row) ? null : row.unsupportedReason;
+  if (blockedReason) {
+    return { runtime: kind, label: runtime.label, action: null, actionLabel: null, provisions: false, blockedReason };
   }
 
   // Only offered once the binary is here: the cache cannot be read without it, so `install-start` stays the first step.
@@ -383,13 +444,17 @@ export function describeRuntimeSetup(kind, { installed, running, weights = 'unkn
   const action = needsWeights ? provision
     : needsInstall && needsStart ? 'install-start'
       : needsInstall ? 'install' : 'start';
+  const download = needsInstall && row.installDownload;
+  const actionLabel = download
+    ? `Install & start ${runtime.label} with ${download}`
+    : ACTION_CAPABILITIES[action].label(runtime.label);
   return {
     runtime: kind,
     label: runtime.label,
     action,
-    actionLabel: ACTION_CAPABILITIES[action].label(runtime.label),
+    actionLabel,
     // Whether this click spends gigabytes, answered HERE so the client needn't mirror it by action name.
-    provisions: actionCovers(action, 'provisions'),
+    provisions: Boolean(download) || actionCovers(action, 'provisions'),
     blockedReason: null,
   };
 }
@@ -402,8 +467,9 @@ export function describeRuntimeSetup(kind, { installed, running, weights = 'unkn
  * @param {string} kind
  * @param {{endpoint: string, emit: (line: string) => void, isCancelled?: () => boolean, action?: string}} ctx
  *   `isCancelled` is checked between steps so a closed modal doesn't start a daemon nobody watches. `action` is the one the
- *   button named; `io` lets the post-start provider-model refresh announce `providers:changed`; only a PROVISION_STEPS action adds a step (MTPLX's model download, vLLM's clone/build/prepare), opt-in so no
- *   other action can spend gigabytes. Omit it (`null`) to resolve the action the checklist would offer now.
+ *   button named. `io` lets the post-start provider-model refresh announce `providers:changed`. A PROVISION_STEPS action
+ *   adds a separate provisioning step. Splash and mkserve require an explicit install action for their bundled checkpoint.
+ *   Omit the action (`null`) to resolve other steps from the current state.
  * @returns {Promise<{success: boolean, error?: string, message?: string}>}
  */
 export async function runLocalRuntimeSetup(kind, { endpoint, emit = () => {}, isCancelled = () => false, action = null, io = null }) {
@@ -419,6 +485,8 @@ export async function runLocalRuntimeSetup(kind, { endpoint, emit = () => {}, is
     return { success: true, message: `${runtime.label} is already running at ${target} — nothing to do.` };
   }
   if (!platformSupported(row)) return { success: false, error: row.unsupportedReason };
+  const blockedReason = await runtimeSetupBlockedReason({ ...runtime, kind, endpoint: target });
+  if (blockedReason) return { success: false, error: blockedReason };
 
   const provision = rowProvisionAction(row);
 
@@ -428,12 +496,12 @@ export async function runLocalRuntimeSetup(kind, { endpoint, emit = () => {}, is
     return { success: false, error: PROVISION_STEPS[action].refused(runtime.label) };
   }
 
-  // Same two signals `providerReadiness.js` uses: the binary on PATH, plus LM
-  // Studio's macOS app bundle, which serves without ever putting `lms` there.
-  const installed = Boolean(runtime.command && (kind === 'mtplx' ? resolveMtplxBinary() : findCommandOnPath(runtime.command))) ||
-    (kind === 'lmstudio' && isLmStudioAppInstalled());
+  const installed = Boolean(await detectRuntimeInstallation(kind));
+  if (!installed && row.installDownload && !actionCovers(action, 'installs')) {
+    return { success: false, error: `Choose Install & start ${runtime.label} to download ${row.installDownload}.` };
+  }
 
-  // A request naming NO action came from a stale client (`client/dist` not rebuilt, or a tab open across an upgrade) that still
+  // For runtimes with a separate provisioning step, a request naming NO action can come from a stale client (`client/dist` not rebuilt, or a tab open across an upgrade) that still
   // renders this server's `setup.actionLabel`; defaulting to a plain start would hit the "no model weights are cached" dead end
   // for a click on "Download the default model & start MTPLX". So resolve what the checklist offers. `installed &&` mirrors
   // `describeRuntimeSetup`: an uninstalled runtime never resolves to a download or spends a cache read.
@@ -456,8 +524,7 @@ export async function runLocalRuntimeSetup(kind, { endpoint, emit = () => {}, is
   }
   if (isCancelled()) return { success: false, error: 'Cancelled after the install — nothing was started.' };
 
-  // The ONLY path that spends gigabytes, run because the user clicked a button saying so; `describeRuntimeSetup` offers it
-  // only when the offline read proves a plain Start would exit before binding.
+  // Explicit opt-in for a separate provisioning step. The offline read offers it when a plain Start would exit before binding.
   if (resolved === provision) {
     const step = PROVISION_STEPS[provision];
     const pulled = await row.provision.run({ emit, isCancelled });

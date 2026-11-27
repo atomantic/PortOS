@@ -206,7 +206,7 @@ describe('Media3D — generation workspace', () => {
     });
     renderAt('/3d?image=example-robot.png');
     fireEvent.click(await screen.findByRole('button', { name: /Generate 3D/i }));
-    expect(await screen.findByText(/could not download a gated model dependency from Hugging Face/i)).toBeInTheDocument();
+    expect(await screen.findByRole('alert')).toHaveTextContent(/could not download a gated model dependency from Hugging Face/i);
     // No mesh preview on failure.
     expect(screen.queryByTestId('glb-viewer')).toBeNull();
   });
@@ -263,6 +263,21 @@ describe('Media3D — generation workspace', () => {
     await screen.findByRole('button', { name: /Generate 3D/i });
     expect(screen.queryByPlaceholderText('hf_…')).toBeNull();
     expect(screen.queryByText(/Hugging Face token configured/i)).toBeNull();
+  });
+
+  it('announces which model is selected and makes each model touch-sized', async () => {
+    getImageTo3dTargets.mockResolvedValue({ targets: [
+      target({ installed: true }),
+      target({ id: 'example-model', label: 'Example model' }),
+    ] });
+    renderAt('/3d?image=example-robot.png');
+    const first = await screen.findByRole('button', { name: 'TRELLIS.2', pressed: true });
+    const second = screen.getByRole('button', { name: 'Example model', pressed: false });
+    expect(first).toHaveClass('pointer-coarse:min-h-11', 'pointer-coarse:min-w-11');
+    expect(second).toHaveClass('pointer-coarse:min-h-11', 'pointer-coarse:min-w-11');
+    fireEvent.click(second);
+    expect(screen.getByRole('button', { name: 'Example model', pressed: true })).toBe(second);
+    expect(screen.getByRole('button', { name: 'TRELLIS.2', pressed: false })).toBe(first);
   });
 
   it('keeps Generate disabled and explains why when no image is picked', async () => {

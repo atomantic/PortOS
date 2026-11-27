@@ -7,7 +7,7 @@
  * API.
  */
 
-export const FAL_H3_MAX_FREE_URL = 'https://fal.ai/tools/minimax-h3-max';
+export { FAL_H3_MAX_FREE_URL } from '../../../server/lib/falVideoConstants.js';
 export const FAL_H3_MAX_FREE_ALLOWANCE_NOTE =
   'fal.ai currently advertises up to 5 free videos per day with an account; this vendor-controlled allowance may change.';
 

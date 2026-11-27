@@ -43,7 +43,7 @@ export async function claimQueueDelivery(id, channel = 'toast', occurrence) {
   if (!item) return { claimed: false };
   if (occurrence !== undefined && item.occurrence !== occurrence) return { claimed: false };
   if (channel === 'toast') {
-    const { getPostConfig } = await import('./meatspace/meatspacePost.js');
+    const { getPostConfig } = await import('./meatspace/postConfig.js');
     if (id !== 'product:daily-post' || !(await getPostConfig()).reminder?.enabled) return { claimed: false };
     const { getNotifications } = await import('./notifications.js');
     const notices = await getNotifications();

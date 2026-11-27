@@ -1221,6 +1221,7 @@ describe('reviewQueue triage', () => {
   });
 
   afterEach(() => {
+    __resetQueueSnapshots();
     vi.useRealTimers();
   });
 
@@ -1242,7 +1243,6 @@ describe('reviewQueue triage', () => {
     await buildQueue({ query: { view: 'today' } });
     await vi.advanceTimersByTimeAsync(60_000);
     expect(reviewService.reviewEvents.emit).toHaveBeenCalledTimes(2);
-    __resetQueueSnapshots();
   });
 
   it('hides a snoozed row until the injected expiry, then shows it again', async () => {
@@ -1373,6 +1373,43 @@ describe('reviewQueue triage', () => {
     expect(reviewQueueTriageStore.upsertReviewQueueTriage).not.toHaveBeenCalled();
   });
 
+  it.each([
+    ['review', reviewService.getItems],
+    ['notifications', notifications.getNotifications],
+  ])('returns 503 for a missing adapted row when the %s producer fails', async (_source, read) => {
+    read.mockRejectedValue(new Error('producer unavailable'));
+
+    await expect(triageQueueItem('memory:missing', 'unsnooze')).rejects.toMatchObject({
+      status: 503, code: 'SOURCE_UNAVAILABLE',
+    });
+    expect(reviewQueueTriageStore.removeReviewQueueTriage).not.toHaveBeenCalled();
+  });
+
+  it('triages an adapted row found by a healthy producer during a backing source outage', async () => {
+    reviewService.getItems.mockRejectedValue(new Error('review unavailable'));
+    notifications.getNotifications.mockResolvedValue([{
+      id: 'record', type: 'memory_approval', metadata: { memoryId: 'target' }, link: '/cos/memory',
+    }]);
+
+    await expect(triageQueueItem('memory:target', 'unsnooze')).resolves.toMatchObject({ triaged: true });
+  });
+
+  it('arms snooze expiry without a queue read and preserves it when another row is snoozed', async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date('2026-09-20T10:00:00.000Z'));
+    brain.getInboxLog.mockResolvedValue([
+      { id: 'b1', capturedText: 'first' },
+      { id: 'b2', capturedText: 'second' },
+    ]);
+    await triageQueueItem('brain:b1', 'snooze', { snoozedUntil: '2026-09-20T10:01:00.000Z' });
+    await triageQueueItem('brain:b2', 'snooze', { snoozedUntil: '2026-09-20T10:02:00.000Z' });
+
+    await vi.advanceTimersByTimeAsync(59_999);
+    expect(reviewService.reviewEvents.emit).not.toHaveBeenCalled();
+    await vi.advanceTimersByTimeAsync(1);
+    expect(reviewService.reviewEvents.emit).toHaveBeenCalledExactlyOnceWith('queue:changed');
+  });
+
   it('persists a future snooze without invoking the source completion primitive', async () => {
     brain.getInboxLog.mockResolvedValue([{ id: 'b1', capturedText: 'required', capturedAt: 'revision-1' }]);
 
@@ -1432,6 +1469,28 @@ describe('reviewQueue triage', () => {
     await expect(buildQueue({ limit: 1, cursor: first.nextCursor })).rejects.toMatchObject({
       status: 409,
       code: 'CURSOR_EXPIRED',
+    });
+  });
+
+  it.each([
+    ['resolve', () => resolveQueueItem('brain:b1')],
+    ['complete', () => resolveQueueItem('todo:todo-1', 'complete')],
+    ['promote', () => promoteAskQueueItem('ask:a1', 'brain')],
+  ])('invalidates an active cursor after %s', async (_operation, mutate) => {
+    brain.getInboxLog.mockResolvedValue([{ id: 'b1', capturedText: 'classify' }]);
+    brain.markInboxDone.mockResolvedValue({ id: 'b1' });
+    storedItems.mockReturnValue([{ id: 'todo-1', type: 'todo', status: 'pending', title: 'Follow up' }]);
+    askConversations.listConversations.mockResolvedValue([{
+      id: 'a1', title: 'Optional', promoted: false, assistantTurnCount: 1,
+    }]);
+    askPromote.promoteLatestAssistantTurn.mockResolvedValue({ target: 'brain', ref: { type: 'brain', id: 'note-1' } });
+    const first = await buildQueue({ limit: 1 });
+    expect(first.nextCursor).toBeTruthy();
+
+    await mutate();
+
+    await expect(buildQueue({ cursor: first.nextCursor })).rejects.toMatchObject({
+      status: 409, code: 'CURSOR_EXPIRED',
     });
   });
 

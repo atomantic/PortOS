@@ -1,3 +1,4 @@
+import { recordingOperatorIo } from '../test/recordingOperatorIo.js';
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import express from 'express';
 import { request } from '../lib/testHelper.js';
@@ -97,7 +98,7 @@ describe('Calendar Routes — normalized error handling', () => {
     // Catches a false 204 when cleanup fails or a retry rejected merely because
     // account metadata was already removed; cleanup must follow metadata removal.
     it('reports account cleanup failure and accepts retries after account removal', async () => {
-      const io = { emit: vi.fn() };
+      const io = recordingOperatorIo();
       app.set('io', io);
       errorEvents.once('error', observeError);
       let present = true;
@@ -194,7 +195,7 @@ describe('Calendar Routes — normalized error handling', () => {
 
   describe('Google automation request correlation', () => {
     it('passes optional request IDs through and preserves email-only callers and responses', async () => {
-      const io = { emit: vi.fn() };
+      const io = recordingOperatorIo();
       app.set('io', io);
       const result = { status: 'success', clientId: 'synthetic-client', authUrl: null };
       googleOAuthAutoConfig.runAutomatedSetup.mockResolvedValue(result);
@@ -245,7 +246,7 @@ describe('Calendar Routes — normalized error handling', () => {
     });
 
     it('PUT /accounts/:id/subcalendars updates subcalendars, triggers purge, and fails closed on purge errors (#18229)', async () => {
-      const io = { emit: vi.fn() };
+      const io = recordingOperatorIo();
       app.set('io', io);
       const subcalendars = [
         { calendarId: 'work', name: 'Work', enabled: true, dormant: false },

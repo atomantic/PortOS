@@ -236,6 +236,11 @@ export const getRecentBehavioralFeedback = (contentType, limit = 20) => {
 // Digital Twin - Taste Questionnaire
 export const getTasteProfile = (options) => request('/digital-twin/taste', options);
 export const getTasteNextQuestion = (section, options = {}) => request(`/digital-twin/taste/${section}/next`, options);
+export const skipTasteFollowUp = (section, questionId, options = {}) => request(`/digital-twin/taste/${section}/skip`, {
+  method: 'POST',
+  body: JSON.stringify({ questionId }),
+  ...options
+});
 export const submitTasteAnswer = (section, questionId, answer, meta = {}, options = {}) => request('/digital-twin/taste/answer', {
   method: 'POST',
   body: JSON.stringify({ section, questionId, answer, ...meta }),

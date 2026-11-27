@@ -57,7 +57,10 @@ vi.mock('./beeperCredentials.js', async (importOriginal) => {
 
 vi.mock('../instanceFeatures.js', () => ({ isInstanceFeatureEnabled: async () => true }));
 const { runBeeperSweep, reconcileBeeperEvent, upsertMirroredMessage, normalizeMessageRow, normalizeAttachmentRows } = await import('./beeperSync.js');
-const { listMessages: readThread } = await import('./beeperConversations.js');
+const { listMessages: readThread, purgeConversation } = await import('./beeperConversations.js');
+const beeperTribe = await import('./beeperTribe.js');
+const { createPerson } = await import('../tribe.js');
+const { linkIdentity } = await import('../tribeIdentities.js');
 const { beeperSocketEvents } = await import('./beeperSocketEvents.js');
 
 let dbReady = false;
@@ -412,14 +415,11 @@ describe.skipIf(!runDb)('beeperSync against Postgres', () => {
       if (pathname === '/v1/bridges') return jsonResponse(BRIDGES);
       if (pathname === '/v1/chats') return jsonResponse({ items: [purgedChat], hasMore: false });
       if (/\/messages$/.test(pathname)) {
-        await query(
-          'DELETE FROM beeper_conversations WHERE account_id = $1 AND source_chat_id = $2',
+        const { rows: [{ id }] } = await query(
+          'SELECT id FROM beeper_conversations WHERE account_id = $1 AND source_chat_id = $2',
           [ACCOUNT_ID, purgedChatId],
         );
-        await query(
-          'DELETE FROM beeper_sync_cursors WHERE account_id = $1 AND chat_id = $2',
-          [ACCOUNT_ID, purgedChatId],
-        );
+        await purgeConversation(id);
         return jsonResponse({ items: [], hasMore: false, newestCursor: 'cursor-after-purge' });
       }
       throw new Error(`unexpected fetch: ${url}`);
@@ -439,6 +439,105 @@ describe.skipIf(!runDb)('beeperSync against Postgres', () => {
     // Nothing resurrects the watermark, so the next sweep sees a never-swept
     // chat and mirrors it from scratch — what the purge confirmation promises.
     expect(cursor.rows).toHaveLength(0);
+  });
+
+  function installSenderChat(chatId) {
+    installFetch({
+      chats: { items: [{ ...chatFixture('2026-09-05T10:00:00.000Z'), id: chatId }], hasMore: false },
+      messages: { items: [{ ...messageFixture(), chatID: chatId, id: `${chatId}-message` }], hasMore: false },
+    });
+  }
+
+  it.each(['purge', 'unlink', 'transfer'])('attributes touchpoints after %s commits between participant and message writes', async (edit) => {
+    const chatId = `${nonce}-chat-${edit}-with-sender`;
+    const previous = await createPerson({ name: 'Example Previous Sender' });
+    const next = edit === 'transfer' ? await createPerson({ name: 'Example Current Sender' }) : null;
+    const senderId = `${nonce}-user`;
+    const upsert = beeperTribe.upsertConversationParticipants;
+    const participants = vi.spyOn(beeperTribe, 'upsertConversationParticipants');
+    let conversationId;
+    try {
+      await linkIdentity({ personId: previous.id, kind: 'beeper-user', network: ACCOUNT_ID, handle: senderId });
+      participants.mockImplementationOnce(async (...args) => {
+        const result = await upsert(...args);
+        expect(result.resolvedPersonIds.get(senderId)).toBe(previous.id);
+        [conversationId] = args;
+        const participant = { conversationId, sourceUserId: senderId };
+        if (edit === 'purge') {
+          await purgeConversation(conversationId);
+        } else if (next) {
+          expect(await beeperTribe.linkParticipant({ ...participant, personId: next.id }))
+            .toMatchObject({ tribePersonId: next.id, displacedPersonId: previous.id });
+        } else {
+          expect(await beeperTribe.unlinkParticipant(participant))
+            .toMatchObject({ removedClaims: 1, participant: { tribePersonId: null } });
+        }
+        return result;
+      });
+
+      installSenderChat(chatId);
+      expect(await runBeeperSweep({ reason: 'db-test' })).toMatchObject({ failedChats: 0, messages: edit === 'purge' ? 0 : 1 });
+
+      expect(conversationId).toBeTruthy();
+      const participant = await beeperTribe.getParticipant(conversationId, senderId);
+      if (edit === 'purge') {
+        expect((await query('SELECT id FROM beeper_conversations WHERE id = $1', [conversationId])).rows).toEqual([]);
+      } else {
+        expect(participant.tribePersonId).toBe(next?.id ?? null);
+      }
+      const touchpoints = await query(
+        `SELECT person_id FROM tribe_touchpoints WHERE metadata->>'conversationId' = $1`, [conversationId],
+      );
+      expect(touchpoints.rows).toEqual(next ? [{ person_id: next.id }] : []);
+    } finally {
+      participants.mockRestore();
+      await query('DELETE FROM tribe_people WHERE id = ANY($1::uuid[])', [[previous.id, next?.id].filter(Boolean)]);
+    }
+  });
+
+  it('holds a competing unlink until the sender touchpoint and cursor commit', async () => {
+    const chatId = `${nonce}-chat-sweep-first`;
+    const senderId = `${nonce}-user`;
+    const person = await createPerson({ name: 'Example Sweep Sender' });
+    const atCursor = Promise.withResolvers();
+    const resume = Promise.withResolvers();
+    const pgQuery = pg.Client.prototype.query;
+    const spy = vi.spyOn(pg.Client.prototype, 'query').mockImplementation(function pauseCursor(sql, params, ...rest) {
+      if (params?.[1] === chatId && sql.includes('INSERT INTO beeper_sync_cursors')) {
+        atCursor.resolve(this.processID);
+        return resume.promise.then(() => pgQuery.call(this, sql, params, ...rest));
+      }
+      return pgQuery.call(this, sql, params, ...rest);
+    });
+    let sweep;
+    let unlink;
+    try {
+      await linkIdentity({ personId: person.id, kind: 'beeper-user', network: ACCOUNT_ID, handle: senderId });
+      installSenderChat(chatId);
+      sweep = runBeeperSweep({ reason: 'db-test' });
+      const sweepPid = await Promise.race([atCursor.promise, sweep.then(() => { throw new Error('Sweep skipped cursor write'); })]);
+      const { rows: [{ id }] } = await query(
+        'SELECT id FROM beeper_conversations WHERE account_id = $1 AND source_chat_id = $2', [ACCOUNT_ID, chatId],
+      );
+      unlink = beeperTribe.unlinkParticipant({ conversationId: id, sourceUserId: senderId });
+      const committed = unlink.then(() => 'committed');
+      await expect.poll(() => Promise.race([committed, query(
+        `SELECT EXISTS(SELECT 1 FROM pg_locks WHERE locktype = 'advisory' AND NOT granted
+           AND $1 = ANY(pg_blocking_pids(pid))) AS blocked`, [sweepPid],
+      ).then(({ rows }) => rows[0].blocked ? 'blocked' : 'running')])).toBe('blocked');
+
+      resume.resolve();
+      expect(await sweep).toMatchObject({ failedChats: 0, messages: 1 });
+      expect(await unlink).toMatchObject({ unlinkedPersonId: person.id, removedClaims: 1 });
+      expect((await query(
+        `SELECT person_id FROM tribe_touchpoints WHERE metadata->>'conversationId' = $1`, [id],
+      )).rows).toEqual([{ person_id: person.id }]);
+    } finally {
+      resume.resolve();
+      spy.mockRestore();
+      await Promise.allSettled([sweep, unlink]);
+      await query('DELETE FROM tribe_people WHERE id = $1', [person.id]);
+    }
   });
 
   // `is_sender` is the only inbound/outbound signal a chat surface has —
@@ -596,7 +695,10 @@ describe.skipIf(!runDb)('beeperSync against Postgres', () => {
          RETURNING id`,
         [OTHER_ACCOUNT_ID, `${OTHER_ACCOUNT_ID}-chat-0`],
       );
-      const otherMsgIds = Array.from({ length: 10 }, (_, j) => `${OTHER_ACCOUNT_ID}-m${j}`);
+      // Place unrelated IDs before each target chat's messages, inside the batch bounds.
+      // An ID-only scan would walk those rows before finding each chat's first match.
+      const otherMsgIds = Array.from({ length: 512 }, (_, j) =>
+        `${explainAccount}-c${j % targetConvs.length}-distractor-${j}`);
       await query(
         `INSERT INTO beeper_messages (id, conversation_id, body)
          SELECT id, $2, 'Other body' FROM unnest($1::text[]) AS id`,
@@ -652,7 +754,8 @@ describe.skipIf(!runDb)('beeperSync against Postgres', () => {
       expect(batchPlan).not.toMatch(/Seq Scan/);
       const batchIndexLine = batchPlan.split('\n').find((line) => line.includes('idx_beeper_messages_conversation_id'));
       expect(batchIndexLine).toMatch(/actual rows=4 loops=2\b/);
-      // No inner sort in the LATERAL probe, and the outer limit bounds rows to <= targetConvs * limit (8), never full history.
+      // Only the outer ordering needs a sort. Each inner limit contributes four rows.
+      expect(batchPlan.match(/^\s*->\s+Sort\s/gm)).toHaveLength(1);
       expect(batchPlan).toMatch(/Nested Loop.*actual rows=8 loops=1/);
 
       const { rows: selected } = await query(batchSql, [explainAccount, '', 4, upperBound]);

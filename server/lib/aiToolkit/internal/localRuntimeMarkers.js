@@ -1,5 +1,5 @@
 /**
- * Local-runtime marker registry: the one ordered table of the seven persisted `*Backed` booleans
+ * Local-runtime marker registry: the one ordered table of persisted `*Backed` booleans
  * (`ollamaBacked`, `lmstudioBacked`, ...) and the two questions asked of them, "is this provider
  * fronting any local runtime?" and "which one?".
  *
@@ -19,6 +19,7 @@ export const LOCAL_RUNTIME_MARKERS = Object.freeze({
   vllm: 'vllmBacked',
   sglang: 'sglangBacked',
   splash: 'splashBacked',
+  mkserve: 'mkserveBacked',
 });
 
 /** The marker field names, in registry order. */
@@ -28,7 +29,7 @@ export const LOCAL_RUNTIME_MARKER_KEYS = Object.freeze(Object.values(LOCAL_RUNTI
  * The id of the first local runtime `provider` is marked for, or `null`. Reads the marker booleans
  * only: id/endpoint-based inference (`isOllamaBackedProvider`, loopback endpoints) stays with callers.
  * @param {object|null|undefined} provider
- * @returns {'ollama'|'lmstudio'|'mtplx'|'llama'|'vllm'|'sglang'|'splash'|null}
+ * @returns {'ollama'|'lmstudio'|'mtplx'|'llama'|'vllm'|'sglang'|'splash'|'mkserve'|null}
  */
 export function markedLocalRuntime(provider) {
   for (const [id, key] of Object.entries(LOCAL_RUNTIME_MARKERS)) {

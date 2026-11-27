@@ -71,14 +71,6 @@ CREATE TABLE IF NOT EXISTS brain_memory_links (
       memory_id UUID NOT NULL
     );
 
-CREATE TABLE IF NOT EXISTS deep_audit_ledgers (
-      id TEXT PRIMARY KEY,
-      app_id TEXT NOT NULL,
-      category TEXT NOT NULL,
-      ledger JSONB NOT NULL,
-      updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
-    );
-
 ALTER TABLE memory_links ADD COLUMN IF NOT EXISTS id UUID NOT NULL DEFAULT gen_random_uuid();
 
 ALTER TABLE memory_links ADD COLUMN IF NOT EXISTS link_type VARCHAR(32) NOT NULL DEFAULT 'related';
@@ -150,7 +142,7 @@ ALTER TABLE memories ADD COLUMN IF NOT EXISTS last_review JSONB;
 
 ALTER TABLE memories ADD COLUMN IF NOT EXISTS review_origin JSONB;
 
-CREATE INDEX IF NOT EXISTS idx_memories_mind_reflection ON memories (source_agent_id, created_at, id) WHERE status = 'active' AND importance < 0.15;
+CREATE INDEX IF NOT EXISTS idx_memories_mind_reflection ON memories (source_agent_id, created_at, id) WHERE status = 'active' AND source_agent_id IS NOT NULL;
 
 CREATE INDEX IF NOT EXISTS idx_memories_source_agent_active ON memories (source_agent_id, importance DESC) WHERE status = 'active' AND source_agent_id IS NOT NULL;
 
@@ -164,6 +156,8 @@ CREATE TABLE IF NOT EXISTS app_quality_measurements (
     );
 
 CREATE INDEX IF NOT EXISTS idx_app_quality_history ON app_quality_measurements (app_id, assessed_at DESC);
+
+CREATE INDEX IF NOT EXISTS idx_app_quality_app_category_assessed ON app_quality_measurements (app_id, category, assessed_at DESC, agent_id DESC);
 
 ALTER TABLE app_quality_measurements ADD COLUMN IF NOT EXISTS slice TEXT;
 
@@ -333,6 +327,12 @@ CREATE INDEX IF NOT EXISTS idx_human_activity_source_happened ON human_activity_
 
 CREATE INDEX IF NOT EXISTS idx_human_activity_source_kind_happened ON human_activity_events (source, kind, happened_at DESC);
 
+CREATE INDEX IF NOT EXISTS idx_human_activity_happened_id ON human_activity_events (happened_at DESC, id DESC);
+
+CREATE INDEX IF NOT EXISTS idx_human_activity_participants ON human_activity_events USING gin (participants jsonb_path_ops);
+
+CREATE INDEX IF NOT EXISTS idx_human_activity_account_happened ON human_activity_events (account_id, happened_at DESC) WHERE account_id IS NOT NULL;
+
 CREATE TABLE IF NOT EXISTS post_runs (
     id TEXT PRIMARY KEY,
     mode TEXT NOT NULL CHECK (mode IN ('benchmark', 'test', 'training')),
@@ -427,6 +427,8 @@ CREATE UNIQUE INDEX IF NOT EXISTS idx_user_action_dedupe ON user_action_events (
 
 CREATE INDEX IF NOT EXISTS idx_user_action_happened ON user_action_events (happened_at DESC);
 
+CREATE INDEX IF NOT EXISTS idx_user_action_happened_id ON user_action_events (happened_at DESC, id DESC);
+
 CREATE INDEX IF NOT EXISTS idx_user_action_type_time ON user_action_events (type, happened_at DESC);
 
 CREATE INDEX IF NOT EXISTS idx_user_action_actor_time ON user_action_events (actor, happened_at DESC);
@@ -483,6 +485,8 @@ CREATE TABLE IF NOT EXISTS cos_tasks (
 CREATE INDEX IF NOT EXISTS idx_cos_tasks_open ON cos_tasks (source, status) WHERE status <> 'completed';
 
 CREATE INDEX IF NOT EXISTS idx_cos_tasks_completed ON cos_tasks (source, completed_at DESC NULLS LAST, task_id DESC) WHERE status = 'completed';
+
+CREATE INDEX IF NOT EXISTS idx_cos_tasks_completed_id ON cos_tasks (source, task_id DESC) WHERE status = 'completed';
 
 CREATE TABLE IF NOT EXISTS cos_task_lists (
     source TEXT PRIMARY KEY CHECK (source IN ('user', 'internal')),
@@ -865,6 +869,9 @@ CREATE TABLE IF NOT EXISTS catalog_ingredient_merges (
 CREATE UNIQUE INDEX IF NOT EXISTS idx_catalog_merge_source_active
        ON catalog_ingredient_merges (source_id) WHERE restored_at IS NULL;
 
+CREATE INDEX IF NOT EXISTS idx_catalog_merge_survivor
+       ON catalog_ingredient_merges (survivor_id);
+
 CREATE OR REPLACE FUNCTION catalog_resolve_ingredient_id(requested_id TEXT)
        RETURNS TEXT LANGUAGE SQL STABLE AS $$
          SELECT COALESCE((SELECT survivor_id FROM catalog_ingredient_merges
@@ -1164,12 +1171,13 @@ CREATE OR REPLACE FUNCTION catalog_canonical_ingredient_id(requested_id TEXT)
 
 CREATE OR REPLACE FUNCTION catalog_identity_member_ids(requested_id TEXT)
     RETURNS TEXT[] LANGUAGE SQL STABLE AS $$
+    WITH canonical AS (SELECT catalog_canonical_ingredient_id(requested_id) AS id)
     SELECT ARRAY(SELECT DISTINCT member FROM (
-      SELECT catalog_canonical_ingredient_id(requested_id) AS member
+      SELECT id AS member FROM canonical
       UNION ALL SELECT source_id FROM catalog_identity_operations
-        WHERE survivor_id = catalog_canonical_ingredient_id(requested_id) AND state IN ('committed', 'recovery_prepared')
+        WHERE survivor_id = (SELECT id FROM canonical) AND state IN ('committed', 'recovery_prepared')
       UNION ALL SELECT source_id FROM catalog_ingredient_merges
-        WHERE survivor_id = catalog_canonical_ingredient_id(requested_id) AND restored_at IS NULL
+        WHERE survivor_id = (SELECT id FROM canonical) AND restored_at IS NULL
     ) members)
     $$;
 
@@ -1410,7 +1418,13 @@ ALTER TABLE creative_director_projects ADD COLUMN IF NOT EXISTS deleted BOOLEAN 
 
 ALTER TABLE creative_director_projects ADD COLUMN IF NOT EXISTS deleted_at TIMESTAMPTZ;
 
-CREATE INDEX IF NOT EXISTS idx_creative_director_projects_live ON creative_director_projects (deleted) WHERE deleted = FALSE;
+ALTER TABLE creative_director_projects
+      ADD COLUMN IF NOT EXISTS name TEXT GENERATED ALWAYS AS (data->>'name') STORED,
+      ADD COLUMN IF NOT EXISTS page_created_at JSONB GENERATED ALWAYS AS (data->'createdAt') STORED,
+      ADD COLUMN IF NOT EXISTS page_updated_at JSONB GENERATED ALWAYS AS (data->'updatedAt') STORED,
+      ADD COLUMN IF NOT EXISTS page_status TEXT GENERATED ALWAYS AS (data->>'status') STORED;
+
+CREATE INDEX IF NOT EXISTS idx_creative_director_projects_live_created ON creative_director_projects (created_at ASC) WHERE deleted = FALSE;
 
 CREATE TABLE IF NOT EXISTS threejs_models (
       id TEXT PRIMARY KEY,
@@ -1479,7 +1493,13 @@ ALTER TABLE music_video_projects ADD COLUMN IF NOT EXISTS deleted BOOLEAN DEFAUL
 
 ALTER TABLE music_video_projects ADD COLUMN IF NOT EXISTS deleted_at TIMESTAMPTZ;
 
-CREATE INDEX IF NOT EXISTS idx_music_video_projects_live ON music_video_projects (deleted) WHERE deleted = FALSE;
+ALTER TABLE music_video_projects
+      ADD COLUMN IF NOT EXISTS name TEXT GENERATED ALWAYS AS (data->>'name') STORED,
+      ADD COLUMN IF NOT EXISTS page_created_at JSONB GENERATED ALWAYS AS (data->'createdAt') STORED,
+      ADD COLUMN IF NOT EXISTS page_updated_at JSONB GENERATED ALWAYS AS (data->'updatedAt') STORED,
+      ADD COLUMN IF NOT EXISTS page_status TEXT GENERATED ALWAYS AS (data->>'status') STORED;
+
+CREATE INDEX IF NOT EXISTS idx_music_video_projects_live_created ON music_video_projects (created_at ASC) WHERE deleted = FALSE;
 
 CREATE TABLE IF NOT EXISTS mood_boards (
       id TEXT PRIMARY KEY,
@@ -1497,7 +1517,7 @@ ALTER TABLE mood_boards ADD COLUMN IF NOT EXISTS deleted_at TIMESTAMPTZ;
 
 CREATE INDEX IF NOT EXISTS idx_mood_boards_updated ON mood_boards (updated_at DESC);
 
-CREATE INDEX IF NOT EXISTS idx_mood_boards_live ON mood_boards (deleted) WHERE deleted = FALSE;
+CREATE INDEX IF NOT EXISTS idx_mood_boards_live_updated ON mood_boards (updated_at DESC, id ASC) WHERE deleted = FALSE;
 
 CREATE TABLE IF NOT EXISTS storyboards (
       id TEXT PRIMARY KEY,
@@ -1510,9 +1530,25 @@ CREATE TABLE IF NOT EXISTS storyboards (
       deleted_at TIMESTAMPTZ
     );
 
+ALTER TABLE storyboards ADD COLUMN IF NOT EXISTS list_summary JSONB,
+      ADD COLUMN IF NOT EXISTS list_summary_write_id UUID;
+
+CREATE OR REPLACE FUNCTION invalidate_storyboard_list_summary()
+     RETURNS TRIGGER AS $$
+     BEGIN
+       NEW.list_summary := NULL;
+       RETURN NEW;
+     END;
+     $$ LANGUAGE plpgsql;
+
+CREATE OR REPLACE TRIGGER trg_storyboards_invalidate_list_summary
+     BEFORE UPDATE OF data ON storyboards FOR EACH ROW
+     WHEN (NEW.list_summary_write_id IS NOT DISTINCT FROM OLD.list_summary_write_id)
+     EXECUTE FUNCTION invalidate_storyboard_list_summary();
+
 CREATE INDEX IF NOT EXISTS idx_storyboards_updated ON storyboards (updated_at DESC);
 
-CREATE INDEX IF NOT EXISTS idx_storyboards_live ON storyboards (deleted) WHERE deleted = FALSE;
+CREATE INDEX IF NOT EXISTS idx_storyboards_live_updated ON storyboards (updated_at DESC, id ASC) WHERE deleted = FALSE;
 
 CREATE TABLE IF NOT EXISTS storyboard_recipes (
       id TEXT PRIMARY KEY,
@@ -1609,6 +1645,12 @@ ALTER TABLE media_assets ALTER COLUMN provenance_refs SET NOT NULL;
 CREATE INDEX IF NOT EXISTS idx_media_assets_provenance_refs ON media_assets USING gin (provenance_refs) WHERE kind = 'image';
 
 CREATE INDEX IF NOT EXISTS idx_media_assets_kind_created ON media_assets (kind, created_at DESC);
+
+CREATE INDEX IF NOT EXISTS idx_media_assets_visible_images_created ON media_assets (created_at DESC, media_key ASC) WHERE kind = 'image' AND NOT is_hidden;
+
+CREATE INDEX IF NOT EXISTS idx_media_assets_visible_image_facets ON media_assets (universe_id, universe_name, entry_category, entry_kind) WHERE kind = 'image' AND NOT is_hidden;
+
+CREATE INDEX IF NOT EXISTS idx_media_assets_kind_ref ON media_assets (kind, ref);
 
 CREATE TABLE IF NOT EXISTS code_animation_jobs (
       id TEXT PRIMARY KEY,
@@ -1823,6 +1865,8 @@ CREATE TABLE IF NOT EXISTS pipeline_issues (
 
 CREATE INDEX IF NOT EXISTS idx_issues_series ON pipeline_issues (series_id, number) WHERE deleted = FALSE;
 
+CREATE INDEX IF NOT EXISTS idx_issues_series_all ON pipeline_issues (series_id, number);
+
 CREATE INDEX IF NOT EXISTS idx_issues_season ON pipeline_issues (season_id) WHERE season_id IS NOT NULL;
 
 CREATE INDEX IF NOT EXISTS idx_issues_updated ON pipeline_issues (updated_at);
@@ -1866,7 +1910,11 @@ CREATE INDEX IF NOT EXISTS idx_fableloom_universe ON fableloom_stories (universe
 
 CREATE INDEX IF NOT EXISTS idx_fableloom_updated ON fableloom_stories (updated_at);
 
-CREATE INDEX IF NOT EXISTS idx_fableloom_live ON fableloom_stories (deleted) WHERE deleted = FALSE;
+CREATE INDEX IF NOT EXISTS idx_fableloom_live_updated ON fableloom_stories (updated_at DESC, id ASC) WHERE deleted = FALSE;
+
+CREATE INDEX IF NOT EXISTS idx_fableloom_series ON fableloom_stories (series_id, updated_at DESC) WHERE deleted = FALSE AND series_id IS NOT NULL;
+
+DROP INDEX IF EXISTS idx_fableloom_live;
 
 CREATE TABLE IF NOT EXISTS writers_room_folders (
       id TEXT PRIMARY KEY,
@@ -2580,17 +2628,6 @@ CREATE TABLE IF NOT EXISTS beeper_outbox (
 ALTER TABLE beeper_outbox ADD COLUMN IF NOT EXISTS send_requested_at TIMESTAMPTZ;
 
 CREATE INDEX IF NOT EXISTS idx_beeper_outbox_conversation_state ON beeper_outbox (conversation_id, state, created_at DESC);
-
-INSERT INTO tribe_identities (person_id, kind, network, handle, source, linked_at)
-   SELECT DISTINCT ON (c.account_id, p.source_user_id)
-          p.tribe_person_id, 'beeper-user', c.account_id, p.source_user_id, 'backfill', NOW()
-   FROM beeper_participants p
-   JOIN beeper_conversations c ON c.id = p.conversation_id
-   JOIN tribe_people tp ON tp.id = p.tribe_person_id AND tp.deleted = FALSE
-   WHERE p.tribe_person_id IS NOT NULL AND c.account_id <> ''
-     AND NOT EXISTS (SELECT 1 FROM tribe_identities WHERE kind = 'beeper-user')
-   ORDER BY c.account_id, p.source_user_id, p.updated_at DESC
-   ON CONFLICT (kind, network, handle) DO NOTHING;
 
 CREATE TABLE IF NOT EXISTS github_notifications (
     account_id TEXT NOT NULL,

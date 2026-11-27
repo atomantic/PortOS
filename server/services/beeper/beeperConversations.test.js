@@ -697,42 +697,37 @@ describe('markConversationSeen — the local watermark write, never a Beeper cal
 // user reads before confirming it promises the chat comes back on the next
 // sync. That promise is only true if the sync cursor goes with the rows.
 describe('purgeConversation', () => {
-  const purgeQueries = () => vi.mocked(query).mock.calls.map(([sql]) => flat(sql));
+  const row = { account_id: 'acct-example-1', source_chat_id: 'chat-example-1' };
 
-  const stubPurgeReads = (row) => {
-    vi.mocked(query).mockImplementation(async (sql) => {
-      const text = flat(sql);
-      if (text.includes('SELECT id, title, account_id, source_chat_id')) return { rows: [row] };
-      if (text.includes('COUNT(*)::int AS count FROM beeper_messages')) return { rows: [{ count: 7 }] };
-      return { rows: [] };
-    });
-  };
-
-  it('deletes the conversation AND its sync cursor, in one transaction, keyed on Beeper\'s own ids', async () => {
-    stubPurgeReads({ id: CONV_A, title: 'Example Conversation', account_id: 'acct-example-1', source_chat_id: 'chat-example-1' });
-    const statements = [];
-    vi.mocked(withTransaction).mockImplementation(async (fn) => fn({
-      query: async (sql, params) => { statements.push([flat(sql), params]); return { rows: [] }; },
-    }));
+  it('deletes the conversation and its sync cursor in one transaction, keyed on the source ids', async () => {
+    const clientQuery = vi.fn()
+      .mockResolvedValueOnce({ rows: [row] })
+      .mockResolvedValueOnce({ rows: [] })
+      .mockResolvedValueOnce({ rows: [{ count: 7 }] })
+      .mockResolvedValue({ rows: [] });
+    vi.mocked(withTransaction).mockImplementation(async (fn) => fn({ query: clientQuery }));
 
     const result = await purgeConversation(CONV_A);
 
-    expect(statements.map(([sql]) => sql)).toEqual([
+    expect(clientQuery.mock.calls.map(([sql]) => flat(sql)).slice(3)).toEqual([
       'DELETE FROM beeper_conversations WHERE id = $1',
       'DELETE FROM beeper_sync_cursors WHERE account_id = $1 AND chat_id = $2',
     ]);
-    // The cursor is keyed on the ACCOUNT id and the SOURCE chat id, never the
-    // synthetic conversation uuid — its FK reaches beeper_accounts only, so the
-    // conversation cascade cannot take it.
-    expect(statements[1][1]).toEqual(['acct-example-1', 'chat-example-1']);
+    expect(clientQuery).toHaveBeenLastCalledWith(expect.stringContaining('DELETE FROM beeper_sync_cursors'), [
+      row.account_id, row.source_chat_id,
+    ]);
     expect(result).toMatchObject({ purged: true, conversationId: CONV_A, messagesRemoved: 7 });
-    // Never a DELETE outside the transaction.
-    expect(purgeQueries().some((sql) => sql.startsWith('DELETE'))).toBe(false);
+    expect(query).not.toHaveBeenCalled();
   });
 
   it('404s an unknown id without deleting anything', async () => {
-    vi.mocked(query).mockResolvedValue({ rows: [] });
+    const clientQuery = vi.fn().mockResolvedValue({ rows: [] });
+    vi.mocked(withTransaction).mockImplementation(async (fn) => fn({ query: clientQuery }));
+
     await expect(purgeConversation(CONV_B)).rejects.toMatchObject({ status: 404, code: 'NOT_FOUND' });
-    expect(vi.mocked(withTransaction)).not.toHaveBeenCalled();
+
+    expect(clientQuery).toHaveBeenCalledTimes(1);
+    expect(clientQuery).toHaveBeenCalledWith(expect.stringContaining('FOR UPDATE'), [CONV_B]);
+    expect(query).not.toHaveBeenCalled();
   });
 });

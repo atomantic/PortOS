@@ -1,50 +1,14 @@
-/**
- * config.test.js
- *
- * config.js run-option resolvers and config gates. Split from seriesAutopilot.test.js (#16214); shared mocks and
- * fixtures live in seriesAutopilot.testFixtures.js.
- */
-import { describe, it, expect, vi, beforeEach } from 'vitest';
-
-// vi.mock factories are hoisted above imports; the shared fixtures module is
-// loaded the same way.
-const h = await vi.hoisted(() => import('./seriesAutopilot.testFixtures.js'));
-
-vi.mock('../../runner.js', (importOriginal) => h.runnerFactory(importOriginal));
-vi.mock('../../../lib/fileUtils.js', () => h.fileUtilsFactory());
-vi.mock('crypto', () => h.cryptoFactory());
-vi.mock('../../instanceIdentity.js', () => h.instanceIdentityFactory());
-vi.mock('../../instances.js', () => h.instancesFactory());
-vi.mock('../../sharing/peerSync.js', () => h.peerSyncFactory());
-vi.mock('../../cos/cosState.js', () => h.cosStateFactory());
-vi.mock('../../domainUsage.js', () => h.domainUsageFactory());
-vi.mock('../arcPlanner.js', (importOriginal) => h.arcPlannerFactory(importOriginal));
-vi.mock('../volumeBeatsRunner.js', () => h.volumeBeatsSpies);
-vi.mock('../autoRunner.js', () => h.autoRunnerSpies);
-vi.mock('../manuscriptReview.js', () => h.manuscriptReviewFactory());
-vi.mock('../editorial/checkRunner.js', () => h.checkRunnerSpies);
-vi.mock('../reverseOutline.js', () => h.reverseOutlineFactory());
-vi.mock('../../settings.js', (importOriginal) => h.settingsFactory(importOriginal));
-vi.mock('../manuscriptFix.js', () => h.manuscriptFixFactory());
-vi.mock('../visualStages.js', () => h.visualSpies);
-vi.mock('../../cos/cosTaskStore.js', () => h.cosTaskStoreFactory());
-vi.mock('../scriptVerify.js', () => h.scriptVerifyFactory());
-vi.mock('../canonReadiness.js', () => h.canonReadinessFactory());
-vi.mock('../../universeCanon.js', () => h.universeCanonFactory());
-vi.mock('../foundationJudge.js', (importOriginal) => h.foundationJudgeFactory(importOriginal));
-vi.mock('./modelPerformance.js', () => h.modelPerformanceFactory());
-vi.mock('../../notifications.js', () => h.notificationsFactory());
-
-// Mocked bindings, so a test can drive the budget and persisted settings per call.
-const { getDomainBudgetStatus } = await import('../../domainUsage.js');
-const { getSettings } = await import('../../settings.js');
-
-// Real services + the unit under test (imported AFTER the mocks above).
-const autopilot = await import('../seriesAutopilot.js');
-
-beforeEach(() => {
-  h.resetFixtures({ autopilot, getDomainBudgetStatus, getSettings });
-});
+import { describe, it, expect } from 'vitest';
+import { SERIES_AUTOPILOT_DEFAULTS } from '../../../lib/seriesAutopilotDefaults.js';
+import {
+  DEFAULT_CHECK_FINDINGS_PAUSE_THRESHOLD, DEFAULT_NOTIFY_ON_PAUSE,
+  DEFAULT_REVISION_MAX_CYCLES, DEFAULT_REVISION_MIN_CYCLES, DEFAULT_REVISION_PLATEAU_DELTA,
+  MAX_ARC_VERIFY_ROUNDS, MAX_BEAT_CONTINUITY_ROUNDS, MAX_EDITORIAL_ROUNDS, MAX_FOUNDATION_ROUNDS,
+  resolveAutopilotAutoSelectModels, resolveAutopilotCheckPauseThreshold, resolveAutopilotFoundationGate,
+  resolveAutopilotLlm, resolveAutopilotNotifyOnPause, resolveAutopilotObserver, resolveAutopilotOverrideStagePins,
+  resolveAutopilotProduceTeaser, resolveAutopilotReadinessGate, resolveAutopilotRevision, resolveAutopilotRounds,
+  resolveAutopilotSelfImprove, resolveAutopilotUnlockForRun,
+} from './config.js';
 
 // The precedence itself is covered by server/lib/seriesLlmOverride.test.js —
 // what's specific here is that the autopilot delegates to it and renames the
@@ -53,62 +17,62 @@ describe('resolveAutopilotLlm — run provider/model resolution', () => {
   const series = { llm: { provider: 'codex', model: 'gpt-x' } };
 
   it('inherits the series llm under the run-option key names', () => {
-    expect(autopilot.resolveAutopilotLlm({}, series))
+    expect(resolveAutopilotLlm({}, series))
       .toEqual({ providerOverride: 'codex', modelOverride: 'gpt-x' });
   });
 
   it('lets a per-run override win, dropping the series model when the provider differs', () => {
-    expect(autopilot.resolveAutopilotLlm({ providerOverride: 'claude' }, series))
+    expect(resolveAutopilotLlm({ providerOverride: 'claude' }, series))
       .toEqual({ providerOverride: 'claude', modelOverride: undefined });
   });
 
   it('resolves to nothing with no series llm and no override (active provider downstream)', () => {
-    expect(autopilot.resolveAutopilotLlm({}, null))
+    expect(resolveAutopilotLlm({}, null))
       .toEqual({ providerOverride: undefined, modelOverride: undefined });
   });
 
   it('stamps a per-run reasoning effort (#3641) — per-run only, nothing to inherit', () => {
-    expect(autopilot.resolveAutopilotLlm({ effortOverride: 'high' }, series))
+    expect(resolveAutopilotLlm({ effortOverride: 'high' }, series))
       .toEqual({ providerOverride: 'codex', modelOverride: 'gpt-x', effortOverride: 'high' });
     // No series-level effort exists, so a blank pick stays unset and each stage
     // falls through to its own pin, then the provider's configured args.
-    expect(autopilot.resolveAutopilotLlm({ effortOverride: '' }, series).effortOverride).toBeUndefined();
+    expect(resolveAutopilotLlm({ effortOverride: '' }, series).effortOverride).toBeUndefined();
   });
 });
 
 describe('resolveAutopilotProduceTeaser (config gate, #2185)', () => {
   it('defaults OFF', () => {
-    expect(autopilot.resolveAutopilotProduceTeaser({}, null)).toBe(false);
+    expect(resolveAutopilotProduceTeaser({}, null)).toBe(false);
   });
   it('per-run option wins over the persisted setting', () => {
-    expect(autopilot.resolveAutopilotProduceTeaser({ produceTeaser: true }, { pipelineEditorialChecks: { produceTeaser: false } })).toBe(true);
+    expect(resolveAutopilotProduceTeaser({ produceTeaser: true }, { pipelineEditorialChecks: { produceTeaser: false } })).toBe(true);
   });
   it('falls back to the persisted setting when no per-run option', () => {
-    expect(autopilot.resolveAutopilotProduceTeaser({}, { pipelineEditorialChecks: { produceTeaser: true } })).toBe(true);
+    expect(resolveAutopilotProduceTeaser({}, { pipelineEditorialChecks: { produceTeaser: true } })).toBe(true);
   });
 });
 
 describe('resolveAutopilotUnlockForRun (config gate)', () => {
   it('defaults OFF — it mutates lock state the user set by hand', () => {
-    expect(autopilot.resolveAutopilotUnlockForRun({})).toBe(false);
-    expect(autopilot.resolveAutopilotUnlockForRun({ unlockForRun: false })).toBe(false);
+    expect(resolveAutopilotUnlockForRun({})).toBe(false);
+    expect(resolveAutopilotUnlockForRun({ unlockForRun: false })).toBe(false);
   });
   it('is on only when the run explicitly asks for it', () => {
-    expect(autopilot.resolveAutopilotUnlockForRun({ unlockForRun: true })).toBe(true);
+    expect(resolveAutopilotUnlockForRun({ unlockForRun: true })).toBe(true);
   });
   // The one autopilot option with NO persisted default: `seriesAutopilotScheduler`
   // resolves unattended runs from the settings slice, so a saved value would arm
   // lock-clearing on every scheduled run of every series.
   it('ignores a persisted setting entirely — per-run only', () => {
-    expect(autopilot.resolveAutopilotUnlockForRun({}, { pipelineEditorialChecks: { unlockForRun: true } })).toBe(false);
+    expect(resolveAutopilotUnlockForRun({}, { pipelineEditorialChecks: { unlockForRun: true } })).toBe(false);
   });
 });
 
 describe('resolveAutopilotAutoSelectModels (config gate)', () => {
   it('defaults off, supports a saved default, and lets a run override it', () => {
-    expect(autopilot.resolveAutopilotAutoSelectModels({}, null)).toBe(false);
-    expect(autopilot.resolveAutopilotAutoSelectModels({}, { pipelineEditorialChecks: { autoSelectModels: true } })).toBe(true);
-    expect(autopilot.resolveAutopilotAutoSelectModels(
+    expect(resolveAutopilotAutoSelectModels({}, null)).toBe(false);
+    expect(resolveAutopilotAutoSelectModels({}, { pipelineEditorialChecks: { autoSelectModels: true } })).toBe(true);
+    expect(resolveAutopilotAutoSelectModels(
       { autoSelectModels: false },
       { pipelineEditorialChecks: { autoSelectModels: true } },
     )).toBe(false);
@@ -119,9 +83,9 @@ describe('resolveAutopilotAutoSelectModels (config gate)', () => {
 // and the scheduler resolves unattended runs from this same settings slice.
 describe('resolveAutopilotOverrideStagePins (config gate)', () => {
   it('defaults off, supports a saved default, and lets a run override it', () => {
-    expect(autopilot.resolveAutopilotOverrideStagePins({}, null)).toBe(false);
-    expect(autopilot.resolveAutopilotOverrideStagePins({}, { pipelineEditorialChecks: { overrideStagePins: true } })).toBe(true);
-    expect(autopilot.resolveAutopilotOverrideStagePins(
+    expect(resolveAutopilotOverrideStagePins({}, null)).toBe(false);
+    expect(resolveAutopilotOverrideStagePins({}, { pipelineEditorialChecks: { overrideStagePins: true } })).toBe(true);
+    expect(resolveAutopilotOverrideStagePins(
       { overrideStagePins: false },
       { pipelineEditorialChecks: { overrideStagePins: true } },
     )).toBe(false);
@@ -129,8 +93,6 @@ describe('resolveAutopilotOverrideStagePins (config gate)', () => {
 });
 
 describe('resolveAutopilotSelfImprove (config gate)', () => {
-  const { resolveAutopilotSelfImprove } = autopilot;
-
   it('defaults OFF', () => {
     expect(resolveAutopilotSelfImprove({}, null)).toBe(false);
   });
@@ -145,13 +107,6 @@ describe('resolveAutopilotSelfImprove (config gate)', () => {
 
 // CWQE Phase 7 (#2171) — iterate-to-quality revision loop.
 describe('resolveAutopilotRevision (config gate, #2171)', () => {
-  const {
-    resolveAutopilotRevision,
-    DEFAULT_REVISION_MIN_CYCLES,
-    DEFAULT_REVISION_MAX_CYCLES,
-    DEFAULT_REVISION_PLATEAU_DELTA,
-  } = autopilot;
-
   it('defaults OFF with the module cycle defaults', () => {
     expect(resolveAutopilotRevision({}, null)).toEqual({
       revisionEnabled: false,
@@ -182,5 +137,114 @@ describe('resolveAutopilotRevision (config gate, #2171)', () => {
     const r = resolveAutopilotRevision({ revisionMinCycles: 0, revisionPlateauDelta: -5 });
     expect(r.revisionMinCycles).toBe(1);
     expect(r.revisionPlateauDelta).toBe(0);
+  });
+});
+
+describe('autopilot option defaults and precedence', () => {
+  it('resolveAutopilotRounds: per-run option wins, else setting, else default', () => {
+    // per-run option wins (including an explicit 0 = skip)
+    expect(resolveAutopilotRounds(
+      { maxArcVerifyRounds: 7, maxEditorialRounds: 0, maxBeatContinuityRounds: 5, maxFoundationRounds: 2 },
+      { pipelineEditorialChecks: { maxArcVerifyRounds: 4, maxEditorialRounds: 4, maxBeatContinuityRounds: 1, maxFoundationRounds: 1 } },
+    )).toEqual({ maxArcVerifyRounds: 7, maxEditorialRounds: 0, maxBeatContinuityRounds: 5, maxFoundationRounds: 2 });
+    // persisted setting fills in when no per-run override
+    const fromSetting = resolveAutopilotRounds({}, { pipelineEditorialChecks: { maxArcVerifyRounds: 6, maxBeatContinuityRounds: 3 } });
+    expect(fromSetting.maxArcVerifyRounds).toBe(6);
+    expect(fromSetting.maxEditorialRounds).toBe(MAX_EDITORIAL_ROUNDS);
+    expect(fromSetting.maxBeatContinuityRounds).toBe(3);
+    // module default when neither is set
+    expect(resolveAutopilotRounds({}, null)).toEqual({
+      maxArcVerifyRounds: MAX_ARC_VERIFY_ROUNDS, maxEditorialRounds: MAX_EDITORIAL_ROUNDS, maxBeatContinuityRounds: MAX_BEAT_CONTINUITY_ROUNDS, maxFoundationRounds: MAX_FOUNDATION_ROUNDS,
+    });
+    // a non-integer at any layer falls through
+    expect(resolveAutopilotRounds(
+      { maxArcVerifyRounds: 2.5 },
+      { pipelineEditorialChecks: { maxArcVerifyRounds: 'x' } },
+    ).maxArcVerifyRounds).toBe(MAX_ARC_VERIFY_ROUNDS);
+  });
+
+  it('uses the shared defaults when run options and saved settings are absent', () => {
+    const defaults = SERIES_AUTOPILOT_DEFAULTS;
+    expect(resolveAutopilotRounds({}, {})).toEqual({
+      maxArcVerifyRounds: defaults.maxArcVerifyRounds,
+      maxEditorialRounds: defaults.maxEditorialRounds,
+      maxBeatContinuityRounds: defaults.maxBeatContinuityRounds,
+      maxFoundationRounds: defaults.maxFoundationRounds,
+    });
+    expect(resolveAutopilotFoundationGate({}, {})).toBe(defaults.foundationGate);
+    expect(resolveAutopilotCheckPauseThreshold({}, {})).toBe(defaults.checkFindingsPauseThreshold);
+    expect(resolveAutopilotNotifyOnPause({}, {})).toBe(defaults.notifyOnPause);
+    expect(resolveAutopilotRevision({}, {})).toEqual({
+      revisionEnabled: defaults.revisionEnabled,
+      revisionMinCycles: defaults.revisionMinCycles,
+      revisionMaxCycles: defaults.revisionMaxCycles,
+      revisionPlateauDelta: defaults.revisionPlateauDelta,
+    });
+    expect(resolveAutopilotSelfImprove({}, {})).toBe(defaults.selfImprove);
+    expect(resolveAutopilotObserver({}, {})).toBe(defaults.observer);
+    expect(resolveAutopilotAutoSelectModels({}, {})).toBe(defaults.autoSelectModels);
+    expect(resolveAutopilotOverrideStagePins({}, {})).toBe(defaults.overrideStagePins);
+  });
+
+  it('resolveAutopilotReadinessGate: per-run option wins, else setting, else null (#1580)', () => {
+    // per-run override wins over a persisted setting
+    expect(resolveAutopilotReadinessGate(
+      { readinessGate: 'none' },
+      { pipelineEditorialChecks: { readinessGate: 'noOpenHighOrMedium' } },
+    )).toBe('none');
+    // persisted setting fills in when no per-run override
+    expect(resolveAutopilotReadinessGate({}, { pipelineEditorialChecks: { readinessGate: 'noOpenHighOrMedium' } }))
+      .toBe('noOpenHighOrMedium');
+    // null when neither is set — the caller resolves null to the default gate
+    expect(resolveAutopilotReadinessGate({}, null)).toBeNull();
+    // an invalid per-run gate falls through to the persisted setting
+    expect(resolveAutopilotReadinessGate(
+      { readinessGate: 'bogus' },
+      { pipelineEditorialChecks: { readinessGate: 'none' } },
+    )).toBe('none');
+  });
+
+  it('resolveAutopilotCheckPauseThreshold: per-run option wins, else setting, else 0/off (#1613)', () => {
+    expect(DEFAULT_CHECK_FINDINGS_PAUSE_THRESHOLD).toBe(0);
+    // per-run override wins (including an explicit 0 = off)
+    expect(resolveAutopilotCheckPauseThreshold(
+      { checkFindingsPauseThreshold: 0 },
+      { pipelineEditorialChecks: { checkFindingsPauseThreshold: 5 } },
+    )).toBe(0);
+    expect(resolveAutopilotCheckPauseThreshold(
+      { checkFindingsPauseThreshold: 8 },
+      { pipelineEditorialChecks: { checkFindingsPauseThreshold: 5 } },
+    )).toBe(8);
+    // persisted setting fills in when no per-run override
+    expect(resolveAutopilotCheckPauseThreshold({}, { pipelineEditorialChecks: { checkFindingsPauseThreshold: 5 } })).toBe(5);
+    // 0/off when neither is set
+    expect(resolveAutopilotCheckPauseThreshold({}, null)).toBe(0);
+    // a non-integer at any layer falls through to the next
+    expect(resolveAutopilotCheckPauseThreshold(
+      { checkFindingsPauseThreshold: 2.5 },
+      { pipelineEditorialChecks: { checkFindingsPauseThreshold: 'x' } },
+    )).toBe(0);
+  });
+
+  it('resolveAutopilotNotifyOnPause: per-run option wins, else setting, else true/on (#1615)', () => {
+    expect(DEFAULT_NOTIFY_ON_PAUSE).toBe(true);
+    // per-run override wins (including an explicit false = silence)
+    expect(resolveAutopilotNotifyOnPause(
+      { notifyOnPause: false },
+      { pipelineEditorialChecks: { notifyOnPause: true } },
+    )).toBe(false);
+    expect(resolveAutopilotNotifyOnPause(
+      { notifyOnPause: true },
+      { pipelineEditorialChecks: { notifyOnPause: false } },
+    )).toBe(true);
+    // persisted setting fills in when no per-run override
+    expect(resolveAutopilotNotifyOnPause({}, { pipelineEditorialChecks: { notifyOnPause: false } })).toBe(false);
+    // on by default when neither is set (the one opt-OUT autopilot gate)
+    expect(resolveAutopilotNotifyOnPause({}, null)).toBe(true);
+    // a non-boolean at any layer falls through to the next
+    expect(resolveAutopilotNotifyOnPause(
+      { notifyOnPause: 'yes' },
+      { pipelineEditorialChecks: { notifyOnPause: 1 } },
+    )).toBe(true);
   });
 });

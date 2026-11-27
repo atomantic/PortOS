@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { Outlet, useLocation } from 'react-router';
-import { Menu, Search } from 'lucide-react';
+import { Link, Outlet, useLocation } from 'react-router';
+import { Menu, Mic, Search } from 'lucide-react';
 import { safeReadStorage, safeWriteStorage } from '../lib/safeStorage';
 import { useErrorNotifications } from './useErrorNotifications';
 import { useAgentFeedbackToast } from './useAgentFeedbackToast';
@@ -22,7 +22,6 @@ import SocketReconnectingPill from './SocketReconnectingPill.jsx';
 import ThemeModeToggle from './ThemeModeToggle.jsx';
 import ThemeSwitcherGate from './ThemeSwitcherGate';
 import UpdateBanners from './UpdateBanners';
-import VoiceToggleButton from './voice/VoiceToggleButton';
 import VoiceWidgetGate from './voice/VoiceWidgetGate';
 
 const SIDEBAR_KEY = 'portos-sidebar-collapsed';
@@ -121,7 +120,7 @@ export default function Layout() {
                 </button>
                 <div className="flex items-center gap-1.5">
                   <Logo size={22} className="shrink-0" />
-                  <span className="font-bold text-sm text-port-accent">PortOS</span>
+                  <span className="sr-only min-[370px]:not-sr-only font-bold text-sm text-port-accent">PortOS</span>
                 </div>
                 <div className="flex items-center gap-0.5">
                   <button
@@ -135,7 +134,14 @@ export default function Layout() {
                   </button>
                   <ThemeModeToggle />
                   <ThemeSwitcherGate position="below" />
-                  <VoiceToggleButton />
+                  <Link
+                    to="/voice/call"
+                    aria-label="Open Voice Call"
+                    title="Voice Call"
+                    className="inline-flex min-h-[44px] min-w-[44px] shrink-0 items-center justify-center rounded-lg text-port-text-muted hover:text-port-accent"
+                  >
+                    <Mic size={18} aria-hidden="true" />
+                  </Link>
                   <NotificationBell position="below" />
                 </div>
               </header>

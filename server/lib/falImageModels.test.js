@@ -27,6 +27,7 @@ describe('falImageModels — request mapping and cost', () => {
     ['fal-ai/nano-banana-pro', 2560, 1440, '16:9', '2K', 0.15],
     ['fal-ai/nano-banana-pro', 4096, 4096, '1:1', '4K', 0.3],
     ['fal-ai/nano-banana-2', 512, 512, '1:1', '0.5K', 0.06],
+    ['fal-ai/nano-banana-2', 708, 1000, '3:4', '1K', 0.08],
     ['fal-ai/nano-banana-2', 832, 1216, '2:3', '1K', 0.08],
     ['fal-ai/nano-banana-2', 3840, 1600, '21:9', '4K', 0.16],
   ])('%s at %ix%i → %s / %s ≈ $%s', (modelId, width, height, aspect, resolution, cost) => {

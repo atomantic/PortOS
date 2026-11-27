@@ -37,7 +37,7 @@ const SECTION_PRESENTATION = {
   Calendar: { icon: CalendarDays, defaultTo: '/calendar/agenda' },
   'Chief of Staff': { icon: Crown, defaultTo: '/cos/tasks' },
   Comms: { icon: MessagesSquare, defaultTo: '/messages/inbox' },
-  Create: { icon: Sparkles, defaultTo: '/create/media' },
+  Create: { icon: Sparkles, defaultTo: '/media' },
   'Dev Tools': { icon: Terminal },
   Health: { icon: Heart, defaultTo: '/meatspace/overview' },
   Models: { icon: Cpu, defaultTo: '/models/llms' },
@@ -803,7 +803,7 @@ export default function SidebarNav({ collapsed, setCollapsed, mobileOpen, closeM
 
         {/* Nav items */}
         <nav aria-label="Primary navigation" className="flex-1 py-4 overflow-y-auto overflow-x-hidden min-w-0">
-          {!collapsed && (pinned.length > 0 || recent.length > 0) && (
+          {!sidebarCollapsed && (pinned.length > 0 || recent.length > 0) && (
             <div className="mb-2">
               {pinned.length > 0 && (
                 <div className="mb-2" data-testid="pinned-section">

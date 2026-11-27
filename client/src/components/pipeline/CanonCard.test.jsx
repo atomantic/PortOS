@@ -165,8 +165,8 @@ describe('CanonCard — reveal timing / spoiler scoping (#2178)', () => {
     descField: 'physicalDescription', descFieldFallback: 'description', descFieldMax: 2000,
   };
 
-  it('shows a spoiler badge when the entry has a revealIssue', () => {
-    render_({ entry: { ...baseEntry, revealIssue: 8 } });
+  it.each([8, '8'])('shows a badge for a valid reveal issue (%j)', (revealIssue) => {
+    render_({ entry: { ...baseEntry, revealIssue } });
     expect(screen.getByText('reveal #8')).toBeInTheDocument();
   });
 
@@ -175,8 +175,8 @@ describe('CanonCard — reveal timing / spoiler scoping (#2178)', () => {
     expect(screen.getByText('spoiler')).toBeInTheDocument();
   });
 
-  it('omits the badge for an ungated entry', () => {
-    render_();
+  it.each([undefined, 0, -1, 1.5])('omits the badge for an ungated entry (%j)', (revealIssue) => {
+    render_({ entry: { ...baseEntry, revealIssue } });
     expect(screen.queryByText(/^reveal #/)).not.toBeInTheDocument();
     expect(screen.queryByText('spoiler')).not.toBeInTheDocument();
   });

@@ -66,7 +66,7 @@ import {
   evictToBudget,
   getAttachment,
   getAttachmentSummary,
-  purgeConversationAttachments,
+  unlinkPathsIfUnreferenced,
   shapeAttachment,
   sweepAttachmentOrphans,
 } from './beeperAttachments.js';
@@ -471,15 +471,12 @@ describe('the store is content-addressed, so every unlink is reference-checked',
     writeFileSync(join(attachmentsRoot(), relPath), Buffer.alloc(32));
     vi.mocked(query).mockImplementation(async (sql) => {
       const flat = String(sql).replace(/\s+/g, ' ');
-      if (flat.includes('SELECT DISTINCT local_path FROM beeper_attachments WHERE conversation_id')) {
-        return { rows: [{ local_path: relPath }] };
-      }
       // A surviving row in ANOTHER conversation still points at these bytes.
       if (flat.includes('WHERE local_path = $1 LIMIT 1')) return { rows: [{ '?column?': 1 }] };
       return { rows: [] };
     });
 
-    const result = await purgeConversationAttachments(CONV);
+    const result = await unlinkPathsIfUnreferenced([relPath]);
     expect(result).toEqual({ removedFiles: 0, freedBytes: 0, failedUnlinks: 0 });
     expect(existsSync(join(attachmentsRoot(), relPath))).toBe(true);
   });
@@ -487,15 +484,9 @@ describe('the store is content-addressed, so every unlink is reference-checked',
   it('removes the file once nothing outside the purged conversation references it', async () => {
     mkdirSync(join(attachmentsRoot(), 'cc'), { recursive: true });
     writeFileSync(join(attachmentsRoot(), relPath), Buffer.alloc(32));
-    vi.mocked(query).mockImplementation(async (sql) => {
-      const flat = String(sql).replace(/\s+/g, ' ');
-      if (flat.includes('SELECT DISTINCT local_path FROM beeper_attachments WHERE conversation_id')) {
-        return { rows: [{ local_path: relPath }] };
-      }
-      return { rows: [] };
-    });
+    vi.mocked(query).mockResolvedValue({ rows: [] });
 
-    const result = await purgeConversationAttachments(CONV);
+    const result = await unlinkPathsIfUnreferenced([relPath]);
     expect(result).toMatchObject({ removedFiles: 1, freedBytes: 32, failedUnlinks: 0 });
     expect(existsSync(join(attachmentsRoot(), relPath))).toBe(false);
   });
@@ -506,13 +497,11 @@ describe('the store is content-addressed, so every unlink is reference-checked',
     // mount, a permissions change, a handle the OS will not let go of.
     const blocked = `ab/${'ab'.repeat(32)}.png`;
     mkdirSync(join(attachmentsRoot(), blocked), { recursive: true });
-    respondTo([
-      ['SELECT DISTINCT local_path FROM beeper_attachments WHERE conversation_id', { rows: [{ local_path: blocked }] }],
-    ]);
+    vi.mocked(query).mockResolvedValue({ rows: [] });
     const errors = [];
     const errorSpy = vi.spyOn(console, 'error').mockImplementation((line) => { errors.push(String(line)); });
 
-    const result = await purgeConversationAttachments(CONV);
+    const result = await unlinkPathsIfUnreferenced([blocked]);
 
     // The row has already given up its claim, so nothing points at these bytes
     // any more. Reporting them as reclaimed is exactly how they vanish from the

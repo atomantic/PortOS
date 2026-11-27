@@ -52,7 +52,7 @@ vi.mock('../../lib/sseUtils.js', () => ({
 }));
 vi.mock('../../lib/ffmpeg.js', () => ({
   findFfmpeg: vi.fn(async () => '/usr/bin/ffmpeg'),
-  findFfprobe: vi.fn(async () => null), // → probeAudio returns false without spawning
+  hasAudioStream: vi.fn(async () => false),
   safeUnder: (root, name) => (name ? `${root}/${name}` : null),
   generateThumbnail: vi.fn(async () => 'thumb.jpg'),
   probeVideoDuration: vi.fn(async () => null), // no bed probing in these render-lifecycle cases
@@ -68,7 +68,12 @@ vi.mock('../videoGen/history.js', () => ({
   mutateVideoHistory: vi.fn(async (fn) => fn([])),
 }));
 
-import { renderProject, getRenderJobStatus } from './local.js';
+import { renderProject, getRenderJobStatus, cancelRender } from './local.js';
+import { unlink } from 'fs/promises';
+import { CANCEL_ALREADY_TERMINAL } from '../../lib/cancelResponse.js';
+import { findFfmpeg } from '../../lib/ffmpeg.js';
+import { killWithEscalation } from '../../lib/killWithEscalation.js';
+import { broadcastSse } from '../../lib/sseUtils.js';
 import { readJSONFile } from '../../lib/fileUtils.js';
 import { loadHistory, mutateVideoHistory } from '../videoGen/history.js';
 
@@ -89,6 +94,66 @@ beforeEach(() => {
   h.procs.length = 0;
 });
 
+describe('renderProject admission and cancellation', () => {
+  it('reserves a project before async setup and only offers an attachable job ID', async () => {
+    const pid = 'timeline-concurrent';
+    prime(pid);
+    const entered = Promise.withResolvers();
+    const resume = Promise.withResolvers();
+    findFfmpeg.mockImplementationOnce(() => {
+      entered.resolve();
+      return resume.promise;
+    });
+
+    const firstRender = renderProject(pid);
+    try {
+      await entered.promise;
+      const conflict = await renderProject(pid).catch((err) => err);
+      expect(conflict).toMatchObject({ status: 409, code: 'RENDER_IN_PROGRESS' });
+      expect(conflict.context.jobId).toBeUndefined();
+      expect(h.procs).toHaveLength(0);
+    } finally {
+      resume.resolve('/usr/bin/ffmpeg');
+    }
+
+    const { jobId } = await firstRender;
+    expect(h.procs).toHaveLength(1);
+    await expect(renderProject(pid)).rejects.toMatchObject({ status: 409, code: 'RENDER_IN_PROGRESS', context: { jobId } });
+    lastProc().emit('close', 0, null);
+    await vi.waitFor(() => expect(getRenderJobStatus(jobId).status).toBe('complete'));
+  });
+
+  it('releases the reservation when setup fails before spawn', async () => {
+    const pid = 'timeline-setup-error';
+    prime(pid);
+    findFfmpeg.mockResolvedValueOnce(null);
+    await expect(renderProject(pid)).rejects.toMatchObject({ code: 'FFMPEG_MISSING' });
+
+    const { jobId } = await renderProject(pid);
+    expect(h.procs).toHaveLength(1);
+    lastProc().emit('close', 0, null);
+    await vi.waitFor(() => expect(getRenderJobStatus(jobId).status).toBe('complete'));
+  });
+
+  it('holds the project until ffmpeg exits and discards the canceled encode', async () => {
+    const pid = 'timeline-cancel';
+    prime(pid);
+    const { jobId } = await renderProject(pid);
+    const proc = lastProc();
+    proc.emit('spawn');
+
+    expect(cancelRender(jobId)).toBe(true);
+    expect(killWithEscalation).toHaveBeenCalledWith(proc, expect.objectContaining({ stillRunning: expect.any(Function) }));
+    await expect(renderProject(pid)).rejects.toMatchObject({ code: 'RENDER_IN_PROGRESS', context: { jobId } });
+    proc.emit('close', 255, null); // ffmpeg handled SIGTERM and chose an exit code
+    await vi.waitFor(() => expect(broadcastSse).toHaveBeenCalledWith(expect.objectContaining({ id: jobId }), { type: 'canceled', error: 'Render cancelled' }));
+    expect(unlink).toHaveBeenCalledOnce();
+    expect(mutateVideoHistory).not.toHaveBeenCalled();
+    expect(cancelRender(jobId)).toBe(CANCEL_ALREADY_TERMINAL);
+    expect(cancelRender('missing-job')).toBe(false);
+  });
+});
+
 describe('renderProject terminal handling (#2386)', () => {
   it('keeps a finished encode pending through a long cut and records it after release', async () => {
     const pid = 'timeline-backup';
@@ -104,6 +169,7 @@ describe('renderProject terminal handling (#2386)', () => {
       await vi.advanceTimersByTimeAsync(5 * 60_000);
       expect(mutateVideoHistory).not.toHaveBeenCalled();
       expect(getRenderJobStatus(jobId).status).toBe('running');
+      expect(cancelRender(jobId)).toBe(CANCEL_ALREADY_TERMINAL);
     } finally {
       release();
       vi.useRealTimers();

@@ -28,6 +28,7 @@
  * install that updated before this shipped.
  */
 
+import { dependencyWorkspaces } from '../../scripts/lib/workspaceDependencies.js';
 import { join } from 'path';
 import { stat, readdir } from 'fs/promises';
 import { PATHS } from '../lib/fileUtils.js';
@@ -40,10 +41,6 @@ import { isWorktreeRoot } from '../lib/dataRoot.js';
 // captureBootCommit, called from server/index.js). null when not yet captured
 // or when HEAD couldn't be read (tarball install / not a git repo).
 let bootCommit = null;
-
-// Workspaces `update.sh` installs (safe_install . client server).
-// Order is cosmetic; '.' renders as 'root'.
-const DEP_WORKSPACES = ['.', 'client', 'server'];
 
 // Directories never worth walking for client-source freshness.
 const WALK_SKIP_DIRS = new Set(['node_modules', 'dist', '.git']);
@@ -164,12 +161,12 @@ async function isClientSourceNewer(rootDir, buildMtimeMs, { statMtime = statMtim
  */
 async function detectStaleDeps(rootDir, { statMtime = statMtimeMs } = {}) {
   const workspaces = [];
-  for (const ws of DEP_WORKSPACES) {
-    const manifestMtime = await statMtime(join(rootDir, ws, 'package.json'));
+  for (const { dir, label } of dependencyWorkspaces(rootDir)) {
+    const manifestMtime = await statMtime(join(dir, 'package.json'));
     if (manifestMtime == null) continue; // workspace absent
 
-    const receiptMtime = await statMtime(join(rootDir, ws, 'node_modules', '.package-lock.json'));
-    const lockMtime = await statMtime(join(rootDir, ws, 'package-lock.json'));
+    const receiptMtime = await statMtime(join(dir, 'node_modules', '.package-lock.json'));
+    const lockMtime = await statMtime(join(dir, 'package-lock.json'));
 
     let stale = false;
     let reason = null;
@@ -183,7 +180,7 @@ async function detectStaleDeps(rootDir, { statMtime = statMtimeMs } = {}) {
       stale = true;
       reason = 'lockfile-newer';
     }
-    workspaces.push({ name: ws === '.' ? 'root' : ws, stale, reason });
+    workspaces.push({ name: label, stale, reason });
   }
   return { stale: workspaces.some(w => w.stale), workspaces };
 }

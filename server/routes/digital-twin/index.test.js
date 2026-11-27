@@ -1,3 +1,4 @@
+import { recordingOperatorIo } from '../../test/recordingOperatorIo.js';
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import express from 'express';
 import { request } from '../../lib/testHelper.js';
@@ -26,7 +27,7 @@ vi.mock('../../services/digital-twin.js', () => fnMap([
   'saveImportAsDocument',
 ]));
 vi.mock('../../services/taste-questionnaire.js', () => fnMap([
-  'TASTE', 'getNextQuestion', 'submitAnswer', 'getTasteProfile', 'getSectionResponses', 'generateSectionSummary',
+  'TASTE', 'getNextQuestion', 'skipFollowUp', 'submitAnswer', 'getTasteProfile', 'getSectionResponses', 'generateSectionSummary',
   'generateOverallSummary', 'resetSection', 'generatePersonalizedTasteQuestion',
 ]));
 vi.mock('../../services/feedbackLoop.js', () => fnMap([
@@ -207,7 +208,7 @@ describe('Digital Twin Routes', () => {
     };
 
     it('emits the first model\'s result, tagged with the batch id, before the slow model finishes', async () => {
-      const io = { emit: vi.fn() };
+      const io = recordingOperatorIo();
       app.set('io', io);
       const slow = deferred();
       digitalTwinService.runTests.mockImplementation((providerId) => (
@@ -237,7 +238,7 @@ describe('Digital Twin Routes', () => {
     });
 
     it('reports a provider failure as an error frame and entry, not a success', async () => {
-      const io = { emit: vi.fn() };
+      const io = recordingOperatorIo();
       app.set('io', io);
       digitalTwinService.runTests.mockImplementation((providerId) => (
         providerId === 'p1' ? Promise.reject(new Error('quota exceeded')) : Promise.resolve({ score: 1 })
@@ -254,7 +255,7 @@ describe('Digital Twin Routes', () => {
     });
 
     it('still serves callers that send no requestId with the same final array', async () => {
-      const io = { emit: vi.fn() };
+      const io = recordingOperatorIo();
       app.set('io', io);
       digitalTwinService.runTests.mockResolvedValue({ score: 1 });
 

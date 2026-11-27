@@ -11,210 +11,61 @@
  *
  * Storage: `file-primary` — machine-local, never federated. `data/database-maintenance/operation.json` must be
  * readable while either backend is unavailable, so it cannot live in PostgreSQL; its directory is the admission
- * fence. Lifecycle and recovery commands: docs/DATABASE_MAINTENANCE.md.
+ * fence. Lifecycle and recovery commands: docs/STORAGE.md#cutover-recovery.
  */
-
-import { existsSync, lstatSync, mkdirSync, linkSync, unlinkSync, openSync, closeSync, fsyncSync, readFileSync, renameSync, rmSync, writeFileSync } from 'node:fs';
-import { join } from 'node:path';
+import { existsSync, lstatSync, mkdirSync, linkSync, unlinkSync, openSync, closeSync, fsyncSync, readFileSync, renameSync, rmSync } from 'node:fs';
+import { dirname, join } from 'node:path';
 import { randomUUID } from 'node:crypto';
 import { z } from 'zod';
 import { PATHS } from './paths.js';
 import { createMaintenanceJournal } from './maintenanceJournal.js';
 import { assertNotRealDataWrite } from './testDataIsolation.js';
 import { createDatabaseAuthority } from './databaseAuthority.js';
+import { syncDirectorySync, writeDurableExclusiveSync } from './fileDurability.js';
+import { databaseMaintenanceEndpointSchema, stages, journalSchema, coordinatorSchema, successorSchema,
+  producerSnapshotSchema, transferDumpSchema, transferImportSchema, targetProofSchema,
+  recoveryIntentSchema, workerGroupSchema, decisionSchema } from './databaseMaintenance/schemas.js';
+import { databaseMaintenanceError, assertDistinctBackends, assertForwardTransition, assertPublishedStage } from './databaseMaintenance/transitions.js';
 
-export const databaseMaintenanceEndpointSchema = z.object({
-  mode: z.enum(['native', 'docker']),
-  host: z.string().min(1).max(255),
-  port: z.number().int().min(1).max(65535),
-  database: z.string().min(1).max(63),
-  user: z.string().min(1).max(63),
-}).strict();
+export { databaseMaintenanceEndpointSchema };
 
-const stages = ['accepted', 'quiescing', 'exporting', 'importing', 'committing', 'verifying', 'verified'];
-
-const journalSchema = z.object({
-  version: z.literal(1),
-  id: z.string().uuid(),
-  stage: z.enum(stages),
-  createdAt: z.string().datetime(),
-  source: databaseMaintenanceEndpointSchema,
-  target: databaseMaintenanceEndpointSchema,
-}).strict();
-
-const coordinatorSchema = z.object({
-  id: z.string().uuid(),
-  token: z.string().uuid(),
-}).strict();
-const successorSchema = coordinatorSchema.extend({ previousToken: z.string().uuid() });
-const producerSnapshotSchema = z.object({
-  id: z.string().uuid(),
-  producers: z.array(z.object({
-    name: z.enum(['portos-cos', 'portos-server']),
-    pmId: z.number().int().nonnegative(), pid: z.number().int().nonnegative(),
-    cwd: z.string().min(1), script: z.string().min(1),
-    status: z.enum(['online', 'stopped']),
-  }).strict()).length(2),
-}).strict();
-const sha256Schema = z.string().regex(/^[0-9a-f]{64}$/);
-// Transfer evidence. The dump name is derived from the operation, never a path
-// chosen by a caller, so a manifest cannot point the import anywhere else.
-const transferDumpSchema = z.object({
-  id: z.string().uuid(),
-  source: databaseMaintenanceEndpointSchema,
-  file: z.string().regex(/^portos-maintenance-[0-9a-f-]{36}\.sql$/),
-  bytes: z.number().int().positive(),
-  sha256: sha256Schema,
-}).strict();
-const transferImportSchema = z.object({
-  id: z.string().uuid(),
-  target: databaseMaintenanceEndpointSchema,
-  sha256: sha256Schema,
-}).strict();
-// A restarted ordinary server proved ITS OWN pool reaches the recorded target.
-// Evidence, not authority: the coordinator accepts it only for the PM2 pid it
-// reads back itself AND that process's start time (a reused pid cannot inherit
-// an earlier process's proof), and every booting process proves its own pool.
-// startedAt is null only on Windows, which has no process-table start time.
-const targetProofSchema = z.object({
-  id: z.string().uuid(),
-  pid: z.number().int().positive(),
-  startedAt: z.number().int().nullable(),
-  target: databaseMaintenanceEndpointSchema,
-}).strict();
-const recoveryIntentSchema = z.object({
-  id: z.string().uuid(),
-  previousToken: z.string().uuid(),
-  recoveryToken: z.string().uuid(),
-}).strict();
-const workerGroupSchema = coordinatorSchema.extend({ pgid: z.number().int().positive() }).strict();
-const decisionSchema = coordinatorSchema.extend({
-  stage: z.enum(stages),
-  action: z.discriminatedUnion('kind', [
-    z.object({ kind: z.literal('transition'), nextStage: z.enum(stages) }).strict(),
-    z.object({ kind: z.literal('recovery'), recoveryToken: z.string().uuid() }).strict(),
-  ]),
-});
-
-const normalizedHost = host => ['localhost', '127.0.0.1', '::1', '[::1]'].includes(host.toLowerCase())
-  ? 'loopback' : host.toLowerCase();
-
-const databaseMaintenanceError = () => Object.assign(
-  new Error('Persistent database maintenance is active or requires recovery. Inspect scripts/database-maintenance.mjs status.'),
-  { status: 503, code: 'DATABASE_MAINTENANCE' },
-);
-
-function syncDirectory(path) {
-  // Windows does not expose directory fsync through Node. The fence still
-  // exists before journal publication; unreadable/incomplete state fails shut.
-  if (process.platform === 'win32') return;
-  const fd = openSync(path, 'r');
-  try { fsyncSync(fd); } finally { closeSync(fd); }
-}
-
-function writeDurableExclusive(path, value) {
-  const fd = openSync(path, 'wx', 0o600);
-  try {
-    writeFileSync(fd, JSON.stringify(value, null, 2) + '\n');
-    fsyncSync(fd);
-  } finally {
-    closeSync(fd);
+// Optional JSON record: null when absent, fenced when present but invalid.
+const readRecord = (path, schema) => {
+  try { lstatSync(path); } catch (err) {
+    if (err.code === 'ENOENT') return null;
+    throw databaseMaintenanceError();
   }
-}
+  try {
+    if (!lstatSync(path).isFile()) throw databaseMaintenanceError();
+    return schema.parse(JSON.parse(readFileSync(path, 'utf8')));
+  } catch {
+    throw databaseMaintenanceError();
+  }
+};
 
-/**
- * The DIRECTORY is the fence, not a successfully parsed journal. In particular,
- * a crash between mkdir and journal publication must never reopen admission.
- * Admission linearizes at the synchronous filesystem check, before the first
- * pool checkout/await. A call admitted just before publication may acquire its
- * connection or spawn afterward. This is NOT a quiescence/snapshot guarantee:
- * the coordinator must drain/stop every writer and in-flight spawn before dump.
- */
-export function createDatabaseMaintenanceJournal(dataDir = PATHS.data) {
-  const activeDir = join(dataDir, 'database-maintenance');
-  const recordPath = join(activeDir, 'operation.json');
+// No-replace publication of already-fsynced bytes; the first writer wins.
+const publishFirst = (destination, value, prefix = 'record') => {
+  const activeDir = dirname(destination);
+  const pending = join(activeDir, prefix + '-' + randomUUID() + '.pending');
+  writeDurableExclusiveSync(pending, value);
+  try {
+    linkSync(pending, destination);
+  } catch (err) {
+    if (err.code !== 'EEXIST') throw err;
+  } finally {
+    unlinkSync(pending);
+  }
+  syncDirectorySync(activeDir);
+};
 
-  const isFenced = () => {
-    try {
-      // Unlike existsSync, lstat distinguishes missing from unreadable and
-      // treats a dangling symlink as a fence, not a missing operation.
-      lstatSync(activeDir);
-      return true;
-    } catch (err) {
-      return err.code !== 'ENOENT';
-    }
-  };
+// Immutable publication: a retry of the identical record is accepted; a
+// different record is never substituted.
+const publishImmutable = (destination, value) => {
+  publishFirst(destination, value);
+  if (readFileSync(destination, 'utf8') !== JSON.stringify(value, null, 2) + '\n') throw databaseMaintenanceError();
+};
 
-  const assertAdmission = () => {
-    if (isFenced()) throw databaseMaintenanceError();
-  };
-
-  const read = () => {
-    if (!isFenced()) return null;
-    try {
-      const fence = lstatSync(activeDir);
-      if (!fence.isDirectory() || !lstatSync(recordPath).isFile()) {
-        throw databaseMaintenanceError();
-      }
-      let current = journalSchema.parse(JSON.parse(readFileSync(recordPath, 'utf8')));
-      // Immutable publications cannot be overwritten by a delayed older writer.
-      // Legacy journals keep their recorded stage as the history's starting point.
-      for (const stage of stages.slice(stages.indexOf(current.stage) + 1)) {
-        const stagePath = join(activeDir, 'published-' + stage + '.json');
-        try { lstatSync(stagePath); } catch (err) {
-          if (err.code === 'ENOENT') break;
-          throw err;
-        }
-        if (!lstatSync(stagePath).isFile()) throw databaseMaintenanceError();
-        const next = journalSchema.parse(JSON.parse(readFileSync(stagePath, 'utf8')));
-        if (JSON.stringify(next) !== JSON.stringify({ ...current, stage })) throw databaseMaintenanceError();
-        current = next;
-      }
-      // The walk ends at the first missing publication, and a release or
-      // cancellation that moves the fence mid-walk makes every later one look
-      // missing. The history is complete only if the SAME fence is still in
-      // place afterward: a moved fence (ENOENT) reports no operation below; a
-      // different one at this path fails closed.
-      const after = lstatSync(activeDir);
-      if (after.ino !== fence.ino || after.dev !== fence.dev) throw databaseMaintenanceError();
-      return current;
-    } catch {
-      // The fence check and the record reads are separate syscalls. A release
-      // or cancellation that renames the fence between them is not damage:
-      // once the directory itself is gone, no operation is active. Anything
-      // still fenced (partial publication, damaged record) fails closed.
-      if (!isFenced()) return null;
-      throw databaseMaintenanceError();
-    }
-  };
-
-  const begin = ({ source, target }) => {
-    assertNotRealDataWrite(activeDir, 'database maintenance begin');
-    const record = journalSchema.parse({
-      version: 1, id: randomUUID(), stage: 'accepted',
-      createdAt: new Date().toISOString(), source, target,
-    });
-    if (source.mode === target.mode ||
-        (normalizedHost(source.host) === normalizedHost(target.host) && source.port === target.port)) {
-      throw new Error('Database maintenance requires distinct source and target backends.');
-    }
-    mkdirSync(dataDir, { recursive: true });
-    // Exclusive mkdir is also the cross-process begin lock. No rollback on a
-    // failed publication: leaving the fence closed is the recoverable outcome.
-    const acquired = createMaintenanceJournal(dataDir).transaction(state => {
-      if ((state.hold && ['manual-update', 'deferred-update'].includes(state.hold.owner)) || state.exclusive || isFenced()) return false;
-      mkdirSync(activeDir, { mode: 0o700 });
-      syncDirectory(dataDir);
-      return true;
-    });
-    if (!acquired) throw databaseMaintenanceError();
-    const temporary = join(activeDir, 'operation.pending');
-    writeDurableExclusive(temporary, record);
-    renameSync(temporary, recordPath);
-    syncDirectory(activeDir);
-    return record;
-  };
-
+function createCoordinatorRegistry(activeDir, read) {
   // Initial durable owner. Successors require explicit same-operation recovery
   // backed by the detached supervisor's exit receipt, never PID/elapsed time.
   const acquireCoordinator = (id) => {
@@ -222,8 +73,8 @@ export function createDatabaseMaintenanceJournal(dataDir = PATHS.data) {
     const current = read();
     if (!current || current.id !== id || current.stage !== 'accepted') throw databaseMaintenanceError();
     const token = randomUUID();
-    writeDurableExclusive(join(activeDir, 'cancel-' + id + '.claim'), { id, token });
-    syncDirectory(activeDir);
+    writeDurableExclusiveSync(join(activeDir, 'cancel-' + id + '.claim'), { id, token });
+    syncDirectorySync(activeDir);
     const owned = read();
     if (!owned || owned.id !== id || owned.stage !== 'accepted') throw databaseMaintenanceError();
     return token;
@@ -282,12 +133,12 @@ export function createDatabaseMaintenanceJournal(dataDir = PATHS.data) {
     const pending = join(activeDir, 'worker-pending-' + randomUUID());
     mkdirSync(pending, { mode: 0o700 });
     try {
-      writeDurableExclusive(join(pending, 'owner.json'), owner);
-      syncDirectory(pending);
+      writeDurableExclusiveSync(join(pending, 'owner.json'), owner);
+      syncDirectorySync(pending);
       // The complete, nonempty reservation is published at once. Another
       // launch cannot replace it (rename refuses a nonempty destination).
       renameSync(pending, directory);
-      syncDirectory(activeDir);
+      syncDirectorySync(activeDir);
     } finally {
       rmSync(pending, { recursive: true, force: true });
     }
@@ -333,24 +184,10 @@ export function createDatabaseMaintenanceJournal(dataDir = PATHS.data) {
     assertNotRealDataWrite(activeDir, 'database maintenance worker entry');
     const current = assertCoordinatorWorker(id, token);
     // A second invocation with copied arguments cannot become a second worker.
-    writeDurableExclusive(join(workerDirectory(token), 'started.json'), { id, token });
-    syncDirectory(workerDirectory(token));
+    writeDurableExclusiveSync(join(workerDirectory(token), 'started.json'), { id, token });
+    syncDirectorySync(workerDirectory(token));
     assertCoordinatorWorker(id, token);
     return current;
-  };
-
-  // Optional JSON record: null when absent, fenced when present but invalid.
-  const readRecord = (path, schema) => {
-    try { lstatSync(path); } catch (err) {
-      if (err.code === 'ENOENT') return null;
-      throw databaseMaintenanceError();
-    }
-    try {
-      if (!lstatSync(path).isFile()) throw databaseMaintenanceError();
-      return schema.parse(JSON.parse(readFileSync(path, 'utf8')));
-    } catch {
-      throw databaseMaintenanceError();
-    }
   };
 
   // For stages that run inside the one entered worker process. Entry itself
@@ -368,8 +205,8 @@ export function createDatabaseMaintenanceJournal(dataDir = PATHS.data) {
     assertNotRealDataWrite(activeDir, 'database maintenance worker group');
     assertEnteredCoordinatorWorker(id, token);
     const value = workerGroupSchema.parse({ id, token, pgid });
-    writeDurableExclusive(join(workerDirectory(token), 'group.json'), value);
-    syncDirectory(workerDirectory(token));
+    writeDurableExclusiveSync(join(workerDirectory(token), 'group.json'), value);
+    syncDirectorySync(workerDirectory(token));
     assertEnteredCoordinatorWorker(id, token);
     return value;
   };
@@ -393,6 +230,105 @@ export function createDatabaseMaintenanceJournal(dataDir = PATHS.data) {
     });
   };
 
+  return { acquireCoordinator, readCoordinator, assertCoordinator, workerDirectory, reserveCoordinatorWorker,
+    coordinatorStatusForOwner, coordinatorStatus, assertCoordinatorWorker, enterCoordinatorWorker,
+    assertEnteredCoordinatorWorker, recordCoordinatorGroup, readPredecessorWorkers };
+}
+
+/**
+ * The DIRECTORY is the fence, not a successfully parsed journal. In particular,
+ * a crash between mkdir and journal publication must never reopen admission.
+ * Admission linearizes at the synchronous filesystem check, before the first
+ * pool checkout/await. A call admitted just before publication may acquire its
+ * connection or spawn afterward. This is NOT a quiescence/snapshot guarantee:
+ * the coordinator must drain/stop every writer and in-flight spawn before dump.
+ */
+export function createDatabaseMaintenanceJournal(dataDir = PATHS.data) {
+  const activeDir = join(dataDir, 'database-maintenance');
+  const recordPath = join(activeDir, 'operation.json');
+
+  const isFenced = () => {
+    try {
+      // Unlike existsSync, lstat distinguishes missing from unreadable and
+      // treats a dangling symlink as a fence, not a missing operation.
+      lstatSync(activeDir);
+      return true;
+    } catch (err) {
+      return err.code !== 'ENOENT';
+    }
+  };
+
+  const assertAdmission = () => {
+    if (isFenced()) throw databaseMaintenanceError();
+  };
+
+  const read = () => {
+    if (!isFenced()) return null;
+    try {
+      const fence = lstatSync(activeDir);
+      if (!fence.isDirectory() || !lstatSync(recordPath).isFile()) {
+        throw databaseMaintenanceError();
+      }
+      let current = journalSchema.parse(JSON.parse(readFileSync(recordPath, 'utf8')));
+      // Immutable publications cannot be overwritten by a delayed older writer.
+      // Legacy journals keep their recorded stage as the history's starting point.
+      for (const stage of stages.slice(stages.indexOf(current.stage) + 1)) {
+        const stagePath = join(activeDir, 'published-' + stage + '.json');
+        try { lstatSync(stagePath); } catch (err) {
+          if (err.code === 'ENOENT') break;
+          throw err;
+        }
+        if (!lstatSync(stagePath).isFile()) throw databaseMaintenanceError();
+        const next = journalSchema.parse(JSON.parse(readFileSync(stagePath, 'utf8')));
+        assertPublishedStage(current, next, stage);
+        current = next;
+      }
+      // The walk ends at the first missing publication, and a release or
+      // cancellation that moves the fence mid-walk makes every later one look
+      // missing. The history is complete only if the SAME fence is still in
+      // place afterward: a moved fence (ENOENT) reports no operation below; a
+      // different one at this path fails closed.
+      const after = lstatSync(activeDir);
+      if (after.ino !== fence.ino || after.dev !== fence.dev) throw databaseMaintenanceError();
+      return current;
+    } catch {
+      // The fence check and the record reads are separate syscalls. A release
+      // or cancellation that renames the fence between them is not damage:
+      // once the directory itself is gone, no operation is active. Anything
+      // still fenced (partial publication, damaged record) fails closed.
+      if (!isFenced()) return null;
+      throw databaseMaintenanceError();
+    }
+  };
+
+  const begin = ({ source, target }) => {
+    assertNotRealDataWrite(activeDir, 'database maintenance begin');
+    const record = journalSchema.parse({
+      version: 1, id: randomUUID(), stage: 'accepted',
+      createdAt: new Date().toISOString(), source, target,
+    });
+    assertDistinctBackends(source, target);
+    mkdirSync(dataDir, { recursive: true });
+    // Exclusive mkdir is also the cross-process begin lock. No rollback on a
+    // failed publication: leaving the fence closed is the recoverable outcome.
+    const acquired = createMaintenanceJournal(dataDir).transaction(state => {
+      if ((state.hold && ['manual-update', 'deferred-update'].includes(state.hold.owner)) || state.exclusive || isFenced()) return false;
+      mkdirSync(activeDir, { mode: 0o700 });
+      syncDirectorySync(dataDir);
+      return true;
+    });
+    if (!acquired) throw databaseMaintenanceError();
+    const temporary = join(activeDir, 'operation.pending');
+    writeDurableExclusiveSync(temporary, record);
+    renameSync(temporary, recordPath);
+    syncDirectorySync(activeDir);
+    return record;
+  };
+
+  const { acquireCoordinator, readCoordinator, assertCoordinator, workerDirectory, reserveCoordinatorWorker,
+    coordinatorStatusForOwner, coordinatorStatus, assertCoordinatorWorker, enterCoordinatorWorker,
+    assertEnteredCoordinatorWorker, recordCoordinatorGroup, readPredecessorWorkers } = createCoordinatorRegistry(activeDir, read);
+
   const transferDumpPath = id => join(dataDir, 'db-dumps', 'portos-maintenance-' + z.string().uuid().parse(id) + '.sql');
   const transferDumpRecordPath = join(activeDir, 'transfer-dump.json');
   const transferImportRecordPath = join(activeDir, 'transfer-import.json');
@@ -415,27 +351,6 @@ export function createDatabaseMaintenanceJournal(dataDir = PATHS.data) {
     if (!dump || receipt.id !== id || receipt.sha256 !== dump.sha256
       || JSON.stringify(receipt.target) !== JSON.stringify(current.target)) throw databaseMaintenanceError();
     return receipt;
-  };
-
-  // No-replace publication of already-fsynced bytes; the first writer wins.
-  const publishFirst = (destination, value) => {
-    const pending = join(activeDir, 'record-' + randomUUID() + '.pending');
-    writeDurableExclusive(pending, value);
-    try {
-      linkSync(pending, destination);
-    } catch (err) {
-      if (err.code !== 'EEXIST') throw err;
-    } finally {
-      unlinkSync(pending);
-    }
-    syncDirectory(activeDir);
-  };
-
-  // Immutable publication: a retry of the identical record is accepted; a
-  // different record is never substituted.
-  const publishImmutable = (destination, value) => {
-    publishFirst(destination, value);
-    if (readFileSync(destination, 'utf8') !== JSON.stringify(value, null, 2) + '\n') throw databaseMaintenanceError();
   };
 
   // Publish the COMPLETE recovery dump's identity. The caller has already
@@ -489,8 +404,8 @@ export function createDatabaseMaintenanceJournal(dataDir = PATHS.data) {
     assertCoordinatorWorker(id, token);
     if (read()?.stage !== 'accepted' || readProducerSnapshot(id, token)) throw databaseMaintenanceError();
     const snapshot = producerSnapshotSchema.parse({ id, producers });
-    writeDurableExclusive(join(activeDir, 'producers.json'), snapshot);
-    syncDirectory(activeDir);
+    writeDurableExclusiveSync(join(activeDir, 'producers.json'), snapshot);
+    syncDirectorySync(activeDir);
     return readProducerSnapshot(id, token);
   };
 
@@ -501,16 +416,7 @@ export function createDatabaseMaintenanceJournal(dataDir = PATHS.data) {
   const decide = (id, token, stage, action) => {
     const value = decisionSchema.parse({ id, token, stage, action });
     const destination = join(activeDir, 'decision-' + stage + '-' + token + '.json');
-    const pending = join(activeDir, 'decision-' + randomUUID() + '.pending');
-    writeDurableExclusive(pending, value);
-    try {
-      linkSync(pending, destination);
-    } catch (err) {
-      if (err.code !== 'EEXIST') throw err;
-    } finally {
-      unlinkSync(pending);
-    }
-    syncDirectory(activeDir);
+    publishFirst(destination, value, 'decision');
     if (!lstatSync(destination).isFile()) throw databaseMaintenanceError();
     const winner = decisionSchema.parse(JSON.parse(readFileSync(destination, 'utf8')));
     if (winner.id !== id || winner.token !== token || winner.stage !== stage) throw databaseMaintenanceError();
@@ -534,7 +440,7 @@ export function createDatabaseMaintenanceJournal(dataDir = PATHS.data) {
       const published = successorSchema.parse(JSON.parse(readFileSync(
         join(activeDir, 'coordinator-after-' + previousToken + '.json'), 'utf8')));
       if (published.id !== id || published.previousToken !== previousToken || published.token !== recoveryToken) throw databaseMaintenanceError();
-      syncDirectory(activeDir);
+      syncDirectorySync(activeDir);
       return recoveryToken;
     }
     assertCoordinator(id, previousToken);
@@ -555,10 +461,10 @@ export function createDatabaseMaintenanceJournal(dataDir = PATHS.data) {
     const directory = workerDirectory(previousToken);
     const fd = openSync(join(directory, 'exit'), 'r+');
     try { fsyncSync(fd); } finally { closeSync(fd); }
-    syncDirectory(directory);
+    syncDirectorySync(directory);
     const next = { id, token: recoveryToken, previousToken };
     const pending = join(activeDir, 'coordinator-' + randomUUID() + '.pending');
-    writeDurableExclusive(pending, next);
+    writeDurableExclusiveSync(pending, next);
     try {
       // EEXIST is a lost race unless this is the SAME recorded recovery
       // request. Different claimants must never receive the winning token.
@@ -568,7 +474,7 @@ export function createDatabaseMaintenanceJournal(dataDir = PATHS.data) {
     } finally {
       unlinkSync(pending);
     }
-    syncDirectory(activeDir);
+    syncDirectorySync(activeDir);
     assertCoordinator(id, next.token);
     return next.token;
   };
@@ -576,13 +482,12 @@ export function createDatabaseMaintenanceJournal(dataDir = PATHS.data) {
   const transition = (id, token, expectedStage, nextStage) => {
     assertNotRealDataWrite(activeDir, 'database maintenance transition');
     const current = read();
-    if (!current || current.id !== id || !stages.includes(expectedStage)
-      || stages.indexOf(nextStage) !== stages.indexOf(expectedStage) + 1) throw databaseMaintenanceError();
+    assertForwardTransition(current, id, expectedStage, nextStage);
     assertCoordinator(id, token);
     // An acknowledged publication may have crashed before returning to its
     // caller. Only that exact owned transition is idempotent, never a reversal.
     if (current.stage === nextStage) {
-      syncDirectory(activeDir);
+      syncDirectorySync(activeDir);
       return current;
     }
     if (current.stage !== expectedStage) throw databaseMaintenanceError();
@@ -593,18 +498,7 @@ export function createDatabaseMaintenanceJournal(dataDir = PATHS.data) {
     const decision = decide(id, token, expectedStage, { kind: 'transition', nextStage });
     if (decision.kind !== 'transition' || decision.nextStage !== nextStage) throw databaseMaintenanceError();
     const next = journalSchema.parse({ ...current, stage: nextStage });
-    const pending = join(activeDir, 'publication-' + randomUUID() + '.pending');
-    writeDurableExclusive(pending, next);
-    try {
-      // link is an atomic, no-replace publication of already-fsynced bytes.
-      // A competing owner-token retry may win; both describe the same transition.
-      linkSync(pending, join(activeDir, 'published-' + nextStage + '.json'));
-    } catch (err) {
-      if (err.code !== 'EEXIST') throw err;
-    } finally {
-      unlinkSync(pending);
-    }
-    syncDirectory(activeDir);
+    publishFirst(join(activeDir, 'published-' + nextStage + '.json'), next, 'publication');
     const published = read();
     if (!published || published.id !== id || stages.indexOf(published.stage) < stages.indexOf(nextStage)) throw databaseMaintenanceError();
     return next;
@@ -622,7 +516,7 @@ export function createDatabaseMaintenanceJournal(dataDir = PATHS.data) {
     if (JSON.stringify(initial.source) !== JSON.stringify(parsedSource)) {
       throw new Error('Saved database endpoint changed; source-only cancellation refused.');
     }
-    writeDurableExclusive(join(activeDir, 'cancel-' + id + '.claim'), { id });
+    writeDurableExclusiveSync(join(activeDir, 'cancel-' + id + '.claim'), { id });
     const current = read();
     if (current?.id !== id || current.stage !== 'accepted') throw databaseMaintenanceError();
     const archiveDir = join(dataDir, 'database-maintenance-cancelled');
@@ -632,8 +526,8 @@ export function createDatabaseMaintenanceJournal(dataDir = PATHS.data) {
     const destination = join(archiveDir, id);
     if (existsSync(destination)) throw databaseMaintenanceError();
     renameSync(activeDir, destination);
-    syncDirectory(archiveDir);
-    syncDirectory(dataDir);
+    syncDirectorySync(archiveDir);
+    syncDirectorySync(dataDir);
     return { id, stage: 'cancelled' };
   };
 
@@ -713,8 +607,8 @@ export function createDatabaseMaintenanceJournal(dataDir = PATHS.data) {
     if (existsSync(destination)) throw databaseMaintenanceError();
     assertEnteredCoordinatorWorker(id, token);
     renameSync(activeDir, destination);
-    syncDirectory(archiveDir);
-    syncDirectory(dataDir);
+    syncDirectorySync(archiveDir);
+    syncDirectorySync(dataDir);
     return { id, stage: 'released', source: current.source.mode, target: current.target.mode };
   };
 

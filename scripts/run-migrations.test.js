@@ -6,6 +6,7 @@ import { tmpdir } from 'os';
 import { join } from 'path';
 import { pathToFileURL } from 'url';
 
+import { scanMigrationFiles } from './lib/migrationFiles.js';
 import { runMigrations, listPendingMigrations, sourceDeclaresPurge } from './run-migrations.js';
 import { createProviderService } from '../server/lib/aiToolkit/providers.js';
 
@@ -21,6 +22,7 @@ vi.mock('fs/promises', async (importOriginal) => {
       if (failure) throw failure;
       return actual.readFile(path, ...args);
     }),
+    readdir: vi.fn((...args) => actual.readdir(...args)),
     rename: vi.fn((...args) => actual.rename(...args)),
   };
 });
@@ -63,6 +65,15 @@ export default {
     vi.mocked(fsPromises.rename).mockImplementation((...args) => fsMocks.realRename(...args));
     warnSpy.mockRestore();
     logSpy.mockRestore();
+  });
+
+  it('lists only portable migration basenames even when the directory listing is mocked', async () => {
+    vi.mocked(fsPromises.readdir).mockResolvedValueOnce([
+      '002-z.js', '001-a.js', '003-ignore.test.js', '004-../../outside.js',
+      '005-..\\..\\outside.js', '006-stream:outside.js', null,
+    ]);
+
+    await expect(scanMigrationFiles(migrationsDir)).resolves.toEqual(['001-a.js', '002-z.js']);
   });
 
   const corruptSiblings = () =>

@@ -1,3 +1,4 @@
+import { recordingOperatorIo } from '../../test/recordingOperatorIo.js';
 vi.mock('../../services/appQualityFederation.js', () => ({ exportPortosQuality: vi.fn() }));
 import { exportPortosQuality } from '../../services/appQualityFederation.js';
 vi.mock('../../services/appQuality.js', () => ({ getAppQualityHistory: vi.fn(async () => ({ points: [], days: 90 })), enrichAppsWithQuality: vi.fn(async apps => apps.map(app => ({ ...app, quality: { score: 75 } }))) }));
@@ -73,8 +74,7 @@ vi.mock('../../services/appIconDetect.js', () => ({
 }));
 
 vi.mock('../../services/xcodeScripts.js', () => ({
-  checkScripts: vi.fn().mockReturnValue({ missing: [], present: [] }),
-  XCODE_SCRIPT_NAMES: ['deploy.sh', 'take_screenshots.sh', 'take_screenshots_macos.sh']
+  checkScripts: vi.fn().mockReturnValue({ missing: [], present: [] })
 }));
 
 import * as appsService from '../../services/apps.js';
@@ -111,7 +111,7 @@ describe('Apps CRUD Routes', () => {
     expect((await request(app).get('/api/apps/quality-federation?days=999')).status).toBe(400);
     exportPortosQuality.mockResolvedValue(null);
     const emit = vi.fn();
-    app.set('io', { emit });
+    app.set('io', recordingOperatorIo(emit));
     const onError = vi.fn();
     errorEvents.on('error', onError);
     const consoleErrorSpy = vi.spyOn(console, 'error').mockImplementation(() => {});

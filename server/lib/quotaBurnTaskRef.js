@@ -12,16 +12,13 @@
  * cannot run) and by `taskSchedule.triggerOnDemandTask` (so dispatch refuses for the same reasons). It lives in `lib/` so a service and a display path can share it (#6405).
  */
 
+import { QUOTA_BURN_TASK_REF_KIND } from './quotaBurnTaskRefKind.js';
 import { isPlainObject, POLLUTING_KEYS } from './objects.js';
-import { currentTaskTypeName } from './scheduledTaskTypes.js';
+import { auditDomainFor, currentTaskTypeName } from './scheduledTaskTypes.js';
 import { requiresInstallWideTarget, requiresManagedAppTarget } from './taskTargetScope.js';
 import { trimTo } from './textUtils.js';
 
-/** The two things a burn step may point at. */
-export const QUOTA_BURN_TASK_REF_KIND = Object.freeze({
-  BUILTIN: 'builtin',
-  CUSTOM: 'custom',
-});
+export { QUOTA_BURN_TASK_REF_KIND };
 
 /**
  * Why a step is retained but not dispatchable: a code the client can react to plus a human-readable `reason`. A step is never DELETED for being unavailable
@@ -61,7 +58,7 @@ export function normalizeQuotaBurnTaskRef(raw) {
   if (!isPlainObject(raw)) return null;
   if (raw.kind === QUOTA_BURN_TASK_REF_KIND.BUILTIN) {
     // A step saved before a task rename (TASK_TYPE_RENAMES) resolves to the current name, or it reads as an unknown task and never runs.
-    const taskType = currentTaskTypeName(trimTo(raw.taskType, MAX_REF_FIELD));
+    const taskType = auditDomainFor(currentTaskTypeName(trimTo(raw.taskType, MAX_REF_FIELD)));
     if (!taskType) return null;
     return { kind: QUOTA_BURN_TASK_REF_KIND.BUILTIN, taskType, appId: nullable(raw.appId, MAX_REF_FIELD) };
   }

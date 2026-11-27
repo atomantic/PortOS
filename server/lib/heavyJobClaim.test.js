@@ -4,8 +4,9 @@ import { tmpdir } from 'os';
 import { join } from 'path';
 import { spawn, execFile, execFileSync } from 'node:child_process';
 import { promisify } from 'node:util';
-import { describe, expect, it, vi } from 'vitest';
-import { __cleanupHeldClaims, __findSurvivingTrainer as findSurvivingTrainer, __publishClaim, adoptHeavyLocalJob, beginHeavyJobRecovery, claimHeavyLocalJob, HEAVY_LOCAL_JOB_STALE_MS } from './heavyJobClaim.js';
+import { createInterface } from 'node:readline';
+import { afterEach, describe, expect, it, vi } from 'vitest';
+import { __cleanupHeldClaims, findSurvivingTrainer, __publishClaim, claimHeavyLocalJob, HEAVY_LOCAL_JOB_STALE_MS } from './heavyJobClaim.js';
 import { maintenance } from './maintenanceAdmission.js';
 
 const withClaimPath = async (run) => {
@@ -19,6 +20,8 @@ const withClaimPath = async (run) => {
 };
 
 describe('claimHeavyLocalJob', () => {
+  afterEach(() => vi.useRealTimers());
+
   it('publishes no partial claim while another process writes its candidate', async () => {
     await withClaimPath(async claimPath => {
       const entered = Promise.withResolvers();
@@ -54,7 +57,7 @@ describe('claimHeavyLocalJob', () => {
     await writeFile(join(root, '.portos-disposable-root'), '');
     const trainer = spawn(process.execPath, ['-e', 'setInterval(() => {}, 1000)', '--', 'train_mflux_lora.py', '--output-dir', run], { stdio: 'ignore' });
     const stopped = new Promise(resolve => trainer.once('close', resolve));
-    let laterTrainer, laterStopped, racing, go;
+    let laterTrainer, laterStopped, racing;
     try {
       await new Promise((resolve, reject) => { trainer.once('spawn', resolve); trainer.once('error', reject); });
       await writeFile(join(control, 'pid'), String(trainer.pid));
@@ -71,39 +74,50 @@ describe('claimHeavyLocalJob', () => {
       const script = `import { claimHeavyLocalJob } from ${JSON.stringify(moduleUrl)};\n`
         + `import { createMaintenanceAdmission } from ${JSON.stringify(admissionUrl)};\n`
         + `import { writeFile } from 'node:fs/promises';\n`
-        + `import { existsSync } from 'node:fs'; import { setTimeout as delay } from 'node:timers/promises';\n`
         + `const data = ${JSON.stringify(data)}, claimPath = ${JSON.stringify(claimPath)};\n`
         + `const admission = createMaintenanceAdmission(data, { assertWrite: path => { if (path !== ${JSON.stringify(join(data, 'workflow-maintenance'))}) throw new Error('unexpected path'); } });\n`
-        + `const createClaim = async (path, bytes, options) => { if (path !== claimPath) throw new Error('unexpected claim'); if (process.env.CLAIM_TEST_READY) { await writeFile(process.env.CLAIM_TEST_READY, 'ready'); while (!existsSync(process.env.CLAIM_TEST_GO)) await delay(10); } return writeFile(path, bytes, options); };\n`
+        + `const createClaim = async (path, bytes, options) => {
+          if (path !== claimPath) throw new Error('unexpected claim');
+          if (process.env.CLAIM_TEST_PAUSE === '1') {
+            console.log('READY');
+            await new Promise(resolve => process.stdin.once('end', resolve).resume());
+          }
+          return writeFile(path, bytes, options);
+        };\n`
         + `const claim = await claimHeavyLocalJob({ kind: 'image', id: 'other-process', claimPath, admission, createClaim });\n`
         + `console.log('RESULT:' + JSON.stringify({ ok: claim.ok }));\nif (claim.ok) await claim.release();`;
-      const runClaim = async (extra = {}) => {
-        const { stdout } = await promisify(execFile)(process.execPath, ['--input-type=module', '-e', script], {
-          env: { ...process.env, PORTOS_DATA_ROOT: root, CLAIM_TEST_READY: '', CLAIM_TEST_GO: '', ...extra }, timeout: 15000,
+      const runClaim = (pause = false) => {
+        const execution = promisify(execFile)(process.execPath, ['--input-type=module', '-e', script], {
+          env: { ...process.env, PORTOS_DATA_ROOT: root, CLAIM_TEST_PAUSE: pause ? '1' : '0' }, timeout: 15000,
         });
-        return JSON.parse(stdout.match(/RESULT:(\{[^\n]+\})/)?.[1] ?? '{}');
+        const result = execution.then(({ stdout }) => JSON.parse(stdout.match(/RESULT:(\{[^\n]+\})/)?.[1] ?? '{}'));
+        if (!pause) return { result };
+        const ready = new Promise((resolve, reject) => {
+          const output = createInterface({ input: execution.child.stdout });
+          output.on('line', line => { if (line === 'READY') resolve(); });
+          void result.then(() => reject(new Error('Claim process exited before the publication pause')), reject);
+        });
+        return { result, ready, release: () => execution.child.stdin.end() };
       };
-      expect(await runClaim()).toEqual({ ok: false });
+      expect(await runClaim().result).toEqual({ ok: false });
       trainer.kill('SIGTERM');
       await stopped;
       await writeFile(join(control, 'exit'), '0');
-      const ready = join(root, 'ready');
-      go = join(root, 'go');
-      racing = runClaim({ CLAIM_TEST_READY: ready, CLAIM_TEST_GO: go });
-      await vi.waitFor(() => expect(existsSync(ready)).toBe(true));
+      racing = runClaim(true);
+      await racing.ready;
       laterTrainer = spawn(process.execPath, ['-e', 'setInterval(() => {}, 1000)', '--', 'train_mflux_lora.py', '--output-dir', run], { stdio: 'ignore' });
       laterStopped = new Promise(resolve => laterTrainer.once('close', resolve));
       await new Promise((resolve, reject) => { laterTrainer.once('spawn', resolve); laterTrainer.once('error', reject); });
       await writeFile(join(control, 'pid'), String(laterTrainer.pid));
-      await writeFile(go, 'go');
-      expect(await racing).toEqual({ ok: false });
+      racing.release();
+      expect(await racing.result).toEqual({ ok: false });
       laterTrainer.kill('SIGTERM');
       await laterStopped;
-      expect(await runClaim()).toEqual({ ok: true });
+      expect(await runClaim().result).toEqual({ ok: true });
     } finally {
       if (trainer.exitCode === null && trainer.signalCode === null) { trainer.kill('SIGTERM'); await stopped; }
       if (laterTrainer && laterTrainer.exitCode === null && laterTrainer.signalCode === null) { laterTrainer.kill('SIGTERM'); await laterStopped; }
-      if (racing) { await writeFile(go, 'go').catch(() => {}); await racing.catch(() => {}); }
+      if (racing) { racing.release(); await racing.result.catch(() => {}); }
       await rm(root, { recursive: true, force: true });
     }
   });
@@ -180,38 +194,10 @@ describe('claimHeavyLocalJob', () => {
   });
   it('withdraws a local claim that raced a newly observed survivor', async () => {
     await withClaimPath(async claimPath => {
-      const entered = Promise.withResolvers();
-      const resume = Promise.withResolvers();
-      const candidate = claimHeavyLocalJob({ kind: 'image', id: 'image', claimPath, createClaim: async (path, data, options) => {
-        entered.resolve();
-        await resume.promise;
-        await writeFile(path, data, options);
-      } });
-      await entered.promise;
-      const end = beginHeavyJobRecovery('trainer');
-      try {
-        resume.resolve();
-        await expect(candidate).resolves.toMatchObject({ ok: false });
-        expect(existsSync(claimPath)).toBe(false);
-      } finally { resume.resolve(); end(); }
-    });
-  });
-  it('rechecks local recovery after an in-flight post-creation process scan', async () => {
-    await withClaimPath(async claimPath => {
-      const entered = Promise.withResolvers();
-      const resume = Promise.withResolvers();
-      let scans = 0;
-      const candidate = claimHeavyLocalJob({ kind: 'image', id: 'image', claimPath, survivorCheck: async () => {
-        if (++scans === 2) { entered.resolve(); await resume.promise; }
-        return null;
-      } });
-      await entered.promise;
-      const end = beginHeavyJobRecovery('trainer');
-      try {
-        resume.resolve();
-        await expect(candidate).resolves.toMatchObject({ ok: false });
-        expect(existsSync(claimPath)).toBe(false);
-      } finally { resume.resolve(); end(); }
+      const survivorCheck = vi.fn().mockResolvedValueOnce(null).mockResolvedValueOnce({ pid: 12345 });
+      await expect(claimHeavyLocalJob({ kind: 'image', id: 'image', claimPath, survivorCheck })).resolves.toMatchObject({ ok: false });
+      expect(survivorCheck).toHaveBeenCalledTimes(2);
+      expect(existsSync(claimPath)).toBe(false);
     });
   });
   it('records a completed unstarted claim if post-check withdrawal repeatedly fails', async () => {
@@ -283,18 +269,22 @@ describe('claimHeavyLocalJob', () => {
     });
   });
   it('retries an unstarted claim after both unlink and completion-marker writes fail', async () => {
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
     await withClaimPath(async claimPath => {
       let scans = 0;
       await expect(claimHeavyLocalJob({ kind: 'image', id: 'image', claimPath, survivorCheck: async () => ++scans > 1,
         unlinkClaim: async () => { throw new Error('busy'); }, writeCompletion: async () => { throw new Error('unwritable'); },
         wait: async () => {} })).rejects.toThrow('unwritable');
-      await vi.waitFor(() => expect(existsSync(claimPath)).toBe(false), { timeout: 3000 });
+      expect(existsSync(claimPath)).toBe(true);
+      await vi.advanceTimersToNextTimerAsync();
+      await vi.waitFor(() => expect(existsSync(claimPath)).toBe(false));
       const next = await claimHeavyLocalJob({ kind: 'image', id: 'next', claimPath, survivorCheck: async () => false });
       expect(next.ok).toBe(true);
       await next.release();
     });
   });
   it('retries cleanup when a competing local removal fails after its timer fires', async () => {
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
     await withClaimPath(async claimPath => {
       let scans = 0;
       await expect(claimHeavyLocalJob({ kind: 'image', id: 'first', claimPath, survivorCheck: async () => ++scans > 1,
@@ -305,61 +295,24 @@ describe('claimHeavyLocalJob', () => {
       const second = claimHeavyLocalJob({ kind: 'image', id: 'second', claimPath, survivorCheck: async () => false,
         unlinkClaim: async () => { entered.resolve(); await resume.promise; throw new Error('still busy'); } });
       await entered.promise;
-      try { await new Promise(resolve => setTimeout(resolve, 1200)); }
-      finally { resume.resolve(); }
-      await expect(second).rejects.toThrow('still busy');
-      await vi.waitFor(() => expect(existsSync(claimPath)).toBe(false), { timeout: 4000 });
-    });
-  });
-  it('refuses another local accelerator job while a survivor is reattaching', async () => {
-    await withClaimPath(async claimPath => {
-      const end = beginHeavyJobRecovery('surviving-trainer');
       try {
-        expect(await claimHeavyLocalJob({ kind: 'image', id: 'new-image', claimPath })).toMatchObject({ ok: false });
-        const survivor = await claimHeavyLocalJob({ kind: 'training', id: 'surviving-trainer', claimPath, pid: 12345 });
-        expect(survivor).toMatchObject({ ok: true, holder: { pid: 12345 } });
-        __cleanupHeldClaims();
-        expect(existsSync(claimPath)).toBe(true);
-        await survivor.release();
-      } finally { end(); }
-      const next = await claimHeavyLocalJob({ kind: 'image', id: 'new-image', claimPath });
-      expect(next.ok).toBe(true);
-      await next.release();
+        await vi.advanceTimersToNextTimerAsync();
+      } finally {
+        resume.resolve();
+      }
+      await expect(second).rejects.toThrow('still busy');
+      expect(existsSync(claimPath)).toBe(true);
+      await vi.advanceTimersToNextTimerAsync();
+      await vi.waitFor(() => expect(existsSync(claimPath)).toBe(false));
     });
   });
-  it('waits for recovery within a caller’s requested timeout', async () => {
+  it('preserves the claim of a live child when the server exits', async () => {
     await withClaimPath(async claimPath => {
-      const end = beginHeavyJobRecovery('trainer');
-      let clock = 0;
-      const wait = vi.fn(async ms => { clock += ms; end(); });
-      const claim = await claimHeavyLocalJob({ kind: 'assessment', id: 'next', claimPath, timeoutMs: 500, now: () => clock, wait });
-      expect(claim.ok).toBe(true);
-      expect(wait).toHaveBeenCalledOnce();
-      await claim.release();
-    });
-  });
-  it('reuses only an existing parent admission when reattaching a claim', async () => {
-    await withClaimPath(async claimPath => {
-      await expect(claimHeavyLocalJob({ kind: 'training', id: 'job', claimPath, continuationOwned: true }))
-        .rejects.toThrow('Existing work ownership');
-      const parent = maintenance.admit('media', 'trainer');
-      const claim = await parent.run(() => claimHeavyLocalJob({ kind: 'training', id: 'job', claimPath, continuationOwned: true }));
-      expect(maintenance.operations().map(op => op.kind)).toEqual(['media']);
-      await claim.release();
-      await parent.finish();
-      await parent.run(() => expect(claimHeavyLocalJob({ kind: 'training', id: 'late', claimPath, continuationOwned: true }))
-        .rejects.toMatchObject({ code: 'MAINTENANCE_HELD' }));
-      const uncertain = maintenance.admit('media', 'finished-trainer');
-      uncertain.markUnsettled();
-      await uncertain.finish();
-      await uncertain.run(() => expect(claimHeavyLocalJob({ kind: 'training', id: 'late', claimPath, continuationOwned: true }))
-        .rejects.toMatchObject({ code: 'MAINTENANCE_HELD' }));
-      const recovery = maintenance.recoverOwned('media', 'finished-trainer');
-      const resumed = await recovery.run(() => claimHeavyLocalJob({ kind: 'training', id: 'resumed', claimPath, continuationOwned: true }));
-      expect(resumed.ok).toBe(true);
-      await resumed.release();
-      recovery.completeRecovery();
-      await recovery.finish();
+      const child = await claimHeavyLocalJob({ kind: 'video', id: 'example-render', claimPath, pid: 12345 });
+      expect(child).toMatchObject({ ok: true, holder: { pid: 12345 } });
+      __cleanupHeldClaims();
+      expect(existsSync(claimPath)).toBe(true);
+      await child.release();
     });
   });
   it('does not lose a claim on a failed handoff write and refuses changed ownership', async () => {
@@ -472,20 +425,18 @@ describe('claimHeavyLocalJob', () => {
 
   it('stops waiting when the caller aborts and leaves the accelerator free', async () => {
     await withClaimPath(async (claimPath) => {
-      const end = beginHeavyJobRecovery('trainer');
-      try {
-        const controller = new AbortController();
-        const wait = vi.fn(() => new Promise(() => {}));
-        const pending = claimHeavyLocalJob({
-          kind: 'assessment', id: 'cancelled-bench', claimPath, timeoutMs: 60_000, signal: controller.signal, wait, now: () => 0,
-        });
-        await vi.waitFor(() => expect(wait).toHaveBeenCalled());
-        controller.abort();
-        await expect(pending).resolves.toMatchObject({
-          ok: false, aborted: true, message: expect.stringContaining('cancelled'),
-        });
-        expect(maintenance.operations().some((op) => op.resource === 'cancelled-bench')).toBe(false);
-      } finally { end(); }
+      const controller = new AbortController();
+      const wait = vi.fn(() => new Promise(() => {}));
+      const pending = claimHeavyLocalJob({
+        kind: 'assessment', id: 'cancelled-bench', claimPath, timeoutMs: 60_000, signal: controller.signal, wait, now: () => 0,
+        survivorCheck: async () => ({ pid: 12345 }),
+      });
+      await vi.waitFor(() => expect(wait).toHaveBeenCalled());
+      controller.abort();
+      await expect(pending).resolves.toMatchObject({
+        ok: false, aborted: true, message: expect.stringContaining('cancelled'),
+      });
+      expect(maintenance.operations().some((op) => op.resource === 'cancelled-bench')).toBe(false);
       const next = await claimHeavyLocalJob({ kind: 'image', id: 'after-cancel', claimPath });
       expect(next.ok).toBe(true);
       await next.release();
@@ -515,59 +466,6 @@ describe('claimHeavyLocalJob', () => {
       });
       expect(result.stale).toBe(true);
       expect(result.message).toContain('older than the safety ceiling');
-    });
-  });
-});
-
-describe('adoptHeavyLocalJob', () => {
-  // #1332 boot re-attach: a restarted server re-attaches to a detached trainer
-  // that survived the crash. That trainer's PID already holds the machine-wide
-  // claim (handed off to it pre-restart) — the new process must recognize and
-  // adopt that claim rather than contending for a fresh one, which would see
-  // its own survivor as a competing job and refuse it.
-  it('adopts an on-disk claim already recorded for this exact kind/id/pid', async () => {
-    await withClaimPath(async (claimPath) => {
-      await writeFile(claimPath, JSON.stringify({
-        kind: 'LoRA training', id: 'run-a', pid: 4242, startedAt: 0, token: 'tok-a',
-      }));
-      const adopted = await adoptHeavyLocalJob({ kind: 'LoRA training', id: 'run-a', pid: 4242, claimPath });
-      expect(adopted).toMatchObject({ ok: true, holder: { kind: 'LoRA training', id: 'run-a', pid: 4242 } });
-
-      await adopted.release();
-      expect(existsSync(claimPath)).toBe(false);
-    });
-  });
-
-  it('returns null (does not steal) when no claim exists, or the on-disk claim names a different job', async () => {
-    await withClaimPath(async (claimPath) => {
-      expect(await adoptHeavyLocalJob({ kind: 'LoRA training', id: 'run-a', pid: 4242, claimPath })).toBeNull();
-
-      await writeFile(claimPath, JSON.stringify({
-        kind: 'LoRA training', id: 'run-a', pid: 4242, startedAt: 0, token: 'tok-a',
-      }));
-      // Wrong id, wrong pid, and wrong kind all fail to match — and the claim
-      // file is left untouched (still readable, still holding the same token).
-      expect(await adoptHeavyLocalJob({ kind: 'LoRA training', id: 'run-b', pid: 4242, claimPath })).toBeNull();
-      expect(await adoptHeavyLocalJob({ kind: 'LoRA training', id: 'run-a', pid: 9999, claimPath })).toBeNull();
-      expect(await adoptHeavyLocalJob({ kind: 'video', id: 'run-a', pid: 4242, claimPath })).toBeNull();
-      expect(JSON.parse(await readFile(claimPath, 'utf8'))).toMatchObject({ token: 'tok-a' });
-    });
-  });
-
-  it('release() only removes the claim file if its token still matches', async () => {
-    await withClaimPath(async (claimPath) => {
-      await writeFile(claimPath, JSON.stringify({
-        kind: 'LoRA training', id: 'run-a', pid: 4242, startedAt: 0, token: 'tok-a',
-      }));
-      const adopted = await adoptHeavyLocalJob({ kind: 'LoRA training', id: 'run-a', pid: 4242, claimPath });
-
-      // Someone else already claimed the path under a different token by the
-      // time release() runs — it must not remove that unrelated claim.
-      await writeFile(claimPath, JSON.stringify({
-        kind: 'video', id: 'run-c', pid: 1, startedAt: 0, token: 'tok-c',
-      }));
-      await adopted.release();
-      expect(JSON.parse(await readFile(claimPath, 'utf8'))).toMatchObject({ token: 'tok-c' });
     });
   });
 });

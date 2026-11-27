@@ -683,10 +683,7 @@ describe('mediaJobQueue', () => {
   });
 
   it('forwards structured step/totalSteps/loss onto the SSE wire', async () => {
-    // The LoRA training live gallery reads loss + step off the progress/preview
-    // SSE frames to plot a curve and key sample thumbnails by step. The
-    // dispatcher must pass those structured fields through (additive — guarded
-    // by presence so image/video frames that omit them are unaffected).
+    // Structured fields accompany progress and preview frames when present.
     const job = await mediaJobQueue.enqueueJob({ kind: 'video', params: { prompt: 'metrics' } });
     await waitFor(() => stubs.generateVideo.mock.calls.length === 1);
     await waitFor(() => mediaJobQueue.getJob(job.jobId)?.status === 'running');

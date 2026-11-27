@@ -66,14 +66,14 @@ describe('createModuleGraph', () => {
   });
 
   it('expands a bounded computed import site to its enumerated directory', () => {
-    const runner = 'scripts/run-migrations.js';
+    const runner = 'scripts/lib/fileMigrationRunner.js';
     expect(BOUNDED_DYNAMIC_IMPORTS[runner].directory).toBe('scripts/migrations/');
     const graph = graphOf({
       [runner]: 'export const run = (file) => import(file);\n',
       'scripts/migrations/001-first.js': 'export default {};\n',
       'scripts/migrations/_lib.js': 'export {};\n',
     });
-    expect(graph.closure([runner], graph.testDependencies)).toEqual(['scripts/migrations/001-first.js', runner]);
+    expect(graph.closure([runner], graph.testDependencies)).toEqual([runner, 'scripts/migrations/001-first.js']);
   });
 });
 

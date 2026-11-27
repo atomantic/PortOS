@@ -6,23 +6,29 @@ import { createTempDataRoot, makePathsProxy } from '../lib/mockPathsDataRoot.js'
 
 const tempRoot = createTempDataRoot('portos-feature-agent-trigger-');
 
-vi.mock('../lib/fileUtils.js', async () => {
-  const actual = await vi.importActual('../lib/fileUtils.js');
-  return makePathsProxy(actual, { dataRoot: tempRoot });
-});
+vi.mock('../lib/paths.js', async (importActual) => makePathsProxy(await importActual(), { dataRoot: () => tempRoot }));
 
 vi.mock('./cos/cosTaskStore.js', () => ({
-  addTask: vi.fn()
+  addTask: vi.fn(),
+  getTaskById: vi.fn(),
+  deleteTask: vi.fn(async () => ({ success: true }))
 }));
 vi.mock('./cos/cos.js', () => ({
   forceSpawnTask: vi.fn()
 }));
 
+vi.mock('./cos/cosAgentLifecycle.js', async (importActual) => ({
+  ...await importActual(),
+  getAgentRecord: vi.fn(async () => null),
+  getAgents: vi.fn(async () => [])
+}));
+vi.mock('./agent/agentManagement.js', () => ({ killAgent: vi.fn() }));
+
 vi.mock('./apps.js', () => ({
   getAppById: vi.fn()
 }));
 
-import { addTask } from './cos/cosTaskStore.js';
+import { addTask, getTaskById } from './cos/cosTaskStore.js';
 import { forceSpawnTask } from './cos/cos.js';
 import { getAppById } from './apps.js';
 const { generateTaskFromFeatureAgent, triggerFeatureAgent, stopFeatureAgent, updateFeatureAgent } = await import('./featureAgents.js');
@@ -40,6 +46,8 @@ const agent = {
   git: { branchName: 'feature-agent/example-fa-example', baseBranch: 'main' }
 };
 
+const runMetadata = { featureAgentId: agent.id, featureAgentRun: true };
+
 const dataPath = () => join(tempRoot, 'cos', 'feature-agents.json');
 
 beforeEach(() => {
@@ -47,6 +55,7 @@ beforeEach(() => {
   mkdirSync(join(tempRoot, 'cos'), { recursive: true });
   writeFileSync(dataPath(), JSON.stringify({ version: 1, agents: [structuredClone(agent)] }));
   getAppById.mockResolvedValue({ id: 'app-example', repoPath: '/tmp/example-repo' });
+  getTaskById.mockResolvedValue(null);
   addTask.mockResolvedValue({ ...generateTaskFromFeatureAgent(agent) });
   forceSpawnTask.mockResolvedValue({ success: true, taskId: 'fa-run' });
 });
@@ -94,7 +103,7 @@ describe('triggerFeatureAgent', () => {
     // TASK — stranded currentAgentId on the dead agent, so the continuation's
     // output never reached the feature-agent view.
     const result = await triggerFeatureAgent(agent.id);
-    cosEvents.emit('agent:spawned', { taskId: result.taskId, id: 'agent-first' });
+    cosEvents.emit('agent:spawned', { taskId: result.taskId, id: 'agent-first', metadata: runMetadata });
     await vi.waitFor(async () => {
       const saved = JSON.parse(await readFile(dataPath(), 'utf8'));
       expect(saved.agents[0].currentAgentId).toBe('agent-first');
@@ -103,7 +112,7 @@ describe('triggerFeatureAgent', () => {
     cosEvents.emit('agent:completed', {
       id: 'agent-first',
       taskId: result.taskId,
-      metadata: { featureAgentId: agent.id, featureAgentRun: true },
+      metadata: runMetadata,
       result: { success: false, resumed: true, resumedTaskId: result.taskId, error: 'Relaunched by user on codex' }
     });
 
@@ -116,7 +125,7 @@ describe('triggerFeatureAgent', () => {
     expect(saved.agents[0].status).toBe('active');
 
     // And the pointer it handed back is the one the continuation's spawn re-binds.
-    cosEvents.emit('agent:spawned', { taskId: result.taskId, id: 'agent-second' });
+    cosEvents.emit('agent:spawned', { taskId: result.taskId, id: 'agent-second', metadata: runMetadata });
     await vi.waitFor(async () => {
       const after = JSON.parse(await readFile(dataPath(), 'utf8'));
       expect(after.agents[0].currentAgentId).toBe('agent-second');
@@ -130,7 +139,7 @@ describe('triggerFeatureAgent', () => {
     // `triggerFeatureAgent` and `getDueFeatureAgents` refuse to run a feature agent
     // holding one — so the agent never runs again by schedule or by hand.
     const result = await triggerFeatureAgent(agent.id);
-    cosEvents.emit('agent:spawned', { taskId: result.taskId, id: 'agent-first' });
+    cosEvents.emit('agent:spawned', { taskId: result.taskId, id: 'agent-first', metadata: runMetadata });
     await vi.waitFor(async () => {
       const saved = JSON.parse(await readFile(dataPath(), 'utf8'));
       expect(saved.agents[0].currentAgentId).toBe('agent-first');
@@ -139,7 +148,7 @@ describe('triggerFeatureAgent', () => {
     cosEvents.emit('agent:completed', {
       id: 'agent-first',
       taskId: result.taskId,
-      metadata: { featureAgentId: agent.id, featureAgentRun: true },
+      metadata: runMetadata,
       result: { success: false, resumed: true, error: 'Pause retired — its task no longer exists' },
     });
 
@@ -160,7 +169,7 @@ describe('triggerFeatureAgent', () => {
     // pointer, which `triggerFeatureAgent` and `getDueFeatureAgents` both read as
     // "a run is already in flight" — so Stop would quietly disable the agent.
     const result = await triggerFeatureAgent(agent.id);
-    cosEvents.emit('agent:spawned', { taskId: result.taskId, id: 'agent-first' });
+    cosEvents.emit('agent:spawned', { taskId: result.taskId, id: 'agent-first', metadata: runMetadata });
     await vi.waitFor(async () => {
       const saved = JSON.parse(await readFile(dataPath(), 'utf8'));
       expect(saved.agents[0].currentAgentId).toBe('agent-first');
@@ -171,7 +180,7 @@ describe('triggerFeatureAgent', () => {
     cosEvents.emit('agent:completed', {
       id: 'agent-first',
       taskId: result.taskId,
-      metadata: { featureAgentId: agent.id, featureAgentRun: true },
+      metadata: runMetadata,
       result: { success: false, resumed: true, resumedTaskId: result.taskId, error: 'Relaunched by user' },
     });
 
@@ -192,7 +201,7 @@ describe('triggerFeatureAgent', () => {
     // agent's metadata) and reports it as `resumedTaskId`. Handing back the
     // retired `taskId` would leave a pointer nothing will ever spawn.
     const result = await triggerFeatureAgent(agent.id);
-    cosEvents.emit('agent:spawned', { taskId: result.taskId, id: 'agent-first' });
+    cosEvents.emit('agent:spawned', { taskId: result.taskId, id: 'agent-first', metadata: runMetadata });
     await vi.waitFor(async () => {
       const saved = JSON.parse(await readFile(dataPath(), 'utf8'));
       expect(saved.agents[0].currentAgentId).toBe('agent-first');
@@ -201,7 +210,7 @@ describe('triggerFeatureAgent', () => {
     cosEvents.emit('agent:completed', {
       id: 'agent-first',
       taskId: result.taskId,
-      metadata: { featureAgentId: agent.id, featureAgentRun: true },
+      metadata: runMetadata,
       result: { success: false, resumed: true, resumedTaskId: 'task-replacement', error: 'Relaunched by user' }
     });
 
@@ -214,13 +223,15 @@ describe('triggerFeatureAgent', () => {
   it('clears the active pointer and records the run after CoS completion', async () => {
     const result = await triggerFeatureAgent(agent.id);
 
-    cosEvents.emit('agent:spawned', { taskId: result.taskId, id: 'agent-real' });
+    cosEvents.emit('agent:spawned', { taskId: result.taskId, id: 'agent-real', metadata: runMetadata });
     await vi.waitFor(async () => {
       const saved = JSON.parse(await readFile(dataPath(), 'utf8'));
       expect(saved.agents[0].currentAgentId).toBe('agent-real');
     });
     cosEvents.emit('agent:completed', {
-      metadata: { featureAgentId: agent.id, featureAgentRun: true },
+      id: 'agent-real',
+      taskId: result.taskId,
+      metadata: runMetadata,
       result: { success: true }
     });
     await vi.waitFor(async () => {
@@ -238,7 +249,7 @@ describe('pending task pointer when dispatch never spawns', () => {
   it.each([
     ['task:held', (taskId) => ({ taskId, reason: 'local endpoint at capacity' })],
     ['agent:error', (taskId) => ({ taskId, error: 'worktree creation failed' })]
-  ])('clears the pointer on %s so the agent is due and triggerable again', async (event, payload) => {
+  ])('clears a missing task pointer on %s so the agent is triggerable again', async (event, payload) => {
     // Admission sets currentAgentId to the unpersisted task id; a held or failed
     // spawn emits no agent lifecycle event, which used to wedge the agent forever.
     const first = await triggerFeatureAgent(agent.id);
@@ -252,10 +263,16 @@ describe('pending task pointer when dispatch never spawns', () => {
     expect(again.triggered).toBe(true);
   });
 
-  it('ignores a held task that belongs to no feature agent', async () => {
+  it('retains a held run while its queued task can be retried', async () => {
     const first = await triggerFeatureAgent(agent.id);
-    cosEvents.emit('task:held', { taskId: 'other-task', reason: 'x' });
-    await new Promise(resolve => setTimeout(resolve, 20));
+    getTaskById.mockResolvedValue({ id: first.taskId, status: 'pending' });
+    cosEvents.emit('task:held', { taskId: first.taskId, reason: 'local endpoint at capacity' });
+    await updateFeatureAgent(agent.id, { description: agent.description });
+    expect(getTaskById).toHaveBeenCalledWith(first.taskId);
     expect(await pointer()).toBe(first.taskId);
+
+    cosEvents.emit('tasks:changed', { type: 'internal', action: 'deleted', taskId: first.taskId });
+    await updateFeatureAgent(agent.id, { description: agent.description });
+    expect(await pointer()).toBeNull();
   });
 });

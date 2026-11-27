@@ -27,8 +27,12 @@ vi.mock('../settings.js', () => ({ getSettings: async () => mocks.settings }));
 vi.mock('../provider/providers.js', () => ({ getProviderById: (...args) => mocks.provider(...args) }));
 vi.mock('../promptRunner.js', () => ({ runPromptThroughProvider: (...args) => mocks.run(...args) }));
 vi.mock('../aiProvider.js', () => ({ parseLLMJSON: JSON.parse }));
-vi.mock('../socketIo.js', () => ({ getIo: () => ({ emit: mocks.emit }) }));
+vi.mock('../socketIo.js', () => ({ emitToOperators: (...args) => mocks.emit(...args) }));
 vi.mock('../sharing/recordEvents.js', () => ({ emitRecordUpdated: vi.fn() }));
+vi.mock('../mediaCollections.js', () => ({
+  findOrCreateMoodBoardCollection: vi.fn(async () => ({ id: 'example-collection' })),
+  bulkUpdateCollectionItems: vi.fn(async () => ({ added: 1 })),
+}));
 vi.mock('../mediaJobQueue/index.js', () => ({
   enqueueJob: (...args) => mocks.enqueue(...args), getJob: async () => null,
   mediaJobEvents: new EventEmitter(),
@@ -52,6 +56,13 @@ beforeEach(() => {
   __testing.reset(); initMoodBoardItemRenderHook();
 });
 const settled = (id) => vi.waitFor(() => { expect(getGenerateJob(id).status).not.toBe('running'); return getGenerateJob(id); });
+
+const terminalSentInput = (boardId) => vi.waitFor(() => {
+  const event = mocks.emit.mock.calls.find(([name, job]) =>
+    name === 'mood-board:generate' && job.boardId === boardId && job.status === 'queued');
+  expect(event?.[1]).toHaveProperty('sentInput');
+  return event[1].sentInput;
+});
 
 describe('generate more workflow', () => {
   it('writes with the selected LLM, queues configured 16:9 renders once, and attaches new images without changing references', async () => {
@@ -95,7 +106,8 @@ describe('generate more workflow', () => {
   it('reports the exact prompt-writing request with the blocks PortOS added', async () => {
     const id = mocks.board.id;
     await startGenerateJob(id, input({ direction: 'rainy harbor' }));
-    const { sentInput } = await settled(id);
+    const sentInput = await terminalSentInput(id);
+    expect(getGenerateJob(id)).not.toHaveProperty('sentInput');
     expect(sentInput.sentPrompt).toBe(mocks.run.mock.calls[0][0].prompt);
     expect(sentInput.sentPrompt).toContain('rainy harbor');
     expect(sentInput.promptAdditions.map((item) => item.label)).toEqual(['Creative latitude (operator policy)', 'Prompt-writing instructions']);
@@ -109,8 +121,7 @@ describe('generate more workflow', () => {
     mocks.board.items[0].analysis = { prompt: 'A silver lighthouse overlooking a harbor' };
     mocks.run.mockResolvedValueOnce({ text: JSON.stringify({ prompts: ['An empty street facade with floating windows', 'A person on a park bench beneath an impossible shadow'] }) });
     await startGenerateJob(id, input({ direction: 'quiet urban moments' }));
-    const state = await settled(id);
-    const sent = state.sentInput.sentPrompt;
+    const { sentPrompt: sent } = await terminalSentInput(id);
     expect(sent).toContain(style);
     expect(sent).toContain('clinical sharpness');
     expect(sent).not.toContain('silver lighthouse');

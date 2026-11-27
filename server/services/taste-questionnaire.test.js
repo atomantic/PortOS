@@ -124,6 +124,60 @@ describe('getNextQuestion progress', () => {
   });
 });
 
+describe('skipping triggered taste follow-ups', () => {
+  it('advances once, survives a reload, and leaves the answer transcript unchanged', async () => {
+    const taste = await import('./taste-questionnaire.js');
+    await taste.resetSection('food');
+    await taste.submitAnswer('food', 'food-core-1', 'I like spicy miso broth');
+    const aestheticsPath = join(tempRoot, 'digital-twin', 'AESTHETICS.md');
+    const aestheticsBefore = await readFile(aestheticsPath, 'utf8');
+
+    expect(await taste.getNextQuestion('food')).toMatchObject({ questionId: 'food-fu-spice' });
+    await expect(taste.skipFollowUp('food', 'food-fu-umami')).rejects.toMatchObject({ status: 409 });
+    for (const questionId of ['food-core-2', 'food-p25-example']) {
+      await expect(taste.skipFollowUp('food', questionId)).rejects.toMatchObject({ status: 400 });
+    }
+
+    const skips = await Promise.all([
+      taste.skipFollowUp('food', 'food-fu-spice'),
+      taste.skipFollowUp('food', 'food-fu-spice'),
+    ]);
+    expect(skips[0]).toMatchObject({ nextQuestion: { questionId: 'food-fu-umami', progress: { totalAnswered: 1 } } });
+    expect(skips[1]).toEqual(skips[0]);
+    const stored = JSON.parse(await readFile(join(tempRoot, 'digital-twin', 'taste-profile.json'), 'utf8'));
+    expect(stored.sections.food.skippedFollowUpIds).toEqual(['food-fu-spice']);
+    expect(await taste.getSectionResponses('food')).toEqual([expect.objectContaining({ questionId: 'food-core-1' })]);
+    expect((await taste.getTasteProfile()).sections.find(section => section.id === 'food').progress)
+      .toMatchObject({ coreAnswered: 1, followUpsAnswered: 0 });
+    expect(await readFile(aestheticsPath, 'utf8')).toBe(aestheticsBefore);
+
+    vi.resetModules();
+    const reopened = await import('./taste-questionnaire.js');
+    expect(await reopened.getNextQuestion('food')).toEqual(skips[0].nextQuestion);
+
+    await reopened.resetSection('food');
+    expect(await reopened.getNextQuestion('food')).toMatchObject({ questionId: 'food-core-1' });
+    expect(await reopened.submitAnswer('food', 'food-core-1', 'I like spicy food'))
+      .toMatchObject({ nextQuestion: { questionId: 'food-fu-spice' } });
+  });
+
+  it('completes the section when the final pending follow-up is skipped', async () => {
+    const taste = await import('./taste-questionnaire.js');
+    await taste.resetSection('fashion');
+    await taste.submitAnswer('fashion', 'fashion-core-1', 'I wear polyester');
+    await taste.submitAnswer('fashion', 'fashion-core-2', 'I dress casually');
+    expect(await taste.submitAnswer('fashion', 'fashion-core-3', 'I like vintage styles'))
+      .toMatchObject({ sectionStatus: 'in_progress', nextQuestion: { questionId: 'fashion-fu-vintage' } });
+
+    expect(await taste.skipFollowUp('fashion', 'fashion-fu-vintage')).toEqual({ nextQuestion: null });
+    expect(await taste.getNextQuestion('fashion')).toBeNull();
+    expect((await taste.getTasteProfile()).sections.find(section => section.id === 'fashion'))
+      .toMatchObject({ status: 'completed', progress: { coreAnswered: 3, followUpsAnswered: 0 } });
+    expect(await taste.submitAnswer('fashion', 'fashion-p25-example', 'I like tailored jackets', { source: 'personalized' }))
+      .toMatchObject({ sectionStatus: 'completed', totalResponses: 4, nextQuestion: null });
+  });
+});
+
 describe('generatePersonalizedTasteQuestion outcomes', () => {
   const PROVIDER = { id: 'provider-1', name: 'Example Provider', defaultModel: 'model-1' };
 

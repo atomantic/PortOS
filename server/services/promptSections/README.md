@@ -6,7 +6,12 @@ Leaf modules used by `agentPromptBuilder.js`. The builder remains the public fac
 | --- | --- |
 | `appContext.js` | JIRA ticket helpers; compatibility exports for read-only app lookup in `../agent/agentAppWorkspace.js`. |
 | `claimOnDemand.js` | Conditional GitHub and GitLab claim procedures. File-capable hosts receive pointers to staged copies. API providers receive the same text inline. |
-| `completion.js` | Worktree, completion-workflow, and sentinel sections. |
+| `completion.js` | Public exports for completion sections. |
+| `completionFlows.js` | Task-specific workflows, worktree guidance, and sentinel instructions. |
+| `completionClaim.js` | Claim ownership, resumption, and merge handoff. |
+| `completionPullRequest.js` | Commit, PR publication, and review steps shared by CLI and TUI runs. |
+| `completionTui.js` | TUI completion, including manual publication. |
+| `completionCli.js` | CLI completion for slashdo and other providers. |
 | `constants.js` | Constants shared across full and light prompt paths. |
 | `forge.js` | Forge CLI selection for generated workflow text. |
 | `instructions.js` | Skill-template routing and bounded instruction-file discovery. |

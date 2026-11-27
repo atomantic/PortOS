@@ -77,7 +77,7 @@ async function createDocumentLeased(data) {
     throw new Error(`Document ${data.filename} already exists`);
   }
 
-  await atomicWrite(filePath, data.content);
+  await atomicWrite(filePath, data.content, { mode: 0o600, dirMode: 0o700 });
 
   // Re-creating a filename that was previously deleted must clear its tombstone
   // and stamp a creation time that STRICTLY supersedes the deletion — otherwise
@@ -128,7 +128,7 @@ async function updateDocumentLeased(id, updates) {
   let wroteContent = false;
   if (updates.content) {
     if (existsSync(filePath)) previousContent = await readFile(filePath, 'utf-8');
-    await atomicWrite(filePath, updates.content);
+    await atomicWrite(filePath, updates.content, { mode: 0o600, dirMode: 0o700 });
     wroteContent = true;
     docMeta.version = extractVersion(updates.content);
   }
@@ -153,7 +153,7 @@ async function updateDocumentLeased(id, updates) {
     if (wroteContent) {
       if (previousContent === null) await unlink(filePath).catch(() => {});
       else {
-        await atomicWrite(filePath, previousContent).catch(() => {
+        await atomicWrite(filePath, previousContent, { mode: 0o600, dirMode: 0o700 }).catch(() => {
           console.error('❌ Digital twin document restore failed');
         });
       }

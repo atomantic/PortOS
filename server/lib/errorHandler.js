@@ -6,6 +6,7 @@
  * standard `{ error, code, timestamp }` body outside a handler's catch.
  */
 
+import { emitToOperatorsOn } from './socketAudience.js';
 import { EventEmitter } from 'events';
 
 // Global error event emitter for broadcasting errors
@@ -436,8 +437,8 @@ export function emitErrorEvent(io, error, precomputedSafeContext) {
 
   errorEvents.emit('error', error, safeContext);
 
-  // Broadcast to all connected clients
-  io.emit('error:occurred', {
+  // Display the error to operators.
+  emitToOperatorsOn(io, 'error:occurred', {
     message: error.message,
     code: error.code,
     status: error.status,
@@ -449,7 +450,7 @@ export function emitErrorEvent(io, error, precomputedSafeContext) {
 
   // If critical, also emit to system/health channel
   if (error.severity === 'critical') {
-    io.emit('system:critical-error', {
+    emitToOperatorsOn(io, 'system:critical-error', {
       message: error.message,
       code: error.code,
       timestamp: error.timestamp,
@@ -470,7 +471,8 @@ export function errorMiddleware(err, req, res, next) {
   const route = `${req.method} ${routePath(req)}`;
   if (isServerFault(error)) {
     console.error(`❌ Server error [${route}]: ${errorMessage(error)}${causeSuffix(error)}`);
-    if (err.stack) console.error(err.stack);
+    const stack = error.originalStack || error.stack;
+    if (stack) console.error(stack);
   } else {
     console.log(`🚫 Server refused [${route}] ${error.status}: ${errorMessage(error)}${causeSuffix(error)}`);
   }

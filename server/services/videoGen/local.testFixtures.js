@@ -127,7 +127,6 @@ export const fsMockImpl = ({
 export const anchorPick = { best: null };
 
 export const h3LoraState = { capable: false, cached: null };
-export const byovRevisionState = { current: null, expectedRevision: null };
 export const loraLayoutState = { layout: null };
 export const loraSidecarState = { byFilename: {} };
 export const loraEffectState = { reportByFilename: {}, defaultReport: { status: 'unmeasurable', measured: 0, reason: 'no numpy' } };
@@ -317,7 +316,8 @@ export const mediaModelsFactory = async () => {
 });
 };
 
-export const sseUtilsFactory = () => ({
+export const sseUtilsFactory = async () => ({
+  dispatchCanceledJob: (await vi.importActual('../../lib/sseUtils.js')).dispatchCanceledJob,
   broadcastSse: vi.fn(),
   attachSseClient: vi.fn(() => true),
   closeJobAfterDelay: vi.fn(),
@@ -404,16 +404,6 @@ export const runtimesFactory = async (importOriginal) => {
     byovRuntimeLoraCapable: vi.fn((runtime) => runtime === 'minimax_h3'
       && (h3LoraState.cached ?? h3LoraState.capable)),
     resolveByovRuntimeLoraCapable: vi.fn(async (runtime) => runtime === 'minimax_h3' && h3LoraState.capable),
-    isByovRuntimeCurrent: vi.fn(async (runtime) => (
-      byovRevisionState.current === null
-        ? actual.isByovRuntimeCurrent(runtime)
-        : byovRevisionState.current
-    )),
-    byovRuntimeExpectedRevision: vi.fn((runtime) => (
-      byovRevisionState.expectedRevision === null
-        ? actual.byovRuntimeExpectedRevision(runtime)
-        : byovRevisionState.expectedRevision
-    )),
   };
 };
 
@@ -476,8 +466,6 @@ export const resetSharedMocks = async () => {
   const { probeFrameCount, probeVideoDuration } = await import('../../lib/ffmpeg.js');
   vi.mocked(probeFrameCount).mockImplementation(probeMockImpl.probeFrameCount);
   vi.mocked(probeVideoDuration).mockImplementation(probeMockImpl.probeVideoDuration);
-  byovRevisionState.current = null;
-  byovRevisionState.expectedRevision = null;
   fsState.missOnce = [];
   fsState.candidateCount = null;
   fsState.mtimeMs = null;

@@ -6,7 +6,7 @@
  * (scripts/lib/cosWorkerBudget.js): cores / agents, never above the proven cap,
  * so several concurrent worktree gates share one host budget (#9773). Lower the
  * setting in the app to lighten host load; no env var is needed. A focused file
- * run is evidence for that file only. See docs/CONTRIBUTING.md.
+ * run is evidence for that file only. See CONTRIBUTING.md#testing.
  * `PORTOS_PREGATE_MAX_WORKERS` remains an internal handoff (pregate stage env,
  * browser-fidelity's single worker); it can only LOWER a workspace's cap.
  *
@@ -51,10 +51,13 @@ export const EXCLUSIVE_CAPTURE_TESTS = [
   // Save-frame pixel parity uses the same exact SVG film look and two-second
   // paused-video settle contract; keep unrelated browser work out of its budget.
   'services/musicVideo/animaticCapture.browser.test.js',
+  'services/musicVideo/animaticCaptureOverlays.browser.test.js',
   'lib/musicVideo/musicVideoTitleCard.browser.test.js',
   'services/htmlComposition/index.test.js',
   'services/musicVideo/documentRender.browser.test.js',
+  'services/musicVideo/documentRenderTemplates.browser.test.js',
   'services/musicVideo/documentRenderAudioTimeline.browser.test.js',
+  'services/musicVideo/documentRenderEffects.browser.test.js',
   'services/musicVideo/documentRenderGeneration.browser.test.js',
   'services/musicVideo/documentFilmLook.browser.test.js',
   'services/musicVideo/documentVignette.browser.test.js',
@@ -87,6 +90,7 @@ export const EXCLUSIVE_TESTS = [
   'services/musicVideo/sharingCopy.test.js',
   'scripts/run-local-code-review.test.js',
   'lib/workTracker.trackerInstructions.test.js',
+  // The planner's real-tree walks and nested CLI runs need the quiet worker.
   '../scripts/ci-test-plan.test.js',
   // Three real nested runners need quiet startup, with owned cancellation.
   '../scripts/workspaceCaches.test.js',
@@ -150,7 +154,9 @@ export function vitestCaptureProjects(test, { cacheDir, selection = { include: n
         name: 'parallel',
         include,
         exclude: [...exclude, ...exclusiveTests],
-        sequence: { groupOrder: 0 },
+        // Isolated order-0 files are scheduled after explicitly ordered
+        // groups when Vitest has only one worker. Keep ordinary work first.
+        sequence: { groupOrder: 1 },
       },
     },
     {
@@ -163,7 +169,7 @@ export function vitestCaptureProjects(test, { cacheDir, selection = { include: n
         include: captureInclude,
         exclude,
         fileParallelism: false,
-        sequence: { groupOrder: 1 },
+        sequence: { groupOrder: 2 },
       },
     },
   ];

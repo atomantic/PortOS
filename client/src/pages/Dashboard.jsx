@@ -28,7 +28,7 @@ import { useInstanceFeatures } from '../hooks/useInstanceFeatures.js';
 export const isAppsLoading = (appsReadSettled) => !appsReadSettled;
 
 // Optional dashboardState streams, fetched only when a visible widget `needs`
-// one. Health (the header dot) and the Daily Driver read (it records the
+// one. Health (the header status) and the Daily Driver read (it records the
 // first-visit-of-day signal, #2666) are always fetched; apps has its own error
 // and settled tracking below.
 const OPTIONAL_STREAMS = {
@@ -126,54 +126,58 @@ export default function Dashboard() {
   // palette pick) lives server-side in dashboardLayouts.js's `layoutsWriteTail`;
   // no client-side queue needed.
   const autoSwitchedRef = useRef(false);
+  const fetchLayoutsRef = useRef(null);
 
   useEffect(() => {
-    // `cancelled` guard prevents setState-on-unmounted warnings (and
-    // accidental state writes) when the user navigates away before the
-    // fetch resolves, or while a DASHBOARD_LAYOUT_CHANGED fetch is in
-    // flight at unmount time.
     let cancelled = false;
-    const fetchLayouts = () => getDashboardLayouts()
-      .then((data) => {
-        if (cancelled) return;
-        setLayouts(data.layouts);
-        // The server's stored active id is the confirmed baseline until/unless
-        // the auto-switch PUT below lands.
-        layoutSwitcher.confirm(data.activeLayoutId);
-        const desiredActiveId = pickActiveLayoutId(data.activeLayoutId, data.layouts, autoSwitchedRef.current);
-        setActiveLayoutId(desiredActiveId);
-        if (desiredActiveId === data.activeLayoutId) {
-          autoSwitchedRef.current = true;
-        } else {
-          // Server's layoutsWriteTail serializes against concurrent manual
-          // picks, so this fire-and-forget can't clobber a later click. Only
-          // mark "auto-switched" after the PUT settles so a failing server
-          // gets retried on the next mount.
-          layoutSwitcher.switchTo(
-            desiredActiveId,
-            setActiveDashboardLayout(desiredActiveId).then(() => { autoSwitchedRef.current = true; }),
-            { isCancelled: () => cancelled },
-          );
-        }
-        if (data.limits) setLayoutLimits(data.limits);
-        setLayoutsConfirmed(true);
-        setLayoutsError(null);
-      })
-      .catch((err) => { if (!cancelled) setLayoutsError(err.message); })
-      .finally(() => { if (!cancelled) setLayoutsLoading(false); });
+    let latestRead = 0;
+    const fetchLayouts = () => {
+      const read = ++latestRead;
+      const isStale = () => cancelled || read !== latestRead;
+      setLayoutsLoading(true);
+      return getDashboardLayouts({ silent: true })
+        .then((data) => {
+          if (isStale()) return;
+          setLayouts(data.layouts);
+          // The server's stored active id is the confirmed baseline until/unless
+          // the auto-switch PUT below lands.
+          layoutSwitcher.confirm(data.activeLayoutId);
+          const desiredActiveId = pickActiveLayoutId(data.activeLayoutId, data.layouts, autoSwitchedRef.current);
+          setActiveLayoutId(desiredActiveId);
+          if (desiredActiveId === data.activeLayoutId) {
+            autoSwitchedRef.current = true;
+          } else {
+            // Server's layoutsWriteTail serializes against concurrent manual
+            // picks, so this fire-and-forget can't clobber a later click. Only
+            // mark "auto-switched" after the PUT settles so a failing server
+            // gets retried on the next mount.
+            layoutSwitcher.switchTo(
+              desiredActiveId,
+              setActiveDashboardLayout(desiredActiveId).then(() => { autoSwitchedRef.current = true; }),
+              { isCancelled: () => cancelled },
+            );
+          }
+          if (data.limits) setLayoutLimits(data.limits);
+          setLayoutsConfirmed(true);
+          setLayoutsError(null);
+        })
+        .catch((err) => { if (!isStale()) setLayoutsError(err.message || 'Could not load layouts'); })
+        .finally(() => { if (!isStale()) setLayoutsLoading(false); });
+    };
 
+    fetchLayoutsRef.current = fetchLayouts;
     fetchLayouts();
 
     // External switchers (the ⌘K palette) fire this event after writing
     // to the server so the Dashboard re-syncs even when already on `/`
     // (where navigate('/') would be a no-op and no remount happens).
-    const handleLayoutChanged = () => fetchLayouts();
-    window.addEventListener(DASHBOARD_LAYOUT_CHANGED, handleLayoutChanged);
+    window.addEventListener(DASHBOARD_LAYOUT_CHANGED, fetchLayouts);
     return () => {
       cancelled = true;
-      window.removeEventListener(DASHBOARD_LAYOUT_CHANGED, handleLayoutChanged);
+      fetchLayoutsRef.current = null;
+      window.removeEventListener(DASHBOARD_LAYOUT_CHANGED, fetchLayouts);
     };
-  }, []);
+  }, [layoutSwitcher]);
 
   const appList = useMemo(() => (Array.isArray(apps) ? apps : []), [apps]);
   const appsLoading = isAppsLoading(appsReadSettled);
@@ -403,23 +407,17 @@ export default function Dashboard() {
     <div className="space-y-6">
       {/* The shared PageHeader owns the page <h1> (#7245) — it must precede
           FirstRunCard so the rendered outline opens at level 1 and the card's
-          own heading sits one level under it. The server-health dot rides in
+          own heading sits one level under it. The server-health status rides in
           the actions slot, PageHeader's documented place for status badges. */}
       <PageHeader
         title="Dashboard"
         actions={(
           <>
             <span
-              className="relative inline-flex h-2.5 w-2.5"
-              title={healthLabel}
-              aria-label={healthLabel}
+              role="status"
+              className={`text-sm ${health ? 'text-port-success' : health === undefined ? 'text-gray-400' : 'text-port-error'}`}
             >
-              {health && (
-                <span className="absolute inline-flex h-full w-full rounded-full bg-port-success opacity-60 animate-ping" />
-              )}
-              <span
-                className={`relative inline-flex rounded-full h-2.5 w-2.5 ${health ? 'bg-port-success shadow-[0_0_8px_rgb(var(--port-success))]' : health === undefined ? 'bg-gray-600' : 'bg-port-error shadow-[0_0_8px_rgb(var(--port-error))]'}`}
-              />
+              {healthLabel}
             </span>
             {layoutsConfirmed && layouts.length > 0 && !editingGrid && (
               <LayoutPicker
@@ -481,8 +479,11 @@ export default function Dashboard() {
         </div>
       )}
       {layoutsError && (
-        <div role="status" className="p-4 bg-port-error/20 border border-port-error rounded-lg text-port-error">
-          Layouts: {layoutsError}
+        <div className="flex items-center justify-between gap-3 p-4 bg-port-error/20 border border-port-error rounded-lg text-port-error">
+          <span role="status" className="min-w-0 break-words">Layouts: {layoutsError}</span>
+          <button type="button" onClick={() => fetchLayoutsRef.current?.()} disabled={layoutsLoading} className="shrink-0 px-3 py-1.5 min-h-10 rounded-lg border border-port-error hover:bg-port-error/20 text-sm disabled:opacity-50">
+            Retry
+          </button>
         </div>
       )}
 

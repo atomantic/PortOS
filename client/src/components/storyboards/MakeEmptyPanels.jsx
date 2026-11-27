@@ -4,7 +4,8 @@ import InlineConfirmRow from '../ui/InlineConfirmRow';
 import ProgressBar from '../ui/ProgressBar';
 import toast from '../ui/Toast';
 import socket from '../../services/socket';
-import { getStoryboardMakeEmpty, startStoryboardMakeEmpty } from '../../services/apiStoryboards.js';
+import useMounted from '../../hooks/useMounted';
+import { cancelMakeEmptyPanels, getStoryboardMakeEmpty, startStoryboardMakeEmpty } from '../../services/apiStoryboards.js';
 import { formatCount } from '../../utils/formatters';
 
 const plural = (n, word) => `${formatCount(n)} ${word}${n === 1 ? '' : 's'}`;
@@ -31,16 +32,18 @@ export default function MakeEmptyPanels({ boardId }) {
   const [batch, setBatch] = useState(null);
   const [plan, setPlan] = useState(null);
   const [loading, setLoading] = useState(false);
+  const [cancelingRunId, setCancelingRunId] = useState(null);
   const [note, setNote] = useState('');
   const [selectNew, setSelectNew] = useState(true);
-  // Bumped by every batch event and every read or start issued: an answer
+  // Bumped by every batch event and every read or mutation: an answer
   // applies only while nothing newer has been heard or asked since it was sent.
   const epoch = useRef(0);
+  const mounted = useMounted();
 
   useEffect(() => {
     let active = true;
     // A batch started in another tab, or before a reload, is still shown. Re-read
-    // on reconnect: a `done` missed while offline, or a server restart that
+    // on reconnect: a terminal event missed while offline, or a server restart that
     // dropped the batch, would otherwise leave the progress bar up for good.
     const read = () => {
       const seen = ++epoch.current;
@@ -52,8 +55,12 @@ export default function MakeEmptyPanels({ boardId }) {
     const onBatch = (evt) => {
       if (evt?.storyboardId !== boardId) return;
       epoch.current += 1;
-      if (evt.status !== 'done') { setBatch(evt); return; }
+      if (evt.status === 'running' || evt.status === 'canceling') { setBatch(evt); return; }
       setBatch(null);
+      if (evt.status === 'canceled') {
+        toast.info(evt.redraw ? 'Redraw canceled.' : 'Make empty panels canceled.');
+        return;
+      }
       const made = evt.done - evt.failed;
       const verb = evt.redraw ? 'Redrew' : 'Made';
       if (evt.failed) toast.error(`${verb} ${plural(made, 'panel')}; ${plural(evt.failed, 'panel')} could not be made. Open one to see why.`);
@@ -90,13 +97,31 @@ export default function MakeEmptyPanels({ boardId }) {
     // The server emits the batch's events before this answers; a fast batch may already be done.
     if (res?.batch && seen === epoch.current) setBatch(res.batch);
   };
+  const cancel = async () => {
+    const { runId } = batch;
+    const seen = epoch.current;
+    setCancelingRunId(runId);
+    const res = await cancelMakeEmptyPanels(boardId, runId).catch(() => null);
+    if (!mounted.current) return;
+    setCancelingRunId((current) => (current === runId ? null : current));
+    if (res?.batch) {
+      if (seen === epoch.current) epoch.current += 1;
+      setBatch((current) => (current?.runId === runId ? res.batch : current));
+    }
+  };
   const buttonClass = 'min-h-[44px] inline-flex items-center gap-1.5 rounded border border-port-border px-3 text-sm text-gray-200 hover:border-port-accent/60 hover:text-white disabled:opacity-40';
 
   if (batch) {
+    const stopping = batch.status === 'canceling';
+    const cancelPending = cancelingRunId !== null && cancelingRunId === batch.runId;
     return (
-      <div className="flex min-h-[44px] min-w-[12rem] flex-1 items-center gap-2 sm:flex-none">
-        <ProgressBar percent={(batch.done / batch.total) * 100} label={batch.redraw ? 'Redrawing panels' : 'Making empty panels'} className="flex-1" />
-        <span className="text-xs text-gray-400 tabular-nums shrink-0">{formatCount(batch.done)} of {formatCount(batch.total)}</span>
+      <div className="flex min-h-[44px] flex-1 flex-wrap items-center gap-2">
+        <ProgressBar percent={(batch.done / batch.total) * 100} label={batch.redraw ? 'Redrawing panels' : 'Making empty panels'} className="min-w-12 flex-1" />
+        <span className="shrink-0 text-xs text-gray-400 tabular-nums">{formatCount(batch.done)} of {formatCount(batch.total)}</span>
+        <button type="button" onClick={cancel} disabled={stopping || cancelPending} className={buttonClass}>
+          {stopping || cancelPending ? 'Canceling…' : 'Cancel'}
+        </button>
+        {stopping && <p role="status" className="basis-full text-xs text-gray-400">Current work can finish.</p>}
       </div>
     );
   }

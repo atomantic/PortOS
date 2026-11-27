@@ -61,7 +61,7 @@ import { basename, join } from 'path';
 import { documentFilenameSchema } from '../lib/digitalTwinSchemas.js';
 import { readdir, readFile, unlink } from 'fs/promises';
 import { existsSync } from 'fs';
-import { atomicWrite, readJSONFile, ensureDir, PATHS, unreadableStoreError } from '../lib/fileUtils.js';
+import { atomicWrite, readJSONFile, PATHS, unreadableStoreError } from '../lib/fileUtils.js';
 import { canonicalSnapshotChecksum } from '../lib/snapshotChecksum.js';
 import { canonicalStringify, isPlainObject } from '../lib/objects.js';
 import { normalizeTombstones, mergeTombstones, isTombstoned, pruneTombstones, tombstonesEqual } from '../lib/tombstones.js';
@@ -292,10 +292,10 @@ function mergeFeedback(local, remote) {
 
 /**
  * Merge taste profiles. Within each section, responses union by questionId
- * (LWW on updatedAt||answeredAt) so answers given on either machine survive;
- * section status takes the more-complete value; a missing local summary is
- * filled from remote. Top-level profileSummary/lastSessionAt are LWW on the
- * file's updatedAt.
+ * (LWW on updatedAt||answeredAt) so answers given on either machine survive.
+ * Skipped follow-up IDs also union. Section status takes the more-complete
+ * value; a missing local summary is filled from remote. Top-level
+ * profileSummary/lastSessionAt are LWW on the file's updatedAt.
  */
 export function mergeTaste(local, remote) {
   if (!isPlainObject(remote)) return { merged: local, changed: false };
@@ -331,8 +331,19 @@ export function mergeTaste(local, remote) {
 
     const status = pickStatus(localSec.status, remoteSec.status);
     const summary = localSec.summary ?? remoteSec.summary ?? null;
-    if (secChanged || status !== localSec.status || summary !== localSec.summary) {
-      sections[secId] = { ...localSec, responses: mergedResponses, status, summary };
+    const localSkips = Array.isArray(localSec.skippedFollowUpIds) ? localSec.skippedFollowUpIds : [];
+    const remoteSkips = Array.isArray(remoteSec.skippedFollowUpIds) ? remoteSec.skippedFollowUpIds : [];
+    const skippedFollowUpIds = [...new Set([...localSkips, ...remoteSkips].filter(id => typeof id === 'string'))].sort();
+    const skipsChanged = skippedFollowUpIds.length !== localSkips.length ||
+      skippedFollowUpIds.some((id, index) => id !== localSkips[index]);
+    if (secChanged || skipsChanged || status !== localSec.status || summary !== localSec.summary) {
+      sections[secId] = {
+        ...localSec,
+        responses: mergedResponses,
+        status,
+        summary,
+        ...(skipsChanged ? { skippedFollowUpIds } : {}),
+      };
       changed = true;
     }
   }
@@ -901,13 +912,12 @@ function readSyncStore(path) {
 
 // --- Apply ---
 
-async function applyMerge(path, remote, mergeFn, { dir } = {}) {
+async function applyMerge(path, remote, mergeFn, writeOptions) {
   if (remote === undefined || remote === null) return 0;
   const local = await readSyncStore(path);
   const { merged, changed } = mergeFn(local, remote);
   if (!changed) return 0;
-  if (dir) await ensureDir(dir);
-  await atomicWrite(path, merged);
+  await atomicWrite(path, merged, writeOptions);
   if (path === LONGEVITY_FILE) meatspaceEvents.emit('death-clock:changed', {});
   return 1;
 }
@@ -982,11 +992,10 @@ async function applyDocuments(documents, { suppressed, localStamps, remoteStamps
       if (!content || !compareNewerWins(remoteStamps.get(name), localStamps.get(name))) continue;
       const previous = await readFile(filePath, 'utf-8');
       if (previous === content) continue;
-      await atomicWrite(filePath, content);
+      await atomicWrite(filePath, content, { mode: 0o600, dirMode: 0o700 });
       result.replaced.push({ filePath, previous });
     } else {
-      await ensureDir(DIR);
-      await atomicWrite(filePath, content);
+      await atomicWrite(filePath, content, { mode: 0o600, dirMode: 0o700 });
     }
     result.count++;
   }
@@ -995,7 +1004,7 @@ async function applyDocuments(documents, { suppressed, localStamps, remoteStamps
 
 async function restoreReplacedDocuments(replaced) {
   for (const { filePath, previous } of replaced) {
-    await atomicWrite(filePath, previous).catch(() => {
+    await atomicWrite(filePath, previous, { mode: 0o600, dirMode: 0o700 }).catch(() => {
       console.error('❌ Digital twin sync: could not restore document');
     });
   }
@@ -1121,7 +1130,7 @@ export async function applyDigitalTwinRemote(remoteData) {
   if (isPlainObject(remoteData.autobiography)) {
     // stories only — config (prompt schedule) is intentionally machine-local.
     count += await queueAutobiographyStoriesWrite(() =>
-      applyMerge(AUTOBIO_STORIES_FILE, remoteData.autobiography.stories, mergeAutobiographyStories, { dir: AUTOBIO_DIR })
+      applyMerge(AUTOBIO_STORIES_FILE, remoteData.autobiography.stories, mergeAutobiographyStories, { mode: 0o600, dirMode: 0o700 })
     );
   }
 

@@ -14,7 +14,7 @@ import { worldMapSchema } from '../worldMapValidation.js';
 import { emptyToNull } from '../zodCompat.js';
 import { REVISION_SOURCES } from './catalogTypes.js';
 
-// Place greybox (docs/plans/2026-10-25-place-greybox.md). The draft body is the
+// Place greybox. The draft body is the
 // provider › model › effort pick plus the user's own instruction; the picker's
 // "Default effort" submits '' which clears to undefined.
 // Also the body of the prompt preview, which sends nothing to a provider: the
@@ -56,6 +56,11 @@ export const catalogPhotorealRenderSchema = z.object({
   // A fly-through glides through shotIds in order and saves an MP4 to Media History.
   flythroughSeconds: z.number().finite().min(PHOTOREAL_FLYTHROUGH_SECONDS.MIN).max(PHOTOREAL_FLYTHROUGH_SECONDS.MAX).optional(),
 }).strict().refine((body) => !body.flythroughSeconds || body.shotIds.length >= 2, { message: 'a fly-through needs at least two cameras', path: ['shotIds'] });
+
+// A supplied id binds a cancel request to the render shown to the operator.
+export const catalogPhotorealCancelSchema = z.object({
+  jobId: z.string().min(1).max(64).optional(),
+}).strict();
 
 // Opening or building the scene takes no input: the data and executable are fixed.
 export const catalogPhotorealOpenSchema = z.object({}).strict();

@@ -44,7 +44,7 @@ const run = (data) => prepareGenerateParams({ data, files: undefined, referenceI
 // Exercises the card's request builder and the backend preparation shared by preview and render.
 it('refines an unselected take with references on or off without replacing the selection', async () => {
   const { buildSceneFrameGenerateBody } = await import('../musicVideo/sceneFrameReferences.js');
-  const { musicVideoSceneFrameRenderSchema } = await import('../../lib/musicVideo/musicVideoRouteValidation.js');
+  const { musicVideoSceneFrameRenderSchema } = await import('../../lib/musicVideo/routeValidation/scenes.js');
   const { PATHS } = await import('../../lib/paths.js');
   mkdirSync(PATHS.images, { recursive: true });
   for (const file of ['candidate.png', 'cast.png', 'panel.png', 'style.png']) writeFileSync(join(PATHS.images, file), 'fixture');
@@ -108,7 +108,7 @@ describe('selectLocalImageModel', () => {
     expect(selectLocalImageModel(undefined, models).id).toBe('custom');
   });
 
-  // The install-wide pin (settings.imageGen.local.modelId, Settings → Media →
+  // The install-wide pin (settings.imageGen.local.modelId, Media Gen Settings →
   // Local). Without this rung the setting is a control that silently does
   // nothing for any render whose body omits modelId.
   it('prefers the install pin when the caller omits a model', () => {

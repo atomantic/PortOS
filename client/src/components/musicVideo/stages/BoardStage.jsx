@@ -1,6 +1,6 @@
 import { useEffect, useLayoutEffect, useRef } from 'react';
 import { useNavigate, useSearchParams } from 'react-router';
-import { Plus, Image as ImageIcon, Film, Code2, Type, FlagTriangleRight, CheckCircle2, X } from 'lucide-react';
+import { Plus, Image as ImageIcon, Film, Code2, Type, FlagTriangleRight, CheckCircle2, Undo2, X } from 'lucide-react';
 import Drawer from '../../Drawer';
 import ContactSheetButton from '../ContactSheetButton.jsx';
 import PacingRecutPanel from '../PacingRecutPanel.jsx';
@@ -161,11 +161,30 @@ export default function BoardStage({ board }) {
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
   }, [visibleIds, activeSceneId, onToggleSceneExpand]);
+  // Cmd/Ctrl+Z undoes the last structural/timing board edit when focus is not inside a text field.
+  const boardUndo = board.boardUndo ?? project.boardUndo ?? null;
+  useEffect(() => {
+    if (locked || !boardUndo?.count || !board.onUndoBoardEdit) return undefined;
+    const onKey = (e) => {
+      if (!(e.metaKey || e.ctrlKey) || e.shiftKey || e.altKey || e.key.toLowerCase() !== 'z' || isTypingTarget(e.target)) return;
+      e.preventDefault();
+      if (!board.undoingBoard) void board.onUndoBoardEdit();
+    };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [locked, boardUndo?.count, board.undoingBoard, board.onUndoBoardEdit]);
   return (
     <fieldset disabled={locked} className="min-w-0 space-y-3">
       <div id="mv-scene-board" className="flex flex-wrap items-center justify-between gap-2">
         <h3 className="text-sm font-medium">Scene board</h3>
         <div className="flex flex-wrap items-center gap-2">
+          {boardUndo?.count > 0 && board.onUndoBoardEdit && (
+            <button type="button" onClick={() => board.onUndoBoardEdit()} disabled={board.undoingBoard}
+              title={`Undo ${boardUndo.label} (⌘Z)`} aria-label={`Undo ${boardUndo.label}`}
+              className="inline-flex min-h-[44px] items-center gap-1 rounded border border-port-border bg-port-bg px-2 py-1.5 text-sm text-port-text hover:bg-port-border/40 disabled:opacity-50 pointer-fine:sm:min-h-0">
+              <Undo2 size={15} aria-hidden="true" /> Undo{boardUndo.count > 1 ? ` (${boardUndo.count})` : ''}
+            </button>
+          )}
           <PacingRecutPanel key={project.id} project={project} disabled={locked || videoSettings.saving} onApplied={board.replaceProject} />
           <ContactSheetButton onOpen={board.openContactSheet} />
           <button onClick={board.onAddScene} className="flex min-h-[44px] items-center gap-1 rounded bg-port-accent px-2 py-1.5 text-sm text-white pointer-fine:sm:min-h-0">
@@ -206,7 +225,8 @@ export default function BoardStage({ board }) {
       {scenes.length > 0 && <SharedTakeOffers scenes={scenes} onSave={board.saveScene} />}
       {scenes.length > 1 && <SequenceTakePanel key={`sequence-take-${project.id}`} project={project} shotName={shotName} disabled={locked} />}
       {scenes.length > 0 && board.approveFinal && (
-        <FinalUpgradePanel key={`final-upgrade-${project.id}`} project={project} shotName={shotName} disabled={locked} onApprove={board.approveFinal}
+        <FinalUpgradePanel key={`final-upgrade-${project.id}`} project={project} shotName={shotName} disabled={locked || videoSettings.saving} onApprove={board.approveFinal}
+          onUpscaleQueued={sceneMedia.trackShotUpscale}
           onOpenShot={(sceneId) => onToggleSceneExpand?.(sceneId, true)} />
       )}
       {scenes.length > 0 && (

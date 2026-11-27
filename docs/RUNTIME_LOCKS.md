@@ -1,173 +1,201 @@
-# Runtime lock procedure (CUDA runtimes)
+# Runtime locks
 
-Shared procedure for regenerating, auditing and validating the hash-locked
-Windows/Linux CUDA runtimes. Each runtime doc keeps only its own pins, index
-scoping, extra resolver flags and probes, and links here for everything else:
+[Requirements and build locks](../scripts/ml/requirements/) pin dependencies.
+Native profiles also pin interpreters, toolchains and source archives.
 
-| Runtime | Doc |
-| --- | --- |
-| ACE-Step v1 | [ACESTEP_CUDA.md](./ACESTEP_CUDA.md) |
-| ACE-Step 1.5 | [ACESTEP15_CUDA.md](./ACESTEP15_CUDA.md) |
-| AudioLDM2 | [AUDIOLDM2_CUDA.md](./AUDIOLDM2_CUDA.md) |
-| FLUX.2 | [FLUX2_CUDA.md](./FLUX2_CUDA.md) |
-| MiniMax H3 | [MINIMAX_H3_CUDA.md](./MINIMAX_H3_CUDA.md) |
-| MiniMax Music 3 | [MINIMAX_MUSIC3_CUDA.md](./MINIMAX_MUSIC3_CUDA.md) |
-| MuScriptor | [MUSCRIPTOR_CUDA.md](./MUSCRIPTOR_CUDA.md) |
-| Wan 2.2 | [WAN22_CUDA.md](./WAN22_CUDA.md) |
+## Windows and Linux CUDA
 
-LTX-2.5, Pixal3D and TRELLIS.2 resolve differently (immutable source archives,
-Conda inventories) and document their own procedures. Apple Silicon locks and
-held-back pins are in [PYTHON_RUNTIME_REFRESH.md](./PYTHON_RUNTIME_REFRESH.md).
+Install or Repair via the runtime's Models page or
+[`setup-image-video.sh`](../scripts/setup-image-video.sh). On x86_64 Windows
+(Git Bash) and Linux the shared installer selects the host lock and
+uv-managed CPython 3.11. It replaces incompatible venvs and removes packages
+outside the lock. Weights are downloaded separately. Refresh both OS targets
+together when changing the CUDA index or shared inputs.
+
+| Runtime slug | Install flag | `CUDA_SCOPED` | `LINUX_CUDA_SCOPED` |
+| --- | --- | --- | --- |
+| `acestep-cuda` | `INSTALL_ACESTEP` | torch | |
+| `acestep15-cuda` | `INSTALL_ACESTEP15` | torch torchcodec | torchao |
+| `audioldm2-cuda` | `INSTALL_AUDIOLDM2` | torch | |
+| `flux2-cuda` | `INSTALL_FLUX2` | torch | |
+| `minimax-h3-cuda` | `INSTALL_MINIMAX_H3_CUDA` | torch torchvision | torchao |
+| `minimax-music3-cuda` | `INSTALL_MINIMAX_MUSIC3` | torch | |
+| `muscriptor-cuda` | `INSTALL_MUSCRIPTOR` | torch | |
+| `wan22-cuda` | `INSTALL_WAN22_CUDA` | torch torchvision | |
+
+ACE-Step builds its pinned source after dependency sync. Keep Linux TorchAO
+on the CUDA index for H3 and ACE-Step 1.5 and Windows TorchAO on PyPI.
+Keep the H3 checkpoint index guard in the model loader. Wan's bundled FFmpeg
+requires glibc 2.28 and Linux 4.18 or newer. [LTX-2.5](#ltx-25-cuda) uses cu132.
 
 ## Regenerating locks
 
-Edit the runtime's `scripts/ml/requirements/requirements-<slug>.txt` with exact direct pins.
-Use hash-verified uv **0.13.7** (the `requirements-uv-bootstrap.lock.txt`
-bootstrap), setting `UV` to that executable. The CUDA index is an explicit
-named index scoped only to the runtime's CUDA-local packages (normally Torch)
-during resolution: its mirrors of unrelated packages can lack publication
-dates, which correctly makes a global multi-index resolve fail the cooldown.
-Keep all other packages on PyPI rather than dropping the cooldown.
-
-Keep CPython 3.11 and both x86_64 targets. Preserve the existing output pins,
-markers and unrelated hash blocks (the script seeds resolution from the old
-output; never remove it first), advance the cutoff to a UTC date at least three
-days old, and restore each target/cutoff header. The
-[selective regeneration procedure](./PYTHON_RUNTIME_REFRESH.md#selective-regeneration)
-describes complete-closure constraints and selective generated-block transfer.
-
-Run from the repository root in Bash. Set the per-runtime values from the
-runtime doc's own "Regenerating locks" section, then run the rest unchanged:
+Use the hash-verified executable from the
+[uv bootstrap lock](../scripts/ml/requirements/requirements-uv-bootstrap.lock.txt).
+Use a UTC cutoff at least three days before the refresh. Seed scratch
+outputs with the existing locks. For each OS, create a temporary
+`pyproject.toml` with dependencies from `requirements-<slug>.txt`, an
+explicit named PyTorch index at `https://download.pytorch.org/whl/cu126`,
+and `[tool.uv.sources]` entries pointing only the table's scoped packages
+to that index. Include the Linux-only column on Linux.
 
 ```bash
-set -euo pipefail
-: "${UV:?set UV to the verified uv 0.13.7 executable}"
-SLUG=                 # scripts/ml/requirements/requirements-$SLUG.txt, e.g. wan22-cuda
-LABEL=                # lock header label, e.g. "Wan 2.2 CUDA"
-DOC=                  # runtime doc named in the lock header, e.g. docs/WAN22_CUDA.md
-CUDA_SCOPED=          # packages routed to the CUDA index, e.g. "torch torchvision"
-LINUX_CUDA_SCOPED=    # extra packages routed to the CUDA index on Linux only
-COMPILE_EXTRA=()      # extra uv pip compile flags
-CUTOFF=2026-11-05T00:00:00Z  # advance to a UTC date at least three days old
-TMP=$(mktemp -d)
-trap 'rm -rf "$TMP"' EXIT
-for target in windows linux; do
-  case "$target" in
-    windows) platform=x86_64-pc-windows-msvc; scoped="$CUDA_SCOPED" ;;
-    linux) platform=x86_64-manylinux_2_28; scoped="$CUDA_SCOPED $LINUX_CUDA_SCOPED" ;;
-  esac
-  python3 - "$TMP/pyproject.toml" "$SLUG" "$scoped" <<'PYPROJECT'
-import json
-import pathlib
-import sys
-
-out, slug, scoped = sys.argv[1], sys.argv[2], sys.argv[3].split()
-lines = pathlib.Path(f"scripts/ml/requirements/requirements-{slug}.txt").read_text().splitlines()
-deps = [line for line in lines if line and not line.startswith("#")]
-sources = "".join(f'{name}={{index="pytorch"}}\n' for name in scoped)
-pathlib.Path(out).write_text(
-    f'[project]\nname="portos-{slug}"\nversion="0.0.0"\n'
-    'requires-python=">=3.11"\ndependencies=' + json.dumps(deps) + '\n'
-    '[tool.uv.sources]\n' + sources +
-    '[[tool.uv.index]]\nname="pytorch"\n'
-    'url="https://download.pytorch.org/whl/cu126"\nexplicit=true\n'
-)
-PYPROJECT
-  out="scripts/ml/requirements/requirements-${SLUG}-${target}.lock.txt"
-  cp "$out" "$TMP/$target.lock" # retain unrelated pins during resolution
-  "$UV" --no-config pip compile "$TMP/pyproject.toml" \
-    --python-version 3.11 --python-platform "$platform" \
-    --generate-hashes --only-binary :all: --no-header --no-annotate \
-    --index-url https://pypi.org/simple --emit-index-url \
-    ${COMPILE_EXTRA[@]+"${COMPILE_EXTRA[@]}"} \
-    --exclude-newer "$CUTOFF" -o "$TMP/$target.lock"
-  {
-    printf '# %s: CPython 3.11, x86_64 %s, CUDA 12.6.\n' "$LABEL" "$target"
-    printf '# uv 0.13.7; exclude-newer %s; regenerate: %s.\n' "$CUTOFF" "$DOC"
-    # pip-format locks cannot encode uv's named explicit index. Installation
-    # retains the CUDA index, but versions and allowed artifact hashes are fixed.
-    printf '%s\n' '--extra-index-url https://download.pytorch.org/whl/cu126'
-    cat "$TMP/$target.lock"
-  } > "$out"
-done
+"$UV" --no-config pip compile "$project" --python-version 3.11 \
+  --python-platform "$platform" --generate-hashes --only-binary :all: \
+  --no-header --no-annotate --index-url https://pypi.org/simple \
+  --emit-index-url --exclude-newer "$CUTOFF" -o "$scratch_lock"
 ```
 
-The temporary project derives its pins from the source requirements rather than
-maintaining a second dependency list. `--no-annotate` keeps temporary
-filesystem paths out of the committed locks. The pip-format lock retains the
-installation index, but every accepted artifact stays constrained by its
-SHA-256 hash. Verify the CUDA-scoped packages' official simple-index entries
-(SHA-256 values and upload timestamps) against the lock and cutoff. The
-preserved Triton entry also contains official PyTorch build hashes; verify
-those against the CUDA index's `triton/` entries and their upload timestamps.
-They are part of the unchanged native baseline, not new artifacts introduced
-by a refresh. Verify all remaining artifacts against PyPI metadata. Never drop
-the cutoff or hand-edit generated hashes.
+Use `x86_64-pc-windows-msvc` and `x86_64-manylinux_2_28`. For ACE-Step v1
+also pass `--no-binary docopt --no-binary unidic-lite`,
+`--preview-features build-dependency-hashes --require-build-hashes` and
+`--build-constraints scripts/ml/requirements/requirements-acestep-mlx-build.lock.txt`.
+Retain the target, uv, cutoff and regeneration headers and the CUDA
+`--extra-index-url` in each pip-format lock. Inspect both outputs before
+replacing the tracked locks.
 
-This changes regeneration only. Install/Repair retains its existing index
-strategy with complete `--require-hashes` locks; that does not permit packages
-or artifacts outside the committed set.
+Verify wheel hashes and upload times, including CUDA-index Triton, then audit.
 
 ### OSV audit
 
-Query OSV for **every resolved package**, including `MAL-` records,
-immediately before merge. This standard-library Python check normalizes CUDA
-local build tags to the upstream version and fails on any advisory or
-unreadable response. Pass the runtime slug (the `SLUG` above, for example
-`wan22-cuda`):
-
-```bash
-python3 - wan22-cuda <<'PY'
-import json
-import re
-import sys
-import urllib.request
-from pathlib import Path
-
-for target in ("windows", "linux"):
-    lock = Path(f"scripts/ml/requirements/requirements-{sys.argv[1]}-{target}.lock.txt")
-    pins = re.findall(r"^([\w.-]+)==([^\s\\;]+)", lock.read_text(), re.M)
-    assert pins, f"{target}: empty lock"
-    queries = [{"package": {"name": name, "ecosystem": "PyPI"},
-                "version": version.split("+")[0]} for name, version in pins]
-    request = urllib.request.Request(
-        "https://api.osv.dev/v1/querybatch",
-        json.dumps({"queries": queries}).encode(),
-        {"Content-Type": "application/json"},
-    )
-    with urllib.request.urlopen(request, timeout=60) as response:
-        results = json.load(response)["results"]
-    assert len(results) == len(pins), "incomplete OSV response"
-    findings = [(pins[i], v["id"]) for i, result in enumerate(results)
-                for v in result.get("vulns", [])]
-    print(target, len(pins), "packages", findings)
-    assert not findings, "resolve all advisories before merge"
-PY
-```
-
-Check response counts, errors and pagination; any advisory or unreadable
-response blocks the merge.
+Query OSV immediately before merge for every resolved package and marker
+variant, including `MAL-` advisories. Use the base version for local version
+suffixes such as `+cu126`. Include URL-pinned source package versions and
+immutable commits. Process all pages and fail on incomplete or invalid
+responses. Native profiles with dedicated audit scripts are listed below.
 
 ## Fresh install and readiness evidence
 
-Use an isolated home and `PORTOS_DATA` directory to exercise the actual
-installer without replacing a working runtime. From Bash (Git Bash on Windows),
-run the runtime's install command with every other runtime flag set to `0`
-(each runtime doc lists its exact command), then run it again to exercise
-Repair. Do not download model weights or generate media for this check.
+Run Install and Repair with scratch `PORTOS_DATA` and only the intended
+profile enabled. Use its exact import probes and `uv pip check --python
+<interpreter>` (`Scripts/python.exe` on Windows). Check CUDA availability on
+NVIDIA. Compare both package sets and record redacted OS, GPU, driver,
+CUDA, Python, Torch, lock and probe results. Keep render evidence separate.
 
-On an NVIDIA host, run the runtime's CUDA probe with the isolated venv's
-interpreter (`Scripts/python.exe` on Windows) and expect
-`torch.cuda.is_available()` to be `True`.
+## LTX-2.5 CUDA
 
-Record in the PR: OS, GPU model, driver and driver-supported CUDA,
-Python/torch/bundled CUDA versions, the selected lock, and redacted probe
-output. Run `uv pip check --python` with the installed interpreter and verify
-Repair leaves the lock's versions unchanged.
+Keep `ltx-core` and `ltx-pipelines` on the same immutable source archive.
+The installer bootstraps the hash-locked build backend before syncing
+the runtime with `--no-build-isolation` and source builds for those two
+packages. Seed scratch copies of both locks. Compile
+`requirements-ltx25-cuda.txt` for the shared Windows/Linux CPython 3.11
+targets with `--generate-hashes --only-binary :all: --index-url
+https://pypi.org/simple --extra-index-url https://download.pytorch.org/whl/cu132
+--index-strategy unsafe-best-match --emit-index-url --no-header
+--annotation-style line`. Verify official wheel and source hashes and
+release dates when the resolver cannot enforce timestamps. Keep both source
+entries, headers and the separate build lock in sync. Audit both source
+identities and the backend. Include the installed
+[`ltx25_cuda_currency.py`](../scripts/ml/ltx25_cuda_currency.py) probe in
+Install/Repair verification (0 current, 78 upgrade or repair).
 
-Evidence limits: a Windows probe does not certify the Linux target (Linux/WSL
-may share a GPU with Windows but each environment installs from its own lock),
-and untested targets retain their hardware evidence requirement and stay
-pending. Hashes, resolution and import/readiness probes establish dependency
-compatibility only; they do not claim render, generation, transcription
-quality or speed.
+## Native 3D profiles
+
+Use a scratch runtime and synthetic or licensed image. Run Install/Repair,
+native probes and `pip check`. Check GLB triangle bounds and embedded PBR
+textures. Verify Repair retains weights.
+
+### Conda and CUDA
+
+Use offline micromamba `@EXPLICIT` artifacts and verified local sources.
+Compile runtime and build wheels separately on CPython 3.11,
+`x86_64-manylinux_2_28`, with hashes, binary-only and the cutoff. Constrain
+build resolution to the runtime lock and update the manifest
+`registryCutoff`. For Conda changes verify artifacts and upload times via
+Anaconda. Audit source archives and recursive gitlinks alongside the wheels.
+
+#### TRELLIS.2 CUDA
+
+Use [the Linux x86_64 profile](../scripts/ml/trellis2-cuda-profile.json)
+(including WSL2). Run `python3 scripts/ml/setup-trellis2-cuda.py "$scratch_runtime"`
+and [its audit](../scripts/ml/audit-trellis2-cuda.py). Verify native imports,
+DINOv3 and FlashAttention, then render with the
+[CUDA runner](../server/services/imageTo3d/trellis2CudaGenerateRunner.py)
+using the private `.conda/portos-source`, a 2048-pixel atlas and 200,000 faces.
+
+#### Pixal3D CUDA
+
+Use [the native Linux x86_64 profile](../scripts/ml/pixal3d-cuda-profile.json)
+with at least 12 GiB VRAM. WSL2 has an upstream NAF driver issue. Run
+`python3 scripts/ml/setup-pixal3d-cuda.py "$scratch_runtime"` and
+[its audit](../scripts/ml/audit-pixal3d-cuda.py). Repair retries an unavailable
+NATTEN build. **NAF fallback** uses interpolated DINO features. An installed
+NATTEN with a broken operation fails verification. Check both paths with
+a native render, starting at 1024 with low-VRAM offload.
+
+### Metal
+
+Use arm64 macOS 26 or newer with full Xcode and its Metal toolchain. Resolve
+the CPython 3.13 wheels with `MACOSX_DEPLOYMENT_TARGET=26.0`,
+`aarch64-apple-darwin`, hashes, binary-only and the cutoff. Repair rebuilds
+the private venv against the locked Torch ABI and keeps assets.
+
+#### TRELLIS.2 Metal
+
+Run `bash scripts/setup-trellis2-mps.sh "$scratch_runtime"`. Update the
+[profile](../scripts/ml/trellis2-mps-profile.json) and wheel lock together.
+Verify the exact Eigen gitlink when advancing the Apple fork. Render with
+the 512 profile, seed 7, four steps and 2048-pixel atlas. Require the Metal
+baker to run, with no KDTree fallback.
+
+#### Pixal3D Metal
+
+Use [the installer](../scripts/setup-pixal3d-mps.sh) with the locked wheel
+and source inputs. It rebuilds native extensions and checks imports and MPS.
+Render from the private checkout with `generate_mps.py --device mps
+--pipeline-type 1024_cascade --steps 4 --seed 7` and check the output with
+[`verify-pixal3d-mps.py`](../scripts/ml/verify-pixal3d-mps.py).
+
+## MLX video
+
+LTX-2.3, LTX-2.5 and Wan 2.2 MLX target CPython 3.11 on Apple Silicon.
+Follow FastVideo's interpreter markers. Use the inference and shared build
+locks. For failed downloads, check private uv access to PyPI and its wheels.
+
+### Regenerating MLX inference locks
+
+Audit upstream universal locks, select the Apple Silicon subset and
+derive direct inputs from the pinned source manifests. Use both LTX
+packages' dependencies except the local `ltx-core-mlx` edge and preserve
+PortOS-specific inputs such as Click. Compile from the existing lock with
+`MACOSX_DEPLOYMENT_TARGET=14.0`, CPython 3.11, `aarch64-apple-darwin`, hashes,
+binary-only and the cutoff. FastVideo's lock header gives its universal
+recipe. Check LTX-2.3 audio, LTX-2.5 frame-zero preservation and native Wan
+render for changes to the relevant model, source or accelerator.
+
+## Demucs
+
+Provision through Music Video. Use the universal lock header to refresh
+CPython 3.11 for arm64 macOS 14+, Linux x86_64 and Windows x64. Check the
+lock stamp, interpreter, imports and native WAV round trip. A CPU smoke
+test can use `demucs_unittest` and a synthetic short stereo WAV without
+downloading weights.
+
+## Blender rigging
+
+`python3 scripts/ml/setup-rigging.py` explicitly provisions the private
+env. Resolve both wheel locks with the CPython 3.13 patch pinned in
+[the profile](../scripts/ml/rigging-profile.json), using `aarch64-apple-darwin`
+and `x86_64-manylinux_2_28`. For interpreter updates, verify each scratch
+Conda dry-run artifact's upload date and SHA-256. Set
+`CONDA_OVERRIDE_GLIBC=2.28` for Linux. Run
+[`audit-rigging.py`](../scripts/ml/audit-rigging.py), `pip check` and a real
+`bpy` import, then verify native rigging and export.
+
+## Held-back pins
+
+Keep the Python, package and ABI constraints in the direct inputs. FastVideo's tokenizers
+override is paired with Transformers across the RobertaProcessing change.
+Retest real CLIP loading, saving, offsets and attention masks before advancing
+it. Keep cutoff exceptions explicit and track them in the refresh PR.
+
+## Selective regeneration
+
+1. Seed from the existing lock and constrain retained versions, markers and bounds.
+2. Compile in scratch using the header's targets and verified uv. Compare all
+   markers and package sets. Move only changed generated blocks.
+3. Verify official hashes, upload dates and non-yanked status. A temporary
+   relay must preserve metadata and wheel URLs. Audit build and source too.
+4. Run pin and installer tests, dry installs for all targets and native
+   checks for changed behavior. Exercise real transfers for transport
+   changes. Record the uv version and cutoff.

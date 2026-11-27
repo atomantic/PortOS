@@ -92,7 +92,7 @@ export async function mutateDailyLog(mutatorFn, { label = 'MeatSpace' } = {}) {
       log.lastEntryDate = log.entries.length > 0 ? (log.entries[log.entries.length - 1]?.date || null) : null;
     }
     await ensureDir(PATHS.meatspace);
-    await atomicWrite(DAILY_LOG_FILE, log);
+    await atomicWrite(DAILY_LOG_FILE, log, { mode: 0o600, dirMode: 0o700 });
     invalidateMeatspace([
       'overview',
       ...(beforeAlcohol !== resourceSnapshot(log.entries, 'alcohol') ? ['alcohol'] : []),

@@ -15,6 +15,7 @@ import { createRequire } from 'node:module';
 import { stat } from 'node:fs/promises';
 
 import { isRawHexKey } from '../lib/signalCrypto.js';
+import { scrubHomePath } from '../lib/homePath.js';
 
 const require = createRequire(import.meta.url);
 
@@ -27,7 +28,7 @@ const AUTH_REMEDIATION = 'Signal database decryption failed — the key or SQLCi
 const SNAPSHOT_REMEDIATION = 'Could not take one consistent read-only snapshot of the Signal database. Nothing was ingested and the sync cursor was left unchanged; retry when Signal is not checkpointing.';
 
 function setupFailure(err) {
-  const detail = err?.message || 'SQLCipher driver unavailable';
+  const detail = scrubHomePath(err?.message || 'SQLCipher driver unavailable');
   return {
     ok: false,
     reason: 'setup',
@@ -71,10 +72,11 @@ function classifyDriverError(err) {
     return setupFailure(err);
   }
   const message = err?.message || String(err);
+  const safeMessage = scrubHomePath(message);
   if (/not a database|hmac|cipher|encrypt|invalid key|file is not a database/i.test(message)) {
-    return authFailure(`Signal database decryption failed: ${message}`);
+    return authFailure(`Signal database decryption failed: ${safeMessage}`);
   }
-  return snapshotFailure(`Signal snapshot failed: ${message}`);
+  return snapshotFailure(`Signal snapshot failed: ${safeMessage}`);
 }
 
 /**
@@ -102,10 +104,12 @@ export async function withConsistentSnapshot(sourcePath, key, readFn, options = 
     info = await stat(sourcePath);
   } catch (err) {
     const missing = err?.code === 'ENOENT';
+    const safePath = scrubHomePath(sourcePath);
+    const safeMessage = scrubHomePath(err?.message || err);
     return {
       ok: false,
       reason: missing ? 'missing' : 'snapshot',
-      error: missing ? `Signal database not found at ${sourcePath}` : `Cannot access ${sourcePath}: ${err?.message || err}`,
+      error: missing ? `Signal database not found at ${safePath}` : `Cannot access ${safePath}: ${safeMessage}`,
       remediation: missing
         ? 'Signal Desktop has no chat database yet (never opened, or a different profile).'
         : 'Could not read the Signal database file — check file permissions for the process running PortOS.',

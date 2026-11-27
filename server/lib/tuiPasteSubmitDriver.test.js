@@ -1,3 +1,4 @@
+import { UNSUBMITTED_PROMPT_SETTLE_MS } from '../test/fixtures/tuiTiming.js';
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { createPasteSubmitDriver } from './tuiPasteSubmitDriver.js';
 import {
@@ -8,7 +9,6 @@ import {
   PASTE_RETRY_BASE_DELAY_MS,
   PASTE_TO_ENTER_FALLBACK_MS,
   PASTE_VERIFY_WINDOW_MS,
-  UNSUBMITTED_PROMPT_SETTLE_MS,
 } from './tuiHandshake.js';
 
 // The paste-and-submit contract both TUI runners share (#16105). Each case pins

@@ -10,7 +10,7 @@ import { formatCount } from '../../utils/formatters';
 import { newStoryboardEntityId } from '../../../../server/lib/storyboardVocabulary.js';
 import {
   effectiveRecipe, imageNodePrompt, nodeInputValue, panelNodeState, RECIPE_LIMITS, RECIPE_NODE_PORTS, RECIPE_PORT_LABELS, RECIPE_TYPE_TITLES,
-  recipeRunOrder, textNodeValue, upstreamNode,
+  recipeRunOrder, settledImageFrameCount, textNodeValue, upstreamNode,
 } from '../../../../server/lib/storyboardRecipe.js';
 import TabPills from '../ui/TabPills';
 import useUrlParams from '../../hooks/useUrlParams';
@@ -245,7 +245,7 @@ export default function PanelMakeTab({ board, found, sketchNonce, handlers }) {
     if (node.type === 'image') {
       const { prompt, additions } = imageNodePrompt(recipe, node.id, context);
       const over = prompt.length > RECIPE_LIMITS.imagePrompt;
-      const settled = state.takeIds.length + state.failedJobIds.length;
+      const settled = settledImageFrameCount(state);
       return (
         <>
           {inputs}

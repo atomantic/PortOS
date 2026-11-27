@@ -40,6 +40,7 @@ const REPO_ROOT = join(dirname(fileURLToPath(import.meta.url)), '..', '..', '..'
  * a change to the extraction itself.
  */
 export const FACTS_CODE = Object.freeze([
+  'scripts/lib/migrationFiles.js',
   'scripts/lib/sourceTokens.js',
   'scripts/lib/testMemo/constants.js',
   'scripts/lib/testMemo/evaluator.js',

@@ -20,8 +20,19 @@ listener it did not start.
 managed mkserve before updating. The update reuses the verified checkpoint if the
 model revision has not changed; a failed update does not activate a partial
 installation. Once the new bundle is active, PortOS removes the superseded
-managed bundle and any checkpoint it replaced. Interrupted checkpoint downloads
-can resume when you retry.
+managed bundle and any checkpoint it replaced. The runtime card shows checkpoint
+bytes and percent as the download runs. Choose **Cancel** to stop an install or
+update. Retrying resumes the interrupted checkpoint download when possible.
+If mkserve exits with an engine error, **Repair** clears and rebuilds the
+current engine cache using the local checkpoint.
+
+Checkpoint downloads honour `HTTPS_PROXY` and fall back to `ALL_PROXY`,
+including SOCKS5 and SOCKS5h URLs. SOCKS5 resolves artifact hosts locally,
+while SOCKS5h resolves them through the proxy. Configure exceptions with
+`NO_PROXY`. Use `CURL_CA_BUNDLE` (or `SSL_CERT_FILE`) for an explicit PEM
+bundle and `SSL_CERT_DIR` for directories of PEM certificates, including
+OpenSSL hash-named entries. Directory certificates extend the explicit bundle
+when present and the normal Node trust store otherwise.
 
 The build and checkpoint are reproducible caches under `data/cache/mkserve`,
 excluded from PortOS backups. The engine is pinned to the reviewed upstream
@@ -29,4 +40,5 @@ excluded from PortOS backups. The engine is pinned to the reviewed upstream
 The [model files](https://huggingface.co/thinkingmachines/Inkling-2-Mini/tree/c9d028302cd0f035fdf8e7e91f089a4ce94d2195)
 are verified against pinned SHA-256 digests, including the DSpark draft head.
 
-mkserve can be measured on **Models → Performance**, and its PM2 log (`portos-mkserve`) is readable through the PortOS logs API.
+Use **View server logs** on the runtime card to see recent output from the
+PortOS-managed mkserve process. Measure mkserve on **Models → Performance**.

@@ -1,19 +1,15 @@
 /**
  * Media settings — the sections beside the backend config: the HuggingFace
- * token (its own validated endpoints, independent of the Media save), the
- * tailnet A1111 exposure toggle, and the Test Render panel. The toggle is a
- * field of the shared `useSettingsForm`; the token and test render own their
- * own state. Always mounted so the test render's media-run owner outlives a
+ * token (its own validated endpoints, independent of the Media save) and the
+ * Test Render panel. Always mounted so the test render's media-run owner outlives a
  * tab switch.
  */
 
 import { useState, useId } from 'react';
-import { Save, Globe, AlertTriangle, Sparkles, Key, Check, Trash2 } from 'lucide-react';
+import { Save, AlertTriangle, Sparkles, Key, Check, Trash2 } from 'lucide-react';
 import toast from '../ui/Toast';
 import FormField from '../ui/FormField';
 import BrailleSpinner from '../BrailleSpinner';
-import { isLoopbackHost } from '../../lib/loopbackHost.js';
-import { PORTS } from '../../lib/ports.js';
 import { generateImage } from '../../services/apiSystem.js';
 import { saveHfToken, clearHfToken } from '../../services/apiImageVideo.js';
 import { deriveAvailableBackends, isCloudCliMode, IMAGE_GEN_MODE, modeLabel } from '../../lib/imageGenBackends';
@@ -24,26 +20,8 @@ import { useHfTokenStatus } from '../../hooks/useHfTokenStatus';
 const SECTION_CLASS = 'bg-port-card border border-port-border rounded-xl p-6 space-y-4';
 const DEFAULT_TEST_PROMPT = 'a small cyberpunk fox sitting on a neon-lit rooftop at night, cinematic, highly detailed';
 
-// The advertised A1111 URL must be the canonical user-facing endpoint
-// (`<tailscale-host>.<tailnet>.ts.net:PORTS.API` / `<tailscale-ip>:PORTS.API`),
-// not the loopback HTTP mirror on PORTS.API_LOCAL or a localhost dev URL —
-// those aren't reachable from other tailnet machines.
-const advertisedA1111Url = () => {
-  if (typeof window === 'undefined') return null;
-  const h = window.location.hostname;
-  // Local dev / loopback mirror — we can't infer the tailnet hostname
-  // from the browser; tell the user to look it up.
-  if (isLoopbackHost(h)) return null;
-  // Real tailnet host — use the canonical user-facing API port and
-  // match the currently-active scheme so the hint works in both HTTPS-on
-  // (Tailscale cert provisioned) and HTTP-only PortOS deployments.
-  const scheme = window.location.protocol === 'http:' ? 'http' : 'https';
-  return `${scheme}://${h}:${PORTS.API}`;
-};
-
 export default function ImageGenServiceSections({ mediaTab, form }) {
-  const { values, saved, isDirty, set } = form;
-  const { exposeA1111 } = values;
+  const { saved, isDirty } = form;
 
   // HuggingFace token state — separate from the main settings save flow because
   // it has its own validated endpoints (POST /setup/hf-token + DELETE) and
@@ -158,7 +136,6 @@ export default function ImageGenServiceSections({ mediaTab, form }) {
     }
   };
 
-  const a1111Url = mediaTab === 'expose' ? advertisedA1111Url() : null;
 
   return (
     <>
@@ -235,42 +212,6 @@ export default function ImageGenServiceSections({ mediaTab, form }) {
             {hfTokenBusy === 'clearing' ? <BrailleSpinner /> : <Trash2 size={12} />}
             Clear stored token
           </button>
-        )}
-      </div>
-      )}
-
-      {mediaTab === 'expose' && (
-      <div className={SECTION_CLASS}>
-        <div className="flex items-center gap-2 text-white">
-          <Globe size={18} />
-          <h2 className="text-lg font-semibold">Expose as A1111 API on the Tailnet</h2>
-        </div>
-        <p className="text-xs text-gray-500">
-          When enabled, PortOS mounts an AUTOMATIC1111-compatible surface at
-          <code className="text-gray-400"> /sdapi/v1/* </code> so other machines on your tailnet can point any A1111 client at this box and use whichever backend you picked above. Off by default — flip on only when you actually want to share this server.
-        </p>
-        <label className="flex items-center gap-3 cursor-pointer">
-          <input
-            type="checkbox"
-            checked={exposeA1111}
-            onChange={(e) => set('exposeA1111', e.target.checked)}
-            className="rounded"
-          />
-          <span className="text-sm text-gray-300">Enable <code className="text-gray-400">/sdapi/v1/*</code></span>
-        </label>
-        {exposeA1111 && (
-          <div className="text-xs space-y-1 bg-port-bg border border-port-border rounded-lg p-3">
-            <div className="flex items-center gap-1 text-port-warning">
-              <AlertTriangle className="w-3 h-3" /> Anyone with tailnet access to this host can hit the API. PortOS does not authenticate.
-            </div>
-            <div className="text-gray-400">
-              {a1111Url ? (
-                <>Other machines should set their SD API URL to <code className="text-gray-300">{a1111Url}</code></>
-              ) : (
-                <>Other machines should set their SD API URL to <code className="text-gray-300">https://&lt;your-tailscale-host&gt;:{PORTS.API}</code> (run <code className="text-gray-300">tailscale status</code> on this machine to see the hostname).</>
-              )}
-            </div>
-          </div>
         )}
       </div>
       )}

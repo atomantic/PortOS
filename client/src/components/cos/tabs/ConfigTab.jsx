@@ -11,10 +11,7 @@ import {
   Sparkles,
 } from 'lucide-react';
 import toast from '../../ui/Toast';
-import { updateCosConfig, getCosBudgetUsage, getPersistentMind } from '../../../services/apiAgents.js';
-import { useSocketResource } from '../../../hooks/useSocketResource.js';
-import PersistentMindProfileControls from '../PersistentMindProfileControls';
-import { PersistentMindThoughtStatus } from '../PersistentMindRuntimePanel';
+import { updateCosConfig, getCosBudgetUsage } from '../../../services/apiAgents.js';
 import ConfigRow from './ConfigRow';
 import MemoryEmbeddingRecommendation from '../MemoryEmbeddingRecommendation';
 import {
@@ -33,7 +30,6 @@ import {
 import EmbeddingSourceNotice from '../../settings/EmbeddingSourceNotice';
 import { updateSettings } from '../../../services/apiSystem';
 import { coverageSummary, isRiggedAvatarStyle, riggedRecordForStyle } from '../../../hooks/useAvatarCapabilities';
-import { timeAgo } from '../../../utils/formatters';
 
 const DOMAIN_MODE_COLORS = {
   off: {
@@ -53,8 +49,7 @@ const DOMAIN_MODE_COLORS = {
 const PRIORITY_OPTIONS = ['LOW', 'MEDIUM', 'HIGH', 'CRITICAL']
   .map((value) => ({ value, label: value[0] + value.slice(1).toLowerCase() }));
 
-// Mirrors OUTWARD_SAFETY_KINDS. Field names stay flat so the pending-save
-// resync can compare primitives.
+// Mirrors OUTWARD_SAFETY_KINDS. Each kind has its own pending form value.
 const SAFETY_KIND_FIELDS = [
   { id: 'content', field: 'safetyKindContent', label: 'Content', description: 'Generated posts, newsletters, and blogs.' },
   { id: 'publish', field: 'safetyKindPublish', label: 'Publish', description: 'Deploys, releases, and outbound sends.' },
@@ -63,6 +58,12 @@ const SAFETY_KIND_FIELDS = [
 ];
 
 const selectedSafetyKinds = (form) => SAFETY_KIND_FIELDS.filter((item) => form[item.field]).map((item) => item.id);
+
+const removeOverride = (overrides, key) => {
+  const remaining = { ...overrides };
+  delete remaining[key];
+  return remaining;
+};
 
 const getDefaultFormData = (config, avatarStyle) => ({
   healthCheckIntervalMs: config?.healthCheckIntervalMs ?? 900_000,
@@ -222,58 +223,13 @@ const getSavedDomainSelection = (config, domainId) => (
   domainId === CREATIVE_DOMAIN.id ? getCreativeAutonomyOverride(config) : getDomainMode(config, domainId)
 );
 
-const MIND_STATUS_EVENTS = ['cos:mind:event', 'cos:mind:status', 'cos:config:changed'];
-
-function PersistentMindStatus({ mind, loaded, error }) {
-  const state = mind?.state;
-  const model = mind?.profile?.model;
-  const supervisor = !loaded
-    ? 'Loading…'
-    : error ? 'Unavailable'
-      : state?.started ? 'Started'
-        : state?.enabled ? 'Ready, not started'
-          : 'Disabled';
-
-  return (
-    <div className="rounded-lg border border-port-border bg-port-card p-4">
-      <div className="flex flex-wrap items-center justify-between gap-2">
-        <PersistentMindThoughtStatus state={state} model={model} />
-        <Link to="/cos/mind" className="inline-flex items-center gap-1 text-xs font-medium text-port-accent hover:underline">
-          Open mind <ExternalLink size={13} aria-hidden="true" />
-        </Link>
-      </div>
-      <div className="mt-4 grid grid-cols-3 gap-2">
-        <div className="rounded-md bg-port-bg p-2.5">
-          <span className="block text-[10px] font-medium uppercase tracking-wide text-port-text-muted">Supervisor</span>
-          <span className="mt-1 block text-xs font-semibold text-port-text">{supervisor}</span>
-        </div>
-        <div className="rounded-md bg-port-bg p-2.5">
-          <span className="block text-[10px] font-medium uppercase tracking-wide text-port-text-muted">Queued</span>
-          <span aria-label="Queued persistent mind messages" className="mt-1 block text-xs font-semibold text-port-text">{loaded && !error ? state?.queuedMessageCount || 0 : '—'}</span>
-        </div>
-        <div className="rounded-md bg-port-bg p-2.5">
-          <span className="block text-[10px] font-medium uppercase tracking-wide text-port-text-muted">Last turn</span>
-          <span className="mt-1 block text-xs font-semibold text-port-text">{state?.lastCompletedAt ? timeAgo(state.lastCompletedAt) : 'None yet'}</span>
-        </div>
-      </div>
-      {(error || state?.lastError || state?.pauseReason) && (
-        <p role="status" className="mt-3 rounded-md border border-port-warning/30 bg-port-warning/10 px-3 py-2 text-xs text-port-warning">
-          {error || [state.pauseReason, state.lastError && state.lastError !== state.pauseReason ? `Last wake: ${state.lastError}` : null].filter(Boolean).join(' · ')}
-        </p>
-      )}
-      <p className="mt-3 text-xs leading-relaxed text-port-text-muted">
-        Enabling a profile only configures its reasoning lane. Starting, pausing, conversation, context, and task access remain on the Persistent Mind page.
-      </p>
-    </div>
-  );
-}
-
 export default function ConfigTab({ config, onUpdate, onEvaluate, avatarStyle, riggedAvatars = [] }) {
-  const [formData, setFormData] = useState(() => getDefaultFormData(config, avatarStyle));
+  const [confirmedConfig, setConfirmedConfig] = useState(config);
+  const confirmedConfigRef = useRef(config);
+  const [pendingConfigFields, setPendingConfigFields] = useState({});
   const [domainAutonomyOverrides, setDomainAutonomyOverrides] = useState({});
   const [domainBudgetOverrides, setDomainBudgetOverrides] = useState({});
   const [saveStatus, setSaveStatus] = useState('idle');
-  const [profileSaving, setProfileSaving] = useState(false);
   const [budgetUsage, setBudgetUsage] = useState({});
   // Remounts the embeddings notice after the recommendation saves, so it
   // re-reads the backend it just switched to.
@@ -281,19 +237,38 @@ export default function ConfigTab({ config, onUpdate, onEvaluate, avatarStyle, r
   const configSaveQueueRef = useRef(Promise.resolve());
   const pendingSaveCountRef = useRef(0);
   const failedSaveKeysRef = useRef(new Set());
-  const pendingConfigFieldsRef = useRef(new Map());
+  const writeSequencesRef = useRef(new Map());
 
-  const saveConfigPatch = useCallback((patch, { failureKeys = Object.keys(patch), onSuccess } = {}) => {
+  const confirmConfig = useCallback((nextConfig) => {
+    if (!nextConfig) return;
+    confirmedConfigRef.current = nextConfig;
+    setConfirmedConfig(nextConfig);
+  }, []);
+
+  useEffect(() => { confirmConfig(config); }, [config, confirmConfig]);
+
+  const formData = { ...getDefaultFormData(confirmedConfig, avatarStyle), ...pendingConfigFields };
+
+  const saveConfigPatch = useCallback((buildPatch, { key, clearOverride, onSuccess }) => {
+    const sequence = (writeSequencesRef.current.get(key) ?? 0) + 1;
+    writeSequencesRef.current.set(key, sequence);
+    const isLatestWrite = () => writeSequencesRef.current.get(key) === sequence;
     pendingSaveCountRef.current += 1;
     setSaveStatus('saving');
 
-    const request = configSaveQueueRef.current
-      .catch(() => undefined)
-      .then(() => updateCosConfig(patch, { silent: true }));
+    const request = configSaveQueueRef.current.then(async () => {
+      const result = await updateCosConfig(buildPatch(confirmedConfigRef.current), { silent: true });
+      // A successful older write still determines what a newer failure rolls back to.
+      confirmConfig(result);
+      return result;
+    });
     configSaveQueueRef.current = request.catch(() => undefined);
 
     return request.then((result) => {
-      failureKeys.forEach((key) => failedSaveKeysRef.current.delete(key));
+      if (isLatestWrite()) {
+        clearOverride();
+        failedSaveKeysRef.current.delete(key);
+      }
       const reportRefreshError = (error) => toast.error(error?.message || 'Settings saved, but the page could not refresh');
       try {
         Promise.resolve(onSuccess?.(result)).catch(reportRefreshError);
@@ -307,7 +282,10 @@ export default function ConfigTab({ config, onUpdate, onEvaluate, avatarStyle, r
       }
       return result;
     }, (error) => {
-      failureKeys.forEach((key) => failedSaveKeysRef.current.add(key));
+      if (isLatestWrite()) {
+        clearOverride();
+        failedSaveKeysRef.current.add(key);
+      }
       toast.error(error?.message || 'Configuration could not be saved');
       return null;
     }).finally(() => {
@@ -315,81 +293,52 @@ export default function ConfigTab({ config, onUpdate, onEvaluate, avatarStyle, r
       if (pendingSaveCountRef.current > 0) setSaveStatus('saving');
       else setSaveStatus(failedSaveKeysRef.current.size ? 'error' : 'saved');
     });
-  }, [onUpdate]);
+  }, [confirmConfig, onUpdate]);
 
-  const updateSetting = useCallback((field, value) => {
-    pendingConfigFieldsRef.current.set(field, value);
-    setFormData((current) => ({ ...current, [field]: value }));
-    const patch = field === 'startOnBoot'
-      ? { alwaysOn: value, autoStart: false }
-      : { [field]: value };
-    return saveConfigPatch(patch, { failureKeys: [field] });
-  }, [saveConfigPatch]);
+  const patchFormField = (field, value, buildPatch) => {
+    setPendingConfigFields((current) => ({ ...current, [field]: value }));
+    return saveConfigPatch(buildPatch, {
+      key: field,
+      clearOverride: () => setPendingConfigFields((current) => removeOverride(current, field)),
+    });
+  };
 
-  const patchConfidence = useCallback((field, apiKey, value) => {
-    pendingConfigFieldsRef.current.set(field, value);
-    setFormData((current) => ({ ...current, [field]: value }));
-    return saveConfigPatch({ confidenceAutoApproval: { [apiKey]: value } }, { failureKeys: [field] });
-  }, [saveConfigPatch]);
+  const updateSetting = (field, value) => patchFormField(field, value, () => (
+    field === 'startOnBoot' ? { alwaysOn: value, autoStart: false } : { [field]: value }
+  ));
 
-  const patchSafetyEnabled = useCallback((value) => {
-    pendingConfigFieldsRef.current.set('safetyEnabled', value);
-    setFormData((current) => ({ ...current, safetyEnabled: value }));
-    return saveConfigPatch({ safetyKindApproval: { enabled: value } }, { failureKeys: ['safetyEnabled'] });
-  }, [saveConfigPatch]);
+  const patchConfidence = (field, apiKey, value) => patchFormField(field, value, () => (
+    { confidenceAutoApproval: { [apiKey]: value } }
+  ));
 
-  const patchSafetyKind = useCallback((field, checked) => {
-    pendingConfigFieldsRef.current.set(field, checked);
-    const nextForm = { ...formData, [field]: checked };
-    setFormData(nextForm);
-    return saveConfigPatch(
-      { safetyKindApproval: { alwaysApproveKinds: selectedSafetyKinds(nextForm) } },
-      { failureKeys: [field] },
-    );
-  }, [formData, saveConfigPatch]);
+  const patchSafetyEnabled = (value) => patchFormField('safetyEnabled', value, () => (
+    { safetyKindApproval: { enabled: value } }
+  ));
 
-  useEffect(() => {
-    const savedFormData = getDefaultFormData(config, avatarStyle);
-    setFormData(Object.fromEntries(Object.entries(savedFormData).map(([field, savedValue]) => {
-      const pendingValue = pendingConfigFieldsRef.current.get(field);
-      if (pendingConfigFieldsRef.current.has(field) && pendingValue !== savedValue) return [field, pendingValue];
-      pendingConfigFieldsRef.current.delete(field);
-      return [field, savedValue];
-    })));
-
-    setDomainAutonomyOverrides((current) => Object.fromEntries(Object.entries(current).filter(
-      ([domainId, mode]) => getSavedDomainSelection(config, domainId) !== mode,
-    )));
-    setDomainBudgetOverrides((current) => Object.fromEntries(Object.entries(current).flatMap(([domainId, fields]) => {
-      const savedBudget = getDomainBudget(config, domainId);
-      const remaining = Object.fromEntries(Object.entries(fields).filter(([field, value]) => (savedBudget[field] ?? null) !== value));
-      return Object.keys(remaining).length ? [[domainId, remaining]] : [];
-    })));
-  }, [config, avatarStyle]);
+  const patchSafetyKind = (field, checked) => patchFormField(field, checked, (savedConfig) => {
+    // The API replaces the entire list. Build it when the write starts so a sibling
+    // edit that failed while this one was queued cannot be persisted accidentally.
+    const savedForm = getDefaultFormData(savedConfig, avatarStyle);
+    return { safetyKindApproval: { alwaysApproveKinds: selectedSafetyKinds({ ...savedForm, [field]: checked }) } };
+  });
 
   const displayConfig = useMemo(() => {
-    const domainBudgets = { ...(config?.domainBudgets || {}) };
+    const domainBudgets = { ...confirmedConfig?.domainBudgets };
     for (const [domainId, fields] of Object.entries(domainBudgetOverrides)) {
       domainBudgets[domainId] = { ...(domainBudgets[domainId] || {}), ...fields };
     }
     return {
-      ...config,
-      domainAutonomy: { ...(config?.domainAutonomy || {}), ...domainAutonomyOverrides },
+      ...confirmedConfig,
+      domainAutonomy: { ...confirmedConfig?.domainAutonomy, ...domainAutonomyOverrides },
       domainBudgets,
     };
-  }, [config, domainAutonomyOverrides, domainBudgetOverrides]);
+  }, [confirmedConfig, domainAutonomyOverrides, domainBudgetOverrides]);
 
   const refreshBudgetUsage = useCallback(() => (
     getCosBudgetUsage({ silent: true })
       .then((response) => setBudgetUsage(response?.usage || {}))
       .catch(() => {})
   ), []);
-
-  const { data: mindData, loading: mindLoading, error: mindError, refetch: refreshMindStatus } = useSocketResource(
-    () => getPersistentMind({ limit: 1 }, { silent: true }),
-    { namespace: 'cos', events: MIND_STATUS_EVENTS },
-  );
-  const mindStatus = { data: mindData, loaded: !mindLoading, error: mindError ? mindError.message || 'Persistent mind status is unavailable' : null };
 
   useEffect(() => { void refreshBudgetUsage(); }, [refreshBudgetUsage]);
 
@@ -421,9 +370,9 @@ export default function ConfigTab({ config, onUpdate, onEvaluate, avatarStyle, r
   const handleDomainChange = (domainId, mode) => {
     if (getSavedDomainSelection(displayConfig, domainId) === mode) return Promise.resolve();
     setDomainAutonomyOverrides((current) => ({ ...current, [domainId]: mode }));
-    return saveConfigPatch({ domainAutonomy: { [domainId]: mode } }, {
-      failureKeys: [`domainAutonomy:${domainId}`],
-      onSuccess: refreshMindStatus,
+    return saveConfigPatch(() => ({ domainAutonomy: { [domainId]: mode } }), {
+      key: `domainAutonomy:${domainId}`,
+      clearOverride: () => setDomainAutonomyOverrides((current) => removeOverride(current, domainId)),
     });
   };
 
@@ -435,30 +384,34 @@ export default function ConfigTab({ config, onUpdate, onEvaluate, avatarStyle, r
       ...currentOverrides,
       [domainId]: { ...(currentOverrides[domainId] || {}), [field]: value },
     }));
-    return saveConfigPatch({ domainBudgets: { [domainId]: { [field]: value } } }, {
-      failureKeys: [`domainBudget:${domainId}:${field}`],
+    return saveConfigPatch(() => ({ domainBudgets: { [domainId]: { [field]: value } } }), {
+      key: `domainBudget:${domainId}:${field}`,
+      clearOverride: () => setDomainBudgetOverrides((overrides) => {
+        const fields = removeOverride(overrides[domainId], field);
+        return Object.keys(fields).length
+          ? { ...overrides, [domainId]: fields }
+          : removeOverride(overrides, domainId);
+      }),
       onSuccess: refreshBudgetUsage,
     });
   };
 
-  const displayedSaveStatus = saveStatus === 'error'
-    ? 'error'
-    : saveStatus === 'saving' || profileSaving ? 'saving' : saveStatus;
+  const mindProfile = confirmedConfig?.persistentMindProfile;
 
   return (
     <div className="mx-auto max-w-6xl space-y-7 pb-6">
       <header className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
         <div>
-          <h3 className="text-lg font-semibold text-port-text">Chief of Staff settings</h3>
+          <h2 className="text-lg font-semibold text-port-text">Chief of Staff settings</h2>
           <p className="mt-1 max-w-2xl text-sm text-port-text-muted">
             Configure capacity, automatic work, the persistent mind, and supporting services. Domain guardrails are the authoritative autonomy controls.
           </p>
         </div>
         <div className="flex flex-wrap items-center gap-3">
-          <span data-testid="config-save-status" role={displayedSaveStatus === 'error' ? 'alert' : 'status'} aria-live="polite" className={`text-xs ${displayedSaveStatus === 'error' ? 'text-port-error' : 'text-port-text-muted'}`}>
-            {displayedSaveStatus === 'saving' ? 'Saving changes…'
-              : displayedSaveStatus === 'error' ? 'Some changes could not be saved. Change those settings to retry.'
-                : displayedSaveStatus === 'saved' ? 'All changes saved'
+          <span data-testid="config-save-status" role={saveStatus === 'error' ? 'alert' : 'status'} aria-live="polite" className={`text-xs ${saveStatus === 'error' ? 'text-port-error' : 'text-port-text-muted'}`}>
+            {saveStatus === 'saving' ? 'Saving changes…'
+              : saveStatus === 'error' ? 'Some changes could not be saved. Change those settings to retry.'
+                : saveStatus === 'saved' ? 'All changes saved'
                   : 'Changes save automatically'}
           </span>
           <button
@@ -477,21 +430,20 @@ export default function ConfigTab({ config, onUpdate, onEvaluate, avatarStyle, r
           <SectionHeading
             icon={Brain}
             title="Persistent Mind"
-            description="Live supervisor status beside the pinned provider profile used for every wake."
+            description="The saved profile determines which provider and model the Mind uses on each wake."
           />
         </div>
-        <div className="grid gap-3 lg:grid-cols-[minmax(0,0.9fr)_minmax(0,1.1fr)]">
-          <PersistentMindStatus mind={mindStatus.data} loaded={mindStatus.loaded} error={mindStatus.error} />
-          <div className="rounded-lg border border-port-border bg-port-card p-4">
-            <PersistentMindProfileControls
-              profile={config?.persistentMindProfile}
-              onSavingChange={setProfileSaving}
-              onSaved={() => {
-                onUpdate();
-                void refreshMindStatus();
-              }}
-            />
-          </div>
+        <div className="flex flex-wrap items-center justify-between gap-3 rounded-lg border border-port-border bg-port-card p-4">
+          <p className="min-w-0 max-w-full break-words text-sm text-port-text">
+            {!mindProfile?.enabled
+              ? 'AI profile disabled'
+              : mindProfile.providerId && mindProfile.model
+                ? `AI profile · ${mindProfile.providerId} / ${mindProfile.model}`
+                : 'AI profile enabled · select a provider and model'}
+          </p>
+          <Link to="/cos/mind?panel=settings" className="inline-flex items-center gap-1 text-xs font-medium text-port-accent hover:underline">
+            Open Mind Settings <ExternalLink size={13} aria-hidden="true" />
+          </Link>
         </div>
       </section>
 

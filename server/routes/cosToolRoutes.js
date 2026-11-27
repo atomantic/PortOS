@@ -2,20 +2,14 @@
 
 import { createHash } from 'node:crypto';
 import { Router } from 'express';
-import {
-  cosToolCallParamsSchema,
-  cosToolCallSchema,
-  cosToolCatalogQuerySchema,
-} from '../lib/cos/cosToolContracts.js';
-import { asyncHandler, ServerError } from '../lib/errorHandler.js';
+import { cosToolCatalogQuerySchema } from '../lib/cos/cosToolContracts.js';
+import { asyncHandler } from '../lib/errorHandler.js';
 import { canonicalStringify } from '../lib/objects.js';
 import { validateRequest } from '../lib/validateRequest.js';
 import { loadState } from '../services/cos/cosState.js';
 import { getSettings } from '../services/settings.js';
 import {
-  executeCosToolCall,
   formatCosToolCatalog,
-  getCosToolCall,
   getCosToolCatalog,
   readCosToolRecipeCatalog,
 } from '../services/cos/cosToolRegistry.js';
@@ -46,29 +40,6 @@ router.get('/tools', asyncHandler(async (req, res) => {
   res.setHeader('Cache-Control', 'private, no-cache');
   if (req.headers['if-none-match'] === etag) return res.status(304).end();
   res.json(response);
-}));
-
-router.post('/tools/call', asyncHandler(async (req, res) => {
-  const call = validateRequest(cosToolCallSchema, req.body || {});
-  const headerId = req.headers['idempotency-key'];
-  if (headerId && headerId !== call.requestId) {
-    throw new ServerError('Idempotency-Key must match requestId', { status: 400, code: 'TOOL_IDEMPOTENCY_MISMATCH' });
-  }
-  const result = await executeCosToolCall({
-    call,
-    authority: {
-      scope: 'ui',
-      authenticated: req.portosAuthContext?.authenticated === true,
-    },
-  });
-  res.status(result.state === 'failed' ? 422 : 200).json(result);
-}));
-
-router.get('/tools/calls/:requestId', asyncHandler(async (req, res) => {
-  const { requestId } = validateRequest(cosToolCallParamsSchema, req.params);
-  const result = await getCosToolCall(requestId);
-  if (!result) throw new ServerError('Tool call not found', { status: 404, code: 'TOOL_CALL_NOT_FOUND' });
-  res.json(result);
 }));
 
 export default router;

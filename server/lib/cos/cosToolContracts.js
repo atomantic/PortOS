@@ -8,6 +8,7 @@
 import { z } from 'zod';
 
 export const COS_TOOL_SCHEMA_VERSION = 1;
+export const COS_TOOL_OBJECT_OUTPUT_SCHEMA = Object.freeze({ type: 'object', additionalProperties: true });
 export const COS_TOOL_CALL_LIMITS = Object.freeze({
   requestIdChars: 200,
   nameChars: 100,
@@ -70,7 +71,6 @@ export const cosToolCatalogQuerySchema = z.object({
   format: z.enum(['portos', 'openai', 'anthropic', 'mcp']).optional().default('portos'),
 }).strict();
 
-export const cosToolCallParamsSchema = z.object({ requestId: cosToolRequestIdSchema }).strict();
 
 export const persistentMindToolCallSchema = cosToolCallSchema
   .omit({ type: true, version: true, requestId: true })

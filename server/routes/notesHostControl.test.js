@@ -8,13 +8,22 @@ import { DEV_PROXY_CLIENT_ADDRESS_HEADER } from '../../lib/portosAuthCore.js';
 // so the developer's own settings cannot change what these cases observe.
 vi.mock('../services/auth.js', async (importOriginal) => ({
   ...await importOriginal(),
-  isAuthEnabled: vi.fn().mockResolvedValue(false),
+  isAuthEnabled: vi.fn(async () => auth.enabled),
+  verifyRequestSession: vi.fn(async ({ headers }) => auth.enabled && headers?.authorization === 'Bearer example-agent-session'),
 }));
+
+const auth = vi.hoisted(() => ({ enabled: false }));
 
 const obsidian = vi.hoisted(() => ({
   addVault: vi.fn(),
   getVaults: vi.fn(),
   detectVaults: vi.fn(),
+  scanVault: vi.fn(),
+  getNote: vi.fn(),
+  searchNotes: vi.fn(),
+  getVaultTags: vi.fn(),
+  getVaultFolders: vi.fn(),
+  getVaultGraph: vi.fn(),
 }));
 vi.mock('../services/obsidian.js', () => obsidian);
 
@@ -42,7 +51,30 @@ const local = () => buildGatedApp('127.0.0.1');
 const call = (app, [method, path, body = {}], proxyClient) => {
   const pending = request(app)[method](path);
   if (proxyClient) pending.set(DEV_PROXY_CLIENT_ADDRESS_HEADER, proxyClient);
+  if (method === 'get' || method === 'head') return pending;
   return pending.send(body);
+};
+
+const readRoutes = [
+  ['get', '/api/notes/detect'],
+  ['get', '/api/notes/vaults'],
+  ['get', '/api/notes/vaults/example-vault/scan'],
+  ['get', '/api/notes/vaults/example-vault/note?path=example.md'],
+  ['get', '/api/notes/vaults/example-vault/search?q=example'],
+  ['get', '/api/notes/vaults/example-vault/tags'],
+  ['get', '/api/notes/vaults/example-vault/folders'],
+  ['get', '/api/notes/vaults/example-vault/graph'],
+];
+
+const configureNoteReads = () => {
+  obsidian.detectVaults.mockResolvedValue([]);
+  obsidian.getVaults.mockResolvedValue([]);
+  obsidian.scanVault.mockResolvedValue({ notes: [] });
+  obsidian.getNote.mockResolvedValue({ content: 'example' });
+  obsidian.searchNotes.mockResolvedValue({ results: [] });
+  obsidian.getVaultTags.mockResolvedValue([]);
+  obsidian.getVaultFolders.mockResolvedValue([]);
+  obsidian.getVaultGraph.mockResolvedValue({});
 };
 
 const expectRefused = (response) => {
@@ -52,6 +84,7 @@ const expectRefused = (response) => {
 
 describe('host-control gate on notes vault registration (#9007)', () => {
   beforeEach(() => {
+    auth.enabled = false;
     vi.clearAllMocks();
     obsidian.addVault.mockResolvedValue({ id: 'v1', name: 'x', path: '/tmp/example-vault' });
   });
@@ -72,12 +105,28 @@ describe('host-control gate on notes vault registration (#9007)', () => {
     expect(obsidian.addVault).toHaveBeenCalledTimes(2);
   });
 
-  it('leaves read-only vault listing and detection open to a remote caller', async () => {
-    obsidian.getVaults.mockResolvedValue([]);
-    obsidian.detectVaults.mockResolvedValue([]);
-    const list = await request(remote()).get('/api/notes/vaults');
-    const detect = await request(remote()).get('/api/notes/detect');
-    expect(list.status).toBe(200);
-    expect(detect.status).toBe(200);
+  it('refuses every host vault read to a remote password-free caller before scanning', async () => {
+    configureNoteReads();
+    for (const route of readRoutes) expectRefused(await call(remote(), route));
+    expect(obsidian.detectVaults).not.toHaveBeenCalled();
+    expect(obsidian.getVaults).not.toHaveBeenCalled();
+    expect(obsidian.scanVault).not.toHaveBeenCalled();
+    expect(obsidian.getNote).not.toHaveBeenCalled();
+    expect(obsidian.searchNotes).not.toHaveBeenCalled();
+    expect(obsidian.getVaultTags).not.toHaveBeenCalled();
+    expect(obsidian.getVaultFolders).not.toHaveBeenCalled();
+    expect(obsidian.getVaultGraph).not.toHaveBeenCalled();
+  });
+
+  it('keeps local operators and delegated PORTOS_API_TOKEN sessions able to read vaults', async () => {
+    configureNoteReads();
+    for (const route of readRoutes) {
+      expect((await call(local(), route)).status, route[1]).toBe(200);
+    }
+    auth.enabled = true;
+    for (const route of readRoutes) {
+      const pending = request(remote())[route[0]](route[1]).set('Authorization', 'Bearer example-agent-session');
+      expect((await pending).status, route[1]).toBe(200);
+    }
   });
 });

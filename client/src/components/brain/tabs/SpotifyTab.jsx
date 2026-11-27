@@ -116,7 +116,11 @@ export function SpotifyTab() {
 
   const handleSyncNow = async () => {
     setSyncing(true);
-    const result = await syncSpotify({ silent: true }).catch(() => ({ ok: false, error: 'Sync failed' }));
+    const result = await syncSpotify({ silent: true }).catch((error) => ({
+      ok: false,
+      error: error?.message || 'Sync failed',
+      needsAuth: error?.context?.needsAuth,
+    }));
     setSyncing(false);
     if (result?.ok) {
       toast.success(`Synced: ${result.recorded} listen(s)${result.hasMore ? ' — more history remains, run again' : ''}`);
@@ -130,7 +134,10 @@ export function SpotifyTab() {
 
   const handleSyncPlaylists = async () => {
     setPlaylistsSyncing(true);
-    const result = await syncSpotifyPlaylists({ silent: true }).catch(() => ({ ok: false, error: 'Playlist sync failed' }));
+    const result = await syncSpotifyPlaylists({ silent: true }).catch((error) => ({
+      ok: false,
+      error: error?.message || 'Playlist sync failed',
+    }));
     setPlaylistsSyncing(false);
     if (!result?.ok && result?.error) {
       toast.error(result.error);

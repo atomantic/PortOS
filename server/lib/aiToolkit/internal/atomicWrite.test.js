@@ -147,6 +147,24 @@ describe('AI Toolkit atomicWrite preparation failures', () => {
     expect(statSync(target).mode & 0o777).toBe(0o600);
   });
 
+  it.skipIf(process.platform === 'win32')('creates a private temp file when replacing a world-readable destination', async () => {
+    const target = join(tmpRoot, 'private.json');
+    writeFileSync(target, 'original');
+    chmodSync(target, 0o644);
+    let tempMode;
+    fsPromises.writeFile.mockImplementationOnce(async (path, data, options) => {
+      await realFsPromises.writeFile(path, data, options);
+      tempMode = statSync(path).mode & 0o777;
+    });
+
+    await atomicWrite(target, 'replacement', { mode: 0o600 });
+
+    expect(tempMode).toBeDefined();
+    expect(tempMode & 0o077).toBe(0);
+    expect(statSync(target).mode & 0o777).toBe(0o600);
+    expect(readFileSync(target, 'utf8')).toBe('replacement');
+  });
+
   it('creates a missing file and preserves binary bytes', async () => {
     const target = join(tmpRoot, 'new.bin');
     const bytes = Buffer.from([0, 128, 255]);

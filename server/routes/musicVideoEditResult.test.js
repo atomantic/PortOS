@@ -17,9 +17,16 @@ import { applyMusicVideoEdit } from '../lib/musicVideo/musicVideoEditResult.js';
 const ROOT = () => lazyTempDataRoot('mv-edit-result-');
 vi.mock('../lib/paths.js', async (original) => makePathsProxy(await original(), { dataRoot: ROOT }));
 vi.mock('../services/settings.js', () => ({ getSettings: vi.fn(async () => ({})) }));
+const queueSeedvr2 = vi.fn();
+const planUpscale = vi.fn();
+vi.mock('../services/videoGen/falUpscaleJob.js', () => ({ enqueueFalSeedvr2Upscale: queueSeedvr2 }));
+vi.mock('../services/videoGen/upscaleVideo.js', async (original) => ({
+  ...await original(), planUpscaleHistoryItem: planUpscale,
+}));
 const { default: router } = await import('./musicVideo.js');
 const projects = await import('../services/musicVideo/projects.js');
 const boardEdits = await import('../services/musicVideo/projectBoardEdits.js');
+const { clearBoardUndo } = await import('../services/musicVideo/boardUndo.js');
 const { recordEvents } = await import('../services/sharing/recordEvents.js');
 const { productionReviewBasis } = await import('../services/musicVideo/productionReview.js');
 
@@ -35,6 +42,7 @@ const base = () => `/api/music-video/${project.id}`;
 const read = async () => (await request(app).get(base())).body;
 
 beforeEach(async () => {
+  clearBoardUndo();
   mkdirSync(join(ROOT(), 'images'), { recursive: true });
   for (const image of ['a.png', 'b.png', 'c.png', 'spare.png']) writeFileSync(join(ROOT(), 'images', image), 'synthetic-image');
   writeFileSync(join(ROOT(), 'video-history.json'), JSON.stringify(['clip-a', 'clip-b', 'clip-c'].map((id) => ({ id, filename: `${id}.mp4` }))));
@@ -63,6 +71,34 @@ async function expectReloadParity(send, status = 200) {
   expect(applyMusicVideoEdit(before, reply.body.edit)).toEqual(after);
   return { before, after, reply: reply.body };
 }
+
+it('persists the preferred workflow and prices and queues only an approved shot through upgrade', async () => {
+  const videoSettings = { backend: 'grok', upscaleMethod: 'fal-seedvr2', upscaleTargetResolution: '1440p' };
+  const saved = await request(app).patch(base()).send({ videoSettings });
+  expect(saved.status).toBe(200);
+  expect((await read()).videoSettings).toMatchObject(videoSettings);
+  const approval = await request(app).post(`${base()}/scenes/approve-final`).send({ sceneIds: ['a'], approved: true });
+  expect(approval.status).toBe(200);
+  planUpscale.mockResolvedValue({ runtime: { installed: true }, estimatedCostUsd: 0.492 });
+  queueSeedvr2.mockResolvedValue({ jobId: 'upscale-a', status: 'queued' });
+  const invalid = await request(app).post(`${base()}/upgrade`).send({ method: 'upscale', upscaleTargetResolution: '320p' });
+  expect(invalid.status).toBe(400);
+  const dryRun = await request(app).post(`${base()}/upgrade`).send({ method: 'upscale', dryRun: true });
+  expect(dryRun.status).toBe(200);
+  expect(dryRun.body).toMatchObject({
+    upscaleMethod: 'fal-seedvr2', upscaleTargetResolution: '1440p', totalCostUsd: 0.492,
+    shots: [{ sceneId: 'a', status: 'ready', costUsd: 0.492 }],
+  });
+  expect(planUpscale).toHaveBeenCalledWith('clip-a', { method: 'fal-seedvr2', targetResolution: '1440p' });
+  expect(queueSeedvr2).not.toHaveBeenCalled();
+
+  const run = await request(app).post(`${base()}/upgrade`).send({ method: 'upscale', upscaleTargetResolution: '1080p' });
+  expect(run.status).toBe(200);
+  expect(run.body.results).toEqual([{ sceneId: 'a', method: 'upscale', ok: true, jobId: 'upscale-a', status: 'queued' }]);
+  expect(queueSeedvr2).toHaveBeenCalledWith('clip-a', {
+    targetResolution: '1080p', musicVideo: { projectId: project.id, sceneId: 'a', tier: 'final', selectOnComplete: true },
+  });
+});
 
 describe('board edit replies carry what a reload would show', () => {
   it('a prompt edit sends only that shot, with its frame take now stale', async () => {
@@ -255,5 +291,49 @@ describe('take decision replies carry what a reload would show', () => {
     const afterDone = applyMusicVideoEdit(afterConfirm, done.body.edit);
     expect(afterDone).toEqual(await read());
     expect(takeOf(afterDone, 'a', 'a.png').dependencyState.status).toBe('current');
+  });
+});
+
+describe('board edit undo restores prior shots and keeps reload parity', () => {
+  it('undoes merge-next, merge-previous, split and delete in stack order and refuses when empty', async () => {
+    const initial = await read();
+    expect(initial.boardUndo).toBeUndefined();
+
+    // Empty stack returns 400 NOTHING_TO_UNDO.
+    const empty = await request(app).post(`${base()}/scenes/undo`).send();
+    expect(empty.status).toBe(400);
+    expect(empty.body.code).toBe('NOTHING_TO_UNDO');
+
+    // Accidental merge-next of Shot 1 over Shot 2, then undo restores Shot 2 with its takes and timing.
+    const mergedNext = await expectReloadParity(() => request(app).post(`${base()}/scenes/a/merge-next`).send({}));
+    expect(mergedNext.after.scenes.map((s) => s.sceneId)).toEqual(['a', 'c']);
+    expect(mergedNext.after.boardUndo).toEqual({ count: 1, label: 'merge with next' });
+
+    const undoneMerge = await expectReloadParity(() => request(app).post(`${base()}/scenes/undo`).send());
+    expect(undoneMerge.reply.undone).toBe('merge with next');
+    expect(undoneMerge.after.scenes.map((s) => s.sceneId)).toEqual(['a', 'b', 'c']);
+    expect(undoneMerge.after.scenes[0]).toMatchObject({ sceneId: 'a', startSec: 0, endSec: 5 });
+    expect(undoneMerge.after.scenes[1]).toMatchObject({ sceneId: 'b', startSec: 5, endSec: 10, referenceImageId: 'b.png', videoHistoryId: 'clip-b' });
+    expect(undoneMerge.after.boardUndo).toBeUndefined();
+
+    // Multi-step undo: merge-previous then delete, then undo twice.
+    const mergedPrev = await expectReloadParity(() => request(app).post(`${base()}/scenes/b/merge-previous`).send({}));
+    expect(mergedPrev.after.scenes.map((s) => s.sceneId)).toEqual(['b', 'c']);
+    expect(mergedPrev.after.boardUndo).toEqual({ count: 1, label: 'merge over previous' });
+
+    const deleted = await expectReloadParity(() => request(app).delete(`${base()}/scenes/c`));
+    expect(deleted.after.scenes.map((s) => s.sceneId)).toEqual(['b']);
+    expect(deleted.after.boardUndo).toEqual({ count: 2, label: 'delete shot' });
+
+    const undoDelete = await expectReloadParity(() => request(app).post(`${base()}/scenes/undo`).send());
+    expect(undoDelete.reply.undone).toBe('delete shot');
+    expect(undoDelete.after.scenes.map((s) => s.sceneId)).toEqual(['b', 'c']);
+    expect(undoDelete.after.boardUndo).toEqual({ count: 1, label: 'merge over previous' });
+
+    const undoMergePrev = await expectReloadParity(() => request(app).post(`${base()}/scenes/undo`).send());
+    expect(undoMergePrev.reply.undone).toBe('merge over previous');
+    expect(undoMergePrev.after.scenes.map((s) => s.sceneId)).toEqual(['a', 'b', 'c']);
+    expect(undoMergePrev.after.scenes[0]).toMatchObject({ sceneId: 'a', startSec: 0, endSec: 5, referenceImageId: 'a.png' });
+    expect(undoMergePrev.after.boardUndo).toBeUndefined();
   });
 });

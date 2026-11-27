@@ -10,6 +10,7 @@ export const TIMER_INTENT_RE = /\b(set a timer|start a timer|timer for|remind me
 export const TIMER_TOOLS = [
   {
     name: 'timer_set',
+    hostControl: true,
     description:
       'Set a one-shot timer or reminder. Use when the user says "set a timer for 10 minutes", "remind me in 30 minutes to call mom", "ping me in an hour". When the timer fires, PortOS raises a notification with the label. Specify the duration in minutes (or seconds for short timers).',
     parameters: {

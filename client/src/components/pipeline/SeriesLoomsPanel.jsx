@@ -21,17 +21,13 @@ import ListLoadError from '../ui/ListLoadError';
 import { timeAgo } from '../../utils/formatters';
 import { createLoom, listLooms } from '../../services/apiFableLoom.js';
 import { fieldClass, labelClass } from '../fableloom/fieldStyles';
-
-// Mirrors LOOM_LIMITS.NAME_MAX (server/lib/fableLoomLimits.js) — the
-// derived name is built from the series name, which has its own longer cap, so
-// it has to be clamped before the create PATCH hits the door check.
-const LOOM_NAME_MAX = 200;
+import { LOOM_LIMITS } from '../../../../server/lib/fableLoomLimits.js';
 
 const NEW_LOOM_SUFFIX = ' — branching narrative';
 
 export const deriveLoomName = (seriesName) => {
   const base = String(seriesName || '').trim() || 'Untitled series';
-  return `${base}${NEW_LOOM_SUFFIX}`.slice(0, LOOM_NAME_MAX);
+  return `${base}${NEW_LOOM_SUFFIX}`.slice(0, LOOM_LIMITS.NAME_MAX);
 };
 
 const countLabel = (n, noun) => `${n} ${noun}${n === 1 ? '' : 's'}`;

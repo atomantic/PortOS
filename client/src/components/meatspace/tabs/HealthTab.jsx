@@ -129,10 +129,12 @@ export default function HealthTab() {
   return (
     <div className="space-y-4">
       {/* Range selector */}
-      <div className="flex items-center gap-1">
+      <div className="flex items-center gap-1" role="group" aria-label="Health date range">
         {RANGES.map(r => (
           <button
             key={r.id}
+            type="button"
+            aria-pressed={range === r.id}
             onClick={() => setRange(r.id)}
             className={`px-3 py-1.5 text-sm rounded-lg transition-colors font-medium ${
               range === r.id
@@ -147,7 +149,7 @@ export default function HealthTab() {
 
       <section className="border border-port-border rounded-lg overflow-hidden">
         <div className="px-4 py-3 border-b border-port-border bg-port-bg/40">
-          <h3 className="text-sm font-medium text-white">Workouts</h3>
+          <h2 className="text-sm font-medium text-white">Workouts</h2>
         </div>
         {workoutsFailed ? (
           <div className="p-3">

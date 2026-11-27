@@ -14,13 +14,13 @@
  */
 
 /** Render backends billed per render. Subscription and browser lanes (Grok, Codex, Agy, Gemini) are not. */
-export const METERED_RENDER_LANES = Object.freeze(['fal', 'runway', 'higgsfield', 'google', 'reactor']);
+export const METERED_RENDER_LANES = Object.freeze(['fal', 'runway', 'higgsfield', 'google', 'reactor', 'topaz']);
 
 /** Lanes a manual adjustment can name: the metered lanes and `other`. */
 export const SPEND_ADJUSTMENT_LANES = Object.freeze([...METERED_RENDER_LANES, 'other']);
 
 export const SPEND_LANE_LABELS = Object.freeze({
-  fal: 'fal.ai', runway: 'Runway', higgsfield: 'Higgsfield', google: 'Google', reactor: 'reactor.inc', other: 'Other',
+  fal: 'fal.ai', runway: 'Runway', higgsfield: 'Higgsfield', google: 'Google', reactor: 'reactor.inc', topaz: 'Topaz Labs', other: 'Other',
   earlier: 'Earlier estimates',
 });
 
@@ -45,14 +45,14 @@ export function mediaJobProjectId(job) {
 export function renderSpendEntry({ job, estimatedUsd = null, modelId = null, assetId = null, at }) {
   const projectId = mediaJobProjectId(job);
   const lane = job?.params?.mode;
-  if (!projectId || !METERED_RENDER_LANES.includes(lane) || (job.kind !== 'image' && job.kind !== 'video')) return null;
+  if (!projectId || !METERED_RENDER_LANES.includes(lane) || (job.kind !== 'image' && job.kind !== 'video' && job.kind !== 'video-upscale')) return null;
   const tag = job.params.musicVideo || {};
   return {
     id: `render:${job.id}`,
     entryKind: 'render',
     projectId,
     jobId: job.id,
-    mediaKind: job.kind,
+    mediaKind: job.kind === 'video-upscale' ? 'video' : job.kind,
     assetId: typeof assetId === 'string' && assetId ? assetId : null,
     lane,
     modelId: typeof modelId === 'string' && modelId ? modelId : null,

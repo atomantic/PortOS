@@ -8,12 +8,14 @@
 
 import { dirname, join } from 'path';
 import { fileURLToPath } from 'url';
-import { CATALOG_DIRS } from '../lib-catalog.js';
+import { OPERATOR_SCRIPT_CALLER_FILES } from '../../server/lib/apiRouteCallerAllowlist.js';
+import { CATALOG_DIRS } from './moduleCatalog.js';
 import { SERVER_LINT_RE } from './serverLintSurface.js';
 import { resolveDbTestFiles } from './dbTestFiles.js';
 import { guardTestFiles, isGuardTest } from './guardScanners.js';
 import { BROWSER_SUITES } from './browserSuites.js';
 import { DEPENDENCY_MANIFEST_RE, describeDependencyVerdict, escalated, windowsInstalls } from './ciPlanDependencies.js';
+import { escapeRegExp } from '../../server/lib/textUtils.js';
 
 const TEST_FILE_RE = /\.(?:test|spec)\.[cm]?[jt]sx?$/i;
 // `git grep` pathspecs matching every extension TEST_FILE_RE recognizes. A
@@ -46,9 +48,9 @@ const PYTHON_SCRIPT_RE = /^scripts\/(?:ml\/)?[^/]+\.py$/;
 // either. `collectPlanInputs()` finds the tests naming a changed file's basename,
 // the same mechanism the python case above uses, and generalizes
 // it to every changed source — not only `.py` (issue #6363).
-/** `git grep -E` pattern for a test that names this one source file by basename. */
+/** Matches a test that names this source file by its literal basename. */
 export const sourceReferencePattern = (sourcePath) => (
-  `(^|[^A-Za-z0-9_])${sourcePath.slice(sourcePath.lastIndexOf('/') + 1).replace(/[.]/g, '\\.')}([^A-Za-z0-9_]|$)`
+  `(^|[^A-Za-z0-9_])${escapeRegExp(sourcePath.slice(sourcePath.lastIndexOf('/') + 1))}([^A-Za-z0-9_]|$)`
 );
 
 // A full primary plan selects the Windows native job only when its execution
@@ -74,12 +76,12 @@ const FULL_TRIGGER_RULES = [
   { re: /^server\/vitest\.setup\.js$/, reason: 'server test setup changed', windowsRelevant: true },
   // Client-only: windows-server never loads the client setup file.
   { re: /^client\/src\/test\/setup\.js$/, reason: 'client test setup changed', windowsRelevant: false },
-  // Biome config + the client's GritQL plugins (the former client/eslint.config.js).
+  // Biome configs and their enforced GritQL plugins.
   // The .grit files carry real enforced rules — notably the crypto.randomUUID ban —
   // so a change there is as load-bearing as a change to the config itself. The
-  // repo-root biome.jsonc is the same kind of gate for scripts/, lib/ and
-  // autofixer/. The Windows job runs no lint.
-  { re: /^(?:client\/(?:biome\.jsonc|[^/]+\.grit)|biome\.jsonc)$/, reason: 'lint configuration changed', windowsRelevant: false },
+  // server and repo-root rules also have fixture coverage in the server suite.
+  // The Windows job runs no lint.
+  { re: /^(?:(?:client\/|server\/)?biome\.jsonc|client\/[^/]+\.grit|(?:server\/)?lint-[^/]+\.grit)$/, reason: 'lint configuration changed', windowsRelevant: false },
   // Client-only: the Windows job builds no client bundle.
   { re: /^client\/vite\.config\.js$/, reason: 'client build configuration changed', windowsRelevant: false },
   { re: /^server\/index\.js$/, reason: 'server composition root changed', windowsRelevant: true },
@@ -102,11 +104,10 @@ const FULL_TRIGGER_RULES = [
   // The scripts that decide what CI runs, run it, and gate the release on it.
   // A bug in any of them can make a scoped plan silently test nothing, so they
   // prove themselves against the complete suite rather than their own scope.
-  // Only the ones the windows-server job itself executes (ci-base-sha,
-  // run-ci-tests and the githubOutput helper it imports) escalate Windows; the
-  // planner, lint runner, hidden-content scan and status verifier run on Linux
-  // jobs only, so a Windows run would observe nothing they change.
-  { re: /^scripts\/(?:lib\/githubOutput|ci-base-sha|run-ci-tests)(?:\.test)?\.js$/, reason: 'CI pipeline script changed', windowsRelevant: true },
+  // The Windows runner executes the diff-base and npm launch code and consumes
+  // the planner outputs. Lint, hidden-content scanning and status verification
+  // run on Linux only.
+  { re: /^scripts\/(?:lib\/(?:githubOutput|ciNpmRunner|ciTestDiagnosticsFormat)|ci-base-sha|run-ci-tests)(?:\.test)?\.js$/, reason: 'CI pipeline script changed', windowsRelevant: true },
   // The planner, the modules it is split into and the module graph it walks (#16998).
   { re: /^scripts\/(?:ci-test-plan|lib\/(?:ciPlan[A-Za-z]+|moduleGraph))(?:\.test)?\.js$/, reason: 'CI pipeline script changed', windowsRelevant: true },
   { re: /^scripts\/(?:run-ci-lint|run-actionlint|scan-diff-hidden-content|verify-ci-status)(?:\.test)?\.js$/, reason: 'CI pipeline script changed', windowsRelevant: false },
@@ -136,6 +137,7 @@ export const WINDOWS_RISK_RULES = [
 // one shared process helper must not pull all its application consumers onto
 // Windows. Full, scheduled and release plans retain this same native set.
 export const WINDOWS_CONTRACT_TESTS = [
+  'scripts/ci-test-diagnostics.test.js',
   'scripts/update-headless-recovery.test.js',
   'scripts/update-submodules.test.js',
   // Launch, prompt transport, executable discovery and environment/cwd safety.
@@ -237,7 +239,7 @@ export const getGuardTests = () => (guardTests ??= guardTestFiles(REPO_ROOT));
 /** Client guards are reached by structuralTestsFor on any client/src js(x) change. */
 const isClientGuard = (path) => path.startsWith('client/src/');
 
-export let alwaysRun;
+let alwaysRun;
 const alwaysRunFrom = (guards) => [...new Set([
   ...EXPLICIT_ALWAYS_RUN_TESTS,
   ...guards.filter((path) => !isClientGuard(path)),
@@ -269,6 +271,12 @@ export const TOOLING_TESTS = [
   'scripts/workspaceCaches.test.js',
 ];
 
+// Split planner suites contain synthetic path literals like the integration suite.
+// Their real dependencies select them; unrelated tooling diffs need no explicit selector.
+const PLANNER_MODULE_TEST_RE = /^scripts\/lib\/ciPlan(?:Rules|Inputs|Dependencies|Output)\.test\.js$/;
+
+export const isGateToolingTest = (path) => TOOLING_TESTS.includes(path) || PLANNER_MODULE_TEST_RE.test(path);
+
 // Paths whose edit can break a tooling test with no import edge reaching it: the
 // scripts and workflows themselves, every dependency manifest, the Vitest configs,
 // and the Vitest environment modules the real configs load in the fixtures' child runs.
@@ -289,7 +297,7 @@ export const DB_RISK_RULES = [
   /^server\/scripts\/.*db/i,
   /^server\/services\/(?:.*\/)?[^/]*DB(?:\/|\.|$)/i,
   /^server\/services\/.*\.db\.test\.js$/i,
-  /^server\/routes\/catalog\.js$/i,
+  /^server\/routes\/catalog(?:Ingest|Ingredients|Media|Scenes|Stories|Types)?\.js$/i,
   /^scripts\/(?:init-db\.sql|migrations\/.*(?:db|postgres|catalog|privacy))/i,
 ];
 
@@ -351,13 +359,13 @@ export const FIXTURE_OWNERS = [
     re: /^scripts\/setup-trellis2-mps\.sh$/,
     dir: 'scripts',
     fileRe: /^setup-trellis2-mps\.sh$/,
-    tests: ['scripts/setup-trellis2-mps.test.js', 'server/routes/imageTo3d.test.js'],
+    tests: ['scripts/ml/setup-trellis2-mps.test.js', 'server/routes/imageTo3d.test.js'],
   },
   {
     re: /^scripts\/ml\/requirements\/requirements-trellis2-mps(?:\.lock)?\.txt$/,
     dir: 'scripts/ml/requirements',
     fileRe: /^requirements-trellis2-mps(?:\.lock)?\.txt$/,
-    tests: ['scripts/setup-trellis2-mps.test.js', 'server/routes/imageTo3d.test.js'],
+    tests: ['scripts/ml/setup-trellis2-mps.test.js', 'server/routes/imageTo3d.test.js'],
   },
   // Pip pins consumed only by an explicit Install/Repair (`setup-image-video.sh`,
   // and the FLUX.3 and lyric-alignment locks read by flux3Runtime.js and
@@ -468,7 +476,7 @@ export const MACOS_NATIVE_TESTS = [
 export const MACOS_NATIVE_PATH_RE = /^(?:server\/lib\/(?:windowsAgentProcess[^/]*\.js|darwinAgentSupervisor\.py)|server\/vitest\.(?:config|setup)\.js|scripts\/vitestTempRootSetup\.js|scripts\/trusted-rebuilds\.js|server\/(?:package(?:-lock)?\.json|\.npmrc)|\.github\/workflows\/ci\.yml|\.github\/actions\/setup-server\/action\.yml)$/;
 // The `node-minimum` job installs every workspace and runs the runtime gate on
 // the oldest supported Node; only these files can change its answer.
-export const NODE_MINIMUM_PATH_RE = /^(?:(?:server\/|client\/)?(?:package(?:-lock)?\.json|\.npmrc)|\.nvmrc|scripts\/checkNodeVersion(?:\.test)?\.js|scripts\/lib\/directInvocation\.js|scripts\/node-version-drift\.guard\.test\.js|\.github\/workflows\/ci\.yml)$/;
+export const NODE_MINIMUM_PATH_RE = /^(?:(?:server\/|client\/)?(?:package(?:-lock)?\.json|\.npmrc)|\.nvmrc|scripts\/checkNodeVersion(?:\.test)?\.js|scripts\/lib\/directInvocation\.js|server\/test\/guards\/repo\/node-version-drift\.test\.js|server\/test\/guards\/repo\.guard\.test\.js|\.github\/workflows\/ci\.yml)$/;
 
 /** True when the diff reaches a gated job's inputs; null inputs fail open to running it. */
 export const touchesJobInputs = (changed, inputs, pattern) => inputs === null
@@ -603,7 +611,7 @@ const WORKSPACE_CACHE_SERVER_INPUTS = new Set([
 ]);
 const WORKSPACE_CACHE_CLIENT_INPUTS = new Set([
   'ecosystem.config.cjs', 'client/package.json', 'client/package-lock.json',
-  'client/vite.config.js', 'client/vite.buildEnv.js', 'client/vite.chunkGroups.js',
+  'client/vite.config.js', 'lib/viteBuildEnv.js', 'client/vite.chunkGroups.js',
   'client/vitest.config.js', 'client/src/test/timeouts.js',
   'scripts/dev-start.js', 'scripts/publish-client-build.js',
   'scripts/lib/envFile.cjs', 'scripts/lib/databaseSettings.cjs',
@@ -646,8 +654,11 @@ export const structuralTestsFor = (changedFiles, trackedSet) => {
   // what a scoped plan let merge before this rule existed (#5898). The
   // route-graph guard (a route file nothing mounts) is a structural guard
   // check (server/test/guards/modules/apiRouteGraph.test.js) and rides every plan.
-  if (changedFiles.some((path) => /^server\/.*\.js$/.test(path) || /^server\/lib\/.*\.generated\.json$/.test(path) || /^client\/src\/services\/api.*\.js$/.test(path))) {
+  const changedApiSources = changedFiles.some((path) => /^server\/.*\.js$/.test(path) || /^server\/lib\/.*\.generated\.json$/.test(path) || /^client\/src\/services\/api.*\.js$/.test(path));
+  if (changedApiSources || changedFiles.some((path) => OPERATOR_SCRIPT_CALLER_FILES.includes(path))) {
     add('server/lib/apiRouteParity.test.js');
+  }
+  if (changedApiSources) {
     add('scripts/generate-prompt-stage-call-sites.test.js');
   }
   // The fresh-install schema check reads init-db.sql and its base file rather

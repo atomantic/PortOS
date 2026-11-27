@@ -1,497 +1,143 @@
 # Code Animation packages
 
-Completed animations offer **Download package** beside Download HTML. The JSON
-contains the exact saved HTML, its brief and frame settings, and integrity hashes.
-It is a portable handoff to an external authoring harness. The existing preview
-and MP4 export continue to use the saved job.
+**Download package** exports a finished Code Animation's saved HTML, brief,
+frame settings and integrity hashes for portable authoring. Preview and MP4
+export still use the saved job. `GET /api/code-animation/:id/package` returns 404
+for a missing job, 409 for an unfinished one and 422 above the per-file limit.
+Download HTML remains available. Review bundled source and artist-authored
+brief text before sharing. Install-local provider IDs, attachments, upload URLs
+and prompt text are excluded. Selected external audio is declared without its
+bytes. Unrecorded seed and execution settings remain null.
 
-`GET /api/code-animation/:id/package` downloads a version-1 package. The job must
-be completed; missing jobs return 404 and unfinished jobs return 409. A source
-above the 2 MiB per-file package limit returns 422; Download HTML remains available. Local
-provider ids, universe/mood-board pointers, upload URLs, reference attachments,
-and prompt text are excluded. Source and artist-authored brief text are included;
-review those before sharing a package. Selected external audio is declared but
-its bytes are not included. Procedural Web Audio is declared as live sound with
-no offline soundtrack. Unrecorded seed and execution settings remain `null`.
+## Package envelope
 
-`POST /api/code-animation/packages/validate` accepts the package directly as its
-JSON body. It returns `{ schemaVersion, revisionHash, renderer, fileCount,
-totalBytes, executed: false }` or a 400 validation error. This is an integrity
-check: it does not stage or execute code, install dependencies, call a provider,
-create a project, or modify a saved animation. A valid Blender package does not
-establish Blender readiness, code safety, a rendered result, or passing review.
-Durable production import, execution, and rendering are separate implementation
-slices of #9383.
+The [shared schema and builder](../server/lib/codeAnimationPackage.js) define
+`{ schemaVersion, manifest, files, revisionHash }`. Versions 1 and 2 are
+readable. Version 2 adds versioned procedural and generated audio declarations.
+The manifest describes the renderer, format, brief, timing, entrypoints, assets,
+audio and requested/effective execution metadata. Renderer metadata cannot
+select a host executable, and imported execution metadata is a claim.
+Validation rejects unknown fields and unsupported versions.
 
-## Version-1 envelope
+Each file contains a portable relative `path`, UTF-8 or canonical base64
+`content` and SHA-256 of the decoded bytes. Limits are 64 files, 2 MiB per file,
+8 MiB total and a 180-second timeline. Paths are slash-separated with exact
+references to bundled files. Traversal, device names, case collisions and
+duplicate or overlapping file paths are rejected. The revision hash binds
+canonical manifest JSON, version and path-sorted file digests. Changing file
+order, object-key order or byte encoding preserves identity. Changing source,
+metadata or ordered timing arrays changes it.
 
-All fields below are required. Unknown fields and unsupported versions are
-rejected. There are no silent defaults during validation.
-
-| Field | Contract |
-|---|---|
-| `schemaVersion` | Integer `1` |
-| `manifest.title` | At most 200 characters |
-| `manifest.brief` | `concept` (6,000 characters), `cast` (4,000), `onScreenText` (4,000) |
-| `manifest.styleGuide` | At most 16,000 characters; empty is permitted |
-| `manifest.renderer` | `kind`: `browser` or `blender`; nonempty `version` (128 characters); `engine`: string (128 characters) or `null`. Describes the renderer; never selects a host executable. Legacy exports use `code-animation-html-v1`, a runtime contract version. |
-| `manifest.format` | Even `width`/`height` from 2 to 8,192; integer `fps` from 1 to 60; positive `durationSeconds` up to 180 |
-| `manifest.seed` | Unsigned 32-bit integer or `null` |
-| `manifest.entrypoints` | One to three `{ role, path }` entries; roles `scene`, `preview`, `render` are unique. Every path names a bundled file. Source language is renderer-specific. |
-| `manifest.assets` | Up to 64 bundled file paths |
-| `manifest.shots` | Up to 128 `{ label, startSeconds, endSeconds }` entries; positive intervals within the film |
-| `manifest.events` | Up to 512 `{ label, atSeconds }` entries within the film. Shot/event labels have a 200-character limit. |
-| `manifest.audio` | `{ kind: 'silence' }`, `{ kind: 'procedural', notes }`, `{ kind: 'external', notes }`, or `{ kind: 'file', path }`. Notes have a 1,500-character limit; file audio must be bundled. |
-| `manifest.execution` | `requested` and `effective`, each `null` or `{ harness, connection, mode, model, effort }`. Strings are bounded (128 characters, model 256); unknown values remain `null`; mode is `api`, `cli`, or `tui`; effort uses the shared provider ladder. Imported metadata is a claim, never verified execution evidence. |
-| `files` | One to 64 `{ path, encoding, content, sha256 }` entries. Encoding is `utf8` or canonical padded `base64`; SHA-256 is lowercase hex of decoded bytes. |
-| `revisionHash` | Lowercase SHA-256 binding manifest, version, paths and file digests |
-
-Paths are at most 240 characters, relative, slash-separated, and contain only
-ASCII letters, digits, `.`, `_`, and `-`. Each segment starts with a letter or
-digit and cannot end in a dot. Empty segments, dot segments, hidden paths,
-absolute paths, backslashes, drive/URL prefixes, escaped separators and Windows
-device names are refused. Duplicate paths, case collisions, and file/parent
-collisions are refused on every platform. References must match the exact path.
-
-Each decoded file is limited to 2 MiB and all decoded files together to 8 MiB.
-Malformed or noncanonical base64 and invalid UTF-8 text are refused. File bytes
-are checked against their digest before the validation can succeed.
-
-The revision hash is SHA-256 over UTF-8 canonical JSON for:
-
-```js
-{
-  schemaVersion,
-  manifest,
-  files: files.map(({ path, sha256 }) => ({ path, sha256 }))
-    .sort((a, b) => a.path < b.path ? -1 : a.path > b.path ? 1 : 0)
-}
-```
-
-Canonical JSON sorts object keys recursively, uses compact JSON serialization,
-and preserves array order. The same bytes encoded as UTF-8 or base64 and the
-same metadata in another key order retain the revision hash. File order does
-not matter; timing/entrypoint/asset order does. Changing source bytes or manifest
-settings changes the revision hash. The leaf contract in
-`server/lib/codeAnimationPackage.js` provides the shared schema and builder.
-No package is persisted by these endpoints, so this slice needs no new store,
-seed, migration, or federation channel.
+The [API router](../server/routes/codeAnimation.js) defines export, import,
+revision, stage-run and acceptance endpoints. Import validates integrity before
+staging source, and import alone provides no evidence of readiness, safe
+execution or successful review.
 
 ## Saved authoring settings
 
-Production projects use the existing scoped provider/model/effort picker. These
-settings remain machine-local and independent of the renderer and production
-budgets. Save edits before using **Check saved authoring settings**.
-
-`GET /api/code-animation/projects/:id/preflight` reads the saved selection and
-reports missing/disabled routes, model pins, unsupported effort, and stale
-connection/mode constraints. `resolved` is a configuration preview; `effective`
-is null and `executed` is false. It neither contacts a model nor probes or grants
-tools. Catalog compatibility does not verify runtime installation, credentials,
-model access at the vendor, or render readiness. Production authoring dispatch,
-render/inspection/research adapters, fallback decisions and actual-run provenance
-remain pending under #9387 and the execution slices of #9383. Package export and
-import remain available for external authoring.
+Save the scoped provider, model and effort selection, then use **Check saved
+authoring settings**. `GET /api/code-animation/projects/:id/preflight` reports
+configuration compatibility and stale pins without contacting a model. A
+resolved configuration is a preview, with `effective: null` and
+`executed: false`. The [preflight service](../server/services/codeAnimation/preflight.js)
+defines readiness evidence. Authoring settings are machine-local and separate
+from the renderer and production budgets.
 
 ## Contained production execution
 
-A job directory is not a boundary. Production package code defaults to the contained worker in
-`server/services/codeAnimation/containedWorker.js`, under an enforced OS
-mechanism. Where no mechanism is available the worker refuses with 503
-`CODE_ANIMATION_CONTAINMENT_UNAVAILABLE`; there is no automatic fallback.
-An operator may instead select **Trusted local**, save the setting, and pass a
-new execution check. Saving the mode is the operator's grant; there is no
-separate acknowledgement step. This opt-in mode is available on macOS and
-Linux. It runs trusted scene code with the account's
-host filesystem, network and process access: environment scrubbing and process
-supervision are **not containment**. Source can escape the supervised group or
-write outside its workspace. Only run source you trust in that mode. Packages,
-imports, project manifests and stage-run request bodies cannot grant this authority.
-Authoring stays outside the worker: provider transport, credentials and any
-research access belong to the authoring route, never to execution.
+Production package code defaults to an OS-contained worker and fails closed
+where containment is unavailable. macOS uses Seatbelt, with Cycles CPU on
+supported Apple silicon. Linux uses bubblewrap and seccomp where supported
+by the host. Windows has no implemented containment mechanism. Read the
+[containment overview](CONTAINMENT.md),
+[platform policy](../server/lib/codeAnimationContainment.js) and
+[worker](../server/services/codeAnimation/containedWorker.js).
 
-| Platform | Mechanism | Status |
-|---|---|---|
-| macOS | Seatbelt kernel sandbox (`/usr/bin/sandbox-exec`, deny-by-default profile) | Supported on Apple silicon for Cycles on the CPU (official Blender 5.2.3 arm64). No GPU: EEVEE needs Trusted local. Intel Macs have a different GPU client and are untested |
-| Linux x64 / arm64 | bubblewrap namespaces and seccomp | Requires executable `/usr/bin/bwrap`, permitted unprivileged user namespaces and seccomp; proven on demand. Not a project target: never run with real Blender |
-| Windows | None implemented | Refused |
+The worker stages read-only inputs and writable output, temporary and home
+directories in a fresh managed workspace. The sandbox denies network access,
+extra processes and writes outside the approved roots. Tool configuration and
+execution checks are host-control operations. The
+[execution router](../server/routes/codeAnimationExecution.js) exposes readiness,
+operator-owned tool settings and explicit probes. Check the current readiness
+for the selected lane before running it.
 
-Each run gets a fresh UUID workspace under `data/code-animation-workspaces/`
-(excluded from backups, removed when the run ends, swept on the next run after
-a crash) with `input/` (staged files, read-only), `output/`, `tmp/` and a
-private `home/`. The Seatbelt profile allows:
-
-- exec of exactly the operator-configured executable; **fork is denied**, so a
-  worker is one process and cannot start a shell, package manager or helper;
-- reads of system libraries, Homebrew package code (`Cellar/`, `opt/`, not
-  `var/` or `etc/`), the tool's install roots and the staged input;
-- writes to `output/`, `tmp/` and `home/` only;
-- metadata (not listing or content) of those roots' ancestor directories.
-
-Everything else is denied, including all network (loopback and Unix sockets
-too, so PortOS's API and local services are unreachable), Mach/XPC services
-(keychain, pasteboard, launchd) and IPC. The environment is built from scratch
-(worker paths and a synthetic worker identity only), so no `PORTOS_API_TOKEN`, provider key, cloud credential or proxy
-setting is inherited. The process runs in its own process group: cancellation
-and every limit `SIGKILL` the group, and the result reports whether the group
-was verified empty. Limits: wall time, total bytes and file count of the
-writable directories (watchdog), single-file size (`RLIMIT_FSIZE`), resident
-memory (watchdog), open descriptors, no core dumps. Output that is not a
-regular, singly-linked file (a symlink or hard link the worker made) fails the
-run and is never handed to the caller.
-
-On Linux, bubblewrap starts from an empty filesystem, mounts only system/tool
-code and staged input read-only, and maps the three writable directories under
-`/workspace`. The synthetic root is read-only too, so it cannot become
-unmetered scratch space. PID, network, IPC, UTS and user namespaces isolate the
-worker; all capabilities are dropped. A seccomp filter denies process creation,
-network sockets and namespace changes while permitting native threads. The
-filter rejects unknown ABIs and makes `clone3` fall back to the older, flag-
-checked `clone` syscall. Cancellation kills the wrapper's process group;
-bubblewrap's parent-death handling tears down its PID namespace. Memory
-accounting includes the wrapper's descendants, not just the wrapper itself.
-
-A capability probe runs trusted system code to verify namespaces before any
-package is staged. Missing bubblewrap, unsupported architecture, restricted
-user namespaces (including Ubuntu AppArmor restrictions), or failure of the
-adversarial check keeps execution refused. PortOS never installs bubblewrap,
-changes host policy or falls back to an uncontained worker automatically.
-The dedicated Linux CI job requires a functioning real mechanism: unavailable
-bubblewrap fails that job instead of silently skipping its boundary tests.
-
-Installed tools are operator-owned machine-local settings
-(`codeAnimationExecution` in `data/settings.json`). Packages cannot name an
-executable, install command or mount. A tool must be an existing absolute
-executable outside PortOS data; workers can read its app bundle (macOS
-`.app`), its prefix's `bin/`, `lib/`, `libexec/`, `share/` and `Frameworks/`
-when it lives in a `bin/` directory, or otherwise its own directory — and none
-of those may contain PortOS data or the home directory.
-
-- `GET /api/code-animation/execution` reports the platform mechanism, the
-  configured tools, selected execution mode, last check and each lane's readiness.
-  Readiness fails closed: the Blender lane is ready only after the selected
-  mode's check has passed in this server process for the configured executable
-  and engine, and its fixed test scene has rendered successfully. Every save
-  revokes the check. Stage evidence binds its executable fingerprint, version,
-  engine, mode and check timestamp; changing readiness prevents reuse.
-- **A restart does not need a manual re-check.** An explicit check that passes
-  with a passing Blender test render records the checked configuration
-  (`codeAnimationExecutionArmed` in `data/settings.json`: the executable's
-  realpath and file fingerprint, the mode and the engine). A new server process
-  re-runs the same check itself while the inspected configuration still equals
-  that record: once at boot, or on the first readiness read or render, which
-  waits for the result. It is tried at most once per process; a failed run
-  leaves the lane refused until an explicit check. Saving the tools clears the
-  record and a replaced executable no longer matches it, so a changed
-  configuration always needs an explicit check. The record is machine-local
-  and, like the tools slice, a direct `PUT /api/settings` of it needs host
-  control.
-- `PUT /api/code-animation/execution/tools` sets `{ blender: { executable,
-  executionMode, engine } }`. Defaults preserve `contained` / `CYCLES`. The
-  `acknowledgeHostAccess` field older clients send is accepted and ignored.
-  `null` clears the executable. This remains an operator-only host-control route.
-- `POST /api/code-animation/execution/probe` runs the containment check on
-  demand (host control; no provider call). PortOS's own Node
-  interpreter runs synthetic hostile scripts through the same staging, profile,
-  environment and limits, and each check must observe the sandbox refusing:
-  reading a file outside the workspace, listing PortOS data or the home
-  directory, writing outside the workspace or into staged input, starting a
-  process, writing a file over the size limit, inheriting environment
-  variables, connecting to a loopback listener (which must see no connection)
-  or to the network. Positive control: the worker must still write its report.
-  Separate runs must be terminated by the wall-time, disk, memory and
-  cancellation limits with an empty process group. A configured Blender is then
-  asked to build and render a fixed 64 × 64 cube scene in the saved mode using
-  `--background --factory-startup --disable-autoexec --python-exit-code 1`.
-  Blender 4.2 or newer is accepted (`server/lib/blenderVersion.js`; 5.2.3 is the
-  newest checked release), with the selected Cycles / CPU or EEVEE / GPU engine, eight
-  samples and seed zero. Older versions fail this probe. Projects match the checked
-  executable by `major.minor` series, so a patch update keeps saved projects renderable
-  while each run still records the exact version. The check decodes the PNG, requires the exact
-  dimensions and nonblank pixels, validates the runtime/engine/device report,
-  and records its image SHA-256 and elapsed time. A version banner, successful
-  exit or `bpy` import alone cannot pass. No generated project code runs here;
-  no dependency installation is attempted.
-
-In trusted-local mode the check runs wall-time, workspace-disk, memory and
-cancellation controls plus the fixed Blender scene; it does **not** report the
-host-access adversarial checks as passing. Contained mode still requires all
-adversarial checks. Cycles CPU can be substantially slower than GPU rendering.
-EEVEE availability must be established by its own actual render; no engine or
-execution mode is substituted silently. Seatbelt is deprecated by Apple and a
-host or Blender build may not work inside its profile; that lane stays refused,
-and the check names the crash signal, exit code or limit that stopped the render.
-
-**Supported Blender paths.** On macOS (Apple silicon), **Contained** mode runs Cycles on the CPU and **Trusted local** mode adds the GPU (EEVEE and GPU Cycles). Trusted local runs scene code with the operator's full host access, so run only source you trust. Windows has no containment mechanism and no Blender lane; Linux is untested.
-
-**Why contained Blender needs one IOKit grant (#14939).** Blender's startup reads the Metal device's name and segfaults when no device is listed, before any script runs. The profile allows opening `AGXDeviceUserClient`, the Apple GPU's user client, and nothing else in IOKit; `AGXSharedUserClient` or `iokit-get-properties` alone still crash. Fork, Mach services, network and every other denial stay in place. The cost is that contained code can reach the GPU driver's kernel interface, a real but narrower exposure than the alternatives. Metal rendering stays unavailable: adding the compiler service or unrestricted `mach-lookup` still crashed during the render, and broad Mach access would undercut the profile's guarantees, so contained mode stays CPU-only.
-Memory and disk limits are watchdog-enforced, so brief overshoots are possible.
+**Trusted local** is an explicit operator-selected mode on macOS and Linux. It
+runs reviewed source with the operator's filesystem, network and process
+authority. A scrubbed environment and process supervision provide no OS
+containment. Imports, manifests and stage requests cannot grant Trusted local
+authority. Blender GPU execution on macOS uses Trusted local. Provider
+credentials and research access stay with authoring, outside the render worker.
 
 ## Blender production adapter
 
-**Create painterly Blender starter** creates a data-only package containing the
-original `build_scene(config)` Python source for *Lantern in a Painted Garden*:
-a deterministic brush-stroke pigment atlas, faceted paper forms, a subject animated on
-twos with anticipation/squash and sparks that lag on threes, a warm lantern light
-against a cool moon-side fill, dark foreground leaves, and a continuously keyed
-perspective camera with shallow focus on the lantern. No external assets,
-downloads, add-ons, provider calls or rendering occur on import. The default
-format is 10 seconds at 1920 × 1080 / 24 fps, Cycles CPU, on the checked Blender version (5.2.3 when none has been checked). The
-project's authoring provider remains independent from its renderer.
+**Create painterly Blender starter** stages a data-only short project without
+installing dependencies, calling a model or running Blender. An explicit stage
+run renders style frames and a low-sample pilot, measures evidence, can request
+repair on the saved authoring route, and produces sound and a final render.
+The PortOS driver controls format and render settings. It evaluates transforms
+across the film to check held subjects and camera cadence. Review the actual
+preview and measured evidence before accepting the output.
 
-After an explicit production start, the existing stage controller runs native
-style frames, a complete low-sample pilot, evidence inspection, optional repair
-through the saved authoring route, soundtrack, and final render. Preview uses
-four samples; final uses sixteen. Both use a fixed seed and two CPU threads.
-PortOS owns the Blender driver and loads the package's scene entrypoint; it
-forces the requested format, renderer and quality settings. The driver rejects
-live physics/particle simulations, requires constant subject/FX keys on the
-declared cadence, measures evaluated transforms across every frame, and checks
-that camera transforms vary continuously. Cycles excludes held subjects and
-their children from motion blur; EEVEE disables blur to preserve the holds.
-These are transform/cadence checks, not a claim that arbitrary mesh deformation
-or semantic visual quality was independently reviewed.
+The [stage runner](../server/services/codeAnimation/stages.js),
+[Blender adapter](../server/services/codeAnimation/blenderRender.js),
+[driver](../server/services/codeAnimation/blenderDriver.js) and
+[acceptance service](../server/services/codeAnimation/acceptance.js)
+define stage order, limits, evidence and promotion to accepted output.
 
-The baked `.blend` packs original textures (the driver packs each image once; repacking an
-already packed image re-encodes it and corrupts its colour channels). Scene, report, every decoded PNG,
-pilot MP4 and final sequence are immutable run artifacts, separate from accepted
-source revisions. Missing frames, malformed output, unsupported runtime/engine,
-revoked readiness, worker failure and cancellation cannot pass. PNG geometry
-and complete decoding are checked before shared ffmpeg encoding; the result is
-probed for geometry and frame count. Final output uses the existing media
-history and soundtrack mux flow. Run records display engine/device/mode and
-link the pilot, final movie and baked scene. Project time/render/disk budgets
-apply throughout; cancellation keeps earlier accepted artifacts. Failed native
-workers never fall back to browser rendering or a different engine.
+Use the [native Blender acceptance harness](../scripts/code-animation-blender-acceptance.js)
+to check a real executable against the production adapter. Run
+`node scripts/code-animation-blender-acceptance.js` with `--executable`,
+`--blender-version` and `--out` (a new directory). It writes an
+`evidence.json` verdict and leaves tool settings intact.
 
-Runtime/format/cadence fixtures test these contracts but do not constitute real
-Blender acceptance. That is established by
-`scripts/code-animation-blender-acceptance.js`, which drives the production
-`renderBlenderSequence` against an operator-supplied Blender executable (pass its version with `--blender-version`, default 5.2.3) and
-writes an `evidence.json` verdict. It refuses to reuse an output directory, never
-writes machine settings, fingerprints the executable rather than recording its
-path, and `--mode trusted-local` prints the no-containment warning.
+## Offline production sound
 
-```bash
-node scripts/code-animation-blender-acceptance.js --executable <Blender 4.2+> --blender-version 5.2.3 --out <new dir> \
-  --mode trusted-local --phase pilot|final            # full 10 s sequence
-node scripts/code-animation-blender-acceptance.js ... --repeat --times 1,5,9   # repeat sampled frames
-node scripts/code-animation-blender-acceptance.js ... --cancel-after 40        # real cancellation
-node scripts/code-animation-blender-acceptance.js ... --engine BLENDER_EEVEE_NEXT --backend METAL
-```
+Explicit production stage runs support intentional silence, portable file audio
+and deterministic procedural cues. Legacy live procedural sound and unstaged
+external declarations fail the offline sound stage. Package v2 procedural
+events use the audio contract's `version: 1` with labeled, timed
+`impact` or `reveal` events. They snap to the frame grid and then the
+48 kHz sample grid. Preview and final mux use the same persisted WAV.
 
-**Blender 5 compatibility.** PortOS keeps `BLENDER_EEVEE_NEXT` as its EEVEE engine id;
-the driver and probe map it to Blender 5's renamed `BLENDER_EEVEE`. Blender 5 also removed
-`Action.fcurves`, so the driver gives scene code an `action_fcurves(obj)` helper that reads
-an object's keyframe curves on either API; the starter uses it. Blender 5 also compresses a saved `.blend` with zstd by default, so the render boundary accepts that header as well as the plain `BLENDER` magic. The starter and the rigging
-workers were run against `bpy` 5.2.3 (Cycles CPU) on 2026-11-03; EEVEE on 5.x and the full
-acceptance sequence still need a run on a GPU host.
-
-**Acceptance run, 2026-10-02.** Official Blender 4.2.0 macOS arm64 build (the
-download's SHA-256 matched the published checksum), Apple Silicon host, explicit
-trusted-local mode, bundled starter source SHA-256
-`3e108ac6e3610219dfe8249a8292a499cae1e55db730826296713845c98d3b16`, seed 17, two
-CPU threads, 1920 × 1080 / 24 fps / 10 s. Every run produced all 240 PNGs, a
-packed `.blend`, a complete decode of every frame, and an H.264 MP4 probed at
-exactly 240 frames and 1920 × 1080 / 24 fps.
-
-| Engine / device | Profile | Samples | Wall time | Retained | MP4 SHA-256 |
-|---|---|---|---|---|---|
-| Cycles / CPU | pilot | 4 | 27.1 min | 1.08 GB | `1952dd80…133f3e` |
-| Cycles / CPU | final | 16 | 103 min | 0.88 GB | `963a0e30…f27394` |
-| EEVEE Next / GPU (Metal) | pilot | 4 | 55 s | 0.63 GB | `a3409aef…18ea` |
-| EEVEE Next / GPU (Metal) | final | 16 | 76 s | 0.59 GB | `f93885a3…133c` |
-
-Cycles CPU costs roughly 30× (pilot) to 80× (final) the wall time of EEVEE on this host, so the
-preview/final choice is a real cost decision. The cadence check passed in every
-run: the lantern holds on twos, nine sparks hold on threes, motion blur is off for
-held subjects, and the camera moves on every frame. Reported engine, device and
-backend came from Blender itself, and no engine was substituted.
-
-- **Repeatability.** Two independent renders of seconds 1, 5 and 9 gave
-  byte-identical decoded pixels for Cycles CPU (SHA-256 `59195b0d…ce3b`,
-  `e66853ca…58bd`, `77992468…ec36`) and for EEVEE Next/Metal, on the same
-  executable and host. This does not claim cross-machine or cross-version identity.
-- **Cancellation.** Aborting a Cycles pilot after 40 s terminated the worker
-  (`reason: canceled`, SIGKILL) with an empty process group and no accepted
-  artifacts.
-- **Memory.** A full EEVEE Next pilot peaked near 9.7 GiB resident and was killed
-  by the 8 GiB worker watchdog before the limit was raised for that engine only
-  (16 GiB; Cycles CPU stays on the default). The watchdog still applies.
-- **Missing or unsupported runtime.** The script refuses a missing executable
-  before starting a worker, and the readiness gate refuses an unchecked or
-  mismatched runtime. Contained EEVEE on macOS fails closed: Metal cannot render
-  inside the Seatbelt profile, so nothing is accepted and no mode is substituted.
-- **Malformed output.** Truncated, missing and mismatched output is exercised by
-  the fixtures in `blenderRender.test.js`; the real runtime was not made to emit
-  malformed output.
-
-**Contained run, 2026-11-05 (#14939).** Official Blender 5.2.3 macOS arm64, Apple silicon, contained mode.
-The execution check passed all 15 boundary and limit checks and its fixed Cycles CPU scene; contained
-EEVEE failed the check with `SIGABRT`. A 320 × 180, 2 s pilot of the starter (48 frames, encoded MP4) and a
-Photoreal greybox camera both rendered on the CPU. From inside Blender's Python under the same profile, file
-reads and writes outside the workspace, spawn, fork, loopback, network, a Mach service lookup, and opening
-other IOKit clients were all refused. A full 1080p contained sequence was not run.
-
-Not demonstrated, and not planned: contained GPU rendering, contained-mode Blender on
-Linux (bubblewrap is not a project target) and a GPU backend other than Metal. Cross-machine repeatability is also unverified. The Cycles pilot was produced by the first revision of
-the acceptance script; the remaining runs used the current one, which calls the same
-`renderBlenderSequence`.
-
-The browser lane does not use this worker. It reuses the HTML-composition
-renderer sandbox (`server/services/htmlComposition/browser.js`): an in-memory
-asset snapshot (symlinks refused), every request intercepted with only the
-snapshot origin fulfilled, network/WebSocket/WebRTC/workers/frames refused, and
-a disposable credential-free browser context closed on cancel or failure. Its
-limits: it runs inside the shared managed Chromium (Chromium's renderer sandbox
-contains page code, not a PortOS-owned process group), with per-command
-timeouts and render cancellation but no per-render memory cap. Its boundary
-tests are `server/services/htmlComposition/index.test.js`.
-
-
-## Offline Production sound
-
-Production stage runs produce sound only after an explicit **Run production stages** / **Start run** action. Packages with intentional `silence` remain silent.
-Legacy `procedural` notes and unstaged `external` declarations fail visibly;
-they do not earn a successful soundtrack verdict. Fast HTML export keeps its
-existing procedural/upload limitation notes.
-
-Package v1 remains readable. Package v2 introduces audio contract version 1:
-
-```json
-{"kind":"procedural","version":1,"events":[
-  {"label":"Impact","atSeconds":0.5,"effect":"impact","durationSeconds":0.2,"gain":0.8},
-  {"label":"Reveal","atSeconds":1.25,"effect":"reveal","durationSeconds":0.4,"gain":0.6}
-]}
-```
-
-Times are seconds, rounded to the nearest film frame and then the 48,000 Hz
-sample grid. Impact/reveal effects produce deterministic 16-bit mono WAV bytes.
-The timeline is bounded to 128 events, four seconds per event and 180 seconds
-of total synthesis work. Event durations must fit the film. Preview plays the
-persisted WAV used by final muxing; a live Web Audio clock is never captured.
-
-Portable `file` audio is normalized to this same grid (trimmed or padded, without
-looping), preserving stereo channels. `POST /api/code-animation/projects/:id/sound-assets` accepts an explicit
-`revisionId`, `source` (`upload` or `library`) and existing audio `filename`
-basename. It copies validated asset bytes into a new immutable package candidate;
-there are no host-path inputs. The portable package limits still apply (2 MiB
-per file, 8 MiB total). Importing or staging never calls a provider.
-
-Sound artifacts and measured evidence live in the existing project run records
-and managed run directories. Package, source, timeline and audio hashes bind
-that evidence to its immutable revision. Failed/canceled candidates leave
-accepted source and earlier sound artifacts intact. A restart marks stranded
-runs interrupted; resume is an explicit action and sound is rebuilt/remeasured.
-The disk, time and render budgets cover offline audio as well as visual work.
-
-Final MP4 sound must pass real ffprobe stream/duration checks and bounded PCM
-decode measurements, including synthetic event placement. Listening quality
-remains unverified. A `generated` declaration (package v2, `version: 1`, `prompt`)
-is distinct from procedural/file sound: a stage request requires explicit
-`audioConsent`, `audioProviderId`, `audioModel` and a separate positive
-`audioBudgetUsd`. No provider audio adapter is available yet, so even consented
-requests fail before provider dispatch; stage externally produced bytes as a
-portable file instead. There are no startup audio calls or automatic resumes.
+`POST /api/code-animation/projects/:id/sound-assets` stages an upload or
+library filename into a new immutable revision, under the package byte limits.
+Files trim or pad to duration without looping. Evidence binds the audio and
+timeline to the revision, and final audio is checked for stream, duration
+and measured PCM. A failed candidate preserves earlier accepted output.
+Generated audio declarations require explicit consent, a provider/model and
+a separate budget. No generated Production audio adapter is available, so
+stage externally produced bytes as a portable file. See the
+[sound stage](../server/services/codeAnimation/sound.js) and
+[asset staging](../server/services/codeAnimation/soundAssets.js).
 
 ## Film projects
 
-**Code Animation > Production > Create Film project** opens the multi-shot
-Blender lane. A Film has a 1–3,600 second timeline, optionally driven by a
-Music-library track or an uploaded soundtrack. Attaching audio explicitly runs
-local beat, downbeat, section and envelope analysis; it calls no AI provider.
-Without audio the timeline and cuts are silent. Creation starts no analysis or
-render. Package projects remain the portable short lane with their existing
-180-second, 2 MiB per-file and 8 MiB total limits.
+**Production → Create Film project** opens the shared Blender multi-shot lane
+with a 1–3,600 second timeline. A film can be silent or attach a Music-library
+track or upload. Attachment explicitly runs local audio analysis. Creation
+starts no analysis, provider call or render. Package projects keep their shorter
+timeline and separate portable format. The projects list distinguishes
+`kind: 'film'` from `kind: 'package'`.
 
-Films use the [shared Blender film contract](features/music-video-blender.md):
-create the starter workspace, edit `src/film.py`, sync the shot list, render
-stills and previews, inspect the live film or assemble a preview cut, then render
-final shots. **Assemble final cut** requires every final to be current and the
-shots to cover the entire timeline, including the audio's final frame. It copies
-the final MP4 into Media History and records it as the project's accepted output;
-a failed attempt retains the previous accepted output. Title cards, film look,
-timed finishing effects and the ending remain Music Video features.
+Use the [shared Blender workflow](features/music-video.md#blender-films) to
+create a workspace, author `src/film.py`, sync shots, inspect stills and
+previews and render finals. **Assemble final cut** requires current final
+shots covering the timeline, including the audio's final frame. It records an
+accepted output in Media History. A failed attempt preserves the previous
+accepted output. Music Video provides additional title, film look and
+timed finishing controls.
 
-**Send to Music Video** opens a library-track picker and creates a new
-Blender-mode Music Video, with a link to open it. It copies the film's source,
-synced shot inventory, settings and option values, leaving renders, cuts and
-notes behind. The original remains renderable; sending again creates another
-independent copy. The source records the latest copy in `promotedTo`; the target
-records `sourceFilm: {kind:'code-animation',projectId}`.
+**Send to Music Video** uses the host-control
+`POST /api/code-animation/films/:id/promote` with a library track ID or
+uploaded library filename. It copies source, settings, options and synced shot
+inventory into an independent Blender-mode Music Video project. Renders, notes
+and cuts stay with the source. The copy needs song analysis and a new sync
+before rendering. Reported coverage against a stored track duration is
+provisional until then. Repeating promotion makes another independent copy.
 
-Sending starts no jobs. Analyze the song in Music Video, then **Sync shots from
-scripts** to bind its shots to that song. The copied manifest reads **Not synced
-yet**, and renders wait for a sync. The response reports provisional gaps or
-shots past the song end when the library track has a stored duration; otherwise
-analysis is required to check coverage. Adjust `describe(ctx)` for the analyzed
-length before rendering.
-
-The API is `POST /api/code-animation/films/:id/promote` with `{trackId,name?}` or
-`{uploadedAudioFilename,name?}` (exactly one audio source; uploaded filenames
-refer to `data/music/`, as for Music Video). Its `201` answer holds `project`,
-`sourceProject`, `needsAnalysis`, `needsSync`, `coverageDurationSec`,
-`coverageProblems` and `nextSteps`. It requires host-control authority, copies
-no analysis from the standalone film, and never changes its timeline or audio.
-
-The shared Shots, Files, Cut, Jobs and Settings panel lives at
-`/code-animation/production/films/:id/:tab?/:shotId?`. Film settings and notes
-are machine-local Production records. The workspace is
-`data/code-animation/films/<id>/`: `src/`, `manifest.json`, `song.json`, and
-regenerable `renders/`. Blender requires **Trusted local** execution; the same
-host-control gate as Music Video protects source writes and native processes.
-
-API-only workflow (use `node scripts/portos-api.js` for authenticated requests):
-
-1. `POST /api/code-animation/films` with
-   `{"title":"My film","timeline":{"durationSec":240,"fps":24}}`.
-2. Optional: `POST /api/code-animation/films/:id/audio` with
-   `{"source":"track","trackId":"..."}` or
-   `{"source":"upload","filename":"..."}` (from `POST /api/uploads`).
-   `{"source":"none"}` removes audio, retaining the timeline length.
-3. Under `/api/code-animation/films/:id/blender`, `POST /workspace` with
-   `{"template":"starter"}`, then `POST /sync` with `{}`. Read the state until
-   the returned job finishes. The source-file, render, cut, note and media routes
-   mirror Music Video's Blender routes.
-4. `POST /render` with `{"quality":"still"}`, then `{"quality":"preview"}`;
-   `POST /cut` with `{"quality":"preview"}` produces a review file.
-5. `POST /render` with `{"quality":"final"}`, wait for all jobs, then
-   `POST /cut` with `{"quality":"final"}`. The state reports `acceptedOutput`
-   when complete and `finalStale` if later edits/renders supersede it.
-
-`PATCH /api/code-animation/films/:id` changes the title or silent timeline.
-The shared `/blender/settings` route owns render settings and film options.
-Progress arrives on `code-animation:film` after subscribing to `code-animation`.
-
-### Film API contract
-
-`POST /api/code-animation/films` creates a silent Production film from
-`{title,timeline:{durationSec,fps}}`; duration is 1–3,600 seconds.
-`PATCH /films/:id` updates title or a silent timeline, and `POST /films/:id/audio`
-explicitly attaches/analyzes `{source:'track',trackId}` or
-`{source:'upload',filename}`; `{source:'none'}` removes audio. No provider is used.
-Films appear in `GET /api/code-animation/projects` with `kind:'film'`; older
-package records read as `kind:'package'`.
-
-`POST /api/code-animation/films/:id/promote` (host control) accepts exactly one of
-`{trackId,name?}` or `{uploadedAudioFilename,name?}`. Uploaded audio here is a
-Music-library filename, as on Music Video projects. It returns `201` with
-`{project,sourceProject,needsAnalysis:true,needsSync:true,coverageDurationSec,coverageProblems,nextSteps}`.
-The new Blender-mode Music Video owns a copy of `src/`, render settings, film
-option values and the shot manifest, marked **not synced**. Renders, cuts and
-notes stay with the source. No analysis, provider call or job starts. When the
-track has a stored duration, coverage problems compare the copied shots to it;
-this is provisional until song analysis and sync. Otherwise the answer asks for
-analysis before coverage can be checked. Each call makes an independent project;
-`sourceProject.promotedTo` names the latest copy, and `project.sourceFilm` records
-`{kind:'code-animation',projectId}` without entering Music Video's version tree.
-
-`/api/code-animation/films/:id/blender/*` uses the same owner-resolving router as
-Music Video: state, settings, workspace, source files, sync, usage, frame cleanup,
-render, cancel, cut, shot notes/open and media. Native-process/source-write routes
-retain host-control authorization and Blender's Trusted local requirement.
-A final cut requires complete current final shots and becomes the accepted
-Media History output. `animatic` and `filmLook` finishing are Music Video only.
-State adds `timeline`, `audio`, `audioUrl`, `acceptedOutput` and `finalStale`;
-job/state events use `code-animation:film`. See the
-[API-only walkthrough](#film-projects).
+The [film router](../server/routes/codeAnimationFilms.js) defines create,
+timeline, audio, promotion and shared `/blender/*` endpoints. See
+[film ownership](../server/services/codeAnimation/films.js),
+[final cut](../server/services/codeAnimation/filmCut.js) and
+[promotion](../server/services/codeAnimation/promoteFilm.js) for state,
+change invalidation and accepted-output handling.

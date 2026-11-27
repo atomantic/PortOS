@@ -20,7 +20,7 @@
 import { mkdir, readFile, writeFile } from 'fs/promises';
 import { basename, extname, join } from 'path';
 import { resolveImageInputPath } from '../../lib/fileUtils.js';
-import { stripImageMetadata } from '../../lib/imageClean.js';
+import { stripImageMetadataPreservingOrientation } from '../../lib/imageClean.js';
 import { ServerError } from '../../lib/errorHandler.js';
 import { maxInputImages } from './cloudProviderConfig.js';
 
@@ -92,7 +92,7 @@ export function cliPromptImageNames({ paths, initPath }) {
 export async function stageCliPromptImages({ paths, scratchDir, reviewedReferenceBytes = null }) {
   for (const [index, path] of paths.entries()) {
     const bytes = (index === 0 && reviewedReferenceBytes) || await readFile(path);
-    const { data } = stripImageMetadata(bytes);
+    const { data } = await stripImageMetadataPreservingOrientation(bytes);
     await writeFile(join(scratchDir, cliPromptImageName(path, index)), data, { mode: 0o600 });
   }
 }
@@ -115,7 +115,7 @@ export async function stageSanitizedInputImages({ inputImages, scratchDir, revie
       nextPaths.push(srcPath);
       continue;
     }
-    const result = stripImageMetadata(bytes);
+    const result = await stripImageMetadataPreservingOrientation(bytes);
     if (!result.stripped) {
       nextPaths.push(srcPath);
       continue;

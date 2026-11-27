@@ -13,7 +13,7 @@ import { getUnifiedActivityStreak } from '../postActivityStreak.js';
 import { getAllTrainingEntries } from '../postTrainingLogStore.js';
 import { saveStoredTrainingRun } from '../postRunStore.js';
 import { COGNITIVE_DRILL_TYPES, scoreCognitiveDrill } from './meatspacePostCognitive.js';
-import { syncReviewScheduleForSession } from './meatspacePost.js';
+import { syncReviewScheduleForSession } from './postProgress.js';
 
 export { getAllTrainingEntries };
 

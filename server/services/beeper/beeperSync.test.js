@@ -44,6 +44,9 @@ const withTransactionMock = vi.fn(async (fn) => {
       txCalls.push(text.trim().split('\n')[0].trim());
       txWrites.push({ text, params });
       if (txFailPattern && txFailPattern.test(text)) throw new Error('simulated write failure');
+      if (text.includes('FROM beeper_conversations') && text.includes('FOR KEY SHARE')) {
+        return { rows: [{ id: params[0] }] };
+      }
       if (text.includes('FROM beeper_messages') && text.includes('FOR UPDATE')) {
         return {
           rows: storedMessageRows.filter(
@@ -527,12 +530,7 @@ describe('watermark-bounded sweep', () => {
     expect(loadRosterIndexMock).not.toHaveBeenCalled();
   });
 
-  it('deduplicates roster and senders into one batched upsert and passes resolvedPersonIds to logSenderTouchpoints', async () => {
-    const resolvedMap = new Map([['user-1', 'person-1'], ['u-self', null]]);
-    upsertConversationParticipantsMock.mockResolvedValueOnce({
-      participants: [],
-      resolvedPersonIds: resolvedMap,
-    });
+  it('deduplicates roster and senders into one batched upsert and logs inbound senders only', async () => {
     installFetch({
       chatPages: [{ items: [CHAT_PAGE.items[0]], hasMore: false }],
       messagePages: {
@@ -559,10 +557,9 @@ describe('watermark-bounded sweep', () => {
       { personIndex: expect.any(Object) },
     );
     // A message the user SENT is not contact from anyone, so it never becomes a
-    // touchpoint candidate; the resolved sender->personId map rides into options.
-    const [candidates, touchpointOptions] = logSenderTouchpointsMock.mock.calls[0];
+    // touchpoint candidate.
+    const [candidates] = logSenderTouchpointsMock.mock.calls[0];
     expect(candidates.map((c) => c.senderId)).toEqual(['user-1']);
-    expect(touchpointOptions.resolvedPersonIds).toBe(resolvedMap);
   });
 });
 
@@ -592,7 +589,11 @@ describe('cursor transactionality', () => {
     },
   };
 
-  it('commits message rows, attachment rows and the cursor in one transaction, cursor last', async () => {
+  it('commits messages, attachments, sender touchpoints and the cursor in one transaction, cursor last', async () => {
+    logSenderTouchpointsMock.mockImplementationOnce(async () => {
+      txCalls.push('sender touchpoints');
+      return { created: 0, matched: 0 };
+    });
     installFetch({
       chatPages: [ONE_CHAT],
       messagePages: {
@@ -623,7 +624,12 @@ describe('cursor transactionality', () => {
     const cursorIndex = txCalls.findIndex((sql) => sql.includes('INSERT INTO beeper_sync_cursors'));
     expect(messageIndex).toBeGreaterThan(0);
     expect(attachmentIndex).toBeGreaterThan(messageIndex);
-    expect(cursorIndex).toBeGreaterThan(attachmentIndex);
+    const touchpointIndex = txCalls.indexOf('sender touchpoints');
+    expect(touchpointIndex).toBeGreaterThan(attachmentIndex);
+    expect(cursorIndex).toBeGreaterThan(touchpointIndex);
+    expect(logSenderTouchpointsMock).toHaveBeenCalledWith(
+      expect.any(Array), expect.objectContaining({ client: expect.objectContaining({ query: expect.any(Function) }) }),
+    );
   });
 
   it('persists isSender on the message row, and never downgrades a stored TRUE', async () => {

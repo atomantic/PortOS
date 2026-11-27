@@ -3,6 +3,7 @@ import { act, fireEvent, render, screen, waitFor, within } from '@testing-librar
 import { Link, MemoryRouter, Route, Routes, useLocation, useParams } from 'react-router';
 import StoryboardDetail from './StoryboardDetail';
 import StoryboardEditor from '../components/storyboards/StoryboardEditor';
+import toast from '../components/ui/Toast';
 import { updateStoryboardBeat } from '../services/apiStoryboards.js';
 
 const api = vi.hoisted(() => ({
@@ -23,6 +24,7 @@ const api = vi.hoisted(() => ({
   getStoryboardMakeEmpty: vi.fn(),
   getStoryboardPanelMake: vi.fn(),
   startStoryboardMakeEmpty: vi.fn(),
+  cancelMakeEmptyPanels: vi.fn(),
   listStoryboardRecipes: vi.fn(),
   saveStoryboardRecipe: vi.fn(),
   deleteStoryboardRecipe: vi.fn(),
@@ -50,6 +52,7 @@ vi.mock('../services/apiStoryboards.js', () => {
     getStoryboardMakeEmpty: api.getStoryboardMakeEmpty,
     getStoryboardPanelMake: api.getStoryboardPanelMake,
     startStoryboardMakeEmpty: api.startStoryboardMakeEmpty,
+    cancelMakeEmptyPanels: api.cancelMakeEmptyPanels,
     listStoryboardRecipes: api.listStoryboardRecipes,
     saveStoryboardRecipe: api.saveStoryboardRecipe,
     deleteStoryboardRecipe: api.deleteStoryboardRecipe,
@@ -123,6 +126,37 @@ beforeEach(() => {
 });
 
 describe('StoryboardDetail', () => {
+  it('resets drawer and make-empty confirmation state when navigating between boards', async () => {
+    api.getStoryboard.mockImplementation((id) => Promise.resolve(board({
+      id, name: id, plot: `${id} plot`,
+      beats: [{ ...board().beats[0], panels: [panel(`${id}-panel`)] }],
+    })));
+    api.getStoryboardMakeEmpty.mockImplementation(() => Promise.resolve({ batch: null, panelCount: 1, steps: [{ type: 'image', title: 'Image', model: 'Example', frames: 1 }] }));
+    render(
+      <MemoryRouter initialEntries={['/storyboards/sb-1?plot=open']}>
+        <Routes>
+          <Route path="/storyboards/:id" element={<StoryboardDetail />} />
+          <Route path="/storyboards/:id/panel/:panelId" element={<StoryboardDetail />} />
+        </Routes>
+        <Link to="/storyboards/sb-2">Open second board</Link>
+        <LocationProbe />
+      </MemoryRouter>,
+    );
+
+    const plot = await screen.findByLabelText('Plot summary');
+    fireEvent.change(plot, { target: { value: 'Unsaved first board plot' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Close beats from plot' }));
+    fireEvent.click(await screen.findByRole('button', { name: 'Make empty panels' }));
+    expect(await screen.findByLabelText('Make empty panels')).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole('link', { name: 'Open second board' }));
+    expect(await screen.findByRole('button', { name: 'Beats from plot' })).toBeInTheDocument();
+    expect(screen.queryByLabelText('Make empty panels')).toBeNull();
+    expect(screen.getByRole('button', { name: 'Make empty panels' })).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: 'Beats from plot' }));
+    expect(await screen.findByLabelText('Plot summary')).toHaveValue('sb-2 plot');
+  });
+
   // Uniquely catches the embedded editor losing its board-first view, the side panel's previous / next panel,
   // or the music video's panel growing back timing, dialogue or camera fields its shots own.
   it('opens a music video\'s board as the panel grid and steps between panels in the side panel', async () => {
@@ -527,6 +561,48 @@ describe('StoryboardDetail', () => {
     expect(screen.getByText('1 of 2')).toBeInTheDocument();
     act(() => onBatch({ storyboardId: 'sb-1', status: 'done', total: 2, done: 2, failed: 0 }));
     expect(await screen.findByRole('button', { name: 'Make empty panels' })).toBeInTheDocument();
+  });
+
+  it('cancels the displayed batch from its progress controls and handles terminal cancellation', async () => {
+    const batch = { runId: 'batch-1', storyboardId: 'sb-1', status: 'running', total: 3, done: 1, failed: 0 };
+    const answer = Promise.withResolvers();
+    api.getStoryboard.mockResolvedValue(board());
+    api.getStoryboardMakeEmpty.mockResolvedValue({ batch });
+    api.cancelMakeEmptyPanels.mockReturnValue(answer.promise);
+    renderAt('/storyboards/sb-1');
+
+    fireEvent.click(await screen.findByRole('button', { name: 'Cancel' }));
+    expect(api.cancelMakeEmptyPanels).toHaveBeenCalledWith('sb-1', 'batch-1');
+    expect(screen.getByRole('button', { name: 'Canceling…' })).toBeDisabled();
+    await act(async () => { answer.resolve({ ok: true, batch: { ...batch, status: 'canceling' } }); });
+    expect(screen.getByText('Current work can finish.')).toBeInTheDocument();
+
+    const onBatch = socketMock.on.mock.calls.findLast(([event]) => event === 'storyboard:make-batch')[1];
+    act(() => onBatch({ ...batch, status: 'canceled' }));
+    expect(await screen.findByRole('button', { name: 'Make empty panels' })).toBeInTheDocument();
+    expect(screen.queryByRole('progressbar', { name: 'Making empty panels' })).toBeNull();
+    expect(toast.info).toHaveBeenCalledWith('Make empty panels canceled.');
+    expect(toast.success).not.toHaveBeenCalled();
+  });
+
+  it('keeps a replacement batch visible when an earlier cancel response arrives late', async () => {
+    const batch = { runId: 'batch-1', storyboardId: 'sb-1', status: 'running', redraw: true, total: 3, done: 1, failed: 0 };
+    const answer = Promise.withResolvers();
+    api.getStoryboard.mockResolvedValue(board());
+    api.getStoryboardMakeEmpty.mockResolvedValue({ batch });
+    api.cancelMakeEmptyPanels.mockReturnValue(answer.promise);
+    renderAt('/storyboards/sb-1');
+
+    fireEvent.click(await screen.findByRole('button', { name: 'Cancel' }));
+    const onBatch = socketMock.on.mock.calls.findLast(([event]) => event === 'storyboard:make-batch')[1];
+    act(() => {
+      onBatch({ ...batch, status: 'canceled' });
+      onBatch({ ...batch, runId: 'batch-2', done: 0 });
+    });
+    await act(async () => { answer.resolve({ ok: true, batch: { ...batch, status: 'canceling' } }); });
+    expect(screen.getByText('0 of 3')).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Cancel' })).toBeEnabled();
+    expect(toast.info).toHaveBeenCalledWith('Redraw canceled.');
   });
 
   // Uniquely catches the progress bar outliving its batch: a `done` missed while the

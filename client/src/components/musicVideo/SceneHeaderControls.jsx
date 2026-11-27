@@ -1,4 +1,4 @@
-import { Activity, ChevronLeft, ChevronRight, X } from 'lucide-react';
+import { Activity, ChevronLeft, ChevronRight, Undo2, X } from 'lucide-react';
 import { formatTimecode } from '../../utils/formatters.js';
 import { SCENE_ATTENTION_LABELS } from '../../lib/musicVideoSceneAttention.js';
 import { sceneShotName } from '../../lib/musicVideoStages.js';
@@ -14,13 +14,14 @@ import { frameSpan } from './sceneCardProps.js';
 export default function SceneHeaderControls({
   scene, project, posterSrc, shotName, fieldId,
   frameReadiness, clipPlayback, attention,
-  locked, doneSaving, onSetDone, onToggleDone, stepShot, onClose,
-  generatingLane, generatingFrame, generatingVideo, frameProgress, clipJobs,
+  locked, doneSaving, onSetDone, onToggleDone, onUndoBoardEdit = null, undoingBoard = false, stepShot, onClose,
+  generatingLane, generatingFrame, generatingVideo, frameProgress, clipJobs, upscaleJobs,
 }) {
   const { clipId, clipSec } = clipPlayback;
+  const boardUndo = project?.boardUndo || null;
   const hasSpan = typeof scene.startSec === 'number' && typeof scene.endSec === 'number';
   const videoReady = clipId && project?.assetMarks?.[`video:${clipId}`] !== 'bad';
-  const showProgress = generatingLane || generatingFrame || generatingVideo;
+  const showProgress = generatingLane || generatingFrame || generatingVideo || upscaleJobs.length > 0;
 
   return (
     <header className="port-opaque-surface sticky -top-4 z-10 -mx-4 -mt-4 mb-3 flex flex-wrap items-center gap-3 border-b border-port-border px-4 py-2">
@@ -49,6 +50,14 @@ export default function SceneHeaderControls({
           </ul>
         )}
       </div>
+      {boardUndo?.count > 0 && onUndoBoardEdit && (
+        <button type="button" onClick={() => onUndoBoardEdit()} disabled={locked || undoingBoard}
+          aria-label={`Undo ${boardUndo.label}`} title={`Undo ${boardUndo.label} (⌘Z)`}
+          className="inline-flex min-h-[44px] shrink-0 items-center gap-1 rounded-lg border border-port-border px-2 text-xs text-port-text hover:bg-port-border disabled:opacity-40 pointer-fine:sm:min-h-[36px]">
+          <Undo2 size={14} aria-hidden="true" />
+          <span>Undo</span>
+        </button>
+      )}
       {onSetDone && (
         <label htmlFor={fieldId('done')} className="flex min-h-[44px] shrink-0 items-center gap-2 rounded border border-port-border px-2 text-sm pointer-fine:sm:min-h-[36px]">
           <input id={fieldId('done')} type="checkbox" checked={!!scene.shotSheet?.checked} disabled={locked || doneSaving}
@@ -84,6 +93,9 @@ export default function SceneHeaderControls({
             </span>
           )}
           <SceneRenderProgress kind="Frame" generating={generatingFrame} progress={frameProgress} />
+          {upscaleJobs.map((job) => (
+            <SceneRenderProgress key={job.key} kind="Upscale" generating progress={job.running ? { progress: job.progress } : null} />
+          ))}
           {clipJobs.map((job) => (
             <SceneRenderProgress key={job.key} kind={job.label ? `Video (${job.label})` : 'Video'} generating
               progress={job.running ? { progress: job.progress } : null} retry={job.retry} />

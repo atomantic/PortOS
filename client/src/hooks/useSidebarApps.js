@@ -5,7 +5,7 @@
  */
 
 import { useMemo } from 'react';
-import { getApps } from '../services/apiApps.js';
+import { getApps } from '../services/apiNavNames.js';
 import { useSocketResource } from './useSocketResource';
 
 const APPS_EVENTS = ['apps:changed'];

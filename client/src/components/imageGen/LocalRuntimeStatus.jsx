@@ -9,7 +9,7 @@ import { IMAGE_RUNTIME_READINESS, IMAGE_RUNTIME_REMEDY } from '../../lib/imageGe
  * the single action that fixes it attached.
  *
  * The Image Gen page used to say "Unavailable: the FLUX.2 image runtime is not
- * installed or healthy" while Settings › Image Gen › Local — two clicks away,
+ * installed or healthy" while Media Gen Settings → Local — two clicks away,
  * probing a different interpreter — said "All required packages installed", and
  * a deck card that hit the same wall said only "Failed".
  *

@@ -11,7 +11,7 @@
 
 import { asArray } from '../lib/arrayUtils.js';
 import { isPlainObject as isObject } from '../lib/objects.js';
-import { getPostSessions } from './meatspace/meatspacePost.js';
+import { getPostSessions } from './meatspace/postSessionHistory.js';
 import { getAllTrainingEntries } from './postTrainingLogStore.js';
 import { listCommissions } from './creativeCommissions/store.js';
 import { getProjectsByIds } from './creativeDirector/local.js';
@@ -327,15 +327,4 @@ export async function getProductEngagement({ now = new Date(), timezone: configu
 export async function getProductMetricsSource(options = {}) {
   const result = await getProductEngagement(options);
   return JSON.stringify(toProductMetricsAggregate(result)).slice(0, SOURCE_MAX_CHARS);
-}
-
-/** Return the user-facing daily action projection for the dashboard/toast. */
-export async function getDailyActions(options = {}) {
-  const result = await getProductEngagement(options);
-  return {
-    today: result.today,
-    actions: result.actions,
-    metrics: toProductMetricsAggregate(result),
-    checkedAt: result.checkedAt,
-  };
 }

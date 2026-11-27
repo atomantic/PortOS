@@ -7,9 +7,9 @@ import { settingsEvents } from './settings.js';
 import { emitRecordUpdated, emitRecordDeleted, emitRecordInvalidated } from './sharing/recordEvents.js';
 import { writeOriginScope } from '../lib/writeOrigin.js';
 import { fableLoomRunEvents } from './fableLoom/runEvents.js';
-import { trainingEvents } from './loraTraining/events.js';
 import { authEvents, isAuthEnabled, verifyRequestSession } from './auth.js';
 import { verifyPeerToken } from './authGate.js';
+import { PEER_INSTANCE_HEADER } from '../lib/peerHttpClient.js';
 import { usageBackfillEvents } from './usageBackfillEvents.js';
 import { eidoverseWorldEvents } from './eidoverseWorldEvents.js';
 import { layaMlxEvents } from './layaMlxEvents.js';
@@ -37,6 +37,8 @@ vi.mock('./streamingDetect.js', () => ({ streamDetection: vi.fn() }));
 vi.mock('./cos/cosEvents.js', () => ({ cosEvents: { on: vi.fn((...args) => queueListeners.cos.push(args)) }, emitLog: vi.fn() }));
 vi.mock('./apps.js', () => ({ appsEvents: { on: vi.fn() }, getAppById: vi.fn(), notifyAppsChanged: vi.fn(), updateApp: vi.fn() }));
 vi.mock('./appProcessStatus.js', () => ({ resolvePm2HomeForProcess: vi.fn() }));
+const processHandlers = vi.hoisted(() => ({ register: vi.fn((socket) => socket.on('processes:subscribe', vi.fn())) }));
+vi.mock('../sockets/processes.js', () => ({ registerProcessHandlers: processHandlers.register }));
 // logAction appends to the real history file — mock it or this suite writes to data/.
 vi.mock('./history.js', () => ({ logAction: vi.fn(async () => {}) }));
 vi.mock('../lib/errorHandler.js', () => ({ errorEvents: { on: vi.fn((...args) => queueListeners.errors.push(args)) } }));
@@ -86,7 +88,7 @@ vi.mock('./shell.js', () => ({
 // The shell:start provider-launch path resolves a stored provider. Mock the
 // service (not lib/tuiShellLaunch.js) so the REAL command+env resolution runs.
 vi.mock('./provider/providers.js', () => ({ getProviderById: vi.fn() }));
-vi.mock('../lib/socketValidation.js', () => ({
+vi.mock('../lib/socketValidation.js', async (importOriginal) => ({
   validateSocketData: vi.fn((schema, data) => data),
   detectStartSchema: {},
   standardizeStartSchema: {},
@@ -101,10 +103,11 @@ vi.mock('../lib/socketValidation.js', () => ({
   shellStartSchema: {},
   appUpdateSchema: {},
   appStandardizeSchema: {},
+  appDeployCancelSchema: (await importOriginal()).appDeployCancelSchema,
   appDeploySchema: {}
 }));
 vi.mock('./appUpdater.js', () => ({ updateApp: vi.fn() }));
-vi.mock('./appDeployer.js', () => ({ hasDeployScript: vi.fn(), deployApp: vi.fn(), runDeployFlow: vi.fn() }));
+vi.mock('./appDeployer.js', () => ({ hasDeployScript: vi.fn(), deployApp: vi.fn(), runDeployFlow: vi.fn(), cancelDeploy: vi.fn() }));
 vi.mock('../sockets/voice.js', () => ({ registerVoiceHandlers: vi.fn() }));
 
 import { broadcastToCommandSubscribers, initSocket } from './socket.js';
@@ -122,6 +125,7 @@ import * as shellService from './shell.js';
 import { getProviderById } from './provider/providers.js';
 import { updateApp as runAppUpdate } from './appUpdater.js';
 import { analyzeApp, standardizeRefusalFor } from './pm2Standardizer.js';
+import { handleErrorRecovery } from './autoFixer.js';
 import { registerVoiceHandlers } from '../sockets/voice.js';
 
 // Build a minimal fake socket with per-event handler capture
@@ -137,28 +141,43 @@ function makeSocket(id = 'sock-1') {
     emit(event, ...args) { emitted.push([event, ...args]); },
     removeAllListeners: vi.fn(),
     setMaxListeners: vi.fn(),
-    join(room) { this.rooms.push(room); },
-    rooms: [],
+    join(room) { this.rooms.add(room); },
+    rooms: new Set(),
     data: {},
     handshake: { headers: {} }
   };
 }
 
 // Build a minimal fake io that captures the connection handler
-function makeIo() {
+function makeIo({ deliverBroadcasts = false } = {}) {
   let connectionHandler = null;
   const emitted = [];
   const excepted = [];
+  const sockets = [];
+  const broadcast = (event, args, excluded = []) => {
+    emitted.push([event, ...args]);
+    for (const socket of sockets) {
+      if (!excluded.some(room => socket.rooms.has(room))) socket.emit(event, ...args);
+    }
+  };
+  const excluding = (...rooms) => ({
+    except: (room) => excluding(...rooms, room),
+    emit(event, ...args) {
+      for (const room of rooms) excepted.push([event, room]);
+      broadcast(event, args, rooms);
+    },
+  });
   return {
     connectionHandler: () => connectionHandler,
-    emit(event, ...args) { emitted.push([event, ...args]); },
-    except(room) { return { emit: (event, ...args) => { emitted.push([event, ...args]); excepted.push([event, room]); } }; },
+    emit(event, ...args) { broadcast(event, args); },
+    except: excluding,
     excepted,
     emitted,
     on(event, fn) {
       if (event === 'connection') connectionHandler = fn;
     },
     connect(socket) {
+      if (deliverBroadcasts) sockets.push(socket);
       if (connectionHandler) connectionHandler(socket);
     }
   };
@@ -226,6 +245,28 @@ describe('socket.js — initSocket', () => {
     queueListeners.brain.filter(([event]) => event === 'classified').forEach(([, handler]) => handler({ entryId: 'example' }));
     expect(io.emitted).toContainEqual(['brain:classified', { entryId: 'example' }]);
     expect(io.excepted).toContainEqual(['brain:classified', 'peer-sockets']);
+  });
+
+  it('delivers error recovery requests to operators while excluding paired peers', async () => {
+    const deliveryIo = makeIo({ deliverBroadcasts: true });
+    initSocket(deliveryIo);
+    const operator = makeSocket('operator');
+    const peer = makeSocket('peer');
+    peer.data.portosAuthMethod = 'peer';
+    createdSockets.push(operator, peer);
+    deliveryIo.connect(operator);
+    deliveryIo.connect(peer);
+    expect(operator.emitted).toContainEqual(['app:operations:active', { operations: [] }]);
+    expect(peer.emitted.some(([event]) => event === 'app:operations:active')).toBe(false);
+    handleErrorRecovery.mockResolvedValueOnce({ id: 'example-task' });
+
+    const request = { code: 'EXAMPLE_ERROR', context: { source: 'Example app' } };
+    await operator.handlers['error:recover'](request);
+
+    expect(operator.emitted).toContainEqual(['error:recover:requested', {
+      ...request, taskId: 'example-task', timestamp: expect.any(Number),
+    }]);
+    expect(peer.emitted.some(([event]) => event === 'error:recover:requested')).toBe(false);
   });
 
   it('invalidates active memories after approval/rejection only for CoS subscribers', () => {
@@ -804,6 +845,15 @@ describe('socket.js — initSocket', () => {
     expect(io.emitted).toEqual([['review:queue:changed']]);
   });
 
+  it.each(['memory:deleted', 'memory:approval-needed'])(
+    'invalidates Actions globally when %s changes',
+    (event) => {
+      io.emitted.length = 0;
+      queueListeners.cos.filter(([name]) => name === event).forEach(([, listener]) => listener({ id: 'example', privateContent: 'not forwarded' }));
+      expect(io.emitted).toEqual([['review:queue:changed']]);
+    }
+  );
+
   // The three agent-record events leave through the same listing projection as
   // `GET /api/cos/agents`. Without it the socket refills the CoS agents list with
   // unprojected rows — transcript and whole pasted prompt — moments after the
@@ -861,11 +911,9 @@ describe('socket.js — initSocket', () => {
     );
   });
 
-  it('broadcasts bounded queue and checkpoint invalidations', () => {
+  it('broadcasts bounded queue invalidations', () => {
     mediaJobEvents.emit('changed', { privateRecord: 'must not be forwarded' });
-    trainingEvents.emit('checkpoints:changed', { runId: 'example-run', privateRecord: 'must not be forwarded' });
     expect(io.emitted).toContainEqual(['media-jobs:changed', {}]);
-    expect(io.emitted).toContainEqual(['training:checkpoints:changed', { runId: 'example-run' }]);
   });
 
   it('relays render progress only to active queue subscribers', () => {
@@ -915,6 +963,11 @@ describe('socket.js — initSocket', () => {
   it('bridges a failed image job to image-gen:failed keyed by generationId with the error', () => {
     mediaJobEvents.emit('failed', { id: 'job-fail', kind: 'image', error: 'runtime not ready' });
     expect(io.emitted).toContainEqual(['image-gen:failed', { generationId: 'job-fail', error: 'runtime not ready' }]);
+  });
+
+  it('bridges cancellation for a shot upscale queued alongside clip renders', () => {
+    mediaJobEvents.emit('canceled', { kind: 'video-upscale', id: 'shot-upscale', params: { musicVideo: { projectId: 'mv-example', sceneId: 's1' } } });
+    expect(io.emitted).toContainEqual(['video-gen:canceled', { generationId: 'shot-upscale' }]);
   });
 
   it('bridges a failed video job to video-gen:failed', () => {
@@ -1710,6 +1763,57 @@ describe('socket.js — inbound peer socket revocation (#17905)', () => {
   });
 });
 
+describe('app:deploy:cancel host control', () => {
+  it('blocks a remote password-free caller and allows the existing operator session', async () => {
+    const { cancelDeploy } = await import('./appDeployer.js');
+    vi.mocked(cancelDeploy).mockReturnValue(true);
+    const io = makeIo();
+    initSocket(io);
+
+    const socket = makeSocket('deploy-cancel');
+    socket.handshake.headers = { 'x-forwarded-for': '192.0.2.10' };
+    socket.use = (middleware) => { socket.middleware = middleware; };
+    io.connect(socket);
+
+    const payload = { appId: 'example-app' };
+    const requestCancel = async (...args) => {
+      const acknowledge = vi.fn();
+      const next = vi.fn();
+      await socket.middleware(['app:deploy:cancel', ...args, acknowledge], next);
+      if (next.mock.calls.length) await socket.handlers['app:deploy:cancel'](...args, acknowledge);
+      return { next, acknowledge };
+    };
+
+    vi.mocked(isAuthEnabled).mockResolvedValue(false);
+    const refused = await requestCancel(payload);
+    expect(refused.next).not.toHaveBeenCalled();
+    expect(refused.acknowledge).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({
+      ok: false, code: 'HOST_CONTROL_FORBIDDEN',
+    }));
+    expect(cancelDeploy).not.toHaveBeenCalled();
+
+    vi.mocked(isAuthEnabled).mockResolvedValue(true);
+    vi.mocked(verifyRequestSession).mockResolvedValue(true);
+    const invalid = await requestCancel();
+    expect(invalid.acknowledge).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({
+      ok: false, code: 'VALIDATION_ERROR',
+    }));
+    expect(cancelDeploy).not.toHaveBeenCalled();
+
+    const accepted = await requestCancel(payload);
+    expect(accepted.next).toHaveBeenCalled();
+    expect(accepted.acknowledge).toHaveBeenCalledExactlyOnceWith({ ok: true });
+    expect(cancelDeploy).toHaveBeenCalledExactlyOnceWith('example-app');
+
+    vi.mocked(cancelDeploy).mockReturnValueOnce(false);
+    const stale = await requestCancel(payload);
+    expect(stale.acknowledge).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({
+      ok: false, code: 'NO_ACTIVE_DEPLOY',
+    }));
+    expect(socket.emitted.map(([event]) => event)).not.toContain('app:deploy:error');
+  });
+});
+
 describe('logs:subscribe host-control boundary (#19168)', () => {
   let io;
   const guardedSocket = (id, remote = true) => {
@@ -1753,6 +1857,96 @@ describe('logs:subscribe host-control boundary (#19168)', () => {
     expect(spawnPm2).toHaveBeenCalledTimes(2);
     expect(local.emitted).toContainEqual(['logs:subscribed', expect.objectContaining({ processName: 'portos-server' })]);
     expect(operator.emitted).toContainEqual(['logs:subscribed', expect.objectContaining({ processName: 'portos-server' })]);
+  });
+});
+
+describe('agent-processes:subscribe host-control boundary (#19170)', () => {
+  let io;
+  const connectedSocket = ({ local = false, headers = {} } = {}) => {
+    const socket = makeSocket();
+    socket.data.portosLocalConnection = local;
+    socket.handshake.headers = headers;
+    socket.use = (fn) => { socket.middleware = fn; };
+    socket.runEvent = async (event, payload) => {
+      const next = vi.fn();
+      await socket.middleware([event, payload], next);
+      if (next.mock.calls.length) await socket.handlers[event](payload);
+      return next;
+    };
+    io.connect(socket);
+    return socket;
+  };
+
+  beforeEach(() => {
+    io = makeIo();
+    initSocket(io);
+    vi.mocked(isAuthEnabled).mockResolvedValue(false);
+    vi.mocked(verifyRequestSession).mockResolvedValue(false);
+  });
+
+  it('refuses remote password-free subscriptions before dispatch and permits unsubscribe', async () => {
+    const socket = connectedSocket();
+    const next = await socket.runEvent('agent-processes:subscribe');
+    expect(next).not.toHaveBeenCalled();
+    expect(socket.emitted).toContainEqual(['agent-processes:error', expect.objectContaining({ code: 'HOST_CONTROL_FORBIDDEN' })]);
+    expect(await socket.runEvent('agent-processes:unsubscribe')).toHaveBeenCalled();
+  });
+
+  it('dispatches local password-free and authenticated agent sessions', async () => {
+    const local = connectedSocket({ local: true });
+    expect(await local.runEvent('agent-processes:subscribe')).toHaveBeenCalled();
+
+    vi.mocked(isAuthEnabled).mockResolvedValue(true);
+    const headers = { authorization: 'Bearer example-agent-session' };
+    vi.mocked(verifyRequestSession).mockImplementation(async (request) => request.headers === headers);
+    const agent = connectedSocket({ headers });
+    expect(await agent.runEvent('agent-processes:subscribe')).toHaveBeenCalled();
+  });
+});
+
+describe('processes:subscribe host-control boundary (#19729)', () => {
+  let io;
+  const connectedSocket = ({ local = false, headers = {} } = {}) => {
+    const socket = makeSocket();
+    socket.data.portosLocalConnection = local;
+    socket.handshake.headers = headers;
+    socket.use = (fn) => { socket.middleware = fn; };
+    socket.runEvent = async (event) => {
+      const next = vi.fn();
+      await socket.middleware([event], next);
+      if (next.mock.calls.length) await socket.handlers[event]();
+      return next;
+    };
+    io.connect(socket);
+    return socket;
+  };
+
+  beforeEach(() => {
+    io = makeIo();
+    initSocket(io);
+    processHandlers.register.mockClear();
+    vi.mocked(isAuthEnabled).mockResolvedValue(false);
+    vi.mocked(verifyRequestSession).mockResolvedValue(false);
+  });
+
+  it('refuses remote password-free subscriptions before starting process sampling', async () => {
+    const remote = connectedSocket();
+    const next = await remote.runEvent('processes:subscribe');
+    expect(next).not.toHaveBeenCalled();
+    expect(remote.emitted).toContainEqual(['processes:error', expect.objectContaining({ code: 'HOST_CONTROL_FORBIDDEN' })]);
+    expect(processHandlers.register).toHaveBeenCalledTimes(1);
+    expect(remote.handlers['processes:subscribe']).not.toHaveBeenCalled();
+  });
+
+  it('allows local operators and authenticated delegated agent sessions', async () => {
+    const local = connectedSocket({ local: true });
+    expect(await local.runEvent('processes:subscribe')).toHaveBeenCalled();
+
+    vi.mocked(isAuthEnabled).mockResolvedValue(true);
+    const headers = { authorization: 'Bearer example-agent-session' };
+    vi.mocked(verifyRequestSession).mockImplementation(async (request) => request.headers === headers);
+    const agent = connectedSocket({ headers });
+    expect(await agent.runEvent('processes:subscribe')).toHaveBeenCalled();
   });
 });
 
@@ -1818,5 +2012,82 @@ describe('voice socket host-control boundary (#19169)', () => {
       await socket.middleware([event], next);
       expect(next).toHaveBeenCalledExactlyOnceWith();
     }
+  });
+});
+
+describe('command stream and peer relay authorization (#19353)', () => {
+  let io;
+  let socket;
+  const outputEvent = 'command:example-id:data';
+  const output = { data: 'synthetic output', stream: 'stdout' };
+
+  const connectSocket = ({ local = false, authMethod, headers = {} } = {}) => {
+    socket = makeSocket();
+    socket.data = { portosLocalConnection: local, portosAuthMethod: authMethod };
+    socket.handshake.headers = headers;
+    socket.disconnect = vi.fn();
+    socket.use = (middleware) => { socket.middleware = middleware; };
+    io.connect(socket);
+  };
+
+  const dispatch = async (event) => {
+    const next = vi.fn(() => socket.handlers[event]());
+    await socket.middleware([event], next);
+    return next;
+  };
+
+  beforeEach(() => {
+    io = makeIo();
+    initSocket(io);
+    vi.mocked(isAuthEnabled).mockResolvedValue(false);
+    vi.mocked(verifyRequestSession).mockResolvedValue(null);
+  });
+
+  afterEach(() => {
+    socket.handlers.disconnect();
+    authEvents.removeAllListeners('sessions:revoked-all');
+    vi.mocked(isAuthEnabled).mockResolvedValue(false);
+    vi.mocked(verifyRequestSession).mockResolvedValue(false);
+  });
+
+  it('refuses a remote password-free command subscriber before it receives output', async () => {
+    connectSocket();
+    expect(await dispatch('command:subscribe')).not.toHaveBeenCalled();
+    expect(socket.emitted).toContainEqual(['command:error', expect.objectContaining({ code: 'HOST_CONTROL_FORBIDDEN' })]);
+    broadcastToCommandSubscribers(outputEvent, output);
+    expect(socket.emitted).not.toContainEqual([outputEvent, output]);
+  });
+
+  it.each([
+    ['local password-free connection', { local: true }],
+    ['operator session', { headers: { cookie: 'portos_session=example-operator-session' }, authMethod: 'session' }],
+    ['agent session', { headers: { authorization: 'Bearer example-agent-session' }, authMethod: 'session' }],
+  ])('delivers command output to a subscribed %s', async (_name, connection) => {
+    if (connection.authMethod === 'session') {
+      vi.mocked(isAuthEnabled).mockResolvedValue(true);
+      vi.mocked(verifyRequestSession).mockImplementation(async ({ headers }) => headers === connection.headers);
+    }
+    connectSocket(connection);
+    expect(await dispatch('command:subscribe')).toHaveBeenCalledExactlyOnceWith();
+    expect(socket.emitted).toContainEqual(['command:subscribed']);
+    broadcastToCommandSubscribers(outputEvent, output);
+    expect(socket.emitted).toContainEqual([outputEvent, output]);
+  });
+
+  it('disconnects an authenticated peer before adding it to the command stream', async () => {
+    vi.mocked(isAuthEnabled).mockResolvedValue(true);
+    connectSocket({ authMethod: 'peer' });
+    expect(await dispatch('command:subscribe')).not.toHaveBeenCalled();
+    expect(socket.disconnect).toHaveBeenCalledWith(true);
+    broadcastToCommandSubscribers(outputEvent, output);
+    expect(socket.emitted).not.toContainEqual([outputEvent, output]);
+  });
+
+  it('limits password-free peer relays to allowed subscriptions even over a local connection', async () => {
+    connectSocket({ local: true, headers: { [PEER_INSTANCE_HEADER.toLowerCase()]: 'example-peer' } });
+    expect(await dispatch('cos:subscribe')).toHaveBeenCalledExactlyOnceWith();
+    expect(socket.emitted).toContainEqual(['cos:subscribed']);
+    expect(await dispatch('notifications:subscribe')).not.toHaveBeenCalled();
+    expect(socket.disconnect).toHaveBeenCalledWith(true);
   });
 });

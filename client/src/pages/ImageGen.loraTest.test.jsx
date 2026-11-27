@@ -105,7 +105,7 @@ describe('ImageGen image LoRA Test handoff', () => {
 
   it.each([
     ['missing adapter', () => { state.availableLoras = []; }, /no longer installed/],
-    ['disabled local backend', () => { state.settings = { imageGen: { mode: 'codex', codex: { enabled: true } } }; }, /Configure one in Settings/],
+    ['disabled local backend', () => { state.settings = { imageGen: { mode: 'codex', codex: { enabled: true } } }; }, /Configure one in Media Gen Settings → Local, then try Test again\./],
     ['incompatible models', () => { state.models = [DEV, FOUR]; }, /No compatible local image runtime/],
     ['unavailable runtime', () => { state.getImageGenStatus.mockResolvedValue({ connected: false, readiness: 'unavailable' }); }, /No compatible local image runtime/],
     ['failed catalog', () => { state.listLorasFull.mockRejectedValue(new Error('offline')); }, /Reload this page to retry/],

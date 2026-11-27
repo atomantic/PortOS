@@ -35,9 +35,9 @@ export const repairImageModel = (modelId, { deep = false } = {}) => request(`/im
   body: JSON.stringify({ deep }),
   silent: true,
 });
-export const listImageGalleryPage = ({ limit = 60, offset = 0, q = '', hidden, starred, localOnly, rating, summary, compact, filename, kind, media, collectionId, universeId, entryCategory, entryKind } = {}, options = {}) => {
+export const listImageGalleryPage = ({ limit = 60, offset = 0, q = '', hidden, starred, localOnly, rating, summary, compact, filename, kind, media, collectionId, universeId, entryCategory, entryKind, videoSizeOverBytes } = {}, options = {}) => {
   const params = new URLSearchParams({ limit, offset, q });
-  for (const [key, value] of Object.entries({ hidden, starred, localOnly, rating, summary, compact, filename, kind, media, collectionId, universeId, entryCategory, entryKind })) {
+  for (const [key, value] of Object.entries({ hidden, starred, localOnly, rating, summary, compact, filename, kind, media, collectionId, universeId, entryCategory, entryKind, videoSizeOverBytes })) {
     if (value !== undefined) params.set(key, value);
   }
   return request(`/image-gen/gallery?${params}`, options);
@@ -351,16 +351,25 @@ export const extractLastFrame = (id, options = {}) => request(`/video-gen/last-f
 // spread so it can never collide with the HTTP `method: 'POST'` fetch config
 // below — an omitted `method` sends exactly the bare-POST request this
 // endpoint has always received, so existing mocks/tests keep matching.
-export const upscaleVideo = (id, { method, ...options } = {}) => request(`/video-gen/upscale/${encodeURIComponent(id)}`, {
-  method: 'POST',
-  ...(method != null ? { body: JSON.stringify({ method }) } : {}),
-  ...options,
-});
+export const upscaleVideo = (id, { method, targetResolution, realesrganModel, musicVideoProjectId, sceneId, ...options } = {}) => {
+  const payload = {
+    ...(method != null ? { method } : {}),
+    ...(targetResolution != null ? { targetResolution } : {}),
+    ...(realesrganModel != null ? { realesrganModel } : {}),
+    ...(musicVideoProjectId != null ? { musicVideoProjectId } : {}),
+    ...(sceneId != null ? { sceneId } : {}),
+  };
+  return request(`/video-gen/upscale/${encodeURIComponent(id)}`, {
+    method: 'POST',
+    ...(Object.keys(payload).length > 0 ? { body: JSON.stringify(payload) } : {}),
+    ...options,
+  });
+};
 export const quoteTopazUpscale = (id, model, options = {}) => request(`/video-gen/upscale/${encodeURIComponent(id)}/topaz/quote`, {
   method: 'POST', body: JSON.stringify({ model }), ...options,
 });
-export const startTopazUpscale = (id, token, options = {}) => request(`/video-gen/upscale/${encodeURIComponent(id)}/topaz`, {
-  method: 'POST', body: JSON.stringify({ token }), ...options,
+export const startTopazUpscale = (id, token, { musicVideoProjectId, sceneId, ...options } = {}) => request(`/video-gen/upscale/${encodeURIComponent(id)}/topaz`, {
+  method: 'POST', body: JSON.stringify({ token, musicVideoProjectId, sceneId }), ...options,
 });
 export const getTopazJobStatus = (id, options = {}) => request(`/video-gen/upscale/topaz/jobs/${encodeURIComponent(id)}/status`, options);
 export const cancelTopazRemoteJob = (id, options = {}) => request(`/video-gen/upscale/topaz/jobs/${encodeURIComponent(id)}/cancel`, { method: 'POST', ...options });
@@ -369,10 +378,17 @@ export const recoverTopazJob = (id, options = {}) => request(`/video-gen/upscale
 // required padding, and runtime/adapter readiness for `method`. Never queues a
 // job or triggers a download. `silent` by default — the picker owns its own
 // inline error state rather than a toast.
-export const getUpscalePlan = (id, method, options = {}) => request(
-  `/video-gen/upscale/${encodeURIComponent(id)}/plan?method=${encodeURIComponent(method)}`,
+export const getUpscalePlan = (id, method, { targetResolution, realesrganModel, ...options } = {}) => request(
+  `/video-gen/upscale/${encodeURIComponent(id)}/plan?${new URLSearchParams({
+    method,
+    ...(targetResolution ? { targetResolution } : {}),
+    ...(realesrganModel ? { realesrganModel } : {}),
+  })}`,
   { silent: true, ...options },
 );
+// POST SSE stream for the explicit Real-ESRGAN setup (#19985): downloads the
+// pinned release, verifies it and checks each weight on this GPU.
+export const realesrganInstallUrl = () => `${API_BASE}/video-gen/upscale/realesrgan/install`;
 // Live-progress URL for the generative upscale adapter's HF pull, for a small
 // inline "Download adapter" control in the upscale picker. `key` is
 // `plan.adapter.key` from getUpscalePlan — the same key the server's generic
@@ -457,6 +473,10 @@ export const deleteTimelineProject = (id, options = {}) => request(`/video-timel
   ...options,
 });
 export const renderTimelineProject = (id, options = {}) => request(`/video-timeline/projects/${encodeURIComponent(id)}/render`, {
+  method: 'POST',
+  ...options,
+});
+export const cancelTimelineRender = (jobId, options = {}) => request(`/video-timeline/${encodeURIComponent(jobId)}/cancel`, {
   method: 'POST',
   ...options,
 });
@@ -606,6 +626,12 @@ export const removeCustomMediaModel = (id, { silent = false } = {}) => request(`
 // metadata so the manager UI can show trigger words, base model, recommended
 // scale, preview thumbnail. Used by /models/loras and the Image Gen LoRA picker.
 export const listLorasFull = (options = {}) => request('/loras', options);
+export const getCharacterLoras = ({ entryId, ingredientId } = {}, { silent = false } = {}) => {
+  const params = new URLSearchParams();
+  if (entryId) params.set('entryId', entryId);
+  if (ingredientId) params.set('ingredientId', ingredientId);
+  return request(`/loras/by-character?${params.toString()}`, { silent });
+};
 // `silent: true` suppresses the auto-toast in apiCore so the page can route
 // CIVITAI_AUTH errors into the in-UI key prompt instead of a fire-and-forget
 // red toast the user can't act on.

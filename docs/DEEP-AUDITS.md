@@ -12,9 +12,7 @@ New manual, scheduled and custom Deep launches persist `auditWorkflow: "extended
 
 ## Historical evidence
 
-Previous exhaustive Deep ledgers, source pins, findings and worktrees are preserved. They remain visibly historical and incomplete; new Deep runs neither reuse them nor credit their receipts. Normal resume of those certification runs is disabled on the server and in the Quality UI. Their authenticated ledger endpoint remains available at `GET /api/cos/schedule/deep-audits/:id`.
-
-See [historical evidence format](DEEP-AUDITS-LEGACY.md) for the archived architecture. No data migration marks those ledgers complete or removes them. Starting a new Deep audit creates a separate ordinary audit task; it does not delete or repurpose retained source work.
+Existing PostgreSQL ledgers from the retired certification workflow are retained. Historical certification runs cannot be resumed. New Deep audits use separate tasks and leave retained source work intact.
 
 Quality run history is separate from tasks: deleting a task does not delete its batch record. Use **Archive run history** to hide an inactive run from the default Quality sidebar. **View archived runs** and **Restore run history** bring it back without resuming it. Evidence and findings remain stored. Runs with outstanding work cannot be archived.
 

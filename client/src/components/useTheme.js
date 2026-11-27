@@ -23,7 +23,7 @@ import {
   safeWriteStorage,
 } from '../lib/safeStorage.js';
 import { readShellBootstrap } from '../services/shellBootstrap.js';
-import { getSettings, updateSettings } from '../services/apiSystem.js';
+import { getSettings, updateSettings } from '../services/apiAppShell.js';
 
 const STORAGE_KEY = 'portos-theme';
 const CACHE_KEY = 'portos-theme-cache';

@@ -18,6 +18,7 @@ vi.mock('../../services/apiLocalLlm.js', () => ({
   startMtplxServer: vi.fn(),
   stopMtplxServer: vi.fn(),
   installMtplx: vi.fn(),
+  uninstallMtplx: vi.fn(),
   getManagedInklingRuntimeStatus: vi.fn(),
   saveSplashContextWindow: vi.fn(),
   controlManagedInklingRuntime: vi.fn(),
@@ -25,10 +26,13 @@ vi.mock('../../services/apiLocalLlm.js', () => ({
   startSlotstreamServer: vi.fn(),
   stopSlotstreamServer: vi.fn(),
   installSlotstream: vi.fn(),
+  uninstallSlotstream: vi.fn(),
   downloadSlotstreamModel: vi.fn(),
   cancelSlotstreamModelDownload: vi.fn(),
+  removeSlotstreamModel: vi.fn(),
   searchMtplxModels: vi.fn().mockResolvedValue({ models: [], error: null }),
   pullMtplxModel: vi.fn(),
+  cancelMtplxModelPull: vi.fn(),
   removeMtplxModel: vi.fn(),
   saveRuntimeStartupList: vi.fn(),
   getLlamaServerStatus: vi.fn().mockResolvedValue({ installed: false, running: false }),
@@ -77,10 +81,12 @@ import {
   controlManagedInklingRuntime,
   switchLocalLlmBackend,
   installLocalLlmBackend,
+  getMtplxServerStatus,
 } from '../../services/apiLocalLlm.js';
 import { getSystemCapabilities, patchSettingsSlice } from '../../services/apiSystem.js';
 import { getFleetLlmHost, stopFleetLlmHost } from '../../services/apiProviders';
 import socket from '../../services/socket';
+import toast from '../ui/Toast';
 import { clickStartDownload } from '../../test/downloadPreflightConfirm.js';
 import LocalLlmRuntimesView from './LocalLlmRuntimesView.jsx';
 import {
@@ -144,6 +150,7 @@ beforeEach(() => {
     lmstudio: { installed: false, available: false, modelCount: 0, models: [] },
   });
   getLocalLlmCatalog.mockResolvedValue({ models: [] });
+  getMtplxServerStatus.mockResolvedValue({ installed: false, running: false, supported: true, cachedModels: [] });
   getManagedInklingRuntimeStatus.mockResolvedValue({ supported: true, state: 'missing', installed: false });
   getSystemCapabilities.mockResolvedValue({
     platform: 'darwin',
@@ -233,6 +240,16 @@ describe('runtime selection workflow', () => {
     }
     expect(controlManagedInklingRuntime).not.toHaveBeenCalled();
     expect(switchLocalLlmBackend).not.toHaveBeenCalled();
+  });
+
+  it.each(['splash', 'mkserve'])('shows the recent managed server logs for %s', async (id) => {
+    getManagedInklingRuntimeStatus.mockResolvedValue({
+      supported: true, installed: true, state: 'running', managed: true, recentLogs: ['Fixture startup log'],
+    });
+    await renderRuntimes(id);
+
+    fireEvent.click(await screen.findByRole('button', { name: /view server logs/i }));
+    expect(screen.getByText('Fixture startup log')).toBeVisible();
   });
 
   it('saves the requested Splash window when stopped and separately displays the live served window', async () => {
@@ -326,6 +343,49 @@ describe('runtime selection workflow', () => {
     await waitFor(() => expect(controlManagedInklingRuntime).toHaveBeenCalledWith('splash', 'install'));
   });
 
+  it.each([['splash', 'Splash'], ['mkserve', 'mkserve']])('shows %s logs, live install progress and cancellation', async (id, label) => {
+    const installed = { supported: true, state: 'stopped', installed: true, recentLogs: ['engine startup failed'] };
+    getManagedInklingRuntimeStatus.mockImplementation(async (runtime) => runtime === id ? installed : null);
+    await renderRuntimes(id);
+    fireEvent.click(screen.getByRole('button', { name: 'View server logs (1 lines)' }));
+    expect(screen.getByText('engine startup failed')).toBeVisible();
+
+    const group = within(screen.getByRole('button', { name: `Check ${label} status` }).closest('[role="group"]'));
+    const operation = { id: 'active-operation', action: 'upgrade', message: 'Downloading checkpoint: 42%' };
+    const progress = (frame) => {
+      const listener = socket.on.mock.calls.findLast(([name]) => name === 'localLlm:progress')[1];
+      return act(async () => { listener({ runtime: id, ...frame }); });
+    };
+    await progress({ event: 'progress', message: operation.message, operation });
+    expect(group.getByText(operation.message)).toBeVisible();
+    expect(screen.getByRole('link', { name: `${label} progress` })).toHaveAttribute('href', `/models/llms-runtimes/${id}`);
+
+    const cancelling = { ...operation, message: 'Cancelling installation…', cancelling: true };
+    let resolveCancel;
+    controlManagedInklingRuntime.mockImplementationOnce(() => new Promise((resolve) => { resolveCancel = resolve; }));
+    fireEvent.click(group.getByRole('button', { name: 'Cancel' }));
+    expect(controlManagedInklingRuntime).toHaveBeenCalledWith(id, 'cancel', { body: JSON.stringify({ operationId: operation.id }) });
+    await progress({ event: 'progress', message: cancelling.message, operation: cancelling });
+    expect(group.getByRole('button', { name: 'Cancelling…' })).toBeDisabled();
+    await progress({ event: 'cancelled', message: 'Installation cancelled.', operation: null, lastError: null });
+    await act(async () => { resolveCancel({ cancelled: true, operation: cancelling }); });
+    expect(group.queryByRole('button', { name: /cancel/i })).not.toBeInTheDocument();
+    expect(screen.queryByRole('link', { name: `${label} progress` })).not.toBeInTheDocument();
+  });
+
+  it('sends an explicit mkserve repair request after confirmation', async () => {
+    getManagedInklingRuntimeStatus.mockResolvedValue({
+      supported: true, state: 'error', installed: true, repairRecommended: true,
+    });
+    controlManagedInklingRuntime.mockResolvedValue({ operation: { action: 'repair', message: 'Rebuilding engine…' } });
+    await renderRuntimes('mkserve');
+    const check = screen.getByRole('button', { name: 'Check mkserve status' });
+    fireEvent.click(within(check.closest('[role="group"]')).getByRole('button', { name: 'Repair' }));
+    const dialog = screen.getByRole('dialog', { name: 'Repair mkserve' });
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Repair' }));
+    await waitFor(() => expect(controlManagedInklingRuntime).toHaveBeenCalledWith('mkserve', 'install', { body: '{"repair":true}' }));
+  });
+
   it('opens configuration from the roster and recovers an invalid deep link', async () => {
     const { getLlamaServerStatus } = await import('../../services/apiLocalLlm.js');
     getLlamaServerStatus.mockResolvedValue({ installed: false, running: false });
@@ -338,6 +398,45 @@ describe('runtime selection workflow', () => {
     expect(screen.getByLabelText('Current route')).toHaveTextContent('/models/llms-runtimes/llama');
     expect(screen.getByRole('heading', { name: 'Runtime configuration' })).toHaveFocus();
     expect(screen.getByRole('button', { name: /Install llama.cpp/ })).toBeVisible();
+  });
+
+  it('discovers MTPLX checkpoints only on first selection and cancels a pull while busy', async () => {
+    const { searchMtplxModels, pullMtplxModel, cancelMtplxModelPull } = await import('../../services/apiLocalLlm.js');
+    const transfer = Promise.withResolvers();
+    getMtplxServerStatus.mockResolvedValue({ installed: true, running: false, supported: true, cachedModels: [] });
+    pullMtplxModel.mockReturnValueOnce(transfer.promise);
+    cancelMtplxModelPull.mockResolvedValueOnce({ success: true, cancelled: true });
+    await renderRuntimes(null);
+
+    const selectMtplx = () => fireEvent.click(within(screen.getByRole('group', { name: 'MTPLX' })).getByRole('button', { name: 'Configure' }));
+    expect(searchMtplxModels).not.toHaveBeenCalled();
+    await act(async () => selectMtplx());
+    expect(searchMtplxModels).toHaveBeenCalledExactlyOnceWith({ query: '' }, { silent: true });
+    fireEvent.click(screen.getByRole('link', { name: 'All runtimes' }));
+    await act(async () => selectMtplx());
+    expect(searchMtplxModels).toHaveBeenCalledTimes(1);
+
+    fireEvent.click(screen.getByRole('button', { name: 'Download default checkpoint' }));
+    await clickStartDownload();
+    expect(pullMtplxModel).toHaveBeenCalledExactlyOnceWith(null, { silent: true });
+    const receiveProgress = socket.on.mock.calls.find(([event]) => event === 'mtplx:download')[1];
+    act(() => receiveProgress({ event: 'start', model: null, message: 'Resolving…' }));
+    expect(screen.getByRole('button', { name: /Download default checkpoint/ })).toBeDisabled();
+
+    const cancel = screen.getByRole('button', { name: 'Cancel' });
+    expect(cancel).toBeEnabled();
+    await act(async () => fireEvent.click(cancel));
+    expect(cancelMtplxModelPull).toHaveBeenCalledExactlyOnceWith({ silent: true });
+    expect(screen.getByRole('progressbar', { name: /Downloading MTPLX default checkpoint/ })).toBeVisible();
+
+    await act(async () => {
+      receiveProgress({ event: 'cancelled', model: null });
+      transfer.resolve({ success: false, cancelled: true, model: null });
+    });
+    expect(screen.queryByRole('button', { name: 'Cancel' })).toBeNull();
+    expect(screen.getByRole('button', { name: 'Download default checkpoint' })).toBeEnabled();
+    expect(toast.success).not.toHaveBeenCalled();
+    expect(toast.error).not.toHaveBeenCalled();
   });
 
   it('retains a launch draft and download cancellation across selection and history', async () => {
@@ -537,6 +636,60 @@ describe('LocalLlmRuntimesView runtime servers', () => {
 
     // `null` (not a repo id the card invented) = MTPLX's own verified default.
     await waitFor(() => expect(pullMtplxModel).toHaveBeenCalledWith(null, { silent: true }));
+  });
+
+  it('confirms Slotstream uninstall and refreshes the runtime row without touching checkpoints', async () => {
+    const { getSlotstreamServerStatus, uninstallSlotstream } = await import('../../services/apiLocalLlm.js');
+    const idle = { supported: true, installed: true, running: false, cachedModels: ['checkpoint'], canUninstall: true };
+    getSlotstreamServerStatus.mockResolvedValue(idle);
+    uninstallSlotstream.mockImplementationOnce(async () => {
+      getSlotstreamServerStatus.mockResolvedValue({ ...idle, installed: false, canUninstall: false });
+      return { success: true, message: 'Slotstream uninstalled' };
+    });
+    await renderRuntimes();
+    const button = await screen.findByRole('button', { name: 'Uninstall' });
+    fireEvent.click(button);
+    const dialog = screen.getByRole('dialog', { name: 'Uninstall Slotstream' });
+    expect(within(dialog).getByText(/Downloaded checkpoints, provider presets, and launch settings are kept/)).toBeVisible();
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Cancel' }));
+    expect(uninstallSlotstream).not.toHaveBeenCalled();
+    fireEvent.click(button);
+    fireEvent.click(within(screen.getByRole('dialog', { name: 'Uninstall Slotstream' })).getByRole('button', { name: 'Uninstall' }));
+    await waitFor(() => expect(screen.queryByRole('button', { name: 'Uninstall' })).not.toBeInTheDocument());
+    expect(uninstallSlotstream).toHaveBeenCalledTimes(1);
+  });
+
+  it('removes an unused Slotstream link only after confirmation and a successful response', async () => {
+    const { getSlotstreamServerStatus, removeSlotstreamModel } = await import('../../services/apiLocalLlm.js');
+    const model = 'unused-checkpoint';
+    const active = 'active-checkpoint';
+    const activeRow = { id: active, sizeBytes: 2048, linked: false };
+    const current = {
+      installed: true, supported: true, running: true, managed: true, config: { model: active },
+      cachedModels: [active, model],
+      cachedModelRows: [activeRow, { id: model, sizeBytes: 1024, linked: true }],
+    };
+    getSlotstreamServerStatus.mockResolvedValue(current);
+    removeSlotstreamModel.mockRejectedValueOnce(new Error('Checkpoint is in use')).mockImplementationOnce(async () => {
+      getSlotstreamServerStatus.mockResolvedValue({ ...current, cachedModels: [active], cachedModelRows: [activeRow] });
+      return { success: true, model };
+    });
+
+    await renderRuntimes('slotstream');
+    expect(screen.getByRole('button', { name: `Remove ${active}` })).toBeDisabled();
+    expect(screen.getByText(/1 KB.*Linked checkpoint/)).toBeVisible();
+    fireEvent.click(screen.getByRole('button', { name: `Remove ${model}` }));
+    expect(screen.getByText('Remove this link and keep the original files?')).toBeVisible();
+    expect(removeSlotstreamModel).not.toHaveBeenCalled();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Remove checkpoint' }));
+    await waitFor(() => expect(toast.error).toHaveBeenCalledWith('Checkpoint is in use'));
+    expect(screen.getByRole('button', { name: `Remove ${model}` })).toBeEnabled();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Remove checkpoint' }));
+    await waitFor(() => expect(screen.queryByRole('button', { name: `Remove ${model}` })).toBeNull());
+    expect(removeSlotstreamModel).toHaveBeenLastCalledWith(model, { silent: true });
+    expect(screen.getByRole('button', { name: `Remove ${active}` })).toBeDisabled();
   });
 
   it('clears a cancelled Slotstream download without a failure or completion toast', async () => {
@@ -742,8 +895,28 @@ describe('LocalLlmRuntimesView llama-server management', () => {
     await waitFor(() => {
       expect(startLlamaServer).toHaveBeenCalledWith(expect.objectContaining({
         model: 'models/my-model.gguf',
-      }));
+      }), { silent: true });
     });
+  });
+
+  it('starts the locally converted Conversational Gemma with its Voice alias and no drafter', async () => {
+    const { getLlamaServerStatus, startLlamaServer } = await import('../../services/apiLocalLlm.js');
+    const model = '~/.portos/models/Conversational-Gemma-4-31B-Q8_0.gguf';
+    const alias = 'Trelis/gemma-4-31B-it-conversational';
+    getLlamaServerStatus.mockResolvedValue(llamaReady({ presets: [...specPresets(), {
+      id: 'conversational-gemma-local', label: 'Conversational Gemma 4 31B (locally converted Q8_0)',
+      specType: 'none', localBuild: true, alias, ctxSize: 4096,
+      model: { role: 'model', path: model, exists: true, downloadable: false },
+    }] }));
+    startLlamaServer.mockResolvedValueOnce({ success: true, pid: 99 });
+    await renderRuntimes();
+    const preset = await screen.findByRole('combobox', { name: 'Preset' });
+    fireEvent.change(preset, { target: { value: 'conversational-gemma-local' } });
+    expect(screen.getByRole('textbox', { name: 'Target Base Model (GGUF Path)' })).toHaveValue(model);
+    fireEvent.click(screen.getByRole('button', { name: /Start Speculative Server/ }));
+    await waitFor(() => expect(startLlamaServer).toHaveBeenCalledWith(expect.objectContaining({
+      model, alias, ctxSize: 4096, specType: 'none', draftModel: '', projector: '', parallel: 1,
+    }), { silent: true }));
   });
 
   it('sends --parallel 1 by default and honours an edited slot count', async () => {
@@ -815,7 +988,7 @@ describe('LocalLlmRuntimesView llama-server management', () => {
         draftModel: 'models/Qwen3.8-27B-DSpark-bf16.gguf',
         specType: 'draft-dspark',
         parallel: 1,
-      }));
+      }), { silent: true });
     });
   });
 
@@ -873,7 +1046,7 @@ describe('LocalLlmRuntimesView llama-server management', () => {
     fireEvent.click(screen.getByRole('button', { name: /Start Speculative Server/ }));
 
     await waitFor(() => {
-      expect(startLlamaServer).toHaveBeenCalledWith(expect.objectContaining({ nGpuLayers: 99 }));
+      expect(startLlamaServer).toHaveBeenCalledWith(expect.objectContaining({ nGpuLayers: 99 }), { silent: true });
     });
   });
 
@@ -890,7 +1063,7 @@ describe('LocalLlmRuntimesView llama-server management', () => {
     fireEvent.click(screen.getByRole('button', { name: /Start Speculative Server/ }));
 
     await waitFor(() => {
-      expect(startLlamaServer).toHaveBeenCalledWith(expect.objectContaining({ nGpuLayers: 0 }));
+      expect(startLlamaServer).toHaveBeenCalledWith(expect.objectContaining({ nGpuLayers: 0 }), { silent: true });
     });
   });
 
@@ -906,7 +1079,7 @@ describe('LocalLlmRuntimesView llama-server management', () => {
     fireEvent.click(screen.getByRole('button', { name: /Start Speculative Server/ }));
 
     await waitFor(() => {
-      expect(startLlamaServer).toHaveBeenCalledWith(expect.objectContaining({ alias: 'dspark' }));
+      expect(startLlamaServer).toHaveBeenCalledWith(expect.objectContaining({ alias: 'dspark' }), { silent: true });
     });
   });
 
@@ -986,7 +1159,7 @@ describe('LocalLlmRuntimesView llama-server management', () => {
       expect(startLlamaServer).toHaveBeenCalledWith(expect.objectContaining({
         model: 'models/Example-Vision-27B-Q4_K_M.gguf',
         projector: 'models/Example-Vision-27B-mmproj-Q8_0.gguf',
-      }));
+      }), { silent: true });
     });
   });
 
@@ -1007,7 +1180,7 @@ describe('LocalLlmRuntimesView llama-server management', () => {
     expect(startBtn).toBeEnabled();
     fireEvent.click(startBtn);
     await waitFor(() => {
-      expect(startLlamaServer).toHaveBeenCalledWith(expect.objectContaining({ projector: '' }));
+      expect(startLlamaServer).toHaveBeenCalledWith(expect.objectContaining({ projector: '' }), { silent: true });
     });
   });
 
@@ -1134,7 +1307,7 @@ describe('LocalLlmRuntimesView llama-server management', () => {
     expect(removeSpecDecodeModel).not.toHaveBeenCalled();
   });
 
-  it('blocks Start while a preset GGUF is missing and names the fix', async () => {
+  it('keeps the missing GGUF guard and Download action while tuning both KV caches', async () => {
     const { getLlamaServerStatus, startLlamaServer } = await import('../../services/apiLocalLlm.js');
     getLlamaServerStatus.mockResolvedValue(llamaReady({ presets: specPresets({ baseExists: false }) }));
 
@@ -1144,6 +1317,13 @@ describe('LocalLlmRuntimesView llama-server management', () => {
     // an effect, so the Start button can render a tick before the gate that
     // disables it — asserting the button first makes this order-dependent.
     expect(await screen.findByText('Download the base model to enable Start')).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: /Advanced options/ }));
+    fireEvent.change(screen.getByLabelText('KV cache K'), { target: { value: 'q8_0' } });
+    fireEvent.change(screen.getByLabelText('KV cache V'), { target: { value: 'q4_0' } });
+
+    expect(screen.getByLabelText('Preset')).toHaveValue('qwen3.8-27b-dspark');
+    expect(screen.getByRole('button', { name: /^Download$/ })).toBeEnabled();
+    expect(screen.getByText('Download the base model to enable Start')).toBeInTheDocument();
     expect(screen.getByRole('button', { name: /Start Speculative Server/ })).toBeDisabled();
     expect(startLlamaServer).not.toHaveBeenCalled();
   });
@@ -1163,19 +1343,34 @@ describe('LocalLlmRuntimesView llama-server management', () => {
     expect(link).toHaveAttribute('href', 'https://huggingface.co/models?search=dspark_qwen3_8b_block7-bf16');
   });
 
-  it('renders install button and triggers install when llama-server is not installed', async () => {
+  it.each(['detail', 'roster'])('locks both install controls during a failing %s install', async (source) => {
     const { getLlamaServerStatus, installLlamaServer } = await import('../../services/apiLocalLlm.js');
+    const toast = (await import('../ui/Toast')).default;
     getLlamaServerStatus.mockResolvedValue({ installed: false, running: false, managed: false, presets: specPresets() });
+    const pending = Promise.withResolvers();
+    installLlamaServer.mockReturnValueOnce(pending.promise);
 
     await renderRuntimes();
 
-    const installBtn = await screen.findByRole('button', { name: /Install llama\.cpp/ });
-    expect(installBtn).toBeInTheDocument();
-    fireEvent.click(installBtn);
+    const detail = await screen.findByRole('button', { name: 'Install llama.cpp' });
+    const card = screen.getByRole('heading', { name: 'Local Runtime Servers' }).closest('div.bg-port-card');
+    const row = within(card).getByText('llama.cpp').closest('div.flex.flex-col');
+    const roster = within(row).getByRole('button', { name: /^Install/ });
+    fireEvent.click(source === 'detail' ? detail : roster);
 
-    await waitFor(() => {
-      expect(installLlamaServer).toHaveBeenCalled();
+    expect(installLlamaServer).toHaveBeenCalledWith({ silent: true });
+    expect(detail).toBeDisabled();
+    expect(roster).toBeDisabled();
+
+    await act(async () => {
+      if (source === 'detail') pending.reject(new Error('Package manager failed'));
+      else pending.resolve({ success: false, message: 'Package manager failed' });
     });
+
+    expect(toast.error).toHaveBeenCalledExactlyOnceWith('Package manager failed');
+    expect(toast.success).not.toHaveBeenCalled();
+    expect(detail).toBeEnabled();
+    expect(roster).toBeEnabled();
   });
 
   it('names the install command the SERVER reports, not a hardcoded Homebrew one', async () => {
@@ -1243,7 +1438,7 @@ describe('LocalLlmRuntimesView llama-server management', () => {
     fireEvent.click(stopBtn);
 
     await waitFor(() => {
-      expect(stopLlamaServer).toHaveBeenCalled();
+      expect(stopLlamaServer).toHaveBeenCalledWith({ silent: true });
     });
   });
 

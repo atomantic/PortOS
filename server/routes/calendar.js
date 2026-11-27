@@ -1,3 +1,4 @@
+import { emitToOperatorsOn } from '../services/socketIo.js';
 import express from 'express';
 import { z } from 'zod';
 import { asyncHandler, ServerError } from '../lib/errorHandler.js';
@@ -64,7 +65,7 @@ router.get('/accounts', asyncHandler(async (req, res) => {
 router.post('/accounts', asyncHandler(async (req, res) => {
   const data = validateRequest(createAccountSchema, req.body);
   const account = await calendarAccounts.createAccount(data);
-  req.app.get('io')?.emit('calendar:changed', {});
+  emitToOperatorsOn(req.app.get('io'), 'calendar:changed', {});
   res.status(201).json(account);
 }));
 
@@ -75,7 +76,7 @@ router.put('/accounts/:id', asyncHandler(async (req, res) => {
   const updates = validateRequest(updateAccountSchema, req.body);
   const account = await calendarAccounts.updateAccount(req.params.id, updates);
   if (!account) throw new ServerError('Account not found', { status: 404, code: 'NOT_FOUND' });
-  req.app.get('io')?.emit('calendar:changed', {});
+  emitToOperatorsOn(req.app.get('io'), 'calendar:changed', {});
   res.json(account);
 }));
 
@@ -93,7 +94,7 @@ router.delete('/accounts/:id', asyncHandler(async (req, res) => {
   const [humanActivity, { deleteAutoTouchpoints }] = await Promise.all([import('../services/humanActivity.js'), import('../services/tribe.js')]);
   await humanActivity.deleteEvents({ accountId: req.params.id });
   await deleteAutoTouchpoints({ accountId: req.params.id });
-  req.app.get('io')?.emit('calendar:changed', {});
+  emitToOperatorsOn(req.app.get('io'), 'calendar:changed', {});
   res.status(204).send();
 }));
 
@@ -185,7 +186,7 @@ router.put('/accounts/:id/subcalendars', asyncHandler(async (req, res) => {
   if (!account) throw new ServerError('Account not found', { status: 404, code: 'NOT_FOUND' });
   // Auto-purge cached and derived events for disabled subcalendars
   await calendarSync.purgeDisabledSubcalendars(req.params.id);
-  req.app.get('io')?.emit('calendar:changed', {});
+  emitToOperatorsOn(req.app.get('io'), 'calendar:changed', {});
   res.json(account);
 }));
 
@@ -196,7 +197,7 @@ router.post('/sync/:accountId/discover', asyncHandler(async (req, res) => {
   }
   const io = req.app.get('io');
   const result = await calendarGoogleSync.mcpDiscoverCalendars(req.params.accountId, io);
-  req.app.get('io')?.emit('calendar:changed', {});
+  emitToOperatorsOn(req.app.get('io'), 'calendar:changed', {});
   res.json(result);
 }));
 
@@ -284,7 +285,7 @@ router.post('/sync/:accountId/discover-api', asyncHandler(async (req, res) => {
     throw new ServerError('Invalid account ID format', { status: 400, code: 'VALIDATION_ERROR' });
   }
   const result = await calendarGoogleApiSync.apiDiscoverCalendars(req.params.accountId);
-  req.app.get('io')?.emit('calendar:changed', {});
+  emitToOperatorsOn(req.app.get('io'), 'calendar:changed', {});
   res.json(result);
 }));
 

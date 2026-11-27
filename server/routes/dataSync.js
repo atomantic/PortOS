@@ -36,22 +36,15 @@
  */
 
 import { Router } from 'express';
-import { z } from 'zod';
+import { syncCategoryParamSchema, tombstoneSweepBodySchema, syncApplyBodySchema } from '../lib/dataSyncValidation.js';
 import * as dataSync from '../services/dataSync.js';
-import { sweepTombstones, getSweepStatus, TOMBSTONE_GRACE_MS } from '../services/sharing/tombstoneGc.js';
+import { sweepTombstones, getSweepStatus } from '../services/sharing/tombstoneGc.js';
 import { authorizePeerPull } from '../services/sharing/peerPullAuthorization.js';
 import { MAX_MANIFEST_SLOTS } from '../lib/syncManifest.js';
 import { asyncHandler, ServerError } from '../lib/errorHandler.js';
 import { validateRequest } from '../lib/validateRequest.js';
 
 const router = Router();
-
-// MUST stay in sync with dataSync.getSupportedCategories() — a category
-// registered in the service but absent here 400s before its snapshot/apply
-// handler can run (the latent bug #730 hit for `storyBuilder`). Exported so
-// dataSync.test.js can assert that parity against the REAL service export in
-// both directions, instead of re-typing this list (#5705).
-export const categoryParam = z.enum(['goals', 'character', 'digitalTwin', 'meatspace', 'universe', 'pipeline', 'mediaCollections', 'videoHistory', 'storyBuilder', 'usage']);
 
 // Categories whose payload is the user's own person rather than their creative
 // work — `digitalTwin` alone carries identity, chronotype, longevity markers,
@@ -67,14 +60,8 @@ const authorizeSyncPull = (req, category) => authorizePeerPull(req, {
   alwaysEnforce: PII_CATEGORIES.has(category),
 });
 
-// Tombstone GC manual trigger. Declared BEFORE `/:category/*` so the literal
-// "tombstones" segment wins Express's first-match lookup (categoryParam's
-// Zod enum would otherwise 400 before our handler runs). graceMs is clamped
-// to [0, 24h] — the trigger can only SHRINK the grace, never bypass the ack
-// horizon; the per-kind null-cutoff refusal still fires regardless.
-const tombstoneSweepBodySchema = z.object({
-  graceMs: z.number().int().min(0).max(TOMBSTONE_GRACE_MS).optional(),
-}).strict();
+// Tombstone GC routes go before `/:category/*` so the literal "tombstones"
+// segment wins Express's first-match lookup.
 
 // `heldByPausedPeers` names who is holding deletes. The Data Manager (and the
 // gc-tombstones CLI) tell the operator to resume or remove that peer — pausing
@@ -124,7 +111,7 @@ const slotsOf = (req) => {
 };
 
 router.get('/:category/video-inventory', asyncHandler(async (req, res) => {
-  const category = validateRequest(categoryParam, req.params.category);
+  const category = validateRequest(syncCategoryParamSchema, req.params.category);
   if (category !== 'videoHistory' && category !== 'mediaCollections') throw new ServerError('Category has no video inventory', { status: 404 });
   await authorizeSyncPull(req, category);
   res.json(await dataSync.getHostedMediaInventory(category));
@@ -147,7 +134,7 @@ router.get('/mediaCollections/image-library-inventory', asyncHandler(async (req,
 // 404 an older peer returns for the whole route) as "no manifest" and falls
 // back to the whole snapshot.
 router.get('/:category/manifest', asyncHandler(async (req, res) => {
-  const category = validateRequest(categoryParam, req.params.category);
+  const category = validateRequest(syncCategoryParamSchema, req.params.category);
   // Same gate as the other two reads — a manifest is a fingerprint of the same
   // payload, so it must never become the weaker door.
   await authorizeSyncPull(req, category);
@@ -158,7 +145,7 @@ router.get('/:category/manifest', asyncHandler(async (req, res) => {
 
 // GET /api/sync/:category/checksum — return checksum only (lightweight)
 router.get('/:category/checksum', asyncHandler(async (req, res) => {
-  const category = validateRequest(categoryParam, req.params.category);
+  const category = validateRequest(syncCategoryParamSchema, req.params.category);
   await authorizeSyncPull(req, category);
   const result = await dataSync.getChecksum(category, { forPeerId: forPeerOf(req) });
   if (!result) throw new ServerError('Category not found', { status: 404 });
@@ -167,7 +154,7 @@ router.get('/:category/checksum', asyncHandler(async (req, res) => {
 
 // GET /api/sync/:category/snapshot — return category data + checksum
 router.get('/:category/snapshot', asyncHandler(async (req, res) => {
-  const category = validateRequest(categoryParam, req.params.category);
+  const category = validateRequest(syncCategoryParamSchema, req.params.category);
   await authorizeSyncPull(req, category);
   const snapshot = await dataSync.getSnapshot(category, { forPeerId: forPeerOf(req), slots: slotsOf(req) });
   if (!snapshot) throw new ServerError('Category not found', { status: 404 });
@@ -180,18 +167,9 @@ router.get('/:category/snapshot', asyncHandler(async (req, res) => {
 // (manual debug, future client transport) would silently bypass the gate
 // because `applyRemote` defaults the option object to `{}` and the gate
 // reads `options.portosMeta` — absent → comparator skips the ahead check.
-// `portosMeta` is intentionally `.passthrough()` so newer-PortOS callers
-// adding fields don't get 400'd before the gate has a chance to diagnose.
-const applyBodySchema = z.object({
-  data: z.unknown(),
-  portosMeta: z.object({
-    portosVersion: z.string().trim().min(1).max(40).optional(),
-    schemaVersions: z.record(z.string().min(1).max(60), z.number().int().min(0).max(1_000_000)).optional(),
-  }).passthrough().optional(),
-});
 router.post('/:category/apply', asyncHandler(async (req, res) => {
-  const category = validateRequest(categoryParam, req.params.category);
-  const { data, portosMeta } = validateRequest(applyBodySchema, req.body ?? {});
+  const category = validateRequest(syncCategoryParamSchema, req.params.category);
+  const { data, portosMeta } = validateRequest(syncApplyBodySchema, req.body ?? {});
   // `z.unknown()` accepts falsy-but-present payloads (0, false, ''); only
   // reject genuinely missing/null so we don't 400 a valid empty-ish snapshot.
   if (data == null) throw new ServerError('Missing data field', { status: 400 });

@@ -96,14 +96,17 @@ const api = vi.hoisted(() => ({
   getReviewQueue: vi.fn(() => new Promise(() => {})),
   getInstanceFeatures: vi.fn(() => Promise.resolve({ features: featureMock.features })),
 }));
-vi.mock('../services/apiApps.js', () => ({ getApps: api.getApps }));
 vi.mock('../services/apiNavNames.js', () => ({
+  getApps: api.getApps,
+  listUniverseNames: api.listUniverseNames,
   listPipelineSeriesNames: api.listPipelineSeriesNames,
   listMusicVideoProjectNames: api.listMusicVideoProjectNames,
 }));
-vi.mock('../services/apiUniverseBuilder.js', () => ({ listUniverseNames: api.listUniverseNames }));
 vi.mock('../services/apiReview.js', () => ({ getReviewQueue: api.getReviewQueue }));
-vi.mock('../services/apiSystem.js', () => ({ getInstanceFeatures: api.getInstanceFeatures }));
+vi.mock('../services/apiAppShell.js', async (importOriginal) => ({
+  ...(await importOriginal()),
+  getInstanceFeatures: api.getInstanceFeatures,
+}));
 
 import { __resetInstanceFeatureCache } from '../hooks/useInstanceFeatures.js';
 
@@ -540,6 +543,9 @@ describe('Layout — persistent mobile touch targets', () => {
     expect(searchButtons).toHaveLength(2);
     searchButtons.forEach(expectAtLeast44px);
     expect(within(screen.getByRole('banner')).getByRole('button', { name: 'Open command palette' })).toBeInTheDocument();
+    const voiceCall = within(screen.getByRole('banner')).getByRole('link', { name: 'Open Voice Call' });
+    expectAtLeast44px(voiceCall);
+    expect(voiceCall).toHaveAttribute('href', '/voice/call');
     expect(screen.queryByRole('link', { name: 'Ambient display' })).not.toBeInTheDocument();
 
     const themeToggles = screen.getAllByRole('button', { name: 'Toggle day/night mode' });
@@ -725,8 +731,7 @@ describe('Layout — dynamic third-level navigation', () => {
 
     expect(screen.getByRole('button', { name: 'Collapse Create' })).toBeInTheDocument();
     expect(screen.getByRole('link', { name: 'Catalog' })).toHaveClass('text-port-accent');
-    expect(screen.getByRole('link', { name: 'Media Studio' })).toHaveAttribute('href', '/create/media');
-    expect(screen.getByRole('link', { name: 'Story Studio' })).toHaveAttribute('href', '/create/story');
+    expect(screen.getByRole('link', { name: 'Media Gen' })).toHaveAttribute('href', '/media');
     expect(screen.getByRole('link', { name: 'Casting' })).toHaveAttribute('href', '/catalog/casting');
     expect(screen.getByRole('link', { name: 'Writers Room' })).toHaveAttribute('href', '/writers-room');
 

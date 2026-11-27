@@ -42,16 +42,16 @@ commands target the PM2 listener.
 | 5560 | portos-autofixer | ui | Autofixer dashboard and API |
 | 5561 | portos-db (Docker container) | - | Infrastructure dependency: PostgreSQL Docker container provisioned by `scripts/setup-db.js` / Docker Compose (not a PM2 process in `server/services/apps.js`; native mode uses system pg on 5432). |
 | 5562 | portos-whisper | whisper-server | Loopback whisper.cpp speech-to-text server. |
-| 5563 | portos-server | eidoverse-host | Optional legacy HTTPS/WebSocket bridge for Eidoverse Worlds (on demand → loopback `:8940`). Prefer the same-origin path on `:5555` — `/eidoverse-host` plus root allowlist proxies — so a single-port tailcat forward (`:15555` → `:5555`) can embed the iframe. |
+| 5563 | portos-server | eidoverse-host | Optional legacy HTTPS/WebSocket bridge for Eidoverse Worlds (on demand → loopback `:8940`). Prefer the same-origin path on `:5555` — `/eidoverse-host` plus root allowlist proxies — so a single-port Tailcat forward (`:15555` → remote ingress `:5565`) can embed the iframe. |
 | 5564 | portos-slotstream | - | Loopback SSD-streaming MoE runtime. Optional PM2 process, started/stopped from Models → Runtimes. Never 11434 — that port is a PortOS-managed Ollama. |
 | 5566 | jev sidecar (loopback) | - | Loopback openjev entailment scorer. Not a PM2 process: `server/services/jev.js` starts it on the first scoring call and reaps it after ten idle minutes. See [JEV_SETUP.md](./JEV_SETUP.md). |
 | 5568 | portos-llama-server | - | Loopback llama.cpp speculative-decoding server. Optional PM2 process, started/stopped from Models → Runtimes. |
-| 8000 | portos-mtplx | - | Loopback MTPLX OpenAI-compatible API (upstream's own default, kept so the shipped provider presets match). Optional PM2 process, started/stopped from Models → Runtimes. See [features/mtplx.md](./features/mtplx.md). |
+| 8000 | portos-mtplx | - | Loopback MTPLX OpenAI-compatible API (upstream's own default, kept so the shipped provider presets match). Optional PM2 process, started/stopped from Models → Runtimes. See [MTPLX setup](./features/local-llm-runtimes.md#mtplx-on-apple-silicon). |
 | 8001 | portos-splash | - | Loopback Splash API; managed from Models → Runtimes. |
 | 8002 | portos-mkserve | - | Loopback mkserve API; managed from Models → Runtimes. |
 | 18022 | PortOS model host | - | Opt-in bearer-authenticated inference queue for dedicated hosts; one active generation. See [fleet host](./features/fleet-llm-host.md). |
-| 18020 | vLLM (Docker) | - | Loopback vLLM Qwen3.8-27B / DFlash 2 container on an RTX 3090 host. Started explicitly from host setup or by the operator. Dedicated hosting opts into Docker restart persistence. See [features/qwen38-rtx3090.md](./features/qwen38-rtx3090.md). |
-| 18021 | SGLang (Docker) | - | Loopback SGLang Qwen3.8-27B container on a Hopper/Blackwell host. Operator-started (`docker compose up -d`) — PortOS never brings it up on boot. See [features/sglang-qwen38.md](./features/sglang-qwen38.md). |
+| 18020 | vLLM (Docker) | - | Loopback vLLM Qwen3.8-27B / DFlash 2 container on an RTX 3090 host. Started explicitly from host setup or by the operator. Dedicated hosting opts into Docker restart persistence. See [vLLM setup](./features/local-llm-runtimes.md#vllm-on-rtx-3090). |
+| 18021 | SGLang (Docker) | - | Loopback SGLang Qwen3.8-27B container on a Hopper/Blackwell host. Operator-started (`docker compose up -d`) — PortOS never brings it up on boot. See [SGLang setup](./features/local-llm-runtimes.md#sglang-on-hopper-or-blackwell). |
 | 5565 | Tailcat remote ingress (loopback) | - | On demand via managed serve; same HTTP/HTTPS as API, but transport-marked remote requests cannot invoke local-only MCP. |
 | 15555 | tailcat forward (loopback) | - | Preferred local listener for federated peers over [tailcat](https://github.com/tailscale/tailcat) (`PORTS.TAILCAT_FORWARD` / `DEFAULT_TAILCAT_LOCAL_PORT`). Maps `127.0.0.1:15555` → remote ingress `:5565` (the remote side runs managed `tailcat serve`). Saved legacy remote ports are retained until explicitly changed. If busy, PortOS picks the next free port. Dial polarity / managed serve: [features/tailcat-peers.md](./features/tailcat-peers.md). |
 
@@ -76,14 +76,14 @@ Rules of thumb:
    - **A server-owned path must never be answered by an SPA fallback — and there are two of them.** Neither 404s. In dev, Vite answers an unproxied path with `index.html` and a `200`; in production the fallback in `server/index.js` skips a request only when its path carries a file extension, so an EXTENSIONLESS one falls through the same way. Either shape hands a binary loader HTML, which fails far from the cause (a missing `/data/image-to-3d` proxy entry surfaced as `Unexpected token '<' … is not valid JSON` from the GLB viewer, which took its whole route down), or hands an API client HTML with a success status.
    - **Dev side:** `/data` is proxied as one wildcard prefix, so a new mount is covered the moment it is added.
    - **Production side:** `server/lib/assetRoutePrefixes.js` lists the namespaces the server owns (`SERVER_OWNED_PREFIXES`) alongside the exact client routes inside them (`spaPaths` — `/data` itself is the Data Manager page), and `mountAssetRoutes` closes each one with a terminating 404 (#4688).
-   - `scripts/dev-proxy-drift.test.js` fails if the proxy, the mounts, and the client's own routes drift apart. It reads both `NAV_COMMANDS` and `App.jsx`'s nested `<Route>` tree, so a new page under a server-owned prefix — which the terminator would otherwise 404 silently — fails the build even when only its `:id` detail route exists.
+   - `server/test/guards/repo/dev-proxy-drift.test.js` fails if the proxy, the mounts, and the client's own routes drift apart. It reads both `NAV_COMMANDS` and `App.jsx`'s nested `<Route>` tree, so a new page under a server-owned prefix — which the terminator would otherwise 404 silently — fails the build even when only its `:id` detail route exists.
 
 Run `npm run setup:guide` to print the currently valid local URL, the exact trusted MagicDNS URL when available, and the next Tailscale/HTTPS prerequisite. The end-to-end walkthrough is in [SETUP.md](./SETUP.md).
 
 
 ## Eidoverse on a single port (tailcat)
 
-A [tailcat](https://github.com/tailscale/tailcat) forward typically maps only `127.0.0.1:15555` → remote PortOS `:5555`. The Eidoverse iframe used to point at `:5563`, which is not tunneled, and the renderer issues absolute root requests (`/ws`, `/version`, …) that would miss a path-prefix-only iframe.
+A [tailcat](https://github.com/tailscale/tailcat) forward typically maps only `127.0.0.1:15555` → remote PortOS ingress `:5565`. The isolated ingress preserves the remote API boundary; forwarding directly to `:5555` would bypass it. The Eidoverse iframe used to point at `:5563`, which is not tunneled, and the renderer issues absolute root requests (`/ws`, `/version`, …) that would miss a path-prefix-only iframe.
 
 PortOS now embeds via **`/eidoverse-host/`** on the same host+port as the UI. The API reverse-proxies that prefix to loopback `:8940` (prefix stripped) and, while the on-demand host is active, forwards an allowlist of Eidoverse root routes (including WebSocket `/ws`). `GET /embed-config` is terminated locally with a `parentOrigin` that preserves the browser `Host` (so `http://127.0.0.1:15555` works). The dedicated `:5563` bridge remains available as an optional/legacy listener.
 
@@ -157,7 +157,7 @@ PortOS automatically detects ports from env vars:
 |-------|---------|
 | 5553-5561 | PortOS core services (includes the `:5553` loopback mirror and the `portos-db` Docker container on `:5561`) |
 | 5562-5569 | Reserved for PortOS extensions. Assigned: 5562 whisper, 5563 Eidoverse bridge (on demand), 5564 slotstream (on demand), 5565 Tailcat ingress (on demand), 5566 jev scorer (on demand), 5568 llama-server. Unassigned but still reserved: 5567, 5569 |
-| 5570-5599 | User applications — **put managed apps here**. `GET /api/ports/scan`, `POST /api/ports/allocate` (`server/services/ports.js`) and the PM2 Standardizer's collision reassignment (`server/services/pm2Standardizer.js`) all allocate from this band, overflowing just past 5599 when it is full |
+| 5570-5599 | User applications — **put managed apps here**. App scaffolding and the PM2 Standardizer allocate from this band, overflowing just past 5599 when it is full |
 | 6000 and other browser-blocked ports | Never allocated. Chrome and Firefox refuse to connect to the WHATWG Fetch "bad ports" (`ERR_UNSAFE_PORT`; 6000 is X11), so a managed app there has no reachable UI. `server/lib/browserUnsafePorts.js` holds the list and every allocator skips it |
 
 > **A collision inside `5553-5569` is silent, not loud.** The natural assumption is

@@ -1,5 +1,5 @@
 import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { mkdir, readFile, rm, writeFile } from 'node:fs/promises';
+import { chmod, mkdir, readFile, rm, stat, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 
 vi.mock('../lib/paths.js', async importOriginal => {
@@ -22,6 +22,22 @@ beforeEach(async () => {
   await atomicWrite(META(), { uploaded: true, savedMarkers: {}, lastScanAt: null });
 });
 afterAll(cleanupTempDataRoots);
+
+it.skipIf(process.platform === 'win32').each(['new files', 'existing files'])(
+  'writes owner-only genome data for %s',
+  async (scenario) => {
+    const paths = [META(), join(PATHS.meatspace, 'genome-raw.txt')];
+    for (const path of paths) {
+      if (scenario === 'new files') await rm(path);
+      else await chmod(path, 0o644);
+    }
+    const content = Array.from({ length: 100 }, (_, i) => `rs${i + 1}\t1\t1\tAA`).join('\n');
+    await expect(uploadGenome(content, 'example.txt')).resolves.toMatchObject({ snpCount: 100 });
+    for (const path of paths) {
+      expect((await stat(path)).mode & 0o777).toBe(0o600);
+    }
+  }
+);
 
 describe('genome metadata writes are serialized', () => {
   it('keeps every marker from overlapping saveMarker calls, including cold-index lookups', async () => {

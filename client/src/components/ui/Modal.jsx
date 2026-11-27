@@ -17,7 +17,7 @@
  *                           `onClose` (e.g. cancel an inline mode without
  *                           closing the editor).
  *   align='top'             top-anchored panel.
- *   usePortal               escape stacking-context ancestors.
+ *   usePortal=false         render in place instead of escaping stacking-context ancestors.
  *
  * Height: the panel is clamped to the *visible* viewport by Modal itself —
  * `max-h-dvh-cap` (index.css) minus a per-align `--dvh-inset`. Call sites must
@@ -27,7 +27,7 @@
  * `items-center`, so a panel taller than the overlay has its overflow split
  * top and bottom, pushing the title AND the Save/Cancel footer off-screen. The
  * clamp lives in the primitive so no call site has to remember it
- * (`client/src/AGENTS.md`); `client/src/test/guards/ui/modalPanelHeights.test.js` fails the build if the
+ * (`client/src/AGENTS.md`); `client/src/test/guards/ui/tailwindClassConventions.test.js` fails the build if the
  * per-caller idiom returns. A caller wanting a *shorter* panel sets the cap, not
  * a raw vh: `panelClassName="… [--dvh-cap:60dvh]"`. Modal also supplies
  * `overflow-auto` unless `panelClassName` already declares an overflow utility;
@@ -45,7 +45,8 @@
 
 import { useEffect, useId, useRef } from 'react';
 import { createPortal } from 'react-dom';
-import useFocusTrap from '../../hooks/useFocusTrap.js';
+import useFocusTrap, { FocusTrapParent } from '../../hooks/useFocusTrap.js';
+import { useScrollLock } from '../../hooks/useScrollLock.js';
 
 const SIZE_CLASSES = {
   sm: 'max-w-md',
@@ -201,7 +202,7 @@ export default function Modal({
   closeOnBackdrop = true,
   closeOnEsc = true,
   align = 'center',
-  usePortal = false,
+  usePortal = true,
   zIndexClassName = 'z-50',
   backdropClassName = 'bg-black/70',
   panelClassName = '',
@@ -209,6 +210,7 @@ export default function Modal({
   ariaLabel,
   initialFocusRef,
 }) {
+  useScrollLock(open);
   const backdropRef = useRef(null);
   const dialogRef = useRef(null);
   // Trap focus inside the dialog while open and restore it to the opener
@@ -267,12 +269,10 @@ export default function Modal({
         // inside another modal/portal whose ancestor has a bubble-listening onClick
         // (e.g. MediaLightbox's `onClick={onClose}`), the click would dismiss the parent.
         onClick={(e) => e.stopPropagation()}
-        // Same swallow, minus Escape: `handleGlobalEsc` is a native `document`
-        // listener owning stack-aware precedence, and stopPropagation here would
-        // keep Escape from reaching it.
-        onKeyDown={(e) => { if (e.key !== 'Escape') e.stopPropagation(); }}
+        // Let Escape and Tab reach their stack-aware document listeners.
+        onKeyDown={(e) => { if (e.key !== 'Escape' && e.key !== 'Tab') e.stopPropagation(); }}
       >
-        {children}
+        <FocusTrapParent.Provider value={dialogRef}>{children}</FocusTrapParent.Provider>
       </div>
     </div>
   );

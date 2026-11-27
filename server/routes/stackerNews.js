@@ -1,3 +1,4 @@
+import { emitToOperatorsOn } from '../services/socketIo.js';
 import { Router } from 'express';
 import { z } from 'zod';
 import { asyncHandler, ServerError } from '../lib/errorHandler.js';
@@ -73,7 +74,7 @@ const requireId = (value, label = 'ID') => {
 const requireAccount = async (id) => {
   if (!(await stackerNews.getAccount(id))) throw new ServerError('Stacker News account not found', { status: 404 });
 };
-const emitChanged = (req, accountId) => req.app.get('io')?.emit('stacker-news:changed', { accountId });
+const emitChanged = (req, accountId) => emitToOperatorsOn(req.app.get('io'), 'stacker-news:changed', { accountId });
 
 router.get('/accounts', asyncHandler(async (_req, res) => res.json({ accounts: await stackerNews.listAccounts() })));
 

@@ -45,7 +45,7 @@ vi.mock('../../lib/sseUtils.js', () => ({ broadcastSse: vi.fn(), attachSseClient
 vi.mock('../../lib/ffmpeg.js', () => ({
   findFfmpeg: vi.fn(async () => '/usr/bin/ffmpeg'),
   safeUnder: (root, name) => (name ? `${root}/${name}` : null),
-  generateThumbnail: vi.fn(async () => 'thumb.jpg'),
+  generateThumbnail: vi.fn(async (_path, jobId) => `${jobId}.jpg`),
   probeVideoDuration: vi.fn(async () => 30),
 }));
 vi.mock('../../lib/processEnv.js', () => ({ safeChildProcessOptions: (options = {}) => ({ ...options, env: {}, windowsHide: true }) }));
@@ -90,6 +90,7 @@ import { loadHistory, mutateVideoHistory } from '../videoGen/history.js';
 import { getTrack } from '../tracks/index.js';
 import { getProject, updateProject, mutateProjectRecord } from './projects.js';
 import { unlink } from 'fs/promises';
+import { join } from 'node:path';
 import { musicVideoEvents } from './events.js';
 import { broadcastSse, closeJobAfterDelay } from '../../lib/sseUtils.js';
 import { fileOwnedMediaBestEffort } from '../mediaCollectionRules.js';
@@ -192,7 +193,7 @@ describe.each(PIPELINES)('final render job lifecycle: $name pipeline', (pipeline
     await expect.poll(() => steps().includes('close'), { timeout: 5000 }).toBe(true);
     await expect.poll(() => blockersSince(blockersBefore), { timeout: 5000 }).toEqual(retained);
     expect(getActiveRenderJobId(pid)).toBeNull();
-    expect(cancelRender(jobId)).toBe(false);
+    expect(cancelRender(jobId)).toEqual({ ok: false, code: 'ALREADY_TERMINAL' });
   };
   const outputPath = () => expect.stringMatching(/music-video-.*\.mp4$/);
   // Every announcement comes after the slot is free, reading the row the job last settled.
@@ -216,7 +217,7 @@ describe.each(PIPELINES)('final render job lifecycle: $name pipeline', (pipeline
     expect(only('event')[0].event).toEqual({ projectId: pid, jobId, status: 'completed', error: null });
     expect(only('production')[0].event).toEqual({ projectId: pid, runId: 'run-1', attemptId: 'attempt-1', jobId, status: 'completed', error: null });
     const { frame } = only('frame')[0];
-    expect(frame).toMatchObject({ type: 'complete', result: { id: jobId, filename: expect.stringMatching(/^music-video-/), thumbnail: 'thumb.jpg' } });
+    expect(frame).toMatchObject({ type: 'complete', result: { id: jobId, filename: expect.stringMatching(/^music-video-/), thumbnail: `${jobId}.jpg` } });
     // Only a seeked render makes a proof sheet; the other frames keep their shape.
     expect('proof' in frame.result).toBe(pipeline.name === 'seeked');
     expect(generateThumbnail).toHaveBeenCalledOnce();
@@ -340,6 +341,23 @@ describe.each(PIPELINES)('final render job lifecycle: $name pipeline', (pipeline
     // Nothing names the file, so it would be an orphan.
     expect(unlink).toHaveBeenCalledWith(outputPath());
     expect(mutateVideoHistory).not.toHaveBeenCalled();
+  });
+
+  it('a rejected history write removes every unpublished artifact', async () => {
+    vi.spyOn(console, 'error').mockImplementation(() => {});
+    const jobId = await start();
+    const filename = rows.get(pid).renderPartialFilename;
+    mutateVideoHistory.mockRejectedValueOnce(new Error('history unavailable'));
+    pipeline.succeed();
+    await ended(jobId, [PUBLICATION]);
+
+    expect(unlink.mock.calls.map(([path]) => path)).toEqual([
+      join('/data/videos', filename),
+      ...(pipeline.name === 'seeked' ? [join('/data/thumbs', filename.replace(/\.mp4$/, '-proof.png'))] : []),
+      join('/data/thumbs', `${jobId}.jpg`),
+    ]);
+    expect(rows.get(pid)).toMatchObject({ status: 'failed', renderError: 'Finalize failed: history unavailable' });
+    expect(rows.get(pid).renderHistoryId).toBeUndefined();
   });
 
   it('a publish step that fails after the history entry keeps the output the history names', async () => {

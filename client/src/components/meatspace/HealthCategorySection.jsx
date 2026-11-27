@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef, useMemo } from 'react';
+import { useState, useEffect, useRef, useMemo, useId } from 'react';
 import { ChevronDown, ChevronRight } from 'lucide-react';
 import { getAppleHealthMetrics, getLatestHealthMetrics } from '../../services/apiHealth.js';
 import MetricCard from './MetricCard';
@@ -6,6 +6,7 @@ import SleepCard from './SleepCard';
 import ListLoadError from '../ui/ListLoadError';
 
 export default function HealthCategorySection({ category, from, to, expanded, onToggle, availableMetrics }) {
+  const panelId = useId();
   const [metricData, setMetricData] = useState({});
   const [latestValues, setLatestValues] = useState({});
   const [loading, setLoading] = useState(false);
@@ -75,41 +76,46 @@ export default function HealthCategorySection({ category, from, to, expanded, on
 
   return (
     <div className="border border-port-border rounded-xl overflow-hidden">
-      <button
-        onClick={onToggle}
-        className="w-full flex items-center justify-between px-6 py-4 bg-port-card hover:bg-port-border/30 transition-colors"
-      >
-        <div className="flex items-center gap-3">
+      <h2>
+        <button
+          type="button"
+          aria-expanded={expanded}
+          aria-controls={panelId}
+          onClick={onToggle}
+          className="w-full flex items-center gap-3 px-6 py-4 bg-port-card hover:bg-port-border/30 transition-colors"
+        >
           {expanded ? <ChevronDown size={16} className="text-gray-400" /> : <ChevronRight size={16} className="text-gray-400" />}
-          <h2 className="text-sm font-semibold text-white uppercase tracking-wider">{category.label}</h2>
+          <span className="text-sm font-semibold text-white uppercase tracking-wider">{category.label}</span>
           <span className="text-xs text-gray-500">{activeMetrics.length} metrics</span>
-        </div>
-      </button>
+        </button>
+      </h2>
 
-      {expanded && (
-        <div className="grid grid-cols-1 lg:grid-cols-2 gap-6 p-6 bg-port-bg">
-          {failedKeys.length > 0 && (
-            <ListLoadError
-              className="lg:col-span-2"
-              what={failedMetrics.map(m => m.label).join(', ')}
-              onRetry={() => setAttempt(n => n + 1)}
-            />
-          )}
-          {shownMetrics.map(metric =>
-            metric.key === 'sleep_analysis' ? (
-              <SleepCard key={metric.key} data={metricData[metric.key] ?? []} loading={loading} />
-            ) : (
-              <MetricCard
-                key={metric.key}
-                data={metricData[metric.key] ?? []}
-                loading={loading}
-                config={metric}
-                latestValue={latestValues[metric.key] ?? null}
+      <div id={panelId} hidden={!expanded}>
+        {expanded && (
+          <div className="grid grid-cols-1 lg:grid-cols-2 gap-6 p-6 bg-port-bg">
+            {failedKeys.length > 0 && (
+              <ListLoadError
+                className="lg:col-span-2"
+                what={failedMetrics.map(m => m.label).join(', ')}
+                onRetry={() => setAttempt(n => n + 1)}
               />
-            )
-          )}
-        </div>
-      )}
+            )}
+            {shownMetrics.map(metric =>
+              metric.key === 'sleep_analysis' ? (
+                <SleepCard key={metric.key} data={metricData[metric.key] ?? []} loading={loading} />
+              ) : (
+                <MetricCard
+                  key={metric.key}
+                  data={metricData[metric.key] ?? []}
+                  loading={loading}
+                  config={metric}
+                  latestValue={latestValues[metric.key] ?? null}
+                />
+              )
+            )}
+          </div>
+        )}
+      </div>
     </div>
   );
 }

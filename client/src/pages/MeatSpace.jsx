@@ -25,7 +25,7 @@ const NicotineTab = lazy(() => import('../components/meatspace/tabs/NicotineTab'
 export default function MeatSpace() {
   const { tab } = useParams();
   const navigate = useNavigate();
-  const activeTab = tab || 'overview';
+  const activeTab = TABS.some(item => item.id === tab) ? tab : 'overview';
 
   const handleTabChange = (tabId) => {
     navigate(`/meatspace/${tabId}`);
@@ -79,11 +79,18 @@ export default function MeatSpace() {
         activeTab={activeTab}
         onChange={handleTabChange}
         ariaLabel="MeatSpace sections"
+        controlsIdPrefix="meatspace-panel"
         className="print:hidden"
       />
 
       {/* Tab content */}
-      <div className="flex-1 overflow-auto p-6 print:overflow-visible print:p-0">
+      <div
+        role="tabpanel"
+        id={`meatspace-panel-${activeTab}`}
+        aria-labelledby={`tab-${activeTab}`}
+        tabIndex={0}
+        className="flex-1 overflow-auto p-6 print:overflow-visible print:p-0"
+      >
         <Suspense fallback={<div className="flex justify-center py-12"><BrailleSpinner text="Loading" /></div>}>
           {renderTabContent()}
         </Suspense>

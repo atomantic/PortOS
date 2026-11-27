@@ -22,10 +22,13 @@ describe('backup asset owner inventory', () => {
 
   it('admits injected toolkit writers only through the real host boundary', () => {
     const source = path => blankComments(readText(join(SERVER_ROOT, path))).join('\n');
-    const bootstrap = source('services/bootstrap.js');
-    expect(bootstrap).toMatch(/import\s*\{\s*withBackupAssetPublication\s*\}\s*from ['"]\.\.\/lib\/backupSnapshotBoundary\.js['"]/);
+    const bootstrap = source('services/bootstrap/servicesPhase.js');
+    expect(bootstrap).toMatch(/import\s*\{\s*withBackupAssetPublication\s*\}\s*from ['"]\.\.\/\.\.\/lib\/backupSnapshotBoundary\.js['"]/);
     expect(bootstrap).toMatch(/createAIToolkit\(\{[\s\S]*?withAssetPublication:\s*withBackupAssetPublication/);
     expect(source('lib/aiToolkit/index.js')).toMatch(/createRunnerService\(\{\s*withAssetPublication,/);
-    expect(source('lib/aiToolkit/runner.js')).toMatch(/createRunFinalizer\(\{\s*withAssetPublication,/);
+    const runner = source('lib/aiToolkit/runner.js');
+    expect(runner).toMatch(/const execution = \{[^}]*\bwithAssetPublication\b/);
+    expect(runner).toMatch(/createApiStreamExecutor\(\{\s*\.\.\.execution,/);
+    expect(source('lib/aiToolkit/internal/apiStreamExecutor.js')).toMatch(/createRunFinalizer\(\{\s*withAssetPublication,/);
   });
 });

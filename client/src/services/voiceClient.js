@@ -46,7 +46,10 @@ const isOwnerCurrent = (generation) => generation === captureOwnerGeneration;
 // pending synthesis fetches; a new synthetic reply retires only older fetches.
 const playback = {
   queue: Promise.resolve(),
+  decoding: new Set(),
+  animation: null,
   source: null,
+  startedAt: 0,
   depth: 0,
   echoTailUntil: 0,
   acceptsServerTurnAudio: true,
@@ -73,8 +76,18 @@ const ensureCtx = () => {
   return audioCtx;
 };
 
+// Call synchronously from the user's tap/submit so WebKit can start playback
+// before the asynchronous reply arrives. This never opens the microphone.
+export function prepareVoicePlayback() {
+  if (!window.AudioContext && !window.webkitAudioContext) return;
+  try { ensureCtx(); } catch { /* Native audio unavailable; don't block the typed turn. */ }
+}
+
 const cancelVoicePlayback = () => {
   playback.decodeGeneration += 1;
+  playback.animation?.stop();
+  playback.animation = null;
+  playback.decoding.clear();
   if (playback.source) {
     try { playback.source.stop(); } catch { /* already stopped */ }
     playback.source = null;
@@ -102,36 +115,79 @@ const beginSynthesizedReply = () => {
   return generation;
 };
 
-const enqueuePlay = async (bytes) => {
+// Only Voice Call registers a visualizer. It gets assistant output WAV, never mic audio.
+let outputVisualizer;
+export function bindVoiceOutputVisualizer(prepare) {
+  outputVisualizer = prepare;
+  return () => { if (outputVisualizer === prepare) outputVisualizer = undefined; };
+}
+
+const waitForAvatar = (ready) => new Promise(resolve => {
+  const timer = setTimeout(resolve, 750);
+  Promise.resolve(ready).finally(() => { clearTimeout(timer); resolve(); }).catch(() => {});
+});
+
+async function playDecodedVoice(buffer, bytes, ctx, generation, animate) {
+  if (generation !== playback.decodeGeneration) return;
+  let animation;
+  if (animate && outputVisualizer) {
+    try { animation = outputVisualizer(bytes); } catch { /* Avatar never owns the voice transport. */ }
+  }
+  playback.animation = animation;
+  if (animation) await waitForAvatar(animation.ready);
+  if (generation !== playback.decodeGeneration) return;
+  const src = ctx.createBufferSource();
+  src.buffer = buffer;
+  src.connect(ctx.destination);
+  playback.source = src;
+  playback.startedAt = ctx.currentTime;
+  animation?.start(() => ctx.currentTime - playback.startedAt);
+  await new Promise((resolve, reject) => {
+    src.onended = resolve;
+    try { src.start(); } catch (error) { reject(error); }
+  }).catch(error => console.warn('[voice] could not start playback:', error));
+  animation?.stop();
+  if (generation !== playback.decodeGeneration) return;
+  playback.animation = null;
+  playback.source = null;
+  playback.depth -= 1;
+  if (playback.depth === 0 && playback.acceptsServerTurnAudio) {
+    playback.echoTailUntil = performance.now() + VAD.ttsTailMs;
+  }
+}
+
+const enqueuePlay = (bytes, { animate = false } = {}) => {
   const generation = playback.decodeGeneration;
   const ctx = ensureCtx();
-  // decodeAudioData consumes its buffer — clone so we don't mutate the socket frame
-  const copy = bytes.slice(0);
-  const buffer = await ctx.decodeAudioData(copy);
-  if (generation !== playback.decodeGeneration) return;
-  playback.depth += 1;
-  playback.queue = playback.queue.then(() => new Promise((resolve) => {
-    if (generation !== playback.decodeGeneration) {
-      resolve();
-      return;
-    }
-    const src = ctx.createBufferSource();
-    src.buffer = buffer;
-    src.connect(ctx.destination);
-    src.onended = () => {
-      if (playback.source === src) playback.source = null;
-      playback.depth = Math.max(0, playback.depth - 1);
-      // Preserve the admission-based tail policy, including proactive/preview
-      // audio played while server-turn admission is still closed.
-      if (playback.depth === 0 && playback.acceptsServerTurnAudio) {
-        playback.echoTailUntil = performance.now() + VAD.ttsTailMs;
-      }
-      resolve();
-    };
-    playback.source = src;
-    src.start();
-  }));
+  // decodeAudioData consumes its buffer; preserve the TTS bytes for Voice Call.
+  const decoded = ctx.decodeAudioData(bytes.slice(0)).then(buffer => {
+    if (generation !== playback.decodeGeneration) return;
+    playback.depth += 1;
+    playback.queue = playback.queue.then(() => playDecodedVoice(buffer, bytes, ctx, generation, animate));
+  });
+  playback.decoding.add(decoded);
+  return decoded.finally(() => playback.decoding.delete(decoded));
 };
+
+// Sample only the already-decoded output that is actually playing. No mic,
+// second audio graph, network, or queue changes for the visualizer.
+export function getVoiceOutputLevel() {
+  const buffer = playback.source?.buffer;
+  if (!buffer?.numberOfChannels || audioCtx?.state !== 'running') return 0;
+  const elapsed = audioCtx.currentTime - playback.startedAt;
+  if (elapsed < 0 || elapsed >= buffer.duration) return 0;
+  const sample = Math.floor(elapsed * buffer.sampleRate);
+  // Use a bounded sample window (~20 ms) at the current audio-clock position.
+  const stride = Math.max(1, Math.floor(buffer.sampleRate / 1600));
+  const samples = buffer.getChannelData(0);
+  let energy = 0;
+  let count = 0;
+  for (let i = Math.max(0, sample - 16 * stride); i < Math.min(samples.length, sample + 16 * stride); i += stride) {
+    energy += samples[i] ** 2;
+    count += 1;
+  }
+  return count ? Math.min(1, Math.sqrt(energy / count) * 4) : 0;
+}
 
 const isTtsActive = () => playback.depth > 0 || playback.source !== null;
 const isInTtsEchoWindow = () => isTtsActive() || performance.now() < playback.echoTailUntil;
@@ -294,7 +350,7 @@ const playServerTurnAudio = ({ sentence, wav }) => {
   rememberTtsSentence(sentence);
   const ab = toExactArrayBuffer(wav);
   if (!ab) return;
-  enqueuePlay(ab).catch((err) => console.warn('[voice] playback failed:', err));
+  enqueuePlay(ab, { animate: true }).catch((err) => console.warn('[voice] playback failed:', err));
 };
 
 socket.on('voice:tts:audio', playServerTurnAudio);
@@ -739,7 +795,7 @@ export const playWav = (arrayBuffer) => playPreviewAudio(arrayBuffer);
 // + echo memory as server-streamed TTS, so barge-in (cancelVoicePlayback) and
 // echo-suppression keep working exactly as they do for normal turns. Resolves
 // once the audio is decoded and queued (not when playback finishes).
-export const speakSynthesized = async (text, { engine, voice, rate, signal } = {}) => {
+export const speakSynthesized = async (text, { engine, voice, rate, signal, animate = false } = {}) => {
   const clean = (text || '').trim();
   if (!clean) return false;
   const gen = beginSynthesizedReply();
@@ -759,13 +815,20 @@ export const speakSynthesized = async (text, { engine, voice, rate, signal } = {
   // Superseded while the synth was in flight — drop this stale audio rather than
   // playing it over/after the newer turn's reply.
   if (gen !== playback.synthesisGeneration) return false;
-  await enqueuePlay(wav);
+  await enqueuePlay(wav, { animate });
   return true;
 };
 
 // Resolves once every currently-queued TTS chunk has finished playing locally.
 // Used by continuous mode to know when to return from 'speaking' → listening.
 export const whenPlaybackDrained = () => playback.queue.then(() => !isTtsActive());
+
+// voice:idle is sent as soon as the server sends its last WAV; that WAV may
+// still be decoding before it becomes visible to the normal playback queue.
+export async function whenVoiceTurnAudioDrained() {
+  await Promise.allSettled([...playback.decoding]);
+  return whenPlaybackDrained();
+}
 
 // ─── Continuous mode (hands-free VAD) ─────────────────────────────────────
 // AudioWorklet streams PCM, RMS-based VAD auto-submits on silence, and

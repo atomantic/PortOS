@@ -1,9 +1,5 @@
+import { TICKING_CLOCK_KINDS } from '../../../../../server/lib/storyArcLimits.js';
 import { Plus, Trash2, Clock } from 'lucide-react';
-
-// Mirror of TICKING_CLOCK_KINDS in server/lib/storyArc.js. The server is the
-// validation authority (unknown kinds fall back to 'custom'); this list only
-// drives the picker options.
-const TICKING_CLOCK_KINDS = ['deadline', 'event', 'countdown', 'prophecy', 'bomb', 'custom'];
 
 // Inline editor for the arc's singular ticking clock / countdown. Edits merge
 // into a single `tickingClock` object the parent stores under `draft`; the

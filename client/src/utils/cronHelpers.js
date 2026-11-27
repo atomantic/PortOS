@@ -3,6 +3,7 @@
  * human text, and `cronFromIntervalMs`.
  */
 
+import { MONTHLY_DAY_RANGES } from '../../../server/lib/cronFields.js';
 import { INTERVAL_OPTIONS } from '../../../server/lib/autonomousJobIntervals.js';
 export { ON_DEMAND_INTERVAL } from '../../../server/lib/autonomousJobIntervals.js';
 export { scheduleAnchorKindForInterval } from '../../../server/lib/scheduleAnchor.js';
@@ -117,12 +118,6 @@ export const RECURRENCE_ORDINALS = [
   { value: 'last', label: 'Last' },
 ];
 
-const MONTHLY_DAY_RANGES = {
-  first: '1-7',
-  second: '8-14',
-  third: '15-21',
-  fourth: '22-28',
-};
 
 const ORDINAL_LABELS = Object.fromEntries(RECURRENCE_ORDINALS.map(({ value, label }) => [value, label]));
 

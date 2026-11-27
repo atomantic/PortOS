@@ -94,7 +94,7 @@ export const browserVaultListInputSchema = z.object({
 const selectorSchema = z.string().trim().min(1).max(512);
 
 export const browserVaultFillSchema = z.object({
-  // A CDP target id from GET /api/browser/pages or the navigate response.
+  // A CDP target id from the browser catalog or navigate result.
   targetId: z.string().trim().min(1).max(128).regex(/^[A-Za-z0-9_-]+$/),
   loginId: z.string().uuid(),
   fields: z.array(z.enum(WEBSITE_LOGIN_FILL_FIELDS)).min(1).max(WEBSITE_LOGIN_FILL_FIELDS.length).optional(),

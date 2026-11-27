@@ -109,8 +109,9 @@ const noBackEdgeRules = (graph) => [
   {
     why: 'extracted agent leaves exist only to be depended on (#2837); the TUI session controller takes its collaborators as arguments so it never needs a spawner (#8021)',
     from: [
-      'agent/agentFinalization.js', 'agent/agentPrVerification.js', 'agent/agentGoalFidelity.js', 'agent/agentOutputHookDispatch.js', 'agent/agentRunFinalize.js', 'agent/agentSummaryExtraction.js', 'agent/agentRunnerSync.js', 'agent/agentRunnerOutputBatchers.js',
-      'agentTuiSpawning/sessionController.js', 'agentTuiSpawning/spawnConfig.js', 'agentTuiSpawning/outputSpooler.js', 'agentTuiSpawning/finalizeHelpers.js',
+      'agent/agentFinalization.js', 'agent/agentSuccessCriteria.js', 'agent/agentRetirement.js', 'agent/agentForgeSettlement.js', 'agent/agentDeliveryRecovery.js',
+      'agent/agentPrVerification.js', 'agent/agentGoalFidelity.js', 'agent/agentOutputHookDispatch.js', 'agent/agentRunFinalize.js', 'agent/agentSummaryExtraction.js', 'agent/agentRunnerSync.js', 'agent/agentRunnerOutputBatchers.js',
+      ...Array.from(graph.keys()).filter(file => file.startsWith('agentTuiSpawning/')),
     ],
     to: AGENT_ORCHESTRATORS,
   },
@@ -135,8 +136,11 @@ const noBackEdgeRules = (graph) => [
     to: ['identity.js'],
   },
   {
-    why: 'meatspacePost.js is the raw data layer; the analytics and policy layers read it, never the reverse (#5690)',
-    from: ['meatspace/meatspacePost.js'],
+    why: 'the POST service and its data leaves cannot depend on higher-level analytics or policy orchestration (#5690)',
+    from: [
+      'meatspace/meatspacePost.js', 'meatspace/postConfig.js', 'meatspace/postSessions.js',
+      'meatspace/postSessionHistory.js', 'meatspace/postProgress.js', 'meatspace/postSkillEvidence.js',
+    ],
     to: ['meatspace/meatspacePostStats.js', 'meatspace/meatspacePostRecommendations.js', 'meatspace/meatspacePostAdaptive.js'],
   },
 ];

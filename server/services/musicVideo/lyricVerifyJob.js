@@ -1,4 +1,5 @@
 import { randomUUID } from 'crypto';
+import { CANCEL_ALREADY_TERMINAL } from '../../lib/cancelResponse.js';
 import { broadcastSse, attachSseClient, closeJobAfterDelay } from '../../lib/sseUtils.js';
 import { ServerError } from '../../lib/errorHandler.js';
 import { requireProject } from './requireProject.js';
@@ -12,19 +13,22 @@ const jobs = new Map();
 export const attachLyricVerifySseClient = (jobId, res) => attachSseClient(jobs, jobId, res);
 export function cancelLyricVerify(jobId) {
   const job = jobs.get(jobId);
-  if (!job || job.settled) return false;
+  if (!job) return false;
+  if (job.settled) return CANCEL_ALREADY_TERMINAL;
   job.controller.abort();
   return true;
 }
 export async function startLyricVerify(projectId) {
   const running = getActiveLyricVerifyJobId(projectId);
   if (running) return { jobId: running, reused: true };
-  if (getReservedLyricAlignJobId(projectId)) throw new ServerError('Lyric alignment is running.', { status: 409, code: 'LYRIC_ALIGN_BUSY' });
+  const alignJobId = getReservedLyricAlignJobId(projectId);
+  if (alignJobId) throw new ServerError('Lyric alignment is running.', { status: 409, code: 'LYRIC_ALIGN_BUSY', context: { jobId: alignJobId } });
   const project = await requireProject(projectId);
   const stem = await verifyPrerequisites(project);
   const raced = getActiveLyricVerifyJobId(projectId);
   if (raced) return { jobId: raced, reused: true };
-  if (getReservedLyricAlignJobId(projectId)) throw new ServerError('Lyric alignment is running.', { status: 409, code: 'LYRIC_ALIGN_BUSY' });
+  const racedAlignJobId = getReservedLyricAlignJobId(projectId);
+  if (racedAlignJobId) throw new ServerError('Lyric alignment is running.', { status: 409, code: 'LYRIC_ALIGN_BUSY', context: { jobId: racedAlignJobId } });
   const jobId = randomUUID();
   const job = { id: jobId, clients: [], settled: false, controller: new AbortController() };
   jobs.set(jobId, job);

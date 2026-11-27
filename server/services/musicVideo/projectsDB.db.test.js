@@ -322,6 +322,7 @@ describe.skipIf(!runDb)('music video projects DB adapter', () => {
     const records = Array.from({ length: 20 }, (_, i) => ({ id: `mv-page-${i}`,
       createdAt: i === 19 ? null : `2026-01-${String(i + 1).padStart(2, '0')}`,
       updatedAt: `2026-02-${String(i + 1).padStart(2, '0')}`,
+      name: `Example ${i}`,
       composition: { document: { source: 'x'.repeat(128 * 1024) } } }));
     for (const record of records) {
       await query(`INSERT INTO music_video_projects (id, status, data, created_at, updated_at, deleted)
@@ -339,6 +340,7 @@ describe.skipIf(!runDb)('music video projects DB adapter', () => {
       expect(page).toEqual({ items: expected.slice(0, 1), total: 19, limit: 1, offset: 0 });
       const rows = (await Promise.all(read.mock.results.map(result => result.value))).flatMap(result => result.rows);
       expect(rows.filter(row => row.data).map(row => row.id)).toEqual([expected[0].id]);
+      expect(read.mock.calls[0][0]).not.toMatch(/\bdata\b/);
       if (process.env.PORTOS_COLLECTION_BENCHMARK === '1') {
         process.stdout.write(JSON.stringify({ projects: all.length, fullBytes: Buffer.byteLength(toPgJson(all)),
           pageReadBytes: Buffer.byteLength(toPgJson(rows)), hydratedProjects: rows.filter(row => row.data).length }) + '\n');
@@ -353,7 +355,13 @@ describe.skipIf(!runDb)('music video projects DB adapter', () => {
       }
       expect(await db.listProjectPage({ limit: 1, offset: 19, compare: compareMusicVideoProjectsNewestFirst }))
         .toEqual({ items: [], total: 19, limit: 1, offset: 19 });
+      read.mockClear();
       expect((await db.listProjectPage({ limit: 2, offset: 1 })).items).toEqual(all.slice(1, 3));
+      const [pageSql, pageParams] = read.mock.calls[0];
+      expect(pageSql).not.toMatch(/\bdata\b/);
+      expect(pageParams).toEqual([2, 1]);
+
+      expect(await db.listProjectNames()).toContainEqual({ id: 'mv-page-19', name: 'Example 19' });
     } finally {
       read.mockRestore();
     }

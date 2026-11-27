@@ -22,7 +22,7 @@ vi.mock('../notifications.js', () => ({
   PRIORITY_LEVELS: { HIGH: 'high' },
 }));
 
-const { scheduleTimer, initVoiceTimers, __resetVoiceTimers } = await import('./timers.js');
+const { scheduleTimer, initVoiceTimers, withLiveVoiceTimersRestore, __resetVoiceTimers } = await import('./timers.js');
 
 const tick = () => Promise.resolve(); // flush a microtask (persist chain)
 
@@ -144,6 +144,25 @@ describe('initVoiceTimers', () => {
     expect(res).toEqual({ armed: 0, fired: 1 }); // fired once, not twice
     expect(addNotificationMock).toHaveBeenCalledTimes(1);
     vi.useRealTimers();
+  });
+
+  it('drops a callback queued during transfer even if the restored timer reuses its id', async () => {
+    vi.useFakeTimers();
+    try {
+      const { id } = await scheduleTimer({ totalMs: 1000, label: 'original' });
+      await withLiveVoiceTimersRestore(async reload => {
+        await vi.advanceTimersByTimeAsync(1000);
+        storeRef.value = { timers: [{ id, label: 'restored', fireAt: Date.now() + 10000 }] };
+        await reload();
+      });
+      await initVoiceTimers(); // drain the old timeout's queued callback
+      expect(addNotificationMock).not.toHaveBeenCalled();
+      expect(storeRef.value.timers.map(timer => timer.id)).toEqual([id]);
+      await vi.advanceTimersByTimeAsync(10000);
+      expect(addNotificationMock).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({ title: '⏰ restored' }));
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it('is idempotent — a second init is skipped', async () => {

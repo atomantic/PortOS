@@ -96,13 +96,6 @@ runs:
     - name: Rebuild trusted native dependencies
       if: steps.server-modules-usable.outcome != 'success'
       shell: bash
-      env:
-        # Skip onnxruntime-node's CUDA execution provider. Its postinstall
-        # downloads it on linux-x64 whenever the .so is absent — several
-        # hundred MB per job, every run — and no hosted runner has an NVIDIA
-        # GPU to use it with. The CPU binaries ship in the tarball, so
-        # inference still works; this is the single largest cost in the job.
-        ONNXRUNTIME_NODE_INSTALL_CUDA: skip
       run: |
         node scripts/trusted-rebuilds.js server
         node scripts/trusted-rebuild-stamp.js write server

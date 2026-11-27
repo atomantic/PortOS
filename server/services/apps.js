@@ -7,6 +7,8 @@ import {
   containsPortosRootToken,
   expandPortosRootInApp,
 } from '../lib/portosRootPlaceholder.js';
+import { foldAppAuditOverrides } from '../lib/auditScheduleCompatibility.js';
+import { auditDomainFor } from '../lib/auditDomains.js';
 import { PORTOS_APP_ID } from '../lib/appIdentity.js';
 import { NON_PM2_TYPES, usesPm2 } from './appProcessTypes.js';
 import { SELF_IMPROVEMENT_TASK_TYPES } from './taskScheduleRegistry.js';
@@ -97,6 +99,11 @@ export const appsEvents = new EventEmitter();
 // as resetWatchersIfDisabled) each mutate their own snapshot and the later
 // atomicWrite silently reverts the earlier writer's change.
 const withAppsLock = createMutex();
+// Cache misses can normalize the baseline even on read-only calls. Keep those
+// writes separate because some schedule mutations read apps while holding the
+// schedule queue, and app edits can acquire that same queue.
+const withNormalizationLock = createMutex();
+let restoringApps = false;
 // Bumped on every save/invalidate so a read that began before a write cannot
 // install its stale snapshot into the cache after the write lands.
 let cacheGeneration = 0;
@@ -142,14 +149,15 @@ async function loadApps() {
       data.apps[id] = expanded;
       placeholderDirty = true;
     }
+    // Startup migration handles disk; normalize here too for restored older backups.
+    foldAppAuditOverrides(data.apps[id]);
   }
 
   // Ensure PortOS baseline app is always present and up-to-date
   const baseline = await buildPortosApp();
   if (!data.apps[PORTOS_APP_ID]) {
     data.apps[PORTOS_APP_ID] = baseline;
-    await atomicWrite(APPS_FILE, data);
-    console.log('📦 Seeded baseline PortOS app into apps registry');
+    await persistAppNormalization(data, generation, '📦 Seeded baseline PortOS app into apps registry');
   } else {
     // Reconcile: merge new baseline fields into existing entry (preserves user overrides)
     let dirty = placeholderDirty;
@@ -183,8 +191,7 @@ async function loadApps() {
       dirty = true;
     }
     if (dirty) {
-      await atomicWrite(APPS_FILE, data);
-      console.log(placeholderDirty
+      await persistAppNormalization(data, generation, placeholderDirty
         ? '📦 Expanded __PORTOS_ROOT__ placeholders and reconciled PortOS baseline app'
         : '📦 Reconciled PortOS baseline app with latest fields');
     }
@@ -193,11 +200,32 @@ async function loadApps() {
   // A write (or invalidate) that landed while we were reading means this
   // snapshot is stale: hand it to our caller but never cache it, or the next
   // locked writer would start from it and revert that write.
-  if (generation === cacheGeneration) {
+  if (!restoringApps && generation === cacheGeneration) {
     appsCache = data;
     cacheTimestamp = now;
   }
   return data;
+}
+
+function persistAppNormalization(data, generation, message) {
+  if (restoringApps) return;
+  return withNormalizationLock(async () => {
+    if (restoringApps || generation !== cacheGeneration) return;
+    await atomicWrite(APPS_FILE, data);
+    console.log(message);
+  });
+}
+
+/** Hold app edits and drain read-triggered baseline writes before backup transfer. */
+export function withLiveRestore(restore) {
+  return withAppsLock(async () => {
+    restoringApps = true;
+    try {
+      return await withNormalizationLock(() => restore(invalidateCache));
+    } finally {
+      restoringApps = false;
+    }
+  });
 }
 
 /**
@@ -205,11 +233,12 @@ async function loadApps() {
  */
 async function saveApps(data) {
   await ensureDir(DATA_DIR);
-  await atomicWrite(APPS_FILE, data);
-  // Update cache with saved data
-  cacheGeneration += 1;
-  appsCache = data;
-  cacheTimestamp = Date.now();
+  await withNormalizationLock(async () => {
+    await atomicWrite(APPS_FILE, data);
+    cacheGeneration += 1;
+    appsCache = data;
+    cacheTimestamp = Date.now();
+  });
 }
 
 /**
@@ -583,7 +612,7 @@ export async function getAppTaskTypeOverrides(id) {
 export async function isTaskTypeEnabledForApp(id, taskType) {
   const overrides = await getAppTaskTypeOverrides(id);
   // No override means disabled — new task types must be explicitly enabled per app
-  return overrides[taskType]?.enabled === true;
+  return overrides[auditDomainFor(taskType)]?.enabled === true;
 }
 
 /**
@@ -591,7 +620,7 @@ export async function isTaskTypeEnabledForApp(id, taskType) {
  */
 export async function getAppTaskTypeInterval(appId, taskType) {
   const overrides = await getAppTaskTypeOverrides(appId);
-  return overrides[taskType]?.interval || null;
+  return overrides[auditDomainFor(taskType)]?.interval || null;
 }
 
 /**
@@ -603,7 +632,7 @@ export async function getAppTaskTypeInterval(appId, taskType) {
  */
 export async function getAppTaskTypeIntervalMs(appId, taskType) {
   const overrides = await getAppTaskTypeOverrides(appId);
-  const ms = overrides[taskType]?.intervalMs;
+  const ms = overrides[auditDomainFor(taskType)]?.intervalMs;
   return typeof ms === 'number' && Number.isFinite(ms) && ms > 0 ? ms : null;
 }
 
@@ -618,6 +647,7 @@ export async function getAppTaskTypeIntervalMs(appId, taskType) {
  * resetWatchersIfDisabled.
  */
 function mergeTaskTypeOverride(overrides, taskType, { enabled, interval, intervalMs, providerId, model, taskMetadata } = {}) {
+  taskType = auditDomainFor(taskType);
   const updated = { ...(overrides[taskType] || {}) };
   if (typeof enabled === 'boolean') updated.enabled = enabled;
   if (interval !== undefined) updated.interval = interval;

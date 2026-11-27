@@ -27,35 +27,22 @@ import ListLoadError from '../ui/ListLoadError';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Link } from 'react-router';
 import {
-  FlaskConical, Play, RefreshCw, Trash2, Check, X, AlertTriangle, Terminal, Eye, BookOpen, Wrench, Search, Trophy,
+  FlaskConical, Play, RefreshCw, AlertTriangle, Search, Trophy,
 } from 'lucide-react';
 import socket from '../../services/socket';
-import Drawer from '../Drawer';
 import toast from '../ui/Toast';
 import BrailleSpinner from '../BrailleSpinner';
 import Pill from '../ui/Pill';
-import { VerdictChip, TestCell } from './ModelTestCell.jsx';
-import CapabilityBadges, { CAPABILITY_META } from '../models/CapabilityBadges.jsx';
+import CapabilityTestDrawer from './CapabilityTestDrawer.jsx';
+import { TestCell } from './ModelTestCell.jsx';
+import CapabilityBadges from '../models/CapabilityBadges.jsx';
 import useUrlParams from '../../hooks/useUrlParams';
 import useMounted from '../../hooks/useMounted';
-import { formatDurationMs } from '../../utils/formatters';
 import {
   runModelCapabilityTest,
   deleteModelCapabilityTest,
   getModelCapabilityTestResult,
 } from '../../services/apiLocalLlm.js';
-
-// Per-test icon and accent. Keyed off the test id the SERVER ships, so a test
-// added there renders with a sensible fallback rather than vanishing.
-const TEST_META = {
-  'sandbox-repair': { Icon: Wrench, cls: 'text-blue-400', border: 'border-blue-400/35' },
-  'image-analysis': { Icon: Eye, cls: 'text-amber-400', border: 'border-amber-400/35' },
-  'story-outline': { Icon: BookOpen, cls: 'text-port-accent-2', border: 'border-port-accent-2/35' },
-  'fiction-scene': { Icon: BookOpen, cls: 'text-pink-400', border: 'border-pink-400/35' },
-  'rhetoric-reference': { Icon: BookOpen, cls: 'text-green-400', border: 'border-green-400/35' },
-};
-const testMeta = (id) => TEST_META[id] || { Icon: FlaskConical, cls: 'text-gray-400', border: 'border-port-border' };
-
 
 const modelKey = (backend, modelId) => `${backend}:${modelId}`;
 
@@ -149,412 +136,29 @@ const bestForTask = (models, tests, task) => {
 
 // ---- small shared bits ------------------------------------------------------
 
-/**
- * Run every test that applies to one model, in one click.
- *
- * Only the runnable ones are queued, and the count says how many that is before
- * the click — so "Run 2 tests" is a promise about how many provider calls are
- * about to happen, the same promise a single test's gate makes.
- */
-function RunAllButton({ model, disabled, onRun }) {
-  const runnable = (model.tests || []).filter((t) => t.state === 'applicable' || t.state === 'unknown');
+const isRunnable = (slot) => slot?.state === 'applicable' || slot?.state === 'unknown';
+
+function RunAllButton({ model, tests, disabled, onReview }) {
+  const runnable = (model.tests || []).filter(isRunnable)
+    .flatMap((slot) => {
+      const test = tests.find((entry) => entry.id === slot.testId);
+      return test ? [{ ...test, unverified: slot.state === 'unknown' }] : [];
+    });
   if (!runnable.length) return null;
   return (
     <button
       type="button"
-      onClick={() => onRun(model.backend, model.modelId, runnable.map((t) => t.testId))}
+      onClick={() => onReview(model, runnable)}
       disabled={disabled}
-      title={`Run the ${runnable.length} test${runnable.length === 1 ? '' : 's'} that apply to ${model.modelId}, one after another`}
-      className="inline-flex items-center gap-1.5 px-2 py-1 text-[11px] rounded border border-port-border text-gray-300 hover:border-port-accent hover:text-white transition-colors disabled:opacity-50 whitespace-nowrap"
+      title={`Review the ${runnable.length} test${runnable.length === 1 ? '' : 's'} that apply to ${model.modelId}, one after another`}
+      className="inline-flex items-center gap-1.5 px-2 py-1 pointer-coarse:min-h-11 text-[11px] rounded border border-port-border text-gray-300 hover:border-port-accent hover:text-white transition-colors disabled:opacity-50 whitespace-nowrap"
     >
       <Play size={10} /> Run {runnable.length}
     </button>
   );
 }
 
-// ---- result rendering -------------------------------------------------------
-
-/** Required/bonus keyword scoring for the vision test. */
-function KeywordScore({ detail }) {
-  const row = (entry, required) => (
-    <div key={entry.id} className="flex items-center gap-2 py-1.5 border-b border-port-border/50 last:border-b-0">
-      {entry.hit
-        ? <Check size={13} className="text-emerald-400 shrink-0" aria-label="found" />
-        : <X size={13} className={`${required ? 'text-port-error' : 'text-gray-600'} shrink-0`} aria-label="not found" />}
-      <span className={`text-xs ${entry.hit ? 'text-gray-300' : 'text-gray-500'}`}>{entry.label}</span>
-      <span className="ml-auto text-[10px] text-gray-600 font-mono">{entry.any.join(' | ')}</span>
-    </div>
-  );
-
-  return (
-    <div className="space-y-3">
-      <div>
-        <div className="flex items-baseline justify-between gap-2 mb-1">
-          <h4 className="text-xs font-medium text-gray-400">Required</h4>
-          <span className="text-[11px] text-gray-500">{detail.requiredHit} of {detail.requiredTotal} — all needed to pass</span>
-        </div>
-        {detail.required.map((entry) => row(entry, true))}
-      </div>
-      <div>
-        <div className="flex items-baseline justify-between gap-2 mb-1">
-          <h4 className="text-xs font-medium text-gray-400">Bonus</h4>
-          <span className="text-[11px] text-gray-500">{detail.bonusHit} of {detail.bonusTotal} — detail work, never fails a run</span>
-        </div>
-        {detail.bonus.map((entry) => row(entry, false))}
-      </div>
-    </div>
-  );
-}
-
-/** Twelve-beat coverage for the story test. */
-function BeatScore({ detail }) {
-  return (
-    <div>
-      <div className="flex items-baseline justify-between gap-2 mb-1">
-        <h4 className="text-xs font-medium text-gray-400">Beat coverage</h4>
-        <span className="text-[11px] text-gray-500">
-          {detail.found} of {detail.total}{detail.found > 1 && !detail.inOrder ? ' — out of order' : ' — in order'}
-        </span>
-      </div>
-      {detail.beats.map((beat, i) => (
-        <div key={beat.id} className="flex items-center gap-2 py-1.5 border-b border-port-border/50 last:border-b-0">
-          {beat.hit
-            ? <Check size={13} className="text-emerald-400 shrink-0" aria-label="present" />
-            : <X size={13} className="text-port-error shrink-0" aria-label="missing" />}
-          <span className={`text-xs ${beat.hit ? 'text-gray-300' : 'text-gray-500'}`}>{i + 1} · {beat.label}</span>
-          {!beat.hit && <span className="ml-auto text-[10px] text-gray-600">missing</span>}
-        </div>
-      ))}
-      <p className="text-[11px] text-gray-500 mt-2 leading-snug">
-        Coverage is structure, not quality — it only says the model held a twelve-part shape across a long
-        generation. Whether the outline is any good is above.
-      </p>
-    </div>
-  );
-}
-
-/** Structural checks for the fiction scene, kept distinct from prose quality. */
-function FictionScore({ detail }) {
-  const row = (entry, required) => (
-    <div key={entry.id} className="flex items-center gap-2 py-1.5 border-b border-port-border/50 last:border-b-0">
-      {entry.hit
-        ? <Check size={13} className="text-emerald-400 shrink-0" aria-label="found" />
-        : <X size={13} className={`${required ? 'text-port-error' : 'text-gray-600'} shrink-0`} aria-label="not found" />}
-      <span className={`text-xs ${entry.hit ? 'text-gray-300' : 'text-gray-500'}`}>{entry.label}</span>
-      <span className="ml-auto text-[10px] text-gray-600 font-mono">{entry.any.join(' | ')}</span>
-    </div>
-  );
-  const craftChecks = Object.entries(detail.craft || {});
-  const craftPassed = craftChecks.filter(([, passed]) => passed).length;
-
-  return (
-    <div className="space-y-3">
-      <dl className="grid grid-cols-3 gap-2 text-xs">
-        <div><dt className="text-gray-500">Words</dt><dd className="text-gray-200">{detail.wordCount ?? '—'}</dd></div>
-        <div><dt className="text-gray-500">Paragraphs</dt><dd className="text-gray-200">{detail.paragraphCount ?? '—'}</dd></div>
-        <div><dt className="text-gray-500">Dialogue</dt><dd className="text-gray-200">{detail.hasDialogue ? 'yes' : 'no'}</dd></div>
-      </dl>
-      <div>
-        <div className="flex items-baseline justify-between gap-2 mb-1">
-          <h4 className="text-xs font-medium text-gray-400">Scene anchors</h4>
-          <span className="text-[11px] text-gray-500">{detail.requiredHit} of {detail.requiredTotal} — all needed to pass</span>
-        </div>
-        {(detail.required || []).map((entry) => row(entry, true))}
-      </div>
-      <div>
-        <div className="flex items-baseline justify-between gap-2 mb-1">
-          <h4 className="text-xs font-medium text-gray-400">Scene signals</h4>
-          <span className="text-[11px] text-gray-500">{detail.bonusHit} of {detail.bonusTotal}</span>
-        </div>
-        {(detail.bonus || []).map((entry) => row(entry, false))}
-      </div>
-      <p className="text-[11px] text-gray-500">Minimum craft checks: {craftPassed} of {craftChecks.length}</p>
-      <p className="text-[11px] text-gray-500 leading-snug">
-        This is a structural screen for a saved scene, not a literary-quality score. Read the scene above
-        before choosing a writing model.
-      </p>
-    </div>
-  );
-}
-
-/** On-disk checks for the sandbox test. */
-function SandboxChecks({ detail }) {
-  return (
-    <div className="space-y-2">
-      <p className="text-[11px] text-gray-500 leading-snug">
-        Every check reads the sandbox on disk after the agent stopped, never the transcript. A model that
-        says it fixed the module scores nothing for saying so.
-      </p>
-      {(detail.checks || []).map((check) => (
-        <div key={check.id} className="flex items-center gap-2 py-1.5 border-b border-port-border/50 last:border-b-0">
-          {check.ok
-            ? <Check size={13} className="text-emerald-400 shrink-0" aria-label="passed" />
-            : <X size={13} className="text-port-error shrink-0" aria-label="failed" />}
-          <span className={`text-xs ${check.ok ? 'text-gray-300' : 'text-gray-500'}`}>{check.label}</span>
-        </div>
-      ))}
-      <dl className="grid grid-cols-2 gap-2 text-xs pt-1">
-        <div><dt className="text-gray-500">Tool calls</dt><dd className="text-gray-200">{detail.toolCalls ?? 0}</dd></div>
-        <div><dt className="text-gray-500">Verify exit code</dt><dd className="text-gray-200">{detail.verifyExitCode ?? '—'}</dd></div>
-        <div className="col-span-2">
-          <dt className="text-gray-500">Verified with</dt>
-          <dd className="text-gray-300 font-mono break-all">{detail.verifyCommand}</dd>
-        </div>
-        {detail.sandboxPath && (
-          <div className="col-span-2">
-            <dt className="text-gray-500">Sandbox kept at</dt>
-            <dd className="text-gray-400 font-mono break-all text-[11px]">{detail.sandboxPath}</dd>
-          </div>
-        )}
-      </dl>
-    </div>
-  );
-}
-
-/** Calibration summary for the committed rhetoric reference corpus. */
-function RhetoricReferenceScore({ detail }) {
-  const worst = [...(detail.items || [])]
-    .sort((a, b) => b.absoluteError - a.absoluteError)
-    .slice(0, 5);
-  return (
-    <div className="space-y-3">
-      <p className="text-[11px] text-gray-500 leading-snug">
-        PortOS compares the model&rsquo;s scores with a fixed, fictional gold set. Lower error is better;
-        the verdict also requires broad agreement so a model cannot hide a few extreme misses behind an average.
-      </p>
-      <dl className="grid grid-cols-2 sm:grid-cols-4 gap-2 text-xs">
-        <div><dt className="text-gray-500">References</dt><dd className="text-gray-200">{detail.evaluatedCount ?? detail.referenceCount ?? '—'}</dd></div>
-        <div><dt className="text-gray-500">Mean error</dt><dd className="text-gray-200">{detail.meanAbsoluteError ?? '—'} pts</dd></div>
-        <div><dt className="text-gray-500">Within 10</dt><dd className="text-gray-200">{detail.within10Count ?? '—'}</dd></div>
-        <div><dt className="text-gray-500">Within 20</dt><dd className="text-gray-200">{detail.within20Count ?? '—'}</dd></div>
-      </dl>
-      {worst.length > 0 && (
-        <div>
-          <h4 className="text-xs font-medium text-gray-400 mb-1">Largest calibration gaps</h4>
-          {worst.map((item) => (
-            <div key={item.id} className="flex items-center gap-2 py-1.5 border-b border-port-border/50 last:border-b-0 text-xs">
-              <span className="font-mono text-gray-500">{item.id}</span>
-              <span className="ml-auto text-gray-400">gold {item.expected}</span>
-              <span className="text-gray-400">model {item.predicted}</span>
-              <span className="text-port-warning">Δ {item.absoluteError}</span>
-            </div>
-          ))}
-        </div>
-      )}
-    </div>
-  );
-}
-
-const SCORE_VIEWS = {
-  'image-analysis': KeywordScore,
-  'story-outline': BeatScore,
-  'fiction-scene': FictionScore,
-  'rhetoric-reference': RhetoricReferenceScore,
-  'sandbox-repair': SandboxChecks,
-};
-
-// ---- the drawer -------------------------------------------------------------
-
-/**
- * Gate → live → result, in one panel.
- *
- * Consent copy names the runtime, the model and the exact prompt before the
- * first call goes out — the same contract the assessment gate honours.
- */
-function CapabilityTestDrawer({
-  modelId, test, slot, model, prompt, runtimeLabel,
-  running, liveLines, progress, onRun, onDelete, onClose, deleting, queue,
-}) {
-  const [tab, setTab] = useState('output');
-  const liveRef = useRef(null);
-  const result = slot?.result || null;
-  const meta = testMeta(test?.id);
-
-  // Follow the tail while the agent works — a transcript you have to scroll to
-  // keep up with is not a live view.
-  useEffect(() => {
-    if (running && liveRef.current) liveRef.current.scrollTop = liveRef.current.scrollHeight;
-  }, [running, liveLines]);
-
-  // A finished run lands on its output rather than leaving the reader on the
-  // transcript they were watching.
-  useEffect(() => { if (!running && result) setTab('output'); }, [running, result]);
-
-  if (!test) return null;
-  const Icon = meta.Icon;
-  const showTabs = Boolean(result) || running;
-  // `undefined` transcript = still fetching, so the tab is offered rather than
-  // hidden and then appearing under the reader a moment later.
-  const hasTranscript = result?.transcript === undefined ? Boolean(result) : Boolean(result.transcript || liveLines.length);
-
-  const tabs = showTabs
-    ? [
-      { id: 'output', label: 'Output' },
-      { id: 'score', label: 'Checks' },
-      ...(hasTranscript ? [{ id: 'transcript', label: 'Transcript' }] : []),
-    ]
-    : null;
-
-  const ScoreView = SCORE_VIEWS[test.id];
-
-  return (
-    <Drawer
-      open
-      onClose={onClose}
-      size="lg"
-      title={test.label}
-      subtitle={queue ? `${modelId} · ${runtimeLabel} · test ${queue.index} of ${queue.total}` : `${modelId} · ${runtimeLabel}`}
-      tabs={tabs}
-      activeTab={showTabs ? tab : undefined}
-      onTabChange={setTab}
-      // Closing IS stopping while a run is in flight, so both accidental
-      // dismissal paths are shut off and the close button says what it will do.
-      closeLabel={running ? (queue ? 'Stop the remaining tests' : 'Stop this test') : 'Close'}
-      closeOnEsc={!running}
-      closeOnBackdrop={!running}
-    >
-      <div className="space-y-4">
-        <div className="flex items-start gap-2">
-          <Icon size={16} className={`${meta.cls} shrink-0 mt-0.5`} />
-          <div className="min-w-0">
-            <p className="text-sm text-gray-300 leading-snug">{test.blurb}</p>
-            <div className="flex items-center gap-1.5 mt-1.5 flex-wrap">
-              <span className="text-[11px] text-gray-500">needs</span>
-              {test.capabilities.map((c) => (
-                <span key={c} className="px-1.5 py-0.5 text-[10px] rounded border border-port-border text-gray-400">
-                  {CAPABILITY_META[c]?.label || c}
-                </span>
-              ))}
-            </div>
-          </div>
-        </div>
-
-        {slot?.state === 'unknown' && (
-          <p className="text-xs text-port-warning flex items-start gap-1.5" role="alert">
-            <AlertTriangle size={12} className="mt-0.5 shrink-0" />
-            {runtimeLabel} lists model ids only, so PortOS cannot confirm this model claims the capability.
-            Running the test is how you find out.
-          </p>
-        )}
-
-        {/* ---- gate: shown until the first run of this pairing ---- */}
-        {!showTabs && (
-          <>
-            <div className="bg-port-bg border border-port-border rounded-lg p-3 space-y-2">
-              <h3 className="text-xs font-medium text-gray-400">What PortOS will send</h3>
-              <pre className="text-[11px] text-gray-300 whitespace-pre-wrap break-words font-mono leading-relaxed max-h-56 overflow-y-auto">{prompt}</pre>
-            </div>
-            <p className="text-xs text-gray-500 leading-snug">
-              This runs <span className="text-gray-300 font-mono break-all">{modelId}</span> on{' '}
-              <span className="text-gray-300">{runtimeLabel}</span> once. It loads the model into memory and
-              can hold the runtime for several minutes. The result stays on this machine — it describes this
-              hardware and this install, so it is never synced to a peer.
-            </p>
-            {test.id === 'sandbox-repair' && (
-              <p className="text-xs text-gray-500 leading-snug">
-                The broken module, its test and the data file are copied into a throwaway sandbox first. The
-                model only ever edits the copy, and PortOS runs the test itself afterwards to decide the verdict.
-              </p>
-            )}
-          </>
-        )}
-
-        {/* ---- live ---- */}
-        {running && (
-          <div className="border border-port-accent/30 rounded-lg overflow-hidden">
-            <div className="flex items-center gap-2 px-3 py-2 border-b border-port-border">
-              <Terminal size={12} className="text-port-accent" />
-              <span className="text-xs text-gray-300">{progress || 'Starting…'}</span>
-              <BrailleSpinner className="ml-auto" />
-            </div>
-            {liveLines.length > 0 && (
-              <div ref={liveRef} className="bg-port-bg p-3 max-h-72 overflow-y-auto">
-                {liveLines.map((line, i) => (
-                  // Lines are append-only and never reordered, so the index is a
-                  // stable key here; the model's own text has no id to key on.
-                  <div key={i} className="text-[11px] font-mono text-gray-400 whitespace-pre-wrap leading-relaxed">{line}</div>
-                ))}
-              </div>
-            )}
-          </div>
-        )}
-
-        {/* ---- result ---- */}
-        {showTabs && !running && result && (
-          <>
-            {tab === 'output' && (
-              <div className="space-y-2">
-                <div className="flex items-center justify-between gap-2 flex-wrap">
-                  <VerdictChip verdict={result.verdict}>{result.summary}</VerdictChip>
-                  <span className="text-[11px] text-gray-500">
-                    {formatDurationMs(result.elapsedMs)}
-                    {result.timings?.tokensPerSecond ? ` · ${result.timings.tokensPerSecond} tok/s` : ''}
-                  </span>
-                </div>
-                {result.error && (
-                  <p className="text-xs text-port-warning flex items-start gap-1.5" role="alert">
-                    <AlertTriangle size={12} className="mt-0.5 shrink-0" /> {result.error}
-                  </p>
-                )}
-                <div className="bg-port-bg border border-port-border rounded-lg p-3">
-                  {/* `undefined` = the full record has not arrived yet (the report
-                      carries summaries only); `''` = it arrived and the model
-                      genuinely said nothing. Collapsing the two would show a
-                      loading drawer as a silent model. */}
-                  {result.output === undefined
-                    ? <BrailleSpinner text="Loading the output" />
-                    : (result.output.trim()
-                      ? <pre className="text-sm text-gray-200 whitespace-pre-wrap break-all leading-relaxed font-sans">{result.output}</pre>
-                      : <p className="text-xs text-gray-500 italic">The model returned no text.</p>)}
-                </div>
-              </div>
-            )}
-            {tab === 'score' && (result.detail && ScoreView
-              ? <ScoreView detail={result.detail} />
-              : <p className="text-xs text-gray-500">Nothing was scored — the run failed before it produced anything.</p>)}
-            {tab === 'transcript' && (
-              <div className="bg-port-bg border border-port-border rounded-lg p-3 max-h-[28rem] overflow-y-auto">
-                {result.transcript === undefined && liveLines.length === 0
-                  ? <BrailleSpinner text="Loading the transcript" />
-                  : (
-                    <pre className="text-[11px] font-mono text-gray-400 whitespace-pre-wrap break-all leading-relaxed">
-                      {result.transcript?.trim() || liveLines.join('\n') || 'No agent transcript for this test.'}
-                    </pre>
-                  )}
-              </div>
-            )}
-          </>
-        )}
-
-        <div className="flex items-center gap-2 pt-1 flex-wrap">
-          <button
-            type="button"
-            onClick={onRun}
-            disabled={running || deleting}
-            className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium rounded bg-port-accent text-port-on-accent hover:opacity-90 transition-opacity disabled:opacity-50"
-          >
-            <Play size={12} /> {running ? 'Running…' : (result ? 'Run again' : `Run ${test.label.toLowerCase()}`)}
-          </button>
-          {result && !running && (
-            <button
-              type="button"
-              onClick={onDelete}
-              disabled={deleting}
-              className="flex items-center gap-1.5 px-3 py-1.5 text-xs rounded border border-port-border text-gray-300 hover:border-port-error hover:text-port-error transition-colors disabled:opacity-50"
-            >
-              <Trash2 size={12} /> Discard this result
-            </button>
-          )}
-          {model?.capabilities === null && (
-            <span className="text-[11px] text-gray-500">claim unverified</span>
-          )}
-        </div>
-      </div>
-    </Drawer>
-  );
-}
-
-function CapabilityRecommendations({ report, onOpen, stale }) {
+function CapabilityRecommendations({ report, onOpen, stale, disabled }) {
   const tests = report?.tests || [];
   const models = report?.models || [];
   const tasks = TASK_FILTERS.filter((task) => task.id !== 'all');
@@ -570,7 +174,7 @@ function CapabilityRecommendations({ report, onOpen, stale }) {
         writing result is a structural screen, so open the saved scene before choosing a voice. Tied
         structural results favor an explicitly task-specialized model name.
       </p>
-      <div className="grid gap-2 sm:grid-cols-3">
+      <div className="grid gap-2 sm:grid-cols-2 xl:grid-cols-4">
         {tasks.map((task) => {
           const winner = bestForTask(models, tests, task);
           return (
@@ -583,7 +187,8 @@ function CapabilityRecommendations({ report, onOpen, stale }) {
                   <button
                     type="button"
                     onClick={() => onOpen(winner.model.backend, winner.model.modelId, winner.test.id)}
-                    className="text-[10px] pointer-coarse:min-h-11 text-port-accent hover:underline"
+                    disabled={disabled}
+                    className="px-2 py-1 pointer-coarse:min-h-11 rounded border border-port-border text-[10px] text-port-accent hover:border-port-accent disabled:opacity-50"
                   >
                     Read the result
                   </button>
@@ -612,10 +217,8 @@ export default function ModelCapabilityTests({ report, loading, error, onReload,
   const [progress, setProgress] = useState('');
   const [running, setRunning] = useState(false);
   const [deleting, setDeleting] = useState(false);
-  // Position within a multi-test run, or `null` for a single one. The server
-  // deliberately takes ONE test per request — a client that could post a list
-  // would turn one click into a batch of provider calls the gate never counted —
-  // so "run everything applicable" is a queue here, not a wider endpoint.
+  // Consent snapshots the reviewed selection. Each request still runs one test.
+  const [batch, setBatch] = useState(null);
   const [queue, setQueue] = useState(null);
   const [modelQuery, setModelQuery] = useState('');
   const [taskFilter, setTaskFilter] = useState('all');
@@ -635,7 +238,18 @@ export default function ModelCapabilityTests({ report, loading, error, onReload,
     updateParams({ capBackend: b, capModel: m, capTest: t });
   }, [updateParams]);
 
+  const reviewBatch = (model, tests) => setBatch({
+    backend: model.backend,
+    modelId: model.modelId,
+    runtimeLabel: model.runtimeLabel || model.backend,
+    tests: tests.map((test) => ({ ...test, prompt: report?.prompts?.[test.id] || '' })),
+  });
+
   const closeTest = useCallback(() => {
+    if (batch) {
+      setBatch(null);
+      return;
+    }
     controllerRef.current?.abort();
     controllerRef.current = null;
     activeRef.current = null;
@@ -645,7 +259,7 @@ export default function ModelCapabilityTests({ report, loading, error, onReload,
     // `replace` so closing does not leave a Back button that reopens a run the
     // user just stopped.
     updateParams(CLOSED_PARAMS, { replace: true });
-  }, [updateParams]);
+  }, [batch, updateParams]);
 
   useEffect(() => {
     const onFrame = (frame) => {
@@ -679,16 +293,18 @@ export default function ModelCapabilityTests({ report, loading, error, onReload,
   // transcript. `null` = not fetched yet, which renders as loading rather than
   // as "the model returned nothing".
   const [fullResult, setFullResult] = useState(null);
+  const hasResult = Boolean(slot?.result);
+  const resultKey = JSON.stringify([backend, modelId, testId, slot?.result?.ranAt]);
   useEffect(() => {
-    if (!open || !slot?.result) { setFullResult(null); return undefined; }
+    if (batch || !open || !hasResult) { setFullResult(null); return undefined; }
     let live = true;
     // The drawer renders its own empty state, so the default toast is silenced
     // (client/src/AGENTS.md: custom catch ⇒ silent).
     getModelCapabilityTestResult(backend, modelId, testId, { silent: true })
-      .then((record) => { if (live) setFullResult(record); })
+      .then((record) => { if (live) setFullResult({ key: resultKey, record }); })
       .catch(() => { if (live) setFullResult(null); });
     return () => { live = false; };
-  }, [open, backend, modelId, testId, slot?.result?.ranAt]);
+  }, [batch, open, backend, modelId, testId, resultKey, hasResult]);
 
   /**
    * Run one or more tests against one model, in sequence.
@@ -700,22 +316,20 @@ export default function ModelCapabilityTests({ report, loading, error, onReload,
    * to stop.
    */
   const runTests = useCallback(async (runBackend, runModel, testIds) => {
-    const list = (testIds || []).filter(Boolean);
-    if (!list.length) return;
+    if (disabled || deleting || controllerRef.current || !testIds.length) return;
+    const controller = new AbortController();
+    controllerRef.current = controller;
+    setBatch(null);
+    setRunning(true);
     let completed = 0;
 
-    for (const [index, id] of list.entries()) {
-      setQueue(list.length > 1 ? { total: list.length, index: index + 1 } : null);
-      // `replace` after the first, so Back does not walk through every test of a
-      // queue the user already watched finish.
+    for (const [index, id] of testIds.entries()) {
+      setQueue(testIds.length > 1 ? { total: testIds.length, index: index + 1 } : null);
+      // Back skips the intermediate steps in a batch.
       updateParams({ capBackend: runBackend, capModel: runModel, capTest: id }, { replace: index > 0 });
-
-      const controller = new AbortController();
-      controllerRef.current = controller;
       activeRef.current = { backend: runBackend, modelId: runModel, testId: id };
       setLiveLines([]);
       setProgress('Starting…');
-      setRunning(true);
 
       // The panel renders its own progress and error state, so the default toast
       // is silenced (client/src/AGENTS.md: custom catch ⇒ silent).
@@ -730,20 +344,19 @@ export default function ModelCapabilityTests({ report, loading, error, onReload,
       });
 
       if (!mountedRef.current) return;
-      setRunning(false);
-      activeRef.current = null;
-      controllerRef.current = null;
-
-      // A stop or a failure ends the queue: pressing on would run minutes of
-      // work the user just interrupted.
-      if (!result || result.cancelled) break;
+      if (controller.signal.aborted || !result || result.cancelled) break;
       completed += 1;
       toast.success(`${result.testId}: ${result.verdict} — ${result.summary}`);
     }
 
-    setQueue(null);
+    if (controllerRef.current === controller) {
+      controllerRef.current = null;
+      activeRef.current = null;
+      setRunning(false);
+      setQueue(null);
+    }
     if (completed) await onReload();
-  }, [updateParams, onReload, mountedRef]);
+  }, [disabled, deleting, updateParams, onReload, mountedRef]);
 
   const removeResult = useCallback(async () => {
     setDeleting(true);
@@ -751,22 +364,23 @@ export default function ModelCapabilityTests({ report, loading, error, onReload,
       .then(() => true)
       .catch((err) => { toast.error(err?.message || 'Could not discard that result'); return false; });
     if (!mountedRef.current) return;
-    setDeleting(false);
     if (ok) {
       setLiveLines([]);
       await onReload();
     }
+    if (mountedRef.current) setDeleting(false);
   }, [backend, modelId, testId, onReload, mountedRef]);
 
   // Summary first (it is always present and always current), with the fetched
   // output/transcript layered on when they arrive.
+  const record = fullResult?.key === resultKey ? fullResult.record : null;
   const mergedSlot = useMemo(() => (slot?.result
-    ? { ...slot, result: { ...slot.result, output: fullResult?.output, transcript: fullResult?.transcript } }
-    : slot), [slot, fullResult]);
+    ? { ...slot, result: { ...slot.result, output: record?.output, transcript: record?.transcript } }
+    : slot), [slot, record]);
 
   const tests = report?.tests || [];
   const models = report?.models || [];
-  const busy = disabled || running;
+  const busy = disabled || running || deleting;
   const selectedTask = TASK_FILTERS.find((task) => task.id === taskFilter) || TASK_FILTERS[0];
   const visibleTests = selectedTask.id === 'all'
     ? tests
@@ -781,12 +395,6 @@ export default function ModelCapabilityTests({ report, loading, error, onReload,
       return matchesQuery && matchesTask;
     });
   }, [models, modelQuery, selectedTask, visibleTests]);
-
-  const openRecommended = useCallback((b, m, t) => {
-    setLiveLines([]);
-    setProgress('');
-    updateParams({ capBackend: b, capModel: m, capTest: t });
-  }, [updateParams]);
 
   return (
     <div className="bg-port-bg border border-port-border rounded-lg p-3 space-y-3">
@@ -820,38 +428,9 @@ export default function ModelCapabilityTests({ report, loading, error, onReload,
       </div>
 
       <p className="text-[11px] text-gray-500 leading-relaxed">
-        Review task-specific evidence by model. Run a named check only when a saved result is missing or needs refreshing; each run keeps its full output.
+        Each run saves its full output. A model missing a required capability shows as not applicable.
       </p>
-      <details className="border border-port-border/70 rounded px-2 py-1.5">
-        <summary className="cursor-pointer text-[11px] text-gray-400">How capability evidence is scoped</summary>
-        <p className="text-[11px] text-gray-500 leading-snug pt-1.5">
-          A test runs only where the model claims the matching capability. A model with no <span className="text-gray-400">vision</span> badge shows <em>not applicable</em> on the image test, never a failure. Navigation and loading this view never call a provider.
-        </p>
-      </details>
-
-      {tests.length > 0 && (
-        <div className="grid gap-2 sm:grid-cols-3">
-          {tests.map((t) => {
-            const meta = testMeta(t.id);
-            const Icon = meta.Icon;
-            return (
-              <div key={t.id} className={`bg-port-card border ${meta.border} rounded p-2.5 space-y-1.5`}>
-                <div className="flex items-center gap-1.5 flex-wrap">
-                  <Icon size={13} className={meta.cls} />
-                  <span className="text-xs font-medium text-gray-200">{t.label}</span>
-                  <span className="text-[10px] text-gray-500">{t.capabilities.join(' · ')}</span>
-                </div>
-                <details className="bg-port-card border border-port-border/70 rounded px-2 py-1">
-                  <summary className="cursor-pointer text-[10px] text-gray-400">What this test checks</summary>
-                  <p className="text-[11px] text-gray-500 leading-snug pt-1">{t.blurb}</p>
-                </details>
-              </div>
-            );
-          })}
-        </div>
-      )}
-
-      {report && <CapabilityRecommendations report={report} onOpen={openRecommended} stale={Boolean(error)} />}
+      {report && <CapabilityRecommendations report={report} onOpen={openTest} stale={Boolean(error)} disabled={busy} />}
 
       {report?.listErrors?.length > 0 && (
         <div className="border border-port-warning/30 rounded p-2.5 space-y-1.5" role="alert">
@@ -951,7 +530,7 @@ export default function ModelCapabilityTests({ report, loading, error, onReload,
                     </td>
                   ))}
                   <td className="px-3 py-2 align-top text-right">
-                    <RunAllButton model={m} disabled={busy} onRun={runTests} />
+                    <RunAllButton model={m} tests={tests} disabled={busy} onReview={reviewBatch} />
                   </td>
                 </tr>
               ))}
@@ -962,8 +541,11 @@ export default function ModelCapabilityTests({ report, loading, error, onReload,
         </>
       )}
 
-      {open && (
+      {(open || batch) && (
         <CapabilityTestDrawer
+          batch={batch}
+          resultKey={resultKey}
+          disabled={disabled}
           modelId={modelId}
           test={test}
           slot={mergedSlot}
@@ -975,7 +557,9 @@ export default function ModelCapabilityTests({ report, loading, error, onReload,
           progress={progress}
           deleting={deleting}
           queue={queue}
-          onRun={() => runTests(backend, modelId, [testId])}
+          onRun={batch
+            ? () => runTests(batch.backend, batch.modelId, batch.tests.map((test) => test.id))
+            : () => runTests(backend, modelId, [testId])}
           onDelete={removeResult}
           onClose={closeTest}
         />

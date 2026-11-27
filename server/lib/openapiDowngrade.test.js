@@ -1,6 +1,7 @@
 import { describe, it, expect } from 'vitest';
+import { z } from 'zod';
 import { OPENAPI_VERSION, toOpenApi30Schema } from './openapiDowngrade.js';
-import { zodToOpenApiSchema, sdapiTxt2imgBodySchema } from './apiContractSchemas.js';
+import { zodToOpenApiSchema } from './apiContractSchemas.js';
 
 describe('toOpenApi30Schema', () => {
   it('collapses an anyOf null branch into nullable on the surviving branch', () => {
@@ -131,21 +132,21 @@ describe('toOpenApi30Schema', () => {
 });
 
 describe('zodToOpenApiSchema', () => {
+  const nullableBody = z.object({ note: z.string().max(100).nullable() });
+
   it('stays plain JSON Schema so its other consumers are not corrupted', () => {
-    // The AsyncAPI payloads, the CoS provider tool definitions, and the tool
-    // resource all read this as JSON Schema. Downgrading here (as an earlier
-    // revision did) turns `exclusiveMinimum: 0` into the draft-4 boolean form,
-    // which a JSON Schema validator ignores — silently widening `> 0` to `>= 0`.
-    const schema = zodToOpenApiSchema(sdapiTxt2imgBodySchema);
+    // AsyncAPI, the CoS provider tool definitions and the tool resource all
+    // read the null branch as JSON Schema.
+    const schema = zodToOpenApiSchema(nullableBody);
     expect(schema.$schema).toBeUndefined();
-    expect(schema.properties.negative_prompt)
-      .toEqual({ anyOf: [{ type: 'string', maxLength: 8000 }, { type: 'null' }] });
+    expect(schema.properties.note)
+      .toEqual({ anyOf: [{ type: 'string', maxLength: 100 }, { type: 'null' }] });
   });
 
   it('converts to 3.0.3 only at the document boundary', () => {
-    const converted = toOpenApi30Schema(zodToOpenApiSchema(sdapiTxt2imgBodySchema));
+    const converted = toOpenApi30Schema(zodToOpenApiSchema(nullableBody));
     expect(JSON.stringify(converted)).not.toContain('"type":"null"');
-    expect(converted.properties.negative_prompt).toEqual({ type: 'string', maxLength: 8000, nullable: true });
+    expect(converted.properties.note).toEqual({ type: 'string', maxLength: 100, nullable: true });
   });
 });
 
@@ -163,7 +164,7 @@ describe('the published documents are actually 3.0.3', () => {
     '"patternProperties"', '"contentEncoding"', '"contentMediaType"', '"unevaluatedProperties"'];
 
   it.each([
-    ['public', (m) => m.buildOpenApiSpec({ apiAccess: { voice: { exposed: true }, sdapi: { exposed: true } } }, { version: '1.0.0' })],
+    ['public', (m) => m.buildOpenApiSpec({ apiAccess: { voice: { exposed: true } } }, { version: '1.0.0' })],
     ['internal', (m) => m.buildInternalOpenApiSpec({}, { version: '1.0.0' })],
   ])('%s document carries no 3.1-only construct', async (_label, build) => {
     const spec = build(await import('./openapiSpec.js'));

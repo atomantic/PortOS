@@ -225,13 +225,13 @@ describe('POST /api/palette/action/:id', () => {
     expect(res.body.result.summary).toMatch(/Switched to BookLoom/);
   });
 
-  it('workspace_switch reports an unknown workspace instead of throwing', async () => {
+  it('returns a non-2xx error for an unknown workspace so callers can retry', async () => {
     const res = await request(makeApp())
       .post('/api/palette/action/workspace_switch')
       .send({ args: { workspace: 'nonexistent-app' } });
-    expect(res.status).toBe(200);
-    expect(res.body.ok).toBe(false);
-    expect(res.body.result.summary).toMatch(/don't see a project/i);
+    expect(res.status).toBe(400);
+    expect(res.body.error).toMatch(/don't see a project/i);
+    expect(res.body.context.result.summary).toBe(res.body.error);
   });
 
   it('dispatches ui_ask through the palette and returns the answer + sources', async () => {

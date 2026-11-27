@@ -4,7 +4,7 @@ import { invalidateModelObservation } from '../modelObservation.js';
  * (`providerRuntimeInstaller.js`) is only half the story, since a run still dies with "Cannot connect to API" when
  * the daemon is missing, stopped, or serving a different model alias than the provider asks for.
  *
- *   1. runtime  — the daemon's binary is on PortOS's PATH (or something already answers, which proves it)
+ *   1. runtime  — the daemon is installed locally (or its endpoint already answers)
  *   2. server   — the provider's endpoint answers `GET /v1/models`
  *   3. model    — the provider's default model is one the endpoint serves
  *   4. catalog  — every OTHER model the provider offers is servable, so a task or stage cannot pin an id
@@ -25,9 +25,8 @@ import { probeOpenAiModelsCached, resetOpenAiModelsProbeCache } from '../../lib/
 import { aliasServedContextWindows } from '../../lib/provider/providerContextWindows.js';
 import { managedOllamaContextLength } from '../../lib/ollamaContext.js';
 import { findCommandOnPath } from '../../lib/processEnv.js';
-import { resolveMtplxBinary } from '../../lib/mtplxRuntime.js';
-import { actionCovers, describeRuntimeSetup, readRuntimeWeights, weightsBlockStart } from '../localRuntimeSetup.js';
-import { isAppInstalled as isLmStudioAppInstalled } from '../lmStudioManager.js';
+import { actionCovers, describeRuntimeSetup, readRuntimeWeights, runtimeSetupBlockedReason, weightsBlockStart } from '../localRuntimeSetup.js';
+import { detectRuntimeInstallation } from '../localRuntimeInstallation.js';
 
 /**
  * Same 60s TTL as `providerRuntimeInstaller.js`'s status cache: availability changes only on install/remove, and
@@ -74,10 +73,10 @@ function readWeightsStateCached(kind) {
 }
 
 /** TTL-cached PATH lookup for the handful of daemon binaries — see BINARY_TTL_MS. */
-function findCommandCached(command) {
+function findCommandCached(command, resolve = () => findCommandOnPath(command)) {
   const cached = binaryCache.get(command);
   if (cached && Date.now() - cached.at < BINARY_TTL_MS) return cached.path;
-  const path = command === 'mtplx' ? resolveMtplxBinary() : findCommandOnPath(command);
+  const path = resolve();
   binaryCache.set(command, { at: Date.now(), path });
   return path;
 }
@@ -156,11 +155,13 @@ function weightsDetail(runtime, weights) {
 const managePage = (runtime) => getNavPageForPath(runtime.manageUrl)?.breadcrumb ?? null;
 
 /** The `runtime` check — is the daemon's software here at all? */
-function runtimeCheck(runtime, { onPath, appInstalled, installed, reachable, setup }) {
-  const detail = onPath ? `\`${runtime.command}\` is on PortOS's PATH.`
-    : appInstalled ? `${runtime.label} is installed as an app.`
-      : reachable ? `Something is already serving ${runtime.endpoint}.`
-        : `\`${runtime.command}\` was not found on PortOS's PATH.`;
+function runtimeCheck(runtime, { installation, installed, reachable, setup }) {
+  let detail;
+  if (installation === 'path') detail = `\`${runtime.command}\` is on PortOS's PATH.`;
+  else if (installation === 'app') detail = `${runtime.label} is installed as an app.`;
+  else if (installation === 'managed') detail = `${runtime.label} is installed locally.`;
+  else if (reachable) detail = `Something is already serving ${runtime.endpoint}.`;
+  else detail = `No local ${runtime.label} installation was found.`;
   const page = managePage(runtime);
   const fixHint = installed ? null
     : setupHint(setup, 'installs')
@@ -315,7 +316,9 @@ export async function getProviderReadiness(provider, deps = {}) {
   const runtime = localRuntimeForProvider(provider);
   if (!runtime) return null;
 
-  const findCommand = deps.findCommand || findCommandCached;
+  const readInstallation = deps.readInstallation || ((kind) => detectRuntimeInstallation(kind, {
+    findCommand: deps.findCommand || findCommandCached, isAppInstalled: deps.isAppInstalled,
+  }));
   const probe = deps.probe || probeOpenAiModelsCached;
 
   // The wrapper's own key: a vLLM container behind `VLLM_API_KEY` 401s an unauthenticated `/v1/models`, which
@@ -323,12 +326,8 @@ export async function getProviderReadiness(provider, deps = {}) {
   const result = await probe(runtime.endpoint, provider?.apiKey || '');
   // A daemon that answers is installed, whatever PATH says — Ollama's macOS app
   // and LM Studio both serve without putting a CLI on PortOS's PATH.
-  const onPath = Boolean(runtime.command && findCommand(runtime.command));
-  // LM Studio ships as a macOS app bundle whose `lms` shim is opt-in, so PATH alone says "not installed" for an
-    // installed copy. Count the bundle as Models → LLMs does (`localLlm.getStatus`), or the card contradicts itself
-    // and sends the user after the wrong fix.
-  const appInstalled = runtime.kind === 'lmstudio' && (deps.isAppInstalled || isLmStudioAppInstalled)();
-  const installed = onPath || appInstalled || result.reachable;
+  const installation = await readInstallation(runtime.kind);
+  const installed = Boolean(installation) || result.reachable;
 
   // Only worth asking when the daemon is installed and NOT answering: a running server's `/v1/models` is the
     // better answer, and an uninstalled runtime has no cache to read.
@@ -338,14 +337,16 @@ export async function getProviderReadiness(provider, deps = {}) {
 
   // Resolved BEFORE the checks so each unmet one can point at the button that
   // fixes it rather than at a setup doc.
-  const setup = describeRuntimeSetup(runtime.kind, { installed, running: result.reachable, weights });
+  const blockedReason = result.reachable ? null : await runtimeSetupBlockedReason(runtime);
+  const setup = describeRuntimeSetup(runtime.kind, { installed, running: result.reachable, weights, blockedReason });
   const standby = runtime.standbyWhenStopped === true
     && installed
     && !result.reachable
+    && !blockedReason
     && !weightsBlockStart(weights);
 
   const checks = [
-    runtimeCheck(runtime, { onPath, appInstalled, installed, reachable: result.reachable, setup }),
+    runtimeCheck(runtime, { installation, installed, reachable: result.reachable, setup }),
     serverCheck(runtime, { installed, result, setup, weights }),
   ];
   const wanted = servedModelId(provider, runtime.kind);
@@ -395,15 +396,16 @@ export async function getProviderReadinessMap(providers, deps = {}) {
   // One PATH scan per distinct binary and one probe per distinct endpoint per batch, including when the caller
     // injects its own probe (which would bypass the module-level caches).
   const findCommand = memoize(deps.findCommand || findCommandCached);
+  const readInstallation = memoize(deps.readInstallation || ((kind) => detectRuntimeInstallation(kind, {
+    findCommand, isAppInstalled: deps.isAppInstalled,
+  })));
   const probe = memoize(deps.probe || probeOpenAiModelsCached);
   // Same reasoning as the two above: one `mtplx models` subprocess per batch,
   // not one per provider pointed at the same runtime.
   const readWeights = memoize(deps.readWeights || readWeightsStateCached);
 
   const entries = await Promise.all(list.map(async (provider) => {
-    // Spread `deps` first so any other injected dep (isAppInstalled) survives,
-    // then override the three the batch memoizes.
-    const readiness = await getProviderReadiness(provider, { ...deps, findCommand, probe, readWeights });
+    const readiness = await getProviderReadiness(provider, { readInstallation, probe, readWeights });
     return readiness ? [provider.id, readiness] : null;
   }));
   return Object.fromEntries(entries.filter(Boolean));

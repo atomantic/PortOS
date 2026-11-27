@@ -7,6 +7,7 @@ import Pill from '../ui/Pill';
 import EmptyState from '../EmptyState';
 import CollapsibleSection from '../ui/CollapsibleSection';
 import InlineConfirmRow from '../ui/InlineConfirmRow';
+import ConfirmButtonPair from '../ui/ConfirmButtonPair';
 import { FormField } from '../ui/FormField';
 import ToggleSwitch from '../ToggleSwitch';
 import { INPUT_CLASS } from '../apps/constants';
@@ -78,7 +79,10 @@ function ServiceCard({
     draftVersionRef.current = { id: service.id, revision: service.revision };
     setDraft(draftFrom(service));
   }, [service.id, service.revision]); // Dependency list is intentionally partial.
-  const [confirmingDelete, setConfirmingDelete] = useState(false);
+  const [confirmation, setConfirmation] = useState(null);
+  useEffect(() => {
+    if (!open) setConfirmation(null);
+  }, [open]);
   const set = (key) => (e) => setDraft((prev) => ({ ...prev, [key]: e.target.value }));
   const setTransport = (protocol) => (e) => setDraft((prev) => ({ ...prev, transports: { ...prev.transports, [protocol]: e.target.value } }));
 
@@ -197,7 +201,7 @@ function ServiceCard({
           </div>
 
           <div className="flex flex-wrap gap-2">
-            <button type="button" disabled={busy} onClick={() => onSave(service, draft)} className="px-3 py-1.5 text-sm rounded-lg bg-port-accent text-white hover:bg-port-accent/80 disabled:opacity-50">
+            <button type="button" disabled={busy} onClick={() => { setConfirmation(null); onSave(service, draft); }} className="px-3 py-1.5 text-sm rounded-lg bg-port-accent text-white hover:bg-port-accent/80 disabled:opacity-50">
               Save service
             </button>
             {definition && (
@@ -205,25 +209,34 @@ function ServiceCard({
                 <RefreshCw className={`w-3.5 h-3.5 ${busy ? 'animate-spin' : ''}`} aria-hidden="true" /> Refresh catalog
               </button>
             )}
-            {service.hasCredentials && (
-              <button type="button" disabled={busy} onClick={() => onClearKey(service)} className="px-3 py-1.5 text-sm rounded-lg border border-port-border text-gray-200 hover:text-white disabled:opacity-50">
+            {service.hasCredentials && (confirmation === 'clear' ? (
+              <ConfirmButtonPair
+                ariaLabel={`Clear the ${serviceName(service)} key?`}
+                prompt="Clear key?"
+                confirmText="Clear key"
+                busy={busy}
+                onConfirm={() => { setConfirmation(null); onClearKey(service); }}
+                onCancel={() => setConfirmation(null)}
+              />
+            ) : (
+              <button type="button" disabled={busy} onClick={() => setConfirmation('clear')} className="px-3 py-1.5 text-sm rounded-lg border border-port-border text-gray-200 hover:text-white disabled:opacity-50">
                 Clear key
               </button>
-            )}
-            {presets.length === 0 && !confirmingDelete && (
-              <button type="button" disabled={busy} onClick={() => setConfirmingDelete(true)} className="inline-flex items-center gap-1 px-3 py-1.5 text-sm rounded-lg border border-port-error/50 text-port-error hover:bg-port-error/10 disabled:opacity-50">
+            ))}
+            {presets.length === 0 && confirmation !== 'delete' && (
+              <button type="button" disabled={busy} onClick={() => setConfirmation('delete')} className="inline-flex items-center gap-1 px-3 py-1.5 text-sm rounded-lg border border-port-error/50 text-port-error hover:bg-port-error/10 disabled:opacity-50">
                 <Trash2 className="w-3.5 h-3.5" aria-hidden="true" /> Delete
               </button>
             )}
           </div>
-          {confirmingDelete && (
+          {confirmation === 'delete' && (
             <InlineConfirmRow
               question={`Delete the ${serviceName(service)} service? Its endpoint, catalog and saved key go with it.`}
               confirmText="Delete service"
               autoFocus
               aria-label={`Confirm deleting the ${serviceName(service)} service`}
-              onConfirm={() => { setConfirmingDelete(false); onDelete(service); }}
-              onCancel={() => setConfirmingDelete(false)}
+              onConfirm={() => { setConfirmation(null); onDelete(service); }}
+              onCancel={() => setConfirmation(null)}
             />
           )}
 

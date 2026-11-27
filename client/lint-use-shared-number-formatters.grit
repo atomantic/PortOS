@@ -1,0 +1,61 @@
+language js
+
+pattern fixedCall() {
+  JsCallExpression(callee = JsStaticMemberExpression(member = `toFixed`))
+}
+
+pattern templatePercent() {
+  JsTemplateChunkElement() as $chunk where { $chunk <: r"(?s)^\s*%.*" }
+}
+
+pattern templateDollar() {
+  JsTemplateChunkElement() as $chunk where { $chunk <: r"(?s).*\$$" }
+}
+
+pattern jsxPercent() {
+  JsxText() as $text where { $text <: r"(?s)^\s*%.*" }
+}
+
+pattern jsxDollar() {
+  JsxText() as $text where { $text <: r"(?s).*\$$" }
+}
+
+// Test immediate siblings in one scan. Check the dollar marker before searching
+// the expression subtree for a wrapped toFixed call.
+pattern jsxChildren() {
+  some or {
+    and { JsxExpressionChild(expression = fixedCall()), before jsxPercent() },
+    and { after jsxDollar(), JsxExpressionChild(expression = contains fixedCall()) }
+  }
+}
+
+or {
+  JsCallExpression(callee = JsStaticMemberExpression(member = `toLocaleString`)) as $call where {
+    register_diagnostic(
+      span = $call,
+      message = "Use formatCount for numbers or the appropriate date formatter from utils/formatters.js.",
+      severity = "error"
+    )
+  },
+  or {
+    `$left + $right` where {
+      $left <: fixedCall(),
+      $right <: or {
+        JsStringLiteralExpression() as $literal where { $literal <: r"^['\"]\s*%.*" },
+        JsTemplateExpression(elements = [templatePercent(), ...])
+      }
+    },
+    JsTemplateExpression(elements = some or {
+      and { JsTemplateElement(expression = fixedCall()), before templatePercent() },
+      and { after templateDollar(), JsTemplateElement(expression = contains fixedCall()) }
+    }),
+    JsxElement(elements = jsxChildren()),
+    JsxFragment(elements = jsxChildren())
+  } as $format where {
+    register_diagnostic(
+      span = $format,
+      message = "Use formatPercent or formatUsd from utils/formatters.js to render this amount.",
+      severity = "error"
+    )
+  }
+}

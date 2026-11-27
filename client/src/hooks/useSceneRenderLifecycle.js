@@ -373,14 +373,14 @@ export default function useSceneRenderLifecycle({
       settle(data, false, 'canceled');
     };
 
-    socket.on(attachEvent, onAttach);
+    if (attachEvent) socket.on(attachEvent, onAttach);
     if (startedEvent) socket.on(startedEvent, onRunning);
     if (progressEvent) socket.on(progressEvent, onRunning);
     socket.on(completedEvent, onCompleted);
     socket.on(failedEvent, onFailed);
     socket.on(canceledEvent, onCanceled);
     return () => {
-      socket.off(attachEvent, onAttach);
+      if (attachEvent) socket.off(attachEvent, onAttach);
       if (startedEvent) socket.off(startedEvent, onRunning);
       if (progressEvent) socket.off(progressEvent, onRunning);
       socket.off(completedEvent, onCompleted);

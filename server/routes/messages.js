@@ -1,10 +1,28 @@
-import { messageInboxRead, messageDetailRead, messageParamsSchema } from './messageInboxRead.js';
+import { emitToOperatorsOn } from '../services/socketIo.js';
+import { messageInboxRead, messageDetailRead } from './messageInboxRead.js';
 import express from 'express';
-import { z } from 'zod';
+import {
+  createAccountSchema,
+  updateAccountSchema,
+  createDraftSchema,
+  updateDraftSchema,
+  reconcileDraftSchema,
+  generateDraftSchema,
+  evaluateMessagesSchema,
+  updateSelectorsSchema,
+  draftListQuerySchema,
+  testTokenQuerySchema,
+  messageParamsSchema,
+  MESSAGE_TOKEN_PROVIDERS,
+  messageSyncBodySchema,
+  messageFetchFullBodySchema,
+  messageActionBodySchema,
+  messageTokenProviderBodySchema,
+} from '../lib/messagesValidation.js';
 import { asyncHandler, ServerError } from '../lib/errorHandler.js';
 import { validateRequest } from '../lib/validateRequest.js';
 import { UUID_RE } from '../lib/fileUtils.js';
-import { MESSAGE_ACCOUNT_TRANSPORT, MESSAGE_ACCOUNT_TYPES, sendViaForAccountType } from '../lib/messageTransport.js';
+import { MESSAGE_ACCOUNT_TRANSPORT, sendViaForAccountType } from '../lib/messageTransport.js';
 import { normalizeEmail } from '../lib/messageRecipientEmail.js';
 import * as messageAccounts from '../services/messageAccounts.js';
 import * as messageSync from '../services/messageSync.js';
@@ -14,10 +32,6 @@ import { getSelectors, updateSelectors, testSelectors, launchProvider } from '..
 import { evaluateMessages, generateReplyBody } from '../services/messageEvaluator.js';
 import { executeAction } from '../services/messageActions.js';
 import { getToken, getTokenStatus, testApi, clearTokenCache } from '../services/messageTokenExtractor.js';
-import {
-  MESSAGE_TOKEN_PROVIDERS, messageSyncBodySchema, messageFetchFullBodySchema, messageActionBodySchema,
-  messageTokenProviderBodySchema
-} from '../lib/messageValidation.js';
 
 const router = express.Router();
 
@@ -25,75 +39,6 @@ const router = express.Router();
 // When the result set hits this cap the response includes truncated:true so
 // callers know there may be un-refreshed messages beyond the limit.
 const FULL_BODY_REFRESH_LIMIT = 1000;
-
-// === Validation Schemas ===
-const createAccountSchema = z.object({
-  name: z.string().min(1),
-  type: z.enum(MESSAGE_ACCOUNT_TYPES),
-  email: z.union([z.string().email(), z.literal('')]).optional().default(''),
-  syncConfig: z.object({
-    maxMessages: z.number().int().positive().optional(),
-    // Per-account reply-detection ingestion (Gmail sent mail → timeline). #2796.
-    ingestSent: z.boolean().optional()
-  }).optional()
-});
-
-const updateAccountSchema = z.object({
-  name: z.string().min(1).optional(),
-  email: z.union([z.string().email(), z.literal('')]).optional(),
-  enabled: z.boolean().optional(),
-  // Gmail send-as aliases (#2831). Server-populated on sync, not typically set by the
-  // client; accepted here for schema parity so a round-tripped account payload validates.
-  sendAsAliases: z.array(z.string()).optional(),
-  syncConfig: z.object({
-    maxMessages: z.number().int().positive().optional(),
-    // Per-account reply-detection ingestion (Gmail sent mail → timeline). #2796.
-    ingestSent: z.boolean().optional()
-  }).optional()
-});
-
-const createDraftSchema = z.object({
-  accountId: z.string().guid(),
-  replyToMessageId: z.string().nullish(),
-  threadId: z.string().nullish(),
-  to: z.array(z.string()).optional().default([]),
-  cc: z.array(z.string()).optional().default([]),
-  subject: z.string().optional().default(''),
-  body: z.string().optional().default(''),
-  generatedBy: z.enum(['ai', 'manual']).optional().default('manual'),
-  sendVia: z.enum(['api', 'playwright']).optional()
-});
-
-const updateDraftSchema = z.object({
-  to: z.array(z.string()).optional(),
-  cc: z.array(z.string()).optional(),
-  subject: z.string().optional(),
-  body: z.string().optional(),
-  status: z.enum(['draft', 'pending_review', 'approved']).optional()
-});
-
-const reconcileDraftSchema = z.object({
-  attemptId: z.string().guid(),
-  outcome: z.enum(['sent', 'not_sent'])
-});
-
-const generateDraftSchema = z.object({
-  accountId: z.string().guid(),
-  replyToMessageId: z.string().nullish(),
-  threadId: z.string().nullish(),
-  context: z.string().optional().default(''),
-  instructions: z.string().optional().default(''),
-  useVoice: z.boolean().optional()
-});
-
-const evaluateMessagesSchema = z.object({
-  accountId: z.string().guid().optional(),
-  messageIds: z.array(z.string().trim().min(1).max(1024)).min(1).max(100).optional()
-});
-
-const updateSelectorsSchema = z.object({
-  selectors: z.record(z.string())
-});
 
 // === Account Routes ===
 router.get('/accounts', asyncHandler(async (req, res) => {
@@ -104,7 +49,7 @@ router.get('/accounts', asyncHandler(async (req, res) => {
 router.post('/accounts', asyncHandler(async (req, res) => {
   const data = validateRequest(createAccountSchema, req.body);
   const account = await messageAccounts.createAccount(data);
-  req.app.get('io')?.emit('messages:changed', {});
+  emitToOperatorsOn(req.app.get('io'), 'messages:changed', {});
   res.status(201).json(account);
 }));
 
@@ -115,7 +60,7 @@ router.put('/accounts/:id', asyncHandler(async (req, res) => {
   const updates = validateRequest(updateAccountSchema, req.body);
   const account = await messageAccounts.updateAccount(req.params.id, updates);
   if (!account) throw new ServerError('Account not found', { status: 404 });
-  req.app.get('io')?.emit('messages:changed', {});
+  emitToOperatorsOn(req.app.get('io'), 'messages:changed', {});
   res.json(account);
 }));
 
@@ -134,7 +79,7 @@ router.delete('/accounts/:id', asyncHandler(async (req, res) => {
   await humanActivity.deleteEvents({ accountId: req.params.id });
   await deleteAutoTouchpoints({ accountId: req.params.id });
   await messageAccounts.deleteAccount(req.params.id);
-  req.app.get('io')?.emit('messages:changed', {});
+  emitToOperatorsOn(req.app.get('io'), 'messages:changed', {});
   res.status(204).send();
 }));
 
@@ -179,8 +124,6 @@ router.post('/evaluate', asyncHandler(async (req, res) => {
 }));
 
 // === Draft Routes ===
-const draftListQuerySchema = z.object({ accountId: z.string().optional(), status: z.string().optional() });
-const testTokenQuerySchema = z.object({ top: z.string().optional() });
 
 router.get('/drafts', asyncHandler(async (req, res) => {
   const { accountId, status } = validateRequest(draftListQuerySchema, req.query);
@@ -201,7 +144,7 @@ router.post('/drafts', asyncHandler(async (req, res) => {
   }
   data.sendVia = derivedSendVia;
   const draft = await messageDrafts.createDraft(data);
-  req.app.get('io')?.emit('messages:draft:created', { draftId: draft.id });
+  emitToOperatorsOn(req.app.get('io'), 'messages:draft:created', { draftId: draft.id });
   res.status(201).json(draft);
 }));
 
@@ -258,7 +201,7 @@ router.post('/drafts/generate', asyncHandler(async (req, res) => {
     generatedBy: 'ai',
     sendVia: sendViaForAccountType(account.type) ?? 'playwright'
   });
-  req.app.get('io')?.emit('messages:draft:created', { draftId: draft.id });
+  emitToOperatorsOn(req.app.get('io'), 'messages:draft:created', { draftId: draft.id });
   res.status(201).json(draft);
 }));
 
@@ -287,7 +230,7 @@ router.post('/drafts/:id/reconcile', asyncHandler(async (req, res) => {
   }
   const data = validateRequest(reconcileDraftSchema, req.body);
   const draft = await messageDrafts.reconcileDraftSend(req.params.id, data);
-  req.app.get('io')?.emit('messages:changed', {});
+  emitToOperatorsOn(req.app.get('io'), 'messages:changed', {});
   res.json(draft);
 }));
 
@@ -408,7 +351,7 @@ router.post('/:accountId/:messageId/refresh', asyncHandler(async (req, res) => {
     const status = result.error === 'no-browser' || result.error === 'auth-required' ? 503 : 502;
     throw new ServerError(result.message || result.error, { status });
   }
-  req.app.get('io')?.emit('messages:changed', {});
+  emitToOperatorsOn(req.app.get('io'), 'messages:changed', {});
   res.json(result);
 }));
 
@@ -426,7 +369,7 @@ router.post('/fetch-full/:accountId', asyncHandler(async (req, res) => {
   const toRefresh = force ? allResult.messages : allResult.messages.filter(m => m.bodyFull === false);
   const { updated } = await messageSync.refreshMessages(accountId, toRefresh.map(msg => msg.id));
 
-  if (updated > 0) req.app.get('io')?.emit('messages:changed', {});
+  if (updated > 0) emitToOperatorsOn(req.app.get('io'), 'messages:changed', {});
   res.json({ updated, total: toRefresh.length, truncated });
 }));
 
@@ -436,7 +379,7 @@ router.post('/accounts/:id/cache/clear', asyncHandler(async (req, res) => {
     throw new ServerError('Invalid account ID format', { status: 400 });
   }
   await messageSync.deleteCache(req.params.id);
-  req.app.get('io')?.emit('messages:changed', {});
+  emitToOperatorsOn(req.app.get('io'), 'messages:changed', {});
   res.status(204).send();
 }));
 
@@ -447,7 +390,7 @@ router.post('/:accountId/:messageId/action', asyncHandler(async (req, res) => {
   const { accountId, messageId } = parsed.data;
   const { action } = validateRequest(messageActionBodySchema, req.body);
   const result = await executeAction(accountId, messageId, action);
-  req.app.get('io')?.emit('messages:changed', {});
+  emitToOperatorsOn(req.app.get('io'), 'messages:changed', {});
   res.json(result);
 }));
 

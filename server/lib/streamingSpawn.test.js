@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import { runStreamingCommand } from './streamingSpawn.js';
 import { isProcessAlive } from '../test/processAlive.js';
 
@@ -54,6 +54,24 @@ describe('runStreamingCommand', () => {
 
     expect(result).toEqual({ success: false, error: 'cancelled' });
   }, 20_000);
+
+  it('does not spawn an aborted command and waits for a running command to close on abort', async () => {
+    const controller = new AbortController();
+    let pid;
+    const running = runStreamingCommand(
+      NODE, ['-e', 'console.log(process.pid); setTimeout(() => {}, 60000)'],
+      (line) => { pid = Number(line); controller.abort(); },
+      { signal: controller.signal, timeoutMs: 10_000 },
+    );
+    expect(await running).toEqual({ success: false, error: 'cancelled' });
+    expect(pid).toBeGreaterThan(0);
+    expect(isProcessAlive(pid)).toBe(false);
+    const spawnImpl = vi.fn();
+    expect(await runStreamingCommand(NODE, [], undefined, { signal: controller.signal, spawnImpl })).toEqual({
+      success: false, error: 'cancelled',
+    });
+    expect(spawnImpl).not.toHaveBeenCalled();
+  });
 
   it('treats a throwing cancellation check as "not cancelled" rather than crashing', async () => {
     // The poll fires outside the Express request lifecycle: an uncaught throw
@@ -117,8 +135,6 @@ describe('runStreamingCommand — process-group teardown', () => {
   // pid is what lets the assertion probe the real outcome.
   const FORKING_WRAPPER = ['-c', 'sleep 30 & echo $!; wait'];
 
-  const probeAlive = isProcessAlive;
-
   it.skipIf(process.platform === 'win32')('takes the grandchild down with the wrapper on timeout', async () => {
     let grandchildPid = null;
     const result = await runStreamingCommand(SH, FORKING_WRAPPER, (line) => {
@@ -129,10 +145,11 @@ describe('runStreamingCommand — process-group teardown', () => {
     expect(result.error).toMatch(/timed out/);
     expect(Number.isInteger(grandchildPid)).toBe(true);
 
-    await new Promise(resolve => setTimeout(resolve, 200));
-    const alive = probeAlive(grandchildPid);
-    if (alive) process.kill(grandchildPid, 'SIGKILL');
-    expect(alive).toBe(false);
+    try {
+      await vi.waitFor(() => expect(isProcessAlive(grandchildPid)).toBe(false), { timeout: 2000 });
+    } finally {
+      if (isProcessAlive(grandchildPid)) process.kill(grandchildPid, 'SIGKILL');
+    }
   });
 
   it.skipIf(process.platform === 'win32')('leaves an ordinary command on the per-pid kill', async () => {
@@ -144,10 +161,12 @@ describe('runStreamingCommand — process-group teardown', () => {
       if (grandchildPid === null && /^\d+$/.test(line)) grandchildPid = Number(line);
     }, { timeoutMs: 300 });
 
-    await new Promise(resolve => setTimeout(resolve, 200));
-    const alive = probeAlive(grandchildPid);
-    // Clean up regardless — this test deliberately strands a `sleep`.
-    if (alive) process.kill(grandchildPid, 'SIGKILL');
-    expect(alive).toBe(true);
+    expect(Number.isInteger(grandchildPid)).toBe(true);
+    try {
+      expect(isProcessAlive(grandchildPid)).toBe(true);
+    } finally {
+      // This test deliberately strands a `sleep`.
+      if (isProcessAlive(grandchildPid)) process.kill(grandchildPid, 'SIGKILL');
+    }
   });
 });

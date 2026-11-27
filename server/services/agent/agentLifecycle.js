@@ -93,7 +93,13 @@ export async function spawnAgentForTask(task) {
     return null;
   }
   const outcome = await withUpdateInProgressGuard(isUpdateInProgress, () =>
-    withSpawnDedupGuard(spawningTasks, task.id, () => runAgentSpawn(task)));
+    withSpawnDedupGuard(spawningTasks, task.id, async () => {
+      if (task.metadata?.featureAgentRun && task.metadata?.featureAgentId) {
+        const { withFeatureAgentDispatch } = await import('../featureAgents.js');
+        return withFeatureAgentDispatch(task, () => runAgentSpawn(task));
+      }
+      return runAgentSpawn(task);
+    }));
   if (outcome === SPAWN_UPDATE_SKIP) {
     console.log(`⏸️ Holding task ${task.id} — a PortOS self-update is in progress`);
     return null;

@@ -39,6 +39,7 @@
  * failed). See `TRACK_COHORT_KINDS` / `confirmedFloorForSub` below.
  */
 
+import { TOMBSTONE_GRACE_MS } from '../../lib/tombstones.js';
 import {
   pruneTombstonedUniverses,
   listLiveIds as listLiveUniverseIds,
@@ -182,8 +183,6 @@ function makeRecordIdResolver(listers) {
     return idSets.get(kind).has(id);
   };
 }
-
-const GRACE_MS = 24 * 60 * 60 * 1000;
 
 // `peer_subscriptions.json` rows can outlive peer removal. The cohort is
 // every registry peer with an instanceId, paused or not (`enabled: false`
@@ -492,7 +491,7 @@ function refusedFromCutoffs(cutoffs) {
  * per-kind null-cutoff refusal (snapshot-mode peer with no per-record sub)
  * fires independently of graceMs — `refused` lists kinds we couldn't touch.
  */
-export async function sweepTombstones({ now = Date.now(), graceMs = GRACE_MS } = {}) {
+export async function sweepTombstones({ now = Date.now(), graceMs = TOMBSTONE_GRACE_MS } = {}) {
   const { peers, subs } = await loadState();
   const cutoffs = await computeAllCutoffs({ peers, subs, now, graceMs });
   const itemRemovalCutoff = collectionItemRemovalCutoff({
@@ -551,4 +550,4 @@ export async function getSweepStatus({ now = Date.now() } = {}) {
   };
 }
 
-export const TOMBSTONE_GRACE_MS = GRACE_MS;
+export { TOMBSTONE_GRACE_MS };

@@ -1,30 +1,22 @@
 /**
  * POST adaptive difficulty + progressive-ladder resolution.
  *
- * This is the POLICY layer above the two data layers: `meatspacePost.js` owns
- * raw sessions and per-ladder level history, `meatspacePostStats.js` owns the
- * derived aggregates, and this module turns both into the effective config a
- * drill is generated with (and the preview of that decision for the config UI).
- *
- * It lives here rather than inside `meatspacePost.js` because the adaptive
- * signal is read from `getPostStats()`, and `meatspacePostStats.js` reads raw
- * sessions back out of `meatspacePost.js` — computing the signal in the data
- * module closed a static ESM cycle whose only other purpose was letting callers
- * write `import { getPostStats } from './meatspacePost.js'` (issue #5690).
+ * Resolves effective drill settings and previews using progression histories
+ * and aggregate performance derived from scored sessions.
  */
 import { adaptDrillConfig, ADAPTIVE_SPECS, ADAPTIVE_DEFAULTS } from '../../lib/postAdaptive.js';
 import { resolveMultiplicationLevel, MASTERY_DEFAULTS } from '../../lib/postMultiplicationLadder.js';
 import { POWERS_MASTERY_DEFAULTS, resolvePowersLevel } from '../../lib/postPowersLadder.js';
 import { cognitiveLadder, cognitiveLevelConfig, resolveCognitiveProgression } from '../../lib/postProgression.js';
+import { getPostConfig } from './postConfig.js';
+import { MATH_MODULE } from './postDrillGenerators.js';
 import {
-  MATH_MODULE,
-  getPostConfig,
   getMultiplicationProgress,
   getPowersProgress,
   getMultiplicationLevelStats,
   getPowersLevelStats,
   getCognitiveLevelStats,
-} from './meatspacePost.js';
+} from './postProgress.js';
 import { getPostStats } from './meatspacePostStats.js';
 
 /**

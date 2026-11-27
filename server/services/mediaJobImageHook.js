@@ -75,10 +75,12 @@ export function createMediaJobImageHook(config) {
   // Every accepted completion's work, so tests can await the outcome; entries remove themselves.
   const inFlight = new Set();
 
+  const kinds = Array.isArray(kind) ? kind : [kind];
+
   // The tag → identity half of `decode`, shared with the terminal path (a
   // failed job carries no result to extract).
   function identity(job) {
-    if (!job || job.kind !== kind) return null;
+    if (!job || !kinds.includes(job.kind)) return null;
     const tag = job.params?.[tagKey];
     if (!tag) return null;
     const id = identify(tag, job);

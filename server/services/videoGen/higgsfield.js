@@ -16,6 +16,7 @@ import { readFile } from 'fs/promises';
 import { basename } from 'path';
 import { ensureDir, PATHS } from '../../lib/fileUtils.js';
 import { ServerError } from '../../lib/errorHandler.js';
+import { detectImageFormat } from '../../lib/mimeTypes.js';
 import { HIGGSFIELD_DEFAULT_VIDEO_MODEL, HIGGSFIELD_FRAME_ROLE_LINE, buildHiggsfieldVideoRequest, getHiggsfieldVideoModel } from '../../lib/higgsfieldVideoModels.js';
 import { videoGenEvents } from './events.js';
 import { emitCloudRenderStatus, CLOUD_RENDER_PHASE } from './generateVideoHelpers.js';
@@ -134,10 +135,13 @@ async function generateVideoPrepared({
 async function uploadFrame({ apiKey, path, aspect, signal }) {
   const { dataUri, conformed } = await frameDataUriAtAspect(path, aspect);
   const match = /^data:([^;,]+);base64,(.*)$/s.exec(dataUri);
-  if (!match || !['image/png', 'image/jpeg', 'image/webp', 'image/gif'].includes(match[1])) {
+  const bytes = match ? Buffer.from(match[2], 'base64') : null;
+  // Unrecognized bytes can carry fal's PNG fallback label. Check the upload bytes instead.
+  const contentType = detectImageFormat(bytes)?.mime;
+  if (!contentType || contentType !== match[1]) {
     throw new ServerError('Higgsfield accepts PNG, JPEG, WebP or GIF frames', { status: 400, code: 'HIGGSFIELD_INPUT_INVALID' });
   }
-  const url = await uploadHiggsfieldFile({ apiKey, bytes: Buffer.from(match[2], 'base64'), contentType: match[1], signal });
+  const url = await uploadHiggsfieldFile({ apiKey, bytes, contentType, signal });
   return { url, conformed };
 }
 

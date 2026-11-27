@@ -1,5 +1,5 @@
 import { readdirSync, readFileSync, renameSync, statSync, writeFileSync } from 'node:fs';
-import { homedir } from 'node:os';
+import { constants, homedir } from 'node:os';
 import { basename, dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { reportWindowsCrashDiagnostics } from './ci-windows-crash-diagnostics.js';
@@ -8,6 +8,16 @@ import { writeStepSummary } from './lib/githubOutput.js';
 
 // Run-level and suite errors, bounded assertion records, and module progress.
 export const RUN_DIAGNOSTIC_MAX_BYTES = 320_000;
+export const VITEST_CHILD_REPORT = 'vitest-child.json';
+
+export function vitestChildRecord(phase, code, signal) {
+  if (phase !== 'exit' && phase !== 'close') return null;
+  // Windows can report native DWORD statuses. Accept signed and unsigned forms.
+  if (code !== null && (!Number.isInteger(code) || code < -0x80000000 || code > 0xffffffff)) return null;
+  if (signal !== null && (typeof signal !== 'string' || !Object.hasOwn(constants.signals, signal))) return null;
+  if ((code === null) === (signal === null)) return null;
+  return { phase, code, signal };
+}
 
 const repoRoot = fileURLToPath(new URL('../', import.meta.url)).replace(/\\/g, '/');
 
@@ -125,6 +135,7 @@ export async function collectTestDiagnostics(root, {
   for (const [index, name] of attempts.slice(-2).entries()) {
     const dir = join(root, name);
     let replay;
+    let boundary;
     lines.push(`CI test invocation ${index + 1}:`);
     try {
       const invocation = readReport(join(dir, 'invocation.json'));
@@ -133,7 +144,8 @@ export async function collectTestDiagnostics(root, {
       lines.push(`Launcher ${invocation.completed ? 'completed' : 'interrupted or completion not recorded'}; `
         + `exit=${Number.isInteger(invocation.status) ? invocation.status : 'unavailable'}; `
         + `signal=${/^SIG[A-Z]+$/.test(invocation.signal) ? invocation.signal : 'none'}.`);
-      const boundary = ['direct npm process', 'cmd.exe -> npm.cmd'].includes(invocation.commandBoundary) ? invocation.commandBoundary : 'unavailable';
+      boundary = ['direct npm process', 'cmd.exe -> npm.cmd', 'direct Vitest process'].includes(invocation.commandBoundary)
+        ? invocation.commandBoundary : 'unavailable';
       lines.push(`Observed command boundary: ${boundary}.`);
       replay = invocation;
       for (const [event, value] of [['exit', invocation.childExit], ['close', invocation.childClose]]) {
@@ -144,6 +156,18 @@ export async function collectTestDiagnostics(root, {
       if (Array.isArray(invocation.selectors)) lines.push(`Selected inputs (up to 100): ${invocation.selectors.slice(0, 100).map(diagnosticTestFile).join(', ') || 'full suite or no file selectors'}`);
     } catch {
       lines.push('Diagnostic gap: invocation metadata unavailable; launcher completion is unverified.');
+    }
+    try {
+      const { phase, code, signal } = readReport(join(dir, VITEST_CHILD_REPORT), 256);
+      const record = vitestChildRecord(phase, code, signal);
+      if (!record) throw Error('invalid child record');
+      lines.push(`Observed Vitest child ${record.phase}: code=${record.code ?? 'unavailable'}; signal=${record.signal ?? 'none'}.`);
+    } catch {
+      if (boundary === 'direct Vitest process' || !replay) {
+        lines.push('Diagnostic gap: Vitest child exit or close record unavailable.');
+      } else if (replay.observeVitest === true) {
+        lines.push('Diagnostic gap: Vitest child was not observed independently of npm.');
+      }
     }
     try {
       const run = readReport(join(dir, 'run.json'), RUN_DIAGNOSTIC_MAX_BYTES);

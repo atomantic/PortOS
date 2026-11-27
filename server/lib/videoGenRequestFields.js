@@ -5,6 +5,16 @@
 
 export const MAX_VIDEO_BATCH_SIZE = 20;
 
+export const UPSCALE_METHODS = Object.freeze(['lanczos', 'ltx', 'fal-seedvr2', 'realesrgan']);
+export const DEFAULT_UPSCALE_METHOD = 'lanczos';
+// Real-ESRGAN weights the bundled ncnn runtime can run as a 2x video pass:
+// the general photo model (a 4x network downscaled to 2x per frame) and the
+// native-2x animation-video model.
+export const REALESRGAN_MODEL_IDS = Object.freeze(['realesrgan-x4plus', 'realesr-animevideov3']);
+export const DEFAULT_REALESRGAN_MODEL = 'realesrgan-x4plus';
+export const FAL_SEEDVR2_TARGET_RESOLUTIONS = Object.freeze(['720p', '1080p', '1440p', '2160p']);
+export const DEFAULT_FAL_SEEDVR2_TARGET_RESOLUTION = '1080p';
+
 // Request fields that only local video runtimes understand. Their Zod schemas
 // stay in `lib/videoGenValidation.js`, while this domain-level list lets
 // submission logic decide whether a request can be routed to a Grok pin without
@@ -22,10 +32,8 @@ export const VIDEO_GEN_LOCAL_ONLY_FIELDS = Object.freeze({
   TILING: 'tiling',
   TEXT_ENCODER_ID: 'textEncoderId',
   SPEED_PROFILE_ID: 'speedProfileId',
-  DRAFT_DECODE: 'draftDecode',
   // Block-streaming request (#6499) — an LTX-2/2.5 MLX-only knob, so it makes
-  // no sense on a Grok/fal/reactor render and stays local-only for the same
-  // reason speedProfileId/draftDecode do.
+  // no sense on a Grok/fal/reactor render.
   STREAMING_MODE: 'streamingMode',
   CONTINUITY_STRATEGY: 'continuityStrategy',
 });

@@ -15,7 +15,6 @@ import { ServerError } from '../../lib/errorHandler.js';
 import { repoForModel, getTextEncoderRepo, isHfRepoId } from '../../lib/mediaModels.js';
 import { IC_LORA_WEIGHT_KEYS, icLoraSpecByKey, icLoraRepos } from '../../lib/icLoraWeights.js';
 import { downloadableVideoTextEncoders, downloadableVideoTextEncoder } from '../../lib/videoTextEncoders.js';
-import { downloadableVideoDraftDecoders } from '../../lib/videoDraftDecoders.js';
 import { isPinnedMiniMaxH3SpeedProfile } from '../../lib/minimaxH3SpeedProfiles.js';
 import {
   inspectModelCache, verifyModelCache, repairModelCache,
@@ -72,18 +71,6 @@ export const modelDownloadTargets = (model, { speedProfileId } = {}) => {
     if (typeof dep?.repo !== 'string') continue;
     const only = safeOnlyList(videoModelLabel(model), dep.files, 'required-weight');
     if (only.length > 0) targets.push({ repo: dep.repo, revision: dep.revision || null, only });
-  }
-  // The model's preview-fidelity decoder (#5423), when it declares one. Scoped
-  // to its pinned file for the same reason every other entry here is — and
-  // listed under the MODEL rather than as a standalone target, because it is
-  // useless without the checkpoint it decodes for, so the download badge that
-  // offers it belongs beside that model's own.
-  for (const decoder of downloadableVideoDraftDecoders([model])) {
-    targets.push({
-      repo: decoder.repo,
-      revision: decoder.revision || null,
-      only: safeOnlyList(`Draft decoder "${decoder.id}"`, decoder.files, 'weight-file'),
-    });
   }
   return targets;
 };

@@ -28,8 +28,8 @@ import {
   isDefaultI2vReferenceMode, normalizeI2vReferenceMode, resolveI2vReferenceStrength,
 } from '../../lib/videoReferenceModes.js';
 import { videoGenEvents } from './events.js';
-import { broadcastSse, closeJobAfterDelay } from '../../lib/sseUtils.js';
-import { getVideoModels, getTextEncoderRepo } from '../../lib/mediaModels.js';
+import { broadcastSse, dispatchCanceledJob, closeJobAfterDelay } from '../../lib/sseUtils.js';
+import { getTextEncoderRepo } from '../../lib/mediaModels.js';
 import { hardwareUnavailableReason, isHardwareCompatible } from '../../lib/systemCapabilities.js';
 import { resolveVideoModelSelection } from './modelSelection.js';
 import { findCachedRepoFile, findCachedRepoFiles } from '../../lib/hfCache.js';
@@ -48,8 +48,6 @@ import {
   BYOV_VIDEO_RUNTIMES,
   resolveByovRuntimeLoraCapable,
   routesToWindowsHelper,
-  byovRuntimeExpectedRevision,
-  isByovRuntimeCurrent,
 } from './runtimes.js';
 import { getSettings } from '../settings.js';
 import { loadHistory, saveHistory, mutateVideoHistory, getHistoryItem } from './history.js';
@@ -70,11 +68,6 @@ import {
   resolveVideoSpeedProfile, speedProfileDeclineReason, resolveVideoSampler,
   inferEffectiveVideoMode,
 } from '../../lib/videoSpeedProfiles.js';
-import {
-  isFullDecode,
-  draftDecodeDeclineReason,
-  resolveVideoDraftDecoder,
-} from '../../lib/videoDraftDecoders.js';
 import { isDefaultVideoStreamingMode } from '../../lib/videoStreamingMode.js';
 import { isMiniMaxH3SpeedProfileRequest } from '../../lib/minimaxH3SpeedProfiles.js';
 import { extendLatentFrames, supportsContextWindow, resolveContinuityRequest } from '../../lib/videoContinuity.js';
@@ -245,51 +238,6 @@ async function resolveVideoModelAssets({ model, modelId, textEncoderId }) {
   return { wanModelPath, wanRequiredWeights, fastvideoModelPath, fastvideoOmniAssets, ltxModelPath, ref2vaModelPath, resolvedTextEncoder };
 }
 
-// Preview-fidelity video decode (#5423). Every gate lives in
-// lib/videoDraftDecoders.js and RETURNS its reason; the render always
-// proceeds, on the full decoder, because a decode substitution only ever
-// makes a render cheaper. Resolved here rather than in the arg builder for
-// the same reason the substituted conditioner is: a missing download has to
-// be discovered before any GPU work, and the decision has to be recorded on
-// the history row.
-//
-// Two gates need I/O and so cannot live in the pure module: whether the
-// installed runner checkout is the revision the asset was verified against
-// (an older one ignores the flags, which would let a full decode report
-// itself as a draft), and whether the pinned files are actually in the HF
-// cache. Both are only probed when a draft decode was requested AND the model
-// declares one, so a full-decode render costs nothing extra.
-async function resolveRequestedDraftDecoder({ model, draftDecode, jobId }) {
-  let draftDecoder = null;
-  if (!isFullDecode(draftDecode)) {
-    const declared = model.draftDecoder;
-    const runtimeRevision = (declared && await isByovRuntimeCurrent(model.runtime))
-      ? byovRuntimeExpectedRevision(model.runtime)
-      : null;
-    // Only probed once the cheaper gates have passed — a model with no
-    // declaration, or a checkout at the wrong revision, never touches the cache.
-    const decoderPaths = (declared && runtimeRevision === declared.runtimeRevision)
-      ? await findCachedRepoFiles(declared.repo, declared.files, { revision: declared.revision })
-      : null;
-    const gateArgs = {
-      model,
-      models: getVideoModels(),
-      decodeId: draftDecode,
-      runtimeRevision,
-      assetCached: Array.isArray(decoderPaths) && decoderPaths.length > 0,
-    };
-    const resolved = resolveVideoDraftDecoder(gateArgs);
-    if (resolved) {
-      draftDecoder = { ...resolved, paths: decoderPaths };
-      console.log(`🩻 Draft decode "${resolved.id}" [${jobId.slice(0, 8)}] via ${resolved.label}`);
-    } else {
-      const declined = draftDecodeDeclineReason(gateArgs);
-      console.log(`⚠️ Draft decode declined [${jobId.slice(0, 8)}] ${declined?.code || 'UNKNOWN'}: ${declined?.message || 'rendering on the full decoder'}`);
-    }
-  }
-  return draftDecoder;
-}
-
 // Negotiates the user-facing speed profile (#4875) and the opt-in T2V two-stage
 // override. A profile that cannot apply degrades to the default sampler (logged);
 // MiniMax H3 refuses instead, since it has no meaningful default schedule.
@@ -352,7 +300,7 @@ function buildLocalVideoJobRecord({
   resolvedTextEncoder, filename, createdAt, mode, hasMultiKeyframes, sourceImagePath,
   effectiveReferenceMode, actualImageStrength, resolvedContinuation, resolvedSourceImage, resolvedLastImage,
   resolvedKeyframes, extendFromVideoPath, audioFilePath, resolvedIcReferencePaths, visualConditioning,
-  t2vTwoStage, speedProfile, draftDecoder, a2vLoraStageStrengths, resolvedLoras, streamingMode,
+  t2vTwoStage, speedProfile, a2vLoraStageStrengths, resolvedLoras, streamingMode,
   actualIcStrength, actualIcAttentionStrength, icSkipStage2, icReferencePaths, referenceImagePaths,
   referenceVideoPaths, referenceAudioPaths, loraLicenses, addedTriggerWords, renderPrompt, sentRecord,
   hidden,
@@ -427,15 +375,8 @@ function buildLocalVideoJobRecord({
     // What the runner ACTUALLY managed to apply is stamped separately by
     // finalizeGeneratedVideo from the child's SPEEDPROFILE: report.
     ...(speedProfile ? { speedProfileId: speedProfile.id, stage2Steps: actualStage2Steps } : {}),
-    // Preview-fidelity decode (#5423). Recorded as the REQUESTED id, so a Remix
-    // round-trips the decode the user picked, and so the lightbox can say which
-    // decoder produced the pixels being judged. Absent on a full decode, which
-    // keeps every pre-feature history row byte-identical — and, because a
-    // declined request never sets it, a record can never claim a draft decode
-    // the render did not perform.
-    ...(draftDecoder ? { draftDecode: draftDecoder.id } : {}),
     // Block-streaming request (#6499). Recorded as the REQUESTED mode, same
-    // convention as speedProfileId/draftDecode above — 'auto' and absence are
+    // convention as speedProfileId above — 'auto' and absence are
     // the same request, so a quality-default render's history row stays
     // byte-identical to one from before this setting existed. What the
     // bridge ACTUALLY did (active/reason/peakMb) is stamped separately by
@@ -618,7 +559,7 @@ async function validateAndResolveLocalInputs(params) {
   // out of the runtimes they just installed. Routes/videoGen.js reads the same
   // module-level set.
   if (!pythonPath && !BYOV_VIDEO_RUNTIMES.has(model.runtime)) {
-    throw new ServerError('Python path not configured — set it in Settings > Image Gen', { status: 400, code: 'VIDEO_GEN_NOT_CONFIGURED' });
+    throw new ServerError('Python path not configured — set it in Media Gen Settings → Local', { status: 400, code: 'VIDEO_GEN_NOT_CONFIGURED' });
   }
   // Every runner resolves its weights from a HuggingFace repo id EXCEPT the
   // legacy CUDA helper, which hardcodes Lightricks/LTX-Video. A user-edited
@@ -650,14 +591,14 @@ async function validateAndResolveLocalInputs(params) {
 }
 
 // Resolves every numeric/derived knob the runner and the job record share:
-// grid-snapped dimensions, seed/batch plan, speed profile, draft decoder,
+// grid-snapped dimensions, seed/batch plan, speed profile,
 // sampler schedule, and the i2v / IC-LoRA strengths. The returned names are the
 // "actual" values; the raw request fields never reach `meta` or `buildParams`.
 async function resolveLocalRenderPlan(params, inputs, jobId) {
   const {
     batchSize = 1, seed, fps = 24, steps, guidanceScale, uploadedTempPath = null, uploadedTempPaths, keyframes = null,
     extendFromVideoPath = null, audioFilePath = null, lastImagePath = null, mode = null, speedProfileId = null,
-    draftDecode = null, imageStrength = null, i2vReferenceMode = null, icStrength = null, icAttentionStrength = null,
+    imageStrength = null, i2vReferenceMode = null, icStrength = null, icAttentionStrength = null,
   } = params;
   const { model, width, height, numFrames, sourceImagePath, resolvedLoras } = inputs;
   // Most local runners use PortOS's shared 64px grid. H3's released canvas
@@ -684,8 +625,6 @@ async function resolveLocalRenderPlan(params, inputs, jobId) {
     model, jobId, speedProfileId, mode, keyframes, sourceImagePath, extendFromVideoPath, audioFilePath, lastImagePath,
     w, h, steps, guidanceScale, resolvedLoras, uploadedTempPath, uploadedTempPaths,
   });
-  const draftDecoder = await resolveRequestedDraftDecoder({ model, draftDecode, jobId });
-
   const sampler = resolveVideoSampler({ model, steps, guidanceScale, speedProfile });
   let actualSteps = sampler.steps;
   let actualGuidance = sampler.guidance;
@@ -710,7 +649,7 @@ async function resolveLocalRenderPlan(params, inputs, jobId) {
   // would anchor. An explicit slider value always wins on both modes.
   const effectiveReferenceMode = normalizeI2vReferenceMode(i2vReferenceMode);
   return {
-    w, h, batch, actualSeed, speedProfile, t2vTwoStage, draftDecoder, actualSteps, actualGuidance, actualStage2Steps,
+    w, h, batch, actualSeed, speedProfile, t2vTwoStage, actualSteps, actualGuidance, actualStage2Steps,
     effectiveReferenceMode,
     actualImageStrength: resolveI2vReferenceStrength(effectiveReferenceMode, imageStrength),
     // IC-LoRA dials. `icStrength` weights the reference-video conditioning
@@ -794,7 +733,6 @@ function buildLocalRunnerParams({ params, inputs, plan, media, renderPrompt, out
     icAttentionStrength: plan.actualIcAttentionStrength,
     icSkipStage2,
     speedProfile: plan.speedProfile,
-    draftDecoder: plan.draftDecoder,
     streamingMode,
     ffmpegPath: media.ffmpeg,
     ffprobePath: media.ffprobe,
@@ -862,7 +800,7 @@ async function renderLocalVideo(preparation, request) {
     resolvedContinuation: inputs.resolvedContinuation, resolvedSourceImage: media.resolvedSourceImage,
     resolvedLastImage: media.resolvedLastImage, resolvedKeyframes: media.resolvedKeyframes, extendFromVideoPath,
     audioFilePath, resolvedIcReferencePaths: media.resolvedIcReferencePaths, visualConditioning,
-    t2vTwoStage: plan.t2vTwoStage, speedProfile, draftDecoder: plan.draftDecoder, a2vLoraStageStrengths,
+    t2vTwoStage: plan.t2vTwoStage, speedProfile, a2vLoraStageStrengths,
     resolvedLoras, streamingMode, actualIcStrength: plan.actualIcStrength,
     actualIcAttentionStrength: plan.actualIcAttentionStrength, icSkipStage2, icReferencePaths,
     referenceImagePaths, referenceVideoPaths, referenceAudioPaths, loraLicenses, addedTriggerWords, renderPrompt,
@@ -935,12 +873,10 @@ async function startPreparedLocalVideo({
     });
   } catch (err) {
     if (handedOff) throw err;
+    const canceled = preparation.wasCanceled();
     await recordVideoExecutionDiagnostics(jobId, { termination: {
-      exitCode: null, signal: null, reason: preparation.wasCanceled() ? 'canceled' : 'refused', observedAt: new Date().toISOString(),
+      exitCode: null, signal: null, reason: canceled ? 'canceled' : 'refused', observedAt: new Date().toISOString(),
     } }, ...(executionParent ? [executionParent] : [])).catch(error => console.error(`❌ Video preparation evidence persistence failed [${jobId.slice(0, 8)}]: ${error.message}`));
-    job.status = 'error';
-    const reason = err.message || 'Failed to prepare video generation';
-    console.error(`❌ Video generation preparation error [${jobId.slice(0, 8)}]: ${reason}`);
     const cleanup = await Promise.allSettled([
       cleanupTempFiles({ includeUploads: true, includeUntrackedAudio: true }),
       stepwiseDir ? rmGuarded(stepwiseDir, { recursive: true, force: true }) : undefined,
@@ -949,8 +885,15 @@ async function startPreparedLocalVideo({
       maintenance.markCurrentUnsettled();
       maintenance.markResourceUnsettled('media', jobId);
     }
-    broadcastSse(job, { type: 'error', error: reason });
-    videoGenEvents.emit('failed', { generationId: jobId, error: reason, failure: normalizeVideoFailure(err, { prompts: [meta.prompt, meta.negativePrompt] }) });
+    if (canceled) {
+      dispatchCanceledJob(job, jobId, 'Video preparation', () => videoGenEvents.emit('failed', { generationId: jobId, error: 'Canceled' }));
+    } else {
+      job.status = 'error';
+      const reason = err.message || 'Failed to prepare video generation';
+      console.error(`❌ Video generation preparation error [${jobId.slice(0, 8)}]: ${reason}`);
+      broadcastSse(job, { type: 'error', error: reason });
+      videoGenEvents.emit('failed', { generationId: jobId, error: reason, failure: normalizeVideoFailure(err, { prompts: [meta.prompt, meta.negativePrompt] }) });
+    }
     closeJobAfterDelay(videoJobState.jobs, jobId);
     throw err;
   }

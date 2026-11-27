@@ -62,6 +62,7 @@ export function useDeathClock(deathDateISO) {
     };
 
     update();
+    // biome-ignore lint/plugin/lint-no-view-interval: Ticks the countdown display each second; no I/O.
     intervalRef.current = setInterval(update, 1000);
 
     return () => {

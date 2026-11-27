@@ -444,6 +444,7 @@ describe('tribe service — autoLogTouchpoints', () => {
   beforeEach(() => {
     query.mockReset();
     withTransaction.mockReset();
+    getUserTimezone.mockClear();
   });
 
   // One tracked person "Ada" with a known email; listPeople() is the first query.
@@ -453,21 +454,32 @@ describe('tribe service — autoLogTouchpoints', () => {
     ] });
   }
 
-  it('matches identities and inserts one deduped touchpoint per matched person', async () => {
+  it('inserts matched candidates in one transaction and updates only newly inserted contact days', async () => {
     mockPeople();
-    // INSERT returns a row (new); UPDATE returns nothing.
-    withTransaction.mockImplementation(async (fn) => fn({
-      query: vi.fn()
-        .mockResolvedValueOnce({ rows: [{ id: 't1', person_id: 'ada', source: 'calendar' }] })
-        .mockResolvedValueOnce({ rows: [] }),
-    }));
+    const clientQuery = vi.fn()
+      // The middle candidate conflicts in Postgres and must contribute no contact date.
+      .mockImplementationOnce(async (_sql, [ids, personIds]) => ({
+        rows: [0, 2].map((index) => ({ id: ids[index], person_id: personIds[index] })),
+      }))
+      .mockResolvedValueOnce({ rows: [] });
+    withTransaction.mockImplementation(async (fn) => fn({ query: clientQuery }));
 
     const result = await autoLogTouchpoints([
-      { identities: [{ email: 'ada@work.com' }], source: 'calendar', dedupeKey: 'cal:a:e1', happenedAt: '2026-06-01T10:00:00Z' },
-      { identities: [{ email: 'nobody@x.com' }], source: 'calendar', dedupeKey: 'cal:a:e2' },
+      { identities: [{ email: 'ada@work.com' }], dedupeKey: 'cal:a:e1', happenedAt: '2026-06-02T01:00:00Z' },
+      { identities: [{ email: 'ada@work.com' }], dedupeKey: 'cal:a:e2', happenedAt: '2026-06-30T01:00:00Z' },
+      { identities: [{ email: 'ada@work.com' }], dedupeKey: 'cal:a:e3', happenedAt: '2026-06-03T01:00:00Z' },
+      { identities: [{ email: 'unknown@example.com' }], dedupeKey: 'cal:a:e4' },
     ]);
 
-    expect(result).toEqual({ created: 1, matched: 1 });
+    expect(result).toEqual({ created: 2, matched: 3 });
+    expect(getUserTimezone).toHaveBeenCalledTimes(1);
+    expect(withTransaction).toHaveBeenCalledTimes(1);
+    expect(clientQuery).toHaveBeenCalledTimes(2);
+    expect(clientQuery).toHaveBeenNthCalledWith(
+      2,
+      expect.stringContaining('UPDATE tribe_people'),
+      [['ada', 'ada'], ['2026-06-01', '2026-06-02']],
+    );
   });
 
   it('counts a matched-but-duplicate insert (ON CONFLICT no row) as matched, not created', async () => {

@@ -14,7 +14,7 @@ Harness  ×  Method  ×  Service  ×  Model  ×  Effort
 | **Model** | One entry of the service's catalog, narrowed by its plan. | The instance's `catalog` |
 | **Effort** | The reasoning budget, on the harness's ladder (and per model where a model narrows it). | `effortLevels` / `effortLevelsByModel` in the catalog |
 
-Any **compatible** combination of enabled parts is runnable without a stored record: `pi.tui@nvidia-nim-free`, `direct.api@ollama`, `claude.cli@anthropic+corp-auth`. The grammar, the resolver, and which surfaces accept a composite id are in [PROVIDER_COMPOSITION.md](./PROVIDER_COMPOSITION.md). A **preset** is a *named* combination — the stored `data/providers.json` record every `{ providerId, model, effort }` picker has always selected — and every picker stays one dropdown of presets with a "Custom…" step that opens the compose flow.
+Any **compatible** combination of enabled parts is runnable without a stored record: `pi.tui@nvidia-nim-free`, `direct.api@ollama`, `claude.cli@anthropic+corp-auth`. The grammar, the resolver, and which surfaces accept a composite id are in [Provider composition](#provider-composition). A **preset** is a *named* combination — the stored `data/providers.json` record every `{ providerId, model, effort }` picker has always selected — and every picker stays one dropdown of presets with a "Custom…" step that opens the compose flow.
 
 ## The three views
 
@@ -80,3 +80,26 @@ Every view and every open card is a URL — `/ai/harnesses/:harnessId`, `/ai/ser
 ## What federates
 
 Nothing on this page. Harness enablement, bootstrap apps, service instances (endpoints, credentials, catalogs) and presets are machine-local: an `ai_connections` row carries this host's execution environment and credential material (ADR [privacy records machine-local](./decisions/2026-08-08-privacy-records-machine-local.md)), and `settings.harnesses` / `settings.credentialBootstraps` describe binaries on this host. A CoS task's `metadata.provider` crosses to a peer verbatim; a peer with no preset or service under that id reports it unresolved rather than substituting another.
+
+## Provider composition
+
+A composite selection has the form `<harness>.<method>@<service-slug>[+<bootstrap-slug>]`.
+The method is `cli`, `tui` or `api`. A credential bootstrap is allowed for
+CLI or TUI. Create combinations with **Custom…** and check them through the
+provider catalog and readiness view. A disabled or missing part, an
+incompatible route or a required credential that cannot be resolved makes
+the saved selection unavailable. PortOS preserves the selection so repairing
+the parts can restore it.
+
+Use **Save as preset** when a surface needs a stored provider. The global
+active provider, a preset's fallback field and managed-app task type
+overrides accept preset IDs. Derived presets source connection fields from
+the service and retain their own model defaults, settings and catalog
+narrowing. Edit connection-owned fields on the service. Peer installs resolve
+the same saved reference against their own services and credentials.
+
+Execution speed is a separate selection where the runtime supports it.
+**Inherit/default** follows the existing route, **Standard** overrides an
+inherited fast tier, and **Fast** can use more subscription credits. An
+unsupported saved option is shown with a reason and can be cleared. Check
+the run's effective tier evidence before treating a request as confirmed.

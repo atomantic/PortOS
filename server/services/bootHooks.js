@@ -16,7 +16,7 @@
 import { warmModuleLoads } from '../lib/moduleWarmup.js';
 import {
   registerCosOrphanRecoveryHandlers, registerMediaJobTerminalHooks, registerMediaRuntimeModules,
-  registerMergedBranchCleanup, registerMusicVideoRecovery,
+  registerManagedVisitorCredentialRestore, registerMergedBranchCleanup, registerMusicVideoRecovery,
 } from './bootHookRegistry.js';
 import { parseComicPagesOwner, parseSeasonCoverOwner, parseStoryboardsShotOwner } from './pipeline/owners.js';
 import './featureAgents.js';
@@ -30,10 +30,11 @@ const collectionOwned = job => ['deckCard', 'moodBoardPoster', 'storyboardPanelR
 
 const mediaRuntimeLoaders = {
   topazUpscale: () => import('./videoGen/topazJob.js'),
+  falUpscale: () => import('./videoGen/falUpscaleJob.js'),
+  realesrganUpscale: () => import('./videoGen/realesrganUpscaleJob.js'),
   ltxUpscale: () => import('./videoGen/upscaleJob.js'),
   stitch: () => import('./videoGen/stitchJob.js'),
   vertical: () => import('./videoGen/verticalJob.js'),
-  training: () => import('./loraTraining/index.js'),
   videoLocal: () => import('./videoGen/local.js'),
   videoGrok: () => import('./videoGen/grok.js'),
   videoFal: () => import('./videoGen/fal.js'),
@@ -110,6 +111,10 @@ export const warmMediaBootHooks = () => warmModuleLoads([
 
 export function registerBootHooks() {
   registerAutoReviewCompletionListeners();
+  registerManagedVisitorCredentialRestore(async operation => {
+    const { getManagedVisitorBroker } = await import('./managedVisitors.js');
+    return getManagedVisitorBroker().withLiveCredentialRestore(operation);
+  });
   registerCosOrphanRecoveryHandlers({
     cleanupOrphanedAgents: async (...args) => (await agentManagement()).cleanupOrphanedAgents(...args),
     handleOrphanedTask: async (...args) => (await agentManagement()).handleOrphanedTask(...args),

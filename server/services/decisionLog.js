@@ -9,13 +9,14 @@
 import { join } from 'path';
 import { dashboardEvents, scheduleDashboardExpiry } from './dashboardEvents.js';
 import { atomicWrite, ensureDir, readJSONFile, PATHS } from '../lib/fileUtils.js';
+import { createFileWriteQueue } from '../lib/fileWriteQueue.js';
 
 const DATA_DIR = PATHS.cos;
 const DECISION_FILE = join(DATA_DIR, 'decisions.json');
+const queueDecisionWrite = createFileWriteQueue();
 
 // In-memory cache for recent decisions (avoid excessive file I/O)
 let decisionCache = null;
-let cacheLoaded = false;
 
 // Decision types
 export const DECISION_TYPES = {
@@ -47,7 +48,7 @@ const MAX_DECISIONS = 200;
  * Load decision data from file
  */
 async function loadDecisions() {
-  if (cacheLoaded && decisionCache) {
+  if (decisionCache) {
     return decisionCache;
   }
 
@@ -58,8 +59,9 @@ async function loadDecisions() {
   // swallowed unreadable read publishes those as real numbers over an empty set.
   // `data.stats.totalDecisions` is also a LIFETIME counter that `saveDecisions`
   // writes back, so the same read resets it to zero on the next recordDecision.
-  decisionCache = await readJSONFile(DECISION_FILE, { ...DEFAULT_DATA }, { strict: true });
-  cacheLoaded = true;
+  const loaded = await readJSONFile(DECISION_FILE, structuredClone(DEFAULT_DATA), { strict: true });
+  // A dashboard read that started on a cold cache can finish after a write.
+  decisionCache ??= loaded;
   return decisionCache;
 }
 
@@ -67,8 +69,8 @@ async function loadDecisions() {
  * Save decision data to file
  */
 async function saveDecisions(data) {
-  decisionCache = data;
   await atomicWrite(DECISION_FILE, data);
+  decisionCache = data;
   dashboardEvents.emit('cos:decisions:changed');
 }
 
@@ -84,48 +86,35 @@ async function saveDecisions(data) {
  * @param {Object} context - Additional context (taskType, successRate, etc.)
  */
 export async function recordDecision(type, reason, context = {}) {
-  const data = await loadDecisions();
+  return queueDecisionWrite(async () => {
+    const data = await loadDecisions();
+    const prev = data.decisions[0];
+    const timestamp = new Date().toISOString();
+    const collapse = prev && prev.type === type && prev.reason === reason;
+    const decision = collapse
+      ? { ...prev, count: (prev.count || 1) + 1, lastTimestamp: timestamp, context }
+      : {
+          id: `dec-${Date.now().toString(36)}-${Math.random().toString(36).substr(2, 4)}`,
+          type,
+          reason,
+          context,
+          count: 1,
+          timestamp
+        };
 
-  // Collapse consecutive identical decisions (same type + reason)
-  const prev = data.decisions[0];
-  if (prev && prev.type === type && prev.reason === reason) {
-    prev.count = (prev.count || 1) + 1;
-    prev.lastTimestamp = new Date().toISOString();
-    // Keep context from latest occurrence
-    prev.context = context;
-
-    // Update stats
-    data.stats.totalDecisions++;
-    data.stats.byType[type] = (data.stats.byType[type] || 0) + 1;
-
-    await saveDecisions(data);
-    return prev;
-  }
-
-  const decision = {
-    id: `dec-${Date.now().toString(36)}-${Math.random().toString(36).substr(2, 4)}`,
-    type,
-    reason,
-    context,
-    count: 1,
-    timestamp: new Date().toISOString()
-  };
-
-  // Add to beginning (most recent first)
-  data.decisions.unshift(decision);
-
-  // Trim to max size
-  if (data.decisions.length > MAX_DECISIONS) {
-    data.decisions = data.decisions.slice(0, MAX_DECISIONS);
-  }
-
-  // Update stats
-  data.stats.totalDecisions++;
-  data.stats.byType[type] = (data.stats.byType[type] || 0) + 1;
-
-  await saveDecisions(data);
-
-  return decision;
+    await saveDecisions({
+      ...data,
+      decisions: collapse
+        ? [decision, ...data.decisions.slice(1)]
+        : [decision, ...data.decisions.slice(0, MAX_DECISIONS - 1)],
+      stats: {
+        ...data.stats,
+        totalDecisions: data.stats.totalDecisions + 1,
+        byType: { ...data.stats.byType, [type]: (data.stats.byType[type] || 0) + 1 }
+      }
+    });
+    return decision;
+  });
 }
 
 /**

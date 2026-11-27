@@ -46,7 +46,7 @@ describe('App Management update recovery', () => {
           command: scenario === 'reused-short' ? '/usr/bin/cat' : 'node /other/scripts/deferred-update.mjs' }] });
       return { success: true, selfUpdateStarted: true, supervisorPid: launched.supervisorPid, completion: launched.completion, steps: [] };
     });
-    const io = { emit: vi.fn() };
+    const io = { except: () => ({ emit: vi.fn() }) };
     await expect(runAppUpdate({ io, appId: 'portos-default' })).resolves.toEqual({ ok: true });
     expect(checkManualUpdateActivity).toHaveBeenCalledWith({ automatic: false, acknowledgeInterruption: false, ignoreAppId: 'portos-default' });
     await vi.waitFor(() => expect(listActiveAppOperations()).toEqual([]));

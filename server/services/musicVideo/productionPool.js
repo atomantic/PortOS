@@ -191,10 +191,10 @@ async function routeEligibility(route, env) {
       return { ok: true, reason: null };
     }
     if (settings?.imageGen?.[route.mode]?.enabled !== true) {
-      return { ok: false, reason: `${describe(route)} is not enabled in Settings → Image Gen` };
+      return { ok: false, reason: `${describe(route)} is not enabled in Media Gen Settings` };
     }
     if (route.mode === 'fal' && !resolveFalApiKey(settings)) {
-      return { ok: false, reason: 'fal.ai has no API key — add one in Settings → Image Gen or set FAL_KEY' };
+      return { ok: false, reason: 'fal.ai has no API key — add one in Settings → Credentials or set FAL_KEY' };
     }
     const configured = settings.imageGen[route.mode].model || null;
     if (route.model && route.model !== configured && !supportsCloudModelOverride(route.mode)) {

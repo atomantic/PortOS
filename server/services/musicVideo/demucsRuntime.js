@@ -6,6 +6,8 @@ import { mkdir, readFile, writeFile } from 'node:fs/promises';
 import { homedir, release } from 'node:os';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { awaitWithAbort } from '../../lib/abortTimeout.js';
+import { anyAbortSignal } from '../../lib/requestAbort.js';
 import { isAppleSilicon } from '../../lib/platform.js';
 import { ServerError } from '../../lib/errorHandler.js';
 import { runStreamingCommand } from '../../lib/streamingSpawn.js';
@@ -47,12 +49,15 @@ with tempfile.TemporaryDirectory(prefix='portos-demucs-probe-') as directory:
   };
 }
 
-async function defaultBasePython(plan) {
+async function defaultBasePython(plan, signal) {
   const { classifyVenvBases, probePythonVersion, probePythonArch } = await import('../../lib/pythonSetup.js');
   const { supported } = await classifyVenvBases().catch(() => ({ supported: [] }));
+  signal.throwIfAborted();
   const candidates = [...supported, await whichFirst('python3.11')].filter(Boolean);
   for (const candidate of candidates) {
+    signal.throwIfAborted();
     const version = await probePythonVersion(candidate);
+    signal.throwIfAborted();
     const arch = await probePythonArch(candidate);
     if (version?.major === 3 && version.minor === 11 && (plan.arch === 'x64' ? ['x86_64', 'amd64'].includes(arch?.toLowerCase()) : arch === plan.arch)) return candidate;
   }
@@ -61,40 +66,92 @@ async function defaultBasePython(plan) {
 
 const provisioning = new Map();
 
+async function provisionRuntime({ dir, plan, run, resolveBasePython, signal, progress }) {
+  const python = join(dir, process.platform === 'win32' ? 'Scripts/python.exe' : 'bin/python');
+  const stamp = join(dir, 'portos-lock.sha256');
+  const checkedRun = async (bin, args, onLine, options) => {
+    signal.throwIfAborted();
+    const result = await run(bin, args, onLine, { ...options, signal });
+    signal.throwIfAborted();
+    return result;
+  };
+  const passes = async (bin, code) => (await checkedRun(bin, ['-c', code], null, { timeoutMs: 120_000 })).success;
+  const runtimeProbe = `${plan.versionProbe}\n${plan.probe}`;
+  if (existsSync(python) && await readFile(stamp, 'utf8').catch(() => null) === plan.lockId
+    && await passes(python, runtimeProbe)) return python;
+  signal.throwIfAborted();
+  const base = await resolveBasePython(plan, signal);
+  signal.throwIfAborted();
+  if (!base) throw fail(`Separating vocals needs ${plan.arch} CPython 3.11 for its hash-locked Demucs runtime. Install Python 3.11 and retry.`, 'DEMUCS_PYTHON_MISSING');
+  // Check even injected/discovered candidates before clearing an old venv.
+  if (!await passes(base, plan.versionProbe)) {
+    throw fail('The Demucs base interpreter does not match its CPython 3.11 architecture profile.', 'DEMUCS_PYTHON_MISSING');
+  }
+  await mkdir(dirname(dir), { recursive: true });
+  progress({ stage: 'provision', detail: 'Creating the hash-locked Demucs environment' });
+  const made = await checkedRun(base, ['-m', 'venv', '--clear', dir], null, { timeoutMs: 300_000, processGroup: true });
+  if (!made.success) throw fail(`Could not create the Demucs environment: ${made.error}`);
+  progress({ stage: 'installing', detail: 'Installing hash-locked Demucs dependencies (first run only)' });
+  const installed = await checkedRun(python, plan.install, (line) => {
+    if (/^(Collecting|Downloading|Installing|Successfully)/.test(line)) progress({ stage: 'installing', detail: line.slice(0, 160) });
+  }, { timeoutMs: TIMEOUT, processGroup: true });
+  if (!installed.success) throw fail(`Could not install hash-locked Demucs dependencies: ${installed.error}`);
+  if (!await passes(python, runtimeProbe)) throw fail('The hash-locked Demucs runtime failed its import/version probe.');
+  signal.throwIfAborted();
+  await writeFile(stamp, plan.lockId);
+  console.log('✅ Hash-locked Demucs runtime ready');
+  return python;
+}
+
 /** Rebuild legacy/unverified private environments; reuse only this exact lock. */
 export async function ensureDemucsRuntime({
   dir = demucsVenvDir(), plan = _demucsRuntimePlan(), onProgress = () => {},
-  run = runStreamingCommand, resolveBasePython = defaultBasePython,
+  run = runStreamingCommand, resolveBasePython = defaultBasePython, signal, isCancelled,
 } = {}) {
   if (plan.unsupported) throw fail(plan.unsupported, 'DEMUCS_UNSUPPORTED_PROFILE');
-  const python = join(dir, process.platform === 'win32' ? 'Scripts/python.exe' : 'bin/python');
-  const stamp = join(dir, 'portos-lock.sha256');
-  const passes = async (code) => (await run(python, ['-c', code], null, { timeoutMs: 120_000 })).success;
-  if (existsSync(python) && await readFile(stamp, 'utf8').catch(() => null) === plan.lockId
-    && await passes(`${plan.versionProbe}\n${plan.probe}`)) return python;
-  if (!provisioning.has(dir)) {
-    const install = (async () => {
-      const base = await resolveBasePython(plan);
-      if (!base) throw fail(`Separating vocals needs ${plan.arch} CPython 3.11 for its hash-locked Demucs runtime. Install Python 3.11 and retry.`, 'DEMUCS_PYTHON_MISSING');
-      // Check even injected/discovered candidates before clearing an old venv.
-      if (!(await run(base, ['-c', plan.versionProbe], null, { timeoutMs: 120_000 })).success) {
-        throw fail('The Demucs base interpreter does not match its CPython 3.11 architecture profile.', 'DEMUCS_PYTHON_MISSING');
-      }
-      await mkdir(dirname(dir), { recursive: true });
-      onProgress({ stage: 'provision', detail: 'Creating the hash-locked Demucs environment' });
-      const made = await run(base, ['-m', 'venv', '--clear', dir], null, { timeoutMs: 300_000 });
-      if (!made.success) throw fail(`Could not create the Demucs environment: ${made.error}`);
-      onProgress({ stage: 'installing', detail: 'Installing hash-locked Demucs dependencies (first run only)' });
-      const installed = await run(python, plan.install, (line) => {
-        if (/^(Collecting|Downloading|Installing|Successfully)/.test(line)) onProgress({ stage: 'installing', detail: line.slice(0, 160) });
-      }, { timeoutMs: TIMEOUT });
-      if (!installed.success) throw fail(`Could not install hash-locked Demucs dependencies: ${installed.error}`);
-      if (!await passes(`${plan.versionProbe}\n${plan.probe}`)) throw fail('The hash-locked Demucs runtime failed its import/version probe.');
-      await writeFile(stamp, plan.lockId);
-      console.log('✅ Hash-locked Demucs runtime ready');
-    })().finally(() => { provisioning.delete(dir); });
-    provisioning.set(dir, install);
+  const predicateAbort = isCancelled && new AbortController();
+  const waitSignal = anyAbortSignal([signal, predicateAbort?.signal]);
+  const pollCancellation = () => {
+    try {
+      if (isCancelled()) predicateAbort.abort();
+    } catch (error) { predicateAbort.abort(error); }
+  };
+  if (predicateAbort) pollCancellation();
+  const timer = predicateAbort && setInterval(pollCancellation, 1000);
+  try {
+    waitSignal?.throwIfAborted();
+    let pending = provisioning.get(dir);
+    // Keep a cancelled build reserved until the child exits. A fresh waiter
+    // can then retry without clearing a venv that the old process still uses.
+    while (pending?.controller.signal.aborted) {
+      await awaitWithAbort(pending.promise.catch(() => {}), waitSignal);
+      waitSignal?.throwIfAborted();
+      pending = provisioning.get(dir);
+    }
+    if (!pending) {
+      const controller = new AbortController();
+      const waiters = new Set();
+      const progress = (frame) => {
+        for (const waiter of waiters) {
+          if (waiter.signal?.aborted) continue;
+          try { waiter.onProgress(frame); } catch (err) { console.error(`❌ Demucs progress observer failed: ${err.message}`); }
+        }
+      };
+      const promise = Promise.resolve().then(() => provisionRuntime({
+        dir, plan, run, resolveBasePython, signal: controller.signal, progress,
+      })).finally(() => { provisioning.delete(dir); });
+      pending = { controller, promise, waiters };
+      provisioning.set(dir, pending);
+    }
+    const waiter = { signal: waitSignal, onProgress };
+    pending.waiters.add(waiter);
+    try {
+      return await awaitWithAbort(pending.promise, waitSignal);
+    } finally {
+      pending.waiters.delete(waiter);
+      if (!pending.waiters.size && provisioning.get(dir) === pending) pending.controller.abort();
+    }
+  } finally {
+    clearInterval(timer);
   }
-  await provisioning.get(dir);
-  return python;
 }

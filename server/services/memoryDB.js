@@ -33,9 +33,8 @@ import { toPgJson } from '../lib/pgJson.js';
 
 const protectedMindMemoryTags = Object.values(PERSISTENT_MIND_MEMORY_PROTECTION_TAGS);
 
-// Every column rowToMemory reads except `embedding`. Batch peeks omit that
-// pgvector value unless a caller asks for it; parsing 768 floats per row is
-// the cost these reads exist to avoid.
+// Every column rowToMemory reads except `embedding`. Include the pgvector
+// value only when needed to avoid transferring and parsing 768 floats per row.
 const MEMORY_READ_COLUMNS = `id, version, archive_reason, last_review, review_origin, type, content, summary, category, tags,
   source_task_id, source_agent_id, source_app_id, embedding_model, confidence, importance, access_count, last_accessed,
   created_at, updated_at, expires_at, status, origin_instance_id`;
@@ -311,10 +310,10 @@ export async function upsertBrainMemory(key, data, embedding = null, legacyId = 
 }
 
 /**
- * Get a memory by ID
+ * Read a memory without loading its embedding or recording access.
  */
 export async function peekMemory(id) {
-  const result = await query('SELECT * FROM memories WHERE id = $1', [id]);
+  const result = await query(`SELECT ${MEMORY_READ_COLUMNS} FROM memories WHERE id = $1`, [id]);
   if (result.rows.length === 0) return null;
   return rowToMemory(result.rows[0]);
 }
@@ -324,7 +323,7 @@ export function withPendingMemories(ids, publish) {
   return withTransaction(async client => {
     const unique = memoryIdList(ids);
     const { rows } = await client.query(
-      "SELECT * FROM memories WHERE id = ANY($1::uuid[]) AND status = 'pending_approval' ORDER BY id FOR UPDATE",
+      `SELECT ${MEMORY_READ_COLUMNS} FROM memories WHERE id = ANY($1::uuid[]) AND status = 'pending_approval' ORDER BY id FOR UPDATE`,
       [unique]
     );
     const byId = new Map(rows.map(row => [row.id, rowToMemory(row)]));
@@ -354,7 +353,7 @@ export async function recordMemoryAccess(ids) {
 }
 
 export async function getMemory(id) {
-  const result = await query('SELECT * FROM memories WHERE id = $1', [id]);
+  const result = await query(`SELECT ${MEMORY_READ_COLUMNS}, embedding FROM memories WHERE id = $1`, [id]);
   if (result.rows.length === 0) return null;
 
   // Update access stats
@@ -392,9 +391,10 @@ export async function getMemoryVersions(id, { limit = 20, offset = 0 } = {}) {
 }
 
 export async function getMemoryVersion(id, version) {
-  const current = await peekMemory(id);
-  if (!current) return null;
-  if (current.version === version) return current;
+  const { rows: [current] } = await query(
+    `SELECT ${MEMORY_READ_COLUMNS}, embedding FROM memories WHERE id = $1 AND version = $2`, [id, version]
+  );
+  if (current) return rowToMemory(current);
   const result = await query(
     'SELECT memory_id AS id, version, content, summary, type, category, tags, changed_by AS "changedBy", change_reason AS "changeReason", created_at AS "createdAt" FROM memory_versions WHERE memory_id = $1 AND version = $2',
     [id, version]
@@ -504,7 +504,7 @@ export async function getMemories(options = {}) {
   const dataResult = await query(
     `SELECT id, type, category, tags, summary, importance, created_at, status, source_app_id, source_agent_id
      FROM memories ${where}
-     ORDER BY ${sortBy} ${sortOrder}
+     ORDER BY ${sortBy} ${sortOrder}, id ASC
      LIMIT $${paramIdx++} OFFSET $${paramIdx++}`,
     [...params, limit, offset]
   );
@@ -680,6 +680,27 @@ export async function rejectMemory(id, options = {}) {
 // Search Operations
 // =============================================================================
 
+// Tally and page the same filtered matches in one snapshot. The left join
+// preserves the total when the requested page is empty.
+async function querySearchPage({ score, where, params, limit, offset, includeSourceAgent }) {
+  const { rows } = await query(
+    `WITH hits AS (
+       SELECT id, ${score} AS score FROM memories WHERE ${where}
+     ), tally AS (
+       SELECT COUNT(*) AS total FROM hits
+     ), page AS (
+       SELECT id, score FROM hits ORDER BY score DESC, id
+       LIMIT $${params.length + 1} OFFSET $${params.length + 2}
+     )
+     SELECT tally.total, page.score, m.id, m.type, m.category, m.tags, m.summary,
+            m.importance, m.created_at, m.status, m.source_app_id${includeSourceAgent ? ', m.source_agent_id' : ''}
+     FROM tally LEFT JOIN page ON TRUE LEFT JOIN memories m ON m.id = page.id
+     ORDER BY page.score DESC, page.id`,
+    [...params, limit, offset]
+  );
+  return { total: Number(rows[0].total), rows: rows.filter(row => row.id !== null) };
+}
+
 /**
  * Search memories semantically using pgvector cosine similarity
  */
@@ -690,8 +711,8 @@ export async function searchMemories(queryEmbedding, options = {}) {
   const limit = options.limit || 20;
 
   const conditions = ["status = 'active'"];
-  const params = [arrayToPgvector(queryEmbedding), minRelevance, limit];
-  let paramIdx = 4;
+  const params = [arrayToPgvector(queryEmbedding), minRelevance];
+  let paramIdx = 3;
 
   if (options.types?.length > 0) {
     conditions.push(`type = ANY($${paramIdx++})`);
@@ -714,27 +735,18 @@ export async function searchMemories(queryEmbedding, options = {}) {
 
   if (options.excludePersistentMind) conditions.push(excludePersistentMindWhere(params));
 
-  const where = conditions.join(' AND ');
+  // pgvector's cosine distance is 1 minus cosine similarity.
+  const score = '1 - (embedding <=> $1)';
+  const { total, rows } = await querySearchPage({
+    score,
+    where: `embedding IS NOT NULL AND ${conditions.join(' AND ')} AND ${score} >= $2`,
+    params,
+    limit,
+    offset: options.offset ?? 0
+  });
+  const memories = rows.map(row => ({ ...rowToMeta(row), similarity: parseFloat(row.score) }));
 
-  // Use pgvector cosine distance operator <=>
-  // Cosine distance = 1 - cosine_similarity, so similarity = 1 - distance
-  const result = await query(
-    `SELECT id, type, category, tags, summary, importance, created_at, status, source_app_id,
-            1 - (embedding <=> $1) AS similarity
-     FROM memories
-     WHERE embedding IS NOT NULL AND ${where}
-       AND 1 - (embedding <=> $1) >= $2
-     ORDER BY embedding <=> $1
-     LIMIT $3`,
-    params
-  );
-
-  const memories = result.rows.map(row => ({
-    ...rowToMeta(row),
-    similarity: parseFloat(row.similarity)
-  }));
-
-  return { total: memories.length, memories };
+  return { total, memories };
 }
 
 /**
@@ -742,7 +754,7 @@ export async function searchMemories(queryEmbedding, options = {}) {
  * Uses Reciprocal Rank Fusion (RRF) to merge rankings
  */
 export async function hybridSearchMemories(queryText, queryEmbedding, options = {}) {
-  const { limit = 20, minRelevance = 0.5, ftsWeight = options.bm25Weight ?? 0.4, vectorWeight = 0.6, lexicalMatch = 'all' } = options;
+  const { limit = 20, offset, minRelevance = 0.5, ftsWeight = options.bm25Weight ?? 0.4, vectorWeight = 0.6, lexicalMatch = 'all' } = options;
   const RRF_K = 60;
 
   const filterConditions = ["status = 'active'"];
@@ -787,6 +799,23 @@ export async function hybridSearchMemories(queryText, queryEmbedding, options = 
     const tsQuery = lexicalMatch === 'any'
       ? `replace(plainto_tsquery('english', $${queryParam})::text, ' & ', ' | ')::tsquery`
       : `websearch_to_tsquery('english', $${queryParam})`;
+    // An explicit lexical page uses full-match ranks and totals. Mixed retrieval
+    // callers still fuse the bounded candidate lists below.
+    if (!queryEmbedding && offset !== undefined) {
+      const { total, rows } = await querySearchPage({
+        score: `ts_rank(search_tsv, ${tsQuery})`,
+        where: `${filterWhere} AND search_tsv @@ ${tsQuery}`,
+        params: [...filterParams, queryText],
+        limit,
+        offset,
+        includeSourceAgent: true
+      });
+      const memories = rows.map((row, index) => {
+        const ftsRank = offset + index + 1;
+        return { ...rowToMeta(row), ftsRank, vectorRank: null, rrfScore: ftsWeight / (RRF_K + ftsRank), searchMethod: 'fts' };
+      });
+      return { total, memories };
+    }
     searches.push(query(
       `SELECT id, type, category, tags, summary, importance, created_at, status, source_app_id, source_agent_id,
               ts_rank(search_tsv, ${tsQuery}) AS fts_score
@@ -1305,7 +1334,7 @@ export async function flushBM25Index() {
 // Keep the read-time SQL formula aligned with fadedPersistentMindMemoryImportance.
 export async function selectMindMemoryForReview(mindId) {
   const result = await query(`
-    SELECT * FROM memories
+    SELECT ${MEMORY_READ_COLUMNS} FROM memories
     WHERE source_agent_id = $1 AND status = 'active'
       AND NOT (COALESCE(tags, '{}'::text[]) && $2::text[])
       AND created_at < NOW() - INTERVAL '30 days'

@@ -47,6 +47,19 @@ beforeEach(() => {
 afterEach(() => vi.useRealTimers());
 
 describe('runTurn tool execution', () => {
+  it('reports length exhaustion instead of blaming otherwise enabled tools', async () => {
+    mocks.streamChat.mockResolvedValue({ ...completion(''), finishReason: 'length' });
+    const events = [];
+    await runTurn({
+      text: 'hello', state: {}, signal: new AbortController().signal,
+      emit: (event, payload) => events.push({ event, payload }),
+    });
+    const { payload } = events.find(entry => entry.event === 'voice:error');
+    expect(payload.message).toContain('reached its output limit before replying');
+    expect(payload.message).not.toContain('disable voice tools');
+    expect(mocks.dispatchTool).not.toHaveBeenCalled();
+  });
+
   it('refreshes UI before continuing, pairs missing call IDs, and applies dictation effects in order', async () => {
     const seenMessages = [];
     mocks.streamChat.mockImplementation(async (messages, { onDelta }) => {

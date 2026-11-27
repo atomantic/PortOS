@@ -1,0 +1,56 @@
+language js
+
+pattern queryCall() {
+  JsCallExpression(callee = or {
+    `query`, `queryFn`, `execute`, `exec`, `run`, `q`,
+    JsStaticMemberExpression(member = or { `query`, `queryFn`, `execute`, `exec`, `run`, `q` })
+  })
+}
+
+pattern jsonCast() {
+  or { JsStringLiteralExpression(), JsTemplateChunkElement() } as $text where {
+    or {
+      $text <: r"(?s).*::jsonb\b.*",
+      and {
+        // These migrations assert byte-exact ::json equality. Keep checking ::jsonb there.
+        not $filename <: r"(?:.*[/\\])?db-migrations[/\\](?:020-cos-agents-from-state|032-strip-release-candidate-transfer-state)\.js",
+        $text <: r"(?s).*::json\b.*"
+      }
+    }
+  }
+}
+
+pattern braceScope() {
+  or { JsBlockStatement(), JsFunctionBody(), JsObjectExpression(), JsSwitchStatement() }
+}
+
+file(body = $body) where {
+  $body <: r"(?s).*::json.*",
+  $body <: contains (
+    // A query owns its own args. Otherwise, look for a directly populated bind list
+    // and require the cast in the nearest brace scope (or the module at top level).
+    JsCallExpression(callee = `JSON.stringify`) as $call where {
+      $call <: or {
+        within (queryCall() as $query where { $query <: contains jsonCast() }),
+        and {
+          not within queryCall(),
+          within or {
+            JsArrayExpression(),
+            JsCallExpression(callee = JsStaticMemberExpression(member = `push`))
+          } until or { JsCallExpression(), JsParenthesizedExpression(), JsNewExpression(), JsComputedMemberExpression(), braceScope() },
+          or {
+            within (braceScope() as $scope where { $scope <: contains jsonCast() }) until braceScope(),
+            and { not within braceScope(), within (JsModule() as $program where { $program <: contains jsonCast() }) }
+          }
+        }
+      },
+      register_diagnostic(
+        span = $call,
+        message = "Serialize PostgreSQL JSON parameters with toPgJson from lib/pgJson.js.",
+        severity = "error"
+      ),
+      // Continue the subtree search after reporting this match.
+      false
+    }
+  )
+}

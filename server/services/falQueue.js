@@ -21,7 +21,7 @@ import { maintenance } from '../lib/maintenanceAdmission.js';
 import { ServerError } from '../lib/errorHandler.js';
 import { describeFetchError } from '../lib/fetchErrorChain.js';
 import { fetchWithTimeout } from '../lib/fetchWithTimeout.js';
-import { stripImageMetadata } from '../lib/imageClean.js';
+import { stripImageMetadataPreservingOrientation } from '../lib/imageClean.js';
 import { detectImageFormat } from '../lib/mimeTypes.js';
 
 export const FAL_QUEUE_BASE = 'https://queue.fal.run';
@@ -54,7 +54,7 @@ export function resolveFalApiKey(settings) {
 /** Read a local file into a `data:` URI — how fal.ai accepts inline inputs. */
 export async function fileToDataUri(filePath) {
   const raw = await readFile(filePath);
-  const buf = stripImageMetadata(raw).data;
+  const { data: buf } = await stripImageMetadataPreservingOrientation(raw);
   const detected = detectImageFormat(buf);
   const mime = detected?.mime || 'image/png';
   return `data:${mime};base64,${buf.toString('base64')}`;
@@ -222,11 +222,13 @@ export async function deleteFalRequestPayloads({ apiKey, requestId }) {
  * rest of the run needs, falling back to the documented URL shapes when a
  * receipt omits one.
  */
-export async function submitFalRequest({ apiKey, modelId, body }) {
+export async function submitFalRequest({ apiKey, modelId, body, signal }) {
+  signal?.throwIfAborted();
   const res = await fetchWithTimeout(`${FAL_QUEUE_BASE}/${modelId}`, {
     method: 'POST',
     headers: { Authorization: `Key ${assertHeaderSafeKey(apiKey, 'fal.ai')}`, 'Content-Type': 'application/json' },
     body: JSON.stringify(body),
+    ...(signal ? { signal } : {}),
   }, FAL_SUBMIT_TIMEOUT_MS).catch(err => {
     // A lost POST response is not proof that the paid request was rejected.
     maintenance.markCurrentUnsettled();

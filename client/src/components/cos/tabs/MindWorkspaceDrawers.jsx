@@ -1,7 +1,7 @@
 import { Check, CirclePlay, StickyNote, Upload } from 'lucide-react';
 import Drawer from '../../Drawer';
-import TabPills from '../../ui/TabPills';
 import PersistentMindContextPanel from '../PersistentMindContextPanel';
+import PersistentMindCuratedMemories from '../PersistentMindCuratedMemories';
 import PersistentMindJournalPanel from '../PersistentMindJournalPanel';
 import PersistentMindMaintenancePanel from '../PersistentMindMaintenancePanel';
 import PersistentMindPortabilityPanel from '../PersistentMindPortabilityPanel';
@@ -11,9 +11,13 @@ import PersistentMindSessions from '../PersistentMindSessions';
 import PersistentMindThinkingRequests from '../PersistentMindThinkingRequests';
 import PersistentMindThinkingPresets from '../PersistentMindThinkingPresets';
 import PersistentMindVisibilityPanel from '../PersistentMindVisibilityPanel';
-import PersistentMindTools from '../../../pages/PersistentMindTools';
+import PersistentMindToolsPanel from '../PersistentMindToolsPanel';
+import { useSocketResource } from '../../../hooks/useSocketResource';
+import { getPersistentMindContext } from '../../../services/apiAgents.js';
 import { formatDateTime } from '../../../utils/formatters';
 import { ActionButton, eventLabel, eventText, MIND_PANEL_TABS, MessageImages, safeMessageImages } from './MindPanelParts.jsx';
+
+const CONTEXT_EVENTS = ['cos:memory:created', 'cos:memory:updated', 'cos:memory:deleted'];
 
 export default function MindWorkspaceDrawers({
   activePanel,
@@ -29,7 +33,6 @@ export default function MindWorkspaceDrawers({
   loadVisibility,
   prepareRepair,
   contextRefreshKey,
-  refreshContext,
   mind,
   handleMindspaceCleaned,
   updateCapabilities,
@@ -64,6 +67,16 @@ export default function MindWorkspaceDrawers({
   annotationError,
   annotationSubmitting,
 }) {
+  const context = useSocketResource(
+    ({ signal }) => getPersistentMindContext({ signal, silent: true }),
+    {
+      namespace: 'cos',
+      events: CONTEXT_EVENTS,
+      enabled: activePanel === 'context' || activePanel === 'memories',
+      resourceKey: contextRefreshKey,
+    },
+  );
+
   return (
     <>
       <Drawer
@@ -73,23 +86,21 @@ export default function MindWorkspaceDrawers({
         subtitle="Inspect and configure the state available to Persistent Mind"
         size="xl"
         closeLabel="Close mind workspace"
-        closeOnEsc={false}
-        closeOnBackdrop={false}
+        closeOnEsc={!setupSaving && !editingPresetId}
+        closeOnBackdrop={!setupSaving && !editingPresetId}
+        tabs={MIND_PANEL_TABS}
+        activeTab={activePanel || 'context'}
+        onTabChange={openPanel}
       >
-        <div className="mb-4">
-          <TabPills tabs={MIND_PANEL_TABS} activeTab={activePanel || 'context'} onChange={openPanel} variant="pills" size="sm" mobileCompact ariaLabel="Mind workspace sections" />
-        </div>
-        {(visitedPanels.has('context') || activePanel === 'context') && <div hidden={activePanel !== 'context'} className="space-y-4">
+        {activePanel === 'context' && <div className="space-y-4">
           <PersistentMindRuntimePanel runtime={runtime} error={runtimeError} loading={runtimeLoading} />
-            <PersistentMindVisibilityPanel visibility={visibility} error={visibilityError} loading={visibilityLoading} onRefresh={() => loadVisibility({ refresh: true })} onPrepareRepair={prepareRepair} />
-          <PersistentMindContextPanel view="context" refreshKey={contextRefreshKey} />
+          <PersistentMindVisibilityPanel visibility={visibility} error={visibilityError} loading={visibilityLoading} onRefresh={() => loadVisibility({ refresh: true })} onPrepareRepair={prepareRepair} />
+          <PersistentMindContextPanel context={context} />
         </div>}
         {(visitedPanels.has('journal') || activePanel === 'journal') && <div hidden={activePanel !== 'journal'}>
           <PersistentMindJournalPanel refreshKey={contextRefreshKey} />
         </div>}
-        {(visitedPanels.has('memories') || activePanel === 'memories') && <div hidden={activePanel !== 'memories'}>
-            <PersistentMindContextPanel view="memories" refreshKey={contextRefreshKey} onMemoriesChanged={refreshContext} />
-        </div>}
+        {activePanel === 'memories' && <PersistentMindCuratedMemories context={context} />}
         {(visitedPanels.has('maintenance') || activePanel === 'maintenance') && <div hidden={activePanel !== 'maintenance'}>
           <PersistentMindMaintenancePanel
             selfCleanupEnabled={mind?.capabilities?.manageMind === true}
@@ -98,7 +109,7 @@ export default function MindWorkspaceDrawers({
           />
         </div>}
         {(visitedPanels.has('tools') || activePanel === 'tools') && <div hidden={activePanel !== 'tools'}>
-            <PersistentMindTools onCapabilitiesChange={updateCapabilities} onSavingChange={setCapabilitiesSaving} />
+            <PersistentMindToolsPanel onCapabilitiesChange={updateCapabilities} onSavingChange={setCapabilitiesSaving} />
         </div>}
         {(visitedPanels.has('models') || activePanel === 'models') && <div hidden={activePanel !== 'models'} className="space-y-6">
           <PersistentMindThinkingRequests

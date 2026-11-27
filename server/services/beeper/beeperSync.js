@@ -20,12 +20,12 @@
  *      already caught up;
  *   3. for each changed chat: upsert the conversation, upsert participants
  *      (`beeperTribe.upsertConversationParticipants`), page new messages from the stored
- *      opaque cursor with `direction: 'after'`, log daily Tribe touchpoints
- *      (`beeperTribe.logSenderTouchpoints`), then commit message rows,
- *      attachment references and the cursor row in ONE transaction.
+ *      opaque cursor with `direction: 'after'`, then commit message rows,
+ *      attachment references, daily Tribe touchpoints and the cursor row
+ *      in ONE transaction.
  *
  * **The transaction boundary is the point of the whole module.** Message rows,
- * attachment references and the `beeper_sync_cursors` row commit together, so
+ * attachment references, touchpoints and the `beeper_sync_cursors` row commit together, so
  * an interrupted sweep leaves the cursor exactly where it was and the next
  * sweep refetches the same window. `imessageSync` implements the same
  * never-skip rule by hand precisely because its store and its cursor live in
@@ -666,9 +666,26 @@ export async function upsertMirroredMessage(client, conversationId, message, att
   return applied;
 }
 
-async function commitMessages({ conversationId, accountId, sourceChatId, rows, cursor, lastActivity }) {
+// Lock the parent before any message or attachment rows so a purge can
+// snapshot its attachment paths without reversing the writers' lock order.
+async function lockConversationForMirrorWrite(client, conversationId) {
+  const result = await client.query(
+    'SELECT id FROM beeper_conversations WHERE id = $1 FOR KEY SHARE',
+    [conversationId],
+  );
+  return result.rows.length > 0;
+}
+
+async function commitMessages({
+  conversationId, accountId, sourceChatId, rows, cursor, lastActivity,
+  touchpointCandidates, personIndex,
+}) {
   const dedupedRows = deduplicateMessageRows(rows);
   return withTransaction(async (client) => {
+    // The lock also protects an empty batch's cursor, which has no
+    // conversation FK of its own.
+    if (!await lockConversationForMirrorWrite(client, conversationId)) return 0;
+
     if (dedupedRows.length > 0) {
       const msgResult = await client.query(
         `INSERT INTO beeper_messages (
@@ -727,33 +744,18 @@ async function commitMessages({ conversationId, accountId, sourceChatId, rows, c
       }
     }
 
-    // The cursor moves LAST and only inside this transaction, so a failure
-    // anywhere above rolls it back with the rows it was going to describe.
-    //
-    // `WHERE EXISTS` is the purge interlock. `beeper_sync_cursors` carries an FK
-    // onto `beeper_accounts` alone, so the conversation's cascade cannot reach
-    // it and `purgeConversation` deletes the two by hand in one transaction. A
-    // sweep already in flight when that purge commits would otherwise re-insert
-    // the cursor here — unconditionally, because a window with ZERO message rows
-    // still writes it — carrying the chat's current `last_activity`. That
-    // resurrected watermark makes `chatNeedsSweep` skip the chat, so the history
-    // the user just purged never comes back, contradicting the typed
-    // confirmation's promise that the next sync will mirror it again.
-    //
-    // The guard is a row check rather than a constraint on purpose: no DDL, no
-    // cascade, and the schema's own note that "a cursor can exist before the
-    // conversation row does" still holds everywhere else. On this path the
-    // conversation is upserted before the walk starts, so a missing row means it
-    // was deleted underneath us — exactly the case to decline.
+    await logSenderTouchpoints(touchpointCandidates, { client, personIndex });
+
+    // The cursor moves last so the next sweep retries the whole window if
+    // message, attachment or touchpoint persistence fails.
     await client.query(
       `INSERT INTO beeper_sync_cursors (account_id, chat_id, cursor, last_activity, last_swept_at)
-       SELECT $1::text, $2::text, $3::text, $4::timestamptz, NOW()
-        WHERE EXISTS (SELECT 1 FROM beeper_conversations WHERE id = $5::uuid)
+       VALUES ($1, $2, $3, $4, NOW())
        ON CONFLICT (account_id, chat_id) DO UPDATE SET
          cursor = COALESCE(EXCLUDED.cursor, beeper_sync_cursors.cursor),
          last_activity = COALESCE(EXCLUDED.last_activity, beeper_sync_cursors.last_activity),
          last_swept_at = NOW()`,
-      [accountId, sourceChatId, cursor, lastActivity, conversationId],
+      [accountId, sourceChatId, cursor, lastActivity],
     );
     return rows.length;
   });
@@ -880,23 +882,17 @@ async function sweepChat({
     ? await getPersonIndex()
     : null;
 
-  const { resolvedPersonIds } = mergedParticipants.size > 0
-    ? await upsertConversationParticipants(conversationId, [...mergedParticipants.values()], { personIndex })
-    : { resolvedPersonIds: new Map() };
+  if (mergedParticipants.size > 0) {
+    await upsertConversationParticipants(conversationId, [...mergedParticipants.values()], { personIndex });
+  }
 
-  // Touchpoints are derived from message SENDERS only, never from the
-  // participant roster (which truncates, so iterating it would invent contact
-  // with people who never messaged). Written BEFORE the commit deliberately:
-  // they are day-deduped on `beeper:<YYYY-MM-DD>`, so a rolled-back sweep
-  // re-derives exactly the same ones next pass, whereas writing them after the
-  // cursor advanced would lose them for good.
-  await logSenderTouchpoints(touchpointCandidates, { personIndex, resolvedPersonIds });
-
-  await commitMessages({
+  const committedMessages = await commitMessages({
     conversationId,
     accountId: normalized.accountId,
     sourceChatId: normalized.sourceChatId,
     rows,
+    touchpointCandidates,
+    personIndex,
     // A truncated forward walk advanced the cursor but did NOT reach the
     // chat's newest message, so the watermark must stay where it was: a null
     // here hits `COALESCE(EXCLUDED.last_activity, beeper_sync_cursors.…)` in
@@ -911,7 +907,7 @@ async function sweepChat({
     lastActivity: commitLastActivity,
   });
 
-  return { messages: rows.length };
+  return { messages: committedMessages };
 }
 
 /**
@@ -1106,7 +1102,8 @@ async function reconcileStoredRow(row, clientOptions) {
   const message = normalizeMessageRow(raw, observedAt);
   const attachments = normalizeAttachmentRows(raw);
   const changed = await withTransaction(async (client) => {
-    // Lock the existing row: purge must not resurrect a message while HTTP was in flight.
+    if (!await lockConversationForMirrorWrite(client, row.conversation_id)) return false;
+    // Compare only after locking the stored row against overlapping writers.
     const existing = await client.query(
       `SELECT id, sender_id, body, sent_at, edited_at, unsent_at, sort_key, is_sender, observed_at
          FROM beeper_messages

@@ -1,5 +1,6 @@
 // Editorial checks — visual group. Extracted from checkRegistry.js (#1829).
 // Each entry is a declarative check; see ../README.md and ../checkInfra.js.
+import { DIRECTION_LABEL } from '../shotContinuity.js';
 import { findingCapField, findingCapSchema } from '../checkInfra/findingCap.js';
 import {
   APPEARANCE_CONTINUITY_STAGE,
@@ -58,7 +59,6 @@ export const visualChecks = [
       const minMonotony = cfg.minShotsForMonotony ?? 3;
       const entries = Array.isArray(ctx.storyboardScenes) ? ctx.storyboardScenes : [];
       const findings = [];
-      const DIRECTION_LABEL = { left: 'screen-left', right: 'screen-right', neutral: 'head-on' };
       for (const entry of entries) {
         const scene = entry?.scene;
         if (!scene || typeof scene !== 'object') continue;

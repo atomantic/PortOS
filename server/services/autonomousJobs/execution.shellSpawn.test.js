@@ -30,14 +30,14 @@ vi.mock('./crud.js', () => ({ recordJobExecution: vi.fn(async () => {}) }))
 
 const { executeShellJob } = await import('./execution.js')
 
-/** A child that exits 0 immediately, so executeShellJob resolves. */
-function fakeChild() {
+/** A child that promptly reports the chosen exit code. */
+function fakeChild(exitCode = 0) {
   const child = new EventEmitter()
   child.stdout = new EventEmitter()
   child.stderr = new EventEmitter()
   child.exitCode = null
   child.kill = vi.fn()
-  setImmediate(() => child.emit('close', 0, null))
+  setImmediate(() => child.emit('close', exitCode, null))
   return child
 }
 
@@ -101,6 +101,14 @@ describe('executeShellJob — Windows CLI shim resolution', () => {
     expect(src).toMatch(/killProcessTree\(\s*child,\s*'SIGKILL'\s*\)/)
     expect(src, 'the timeout path must not bare-kill the direct child')
       .not.toMatch(/child\.kill\('SIGKILL'\)/)
+  })
+
+  it('preserves a nonzero exit code on the job execution failure', async () => {
+    spawnMock.mockImplementationOnce(() => fakeChild(7))
+
+    await expect(
+      executeShellJob({ id: 'job-1', name: 'System Health Check', command: 'pm2 jlist' })
+    ).rejects.toMatchObject({ code: 'JOB_EXECUTION_FAILED', exitCode: 7 })
   })
 
   it('still rejects a command outside the allowlist', async () => {

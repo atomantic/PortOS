@@ -1,466 +1,133 @@
 # Architecture Overview
 
-PortOS is a monorepo application with a React frontend and Express.js backend, managed by PM2.
-
-## Shared Blender film engine
-
-`server/services/film/` renders authored Blender films through an owner adapter:
-identity and workspace, timeline, optional song context, atomic record changes,
-sync integration and events. Music Video provides that adapter in
-`server/services/musicVideo/blender/owner.js`; its routes and workspace layout
-stay unchanged. The shared engine owns Python execution, per-shot code renders and code
-layers, shot queues, resume, stills, previews and joins. Board mirroring, title cards, grading, timed effects,
-film look and final project publication remain Music Video responsibilities.
-The import-scoping guard prevents the engine from reaching Music Video services.
-See [Blender film ownership](features/music-video-blender.md#shared-engine-and-ownership).
+PortOS pairs a React workspace with an Express server and host-local services.
+PM2 manages the application processes. PostgreSQL with pgvector is the required
+primary datastore. See [product surfaces](features/product-surfaces.md) for
+where features appear in the workspace.
 
 ## System Diagram
 
-```
-┌─────────────────────────────────────────────────────────────────────────────────────┐
-│                                      PortOS                                         │
-├─────────────────────────────────────────────────────────────────────────────────────┤
-│                                                                                     │
-│  ┌────────────────────┐             ┌──────────────────────────────────────┐        │
-│  │  React Client      │             │        Express Server                │        │
-│  │  (port 5554)       │    HTTP     │        (port 5555)                   │        │
-│  │                    │ <---------> │                                      │        │
-│  │  ┌──────────────┐  │             │  ┌──────────┐  ┌──────────────────┐  │        │
-│  │  │    Pages     │  │             │  │  Routes  │──│    Services      │  │        │
-│  │  └──────────────┘  │             │  └──────────┘  └──────────────────┘  │        │
-│  │       |            │  Socket.IO  │       |              |               │        │
-│  │  ┌──────────────┐  │ <---------- │       |         ┌────v─────────┐     │        │
-│  │  │  Components  │  │             │       |         │   PM2 API    │     │        │
-│  │  └──────────────┘  │             │       |         └──────────────┘     │        │
-│  │       |            │             │       |              |               │        │
-│  │  ┌──────────────┐  │             │       |         ┌────v─────────┐     │        │
-│  │  │  api.js      │  │             │       |         │ Postgres +   │     │        │
-│  │  │  socket.js   │  │             │       |         │ data/ files  │     │        │
-│  │  └──────────────┘  │             │       |         └──────────────┘     │        │
-│  └────────────────────┘             └──────────────────────────────────────┘        │
-│                                                                                     │
-│  ┌───────────────────────────────────────────────────────────────────────────────┐  │
-│  │                    PM2-Managed Satellite Services                             │  │
-│  │                                                                               │  │
-│  │  ┌─────────────────────┐  ┌────────────────────┐  ┌────────────────────────┐  │  │
-│  │  │ Chief of Staff      │  │ portos-browser     │  │ portos-autofixer       │  │  │
-│  │  │ portos-cos :5558    │  │ CDP :5556          │  │ dashboard :5560        │  │  │
-│  │  │                     │  │ health :5557       │  │ UI :5560               │  │  │
-│  │  │ Task Watcher        │  │                    │  │                        │  │  │
-│  │  │ CoS Evaluation      │  │ Persistent         │  │ PM2 crash monitor      │  │  │
-│  │  │ CoS runner / task    │  │ Chromium instance  │  │ (polls every 15m)      │  │  │
-│  │  │ execution            │  │ CDP WebSocket for  │  │ Claude CLI auto-fix    │  │  │
-│  │  │                     │  │ web automation     │  │ Reads apps.json        │  │  │
-│  │  └─────────────────────┘  └────────────────────┘  │ Session history        │  │  │
-│  │                                                   └────────────────────────┘  │  │
-│  └───────────────────────────────────────────────────────────────────────────────┘  │
-│                                                                                     │
-└─────────────────────────────────────────────────────────────────────────────────────┘
-
-Communication paths:
-  Client <--HTTP/Socket.IO--> Server --PM2 API--> all satellite processes
-  Server --pg--> PostgreSQL + pgvector (system :5432 or Docker :5561) — mandatory primary datastore
-  Server --browserService--> portos-browser (CDP :5556, health :5557)
-  Server --apps.json--> portos-autofixer reads registered apps to monitor
-  CoS agents --CDP WebSocket--> portos-browser for web automation tasks
-  portos-autofixer --pm2 jlist--> detects crashed processes --Claude CLI--> auto-fix
-  portos-autofixer --reads--> data/autofixer/sessions/ for fix history
+```mermaid
+flowchart LR
+    Browser[React workspace] <-->|HTTP and Socket.IO| Server[Express server]
+    Server --> DB[(PostgreSQL and pgvector)]
+    Server --> Files[Local files and media]
+    Server --> PM2[PM2]
+    PM2 --> CoS[Chief of Staff runner]
+    PM2 --> Chromium[Browser sidecar]
+    PM2 --> Autofixer
 ```
 
 ## Directory Structure
 
-```
-PortOS/
-├── client/                    # React + Vite frontend
-│   └── src/
-│       ├── components/        # Reusable UI components
-│       │   ├── cos/           # Chief of Staff components
-│       │   └── Layout.jsx     # Main app layout
-│       ├── hooks/             # Custom React hooks
-│       ├── pages/             # Route-based page components
-│       │   └── Browser.jsx    # Browser management dashboard
-│       └── services/          # API client (api.js, socket.js)
-│
-├── server/                    # Express.js backend
-│   ├── routes/                # HTTP endpoint handlers
-│   │   └── browser.js         # /api/browser/* endpoints
-│   ├── services/              # Business logic
-│   │   ├── cos/               # Chief of Staff
-│   │   │   └── cos.js        # Task scheduling and lifecycle
-│   │   ├── subAgentSpawner.js # Agent-cluster event wiring, runner communication, and slashdo loading
-│   │   ├── agent/             # Agent orchestration and execution
-│   │   │   ├── agentCliSpawning.js # Multi-provider CLI agent spawning
-│   │   │   ├── agentCliOutputStream.js # Headless CLI stdout/stderr pipeline and transcript persistence
-│   │   │   └── agentOrchestrator.js # Agent lifecycle-transition facade
-│   │   ├── pm2.js             # PM2 process management
-│   │   ├── runner.js          # AI execution engine
-│   │   ├── memory.js          # Memory system
-│   │   └── browserService.js  # Browser CDP/health/PM2 control
-│   ├── lib/                   # Shared utilities
-│   │   ├── errorHandler.js    # Error normalization
-│   │   ├── *Validation.js     # Zod schemas, one file per route family
-│   │   └── taskParser.js      # Task stored-form parser (and migration 018's input reader)
-│   └── cos-runner/            # Isolated agent runner
-│       └── index.js           # Standalone Express server
-│
-├── browser/                   # portos-browser service
-│   ├── server.js              # Launches Chromium with CDP, runs health server
-│   └── package.json           # Zero third-party dependencies; Chrome launched via native child_process.spawn
-│
-├── autofixer/                 # portos-autofixer service
-│   ├── server.js              # Crash detection daemon (polls PM2 every 15min)
-│   └── ui.js                  # Standalone Express UI with SSE log streaming
-│
-├── data/                      # Runtime file data (gitignored) — relational records live in PostgreSQL (see docs/STORAGE.md)
-│   ├── apps.json              # Registered apps (read by autofixer)
-│   ├── providers.json         # AI provider configs
-│   ├── history.jsonl          # Action history (JSON Lines)
-│   ├── browser-config.json    # Browser CDP/health configuration
-│   ├── cos/                   # CoS state and agents
-│   │   ├── state.json         # Daemon state
-│   │   └── agents/            # Agent outputs
-│   ├── autofixer/             # Autofixer session history
-│   │   ├── index.json         # Fix session index (max 100 entries)
-│   │   └── sessions/          # Per-session prompt, output, metadata
-│   ├── brain/                 # Brain second-brain data (file-primary)
-│   │   ├── meta.json          # Settings
-│   │   ├── admin/             # Admin tasks (collectionStore: <id>/index.json)
-│   │   ├── buckets/           # Custom bucket definitions (collectionStore: <id>/index.json)
-│   │   ├── ideas/             # Ideas and concepts (collectionStore: <id>/index.json)
-│   │   ├── inbox/             # Captured thoughts (collectionStore: <id>/index.json)
-│   │   ├── journals/          # Daily Log entries (collectionStore: <id>/index.json)
-│   │   ├── links/             # Saved bookmarks (collectionStore: <id>/index.json)
-│   │   ├── memories/          # Brain memories (collectionStore: <id>/index.json)
-│   │   ├── people/            # People records (collectionStore: <id>/index.json)
-│   │   ├── projects/          # Projects with status tracking (collectionStore: <id>/index.json)
-│   │   ├── songs/             # SongBook songs (collectionStore: <id>/index.json)
-│   │   ├── idealoom-lists/    # Machine-local IdeaLoom lists (collectionStore: <id>/index.json)
-│   │   ├── imports/           # Imported conversation archives
-│   │   ├── scans/             # Repository malware scan reports
-│   │   ├── songbook/          # Machine-local SongBook attachment files
-│   │   ├── youtube/           # YouTube transcripts, audio, and ingest index
-│   │   ├── activity-digest-settings.json # Activity digest configuration
-│   │   ├── journal-settings.json # Daily Log and Obsidian mirror settings
-│   │   ├── journal-obsidian-locations.json # Machine-local journal mirror paths
-│   │   ├── memory-bridge-map.json # Brain↔CoS memory bridge mapping
-│   │   ├── obsidian-vaults.json # Obsidian vault sync config
-│   │   ├── youtube-ingest-settings.json # YouTube ingest defaults
-│   │   ├── sync_log.jsonl     # Brain peer-sync mutation history
-│   │   ├── digests.jsonl      # Daily digest history
-│   │   └── reviews.jsonl      # Weekly review history
-│   ├── digital-twin/          # Digital twin identity documents
-│   │   ├── meta.json          # Settings and state
-│   │   └── documents/         # Markdown identity documents
-│   ├── uploads/               # Generic file uploads
-│   ├── repos/                 # Cloned GitHub repositories
-│   └── agent-personalities/   # Agent personality configs
-│
-├── docs/                      # Documentation
-│   └── GOALS_OPERATIONAL.md   # Operational CoS goals
-├── .github/workflows/         # CI/CD
-├── GOALS.md                   # Repository mission and goals
-└── ecosystem.config.cjs       # PM2 configuration
-```
-
-Each Brain `collectionStore` directory contains a schema-versioned `index.json`
-and stores every record at `<id>/index.json`.
+| Directory | Responsibility |
+| --- | --- |
+| `client/src/` | Pages, navigation, components, hooks and domain API clients |
+| `server/routes/` | HTTP entry points and request validation |
+| `server/services/` | Domain behavior, persistence and integrations |
+| `server/lib/` | Shared modules, contracts and DB schemas |
+| `browser/`, `autofixer/` | Browser automation and crash-repair sidecars |
+| `scripts/`, `data.reference/` | Setup, migrations and shipped defaults |
 
 ## Data Flow
 
-### HTTP Request Flow
+React calls domain API clients in `client/src/services/`. Express routes validate
+inputs with Zod and delegate to services. Those services read and write
+PostgreSQL or local files, or call host integrations such as PM2. Route errors
+flow through the centralized handler. See the [API guide](API.md) and
+[storage policy](STORAGE.md) for the request and persistence contracts.
 
-```
-Browser → React Page → api.js → Express Route → Service → Response
-                                     │
-                                     ├── Zod Validation
-                                     ├── Service Logic
-                                     └── PostgreSQL / data/ file / PM2 API
-```
+The server pushes status, progress and data changes through Socket.IO.
+Clients apply their own mutation responses immediately and reconcile any missed
+events on reconnect. Long-running jobs may also stream updates over SSE. See
+[realtime updates](UX_DESIGN_GUIDE.md#realtime-updates-not-polling).
 
-### WebSocket Event Flow
+### Chief of Staff
 
-```
-Server Event → Socket.IO → socket.js → React Component State Update
-     │
-     └── Real-time: logs, CoS status, errors, memory changes
-```
+[Chief of Staff](features/chief-of-staff.md) evaluates queued and scheduled work,
+selects the configured provider and model, and dispatches agents through the
+runner. Progress and outcomes are recorded by the server and surfaced in the
+workspace. [AI providers](AI_PROVIDERS.md) describes the available integrations.
 
-### Chief of Staff Flow
+### Peer Sync
 
-```
-1. Task writes emit `tasks:changed`; the CoS Service evaluates tasks on that event and on an interval
-2. For each pending task:
-   a. Select appropriate AI model based on task complexity
-   b. Build prompt with context and memory injection
-   c. Spawn Claude CLI via Sub-Agent Spawner
-3. Agent executes task, output captured
-4. On completion:
-   a. Mark task as completed
-   b. Extract memories from output
-   c. Update usage metrics
-```
+Installations can share enabled categories with paired peers on the user's own
+network. Periodic snapshot pulls reconcile state, while live media events reduce
+latency. Committed deletion tombstones travel with sync so an offline replica
+can retire its stale copy when it reconnects. See the
+[federation decision](decisions/2026-09-19-user-controlled-federation.md) and
+[peer administration](features/peer-administration.md).
 
-### Peer Sync Flow
+### Browser Automation and Autofixer
 
-Each install pulls from its peers (`server/services/syncOrchestrator.js`).
-
-- **Snapshot loop.** `syncAllPeers` runs every 60s, and `syncWithPeer` runs at
-  once on `peer:online` and on a manual sync. Each enabled snapshot category is
-  a checksum fetch, plus a snapshot fetch when the checksum moved.
-- **Realtime frames.** Video history changes travel as `peer:sync:event` frames
-  (`peerSyncEventBus.js` emits them, `peerSyncEvents.js` applies them). Gallery
-  images send delete frames only. The receiver's relay socket
-  (`peerSocketRelay.js`) subscribes after the peer advertises
-  `peer:sync:available`, and the peer's `peer:sync:subscribed` ack says whether
-  it will deliver video frames to this install (`deliver`). Frames go only to a
-  paired relay that names this install, for a category the sender shares with
-  it. A sender announces only rows it created and deletes of its own rows, and a
-  frame applies without waiting for the loop. A relay opened under an identity
-  this install no longer holds (before it was resolved, or replaced by a
-  restore) is reopened on the next probe.
-- **Safety net.** From a peer whose ack promised delivery
-  (`peerRealtimeSyncSince`), the 60s tick re-pulls `videoHistory` about every
-  `SAFETY_NET_INTERVAL_MS` (5 min). It pulls sooner when the subscription went
-  live after the last snapshot (frames sent during that gap were missed) or the
-  clock moved backwards. That snapshot repairs missed frames and carries rows
-  the peer holds but did not create. A peer without a live, delivering
-  subscription keeps the 60s cadence: an older version (no channel, or an ack
-  without `deliver`), a peer that does not share video history with this
-  install, an unpaired peer, or a relay that is down. Every other category keeps
-  the 60s cadence, and `peer:online` and a manual sync always pull everything.
-  Gallery images ride the library sweep's own 60s timer (`sharing/index.js`,
-  full-sync peers only), which is unchanged because it is also how new images
-  arrive.
-- **Tombstones.** A delete records a tombstone (`data/media-tombstones.json`)
-  before the files are trashed. It filters peer copies here at once but stays
-  in flight, never exported, until the trash commits; a failed trash withdraws
-  it and a crash leaves the next boot to settle it from file presence. A
-  committed tombstone rides the frame, the `videoHistory` snapshot and (for
-  images, to full-sync peers) the library manifest, so a peer that was offline
-  during the delete retires its copy on its next sync. No peer can re-offer the row. A peer's tombstone is admitted
-  only from a paired peer with media delete allowed that owns or holds the row
-  (`mediaTombstoneAuthorization.js`). Deleting a row owned elsewhere sends
-  `POST /api/peer-media/delete` to the owner (`mediaRemoteDelete.js`).
-- **Pre-upgrade media.** A delete is announced to peers only for a row or
-  image whose recorded origin is this install. Migration 450 gives media made
-  before that release this install as origin only on an install that has
-  never federated media (no registered peer, hosted file, or other machine's
-  id in its media stores), where every held file was made or imported here.
-  On a federated install an older copy pulled from a peer cannot be told
-  apart from local media, so pre-upgrade media stays origin-less and its
-  deletes stay on the machine where they happen until its creator is
-  resolved across machines (#14133).
-
-### Browser Automation Flow
-
-```
-1. portos-browser launches persistent Chromium with CDP on :5556
-2. Health server on :5557 reports connection status
-3. Express Server proxies browser management via browserService.js:
-   - Client UI (Browser.jsx) → /api/browser/* → browserService → CDP/PM2
-4. CoS agents connect directly to CDP WebSocket for web automation
-5. Configuration persisted to data/browser-config.json
-```
-
-### Autofixer Flow
-
-```
-1. portos-autofixer daemon starts, reads registered apps from data/apps.json
-2. Every 15 minutes, polls PM2 (pm2 jlist) for crashed processes
-3. For each errored process (with 30min cooldown):
-   a. Fetch last 100 lines of error logs + 50 lines of output logs (UNTRUSTED)
-   b. Build a prompt that fences the logs as data, not instructions
-   c. Cut a disposable detached git worktree; refuse a non-git app
-   d. Run a restricted CLI provider there (claude without shell/network tools,
-      or codex in its network-denied workspace-write sandbox) with an
-      allowlisted environment
-   e. Validate the diff (size, paths, no secrets)
-   f. Optionally run the configured verify command, contained: bubblewrap on
-      Linux, else the opt-in Docker containment profile (always on macOS);
-      no containment => verify refused => nothing promoted
-   g. Promote (git apply + pm2 restart) only when settings.autofixer.autoPromote
-      is on; otherwise stage the patch beside the session
-   h. Save session (prompt.txt, output.txt, metadata.json, fix.patch) to data/autofixer/sessions/
-4. portos-autofixer serves its dashboard on port 5560:
-   - SSE endpoint for real-time log streaming
-   - Fix history viewer with success/failure status
-   - Process status indicators
-```
-
-## Key Services
-
-### Apps Service (`server/services/apps.js`)
-- CRUD operations for registered apps
-- Persists to `data/apps.json`
-
-### PM2 Service (`server/services/pm2.js`)
-- Start/stop/restart processes
-- Status monitoring
-- Log retrieval
-
-### Runner Service (`server/services/runner.js`)
-- AI provider execution
-- CLI and API-based providers
-- Output streaming and capture
-
-### CoS Service (`server/services/cos/cos.js`)
-- Task evaluation and prioritization
-- Agent orchestration
-- Health monitoring
-- Self-improvement task generation
-
-### Sub-Agent Spawner (`server/services/subAgentSpawner.js`)
-- `initSpawner()`: CoS Runner connection + runner event handlers, the `task:ready` → spawn listener, run-directory pruning, orphan sweep
-- The work itself lives in focused siblings: `agentLifecycle.js` (spawn/completion), `agentCliSpawning.js` / `agentCliOutputStream.js` / `agentTuiSpawning.js` (process spawning), `agentModelSelection.js`, `agentPromptBuilder.js`, `agentRunTracking.js`
-
-### Agent Orchestrator (`server/services/agent/agentOrchestrator.js`)
-- The one entry point for an agent LIFECYCLE TRANSITION (pause / kill / terminate / complete / spawn) — read its header before touching the agent cluster
-
-### Memory Service (`server/services/memoryBackend.js`)
-- Backend switcher: PostgreSQL + pgvector (`memoryDB.js`) for real installs; the file backend (`memory.js`) is a test-only escape hatch
-- Semantic memory storage with vector embeddings via LM Studio
-- Memory retrieval for context injection
-
-### Task Learning Service (`server/services/taskLearning.js`)
-- Completion tracking and success rates
-- Duration estimates by task type
-- Model tier effectiveness analysis
-- Actionable recommendations
-
-### Task Schedule Service (`server/services/taskSchedule.js`)
-- Interval/cron scheduling for CoS self-improvement and app tasks
-- Autonomous jobs (`/api/cos/jobs`) with command allowlist enforcement for shell jobs
-- Prompt-template versioning with auto-upgrade of unchanged defaults
-
-### Brain Service (`server/services/brain.js`)
-- Thought capture and AI classification
-- CRUD for People, Projects, Ideas, Admin
-- Daily digest and weekly review generation
-- Classification correction workflow
-- Link capture with GitHub auto-clone
-
-### Digital Twin Service (`server/services/digital-twin.js`)
-- Identity scaffold document management
-- Personality trait extraction (Big Five, values hierarchy)
-- Behavioral test generation and execution
-- External data import (Goodreads, Spotify, Letterboxd, iCal)
-- Confidence scoring and gap recommendations
-
-### Agent Personalities (`server/services/agent/agentPersonalities.js`)
-- Agent personality CRUD and AI generation
-- Custom communication styles, tones, and quirks
-
-### Browser Service (`server/services/browserService.js`)
-- Manages portos-browser lifecycle via PM2 (launch/stop/restart)
-- Proxies CDP queries (open pages, version info) via HTTP to :5556
-- Health checks against :5557
-- Configuration CRUD persisted to `data/browser-config.json`
-- CDP host restricted to localhost to prevent SSRF
-
-### Autofixer (`autofixer/server.js` + `autofixer/ui.js`)
-- **Monitor**: Checks PM2 every 15 minutes for errored processes
-- Reads `data/apps.json` to know which processes to monitor
-- 30-minute cooldown per process to prevent fix loops
-- Repairs in a disposable worktree with a restricted CLI provider (`autofixer/sandbox.js`), never the live checkout
-- Verifies under containment ([CONTAINMENT.md](./CONTAINMENT.md)) and promotes only a validated, verified diff when `autoPromote` is on
-- Stores fix sessions in `data/autofixer/sessions/` (prompt, output, metadata, patch)
-- **UI** (:5560): Express listener in the Autofixer process with SSE real-time log streaming
-  - Serves HTTPS with the shared Tailscale cert (`data/certs/`) when one is present, plain HTTP otherwise — matching the scheme the sidebar's `//<host>:5560` link inherits from the main app
-- Fix history viewer, process status dashboard
-
-### Local-model Hub metadata
-
-`server/services/huggingFaceMetadata.js` owns the shared authenticated Hub reads,
-request budgets, in-memory cache and publish-date enrichment used by the local
-model catalog and MTPLX. Add reusable raw repo metadata reads here; disk cache
-persistence remains in `huggingFaceRepoCache.js`. Model ranking, GGUF/MLX variant
-selection, fit and installability belong in `huggingFaceCatalog.js`. Consumers
-needing only metadata import its owner directly; the catalog retains its old
-`fetchRepoPublishedDates` export for compatibility. The import-growth guard in `importScoping.test.js` covers
-this boundary against fan-out and the catalog workflow test checks shared request coalescing.
-
-### Shell Service (`server/services/shell.js`)
-- PTY-based web terminal via node-pty
-- Session management with WebSocket I/O
-- Terminal resize handling
-
-## Error Handling
-
-All routes use `asyncHandler` wrapper from `server/lib/errorHandler.js`:
-
-```javascript
-// Routes automatically catch errors and:
-// 1. Log to console with emoji prefix
-// 2. Emit Socket.IO event for UI notification
-// 3. Return structured JSON error response
-```
-
-Error severity levels:
-- **warning**: Non-critical, logged only
-- **error**: Server error, shown to user
-- **critical**: System-threatening, triggers auto-fix
+The [browser sidecar](features/browser.md) runs persistent Chromium. The server
+proxies browser management and authorized agents use CDP for automation. The
+[autofixer](features/autofixer.md) monitors PM2 crashes, asks a restricted CLI
+provider to propose repairs in a disposable checkout, and stages or promotes
+patches under the configured verification and promotion policy.
 
 ## Security Model
 
-The authoritative statement is "Security Model" in the root `AGENTS.md`; in brief:
-
-1. **Network Security**: A private network behind Tailscale; PortOS is never exposed to the public internet
-2. **Optional authentication**: An instance password (off by default) gates `/api/*` and `/data/*`; spawned agents carry a loopback `PORTOS_API_TOKEN`; every `/api` write outside the public, peer and opt-in public-API surfaces, plus a short list of sensitive reads (`server/lib/hostControlRoutes.js`), needs operator authority
-3. **Command Allowlist**: Shell execution restricted to approved commands (`server/lib/commandSecurity.js`)
-4. **No Shell Interpolation**: Uses `spawn()` with argument arrays
-5. **Zod Validation**: All API inputs validated
-6. **Path Traversal Prevention**: Filename sanitization on uploads
-7. **Containment for untrusted code**: Code Animation workers, autofix verification, SuperCollider renders and opt-in Docker-contained installs/tests run under the profiles in [CONTAINMENT.md](./CONTAINMENT.md), refusing rather than running on the host when their mechanism is unavailable
+PortOS is a single-operator system on a private Tailscale network. Host control
+runs with host privileges. Keep its UI, APIs, sockets and sidecars private.
+Instance password authentication and HTTPS are opt-in. Sensitive operations need
+operator authority, including when requested by a reachable peer. Use the
+[repository security model](../AGENTS.md#security-model) and
+[containment profiles](CONTAINMENT.md) when changing these boundaries.
 
 ## PM2 Process Map
 
-| Process | Port | Script | Purpose |
-|---------|------|--------|---------|
-| portos-ui | 5554 | `client/node_modules/vite/bin/vite.js` | React frontend dev server (dev only) |
-| portos-server | 5555 | `server/start.js` | Main Express API server |
-| portos-browser | 5556 (CDP), 5557 (health) | `browser/server.js` | Persistent Chromium with CDP for web automation |
-| portos-cos | 5558 | `server/cos-runner/index.js` | Isolated CoS agent runner |
-| portos-autofixer | 5560 | `autofixer/server.js` | Crash detection, CLI repair, and dashboard with SSE logs |
+| Process | Port | Purpose |
+| --- | --- | --- |
+| `portos-server` | 5555 | Express API and production UI |
+| `portos-ui` | 5554 | Vite in development |
+| `portos-browser` | 5556, 5557 | Chromium CDP and health |
+| `portos-cos` | 5558 | Chief of Staff runner |
+| `portos-autofixer` | 5560 | Crash monitoring and repair UI |
 
-PostgreSQL itself is not PM2-managed — it runs as the system service (`:5432`) or the `docker-compose.yml` container (`:5561`), provisioned by `npm run setup:db`.
+PostgreSQL runs outside PM2 as a system service or container. See
+[port allocation](PORTS.md) and the [PM2 guide](PM2.md) for configuration.
 
 ## Extension Points
 
 ### Adding a New Page
-1. Create component in `client/src/pages/`.
-2. Add `<Route>` in `client/src/App.jsx`.
-3. Add a navigation command entry in `server/lib/navManifest.js` (`NAV_COMMANDS`) with its keywords, section, and label so the `⌘K` command palette and the voice agent's `ui_navigate` tool can discover and navigate to the page.
-4. If the page belongs to an optional feature (e.g. `post`, `datadog`, `jira`, `gsd`), register the feature in `server/lib/instanceFeatureRegistry.js` and tag the nav command with `feature: '<id>'` (or map its section in `SECTION_FEATURE`).
-5. Add the sidebar icon in `NAV_PRESENTATION` (`client/src/lib/navPresentation.js`, rendered by `SidebarNav.jsx`) (tagged with `feature` if optional).
+
+Add the page and its route in `client/src/App.jsx`. Add the command to
+`NAV_COMMANDS` in `server/lib/navManifest.js` for palette and voice discovery,
+and the icon to `NAV_PRESENTATION`. Register and tag optional features through
+the [instance feature registry](INSTANCE_FEATURES.md). Follow the
+[workspace design guide](UX_DESIGN_GUIDE.md).
 
 ### Adding an API Endpoint
-1. Create route file in `server/routes/` and mount it in `server/index.js`.
-2. Validate incoming request parameters and bodies using `validateRequest` with reusable Zod schemas (in the route family's domain `server/lib/*Validation.js` module, or `server/lib/sharedSchemas.js` for fragments two domains share).
-3. Register detailed API operation metadata and schemas in `server/lib/apiOperationContracts.js`. Add `x-portos-tool` if the operation should be exposed as an agent-callable tool, and declare thrown error codes in `x-portos-error-codes`.
-4. If the endpoint or domain emits real-time Socket.IO events, declare their payload contracts in `server/lib/socketEventContracts.js`.
 
-### Adding a Service
-1. Create service file in `server/services/`.
-2. Export pure or domain functions (favor functional programming over classes).
-3. Import in routes and wrap handlers with `asyncHandler` from `server/lib/errorHandler.js`.
+Mount the route in `server/index.js`. Use reusable Zod schemas with
+`validateRequest` and send errors through the centralized handler. Register
+operation metadata and errors in `server/lib/apiOperationContracts.js`, adding
+`x-portos-tool` if the operation is agent-callable. Declare emitted events in
+`server/lib/socketEventContracts.js`. See the
+[API tool contract](API_TOOL_CONTRACT.md).
 
-### Adding a Shared Helper, Hook, or Utility
-1. Choose the proper directory by concern:
-   - Pure / side-effect-free server helpers → `server/lib/`
-   - Pure / side-effect-free client helpers → `client/src/lib/`
-   - React state and lifecycle hooks → `client/src/hooks/` (prefix with `use`)
-   - Pure formatting and mathematical helpers → `client/src/utils/`
-   - API / network / WebSocket clients → `client/src/services/` (prefix with `api*`)
-2. **Module summary rule**: Every module opens with a comment whose first paragraph is a one-sentence summary of at most 200 characters; `node scripts/lib-catalog.js <term>` derives the catalog from these headers, and each directory's `moduleSummaries.test.js` enforces them. Import client API wrappers directly from their domain modules.
+### Adding a Service or Shared Helper
+
+Keep domain work in `server/services/`, pure helpers in the appropriate
+`lib/` directory and React lifecycle behavior in `client/src/hooks/`.
+Search `node scripts/lib-catalog.js <term>` before adding helpers. Cataloged
+modules open with a one-sentence summary of at most 200 characters. Follow the
+[module guide](../.claude/skills/portos-add-module/SKILL.md) for placement.
 
 ### Adding a Data Store
-1. Determine the storage tier according to `docs/STORAGE.md`.
-2. Core application relational records are `db-primary` and must be stored in PostgreSQL with schema migrations in `server/lib/db/schema/` and `server/scripts/db-migrations/`.
-3. File-backed collections under `data/` should use `createCollectionStore` (`server/lib/collectionStore.js`) for schema-versioned layouts (`data/{type}/{id}/index.json`) with atomic writes and per-record queues.
+
+Choose the tier from the [storage policy](STORAGE.md). Core relational records
+belong in PostgreSQL with schema migrations. File-backed collections use
+`createCollectionStore` for schema-versioned layouts, atomic writes and queues.
 
 ### Adding CoS Task Types
-1. Add the task type to `SELF_IMPROVEMENT_TASK_TYPES` in `server/lib/scheduledTaskTypes.js` and `DEFAULT_TASK_INTERVALS` in `server/services/taskScheduleRegistry.js`.
-2. Add its prompt template to `DEFAULT_TASK_PROMPTS` in `server/services/taskPromptDefaults/prompts.js` (after editing any default, run `node scripts/regen-prompt-integrity-snapshot.js`: it bumps the version and retires the outgoing default's hash in `integrity.snapshot.json`).
-3. If it is an audit that should be configurable to **file issues** or **do the work**, add it to `AUDIT_DEFINITIONS` in `server/lib/auditCatalog.js` (and map any matching legacy quota-burn preset via `quotaBurnId`, so an un-migrated plan converts onto it). Quota Burn picks the new type up for free — its plan references scheduled tasks rather than carrying prompts of its own ([QUOTA-BURN.md](./QUOTA-BURN.md)).
-4. If it ALWAYS files findings/plans into the app's work tracker (never implements), add a wording preset to `TRACKER_FILING_PRESETS` in `server/lib/workTracker.js` and reference `{trackerInstructions}` in its prompt template — membership is what makes `resolveTrackerFilingBlock` file on every dispatch.
-5. Give it a home in `WORKFLOW_STAGES` (`server/services/workflow.js`) so the Workflow tab doesn't render it under Ambient.
+
+Register a scheduled task and its default interval in
+`server/lib/scheduledTaskTypes.js` and `server/services/taskScheduleRegistry.js`.
+Add its default prompt and run `node scripts/regen-prompt-integrity-snapshot.js`
+after changing prompt defaults. Register configurable audits in
+`server/lib/auditCatalog.js`. For a filing-only task, add a preset in
+`server/lib/workTracker.js` and use `{trackerInstructions}` in its prompt.
+Add its workflow stage in `server/services/workflow.js`. See the
+[Quota Burn guide](QUOTA-BURN.md) for how audit presets feed schedules.

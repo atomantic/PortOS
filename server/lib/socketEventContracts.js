@@ -8,6 +8,7 @@
 import { zodToOpenApiSchema } from './apiContractSchemas.js';
 import { generatedPreviewPlaybackSchema } from './generatedPreviewPlaybackSchema.js';
 import {
+  appDeployCancelSchema,
   appDeploySchema,
   appStandardizeSchema,
   appUpdateSchema,
@@ -50,6 +51,7 @@ const loomRunSnapshot = (production) => Object.freeze({
 });
 
 export const SOCKET_EVENT_CONTRACTS = Object.freeze({
+  'voice:avatar:changed': { direction: 'server-to-client', summary: 'Invalidate the machine-local Voice Call avatar runtime status; no payload.' },
   'generated-preview:playback': input(generatedPreviewPlaybackSchema, 'Calibrate or control an advertised cooperative document preview; audio remains in the client.'),
   'generated-preview:playback-state': {
     direction: 'server-to-client',
@@ -153,9 +155,9 @@ export const SOCKET_EVENT_CONTRACTS = Object.freeze({
     } },
   },
   'music-video:research-seed': {
-    direction: 'server-to-client', summary: 'Research and seed for a shot (sceneId) or cameo (cameoId) started, imported photos (with the saved project), or failed.',
+    direction: 'server-to-client', summary: 'Research and seed for a shot (sceneId) or cameo (cameoId) started, imported photos (with the saved project), was canceled, or failed.',
     payloadSchema: { type: 'object', required: ['projectId', 'status'], properties: {
-      projectId: { type: 'string' }, sceneId: { type: 'string' }, cameoId: { type: 'string' }, status: { type: 'string', enum: ['running', 'done', 'failed'] },
+      projectId: { type: 'string' }, runId: { type: 'string' }, sceneId: { type: 'string' }, cameoId: { type: 'string' }, status: { type: 'string', enum: ['running', 'done', 'failed', 'canceled'] },
       subject: { type: 'string' }, added: { type: 'integer' }, error: { type: 'string' }, project: { type: 'object' },
     }, additionalProperties: false },
   },
@@ -485,7 +487,7 @@ export const SOCKET_EVENT_CONTRACTS = Object.freeze({
   },
   'catalog:photoreal': {
     direction: 'server-to-client',
-    summary: 'An Environments photoreal (Blender) render for a place started, finished or failed; carries the job state.',
+    summary: 'An Environments photoreal (Blender) render for a place started or settled; carries the job state.',
     payloadSchema: { type: 'object', properties: { ingredientId: { type: 'string' }, job: { type: 'object' } }, required: ['ingredientId', 'job'], additionalProperties: false },
   },
   'catalog:previz-jobs': {
@@ -581,19 +583,20 @@ export const SOCKET_EVENT_CONTRACTS = Object.freeze({
   },
   'storyboard:make-batch': {
     direction: 'server-to-client',
-    summary: 'Make empty panels (or Redraw all) progress on a storyboard: panels finished of the total, and when the batch is done.',
+    summary: 'Make empty panels (or Redraw all) progress, completion, and cancellation on a storyboard.',
     payloadSchema: {
       type: 'object',
       properties: {
         storyboardId: { type: 'string' },
-        status: { type: 'string', enum: ['running', 'done'] },
+        runId: { type: 'string', format: 'uuid' },
+        status: { type: 'string', enum: ['running', 'canceling', 'canceled', 'done'] },
         redraw: { type: 'boolean' },
         total: { type: 'number' },
         done: { type: 'number' },
         failed: { type: 'number' },
         startedAt: { type: 'string' },
       },
-      required: ['storyboardId', 'status', 'total', 'done', 'failed'],
+      required: ['storyboardId', 'runId', 'status', 'total', 'done', 'failed'],
       additionalProperties: false,
     },
   },
@@ -664,6 +667,7 @@ export const SOCKET_EVENT_CONTRACTS = Object.freeze({
   'fableloom:production:run': loomRunSnapshot(true),
   'fableloom:shots:run': loomRunSnapshot(false),
   'app:deploy': input(appDeploySchema, 'Deploy a managed app with allowlisted flags.'),
+  'app:deploy:cancel': input(appDeployCancelSchema, 'Request cancellation of an active deploy. The acknowledgement reports acceptance or an error code.'),
   'app:standardize': input(appStandardizeSchema, 'Standardize one registered app.'),
   'app:update': input(appUpdateSchema, 'Run the update lifecycle for one registered app.'),
   'detect:start': input(detectStartSchema, 'Start streamed application detection.'),
@@ -813,11 +817,6 @@ export const SOCKET_EVENT_CONTRACTS = Object.freeze({
         statusMsg: { type: 'string' }, etaMs: { type: 'number' },
       },
     },
-  },
-  'training:checkpoints:changed': {
-    direction: 'server-to-client',
-    summary: 'Training checkpoints or samples were persisted; reread this run.',
-    payloadSchema: { type: 'object', properties: { runId: { type: 'string' } }, required: ['runId'], additionalProperties: false },
   },
   'logs:subscribe': input(logsSubscribeSchema, 'Subscribe to a bounded process-log tail.'),
   'logs:unsubscribe': input(logsUnsubscribeSchema, 'Release one process-log subscription or all legacy subscriptions.'),

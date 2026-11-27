@@ -82,17 +82,15 @@ Design uses actual inspected screenshots, with at most six captures across repre
 list/media, detail/editor and overlay/error/empty states, desktop and narrow views,
 and at most two optional themes. Source-only review reports unavailable visual coverage;
 unsampled states stay untested. Private/local synthetic evidence supports component
-attribution, severity, impact and precise before/after acceptance criteria. UX owns
-usability, hierarchy, clarity, spacing and consistency; Design owns composition and
-visual character. Mobile layout/touch and accessibility failures retain their existing
-owners. Deduplicate sibling findings by root cause. Aesthetic suggestions are report-only
+attribution, severity, impact and precise before/after acceptance criteria. Design and usability covers task flows, visual composition, and mobile layout and touch.
+Accessibility owns keyboard, assistive-technology and contrast barriers. Deduplicate sibling findings by root cause. Aesthetic suggestions are report-only
 proposals, never automatically scored or implemented defects. Preserve authored theme
 identity; PortOS's Kestrel references apply only to PortOS. Manual Run or an explicitly
 chosen cadence remains the trigger; adding this lane starts no provider work.
 
 ## Active audit domains
 
-The Quality tab plans and scores these 16 domains. CoS Schedule shows active domains and any scheduled legacy profiles. Select **Show all legacy audit profiles** to inspect or run a specific older profile. Each domain starts on demand.
+The Quality tab plans and scores the same 16 audit domains that CoS Schedule configures. Each domain starts on demand.
 
 | Task type | Owns | Files under | Mode | Isolated |
 |---|---|---|---|---|
@@ -113,168 +111,29 @@ The Quality tab plans and scores these 16 domains. CoS Schedule shows active dom
 | `design-usability` | Design and usability | `ux`, `design-usability` | file |  |
 | `documentation-content` | Documentation and product copy | `documentation`, `documentation-content` | file |  |
 
-## Legacy task profiles
+## Upgrading earlier schedules
 
-Stored schedules keep their original task IDs, prompts, delivery modes, execution history and app overrides. Applying a new Quality plan disables and clears the cadence of enabled legacy profiles covered by a newly scheduled domain. Older clients can still explicitly schedule a legacy profile. Historical snapshots keep each profile's daily observation even when several profiles now contribute to one domain.
+Saved settings on retired audit IDs are folded into their corresponding domains. A
+customized domain schedule takes precedence. When several retired profiles have
+different customizations and the domain still has its defaults, the first customized
+record in file order supplies the active configuration. Conflicting settings are kept
+under `retiredAuditConfigs` in the schedule or app record for recovery. Unedited
+shipped prompts are replaced by the domain's default. Custom prompts are carried
+forward verbatim.
 
-| Domain | Legacy profiles |
-|---|---|
-| `architecture-maintainability` | `code-quality`, `better-structural-drift`, `module-hygiene`, `typing` |
-| `code-simplification` | `simplify`, `over-engineering`, `better-complexity`, `better-cognitive-load` |
-| `ui-runtime-bugs` | `app-bugs`, `ui-bugs`, `console-errors`, `ui-lifecycle` |
-| `reliability-error-handling` | `error-handling`, `better-runtime-safety`, `reliability`, `workflow-recovery`, `observability` |
-| `data-integrity-safety` | `data-safety`, `data-integrity`, `upgrade-rehearsal` |
-| `test-quality-coverage` | `test-coverage`, `better-test-quality` |
-| `performance-efficiency` | `performance`, `cost-efficiency` |
-| `infrastructure-environment` | `infrastructure`, `better-dev-environment` |
-| `design-usability` | `design`, `ux`, `mobile-responsive` |
-| `documentation-content` | `documentation`, `copy` |
+Pending requests and ordering references follow the new IDs. Historical quality
+measurements keep their original categories and contribute to the corresponding
+domain trend.
 
-| Task type | Owns | Files under | Mode | Isolated |
-|---|---|---|---|---|
-| `code-quality` | Conventional maintainability defects | `code-quality` | implement | |
-| `test-coverage` | Untested behavior worth covering | `tests`, `test-gap` | file | |
-| `performance` | Provably wasted work on a hot path | `performance`, `perf` | implement | |
-| `documentation` | Docs that are wrong, then docs that are missing | `documentation`, `docs` | implement | |
-| `ui-bugs` | Things that are broken in the running interface | `bug`, `ui-bug` | implement | |
-| `mobile-responsive` | Layout at viewport widths ≤1024 and touch mechanics | `mobile` | implement | |
-| `error-handling` | Failure paths, timeouts, retries, degraded fallback | `resilience` | implement | |
-| `typing` | Type contracts at boundaries | `code-quality`, `typing` | implement | |
-| `console-errors` | What the app actually emits while running | `bug`, `console` | implement | |
-| `ux` | Whether a user can get the job done | `ux` | file | |
-| `design` | Rendered composition, media framing, polished states and intentional theme character; bounded screenshot evidence | `ux`, `design` | file | |
-| `data-safety` | Migrations, schema parity, cross-version safety | `data-safety` | file | |
-| `simplify` | Dead code, duplication, YAGNI | `code-quality`, `simplify` | file | |
-| `over-engineering` | Process and validation machinery costing more than the harm it prevents | `code-quality`, `over-engineering` | file | |
-| `module-hygiene` | Responsibility boundaries, reuse, discoverability | `code-quality`, `module-hygiene` | file | yes |
-| `ui-lifecycle` | UI resource lifetimes, stale data, async ordering, state continuity | `ui-lifecycle` | file | |
-| `observability` | Silent catches, log noise, missing error context | `code-quality`, `observability` | file | |
-| `copy` | User-facing wording | `ux`, `copy` | file | |
-| `better-complexity` | Counted branching per function | `code-quality`, `complexity` | file | yes |
-| `better-cognitive-load` | Reader cost no metric captures | `code-quality`, `cognitive-load` | file | yes |
-| `better-structural-drift` | The same fact kept in two places | `code-quality`, `structural-drift` | file | yes |
-| `better-runtime-safety` | Latent defects not yet triggered | `bug`, `runtime-safety` | file | |
-| `app-bugs` | Server and core-logic behavior bugs a user or job can hit: wrong results, edge inputs, success that did nothing, user-triggerable races | `bug`, `app-bug` | file | |
-| `better-test-quality` | Existing tests that prove nothing | `tests`, `test-quality` | file | |
-| `better-dev-environment` | What the dev loop leaves on the host | `tests`, `dev-environment` | file | |
-| `infrastructure` | Deployment, container, IaC and CI configuration | `infrastructure` | file | |
-| `data-integrity` | Ingestion, idempotency, lost updates, consistency, schema evolution | `data-safety`, `data-integrity` | file | |
-| `reliability` | Shutdown, health checks, backpressure, job leasing, mixed-version deploys | `resilience`, `reliability` | file | |
-| `cost-efficiency` | Metered spend: paid calls, unbounded scans, over-provisioning | `performance`, `cost` | file | |
-| `workflow-recovery` | Multi-step workflows that strand their record between steps | `bug`, `workflow` | file | |
-| `upgrade-rehearsal` | Executed migrations, backup restore and boot against scratch installs | `data-safety`, `upgrade-rehearsal` | file | |
+Data integrity and safety includes upgrade and restore rehearsals. Build them
+from synthetic fixtures and use separate test databases through
+`scripts/rehearsal-scratch-db.js`. Report the PostgreSQL steps as uncovered when
+the sandbox cannot create scratch databases. Keep live data out of rehearsals.
 
-## Why the boundaries are explicit
+## Slashdo scope alignment
 
-Lanes only pay off if they do not file each other's findings. Every
-mission body names what it cedes and to whom, so two lanes cannot both claim one
-problem:
-
-- **`code-quality` is the triage lane.** After ceding drift, complexity,
-  cognitive load, module hygiene, dead code, runtime defects, logging, and
-  unhandled boundary calls to their owners, its second deliverable is a ranked
-  `Recommended next audits` list in the completion summary; dispatch parses it
-  (`parseRecommendedAudits`) onto the task's execution record, and the Schedule
-  card shows it under the last run (#12085). `test-coverage` files by default
-  for the same reason the other filing lanes do: an unattended test addition
-  has no reviewer weighing the regression it names against suite time (#12087).
-- **Complexity is split three ways.** `better-complexity` owns *counted*
-  branching and must report the number. `better-cognitive-load` owns reader cost
-  that no metric captures — mixed abstraction levels, flag arguments, names that
-  lie. `module-hygiene` owns responsibility boundaries and treats a complexity
-  score only as a candidate signal, never as a finding.
-  For PortOS, `npm run quality:complexity` prints ranked JavaScript/JSX source and
-  test shortlists without writing a report file. It computes classic
-  cyclomatic complexity from a Babel AST. Each function starts with one base
-  path and adds decision points such as non-default switch cases, default
-  arguments, short-circuit operators and assignments, and optional chains. Class field initializers and static blocks are counted separately,
-  as are nested functions. The report excludes generated, vendored, build and
-  migration files; it identifies parsing failures and exits nonzero if its scan
-  is incomplete, but never fails for a high score. Analyze other languages
-  separately and judge each candidate in context. A repeatable
-  `--exclude <glob>` drops matching paths from both shortlists and prints the
-  excluded count; a PortOS audit passes the globs of its dormant
-  [feature areas](feature-priorities.md#audit-scope).
-- **Layout is split by what is narrow.** `mobile-responsive` owns every layout
-  defect at a viewport width ≤1024 (phone and tablet) plus touch mechanics —
-  overflow, clipping, breakpoint gaps, tap targets. `ux` checklist item 8 keeps
-  only a narrow CONTAINER on a desktop viewport (a dashboard widget, an embedded
-  panel, a side panel); the two lanes name each other's side (#12084).
-- **Duplication is split two ways.** `simplify` owns copy-paste and dead code.
-  `better-structural-drift` owns a derived artifact or hand-synced registry acting
-  as a second source of truth, which is a different fix (derive it, or add the
-  parity check). It also owns **behaviour twins** — two code paths implementing
-  one concern for different callers (an operator lane and an unattended lane, a
-  modal and a drawer) where a guard or contract check landed in only one; the
-  proof is `git log -S` on the one-sided fix, and the resolution is a shared
-  primitive or a parity test, never a copied patch (#12092). File splits and
-  responsibility boundaries stay with `module-hygiene`, which `simplify` cedes
-  by name (#12083).
-- **Over-engineering is the removal counterpart of the proportionality check.**
-  Every lane carries a shared check (`auditQualityInstructions`) that rejects a
-  fix adding a validation layer, archive, ledger, retry or recovery workflow, or
-  slower process. `over-engineering` hunts the machinery already added —
-  re-verification of branch, merge, review or build state the code host or CI
-  system already owns, archives and retry layers with no reachable failure,
-  gates that add CI or local time without catching a regression, and the docs
-  that mandate them. It files only removals or simplifications with a measured
-  time or maintenance cost, and assumes no particular code host or platform.
-  `simplify` keeps code that nothing runs and copy-paste duplication;
-  `over-engineering` keeps process that runs and works but is disproportionate.
-- **Read-modify-write races have one owner.** `data-integrity` owns lost
-  updates and read-modify-write races on a persisted record or file;
-  `data-safety` and `better-runtime-safety` cede them by name, and runtime-safety
-  keeps only check-then-act races on in-memory module state (#12082).
-  `error-handling` likewise cedes sensitive detail leaking through an error path
-  to `privacy` and partial writes to `data-integrity` (#12086).
-- **Upgrade safety is split by read versus run.** `data-safety` reads
-  migrations, seeds and backup code for missing safety nets. `upgrade-rehearsal`
-  executes them: it builds scratch installs from the fixture shapes the
-  migration tests carry, runs the seed step and the migration runner, boots to
-  the health endpoint, and restores a backup into a second scratch root — never
-  the live `data/` or the real Postgres. Postgres is exercised through two
-  throwaway `portos_rehearsal_<id>_test` databases that
-  `scripts/rehearsal-scratch-db.js` creates and drops (the `_test` suffix keeps
-  the `isTestDatabase()` gate armed, and `drop` refuses any other name,
-  including `portos` and `portos_test`); with no creatable scratch database the
-  run reports the Postgres steps as uncovered. It files only what the executed path
-  broke, one issue per root cause (#12091).
-- **Defects are split five ways.** `better-runtime-safety` reads source for
-  latent code-shape defects; `app-bugs` traces server routes and jobs against
-  what they promise for behavior bugs; `console-errors` collects what actually errors at runtime;
-  `error-handling` owns the failure path once something goes wrong; and
-  `ui-lifecycle` owns UI lifecycle and state correctness across UI runtimes.
-  Its checks follow the target app’s own semantics.
-- **Tests are split three ways.** `test-coverage` owns the gaps;
-  `better-test-quality` owns whether the tests that exist prove anything; and
-  `better-dev-environment` owns what running them does to the host — temp
-  files and processes left behind, writes outside the sandbox, watcher cost,
-  suite runtime. It measures host state before and after a bounded run,
-  because a static read of one suite cannot see accumulation: every suite
-  leaking one temp directory per run passed both other lanes while filling a
-  dev machine's temp directory with tens of thousands of entries (#9000).
-
-## The `better-` prefix and slashdo scope alignment
-
-The bundled slashdo `/do:better` command now declares a generic scope and
-ownership table in `lib/slashdo/lib/better-audit.md`; it no longer has a
-`For <lens>:` checklist for PortOS to mirror. PortOS keeps its focused
-`better-*` scheduled missions as narrower, PortOS-owned additions that can be
-scheduled and pinned independently. Their prompt bodies own the specialist
-checks. Shared audit discovery, issue filing, and delivery contracts stay in
-their common runtime seams instead of being copied into each mission.
-
-`DO_BETTER_SCOPE_COVERAGE` in `server/lib/auditCatalog.js` maps current slashdo
-scope names to scheduled task types and drives schedule labels. The test reads
-the bundled scope table in both directions: a new upstream scope needs an owner,
-and an obsolete scope label cannot remain after upstream changes. The former
-`DO_BETTER_LENS_COVERAGE` export remains an alias for compatibility.
-
-The prefix is spelled with a hyphen rather than `better:` because a task type is
-interpolated into the CoS task id, which becomes a git branch name
-(`cos/<taskId>/<agentId>`) and a worktree directory. Git refs reject a colon,
-Windows paths reject a colon, and the task id pattern accepts only word
-characters and hyphens.
+`DO_BETTER_SCOPE_COVERAGE` maps the bundled slashdo audit scopes to their PortOS
+scheduled domains. Its tests verify that every bundled scope has an owner.
 
 ## Filing and mode
 

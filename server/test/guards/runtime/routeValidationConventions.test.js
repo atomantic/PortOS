@@ -1,6 +1,7 @@
 /**
  * Rule: Every route handler reading `req.body` or `req.query` must validate it with `validateRequest`, `validate`, `parseBody`, or `…Schema.safeParse/parse` (see root `AGENTS.md`).
  * Fix: Add a Zod schema to the route family's domain `lib/<domain>Validation.js` file (or `lib/aiToolkit/validation.js` / `cos-runner/requestSchemas.js`) and pass `req.body` / `req.query` to `validateRequest(schema, …)`; prune resolved entries from `ALLOWED_UNVALIDATED`.
+ * Rule: Route modules import Zod schemas from server/lib instead of importing Zod directly.
  * What this guard cannot see:
  *   - Lexer-assisted scan (`lib/sourceScan.js`): cannot see field-by-field validation in a helper, handlers delegated to a named function, or `router.route(…).post(…)`.
  *   - `parsePagination(req.query)` only clamps limit/offset and does not count as validation.
@@ -11,6 +12,7 @@ import { join } from 'path';
 import { matchBracket } from '../../../lib/sourceScan.js';
 import { blankLiterals } from '../../guardSources.js';
 import { readText, REPO_ROOT, trackedFiles } from '../../../../scripts/lib/guardCorpus.js';
+import { MODULE_SOURCE_RE, moduleSpecifiers } from '../../../../scripts/lib/moduleGraph.js';
 
 const SERVER_ROOT = join(REPO_ROOT, 'server');
 
@@ -30,6 +32,89 @@ const ALLOWED_UNVALIDATED = new Map([
   ['routes/imageClean.js POST /', 'raw image bytes (express.raw Buffer); the JSON-shaped options are validated from req.query'],
   ['routes/imageTo3d.js POST /models/:id/usdz', 'raw binary body (express.raw); validated by byte checks (non-empty, size cap, zip magic)'],
   ['routes/pipeline/audio.js POST /issues/:id/stages/audio/music/upload', 'multipart upload: req.body only carries an optional label text field'],
+]);
+
+// Legacy route modules still importing Zod. Remove entries as schemas move to server/lib.
+const ALLOWED_ZOD_IMPORTS = new Set([
+  'routes/albums.js',
+  'routes/artists.js',
+  'routes/ask.js',
+  'routes/authors.js',
+  'routes/autobiography.js',
+  'routes/automationSchedules.js',
+  'routes/avatar.js',
+  'routes/beeper.js',
+  'routes/brainImport.js',
+  'routes/browser.js',
+  'routes/calendar.js',
+  'routes/catalogSheets.js',
+  'routes/character.js',
+  'routes/codeReview.js',
+  'routes/conflictJournal.js',
+  'routes/contacts.js',
+  'routes/continuousVideoEpisode.js',
+  'routes/dashboardLayouts.js',
+  'routes/dataMaintenance.js',
+  'routes/dataManager.js',
+  'routes/decks.js',
+  'routes/digital-twin/import.js',
+  'routes/feeds.js',
+  'routes/gsd.js',
+  'routes/history.js',
+  'routes/humanActions.js',
+  'routes/imageClean.js',
+  'routes/imageGalleryRead.js',
+  'routes/imageGenSetup.js',
+  'routes/imageTo3d.js',
+  'routes/imageVerifier.js',
+  'routes/imageVideoModels.js',
+  'routes/imessage.js',
+  'routes/jira.js',
+  'routes/loras.js',
+  'routes/media.js',
+  'routes/mediaAnnotations.js',
+  'routes/mediaCollections.js',
+  'routes/mindToolRecipeRoutes.js',
+  'routes/moltworldTools.js',
+  'routes/moodBoard.js',
+  'routes/music.js',
+  'routes/musicVideoCameos.js',
+  'routes/musicVideoScenes.js',
+  'routes/openclaw.js',
+  'routes/pipeline/continuityBible.js',
+  'routes/pipeline/covers.js',
+  'routes/pipeline/editorial.js',
+  'routes/pipeline/manuscript.js',
+  'routes/pipeline/perspectiveRewrite.js',
+  'routes/pipeline/reverseOutline.js',
+  'routes/pipeline/textStageRecovery.js',
+  'routes/remoteDesktopViewer.js',
+  'routes/review.js',
+  'routes/rigging.js',
+  'routes/rounds.js',
+  'routes/socialAccounts.js',
+  'routes/spotify.js',
+  'routes/sprites.js',
+  'routes/stackerNews.js',
+  'routes/superCollider.js',
+  'routes/systemResources.js',
+  'routes/threejsModels.js',
+  'routes/timeline.js',
+  'routes/tools.js',
+  'routes/tracks.js',
+  'routes/tribe.js',
+  'routes/universeBuilder/canon.js',
+  'routes/universeBuilder/crud.js',
+  'routes/universeBuilder/expand.js',
+  'routes/universeBuilder/export.js',
+  'routes/universeBuilder/merge.js',
+  'routes/universeBuilder/render.js',
+  'routes/universeBuilder/shared.js',
+  'routes/universeBuilder/styleReferences.js',
+  'routes/universeBuilder/vision.js',
+  'routes/videoHistoryRead.js',
+  'routes/videoTimeline.js',
+  'routes/writersRoom.js',
 ]);
 
 const VALIDATE_CALL = /\bvalidateRequest\s*\(|\bvalidate\s*\(|\bparseBody\s*\(|\.safeParse\s*\(|[Ss]chema\w*\.parse\s*\(/g;
@@ -118,17 +203,24 @@ export function findUnvalidatedQueryHandlers(src) {
 
 // `routes/` plus the two out-of-tree HTTP surfaces (#10024): the vendored toolkit's
 // routers and the CoS runner's standalone Express app.
-const SCANNED_PATHS = ['routes', 'lib/aiToolkit/routes', 'cos-runner/index.js'];
+const SCANNED_PATHS = ['routes', 'lib/aiToolkit/routes', 'cos-runner'];
 
-const trackedRouteSources = () => (trackedFilesCache ??= trackedFiles(SERVER_ROOT, SCANNED_PATHS).filter((f) => f.endsWith('.js') && !f.includes('.test.')));
+const trackedRouteSources = () => (trackedFilesCache ??= trackedFiles(SERVER_ROOT, SCANNED_PATHS).filter((f) => MODULE_SOURCE_RE.test(f) && !f.includes('.test.')));
+
+function importsZod(src, file) {
+  const { statics, deferred } = moduleSpecifiers(src, file);
+  return [...statics, ...deferred].some((specifier) => specifier === 'zod' || specifier.startsWith('zod/'));
+}
 
 function runScan() {
   if (scanCache) return scanCache;
   const bodyOffenders = [];
   const queryOffenders = [];
+  const zodImports = [];
 
   for (const file of trackedRouteSources()) {
     const src = readText(join(SERVER_ROOT, file));
+    if (file.startsWith('routes/') && importsZod(src, file)) zodImports.push(file);
     for (const hit of findUnvalidatedBodyHandlers(src)) {
       bodyOffenders.push(`${file} ${hit}`);
     }
@@ -137,12 +229,38 @@ function runScan() {
     }
   }
 
-  scanCache = { bodyOffenders, queryOffenders };
+  scanCache = { bodyOffenders, queryOffenders, zodImports };
   return scanCache;
 }
 
 const scanTree = () => runScan().bodyOffenders;
 const scanQueries = () => runScan().queryOffenders;
+
+describe('route schema placement (#19438)', () => {
+  it('only permits direct Zod imports in legacy route files', () => {
+    const offenders = runScan().zodImports.filter((file) => !ALLOWED_ZOD_IMPORTS.has(file));
+    expect(
+      offenders,
+      `Move these routes' schemas into their domain lib/*Validation.js module:\n  ${offenders.join('\n  ')}`,
+    ).toEqual([]);
+  });
+
+  it('removes allowlist entries after their direct imports are gone', () => {
+    const live = new Set(runScan().zodImports);
+    const stale = [...ALLOWED_ZOD_IMPORTS].filter((file) => !live.has(file));
+    expect(stale, `Remove stale entries from ALLOWED_ZOD_IMPORTS:\n  ${stale.join('\n  ')}`).toEqual([]);
+  });
+
+  it('recognizes Zod imports and ignores comments and quoted examples', () => {
+    expect(importsZod("import { z }\nfrom \"zod\";", 'routes/example.js')).toBe(true);
+    expect(importsZod("const { z } = await import('zod/v4');", 'routes/example.js')).toBe(true);
+    expect(importsZod(`
+      // import { z } from 'zod';
+      const example = "import { z } from 'zod';";
+      import { bodySchema } from '../lib/exampleValidation.js';
+    `, 'routes/example.js')).toBe(false);
+  });
+});
 
 describe('route handlers validate req.body (#9950, #10024)', () => {
   it('scans the route tree', () => {
@@ -229,7 +347,10 @@ describe('the unvalidated-body recognizer', () => {
   it('covers the toolkit routers and the CoS runner app (#10024)', () => {
     const files = trackedRouteSources();
     expect(files).toContain('lib/aiToolkit/routes/prompts.js');
-    expect(files).toContain('cos-runner/index.js');
+    expect(files).toEqual(expect.arrayContaining([
+      'cos-runner/agentControlRoutes.js', 'cos-runner/securityScanRoutes.js',
+      'cos-runner/spawnCliRoute.js', 'cos-runner/spawnTuiRoute.js',
+    ]));
     expect(findUnvalidatedBodyHandlers("app.post('/spawn', lifecycle.spawnRoute(async (req, res) => { const { agentId } = req.body; }));"))
       .toEqual(['POST /spawn']);
     for (const call of ['spawnBodySchema.safeParse(req.body ?? {})', "parseBody(promptStageUpdateBodySchema, req.body, 'stage data')"]) {

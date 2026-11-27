@@ -16,7 +16,7 @@
  * the prompt directs it to save the generated PNG to a staging path PortOS
  * chose, and the post-exit handler just reads that file back.
  *
- * The user must explicitly enable this provider in Settings → Image Gen
+ * The user must explicitly enable this provider in Media Gen Settings
  * (mirrors the Codex gate — it spends the user's Grok quota). When disabled
  * the dispatcher rejects up front; this module assumes it's enabled by the
  * time generateImage() is called.
@@ -94,7 +94,7 @@ export async function checkConnection({ grokPath } = {}) {
 // we can when the directed output file never landed — surfacing the model's
 // own words (content declines, tool-failure notes) instead of a fixed guess.
 const GROK_NO_IMAGE_HINT =
-  'Grok returned no image — the image_gen tool may be unavailable on your Grok plan, or the model declined. Check Settings → Image Gen → Enable Grok Imagegen.';
+  'Grok returned no image — the image_gen tool may be unavailable on your Grok plan, or the model declined. Check the Enable Grok Imagegen toggle in Media Gen Settings → Grok CLI.';
 export const noImageReason = (stdoutTail = '') => buildNoImageReason(stdoutTail, {
   hint: GROK_NO_IMAGE_HINT,
   describe: (said) => `Grok did not produce an image at the directed path. Grok said: "${said}"`,

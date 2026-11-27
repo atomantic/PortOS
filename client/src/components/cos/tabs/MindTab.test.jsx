@@ -3,6 +3,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { createEvent, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { MemoryRouter } from 'react-router';
+import { PROVIDERS_PAGE_PATH } from '../../../../../server/lib/navManifest.js';
 import { awaitEnabled, findEnabledByLabelText, findEnabledByRole } from '../../../test/enabledBarrier.js';
 
 const api = vi.hoisted(() => ({
@@ -21,6 +22,7 @@ const api = vi.hoisted(() => ({
   getProviders: vi.fn(),
   updateCosConfig: vi.fn(),
   getPersistentMindContext: vi.fn(),
+  getPersistentMindReflection: vi.fn(),
   getPersistentMindMaintainer: vi.fn().mockResolvedValue({
     role: { schemaVersion: 1, enabled: false, appIds: [], intervalMinutes: 60 },
     apps: [], availableApps: [], prerequisites: [], instructions: '',
@@ -37,10 +39,13 @@ const api = vi.hoisted(() => ({
 const socket = vi.hoisted(() => {
   const handlers = new Map();
   return {
-    on: vi.fn((event, handler) => handlers.set(event, handler)),
-    off: vi.fn((event) => handlers.delete(event)),
+    on: vi.fn((event, handler) => {
+      if (!handlers.has(event)) handlers.set(event, new Set());
+      handlers.get(event).add(handler);
+    }),
+    off: vi.fn((event, handler) => handlers.get(event)?.delete(handler)),
     emit: vi.fn(),
-    emitServer: (event, data) => handlers.get(event)?.(data),
+    emitServer: (event, data) => handlers.get(event)?.forEach(handler => handler(data)),
     reset: () => handlers.clear(),
   };
 });
@@ -64,6 +69,7 @@ vi.mock('../../../services/apiAgents.js', () => ({
   promotePersistentMindEvent: api.promotePersistentMindEvent,
   updateCosConfig: api.updateCosConfig,
   getPersistentMindContext: api.getPersistentMindContext,
+  getPersistentMindReflection: api.getPersistentMindReflection,
   getPersistentMindMaintainer: api.getPersistentMindMaintainer,
   getPersistentMindTools: api.getPersistentMindTools,
   getMindRecipes: api.getMindRecipes,
@@ -76,6 +82,7 @@ vi.mock('../../../services/apiAgents.js', () => ({
 vi.mock('../../../services/apiProviders.js', () => ({ getProviders: api.getProviders }));
 vi.mock('../../../services/apiLocalLlm', () => localLlm);
 vi.mock('../../../hooks/useSocket', () => ({ useSocket: () => socket }));
+vi.mock('../../../services/socket', () => ({ default: socket }));
 
 import MindTab from './MindTab';
 
@@ -123,15 +130,15 @@ describe('MindTab', () => {
 
     let resolveHistory;
     api.getPersistentMind.mockReturnValueOnce(new Promise(resolve => { resolveHistory = resolve; }));
-    act(() => socket.emitServer('cos:mind:event', {}));
-    act(() => socket.emitServer('cos:mind:status', {}));
+    act(() => socket.emitServer('connect'));
+    act(() => socket.emitServer('connect'));
     const before = api.getPersistentMind.mock.calls.length;
     view.unmount();
     await act(async () => resolveHistory(response({ hasMore: true })));
     expect(api.getPersistentMind).toHaveBeenCalledTimes(before);
   });
 
-  it('reconciles Mind consumers from events and reshow without recurring API reads', async () => {
+  it('applies live events and status locally, and reconciles visibility only when invalidated', async () => {
     const view = renderTab();
     await screen.findByText('Review the next bounded slice.');
     vi.useFakeTimers();
@@ -141,18 +148,30 @@ describe('MindTab', () => {
       const initial = counts();
       await act(async () => { await vi.advanceTimersByTimeAsync(60_000); });
       expect(counts()).toEqual(initial);
-      for (const name of ['cos:mind:event', 'cos:mind:status', 'connect']) {
-        const before = counts();
-        await act(async () => socket.emitServer(name, {}));
-        expect(counts()).toEqual(before.map(count => count + 1));
-      }
+      await act(async () => {
+        socket.emitServer('cos:mind:event', event({
+          eventId: 'new-reply', sequence: 1000, kind: 'mind.reply',
+          data: { previousSequence: 1, displayText: 'A reply from the socket.' },
+        }));
+        socket.emitServer('cos:mind:status', { ...response().state, queuedMessageCount: 2 });
+      });
+      expect(screen.getByText('A reply from the socket.')).toBeInTheDocument();
+      expect(screen.getByText('2 queued messages')).toBeInTheDocument();
+      expect(counts()).toEqual(initial);
+
+      // Reconnect uses the last confirmed socket cursor, and refreshes telemetry.
+      api.getPersistentMind.mockResolvedValue(response({ events: [], cursor: '1000:new-reply' }));
+      await act(async () => socket.emitServer('connect'));
+      expect(api.getPersistentMind).toHaveBeenLastCalledWith({ cursor: '1000:new-reply', limit: 200 }, { silent: true });
+      expect(counts()).toEqual(initial.map(count => count + 1));
       const before = counts();
       await act(async () => socket.emitServer('cos:mind:visibility', {}));
       expect(counts()).toEqual([before[0], before[1], before[2] + 1]);
+
       const hidden = counts();
       Object.defineProperty(document, 'visibilityState', { configurable: true, value: 'hidden' });
       await act(async () => document.dispatchEvent(new Event('visibilitychange')));
-      await act(async () => socket.emitServer('cos:mind:event', {}));
+      await act(async () => socket.emitServer('cos:mind:visibility', {}));
       expect(counts()).toEqual(hidden);
       Object.defineProperty(document, 'visibilityState', { configurable: true, value: 'visible' });
       await act(async () => document.dispatchEvent(new Event('visibilitychange')));
@@ -162,8 +181,6 @@ describe('MindTab', () => {
       view.unmount();
       await act(async () => {
         socket.emitServer('connect');
-        socket.emitServer('cos:mind:event', {});
-        socket.emitServer('cos:mind:visibility', {});
         await vi.advanceTimersByTimeAsync(60_000);
       });
       expect(counts()).toEqual(hidden.map(count => count + 1));
@@ -173,14 +190,17 @@ describe('MindTab', () => {
     }
   });
 
-  it('shows a prominent chosen identity and refreshes a rename from the trajectory notification', async () => {
+  it('shows a prominent chosen identity and applies a rename from the trajectory payload', async () => {
     api.getPersistentMind.mockResolvedValue(response({ identity: { mindId: 'cos-persistent-mind', name: 'Example Star' } }));
     renderTab();
     expect(await screen.findByRole('heading', { name: 'Example Star' })).toHaveAttribute('aria-live', 'polite');
-    api.getPersistentMind.mockResolvedValue(response({ identity: { mindId: 'cos-persistent-mind', name: 'Étoile' } }));
-    act(() => socket.emitServer('cos:mind:event', { kind: 'mind.capability.result' }));
-    expect(await screen.findByRole('heading', { name: 'Étoile' })).toBeInTheDocument();
+    act(() => socket.emitServer('cos:mind:event', event({
+      kind: 'mind.capability.result', eventId: 'name-2', sequence: 2,
+      data: { previousSequence: 1, tool: 'mind.choose-name', success: true, displayText: 'Chosen display name: Étoile' },
+    })));
+    expect(screen.getByRole('heading', { name: 'Étoile' })).toBeInTheDocument();
     expect(screen.queryByRole('heading', { name: 'Example Star' })).not.toBeInTheDocument();
+    expect(api.getPersistentMind).toHaveBeenCalledTimes(1);
   });
 
   it('shows the unnamed state without confusing the provider model with identity', async () => {
@@ -220,6 +240,7 @@ describe('MindTab', () => {
     api.updateCosConfig.mockResolvedValue({ success: true });
     localLlm.getLocalLlmStatus.mockResolvedValue({ ollama: { models: [] }, lmstudio: { models: [] } });
     localLlm.getToolUseModels.mockResolvedValue({ models: [] });
+    api.getPersistentMindReflection.mockResolvedValue({ state: 'empty' });
     api.getPersistentMindContext.mockResolvedValue({
       prompt: { schemaVersion: 1, identity: 'Resident mind', instructions: 'Stay grounded.' },
       preview: { text: '# Effective context', chars: 19, approximateTokens: 5, summaryState: 'empty' },
@@ -352,15 +373,32 @@ describe('MindTab', () => {
     expect(screen.getByRole('button', { name: /Settings/i })).toBeInTheDocument();
   });
 
-  it('deduplicates a socket-triggered cursor backfill', async () => {
+  it('backfills a missing predecessor once, preserving live events and status that arrive during the read', async () => {
     renderTab();
-    expect(await screen.findByText('Review the next bounded slice.')).toBeInTheDocument();
+    await screen.findByText('Review the next bounded slice.');
+    const reply = (sequence, previousSequence) => event({
+      kind: 'mind.reply', eventId: `reply-${sequence}`, sequence,
+      data: { previousSequence, displayText: `Reply ${sequence}` },
+    });
 
-    api.getPersistentMind.mockResolvedValue(response({ events: [event()], hasMore: false }));
-    await act(async () => { socket.emitServer('cos:mind:event', event()); });
+    let finishHistory;
+    api.getPersistentMind.mockReturnValueOnce(new Promise(resolve => { finishHistory = resolve; }));
+    act(() => {
+      socket.emitServer('cos:mind:event', reply(12, 10));
+      socket.emitServer('cos:mind:event', reply(15, 12));
+      socket.emitServer('cos:mind:event', reply(15, 12));
+      socket.emitServer('cos:mind:status', { ...response().state, queuedMessageCount: 3 });
+    });
+    expect(api.getPersistentMind).toHaveBeenLastCalledWith({ cursor: '1:mind-message:message-1', limit: 200 }, { silent: true });
+    await act(async () => finishHistory(response({ events: [reply(10, 1), reply(12, 10)], cursor: '12:reply-12' })));
 
-    await waitFor(() => expect(api.getPersistentMind).toHaveBeenCalledTimes(2));
-    expect(screen.getAllByText('Review the next bounded slice.')).toHaveLength(1);
+    for (const sequence of [10, 12, 15]) {
+      expect(screen.getAllByText(`Reply ${sequence}`)).toHaveLength(1);
+    }
+    expect(screen.getByText('3 queued messages')).toBeInTheDocument();
+    expect(api.getPersistentMind).toHaveBeenCalledTimes(2);
+    expect(api.getPersistentMindRuntime).toHaveBeenCalledTimes(1);
+    expect(api.getPersistentMindVisibility).toHaveBeenCalledTimes(1);
   });
 
   it('shows an explicit reload state when reconnect backfill reports a gap', async () => {
@@ -379,7 +417,7 @@ describe('MindTab', () => {
     await waitFor(() => expect(api.getPersistentMind).toHaveBeenCalledTimes(2));
 
     api.getPersistentMind.mockResolvedValueOnce(response());
-    await act(async () => { socket.emitServer('cos:mind:status'); });
+    await act(async () => { socket.emitServer('connect'); });
     await waitFor(() => expect(api.getPersistentMind).toHaveBeenCalledTimes(3));
     expect(api.getPersistentMind.mock.calls[2][0].cursor).toBeNull();
   });
@@ -417,6 +455,26 @@ describe('MindTab', () => {
     await user.click(screen.getByRole('button', { name: 'Draft repair request' }));
     expect(screen.getByPlaceholderText('Message Persistent Mind').value).toContain('app ID: example-app');
     expect(api.sendPersistentMindMessage).not.toHaveBeenCalled();
+  });
+
+  it('enables the saved AI profile without starting a wake', async () => {
+    const user = userEvent.setup();
+    api.getPersistentMind.mockResolvedValue(response({
+      state: { enabled: false, started: false, status: 'idle' },
+      profile: { enabled: false },
+    }));
+    renderTab('/cos/mind?panel=settings');
+
+    const toggle = await findEnabledByRole('checkbox', { name: 'Enable persistent mind profile' });
+    expect(toggle).not.toBeChecked();
+    await user.click(toggle);
+
+    expect(api.updateCosConfig).toHaveBeenCalledWith(
+      { persistentMindProfile: expect.objectContaining({ enabled: true, thinkingInterface: 'text' }) },
+      { silent: true },
+    );
+    expect(api.startPersistentMind).not.toHaveBeenCalled();
+    expect(api.wakePersistentMind).not.toHaveBeenCalled();
   });
 
   it('puts the AI profile controls before start and starts only after the profile save finishes', async () => {
@@ -578,6 +636,30 @@ describe('MindTab', () => {
     expect(api.sendPersistentMindMessage.mock.calls[1][0].id).toBe(firstId);
   });
 
+  it('keeps the durable socket message when its submit response finishes later', async () => {
+    const user = userEvent.setup();
+    let finishMessage;
+    api.sendPersistentMindMessage.mockReturnValueOnce(new Promise(resolve => { finishMessage = resolve; }));
+    renderTab();
+    await screen.findByText('Review the next bounded slice.');
+    const message = screen.getByLabelText('Message');
+    await user.type(message, 'Local draft.');
+    await user.click(screen.getByRole('button', { name: 'Send message' }));
+
+    const { id } = api.sendPersistentMindMessage.mock.calls[0][0];
+    const eventId = `mind-message:${id}`;
+    act(() => socket.emitServer('cos:mind:event', event({
+      eventId, sequence: 1000,
+      data: { previousSequence: 1, messageId: id, displayText: 'Canonical stored message.' },
+    })));
+    expect(screen.getByText('Canonical stored message.')).toBeInTheDocument();
+    api.getPersistentMind.mockResolvedValue(response({ events: [], cursor: `1000:${eventId}` }));
+    await act(async () => finishMessage({ success: true }));
+    expect(message).toHaveValue('');
+    expect(screen.getByText('Canonical stored message.')).toBeInTheDocument();
+    expect(screen.queryByText('Local draft.')).not.toBeInTheDocument();
+  });
+
   it('sends on Enter while preserving a newline for Option+Enter and Shift+Enter', async () => {
     const user = userEvent.setup();
     renderTab();
@@ -640,7 +722,7 @@ describe('MindTab', () => {
     expect((await screen.findAllByAltText('diagram.png')).length).toBeGreaterThan(0);
     expect(screen.getByLabelText('Attach images')).toBeDisabled();
     expect(screen.getByText(/Image attachments are unavailable/)).toBeInTheDocument();
-    expect(screen.getByRole('link', { name: 'Settings' })).toHaveAttribute('href', '/settings?tab=providers');
+    expect(screen.getByRole('link', { name: 'Settings' })).toHaveAttribute('href', PROVIDERS_PAGE_PATH);
   });
 
   it('does not submit an IME composition commit key', async () => {
@@ -760,11 +842,47 @@ describe('MindTab', () => {
 
     const indicator = await screen.findByTestId('mind-typing-indicator');
     expect(indicator).toHaveTextContent('Waiting on the model · 2m 40s · heartbeat 5s ago · model loaded');
-    // The announced name is the stage alone: the durations re-render every 10s
-    // poll, and putting them in a live region re-reads the same state forever.
+    // The announcement excludes durations so ticks do not repeat the stage.
     expect(indicator).toHaveAccessibleName('Chief of Staff is typing — Waiting on the model');
     expect(await screen.findByTestId('mind-turn-progress-detail'))
       .toHaveTextContent('2m 40s · heartbeat 5s ago · model loaded');
+  });
+
+  it('ticks elapsed time locally and coalesces telemetry reads to turn transitions', async () => {
+    const view = renderTab();
+    await screen.findByText('Review the next bounded slice.');
+    vi.useFakeTimers();
+    try {
+      const thinking = { ...response().state, status: 'thinking', activeTurnId: 'mind-turn-1' };
+      api.getPersistentMindRuntime.mockResolvedValue(thinkingRuntime());
+      await act(async () => socket.emitServer('cos:mind:status', thinking));
+      expect(screen.getByTestId('mind-typing-indicator')).toHaveTextContent('2m 40s');
+      expect(api.getPersistentMindRuntime).toHaveBeenCalledTimes(2);
+      expect(api.getPersistentMind).toHaveBeenCalledTimes(1);
+      expect(api.getPersistentMindVisibility).toHaveBeenCalledTimes(1);
+
+      await act(async () => {
+        socket.emitServer('cos:mind:status', { ...thinking, queuedMessageCount: 1 });
+        await vi.advanceTimersByTimeAsync(5_000);
+      });
+      expect(screen.getByTestId('mind-typing-indicator')).toHaveTextContent('2m 45s');
+      expect(api.getPersistentMindRuntime).toHaveBeenCalledTimes(2);
+
+      const activeRoute = { providerId: 'ollama', model: 'local-alternate', effort: null };
+      await act(async () => socket.emitServer('cos:mind:status', { ...thinking, activeRoute }));
+      expect(api.getPersistentMindRuntime).toHaveBeenCalledTimes(3);
+      expect(api.getPersistentMind).toHaveBeenCalledTimes(1);
+      await act(async () => socket.emitServer('cos:mind:status', { ...thinking, activeRoute: { ...activeRoute } }));
+      expect(api.getPersistentMindRuntime).toHaveBeenCalledTimes(3);
+
+      await act(async () => socket.emitServer('cos:mind:status', response().state));
+      expect(screen.queryByTestId('mind-typing-indicator')).not.toBeInTheDocument();
+      expect(api.getPersistentMindRuntime).toHaveBeenCalledTimes(4);
+      expect(api.getPersistentMindVisibility).toHaveBeenCalledTimes(1);
+    } finally {
+      view.unmount();
+      vi.useRealTimers();
+    }
   });
 
   it('renders a stale heartbeat as a stalled state rather than the normal thinking dots', async () => {
@@ -867,7 +985,7 @@ describe('MindTab', () => {
     expect(await screen.findByRole('heading', { name: 'Identity and operating prompt' })).toBeInTheDocument();
     expect(screen.getByLabelText('Identity')).toHaveValue('Resident mind');
     expect(screen.getByText('# Effective context')).toBeInTheDocument();
-    expect(api.getPersistentMindContext).toHaveBeenCalledWith({ silent: true });
+    expect(api.getPersistentMindContext).toHaveBeenCalledWith(expect.objectContaining({ silent: true }));
   });
 
   it('keeps conversation central while exposing created and accessible memories', async () => {
@@ -884,6 +1002,55 @@ describe('MindTab', () => {
     expect(screen.getByRole('tab', { name: 'Memories' })).toHaveAttribute('aria-selected', 'true');
     expect(await screen.findByRole('heading', { name: 'Curated memories' })).toBeInTheDocument();
     expect(screen.getByText('Delivery preference')).toBeInTheDocument();
+  });
+
+  it('shares one context read across Context and Memories and mounts reflection only in Context', async () => {
+    const user = userEvent.setup();
+    renderTab('/cos/mind?panel=context');
+
+    expect(await screen.findByRole('heading', { name: 'Memory reflection' })).toBeInTheDocument();
+    expect(api.getPersistentMindContext).toHaveBeenCalledTimes(1);
+    expect(api.getPersistentMindReflection).toHaveBeenCalledTimes(1);
+
+    await user.click(screen.getByRole('tab', { name: 'Memories' }));
+    expect(await screen.findByRole('heading', { name: 'Curated memories' })).toBeInTheDocument();
+    expect(document.querySelector('#mind-reflection-heading')).toBeNull();
+    expect(api.getPersistentMindContext).toHaveBeenCalledTimes(1);
+    expect(api.getPersistentMindReflection).toHaveBeenCalledTimes(1);
+
+    await user.click(screen.getByRole('tab', { name: 'Context' }));
+    expect(await screen.findByRole('heading', { name: 'Memory reflection' })).toBeInTheDocument();
+    expect(document.querySelectorAll('#mind-reflection-heading')).toHaveLength(1);
+    expect(api.getPersistentMindContext).toHaveBeenCalledTimes(1);
+  });
+
+  it.each(['version', 'updatedAt'])('loads saved and socket revisions keyed by %s into an open memory editor', async (revisionField) => {
+    const user = userEvent.setup();
+    const revision = (value) => revisionField === 'version' ? value : `2026-01-0${value}T00:00:00.000Z`;
+    const memory = {
+      id: 'example-memory', [revisionField]: revision(1), content: 'Initial content.', summary: 'Example record',
+      type: 'fact', category: 'other', tags: [], importance: 0.5,
+    };
+    let current = memory;
+    api.getPersistentMindContext.mockImplementation(async () => ({ memories: [current], preview: {} }));
+    api.updatePersistentMindMemory.mockImplementation(async () => {
+      current = { ...memory, [revisionField]: revision(2), content: 'Canonical saved content.' };
+      return { success: true, memory: current };
+    });
+    renderTab('/cos/mind?panel=memories');
+
+    await user.click(await screen.findByText('Example record'));
+    const editor = screen.getByText('Example record').closest('details');
+    const content = () => within(editor).getByLabelText('Content');
+    await user.type(content(), ' Local edit.');
+    await user.click(within(editor).getByRole('button', { name: 'Save memory' }));
+    await waitFor(() => expect(content()).toHaveValue('Canonical saved content.'));
+    expect(editor.open).toBe(true);
+
+    current = { ...current, [revisionField]: revision(3), content: 'Newer revision.' };
+    await act(async () => socket.emitServer('cos:memory:updated', { id: memory.id }));
+    expect(content()).toHaveValue('Newer revision.');
+    expect(editor.open).toBe(true);
   });
 
   it('lets the user protect a memory and makes bulk cleanup retention explicit', async () => {
@@ -933,19 +1100,20 @@ describe('MindTab', () => {
     expect(memory.protection).toBe('important');
   });
 
-  it('retains unsaved context drafts across workspace panels and ignores accidental dismissal', async () => {
+  it('resets unsaved context drafts across panels and allows dismissal when idle', async () => {
     const user = userEvent.setup();
     renderTab('/cos/mind?panel=context');
 
     const identity = await screen.findByLabelText('Identity');
     await user.clear(identity);
     await user.type(identity, 'Unsaved operating identity');
+    expect(screen.getByLabelText('Identity')).toHaveValue('Unsaved operating identity');
     await user.click(screen.getByRole('tab', { name: 'Memories' }));
     await user.click(screen.getByRole('tab', { name: 'Context' }));
-    expect(screen.getByLabelText('Identity')).toHaveValue('Unsaved operating identity');
+    expect(await screen.findByLabelText('Identity')).toHaveValue('Resident mind');
 
     fireEvent.keyDown(window, { key: 'Escape' });
-    expect(screen.getByRole('heading', { name: 'Identity and operating prompt' })).toBeInTheDocument();
+    expect(screen.queryByRole('dialog', { name: 'Mind workspace' })).not.toBeInTheDocument();
   });
 
   it('refreshes the effective context after a memory is created', async () => {
@@ -953,7 +1121,7 @@ describe('MindTab', () => {
     api.getPersistentMindContext.mockImplementation(() => Promise.resolve({
       prompt: { schemaVersion: 1, identity: 'Resident mind', instructions: 'Stay grounded.' },
       preview: {
-        text: api.getPersistentMindContext.mock.calls.length > 2 ? '# Context with new memory' : '# Original context',
+        text: api.getPersistentMindContext.mock.calls.length > 1 ? '# Context with new memory' : '# Original context',
         chars: 24,
         approximateTokens: 6,
         summaryState: 'ready',
@@ -966,7 +1134,7 @@ describe('MindTab', () => {
 
     await user.type(await screen.findByLabelText('Add a durable memory'), 'A newly curated fact');
     await user.click(screen.getByRole('button', { name: 'Add memory' }));
-    await waitFor(() => expect(api.getPersistentMindContext.mock.calls.length).toBeGreaterThanOrEqual(2));
+    await waitFor(() => expect(api.getPersistentMindContext).toHaveBeenCalledTimes(2));
     await user.click(screen.getByRole('tab', { name: 'Context' }));
 
     expect(await screen.findByText('# Context with new memory')).toBeInTheDocument();

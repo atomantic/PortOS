@@ -10,6 +10,7 @@ import { readdir, unlink } from 'fs/promises';
 import { join } from 'path';
 import { randomUUID } from 'crypto';
 import { atomicWrite, ensureDir, readJSONFile, PATHS } from '../lib/fileUtils.js';
+import { createKeyCachedQueue } from '../lib/createKeyCachedQueue.js';
 
 const TOOL_ID_PATTERN = /^[a-zA-Z0-9_-]{1,100}$/;
 
@@ -24,9 +25,10 @@ const toolPath = (id) => {
   return join(PATHS.tools, `${id}.json`);
 };
 
-let cache = null;
-// In-flight dedup: two concurrent cold-cache getTools() calls share one load
-// rather than each kicking off a parallel readdir+readJSONFile storm.
+const queueToolWrite = createKeyCachedQueue();
+
+// Cache the promise so concurrent callers share the load and an invalidated
+// load cannot overwrite the current result when it eventually settles.
 let loadAllPromise = null;
 
 async function loadAll() {
@@ -37,24 +39,21 @@ async function loadAll() {
   const results = await Promise.all(
     jsonFiles.map((f) => readJSONFile(join(PATHS.tools, f), null))
   );
-  const tools = results.filter(Boolean);
-  cache = tools;
-  return tools;
+  return results.filter(Boolean);
 }
 
 function invalidateCache() {
-  cache = null;
   loadAllPromise = null;
 }
 
 export async function getTools() {
-  if (cache) return cache;
   if (loadAllPromise) return loadAllPromise;
-  loadAllPromise = loadAll().catch((err) => {
-    loadAllPromise = null;
+  const loading = loadAll().catch((err) => {
+    if (loadAllPromise === loading) invalidateCache();
     throw err;
   });
-  return loadAllPromise;
+  loadAllPromise = loading;
+  return loading;
 }
 
 // Non-strict by design: updateTool returns without writing when this read fails;
@@ -69,44 +68,55 @@ export async function getEnabledTools() {
 }
 
 export async function registerTool(config) {
-  await ensureDir(PATHS.tools);
-  const now = new Date().toISOString();
-  const tool = {
-    id: config.id || randomUUID(),
-    name: config.name,
-    category: config.category,
-    description: config.description || '',
-    enabled: config.enabled ?? true,
-    config: config.config || {},
-    promptHints: config.promptHints || '',
-    createdAt: now,
-    updatedAt: now
-  };
-  await atomicWrite(toolPath(tool.id), tool);
-  invalidateCache();
-  console.log(`🔧 Tool registered: ${tool.name} (${tool.id})`);
-  return tool;
+  const id = config.id || randomUUID();
+  const path = toolPath(id);
+  // Case variants can refer to the same file on macOS or Windows.
+  return queueToolWrite(id.toLowerCase(), async () => {
+    await ensureDir(PATHS.tools);
+    const now = new Date().toISOString();
+    const tool = {
+      id,
+      name: config.name,
+      category: config.category,
+      description: config.description || '',
+      enabled: config.enabled ?? true,
+      config: config.config || {},
+      promptHints: config.promptHints || '',
+      createdAt: now,
+      updatedAt: now
+    };
+    await atomicWrite(path, tool);
+    invalidateCache();
+    console.log(`🔧 Tool registered: ${tool.name} (${id})`);
+    return tool;
+  });
 }
 
 export async function updateTool(id, updates) {
-  const existing = await getTool(id);
-  if (!existing) return null;
-  const merged = {
-    ...existing,
-    ...updates,
-    id,
-    updatedAt: new Date().toISOString()
-  };
-  await atomicWrite(toolPath(id), merged);
-  invalidateCache();
-  console.log(`🔧 Tool updated: ${merged.name} (${id})`);
-  return merged;
+  validateToolId(id);
+  return queueToolWrite(id.toLowerCase(), async () => {
+    const existing = await getTool(id);
+    if (!existing) return null;
+    const merged = {
+      ...existing,
+      ...updates,
+      id,
+      updatedAt: new Date().toISOString()
+    };
+    await atomicWrite(toolPath(id), merged);
+    invalidateCache();
+    console.log(`🔧 Tool updated: ${merged.name} (${id})`);
+    return merged;
+  });
 }
 
 export async function deleteTool(id) {
-  await unlink(toolPath(id)).catch(() => null);
-  invalidateCache();
-  console.log(`🗑️ Tool deleted: ${id}`);
+  const path = toolPath(id);
+  return queueToolWrite(id.toLowerCase(), async () => {
+    await unlink(path).catch(() => null);
+    invalidateCache();
+    console.log(`🗑️ Tool deleted: ${id}`);
+  });
 }
 
 export async function getToolsSummaryForPrompt() {

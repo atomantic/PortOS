@@ -276,16 +276,6 @@ describe('authGate middleware', () => {
     expect(result.res.body).toBe('Unauthorized');
   });
 
-  it('gates the /sdapi/* AUTOMATIC1111-compatible surface', async () => {
-    const auth = await import('./auth.js');
-    await auth.setPassword({ newPassword: 'correct-horse' });
-    const { authGate } = await import('./authGate.js');
-    const result = await runGate(authGate, { path: '/sdapi/v1/sd-models', headers: {} });
-    expect(result.called).toBe(false);
-    expect(result.res.statusCode).toBe(401);
-    expect(result.res.body).toEqual({ error: 'Authentication required', code: 'AUTH_REQUIRED', timestamp: expect.any(Number) });
-  });
-
   it('treats a malformed cookie value as no token (clean 401, not 500)', async () => {
     const auth = await import('./auth.js');
     await auth.setPassword({ newPassword: 'correct-horse' });
@@ -483,23 +473,14 @@ describe('authGate per-API public registry (apiAccess)', () => {
     expect(result.res.statusCode).toBe(401);
   });
 
-  it('opens /sdapi/* when sdapi is exposed + passwordless', async () => {
-    const auth = await import('./auth.js');
-    await auth.setPassword({ newPassword: 'correct-horse' });
-    await writeApiAccess({ sdapi: { exposed: true, requireAuth: false } });
-    const { authGate } = await import('./authGate.js');
-    const result = await runGate(authGate, { path: '/sdapi/v1/txt2img', headers: {} });
-    expect(result.called).toBe(true);
-  });
-
   it('retains verified human and delegated agent sessions on a passwordless API', async () => {
     const auth = await import('./auth.js');
     await auth.setPassword({ newPassword: 'example-password' });
-    await writeApiAccess({ sdapi: { exposed: true, requireAuth: false } });
+    await writeApiAccess({ voice: { exposed: true, requireAuth: false } });
     const { authGate, requestHasHostControl } = await import('./authGate.js');
     for (const label of [null, 'agent']) {
       const { token } = await auth.createSession({ label });
-      const req = { path: '/sdapi/v1/txt2img', headers: { authorization: `Bearer ${token}` }, socket: { remoteAddress: '192.0.2.10' } };
+      const req = { path: '/api/voice/public/synthesize', headers: { authorization: `Bearer ${token}` }, socket: { remoteAddress: '192.0.2.10' } };
       expect((await runGate(authGate, req)).called).toBe(true);
       expect(req.portosAuthContext).toEqual({ enabled: true, authenticated: true, method: 'session' });
       expect(requestHasHostControl(req)).toBe(true);
@@ -552,11 +533,6 @@ describe('authGate Express path matching', () => {
     app.use('/api/example', api);
     app.use('/data/images', (req, res) => res.type('text/plain').send(req.path));
 
-    const sdapi = express.Router();
-    sdapi.get('/sd-models', (_req, res) => res.json([]));
-    sdapi.post('/txt2img', recordMutation);
-    app.use('/sdapi/v1', sdapi);
-
     const voice = express.Router();
     voice.post('/public/synthesize', recordMutation);
     voice.put('/config', recordMutation);
@@ -576,14 +552,13 @@ describe('authGate Express path matching', () => {
       '/api/example/records/ExampleRecord', '/aPi/example/records/ExampleRecord',
       '/api/database/maintenance/status',
       '/data/images/ExampleAsset.txt', '/DaTa/images/ExampleAsset.txt',
-      '/sdapi/v1/sd-models', '/SdApI/v1/sd-models',
     ]) {
       const response = await request(app).get(path);
       expect(response.status, path).toBe(401);
       if (path.toLowerCase().startsWith('/data/')) expect(response.text).toBe('Unauthorized');
       else expect(response.body.code).toBe('AUTH_REQUIRED');
     }
-    for (const path of ['/API/example/records', '/SDAPI/v1/txt2img']) {
+    for (const path of ['/api/example/records', '/API/example/records']) {
       const response = await request(app).post(path).send({ name: 'Example Record' });
       expect(response.status, path).toBe(401);
     }
@@ -604,12 +579,12 @@ describe('authGate Express path matching', () => {
     expect(asset.status).toBe(200);
     expect(asset.text).toBe('/ExampleAsset.txt');
 
-    const rendered = await request(app).post('/SDAPI/v1/txt2img')
+    const write = await request(app).post('/API/example/records')
       .set('Authorization', `Basic ${Buffer.from(':correct-horse').toString('base64')}`)
-      .send({ prompt: 'Example scene' });
-    expect(rendered.status).toBe(200);
-    expect(rendered.body.auth).toEqual({ enabled: true, authenticated: true, method: 'basic' });
-    expect(mutations).toEqual([{ prompt: 'Example scene' }]);
+      .send({ name: 'Example Record' });
+    expect(write.status).toBe(200);
+    expect(write.body.auth).toEqual({ enabled: true, authenticated: true, method: 'basic' });
+    expect(mutations).toEqual([{ name: 'Example Record' }]);
   });
 
   it('preserves public auth routes and keeps opt-in API exemptions within their prefixes', async () => {
@@ -627,17 +602,15 @@ describe('authGate Express path matching', () => {
     expect(health.body).toEqual({ status: 'ok' });
     expect((await request(app).get('/assets/App.js')).status).toBe(200);
 
-    await writeApiAccess({ voice: { exposed: true, requireAuth: false }, sdapi: { exposed: true, requireAuth: false } });
+    await writeApiAccess({ voice: { exposed: true, requireAuth: false } });
     expect((await request(app).post('/API/VOICE/PUBLIC/synthesize').send({ text: 'Example speech' })).status).toBe(200);
-    expect((await request(app).post('/SDAPI/v1/txt2img').send({ prompt: 'Example scene' })).status).toBe(200);
     expect((await request(app).put('/API/VOICE/config').send({ example: true })).status).toBe(401);
     expect((await request(app).post('/API/VOICE/publicity').send({ example: true })).status).toBe(401);
-    expect(mutations).toEqual([{ text: 'Example speech' }, { prompt: 'Example scene' }]);
+    expect(mutations).toEqual([{ text: 'Example speech' }]);
 
-    await writeApiAccess({ voice: { exposed: true, requireAuth: true }, sdapi: { exposed: false, requireAuth: false } });
+    await writeApiAccess({ voice: { exposed: true, requireAuth: true } });
     expect((await request(app).post('/API/VOICE/PUBLIC/synthesize').send({ text: 'Example speech' })).status).toBe(401);
-    expect((await request(app).post('/SDAPI/v1/txt2img').send({ prompt: 'Example scene' })).status).toBe(401);
-    expect(mutations).toHaveLength(2);
+    expect(mutations).toHaveLength(1);
   });
 
   it('keeps the default auth-off behavior on mixed-case routes', async () => {
@@ -881,6 +854,8 @@ describe('host control by default on /api writes (#16018)', () => {
     app.use(hostControlRouteGate);
     app.use(express.json());
     app.use('/api/runs', createRunsRoutes(runner));
+    const { default: agentsRoutes } = await import('../routes/agents.js');
+    app.use('/api/agents', agentsRoutes);
     const settings = express.Router();
     settings.get('/', ok);
     settings.put('/', ok);
@@ -919,6 +894,40 @@ describe('host control by default on /api writes (#16018)', () => {
     return ['Authorization', `Bearer ${PORTOS_API_TOKEN}`];
   };
 
+  it.each(['remote', 'basic', 'local', 'session', 'agent'])('checks %s authority for host repository and runtime reads (#19495)', async (authority) => {
+    const paths = [
+      '/api/apps/example-app/documents',
+      '/api/apps/example-app/documents/docs/guide.md',
+      '/api/apps/example-app/vite-host-check',
+      '/api/cos/gsd/projects',
+      '/api/cos/gsd/projects/example-app',
+      '/api/cos/gsd/projects/example-app/phases',
+      '/api/cos/gsd/projects/example-app/documents/ROADMAP.md',
+      '/api/commands/processes',
+      '/api/github/accounts/example-account/status',
+      '/api/apps/example-app/issues',
+      '/api/apps/example-app/pull-requests',
+      '/api/apps/example-app/work-items',
+      '/api/apps/example-app/lane-health',
+      '/api/devtools/video-download/yt-dlp',
+      '/api/midi-runtime/install',
+      '/api/music/setup/runtime-install',
+      '/api/remote-desktop/status',
+      '/api/html-pages/runs/example-run/pages/0/path',
+    ];
+    const header = authority === 'remote' ? null : await authorityHeader(authority);
+    const { app, sink } = await buildApp(authority === 'local' ? '127.0.0.1' : '192.0.2.10');
+    app.get(paths, (req, res) => { sink(req.path); res.json({ ok: true }); });
+    const allowed = authority !== 'remote' && authority !== 'basic';
+    for (const path of paths) {
+      const response = await send(app, 'get', path, undefined, header);
+      expect(response.status, path).toBe(allowed ? 200 : 403);
+      if (!allowed) expect(response.body.code, path).toBe('HOST_CONTROL_FORBIDDEN');
+      expect((await send(app, 'head', path, undefined, header)).status, path).toBe(allowed ? 200 : 403);
+    }
+    expect(sink).toHaveBeenCalledTimes(allowed ? paths.length * 2 : 0);
+  });
+
   it('refuses a remote password-free caller on every write and sensitive GET before any sink', async () => {
     const { app, runner, sink } = await buildApp();
     for (const suffix of ['', '/', '//']) {
@@ -934,6 +943,10 @@ describe('host control by default on /api writes (#16018)', () => {
     const listing = await request(app).get('/api/scaffold/directories');
     expect(listing.status).toBe(403);
     expect(listing.body.code).toBe('HOST_CONTROL_FORBIDDEN');
+    for (const path of ['/api/agents', '/api/agents/4242']) {
+      const response = await request(app).get(path);
+      expect([response.status, response.body.code], path).toEqual([403, 'HOST_CONTROL_FORBIDDEN']);
+    }
     expect(runner.createRun).not.toHaveBeenCalled();
     expect(runner.executeCliRun).not.toHaveBeenCalled();
     expect(sink).not.toHaveBeenCalled();

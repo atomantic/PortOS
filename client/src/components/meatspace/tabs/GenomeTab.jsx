@@ -76,6 +76,9 @@ import GenomeCategoryCard from '../GenomeCategoryCard';
 import EpigeneticTracker from '../EpigeneticTracker';
 import ProvenanceChip from '../../ui/ProvenanceChip';
 import FilePickerButton from '../../ui/FilePickerButton';
+import InlineConfirmRow from '../../ui/InlineConfirmRow';
+import useClickOutside from '../../../hooks/useClickOutside';
+import useEscapeKey from '../../../hooks/useEscapeKey';
 
 const CATEGORY_META = {
   longevity:          { emoji: '\u2728', label: 'Longevity',            color: 'purple' },
@@ -128,6 +131,96 @@ const SEVERITY_LABELS = {
   protective: { label: 'Protective', bg: 'bg-port-success/20', text: 'text-port-success', border: 'border-port-success/30' }
 };
 
+function GenomeCategoryJump({ categories, markersByCategory }) {
+  const [jumpOpen, setJumpOpen] = useState(false);
+  const jumpRef = useRef(null);
+  const jumpTriggerRef = useRef(null);
+
+  const closeJumpAndRestoreFocus = () => {
+    setJumpOpen(false);
+    jumpTriggerRef.current?.focus();
+  };
+
+  useClickOutside(jumpRef, jumpOpen, () => setJumpOpen(false));
+  useEscapeKey(jumpOpen, closeJumpAndRestoreFocus);
+
+  useEffect(() => {
+    if (jumpOpen) jumpRef.current?.querySelector('[role="menuitem"]')?.focus();
+  }, [jumpOpen]);
+
+  const handleJumpMenuKeyDown = (event) => {
+    if (event.key === 'Tab') {
+      closeJumpAndRestoreFocus();
+      return;
+    }
+
+    if (!['ArrowDown', 'ArrowUp', 'Home', 'End'].includes(event.key)) return;
+    event.preventDefault();
+    const items = Array.from(event.currentTarget.querySelectorAll('[role="menuitem"]'));
+    const index = items.indexOf(event.target);
+    let nextIndex = 0;
+    if (event.key === 'End') nextIndex = items.length - 1;
+    if (event.key === 'ArrowDown') nextIndex = (index + 1) % items.length;
+    if (event.key === 'ArrowUp') nextIndex = (index - 1 + items.length) % items.length;
+    items[nextIndex]?.focus();
+  };
+
+  return (
+    <div className="relative" ref={jumpRef}>
+      <button
+        ref={jumpTriggerRef}
+        type="button"
+        aria-expanded={jumpOpen}
+        aria-haspopup="true"
+        aria-controls="genome-category-jump-list"
+        onClick={() => setJumpOpen(open => !open)}
+        className="w-full flex items-center justify-between px-3 py-2 bg-port-card border border-port-border rounded text-sm text-gray-400 hover:text-white transition-colors"
+      >
+        <span>Jump to category ({categories.length})</span>
+        <span aria-hidden="true" className="text-xs">{jumpOpen ? '\u25B2' : '\u25BC'}</span>
+      </button>
+      <div
+        id="genome-category-jump-list"
+        role="menu"
+        aria-label="Jump to category"
+        hidden={!jumpOpen}
+        onKeyDown={handleJumpMenuKeyDown}
+        className="absolute top-full left-0 right-0 mt-1 z-20 bg-port-card border border-port-border rounded-lg shadow-xl max-h-64 overflow-y-auto"
+      >
+        {jumpOpen && categories.map(cat => {
+          const meta = CATEGORY_META[cat] || { emoji: '\u{1F9EC}', label: cat };
+          const catMarkers = markersByCategory[cat];
+          const concerns = catMarkers.filter(m => m.status === 'major_concern' || m.status === 'concern').length;
+          return (
+            <button
+              key={cat}
+              type="button"
+              role="menuitem"
+              tabIndex={-1}
+              onClick={() => {
+                const target = document.getElementById(`genome-cat-${cat}`);
+                setJumpOpen(false);
+                target?.querySelector('button')?.focus({ preventScroll: true });
+                target?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+              }}
+              className="w-full flex items-center justify-between px-3 py-2 text-left hover:bg-port-border/30 focus:bg-port-border/50 transition-colors"
+            >
+              <span className="flex items-center gap-2 text-sm">
+                <span aria-hidden="true">{meta.emoji}</span>
+                <span className="text-gray-300">{meta.label}</span>
+              </span>
+              <span className="flex items-center gap-2 text-xs">
+                <span className="text-gray-500">{catMarkers.length}</span>
+                {concerns > 0 && <span className="text-yellow-400">{concerns} !</span>}
+              </span>
+            </button>
+          );
+        })}
+      </div>
+    </div>
+  );
+}
+
 export default function GenomeTab() {
   const [summary, setSummary] = useState(null);
   const [summaryFailed, setSummaryFailed] = useState(false);
@@ -141,7 +234,6 @@ export default function GenomeTab() {
   const [deleting, setDeleting] = useState(false);
   const [savingNotes, setSavingNotes] = useState(null);
   const [statusFilter, setStatusFilter] = useState('all');
-  const [jumpOpen, setJumpOpen] = useState(false);
   const [showAllAttention, setShowAllAttention] = useState(false);
 
   // ClinVar state
@@ -165,7 +257,7 @@ export default function GenomeTab() {
   }, []);
   const dropRef = useRef(null);
   const notesTimerRef = useRef({});
-  const jumpRef = useRef(null);
+  const deleteTriggerRef = useRef(null);
 
   const fetchSummary = useCallback(async () => {
     const [summaryResult, clinvarResult] = await Promise.all([
@@ -192,15 +284,6 @@ export default function GenomeTab() {
   useEffect(() => {
     fetchSummary();
   }, [fetchSummary]);
-
-  useEffect(() => {
-    if (!jumpOpen) return;
-    const handleClickOutside = (e) => {
-      if (jumpRef.current && !jumpRef.current.contains(e.target)) setJumpOpen(false);
-    };
-    document.addEventListener('mousedown', handleClickOutside);
-    return () => document.removeEventListener('mousedown', handleClickOutside);
-  }, [jumpOpen]);
 
   // Debounced notes save
   const handleNotesChange = useCallback((markerId, notes) => {
@@ -523,8 +606,10 @@ export default function GenomeTab() {
 
       {/* Status overview — tappable filter pills */}
       {markers.length > 0 && (
-        <div className="flex flex-wrap gap-2">
+        <div className="flex flex-wrap gap-2" role="group" aria-label="Genome marker status">
           <button
+            type="button"
+            aria-pressed={statusFilter === 'all'}
             onClick={() => setStatusFilter('all')}
             className={`px-3 py-1.5 rounded-full text-sm font-medium transition-colors ${
               statusFilter === 'all'
@@ -537,6 +622,8 @@ export default function GenomeTab() {
           {STATUS_FILTERS.map(({ key, label, active, inactive }) => statusCounts[key] > 0 && (
             <button
               key={key}
+              type="button"
+              aria-pressed={statusFilter === key}
               onClick={() => setStatusFilter(statusFilter === key ? 'all' : key)}
               className={`px-3 py-1.5 rounded-full text-sm font-medium transition-colors ${
                 statusFilter === key ? active : inactive
@@ -611,6 +698,8 @@ export default function GenomeTab() {
           {scanning ? 'Scanning...' : 'Scan Known Markers'}
         </button>
         <button
+          ref={deleteTriggerRef}
+          type="button"
           onClick={() => setConfirmDelete(true)}
           className="flex items-center gap-2 px-3 py-2 bg-red-500/10 text-red-400 border border-red-500/20 rounded hover:bg-red-500/20 transition-colors text-sm"
         >
@@ -619,69 +708,20 @@ export default function GenomeTab() {
         </button>
       </div>
 
-      {/* Delete confirmation */}
       {confirmDelete && (
-        <div className="p-4 rounded bg-red-500/10 border border-red-500/30 space-y-3">
-          <p className="text-sm text-red-400 font-medium">
-            Are you sure? This will permanently delete your raw genome file and all saved markers.
-          </p>
-          <div className="flex gap-2">
-            <button
-              onClick={handleDeleteGenome}
-              disabled={deleting}
-              className="px-3 py-1.5 bg-red-500/20 text-red-400 border border-red-500/30 rounded text-sm hover:bg-red-500/30 disabled:opacity-50"
-            >
-              {deleting ? 'Deleting...' : 'Yes, delete everything'}
-            </button>
-            <button
-              onClick={() => setConfirmDelete(false)}
-              className="px-3 py-1.5 bg-port-card border border-port-border rounded text-sm text-gray-400 hover:text-white"
-            >
-              Cancel
-            </button>
-          </div>
-        </div>
+        <InlineConfirmRow
+          autoFocus
+          returnFocusRef={deleteTriggerRef}
+          question="Are you sure? This will permanently delete your raw genome file and all saved markers."
+          confirmText={deleting ? 'Deleting...' : 'Yes, delete everything'}
+          confirmDisabled={deleting}
+          onConfirm={handleDeleteGenome}
+          onCancel={() => setConfirmDelete(false)}
+        />
       )}
 
-      {/* Category quick-jump (mobile-friendly) */}
       {sortedCategories.length > 5 && (
-        <div className="relative" ref={jumpRef}>
-          <button
-            onClick={() => setJumpOpen(!jumpOpen)}
-            className="w-full flex items-center justify-between px-3 py-2 bg-port-card border border-port-border rounded text-sm text-gray-400 hover:text-white transition-colors"
-          >
-            <span>Jump to category ({sortedCategories.length})</span>
-            <span className="text-xs">{jumpOpen ? '\u25B2' : '\u25BC'}</span>
-          </button>
-          {jumpOpen && (
-            <div className="absolute top-full left-0 right-0 mt-1 z-20 bg-port-card border border-port-border rounded-lg shadow-xl max-h-64 overflow-y-auto">
-              {sortedCategories.map(cat => {
-                const meta = CATEGORY_META[cat] || { emoji: '\u{1F9EC}', label: cat };
-                const catMarkers = filteredGrouped[cat];
-                const concerns = catMarkers.filter(m => m.status === 'major_concern' || m.status === 'concern').length;
-                return (
-                  <button
-                    key={cat}
-                    onClick={() => {
-                      setJumpOpen(false);
-                      document.getElementById(`genome-cat-${cat}`)?.scrollIntoView({ behavior: 'smooth', block: 'start' });
-                    }}
-                    className="w-full flex items-center justify-between px-3 py-2 text-left hover:bg-port-border/30 transition-colors"
-                  >
-                    <span className="flex items-center gap-2 text-sm">
-                      <span>{meta.emoji}</span>
-                      <span className="text-gray-300">{meta.label}</span>
-                    </span>
-                    <span className="flex items-center gap-2 text-xs">
-                      <span className="text-gray-500">{catMarkers.length}</span>
-                      {concerns > 0 && <span className="text-yellow-400">{concerns} !</span>}
-                    </span>
-                  </button>
-                );
-              })}
-            </div>
-          )}
-        </div>
+        <GenomeCategoryJump categories={sortedCategories} markersByCategory={filteredGrouped} />
       )}
 
       {/* Curated Markers by category */}
@@ -780,7 +820,7 @@ export default function GenomeTab() {
 
         {/* Sync progress */}
         {clinvarProgress && (
-          <div className="flex items-center gap-2 p-3 rounded bg-port-accent-2/10 border border-port-accent-2/20 text-sm text-port-accent-2">
+          <div role="status" aria-live="polite" className="flex items-center gap-2 p-3 rounded bg-port-accent-2/10 border border-port-accent-2/20 text-sm text-port-accent-2">
             <BrailleSpinner />
             {clinvarProgress}
           </div>
@@ -818,10 +858,12 @@ export default function GenomeTab() {
 
             {/* Filters */}
             <div className="flex flex-wrap gap-2">
-              <div className="flex gap-1 text-xs">
+              <div className="flex gap-1 text-xs" role="group" aria-label="ClinVar severity">
                 {['all', 'pathogenic', 'risk_factor', 'drug_response', 'protective'].map(f => (
                   <button
                     key={f}
+                    type="button"
+                    aria-pressed={clinvarFilter === f}
                     onClick={() => setClinvarFilter(f)}
                     className={`px-2 py-1 rounded border transition-colors ${
                       clinvarFilter === f
@@ -853,13 +895,15 @@ export default function GenomeTab() {
                   .filter(f => clinvarFilter === 'all' || f.severity === clinvarFilter)
                   .filter(f => f.reviewStars >= clinvarStarFilter)
                   .slice(0, 200)
-                  .map((finding, i) => {
+                  .map(finding => {
                     const sev = SEVERITY_LABELS[finding.severity] || SEVERITY_LABELS.risk_factor;
-                    const isOpen = clinvarExpanded[`cv-${i}`];
+                    const isOpen = Boolean(clinvarExpanded[finding.rsid]);
                     return (
-                      <div key={`${finding.rsid}-${i}`} className="border-b border-port-border/50 last:border-b-0">
+                      <div key={finding.rsid} className="border-b border-port-border/50 last:border-b-0">
                         <button
-                          onClick={() => setClinvarExpanded(prev => ({ ...prev, [`cv-${i}`]: !prev[`cv-${i}`] }))}
+                          type="button"
+                          aria-expanded={isOpen}
+                          onClick={() => setClinvarExpanded(prev => ({ ...prev, [finding.rsid]: !prev[finding.rsid] }))}
                           className="w-full flex items-center justify-between p-2.5 text-left hover:bg-white/5 transition-colors text-sm"
                         >
                           <div className="flex items-center gap-2 flex-1 min-w-0">
@@ -870,8 +914,13 @@ export default function GenomeTab() {
                             </span>
                           </div>
                           <div className="flex items-center gap-2 shrink-0 ml-2">
-                            <span className="text-xs text-yellow-500" title={STAR_LABELS[finding.reviewStars] || ''}>
-                              {'★'.repeat(finding.reviewStars)}{'☆'.repeat(4 - finding.reviewStars)}
+                            <span
+                              role="img"
+                              aria-label={`${finding.reviewStars} of 4 stars: ${STAR_LABELS[finding.reviewStars]}`}
+                              className="text-xs text-yellow-500"
+                              title={STAR_LABELS[finding.reviewStars]}
+                            >
+                              <span aria-hidden="true">{'★'.repeat(finding.reviewStars)}{'☆'.repeat(4 - finding.reviewStars)}</span>
                             </span>
                           </div>
                         </button>
@@ -947,7 +996,7 @@ export default function GenomeTab() {
 
         {/* Search result */}
         {searchResult && (
-          <div className="p-4 rounded bg-port-card border border-port-border space-y-3">
+          <div role="status" aria-live="polite" className="p-4 rounded bg-port-card border border-port-border space-y-3">
             {searchResult.found ? (
               <>
                 <div className="flex items-center justify-between flex-wrap gap-2">
@@ -994,7 +1043,7 @@ export default function GenomeTab() {
 
       {/* Saving indicator */}
       {savingNotes && (
-        <div className="fixed bottom-4 right-4 px-3 py-2 bg-port-card border border-port-border rounded shadow-lg text-xs text-gray-400 flex items-center gap-2">
+        <div role="status" aria-live="polite" className="fixed bottom-4 right-4 px-3 py-2 bg-port-card border border-port-border rounded shadow-lg text-xs text-gray-400 flex items-center gap-2">
           <BrailleSpinner />
           Saving notes...
         </div>

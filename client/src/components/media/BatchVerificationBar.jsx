@@ -124,8 +124,7 @@ export default function BatchVerificationBar({
           <button
             type="button"
             onClick={onCancel}
-            disabled={isVerifying}
-            className="px-2.5 py-1.5 text-xs rounded border border-port-border text-gray-400 hover:text-white hover:bg-port-border/50 disabled:opacity-50"
+            className="min-h-[44px] pointer-fine:sm:min-h-0 px-2.5 py-1.5 text-xs rounded border border-port-border text-gray-400 hover:text-white hover:bg-port-border/50"
           >
             Cancel
           </button>

@@ -1,16 +1,14 @@
 /**
  * POST aggregate statistics.
  *
- * Reads raw sessions and the legacy-task helpers from the persistence service;
- * callers name THIS module for the derived aggregates rather than reaching for
- * a re-export off the persistence service (issue #5690).
+ * Reads session history and derives the same skill evidence as the progression ladders.
  */
+import { getPostSessions } from './postSessionHistory.js';
 import {
-  getPostSessions,
   deriveTaskAccuracy,
   deriveTaskCompletion,
   summarizeSkillEvidence,
-} from './meatspacePost.js';
+} from './postSkillEvidence.js';
 import { getAllTrainingEntries } from '../postTrainingLogStore.js';
 import { computePostStreaks, computeUnifiedStreak, recordDayKey, ymdShift } from '../../lib/postStreak.js';
 import { todayInTimezone } from '../../lib/timezone.js';

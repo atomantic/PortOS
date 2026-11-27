@@ -6,6 +6,8 @@ import { delimiter, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { dependencyHash, npmConfigHash, readDependencyHashes, writeDependencyHashes } from './lib/dependencyReceipts.js';
 import { dependencyWorkspaces, hasLinkedDependencies, inspectWorkspaceDependencies } from './lib/workspaceDependencies.js';
+import { PM2_BIN } from './lib/pm2Resolve.js';
+import { clearDependencyReconcilePending, pendingReconcilePath } from './lib/dependencyReconcile.js';
 import { prepareWindowsSafeSpawn, resolveWindowsExecutable } from '../server/lib/aiToolkit/internal/windowsSafeSpawn.js';
 
 const root = fileURLToPath(new URL('..', import.meta.url));
@@ -19,13 +21,14 @@ const productionApps = 'portos-server,portos-cos,portos-autofixer,portos-browser
 const dataDir = join(root, 'data');
 const updateLog = join(dataDir, 'update.log');
 const marker = join(dataDir, 'update-complete.json');
-const pendingReconcile = join(dataDir, 'dependency-reconcile-pending.json');
-const pm2Local = [process.execPath, join(root, 'node_modules', 'pm2', 'bin', 'pm2')];
+const pendingReconcile = pendingReconcilePath(dataDir);
+const pm2Local = [process.execPath, PM2_BIN];
 const pm2Start = ['start', 'ecosystem.config.cjs', '--only', productionApps];
 const signals = { SIGTERM: 143, SIGINT: 130, SIGHUP: 129 };
 let stopped = false;
 let signalCode = 0;
 let recovering = false;
+let restartBlockedByRebase = false;
 let logFd;
 let entered = false;
 
@@ -77,7 +80,7 @@ function pm2RecoveryCommand() {
   if (existsSync(pm2Local[1])) return pm2Local;
   if (executable('pm2')) return ['pm2'];
   let pin;
-  try { pin = JSON.parse(readFileSync(join(root, 'package.json'), 'utf8')).dependencies?.pm2; } catch { /* default pinless fallback */ }
+  try { pin = JSON.parse(readFileSync(join(root, 'server', 'package.json'), 'utf8')).dependencies?.pm2; } catch { /* default pinless fallback */ }
   return ['npx', '--yes', typeof pin === 'string' && pin ? `pm2@${pin}` : 'pm2'];
 }
 const pm2 = (...args) => run(pm2Local[0], [...pm2Local.slice(1), ...args]);
@@ -85,6 +88,10 @@ const pm2 = (...args) => run(pm2Local[0], [...pm2Local.slice(1), ...args]);
 async function recover(code) {
   if (!stopped) return;
   stopped = false;
+  if (restartBlockedByRebase) {
+    step('restart', 'error', 'Restore the checkout before restarting PortOS');
+    return;
+  }
   const [command, ...prefix] = pm2RecoveryCommand();
   log(`⚠️  Update is exiting (status ${code}) with PortOS's apps deleted — restarting them so the install isn't left headless.`);
   step('restart', 'running', "Update failed — restarting PortOS so it isn't left down...");
@@ -146,8 +153,25 @@ async function preflight(target) {
   } finally { rmSync(scratch, { recursive: true, force: true }); }
 }
 
+async function pullRebasePaths() {
+  const { code, stdout } = await capture('git', ['rev-parse', '--path-format=absolute',
+    '--git-path', 'REBASE_HEAD', '--git-path', 'rebase-merge', '--git-path', 'rebase-apply']);
+  if (code) {
+    step('git-pull', 'failed', 'Unable to locate Git rebase state');
+    fail(code);
+  }
+  const paths = stdout.split(/\r?\n/);
+  if (paths.some(path => existsSync(path))) {
+    restartBlockedByRebase = true;
+    step('git-pull', 'failed', 'An existing rebase or patch application must be resolved before updating');
+    fail();
+  }
+  return paths;
+}
+
 async function pull() {
   step('git-pull', 'running', 'Pulling latest changes...');
+  const rebasePaths = peerTarget ? [] : await pullRebasePaths();
   const origin = (await capture('git', ['remote', 'get-url', 'origin'])).stdout;
   if (origin) {
     const safe = `🌐 Pulling from origin: ${origin.replace(/:\/\/[^@/]+@/, '://***@')}`;
@@ -178,7 +202,28 @@ async function pull() {
   if (!peerTarget) await git('fetch');
   await preflight(peerTarget || (await capture('git', ['rev-parse', '-q', '--verify', '@{upstream}^{commit}'])).stdout);
   const previous = await head();
-  await required(peerTarget ? git('merge', '--ff-only', peerTarget) : git('pull', '--rebase'));
+  if (peerTarget) await required(git('merge', '--ff-only', peerTarget));
+  else {
+    // Inspect Git's result and finish any rollback before handling a signal.
+    const { code } = await run('git', ['pull', '--rebase'], { checkSignalAfter: false });
+    if (code) {
+      let message = 'Pull failed; see the update log';
+      if (rebasePaths.some(path => existsSync(path))) {
+        restartBlockedByRebase = true;
+        const abort = await run('git', ['rebase', '--abort'], { checkSignalAfter: false });
+        if (abort.code) {
+          log(`❌ git rebase --abort failed (status ${abort.code}); see the update log`);
+          message = 'Pull conflicted; rebase abort failed';
+        } else {
+          restartBlockedByRebase = false;
+          message = 'Pull conflicted; rebase aborted and checkout restored';
+        }
+      }
+      step('git-pull', 'failed', message);
+      fail(code);
+    }
+    checkSignal();
+  }
   step('git-pull', 'done', 'Latest changes pulled');
   return previous;
 }
@@ -233,9 +278,8 @@ async function install(previous) {
   let installed = 0;
   for (const workspace of workspaces) {
     const { dir: cwd, label } = workspace;
-    const key = label === 'root' ? '.' : label;
     const inputs = ['package.json', 'package-lock.json', '.npmrc']
-      .filter(file => changed.has(label === 'root' ? file : `${label}/${file}`));
+      .filter(file => changed.has(`${label}/${file}`));
     const hash = dependencyHash(cwd);
     const config = npmConfigHash(cwd);
     const recordedConfig = hashes.npmrc[label];
@@ -245,7 +289,7 @@ async function install(previous) {
     let reason;
     if (!known) reason = 'dependency baseline unknown';
     else if (inputs.length) reason = `${inputs.join(' and ')} changed`;
-    else if (forced.has(key)) reason = 'clean reinstall forced';
+    else if (forced.has(label)) reason = 'clean reinstall forced';
     else if (configChanged || (hashes[label] != null && hashes[label] !== hash)) reason = 'dependency receipt changed';
     else if (receiptMatches) {
       const { issues } = inspectWorkspaceDependencies(workspace);
@@ -279,7 +323,7 @@ async function install(previous) {
   }
   // Preserve pending repair evidence until the install receipts are in place.
   writeDependencyHashes(root);
-  rmSync(pendingReconcile, { force: true });
+  clearDependencyReconcilePending(dataDir);
   step('npm-install', 'done', installed ? `Dependencies installed in ${installed} of ${workspaces.length} workspaces` : 'Verified existing workspace dependencies');
 }
 

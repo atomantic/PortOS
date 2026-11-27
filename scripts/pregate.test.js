@@ -43,6 +43,7 @@ import { BROWSER_SUITES } from './lib/browserSuites.js';
 import { BROWSER_FIDELITY_FILES } from './lib/browserTestProfiles.js';
 
 const REPO_ROOT = join(dirname(fileURLToPath(import.meta.url)), '..');
+const TRACKED_FILES_FIXTURE = ['scripts/lib/trackedFiles.js', 'lib/trackedFiles.js', 'lib/gitWorktree.js'];
 
 const planWith = (overrides = {}) => ({
   full: false,
@@ -239,13 +240,16 @@ describe('pregate hidden-content invocation', () => {
     scratch = template.scratch;
     git('config', 'core.hooksPath', join(scratch, 'empty-hooks'));
     git('config', 'core.excludesFile', join(scratch, 'empty-excludes'));
+    // The missing-blob case deletes one loose object from the committed fixture.
+    git('config', 'maintenance.auto', 'false');
+    git('config', 'gc.auto', '0');
     // Copy the real builtin-only entrypoints so REPO_ROOT targets this fixture.
     // Docs-only changes select no test owners; full plans still have a native inventory.
     for (const path of [
       'lib/gitMergeTree.js', 'scripts/pregate.js', 'scripts/checkNodeVersion.js', 'scripts/scan-diff-hidden-content.js', 'scripts/lib/githubActionsApi.js',
-      'scripts/ci-test-plan.js', 'scripts/lib-catalog.js', 'scripts/ci-base-sha.js', 'server/lib/staticImportGraph.js',
-      'scripts/lib/directInvocation.js', 'scripts/lib/serverLintSurface.js', 'scripts/lib/importReach.js', 'scripts/lib/moduleGraph.js', 'scripts/lib/ciPlanRules.js', 'scripts/lib/ciPlanDependencies.js', 'scripts/lib/ciPlanOutput.js', 'scripts/lib/ciPlanInputs.js', 'scripts/lib/browserServedFiles.js', 'scripts/lib/workspaceTests.js', 'scripts/lib/browserFidelity.js', 'scripts/lib/browserTestProfiles.js', 'scripts/lib/githubOutput.js', 'scripts/lib/dbTestFiles.js', 'scripts/lib/guardScanners.js', 'scripts/lib/trackedFiles.js',
-      'scripts/lib/browserSuites.js', 'scripts/lib/sourceTokens.js', 'scripts/lib/workspaceDependencies.js', 'scripts/lib/pregateReport.js', 'scripts/lib/guardBudget.js', 'scripts/lib/actionlint.js', 'scripts/run-actionlint.js', 'scripts/lib/cosWorkerBudget.js', 'scripts/vitestCiPool.js',
+      'scripts/ci-test-plan.js', 'scripts/lib/moduleCatalog.js', 'scripts/ci-base-sha.js', 'server/lib/staticImportGraph.js',
+      'scripts/lib/directInvocation.js', 'scripts/lib/serverLintSurface.js', 'scripts/lib/importReach.js', 'scripts/lib/moduleGraph.js', 'scripts/lib/ciPlanRules.js', 'server/lib/apiRouteCallerAllowlist.js', 'scripts/lib/ciPlanDependencies.js', 'scripts/lib/ciPlanOutput.js', 'scripts/lib/ciPlanInputs.js', 'scripts/lib/browserServedFiles.js', 'scripts/lib/workspaceTests.js', 'scripts/lib/browserFidelity.js', 'scripts/lib/browserTestProfiles.js', 'scripts/lib/githubOutput.js', 'scripts/lib/dbTestFiles.js', 'scripts/lib/guardScanners.js', ...TRACKED_FILES_FIXTURE,
+      'scripts/lib/browserSuites.js', 'scripts/lib/sourceTokens.js', 'scripts/lib/workspaceDependencies.js', 'scripts/lib/pregateReport.js', 'scripts/lib/pregateGitState.js', 'scripts/lib/pregateProcessGroup.js', 'scripts/lib/pregateStages.js', 'scripts/lib/pregateFocusedPlan.js', 'scripts/lib/guardBudget.js', 'scripts/lib/actionlint.js', 'scripts/run-actionlint.js', 'scripts/lib/cosWorkerBudget.js', 'scripts/vitestCiPool.js',
       'scripts/migrations/shippedPromptHistory.js', 'server/lib/aiToolkit/internal/windowsSafeSpawn.js',
       'server/lib/diffHiddenContentScan.js', 'server/lib/modelAbuseGuard.js',
       'server/lib/textUtils.js',
@@ -372,7 +376,7 @@ describe('pregate hidden-content invocation', () => {
 
   it('passes the selected release base to the import guard while a main base still enforces growth', () => {
     copyFileSync(join(REPO_ROOT, 'scripts/lib/importGrowth.js'), join(root, 'scripts/lib/importGrowth.js'));
-    copyFileSync(join(REPO_ROOT, 'scripts/lib/guardCorpus.js'), join(root, 'scripts/lib/guardCorpus.js'));
+    copyFileSync(join(REPO_ROOT, 'lib/guardCorpus.js'), join(root, 'lib/guardCorpus.js'));
     // Exercise the real guard in a child stage against a real Git base. Each
     // existing suite gains three leaves, exceeding the unchanged 2,500 limit.
     write('server/lib/wide.js', 'export const wide = true;\n');
@@ -1132,7 +1136,12 @@ await linkWorktreeDependencies(process.argv[2], process.argv[3]);\n`);
     write(trackedPath, `${clean}ordinary addition\n`);
     git('add', '--', trackedPath);
     git('commit', '-qm', 'changed fixture');
+    expect(git('cat-file', '-t', blob)).toBe('blob');
     rmSync(join(root, '.git', 'objects', blob.slice(0, 2), blob.slice(2)));
+    const probe = execFileSync('git', ['cat-file', '--batch-check'], {
+      cwd: root, encoding: 'utf8', input: `${blob}\n`,
+    });
+    expect(probe.trim()).toBe(`${blob} missing`);
     const result = run('--skip-lint');
     expect(result.status).toBe(2);
     expect(result.stderr).toContain('Hidden-content scan failed:');
@@ -1398,9 +1407,9 @@ describe('the gate end to end', () => {
       git('config', 'user.email', 'contributor@example.com');
       for (const path of [
         'lib/gitMergeTree.js', 'scripts/pregate.js', 'scripts/checkNodeVersion.js', 'scripts/scan-diff-hidden-content.js',
-        'scripts/ci-test-plan.js', 'scripts/lib-catalog.js', 'scripts/ci-base-sha.js', 'server/lib/staticImportGraph.js',
-        'scripts/lib/directInvocation.js', 'scripts/lib/serverLintSurface.js', 'scripts/lib/importReach.js', 'scripts/lib/moduleGraph.js', 'scripts/lib/ciPlanRules.js', 'scripts/lib/ciPlanDependencies.js', 'scripts/lib/ciPlanOutput.js', 'scripts/lib/ciPlanInputs.js', 'scripts/lib/browserServedFiles.js', 'scripts/lib/workspaceTests.js', 'scripts/lib/browserFidelity.js', 'scripts/lib/browserTestProfiles.js', 'scripts/lib/githubOutput.js', 'scripts/lib/dbTestFiles.js', 'scripts/lib/guardScanners.js', 'scripts/lib/trackedFiles.js',
-        'scripts/lib/browserSuites.js', 'scripts/lib/sourceTokens.js', 'scripts/lib/workspaceDependencies.js', 'scripts/lib/pregateReport.js', 'scripts/lib/guardBudget.js', 'scripts/lib/actionlint.js', 'scripts/run-actionlint.js', 'scripts/lib/cosWorkerBudget.js', 'scripts/vitestCiPool.js',
+        'scripts/ci-test-plan.js', 'scripts/lib/moduleCatalog.js', 'scripts/ci-base-sha.js', 'server/lib/staticImportGraph.js',
+        'scripts/lib/directInvocation.js', 'scripts/lib/serverLintSurface.js', 'scripts/lib/importReach.js', 'scripts/lib/moduleGraph.js', 'scripts/lib/ciPlanRules.js', 'server/lib/apiRouteCallerAllowlist.js', 'scripts/lib/ciPlanDependencies.js', 'scripts/lib/ciPlanOutput.js', 'scripts/lib/ciPlanInputs.js', 'scripts/lib/browserServedFiles.js', 'scripts/lib/workspaceTests.js', 'scripts/lib/browserFidelity.js', 'scripts/lib/browserTestProfiles.js', 'scripts/lib/githubOutput.js', 'scripts/lib/dbTestFiles.js', 'scripts/lib/guardScanners.js', ...TRACKED_FILES_FIXTURE,
+        'scripts/lib/browserSuites.js', 'scripts/lib/sourceTokens.js', 'scripts/lib/workspaceDependencies.js', 'scripts/lib/pregateReport.js', 'scripts/lib/pregateGitState.js', 'scripts/lib/pregateProcessGroup.js', 'scripts/lib/pregateStages.js', 'scripts/lib/pregateFocusedPlan.js', 'scripts/lib/guardBudget.js', 'scripts/lib/actionlint.js', 'scripts/run-actionlint.js', 'scripts/lib/cosWorkerBudget.js', 'scripts/vitestCiPool.js',
         'scripts/migrations/shippedPromptHistory.js', 'server/lib/aiToolkit/internal/windowsSafeSpawn.js',
         'server/lib/diffHiddenContentScan.js', 'server/lib/modelAbuseGuard.js',
         'server/lib/textUtils.js', 'server/lib/workspaceTestCacheRoots.js',
@@ -1872,6 +1881,18 @@ describe('working tree snapshots', () => {
 });
 
 describe('focused local policy', () => {
+  it('adds focused tests to the supplied guard plan without changing its original scopes', async () => {
+    const guard = 'server/test/guards/existing.guard.test.js';
+    const edited = 'server/lib/edited.test.js';
+    const plan = planWith();
+    const guardPlan = downgradeFullPlan(plan, [guard]);
+
+    const local = await focusedLocalPlan(plan, [edited], [edited], () => null, { basePlan: { ...guardPlan } });
+
+    expect(local.server.files).toEqual([guard, edited]);
+    expect(guardPlan.server.files).toEqual([guard]);
+  });
+
   it('runs direct behavior owners and edited unit tests without transitive or resource suites', async () => {
     const tracked = ['server/lib/a.js', 'server/lib/a.test.js', 'server/lib/unrelated.test.js', 'server/lib/a.db.test.js', 'server/lib/a.browser.test.js', 'client/src/Card.jsx', 'client/src/Card.test.jsx', 'scripts/tool.test.js', 'server/services/htmlComposition/index.test.js'];
     const changed = ['server/lib/a.js', 'client/src/Card.jsx', 'scripts/tool.test.js', 'server/lib/a.db.test.js', 'server/lib/a.browser.test.js', 'docs/README.md', 'server/services/htmlComposition/index.test.js'];

@@ -244,6 +244,69 @@ describe.skipIf(!runDb)('Beeper participant link transactions (#19178)', () => {
   });
 });
 
+describe.skipIf(!runDb)('Beeper participant cache fills during explicit edits (#19236)', () => {
+  it.each([
+    ['single', 'unlink'], ['batch', 'unlink'],
+    ['single', 'transfer'], ['batch', 'transfer'],
+  ])('%s cache fill completes before a waiting %s clears the displaced cache', async (path, edit) => {
+    await makeAccount();
+    const sourceUserId = `race-${path}-${edit}`;
+    const original = { conversationId: await makeConversation(sourceUserId), sourceUserId };
+    const otherId = await makeConversation(`${sourceUserId}-sweep`);
+    const input = { sourceUserId, handle: `@example_${path}_${edit}`, observedVia: 'participant-list' };
+    const previous = await makePerson('Example Previous Owner');
+    const next = edit === 'transfer' ? await makePerson('Example Next Owner') : null;
+    await beeperTribe.upsertParticipant({ ...input, conversationId: original.conversationId });
+    await beeperTribe.linkParticipant({ ...original, personId: previous.id });
+
+    const sweep = async () => {
+      if (path === 'single') return beeperTribe.upsertParticipant({ ...input, conversationId: otherId });
+      const { participants } = await beeperTribe.upsertConversationParticipants(otherId, [input]);
+      return participants[0];
+    };
+    const beforeUpdate = Promise.withResolvers();
+    const resume = Promise.withResolvers();
+    const pgQuery = pg.Client.prototype.query;
+    const spy = vi.spyOn(pg.Client.prototype, 'query').mockImplementation(function pauseCacheFill(sql, params, ...rest) {
+      if (params?.[0] === otherId && sql.startsWith('UPDATE beeper_participants')) {
+        beforeUpdate.resolve(this.processID);
+        return resume.promise.then(() => pgQuery.call(this, sql, params, ...rest));
+      }
+      return pgQuery.call(this, sql, params, ...rest);
+    });
+    const filling = sweep();
+    let editing;
+    try {
+      const sweepPid = await Promise.race([beforeUpdate.promise, filling.then(() => { throw new Error('Sweep skipped cache fill'); })]);
+      editing = next ? beeperTribe.linkParticipant({ ...original, personId: next.id }) : beeperTribe.unlinkParticipant(original);
+      // Inspect the actual wait in PostgreSQL while the old owner is resolved
+      // and the cache UPDATE has yet to run. A row wait on the same participant
+      // would conceal the cross-conversation race.
+      const committed = editing.then(() => 'committed');
+      await expect.poll(async () => {
+        const lock = query(
+          `SELECT EXISTS(SELECT 1 FROM pg_locks WHERE locktype = 'advisory' AND NOT granted
+             AND $1 = ANY(pg_blocking_pids(pid))) AS blocked`, [sweepPid],
+        ).then(({ rows }) => rows[0].blocked ? 'blocked' : 'running');
+        return Promise.race([committed, lock]);
+      }).toBe('blocked');
+    } finally {
+      resume.resolve();
+      spy.mockRestore();
+      await Promise.allSettled([filling, editing]);
+    }
+
+    expect((await filling).tribePersonId).toBe(previous.id);
+    await editing;
+    expect(await tribeIdentities.listIdentitiesForPerson(previous.id)).toEqual([]);
+    expect((await beeperTribe.getParticipant(otherId, sourceUserId)).tribePersonId).toBeNull();
+    // With the edit committed first, both resolution and the next cache fill
+    // see the new owner (or the absence of a claim).
+    expect(await beeperTribe.resolveParticipantPerson({ conversationId: otherId, sourceUserId })).toBe(next?.id ?? null);
+    expect((await sweep()).tribePersonId).toBe(next?.id ?? null);
+  });
+});
+
 describe.skipIf(!runDb)('beeperTribe (#34)', () => {
   it('a counterparty with a phone links to an existing Tribe person without creating a duplicate', async () => {
     await makeAccount();
@@ -826,7 +889,7 @@ describe.skipIf(!runDb)('beeperTribe (#34)', () => {
     }
   });
 
-  it('batches conversation participants in <=4 queries while preserving handle-COALESCE, soft-delete, and precedence (#18162)', async () => {
+  it('batches conversation participants in four data queries and one locked transaction while preserving handle-COALESCE, soft-delete, and precedence (#18162)', async () => {
     await makeAccount();
     const conversationId = await makeConversation(`${nonce}-batched-chat`, { network: 'whatsapp' });
     const deletedPerson = await makePerson('Example Deleted Cached');
@@ -868,6 +931,7 @@ describe.skipIf(!runDb)('beeperTribe (#34)', () => {
         personIndex: rosterIndex,
       });
       expect(single.tribePersonId).toBe(handleOwner.id);
+      expect(sqlLog.slice(0, 2)).toEqual(['BEGIN', expect.stringContaining('pg_advisory_xact_lock_shared')]);
       expect(sqlLog.filter((s) => s.includes('FROM beeper_participants'))).toHaveLength(1);
       expect(sqlLog.filter((s) => s.includes('tribe_identities'))).toHaveLength(1);
 
@@ -892,7 +956,9 @@ describe.skipIf(!runDb)('beeperTribe (#34)', () => {
       );
 
       expect(participants).toHaveLength(19);
-      expect(sqlLog.length).toBeLessThanOrEqual(4);
+      expect(sqlLog).toHaveLength(7);
+      expect(sqlLog.slice(0, 2)).toEqual(['BEGIN', expect.stringContaining('pg_advisory_xact_lock_shared')]);
+      expect(sqlLog.at(-1)).toBe('COMMIT');
       const byId = new Map(participants.map((p) => [p.sourceUserId, p]));
       expect(byId.get('batch-soft-del').handle).toBe('+1 (555) 010-0088');
       expect(byId.get('batch-soft-del').tribePersonId).toBe(phoneOwner.id);
@@ -902,14 +968,19 @@ describe.skipIf(!runDb)('beeperTribe (#34)', () => {
       expect(byId.get('batch-beeper-only').tribePersonId).toBe(beeperUserOwner.id);
       expect(resolvedPersonIds.get('batch-unlinked-0')).toBeNull();
 
-      // logSenderTouchpoints reuses resolvedPersonIds with zero participant/identity reads.
+      // Two reads cover every sender in the transaction that inserts the touchpoint.
       sqlLog.length = 0;
       const tp = await beeperTribe.logSenderTouchpoints([
         { conversationId, senderId: 'batch-both', sentAt: '2026-10-04T12:00:00.000Z', network: 'whatsapp' },
         { conversationId, senderId: 'batch-unlinked-0', sentAt: '2026-10-04T12:05:00.000Z', network: 'whatsapp' },
-      ], { personIndex: rosterIndex, resolvedPersonIds });
+      ], { personIndex: rosterIndex });
       expect(tp).toEqual({ matched: 1, created: 1 });
-      expect(sqlLog.some((s) => s.includes('beeper_participants') || s.includes('tribe_identities'))).toBe(false);
+      expect(sqlLog.slice(0, 4)).toEqual([
+        'BEGIN', expect.stringContaining('pg_advisory_xact_lock_shared'),
+        expect.stringContaining('p.source_user_id = ANY'), expect.stringContaining('JOIN tribe_identities'),
+      ]);
+      expect(sqlLog.filter((s) => s.includes('beeper_participants') || s.includes('tribe_identities'))).toHaveLength(2);
+      expect(sqlLog.at(-1)).toBe('COMMIT');
     } finally {
       spy.mockRestore();
     }

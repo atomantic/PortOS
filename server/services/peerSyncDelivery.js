@@ -2,6 +2,8 @@
 import { PEER_SYNC_EVENT_VERSION } from '../lib/peerSyncEventSchema.js';
 import { PEER_INSTANCE_HEADER } from '../lib/peerHttpClient.js';
 import { UNKNOWN_INSTANCE_ID } from './instanceIdentity.js';
+import { peerSyncBus } from './peerSyncEventBus.js';
+import { emitToOperatorsOn, getIo } from './socketIo.js';
 
 export const PEER_SYNC_ROOM = 'peer-sync';
 
@@ -103,4 +105,19 @@ async function deliverNow(io, event) {
     console.error(`❌ Peer sync event delivery failed: ${err.message}`);
     return 0;
   }
+}
+
+// Sync frames go only to the peer-sync room (filtered per peer + category);
+// operators outside that room receive the UI invalidations.
+export function setupPeerSyncEventForwarding() {
+  peerSyncBus.on('event', (event) => { void deliverPeerSyncEvent(getIo(), event); });
+  peerSyncBus.on('media-history-changed', (payload) => {
+    emitToOperatorsOn(getIo()?.except(PEER_SYNC_ROOM), 'media:history:changed', payload);
+  });
+  peerSyncBus.on('collection-primary-changed', (payload) => {
+    emitToOperatorsOn(getIo()?.except(PEER_SYNC_ROOM), 'media:collection-primary:changed', payload);
+  });
+  peerSyncBus.on('media-holders-changed', () => {
+    emitToOperatorsOn(getIo()?.except(PEER_SYNC_ROOM), 'media:holders:changed', {});
+  });
 }

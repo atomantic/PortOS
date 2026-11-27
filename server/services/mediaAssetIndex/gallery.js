@@ -1,7 +1,7 @@
 import { readdir, stat } from 'node:fs/promises';
 import { join } from 'node:path';
 import { PATHS } from '../../lib/paths.js';
-import { withMediaFileSizes } from '../../lib/mediaFileInfo.js';
+import { withMediaFileSize, withMediaFileSizes } from '../../lib/mediaFileInfo.js';
 import { mapWithConcurrency } from '../../lib/mapWithConcurrency.js';
 import { isFileBackend } from '../../lib/pgFileFacade.js';
 import { listAssets, countAssets, galleryFacets, listMixedGalleryPage, collectionCovers, visibleImageCollections, listGalleryImageRefs } from './db.js';
@@ -85,12 +85,23 @@ export async function listUnsortedGalleryFiles(diskReader) {
   return [...entries.values()];
 }
 
+// Resolve each file once, even when several history entries refer to the same
+// bytes. Missing/remote-only files cannot satisfy a local size threshold.
+async function videosOverSize(videos, threshold) {
+  const names = [...new Set(videos.map(video => video.filename))];
+  const measured = await mapWithConcurrency(names, 8, (filename) => withMediaFileSize('video', { filename }));
+  const sizes = new Map(measured.filter(row => row.fileSizeBytes > threshold).map(row => [row.filename, row.fileSizeBytes]));
+  return videos.filter(video => sizes.has(video.filename)).map(video => ({ ...video, fileSizeBytes: sizes.get(video.filename) }));
+}
+
 /** Bounded reads; sidecars remain the reconcile authority and test escape hatch. */
 export async function listGalleryPage({
   limit = 60, offset = 0, q = '', hidden, filename, starred = false, rating, summary = false, compact = false, localOnly = false,
-  kind = 'image', media = false, cover = false, videoSnapshot, collectionSnapshot, collectionId, universeId, entryCategory, entryKind, mediaKeys,
+  kind = 'image', media = false, cover = false, videoSnapshot, collectionSnapshot, collectionId, universeId, entryCategory, entryKind, mediaKeys, videoSizeOverBytes,
 } = {}, diskReader) {
-  const mixed = media || kind !== 'image';
+  const sizeFiltered = videoSizeOverBytes !== undefined;
+  const viewKind = sizeFiltered ? 'video' : kind;
+  const mixed = media || viewKind !== 'image';
   const videoReader = mixed && videoSnapshot == null ? await import('../videoGen/history.js') : null;
   // The index reader searches the cached compact snapshot through
   // videoSearchText, so a search never re-reads or binds full video records;
@@ -100,20 +111,30 @@ export async function listGalleryPage({
     ? videoReader.loadCompactHistory() : videoReader.loadHistory()) : undefined;
   // A copied file is local even if its metadata or hosted entry names a peer.
   // Snapshot filenames once before paging so counts use the same inventory.
-  const [localImages, localVideos] = localOnly
+  const [localImages, localVideos] = localOnly && !sizeFiltered
     ? await Promise.all([localFilenames(PATHS.images), mixed ? localFilenames(PATHS.videos) : undefined])
     : [];
   if (localVideos) videos = videos.filter(video => localVideos.has(video.filename));
+  let searchTextOf = videoReader?.videoSearchText;
+  if (sizeFiltered) {
+    // Compact history's full search text is cached by row identity; measured
+    // copies must still search the original (including text beyond the preview).
+    if (q.trim() && searchTextOf) {
+      const originals = new Map(videos.map(video => [video.id, video]));
+      searchTextOf = video => videoReader.videoSearchText(originals.get(video.id));
+    }
+    videos = await videosOverSize(videos, videoSizeOverBytes);
+  }
   const scope = await resolveScope({ collectionId, starred, rating, mediaKeys, collectionSnapshot });
-  const filters = { kind: kind === 'all' ? undefined : kind, q, hidden, filename,
+  const filters = { kind: viewKind === 'all' ? undefined : viewKind, q, hidden, filename,
     universeId, entryCategory, entryKind, mediaKeys: scope.mediaKeys, excludeKeys: scope.excludeKeys, videos,
-    searchTextOf: videoReader?.videoSearchText, localImages: localImages && [...localImages] };
+    searchTextOf, localImages: sizeFiltered ? [] : localImages && [...localImages] };
   let items;
   let total;
   let hiddenTotal;
   let counts;
   if (isFileBackend()) {
-    const images = kind === 'video' && !summary ? [] : await readImages(diskReader);
+    const images = sizeFiltered || (viewKind === 'video' && !summary) ? [] : await readImages(diskReader);
     const tokens = q.trim().toLowerCase().split(/\s+/).filter(Boolean);
     const candidates = [
       ...images.filter(data => !localImages || localImages.has(data.filename)).map(data => ({ kind: 'image', data })),
@@ -166,7 +187,7 @@ export async function listGalleryPage({
   items = items.map(item => mixed
     ? item.kind === 'image' ? { ...item, data: projectImageInputProvenance(item.data) } : item
     : projectImageInputProvenance(item));
-  items = await withMediaFileSizes(items, mixed ? undefined : kind);
+  if (!sizeFiltered) items = await withMediaFileSizes(items, mixed ? undefined : viewKind);
   return { items, total, limit, offset, ...(summary ? { hiddenTotal, ...(counts ? { counts } : {}) } : {}) };
 }
 

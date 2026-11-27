@@ -89,6 +89,26 @@ describe('RelaunchAgentModal', () => {
     expect(onClose).toHaveBeenCalled();
   });
 
+  it('does not submit stale effort after switching to a model with no effort tiers', async () => {
+    const user = userEvent.setup();
+    const provider = {
+      id: 'antigravity-cli', name: 'Antigravity', command: 'agy', enabled: true,
+      models: ['gemini-3.6-flash-low', 'gemini-3.6-flash-medium', 'gemini-3.6-flash-high', 'claude-sonnet-4-6'],
+    };
+    renderModal({
+      providers: [provider],
+      agent: { ...STALLED_AGENT, metadata: { ...STALLED_AGENT.metadata, provider: provider.id, model: 'gemini-3.6-flash', effort: 'high' } },
+    });
+
+    await user.selectOptions(screen.getByRole('combobox', { name: 'Model' }), 'claude-sonnet-4-6');
+    await user.click(screen.getByRole('button', { name: 'Relaunch Agent' }));
+
+    await waitFor(() => expect(relaunchCosAgent).toHaveBeenCalled());
+    const [, overrides] = relaunchCosAgent.mock.calls[0];
+    expect(overrides.model).toBe('claude-sonnet-4-6');
+    expect(overrides.effort).toBeUndefined();
+  });
+
   // `already-active` and `superseded` deliberately queue NOTHING server-side, so
   // a relaunch must not claim it restarted the work.
   it.each([

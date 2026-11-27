@@ -1,12 +1,13 @@
 const batchApi = vi.hoisted(() => ({ importGalleryFile: vi.fn(), assignImportedMedia: vi.fn() }));
 vi.mock('../services/apiMedia', () => batchApi);
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { act, fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { MemoryRouter, Route, Routes, useNavigate } from 'react-router';
 
 // ── Mocks must be declared before any imports that use them ──────────────────
 
+const mockVerifyImageNow = vi.fn();
 const mockPullMissingMetadata = vi.fn();
 const mockListImageGallery = vi.fn();
 const mockListVideoHistory = vi.fn();
@@ -55,6 +56,10 @@ vi.mock('../services/apiImageVideo', () => ({
 }));
 
 vi.mock('../components/ui/Toast');
+
+vi.mock('../services/apiImageVerifier', () => ({
+  verifyImageNow: (...args) => mockVerifyImageNow(...args),
+}));
 
 const mockUpdateAnnotation = vi.fn();
 
@@ -479,12 +484,65 @@ describe('MediaCollectionDetail — bulkMoveOrCopy move/remove failures', () => 
   });
 
   async function selectAllAndMove(user) {
-    await waitFor(() => screen.getByRole('button', { name: /^select$/i }));
-    await user.click(screen.getByRole('button', { name: /^select$/i }));
-    await user.click(screen.getByRole('button', { name: /select all/i }));
+    await selectAll(user);
     await user.click(screen.getByRole('button', { name: /move…/i }));
     await user.click(screen.getByRole('button', { name: /pick target/i }));
   }
+
+  async function selectAll(user) {
+    await user.click(await screen.findByRole('button', { name: /^select$/i }));
+    await user.click(screen.getByRole('button', { name: /select all/i }));
+  }
+
+  it('exposes the editable name as a level-one heading', async () => {
+    const user = userEvent.setup();
+    renderReal();
+    const heading = await screen.findByRole('heading', { level: 1, name: 'My Collection' });
+    await user.click(within(heading).getByRole('button', { name: 'My Collection' }));
+    expect(screen.getByRole('textbox', { name: 'Collection name' })).toBeInTheDocument();
+  });
+
+  it('requires confirmation for the current selection before removing collection members', async () => {
+    const user = userEvent.setup();
+    renderReal();
+    await selectAll(user);
+    const removeButton = () => screen.getByRole('button', { name: 'Remove' });
+    await user.click(removeButton());
+    expect(screen.getByRole('group', { name: 'Remove 3 selected?' })).toBeInTheDocument();
+    expect(mockRemoveMediaCollectionItem).not.toHaveBeenCalled();
+
+    await user.click(screen.getByRole('button', { name: 'Cancel' }));
+    expect(mockRemoveMediaCollectionItem).not.toHaveBeenCalled();
+    await user.click(removeButton());
+    await user.click(screen.getByRole('button', { name: 'Clear' }));
+    expect(screen.queryByRole('group', { name: 'Remove 3 selected?' })).toBeNull();
+    await user.click(screen.getByRole('button', { name: /select all/i }));
+    expect(mockRemoveMediaCollectionItem).not.toHaveBeenCalled();
+    await user.click(removeButton());
+    await user.click(removeButton());
+
+    await waitFor(() => expect(mockRemoveMediaCollectionItem).toHaveBeenCalledTimes(3));
+    expect(toast.success).toHaveBeenCalledWith('Removed 3 items from "My Collection"');
+    expect(screen.getByRole('region', { name: 'Media collection' })).toHaveFocus();
+  });
+
+  it('reports failed image verification only in the batch summary', async () => {
+    mockVerifyImageNow.mockResolvedValueOnce({ verdict: 'pass' }).mockRejectedValueOnce(new Error('Verification failed'));
+    const user = userEvent.setup();
+    renderReal();
+    await selectAll(user);
+    await user.click(screen.getByRole('button', { name: 'Verify' }));
+
+    await waitFor(() => expect(toast.warning).toHaveBeenCalledWith(
+      'Batch verification: 1 passed, 0 defect(s) flagged, 1 could not be verified.',
+    ));
+    expect(toast.warning).toHaveBeenCalledOnce();
+    expect(toast.error).not.toHaveBeenCalled();
+    expect(mockVerifyImageNow).toHaveBeenCalledTimes(2);
+    for (const [, options] of mockVerifyImageNow.mock.calls) {
+      expect(options).toEqual({ silent: true });
+    }
+  });
 
   it('toasts a plain success and exits select mode when every removal succeeds', async () => {
     const user = userEvent.setup();
@@ -553,6 +611,8 @@ describe('MediaCollectionDetail — bulkMoveOrCopy move/remove failures', () => 
     await user.click(screen.getByRole('button', { name: /pick target/i }));
     await waitFor(() => expect(screen.queryByText('paged-61.png')).toBeNull());
     await user.click(screen.getByRole('button', { name: /^remove$/i }));
+    const confirmation = screen.getByRole('group', { name: 'Remove 1 selected?' });
+    await user.click(within(confirmation).getByRole('button', { name: 'Remove' }));
     await waitFor(() => expect(mockRemoveMediaCollectionItem).toHaveBeenCalledTimes(3));
     expect(mockRemoveMediaCollectionItem.mock.calls[2][1]).toBe('image:paged-61.png');
   });

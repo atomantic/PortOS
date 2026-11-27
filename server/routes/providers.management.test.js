@@ -1,3 +1,4 @@
+import { recordingOperatorIo } from '../test/recordingOperatorIo.js';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
@@ -49,7 +50,7 @@ const providersFixture = () => ({
 });
 
 describe('GET /api/providers', () => {
-  it('leaves GET /api/providers byte-compatible for existing clients', async () => {
+  it('keeps the provider-list envelope, ordering and sanitization', async () => {
     const res = await request(appWith({ getAllProviders: vi.fn().mockResolvedValue(providersFixture()) }))
       .get('/api/providers');
 
@@ -60,6 +61,33 @@ describe('GET /api/providers', () => {
     expect(res.body.providers[0].hasApiKey).toBe(false);
     expect(res.body.providers[0].executionModes).toBeDefined();
   });
+
+  it('projects the host context budget and per-model overrides for policy previews', async () => {
+    vi.stubEnv('OLLAMA_URL', REMOTE_API.endpoint);
+    vi.stubEnv('OLLAMA_CONTEXT_LENGTH', '32768');
+    const local = {
+      id: 'ollama', type: 'api', endpoint: 'http://127.0.0.1:11434/v1',
+      enabled: true, numCtx: 0, modelNumCtx: { wide: 65_536 },
+      modelContextWindows: { wide: 49_152 }, defaultModel: 'small',
+      apiKey: 'example-local-key',
+    };
+    try {
+      const getAllProviders = vi.fn().mockResolvedValue({ providers: [local, REMOTE_API, CLAUDE_OLLAMA] });
+      const res = await request(appWith({ getAllProviders })).get('/api/providers');
+      expect(res.status).toBe(200);
+      const [projected, remote, cli] = res.body.providers;
+      expect(projected.untrustedContentWindows).toEqual({
+        defaultWindow: 4_096, byModel: { wide: 49_152 },
+      });
+      expect(projected).toMatchObject({ hasApiKey: true });
+      expect(projected).not.toHaveProperty('apiKey');
+      expect(remote.untrustedContentWindows).toEqual({ defaultWindow: 32_768, byModel: {} });
+      expect(cli).not.toHaveProperty('untrustedContentWindows');
+    } finally {
+      vi.unstubAllEnvs();
+    }
+  });
+
 });
 
 describe('GET /api/providers local catalog sync', () => {
@@ -182,7 +210,7 @@ describe('provider configuration invalidation', () => {
       getProviderById: vi.fn().mockResolvedValue(CLAUDE_OLLAMA), updateProvider: vi.fn().mockResolvedValue({ ...CLAUDE_OLLAMA, enabled: false }) });
     const updates = vi.spyOn(runtimeUpdateEvents, 'emit');
     const emit = vi.fn();
-    app.set('io', { emit });
+    app.set('io', recordingOperatorIo(emit));
     expect((await request(app).get('/api/providers')).status).toBe(200);
     expect(emit).not.toHaveBeenCalledWith('providers:changed');
     expect(updates).not.toHaveBeenCalled();

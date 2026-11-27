@@ -1,4 +1,4 @@
-import { useMemo, useState } from 'react';
+import { useLayoutEffect, useMemo, useRef, useState } from 'react';
 
 import { RINGS, TRIBE_RINGS, ENERGY, STATUS_HEX, contactStatus, energyFor, initialsFor } from '../../lib/tribe.js';
 import { clickableProps } from '../../lib/a11yKeyboard';
@@ -100,12 +100,54 @@ function externalLayout(total) {
   return { nodes, r };
 }
 
+function ContactTooltip({ node }) {
+  const tooltipRef = useRef(null);
+  const { x, y, contact } = node;
+  const status = contactStatus(contact);
+
+  useLayoutEffect(() => {
+    const tooltip = tooltipRef.current;
+    const canvas = tooltip.parentElement;
+
+    function position() {
+      const { clientWidth: width, clientHeight: height } = canvas;
+      const { offsetWidth, offsetHeight } = tooltip;
+      const anchorX = x / VIEW * width;
+      const anchorY = y / VIEW * height;
+      const gap = 14;
+      const above = anchorY - gap - offsetHeight;
+      const top = above < 0 ? anchorY + gap : above;
+      tooltip.style.left = `${clamp(anchorX - offsetWidth / 2, 0, Math.max(0, width - offsetWidth))}px`;
+      tooltip.style.top = `${clamp(top, 0, Math.max(0, height - offsetHeight))}px`;
+    }
+
+    position();
+    if (typeof ResizeObserver === 'undefined') return undefined;
+    const observer = new ResizeObserver(position);
+    observer.observe(canvas);
+    observer.observe(tooltip);
+    return () => observer.disconnect();
+  }, [x, y]);
+
+  return (
+    <div
+      ref={tooltipRef}
+      className="pointer-events-none absolute z-10 w-max max-w-[min(220px,100%)] rounded border border-port-border bg-port-bg/95 px-3 py-2 text-xs wrap-anywhere shadow-lg"
+    >
+      <p className="font-semibold text-port-text">{contact.name || 'Unnamed person'}</p>
+      {contact.relationship && <p className="mt-0.5 text-port-text-muted">{contact.relationship}</p>}
+      <p className={`mt-1 ${status.tone}`}>{status.label}</p>
+    </div>
+  );
+}
+
 export default function TribeCircleMap({ contacts, selectedId, onSelect, onLogTouch }) {
   // `hovered` drives the transient tooltip/enlarge and clears on mouse-leave.
   // `activeId` is sticky — it survives mouse-leave so the aside "Log touchpoint"
   // button stays mounted while the pointer travels from the node to the button
   // (otherwise leaving the node would unmount the button before the click lands).
   const [hovered, setHovered] = useState(null);
+  const [focusedId, setFocusedId] = useState(null);
   const [activeId, setActiveId] = useState(null);
 
   // Split contacts: Dunbar rings get banded placement; external people get the
@@ -134,165 +176,160 @@ export default function TribeCircleMap({ contacts, selectedId, onSelect, onLogTo
 
   // External glyphs only carry initials when the nodes are large enough to read.
   const showExternalText = placed.externalR >= 8;
-  const hoveredNode = hovered ? placed.nodes.find((n) => n.contact.id === hovered) : null;
+  const tooltipNode = placed.nodes.find((n) => n.contact.id === (hovered ?? focusedId));
   // The sticky-active node drives the persistent "Log touchpoint" action; falls
   // back to null once its contact leaves the list (e.g. after a ring change).
   const activeNode = activeId ? placed.nodes.find((n) => n.contact.id === activeId) : null;
 
   return (
     <div className="grid gap-4 lg:grid-cols-[minmax(0,1fr)_minmax(220px,300px)]">
-      <div className="relative min-w-0 rounded border border-port-border bg-port-card p-2">
-        <svg
-          viewBox={`0 0 ${VIEW} ${VIEW}`}
-          className="h-auto w-full select-none"
-          role="img"
-          aria-label="Concentric map of tribe relationships by ring"
-        >
-          {/* Subtle tinted band fills in each Dunbar ring's theme color, behind the
-              dashed lines and nodes. Drawn as a thick stroke at the band's mid
-              radius = a clean annulus (no overlap, so z-order among them is moot). */}
-          {DUNBAR.map((ring, i) => {
-            const outerEdge = RING_RADII[i];
-            const innerEdge = i === 0 ? 0 : RING_RADII[i - 1];
-            return (
-              <circle
-                key={`band-${ring.id}`}
-                cx={CENTER}
-                cy={CENTER}
-                r={(outerEdge + innerEdge) / 2}
-                fill="none"
-                stroke={ring.hex}
-                strokeOpacity="0.06"
-                strokeWidth={outerEdge - innerEdge}
-              />
-            );
-          })}
-
-          {/* Ring boundary lines + labels, outermost first so inner rings paint on top.
-              The village outer edge is the tribe perimeter (external people live beyond
-              it), so it's drawn as a solid, brighter line instead of a faint dash. */}
-          {DUNBAR.map((_, i) => DUNBAR.length - 1 - i).map((i) => {
-            const ring = DUNBAR[i];
-            const isTribeEdge = i === TRIBE_EDGE_INDEX;
-            return (
-              <g key={ring.id}>
-                <circle
-                  cx={CENTER}
-                  cy={CENTER}
-                  r={RING_RADII[i]}
-                  fill="none"
-                  stroke={ring.hex}
-                  strokeOpacity={isTribeEdge ? 0.5 : 0.28}
-                  strokeWidth={isTribeEdge ? 2 : 1.5}
-                  strokeDasharray={isTribeEdge ? undefined : '2 6'}
-                />
-                <text
-                  x={CENTER}
-                  y={CENTER - RING_RADII[i] - 6}
-                  textAnchor="middle"
-                  fill={ring.hex}
-                  fillOpacity="0.85"
-                  fontSize="13"
-                  fontWeight="600"
-                  className="uppercase tracking-wider"
-                  // Halo (card-bg stroke painted under the fill) keeps the label
-                  // legible over any node that lands near it on a dense ring.
-                  strokeWidth="3"
-                  style={strokeStyle(HALO, { paintOrder: 'stroke' })}
-                >
-                  {ring.label}
-                </text>
-              </g>
-            );
-          })}
-
-          {/* External zone label — the whole open region outside the perimeter. */}
-          <text
-            x={CENTER}
-            y={EDGE_PAD + 14}
-            textAnchor="middle"
-            fillOpacity="0.8"
-            fontSize="13"
-            fontWeight="600"
-            className="uppercase tracking-wider"
-            strokeWidth="3"
-            style={{ fill: MUTED_INK, stroke: HALO, paintOrder: 'stroke' }}
+      <div className="min-w-0 rounded border border-port-border bg-port-card p-2">
+        <div className="relative">
+          <svg
+            viewBox={`0 0 ${VIEW} ${VIEW}`}
+            className="h-auto w-full select-none"
+            role="group"
+            aria-label="Concentric map of tribe relationships by ring"
           >
-            External
-          </text>
+            {/* biome-ignore lint/a11y/noAriaHiddenOnFocusable: The SVG backdrop has no focusable elements. */}
+            <g aria-hidden="true" focusable="false">
+              {/* Subtle tinted band fills in each Dunbar ring's theme color, behind the
+                  dashed lines and nodes. Drawn as a thick stroke at the band's mid
+                  radius = a clean annulus (no overlap, so z-order among them is moot). */}
+              {DUNBAR.map((ring, i) => {
+                const outerEdge = RING_RADII[i];
+                const innerEdge = i === 0 ? 0 : RING_RADII[i - 1];
+                return (
+                  <circle
+                    key={`band-${ring.id}`}
+                    cx={CENTER}
+                    cy={CENTER}
+                    r={(outerEdge + innerEdge) / 2}
+                    fill="none"
+                    stroke={ring.hex}
+                    strokeOpacity="0.06"
+                    strokeWidth={outerEdge - innerEdge}
+                  />
+                );
+              })}
 
-          {/* Center "Me" hub. */}
-          <circle cx={CENTER} cy={CENTER} r={HUB_R} fillOpacity="0.15" strokeOpacity="0.6" style={{ fill: ACCENT, stroke: ACCENT }} />
-          <text x={CENTER} y={CENTER + 5} textAnchor="middle" fontSize="15" fontWeight="700" style={fillStyle(ACCENT)}>Me</text>
+              {/* Ring boundary lines + labels, outermost first so inner rings paint on top.
+                  The village outer edge is the tribe perimeter (external people live beyond
+                  it), so it's drawn as a solid, brighter line instead of a faint dash. */}
+              {DUNBAR.map((_, i) => DUNBAR.length - 1 - i).map((i) => {
+                const ring = DUNBAR[i];
+                const isTribeEdge = i === TRIBE_EDGE_INDEX;
+                return (
+                  <g key={ring.id}>
+                    <circle
+                      cx={CENTER}
+                      cy={CENTER}
+                      r={RING_RADII[i]}
+                      fill="none"
+                      stroke={ring.hex}
+                      strokeOpacity={isTribeEdge ? 0.5 : 0.28}
+                      strokeWidth={isTribeEdge ? 2 : 1.5}
+                      strokeDasharray={isTribeEdge ? undefined : '2 6'}
+                    />
+                    <text
+                      x={CENTER}
+                      y={CENTER - RING_RADII[i] - 6}
+                      textAnchor="middle"
+                      fill={ring.hex}
+                      fillOpacity="0.85"
+                      fontSize="13"
+                      fontWeight="600"
+                      className="uppercase tracking-wider"
+                      // Halo (card-bg stroke painted under the fill) keeps the label
+                      // legible over any node that lands near it on a dense ring.
+                      strokeWidth="3"
+                      style={strokeStyle(HALO, { paintOrder: 'stroke' })}
+                    >
+                      {ring.label}
+                    </text>
+                  </g>
+                );
+              })}
 
-          {/* People nodes — Dunbar rings (banded) and external (open outer region). */}
-          {placed.nodes.map(({ contact, ringIdx, isExternal, r: baseR, x, y }) => {
-            const status = contactStatus(contact);
-            const energy = energyFor(contact.energy);
-            const isSelected = selectedId === contact.id;
-            const isHovered = hovered === contact.id;
-            const r = baseR + (isSelected || isHovered ? 3 : 0);
-            const ringLabel = isExternal ? 'External' : DUNBAR[ringIdx].label;
-            const showText = isExternal ? showExternalText : true;
-            return (
-              <g
-                key={contact.id}
-                transform={`translate(${x} ${y})`}
-                className="cursor-pointer"
-                onClick={() => onSelect?.(contact)}
-                onMouseEnter={() => { setHovered(contact.id); setActiveId(contact.id); }}
-                onMouseLeave={() => setHovered((cur) => (cur === contact.id ? null : cur))}
-                onFocus={() => { setHovered(contact.id); setActiveId(contact.id); }}
-                onBlur={() => setHovered((cur) => (cur === contact.id ? null : cur))}
-                {...clickableProps(() => onSelect?.(contact))}
-                aria-label={`${contact.name || 'Unnamed'} — ${ringLabel}, ${status.label}`}
+              {/* External zone label — the whole open region outside the perimeter. */}
+              <text
+                x={CENTER}
+                y={EDGE_PAD + 14}
+                textAnchor="middle"
+                fillOpacity="0.8"
+                fontSize="13"
+                fontWeight="600"
+                className="uppercase tracking-wider"
+                strokeWidth="3"
+                style={{ fill: MUTED_INK, stroke: HALO, paintOrder: 'stroke' }}
               >
-                {isSelected && (
-                  <circle r={r + 5} fill="none" stroke="#3b82f6" strokeWidth="2" strokeOpacity="0.9" />
-                )}
-                <circle
-                  r={r}
-                  fill={energy.hex}
-                  fillOpacity="0.22"
-                  stroke={STATUS_HEX[status.state] || STATUS_HEX.missing}
-                  strokeWidth={status.state === 'overdue' || status.state === 'missing' ? 2.5 : 2}
-                />
-                {showText && (
-                  <text
-                    textAnchor="middle"
-                    dy="0.35em"
-                    style={fillStyle(NODE_INK)}
-                    fontSize={isExternal ? 8 : (ringIdx < 2 ? 11 : 9)}
-                    fontWeight="600"
-                    pointerEvents="none"
-                  >
-                    {initialsFor(contact.name)}
-                  </text>
-                )}
-              </g>
-            );
-          })}
-        </svg>
+                External
+              </text>
 
-        {/* Hover tooltip — absolutely positioned card driven by the hovered node. */}
-        {hoveredNode && (
-          <div
-            className="pointer-events-none absolute z-10 max-w-[220px] rounded border border-port-border bg-port-bg/95 px-3 py-2 text-xs shadow-lg"
-            style={{
-              left: `${(hoveredNode.x / VIEW) * 100}%`,
-              top: `${(hoveredNode.y / VIEW) * 100}%`,
-              transform: 'translate(-50%, calc(-100% - 14px))',
-            }}
-          >
-            <p className="font-semibold text-port-text">{hoveredNode.contact.name || 'Unnamed person'}</p>
-            {hoveredNode.contact.relationship && (
-              <p className="mt-0.5 text-port-text-muted">{hoveredNode.contact.relationship}</p>
-            )}
-            <p className={`mt-1 ${contactStatus(hoveredNode.contact).tone}`}>
-              {contactStatus(hoveredNode.contact).label}
-            </p>
-          </div>
-        )}
+              {/* Center "Me" hub. */}
+              <circle cx={CENTER} cy={CENTER} r={HUB_R} fillOpacity="0.15" strokeOpacity="0.6" style={{ fill: ACCENT, stroke: ACCENT }} />
+              <text x={CENTER} y={CENTER + 5} textAnchor="middle" fontSize="15" fontWeight="700" style={fillStyle(ACCENT)}>Me</text>
+            </g>
+
+            {/* People nodes — Dunbar rings (banded) and external (open outer region). */}
+            {placed.nodes.map(({ contact, ringIdx, isExternal, r: baseR, x, y }) => {
+              const status = contactStatus(contact);
+              const energy = energyFor(contact.energy);
+              const isSelected = selectedId === contact.id;
+              const isFocused = focusedId === contact.id;
+              const isHovered = hovered === contact.id;
+              const select = () => onSelect?.(contact);
+              const r = baseR + (isSelected || isHovered || isFocused ? 3 : 0);
+              const ringLabel = isExternal ? 'External' : DUNBAR[ringIdx].label;
+              const showText = isExternal ? showExternalText : true;
+              return (
+                <g
+                  key={contact.id}
+                  transform={`translate(${x} ${y})`}
+                  className="cursor-pointer"
+                  onClick={select}
+                  onMouseEnter={() => { setHovered(contact.id); setActiveId(contact.id); }}
+                  onMouseLeave={() => setHovered((cur) => (cur === contact.id ? null : cur))}
+                  onFocus={() => { setFocusedId(contact.id); setActiveId(contact.id); }}
+                  onBlur={() => setFocusedId(null)}
+                  {...clickableProps(select)}
+                  aria-label={`${contact.name || 'Unnamed'} — ${ringLabel}, ${status.label}`}
+                >
+                  {isSelected && (
+                    <circle r={r + 5} fill="none" stroke="#3b82f6" strokeWidth="2" strokeOpacity="0.9" />
+                  )}
+                  {isFocused && (
+                    <g pointerEvents="none">
+                      <circle r={r + 5} fill="none" strokeWidth="5" vectorEffect="non-scaling-stroke" style={strokeStyle(HALO)} />
+                      <circle r={r + 5} fill="none" strokeWidth="2" vectorEffect="non-scaling-stroke" style={strokeStyle(NODE_INK)} />
+                    </g>
+                  )}
+                  <circle
+                    r={r}
+                    fill={energy.hex}
+                    fillOpacity="0.22"
+                    stroke={STATUS_HEX[status.state] || STATUS_HEX.missing}
+                    strokeWidth={status.state === 'overdue' || status.state === 'missing' ? 2.5 : 2}
+                  />
+                  {showText && (
+                    <text
+                      textAnchor="middle"
+                      dy="0.35em"
+                      style={fillStyle(NODE_INK)}
+                      fontSize={isExternal ? 8 : (ringIdx < 2 ? 11 : 9)}
+                      fontWeight="600"
+                      pointerEvents="none"
+                    >
+                      {initialsFor(contact.name)}
+                    </text>
+                  )}
+                </g>
+              );
+            })}
+          </svg>
+
+          {tooltipNode && <ContactTooltip node={tooltipNode} />}
+        </div>
       </div>
 
       {/* Legend + at-a-glance ring counts. */}

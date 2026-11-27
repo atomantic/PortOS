@@ -177,6 +177,20 @@ describe('unionByKey', () => {
 });
 
 describe('mergeTaste', () => {
+  it('keeps skipped follow-ups across peers and accepts profiles without skip state', () => {
+    const onPeer = (skippedFollowUpIds) => ({
+      sections: { food: { status: 'in_progress', responses: [], summary: null, skippedFollowUpIds } },
+    });
+    const remote = onPeer(['food-fu-spice']);
+    const first = mergeTaste(onPeer(undefined), remote);
+    expect(first.changed).toBe(true);
+    expect(first.merged.sections.food.skippedFollowUpIds).toEqual(['food-fu-spice']);
+    const second = mergeTaste(first.merged, onPeer(['food-fu-umami']));
+    expect(second.merged.sections.food.skippedFollowUpIds).toEqual(['food-fu-spice', 'food-fu-umami']);
+    expect(mergeTaste(second.merged, remote).changed).toBe(false);
+    expect(mergeTaste(second.merged, onPeer(undefined)).changed).toBe(false);
+  });
+
   it('unions responses across machines so no answer is lost', () => {
     const local = {
       updatedAt: '2026-03-01',

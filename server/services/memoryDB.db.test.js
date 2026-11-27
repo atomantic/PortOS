@@ -36,6 +36,7 @@ import { requireDbOrSkip } from '../lib/dbTestGate.js';
 import { mockNoPeers, mockTestIdentity, mockPathsDataRoot } from '../lib/mockPathsDataRoot.js';
 import { DEFAULT_MEMORY_CONFIG } from './memoryConfig.js';
 import { up as upgradeMemorySearch } from '../scripts/db-migrations/017-memory-search-vector.js';
+import { up as installLegacyReflectionIndex } from '../scripts/db-migrations/028-mind-memory-reflection-index.js';
 
 // Keep every filesystem side effect this module graph can reach (notifications
 // pruning on approve/reject, the instance registry) inside a temp dir.
@@ -143,7 +144,7 @@ describe.skipIf(!runDb)('memoryDB CRUD (#3447)', () => {
     await resetMemories();
   });
 
-  it('round-trips a memory through create → peek, including the pgvector embedding', async () => {
+  it('peeks without loading the stored embedding and round-trips it through getMemory', async () => {
     const created = await memoryDB.createMemory({
       type: 'fact',
       content: 'Quasar catalogue entries index distant luminous objects.',
@@ -168,18 +169,16 @@ describe.skipIf(!runDb)('memoryDB CRUD (#3447)', () => {
     // Federation provenance is stamped at insert time.
     expect(created.originInstanceId).toBe(TEST_INSTANCE_ID);
 
-    // The embedding survives the pgvector column, not just the in-memory echo
-    // createMemory attaches to its return value.
-    const fetched = await memoryDB.peekMemory(created.id);
-    expect(fetched.embedding).toHaveLength(DIM);
-    expect(fetched.embedding[0]).toBeCloseTo(1, 6);
-    expect(fetched.embedding[1]).toBeCloseTo(0, 6);
-    expect(fetched.sourceTaskId).toBe('task-1');
-    expect(fetched.sourceAgentId).toBe('agent-1');
-    expect(fetched.sourceAppId).toBe('brain');
-    // peek is a pure read — it must not bump access stats.
-    expect(fetched.accessCount).toBe(0);
-    expect(fetched.lastAccessed).toBeNull();
+    const peeked = await memoryDB.peekMemory(created.id);
+    expect(peeked).toMatchObject({
+      embedding: null, sourceTaskId: 'task-1', sourceAgentId: 'agent-1', sourceAppId: 'brain',
+      accessCount: 0, lastAccessed: null,
+    });
+    // The public versioned read of the current row also retains its vector.
+    expect(await memoryDB.getMemoryVersion(created.id.toUpperCase(), created.version)).toMatchObject({
+      embedding: VEC_A, accessCount: 0, lastAccessed: null,
+    });
+    expect(await memoryDB.getMemory(created.id)).toMatchObject({ embedding: VEC_A, accessCount: 1 });
   });
 
   it('generates a truncated summary when none is supplied, and honors an explicit one', async () => {
@@ -375,12 +374,12 @@ describe.skipIf(!runDb)('memoryDB CRUD (#3447)', () => {
   });
 
   it('locks current pending records throughout approval publication and omits retired records', async () => {
-    const pending = await memoryDB.createMemory({ type: 'fact', content: 'Original preview.', status: 'pending_approval' });
+    const pending = await memoryDB.createMemory({ type: 'fact', content: 'Original preview.', status: 'pending_approval' }, VEC_A);
     const active = await memoryDB.createMemory({ type: 'fact', content: 'Active memory.' });
     await memoryDB.updateMemory(pending.id, { content: 'Current preview.' });
 
     await memoryDB.withPendingMemories([active.id, pending.id], async records => {
-      expect(records).toMatchObject([{ id: pending.id, content: 'Current preview.' }]);
+      expect(records).toMatchObject([{ id: pending.id, content: 'Current preview.', embedding: null }]);
       // A second connection cannot acquire the lock that DELETE requires.
       await expect(withTransaction(client =>
         client.query('SELECT id FROM memories WHERE id = $1 FOR UPDATE NOWAIT', [pending.id])
@@ -521,6 +520,18 @@ describe.skipIf(!runDb)('memoryDB listing filters (#3447)', () => {
     expect(peeks[1]).toMatch(/(?<![_])embedding(?![_])/);
     expect(sqls.filter((sql) => sql.startsWith('UPDATE memories SET access_count'))).toHaveLength(1);
     await query('DELETE FROM memories WHERE id = ANY($1::uuid[])', [[matched.id, other.id]]);
+  });
+
+  it('breaks timestamp ties by id so offset pages have stable membership', async () => {
+    const idOrder = [brainFact.id, studioPreference.id].sort();
+    await query('UPDATE memories SET created_at = $1 WHERE id = ANY($2::uuid[])',
+      [brainFact.createdAt, idOrder]);
+
+    const first = await memoryDB.getMemories({ limit: 1 });
+    const second = await memoryDB.getMemories({ limit: 1, offset: 1 });
+    expect(first.total).toBe(2);
+    expect(second.total).toBe(2);
+    expect([...first.memories, ...second.memories].map(memory => memory.id)).toEqual(idOrder);
   });
 
   it('sorts and paginates while reporting the unpaginated total', async () => {
@@ -683,6 +694,41 @@ describe.skipIf(!runDb)('memoryDB prompt audience filtering', () => {
     expect(hybrid.memories).toMatchObject([{ id: shared.id, searchMethod: 'hybrid' }]);
     const ownRecall = await memoryDB.hybridSearchMemories('observatory', null, { sourceAgentId: 'cos-persistent-mind' });
     expect(ownRecall.memories.map(m => m.id)).toEqual([owned.id]);
+  });
+});
+
+describe.skipIf(!runDb)('memoryDB search pagination', () => {
+  const content = 'Observatory notes from the mountain.';
+  const sourceAppId = 'example-app';
+  const eligibleIds = [];
+
+  beforeAll(async () => {
+    await resetMemories();
+    await memoryDB.createMemory({ content, type: 'preference', sourceAppId }, VEC_A);
+    await memoryDB.createMemory({ content, type: 'fact', sourceAppId: 'brain' }, VEC_A);
+    await memoryDB.createMemory({ content, type: 'fact', sourceAppId, status: 'archived' }, VEC_A);
+    for (let index = 0; index < 3; index += 1) {
+      const { id } = await memoryDB.createMemory({ content, type: 'fact', sourceAppId }, VEC_NEAR_A);
+      eligibleIds.push(id);
+    }
+    eligibleIds.sort();
+  });
+
+  it.each(['semantic', 'lexical'])('returns deterministic %s pages and counts all eligible hits', async mode => {
+    const search = mode === 'semantic'
+      ? options => memoryDB.searchMemories(VEC_A, options)
+      : options => memoryDB.hybridSearchMemories('observatory unmatched', null, { ...options, lexicalMatch: 'any' });
+
+    for (const offset of [0, 1, 2, 3, 1]) {
+      const { total, memories } = await search({ types: ['fact'], appId: '__not_brain', limit: 1, offset });
+      expect(total).toBe(3);
+      expect(memories.map(hit => hit.id)).toEqual(eligibleIds.slice(offset, offset + 1));
+      if (mode === 'lexical' && memories.length) {
+        expect(memories[0]).toMatchObject({
+          ftsRank: offset + 1, rrfScore: 0.4 / (61 + offset), searchMethod: 'fts',
+        });
+      }
+    }
   });
 });
 
@@ -1594,6 +1640,48 @@ describe.skipIf(!runDb)('mind memory review transactions', () => {
 
 describe.skipIf(!runDb)('mind reflection selection', () => {
   beforeEach(resetMemories);
+
+  it('uses the upgraded reflection index for the production query', async () => {
+    const migration = await readFile(new URL(
+      '../scripts/db-migrations/035-rebuild-mind-memory-reflection-index.sql', import.meta.url,
+    ), 'utf8');
+    const mindId = 'cos-persistent-mind';
+    await withTransaction(async (client) => {
+      // Exercise an existing install in a shadow table without changing the shared schema.
+      await client.query('SET LOCAL search_path = pg_temp, public');
+      await client.query('CREATE TEMP TABLE memories (LIKE public.memories INCLUDING DEFAULTS INCLUDING GENERATED) ON COMMIT DROP');
+      await client.query('CREATE INDEX idx_memories_created_at ON memories (created_at)');
+      await client.query(`CREATE INDEX idx_memories_source_agent_active ON memories (source_agent_id, importance DESC)
+        WHERE status = 'active' AND source_agent_id IS NOT NULL`);
+      await installLegacyReflectionIndex(client);
+
+      const { rows: [source] } = await client.query(`INSERT INTO memories
+        (type, content, source_agent_id, created_at, importance, embedding)
+        VALUES ('observation', 'Fading memory.', $1, NOW() - INTERVAL '200 days', 0.5, $2)
+        RETURNING id`, [mindId, JSON.stringify(VEC_A)]);
+      await client.query(`INSERT INTO memories (type, content, source_agent_id, created_at)
+        SELECT 'fact', 'Recent mind memory.', $1, NOW() - INTERVAL '7 days' FROM generate_series(1, 512)
+        UNION ALL
+        SELECT 'fact', 'Unowned old memory.', NULL, NOW() - INTERVAL '200 days' FROM generate_series(1, 512)`, [mindId]);
+      await client.query(migration);
+      await client.query('ANALYZE memories');
+
+      const spy = vi.spyOn(dbConnection, 'query').mockImplementation(async (sql, params) => {
+        const { rows: [{ 'QUERY PLAN': [{ Plan }] }] } = await client.query(`EXPLAIN (FORMAT JSON) ${sql}`, params);
+        expect(Plan.Plans).toEqual([expect.objectContaining({ 'Index Name': 'idx_memories_mind_reflection' })]);
+        const result = await client.query(sql, params);
+        expect(result.fields.map(field => field.name)).not.toContain('search_tsv');
+        return result;
+      });
+      try {
+        expect(await memoryDB.selectMindMemoryForReview(mindId)).toMatchObject({
+          id: source.id, importance: 0.5, embedding: null,
+        });
+      } finally {
+        spy.mockRestore();
+      }
+    });
+  });
 
   it('selects by idle time, ownership, protection, age and review state without writing', async () => {
     const mindId = 'cos-persistent-mind';

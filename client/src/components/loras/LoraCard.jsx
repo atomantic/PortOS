@@ -195,7 +195,7 @@ function LoraCard({ lora, onDelete, onMeasured, deleting, deleteConfirm }) {
                 href={civitai.url}
                 target="_blank"
                 rel="noopener noreferrer"
-                className="text-gray-400 hover:text-gray-200 p-1.5 rounded hover:bg-port-bg"
+                className="inline-flex min-h-[44px] min-w-[44px] items-center justify-center rounded p-1.5 text-gray-400 hover:bg-port-bg hover:text-gray-200"
                 title="Open on Civitai"
                 aria-label="Open on Civitai"
               >
@@ -207,7 +207,7 @@ function LoraCard({ lora, onDelete, onMeasured, deleting, deleteConfirm }) {
                 href={lora.huggingface.url}
                 target="_blank"
                 rel="noopener noreferrer"
-                className="text-gray-400 hover:text-gray-200 p-1.5 rounded hover:bg-port-bg"
+                className="inline-flex min-h-[44px] min-w-[44px] items-center justify-center rounded p-1.5 text-gray-400 hover:bg-port-bg hover:text-gray-200"
                 title="Open on HuggingFace"
                 aria-label="Open on HuggingFace"
               >

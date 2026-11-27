@@ -6,6 +6,8 @@
  */
 
 import { probeOpenAiModels } from '../lib/openAiModelsProbe.js';
+import { listSlotstreamCachedModels } from '../lib/slotstreamModels.js';
+import { SPLASH_MODEL } from '../lib/splashRuntime.js';
 import {
   ASSESSABLE_RUNTIMES,
   LOCAL_RUNTIMES,
@@ -64,6 +66,18 @@ export async function durableRuntimeModels(runtime) {
   if (runtime === 'mtplx') {
     const status = await getMtplxServerStatus().catch(() => null);
     return (status?.cachedModels || []).map((id) => ({ id, params: null, quantization: null }));
+  }
+  if (runtime === 'slotstream') {
+    const cache = await listSlotstreamCachedModels();
+    return (cache.models || []).map(({ id }) => ({ id, params: null, quantization: null }));
+  }
+  if (runtime === 'splash') {
+    const { readInstalledSplashVersion } = await import('./splashManagedRuntime.js');
+    return await readInstalledSplashVersion() ? [{ id: SPLASH_MODEL, params: null, quantization: null }] : [];
+  }
+  if (runtime === 'mkserve') {
+    const { MKSERVE_MODEL, readMkserveInstall } = await import('./mkserveRuntimeInstall.js');
+    return await readMkserveInstall() ? [{ id: MKSERVE_MODEL, params: null, quantization: null }] : [];
   }
   return [];
 }

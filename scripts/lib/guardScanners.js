@@ -14,8 +14,8 @@
  * cannot ride no plan unnoticed.
  * Builtins only: ci-test-plan.js imports this before `npm ci` runs.
  */
-import { appendFileSync, readFileSync, readdirSync } from 'node:fs';
-import { dirname, join, relative, resolve, sep } from 'node:path';
+import { appendFileSync, readdirSync } from 'node:fs';
+import { dirname, relative, resolve, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { tokenize } from './sourceTokens.js';
 import { trackedFiles } from './trackedFiles.js';
@@ -26,7 +26,7 @@ import { trackedFiles } from './trackedFiles.js';
  * every plan and every client one on any client source change, and the test
  * memo never skips one.
  */
-export const GUARD_TEST_RE = /\.guard\.test\.jsx?$/;
+const GUARD_TEST_RE = /\.guard\.test\.jsx?$/;
 export const isGuardTest = (relPath) => GUARD_TEST_RE.test(relPath);
 
 /**
@@ -269,7 +269,7 @@ export const scansTrackedTree = (source) => {
 };
 
 /** Which runner owns `relPath` (a `git ls-files`-relative path): 'client' or 'server'. */
-export const ownerRootFor = (relPath) => (relPath.startsWith('client/src/') ? 'client' : 'server');
+const ownerRootFor = (relPath) => (relPath.startsWith('client/src/') ? 'client' : 'server');
 
 /** The directory prefix, as a regex fragment, of the *other* runner's tree. */
 const OPPOSITE_ROOT_PREFIX = {
@@ -305,12 +305,3 @@ export const isTreeScanner = (source, relPath) => scansTrackedTree(source) || re
 export const findUnsuffixedScanners = (sources, exempt = new Set()) => Object.keys(sources)
   .filter((path) => !isGuardTest(path) && !isGuardCheck(path) && !exempt.has(path) && isTreeScanner(sources[path], path))
   .sort();
-
-/** Tracked test files (relative paths) the detectors recognise as scanners, whatever their name. */
-export const detectTreeGuards = (repoRoot) => {
-  const found = [];
-  for (const rel of trackedFiles(repoRoot, ['*.test.js', '*.test.jsx'])) {
-    if (isTreeScanner(readFileSync(join(repoRoot, rel), 'utf8'), rel)) found.push(rel);
-  }
-  return found.sort();
-};

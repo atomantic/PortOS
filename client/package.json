@@ -20,7 +20,7 @@
   "dependencies": {
     "@react-three/fiber": "9.8.2",
     "@xterm/xterm": "6.0.0",
-    "lucide-react": "1.80.0",
+    "lucide-react": "1.81.0",
     "react": "19.3.1",
     "react-dom": "19.3.1",
     "react-router": "8.5.3",
@@ -43,8 +43,6 @@
   "overrides": {
     "socket.io-parser": "4.2.7",
     "ws": "8.23.0",
-    "nanoid": "3.3.20",
-    "three": "0.187.0",
     "postcss": "8.5.33"
   }
 }

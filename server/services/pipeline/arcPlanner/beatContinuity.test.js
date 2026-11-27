@@ -1,65 +1,34 @@
-/**
- * beatContinuity.test.js
- *
- * arcPlanner beat-continuity resolve internals. Split from seriesAutopilot.test.js (#16214); shared mocks and
- * fixtures live in seriesAutopilot.testFixtures.js.
- */
-import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { afterAll, describe, expect, it, vi } from 'vitest';
+import {
+  cleanupTempDataRoots, lazyTempDataRoot, makePathsProxy, mockNoPeers, mockNoPeerSync, ownTestBodies,
+} from '../../../lib/mockPathsDataRoot.js';
+import * as issuesSvc from '../issues.js';
+import * as seasonsSvc from '../seasons.js';
+import * as seriesSvc from '../series.js';
+import { visualReady } from '../seriesAutopilot/stepResolver.js';
+import { stageContentOf } from '../textStages.js';
+import { applyBeatResolutions } from './beatContinuity.js';
+import { buildBeatContinuityContext, shapeBeatResolutions } from './context.js';
 
-// vi.mock factories are hoisted above imports; the shared fixtures module is
-// loaded the same way.
-const h = await vi.hoisted(() => import('../seriesAutopilot/seriesAutopilot.testFixtures.js'));
-const { ready } = h;
+vi.mock('../../../lib/fileUtils.js', async (importOriginal) => makePathsProxy(await importOriginal(), {
+  dataRoot: () => lazyTempDataRoot('portos-beat-continuity-'),
+}));
+vi.mock('../../instances.js', () => mockNoPeers());
+vi.mock('../../sharing/peerSync.js', () => mockNoPeerSync());
 
-vi.mock('../../runner.js', (importOriginal) => h.runnerFactory(importOriginal));
-vi.mock('../../../lib/fileUtils.js', () => h.fileUtilsFactory());
-vi.mock('crypto', () => h.cryptoFactory());
-vi.mock('../../instanceIdentity.js', () => h.instanceIdentityFactory());
-vi.mock('../../instances.js', () => h.instancesFactory());
-vi.mock('../../sharing/peerSync.js', () => h.peerSyncFactory());
-vi.mock('../../cos/cosState.js', () => h.cosStateFactory());
-vi.mock('../../domainUsage.js', () => h.domainUsageFactory());
-vi.mock('../arcPlanner.js', (importOriginal) => h.arcPlannerFactory(importOriginal));
-vi.mock('../volumeBeatsRunner.js', () => h.volumeBeatsSpies);
-vi.mock('../autoRunner.js', () => h.autoRunnerSpies);
-vi.mock('../manuscriptReview.js', () => h.manuscriptReviewFactory());
-vi.mock('../editorial/checkRunner.js', () => h.checkRunnerSpies);
-vi.mock('../reverseOutline.js', () => h.reverseOutlineFactory());
-vi.mock('../../settings.js', (importOriginal) => h.settingsFactory(importOriginal));
-vi.mock('../manuscriptFix.js', () => h.manuscriptFixFactory());
-vi.mock('../visualStages.js', () => h.visualSpies);
-vi.mock('../../cos/cosTaskStore.js', () => h.cosTaskStoreFactory());
-vi.mock('../scriptVerify.js', () => h.scriptVerifyFactory());
-vi.mock('../canonReadiness.js', () => h.canonReadinessFactory());
-vi.mock('../../universeCanon.js', () => h.universeCanonFactory());
-vi.mock('../foundationJudge.js', (importOriginal) => h.foundationJudgeFactory(importOriginal));
-vi.mock('../seriesAutopilot/modelPerformance.js', () => h.modelPerformanceFactory());
-vi.mock('../../notifications.js', () => h.notificationsFactory());
-
-// Mocked bindings, so a test can drive the budget and persisted settings per call.
-const { getDomainBudgetStatus } = await import('../../domainUsage.js');
-const { getSettings } = await import('../../settings.js');
-
-// Real services + the unit under test (imported AFTER the mocks above).
-const seriesSvc = await import('../series.js');
-const seasonsSvc = await import('../seasons.js');
-const issuesSvc = await import('../issues.js');
-const autopilot = await import('../seriesAutopilot.js');
-const arcPlanner = await import('../arcPlanner.js');
-const { stageContentOf } = await import('../textStages.js');
-
-beforeEach(() => {
-  h.resetFixtures({ autopilot, getDomainBudgetStatus, getSettings });
+const owned = ownTestBodies(it);
+afterAll(async () => {
+  try {
+    await owned.drain();
+  } finally {
+    cleanupTempDataRoots();
+  }
 });
 
-// ---------------------------------------------------------------------------
-// Beat-continuity resolve internals (#1510) — pure shaper + the beat-rewrite
-// apply pass (real issues service against the file store, like the conductor).
-// ---------------------------------------------------------------------------
-describe('beat-continuity resolve (#1510)', () => {
-  const { shapeBeatResolutions, applyBeatResolutions, buildBeatContinuityContext } = arcPlanner.__testing;
+const ready = (output) => ({ status: 'ready', output });
 
-  it('buildBeatContinuityContext renders beats into the tree and counts beat-bearing issues', async () => {
+describe('beat-continuity resolve (#1510)', () => {
+  owned.it('buildBeatContinuityContext renders beats into the tree and counts beat-bearing issues', async () => {
     const series = await seriesSvc.createSeries({ name: 'S', logline: 'L', premise: 'P', targetFormat: 'comic' });
     await seriesSvc.updateSeries(series.id, { arc: { logline: 'A', summary: 'Sum' } });
     const season = await seasonsSvc.createSeason(series.id, { number: 1, title: 'V1' });
@@ -74,7 +43,7 @@ describe('beat-continuity resolve (#1510)', () => {
     expect(ctx.seasonsTreeJson).toContain('syn2');  // synopsis fallback for the un-expanded issue
   });
 
-  it('shapeBeatResolutions keeps valid entries, drops malformed, caps the count', () => {
+  owned.it('shapeBeatResolutions keeps valid entries, drops malformed, caps the count', () => {
     const out = shapeBeatResolutions([
       { episodeNumber: 1, beats: '  new beats  ', seasonNumber: 2 },
       { episodeNumber: 3, beats: '' },            // empty beats → dropped
@@ -99,7 +68,7 @@ describe('beat-continuity resolve (#1510)', () => {
     return { series: fresh, issueId: issue.id };
   }
 
-  it('rejects the whole candidate before clearing art when a pilot repair targets a later issue', async () => {
+  owned.it('rejects the whole candidate before clearing art when a pilot repair targets a later issue', async () => {
     const { series, issueId } = await seedIssueWithBeats();
     const later = await issuesSvc.createIssue({ seriesId: series.id, seasonId: series.seasons[0].id, title: 'Later', arcPosition: 2 });
     await issuesSvc.updateStage(later.id, 'idea', ready('later beats'));
@@ -115,7 +84,7 @@ describe('beat-continuity resolve (#1510)', () => {
     expect((await issuesSvc.getIssue(later.id)).stages).toEqual(before.stages);
   });
 
-  it('writes the corrected beats to BOTH idea.input and idea.output so prose adapts from the fix', async () => {
+  owned.it('writes the corrected beats to BOTH idea.input and idea.output so prose adapts from the fix', async () => {
     const { series, issueId } = await seedIssueWithBeats();
     const applied = await applyBeatResolutions(series.id, series, [{ seasonNumber: 1, episodeNumber: 1, beats: 'corrected beats' }]);
     expect(applied).toEqual([expect.objectContaining({ issueId, number: 1, corrected: true })]);
@@ -130,7 +99,7 @@ describe('beat-continuity resolve (#1510)', () => {
     expect(stageContentOf(issue.stages.idea)).toBe('corrected beats');
   });
 
-  it('clears stale downstream prose/scripts AND comicPages art so they regenerate from the corrected beats', async () => {
+  owned.it('clears stale downstream prose/scripts AND comicPages art so they regenerate from the corrected beats', async () => {
     const { series, issueId } = await seedIssueWithBeats();
     // Pre-existing downstream drafts (the re-run / resume case): prose, comicScript,
     // and rendered comic art were all generated from the OLD beats.
@@ -143,7 +112,7 @@ describe('beat-continuity resolve (#1510)', () => {
       backCover: { proofImage: { jobId: 'bc' } },
     });
     // Sanity: art reads as fully drafted before the beat fix.
-    expect(autopilot.visualReady(await issuesSvc.getIssue(issueId))).toBe(true);
+    expect(visualReady(await issuesSvc.getIssue(issueId))).toBe(true);
 
     const applied = await applyBeatResolutions(series.id, series, [{ seasonNumber: 1, episodeNumber: 1, beats: 'corrected beats' }]);
     expect(applied[0].clearedStages).toEqual(expect.arrayContaining(['prose', 'comicScript', 'comicPages']));
@@ -151,10 +120,10 @@ describe('beat-continuity resolve (#1510)', () => {
     expect(issue.stages.idea.output).toBe('corrected beats');     // new beats applied
     expect(issuesSvc.isStageReady(issue.stages.prose)).toBe(false);       // stale text → cleared
     expect(issuesSvc.isStageReady(issue.stages.comicScript)).toBe(false); // stale script → cleared
-    expect(autopilot.visualReady(issue)).toBe(false);                     // stale art → re-draw forced
+    expect(visualReady(issue)).toBe(false);                     // stale art → re-draw forced
   });
 
-  it('does NOT clear a locked downstream stage when rewriting beats', async () => {
+  owned.it('does NOT clear a locked downstream stage when rewriting beats', async () => {
     const { series, issueId } = await seedIssueWithBeats();
     await issuesSvc.updateStage(issueId, 'comicScript', { status: 'ready', output: 'frozen script', locked: true });
     const applied = await applyBeatResolutions(series.id, series, [{ seasonNumber: 1, episodeNumber: 1, beats: 'corrected beats' }]);
@@ -163,7 +132,7 @@ describe('beat-continuity resolve (#1510)', () => {
     expect(issue.stages.comicScript.output).toBe('frozen script');  // untouched
   });
 
-  it('skips a locked idea stage', async () => {
+  owned.it('skips a locked idea stage', async () => {
     const { series, issueId } = await seedIssueWithBeats({ locked: true });
     const applied = await applyBeatResolutions(series.id, series, [{ seasonNumber: 1, episodeNumber: 1, beats: 'corrected' }]);
     expect(applied[0]).toMatchObject({ skipped: 'locked' });
@@ -171,13 +140,13 @@ describe('beat-continuity resolve (#1510)', () => {
     expect(issue.stages.idea.output).toBe('old beats');  // untouched
   });
 
-  it('skips an issue that has no beats yet (corpus is beat-level)', async () => {
+  owned.it('skips an issue that has no beats yet (corpus is beat-level)', async () => {
     const { series } = await seedIssueWithBeats({ status: 'empty', output: '' });
     const applied = await applyBeatResolutions(series.id, series, [{ seasonNumber: 1, episodeNumber: 1, beats: 'corrected' }]);
     expect(applied[0]).toMatchObject({ skipped: 'no-beats' });
   });
 
-  it('drops an unmatched correction rather than rewriting the wrong issue', async () => {
+  owned.it('drops an unmatched correction rather than rewriting the wrong issue', async () => {
     const { series, issueId } = await seedIssueWithBeats();
     // Only episode 1 exists; a correction for episode 99 matches nothing.
     const applied = await applyBeatResolutions(series.id, series, [{ seasonNumber: 1, episodeNumber: 99, beats: 'corrected' }]);

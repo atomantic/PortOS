@@ -1,6 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import { act, fireEvent, render, screen, waitFor, cleanup } from '@testing-library/react';
+import { act, fireEvent, render, screen, waitFor, cleanup, within } from '@testing-library/react';
 import { afterEach } from 'vitest';
+import userEvent from '@testing-library/user-event';
 
 const mocks = vi.hoisted(() => ({ listeners: new Set(), sync: vi.fn(), del: vi.fn(), success: vi.fn() }));
 vi.mock('../../../services/socket', () => ({ default: {
@@ -13,11 +14,12 @@ vi.mock('../../../services/apiMeatspace.js', () => ({
   syncClinvar: mocks.sync,
   deleteGenomeData: mocks.del,
   scanGenomeMarkers: vi.fn(async () => ({ markers: [] })),
+  scanClinvar: vi.fn(),
 }));
 vi.mock('../../ui/Toast', () => ({ default: { success: mocks.success } }));
 vi.mock('../EpigeneticTracker', () => ({ default: () => null }));
 import GenomeTab from './GenomeTab';
-import { getClinvarStatus, getGenomeSummary } from '../../../services/apiMeatspace.js';
+import { getClinvarStatus, getGenomeSummary, scanClinvar } from '../../../services/apiMeatspace.js';
 
 const emit = (frame) => act(() => { for (const handler of mocks.listeners) handler(frame); });
 const begin = async () => {
@@ -88,6 +90,55 @@ describe('genome load failure vs empty', () => {
   });
 });
 
+describe('genome category jump', () => {
+  const openJump = async (user) => {
+    getGenomeSummary.mockResolvedValueOnce({
+      uploaded: true,
+      savedMarkers: Object.fromEntries(
+        ['longevity', 'cardiovascular', 'iron', 'methylation', 'nutrient', 'caffeine'].map(category => [
+          `test-${category}`, { category, status: 'typical' },
+        ]),
+      ),
+    });
+    render(<GenomeTab />);
+    const trigger = await screen.findByRole('button', { name: 'Jump to category (6)' });
+    expect(trigger).toHaveAttribute('aria-expanded', 'false');
+    expect(trigger).toHaveAttribute('aria-haspopup', 'true');
+    trigger.focus();
+    await user.keyboard('{Enter}');
+    const menu = screen.getByRole('menu', { name: 'Jump to category' });
+    expect(trigger).toHaveAttribute('aria-expanded', 'true');
+    expect(trigger).toHaveAttribute('aria-controls', menu.id);
+    expect(screen.getByRole('menuitem', { name: /Longevity/ })).toHaveFocus();
+    return trigger;
+  };
+
+  it('dismisses the menu on Escape and returns focus to the trigger', async () => {
+    const user = userEvent.setup();
+    const trigger = await openJump(user);
+    await user.keyboard('{Escape}');
+    expect(screen.queryByRole('menu')).not.toBeInTheDocument();
+    expect(trigger).toHaveAttribute('aria-expanded', 'false');
+    expect(trigger).toHaveFocus();
+  });
+
+  it('moves focus to the selected category disclosure when activated from the keyboard', async () => {
+    const user = userEvent.setup();
+    const trigger = await openJump(user);
+    const disclosure = screen.getByRole('button', { name: /Cardiovascular/ });
+    const scroll = vi.spyOn(disclosure.closest('#genome-cat-cardiovascular'), 'scrollIntoView');
+    await user.keyboard('{ArrowDown}');
+    expect(screen.getByRole('menuitem', { name: /Cardiovascular/ })).toHaveFocus();
+    await user.keyboard('{Enter}');
+    expect(trigger).toHaveAttribute('aria-expanded', 'false');
+    expect(disclosure).toHaveFocus();
+    expect(scroll).toHaveBeenCalledWith({ behavior: 'smooth', block: 'start' });
+    expect(disclosure).toHaveAttribute('aria-expanded', 'false');
+    await user.keyboard('{Enter}');
+    expect(disclosure).toHaveAttribute('aria-expanded', 'true');
+  });
+});
+
 describe('genome delete (#17354)', () => {
   const confirmDelete = async () => {
     getGenomeSummary.mockResolvedValue({ uploaded: true, markers: [] });
@@ -95,6 +146,30 @@ describe('genome delete (#17354)', () => {
     fireEvent.click(await screen.findByRole('button', { name: /Delete Genome/ }));
     fireEvent.click(screen.getByRole('button', { name: 'Yes, delete everything' }));
   };
+
+  it('returns focus to Delete Genome when the user cancels from the keyboard', async () => {
+    const user = userEvent.setup();
+    render(<GenomeTab />);
+    const trigger = await screen.findByRole('button', { name: 'Delete Genome' });
+    trigger.focus();
+    await user.keyboard('{Enter}');
+    expect(screen.getByRole('group', { name: /permanently delete/ })).toHaveFocus();
+    await user.tab();
+    await user.tab();
+    expect(screen.getByRole('button', { name: 'Cancel' })).toHaveFocus();
+    await user.keyboard('{Enter}');
+    expect(trigger).toHaveFocus();
+    expect(mocks.del).not.toHaveBeenCalled();
+  });
+
+  it('disables only the confirm button while deletion is pending', async () => {
+    let resolve;
+    mocks.del.mockImplementationOnce(() => new Promise(r => { resolve = r; }));
+    await confirmDelete();
+    expect(screen.getByRole('button', { name: 'Deleting...' })).toBeDisabled();
+    expect(screen.getByRole('button', { name: 'Cancel' })).toBeEnabled();
+    await act(async () => resolve(null));
+  });
 
   it('keeps the loaded summary, no success toast and no drop zone when the delete rejects', async () => {
     mocks.del.mockRejectedValueOnce(new Error('boom'));
@@ -141,4 +216,58 @@ describe('ClinVar status failure vs unsynced', () => {
     expect(screen.queryByRole('alert')).not.toBeInTheDocument();
     expect(screen.queryByRole('button', { name: 'Sync ClinVar Database' })).not.toBeInTheDocument();
   });
+});
+
+it('exposes the full status of collapsed markers and shows badges for non-typical results', async () => {
+  const results = [
+    ['major_concern', 'Major Concern', 'Major'],
+    ['concern', 'Concern', 'Concern'],
+    ['beneficial', 'Beneficial', 'Beneficial'],
+    ['not_found', 'Not Found', 'Not Found'],
+    ['typical', 'Typical', null],
+  ];
+  getGenomeSummary.mockResolvedValueOnce({
+    uploaded: true,
+    savedMarkers: Object.fromEntries(results.map(([status], index) => [
+      `marker-${index}`, { category: 'longevity', status, name: `Marker ${index}` },
+    ])),
+  });
+  render(<GenomeTab />);
+  fireEvent.click(await screen.findByRole('button', { name: /Longevity/ }));
+
+  results.forEach(([, label, badgeLabel], index) => {
+    const tile = screen.getByRole('button', { name: `${label}: Marker ${index}`, expanded: false });
+    if (badgeLabel) {
+      const badge = within(tile).getByText(badgeLabel, { exact: true });
+      expect(badge).toBeVisible();
+      expect(badge).toHaveAttribute('aria-hidden', 'true');
+    } else {
+      expect(within(tile).getByText('Typical:')).toHaveClass('sr-only');
+      expect(within(tile).queryByText('Typical', { exact: true })).not.toBeInTheDocument();
+    }
+  });
+});
+
+it('announces each ClinVar rating and keeps expansion tied to the finding during filtering', async () => {
+  getClinvarStatus.mockResolvedValueOnce({ synced: true, variantCount: 2 });
+  scanClinvar.mockResolvedValueOnce({
+    totalMatched: 2,
+    bySeverity: { pathogenic: 1, protective: 1 },
+    findings: [
+      { rsid: 'rs100', gene: 'TEST1', severity: 'pathogenic', reviewStars: 3, conditions: [] },
+      { rsid: 'rs200', gene: 'TEST2', severity: 'protective', reviewStars: 1, conditions: [] },
+    ],
+  });
+  render(<GenomeTab />);
+  fireEvent.click(await screen.findByRole('button', { name: 'Scan Against ClinVar' }));
+
+  const pathogenic = await screen.findByRole('button', { name: /rs100.*3 of 4 stars: Expert panel/, expanded: false });
+  expect(within(pathogenic).getByText('★★★☆')).toHaveAttribute('aria-hidden', 'true');
+  fireEvent.click(pathogenic);
+  expect(pathogenic).toHaveAttribute('aria-expanded', 'true');
+
+  const filters = within(screen.getByRole('group', { name: 'ClinVar severity' }));
+  fireEvent.click(filters.getByRole('button', { name: 'Protective', pressed: false }));
+  expect(filters.getByRole('button', { name: 'Protective', pressed: true })).toBeInTheDocument();
+  expect(screen.getByRole('button', { name: /rs200.*1 of 4 stars: Single submitter/, expanded: false })).toBeInTheDocument();
 });

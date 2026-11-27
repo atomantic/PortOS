@@ -1,3 +1,4 @@
+import { TAKE_SLOT } from '../../lib/musicVideo/musicVideoLayers.js';
 import { currentPlateEvidence, plateFrameRole, plateRequirementBasis } from '../../lib/musicVideo/musicVideoPlateEvidence.js';
 import { assertMusicVideoMedia } from '../../lib/musicVideo/musicVideoMediaPolicy.js';
 /**
@@ -33,8 +34,7 @@ import { randomUUID } from 'crypto';
 import { ServerError } from '../../lib/errorHandler.js';
 import { isNonBlankStr, trimTo } from '../../lib/textUtils.js';
 
-// `endImage` (#11173): an optional style-break end frame a fal clip ends on.
-export const TAKE_SLOT = Object.freeze({ image: 'referenceImageId', video: 'videoHistoryId', endImage: 'endImageId' });
+export { TAKE_SLOT };
 
 /** `codeClip` describes the clip it was set on: another clip in the slot is not code-rendered. */
 export function keepCodeClipWithItsClip(before, after) {
@@ -153,9 +153,8 @@ function replaceScene(project, idx, scene) {
  * present as a take of that kind is not duplicated (a replayed job completion
  * or a re-import is a no-op for the list). A slot is filled only while it is
  * empty, by the first appended take of that kind. An existing selection is
- * replaced only when that input sets `replaceSelection` on an image or end
- * frame. A motion-reference take (#8980) never fills a slot — it
- * becomes final picture only by an explicit select. A take already stale
+ * replaced by an explicit frame replacement or by an upscale of the selected
+ * source. A motion-reference take (#8980) requires explicit selection. A take already stale
  * against the whole PROJECT (its plate, timing, or for a supplied-audio take
  * the song master/lyrics) does not fill either; the check needs the real
  * project, since a song reference reads the project's song fields. Returns
@@ -178,12 +177,23 @@ function appendToScene(project, scene, inputs, now) {
       ? input.frameDependencies || (input.skipFrameCapture || input.source !== 'generated' ? null : captureImageFrameDependencies(project, scene, { slot: frameSlot }))
       : null;
     const { skipFrameCapture: _skipFrameCapture, ...stored } = input;
+    const upscaleSource = input.upscaledFrom && takes.find((take) => take.kind === 'video' && take.assetId === input.upscaledFrom);
+    const sourceProvenance = upscaleSource ? {
+      dependencies: upscaleSource.dependencies,
+      sourceImageId: upscaleSource.sourceImageId,
+      prompt: upscaleSource.prompt,
+      inputAssets: upscaleSource.inputAssets,
+      shotInstruction: upscaleSource.shotInstruction,
+      sequence: upscaleSource.sequence,
+      extend: upscaleSource.extend,
+      castInputs: upscaleSource.castInputs,
+    } : {};
     // A slot materialized before this completion has no stamp yet. Keep the
     // first stamp; a replay must not replace evidence already recorded.
     const stamped = existing && frameDependencies && !existing.frameDependencies
       ? { ...existing, frameDependencies: structuredClone(frameDependencies) }
       : existing;
-    const take = existing ? stamped : buildTake({ ...stored, dependencies, frameDependencies, now });
+    const take = existing ? stamped : buildTake({ ...stored, dependencies, ...sourceProvenance, frameDependencies, now });
     if (!existing) takes = [...takes, take];
     else if (take !== existing) takes = takes.map((entry) => (entry === existing ? take : entry));
     appended.push(take);
@@ -195,7 +205,10 @@ function appendToScene(project, scene, inputs, now) {
     const selectionUnchanged = input.expectedSelection !== undefined && (next[field] || null) === input.expectedSelection;
     const repairDone = input.kind === 'image' && input.stillRepairAt && next.stillFixes?.pending === true
       && next.stillFixes.at === input.stillRepairAt;
-    if (selectable && (replaceFrame ? selectionUnchanged && (!input.stillRepairAt || repairDone) : !isNonBlankStr(next[field]))) next[field] = take.assetId;
+    const select = input.upscaledFrom ? next[field] === input.upscaledFrom
+      : replaceFrame ? selectionUnchanged && (!input.stillRepairAt || repairDone)
+        : !isNonBlankStr(next[field]);
+    if (selectable && select) next[field] = take.assetId;
     if (repairDone) {
       const { pending: _pending, replaces: _replaces, ...fixes } = next.stillFixes;
       next.stillFixes = fixes;

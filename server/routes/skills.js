@@ -41,12 +41,6 @@ router.get('/view', asyncHandler(async (req, res) => {
   res.json(await viewSkill(validateRequest(skillsViewQuerySchema, req.query)));
 }));
 
-// POST /api/skills/manage — create | patch | write_file | remove_file | delete (local tier).
-// The agent-facing write: it honors a skill's lock (#17391).
-router.post('/manage', asyncHandler(async (req, res) => {
-  res.json(await manageSkill(validateRequest(skillsManageSchema, req.body ?? {}), { actor: 'agent' }));
-}));
-
 // POST /api/skills/edit — the same actions for the human editing through the
 // PortOS UI, which a lock does not stop. The lock is a guard against an agent
 // rewriting a curated skill by accident, not an authorization boundary.

@@ -7,7 +7,8 @@
  */
 
 import { Router } from 'express';
-import { confirmQuerySchema } from '../lib/queryValidation.js';
+import { BOUNDED_PAGE_DEFAULT_LIMIT, BOUNDED_PAGE_MAX_LIMIT, boundedPaginationQuerySchema, confirmQuerySchema, isPaginationRequested, paginateArray } from '../lib/queryValidation.js';
+import { mapWithConcurrency } from '../lib/mapWithConcurrency.js';
 import { withBackupAssetPublication } from '../lib/backupSnapshotBoundary.js';
 import { readdir, stat } from 'fs/promises';
 import { join, resolve } from 'path';
@@ -95,20 +96,20 @@ router.post('/', optionalUpload('file'), asyncHandler(async (req, res) => {
   });
 }));
 
-// GET /api/uploads - List all uploads
+// GET /api/uploads - List uploads with optional pagination
 router.get('/', asyncHandler(async (req, res) => {
-  if (!(await pathExists(UPLOADS_DIR))) {
+  const query = validateRequest(boundedPaginationQuerySchema, req.query);
+  const paginated = isPaginationRequested(query);
+  const exists = await pathExists(UPLOADS_DIR);
+  if (!exists && !paginated) {
     return res.json({ uploads: [], totalSize: 0, totalSizeFormatted: '0 B' });
   }
 
-  const files = await readdir(UPLOADS_DIR);
-  let totalSize = 0;
-
-  const uploads = await Promise.all(files.map(async (filename) => {
+  const files = exists ? await readdir(UPLOADS_DIR) : [];
+  const uploads = await mapWithConcurrency(files, 32, async (filename) => {
     const filepath = join(UPLOADS_DIR, filename);
     const stats = await stat(filepath);
     const ext = getFileExtension(filename);
-    totalSize += stats.size;
 
     return {
       filename,
@@ -120,16 +121,15 @@ router.get('/', asyncHandler(async (req, res) => {
       createdAt: stats.birthtime.toISOString(),
       modifiedAt: stats.mtime.toISOString()
     };
-  }));
-
-  uploads.sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt));
-
-  res.json({
-    uploads,
-    count: uploads.length,
-    totalSize,
-    totalSizeFormatted: formatSize(totalSize)
   });
+
+  uploads.sort((a, b) => b.createdAt.localeCompare(a.createdAt) || a.filename.localeCompare(b.filename));
+  const totalSize = uploads.reduce((sum, upload) => sum + upload.size, 0);
+
+  const listing = paginated
+    ? paginateArray(uploads, query, { defaultLimit: BOUNDED_PAGE_DEFAULT_LIMIT, maxLimit: BOUNDED_PAGE_MAX_LIMIT })
+    : { uploads, count: uploads.length };
+  res.json({ ...listing, totalSize, totalSizeFormatted: formatSize(totalSize) });
 }));
 
 // GET /api/uploads/:filename - Serve a file

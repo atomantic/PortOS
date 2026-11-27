@@ -77,7 +77,7 @@ describe('BodyTab measurement dates', () => {
 
   it('preserves backdated entries and the stored date when editing an existing exam', async () => {
     await act(async () => { render(<BodyTab />); });
-    await click('Edit');
+    await click('Edit eye exam for 2026-02-10');
     expect(screen.getByLabelText('Date')).toHaveValue(EXISTING_EXAM.date);
     changeField('L SPH', '-1.5');
     await click('Save');

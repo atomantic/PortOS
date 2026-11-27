@@ -209,15 +209,6 @@ describe('Audio kind (#1928)', () => {
     expect(accepted.jobId).toBeTruthy();
   });
 
-  it('retires persisted queued training without invoking a trainer or removing artifacts', async () => {
-    const id = '00000000-0000-4000-8000-000000000019';
-    writeFileSync(join(tempDataDir, 'media-jobs.json'), JSON.stringify({ jobs: [{ id, kind: 'training', status: 'queued', params: { runId: 'example-retired' } }] }));
-    await importFresh();
-    await mediaJobQueue.initMediaJobQueue();
-    expect(mediaJobQueue.getJob(id)).toMatchObject({ status: 'canceled', error: expect.stringContaining('retired') });
-    expect(stubs.runTraining).not.toHaveBeenCalled();
-  });
-
   it('refuses retired training even when carrying a stray remote marker', async () => {
     await expect(mediaJobQueue.enqueueJob({ kind: 'training', params: { runId: 'example', remoteMedia: remoteImageMediaParams() } })).rejects.toMatchObject({ status: 410, code: 'LORA_TRAINING_RETIRED' });
   });

@@ -1,11 +1,14 @@
 import { readFile, realpath, stat, writeFile } from 'node:fs/promises';
-import { execFileSync } from 'node:child_process';
 import { join } from 'node:path';
+import { execGit } from '../../server/lib/execGit.js';
 import { assertNotRealDataWrite } from '../../server/lib/testDataIsolation.js';
 
 const validId = value => typeof value === 'string' && /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(value);
 const workspaces = new Set(['.', 'client', 'server']);
-const head = root => execFileSync('git', ['rev-parse', 'HEAD'], { cwd: root, encoding: 'utf8', timeout: 10000 }).trim();
+async function head(root) {
+  const { stdout } = await execGit(['rev-parse', 'HEAD'], root, { timeout: 10000 });
+  return stdout.trim();
+}
 const requestPath = (directory, id) => {
   if (!validId(id)) throw new Error('Invalid manual update attempt');
   return join(directory, `update-manual-${id}.json`);
@@ -17,7 +20,7 @@ export async function offerManualUpdateRecovery({ root, directory, id, env = pro
   const dist = join(root, 'client', 'dist');
   if (!(await stat(join(dist, 'index.html'))).isFile()) return null;
   const page = await readFile(new URL('../manual-update-recovery.html', import.meta.url), 'utf8');
-  const request = { id, sourceRoot: await realpath(root), sourceHead: head(root),
+  const request = { id, sourceRoot: await realpath(root), sourceHead: await head(root),
     forceCleanWorkspaces: [...new Set((env.PORTOS_FORCE_CLEAN_WORKSPACES || '').split(',').filter(value => workspaces.has(value)))],
     acknowledgePersistentMindImageBackup: env.PORTOS_UPDATE_IMAGE_BACKUP_ACKNOWLEDGED === '1' };
   assertNotRealDataWrite(path);
@@ -39,7 +42,7 @@ export async function continueManualUpdateRecovery({ id, root, directory, launch
   const refusal = JSON.parse(await readFile(join(directory, `update-refusal-${id}.json`), 'utf8'));
   if (result.id !== id || result.success !== false || refusal.id !== id || refusal.code !== 'UPDATE_INTERRUPTION_REQUIRED')
     throw new Error('A newer update attempt replaced this confirmation. Return to PortOS and try again.');
-  if (head(root) !== request.sourceHead) throw new Error('The checkout changed. Return to PortOS and request the update again.');
+  if (await head(root) !== request.sourceHead) throw new Error('The checkout changed. Return to PortOS and request the update again.');
   const { version } = JSON.parse(await readFile(join(root, 'package.json'), 'utf8'));
   const run = launch ?? (await import('../../server/services/updateExecutor.js')).launchUpdate;
   const update = await run(`v${version}`, emit, { acknowledgeInterruption: true, expectedRefusalId: id,

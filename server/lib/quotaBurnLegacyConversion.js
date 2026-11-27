@@ -14,19 +14,29 @@
  * Pure: shape and decisions only; job creation, file writes and catalog reads belong to the two adapters.
  */
 
-import { AUDIT_EXECUTION_PROFILES } from './auditCatalog.js';
 import { ON_DEMAND_INTERVAL } from './autonomousJobIntervals.js';
 import { QUOTA_BURN_BOUNDS, QUOTA_BURN_JOB_TYPE } from './quotaBurnConfig.js';
 import { matchStoredAuditPreset } from './quotaBurnPresets.js';
 import { QUOTA_BURN_TASK_REF_KIND } from './quotaBurnTaskRef.js';
 import { isProgrammaticScheduledTaskType } from './taskTargetScope.js';
 
-/** `<preset id> → <scheduled audit task type>`, INVERTED from the catalog so it can't drift from the pairing `auditCatalog.test.js` enforces. */
-export const AUDIT_TASK_TYPE_BY_PRESET_ID = Object.freeze(Object.fromEntries(
-  Object.entries(AUDIT_EXECUTION_PROFILES)
-    .filter(([, definition]) => typeof definition.quotaBurnId === 'string' && definition.quotaBurnId)
-    .map(([taskType, definition]) => [definition.quotaBurnId, taskType]),
-));
+// Frozen preset IDs are input to older quota-burn migrations.
+export const AUDIT_TASK_TYPE_BY_PRESET_ID = Object.freeze({
+  'security-audit': 'security',
+  'a11y-audit': 'accessibility',
+  'api-contract-audit': 'api-contract',
+  'test-gap-audit': 'test-quality-coverage',
+  'perf-audit': 'performance-efficiency',
+  'docs-audit': 'documentation-content',
+  'mobile-audit': 'design-usability',
+  'resilience-audit': 'reliability-error-handling',
+  'ux-audit': 'design-usability',
+  'data-safety-audit': 'data-integrity-safety',
+  'simplify-audit': 'code-simplification',
+  'ui-lifecycle-audit': 'ui-runtime-bugs',
+  'observability-audit': 'reliability-error-handling',
+  'copy-audit': 'documentation-content',
+});
 
 /** Autonomy a custom job needs for an UNATTENDED burn (`quotaBurnInvoke.js#unattendedApprovalRefusal`); a legacy `agent-prompt` step ran with no approval, so a converted job needing one would silently stop burning. */
 const UNATTENDED_AUTONOMY_LEVEL = 'yolo';

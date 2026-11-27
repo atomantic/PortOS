@@ -3,7 +3,7 @@
  * recently-played endpoint and feed the machine-local human-activity timeline
  * (#2150) with `media.listen` events.
  *
- * Design constraints (docs/plans/archive/2026-07-04-human-activity-tracking.md):
+ * Design constraints:
  *
  * - **Incremental pagination.** Spotify returns up to 50 plays per page.
  *   Each sync drains the available pages above the saved `after` cursor.
@@ -256,6 +256,7 @@ async function doRunSync() {
   } catch (err) {
     console.error(`❌ Spotify activity record failed: ${err?.message || err}`);
     return fail({
+      status: 'persist-failed',
       error: 'Persistence failed — cursor held so the batch retries next sync',
       cursorAfter: state.cursorAfter,
       scanned,

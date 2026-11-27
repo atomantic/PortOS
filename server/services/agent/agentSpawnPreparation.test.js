@@ -65,6 +65,7 @@ describe('prepareAgentSpawn — duplicate dispatch', () => {
     context.blockAndBail = vi.fn(async () => null);
     expect(await prepareAgentSpawn(task, context)).toBe(context);
     expect(context.claimAcquired).toBe(true);
+    expect(context.instanceId).toBe('local');
     expect(context.cleanupOnError).not.toHaveBeenCalled();
     expect(context.blockAndBail).not.toHaveBeenCalled();
   });
@@ -106,6 +107,46 @@ describe('prepareAgentSpawn — duplicate dispatch', () => {
     expect(await prepareAgentSpawn(task, context)).toBeNull();
     expect(emitLog).toHaveBeenCalledWith('warn', 'Holding task sys-release: task state could not be read', { taskId: 'sys-release' });
     expect(updateTask).not.toHaveBeenCalled();
+  });
+
+  it('holds when the first task read fails', async () => {
+    const task = { id: 'sys-release', taskType: 'internal', status: 'pending', metadata: {} };
+    loadState.mockResolvedValue({ agents: {} }); hasActiveTaskOwner.mockReturnValue(false);
+    ensureInstanceId.mockResolvedValue('local'); getTaskById.mockRejectedValueOnce(new Error('read failed'));
+    const context = createAgentSpawnContext(task); context.cleanupOnError = vi.fn(async () => {});
+    expect(await prepareAgentSpawn(task, context)).toBeNull();
+    expect(updateTask).not.toHaveBeenCalled();
+    expect(context.cleanupOnError).toHaveBeenCalledWith('task state unavailable');
+  });
+
+  it.each([
+    ['status', { status: 'in_progress', metadata: {} }],
+    ['metadata', { status: 'pending', metadata: { changed: true } }],
+  ])('holds when task %s changes between reads', async (_field, changed) => {
+    const task = { id: 'sys-release', taskType: 'internal', status: 'pending', metadata: {} };
+    loadState.mockResolvedValue({ agents: {} }); hasActiveTaskOwner.mockReturnValue(false);
+    ensureInstanceId.mockResolvedValue('local');
+    getTaskById.mockReset().mockResolvedValueOnce(task).mockResolvedValueOnce({ ...task, ...changed });
+    updateTask.mockClear();
+    const context = createAgentSpawnContext(task); context.cleanupOnError = vi.fn(async () => {});
+    expect(await prepareAgentSpawn(task, context)).toBeNull();
+    expect(updateTask).not.toHaveBeenCalled();
+    expect(context.cleanupOnError).toHaveBeenCalledWith('task changed after spawn budget verification');
+  });
+
+  it.each([
+    ['an error result', { error: 'claim refused' }],
+    ['a changed status result', { statusChanged: true }],
+  ])('holds when the claim store returns %s', async (_label, result) => {
+    const task = { id: 'sys-release', taskType: 'internal', status: 'pending', metadata: {} };
+    loadState.mockResolvedValue({ agents: {} }); hasActiveTaskOwner.mockReturnValue(false);
+    ensureInstanceId.mockResolvedValue('local'); getTaskById.mockResolvedValue(task);
+    updateTask.mockReset().mockResolvedValue(result);
+    const context = createAgentSpawnContext(task); context.cleanupOnError = vi.fn(async () => {});
+    expect(await prepareAgentSpawn(task, context)).toBeNull();
+    expect(context.claimAcquired).toBe(false);
+    expect(context.cleanupOnError).toHaveBeenCalledWith('task or claim changed during dispatch');
+    expect(context.setupCatchArmed).toBe(false);
   });
 
   it('cleans up even when a claim write rejects without an Error', async () => {

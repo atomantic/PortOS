@@ -22,6 +22,7 @@ import {
   startSlotstreamServer,
   stopSlotstreamServer,
   installSlotstream,
+  uninstallSlotstream,
   _resetSlotstreamServerStateForTests,
   ensureSlotstreamRunning,
   isSlotstreamProvider,
@@ -31,6 +32,7 @@ import {
   SLOTSTREAM_RELEASE_TAG,
   SLOTSTREAM_RELEASE_TARGETS,
 } from './slotstreamServerManager.js';
+import { removeSlotstreamModel } from './slotstreamModelManager.js';
 import * as processEnv from '../lib/processEnv.js';
 import * as platform from '../lib/platform.js';
 import * as openAiModelsProbe from '../lib/openAiModelsProbe.js';
@@ -54,6 +56,53 @@ const resetForTest = (overrides = {}) => {
 };
 
 describe('slotstreamServerManager', () => {
+  async function fixtureInstall() {
+    const bin = join(testLogDir, '.slotstream', 'bin');
+    const binary = join(bin, 'slotstream');
+    const checkpoint = join(testLogDir, '.slotstream', 'models', 'checkpoint');
+    vi.spyOn(slotstreamModels, 'slotstreamBinDir').mockReturnValue(bin);
+    await mkdir(bin, { recursive: true });
+    await mkdir(dirname(checkpoint), { recursive: true });
+    await writeFile(binary, 'runtime', { mode: 0o755 });
+    await writeFile(checkpoint, 'weights');
+    return { bin, binary, checkpoint };
+  }
+
+  it('removes only the release binary and keeps weights and launch settings', async () => {
+    const { binary, checkpoint } = await fixtureInstall();
+    settingsStore.current = { localLlm: { slotstream: { port: 12980, model: 'checkpoint' } } };
+    const saved = structuredClone(settingsStore.current);
+    await expect(getSlotstreamServerStatus()).resolves.toMatchObject({ canUninstall: true });
+    await expect(uninstallSlotstream()).resolves.toMatchObject({ success: true });
+    await expect(lstat(binary)).rejects.toMatchObject({ code: 'ENOENT' });
+    expect(await readFile(checkpoint, 'utf8')).toBe('weights');
+    expect(settingsStore.current).toEqual(saved);
+    expect(execPm2Calls).toEqual([]);
+  });
+
+  it('refuses to remove the binary when a launch or an external listener is active', async () => {
+    const { binary } = await fixtureInstall();
+    pm2Module.getAppStatusStrict.mockResolvedValueOnce({ status: 'launching' });
+    await expect(uninstallSlotstream()).rejects.toMatchObject({ code: 'SLOTSTREAM_IN_USE' });
+    platform.isPortInUse.mockResolvedValue(true);
+    await expect(uninstallSlotstream()).rejects.toMatchObject({ code: 'SLOTSTREAM_IN_USE' });
+    expect(await readFile(binary, 'utf8')).toBe('runtime');
+    expect(execPm2Calls).toEqual([]);
+  });
+
+  it('refuses external installs and symlinked install directories', async () => {
+    const { bin, binary, checkpoint } = await fixtureInstall();
+    const outside = join(testLogDir, 'outside');
+    await mkdir(outside);
+    await writeFile(join(outside, 'slotstream'), 'external');
+    await rm(bin, { recursive: true });
+    await expect(uninstallSlotstream()).rejects.toMatchObject({ code: 'SLOTSTREAM_NOT_MANAGED' });
+    await symlink(outside, bin, 'dir');
+    await expect(uninstallSlotstream()).rejects.toMatchObject({ code: 'SLOTSTREAM_NOT_MANAGED' });
+    expect(await readFile(binary, 'utf8')).toBe('external');
+    expect(await readFile(checkpoint, 'utf8')).toBe('weights');
+  });
+
   let pm2State = null;
   let execPm2Calls = [];
   let testLogDir = null;
@@ -106,8 +155,72 @@ describe('slotstreamServerManager', () => {
     _resetSlotstreamServerStateForTests();
     vi.restoreAllMocks();
     vi.unstubAllGlobals();
+    vi.unstubAllEnvs();
     await rm(testLogDir, { recursive: true, force: true });
     testLogDir = null;
+  });
+
+  it('reports checkpoint sizes and link metadata without exposing cache or target paths', async () => {
+    slotstreamModels.listSlotstreamCachedModels.mockRestore();
+    const cacheDir = join(testLogDir, 'models');
+    const external = join(testLogDir, 'external');
+    const native = join(cacheDir, 'native');
+    const incomplete = join(cacheDir, 'incomplete');
+    vi.stubEnv('SLOTSTREAM_MODEL_DIR', cacheDir);
+    settingsStore.current = { localLlm: { slotstream: { launch: { model: external } } } };
+    for (const dir of [native, external, incomplete]) await mkdir(dir, { recursive: true });
+    await writeFile(join(native, 'config.json'), '{}');
+    await writeFile(join(native, 'model.safetensors'), 'weights');
+    await writeFile(join(external, 'config.json'), '{}');
+    await symlink(join(native, 'model.safetensors'), join(external, 'model.safetensors'), 'file');
+    await writeFile(join(incomplete, slotstreamModels.SLOTSTREAM_INCOMPLETE_MARKER), 'partial');
+    await symlink(external, join(cacheDir, 'linked'), 'dir');
+
+    const status = await getSlotstreamServerStatus({ includeLogs: false });
+    expect(status.cacheDir).toBe('~/.slotstream/models');
+    expect(status.cachedModels).toEqual(expect.arrayContaining(['native', 'linked']));
+    expect(status.cachedModels).not.toContain('incomplete');
+    expect(status.cachedModelRows).toEqual(expect.arrayContaining([
+      { id: 'native', sizeBytes: 9, linked: false },
+      { id: 'linked', sizeBytes: 9, linked: true },
+      { id: 'incomplete', sizeBytes: 7, linked: false },
+    ]));
+    expect(JSON.stringify(status)).not.toContain(testLogDir);
+  });
+
+  it('keeps active weights and unlinks an unused external checkpoint without deleting it', async () => {
+    const cacheDir = join(testLogDir, 'models');
+    const external = join(testLogDir, 'external');
+    const native = join(cacheDir, 'native');
+    const active = join(cacheDir, 'active');
+    for (const dir of [external, native, active]) await mkdir(dir, { recursive: true });
+    await writeFile(join(external, 'model.safetensors'), 'external weights');
+    await writeFile(join(active, 'model.safetensors'), 'active weights');
+    const linked = join(cacheDir, 'linked');
+    await symlink(external, linked, 'dir');
+    pm2State = { name: SLOTSTREAM_APP, status: 'online', args: ['serve', '--model', 'active'] };
+
+    await expect(removeSlotstreamModel('active', { cacheDir })).rejects.toMatchObject({ status: 409 });
+    await expect(readFile(join(active, 'model.safetensors'), 'utf8')).resolves.toBe('active weights');
+    await expect(removeSlotstreamModel('native', { cacheDir })).resolves.toEqual({ success: true, model: 'native' });
+    await expect(lstat(native)).rejects.toMatchObject({ code: 'ENOENT' });
+    await expect(removeSlotstreamModel('linked', { cacheDir })).resolves.toEqual({ success: true, model: 'linked' });
+    await expect(lstat(linked)).rejects.toMatchObject({ code: 'ENOENT' });
+    await expect(readFile(join(external, 'model.safetensors'), 'utf8')).resolves.toBe('external weights');
+  });
+
+  it('preserves a directory used through a managed link and refuses removal while an external port is in use', async () => {
+    const cacheDir = join(testLogDir, 'models');
+    const native = join(cacheDir, 'native');
+    await mkdir(native, { recursive: true });
+    await symlink(native, join(cacheDir, 'linked'), 'dir');
+    pm2State = { name: SLOTSTREAM_APP, status: 'online', args: ['serve', '--model', 'linked'] };
+
+    await expect(removeSlotstreamModel('native', { cacheDir })).rejects.toMatchObject({ status: 409 });
+    pm2State = null;
+    platform.isPortInUse.mockImplementation(async (port) => port === PORTS.SLOTSTREAM);
+    await expect(removeSlotstreamModel('native', { cacheDir })).rejects.toMatchObject({ status: 409 });
+    expect((await lstat(native)).isDirectory()).toBe(true);
   });
 
   describe('getSlotstreamServerStatus', () => {
@@ -213,8 +326,7 @@ describe('slotstreamServerManager', () => {
     it('refuses with an in-app fix when the cache was read and is empty', async () => {
       vi.spyOn(slotstreamModels, 'listSlotstreamCachedModels').mockResolvedValue({ models: [], error: null });
       const err = await startSlotstreamServer().catch((e) => e);
-      expect(err.message).toMatch(/never downloads weights|no model weights cached/i);
-      expect(err.message).not.toMatch(/terminal/);
+      expect(err.message).toMatch(/Configure.*Download checkpoint/i);
       expect(execPm2Calls.some((args) => args[0] === 'start')).toBe(false);
     });
 
@@ -226,10 +338,10 @@ describe('slotstreamServerManager', () => {
       slotstreamModels.listSlotstreamCachedModels.mockRestore();
       const readCache = slotstreamModels.listSlotstreamCachedModels;
       vi.spyOn(slotstreamModels, 'listSlotstreamCachedModels').mockImplementation(() => readCache({ cacheDir }));
-      await expect(startSlotstreamServer({ model: 'incomplete' })).rejects.toThrow(/no model weights cached/i);
+      await expect(startSlotstreamServer({ model: 'incomplete' })).rejects.toThrow(/no cached checkpoint/i);
       await writeFile(join(modelDir, 'model.safetensors'), 'weights');
       await writeFile(join(modelDir, slotstreamModels.SLOTSTREAM_INCOMPLETE_MARKER), 'interrupted');
-      await expect(startSlotstreamServer({ model: 'incomplete' })).rejects.toThrow(/no model weights cached/i);
+      await expect(startSlotstreamServer({ model: 'incomplete' })).rejects.toThrow(/no cached checkpoint/i);
       expect(execPm2Calls.some((args) => args[0] === 'start')).toBe(false);
     });
 
@@ -481,11 +593,16 @@ describe('slotstreamServerManager', () => {
   });
 
   describe('isSlotstreamProvider', () => {
-    it('matches a local Slotstream endpoint on the dedicated port', () => {
+    it.each(['api', 'cli', 'tui'])('matches a local %s Slotstream provider', (type) => {
+      expect(isSlotstreamProvider({ type, endpoint: `http://127.0.0.1:${PORTS.SLOTSTREAM}/v1`, id: 'slotstream' })).toBe(true);
+    });
+
+    it('matches an OpenCode provider whose loopback endpoint is only in its config', () => {
       expect(isSlotstreamProvider({
-        type: 'api',
-        endpoint: `http://127.0.0.1:${PORTS.SLOTSTREAM}/v1`,
+        type: 'cli',
+        command: 'opencode',
         id: 'slotstream',
+        envVars: { OPENCODE_CONFIG_CONTENT: JSON.stringify({ provider: { slotstream: { options: { baseURL: `http://127.0.0.1:${PORTS.SLOTSTREAM}/v1` } } } }) },
       })).toBe(true);
     });
 

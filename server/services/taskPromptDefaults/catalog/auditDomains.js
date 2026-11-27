@@ -7,5 +7,7 @@ Repository: {repoPath}
 
 {modeInstructions}
 
+{trackerInstructions}
+
 ${domain.mission}`,
 ]));

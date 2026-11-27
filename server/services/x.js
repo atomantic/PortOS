@@ -12,6 +12,7 @@ const MAX_INTEGER = 2_147_483_647;
 const X_STATUS_URL = /^https:\/\/x\.com\/(?:(?:[A-Za-z0-9_]{1,15}|i)\/)?status\/\d+$/;
 const syncLocks = new Map();
 const draftOpenLocks = new Map();
+const draftDeleteLocks = new Set();
 
 const normalizeUsername = (value) => {
   const username = String(value || '').trim().replace(/^@/, '');
@@ -106,13 +107,22 @@ export async function createAccount({ label, username, enabled = true, notes = '
 }
 
 export async function updateAccount(id, updates) {
-  const existing = await getAccountRow(id);
-  if (!existing) return null;
-  await mapPgConstraintErrors(() => query(
-    `UPDATE x_accounts SET label=$2,username=$3,enabled=$4,notes=$5,updated_at=NOW() WHERE id=$1`,
-    [id, boundedText(updates.label ?? existing.label, 120).trim(), normalizeUsername(updates.username ?? existing.username), updates.enabled ?? existing.enabled, boundedText(updates.notes ?? existing.notes, 4_000)],
+  const sets = ['updated_at = NOW()'];
+  const params = [id];
+  const add = (column, value) => {
+    params.push(value);
+    sets.push(`${column} = $${params.length}`);
+  };
+  if (updates.label != null) add('label', boundedText(updates.label, 120).trim());
+  if (updates.username != null) add('username', normalizeUsername(updates.username));
+  if (updates.enabled != null) add('enabled', updates.enabled);
+  if (updates.notes != null) add('notes', boundedText(updates.notes, 4_000));
+
+  const { rows } = await mapPgConstraintErrors(() => query(
+    `UPDATE x_accounts SET ${sets.join(', ')} WHERE id = $1 RETURNING *`,
+    params,
   ), ACCOUNT_CONSTRAINT_MESSAGES);
-  return getAccount(id);
+  return rows[0] ? accountView(rows[0]) : null;
 }
 
 export async function deleteAccount(id) {
@@ -293,6 +303,40 @@ export async function createDraft({ accountId, body }) {
   return draftView({ ...result.rows[0], account_label: account.label, username: account.username });
 }
 
+async function updatedDraftView(id, row) {
+  if (!row) {
+    const exists = await query('SELECT 1 FROM x_drafts WHERE id=$1', [id]);
+    if (!exists.rows[0]) throw new ServerError('X draft not found', { status: 404 });
+    return null;
+  }
+  const account = await getAccountRow(row.account_id);
+  return draftView({ ...row, account_label: account?.label, username: account?.username });
+}
+
+export async function updateDraft(id, { body }) {
+  const result = await query(
+    `UPDATE x_drafts SET body=$2,state='draft',review_note='',approved_at=NULL,updated_at=NOW()
+     WHERE id=$1 AND state IN ('draft','rejected') RETURNING *`,
+    [id, boundedText(body, 4_000).trim()],
+  );
+  return updatedDraftView(id, result.rows[0]);
+}
+
+export async function deleteDraft(id) {
+  // PostgreSQL UUIDs are case-insensitive, including when open and delete use different casing.
+  const key = id.toLowerCase();
+  if (draftOpenLocks.has(key) || draftDeleteLocks.has(key)) {
+    throw new ServerError('This X draft is already being opened or deleted', { status: 409 });
+  }
+  draftDeleteLocks.add(key);
+  try {
+    const result = await query('DELETE FROM x_drafts WHERE id=$1 RETURNING account_id', [id]);
+    return result.rows[0]?.account_id ?? null;
+  } finally {
+    draftDeleteLocks.delete(key);
+  }
+}
+
 export async function listPendingReviewActions({ limit = 50 } = {}) {
   const result = await query(
     `SELECT d.*, a.label AS account_label, a.username
@@ -313,15 +357,7 @@ export async function reviewDraft(id, state, reviewNote = '') {
      RETURNING *`,
     [id, state, boundedText(reviewNote, 2_000), expectedState, MAX_DRAFT_AGE_MS],
   );
-  const row = result.rows[0];
-  if (!row) {
-    // Zero rows means either no such draft (404) or one in a state this transition can't leave (null -> route 409).
-    const exists = await query('SELECT 1 FROM x_drafts WHERE id=$1', [id]);
-    if (!exists.rows[0]) throw new ServerError('X draft not found', { status: 404 });
-    return null;
-  }
-  const account = await getAccountRow(row.account_id);
-  return draftView({ ...row, account_label: account?.label, username: account?.username });
+  return updatedDraftView(id, result.rows[0]);
 }
 
 async function openApprovedDraftUnlocked(id) {
@@ -345,9 +381,11 @@ async function openApprovedDraftUnlocked(id) {
 }
 
 export async function openApprovedDraft(id) {
-  if (draftOpenLocks.has(id)) return draftOpenLocks.get(id);
-  const run = openApprovedDraftUnlocked(id).finally(() => draftOpenLocks.delete(id));
-  draftOpenLocks.set(id, run);
+  const key = id.toLowerCase();
+  if (draftDeleteLocks.has(key)) throw new ServerError('This X draft is being deleted', { status: 409 });
+  if (draftOpenLocks.has(key)) return draftOpenLocks.get(key);
+  const run = openApprovedDraftUnlocked(id).finally(() => draftOpenLocks.delete(key));
+  draftOpenLocks.set(key, run);
   return run;
 }
 

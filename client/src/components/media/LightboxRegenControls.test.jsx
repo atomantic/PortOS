@@ -1,5 +1,5 @@
-import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { fireEvent, render, screen } from '@testing-library/react';
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
+import { act, fireEvent, render, screen } from '@testing-library/react';
 import LightboxRegenControls from './LightboxRegenControls.jsx';
 
 const previewRegenerate = vi.fn();
@@ -22,6 +22,7 @@ const open = () => {
 
 describe('LightboxRegenControls model input preview', () => {
   beforeEach(() => { vi.clearAllMocks(); });
+  afterEach(() => { vi.useRealTimers(); });
 
   it('shows the carried negative prompt as a chip and in the full prompt once a prompt is typed', async () => {
     previewRegenerate.mockResolvedValue(serverRecord);
@@ -37,8 +38,9 @@ describe('LightboxRegenControls model input preview', () => {
   });
 
   it('asks the server for nothing and shows no chip while the prompt is empty', async () => {
+    vi.useFakeTimers();
     open();
-    await new Promise((resolve) => setTimeout(resolve, 700));
+    await act(() => vi.advanceTimersByTimeAsync(700));
     expect(previewRegenerate).not.toHaveBeenCalled();
     expect(screen.queryByRole('button', { name: /negative prompt/ })).toBeNull();
   });

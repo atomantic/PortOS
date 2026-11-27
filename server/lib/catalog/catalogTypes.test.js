@@ -40,7 +40,7 @@ import {
   getActiveCatalogType,
   isActiveType,
 } from './catalogTypes.js';
-import { INGREDIENT_TYPES } from './catalogValidation.js';
+import { catalogIngredientCreateSchema } from './catalogValidation.js';
 
 import { afterEach } from 'vitest';
 
@@ -98,10 +98,9 @@ describe('catalogTypes — registry shape', () => {
   });
 });
 
-describe('catalogTypes — derived validation enum', () => {
-  it('catalogValidation.INGREDIENT_TYPES is the registry id list', () => {
-    expect([...INGREDIENT_TYPES]).toEqual([...INGREDIENT_TYPE_IDS]);
-    expect(Object.isFrozen(INGREDIENT_TYPES)).toBe(true);
+describe('catalogTypes — create validation', () => {
+  it.each(INGREDIENT_TYPE_IDS)('accepts the registered system type %s at the create boundary', (type) => {
+    expect(catalogIngredientCreateSchema.shape.type.parse(type)).toBe(type);
   });
 });
 

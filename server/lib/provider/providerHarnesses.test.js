@@ -15,10 +15,13 @@ import { fileURLToPath } from 'node:url';
 import {
   CREATABLE_HARNESS_IDS,
   PROVIDER_HARNESSES,
+  PROVIDER_HARNESS_IDS,
   compatibleBindings,
+  graphHarnessId,
   harnessById,
   harnessForProvider,
   isCompatible,
+  normalizeHarnessId,
 } from './providerHarnesses.js';
 import { CODEX_OSS_LOCAL_PROVIDERS } from './providerModels.js';
 import { PROVIDER_VENDORS } from './providerVendors.js';
@@ -51,6 +54,22 @@ describe('harness rows say why they cannot be minted from a connection', () => {
     }
     expect(harnessById('direct').recipe).toBeNull();
     expect(harnessById('direct').bindings).toHaveLength(1);
+  });
+});
+
+describe('harness IDs in the provider graph', () => {
+  it.each([
+    [null, 'direct', null],
+    [undefined, 'direct', null],
+    ['direct', 'direct', null],
+    ['claude', 'claude', 'claude'],
+    ['pi', 'pi', 'pi'],
+  ])('translates %s to registry ID %s and graph ID %s', (id, registryId, graphId) => {
+    expect(PROVIDER_HARNESS_IDS).toContain(registryId);
+    expect(normalizeHarnessId(id)).toBe(registryId);
+    expect(graphHarnessId(id)).toBe(graphId);
+    expect(graphHarnessId(normalizeHarnessId(id))).toBe(graphId);
+    expect(normalizeHarnessId(graphHarnessId(id))).toBe(registryId);
   });
 });
 

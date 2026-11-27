@@ -24,7 +24,6 @@ vi.mock('../services/settings.js', () => ({
 vi.mock('../services/browserService.js', () => ({
   updateConfig: vi.fn(async body => body),
   launchBrowser: vi.fn(async () => ({ running: true })),
-  getConfig: vi.fn(async () => ({})),
 }));
 vi.mock('../services/browserStatus.js', () => ({ getBrowserStatusSnapshot: vi.fn() }));
 vi.mock('../services/harnessActionStream.js', () => ({
@@ -43,6 +42,7 @@ vi.mock('../services/llamaServerManager.js', () => ({
   startLlamaServer: vi.fn(),
   stopLlamaServer: vi.fn(),
   installLlamaServer: vi.fn(),
+  waitForLlamaServerReady: vi.fn(),
   upgradeLlamaServer: vi.fn(),
 }));
 vi.mock('../services/mtplxServerManager.js', () => ({
@@ -51,6 +51,8 @@ vi.mock('../services/mtplxServerManager.js', () => ({
   startMtplxServer: vi.fn(),
   stopMtplxServer: vi.fn(),
   installMtplx: vi.fn(),
+  waitForMtplxReady: vi.fn(),
+  uninstallMtplx: vi.fn(),
 }));
 vi.mock('../services/slotstreamServerManager.js', () => ({
   SLOTSTREAM_APP: 'example-runtime',
@@ -58,15 +60,36 @@ vi.mock('../services/slotstreamServerManager.js', () => ({
   startSlotstreamServer: vi.fn(),
   stopSlotstreamServer: vi.fn(),
   installSlotstream: vi.fn(),
+  uninstallSlotstream: vi.fn(),
+  waitForSlotstreamReady: vi.fn(),
+}));
+vi.mock('../services/splashRuntimeStatus.js', () => ({
+  getSplashRuntimeStatus: vi.fn(),
+}));
+vi.mock('../services/splashServerManager.js', () => ({
+  installSplashRuntime: vi.fn(),
+  saveSplashContextWindow: vi.fn(),
+  startSplashServer: vi.fn(),
+  stopSplashServer: vi.fn(),
+  uninstallSplashRuntime: vi.fn(),
+}));
+vi.mock('../services/mkserveRuntimeManager.js', () => ({
+  getMkserveRuntimeStatus: vi.fn(),
+  installMkserve: vi.fn(),
+  startMkserveServer: vi.fn(),
+  stopMkserveServer: vi.fn(),
+  uninstallMkserve: vi.fn(),
 }));
 vi.mock('../services/slotstreamModelManager.js', () => ({
   cancelSlotstreamModelDownload: vi.fn(),
   downloadSlotstreamModel: vi.fn(),
+  removeSlotstreamModel: vi.fn(),
   previewSlotstreamDownload: vi.fn(),
 }));
 vi.mock('../services/mtplxModelManager.js', () => ({
   searchMtplxCatalog: vi.fn(),
   pullMtplxModel: vi.fn(),
+  cancelMtplxModelPull: vi.fn(),
   previewMtplxPull: vi.fn(),
   removeMtplxModel: vi.fn(),
 }));
@@ -170,6 +193,9 @@ vi.mock('../services/lmStudioManager.js', () => ({
 import browserRoutes from './browser.js';
 import harnessRoutes from './harnesses.js';
 import localLlmRoutes from './localLlm.js';
+import { cancelMtplxModelPull } from '../services/mtplxModelManager.js';
+import { removeSlotstreamModel } from '../services/slotstreamModelManager.js';
+import { uninstallSlotstream } from '../services/slotstreamServerManager.js';
 import { updateConfig, launchBrowser } from '../services/browserService.js';
 import { streamHarnessAction } from '../services/harnessActionStream.js';
 import { listHarnesses } from '../services/harnesses.js';
@@ -186,11 +212,16 @@ const mounts = [
   ['/api/local-llm', localLlmRoutes],
 ];
 
+const mtplxCancel = ['post', '/api/local-llm/mtplx/models/pull/cancel', undefined, cancelMtplxModelPull];
+const slotstreamRemoval = ['post', '/api/local-llm/slotstream/models/remove', { model: 'example-model' }, removeSlotstreamModel];
 const writes = [
+  slotstreamRemoval,
+  mtplxCancel,
   ['post', '/api/local-llm/capability-tests/run', { backend: 'ollama', modelId: 'example-model', testId: 'sandbox-repair' }, runCapabilityTest],
   ['put', '/api/browser/config', { chromePath: '/opt/example/bin/chrome', headless: true }, updateConfig],
   ['post', '/api/browser/launch', {}, launchBrowser],
   ['post', '/api/harnesses/action?runtime=codex&action=uninstall', {}, streamHarnessAction],
+  ['post', '/api/local-llm/slotstream/uninstall', {}, uninstallSlotstream],
   ['post', '/api/local-llm/install-backend', { backend: 'ollama' }, installBackend],
   ['post', '/api/local-llm/assessments/agent-benchmark', { backend: 'ollama', modelId: 'example-model' }, runOpenCodeAgentBenchmark],
   ['put', '/api/local-llm/jev/policy', { scopeAdherenceEnabled: false }, updateSettingsWith],
@@ -201,6 +232,8 @@ describe('operator authority for browser, harness and local-runtime management',
     vi.clearAllMocks();
     auth.enabled = false;
     installBackend.mockResolvedValue({ success: true });
+    uninstallSlotstream.mockResolvedValue({ success: true });
+    removeSlotstreamModel.mockResolvedValue({ success: true });
     runOpenCodeAgentBenchmark.mockResolvedValue({ completed: true });
     runCapabilityTest.mockResolvedValue({ passed: true });
     getStatus.mockResolvedValue({ available: true });
@@ -210,8 +243,11 @@ describe('operator authority for browser, harness and local-runtime management',
     runLocalLlmTest.mockResolvedValue({ text: 'example answer' });
   });
 
-  it('refuses a remote caller before a runtime install', async () => {
+  it('refuses a remote caller before a runtime install or MTPLX pull cancellation', async () => {
     await expectRemoteRefusal(mounts, ['post', '/api/local-llm/install-backend', { backend: 'ollama' }, installBackend]);
+    await expectRemoteRefusal(mounts, ['post', '/api/local-llm/slotstream/uninstall', {}, uninstallSlotstream]);
+    await expectRemoteRefusal(mounts, mtplxCancel);
+    await expectRemoteRefusal(mounts, slotstreamRemoval);
   });
 
   it('preserves local and delegated-agent runtime management and inference', async () => {
@@ -224,7 +260,7 @@ describe('operator authority for browser, harness and local-runtime management',
 
   it('keeps remote status and catalog reads open', async () => {
     const app = await hostControlApp('192.0.2.10', mounts);
-    for (const path of ['/api/browser/config', '/api/harnesses', '/api/local-llm/status', '/api/local-llm/catalog?backend=ollama']) {
+    for (const path of ['/api/harnesses', '/api/local-llm/status', '/api/local-llm/catalog?backend=ollama']) {
       expect((await callRoute(app, ['get', path])).status, path).toBe(200);
     }
     expect(listHarnesses).toHaveBeenCalledExactlyOnceWith({ fresh: false });

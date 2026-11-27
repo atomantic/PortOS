@@ -1,3 +1,4 @@
+import { recordingOperatorIo } from '../test/recordingOperatorIo.js';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { join } from 'path';
 
@@ -224,7 +225,7 @@ describe('browser draft delivery', () => {
 
   it('parks an unconfirmed delivery for reconciliation instead of a re-approvable failure', async () => {
     seed({ id: 'draft-1', ...browserDraft() });
-    const io = { emit: vi.fn() };
+    const io = recordingOperatorIo();
     doubles.sendPlaywright.mockResolvedValueOnce({ success: false, deliveryUnknown: true, status: 502, code: 'DELIVERY_UNKNOWN', error: 'Example unconfirmed' });
     expect(await sendDraft('draft-1', io)).toEqual({ success: false, status: 502, code: 'DELIVERY_UNKNOWN', error: 'Example unconfirmed' });
     const unknown = await getDraft('draft-1');

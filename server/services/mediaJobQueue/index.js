@@ -9,7 +9,7 @@
 
 import { randomUUID } from 'crypto';
 import { join } from 'path';
-import { PATHS, ensureDir } from '../../lib/fileUtils.js';
+import { PATHS, UUID_RE, ensureDir } from '../../lib/fileUtils.js';
 import { ServerError } from '../../lib/errorHandler.js';
 import { broadcastSse } from '../../lib/sseUtils.js';
 import { refuseRetiredTraining, assertRetiredDataAvailable } from '../../lib/retiredLoraTraining.js';
@@ -24,17 +24,18 @@ import { canRequestCancellation, snapshotCancellationIntent, applyCancellationIn
 import { MAX_PENDING_MEDIA_JOBS, MEDIA_QUEUE_PERSIST_FAILED, mediaQueueFullError } from './admission.js';
 import { jobLane, jobSwimlane, laneLimits, laneTotalLimits, refreshCodexParallelLimit, resetLimitsForTests } from './limits.js';
 import {
-  queue, cloudRunning, remoteRunning, archive, videoHolds, mediaJobEvents, recoveringJobs, terminalOperations,
+  queue, cloudRunning, remoteRunning, archive, videoHolds, mediaJobEvents, terminalOperations,
   getRunningJob, findJob, runningJobs, listJobs, isTopazUpscale, resetQueueStateForTests,
-  dispatchOperations, laneOperations, recoveryState, testLifecycleDisposals, workerState,
+  dispatchOperations, laneOperations, recoveryState, testLifecycleDisposals,
 } from './state.js';
+import { workerState } from './workerSignal.js';
 import {
   admitCompletion, persistTerminalTransition, persist, restoreQueueSnapshot, isPersistBlocked,
   hasPendingTransitions, configureTerminalTransitions, settlePersistChain, resetPersistenceForTests,
 } from './persistence.js';
 import { ensureSseEntry, broadcastTerminalSse, recomputeQueuePositions, resetSseForTests } from './sse.js';
 import { assertMusicVideoJobPolicy, getGenModuleForJob, installVideoExecutionRecorder, JOB_KINDS } from './execution.js';
-import { prepareQueuedVideos, quiesceMediaJobQueue, runJobNow as runScheduledJobNow, settleQueuedJob, startWorker } from './scheduler.js';
+import { prepareQueuedVideos, quiesceMediaJobQueue, runJobNow as runScheduledJobNow, settleQueuedJob, startWorker, wakeWorker } from './scheduler.js';
 import { loadMediaRuntimeModule } from '../bootHookRegistry.js';
 
 // The admission contract lives in ./admission.js so producers that cannot
@@ -196,12 +197,12 @@ export async function initMediaJobQueue({ deferCompletionRecovery = false, prepa
   return recoveryState.initPromise;
 }
 
-// A queued recovery can still own a remote or detached job, and a terminal
+// A queued recovery can still own a remote job, and a terminal
 // callback can still be publishing after its visible status changed.
 export function getMediaRecoveryActivity() {
   const jobs = listJobs();
   const pending = hasPendingTransitions() || terminalOperations.size > 0 || dispatchOperations.size > 0
-    || recoveringJobs.size > 0 || jobs.some(mediaRecoveryPending);
+    || jobs.some(mediaRecoveryPending);
   return { trusted: recoveryState.inventoryReady && !isPersistBlocked(), pending };
 }
 
@@ -258,20 +259,25 @@ export function assertMediaQueueRoom(count = 1) {
 // memory, so admission succeeds without durability; boot already reported it.
 //
 // Bounded (#8326): at MAX_PENDING_MEDIA_JOBS waiting jobs the submission is
-// refused (429 MEDIA_QUEUE_FULL) before ANY state changes — no id, no queue
+// refused (429 MEDIA_QUEUE_FULL) before ANY queue state changes — no queue
 // entry, no SSE entry, no snapshot write. The check and the push below run in
 // one synchronous stretch, so concurrent submissions cannot overshoot it.
-export async function enqueueJob(job) {
+// Internal callers can supply their generated UUID to stage job-owned inputs
+// before admission.
+export async function enqueueJob(job, { jobId } = {}) {
+  if (jobId !== undefined && (typeof jobId !== 'string' || !UUID_RE.test(jobId) || jobId !== jobId.toLowerCase())) {
+    throw new Error('enqueueJob: invalid job ID');
+  }
   const params = job.params || {};
   const inputs = [params.initImagePath, params.sourceImagePath, params.sourceImageFile, params.lastImagePath, params.lastImageFile,
     ...(Array.isArray(params.referenceImagePaths) ? params.referenceImagePaths : []),
     ...(Array.isArray(params.remoteMedia?.inputAssets) ? params.remoteMedia.inputAssets.map(asset => asset?.path) : [])];
-  if (!params.reviewedReferenceDigest && !inputs.some(path => typeof path === 'string' && path.includes('snapshot-'))) return enqueueJobLocked(job);
+  if (!params.reviewedReferenceDigest && !inputs.some(path => typeof path === 'string' && path.includes('snapshot-'))) return enqueueJobLocked(job, jobId);
   const { withReviewedSnapshotLock } = await loadMediaRuntimeModule('reviewedReference');
-  return withReviewedSnapshotLock(() => enqueueJobLocked(job));
+  return withReviewedSnapshotLock(() => enqueueJobLocked(job, jobId));
 }
 
-async function enqueueJobLocked({ kind, params, owner = null }) {
+async function enqueueJobLocked({ kind, params, owner = null }, jobId) {
   installVideoExecutionRecorder();
   if (kind === 'training') refuseRetiredTraining();
   await assertMusicVideoJobPolicy(kind, params);
@@ -292,7 +298,7 @@ async function enqueueJobLocked({ kind, params, owner = null }) {
     });
   }
   assertMediaQueueRoom(1);
-  const id = randomUUID();
+  const id = jobId ?? randomUUID();
   let preparedParams = params;
   if (kind === 'image' && params?.reviewedReferenceDigest) {
     if (isPersistBlocked()) throw new ServerError('Reviewed edits require a writable media queue', { status: 503, code: MEDIA_QUEUE_PERSIST_FAILED });
@@ -351,6 +357,7 @@ async function enqueueJobLocked({ kind, params, owner = null }) {
     })(),
   };
   assertRetiredDataAvailable();
+  if (jobId && findJob(id)) throw new Error('enqueueJob: job ID already exists');
   job.admitting = true;
   queue.push(job);
   try {
@@ -377,6 +384,7 @@ async function enqueueJobLocked({ kind, params, owner = null }) {
   }
   broadcastSse(ensureSseEntry(id), { type: 'queued', position: job.position });
   mediaJobEvents.emit('enqueued', job);
+  wakeWorker();
   startWorker(enqueueJob);
   console.log(`📥 media-job [${id.slice(0, 8)}] ${kind} queued (position ${job.position})`);
   return { jobId: id, position: job.position, status: 'queued' };
@@ -400,7 +408,10 @@ export function isVideoModelHeld(modelId, runtime) {
 export async function resumeVideoHold(holdId) {
   if (!videoHolds.resume(holdId)) return false;
   videoHolds.updateQueued(queue);
-  await persist();
+  // Queue the cleared hold snapshot before dispatching any newly eligible jobs.
+  const saved = persist();
+  wakeWorker();
+  await saved;
   return true;
 }
 

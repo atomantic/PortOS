@@ -12,7 +12,7 @@
  * re-adopt a server it started earlier instead of losing track of a detached
  * pid. A detached child gets none of that.
  *
- * Two limits carried over from `docs/features/mtplx.md`:
+ * Two limits carried over from `docs/features/local-llm-runtimes.md`:
  *   - **A start never downloads weights.** `mtplx serve` is started on a
  *     checkpoint ALREADY in MTPLX's cache; an empty cache is reported rather
  *     than silently filled. Fetching one is its own explicit, user-pressed
@@ -22,19 +22,20 @@
  *     outside PortOS.
  */
 
-import { readFile, unlink } from 'fs/promises';
+import { lstat, readFile, rm, unlink } from 'fs/promises';
 import { release } from 'os';
 import { join } from 'path';
 import { sleep } from '../lib/fileUtils.js';
 import { ServerError } from '../lib/errorHandler.js';
 import { launchArgs, normalizeTuning, tuningSpecsFor } from '../lib/localModelTuning.js';
-import { LOCAL_RUNTIMES, localEndpointPort, localRuntimeKind, isLocalInstanceEndpoint } from '../lib/localProviderRuntime.js';
+import { LOCAL_RUNTIMES, localEndpointPort, localRuntimeForProvider, isLocalInstanceEndpoint } from '../lib/localProviderRuntime.js';
 import { listMtplxCachedModels, pickMtplxCachedModel } from '../lib/mtplxModels.js';
 import { compareMtplxVersions, describeMtplxRuntime, lockedMtplxVersion, readExternalMtplxVersion, mtplxManagedBinary, mtplxVenvDir, readManagedMtplxVersion, resolveMtplxBinary, setMtplxInstallInProgress } from '../lib/mtplxRuntime.js';
 import { LOCK_PROFILES } from '../lib/pythonLockProfiles.js';
 import { probeOpenAiModels } from '../lib/openAiModelsProbe.js';
 import { createDaemonLogFiles, createDaemonWatcher, createOnDemandDaemon, createPm2ExitTail, pm2ArgValue, MTPLX_APP } from '../lib/managedDaemon.js';
 import { persistDaemonLaunchConfig } from './localDaemonLaunchConfig.js';
+import { createMtplxCheckpointRunner } from './mtplxCheckpoints.js';
 // `settings.js` is lazy-imported at its call sites below, never statically: it
 // eagerly resolves `fileUtils.PATHS` at module load, which drags PATHS into the
 // module graph of every consumer of this manager and breaks the many suites that
@@ -310,7 +311,7 @@ export async function getMtplxServerEndpoint() {
  * binary; until then `cachedModels` stays empty with `cacheError: null` —
  * "not read", never "read and empty".
  */
-export async function getMtplxServerStatus() {
+export async function getMtplxServerStatus({ includeLogs } = {}) {
   const binaryPath = resolveMtplxBinary();
   const installed = Boolean(binaryPath);
   // The platform gate is about what PortOS may INSTALL, never about what is
@@ -319,7 +320,7 @@ export async function getMtplxServerStatus() {
   // be a false negative.
   const supported = installed || supportsMtplxInstall();
 
-  const base = await daemon.getStatusBase({ installed });
+  const base = await daemon.getStatusBase({ installed, includeLogs });
 
   // Reading the wrapper, never running it — see `lib/mtplxRuntime.js`.
   const runtime = installed ? await describeMtplxRuntime(binaryPath) : null;
@@ -355,6 +356,7 @@ export async function getMtplxServerStatus() {
     runtimeVersion,
     lockedVersion,
     runtimeManaged: managedRuntime,
+    canUninstall: managedRuntime && !mtplxInstallation && !mtplxUninstalling && !base.running && base.managed === false,
     runtimeOutdated,
     // The tuning flags the running daemon was LAUNCHED with, rendered by the
     // catalog that owns the transport rather than re-derived in the UI. A
@@ -368,7 +370,7 @@ export async function getMtplxServerStatus() {
     keepLoaded: await onDemand.keepLoaded(),
     // What a lazy start will launch on, so the card's fields show the saved
     // choice rather than resetting to "Auto" on every page load.
-    launch: await onDemand.savedLaunch().then(({ model, port }) => ({ model, port })),
+    launch: await onDemand.savedLaunch().then(({ model, port, tuning }) => ({ model, port, tuning })),
     cachedModels: (cache.models || []).map((m) => m?.repo_id).filter(Boolean),
     // The same cache, with what the manage-checkpoints UI needs to let a user
     // free the disk: how big each pack is, and whether it is actually servable
@@ -393,8 +395,12 @@ export async function getMtplxServerStatus() {
  * Ready external installs remain usable through resolveMtplxBinary().
  */
 let mtplxInstallation = null;
+let mtplxUninstalling = false;
 const mtplxProgressListeners = new Set();
 export function installMtplx({ onProgress = () => {} } = {}) {
+  if (mtplxUninstalling) {
+    return Promise.reject(new ServerError('MTPLX is being uninstalled.', { status: 409 }));
+  }
   if (!supportsMtplxInstall()) {
     return Promise.reject(new ServerError(MTPLX_UNSUPPORTED_REASON, { status: 400, code: 'MTPLX_UNSUPPORTED_PLATFORM' }));
   }
@@ -410,6 +416,35 @@ export function installMtplx({ onProgress = () => {} } = {}) {
     });
   }
   return mtplxInstallation.finally(() => { mtplxProgressListeners.delete(listener); });
+}
+
+export async function uninstallMtplx() {
+  if (mtplxInstallation || mtplxUninstalling) {
+    throw new ServerError('MTPLX already has an installation change in progress.', { status: 409 });
+  }
+  mtplxUninstalling = true;
+  try {
+    return await onDemand.runStart(removeMtplxVenv);
+  } finally {
+    mtplxUninstalling = false;
+  }
+}
+
+async function removeMtplxVenv() {
+  const venv = mtplxVenvDir();
+  const stat = await lstat(venv).catch((error) => {
+    if (error.code === 'ENOENT') return null;
+    throw error;
+  });
+  if (!stat?.isDirectory() || resolveMtplxBinary() !== mtplxManagedBinary()) {
+    throw new ServerError('There is no PortOS-managed MTPLX environment to uninstall.', {
+      status: 409, code: 'MTPLX_NOT_MANAGED',
+    });
+  }
+  const { port: savedPort } = await onDemand.savedLaunch();
+  await daemon.assertStoppedForUninstall({ label: 'MTPLX', codePrefix: 'MTPLX', savedPort });
+  await rm(venv, { recursive: true });
+  return { success: true, message: 'PortOS-managed MTPLX uninstalled. Checkpoints and provider settings were kept.' };
 }
 
 async function installLockedMtplx(onProgress) {
@@ -434,11 +469,11 @@ async function installLockedMtplx(onProgress) {
       // A failed sync may have written the entry point before all dependencies.
       // Do not advertise that partial runtime as installed on the next poll.
       if (args[0] === 'pip') await unlink(mtplxManagedBinary()).catch((error) => { if (error.code !== 'ENOENT') throw error; });
-      throw new ServerError(`MTPLX install failed: ${result.error}`, { status: 500, code: 'MTPLX_INSTALL_FAILED' });
+      throw new ServerError(`MTPLX install failed: ${result.error}`, { status: 502, code: 'MTPLX_INSTALL_FAILED' });
     }
   }
   if (!findCommandOnPath(mtplxManagedBinary())) {
-    throw new ServerError('MTPLX installation did not create an executable. Retry the runtime installation.', { status: 500, code: 'MTPLX_INSTALL_FAILED' });
+    throw new ServerError('MTPLX installation did not create an executable. Retry the runtime installation.', { status: 502, code: 'MTPLX_INSTALL_FAILED' });
   }
   return { success: true, message: 'MTPLX installed' };
 }
@@ -490,7 +525,7 @@ export const startMtplxServer = (options = {}) => onDemand.runStart(() => launch
  * endpoint answers when this returns".
  *
  * There is deliberately no `host` option: MTPLX is a loopback daemon
- * (`docs/features/mtplx.md`), every shipped provider preset points at
+ * (`docs/features/local-llm-runtimes.md`), every shipped provider preset points at
  * 127.0.0.1, and accepting a host PortOS never puts on the launch line would
  * report an endpoint the server is not bound to.
  *
@@ -501,10 +536,10 @@ export const startMtplxServer = (options = {}) => onDemand.runStart(() => launch
  * failed tuning relaunch puts back: without it the restore would bring the
  * daemon up untuned and call that "the previous configuration".
  *
- * @param {{port?: number, model?: string, tuning?: object, waitMs?: number, onProgress?: (line: string) => void}} options
+ * @param {{port?: number, model?: string, tuning?: object, temporary?: boolean, waitMs?: number, onProgress?: (line: string) => void}} options
  */
 async function launchMtplxServer(options = {}) {
-  const { port = DEFAULT_PORT, model: requestedModel = null, tuning = null, waitMs, onProgress = () => {} } = options;
+  const { port = DEFAULT_PORT, model: requestedModel = null, tuning = null, temporary = false, waitMs, onProgress = () => {} } = options;
   const normalizedTuning = normalizeTuning('mtplx', tuning);
   const emit = (line) => { appendLog(line); onProgress(line); };
 
@@ -565,7 +600,7 @@ async function launchMtplxServer(options = {}) {
     describeExit: (lines) => isMtplxRuntimeBootstrapFailure(lines.join('\n'))
       ? MTPLX_RUNTIME_BOOTSTRAP_ERROR
       : null,
-    onStarted: () => persistDaemonLaunchConfig({ key: 'mtplx', label: 'MTPLX', launch: { port, model, tuning: normalizedTuning } }),
+    onStarted: temporary ? undefined : () => persistDaemonLaunchConfig({ key: 'mtplx', label: 'MTPLX', launch: { port, model, tuning: normalizedTuning } }),
   });
 }
 
@@ -708,99 +743,10 @@ async function relaunchWithTuning(normalized, knobs) {
   return { applied: false, reason: ready.reason, config: await restorePrevious(previous, ready.reason) };
 }
 
-/**
- * Run `fn` while MTPLX serves the cached checkpoint `model`, then put back what was serving before.
- *
- * `mtplx serve` holds one checkpoint, so a caller that compares several cached packs (the HTML
- * Pages bench) has to relaunch between them. When `model` is already serving, `fn` runs with no
- * relaunch. Otherwise the daemon is stopped and started on `model`, and once `fn` settles the
- * previous launch line goes back up, or MTPLX is stopped again when it was not running before.
- * Refuses to stop a server unless PortOS owns it and can name its checkpoint.
- *
- * `fn` receives the served model id as `/v1/models` reports it, which is what a request names.
- *
- * @param {string} model a cached MTPLX repo id
- * @param {(servedModelId: string|null) => Promise<*>} fn
- * @param {{ signal?: AbortSignal }} [options] abort the switch while the new checkpoint is still loading
- */
-export async function runOnMtplxCheckpoint(model, fn, { signal } = {}) {
-  if (signal?.aborted) throw checkpointAborted();
-  const switched = await onDemand.runStart(() => switchToCheckpoint(model, signal));
-  try {
-    if (signal?.aborted) throw checkpointAborted();
-    return await fn(switched.servedModelId);
-  } finally {
-    if (switched?.previous !== undefined) {
-      await onDemand.runStart(() => restoreAfterCheckpoint(switched)).catch((err) => {
-        console.error(`❌ MTPLX: could not put the previous checkpoint back after ${model}: ${err.message}`);
-      });
-    }
-  }
-}
-
-const checkpointAborted = () => {
-  const err = new Error('The MTPLX checkpoint switch was aborted');
-  err.name = 'AbortError';
-  return err;
-};
-
-const servedModelIdAt = async (endpoint) => (await probeOpenAiModels(endpoint, { timeoutMs: PROBE_TIMEOUT_MS })).models?.[0] ?? null;
-
-async function switchToCheckpoint(model, signal) {
-  if (signal?.aborted) throw checkpointAborted();
-  const status = await getMtplxServerStatus();
-  if (status.running && status.config?.model === model) {
-    return { servedModelId: await servedModelIdAt(endpointFor(status.config)), previous: undefined };
-  }
-  if (status.running && status.managed !== true) {
-    const why = status.managed === null
-      ? 'PortOS could not read PM2, so it cannot tell whether it owns the MTPLX server'
-      : 'MTPLX was started outside PortOS, so PortOS will not stop it to switch checkpoints';
-    throw new ServerError(why, { status: 409, code: 'MTPLX_SWITCH_REFUSED' });
-  }
-  if (status.running && !status.config?.model) {
-    throw new ServerError('MTPLX is serving its own default checkpoint, which PortOS cannot name — restart it on a chosen checkpoint from the LLMs page before switching checkpoints', {
-      status: 409,
-      code: 'MTPLX_SWITCH_REFUSED',
-    });
-  }
-  // `null` previous = MTPLX was not running, so it is stopped again afterwards. Every launch persists
-  // its line as the saved launch, so the saved one is kept to write back: otherwise the next on-demand
-  // start would serve the bench pack instead of the operator's choice.
-  const previous = status.running ? status.config : null;
-  const savedLaunch = previous ? null : (await onDemand.savedLaunch().catch(() => null))?.raw ?? null;
-  const port = previous?.port ?? DEFAULT_PORT;
-  console.log(`🚄 MTPLX: switching to ${model}${previous?.model ? ` (from ${previous.model})` : ''}`);
-  if (previous) {
-    await stopMtplxServer();
-    await waitForPortRelease(port);
-  }
-  const started = await launchMtplxServer({ port, model }).catch((failure) => ({ failure }));
-  if (signal?.aborted && !started.failure) {
-    await stopMtplxServer().catch(() => {});
-    await restoreAfterCheckpoint({ previous, savedLaunch, stopped: true }).catch((restoreErr) => {
-      console.error(`❌ MTPLX: could not put the previous checkpoint back after an aborted switch to ${model}: ${restoreErr?.message ?? restoreErr}`);
-    });
-    throw checkpointAborted();
-  }
-  const ready = started.failure ? { ready: false, reason: started.failure.message }
-    : started.online ? { ready: true } : await onDemand.waitForReady(started.endpoint, { signal });
-  if (!ready.ready) {
-    if (!started.failure) await stopMtplxServer().catch(() => {});
-    await restoreAfterCheckpoint({ previous, savedLaunch, stopped: true }).catch((restoreErr) => {
-      console.error(`❌ MTPLX: could not put the previous checkpoint back after failed switch to ${model}: ${restoreErr?.message ?? restoreErr}`);
-    });
-    if (ready.aborted || signal?.aborted) throw checkpointAborted();
-    throw new ServerError(`MTPLX could not serve ${model}: ${ready.reason}`, { status: 503, code: 'MTPLX_SWITCH_FAILED' });
-  }
-  return { servedModelId: await servedModelIdAt(started.endpoint), previous, savedLaunch };
-}
-
-async function restoreAfterCheckpoint({ previous, savedLaunch, stopped = false }) {
-  if (!stopped) await stopMtplxServer();
-  if (previous) await restorePrevious(previous, null);
-  else if (savedLaunch) await persistDaemonLaunchConfig({ key: 'mtplx', label: 'MTPLX', launch: savedLaunch });
-}
+export const runOnMtplxCheckpoint = createMtplxCheckpointRunner({
+  onDemand, getMtplxServerStatus, endpointFor, defaultPort: DEFAULT_PORT, probeTimeoutMs: PROBE_TIMEOUT_MS,
+  stopMtplxServer, waitForPortRelease, launchMtplxServer, restorePrevious,
+});
 
 /**
  * Why the tuned launch failed, in the caller's words.
@@ -828,9 +774,9 @@ const launchFailureReason = (err) => (err?.code === 'MTPLX_EXITED'
  * the caller reports the tuning as not applied either way, and a config here
  * would claim a daemon that is not running.
  */
-async function restorePrevious(previous, failure) {
+async function restorePrevious(previous, failure, { temporary = false } = {}) {
   await waitForPortRelease(previous.port ?? DEFAULT_PORT);
-  const restored = await launchMtplxServer(previous).catch((err) => {
+  const restored = await launchMtplxServer({ ...previous, temporary }).catch((err) => {
     console.error(`❌ MTPLX: could not restore the previous configuration: ${err.message}`);
     return null;
   });
@@ -933,16 +879,17 @@ export function isMtplxProvider(provider) {
   // API providers reach MTPLX directly, while OpenCode TUI providers carry
   // the same local endpoint and need the exact same lazy wake-up before the
   // TUI is spawned.
-  if (!provider || !['api', 'tui'].includes(provider.type)) return false;
+  if (!provider || !['api', 'cli', 'tui'].includes(provider.type)) return false;
+  const localRuntime = localRuntimeForProvider(provider);
+  if (localRuntime?.kind === 'mtplx') return true;
   if (!isLocalInstanceEndpoint(provider.endpoint)) return false;
-  // `localRuntimeKind`, not `localBackendForProvider` — the latter only ever
+  // `localRuntimeForProvider`, not `localBackendForProvider` — the latter only ever
   // answers 'ollama'/'lmstudio' (it maps those two catalog ports), so it reports
   // every MTPLX provider as having no local backend at all. This one call now
   // covers both marker-backed wrappers (`mtplxBacked`) and the shipped bare API
   // record (`id === 'mtplx'`) — #6466 collapsed the two hand-rolled checks that
-  // used to live here into `localRuntimeKind` itself.
-  if (localRuntimeKind(provider) === 'mtplx') return true;
-  // ...and an endpoint-only provider aimed at the port THIS daemon is serving.
+  // used to live here into the shared runtime resolver itself.
+  // An endpoint-only provider aimed at the port THIS daemon is serving.
   // Deliberately compared against the live launch config rather than treating
   // :8000 as "must be MTPLX" — 8000 is a generic port, and claiming any local
   // server on it would lazily start MTPLX for someone else's API. This arm

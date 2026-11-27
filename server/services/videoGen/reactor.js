@@ -63,7 +63,7 @@ export function resolveReactorApiKey(settings) {
  */
 export async function mintReactorToken(apiKey) {
   if (!apiKey) {
-    throw new ServerError('No reactor.inc API key configured — set it in Settings > Video Gen or the REACTOR_API_KEY env var', { status: 400, code: 'REACTOR_NOT_CONFIGURED' });
+    throw new ServerError('No reactor.inc API key configured — set it in Settings → Credentials or the REACTOR_API_KEY env var', { status: 400, code: 'REACTOR_NOT_CONFIGURED' });
   }
   const res = await fetchWithTimeout(`${REACTOR_API_BASE}/tokens`, {
     method: 'POST',
@@ -237,7 +237,7 @@ async function generateVideoPrepared({
   const effectiveSettings = settings || await getSettings().catch(() => null);
   const apiKey = resolveReactorApiKey(effectiveSettings);
   if (!apiKey) {
-    throw new ServerError('No reactor.inc API key configured — set it in Settings > Video Gen or the REACTOR_API_KEY env var', { status: 400, code: 'REACTOR_NOT_CONFIGURED' });
+    throw new ServerError('No reactor.inc API key configured — set it in Settings → Credentials or the REACTOR_API_KEY env var', { status: 400, code: 'REACTOR_NOT_CONFIGURED' });
   }
 
   const jobId = providedJobId || randomUUID();

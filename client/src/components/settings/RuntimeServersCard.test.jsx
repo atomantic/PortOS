@@ -238,7 +238,7 @@ describe('RuntimeServersCard', () => {
     });
     const slotstream = row('Slotstream');
     expect(within(slotstream).queryByRole('button', { name: /^Start/ })).toBeNull();
-    expect(within(slotstream).getByText(/a start never fetches weights/i)).toBeInTheDocument();
+    expect(within(slotstream).getByText(/open configure and select download checkpoint/i)).toBeInTheDocument();
   });
 
   it('says why Slotstream cannot start when its checkpoint cache is unreadable', () => {

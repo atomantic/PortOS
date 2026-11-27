@@ -37,9 +37,7 @@ vi.mock('../codeReview.js', async (importOriginal) => ({
 }));
 
 import { afterAll, beforeEach, describe, expect, it, vi } from 'vitest';
-import { readFileSync } from 'fs';
-import { dirname, join } from 'path';
-import { fileURLToPath } from 'url';
+import { join } from 'path';
 
 vi.mock('../cos/cosAgentLifecycle.js', () => ({
   getAgent: vi.fn(),
@@ -96,9 +94,6 @@ import { completeAgentRun } from './agentRunTracking.js';
 import { processAgentCompletion } from './agentCompletion.js';
 import { MAX_TASK_RETRIES, resolveFailedTaskUpdate } from './agentErrorAnalysis.js';
 
-const __dirname = dirname(fileURLToPath(import.meta.url));
-const MANAGEMENT_SOURCE = readFileSync(join(__dirname, 'agentManagement.js'), 'utf8');
-const LIFECYCLE_SOURCE = readFileSync(join(__dirname, 'agentLifecycle.js'), 'utf8');
 const TASK = {
   id: 'sys-example',
   taskType: 'internal',
@@ -1341,22 +1336,6 @@ it('finishes extended Deep with an honest partial summary through ordinary compl
     await expect(dispatchRecoveredTaskOutputHook({ agentId: 'agent-recovered', task: TASK, success: true }))
       .resolves.toEqual({ ran: false, recoveryPayloadUnavailable: true });
     expect(hook).toHaveBeenCalledOnce();
-  });
-});
-
-describe('recovery path wiring (#3182, #8440)', () => {
-  // Both recovery paths (the orphan sweep in agentManagement.js and post-restart
-  // recovery in agentLifecycle.js) call the shared `retireDeadAgent` (#8440) for
-  // this step list now, so the ordering guard moved to pin ITS body instead of
-  // each caller's inlined copy.
-  it('both recovery paths retire through the shared retireDeadAgent', () => {
-    const sweepStart = MANAGEMENT_SOURCE.indexOf('async function runCleanupOrphanedAgents');
-    const sweepBody = MANAGEMENT_SOURCE.slice(sweepStart, sweepStart + 12_000);
-    expect(sweepBody).toMatch(/await retireDeadAgent\(/);
-
-    const recoveryStart = LIFECYCLE_SOURCE.indexOf('Completing untracked agent');
-    const recoveryBody = LIFECYCLE_SOURCE.slice(recoveryStart, recoveryStart + 2_000);
-    expect(recoveryBody).toMatch(/await retireDeadAgent\(/);
   });
 });
 

@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useId, useRef, useState } from 'react';
 import { useNavigate, useParams, useSearchParams } from 'react-router';
 import { AtSign, BarChart3, Check, ExternalLink, FilePen, Plus, RefreshCw, ShieldAlert, X as XIcon } from 'lucide-react';
 import {
@@ -11,11 +11,15 @@ import {
   syncXAccount,
   openXAccountDestination,
   createXDraft,
+  updateXDraft,
+  deleteXDraft,
   reviewXDraft,
   openXDraft,
 } from '../services/apiX.js';
 import Drawer from '../components/Drawer';
 import PageHeader from '../components/PageHeader';
+import CollapsibleListItem from '../components/ui/CollapsibleListItem';
+import InlineConfirmRow from '../components/ui/InlineConfirmRow';
 import PageSkeleton from '../components/ui/PageSkeleton';
 import TabPills from '../components/ui/TabPills';
 import BrailleSpinner from '../components/BrailleSpinner';
@@ -51,6 +55,65 @@ function StatusBadge({ value, children }) {
   return <span className={`inline-flex items-center gap-1 rounded border px-2 py-1 text-xs ${classes}`}>{value === true ? <Check size={13} /> : value === false ? <XIcon size={13} /> : null}{children}</span>;
 }
 
+function DraftCard({ draft, busy, onUpdate, onRemove, onReview, onOpen }) {
+  const [editBody, setEditBody] = useState(null);
+  const [confirming, setConfirming] = useState(false);
+  const editFieldId = useId();
+  const deleteButtonRef = useRef(null);
+  const canEdit = draft.state === 'draft' || draft.state === 'rejected';
+  const editing = canEdit && editBody !== null;
+  const closeEditor = () => setEditBody(null);
+
+  const saveEdit = (event) => {
+    event.preventDefault();
+    if (busy || !editBody.trim()) return;
+    onUpdate(draft, editBody.trim(), closeEditor);
+  };
+
+  return (
+    <article className="rounded border border-port-border p-3">
+      <div className="flex flex-wrap items-center justify-between gap-2">
+        <StatusBadge value={draft.state === 'approved' || draft.state === 'opened'}>{stateLabel(draft.state)}</StatusBadge>
+        <span className="text-xs text-gray-500">{formatDate(draft.updatedAt)}</span>
+      </div>
+      {editing ? (
+        <form className="mt-3 space-y-2" onSubmit={saveEdit}>
+          <label htmlFor={editFieldId} className="sr-only">Edit draft text</label>
+          <textarea id={editFieldId} className={fieldClass} rows="4" maxLength={4000} disabled={busy} value={editBody} onChange={(event) => setEditBody(event.target.value)} />
+          <div className="flex flex-wrap items-center gap-2">
+            <button className={buttonClass} disabled={busy || !editBody.trim()}>Save changes</button>
+            <button type="button" className={secondaryButton} disabled={busy} onClick={closeEditor}>Cancel</button>
+          </div>
+        </form>
+      ) : (
+        <>
+          <p className="mt-3 whitespace-pre-wrap wrap-anywhere text-sm text-gray-200">{draft.body}</p>
+          {confirming ? (
+            <fieldset disabled={busy} className="mt-3 disabled:opacity-50">
+              <InlineConfirmRow question="Delete this local draft?" onConfirm={() => onRemove(draft)} onCancel={() => setConfirming(false)} autoFocus returnFocusRef={deleteButtonRef} />
+            </fieldset>
+          ) : (
+            <div className="mt-3 flex flex-wrap gap-2">
+              {draft.state === 'draft' && <button type="button" className={secondaryButton} disabled={busy} onClick={() => onReview(draft, 'pending_review')}>Submit for review</button>}
+              {draft.state === 'pending_review' && <>
+                <button type="button" className={buttonClass} disabled={busy} onClick={() => onReview(draft, 'approved')}>Approve</button>
+                <button type="button" className={secondaryButton} disabled={busy} onClick={() => onReview(draft, 'rejected')}>Reject</button>
+              </>}
+              {draft.state === 'approved' && (isApprovalExpired(draft) ? <>
+                <span className="self-center text-xs text-port-warning">Approval expired</span>
+                <button type="button" className={secondaryButton} disabled={busy} onClick={() => onReview(draft, 'pending_review')}>Re-submit for review</button>
+              </> : <button type="button" className={buttonClass} disabled={busy} onClick={() => onOpen(draft)}><ExternalLink size={15} className="mr-1 inline" />Open compose in X</button>)}
+              {canEdit && <button type="button" className={secondaryButton} disabled={busy} onClick={() => setEditBody(draft.body)}>Edit</button>}
+              <button type="button" ref={deleteButtonRef} className={secondaryButton} disabled={busy} onClick={() => setConfirming(true)}>Delete</button>
+            </div>
+          )}
+        </>
+      )}
+      {draft.reviewNote && <p className="mt-2 wrap-anywhere text-xs text-gray-500">{draft.reviewNote}</p>}
+    </article>
+  );
+}
+
 export default function XPage() {
   const navigate = useNavigate();
   const { accountId } = useParams();
@@ -72,6 +135,7 @@ export default function XPage() {
   const [accountFormError, setAccountFormError] = useState('');
   const [deleteAccountId, setDeleteAccountId] = useState(null);
   const [draftBody, setDraftBody] = useState('');
+  const [draftDeletion, setDraftDeletion] = useState(null);
   const selectedLoadRef = useRef({ posts: 0, drafts: 0 });
   const accountsLoadRef = useRef(0);
   const accountsLoadedRef = useRef(false);
@@ -96,6 +160,12 @@ export default function XPage() {
   const unsavedAccountNotice = accountFormDirty && <div className="mt-4 flex flex-wrap items-center gap-2 rounded border border-port-warning/40 bg-port-warning/10 p-3"><p className="text-sm text-port-warning">Unsaved changes to this account. Save it before running these checks.</p><button type="button" className={secondaryButton} disabled={Boolean(busy)} onClick={discardAccountEdits}>Discard changes</button></div>;
   const visiblePosts = resourcesAccountId === accountId ? posts : [];
   const visibleDrafts = resourcesAccountId === accountId ? drafts : [];
+  const currentDeletion = draftDeletion?.accountId === accountId ? draftDeletion : null;
+  const queuedDrafts = [...visibleDrafts];
+  // The socket notification can remove this row before the DELETE response arrives.
+  if (currentDeletion && !queuedDrafts.some((draft) => draft.id === currentDeletion.draft.id)) {
+    queuedDrafts.splice(currentDeletion.index, 0, currentDeletion.draft);
+  }
 
   const openAccountForm = useCallback((mode) => {
     setAccountFormError('');
@@ -268,6 +338,35 @@ export default function XPage() {
     });
   };
 
+  const updateDraft = (draft, body, closeEditor) => {
+    ++selectedLoadRef.current.drafts;
+    finish(`update-draft-${draft.id}`, updateXDraft(draft.id, { body }, { silent: true }), (result) => {
+      if (currentAccountIdRef.current !== result.accountId) return;
+      setDrafts((previous) => previous.map((candidate) => candidate.id === result.id ? result : candidate));
+      closeEditor();
+      setNotice('Draft changes saved.');
+    });
+  };
+
+  const removeDraft = (draft) => {
+    if (busy || currentDeletion) return;
+    const deletion = { accountId, draft, index: visibleDrafts.findIndex((item) => item.id === draft.id), removing: false };
+    ++selectedLoadRef.current.drafts;
+    setDraftDeletion(deletion);
+    const request = deleteXDraft(draft.id, { silent: true }).catch((err) => {
+      setDraftDeletion(null);
+      throw err;
+    });
+    finish(`delete-draft-${draft.id}`, request, () => {
+      if (currentAccountIdRef.current === accountId) {
+        setDraftDeletion({ ...deletion, removing: true });
+        setNotice('Draft deleted.');
+      } else {
+        setDraftDeletion(null);
+      }
+    });
+  };
+
   const reviewDraft = (draft, state) => finish(`review-${draft.id}`, reviewXDraft(draft.id, { state }, { silent: true }), (result) => {
     setDrafts((previous) => previous.map((candidate) => candidate.id === result.id ? result : candidate));
     setNotice(state === 'pending_review' ? 'Draft submitted to Review Hub.' : `Draft ${state}.`);
@@ -323,7 +422,42 @@ export default function XPage() {
 
   const renderPosts = () => <section className="rounded border border-port-border bg-port-card p-4"><div className="flex flex-wrap items-start justify-between gap-3"><div><h2 className="font-semibold text-white">Captured post reach</h2><p className="mt-1 text-sm text-gray-400">Public metrics from the last browser diagnostic; counts are impressions, not unique people.</p></div><button type="button" className={secondaryButton} disabled={accountActionsDisabled} onClick={sync}><RefreshCw size={15} className="mr-1 inline" />Refresh</button></div>{resourcesAccountId === selected?.id && postRead.status === 'error' ? resourceError(postRead.error, () => loadResource('posts'), 'posts') : resourcesAccountId !== selected?.id || postRead.status === 'loading' ? <div className="mt-4 text-sm text-gray-400"><BrailleSpinner text="Loading posts…" /></div> : !visiblePosts.length ? <p className="mt-4 text-sm text-gray-500">No captured posts yet. Run a diagnostic from Reach &amp; health.</p> : <div className="mt-4 space-y-2">{visiblePosts.map((post) => <article key={post.id} className="rounded border border-port-border p-3"><div className="flex flex-wrap items-center justify-between gap-2 text-xs text-gray-500"><span>{post.kind === 'reply' ? 'Reply' : 'Post'} · {formatDate(post.remoteCreatedAt)}</span><span>{post.sourceUrl ? <a className="text-port-accent hover:underline" href={post.sourceUrl} target="_blank" rel="noreferrer">Open on X</a> : null}</span></div><p className="mt-2 whitespace-pre-wrap text-sm text-gray-200">{post.body || '(no text captured)'}</p><div className="mt-3 flex flex-wrap gap-3 text-xs text-gray-400"><span><strong className="text-white">{formatCount(post.impressions)}</strong> impressions</span><span><strong className="text-white">{formatCount(post.engagements)}</strong> engagements</span><span>{formatCount(post.likes)} likes</span><span>{formatCount(post.reposts)} reposts</span><span>{formatCount(post.replies)} replies</span></div></article>)}</div>}</section>;
 
-  const renderDrafts = () => <div className="space-y-4"><section className="rounded border border-port-border bg-port-card p-4"><h2 className="font-semibold text-white">Draft a post for review</h2><p className="mt-1 text-sm text-gray-400">Drafts stay local until you submit them to Review Hub. PortOS will never publish automatically.</p><form className="mt-3 space-y-3" onSubmit={createDraft}><label htmlFor="x-draft-body" className="sr-only">X draft text</label><textarea id="x-draft-body" className={fieldClass} rows="5" maxLength="4000" placeholder="Write something you actually want to say…" value={draftBody} onChange={(event) => setDraftBody(event.target.value)} /><div className="flex flex-wrap items-center justify-between gap-2"><span className="text-xs text-gray-500">{draftBody.length}/4000</span><button className={buttonClass} disabled={!draftBody.trim() || Boolean(busy)}>Save draft</button></div></form></section><section className="rounded border border-port-border bg-port-card p-4"><h2 className="font-semibold text-white">Draft queue</h2>{resourcesAccountId === selected?.id && draftRead.status === 'error' ? resourceError(draftRead.error, () => loadResource('drafts'), 'drafts') : resourcesAccountId !== selected?.id || draftRead.status === 'loading' ? <div className="mt-3 text-sm text-gray-400"><BrailleSpinner text="Loading drafts…" /></div> : !visibleDrafts.length ? <p className="mt-3 text-sm text-gray-500">No drafts for @{selected.username}.</p> : <div className="mt-3 space-y-2">{visibleDrafts.map((draft) => <article key={draft.id} className="rounded border border-port-border p-3"><div className="flex flex-wrap items-center justify-between gap-2"><StatusBadge value={draft.state === 'approved' || draft.state === 'opened'}>{stateLabel(draft.state)}</StatusBadge><span className="text-xs text-gray-500">{formatDate(draft.updatedAt)}</span></div><p className="mt-3 whitespace-pre-wrap text-sm text-gray-200">{draft.body}</p><div className="mt-3 flex flex-wrap gap-2">{draft.state === 'draft' && <button type="button" className={secondaryButton} disabled={Boolean(busy)} onClick={() => reviewDraft(draft, 'pending_review')}>Submit for review</button>}{draft.state === 'pending_review' && <><button type="button" className={buttonClass} disabled={Boolean(busy)} onClick={() => reviewDraft(draft, 'approved')}>Approve</button><button type="button" className={secondaryButton} disabled={Boolean(busy)} onClick={() => reviewDraft(draft, 'rejected')}>Reject</button></>}{draft.state === 'approved' && (isApprovalExpired(draft) ? <><span className="self-center text-xs text-port-warning">Approval expired</span><button type="button" className={secondaryButton} disabled={Boolean(busy)} onClick={() => reviewDraft(draft, 'pending_review')}>Re-submit for review</button></> : <button type="button" className={buttonClass} disabled={Boolean(busy)} onClick={() => openDraft(draft)}><ExternalLink size={15} className="mr-1 inline" />Open compose in X</button>)}{draft.reviewNote && <span className="self-center text-xs text-gray-500">{draft.reviewNote}</span>}</div></article>)}</div>}</section></div>;
+  const renderDrafts = () => (
+    <div className="space-y-4">
+      <section className="rounded border border-port-border bg-port-card p-4">
+        <h2 className="font-semibold text-white">Draft a post for review</h2>
+        <p className="mt-1 text-sm text-gray-400">Drafts stay local until you submit them to Review Hub. PortOS will never publish automatically.</p>
+        <form className="mt-3 space-y-3" onSubmit={createDraft}>
+          <label htmlFor="x-draft-body" className="sr-only">X draft text</label>
+          <textarea id="x-draft-body" className={fieldClass} rows="5" maxLength={4000} placeholder="Write something you actually want to say…" value={draftBody} onChange={(event) => setDraftBody(event.target.value)} />
+          <div className="flex flex-wrap items-center justify-between gap-2">
+            <span className="text-xs text-gray-500">{draftBody.length}/4000</span>
+            <button className={buttonClass} disabled={!draftBody.trim() || Boolean(busy)}>Save draft</button>
+          </div>
+        </form>
+      </section>
+      <section className="rounded border border-port-border bg-port-card p-4" tabIndex={-1} aria-labelledby="x-draft-queue-heading">
+        <h2 id="x-draft-queue-heading" className="font-semibold text-white">Draft queue</h2>
+        {resourcesAccountId === selected?.id && draftRead.status === 'error' ? resourceError(draftRead.error, () => loadResource('drafts'), 'drafts')
+          : resourcesAccountId !== selected?.id || draftRead.status === 'loading' ? <div className="mt-3 text-sm text-gray-400"><BrailleSpinner text="Loading drafts…" /></div>
+          : !queuedDrafts.length ? <p className="mt-3 text-sm text-gray-500">No drafts for @{selected.username}.</p>
+          : <div className="mt-3">
+            {queuedDrafts.map((draft) => (
+              <CollapsibleListItem
+                key={draft.id}
+                removing={currentDeletion?.draft.id === draft.id && currentDeletion.removing}
+                onExited={() => {
+                  setDrafts((previous) => previous.filter((item) => item.id !== draft.id));
+                  setDraftDeletion(null);
+                }}
+              >
+                <DraftCard draft={draft} busy={Boolean(busy || currentDeletion)} onUpdate={updateDraft} onRemove={removeDraft} onReview={reviewDraft} onOpen={openDraft} />
+              </CollapsibleListItem>
+            ))}
+          </div>}
+      </section>
+    </div>
+  );
 
   const renderAccounts = () => <section className="rounded border border-port-border bg-port-card p-4"><div className="flex flex-wrap items-start justify-between gap-3"><div><h2 className="font-semibold text-white">X accounts</h2><p className="mt-1 text-sm text-gray-400">Browser-only diagnostics and review-gated compose handoffs. No X credentials are stored.</p></div><button type="button" className={buttonClass} onClick={() => { setAccountForm(emptyAccount); openAccountForm('new'); }}><Plus size={15} className="mr-1 inline" />Add account</button></div>{accountsReadError ? resourceError(accountsReadError, () => loadAccounts(), 'accounts') : !accounts.length ? <div className="mt-4 rounded border border-port-border p-4 text-sm text-gray-400">Add an X account to begin. Sync is manual, so nothing contacts X at boot.</div> : <div className="mt-4 grid gap-3 md:grid-cols-2">{accounts.map((account) => <article key={account.id} className="rounded border border-port-border p-4"><div className="flex items-start justify-between gap-2"><div><h3 className="font-semibold text-white">{account.label}</h3><p className="text-sm text-gray-400">@{account.username}</p></div><StatusBadge value={account.enabled}>{account.enabled ? 'Enabled' : 'Disabled'}</StatusBadge></div><p className="mt-3 text-xs text-gray-500">{account.lastSyncAt ? `Last diagnostic ${formatDate(account.lastSyncAt)}` : 'No diagnostic yet'}</p><div className="mt-3 flex flex-wrap gap-2"><button type="button" className={secondaryButton} onClick={() => openEditAccount(account)}>Edit</button><button type="button" className={secondaryButton} onClick={() => navigate(accountPath(account.id, 'health'))}>Open</button>{deleteAccountId === account.id ? <><button type="button" className="rounded border border-port-error px-3 py-2 text-sm text-port-error disabled:opacity-50" disabled={Boolean(busy)} onClick={() => removeAccount(account.id)}>Delete</button><button type="button" className={secondaryButton} onClick={() => setDeleteAccountId(null)}>Cancel</button></> : <button type="button" className={secondaryButton} onClick={() => setDeleteAccountId(account.id)}>Remove</button>}</div></article>)}</div>}</section>;
 

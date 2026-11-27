@@ -3,7 +3,7 @@
  * mounts) and `SERVER_OWNED_PREFIXES` (never served by the SPA fallback).
  *
  * Zero imports so a Vite config, drift guard or build script can read it.
- * `scripts/dev-proxy-drift.test.js` checks both lists: the dev proxy's `^/data/` wildcard
+ * `server/test/guards/repo/dev-proxy-drift.test.js` checks both lists: the dev proxy's `^/data/` wildcard
  * against the mounts, route-registration order in `server/index.js`, and that no client
  * route lands under a server-owned prefix undeclared.
  *
@@ -38,6 +38,7 @@ export const ASSET_ROUTE_PREFIXES = [
 export const SERVER_OWNED_PREFIXES = [
   { prefix: '/data', spaPaths: ['/data'] },
   { prefix: '/api', spaPaths: [] },
+  // Keep requests for the retired inbound SDAPI from falling through to the SPA.
   { prefix: '/sdapi', spaPaths: [] },
   // Same-origin Eidoverse iframe mount (reverse-proxied while the host is active).
   { prefix: '/eidoverse-host', spaPaths: [] },

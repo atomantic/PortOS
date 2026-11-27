@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach, afterAll, vi } from 'vitest';
-import { mkdtempSync, rmSync, mkdirSync } from 'fs';
+import { mkdtempSync, rmSync, mkdirSync, chmodSync, statSync } from 'fs';
 import { tmpdir } from 'os';
 import { join } from 'path';
 import { makePathsProxy } from '../lib/mockPathsDataRoot.js';
@@ -78,6 +78,20 @@ describe('messageAccounts', () => {
   });
 
   describe('createAccount', () => {
+    it.skipIf(process.platform === 'win32')('keeps accounts and their directory owner-only', async () => {
+      const dir = join(TEST_DATA_ROOT, 'messages');
+      const file = join(dir, 'accounts.json');
+      await messageAccounts.createAccount({ name: 'Example Inbox', type: 'gmail' });
+      expect(statSync(file).mode & 0o777).toBe(0o600);
+      expect(statSync(dir).mode & 0o777).toBe(0o700);
+
+      chmodSync(dir, 0o755);
+      chmodSync(file, 0o644);
+      await messageAccounts.updateAccount('msg-uuid-5678', { name: 'Example Updated Inbox' });
+      expect(statSync(file).mode & 0o777).toBe(0o600);
+      expect(statSync(dir).mode & 0o777).toBe(0o700);
+    });
+
     it('creates a gmail account with correct defaults', async () => {
       const acc = await messageAccounts.createAccount({
         name: 'Gmail Work',

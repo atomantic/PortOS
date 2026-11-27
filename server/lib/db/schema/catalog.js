@@ -109,7 +109,7 @@ export const catalogDdl = [
     // v2 rewrite deliberately accepts that boot-time lock: Postgres cannot alter
     // a STORED generation expression in place, and the catalog schema must be
     // complete before the server becomes ready. Operators with unusually large
-    // catalogs should schedule that upgrade as maintenance; see docs/STORAGE_RECOVERY.md
+    // catalogs should schedule that upgrade as maintenance; see docs/STORAGE.md#catalog-generated-column-rewrite
     // ("Catalog generated-column rewrite") for the decision and runbook.
     // Fresh installs (no column yet) fall through to the ADD IF NOT EXISTS
     // below and skip the DROP entirely.
@@ -248,6 +248,8 @@ export const catalogDdl = [
     )`,
     `CREATE UNIQUE INDEX IF NOT EXISTS idx_catalog_merge_source_active
        ON catalog_ingredient_merges (source_id) WHERE restored_at IS NULL`,
+    `CREATE INDEX IF NOT EXISTS idx_catalog_merge_survivor
+       ON catalog_ingredient_merges (survivor_id)`,
     `CREATE OR REPLACE FUNCTION catalog_resolve_ingredient_id(requested_id TEXT)
        RETURNS TEXT LANGUAGE SQL STABLE AS $$
          SELECT COALESCE((SELECT survivor_id FROM catalog_ingredient_merges

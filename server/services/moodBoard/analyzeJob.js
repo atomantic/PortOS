@@ -8,7 +8,7 @@
  *
  * One job per board, kept in memory only: a run is a user-triggered, minutes
  * long operation, and the finished per-item analyses are persisted on the board
- * itself. The last terminal state is retained until the next run so a page that
+ * itself. Recent terminal state is retained so a page that
  * reopens right after completion can still report the outcome.
  */
 
@@ -18,6 +18,7 @@ import { promptFromMedia } from '../mediaPromptFromMedia.js';
 import { composeBoardPrompt } from '../moodBoardCompositeStyle.js';
 import { boardItemLocalImage } from './logic.js';
 import { getBoard, updateBoard, updateBoardItem, backfillGalleryPrompts } from './index.js';
+import { pruneFinishedJobs, retainFinishedJob } from './jobRetention.js';
 
 const jobs = new Map();
 const completions = new Map();
@@ -66,12 +67,13 @@ function pendingItems(board) {
 
 function publish(job) {
   import('../socketIo.js')
-    .then(({ getIo }) => getIo()?.emit('mood-board:analyze', { ...job }))
+    .then(({ emitToOperators }) => emitToOperators('mood-board:analyze', { ...job }))
     .catch((err) => console.error(`❌ mood-board analyze emit failed: ${err.message}`));
 }
 
 function update(job, patch) {
   Object.assign(job, patch);
+  if (job.status !== 'running') retainFinishedJob(jobs, job);
   publish(job);
 }
 
@@ -127,18 +129,24 @@ async function run(job, { providerId, model, effort, render }) {
 }
 
 export function getAnalyzeJob(boardId) {
+  pruneFinishedJobs(jobs);
   const job = jobs.get(boardId);
   return job ? { ...job } : null;
 }
 
 /** Start (or join, when one is already running) the analyze job for a board. */
-export function startAnalyzeJob(boardId, { providerId, model, effort, render } = {}) {
+export function startAnalyzeJob(boardId, options) {
+  return { ...startOrJoinAnalyzeJob(boardId, options) };
+}
+
+function startOrJoinAnalyzeJob(boardId, { providerId, model, effort, render } = {}) {
+  pruneFinishedJobs(jobs);
   const existing = jobs.get(boardId);
   if (existing?.status === 'running') {
     if (render && !existing.makeComplete) {
       throw new ServerError('A board analysis is already running. Retry Make complete when it finishes.', { status: 409, code: 'MOOD_BOARD_ANALYSIS_RUNNING' });
     }
-    return { ...existing };
+    return existing;
   }
   const job = {
     boardId,
@@ -158,16 +166,17 @@ export function startAnalyzeJob(boardId, { providerId, model, effort, render } =
   const completion = run(job, { providerId, model, effort, render }).catch((err) => {
     console.error(`❌ mood-board ${boardId} analyze failed: ${err.message}`);
     update(job, { status: 'failed', phase: null, error: err.message, finishedAt: new Date().toISOString() });
+  }).finally(() => {
+    if (completions.get(boardId) === completion) completions.delete(boardId);
   });
   completions.set(boardId, completion);
-  return { ...job };
+  return job;
 }
 
 // Reuse the same per-board job when a combine request needs a source style.
 export async function analyzeBoardForCombine(boardId, options) {
-  startAnalyzeJob(boardId, options);
+  const job = startOrJoinAnalyzeJob(boardId, options);
   await completions.get(boardId);
-  const job = getAnalyzeJob(boardId);
   if (job.status !== 'done') {
     throw new Error(job.error || 'The source board style could not be composed. Retry before combining.');
   }

@@ -48,11 +48,6 @@ vi.mock('../../services/apiSystem.js', async (importOriginal) => ({
   getSettings: vi.fn(async () => ({})),
 }));
 
-const listLoraTrainingCheckpoints = vi.fn();
-vi.mock('../../services/apiLoraTraining.js', () => ({
-  listLoraTrainingCheckpoints: (...a) => listLoraTrainingCheckpoints(...a),
-}));
-
 const socketHandlers = vi.hoisted(() => new Map());
 const socketEmit = vi.hoisted(() => vi.fn());
 vi.mock('../../services/socket', () => ({
@@ -99,7 +94,6 @@ beforeEach(() => {
   toast.error.mockClear();
   listMediaVideoHolds.mockReset().mockResolvedValue([]);
   resumeMediaVideoHold.mockReset();
-  listLoraTrainingCheckpoints.mockReset();
   retryMediaJob.mockReset();
   retryMediaJob.mockResolvedValue({ jobId: 'new-job-1234' });
   getVideoGenModelContext.mockReset();
@@ -115,7 +109,6 @@ beforeEach(() => {
 
 it('applies only matching progress frames to a running row without rereading the queue', async () => {
   listQueueMediaJobs.mockResolvedValue([trainingJob]);
-  listLoraTrainingCheckpoints.mockResolvedValue({ checkpoints: [] });
   const { unmount } = render(<MediaJobsQueue kind="training" />);
   expect(await screen.findByText('50%')).toBeInTheDocument();
   expect(socketEmit).toHaveBeenCalledWith('media-jobs:subscribe');
@@ -351,7 +344,7 @@ describe('MediaJobsQueue — continuation retry', () => {
     await user.click(screen.getByRole('button', { name: /Retry with changes/ }));
     expect(retryMediaJob).toHaveBeenCalledWith('continuation-retry', {
       modelId: unavailable.id, contextFrames: 0, continuityStrategy: 'frame',
-      draftDecode: null, speedProfileId: null, textEncoderId: 'stock',
+      speedProfileId: null, textEncoderId: 'stock',
     }, { silent: true });
   });
 
@@ -922,7 +915,6 @@ describe('MediaJobsQueue — Agy retry model field', () => {
 describe('MediaJobsQueue — training rows', () => {
   it('renders a training summary + engine/character label instead of a prompt', async () => {
     listQueueMediaJobs.mockResolvedValue([trainingJob]);
-    listLoraTrainingCheckpoints.mockResolvedValue({ checkpoints: [] });
 
     render(<MediaJobsQueue kind="training" />);
 
@@ -932,76 +924,24 @@ describe('MediaJobsQueue — training rows', () => {
     expect(screen.getByText(/Training Queue/i)).toBeInTheDocument();
   });
 
-  it('draws a loss sparkline and sample thumbnails from the run checkpoints', async () => {
-    listQueueMediaJobs.mockResolvedValue([trainingJob]);
-    listLoraTrainingCheckpoints.mockResolvedValue({
-      checkpoints: [
-        { step: 100, loss: 0.8, previewUrl: '/api/lora-training/runs/run-abc/samples/a.png', deployed: false },
-        { step: 200, loss: 0.4, previewUrl: '/api/lora-training/runs/run-abc/samples/b.png', deployed: true },
-      ],
-    });
-
-    render(<MediaJobsQueue kind="training" />);
-
-    await waitFor(() => expect(screen.getByRole('img', { name: /Training loss curve/i })).toBeInTheDocument());
-    // Latest loss is surfaced.
-    expect(screen.getByText('0.4000')).toBeInTheDocument();
-    // Both checkpoint sample thumbnails render.
-    expect(screen.getByAltText('sample @ step 100')).toBeInTheDocument();
-    expect(screen.getByAltText('sample @ step 200')).toBeInTheDocument();
-  });
-
-  it('shows a friendly placeholder when no checkpoints exist yet', async () => {
-    listQueueMediaJobs.mockResolvedValue([trainingJob]);
-    listLoraTrainingCheckpoints.mockResolvedValue({ checkpoints: [] });
-
-    render(<MediaJobsQueue kind="training" />);
-
-    await waitFor(() => expect(screen.getByText(/No checkpoints yet/i)).toBeInTheDocument());
-  });
-
-  it('does not fetch checkpoints for non-training jobs', async () => {
-    listQueueMediaJobs.mockResolvedValue([{
-      id: 'img1', kind: 'image', status: 'running', progress: 0.2,
-      params: { prompt: 'a castle', modelId: 'z-image-turbo' },
-    }]);
-
-    render(<MediaJobsQueue kind="image" />);
-
-    await waitFor(() => expect(screen.getByText(/"a castle"/)).toBeInTheDocument());
-    expect(listLoraTrainingCheckpoints).not.toHaveBeenCalled();
-  });
 });
 
-// Queue and checkpoints advance from events, without timer-driven reads.
+// Queue updates arrive from events without timer-driven reads.
 describe('MediaJobsQueue — socket updates', () => {
   beforeEach(() => { vi.useFakeTimers({ shouldAdvanceTime: true }); });
   afterEach(() => { vi.useRealTimers(); vi.restoreAllMocks(); });
 
   it('updates from events and reconciles reconnect and tab show once', async () => {
     listQueueMediaJobs.mockResolvedValue([trainingJob]);
-    listLoraTrainingCheckpoints.mockResolvedValue({ checkpoints: [] });
-    const { unmount } = render(<MediaJobsQueue kind="training" />);
-    await screen.findByText(/No checkpoints yet/);
+      const { unmount } = render(<MediaJobsQueue kind="training" />);
+    await screen.findByText(/Training "Kessa"/);
     expect(listQueueMediaJobs).toHaveBeenCalledTimes(1);
-    expect(listLoraTrainingCheckpoints).toHaveBeenCalledTimes(1);
 
     await act(async () => { await vi.advanceTimersByTimeAsync(60_000); });
     expect(listQueueMediaJobs).toHaveBeenCalledTimes(1);
-    expect(listLoraTrainingCheckpoints).toHaveBeenCalledTimes(1);
-
-    listLoraTrainingCheckpoints.mockResolvedValue({ checkpoints: [
-      { step: 250, loss: 0.42, previewUrl: '/example-preview.png' },
-    ] });
-    await act(async () => { emitSocket('training:checkpoints:changed', { runId: 'other-run' }); });
-    expect(listLoraTrainingCheckpoints).toHaveBeenCalledTimes(1);
-    await act(async () => { emitSocket('training:checkpoints:changed', { runId: 'run-abc' }); });
-    expect(screen.queryByText(/No checkpoints yet/)).not.toBeInTheDocument();
-    expect(listLoraTrainingCheckpoints).toHaveBeenCalledTimes(2);
 
     await act(async () => { emitSocket('connect'); });
     expect(listQueueMediaJobs).toHaveBeenCalledTimes(2);
-    expect(listLoraTrainingCheckpoints).toHaveBeenCalledTimes(3);
 
     const visibility = vi.spyOn(document, 'visibilityState', 'get').mockReturnValue('hidden');
     await act(async () => { document.dispatchEvent(new Event('visibilitychange')); });
@@ -1013,7 +953,6 @@ describe('MediaJobsQueue — socket updates', () => {
     visibility.mockReturnValue('visible');
     await act(async () => { document.dispatchEvent(new Event('visibilitychange')); });
     expect(listQueueMediaJobs).toHaveBeenCalledTimes(3);
-    expect(listLoraTrainingCheckpoints).toHaveBeenCalledTimes(4);
 
     listQueueMediaJobs.mockResolvedValue([]);
     await act(async () => { emitSocket('media-jobs:changed', {}); });
@@ -1146,155 +1085,6 @@ describe('MediaJobsQueue — video retry memory mode (#10742)', () => {
     expect(await screen.findByLabelText('Memory')).toHaveValue('auto');
     await user.click(screen.getByRole('button', { name: /Retry with changes/i }));
     expect(retryMediaJob).toHaveBeenCalledWith('memory-job', null, { silent: true });
-  });
-});
-
-// Preview-fidelity decode (#5423) as an editable requeue override (#5449). The
-// shipped VIDEO_DRAFT_DECODERS table is EMPTY, so these use a fixture decoder
-// entry — the option list is server-declared and rides on the model entry as
-// `draftDecodeOptions`, which is exactly what the picker reads.
-describe('MediaJobsQueue — video retry decode override (#5449)', () => {
-  const DECODE_OPTIONS = [
-    { id: 'full', label: 'Full decode', description: "The model's own decoder." },
-    { id: 'draft', label: 'Example draft decoder', description: 'Preview fidelity only.', sizeLabel: '120 MB' },
-  ];
-  // Declares a draft decoder AND is somebody's Finish target — so the picker
-  // must lock to Full on it, the way `draftDecodeDeclineReason` does server-side.
-  const DELIVERY = {
-    id: 'example-delivery', name: 'Example Delivery', runtime: 'minimax_h3',
-    supportedModes: ['text', 'image'], draftDecodeOptions: DECODE_OPTIONS,
-  };
-  const DECODER_MODEL = {
-    id: 'example-h3', name: 'Example H3', runtime: 'minimax_h3',
-    supportedModes: ['text', 'image'], finishModelId: 'example-delivery',
-    draftDecodeOptions: DECODE_OPTIONS,
-  };
-  const NO_DECODER_MODEL = {
-    id: 'example-plain', name: 'Example Plain', runtime: 'ltx2',
-    supportedModes: ['text', 'image'],
-  };
-  const MODELS = [DECODER_MODEL, DELIVERY, NO_DECODER_MODEL];
-
-  const failedJob = (params = {}) => ({
-    id: 'decodefail000dead',
-    kind: 'video',
-    status: 'failed',
-    error: 'boom',
-    queuedAt: '2026-06-19T10:00:00Z',
-    params: {
-      prompt: 'a fox', mode: 'text', modelId: 'example-h3', width: 704, height: 448, ...params,
-    },
-  });
-
-  const openRetryEditor = async (user, job) => {
-    listQueueMediaJobs.mockResolvedValue([job]);
-    render(<MediaJobsQueue kind="video" />);
-    await expandReel(user);
-    await user.click(await screen.findByLabelText('Edit and retry'));
-  };
-
-  it('renders no decode control for a model that declares no draft decoder', async () => {
-    const user = userEvent.setup();
-    getVideoGenModelContext.mockResolvedValue({ models: MODELS });
-    await openRetryEditor(user, failedJob({ modelId: 'example-plain' }));
-    await screen.findByLabelText('Model');
-    expect(screen.queryByLabelText('Decode')).not.toBeInTheDocument();
-  });
-
-  it('pre-fills the decode the job was submitted with', async () => {
-    const user = userEvent.setup();
-    getVideoGenModelContext.mockResolvedValue({ models: MODELS });
-    await openRetryEditor(user, failedJob({ draftDecode: 'draft' }));
-    const select = await screen.findByLabelText('Decode');
-    await waitFor(() => expect(select.value).toBe('draft'));
-  });
-
-  it('sends no override at all when the decode is left untouched', async () => {
-    const user = userEvent.setup();
-    getVideoGenModelContext.mockResolvedValue({ models: MODELS });
-    await openRetryEditor(user, failedJob({ draftDecode: 'draft' }));
-    await waitFor(() => expect(screen.getByLabelText('Decode').value).toBe('draft'));
-
-    await user.click(screen.getByRole('button', { name: /Retry with changes/i }));
-    expect(retryMediaJob).toHaveBeenCalledWith('decodefail000dead', null, { silent: true });
-  });
-
-  it('sends no overrides when retrying an untouched local job without a stored model ID', async () => {
-    const user = userEvent.setup();
-    getVideoGenModelContext.mockResolvedValue({ models: MODELS });
-    await openRetryEditor(user, failedJob({ modelId: undefined }));
-    await screen.findByLabelText('Model');
-
-    await user.click(screen.getByRole('button', { name: /Retry with changes/i }));
-    expect(retryMediaJob).toHaveBeenCalledWith('decodefail000dead', null, { silent: true });
-  });
-
-  it('requeues a full-decode job at draft fidelity when the user switches it', async () => {
-    const user = userEvent.setup();
-    getVideoGenModelContext.mockResolvedValue({ models: MODELS });
-    await openRetryEditor(user, failedJob());
-    const select = await screen.findByLabelText('Decode');
-    await waitFor(() => expect(select.value).toBe('full'));
-
-    await user.selectOptions(select, 'draft');
-    await user.click(screen.getByRole('button', { name: /Retry with changes/i }));
-    expect(retryMediaJob).toHaveBeenCalledWith(
-      'decodefail000dead', { draftDecode: 'draft' }, { silent: true },
-    );
-  });
-
-  it('clears an inherited draft decode with null rather than submitting the full sentinel', async () => {
-    const user = userEvent.setup();
-    getVideoGenModelContext.mockResolvedValue({ models: MODELS });
-    await openRetryEditor(user, failedJob({ draftDecode: 'draft' }));
-    const select = await screen.findByLabelText('Decode');
-    await waitFor(() => expect(select.value).toBe('draft'));
-
-    await user.selectOptions(select, 'full');
-    await user.click(screen.getByRole('button', { name: /Retry with changes/i }));
-    expect(retryMediaJob).toHaveBeenCalledWith(
-      'decodefail000dead', { draftDecode: null }, { silent: true },
-    );
-  });
-
-  it('locks the picker to Full on a delivery model and still sends no override', async () => {
-    const user = userEvent.setup();
-    getVideoGenModelContext.mockResolvedValue({ models: MODELS });
-    await openRetryEditor(user, failedJob({ modelId: 'example-delivery', draftDecode: 'draft' }));
-    const select = await screen.findByLabelText('Decode');
-    await waitFor(() => expect(select.value).toBe('full'));
-    expect(select).toBeDisabled();
-    expect(screen.getByText(/Example Delivery is a delivery model/)).toBeInTheDocument();
-
-    // The lock is a real reset, not just a display: it clears the inherited
-    // request so the requeued job stops carrying a decode it can never perform.
-    await user.click(screen.getByRole('button', { name: /Retry with changes/i }));
-    expect(retryMediaJob).toHaveBeenCalledWith(
-      'decodefail000dead', { draftDecode: null }, { silent: true },
-    );
-  });
-
-  it('sends no override for a delivery-model job that never carried a decode', async () => {
-    const user = userEvent.setup();
-    getVideoGenModelContext.mockResolvedValue({ models: MODELS });
-    await openRetryEditor(user, failedJob({ modelId: 'example-delivery' }));
-    await waitFor(() => expect(screen.getByLabelText('Decode').value).toBe('full'));
-
-    await user.click(screen.getByRole('button', { name: /Retry with changes/i }));
-    expect(retryMediaJob).toHaveBeenCalledWith('decodefail000dead', null, { silent: true });
-  });
-  it('resets the decode to Full when the retry is retargeted at a delivery model', async () => {
-    const user = userEvent.setup();
-    getVideoGenModelContext.mockResolvedValue({ models: MODELS });
-    await openRetryEditor(user, failedJob({ draftDecode: 'draft' }));
-    await waitFor(() => expect(screen.getByLabelText('Decode').value).toBe('draft'));
-
-    await user.selectOptions(screen.getByLabelText('Model'), 'example-delivery');
-    await waitFor(() => expect(screen.getByLabelText('Decode').value).toBe('full'));
-
-    await user.click(screen.getByRole('button', { name: /Retry with changes/i }));
-    const [, overrides] = retryMediaJob.mock.calls.at(-1);
-    expect(overrides.draftDecode).toBeNull();
   });
 });
 
@@ -1443,6 +1233,31 @@ it('keeps edited prompt text when the retry is refused', async () => {
   await user.click(screen.getByRole('button', { name: /retry with changes/i }));
   await waitFor(() => expect(toast.error).toHaveBeenCalledWith('Prompt is 8001/8000 characters. Shorten it to retry.'));
   expect(prompt).toHaveValue('  edited  ');
+});
+
+it.each([
+  [{ guidanceScale: 3.25 }, /CFG Scale/],
+  [{ steps: 151 }, /Steps/],
+])('submits only the prompt change with saved sampler values %o', async (samplerParams, field) => {
+  const job = {
+    id: 'failed-video-sampler', kind: 'video', status: 'failed',
+    params: { mode: 'text', prompt: 'original prompt', ...samplerParams },
+  };
+  listQueueMediaJobs.mockResolvedValue([job]);
+  const user = userEvent.setup();
+  render(<MediaJobsQueue kind="video" />);
+  await expandReel(user);
+  await user.click(await screen.findByLabelText('Edit and retry'));
+
+  const samplerInput = screen.getByLabelText(field);
+  expect(samplerInput.checkValidity()).toBe(false);
+
+  const prompt = screen.getByRole('textbox', { name: /^prompt$/i });
+  await user.clear(prompt);
+  await user.type(prompt, 'revised prompt');
+  await user.click(await findEnabledByRole('button', { name: /Retry with changes/i }));
+
+  expect(retryMediaJob).toHaveBeenCalledWith(job.id, { prompt: 'revised prompt' }, { silent: true });
 });
 
 it('submits a style-only video retry with an empty authored prompt', async () => {

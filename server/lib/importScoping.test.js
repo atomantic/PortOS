@@ -60,6 +60,12 @@ const staticImportClosure = (entry) => walkImportClosure(entry, closureIo);
 const abs = (relative) => join(SERVER_DIR, ...relative.split('/'));
 const reaches = (entry, target) => staticImportClosure(abs(entry)).files.has(abs(target));
 
+it('keeps boot sequencing independent of service imports', () => {
+  const { statics, deferred, computed } = moduleSpecifiers(readText(abs('services/bootstrapSequence.js')));
+  expect([...statics, ...deferred]).toEqual([]);
+  expect(computed).toBe(false);
+});
+
 // The reusable engine cannot acquire Music Video persistence or finishing through an indirect import.
 it('keeps every shared film module outside the Music Video service graph', () => {
   for (const name of readdirSync(abs('services/film')).filter((name) => name.endsWith('.js') && !name.endsWith('.test.js'))) {
@@ -119,6 +125,27 @@ describe('instance identity stays a leaf (#6836)', () => {
   });
 });
 
+it.each(['agentResumePointers.js', 'agentFollowUpSpawning.js'])(
+  '%s keeps the CoS daemon and cleanup facade outside its static closure',
+  (name) => {
+    const entry = `services/agent/${name}`;
+    expect(reaches(entry, 'services/cos/cosTaskStore.js')).toBe(true);
+    expect(reaches(entry, 'services/cos/cos.js')).toBe(false);
+    expect(reaches(entry, 'services/agent/agentWorktreeCleanup.js')).toBe(false);
+  },
+);
+
+it.each([
+  ['services/agent/agentOrphanRecovery.js', 'services/agent/agentProcessProbe.js', 'services/agent/agentManagement.js'],
+  ['services/agent/agentProcessProbe.js', 'lib/childProcess.js', 'services/agent/agentOrphanRecovery.js'],
+  ['services/cos/cosDequeue.js', 'services/cos/cosDequeueAdmission.js', 'services/cos/cos.js'],
+  ['services/cos/cosOrphanReset.js', 'services/cos/cosTaskStore.js', 'services/cos/cos.js'],
+  ['services/cos/cosPerpetualRefill.js', 'services/cos/cosTaskStore.js', 'services/cos/cos.js'],
+])('%s reaches %s without loading %s', (entry, dependency, orchestrator) => {
+  expect(reaches(entry, dependency)).toBe(true);
+  expect(reaches(entry, orchestrator)).toBe(false);
+});
+
 // `vitest related` follows dynamic imports, so a lazy import() narrows the
 // static closure above but not CI selection. Each row is an edge cut from the
 // dynamically connected CoS cluster (#12285): the entry must import its target
@@ -155,6 +182,8 @@ const SELECTION_CUTS = [
     'signals host changes through the fleetHostSignal.js leaf'],
   ['services/promptRunner.js', 'services/autoFixer.js',
     'reports fallback lifecycle through handlers initAutoFixer() registers in providerRecoveryHooks.js'],
+  ['lib/agent/agentErrorPatterns.js', /^services\//,
+    'classifies failure signatures without loading CoS services or task stores'],
   // #17499: lazy imports whose target statically imported the importer.
   ['services/cos/cos.js', 'services/agent/agentManagement.js',
     'recovers orphans through handlers registerBootHooks() registers in bootHookRegistry.js'],
@@ -169,6 +198,8 @@ const SELECTION_CUTS = [
   // #17692: boot recovery must not pull the render pipeline into the static closure or into this file's import list.
   ['services/bootstrap.js', /^services\/musicVideo\/(?:render|excerptRender)\.js$/,
     'recovers stuck renders through loaders registerBootHooks() registers in bootHookRegistry.js'],
+  ['services/backup/restore.js', 'services/managedVisitors.js',
+    'acquires the managed visitor credential restore lock through bootHookRegistry.js'],
   ['services/worktreeManager.js', /^services\/(?:git|prProbe|repoBranchSnapshot|branchReconcile)\.js$/,
     'only re-exports services/worktree/*, which keeps these reads as non-inverting lazy imports'],
   ['services/cos/cosClaimOwnership.js', 'services/branchReconcile.js',
@@ -258,8 +289,8 @@ const SELECTION_CUTS = [
 
 // Runtimes, helpers, and terminal hooks registered in bootHooks.js (#17499, #18217).
 // Only pure event/mode/recorder leaves from those directories may be imported by mediaJobQueue.
-const QUEUE_IMPORTING_RUNTIME = /^services\/(?:videoGen\/(?:topazJob|upscaleJob|stitchJob|verticalJob)|loraTraining\/index)\.js$/;
-const MEDIA_QUEUE_BOOT_REGISTERED = /^services\/(?:creativeDirector\/|cos\/|pipeline\/|audioGen\/(?!events\.js$)|videoGen\/(?!events\.js$|executionRecorder\.js$)|imageGen\/(?!modes\.js$)|musicVideo\/|fableLoom\/|htmlComposition\/|superColliderRender\.js$|imageVerifier\.js$|loraTraining\/(?!events\.js$))/;
+const QUEUE_IMPORTING_RUNTIME = /^services\/videoGen\/(?:topazJob|upscaleJob|stitchJob|verticalJob)\.js$/;
+const MEDIA_QUEUE_BOOT_REGISTERED = /^services\/(?:creativeDirector\/|cos\/|pipeline\/|audioGen\/(?!events\.js$)|videoGen\/(?!events\.js$|executionRecorder\.js$)|imageGen\/(?!modes\.js$)|musicVideo\/|fableLoom\/|htmlComposition\/|superColliderRender\.js$|imageVerifier\.js$)/;
 const productionModulesIn = (dir) => readdirSync(abs(dir))
   .filter(file => file.endsWith('.js') && !file.endsWith('.test.js') && !file.endsWith('.test.fixture.js'))
   .map(file => `${dir}/${file}`);
@@ -281,6 +312,15 @@ describe('CI-selection cuts stay cut (#12285)', () => {
     for (const entry of entries) {
       expect(importTargets(entry), entry).not.toContain('services/cos/cosClaimOwnership.js');
       expect(importTargets(entry), entry).not.toContain('services/branchReconcile.js');
+    }
+  });
+
+  it('keeps Music Video route validation domains independent (#19757)', () => {
+    const dir = 'lib/musicVideo/routeValidation';
+    const domains = productionModulesIn(dir).filter(entry => entry !== `${dir}/shared.js`);
+    expect(domains).toContain(`${dir}/project.js`);
+    for (const entry of [...domains, `${dir}/shared.js`]) {
+      expect(importTargets(entry).filter(target => domains.includes(target)), entry).toEqual([]);
     }
   });
 
@@ -308,12 +348,13 @@ describe('CI-selection cuts stay cut (#12285)', () => {
       'services/fleetHostSignal.js',
       'services/provider/providerRecoveryHooks.js',
       'services/bootHookRegistry.js',
-      'services/socketIo.js',
+      'lib/socketAudience.js',
     ]) expect(importTargets(leaf), leaf).toEqual([]);
   });
 
   // Positive control: the cut callers still name the leaf, so an empty scan cannot pass.
   it('still sees the socketIo.js and film-event edges the cut callers keep (#17619)', () => {
+    expect(importTargets('services/socketIo.js')).toEqual(['lib/socketAudience.js']);
     expect(importTargets('services/backup.js')).toContain('services/socketIo.js');
     expect(importTargets('routes/commands.js')).toContain('services/socketIo.js');
     expect(importTargets('services/codeAnimation/films.js')).toContain('services/codeAnimation/events.js');
@@ -333,7 +374,12 @@ describe('CI-selection cuts stay cut (#12285)', () => {
   // Positive control for the media scan: the boot owner still names every runtime and helper.
   it('still sees the runtime loaders bootHooks.js registers', () => {
     const bootTargets = importTargets('services/bootHooks.js');
-    expect(bootTargets.filter(target => QUEUE_IMPORTING_RUNTIME.test(target))).toHaveLength(5);
+    expect(bootTargets.filter(target => QUEUE_IMPORTING_RUNTIME.test(target)).sort()).toEqual([
+      'services/videoGen/stitchJob.js',
+      'services/videoGen/topazJob.js',
+      'services/videoGen/upscaleJob.js',
+      'services/videoGen/verticalJob.js',
+    ]);
     expect(bootTargets).toEqual(expect.arrayContaining([
       'services/musicVideo/render.js',
       'services/musicVideo/excerptRender.js',
@@ -524,12 +570,13 @@ describe('server suite import growth (#7993)', () => {
 });
 
 // #16096: request validation is its own leaf. ~113 route/service files import
-// only validateRequest; if this grows past errorHandler.js, every one of them
-// pays for the new edge again.
-it('keeps the validateRequest leaf to itself and errorHandler.js', () => {
+// only validateRequest. The error handler depends on the import-free Socket.IO
+// audience filter so it can send UI frames without pulling in services.
+it('keeps the validateRequest closure limited to the error handler and audience filter', () => {
   const closure = staticImportClosure(abs('lib/validateRequest.js')).files;
   expect([...closure].map((file) => relative(SERVER_DIR, file)).sort()).toEqual([
     'lib/errorHandler.js',
+    'lib/socketAudience.js',
     'lib/validateRequest.js',
   ]);
 });

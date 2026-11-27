@@ -289,7 +289,8 @@ export async function createLoop({ prompt, interval, name, cwd, providerId, time
   if (!isValidLoopInterval(intervalMs)) {
     throw new ServerError(INTERVAL_RANGE_MESSAGE, { status: 400, code: 'VALIDATION_ERROR' });
   }
-  if (!prompt?.trim()) {
+  const trimmedPrompt = prompt?.trim();
+  if (!trimmedPrompt) {
     throw new ServerError('Prompt is required', { status: 400, code: 'VALIDATION_ERROR' });
   }
 
@@ -298,8 +299,8 @@ export async function createLoop({ prompt, interval, name, cwd, providerId, time
   const id = randomUUID().slice(0, 8);
   const loop = {
     id,
-    name: name || prompt.slice(0, 60),
-    prompt: prompt.trim(),
+    name: name || trimmedPrompt.slice(0, 60),
+    prompt,
     intervalMs,
     cwd: cwd || null,
     providerId: providerId || null,

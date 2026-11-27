@@ -23,8 +23,7 @@ import {
 import { isConfiguredDefaultModel } from './providerModels.js';
 
 /**
- * READ-ONLY import preview for the provider connection graph proposed in
- * `docs/plans/archive/2026-09-06-provider-connections-and-harnesses.md` (#6366).
+ * READ-ONLY import preview for the provider connection graph (#6366).
  *
  * Given the provider records this install already runs, this answers what
  * connections, harness bindings and executable routes an import WOULD create —

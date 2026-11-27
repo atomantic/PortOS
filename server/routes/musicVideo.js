@@ -8,7 +8,57 @@
  * arranged against the beat grid".
  */
 
-import { musicVideoColorMatchMeasureSchema, musicVideoColorMatchReferenceUpdateSchema, musicVideoSongDraftSchema, musicVideoSongActionSchema, musicVideoSongSelectSchema, musicVideoSongFromTrackSchema, musicVideoSongSceneActionSchema, musicVideoMakingOfSelectionSchema, musicVideoAudioLayerUploadQuerySchema } from '../lib/musicVideo/musicVideoRouteValidation.js';
+import { assertCancelResult } from '../lib/cancelResponse.js';
+import {
+  musicVideoAudioLayerUploadQuerySchema,
+  musicVideoAudioTimingApplySchema,
+  musicVideoAudioTimingPreviewSchema,
+  musicVideoCatalogCompletionSchema,
+  musicVideoCodeGenerateSchema,
+  musicVideoColdOpenAudioSchema,
+  musicVideoColorMatchMeasureSchema,
+  musicVideoColorMatchReferenceUpdateSchema,
+  musicVideoCompletionSchema,
+  musicVideoFinishedOutsideSchema,
+  musicVideoHandoffImportSchema,
+  musicVideoLibrarySearchQuerySchema,
+  musicVideoLyricsAlignSchema,
+  musicVideoLyricsImportSchema,
+  musicVideoLyricsImportTrackSchema,
+  musicVideoLyricsVerifySchema,
+  musicVideoMakingOfSelectionSchema,
+  musicVideoManualAnalysisSchema,
+  musicVideoPacingRecutSchema,
+  musicVideoPlanRequestSchema,
+  musicVideoPoolAddSchema,
+  musicVideoPoolDeleteSchema,
+  musicVideoPoolImportSchema,
+  musicVideoPoolMarkSchema,
+  musicVideoPoolSearchQuerySchema,
+  musicVideoProjectCloneSchema,
+  musicVideoProjectCreateSchema,
+  musicVideoProjectListQuerySchema,
+  musicVideoProjectPatchQuerySchema,
+  musicVideoProjectUpdateSchema,
+  musicVideoRenderCleanupSchema,
+  musicVideoRenderPreviewSchema,
+  musicVideoSectionsEditSchema,
+  musicVideoSequenceRenderSchema,
+  musicVideoSequenceTakeSchema,
+  musicVideoSongActionSchema,
+  musicVideoSongDraftSchema,
+  musicVideoSongFromTrackSchema,
+  musicVideoSongPrepareSchema,
+  musicVideoSongSceneActionSchema,
+  musicVideoSongSelectSchema,
+  musicVideoSongStyleSunoSchema,
+  musicVideoTakeInputSchema,
+  musicVideoTranscribeMidiRequestSchema,
+  musicVideoTreatmentApplySchema,
+  musicVideoTreatmentCompileSchema,
+  musicVideoTreatmentSyncShotSheetSchema,
+  musicVideoTreatmentUpdateSchema,
+} from '../lib/musicVideo/routeValidation/project.js';
 import { activeDcp } from '../services/musicVideo/dcp.js';
 import { pipeline } from 'stream/promises';
 import { basename } from 'path';
@@ -18,12 +68,10 @@ import festivalPacketRoutes from './musicVideoFestivalPacket.js';
 import researchSeedRoutes from './musicVideoResearchSeed.js';
 import blenderRoutes from './musicVideoBlender.js';
 import spendRoutes from './musicVideoSpend.js';
-import { musicVideoColdOpenAudioSchema, musicVideoRenderCleanupSchema, musicVideoRenderPreviewSchema, musicVideoSongStyleSunoSchema, musicVideoProjectListQuerySchema, musicVideoFinishedOutsideSchema, musicVideoCompletionSchema, musicVideoPoolMarkSchema, musicVideoPoolSearchQuerySchema, musicVideoProjectPatchQuerySchema, musicVideoPoolDeleteSchema, musicVideoPoolImportSchema, musicVideoLibrarySearchQuerySchema, musicVideoPoolAddSchema, musicVideoCatalogCompletionSchema } from '../lib/musicVideo/musicVideoRouteValidation.js';
 import { finishedOutsideBlocker } from '../lib/musicVideo/musicVideoFinishedOutside.js';
 import { musicVideoCompletionBlocker, musicVideoCompletionOverride } from '../lib/musicVideo/musicVideoCompletion.js';
 import { asyncHandler, ServerError } from '../lib/errorHandler.js';
 import { validateRequest } from '../lib/validateRequest.js';
-import { musicVideoAudioTimingPreviewSchema, musicVideoAudioTimingApplySchema, musicVideoProjectCreateSchema, musicVideoProjectCloneSchema, musicVideoProjectUpdateSchema, musicVideoPacingRecutSchema, musicVideoPlanRequestSchema, musicVideoManualAnalysisSchema, musicVideoSectionsEditSchema, musicVideoTranscribeMidiRequestSchema, musicVideoLyricsImportSchema, musicVideoLyricsImportTrackSchema, musicVideoLyricsAlignSchema, musicVideoLyricsVerifySchema, musicVideoSongPrepareSchema, musicVideoTakeInputSchema, musicVideoHandoffImportSchema, musicVideoTreatmentUpdateSchema, musicVideoTreatmentCompileSchema, musicVideoTreatmentApplySchema, musicVideoTreatmentSyncShotSheetSchema, musicVideoSequenceRenderSchema, musicVideoSequenceTakeSchema, musicVideoCodeGenerateSchema } from '../lib/musicVideo/musicVideoRouteValidation.js';
 import { recordRenderPinFields } from '../lib/sharedSchemas.js';
 import { uploadSingle } from '../lib/multipart.js';
 import { isSupportedMusicUpload, MUSIC_UPLOAD_MAX_BYTES } from '../services/pipeline/musicLibrary.js';
@@ -118,7 +166,10 @@ router.get('/', asyncHandler(async (req, res) => {
       ? (project) => (musicVideoCompletionOverride(project) ?? (project.status === 'complete' && !stale?.has(project.id))) === (query.statusFilter === 'completed')
       : null;
     const filter = matchesStatus || matchesName ? (project) => (!matchesStatus || matchesStatus(project)) && (!matchesName || matchesName(project)) : undefined;
-    const page = await listProjectPage({ ...paging, ...(summary ? { compare: compareMusicVideoProjectsNewestFirst, filter } : {}) });
+    const page = await listProjectPage({
+      ...paging,
+      ...(summary ? { compare: compareMusicVideoProjectsNewestFirst, filter, filterNeedsExtraHeaders: Boolean(matchesStatus) } : {}),
+    });
     const presented = await Promise.all(page.items.map((project) => presentProjectForRead(project)));
     const items = summary ? presented.map(project => summarizeMusicVideoProject(project, project.productionReadiness)) : presented;
     // A deletion between header selection and hydration still consumes its slot.
@@ -336,7 +387,7 @@ router.get('/vocal-stem/separate/:jobId/events', asyncHandler(async (req, res) =
 
 router.post('/vocal-stem/separate/:jobId/cancel', asyncHandler(async (req, res) => {
   const { cancelVocalSeparation } = await import('../services/musicVideo/vocalSeparation.js');
-  res.json({ ok: cancelVocalSeparation(req.params.jobId) });
+  res.json(assertCancelResult(cancelVocalSeparation(req.params.jobId), { notFoundMessage: 'Vocal separation job not found' }));
 }));
 
 // Run the offline beat/tempo/section analysis and cache it on the project.
@@ -509,7 +560,7 @@ router.get('/lyrics/verify/:jobId/events', (req, res) => {
   if (!attachLyricVerifySseClient(req.params.jobId, res)) throw new ServerError('Verification job not found or expired', { status: 404, code: 'NOT_FOUND' });
 });
 router.post('/lyrics/verify/:jobId/cancel', (req, res) => {
-  res.json({ ok: cancelLyricVerify(req.params.jobId) });
+  res.json(assertCancelResult(cancelLyricVerify(req.params.jobId), { notFoundMessage: 'Lyric verification job not found' }));
 });
 
 // Re-read the song's Suno style (excluded styles included) from its song link,
@@ -548,7 +599,7 @@ router.get('/lyrics/align/:jobId/events', (req, res) => {
 });
 
 router.post('/lyrics/align/:jobId/cancel', (req, res) => {
-  res.json({ ok: cancelLyricAlign(req.params.jobId) });
+  res.json(assertCancelResult(cancelLyricAlign(req.params.jobId), { notFoundMessage: 'Lyric alignment job not found' }));
 });
 
 // Read-only: the project's live alignment, vocal-separation and MIDI jobs on
@@ -596,7 +647,7 @@ router.get('/transcribe-midi/:jobId/events', (req, res) => {
 });
 
 router.post('/transcribe-midi/:jobId/cancel', (req, res) => {
-  res.json({ ok: cancelMidiTranscription(req.params.jobId) });
+  res.json(assertCancelResult(cancelMidiTranscription(req.params.jobId), { notFoundMessage: 'MIDI transcription job not found' }));
 });
 
 // --- Render (#1760, Phase 2) ---
@@ -693,7 +744,7 @@ router.post('/:id/shots/:sceneId/render', asyncHandler(async (req, res) => {
 }));
 router.post('/:id/shots/:sceneId/render/cancel', asyncHandler(async (req, res) => {
   const { cancelShotRender } = await import('../services/musicVideo/shotSegments.js');
-  res.json({ ok: cancelShotRender(req.params.id, req.params.sceneId) });
+  res.json(assertCancelResult(cancelShotRender(req.params.id, req.params.sceneId), { notFoundMessage: 'Active shot render not found' }));
 }));
 // The shots rendered so far, stitched in order with the song (a seam check
 // while the rest renders), and the film looks cached over the current takes.
@@ -748,7 +799,7 @@ router.get('/render/:jobId/events', (req, res) => {
 });
 
 router.post('/render/:jobId/cancel', (req, res) => {
-  res.json({ ok: cancelRender(req.params.jobId) });
+  res.json(assertCancelResult(cancelRender(req.params.jobId), { notFoundMessage: 'Final render job not found' }));
 });
 
 // Code-rendered style (#9076). Document reads build the page from stored

@@ -2,6 +2,7 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 import express from 'express';
 import { remoteRequestHandler } from '../lib/requestOrigin.js';
 import { verifySession } from '../services/auth.js';
+import { hostControlRouteGate } from '../services/authGate.js';
 vi.mock('../services/auth.js', () => {
   const verifySession = vi.fn().mockResolvedValue(true);
   return {
@@ -27,6 +28,7 @@ vi.mock('../services/instances.js', async (importOriginal) => ({
   acceptPeerSyncSecretFromPeer: vi.fn(),
   updatePeer: vi.fn(),
   addPeer: vi.fn(),
+  enqueueReciprocalSync: vi.fn(),
   sanitizePeerForClient: vi.fn((peer) => peer),
   getAssignableInstances: vi.fn(),
   getPeers: vi.fn(),
@@ -91,9 +93,16 @@ import {
 } from '../services/tailcatServe.js';
 import instancesRoutes from './instances.js';
 
-const buildApp = () => {
+const buildApp = (authContext) => {
   const app = express();
   app.use(express.json());
+  if (authContext) {
+    app.use((req, _res, next) => {
+      req.portosAuthContext = authContext;
+      next();
+    });
+    app.use(hostControlRouteGate);
+  }
   app.use('/api/instances', instancesRoutes);
   app.use(errorMiddleware);
   return app;
@@ -115,22 +124,81 @@ describe('GET /api/instances/peers/:id/query', () => {
   });
 });
 
+describe('POST /api/instances/peers/:id/reciprocate', () => {
+  beforeEach(() => {
+    instances.getPeers.mockResolvedValue([{ id: 'peer-1' }]);
+  });
+
+  it.each([
+    ['no-peer-identity', 409, 'PEER_NOT_READY'],
+    ['no-categories', 409, 'PEER_NOT_READY'],
+    ['http-403', 502, 'PEER_RECIPROCATE_FAILED'],
+    ['fetch failed', 502, 'PEER_RECIPROCATE_FAILED'],
+  ])('maps %s to HTTP %i with its reason', async (reason, status, code) => {
+    instances.enqueueReciprocalSync.mockResolvedValueOnce({ ok: false, reason });
+
+    const res = await request(buildApp()).post('/api/instances/peers/peer-1/reciprocate');
+
+    expect(res.status).toBe(status);
+    expect(res.body).toMatchObject({ code, context: { reason } });
+  });
+
+  it.each([undefined, null])('returns HTTP 502 for an absent result (%s)', async (result) => {
+    instances.enqueueReciprocalSync.mockResolvedValueOnce(result);
+
+    const res = await request(buildApp()).post('/api/instances/peers/peer-1/reciprocate');
+
+    expect(res.status).toBe(502);
+    expect(res.body).toMatchObject({ code: 'PEER_RECIPROCATE_FAILED', context: { reason: 'no-result' } });
+  });
+
+  it('passes successful reciprocation through as 200 JSON', async () => {
+    instances.enqueueReciprocalSync.mockResolvedValueOnce({ ok: true });
+
+    const res = await request(buildApp()).post('/api/instances/peers/peer-1/reciprocate');
+
+    expect(res.status).toBe(200);
+    expect(res.body).toEqual({ ok: true });
+  });
+});
+
 describe('POST /api/instances/provision-cert', () => {
+  const path = '/api/instances/provision-cert';
+  const passwordFree = { enabled: false };
   beforeEach(() => { provisionTailscaleCert.mockReset(); });
 
-  it('passes a successful result through as 200 JSON', async () => {
+  it.each([
+    ['local password-free operator', passwordFree, false],
+    ['delegated operator session', { enabled: true, authenticated: true, method: 'session' }, true],
+  ])('passes the restart hint through for a %s', async (_principal, authContext, remote) => {
     const result = { ok: true, mode: 'tailscale', hostname: 'h.ts.net', wroteNew: true, requiresRestart: true, message: 'Cert installed' };
     provisionTailscaleCert.mockResolvedValue(result);
-    const res = await request(buildApp()).post('/api/instances/provision-cert');
+    const app = buildApp(authContext);
+    const res = await request(remote ? remoteRequestHandler(app) : app).post(path);
     expect(res.status).toBe(200);
     expect(res.body).toEqual(result);
   });
 
-  it('maps a structured failure to 400 with code equal to result.reason', async () => {
-    provisionTailscaleCert.mockResolvedValue({ ok: false, reason: 'no-magic-dns', message: 'No MagicDNS hostname' });
-    const res = await request(buildApp()).post('/api/instances/provision-cert');
+  it.each([
+    ['anonymous remote caller', passwordFree],
+    ['scoped peer', { enabled: true, authenticated: true, method: 'peer' }],
+  ])('refuses a %s before invoking the provisioner', async (_principal, authContext) => {
+    const res = await request(remoteRequestHandler(buildApp(authContext))).post(path);
+    expect(res.status).toBe(403);
+    expect(res.body.code).toBe('HOST_CONTROL_FORBIDDEN');
+    expect(provisionTailscaleCert).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    ['no-magic-dns', 'No MagicDNS hostname'],
+    ['cert-files-missing', 'tailscale cert returned success but cert files are missing.'],
+    ['tailscale-cert-failed', 'tailscale cert returned an invalid certificate or private key.'],
+    ['tailscale-sandboxed', 'Install the unsandboxed CLI with `brew install tailscale`.'],
+  ])('maps the %s failure to HTTP 400 with its message', async (reason, message) => {
+    provisionTailscaleCert.mockResolvedValue({ ok: false, reason, message });
+    const res = await request(buildApp(passwordFree)).post(path);
     expect(res.status).toBe(400);
-    expect(res.body).toMatchObject({ code: 'no-magic-dns', error: 'No MagicDNS hostname' });
+    expect(res.body).toMatchObject({ code: reason, error: message });
   });
 });
 

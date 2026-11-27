@@ -4,7 +4,17 @@ import { request as httpRequest } from 'node:http';
 import { join } from 'node:path';
 import { io as connect } from 'socket.io-client';
 import { createCosRunner, shouldStartUnderPm2 } from './index.js';
+import { ChildProcess } from '../lib/childProcess.js';
 import { PTY_WORKSPACE_MISSING_PREFIX } from '../lib/ptySpawnDiagnostics.js';
+
+const { taskkillMock } = vi.hoisted(() => ({ taskkillMock: vi.fn() }));
+vi.mock('../lib/childProcess.js', async importOriginal => {
+  const actual = await importOriginal();
+  return {
+    ...actual,
+    spawn: (command, ...args) => command === 'taskkill' ? taskkillMock(...args) : actual.spawn(command, ...args),
+  };
+});
 
 const activeCleanups = [];
 
@@ -990,6 +1000,45 @@ describe('cos-runner termination, pause, and tui:kill delegation', () => {
     expect(deps.killProcessTree).toHaveBeenCalledWith(children[0], 'SIGKILL');
     expect(runner.activeAgents.has('a-kill')).toBe(false);
     expect(state.agents['a-kill']).toBeUndefined();
+  });
+
+  it('retains Windows runner ownership on failure and while a retry outlasts the root process', async () => {
+    const target = Object.setPrototypeOf(makeFakeChild(), ChildProcess.prototype);
+    const { post, runner, state, deps } = await bootTestRunner({
+      process: { platform: 'win32' },
+      spawn: vi.fn(() => target),
+    });
+    const agentId = 'windows-runner';
+    expect((await post('/spawn', { agentId, taskId: 't-kill', prompt: 'work', cliCommand: 'claude' })).status).toBe(200);
+    const agent = runner.activeAgents.get(agentId);
+    const failed = new EventEmitter();
+    const retry = new EventEmitter();
+    taskkillMock.mockReset().mockReturnValueOnce(failed).mockReturnValueOnce(retry);
+    vi.spyOn(process, 'kill').mockReturnValue(true);
+
+    const firstResponse = post(`/kill/${agentId}`);
+    await vi.waitFor(() => expect(taskkillMock).toHaveBeenCalledTimes(1));
+    failed.emit('close', 1);
+    expect(await firstResponse).toMatchObject({ status: 500, body: { error: expect.stringContaining('exit code 1') } });
+    expect(runner.activeAgents.get(agentId)).toBe(agent);
+    expect(state.agents[agentId]).toBeDefined();
+
+    const received = vi.fn();
+    const retryResponse = post(`/kill/${agentId}`).then(received);
+    await vi.waitFor(() => expect(taskkillMock).toHaveBeenCalledTimes(2));
+    target.exitCode = 1;
+    target.emit('close', 1);
+    retry.emit('exit', 0);
+    await new Promise(resolve => setImmediate(resolve));
+    expect(received).not.toHaveBeenCalled();
+    expect(deps.persistRunnerCompletion).not.toHaveBeenCalled();
+    expect(runner.activeAgents.get(agentId)).toBe(agent);
+    expect(state.agents[agentId]).toBeDefined();
+    retry.emit('close', 0);
+    await retryResponse;
+    expect(received).toHaveBeenCalledWith({ status: 200, body: { success: true, agentId, pid: target.pid, signal: 'SIGKILL' } });
+    expect(runner.activeAgents.has(agentId)).toBe(false);
+    expect(state.agents[agentId]).toBeUndefined();
   });
 
   it('covers POST /terminate/:agentId 400/404, onlyIfPromptUnsubmitted gating, and real force-kill escalation', async () => {

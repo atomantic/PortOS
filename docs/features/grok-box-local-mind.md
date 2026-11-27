@@ -9,7 +9,7 @@
 | **Persistent Mind** | Local **Ollama** API provider | **Qwen2.5 7B Instruct (Q4)** — `qwen2.5:7b-instruct` (alias: `qwen2.5:7b`) |
 | **Coding tasks** | Cloud CLIs / harnesses | **Cursor Agent** / **OpenCode Zen** (and other subscription CLIs you enable) |
 
-Keep the mind free and local. Do **not** point coding agents at a CPU-bound 27B/vLLM stack on this host — those presets need a GPU workstation (see [Recommended coding-agent setup](./qwen38-rtx3090.md), [SGLang](./sglang-qwen38.md), [Fleet LLM host](./fleet-llm-host.md)).
+Keep the mind free and local. Do **not** point coding agents at a CPU-bound 27B/vLLM stack on this host — those presets need a GPU workstation (see [Recommended coding-agent setup](./local-llm-runtimes.md#vllm-on-rtx-3090), [SGLang](./local-llm-runtimes.md#sglang-on-hopper-or-blackwell), [Fleet LLM host](./fleet-llm-host.md)).
 
 ## Why this default
 
@@ -52,5 +52,5 @@ Apply never downloads weights. Install / start / pull stay on `/api/local-llm/in
 ## Related
 
 - [Claude Ollama](./claude-ollama.md) — local model behind the Claude Code harness (optional coding path once Ollama is up)
-- [Persistent Mind / CoS enhancement](./chief-of-staff.md#hybrid-memory-search-execution-lanes-and-local-models)
+- [Persistent Mind / CoS enhancement](./chief-of-staff.md#hybrid-memory-search-and-local-models)
 - [Product surfaces](./product-surfaces.md)

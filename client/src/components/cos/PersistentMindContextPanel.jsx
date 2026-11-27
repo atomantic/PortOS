@@ -1,10 +1,7 @@
-import { useCallback, useEffect, useId, useState } from 'react';
-import { Brain, Database, Eye, Plus, RefreshCw, Save } from 'lucide-react';
+import { useState } from 'react';
+import { Brain, Eye, RefreshCw, Save } from 'lucide-react';
 import {
-  getPersistentMindContext,
   updateCosConfig,
-  createPersistentMindMemory,
-  updatePersistentMindMemory,
   getPersistentMindReflection,
 } from '../../services/apiAgents.js';
 import BrailleSpinner from '../BrailleSpinner';
@@ -13,13 +10,7 @@ import PersistentMindMaintainerControls from './PersistentMindMaintainerControls
 import PersistentMindContextBreakdown from './PersistentMindContextBreakdown';
 import { Link } from 'react-router';
 import { useSocketResource } from '../../hooks/useSocketResource';
-import { formatDateTime } from '../../utils/formatters';
-import { formatCount } from '../../utils/formatters';
-import { normalizeMemoryType } from '../../lib/legacyMemoryType';
-
-const EMPTY_MEMORY = {
-  content: '', summary: '', type: 'observation', category: 'other', tags: [], importance: 0.5, protection: 'standard',
-};
+import { formatCount, formatDateTime } from '../../utils/formatters';
 
 const promptDraft = (data) => ({
   schemaVersion: data?.prompt?.schemaVersion || 1,
@@ -37,53 +28,45 @@ const harnessTone = (recommendation) => recommendation === 'recommended'
   ? 'success'
   : recommendation === 'unavailable' ? 'error' : 'info';
 
-export default function PersistentMindContextPanel({ view = 'all', refreshKey = 0, onMemoriesChanged }) {
-  const [data, setData] = useState(null);
-  const [draft, setDraft] = useState(() => promptDraft(null));
-  const [playbook, setPlaybook] = useState(() => playbookDraft(null));
+export default function PersistentMindContextPanel({ context }) {
+  const { data, loading, error, refetch, updateData } = context;
+  const [promptEdit, setPromptEdit] = useState(null);
+  const [playbookEdit, setPlaybookEdit] = useState(null);
   const [savingPlaybook, setSavingPlaybook] = useState(false);
-  const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
-  const [error, setError] = useState(null);
-
-  const load = useCallback(async () => {
-    setLoading(true);
-    setError(null);
-    return getPersistentMindContext({ silent: true })
-      .then((next) => {
-        setData(next);
-        setDraft(promptDraft(next));
-        setPlaybook(playbookDraft(next));
-      })
-      .catch((nextError) => setError(nextError?.message || 'Could not load the mind context'))
-      .finally(() => setLoading(false));
-  }, []);
-
-  useEffect(() => { void load(); }, [load, refreshKey]);
-
-  const refreshMemories = useCallback(async () => {
-    await load();
-    onMemoriesChanged?.();
-  }, [load, onMemoriesChanged]);
-
+  const [saveError, setSaveError] = useState(null);
+  const draft = promptEdit ?? promptDraft(data);
+  const playbook = playbookEdit ?? playbookDraft(data);
 
   const savePlaybook = async () => {
     if (savingPlaybook) return;
     setSavingPlaybook(true);
-    setError(null);
+    setSaveError(null);
     await updateCosConfig({ persistentMindPlaybook: playbook }, { silent: true })
-      .then(() => load())
-      .catch((nextError) => setError(nextError?.message || 'Could not save the playbook'))
+      .then(async (saved) => {
+        if (saved?.persistentMindPlaybook) {
+          updateData((current) => current && { ...current, playbook: saved.persistentMindPlaybook });
+        }
+        await refetch();
+        setPlaybookEdit((current) => current === playbookEdit ? null : current);
+      })
+      .catch((nextError) => setSaveError(nextError?.message || 'Could not save the playbook'))
       .finally(() => setSavingPlaybook(false));
   };
 
   const savePrompt = async () => {
     if (saving) return;
     setSaving(true);
-    setError(null);
+    setSaveError(null);
     await updateCosConfig({ persistentMindPrompt: draft }, { silent: true })
-      .then(() => load())
-      .catch((nextError) => setError(nextError?.message || 'Could not save the prompt'))
+      .then(async (saved) => {
+        if (saved?.persistentMindPrompt) {
+          updateData((current) => current && { ...current, prompt: saved.persistentMindPrompt });
+        }
+        await refetch();
+        setPromptEdit((current) => current === promptEdit ? null : current);
+      })
+      .catch((nextError) => setSaveError(nextError?.message || 'Could not save the prompt'))
       .finally(() => setSaving(false));
   };
 
@@ -91,13 +74,14 @@ export default function PersistentMindContextPanel({ view = 'all', refreshKey = 
 
   return (
     <div className="space-y-4">
-      {error && <Banner tone="error" title="Context unavailable">{error}</Banner>}
+      {error && <Banner tone="error" title="Context unavailable">{error.message}</Banner>}
+      {saveError && <Banner tone="error" title="Context changes could not be saved">{saveError}</Banner>}
 
-      {view !== 'memories' && <PersistentMindMaintainerControls />}
+      <PersistentMindMaintainerControls />
 
       <MemoryReflection />
 
-      {view !== 'memories' && <section className="rounded border border-port-border bg-port-card p-4" aria-labelledby="mind-architecture-heading">
+      <section className="rounded border border-port-border bg-port-card p-4" aria-labelledby="mind-architecture-heading">
         <div className="flex flex-wrap items-start justify-between gap-3">
           <div>
             <h3 id="mind-architecture-heading" className="flex items-center gap-2 text-sm font-semibold text-port-text">
@@ -105,7 +89,7 @@ export default function PersistentMindContextPanel({ view = 'all', refreshKey = 
             </h3>
             <p className="mt-1 text-xs text-port-text-muted">Every visible result is appended to the machine-local trajectory; the next wake receives a bounded projection of that same record.</p>
           </div>
-          <button type="button" onClick={() => load()} disabled={loading} className="flex items-center gap-2 rounded border border-port-border px-3 py-1.5 text-xs text-port-text disabled:opacity-50">
+          <button type="button" onClick={refetch} disabled={loading} className="flex items-center gap-2 rounded border border-port-border px-3 py-1.5 text-xs text-port-text disabled:opacity-50">
             <RefreshCw size={14} className={loading ? 'animate-spin' : ''} aria-hidden="true" /> Refresh
           </button>
         </div>
@@ -122,16 +106,16 @@ export default function PersistentMindContextPanel({ view = 'all', refreshKey = 
             </div>
           ))}
         </div>
-      </section>}
+      </section>
 
-      {view !== 'memories' && data?.harness && (
+      {data?.harness && (
         <Banner tone={harnessTone(data.harness.recommendation)} title={`${data.harness.label} · ${data.harness.recommendation}`}>
           {data.harness.detail}
         </Banner>
       )}
 
 
-      {view !== 'memories' && <section className="rounded border border-port-border bg-port-card p-4" aria-labelledby="mind-playbook-heading">
+      <section className="rounded border border-port-border bg-port-card p-4" aria-labelledby="mind-playbook-heading">
         <div className="flex flex-wrap items-start justify-between gap-3">
           <div>
             <h3 id="mind-playbook-heading" className="text-sm font-semibold text-port-text">Operating playbook</h3>
@@ -147,7 +131,7 @@ export default function PersistentMindContextPanel({ view = 'all', refreshKey = 
             <select
               id="persistent-mind-playbook-mode"
               value={playbook.mode}
-              onChange={(event) => setPlaybook((current) => ({ ...current, mode: event.target.value }))}
+              onChange={(event) => setPlaybookEdit({ ...playbook, mode: event.target.value })}
               className="mt-1 w-full rounded border border-port-border bg-port-bg px-3 py-2 text-sm font-normal text-port-text"
             >
               {(data?.playbookCatalog || [
@@ -165,14 +149,14 @@ export default function PersistentMindContextPanel({ view = 'all', refreshKey = 
               rows={4}
               maxLength={6000}
               value={playbook.customInstructions}
-              onChange={(event) => setPlaybook((current) => ({ ...current, customInstructions: event.target.value }))}
+              onChange={(event) => setPlaybookEdit({ ...playbook, customInstructions: event.target.value })}
               className="mt-1 w-full resize-y rounded border border-port-border bg-port-bg px-3 py-2 text-sm font-normal text-port-text"
             />
           </label>
         </div>
-      </section>}
+      </section>
 
-      {view !== 'memories' && <section className="rounded border border-port-border bg-port-card p-4" aria-labelledby="mind-prompt-heading">
+      <section className="rounded border border-port-border bg-port-card p-4" aria-labelledby="mind-prompt-heading">
         <div className="flex flex-wrap items-start justify-between gap-3">
           <div>
             <h3 id="mind-prompt-heading" className="text-sm font-semibold text-port-text">Identity and operating prompt</h3>
@@ -185,33 +169,20 @@ export default function PersistentMindContextPanel({ view = 'all', refreshKey = 
         <div className="mt-3 grid gap-3 lg:grid-cols-2">
           <label className="text-xs font-medium text-port-text" htmlFor="persistent-mind-identity">
             Identity
-            <textarea id="persistent-mind-identity" rows={7} maxLength={4000} value={draft.identity} onChange={(event) => setDraft((current) => ({ ...current, identity: event.target.value }))} className="mt-1 w-full resize-y rounded border border-port-border bg-port-bg px-3 py-2 text-sm font-normal text-port-text" />
+            <textarea id="persistent-mind-identity" rows={7} maxLength={4000} value={draft.identity} onChange={(event) => setPromptEdit({ ...draft, identity: event.target.value })} className="mt-1 w-full resize-y rounded border border-port-border bg-port-bg px-3 py-2 text-sm font-normal text-port-text" />
           </label>
           <label className="text-xs font-medium text-port-text" htmlFor="persistent-mind-instructions">
             Operating instructions
-            <textarea id="persistent-mind-instructions" rows={7} maxLength={12000} value={draft.instructions} onChange={(event) => setDraft((current) => ({ ...current, instructions: event.target.value }))} className="mt-1 w-full resize-y rounded border border-port-border bg-port-bg px-3 py-2 text-sm font-normal text-port-text" />
+            <textarea id="persistent-mind-instructions" rows={7} maxLength={12000} value={draft.instructions} onChange={(event) => setPromptEdit({ ...draft, instructions: event.target.value })} className="mt-1 w-full resize-y rounded border border-port-border bg-port-bg px-3 py-2 text-sm font-normal text-port-text" />
           </label>
         </div>
-      </section>}
+      </section>
 
-      {view !== 'context' && <section className="rounded border border-port-border bg-port-card p-4" aria-labelledby="mind-memory-heading">
-        <div>
-          <h3 id="mind-memory-heading" className="flex items-center gap-2 text-sm font-semibold text-port-text"><Database size={16} aria-hidden="true" /> Curated memories</h3>
-          <p className="mt-1 text-xs text-port-text-muted">Memories created by the persistent mind and memories added here enter its bounded context automatically. Core identity and important memories survive cleanup and receive priority in bounded context. Existing memories are standard until explicitly protected; an importance score alone does not protect them.</p>
-        </div>
-        <MemoryCreator onCreated={refreshMemories} />
-        <div className="mt-3 space-y-2">
-          {(data?.memories || []).length === 0 ? (
-            <p className="rounded border border-dashed border-port-border p-4 text-center text-xs text-port-text-muted">No curated memories yet.</p>
-          ) : (data.memories || []).map((memory) => <MemoryEditor key={memory.id} memory={memory} onSaved={refreshMemories} />)}
-        </div>
-      </section>}
+      <PersistentMindContextBreakdown breakdown={data?.breakdown} />
 
-      {view !== 'memories' && <PersistentMindContextBreakdown breakdown={data?.breakdown} />}
+      {data?.preview && <ContinuationNote note={data.preview.continuationNote} />}
 
-      {view !== 'memories' && data?.preview && <ContinuationNote note={data.preview.continuationNote} />}
-
-      {view !== 'memories' && <section className="rounded border border-port-border bg-port-card p-4" aria-labelledby="mind-preview-heading">
+      <section className="rounded border border-port-border bg-port-card p-4" aria-labelledby="mind-preview-heading">
         <h3 id="mind-preview-heading" className="flex items-center gap-2 text-sm font-semibold text-port-text"><Eye size={16} aria-hidden="true" /> Effective context preview</h3>
         <p className="mt-1 text-xs text-port-text-muted">
           This is the actual bounded text projection used on the next wake: {formatCount(data?.preview?.chars)} characters, about {formatCount(data?.preview?.approximateTokens)} tokens, summary cache {data?.preview?.summaryState || 'unknown'}.
@@ -229,7 +200,7 @@ export default function PersistentMindContextPanel({ view = 'all', refreshKey = 
             ))}
           </div>
         </details>
-      </section>}
+      </section>
     </div>
   );
 }
@@ -257,117 +228,16 @@ function ContinuationNote({ note }) {
   );
 }
 
-function MemoryProtectionSelect({ id, value, onChange, disabled }) {
-  return (
-    <label htmlFor={id} className="text-xs font-medium text-port-text">
-      Cleanup protection
-      <select id={id} value={value} disabled={disabled} onChange={(event) => onChange(event.target.value)} className="mt-1 block w-full rounded border border-port-border bg-port-bg px-3 py-2 text-sm font-normal text-port-text disabled:opacity-50">
-        <option value="standard">Standard · eligible for cleanup</option>
-        <option value="important">Important · kept during cleanup</option>
-        <option value="core-identity">Core identity · kept during cleanup</option>
-      </select>
-    </label>
-  );
-}
-
-function MemoryCreator({ onCreated }) {
-  const id = useId();
-  const [draft, setDraft] = useState(EMPTY_MEMORY);
-  const [saving, setSaving] = useState(false);
-  const [error, setError] = useState(null);
-  const create = async (event) => {
-    event.preventDefault();
-    if (!draft.content.trim() || saving) return;
-    setSaving(true);
-    setError(null);
-    await createPersistentMindMemory({
-      ...draft,
-      content: draft.content.trim(),
-      summary: draft.summary.trim() || undefined,
-    }, { silent: true })
-      .then(() => {
-        setDraft({ ...EMPTY_MEMORY });
-        return onCreated();
-      })
-      .catch((nextError) => setError(nextError?.message || 'Could not add the memory'))
-      .finally(() => setSaving(false));
-  };
-  return (
-    <form onSubmit={create} className="mt-3 rounded border border-port-border bg-port-bg/30 p-3">
-      <label htmlFor={`${id}-content`} className="text-xs font-medium text-port-text">Add a durable memory</label>
-      <div className="mt-1 flex flex-col gap-2 sm:flex-row">
-        <input id={`${id}-content`} value={draft.content} maxLength={10240} onChange={(event) => setDraft((current) => ({ ...current, content: event.target.value }))} placeholder="A stable fact, preference, decision, or context…" className="min-w-0 flex-1 rounded border border-port-border bg-port-bg px-3 py-2 text-sm text-port-text" />
-        <button type="submit" disabled={saving || !draft.content.trim()} className="flex items-center justify-center gap-2 rounded border border-port-accent px-3 py-2 text-xs font-medium text-port-accent disabled:opacity-50"><Plus size={14} aria-hidden="true" /> {saving ? 'Adding…' : 'Add memory'}</button>
-      </div>
-      <div className="mt-3"><MemoryProtectionSelect id={`${id}-protection`} value={draft.protection} disabled={saving} onChange={(protection) => setDraft((current) => ({ ...current, protection }))} /></div>
-      {error && <p role="alert" className="mt-2 text-xs text-port-error">{error}</p>}
-    </form>
-  );
-}
-
-function MemoryEditor({ memory, onSaved }) {
-  const id = useId();
-  const [draft, setDraft] = useState({
-    content: memory.content || '',
-    summary: memory.summary || '',
-    type: normalizeMemoryType(memory.type),
-    category: memory.category || 'other',
-    tags: (memory.tags || []).filter((tag) => !tag.startsWith('mind:')).join(', '),
-    importance: memory.importance ?? 0.5,
-  });
-  // Omit protection from ordinary edits so a newer protection applied by the
-  // mind survives even when this editor still has an older context snapshot.
-  const [protectionOverride, setProtectionOverride] = useState(null);
-  const protection = protectionOverride ?? memory.protection ?? 'standard';
-  const [saving, setSaving] = useState(false);
-  const [error, setError] = useState(null);
-  const save = async (event) => {
-    event.preventDefault();
-    setSaving(true);
-    setError(null);
-    await updatePersistentMindMemory(memory.id, {
-      ...draft,
-      ...(protectionOverride !== null ? { protection: protectionOverride } : {}),
-      summary: draft.summary.trim(),
-      tags: draft.tags.split(',').map((tag) => tag.trim()).filter(Boolean),
-      importance: Number(draft.importance),
-    }, { silent: true })
-      .then(async () => {
-        setProtectionOverride(null);
-        await onSaved();
-      })
-      .catch((nextError) => setError(nextError?.message || 'Could not save the memory'))
-      .finally(() => setSaving(false));
-  };
-  // The server refuses edits to the chosen-name record (MIND_CHOSEN_NAME_READ_ONLY); it changes only by choosing a new name.
-  const chosenName = (memory.tags || []).includes('mind:chosen-name');
-  return (
-    <details className="rounded border border-port-border p-3">
-      <summary className="cursor-pointer text-sm text-port-text"><span className="font-medium">{memory.summary || memory.content}</span> <span className="text-xs text-port-text-muted">· {memory.type}/{memory.category}</span>{memory.protection && memory.protection !== 'standard' && <span className="ml-2 rounded border border-port-success/40 px-2 py-0.5 text-xs text-port-success">{memory.protection === 'core-identity' ? 'Core identity' : 'Important'} · Protected</span>}</summary>
-      {chosenName ? <p className="mt-3 text-xs text-port-text-muted">The chosen name is read-only here. The mind changes it by choosing a new name.</p> : <form onSubmit={save} className="mt-3 grid gap-3">
-        <label htmlFor={`${id}-content`} className="text-xs font-medium text-port-text">Content<textarea id={`${id}-content`} rows={4} required maxLength={10240} value={draft.content} onChange={(event) => setDraft((current) => ({ ...current, content: event.target.value }))} className="mt-1 w-full rounded border border-port-border bg-port-bg px-3 py-2 text-sm font-normal text-port-text" /></label>
-        <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
-          <label htmlFor={`${id}-summary`} className="text-xs font-medium text-port-text">Summary<input id={`${id}-summary`} maxLength={500} value={draft.summary} onChange={(event) => setDraft((current) => ({ ...current, summary: event.target.value }))} className="mt-1 w-full rounded border border-port-border bg-port-bg px-2 py-1.5 font-normal" /></label>
-          <label htmlFor={`${id}-type`} className="text-xs font-medium text-port-text">Type<select id={`${id}-type`} value={draft.type} onChange={(event) => setDraft((current) => ({ ...current, type: event.target.value }))} className="mt-1 w-full rounded border border-port-border bg-port-bg px-2 py-1.5 font-normal">{['fact', 'learning', 'observation', 'decision', 'preference', 'context'].map((type) => <option key={type}>{type}</option>)}</select></label>
-          <label htmlFor={`${id}-category`} className="text-xs font-medium text-port-text">Category<input id={`${id}-category`} maxLength={100} value={draft.category} onChange={(event) => setDraft((current) => ({ ...current, category: event.target.value }))} className="mt-1 w-full rounded border border-port-border bg-port-bg px-2 py-1.5 font-normal" /></label>
-          <label htmlFor={`${id}-importance`} className="text-xs font-medium text-port-text">Importance<input id={`${id}-importance`} type="number" min="0" max="1" step="0.1" value={draft.importance} onChange={(event) => setDraft((current) => ({ ...current, importance: event.target.value }))} className="mt-1 w-full rounded border border-port-border bg-port-bg px-2 py-1.5 font-normal" /></label>
-        </div>
-        <MemoryProtectionSelect id={`${id}-protection`} value={protection} disabled={saving} onChange={setProtectionOverride} />
-        {memory.protection && memory.protection !== 'standard' && protection === 'standard' && <p className="text-xs text-port-warning">Saving as Standard removes protection. Future cleanup may archive this memory.</p>}
-        <label htmlFor={`${id}-tags`} className="text-xs font-medium text-port-text">Tags, comma-separated<input id={`${id}-tags`} value={draft.tags} onChange={(event) => setDraft((current) => ({ ...current, tags: event.target.value }))} className="mt-1 w-full rounded border border-port-border bg-port-bg px-2 py-1.5 font-normal" /></label>
-        {error && <p role="alert" className="text-xs text-port-error">{error}</p>}
-        <div className="flex justify-end"><button type="submit" disabled={saving || !draft.content.trim()} className="flex items-center gap-2 rounded bg-port-accent px-3 py-1.5 text-xs font-medium text-white disabled:opacity-50"><Save size={14} aria-hidden="true" /> {saving ? 'Saving…' : 'Save memory'}</button></div>
-      </form>}
-    </details>
-  );
-}
-
 const REFLECTION_EVENTS = ['cos:memory:created', 'cos:memory:updated', 'cos:memory:deleted', 'cos:config:changed', 'cos:mind:event'];
 
 function MemoryReflection() {
   const { data, loading, error, refetch } = useSocketResource(async ({ signal }) => {
     return getPersistentMindReflection({ signal, silent: true });
-  }, { namespace: 'cos', events: REFLECTION_EVENTS });
+  }, {
+    namespace: 'cos',
+    events: REFLECTION_EVENTS,
+    matchesEvent: (payload, event) => event !== 'cos:mind:event' || Boolean(payload?.data?.memoryReview?.memoryId),
+  });
   const sources = [data?.source, data?.inspected].filter((source, index, all) => source && all.findIndex(item => item?.id === source.id) === index);
   return (
     <section className="rounded border border-port-border bg-port-card p-4" aria-labelledby="mind-reflection-heading">

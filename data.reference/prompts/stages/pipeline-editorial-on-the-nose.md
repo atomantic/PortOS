@@ -58,11 +58,7 @@ over-direct answer over-states — the feeling (`emotion-tell`), the fact
 (`exposition`), or the bond (`relationship-report`) it lays bare. Every finding
 gets exactly one of these three labels.
 
-## Manuscript
-
-The manuscript is stitched from the drafted issues. Section headers attribute
-each chunk to an issue (e.g. `# Issue 3 — Title (prose)`). Use the issue number
-in each section header to attribute every finding to its `issueNumber`.
+{{> editorial-manuscript-preamble }}
 
 ```
 {{manuscript}}
@@ -80,14 +76,7 @@ exchange for the author.
 Be specific and cite the text. If the dialogue already works with subtext,
 return an empty `findings` array — do not invent problems.
 
-## Output contract
-
-Return ONLY valid JSON matching this shape — no prose, no markdown fence, no
-commentary:
-
-```json
-{
-  "findings": [
+{{> editorial-findings-contract }}
     {
       "severity": "high|medium|low",
       "subtype": "exposition|emotion-tell|relationship-report",

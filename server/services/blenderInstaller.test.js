@@ -1,3 +1,4 @@
+import { recordingOperatorIo } from '../test/recordingOperatorIo.js';
 import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -61,7 +62,7 @@ describe('startBlenderInstall', () => {
       }
     });
     const events = [];
-    const io = { emit: (name, frame) => events.push([name, frame]) };
+    const io = recordingOperatorIo((name, frame) => events.push([name, frame]));
     const done = () => vi.waitFor(() => expect(events.some(([name]) => name === 'software:changed')).toBe(true));
     const deps = { platform: 'darwin', readOffer: async () => offer, assertIdle: vi.fn(async () => {}), execution, home: HOME, download: vi.fn(async () => {}), run };
     return { deps, io, events, selected, run, done, execution };

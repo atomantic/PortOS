@@ -1,3 +1,4 @@
+import { recordingOperatorIo } from '../test/recordingOperatorIo.js';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import express from 'express';
 import { request } from '../lib/testHelper.js';
@@ -111,7 +112,7 @@ describe('Stacker News routes', () => {
 
   it('returns the same action body on replay and broadcasts only when the transaction changed state', async () => {
     const emit = vi.fn();
-    app.set('io', { emit });
+    app.set('io', recordingOperatorIo(emit));
     const accountId = '00000000-0000-4000-8000-000000000001';
     const action = { id: 'action', accountId };
     stackerNews.createActionWithOutcome

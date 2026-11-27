@@ -1,3 +1,4 @@
+import { recordingOperatorIo } from '../test/recordingOperatorIo.js';
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 
 // Mock the token source and the HTTP client so the sync runs offline.
@@ -67,7 +68,7 @@ describe('syncOutlookApi — malformed-body masquerade guard', () => {
 
   it('certifies a full snapshot only after its last page', async () => {
     const body = 'Synthetic body '.repeat(1000);
-    const io = { emit: vi.fn() };
+    const io = recordingOperatorIo();
     fetchWithTimeout.mockResolvedValueOnce(mockJsonResponse({
       value: [{ Id: 'a', Body: { Content: body } }], '@odata.nextLink': 'https://outlook.office.com/next',
     })).mockResolvedValueOnce(mockJsonResponse({ value: [{ Id: 'b' }] }));

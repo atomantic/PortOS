@@ -1,5 +1,5 @@
 import { useState, useEffect, useCallback } from 'react';
-import { Link } from 'react-router';
+import { Link, useNavigate } from 'react-router';
 import { BarChart3, BookOpen, Brain, GitBranch, GitMerge, GitPullRequest, Info, Lock, Copy, Network, ShieldCheck, SquareTerminal, ToggleLeft } from 'lucide-react';
 import IconPicker from '../IconPicker';
 import { getDatadogInstances } from '../../services/apiSystem.js';
@@ -16,6 +16,7 @@ import { PORTOS_APP_ID } from '../../services/apiCore';
 import toast from '../ui/Toast';
 import Drawer from '../Drawer';
 import Banner from '../ui/Banner';
+import InlineConfirmRow from '../ui/InlineConfirmRow';
 import ListLoadError from '../ui/ListLoadError';
 import useDrawerTab from '../../hooks/useDrawerTab';
 import useListResource from '../../hooks/useListResource';
@@ -62,15 +63,16 @@ const PORT_FIELDS = [
 ];
 
 export default function EditAppDrawer({ app, onClose, onSave }) {
+  const navigate = useNavigate();
   const [activeTab, setActiveTab] = useDrawerTab('appTab', 'general', TAB_IDS);
-  const [formData, setFormData] = useState({
+  const [initialForm] = useState(() => ({
     name: app.name,
     icon: app.icon || 'package',
     repoPath: app.repoPath,
-    uiPort: app.uiPort || '',
-    devUiPort: app.devUiPort || '',
-    apiPort: app.apiPort || '',
-    tlsPort: app.tlsPort || '',
+    uiPort: String(app.uiPort || ''),
+    devUiPort: String(app.devUiPort || ''),
+    apiPort: String(app.apiPort || ''),
+    tlsPort: String(app.tlsPort || ''),
     buildCommand: app.buildCommand || '',
     updateCommand: app.updateCommand || '',
     startCommands: (app.startCommands || []).join('\n'),
@@ -112,10 +114,12 @@ export default function EditAppDrawer({ app, onClose, onSave }) {
     datadogServiceName: app.datadog?.serviceName || '',
     datadogEnvironment: app.datadog?.environment || '',
     datadogConfigTouched: false,
-  });
+  }));
+  const [formData, setFormData] = useState(initialForm);
   const { features: instanceFeatures, error: instanceFeaturesError } = useInstanceFeatures();
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState(null);
+  const [pendingExit, setPendingExit] = useState(null);
   // Layered Intelligence (self-improvement loop) config lives in its own slice —
   // it's saved through a dedicated server merge helper (updateAppLayeredIntelligence)
   // that patches over the STORED config, not the effective one, so we diff the
@@ -225,8 +229,38 @@ export default function EditAppDrawer({ app, onClose, onSave }) {
 
   const updateLiConfig = (patch) => setLiConfig(prev => ({ ...(prev || {}), ...patch }));
 
+  // The *Touched flags control PATCH inclusion. Compare the editable values so
+  // reverting a field clears its dirty state without changing that save contract.
+  const isDirty = Object.keys(initialForm).some(key =>
+    !key.endsWith('Touched') && JSON.stringify(formData[key]) !== JSON.stringify(initialForm[key])
+  ) || JSON.stringify(liConfig) !== JSON.stringify(liBaseline);
+  const jiraPath = `/apps/${app.id}/jira`;
+
+  const closeEditor = (exit) => {
+    onClose();
+    // A same-app route change would otherwise leave the drawer open over JIRA.
+    if (exit === 'jira') navigate(jiraPath);
+  };
+
+  const requestClose = (exit = 'drawer') => {
+    if (saving) return;
+    if (isDirty) {
+      setPendingExit(exit);
+      return;
+    }
+    closeEditor(exit);
+  };
+
+  const handleJiraLink = (event) => {
+    if (event.button !== 0 || event.metaKey || event.ctrlKey || event.shiftKey || event.altKey) return;
+    event.preventDefault();
+    requestClose('jira');
+  };
+
   const handleSubmit = async (e) => {
     e.preventDefault();
+    if (saving) return;
+    setPendingExit(null);
     setError(null);
 
     // The required Name/Repository Path inputs live on the General tab and are
@@ -368,7 +402,7 @@ export default function EditAppDrawer({ app, onClose, onSave }) {
   return (
     <Drawer
       open
-      onClose={onClose}
+      onClose={() => requestClose()}
       title="Edit App"
       size="lg"
       tabs={TABS}
@@ -379,20 +413,30 @@ export default function EditAppDrawer({ app, onClose, onSave }) {
       // the modal's no-accidental-dismiss behavior.
       closeOnEsc={false}
       closeOnBackdrop={false}
-    >
+      beforeBody={<>
         {error && (
-          <div role="alert" className="mb-4 p-3 bg-port-error/20 border border-port-error rounded-lg text-port-error text-sm">
+          <div role="alert" className="shrink-0 px-4 py-3 bg-port-error/20 border-b border-port-error text-port-error text-sm wrap-anywhere">
             {error}
           </div>
         )}
-
-        {/* The Drawer body remounts per active tab (key={currentTab}), so this
-            entire form/footer subtree is torn down and rebuilt on every tab
-            switch. All mutable form state (formData, error, saving, the layered
-            intelligence working copy) therefore MUST live above the Drawer body
-            in this component — never in an uncontrolled input or subcomponent
-            inside the form, or it would silently reset on tab switch. */}
-        <form onSubmit={handleSubmit} className="space-y-4">
+        {pendingExit && (
+          <InlineConfirmRow
+            className="shrink-0"
+            variant="separator"
+            question="Discard unsaved changes?"
+            confirmText="Discard"
+            cancelText="Keep editing"
+            onConfirm={() => closeEditor(pendingExit)}
+            onCancel={() => setPendingExit(null)}
+            autoFocus
+          />
+        )}
+      </>}
+    >
+      {/* Drawer remounts the scroll region on tab switch. Keep the working
+          copy here so changing tabs preserves edits. */}
+      <form onSubmit={handleSubmit}>
+        <fieldset disabled={saving} className="min-w-0 space-y-4">
           {activeTab === 'general' && (
             <div className="space-y-4">
               <div className="grid grid-cols-1 sm:grid-cols-[1fr_auto] gap-4">
@@ -682,11 +726,7 @@ export default function EditAppDrawer({ app, onClose, onSave }) {
                 {formData.workTracker === 'jira' && (
                   <p className="text-xs text-gray-500 mt-1">
                     {appUsesJira(app) ? (
-                      // Closing is load-bearing, not politeness: AppDetailView only
-                      // clears `editing` when the appId CHANGES, so a same-app tab
-                      // link would leave this portaled drawer sitting over the JIRA
-                      // tab it just navigated to.
-                      <>Instance, project, and board live on the app’s <Link to={`/apps/${app.id}/jira`} onClick={onClose} className="underline hover:text-white">JIRA tab</Link>.</>
+                      <>Instance, project, and board live on the app’s <Link to={jiraPath} onClick={handleJiraLink} className="underline hover:text-white">JIRA tab</Link>.</>
                     ) : (
                       <>Save to reveal the app’s JIRA tab, where the instance, project, and board are configured.</>
                     )}
@@ -1016,7 +1056,7 @@ export default function EditAppDrawer({ app, onClose, onSave }) {
           <div className="flex justify-end gap-3 pt-4">
             <button
               type="button"
-              onClick={onClose}
+              onClick={() => requestClose()}
               className="px-4 py-2 text-gray-400 hover:text-white"
             >
               Cancel
@@ -1029,7 +1069,8 @@ export default function EditAppDrawer({ app, onClose, onSave }) {
               {saving ? 'Saving...' : 'Save Changes'}
             </button>
           </div>
-        </form>
+        </fieldset>
+      </form>
     </Drawer>
   );
 }

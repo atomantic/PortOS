@@ -1,6 +1,7 @@
 import { usageBackfillEvents } from './usageBackfillEvents.js';
 import { EventEmitter } from 'events';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { markHostShuttingDown, resetHostShutdownFlagForTests } from '../lib/hostShutdown.js';
 
 vi.mock('../lib/fileUtils.js', () => ({
   atomicWrite: vi.fn(),
@@ -44,11 +45,13 @@ vi.mock('./codexSpeedRepair.js', () => ({
 const {
   __resetHistoricalUsageBackfillForTests,
   getHistoricalUsageBackfillStatus,
-  startHistoricalUsageBackfill
+  startHistoricalUsageBackfill,
+  stopHistoricalUsageBackfill
 } = await import('./usageBackfill.js');
 const { applyGrokUsageRepair } = await import('./grokUsageBackfill.js');
 const { applyAgyUsageRepair } = await import('./agyUsageBackfill.js');
 const { applyCodexSpeedRepair } = await import('./codexSpeedRepair.js');
+const { listProviders } = await import('./provider/providers.js');
 
 class FakeWorker extends EventEmitter {
   static instances = [];
@@ -68,6 +71,7 @@ beforeEach(() => {
   usageBackfillEvents.removeAllListeners();
   FakeWorker.instances = [];
   __resetHistoricalUsageBackfillForTests();
+  resetHostShutdownFlagForTests();
   applyGrokUsageRepair.mockReset();
   applyGrokUsageRepair.mockResolvedValue({
     added: 0, turns: 0, images: 0, videos: 0, backedUp: false, note: null, backupDir: null,
@@ -124,15 +128,23 @@ describe('historical usage backfill job', () => {
         corrections: [{ runId: 'run-example-1', metadataPath: '/example/metadata.json' }]
       }
     });
+    const terminate = vi.spyOn(worker, 'terminate');
+    worker.emit('exit', 0);
     await vi.waitFor(() => expect(finishWrite).toBeTypeOf('function'));
     expect(updates.at(-1).status).toBe('running');
+    const stopped = vi.fn();
+    const stopping = stopHistoricalUsageBackfill().then(stopped);
+    await new Promise(resolve => setImmediate(resolve));
+    expect(terminate).not.toHaveBeenCalled();
+    expect(stopped).not.toHaveBeenCalled();
     finishWrite({ corrected: 1, correctedRunIds: ['run-example-1'] });
-    await vi.waitFor(() => expect(getHistoricalUsageBackfillStatus()).toMatchObject({
+    await stopping;
+    expect(getHistoricalUsageBackfillStatus()).toMatchObject({
       status: 'complete',
       corrected: 1,
       processed: 5,
       total: 5
-    }));
+    });
     expect(updates.at(-1)).toMatchObject({ status: 'complete', corrected: 1 });
   });
 });
@@ -143,6 +155,7 @@ it('notifies clients when the worker fails', async () => {
   await startHistoricalUsageBackfill({ WorkerClass: FakeWorker, providers: [] });
   updated.mockClear();
   FakeWorker.instances[0].emit('error', new Error('Example worker failure'));
+  FakeWorker.instances[0].emit('exit', 1);
   await vi.waitFor(() => expect(getHistoricalUsageBackfillStatus()).toMatchObject({
     status: 'error',
     error: 'Example worker failure',
@@ -152,6 +165,76 @@ it('notifies clients when the worker fails', async () => {
   expect(applyGrokUsageRepair).toHaveBeenCalledTimes(1);
   expect(applyCodexSpeedRepair).toHaveBeenCalledTimes(1);
   expect(applyAgyUsageRepair).toHaveBeenCalledTimes(1);
+});
+
+it.each([1, 0])('reports exit code %i when the worker leaves without a result and allows a retry', async (code) => {
+  const updates = vi.fn();
+  usageBackfillEvents.on('updated', updates);
+  const options = { WorkerClass: FakeWorker, providers: [] };
+  const first = await startHistoricalUsageBackfill(options);
+  FakeWorker.instances[0].emit('exit', code);
+
+  await vi.waitFor(() => expect(getHistoricalUsageBackfillStatus()).toMatchObject({
+    status: 'error',
+    error: expect.stringContaining(`code ${code}`),
+    completedAt: expect.any(String),
+    grok: { added: 0 },
+    codex: { added: 0 },
+    agy: { added: 0 },
+  }));
+  expect(updates).toHaveBeenCalledTimes(2);
+  expect(applyGrokUsageRepair).toHaveBeenCalledTimes(1);
+  expect(applyCodexSpeedRepair).toHaveBeenCalledTimes(1);
+  expect(applyAgyUsageRepair).toHaveBeenCalledTimes(1);
+
+  const second = await startHistoricalUsageBackfill(options);
+  expect(second.status).toBe('running');
+  expect(second.id).not.toBe(first.id);
+  expect(FakeWorker.instances).toHaveLength(2);
+});
+
+it('terminates the active worker during shutdown without starting ledger repairs', async () => {
+  const options = { WorkerClass: FakeWorker, providers: [] };
+  await startHistoricalUsageBackfill(options);
+  const terminate = vi.spyOn(FakeWorker.instances[0], 'terminate');
+  markHostShuttingDown();
+  await stopHistoricalUsageBackfill();
+  await stopHistoricalUsageBackfill();
+  expect(terminate).toHaveBeenCalledOnce();
+  expect(await startHistoricalUsageBackfill(options)).toMatchObject({
+    status: 'error',
+    error: expect.stringContaining('server shutdown'),
+    completedAt: expect.any(String),
+  });
+  expect(FakeWorker.instances).toHaveLength(1);
+  expect(applyGrokUsageRepair).not.toHaveBeenCalled();
+  expect(applyCodexSpeedRepair).not.toHaveBeenCalled();
+  expect(applyAgyUsageRepair).not.toHaveBeenCalled();
+});
+
+it('does not spawn a worker for a request still in preflight when shutdown starts', async () => {
+  let finishProviderLookup;
+  listProviders.mockImplementationOnce(() => new Promise(resolve => { finishProviderLookup = resolve; }));
+  const starting = startHistoricalUsageBackfill({ WorkerClass: FakeWorker });
+  markHostShuttingDown();
+  await stopHistoricalUsageBackfill();
+  finishProviderLookup([]);
+  expect(await starting).toMatchObject({
+    status: 'error',
+    error: expect.stringContaining('server shutdown'),
+  });
+  expect(FakeWorker.instances).toHaveLength(0);
+});
+
+it('recovers when the worker constructor throws', async () => {
+  const BrokenWorker = function () { throw new Error('synthetic worker startup failure'); };
+  const failed = await startHistoricalUsageBackfill({ WorkerClass: BrokenWorker, providers: [] });
+  expect(failed).toMatchObject({
+    status: 'error',
+    error: 'synthetic worker startup failure',
+  });
+  expect(await startHistoricalUsageBackfill({ WorkerClass: FakeWorker, providers: [] }))
+    .toMatchObject({ status: 'running' });
 });
 
 it('puts the Grok repair on the reconcile result and runs it once', async () => {

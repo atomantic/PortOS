@@ -20,6 +20,7 @@ const effects = vi.hoisted(() => ({
   startLyricVerify: vi.fn(async () => ({ jobId: 'verify-1' })),
   probeLoraEffect: vi.fn(async () => ({ status: 'active' })),
   renderTimelineProject: vi.fn(async () => ({ jobId: 'render-1' })),
+  cancelTimelineRender: vi.fn(() => true),
   addCoverFont: vi.fn(async () => ({ id: 'font-1' })),
 }));
 
@@ -131,7 +132,7 @@ vi.mock('../services/videoTimeline/local.js', () => ({
   deleteProject: vi.fn(async () => ({})),
   renderProject: effects.renderTimelineProject,
   attachSseClient: vi.fn(() => true),
-  cancelRender: vi.fn(() => true),
+  cancelRender: effects.cancelTimelineRender,
 }));
 
 vi.mock('../services/loras.js', () => ({
@@ -139,6 +140,7 @@ vi.mock('../services/loras.js', () => ({
   assertSafeLoraFilename: vi.fn(),
 }));
 
+import { getYtDlpUpdateStatus } from '../services/ytdlpUpdate.js';
 import videoDownloadRoutes from './videoDownload.js';
 import tracksRoutes from './tracks.js';
 import roundsRoutes from './rounds.js';
@@ -186,6 +188,12 @@ describe('media process execution operator authority', () => {
     });
   });
 
+  it('requires operator authority to cancel a Video Timeline render', async () => {
+    const workflow = ['post', '/api/video-timeline/render-1/cancel', undefined, effects.cancelTimelineRender, 200];
+    await expectRemoteRefusal(mounts, workflow);
+    await expectAuthorizedWorkflows({ auth: state, mounts, workflows: [workflow] });
+  });
+
   it('reaches the cover font upload handler for a local caller (#12493)', async () => {
     // Past the gate, the upload middleware rejects a JSON body (not multipart).
     const local = await callRoute(await hostControlApp('127.0.0.1', mounts), ['post', '/api/music-video/publish/cover-fonts', {}]);
@@ -193,9 +201,15 @@ describe('media process execution operator authority', () => {
     expect(effects.addCoverFont).not.toHaveBeenCalled();
   });
 
-  it('keeps reads and status endpoints open to remote callers', async () => {
+  it('requires operator authority before probing yt-dlp status', async () => {
+    const workflow = ['get', '/api/devtools/video-download/yt-dlp', undefined, getYtDlpUpdateStatus, 200];
+    await expectRemoteRefusal(mounts, workflow);
+    await expectAuthorizedWorkflows({ auth: state, mounts, workflows: [workflow] });
+  });
+
+  it('keeps download and LoRA listings open to remote callers', async () => {
     const app = await hostControlApp('192.0.2.10', mounts);
-    for (const path of ['/api/devtools/video-download/downloads', '/api/devtools/video-download/yt-dlp', '/api/loras']) {
+    for (const path of ['/api/devtools/video-download/downloads', '/api/loras']) {
       expect((await callRoute(app, ['get', path])).status, path).toBe(200);
     }
   });

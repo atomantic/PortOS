@@ -84,12 +84,12 @@ describe.skipIf(!canRun)('song revision in Chrome (client dependencies required)
     const entry = `import React,{useState} from 'react';import{createRoot}from'react-dom/client';import{BrowserRouter,useNavigate}from'react-router';import Panel from '${client}/src/components/musicVideo/SongRevisionPanel.jsx';import ReviewPanel from '${client}/src/components/musicVideo/ProductionReviewPanel.jsx';import useReview from '${client}/src/components/musicVideo/useMusicVideoProductionReview.js';import{cloneMusicVideoProject}from'${client}/src/services/apiMusicVideo.js';const STEPS=[['art','Look step'],['storyboard','Storyboard step'],['proof','Make step']];function App(){const[p,setP]=useState(${JSON.stringify(before)});const[stage,setStage]=useState('art');const planning=useState(null);const nav=useNavigate();const review=useReview({project:p,replaceProject:setP});return <main style={{maxWidth:1000,margin:'auto',padding:20}}><Panel key={p.id} project={p} onUpdated={setP} onFork={()=>cloneMusicVideoProject(p.id).then(next=>{setP(next);nav('/music-video/'+next.id+'/setup')})}/><nav>{STEPS.map(([id,name])=><button key={id} type="button" aria-pressed={stage===id} onClick={()=>setStage(id)}>{name}</button>)}</nav><ReviewPanel key={'review-'+p.id+'-'+stage} project={p} review={review} stage={stage} planning={planning} onOpenArtifact={()=>{}}/></main>}createRoot(document.getElementById('root')).render(<BrowserRouter><App/></BrowserRouter>);`;
     await writeFile(join(ui, 'entry.jsx'), `import ${JSON.stringify(join(client, 'src/index.css'))};\n` + entry);
     await writeFile(join(ui, 'index.html'), '<html><head><meta name="viewport" content="width=device-width,initial-scale=1"></head><body><div id="root"></div><script type="module" src="/entry.jsx"></script></body></html>');
-    const { build } = await import(bundler[0]); const { default: react } = await import(bundler[1]); const { default: tailwind } = await import(bundler[2]);
+    const { build, react, tailwind } = await import('../../client/src/test/clientBundler.js');
     await buildRecordedViteFixture({
       build,
       recordedRoot: client,
       temp: ui,
-      config: { configFile: false, root: ui, plugins: [react()], css: { postcss: { plugins: [tailwind({ base: client })] } }, build: { outDir: join(ui, 'dist') }, logLevel: 'warn' },
+      config: { configFile: false, root: ui, publicDir: join(client, 'public'), plugins: [react()], css: { postcss: { plugins: [tailwind({ base: client })] } }, build: { outDir: join(ui, 'dist') }, logLevel: 'warn' },
     });
     const app = express(); const staticFiles = createRecordedStaticServer(express); app.use(express.json()); app.use('/api/music-video', router); app.use('/data/music', staticFiles.serve(PATHS.music)); app.use(staticFiles.serve(join(ui, 'dist'))); app.use(errorMiddleware);
     server = await staticFiles.start(app);
@@ -100,6 +100,8 @@ describe.skipIf(!canRun)('song revision in Chrome (client dependencies required)
     const page = await browser.newPage({ viewport: { width: 1000, height: 900 } });
     const errors = []; page.on('pageerror', e => errors.push(e.message));
     await page.goto(`http://127.0.0.1:${server.address().port}`);
+    await page.evaluate(() => document.fonts.ready);
+    expect(await page.evaluate(async () => Promise.all(['Inter-Regular.woff2', 'Inter-Medium.woff2', 'Inter-SemiBold.woff2', 'Inter-Bold.woff2', 'IBMPlexMono-Regular.woff2', 'IBMPlexMono-Medium.woff2', 'IBMPlexMono-SemiBold.woff2', 'GeistPixel-Square.woff2', 'GeistPixel-Grid.woff2'].map(async file => (await fetch(`/fonts/${file}`)).ok)))).toEqual(Array(9).fill(true));
     await page.getByRole('button', { name: 'Fork & revise song' }).click();
     await page.getByLabel('Suno musical style').fill('Bright synth pop');
     await page.getByLabel('Revision lyrics').fill('[Verse]\nNew lyric');

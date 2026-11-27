@@ -20,6 +20,7 @@
 import { v4 as uuidv4 } from '../lib/uuid.js';
 import { ensureSchema, query, withTransaction } from '../lib/db.js';
 import { ServerError } from '../lib/errorHandler.js';
+import { toPgJson } from '../lib/pgJson.js';
 import { cadenceStatus, DEFAULT_RING_CADENCE } from '../lib/tribeCadence.js';
 import { buildCalendarSubcalendarClause, buildPersonMatchIndex, matchPeople, normalizeFilterIds, normalizeIdentifier, normalizePhone } from '../lib/tribeMatch.js';
 import { toUserDayKey } from '../lib/activeDays.js';
@@ -265,8 +266,8 @@ const PERSON_LIST_ORDER = `CASE ring WHEN 'support' THEN 1 WHEN 'core' THEN 2 WH
        COALESCE(last_contact_on, DATE '1900-01-01') ASC,
        name ASC`;
 
-export async function listPeople(options = {}) {
-  await ensureReady();
+export async function listPeople(options = {}, { client } = {}) {
+  if (!client) await ensureReady();
   const conditions = ['deleted = FALSE'];
   const params = [];
   let idx = 1;
@@ -286,7 +287,7 @@ export async function listPeople(options = {}) {
   // No touchpoint/memory-link counts here: they cost 2N correlated subqueries
   // per list, no client view reads them, and `rowToPerson` already defaults both
   // to 0 when the column is absent. Detail views get them from getPerson() (#6024).
-  const result = await query(
+  const result = await (client ?? { query }).query(
     `SELECT *
      FROM tribe_people
      WHERE ${conditions.join(' AND ')}
@@ -662,13 +663,12 @@ export async function createTouchpoint(personId, data = {}) {
 // touchpoint, or `null` when this person+dedupeKey was already logged (re-sync).
 // Only advances last_contact_on when a row is actually inserted.
 //
-// Exported (in addition to being used internally by autoLogTouchpoints below)
-// so a caller that has ALREADY resolved a personId through a different axis —
+// Callers that have ALREADY resolved a personId through a different axis —
 // server/services/beeper/beeperTribe.js resolves via tribe_identities / the
 // beeper_participants cache, not the email/phone/name matcher in
-// tribeMatch.js — can reuse this exact dedupe-keyed insert + last_contact_on
+// tribeMatch.js — can reuse this dedupe-keyed insert + last_contact_on
 // advance instead of re-implementing it (#34).
-export async function autoCreateTouchpoint(personId, data) {
+export async function autoCreateTouchpoint(personId, data, { client } = {}) {
   const happenedAt = data.happenedAt || new Date().toISOString();
   // Advance last_contact_on by the user's LOCAL calendar day, not the UTC day the
   // raw instant's date part happens to fall on — an evening meeting/message must
@@ -676,8 +676,8 @@ export async function autoCreateTouchpoint(personId, data) {
   // (#8451). Falls back to the raw instant only if it doesn't parse as a date at
   // all (toUserDayKey returns null), matching the manual-touchpoint fallback.
   const contactDay = toUserDayKey(happenedAt, await getUserTimezone()) || happenedAt;
-  return withTransaction(async (client) => {
-    const result = await client.query(
+  const insert = async (db) => {
+    const result = await db.query(
       `INSERT INTO tribe_touchpoints (
         id, person_id, happened_at, channel, summary, source,
         calendar_account_id, calendar_event_id, dedupe_key, metadata
@@ -705,7 +705,7 @@ export async function autoCreateTouchpoint(personId, data) {
     // connect): it fires silently on every sync and would otherwise churn the
     // preference to the last meeting location / account type. The synced
     // channel is still preserved on the touchpoint row itself.
-    await client.query(
+    await db.query(
       `UPDATE tribe_people
        SET last_contact_on = GREATEST(COALESCE(last_contact_on, DATE '1900-01-01'), $2::date),
            updated_at = NOW()
@@ -713,7 +713,8 @@ export async function autoCreateTouchpoint(personId, data) {
       [personId, contactDay],
     );
     return rowToTouchpoint(result.rows[0]);
-  });
+  };
+  return client ? insert(client) : withTransaction(insert);
 }
 
 /**
@@ -729,23 +730,88 @@ export async function autoCreateTouchpoint(personId, data) {
  */
 export async function autoLogTouchpoints(candidates = []) {
   if (!Array.isArray(candidates) || candidates.length === 0) return { created: 0, matched: 0 };
-  await ensureReady();
   const people = await listPeople();
   if (people.length === 0) return { created: 0, matched: 0 };
 
   const index = buildPersonMatchIndex(people);
-  let created = 0;
-  let matched = 0;
+  const matches = [];
   for (const candidate of candidates) {
     if (!candidate?.dedupeKey) continue; // no idempotency key → refuse to log
     const personIds = matchPeople(candidate.identities, index);
-    for (const personId of personIds) {
-      matched++;
-      const touchpoint = await autoCreateTouchpoint(personId, candidate);
-      if (touchpoint) created++;
-    }
+    if (personIds.size > 0) matches.push({ candidate, personIds });
   }
-  return { created, matched };
+  if (matches.length === 0) return { created: 0, matched: 0 };
+
+  const timezone = await getUserTimezone();
+  const rows = matches.flatMap(({ candidate, personIds }) => {
+    const happenedAt = candidate.happenedAt || new Date().toISOString();
+    const contactDay = toUserDayKey(happenedAt, timezone) || happenedAt;
+    return Array.from(personIds, (personId) => ({ id: uuidv4(), personId, happenedAt, contactDay, candidate }));
+  });
+  return withTransaction(async (client) => {
+    // Order shared dedupe keys consistently across batches and keep the first
+    // candidate when the same person and key appear more than once in a batch.
+    const { rows: inserted } = await client.query(
+      `INSERT INTO tribe_touchpoints (
+         id, person_id, happened_at, channel, summary, source,
+         calendar_account_id, calendar_event_id, dedupe_key, metadata
+       )
+       SELECT id, person_id, happened_at, channel, summary, source,
+              calendar_account_id, calendar_event_id, dedupe_key, metadata
+       FROM unnest(
+         $1::uuid[], $2::uuid[], $3::timestamptz[], $4::text[], $5::text[],
+         $6::text[], $7::text[], $8::text[], $9::text[], $10::jsonb[]
+       ) WITH ORDINALITY AS input(
+         id, person_id, happened_at, channel, summary, source,
+         calendar_account_id, calendar_event_id, dedupe_key, metadata, position
+       )
+       ORDER BY input.person_id, input.dedupe_key, input.position
+       ON CONFLICT (person_id, dedupe_key) WHERE dedupe_key IS NOT NULL
+       DO NOTHING RETURNING id, person_id`,
+      [
+        rows.map(({ id }) => id),
+        rows.map(({ personId }) => personId),
+        rows.map(({ happenedAt }) => happenedAt),
+        rows.map(({ candidate }) => candidate.channel || ''),
+        rows.map(({ candidate }) => candidate.summary || ''),
+        rows.map(({ candidate }) => candidate.source || 'user'),
+        rows.map(({ candidate }) => candidate.calendarAccountId || null),
+        rows.map(({ candidate }) => candidate.calendarEventId || null),
+        rows.map(({ candidate }) => candidate.dedupeKey),
+        rows.map(({ candidate }) => toPgJson(candidate.metadata || {})),
+      ],
+    );
+
+    if (inserted.length > 0) {
+      // Associate each insert with its actual input row: a later duplicate may
+      // carry a newer date, but only the accepted row advances last_contact_on.
+      const contactDays = new Map(rows.map(({ id, contactDay }) => [id, contactDay]));
+      // Keep the curated channel and take person locks in stable order so
+      // overlapping batches with different dedupe keys can advance safely.
+      await client.query(
+        `WITH latest AS (
+           SELECT person_id, MAX(contact_day) AS contact_day
+           FROM unnest($1::uuid[], $2::date[]) AS input(person_id, contact_day)
+           GROUP BY person_id
+         )
+         UPDATE tribe_people AS p
+         SET last_contact_on = GREATEST(COALESCE(p.last_contact_on, DATE '1900-01-01'), locked.contact_day),
+             updated_at = NOW()
+         FROM (
+           SELECT person.id, latest.contact_day
+           FROM latest JOIN tribe_people AS person ON person.id = latest.person_id
+           ORDER BY person.id
+           FOR NO KEY UPDATE OF person
+         ) AS locked
+         WHERE p.id = locked.id`,
+        [
+          inserted.map(({ person_id }) => person_id),
+          inserted.map(({ id }) => contactDays.get(id)),
+        ],
+      );
+    }
+    return { created: inserted.length, matched: rows.length };
+  });
 }
 
 export async function listMemoryLinks(personId) {

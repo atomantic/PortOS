@@ -1,16 +1,15 @@
 import { describe, expect, it } from 'vitest';
-import { readFileSync } from 'fs';
+import { readFile } from 'fs/promises';
 import { dirname, join } from 'path';
 import { fileURLToPath } from 'url';
 
 import { applyTemplate } from '../../promptTemplate.js';
+import { expandPartials } from '../../promptPartials.js';
 
-const PROMPT = readFileSync(
-  join(
-    dirname(fileURLToPath(import.meta.url)),
-    '../../../../data.reference/prompts/stages/pipeline-editorial-plot-structure.md',
-  ),
-  'utf-8',
+const PROMPTS_DIR = join(dirname(fileURLToPath(import.meta.url)), '../../../../data.reference/prompts');
+const PROMPT = await expandPartials(
+  await readFile(join(PROMPTS_DIR, 'stages', 'pipeline-editorial-plot-structure.md'), 'utf-8'),
+  { partialsDir: join(PROMPTS_DIR, '_partials') },
 );
 
 const render = (overrides = {}) => applyTemplate(PROMPT, {

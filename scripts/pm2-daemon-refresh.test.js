@@ -1,14 +1,13 @@
 import { afterAll, describe, expect, it } from 'vitest';
-import { mkdtempSync, mkdirSync, rmSync, writeFileSync } from 'fs';
+import { execFileSync } from 'node:child_process';
+import { existsSync, mkdtempSync, mkdirSync, rmSync, symlinkSync, writeFileSync } from 'fs';
 import { homedir, tmpdir } from 'os';
 import { join } from 'path';
-import { daemonEntryFromArgv, daemonNeedsRefresh, redactPaths } from './pm2-daemon-refresh.js';
+import { daemonEntryFromArgv, daemonNeedsRefresh, linkLegacyUpdaterPm2, redactPaths } from './pm2-daemon-refresh.js';
 
 // A real file on disk, because the path comparison realpath()s both sides — a
 // fixture that doesn't exist would silently take the literal-spelling fallback
-// and stop exercising the normalization. Deliberately NOT the repo's own
-// node_modules/pm2: CI installs only the server workspace (`npm ci --prefix
-// server`), so root node_modules is absent there.
+// and stop exercising the normalization. The fixture never contacts a live daemon.
 const FIXTURE_DIR = mkdtempSync(join(tmpdir(), 'pm2-daemon-refresh-'));
 const OURS = join(FIXTURE_DIR, 'lib', 'Daemon.js');
 mkdirSync(join(FIXTURE_DIR, 'lib'), { recursive: true });
@@ -101,5 +100,33 @@ describe('redactPaths', () => {
 
   it('survives a missing message', () => {
     expect(redactPaths(undefined)).toBe('');
+  });
+});
+
+describe('legacy updater restart handoff', () => {
+  it.each(['legacy update', 'current update', 'linked root modules'])('handles %s without a duplicate PM2 install', (scenario) => {
+    const root = mkdtempSync(join(tmpdir(), 'pm2-upgrade-'));
+    const serverBin = join(root, 'server', 'node_modules', 'pm2', 'bin');
+    const legacyBin = join(root, 'node_modules', 'pm2', 'bin', 'pm2');
+    try {
+      mkdirSync(serverBin, { recursive: true });
+      writeFileSync(join(serverBin, 'pm2'), "console.log(process.argv[2]);");
+      mkdirSync(join(root, 'data'));
+      writeFileSync(join(root, 'data', 'deps-hashes.json'), JSON.stringify(scenario === 'current update' ? {} : { root: 'old receipt' }));
+      if (scenario === 'linked root modules') {
+        mkdirSync(join(root, 'shared'));
+        symlinkSync(join(root, 'shared'), join(root, 'node_modules'), 'junction');
+      }
+
+      linkLegacyUpdaterPm2(root);
+
+      if (scenario === 'legacy update') {
+        expect(execFileSync(process.execPath, [legacyBin, 'start'], { encoding: 'utf8' }).trim()).toBe('start');
+      } else {
+        expect(existsSync(legacyBin)).toBe(false);
+      }
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
   });
 });

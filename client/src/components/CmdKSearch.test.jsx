@@ -2,7 +2,7 @@ import { useState } from 'react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
-import { MemoryRouter, useLocation } from 'react-router';
+import { MemoryRouter, useLocation, useNavigate } from 'react-router';
 import { RECENT_KEY } from '../utils/navWorkingSet.js';
 import { CMD_K_SEARCH_OPEN_EVENT } from '../hooks/useCmdKSearch.js';
 
@@ -24,7 +24,7 @@ vi.mock('../services/apiPalette.js', () => ({
   getPaletteManifest: (...args) => getPaletteManifest(...args),
   runPaletteAction: (...args) => runPaletteAction(...args),
 }));
-vi.mock('../services/apiSystem.js', () => ({ getInstanceFeatures: (...args) => getInstanceFeatures(...args) }));
+vi.mock('../services/apiAppShell.js', () => ({ getInstanceFeatures: (...args) => getInstanceFeatures(...args) }));
 vi.mock('../services/apiDashboard.js', () => ({
   getDashboardLayouts: (...args) => getDashboardLayouts(...args),
   setActiveDashboardLayout: vi.fn(() => Promise.resolve()),
@@ -54,6 +54,11 @@ const FEATURES_OFF = [{ id: 'jira', label: 'JIRA', enabled: false }];
 function LocationProbe() {
   const location = useLocation();
   return <output data-testid="location">{location.pathname}</output>;
+}
+
+function RouteChanger() {
+  const navigate = useNavigate();
+  return <button type="button" onClick={() => navigate('/music-video/project-b/setup')}>Open project B</button>;
 }
 
 beforeEach(() => {
@@ -444,6 +449,30 @@ describe('CmdKSearch dialog accessibility', () => {
 });
 
 describe('CmdKSearch recent destinations', () => {
+  it('uses the current project route after the mounted palette is reopened', async () => {
+    getPaletteManifest.mockResolvedValue({ actions: [] });
+    render(
+      <MemoryRouter initialEntries={['/']}>
+        <CmdKSearch />
+        <RouteChanger />
+        <LocationProbe />
+      </MemoryRouter>,
+    );
+
+    fireEvent.keyDown(document, { key: 'k', metaKey: true });
+    fireEvent.keyDown(await screen.findByRole('combobox', { name: 'Command palette' }), { key: 'Escape' });
+    await waitFor(() => expect(screen.queryByRole('dialog', { name: 'Command palette' })).not.toBeInTheDocument());
+
+    fireEvent.click(screen.getByRole('button', { name: 'Open project B' }));
+    expect(screen.getByTestId('location')).toHaveTextContent('/music-video/project-b/setup');
+    fireEvent.keyDown(document, { key: 'k', metaKey: true });
+    const input = await screen.findByRole('combobox', { name: 'Command palette' });
+    fireEvent.change(input, { target: { value: 'produce' } });
+    fireEvent.click(await screen.findByRole('option', { name: /Music Video.*Produce/i }));
+
+    await waitFor(() => expect(screen.getByTestId('location')).toHaveTextContent('/music-video/project-b/produce'));
+  });
+
   it('leads with shared nav history, resolves deep links, and fills with non-duplicate defaults', async () => {
     localStorage.setItem(RECENT_KEY, JSON.stringify([
       '/current',

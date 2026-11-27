@@ -33,7 +33,7 @@ export const memorySearchDdl = [
 export const memoryReviewDdl = [
     `ALTER TABLE memories ADD COLUMN IF NOT EXISTS last_review JSONB`,
     `ALTER TABLE memories ADD COLUMN IF NOT EXISTS review_origin JSONB`,
-    `CREATE INDEX IF NOT EXISTS idx_memories_mind_reflection ON memories (source_agent_id, created_at, id) WHERE status = 'active' AND importance < 0.15`,
+    `CREATE INDEX IF NOT EXISTS idx_memories_mind_reflection ON memories (source_agent_id, created_at, id) WHERE status = 'active' AND source_agent_id IS NOT NULL`,
     `CREATE INDEX IF NOT EXISTS idx_memories_source_agent_active ON memories (source_agent_id, importance DESC) WHERE status = 'active' AND source_agent_id IS NOT NULL`,
 ];
 
@@ -149,13 +149,6 @@ export const coreDdl = [
       bridge_key TEXT PRIMARY KEY,
       memory_id UUID NOT NULL
     )`,
-    `CREATE TABLE IF NOT EXISTS deep_audit_ledgers (
-      id TEXT PRIMARY KEY,
-      app_id TEXT NOT NULL,
-      category TEXT NOT NULL,
-      ledger JSONB NOT NULL,
-      updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
-    )`,
     ...memoryHistoryDdl,
     ...memoryReviewDdl,
     `CREATE TABLE IF NOT EXISTS app_quality_measurements (
@@ -167,6 +160,7 @@ export const coreDdl = [
       PRIMARY KEY (app_id, category, agent_id)
     )`,
     `CREATE INDEX IF NOT EXISTS idx_app_quality_history ON app_quality_measurements (app_id, assessed_at DESC)`,
+    `CREATE INDEX IF NOT EXISTS idx_app_quality_app_category_assessed ON app_quality_measurements (app_id, category, assessed_at DESC, agent_id DESC)`,
     // The AUDIT_SLICE line of the run's completion summary (#12090): which paths
     // or areas the lane deep-reviewed, so later runs rotate. Null for runs that
     // predate it; the report JSON stays the scoring record.

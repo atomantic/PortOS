@@ -244,6 +244,7 @@ export default function LayoutEditor({ layouts, activeLayoutId, limits, onClose,
             {layouts.map((l) => (
               <button
                 key={l.id}
+                aria-current={l.id === editingId ? 'true' : undefined}
                 onClick={() => requestSwitch(l.id)}
                 className={`w-full min-w-0 min-h-[44px] text-left px-4 py-2 text-sm border-l-2 ${
                   l.id === editingId ? 'border-port-accent bg-white/5 text-white' : 'border-transparent text-gray-400 hover:bg-white/5 hover:text-white'
@@ -323,15 +324,16 @@ export default function LayoutEditor({ layouts, activeLayoutId, limits, onClose,
               <ul className="space-y-1">
                 {widgets.map((id, idx) => {
                   const meta = WIDGETS_BY_ID[id];
+                  const label = meta?.label ?? id;
                   return (
                     <li key={id} className="flex items-center gap-2 bg-port-bg border border-port-border rounded-lg px-3 py-2">
                       <span className="min-w-0 flex-1 text-sm text-white truncate">
-                        {meta?.label ?? id}
+                        {label}
                         {!meta && <span className="ml-2 text-xs text-port-warning">(unknown — skipped)</span>}
                       </span>
-                      <button onClick={() => move(idx, -1)} disabled={idx === 0} className="min-h-[44px] min-w-[44px] inline-flex items-center justify-center p-1 rounded text-gray-400 hover:text-white disabled:opacity-30 disabled:hover:text-gray-400" aria-label="Move up"><ArrowUp size={14} /></button>
-                      <button onClick={() => move(idx, 1)} disabled={idx === widgets.length - 1} className="min-h-[44px] min-w-[44px] inline-flex items-center justify-center p-1 rounded text-gray-400 hover:text-white disabled:opacity-30 disabled:hover:text-gray-400" aria-label="Move down"><ArrowDown size={14} /></button>
-                      <button onClick={() => remove(id)} className="min-h-[44px] min-w-[44px] inline-flex items-center justify-center p-1 rounded text-gray-400 hover:text-port-error" aria-label="Remove widget"><Trash2 size={14} /></button>
+                      <button onClick={() => move(idx, -1)} disabled={idx === 0} className="min-h-[44px] min-w-[44px] inline-flex items-center justify-center p-1 rounded text-gray-400 hover:text-white disabled:opacity-30 disabled:hover:text-gray-400" aria-label={`Move up ${label}`}><ArrowUp size={14} /></button>
+                      <button onClick={() => move(idx, 1)} disabled={idx === widgets.length - 1} className="min-h-[44px] min-w-[44px] inline-flex items-center justify-center p-1 rounded text-gray-400 hover:text-white disabled:opacity-30 disabled:hover:text-gray-400" aria-label={`Move down ${label}`}><ArrowDown size={14} /></button>
+                      <button onClick={() => remove(id)} className="min-h-[44px] min-w-[44px] inline-flex items-center justify-center p-1 rounded text-gray-400 hover:text-port-error" aria-label={`Remove ${label}`}><Trash2 size={14} /></button>
                     </li>
                   );
                 })}

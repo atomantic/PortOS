@@ -51,9 +51,9 @@ describe('vitestTempRootFixture memo closure', () => {
     }).get('scripts/lib/cosWorkerBudget.test.js');
     expect(directBudgetImport.floor).toMatchObject({ memoizable: false, reason: 'spawns git' });
 
-    const unrelatedGitCaller = computeTestMemoKeys(['server/instructionFileReferences.test.js'], {
+    const unrelatedGitCaller = computeTestMemoKeys(['scripts/ci-base-sha.test.js'], {
       fs: serverOnlyFs, workspace: 'server', env: process.env, listFiles: () => WORKSPACE_TESTS,
-    }).get('server/instructionFileReferences.test.js');
+    }).get('scripts/ci-base-sha.test.js');
     expect(unrelatedGitCaller.floor).toMatchObject({ memoizable: false, reason: 'spawns git' });
   });
 });

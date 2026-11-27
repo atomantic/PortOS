@@ -19,9 +19,11 @@ import { ORCHESTRATION_MODES, ORCHESTRATION_ROLES } from '../orchestrationProfil
 import { RUN_EVENT_READ_LIMITS } from '../agent/agentRunEvents.js';
 import { TASK_STATUS_VALUES, TASK_PRIORITY_VALUES } from '../taskParser.js';
 import { recurrenceRuleSchema } from '../recurrenceValidation.js';
-import { AUDIT_EXECUTION_TASK_TYPES, DEPFREE_MODES } from '../auditCatalog.js';
+import { AUDIT_DOMAIN_ALIASES, auditDomainFor } from '../auditDomains.js';
+import { AUDIT_TASK_TYPE_LIST, DEPFREE_MODES } from '../auditCatalog.js';
 import { CLAIM_DRAIN_TASK_TYPES } from '../qualitySchedulePlan.js';
 import { JOB_INTERVAL_VALUES } from '../autonomousJobIntervals.js';
+import { SUGGESTED_AFTER_MAX } from '../scheduleRunOrder.js';
 import { jobFormFieldsSchema, jobFormValuesSchema } from '../jobFormFields.js';
 import { TASK_DATA_INPUT_IDS } from '../taskDataInputCatalog.js';
 import { GOAL_FIDELITY_FOLLOW_UP_TRIGGERS } from '../goalFidelityFollowUp.js';
@@ -441,7 +443,7 @@ export const goalFidelityFalsePositiveSchema = z.object({
 // =============================================================================
 
 export const createLoopSchema = z.object({
-  prompt: z.string().trim().min(1),
+  prompt: z.string().refine(value => value.trim().length > 0, 'Prompt is required'),
   interval: z.union([z.string().min(1), z.number().positive()])
     .refine(isValidLoopInterval, `Interval must be between ${MIN_INTERVAL_MS / 1000} seconds and ${Math.floor(MAX_INTERVAL_MS / 86_400_000)} days`),
   name: z.string().optional(),
@@ -943,11 +945,16 @@ export const runEventReconcileSchema = z.object({
 // naming `do-release` would otherwise have its cadence rewritten by a form
 // that never showed it. `fileIssuesByType` is keyed the same way and read only
 // for the types actually scheduled.
+const readableAuditIds = [...AUDIT_TASK_TYPE_LIST, ...Object.keys(AUDIT_DOMAIN_ALIASES)];
+const readableAuditId = z.enum(readableAuditIds);
+export const scheduledAuditIdsSchema = z.array(readableAuditId).max(readableAuditIds.length)
+  .transform(ids => [...new Set(ids.map(auditDomainFor))]);
+
 export const qualitySchedulePlanSchema = z.object({
-  taskTypes: z.array(z.enum(AUDIT_EXECUTION_TASK_TYPES)).max(AUDIT_EXECUTION_TASK_TYPES.length).optional(),
+  taskTypes: scheduledAuditIdsSchema.optional(),
   // partialRecord, not record: a Zod 4 enum-keyed record demands EVERY key, and
   // the form only sends the checks whose mode the user actually changed.
-  fileIssuesByType: z.partialRecord(z.enum(AUDIT_EXECUTION_TASK_TYPES), z.boolean()).optional(),
+  fileIssuesByType: z.partialRecord(readableAuditId, z.boolean()).optional(),
   // null = spread the selection evenly over the week.
   checksPerDay: z.number().int().min(1).max(24).nullable().optional(),
   windowStartHour: z.number().int().min(0).max(23).optional(),
@@ -968,6 +975,45 @@ export const cosAgentFeedbackBodySchema = z.object({
   comment: nullishString,
 });
 export const cosAgentBtwBodySchema = z.object({ message: z.string().trim().min(1).max(5000) });
+
+export const cosAgentMergeHandoffSchema = z.object({
+  agentId: z.string().min(1).max(200),
+  prUrl: z.string().url().max(2048),
+  headSha: z.string().regex(/^[0-9a-fA-F]{40}$/),
+  worktreePath: z.string().min(1).max(4096).optional(),
+});
+
+// `reason` is persisted into task metadata + interpolated into logs; guard the
+// shape so a non-string body can't store `[object Object]`.
+export const cosAgentPauseBodySchema = z.object({ reason: z.string().max(500).optional() });
+
+// GET /agents/:id?lines=N — how many TAIL transcript lines to hydrate. The
+// service defaults to `AGENT_OUTPUT_TAIL_LINES` and the ceiling here keeps a
+// hand-written query from re-opening the unbounded read this cap closed (#3498).
+export const cosAgentQuerySchema = z.object({
+  lines: z.coerce.number().int().positive().max(10000).optional(),
+});
+
+// Bounded completed history, including state records not yet archived.
+export const cosAgentCompletedQuerySchema = z.object({
+  limit: z.coerce.number().int().min(1).max(100).default(25),
+  cursor: z.string().max(512).regex(/^\d{4}-\d{2}-\d{2}\|[^|]*\|[^|]+$/).optional(),
+});
+
+export const cosAgentCleanupRecheckSchema = z.object({ taskId: z.string().min(1).max(512) }).strict();
+
+export const cosAgentClaimSelectionSchema = z.object({
+  agentId: z.string().min(1).max(200),
+  issueNumber: z.number().int().positive().max(Number.MAX_SAFE_INTEGER),
+}).strict();
+
+export const cosAgentListQuerySchema = z.object({ active: z.literal('1').optional() });
+
+export const cosAgentPendingFeedbackQuerySchema = z.object({
+  countOnly: z.literal('1').optional(),
+  limit: z.coerce.number().int().min(1).max(100).optional(),
+  cursor: z.string().max(512).optional(),
+});
 
 const claimBranchSchema = z.string().min(1).max(200);
 export const claimOwnershipSchema = z.discriminatedUnion('action', [
@@ -1012,4 +1058,80 @@ export const heldCheckoutRetireBodySchema = z.object({
   branch: z.string().min(1).nullable(),
   locked: z.boolean(),
   lockReason: z.string().nullable(),
+});
+
+export const scheduleLabelsSchema = z.array(z.string().trim().min(1).max(40)).max(20)
+  .transform(labels => [...new Set(labels.map(label => label.toLowerCase()))]);
+
+// Shape only — normalizeSuggestedAfter does the trimming, self-drop and dedupe
+// so the storage rules live with the field's own helper, not in the route.
+export const suggestedAfterSchema = z.array(z.string()).max(SUGGESTED_AFTER_MAX);
+
+// A manual maintenance run names the app, the provider and the model up front
+// (AGENTS.md AI-policy: the click IS the consent). Any enabled CLI/TUI provider
+// is accepted — one outside every subscription family runs unfamilied, see
+// `maintenanceRun.js#manualBurnFamily` — so the family check belongs to the
+// service's live provider gate, not to this schema. Blank effort inherits each
+// scheduled task's saved effort.
+export const maintenanceRunStartSchema = z.object({
+  taskTypes: scheduledAuditIdsSchema.refine(ids => ids.length > 0, 'Select at least one audit').optional(),
+  // The user named these checks one by one (the Quality tab's per-category Run),
+  // so each runs even where the repository scan says it cannot apply.
+  explicitCheck: z.boolean().optional(),
+  mode: z.enum(['file-issues', 'fix']).optional(),
+  auditDepth: z.enum(['quick', 'deep']).optional(),
+  prCompletion: z.enum([...PR_COMPLETION_VALUES, 'inherit']).optional(),
+  claimBetweenAudits: z.boolean().optional(),
+  claimHandler: z.object({
+    providerId: z.string().trim().min(1),
+    model: z.string().trim().min(1),
+    effort: z.enum(EFFORT_LEVELS).nullable().optional(),
+    executionOptions: executionOptionsSchema.optional(),
+  }).nullable().optional(),
+  appId: z.string().trim().min(1),
+  providerId: z.string().trim().min(1),
+  model: z.string().trim().min(1),
+  effort: z.enum(EFFORT_LEVELS).nullable().optional(),
+  executionOptions: executionOptionsSchema.optional(),
+}).strict();
+
+export const maintenanceRunArchiveSchema = z.object({ appId: z.string().min(1), archived: z.boolean() }).strict();
+
+export const enhanceTaskSchema = z.object({
+  description: z.string().min(1),
+  context: z.string().optional(),
+});
+
+// One-off "implement THIS JIRA ticket" task (the per-card play button on the
+// app overview's sprint board). `ticketKey` is a JIRA key like `PROJ-1234`.
+export const jiraTicketTaskSchema = z.object({
+  app: z.string().min(1),
+  ticketKey: z.string().trim().regex(/^[A-Za-z][A-Za-z0-9]*-\d+$/, 'Invalid JIRA ticket key'),
+});
+
+export const cosTaskListQuerySchema = z.object({
+  view: z.enum(['queue', 'completed', 'full']).optional(),
+  source: z.enum(['user', 'internal']).default('user'),
+  selected: z.string().max(512).optional(),
+  cursor: z.string().max(512).optional(),
+});
+
+export const cosTaskCompletedQuerySchema = z.object({ limit: z.coerce.number().int().min(1).max(100).default(25) });
+
+export const cosCachedHealthQuerySchema = z.object({ cachedHealth: z.literal('1').optional() });
+
+export const cosBriefingDateParamsSchema = z.object({
+  date: z.string().regex(/^\d{4}-\d{2}-\d{2}$/, 'date must be YYYY-MM-DD')
+});
+
+// `since` is the client's last-visit marker (ISO-8601). Optional and tolerant:
+// `getWhileAwayActivity` already clamps an absent/garbage/future marker to a
+// 24h fallback, so a malformed value preprocesses to `undefined` (let the
+// service apply its fallback) rather than 400-ing the dashboard card into a
+// blank state. A valid datetime string passes through unchanged.
+export const whileAwayQuerySchema = z.object({
+  since: z.preprocess(
+    (v) => (typeof v === 'string' && !Number.isNaN(Date.parse(v)) ? v : undefined),
+    z.string().optional()
+  )
 });

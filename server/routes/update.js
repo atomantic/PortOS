@@ -1,5 +1,13 @@
+import { emitToOperatorsOn } from '../services/socketIo.js';
 import { Router } from 'express';
-import { z } from 'zod';
+import {
+  ignoreUpdateSchema,
+  acknowledgeBusySchema,
+  nodeUpdateSchema,
+  softwareQuerySchema,
+  syncForkSchema,
+  executeUpdateSchema,
+} from '../lib/updateValidation.js';
 import { asyncHandler, ServerError } from '../lib/errorHandler.js';
 import { validateRequest } from '../lib/validateRequest.js';
 import { UPSTREAM_FULL_NAME } from '../lib/gitRemote.js';
@@ -24,34 +32,6 @@ import {
 } from '../services/updatePreflight.js';
 
 const router = Router();
-
-const ignoreSchema = z.object({
-  version: z.string().min(1, 'version is required')
-});
-
-// `acknowledgeBusy`: the owner proceeds although PortOS is busy (the guard
-// warns with what is running; it does not lock the owner out).
-const acknowledgeBusySchema = z.object({ acknowledgeBusy: z.boolean().optional() });
-
-const nodeUpdateSchema = acknowledgeBusySchema.extend({
-  version: z.string().regex(/^v\d+\.\d+\.\d+$/, 'version must look like v26.12.1')
-});
-
-const softwareQuerySchema = z.object({ fresh: z.enum(['0', '1']).optional() });
-
-const syncForkSchema = z.object({
-  branch: z.string().min(1).max(255).regex(/^[A-Za-z0-9._/-]+$/, 'branch contains invalid characters').optional()
-});
-
-const executeSchema = z.object({
-  acknowledgeInterruption: z.boolean().optional(),
-  acknowledgeFork: z.boolean().optional(),
-  acknowledgePersistentMindImageBackup: z.boolean().optional(),
-  // Reconcile a half-updated install (issue #1779): run update.sh to pull +
-  // install + build + restart even when there's no NEWER GitHub release — the
-  // user did a bare `git pull` and just needs the rest of the update steps.
-  reconcile: z.boolean().optional()
-});
 
 // GET /api/update/status — returns update state (also clears stale locks).
 // `activeCosAgents` counts live CoS agent processes (direct + runner spawns) so
@@ -126,7 +106,7 @@ router.post('/check', asyncHandler(async (req, res) => {
 
 // POST /api/update/ignore — adds version to ignored list
 router.post('/ignore', asyncHandler(async (req, res) => {
-  const { version } = validateRequest(ignoreSchema, req.body);
+  const { version } = validateRequest(ignoreUpdateSchema, req.body);
   await updateChecker.ignoreVersion(version.replace(/^v/, ''));
   const status = await updateChecker.getUpdateStatus();
   res.json(status);
@@ -195,7 +175,7 @@ router.post('/sync-fork', asyncHandler(async (req, res) => {
 
 // POST /api/update/execute — kicks off update
 router.post('/execute', asyncHandler(async (req, res) => {
-  const { acknowledgeFork, acknowledgePersistentMindImageBackup, acknowledgeInterruption, reconcile } = validateRequest(executeSchema, req.body || {});
+  const { acknowledgeFork, acknowledgePersistentMindImageBackup, acknowledgeInterruption, reconcile } = validateRequest(executeUpdateSchema, req.body || {});
 
   // Every refusal, the update lock, and the fire-and-forget launch live in
   // `portosSelfUpdate` — shared with App Management's Git tab so both entry
@@ -247,7 +227,7 @@ router.post('/node-runtime/startup', asyncHandler(async (req, res) => {
   if (!fixed) {
     throw new ServerError('Start-on-boot can\'t be updated from PortOS here. Run the command shown instead.', { status: 409, code: 'STARTUP_NOT_FIXABLE' });
   }
-  req.app.get('io')?.emit('portos:node-runtime:changed', { reason: 'startup' });
+  emitToOperatorsOn(req.app.get('io'), 'portos:node-runtime:changed', { reason: 'startup' });
   runtimeUpdateEvents.emit('changed');
   res.json({ fixed });
 }));

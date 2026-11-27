@@ -22,17 +22,6 @@ export const voiceSynthesizeBodySchema = z.object({
     .describe('Speech rate. Validated 0.25-4 (Piper).'),
 }).strict();
 
-export const sdapiTxt2imgBodySchema = z.object({
-  prompt: z.string().min(1).max(8000),
-  negative_prompt: z.string().max(8000).optional().nullable(),
-  width: z.number().int().min(64).max(2048).optional(),
-  height: z.number().int().min(64).max(2048).optional(),
-  steps: z.number().int().min(1).max(150).optional(),
-  cfg_scale: z.number().min(0).max(30).optional(),
-  seed: z.number().int().optional(),
-  sd_model_checkpoint: z.string().max(128).optional(),
-}).passthrough();
-
 /**
  * Convert a Zod contract to plain JSON Schema (draft 2020-12, minus `$schema`).
  *

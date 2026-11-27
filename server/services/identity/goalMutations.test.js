@@ -23,7 +23,7 @@ vi.mock('../../lib/fileUtils.js', () => ({
 vi.mock('../mortalLoomStore.js', () => ({
   isMortalLoomEnabled: async () => h.mirror !== null,
   mlArrayIfEnabled: async () => structuredClone(h.mirror),
-  mlReplace: vi.fn(async (_key, goals) => { h.mirror = structuredClone(goals); })
+  mlApplyGoalChanges: vi.fn(async (_before, goals) => { h.mirror = structuredClone(goals); })
 }));
 vi.mock('../userTimezone.js', () => ({ userLocalToday: async () => '2026-01-01' }));
 vi.mock('../meatspace/meatspaceCalendar.js', () => ({ getActivities: async () => [] }));
@@ -85,7 +85,7 @@ describe('shared goal document writers', () => {
     expect(h.document.goals[0]).toMatchObject({ todos: [], progress: 60 });
   });
 
-  it('re-reads lazy normalization after a concurrent progress write and then stays read-only', async () => {
+  it('never writes stale normalization over a concurrent goal edit', async () => {
     h.readBarrier = barrier();
     const held = h.readBarrier;
     const reading = goals.getGoals();
@@ -93,9 +93,10 @@ describe('shared goal document writers', () => {
     await goals.addProgressEntry('example', { date: '2026-01-01', note: 'Retain me' });
     await goals.updateGoal('example', { title: 'Retain title' });
     held.release.resolve();
-    expect((await reading).goals[0]).toMatchObject({ title: 'Retain title', progressLog: [{ note: 'Retain me' }], tags: [] });
+    expect((await reading).goals[0]).toMatchObject({ title: 'Example goal', tags: [] });
+    expect(atomicWrite).toHaveBeenCalledTimes(2);
     atomicWrite.mockClear();
-    await goals.getGoals();
+    expect((await goals.getGoals()).goals[0]).toMatchObject({ title: 'Retain title', progressLog: [{ note: 'Retain me' }], tags: [] });
     expect(atomicWrite).not.toHaveBeenCalled();
   });
 
@@ -131,6 +132,34 @@ describe('shared goal document writers', () => {
     expect(await goals.completeMilestoneTask('example', 'missing', 'missing')).toBeNull();
     expect(atomicWrite).not.toHaveBeenCalled();
     await expect(goals.acceptGoalPhases('missing', [])).rejects.toMatchObject({ code: 'NOT_FOUND' });
+  });
+
+  it('stamps a todo completion once, preserves it on repeat, and clears it when reopened', async () => {
+    const todo = await todos.addTodo('example', { title: 'Practice' });
+
+    const completed = await todos.updateTodo('example', todo.id, { status: 'done' });
+    const completedAt = completed.completedAt;
+    expect(completedAt).toEqual(expect.any(String));
+
+    const repeated = await todos.updateTodo('example', todo.id, { status: 'done' });
+    expect(repeated.completedAt).toBe(completedAt);
+
+    const reopened = await todos.updateTodo('example', todo.id, { status: 'in-progress' });
+    expect(reopened.completedAt).toBeNull();
+  });
+
+  it('returns null when updating or deleting a todo under an unknown goal', async () => {
+    expect(await todos.updateTodo('missing', 'todo-1', { title: 'No goal' })).toBeNull();
+    expect(await todos.deleteTodo('missing', 'todo-1')).toBeNull();
+    expect(atomicWrite).not.toHaveBeenCalled();
+  });
+
+  it('stores explicit todo priority and estimate and applies defaults when omitted', async () => {
+    const prioritized = await todos.addTodo('example', { title: 'Long run', priority: 'high', estimateMinutes: 90 });
+    expect(prioritized).toMatchObject({ priority: 'high', estimateMinutes: 90 });
+
+    const defaults = await todos.addTodo('example', { title: 'Stretch' });
+    expect(defaults).toMatchObject({ priority: 'medium', estimateMinutes: null });
   });
 
   it('mirrors the serialized final document and keeps explicit imports local', async () => {

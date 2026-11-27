@@ -42,10 +42,7 @@ whose perceptions, thoughts, and feelings the narration follows. If POV is not
 explicitly tagged, infer it from the scene and proceed; do not flag a scene
 whose POV character you cannot determine.
 
-## Manuscript
-
-The manuscript is stitched from the drafted issues. Use the issue number in each
-section header to attribute every finding to its `issueNumber`.
+{{> editorial-manuscript-preamble }}
 
 ```
 {{manuscript}}
@@ -64,14 +61,7 @@ transitional beat.
 Be specific and cite the text. If the manuscript gives its POV characters strong
 interiority throughout, return an empty `findings` array — do not invent issues.
 
-## Output contract
-
-Return ONLY valid JSON matching this shape — no prose, no markdown fence, no
-commentary:
-
-```json
-{
-  "findings": [
+{{> editorial-findings-contract }}
     {
       "severity": "high|medium|low",
       "issueNumber": 3,

@@ -1,17 +1,17 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { EventEmitter } from 'node:events';
-import { mkdtemp, rm, mkdir, writeFile, readFile } from 'node:fs/promises';
+import { access, mkdtemp, rm, mkdir, writeFile, readFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { setTimeout as setWatchdog, clearTimeout as clearWatchdog } from 'node:timers';
 import { SSE_CLEANUP_DELAY_MS } from '../../lib/sseUtils.js';
-import { acquireBackupSnapshotCut } from '../../lib/backupSnapshotBoundary.js';
+import { _backupSnapshotWaitersForTests, acquireBackupSnapshotCut } from '../../lib/backupSnapshotBoundary.js';
 
 let voiceProfilesRoot = '';
 const queryMock = vi.fn();
 
 // Both overrides default to null = "use the real thing". The runner's own
-// publication contract is covered in scripts/qwen3_tts_runner.test.js; these
+// publication contract is covered in scripts/ml/qwen3_tts_runner.test.js; these
 // lifecycle cases script its stdout frames instead of training a model.
 let spawnOverride = null;
 let runtimeOverride = null;
@@ -19,11 +19,13 @@ let runtimeOverride = null;
 // Every sidecar write is recorded when it is ATTEMPTED, so a test can tell a write
 // held behind backup admission from one that is merely still in flight.
 const sidecarWrites = [];
+let beforeAtomicWrite = null;
 let onSidecarWritten = null;
 vi.mock('../../lib/fileUtils.js', async (importOriginal) => {
   const actual = await importOriginal();
   return { ...actual, atomicWrite: async (path, ...rest) => {
     sidecarWrites.push(path);
+    if (beforeAtomicWrite) await beforeAtomicWrite(path);
     const result = await actual.atomicWrite(path, ...rest);
     onSidecarWritten?.(path, rest[0]);
     return result;
@@ -47,6 +49,7 @@ vi.mock('./qwen3TtsRuntime.js', async (importOriginal) => {
 });
 
 const { listActiveRenders } = await import('../renderActivity.js');
+const { deleteVoiceProfile } = await import('./profiles.js');
 const { fineTuningEvents } = await import('./fineTuningEvents.js');
 const {
   validateFineTuningDataset,
@@ -83,6 +86,7 @@ beforeEach(async () => {
   queryMock.mockReset();
   spawnOverride = null;
   runtimeOverride = null;
+  beforeAtomicWrite = null;
 });
 
 afterEach(async () => {
@@ -249,6 +253,9 @@ describe('fineTuning', () => {
       modelRevision: revisionFor(20),
     });
 
+    queryMock.mockResolvedValueOnce({ rows: [{ data: { ...PROFILE, id: 'another-profile' } }] });
+    await expect(promoteCheckpoint({ profileId: 'another-profile', jobId: startRes.jobId, checkpointId: '100' }))
+      .rejects.toMatchObject({ code: 'JOB_NOT_FOUND' });
     const promoteRes = await promoteCheckpoint({
       profileId: PROFILE.id,
       jobId: startRes.jobId,
@@ -284,6 +291,94 @@ describe('fineTuning', () => {
     await vi.waitFor(async () => expect((await readCheckpoints()).map((c) => c.step)).toEqual([20]));
     scripted().exit(0);
     await drainJobRecord(jobId);
+  });
+
+  it('waits for the trainer and discards checkpoint writes queued when consent is withdrawn', async () => {
+    queryMock.mockResolvedValue({ rows: [{ data: PROFILE }] });
+    await seedSourceAudio();
+    const scripted = useScriptedRunner();
+    const { jobId } = await startFineTuningJob({ profileId: PROFILE.id });
+    const child = scripted();
+    child.kill.mockImplementation(() => true);
+    const profileDir = join(voiceProfilesRoot, PROFILE.id);
+    const writesBefore = sidecarWrites.length;
+
+    const release = await acquireBackupSnapshotCut();
+    let withdrawing;
+    try {
+      // The checkpoint waits on backup admission while withdrawal stops the trainer.
+      child.emitFrames(checkpointFrame(jobId, 20));
+      await vi.waitFor(() => expect(_backupSnapshotWaitersForTests().publications).toBe(1));
+      withdrawing = deleteVoiceProfile(PROFILE.id);
+      await vi.waitFor(() => expect(child.kill).toHaveBeenCalledWith('SIGTERM'));
+      expect(queryMock.mock.calls.some(([sql]) => sql.startsWith('DELETE'))).toBe(false);
+      await access(profileDir);
+
+      // Model a last artifact written by a trainer that is still shutting down.
+      await writeFile(join(jobDir(jobId), 'late-audition.wav'), 'synthetic audio');
+      child.emitFrames(checkpointFrame(jobId, 40));
+    } finally {
+      child.exit(null, 'SIGTERM');
+      release();
+      await withdrawing;
+    }
+
+    await expect(access(profileDir)).rejects.toMatchObject({ code: 'ENOENT' });
+    await expect(getFineTuningJobStatus(jobId, PROFILE.id)).rejects.toMatchObject({ code: 'JOB_NOT_FOUND' });
+    expect(sidecarWrites).toHaveLength(writesBefore);
+  });
+
+  it('drains an admitted sidecar write before removing the profile', async () => {
+    queryMock.mockResolvedValue({ rows: [{ data: PROFILE }] });
+    await seedSourceAudio();
+    const scripted = useScriptedRunner();
+    const { jobId } = await startFineTuningJob({ profileId: PROFILE.id });
+    const child = scripted();
+    const writing = Promise.withResolvers();
+    const resume = Promise.withResolvers();
+    beforeAtomicWrite = async (path) => {
+      if (path !== jobRecordPath(jobId)) return;
+      writing.resolve();
+      await resume.promise;
+    };
+
+    child.emitFrames(checkpointFrame(jobId, 20));
+    await writing.promise;
+    const withdrawing = deleteVoiceProfile(PROFILE.id);
+    try {
+      await vi.waitFor(() => expect(child.kill).toHaveBeenCalledWith('SIGTERM'));
+      expect(queryMock.mock.calls.some(([sql]) => sql.startsWith('DELETE'))).toBe(false);
+      await access(jobRecordPath(jobId));
+    } finally {
+      resume.resolve();
+      await withdrawing;
+    }
+
+    await expect(access(join(voiceProfilesRoot, PROFILE.id))).rejects.toMatchObject({ code: 'ENOENT' });
+  });
+
+  it('escalates before failing withdrawal and allows a retry after the trainer exits', async () => {
+    queryMock.mockResolvedValue({ rows: [{ data: PROFILE }] });
+    await seedSourceAudio();
+    const scripted = useScriptedRunner();
+    const { jobId } = await startFineTuningJob({ profileId: PROFILE.id });
+    const child = scripted();
+    child.kill.mockImplementation(() => true);
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
+    try {
+      const withdrawn = expect(deleteVoiceProfile(PROFILE.id)).rejects.toMatchObject({ code: 'VOICE_TRAINER_STOP_TIMEOUT' });
+      await vi.waitFor(() => expect(child.kill).toHaveBeenCalledWith('SIGTERM'));
+      await vi.advanceTimersByTimeAsync(10_000);
+      await withdrawn;
+      expect(child.kill).toHaveBeenCalledWith('SIGKILL');
+      expect(queryMock.mock.calls.some(([sql]) => sql.startsWith('DELETE'))).toBe(false);
+      await access(jobRecordPath(jobId));
+    } finally {
+      child.exit(null, 'SIGKILL');
+      vi.useRealTimers();
+    }
+    await expect(deleteVoiceProfile(PROFILE.id)).resolves.toEqual({ id: PROFILE.id });
+    await expect(access(join(voiceProfilesRoot, PROFILE.id))).rejects.toMatchObject({ code: 'ENOENT' });
   });
 
   it('settles a cancelled job as cancelled even though its child closes on a signal', async () => {

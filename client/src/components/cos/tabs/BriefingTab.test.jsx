@@ -1,7 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { act, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
-import { MemoryRouter } from 'react-router';
+import { MemoryRouter, useLocation } from 'react-router';
 import BriefingTab from './BriefingTab';
 
 const api = vi.hoisted(() => ({
@@ -34,15 +34,21 @@ vi.mock('../../../services/apiAgents.js', () => ({
 }));
 vi.mock('../../ui/Toast', () => ({ default: toast }));
 
-const renderTab = () => render(
-  <MemoryRouter>
+function CurrentSearch() {
+  return <output aria-label="Current query">{useLocation().search}</output>;
+}
+
+const renderTab = (entry = '/cos/briefing') => render(
+  <MemoryRouter initialEntries={[entry]}>
     <BriefingTab />
+    <CurrentSearch />
   </MemoryRouter>,
 );
 
 beforeEach(() => {
   vi.clearAllMocks();
   api.getCosBriefings.mockReset().mockResolvedValue({ briefings: [] });
+  api.getCosBriefing.mockReset();
   api.getCosLatestBriefing.mockReset().mockResolvedValue(null);
   api.triggerCosJob.mockReset().mockResolvedValue({ started: true });
   toast.error.mockReset();
@@ -60,9 +66,9 @@ it('announces the briefing heading hierarchy and section disclosure state', asyn
   });
   renderTab();
 
-  expect(await screen.findByRole('heading', { name: 'Today', level: 4 })).toBeInTheDocument();
-  expect(screen.getByRole('heading', { name: 'Daily Briefing', level: 3 })).toBeInTheDocument();
-  expect(screen.getByRole('heading', { name: 'Priority', level: 5 })).toBeInTheDocument();
+  expect(await screen.findByRole('heading', { name: 'Today', level: 3 })).toBeInTheDocument();
+  expect(screen.getByRole('heading', { name: 'Daily Briefing', level: 2 })).toBeInTheDocument();
+  expect(screen.getByRole('heading', { name: 'Priority', level: 4 })).toBeInTheDocument();
   await user.click(screen.getByRole('button', { name: 'Focus', expanded: true }));
   expect(screen.getByRole('button', { name: 'Focus', expanded: false })).toBeInTheDocument();
   expect(screen.queryByRole('heading', { name: 'Priority' })).not.toBeInTheDocument();
@@ -138,6 +144,32 @@ describe('BriefingTab empty state', () => {
     expect(screen.getByText('Today')).toBeInTheDocument();
   });
 
+  it.each([false, true])('offers a new generation attempt after a failed completion (early event: %s)', async early => {
+    const user = userEvent.setup();
+    let resolveTrigger;
+    api.triggerCosJob.mockReturnValueOnce(new Promise(resolve => { resolveTrigger = resolve; }));
+    renderTab();
+
+    await user.click(await screen.findByRole('button', { name: 'Generate today’s briefing' }));
+    expect(screen.getByRole('button', { name: 'Generating today’s briefing…' })).toBeDisabled();
+
+    const finishTrigger = () => act(async () => resolveTrigger({ started: true }));
+    if (!early) await finishTrigger();
+    await act(async () => socket.receive('cos:agent:completed', {
+      metadata: { jobId: 'job-daily-briefing' },
+      result: { success: false },
+    }));
+    if (early) await finishTrigger();
+
+    expect(screen.getByRole('alert')).toHaveTextContent('The Daily Briefing job ended without producing a briefing.');
+    expect(screen.getByRole('link', { name: 'Open Daily Briefing job' })).toHaveAttribute('href', '/cos/jobs');
+    const retry = screen.getByRole('button', { name: 'Retry' });
+    expect(retry).toBeEnabled();
+    await user.click(retry);
+    expect(api.triggerCosJob).toHaveBeenCalledTimes(2);
+    expect(screen.queryByRole('alert')).not.toBeInTheDocument();
+  });
+
   it('does not trigger twice while generation is pending', async () => {
     let resolveTrigger;
     api.triggerCosJob.mockReturnValue(new Promise((resolve) => { resolveTrigger = resolve; }));
@@ -156,7 +188,7 @@ describe('BriefingTab empty state', () => {
 
   it('shows a rejected trigger reason once', async () => {
     const user = userEvent.setup();
-    api.triggerCosJob.mockResolvedValue({ success: false, status: 'skipped', reason: 'No provider available' });
+    api.triggerCosJob.mockRejectedValue(new Error('No provider available'));
     renderTab();
 
     await user.click(await screen.findByRole('button', { name: 'Generate today’s briefing' }));
@@ -191,11 +223,12 @@ it('reconciles once on reconnect and tab show, and stops reading after unmount',
 it('keeps the selected historical briefing when a daily job completes', async () => {
   api.getCosBriefings.mockResolvedValue({ briefings: [{ date: '2026-09-12' }, { date: '2026-09-11' }] });
   api.getCosLatestBriefing.mockResolvedValue({ date: '2026-09-12', content: '# Latest' });
-  renderTab();
+  renderTab('/cos/briefing?view=compact');
   await act(async () => {});
   let resolveOld;
   api.getCosBriefing.mockReturnValueOnce(new Promise(resolve => { resolveOld = resolve; }));
   fireEvent.change(screen.getByRole('combobox', { name: 'Date' }), { target: { value: '2026-09-11' } });
+  expect(screen.getByLabelText('Current query')).toHaveTextContent('?view=compact&date=2026-09-11');
   await act(async () => {});
   // The route remains mounted while the first historical read is pending.
   api.getCosBriefing.mockResolvedValue({ date: '2026-09-11', content: '# Historical' });
@@ -220,4 +253,13 @@ it('reconciles completion received while the post-trigger read is still pending'
   await act(async () => resolvePending(null));
   expect(screen.getByText('Finished during read')).toBeInTheDocument();
   expect(api.getCosLatestBriefing).toHaveBeenCalledTimes(3);
+});
+
+it('loads a historical briefing directly from the date query parameter', async () => {
+  api.getCosBriefing.mockResolvedValue({ date: '2026-09-11', content: '# Historical' });
+  renderTab('/cos/briefing?date=2026-09-11');
+
+  expect(await screen.findByText('Historical')).toBeInTheDocument();
+  expect(api.getCosBriefing).toHaveBeenCalledWith('2026-09-11', { silent: true });
+  expect(api.getCosLatestBriefing).not.toHaveBeenCalled();
 });

@@ -2,7 +2,7 @@ import { useModelInputPreview } from '../../hooks/useModelInputPreview';
 import { previewMediaJobRetry } from '../../services/apiMediaJobs';
 import ModelInputPreview from './ModelInputPreview';
 import { useCallback, useState, useEffect } from 'react';
-import { RotateCw } from 'lucide-react';
+import RetryFormActions from './RetryFormActions';
 import A2vLoraStageControls from '../videoGen/A2vLoraStageControls';
 import { isDefaultA2vLoraStages } from '../../lib/videoLoraStages';
 import { FormField } from '../ui/FormField';
@@ -20,10 +20,9 @@ import { resolutionOptionsForModel } from '../../lib/videoGenResolutions';
 import {
   videoEdgeBoundsForModel, textEncoderOptionsForModel, STOCK_TEXT_ENCODER_ID,
   normalizeTextEncoderForModel, normalizeSpeedProfileForModel, speedProfileIdFromRecord,
-  resolveDraftDecodeForModel, draftDecodeFromRecord, selectedContextFramesForModel,
+  selectedContextFramesForModel,
 } from '../../lib/videoGenParams';
 import { isDefaultVideoStreamingMode, videoStreamingModeFromRecord } from '../../lib/videoStreamingMode';
-import { isDeliveryVideoModel } from '../../lib/videoFinish';
 import { loraFamilyOf, videoLoraFamily } from '../../lib/runnerFamilies';
 import LoraPicker from '../imageGen/LoraPicker';
 import { buildVideoRetryOverrides, reconcileModelBoundParams } from './retryOverrides';
@@ -59,10 +58,6 @@ export default function VideoRetryForm({ job, retrying, onSubmit, onCancel }) {
   // picker reports what the render actually used rather than always reading
   // "Quality", and so an unchanged retry re-submits the same schedule.
   const [speedProfileId, setSpeedProfileId] = useState(speedProfileIdFromRecord(p.speedProfileId));
-  // The decode the job was submitted with (#5423, #5449). Seeded from its params
-  // for the same reason the schedule above is: an untouched requeue must
-  // re-submit what the original render asked for, not snap silently back to Full.
-  const [draftDecode, setDraftDecode] = useState(draftDecodeFromRecord(p.draftDecode));
   // Keep a recorded explicit memory request editable until the catalog loads;
   // only the render bridge decides whether its pinned pipeline can honor it.
   const [streamingMode, setStreamingMode] = useState(videoStreamingModeFromRecord(p.streamingMode));
@@ -88,13 +83,12 @@ export default function VideoRetryForm({ job, retrying, onSubmit, onCancel }) {
   // it is idempotent, so re-running as the draft settles cannot loop.
   useEffect(() => {
     if (!currentModel) return;
-    const next = reconcileModelBoundParams(currentModel, models, { contextFrames, i2vReferenceMode, textEncoderId, speedProfileId, draftDecode });
+    const next = reconcileModelBoundParams(currentModel, { contextFrames, i2vReferenceMode, textEncoderId, speedProfileId });
     setContextFrames(next.contextFrames);
     setI2vReferenceMode(next.i2vReferenceMode);
     setTextEncoderId(next.textEncoderId);
     setSpeedProfileId(next.speedProfileId);
-    setDraftDecode(next.draftDecode);
-  }, [currentModel, models, contextFrames, i2vReferenceMode, textEncoderId, speedProfileId, draftDecode]);
+  }, [currentModel, contextFrames, i2vReferenceMode, textEncoderId, speedProfileId]);
   // Hosted backends (grok / fal / reactor) own their params: `mode` is the
   // dispatch discriminator and `modelId` is a provider id the local catalog
   // doesn't know, so the local model / size / sampler / chaining controls don't apply.
@@ -105,22 +99,6 @@ export default function VideoRetryForm({ job, retrying, onSubmit, onCancel }) {
   const encoderOptions = textEncoderOptionsForModel(currentModel);
   const originalEncoder = normalizeTextEncoderForModel(p.textEncoderId || STOCK_TEXT_ENCODER_ID, currentModel);
   const originalSpeedProfileForModel = normalizeSpeedProfileForModel(speedProfileIdFromRecord(p.speedProfileId), currentModel);
-  // Preview-fidelity decode (#5449). A model the finish graph names as a
-  // DELIVERY target always decodes on its own decoder, so the picker is locked
-  // to Full there rather than offering a draft the server would decline — the
-  // same reset the Video Gen form makes when Finish switches models.
-  const deliveryModel = isDeliveryVideoModel(currentModel, models);
-  const recordedDraftDecode = draftDecodeFromRecord(p.draftDecode);
-  // What an UNTOUCHED requeue would re-submit. Two deliberate readings:
-  //   - until `models` resolves, an unknown model means "not known yet", never
-  //     "no draft decoder", so the baseline stays the recorded value and a
-  //     requeue submitted mid-load still sends no decode override at all;
-  //   - on a delivery model it ALSO stays the recorded value, so the lock's
-  //     reset to Full counts as a change and clears the stale request rather
-  //     than silently re-inheriting a decode the render can never perform.
-  const originalDraftDecode = (currentModel && !deliveryModel)
-    ? resolveDraftDecodeForModel(recordedDraftDecode, currentModel, models)
-    : recordedDraftDecode;
   // Multi-keyframe inputs are not exposed in the sanitized queue projection,
   // but FFLF is their persisted semantic mode. IC/a2v conditioning also pins
   // a single render, so keep the shared chaining controls consistent with the
@@ -148,11 +126,11 @@ export default function VideoRetryForm({ job, retrying, onSubmit, onCancel }) {
     prompt, negativePrompt: isReactor ? (p.retryNegativePrompt ?? p.negativePrompt ?? '') : negativePrompt,
     modelId, width, height, numFrames, fps, chunks, chunkPrompts, seed, steps,
     guidanceScale, imageStrength, i2vReferenceMode, tiling, disableAudio, textEncoderId, speedProfileId,
-    draftDecode, a2vLoraStageStrengths, streamingMode, selectedLoras,
+    a2vLoraStageStrengths, streamingMode, selectedLoras,
   };
   const overrides = buildVideoRetryOverrides(draft, p, {
     currentModel, isHosted, chainingActive, displayedContextFrames,
-    originalEncoder, originalSpeedProfileForModel, originalDraftDecode,
+    originalEncoder, originalSpeedProfileForModel,
   });
   const fetchPreview = useCallback((body, options) => previewMediaJobRetry(job.id, body, options), [job.id]);
   const modelInputPreview = useModelInputPreview(fetchPreview, overrides, { enabled: !continuationPending });
@@ -161,8 +139,9 @@ export default function VideoRetryForm({ job, retrying, onSubmit, onCancel }) {
     if (!continuationPending && !modelInputPreview.error && (overrides?.prompt === undefined || prompt.trim())) onSubmit(overrides);
   };
 
+  // The compose ranges can reject saved values that a prompt-only retry inherits.
   return (
-    <form onSubmit={submit} className="mt-3 pt-3 border-t border-port-border space-y-3">
+    <form onSubmit={submit} noValidate className="mt-3 pt-3 border-t border-port-border space-y-3">
       <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
         <FormField label="Prompt" labelClassName="block text-xs font-medium text-gray-400 mb-1">
           <AutoSizeTextarea value={prompt} onChange={(e) => setPrompt(e.target.value)} rows={3} className="w-full bg-port-bg border border-port-border rounded-lg px-3 py-2 text-sm text-white min-h-[80px]" />
@@ -205,22 +184,29 @@ export default function VideoRetryForm({ job, retrying, onSubmit, onCancel }) {
       {!isHosted && (
         <AdvancedParamsPanel
           mode={p.mode || 'text'} currentModel={currentModel}
-          numFrames={displayedNumFrames} onNumFramesChange={setNumFrames}
-          chunks={chunks} onChunksChange={setChunks} keyframesActive={chainingLocked}
-          chunkPrompts={chunkPrompts} onChunkPromptChange={setChunkPromptAt} chainingActive={chainingActive}
-          contextFrames={displayedContextFrames} onContextFramesChange={setContextFrames}
-          fps={displayedFps} onFpsChange={setFps} seed={seed} onSeedChange={setSeed} onRandomSeed={() => setSeed(Math.floor(Math.random() * 2147483647))}
-          steps={steps} onStepsChange={setSteps} guidanceScale={guidanceScale} onGuidanceScaleChange={setGuidanceScale}
-          speedProfileId={speedProfileId} onSpeedProfileChange={setSpeedProfileId}
-          width={width} height={height}
-          streamingMode={streamingMode} onStreamingModeChange={setStreamingMode}
-          showStreamingMode={currentModel ? undefined : !isDefaultVideoStreamingMode(p.streamingMode)}
-          draftDecode={draftDecode} onDraftDecodeChange={setDraftDecode} draftDecodeLocked={deliveryModel}
-          imageStrength={imageStrength} onImageStrengthChange={setImageStrength} tiling={tiling} onTilingChange={setTiling}
-          i2vReferenceMode={i2vReferenceMode} onI2vReferenceModeChange={setI2vReferenceMode}
-          effectiveImageStrength={resolveI2vReferenceStrength(i2vReferenceMode, imageStrength)}
-          disableAudio={disableAudio} onDisableAudioChange={setDisableAudio}
-          idPrefix={`retry-video-${job.id}`}
+          timing={{
+            numFrames: displayedNumFrames, onNumFramesChange: setNumFrames,
+            chunks, onChunksChange: setChunks, keyframesActive: chainingLocked,
+            chunkPrompts, onChunkPromptChange: setChunkPromptAt, chainingActive,
+            contextFrames: displayedContextFrames, onContextFramesChange: setContextFrames,
+            fps: displayedFps, onFpsChange: setFps,
+            seed, onSeedChange: setSeed,
+            onRandomSeed: () => setSeed(Math.floor(Math.random() * 2147483647)),
+          }}
+          samplerMemory={{
+            steps, onStepsChange: setSteps,
+            guidanceScale, onGuidanceScaleChange: setGuidanceScale,
+            speedProfileId, onSpeedProfileChange: setSpeedProfileId, width, height,
+            streamingMode, onStreamingModeChange: setStreamingMode,
+            showStreamingMode: currentModel ? undefined : !isDefaultVideoStreamingMode(p.streamingMode),
+          }}
+          conditioningAudio={{
+            imageStrength, onImageStrengthChange: setImageStrength,
+            i2vReferenceMode, onI2vReferenceModeChange: setI2vReferenceMode,
+            effectiveImageStrength: resolveI2vReferenceStrength(i2vReferenceMode, imageStrength),
+            tiling, onTilingChange: setTiling,
+            disableAudio, onDisableAudioChange: setDisableAudio,
+          }}
         />
       )}
       {((!isHosted && p.mode === 'a2v' && currentModel?.a2vLoraStageCapable && selectedLoras.length > 0)
@@ -228,10 +214,12 @@ export default function VideoRetryForm({ job, retrying, onSubmit, onCancel }) {
         <A2vLoraStageControls value={a2vLoraStageStrengths} onChange={setA2vLoraStageStrengths}
           supported={!isHosted && p.mode === 'a2v' && currentModel?.a2vLoraStageCapable && selectedLoras.length > 0} loras={selectedLoras} />
       )}
-      <div className="flex items-center justify-end gap-2 pt-1">
-        <button type="button" disabled={retrying} onClick={onCancel} className="px-3 py-1 text-xs text-port-text-muted hover:text-white">Cancel</button>
-        <button type="submit" disabled={retrying || continuationPending || !!modelInputPreview.error} title={continuationPending ? 'Waiting for the model continuation capability.' : undefined} className="inline-flex items-center gap-1 px-3 py-1 bg-port-accent text-white text-xs rounded hover:bg-port-accent/90 disabled:opacity-50"><RotateCw className="w-3 h-3" />Retry with changes</button>
-      </div>
+      <RetryFormActions
+        onCancel={onCancel}
+        retrying={retrying}
+        submitDisabled={continuationPending || !!modelInputPreview.error}
+        submitTitle={continuationPending ? 'Waiting for the model continuation capability.' : undefined}
+      />
     </form>
   );
 }

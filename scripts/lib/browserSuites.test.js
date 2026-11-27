@@ -1,13 +1,16 @@
 import { describe, expect, it } from 'vitest';
 import { EXCLUSIVE_CAPTURE_TESTS } from '../vitestCiPool.js';
-import { BROWSER_SUITES, browserShardSlice, FULL_BROWSER_SHARD_COUNT } from './browserSuites.js';
+import { BROWSER_SUITES, browserShardSlice, browserSmokeMemoDonors, FULL_BROWSER_SHARD_COUNT } from './browserSuites.js';
 import { browserTestProfileFiles } from './browserTestProfiles.js';
 
 const visual = 'server/services/musicVideo/documentRender.browser.test.js';
+const templates = 'server/services/musicVideo/documentRenderTemplates.browser.test.js';
 const timeline = 'server/services/musicVideo/documentRenderAudioTimeline.browser.test.js';
+const effects = 'server/services/musicVideo/documentRenderEffects.browser.test.js';
 const templateParity = 'server/services/musicVideo/documentTemplateParity.browser.test.js';
 const htmlComposition = 'server/services/htmlComposition/index.test.js';
 const animatic = 'server/services/musicVideo/animaticCapture.browser.test.js';
+const overlays = 'server/services/musicVideo/animaticCaptureOverlays.browser.test.js';
 
 describe('browser shard ownership', () => {
   it.each([1, 2, 3, 4, FULL_BROWSER_SHARD_COUNT])('assigns every registered suite once with %i shards', count => {
@@ -39,40 +42,49 @@ describe('browser shard ownership', () => {
     }
   });
 
-  it('keeps every broad runner active and bounds other work on the visual runner', () => {
+  it('keeps broad owners stable for scoped selections within each profile', () => {
     const count = FULL_BROWSER_SHARD_COUNT;
     for (const profile of ['smoke', 'full']) {
-      const files = browserTestProfileFiles(profile, BROWSER_SUITES);
-      const shards = Array.from({ length: count }, (_, index) => browserShardSlice(files, { index: index + 1, count }, profile));
-      expect(shards.every(shard => shard.length > 0)).toBe(true);
-      const overlay = 'server/services/musicVideo/overlayTextService.browser.test.js';
-      const visualShard = profile === 'smoke'
-        ? [visual, 'server/services/musicVideo/documentRenderGeneration.browser.test.js']
-        : [visual, overlay, 'server/services/codeAnimation/poster.realBrowser.test.js'];
-      expect(shards.find(shard => shard.includes(visual))).toEqual(visualShard);
+      const selected = browserTestProfileFiles(profile, BROWSER_SUITES);
+      for (let index = 1; index <= count; index++) {
+        const shard = { index, count };
+        const files = browserShardSlice(BROWSER_SUITES, shard, profile);
+        expect(browserShardSlice(selected, shard, profile)).toEqual(files.filter(file => selected.includes(file)));
+        expect(files.length).toBeGreaterThanOrEqual(4);
+        expect(files.length).toBeLessThanOrEqual(7);
+      }
     }
   });
 
-  it.each([
-    ['server/lib/filmLook.browser.test.js', 6, 5],
-    ['server/services/codeAnimation/export.realBrowser.test.js', 6, 3],
-    ['server/services/musicVideo/overlayTextService.browser.test.js', 1, 7],
-    ['server/services/musicVideo/documentTemplates/shared/toonWorld.browser.test.js', 5, 6],
-    ['server/services/musicVideo/publish/x.browser.test.js', 6, 2],
-    ['server/services/codeAnimation/poster.realBrowser.test.js', 1, 6],
-    ['server/services/musicVideo/documentRenderGeneration.browser.test.js', 3, 1],
-    ['server/services/musicVideo/publish/sunoHook.browser.test.js', 3, 7],
-    ['server/services/greyboxRender.browser.test.js', 4, 7],
-    ['server/routes/catalogGreyboxViewer.browser.test.js', 7, 7],
-    ['server/services/musicVideo/documentVignette.browser.test.js', 2, 7],
-    ['server/routes/musicVideoProductionReview.browser.test.js', 6, 6],
-  ])('keeps %s on its balanced broad owner for each profile', (file, full, smoke) => {
+  it('restores exactly the distinct full-run donors of selected moved smoke suites', () => {
     const count = FULL_BROWSER_SHARD_COUNT;
-    expect(browserShardSlice([file], { index: full, count }, 'full')).toEqual([file]);
-    expect(browserShardSlice([file], { index: smoke, count }, 'smoke')).toEqual([file]);
+    const smoke = browserTestProfileFiles('smoke', BROWSER_SUITES);
+    for (let index = 1; index <= count; index++) {
+      const selected = browserShardSlice(smoke, { index, count }, 'smoke');
+      const donors = Array.from({ length: count }, (_, i) => i + 1)
+        .filter(owner => owner !== index && browserShardSlice(selected, { index: owner, count }, 'full').length > 0);
+      expect(browserSmokeMemoDonors(smoke, index)).toEqual(donors);
+      expect(donors.length).toBeLessThanOrEqual(2);
+    }
+    expect(browserSmokeMemoDonors([templates], 4)).toEqual([5]);
+    expect(browserSmokeMemoDonors([templates, timeline], 4)).toEqual([5]);
+    expect(browserSmokeMemoDonors([timeline], 4)).toEqual([]);
+    expect(browserSmokeMemoDonors([templates], 5)).toEqual([]);
   });
 
-  it('applies the smoke GPU override only to two-shard plans', () => {
+  it.each([2, 4, FULL_BROWSER_SHARD_COUNT])('gives each split capture a separate runner with %i shards', count => {
+    const files = [visual, templates, timeline, effects, animatic, overlays];
+    expect(EXCLUSIVE_CAPTURE_TESTS).toEqual(expect.arrayContaining(files.map(file => file.slice('server/'.length))));
+    for (const profile of ['smoke', 'full']) {
+      const owners = new Map(Array.from({ length: count }, (_, i) =>
+        browserShardSlice(files, { index: i + 1, count }, profile).map(file => [file, i])).flat());
+      expect(owners.get(visual)).not.toBe(owners.get(templates));
+      expect(owners.get(timeline)).not.toBe(owners.get(effects));
+      expect(owners.get(animatic)).not.toBe(owners.get(overlays));
+    }
+  });
+
+  it('keeps the four-shard GPU owner shared across profiles', () => {
     const gpu = 'server/lib/filmLookGpu.browser.test.js';
     expect(browserShardSlice([gpu], { index: 2, count: 2 }, 'full')).toEqual([]);
     expect(browserShardSlice([gpu], { index: 2, count: 2 }, 'smoke')).toEqual([gpu]);

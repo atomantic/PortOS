@@ -159,7 +159,7 @@ import { clearCompletedAgents } from '../services/cos/cosAgentArchive.js';
 import { evaluateTasks } from '../services/cos/cosTaskGenerator.js';
 import { getBriefing, getWhileAwayActivity, listBriefings, } from '../services/cos/cosReports.js';
 import { getCompletedAgentPage } from '../services/cos/cosAgentIndex.js';
-import { getFeedbackStats, getPendingAgentFeedback, submitAgentFeedback } from '../services/cos/cosAgentFeedback.js';
+import { getPendingAgentFeedback, submitAgentFeedback } from '../services/cos/cosAgentFeedback.js';
 import { getHealthStatus, runHealthCheck } from '../services/cos/cosHealthMonitor.js';
 import { pause, resume, start, stop, updateConfig } from '../services/cos/cos.js';
 import * as agentOrchestrator from '../services/agent/agentOrchestrator.js';
@@ -1682,17 +1682,6 @@ describe('CoS Routes', () => {
     });
   });
 
-  describe('GET /api/cos/feedback/stats', () => {
-    it('should return feedback statistics', async () => {
-      getFeedbackStats.mockResolvedValue({ total: 10, positive: 7, negative: 2, neutral: 1 });
-
-      const response = await request(app).get('/api/cos/feedback/stats');
-
-      expect(response.status).toBe(200);
-      expect(response.body.total).toBe(10);
-    });
-  });
-
   // ============================================================
   // Report Routes — additional coverage
   // ============================================================
@@ -1705,6 +1694,17 @@ describe('CoS Routes', () => {
 
       expect(response.status).toBe(200);
       expect(response.body).toEqual({ briefings: ['2026-02-25', '2026-02-24'] });
+    });
+
+    it('uses the default page size for an offset-only request and rejects repeated limits', async () => {
+      const dates = Array.from({ length: 70 }, (_, index) => new Date(Date.UTC(2026, 2, 1 - index)).toISOString().slice(0, 10));
+      listBriefings.mockResolvedValueOnce(dates);
+
+      const response = await request(app).get('/api/cos/briefings?offset=3');
+
+      expect(response.status).toBe(200);
+      expect(response.body).toEqual({ items: dates.slice(3, 53), total: 70, limit: 50, offset: 3 });
+      expect((await request(app).get('/api/cos/briefings?limit=1&limit=2')).status).toBe(400);
     });
   });
 

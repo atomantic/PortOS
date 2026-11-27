@@ -18,17 +18,7 @@ import { csvIdsParam } from './sharedSchemas.js';
 const AGENT_ACTIVITY_MAX_LIMIT = 500;
 const agentActivityLimit = (defaultLimit) =>
   z.coerce.number().int().min(1).max(AGENT_ACTIVITY_MAX_LIMIT).default(defaultLimit);
-// A blank query value (`?action=` from an unset form field) reads as absent
-// rather than as a 400 — it was `action || null` before this schema existed.
-const agentActivityAction = z.preprocess(emptyToUndefined, z.string().trim().min(1).max(64).optional());
 const agentActivityIds = csvIdsParam({ max: 50, maxIdLength: 128 });
-
-// GET /api/agents/activity
-export const agentActivityQuerySchema = z.object({
-  limit: agentActivityLimit(50),
-  agentIds: agentActivityIds,
-  action: agentActivityAction,
-}).strict();
 
 // GET /api/agents/activity/timeline — `before` is an infinite-scroll cursor the
 // client echoes back from a row's `timestamp`, so it is a full ISO instant.

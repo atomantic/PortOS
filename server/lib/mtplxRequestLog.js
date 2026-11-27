@@ -19,12 +19,13 @@ async function readTail(path) {
   const handle = await open(path, 'r');
   try {
     const { size } = await handle.stat();
-    const length = Math.min(size, TAIL_BYTES);
+    // Include the preceding byte so an aligned tail keeps its first full record.
+    const length = Math.min(size, TAIL_BYTES + 1);
     const buffer = Buffer.alloc(length);
-    await handle.read(buffer, 0, length, size - length);
-    const text = buffer.toString('utf8');
-    // A tail that starts mid-file begins inside a line; drop it.
-    return size > length ? text.slice(text.indexOf('\n') + 1) : text;
+    const { bytesRead } = await handle.read(buffer, 0, length, size - length);
+    if (size <= TAIL_BYTES) return buffer.toString('utf8', 0, bytesRead);
+    const firstNewline = buffer.subarray(0, bytesRead).indexOf(0x0a);
+    return firstNewline === -1 ? '' : buffer.toString('utf8', firstNewline + 1, bytesRead);
   } finally {
     await handle.close();
   }

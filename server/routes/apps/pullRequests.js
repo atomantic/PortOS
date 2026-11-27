@@ -29,7 +29,7 @@
  */
 
 import { Router } from 'express';
-import { z } from 'zod';
+import { pullRequestParamsSchema, pullRequestMergeSchema } from '../../lib/appValidation.js';
 import { asyncHandler, ServerError } from '../../lib/errorHandler.js';
 import { pullRequestProviderOverrideSchema, pullRequestRunSettingsSchema } from '../../lib/cos/cosValidation.js';
 import { reviewerConfigMetadata } from '../../lib/cos/cosTaskMetadata.js';
@@ -41,7 +41,6 @@ import { resolveReviewLoopOptions } from '../../services/codeReview.js';
 import { spawnReviewLoopFollowUp } from '../../services/agent/agentWorktreeCleanup.js';
 import { listAppPullRequests } from '../../services/appPullRequests.js';
 import {
-  MERGE_METHODS,
   DEFAULT_MERGE_METHOD,
   isDirectlyMergeablePullRequest,
   mergeAppPullRequest,
@@ -62,18 +61,6 @@ import {
 import { loadApp } from './shared.js';
 
 const router = Router();
-
-const pullRequestParamsSchema = z.object({
-  number: z.coerce.number().int().positive(),
-});
-
-// The direct merge's only inputs; the tab always sends both. A caller that omits
-// `deleteBranch` gets the conservative answer — the flag is irreversible on the
-// forge, and the merge service refuses it outright for a long-lived head.
-const pullRequestMergeSchema = z.object({
-  method: z.enum(MERGE_METHODS).optional(),
-  deleteBranch: z.boolean().optional(),
-});
 
 const isResolveTaskFor = (task, appId, pullRequest) => {
   const metadata = task?.metadata;

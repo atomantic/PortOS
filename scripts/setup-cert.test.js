@@ -1,6 +1,6 @@
 import { describe, it, expect, beforeAll, afterAll, beforeEach, afterEach } from 'vitest';
 import { execFileSync } from 'child_process';
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'fs';
+import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from 'fs';
 import { X509Certificate } from 'crypto';
 import { tmpdir } from 'os';
 import { join } from 'path';
@@ -37,12 +37,14 @@ let dataDir;
 let certDir;
 let logs;
 let calls;
+let cliOptions;
 
 beforeEach(() => {
   dataDir = mkdtempSync(join(tmpdir(), 'setup-cert-data-'));
   certDir = join(dataDir, 'certs');
   logs = [];
   calls = [];
+  cliOptions = {};
 });
 afterEach(() => rmSync(dataDir, { recursive: true, force: true }));
 
@@ -59,27 +61,31 @@ const tailscaleStatus = (overrides = {}) =>
   Buffer.from(JSON.stringify({ BackendState: 'Running', Self: { DNSName: `${HOST}.` }, ...overrides }));
 
 // Stubbed Tailscale + OpenSSL executors. `certFixture` is what `tailscale cert`
-// "issues"; `tsCertFails` simulates a tailnet without HTTPS enabled.
+// "issues"; `tsCertFails` simulates a timeout during a write.
 function makeDeps({ ts = true, status = tailscaleStatus(), statusFails = false, tsCertFails = false, certFixture = 'long', sandboxed = false, ips = ['192.0.2.10'] } = {}) {
   return {
     log: (m) => logs.push(m),
     hasOnlySandboxedTailscale: () => sandboxed,
     findTailscale: () => (ts ? '/fake/tailscale' : null),
     networkInterfaces: () => ({ en0: ips.map((address) => ({ family: 'IPv4', internal: false, address })) }),
-    execFileSync: (bin, args) => {
+    execFileSync: (bin, args, options) => {
       calls.push([bin, ...args]);
       if (bin === 'openssl') {
         writeFileSync(args[args.indexOf('-keyout') + 1], fixtures.long.key);
         writeFileSync(args[args.indexOf('-out') + 1], fixtures.long.cert);
         return Buffer.alloc(0);
       }
+      cliOptions[args[0]] = options;
       if (args[0] === 'status') {
         if (statusFails) throw new Error('daemon down');
         return status;
       }
       if (args[0] === 'cert') {
-        if (tsCertFails) throw new Error('cert denied');
         const val = (prefix) => args.find((a) => a.startsWith(prefix)).slice(prefix.length);
+        if (tsCertFails) {
+          writeFileSync(val('--cert-file='), 'partial cert');
+          throw Object.assign(new Error('timed out'), { code: 'ETIMEDOUT' });
+        }
         writeFileSync(val('--cert-file='), fixtures[certFixture].cert);
         writeFileSync(val('--key-file='), fixtures[certFixture].key);
         return Buffer.alloc(0);
@@ -94,122 +100,145 @@ const opensslCalls = () => calls.filter((c) => c[0] === 'openssl');
 const tsCertCalls = () => calls.filter((c) => c[1] === 'cert');
 
 describe('runSetupCert: fresh install', () => {
-  it('stays HTTP-only when Tailscale is absent and --self-signed is not passed', () => {
-    run([], { ts: false });
+  it('stays HTTP-only when Tailscale is absent and --self-signed is not passed', async () => {
+    await run([], { ts: false });
     expect(existsSync(join(certDir, 'cert.pem'))).toBe(false);
     expect(opensslCalls()).toHaveLength(0);
     expect(output()).toContain('Staying HTTP-only');
   });
 
-  it('stays HTTP-only when Tailscale reports a non-running backend', () => {
-    run([], { status: tailscaleStatus({ BackendState: 'Stopped' }) });
+  it('stays HTTP-only when Tailscale reports a non-running backend', async () => {
+    await run([], { status: tailscaleStatus({ BackendState: 'Stopped' }) });
     expect(existsSync(join(certDir, 'cert.pem'))).toBe(false);
     expect(output()).toContain('Staying HTTP-only');
   });
 
-  it('stays HTTP-only when tailscale status fails', () => {
-    run([], { statusFails: true });
+  it('stays HTTP-only when tailscale status fails', async () => {
+    await run([], { statusFails: true });
     expect(output()).toContain('tailscale status failed');
     expect(output()).toContain('Staying HTTP-only');
   });
 });
 
 describe('runSetupCert: --self-signed', () => {
-  it('generates a self-signed cert and records the detected IPs', () => {
-    run(['--self-signed']);
+  it('generates a self-signed cert and records the detected IPs', async () => {
+    await run(['--self-signed']);
     expect(opensslCalls()).toHaveLength(1);
     expect(tsCertCalls()).toHaveLength(0);
     expect(existsSync(join(certDir, 'cert.pem'))).toBe(true);
     expect(readMetaFile()).toMatchObject({ mode: 'self-signed', ips: ['127.0.0.1', '192.0.2.10'] });
   });
 
-  it('skips regeneration when the IP set is unchanged', () => {
-    run(['--self-signed']);
+  it('skips regeneration when the IP set is unchanged', async () => {
+    await run(['--self-signed']);
     calls.length = 0;
-    run(['--self-signed']);
+    await run(['--self-signed']);
     expect(opensslCalls()).toHaveLength(0);
     expect(output()).toContain('still valid');
   });
 
-  it('regenerates when the IP set rotates', () => {
-    run(['--self-signed']);
+  it('regenerates when the IP set rotates', async () => {
+    await run(['--self-signed']);
     calls.length = 0;
-    run(['--self-signed'], { ips: ['192.0.2.77'] });
+    await run(['--self-signed'], { ips: ['192.0.2.77'] });
     expect(opensslCalls()).toHaveLength(1);
     expect(readMetaFile().ips).toEqual(['127.0.0.1', '192.0.2.77']);
   });
 
-  it('regenerates with --force even when nothing changed', () => {
-    run(['--self-signed']);
+  it('regenerates with --force even when nothing changed', async () => {
+    await run(['--self-signed']);
     calls.length = 0;
-    run(['--self-signed', '--force']);
+    await run(['--self-signed', '--force']);
     expect(opensslCalls()).toHaveLength(1);
   });
 
-  it('leaves no staging directory behind', () => {
-    run(['--self-signed']);
-    const stray = (execFileSync('ls', ['-a', certDir]).toString()).split('\n').filter((n) => n.startsWith('.stage-'));
+  it('leaves no staging directory behind', async () => {
+    await run(['--self-signed']);
+    const stray = readdirSync(certDir).filter((n) => n.startsWith('.stage-'));
     expect(stray).toEqual([]);
   });
 });
 
 describe('runSetupCert: Tailscale provisioning', () => {
-  it('provisions a cert and writes meta.json with expiresAt', () => {
-    run([]);
+  it('provisions a cert and writes meta.json with expiresAt', async () => {
+    await run([]);
     expect(tsCertCalls()).toHaveLength(1);
     const meta = readMetaFile();
     expect(meta).toMatchObject({ mode: 'tailscale', hostname: HOST });
     const expected = new Date(new X509Certificate(fixtures.long.cert).validTo).toISOString();
     expect(meta.expiresAt).toBe(expected);
     expect(output()).toContain('Tailscale cert installed');
+    expect(cliOptions.status).toMatchObject({ timeout: 15_000, windowsHide: true });
+    expect(cliOptions.cert).toMatchObject({ timeout: 60_000, windowsHide: true });
+    if (process.platform !== 'win32') expect(statSync(join(certDir, 'key.pem')).mode & 0o777).toBe(0o600);
+    expect(readdirSync(certDir).sort()).toEqual(['cert.pem', 'key.pem', 'meta.json']);
   });
 
-  it('skips regeneration when at least 30 days remain', () => {
+  it('skips regeneration when at least 30 days remain', async () => {
     writePair(fixtures.long, { mode: 'tailscale', hostname: HOST });
-    run([]);
+    await run([]);
     expect(tsCertCalls()).toHaveLength(0);
     expect(output()).toContain('still valid');
   });
 
-  it('regenerates when fewer than 30 days remain', () => {
+  it('regenerates when fewer than 30 days remain', async () => {
     writePair(fixtures.short, { mode: 'tailscale', hostname: HOST });
-    run([]);
+    await run([]);
     expect(tsCertCalls()).toHaveLength(1);
     expect(readFileSync(join(certDir, 'cert.pem'))).toEqual(fixtures.long.cert);
   });
 
-  it('regenerates when the hostname changed', () => {
+  it('regenerates when the hostname changed', async () => {
     writePair(fixtures.long, { mode: 'tailscale', hostname: 'old.tailnet-example.ts.net' });
-    run([]);
+    await run([]);
     expect(tsCertCalls()).toHaveLength(1);
     expect(readMetaFile().hostname).toBe(HOST);
   });
 
-  it('regenerates when the cert PEM is corrupt', () => {
+  it('regenerates when the cert PEM is corrupt', async () => {
     writePair({ cert: Buffer.from('not a cert'), key: Buffer.from('not a key') }, { mode: 'tailscale', hostname: HOST });
-    run([]);
+    await run([]);
     expect(tsCertCalls()).toHaveLength(1);
     expect(readFileSync(join(certDir, 'cert.pem'))).toEqual(fixtures.long.cert);
   });
 
-  it('regenerates with --force', () => {
+  it('regenerates with --force', async () => {
     writePair(fixtures.long, { mode: 'tailscale', hostname: HOST });
-    run(['--force']);
+    await run(['--force']);
     expect(tsCertCalls()).toHaveLength(1);
   });
 
-  it('preserves an existing valid Tailscale cert when `tailscale cert` fails', () => {
+  it('keeps the files and metadata when Tailscale returns its cached pair', async () => {
+    const meta = { mode: 'tailscale', hostname: HOST, issuedAt: 'then' };
+    writePair(fixtures.long, meta);
+    const liveCert = join(certDir, 'cert.pem');
+    const before = statSync(liveCert);
+    await run(['--force']);
+    expect(statSync(liveCert).mtimeMs).toBe(before.mtimeMs);
+    expect(readMetaFile()).toEqual(meta);
+    expect(output()).toContain('Tailscale cert unchanged');
+  });
+
+  it('repairs a mismatched live key even when Tailscale returns the same cert', async () => {
+    writePair({ cert: fixtures.long.cert, key: fixtures.short.key }, { mode: 'tailscale', hostname: HOST });
+    await run([]);
+    expect(readFileSync(join(certDir, 'key.pem'))).toEqual(fixtures.long.key);
+  });
+
+  it('preserves the installed pair when `tailscale cert` times out after a partial write', async () => {
     writePair(fixtures.short, { mode: 'tailscale', hostname: HOST });
-    run([], { tsCertFails: true });
+    await run([], { tsCertFails: true });
     expect(readFileSync(join(certDir, 'cert.pem'))).toEqual(fixtures.short.cert);
-    expect(readMetaFile().mode).toBe('tailscale');
+    expect(readFileSync(join(certDir, 'key.pem'))).toEqual(fixtures.short.key);
+    expect(readMetaFile()).toEqual({ mode: 'tailscale', hostname: HOST });
+    expect(readdirSync(certDir).sort()).toEqual(['cert.pem', 'key.pem', 'meta.json']);
     expect(opensslCalls()).toHaveLength(0);
     expect(output()).toContain('Keeping existing tailscale cert');
   });
 
-  it('preserves the existing cert and explains when only sandboxed Tailscale is installed', () => {
+  it('preserves the existing cert and explains when only sandboxed Tailscale is installed', async () => {
     writePair(fixtures.long, { mode: 'tailscale', hostname: HOST });
-    run([], { sandboxed: true });
+    await run([], { sandboxed: true });
     expect(tsCertCalls()).toHaveLength(0);
     expect(opensslCalls()).toHaveLength(0);
     expect(output()).toContain('sandboxed Tailscale.app');

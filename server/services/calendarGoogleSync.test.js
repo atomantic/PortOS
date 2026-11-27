@@ -1,3 +1,4 @@
+import { recordingOperatorIo } from '../test/recordingOperatorIo.js';
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 
 // The CLI exit-status contract (#5302): runCliProviderPrompt hands back stdout
@@ -132,7 +133,7 @@ describe('mcpSyncAccount CLI exit-status agreement (#5302)', () => {
       partial: true,
       stderrTail: 'killed mid-stream',
     });
-    const io = { emit: vi.fn() };
+    const io = recordingOperatorIo();
 
     await mcpSyncAccount(ACCOUNT_ID, io);
 
@@ -317,7 +318,7 @@ describe('Google MCP page completeness (#10869)', () => {
     ['a calendar that was never requested', { calendarId: 'stranger@example.com' }, 'not requested'],
   ])('upserts but never prunes on %s, and reports a partial result', async (_name, override, reasonFragment) => {
     runCliProviderPrompt.mockImplementation(cliReply([{ calendarId: CAL_ID, events: [rawEvent('upstream-2', 'Design review')], ...override }]));
-    const io = { emit: vi.fn() };
+    const io = recordingOperatorIo();
 
     const result = await mcpSyncAccount(ACCOUNT_ID, io);
 

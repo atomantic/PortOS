@@ -32,12 +32,13 @@ export const catalogIdentityDdl = [
     $$`,
   `CREATE OR REPLACE FUNCTION catalog_identity_member_ids(requested_id TEXT)
     RETURNS TEXT[] LANGUAGE SQL STABLE AS $$
+    WITH canonical AS (SELECT catalog_canonical_ingredient_id(requested_id) AS id)
     SELECT ARRAY(SELECT DISTINCT member FROM (
-      SELECT catalog_canonical_ingredient_id(requested_id) AS member
+      SELECT id AS member FROM canonical
       UNION ALL SELECT source_id FROM catalog_identity_operations
-        WHERE survivor_id = catalog_canonical_ingredient_id(requested_id) AND state IN ('committed', 'recovery_prepared')
+        WHERE survivor_id = (SELECT id FROM canonical) AND state IN ('committed', 'recovery_prepared')
       UNION ALL SELECT source_id FROM catalog_ingredient_merges
-        WHERE survivor_id = catalog_canonical_ingredient_id(requested_id) AND restored_at IS NULL
+        WHERE survivor_id = (SELECT id FROM canonical) AND restored_at IS NULL
     ) members)
     $$`,
   `CREATE OR REPLACE FUNCTION guard_catalog_identity_member()

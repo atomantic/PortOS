@@ -81,6 +81,7 @@ vi.mock('../cos/cosEvents.js', () => ({
 vi.mock('../cos/cosState.js', async importOriginal => ({
   ...(await importOriginal()),
   getConfig: vi.fn().mockResolvedValue({}),
+  loadState: vi.fn().mockResolvedValue({ agents: [] }),
 }));
 vi.mock('../cos/cosTaskStore.js', () => ({
   updateTask: vi.fn().mockResolvedValue(undefined),
@@ -133,6 +134,8 @@ vi.mock('../modelAbuseGuard.js', () => ({
   validatePublicReviewModel: vi.fn().mockResolvedValue({ ok: true }),
 }));
 
+import { maintenance } from '../../lib/maintenanceAdmission.js';
+import { buildTuiSpawnConfig, spawnTuiAgent } from './agentTuiSpawning.js';
 import { spawnAgentForTask as runSpawnAgentForTask } from './agentLifecycle.js';
 import { prepareAgentWorkspace } from './agentWorkspacePrep.js';
 import {
@@ -145,11 +148,12 @@ import { resolveAgentProviderAndModel } from './agentProviderResolution.js';
 import { buildAgentPrompt } from './agentPromptBuilder.js';
 import { registerAgent } from '../cos/cosAgentLifecycle.js';
 import { createAgentRun } from './agentRunTracking.js';
-import { buildCliSpawnConfig, isTuiProvider } from './agentCliSpawning.js';
+import { buildCliSpawnConfig, isTuiProvider, spawnDirectly } from './agentCliSpawning.js';
 import { spawnAgentViaRunner } from '../cos/cosRunnerClient.js';
-import { getConfig } from '../cos/cosState.js';
+import { getConfig, loadState } from '../cos/cosState.js';
 import { getTaskById, updateTask } from '../cos/cosTaskStore.js';
 import { cosEvents, emitLog } from '../cos/cosEvents.js';
+import { isUpdateInProgress } from '../updateChecker.js';
 import { releaseAppReviewMarker } from '../appActivity.js';
 import { spawningTasks, runnerAgents, setUseRunner } from './agentState.js';
 import { MAX_TOTAL_SPAWNS } from '../../lib/cos/cosTaskMetadata.js';
@@ -275,6 +279,7 @@ describe('runAgentSpawn gates — max total spawns', () => {
     expect(markerReleasedFor(APP)).toBe(true);
     expect(registerAgent).not.toHaveBeenCalled();
     expect(spawningTasks.has(task.id)).toBe(false);
+    expect(maintenance.operations().filter(op => op.kind === 'agent')).toEqual([]);
   });
 
   it('spawns normally one dispatch below the cap', async () => {
@@ -635,6 +640,108 @@ describe('runAgentSpawn gates — spawn setup failure', () => {
     await spawnAgentForTask({ id: 'task-job', metadata: { app: APP, jobId: 'job-7' } });
 
     expect(vi.mocked(cosEvents.emit).mock.calls).toContainEqual(['job:spawn-failed', { jobId: 'job-7', reason: 'failed', error: 'setup blew up' }]);
+  });
+});
+
+describe('agent maintenance reservation at handoff', () => {
+  const agentReservations = () => maintenance.operations().filter(op => op.kind === 'agent');
+
+  beforeEach(() => {
+    reachPostPrepGates();
+    vi.mocked(buildTuiSpawnConfig).mockReturnValue({ command: 'claude', args: [] });
+  });
+
+  afterEach(async () => {
+    // A failing assertion must not leave this journal dirty for the next case.
+    await Promise.all(agentReservations().map(op => maintenance.finishResource('agent', op.resource)));
+  });
+
+  it('transfers the reservation to the agent before launch and keeps it while the agent runs', async () => {
+    const task = { id: 'task-maintenance-running', description: 'Example run', metadata: { app: APP } };
+    vi.mocked(spawnTuiAgent).mockImplementationOnce(async ({ agentId }) => {
+      expect(agentReservations()).toEqual([expect.objectContaining({ resource: agentId })]);
+      return agentId;
+    });
+
+    const agentId = await spawnAgentForTask(task);
+
+    expect(agentId).toEqual(expect.any(String));
+    expect(agentId).not.toBe(task.id);
+    expect(agentReservations()).toEqual([expect.objectContaining({ resource: agentId })]);
+  });
+
+  it('releases the reservation when a spawner returns no agent after handoff', async () => {
+    vi.mocked(spawnTuiAgent).mockResolvedValueOnce(null);
+    const task = { id: 'task-maintenance-no-agent', description: 'Example run', metadata: { app: APP } };
+
+    await expect(spawnAgentForTask(task)).resolves.toBeNull();
+
+    expect(spawnTuiAgent).toHaveBeenCalledOnce();
+    expect(agentReservations()).toEqual([]);
+  });
+
+  it('leaves a post-handoff failure to the spawner without treating it as a setup refusal', async () => {
+    const failure = new Error('post-launch failure');
+    vi.mocked(spawnTuiAgent).mockRejectedValueOnce(failure);
+    const task = { id: 'task-maintenance-post-launch', description: 'Example run', metadata: { app: APP } };
+
+    await expect(spawnAgentForTask(task)).rejects.toBe(failure);
+
+    const [{ agentId }] = vi.mocked(spawnTuiAgent).mock.calls[0];
+    expect(agentReservations()).toEqual([expect.objectContaining({ resource: agentId })]);
+    expect(blockedWrites()).toEqual([]);
+    expect(agentErrors()).toEqual([]);
+  });
+});
+
+describe('spawn admission', () => {
+  it('holds a spawn during a self-update before reading or claiming the task', async () => {
+    vi.mocked(isUpdateInProgress).mockReturnValueOnce(true);
+
+    await expect(spawnAgentForTask({ id: 'task-self-update' })).resolves.toBeNull();
+
+    expect(loadState).not.toHaveBeenCalled();
+    expect(updateTask).not.toHaveBeenCalled();
+    expect(spawnTuiAgent).not.toHaveBeenCalled();
+    expect(spawnAgentViaRunner).not.toHaveBeenCalled();
+    expect(spawnDirectly).not.toHaveBeenCalled();
+  });
+
+  it('refuses another spawn for the same task while the first is awaiting preparation', async () => {
+    const stateLoaded = Promise.withResolvers();
+    const readingState = Promise.withResolvers();
+    vi.mocked(loadState).mockImplementationOnce(() => {
+      readingState.resolve();
+      return stateLoaded.promise;
+    });
+    const task = { id: 'task-duplicate', metadata: { app: APP } };
+    const firstSpawn = spawnAgentForTask(task);
+    await readingState.promise;
+
+    try {
+      await expect(runSpawnAgentForTask({ ...task })).resolves.toBeNull();
+
+      expect(loadState).toHaveBeenCalledOnce();
+      expect(updateTask).not.toHaveBeenCalled();
+      expect(prepareAgentWorkspace).not.toHaveBeenCalled();
+    } finally {
+      stateLoaded.resolve({ agents: [] });
+      await firstSpawn;
+    }
+    expect(prepareAgentWorkspace).toHaveBeenCalledOnce();
+  });
+
+  it('propagates an early preparation failure without treating it as a setup refusal', async () => {
+    const failure = new Error('agent state unavailable');
+    vi.mocked(loadState).mockRejectedValueOnce(failure);
+    const task = { id: 'task-early-prep', metadata: { app: APP } };
+
+    await expect(spawnAgentForTask(task)).rejects.toBe(failure);
+
+    expect(updateTask).not.toHaveBeenCalled();
+    expect(agentErrors()).toEqual([]);
+    expect(markerReleasedFor(APP)).toBe(false);
+    expect(spawningTasks.has(task.id)).toBe(false);
   });
 });
 

@@ -23,7 +23,8 @@
  * that falls short is still a good model, it is just a static one.
  */
 
-import { isThreejsAttachmentAnchored, listSpecNames, resolveThreejsAttachments } from './threejsModel.js';
+import { isThreejsAttachmentAnchored, resolveThreejsAttachments } from './threejsModel.js';
+import { listSpecNames } from './threejsModelSpecNames.js';
 
 // One joint is a root and nothing else — a graph with nothing to rotate against
 // it describes a static assembly with extra words.

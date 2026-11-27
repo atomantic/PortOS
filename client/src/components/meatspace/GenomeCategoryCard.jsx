@@ -1,6 +1,7 @@
 import { useState } from 'react';
 import { ChevronDown, ChevronRight } from 'lucide-react';
 import InlineConfirmRow from '../ui/InlineConfirmRow';
+import Pill from '../ui/Pill';
 import { FormField } from '../ui/FormField';
 import { useConfirmDelete } from '../../hooks/useConfirmDelete';
 import { formatCount } from '../../utils/formatters';
@@ -68,6 +69,8 @@ export default function GenomeCategoryCard({ category: _category, label, emoji, 
     <div className={`border rounded-lg ${headerColor}`}>
       {/* Category header */}
       <button
+        type="button"
+        aria-expanded={expanded}
         onClick={() => setExpanded(!expanded)}
         className="w-full flex items-center justify-between px-3 py-2.5 text-left hover:bg-white/5 transition-colors rounded-t-lg"
       >
@@ -94,6 +97,7 @@ export default function GenomeCategoryCard({ category: _category, label, emoji, 
               const isExpanded = expandedMarker === marker.id;
               const badge = STATUS_BADGE[marker.status] || STATUS_BADGE.not_found;
               const dot = STATUS_DOT[marker.status] || STATUS_DOT.not_found;
+              const statusLabel = STATUS_LABEL[marker.status] || marker.status;
 
               return (
                 <div
@@ -106,18 +110,26 @@ export default function GenomeCategoryCard({ category: _category, label, emoji, 
                 >
                   {/* Compact marker tile */}
                   <button
+                    type="button"
+                    aria-expanded={isExpanded}
                     onClick={() => setExpandedMarker(isExpanded ? null : marker.id)}
                     className="w-full p-2.5 text-left"
                   >
                     <div className="flex items-start justify-between gap-2">
                       <div className="min-w-0 flex-1">
                         <div className="flex items-center gap-1.5">
-                          <span className={`w-2 h-2 rounded-full shrink-0 ${dot}`} />
+                          <span aria-hidden="true" className={`w-2 h-2 rounded-full shrink-0 ${dot}`} />
+                          {statusLabel && <span className="sr-only">{statusLabel}: </span>}
                           <span className="text-xs font-medium text-gray-200 truncate">{marker.name}</span>
                         </div>
-                        <div className="flex items-center gap-2 mt-1 ml-3.5">
+                        <div className="flex flex-wrap items-center gap-2 mt-1 ml-3.5">
                           <span className="text-[10px] text-gray-500 font-mono">{marker.gene}</span>
                           <span className="text-[10px] text-gray-600 font-mono">{marker.rsid}</span>
+                          {!isExpanded && marker.status !== 'typical' && statusLabel && (
+                            <Pill aria-hidden="true" size="xs" tone="bare" className={`${badge.bg} ${badge.text} ${badge.border}`}>
+                              {marker.status === 'major_concern' ? 'Major' : statusLabel}
+                            </Pill>
+                          )}
                         </div>
                       </div>
                       {marker.genotype && (
@@ -134,7 +146,7 @@ export default function GenomeCategoryCard({ category: _category, label, emoji, 
                       {/* Status + genotype row */}
                       <div className="flex items-center gap-2 pt-2 flex-wrap">
                         <span className={`px-2 py-0.5 rounded text-xs font-medium ${badge.bg} ${badge.text} border ${badge.border}`}>
-                          {STATUS_LABEL[marker.status] || marker.status}
+                          {statusLabel}
                         </span>
                         {marker.genotype && (
                           <span className="px-2 py-0.5 rounded bg-port-card border border-port-border text-xs font-mono text-gray-300">

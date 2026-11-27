@@ -9,9 +9,10 @@ import { APP_FEATURE_IDS } from './instanceFeatureRegistry.js';
 import { emptyToUndefined, providerRefSchema, presetProviderIdSchema, partialWithoutDefaults } from './zodCompat.js';
 import { LAYERED_INTELLIGENCE_SOURCE_KEYS } from './layeredIntelligenceSourceKeys.js';
 import { isCronShaped, isValidCronExpression } from './cronValidation.js';
-import { PR_COMPLETION_VALUES } from './prDisposition.js';
+import { MERGE_METHODS, PR_COMPLETION_VALUES } from './prDisposition.js';
 import { WORK_TRACKERS } from './workTracker.js';
 import { nullishString } from './sharedSchemas.js';
+import { XCODE_SCRIPT_NAMES } from './xcodeScriptNames.js';
 import {
   FEATURE_PRIORITY_MAX_ENTRIES, FEATURE_PRIORITY_MAX_LABEL, FEATURE_PRIORITY_MAX_NOTE, FEATURE_PRIORITY_MAX_PATH, FEATURE_PRIORITY_MAX_PATHS,
   auditPathConflict, hasUnsafePromptChar,
@@ -311,4 +312,36 @@ export const appTaskTypeOverrideBodySchema = z.object({
   taskMetadata: z.record(z.string(), z.unknown()).nullish(),
 }).refine((body) => Object.values(body).some((value) => value !== undefined), {
   message: 'enabled (boolean), interval (string|null), intervalMs (number|null), providerId (string|null), model (string|null), or taskMetadata (object|null) required',
+});
+
+export const forgeAuthRefreshBodySchema = z.object({
+  scopes: z.array(z.string().regex(/^[a-z][a-z0-9:_.-]*$/i)).min(1).max(8),
+});
+
+export const forgeAuthJobParamsSchema = z.object({ id: z.string().min(1), jobId: z.string().uuid() });
+
+export const pullRequestParamsSchema = z.object({
+  number: z.coerce.number().int().positive(),
+});
+
+// The direct merge's only inputs; the tab always sends both. A caller that omits
+// `deleteBranch` gets the conservative answer — the flag is irreversible on the
+// forge, and the merge service refuses it outright for a long-lived head.
+export const pullRequestMergeSchema = z.object({
+  method: z.enum(MERGE_METHODS).optional(),
+  deleteBranch: z.boolean().optional(),
+});
+
+export const upgradeTlsSchema = z.object({
+  tlsPort: z.number().int().min(1).max(65535),
+  force: z.boolean().optional()
+});
+
+export const fixViteHostsSchema = z.object({
+  mode: z.enum(['allow-all', 'ai']).default('allow-all'),
+  host: z.string().trim().optional()
+});
+
+export const xcodeInstallScriptsSchema = z.object({
+  scripts: z.array(z.enum(XCODE_SCRIPT_NAMES)).min(1).max(XCODE_SCRIPT_NAMES.length)
 });

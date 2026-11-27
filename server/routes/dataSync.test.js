@@ -14,7 +14,7 @@ vi.mock('../services/sharing/tombstoneGc.js', () => ({
 // The three I/O entry points are stubbed so the route test never touches real
 // stores — but `getSupportedCategories` delegates to the REAL export (#5705).
 // It is a pure `Object.keys(CATEGORIES)` with no I/O, and it is the source of
-// truth the route's hand-maintained `categoryParam` enum has to match; a stub
+// truth the route's hand-maintained `syncCategoryParamSchema` enum has to match; a stub
 // would make the parity tests below compare the route to a copy of itself.
 vi.mock('../services/dataSync.js', async () => ({
   getHostedMediaInventory: vi.fn(),
@@ -52,7 +52,8 @@ import { sweepTombstones, getSweepStatus } from '../services/sharing/tombstoneGc
 import { getHostedMediaInventory, getImageLibraryInventory, getChecksum, getSnapshot, getManifest, applyRemote, getSupportedCategories } from '../services/dataSync.js';
 import { PEER_INSTANCE_ID_HEADER, __resetPullWarnThrottleForTests } from '../services/sharing/peerPullAuthorization.js';
 import { MAX_MANIFEST_SLOTS } from '../lib/syncManifest.js';
-import dataSyncRoutes, { categoryParam } from './dataSync.js';
+import dataSyncRoutes from './dataSync.js';
+import { syncCategoryParamSchema } from '../lib/dataSyncValidation.js';
 
 const PEER_ID = 'peer-a-instance-id';
 // Obviously-fake peer record. `fullSync` stands in for "the user ticked every
@@ -165,7 +166,7 @@ describe('GET /api/sync/:category/checksum — forPeer scoping', () => {
   });
 });
 
-// The route's `categoryParam` enum is hand-maintained and has to match
+// The data-sync category enum is hand-maintained and has to match
 // `dataSync.getSupportedCategories()` exactly. Drift in either direction is a
 // live bug: a service category missing from the enum 400s before its handler
 // can run (#730 hit that for `storyBuilder`), and an enum entry the service
@@ -189,7 +190,7 @@ describe('/api/sync/:category — enum parity with getSupportedCategories()', ()
     // only this gives a stale entry (a category the service retired, which now
     // reaches a 404 at the service) a failure at all — and it names the drift
     // in the diff instead of as N route errors.
-    expect([...categoryParam.options].sort()).toEqual([...getSupportedCategories()].sort());
+    expect([...syncCategoryParamSchema.options].sort()).toEqual([...getSupportedCategories()].sort());
   });
 
   it.each(getSupportedCategories())('serves a checksum for the %s category', async (category) => {

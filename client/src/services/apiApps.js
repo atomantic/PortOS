@@ -6,6 +6,8 @@
 import toast from '../components/ui/Toast';
 import { request, API_BASE } from './apiCore.js';
 
+export { getApps } from './apiNavNames.js';
+
 export const createAppLaunchVideo = (id, body, options) => request(`/apps/${encodeURIComponent(id)}/launch-videos`, { method: 'POST', body: JSON.stringify(body), ...options });
 export const publishAppLaunchVideo = (id, body, options) => request(`/apps/${encodeURIComponent(id)}/launch-videos/publish`, { method: 'POST', body: JSON.stringify(body), ...options });
 export const getAppLaunchVideos = (id, options) => request(`/apps/${encodeURIComponent(id)}/launch-videos`, options);
@@ -14,15 +16,6 @@ export const getMotionToolkit = (options) => request('/html-composition/toolkit'
 
 export const installMotionSkills = (options) => request('/html-composition/toolkit/skills/install', { method: 'POST', ...options });
 
-// Apps. The default response remains the PM2-enriched list; `view=nav` and
-// `view=probe` are explicit projections for hot name-only and peer callers.
-export const getApps = ({ includeQuality = false, view, ...options } = {}) => {
-  const query = new URLSearchParams();
-  if (includeQuality) query.set('includeQuality', 'true');
-  if (view) query.set('view', view);
-  const suffix = query.toString() ? `?${query}` : '';
-  return request(`/apps${suffix}`, options);
-};
 export const getApp = (id, { includeQuality = false, ...options } = {}) => request(includeQuality ? `/apps/${id}?includeQuality=true` : `/apps/${id}`, options);
 export const getAppQualitySummaries = (options) => request('/apps/quality/summaries', options);
 export const getAppQualityHistory = (id, days, options) => request(`/apps/${id}/quality-history?days=${days}`, { silent: true, ...options });

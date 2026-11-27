@@ -270,3 +270,5 @@ export function findShotTypeMonotony(scene, opts = {}) {
   if (!types.every((t) => t === first)) return null;
   return { shotType: first, classifiedCount: types.length };
 }
+
+export const DIRECTION_LABEL = Object.freeze({ left: 'screen-left', right: 'screen-right', neutral: 'head-on' });

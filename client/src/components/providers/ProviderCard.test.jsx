@@ -1,5 +1,5 @@
 import { describe, it, expect, vi } from 'vitest';
-import { fireEvent, render, screen } from '@testing-library/react';
+import { fireEvent, render, screen, within } from '@testing-library/react';
 import { MemoryRouter } from 'react-router';
 import ProviderCard from './ProviderCard';
 import { PROVIDER_CARD_STATE } from '../../utils/providers';
@@ -34,6 +34,19 @@ const renderCard = (provider, daemonReadiness = null, props = {}) => render(
     />
   </MemoryRouter>
 );
+
+describe('runtime identity on ProviderCard', () => {
+  it.each([
+    ['SPLASH', { splashBacked: true }, 'Splash runtime for Inkling 2 Mini.'],
+    ['MKSERVE', { id: 'mkserve', type: 'api' }, 'mkserve runtime for Inkling 2 Mini.'],
+    ['SLOTSTREAM', { id: 'slotstream', type: 'api' }, 'Slotstream runtime for SSD-streamed mixture-of-experts models on Apple Silicon.'],
+  ])('shows the %s badge and description', (badge, provider, description) => {
+    renderCard(wrapper(provider));
+
+    expect(screen.getByText(badge)).toBeInTheDocument();
+    expect(screen.getByText(description)).toBeInTheDocument();
+  });
+});
 
 describe('ProviderCard context window', () => {
   it('keeps disabled providers readable without dimming the whole card', () => {
@@ -139,11 +152,11 @@ describe('ProviderCard ChatGPT subscription', () => {
           providersById={{}}
           runnerAllowedCommands={[]}
           testResult={null}
-          codexAccount={{
+          codex={{ account: {
             status: 'signed-out',
             account: { accountId: 'private-account', email: 'private@example.test' },
             rateLimits: null,
-          }}
+          } }}
         />
       </MemoryRouter>
     );
@@ -166,7 +179,7 @@ describe('ProviderCard ChatGPT subscription', () => {
           providersById={{}}
           runnerAllowedCommands={[]}
           testResult={null}
-          codexAccount={{ status: 'login-pending', login: { authUrl: 'javascript:alert(1)' } }}
+          codex={{ account: { status: 'login-pending', login: { authUrl: 'javascript:alert(1)' } } }}
         />
       </MemoryRouter>
     );
@@ -186,11 +199,11 @@ describe('ProviderCard ChatGPT subscription', () => {
           providersById={{}}
           runnerAllowedCommands={[]}
           testResult={null}
-          codexAccount={{
+          codex={{ account: {
             status: 'quota-exhausted',
             account: { planType: 'pro' },
             rateLimits: { primary: { usedPercent: 100 } },
-          }}
+          } }}
         />
       </MemoryRouter>
     );
@@ -201,6 +214,31 @@ describe('ProviderCard ChatGPT subscription', () => {
 });
 
 describe('ProviderCard model refresh', () => {
+  it.each([
+    ['MTPLX', { mtplxBacked: true }, 'mtplx'],
+    ['Splash', { splashBacked: true }, 'splash'],
+    ['mkserve', { mkserveBacked: true }, 'mkserve'],
+    ['Slotstream', { id: 'slotstream', type: 'api' }, 'slotstream'],
+    ['llama.cpp', { llamaBacked: true }, 'llama'],
+  ])('links a refresh notice to the %s runtime when it has no explicit link', (label, runtime, route) => {
+    renderCard(wrapper({ ...runtime, canRefreshModels: true }), null, {
+      refreshNotice: { message: 'Start this runtime before refreshing.' },
+    });
+
+    expect(screen.getByRole('alert')).toHaveTextContent('Start this runtime');
+    expect(screen.getByRole('link', { name: `Open the ${label} card` }))
+      .toHaveAttribute('href', `/models/llms-runtimes/${route}`);
+  });
+
+  it('displays the notice without a link when the provider has no managed runtime', () => {
+    renderCard(wrapper({ canRefreshModels: true }), null, {
+      refreshNotice: { message: 'This runtime is managed elsewhere.', manageUrl: '//example.com/unsafe' },
+    });
+
+    expect(screen.getByRole('alert')).toHaveTextContent('This runtime is managed elsewhere.');
+    expect(within(screen.getByRole('alert')).queryByRole('link')).toBeNull();
+  });
+
   it('renders the Refresh Models button for a Codex provider with model-list capability', () => {
     renderCard({
       id: 'codex',

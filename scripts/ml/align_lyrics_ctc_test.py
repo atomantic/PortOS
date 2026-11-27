@@ -1,7 +1,7 @@
 """Checks of the production CTC transcript, timebase, Viterbi and checkpoint gate.
 
 Nothing here downloads a model or imports torch. The Viterbi cases need numpy
-and are skipped without it; scripts/align_lyrics_ctc.test.js runs them with a
+and are skipped without it; scripts/ml/align_lyrics_ctc.test.js runs them with a
 numpy-capable interpreter when one exists.
 """
 import hashlib

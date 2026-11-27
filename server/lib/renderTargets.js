@@ -21,7 +21,7 @@ export const RENDER_TARGET = Object.freeze({
 
 export const RENDER_TARGETS = Object.freeze(Object.values(RENDER_TARGET));
 
-// The Settings → Image Gen → Defaults rows (re-exported by `client/src/lib/imageGenModes.js`): the surfaces whose default backend + model are pinnable via settings.renderDefaults. Only targets whose resolver is LIVE are listed — a pin nobody's resolver reads would be a control that silently does nothing.
+// The Media Gen Settings → Defaults rows (re-exported by `client/src/lib/imageGenModes.js`): the surfaces whose default backend + model are pinnable via settings.renderDefaults. Only targets whose resolver is LIVE are listed — a pin nobody's resolver reads would be a control that silently does nothing.
 // `renderTargets.test.js` fails a target that is neither listed nor in RENDER_TARGETS_WITHOUT_SETTINGS_ROW. Labels are the Settings-UI display names. `video: true` marks the targets whose VIDEO lane also consults `renderDefaults[target].videoMode` (#3231 Phase 4): music-video (scene clips + new-project backend seeding) and creative-agent (commission video steps). Video pins are backend-only — grok video has no model knob and local video models are picked on the surface itself, so no video-model control is offered anywhere.
 export const RENDER_TARGET_OPTIONS = Object.freeze([
   { id: RENDER_TARGET.UNIVERSE_BIBLE, label: 'Universe Bible & canon renders' },

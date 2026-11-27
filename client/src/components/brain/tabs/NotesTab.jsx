@@ -32,7 +32,6 @@ import { formatCount } from '../../../utils/formatters';
 import { useConfirmDelete } from '../../../hooks/useConfirmDelete';
 import { useNoteSave } from '../../../hooks/useNoteSave.js';
 import useUrlParams from '../../../hooks/useUrlParams';
-import { clickableProps, onActivateKeyDown } from '../../../lib/a11yKeyboard.js';
 import OfflineNotesNotice from '../../OfflineNotesNotice.jsx';
 import NoteDetailPane from '../../notes/NoteDetailPane.jsx';
 import useVaultNote from '../../../hooks/useVaultNote.js';
@@ -314,6 +313,13 @@ export default function NotesTab() {
     updateParams({ note: notePath });
   };
 
+  const findWikilinkPath = target => notes.find(note => note.name.toLowerCase() === target.toLowerCase())?.path;
+
+  const openPreviewWikilink = target => {
+    // The scan is bounded and may be scoped to a folder. Keep direct paths usable outside it.
+    handleSelectNote(findWikilinkPath(target) ?? `${target}.md`);
+  };
+
   const closeNote = () => {
     clearSelection();
     updateParams({ note: null });
@@ -574,7 +580,7 @@ export default function NotesTab() {
           <button
             onClick={() => { loadTags(); setShowTags(!showTags); }}
             className={`min-h-[44px] min-w-[44px] inline-flex items-center justify-center ml-auto p-0.5 rounded ${showTags ? 'text-port-accent' : 'text-gray-500 hover:text-white'}`}
-            title="Tags" aria-label="Tags"
+            title="Tags" aria-label="Tags" aria-expanded={showTags}
           >
             <Tag size={12} />
           </button>
@@ -591,15 +597,14 @@ export default function NotesTab() {
         {showTags && tags.length > 0 && (
           <div className="px-3 py-2 border-b border-port-border flex flex-wrap gap-1 max-h-24 overflow-auto">
             {tags.map(t => (
-              <span
+              <button
+                type="button"
                 key={t.tag}
                 className="px-1.5 py-0.5 rounded text-xs bg-port-accent/20 text-port-accent cursor-pointer hover:bg-port-accent/30"
                 onClick={() => { setSearchInput(`#${t.tag}`); handleSearch(`#${t.tag}`); }}
-                {...clickableProps(() => { setSearchInput(`#${t.tag}`); handleSearch(`#${t.tag}`); })}
-                onKeyDown={onActivateKeyDown(() => { setSearchInput(`#${t.tag}`); handleSearch(`#${t.tag}`); })}
               >
                 #{t.tag} <span className="text-gray-500">{t.count}</span>
-              </span>
+              </button>
             ))}
           </div>
         )}
@@ -676,14 +681,14 @@ export default function NotesTab() {
           onRequestDelete={requestDelete} onDelete={handleDeleteNote}
           onCancelDelete={cancelDelete} forceOffered={forceOffered}
           dismissForce={dismissForce}
-          renderPreview={content => <MarkdownOutput content={content} linkifyText={noteLinkify(handleSelectNote)} />}
+          renderPreview={content => <MarkdownOutput content={content} linkifyText={noteLinkify(openPreviewWikilink)} />}
           renderLinks={note => (
             <>
               <LinkSection icon={<Link2 size={10} />} label="Links" items={note.wikilinks}
                 getKey={link => link} getLabel={link => link}
                 onClickItem={link => {
-                  const match = notes.find(n => n.name.toLowerCase() === link.toLowerCase());
-                  if (match) handleSelectNote(match.path);
+                  const path = findWikilinkPath(link);
+                  if (path) handleSelectNote(path);
                   else toast.warning(`Note "${link}" not found in vault`);
                 }} />
               <LinkSection icon={<ArrowLeft size={10} />} label="Backlinks" items={note.backlinks}
@@ -772,18 +777,18 @@ function VaultSetup({ detectedVaults, vaults, customPath, setCustomPath, adding,
             {detectedVaults.map(dv => {
               const isConnected = vaults.some(v => v.path === dv.path);
               return (
-                <div key={dv.path} className="flex items-center justify-between p-3 rounded-lg bg-port-card border border-port-border">
-                  <div>
-                    <span className="text-white">{dv.name}</span>
+                <div key={dv.path} className="flex items-center justify-between gap-2 p-3 rounded-lg bg-port-card border border-port-border">
+                  <div className="min-w-0">
+                    <span className="block truncate text-white">{dv.name}</span>
                     <span className="text-xs text-gray-500 block truncate">{dv.path}</span>
                   </div>
                   {isConnected ? (
-                    <span className="text-xs text-port-success">Connected</span>
+                    <span className="shrink-0 text-xs text-port-success">Connected</span>
                   ) : (
                     <button
                       onClick={() => onAdd(dv.name, dv.path)}
                       disabled={adding}
-                      className="px-3 py-1 rounded bg-port-accent text-white text-sm disabled:opacity-50"
+                      className="shrink-0 px-3 py-1 rounded bg-port-accent text-white text-sm disabled:opacity-50"
                     >
                       {adding ? '...' : 'Connect'}
                     </button>
@@ -846,6 +851,7 @@ function FolderItem({ folder, notes, expanded, onToggle, onSelectNote, onFilterF
     <div>
       <button
         onClick={onToggle}
+        aria-expanded={expanded}
         className="w-full flex items-center gap-2 px-3 py-2 text-sm text-gray-400 hover:text-white hover:bg-port-card/50"
       >
         {expanded ? <ChevronDown size={12} /> : <ChevronRight size={12} />}
@@ -924,7 +930,7 @@ function noteLinkify(onLinkClick) {
     const wiki = seg.match(/^\[\[([^\]|]+)(?:\|([^\]]+))?\]\]$/);
     if (wiki) {
       const target = wiki[1].trim();
-      return { ref: wiki[2]?.trim() || target, onClick: () => onLinkClick?.(`${target}.md`) };
+      return { ref: wiki[2]?.trim() || target, onClick: () => onLinkClick(target) };
     }
     if (seg[0] === '#') return { ref: seg, className: 'text-port-accent/70' };
     return seg;

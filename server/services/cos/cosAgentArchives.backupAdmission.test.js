@@ -2,6 +2,7 @@
 import { afterAll, beforeEach, describe, expect, it, onTestFinished, vi } from 'vitest';
 import { mkdir, readFile, readdir, rm, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
+import { maintenance } from '../../lib/maintenanceAdmission.js';
 import { RELEASE_SYNC_OBLIGATIONS } from '../../lib/releaseSynchronization.js';
 // Fail-fast cancellation does not stop an async body. Join its remaining writes
 // before either this fixture or the admission setup removes its directories.
@@ -314,6 +315,28 @@ it('does not let a cold reader queue its shared initialization ahead of an admit
   const release = await cut;
   try { await assertIndexedTrees(); } finally { release(); }
   await reader;
+}));
+
+it.each([
+  { storage: 'resident', archive: false },
+  { storage: 'archive-only', archive: true },
+])('releases the reservation of a cleared completed agent ($storage) and keeps the running agent admitted', joinTestWork(async ({ archive }) => {
+  await seed({ completed: true, indexed: !archive });
+  if (archive) {
+    await expect(api.archiveStaleAgents()).resolves.toEqual({ archived: 1 });
+    expect(fixture.state.agents[id]).toBeUndefined();
+  }
+  const runningId = 'agent-still-running';
+  await seedAgent(runningId);
+  const completedReservation = maintenance.admit('agent', id);
+  const runningReservation = maintenance.admit('agent', runningId);
+  try {
+    await expect(api.clearCompletedAgents()).resolves.toEqual({ cleared: 1, retained: 0 });
+    expect(completedReservation.isCurrent()).toBe(false);
+    expect(runningReservation.isCurrent()).toBe(true);
+  } finally {
+    await Promise.all([completedReservation.finish(), runningReservation.finish()]);
+  }
 }));
 
 describe('active cleanup and retry owner preservation (#13430)', () => {

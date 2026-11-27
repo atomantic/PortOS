@@ -3,7 +3,7 @@ import { act, render, screen, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { MemoryRouter } from 'react-router';
 import { Toaster, toast } from '../../ui/Toast';
-import { deleteRun, deleteFailedRuns } from '../../../services/apiRuns.js';
+import { deleteRun, deleteFailedRuns, getRunPrompt, getRunOutput } from '../../../services/apiRuns.js';
 import RunsTab, { runLogProcessName } from './RunsTab';
 
 vi.mock('../../../services/socket', () => ({ default: { on: vi.fn(), off: vi.fn() } }));
@@ -11,8 +11,8 @@ vi.mock('../../ui/ProcessLogModal', () => ({ default: () => null }));
 vi.mock('../../../services/apiRuns.js', () => ({
   getRuns: async () => ({ runs: [failedRun, runningRun] }),
   getRun: vi.fn(),
-  getRunPrompt: async () => 'Full prompt',
-  getRunOutput: async () => 'Full output',
+  getRunPrompt: vi.fn().mockResolvedValue('Full prompt'),
+  getRunOutput: vi.fn().mockResolvedValue('Full output'),
   stopRun: vi.fn(),
   deleteRun: vi.fn(),
   deleteFailedRuns: vi.fn(),
@@ -45,6 +45,45 @@ const renderTab = () => render(
 );
 
 afterEach(() => act(() => toast.dismiss()));
+
+describe('RunsTab details', () => {
+  it('renders successful empty details even when the row has a prompt preview', async () => {
+    const user = userEvent.setup();
+    getRunPrompt.mockResolvedValueOnce('');
+    getRunOutput.mockResolvedValueOnce('');
+    renderTab();
+    const row = within(await screen.findByTestId('run-row-failed-example'));
+    const disclosure = row.getByRole('button', { expanded: false });
+    await user.click(disclosure);
+    const details = within(document.getElementById(disclosure.getAttribute('aria-controls')));
+
+    expect(await details.findByText('(no prompt)')).toBeVisible();
+    expect(details.getByText('(no output)')).toBeVisible();
+    expect(details.queryByRole('status', { name: 'Loading run details' })).not.toBeInTheDocument();
+  });
+
+  it.each([
+    ['prompt', getRunPrompt],
+    ['output', getRunOutput],
+  ])('shows an inline error when the %s read fails and recovers on Retry', async (field, read) => {
+    const user = userEvent.setup();
+    read.mockRejectedValueOnce(new Error(`Unavailable ${field}`));
+    renderTab();
+    const row = within(await screen.findByTestId('run-row-failed-example'));
+    const disclosure = row.getByRole('button', { expanded: false });
+    await user.click(disclosure);
+    const details = within(document.getElementById(disclosure.getAttribute('aria-controls')));
+
+    const error = within(await details.findByRole('alert'));
+    expect(error.getByText(`Could not load run details — Unavailable ${field}`)).toBeVisible();
+    expect(details.queryByText('(no output)')).not.toBeInTheDocument();
+    await user.click(error.getByRole('button', { name: 'Retry' }));
+
+    expect(await details.findByText('Full prompt')).toBeVisible();
+    expect(details.getByText('Full output')).toBeVisible();
+    expect(details.queryByRole('alert')).not.toBeInTheDocument();
+  });
+});
 
 describe('RunsTab accessibility', () => {
   it('exposes a native keyboard disclosure and separate, run-specific actions', async () => {

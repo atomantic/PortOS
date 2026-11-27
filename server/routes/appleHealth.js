@@ -218,7 +218,7 @@ router.post('/import/xml', uploadXml, asyncHandler(async (req, res) => {
   // Import clinical records if any were found
   let clinicalResult = null;
   if (clinicalJsons.length > 0) {
-    clinicalResult = await importClinicalRecords(clinicalJsons, io);
+    clinicalResult = await importClinicalRecords(clinicalJsons);
   }
 
   res.json({ ...result, ...(clinicalResult && { clinical: clinicalResult }) });

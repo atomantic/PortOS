@@ -25,6 +25,7 @@
 import { basename, join } from 'path';
 import { access } from 'fs/promises';
 import { randomUUID } from 'crypto';
+import { CANCEL_ALREADY_TERMINAL } from '../lib/cancelResponse.js';
 import { ServerError } from '../lib/errorHandler.js';
 import { shortId, PATHS, unlinkGuarded } from '../lib/fileUtils.js';
 import { withBackupAssetPublication } from '../lib/backupSnapshotBoundary.js';
@@ -81,10 +82,12 @@ export const __testing = { downloadJobs };
 export const listActiveVideoDownloads = () => [...downloadJobs.values()]
   .filter((job) => job.status === 'running').reverse().map(({ id, url }) => ({ jobId: id, url }));
 
-/** Cancel an in-flight download. Returns false if the job is unknown or already finished. */
+/** Cancel an in-flight download, or report a conflict for a retained finished job. */
 export function cancelVideoDownload(jobId) {
   const job = downloadJobs.get(jobId);
-  if (!job || !job.process) return false;
+  if (!job) return false;
+  if (job.status !== 'running') return CANCEL_ALREADY_TERMINAL;
+  if (!job.process) return false;
   const proc = job.process;
   killWithEscalation(proc, { label: 'yt-dlp download', stillRunning: () => job.process === proc });
   return true;

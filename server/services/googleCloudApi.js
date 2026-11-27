@@ -87,7 +87,7 @@ export function resolveGoogleConfig(settings) {
     || (process.env.GOOGLE_CLOUD_PROJECT || '').trim() || null;
   const location = isValidGoogleLocation(vg.location) ? vg.location : GOOGLE_DEFAULT_LOCATION;
   if (credential.kind === 'serviceAccount' && !projectId) {
-    throw new ServerError('The Google service account key has no project_id; set the project in Settings > Media > Google', { status: 400, code: 'GOOGLE_CREDENTIAL_INVALID' });
+    throw new ServerError('The Google service account key has no project_id; set the project in Media Gen Settings → Google', { status: 400, code: 'GOOGLE_CREDENTIAL_INVALID' });
   }
   if (projectId && !isValidGoogleProjectId(projectId)) {
     throw new ServerError('The Google project id is not a valid Google Cloud project id', { status: 400, code: 'GOOGLE_CREDENTIAL_INVALID' });
@@ -101,7 +101,7 @@ export function resolveGoogleConfig(settings) {
  */
 export function googleExpressModeRefusal(config, { label, expressMode = false }) {
   if (!config || config.projectId || expressMode) return null;
-  return `${label} is not available in Agent Platform express mode (an API key with no project). Set your Google Cloud project in Settings > Media > Google, or use a service account key.`;
+  return `${label} is not available in Agent Platform express mode (an API key with no project). Set your Google Cloud project in Media Gen Settings → Google, or use a service account key.`;
 }
 
 const base64url = (input) => Buffer.from(input).toString('base64url');

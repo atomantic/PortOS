@@ -6,7 +6,6 @@ import VideoGenLocalModelSettings from './VideoGenLocalModelSettings';
 import MusicVideoFilingSelect from '../media/MusicVideoFilingSelect';
 import RemoteMediaTargetPicker from '../federatedMedia/RemoteMediaTargetPicker';
 import { isDefaultA2vLoraStages } from '../../lib/videoLoraStages';
-import { isDeliveryVideoModel } from '../../lib/videoFinish.js';
 
 /**
  * The "Render settings" column of the VideoGen form: render target, the hosted
@@ -24,13 +23,6 @@ export default function VideoGenRenderSettingsPanel({
   const { currentModel, selectedLoras, a2vLoraStageStrengths, setA2vLoraStageStrengths } = model;
   const { modelDownload, speedProfileAssetId, speedProfileStatus } = weights;
   const { canSleepDisplay, displaySleepEnabled, setDisplaySleepOverride } = displaySleep;
-  // A model the finish graph names as a DELIVERY target always decodes on its
-  // own decoder — the server declines a draft request there outright (#5423) —
-  // so the decode picker shows Full and says why instead of offering a choice
-  // that would be silently dropped. `applyFinish` already resets the value when
-  // Finish switches models; this keeps the control honest when the user picks
-  // the delivery model by hand.
-  const deliveryModelSelected = isDeliveryVideoModel(currentModel, catalog.models);
 
   return (
     <section aria-label="Render settings" className="min-w-0 space-y-3">
@@ -83,32 +75,35 @@ export default function VideoGenRenderSettingsPanel({
 
       {!rendersOffMachine && (
         <AdvancedParamsPanel
-          mode={mode}
-          currentModel={currentModel}
-          numFrames={sampler.numFrames} onNumFramesChange={sampler.setNumFrames}
-          chunks={sampler.chunks} onChunksChange={sampler.setChunks} keyframesActive={keyframesActive}
-          chunkPrompts={sampler.chunkPrompts} onChunkPromptChange={sampler.setChunkPromptAt} chainingActive={sampler.chainingActive}
-          contextFrames={sampler.contextFrames} onContextFramesChange={sampler.setContextFrames}
-          fps={sampler.fps} onFpsChange={sampler.setFps}
-          batchSize={sampler.batchSize} onBatchSizeChange={sampler.setBatchSize}
-          seed={sampler.seed} onSeedChange={sampler.setSeed} onRandomSeed={sampler.handleRandomSeed}
-          steps={sampler.steps} onStepsChange={sampler.setSteps}
-          guidanceScale={sampler.guidanceScale} onGuidanceScaleChange={sampler.setGuidanceScale}
-          speedProfileId={model.speedProfileId} onSpeedProfileChange={model.setSpeedProfileId}
-          speedProfileStatus={speedProfileStatus}
-          onSpeedProfileDownload={() => modelDownload.start(speedProfileAssetId, { force: true })}
-          width={sampler.width} height={sampler.height}
-          onCancelSpeedProfileDownload={modelDownload.cancel}
-          speedProfileDownloadError={modelDownload.lastError?.modelId === speedProfileAssetId ? modelDownload.lastError.message : null}
-          draftDecode={model.draftDecode} onDraftDecodeChange={model.setDraftDecode}
-          draftDecodeLocked={deliveryModelSelected}
-          streamingMode={model.streamingMode} onStreamingModeChange={model.setStreamingMode}
-          imageStrength={sampler.imageStrength} onImageStrengthChange={sampler.setImageStrength}
-          i2vReferenceMode={sampler.i2vReferenceMode} onI2vReferenceModeChange={sampler.setI2vReferenceMode}
-          effectiveImageStrength={sampler.effectiveImageStrength}
-          tiling={sampler.tiling} onTilingChange={sampler.setTiling}
-          disableAudio={sampler.disableAudio} onDisableAudioChange={sampler.setDisableAudio}
-          noMusic={sampler.noMusic} onNoMusicChange={sampler.setNoMusic}
+          mode={mode} currentModel={currentModel}
+          timing={{
+            numFrames: sampler.numFrames, onNumFramesChange: sampler.setNumFrames,
+            chunks: sampler.chunks, onChunksChange: sampler.setChunks, keyframesActive,
+            chunkPrompts: sampler.chunkPrompts, onChunkPromptChange: sampler.setChunkPromptAt, chainingActive: sampler.chainingActive,
+            contextFrames: sampler.contextFrames, onContextFramesChange: sampler.setContextFrames,
+            fps: sampler.fps, onFpsChange: sampler.setFps,
+            batchSize: sampler.batchSize, onBatchSizeChange: sampler.setBatchSize,
+            seed: sampler.seed, onSeedChange: sampler.setSeed, onRandomSeed: sampler.handleRandomSeed,
+          }}
+          samplerMemory={{
+            steps: sampler.steps, onStepsChange: sampler.setSteps,
+            guidanceScale: sampler.guidanceScale, onGuidanceScaleChange: sampler.setGuidanceScale,
+            speedProfileId: model.speedProfileId, onSpeedProfileChange: model.setSpeedProfileId,
+            width: sampler.width, height: sampler.height,
+            speedProfileStatus,
+            onSpeedProfileDownload: () => modelDownload.start(speedProfileAssetId, { force: true }),
+            onCancelSpeedProfileDownload: modelDownload.cancel,
+            speedProfileDownloadError: modelDownload.lastError?.modelId === speedProfileAssetId ? modelDownload.lastError.message : null,
+            streamingMode: model.streamingMode, onStreamingModeChange: model.setStreamingMode,
+          }}
+          conditioningAudio={{
+            imageStrength: sampler.imageStrength, onImageStrengthChange: sampler.setImageStrength,
+            i2vReferenceMode: sampler.i2vReferenceMode, onI2vReferenceModeChange: sampler.setI2vReferenceMode,
+            effectiveImageStrength: sampler.effectiveImageStrength,
+            tiling: sampler.tiling, onTilingChange: sampler.setTiling,
+            disableAudio: sampler.disableAudio, onDisableAudioChange: sampler.setDisableAudio,
+            noMusic: sampler.noMusic, onNoMusicChange: sampler.setNoMusic,
+          }}
         />
       )}
 

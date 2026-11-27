@@ -3,7 +3,21 @@
  */
 
 import { Router } from 'express';
-import { z } from 'zod';
+import {
+  createCosTaskSchema,
+  slashdoTaskSchema,
+  updateCosTaskSchema,
+  challengeTaskSchema,
+  resolveChallengeSchema,
+  goalFidelityFalsePositiveSchema,
+  cosTaskDeleteQuerySchema,
+  cosTaskReorderBodySchema,
+  cosTaskSpawnBodySchema,
+  enhanceTaskSchema,
+  jiraTicketTaskSchema,
+  cosTaskListQuerySchema,
+  cosTaskCompletedQuerySchema,
+} from '../lib/cos/cosValidation.js';
 import { existsSync } from 'fs';
 import { isRepo, notGitRepoMessage } from '../services/git/status.js';
 import { addTask, approveTask, challengeTask, deleteTask, findTaskWithSource, getAllTasks, getTaskById, getTaskView, reorderTasks, resolveTaskChallenge, resolveTaskChallengeWithRecheck, updateTask } from '../services/cos/cosTaskStore.js';
@@ -27,17 +41,8 @@ import { fileInvestigationTask } from '../services/investigationTaskProducer.js'
 import { reportGoalFidelityFalsePositive } from '../services/goalFidelityCalibration.js';
 import { projectPreflightSource, projectPreflightTask } from '../services/preflightActivity.js';
 import { CLIENT_INVESTIGATION_DELIVERY, clientInvestigationFingerprint } from '../lib/investigationTasks.js';
-import {
-  createCosTaskSchema, slashdoTaskSchema, updateCosTaskSchema, challengeTaskSchema, resolveChallengeSchema,
-  goalFidelityFalsePositiveSchema, cosTaskDeleteQuerySchema, cosTaskReorderBodySchema, cosTaskSpawnBodySchema
-} from '../lib/cos/cosValidation.js';
 import { validateRequest } from '../lib/validateRequest.js';
 import { isPaginationRequested, parsePagination } from '../lib/queryValidation.js';
-
-const enhanceTaskSchema = z.object({
-  description: z.string().min(1),
-  context: z.string().optional(),
-});
 
 // ── Operator-action ledger (#5594) ──────────────────────────────────────────
 //
@@ -83,13 +88,6 @@ async function logTaskCreated(req, task, taskData) {
     dedupeKey: `cos.task.create:${task.id}`,
   });
 }
-
-// One-off "implement THIS JIRA ticket" task (the per-card play button on the
-// app overview's sprint board). `ticketKey` is a JIRA key like `PROJ-1234`.
-const jiraTicketTaskSchema = z.object({
-  app: z.string().min(1),
-  ticketKey: z.string().trim().regex(/^[A-Za-z][A-Za-z0-9]*-\d+$/, 'Invalid JIRA ticket key'),
-});
 
 // Reject a task pinned to an instance this install does not know (#4520). The
 // picker only offers registry members, so this catches the two ways a bad pin
@@ -176,12 +174,7 @@ const router = Router();
 // caller asked to page through, defeating the bound. A `pagination` block with
 // the true per-source totals is added so the caller can page.
 router.get('/tasks', asyncHandler(async (req, res) => {
-  const query = validateRequest(z.object({
-    view: z.enum(['queue', 'completed', 'full']).optional(),
-    source: z.enum(['user', 'internal']).default('user'),
-    selected: z.string().max(512).optional(),
-    cursor: z.string().max(512).optional(),
-  }), req.query);
+  const query = validateRequest(cosTaskListQuerySchema, req.query);
   const { readReleaseSynchronizationOutbox } = await import('../services/releaseSynchronizationStore.js');
   const { projectTaskSourceReleaseMilestones } = await import('../services/releaseSynchronizationProjection.js');
   const outboxPromise = readReleaseSynchronizationOutbox().catch(() => null);
@@ -194,7 +187,7 @@ router.get('/tasks', asyncHandler(async (req, res) => {
   // never copies archived prompt bodies (#9677). Settlement runs on the selection.
   const agentsPromise = getAgents().catch(() => []);
   if (query.view === 'completed') {
-    const { limit } = validateRequest(z.object({ limit: z.coerce.number().int().min(1).max(100).default(25) }), req.query);
+    const { limit } = validateRequest(cosTaskCompletedQuerySchema, req.query);
     const [completedView, outbox] = await Promise.all([getTaskView({ kind: 'completed', source: query.source, cursor: query.cursor, limit }), outboxPromise]);
     return res.json(projectTaskSourceReleaseMilestones(completedView, outbox));
   }

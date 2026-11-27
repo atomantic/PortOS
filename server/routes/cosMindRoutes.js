@@ -1,27 +1,19 @@
 import { composeMaintainerInstructions } from '../lib/persistent/persistentMindMaintainer.js';
 import mindToolRecipeRoutes from './mindToolRecipeRoutes.js';
-import { persistentMindMemoryProtectionSchema } from '../lib/persistent/persistentMindMemory.js';
 import { getPersistentMindThinkingRequestCatalog, cancelPersistentMindThinkingRequest } from '../services/persistent/persistentMindThinkingRequests.js';
 /** Persistent Chief-of-Staff mind conversation and lifecycle routes. */
 
 import { Router } from 'express';
-import { z } from 'zod';
 import { asyncHandler, ServerError } from '../lib/errorHandler.js';
+import { localRuntimeForProvider } from '../lib/localProviderRuntime.js';
 import { getDomainMode } from '../lib/domainAutonomy.js';
-import { PERSISTENT_MIND_LIMITS } from '../lib/persistent/persistentMind.js';
-import { MAX_SCREENSHOT_BYTES } from '../lib/uploadLimits.js';
 import {
   normalizePersistentMindCapabilities,
   PERSISTENT_MIND_CAPABILITIES_SCHEMA_VERSION,
-  PERSISTENT_MIND_CLEANUP_SCOPES,
   PERSISTENT_MIND_TOOL_BOUNDARIES,
   PERSISTENT_MIND_TOOL_CATALOG,
 } from '../lib/persistent/persistentMindCapabilities.js';
-import {
-  PERSISTENT_MIND_ID,
-  PERSISTENT_MIND_TRAJECTORY_LIMITS,
-  parsePersistentMindCursor,
-} from '../lib/persistent/persistentMindTrajectory.js';
+import { PERSISTENT_MIND_ID } from '../lib/persistent/persistentMindTrajectory.js';
 import {
   PERSISTENT_MIND_JOURNAL_KINDS,
   PERSISTENT_MIND_JOURNAL_LIMITS,
@@ -29,11 +21,7 @@ import {
   publicPersistentMindJournalEvent,
 } from '../lib/persistent/persistentMindJournal.js';
 import { normalizePersistentMindProfile } from '../lib/persistent/persistentMindProfile.js';
-import {
-  normalizePersistentMindThinkingPresets,
-  persistentMindThinkingPresetSchema,
-  persistentMindThinkingSelectionSchema,
-} from '../lib/persistent/persistentMindThinkingPresets.js';
+import { normalizePersistentMindThinkingPresets } from '../lib/persistent/persistentMindThinkingPresets.js';
 import { normalizePersistentMindPrompt } from '../lib/persistent/persistentMindPrompt.js';
 import { composePersistentMindInstructions, normalizePersistentMindPlaybook, PERSISTENT_MIND_PLAYBOOK_CATALOG } from '../lib/persistent/persistentMindPlaybook.js';
 import { resolvePersistentMindPlaybookPhase } from '../services/persistent/persistentMindPlaybookSignals.js';
@@ -88,126 +76,29 @@ import {
 import { getCosToolCatalog, readCosToolRecipeCatalog } from '../services/cos/cosToolRegistry.js';
 import { readPersistentMindManagedApps } from '../services/persistent/persistentMindManagedApps.js';
 import { mindBundleApplySchema, mindBundleExportSchema, mindBundlePreviewSchema } from '../lib/mindBundleValidation.js';
+import {
+  mindReadSchema,
+  visibilityReadSchema,
+  messageSchema,
+  attachmentUploadSchema,
+  attachmentParamsSchema,
+  annotationSchema,
+  pauseSchema,
+  acknowledgementSchema,
+  eventParamsSchema,
+  promotionSchema,
+  memoryInputSchema,
+  memoryUpdateSchema,
+  memoryParamsSchema,
+  journalReadSchema,
+  journalCorrectionSchema,
+  journalParamsSchema,
+  cleanupSchema,
+  watchdogRunSchema,
+} from '../lib/persistent/persistentMindValidation.js';
+
 const router = Router();
 router.use('/mind/recipes', mindToolRecipeRoutes);
-
-const idempotencyId = z.string().trim().min(1).max(200);
-const eventId = z.string().trim().min(1).max(128);
-const text = z.string().trim().min(1).max(PERSISTENT_MIND_LIMITS.MAX_MESSAGE_CHARS);
-const messageText = z.string().trim().max(PERSISTENT_MIND_LIMITS.MAX_MESSAGE_CHARS).optional();
-const attachmentId = z.string()
-  .trim()
-  .min(1)
-  .max(PERSISTENT_MIND_LIMITS.MAX_ATTACHMENT_ID_CHARS)
-  .regex(/^[A-Za-z0-9_-]+$/, 'invalid attachment id');
-const imageReference = z.union([
-  attachmentId,
-  z.object({ attachmentId }).strict(),
-]);
-const mindReadSchema = z.object({
-  cursor: z.string().max(260).refine((value) => parsePersistentMindCursor(value) !== null, 'Invalid cursor').optional(),
-  limit: z.coerce.number().int().positive().max(PERSISTENT_MIND_TRAJECTORY_LIMITS.maxPageSize).optional(),
-}).strict();
-const visibilityReadSchema = z.object({
-  refresh: z.enum(['true', 'false']).transform((value) => value === 'true').optional(),
-}).strict();
-const messageSchema = z.object({
-  id: idempotencyId,
-  text: messageText,
-  images: z.array(imageReference).max(PERSISTENT_MIND_LIMITS.MAX_MESSAGE_IMAGES).optional(),
-  // "Send with another model": one saved preset, for this message's single turn
-  // only. Absent, empty, and null all mean the same thing here — the mind's
-  // unchanged default route — so a composer that clears its picker does not
-  // have to omit the key to say "no override".
-  thinkingPresetId: z.union([
-    persistentMindThinkingPresetSchema.shape.id,
-    z.literal(''),
-    z.null(),
-  ]).optional(),
-  thinkingPreset: persistentMindThinkingSelectionSchema.optional(),
-}).strict().superRefine((value, ctx) => {
-  if (value.thinkingPreset && value.thinkingPreset.id !== value.thinkingPresetId) {
-    ctx.addIssue({ code: z.ZodIssueCode.custom, path: ['thinkingPreset'], message: 'The displayed selection must match thinkingPresetId' });
-  }
-  const images = Array.isArray(value.images) ? value.images : [];
-  const ids = images.map((image) => typeof image === 'string' ? image : image.attachmentId);
-  if (!value.text && ids.length === 0) {
-    ctx.addIssue({ code: z.ZodIssueCode.custom, path: ['text'], message: 'text or at least one image is required' });
-  }
-  if (new Set(ids).size !== ids.length) {
-    ctx.addIssue({ code: z.ZodIssueCode.custom, path: ['images'], message: 'image references must be unique' });
-  }
-});
-const attachmentUploadSchema = z.object({
-  filename: z.string().trim().min(1).max(PERSISTENT_MIND_LIMITS.MAX_ATTACHMENT_FILENAME_CHARS),
-  data: z.string().min(1).max(Math.ceil(MAX_SCREENSHOT_BYTES * 4 / 3) + 16),
-}).strict();
-const attachmentParamsSchema = z.object({ attachmentId }).strict();
-const annotationSchema = z.object({
-  id: idempotencyId,
-  text,
-  turnId: z.string().trim().min(1).max(128).nullable().optional(),
-  targetEventId: eventId.nullable().optional(),
-}).strict();
-const pauseSchema = z.object({ reason: z.string().trim().min(1).max(PERSISTENT_MIND_LIMITS.MAX_REASON_CHARS).optional() }).strict();
-const acknowledgementSchema = z.object({ id: idempotencyId }).strict();
-const eventParamsSchema = z.object({ eventId }).strict();
-// Legacy promotion types predate memoryTypeEnum; map them so stored records stay editable.
-const LEGACY_PROMOTION_TYPES = { insight: 'learning', pattern: 'observation' };
-const promotionSchema = z.object({
-  id: idempotencyId,
-  approved: z.literal(true),
-  content: z.string().trim().min(1).max(10_240),
-  summary: z.string().trim().max(500).optional(),
-  turnId: z.string().trim().min(1).max(128).nullable().optional(),
-  type: z.preprocess((value) => LEGACY_PROMOTION_TYPES[value] ?? value, z.enum(['fact', 'learning', 'observation', 'decision', 'preference', 'context'])).optional(),
-  category: z.string().trim().min(1).max(100).optional(),
-  tags: z.array(z.string().trim().min(1).max(50)).max(20).optional(),
-}).strict();
-const memoryType = z.enum(['fact', 'learning', 'observation', 'decision', 'preference', 'context']);
-const memoryFields = {
-  protection: persistentMindMemoryProtectionSchema.optional(),
-  content: z.string().trim().min(1).max(10_240),
-  summary: z.string().trim().max(500).optional(),
-  type: memoryType,
-  category: z.string().trim().min(1).max(100),
-  tags: z.array(z.string().trim().min(1).max(50)).max(20),
-  importance: z.number().min(0).max(1),
-};
-const memoryInputSchema = z.object({
-  ...memoryFields,
-  type: memoryFields.type.optional().default('observation'),
-  category: memoryFields.category.optional().default('other'),
-  tags: memoryFields.tags.optional().default([]),
-  importance: memoryFields.importance.optional().default(0.5),
-}).strict();
-const memoryUpdateSchema = z.object(memoryFields).partial().strict().refine(
-  (value) => Object.keys(value).length > 0,
-  'At least one memory field is required'
-);
-const memoryParamsSchema = z.object({ memoryId: z.string().trim().min(1).max(128) }).strict();
-const journalReadSchema = z.object({
-  kind: z.enum(PERSISTENT_MIND_JOURNAL_KINDS).optional(),
-  status: z.enum(PERSISTENT_MIND_JOURNAL_STATUSES).optional(),
-  limit: z.coerce.number().int().positive().max(PERSISTENT_MIND_JOURNAL_LIMITS.maxPageSize).optional(),
-  offset: z.coerce.number().int().nonnegative().optional(),
-}).strict();
-// Two verbs, not a free status write: the user may settle an entry or retire
-// one the mind got wrong. Neither deletes it, and neither can resurrect a
-// retired statement — that is the mind's own supersede operation.
-const journalCorrectionSchema = z.object({
-  action: z.enum(['resolve', 'retire']),
-  resolution: z.string().trim().max(PERSISTENT_MIND_JOURNAL_LIMITS.maxResolutionChars).optional(),
-}).strict();
-const journalParamsSchema = z.object({ journalEventId: z.string().trim().min(1).max(160) }).strict();
-const cleanupSchema = z.object({
-  scopes: z.array(z.enum(PERSISTENT_MIND_CLEANUP_SCOPES))
-    .min(1)
-    .max(PERSISTENT_MIND_CLEANUP_SCOPES.length)
-    .refine((scopes) => new Set(scopes).size === scopes.length, 'cleanup scopes must be unique'),
-  reason: z.string().trim().min(1).max(300).optional(),
-  confirmation: z.literal('CLEAR'),
-}).strict();
 
 const requireSuccess = (result) => {
   if (result?.success === false) {
@@ -302,7 +193,7 @@ router.get('/mind/maintainer/watchdog', asyncHandler(async (_req, res) => {
   res.json(await readDevelopmentWatchdogSnapshot());
 }));
 router.post('/mind/maintainer/watchdog', asyncHandler(async (req, res) => {
-  const request = validateRequest(z.object({ dryRun: z.boolean().optional() }).strict(), req.body || {});
+  const request = validateRequest(watchdogRunSchema, req.body || {});
   const { runDevelopmentWatchdog } = await import('../services/developmentWatchdog.js');
   res.json(await runDevelopmentWatchdog({ dryRun: request.dryRun === true, force: true, source: 'manual' }));
 }));
@@ -420,25 +311,56 @@ router.get('/mind/tools', asyncHandler(async (_req, res) => {
   });
 }));
 
-router.get('/mind/runtime', asyncHandler(async (_req, res) => {
+// The two machine-local HTTP views need the same expensive telemetry. Share
+// pending work and the just-completed sample, but never reuse it across routes
+// with different turn, prompt, or residency inputs.
+const MIND_RUNTIME_TTL_MS = 2_000;
+let mindRuntimeSample;
+
+function readMindRuntime({ state, profile, prompt, provider }) {
+  const turn = state.activeTurn;
+  const backend = provider ? localRuntimeForProvider(provider) : null;
+  const usageLimitRetryAt = persistentMindUsageLimitRetryAt();
+  const key = JSON.stringify([
+    turn?.id, turn?.startedAt, turn?.heartbeatAt, turn?.providerId, turn?.model,
+    profile.providerId, profile.model, prompt.identity, prompt.instructions,
+    Boolean(provider), backend?.kind, backend?.endpoint, provider?.apiKey, usageLimitRetryAt,
+  ]);
+  if (mindRuntimeSample?.key === key && Date.now() < mindRuntimeSample.expiresAt) {
+    return mindRuntimeSample.promise;
+  }
+  const sample = { key, expiresAt: Infinity, promise: null };
+  sample.promise = inspectPersistentMindRuntime({ state, profile, prompt, provider, usageLimitRetryAt }).then(
+    (runtime) => {
+      sample.expiresAt = Date.now() + MIND_RUNTIME_TTL_MS;
+      return runtime;
+    },
+    (error) => {
+      if (mindRuntimeSample === sample) mindRuntimeSample = undefined;
+      throw error;
+    },
+  );
+  mindRuntimeSample = sample;
+  return sample.promise;
+}
+
+async function readMindRuntimeInputs() {
   const [root, state] = await Promise.all([loadState(), getPersistentMindState()]);
   const prompt = normalizePersistentMindPrompt(root.config?.persistentMindPrompt);
   const profile = normalizePersistentMindProfile(root.config?.persistentMindProfile);
   const providerId = state.activeTurn?.providerId || profile.providerId;
   const provider = providerId ? await getProviderById(providerId) : null;
-  res.json(await inspectPersistentMindRuntime({
-    state, profile, prompt, provider, usageLimitRetryAt: persistentMindUsageLimitRetryAt(),
-  }));
+  return { root, state, prompt, profile, provider };
+}
+
+router.get('/mind/runtime', asyncHandler(async (_req, res) => {
+  res.json(await readMindRuntime(await readMindRuntimeInputs()));
 }));
 
 router.get('/mind/visibility', asyncHandler(async (req, res) => {
   const { refresh = false } = validateRequest(visibilityReadSchema, req.query);
-  const [root, state] = await Promise.all([loadState(), getPersistentMindState()]);
-  const prompt = normalizePersistentMindPrompt(root.config?.persistentMindPrompt);
-  const profile = normalizePersistentMindProfile(root.config?.persistentMindProfile);
-  const providerId = state.activeTurn?.providerId || profile.providerId;
-  const provider = providerId ? await getProviderById(providerId) : null;
-  res.json(await readPersistentMindVisibility({ root, state, profile, prompt, provider, force: refresh }));
+  const inputs = await readMindRuntimeInputs();
+  res.json(await readPersistentMindVisibility({ ...inputs, runtime: readMindRuntime(inputs), force: refresh }));
 }));
 
 router.post('/mind/memories', asyncHandler(async (req, res) => {

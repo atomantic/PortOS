@@ -178,7 +178,7 @@ export function backupSnapshotCutPending() {
   return cutRequested || cutActive || backupSharedAdmission.cutPending();
 }
 
-const RECOVERY_DOC = 'docs/BACKUP_PUBLICATION_ADMISSION.md#interrupted-ownership-recovery';
+const RECOVERY_DOC = 'docs/BACKUP.md#interrupted-ownership-recovery';
 
 function blockedCutMessage(blockers) {
   const named = blockers.map(blocker => {

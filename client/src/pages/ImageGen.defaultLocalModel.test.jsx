@@ -1,6 +1,6 @@
 /**
  * The Image Gen form seeds its model picker from the install-wide default
- * (`settings.imageGen.local.modelId`, set on Settings → Media → Local) rather
+ * (`settings.imageGen.local.modelId`, set on Media Gen Settings → Local) rather
  * than from whatever the catalog happens to list first. Every other local
  * render surface already honoured that pin; this page did not, so one install
  * rendered a different model depending on which screen you started from.

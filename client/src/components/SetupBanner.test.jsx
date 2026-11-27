@@ -3,11 +3,11 @@ import { render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { Link, MemoryRouter, Route, Routes } from 'react-router';
 
-vi.mock('../services/apiSystem.js', () => ({
+vi.mock('../services/apiAppShell.js', () => ({
   getCapabilities: vi.fn(),
 }));
 
-import * as api from '../services/apiSystem.js';
+import * as api from '../services/apiAppShell.js';
 import SetupBanner from './SetupBanner';
 
 const incomplete = {

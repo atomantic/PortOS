@@ -1,3 +1,4 @@
+// test-memo: git-fixture
 /**
  * The shared guard corpus (`scripts/lib/guardCorpus.js`, #16996) answers every
  * pathspec shape the structural checks use exactly as `git ls-files` does: same
@@ -11,8 +12,8 @@ import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
-import { REPO_ROOT, createGuardCorpus, pathspecMatcher, readText } from './guardCorpus.js';
-import { trackedFiles, workingTreeFiles } from './trackedFiles.js';
+import { createGuardCorpus, pathspecMatcher } from '../../lib/guardCorpus.js';
+import { trackedFiles, workingTreeFiles } from '../../lib/trackedFiles.js';
 
 const FILES = [
   'AGENTS.md', 'CLAUDE.md', 'a.js', 'b.mjs', 'c.cjs', 'x.generated.json', 'root.test.js', '.env.example', '.gitignore',
@@ -34,7 +35,7 @@ const REPO_SPECS = [
   ['.claude'], ['.github/workflows', '.github/actions'], ['server/**/*.test.js', ':!server/lib/browserSuiteGate*.test.js', ':!server/test/guards'],
   ['.'], ['./server'], ['server/'], ['q?.js'], ['[aq]*.js'], ['weird[[]name].js'], [':(exclude)*.md'], ['dir with space'],
 ];
-const SERVER_SPECS = [['*.js', '*.mjs', '*.cjs'], ['*.js', '*.mjs'], ['*.js'], ['routes', 'lib/aiToolkit/routes', 'cos-runner/index.js'], []];
+const SERVER_SPECS = [['*.js', '*.mjs', '*.cjs'], ['*.js', '*.mjs'], ['*.js'], ['routes', 'lib/aiToolkit/routes', 'cos-runner'], []];
 const CLIENT_SPECS = [['src'], []];
 // Shapes the matcher declines: the corpus must hand them to git rather than guess.
 const UNSUPPORTED = [[':(glob)**/*.js'], [':(icase)agents.md'], ['../a.js'], ['weird\\[name].js'], ['[[:alpha:]]*.js']];
@@ -119,16 +120,7 @@ describe('guard corpus pathspec parity with git (#16996)', () => {
   });
 
   it('reports a path that descends through a file as absent', () => {
-    expect(createGuardCorpus(REPO_ROOT).lstat('package.json/index.js')).toBeNull();
-  });
-
-  it('caches reads only inside this repository', () => {
-    const outside = join(root, 'outside.txt');
-    writeFileSync(outside, 'one');
-    expect(readText(outside)).toBe('one');
-    writeFileSync(outside, 'two');
-    expect(readText(outside)).toBe('two');
-    expect(readText(join(REPO_ROOT, 'AGENTS.md'))).toBe(readText(join(REPO_ROOT, 'AGENTS.md')));
+    expect(createGuardCorpus(root).lstat('a.js/index.js')).toBeNull();
   });
 
   it('decodes an existing byte read without rereading the file', () => {

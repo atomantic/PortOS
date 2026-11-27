@@ -7,6 +7,7 @@
  * inbox updates / watcher errors live.
  */
 
+import { emitToOperatorsOn } from '../socketIo.js';
 import { ensureDir, PATHS } from '../../lib/fileUtils.js';
 import { join } from 'path';
 import { attachAllWatchers, attachWatcher, detachWatcher, shutdownAllWatchers, quiesceAllWatchersForExit, listAttachedWatchers } from './watcher.js';
@@ -102,16 +103,16 @@ export async function initSharing({ io: socketIo } = {}) {
   // Wire socket events for the client UI.
   if (io) {
     sharingEvents.on('manifest-processed', (payload) => {
-      io.emit('sharing:manifest-processed', payload);
+      emitToOperatorsOn(io, 'sharing:manifest-processed', payload);
       if (payload.outcome?.mode === 'inbox') {
-        io.emit('sharing:inbox-updated', { bucketId: payload.bucketId });
+        emitToOperatorsOn(io, 'sharing:inbox-updated', { bucketId: payload.bucketId });
       }
     });
     sharingEvents.on('inbox-updated', (payload) => {
-      io.emit('sharing:inbox-updated', payload);
+      emitToOperatorsOn(io, 'sharing:inbox-updated', payload);
     });
     sharingEvents.on('incompatible-manifest', (payload) => {
-      io.emit('sharing:incompatible-manifest', payload);
+      emitToOperatorsOn(io, 'sharing:incompatible-manifest', payload);
     });
     // PortOS storage-layout version is ahead of this instance — the user
     // needs to update PortOS to import the manifest. Separate event from
@@ -119,34 +120,34 @@ export async function initSharing({ io: socketIo } = {}) {
     // different version axis) so the UI can render distinct messages for
     // each case.
     sharingEvents.on('portos-schema-ahead', (payload) => {
-      io.emit('sharing:portos-schema-ahead', payload);
+      emitToOperatorsOn(io, 'sharing:portos-schema-ahead', payload);
     });
     // Peer-sync per-record subscription got blocked / unblocked by a schema-
     // version mismatch. Lets the Instances UI swap in the SchemaGapBadge
     // without polling.
     peerSyncEvents.on('subscription-blocked', (payload) => {
-      io.emit('peerSync:subscription-blocked', payload);
+      emitToOperatorsOn(io, 'peerSync:subscription-blocked', payload);
     });
     peerSyncEvents.on('subscription-unblocked', (payload) => {
-      io.emit('peerSync:subscription-unblocked', payload);
+      emitToOperatorsOn(io, 'peerSync:subscription-unblocked', payload);
     });
     // An incoming push auto-created a reverse subscription back to the
     // sender. Let the Instances UI re-fetch that peer's subs so the new
     // adopted-from-reverse row appears without a manual page reload.
     peerSyncEvents.on('subscription-created', (payload) => {
-      io.emit('peerSync:subscription:created', payload);
+      emitToOperatorsOn(io, 'peerSync:subscription:created', payload);
     });
     // Peer-driven annotation merges re-use the same `media:annotation:updated`
     // socket event the local PATCH route emits, so open UI consumers handle
     // both transports through the same listener.
     sharingEvents.on('annotation-updated', (payload) => {
-      io.emit('media:annotation:updated', payload);
+      emitToOperatorsOn(io, 'media:annotation:updated', payload);
     });
     // Peer-sync asset arrivals → broadcast so the UI can swap the
     // <MediaImage> "syncing" placeholder for the live bytes the moment
     // the receiver's background pull lands them on disk.
     peerSyncEvents.on('asset-arrived', (payload) => {
-      io.emit('peerSync:asset-arrived', payload);
+      emitToOperatorsOn(io, 'peerSync:asset-arrived', payload);
     });
   }
 

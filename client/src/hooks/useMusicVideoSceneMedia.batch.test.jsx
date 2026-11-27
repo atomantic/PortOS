@@ -4,8 +4,8 @@ import { renderHook, act } from '@testing-library/react';
 const handlers = new Map();
 vi.mock('../services/socket', () => ({
   default: {
-    on: (event, fn) => { handlers.set(event, fn); },
-    off: (event, fn) => { if (handlers.get(event) === fn) handlers.delete(event); },
+    on: (event, fn) => { handlers.set(event, new Set([...(handlers.get(event) || []), fn])); },
+    off: (event, fn) => { handlers.get(event)?.delete(fn); },
     emit: () => {},
   },
 }));
@@ -24,7 +24,7 @@ vi.mock('../components/ui/Toast');
 
 const useMusicVideoSceneMedia = (await import('./useMusicVideoSceneMedia.js')).default;
 
-const fire = (event, payload) => act(() => { handlers.get(event)?.(payload); });
+const fire = (event, payload) => act(() => { for (const listener of handlers.get(event) || []) listener(payload); });
 const videoSettings = { settings: { backend: 'local' }, audioReactiveSelected: false, videoBlockedReason: '' };
 // Ten footage scenes; the last one has no reference frame yet.
 const project = {

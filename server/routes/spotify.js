@@ -9,6 +9,7 @@ import { requestOriginFrom as requestOrigin } from '../lib/beeperOAuthOrigin.js'
 import * as spotifyAuth from '../services/spotifyAuth.js';
 import * as spotifySync from '../services/spotifySync.js';
 import * as spotifyPlaylists from '../services/spotifyPlaylists.js';
+import { requireSyncResult } from './mediaSyncResult.js';
 
 const router = Router();
 
@@ -33,7 +34,9 @@ router.get('/playlists', asyncHandler(async (_req, res) => {
 
 // Explicit user action — fetch current playlists and their track metadata.
 router.post('/playlists/sync', asyncHandler(async (_req, res) => {
-  res.json(await spotifyPlaylists.syncSpotifyPlaylists());
+  const result = await spotifyPlaylists.syncSpotifyPlaylists();
+  // The service returns warnings only after writing the playlist snapshot.
+  res.json(result.warnings?.length ? result : requireSyncResult(result, 'SPOTIFY_PLAYLIST_SYNC_FAILED'));
 }));
 
 // Save the user-created Spotify developer app credentials (client id/secret).
@@ -81,11 +84,10 @@ router.post('/auth/clear', asyncHandler(async (req, res) => {
   res.json(result);
 }));
 
-// Run one incremental sync pass now (explicit user action). Returns the pass
-// summary, or a needsAuth report when Spotify isn't connected.
+// Run one incremental sync pass now (explicit user action).
 router.post('/sync', asyncHandler(async (req, res) => {
   const result = await spotifySync.runSync();
-  res.json(result);
+  res.json(requireSyncResult(result, 'SPOTIFY_SYNC_FAILED'));
 }));
 
 export default router;

@@ -1,6 +1,6 @@
 # Local managed-app visitor broker
 
-The version-1 broker provides an explicit, app-scoped route to a separately configured nonhumanoid Eidoverse host. It never reuses peer/Mind travel, humanoid guest tickets, the owner identity or ordinary PortOS session credentials as app authority. It makes no boot traffic and starts no host. Without a configured host credential and exact negotiated capabilities it returns unavailable.
+The broker connects an app to a separately configured Eidoverse host. App visitors use a distinct credential from peer travel and owner sessions. The host and its capabilities must be available before admitting a visitor.
 
 ## Owner setup and credential lifecycle
 
@@ -10,11 +10,9 @@ Use the ordinary PortOS owner API:
 - `POST /api/managed-visitor-admin/:appId/credential` provisions or rotates a credential for an existing, unarchived managed-app record. Body: `{individualIds:["individual-a"],worldIds:["quiet-garden"],ttlMs:86400000}`. IDs start with a letter or digit and contain 1–128 letters, digits, dots, underscores, colons or hyphens. Allow 1–64 individual IDs and 1–32 worlds. Credential lifetime is 1 minute to 7 days. The response contains `credential` **once**, plus scope and expiry metadata; do not log or publish it. Rotation revokes existing sessions.
 - `DELETE /api/managed-visitor-admin/:appId/credential` revokes its credential and current sessions.
 
-When an instance password is set, management requires a verified owner session; a peer Basic credential is insufficient. When the password is unset, management retains PortOS's existing private-install owner API posture: no authenticated human identity can be inferred. Cross-origin requests and app bearer credentials are rejected by management in either posture. A local process with unrestricted access to the passwordless owner API is not sandboxed by this feature.
+With a password configured, administration requires a verified owner session. Cross-origin requests and app credentials are refused. Credential digests and their scope stay local. Admission authority expires and is forgotten when PortOS restarts.
 
-`data/managed-visitor-credentials.json` contains only SHA-256 credential digests, app IDs, exact scope allowlists and timestamps. It is bounded to 64 credentials and 64 KiB, machine-local and never federated. Admission/session authority is memory-only and is forgotten on restart. A restart does not resume any visit.
-
-The host administrator separately configures matching **64 lowercase hexadecimal characters** in `PORTOS_EIDOVERSE_VISITOR_TOKEN` for PortOS and Eidoverse. This host credential is distinct from every app credential. The Eidoverse host also requires its explicit world allowlist. No command in this document configures, starts or restarts a live host; setup is a deliberate operator action after both source implementations are reviewed.
+Configure the same 64 lowercase hex characters in `PORTOS_EIDOVERSE_VISITOR_TOKEN` on both PortOS and the Eidoverse host. The host also needs its world allowlist. Keep this host token separate from app credentials.
 
 ## App-facing protocol
 
@@ -58,14 +56,10 @@ Host admissions add `version:1` and the authenticated `appId` to the app request
 
 A dedicated unsequenced `POST /sessions/:hostId/leave` takes `{appId,individualId,individualSessionId,worldId,epoch}` for idempotent revocation. It must invalidate a pending action even when its sequence is uncertain. This is how credential revocation avoids racing the normal action sequence. If the host cannot be reached, broker authority is still revoked immediately and independently enforced host expiry bounds the remaining ephemeral presence.
 
-This foundation does not implement connectome execution, retained learning, travel consent inference, arbitrary world authority or client-side embodiment. Fly Garden remains paused at home unless its own explicit visitor adapter is subsequently enabled. Source changes do not enable a production visitor.
-
 ## Reconcile interrupted admission and return
 
 `POST /sessions/:sessionId/leave` accepts the exact ordinary scope without a sequence. It revokes pending action authority immediately; a late action cannot become current again. Return is acknowledged only after matching host cleanup or the trusted admission deadline. An unconfirmed cleanup retains a revoked receipt so a retry cannot mistake the missing active session for an acknowledged return.
 
 When an admission times out before returning a session ID, use `POST /admissions/cancel` with exactly `{individualId,individualSessionId,worldId}` and the app credential. It cancels matching pending attempts and removes matching published visits, without touching another recipient or runtime session. The response contains `version`, `appId`, those scope IDs, `confirmed`, `pending` and nullable `expiresAt`. Keep local embodiment ownership paused while `confirmed:false`; retry cancellation until confirmed. A pending acknowledgment is cleaned when it arrives and cannot publish authority after cancellation.
 
-Host negotiation additionally requires `admissionDeadline:true`. Every host admission carries `X-Managed-Visitor-Deadline`, an absolute same-machine wall-clock upper bound chosen before the host call. The host must validate it after consuming the body and clamp its lease expiry to that bound. If the host call itself times out without a lease ID, PortOS keeps a revoked unresolved receipt until this trustworthy deadline. Invalid host expiry values cannot extend that bound. A stale or older host lacking this capability is unavailable; no TTL is guessed from receipt time.
-
-After a broker restart, host leases may remain while their private receipt mappings have been lost. Unknown cleanup therefore remains unconfirmed until broker boot time plus the maximum 300,000 ms host lease. Original-scope cancellation exposes this bound; unknown session leave refuses premature confirmation. Exact current-process cleanup receipts remain immediately idempotent, and a successfully acknowledged current-process admission establishes its original scope. These bounded proof caches hold at most 256 entries; eviction can conservatively delay confirmation. Backward clock movement fails closed. No restart cleanup grants access outside the credential's individual/world allowlists.
+Host negotiation requires `admissionDeadline:true`. Each admission carries `X-Managed-Visitor-Deadline`. The host validates it and clamps lease expiry to that same-machine deadline. After a restart, unknown cleanup can remain pending until broker boot plus the maximum 300-second host lease. Keep the app paused until cancellation is confirmed.

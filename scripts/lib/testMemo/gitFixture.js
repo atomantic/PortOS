@@ -48,7 +48,7 @@
  * is no literal, and whatever another program the suite starts goes on to
  * run. The marker is
  * therefore added only after the suite has been read, and reviewed as a
- * claim about it (docs/TEST_MEMO_GIT_FIXTURES.md).
+ * claim about it (docs/TEST_MEMO.md#git-fixtures).
  */
 
 import { posix } from 'node:path';
@@ -257,8 +257,15 @@ function directoryOf(arr, m, args) {
   for (const [from, to] of args.slice(1)) {
     if (!isPunct(arr[from], '{') || m[from] !== to - 1) continue;
     const entries = listRanges(arr, m, from);
-    const cwd = entries.find(([at, end]) => (arr[at].t === 'id' || arr[at].t === 's') && arr[at].v === 'cwd' && (end === at + 1 || isPunct(arr[at + 1], ':')));
-    if (cwd !== undefined && !entries.some(([at]) => isPunct(arr[at], '...'))) return cwd[1] === cwd[0] + 1 ? cwd[0] : cwd[0] + 2;
+    for (const [at, end] of entries.toReversed()) {
+      // Earlier spreads cannot replace an explicit cwd. A later spread or
+      // computed property can, so it still hides the effective directory.
+      if (isPunct(arr[at], '...', '[') || isWord(arr[at], 'get', 'set')) break;
+      if (arr[at].v !== 'cwd') continue;
+      if (end === at + 1) return at;
+      if (isPunct(arr[at + 1], ':')) return at + 2;
+      break;
+    }
   }
   const [from, to] = args[1] ?? [];
   const leadsWithC = from !== undefined && isPunct(arr[from], '[') && m[from] === to - 1

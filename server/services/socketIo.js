@@ -1,5 +1,5 @@
 /**
- * Import-free Socket.IO handle and command-subscriber broadcast (#17619).
+ * Socket.IO handle and command-subscriber broadcast (#17619).
  *
  * `socket.js` is the composition root: it statically imports readiness,
  * autoFixer, apps, brain, instances, the media queue and every socket
@@ -7,8 +7,12 @@
  * only needed `getIo()` or a command broadcast pulled that root into a
  * 1,481-suite selection. This leaf holds the live server and the command
  * subscriber set. `initSocket` publishes the server with `setIo`. The leaf
- * imports nothing, including `socket.js`.
+ * depends only on the import-free audience filter.
  */
+
+import { emitToOperatorsOn, PEER_SOCKET_ROOM } from '../lib/socketAudience.js';
+
+export { emitToOperatorsOn, PEER_SOCKET_ROOM };
 
 let ioInstance = null;
 
@@ -25,15 +29,9 @@ export function getIo() {
   return ioInstance;
 }
 
-// Room joined by every peer-authenticated socket (paired peer token, legacy
-// Basic relay, or a peer-identified socket on a password-free install). Peers
-// are not operators: global frames that carry local private records go through
-// `emitToOperators`, never a bare `getIo().emit`.
-export const PEER_SOCKET_ROOM = 'peer-sockets';
-
-/** Emit to every connected socket except peer sockets. */
-export function emitToOperators(event, data) {
-  getIo()?.except(PEER_SOCKET_ROOM).emit(event, data);
+/** Emit to operators on the live Socket.IO server. */
+export function emitToOperators(event, ...args) {
+  emitToOperatorsOn(getIo(), event, ...args);
 }
 
 // Operator command-runner output (#12019). Never a global emit: the stream

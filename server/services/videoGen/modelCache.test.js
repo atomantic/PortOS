@@ -16,10 +16,6 @@ vi.mock('../../lib/videoTextEncoders.js', () => ({
   downloadableVideoTextEncoder: vi.fn(() => null),
 }));
 
-vi.mock('../../lib/videoDraftDecoders.js', () => ({
-  downloadableVideoDraftDecoders: vi.fn(() => []),
-}));
-
 vi.mock('../../lib/icLoraWeights.js', () => ({
   IC_LORA_WEIGHT_KEYS: ['ic-control'],
   icLoraSpecByKey: vi.fn(() => null),

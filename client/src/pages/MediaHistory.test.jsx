@@ -1,5 +1,7 @@
 const jobsApi = vi.hoisted(() => ({ getMediaJob: vi.fn() }));
 vi.mock('../services/apiMediaJobs', () => jobsApi);
+const verifierApi = vi.hoisted(() => ({ verifyImageNow: vi.fn() }));
+vi.mock('../services/apiImageVerifier', () => verifierApi);
 const batchApi = vi.hoisted(() => ({ importGalleryFile: vi.fn(), assignImportedMedia: vi.fn() }));
 vi.mock('../services/apiMedia', () => batchApi);
 import { beforeEach, describe, expect, it, vi } from 'vitest';
@@ -55,6 +57,68 @@ beforeEach(() => {
   deleteImage.mockImplementation(async filename => { rows = rows.filter(row => row.data.filename !== filename); return { ok: true }; });
 });
 const open = (url = '/media/history') => render(<MemoryRouter initialEntries={[url]}><MediaHistory /></MemoryRouter>);
+
+describe('batch image verification', () => {
+  it.each(['toolbar', 'batch bar', 'stitch mode', 'unmount'])('stops a batch on %s cancellation', async (exit) => {
+    rows = rows.slice(0, 2);
+    const first = Promise.withResolvers();
+    verifierApi.verifyImageNow.mockReturnValueOnce(first.promise);
+    const { unmount } = open();
+    const verify = await screen.findByRole('button', { name: 'Verify Images', pressed: false });
+    const stitch = screen.getByRole('button', { name: 'Stitch', pressed: false });
+    expect(verify.parentElement).toHaveClass('flex-wrap');
+    for (const action of verify.parentElement.children) {
+      expect(action).toHaveClass('min-h-[44px]', 'pointer-fine:sm:min-h-0');
+    }
+
+    fireEvent.click(verify);
+    await screen.findByRole('button', { name: 'Pick 0.png' });
+    expect(verify).toHaveAttribute('aria-pressed', 'true');
+    fireEvent.click(screen.getByRole('button', { name: 'Select All (2)' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Verify Selected (2)' }));
+    expect(verifierApi.verifyImageNow).toHaveBeenCalledExactlyOnceWith({
+      filename: '0.png', profileId: 'strict_anatomy', reviewerModel: undefined,
+    }, { signal: expect.any(AbortSignal), silent: true });
+    const { signal } = verifierApi.verifyImageNow.mock.lastCall[1];
+    expect(signal.aborted).toBe(false);
+
+    if (exit === 'unmount') unmount();
+    else {
+      if (exit === 'toolbar') fireEvent.click(screen.getByRole('button', { name: 'Cancel Verify (2)', pressed: true }));
+      if (exit === 'batch bar') fireEvent.click(screen.getByRole('button', { name: 'Cancel' }));
+      if (exit === 'stitch mode') {
+        fireEvent.click(stitch);
+        expect(stitch).toHaveAttribute('aria-pressed', 'true');
+      }
+      expect(verify).toHaveAttribute('aria-pressed', 'false');
+      expect(screen.queryByRole('region', { name: 'Batch verification toolbar' })).toBeNull();
+    }
+    expect(signal.aborted).toBe(true);
+    await act(async () => first.resolve({ verdict: 'pass' }));
+    expect(verifierApi.verifyImageNow).toHaveBeenCalledTimes(1);
+    expect(toast.success).not.toHaveBeenCalled();
+  });
+
+  it('lets a new batch finish after the previous batch is canceled', async () => {
+    rows = rows.slice(0, 2);
+    const first = Promise.withResolvers();
+    verifierApi.verifyImageNow.mockReturnValueOnce(first.promise).mockResolvedValue({ verdict: 'pass' });
+    open();
+    await screen.findByText('Picture 0');
+    const runBatch = () => {
+      fireEvent.click(screen.getByRole('button', { name: 'Verify Images' }));
+      fireEvent.click(screen.getByRole('button', { name: 'Select All (2)' }));
+      fireEvent.click(screen.getByRole('button', { name: 'Verify Selected (2)' }));
+    };
+    runBatch();
+    fireEvent.click(screen.getByRole('button', { name: 'Cancel' }));
+    runBatch();
+    await waitFor(() => expect(toast.success).toHaveBeenCalledWith('Batch verification complete: 2 passed, 0 defect(s) flagged.'));
+    await act(async () => first.reject(new DOMException('Canceled', 'AbortError')));
+    expect(verifierApi.verifyImageNow.mock.calls.map(([{ filename }]) => filename)).toEqual(['0.png', '0.png', '1.png']);
+    expect(toast.success).toHaveBeenCalledTimes(1);
+  });
+});
 
 describe('bounded media history', () => {
   it('loads the next server page, retries it without losing existing cards, and searches on the server', async () => {
@@ -118,6 +182,28 @@ describe('bounded media history', () => {
     expect(await screen.findByText('Picture 0')).toBeInTheDocument();
     expect(toggle).toHaveAttribute('aria-pressed', 'false');
     expect(screen.getByRole('button', { name: 'Images 61' })).toBeInTheDocument();
+  });
+
+  it('requests size thresholds from the server and clears them when switching to Images', async () => {
+    const listAll = fetchPage.getMockImplementation();
+    fetchPage.mockImplementation(async filters => {
+      if (!filters.videoSizeOverBytes) return listAll(filters);
+      return { items: [], total: 0, limit: 60, offset: 0, counts: { all: 0, image: 0, video: 0 } };
+    });
+    open();
+    await screen.findByText('Picture 0');
+    const size = screen.getByRole('combobox', { name: 'Video file size' });
+    for (const [label, bytes] of [['Over 100 MB', 100 * 1024 ** 2], ['Over 1 GB', 1024 ** 3]]) {
+      fireEvent.change(size, { target: { value: screen.getByRole('option', { name: label }).value } });
+      await waitFor(() => expect(fetchPage).toHaveBeenLastCalledWith(
+        expect.objectContaining({ kind: 'video', videoSizeOverBytes: bytes, offset: 0 }), { silent: true }));
+    }
+    expect(await screen.findByText('No videos on this machine match this size filter.')).toBeInTheDocument();
+    expect(screen.queryByText('Picture 0')).not.toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: 'Images 0' }));
+    await screen.findByText('Picture 0');
+    expect(size).toHaveValue('');
+    expect(fetchPage.mock.lastCall[0]).not.toHaveProperty('videoSizeOverBytes');
   });
 
   it('keeps the previously unseen last item reachable after deletion shifts offsets', async () => {

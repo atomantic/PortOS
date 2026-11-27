@@ -1,14 +1,10 @@
 /**
  * The load-bearing ORDER of server boot, extracted from `bootstrap.js` (#3451).
  *
- * `bootstrap.js` owns *what* each boot step is — the real migration runner, the
- * real AI Toolkit, the real stores, the real listener. This module owns *when*
- * each step runs relative to its neighbours, and receives every step as an
- * injected parameter. That split is the whole point: the ordering contract the
- * `bootstrap.js` header describes ("ordering inside each phase is load-bearing")
- * can then be executed and asserted by `bootstrapSequence.test.js` without
- * importing a module graph that would open a real listener, touch the real
- * database, or reach a provider.
+ * The bootstrap phase modules supply the migration runner, AI Toolkit, stores,
+ * and listener. This module owns when each step runs and accepts the steps as
+ * parameters so `bootstrapSequence.test.js` can verify their order and await
+ * boundaries without starting the server.
  *
  * Rules for editing:
  *   - Nothing here may import a PortOS service, `db.js`, or the AI Toolkit.
@@ -49,7 +45,6 @@ export const SMOKE_BOOT_DISABLED_STEPS = Object.freeze({
     'recoverInterruptedRepoClones',
     // Interrupted-run reconcile needs the real database. A hermetic smoke names
     // a database that does not exist; skipping it keeps that miss off stderr.
-    'initLoraTraining',
     'recoverStoryboardRuns',
     'initSharing',
     'recoverCreativeDirectorProjects'
@@ -357,12 +352,8 @@ export const runDatabasePhase = async ({ gate, migrate, warmStores, reconcilePro
  *      Interrupted clone recovery is awaited so the first links request cannot
  *      observe an orphaned `cloning` state; inbox recovery remains best-effort
  *      in the background because nothing below reads its result.
- *   4. `initMediaJobQueue` awaited before `initLoraTraining` and
- *      `initMediaJobDependentHooks` — the reconcile and the hooks read the
- *      reloaded queue, and no route may enqueue against a half-init queue.
- *      The lora reconcile is best-effort (a down database must not fail boot)
- *      and smoke-disabled. The other hooks must be listening before the queue
- *      replays `completed` events for reloaded jobs.
+ *   4. `initMediaJobQueue` restores the queue before the dependent hooks read
+ *      it. The hooks must listen before the queue replays `completed` events.
  *   5. The database phase before `startListening`, so no request can land on a
  *      partially-migrated install.
  *   6. The series-cover backfill MODULE is awaited but the backfill RUN is not:
@@ -383,7 +374,6 @@ export const runPostRouteSequence = ({
   recoverStuckClassifications,
   recoverInterruptedRepoClones,
   initMediaJobQueue,
-  initLoraTraining,
   initMediaJobDependentHooks,
   recoverStoryboardRuns,
   resumeMediaJobCompletions,
@@ -417,7 +407,6 @@ export const runPostRouteSequence = ({
       return bestEffort(recoverInterruptedRepoClones(), logFailure('Brain clone recovery failed'));
     })))
     .then(whileRunning(timed('mediaQueue', () => initMediaJobQueue({ deferCompletionRecovery: true }))))
-    .then(whileRunning(timed('lora', () => bestEffort(initLoraTraining(), logFailure('loraTraining init failed')))))
     .then(whileRunning(initMediaJobDependentHooks))
     // Awaited: recovery and the completion hooks both rewrite whole boards, so
     // the hooks must not arm until recovery has finished its saves.

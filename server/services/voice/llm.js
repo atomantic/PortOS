@@ -10,6 +10,7 @@ import { getProviderById } from '../provider/providers.js';
 import { DEFAULT_VOICE_BACKEND } from './config.js';
 import { managedOllamaBaseUrl } from '../../lib/ollamaContext.js';
 import { normalizeOpenAiBaseUrl } from '../../lib/localProviderRuntime.js';
+import { isConversationalGemma } from '../../lib/voiceModelCatalog.js';
 import { assertSecretEndpoint } from '../../lib/aiToolkit/endpointGuard.js';
 
 // Legacy env-based LM Studio default. Returns the OpenAI-compatible API base
@@ -196,6 +197,13 @@ const resolveModel = async (requested, { apiBase, apiKey, defaultModel = null, r
   const body = await res.json().catch(() => null);
   const ids = (body?.data || []).map((m) => m.id);
   if (!isAuto) {
+    // The conversational fine-tune and base Gemma are different models.
+    // When the provider positively lists its models, never test the wrong one.
+    if (isConversationalGemma(requested) && Array.isArray(body?.data)) {
+      const served = ids.find(isConversationalGemma);
+      if (!served) throw new Error('This Voice provider does not serve Conversational Gemma 4 31B. Connect a compatible provider and refresh its model list.');
+      return served;
+    }
     return ids.includes(requested) ? requested : ids[0] || requested;
   }
   // 'auto' — prefer the provider's configured default when set (hosted
@@ -348,8 +356,12 @@ export const streamChat = async (messages, opts = {}) => {
   // o1) emit `<think>` unconditionally. The deprioritization in resolveModel
   // is the durable fix; this is best-effort speedup for the rare case where
   // a reasoning model is the only tool-capable option.
-  const reasoning = isReasoningModel(model);
-  const sentMessages = reasoning ? messages.map((m, i, arr) => {
+  // Ollama exposes Inkling's opt-out as a model-defined compatibility effort.
+  // Apply it only to interactive Voice; other callers keep their own effort.
+  const ollamaInkling = (opts.provider || DEFAULT_VOICE_BACKEND) === 'ollama'
+    && /(?:^|[/:])inkling-2-mini(?:$|[-:/.])/i.test(model);
+  const legacyReasoning = !ollamaInkling && isReasoningModel(model);
+  const sentMessages = legacyReasoning ? messages.map((m, i, arr) => {
     if (m.role !== 'system' || i !== arr.findLastIndex((x) => x.role === 'system')) return m;
     const directive = (m.content || '').includes('/no_think') ? '' : '\n/no_think';
     return { ...m, content: (m.content || '') + directive };
@@ -360,9 +372,13 @@ export const streamChat = async (messages, opts = {}) => {
     messages: sentMessages,
     stream: true,
     temperature: 0.5,
-    max_tokens: opts.maxTokens ?? 180,
+    // The provider owns default output limits; the Voice prompt requests brevity.
+    ...(opts.maxTokens != null ? { max_tokens: opts.maxTokens } : {}),
   };
-  if (reasoning) {
+  if (ollamaInkling) body.reasoning_effort = 'none';
+  // Trelis recommends the assistant template with thinking disabled for spoken turns.
+  if (isConversationalGemma(model)) body.chat_template_kwargs = { enable_thinking: false };
+  if (legacyReasoning) {
     body.chat_template_kwargs = { thinking: false, enable_thinking: false };
     body.reasoning_effort = 'minimal';
   }

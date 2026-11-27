@@ -269,6 +269,128 @@ async function productionCheckin(limits, price = 0.25, overrides = {}) {
   return { project, run };
 }
 
+describe('Cast & Sets background stage ownership', () => {
+  const directionAnswer = { text: JSON.stringify(DIRECTION) };
+
+  it.each([
+    ['skip', 'success'], ['skip', 'failure'],
+    ['rebuild', 'success'], ['rebuild', 'failure'],
+    ['catalog', 'success'], ['catalog', 'failure'],
+  ])('keeps the stage after %s when earlier direction returns %s', async (action, outcome) => {
+    const entered = Promise.withResolvers();
+    const result = Promise.withResolvers();
+    heldWorkReleases.add(() => result.resolve(directionAnswer));
+    runPrompt.mockImplementationOnce(() => {
+      entered.resolve();
+      return result.promise;
+    });
+    const project = await seed({ mediaMode: 'code-only', visualSpec: null });
+    const url = `/api/music-video/${project.id}/cast-and-sets`;
+    expect((await request(app).post(url).send({})).status).toBe(202);
+    await entered.promise;
+    expect((await request(app).post(`${url}/skip`).send({})).body.stage.status).toBe('skipped');
+    if (action === 'catalog') expect((await request(app).post(`${url}/catalog`).send({})).body.stage.source).toBe('catalog');
+    if (action === 'rebuild') {
+      runPrompt.mockResolvedValueOnce({ text: JSON.stringify({ ...DIRECTION, logline: 'The new direction' }) });
+      expect((await request(app).post(url).send({})).body.stage.revision).toBe(2);
+      await runTo(project.id, 'review');
+    }
+    const before = await current(project.id);
+    if (outcome === 'success') result.resolve(directionAnswer);
+    else result.reject(new Error('Example late provider failure'));
+    await service.__settleCastAndSetsForTests();
+    expect(await current(project.id)).toEqual(before);
+    expect(enqueue).not.toHaveBeenCalled();
+  });
+
+  it('records a delayed direction failure on the originating active revision', async () => {
+    const entered = Promise.withResolvers();
+    const result = Promise.withResolvers();
+    heldWorkReleases.add(() => result.resolve(directionAnswer));
+    runPrompt.mockImplementationOnce(() => {
+      entered.resolve();
+      return result.promise;
+    });
+    const project = await seed();
+    expect((await request(app).post(`/api/music-video/${project.id}/cast-and-sets`).send({})).status).toBe(202);
+    await entered.promise;
+    result.reject(new Error('Example active provider failure'));
+    await service.__settleCastAndSetsForTests();
+    expect((await current(project.id)).castAndSets).toMatchObject({
+      revision: 1, status: 'failed', failedFromStatus: 'directing', error: 'Example active provider failure',
+    });
+  });
+
+  it('refunds a skipped image plan and refuses its prepared submissions', async () => {
+    const entered = Promise.withResolvers();
+    const release = Promise.withResolvers();
+    heldWorkReleases.add(release.resolve);
+    service.__setCastAndSetsDepsForTests(testDeps({
+      imageParams: async (_settings, route, common) => {
+        entered.resolve();
+        await release.promise;
+        return { mode: route.mode, ...common };
+      },
+    }));
+    const { project } = await productionCheckin({ maxGenerations: 20 });
+    await entered.promise;
+    expect((await current(project.id)).productionRuns[0].usage.generations).toBeGreaterThan(0);
+    expect((await request(app).post(`/api/music-video/${project.id}/cast-and-sets/skip`).send({})).body.stage.status).toBe('skipped');
+    const skipped = await current(project.id);
+    expect(skipped.productionRuns[0].usage).toEqual({ generations: 0, spentUsd: 0 });
+    release.resolve();
+    await service.__settleCastAndSetsForTests();
+    expect(await current(project.id)).toEqual(skipped);
+    expect(enqueue).not.toHaveBeenCalled();
+  });
+
+  it('settles already submitted image charges without changing a skipped stage', async () => {
+    const { project, run } = await productionCheckin({ maxGenerations: 20 });
+    await service.__settleCastAndSetsForTests();
+    const url = `/api/music-video/${project.id}/cast-and-sets`;
+    expect((await request(app).post(`${url}/skip`).send({})).body.stage.status).toBe('skipped');
+    const skipped = await current(project.id);
+    const [finished, failed] = jobs;
+    await land(project.id, [keyOf(finished)]);
+    const { castAndSets, productionStepKey } = failed.params.musicVideo;
+    expect(await service.onCastAndSetsImageSettled({ projectId: project.id, ...castAndSets,
+      jobId: failed.id, error: 'Example late image failure', productionRunId: run.id, productionStepKey })).toBe(false);
+    const saved = await current(project.id);
+    expect(saved.castAndSets).toEqual(skipped.castAndSets);
+    expect(saved.productionRuns[0].usage).toEqual(skipped.productionRuns[0].usage);
+    expect(saved.productionRuns[0].steps.find((step) => step.jobId === finished.id).status).toBe('completed');
+    expect(saved.productionRuns[0].steps.find((step) => step.jobId === failed.id).status).toBe('failed');
+  });
+
+  it('keeps a newer catalog check-in when old sheet rendering finishes', async () => {
+    const entered = Promise.withResolvers();
+    const release = Promise.withResolvers();
+    heldWorkReleases.add(release.resolve);
+    service.__setCastAndSetsDepsForTests(testDeps({
+      sheetImage: async (path) => {
+        entered.resolve();
+        await release.promise;
+        return { mime: 'image/png', bytes: readFileSync(path) };
+      },
+    }));
+    const project = await seed();
+    const url = `/api/music-video/${project.id}/cast-and-sets`;
+    expect((await request(app).post(url).send({})).status).toBe(202);
+    await until(async () => {
+      await land(project.id);
+      return (await current(project.id)).castAndSets.status === 'assembling';
+    }, 'sheet assembly');
+    await entered.promise;
+    expect((await request(app).post(`${url}/skip`).send({})).body.stage.status).toBe('skipped');
+    expect((await request(app).post(`${url}/catalog`).send({})).body.stage.source).toBe('catalog');
+    const catalogProject = await current(project.id);
+    release.resolve();
+    await service.__settleCastAndSetsForTests();
+    expect(await current(project.id)).toEqual(catalogProject);
+    expect(catalogProject.devArtifacts || []).toEqual([]);
+  });
+});
+
 describe('Cast & Sets production accounting', () => {
   it.each([
     { maxGenerations: 2 },
@@ -594,6 +716,7 @@ describe('Cast & Sets check-in', () => {
     const artifactId = first.castAndSets.artifactId;
     const finish = await request(app).post(`/api/music-video/${project.id}/cast-and-sets/${end === 'approved' ? 'approve' : 'skip'}`).send({});
     expect(finish.body.stage.status).toBe(end);
+    await service.__settleCastAndSetsForTests();
 
     const rebuilt = await request(app).post(`/api/music-video/${project.id}/cast-and-sets`).send({});
     expect(rebuilt.status).toBe(202);
@@ -1263,7 +1386,7 @@ describe('Cast & Sets procedural check-in', () => {
     expect(html).toContain('No raster image: drawn in code');
   });
 
-  // Uniquely catches an approval's background sheet re-save racing an immediate edit's re-assembly for the same artifact version, failing the edited stage.
+  // The old approval save finishes after the edit has entered assembly.
   it('re-assembles an edit made right after approval without colliding with the approved sheet save', async () => {
     const project = await seedProcedural(['image:codex', 'code:render']);
     await service.startCastAndSets(project.id);
@@ -1286,7 +1409,7 @@ describe('Cast & Sets procedural check-in', () => {
     await service.__settleCastAndSetsForTests();
     const stage = (await current(project.id)).castAndSets;
     expect(stage.stopReason || null).toBeNull();
-    expect(stage).toMatchObject({ status: 'review', direction: { world: { camera: 'locked off' } } });
+    expect(stage).toMatchObject({ status: 'review', artifactVersion: 2, direction: { world: { camera: 'locked off' } } });
     expect(spy.mock.calls.map(([, input]) => input.status ?? null)).toEqual(['approved', null]);
     expect((await Promise.allSettled(spy.mock.results.map((r) => r.value))).map((r) => r.status)).toEqual(['fulfilled', 'fulfilled']);
   });
@@ -2250,6 +2373,12 @@ it('holds approval for a changed greybox camera and releases it when the change 
   await projects.mutateProjectRecord(project.id, (p) => ({ project: { ...p, castAndSets: {
     status: 'review', revision: 1, direction: DIRECTION, plan: {}, images: {},
   } } }));
+  const mixed = await request(app).patch(`/api/music-video/${project.id}/cast-and-sets/direction`).send({
+    sets: [{ id: 'lab', setReference: { subjectId: 'place-example', greyboxShotId: 'wide' } }],
+    props: [{ name: 'Notebook', description: 'A pocket notebook' }],
+  });
+  expect(mixed.status).toBe(400);
+  expect(mixed.body.context.details).toContainEqual({ path: '', message: 'Save greybox selections separately from direction edits.' });
   const beforeJobs = jobs.length;
   const result = await service.editCastAndSetsDirection(project.id, { sets: [{ id: 'lab', setReference: { subjectId: 'place-example', greyboxShotId: 'wide' } }] });
   await service.__settleCastAndSetsForTests();
@@ -2794,6 +2923,30 @@ describe('editing a saved Cast & Sets image', () => {
       castAndSets: { ...current.castAndSets, revision: current.castAndSets.revision + 1 } } }));
     expect((await request(app).post(editUrl(project.id, 'accept-image-edit')).send({ key: 'character', requestId: newer.params.musicVideo.castAndSets.editRequestId })).status).toBe(409);
     expect((await current(project.id)).castAndSets.images.character.imageId).toBe(input.imageId);
+  });
+
+  it('discards a legacy image edit and publishes the updated project, while refusing catalog check-ins', async () => {
+    const project = await ready();
+    const requested = await requestEdit(project);
+    expect(requested.status).toBe(202);
+    const job = jobs.at(-1);
+    await landEdit(project, job);
+    const requestId = job.params.musicVideo.castAndSets.editRequestId;
+    const events = [];
+    const capture = (event) => { if (event.projectId === project.id) events.push(event); };
+    musicVideoEvents.on('cast-and-sets', capture);
+    onTestFinished(() => musicVideoEvents.off('cast-and-sets', capture));
+
+    const discarded = await request(app).post(editUrl(project.id, 'discard-image-edit')).send({ key: 'character', requestId });
+    expect(discarded.status).toBe(200);
+    expect(discarded.body.project.castAndSets.images.character.edit).toBeNull();
+    expect(events.at(-1).project.castAndSets.images.character.edit).toBeNull();
+
+    await projects.mutateProjectRecord(project.id, (current) => ({ project: { ...current,
+      castAndSets: { ...current.castAndSets, source: 'catalog', status: 'review' } } }));
+    const refused = await request(app).post(editUrl(project.id, 'discard-image-edit')).send({ key: 'character', requestId });
+    expect(refused.status).toBe(409);
+    expect(refused.body.code || refused.body.error?.code).toBe('CAST_SETS_CATALOG_ONLY');
   });
 
   it('charges an active run before queueing and settles a discarded edit without stranding its budget step', async () => {

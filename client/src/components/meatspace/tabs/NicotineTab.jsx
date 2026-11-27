@@ -294,8 +294,10 @@ export default function NicotineTab() {
       {/* Quick Add + Custom Entry — single card */}
       <div className="bg-port-card border border-port-border rounded-xl p-4">
         <div className="flex items-center justify-between mb-3">
-          <h3 className="text-sm font-medium text-gray-400 uppercase tracking-wider">Log Nicotine</h3>
+          <h2 className="text-sm font-medium text-gray-400 uppercase tracking-wider">Log Nicotine</h2>
           {productButtons && <button
+            type="button"
+            aria-expanded={managingButtons}
             onClick={() => setManagingButtons(!managingButtons)}
             className={`flex items-center gap-1 px-2 py-1 text-xs rounded-lg transition-colors ${
               managingButtons ? 'bg-port-accent/20 text-port-accent' : 'text-gray-500 hover:text-gray-300'
@@ -343,7 +345,7 @@ export default function NicotineTab() {
                   <>
                     <span className="flex-1 text-xs text-gray-300">{btn.name}</span>
                     <span className="text-xs text-gray-500">{btn.mgPerUnit}mg</span>
-                    <button aria-label="Edit" onClick={() => startEditButton(idx)} className="min-h-[44px] min-w-[44px] inline-flex items-center justify-center p-1.5 text-gray-600 hover:text-port-accent"><Pencil size={12} /></button>
+                    <button aria-label={`Edit ${btn.name}`} onClick={() => startEditButton(idx)} className="min-h-[44px] min-w-[44px] inline-flex items-center justify-center p-1.5 text-gray-600 hover:text-port-accent"><Pencil size={12} /></button>
                     {isConfirming(`btn:${idx}`) ? (
                       <ConfirmButtonPair
                         prompt="Remove?"
@@ -354,7 +356,7 @@ export default function NicotineTab() {
                         onCancel={cancelDelete}
                       />
                     ) : (
-                      <button aria-label="Delete" onClick={() => requestDelete(`btn:${idx}`)} className="min-h-[44px] min-w-[44px] inline-flex items-center justify-center p-1.5 text-gray-600 hover:text-port-error"><Trash2 size={12} /></button>
+                      <button aria-label={`Delete ${btn.name}`} onClick={() => requestDelete(`btn:${idx}`)} className="min-h-[44px] min-w-[44px] inline-flex items-center justify-center p-1.5 text-gray-600 hover:text-port-error"><Trash2 size={12} /></button>
                     )}
                   </>
                 )}
@@ -471,19 +473,19 @@ export default function NicotineTab() {
       {/* Entry History — table format */}
       {allEntries?.length > 0 && (
         <div className="bg-port-card border border-port-border rounded-xl p-4">
-          <h3 className="text-sm font-medium text-gray-400 uppercase tracking-wider mb-3">
+          <h2 className="text-sm font-medium text-gray-400 uppercase tracking-wider mb-3">
             History ({pluralize(allEntries.length, 'day')})
-          </h3>
+          </h2>
           <div className="max-h-dvh-cap [--dvh-cap:70dvh] overflow-x-auto overflow-y-auto rounded-lg border border-port-border">
             <table className="w-full text-sm min-w-[500px]">
               <thead className="sticky top-0 bg-port-card z-10">
                 <tr className="border-b border-port-border text-left text-xs text-gray-500 uppercase">
-                  <th className="px-3 py-2">Date</th>
-                  <th className="px-3 py-2">Product</th>
-                  <th className="px-3 py-2 text-right">mg/unit</th>
-                  <th className="px-3 py-2 text-right">Count</th>
-                  <th className="px-3 py-2 text-right">Total</th>
-                  <th className="px-3 py-2 text-right w-20">Actions</th>
+                  <th scope="col" className="px-3 py-2">Date</th>
+                  <th scope="col" className="px-3 py-2">Product</th>
+                  <th scope="col" className="px-3 py-2 text-right">mg/unit</th>
+                  <th scope="col" className="px-3 py-2 text-right">Count</th>
+                  <th scope="col" className="px-3 py-2 text-right">Total</th>
+                  <th scope="col" className="px-3 py-2 text-right w-20">Actions</th>
                 </tr>
               </thead>
               <tbody>
@@ -518,7 +520,7 @@ export default function NicotineTab() {
                               </span>
                             </div>
                           ) : (
-                            <span className="text-gray-700">&nbsp;</span>
+                            <span className="sr-only">{entry.date}</span>
                           )}
                         </td>
                         {isEditing ? (
@@ -570,7 +572,7 @@ export default function NicotineTab() {
                             <td className="px-3 py-1.5 text-right text-white font-medium">{itemTotal}mg</td>
                             <td className="px-3 py-1.5 text-right">
                               <div className="flex items-center justify-end gap-2">
-                                <button aria-label="Edit" onClick={() => startEdit(entry.date, idx, item)} className="min-h-[44px] min-w-[44px] inline-flex items-center justify-center p-1 text-gray-600 hover:text-port-accent"><Pencil size={12} /></button>
+                                <button aria-label={`Edit ${item.product || 'product'} entry for ${entry.date}`} onClick={() => startEdit(entry.date, idx, item)} className="min-h-[44px] min-w-[44px] inline-flex items-center justify-center p-1 text-gray-600 hover:text-port-accent"><Pencil size={12} /></button>
                                 {isConfirming(key) ? (
                                   <ConfirmButtonPair
                                     prompt="Remove?"
@@ -581,7 +583,7 @@ export default function NicotineTab() {
                                     onCancel={cancelDelete}
                                   />
                                 ) : (
-                                  <button aria-label="Delete" onClick={() => requestDelete(key)} className="min-h-[44px] min-w-[44px] inline-flex items-center justify-center p-1 text-gray-600 hover:text-port-error"><Trash2 size={12} /></button>
+                                  <button aria-label={`Delete ${item.product || 'product'} entry for ${entry.date}`} onClick={() => requestDelete(key)} className="min-h-[44px] min-w-[44px] inline-flex items-center justify-center p-1 text-gray-600 hover:text-port-error"><Trash2 size={12} /></button>
                                 )}
                               </div>
                             </td>

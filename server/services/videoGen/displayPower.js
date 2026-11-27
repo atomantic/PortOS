@@ -1,31 +1,31 @@
 /**
- * macOS display power control for local MLX video renders (GPU-watchdog
- * mitigation, mlx #3267 — same underlying mechanism documented in
- * ../loraTraining/displayPower.js).
- *
- * Unlike LoRA training (a multi-hour unattended run, default ON), a video
- * render is a short, user-attended action — sleeping the screen without
- * being asked reads as a crash. So this gate is OPT-IN: only
- * settings.videoGen.displaySleep === true enables it, and it can also be
- * turned on/off per render (see the `displaySleep` request field on
- * POST /api/video-gen).
+ * Opt-in macOS display power control for local MLX video renders (mlx #3267).
+ * Sleeping the display reduces WindowServer contention for Metal command
+ * buffers. An attended render only sleeps the display when explicitly enabled.
  */
-import {
-  isDisplaySleepEnabled as sharedDisplaySleepEnabled,
-  sleepDisplayNow,
-  wakeDisplayNow,
-} from '../displayPower.js';
+import { platform } from 'os';
+import { spawn } from '../../lib/childProcess.js';
 
 export function isDisplaySleepEnabled(settings) {
-  return sharedDisplaySleepEnabled(settings, { defaultEnabled: false });
+  return platform() === 'darwin' && settings?.displaySleep === true;
+}
+
+function runPowerCmd(cmd, args) {
+  const proc = spawn(cmd, args, { stdio: 'ignore' });
+  proc.on('error', () => {});
+  proc.unref?.();
 }
 
 export function sleepDisplayForVideo(settings, workload = 'Video generation') {
   if (!isDisplaySleepEnabled(settings)) return false;
-  return sleepDisplayNow(workload);
+  runPowerCmd('pmset', ['displaysleepnow']);
+  console.log(`🌙 ${workload}: slept the display to avoid the GPU-watchdog panic (mlx #3267)`);
+  return true;
 }
 
 export function wakeDisplayForVideo(settings, workload = 'Video generation') {
   if (!isDisplaySleepEnabled(settings)) return false;
-  return wakeDisplayNow(workload);
+  runPowerCmd('caffeinate', ['-u', '-t', '5']);
+  console.log(`☀️ ${workload} finished: woke the display`);
+  return true;
 }

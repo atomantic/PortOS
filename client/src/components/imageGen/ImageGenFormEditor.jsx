@@ -166,7 +166,7 @@ export default function ImageGenFormEditor({ form, backend, generation }) {
           {isFalMode && backend.falCatalog && <FalCatalogStatus catalog={backend.falCatalog} />}
           {isAgyMode && backend.agy.error && (
             <p role="status" className="text-xs text-port-warning">
-              {backend.agy.error} — renders will use the model saved in Settings → Image Gen.
+              {backend.agy.error} — renders will use the model saved in Media Gen Settings.
             </p>
           )}
 
@@ -244,9 +244,9 @@ function ImageGenActionBar({ form, generation }) {
       )}
       {derived.isAsyncMode && (
         <label className="flex items-center gap-1.5 text-xs text-gray-400" title="Batch size: number of renders to queue per submit">
-          <span className="select-none">×</span>
+          <span className="select-none" aria-hidden="true">×</span>
           <DraftNumber integer min={1} max={20} value={fields.batchCount} onCommit={fields.setBatchCount}>
-            {(field) => <input type="number" className="w-14 bg-port-bg border border-port-border rounded-lg px-2 py-2 text-sm text-white focus:outline-none focus:border-port-accent" {...field} />}
+            {(field) => <input type="number" aria-label="Batch size" className="w-14 bg-port-bg border border-port-border rounded-lg px-2 py-2 text-sm text-white focus:outline-none focus:border-port-accent" {...field} />}
           </DraftNumber>
         </label>
       )}
@@ -354,7 +354,7 @@ function ImageGenPostProcessOptions({ fields, settings, mode }) {
     <div className="flex flex-col gap-1 text-xs text-gray-400">
       <label
         className="flex items-center gap-2 cursor-pointer select-none"
-        title="Lossless strip of the gpt-image C2PA provenance chunk. Pixels untouched. Overrides the saved Settings → Image Gen default for this render only."
+        title="Lossless strip of the gpt-image C2PA provenance chunk. Pixels untouched. Overrides the saved Media Gen Settings default for this render only."
       >
         <input
           type="checkbox"

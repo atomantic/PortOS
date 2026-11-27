@@ -4,6 +4,7 @@ import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { cp, mkdir, readFile, writeFile, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { federatedMediaAssetId } from '../../lib/federatedMediaWire.js';
 import { cleanupTempDataRoots, lazyTempDataRoot, makePathsProxy } from '../../lib/mockPathsDataRoot.js';
 
 let tempVideoDir;
@@ -29,6 +30,7 @@ vi.mock('../../lib/fileUtils.js', async () => {
   return makePathsProxy(actual, {
     dataRoot: () => lazyTempDataRoot('remote-video-data-'),
     extraOverrides: () => ({ videos: videoDirs.current, videoThumbnails: videoDirs.current }),
+    overrides: { resolveImageInputPath: actual.makePathResolver(() => videoDirs.current, { extensions: ['png'] }) },
   });
 });
 
@@ -243,6 +245,32 @@ describe('federated video consumer adapter', () => {
       numFrames: 121,
       fps: 24,
     });
+  });
+
+  it('stages a source frame and submits its asset id with the video request', async () => {
+    const frame = Buffer.from('89504e470d0a1a0a00000000', 'hex');
+    const digest = sha256(frame);
+    const assetId = federatedMediaAssetId('consumer-instance', digest);
+    const input = params();
+    await writeFile(join(tempVideoDir, 'frame.png'), frame);
+    input.remoteMedia.inputAssets = [{ role: 'sourceImage', path: 'frame.png' }];
+    transport.fetch.mockResolvedValueOnce(jsonResponse({}, 404))
+      .mockResolvedValueOnce(jsonResponse({
+        wireVersion: 1, assetId, sha256: digest, sizeBytes: frame.length, mimeType: 'image/png',
+        expiresAt: '2026-08-22T18:00:00.000Z',
+      }, 201))
+      .mockResolvedValueOnce(jsonResponse(providerJob('canceled')));
+    const terminal = captureTerminal(LOCAL_JOB_ID);
+    await generateVideo(input);
+    expect((await terminal).event.error).toMatch(/provider canceled/i);
+    const [lookup, upload, submit] = transport.fetch.mock.calls;
+    expect(lookup[0]).toMatch(new RegExp(`/assets/${assetId}$`));
+    expect(upload[0]).toMatch(/\/assets$/);
+    expect(upload[1]).toMatchObject({
+      method: 'POST', headers: { 'X-Content-SHA256': digest, 'Content-Type': 'image/png' }, body: frame,
+    });
+    expect(submit[0]).toMatch(/\/jobs$/);
+    expect(JSON.parse(submit[1].body)).toEqual({ ...input.remoteMedia.request, sourceImage: { assetId } });
   });
 
   it('still registers the render when ffmpeg is unavailable for a thumbnail', async () => {

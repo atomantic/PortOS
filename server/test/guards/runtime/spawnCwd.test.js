@@ -48,11 +48,8 @@ describe('every cwd-passing spawn pins PWD', () => {
   const EXEMPT = new Map([
     ['lib/windowsGitProcess.js', 'Git supervisor and its system compiler resolve paths from the actual cwd'],
     ['lib/planIds.js', 'git only'],
-    ['services/repoCloner.js', 'git clone/fetch only'],
     ['services/gitlab.js', 'glab only'],
-    ['services/pm2Standardizer.js', 'git + pm2 only'],
     ['services/pm2.js', 'pm2 only'],
-    ['services/appDeployer.js', 'deploy shell commands, not an AI CLI'],
     ['services/xcodeScripts.js', 'xcodebuild/ls, not an AI CLI'],
     ['services/imageTo3d/laneRunner.js', 'git/bash/python install + render steps inside a target install root, not an AI CLI'],
     ['services/dbAdmin.js', 'psql/pg_dump, not an AI CLI'],
@@ -65,13 +62,17 @@ describe('every cwd-passing spawn pins PWD', () => {
   // pins, so they need no call of their own.
   const DELEGATES = new Map([
     ['services/appBuilder.js', 'bufferedSpawn'],
+    ['services/appDeployer.js', 'bufferedSpawn'],
+    ['services/databaseMaintenanceCutover.js', 'bufferedSpawn'],
+    ['services/film/describeRun.js', 'bufferedSpawn'],
+    ['services/repoCloner.js', 'bufferedSpawn'],
   ]);
 
   // Files that pin by inlining the assignment instead of calling the shared
   // helper, with the reason they cannot call it.
   const INLINE_PIN = new Map([
     ['lib/aiToolkit/internal/codexModelListProbe.js', 'vendored toolkit metadata probe — must not import host modules'],
-    ['lib/aiToolkit/runner.js', 'vendored toolkit — must not import out to other PortOS modules'],
+    ['lib/aiToolkit/internal/cliExecutor.js', 'vendored toolkit — must not import out to other PortOS modules'],
   ]);
 
   const SPAWN_CALL_RE = /\b(?:spawn|ptySpawn|spawnImpl|pty\.spawn|bufferedSpawn|execFile|execAsync)\s*\(/g;
@@ -187,7 +188,8 @@ describe('every cwd-passing spawn pins PWD', () => {
     // If this ever collapses toward zero the scan broke (a rename, a new spawn
     // wrapper) and every assertion below would pass for the wrong reason.
     expect(found.length, 'expected the scan to still find the known spawn sites').toBeGreaterThan(10);
-    expect(found).toContain('cos-runner/index.js');
+    expect(found).toContain('cos-runner/spawnCliRoute.js');
+    expect(found).toContain('cos-runner/spawnTuiRoute.js');
     expect(found).toContain('services/shell.js');
     // The forwarding-wrapper shape specifically — this one is invisible to a
     // scan that only reads inline `cwd:` literals, and missing it is what let an

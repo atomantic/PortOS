@@ -91,6 +91,7 @@ export default function Ambient() {
   }, [day, refreshDeathClock, refreshSummary, refreshCalendar]);
 
   useEffect(() => {
+    // biome-ignore lint/plugin/lint-no-view-interval: Wall clock; no I/O.
     const interval = setInterval(() => setTime(new Date()), 1000);
     return () => clearInterval(interval);
   }, []);

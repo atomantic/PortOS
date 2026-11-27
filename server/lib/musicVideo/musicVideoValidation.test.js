@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest';
 import { musicVideoConceptSchema, musicVideoSceneCreateSchema, musicVideoSceneUpdateSchema, musicVideoVisualSpecSchema } from './musicVideoValidation.js';
-import { musicVideoPublishPrepareSchema } from './musicVideoRouteValidation.js';
+import { musicVideoPublishPrepareSchema } from './routeValidation/publish.js';
 import { MUSIC_VIDEO_MAX_SUBJECTS } from './musicVideoLimits.js';
 
 describe('musicVideoPublishPrepareSchema (DistroKid release answers)', () => {

@@ -1,3 +1,4 @@
+import { emitToOperatorsOn } from '../services/socketIo.js';
 import { Router } from 'express';
 import * as genomeService from '../services/genome.js';
 import * as clinvarService from '../services/clinvar.js';
@@ -63,6 +64,12 @@ router.post('/search', asyncHandler(async (req, res) => {
 router.post('/markers', asyncHandler(async (req, res) => {
   const data = validateRequest(genomeSaveMarkerSchema, req.body);
   const marker = await genomeService.saveMarker(data);
+  if (marker.error) {
+    throw new ServerError(marker.error, {
+      status: 400,
+      code: 'GENOME_MARKER_SAVE_ERROR'
+    });
+  }
   res.status(201).json(marker);
 }));
 
@@ -106,7 +113,7 @@ router.post('/clinvar/sync', asyncHandler(async (req, res) => {
   const { requestId } = validateRequest(genomeClinvarSyncSchema, req.body ?? {});
   const io = req.app.get('io');
   const onProgress = (message) => {
-    if (io) io.emit('genome:clinvar-progress', { message, ...(requestId ? { requestId } : {}) });
+    emitToOperatorsOn(io, 'genome:clinvar-progress', { message, ...(requestId ? { requestId } : {}) });
   };
 
   const result = await clinvarService.syncClinvar(onProgress);

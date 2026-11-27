@@ -1,5 +1,6 @@
 /**
  *   GET    /api/media/annotations
+ *     Optional kind and up to 100 keys (repeat keys for each value). Both filters apply when supplied.
  *     → { annotations: { [key]: { own: { authorName, starred, note, updatedAt } | null,
  *                                  others: [{ instanceId, authorName, starred, note, updatedAt }] } } }
  *   PATCH  /api/media/annotations/:key
@@ -11,10 +12,12 @@
  * image-ref is a /data/image-refs file (see mediaAnnotationKey on the client).
  */
 
+import { emitToOperatorsOn } from '../services/socketIo.js';
 import { Router } from 'express';
 import { z } from 'zod';
 import { asyncHandler, createServiceErrorMapper } from '../lib/errorHandler.js';
 import { validateRequest } from '../lib/validateRequest.js';
+import { mediaAnnotationsQuerySchema } from '../lib/mediaValidation.js';
 import * as svc from '../services/mediaAnnotations.js';
 
 const router = Router();
@@ -31,8 +34,9 @@ const patchSchema = z.object({
   note: z.string().max(svc.NOTE_MAX_LENGTH).optional(),
 }).refine((p) => Object.keys(p).length > 0, { message: 'patch must include starred, rating and/or note' });
 
-router.get('/', asyncHandler(async (_req, res) => {
-  res.json({ annotations: await svc.listAnnotations() });
+router.get('/', asyncHandler(async (req, res) => {
+  const query = validateRequest(mediaAnnotationsQuerySchema, req.query);
+  res.json({ annotations: await svc.listAnnotations(query) });
 }));
 
 router.patch('/:key', asyncHandler(async (req, res) => {
@@ -44,7 +48,7 @@ router.patch('/:key', asyncHandler(async (req, res) => {
   // browser tabs) reflects the change without a manual refresh. Payload mirrors
   // the GET shape: `entry` is `{ own, others }` (with own=null when the local
   // author cleared their entry but peer notes remain).
-  req.app.get('io')?.emit('media:annotation:updated', { key: req.params.key, entry });
+  emitToOperatorsOn(req.app.get('io'), 'media:annotation:updated', { key: req.params.key, entry });
   res.json({ key: req.params.key, entry });
 }));
 

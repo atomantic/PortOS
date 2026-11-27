@@ -54,6 +54,12 @@ export async function supportsManagedSplash({ platform = process.platform, arch 
   return !/^Apple M[12]\b/.test(cpuModel ?? cpus()[0]?.model ?? '');
 }
 
+export async function removeSplashRelease(version) {
+  if (!VERSION.test(version)) throw new TypeError('Invalid Splash release version');
+  await rm(releaseDirectory(version), { recursive: true, force: true });
+  await rm(activeFile(), { force: true });
+}
+
 export async function readInstalledSplashVersion() {
   const version = (await readFile(activeFile(), 'utf8').catch(() => '')).trim();
   if (!VERSION.test(version)) return null;
@@ -90,14 +96,15 @@ export function splashLaunchArgs(version, model, context, port) {
   ];
 }
 
-async function runInstallStep(command, args, { cwd, timeoutMs, onLine, label, network = false }) {
+async function runInstallStep(command, args, { cwd, timeoutMs, onLine, label, signal, network = false }) {
   // Only model preparation needs network settings. Keeping them in env, not
   // argv, also keeps any proxy credentials out of process arguments.
   const env = withSpawnCwdEnv({ ...cleanEnvironment(), ...(network ? artifactDownloadEnv() : {}) }, cwd);
   const result = await runStreamingCommand(command, args, onLine, {
-    cwd, timeoutMs, processGroup: true,
+    cwd, timeoutMs, processGroup: true, signal,
     spawnImpl: (file, argv, options) => spawn(file, argv, { ...options, env }),
   });
+  signal?.throwIfAborted();
   if (!result.success) throw new ServerError(label, { status: 502, code: 'SPLASH_INSTALL_FAILED' });
 }
 
@@ -118,7 +125,8 @@ function parseProgress(line) {
   try { return JSON.parse(line); } catch { return null; }
 }
 
-export async function installPinnedSplash({ previousVersion, emit }) {
+export async function installPinnedSplash({ previousVersion, emit, signal }) {
+  signal?.throwIfAborted();
   const root = splashRoot();
   const home = join(root, 'home');
   await mkdir(home, { recursive: true, mode: 0o700 });
@@ -128,15 +136,15 @@ export async function installPinnedSplash({ previousVersion, emit }) {
   try {
     const directory = previousVersion === SPLASH_VERSION ? releaseDirectory(SPLASH_VERSION) : join(staging, FILE);
     if (previousVersion !== SPLASH_VERSION) {
-      await stageRelease(staging, emit);
+      await stageRelease(staging, emit, signal);
     }
     emit('Checking Splash hardware compatibility.');
     await runInstallStep(join(directory, 'engine', 'splash'), ['device-check'], {
-      cwd: directory, timeoutMs: 20_000, label: SPLASH_UNSUPPORTED_REASON,
+      cwd: directory, timeoutMs: 20_000, label: SPLASH_UNSUPPORTED_REASON, signal,
     });
     emit('Preparing Inkling 2 Mini and its DFlash drafter. This can download about 17 GB.');
     await runInstallStep(python(directory), ['-E', 'install/models.py', ...MODEL_ARGS, 'prepare', '--json-progress'], {
-      cwd: directory, timeoutMs: 4 * 60 * 60_000, onLine: downloadProgress(emit), network: true,
+      cwd: directory, timeoutMs: 4 * 60 * 60_000, onLine: downloadProgress(emit), network: true, signal,
       label: 'Splash could not prepare Inkling 2 Mini. Check free disk space and access to Hugging Face, then retry Install or Update.',
     });
     if (previousVersion !== SPLASH_VERSION) await publishRelease(directory);
@@ -149,7 +157,7 @@ export async function installPinnedSplash({ previousVersion, emit }) {
   }
 }
 
-async function stageRelease(staging, emit) {
+async function stageRelease(staging, emit, signal) {
   // A persistent partial lets a retry resume the 103 MB asset. Only this
   // version's reviewed official SHA may pass the extraction boundary.
   const archive = join(splashRoot(), `${FILE}.tar.gz`);
@@ -157,7 +165,7 @@ async function stageRelease(staging, emit) {
   emit(`Downloading and verifying Splash ${SPLASH_VERSION}.`);
   await streamResumableDownload({
     url: ASSET_URL, destPath: archive, expectedSha256: ASSET_SHA256,
-    signal: AbortSignal.any([AbortSignal.timeout(20 * 60_000), idle.signal]),
+    signal: AbortSignal.any([AbortSignal.timeout(20 * 60_000), idle.signal, ...(signal ? [signal] : [])]),
     idleStallTimeoutMs: 60_000,
     onIdleStall: () => idle.abort(new ServerError(
       'The Splash release download stalled for one minute. Retry Install or Update to resume.',
@@ -165,7 +173,7 @@ async function stageRelease(staging, emit) {
     )),
   });
   await runInstallStep('/usr/bin/tar', ['-xzf', archive, '-C', staging], {
-    cwd: staging, timeoutMs: 120_000, label: 'Splash could not extract the verified release.',
+    cwd: staging, timeoutMs: 120_000, label: 'Splash could not extract the verified release.', signal,
   });
   await rm(archive, { force: true });
 }

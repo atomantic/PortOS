@@ -117,6 +117,48 @@ describe('assemblePersistentMindContext', () => {
     expect(context.omittedRange).toMatchObject({ fromSequence: 1, toSequence: 3 });
   });
 
+  it.each([6_000, 12_000])('reserves a 4k journal and the latest input in a %i-character context', (maxChars) => {
+    const latest = `Newest request: ${'question '.repeat(100)}END`;
+    const journal = `${'j'.repeat(3_989)}JOURNAL END`;
+    const context = assemblePersistentMindContext({
+      identity: 'Stable identity',
+      instructions: 'Stable instructions',
+      memories: [{ id: 'large-memory', content: "Memory start\n```\n" + 'm'.repeat(10_000) }],
+      journalDigest: { text: journal, activeCount: 1 },
+      events: [...history, event({ eventId: 'latest', sequence: 6, kind: 'mind.message.accepted', text: latest })],
+      maxChars,
+    });
+
+    expect(context.chars).toBeLessThanOrEqual(maxChars);
+    expect(context.text).toContain(`# Decision journal\n${journal}\n\n# Older context`);
+    expect(context.text.split('# Recent trajectory\n')[1]).toContain(JSON.stringify(latest));
+    expect(context.text).toMatch(/```text\n[^`]*Memory start[\s\S]*?\n```\n\n# Decision journal/);
+    expect([...context.text.matchAll(/```/g)]).toHaveLength(2);
+  });
+
+  it('reserves the latest human input ahead of summaries and more recent replies', () => {
+    const latest = `Newest annotation: ${'question '.repeat(390)}END`;
+    const context = assemblePersistentMindContext({
+      events: [
+        ...history,
+        event({ eventId: 'annotation', sequence: 6, kind: 'mind.annotation.accepted', text: latest }),
+        event({ eventId: 'reply', sequence: 7, kind: 'mind.reply', text: 'r'.repeat(700) }),
+      ],
+      rollups: [buildPersistentMindRollup({
+        id: 'large-rollup',
+        status: 'ready',
+        summary: 's'.repeat(1_000),
+        source: source(history),
+      })],
+      journalDigest: { text: '"Retain this commitment"\n' + '"Large commitment"\n'.repeat(250), activeCount: 251 },
+      maxChars: 6_000,
+    });
+
+    expect(context.chars).toBeLessThanOrEqual(6_000);
+    expect(context.text).toContain('"Retain this commitment"');
+    expect(context.text.split('# Recent trajectory\n')[1]).toContain(JSON.stringify(latest));
+  });
+
   it('keeps a ready rollup after its raw source events have expired', () => {
     const context = assemblePersistentMindContext({ events: [], rollups: [readyRollup] });
     expect(context.summaryState).toBe('ready');

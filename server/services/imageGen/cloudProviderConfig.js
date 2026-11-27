@@ -217,7 +217,7 @@ export function resolveCloudProviderConfig(settings, mode, overrides = {}) {
     providerParams,
     jobParams: { mode, ...providerParams },
     disabledError: enabled ? null : new ServerError(
-      `${spec.label} is disabled — enable it in Settings → Image Gen first`,
+      `${spec.label} is disabled — enable it in Media Gen Settings first`,
       { status: 400, code: spec.errorCode },
     ),
     disabledReason: `${mode}-disabled`,

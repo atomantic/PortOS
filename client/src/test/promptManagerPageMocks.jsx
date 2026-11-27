@@ -56,8 +56,7 @@ vi.mock('../services/apiSkills', () => Object.fromEntries(
 vi.mock('../services/apiProviders', () => ({
   getProviders: vi.fn(() => Promise.resolve({ providers: [], activeProvider: null })),
 }));
-// useInstanceFeatures reads apiSystem.js directly, not the barrel (#16562).
-vi.mock('../services/apiSystem.js', async (importOriginal) => ({
+vi.mock('../services/apiAppShell.js', async (importOriginal) => ({
   ...await importOriginal(),
   getInstanceFeatures: vi.fn().mockResolvedValue({ features: [], groups: [] }),
 }));

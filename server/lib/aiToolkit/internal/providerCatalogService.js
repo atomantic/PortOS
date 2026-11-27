@@ -239,13 +239,14 @@ function ollamaModelSupportsTools(id, capabilities) {
 
 export function createProviderCatalogService({
   loadProviders,
+  loadProvidersForWrite,
   saveProviders,
   withGatewayApiKey,
   cachedModelIds = null,
   sampleFile = null,
   defaultSamplePath,
   cliProbeTimeouts = {},
-  withProviderWrite = work => work(),
+  withProvidersWrite = work => work(),
 }) {
   const lookupTimeoutMs = cliProbeTimeouts.lookup ?? CLI_COMMAND_LOOKUP_TIMEOUT_MS;
   const versionTimeoutMs = cliProbeTimeouts.version ?? CLI_VERSION_PROBE_TIMEOUT_MS;
@@ -431,7 +432,7 @@ export function createProviderCatalogService({
       const sourceId = data.providers[id]?.executionSourceProviderId || id;
       const catalog = await this.fetchProviderModelCatalog(sourceId);
       if (catalog === null) return null;
-      return withProviderWrite(async () => {
+      return withProvidersWrite(async () => {
         const previous = (await this.getProviderById(sourceId))?.modelContextWindows;
         const updated = await this.updateProvider(sourceId, modelCatalogUpdate(catalog, previous));
         return updated && sourceId !== id ? this.getProviderById(id) : updated;
@@ -482,8 +483,8 @@ export function createProviderCatalogService({
       const updated = groups.filter(group => group.status === 'updated');
       if (updated.length === 0) return groups;
 
-      await withProviderWrite(async () => {
-        const fresh = await loadProviders();
+      await withProvidersWrite(async () => {
+        const fresh = await loadProvidersForWrite();
         let changed = false;
         for (const group of updated) {
           const sourceIds = new Set(group.ids.map(id => fresh.providers[id]?.executionSourceProviderId || id));

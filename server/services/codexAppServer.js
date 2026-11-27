@@ -424,7 +424,7 @@ const openConnection = async () => {
 
   connectingTarget = target;
   try {
-    const initialized = await sendRequest(target, CODEX_RPC.initialize, { clientInfo: CLIENT_INFO }, HANDSHAKE_TIMEOUT_MS);
+    const initialized = await sendRequest(target, CODEX_RPC.initialize, { clientInfo: CLIENT_INFO, capabilities: { experimentalApi: true, requestAttestation: false } }, HANDSHAKE_TIMEOUT_MS);
     target.runtimeVersion = parseCodexRuntimeVersion(initialized?.userAgent);
     await sendNotification(target, CODEX_RPC.initialized, {});
     console.log('🔌 Codex app-server connected');
@@ -462,6 +462,12 @@ const connect = async () => {
 /** A request against a fresh-or-existing connection. */
 const call = async (method, params = {}, timeoutMs = REQUEST_TIMEOUT_MS) =>
   sendRequest(await connect(), method, params, timeoutMs);
+
+/** Metadata-only project assignment for a locally started issue-claim thread. */
+export async function groupCodexIssueClaim(options) {
+  const { groupCodexClaimProject } = await import('./agent/codexClaimProject.js');
+  return groupCodexClaimProject({ ...options, request: (method, params) => call(method, params, 4000) });
+}
 
 const loginSnapshot = () => (pendingLogin
   ? { loginId: pendingLogin.loginId, startedAt: pendingLogin.startedAt, expiresAt: pendingLogin.expiresAt }

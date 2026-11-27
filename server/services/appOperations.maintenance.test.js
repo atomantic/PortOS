@@ -3,7 +3,7 @@ import { maintenance } from '../lib/maintenanceAdmission.js';
 import { __resetAppOperations, claimAppOperation, endAppOperation, handOffAppOperation,
   isSoleDeferredUpdateAppOperation, listActiveAppOperations } from './appOperations.js';
 
-const io = { emit: vi.fn() };
+const io = { except: () => ({ emit: vi.fn() }) };
 const app = { id: 'portos-default', name: 'PortOS', repoPath: '/example/portos' };
 afterEach(() => __resetAppOperations());
 

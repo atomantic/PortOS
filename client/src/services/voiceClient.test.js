@@ -26,6 +26,7 @@ const { socket, listeners, audio, FakeAudioContext } = vi.hoisted(() => {
       this.destination = {};
       this.state = 'running';
       this.sampleRate = 48_000;
+      this.currentTime = 2;
       this.audioWorklet = { addModule: vi.fn(() => Promise.resolve()) };
     }
 
@@ -182,6 +183,22 @@ describe('voice playback cancellation', () => {
     vi.unstubAllGlobals();
   });
 
+  it('samples the current played buffer for the avatar and returns silence on interrupt', async () => {
+    const samples = new Float32Array(800);
+    samples.fill(0.15);
+    audio.decodeImpl = () => Promise.resolve({
+      numberOfChannels: 1,
+      duration: 0.5,
+      sampleRate: 1600,
+      getChannelData: () => samples,
+    });
+    expect(voiceClient.getVoiceOutputLevel()).toBe(0);
+    await voiceClient.playWav(new ArrayBuffer(8));
+    expect(voiceClient.getVoiceOutputLevel()).toBeCloseTo(0.6);
+    voiceClient.interrupt();
+    expect(voiceClient.getVoiceOutputLevel()).toBe(0);
+  });
+
   it('stops active and queued audio when a provider timeout is signaled', async () => {
     trigger('voice:transcript');
     emitTtsAudio('first sentence');
@@ -333,6 +350,29 @@ describe('voice playback cancellation', () => {
     audio.sources[0].onended();
     await drain;
     expect(drained).toHaveBeenCalledWith(true);
+  });
+
+  it('lets call animation prepare and cancels it without playing a stale output', async () => {
+    const { promise: ready, resolve: resume } = Promise.withResolvers();
+    const animation = { ready, start: vi.fn(), stop: vi.fn() };
+    const prepare = vi.fn(() => animation);
+    const unbind = voiceClient.bindVoiceOutputVisualizer(prepare);
+    try {
+      trigger('voice:transcript');
+      emitTtsAudio('assistant audio');
+      await vi.waitFor(() => expect(prepare).toHaveBeenCalledTimes(1));
+      expect(audio.sources).toHaveLength(0);
+      voiceClient.interrupt();
+      expect(animation.stop).toHaveBeenCalledOnce();
+      resume();
+      await voiceClient.whenVoiceTurnAudioDrained();
+      expect(animation.start).not.toHaveBeenCalled();
+      expect(audio.sources).toHaveLength(0);
+      await voiceClient.playWav(new ArrayBuffer(4));
+      expect(prepare).toHaveBeenCalledTimes(1);
+    } finally {
+      unbind();
+    }
   });
 
   it('suppresses Web Speech during playback and the 700ms tail, and clears the tail on cancellation', async () => {

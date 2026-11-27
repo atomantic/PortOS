@@ -4,7 +4,9 @@
 
 import { request } from './apiCore.js';
 
-export const WORLD_CATEGORIES = ['landscapes', 'environments', 'structures', 'vehicles'];
+export { listUniverseNames } from './apiNavNames.js';
+
+export { WORLD_CATEGORIES } from '../../../server/lib/universeWorldCategories.js';
 export const WORLD_CATEGORY_KEY_MAX = 64;
 export const COMPOSITE_PROMPT_MAX = 4000;
 // Universe bible field caps — used by the Universe Builder + Pipeline forms
@@ -62,9 +64,6 @@ export const waitForUniverseWrites = async (universeId, { timeoutMs = 15000 } = 
   return true;
 };
 
-// `options` lets a caller that owns its own error toast pass `{ silent: true }`
-// so request() doesn't also toast — see AGENTS.md "Custom catch ⇒ silent: true".
-export const listUniverseNames = (options = {}) => request('/universe-builder/names', options);
 export const listUniverseSummaries = (options = {}) => request('/universe-builder/summaries', options);
 export const getUniverse = (id, options = {}) => request(`/universe-builder/${encodeURIComponent(id)}`, options);
 export const exportUniverseMarkdown = (id, options = {}) => request(

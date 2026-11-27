@@ -3,13 +3,12 @@
  */
 
 import { Router } from 'express';
-import { z } from 'zod';
 import { deleteAgent, getAgent, getAgentPrompt, getAgentRecord, getAgents, sendBtwToAgent } from '../services/cos/cosAgentLifecycle.js';
 import { requireCosOrphanRecoveryHandlers } from '../services/bootHookRegistry.js';
 import { getTaskView } from '../services/cos/cosTaskStore.js';
 import { clearCompletedAgents } from '../services/cos/cosAgentArchive.js';
 import { getCompletedAgentPage } from '../services/cos/cosAgentIndex.js';
-import { getFeedbackStats, getPendingAgentFeedback, getPendingAgentFeedbackCount, getPendingAgentFeedbackPage, submitAgentFeedback } from '../services/cos/cosAgentFeedback.js';
+import { getPendingAgentFeedback, getPendingAgentFeedbackCount, getPendingAgentFeedbackPage, submitAgentFeedback } from '../services/cos/cosAgentFeedback.js';
 import { getHealthStatus, runHealthCheck } from '../services/cos/cosHealthMonitor.js';
 // Lifecycle transitions go through the facade (#3450).
 import * as agentOrchestrator from '../services/agent/agentOrchestrator.js';
@@ -19,14 +18,28 @@ import { isDeliveryCleanupHeld, retryHoldOwnerId } from '../lib/taskRetryHold.js
 import { getDeliveryActivity } from '../services/agent/agentDeliveryActivity.js';
 import { securityScanRequestSchema } from '../lib/securityScanEvidence.js';
 import { validateRequest } from '../lib/validateRequest.js';
-import { resumeCosAgentSchema, relaunchCosAgentSchema, cosAgentFeedbackBodySchema, cosAgentBtwBodySchema, claimOwnershipSchema } from '../lib/cos/cosValidation.js';
+import {
+  resumeCosAgentSchema,
+  relaunchCosAgentSchema,
+  cosAgentFeedbackBodySchema,
+  cosAgentBtwBodySchema,
+  claimOwnershipSchema,
+  cosAgentCleanupRecheckSchema,
+  cosAgentClaimSelectionSchema,
+  cosAgentListQuerySchema,
+  cosAgentPendingFeedbackQuerySchema,
+  cosAgentMergeHandoffSchema,
+  cosAgentPauseBodySchema,
+  cosAgentQuerySchema,
+  cosAgentCompletedQuerySchema,
+} from '../lib/cos/cosValidation.js';
 
 import { releasePublicationRequestSchema, releaseCandidateRequestSchema } from '../lib/releasePublication.js';
 import { updateReleaseSynchronizationOwnership, updateReleaseCandidateOwnership, updateClaimOwnership, checkReconcileOwnership } from '../services/cos/cosClaimOwnership.js';
 const router = Router();
 
 router.post('/agents/:id/recheck-cleanup', asyncHandler(async (req, res) => {
-  const { taskId } = validateRequest(z.object({ taskId: z.string().min(1).max(512) }).strict(), req.body ?? {});
+  const { taskId } = validateRequest(cosAgentCleanupRecheckSchema, req.body ?? {});
   const { recheckAgentCleanup } = await import('../services/agent/agentRepoStateVerification.js');
   const result = await recheckAgentCleanup(req.params.id, taskId);
   if (!result.ok) throw new ServerError(result.reason === 'cleanup-already-running'
@@ -60,14 +73,8 @@ router.post('/agents/:id/release-candidate', asyncHandler(async (req, res) => {
 // A registered run hands its published, reviewed head to the server's
 // pending-merge coordinator instead of waiting for CI itself (#12247). The
 // repository, branch, checkout and policy come from the run's registration.
-const mergeHandoffSchema = z.object({
-  agentId: z.string().min(1).max(200),
-  prUrl: z.string().url().max(2048),
-  headSha: z.string().regex(/^[0-9a-fA-F]{40}$/),
-  worktreePath: z.string().min(1).max(4096).optional(),
-});
 router.post('/merge-handoff', asyncHandler(async (req, res) => {
-  const input = validateRequest(mergeHandoffSchema, req.body ?? {});
+  const input = validateRequest(cosAgentMergeHandoffSchema, req.body ?? {});
   const { handoffPendingMerge } = await import('../services/cos/cosMergeHandoff.js');
   res.json(await handoffPendingMerge(input));
 }));
@@ -80,24 +87,10 @@ router.post('/claim-ownership', asyncHandler(async (req, res) => {
 }));
 
 router.post('/claim-selection', asyncHandler(async (req, res) => {
-  const input = validateRequest(z.object({
-    agentId: z.string().min(1).max(200),
-    issueNumber: z.number().int().positive().max(Number.MAX_SAFE_INTEGER),
-  }).strict(), req.body ?? {});
+  const input = validateRequest(cosAgentClaimSelectionSchema, req.body ?? {});
   const { recordClaimSelection } = await import('../services/cos/cosClaimSelection.js');
   res.json(await recordClaimSelection(input));
 }));
-
-// `reason` is persisted into task metadata + interpolated into logs; guard the
-// shape so a non-string body can't store `[object Object]`.
-const pauseBodySchema = z.object({ reason: z.string().max(500).optional() });
-
-// GET /agents/:id?lines=N — how many TAIL transcript lines to hydrate. The
-// service defaults to `AGENT_OUTPUT_TAIL_LINES` and the ceiling here keeps a
-// hand-written query from re-opening the unbounded read this cap closed (#3498).
-const agentQuerySchema = z.object({
-  lines: z.coerce.number().int().positive().max(10000).optional()
-});
 
 // GET /api/cos/health - Get health status
 router.get('/health', asyncHandler(async (req, res) => {
@@ -147,7 +140,7 @@ function sweepDeadAgentsInBackground() {
 // here — both are loaded on demand via GET /agents/:id. See cosAgentListProjection.js.
 router.get('/agents', asyncHandler(async (req, res) => {
   sweepDeadAgentsInBackground();
-  const { active } = validateRequest(z.object({ active: z.literal('1').optional() }), req.query);
+  const { active } = validateRequest(cosAgentListQuerySchema, req.query);
   const [agents, taskView] = await Promise.all([
     getAgents(),
     active ? getTaskView({ kind: 'queue' }) : null,
@@ -177,13 +170,8 @@ router.get('/agents', asyncHandler(async (req, res) => {
   res.json(toAgentListItems(await getProjectedAgentList([...visible.values()])));
 }));
 
-// Bounded completed history, including state records not yet archived.
-const completedQuerySchema = z.object({
-  limit: z.coerce.number().int().min(1).max(100).default(25),
-  cursor: z.string().max(512).regex(/^\d{4}-\d{2}-\d{2}\|[^|]*\|[^|]+$/).optional(),
-});
 router.get('/agents/completed', asyncHandler(async (req, res) => {
-  const query = validateRequest(completedQuerySchema, req.query);
+  const query = validateRequest(cosAgentCompletedQuerySchema, req.query);
   const page = await getCompletedAgentPage({ ...query, liveAgents: await getAgents() });
   const { getProjectedAgentList } = await import('../services/releaseSynchronizationProjection.js');
   res.json({ ...page, items: toAgentListItems(await getProjectedAgentList(page.items)) });
@@ -198,11 +186,7 @@ router.get('/agents/completed', asyncHandler(async (req, res) => {
 // form is the one that also reconciles the durable references and reports the
 // archives it could not read.
 router.get('/agents/feedback/pending', asyncHandler(async (req, res) => {
-  const { limit, cursor, countOnly } = validateRequest(z.object({
-    countOnly: z.literal('1').optional(),
-    limit: z.coerce.number().int().min(1).max(100).optional(),
-    cursor: z.string().max(512).optional(),
-  }), req.query);
+  const { limit, cursor, countOnly } = validateRequest(cosAgentPendingFeedbackQuerySchema, req.query);
   if (countOnly) return res.json({ count: await getPendingAgentFeedbackCount() });
   if (limit) {
     const page = await getPendingAgentFeedbackPage({ limit, cursor });
@@ -218,7 +202,7 @@ router.get('/agents/feedback/pending', asyncHandler(async (req, res) => {
 
 // GET /api/cos/agents/:id - Get agent by ID (transcript hydrated as a capped tail)
 router.get('/agents/:id', asyncHandler(async (req, res) => {
-  const { lines } = validateRequest(agentQuerySchema, req.query);
+  const { lines } = validateRequest(cosAgentQuerySchema, req.query);
   const agent = await getAgent(req.params.id, lines ? { limit: lines } : {});
   if (!agent) {
     throw new ServerError('Agent not found', { status: 404, code: 'NOT_FOUND' });
@@ -239,7 +223,7 @@ router.get('/agents/:id/prompt', asyncHandler(async (req, res) => {
 // pauseAgent throws a ServerError — 404 when the agent is missing, 500 when the
 // runner/persist step fails — so no result-shape string-matching here.
 router.post('/agents/:id/pause', asyncHandler(async (req, res) => {
-  const { reason } = validateRequest(pauseBodySchema, req.body ?? {});
+  const { reason } = validateRequest(cosAgentPauseBodySchema, req.body ?? {});
   const result = await agentOrchestrator.pauseAgent(req.params.id, reason || null);
   res.json(result);
 }));
@@ -311,12 +295,6 @@ router.post('/agents/:id/btw', asyncHandler(async (req, res) => {
   // result-shape string-matching here.
   const result = await sendBtwToAgent(req.params.id, message);
   res.json(result);
-}));
-
-// GET /api/cos/feedback/stats - Get feedback statistics
-router.get('/feedback/stats', asyncHandler(async (req, res) => {
-  const stats = await getFeedbackStats();
-  res.json(stats);
 }));
 
 export default router;

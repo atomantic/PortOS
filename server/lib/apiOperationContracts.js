@@ -6,22 +6,20 @@
  */
 
 import {
-  sdapiTxt2imgBodySchema,
   voiceSynthesizeBodySchema,
   zodToOpenApiSchema,
 } from './apiContractSchemas.js';
 import { writersRoomWorksQuerySchema, writersRoomWorksResponseSchema } from './pipelineValidation.js';
 import { TTS_ENGINE_IDS } from './voiceEngines.js';
-import { cosToolCallSchema } from './cos/cosToolContracts.js';
 import { agentContextMcpInboundSchema } from './agent/agentContextValidation.js';
 import { settingsSlicePatchSchema } from './settingsValidation.js';
 import { signalBlocklistHandlesSchema } from './signalValidation.js';
 import {
-  gitBranchBodySchema, gitBranchComparisonBodySchema, gitCommitBodySchema, gitCommitsBodySchema,
+  gitBranchBodySchema, gitBranchComparisonBodySchema, gitCommitBodySchema,
   gitDeleteBranchBodySchema, gitDiffBodySchema, gitOptionalBranchBodySchema, gitPathBodySchema,
   gitCleanupMergedBodySchema, gitRemoteBranchesBodySchema, gitStageBodySchema
 } from './gitValidation.js';
-import { logsQuerySchema, pm2ProcessNameSchema } from './sharedSchemas.js';
+import { cancelOperationSchema, logsQuerySchema, pm2ProcessNameSchema } from './sharedSchemas.js';
 
 const jsonBody = (schema, options) => ({
   required: true,
@@ -39,7 +37,53 @@ const gitWriteOperation = (summary, schema) => ({
   },
 });
 
+const operationStatus = (summary, description) => ({
+  get: {
+    summary,
+    responses: {
+      200: { description },
+      400: { description: 'Invalid query or record ID', 'x-portos-error-codes': ['VALIDATION_ERROR'] },
+    },
+  },
+});
+
+const cancelOperation = (summary, description, conflict) => ({
+  post: {
+    summary,
+    description,
+    requestBody: { ...jsonBody(cancelOperationSchema), required: false },
+    responses: {
+      202: { description: 'Cancellation requested for the matching run' },
+      400: { description: 'Invalid body, query or record ID', 'x-portos-error-codes': ['VALIDATION_ERROR'] },
+      403: { description: 'Operator authority required', 'x-portos-error-codes': ['HOST_CONTROL_FORBIDDEN'] },
+      404: { description: 'No matching active run', 'x-portos-error-codes': ['NOT_FOUND'] },
+      ...(conflict ? { 409: conflict } : {}),
+    },
+  },
+});
+
 export const API_OPERATION_CONTRACTS = Object.freeze({
+  '/api/media/collections/:id/primary/cancel': cancelOperation(
+    'Cancel media collection consolidation',
+    'The current file finishes verification and release before the batch stops. Pass the run ID from collection primary status to target a specific run.',
+  ),
+  '/api/decks/:id/generate-prompts/status': operationStatus(
+    'Read active deck prompt generation status',
+    'An active run with its ID and status, or a null run when idle.',
+  ),
+  '/api/decks/:id/generate-prompts/cancel': cancelOperation(
+    'Cancel deck prompt generation',
+    'Prompts already written remain on the deck. Pass the run ID from status or progress to target a specific run.',
+  ),
+  '/api/music-video/:id/research': operationStatus(
+    'List active Music Video photo research runs',
+    'Active runs with their IDs, scene or cameo targets, and status.',
+  ),
+  '/api/music-video/:id/research/cancel': cancelOperation(
+    'Cancel Music Video photo research',
+    'Pass a run ID when multiple project runs are active. Files already imported remain in the gallery.',
+    { description: 'Choose a run or allow the current save to finish', 'x-portos-error-codes': ['RESEARCH_RUN_REQUIRED', 'ALREADY_TERMINAL'] },
+  ),
   '/api/settings/slice': {
     patch: {
       summary: 'Atomically merge a partial settings slice',
@@ -100,7 +144,6 @@ export const API_OPERATION_CONTRACTS = Object.freeze({
 
   '/api/git/status': gitWriteOperation('Read git status for a path', gitPathBodySchema),
   '/api/git/diff': gitWriteOperation('Read the working-tree or staged diff', gitDiffBodySchema),
-  '/api/git/commits': gitWriteOperation('List recent commits', gitCommitsBodySchema),
   '/api/git/stage': gitWriteOperation('Stage files', gitStageBodySchema),
   '/api/git/unstage': gitWriteOperation('Unstage files', gitStageBodySchema),
   '/api/git/commit': gitWriteOperation('Create a commit', gitCommitBodySchema),
@@ -233,81 +276,6 @@ export const API_OPERATION_CONTRACTS = Object.freeze({
       'x-portos-tool': { name: 'voice.list-engines', version: 1, policy: { privacy: 'internal', sideEffect: 'read', async: false } },
     },
   },
-  '/sdapi/v1/txt2img': {
-    post: {
-      summary: 'Generate an image',
-      description: 'AUTOMATIC1111-compatible text-to-image generation through the active PortOS image provider.',
-      requestBody: jsonBody(sdapiTxt2imgBodySchema),
-      responses: {
-        200: { description: 'Generated images in AUTOMATIC1111 response format' },
-        400: { description: 'Invalid generation payload', 'x-portos-error-codes': ['VALIDATION_ERROR'] },
-        403: { description: 'A1111 API exposure is disabled' },
-        500: { description: 'Generation failed or its output could not be read', 'x-portos-error-codes': ['GEN_FAILED', 'GEN_OUTPUT_MISSING'] },
-        504: { description: 'Generation timed out', 'x-portos-error-codes': ['GEN_TIMEOUT'] },
-      },
-      'x-portos-tool': {
-        name: 'image.generate', version: 1,
-        policy: { privacy: 'personal', sideEffect: 'local-compute', async: true },
-      },
-    },
-  },
-  '/sdapi/v1/sd-models': {
-    get: {
-      summary: 'List image models',
-      responses: {
-        200: { description: 'Model catalog', content: { 'application/json': { schema: { type: 'array', items: { type: 'object' } } } } },
-        403: { description: 'A1111 API exposure is disabled' },
-      },
-      'x-portos-tool': { name: 'image.list-models', version: 1, policy: { privacy: 'internal', sideEffect: 'read', async: false } },
-    },
-  },
-  '/sdapi/v1/samplers': {
-    get: {
-      summary: 'List samplers',
-      responses: {
-        200: { description: 'Sampler list', content: { 'application/json': { schema: { type: 'array', items: { type: 'object' } } } } },
-        403: { description: 'A1111 API exposure is disabled' },
-      },
-      'x-portos-tool': { name: 'image.list-samplers', version: 1, policy: { privacy: 'internal', sideEffect: 'read', async: false } },
-    },
-  },
-  '/sdapi/v1/options': {
-    get: {
-      summary: 'Read active image options',
-      responses: {
-        200: { description: 'Active model and options', content: { 'application/json': { schema: { type: 'object' } } } },
-        403: { description: 'A1111 API exposure is disabled' },
-      },
-      'x-portos-tool': { name: 'image.get-options', version: 1, policy: { privacy: 'internal', sideEffect: 'read', async: false } },
-    },
-    post: {
-      summary: 'Acknowledge image options',
-      description: 'Compatibility endpoint. PortOS does not switch its underlying model from this request.',
-      responses: {
-        200: { description: 'Acknowledgement' },
-        403: { description: 'A1111 API exposure is disabled' },
-      },
-    },
-  },
-  '/sdapi/v1/progress': {
-    get: {
-      summary: 'Read generation progress',
-      responses: {
-        200: { description: 'Current generation progress or idle state', content: { 'application/json': { schema: { type: 'object' } } } },
-        403: { description: 'A1111 API exposure is disabled' },
-      },
-      'x-portos-tool': { name: 'image.get-progress', version: 1, policy: { privacy: 'internal', sideEffect: 'read', async: false } },
-    },
-  },
-  '/sdapi/v1/portos/video-models': {
-    get: {
-      summary: 'List PortOS video models',
-      responses: {
-        200: { description: 'Video model catalog and default' },
-        403: { description: 'A1111 API exposure is disabled' },
-      },
-    },
-  },
   '/api/cos/tools': {
     get: {
       summary: 'List semantic CoS tools',
@@ -318,27 +286,6 @@ export const API_OPERATION_CONTRACTS = Object.freeze({
         { name: 'format', in: 'query', schema: { type: 'string', enum: ['portos', 'openai', 'anthropic', 'mcp'] } },
       ],
       responses: { 200: { description: 'Versioned semantic tool catalog' }, 304: { description: 'Catalog ETag is unchanged' } },
-    },
-  },
-  '/api/cos/tools/call': {
-    post: {
-      summary: 'Call a semantic CoS tool',
-      description: 'Execute one allowlisted tool. Mutations require a trusted authenticated UI session or process-local Persistent Mind authority.',
-      requestBody: jsonBody(cosToolCallSchema),
-      responses: {
-        200: { description: 'Normalized tool result' },
-        400: { description: 'Invalid call or arguments' },
-        403: { description: 'Scope, capability, or authentication denied' },
-        409: { description: 'Idempotency conflict' },
-        422: { description: 'Tool execution failed' },
-      },
-    },
-  },
-  '/api/cos/tools/calls/:requestId': {
-    get: {
-      summary: 'Read a semantic tool result',
-      description: 'Read the normalized result retained for a prior process-local request id.',
-      responses: { 200: { description: 'Normalized tool result' }, 404: { description: 'Unknown or expired request id' } },
     },
   },
 });

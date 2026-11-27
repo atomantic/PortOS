@@ -14,6 +14,12 @@ import { createReadStream, existsSync, mkdirSync, mkdtempSync, readFileSync, rmS
 import { tmpdir } from 'os';
 import { dirname, join as joinPath } from 'path';
 import { makePathsProxy, ownTestBodies } from '../lib/mockPathsDataRoot.js';
+import { createFileWriteQueue } from '../lib/fileWriteQueue.js';
+import { registerManagedVisitorCredentialRestore } from './bootHookRegistry.js';
+
+// Backup restore tests run without full server bootstrap; preserve the same
+// serialized credential-write boundary while keeping the broker lazy.
+registerManagedVisitorCredentialRestore(createFileWriteQueue());
 
 // Fail-fast/timeout settles Vitest's wrapper before its async body. These
 // real-rsync cases also seed the source between restores; own the whole body
@@ -148,6 +154,7 @@ vi.mock('fs/promises', async (importOriginal) => {
     ...actual,
     stat: vi.fn(actual.stat),
     readdir: vi.fn(actual.readdir),
+    rename: vi.fn(actual.rename),
     readFile: vi.fn(actual.readFile),
     access: vi.fn(actual.access),
     unlink: vi.fn(actual.unlink),
@@ -182,6 +189,7 @@ beforeEach(async () => {
   await authorityBodies.drain();
   const actual = await vi.importActual('fs/promises');
   fs.readdir.mockImplementation(actual.readdir);
+  fs.rename.mockImplementation(actual.rename);
   fs.access.mockImplementation(actual.access);
   fs.readFile.mockImplementation(actual.readFile);
   fs.unlink.mockImplementation(actual.unlink);

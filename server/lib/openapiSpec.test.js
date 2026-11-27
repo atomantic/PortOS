@@ -38,7 +38,6 @@ describe('buildOpenApiSpec', () => {
     const spec = buildOpenApiSpec(exposed({ voice: { exposed: true, requireAuth: false } }), {});
     expect(spec.paths['/api/voice/public/synthesize']).toBeDefined();
     expect(spec.paths['/api/voice/public/voices']).toBeDefined();
-    expect(spec.paths['/sdapi/v1/txt2img']).toBeUndefined();
     expect(spec.tags.map((t) => t.name)).toContain('voice');
   });
 
@@ -66,8 +65,8 @@ describe('buildOpenApiSpec', () => {
   });
 
   it('tags each operation with its API id', () => {
-    const spec = buildOpenApiSpec(exposed({ sdapi: { exposed: true, requireAuth: false } }), {});
-    expect(spec.paths['/sdapi/v1/txt2img'].post.tags).toEqual(['sdapi']);
+    const spec = buildOpenApiSpec(exposed({ voice: { exposed: true, requireAuth: false } }), {});
+    expect(spec.paths['/api/voice/public/synthesize'].post.tags).toEqual(['voice']);
   });
 
   it('emits empty servers when no baseUrl given', () => {
@@ -153,13 +152,10 @@ describe('buildInternalOpenApiSpec', () => {
     expect(appLogs.responses[400]['x-portos-error-codes']).toEqual(['MISSING_PROCESS', 'INVALID_PROCESS_NAME']);
   });
 
-  it('documents 422 and 403 refusal responses on CoS tool call, voice synthesize, and sdapi endpoints', () => {
+  it('documents refusal responses on the voice synthesize endpoint', () => {
     const spec = buildInternalOpenApiSpec({}, {});
-    expect(spec.paths['/api/cos/tools/call'].post.responses[422]).toBeDefined();
     expect(spec.paths['/api/voice/public/synthesize'].post.responses[403]).toMatchObject({
       'x-portos-error-codes': ['HOST_CONTROL_FORBIDDEN'],
     });
-    expect(spec.paths['/sdapi/v1/options'].post.responses[403]).toBeDefined();
-    expect(spec.paths['/sdapi/v1/portos/video-models'].get.responses[403]).toBeDefined();
   });
 });

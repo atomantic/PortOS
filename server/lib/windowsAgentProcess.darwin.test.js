@@ -96,7 +96,6 @@ setTimeout(() => process.exit(3), 20000).unref();`);
       // The grandchild leads its own session/process group and was never this supervisor's child.
       expect(Number(await ps(grandchild, 'pgid'))).toBe(grandchild);
       expect(Number(await ps(grandchild, 'ppid'))).not.toBe(child.pid);
-      await new Promise(resolve => setTimeout(resolve, 300));
       await expect(readWindowsAgentSettlement(agent)).rejects.toMatchObject({ code: 'WINDOWS_AGENT_PROCESS_UNVERIFIED', reason: 'receipt-missing' });
       expect(() => prepareWindowsAgentLaunch(agent.id, process.execPath, [], { cwd: root, env: process.env })).toThrow();
       await writeFile(childRelease, 'release');
@@ -184,8 +183,26 @@ setInterval(()=>{},1000);`);
   it('still stops and settles a PTY agent whose server-side terminal has stopped draining output', async () => {
     const pty = await import('node-pty');
     await reserveWindowsAgentProcess(agent);
-    const flood = `const chunk = 'x'.repeat(65536); const write = () => process.stdout.write(chunk, write); write();`;
-    const prepared = prepareWindowsAgentLaunch(agent.id, process.execPath, ['-e', flood], { cwd: root, env: process.env, pty: true });
+    const blocked = join(root, 'output-blocked');
+    // Start flooding only after the reader pauses. Briefly full PTY buffers
+    // can drain through the relay, so wait for sustained backpressure.
+    const flood = `
+import os, select, signal, sys, tty
+tty.setraw(0)
+os.write(1, b'EXAMPLE_READY')
+if os.read(0, 1) != b'x':
+    sys.exit(2)
+os.set_blocking(1, False)
+chunk = b'x' * 65536
+while True:
+    try:
+        os.write(1, chunk)
+    except BlockingIOError:
+        if not select.select([], [1], [], 0.1)[1]:
+            open(sys.argv[1], 'w').close()
+            signal.pause()
+`;
+    const prepared = prepareWindowsAgentLaunch(agent.id, 'python3', ['-I', '-c', flood, blocked], { cwd: root, env: process.env, pty: true });
     const child = watchWindowsAgentProcess(pty.spawn(prepared.command, prepared.args, { cwd: root, env: process.env, cols: 80, rows: 24 }), prepared);
     const closed = new Promise(resolve => child.onExit(resolve));
     let received = 0;
@@ -193,7 +210,8 @@ setInterval(()=>{},1000);`);
     try {
       await vi.waitFor(() => expect(received).toBeGreaterThan(0), { timeout: 10000 });
       child.pause();
-      await new Promise(resolve => setTimeout(resolve, 500));
+      child.write('x');
+      await waitForFile(blocked);
       child.kill();
       await waitForFile(join(root, 'settled.json'));
       expect(await readWindowsAgentSettlement(agent)).toMatchObject({ active: 0, exitCode: 143 });

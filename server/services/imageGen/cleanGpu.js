@@ -73,7 +73,7 @@ export async function enqueueGpuClean({
   await ensureDir(PATHS.imageCleanTmp);
   // Stage the init bytes under an `init-<uuid>` name so the shared image-input
   // resolver accepts them and the tmp GC can sweep them. The render itself
-  // lands at `<jobId>.png` (jobId is assigned by enqueueJob below).
+  // lands at `<jobId>.png`.
   const initName = `init-${randomUUID()}.png`;
   const initAbsPath = join(PATHS.imageCleanTmp, initName);
   // Normalize to PNG so the runner's init-image decode is stable regardless of
@@ -106,22 +106,28 @@ export async function enqueueGpuClean({
   // Render to the temp dir with no sidecar so the gallery stays clean.
   params.outputTarget = { dir: PATHS.imageCleanTmp, skipSidecar: true };
 
-  const queued = await enqueueJob({ kind: 'image', params });
-  const jobId = queued.jobId;
-
-  // Stage the preserve-region inputs (only when a mask rode along) so the
-  // result-fetch can composite the ORIGINAL pixels back over the diffused
-  // render. Named by the (now-known) jobId. Best-effort — a failed stage just
-  // means the composite is skipped, never a failed enqueue.
-  let hasMask = false;
-  if (Buffer.isBuffer(originalBuffer) && Buffer.isBuffer(maskBuffer)) {
-    await atomicWrite(join(PATHS.imageCleanTmp, `${jobId}-original.png`), originalBuffer).catch(() => {});
-    await atomicWrite(join(PATHS.imageCleanTmp, `${jobId}-mask.png`), maskBuffer).catch(() => {});
-    hasMask = true;
+  // Finish staging before the queue can start the render or expose its ID.
+  const jobId = randomUUID();
+  const needsMask = maskBuffer != null;
+  try {
+    if (needsMask) {
+      if (!Buffer.isBuffer(originalBuffer) || !originalBuffer.length || !Buffer.isBuffer(maskBuffer) || !maskBuffer.length) {
+        throw new Error('Missing preserve-region image data');
+      }
+      await atomicWrite(join(PATHS.imageCleanTmp, `${jobId}-original.png`), originalBuffer);
+      await atomicWrite(join(PATHS.imageCleanTmp, `${jobId}-mask.png`), maskBuffer);
+    }
+    await atomicWrite(cleanMetaPath(jobId), { hasMask: needsMask, feather, initName });
+  } catch (error) {
+    console.error(`❌ GPU clean staging failed for job=${jobId} mask=${needsMask} code=${error?.code ?? 'IMAGE_CLEAN_STAGING_FAILED'}`);
+    if (needsMask) {
+      throw new ServerError('Could not stage the preserve mask for GPU clean.', { status: 500, code: 'IMAGE_CLEAN_STAGING_FAILED' });
+    }
   }
-  await atomicWrite(cleanMetaPath(jobId), { hasMask, feather, initName }).catch(() => {});
 
-  console.log(`🧪 GPU clean enqueued via ${backend.model.id} (strength=${useStrength}${hasMask ? ', ignore-zone mask' : ''}) → job ${jobId.slice(0, 8)}`);
+  const queued = await enqueueJob({ kind: 'image', params }, { jobId });
+
+  console.log(`🧪 GPU clean enqueued via ${backend.model.id} (strength=${useStrength}${needsMask ? ', ignore-zone mask' : ''}) → job ${jobId.slice(0, 8)}`);
   return {
     jobId,
     position: queued.position,

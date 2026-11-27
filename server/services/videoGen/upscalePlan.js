@@ -1,21 +1,79 @@
 /**
  * Video upscale — method contract, alignment math, and the provenance shape.
  *
- * Two upscale methods share one request contract (#6502 / #6509):
+ * The upscale methods share one request contract (#6502 / #6509):
  *
  *  - `lanczos` — the historical ffmpeg pass. Pixel-faithful, no model, no
  *    alignment constraint, and the DEFAULT for every existing caller.
  *  - `ltx` — the LTX-2.5 Pixel Spatial Upscaler adapter, which synthesizes
  *    detail on a GPU runtime. Gated on a cached adapter and a supported
  *    backend, and constrained by the model's frame/spatial grid.
+ *  - `realesrgan` — the opt-in local Real-ESRGAN runtime (#19985), a 2x
+ *    frame-by-frame enhancement with no grid constraint.
+ *  - `fal-seedvr2` — the paid fal.ai SeedVR2 cloud upscale to a target size.
  *
  * This module holds only the pure parts (the enum, the grid, the padding math
  * and the provenance field list) so the numbers can be tested without touching
  * ffprobe, the HF cache, or the history file.
  */
 
-export const UPSCALE_METHODS = Object.freeze(['lanczos', 'ltx']);
-export const DEFAULT_UPSCALE_METHOD = 'lanczos';
+export {
+  UPSCALE_METHODS, DEFAULT_UPSCALE_METHOD,
+  FAL_SEEDVR2_TARGET_RESOLUTIONS, DEFAULT_FAL_SEEDVR2_TARGET_RESOLUTION,
+  REALESRGAN_MODEL_IDS, DEFAULT_REALESRGAN_MODEL,
+} from '../../lib/videoGenRequestFields.js';
+
+// Real-ESRGAN (#19985) runs the official ncnn-Vulkan build frame by frame on
+// the local GPU lane. Each selectable weight names the network file the binary
+// loads (`-n`), the scale that network actually produces (`-s`), and the model
+// files it reads. `realesrgan-x4plus` is a fixed-4x network — asking the binary
+// for `-s 2` returns corrupt frames — so it renders at 4x and the encode step
+// resamples each frame to the 2x deliverable; the animation-video model has a
+// native 2x variant.
+export const REALESRGAN_RUNTIME_ID = 'realesrgan-ncnn-vulkan';
+export const REALESRGAN_JOB_MODE = 'realesrgan';
+export const REALESRGAN_MODELS = Object.freeze({
+  'realesrgan-x4plus': Object.freeze({
+    id: 'realesrgan-x4plus',
+    label: 'Real-ESRGAN x4plus (general footage)',
+    network: 'realesrgan-x4plus',
+    nativeScale: 4,
+    files: Object.freeze(['realesrgan-x4plus.param', 'realesrgan-x4plus.bin']),
+  }),
+  'realesr-animevideov3': Object.freeze({
+    id: 'realesr-animevideov3',
+    label: 'Real-ESRGAN animevideov3 (animation)',
+    network: 'realesr-animevideov3',
+    nativeScale: 2,
+    files: Object.freeze(['realesr-animevideov3-x2.param', 'realesr-animevideov3-x2.bin']),
+  }),
+});
+
+export const FAL_SEEDVR2_MODEL_ID = 'fal-ai/seedvr/upscale/video';
+export const FAL_SEEDVR2_HISTORY_MODEL_ID = `fal:${FAL_SEEDVR2_MODEL_ID}`;
+export const FAL_SEEDVR2_RUNTIME_ID = 'fal-seedvr2';
+export const FAL_SEEDVR2_USD_PER_MP = 0.001;
+const FAL_SEEDVR2_TARGET_SHORT_EDGE = Object.freeze({ '720p': 720, '1080p': 1080, '1440p': 1440, '2160p': 2160 });
+
+/** Target dimensions SeedVR2 aims for in `upscale_mode: 'target'` (rounded to multiples of 16). */
+export const planFalSeedvr2Target = ({ width, height, frameCount, targetResolution = '1080p' } = {}) => {
+  const frames = Number.isFinite(frameCount) && frameCount > 0 ? Math.round(frameCount) : null;
+  if (!(Number.isFinite(width) && width > 0 && Number.isFinite(height) && height > 0)) {
+    return { width: null, height: null, frameCount: frames };
+  }
+  const targetShort = FAL_SEEDVR2_TARGET_SHORT_EDGE[targetResolution] ?? 1080;
+  const scale = targetShort / Math.min(width, height);
+  const round16 = (n) => Math.max(16, Math.round(n / 16) * 16);
+  return { width: round16(width * scale), height: round16(height * scale), frameCount: frames };
+};
+
+/** SeedVR2 bills $0.001 per output megapixel (width * height * frameCount / 1e6). */
+export const estimateFalSeedvr2CostUsd = ({ width, height, frameCount } = {}) => {
+  if (!(Number.isFinite(width) && width > 0 && Number.isFinite(height) && height > 0 && Number.isFinite(frameCount) && frameCount > 0)) {
+    return null;
+  }
+  return Math.round(((width * height * frameCount) / 1_000_000) * FAL_SEEDVR2_USD_PER_MP * 1e4) / 1e4;
+};
 
 // Both methods double each axis. Declared once because the plan endpoint, the
 // Lanczos entry builder and the client disclosure all quote it.
@@ -116,8 +174,10 @@ export const planLtxAlignment = ({ width, height, frameCount } = {}, grid = LTX_
   };
 };
 
-// Lanczos scales the source verbatim; the generative method scales the PADDED source.
-export const planTargetDimensions = ({ method, width, height, frameCount, alignment }) => {
+// Lanczos and Real-ESRGAN scale the source verbatim (2x); the generative method scales the PADDED source;
+// fal-seedvr2 scales to the requested target resolution preserving aspect ratio.
+export const planTargetDimensions = ({ method, width, height, frameCount, alignment, targetResolution }) => {
+  if (method === 'fal-seedvr2') return planFalSeedvr2Target({ width, height, frameCount, targetResolution });
   const scaleAxis = (n) => (Number.isFinite(n) && n > 0 ? Math.round(n) * UPSCALE_SCALE : null);
   if (method !== 'ltx') {
     return {
@@ -141,15 +201,16 @@ export const planTargetDimensions = ({ method, width, height, frameCount, alignm
  * generative dispatch (#6511) fills the model-specific ones Lanczos leaves null:
  *
  *  - `upscaledFrom`   — source history id. Also the ALREADY_UPSCALED guard.
- *  - `upscaleMethod`  — `'lanczos' | 'ltx'`.
+ *  - `upscaleMethod`  — `'lanczos' | 'ltx' | 'fal-seedvr2' | 'realesrgan'`.
  *  - `width`/`height` — the ACTUAL output dimensions, measured from the file
  *                       (a padded generative render is not 2x the source).
  *  - `fps`, `numFrames`, `duration` — output frame rate, frame count, seconds.
  *  - `seed`           — the generative render's seed. Lanczos writes none; tell
  *                       the methods apart by `upscaleMethod`, not this key, since
  *                       an upscaled row also inherits the SOURCE render's fields.
- *  - `upscaleRuntime` — BYOV runtime id that rendered it (`ltx25` /
- *                       `ltx25_cuda`), or `'ffmpeg'` for Lanczos.
+ *  - `upscaleRuntime` — runtime id that rendered it (`ltx25` / `ltx25_cuda`,
+ *                       `realesrgan-ncnn-vulkan`, `fal-seedvr2`), or `'ffmpeg'`
+ *                       for Lanczos. Real-ESRGAN rows add `upscaleModel`.
  *  - `renderStartedAt`/`renderMs` — measured wall-clock render time (#5878).
  */
 export const UPSCALE_PROVENANCE_FIELDS = Object.freeze([

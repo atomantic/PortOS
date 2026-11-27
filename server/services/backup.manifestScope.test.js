@@ -11,6 +11,13 @@ import * as fs from 'fs/promises';
 import { reloadSettings } from './settings.js';
 import { invalidateAllCaches as invalidateBrainCaches } from './brainStorage.js';
 import { openSnapshotStream, restoreSnapshot, deleteSnapshot } from './backup.js';
+import { createFileWriteQueue } from '../lib/fileWriteQueue.js';
+import { createProviderService } from '../lib/aiToolkit/providers.js';
+import { setAIToolkitInstance } from '../lib/aiToolkitState.js';
+import { registerManagedVisitorCredentialRestore } from './bootHookRegistry.js';
+
+const credentialRestoreLock = vi.fn(createFileWriteQueue());
+registerManagedVisitorCredentialRestore(credentialRestoreLock);
 
 describe('restoreSnapshot manifest verification', () => {
   let tmpRoot;
@@ -223,6 +230,25 @@ describe('restoreSnapshot manifest verification', () => {
         expect(JSON.parse(await realFs.readFile(liveLedgerPath(), 'utf8'))).toEqual(['001-example.js']);
         expect(JSON.parse(await realFs.readFile(joinPath(PATHS.data, result.restoredLegacyLedger.parkedAs), 'utf8'))).toEqual(['001-example.js', '359-example.js']);
         expect(existsSync(liveLegacyLedgerPath())).toBe(false);
+      });
+
+      it('restores the live ledger when installing the legacy ledger fails', async () => {
+        await seedLegacySnapshot();
+        const liveLedger = JSON.stringify(['001-example.js', '359-example.js']);
+        const legacyLedger = JSON.stringify(['001-example.js']);
+        await realFs.writeFile(liveLedgerPath(), liveLedger);
+        await realFs.mkdir(joinPath(PATHS.data, 'migrations'), { recursive: true });
+        await realFs.writeFile(liveLegacyLedgerPath(), legacyLedger);
+        const installError = Object.assign(new Error('Legacy ledger rename denied'), { code: 'EACCES' });
+        fs.rename.mockImplementation(async (source, destination) => {
+          if (source === liveLegacyLedgerPath() && destination === liveLedgerPath()) throw installError;
+          return realFs.rename(source, destination);
+        });
+
+        await expect(finishRestore({ dryRun: false })).rejects.toMatchObject({ code: 'EACCES', message: expect.stringContaining(installError.message) });
+        expect(await realFs.readFile(liveLedgerPath(), 'utf8')).toBe(liveLedger);
+        expect(await realFs.readFile(liveLegacyLedgerPath(), 'utf8')).toBe(legacyLedger);
+        expect(await parkedLedgers()).toEqual([]);
       });
 
       it('adopts the ledger on an install that had none, parking nothing', async () => {
@@ -486,6 +512,203 @@ describe('restoreSnapshot manifest verification', () => {
       else process.env.PORTOS_RSYNC = previousRsync;
       spawn.mockReset();
     }
+  });
+
+  describe.skipIf(process.platform === 'win32')('owner-only credential restore', () => {
+    const settings = 'settings.json';
+    const visitor = 'managed-visitor-credentials.json';
+    const privateKeys = 'private/api-keys.json';
+    const providers = 'providers.json';
+    const credentialRecords = [settings, visitor, privateKeys, providers];
+    const other = `restore-integrity/${settings}`;
+    const snapshotBytes = '{ "example": "snapshot" }\n';
+    const liveBytes = '{ "example": "live" }\n';
+    const livePath = name => joinPath(PATHS.data, name);
+    const mode = async path => (await realFs.stat(path)).mode & 0o777;
+
+    async function writeLegacySnapshot(name) {
+      const hash = await writeSnapshotFile(name, snapshotBytes);
+      await realFs.chmod(joinPath(snapshotDataDir, name), 0o644);
+      return hash;
+    }
+
+    afterEach(async () => {
+      setAIToolkitInstance(null);
+      await realFs.rm(livePath(settings), { force: true });
+      await realFs.rm(livePath(visitor), { force: true });
+      await realFs.rm(livePath(providers), { force: true });
+      await realFs.rm(livePath('private'), { force: true, recursive: true });
+    });
+
+    it('previews and restores verified credential bytes and permissions in a full restore', async () => {
+      credentialRestoreLock.mockClear();
+      await writeManifest({
+        [settings]: await writeLegacySnapshot(settings),
+        [visitor]: await writeLegacySnapshot(visitor),
+        [privateKeys]: await writeLegacySnapshot(privateKeys),
+        [providers]: await writeLegacySnapshot(providers),
+        [other]: await writeLegacySnapshot(other),
+      });
+      await realFs.writeFile(livePath(settings), liveBytes, { mode: 0o600 });
+      await realFs.writeFile(livePath(visitor), snapshotBytes, { mode: 0o644 });
+      await realFs.chmod(livePath(visitor), 0o644);
+      spawn.mockImplementation((...args) => spawnChild(...args));
+
+      const preview = await restoreSnapshot(tmpRoot, 'snap-1');
+      expect(preview.verification).toMatchObject({ status: 'verified', checkedFiles: 5 });
+      expect(preview.changedFiles).toHaveLength(5);
+      expect(preview.changedFiles).toEqual(expect.arrayContaining([
+        `>fc........ ${settings}`, `.f...p..... ${visitor}`, `>f+++++++++ ${privateKeys}`, `>f+++++++++ ${providers}`, expect.stringContaining(other),
+      ]));
+      expect(await mode(livePath(visitor))).toBe(0o644);
+      expect(await realFs.readFile(livePath(settings), 'utf8')).toBe(liveBytes);
+      await expect(realFs.stat(livePath(other))).rejects.toMatchObject({ code: 'ENOENT' });
+
+      const result = await restoreSnapshot(tmpRoot, 'snap-1', { dryRun: false });
+      expect(credentialRestoreLock).toHaveBeenCalledOnce();
+      expect(result.changedFiles).toEqual(preview.changedFiles);
+      for (const name of credentialRecords) {
+        expect(await realFs.readFile(livePath(name), 'utf8')).toBe(snapshotBytes);
+        expect(await mode(livePath(name))).toBe(0o600);
+        expect(await mode(joinPath(snapshotDataDir, name))).toBe(0o644);
+      }
+      expect(await mode(livePath(other))).toBe(0o644);
+      expect(await mode(livePath('private'))).toBe(0o700);
+      expect((await restoreSnapshot(tmpRoot, 'snap-1')).changedFiles).toEqual([]);
+      expect((await restoreSnapshot(tmpRoot, 'snap-1', { dryRun: false })).changedFiles).toEqual([]);
+      expect(await mode(livePath(settings))).toBe(0o600);
+      expect(await mode(livePath(visitor))).toBe(0o600);
+    });
+
+    it.each([...credentialRecords, 'private'])('restores only %s from a pre-manifest snapshot', async subdirFilter => {
+      for (const name of credentialRecords) await writeLegacySnapshot(name);
+      const selected = subdirFilter === 'private' ? privateKeys : subdirFilter;
+      spawn.mockImplementation((...args) => spawnChild(...args));
+
+      const preview = await restoreSnapshot(tmpRoot, 'snap-1', { subdirFilter });
+      expect(preview.verification.status).toBe('unverified');
+      expect(preview.changedFiles).toEqual([expect.stringContaining(selected)]);
+      await expect(realFs.stat(livePath(selected))).rejects.toMatchObject({ code: 'ENOENT' });
+
+      await restoreSnapshot(tmpRoot, 'snap-1', { dryRun: false, subdirFilter });
+      expect(await mode(livePath(selected))).toBe(0o600);
+      expect(await realFs.readFile(livePath(selected), 'utf8')).toBe(snapshotBytes);
+      for (const name of credentialRecords.filter(name => name !== selected)) {
+        await expect(realFs.stat(livePath(name))).rejects.toMatchObject({ code: 'ENOENT' });
+      }
+      if (selected === privateKeys) expect(await mode(livePath('private'))).toBe(0o700);
+    });
+
+    it('keeps private sibling records restorable while securing the credential directory', async () => {
+      const sibling = 'private/example.json';
+      await writeLegacySnapshot(privateKeys);
+      await writeLegacySnapshot(sibling);
+      await realFs.chmod(joinPath(snapshotDataDir, 'private'), 0o755);
+      await realFs.mkdir(livePath('private'), { mode: 0o755 });
+      await realFs.writeFile(livePath(privateKeys), liveBytes, { mode: 0o644 });
+      spawn.mockImplementation((...args) => spawnChild(...args));
+
+      await restoreSnapshot(tmpRoot, 'snap-1', { dryRun: false, subdirFilter: sibling });
+      expect(await realFs.readFile(livePath(sibling), 'utf8')).toBe(snapshotBytes);
+      expect(await realFs.readFile(livePath(privateKeys), 'utf8')).toBe(liveBytes);
+      expect(await mode(livePath(privateKeys))).toBe(0o600);
+      expect(await mode(livePath('private'))).toBe(0o700);
+    });
+
+    it('serializes provider edits through live restore and reloads the restored configuration', async () => {
+      let withLiveProvidersRestore;
+      const providerService = createProviderService({
+        dataDir: PATHS.data,
+        providersCacheTtlMs: 60_000,
+        registerProviderRestore: restore => { withLiveProvidersRestore = restore; },
+      });
+      const proc = fakeProc();
+      const seed = { id: 'example-provider', name: 'Example Provider', type: 'api' };
+      await providerService.createProvider({ ...seed, apiKey: 'example-live-key' });
+      await writeSnapshotFile(providers, JSON.stringify({
+        activeProvider: seed.id, providers: { [seed.id]: { ...seed, apiKey: 'example-backup-key' } },
+      }));
+      setAIToolkitInstance({ withLiveProvidersRestore });
+      spawn.mockReturnValue(proc);
+      const pending = restoreSnapshot(tmpRoot, 'snap-1', { dryRun: false, subdirFilter: providers });
+      let closeCode = 1;
+      let edit;
+      try {
+        await flush();
+        edit = providerService.updateProvider(seed.id, { name: 'Edited Provider' });
+        expect(await providerService.getProviderById(seed.id)).toMatchObject(seed);
+        closeCode = 0;
+      } finally {
+        proc.emit('close', closeCode);
+        await Promise.all([pending, edit]);
+      }
+      expect(await providerService.getProviderById(seed.id)).toMatchObject({
+        name: 'Edited Provider', apiKey: 'example-backup-key',
+      });
+      expect(await mode(livePath(providers))).toBe(0o600);
+    });
+
+    it('keeps snapshot and live credentials independent of shared inodes', async () => {
+      await writeLegacySnapshot(privateKeys);
+      await realFs.mkdir(livePath('private'), { mode: 0o700 });
+      const original = livePath('private/example.json');
+      await realFs.writeFile(original, liveBytes, { mode: 0o600 });
+      await realFs.link(original, livePath(privateKeys));
+
+      await expect(restoreSnapshot(tmpRoot, 'snap-1', { subdirFilter: privateKeys }))
+        .rejects.toMatchObject({ code: 'BACKUP_RESTORE_UNSAFE_CREDENTIAL' });
+      expect(spawn).not.toHaveBeenCalled();
+      expect(await realFs.readFile(original, 'utf8')).toBe(liveBytes);
+    });
+
+    it.each([23, null])('keeps live bytes private when the bulk transfer closes with %s', async exitCode => {
+      await writeLegacySnapshot(settings);
+      await writeLegacySnapshot(visitor);
+      await realFs.writeFile(livePath(settings), liveBytes);
+      await realFs.chmod(livePath(settings), 0o644);
+      const proc = fakeProc();
+      spawn.mockReturnValueOnce(proc);
+      const pending = restoreSnapshot(tmpRoot, 'snap-1', { dryRun: false });
+      await flush();
+      const modeDuringTransfer = await mode(livePath(settings));
+      proc.emit('close', exitCode);
+
+      await expect(pending).rejects.toThrow(/rsync exited with code/);
+      expect(modeDuringTransfer).toBe(0o600);
+      expect(await realFs.readFile(livePath(settings), 'utf8')).toBe(liveBytes);
+      expect(await mode(livePath(settings))).toBe(0o600);
+      await expect(realFs.stat(livePath(visitor))).rejects.toMatchObject({ code: 'ENOENT' });
+      expect(reloadSettings).toHaveBeenCalledTimes(1);
+    });
+
+    it('verifies staged credential bytes before either planning or writing a restore', async () => {
+      await writeManifest({ [settings]: await writeLegacySnapshot(settings) });
+      await realFs.writeFile(joinPath(snapshotDataDir, settings), liveBytes);
+      for (const dryRun of [true, false]) {
+        await expect(restoreSnapshot(tmpRoot, 'snap-1', { dryRun, subdirFilter: settings }))
+          .rejects.toMatchObject({ code: 'BACKUP_FILE_INTEGRITY_FAILED' });
+      }
+      expect(spawn).not.toHaveBeenCalled();
+      await expect(realFs.stat(livePath(settings))).rejects.toMatchObject({ code: 'ENOENT' });
+    });
+
+    it.each(['source', 'destination'])('refuses a credential symlink at the %s before transferring', async side => {
+      const sourcePath = joinPath(snapshotDataDir, settings);
+      const target = joinPath(snapshotDataDir, 'example.json');
+      const hash = await writeSnapshotFile('example.json', snapshotBytes);
+      if (side === 'source') await realFs.symlink(target, sourcePath);
+      else {
+        await writeLegacySnapshot(settings);
+        await realFs.symlink(target, livePath(settings));
+      }
+      await writeManifest({ [settings]: hash, 'example.json': hash });
+      for (const dryRun of [true, false]) {
+        await expect(restoreSnapshot(tmpRoot, 'snap-1', { dryRun, subdirFilter: settings }))
+          .rejects.toMatchObject({ code: 'BACKUP_RESTORE_UNSAFE_CREDENTIAL' });
+      }
+      expect(spawn).not.toHaveBeenCalled();
+      expect(await realFs.readFile(target, 'utf8')).toBe(snapshotBytes);
+    });
   });
 
   // #10898: a verified source is worth nothing if it can be deleted while rsync

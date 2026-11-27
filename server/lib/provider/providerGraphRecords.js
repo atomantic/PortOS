@@ -12,8 +12,7 @@ import { SERVICE_CREDENTIAL_VIAS, SERVICE_PLANS } from '../serviceDefinitions.js
 import { isNonBlankStr } from '../textUtils.js';
 
 /**
- * The DURABLE half of the provider connection graph (#6367, design record
- * `docs/plans/archive/2026-09-06-provider-connections-and-harnesses.md`).
+ * The DURABLE half of the provider connection graph (#6367).
  *
  * `providerGraphPreview.js` (#6366) answers "what WOULD an import create?" from
  * provider records alone. This module owns the records that survive a restart:

@@ -23,6 +23,7 @@
  * negative prompt, so one rides as a visible "Avoid:" clause, and Wan's
  * `enable_thinking` rewrite knob is sent off.
  */
+import { nearestRatio } from './aspectRatios.js';
 
 import { durationLengths } from './hostedVideoClipRules.js';
 
@@ -187,16 +188,6 @@ export const HIGGSFIELD_FRAME_ROLE_LINE = 'The first reference image is the open
 const refuse = (message) => Object.assign(new Error(message), { status: 400, code: 'HIGGSFIELD_VIDEO_INPUT_INVALID' });
 
 // Non-numeric ratios ('adaptive') are only ever an explicit pick, never the nearest match.
-function nearestRatio(width, height, ratios) {
-  const numeric = ratios.filter((r) => /^\d+:\d+$/.test(r));
-  const w = Number(width);
-  const h = Number(height);
-  if (!(w > 0 && h > 0)) return null;
-  const target = Math.log(w / h);
-  const distance = (ratio) => { const [rw, rh] = ratio.split(':').map(Number); return Math.abs(Math.log(rw / rh) - target); };
-  return numeric.reduce((best, ratio) => (distance(ratio) < distance(best) ? ratio : best));
-}
-
 /** The prompt text the model receives: the user's words plus a folded "Avoid:" clause. */
 export const higgsfieldVideoPromptText = (prompt = '', negativePrompt = '') => {
   const negative = typeof negativePrompt === 'string' ? negativePrompt : '';

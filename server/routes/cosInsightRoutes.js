@@ -3,7 +3,7 @@
  */
 
 import { Router } from 'express';
-import { z } from 'zod';
+import { cosActivityCalendarQuerySchema, cosCachedHealthQuerySchema } from '../lib/cos/cosValidation.js';
 import { getAgents } from '../services/cos/cosAgentLifecycle.js';
 import { getAllTasks } from '../services/cos/cosTaskStore.js';
 import { getHealthStatus, runHealthCheck } from '../services/cos/cosHealthMonitor.js';
@@ -16,7 +16,6 @@ import * as decisionLog from '../services/decisionLog.js';
 import { asyncHandler } from '../lib/errorHandler.js';
 import { validateRequest } from '../lib/validateRequest.js';
 import { limitQuerySchema, parsePagination } from '../lib/queryValidation.js';
-import { cosActivityCalendarQuerySchema } from '../lib/cos/cosValidation.js';
 import { runningAgentsByTaskId, withoutSpawningTasks } from '../lib/cos/cosSpawnWindow.js';
 import { detectIdleLeftoverBranches } from '../services/userActionDetectors.js';
 import { requestHasHostControl } from '../services/authGate.js';
@@ -35,7 +34,7 @@ router.get('/activity-calendar', asyncHandler(async (req, res) => {
 // GET /api/cos/actionable-insights - Get prioritized action items requiring user attention
 // Surfaces the most important things to address right now across all CoS subsystems
 router.get('/actionable-insights', asyncHandler(async (req, res) => {
-  const { cachedHealth } = validateRequest(z.object({ cachedHealth: z.literal('1').optional() }), req.query);
+  const { cachedHealth } = validateRequest(cosCachedHealthQuerySchema, req.query);
   // The live check is the PM2 sweep that restarts errored processes, the work
   // POST /api/cos/health/check gates; anyone else reads the last snapshot (#13097).
   const liveHealth = !cachedHealth && requestHasHostControl(req);

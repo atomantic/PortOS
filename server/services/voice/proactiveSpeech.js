@@ -60,9 +60,8 @@ export const shouldSpeak = (cfg, nowMinutes, { solicited = false } = {}) => {
   return { ok: true };
 };
 
-// Speak a line to the single designated voice-output tab. `io` is passed from
-// socket.js (no global stash so tests can inject a fake). Not broadcast:
-// `emitVoiceOutput` (voiceOutput.js) routes it to the one claiming tab.
+// Speak a line through the designated voice-output tab or an authorized
+// pre-upgrade client. `io` is passed by the caller so tests can inject a fake.
 // `priority` is reserved/informational. Returns { ok, reason?, latencyMs? }.
 export const speakProactive = async ({ io, text, priority = 'normal', source = 'cos', solicited = false }) => {
   if (!io) return { ok: false, reason: 'no-io' };
@@ -92,8 +91,8 @@ export const speakProactive = async ({ io, text, priority = 'normal', source = '
 
   const { wav, latencyMs } = await synthesize(trimmed);
   // `voice:speak` is distinct from per-turn `voice:tts:audio` so the client can
-  // render a subtle pill and skip dialogue history. Routed to the single voice-output tab.
-  const delivery = emitVoiceOutput(io, 'voice:speak', {
+  // render a subtle pill and skip dialogue history.
+  const delivery = await emitVoiceOutput(io, 'voice:speak', {
     sentence: trimmed,
     wav,
     latencyMs,
@@ -101,13 +100,14 @@ export const speakProactive = async ({ io, text, priority = 'normal', source = '
     source,
     ts: Date.now(),
   });
+  if (!delivery.delivered) return { ok: false, reason: 'no-recipient' };
   // Mirror the per-turn `state.recentTts` write so a proactive line bleeding from
   // speakers into the mic is dropped as echo. Remembered on EVERY socket, not just
   // the recipient: a sibling tab on the same machine hears it through the shared
   // mic and must suppress it too, or the bot answers its own voice. The cost is a
   // rare false drop of a close 4+ word phrase within the 8s window.
   rememberTtsForAllSockets(trimmed);
-  const dest = delivery.broadcast ? 'broadcast' : (delivery.socketId ?? 'none');
+  const dest = delivery.socketId ?? `fallback (${delivery.fallbackCount} sockets)`;
   console.log(`🔔 voice: proactive sent (${priority}) → ${dest} "${trimmed.slice(0, 80)}" (${latencyMs}ms synth)`);
   return { ok: true, latencyMs };
 };

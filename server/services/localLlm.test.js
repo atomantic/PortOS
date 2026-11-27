@@ -1,3 +1,4 @@
+import { recordingOperatorIo } from '../test/recordingOperatorIo.js';
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import os from 'os';
 import path from 'path';
@@ -133,6 +134,7 @@ const mocks = vi.hoisted(() => ({
     getBaseUrl: vi.fn(() => 'http://localhost:11434'),
     getInstalledModels: vi.fn(async () => []),
     getModelCapabilities: vi.fn(async () => []),
+    getModelLayout: vi.fn(async () => ({ modelInfo: null, runner: null })),
     pullModel: vi.fn(async (id) => ({ success: true, modelId: id })),
     deleteModel: vi.fn(async (id) => ({ success: true, modelId: id })),
     getLoadedModels: vi.fn(async () => []),
@@ -1714,7 +1716,7 @@ describe('syncLocalProviderModels', () => {
 
   beforeEach(() => {
     emit.mockClear();
-    svc.bindLocalLlmIo({ emit });
+    svc.bindLocalLlmIo(recordingOperatorIo(emit));
     mocks.providers.refreshProviderModelsBatch.mockImplementation(async (ids) => [
       { ids: [...ids], leadId: ids[0], status: 'updated' },
     ]);

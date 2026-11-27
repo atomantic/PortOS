@@ -4,6 +4,7 @@
 // leaves it out of TOOL_GROUPS) so one-shot "note in today's log: X" works on
 // any turn; the other four gate on DAILYLOG_INTENT_RE.
 
+import { ServerError } from '../../../lib/errorHandler.js';
 import * as journal from '../../brainJournal.js';
 
 export const DAILY_LOG_PATH = '/brain/daily-log';
@@ -34,6 +35,10 @@ export const DAILYLOG_TOOLS = [
       },
     },
     execute: async ({ startDictation = false } = {}, ctx = {}) => {
+      if (startDictation && await ctx.hasHostControl?.() !== true) {
+        const { HOST_CONTROL_FORBIDDEN_MESSAGE } = await import('../../authGate.js');
+        throw new ServerError(HOST_CONTROL_FORBIDDEN_MESSAGE, { status: 403, code: 'HOST_CONTROL_FORBIDDEN' });
+      }
       const date = await journal.getToday();
       const entry = await journal.getJournal(date);
       ctx.sideEffects?.push({ type: 'navigate', path: DAILY_LOG_PATH });
@@ -51,6 +56,7 @@ export const DAILYLOG_TOOLS = [
 
   {
     name: 'daily_log_start_dictation',
+    hostControl: true,
     description:
       'Begin voice dictation into the Daily Log: subsequent user speech is transcribed and appended verbatim to today\'s log until they say stop. Use when the user says "start dictation", "record my log", "begin logging", "dictate this", "I want to start talking into my daily log". After calling, do not comment further — just confirm briefly.',
     parameters: {
@@ -80,6 +86,7 @@ export const DAILYLOG_TOOLS = [
 
   {
     name: 'daily_log_append',
+    hostControl: true,
     description:
       'Append a text segment to a Daily Log entry (does NOT enter dictation mode — one-shot). Use when the user says "add to my daily log: X", "write in my daily log that X", "note in today\'s log: X". Exact text goes in; do not summarize.',
     parameters: {

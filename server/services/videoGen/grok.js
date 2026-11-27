@@ -44,6 +44,7 @@ import { isLowResVideo } from '../../lib/videoResolution.js';
 import { withSpawnCwdEnv } from '../../lib/spawnCwd.js';
 import { probeVideoDuration, probeVideoStreamInfo } from '../../lib/ffmpeg.js';
 import { maintenance } from '../../lib/maintenanceAdmission.js';
+import { finishedImageAdmission } from '../../lib/backupPublicationWait.js';
 import { withBackupAssetPublication } from '../../lib/backupSnapshotBoundary.js';
 import { agentInstructionsAddition, carriedPromptAdditions, sentPromptRecord } from '../../lib/modelInput.js';
 import { storyboardGuidanceAddition, storyboardGuidanceText } from '../../lib/storyboardGuidance.js';
@@ -101,6 +102,8 @@ export const cancel = (jobId) => {
   if (pending) return pending;
   const proc = activeProcs.get(jobId);
   if (!proc) return false;
+  const job = jobs.get(jobId);
+  if (job) job.canceled = true;
   sigtermWithEscalation(jobId, proc);
   return true;
 };
@@ -411,6 +414,7 @@ async function runGrokVideo(job, jobId, bin, args, {
     terminalStarted = true;
     clearTimeout(timeoutTimer);
     cleanup().then(() => {
+      if (job.canceled) return finalizeJobFailure.canceled(job, jobId, proc);
       finalizeJobFailure(job, jobId, proc, `Failed to spawn ${bin}: ${err.message}`);
     }).catch(retainOwnership);
   });
@@ -436,7 +440,12 @@ async function runGrokVideo(job, jobId, bin, args, {
     if (terminalStarted) return;
     terminalStarted = true;
     clearTimeout(timeoutTimer);
+    if (activeProcs.get(jobId) === proc) activeProcs.delete(jobId);
     try {
+      if (job.canceled) {
+        await cleanup();
+        return finalizeJobFailure.canceled(job, jobId, proc);
+      }
       if (code !== 0 || processError) {
         const reason = processError?.message || (signal ? `Killed by signal ${signal}` : `Exit code ${code}`);
         const tail = stderrTail.trim().split('\n').slice(-6).join('\n');
@@ -485,7 +494,6 @@ async function runGrokVideo(job, jobId, bin, args, {
       if (meta.storyboardGuidance) await keepFirstFrame(scratchDir, jobId, meta);
       // Removing the scratch directory also removes the harvested staging file.
       await cleanup();
-      if (activeProcs.get(jobId) === proc) activeProcs.delete(jobId);
       activeJobs.delete(jobId);
       // Shared finalizer: faststart optimization, thumbnail, history entry,
       // SSE complete + videoGenEvents 'completed' — identical to local
@@ -532,7 +540,7 @@ async function keepFirstFrame(scratchDir, jobId, meta) {
       ]);
       const { refreshImageIndex } = await import('../imageGen/sidecarStore.js');
       await refreshImageIndex(filename);
-    });
+    }, finishedImageAdmission(videoGenEvents, jobId));
     meta.firstFrameFile = filename;
   } catch (err) {
     console.warn(`⚠️ Could not keep the storyboard clip's first frame [${jobId.slice(0, 8)}]: ${err.message}`);
@@ -549,6 +557,7 @@ function noVideoReason(stdoutTail = '') {
 }
 
 const finalizeJobFailure = createJobFailureFinalizer({
+  emitCanceledFrame: true,
   jobs,
   activeJobs,
   activeSlots: activeProcs,

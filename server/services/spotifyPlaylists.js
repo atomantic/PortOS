@@ -141,10 +141,15 @@ export async function syncSpotifyPlaylists() {
 }
 
 async function doSyncSpotifyPlaylists() {
-  const accessToken = await getAccessToken().catch((error) => {
+  let accessToken;
+  try {
+    accessToken = await getAccessToken();
+  } catch (error) {
     console.error(`❌ Spotify playlist sync auth failed: ${error?.message || error}`);
-    return null;
-  });
+    return error?.code === 'INVALID_GRANT'
+      ? { ok: false, needsAuth: true, error: 'Spotify rejected the saved authorization — reconnect Spotify.' }
+      : { ok: false, needsAuth: false, error: 'Could not refresh Spotify authorization. Try syncing playlists again.' };
+  }
   if (!accessToken) {
     return { ok: false, needsAuth: true, error: 'Spotify not connected — authorize in Brain → Spotify.' };
   }

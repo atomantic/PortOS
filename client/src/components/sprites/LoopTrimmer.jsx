@@ -159,6 +159,7 @@ export default function LoopTrimmer({
     if (!playing) return undefined;
     const cols = [...enabled].sort((a, b) => a - b);
     if (cols.length < 1) return undefined;
+    // biome-ignore lint/plugin/lint-no-view-interval: Advances the sprite playback frame; no I/O.
     const timer = setInterval(() => {
       setFrameIndex((prev) => {
         const at = cols.indexOf(prev);

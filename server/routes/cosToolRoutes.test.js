@@ -6,8 +6,6 @@ import { errorMiddleware } from '../lib/errorHandler.js';
 const mocks = vi.hoisted(() => ({
   catalog: vi.fn(),
   format: vi.fn(),
-  execute: vi.fn(),
-  getCall: vi.fn(),
   readRecipes: vi.fn(),
 }));
 
@@ -20,20 +18,13 @@ vi.mock('../services/settings.js', () => ({
 vi.mock('../services/cos/cosToolRegistry.js', () => ({
   getCosToolCatalog: (...args) => mocks.catalog(...args),
   formatCosToolCatalog: (...args) => mocks.format(...args),
-  executeCosToolCall: (...args) => mocks.execute(...args),
-  getCosToolCall: (...args) => mocks.getCall(...args),
   readCosToolRecipeCatalog: (...args) => mocks.readRecipes(...args),
 }));
 
 import routes from './cosToolRoutes.js';
 
-const buildApp = ({ authenticated = false } = {}) => {
+const buildApp = () => {
   const app = express();
-  app.use(express.json());
-  app.use((req, _res, next) => {
-    req.portosAuthContext = { authenticated };
-    next();
-  });
   app.use('/api/cos', routes);
   app.use(errorMiddleware);
   return app;
@@ -44,8 +35,6 @@ beforeEach(() => {
   mocks.catalog.mockReturnValue({ type: 'portos_tool_catalog', schemaVersion: 1, tools: [] });
   mocks.format.mockImplementation((catalog) => catalog);
   mocks.readRecipes.mockResolvedValue([]);
-  mocks.execute.mockResolvedValue({ type: 'portos_tool_result', requestId: 'call-1', state: 'completed' });
-  mocks.getCall.mockResolvedValue({ type: 'portos_tool_result', requestId: 'call-1', state: 'completed' });
 });
 
 describe('CoS tool routes', () => {
@@ -78,29 +67,5 @@ describe('CoS tool routes', () => {
     expect(mocks.readRecipes).toHaveBeenCalledWith({ scope: 'agent' });
   });
 
-  it('derives UI authority from the server auth context and checks idempotency headers', async () => {
-    const body = { requestId: 'call-1', name: 'brain.search', arguments: { query: 'example' } };
-    const res = await request(buildApp({ authenticated: true }))
-      .post('/api/cos/tools/call')
-      .set('Idempotency-Key', 'call-1')
-      .send(body);
-    expect(res.status).toBe(200);
-    expect(mocks.execute).toHaveBeenCalledWith(expect.objectContaining({
-      call: expect.objectContaining(body),
-      authority: { scope: 'ui', authenticated: true },
-    }));
 
-    const mismatch = await request(buildApp()).post('/api/cos/tools/call').set('Idempotency-Key', 'other').send(body);
-    expect(mismatch.status).toBe(400);
-    expect(mismatch.body.code).toBe('TOOL_IDEMPOTENCY_MISMATCH');
-  });
-
-  it('reads retained results and 404s missing request ids', async () => {
-    const found = await request(buildApp()).get('/api/cos/tools/calls/call-1');
-    expect(found.status).toBe(200);
-    mocks.getCall.mockResolvedValue(null);
-    const missing = await request(buildApp()).get('/api/cos/tools/calls/missing');
-    expect(missing.status).toBe(404);
-    expect(missing.body.code).toBe('TOOL_CALL_NOT_FOUND');
-  });
 });

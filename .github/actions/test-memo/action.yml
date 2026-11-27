@@ -11,7 +11,7 @@ inputs:
     required: true
   partition:
     description: >-
-      The job family plus its shard (e.g. `server-1of2`), or the family alone
+      The job family plus its shard (e.g. `server-1of4`), or the family alone
       for an unsharded job. The preferred restore prefix and the saved key.
     required: true
   merge-shards:
@@ -22,12 +22,14 @@ inputs:
       from all shards. Up to 7.
     required: false
     default: '0'
-  legacy-shards:
-    description: >-
-      Previous full-run shard count, or 0. A sibling restore without a current
-      lineage can fall back to the same shard index of the old partition.
+  merge-partitions:
+    description: JSON list of specific full-run shard indexes to merge, or [] for all when merge-shards is set.
     required: false
-    default: '0'
+    default: '[]'
+  partition-only:
+    description: Limit the restore to the requested partition lineage.
+    required: false
+    default: 'false'
 
 outputs:
   key:
@@ -42,7 +44,7 @@ runs:
     # byte-identical to one a trusted green run verified. Pull requests only
     # read. Pushes to main and the scheduled, dispatched and called full runs
     # save, so the cache holds nothing a PR branch wrote. Prefer the same
-    # partition's lineage, then any shard of this job family: scoped 1of1
+    # partition's lineage, then any shard of this job family when allowed: scoped 1of1
     # plans have no full-run seed of their own. OS and architecture are in
     # every key, so a platform reads only its own verdicts. Per-test content
     # keys still decide reuse; unmatched files run normally.
@@ -54,7 +56,7 @@ runs:
         key: test-memo-${{ runner.os }}-${{ runner.arch }}-${{ inputs.partition }}-${{ github.run_id }}
         restore-keys: |
           test-memo-${{ runner.os }}-${{ runner.arch }}-${{ inputs.partition }}-
-          test-memo-${{ runner.os }}-${{ runner.arch }}-${{ inputs.suite }}-
+          ${{ inputs.partition-only != 'true' && format('test-memo-{0}-{1}-{2}-', runner.os, runner.arch, inputs.suite) || '' }}
 
     # A shard records only the tests in its slice. Related selection narrows
     # a test only through its own record (scripts/lib/testMemo.js
@@ -78,6 +80,7 @@ runs:
       id: restore-shard-1
       if: >-
         fromJSON(inputs.merge-shards) >= 1 &&
+        (inputs.merge-partitions == '[]' || contains(fromJSON(inputs.merge-partitions), 1)) &&
         !startsWith(steps.restore.outputs.cache-matched-key, format('test-memo-{0}-{1}-{2}-1of{3}-', runner.os, runner.arch, inputs.suite, inputs.merge-shards))
       uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
       with:
@@ -85,7 +88,6 @@ runs:
         key: test-memo-${{ runner.os }}-${{ runner.arch }}-${{ inputs.suite }}-1of${{ inputs.merge-shards }}-
         restore-keys: |
           test-memo-${{ runner.os }}-${{ runner.arch }}-${{ inputs.suite }}-1of${{ inputs.merge-shards }}-
-          ${{ fromJSON(inputs.legacy-shards) >= 1 && format('test-memo-{0}-{1}-{2}-1of{3}-', runner.os, runner.arch, inputs.suite, inputs.legacy-shards) || '' }}
 
     - name: Park full-run shard 1
       if: steps.restore-shard-1.outcome == 'success'
@@ -100,6 +102,7 @@ runs:
       id: restore-shard-2
       if: >-
         fromJSON(inputs.merge-shards) >= 2 &&
+        (inputs.merge-partitions == '[]' || contains(fromJSON(inputs.merge-partitions), 2)) &&
         !startsWith(steps.restore.outputs.cache-matched-key, format('test-memo-{0}-{1}-{2}-2of{3}-', runner.os, runner.arch, inputs.suite, inputs.merge-shards))
       uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
       with:
@@ -107,7 +110,6 @@ runs:
         key: test-memo-${{ runner.os }}-${{ runner.arch }}-${{ inputs.suite }}-2of${{ inputs.merge-shards }}-
         restore-keys: |
           test-memo-${{ runner.os }}-${{ runner.arch }}-${{ inputs.suite }}-2of${{ inputs.merge-shards }}-
-          ${{ fromJSON(inputs.legacy-shards) >= 2 && format('test-memo-{0}-{1}-{2}-2of{3}-', runner.os, runner.arch, inputs.suite, inputs.legacy-shards) || '' }}
 
     - name: Park full-run shard 2
       if: steps.restore-shard-2.outcome == 'success'
@@ -122,6 +124,7 @@ runs:
       id: restore-shard-3
       if: >-
         fromJSON(inputs.merge-shards) >= 3 &&
+        (inputs.merge-partitions == '[]' || contains(fromJSON(inputs.merge-partitions), 3)) &&
         !startsWith(steps.restore.outputs.cache-matched-key, format('test-memo-{0}-{1}-{2}-3of{3}-', runner.os, runner.arch, inputs.suite, inputs.merge-shards))
       uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
       with:
@@ -129,7 +132,6 @@ runs:
         key: test-memo-${{ runner.os }}-${{ runner.arch }}-${{ inputs.suite }}-3of${{ inputs.merge-shards }}-
         restore-keys: |
           test-memo-${{ runner.os }}-${{ runner.arch }}-${{ inputs.suite }}-3of${{ inputs.merge-shards }}-
-          ${{ fromJSON(inputs.legacy-shards) >= 3 && format('test-memo-{0}-{1}-{2}-3of{3}-', runner.os, runner.arch, inputs.suite, inputs.legacy-shards) || '' }}
 
     - name: Park full-run shard 3
       if: steps.restore-shard-3.outcome == 'success'
@@ -144,6 +146,7 @@ runs:
       id: restore-shard-4
       if: >-
         fromJSON(inputs.merge-shards) >= 4 &&
+        (inputs.merge-partitions == '[]' || contains(fromJSON(inputs.merge-partitions), 4)) &&
         !startsWith(steps.restore.outputs.cache-matched-key, format('test-memo-{0}-{1}-{2}-4of{3}-', runner.os, runner.arch, inputs.suite, inputs.merge-shards))
       uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
       with:
@@ -151,7 +154,6 @@ runs:
         key: test-memo-${{ runner.os }}-${{ runner.arch }}-${{ inputs.suite }}-4of${{ inputs.merge-shards }}-
         restore-keys: |
           test-memo-${{ runner.os }}-${{ runner.arch }}-${{ inputs.suite }}-4of${{ inputs.merge-shards }}-
-          ${{ fromJSON(inputs.legacy-shards) >= 4 && format('test-memo-{0}-{1}-{2}-4of{3}-', runner.os, runner.arch, inputs.suite, inputs.legacy-shards) || '' }}
 
     - name: Park full-run shard 4
       if: steps.restore-shard-4.outcome == 'success'
@@ -166,6 +168,7 @@ runs:
       id: restore-shard-5
       if: >-
         fromJSON(inputs.merge-shards) >= 5 &&
+        (inputs.merge-partitions == '[]' || contains(fromJSON(inputs.merge-partitions), 5)) &&
         !startsWith(steps.restore.outputs.cache-matched-key, format('test-memo-{0}-{1}-{2}-5of{3}-', runner.os, runner.arch, inputs.suite, inputs.merge-shards))
       uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
       with:
@@ -173,7 +176,6 @@ runs:
         key: test-memo-${{ runner.os }}-${{ runner.arch }}-${{ inputs.suite }}-5of${{ inputs.merge-shards }}-
         restore-keys: |
           test-memo-${{ runner.os }}-${{ runner.arch }}-${{ inputs.suite }}-5of${{ inputs.merge-shards }}-
-          ${{ fromJSON(inputs.legacy-shards) >= 5 && format('test-memo-{0}-{1}-{2}-5of{3}-', runner.os, runner.arch, inputs.suite, inputs.legacy-shards) || '' }}
 
     - name: Park full-run shard 5
       if: steps.restore-shard-5.outcome == 'success'
@@ -188,6 +190,7 @@ runs:
       id: restore-shard-6
       if: >-
         fromJSON(inputs.merge-shards) >= 6 &&
+        (inputs.merge-partitions == '[]' || contains(fromJSON(inputs.merge-partitions), 6)) &&
         !startsWith(steps.restore.outputs.cache-matched-key, format('test-memo-{0}-{1}-{2}-6of{3}-', runner.os, runner.arch, inputs.suite, inputs.merge-shards))
       uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
       with:
@@ -195,7 +198,6 @@ runs:
         key: test-memo-${{ runner.os }}-${{ runner.arch }}-${{ inputs.suite }}-6of${{ inputs.merge-shards }}-
         restore-keys: |
           test-memo-${{ runner.os }}-${{ runner.arch }}-${{ inputs.suite }}-6of${{ inputs.merge-shards }}-
-          ${{ fromJSON(inputs.legacy-shards) >= 6 && format('test-memo-{0}-{1}-{2}-6of{3}-', runner.os, runner.arch, inputs.suite, inputs.legacy-shards) || '' }}
 
     - name: Park full-run shard 6
       if: steps.restore-shard-6.outcome == 'success'
@@ -210,6 +212,7 @@ runs:
       id: restore-shard-7
       if: >-
         fromJSON(inputs.merge-shards) >= 7 &&
+        (inputs.merge-partitions == '[]' || contains(fromJSON(inputs.merge-partitions), 7)) &&
         !startsWith(steps.restore.outputs.cache-matched-key, format('test-memo-{0}-{1}-{2}-7of{3}-', runner.os, runner.arch, inputs.suite, inputs.merge-shards))
       uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
       with:
@@ -217,7 +220,6 @@ runs:
         key: test-memo-${{ runner.os }}-${{ runner.arch }}-${{ inputs.suite }}-7of${{ inputs.merge-shards }}-
         restore-keys: |
           test-memo-${{ runner.os }}-${{ runner.arch }}-${{ inputs.suite }}-7of${{ inputs.merge-shards }}-
-          ${{ fromJSON(inputs.legacy-shards) >= 7 && format('test-memo-{0}-{1}-{2}-7of{3}-', runner.os, runner.arch, inputs.suite, inputs.legacy-shards) || '' }}
 
     - name: Park full-run shard 7
       if: steps.restore-shard-7.outcome == 'success'

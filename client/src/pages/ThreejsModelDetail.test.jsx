@@ -72,10 +72,10 @@ const RouteSwitcher = () => {
   const navigate = useNavigate();
   return (
     <>
-      <button type="button" onClick={() => navigate('/media/threejs/model-b')}>
+      <button type="button" onClick={() => navigate('/3d/threejs/model-b')}>
         Switch to model B
       </button>
-      <button type="button" onClick={() => navigate('/media/threejs/model-a')}>
+      <button type="button" onClick={() => navigate('/3d/threejs/model-a')}>
         Switch to model A
       </button>
     </>
@@ -83,12 +83,12 @@ const RouteSwitcher = () => {
 };
 
 const renderDetail = (
-  initialEntries = ['/media/threejs/threejs-example'],
+  initialEntries = ['/3d/threejs/threejs-example'],
   { withSwitcher = false } = {},
 ) => render(
   <MemoryRouter initialEntries={initialEntries}>
     <Routes>
-      <Route path="/media/threejs/:id" element={<>{withSwitcher && <RouteSwitcher />}<ThreejsModelDetail /></>} />
+      <Route path="/3d/threejs/:id" element={<>{withSwitcher && <RouteSwitcher />}<ThreejsModelDetail /></>} />
     </Routes>
   </MemoryRouter>,
 );
@@ -140,7 +140,7 @@ describe('ThreejsModelDetail request lifecycle', () => {
       if (id === 'model-a') { oldSignal = signal; return pending.promise; }
       return Promise.resolve({ ...baseRecord, id, name: 'Model B' });
     });
-    renderLifecycleDetail(['/media/threejs/model-a']);
+    renderLifecycleDetail(['/3d/threejs/model-a']);
     await act(async () => {});
     fireEvent.click(screen.getByRole('button', { name: 'Switch to model B' }));
     expect(oldSignal.aborted).toBe(true);
@@ -411,10 +411,10 @@ describe('ThreejsModelDetail cross-part penetration gate', () => {
       },
     });
     render(
-      <MemoryRouter initialEntries={['/media/threejs/threejs-example']}>
+      <MemoryRouter initialEntries={['/3d/threejs/threejs-example']}>
         <LocationProbe />
         <Routes>
-          <Route path="/media/threejs/:id" element={<ThreejsModelDetail />} />
+          <Route path="/3d/threejs/:id" element={<ThreejsModelDetail />} />
         </Routes>
       </MemoryRouter>,
     );

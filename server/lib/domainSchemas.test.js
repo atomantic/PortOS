@@ -32,7 +32,7 @@ import { featureProviderConfigSchema, seriesAutopilotSettingsSchema } from './se
 import { locationSettingsSchema } from './instanceSettingsValidation.js';
 import { restoreRequestSchema, subdirFilterSchema } from './backupValidation.js';
 import { isPaginationRequested, paginateArray, parseIndexParam, parsePagination } from './queryValidation.js';
-import { portsAllocateSchema, databaseSwitchSchema, databaseBackendSchema, databaseExportSchema } from './databaseValidation.js';
+import { databaseBackendSchema, databaseExportSchema } from './databaseValidation.js';
 import { uploadRequestSchema, attachmentUploadRequestSchema } from './uploadValidation.js';
 
 describe('domain validation schemas', () => {
@@ -2223,30 +2223,7 @@ describe('seriesAutopilotSettingsSchema (#2174)', () => {
 });
 
 describe('ad-hoc route schemas (#2521)', () => {
-  describe('portsAllocateSchema', () => {
-    it('defaults count to 1 when absent and coerces numeric strings', () => {
-      expect(portsAllocateSchema.parse({})).toEqual({ count: 1 });
-      expect(portsAllocateSchema.parse({ count: '5' })).toEqual({ count: 5 });
-    });
-    it('rejects out-of-range counts, non-numeric strings, and non-scalar JSON', () => {
-      expect(portsAllocateSchema.safeParse({ count: 0 }).success).toBe(false);
-      expect(portsAllocateSchema.safeParse({ count: 11 }).success).toBe(false);
-      expect(portsAllocateSchema.safeParse({ count: 'abc' }).success).toBe(false);
-      // z.coerce alone would turn these into valid counts (true→1, [5]→5); the
-      // preprocess forwards only number|string so they fail instead.
-      expect(portsAllocateSchema.safeParse({ count: true }).success).toBe(false);
-      expect(portsAllocateSchema.safeParse({ count: [5] }).success).toBe(false);
-    });
-  });
-
   describe('database schemas', () => {
-    it('databaseSwitchSchema accepts valid backends + optional migrate, rejects others', () => {
-      expect(databaseSwitchSchema.safeParse({ target: 'docker' }).success).toBe(true);
-      expect(databaseSwitchSchema.safeParse({ target: 'native', migrate: true }).success).toBe(true);
-      expect(databaseSwitchSchema.safeParse({ target: 'sqlite' }).success).toBe(false);
-      expect(databaseSwitchSchema.safeParse({}).success).toBe(false);
-      expect(databaseSwitchSchema.safeParse({ target: 'docker', migrate: 'yes' }).success).toBe(false);
-    });
     it('databaseBackendSchema requires a valid backend enum', () => {
       expect(databaseBackendSchema.safeParse({ backend: 'docker' }).success).toBe(true);
       expect(databaseBackendSchema.safeParse({ backend: 'native' }).success).toBe(true);

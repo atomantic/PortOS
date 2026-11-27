@@ -73,3 +73,41 @@ describe('YoutubeTab load errors and download button (#17971)', () => {
     expect(btn.className).toContain('pointer-fine:sm:min-h-0');
   });
 });
+
+describe('YoutubeTab manual sync', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    api.getYoutubePlaylists.mockResolvedValue({ snapshot: null });
+  });
+
+  it.each([
+    ['Scrape now', api.syncYoutube, 'YOUTUBE_SYNC_FAILED'],
+    ['Sync playlists', api.syncYoutubePlaylists, 'YOUTUBE_PLAYLIST_SYNC_FAILED'],
+  ])('shows remediation when %s returns a structured error', async (button, sync, code) => {
+    const remediation = 'Log into YouTube in the managed browser, then sync again.';
+    sync.mockRejectedValueOnce(Object.assign(new Error('Signed out of YouTube'), {
+      code, status: 409, context: { status: 'auth-required', needsAuth: true, remediation },
+    }));
+    render(<YoutubeTab />);
+
+    await act(async () => { fireEvent.click(screen.getByRole('button', { name: button })); });
+
+    expect(toast.error).toHaveBeenCalledWith(remediation);
+    expect(api.getYoutubePlaylists).toHaveBeenCalledTimes(1);
+  });
+
+  it('reloads a newly saved snapshot after a playlist sync with warnings', async () => {
+    api.getYoutubePlaylists.mockResolvedValueOnce({ snapshot: null }).mockResolvedValueOnce({
+      snapshot: { playlists: [{ id: 'p1', name: 'New mix', videos: [] }] },
+    });
+    api.syncYoutubePlaylists.mockResolvedValueOnce({
+      ok: false, playlistCount: 1, videoCount: 0, warnings: ['One playlist failed'], failed: 1,
+    });
+    render(<YoutubeTab />);
+
+    fireEvent.click(screen.getByRole('button', { name: 'Sync playlists' }));
+
+    expect(await screen.findByText('New mix')).toBeInTheDocument();
+    expect(toast.error).toHaveBeenCalledWith('Playlist sync completed with 1 warning(s)');
+  });
+});

@@ -35,6 +35,9 @@ import {
   generatePipelineMusic,
   renderPipelineAudioCue,
   listPipelineMusicGenerators,
+  listPipelineMusicLibrary,
+  patchPipelineAudioLine,
+  renderPipelineAudioLine,
 } from '../../../services/apiPipeline.js';
 
 const READY_ENGINE = {
@@ -374,5 +377,107 @@ describe('AudioStage generator readiness', () => {
     await openGenerator();
     expect(await screen.findByText('INSTALL_MUSICGEN=1 bash scripts/setup-image-video.sh')).toBeInTheDocument();
     expect(screen.getByRole('button', { name: 'Generate' })).toBeDisabled();
+  });
+});
+
+describe('AudioStage dialogue edits', () => {
+  const lines = [{ id: 'line-1', text: 'Original line', offsetSec: 2 }];
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    patchPipelineAudioLine.mockReset();
+    renderPipelineAudioLine.mockReset();
+  });
+
+  it.each([
+    ['text', 'Dialogue line 1 text', 'Revised line', 'Revised line'],
+    ['offsetSec', 'Start (s)', '3.5', 3.5],
+  ])('preserves the %s draft through a failed PATCH and saves it on the next blur', async (field, label, input, value) => {
+    let failSave;
+    patchPipelineAudioLine.mockImplementationOnce(() => new Promise((_resolve, reject) => { failSave = reject; }));
+    const updated = makeIssue({ lines: [{ ...lines[0], [field]: value }] });
+    patchPipelineAudioLine.mockResolvedValueOnce({ stage: updated.stages.audio, issue: updated });
+    const onStageUpdate = vi.fn();
+    const { rerender } = render(<AudioStage issue={makeIssue({ lines })} onStageUpdate={onStageUpdate} />);
+    const editor = screen.getByLabelText(label);
+
+    fireEvent.change(editor, { target: { value: input } });
+    fireEvent.blur(editor);
+    await waitFor(() => expect(patchPipelineAudioLine).toHaveBeenCalledWith('iss-1', 0, { [field]: value }, { silent: true }));
+    expect(editor).toHaveValue(value);
+
+    await act(async () => failSave(new Error('Save unavailable')));
+    expect(toast.error).toHaveBeenCalledWith('Save unavailable');
+    expect(onStageUpdate).not.toHaveBeenCalled();
+    expect(editor).toHaveValue(value);
+
+    fireEvent.focus(editor);
+    fireEvent.blur(editor);
+    await waitFor(() => expect(onStageUpdate).toHaveBeenCalledWith('audio', updated.stages.audio, updated));
+    expect(patchPipelineAudioLine).toHaveBeenCalledTimes(2);
+
+    // The draft has cleared, so a later external update is reflected in the editor.
+    rerender(<AudioStage issue={makeIssue({ lines })} onStageUpdate={onStageUpdate} />);
+    expect(editor).toHaveValue(lines[0][field]);
+  });
+
+  it('keeps a newer edit when an older save succeeds', async () => {
+    let finishSave;
+    patchPipelineAudioLine.mockImplementationOnce(() => new Promise((resolve) => { finishSave = resolve; }));
+    const updated = makeIssue({ lines: [{ ...lines[0], text: 'First edit' }] });
+    const { rerender } = render(<AudioStage issue={makeIssue({ lines })} />);
+    const editor = screen.getByRole('textbox', { name: 'Dialogue line 1 text' });
+
+    fireEvent.change(editor, { target: { value: 'First edit' } });
+    fireEvent.blur(editor);
+    await waitFor(() => expect(patchPipelineAudioLine).toHaveBeenCalledOnce());
+    fireEvent.change(editor, { target: { value: 'Second edit' } });
+
+    await act(async () => finishSave({ stage: updated.stages.audio, issue: updated }));
+    rerender(<AudioStage issue={updated} />);
+    expect(editor).toHaveValue('Second edit');
+  });
+
+  it('awaits a pending draft save before rendering and stops when it fails', async () => {
+    let failSave;
+    patchPipelineAudioLine.mockImplementationOnce(() => new Promise((_resolve, reject) => { failSave = reject; }));
+    render(<AudioStage issue={makeIssue({ lines })} />);
+
+    const editor = screen.getByRole('textbox', { name: 'Dialogue line 1 text' });
+    fireEvent.change(editor, { target: { value: 'Edited line' } });
+    fireEvent.blur(editor);
+    await waitFor(() => expect(patchPipelineAudioLine).toHaveBeenCalledOnce());
+
+    const renderLine = screen.getByRole('button', { name: 'Render' });
+    await userEvent.click(renderLine);
+    expect(renderLine).toBeDisabled();
+    expect(renderPipelineAudioLine).not.toHaveBeenCalled();
+
+    await act(async () => failSave(new Error('Save unavailable')));
+    expect(patchPipelineAudioLine).toHaveBeenCalledOnce();
+    expect(renderPipelineAudioLine).not.toHaveBeenCalled();
+    expect(editor).toHaveValue('Edited line');
+    expect(renderLine).toBeEnabled();
+  });
+});
+
+describe('AudioStage music library', () => {
+  it('shows a load error and replaces it with the library results on Retry', async () => {
+    listPipelineMusicLibrary.mockRejectedValueOnce(new Error('Library unavailable')).mockResolvedValueOnce({
+      tracks: [{ filename: 'theme.wav', label: 'Theme' }],
+    });
+    render(<AudioStage issue={makeIssue()} />);
+
+    await userEvent.click(screen.getByRole('button', { name: 'Pick from library' }));
+    const error = await screen.findByRole('alert');
+    expect(error).toHaveTextContent('Could not load music library');
+    expect(error).toHaveTextContent('Library unavailable');
+    expect(screen.queryByText(/Library is empty/)).not.toBeInTheDocument();
+    expect(screen.queryByText('Loading…')).not.toBeInTheDocument();
+
+    await userEvent.click(within(error).getByRole('button', { name: 'Retry' }));
+    expect(await screen.findByText('Theme')).toBeInTheDocument();
+    expect(screen.queryByRole('alert')).not.toBeInTheDocument();
+    expect(listPipelineMusicLibrary).toHaveBeenCalledTimes(2);
   });
 });

@@ -3,6 +3,7 @@
  *
  * Journal ownership, process settlement and deferred-work recovery for harness actions.
  */
+import { isPidAlive } from './processLiveness.js';
 import { processAbsent } from './maintenanceDeferredUpdate.js';
 
 const KIND = 'harness-action';
@@ -11,9 +12,6 @@ const uuid = value => typeof value === 'string' && /^[0-9a-f]{8}-[0-9a-f]{4}-[1-
 const pid = value => Number.isSafeInteger(value) && value > 0;
 const actions = new Set(['install', 'update', 'uninstall']);
 const runtime = value => typeof value === 'string' && /^[a-zA-Z0-9._-]{1,64}$/.test(value);
-const processPresent = value => {
-  try { process.kill(value, 0); return true; } catch { return false; }
-};
 
 // Only a closed set of fields is persisted. This fits the journal's existing
 // operation schema, so the runner's dependency-free reader can retain it.
@@ -34,7 +32,7 @@ function parse(row) {
 }
 
 export function createHarnessActionAdmission({ transaction, read, makeId, error, now = Date.now, absent = processAbsent,
-  ownerPresent = processPresent, parentPid = () => process.ppid }) {
+  ownerPresent = isPidAlive, parentPid = () => process.ppid }) {
   const stale = message => { throw error('MAINTENANCE_STALE', message || 'The harness action ownership changed.'); };
   const inspect = state => {
     const rows = state.operations.filter(op => op.kind === KIND);

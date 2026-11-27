@@ -723,7 +723,7 @@ if [[ "$INSTALL_LTX2" == "1" ]]; then
   #
   # The runtime is pinned to a known-good commit in PortOS releases for
   # reproducibility — upstream changes cannot break installs without a
-  # PortOS release. Source build inputs are documented in docs/MLX_VIDEO_LOCKS.md.
+  # PortOS release. Source build inputs are documented in docs/RUNTIME_LOCKS.md#regenerating-mlx-inference-locks.
   #
   # The notapalindrome `mlx-video-with-audio` install above is unaffected
   # — both pipelines coexist; dispatch is per-model via media-models.json's
@@ -1026,7 +1026,7 @@ if [[ "$INSTALL_MINIMAX_H3_CUDA" == "1" ]]; then
     *) echo "❌ MiniMax H3 CUDA hash locks support x86_64 Windows/Linux only." >&2; exit 1 ;;
   esac
   if [[ "$TORCH_CUDA_INDEX" != "https://download.pytorch.org/whl/cu126" ]]; then
-    echo "❌ MiniMax H3 CUDA is locked to cu126. Unset PORTOS_TORCH_CUDA_INDEX for this runtime; see docs/MINIMAX_H3_CUDA.md." >&2
+    echo "❌ MiniMax H3 CUDA is locked to cu126. Unset PORTOS_TORCH_CUDA_INDEX for this runtime; see docs/RUNTIME_LOCKS.md#windows-and-linux-cuda." >&2
     exit 1
   fi
   MINIMAX_H3_CUDA_DIR="${HOME}/.portos/minimax-h3-cuda"
@@ -1085,7 +1085,7 @@ if [[ "$INSTALL_LTX25_CUDA" == "1" ]]; then
   esac
   LTX25_CUDA_TORCH_INDEX="${PORTOS_LTX25_CUDA_TORCH_INDEX:-https://download.pytorch.org/whl/cu132}"
   if [[ "$LTX25_CUDA_TORCH_INDEX" != "https://download.pytorch.org/whl/cu132" ]]; then
-    echo "❌ LTX-2.5 CUDA is locked to cu132. Unset PORTOS_LTX25_CUDA_TORCH_INDEX for this runtime; see docs/LTX25_CUDA.md." >&2
+    echo "❌ LTX-2.5 CUDA is locked to cu132. Unset PORTOS_LTX25_CUDA_TORCH_INDEX for this runtime; see docs/RUNTIME_LOCKS.md#ltx-25-cuda." >&2
     exit 1
   fi
   LTX25_CUDA_DIR="${HOME}/.portos/ltx-2.5-cuda"
@@ -1137,7 +1137,7 @@ if [[ "$INSTALL_WAN22_CUDA" == "1" ]]; then
     *) echo "❌ Wan 2.2 CUDA hash locks support x86_64 Windows/Linux only." >&2; exit 1 ;;
   esac
   if [[ "$TORCH_CUDA_INDEX" != "https://download.pytorch.org/whl/cu126" ]]; then
-    echo "❌ Wan 2.2 CUDA is locked to the cu126 stack. Unset PORTOS_TORCH_CUDA_INDEX for this runtime; see docs/WAN22_CUDA.md." >&2
+    echo "❌ Wan 2.2 CUDA is locked to the cu126 stack. Unset PORTOS_TORCH_CUDA_INDEX for this runtime; see docs/RUNTIME_LOCKS.md#windows-and-linux-cuda." >&2
     exit 1
   fi
   WAN22_CUDA_DIR="${HOME}/.portos/wan2.2-cuda"
@@ -1253,7 +1253,7 @@ if [[ "$INSTALL_AUDIOLDM2" == "1" ]]; then
       echo "❌ AudioLDM2 hash locks cover Apple Silicon and x86_64 Windows/Linux; Intel macOS is unsupported." >&2
       exit 1
     fi
-    require_cuda_lock_host AudioLDM2 docs/AUDIOLDM2_CUDA.md
+    require_cuda_lock_host AudioLDM2 docs/RUNTIME_LOCKS.md#windows-and-linux-cuda
   fi
   mkdir -p "${HOME}/.portos"
   reset_universal_venv "$AUDIOLDM2_VENV" "$PYTHON_BIN"
@@ -1315,7 +1315,7 @@ if [[ "$INSTALL_ACESTEP" == "1" ]]; then
       echo "❌ ACE-Step hash locks cover Apple Silicon and x86_64 Windows/Linux; Intel macOS is unsupported." >&2
       exit 1
     fi
-    require_cuda_lock_host ACE-Step docs/ACESTEP_CUDA.md
+    require_cuda_lock_host ACE-Step docs/RUNTIME_LOCKS.md#windows-and-linux-cuda
   fi
   mkdir -p "${HOME}/.portos"
   reset_universal_venv "$ACESTEP_VENV" "$PYTHON_BIN"
@@ -1393,7 +1393,7 @@ if [[ "$INSTALL_ACESTEP15" == "1" ]]; then
       echo "❌ ACE-Step 1.5 hash locks cover Apple Silicon and x86_64 Windows/Linux; Intel macOS is unsupported." >&2
       exit 1
     fi
-    require_cuda_lock_host "ACE-Step 1.5" docs/ACESTEP15_CUDA.md
+    require_cuda_lock_host "ACE-Step 1.5" docs/RUNTIME_LOCKS.md#windows-and-linux-cuda
   fi
   mkdir -p "${HOME}/.portos"
   reset_universal_venv "$ACESTEP15_VENV" "$PYTHON_BIN"
@@ -1456,7 +1456,7 @@ if [[ "$INSTALL_MINIMAX_MUSIC3" == "1" ]]; then
     echo "❌ MiniMax Music 3 CUDA needs an NVIDIA GPU. Use the Music 3 MLX runtime on Apple Silicon." >&2
     exit 1
   fi
-  require_cuda_lock_host "MiniMax Music 3" docs/MINIMAX_MUSIC3_CUDA.md
+  require_cuda_lock_host "MiniMax Music 3" docs/RUNTIME_LOCKS.md#windows-and-linux-cuda
   MINIMAX_MUSIC3_VENV="${HOME}/.portos/venv-minimax-music3"
   mkdir -p "${HOME}/.portos"
   reset_universal_venv "$MINIMAX_MUSIC3_VENV" "$PYTHON_BIN"
@@ -1534,7 +1534,7 @@ if [[ "$INSTALL_MUSCRIPTOR" == "1" ]]; then
       echo "❌ MuScriptor hash locks cover Apple Silicon and x86_64 Windows/Linux; Intel macOS is unsupported." >&2
       exit 1
     fi
-    require_cuda_lock_host MuScriptor docs/MUSCRIPTOR_CUDA.md
+    require_cuda_lock_host MuScriptor docs/RUNTIME_LOCKS.md#windows-and-linux-cuda
   fi
   mkdir -p "${HOME}/.portos"
   reset_universal_venv "$MUSCRIPTOR_VENV" "$PYTHON_BIN"
@@ -1596,7 +1596,7 @@ if [[ "$INSTALL_FLUX2" == "1" ]]; then
       echo "❌ FLUX.2 hash locks cover Apple Silicon and x86_64 Windows/Linux; Intel macOS is unsupported." >&2
       exit 1
     fi
-    require_cuda_lock_host FLUX.2 docs/FLUX2_CUDA.md
+    require_cuda_lock_host FLUX.2 docs/RUNTIME_LOCKS.md#windows-and-linux-cuda
   fi
   mkdir -p "${HOME}/.portos"
 

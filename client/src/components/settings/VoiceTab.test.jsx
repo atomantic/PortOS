@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
-import { act, fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { MemoryRouter } from 'react-router';
 import VoiceTab from './VoiceTab';
 import { getProviders } from '../../services/apiProviders';
@@ -294,6 +294,19 @@ describe('VoiceTab LLM / code-agent pickers', () => {
     voiceApi.getVoiceStatus.mockResolvedValue({ services: {} });
     voiceApi.listVoiceEngines.mockResolvedValue({ engines: [] });
     voiceApi.listVoices.mockResolvedValue({ engine: 'qwen3-tts', voices: [] });
+  });
+
+  it('labels the served Conversational Gemma option without replacing the provider’s actual id', async () => {
+    const id = 'trelis/gemma-4-31b-it-conversational';
+    getProviders.mockResolvedValue({
+      providers: [{ id: config.llm.provider, type: 'api', name: 'Local OpenAI API', models: ['gemma4:31b', id] }],
+    });
+    render(<MemoryRouter><VoiceTab /></MemoryRouter>);
+    const model = await screen.findByRole('combobox', { name: 'LLM model' });
+    const option = await within(model).findByRole('option', { name: 'Conversational Gemma 4 31B' });
+    expect(option).toHaveValue(id);
+    fireEvent.change(model, { target: { value: id } });
+    expect(model).toHaveValue(id);
   });
 
   it('keeps a linked LLM provider, model, and vision model the registry no longer lists selectable', async () => {

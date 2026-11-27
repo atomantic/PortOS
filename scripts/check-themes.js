@@ -1,5 +1,5 @@
 import { strict as assert } from 'node:assert';
-import { access, readFile } from 'node:fs/promises';
+import { readFile } from 'node:fs/promises';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import {
@@ -95,28 +95,11 @@ const FX_TOKEN_OWNERS = [
   ['--port-fx-grain-', ['grain']],
 ];
 
-const REQUIRED_DOC_SECTIONS = [
-  '## Intent',
-  '## Integration Rules',
-  '## Component Notes',
-  '## Validation',
-];
-
 function assertRgbChannels(value, themeId, varName) {
   assert(typeof value === 'string', `${themeId} ${varName} must be a string`);
   assert(/^\d{1,3} \d{1,3} \d{1,3}$/.test(value), `${themeId} ${varName} must be RGB channels`);
   for (const channel of value.split(' ').map(Number)) {
     assert(channel >= 0 && channel <= 255, `${themeId} ${varName} has out-of-range channel ${channel}`);
-  }
-}
-
-async function checkThemeDocs(theme) {
-  assert(theme.doc?.startsWith('/docs/themes/'), `${theme.id} doc must live under docs/themes`);
-  const docPath = join(repoRoot, theme.doc.slice(1));
-  await access(docPath);
-  const contents = await readFile(docPath, 'utf8');
-  for (const section of REQUIRED_DOC_SECTIONS) {
-    assert(contents.includes(section), `${theme.id} doc is missing ${section}`);
   }
 }
 
@@ -142,7 +125,7 @@ async function main() {
     }
     // `aurora` and `grid-floor` are both below-content full-screen layers at the
     // same depth, so listing both stacks them and washes the grid out. Documented
-    // in index.css and the themes README; asserted here so it can't drift.
+    // in index.css and asserted here so it can't drift.
     assert(
       !(effects.includes('aurora') && effects.includes('grid-floor')),
       `${id} lists both aurora and grid-floor — they occupy the same below-content depth`,
@@ -166,7 +149,6 @@ async function main() {
     for (const varName of REQUIRED_TOKEN_VARS) {
       assert(theme.tokens[varName], `${id} is missing token ${varName}`);
     }
-    await checkThemeDocs(theme);
   }
 
   for (const [legacyId, nextId] of Object.entries(LEGACY_THEME_ALIASES)) {

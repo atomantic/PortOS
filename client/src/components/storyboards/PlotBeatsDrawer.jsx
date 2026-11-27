@@ -32,7 +32,8 @@ export default function PlotBeatsDrawer({ open, board, onClose, onBoard }) {
   }, [board.plot]);
 
   const savePlot = () => {
-    if (plot !== (board.plot || '')) updateStoryboard(board.id, { plot }).then(onBoard).catch(() => {});
+    if (over || plot === (board.plot || '')) return;
+    updateStoryboard(board.id, { plot }).then(onBoard).catch(() => {});
   };
 
   const extract = async () => {

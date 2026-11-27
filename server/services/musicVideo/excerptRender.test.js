@@ -143,7 +143,7 @@ describe('excerpt render cancellation', () => {
     expect(excerpt(id, excerptId)).toMatchObject({ status: 'canceled', filename: null, partialFilename: null, jobId: null, renderingOn: null, error: null });
     expect(unlink.mock.calls).toEqual([[join('/test/videos', partialFilename)]]);
     expect(events).toEqual([{ projectId: id, excerptId, status: 'canceled' }]);
-    expect(cancelExcerptRender(jobId)).toBe(false);
+    expect(cancelExcerptRender(jobId)).toEqual({ ok: false, code: 'ALREADY_TERMINAL' });
     const again = await startExcerptRender(id, { startSec: 0, endSec: 2 });
     lastProc().emit('close', 1, null);
     await vi.waitFor(() => expect(terminalFrames(again.jobId)).toHaveLength(1));
@@ -221,7 +221,7 @@ describe('excerpt render cancellation', () => {
     await vi.waitFor(() => expect(terminalFrames(jobId)).toHaveLength(1));
     expect(excerpt(id, excerptId).status).toBe('canceled');
     expect(terminalFrames(jobId)).toEqual([{ type: 'canceled', error: 'Render cancelled' }]);
-    expect(cancelExcerptRender(jobId)).toBe(false);
+    expect(cancelExcerptRender(jobId)).toEqual({ ok: false, code: 'ALREADY_TERMINAL' });
   });
 
   it('accepts a cancel in the gap after ffmpeg exits and skips the film look pass', async () => {
@@ -263,7 +263,7 @@ describe('excerpt render cancellation', () => {
     expect(h.procs).toHaveLength(0);
     expect(cancelExcerptRender(jobId)).toBe(true);
     await vi.waitFor(() => expect(terminalFrames(jobId)).toHaveLength(1));
-    expect(cancelExcerptRender(jobId)).toBe(false);
+    expect(cancelExcerptRender(jobId)).toEqual({ ok: false, code: 'ALREADY_TERMINAL' });
     expect(excerpt(id, excerptId).status).toBe('canceled');
     expect(removeCompositionScratch).toHaveBeenCalledExactlyOnceWith(jobId);
     expect(h.procs).toHaveLength(0);
@@ -385,7 +385,7 @@ describe('film look finishing pass on a footage excerpt', () => {
     expect(terminalFrames(jobId)).toEqual([{ type: 'canceled', error: 'Render cancelled' }]);
     expect(excerpt(id, excerptId)).toMatchObject({ status: 'canceled', filename: null, partialFilename: null, jobId: null, error: null });
     expect(unlink.mock.calls).toEqual([[join('/test/videos', partialFilename)]]);
-    expect(cancelExcerptRender(jobId)).toBe(false);
+    expect(cancelExcerptRender(jobId)).toEqual({ ok: false, code: 'ALREADY_TERMINAL' });
   });
 
   it('settles a failed pass as an error that names it, with the window removed', async () => {

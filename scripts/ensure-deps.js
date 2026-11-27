@@ -47,8 +47,8 @@ function dependenciesNewerThanInstall(dir) {
   }
 }
 
-// Wipe `node_modules` ONLY. Every workspace lockfile ensure-deps touches (root,
-// client, server) is tracked, so `npm install` re-resolves from the
+// Wipe `node_modules` ONLY. Every workspace lockfile ensure-deps touches (client and
+// server) is tracked, so `npm install` re-resolves from the
 // committed lock — which is the state we want. Deleting it would let a clean
 // reinstall silently float transitive versions past the `overrides` pins.
 export function cleanWorkspaceDeps(dir) {
@@ -152,10 +152,10 @@ function main() {
   // Verify critical packages exist even if node_modules dirs were present
   // Grouped by workspace to avoid redundant installs
   const criticalPackages = [
-    { dir: ROOT, label: 'root', pkg: 'pm2/package.json' },
     { dir: join(ROOT, 'client'), label: 'client', pkg: 'vite/bin/vite.js' },
     { dir: join(ROOT, 'server'), label: 'server', pkg: 'express/package.json' },
     { dir: join(ROOT, 'server'), label: 'server', pkg: 'pg/package.json' },
+    { dir: join(ROOT, 'server'), label: 'server', pkg: 'pm2/bin/pm2' },
   ];
 
   const criticalByDir = new Map();

@@ -18,18 +18,26 @@ import {
   appendSceneTakes as appendTakes, selectSceneTake as selectTake, rejectUnusedTakes, swapSceneFrames, reviewSceneTake as reviewTake,
   plateCheckPrompt, plateCheckTake, recordTakePlateEvidence, moveSceneTake as moveTake,
 } from './takes.js';
+import { applyBoardUndoEntry, peekBoardUndo, popBoardUndo, recordBoardUndo, restoreBoardUndoEntry } from './boardUndo.js';
 
-const presentEdit = async ({ before, after }) => (await import('./editResult.js')).presentEditResult({ before, after });
+const presentEdit = async ({ before, after, beforeBoardUndo }) => (await import('./editResult.js')).presentEditResult({ before, after, beforeBoardUndo });
 
 // The write fills `edit` with the record before and after it (mutateProjectRecord's `edit` option);
-// `after` replaces its saved record when a board write followed.
+// `after` replaces its saved record when a board write followed. When `undoLabel` is given on a
+// board that does not mirror a linked storyboard, the pre-edit snapshot is pushed onto the undo stack.
 async function editWrite(id, transform, options = {}) {
+  const { undoLabel = null, ...mutateOptions } = options;
+  const beforeBoardUndo = peekBoardUndo(id);
   const edit = {};
-  const outcome = await mutateProjectRecord(id, transform, { ...options, presentProject: false, edit });
+  const outcome = await mutateProjectRecord(id, transform, { ...mutateOptions, presentProject: false, edit });
+  if (undoLabel && edit.before && !(edit.before.storyboardId && edit.before.storyboardSync === true)) {
+    recordBoardUndo(id, { label: undoLabel, before: edit.before });
+  }
+  edit.beforeBoardUndo = beforeBoardUndo;
   return { outcome, edit };
 }
 async function withEditResult(outcome, edit, after = edit.after) {
-  return { ...outcome, edit: await presentEdit({ before: edit.before, after }) };
+  return { ...outcome, edit: await presentEdit({ before: edit.before, after, beforeBoardUndo: edit.beforeBoardUndo }) };
 }
 // A shot as the edit result presents it (as GET does), falling back to the write's own copy.
 const presentedScene = (edit, sceneId, fallback) => edit.scenes.find((scene) => scene.sceneId === sceneId) || fallback;
@@ -45,7 +53,7 @@ export async function addProjectScene(id, sceneInput) {
   const { outcome, edit } = await editWrite(id, (current) => {
     const added = addScene(current, sceneInput);
     return { ...added, project: carryShotLocks(current, added.project) };
-  });
+  }, { undoLabel: 'add shot' });
   const { edit: result } = await withEditResult({}, edit);
   return { scene: outcome.scene, edit: result };
 }
@@ -61,21 +69,21 @@ export async function updateScene(id, sceneId, patch) {
 /** "Vary wipes" over a run of shots (projectsLogic.varySceneWipes). Answers `{ project, scenes, edit }`. */
 export async function varyProjectWipes(id, options) {
   const { varySceneWipes } = await import('./projectsLogic.js');
-  const { outcome, edit } = await editWrite(id, (current) => varySceneWipes(current, options));
+  const { outcome, edit } = await editWrite(id, (current) => varySceneWipes(current, options), { undoLabel: 'vary wipes' });
   return withEditResult(outcome, edit);
 }
 
 /** Remove a shot. Answers `{ project, edit }`. */
 export async function deleteScene(id, sceneId) {
   const { removeScene } = await import('./projectsLogic.js');
-  const { outcome, edit } = await editWrite(id, (current) => ({ project: removeScene(current, sceneId) }));
+  const { outcome, edit } = await editWrite(id, (current) => ({ project: removeScene(current, sceneId) }), { undoLabel: 'delete shot' });
   return withEditResult(outcome, edit);
 }
 
 /** Put the shots in `orderedIds` order (each slot keeps its timing). Answers `{ project, edit }`. */
 export async function reorderProjectScenes(id, orderedIds) {
   const { reorderScenes } = await import('./projectsLogic.js');
-  const { outcome, edit } = await editWrite(id, (current) => ({ project: reorderScenes(current, orderedIds) }));
+  const { outcome, edit } = await editWrite(id, (current) => ({ project: reorderScenes(current, orderedIds) }), { undoLabel: 'reorder shots' });
   return withEditResult(outcome, edit);
 }
 
@@ -105,7 +113,7 @@ export async function splitProjectScene(id, sceneId, options = {}) {
     const scenes = split.project.scenes.map((scene) => (ownPanel.has(scene.sceneId) ? { ...scene, panelId: ownPanel.get(scene.sceneId) } : scene));
     const project = carryShotLocks(current, { ...split.project, scenes }, locks);
     return { project, scenes: split.scenes.map((piece) => (ownPanel.has(piece.sceneId) ? { ...piece, panelId: ownPanel.get(piece.sceneId) } : piece)) };
-  });
+  }, { undoLabel: 'split shot' });
   if (!panelIds.length) return withEditResult(outcome, edit);
   const [first, ...later] = outcome.scenes;
   await followShots.applyShotEditToBoard(outcome.project, {
@@ -152,7 +160,7 @@ export async function cutProjectScenesOnLyrics(id, options) {
   const { outcome, edit } = await editWrite(id, (current) => {
     const { project, scenes, skipped, from, laidOut } = cutScenesOnLyricWords(current, options);
     return { project: carryShotLocks(current, project, { from }), scenes, skipped, laidOut };
-  });
+  }, { undoLabel: 'cut on lyrics' });
   return withEditResult(outcome, edit);
 }
 
@@ -164,10 +172,15 @@ export async function previewProjectPacingRecut(id) {
 
 export async function recutProjectToPacing(id, revision) {
   const [{ applyPacingRecut }, { carryShotLocks }] = await Promise.all([import('./pacingRecut.js'), import('./productionReview.js')]);
-  return mutateProjectRecord(id, (current) => {
+  const edit = {};
+  const outcome = await mutateProjectRecord(id, (current) => {
     const { project, added, from } = applyPacingRecut(current, revision);
     return { project: carryShotLocks(current, project, { from }), added };
-  });
+  }, { edit });
+  if (edit.before && !(edit.before.storyboardId && edit.before.storyboardSync === true)) {
+    recordBoardUndo(id, { label: 'recut to pacing', before: edit.before });
+  }
+  return outcome;
 }
 
 /**
@@ -182,7 +195,7 @@ export async function mergeProjectNextScene(id, sceneId, options = {}) {
     const merged = mergeNextScene(current, sceneId, options);
     assertBoardHoldsShotLengths(current, [merged.scene]);
     return merged;
-  });
+  }, { undoLabel: 'merge with next' });
   return mergeIntoBoard(id, before, outcome, edit);
 }
 
@@ -199,7 +212,7 @@ export async function mergeProjectPreviousScene(id, sceneId, options = {}) {
     const merged = mergePreviousScene(current, sceneId, options);
     assertBoardHoldsShotLengths(current, [merged.scene]);
     return merged;
-  });
+  }, { undoLabel: 'merge over previous' });
   return mergeIntoBoard(id, before, outcome, edit);
 }
 
@@ -231,7 +244,7 @@ export async function moveProjectSceneStart(id, sceneId, { startSec }) {
     const prior = previous ? sceneById(project, previous.sceneId) : null;
     assertBoardHoldsShotLengths(current, [moved, prior]);
     return { project, scene: moved, previous: prior };
-  });
+  }, { undoLabel: 'move shot start' });
   return moveCutOnBoard(id, outcome, [outcome.previous, outcome.scene], edit);
 }
 
@@ -269,8 +282,28 @@ export async function moveProjectSceneEnd(id, sceneId, { endSec }) {
     const nextShot = next ? sceneById(project, next.sceneId) : null;
     assertBoardHoldsShotLengths(current, [moved, nextShot]);
     return { project, scene: moved, next: nextShot };
-  });
+  }, { undoLabel: 'change shot length' });
   return moveCutOnBoard(id, outcome, [outcome.scene, outcome.next], edit);
+}
+
+/** Restore the most recent structural/timing board edit snapshot. Answers `{ undone, edit }`. */
+export async function undoProjectBoardEdit(id) {
+  const beforeBoardUndo = peekBoardUndo(id);
+  const entry = popBoardUndo(id);
+  if (!entry) throw new ServerError('Nothing to undo for this project.', { status: 400, code: 'NOTHING_TO_UNDO' });
+  try {
+    const { outcome, edit } = await editWrite(id, (current) => {
+      if (current.storyboardId && current.storyboardSync === true) {
+        throw new ServerError("This video's shots follow its storyboard; undo panel changes in the storyboard.", { status: 409, code: 'UNDO_FOLLOWS_STORYBOARD' });
+      }
+      return { project: applyBoardUndoEntry(current, entry) };
+    });
+    edit.beforeBoardUndo = beforeBoardUndo;
+    return withEditResult({ ...outcome, undone: entry.label }, edit);
+  } catch (err) {
+    restoreBoardUndoEntry(id, entry);
+    throw err;
+  }
 }
 
 // A take decision with the edit result, so the board shows the readiness and neighbour take

@@ -1,3 +1,4 @@
+import { recordingOperatorIo } from '../test/recordingOperatorIo.js';
 import { armSystemActivityWatchers } from './systemActivityWatchers.js';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { claimAppOperation, endAppOperation, __resetAppOperations } from './appOperations.js';
@@ -45,7 +46,7 @@ describe('system activity invalidation', () => {
   it('coalesces a burst into one frame that carries no snapshot', () => {
     vi.useFakeTimers();
     const emit = vi.fn();
-    bindSystemActivityIo({ emit });
+    bindSystemActivityIo(recordingOperatorIo(emit));
     noteSystemActivity('media', 'start');
     noteSystemActivity('media', 'completion');
     noteSystemActivity('agents', 'queued');
@@ -117,7 +118,7 @@ describe('system activity invalidation', () => {
     hooks.onRunCanceled({ runId: 'run-1' });
     expect(hooks.onRunUnreported({ runId: 'run-2' })).toBe('unreported kept');
 
-    const io = { emit: vi.fn() };
+    const io = { except: () => ({ emit: vi.fn() }) };
     const app = { id: 'app-1', name: 'Example', repoPath: 'app-1' };
     expect(claimAppOperation(io, app, 'update').ok).toBe(true);
     endAppOperation(io, 'app-1', 'failure');

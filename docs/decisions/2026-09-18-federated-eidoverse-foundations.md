@@ -2,7 +2,7 @@
 
 - **Date:** 2026-09-18
 - **Status:** Accepted
-- **Related:** [machine-local privacy records](./2026-08-08-privacy-records-machine-local.md), [Eidoverse guest chat](./2026-09-05-eidoverse-guest-chat.md), [Eidoverse](../features/eidoverse-guest-travel.md), #7455, epic #7453, provenance edges #7461
+- **Related:** [machine-local privacy records](./2026-08-08-privacy-records-machine-local.md), [Eidoverse guest chat](./2026-09-05-eidoverse-guest-chat.md), [Eidoverse](../features/eidoverse.md#federated-guest-travel), #7455, epic #7453, provenance edges #7461
 
 ## Context
 

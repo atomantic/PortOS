@@ -44,7 +44,7 @@ export async function generateArcFromSource(seriesId, {
       contentType,
       source,
       // Mirror the importer's per-type Mustache section guards so the prompt's
-      // boundary heuristics fire correctly (buildTypeFlags in importer.js).
+      // boundary heuristics fire correctly (buildTypeFlags in importerAnalyze.js).
       isShortStory: contentType === 'short-story',
       isNovel: contentType === 'novel',
       isScreenplay: contentType === 'screenplay',

@@ -53,10 +53,10 @@ async function inspect(directory, logicalDirectory = directory) {
   return { canonicalRoot: root, rootIdentity, bytes, files, present: identity !== null, fingerprint: hash.digest('hex'), identity };
 }
 
-async function assertIdle() {
+async function assertIdle(runsDir) {
   // Retired producers cannot start; queued or running media work may still own dataset inputs.
   if (listJobs().some(job => ['queued', 'running'].includes(job.status))) throw fail('Media work is queued or running. Wait for it to finish or cancel it explicitly.', 'MAINTENANCE_BUSY');
-  const busy = await trainingRunsBusy();
+  const busy = await trainingRunsBusy({ runsDir });
   if (busy.busy !== false) throw fail(busy.reason || 'Training ownership could not be determined.', 'MAINTENANCE_BUSY');
 }
 
@@ -76,10 +76,11 @@ export async function deleteMaintenance(id) {
   if (!operation) throw new ServerError('Unsupported maintenance operation', { status: 404, code: 'NOT_FOUND' });
   const { directory } = operation;
   return withLock(() => withBackupAssetPublication(() => withRetiredDataRemoval(async () => {
-    await assertIdle();
     const current = await inspect(directory);
     if (!current.present) throw fail('Nothing remains to delete. Refresh inventory.', 'MAINTENANCE_STALE');
     const source = join(current.canonicalRoot, directory);
+    const runsDir = join(current.canonicalRoot, 'training-runs');
+    await assertIdle(runsDir);
     const stagedName = `.maintenance-${randomUUID()}`;
     const staged = join(current.canonicalRoot, stagedName);
     await renameGuarded(source, staged);
@@ -89,7 +90,7 @@ export async function deleteMaintenance(id) {
     try {
       const detached = await inspect(stagedName, directory);
       if (JSON.stringify(detached.rootIdentity) !== JSON.stringify(current.rootIdentity) || JSON.stringify(detached.identity) !== JSON.stringify(current.identity) || detached.fingerprint !== current.fingerprint) throw fail('Files changed while preparing deletion.');
-      await assertIdle();
+      await assertIdle(directory === 'training-runs' ? staged : runsDir);
       const finalRoot = await dataRootSnapshot();
       if (finalRoot.root !== current.canonicalRoot || JSON.stringify(finalRoot.identity) !== JSON.stringify(current.rootIdentity)) throw fail('Data root changed while preparing deletion.');
       if (await lstat(source).catch(missing)) throw fail('The source directory was recreated while preparing deletion.');

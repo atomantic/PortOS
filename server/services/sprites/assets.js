@@ -25,7 +25,7 @@ import { ServerError } from '../../lib/errorHandler.js';
 import {
   spriteDir, resolveSpriteAssetPath, RUNTIME_POINTER_REL, RUNTIME_PUBLICATIONS_REL,
 } from './paths.js';
-import { withWalkWriteTail } from './walk.js';
+import { withAnimationWriteTail as withWalkWriteTail } from './animationWorkflow.js';
 
 // Record bookkeeping, not deletable assets: the mutable current-atlas pointer
 // and the append-only publish history. The versioned PNGs/manifests they name

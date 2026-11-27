@@ -86,15 +86,14 @@ async function stageEndFrame({ body, uploads, stageUploadDurable }) {
 // Runway renders from a start frame (an end frame on the models that take one),
 // or from text alone on a model with a text-to-video rule.
 async function stageRunwayInputs(ctx) {
-  const { body, uploads, sourceImagePath, cleanupStaged } = ctx;
-  const refuse = async (message) => {
-    await cleanupStaged();
+  const { body, uploads, sourceImagePath } = ctx;
+  const refuse = (message) => {
     throw new ServerError(message, { status: 400, code: 'VALIDATION_ERROR' });
   };
-  if (uploads.audioFile) await refuse('Runway renders cutaways only; it takes no source audio.');
+  if (uploads.audioFile) refuse('Runway renders cutaways only; it takes no source audio.');
   const special = getRunwaySpecialVideoModel(body.runwayModelId);
   if (special) {
-    if ((uploads.sourceImage || body.sourceImageFile) && !sourceImagePath) await refuse('The requested Runway guidance or character image could not be resolved.');
+    if ((uploads.sourceImage || body.sourceImageFile) && !sourceImagePath) refuse('The requested Runway guidance or character image could not be resolved.');
     buildRunwaySpecialVideoRequest({
       modelId: special.id, videoMode: body.mode, prompt: body.prompt, negativePrompt: body.negativePrompt,
       videoUri: uploads.runwayVideo ? 'pending:video' : null,
@@ -109,25 +108,25 @@ async function stageRunwayInputs(ctx) {
     if (runwayCharacterVideoPath) await validateRunwayVideoInput(runwayCharacterVideoPath, special, { character: true });
     return { runwayVideoPath, runwayCharacterVideoPath, uploadedTempPaths: [runwayVideoPath, runwayCharacterVideoPath].filter(Boolean) };
   }
-  if (uploads.runwayVideo || uploads.runwayCharacterVideo || !['text', 'image', undefined].includes(body.mode)) await refuse('Choose the Runway model matching these video inputs.');
+  if (uploads.runwayVideo || uploads.runwayCharacterVideo || !['text', 'image', undefined].includes(body.mode)) refuse('Choose the Runway model matching these video inputs.');
   const model = getRunwayVideoModel(body.runwayModelId || RUNWAY_DEFAULT_IMAGE_VIDEO_MODEL);
-  if (!model) await refuse(`"${body.runwayModelId}" is not a Runway model PortOS offers`);
-  if (!sourceImagePath && !runwayModelTakesText(model)) await refuse(`${model.label} renders from a start frame — supply a source image.`);
-  if (!sourceImagePath && (uploads.lastImage || body.lastImageFile)) await refuse('An end frame needs a start frame — supply a source image.');
+  if (!model) refuse(`"${body.runwayModelId}" is not a Runway model PortOS offers`);
+  if (!sourceImagePath && !runwayModelTakesText(model)) refuse(`${model.label} renders from a start frame — supply a source image.`);
+  if (!sourceImagePath && (uploads.lastImage || body.lastImageFile)) refuse('An end frame needs a start frame — supply a source image.');
   const hasEndFrame = !!uploads.lastImage || !!body.lastImageFile;
-  if (hasEndFrame && !model.endImage) await refuse(`${model.label} takes no end frame`);
+  if (hasEndFrame && !model.endImage) refuse(`${model.label} takes no end frame`);
   // A Music Video clip resolves its shot's references when it is queued (submitJob.js).
   const pickedReferences = body.musicVideo ? [] : body.referenceImageFiles || [];
   if (pickedReferences.length) {
-    if (!model.referenceImages) await refuse(`${model.label} takes no reference images.`);
-    if (!sourceImagePath) await refuse('Reference images need a start frame — supply a source image.');
-    if (hasEndFrame && !model.referenceImages.keepsFrames) await refuse(`${model.label} cannot combine an end frame with reference images. Turn one of them off.`);
-    if (pickedReferences.length + (hasEndFrame ? 2 : 1) > model.referenceImages.max) await refuse(`${model.label} takes at most ${model.referenceImages.max} images, its frames included.`);
+    if (!model.referenceImages) refuse(`${model.label} takes no reference images.`);
+    if (!sourceImagePath) refuse('Reference images need a start frame — supply a source image.');
+    if (hasEndFrame && !model.referenceImages.keepsFrames) refuse(`${model.label} cannot combine an end frame with reference images. Turn one of them off.`);
+    if (pickedReferences.length + (hasEndFrame ? 2 : 1) > model.referenceImages.max) refuse(`${model.label} takes at most ${model.referenceImages.max} images, its frames included.`);
   }
   const referenceImagePaths = [];
   for (const file of pickedReferences) {
     const path = resolveGalleryImage(file);
-    if (!path) await refuse(`The reference image ${file} could not be found in the gallery.`);
+    if (!path) refuse(`The reference image ${file} could not be found in the gallery.`);
     referenceImagePaths.push(path);
   }
   const references = referenceImagePaths.length ? { referenceImagePaths } : {};
@@ -140,12 +139,11 @@ async function stageRunwayInputs(ctx) {
 // end frame) or gallery reference images. The catalog dry run refuses a
 // combination the chosen family cannot take before anything is staged.
 async function stageHiggsfieldInputs(ctx) {
-  const { body, uploads, sourceImagePath, cleanupStaged } = ctx;
-  const refuse = async (message, code = 'VALIDATION_ERROR') => {
-    await cleanupStaged();
+  const { body, uploads, sourceImagePath } = ctx;
+  const refuse = (message, code = 'VALIDATION_ERROR') => {
     throw new ServerError(message, { status: 400, code });
   };
-  if (uploads.audioFile) await refuse('Use the shot’s Song audio control for a Higgsfield song reference.');
+  if (uploads.audioFile) refuse('Use the shot’s Song audio control for a Higgsfield song reference.');
   const hasEndFrame = !!uploads.lastImage || !!body.lastImageFile;
   const pickedReferences = body.referenceImageFiles || [];
   try {
@@ -155,12 +153,12 @@ async function stageHiggsfieldInputs(ctx) {
       referenceImageUrls: pickedReferences.map((_, i) => `pending:reference-${i + 1}`),
     });
   } catch (err) {
-    await refuse(err.message, err.code);
+    refuse(err.message, err.code);
   }
   const referenceImagePaths = [];
   for (const file of pickedReferences) {
     const path = resolveGalleryImage(file);
-    if (!path) await refuse(`The reference image ${file} could not be found in the gallery.`);
+    if (!path) refuse(`The reference image ${file} could not be found in the gallery.`);
     referenceImagePaths.push(path);
   }
   const references = referenceImagePaths.length ? { referenceImagePaths } : {};
@@ -169,22 +167,26 @@ async function stageHiggsfieldInputs(ctx) {
   return { ...references, lastImagePath: endFrame.path, ...(endFrame.owned ? { uploadedTempPaths: [endFrame.path] } : {}) };
 }
 
+export function googleVideoProjectError(settings, modelId) {
+  const config = resolveGoogleConfig(settings);
+  const model = getGoogleVideoModel(modelId || GOOGLE_DEFAULT_VIDEO_MODEL);
+  const message = model && googleExpressModeRefusal(config, model);
+  return message ? new ServerError(message, { status: 400, code: 'GOOGLE_PROJECT_REQUIRED' }) : null;
+}
+
 // Veo renders from a prompt, a start frame (optionally with an end frame) or,
 // on Veo 3.1, gallery asset reference images. The catalog dry run refuses a
 // combination the chosen model cannot take before anything is staged.
 async function stageGoogleInputs(ctx) {
-  const { body, uploads, sourceImagePath, cleanupStaged } = ctx;
-  const refuse = async (message, code = 'VALIDATION_ERROR') => {
-    await cleanupStaged();
+  const { body, uploads, sourceImagePath } = ctx;
+  const refuse = (message, code = 'VALIDATION_ERROR') => {
     throw new ServerError(message, { status: 400, code });
   };
-  const config = resolveGoogleConfig(ctx.settings || await getSettings().catch(() => null));
-  const model = getGoogleVideoModel(body.googleModelId || GOOGLE_DEFAULT_VIDEO_MODEL);
-  if (model) {
-    const expressRefusal = googleExpressModeRefusal(config, model);
-    if (expressRefusal) await refuse(expressRefusal, 'GOOGLE_PROJECT_REQUIRED');
+  const projectError = googleVideoProjectError(ctx.settings || await getSettings().catch(() => null), body.googleModelId);
+  if (projectError) {
+    throw projectError;
   }
-  if (uploads.audioFile) await refuse('Google Veo takes no source audio; turn on Provider audio instead.');
+  if (uploads.audioFile) refuse('Google Veo takes no source audio; turn on Provider audio instead.');
   const hasEndFrame = !!uploads.lastImage || !!body.lastImageFile;
   const pickedReferences = body.musicVideo ? [] : body.referenceImageFiles || [];
   const placeholder = { mimeType: 'image/png', data: '' };
@@ -196,12 +198,12 @@ async function stageGoogleInputs(ctx) {
       referenceImages: pickedReferences.map(() => placeholder),
     });
   } catch (err) {
-    await refuse(err.message, err.code || 'VALIDATION_ERROR');
+    refuse(err.message, err.code || 'VALIDATION_ERROR');
   }
   const referenceImagePaths = [];
   for (const file of pickedReferences) {
     const path = resolveGalleryImage(file);
-    if (!path) await refuse(`The reference image ${file} could not be found in the gallery.`);
+    if (!path) refuse(`The reference image ${file} could not be found in the gallery.`);
     referenceImagePaths.push(path);
   }
   const references = referenceImagePaths.length ? { referenceImagePaths } : {};
@@ -213,10 +215,9 @@ async function stageGoogleInputs(ctx) {
 // A standalone fal source-audio take: stage the audio clip durably like the frame. The queue removes
 // it if the job fails, is cancelled or is lost to a restart (uploadedTempPaths); the fal worker
 // removes it once the take is published.
-async function stageFalSourceAudio({ body, uploads, sourceImagePath, stageUploadDurable, cleanupStaged }) {
+async function stageFalSourceAudio({ body, uploads, sourceImagePath, stageUploadDurable }) {
   if (!uploads.audioFile) return null;
   if (!sourceImagePath) {
-    await cleanupStaged();
     throw new ServerError('A fal.ai source-audio render needs a reference frame (sourceImage or sourceImageFile).', { status: 400, code: 'VALIDATION_ERROR' });
   }
   const audioPath = await stageUploadDurable(uploads.audioFile, 'audio');
@@ -225,12 +226,10 @@ async function stageFalSourceAudio({ body, uploads, sourceImagePath, stageUpload
   const window = getFalVideoModel(body.falModelId)?.audioInput || {};
   const clipSec = await probeVideoDuration(audioPath).catch(() => null);
   if (clipSec == null) {
-    await cleanupStaged();
     throw new ServerError('Could not read the voice clip\'s duration. Upload a valid WAV, MP3, M4A, AAC, FLAC, OGG or WebM file.',
       { status: 400, code: 'VIDEO_GEN_AUDIO_DURATION_UNREADABLE' });
   }
   if ((window.minSec != null && clipSec < window.minSec) || (window.maxSec != null && clipSec > window.maxSec)) {
-    await cleanupStaged();
     throw new ServerError(`The voice clip is ${clipSec.toFixed(2)} s; this model takes ${window.minSec}–${window.maxSec} s (pad a short line with silence).`,
       { status: 400, code: 'VIDEO_GEN_AUDIO_LENGTH' });
   }
@@ -241,11 +240,10 @@ async function stageFalSourceAudio({ body, uploads, sourceImagePath, stageUpload
 // (@Image1..N). A storyboard-guided render owns its references (storyboardGuidance.js) and a Music
 // Video clip resolves its own at queue time, so neither passes through here. The dry run refuses a
 // count over the model's cap (its start frame included) before anything is staged or paid for.
-async function resolveFalReferenceImages({ body, sourceImagePath, cleanupStaged }) {
+function resolveFalReferenceImages({ body, sourceImagePath }) {
   const picks = body.guidanceImageFile || body.musicVideo ? [] : body.referenceImageFiles || [];
   if (!picks.length) return [];
-  const refuse = async (message) => {
-    await cleanupStaged();
+  const refuse = (message) => {
     throw new ServerError(message, { status: 400, code: 'VALIDATION_ERROR' });
   };
   try {
@@ -255,12 +253,12 @@ async function resolveFalReferenceImages({ body, sourceImagePath, cleanupStaged 
       referenceImageUrls: picks.map((_, i) => `pending:reference-${i + 1}`),
     });
   } catch (err) {
-    await refuse(err.message);
+    refuse(err.message);
   }
   const paths = [];
   for (const file of picks) {
     const path = resolveGalleryImage(file);
-    if (!path) await refuse(`The reference image ${file} could not be found in the gallery.`);
+    if (!path) refuse(`The reference image ${file} could not be found in the gallery.`);
     paths.push(path);
   }
   return paths;
@@ -269,7 +267,7 @@ async function resolveFalReferenceImages({ body, sourceImagePath, cleanupStaged 
 // Stage fal's extra inputs (end frame, then source audio — the order matters
 // for rollback). Returns the provider fields plus every queue-owned path.
 async function stageFalInputs(ctx) {
-  const referenceImagePaths = await resolveFalReferenceImages(ctx);
+  const referenceImagePaths = resolveFalReferenceImages(ctx);
   const endFrame = await stageFalEndFrame(ctx);
   const audioFilePath = ctx.falSourceAudio ? await stageFalSourceAudio(ctx) : null;
   const uploadedTempPaths = [...(endFrame?.owned ? [endFrame.path] : []), ...(audioFilePath ? [audioFilePath] : [])];
@@ -290,7 +288,7 @@ export const HOSTED_VIDEO_SUBMISSIONS = {
     stageInputs: stageCastReferenceImages,
     validateRetry: (params) => assertAnchoredReference(VIDEO_GEN_MODE.GROK, params),
     errorCode: 'GROK_IMAGEGEN_DISABLED',
-    errorMessage: 'Grok Imagegen is disabled — enable it in Settings → Image Gen first',
+    errorMessage: 'Grok Imagegen is disabled — enable it in Media Gen Settings first',
     buildParams: (body, prepared) => ({
       grokPath: prepared.grok.grokPath,
       aspectRatio: body.visualConditioning?.render?.parameters?.aspectRatio || prepared.grok.aspectRatio,
@@ -309,7 +307,7 @@ export const HOSTED_VIDEO_SUBMISSIONS = {
     stageInputs: stageFalInputs,
     validateRetry: (params) => assertAnchoredReference(VIDEO_GEN_MODE.FAL, params),
     errorCode: 'FAL_NOT_CONFIGURED',
-    errorMessage: 'No fal.ai API key configured — set it in Settings → Video Gen (or the FAL_KEY env var) first',
+    errorMessage: 'No fal.ai API key configured — set it in Settings → Credentials (or the FAL_KEY env var) first',
     // The model, resolution and audio flag are resolved against the curated
     // catalog by videoGen/fal.js (an unsupported resolution falls back to the
     // model's default there); provider audio is off unless asked for.
@@ -338,7 +336,7 @@ export const HOSTED_VIDEO_SUBMISSIONS = {
     stageInputs: stageRunwayInputs,
     validateRetry: (params) => assertAnchoredReference(VIDEO_GEN_MODE.RUNWAY, params),
     errorCode: 'RUNWAY_NOT_CONFIGURED',
-    errorMessage: 'No Runway API key configured — set it in Settings → Video Gen (or the RUNWAYML_API_SECRET env var) first',
+    errorMessage: 'No Runway API key configured — set it in Settings → Credentials (or the RUNWAYML_API_SECRET env var) first',
     // The model, length and size are resolved against the curated catalog by videoGen/runway.js.
     buildParams: (body, prepared) => ({
       modelId: body.runwayModelId,
@@ -423,7 +421,7 @@ export const HOSTED_VIDEO_SUBMISSIONS = {
     stageInputs: NO_STAGED_INPUTS,
     validateRetry: (params) => assertAnchoredReference(VIDEO_GEN_MODE.REACTOR, params),
     errorCode: 'REACTOR_NOT_CONFIGURED',
-    errorMessage: 'No reactor.inc API key configured — set it in Settings → Video Gen (or the REACTOR_API_KEY env var) first',
+    errorMessage: 'No reactor.inc API key configured — set it in Settings → Credentials (or the REACTOR_API_KEY env var) first',
     buildParams: (body) => ({
       continueFromClipId: body.reactorClipId,
       seconds: body.reactorSeconds,

@@ -1,12 +1,12 @@
 /**
  * Builds the current VideoGen wire payload and enveloped prompt from a form-state snapshot.
  *
- * Use when: Internal submission slice composed by `useVideoGenForm`; all local, Grok, and federated
- * request shaping remains in `videoGenSubmission`.
+ * Use when: Internal submission slice composed by `useVideoGenForm`; all local, hosted, and federated
+ * request shaping remains in `buildVideoGenPayload`.
  */
 
 import { useCallback, useRef } from 'react';
-import { buildVideoGenSubmission, envelopVideoPrompt } from '../../lib/videoGenSubmission.js';
+import { buildVideoGenPayload, envelopVideoPrompt } from '../../lib/buildVideoGenPayload.js';
 
 /** Keeps request shaping behind one focused boundary for every VideoGen lane. */
 export function useVideoGenSubmitFlow(submissionState) {
@@ -14,7 +14,7 @@ export function useVideoGenSubmitFlow(submissionState) {
   submissionStateRef.current = submissionState;
 
   const buildGeneratePayload = useCallback(
-    () => buildVideoGenSubmission(submissionStateRef.current),
+    () => buildVideoGenPayload(submissionStateRef.current),
     [],
   );
 

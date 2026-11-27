@@ -20,11 +20,13 @@ const { mockGetSystemActivity, mockGetGpuTelemetry, mockCancelMediaJob } = vi.ho
 }));
 
 // The widget imports apiSystem.js and apiMediaJobs.js directly, not the api barrel (#16813).
-// useSystemActivity reads apiSystem.js too, so the same mock serves both.
 vi.mock('../../services/apiSystem.js', async (importOriginal) => ({
   ...(await importOriginal()),
-  getSystemActivity: (...args) => mockGetSystemActivity(...args),
   getGpuTelemetry: (...args) => mockGetGpuTelemetry(...args),
+}));
+vi.mock('../../services/apiAppShell.js', async (importOriginal) => ({
+  ...(await importOriginal()),
+  getSystemActivity: (...args) => mockGetSystemActivity(...args),
 }));
 vi.mock('../../services/apiMediaJobs.js', () => ({
   cancelMediaJob: (...args) => mockCancelMediaJob(...args),
@@ -62,6 +64,15 @@ describe('ActiveProcessingWidget', () => {
     expect(await screen.findByText('Live activity')).toBeInTheDocument();
     expect(screen.getByText('Nothing is running')).toBeInTheDocument();
     expect(screen.getByRole('link', { name: /GPU ready/ })).toHaveAttribute('href', '/system-resources/overview');
+  });
+
+  it('does not subscribe to the one-second clock while idle or offscreen', async () => {
+    vi.useFakeTimers();
+    intersecting = false;
+    await act(async () => { renderWidget(); });
+    expect(screen.getByText('Nothing is running')).toBeInTheDocument();
+    expect(vi.getTimerCount()).toBe(0);
+    vi.useRealTimers();
   });
 
   it('summarizes active work and links each lane to its destination', async () => {

@@ -20,12 +20,12 @@ const LAYOUT = {
   ],
 };
 
-async function renderEditor(layout = LAYOUT) {
+async function renderEditor(layout = LAYOUT, layouts = [layout]) {
   const onSave = vi.fn().mockResolvedValue(undefined);
   const onDuplicate = vi.fn().mockResolvedValue(undefined);
   render(
     <LayoutEditor
-      layouts={[layout]}
+      layouts={layouts}
       activeLayoutId={layout.id}
       limits={null}
       onClose={vi.fn()}
@@ -44,8 +44,8 @@ async function renderEditor(layout = LAYOUT) {
 // The widget rows are the only <li>s once a layout has widgets.
 const widgetRows = () => [...document.querySelectorAll('li')];
 const clickButton = (label) => fireEvent.click(screen.getByText(label).closest('button'));
-const moveUp = (idx) => fireEvent.click(within(widgetRows()[idx]).getByLabelText('Move up'));
-const moveDown = (idx) => fireEvent.click(within(widgetRows()[idx]).getByLabelText('Move down'));
+const moveUp = (idx) => fireEvent.click(within(widgetRows()[idx]).getByLabelText(/^Move up /));
+const moveDown = (idx) => fireEvent.click(within(widgetRows()[idx]).getByLabelText(/^Move down /));
 // Two settles: one to run the click's own async handler, one to let the
 // post-save state updates it schedules land inside act as well.
 const settle = async (fire) => {
@@ -56,6 +56,23 @@ const save = () => settle(() => clickButton('Save'));
 
 describe('LayoutEditor reorder signal', () => {
   beforeEach(() => { vi.clearAllMocks(); });
+
+  it('marks the layout being edited and identifies widgets in row actions', async () => {
+    const other = { id: 'other', name: 'Other', widgets: [], grid: [] };
+    await renderEditor(LAYOUT, [LAYOUT, other]);
+
+    const demo = screen.getByText('Demo').closest('button');
+    const otherButton = screen.getByText('Other').closest('button');
+    expect(demo).toHaveAttribute('aria-current', 'true');
+    expect(otherButton).not.toHaveAttribute('aria-current');
+    expect(screen.getByLabelText('Move up Quick Task')).toBeDisabled();
+    expect(screen.getByLabelText('Move down Quick Task')).toBeEnabled();
+    expect(screen.getByLabelText('Remove Quick Task')).toBeEnabled();
+
+    fireEvent.click(otherButton);
+    expect(otherButton).toHaveAttribute('aria-current', 'true');
+    expect(demo).not.toHaveAttribute('aria-current');
+  });
 
   it('moves a widget up in the list and flags the save as a reorder', async () => {
     const { onSave } = await renderEditor();
@@ -98,7 +115,7 @@ describe('LayoutEditor reorder signal', () => {
 
   it('does not flag a widget toggle as a reorder', async () => {
     const { onSave } = await renderEditor();
-    fireEvent.click(within(widgetRows()[1]).getByLabelText('Remove widget'));
+    fireEvent.click(within(widgetRows()[1]).getByLabelText('Remove Apps Grid'));
     clickButton('Meatspace Time Remaining');
     await save();
     expect(onSave).toHaveBeenCalledWith(expect.objectContaining({

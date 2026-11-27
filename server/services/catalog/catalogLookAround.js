@@ -174,7 +174,7 @@ export async function startLookAround(ingredientId, { sourceImage, motion: motio
     configured: isVideoModeUsable(settings, VIDEO_GEN_MODE.FAL),
   };
   if (dryRun) return { dryRun: true, ...plan };
-  if (!plan.configured) refuse(400, 'FAL_NOT_CONFIGURED', 'No fal.ai API key configured — set it in Settings > Video Gen or the FAL_KEY env var');
+  if (!plan.configured) refuse(400, 'FAL_NOT_CONFIGURED', 'No fal.ai API key configured — set it in Settings → Credentials or the FAL_KEY env var');
 
   // These are the fields videoGen/fal.js rebuilds the request from, so the sent body equals `plan.body`.
   const { jobId } = await deps.enqueueJob({ kind: 'video', owner: ownerFor(place.id), params: {

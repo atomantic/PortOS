@@ -25,7 +25,10 @@ import { computeCorrelationQuality, isCorrelationProven, CORRELATION_QUALITY_THR
 export async function getLearningInsights() {
   const data = await loadLearningData();
   const dismissed = await loadDismissedRecommendations();
+  return summarizeLearningInsights(data, dismissed);
+}
 
+export function summarizeLearningInsights(data, dismissed) {
   // Calculate overall success rate
   const overallSuccessRate = data.totals.completed > 0
     ? Math.round((data.totals.succeeded / data.totals.completed) * 100)
@@ -286,8 +289,7 @@ export async function clearDismissedRecommendations() {
 /**
  * List dismissed recommendations as an array sorted by dismissedAt desc.
  */
-export async function getDismissedRecommendations() {
-  const map = await loadDismissedRecommendations();
+export function listDismissedRecommendations(map) {
   return Object.entries(map)
     .map(([id, entry]) => ({ id, ...entry }))
     .sort((a, b) => (b.dismissedAt || '').localeCompare(a.dismissedAt || ''));

@@ -6,14 +6,21 @@ import { errorMiddleware } from '../lib/errorHandler.js';
 vi.mock('../services/mortalLoomStore.js', () => ({
   getStatus: vi.fn(),
   importToPortOS: vi.fn(),
+  previewMortalLoomRecoveryCopy: vi.fn(),
   MORTALLOOM_APP_STORE_URL: 'https://apps.apple.com/app/id0000000000',
 }));
 
-import { getStatus, importToPortOS } from '../services/mortalLoomStore.js';
+import { getStatus, importToPortOS, previewMortalLoomRecoveryCopy } from '../services/mortalLoomStore.js';
 import mortalloomRoutes from './mortalloom.js';
 
 const app = express();
 app.use(express.json());
+app.use((req, _res, next) => {
+  // Model the authority authGate would derive, not an authorization bypass
+  // in the route under test.
+  if (req.get('X-Test-Session')) req.portosAuthContext = { enabled: true, authenticated: true, method: 'session' };
+  next();
+});
 app.use('/api/mortalloom', mortalloomRoutes);
 app.use(errorMiddleware);
 
@@ -32,6 +39,21 @@ describe('/api/mortalloom', () => {
     const res = await request(app).post('/api/mortalloom/import');
     expect(res.status).toBe(500);
     expect(res.body.error).toEqual(expect.any(String));
+  });
+
+  it('requires an operator and opaque ID before previewing a recovery copy', async () => {
+    const url = '/api/mortalloom/recovery/preview';
+    const id = 'a'.repeat(64);
+    expect((await request(app).post(url).send({ id })).status).toBe(403);
+    expect((await request(app).post(url).set('X-Test-Session', 'operator').send({ id: '../private.json' })).status).toBe(400);
+    expect(previewMortalLoomRecoveryCopy).not.toHaveBeenCalled();
+
+    previewMortalLoomRecoveryCopy.mockResolvedValue({ goals: 2, healthMetrics: 31 });
+    const response = await request(app).post(url).set('X-Test-Session', 'operator').send({ id });
+    expect(response.status).toBe(200);
+    expect(response.headers['cache-control']).toBe('no-store');
+    expect(response.body).toEqual({ goals: 2, healthMetrics: 31 });
+    expect(previewMortalLoomRecoveryCopy).toHaveBeenCalledExactlyOnceWith(id);
   });
 
   it('serves status without importing', async () => {

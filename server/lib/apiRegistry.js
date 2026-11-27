@@ -2,8 +2,7 @@
  * Public API registry — the single source of truth for which PortOS services
  * are usable as externally-callable HTTP APIs.
  *
- * Single source of truth for which PortOS services are externally-callable HTTP APIs (`voice`,
- * `sdapi`). `API_REGISTRY` declares each API's `publicPrefixes` (read/compute-safe surface only) +
+ * `API_REGISTRY` declares each API's `publicPrefixes` (read/compute-safe surface only) and
  * defaults; `isRegistryPublic(settings, path)` tells `authGate` when an `exposed && !requireAuth` API
  * re-opens its prefix; `resolveApiAccess(settings)` merges persisted `apiAccess` flags for the
  * Settings UI + OpenAPI docs.
@@ -30,7 +29,7 @@
  */
 
 // Static declaration. `defaults` apply when an install has no persisted
-// `apiAccess.<settingsKey>` value yet (fresh install / pre-migration): both
+// `apiAccess.<settingsKey>` value yet (fresh install / pre-migration).
 // APIs default to NOT exposed (nothing on the network until the user opts in)
 // and passwordless (requireAuth:false) once exposed.
 export const API_REGISTRY = [
@@ -52,28 +51,6 @@ export const API_REGISTRY = [
       '/api/voice/public/synthesize',
       '/api/voice/public/voices',
       '/api/voice/public/engines',
-    ],
-  },
-  {
-    id: 'sdapi',
-    label: 'Image Gen (A1111-compatible)',
-    description: 'AUTOMATIC1111-compatible txt2img + model/sampler catalog. Also requires the Image Gen exposure toggle.',
-    publicPrefixes: ['/sdapi/'],
-    publicBase: '/sdapi/v1',
-    example: {
-      method: 'POST',
-      path: '/sdapi/v1/txt2img',
-      body: { prompt: 'a neon city', steps: 20 },
-    },
-    settingsKey: 'sdapi',
-    defaults: { exposed: false, requireAuth: false },
-    docPaths: [
-      '/sdapi/v1/txt2img',
-      '/sdapi/v1/sd-models',
-      '/sdapi/v1/samplers',
-      '/sdapi/v1/options',
-      '/sdapi/v1/progress',
-      '/sdapi/v1/portos/video-models',
     ],
   },
 ];

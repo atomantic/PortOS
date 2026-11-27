@@ -197,7 +197,7 @@ function beeperUserScopeFor(participant) {
  * When `resolvedIdentities` is omitted, combines the handle and `beeper-user`
  * `tribe_identities` lookups into a single query.
  */
-async function resolveLoadedParticipant(participant, personIndex = null, resolvedIdentities = null) {
+async function resolveLoadedParticipant(participant, personIndex = null, { resolvedIdentities, client } = {}) {
   if (!participant) return null;
 
   const scope = identityScopeFor(participant);
@@ -206,7 +206,7 @@ async function resolveLoadedParticipant(participant, personIndex = null, resolve
   if (!identities) {
     const scopes = [scope, beeperUserScope].filter(Boolean);
     identities = scopes.length > 0
-      ? await tribeIdentities.resolvePeopleByIdentities(scopes)
+      ? await tribeIdentities.resolvePeopleByIdentities(scopes, { client })
       : new Map();
   }
 
@@ -223,7 +223,7 @@ async function resolveLoadedParticipant(participant, personIndex = null, resolve
   if (participant.tribePersonId) return participant.tribePersonId;
 
   if (scope?.kind === 'phone') {
-    const index = personIndex || buildPersonMatchIndex(await tribe.listPeople());
+    const index = personIndex || await loadRosterIndex({ client });
     const viaTribePhone = matchPerson({ phone: scope.handle }, index);
     if (viaTribePhone) return viaTribePhone;
   }
@@ -233,7 +233,8 @@ async function resolveLoadedParticipant(participant, personIndex = null, resolve
 
 export async function resolveParticipantPerson({ conversationId, sourceUserId }, personIndex = null) {
   const participant = await getParticipant(conversationId, sourceUserId);
-  return resolveLoadedParticipant(participant, personIndex);
+  // getParticipant already initialized the schema for these pool reads.
+  return resolveLoadedParticipant(participant, personIndex, { client: { query } });
 }
 
 /**
@@ -242,8 +243,8 @@ export async function resolveParticipantPerson({ conversationId, sourceUserId },
  * same `personIndex` to participant upserts and touchpoint batches rather than
  * let each reload and reindex every Tribe person for itself.
  */
-export async function loadRosterIndex() {
-  return buildPersonMatchIndex(await tribe.listPeople());
+export async function loadRosterIndex({ client } = {}) {
+  return buildPersonMatchIndex(await tribe.listPeople({}, { client }));
 }
 
 const PARTICIPANT_UPSERT_CONFLICT_SQL = `ON CONFLICT (conversation_id, source_user_id)
@@ -298,51 +299,44 @@ export async function upsertParticipant({
     throw new ServerError('conversationId and sourceUserId are required', { status: 400, code: 'BAD_REQUEST' });
   }
   validateParticipantInput({ sourceUserId, observedVia });
-  await ensureReady();
-  await query(
-    `INSERT INTO beeper_participants (conversation_id, source_user_id, display_name, handle, observed_via)
-     VALUES ($1, $2, $3, $4, $5)
-     ${PARTICIPANT_UPSERT_CONFLICT_SQL}`,
-    [conversationId, sourceUserId, displayName, handle, observedVia],
-  ).catch((err) => {
-    if (err?.code === '23503') throw new ServerError('Conversation not found', { status: 404 });
-    throw err;
-  });
+  return withParticipantLinkTransaction(async (client) => {
+    await client.query(
+      `INSERT INTO beeper_participants (conversation_id, source_user_id, display_name, handle, observed_via)
+       VALUES ($1, $2, $3, $4, $5)
+       ${PARTICIPANT_UPSERT_CONFLICT_SQL}`,
+      [conversationId, sourceUserId, displayName, handle, observedVia],
+    ).catch((err) => {
+      if (err?.code === '23503') throw new ServerError('Conversation not found', { status: 404 });
+      throw err;
+    });
 
-  const participant = await getParticipant(conversationId, sourceUserId);
-  // Gated on the cache being empty only: with the `kind='beeper-user'` claim a handle-less participant is resolvable, so a
-  // hand-linked one re-fills after a purge + resweep. Cost is one combined `tribe_identities` lookup; the phone matcher
-  // (the expensive leg) still only runs for a phone-shaped handle.
-  // A soft-deleted owner is unlinked in the read model even while its raw FK
-  // remains. Apply the same rule to the write, preserving only live links.
-  if (!participant.tribePersonId) {
-    const resolved = await resolveLoadedParticipant(participant, personIndex);
-    if (resolved) {
-      const updated = await query(
-        `UPDATE beeper_participants SET tribe_person_id = $3, updated_at = NOW()
-         WHERE conversation_id = $1 AND source_user_id = $2
-           AND (tribe_person_id IS NULL OR EXISTS (
-             SELECT 1 FROM tribe_people tp
-             WHERE tp.id = beeper_participants.tribe_person_id AND tp.deleted = TRUE
-           ))
-         RETURNING tribe_person_id, updated_at`,
-        [conversationId, sourceUserId, resolved],
-      );
-      if (updated.rows[0]) return applyUpdatedCacheRow(participant, updated.rows[0]);
-      return getParticipant(conversationId, sourceUserId);
-    }
-  }
-  return participant;
+    const participant = await getParticipant(conversationId, sourceUserId, { client });
+    // A live cache survives re-sync. A soft-deleted owner reads as unlinked
+    // even while its raw foreign key remains.
+    if (participant.tribePersonId) return participant;
+    const resolved = await resolveLoadedParticipant(participant, personIndex, { client });
+    if (!resolved) return participant;
+    const updated = await client.query(
+      `UPDATE beeper_participants SET tribe_person_id = $3, updated_at = NOW()
+       WHERE conversation_id = $1 AND source_user_id = $2
+         AND (tribe_person_id IS NULL OR EXISTS (
+           SELECT 1 FROM tribe_people tp
+           WHERE tp.id = beeper_participants.tribe_person_id AND tp.deleted = TRUE
+         ))
+       RETURNING tribe_person_id, updated_at`,
+      [conversationId, sourceUserId, resolved],
+    );
+    if (updated.rows[0]) return applyUpdatedCacheRow(participant, updated.rows[0]);
+    return getParticipant(conversationId, sourceUserId, { client });
+  }, { shared: true });
 }
 
 /**
- * Batch-upsert and auto-resolve all participants for one conversation in at most
- * four queries: one UNNEST upsert, one participant SELECT, one batched
- * `tribe_identities` lookup, and one batched cache UPDATE. Preserves
+ * With a sweep roster, the locked transaction uses at most four data queries:
+ * one UNNEST upsert, one participant SELECT, one batched identity lookup,
+ * and one batched cache UPDATE. Preserves
  * handle-COALESCE, soft-delete, and `tribe_identities` precedence semantics and
- * returns `{ participants, resolvedPersonIds }` so callers (`sweepChat`) can
- * pass `resolvedPersonIds` (`Map<sourceUserId, personId | null>`) straight into
- * `logSenderTouchpoints` without re-querying.
+ * returns the participants and resolved owners as observed in this transaction.
  */
 export async function upsertConversationParticipants(conversationId, participants = [], { personIndex = null } = {}) {
   if (!conversationId) {
@@ -367,15 +361,22 @@ export async function upsertConversationParticipants(conversationId, participant
     });
   }
 
-  const batch = [...deduped.values()];
+  return withParticipantLinkTransaction(
+    (client) => upsertParticipantBatch(client, conversationId, [...deduped.values()], personIndex),
+    { shared: true },
+  );
+}
+
+async function upsertParticipantBatch(client, conversationId, batch, personIndex) {
   const sourceUserIds = batch.map((p) => p.sourceUserId);
 
-  await ensureReady();
-  await query(
+  // Overlapping sweeps lock rows in the same order even if their rosters differ.
+  await client.query(
     `INSERT INTO beeper_participants (conversation_id, source_user_id, display_name, handle, observed_via)
      SELECT $1::uuid, t.source_user_id, t.display_name, t.handle, t.observed_via
        FROM unnest($2::text[], $3::text[], $4::text[], $5::text[])
          AS t(source_user_id, display_name, handle, observed_via)
+      ORDER BY t.source_user_id
      ${PARTICIPANT_UPSERT_CONFLICT_SQL}`,
     [
       conversationId,
@@ -389,7 +390,41 @@ export async function upsertConversationParticipants(conversationId, participant
     throw err;
   });
 
-  const loadedResult = await query(
+  const { participants, resolvedPersonIds } = await resolveConversationParticipants(client, conversationId, sourceUserIds, personIndex);
+  const cacheUpdates = participants.filter((p) => !p.tribePersonId && resolvedPersonIds.get(p.sourceUserId));
+
+  if (cacheUpdates.length > 0) {
+    const updated = await client.query(
+      `UPDATE beeper_participants p
+          SET tribe_person_id = u.tribe_person_id, updated_at = NOW()
+         FROM unnest($2::text[], $3::uuid[]) AS u(source_user_id, tribe_person_id)
+        WHERE p.conversation_id = $1
+          AND p.source_user_id = u.source_user_id
+          AND (p.tribe_person_id IS NULL OR EXISTS (
+            SELECT 1 FROM tribe_people tp
+            WHERE tp.id = p.tribe_person_id AND tp.deleted = TRUE
+          ))
+       RETURNING p.source_user_id, p.tribe_person_id, p.updated_at`,
+      [
+        conversationId,
+        cacheUpdates.map((u) => u.sourceUserId),
+        cacheUpdates.map((p) => resolvedPersonIds.get(p.sourceUserId)),
+      ],
+    );
+    const updatedById = new Map(updated.rows.map((row) => [row.source_user_id, row]));
+    for (const participant of cacheUpdates) {
+      const row = updatedById.get(participant.sourceUserId);
+      if (row) {
+        Object.assign(participant, applyUpdatedCacheRow(participant, row));
+      }
+    }
+  }
+
+  return { participants, resolvedPersonIds };
+}
+
+async function resolveConversationParticipants(client, conversationId, sourceUserIds, personIndex) {
+  const loadedResult = await client.query(
     `SELECT p.*, c.network, c.account_id, tp.deleted AS tribe_person_deleted
      FROM beeper_participants p
      JOIN beeper_conversations c ON c.id = p.conversation_id
@@ -412,7 +447,7 @@ export async function upsertConversationParticipants(conversationId, participant
     const beeperUserScope = beeperUserScopeFor(participant);
     if (beeperUserScope) scopes.push(beeperUserScope);
   }
-  const resolvedIdentities = await tribeIdentities.resolvePeopleByIdentities(scopes);
+  const resolvedIdentities = await tribeIdentities.resolvePeopleByIdentities(scopes, { client });
 
   let batchPersonIndex = personIndex;
   if (!batchPersonIndex) {
@@ -425,47 +460,14 @@ export async function upsertConversationParticipants(conversationId, participant
       if (beeperUserScope && resolvedIdentities.has(tribeIdentities.identityLookupKey(beeperUserScope))) return false;
       return true;
     });
-    if (needsPhoneFallback) batchPersonIndex = await loadRosterIndex();
+    if (needsPhoneFallback) batchPersonIndex = await loadRosterIndex({ client });
   }
 
   const resolvedPersonIds = new Map();
-  const cacheUpdates = [];
   for (const participant of loaded) {
-    const resolved = await resolveLoadedParticipant(participant, batchPersonIndex, resolvedIdentities);
+    const resolved = await resolveLoadedParticipant(participant, batchPersonIndex, { resolvedIdentities, client });
     resolvedPersonIds.set(participant.sourceUserId, resolved);
-    if (!participant.tribePersonId && resolved) {
-      cacheUpdates.push({ sourceUserId: participant.sourceUserId, personId: resolved });
-    }
   }
-
-  if (cacheUpdates.length > 0) {
-    const updated = await query(
-      `UPDATE beeper_participants p
-          SET tribe_person_id = u.tribe_person_id, updated_at = NOW()
-         FROM unnest($2::text[], $3::uuid[]) AS u(source_user_id, tribe_person_id)
-        WHERE p.conversation_id = $1
-          AND p.source_user_id = u.source_user_id
-          AND (p.tribe_person_id IS NULL OR EXISTS (
-            SELECT 1 FROM tribe_people tp
-            WHERE tp.id = p.tribe_person_id AND tp.deleted = TRUE
-          ))
-       RETURNING p.source_user_id, p.tribe_person_id, p.updated_at`,
-      [
-        conversationId,
-        cacheUpdates.map((u) => u.sourceUserId),
-        cacheUpdates.map((u) => u.personId),
-      ],
-    );
-    const updatedById = new Map(updated.rows.map((row) => [row.source_user_id, row]));
-    for (const { sourceUserId } of cacheUpdates) {
-      const row = updatedById.get(sourceUserId);
-      const participant = loadedById.get(sourceUserId);
-      if (row && participant) {
-        Object.assign(participant, applyUpdatedCacheRow(participant, row));
-      }
-    }
-  }
-
   return { participants: loaded, resolvedPersonIds };
 }
 
@@ -542,15 +544,17 @@ async function clearIdentityCaches(personId, scope, client) {
   return clearDisplacedParticipantCaches(personId, scope, client);
 }
 
-async function withParticipantLinkTransaction(operation) {
+async function withParticipantLinkTransaction(operation, { shared = false, client } = {}) {
+  const run = async (tx) => {
+    // Take the lock before any participant rows. Sweeps can resolve claims
+    // together, but an edit must follow all cache and touchpoint writes for the old owner.
+    const lock = shared ? 'pg_advisory_xact_lock_shared' : 'pg_advisory_xact_lock';
+    await tx.query(`SELECT ${lock}(hashtext($1))`, ['portos:beeper-tribe-links']);
+    return operation(tx);
+  };
+  if (client) return run(client);
   await ensureReady();
-  return withTransaction(async (client) => {
-    // A handle can be shared across conversations and accounts. Serialize
-    // explicit link edits before locking any rows so they cannot lock each
-    // other's cache rows or both report a fresh claim on the same identity.
-    await client.query('SELECT pg_advisory_xact_lock(hashtext($1))', ['portos:beeper-tribe-links']);
-    return operation(client);
-  });
+  return withTransaction(run);
 }
 
 async function lockParticipant(conversationId, sourceUserId, client) {
@@ -734,45 +738,36 @@ export async function createPersonAndLinkParticipant({
  * candidate is `{ conversationId, senderId, sentAt, network, channel }`.
  * Dedupe key is `beeper:<YYYY-MM-DD>`, matching #10 decision "daily Tribe
  * touchpoints are written; there is no per-message activity event."
- * Accepts an optional sweep-scoped `personIndex` and optional
- * `resolvedPersonIds` (`Map<senderId, personId | null>` from
- * `upsertConversationParticipants`) so callers don't re-query already-resolved
- * senders; standalone calls load a roster index once when needed. Returns
- * `{ created, matched }` (mirrors `tribe.autoLogTouchpoints`'s shape).
+ * The optional sweep-scoped roster index supplies legacy phone matches. Read
+ * current claims and caches under the shared link lock, held until the last
+ * write commits. The sweep supplies its existing message/cursor transaction.
  */
-export async function logSenderTouchpoints(candidates = [], { personIndex = null, resolvedPersonIds = null } = {}) {
-  if (!Array.isArray(candidates) || candidates.length === 0) return { created: 0, matched: 0 };
-  await ensureReady();
+export async function logSenderTouchpoints(candidates = [], { personIndex = null, client } = {}) {
+  if (!Array.isArray(candidates)) return { created: 0, matched: 0 };
+  const valid = candidates.filter((c) => c?.conversationId && c.senderId && c.sentAt);
+  if (!valid.length) return { created: 0, matched: 0 };
+  return withParticipantLinkTransaction(
+    (tx) => logSenderTouchpointsInTransaction(tx, valid, personIndex),
+    { shared: true, client },
+  );
+}
 
-  // Reuse the sweep snapshot, or load once on the first unresolved sender.
-  // Identity resolution still runs against current authoritative records.
-  let index = personIndex;
+async function logSenderTouchpointsInTransaction(client, candidates, personIndex) {
+  const byConversation = Map.groupBy(candidates, (candidate) => candidate.conversationId);
+  const ownersByConversation = new Map();
+  const index = personIndex || await loadRosterIndex({ client });
+  for (const [conversationId, messages] of byConversation) {
+    const senderIds = [...new Set(messages.map((message) => message.senderId))];
+    // One batch per conversation keeps account-scoped senders distinct.
+    const { resolvedPersonIds } = await resolveConversationParticipants(client, conversationId, senderIds, index);
+    ownersByConversation.set(conversationId, resolvedPersonIds);
+  }
 
-  // Memoize the participant -> person resolution per (conversationId,
-  // senderId) within this batch, so a burst of messages from the same sender
-  // resolves once, not per message. Completed person/day attempts are also
-  // reused within this batch; the database unique index remains authoritative
-  // across batches and concurrent syncs.
-  const personCache = new Map();
   const completedTouchpoints = new Set();
   let created = 0;
   let matched = 0;
   for (const c of candidates) {
-    if (!c?.conversationId || !c?.senderId || !c?.sentAt) continue;
-    const cacheKey = `${c.conversationId} ${c.senderId}`;
-    if (!personCache.has(cacheKey)) {
-      if (resolvedPersonIds?.has(c.senderId)) {
-        personCache.set(cacheKey, resolvedPersonIds.get(c.senderId) || null);
-      } else {
-        index ??= await loadRosterIndex();
-        // resolving one sender at a time when not pre-resolved by the batch upserter
-        personCache.set(cacheKey, await resolveParticipantPerson(
-          { conversationId: c.conversationId, sourceUserId: c.senderId },
-          index,
-        ));
-      }
-    }
-    const personId = personCache.get(cacheKey);
+    const personId = ownersByConversation.get(c.conversationId).get(c.senderId);
     if (!personId) continue;
     matched++;
     // Normalize to an ISO date first: String() of a Date object gives its toString() form, whose first 10 characters
@@ -784,7 +779,7 @@ export async function logSenderTouchpoints(candidates = [], { personIndex = null
     const dedupeKey = `beeper:${day}`;
     const touchpointKey = JSON.stringify([personId, dedupeKey]);
     if (completedTouchpoints.has(touchpointKey)) continue;
-    // same reason as above
+    // Preserve the first matching message as the daily touchpoint.
     const touchpoint = await tribe.autoCreateTouchpoint(personId, {
       happenedAt: c.sentAt,
       channel: c.channel || (c.network ? `Beeper (${c.network})` : 'Beeper'),
@@ -792,7 +787,7 @@ export async function logSenderTouchpoints(candidates = [], { personIndex = null
       source: 'message',
       dedupeKey,
       metadata: { network: c.network || '', conversationId: c.conversationId },
-    });
+    }, { client });
     completedTouchpoints.add(touchpointKey);
     if (touchpoint) created++;
   }

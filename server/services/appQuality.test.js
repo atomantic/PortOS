@@ -1,6 +1,6 @@
 import { describe, it, expect, vi } from 'vitest';
 import { recordAuditQuality, enrichAppsWithQuality, getAppQualityHistory, readRecentAuditSlices, AUDIT_SLICE_HISTORY_RUNS } from './appQuality.js';
-import { AUDIT_DEFINITIONS, AUDIT_EXECUTION_PROFILES } from '../lib/auditCatalog.js';
+import { AUDIT_DEFINITIONS } from '../lib/auditCatalog.js';
 import { AUDIT_DISCOVERY, auditQualityInstructions, parseAuditQualityReport, parseRecommendedAudits, summarizeAppQuality, AUDIT_FRESHNESS_MS, buildAppQualityHistory, dailyQualityRecords, numericQualityReport, parseAuditSlice, QUALITY_WINDOW_RUNS, QUALITY_HEALTHY_THRESHOLD } from '../lib/auditQuality.js';
 import { buildQualitySnapshot, exportPortosQuality, readQualityRecords } from './appQualityFederation.js';
 import { classifyQualitySnapshot, serializeQualitySnapshot } from './appQualitySnapshotFormat.js';
@@ -18,8 +18,8 @@ const assessedAt = '2026-09-10T00:00:00Z';
 // without turning a missing/malformed report into a perfect score.
 describe('scheduled audit measurement workflow', () => {
   it('covers every scheduled audit lens with a discovery strategy and score contract', () => {
-    expect(Object.keys(AUDIT_DISCOVERY).sort()).toEqual(Object.keys(AUDIT_EXECUTION_PROFILES).sort());
-    for (const category of Object.keys(AUDIT_EXECUTION_PROFILES)) {
+    expect(Object.keys(AUDIT_DISCOVERY).sort()).toEqual(Object.keys(AUDIT_DEFINITIONS).sort());
+    for (const category of Object.keys(AUDIT_DEFINITIONS)) {
       expect(auditQualityInstructions(category)).toContain(AUDIT_DISCOVERY[category]);
       expect(auditQualityInstructions(category)).toContain(`"category":"${category}"`);
     }
@@ -418,7 +418,8 @@ describe('scheduled audit measurement workflow', () => {
     const [enriched] = await enrichAppsWithQuality([{ id: 'portos-default' }], {
       now, query, getPeers: async () => [], readFile: async () => null,
     });
-    expect(query.mock.calls[0][0]).toMatch(/SELECT app_id, category, agent_id, assessed_at, report, slice/);
+    expect(query.mock.calls[0][0]).toMatch(/SELECT [^\n]*measurement\.report, measurement\.slice/);
+    expect(query.mock.calls[0][0]).toMatch(/SELECT app_id, category, agent_id, assessed_at,\s+row_number\(\)/);
     expect(enriched.quality.categories.find(c => c.id === 'security')).toMatchObject({ score: 90, window: { runs: 1, worstSeverity: 1 } });
 
     const localRecords = await readQualityRecords('portos-default', 30, now, { query });

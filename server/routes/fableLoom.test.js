@@ -1,3 +1,4 @@
+import { recordingOperatorIo } from '../test/recordingOperatorIo.js';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import express from 'express';
 import { errorMiddleware } from '../lib/errorHandler.js';
@@ -275,7 +276,7 @@ describe('FableLoom routes', () => {
     };
     fableLoom.startFalVideoAutomation.mockResolvedValueOnce(job);
     const app = makeApp();
-    const io = { emit: vi.fn() };
+    const io = recordingOperatorIo();
     app.set('io', io);
     const created = await request(app)
       .post('/api/fableloom/loom-1/episodes/ep-1/nodes/node-1/fal-video')

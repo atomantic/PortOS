@@ -7,7 +7,7 @@
 import { AsyncLocalStorage } from 'node:async_hooks';
 import { EventEmitter } from 'node:events';
 import { randomUUID } from 'node:crypto';
-import { isDeepStrictEqual } from 'node:util';
+import { releaseObservedOperations, markObservedOperationsUncertain, reconcileReservations } from './maintenance/reservationTransitions.js';
 import * as fs from 'node:fs';
 import { z } from 'zod';
 import { dirname } from 'node:path';
@@ -18,6 +18,7 @@ import { createDeferredUpdateAdmission } from './maintenanceDeferredUpdate.js';
 import { createHarnessActionAdmission } from './maintenanceHarnessAction.js';
 import { createMaintenanceExclusive, maintenanceExclusiveSchema, maintenanceExclusiveReceiptSchema } from './maintenanceExclusive.js';
 
+export { isOperatorDisposableReservation } from './maintenance/reservationTransitions.js';
 export { syncMaintenanceDirectory } from './maintenanceJournal.js';
 
 const operationSchema = z.object({
@@ -38,14 +39,25 @@ export const maintenanceJournalSchema = z.object({
 export const maintenanceBeginSchema = z.object({ reason: z.string().trim().min(1).max(500) }).strict();
 export const maintenanceResumeSchema = z.object({ id: z.string().uuid(), revision: z.number().int().positive() }).strict();
 export const isMaintenanceHold = err => ['MAINTENANCE_HELD', 'MAINTENANCE_UNAVAILABLE'].includes(err?.code);
-export const isOperatorDisposableReservation = op => ['media', 'runner', 'api-run', 'cli-run', 'tui-run', 'manual-run', 'heavy-job',
-  'script-job', 'shell-job', 'provider', 'music-video', 'app-operation', 'backup'].includes(op.kind)
-  || (op.kind === 'settlement' && op.resource === 'Output publication');
-
 const AGENT_DISK_HEADROOM_BYTES = 1024 ** 3;
 // Well past a writer's own lock patience (~500 ms of retries), so an older lock
 // is a crashed or wedged writer rather than one mid-publication.
 const LIVE_TRANSACTION_GRACE_MS = 2000;
+
+const ownerFor = op => ({ pid: op.pid, startedAt: op.startedAt, generation: op.uncertaintyStamp });
+const sameOwner = (op, owner) => Boolean(op && owner) && op.pid === owner.pid && op.startedAt === owner.startedAt;
+const adopt = op => {
+  op.pid = process.pid;
+  op.startedAt = new Date(Math.max(Date.now(), Date.parse(op.startedAt) + 1)).toISOString();
+  if (op.unsettled && op.uncertaintyStamp) op.uncertaintyStamp = randomUUID();
+  return ownerFor(op);
+};
+
+// A capability binds one previously observed operation, including every
+// uncertainty mark made before reconciliation. A legacy unsettled record
+// has no stamp to compare and cannot be completed through this capability.
+const recoverySnapshot = op => Object.freeze({ id: op.id, kind: op.kind, resource: op.resource, pid: op.pid, startedAt: op.startedAt,
+  unsettled: op.unsettled === true, uncertaintyStamp: op.uncertaintyStamp });
 
 export function createMaintenanceAdmission(dataDir = PATHS.data, { io = fs, assertWrite = assertNotRealDataWrite,
   makeId = randomUUID, now = Date.now, verifyExclusiveReceipt = () => false, harnessAbsent, harnessOwnerPresent, harnessParentPid,
@@ -124,14 +136,6 @@ export function createMaintenanceAdmission(dataDir = PATHS.data, { io = fs, asse
   };
   const assertOpen = () => { if (held()) throw error(status().state === 'unavailable' ? 'MAINTENANCE_UNAVAILABLE' : 'MAINTENANCE_HELD'); };
   const currentId = () => context.getStore()?.id ?? null;
-  const ownerFor = op => ({ pid: op.pid, startedAt: op.startedAt, generation: op.uncertaintyStamp });
-  const sameOwner = (op, owner) => Boolean(op && owner) && op.pid === owner.pid && op.startedAt === owner.startedAt;
-  const adopt = op => {
-    op.pid = process.pid;
-    op.startedAt = new Date(Math.max(Date.now(), Date.parse(op.startedAt) + 1)).toISOString();
-    if (op.unsettled && op.uncertaintyStamp) op.uncertaintyStamp = randomUUID();
-    return ownerFor(op);
-  };
   const admit = (kind, resource = '', { continuation = false, parentId = null, parentKinds = null, reconnect = false, reconnectFinished = false } = {}) => {
     if (kind === 'agent' || kind === 'runner') {
       const pressure = agentDiskPressure();
@@ -166,11 +170,6 @@ export function createMaintenanceAdmission(dataDir = PATHS.data, { io = fs, asse
     locallyFinished.delete(id);
     return permitFor(id, recovery, owner);
   };
-  // A capability binds one previously observed operation, including every
-  // uncertainty mark made before reconciliation. A legacy unsettled record
-  // has no stamp to compare and cannot be completed through this capability.
-  const recoverySnapshot = op => Object.freeze({ id: op.id, kind: op.kind, resource: op.resource, pid: op.pid, startedAt: op.startedAt,
-    unsettled: op.unsettled === true, uncertaintyStamp: op.uncertaintyStamp });
   const completeRecovery = expected => {
     if (expected.unsettled && !expected.uncertaintyStamp) return false;
     return transaction(state => {
@@ -398,58 +397,11 @@ export function createMaintenanceAdmission(dataDir = PATHS.data, { io = fs, asse
   };
   // Cached read-only snapshot for trusted reconcilers (runs on every orphan sweep); releaseOperations re-verifies under the lock.
   const operations = () => readForStatus().operations.map(op => ({ ...op }));
-  // Removes only settled records still identical to what the caller inspected;
-  // anything that changed (or settled elsewhere) since then is left alone.
-  const releaseOperations = expected => transaction(state => {
-    const before = state.operations.length;
-    state.operations = state.operations.filter(op => op.unsettled
-      || !expected.some(seen => seen.id === op.id && seen.kind === op.kind
-        && seen.resource === op.resource && seen.pid === op.pid && seen.startedAt === op.startedAt));
-    return before - state.operations.length;
-  });
-  // Fail-closed stamp for records the caller already inspected. Already-unsettled
-  // rows keep their stamp: rotating it would invalidate an operator receipt in flight.
-  const markOperationsUncertain = expected => transaction(state => {
-    let marked = 0;
-    for (const op of state.operations) {
-      if (op.unsettled) continue;
-      const seen = expected.some(item => item.id === op.id && item.kind === op.kind
-        && item.resource === op.resource && item.pid === op.pid && item.startedAt === op.startedAt);
-      if (!seen) continue;
-      op.unsettled = true;
-      op.uncertaintyStamp = randomUUID();
-      marked += 1;
-    }
-    return marked;
-  });
-  // The operator's receipt preserves the exact reservations and explicitly
-  // records unknown output. It does not settle a release-candidate obligation.
-  const reconcileInactiveReservations = ({ hold, update, revision, expected, ordinaryAgentIds = [], validate, publish, replay }) => {
-    const result = transaction(state => {
-    if (update) {
-      const owner = deferredUpdate.inspect(state);
-      if (state.hold || state.exclusive || !owner || owner.id !== update.id || owner.ownerPid !== update.ownerPid
-        || owner.requestedAt !== update.requestedAt || owner.phase !== 'waiting' || owner.childPid || owner.holdId)
-        throw error('MAINTENANCE_STALE', 'The waiting update changed.');
-    } else if (!hold || state.hold?.id !== hold.id || state.hold?.revision !== hold.revision || state.exclusive
-      || !['Operator session', 'Local operator'].includes(state.hold.owner))
-      throw error('MAINTENANCE_STALE', 'The maintenance hold changed or is exclusively owned.');
-    if (state.revision !== revision)
-      throw error('MAINTENANCE_STALE', 'Work changed during the activity check. Inspect it again.');
-    if (!expected.length || new Set(expected.map(op => op.id)).size !== expected.length || expected.some(op =>
-      !isOperatorDisposableReservation(op) && !(update && op.kind === 'agent' && ordinaryAgentIds.includes(op.id))))
-      throw error('MAINTENANCE_STALE', 'Select only supported, distinct reservations.');
-    const current = expected.map(op => state.operations.find(row => row.id === op.id));
-    if (current.every(op => !op)) return replay();
-    if (current.some((op, index) => !op || !isDeepStrictEqual(op, expected[index])))
-      throw error('MAINTENANCE_STALE', 'The reservation inventory changed. Inspect it again.');
-    validate(state.operations);
-    const receipt = publish();
-    const ids = new Set(expected.map(op => op.id));
-    state.operations = state.operations.filter(op => !ids.has(op.id));
-    return receipt;
-    });
-    for (const op of expected) { locallyFinished.delete(op.id); localOwners.delete(op.id); }
+  const releaseOperations = expected => transaction(state => releaseObservedOperations(state, expected));
+  const markOperationsUncertain = expected => transaction(state => markObservedOperationsUncertain(state, expected));
+  const reconcileInactiveReservations = request => {
+    const result = transaction(state => reconcileReservations(state, request, deferredUpdate.inspect));
+    for (const op of request.expected) { locallyFinished.delete(op.id); localOwners.delete(op.id); }
     return result;
   };
   const isLocallyFinished = op => {

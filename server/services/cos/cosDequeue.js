@@ -1,345 +1,361 @@
 /**
- * CoS Dequeue — priority/capacity helpers (issue #2530)
- *
- * The spawn-side scheduler `dequeueNextTask` (in cos.js) fills open agent slots
- * by draining four priority tiers in order. This module holds the capacity and
- * ownership decisions — the per-cycle capacity tracker and
- * the idle tier-eligibility predicate — so the scheduler and its unit
- * tests share ONE implementation instead of the tests re-deriving a local
- * replica of the guards.
- *
- * Idle review has one shared admission/handoff workflow here: check the
- * autonomous ceiling and project eligibility BEFORE preparation can consume a
- * human request or commit cooldown/marker state. The two engines retain only
- * their trigger ordering and dispatch adapters.
- *
- * Priority-tier order, shared by BOTH engines (`dequeueNextTask` in cos.js and
- * `evaluateTasks` in cosTaskGenerator.js; pinned by the source-order regression
- * tests in cos.test.js): 0 on-demand (bypasses pause) → 1 user → 2 auto-approved
- * → 3.6 feature agents → 4 idle review. The evaluator additionally runs `maybeQueueImprovementTasks` between 2 and
- * 3.6, which only WRITES queue rows (batch regeneration) and never spawns, so the
- * event-driven dequeue deliberately has no counterpart.
+ * Admits queued CoS tasks in priority order when agent capacity opens.
  */
 
-import { hasActiveTaskOwner } from '../agent/agentState.js';
-import { emitLog } from './cosEvents.js';
+import { maintenance } from '../../lib/maintenanceAdmission.js';
+import { isHostShuttingDown } from '../../lib/hostShutdown.js';
+import { drainOnDemandRequests } from '../onDemandDrain.js';
+import { useRunner, spawningTasks } from '../agent/agentState.js';
+import { loadState, isDaemonRunning } from './cosState.js';
+import { cosEvents, emitLog } from './cosEvents.js';
+import { getUserTasks, getCosTasks } from './cosTaskStore.js';
+import { ensureInstanceId } from '../instanceIdentity.js';
+import { admitAutoApprovedSystemTasks, admitPendingUserTasks, resolveAutonomyBudget, countRunningAgentsByProject, isWithinProjectLimit } from './cosTaskGenerator.js';
+import { admitFeatureAgentTasks, admitIdleReviewTask, createDequeueCapacity, countRunningAgentsByLocalEndpoint } from './cosDequeueAdmission.js';
+import { buildLocalEndpointSlotContext } from './cosLocalEndpointSlots.js';
+
+export { admitFeatureAgentTasks, admitIdleReviewTask, closeStolenIdleReviewCard, countRunningAgentsByLocalEndpoint, countUnregisteredInFlight, createDequeueCapacity, isIdleTierEligible, isUserTaskRunnableUnattended } from './cosDequeueAdmission.js';
 
 /**
- * Per-cycle spawn-capacity tracker. Owns the running `spawned` count and the
- * per-project tally, and exposes the exact `canSpawn` / `trackSpawn` closure the
- * scheduler uses to enforce the global slot cap AND the per-project cap.
+ * Is spawning currently held because the CoS Runner is down?
  *
- * `availableSlots` = global cap minus currently-running agents minus in-flight
- * spawns that have no running agent record yet (may be 0 or
- * negative if a config change shrank the cap below live load — callers still
- * guard with `availableSlots <= 0`). `perProjectLimit` falls back to the global
- * cap when `maxConcurrentAgentsPerProject` is unset/0, matching the scheduler's
- * historical behavior.
- *
- * `canSpawn(task, ceiling = availableSlots)` — autonomous tiers pass a lower
- * `ceiling` (the daily CoS action budget) so a task admitted there counts
- * against both the global slots and the budget. A task with no `metadata.app`
- * buckets into the `_self` project key (PortOS-on-itself work) so app-less tasks
- * can't bypass the per-project cap.
- *
- * Task ownership is tracked here too, so an id is admitted at most once. Two
- * kinds of owner are invisible to `hasActiveTaskOwner` (it reads registered
- * agents only): a task admitted earlier in THIS cycle (Priority 0 persists its
- * task as pending, so Priority 2 reads it back with no agent yet), and a task
- * whose spawn is still in flight from an earlier cycle (`inFlightTaskIds`, the
- * `spawningTasks` set — passed in so this stays pure). Re-admitting either one
- * spent a global/project/autonomous slot on a duplicate `task:ready` that the
- * spawn guard then discarded. `isTaskOwned` exposes the same predicate so the
- * admission passes can skip an owned task before their gates record deferrals.
- *
- * The THIRD cap is per local inference endpoint (issue #4834): a single GPU
- * can't hold N model contexts at once, so agents whose provider resolves to the
- * same local endpoint dispatch `localEndpointLimit` at a time and the rest stay
- * queued. Callers supply the already-resolved pieces — `localEndpointCounts`
- * (endpoint → running agents) and `resolveLocalEndpoint(task)` (which endpoint a
- * candidate would land on, built by cosLocalEndpointSlots.js) — so this module
- * stays pure and dependency-free. A task resolving to `null` (cloud provider, or
- * a TUI provider with no recorded endpoint) is ungated. `onLocalEndpointHold`
- * fires on a denial so the scheduler can log queued-no-slot without this module
- * importing the event bus.
- *
- * `canSpawnCommitted` opts a tier out of that third cap. Two tiers use it,
- * because a denial there is DESTRUCTIVE rather than a defer — each has already
- * committed side effects by the time `canSpawn` runs, and none of them persists
- * the task, so `false` discards the only copy:
- *
- *   - Priority 0 has cleared the on-demand request and bound the app-review
- *     marker — a denial silently swallows the user's explicit "Run".
- *   - Priority 3 has bound the app-review marker and advanced the 30-minute
- *     review cooldown (issue #978's failure mode).
- *
- * Emitting instead is strictly better — the authoritative cap at subAgentSpawner's
- * `task:ready` chokepoint HOLDS the task (still `pending`, marker released, job
- * reservation freed), which is exactly the outcome these tiers cannot produce.
- * Idle review prechecks global/project capacity before preparation below.
+ * The single predicate behind the three places that must agree: the dequeue
+ * gate, `tryImmediateSpawn`, and `forceSpawnTask`'s refusal. False in direct
+ * mode, where there is no runner to be down. `cosRunnerClient` is imported
+ * lazily (mirroring cosAgentLifecycle's runner calls) so a static edge doesn't
+ * drag socket.io-client into the graph of every suite that loads this module.
  */
-export function createDequeueCapacity(state, {
-  inFlightTaskIds = [],
-  agentsByProject = {},
-  localEndpointCounts = {},
-  localEndpointLimit = Infinity,
-  resolveLocalEndpoint = () => null,
-  onLocalEndpointHold = null,
-} = {}) {
+export async function isRunnerHolding() {
+  if (!useRunner) return false;
+  const { isRunnerReachable } = await import('./cosRunnerClient.js');
+  return !(await isRunnerReachable());
+}
+
+/**
+ * Attempt to immediately spawn a newly added user task if there are available agent slots.
+ * This bypasses the evaluation interval for user-submitted tasks so they start instantly.
+ */
+export async function tryImmediateSpawn(task) {
+  if (isHostShuttingDown()) return;
+  if (!isDaemonRunning()) return;
+
+  const { paused } = await loadState();
+  if (paused) return;
+
+  if (await isRunnerHolding()) {
+    emitLog('debug', `⏳ Queued task ${task.id} - CoS Runner is down`);
+    return;
+  }
+
+  const state = await loadState();
   const runningAgents = Object.values(state.agents).filter(a => a.status === 'running').length;
-  const inFlight = new Set(inFlightTaskIds);
-  const availableSlots = state.config.maxConcurrentAgents - runningAgents - countUnregisteredInFlight(inFlight, state.agents);
+  const availableSlots = state.config.maxConcurrentAgents - runningAgents;
+
+  if (availableSlots <= 0) {
+    emitLog('debug', `⏳ Queued task ${task.id} - no available slots (${runningAgents}/${state.config.maxConcurrentAgents})`);
+    return;
+  }
+
+  // Check per-project limit
   const perProjectLimit = state.config.maxConcurrentAgentsPerProject || state.config.maxConcurrentAgents;
-  // A caller passing 0/NaN would wedge every local-endpoint task forever; floor
-  // at 1 so the cap degrades to "serialize", never to "never dispatch".
-  // `Infinity` (the no-cap default) passes through unchanged.
-  const localSlotLimit = Math.max(1, Number(localEndpointLimit) || 1);
-
-  const spawnProjectCounts = { ...agentsByProject };
-  const spawnLocalEndpointCounts = { ...localEndpointCounts };
-  const spawnedTaskIds = [];
-  let spawned = 0;
-
-  // App eligibility probes have no task id yet; only real tasks can have an
-  // owner (a running legacy agent may also have no taskId).
-  const isTaskOwned = (task) => Boolean(task?.id)
-    && (hasActiveTaskOwner(task.id, state.agents) || inFlight.has(task.id) || spawnedTaskIds.includes(task.id));
-
-  const admit = (task, ceiling, gateLocalEndpoint) => {
-    if (isTaskOwned(task)) return false;
-    if (spawned >= ceiling) return false;
+  const agentsByProject = countRunningAgentsByProject(state.agents);
+  if (!isWithinProjectLimit(task, agentsByProject, perProjectLimit)) {
     const project = task.metadata?.app || '_self';
-    if ((spawnProjectCounts[project] || 0) >= perProjectLimit) return false;
-    const endpoint = gateLocalEndpoint ? resolveLocalEndpoint(task) : null;
-    if (endpoint) {
-      const running = spawnLocalEndpointCounts[endpoint] || 0;
-      if (running >= localSlotLimit) {
-        onLocalEndpointHold?.(task, endpoint, running);
-        return false;
-      }
-    }
-    return true;
-  };
-
-  const canSpawn = (task, ceiling = availableSlots) => admit(task, ceiling, true);
-  // For a COMMITTED tier — one that has already taken side effects and does not
-  // persist the task, so a denial would discard it rather than defer it. Skips
-  // only the local-endpoint cap; see the header for which tiers qualify and why.
-  const canSpawnCommitted = (task, ceiling = availableSlots) => admit(task, ceiling, false);
-
-  const trackSpawn = (task) => {
-    const project = task.metadata?.app || '_self';
-    spawnProjectCounts[project] = (spawnProjectCounts[project] || 0) + 1;
-    const endpoint = resolveLocalEndpoint(task);
-    if (endpoint) spawnLocalEndpointCounts[endpoint] = (spawnLocalEndpointCounts[endpoint] || 0) + 1;
-    spawnedTaskIds.push(typeof task?.id === 'string' && task.id ? task.id : 'unknown-task');
-    spawned++;
-  };
-
-  return {
-    availableSlots,
-    perProjectLimit,
-    localEndpointLimit: localSlotLimit,
-    spawnProjectCounts,
-    spawnLocalEndpointCounts,
-    canSpawn,
-    canSpawnCommitted,
-    trackSpawn,
-    isTaskOwned,
-    // Live read of the running spawn count — a getter so callers always see the
-    // current total after trackSpawn mutations rather than a stale snapshot.
-    get spawned() { return spawned; },
-    get spawnedTaskIds() { return spawnedTaskIds; },
-  };
-}
-
-/**
- * How many in-flight spawns hold a slot that `runningAgents` does not count yet:
- * a task sits in `spawningTasks` for the whole spawn, but its agent only shows
- * as `running` in state once registered. Both engines subtract this from their
- * free-slot count so skipping the in-flight task cannot over-spawn past
- * `maxConcurrentAgents`.
- */
-export function countUnregisteredInFlight(inFlightTaskIds, agents = {}) {
-  const running = new Set(Object.values(agents).filter(a => a.status === 'running').map(a => a.taskId));
-  let count = 0;
-  for (const id of inFlightTaskIds) if (!running.has(id)) count++;
-  return count;
-}
-
-/**
- * Count running agents grouped by the local inference endpoint they occupy
- * (issue #4834). `endpointForAgent` maps a running agent to its local endpoint
- * or null — supplied by cosLocalEndpointSlots.js so this stays pure. Agents on
- * cloud providers (and TUI providers with no recorded endpoint) resolve to null
- * and are not counted, mirroring the ungated path in `createDequeueCapacity`.
- */
-export function countRunningAgentsByLocalEndpoint(agents, endpointForAgent) {
-  const counts = {};
-  for (const agent of Object.values(agents || {})) {
-    if (agent.status !== 'running') continue;
-    const endpoint = endpointForAgent(agent);
-    if (!endpoint) continue;
-    counts[endpoint] = (counts[endpoint] || 0) + 1;
+    emitLog('debug', `⏳ Queued task ${task.id} - per-project limit reached for ${project} (${agentsByProject[project] || 0}/${perProjectLimit})`);
+    return;
   }
-  return counts;
-}
 
-/**
- * Priority 3.6 (feature agents) tier. Shared by both spawn engines: due feature
- * agents are autonomous work, so they yield to pending user tasks, need CoS
- * auto-run in `execute`, and spend only the autonomous ceiling. Each admitted
- * agent is marked as holding a pending task so a second cycle cannot re-spawn it.
- *
- * Priority 3.5 (autonomous jobs) has no inline tier: those are handled by
- * registerJobSchedules(), which sets up one-shot timers per job via
- * executeScheduledJob(). Spawning them here as well caused duplicate agent spawns
- * on startup when both paths fired for the same past-due job.
- *
- * `spawnedCount()` reads the engine's live spawn total (it grows as agents are
- * admitted); `canSpawn`/`emitSpawn`/`trackSpawn` are the engine's own hooks.
- */
-export async function admitFeatureAgentTasks({
-  spawnedCount,
-  hasPendingUserTasks,
-  cosAutonomyMode,
-  autonomousSlotCeiling,
-}, { canSpawn, emitSpawn, trackSpawn }) {
-  if (spawnedCount() >= autonomousSlotCeiling || hasPendingUserTasks || cosAutonomyMode !== 'execute') return;
+  // No local-endpoint check here (#4834). The task is already persisted by
+  // `addTask`, so emitting and letting the chokepoint hold it produces exactly
+  // the state an early return would — still `pending`, marker released, job
+  // reservation freed — and the chokepoint also counts in-flight reservations,
+  // which a snapshot here cannot. A copy would be a weaker duplicate that can
+  // pass a task the chokepoint then holds, for a fourth provider-list fetch.
 
-  const { getDueFeatureAgents, generateTaskFromFeatureAgent, setCurrentAgent } = await import('../featureAgents.js');
-  const dueAgents = await getDueFeatureAgents().catch(err => {
-    emitLog('debug', `Feature agents check failed: ${err.message}`);
-    return [];
+  emitLog('info', `⚡ Immediate spawn: ${task.id} (${task.priority || 'MEDIUM'})`, {
+    taskId: task.id,
+    availableSlots
   });
-  for (const fa of dueAgents) {
-    if (spawnedCount() >= autonomousSlotCeiling) break;
-    const task = generateTaskFromFeatureAgent(fa);
-    if (!canSpawn(task, autonomousSlotCeiling)) continue;
-    emitSpawn(task);
-    trackSpawn(task);
-    await setCurrentAgent(fa.id, task.id).catch(() => {});
-    emitLog('info', `Feature agent due: ${fa.name}`, { featureAgentId: fa.id });
-  }
+  cosEvents.emit('task:ready', { ...task, taskType: 'user' });
+}
+
+// ─── dequeueNextTask priority tiers ────────────────────────────────────────
+//
+// dequeueNextTask (below) is a thin orchestrator that threads a shared `ctx`
+// through the five priority tiers in order. Each tier is a focused async helper
+// that reads/mutates the per-cycle spawn capacity via `ctx.capacity` (the pure
+// tracker from cosDequeueAdmission.js) and emits `task:ready` for admitted tasks. This
+// mirrors the established `spawnPriorityN(ctx)` decomposition in
+// cosTaskGenerator.js's evaluateTasks (issue #2530). `ctx` is frozen: a tier
+// returns the values a later tier needs and the orchestrator passes them on as
+// named arguments, so tier order cannot silently change what a tier reads.
+
+/**
+ * Priority 0 — on-demand task requests (explicit user "Run"). Runs even while
+ * paused. Drains the on-demand request queue, generating + persisting a task per
+ * request. Returns the schedule it loaded so the orchestrator can hand it to
+ * Priority 2's disabled-analysis-type gate (avoids a second load).
+ */
+async function spawnDequeuePriority0OnDemand(ctx) {
+  const { state, capacity, ignoreTaskId } = ctx;
+
+  const { schedule } = await drainOnDemandRequests({ state }, {
+    capacityExhausted: () => capacity.spawned >= capacity.availableSlots,
+    projectCapacityExhausted: (appId) =>
+      (capacity.spawnProjectCounts[appId || '_self'] || 0) >= capacity.perProjectLimit,
+    // Priority 0 is a COMMITTED tier — the request is cleared and the app-review
+    // marker bound before this runs, and nothing persists the task on a denial,
+    // so it opts out of the local-endpoint cap (#4834).
+    canSpawn: (task) => capacity.canSpawnCommitted(task),
+    emitSpawn: (task) => {
+      cosEvents.emit('task:ready', task);
+      capacity.trackSpawn(task);
+    },
+    // Forward `ignoreTaskId` so a completion-triggered re-issue is dedup-safe
+    // against the still-in_progress task that triggered it.
+    addTaskOptions: { ignoreTaskId },
+  });
+
+  return { schedule };
 }
 
 /**
- * Priority 4 (idle-review) tier eligibility. The idle task only fires when the
- * daemon is COMPLETELY idle this cycle — nothing else spawned (`spawned === 0`),
- * no pending user tasks, idle review enabled, and CoS auto-run in `execute`.
- * The `spawned === 0` fence is stricter than the auto-approved tier's `< ceiling`
- * admission: even a single autonomous spawn suppresses idle on the same cycle.
+ * Priority 1 — pending user tasks. Returns `hasPendingUserTasks`
+ * for the idle tier below.
  */
-export function isIdleTierEligible({ spawned, hasPendingUserTasks, idleReviewEnabled, autonomyMode }) {
-  return spawned === 0
-    && !!idleReviewEnabled
-    && !hasPendingUserTasks
-    && autonomyMode === 'execute';
+async function spawnDequeuePriority1UserTasks(ctx) {
+  const { instanceId, capacity } = ctx;
+
+  const userTaskData = await getUserTasks();
+  const pendingUserTasks = userTaskData.grouped?.pending || [];
+
+  await admitPendingUserTasks({ pendingUserTasks, instanceId }, {
+    capacityExhausted: () => capacity.spawned >= capacity.availableSlots,
+    isOwned: (task) => capacity.isTaskOwned(task),
+    canSpawn: (task) => capacity.canSpawn(task),
+    emitSpawn: (task) => cosEvents.emit('task:ready', task),
+    trackSpawn: (task) => capacity.trackSpawn(task),
+  });
+
+  return { hasPendingUserTasks: pendingUserTasks.length > 0 };
 }
 
 /**
- * Close the preflight card of a human "Run" this tier STOLE, now that the
- * admission decision on the task it produced is final (`admittedTask` is that
- * task, or null when none will run).
- *
- * Lives beside `isIdleTierEligible` for the same reason: both spawn engines run
- * their own copy of the idle-review tier, and anything the two must agree on
- * belongs in ONE body rather than in a pair of blocks a grep test has to police.
- * The import is deferred so the far more common uncarded tick — every idle tick
- * that did not steal a request — pays neither the module nor a task read.
+ * Priority 2 — auto-approved system tasks, gated by the CoS auto-run domain.
+ * Returns `cosAutonomyMode` and `autonomousSpawnCeiling` (used by the
+ * idle tier) resolved from the daily CoS budget (#711). `off`/`dry-run` withhold
+ * the unattended spawn; `dry-run` logs what execute mode would have run.
  */
-export async function closeStolenIdleReviewCard(cardId, admittedTask) {
-  if (!cardId) return null;
-  const { finishPreflightDispatch } = await import('../preflightTaskCard.js');
-  return finishPreflightDispatch(cardId, admittedTask?.id ?? null);
+async function spawnDequeuePriority2AutoApproved(ctx, { taskSchedule }) {
+  const { state, instanceId, capacity } = ctx;
+
+  const cosTaskData = await getCosTasks();
+  const runningAgentEntries = Object.values(state.agents).filter((agent) => agent.status === 'running');
+  const { cosAutonomyMode, autonomousActionsRemaining } = await resolveAutonomyBudget(state, runningAgentEntries);
+  const autonomousSpawnCeiling = Math.min(capacity.availableSlots, capacity.spawned + autonomousActionsRemaining);
+
+  await admitAutoApprovedSystemTasks({
+    state,
+    cosTaskData,
+    taskSchedule,
+    cosAutonomyMode,
+    autonomousSlotCeiling: autonomousSpawnCeiling,
+    alreadySpawned: capacity.spawned,
+    perProjectLimit: capacity.perProjectLimit,
+    spawnProjectCounts: capacity.spawnProjectCounts,
+    instanceId,
+  }, {
+    isOwned: (task) => capacity.isTaskOwned(task),
+    canSpawn: (task, ceiling) => capacity.canSpawn(task, ceiling),
+    trackSpawn: (task) => capacity.trackSpawn(task),
+    emitSpawn: (task) => {
+      cosEvents.emit('task:ready', task);
+    },
+  });
+
+  return { cosAutonomyMode, autonomousSpawnCeiling };
 }
 
 /**
- * Shared idle-review lifecycle for the periodic and dequeue engines. Capacity
- * comes from each engine's existing tracker; the same committed admission
- * predicate filters apps before generation and admits the resulting task.
- * Local-endpoint denial remains the spawn chokepoint's durable hold/release.
+ * Priority 3.6 — due feature agents. Same shared admission pass as
+ * evaluateTasks, so an agent that comes due is dispatched by the next
+ * completion/queue event instead of waiting for a batch evaluation.
  */
-export async function admitIdleReviewTask({
-  state,
-  alreadySpawned,
-  hasPendingUserTasks,
-  cosAutonomyMode,
-  autonomousSlotCeiling,
-  ignoreTaskId = null,
-}, { canSpawn, emitSpawn, trackSpawn, deferPreflightDispatch = null }) {
-  if (!isIdleTierEligible({
-    spawned: alreadySpawned,
+async function spawnDequeuePriority36FeatureAgents(ctx, { hasPendingUserTasks, cosAutonomyMode, autonomousSpawnCeiling }) {
+  const { capacity } = ctx;
+  return admitFeatureAgentTasks({
+    spawnedCount: () => capacity.spawned,
     hasPendingUserTasks,
-    idleReviewEnabled: state.config.idleReviewEnabled,
-    autonomyMode: cosAutonomyMode,
-  }) || alreadySpawned >= autonomousSlotCeiling) return;
-
-  // Deferred: the generator imports this owner, and ordinary capacity users
-  // need neither the task store nor the prompt-generation dependency graph.
-  const { getCosApprovalView } = await import('./cosTaskStore.js');
-  if ((await getCosApprovalView()).autoApprovedCount) return;
-  const { generateIdleReviewTask, recordDeferredPerpetualDispatch } = await import('./cosImprovementTasks.js');
-  let preflightCardId = null;
-  let endPreflight = () => {};
-  let handoffAttempted = false;
-  let preflightTransferred = false;
-  try {
-    const generated = await generateIdleReviewTask(state, {
-      ignoreTaskId,
-      isAppEligible: (app) => canSpawn({ metadata: { app: app.id } }, autonomousSlotCeiling),
-      onPreflightStart: (id, end) => { preflightCardId = id; endPreflight = end; },
-    });
-    const { task, pendingPerpetualDispatch } = generated;
-    preflightCardId = generated.preflightCardId;
-    const admitted = task && canSpawn(task, autonomousSlotCeiling);
-    if (admitted) {
-      await recordDeferredPerpetualDispatch(pendingPerpetualDispatch, await import('../taskSchedule.js'));
-      handoffAttempted = true;
-      emitSpawn(task);
-      trackSpawn(task);
-    }
-    if (admitted && preflightCardId && deferPreflightDispatch) {
-      deferPreflightDispatch(task.id, { cardId: preflightCardId, resultTaskId: task.id, endPreflight, persisted: false });
-      preflightTransferred = true;
-    } else await closeStolenIdleReviewCard(preflightCardId, admitted ? task : null);
-  } catch (error) {
-    if (preflightCardId) {
-      const { finishPreflightCard } = await import('../preflightTaskCard.js');
-      await finishPreflightCard(preflightCardId, { outcome: 'failed', reason: 'preparation-failed',
-        note: handoffAttempted ? 'The handoff did not finish. Inspect the task and activity log before trying again.'
-          : 'Preparation failed before the handoff completed. Check the activity log and run again.' });
-    }
-    throw error;
-  } finally {
-    if (!preflightTransferred) endPreflight();
-  }
+    cosAutonomyMode,
+    autonomousSlotCeiling: autonomousSpawnCeiling,
+  }, {
+    canSpawn: (task, ceiling) => capacity.canSpawn(task, ceiling),
+    emitSpawn: (task) => cosEvents.emit('task:ready', task),
+    trackSpawn: (task) => capacity.trackSpawn(task),
+  });
 }
 
 /**
- * Priority 1 (user) tier: is this pending user row runnable unattended?
- *
- * The user tier otherwise spawns EVERY pending row, so `autoApproved` carried no
- * weight in the user file — and that is exactly where its `false` is most
- * informative. A strict row always parses auto-approved, so `false` on a user row
- * can only come from the legacy parser's RECOVERY match (legacyTaskMarkdown.js,
- * read by db-migration 018), which cannot
- * tell a genuine legacy row from a task-shaped SENTENCE sitting at column 0 inside
- * a legacy multi-line description body (#7300). Spawning that is an agent run
- * minted from prose. The row is preserved and stays pending for a human.
- *
- * `undefined` is NOT that claim — a task built without the field (most user rows)
- * stays runnable, so this narrows nothing that was already running.
- *
- * `approvalRequired` is the same hold said the way the FILE can hold it: the user
- * `TASKS.md` writes `| APPROVAL |` on a withheld row (#7367), which reads back as
- * `approvalRequired: true` + `autoApproved: false`. Both are checked so the hold
- * survives whichever half a producer or a peer merge happens to carry.
- *
- * Lives beside `isIdleTierEligible` for the same reason: both spawn engines run
- * their own copy of the user tier, and anything the two must agree on belongs in
- * ONE body rather than in a pair of blocks a grep test has to police.
+ * Priority 4 — idle review task, only when the daemon is completely idle this
+ * cycle. The shared owner checks eligibility and capacity before preparation,
+ * then performs the committed handoff.
  */
-export function isUserTaskRunnableUnattended(task) {
-  return task?.autoApproved !== false && task?.approvalRequired !== true;
+async function spawnDequeuePriority4IdleReview(ctx, { hasPendingUserTasks, cosAutonomyMode, autonomousSpawnCeiling }) {
+  const { capacity } = ctx;
+  return admitIdleReviewTask({
+    state: ctx.state,
+    alreadySpawned: capacity.spawned,
+    hasPendingUserTasks,
+    cosAutonomyMode,
+    autonomousSlotCeiling: autonomousSpawnCeiling,
+    ignoreTaskId: ctx.ignoreTaskId,
+  }, {
+    canSpawn: (task, ceiling) => capacity.canSpawnCommitted(task, ceiling),
+    emitSpawn: (task) => cosEvents.emit('task:ready', task),
+    trackSpawn: (task) => capacity.trackSpawn(task),
+  });
+}
+
+// Every dequeue below is scheduled from a timer/setImmediate outside the request
+// lifecycle, so a rejection has nowhere to bubble: it escapes as an unhandled
+// rejection, which setupProcessErrorHandlers classifies `critical` and broadcasts
+// `system:critical-error` to every browser, while the open slot it was meant to
+// fill stays empty until an unrelated event fires another cycle. One wrapper so
+// the guard cannot drift between the ~10 call sites.
+export const scheduleDequeue = (options = {}) => setImmediate(() => {
+  dequeueNextTask(options).catch(err =>
+    console.error(`❌ CoS dequeue cycle failed: ${err?.message ?? String(err)}`));
+});
+
+/**
+ * Event-driven task dequeue — the primary way tasks get spawned.
+ *
+ * Triggered by: agent:completed, tasks:changed, status:resumed
+ * Thin orchestrator: computes per-cycle capacity, then threads a shared `ctx`
+ * through the priority tiers in order (same tiers/numbering as evaluateTasks;
+ * evaluateTasks' queue-regeneration step is
+ * batch-only and has no event-driven counterpart):
+ *   0. On-demand requests (bypasses pause)
+ *   1. User tasks
+ *   2. Auto-approved system tasks
+ *   3.6. Due feature agents
+ *   4. Idle review task (if idleReviewEnabled)
+ * Returns silently when idle — no log noise.
+ */
+/**
+ * `ignoreTaskId` names a task that just completed but may still read
+ * `pending`/`in_progress` on disk — `agent:completed` fires from `completeAgent`,
+ * before the completion flow's `updateTask` settles it. Generators that count
+ * in-flight work against a spend budget (#3179) must exclude it or they
+ * charge the finished run twice. Only the completion continuation passes it; every
+ * other caller runs outside that window and correctly leaves it null.
+ */
+export async function dequeueNextTask({ ignoreTaskId = null } = {}) {
+  if (maintenance.held() || maintenance.agentDiskPressure()) return;
+  if (!isDaemonRunning()) return;
+  // Same reason as the runner gate below: the tiers' side effects cannot be
+  // taken back, and an agent registered after the shutdown marker snapshot is
+  // charged as a genuine orphan on the next boot (#14170).
+  if (isHostShuttingDown()) return;
+
+  // In runner mode the cos-runner app owns every agent process, so a cycle run
+  // while it is down can only produce holds. Bail before the tiers rather than
+  // after: they drain on-demand requests, advance review cooldowns, bind the
+  // synthetic app-review marker, and spend `capacity` — side effects a hold
+  // downstream cannot take back. Same shape as the `availableSlots <= 0` gate
+  // below; "the runner is off" is the same fact as "there is nowhere to spawn".
+  // `connection:ready` re-runs this the moment the runner returns.
+  if (await isRunnerHolding()) return;
+
+  // A global pause stops scheduled/autonomous spawning, but NOT explicit user
+  // triggers: on-demand requests (Priority 0) are processed even while paused so
+  // a manual "Run" from an app's automation page still fires. The autonomous
+  // tiers (Priority 1+) are skipped below when paused.
+  const { paused } = await loadState();
+
+  const state = await loadState();
+
+  // Bail before the provider fetch below. This function fires from ~8 event
+  // sources plus a setImmediate on every completion, and a saturated pool — the
+  // state that makes those fire in bursts — would otherwise pay two awaits and
+  // a full agent scan per trigger for a tracker discarded immediately.
+  if (state.config.maxConcurrentAgents - Object.values(state.agents).filter(a => a.status === 'running').length <= 0) return;
+
+  // Per-local-endpoint agent slots (#4834). A CoS agent runs a vendor CLI that
+  // talks to the local model server directly, so promptRunner's in-flight gate
+  // never sees it; without this, two agents can be dispatched at one GPU and
+  // take an accelerator OOM. Resolved once per cycle and threaded into the
+  // capacity tracker, which enforces it alongside the global/per-project caps.
+  //
+  // Predictive only — it just avoids emitting a task the chokepoint would hold,
+  // so unlike `acquireLocalEndpointSpawnSlot` it does NOT count in-flight
+  // reservations. Erring toward admitting is correct here: the authoritative
+  // gate still refuses, and a hold is cheap.
+  const localSlots = await buildLocalEndpointSlotContext();
+  // One debug line per saturated endpoint per cycle, not one per queued task —
+  // the user/system tiers `continue` past a denial, so a 40-task queue behind
+  // one busy GPU would otherwise emit 40 identical log events, each broadcast
+  // to every CoS-subscribed socket client.
+  const loggedFullEndpoints = new Set();
+  const capacity = createDequeueCapacity(state, {
+    inFlightTaskIds: spawningTasks,
+    agentsByProject: countRunningAgentsByProject(state.agents),
+    localEndpointCounts: countRunningAgentsByLocalEndpoint(state.agents, localSlots.endpointForAgent),
+    localEndpointLimit: localSlots.limit,
+    resolveLocalEndpoint: localSlots.resolveLocalEndpoint,
+    onLocalEndpointHold: (task, endpoint, running) => {
+      if (loggedFullEndpoints.has(endpoint)) return;
+      loggedFullEndpoints.add(endpoint);
+      emitLog('debug', `⏳ Queued task ${task.id} - local endpoint ${endpoint} at capacity (${running}/${localSlots.limit})`, {
+        taskId: task.id,
+        endpoint
+      });
+    }
+  });
+  const availableSlots = capacity.availableSlots;
+
+  if (availableSlots <= 0) return;
+
+  // This instance's federation id, resolved once per cycle so the priority
+  // tiers below can skip tasks a peer holds a live lease on (#1650). Warm path
+  // is the cheap cached read; only the cold boot creates the identity.
+  const instanceId = await ensureInstanceId();
+
+  // Shared spawn context threaded through each priority tier. The tiers mutate
+  // the running spawn total + per-project counts through `capacity` (whose
+  // `canSpawn`/`trackSpawn` close over that state). Frozen: cross-tier values
+  // (schedule, hasPendingUserTasks, cosAutonomyMode, autonomousSpawnCeiling) are
+  // returned by the tier that resolves them and passed on as named arguments.
+  const ctx = Object.freeze({
+    state,
+    instanceId,
+    capacity,
+    ignoreTaskId
+  });
+
+  // Priority 0 (on-demand) runs even when paused — an explicit user "Run"
+  // bypasses the global pause.
+  const { schedule: taskSchedule } = await spawnDequeuePriority0OnDemand(ctx);
+
+  // Global pause stops every autonomous/scheduled/user tier below; only the
+  // on-demand queue above (explicit user "Run") bypasses it.
+  if (paused) return;
+
+  // Priority 1 spends against the global slot cap.
+  const { hasPendingUserTasks } = await spawnDequeuePriority1UserTasks(ctx);
+
+  // Priorities 2, 3.6 and 4 spend against the lower autonomous ceiling that
+  // Priority 2 resolves `autonomousSpawnCeiling` from the daily budget.
+  const { cosAutonomyMode, autonomousSpawnCeiling } = await spawnDequeuePriority2AutoApproved(ctx, { taskSchedule });
+  await spawnDequeuePriority36FeatureAgents(ctx, { hasPendingUserTasks, cosAutonomyMode, autonomousSpawnCeiling });
+  await spawnDequeuePriority4IdleReview(ctx, { hasPendingUserTasks, cosAutonomyMode, autonomousSpawnCeiling });
+
+  if (capacity.spawned > 0) {
+    const ids = capacity.spawnedTaskIds.join(', ');
+    emitLog('info', `⚡ Dequeued ${capacity.spawned} task(s): ${ids}`, {
+      spawned: capacity.spawned,
+      taskIds: capacity.spawnedTaskIds,
+      availableSlots,
+    });
+  }
 }

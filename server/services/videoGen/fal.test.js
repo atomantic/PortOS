@@ -314,11 +314,25 @@ describe('videoGen/fal — generateVideo', () => {
     expect(fetchMock).toHaveBeenCalled();
   });
 
-  it('crops an off-aspect start frame to the named frame aspect before upload, leaving the file alone', async () => {
+  it.each([
+    { name: 'upright off-aspect frame', sourceWidth: 640, sourceHeight: 640, orientation: 1, aspect: '16:9',
+      width: 640, height: 360, from: '640x640' },
+    { name: 'sideways off-aspect frame', sourceWidth: 96, sourceHeight: 64, orientation: 6, aspect: '1:1',
+      width: 64, height: 64, from: '64x96' },
+    { name: 'sideways frame already at its displayed aspect', sourceWidth: 96, sourceHeight: 64, orientation: 6, aspect: '2:3',
+      width: 64, height: 96, from: null },
+  ])('uploads $name upright at the requested aspect, leaving the file alone', async ({
+    sourceWidth, sourceHeight, orientation, aspect, width, height, from,
+  }) => {
     const sharp = (await import('sharp')).default;
-    const framePath = join(TEST_ROOT, 'square.png');
-    const square = await sharp({ create: { width: 640, height: 640, channels: 3, background: { r: 200, g: 120, b: 40 } } }).png().toBuffer();
-    await writeFile(framePath, square);
+    const framePath = join(TEST_ROOT, 'frame.jpg');
+    const frame = await sharp({ create: { width: sourceWidth, height: sourceHeight, channels: 3, background: 'red' } })
+      .composite([{ input: { create: { width: sourceWidth / 2, height: sourceHeight, channels: 3, background: 'blue' } },
+        top: 0, left: sourceWidth / 2 }])
+      .withMetadata({ orientation })
+      .jpeg()
+      .toBuffer();
+    await writeFile(framePath, frame);
     let sent = null;
     vi.stubGlobal('fetch', vi.fn(async (url, opts) => {
       if (url === 'https://queue.fal.run/fal-ai/x') {
@@ -331,13 +345,19 @@ describe('videoGen/fal — generateVideo', () => {
       throw new Error(`unexpected fetch: ${url}`);
     }));
 
-    const job = await fal.generateVideo({ apiKey: 'test-key', modelId: 'fal-ai/x', prompt: 'singer', sourceImagePath: framePath, frameAspect: '16:9' });
+    const job = await fal.generateVideo({ apiKey: 'test-key', modelId: 'fal-ai/x', prompt: 'singer', sourceImagePath: framePath, frameAspect: aspect });
     expect(await waitForTerminal(job.jobId)).toMatchObject({ type: 'completed' });
     const uploaded = Buffer.from(sent.image_url.split(',')[1], 'base64');
-    const { width, height } = await sharp(uploaded).metadata();
-    expect({ width, height }).toEqual({ width: 640, height: 360 });
-    expect((await readFile(framePath)).equals(square)).toBe(true);
-    expect((await loadHistory())[0].frameConformed).toEqual({ aspect: '16:9', start: { from: '640x640', to: '640x360' } });
+    const meta = await sharp(uploaded).metadata();
+    expect(meta).toMatchObject({ width, height });
+    expect(meta).not.toHaveProperty('exif');
+    if (orientation === 6) {
+      const pixels = await sharp(uploaded).extract({ left: width / 2, top: 0, width: 1, height }).raw().toBuffer();
+      expect(pixels[0]).toBeGreaterThan(192);
+      expect(pixels.at(-1)).toBeGreaterThan(192);
+    }
+    expect(await readFile(framePath)).toEqual(frame);
+    expect((await loadHistory())[0].frameConformed).toEqual(from ? { aspect, start: { from, to: `${width}x${height}` } } : undefined);
   });
 
   it('resolves the API key from live settings when the caller supplies neither apiKey nor settings (the mediaJobQueue dispatch shape)', async () => {
@@ -920,6 +940,43 @@ describe('standalone lip-sync take', () => {
     // the clip's data URI is labelled by its extension, not always WAV
     expect(JSON.stringify(posted[0])).toContain('data:audio/mpeg;base64,');
     expect(JSON.stringify(posted[1])).toContain('data:audio/webm;base64,');
+  });
+});
+
+describe('videoGen/fal — cancel input transfer and submission', () => {
+  it.each(['hosted upload', 'queue submission'])('aborts requests during %s', async (phase) => {
+    const hosted = phase === 'hosted upload';
+    const modelId = hosted ? 'fal-ai/bytedance/omnihuman/v1.5' : 'fal-ai/x';
+    const frame = join(TEST_ROOT, 'frame.png');
+    const audio = join(TEST_ROOT, 'voice.wav');
+    if (hosted) await Promise.all([writeFile(frame, 'png'), writeFile(audio, 'wav')]);
+    const submitUrl = `https://queue.fal.run/${modelId}`;
+    const pendingSignals = [];
+    const fetchMock = vi.fn(async (url, { body, method, signal }) => {
+      if (hosted && url.startsWith('https://rest.fal.ai/storage/upload/initiate')) {
+        const { file_name: name } = JSON.parse(body);
+        return jsonResponse({ upload_url: `https://upload.example.com/${name}`, file_url: `https://cdn.example.com/${name}` });
+      }
+      if ((hosted && method === 'PUT' && url.startsWith('https://upload.example.com/')) || (!hosted && url === submitUrl && method === 'POST')) {
+        pendingSignals.push(signal);
+        return new Promise((_, reject) => {
+          signal.addEventListener('abort', () => reject(signal.reason), { once: true });
+        });
+      }
+      throw new Error(`unexpected fetch: ${url}`);
+    });
+    vi.stubGlobal('fetch', fetchMock);
+
+    const job = await fal.generateVideo({
+      apiKey: 'test-key', modelId, prompt: 'she sings',
+      ...(hosted ? { sourceImagePath: frame, audioFilePath: audio } : {}),
+    });
+    await vi.waitFor(() => expect(pendingSignals).toHaveLength(hosted ? 2 : 1));
+    expect(fal.cancel(job.jobId)).toBe(true);
+    expect(pendingSignals.every((signal) => signal.aborted)).toBe(true);
+    expect(await waitForTerminal(job.jobId)).toMatchObject({ type: 'failed', error: expect.stringMatching(/cancel/i) });
+    expect(fetchMock.mock.calls.filter(([url]) => url === submitUrl)).toHaveLength(hosted ? 0 : 1);
+    expect(await loadHistory()).toEqual([]);
   });
 });
 

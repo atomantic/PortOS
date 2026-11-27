@@ -15,7 +15,7 @@ import { createRequire } from 'module';
 import { dirname, join } from 'path';
 import { fileURLToPath } from 'url';
 import { PORTOS_API_URL } from '../../lib/portosUrls.js';
-import { TASK_TYPE_RENAMES } from '../../lib/scheduledTaskTypes.js';
+import { AUDIT_DOMAIN_ALIASES, TASK_TYPE_RENAMES } from '../../lib/scheduledTaskTypes.js';
 
 export const PROMPT_INTEGRITY_SNAPSHOT_PATH = join(dirname(fileURLToPath(import.meta.url)), 'integrity.snapshot.json');
 
@@ -101,6 +101,15 @@ export const advancePromptIntegritySnapshot = (committed, defaults) => {
     }
     if (versions[oldKey] !== undefined && versions[newKey] === undefined) versions[newKey] = versions[oldKey];
     delete history[oldKey];
+  }
+
+  for (const [oldKey, domain] of Object.entries(AUDIT_DOMAIN_ALIASES)) {
+    if (Object.hasOwn(next.DEFAULT_TASK_PROMPTS, oldKey)) continue;
+    const oldCurrent = committed.DEFAULT_TASK_PROMPTS[oldKey];
+    const moved = [...(history[oldKey] || []), ...(oldCurrent ? [oldCurrent] : [])];
+    if (moved.length) history[domain] = [...new Set([...(history[domain] || []), ...moved])];
+    delete history[oldKey];
+    delete versions[oldKey];
   }
 
   for (const [key, hash] of Object.entries(next.DEFAULT_TASK_PROMPTS)) {

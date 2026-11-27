@@ -1,3 +1,4 @@
+import { CANCEL_ALREADY_TERMINAL } from '../../lib/cancelResponse.js';
 import { assertRenderCleanupIdle } from './renderCleanupActivity.js';
 /**
  * Music Video — publishing kit (#9281).
@@ -15,13 +16,13 @@ import { assertRenderCleanupIdle } from './renderCleanupActivity.js';
  */
 import { randomUUID } from 'crypto';
 import { existsSync } from 'fs';
-import { copyFile, rename, unlink, writeFile } from 'fs/promises';
+import { copyFile, unlink, writeFile } from 'fs/promises';
 import { basename, join } from 'path';
 import { FINISHED_OUTPUT_ADMISSION_MS } from '../../lib/backupPublicationWait.js';
 import { withBackupAssetPublication } from '../../lib/backupSnapshotBoundary.js';
 import { ServerError } from '../../lib/errorHandler.js';
 import { ensureDir, PATHS } from '../../lib/fileUtils.js';
-import { safeUnder, edgeFadeFilter, findFfmpeg, runFfmpegProcess, probeVideoDuration, probeVideoStreamInfo, probeVideoAudioSampleCount, planLoudnessMaster, reportMasteredLoudness, MASTER_LOUDNESS, AAC_ENCODE_ARGS } from '../../lib/ffmpeg.js';
+import { safeUnder, edgeFadeFilter, findFfmpeg, runFfmpegProcess, probeVideoDuration, probeVideoStreamInfo, probeVideoAudioSampleCount, planLoudnessMaster, reportMasteredLoudness, installEncodedVideo, MASTER_LOUDNESS, AAC_ENCODE_ARGS } from '../../lib/ffmpeg.js';
 import { broadcastSse, attachSseClient as attachSse, closeJobAfterDelay } from '../../lib/sseUtils.js';
 import { listProjects, mutateProjectRecord } from './projects.js';
 import { requireProject } from './requireProject.js';
@@ -138,7 +139,8 @@ async function masterPublishCopy(bin, path, signal) {
       // A rounded reading equal to the ceiling can still be over it. If AAC
       // used up the headroom, back off and encode again from the same source.
       if (loudness.truePeakDb < MASTER_LOUDNESS.truePeakDb) {
-        await rename(outputPath, path);
+        const installed = await installEncodedVideo(outputPath, path, 'publish-kit loudness');
+        if (!installed.ok) throw new Error(installed.reason);
         return loudness;
       }
       const correction = MASTER_LOUDNESS.truePeakDb - loudness.truePeakDb - 0.5;
@@ -342,7 +344,8 @@ async function beginPublishKitBuild(projectId, jobId, { crop, loudnessPreset }) 
 
 export function cancelPublishKitBuild(jobId) {
   const job = jobs.get(jobId);
-  if (!job || job.status !== 'running' || job.committing) return false;
+  if (!job) return false;
+  if (job.status !== 'running' || job.committing) return CANCEL_ALREADY_TERMINAL;
   job.abort.abort();
   return true;
 }

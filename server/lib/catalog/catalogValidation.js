@@ -5,8 +5,8 @@
  * sync envelope).
  *
  * Domain-namespaced (imported as `catalogValidation.X` from the lib barrel)
- * so cross-domain identifier collisions never bite. The route handler in
- * server/routes/catalog.js uses `validateRequest(schema, body)` against these.
+ * so cross-domain identifier collisions never bite. Catalog routers use these
+ * schemas through `validateRequest`.
  *
  * Payload shapes for character/place/object intentionally accept the
  * server/lib/storyBible.js field set verbatim — backfilled and freshly
@@ -37,18 +37,10 @@ import { isTruthyMeta } from '../metadataFlags.js';
 import { LOOK_AROUND_MAX_ANGLES, LOOK_AROUND_MOTION_IDS } from './catalogLookAround.js';
 import { STORY_DRAFT_LIMITS } from './catalogStoryDraft.js';
 import { BLEND_MAX_STRENGTH_TAKES, DESIGN_FEATURES, DESIGN_FRAMINGS, DEFAULT_DESIGN_FRAMING, DESIGN_LINE_MAX, DESIGN_MAX_BLEND_REFS, DESIGN_MAX_TAKES, DESIGN_NOTE_MAX } from './catalogDesign.js';
-// Derived from the shared type registry (`catalogTypes.js`) — adding a SYSTEM
-// type there flows through to consumers automatically. Kept as a frozen
-// re-export so existing `import { INGREDIENT_TYPES }` callers are unaffected.
-// NOTE: this is the SYSTEM list only — the local-create `type` gate below uses
-// the runtime `isActiveType` refinement so user-defined types validate too.
-export const INGREDIENT_TYPES = INGREDIENT_TYPE_IDS;
 
-// Local ingredient `type` gate. Was a frozen `z.enum(INGREDIENT_TYPES)`; now a
-// runtime refinement against the active registry (system + user-defined types)
-// so a user-typed create/query passes. The cross-instance SYNC path stays loose
-// (`z.string().max(32)` below) — a peer ingredient may arrive before its type
-// row applies, and the version gate already covers true shape skew.
+// Local ingredient types come from the active registry (system and user-defined).
+// Sync accepts a bounded string because a peer ingredient can arrive before
+// its type definition. The version gate covers incompatible shapes.
 const ingredientTypeGate = z.string().trim().min(1).max(32)
   .refine(isActiveType, 'unknown ingredient type');
 
@@ -70,10 +62,6 @@ export const REF_KINDS = Object.freeze([
   'music-video',
   'storyboard',
 ]);
-
-// Relation kinds derived from the shared registry (`catalogTypes.js`) — adding
-// a kind there flows through to the Zod enum below.
-export const RELATION_KINDS = RELATION_KIND_IDS;
 
 // Media-attachment kinds derived from the shared registry — same pattern.
 export const MEDIA_KINDS = MEDIA_KIND_IDS;
@@ -383,7 +371,7 @@ export const catalogIngredientLinkSchema = z.object({
 // server-side in `linkIngredientRelation`.
 export const catalogRelationLinkSchema = z.object({
   toId: z.string().trim().min(1).max(80),
-  kind: z.enum(RELATION_KINDS),
+  kind: z.enum(RELATION_KIND_IDS),
 }).strict();
 
 // Media attach body. `mediaKey` is a REFERENCE into the media library (a
@@ -579,7 +567,7 @@ export const catalogMediaVoiceMemoSchema = z.object({
 export const catalogDraftRelationshipSchema = z.object({
   fromDraftId: z.string().trim().min(1).max(120),
   toDraftId: z.string().trim().min(1).max(120),
-  kind: z.enum(RELATION_KINDS),
+  kind: z.enum(RELATION_KIND_IDS),
   evidence: z.string().trim().min(1).max(400),
 }).strict();
 

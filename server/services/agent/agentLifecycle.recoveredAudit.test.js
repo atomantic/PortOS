@@ -17,7 +17,10 @@ vi.mock('../../lib/paths.js', async importOriginal => {
 });
 vi.mock('../../lib/maintenanceAdmission.js', () => ({ maintenance: {
   continueSettlement: fn => fn(), recoverOwned: vi.fn(), withResource: (_kind, _id, fn) => fn(), finishResource: vi.fn(), markResourceUnsettled: vi.fn(),
+  operations: () => [],
 } }));
+vi.mock('../deadOwnerReservations.js', () => ({ reconcileDeadOwnerReservations: vi.fn() }));
+vi.mock('../cos/cosTaskGenerator.js', () => ({ evaluateTasks: vi.fn(async () => {}) }));
 vi.mock('../cos/cosRunnerClient.js', () => ({
   getActiveAgentsFromRunner: vi.fn(), connectTuiSessionViaRunner: vi.fn(),
   spawnAgentViaRunner: vi.fn(), getRunnerHealth: vi.fn(), classifyRunnerSpawnFailure: vi.fn(),
@@ -26,6 +29,7 @@ vi.mock('../shell.js', () => ({ getSession: vi.fn(() => ({})) }));
 vi.mock('../cos/cosAgentLifecycle.js', async importOriginal => ({
   ...(await importOriginal()),
   readAgentRecordOrUnreadable: vi.fn(),
+  getAgents: vi.fn(async () => [...fixture.records.values()]),
   getAgent: vi.fn(async id => fixture.records.get(id)),
   getAgentRecord: vi.fn(async id => fixture.records.get(id)),
   updateAgent: vi.fn(async (id, update) => {
@@ -64,6 +68,7 @@ vi.mock('./agentWorktreeCleanup.js', () => ({
     await rm(record.metadata.workspacePath, { recursive: true, force: true });
     return [];
   }),
+  resolveTaskResumePatch: vi.fn(async () => ({})),
   releaseRetryHold: vi.fn(async () => ({})), spawnMergeRecoveryTask: vi.fn(),
 }));
 vi.mock('../../lib/db.js', () => ({ ensureSchema: vi.fn(), query: vi.fn(async (_sql, values) => {
@@ -91,6 +96,10 @@ vi.mock('./agentErrorAnalysis.js', async importOriginal => ({
 vi.mock('../cos/cosEvents.js', () => ({ emitLog: vi.fn(), cosEvents: { emit: vi.fn(), on: vi.fn() } }));
 vi.mock('./agentRunEventLog.js', () => ({ appendRunEvent: vi.fn() }));
 vi.mock('./agentRunTracking.js', () => ({ completeAgentRun: vi.fn() }));
+vi.mock('./agentProcessProbe.js', async importOriginal => ({
+  ...(await importOriginal()),
+  isPidAlive: vi.fn(async () => false),
+}));
 vi.mock('./agentCompletion.js', () => ({ processAgentCompletion: vi.fn() }));
 vi.mock('../taskSchedule.js', () => ({ recordTaskTypeSuccess: vi.fn(async () => null), recordTaskTypeFailure: vi.fn(async () => null) }));
 vi.mock('./agentSpawnPreparation.js', () => ({ createAgentSpawnContext: vi.fn(), prepareAgentSpawn: vi.fn() }));
@@ -125,8 +134,12 @@ import { cleanupTempDataRoots } from '../../lib/mockPathsDataRoot.js';
 import { AGENT_RECORD_UNREADABLE, readAgentRecordOrUnreadable } from '../cos/cosAgentLifecycle.js';
 import { getActiveAgentsFromRunner } from '../cos/cosRunnerClient.js';
 import { cleanupAgentWorktree } from './agentWorktreeCleanup.js';
+import { bindCompletionTaskDispatch } from './agentCompletionTaskHandoff.js';
+import { cleanupOrphanedAgents } from './agentOrphanRecovery.js';
+import { completeAgentRun } from './agentRunTracking.js';
 import { activeAgents, runnerAgents } from './agentState.js';
 import { syncRunnerAgents } from './agentRunnerSync.js';
+import { maintenance } from '../../lib/maintenanceAdmission.js';
 import { handleAgentCompletion } from './agentLifecycle.js';
 
 const report = { version: 1, findings: [{ key: 'example-candidate', title: 'Reviewed example candidate',
@@ -163,6 +176,43 @@ const complete = agentId => {
   fixture.completions++;
   return handleAgentCompletion(agentId, 0, true, 1000);
 };
+
+describe('dead agent recovery (#3182, #8440)', () => {
+  it.each([
+    { mode: 'orphan sweep', exitCode: 1, success: false, taskStatus: 'pending' },
+    { mode: 'untracked completion', exitCode: 0, success: true, taskStatus: 'completed' },
+  ])('settles the saved output and task through $mode', async ({ mode, exitCode, success, taskStatus }) => {
+    const startedAt = '2026-10-01T12:00:00.000Z';
+    const task = { id: 'sys-example-recovery', taskType: 'internal', status: 'in_progress',
+      metadata: { claimedBy: 'example-install', lastSpawnedAt: startedAt, totalSpawnCount: 1 } };
+    const record = { id: 'agent-example-recovery', taskId: task.id, status: 'running', pid: 12345, startedAt,
+      metadata: { runId: 'run-example-recovery' }, output: ['Synthetic output', { line: 'Saved before restart' }] };
+    fixture.tasks.push(task);
+    fixture.records.set(record.id, record);
+    expect(await bindCompletionTaskDispatch(record.id, task)).toBe(true);
+
+    if (mode === 'orphan sweep') {
+      readAgentRecordOrUnreadable.mockResolvedValueOnce(record);
+      getActiveAgentsFromRunner.mockResolvedValueOnce([]);
+      cleanupAgentWorktree.mockResolvedValueOnce([]);
+      vi.useFakeTimers({ toFake: ['setTimeout'] });
+      try {
+        await expect(cleanupOrphanedAgents()).resolves.toBe(1);
+      } finally {
+        vi.useRealTimers();
+      }
+    } else {
+      await complete(record.id);
+    }
+
+    expect(completeAgentRun).toHaveBeenCalledExactlyOnceWith(record.metadata.runId,
+      'Synthetic output\nSaved before restart', exitCode, expect.any(Number),
+      expect.objectContaining({ category: success ? undefined : 'orphaned' }),
+      success ? null : false, expect.objectContaining({ executionSuccess: success }));
+    expect(record).toMatchObject({ status: 'completed', result: { orphaned: true, exitCode, success } });
+    expect(task.status).toBe(taskStatus);
+  });
+});
 
 async function recoveredRun({ primary = false, missingPath = false, unreadable = false } = {}) {
   const agentId = `agent-example-${++fixture.serial}`;
@@ -203,6 +253,7 @@ describe('recovered runner audit completion (#11526)', () => {
     expect(fixture.trace.indexOf('quality')).toBeLessThan(fixture.trace.indexOf('complete'));
     expect(fixture.trace.indexOf('complete')).toBeLessThan(fixture.trace.indexOf('cleanup'));
     expect(runnerAgents.has(run.agentId)).toBe(false);
+    expect(maintenance.finishResource).toHaveBeenCalledExactlyOnceWith('agent', run.agentId);
     await expect(readFile(join(run.workspacePath, `.agent-done-${run.agentId}`))).rejects.toMatchObject({ code: 'ENOENT' });
     expect(await readFile(join(run.primaryPath, `.agent-done-${run.agentId}`), 'utf8')).toBe(sentinel({ version: 1, findings: [] }, 12));
   });

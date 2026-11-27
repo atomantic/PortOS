@@ -119,7 +119,7 @@ export function buildCollectionActions({
         pending,
         disabled: !hasBackend || locked || pending,
         title: !hasBackend
-          ? 'No image backend configured — enable one in Settings → Image Gen'
+          ? 'No image backend configured — enable one in Media Gen Settings'
           : locked ? 'This anchor is locked — its reference set is frozen' : 'Render another candidate for this anchor',
         onClick: () => generateAnchor(direction, mode),
       };

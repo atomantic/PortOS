@@ -21,10 +21,12 @@ import { compareDeclaration } from './mirrorParity.js';
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const SERVER_PATH = resolve(__dirname, 'localModelHeuristics.js');
 const TOOLKIT_PATH = resolve(__dirname, 'aiToolkit/internal/providerCatalogService.js');
+const STATUS_PATH = resolve(__dirname, 'aiToolkit/providerStatus.js');
 
 describe('localModelHeuristics↔aiToolkit TOOL_USE_RE mirror parity', () => {
   const serverSrc = readFileSync(SERVER_PATH, 'utf8');
   const toolkitSrc = readFileSync(TOOLKIT_PATH, 'utf8');
+  const statusSrc = readFileSync(STATUS_PATH, 'utf8');
 
   it('is present and identical in both server copies (code only)', () => {
     const { serverDecl, clientDecl, serverNorm, clientNorm } =
@@ -36,5 +38,14 @@ describe('localModelHeuristics↔aiToolkit TOOL_USE_RE mirror parity', () => {
       clientNorm,
       'TOOL_USE_RE diverged — the localModelHeuristics copy is authoritative; port the change verbatim',
     ).toBe(serverNorm);
+  });
+
+  it('keeps the aiToolkit embedding classifier aligned with the host (code only)', () => {
+    const { serverDecl, clientDecl, serverNorm, clientNorm } =
+      compareDeclaration(serverSrc, statusSrc, 'EMBEDDING_RE');
+
+    expect(serverDecl, 'server/lib/localModelHeuristics.js is missing: EMBEDDING_RE').not.toBeNull();
+    expect(clientDecl, 'server/lib/aiToolkit/providerStatus.js is missing: EMBEDDING_RE').not.toBeNull();
+    expect(clientNorm, 'aiToolkit EMBEDDING_RE diverged from EMBEDDING_RE').toBe(serverNorm);
   });
 });

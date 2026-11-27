@@ -6,7 +6,7 @@ vi.mock('../services/apiPalette.js', () => ({
   getPaletteManifest: vi.fn(() => Promise.resolve({ actions: [] })),
   runPaletteAction: vi.fn(() => Promise.resolve({ ok: true })),
 }));
-vi.mock('../services/apiSystem.js', () => ({
+vi.mock('../services/apiAppShell.js', () => ({
   getInstanceFeatures: vi.fn(() => Promise.resolve({ features: [] })),
 }));
 vi.mock('../services/apiDashboard.js', () => ({

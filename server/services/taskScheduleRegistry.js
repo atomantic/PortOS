@@ -8,7 +8,7 @@ import { PRIVATE_SECURITY_TASK_TYPE, PRIVATE_SECURITY_DELIVERY } from '../lib/pr
 
 import { BRANCHES_PER_AGENT_MAX, BRANCHES_PER_AGENT_MIN, DEFAULT_REPO_SYNC_VERIFY_MODE, ERROR_LOG_TRIAGE_LIMITS, RELEASE_OPTION_KEYS } from '../lib/cos/cosTaskMetadata.js';
 import { CONSOLIDATED_AUDIT_DOMAINS } from '../lib/auditDomains.js';
-import { isAuditTaskType, } from '../lib/auditCatalog.js';
+import { isAuditTaskType } from '../lib/auditCatalog.js';
 import { DEFAULT_ISSUE_MIN_AGE_MINUTES } from '../lib/issueClaimEvidence.js';
 import { MODEL_ABUSE_GUARD_ID } from '../lib/modelAbuseGuard.js';
 import {
@@ -158,9 +158,6 @@ const TASK_INTERVAL_DEFAULTS = {
   [PRIVATE_SECURITY_TASK_TYPE]: { type: INTERVAL_TYPES.ON_DEMAND, enabled: true, providerId: null, model: null, prompt: null, taskMetadata: { ...PRIVATE_SECURITY_DELIVERY } },
   'model-comparison-refresh': { type: INTERVAL_TYPES.ON_DEMAND, enabled: false, providerId: null, model: null, prompt: null, taskMetadata: { useWorktree: true, openPR: true, worktreeChangesExpected: true } },
   'security':            { type: INTERVAL_TYPES.ON_DEMAND, enabled: true, providerId: null, model: null, prompt: null, taskMetadata: { fileIssues: false } },
-  'code-quality':        { type: INTERVAL_TYPES.ON_DEMAND, enabled: true, providerId: null, model: null, prompt: null, taskMetadata: { fileIssues: false } },
-  'test-coverage':       { type: INTERVAL_TYPES.ON_DEMAND, enabled: true, providerId: null, model: null, prompt: null, taskMetadata: { fileIssues: true } },
-  'performance':         { type: INTERVAL_TYPES.ON_DEMAND, enabled: true, providerId: null, model: null, prompt: null, taskMetadata: { fileIssues: false } },
   'accessibility':       { type: INTERVAL_TYPES.ON_DEMAND, enabled: true, providerId: null, model: null, prompt: null, taskMetadata: { fileIssues: false } },
   // branch-reconcile first removes fully-merged, clean orphaned worktrees and branches, then finishes
   // THIS machine's remaining in-flight LOCAL branches per app (open a PR, resolve conflicts, drive the
@@ -189,7 +186,6 @@ const TASK_INTERVAL_DEFAULTS = {
   // The same deterministic pre-step unblocks `blocked` issues whose `Blocked by #N` blockers are all
   // closed (blockedIssueReconcile.js); like releaseAbandonedClaims it needs no model and runs every pass.
   'issue-reconcile':     { type: INTERVAL_TYPES.ON_DEMAND, perpetual: true, enabled: true, providerId: null, model: null, prompt: null, recheckCron: '0 4 * * *', drainDispatchCap: PERPETUAL_DRAIN_DISPATCH_CAP, taskMetadata: { ...NON_COMMITTING_COORDINATOR_METADATA, autoClose: true } },
-  'console-errors':      { type: INTERVAL_TYPES.ON_DEMAND, enabled: true, providerId: null, model: null, prompt: null, taskMetadata: { fileIssues: false } },
   // dependency-updates runs package-manager installs, so it ALWAYS gets an isolated CoS worktree with
   // private node_modules (agentWorkspacePrep passes `linkDependencies: false`): in the live checkout
   // `npm install` follows the shared-dependency symlinks and rewrites the running server's
@@ -197,9 +193,6 @@ const TASK_INTERVAL_DEFAULTS = {
   // CI validates a bump, but the operator may flip it. `noChangeSuccess`: already-current dependencies
   // are the common outcome, an empty branch that is still a success (lib/noChangeCompletion.js).
   'dependency-updates':  { type: INTERVAL_TYPES.ON_DEMAND, enabled: true, providerId: null, model: null, prompt: null, taskMetadata: { useWorktree: true, openPR: true, noChangeSuccess: true } },
-  'documentation':       { type: INTERVAL_TYPES.ON_DEMAND, enabled: true, providerId: null, model: null, prompt: null, taskMetadata: { fileIssues: false } },
-  'ui-bugs':             { type: INTERVAL_TYPES.ON_DEMAND, enabled: true, providerId: null, model: null, prompt: null, taskMetadata: { fileIssues: false } },
-  'mobile-responsive':   { type: INTERVAL_TYPES.ON_DEMAND, enabled: true, providerId: null, model: null, prompt: null, taskMetadata: { fileIssues: false } },
   // feature-ideas waits for do-replan so new work is grounded in a fresh PLAN.md.
   'feature-ideas':       { type: INTERVAL_TYPES.ON_DEMAND, enabled: true, providerId: null, model: null, prompt: null, runAfter: ['do-replan'], taskMetadata: { useWorktree: true, openPR: true, simplify: true } },
   // plan-task is a strict executor of PLAN.md items — no brainstorm fallback, no runAfter deps. It
@@ -231,8 +224,6 @@ const TASK_INTERVAL_DEFAULTS = {
   // jira-sprint-manager triage). `useWorktree`/`openPR` are OFF for the same reasons as plan-task.
   // `issueAuthorFilter` / `issueExcludeLabels` apply only for a forge tracker (github/gitlab).
   'claim-work':          { type: INTERVAL_TYPES.ON_DEMAND, enabled: true, providerId: null, model: null, prompt: null, taskMetadata: { useWorktree: false, openPR: false, claimFlow: true, simplify: true, issueAuthorFilter: 'self', issueExcludeLabels: [], issueMinAgeMinutes: DEFAULT_ISSUE_MIN_AGE_MINUTES } },
-  'error-handling':      { type: INTERVAL_TYPES.ON_DEMAND, enabled: true, providerId: null, model: null, prompt: null, taskMetadata: { fileIssues: false } },
-  'typing':              { type: INTERVAL_TYPES.ON_DEMAND, enabled: true, providerId: null, model: null, prompt: null, taskMetadata: { fileIssues: false } },
   // do-release finishes in-flight PRs, merges dependency updates and drives the main → release PR. It
   // must run from the app's live main checkout so its branch/ref checks describe the real release
   // flow; a CoS worktree would hide that checkout.
@@ -264,51 +255,10 @@ const TASK_INTERVAL_DEFAULTS = {
   // PROMPT_VERSIONS['reference-watch'] (REFERENCE_WATCH_AUDITED_VERSION above); a bump requires
   // re-auditing it, enforced by a guard test in taskSchedule.test.js.
   'reference-watch':     { type: INTERVAL_TYPES.ON_DEMAND, enabled: true, providerId: null, model: null, prompt: null, taskMetadata: { readOnly: false } },
-  // ux audits the RUNNING app UI and files tracker issues by default (`fileIssues: true`).
-  // `readOnly: false` so the PLAN.md path can commit checklist items / forge paths can create issues.
-  // On-demand by default (AI Provider Usage Policy): a manual Run is the consent to a browser-driving
-  // LLM run.
-  'ux':                  { type: INTERVAL_TYPES.ON_DEMAND, enabled: true, providerId: null, model: null, prompt: null, taskMetadata: { fileIssues: true, useWorktree: false, openPR: false, readOnly: false } },
-  'design':                  { type: INTERVAL_TYPES.ON_DEMAND, enabled: true, providerId: null, model: null, prompt: null, taskMetadata: { fileIssues: true, useWorktree: false, openPR: false, readOnly: false } },
-  // data-safety / simplify are the scheduled counterparts of the quota-burn
-  // `data-safety-audit` and `simplify-audit` presets. New types default to
-  // file-issues so an unattended scheduled run doesn't land code. On-demand
-  // defaults keep manual filing available without opting into scheduling.
-  'data-safety':         { type: INTERVAL_TYPES.ON_DEMAND, enabled: true, providerId: null, model: null, prompt: null, taskMetadata: { fileIssues: true, useWorktree: false, openPR: false } },
-  'simplify':            { type: INTERVAL_TYPES.ON_DEMAND, enabled: true, providerId: null, model: null, prompt: null, taskMetadata: { fileIssues: true, useWorktree: false, openPR: false } },
-  'over-engineering':    { type: INTERVAL_TYPES.ON_DEMAND, enabled: true, providerId: null, model: null, prompt: null, taskMetadata: { fileIssues: true, useWorktree: false, openPR: false } },
-  'module-hygiene':      { type: INTERVAL_TYPES.ON_DEMAND, enabled: true, providerId: null, model: null, prompt: null, dataInputs: ['open-issues', 'open-pull-requests'], taskMetadata: { fileIssues: true, useWorktree: false, openPR: false } },
   'api-contract':      { type: INTERVAL_TYPES.ON_DEMAND, enabled: true, providerId: null, model: null, prompt: null, taskMetadata: { fileIssues: true, useWorktree: false, openPR: false } },
-  'ui-lifecycle':      { type: INTERVAL_TYPES.ON_DEMAND, enabled: true, providerId: null, model: null, prompt: null, taskMetadata: { fileIssues: true, useWorktree: false, openPR: false } },
-  'observability':     { type: INTERVAL_TYPES.ON_DEMAND, enabled: true, providerId: null, model: null, prompt: null, taskMetadata: { fileIssues: true, useWorktree: false, openPR: false } },
-  'copy':                { type: INTERVAL_TYPES.ON_DEMAND, enabled: true, providerId: null, model: null, prompt: null, taskMetadata: { fileIssues: true, useWorktree: false, openPR: false } },
-  // The do:better-lens lanes. All file-issues by default (an unattended run
-  // must not land a refactor) and on-demand until the user picks a cadence.
-  // Open issues + PRs are preloaded so the agent dedups against in-flight
-  // work without spending its own forge calls, the way module-hygiene does.
-  'better-complexity':          fileIssuesAuditInterval(),
-  'better-cognitive-load':      fileIssuesAuditInterval(),
-  'better-structural-drift':    fileIssuesAuditInterval(),
-  'app-bugs':                   fileIssuesAuditInterval(),
-  'better-runtime-safety':      fileIssuesAuditInterval(),
   'better-dependency-freedom':  fileIssuesAuditInterval(),
-  'better-test-quality':        fileIssuesAuditInterval(),
-  'better-dev-environment':     fileIssuesAuditInterval(),
-  // Service and data-platform lenses (see AUDIT_DEFINITIONS). File-issues by
-  // default — their findings usually touch production configuration — with
-  // open issues + PRs preloaded for dedup like the do:better lanes above.
-  'infrastructure':             fileIssuesAuditInterval(),
-  'data-integrity':             fileIssuesAuditInterval(),
-  'reliability':                fileIssuesAuditInterval(),
   'privacy':                    fileIssuesAuditInterval(),
-  'cost-efficiency':            fileIssuesAuditInterval(),
-  // Gap lenses the page-walking audits miss: unfinished features and workflows
-  // that strand their record between steps. File-issues by default.
   'feature-completeness':       fileIssuesAuditInterval(),
-  'workflow-recovery':          fileIssuesAuditInterval(),
-  // Executed counterpart of data-safety: scratch-only migrations, restore and
-  // boot. File-issues by default; a scratch run never lands code.
-  'upgrade-rehearsal':          fileIssuesAuditInterval(),
   // Trusted remediation is separate from external intake. Legacy author
   // filter settings cannot widen this lane into untrusted contributor PRs.
   'pr-watcher':          { type: INTERVAL_TYPES.ON_DEMAND, intervalMs: 1800000, enabled: true, providerId: null, model: null, prompt: null, taskMetadata: { prAuthorFilter: 'trusted', readOnly: false } },
@@ -401,15 +351,7 @@ export const DEFAULT_TASK_INTERVALS = Object.fromEntries(
 // Git pathspecs relative to the app's repo root. The prompt version stands in
 // for the prompt body: a body change requires a bump.
 export const TASK_INPUT_PATHS = Object.freeze({
-  'upgrade-rehearsal': Object.freeze([
-    'scripts/run-migrations.js',
-    'scripts/lib/',
-    'scripts/migrations/',
-    'data.reference/',
-    'server/services/backup.js',
-    'server/services/backupRestore*',
-    'server/services/taskPromptDefaults/versions.js',
-  ]),
+  'data-integrity-safety': Object.freeze(['.']),
 });
 
 // Agent-options that a task manages internally — UI locks the toggle, and
@@ -521,15 +463,8 @@ export function enforceBranchReconcileBatch(taskType, config) {
 // fails the suite if the two ever drift apart.
 export const TASK_TYPE_DESCRIPTIONS = {
   ...Object.fromEntries(Object.entries(CONSOLIDATED_AUDIT_DOMAINS).map(([id, domain]) => [id, domain.mission])),
-  'ui-bugs': 'Find UI bugs — file issues or implement fixes',
-  'mobile-responsive': 'Mobile/responsive audit — file issues or implement fixes',
   [PRIVATE_SECURITY_TASK_TYPE]: 'Private security assessment — sandboxed local model, report and remediation only; no issues or PRs',
   'security': 'Security audit — file issues or implement fixes',
-  'code-quality': 'Code quality — file issues or implement fixes',
-  'console-errors': 'Console errors — file issues or implement fixes',
-  'performance': 'Performance audit — file issues or implement fixes',
-  'test-coverage': 'Test coverage — file issues or add tests',
-  'documentation': 'Docs drift — file issues or implement fixes',
   'feature-ideas': 'Implement next planned feature or brainstorm new one',
   'plan-task': 'Execute next PLAN.md item, remove it from PLAN.md, log to changelog (worktree+PR)',
   'claim-issue': 'Claim and ship the next open GitHub issue (owner-filed or any author), PR closes it',
@@ -539,8 +474,6 @@ export const TASK_TYPE_DESCRIPTIONS = {
   'issue-reconcile': "Remediate trusted operator and collaborator issues: heal zombies (open + in-progress but their PR already merged with no live claim — close + file a scoped follow-up or release the claim) and auto-unblock: remove the `blocked` label once every issue named in its `Blocked by #N` line has closed",
   'dependency-updates': 'Land or resolve open Dependabot/Renovate PRs, then update the dependencies they missed',
   'do-release': 'Ship a release: finish in-flight work, merge dependency updates, fix blockers, then run the release workflow',
-  'error-handling': 'Failure-path audit — file issues or implement fixes',
-  'typing': 'TypeScript types — file issues or implement fixes',
   'pr-reviewer': 'Watch external contributor PRs: screen content, gate eligibility, and validate review actions',
   'pr-watcher': 'Remediate operator and collaborator PRs using screened activity; verify tests and reviews before merging',
   'issue-watcher': 'Triage external issues and comments through screening, tool-free analysis, and deterministic replies or volunteer assignment',
@@ -550,32 +483,10 @@ export const TASK_TYPE_DESCRIPTIONS = {
   'jira-sprint-manager': 'Triage and implement JIRA sprint tickets',
   'jira-status-report': 'Generate JIRA weekly status report',
   'reference-watch': 'Watch reference repos and append PLAN.md items for new upstream work',
-  'design': 'Rendered design audit — file issues (default) or implement fixes',
-  'ux': 'UX audit — file issues (default) or implement fixes',
-  'data-safety': 'Data/upgrade-safety audit — file issues (default) or implement fixes',
-  'simplify': 'Dead-code/duplication audit — file issues (default) or implement removals',
-  'over-engineering': 'Over-engineering — process and validation machinery costing more (CI minutes, agent turnaround, maintenance) than the harm it prevents; file issues (default) or implement removals',
-  'module-hygiene': 'Module hygiene — complexity, reuse, ownership, and discoverability; file issues (default) or implement one refactor',
   'api-contract': 'API/route-contract audit — file issues (default) or implement fixes',
-  'ui-lifecycle': 'UI lifecycle/state audit — file issues (default) or implement fixes',
-  'observability': 'Logging/observability audit — file issues (default) or implement fixes',
-  'copy': 'Copy/text-clarity audit — file issues (default) or implement rewrites',
-  'better-complexity': 'Cyclomatic complexity — measure branching per function, reduce the hottest offenders; file issues (default) or implement one refactor',
-  'better-cognitive-load': 'Cognitive load — excessive code comments, mixed abstraction levels, flag arguments, misleading names, action at a distance; file issues (default) or implement one refactor',
-  'better-structural-drift': 'Structural drift — generated artifacts as a second source of truth, hand-synced registries, layout coupling; file issues (default) or implement one consolidation',
-  'app-bugs': 'App bugs — server and core-logic bugs: wrong results, edge inputs, success that did nothing, races a user or job can trigger; file issues (default) or implement fixes',
-  'better-runtime-safety': 'Runtime safety — missing awaits, unhandled rejections, unguarded nulls, leaks, races; file issues (default) or implement fixes',
   'better-dependency-freedom': 'Dependency freedom — replace micro-packages and native-API wrappers with in-repo code; file issues (default) or implement one removal',
-  'better-test-quality': 'Test quality — vacuous, weak, or redundant tests; file issues (default) or implement one cleanup',
-  'better-dev-environment': 'Development environment — temp files/processes leaked by test runs, writes outside the sandbox, watcher cost, suite runtime; file issues (default) or implement one fix',
-  'infrastructure': 'Infrastructure & deployment — IaC, containers, orchestration and CI: exposure, identity grants, secrets, pinning, limits; file issues (default) or implement fixes',
-  'data-integrity': 'Data integrity — idempotent ingestion, atomic writes, consistency, schema evolution of stored data; file issues (default) or implement fixes',
-  'reliability': 'Reliability — graceful shutdown, health/readiness, backpressure, job leasing, mixed-version deploys; file issues (default) or implement fixes',
   'privacy': 'Privacy & data governance — personal data in logs/exports/third parties, minimization, retention and erasure; file issues (default) or implement fixes',
-  'cost-efficiency': 'Cost efficiency — metered API/model calls, unbounded scans, storage tiers, over-provisioning; file issues (default) or implement fixes',
   'feature-completeness': 'Feature completeness — stubs reachable from the UI, disabled or "coming soon" controls, settings nothing reads, endpoints with no entry point; file issues (default) or finish one',
-  'workflow-recovery': 'Workflow recovery — in-progress states with no visible resume/cancel, busy refusals without a handle, follow-up steps that strand a record; file issues (default) or implement fixes',
-  'upgrade-rehearsal': 'Upgrade & restore rehearsal — runs migrations over synthetic older installs and a backup restore in scratch directories, never the live data; file issues (default) or implement fixes',
   'model-comparison-refresh': 'Research sourced model quality, effort, price, latency and quota evidence for Models Comparison',
   'stash-cleanup': 'Triage git stash list — drop entries superseded by or stale relative to main, leave real unlanded work in place',
   'repo-sync': 'Sync every managed app with origin — back on the default branch, pushed and pulled, merged branches/worktrees and redundant stashes cleared',

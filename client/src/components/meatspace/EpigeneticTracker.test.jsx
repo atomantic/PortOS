@@ -88,7 +88,7 @@ describe('EpigeneticTracker delete (#17354)', () => {
     render(<EpigeneticTracker markerCategories={CATEGORIES} />);
     await screen.findByText('Tracking (1)');
     fireEvent.click(screen.getByRole('button', { name: /Omega-3/ }));
-    fireEvent.click(screen.getByRole('button', { name: 'Delete' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Delete Omega-3' }));
     fireEvent.click(screen.getByRole('button', { name: 'Delete' }));
   };
 
@@ -108,4 +108,17 @@ describe('EpigeneticTracker delete (#17354)', () => {
     await openAndConfirmDelete();
     await waitFor(() => expect(toast.success).toHaveBeenCalledWith('Removed Omega-3'));
   });
+});
+
+it('shows and announces Paused only on paused interventions', async () => {
+  getEpigeneticRecommendations.mockResolvedValue({ recommendations: [] });
+  getEpigeneticInterventions.mockResolvedValue({ interventions: {
+    a: { name: 'Intervention A', active: false },
+    b: { name: 'Intervention B', active: true },
+  } });
+  render(<EpigeneticTracker markerCategories={CATEGORIES} />);
+
+  expect(await screen.findByRole('button', { name: 'Intervention A Paused' })).toBeInTheDocument();
+  expect(screen.getByText('Paused')).toBeVisible();
+  expect(screen.getByRole('button', { name: 'Intervention B' })).toBeInTheDocument();
 });

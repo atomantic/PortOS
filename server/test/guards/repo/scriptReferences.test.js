@@ -8,7 +8,7 @@
  * token, or, for a Python module, its stem (`import ltx25_reference`). Exempt:
  * `*.test.js`, which the server Vitest run collects through `../scripts/**` globs.
  * Sibling tests (`<stem>.test.js`, `<stem>_test.py`), migrations (`scripts/migrations/*`),
- * changelogs, decision records (ADRs), concluded plans, and research docs do not count:
+ * changelogs and decision records (ADRs) do not count:
  * a historical mention or self-test is not a pointer for the next reader.
  * No allowlist: document the script or delete it.
  */
@@ -18,7 +18,8 @@ import { guardCorpus, REPO_ROOT, trackedFiles } from '../../../../scripts/lib/gu
 
 export const CANDIDATE_SCRIPT = /^scripts\/(?:[^/]+|(?:ml|ops|fixtures|experiments)\/.+)$/;
 export const VITEST_COLLECTED = /\.test\.js$/;
-export const HISTORICAL = /^docs\/(?:decisions|plans|research)\/|^scripts\/migrations\//;
+export const HISTORICAL = /^(?:\.changelog|docs\/decisions|scripts\/migrations)\//;
+const LIKELY_POINTER = /^(?:\.github\/|docs\/|scripts\/|server\/(?:AGENTS\.md$|lib\/|routes\/|services\/)|client\/src\/|package\.json$)/;
 const escapeRegExp = (text) => text.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 
 export function isSiblingTest(candidate, file) {
@@ -63,7 +64,14 @@ export function unreferencedScripts(candidates, corpus) {
   const keys = referenceKeys(candidates);
   const pattern = keyPattern(keys.keys());
   const repo = guardCorpus();
+  // Most references come from workflows, docs, scripts and application code.
+  // Search those first and retain the full fallback for any outstanding script.
+  const likely = [];
+  const rest = [];
   for (const path of corpus) {
+    (LIKELY_POINTER.test(path) ? likely : rest).push(path);
+  }
+  for (const path of [...likely, ...rest]) {
     // Tracked symlinks (.claude/commands/do/*) point into the lib/slashdo submodule; a symlink holds no text of its own.
     if (!repo.lstat(path).isFile()) continue;
     // A binary asset (git's NUL-in-the-first-8000-bytes heuristic) holds no pointer to a script.
@@ -92,26 +100,25 @@ describe('scripts/ reference guard (#16089, #16909)', () => {
     expect(isSiblingTest('scripts/foo.py', 'scripts/foo.test.js')).toBe(true);
     expect(isSiblingTest('scripts/setup-voice.ps1', 'scripts/setup-voice.ps1.test.js')).toBe(true);
     expect(isSiblingTest('scripts/setup-voice.ps1', 'scripts/setup-voice.test.js')).toBe(true);
-    expect(isSiblingTest('scripts/fixtures/minimax_h3_history.py', 'scripts/_minimax_h3_mlx_history.test.js')).toBe(false);
+    expect(isSiblingTest('scripts/fixtures/minimax_h3_history.py', 'scripts/ml/_minimax_h3_mlx_history.test.js')).toBe(false);
     expect(isSiblingTest('scripts/foo.js', 'server/foo.test.js')).toBe(false);
   });
 
   it('filters historical documents and migrations out of the live reference corpus', () => {
     expect(HISTORICAL.test('docs/decisions/2026-09-19-federation.md')).toBe(true);
-    expect(HISTORICAL.test('docs/plans/archive/2026-07-18-synthid-adversarial-jamming-experiment.md')).toBe(true);
-    expect(HISTORICAL.test('docs/research/minimax-h3-continuity.md')).toBe(true);
     expect(HISTORICAL.test('scripts/migrations/444-minimax-h3-cuda-lightx2v.js')).toBe(true);
+    expect(HISTORICAL.test('.changelog/RELEASE.md')).toBe(true);
+    expect(HISTORICAL.test('.changelog/README.md')).toBe(true);
     expect(HISTORICAL.test('docs/SCRIPTS.md')).toBe(false);
     expect(HISTORICAL.test('server/index.js')).toBe(false);
   });
 
-  it('catches scripts only referenced by their own sibling test or concluded plans, and covers scripts/{fixtures,experiments}/**', () => {
+  it('catches scripts only referenced by their own sibling test or decision records, and covers scripts/{fixtures,experiments}/**', () => {
     // Sibling test reference is ignored by isSiblingTest
     expect(isSiblingTest('scripts/orphan.js', 'scripts/orphan.test.js')).toBe(true);
     expect(isSiblingTest('scripts/orphan.py', 'scripts/orphan_test.py')).toBe(true);
     // Historical paths and migrations are rejected by the corpus filter
-    expect(HISTORICAL.test('docs/plans/archive/2026-07-18-synthid-adversarial-jamming-experiment.md')).toBe(true);
-    expect(HISTORICAL.test('docs/research/minimax-h3-continuity.md')).toBe(true);
+    expect(HISTORICAL.test('docs/decisions/design.md')).toBe(true);
     expect(HISTORICAL.test('scripts/migrations/001-init.js')).toBe(true);
     // Candidate pattern covers subdirectories fixtures and experiments
     expect(CANDIDATE_SCRIPT.test('scripts/fixtures/minimax_h3_history.py')).toBe(true);
@@ -125,6 +132,12 @@ describe('scripts/ reference guard (#16089, #16909)', () => {
   it('files Python sidecars and requirements under scripts/ml', () => {
     const rootFiles = trackedFiles(REPO_ROOT).filter((path) => /^scripts\/[^/]+$/.test(path));
     expect(rootFiles.filter((path) => path.endsWith('.py') || /^scripts\/requirements-.*\.txt$/.test(path))).toEqual([]);
+  });
+
+  it('searches fallback files for unresolved scripts and reports orphans', () => {
+    const documented = 'scripts/lib-catalog.js'; // Referenced from root AGENTS.md.
+    const orphan = 'scripts/fixtures/unreferenced-example.py';
+    expect(unreferencedScripts([documented, orphan], ['docs/SCRIPTS.md', 'AGENTS.md'])).toEqual([orphan]);
   });
 
   it('every script is referenced by code, a workflow, package.json or a live doc', () => {

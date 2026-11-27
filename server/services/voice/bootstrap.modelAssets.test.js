@@ -13,7 +13,11 @@ vi.mock('os', async (importOriginal) => {
   home.dir = fs.mkdtempSync(actual.tmpdir() + '/voice-bootstrap-');
   return { ...actual, default: { ...actual, homedir: () => home.dir }, homedir: () => home.dir };
 });
-vi.mock('../pm2.js', () => ({ execPm2: vi.fn(async () => ({})), getAppStatus: vi.fn(async () => null) }));
+vi.mock('../pm2.js', () => ({
+  clearJlistCache: vi.fn(),
+  execPm2: vi.fn(async () => ({})),
+  getAppStatusStrict: vi.fn(async () => ({ status: 'not_found' })),
+}));
 vi.mock('../../lib/processEnv.js', () => ({ whichFirst: vi.fn(async () => null) }));
 vi.mock('../../lib/childProcess.js', () => ({ execFile: vi.fn() }));
 vi.mock('../provider/providers.js', () => ({ getProviderById: vi.fn() }));
@@ -36,10 +40,12 @@ const cfg = (overrides = {}) => ({
 });
 
 // A setup script double that completes the pair the way the real one does.
-const setupScriptCompletes = () => execFile.mockImplementation((_cmd, _args, _opts, done) => {
-  writeFileSync(onnxPath(), 'onnx-bytes');
-  writeFileSync(`${onnxPath()}.json`, CONFIG);
-  writeVoiceAssetReceipt('piper', onnxPath()).then(() => done(null, { stdout: '', stderr: '' }), done);
+const setupScriptCompletes = (ready = Promise.resolve()) => execFile.mockImplementation((_cmd, _args, _opts, done) => {
+  ready.then(() => {
+    writeFileSync(onnxPath(), 'onnx-bytes');
+    writeFileSync(`${onnxPath()}.json`, CONFIG);
+    return writeVoiceAssetReceipt('piper', onnxPath());
+  }).then(() => done(null, { stdout: '', stderr: '' }), done);
 });
 
 describe('Piper voice with an ONNX but no sidecar (#9808)', () => {
@@ -57,26 +63,46 @@ describe('Piper voice with an ONNX but no sidecar (#9808)', () => {
     expect(models.ttsVoiceState).toBe('incomplete');
   });
 
-  it('is repaired by the voice download action instead of being skipped', async () => {
-    setupScriptCompletes();
-    await expect(downloadPiperVoice(VOICE_ID, cfg())).resolves.toMatchObject({ downloaded: true });
+  it('repairs the voice once when overlapping downloads request the same voice', async () => {
+    const ready = Promise.withResolvers();
+    setupScriptCompletes(ready.promise);
+    const downloads = Promise.all([downloadPiperVoice(VOICE_ID, cfg()), downloadPiperVoice(VOICE_ID, cfg())]);
+    ready.resolve();
+
+    await expect(downloads).resolves.toEqual([
+      { downloaded: true, voicePath: piperVoiceTildePath(VOICE_ID) },
+      { skipped: true, voicePath: piperVoiceTildePath(VOICE_ID) },
+    ]);
     expect(execFile).toHaveBeenCalledTimes(1);
     expect(inspectVoiceAsset('piper', onnxPath()).state).toBe('verified');
-    // …and once verified, the next request really is a no-op.
-    await expect(downloadPiperVoice(VOICE_ID, cfg())).resolves.toMatchObject({ skipped: true });
-    expect(execFile).toHaveBeenCalledTimes(1);
   });
 
-  it('never reports a download that left the voice unusable', async () => {
-    execFile.mockImplementation((_cmd, _args, _opts, done) => done(null, { stdout: '', stderr: '' }));
-    await expect(downloadPiperVoice(VOICE_ID, cfg())).rejects.toThrow(/still not usable/);
+  it('keeps Piper audition setup from provisioning configured Whisper or CoreML', async () => {
+    setupScriptCompletes();
+    await expect(downloadPiperVoice(VOICE_ID, cfg({
+      stt: { ...VOICE_DEFAULTS.stt, engine: 'whisper', coreml: true },
+    }))).resolves.toMatchObject({ downloaded: true });
+
+    const setupEnv = execFile.mock.calls[0][2].env;
+    expect(setupEnv).toMatchObject({ STT_ENGINE: 'web-speech', INSTALL_COREML: '0' });
+    expect(inspectVoiceAsset('piper', onnxPath()).state).toBe('verified');
+  });
+
+  it('rejects a download that left the voice unusable and lets the next request retry', async () => {
+    setupScriptCompletes();
+    execFile.mockImplementationOnce((_cmd, _args, _opts, done) => done(null, { stdout: '', stderr: '' }));
+    const failed = expect(downloadPiperVoice(VOICE_ID, cfg())).rejects.toThrow(/still not usable/);
+    const retried = expect(downloadPiperVoice(VOICE_ID, cfg())).resolves.toMatchObject({ downloaded: true });
+    await Promise.all([failed, retried]);
+    expect(execFile).toHaveBeenCalledTimes(2);
   });
 
   it('is repaired by Save & Reconcile (default allowSetup) via the setup script', async () => {
     setupScriptCompletes();
-    await reconcile(cfg());
+    await expect(reconcile(cfg({ stt: { ...VOICE_DEFAULTS.stt, engine: 'whisper', coreml: true } })))
+      .rejects.toThrow(/whisper-server not on PATH/);
     expect(execFile).toHaveBeenCalledTimes(1);
-    expect(inspectVoiceAsset('piper', onnxPath()).state).toBe('verified');
+    expect(execFile.mock.calls[0][2].env).toMatchObject({ STT_ENGINE: 'whisper', INSTALL_COREML: '1' });
   });
 
   it('is left alone at boot: readiness is read-only and starts no download', async () => {

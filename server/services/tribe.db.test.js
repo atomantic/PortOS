@@ -108,3 +108,54 @@ describe.skipIf(!runDb)('tribe last_contact_on — UTC-offset round-trip (#8451)
     expect(updated.lastContact).toBe('2026-05-01');
   });
 });
+
+describe.skipIf(!runDb)('tribe batch auto-logging', () => {
+  it('keeps the first occurrence per person and advances contact dates only for inserted rows', async () => {
+    const primaryEmail = `primary-${nonce}@example.com`;
+    const secondaryEmail = `secondary-${nonce}@example.com`;
+    const primary = await tribe.createPerson({
+      name: 'Example Primary', emails: [primaryEmail], channel: 'call', lastContact: '2026-09-01',
+    });
+    createdPersonIds.push(primary.id);
+    const secondary = await tribe.createPerson({
+      name: 'Example Secondary', emails: [secondaryEmail], channel: 'email', lastContact: '2026-09-15',
+    });
+    createdPersonIds.push(secondary.id);
+    await tribe.autoCreateTouchpoint(primary.id, {
+      happenedAt: '2026-09-01', dedupeKey: 'existing', source: 'message',
+    });
+
+    const shared = {
+      identities: [primaryEmail, secondaryEmail],
+      happenedAt: '2026-09-02',
+      dedupeKey: 'shared',
+      source: 'calendar',
+      channel: 'video',
+      summary: 'Example event',
+      calendarAccountId: 'example-account',
+      calendarEventId: 'example-event',
+      metadata: { subcalendarId: 'example-subcalendar', labels: ['group', 'weekly'] },
+    };
+    const candidates = [
+      shared,
+      { ...shared, happenedAt: '2026-09-08', summary: 'Duplicate event' },
+      { identities: [primaryEmail], happenedAt: '2026-10-01', dedupeKey: 'existing' },
+      { identities: [primaryEmail], happenedAt: '2026-09-03', dedupeKey: 'later', source: 'message' },
+    ];
+
+    expect(await tribe.autoLogTouchpoints(candidates)).toEqual({ created: 3, matched: 6 });
+    expect(await tribe.autoLogTouchpoints(candidates)).toEqual({ created: 0, matched: 6 });
+    expect(await tribe.getPerson(primary.id)).toMatchObject({ lastContact: '2026-09-03', channel: 'call' });
+    expect(await tribe.getPerson(secondary.id)).toMatchObject({ lastContact: '2026-09-15', channel: 'email' });
+    const secondaryTouchpoints = await tribe.listTouchpoints(secondary.id);
+    expect(secondaryTouchpoints).toMatchObject([{
+      source: shared.source,
+      channel: shared.channel,
+      summary: shared.summary,
+      calendarAccountId: shared.calendarAccountId,
+      calendarEventId: shared.calendarEventId,
+      metadata: shared.metadata,
+    }]);
+    expect(await tribe.listTouchpoints(primary.id)).toHaveLength(3);
+  });
+});

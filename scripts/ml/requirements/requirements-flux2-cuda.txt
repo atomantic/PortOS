@@ -1,6 +1,6 @@
 # FLUX.2 CUDA: direct pins for the dedicated CPython 3.11 runtime.
 # Install from the windows/linux hash locks, never directly from this input.
-# Regeneration and hardware validation: docs/FLUX2_CUDA.md.
+# Regeneration and hardware validation: docs/RUNTIME_LOCKS.md#regenerating-locks.
 #
 # The package set matches requirements-flux2-mlx.txt except torch, which is the
 # cu126 build the other CUDA runtimes share. torchvision stays the PyPI 0.29.2

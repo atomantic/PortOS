@@ -17,6 +17,7 @@ const net = { fetchPublicText: vi.fn(), fetchPublicBinary: vi.fn() };
 vi.mock('../../lib/safeUrlFetch.js', () => net);
 
 const emitRecordUpdated = vi.fn();
+vi.mock('../externalMediaCollection.js', () => ({ fileExternalMedia: vi.fn() }));
 vi.mock('../sharing/recordEvents.js', () => ({ emitRecordUpdated: (...a) => emitRecordUpdated(...a) }));
 
 const writeFile = vi.fn();

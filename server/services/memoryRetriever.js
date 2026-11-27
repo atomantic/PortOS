@@ -5,13 +5,10 @@
  * Combines semantic search with importance scoring.
  */
 
-import { getMemories, searchMemories, hybridSearchMemories, peekMemories, recordMemoryAccess, DEFAULT_MEMORY_CONFIG } from './memoryBackend.js';
+import { getMemories, hybridSearchMemories, peekMemories, recordMemoryAccess, DEFAULT_MEMORY_CONFIG } from './memoryBackend.js';
 import { generateQueryEmbedding, estimateTokens } from './memoryEmbeddings.js';
 import { fenceBlock, neutralizeFences, UNTRUSTED_REFERENCE_NOTICE } from '../lib/promptFencing.js';
 import { isPersistentMindPrivateMemory } from '../lib/memoryQuery.js';
-
-// Search mode preference: 'hybrid' (FTS + vector) or 'vector' (embedding-only)
-const SEARCH_MODE = 'hybrid';
 
 const MEMORY_HEADINGS = {
   preference: 'User Preferences',
@@ -32,6 +29,10 @@ export async function getRelevantMemories(task, options = {}) {
 async function selectMemories(task, options) {
   const maxTokens = options.maxTokens || DEFAULT_MEMORY_CONFIG.maxContextTokens;
   const minRelevance = options.minRelevance || DEFAULT_MEMORY_CONFIG.minRelevanceThreshold;
+  // Background jobs may search their own app's memories only. A missing app
+  // is not permission to fall back to a search of the user's entire Brain.
+  const appId = task.metadata?.app;
+  if (options.scopedToApp && (!appId || !task.description?.trim())) return [];
   // Cap the semantic-search fan-out. Callers that only inject a handful of
   // memories (e.g. voice's buildMemoryContext) pass a small `limit` so retrieval
   // doesn't fetch 20 rows just to slice down to 5. Search results are
@@ -43,9 +44,9 @@ async function selectMemories(task, options) {
   // none of them needs a total count. Start them together so the three
   // stages overlap instead of stacking.
   const searchPromise = task.description
-    ? retrieveSearchHits(task.description, { searchLimit, minRelevance })
+    ? retrieveSearchHits(task.description, { searchLimit, minRelevance, appId: options.scopedToApp ? appId : undefined })
     : Promise.resolve([]);
-  const preferencePromise = getMemories({
+  const preferencePromise = options.scopedToApp ? Promise.resolve({ memories: [] }) : getMemories({
     types: ['preference'],
     status: 'active',
     sortBy: 'importance',
@@ -54,10 +55,11 @@ async function selectMemories(task, options) {
     includeCount: false,
     excludePersistentMind: true,
   });
-  const codebasePromise = task.metadata?.app
+  const codebasePromise = !options.scopedToApp && appId
     ? getMemories({
       types: ['fact', 'observation'],
       categories: ['codebase', 'architecture', 'patterns'],
+      appId: task.metadata.app,
       status: 'active',
       sortBy: 'importance',
       sortOrder: 'desc',
@@ -90,7 +92,8 @@ async function selectMemories(task, options) {
   const hydrated = candidateIds.length > 0 ? await peekMemories(candidateIds) : [];
   // A file index or result from before a concurrent update can have stale tags.
   const byId = new Map(hydrated
-    .filter(memory => memory && !isPersistentMindPrivateMemory(memory))
+    .filter(memory => memory && !isPersistentMindPrivateMemory(memory)
+      && (!options.scopedToApp || (memory.sourceAppId === appId && memory.status === 'active')))
     .map(memory => [memory.id, memory]));
 
   const memories = [];
@@ -125,27 +128,18 @@ async function selectMemories(task, options) {
   return memories;
 }
 
-async function retrieveSearchHits(description, { searchLimit, minRelevance }) {
+async function retrieveSearchHits(description, { searchLimit, minRelevance, appId }) {
   const queryEmbedding = await generateQueryEmbedding(description);
-  if (SEARCH_MODE === 'hybrid' && queryEmbedding) {
-    const searchResults = await hybridSearchMemories(description, queryEmbedding, {
-      limit: searchLimit,
-      minRelevance,
-      excludePersistentMind: true,
-      ftsWeight: 0.4,
-      vectorWeight: 0.6
-    });
-    return searchResults.memories || [];
-  }
-  if (queryEmbedding) {
-    const searchResults = await searchMemories(queryEmbedding, {
-      minRelevance,
-      limit: searchLimit,
-      excludePersistentMind: true,
-    });
-    return searchResults.memories || [];
-  }
-  return [];
+  const searchResults = await hybridSearchMemories(description, queryEmbedding, {
+    limit: searchLimit,
+    minRelevance,
+    ...(appId ? { appId } : {}),
+    excludePersistentMind: true,
+    ftsWeight: 0.4,
+    vectorWeight: 0.6,
+    lexicalMatch: queryEmbedding ? 'all' : 'any',
+  });
+  return searchResults.memories || [];
 }
 
 function formatForPrompt(memories, maxTokens = DEFAULT_MEMORY_CONFIG.maxContextTokens) {

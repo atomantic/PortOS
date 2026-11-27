@@ -48,7 +48,7 @@ export const LTX25_ENCODER_SHIM_DIR = join(homedir(), '.portos', 'ltx25-encoder-
 // runtime rather than another mode flag on the generation script. Both runners
 // have landed (#6512 MLX / #6513 CUDA) and share one argv contract
 // (`scripts/ml/_upscale_contract.py`); per-backend verification status lives in
-// `docs/features/video-upscale.md` "Readiness". An install with neither
+// `docs/features/video-generation.md` "Video upscale". An install with neither
 // runtime's venv present still has no generative upscale, which is what gates
 // the feature off per host.
 export const LTX25_UPSCALE_HELPER_SCRIPT = join(PATHS.root, 'scripts', 'ml', 'upscale_ltx25.py');
@@ -75,13 +75,6 @@ export const MINIMAX_H3_EXPECTED_REVISION = 'fcd9e9b79a1d6018d91ac477c0968de1fa0
 // MINIMAX_H3_REPO_DIR: anything written inside the checkout would show up as
 // untracked in the pin verification that both /status and the render helper run.
 export const MINIMAX_H3_ENCODER_SHIM_DIR = join(homedir(), '.portos', 'minimax-h3-encoder-shims');
-
-// Composed checkpoint roots for a preview-fidelity video decode
-// (lib/videoDraftDecoders.js, #5423). Same shape and the same reason as the
-// encoder shims above — a tree of symlinks into the upstream FL2VA snapshot
-// with only `video_vae/source/model.safetensors` replaced — kept in its own
-// directory so removing one substitution never disturbs the other.
-export const MINIMAX_H3_DRAFT_DECODER_SHIM_DIR = join(homedir(), '.portos', 'minimax-h3-decoder-shims');
 
 // Reusable Qwen3-VL prompt embeddings (#5443). The MLX runner keys each entry
 // on the prompt text plus the CONTENT digest of every conditioning image and
@@ -675,16 +668,6 @@ export function isPinnedSourceStatusClean(stdout, expectedRevision) {
   const lines = String(stdout).split(/\r?\n/).filter(Boolean);
   const oid = lines.find((line) => line.startsWith('# branch.oid '))?.slice('# branch.oid '.length);
   return oid === expectedRevision && lines.every((line) => line.startsWith('# '));
-}
-
-// The revision a BYOV runtime's checkout is pinned to, or null for a runtime
-// that has no source pin (a plain pip venv). Paired with
-// `isByovRuntimeCurrent` by callers that need to know WHICH revision is
-// installed rather than just whether it is current — a capability gate on a
-// separately verified asset (lib/videoDraftDecoders.js) has to name the
-// checkout the asset was validated against, not just assert cleanliness.
-export function byovRuntimeExpectedRevision(runtimeId) {
-  return BYOV_RUNTIME_INFO[runtimeId]?.expectedRevision || null;
 }
 
 export async function isByovRuntimeCurrent(runtimeId) {

@@ -11,6 +11,7 @@ import { existsSync } from 'fs';
 import { join, } from 'path';
 import { atomicWrite } from './internal/atomicWrite.js';
 import { clampToRuntimeContextWindow, withModelNumCtx } from './internal/ollamaBacked.js';
+import { extractBakedModel } from './internal/bakedModel.js';
 
 /**
  * Gate a *configured* fallback-model pin against the fallback provider's own
@@ -51,26 +52,11 @@ export function usableFallbackModel(provider, pinnedModel) {
 // Mirrored from the host's generation-model classifier because aiToolkit must
 // stay self-contained. Fallback admission must inspect the model the executor
 // will actually run, not an embedding-only configured pin/default.
-const EMBEDDING_MODEL_RE =
+const EMBEDDING_RE =
   /(?:^|[-_/:])(?:embed|embedding|bge|nomic|mxbai|gte|e5|snowflake-arctic-embed)(?:[-_/:]|$)|text-embedding|embeddinggemma|minilm|paraphrase-multilingual/i;
 
 function isGenerationModelId(model) {
-  return typeof model === 'string' && model.length > 0 && !EMBEDDING_MODEL_RE.test(model);
-}
-
-function extractBakedModel(args) {
-  if (!Array.isArray(args)) return null;
-  for (let i = 0; i < args.length; i += 1) {
-    const arg = args[i];
-    if (typeof arg !== 'string') continue;
-    if (arg === '--model' || arg === '-m') {
-      const next = args[i + 1];
-      return typeof next === 'string' && next.length > 0 && !next.startsWith('-') ? next : null;
-    }
-    if (arg.startsWith('--model=')) return arg.slice('--model='.length) || null;
-    if (arg.startsWith('-m=')) return arg.slice('-m='.length) || null;
-  }
-  return null;
+  return typeof model === 'string' && model.length > 0 && !EMBEDDING_RE.test(model);
 }
 
 function resolvedFallbackModel(provider, correctedModel) {

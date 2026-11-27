@@ -1,29 +1,9 @@
 import { useState, useEffect, useCallback, useMemo, useRef } from 'react';
-import {Palette,
-  Film,
-  Music,
-  Building,
-  UtensilsCrossed,
-  Shirt,
-  Monitor,
-  ChevronRight,
-  ArrowLeft,
-  Send,
-  SkipForward,
-  Check,
-  Sparkles,
-  RotateCcw,
-  Eye,
-  ChevronDown,
-  ChevronUp,
-  Telescope,
-  ThumbsUp,
-  ThumbsDown,
-  Minus} from 'lucide-react';
 import BrailleSpinner from '../../BrailleSpinner';
 import {
   getTasteProfile,
   getTasteNextQuestion,
+  skipTasteFollowUp,
   submitTasteAnswer,
   getPersonalizedTasteQuestion,
   getTasteSectionResponses,
@@ -33,39 +13,13 @@ import {
 } from '../../../services/apiDigitalTwin.js';
 import socket from '../../../services/socket';
 import toast from '../../ui/Toast';
-import Banner from '../../ui/Banner';
-import InlineConfirmRow from '../../ui/InlineConfirmRow';
-import ListLoadError from '../../ui/ListLoadError';
 import useProviderList from '../../../hooks/useProviderList';
-import MarkdownOutput from '../../cos/MarkdownOutput';
 import { isApiProvider } from '../../../utils/providers';
-import TwinProviderPicker from '../TwinProviderPicker.jsx';
-import ObservedTasteEvidence from '../ObservedTasteEvidence';
-import { formatDateNumeric } from '../../../utils/formatters';
-import { iconBadgeClasses } from '../constants';
-
-const SECTION_ICONS = {
-  movies: Film,
-  music: Music,
-  visual_art: Palette,
-  architecture: Building,
-  food: UtensilsCrossed,
-  fashion: Shirt,
-  digital: Monitor
-};
-
-const SECTION_COLORS = {
-  movies: 'red',
-  music: 'green',
-  visual_art: 'violet',
-  architecture: 'amber',
-  food: 'orange',
-  fashion: 'pink',
-  digital: 'cyan'
-};
+import TasteOverview from './TasteOverview';
+import TasteQuestionSession from './TasteQuestionSession';
+import TasteReviewView from './TasteReviewView';
 
 const NO_API_PROVIDER_TOAST = 'No API provider configured — open AI Providers to add one (e.g. LM Studio, OpenAI).';
-const NO_API_PROVIDER_TITLE = 'Configure an AI provider to enable';
 
 // "Go deeper" came back with no question. Each `reason` names the precondition that
 // was actually missing, so only a genuine lack of identity context points the user at
@@ -110,6 +64,8 @@ export default function TasteTab({ onRefresh }) {
   const [answer, setAnswer] = useState('');
   const [submitting, setSubmitting] = useState(false);
   const [loadingQuestion, setLoadingQuestion] = useState(false);
+  // Leaving a session invalidates every in-flight change to its displayed question.
+  const questionRequestRef = useRef(0);
 
   // Summary generation
   const [generatingSummary, setGeneratingSummary] = useState(false);
@@ -135,7 +91,6 @@ export default function TasteTab({ onRefresh }) {
   const reviewRequestRef = useRef(0);
 
   // Personalized question state
-  const [_personalizedQuestion, setPersonalizedQuestion] = useState(null);
   const [loadingPersonalized, setLoadingPersonalized] = useState(false);
 
   // Behavioral feedback
@@ -169,21 +124,26 @@ export default function TasteTab({ onRefresh }) {
   }, [loadProfile]);
 
   const startSection = async (sectionId) => {
+    const request = ++questionRequestRef.current;
     setActiveSection(sectionId);
+    setCurrentQuestion(null);
+    setAnswer('');
     setLoadingQuestion(true);
     setQuestionError(null);
-    const question = await getTasteNextQuestion(sectionId, { silent: true }).catch((err) => {
-      setQuestionError(err);
-      return null;
-    });
-    setCurrentQuestion(question);
-    setAnswer('');
-    setLoadingQuestion(false);
+    try {
+      const question = await getTasteNextQuestion(sectionId, { silent: true });
+      if (questionRequestRef.current === request) setCurrentQuestion(question);
+    } catch (err) {
+      if (questionRequestRef.current === request) setQuestionError(err);
+    } finally {
+      if (questionRequestRef.current === request) setLoadingQuestion(false);
+    }
   };
 
   const submitAnswer = async () => {
-    if (!answer.trim() || !currentQuestion) return;
+    if (!answer.trim() || !currentQuestion || submitting) return;
 
+    const request = ++questionRequestRef.current;
     setSubmitting(true);
     const meta = currentQuestion.isPersonalized ? {
       source: 'personalized',
@@ -200,25 +160,40 @@ export default function TasteTab({ onRefresh }) {
 
     if (!result) {
       toast.error('Failed to save response');
-      setSubmitting(false);
+      if (questionRequestRef.current === request) setSubmitting(false);
       return;
     }
 
     toast.success('Response saved');
-    setAnswer('');
-
-    // If we just answered a personalized question, clear it and show section complete
-    if (currentQuestion.isPersonalized) {
-      setPersonalizedQuestion(null);
-      setCurrentQuestion(null);
-    } else if (result.nextQuestion) {
-      setCurrentQuestion(result.nextQuestion);
-    } else {
-      setCurrentQuestion(null);
+    if (questionRequestRef.current === request) {
+      setAnswer('');
+      setCurrentQuestion(currentQuestion.isPersonalized ? null : (result.nextQuestion ?? null));
     }
-
     await loadProfile();
-    setSubmitting(false);
+    if (questionRequestRef.current === request) setSubmitting(false);
+    onRefresh?.();
+  };
+
+  const skipQuestion = async () => {
+    if (!currentQuestion?.isFollowUp || currentQuestion.isPersonalized || loadingQuestion || submitting) return;
+
+    const request = ++questionRequestRef.current;
+    setLoadingQuestion(true);
+    try {
+      const { nextQuestion } = await skipTasteFollowUp(activeSection, currentQuestion.questionId, { silent: true });
+      if (questionRequestRef.current === request) {
+        setCurrentQuestion(nextQuestion);
+        setAnswer('');
+      }
+    } catch (err) {
+      if (questionRequestRef.current === request) {
+        toast.error(err?.message ? `Failed to skip question: ${err.message}` : 'Failed to skip question');
+      }
+      return;
+    } finally {
+      if (questionRequestRef.current === request) setLoadingQuestion(false);
+    }
+    await loadProfile();
     onRefresh?.();
   };
 
@@ -227,56 +202,56 @@ export default function TasteTab({ onRefresh }) {
       toast.error(NO_API_PROVIDER_TOAST);
       return;
     }
+
+    const request = ++questionRequestRef.current;
     setLoadingPersonalized(true);
-    // Sentinel: `undefined` = the request failed and has already been reported (see
-    // shouldReportGoDeeperError). A 200 always resolves to `{ question, reason }`, so a
-    // missing question names its own cause instead of being guessed at here (#2733).
-    // The request is silenced so that reporting stays a single layer's job.
-    const result = await getPersonalizedTasteQuestion(
-      activeSection,
-      selectedProvider.providerId,
-      selectedProvider.model,
-      { silent: true }
-    ).catch((err) => {
-      // Read `connected` at catch time: by now the server has emitted its ai:status
-      // error, so a live socket means that toast is landing and this layer defers.
-      if (shouldReportGoDeeperError(err, socket.connected)) {
+    try {
+      const { question, reason } = await getPersonalizedTasteQuestion(
+        activeSection,
+        selectedProvider.providerId,
+        selectedProvider.model,
+        { silent: true }
+      );
+      if (questionRequestRef.current !== request) return;
+      if (!question) {
+        toast(noQuestionToast(reason), { icon: '⚠️' });
+        return;
+      }
+      setCurrentQuestion(question);
+      setAnswer('');
+    } catch (err) {
+      // ai:status may already report a provider failure. Check the socket when
+      // the HTTP request fails so a disconnected socket never silences the error.
+      if (questionRequestRef.current === request && shouldReportGoDeeperError(err, socket.connected)) {
         toast.error(err?.message || 'Failed to generate a personalized question');
       }
-      return undefined;
-    });
-
-    if (result === undefined) {
-      setLoadingPersonalized(false);
-      return;
+    } finally {
+      if (questionRequestRef.current === request) setLoadingPersonalized(false);
     }
-
-    const { question, reason } = result || {};
-    if (!question) {
-      toast(noQuestionToast(reason), { icon: '⚠️' });
-      setLoadingPersonalized(false);
-      return;
-    }
-
-    setPersonalizedQuestion(question);
-    setCurrentQuestion(question);
-    setAnswer('');
-    setLoadingPersonalized(false);
   };
 
   const exitSection = () => {
+    questionRequestRef.current += 1;
     setActiveSection(null);
     setCurrentQuestion(null);
     setQuestionError(null);
     setAnswer('');
+    setLoadingQuestion(false);
+    setLoadingPersonalized(false);
+    setSubmitting(false);
+  };
+
+  const exitReview = () => {
+    reviewRequestRef.current += 1;
     setReviewSection(null);
     setReviewResponses([]);
-    setPersonalizedQuestion(null);
+    setLoadingReview(false);
+    setReviewError(null);
+    setConfirmingReset(null);
   };
 
   const handleReviewSection = async (sectionId) => {
-    reviewRequestRef.current += 1;
-    const request = reviewRequestRef.current;
+    const request = ++reviewRequestRef.current;
     setConfirmingReset(null);
     setReviewSection(sectionId);
     setLoadingReview(true);
@@ -295,15 +270,15 @@ export default function TasteTab({ onRefresh }) {
     // request() owns the failure toast; bail before the success toast so a
     // failed reset doesn't report "Section reset" on top of that error.
     if (resetting) return;
+    const request = reviewRequestRef.current;
     setResetting(true);
     const ok = await resetTasteSection(sectionId).then(() => true).catch(() => false);
     setResetting(false);
-    setConfirmingReset(null);
+    if (reviewRequestRef.current === request) setConfirmingReset(null);
     if (!ok) return;
     toast.success('Section reset');
     await loadProfile();
-    setReviewSection(null);
-    setReviewResponses([]);
+    if (reviewRequestRef.current === request) exitReview();
     onRefresh?.();
   };
 
@@ -371,535 +346,76 @@ export default function TasteTab({ onRefresh }) {
     );
   }
 
-  // Review mode — show previous responses
   if (reviewSection) {
     const section = profile?.sections?.find(s => s.id === reviewSection);
-    const Icon = SECTION_ICONS[reviewSection] || Palette;
-    const color = SECTION_COLORS[reviewSection] || 'blue';
-
     return (
-      <div className="max-w-2xl mx-auto px-1">
-        <div className="mb-6">
-          <button
-            onClick={() => { setReviewSection(null); setReviewResponses([]); }}
-            className="flex items-center gap-2 text-gray-400 hover:text-white mb-4 py-2 min-h-[44px]"
-          >
-            <ArrowLeft size={18} />
-            Back to sections
-          </button>
-          <div className="flex items-center gap-3">
-            <div className={`p-2.5 rounded-lg ${iconBadgeClasses(color).bg}`}>
-              <Icon className={`w-5 h-5 ${iconBadgeClasses(color).text}`} />
-            </div>
-            <div>
-              <h2 className="text-xl font-semibold text-white">{section?.label} — Responses</h2>
-              {!loadingReview && !reviewError && (
-                <p className="text-sm text-gray-400">{reviewResponses.length} responses recorded</p>
-              )}
-            </div>
-          </div>
-        </div>
-
-        {loadingReview ? (
-          <div className="flex items-center justify-center h-48">
-            <BrailleSpinner text="Loading" />
-          </div>
-        ) : reviewError ? (
-          // A failed read must not look like "0 responses recorded", and the
-          // summary / reset actions below act on responses the user never saw.
-          <ListLoadError what="your responses" error={reviewError} onRetry={() => handleReviewSection(reviewSection)} />
-        ) : (
-          <div className="space-y-4">
-            {reviewResponses.map((r, i) => (
-              <div key={i} className={`bg-port-card rounded-lg border ${r.isPersonalized ? 'border-port-accent-2/30' : 'border-port-border'} p-4`}>
-                <div className="flex items-start gap-2 mb-2">
-                  {r.isPersonalized ? (
-                    <span className="text-xs px-2 py-0.5 bg-port-accent-2/20 text-port-accent-2 rounded">personalized</span>
-                  ) : r.isFollowUp ? (
-                    <span className="text-xs px-2 py-0.5 bg-port-accent/20 text-port-accent rounded">follow-up</span>
-                  ) : null}
-                  <p className="text-sm text-gray-400">{r.questionText}</p>
-                </div>
-                <p className="text-white whitespace-pre-wrap">{r.answer}</p>
-              </div>
-            ))}
-
-            {section?.summary && (
-              <div className="bg-port-card rounded-lg border border-port-accent-2/30 p-4">
-                <h3 className="text-sm font-medium text-port-accent-2 mb-2 flex items-center gap-2">
-                  <Sparkles size={14} />
-                  AI Summary
-                </h3>
-                <div className="text-sm mb-3"><MarkdownOutput content={section.summary} /></div>
-
-                {/* Behavioral Feedback */}
-                <div className="pt-3 border-t border-port-border">
-                  <p className="text-xs text-gray-500 mb-2">Does this summary capture your taste accurately?</p>
-                  <div className="flex flex-wrap items-center gap-2">
-                    {[
-                      { key: 'sounds_like_me', label: 'Sounds like me', icon: ThumbsUp, active: 'bg-port-success/20 text-port-success border border-port-success/30', inactive: 'text-gray-400 border border-port-border hover:text-port-success hover:border-port-success/30 disabled:opacity-30' },
-                      { key: 'not_quite', label: 'Not quite', icon: Minus, active: 'bg-port-warning/20 text-port-warning border border-port-warning/30', inactive: 'text-gray-400 border border-port-border hover:text-port-warning hover:border-port-warning/30 disabled:opacity-30' },
-                      { key: 'doesnt_sound_like_me', label: 'Not me', icon: ThumbsDown, active: 'bg-port-error/20 text-port-error border border-port-error/30', inactive: 'text-gray-400 border border-port-border hover:text-port-error hover:border-port-error/30 disabled:opacity-30' }
-                    ].map(({ key, label, icon: FbIcon, active, inactive }) => (
-                      <button
-                        key={key}
-                        onClick={() => submitSummaryFeedback(reviewSection, section.summary, key)}
-                        disabled={!!summaryFeedback[reviewSection]}
-                        className={`flex items-center gap-1.5 px-3 py-1.5 min-h-[36px] pointer-coarse:min-h-11 rounded-lg text-xs transition-colors ${
-                          summaryFeedback[reviewSection] === key ? active : inactive
-                        }`}
-                      >
-                        <FbIcon size={14} />
-                        {label}
-                      </button>
-                    ))}
-                  </div>
-                </div>
-              </div>
-            )}
-
-            <div className="flex flex-col sm:flex-row gap-3 pt-2">
-              <button
-                onClick={() => handleGenerateSummary(reviewSection)}
-                disabled={generatingSummary || reviewResponses.length === 0}
-                className="flex items-center justify-center gap-2 px-4 py-3 min-h-[44px] bg-port-accent-2 text-port-on-accent-2 rounded-lg text-sm hover:bg-port-accent-2/80 disabled:opacity-50"
-              >
-                {generatingSummary ? <BrailleSpinner /> : <Sparkles size={16} />}
-                {section?.summary ? 'Regenerate Summary' : 'Generate Summary'}
-              </button>
-              <button
-                onClick={() => setConfirmingReset(reviewSection)}
-                disabled={resetting}
-                className="flex items-center justify-center gap-2 px-4 py-3 min-h-[44px] text-port-error border border-port-error/30 rounded-lg text-sm hover:bg-port-error/10 disabled:opacity-50"
-              >
-                <RotateCcw size={16} />
-                Reset Section
-              </button>
-            </div>
-            {confirmingReset === reviewSection && (
-              <InlineConfirmRow
-                question="Reset all responses and summary for this section? This cannot be undone."
-                confirmText="Reset Section"
-                onConfirm={() => handleResetSection(reviewSection)}
-                onCancel={() => setConfirmingReset(null)}
-                autoFocus
-                aria-label="Confirm section reset"
-              />
-            )}
-          </div>
-        )}
-      </div>
+      <TasteReviewView
+        section={section}
+        reviewResponses={reviewResponses}
+        loadingReview={loadingReview}
+        reviewError={reviewError}
+        onBack={exitReview}
+        onRetry={() => handleReviewSection(reviewSection)}
+        summaryFeedback={summaryFeedback[reviewSection]}
+        onSummaryFeedback={(validation) => submitSummaryFeedback(reviewSection, section?.summary, validation)}
+        providersResource={providersResource}
+        selectedProvider={selectedProvider}
+        generatingSummary={generatingSummary}
+        onGenerateSummary={() => handleGenerateSummary(reviewSection)}
+        resetting={resetting}
+        confirmingReset={confirmingReset === reviewSection}
+        onRequestReset={() => setConfirmingReset(reviewSection)}
+        onConfirmReset={() => handleResetSection(reviewSection)}
+        onCancelReset={() => setConfirmingReset(null)}
+      />
     );
   }
 
-  // Active Q&A session
   if (activeSection) {
     const section = profile?.sections?.find(s => s.id === activeSection);
-    const Icon = SECTION_ICONS[activeSection] || Palette;
-    const color = SECTION_COLORS[activeSection] || 'blue';
-
-    // Section complete
-    if (!currentQuestion && !loadingQuestion && !loadingPersonalized) {
-      return (
-        <div className="max-w-2xl mx-auto px-1">
-          <div className="mb-6">
-            <button
-              onClick={exitSection}
-              className="flex items-center gap-2 text-gray-400 hover:text-white mb-4 py-2 min-h-[44px]"
-            >
-              <ArrowLeft size={18} />
-              Back to sections
-            </button>
-            <div className="flex items-center gap-3">
-              <div className={`p-2.5 rounded-lg ${iconBadgeClasses(color).bg}`}>
-                <Icon className={`w-5 h-5 ${iconBadgeClasses(color).text}`} />
-              </div>
-              <h2 className="text-xl font-semibold text-white">{section?.label}</h2>
-            </div>
-          </div>
-          {questionError ? (
-            <ListLoadError className="mb-4" what="the next question" error={questionError} onRetry={() => startSection(activeSection)} />
-          ) : (
-            <div className="p-4 bg-port-success/10 border border-port-success/30 rounded-lg mb-4">
-              <div className="flex items-center gap-3">
-                <Check className="w-5 h-5 text-port-success" />
-                <span className="text-port-success">All questions for this section are complete.</span>
-              </div>
-            </div>
-          )}
-          {section?.summary && (
-            <div className="bg-port-card rounded-lg border border-port-accent-2/30 p-4 mb-4">
-              <h3 className="text-sm font-medium text-port-accent-2 mb-2 flex items-center gap-2">
-                <Sparkles size={14} />
-                AI Summary
-              </h3>
-              <div className="text-sm"><MarkdownOutput content={section.summary} /></div>
-            </div>
-          )}
-          {providersResource.state === 'error' && (
-            <ListLoadError className="mb-4" what="AI providers" error={providersResource.error} onRetry={providersResource.retry} />
-          )}
-          {!selectedProvider && providersResource.state === 'ready' && (
-            <Banner tone="warning" size="lg" className="mb-4">
-              No API-based provider configured — Go Deeper and Generate Summary need one.{' '}
-              <a href="/ai" className="underline hover:text-yellow-300">
-                Open AI Providers
-              </a>{' '}
-              and add LM Studio, OpenAI, or Anthropic to enable these.
-            </Banner>
-          )}
-          <div className="flex flex-col sm:flex-row gap-3">
-            <button
-              onClick={handleGoDeeper}
-              disabled={loadingPersonalized || !selectedProvider}
-              className="flex items-center justify-center gap-2 px-4 py-3 min-h-[44px] bg-port-accent-2 text-port-on-accent-2 rounded-lg text-sm hover:bg-port-accent-2/80 disabled:opacity-50"
-              title={!selectedProvider ? NO_API_PROVIDER_TITLE : ''}
-            >
-              {loadingPersonalized ? <BrailleSpinner /> : <Telescope size={16} />}
-              Go Deeper
-            </button>
-            <button
-              onClick={() => handleReviewSection(activeSection)}
-              className="flex items-center justify-center gap-2 px-4 py-3 min-h-[44px] bg-port-card border border-port-border text-white rounded-lg text-sm hover:border-port-accent"
-            >
-              <Eye size={16} />
-              Review Responses
-            </button>
-            <button
-              onClick={() => handleGenerateSummary(activeSection)}
-              disabled={generatingSummary || !selectedProvider}
-              className="flex items-center justify-center gap-2 px-4 py-3 min-h-[44px] bg-port-accent-2 text-port-on-accent-2 rounded-lg text-sm hover:bg-port-accent-2/80 disabled:opacity-50"
-              title={!selectedProvider ? NO_API_PROVIDER_TITLE : ''}
-            >
-              {generatingSummary ? <BrailleSpinner /> : <Sparkles size={16} />}
-              Generate Summary
-            </button>
-          </div>
-        </div>
-      );
-    }
-
-    // Active question
     return (
-      <div className="max-w-2xl mx-auto px-1">
-        <div className="mb-6 sm:mb-8">
-          <button
-            onClick={exitSection}
-            className="flex items-center gap-2 text-gray-400 hover:text-white mb-4 py-2 min-h-[44px]"
-          >
-            <ArrowLeft size={18} />
-            Back to sections
-          </button>
-
-          <div className="flex items-center gap-3 sm:gap-4">
-            <div className={`p-2.5 sm:p-3 rounded-lg ${iconBadgeClasses(color).bg} shrink-0`}>
-              <Icon className={`w-5 h-5 sm:w-6 sm:h-6 ${iconBadgeClasses(color).text}`} />
-            </div>
-            <div className="min-w-0">
-              <h2 className="text-lg sm:text-xl font-bold text-white">{section?.label}</h2>
-              <p className="text-sm sm:text-base text-gray-400 truncate">{section?.description}</p>
-            </div>
-          </div>
-
-          {/* Progress bar */}
-          <div className="mt-4">
-            <div className="flex items-center justify-between text-sm mb-1">
-              <span className="text-gray-400">
-                {currentQuestion?.isPersonalized ? 'Personalized deep-dive' : currentQuestion?.isFollowUp ? 'Follow-up question' : `Question ${currentQuestion?.progress?.current || 1} of ${currentQuestion?.progress?.coreTotal || '?'}`}
-              </span>
-              <span className="text-gray-400">{section?.progress?.percentage || 0}% core complete</span>
-            </div>
-            <div className="h-2 bg-port-border rounded-full overflow-hidden">
-              <div
-                className="h-full bg-port-accent transition-all"
-                style={{ width: `${section?.progress?.percentage || 0}%` }}
-              />
-            </div>
-          </div>
-        </div>
-
-        {loadingQuestion || loadingPersonalized ? (
-          <div className="flex flex-col items-center justify-center h-48 gap-3">
-            <BrailleSpinner text="Loading" />
-            {loadingPersonalized && (
-              <span className="text-sm text-gray-400">Generating personalized question...</span>
-            )}
-          </div>
-        ) : (
-          <div className={`bg-port-card rounded-lg border ${currentQuestion?.isPersonalized ? 'border-port-accent-2/30' : 'border-port-border'} p-6`}>
-            <div className="mb-6">
-              {currentQuestion?.isPersonalized ? (
-                <span className="text-xs px-2 py-0.5 bg-port-accent-2/20 text-port-accent-2 rounded uppercase tracking-wider">
-                  Personalized — referencing your identity
-                </span>
-              ) : (
-                <span className="text-xs text-gray-500 uppercase tracking-wider">
-                  {currentQuestion?.isFollowUp ? 'Follow-up — based on your previous answer' : 'Core Question'}
-                </span>
-              )}
-              <h3 className="text-xl text-white mt-2">{currentQuestion?.text}</h3>
-            </div>
-
-            <div className="mb-6">
-              <textarea
-                aria-label="Your answer"
-                value={answer}
-                onChange={(e) => setAnswer(e.target.value)}
-                placeholder="Share your thoughts... be as specific as possible."
-                rows={6}
-                className="w-full px-4 py-3 bg-port-bg border border-port-border rounded-lg text-white resize-none focus:outline-hidden focus:border-port-accent"
-                autoFocus
-              />
-              <div className="text-xs text-gray-500 mt-2">
-                The more specific you are, the better your taste profile will be. Reference specific examples, feelings, and reasons.
-              </div>
-            </div>
-
-            <div className="flex flex-col-reverse sm:flex-row items-stretch sm:items-center justify-between gap-3">
-              {currentQuestion?.isPersonalized ? (
-                <button
-                  onClick={() => {
-                    setCurrentQuestion(null);
-                    setPersonalizedQuestion(null);
-                    setAnswer('');
-                  }}
-                  className="flex items-center justify-center gap-2 px-4 py-3 min-h-[44px] text-gray-400 hover:text-white transition-colors"
-                >
-                  <ArrowLeft size={18} />
-                  Done exploring
-                </button>
-              ) : (
-                <button
-                  onClick={() => {
-                    // Skip current question by submitting empty — move to next
-                    setAnswer('');
-                    setLoadingQuestion(true);
-                    getTasteNextQuestion(activeSection, { silent: true }).then(q => {
-                      // If same question returned (can't skip core), just clear loading
-                      if (q?.questionId === currentQuestion?.questionId) {
-                        toast('Core questions cannot be skipped', { icon: '⚠️' });
-                      } else {
-                        setCurrentQuestion(q);
-                      }
-                      setLoadingQuestion(false);
-                    }).catch(() => setLoadingQuestion(false));
-                  }}
-                  disabled={!currentQuestion?.isFollowUp}
-                  className="flex items-center justify-center gap-2 px-4 py-3 min-h-[44px] text-gray-400 hover:text-white transition-colors disabled:opacity-30 disabled:cursor-not-allowed"
-                >
-                  <SkipForward size={18} />
-                  Skip
-                </button>
-              )}
-
-              <button
-                onClick={submitAnswer}
-                disabled={submitting || !answer.trim()}
-                className="flex items-center justify-center gap-2 px-6 py-3 min-h-[48px] bg-port-accent text-white rounded-lg font-medium hover:bg-port-accent/80 disabled:opacity-50 disabled:cursor-not-allowed"
-              >
-                {submitting ? (
-                  <>
-                    <BrailleSpinner />
-                    Saving...
-                  </>
-                ) : (
-                  <>
-                    <Send size={18} />
-                    Submit
-                  </>
-                )}
-              </button>
-            </div>
-          </div>
-        )}
-      </div>
+      <TasteQuestionSession
+        section={section}
+        currentQuestion={currentQuestion}
+        answer={answer}
+        submitting={submitting}
+        loadingQuestion={loadingQuestion}
+        questionError={questionError}
+        loadingPersonalized={loadingPersonalized}
+        providersResource={providersResource}
+        selectedProvider={selectedProvider}
+        generatingSummary={generatingSummary}
+        onBack={exitSection}
+        onRetry={() => startSection(activeSection)}
+        onReview={() => handleReviewSection(activeSection)}
+        onGoDeeper={handleGoDeeper}
+        onGenerateSummary={() => handleGenerateSummary(activeSection)}
+        onAnswerChange={setAnswer}
+        onDoneExploring={() => {
+          setCurrentQuestion(null);
+          setAnswer('');
+        }}
+        onSkip={skipQuestion}
+        onSubmit={submitAnswer}
+      />
     );
   }
 
-  // Section selection view
   return (
-    <div className="space-y-6">
-      {/* Overall Progress */}
-      {profileError && !profile ? (
-        <ListLoadError what="your taste profile" error={profileError} onRetry={loadProfile} />
-      ) : (
-      <div className="bg-port-card rounded-lg border border-port-border p-6">
-        <div className="flex flex-wrap items-center justify-between gap-2 mb-4">
-          <div className="flex items-center gap-3">
-            <Palette className="w-6 h-6 text-port-accent-2" />
-            <h2 className="text-lg font-semibold text-white">Aesthetic Taste Profile</h2>
-          </div>
-          <span className="text-gray-400">
-            {profile?.completedCount || 0}/{profile?.totalSections || 7} sections complete
-          </span>
-        </div>
-
-        <div className="h-3 bg-port-border rounded-full overflow-hidden">
-          <div
-            className="h-full bg-gradient-to-r from-port-accent-2 to-port-accent-2/40 transition-all"
-            style={{ width: `${profile?.overallPercentage || 0}%` }}
-          />
-        </div>
-
-        {profile?.lastSessionAt && (
-          <p className="text-sm text-gray-500 mt-3">
-            Last session: {formatDateNumeric(profile.lastSessionAt)}
-          </p>
-        )}
-      </div>
-      )}
-
-      {/* Observed-behavior evidence (stated vs observed, #2156) */}
-      <ObservedTasteEvidence />
-
-      {/* Section Grid */}
-      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3 sm:gap-4">
-        {(profile?.sections || []).map((section) => {
-          const Icon = SECTION_ICONS[section.id] || Palette;
-          const color = SECTION_COLORS[section.id] || 'blue';
-          const isComplete = section.status === 'completed';
-          const isStarted = section.status === 'in_progress';
-
-          return (
-            <div
-              key={section.id}
-              className={`bg-port-card rounded-lg border transition-all ${
-                isComplete ? 'border-port-success/30' : isStarted ? 'border-port-accent/30' : 'border-port-border'
-              }`}
-            >
-              <button
-                onClick={() => startSection(section.id)}
-                className="w-full p-4 min-h-[120px] text-left hover:bg-port-border/20 rounded-t-lg transition-colors"
-              >
-                <div className="flex items-start justify-between mb-3">
-                  <div className={`p-2 rounded-lg ${iconBadgeClasses(color).bg}`}>
-                    <Icon className={`w-5 h-5 ${iconBadgeClasses(color).text}`} />
-                  </div>
-                  {isComplete ? (
-                    <Check className="w-5 h-5 text-port-success" />
-                  ) : (
-                    <ChevronRight className="w-5 h-5 text-gray-500" />
-                  )}
-                </div>
-
-                <h3 className="font-semibold text-white mb-1">{section.label}</h3>
-                <p className="text-sm text-gray-400 mb-3 line-clamp-2">{section.description}</p>
-
-                <div className="flex items-center justify-between text-xs">
-                  <span className="text-gray-500">
-                    {section.progress?.coreAnswered || 0}/{section.progress?.coreTotal || 0} core
-                    {section.progress?.followUpsAnswered > 0 && ` + ${section.progress.followUpsAnswered} follow-ups`}
-                  </span>
-                  <span className={isComplete ? 'text-port-success' : 'text-gray-500'}>
-                    {section.progress?.percentage || 0}%
-                  </span>
-                </div>
-
-                {/* Mini progress bar */}
-                <div className="h-1 bg-port-border rounded-full mt-2 overflow-hidden">
-                  <div
-                    className={`h-full transition-all ${isComplete ? 'bg-port-success' : 'bg-port-accent'}`}
-                    style={{ width: `${section.progress?.percentage || 0}%` }}
-                  />
-                </div>
-              </button>
-
-              {/* Review button for sections with responses */}
-              {(section.progress?.coreAnswered > 0 || section.progress?.followUpsAnswered > 0) && (
-                <div className="px-4 pb-3 flex gap-2">
-                  <button
-                    onClick={() => handleReviewSection(section.id)}
-                    className="text-xs text-gray-400 hover:text-white flex items-center gap-1 py-1 min-h-[36px] pointer-coarse:min-h-11"
-                  >
-                    <Eye size={12} />
-                    Review
-                  </button>
-                </div>
-              )}
-
-              {/* Expandable summary */}
-              {section.summary && (
-                <div className="px-4 pb-3">
-                  <button
-                    onClick={() => setExpandedSummary(expandedSummary === section.id ? null : section.id)}
-                    className="text-xs text-port-accent-2 hover:text-port-accent-2/80 flex items-center gap-1 py-1 min-h-[36px] pointer-coarse:min-h-11"
-                  >
-                    <Sparkles size={12} />
-                    Summary
-                    {expandedSummary === section.id ? <ChevronUp size={12} /> : <ChevronDown size={12} />}
-                  </button>
-                  {expandedSummary === section.id && (
-                    <div className="mt-2 p-3 bg-port-bg rounded-lg max-h-72 overflow-auto">
-                      <MarkdownOutput content={section.summary} />
-                    </div>
-                  )}
-                </div>
-              )}
-            </div>
-          );
-        })}
-      </div>
-
-      {/* Overall Summary */}
-      {profile?.profileSummary && (
-        <div className="bg-port-card rounded-lg border border-port-accent-2/30 p-6">
-          <h3 className="text-lg font-semibold text-white mb-3 flex items-center gap-2">
-            <Sparkles className="w-5 h-5 text-port-accent-2" />
-            Unified Taste Profile
-          </h3>
-          <div className="text-sm"><MarkdownOutput content={profile.profileSummary} /></div>
-        </div>
-      )}
-
-      {/* Generate Summary / Provider Selection */}
-      <div className="bg-port-card rounded-lg border border-port-border p-4">
-        <div className="flex flex-col sm:flex-row items-start sm:items-center gap-4">
-          <div className="flex-1">
-            <h3 className="font-medium text-white mb-1">Generate Taste Profile</h3>
-            <p className="text-sm text-gray-400">
-              Use AI to analyze your responses and build a unified aesthetic taste profile.
-            </p>
-          </div>
-          <div className="flex flex-col sm:flex-row items-stretch sm:items-center gap-2 w-full sm:w-auto">
-            {providersResource.state === 'error' && (
-              <ListLoadError what="AI providers" error={providersResource.error} onRetry={providersResource.retry} />
-            )}
-            <TwinProviderPicker
-              compact
-              className="flex-1 min-w-0"
-              providers={providers}
-              selected={selectedProvider}
-              onChange={setSelectedProvider}
-            />
-            <button
-              onClick={handleGenerateOverallSummary}
-              disabled={generatingSummary || (profile?.completedCount || 0) === 0}
-              className="flex items-center justify-center gap-2 px-4 py-3 min-h-[44px] bg-port-accent-2 text-port-on-accent-2 rounded-lg text-sm hover:bg-port-accent-2/80 disabled:opacity-50 whitespace-nowrap"
-            >
-              {generatingSummary ? <BrailleSpinner /> : <Sparkles size={16} />}
-              {profile?.profileSummary ? 'Regenerate' : 'Generate Profile'}
-            </button>
-          </div>
-        </div>
-      </div>
-
-      {/* Info */}
-      <div className="bg-port-card rounded-lg border border-port-border p-4">
-        <div className="flex items-start gap-4">
-          <Palette className="w-6 h-6 text-port-accent-2 shrink-0" />
-          <div>
-            <h3 className="font-medium text-white mb-1">How the Taste Questionnaire Works</h3>
-            <p className="text-sm text-gray-400">
-              Each section explores a different domain of aesthetic taste through a conversational Q&A flow.
-              Core questions establish your baseline preferences. Based on your answers, follow-up questions
-              dig deeper into specific areas — if you mention visual elements in your movie preferences,
-              you'll get questions about cinematography style. After completing sections, generate an
-              AI-powered taste profile that captures your aesthetic identity across all domains.
-            </p>
-          </div>
-        </div>
-      </div>
-    </div>
+    <TasteOverview
+      profile={profile}
+      profileError={profileError}
+      providersResource={providersResource}
+      providers={providers}
+      selectedProvider={selectedProvider}
+      generatingSummary={generatingSummary}
+      expandedSummary={expandedSummary}
+      onToggleSummary={(sectionId) => setExpandedSummary(prev => prev === sectionId ? null : sectionId)}
+      onRetry={loadProfile}
+      onStartSection={startSection}
+      onReviewSection={handleReviewSection}
+      onProviderChange={setSelectedProvider}
+      onGenerateSummary={handleGenerateOverallSummary}
+    />
   );
 }
-

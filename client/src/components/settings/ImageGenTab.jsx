@@ -1,7 +1,6 @@
 /**
  * Image Gen Settings — backend picker (External SD API / local mflux / Codex
- * CLI), per-mode configuration, and the "expose A1111 API on the tailnet"
- * toggle so other machines can use this PortOS as their image/video backend.
+ * CLI) and per-mode configuration.
  * Codex appears as a backend tile only after the user enables it; the toggle
  * lives in the always-visible Codex CLI Imagegen section.
  *
@@ -9,12 +8,12 @@
  * load and the field-by-field save; the sections are three sibling
  * components reading the same form: ImageGenBackendSections (Backend,
  * Defaults), ImageGenProviderSections (External, Local, Codex, Grok, Agy,
- * fal.ai) and ImageGenServiceSections (Tokens, Expose, Test).
+ * fal.ai) and ImageGenServiceSections (Tokens, Test).
  */
 
 import { useState, useEffect, useCallback } from 'react';
 import {
-  Save, Image as ImageIcon, Zap, Wrench, Cloud, Cpu, Globe,
+  Save, Image as ImageIcon, Zap, Wrench, Cloud, Cpu,
   Sparkles, Terminal, Clapperboard, CloudCog, Key, SlidersHorizontal, Bot, FlaskConical,
 } from 'lucide-react';
 import toast from '../ui/Toast';
@@ -59,7 +58,7 @@ const normalizeUrl = (url) => (url || '').trim().replace(/\/+$/, '');
 // button should probe. Without it the button always probed the *saved default*
 // mode, so testing from the Grok or Agy tab reported the Codex CLI's version
 // ("codex — codex-cli 0.145.0") — the answer to a question nobody asked.
-// Tabs with no provider of their own (Backend / Tokens / Expose / Test) leave
+// Tabs with no provider of their own (Backend / Tokens / Test) leave
 // it undefined and fall back to the saved default backend.
 // Exported so a test can assert every IMAGE_GEN_MODE is tagged onto some tab —
 // a new backend that forgets its `probeMode` would otherwise silently regress
@@ -77,7 +76,6 @@ export const MEDIA_TABS = [
   { id: 'higgsfield', label: 'Higgsfield', icon: Clapperboard, probeMode: IMAGE_GEN_MODE.HIGGSFIELD },
   { id: 'google', label: 'Google', icon: CloudCog, probeMode: IMAGE_GEN_MODE.GOOGLE },
   { id: 'tokens', label: 'Tokens', icon: Key },
-  { id: 'expose', label: 'Expose', icon: Globe },
   { id: 'test', label: 'Test', icon: FlaskConical },
 ];
 const MEDIA_TAB_IDS = MEDIA_TABS.map((t) => t.id);
@@ -92,7 +90,6 @@ const EMPTY_MEDIA_FORM = Object.freeze({
   // Install-wide default local image model (`settings.imageGen.local.modelId`).
   // '' = no pin, which the server resolves to LOCAL_IMAGEGEN_DEFAULT_MODEL.
   localModelId: '',
-  exposeA1111: false,
   // Codex CLI provider config — gated by `codexEnabled` so users without a
   // paid Codex plan that includes image_gen can hide the option entirely.
   // Empty model/effort = the shipped defaults.
@@ -180,7 +177,6 @@ const mediaFormFromSettings = (s) => {
     sdapiUrl: normalizeUrl(ig.external?.sdapiUrl || ig.sdapiUrl),
     pythonPath: ig.local?.pythonPath || '',
     localModelId: ig.local?.modelId || '',
-    exposeA1111: ig.expose?.a1111 === true,
     codexEnabled: cx.enabled === true,
     codexPath: cx.codexPath || '',
     codexModel: cx.model || '',
@@ -337,7 +333,6 @@ const sliceFieldsOf = (f) => ({
   'videoGen.runway': {
     parallelLimit: f.runwayVideoParallelLimit,
   },
-  'imageGen.expose': { a1111: f.exposeA1111 },
   renderDefaults: Object.fromEntries(RENDER_TARGET_OPTIONS.map(({ id }) => [id, f.renderDefaults[id] ?? null])),
   videoGen: { mode: f.videoGenMode || null, defaultModelId: f.localVideoModelId || null, displaySleep: f.videoGenDisplaySleep },
 });

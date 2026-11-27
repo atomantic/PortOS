@@ -26,7 +26,7 @@ const MODEL_CACHE_TTL = 5 * 60 * 1000;
 let cachedModel = { name: null, timestamp: 0, baseUrl: null };
 
 export function validateSdUrl(rawUrl) {
-  if (!rawUrl) throw new ServerError('No SD API URL configured — set it in Settings > Image Gen', { status: 400, code: 'IMAGE_GEN_NOT_CONFIGURED' });
+  if (!rawUrl) throw new ServerError('No SD API URL configured — set it in Media Gen Settings → External', { status: 400, code: 'IMAGE_GEN_NOT_CONFIGURED' });
   let url;
   try { url = new URL(rawUrl); } catch { throw new ServerError('Invalid SD API URL — must be a valid http/https URL', { status: 400, code: 'INVALID_SD_URL' }); }
   if (url.protocol !== 'http:' && url.protocol !== 'https:') {

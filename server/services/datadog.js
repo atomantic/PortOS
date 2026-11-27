@@ -8,8 +8,10 @@ import { countConfiguredInstances } from '../lib/instanceFeatureRegistry.js';
 import path from 'path';
 import { PATHS, readJSONFile } from '../lib/fileUtils.js';
 import { writeSecureJson } from '../lib/secureAuthStore.js';
+import { createFileWriteQueue } from '../lib/fileWriteQueue.js';
 
 const DATADOG_CONFIG_FILE = path.join(PATHS.data, 'datadog.json');
+const queueInstanceWrite = createFileWriteQueue();
 
 // Hostname-only pattern: no scheme, no path, no port, no special chars
 const VALID_HOSTNAME_RE = /^[a-zA-Z0-9]([a-zA-Z0-9-]*[a-zA-Z0-9])?(\.[a-zA-Z0-9]([a-zA-Z0-9-]*[a-zA-Z0-9])?)*$/;
@@ -57,6 +59,7 @@ export async function saveInstances(config) {
  */
 export async function upsertInstance(instanceId, instanceData) {
   validateSite(instanceData.site);
+  return queueInstanceWrite(async () => {
   const config = await getInstances();
   if (!config.instances) config.instances = {};
 
@@ -74,15 +77,18 @@ export async function upsertInstance(instanceId, instanceData) {
 
   await saveInstances(config);
   return config.instances[instanceId];
+  });
 }
 
 /**
  * Delete DataDog instance
  */
 export async function deleteInstance(instanceId) {
+  return queueInstanceWrite(async () => {
   const config = await getInstances();
   delete config.instances[instanceId];
   await saveInstances(config);
+  });
 }
 
 function createDatadogClient(instance) {

@@ -38,17 +38,15 @@
  * with too few test files to be the real suite, or a base blob git cannot
  * read throws `ImportGrowthBaseError`. None of those become a zero delta.
  *
- * Wall-clock is not a gate. `benchmarkProxySplit` reports a synthetic
- * collection walk and a synthetic execution loop as separate numbers so the
- * two costs stay distinguishable; the live report's collect timings are the
- * same kind of evidence. Neither is compared to a threshold.
+ * Wall-clock is not a gate. Live report collect timings are evidence about the
+ * guard reading source; they are not compared to a threshold.
  */
 
-import { spawnSync } from 'child_process';
 import { existsSync, readFileSync } from 'fs';
 import { join, posix } from 'path';
 import { staticImportSpecifiersFromSource } from '../../server/lib/staticImportGraph.js';
-import { createGuardCorpus } from './guardCorpus.js';
+import { createGuardCorpus } from '../../lib/guardCorpus.js';
+import { runWorktreeGit } from '../../lib/gitWorktree.js';
 
 /** Proxy counts recorded for the heavy edges this guard is calibrated against. */
 export const HISTORICAL_PROXY_TOTALS = Object.freeze({
@@ -82,7 +80,7 @@ export const BOOT_CLOSURE_GROWTH_LIMIT = 15;
 export const HEAVY_REGRESSION_BAND = Math.floor(REGRESSION_6156 / 2);
 
 /** Below this, a measurement is not the server suite — passing would be vacuous. */
-export const MIN_SERVER_TESTS = 1_000;
+const MIN_SERVER_TESTS = 1_000;
 
 const SKIP_DIRS = new Set(['node_modules', 'coverage', 'dist', 'data']);
 const SOURCE_EXT = /\.(?:[cm]?js|jsx|tsx?)$/;
@@ -101,7 +99,7 @@ export function cachedStaticImportSpecifiers(text) {
 
 const PROXY_NOTE = 'Static closure sizes are a proxy for import cost, not a count of observed module instantiations.';
 
-export function importGrowthBaseError(message) {
+function importGrowthBaseError(message) {
   const error = new Error(message);
   error.name = 'ImportGrowthBaseError';
   error.code = 'IMPORT_GROWTH_BASE_UNAVAILABLE';
@@ -137,7 +135,7 @@ function closureOf(entry, resolved) {
  *
  * @returns {{ tests: Map<string, Set<string>>, deps: Map<string, string[]>, texts: Map<string, string|null>, bootClosure: Set<string>|null, testCount: number, total: number }}
  */
-export function measureClosures(testFiles, readText, { bootEntry = BOOT_ENTRY } = {}) {
+export function measureClosures(testFiles, readText, { bootEntry = BOOT_ENTRY, reuseFrom = null } = {}) {
   const textCache = new Map();
   const read = (rel) => {
     if (textCache.has(rel)) return textCache.get(rel);
@@ -167,19 +165,37 @@ export function measureClosures(testFiles, readText, { bootEntry = BOOT_ENTRY } 
     return next;
   };
 
+  // Verify outgoing edges against this reader, including targets that only
+  // exist in one tree. If none of a closure's members changed, the original
+  // walk still reaches exactly the same files, even across cycles.
+  const changedEdges = new Set();
+  if (reuseFrom) {
+    for (const [file, previous] of reuseFrom.deps) {
+      const current = resolved(file);
+      if (previous.length !== current.length || previous.some((target, i) => target !== current[i])) {
+        changedEdges.add(file);
+      }
+    }
+  }
+  const closure = (entry, previous) => (previous?.isDisjointFrom(changedEdges)
+    ? previous : closureOf(entry, resolved));
   const tests = new Map();
   let total = 0;
   for (const file of testFiles) {
     if (read(file) == null) continue;
-    const closure = closureOf(file, resolved);
-    tests.set(file, closure);
-    total += closure.size;
+    const reached = closure(file, reuseFrom?.tests.get(file));
+    tests.set(file, reached);
+    total += reached.size;
   }
-  const bootClosure = bootEntry && read(bootEntry) != null ? closureOf(bootEntry, resolved) : null;
+  const previousBoot = reuseFrom?.bootClosure;
+  // The first member is the entry of the original walk.
+  const sameBootEntry = previousBoot?.values().next().value === bootEntry;
+  const bootClosure = bootEntry && read(bootEntry) != null
+    ? closure(bootEntry, sameBootEntry ? previousBoot : null) : null;
   return { tests, deps, texts: textCache, bootClosure, testCount: tests.size, total };
 }
 
-export function closureSizeFromDeps(entry, deps) {
+function closureSizeFromDeps(entry, deps) {
   return closureOf(entry, (rel) => deps.get(rel) || []).size;
 }
 
@@ -359,54 +375,9 @@ export function formatImportGrowthReport(report) {
   return lines.join('\n');
 }
 
-/**
- * Synthetic collection-versus-execution split.
- * Collection is the static closure walk. Execution is a separate loop over
- * the measured result. Both are returned so a caller can report them apart;
- * nothing here decides pass/fail from either number.
- */
-export function benchmarkProxySplit({ modules = 30 } = {}) {
-  const files = new Map();
-  for (let i = 0; i < modules; i += 1) {
-    const prev = i === 0 ? '' : `import './m${i - 1}.js';\n`;
-    files.set(`synth/m${i}.js`, `${prev}export const n = ${i};\n`);
-  }
-  files.set('synth/suite.test.js', `import './m${modules - 1}.js';\n`);
-  const readText = (rel) => files.get(rel) ?? null;
-  const collectStart = performance.now();
-  const measured = measureClosures(['synth/suite.test.js'], readText);
-  const collectionMs = performance.now() - collectStart;
-  const executeStart = performance.now();
-  let executed = 0;
-  for (const closure of measured.tests.values()) executed += closure.size;
-  const executionMs = performance.now() - executeStart;
-  return {
-    collectionMs,
-    executionMs,
-    executed,
-    environment: {
-      node: process.version,
-      platform: process.platform,
-      synthetic: true,
-      modules,
-    },
-    limitations: [
-      'collectionMs times the static closure walk on an in-memory synthetic graph, not Vitest transforming the server suite',
-      'executionMs times a loop over that walk\'s result, not test bodies',
-      'neither number is a CI pass/fail threshold; the gate is existing-suite proxy growth',
-      PROXY_NOTE,
-    ],
-  };
-}
 
 function git(repoRoot, args, { input, encoding = 'utf8', maxBuffer = 64 * 1024 * 1024 } = {}) {
-  const result = spawnSync('git', args, {
-    cwd: repoRoot,
-    input,
-    encoding,
-    maxBuffer,
-  });
-  return result;
+  return runWorktreeGit(repoRoot, args, { input, encoding, maxBuffer });
 }
 
 function gitOk(repoRoot, args, options) {
@@ -601,10 +572,10 @@ function readBlobs(repoRoot, sha, paths) {
 }
 
 /**
- * `headTexts` is the head measurement's text map: a path git reports as
- * unchanged is the same bytes in the worktree, so it need not be read again.
+ * An optional worktree measurement supplies the text of unchanged paths and
+ * the closures that can be reused after checking their edges against the base.
  */
-export function measureGitTree(repoRoot, sha, headTexts = null) {
+export function measureGitTree(repoRoot, sha, head = null) {
   const tree = listTree(repoRoot, sha);
   const testFiles = [...tree].filter(isServerTest).sort();
   // git diff exits 1 when the trees differ and 0 when they do not. Above 1 is a real failure.
@@ -624,7 +595,7 @@ export function measureGitTree(repoRoot, sha, headTexts = null) {
     if (dirty.has(rel)) {
       throw importGrowthBaseError(`Base file ${rel} differs from the worktree but its blob was not loaded from ${String(sha).slice(0, 12)}.`);
     }
-    const shared = headTexts?.get(rel);
+    const shared = head?.texts.get(rel);
     if (typeof shared === 'string') return shared;
     const abs = join(repoRoot, ...rel.split('/'));
     if (!existsSync(abs)) {
@@ -632,7 +603,7 @@ export function measureGitTree(repoRoot, sha, headTexts = null) {
     }
     return fromDisk(rel);
   };
-  return measureClosures(testFiles, readText);
+  return measureClosures(testFiles, readText, { reuseFrom: head });
 }
 
 /**
@@ -665,7 +636,7 @@ export function evaluateWorkingTreeImportGrowth({
     );
   }
   const baseStart = now();
-  const base = measureGitTree(repoRoot, baseRef.sha, head.texts);
+  const base = measureGitTree(repoRoot, baseRef.sha, head);
   const baseCollectMs = Math.round(now() - baseStart);
   if (base.testCount < MIN_SERVER_TESTS) {
     throw importGrowthBaseError(

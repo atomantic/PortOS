@@ -72,6 +72,17 @@ describe('buildGoogleVideoRequest', () => {
     expect(() => buildGoogleVideoRequest({ modelId: 'veo-3.1-generate-001', prompt: 'p', referenceImages: [img], seconds: 4 })).toThrow(/only as 8-second/);
   });
 
+  it('preserves authored whitespace in the provider payload and sent-prompt preview', async () => {
+    const { googleVideoSentPrompt } = await import('../services/videoGen/google.js');
+    const prompt = '  A fox runs\n';
+    const negativePrompt = ' blur  ';
+    const { planned, record } = googleVideoSentPrompt({ modelId: 'veo-3.1-generate-001', prompt, negativePrompt });
+
+    expect(planned.body.instances[0].prompt).toBe(prompt);
+    expect(planned.body.parameters.negativePrompt).toBe(negativePrompt);
+    expect(record).toMatchObject({ sentPrompt: prompt, sentNegativePrompt: negativePrompt });
+  });
+
   it('refuses inputs a model cannot take', () => {
     expect(() => buildGoogleVideoRequest({ modelId: 'veo-3.0-generate-001', prompt: 'p', image: img, lastImage: img })).toThrow(/no end frame/);
     expect(() => buildGoogleVideoRequest({ modelId: 'veo-3.1-fast-generate-001', prompt: 'p', referenceImages: [img] })).toThrow(/no reference images/);

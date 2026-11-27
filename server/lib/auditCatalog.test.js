@@ -1,10 +1,10 @@
 import { describe, it, expect } from 'vitest';
+import { AUDIT_TASK_TYPE_BY_PRESET_ID } from './quotaBurnLegacyConversion.js';
 import { QUOTA_BURN_PROMPT_PRESETS } from './quotaBurnPresets.js';
 import { requireSlashdoSubmoduleInCi } from './testHelper.js';
 import { LIGHT_FINDINGS_BATCH_EXCEPTION } from './dispatchLabels.js';
 import {
   applyDepfreeMode,
-  AUDIT_EXECUTION_PROFILES,
   AUDIT_DEFINITIONS,
   AUDIT_TASK_TYPES,
   AUDIT_TASK_TYPE_LIST,
@@ -33,18 +33,25 @@ import {
 } from './auditCatalog.js';
 
 describe('AUDIT_DEFINITIONS', () => {
-  it('assigns every executable profile to one active domain and keeps filing metrics unambiguous', async () => {
-    const { AUDIT_DOMAIN_ALIASES, auditDomainFor } = await import('./scheduledTaskTypes.js');
-    expect(AUDIT_TASK_TYPES.size).toBeLessThanOrEqual(16);
+  it('registers exactly 16 domains and resolves each retired ID to one of them', async () => {
+    const { AUDIT_DOMAIN_ALIASES, auditDomainFor } = await import('./auditDomains.js');
+    const { DEFAULT_TASK_INTERVALS, SELF_IMPROVEMENT_TASK_TYPES } = await import('../services/taskScheduleRegistry.js');
+    expect(Object.keys(AUDIT_DEFINITIONS)).toEqual([...AUDIT_TASK_TYPE_LIST]);
+    expect(AUDIT_TASK_TYPE_LIST).toHaveLength(16);
     expect(Object.keys(AUDIT_DOMAIN_ALIASES)).toHaveLength(31);
-    expect(AUDIT_TASK_TYPES.size + Object.keys(AUDIT_DOMAIN_ALIASES).length).toBe(Object.keys(AUDIT_EXECUTION_PROFILES).length);
-    for (const id of Object.keys(AUDIT_EXECUTION_PROFILES)) expect(AUDIT_TASK_TYPES.has(auditDomainFor(id)), id).toBe(true);
-    const metrics = Object.values(AUDIT_EXECUTION_PROFILES).map(def => def.filing.metricLabel);
+    for (const id of Object.keys(AUDIT_DOMAIN_ALIASES)) {
+      expect(AUDIT_TASK_TYPES.has(auditDomainFor(id)), id).toBe(true);
+      expect(AUDIT_DEFINITIONS, id).not.toHaveProperty(id);
+      expect(DEFAULT_TASK_INTERVALS, id).not.toHaveProperty(id);
+      expect(SELF_IMPROVEMENT_TASK_TYPES).not.toContain(id);
+    }
+    for (const id of AUDIT_TASK_TYPE_LIST) expect(DEFAULT_TASK_INTERVALS, id).toHaveProperty(id);
+    const metrics = Object.values(AUDIT_DEFINITIONS).map(def => def.filing.metricLabel);
     expect(new Set(metrics).size).toBe(metrics.length);
   });
 
   it('has a filing preset (slug + label) for every audit type', () => {
-    for (const [taskType, def] of Object.entries(AUDIT_EXECUTION_PROFILES)) {
+    for (const [taskType, def] of Object.entries(AUDIT_DEFINITIONS)) {
       expect(def.filing, taskType).toBeTruthy();
       expect(def.filing.slugPrefix, taskType).toMatch(/-$/);
       expect(def.filing.issueLabel, taskType).toBeTruthy();
@@ -56,35 +63,9 @@ describe('AUDIT_DEFINITIONS', () => {
     }
   });
 
-  it('maps every quota-burn audit preset to a scheduled audit type', () => {
-    const mapped = new Set(
-      Object.values(AUDIT_EXECUTION_PROFILES).map((def) => def.quotaBurnId).filter(Boolean)
-    );
-    for (const preset of QUOTA_BURN_PROMPT_PRESETS) {
-      expect(mapped.has(preset.id), `missing scheduled counterpart for ${preset.id}`).toBe(true);
-    }
-  });
-
-  // The REVERSE of the mapping above. The forward direction stops a new burn
-  // preset landing without a scheduled counterpart; this one stops a `quotaBurnId`
-  // that names a preset which was renamed or deleted. Once the presets are
-  // compatibility-only inputs to the migration, a dangling id here is invisible
-  // — nothing dereferences it at runtime — so only a test can catch it.
-  it('every non-null quotaBurnId names a preset that exists', () => {
-    const presetIds = new Set(QUOTA_BURN_PROMPT_PRESETS.map((preset) => preset.id));
-    const referenced = Object.entries(AUDIT_EXECUTION_PROFILES)
-      .filter(([, def]) => def.quotaBurnId != null);
-    // Guards the guard: an accidental `quotaBurnId: null` sweep would make the
-    // loop below vacuous while still passing.
-    expect(referenced.length).toBeGreaterThan(0);
-    for (const [taskType, def] of referenced) {
-      expect(presetIds.has(def.quotaBurnId), `${taskType} → unknown preset "${def.quotaBurnId}"`).toBe(true);
-    }
-  });
-
-  it('never points two audit types at the same burn preset', () => {
-    const ids = Object.values(AUDIT_EXECUTION_PROFILES).map((def) => def.quotaBurnId).filter(Boolean);
-    expect(new Set(ids).size).toBe(ids.length);
+  it('maps each historical quota-burn preset onto an active domain', () => {
+    expect(Object.keys(AUDIT_TASK_TYPE_BY_PRESET_ID).sort()).toEqual(QUOTA_BURN_PROMPT_PRESETS.map(({ id }) => id).sort());
+    for (const type of Object.values(AUDIT_TASK_TYPE_BY_PRESET_ID)) expect(AUDIT_TASK_TYPES.has(type)).toBe(true);
   });
 
   it('defaults new audit types to file-issues and existing do-work types to implement', () => {
@@ -100,7 +81,7 @@ describe('AUDIT_DEFINITIONS', () => {
 
   it('declares isolation as a catalog capability only for audits that require it', () => {
     expect(auditDoWorkRequiresWorktree('module-hygiene')).toBe(true);
-    expect(auditDoWorkRequiresWorktree('simplify')).toBe(false);
+    expect(auditDoWorkRequiresWorktree('ui-runtime-bugs')).toBe(false);
     expect(auditDoWorkRequiresWorktree('unknown')).toBe(false);
   });
 
@@ -116,16 +97,7 @@ describe('AUDIT_DEFINITIONS', () => {
     // Deliberately ungated: the repository with no tests is the one this audit
     // has the most to say about. Its sibling assesses tests that exist.
     expect(auditCapabilityRequirement('test-coverage')).toBeNull();
-    expect(auditCapabilityRequirement('better-test-quality')).toBe('tests');
-  });
-
-  // The executed rehearsal shares data-safety's category and follows it in the
-  // advisory order; its metric label keeps the two sets of findings apart.
-  it('registers upgrade-rehearsal as data-safety\'s executed, ungated successor', () => {
-    expect(AUDIT_SUGGESTED_AFTER['upgrade-rehearsal']).toEqual(['data-safety']);
-    expect(AUDIT_EXECUTION_PROFILES['upgrade-rehearsal'].filing).toMatchObject({ issueLabel: 'data-safety', extraLabels: ['upgrade-rehearsal'] });
-    expect(auditCapabilityRequirement('upgrade-rehearsal')).toBeNull();
-    expect(defaultFileIssuesFor('upgrade-rehearsal')).toBe(true);
+    expect(auditCapabilityRequirement('test-quality-coverage')).toBeNull();
   });
 
   it('enumerates the audits in catalog order without a second vocabulary', () => {
@@ -133,18 +105,11 @@ describe('AUDIT_DEFINITIONS', () => {
     expect(AUDIT_TASK_TYPE_LIST.every(isAuditTaskType)).toBe(true);
   });
 
-  it('files UI lifecycle findings under framework-neutral names', () => {
-    expect(AUDIT_EXECUTION_PROFILES['ui-lifecycle'].filing).toMatchObject({
-      slugPrefix: 'ui-lifecycle-',
-      issueLabel: 'ui-lifecycle',
-      label: 'ui-lifecycle-audit',
-    });
-    expect(AUDIT_DEFINITIONS).not.toHaveProperty('react-lifecycle');
-    expect(QUOTA_BURN_PROMPT_PRESETS.map((preset) => preset.id)).toContain('ui-lifecycle-audit');
+  it('routes historic lifecycle IDs to the UI runtime domain', () => {
     expect(isAuditTaskType('react-lifecycle')).toBe(true);
     expect(AUDIT_TASK_TYPES.has('react-lifecycle')).toBe(false);
-    expect(getAuditFilingPreset('react-lifecycle').slugPrefix).toBe('ui-lifecycle-');
-    expect(getAuditScheduleMetadata('react-lifecycle').displayName).toBe('better-ui-lifecycle');
+    expect(getAuditFilingPreset('react-lifecycle')).toBe(getAuditFilingPreset('ui-runtime-bugs'));
+    expect(getAuditScheduleMetadata('react-lifecycle').displayName).toBe('better-ui-runtime-bugs');
   });
 });
 
@@ -275,21 +240,12 @@ describe('mode contracts + wrapper', () => {
 
 describe('getAuditFilingPreset', () => {
   it('returns the preset for an audit type and null otherwise', () => {
-    expect(getAuditFilingPreset('data-safety').slugPrefix).toBe('data-safety-');
-    expect(getAuditFilingPreset('simplify').issueLabel).toBe('code-quality');
-    expect(getAuditFilingPreset('module-hygiene').slugPrefix).toBe('module-hygiene-');
-    expect(getAuditFilingPreset('claim-issue')).toBeNull();
-  });
-
-  it('uses the slug-stem metric as an extra forge label when it is not already the category', () => {
-    expect(getAuditFilingPreset('better-cognitive-load').extraLabels).toEqual(['cognitive-load']);
-    expect(getAuditFilingPreset('better-structural-drift').extraLabels).toEqual(['structural-drift']);
-    expect(getAuditFilingPreset('better-runtime-safety')).toMatchObject({
-      issueLabel: 'bug',
-      extraLabels: ['runtime-safety'],
+    expect(getAuditFilingPreset('data-safety')).toBe(getAuditFilingPreset('data-integrity-safety'));
+    expect(getAuditFilingPreset('code-simplification')).toMatchObject({
+      issueLabel: 'code-quality', extraLabels: ['code-simplification'],
     });
-    expect(getAuditFilingPreset('ux').extraLabels).toEqual([]);
-    expect(getAuditFilingPreset('ux').metricLabel).toBe('ux');
+    expect(getAuditFilingPreset('security').extraLabels).toEqual([]);
+    expect(getAuditFilingPreset('claim-issue')).toBeNull();
   });
 
   it('AUDIT_TASK_TYPES is derived from the definitions table', () => {
@@ -491,8 +447,8 @@ describe('banner-owned rules are not restated by mission bodies (#12080)', () =>
   it.each([true, false])('an assembled code-quality prompt states each rule once (fileIssues=%s)', async (fileIssues) => {
     const { DEFAULT_TASK_PROMPTS } = await import('../services/taskPromptDefaults.js');
     const { auditQualityInstructions } = await import('./auditQuality.js');
-    const banner = `${modeContractFor(fileIssues)}\n\n${auditQualityInstructions('code-quality')}`;
-    const prompt = applyAuditModeWrapper(DEFAULT_TASK_PROMPTS['code-quality'], banner)
+    const banner = `${modeContractFor(fileIssues)}\n\n${auditQualityInstructions('architecture-maintainability')}`;
+    const prompt = applyAuditModeWrapper(DEFAULT_TASK_PROMPTS['architecture-maintainability'], banner)
       .replace('{modeInstructions}', banner);
     const count = (needle) => prompt.split(needle).length - 1;
     expect(count(AUDIT_REDACTION_RULE)).toBe(1);
@@ -512,7 +468,7 @@ describe('security quality assessment', () => {
     expect(security).toContain('browser-origin access');
     expect(security).toContain('only where the actual path invokes it');
     expect(security).toContain('do not reject one solely because it adds validation');
-    expect(auditQualityInstructions('code-quality')).not.toContain('Security assessment:');
+    expect(auditQualityInstructions('architecture-maintainability')).not.toContain('Security assessment:');
   });
 });
 
@@ -524,43 +480,5 @@ describe('out-of-scope findings', () => {
     for (const [type, { filing }] of Object.entries(AUDIT_DEFINITIONS)) {
       expect(OUT_OF_SCOPE_FINDINGS_RULE).toContain(`${type}=${[filing.issueLabel, ...filing.extraLabels].join('+')}`);
     }
-  });
-});
-
-// Lane boundaries decided in the 2026-10-17 prompt audit. Each cession names
-// the owning lane so two lanes cannot both file one class of finding.
-describe('lane ownership cessions', () => {
-  const hunted = (body) => body.split('\n').filter((line) => /^\s*(?:-|\d+\.) \*\*/.test(line)).join('\n');
-
-  it('only data-integrity hunts read-modify-write races; data-safety and runtime-safety cede them (#12082)', async () => {
-    const { DEFAULT_TASK_PROMPTS } = await import('../services/taskPromptDefaults.js');
-    expect(hunted(DEFAULT_TASK_PROMPTS['data-integrity'])).toContain('read-modify-write');
-    for (const lane of ['data-safety', 'better-runtime-safety']) {
-      expect(hunted(DEFAULT_TASK_PROMPTS[lane]), lane).not.toContain('read-modify-write');
-      expect(DEFAULT_TASK_PROMPTS[lane], lane).toMatch(/read-modify-write races[^.]*data-integrity\s+work/);
-    }
-    expect(DEFAULT_TASK_PROMPTS['better-runtime-safety']).toContain('check-then-act sequences on module-level');
-  });
-
-  it('simplify cedes file splits to module-hygiene (#12083)', async () => {
-    const { DEFAULT_TASK_PROMPTS } = await import('../services/taskPromptDefaults.js');
-    expect(DEFAULT_TASK_PROMPTS.simplify).not.toContain('outgrew their file');
-    expect(DEFAULT_TASK_PROMPTS.simplify).toContain('File splits and responsibility boundaries belong to the\nmodule-hygiene work');
-  });
-
-  it('error-handling cedes sensitive error detail to privacy and partial writes to data-integrity (#12086)', async () => {
-    const { DEFAULT_TASK_PROMPTS } = await import('../services/taskPromptDefaults.js');
-    const body = DEFAULT_TASK_PROMPTS['error-handling'];
-    expect(body).not.toContain('Sensitive detail in an error path');
-    expect(body).not.toContain('Partial writes with no recovery');
-    expect(body).toContain('Sensitive detail\nleaking through an error path belongs to the privacy work; partial writes to\nthe data-integrity work');
-  });
-
-  it('structural-drift hunts behaviour twins (#12092) and ui-lifecycle hunts failed loads rendered as empty (#12094)', async () => {
-    const { DEFAULT_TASK_PROMPTS } = await import('../services/taskPromptDefaults.js');
-    expect(hunted(DEFAULT_TASK_PROMPTS['better-structural-drift'])).toContain('**Behaviour twins**');
-    expect(DEFAULT_TASK_PROMPTS['better-structural-drift']).toContain('one shared primitive or\n   a parity test, never a copied patch');
-    expect(hunted(DEFAULT_TASK_PROMPTS['ui-lifecycle'])).toContain('**Failed loads rendered as empty**');
-    expect(DEFAULT_TASK_PROMPTS['ui-lifecycle']).toContain('loading/ready/error state with a retry, not a toast');
   });
 });

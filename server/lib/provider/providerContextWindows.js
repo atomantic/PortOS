@@ -15,6 +15,8 @@ export const GROK_CONTEXT_WINDOW = 256_000;
 export const KIMI_CONTEXT_WINDOW = 256_000;
 
 const KNOWN_MODEL_CONTEXT_WINDOWS = Object.freeze([
+  [/gpt[-_.:/]?5\.6(?:[-_.:/]|\b)/i, CODEX_CONTEXT_WINDOW],
+  [/gpt[-_.:/]?6(?:[-_.:/]|\b)/i, CODEX_CONTEXT_WINDOW],
   [/gpt[-_.:/]?5\.5(?:[-_.:/]|\b)/i, CODEX_CONTEXT_WINDOW],
   [/gpt[-_.:/]?5\.4[-_.:/]?mini(?:[-_.:/]|\b)/i, 400_000],
   [/gpt[-_.:/]?5\.4(?![-_.:/]?(?:mini|nano))(?:[-_.:/]|\b)/i, CODEX_CONTEXT_WINDOW],
@@ -27,6 +29,8 @@ const KNOWN_MODEL_CONTEXT_WINDOWS = Object.freeze([
   [/claude[-_.:/]?sonnet[-_.:/]?4(?:[-_.:/]|\b)/i, 200_000],
   [/claude[-_.:/]?haiku[-_.:/]?5[-_.:/]?5(?:[-_.:/]|\b)/i, 1_000_000],
   [/claude[-_.:/]?haiku[-_.:/]?4(?:[-_.:/]|\b)/i, 200_000],
+  [/gemini[-_.:/]?3(?:\.\d+)?(?:[-_.:/]|\b)/i, GEMINI_CONTEXT_WINDOW],
+  [/gemini[-_.:/]?4(?:[-_.:/]|\b)/i, GEMINI_CONTEXT_WINDOW],
   [/gemini[-_.:/]?2\.5[-_.:/]?pro(?:[-_.:/]|\b)/i, GEMINI_CONTEXT_WINDOW],
 ]);
 

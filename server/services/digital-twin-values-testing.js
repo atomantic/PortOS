@@ -43,8 +43,9 @@ export const VALUES_SUITE_FILE = 'VALUES_ALIGNMENT_SUITE.md';
  *   <what contradicts the user's values>
  */
 export async function parseValuesAlignmentSuite() {
-  if (cache.valuesTests.data && (Date.now() - cache.valuesTests.timestamp) < CACHE_TTL_MS) {
-    return cache.valuesTests.data;
+  const entry = cache.valuesTests;
+  if (entry.data && (Date.now() - entry.timestamp) < CACHE_TTL_MS) {
+    return entry.data;
   }
 
   const suiteFile = join(DIGITAL_TWIN_DIR, VALUES_SUITE_FILE);
@@ -69,8 +70,8 @@ export async function parseValuesAlignmentSuite() {
     });
   }
 
-  cache.valuesTests.data = dilemmas;
-  cache.valuesTests.timestamp = Date.now();
+  entry.data = dilemmas;
+  entry.timestamp = Date.now();
 
   return dilemmas;
 }

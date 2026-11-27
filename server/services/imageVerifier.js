@@ -5,19 +5,21 @@
 
 import { EventEmitter } from 'events';
 import { existsSync } from 'fs';
+import { basename } from 'path';
 import { ServerError } from '../lib/errorHandler.js';
 import { resolveGalleryImage } from '../lib/pathSafety.js';
 import { assertGalleryFilename } from './imageGen/local.js';
 import { getSettings } from './settings.js';
-import { editImageSidecar } from './imageGen/sidecarStore.js';
+import { editImageSidecar, readImageSidecar } from './imageGen/sidecarStore.js';
+import { runCancellablePrompt } from './cancellablePrompt.js';
 import { isOllamaBackedProvider } from '../lib/aiToolkit/internal/ollamaBacked.js';
 import {
   DEFAULT_VERIFICATION_PROFILES,
   verificationProfileSchema,
   buildMultiAspectVerificationPrompt,
-  buildDefectConfirmationPrompt,
+  buildBatchDefectConfirmationPrompt,
   parseVerificationResponse,
-  parseConfirmationResponse,
+  parseBatchConfirmationResponse,
 } from '../lib/imageVerification.js';
 
 export const isAdvisoryVisionReviewer = isOllamaBackedProvider;
@@ -177,93 +179,90 @@ export async function verifyImage({
   imagePath,
   profile: profileInput,
   profileId,
-  prompt = '',
+  prompt,
   reviewer: reviewerInput,
   isImport = false,
   source = 'image-verifier',
   beforeExecute,
+  signal,
 }) {
+  signal?.throwIfAborted();
   const settings = await getVerifierSettings();
   const profile = profileInput
     ? verificationProfileSchema.parse(profileInput)
     : await getVerificationProfile(profileId || settings.defaultProfileId);
 
-  const resolvedPath = imagePath || (filename ? resolveGalleryImage(filename) : null);
+  // Use the same gallery basename for the image and both sidecar spellings.
+  const galleryFilename = filename ? basename(filename) : null;
+  const resolvedPath = imagePath || (galleryFilename ? resolveGalleryImage(galleryFilename) : null);
   if (!resolvedPath || !existsSync(resolvedPath)) {
     throw new ServerError(`Image file not found: ${filename || imagePath}`, { status: 404, code: 'IMAGE_NOT_FOUND' });
   }
 
+  let generationPrompt = prompt;
+  if (generationPrompt === undefined && galleryFilename) {
+    const { metadata } = await readImageSidecar(galleryFilename);
+    if (typeof metadata?.prompt === 'string') generationPrompt = metadata.prompt;
+  }
   const reviewer = await resolveVisionReviewer(reviewerInput || profile.reviewer || settings.reviewer);
   const { runPromptThroughProvider, assertVisionRunUsedImages } = await import('./promptRunner.js');
   const { isToolFreeOneShotProvider } = await import('../lib/provider/providerVendors.js');
 
-  const toolFree = isToolFreeOneShotProvider(reviewer.provider);
+  const runVision = async (reviewPrompt, reviewSource) => {
+    const result = await runCancellablePrompt(runPromptThroughProvider, {
+      provider: { ...reviewer.provider, thinking: false },
+      model: reviewer.model,
+      prompt: reviewPrompt,
+      screenshots: [resolvedPath],
+      source: reviewSource,
+      timeout: Math.min(reviewer.provider.timeout || 120000, 120000),
+      toolFree: isToolFreeOneShotProvider(reviewer.provider),
+      allowFallback: false,
+      beforeExecute,
+    }, signal);
+    assertVisionRunUsedImages(result, reviewer.provider);
+    return result;
+  };
 
   // Pass 1: Multi-Aspect Scan
-  const pass1Prompt = buildMultiAspectVerificationPrompt({ profile, prompt, isImport });
-  const result1 = await runPromptThroughProvider({
-    provider: { ...reviewer.provider, thinking: false },
-    model: reviewer.model,
-    prompt: pass1Prompt,
-    screenshots: [resolvedPath],
-    source,
-    timeout: Math.min(reviewer.provider.timeout || 120000, 120000),
-    toolFree,
-    allowFallback: false,
-    beforeExecute,
-  });
-  assertVisionRunUsedImages(result1, reviewer.provider);
-
+  const pass1Prompt = buildMultiAspectVerificationPrompt({ profile, prompt: generationPrompt, isImport });
+  const result1 = await runVision(pass1Prompt, source);
   const parsed = parseVerificationResponse(result1.text);
-  const advisory = isAdvisoryVisionReviewer(reviewer.provider);
 
   // Pass 2: Skeptical Defect Confirmation
   if (parsed.defects.length > 0) {
-    const confirmedDefects = [];
-    for (const defect of parsed.defects) {
-      try {
-        const pass2Prompt = buildDefectConfirmationPrompt({
-          claim: defect.claim,
-          dimension: defect.dimension,
-          region: defect.region,
-          prompt,
-        });
+    const pass2Prompt = buildBatchDefectConfirmationPrompt({ defects: parsed.defects, prompt: generationPrompt });
+    const result2 = await runVision(pass2Prompt, `${source}-confirmation`).catch(() => null);
+    signal?.throwIfAborted();
 
-        const result2 = await runPromptThroughProvider({
-          provider: { ...reviewer.provider, thinking: false },
-          model: reviewer.model,
-          prompt: pass2Prompt,
-          screenshots: [resolvedPath],
-          source: `${source}-confirmation`,
-          timeout: Math.min(reviewer.provider.timeout || 120000, 120000),
-          toolFree,
-          allowFallback: false,
-          beforeExecute,
-        });
-        assertVisionRunUsedImages(result2, reviewer.provider);
+    if (result2) {
+      const { verdicts } = parseBatchConfirmationResponse(result2.text, parsed.defects.length);
+      const byIndex = new Map(verdicts.map((verdict) => [verdict.index, verdict]));
+      const claims = parsed.defects;
 
-        const confirmation = parseConfirmationResponse(result2.text);
-        if (confirmation.confirmed) {
-          confirmedDefects.push({
-            ...defect,
-            confirmed: true,
-            confirmationNote: confirmation.note,
-            region: confirmation.region || defect.region,
-          });
-        } else {
-          // False alarm: Demote corresponding check to unverified
-          parsed.checks = parsed.checks.map((c) => (c.dimension === defect.dimension
-            ? { ...c, status: 'unverified', note: `Unconfirmed defect claim: ${c.note || defect.claim}` }
-            : c));
-        }
-      } catch (_err) {
-        if (!advisory) confirmedDefects.push(defect);
-      }
+      // The first pass emits failed checks as claims in order, then appends any hand-only claim.
+      let claimIndex = 0;
+      parsed.checks = parsed.checks.map((check) => {
+        if (check.status !== 'fail') return check;
+        const index = claimIndex++;
+        if (byIndex.get(index)?.confirmed) return check;
+        return { ...check, status: 'unverified', note: `Unconfirmed defect claim: ${check.note || claims[index].claim}` };
+      });
+      parsed.defects = claims.flatMap((defect, index) => {
+        const verdict = byIndex.get(index);
+        return verdict?.confirmed ? [{
+          ...defect,
+          confirmationNote: verdict.note,
+          region: verdict.region || defect.region,
+        }] : [];
+      });
+    } else if (isAdvisoryVisionReviewer(reviewer.provider)) {
+      // Keep first-pass checks but drop advisory defects when the confirmation run fails.
+      parsed.defects = [];
     }
 
-    parsed.defects = confirmedDefects;
     const hasRemainingCritical = parsed.checks.some((c) => c.status === 'fail' && c.severity === 'critical')
-      || confirmedDefects.some((d) => d.severity === 'critical');
+      || parsed.defects.some((d) => d.severity === 'critical');
     parsed.overallVerdict = hasRemainingCritical ? 'fail' : 'pass';
   }
 
@@ -283,14 +282,16 @@ export async function verifyImage({
   };
 
   // Persist to sidecar if filename is provided
-  if (filename) {
-    await editImageSidecar(filename, (meta) => {
+  if (galleryFilename) {
+    await editImageSidecar(galleryFilename, (meta) => {
+      if (signal?.aborted) return null;
       meta.verification = verificationRecord;
       return meta;
     }).catch((err) => console.error(`⚠️ Failed to update image sidecar verification for ${filename}:`, err.message));
   }
 
-  imageVerifierEvents.emit('verified', { filename, verification: verificationRecord });
+  signal?.throwIfAborted();
+  imageVerifierEvents.emit('verified', { filename: galleryFilename || filename, verification: verificationRecord });
   return verificationRecord;
 }
 

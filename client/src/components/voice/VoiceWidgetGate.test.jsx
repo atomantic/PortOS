@@ -70,6 +70,7 @@ vi.mock('../../services/voiceClient', () => ({
   stopContinuous: mocks.stopContinuous,
   isContinuous: mocks.isContinuous,
   whenPlaybackDrained: vi.fn(() => Promise.resolve(true)),
+  whenVoiceTurnAudioDrained: vi.fn(() => Promise.resolve(true)),
   getVadLevel: vi.fn(() => 0),
   webSpeechSupported: true,
   startWebSpeechCapture: mocks.startWebSpeechCapture,
@@ -109,7 +110,7 @@ vi.mock('../../services/uiInteract', () => ({
   doSetCheckbox: vi.fn(() => ({ ok: true })),
 }));
 vi.mock('../micrographics', () => ({ MicroGlyph: () => null }));
-vi.mock('react-router', () => ({ useNavigate: () => vi.fn() }));
+vi.mock('react-router', () => ({ useNavigate: () => vi.fn(), Link: ({ to, children }) => <a href={to}>{children}</a> }));
 
 import { warmNano } from '../../services/browserLlm';
 import VoiceWidgetGate from './VoiceWidgetGate';
@@ -582,7 +583,7 @@ describe('VoiceWidgetGate — once the widget is listening', () => {
       fastPath, personality: { name: 'Example' },
     }));
     expect(mocks.speakSynthesized).toHaveBeenCalledWith('Example reply', {
-      engine: 'kokoro', voice: 'new-voice', rate: 1.2,
+      engine: 'kokoro', voice: 'new-voice', rate: 1.2, animate: true,
     });
     unmount();
   });
@@ -622,7 +623,7 @@ describe('VoiceWidgetGate — once the widget is listening', () => {
     const capture = mocks.startWebSpeechCapture.mock.calls[0][0];
     await act(async () => capture.routeFinal('example utterance'));
     expect(mocks.speakSynthesized).toHaveBeenCalledWith('Example reply', {
-      engine: 'qwen3-tts', voice: 'warm-narrator', rate: 1.1,
+      engine: 'qwen3-tts', voice: 'warm-narrator', rate: 1.1, animate: true,
     });
 
     act(() => emitSocket('voice:config:changed', {
@@ -632,7 +633,7 @@ describe('VoiceWidgetGate — once the widget is listening', () => {
     }));
     await act(async () => capture.routeFinal('second utterance'));
     expect(mocks.speakSynthesized).toHaveBeenLastCalledWith('Example reply', {
-      engine: 'qwen3-tts', voice: 'expressive-alto', rate: 1.25,
+      engine: 'qwen3-tts', voice: 'expressive-alto', rate: 1.25, animate: true,
     });
     unmount();
   });

@@ -28,7 +28,6 @@ import { attachTailcatForwardsToPeers } from './tailcatPeer.js';
 import { reviewEvents } from './review.js';
 import { loopEvents } from './loops.js';
 import { imageGenEvents } from './imageGenEvents.js';
-import { trainingEvents } from './loraTraining/events.js';
 import { mediaPromptHistoryEvents } from './mediaPromptHistory.js';
 import { mediaJobEvents } from './mediaJobQueue/index.js';
 import { importerEvents, getImporterProgressFrames } from './importerEvents.js';
@@ -68,9 +67,8 @@ import { bindSystemActivityIo } from './systemActivityNotify.js';
 import { armSystemActivityWatchers } from './systemActivityWatchers.js';
 import { armReadinessWatchers, registerReadinessSocket } from './readinessNotify.js';
 import { closeGeneratedPreviewsForSocket, registerGeneratedPreviewHandlers } from './generatedPreview/sessions.js';
-import { peerSyncBus } from './peerSyncEventBus.js';
-import { deliverPeerSyncEvent, registerPeerSyncSubscriber, PEER_SYNC_ROOM } from './peerSyncDelivery.js';
-import { broadcastToCommandSubscribers, commandSubscribers, emitToOperators, getIo, setIo, PEER_SOCKET_ROOM } from './socketIo.js';
+import { registerPeerSyncSubscriber, setupPeerSyncEventForwarding } from './peerSyncDelivery.js';
+import { broadcastToCommandSubscribers, commandSubscribers, emitToOperators, emitToOperatorsOn, getIo, setIo, PEER_SOCKET_ROOM } from './socketIo.js';
 import { PEER_INSTANCE_HEADER } from '../lib/peerHttpClient.js';
 
 export { broadcastToCommandSubscribers, getIo };
@@ -140,10 +138,7 @@ function registerSubscriber(socket, namespace, set) {
 // subscribe/unsubscribe events the relay needs to receive `cos:agent:*`
 // broadcasts and realtime `peer:sync:event` frames (room membership only; the
 // frames themselves are filtered per peer and category on the way out). Every
-// other event, including any `shell:*`/host-control event, still requires a
-// real operator session and disconnects a peer-authenticated socket exactly as
-// it did before. Keep this list minimal — do not add a mutating or
-// host-affecting event here.
+// other event disconnects the peer relay, even on a password-free install.
 const PEER_RELAY_ALLOWED_EVENTS = new Set(['cos:subscribe', 'cos:unsubscribe', 'peer:sync:subscribe', 'peer:sync:unsubscribe']);
 
 // Events that execute on the host — an interactive PTY, keystrokes into the
@@ -153,13 +148,14 @@ const PEER_RELAY_ALLOWED_EVENTS = new Set(['cos:subscribe', 'cos:unsubscribe', '
 // LAN/tailnet socket is refused (#8708). Every `shell:*` and `iterm:*` event
 // is included by prefix, as is every `generated-preview:*` event except `close`
 // (open launches a headless browser/ffmpeg, command can record into the
-// gallery); read-only subscriptions stay open to remote sockets.
+// gallery). Command and log subscriptions stream host output.
 // `error:recover` queues a recovery agent that runs shell commands (#8716).
 // Detection can bootstrap a PM2 daemon while inspecting an app-specific home.
 // Voice host slots, dictation, and proactive output require operator authority.
 // The HTTP twin of this set is isHostControlRoute in lib/hostControlRoutes.js.
 const HOST_CONTROL_SOCKET_EVENTS = new Set([
-  'app:update', 'app:standardize', 'app:deploy', 'standardize:start', 'detect:start', 'error:recover', 'logs:subscribe',
+  'app:update', 'app:standardize', 'app:deploy', 'app:deploy:cancel', 'standardize:start', 'detect:start', 'error:recover', 'logs:subscribe',
+  'agent-processes:subscribe', 'processes:subscribe', 'command:subscribe',
   'voice:call:attach', 'voice:call:audio', 'voice:call:hangup', 'voice:capture:start', 'voice:dictation:set',
   'voice:output:available', 'voice:output:claim',
 ]);
@@ -186,6 +182,9 @@ const hostControlRefusal = (event, payload) => {
   if (event === 'standardize:start') return ['standardize:complete', { success: false, ...refusal }];
   if (event === 'detect:start') return ['detect:complete', { success: false, ...refusal }];
   if (event === 'logs:subscribe') return ['logs:error', { ...refusal, processName: payload?.processName }];
+  if (event === 'agent-processes:subscribe') return ['agent-processes:error', refusal];
+  if (event === 'processes:subscribe') return ['processes:error', refusal];
+  if (event === 'command:subscribe') return ['command:error', refusal];
   return [`${event}:error`, { ...refusal, appId: payload?.appId }];
 };
 
@@ -194,12 +193,23 @@ function registerAuthHandlers(socket, _io) {
   // time, so every inbound event re-verifies an enabled session. With auth
   // off, host-control events still need a local connection.
   if (typeof socket.use === 'function') {
-    socket.use(async ([event, payload], next) => {
+    socket.use(async (packet, next) => {
+      const [event, payload] = packet;
       try {
+        if (isPeerSocket(socket) && !PEER_RELAY_ALLOWED_EVENTS.has(event)) {
+          socket.disconnect(true);
+          return;
+        }
         if (!(await isAuthEnabled())) {
           if (!isHostControlSocketEvent(event) || socketHasHostControl(socket)) return next();
           console.log(`🚫 Refused host-control socket event ${event} from a non-local connection`);
-          socket.emit(...hostControlRefusal(event, payload));
+          const [channel, refusal] = hostControlRefusal(event, payload);
+          if (event === 'app:deploy:cancel') {
+            const acknowledge = packet.at(-1);
+            if (typeof acknowledge === 'function') acknowledge({ ok: false, ...refusal });
+          } else {
+            socket.emit(channel, refusal);
+          }
           // After the refusal so the client settles on the error before the close.
           if (event.startsWith('generated-preview:')) await closeGeneratedPreviewsForSocket(socket.id);
           return;
@@ -260,7 +270,7 @@ function registerErrorHandlers(socket, io) {
       console.log(`🔧 Error recovery requested: ${code}`);
 
       const task = await handleErrorRecovery(code, context);
-      io.emit('error:recover:requested', {
+      emitToOperatorsOn(io, 'error:recover:requested', {
         code,
         context,
         taskId: task.id,
@@ -442,37 +452,22 @@ function setupEventForwarding() {
   setupPeerSyncEventForwarding();
 }
 
-// Sync frames go only to the peer-sync room (filtered per peer + category);
-// the history invalidation goes to every socket EXCEPT that room.
-function setupPeerSyncEventForwarding() {
-  peerSyncBus.on('event', (event) => { void deliverPeerSyncEvent(getIo(), event); });
-  peerSyncBus.on('media-history-changed', (payload) => {
-    getIo()?.except(PEER_SYNC_ROOM).emit('media:history:changed', payload);
-  });
-  peerSyncBus.on('collection-primary-changed', (payload) => {
-    getIo()?.except(PEER_SYNC_ROOM).emit('media:collection-primary:changed', payload);
-  });
-  peerSyncBus.on('media-holders-changed', () => {
-    getIo()?.except(PEER_SYNC_ROOM).emit('media:holders:changed', {});
-  });
-}
-
 // Bounded invalidations only: records remain behind their existing HTTP gates.
 function setupRecordEventForwarding() {
   const forward = ({ recordKind, recordId, origin }) => {
     if (recordKind === 'creativeDirectorProject') {
-      getIo()?.emit('creative-director:project:changed', { id: recordId });
+      emitToOperators('creative-director:project:changed', { id: recordId });
     } else if (recordKind === 'creativeCommission') {
-      getIo()?.emit('commission:changed', { id: recordId });
+      emitToOperators('commission:changed', { id: recordId });
     } else if (recordKind === 'storyboard') {
-      getIo()?.emit('storyboard:changed', { id: recordId });
+      emitToOperators('storyboard:changed', { id: recordId });
     } else if (recordKind === 'series') {
-      getIo()?.emit('pipeline-series:changed', { id: recordId });
+      emitToOperators('pipeline-series:changed', { id: recordId });
     } else if (recordKind === 'universe') {
-      getIo()?.emit('universe:changed', { id: recordId });
+      emitToOperators('universe:changed', { id: recordId });
     } else if (recordKind === 'musicVideoProject') {
       // `origin`: the socket whose own write this was; that tab already applied the reply.
-      getIo()?.emit('music-video:project:changed', { id: recordId, ...(origin ? { origin } : {}) });
+      emitToOperators('music-video:project:changed', { id: recordId, ...(origin ? { origin } : {}) });
     }
   };
   recordEvents.on('updated', forward);
@@ -510,11 +505,6 @@ export function initSocket(io) {
 
 function setupProactiveSpeechForwarding() {
   wireProactiveTriggers({ io: getIo() });
-}
-
-// Broadcast to all connected clients
-export function broadcast(io, event, data) {
-  io.emit(event, data);
 }
 
 // Test-only seam (mirrors the `__testing` convention in authGate.js): lets an
@@ -563,12 +553,12 @@ function invalidateMindVisibility() {
 function setupCosEventForwarding() {
   // Dashboard invalidations deliberately omit decisions, prompts and settings.
   for (const event of ['goals:changed', 'backup:changed']) {
-    dashboardEvents.on(event, () => getIo()?.emit(event, {}));
+    dashboardEvents.on(event, () => emitToOperators(event, {}));
   }
   for (const event of ['cos:schedule:changed', 'cos:decisions:changed', 'cos:day:changed']) {
     dashboardEvents.on(event, () => broadcastToCos(event, {}));
   }
-  nativeUsageEvents.on('updated', () => getIo()?.emit('usage:native-history-updated', {}));
+  nativeUsageEvents.on('updated', () => emitToOperators('usage:native-history-updated', {}));
   let memoryModels;
   settingsEvents.on('settings:updated', settings => {
     const nextMemoryModels = JSON.stringify([
@@ -579,15 +569,15 @@ function setupCosEventForwarding() {
       memoryModels = nextMemoryModels;
       emitToOperators('memory:models:changed', {});
     }
-    getIo()?.emit('backup:changed', {});
-    getIo()?.emit('jev:policy', {});
+    emitToOperators('backup:changed', {});
+    emitToOperators('jev:policy', {});
   });
   // A failed restore also invalidates policy: clients must show the strict
   // read failure instead of continuing to offer stale safety settings.
   settingsEvents.on('settings:invalidated', () => {
     memoryModels = undefined;
     emitToOperators('memory:models:changed', {});
-    getIo()?.emit('jev:policy', {});
+    emitToOperators('jev:policy', {});
   });
   for (const [source, target] of [
     ['scheduler:scheduled', 'cos:scheduler:changed'],
@@ -600,7 +590,7 @@ function setupCosEventForwarding() {
     cosEvents.on(source, data => {
       broadcastToCos(target, target === 'cos:scheduler:changed' && typeof data?.id === 'string' ? { id: data.id } : {});
       if (target === 'cos:scheduler:changed' && data?.id === 'backup-daily') {
-        getIo()?.emit('backup:changed', {});
+        emitToOperators('backup:changed', {});
       }
     });
   }
@@ -701,13 +691,11 @@ function setupErrorEventForwarding() {
   });
 }
 
-// Set up apps event forwarding - broadcasts to ALL clients
+// Set up apps event forwarding for operators
 function setupAppsEventForwarding() {
   appsEvents.on('changed', (data) => {
     invalidateMindVisibility();
-    if (getIo()) {
-      getIo().emit('apps:changed', data);
-    }
+    emitToOperators('apps:changed', data);
   });
 }
 
@@ -730,7 +718,7 @@ function broadcastToAgents(event, data) { broadcastToSet(agentSubscribers, event
 // All status/settings writers save meta; sync also signals after document I/O.
 function setupDigitalTwinEventForwarding() {
   for (const event of ['meta:changed', 'sync:completed', 'traits:updated', 'taste:profile-updated', 'interview:analyzed', 'feedback:submitted', 'feedback:weights-recalculated']) {
-    digitalTwinEvents.on(event, () => getIo()?.emit('digital-twin:changed', {}));
+    digitalTwinEvents.on(event, () => emitToOperators('digital-twin:changed', {}));
   }
 }
 
@@ -738,8 +726,8 @@ function setupDigitalTwinEventForwarding() {
 function setupBrainEventForwarding() {
   // Invalidation only: record bodies, local paths and settings stay behind HTTP.
   const changed = (type, id) => {
-    getIo()?.emit('brain:changed', { type, id });
-    if (type === 'links') getIo()?.emit('brain:links:changed', { id });
+    emitToOperators('brain:changed', { type, id });
+    if (type === 'links') emitToOperators('brain:links:changed', { id });
   };
   for (const type of BRAIN_ENTITY_TYPES) {
     brainEvents.on(`${type}:upserted`, ({ id }) => changed(type, id));
@@ -784,7 +772,7 @@ function broadcastToInstances(event, data) { broadcastToSet(instanceSubscribers,
 function setupInstanceEventForwarding() {
   let peerUpdateSequence = 0;
   // Invalidation only: the copyable serve capability stays behind the status API.
-  instanceEvents.on('tailcat:serve:changed', () => getIo()?.emit('tailcat:serve:changed', {}));
+  instanceEvents.on('tailcat:serve:changed', () => emitToOperators('tailcat:serve:changed', {}));
   // Redact each peer's stored proxy password before it reaches the browser
   // (keep username + hasPassword) — same secret-stripping the GET /instances
   // route applies. `data` is the full peers array.
@@ -837,13 +825,13 @@ function setupPeerAgentEventForwarding() {
 function setupReviewEventForwarding() {
   // Global invalidations reach the bell/dashboard even without a CoS room
   // subscription. They carry no record payload and are never peer-forwarded.
-  for (const event of ['tasks:changed', 'agent:completed', 'agent:feedback', 'memory:approved', 'memory:rejected']) {
+  for (const event of ['tasks:changed', 'agent:completed', 'agent:feedback', 'memory:approved', 'memory:rejected', 'memory:deleted', 'memory:approval-needed']) {
     cosEvents.on(event, () => {
-      if (getIo()) getIo().emit('review:queue:changed');
+      emitToOperators('review:queue:changed');
     });
   }
   reviewEvents.on('queue:changed', () => {
-    if (getIo()) getIo().emit('review:queue:changed');
+    emitToOperators('review:queue:changed');
   });
   reviewEvents.on('item:created', (data) => {
     emitToOperators('review:item:created', data?.metadata?.privateSecurity ? { id: data.id, metadata: { privateSecurity: true } } : data);
@@ -864,14 +852,10 @@ function setupReviewEventForwarding() {
 // Set up update event forwarding
 function setupUpdateEventForwarding() {
   updateEvents.on('update:available', (data) => {
-    if (getIo()) {
-      getIo().emit('portos:update:available', data);
-    }
+    emitToOperators('portos:update:available', data);
   });
   updateEvents.on('update:checked', (data) => {
-    if (getIo()) {
-      getIo().emit('portos:update:checked', data);
-    }
+    emitToOperators('portos:update:checked', data);
   });
 }
 
@@ -972,14 +956,14 @@ function setupMediaGenEventForwarding() {
   // media queue also runs `training` (LoRA) jobs, which have their own UI and NO
   // `*-gen:*` listener — so they must NOT be forwarded onto the image channel
   // (returning null skips them) rather than falling through to `image-gen:*`.
-  const genEvtPrefix = (kind) =>
-    kind === 'video' ? 'video-gen'
-      : kind === 'image' ? 'image-gen'
-        : kind === 'audio' ? 'audio-gen'
+  const genEvtPrefix = (job) =>
+    job.kind === 'video' || (job.kind === 'video-upscale' && job.params?.musicVideo?.sceneId) ? 'video-gen'
+      : job.kind === 'image' ? 'image-gen'
+        : job.kind === 'audio' ? 'audio-gen'
           : null;
 
   spriteEvents.on('changed', ({ recordId }) => {
-    getIo()?.emit('sprites:changed', { recordId });
+    emitToOperators('sprites:changed', { recordId });
   });
   // Queue lifecycle events carry the persisted job's routing tags. Generation
   // transport events can precede the queue's terminal state, so do not use them.
@@ -987,22 +971,19 @@ function setupMediaGenEventForwarding() {
     mediaJobEvents.on(event, (job) => {
       for (const tagKey of ['spriteRef', 'spriteWalk', 'spriteAnimation']) {
         const recordId = job.params?.[tagKey]?.recordId;
-        if (recordId) getIo()?.emit('sprites:jobs-changed', { recordId, kind: job.kind, tagKey });
+        if (recordId) emitToOperators('sprites:jobs-changed', { recordId, kind: job.kind, tagKey });
       }
     });
   }
 
   mediaJobEvents.on('reference-sheet:changed', ({ universeId, entryId, jobId, variant, status }) => {
-    getIo()?.emit('reference-sheet:changed', { universeId, entryId, jobId, variant, status });
+    emitToOperators('reference-sheet:changed', { universeId, entryId, jobId, variant, status });
   });
   mediaJobEvents.on('progress', ({ id, startedAt, progress, statusMsg, etaMs }) => {
     broadcastToMediaQueue('media-jobs:progress', { id, startedAt, progress, statusMsg, etaMs });
   });
   mediaJobEvents.on('changed', () => {
-    getIo()?.emit('media-jobs:changed', {});
-  });
-  trainingEvents.on('checkpoints:changed', ({ runId }) => {
-    getIo()?.emit('training:checkpoints:changed', { runId });
+    emitToOperators('media-jobs:changed', {});
   });
 
   // Bridge media-job cancellation onto a `*-gen:canceled` socket event keyed by
@@ -1016,11 +997,11 @@ function setupMediaGenEventForwarding() {
   // consumers (catalog et al.) uniformly — no per-domain event needed. For a
   // job canceled *while running* this fires alongside the gen module's `failed`;
   // both clear the spinner and the handlers are idempotent.
-  mediaPromptHistoryEvents.on('changed', () => { getIo()?.emit('media-prompt-history:changed', {}); });
+  mediaPromptHistoryEvents.on('changed', () => { emitToOperators('media-prompt-history:changed', {}); });
 
   mediaJobEvents.on('canceled', (job) => {
     if (!getIo() || !job?.id) return;
-    const prefix = genEvtPrefix(job.kind);
+    const prefix = genEvtPrefix(job);
     if (!prefix) return;
     emitToOperators(`${prefix}:canceled`, { generationId: job.id });
   });
@@ -1037,7 +1018,7 @@ function setupMediaGenEventForwarding() {
   // settle the spinner to 'failed' and the handler is idempotent.
   mediaJobEvents.on('failed', (job) => {
     if (!getIo() || !job?.id) return;
-    const prefix = genEvtPrefix(job.kind);
+    const prefix = genEvtPrefix(job);
     if (!prefix) return;
     emitToOperators(`${prefix}:failed`, { generationId: job.id, error: job.error });
   });

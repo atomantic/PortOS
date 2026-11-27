@@ -1,6 +1,6 @@
 /** New Three candidates keep the spatial renderer behind the shared producer. */
 import { installGeneratedPlayback } from './generatedCanvasPlayback.js';
-import { installLayeredPreviewPlayback } from './previewPlaybackRuntime.js';
+import { layeredPreviewPlaybackSource } from './previewPlaybackRuntime.js';
 
 const BRIDGE = `
 const draw = composition.draw;
@@ -47,7 +47,7 @@ globalThis.portosComposition = composition;
     canvas.width = 0; canvas.height = 0; overlay.width = 0; overlay.height = 0;
     stagedWorld.width = 0; stagedWorld.height = 0;
   },
-}, ${installLayeredPreviewPlayback.toString()});
+}, ${layeredPreviewPlaybackSource});
 `;
 
 /** Adapt only the canonical engine copied into a deliberately new candidate. */

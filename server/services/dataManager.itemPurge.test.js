@@ -21,6 +21,8 @@ vi.mock('../lib/fileUtils.js', async (importOriginal) => {
 });
 
 vi.mock('../lib/db.js', () => ({ query: vi.fn() }));
+vi.mock('./mkserveRuntimeManager.js', () => ({ getMkserveRuntimeStatus: async () => ({ supported: false }) }));
+vi.mock('./splashRuntimeStatus.js', () => ({ getSplashRuntimeStatus: async () => ({ installed: true, supported: true, state: 'running' }) }));
 const { query } = await import('../lib/db.js');
 
 const { purgeCategory, getCategoryDetail } = await import('./dataManager.js');
@@ -95,6 +97,62 @@ describe('purgeCategory — item-scoped categories (#3327)', () => {
   });
 });
 
+describe('Data Manager rebuildable cache policy', () => {
+  beforeEach(() => {
+    for (const dir of ['runtimes/splash', 'mkserve', 'codex-usage-inventory', 'unknown']) {
+      mkdirSync(dataPath('cache', dir), { recursive: true });
+      writeFileSync(dataPath('cache', dir, 'keep.bin'), 'fixture');
+    }
+    writeFileSync(dataPath('cache', 'accelerando.html'), 'book');
+    writeFileSync(dataPath('cache', 'runtime-update-review.json'), '{}');
+    mkdirSync(dataPath('codex-sources'));
+    writeFileSync(dataPath('codex-sources', 'session.jsonl'), 'source');
+  });
+
+  it('shows runtime state separately from the rebuildable scan cache', async () => {
+    const detail = await getCategoryDetail('cache');
+    expect(detail).toMatchObject({ mixed: true, purgeScope: 'items' });
+    const entries = Object.fromEntries(detail.items.map(item => [item.name, item]));
+    expect(entries.runtimes).toMatchObject({
+      canPurge: false,
+      sourceHref: '/models/llms-runtimes',
+      description: expect.stringContaining('Splash: running'),
+    });
+    expect(entries.mkserve.canPurge).toBe(false);
+    expect(entries['codex-usage-inventory']).toMatchObject({ canPurge: true, description: expect.stringContaining('session logs') });
+    expect(entries.unknown.canPurge).toBe(false);
+  });
+
+  it('blocks old bulk requests and direct removal of runtime, unknown, or state entries', async () => {
+    await expect(purgeCategory('cache')).rejects.toMatchObject({ code: 'CATEGORY_ITEM_PURGE_ONLY' });
+    for (const entry of ['runtimes', 'mkserve', 'unknown', 'runtime-update-review.json']) {
+      await expect(purgeCategory('cache', { subPath: entry })).rejects.toMatchObject({ code: 'CATEGORY_ITEM_PROTECTED' });
+      expect(existsSync(dataPath('cache', entry))).toBe(true);
+    }
+    await expect(purgeCategory('cache', { subPath: 'runtimes/splash' })).rejects.toMatchObject({ code: 'VALIDATION_ERROR' });
+    expect(existsSync(dataPath('cache', 'runtimes', 'splash', 'keep.bin'))).toBe(true);
+  });
+
+  it('clears a single rebuildable entry without removing Codex session logs or runtime data', async () => {
+    await expect(purgeCategory('cache', { subPath: 'codex-usage-inventory' }))
+      .resolves.toEqual({ category: 'cache', subPath: 'codex-usage-inventory' });
+    expect(existsSync(dataPath('cache', 'codex-usage-inventory'))).toBe(false);
+    expect(existsSync(dataPath('cache', 'runtimes', 'splash', 'keep.bin'))).toBe(true);
+    expect(existsSync(dataPath('codex-sources', 'session.jsonl'))).toBe(true);
+    expect(existsSync(dataPath('cache', 'accelerando.html'))).toBe(true);
+  });
+
+  it('refuses a redirected allowed entry or directory using an allowed filename', async () => {
+    rmSync(dataPath('cache', 'codex-usage-inventory'), { recursive: true });
+    symlinkSync(dataPath('codex-sources'), dataPath('cache', 'codex-usage-inventory'), 'junction');
+    await expect(purgeCategory('cache', { subPath: 'codex-usage-inventory' })).rejects.toMatchObject({ code: 'CATEGORY_ITEM_PROTECTED' });
+    expect(existsSync(dataPath('codex-sources', 'session.jsonl'))).toBe(true);
+    rmSync(dataPath('cache', 'accelerando.html'));
+    mkdirSync(dataPath('cache', 'accelerando.html'));
+    await expect(purgeCategory('cache', { subPath: 'accelerando.html' })).rejects.toMatchObject({ code: 'CATEGORY_ITEM_PROTECTED' });
+  });
+});
+
 describe('purgeCategory — category-scoped categories keep their behavior', () => {
   it('purges local model assessments and keeps jev decision history', async () => {
     await purgeCategory('local-llm');
@@ -157,19 +215,25 @@ describe('purgeCategory — category-scoped categories keep their behavior', () 
 
 
 describe('training-run source details', () => {
-  it('resolves stored run names and dataset links while retaining orphan folders', async () => {
-    for (const id of ['example-run', 'orphan-run']) {
+  it('resolves stored run names while retaining orphan folders', async () => {
+    for (const id of ['example-run', 'interrupted-run', 'orphan-run']) {
       mkdirSync(dataPath('training-runs', id), { recursive: true });
       writeFileSync(dataPath('training-runs', id, 'checkpoint.bin'), 'checkpoint');
     }
     query.mockResolvedValue({ rows: [{ data: {
       id: 'example-run', name: 'Example portrait study', datasetId: 'example-dataset',
       baseModelId: 'example-model', status: 'completed',
+    } }, { data: {
+      id: 'interrupted-run', baseModelId: 'example-model', status: 'running',
     } }] });
     const detail = await getCategoryDetail('training-runs');
     expect(detail.items.find(item => item.name === 'example-run')).toMatchObject({
-      label: 'Example portrait study', sourceHref: '/models/training/example-dataset',
+      label: 'Example portrait study',
       description: 'example-model · completed',
+    });
+    expect(detail.items.find(item => item.name === 'example-run')).not.toHaveProperty('sourceHref');
+    expect(detail.items.find(item => item.name === 'interrupted-run')).toMatchObject({
+      description: 'example-model · last recorded as running',
     });
     expect(detail.items.find(item => item.name === 'orphan-run')).toMatchObject({ sourceUnavailable: 'Run record no longer available' });
     await expect(purgeCategory('training-runs', { subPath: 'example-run' })).rejects.toMatchObject({ status: 403, code: 'CATEGORY_NOT_PURGEABLE' });

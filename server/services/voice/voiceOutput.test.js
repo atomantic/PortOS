@@ -1,4 +1,7 @@
 import { describe, it, expect, beforeEach, vi } from 'vitest';
+import { isAuthEnabled, verifyRequestSession } from '../auth.js';
+import { PEER_SOCKET_ROOM } from '../socketIo.js';
+
 import {
   registerVoiceOutputCandidate,
   claimVoiceOutput,
@@ -8,10 +11,19 @@ import {
   __resetVoiceOutput,
 } from './voiceOutput.js';
 
+vi.mock('../auth.js', () => ({
+  isAuthEnabled: vi.fn(),
+  verifyPassword: vi.fn(),
+  verifyRequestSession: vi.fn(),
+}));
+
 // Minimal socket double: records emitted events and carries a stable id +
 // `connected` flag (real Socket.IO sockets expose both).
-const makeSocket = (id) => ({
+const makeSocket = (id, { local = true, session, peer = false } = {}) => ({
   id,
+  data: { portosLocalConnection: local },
+  rooms: new Set(peer ? [PEER_SOCKET_ROOM] : []),
+  handshake: { headers: session ? { cookie: `portos_auth=${session}` } : {} },
   connected: true,
   emitted: [],
   emit(event, payload) { this.emitted.push({ event, payload }); },
@@ -19,23 +31,62 @@ const makeSocket = (id) => ({
 
 const emittedEvents = (sock) => sock.emitted.map((e) => e.event);
 
+const makeIo = (...sockets) => ({
+  emit: vi.fn(),
+  sockets: { sockets: new Map(sockets.map((socket) => [socket.id, socket])) },
+});
+const speech = { sentence: 'Example reminder', wav: Buffer.alloc(8) };
+
 describe('voiceOutput single-recipient routing', () => {
-  beforeEach(() => __resetVoiceOutput());
+  beforeEach(() => {
+    __resetVoiceOutput();
+    isAuthEnabled.mockReset().mockResolvedValue(false);
+    verifyRequestSession.mockReset().mockResolvedValue(null);
+  });
 
   it('getVoiceOutputSocket is null with no candidates', () => {
     expect(getVoiceOutputSocket()).toBe(null);
   });
 
-  it('emitVoiceOutput falls back to io.emit only when no candidate is announced', () => {
-    // Backward-compat path: a pre-upgrade client speaks the same voice:speak
-    // event but never announces, so with no candidate we broadcast rather than
-    // silently drop its proactive audio. In normal operation a tab always
-    // announces, so this path is not taken (see the routing test below).
-    const io = { emit: vi.fn() };
-    const res = emitVoiceOutput(io, 'voice:speak', { sentence: 'hi' });
-    expect(io.emit).toHaveBeenCalledTimes(1);
-    expect(io.emit).toHaveBeenCalledWith('voice:speak', { sentence: 'hi' });
-    expect(res).toMatchObject({ delivered: true, broadcast: true });
+  it('delivers fallback speech to an older local browser on a password-free install', async () => {
+    const local = makeSocket('local');
+    const remote = makeSocket('remote', { local: false });
+    const peer = makeSocket('peer', { peer: true });
+    const io = makeIo(local, remote, peer);
+
+    expect(await emitVoiceOutput(io, 'voice:speak', speech)).toEqual({ delivered: true, fallbackCount: 1 });
+    expect(local.emitted).toEqual([{ event: 'voice:speak', payload: speech }]);
+    expect(remote.emitted).toEqual([]);
+    expect(peer.emitted).toEqual([]);
+    expect(io.emit).not.toHaveBeenCalled();
+  });
+
+  it('delivers fallback speech only to currently verified operator sessions when auth is enabled', async () => {
+    isAuthEnabled.mockResolvedValue(true);
+    verifyRequestSession.mockImplementation(async ({ headers }) =>
+      headers.cookie === 'portos_auth=active-fixture' ? 'active-fixture' : null);
+    const operator = makeSocket('operator', { local: false, session: 'active-fixture' });
+    const expired = makeSocket('expired', { session: 'expired-fixture' });
+    const io = makeIo(operator, expired);
+
+    expect(await emitVoiceOutput(io, 'voice:speak', speech)).toEqual({ delivered: true, fallbackCount: 1 });
+    expect(operator.emitted).toEqual([{ event: 'voice:speak', payload: speech }]);
+    expect(expired.emitted).toEqual([]);
+    expect(io.emit).not.toHaveBeenCalled();
+  });
+
+  it('skips delivery when the registered primary has expired and no eligible sockets remain', async () => {
+    isAuthEnabled.mockResolvedValue(true);
+    const expired = makeSocket('expired', { session: 'expired-fixture' });
+    const peer = makeSocket('peer', { peer: true });
+    const io = makeIo(expired, peer);
+    claimVoiceOutput(expired);
+    expired.emitted.length = 0;
+
+    expect(await emitVoiceOutput(io, 'voice:speak', speech)).toEqual({ delivered: false });
+    expect(expired.emitted).toEqual([]);
+    expect(peer.emitted).toEqual([]);
+    expect(io.emit).not.toHaveBeenCalled();
   });
 
   it('registering a candidate does NOT auto-steal primary, but is promoted lazily', () => {
@@ -50,20 +101,22 @@ describe('voiceOutput single-recipient routing', () => {
     expect(emittedEvents(a)).toContain('voice:output:primary');
   });
 
-  it('emitVoiceOutput routes to the single primary, not other candidates', () => {
+  it('routes directly to the authorized primary with no fallback copies', async () => {
     const a = makeSocket('a');
     const b = makeSocket('b');
     registerVoiceOutputCandidate(a);
     registerVoiceOutputCandidate(b);
     claimVoiceOutput(b);
 
-    const io = { emit: vi.fn() };
-    const res = emitVoiceOutput(io, 'voice:speak', { sentence: 'hello' });
+    const legacy = makeSocket('legacy');
+    const io = makeIo(a, b, legacy);
+    const res = await emitVoiceOutput(io, 'voice:speak', speech);
 
     expect(io.emit).not.toHaveBeenCalled();
     expect(res).toMatchObject({ delivered: true, socketId: 'b' });
-    expect(a.emitted.filter((e) => e.event === 'voice:speak')).toHaveLength(0);
-    expect(b.emitted.filter((e) => e.event === 'voice:speak')).toHaveLength(1);
+    expect(a.emitted.filter((e) => e.event === 'voice:speak')).toEqual([]);
+    expect(b.emitted.filter((e) => e.event === 'voice:speak')).toEqual([{ event: 'voice:speak', payload: speech }]);
+    expect(legacy.emitted).toEqual([]);
   });
 
   it('claim hands off primary: detaches the previous holder, notifies the new one', () => {
@@ -163,7 +216,7 @@ describe('voiceOutput single-recipient routing', () => {
     expect(getVoiceOutputSocket()).toBe(b);
   });
 
-  it('emitVoiceOutput returns not-delivered when io is absent and no candidate', () => {
-    expect(emitVoiceOutput(null, 'voice:speak', {})).toMatchObject({ delivered: false });
+  it('emitVoiceOutput returns not-delivered when io is absent and no candidate', async () => {
+    expect(await emitVoiceOutput(null, 'voice:speak', {})).toMatchObject({ delivered: false });
   });
 });

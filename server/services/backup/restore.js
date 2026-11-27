@@ -6,10 +6,11 @@
 
 import { lstat, readdir, rename, stat } from 'fs/promises';
 import { basename, dirname, join, resolve, relative, isAbsolute } from 'path';
-import { PATHS, readJSONFileStrict, sha256File } from '../../lib/fileUtils.js';
+import { PATHS, readJSONFileStrict, safeJSONParse, sha256File, sha256Text } from '../../lib/fileUtils.js';
 import { acquireBackupSnapshotCut } from '../../lib/backupSnapshotBoundary.js';
 import { APPLIED_LEDGER_RELPATH, LEGACY_APPLIED_LEDGER_RELPATH } from '../../../scripts/lib/migrationLedger.js';
 import { ServerError } from '../../lib/errorHandler.js';
+import { getAIToolkitInstance } from '../../lib/aiToolkitState.js';
 import { isSafeSubdirFilter } from '../../lib/sharedSchemas.js';
 import { reloadSettings, withLiveSettingsRestore } from '../settings.js';
 import { invalidateAllCaches as invalidateBrainCaches } from '../brainStorage.js';
@@ -23,10 +24,13 @@ import {
   legacyDbMetadataMessage, manifestDataEntries, resolveSnapshotPath, usesFileEscapeHatch, withSnapshotRead,
 } from './snapshots.js';
 import {
-  IDENTITY_FILE, IDENTITY_RSYNC_EXCLUDE, OS_METADATA_RSYNC_EXCLUDES, RESTORE_PRESERVED_RSYNC_EXCLUDES, isIdentityPath,
+  IDENTITY_FILE, OS_METADATA_RSYNC_EXCLUDES, PRIVATE_DIRECTORY_RSYNC_EXCLUDE, RESTORE_CREDENTIAL_FILES,
+  RESTORE_CREDENTIAL_RSYNC_EXCLUDES, RESTORE_PRESERVED_RSYNC_EXCLUDES, isIdentityPath,
   isOsMetadataFile, isRestorePreservedPath, restoreScopeIsPreservedFile,
 } from './excludes.js';
 import { BACKUP_PROCESS_IDLE_TIMEOUT_MS, runRsync } from './rsync.js';
+import { readCredentialFile, readSnapshotCredentials, scopeTouchesPrivateDirectory, transferWithCredentials } from './restoreCredentials.js';
+import { requireManagedVisitorCredentialRestore } from '../bootHookRegistry.js';
 
 // `-ii` heartbeats once per file rsync finishes deciding about, so a single
 // file whose `--checksum` digest outlasts the idle deadline still emits
@@ -63,13 +67,18 @@ async function clearRestoredImageTombstones(subdirFilter) {
   });
 }
 
-async function reconcileLiveFileRestore(subdirFilter) {
+async function reconcileLiveFileRestore(subdirFilter, ownerRefreshes) {
   const restoresMedia = restoresMediaScope(subdirFilter);
+  // Restored cron registrations read the configured timezone from the settings cache.
+  // Still refresh every owner if settings fail, and report each failure once.
+  const settingsReload = Promise.resolve().then(reloadSettings);
+  const settingsSettled = Promise.allSettled([settingsReload]);
   const refreshes = [
+    ...ownerRefreshes.map(({ label, run }) => ({ label, run: () => settingsSettled.then(() => run()) })),
     ...(!subdirFilter || subdirFilter === 'brain' || subdirFilter.startsWith('brain/')
       ? [{ label: 'Brain cache invalidation', run: invalidateBrainCaches }]
       : []),
-    { label: 'settings reload', run: reloadSettings },
+    { label: 'settings reload', run: () => settingsReload },
     ...(restoresMedia && !usesFileEscapeHatch()
       ? [{ label: 'media index rebuild', run: async () => {
         const { reconcileMediaAssets } = await import('../mediaAssetIndex/db.js');
@@ -102,18 +111,18 @@ async function reconcileLiveFileRestore(subdirFilter) {
 
   if (failures.length > 0) {
     throw new Error(
-      `Live restore cache reconciliation failed (${failures.join('; ')}). Restart PortOS before relying on restored settings, Brain data or media.`,
+      `Live restore cache reconciliation failed (${failures.join('; ')}). Restart PortOS before relying on restored data.`,
       { cause: results.find(result => result.status === 'rejected').reason },
     );
   }
 }
-const IDENTITY_ABSENT = Symbol('identity-absent');
+const IDENTITY_UNREADABLE = Symbol('identity-unreadable');
 
-async function readIdentityFile(path) {
-  const { ok, value } = await readJSONFileStrict(path, IDENTITY_ABSENT, { logError: false });
-  if (ok && value === IDENTITY_ABSENT) return { present: false, readable: true, instanceId: null };
-  const instanceId = ok ? value?.self?.instanceId : null;
-  return { present: true, readable: ok, instanceId: typeof instanceId === 'string' && instanceId ? instanceId : null };
+function parseIdentityId(bytes) {
+  const value = safeJSONParse(bytes.toString('utf8'), IDENTITY_UNREADABLE);
+  if (value === IDENTITY_UNREADABLE) return value;
+  const id = value?.self?.instanceId;
+  return typeof id === 'string' && id ? id : null;
 }
 
 /**
@@ -122,17 +131,23 @@ async function readIdentityFile(path) {
  * unreadable live file counts as an identity (fail closed): only adoption
  * replaces it, since its owner cannot be known.
  */
-async function resolveIdentityRestore(srcDir, subdirFilter, adoptIdentity) {
+async function resolveIdentityRestore(snapshotBytes, adoptIdentity) {
   const notInstalled = { installs: false, preserved: null, adopted: null };
-  if (subdirFilter && !isIdentityPath(subdirFilter)) return notInstalled;
-  const snapshot = await readIdentityFile(join(srcDir, IDENTITY_FILE));
-  if (!snapshot.present) return notInstalled;
-  const live = await readIdentityFile(join(PATHS.data, IDENTITY_FILE));
-  const liveHasIdentity = live.present && (live.instanceId !== null || !live.readable);
-  if (!liveHasIdentity || (live.instanceId !== null && live.instanceId === snapshot.instanceId)) {
+  if (!snapshotBytes) return notInstalled;
+  const snapshotId = parseIdentityId(snapshotBytes);
+  const liveId = await readCredentialFile(join(PATHS.data, IDENTITY_FILE))
+    .then(bytes => bytes && parseIdentityId(bytes))
+    .catch(error => {
+      if (error.code === 'BACKUP_RESTORE_UNSAFE_CREDENTIAL') throw error;
+      return IDENTITY_UNREADABLE;
+    });
+  if (liveId !== IDENTITY_UNREADABLE && (liveId === null || liveId === snapshotId)) {
     return { installs: true, preserved: null, adopted: null };
   }
-  const ids = { liveInstanceId: live.instanceId, snapshotInstanceId: snapshot.instanceId };
+  const ids = {
+    liveInstanceId: liveId === IDENTITY_UNREADABLE ? null : liveId,
+    snapshotInstanceId: snapshotId === IDENTITY_UNREADABLE ? null : snapshotId,
+  };
   return adoptIdentity
     ? { installs: true, preserved: null, adopted: ids }
     : { ...notInstalled, preserved: ids };
@@ -215,7 +230,7 @@ async function assertRestoreStorageCompatible(srcDir, inventory, snapshotId) {
   }
 }
 
-async function verifySnapshotFiles(snapshotDir, srcDir, snapshotId, subdirFilter, { preserveIdentity = false } = {}) {
+async function verifySnapshotFiles(snapshotDir, srcDir, snapshotId, subdirFilter, { preserveIdentity, credentials }) {
   const isSkippedPath = preserveIdentity
     ? path => isRestorePreservedPath(path) || isIdentityPath(path)
     : isRestorePreservedPath;
@@ -264,10 +279,18 @@ async function verifySnapshotFiles(snapshotDir, srcDir, snapshotId, subdirFilter
   if (!inventory) throw snapshotFileIntegrityError(snapshotId);
   await assertRestoreStorageCompatible(srcDir, inventory, snapshotId);
   const { paths: snapshotPaths, largestFileBytes } = inventory;
-  const unmanifested = snapshotPaths.find(entry => !dataPaths.has(entry));
+  const unmanifested = snapshotPaths.find(entry => !dataPaths.has(entry))
+    ?? [...credentials.keys()].find(entry => !dataPaths.has(entry));
   if (unmanifested) throw snapshotFileIntegrityError(snapshotId, unmanifested);
 
   for (const { filePath, expectedHash } of selected) {
+    const name = relative(srcDir, filePath).replaceAll('\\', '/');
+    if (RESTORE_CREDENTIAL_FILES.includes(name)) {
+      // Verify the exact buffer the private writer will publish.
+      const bytes = credentials.get(name);
+      if (!bytes || sha256Text(bytes) !== expectedHash) throw snapshotFileIntegrityError(snapshotId);
+      continue;
+    }
     const info = await lstat(filePath).catch(() => null);
     if (!info || (!info.isFile() && !info.isSymbolicLink())) {
       throw snapshotFileIntegrityError(snapshotId);
@@ -332,7 +355,7 @@ async function restoreSnapshotAdmitted(destPath, snapshotId, { dryRun, requested
   // never promises a restore that execution would silently skip.
   if (restoreScopeIsPreservedFile(subdirFilter)) {
     throw new ServerError(
-      'The selected path is machine-local authority, recovery data or unpublished scratch and is excluded from restore. Select a backed-up application record or directory. Reconcile local authority and unresolved owners on this machine (see docs/STORAGE_RECOVERY.md).',
+      'The selected path is machine-local authority, recovery data or unpublished scratch and is excluded from restore. Select a backed-up application record or directory. Reconcile local authority and unresolved owners on this machine (see docs/STORAGE.md#workflow-maintenance-journal).',
       { status: 400, code: 'BACKUP_RESTORE_MACHINE_LOCAL' },
     );
   }
@@ -348,15 +371,17 @@ async function restoreSnapshotAdmitted(destPath, snapshotId, { dryRun, requested
 async function restoreHeldSnapshot({ snapshotDir, currentSource }, snapshotId, { dryRun, subdirFilter, adoptIdentity }) {
   await assertSnapshotRestorable(snapshotDir, snapshotId, currentSource);
   const srcDir = join(snapshotDir, 'data');
-  const identity = await resolveIdentityRestore(srcDir, subdirFilter, adoptIdentity);
-  // Keyed on the approval, not on a mismatch: a snapshot instances.json that
-  // appears after the check must not reach the live file unfenced.
-  const preserveIdentity = !identity.installs;
 
   // Run the preflight independently for preview and execution. A preview is an
   // aid to confirmation, not an integrity lease: snapshot bytes may change
   // between requests, especially on removable or network-backed destinations.
-  const verification = await verifySnapshotFiles(snapshotDir, srcDir, snapshotId, subdirFilter, { preserveIdentity });
+  const credentials = await readSnapshotCredentials(srcDir, subdirFilter);
+  // Decide adoption from the same bytes integrity verification and publication
+  // use. The identity fence rechecks the live side against those staged bytes.
+  const snapshotIdentity = credentials.get(IDENTITY_FILE);
+  const identity = await resolveIdentityRestore(snapshotIdentity, adoptIdentity);
+  if (!identity.installs) credentials.delete(IDENTITY_FILE);
+  const verification = await verifySnapshotFiles(snapshotDir, srcDir, snapshotId, subdirFilter, { preserveIdentity: !identity.installs, credentials });
   // A full restore installs the snapshot's ledger too, so the next boot re-runs
   // whatever it lacks; only a folder restore can leave restored files behind
   // migrations the live ledger already records.
@@ -401,13 +426,13 @@ async function restoreHeldSnapshot({ snapshotDir, currentSource }, snapshotId, {
   //
   // Before the include chain below: rsync takes the FIRST matching rule, so an
   // exclude placed after `--include=/<filter>/***` would never be consulted.
-  // These are the files `snapshotScopeInventory` skips — keeping the two in
-  // step is what preserves "everything transferred was verified".
-  // Same placement rule: excluded before the include chain, and kept out of the
-  // manifest selection and inventory above, so what rsync may write is exactly
-  // what the preflight verified.
+  // The inventory skips preserved paths. Credential records stay in the
+  // inventory and are excluded here because they have their own writer.
   const flags = ['-ii', '--checksum', ...OS_METADATA_RSYNC_EXCLUDES, ...RESTORE_PRESERVED_RSYNC_EXCLUDES,
-    ...(preserveIdentity ? [IDENTITY_RSYNC_EXCLUDE] : [])];
+    ...RESTORE_CREDENTIAL_RSYNC_EXCLUDES,
+    // The directory-wide include for a selective restore also matches parent
+    // metadata. Keep private directory permissions outside unrelated scopes.
+    ...(!scopeTouchesPrivateDirectory(subdirFilter) ? [PRIVATE_DIRECTORY_RSYNC_EXCLUDE] : [])];
   if (dryRun) flags.push('--dry-run');
   if (subdirFilter) {
     // Anchored with a leading `/` — rsync matches an unanchored pattern against
@@ -426,7 +451,16 @@ async function restoreHeldSnapshot({ snapshotDir, currentSource }, snapshotId, {
   // file whose digest outlasts the default deadline emits no `-ii` heartbeat
   // until it finishes (#7302), so this restore's idle floor scales to it.
   const idleTimeoutMs = restoreIdleTimeoutMs(verification.largestFileBytes);
-  const transferFiles = () => runRsync(srcDir, PATHS.data, flags, { idleTimeoutMs });
+  const transferFiles = () => {
+    const transfer = () => transferWithCredentials(credentials, PATHS.data,
+      () => runRsync(srcDir, PATHS.data, flags, { idleTimeoutMs }), { dryRun, scope: subdirFilter });
+    const withLiveProvidersRestore = getAIToolkitInstance()?.withLiveProvidersRestore;
+    // Only the toolkit's legacy provider file shares this write queue. Hold it
+    // through publication and invalidate its cached file after the transfer.
+    return !dryRun && credentials.has('providers.json') && withLiveProvidersRestore
+      ? withLiveProvidersRestore(transfer)
+      : transfer();
+  };
   // A preview holds no owner, fences no identity and reconciles no cache.
   if (dryRun) {
     const changedFiles = await transferFiles();
@@ -440,13 +474,13 @@ async function restoreHeldSnapshot({ snapshotDir, currentSource }, snapshotId, {
   // Conversion parks live stores, so it runs only after a successful transfer,
   // and before reconciliation so the Brain caches drop the parked records. It
   // follows ledger adoption so a replay reads the ledger the boot would read.
-  const changedFiles = await withLiveFileRestoreOwners(scope, srcDir, () => transferAndReconcileLiveFiles({
-    subdirFilter,
+  const changedFiles = await withLiveFileRestoreOwners(scope, srcDir, ownerRefreshes => transferAndReconcileLiveFiles({
+    subdirFilter, ownerRefreshes,
     transfer: async () => {
       const changed = await transferWithIdentityFence({
         installsIdentity: identity.installs,
         assertIdentityUnchanged: async () => {
-          const current = await resolveIdentityRestore(srcDir, subdirFilter, adoptIdentity);
+          const current = await resolveIdentityRestore(snapshotIdentity, adoptIdentity);
           if (JSON.stringify(current) !== JSON.stringify(identity)) throw identityChangedError();
         },
         transferFiles,
@@ -518,11 +552,21 @@ async function adoptRestoredLegacyLedger(legacyLedger) {
   }
   const stamp = new Date().toISOString().replace(/[:.]/g, '-');
   const parkedAs = `${basename(current)}.pre-restore-${stamp}`;
-  const parked = await rename(current, join(dirname(current), parkedAs)).then(
+  const parkedPath = join(dirname(current), parkedAs);
+  const parked = await rename(current, parkedPath).then(
     () => true,
     error => { if (error.code === 'ENOENT') return false; throw error; },
   );
-  await rename(legacy, current);
+  try {
+    await rename(legacy, current);
+  } catch (error) {
+    if (parked) {
+      await rename(parkedPath, current).catch(rollbackError => {
+        console.error(`❌ Restore could not roll back the live migration ledger from ${parkedAs}: ${rollbackError.code ?? 'unknown error'}`);
+      });
+    }
+    throw error;
+  }
   console.log(`📦 Restore adopted the snapshot's pre-May-2026 migration ledger${parked ? `; previous ledger parked as ${parkedAs}` : ''}`);
   return { status: 'adopted', parkedAs: parked ? parkedAs : null };
 }
@@ -562,6 +606,15 @@ async function snapshotLegacyCosConfig(srcDir, scope) {
   return config && typeof config === 'object' && !Array.isArray(config) ? config : null;
 }
 
+function cachedStoreOwner(path, loadOwner) {
+  return {
+    name: path,
+    refreshLabel: `${path} cache invalidation`,
+    appliesTo: scope => !scope || path === scope.toLowerCase() || path.startsWith(`${scope.toLowerCase()}/`),
+    hold: async inner => (await loadOwner()).withLiveRestore(inner),
+  };
+}
+
 /**
  * Owners a live file restore holds, OUTERMOST FIRST — this array order IS the
  * acquisition order, and each owner is released in reverse after everything
@@ -569,12 +622,16 @@ async function snapshotLegacyCosConfig(srcDir, scope) {
  * `appliesTo` receives the normalized scope (`''`/undefined = full restore);
  * `hold(inner, { srcDir, scope })` acquires the owner, runs `inner`, and
  * releases on every exit; `srcDir` is the verified snapshot's data directory. Domain
- * modules are imported only once every outer owner is held.
+ * modules are imported only once every outer owner is held. An owner can pass
+ * a reload callback to `inner` to reconcile inside its write fence after a
+ * successful or partial transfer. Its refreshLabel identifies reload errors.
  *
  * - The snapshot cut drains in-flight asset publications BEFORE any domain
  *   queue they may need to finish, and keeps admission closed throughout.
+ * - App edits can await the task schedule queue, so apps precede that queue.
  * - Schedule mutations can await CoS state, so their queue precedes CoS.
  * - The settings queue stays held through CoS reconciliation.
+ * - The visitor credential queue drains writes and holds them through publication.
  * - CoS acquires config then runtime internally (`withLiveCosRestore`) and
  *   refuses a busy daemon/mind/agent with `COS_RESTORE_BUSY`.
  * - The media registry refuses edits for the whole hold and is acquired after
@@ -596,6 +653,7 @@ const LIVE_FILE_RESTORE_OWNERS = Object.freeze([
       }
     },
   },
+  cachedStoreOwner('apps.json', () => import('../apps.js')),
   {
     name: 'task schedule',
     appliesTo: scope => !scope || scope === 'cos' || scope === 'cos/task-schedule.json',
@@ -606,8 +664,13 @@ const LIVE_FILE_RESTORE_OWNERS = Object.freeze([
   },
   {
     name: 'settings',
-    appliesTo: scope => !scope || scope === 'settings.json',
+    appliesTo: scope => scope === 'settings.json' || scopeTouchesPrivateDirectory(scope),
     hold: inner => withLiveSettingsRestore(inner),
+  },
+  {
+    name: 'managed visitor credentials',
+    appliesTo: scope => !scope || scope === 'managed-visitor-credentials.json',
+    hold: inner => requireManagedVisitorCredentialRestore()(inner),
   },
   {
     name: 'CoS config and runtime',
@@ -627,6 +690,37 @@ const LIVE_FILE_RESTORE_OWNERS = Object.freeze([
     },
   },
   {
+    name: 'prompts',
+    refreshLabel: 'prompts reload',
+    appliesTo: scope => !scope || scope === 'prompts' || scope.startsWith('prompts/'),
+    hold: inner => {
+      const prompts = getAIToolkitInstance()?.services?.prompts;
+      return prompts ? prompts.withLiveRestore(inner) : inner();
+    },
+  },
+  {
+    name: 'digital twin',
+    refreshLabel: 'digital twin cache invalidation',
+    appliesTo: scope => !scope || scope === 'digital-twin' || scope.startsWith('digital-twin/'),
+    hold: async inner => {
+      const { metaMutex, invalidateDigitalTwinCaches } = await import('../digital-twin-cache.js');
+      return metaMutex(() => inner(invalidateDigitalTwinCaches));
+    },
+  },
+  {
+    name: 'voice timers',
+    refreshLabel: 'voice timers reload',
+    appliesTo: scope => !scope || scope === 'voice-timers.json',
+    hold: async inner => {
+      const { withLiveVoiceTimersRestore } = await import('../voice/timers.js');
+      return withLiveVoiceTimersRestore(inner);
+    },
+  },
+  cachedStoreOwner('notifications.json', () => import('../notifications.js')),
+  cachedStoreOwner('feeds.json', () => import('../feeds.js')),
+  cachedStoreOwner('agents/schedules.json', () => import('../automationScheduler.js')),
+  cachedStoreOwner('agents/agents.json', () => import('../agent/agentPersonalities.js')),
+  {
     name: 'Apple Health day files',
     appliesTo: scope => !scope || scope === 'health' || scope.startsWith('health/'),
     hold: async (inner) => {
@@ -638,16 +732,23 @@ const LIVE_FILE_RESTORE_OWNERS = Object.freeze([
 
 /** Run `operation` inside every live-restore owner that applies to `scope`, in table order. */
 function withLiveFileRestoreOwners(scope, srcDir, operation) {
+  const ownerRefreshes = [];
   const nested = LIVE_FILE_RESTORE_OWNERS.reduceRight(
-    (inner, owner) => (owner.appliesTo(scope) ? () => owner.hold(inner, { srcDir, scope }) : inner),
-    operation,
+    (inner, owner) => {
+      if (!owner.appliesTo(scope)) return inner;
+      return () => owner.hold(run => {
+        if (owner.refreshLabel && run) ownerRefreshes.push({ label: owner.refreshLabel, run });
+        return inner();
+      }, { srcDir, scope });
+    },
+    () => operation(ownerRefreshes),
   );
   return nested();
 }
 
 /**
  * Peer-execution identity fence: shorter-lived than the owners above. It wraps
- * ONLY the rsync transfer, never reconciliation, and only when this restore
+ * ONLY the file transfer, never reconciliation, and only when this restore
  * installs instances.json (resolveIdentityRestore). The decision was made
  * before verification, so it is re-checked here under the identity writer lock:
  * a live identity written since then (first pairing, ensureSelf) must not be
@@ -677,9 +778,9 @@ async function transferWithIdentityFence({ installsIdentity, assertIdentityUncha
  * failure stays the primary error (keeping its code); a reconciliation failure
  * is appended to it, or thrown on its own after a successful transfer.
  */
-async function transferAndReconcileLiveFiles({ subdirFilter, transfer }) {
+async function transferAndReconcileLiveFiles({ subdirFilter, ownerRefreshes, transfer }) {
   const [result] = await Promise.allSettled([transfer()]);
-  const reconciliationError = await reconcileLiveFileRestore(subdirFilter).then(() => null, error => error);
+  const reconciliationError = await reconcileLiveFileRestore(subdirFilter, ownerRefreshes).then(() => null, error => error);
   if (result.status === 'rejected') {
     if (result.reason?.beforeTransfer) throw result.reason;
     const partialRestoreError = new Error(

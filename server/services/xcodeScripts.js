@@ -2,6 +2,7 @@ import { existsSync } from 'fs';
 import { readFile, writeFile } from 'fs/promises';
 import { join } from 'path';
 import { exec, execFile } from '../lib/childProcess.js';
+import { XCODE_SCRIPT_NAME } from '../lib/xcodeScriptNames.js';
 import { promisify } from 'util';
 import { activateAppLine, osascriptSystemEvents } from './xcodeScriptBuilders.js';
 
@@ -12,8 +13,13 @@ const execFileAsync = promisify(execFile);
 const XCODE_TYPES = new Set(['ios-native', 'macos-native', 'xcode']);
 
 // Shared Xcode project constants
-export const XCODE_TEAM_ID = 'TYQ32QCF6K';
-export const XCODE_BUNDLE_PREFIX = 'net.shadowpuppet';
+// These values are written into generated project files and a shell-sourced template.
+const teamId = process.env.XCODE_TEAM_ID?.trim() ?? '';
+const bundlePrefix = process.env.XCODE_BUNDLE_PREFIX?.trim() ?? '';
+export const XCODE_TEAM_ID = /^[A-Z0-9]{10}$/.test(teamId) ? teamId : 'YOUR_TEAM_ID';
+export const XCODE_BUNDLE_PREFIX = /^[a-zA-Z0-9-]+(?:\.[a-zA-Z0-9-]+)+$/.test(bundlePrefix)
+  ? bundlePrefix
+  : 'com.example';
 export const toBundleId = (name) => {
   const sanitized = name.replace(/[^a-zA-Z0-9]/g, '');
   return `${XCODE_BUNDLE_PREFIX}.${sanitized || 'app'}`;
@@ -972,19 +978,19 @@ echo "If sidebar navigation failed, grant Accessibility permission to your termi
  */
 export const XCODE_MANAGEMENT_SCRIPTS = [
   {
-    name: 'deploy.sh',
+    name: XCODE_SCRIPT_NAME.deploy,
     description: 'TestFlight deployment',
     generator: generateDeployScript,
     appTypes: ['xcode', 'ios-native', 'macos-native']
   },
   {
-    name: 'take_screenshots.sh',
+    name: XCODE_SCRIPT_NAME.screenshots,
     description: 'iOS/iPad screenshot automation',
     generator: generateScreenshotScript,
     appTypes: ['xcode', 'ios-native']
   },
   {
-    name: 'take_screenshots_macos.sh',
+    name: XCODE_SCRIPT_NAME.macScreenshots,
     description: 'macOS screenshot automation',
     generator: generateMacScreenshotScript,
     appTypes: ['xcode', 'macos-native']
@@ -997,13 +1003,6 @@ export const XCODE_MANAGEMENT_SCRIPTS = [
 export function scriptsForAppType(appType) {
   return XCODE_MANAGEMENT_SCRIPTS.filter(s => s.appTypes.includes(appType));
 }
-
-/**
- * The set of script names installable via the API. Used by route validation
- * to fail fast on bogus payloads instead of relying on installScripts to
- * report unknowns one-by-one.
- */
-export const XCODE_SCRIPT_NAMES = XCODE_MANAGEMENT_SCRIPTS.map(s => s.name);
 
 /**
  * Check which management scripts are missing from an Xcode app's repo.

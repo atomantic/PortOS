@@ -1,6 +1,6 @@
 /**
  * Pipeline audio cues — arc-driven cue derivation for whole-episode audio
- * (issue #863 / design doc 2026-06-03-whole-episode-audio-strategy.md, step 3).
+ * (issue #863).
  *
  * `audioMode: 'generated'` lays an ordered `cues[]` array — one cue per
  * *narrative arc beat* — onto the episode timeline at stitch time. This module

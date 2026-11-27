@@ -311,8 +311,11 @@ describe('claim flow workflow-scope handoff', () => {
 });
 
 describe('publish_reviewed_branch tag scope', () => {
-  // The wrapper lives in a manual-completion template literal list; read the shipped line from source.
-  const wrapper = readFileSync(new URL('./completion.js', import.meta.url), 'utf8').split('\n').find(line => line.includes('publish_reviewed_branch() {')).trim().replace(/^'/, '').replace(/',$/, '');
+  const section = render('gh', ['codex'], {
+    mode: COMPLETION_MODES.TUI_SLASHDO_FREE,
+    rendersInlinePrLifecycle: true,
+  });
+  const wrapper = section.split('\n').find(line => line.trimStart().startsWith('publish_reviewed_branch() {')).trim();
   const setup = () => {
     const root = mkdtempSync(join(tmpdir(), 'portos-publish-'));
     const git = (cwd, ...args) => execFileSync('git', ['-c', 'user.name=t', '-c', 'user.email=t@example.com', ...args], { cwd, encoding: 'utf8' }).trim();

@@ -16,12 +16,12 @@
  */
 
 import { randomUUID } from 'crypto';
-import { chmod, copyFile, lstat, mkdir, mkdtemp, rename, rm } from 'fs/promises';
+import { chmod, copyFile, lstat, mkdir, mkdtemp, readdir, realpath, rename, rm } from 'fs/promises';
 import { tmpdir } from 'os';
-import { join } from 'path';
+import { dirname, isAbsolute, join, relative, sep } from 'path';
 import { ServerError } from '../lib/errorHandler.js';
 import { sleep } from '../lib/fileUtils.js';
-import { LOCAL_RUNTIMES, localEndpointPort, localRuntimeKind, isLocalInstanceEndpoint } from '../lib/localProviderRuntime.js';
+import { LOCAL_RUNTIMES, localEndpointPort, localRuntimeForProvider, isLocalInstanceEndpoint } from '../lib/localProviderRuntime.js';
 import {
   createDaemonLogFiles,
   createDaemonWatcher,
@@ -37,11 +37,12 @@ import { PORTS } from '../lib/ports.js';
 import { findCommandOnPath } from '../lib/processEnv.js';
 import { SLOTSTREAM_CATALOG } from '../lib/slotstreamCatalog.js';
 import {
+  isSlotstreamCheckpointId,
   listSlotstreamCachedModels,
   pickSlotstreamCachedModel,
   planSlotstreamMemory,
   slotstreamBinDir,
-  slotstreamCacheDir,
+  SLOTSTREAM_CACHE_DISPLAY,
 } from '../lib/slotstreamModels.js';
 import { runStreamingCommand } from '../lib/streamingSpawn.js';
 import { execPm2, getAppStatusStrict, clearJlistCache, getSavedProcessNames } from './pm2.js';
@@ -71,13 +72,37 @@ const DEFAULT_HOST = '127.0.0.1';
 const DEFAULT_PORT = Number(localEndpointPort(LOCAL_RUNTIMES.slotstream.defaultBaseUrl)) || PORTS.SLOTSTREAM;
 
 export const SLOTSTREAM_UNSUPPORTED_REASON = 'Slotstream runs only on macOS with Apple Silicon.';
-const slotstreamNoModelError = () => `Slotstream has no model weights cached, so its server would exit before it binds a port. A start never downloads weights — place a checkpoint directory in ${slotstreamCacheDir()}, then start it again.`;
+const SLOTSTREAM_NO_MODEL_ERROR = 'Slotstream has no cached checkpoint. Open Configure and select Download checkpoint before starting Slotstream.';
 const SLOTSTREAM_OLLAMA_PORT_ERROR = `Port ${OLLAMA_COLLISION_PORT} is Ollama's default and a PortOS-managed Ollama already uses it. Point Slotstream at its dedicated loopback port (${DEFAULT_PORT}) instead.`;
 
 const slotstreamLogs = createDaemonLogFiles(SLOTSTREAM_APP);
 
 let currentConfig = null;
 let lastExitError = null;
+let installationChange = null;
+
+function changeSlotstreamInstallation(work) {
+  if (installationChange) {
+    throw new ServerError('Slotstream already has an installation change in progress.', { status: 409 });
+  }
+  installationChange = Promise.resolve().then(work).finally(() => { installationChange = null; });
+  return installationChange;
+}
+
+async function slotstreamInstallFile() {
+  const bin = slotstreamBinDir();
+  const binary = join(bin, 'slotstream');
+  const entry = (path) => lstat(path).catch((error) => {
+    if (error.code === 'ENOENT') return null;
+    throw error;
+  });
+  // A PATH lookup may resolve to Homebrew or a symlink. Neither establishes
+  // ownership. Only a regular file at our release-install location is removable.
+  for (const directory of [dirname(bin), bin]) {
+    if (!(await entry(directory))?.isDirectory()) return null;
+  }
+  return (await entry(binary))?.isFile() ? binary : null;
+}
 
 const probeEndpoint = async (endpoint) =>
   (await probeOpenAiModels(endpoint, { timeoutMs: PROBE_TIMEOUT_MS })).reachable;
@@ -178,13 +203,14 @@ export async function getSlotstreamServerEndpoint() {
 /**
  * Current Slotstream state: binary, process, endpoint, memory plan, cache, logs.
  */
-export async function getSlotstreamServerStatus() {
+export async function getSlotstreamServerStatus({ includeLogs } = {}) {
   const binaryPath = resolveSlotstreamBinary();
   const installed = Boolean(binaryPath);
   const supported = installed || isAppleSilicon();
-  const base = await daemon.getStatusBase({ installed });
+  const base = await daemon.getStatusBase({ installed, includeLogs });
+  const ownedBinary = installed && await slotstreamInstallFile().catch(() => null);
   const saved = await savedLaunchConfig();
-  const cache = installed ? await listSlotstreamCachedModels() : { models: null, error: null };
+  const cache = await listSlotstreamCachedModels({ includeRows: true });
   // The SAVED override, never the running config: `--memory-gb` is always on
   // the launch line, so reading the target back off it would report every
   // auto-sized start as an explicit cap and `auto` would never be true.
@@ -192,14 +218,17 @@ export async function getSlotstreamServerStatus() {
 
   return {
     ...base,
+    config: base.config && { ...base.config, model: isSlotstreamCheckpointId(base.config.model) ? base.config.model : null },
     supported,
+    canUninstall: Boolean(ownedBinary) && !installationChange && !base.running && base.managed === false,
     unsupportedReason: supported ? null : SLOTSTREAM_UNSUPPORTED_REASON,
     idleMinutes: await onDemand.idleMinutes(),
     keepLoaded: await onDemand.keepLoaded(),
-    launch: saved,
+    launch: { ...saved, model: isSlotstreamCheckpointId(saved.model) ? saved.model : null },
     memoryPlan,
     cachedModels: (cache.models || []).map((m) => m?.id).filter(Boolean),
-    cacheDir: slotstreamCacheDir(),
+    cachedModelRows: cache.rows,
+    cacheDir: SLOTSTREAM_CACHE_DISPLAY,
     cacheError: cache.error,
     // The download menu rides on the status payload rather than a route of its
     // own: it is three frozen rows, so a second fetch (and a second cache to
@@ -214,7 +243,11 @@ export async function getSlotstreamServerStatus() {
  * before extracting, never pipes a remote script to a shell, and never
  * fetches model weights.
  */
-export async function installSlotstream({ onProgress = () => {} } = {}) {
+export async function installSlotstream(options = {}) {
+  return changeSlotstreamInstallation(() => installPinnedSlotstream(options));
+}
+
+async function installPinnedSlotstream({ onProgress = () => {} } = {}) {
   const emit = (message) => onProgress({ event: 'progress', message });
   if (!isAppleSilicon()) {
     throw new ServerError(SLOTSTREAM_UNSUPPORTED_REASON, { status: 400, code: 'SLOTSTREAM_UNSUPPORTED_PLATFORM' });
@@ -251,7 +284,7 @@ export async function installSlotstream({ onProgress = () => {} } = {}) {
 
     emit('Extracting Slotstream…');
     const extract = await runStreamingCommand('tar', ['-xzf', archivePath, '-C', extractDir], emit, { timeoutMs: 60_000 });
-    if (!extract.success) throw new ServerError(`Slotstream extract failed: ${extract.error}`, { status: 500 });
+    if (!extract.success) throw new ServerError(`Slotstream extract failed: ${extract.error}`, { status: 502, code: 'INTERNAL_ERROR' });
 
     const extractedBinary = join(extractDir, 'slotstream');
     const extractedStat = await lstat(extractedBinary).catch(() => null);
@@ -276,12 +309,31 @@ export async function installSlotstream({ onProgress = () => {} } = {}) {
     }
 
     if (!resolveSlotstreamBinary() && !findCommandOnPath(binary)) {
-      throw new ServerError('Slotstream downloaded but the binary was not found in ~/.slotstream/bin.', { status: 500 });
+      throw new ServerError('Slotstream downloaded but the binary was not found in ~/.slotstream/bin.', { status: 502, code: 'INTERNAL_ERROR' });
     }
     return { success: true, message: 'Slotstream installed' };
   } finally {
     await rm(workDir, { recursive: true, force: true });
   }
+}
+
+/**
+ * Require an idle runtime; don't kill a process to remove its executable.
+ * Share the wake/start slot so an inference request cannot launch it midway.
+ */
+export async function uninstallSlotstream() {
+  return changeSlotstreamInstallation(() => onDemand.runStart(async () => {
+    const binary = await slotstreamInstallFile();
+    if (!binary) {
+      throw new ServerError('Slotstream is not installed at the PortOS release location.', {
+        status: 409, code: 'SLOTSTREAM_NOT_MANAGED',
+      });
+    }
+    const { port: savedPort } = await savedLaunchConfig();
+    await daemon.assertStoppedForUninstall({ label: 'Slotstream', codePrefix: 'SLOTSTREAM', savedPort });
+    await rm(binary);
+    return { success: true, message: 'Slotstream uninstalled. Checkpoints and provider settings were kept.' };
+  }));
 }
 
 /**
@@ -297,14 +349,14 @@ async function resolveStartModel(requested, emit) {
   const cache = await listSlotstreamCachedModels();
   if (cache.models === null) {
     emit(`Could not read Slotstream's model cache (${cache.error}) — refusing to start rather than fetching weights.`);
-    return { error: slotstreamNoModelError() };
+    return { error: SLOTSTREAM_NO_MODEL_ERROR };
   }
-  if (cache.models.length === 0) return { error: slotstreamNoModelError() };
+  if (cache.models.length === 0) return { error: SLOTSTREAM_NO_MODEL_ERROR };
   const model = pickSlotstreamCachedModel(cache.models, requested);
-  if (!model) return { error: slotstreamNoModelError() };
+  if (!model) return { error: SLOTSTREAM_NO_MODEL_ERROR };
   if (!cache.models.some((row) => row?.id === model)) {
     return {
-      error: `Slotstream has no cached checkpoint named "${model}". A start never downloads weights — pick one of the cached checkpoints (${cache.models.map((row) => row.id).join(', ')}) instead.`,
+      error: `The selected Slotstream checkpoint is unavailable. A start never downloads weights. Choose a cached checkpoint (${cache.models.map((row) => row.id).join(', ')}) or open Configure and select Download checkpoint.`,
     };
   }
   return { model };
@@ -318,6 +370,51 @@ async function resolveStartModel(requested, emit) {
  * @param {Parameters<typeof launchSlotstreamServer>[0]} [options]
  */
 export const startSlotstreamServer = (options = {}) => onDemand.runStart(() => launchSlotstreamServer(options));
+
+/**
+ * Share the start slot with explicit and on-demand starts so a checked
+ * checkpoint cannot disappear between model selection and launch.
+ */
+export const withUnusedSlotstreamCheckpoint = ({ model, modelDir, cacheDir, linked }, remove) => onDemand.runStart(async () => {
+  const inUse = () => new ServerError('Stop Slotstream before removing a checkpoint it may be serving.', {
+    status: 409, code: 'SLOTSTREAM_CHECKPOINT_IN_USE',
+  });
+
+  clearJlistCache();
+  const app = await getAppStatusStrict(SLOTSTREAM_APP);
+  if (!app) {
+    throw new ServerError('PortOS could not verify whether Slotstream is serving this checkpoint. Check PM2 and retry.', {
+      status: 503, code: 'SLOTSTREAM_PM2_UNAVAILABLE',
+    });
+  }
+
+  if (app.status === 'online') {
+    const active = parseConfigFromArgs(app.args)?.model;
+    if (!isSlotstreamCheckpointId(active) || active === model) throw inUse();
+    // Resolve aliases and filesystem case before removing a directory. Removing
+    // a different link leaves the weights intact, even if it shares the target.
+    const activeDir = join(cacheDir, active);
+    const actualActive = await realpath(activeDir).catch(() => null);
+    const actualCandidate = await realpath(modelDir).catch(() => null);
+    if (actualActive && actualActive === actualCandidate) {
+      const names = new Set(await readdir(cacheDir));
+      if (!linked || !names.has(model) || !names.has(active)) throw inUse();
+    }
+    if (!linked && actualActive && actualCandidate) {
+      const child = relative(actualCandidate, actualActive);
+      if (child && child !== '..' && !child.startsWith(`..${sep}`) && !isAbsolute(child)) throw inUse();
+    }
+  } else {
+    // External servers do not expose a trusted cache entry ID. Check known
+    // runtime ports even while a listener is still warming up.
+    if (!['not_found', 'stopped', 'errored'].includes(app.status)) throw inUse();
+    const saved = await savedLaunchConfig();
+    const ports = new Set([DEFAULT_PORT, saved.port, currentConfig?.port].filter(Boolean));
+    if ((await Promise.all([...ports].map((port) => isPortInUse(port)))).some(Boolean)) throw inUse();
+  }
+
+  return remove();
+});
 
 /**
  * The unserialized start behind `startSlotstreamServer`; only the on-demand
@@ -445,9 +542,9 @@ export const waitForSlotstreamReady = (endpoint) => onDemand.waitForReady(endpoi
 export const ensureSlotstreamRunning = () => onDemand.ensureRunning();
 
 export function isSlotstreamProvider(provider) {
-  if (!provider || !['api', 'tui'].includes(provider.type)) return false;
+  if (!provider || !['api', 'cli', 'tui'].includes(provider.type)) return false;
+  if (localRuntimeForProvider(provider)?.kind === 'slotstream') return true;
   if (!isLocalInstanceEndpoint(provider.endpoint)) return false;
-  if (localRuntimeKind(provider) === 'slotstream') return true;
   return onDemand.servesPort(provider, currentConfig?.port);
 }
 

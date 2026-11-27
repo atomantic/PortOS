@@ -2,11 +2,11 @@ import { useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
 import { X } from 'lucide-react';
 import { useScrollLock } from '../hooks/useScrollLock';
-import useFocusTrap from '../hooks/useFocusTrap.js';
+import useFocusTrap, { FocusTrapParent } from '../hooks/useFocusTrap.js';
 import TabPills from './ui/TabPills';
 import { useEscLayer } from './ui/Modal';
 
-// Right-side slide-in panel for the "settings over a feature page" pattern.
+// Overlay panel for the "settings over a feature page" pattern.
 // Mobile (<sm): full width. Desktop: a `size` bracket (see SIZE below). Backdrop
 // click + Esc close it. Caller controls open state — typically driven by a URL
 // search param so the view stays deep-linkable per the project convention.
@@ -56,10 +56,12 @@ export default function Drawer({
   children,
   size = 'sm',
   widthClass,           // escape hatch: overrides `size` when provided (back-compat)
+  placement = 'right',  // 'bottom' uses a full-width, height-limited sheet
   tabs = null,          // [{ id, label, icon?, count? }] enables the tabbed layout
   activeTab,            // controlled active tab id (falls back to uncontrolled)
   onTabChange,          // (id) => void — required for the controlled form
   bodyClassName = '',   // extra classes on the scroll region (e.g. multi-column grid)
+  beforeBody = null,    // status or confirmation outside the body scroll region
   closeOnEsc = true,
   closeOnBackdrop = true,
   closeLabel = 'Close settings',
@@ -92,7 +94,9 @@ export default function Drawer({
 
   if (!open) return null;
 
-  const resolvedWidth = widthClass || SIZE[size] || SIZE.sm;
+  const placementClasses = placement === 'bottom'
+    ? 'inset-x-0 bottom-0 max-h-[88dvh] rounded-t-xl border-t'
+    : `inset-y-0 right-0 w-full max-w-full ${widthClass || SIZE[size] || SIZE.sm} border-l`;
   const bodyClasses = `flex-1 overflow-y-auto p-4 ${bodyClassName}`.trim();
 
   const overlay = (
@@ -107,7 +111,7 @@ export default function Drawer({
         role="dialog"
         aria-modal="true"
         aria-label={title}
-        className={`port-opaque-surface fixed inset-y-0 right-0 z-50 w-full max-w-full ${resolvedWidth} bg-port-card border-l border-port-border shadow-2xl flex flex-col`}
+        className={`port-opaque-surface fixed z-50 ${placementClasses} bg-port-card border-port-border shadow-2xl flex flex-col`}
       >
         {showHeader && (
         <header className="flex items-center justify-between px-4 py-3 border-b border-port-border">
@@ -144,6 +148,7 @@ export default function Drawer({
             />
           </div>
         )}
+        {beforeBody}
         {/* One body element for both modes. When tabbed, `key={currentTab}`
             remounts the panel on switch so each tab's scroll resets — no single
             accumulated page-length scroll. */}
@@ -165,10 +170,9 @@ export default function Drawer({
   // SSR / non-DOM render falls back to rendering in place — there is no <body>
   // to portal into, and the containing-block trap is a layout concern that only
   // exists in a browser anyway.
-  if (typeof document === 'undefined') return overlay;
-
-  return createPortal(
-    overlay,
-    document.body
+  return (
+    <FocusTrapParent.Provider value={panelRef}>
+      {typeof document === 'undefined' ? overlay : createPortal(overlay, document.body)}
+    </FocusTrapParent.Provider>
   );
 }

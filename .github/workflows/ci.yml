@@ -11,6 +11,19 @@ on:
     - cron: '17 9 * * *'
     - cron: '17 21 * * *'
   workflow_dispatch:
+    inputs:
+      enforce_guard_budget:
+        description: Run the Linux server guards in the scheduled budget-enforcing passes
+        type: boolean
+        default: false
+      browser_timing:
+        description: Browser test timing with the passed-test memo off
+        type: choice
+        default: ordinary
+        options:
+          - ordinary
+          - cold-smoke
+          - cold-full
   workflow_call:
     inputs:
       full:
@@ -23,7 +36,7 @@ permissions:
   contents: read
 
 concurrency:
-  group: ci-${{ github.workflow }}-${{ github.event.pull_request.number || (github.event_name == 'schedule' && 'schedule') || github.ref }}
+  group: ci-${{ github.workflow }}-${{ github.event.pull_request.number || (github.event_name == 'schedule' && 'schedule') || github.ref }}${{ github.event_name == 'workflow_dispatch' && contains(fromJSON('["cold-smoke","cold-full"]'), inputs.browser_timing) && format(':{0}', inputs.browser_timing) || '' }}
   # A newer PR push supersedes the run in flight. On main the run in flight
   # finishes and only the newest waiting push runs next (GitHub cancels a
   # pending run when a newer one queues, and its tree contains the older
@@ -34,6 +47,7 @@ concurrency:
   # own group: in the ref group it was the pending run a merge to main
   # dropped before it started, so the enforced guard budget, ungated native
   # jobs, cache seeding and Full CI Gate silently lapsed for 12 hours.
+  # Cold timing dispatches use one group per profile so they can run together.
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
@@ -78,7 +92,7 @@ jobs:
       # A red impact job keeps CI Gate red; skipped test jobs are not evidence.
       # Re-running this run is GitHub's writer-only, exact-SHA release control.
       - name: Require maintainer release for Dependabot
-        run: node scripts/ci-impact-diagnostics.js admission -- node scripts/ci-dependabot-admission.js
+        run: node scripts/ci-dependabot-admission.js
 
       # Reads the base commit off HEAD^1 rather than the event payload, so a
       # depth-2 clone is enough for every three-dot diff downstream. Exports
@@ -93,7 +107,7 @@ jobs:
         env:
           CI_GATED_BASE_LOOKUP: ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' && inputs.full != true }}
           GITHUB_TOKEN: ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' && inputs.full != true && github.token || '' }}
-        run: node scripts/ci-impact-diagnostics.js base -- node scripts/ci-base-sha.js
+        run: node scripts/ci-base-sha.js
 
       # Before any reviewer — human or model — reads this diff. Pattern
       # matching over the added lines only: invisible Unicode and compressed or
@@ -101,13 +115,13 @@ jobs:
       # approving it, so a hit fails the run rather than being reported. Every
       # other job needs this one, so the whole suite stops here.
       - name: Scan the diff for hidden content
-        run: node scripts/ci-impact-diagnostics.js hidden-content -- node scripts/scan-diff-hidden-content.js
+        run: node scripts/scan-diff-hidden-content.js
 
       # Linux resolves `./Foo.js` only as spelled; macOS and Windows do not, so
       # a macOS-only run cannot see that failure. Checked here on every pull
       # request.
       - name: Check relative imports match the tracked path case
-        run: node scripts/ci-impact-diagnostics.js import-case -- node scripts/check-import-case.js
+        run: node scripts/check-import-case.js
 
       - name: Resolve the pinned database image
         id: db-image
@@ -124,20 +138,14 @@ jobs:
           # The planner turns a PR into `release` into a full plan: that PR is
           # the single gate a release ships behind, so it never runs scoped.
           CI_BASE_REF: ${{ github.base_ref }}
-        run: node scripts/ci-impact-diagnostics.js plan -- node scripts/ci-test-plan.js
+        run: node scripts/ci-test-plan.js
 
       # The entry-point syntax check must not ride a skippable job.
       - name: Check server entry-point syntax
-        run: node scripts/ci-impact-diagnostics.js syntax -- node --check server/index.js
-
-      # This precedes checkout post-actions and runner finalization; it cannot
-      # attest that the hosted runner acknowledged the completed job.
-      - name: Record impact process settlement
-        if: always()
-        run: node scripts/ci-impact-diagnostics.js settlement
+        run: node --check server/index.js
 
   server:
-    # Sharded on a full plan — see docs/CI_TEST_SELECTION.md "Full-suite sharding".
+    # Sharded on a full plan — see docs/GITHUB_ACTIONS.md#full-suite-sharding.
     # The matrix comes from the planner; once-only steps pin to shard 1, and the
     # transform-artifact cache key carries the shard so parallel saves don't race.
     name: Server tests (${{ matrix.shard }}/${{ strategy.job-total }})
@@ -222,7 +230,7 @@ jobs:
           # FULL_SUITE_SHARDS.server; scripts/ci-test-memo-cache.test.js pins it.
           # A full run executes only its own partition, so sibling lineages
           # are merged only for scoped plans (recordedReach narrowing).
-          merge-shards: ${{ fromJSON(needs.impact.outputs.plan).server_mode == 'full' && '0' || '2' }}
+          merge-shards: ${{ fromJSON(needs.impact.outputs.plan).server_mode == 'full' && '0' || '4' }}
 
       - name: Run server tests
         id: server-tests
@@ -233,10 +241,9 @@ jobs:
           CI_EXPECT_SLASHDO_SUBMODULE: ${{ fromJSON(needs.impact.outputs.plan).slashdo }}
           # The always-run guards' time budget (each structural guard runner's checks,
           # and every other always-run file whole) fails the run only on the
-          # twice-daily schedule, where a regression is still caught within 12
-          # hours without runner noise blocking a PR, push or release. Every other
-          # event reports it as a warning (scripts/lib/guardBudget.js, #16551, #16810, #16996).
-          CI_GUARD_BUDGET: ${{ github.event_name == 'schedule' && 'enforce' || 'report' }}
+          # twice-daily schedule or an explicit manual reproduction. PR, push,
+          # release and ordinary manual runs report a warning.
+          CI_GUARD_BUDGET: ${{ (github.event_name == 'schedule' || (github.event_name == 'workflow_dispatch' && inputs.enforce_guard_budget)) && 'enforce' || 'report' }}
           # Keep successful-test output signal-dense. Developers can reproduce
           # locally without this flag when assertion context needs app logs.
           PORTOS_TEST_QUIET: 1
@@ -404,6 +411,10 @@ jobs:
           CI_LINT_FILES: ${{ toJSON(fromJSON(needs.impact.outputs.plan).lint_files) }}
         run: node scripts/run-ci-lint.js
 
+      - name: Verify runtime lint fixtures
+        if: fromJSON(needs.impact.outputs.plan).lint_mode == 'full' || contains(fromJSON(needs.impact.outputs.plan).lint_files, 'scripts/fixtures/biome/runtime-lint.mjs')
+        run: node --test scripts/fixtures/biome/runtime-lint.mjs
+
       # GitHub silently skips a workflow it rejects, so a bad file never fails a
       # check; actionlint is the only pre-merge proof. The pinned version and
       # archive checksum live only in scripts/lib/actionlint.js.
@@ -482,6 +493,7 @@ jobs:
           PGDATABASE: portos_test
           PORTOS_TEST_MEMO_DIR: ${{ runner.temp }}/portos-test-memo
           CI_TEST_MODE: full
+          PORTOS_CI_PREPLANNED_RUN: ${{ runner.temp }}/portos-db-run.json
         run: node scripts/run-ci-tests.js db --check-remaining
 
       - name: Provision test database (portos_test)
@@ -520,6 +532,7 @@ jobs:
           PORTOS_TEST_MEMO_DIR: ${{ runner.temp }}/portos-test-memo
           PORTOS_CI_DIAGNOSTICS_DIR: ${{ runner.temp }}/portos-ci-diagnostics
           CI_TEST_MODE: full
+          PORTOS_CI_PREPLANNED_RUN: ${{ runner.temp }}/portos-db-run.json
           # The launcher ends its own test tree and prints the log at this wall-clock deadline (#18636), below the outer limit.
           PORTOS_CI_TEST_DEADLINE_MINUTES: 15
         run: node scripts/run-ci-tests.js db
@@ -534,7 +547,7 @@ jobs:
   browser:
     # Owns the registered browser suites; the Linux unit job excludes that
     # exact registry. PRs run the smoke profile; scheduled, release and
-    # dispatched runs run the complete profile. No Postgres: the suites run on
+    # ordinary manual runs use the complete profile. No Postgres: the suites run on
     # the file backend under NODE_ENV=test. The planner keeps one-, two-, and
     # four-shard scoped plans and gives broad plans seven runners. Quiet-project
     # sequencing and the per-runner watchdog are unchanged.
@@ -544,7 +557,8 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 20
     env:
-      PORTOS_BROWSER_TEST_PROFILE: ${{ github.event_name == 'pull_request' && github.base_ref != 'release' && inputs.full != true && 'smoke' || 'full' }}
+      PORTOS_BROWSER_TEST_PROFILE: ${{ (github.event_name == 'workflow_dispatch' && inputs.browser_timing == 'cold-smoke' && 'smoke') || (github.event_name == 'pull_request' && github.base_ref != 'release' && inputs.full != true && 'smoke' || 'full') }}
+      PORTOS_TEST_MEMO: ${{ github.event_name == 'workflow_dispatch' && contains(fromJSON('["cold-smoke","cold-full"]'), inputs.browser_timing) && 'off' || '' }}
     strategy:
       # Keep every shard's evidence if another fails; CI Gate requires all.
       fail-fast: false
@@ -561,17 +575,33 @@ jobs:
         with:
           vitest-key-suffix: -browser-${{ matrix.shard }}of${{ strategy.job-total }}
 
-      # Smoke can use every trusted full-run lineage because smaller
-      # selections can use different shard owners. Per-test keys still require
-      # compatible inputs and coverage.
+      # Wide smoke restores its own full-run lineage and the lineages of
+      # selected suites that move between profiles. Smaller plans merge all.
+      - name: Select browser memo donors
+        id: browser-memo-donors
+        if: env.PORTOS_BROWSER_TEST_PROFILE == 'smoke' && strategy.job-total == 7 && env.PORTOS_TEST_MEMO != 'off'
+        env:
+          BROWSER_SHARD_INDEX: ${{ matrix.shard }}
+          BROWSER_FILES: ${{ toJSON(fromJSON(needs.impact.outputs.plan).browser_files) }}
+        run: |
+          node --input-type=module <<'JS' >> "$GITHUB_OUTPUT"
+          import { browserSmokeMemoDonors } from './scripts/lib/browserSuites.js';
+          import { browserTestProfileFiles } from './scripts/lib/browserTestProfiles.js';
+          const files = browserTestProfileFiles('smoke', JSON.parse(process.env.BROWSER_FILES));
+          const donors = browserSmokeMemoDonors(files, Number(process.env.BROWSER_SHARD_INDEX));
+          console.log('shards=' + JSON.stringify(donors));
+          JS
+
       - name: Restore the test memo
+        if: env.PORTOS_TEST_MEMO != 'off'
         id: test-memo
         uses: ./.github/actions/test-memo
         with:
           suite: browser
           partition: browser-${{ matrix.shard }}of${{ strategy.job-total }}
-          merge-shards: ${{ env.PORTOS_BROWSER_TEST_PROFILE == 'smoke' && '7' || '0' }}
-          legacy-shards: '4'
+          merge-shards: ${{ env.PORTOS_BROWSER_TEST_PROFILE == 'smoke' && (strategy.job-total != 7 || steps.browser-memo-donors.outputs.shards != '[]') && '7' || '0' }}
+          merge-partitions: ${{ steps.browser-memo-donors.outputs.shards || '[]' }}
+          partition-only: ${{ strategy.job-total == 7 }}
 
       # Plan before installing ffmpeg/client deps so shards 100% covered by the
       # memo skip both. Uses the same env keys as the test step below.
@@ -586,6 +616,7 @@ jobs:
           PORTOS_REQUIRE_BROWSER_SUITES: '1'
           PORTOS_TEST_QUIET: 1
           PORTOS_CI_BEFORE_AUDIO_SETUP: '1'
+          PORTOS_CI_PREPLANNED_RUN: ${{ runner.temp }}/portos-browser-run.json
         run: node scripts/run-ci-tests.js server --check-remaining
 
       # The step timeout backs up the helper's download budget.
@@ -607,6 +638,7 @@ jobs:
           CI_TEST_FILES: ${{ toJSON(fromJSON(needs.impact.outputs.plan).browser_files) }}
           PORTOS_REQUIRE_BROWSER_SUITES: '1'
           PORTOS_TEST_QUIET: 1
+          PORTOS_CI_PREPLANNED_RUN: ${{ runner.temp }}/portos-browser-run.json
         run: node scripts/run-ci-tests.js server --check-remaining
 
       # The test runner reads the runner's Chrome tree into the page cache
@@ -634,10 +666,11 @@ jobs:
           CI_TEST_FILES: ${{ toJSON(fromJSON(needs.impact.outputs.plan).browser_files) }}
           PORTOS_REQUIRE_BROWSER_SUITES: '1'
           PORTOS_TEST_QUIET: 1
+          PORTOS_CI_PREPLANNED_RUN: ${{ runner.temp }}/portos-browser-run.json
         run: node scripts/watch-ci-tests.js server
 
       - name: Save the test memo
-        if: steps.browser-tests.outcome == 'success' && steps.browser-tests.outputs.memo-written == 'true' && github.event_name != 'pull_request'
+        if: steps.browser-tests.outcome == 'success' && steps.browser-tests.outputs.memo-written == 'true' && github.event_name != 'pull_request' && env.PORTOS_TEST_MEMO != 'off'
         uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: ${{ runner.temp }}/portos-test-memo
@@ -730,6 +763,7 @@ jobs:
         env:
           PORTOS_TEST_MEMO_DIR: ${{ runner.temp }}/portos-test-memo
           PORTOS_CI_DIAGNOSTICS_DIR: ${{ runner.temp }}/portos-ci-diagnostics
+          PORTOS_CI_OBSERVE_VITEST: 1
           # Outside the launcher's disposable temp root; recoverable after exit.
           CI_TEST_MODE: ${{ fromJSON(needs.impact.outputs.plan).windows_mode }}
           CI_TEST_FILES: ${{ toJSON(fromJSON(needs.impact.outputs.plan).windows_files) }}
@@ -788,12 +822,13 @@ jobs:
       # job into a second application test suite.
       - name: Install all workspaces
         run: |
-          npm ci --ignore-scripts
           npm ci --ignore-scripts --prefix client
           npm ci --ignore-scripts --prefix server
 
       - name: Run the Node compatibility contract
-        run: npm run test:fast --prefix server -- ../scripts/checkNodeVersion.test.js ../scripts/node-version-drift.guard.test.js
+        run: |
+          npm run test:fast --prefix server -- ../scripts/checkNodeVersion.test.js
+          npm run test:fast --prefix server -- test/guards/repo.guard.test.js -t node-version-drift
 
       - name: Use the Node 22 security minimum
         uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
@@ -930,9 +965,7 @@ jobs:
         with:
           node-version: 26.x
           cache: npm
-          cache-dependency-path: |
-            package-lock.json
-            server/package-lock.json
+          cache-dependency-path: server/package-lock.json
 
       - name: Verify the native Docker host
         run: |
@@ -957,9 +990,6 @@ jobs:
         with:
           path: server/node_modules
           key: supercollider-server-ignore-scripts-${{ matrix.arch }}-${{ steps.supercollider-node.outputs.node-version }}-${{ hashFiles('server/package-lock.json', 'server/.npmrc') }}
-
-      - name: Install root dependencies without lifecycle scripts
-        run: npm ci --ignore-scripts
 
       - name: Install server dependencies without lifecycle scripts
         if: steps.supercollider-dependencies.outputs.cache-hit != 'true'
@@ -1122,8 +1152,9 @@ jobs:
     # Full supported coverage means full primary suites plus the native
     # Windows contract set. A primary-only full plan with Windows skipped
     # cannot supply the release-reuse marker, and neither can a push whose
-    # native jobs were gated on its diff (native_gated).
-    if: always() && needs.impact.result == 'success' && fromJSON(needs.impact.outputs.plan).full && fromJSON(needs.impact.outputs.plan).windows_mode == 'files' && !fromJSON(needs.impact.outputs.plan).native_gated && (github.event_name != 'pull_request' || github.base_ref == 'release' || inputs.full == true)
+    # native jobs were gated on its diff (native_gated). A manual cold smoke
+    # run also omits browser fidelity and cannot certify full coverage.
+    if: always() && needs.impact.result == 'success' && fromJSON(needs.impact.outputs.plan).full && fromJSON(needs.impact.outputs.plan).windows_mode == 'files' && !fromJSON(needs.impact.outputs.plan).native_gated && (github.event_name != 'pull_request' || github.base_ref == 'release' || inputs.full == true) && !(github.event_name == 'workflow_dispatch' && inputs.browser_timing == 'cold-smoke')
     needs: [impact, gate]
     runs-on: ubuntu-latest
     timeout-minutes: 10

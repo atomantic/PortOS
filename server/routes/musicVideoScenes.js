@@ -4,8 +4,28 @@
  * against the remaining routes is unchanged.
  */
 
-import { musicVideoSceneCreateSchema, musicVideoSceneUpdateSchema } from '../lib/musicVideo/musicVideoValidation.js';
-import { musicVideoColorMatchTakePatchSchema, musicVideoContinueShotSchema, musicVideoPoolUseSchema, musicVideoSceneReorderSchema, musicVideoVaryWipesSchema, musicVideoSceneSplitSchema, musicVideoLyricCutSchema, musicVideoSceneStartSchema, musicVideoSceneEndSchema, musicVideoSceneFrameRenderSchema, musicVideoSceneClipRenderSchema, musicVideoTakeInputSchema, musicVideoTakeReviewSchema, musicVideoPerformanceRepairSchema, musicVideoApproveFinalSchema, musicVideoUpgradeSchema, musicVideoTakeSelectSchema, musicVideoTakeMoveSchema } from '../lib/musicVideo/musicVideoRouteValidation.js';
+import {
+  musicVideoApproveFinalSchema,
+  musicVideoColorMatchTakePatchSchema,
+  musicVideoContinueShotSchema,
+  musicVideoLyricCutSchema,
+  musicVideoPerformanceRepairSchema,
+  musicVideoPoolUseSchema,
+  musicVideoSceneClipRenderSchema,
+  musicVideoSceneCreateSchema,
+  musicVideoSceneEndSchema,
+  musicVideoSceneFrameRenderSchema,
+  musicVideoSceneReorderSchema,
+  musicVideoSceneSplitSchema,
+  musicVideoSceneStartSchema,
+  musicVideoSceneUpdateSchema,
+  musicVideoTakeInputSchema,
+  musicVideoTakeMoveSchema,
+  musicVideoTakeReviewSchema,
+  musicVideoTakeSelectSchema,
+  musicVideoUpgradeSchema,
+  musicVideoVaryWipesSchema,
+} from '../lib/musicVideo/routeValidation/scenes.js';
 import { renderShotDownload } from '../services/musicVideo/shotDownload.js';
 import { Router } from 'express';
 import { musicVideoImageTreatmentQuerySchema } from '../lib/musicVideo/musicVideoImageTreatmentValidation.js';
@@ -17,7 +37,7 @@ import { z } from 'zod';
 import { requireProductionReviewer } from '../services/musicVideo/productionReviewService.js';
 import { asyncHandler, ServerError } from '../lib/errorHandler.js';
 import { validateRequest } from '../lib/validateRequest.js';
-import { addProjectScene, updateScene, deleteScene, reorderProjectScenes, varyProjectWipes, splitProjectScene, cutProjectScenesOnLyrics, mergeProjectNextScene, mergeProjectPreviousScene, moveProjectSceneStart, moveProjectSceneEnd, appendSceneTakes, selectSceneTake, placeMediaPoolItem, reviewSceneTake, checkSceneTakePlate, rejectUnusedSceneTakes, swapProjectSceneFrames, moveSceneTake } from '../services/musicVideo/projectBoardEdits.js';
+import { addProjectScene, updateScene, deleteScene, reorderProjectScenes, varyProjectWipes, splitProjectScene, cutProjectScenesOnLyrics, mergeProjectNextScene, mergeProjectPreviousScene, moveProjectSceneStart, moveProjectSceneEnd, undoProjectBoardEdit, appendSceneTakes, selectSceneTake, placeMediaPoolItem, reviewSceneTake, checkSceneTakePlate, rejectUnusedSceneTakes, swapProjectSceneFrames, moveSceneTake } from '../services/musicVideo/projectBoardEdits.js';
 import { requireProject } from '../services/musicVideo/requireProject.js';
 import { approveFinal, upgradeApproved } from '../services/musicVideo/finalUpgrade.js';
 import { renderSceneClips, renderSceneFrames } from '../services/musicVideo/sceneCardRender.js';
@@ -102,6 +122,12 @@ router.post('/:id/scenes/reorder', asyncHandler(async (req, res) => {
   const { sceneIds } = validateRequest(musicVideoSceneReorderSchema, req.body);
   const { edit } = await reorderProjectScenes(req.params.id, sceneIds);
   res.json({ edit });
+}));
+
+// No body: restore the most recent structural or timing board edit (merge, split, delete, reorder, retime).
+router.post('/:id/scenes/undo', asyncHandler(async (req, res) => {
+  const { undone, edit } = await undoProjectBoardEdit(req.params.id);
+  res.json({ undone, edit });
 }));
 
 // Split a shot its backend cannot render in one take (#8977): a performance

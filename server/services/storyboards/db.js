@@ -9,77 +9,43 @@
  * filenames and sketch keys, never bytes; `sketch:` sidecars and in-flight runs stay local.
  */
 
+import { randomUUID } from 'node:crypto';
 import { query } from '../../lib/db.js';
-import { mirrorTimestamp } from '../../lib/pgTimestamp.js';
-import { toPgJson } from '../../lib/pgJson.js';
+import { createJsonbLeafDb } from '../../lib/jsonbLeafDb.js';
+import { sanitizeStoryboard, summarizeStoryboard } from '../../lib/storyboardRecord.js';
 
-export async function readRaw(id) {
-  const { rows } = await query('SELECT data FROM storyboards WHERE id = $1', [id]);
-  return rows[0]?.data ?? null;
+export const { readRaw, listRaw, listIds, listLiveIds, listTombstoneIdsBefore, writeRaw, deleteRaw } = createJsonbLeafDb({
+  table: 'storyboards',
+  orderBy: [['updated_at', 'DESC'], ['id', 'ASC']],
+  softDelete: {},
+  mirrorColumns: {
+    name: record => record.name,
+    universe_id: record => record.universeId ?? null,
+    list_summary: { jsonb: summarizeStoryboard },
+    list_summary_write_id: () => randomUUID(),
+  },
+});
+
+async function readLiveSummaries({ limit, offset } = {}) {
+  // A SQL NULL means the record was written without a summary. A JSON null
+  // means the backfill found an invalid record that the list used to omit.
+  const { rows } = await query(`SELECT list_summary, CASE WHEN list_summary IS NULL THEN data END AS legacy_data
+    FROM storyboards WHERE deleted = FALSE ORDER BY updated_at DESC, id ASC${limit === undefined ? '' : ' LIMIT $1 OFFSET $2'}`,
+  limit === undefined ? [] : [limit, offset]);
+  return rows.map(({ list_summary, legacy_data }) => {
+    if (list_summary) return list_summary;
+    const board = sanitizeStoryboard(legacy_data);
+    return board && summarizeStoryboard(board);
+  }).filter(Boolean);
 }
 
-export async function listRaw() {
-  const { rows } = await query('SELECT data FROM storyboards ORDER BY updated_at DESC, id ASC');
-  return rows.map((row) => row.data);
-}
+export const listSummaries = () => readLiveSummaries();
 
 /** One live-board page (`LIMIT`/`OFFSET` in SQL, newest first) plus the live total. */
-export async function listRawPage({ limit, offset }) {
-  const [page, count] = await Promise.all([
-    query('SELECT data FROM storyboards WHERE deleted = FALSE ORDER BY updated_at DESC, id ASC LIMIT $1 OFFSET $2', [limit, offset]),
+export async function listSummaryPage(page) {
+  const [items, count] = await Promise.all([
+    readLiveSummaries(page),
     query('SELECT COUNT(*)::int AS total FROM storyboards WHERE deleted = FALSE'),
   ]);
-  return { rows: page.rows.map((row) => row.data), total: count.rows[0].total };
-}
-
-export async function writeRaw(id, record) {
-  const now = new Date().toISOString();
-  const createdAt = mirrorTimestamp(record?.createdAt, now);
-  await query(
-    `INSERT INTO storyboards (id, name, universe_id, data, created_at, updated_at, deleted, deleted_at)
-     VALUES ($1, $2, $3, $4::jsonb, $5, $6, $7, $8)
-     ON CONFLICT (id) DO UPDATE SET
-       name = EXCLUDED.name,
-       universe_id = EXCLUDED.universe_id,
-       data = EXCLUDED.data,
-       updated_at = EXCLUDED.updated_at,
-       deleted = EXCLUDED.deleted,
-       deleted_at = EXCLUDED.deleted_at`,
-    [
-      id,
-      record.name,
-      record.universeId ?? null,
-      toPgJson(record),
-      createdAt,
-      mirrorTimestamp(record?.updatedAt, createdAt),
-      record.deleted === true,
-      mirrorTimestamp(record.deletedAt, null),
-    ],
-  );
-  return record;
-}
-
-export async function deleteRaw(id) {
-  await query('DELETE FROM storyboards WHERE id = $1', [id]);
-}
-
-/** Every board id (live AND tombstones). */
-export async function listIds() {
-  const { rows } = await query('SELECT id FROM storyboards');
-  return rows.map((row) => row.id);
-}
-
-/** Live board ids only — id-only projection hitting idx_storyboards_live. */
-export async function listLiveIds() {
-  const { rows } = await query('SELECT id FROM storyboards WHERE deleted = FALSE');
-  return rows.map((row) => row.id);
-}
-
-/** Tombstoned board ids deleted before `beforeMs` — the GC candidate scan. */
-export async function listTombstoneIdsBefore(beforeMs) {
-  const { rows } = await query(
-    'SELECT id FROM storyboards WHERE deleted = TRUE AND deleted_at IS NOT NULL AND deleted_at < $1',
-    [new Date(beforeMs).toISOString()],
-  );
-  return rows.map((row) => row.id);
+  return { items, total: count.rows[0].total };
 }

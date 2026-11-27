@@ -60,6 +60,10 @@ describe('shared lyric-type assets in composition documents', () => {
     expect(await readFile(join(root, 'cameraRig.js'))).toEqual(rig);
     const preview = await readTemplateDocumentFiles('layered');
     expect(await readFile(preview.get('cameraRig.js').abs)).toEqual(rig);
+    const engine = await readFile(join(root, 'engine.js'), 'utf8');
+    const { buildDocumentPreview } = await import('./documentPreview.js');
+    const { html } = await buildDocumentPreview(await projects.getProject(id), { files: preview });
+    expect(html).toContain(engine);
   });
 
   it('adds the module and faces to an uploaded document that imports it, and keeps a document\'s own copy', async () => {

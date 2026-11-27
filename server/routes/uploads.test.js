@@ -158,6 +158,24 @@ describe('uploads routes (#4101)', () => {
     }
   });
 
+  it('pages the sorted upload list and keeps directory-wide size totals', async () => {
+    const app = buildApp();
+    await post(app, 'first.txt');
+    await post(app, 'second.txt');
+    const legacy = await request(app).get('/api/uploads');
+    const page = await request(app).get('/api/uploads?limit=1&offset=1');
+    expect(page.status).toBe(200);
+    expect(page.body).toEqual({
+      items: legacy.body.uploads.slice(1, 2),
+      limit: 1,
+      offset: 1,
+      total: legacy.body.count,
+      totalSize: legacy.body.totalSize,
+      totalSizeFormatted: legacy.body.totalSizeFormatted,
+    });
+    expect((await request(app).get('/api/uploads?limit=501')).status).toBe(400);
+  });
+
   it('DELETE :filename returns the deleted size and 404s the second time', async () => {
     const app = buildApp();
     const created = await post(app, 'doomed.txt', 'doomed');

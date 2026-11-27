@@ -16,7 +16,7 @@ everywhere. How should PortOS contain those runs on macOS and Linux alike?
 
 Add an opt-in **Docker containment** profile (#12844) that runs each step in a
 throwaway Linux container from a digest-pinned official Node image, inheriting
-the Docker rules of the [SuperCollider ADR](2026-10-01-supercollider-code-audio.md):
+the Docker rules of the [SuperCollider runtime](../SUPERCOLLIDER.md):
 PortOS never installs or reconfigures Docker, untrusted code gets no native
 fallback, no capabilities, no Docker socket, a read-only root, CPU/memory/PID/
 wall budgets, an explicit environment, and kill-and-remove on timeout or

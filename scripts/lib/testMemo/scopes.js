@@ -5,13 +5,14 @@
  * that state once and returns the query API the evaluator uses.
  */
 
+import { posix } from 'node:path';
 import {
   ARRAY_ITERATORS, ARRAY_MATCHERS, ARRAY_READS, BEFORE_FUNCTION_EXPRESSION, BLOCK_KEYWORDS, COMPARING_MATCHERS,
   ELEMENT_CALLBACKS, ELEMENT_PRESERVING, FS_MODULES, OPERAND_KEYWORDS, READDIR_CALLEES,
 } from './constants.js';
 import { evaluate, importedConstant } from './evaluator.js';
 import {
-  DB_MIGRATION_LISTED, LISTED, LISTED_NAME, MIGRATION_LISTED, isGuardModule, isListedDomain, isVariableText, variableCombinations,
+  DB_MIGRATION_LISTED, LISTED, LISTED_NAME, MIGRATION_LISTED, isGuardModule, isListedDomain, isVariableText, normalizeRel, variableCombinations,
 } from './pathValues.js';
 import { OPENERS, assignsAt, boundNames, enclosingOpen, expressionEnd, groupsAt, isPunct, isWord, listRanges, tokenArrays } from './tokens.js';
 
@@ -232,9 +233,10 @@ const TRUSTED_IMPORTS = Object.freeze({ path: ['delimiter'], 'node:path': ['deli
 const isFsSpecifier = (token) => token?.t === 's' && FS_MODULES.has(token.v);
 
 function scannerFor(ctx, imported, spec) {
-  if (ctx.mocksSpecifier?.(spec)) return null;
-  if (imported === 'scanMigrationFiles' && /(?:^|\/)migration(?:Files|Ledger)\.js$/.test(spec)) return MIGRATION_LISTED;
-  if (imported === 'scanDatabaseMigrationFiles' && /(?:^|\/)migrationFiles\.js$/.test(spec)) return DB_MIGRATION_LISTED;
+  if (!spec.startsWith('.') || ctx.mocksSpecifier?.(spec)
+    || normalizeRel(posix.join(posix.dirname(ctx.fileRel), spec)) !== 'scripts/lib/migrationFiles.js') return null;
+  if (imported === 'scanMigrationFiles') return { domain: MIGRATION_LISTED, spec };
+  if (imported === 'scanDatabaseMigrationFiles') return { domain: DB_MIGRATION_LISTED, spec };
   return null;
 }
 
@@ -535,7 +537,11 @@ function namedElements(s, arr, m, i, to, depth) {
     if (arr.slice(open + 1, m[open]).some((token) => isWord(token, 'withFileTypes'))) return null;
     return { domain: LISTED, next: m[open] + 1 };
   }
-  if (calls && callee === i && s.scanners.has(head.v) && !shadowed(s, head.v)) return { domain: s.scanners.get(head.v), next: m[open] + 1 };
+  if (calls && callee === i && s.scanners.has(head.v) && !shadowed(s, head.v)) {
+    const { domain, spec } = s.scanners.get(head.v);
+    s.ctx.shared.trustLog.push(spec);
+    return { domain, next: m[open] + 1 };
+  }
   if (calls && callee === i + 2 && head.v === 'Object' && arr[callee].v === 'freeze' && !shadowed(s, 'Object')) {
     return { domain: elementsOf(s, arr, m, open + 1, m[open], depth + 1), next: m[open] + 1 };
   }

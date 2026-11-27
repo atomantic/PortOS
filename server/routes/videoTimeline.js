@@ -7,10 +7,11 @@
  */
 
 import { Router } from 'express';
-import { paginationQuerySchema, isPaginationRequested, paginateArray } from '../lib/queryValidation.js';
+import { emptyQuerySchema, paginationQuerySchema, isPaginationRequested, paginateArray } from '../lib/queryValidation.js';
 import { z } from 'zod';
 import { asyncHandler, ServerError } from '../lib/errorHandler.js';
 import { validateRequest } from '../lib/validateRequest.js';
+import { assertCancelResult } from '../lib/cancelResponse.js';
 import {
   listProjects,
   getProject,
@@ -18,6 +19,7 @@ import {
   updateProject,
   deleteProject,
   renderProject,
+  cancelRender,
   attachSseClient,
 } from '../services/videoTimeline/local.js';
 import {
@@ -163,6 +165,11 @@ router.delete('/projects/:id', asyncHandler(async (req, res) => {
 router.post('/projects/:id/render', asyncHandler(async (req, res) => {
   res.json(await renderProject(req.params.id));
 }));
+
+router.post('/:jobId/cancel', (req, res) => {
+  validateRequest(emptyQuerySchema, req.query);
+  res.json(assertCancelResult(cancelRender(req.params.jobId)));
+});
 
 router.get('/:jobId/events', (req, res) => {
   const ok = attachSseClient(req.params.jobId, res);

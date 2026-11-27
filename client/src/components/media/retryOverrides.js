@@ -12,7 +12,7 @@ import {
 } from '../../lib/videoReferenceModes';
 import {
   isMiniMaxH3SpeedProfile, normalizeTextEncoderForModel, DEFAULT_SPEED_PROFILE_ID,
-  normalizeSpeedProfileForModel, isFullDecodeId, resolveDraftDecodeForModel,
+  normalizeSpeedProfileForModel,
   selectedContextFramesForModel,
 } from '../../lib/videoGenParams';
 import { isDefaultVideoStreamingMode, videoStreamingModeFromRecord } from '../../lib/videoStreamingMode';
@@ -40,9 +40,8 @@ const sameJson = (a, b) => JSON.stringify(a) === JSON.stringify(b);
 //   - contextFrames: clamp to the model's supported window;
 //   - i2vReferenceMode: a model that pins frame one offers only Anchor (#4874),
 //     so a stranded `inspire` would be invisible to the user and rejected on submit;
-//   - textEncoderId / speedProfileId: drop a recorded value the registry no longer offers;
-//   - draftDecode: snap to the model's decoders (Full for a delivery model).
-export function reconcileModelBoundParams(model, models, draft) {
+//   - textEncoderId / speedProfileId: drop a recorded value the registry no longer offers.
+export function reconcileModelBoundParams(model, draft) {
   if (!model) return draft;
   const keepReferenceMode = isDefaultI2vReferenceMode(draft.i2vReferenceMode)
     || runtimeSupportsI2vReferenceMode(model.runtime, draft.i2vReferenceMode);
@@ -51,7 +50,6 @@ export function reconcileModelBoundParams(model, models, draft) {
     i2vReferenceMode: keepReferenceMode ? draft.i2vReferenceMode : DEFAULT_I2V_REFERENCE_MODE,
     textEncoderId: normalizeTextEncoderForModel(draft.textEncoderId, model),
     speedProfileId: normalizeSpeedProfileForModel(draft.speedProfileId, model),
-    draftDecode: resolveDraftDecodeForModel(draft.draftDecode, model, models),
   };
 }
 
@@ -93,7 +91,7 @@ function numericOverrides(draft, p) {
 // used it. `null` clears the inherited request because an explicit default and
 // an absent field are the same request.
 function modelBoundOverrides(draft, p, context, modelChanged, overrides) {
-  const { currentModel, originalEncoder, originalSpeedProfileForModel, originalDraftDecode } = context;
+  const { currentModel, originalEncoder, originalSpeedProfileForModel } = context;
   const out = {};
   if (modelChanged || draft.textEncoderId !== originalEncoder) out.textEncoderId = draft.textEncoderId;
   if (modelChanged || draft.speedProfileId !== originalSpeedProfileForModel) {
@@ -103,9 +101,6 @@ function modelBoundOverrides(draft, p, context, modelChanged, overrides) {
   if (currentModel?.speedProfiles?.some((profile) => profile.id === draft.speedProfileId && isMiniMaxH3SpeedProfile(profile))) {
     if (p.steps != null || overrides.steps !== undefined) out.steps = null;
     if (p.guidanceScale != null || overrides.guidanceScale !== undefined) out.guidanceScale = null;
-  }
-  if (modelChanged || draft.draftDecode !== originalDraftDecode) {
-    out.draftDecode = isFullDecodeId(draft.draftDecode) ? null : draft.draftDecode;
   }
   return out;
 }
@@ -133,8 +128,7 @@ function flagOverrides(draft, p) {
 // the keys the user changed (null when nothing changed) so unchanged fields
 // ride through from the original job. `context` carries the model-derived
 // baselines the form computes: { currentModel, isHosted, chainingActive,
-// displayedContextFrames, originalEncoder, originalSpeedProfileForModel,
-// originalDraftDecode }.
+// displayedContextFrames, originalEncoder, originalSpeedProfileForModel }.
 export function buildVideoRetryOverrides(draft, p, context) {
   const overrides = {};
   if (draft.prompt !== (p.retryPrompt ?? p.prompt ?? '')) overrides.prompt = draft.prompt;

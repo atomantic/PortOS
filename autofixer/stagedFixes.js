@@ -30,6 +30,7 @@ export const processNameFromSessionId = (id) => {
 export function createStagedFixStore({ root, loadApps, execPm2 }) {
   let tail = Promise.resolve();
   let stopping = false;
+  let patchInProgress = false;
   const restarting = new Set();
   const serialize = (operation) => {
     const run = tail.then(() => {
@@ -39,6 +40,16 @@ export function createStagedFixStore({ root, loadApps, execPm2 }) {
     tail = run.catch(() => {});
     return run;
   };
+  const withPatchTransaction = async (operation) => {
+    if (stopping) throw new Error('Autofixer is shutting down');
+    patchInProgress = true;
+    try {
+      return await operation();
+    } finally {
+      patchInProgress = false;
+    }
+  };
+  const serializePatch = operation => serialize(() => withPatchTransaction(operation));
   const sessionDir = id => isAutofixerSessionId(id) ? join(root, 'sessions', id) : null;
   const metadata = async (id) => {
     const dir = sessionDir(id);
@@ -58,13 +69,16 @@ export function createStagedFixStore({ root, loadApps, execPm2 }) {
     const fix = await read(id);
     if (fix.error) return fix;
     const { record, patch } = fix;
-    let disposition = 'discarded';
-    if (action === 'apply') {
-      const app = (await loadApps()).find(app => app.id === record.appId
-        && app.repoPath === record.repoPath && app.pm2ProcessNames?.includes(record.processName));
-      if (!app) return { status: 409, error: 'The original registered app or process has changed' };
-      const validation = validateProposedDiff(patch, { maxBytes: 200 * 1024 });
-      if (!validation.ok) return { status: 409, error: validation.reason };
+    if (action !== 'apply') {
+      await save(id, { ...record, staged: false, promoted: false, disposition: 'discarded' });
+      return { success: true, disposition: 'discarded' };
+    }
+    const app = (await loadApps()).find(app => app.id === record.appId
+      && app.repoPath === record.repoPath && app.pm2ProcessNames?.includes(record.processName));
+    if (!app) return { status: 409, error: 'The original registered app or process has changed' };
+    const validation = validateProposedDiff(patch, { maxBytes: 200 * 1024 });
+    if (!validation.ok) return { status: 409, error: validation.reason };
+    return withPatchTransaction(async () => {
       const applied = await applyDiffToLive(app.repoPath, patch, root);
       if (!applied.ok) return { status: 409, error: applied.error };
       const rollback = async (error) => {
@@ -77,18 +91,19 @@ export function createStagedFixStore({ root, loadApps, execPm2 }) {
         }
         return `Restart failed: ${error}${reverted.error ? '; rollback failed — inspect the checkout' : '; patch rolled back'}`;
       };
+      const updated = { ...record, staged: false, promoted: true, disposition: 'applied' };
       if (record.processName === 'portos-autofixer') {
         // Commit the applied disposition before dispatching a restart that
         // waits for this daemon to exit. The shutdown drain cannot await it.
         restarting.add(id);
         try {
-          await save(id, { ...record, staged: false, promoted: true, disposition: 'applied' });
+          await save(id, updated);
         } catch (error) {
           restarting.delete(id);
           throw error;
         }
         void execPm2(['restart', record.processName])
-          .catch(error => serialize(() => rollback(error.message)))
+          .catch(error => serializePatch(() => rollback(error.message)))
           .then(message => { if (message) console.error(`❌ [Autofixer] ${message}`); })
           .catch(error => console.error(`❌ [Autofixer] Could not reconcile self-restart: ${error.message}`))
           .finally(() => restarting.delete(id));
@@ -96,16 +111,16 @@ export function createStagedFixStore({ root, loadApps, execPm2 }) {
       }
       const restart = await execPm2(['restart', record.processName]).catch(error => ({ error: error.message }));
       if (restart.error) return { status: 500, error: await rollback(restart.error) };
-      disposition = 'applied';
-    }
-    const updated = { ...record, staged: false, promoted: disposition === 'applied', disposition };
-    await save(id, updated);
-    return { success: true, disposition };
+      await save(id, updated);
+      return { success: true, disposition: 'applied' };
+    });
   };
   const save = (id, record) => writeHistoryJson(join(sessionDir(id), 'metadata.json'), record);
   return {
     read,
     serialize,
+    serializePatch,
+    hasActivePatch: () => patchInProgress,
     async canPrune(id) {
       const dir = sessionDir(id);
       if (!dir || restarting.has(id)) return false;

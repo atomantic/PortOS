@@ -7,7 +7,7 @@
  * so the client imports it directly (see client/src/lib/README.md).
  */
 
-const PITCH_CLASS = { C: 0, D: 2, E: 4, F: 5, G: 7, A: 9, B: 11 };
+export const PITCH_CLASS = Object.freeze({ C: 0, D: 2, E: 4, F: 5, G: 7, A: 9, B: 11 });
 const PITCH_RE = /^([A-Ga-g])(#{1,2}|b{1,2})?(-?\d)$/;
 
 /** MIDI number for a scientific-pitch string ("C4" = 60, "A4" = 69), or null. */

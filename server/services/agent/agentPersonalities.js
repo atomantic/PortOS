@@ -15,6 +15,7 @@ const store = createCachedStore(AGENTS_FILE, { agents: {} }, { context: 'agentPe
 const loadAgents = store.load;
 
 export const invalidateCache = store.invalidateCache;
+export const withLiveRestore = store.withLiveRestore;
 
 /**
  * Get all agent personalities

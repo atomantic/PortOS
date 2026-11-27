@@ -5,8 +5,8 @@
  * Holds what services, lib validators and the project/scene record shape
  * import: the `musicVideoProject` input schemas, the cached audio-analysis
  * shape (services/musicVideo/audioAnalysis.js) and shared enums. Request
- * bodies that only a route validates live in musicVideoRouteValidation.js,
- * which imports from here, never the reverse (#16826).
+ * bodies that only a route validates live under routeValidation/. Those domain
+ * modules import from here, never the reverse (#16826).
  */
 
 import { CLIP_SOUND_FADE_RANGE, CLIP_SOUND_MUSIC_RANGE, CLIP_SOUND_VOLUME_RANGE } from './musicVideoClipSound.js';
@@ -16,6 +16,8 @@ import { filmLookSchema } from '../filmLookValidation.js';
 import { TEMPLATE_EFFECT_CONTROLS } from './musicVideoTemplateEffects.js';
 import { IMAGE_REFERENCE_REQUEST_LIMIT, MUSIC_VIDEO_RESEARCH_REFERENCE_LIMIT, MUSIC_VIDEO_CLIP_REFERENCE_REQUEST_LIMIT } from '../referenceLimits.js';
 import { z } from 'zod';
+import { MUSIC_VIDEO_UPSCALERS } from './musicVideoUpscale.js';
+import { FAL_SEEDVR2_TARGET_RESOLUTIONS } from '../videoGenRequestFields.js';
 import { musicVideoImageTreatmentsSchema } from './musicVideoImageTreatmentValidation.js';
 
 export const musicVideoTemplateEffectsSchema = z.object(Object.fromEntries(TEMPLATE_EFFECT_CONTROLS.map(({ id }) => [id, z.number().min(0).max(1).nullable().optional()]))).strict();
@@ -94,7 +96,13 @@ export const musicVideoConceptSchema = z.object({
 // A tier ceiling is a resolution label every catalog ranks ('480p', '768P', '2K', '4k').
 const musicVideoTierResolution = z.string().trim().regex(/^(\d{3,4}p|\d(\.\d)?k)$/i, 'Use a resolution such as 480p, 1080p or 4k');
 
+export const musicVideoUpscaleFields = {
+  upscaleMethod: z.enum(Object.keys(MUSIC_VIDEO_UPSCALERS)).optional(),
+  upscaleTargetResolution: z.enum(FAL_SEEDVR2_TARGET_RESOLUTIONS).optional(),
+};
+
 export const musicVideoVideoSettingsSchema = z.object({
+  ...musicVideoUpscaleFields,
   renderPool: z.object({
     mode: z.enum(['local', 'peers', 'both']),
     peers: z.array(z.object({ peerId: z.string().uuid(), modelId: z.string().trim().min(1).max(256) }).strict()).max(12),
@@ -808,8 +816,8 @@ export const musicVideoCastAndSetsDirectionEditSchema = z.object({
   }).strict()).max(8).optional(),
 }).strict().refine((edits) => {
   if (!edits.sets?.some((set) => Object.hasOwn(set, 'setReference'))) return true;
-  return !Object.hasOwn(edits, 'renderingMedium') && !Object.hasOwn(edits, 'sheetLayout') && !edits.protagonist && !edits.world && !edits.looks && !edits.cast && !edits.tests
-    && edits.sets.every((set) => Object.keys(set).every((key) => key === 'id' || key === 'setReference'));
+  return Object.keys(edits).every((key) => key === 'sets')
+    && edits.sets.every((set) => Object.hasOwn(set, 'setReference') && Object.keys(set).every((key) => key === 'id' || key === 'setReference'));
 }, 'Save greybox selections separately from direction edits.');
 
 // #14820: the sung word (or phrase) a shot was cut on; its start follows that word's onset.

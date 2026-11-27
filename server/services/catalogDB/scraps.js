@@ -121,7 +121,7 @@ export async function getScrap(id) {
 // internal extraction detail reached only via listChildScraps.
 export async function listScraps({ limit = 50, offset = 0 } = {}) {
   const result = await query(
-    `SELECT * FROM catalog_scraps
+    `SELECT id, title, raw_text, source_kind, metadata, embedding_model, origin_instance_id, chunk_index, parent_scrap_id, created_at, updated_at, deleted, deleted_at, sync_sequence FROM catalog_scraps
      WHERE deleted = false AND parent_scrap_id IS NULL
      ORDER BY created_at DESC
      LIMIT $1 OFFSET $2`,

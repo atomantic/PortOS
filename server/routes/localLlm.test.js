@@ -1,31 +1,29 @@
+import { recordingOperatorIo } from '../test/recordingOperatorIo.js';
 import { EventEmitter } from 'node:events';
 import { registerModelObservationSocket } from '../services/modelObservation.js';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import express from 'express';
 import { request } from '../lib/testHelper.js';
 import localLlmRoutes from './localLlm.js';
+import { adoptJevHead } from '../services/jevHeads.js';
+import { describeLocalPersistentMindSetup } from '../services/localPersistentMindSetup.js';
+import { decide } from '../services/jev.js';
+import { installLaya, scoreLaya } from '../services/layaMlx.js';
 import { runLocalLlmTest, compareLocalLlmModels } from '../services/localLlmPlayground.js';
-import { listModels, listVisionModels, listToolUseModels, installModel, cancelModelInstall, switchBackend } from '../services/localLlm.js';
-import { enrichCatalogWithVariants, applyMeasuredFit } from '../services/huggingFaceCatalog.js';
+import { listModels, listVisionModels, listToolUseModels, listContextPlans, installModel, cancelModelInstall, switchBackend, migrateBackend, controlOllamaServer, upgradeBackend } from '../services/localLlm.js';
+import { enrichCatalogWithVariants, applyMeasuredFit, searchHuggingFaceModels } from '../services/huggingFaceCatalog.js';
 import { getMeasuredFits } from '../services/localModelAssessmentStore.js';
 import { listEndpointRuntimeModels } from '../services/localRuntimeEndpoints.js';
 import { runAssessment } from '../services/localModelAssessments.js';
 import { startSweep, getSweepStatus, cancelSweep } from '../services/localModelAssessmentSweep.js';
 import { runOpenCodeAgentBenchmark } from '../services/localModelAgentBenchmark.js';
 import { getLoadedModels, unloadModel } from '../services/ollamaManager.js';
-import { getLoadedModels as getLoadedLmStudioModels, getLastLoadedModelsError as getLmStudioResidencyError } from '../services/lmStudioManager.js';
+import { getLoadedModels as getLoadedLmStudioModels, getLastLoadedModelsError as getLmStudioResidencyError, controlLmStudioServer } from '../services/lmStudioManager.js';
 import { getSettings, readSettingsStrict, updateSettingsWith } from '../services/settings.js';
 import { localLlmCompareSchema, localLlmTestSchema } from '../lib/mediaValidation.js';
-import { installSplashRuntime, saveSplashContextWindow, startSplashServer, stopSplashServer } from '../services/splashServerManager.js';
-import { installMkserve, startMkserveServer, stopMkserveServer } from '../services/mkserveRuntimeManager.js';
 import { ServerError, errorEvents } from '../lib/errorHandler.js';
-import { saveProcessList } from '../services/pm2.js';
 import { syncRuntimeProviderModels } from '../services/localRuntimeProviderSync.js';
-import { startMtplxServer, stopMtplxServer, waitForMtplxReady } from '../services/mtplxServerManager.js';
-import { startSlotstreamServer, stopSlotstreamServer, waitForSlotstreamReady } from '../services/slotstreamServerManager.js';
 import { startLlamaServer, stopLlamaServer, waitForLlamaServerReady } from '../services/llamaServerManager.js';
-import { pullMtplxModel, removeMtplxModel } from '../services/mtplxModelManager.js';
-import { downloadSlotstreamModel } from '../services/slotstreamModelManager.js';
 
 const getModelAbuseGuardStatus = vi.fn(async () => ({ ready: false, modelCached: false, runtimeReady: false }));
 const installModelAbuseGuard = vi.fn(async () => ({ ok: true, ready: true }));
@@ -42,6 +40,7 @@ vi.mock('../services/localLlm.js', () => ({
   listModels: vi.fn(async () => []),
   listVisionModels: vi.fn(async () => []),
   listToolUseModels: vi.fn(async () => []),
+  listContextPlans: vi.fn(),
   installModel: vi.fn(),
   cancelModelInstall: vi.fn(),
   previewInstallModel: vi.fn(async () => ({
@@ -54,6 +53,23 @@ vi.mock('../services/localLlm.js', () => ({
   installBackend: vi.fn(),
   upgradeBackend: vi.fn(),
   controlOllamaServer: vi.fn(),
+}));
+
+vi.mock('../services/jev.js', async (importOriginal) => ({
+  ...await importOriginal(),
+  decide: vi.fn(),
+}));
+
+vi.mock('../services/jevHeads.js', () => ({ adoptJevHead: vi.fn() }));
+
+vi.mock('../services/localPersistentMindSetup.js', () => ({
+  describeLocalPersistentMindSetup: vi.fn(),
+  applyLocalPersistentMindSetup: vi.fn(),
+}));
+
+vi.mock('../services/layaMlx.js', () => ({
+  installLaya: vi.fn(),
+  scoreLaya: vi.fn(),
 }));
 
 vi.mock('../services/modelAbuseGuard.js', () => ({
@@ -87,6 +103,7 @@ vi.mock('../services/ollamaManager.js', () => ({
 }));
 
 vi.mock('../services/lmStudioManager.js', () => ({
+  controlLmStudioServer: vi.fn(),
   getLastLoadedModelsError: vi.fn(() => null),
   getLoadedModels: vi.fn(async () => []),
 }));
@@ -154,6 +171,7 @@ vi.mock('../services/mtplxServerManager.js', async (importOriginal) => ({
   startMtplxServer: vi.fn(),
   stopMtplxServer: vi.fn(),
   installMtplx: vi.fn(),
+  uninstallMtplx: vi.fn(),
   waitForMtplxReady: vi.fn(),
 }));
 vi.mock('../services/slotstreamServerManager.js', async (importOriginal) => ({
@@ -162,12 +180,14 @@ vi.mock('../services/slotstreamServerManager.js', async (importOriginal) => ({
   startSlotstreamServer: vi.fn(),
   stopSlotstreamServer: vi.fn(),
   installSlotstream: vi.fn(),
+  uninstallSlotstream: vi.fn(),
   waitForSlotstreamReady: vi.fn(),
 }));
 vi.mock('../services/mtplxModelManager.js', async (importOriginal) => ({
   ...(await importOriginal()),
   searchMtplxCatalog: vi.fn(),
   pullMtplxModel: vi.fn(),
+  cancelMtplxModelPull: vi.fn(),
   previewMtplxPull: vi.fn(),
   removeMtplxModel: vi.fn(),
 }));
@@ -175,6 +195,7 @@ vi.mock('../services/slotstreamModelManager.js', async (importOriginal) => ({
   ...(await importOriginal()),
   cancelSlotstreamModelDownload: vi.fn(),
   downloadSlotstreamModel: vi.fn(),
+  removeSlotstreamModel: vi.fn(),
   previewSlotstreamDownload: vi.fn(),
 }));
 vi.mock('../services/splashRuntimeStatus.js', () => ({
@@ -186,6 +207,7 @@ vi.mock('../services/splashServerManager.js', () => ({
   saveSplashContextWindow: vi.fn(),
   startSplashServer: vi.fn(),
   stopSplashServer: vi.fn(),
+  uninstallSplashRuntime: vi.fn(),
 }));
 vi.mock('../services/mkserveRuntimeManager.js', () => ({
   MKSERVE_APP: 'portos-mkserve',
@@ -193,6 +215,7 @@ vi.mock('../services/mkserveRuntimeManager.js', () => ({
   installMkserve: vi.fn(),
   startMkserveServer: vi.fn(),
   stopMkserveServer: vi.fn(),
+  uninstallMkserve: vi.fn(),
 }));
 
 vi.mock('../services/specDecodeModels.js', () => ({
@@ -211,17 +234,103 @@ vi.mock('../services/settings.js', () => ({
   getSettings: vi.fn(async () => ({})),
   readSettingsStrict: vi.fn(),
   updateSettingsWith: vi.fn(),
-  // localPersistentMindSetup → cos → cosTaskStore → codeReview listens on boot.
   settingsEvents: { on: vi.fn(), emit: vi.fn(), setMaxListeners: vi.fn() },
 }));
 
-function makeApp() {
+function makeApp(auth) {
   const app = express();
   app.use(express.json({ limit: '3mb' }));
-  app.set('io', { emit: vi.fn() });
+  app.set('io', recordingOperatorIo());
+  app.use((req, _res, next) => {
+    req.portosAuthContext = auth;
+    next();
+  });
   app.use('/api/local-llm', localLlmRoutes);
   return app;
 }
+
+describe('managed scorer routes', () => {
+  const post = (path, body = {}) => request(makeApp()).post(`/api/local-llm/${path}`).send(body);
+  const premise = 'A duplicate invoice arrived.';
+  const options = ['billing', 'sales'];
+  const jevRequest = { premise, hypotheses: options };
+  const layaRequest = { premise, instructions: 'Choose a department.', options };
+
+  beforeEach(() => {
+    decide.mockReset();
+    installLaya.mockReset();
+    scoreLaya.mockReset();
+  });
+
+  it('accepts a Laya install with HTTP 202', async () => {
+    const result = { ok: true, installing: true };
+    installLaya.mockResolvedValueOnce(result);
+    const res = await post('laya-mlx/install');
+    expect(res.status).toBe(202);
+    expect(res.body).toEqual(result);
+  });
+
+  it.each([
+    ['laya-unsupported', 400],
+    ['laya-busy', 409],
+  ])('returns %s as a Laya install refusal', async (code, status) => {
+    installLaya.mockResolvedValueOnce({ ok: false, code });
+    const res = await post('laya-mlx/install');
+    expect(res.status).toBe(status);
+    expect(res.body).toMatchObject({ error: expect.any(String), code });
+  });
+
+  it.each([
+    ['laya-request-invalid', 400],
+    ['laya-unsupported', 400],
+    ['laya-context-too-long', 400],
+    ['laya-disabled', 403],
+    ['laya-busy', 409],
+    ['laya-not-ready', 503],
+    ['laya-response-invalid', 502],
+    ['laya-scoring-failed', 502],
+  ])('returns %s as a Laya scoring failure', async (code, status) => {
+    scoreLaya.mockResolvedValueOnce({ ok: false, code });
+    const res = await post('laya-mlx/score', layaRequest);
+    expect(res.status).toBe(status);
+    expect(res.body).toMatchObject({ error: expect.any(String), code });
+  });
+
+  it.each([
+    ['jev-request-invalid', 400],
+    ['jev-premise-too-large', 400],
+    ['jev-not-installed', 503],
+    ['jev-start-failed', 503],
+    ['jev-timeout', 504],
+    ['jev-response-invalid', 502],
+    ['jev-head-revision-mismatch', 502],
+  ])('returns %s as a Jev scoring failure', async (code, status) => {
+    decide.mockResolvedValueOnce({ ok: false, code });
+    const res = await post('jev/score', jevRequest);
+    expect(res.status).toBe(status);
+    expect(res.body).toMatchObject({ error: expect.any(String), code });
+  });
+
+  it('validates the Jev decision input before calling the scorer', async () => {
+    const res = await post('jev/score', { ...jevRequest, hypotheses: [options[0]] });
+    expect(res.status).toBe(400);
+    expect(res.body).toMatchObject({ error: expect.any(String), code: 'VALIDATION_ERROR' });
+    expect(decide).not.toHaveBeenCalled();
+  });
+
+  it('returns successful decisions as HTTP 200 with the service payload', async () => {
+    const result = { ok: true, choice: 'billing', margin: 0.8, abstained: false };
+    decide.mockResolvedValueOnce(result);
+    scoreLaya.mockResolvedValueOnce(result);
+    const jev = await post('jev/score', { ...jevRequest, minMargin: 0.2 });
+    expect(jev.status).toBe(200);
+    expect(jev.body).toEqual(result);
+    expect(decide).toHaveBeenCalledWith({ premise, options, minMargin: 0.2 });
+    const laya = await post('laya-mlx/score', layaRequest);
+    expect(laya.status).toBe(200);
+    expect(laya.body).toEqual(result);
+  });
+});
 
 describe('local LLM playground routes', () => {
   beforeEach(() => {
@@ -729,7 +838,7 @@ describe('local LLM memory-management routes', () => {
       .send({ backend: 'lmstudio', modelId: 'some-model' });
 
     expect(res.status).toBe(400);
-    expect(res.body.error).toMatch(/use \/api\/lmstudio\/unload/);
+    expect(res.body.code).toBe('VALIDATION_ERROR');
     expect(unloadModel).not.toHaveBeenCalled();
   });
 
@@ -824,17 +933,46 @@ describe('measured assessments wiring', () => {
     });
   });
 
-  it('runs the explicit OpenCode agent benchmark with a bounded timeout', async () => {
+  it('POST /assessments/run returns 503 when an endpoint runtime is unconfigured', async () => {
+    runAssessment.mockRejectedValueOnce(new ServerError('No endpoint is configured for the llama runtime', {
+      status: 503,
+      code: 'LOCAL_LLM_ENDPOINT_MISSING',
+      context: { backend: 'llama' },
+    }));
+
+    const res = await request(makeApp())
+      .post('/api/local-llm/assessments/run')
+      .send({ backend: 'llama', modelId: 'example-model:7b' });
+
+    expect(res.status).toBe(503);
+    expect(res.body).toMatchObject({ code: 'LOCAL_LLM_ENDPOINT_MISSING', context: { backend: 'llama' } });
+  });
+
+  it('POST /migrate returns 502 when a backend is unavailable', async () => {
+    migrateBackend.mockResolvedValueOnce({ success: false, error: 'Source backend is unavailable' });
+
+    const res = await request(makeApp()).post('/api/local-llm/migrate').send({ to: 'ollama' });
+
+    expect(res.status).toBe(502);
+    expect(res.body).toMatchObject({ error: 'Source backend is unavailable', code: 'BAD_GATEWAY' });
+  });
+
+  it.each([
+    ['ollama', 'qwen3.8:27b-mlx'],
+    ['splash', 'inkling2-mini'],
+    ['mkserve', 'thinkingmachines/Inkling-2-Mini'],
+    ['mtplx', 'example/cached-inkling'],
+  ])('runs the %s agent benchmark with a bounded timeout', async (backend, modelId) => {
     const res = await request(makeApp())
       .post('/api/local-llm/assessments/agent-benchmark')
-      .send({ backend: 'ollama', modelId: 'qwen3.8:27b-mlx', timeoutMs: 120000 });
+      .send({ backend, modelId, timeoutMs: 120000 });
 
     expect(res.status).toBe(200);
     expect(res.body).toMatchObject({
-      backend: 'ollama', modelId: 'qwen3.8:27b-mlx', timeoutMs: 120000, completed: true,
+      backend, modelId, timeoutMs: 120000, completed: true,
     });
     expect(runOpenCodeAgentBenchmark).toHaveBeenCalledWith({
-      backend: 'ollama', modelId: 'qwen3.8:27b-mlx', timeoutMs: 120000,
+      backend, modelId, timeoutMs: 120000,
     });
   });
 
@@ -1104,6 +1242,29 @@ describe('llama-server routes', () => {
     expect(res.status).toBe(400);
   });
 
+  it('ends operator-only install progress when llama.cpp installation rejects', async () => {
+    const { installLlamaServer } = await import('../services/llamaServerManager.js');
+    const start = { event: 'start', message: 'Installing llama.cpp via Homebrew…' };
+    installLlamaServer.mockImplementationOnce(async ({ onProgress }) => {
+      onProgress(start);
+      throw new ServerError('package manager exited', { status: 502 });
+    });
+    const app = makeApp();
+    const operatorEmit = vi.fn();
+    const broadcast = vi.fn();
+    app.set('io', { ...recordingOperatorIo(operatorEmit), emit: broadcast });
+
+    const res = await request(app).post('/api/local-llm/llama-server/install');
+
+    expect(res.status).toBe(502);
+    expect(broadcast).not.toHaveBeenCalled();
+    const progressCalls = operatorEmit.mock.calls.filter(([event]) => event === 'localLlm:progress');
+    expect(progressCalls).toEqual([
+      ['localLlm:progress', start],
+      ['localLlm:progress', { event: 'error', message: 'llama.cpp install failed: package manager exited' }],
+    ]);
+  });
+
   it('POST /api/local-llm/llama-server/upgrade emits progress and returns the result', async () => {
     const { upgradeLlamaServer } = await import('../services/llamaServerManager.js');
     upgradeLlamaServer.mockResolvedValueOnce({ success: true, note: 'updated and restarted' });
@@ -1165,6 +1326,16 @@ describe('local LLM default switching', () => {
     expect(progress.some(([, payload]) => payload.event === 'error' && payload.message === error)).toBe(true);
   });
 
+  it('returns 502 with the existing error envelope when a switch fails', async () => {
+    const error = 'Backend unavailable';
+    switchBackend.mockResolvedValue({ success: false, error });
+
+    const res = await request(makeApp()).post('/api/local-llm/switch').send({ to: 'lmstudio' });
+
+    expect(res.status).toBe(502);
+    expect(res.body).toMatchObject({ error, code: 'INTERNAL_ERROR' });
+  });
+
   it('returns a successful default change and emits completion', async () => {
     switchBackend.mockResolvedValue({ success: true, backend: 'lmstudio' });
     const app = makeApp();
@@ -1180,6 +1351,19 @@ describe('local LLM catalog and loaded query validation', () => {
     listModels.mockClear();
     const res = await request(makeApp()).get('/api/local-llm/catalog?backend=ollama&backend=lmstudio');
     expect(res.status).toBe(400);
+    expect(res.body.code).toBe('VALIDATION_ERROR');
+    expect(listModels).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    ['backend=invalid'],
+    ['backend=ollama&variants=yes'],
+    [`backend=ollama&q=${'x'.repeat(161)}`],
+  ])('GET /catalog rejects invalid query %s before listing models', async (query) => {
+    listModels.mockClear();
+    const res = await request(makeApp()).get(`/api/local-llm/catalog?${query}`);
+    expect(res.status).toBe(400);
+    expect(res.body.code).toBe('VALIDATION_ERROR');
     expect(listModels).not.toHaveBeenCalled();
   });
 
@@ -1187,215 +1371,216 @@ describe('local LLM catalog and loaded query validation', () => {
     getLoadedModels.mockClear();
     const res = await request(makeApp()).get('/api/local-llm/loaded?fresh=1&fresh=0');
     expect(res.status).toBe(400);
+    expect(res.body.code).toBe('VALIDATION_ERROR');
     expect(getLoadedModels).not.toHaveBeenCalled();
   });
 });
 
-describe.each([
-  { id: 'splash', install: installSplashRuntime, start: startSplashServer, stop: stopSplashServer },
-  { id: 'mkserve', install: installMkserve, start: startMkserveServer, stop: stopMkserveServer },
-])('$id lifecycle routes', ({ id, install, start, stop }) => {
-  const url = `/api/local-llm/${id}`;
-  const readStatus = (app) => request(app).get(`${url}/status`);
-  const mutate = (app, action) => request(app).post(`${url}/${action}`);
-
-  it('returns immediately, reports install progress, and rejects concurrent operations', async () => {
-    const app = makeApp();
-    let finish;
-    const transfer = new Promise((resolve) => { finish = resolve; });
-    install.mockImplementationOnce(({ onProgress }) => {
-      onProgress({ event: 'download', message: 'Downloading weights' });
-      return transfer;
-    });
-    try {
-      const accepted = await mutate(app, 'install');
-      expect(accepted.status).toBe(202);
-      expect(accepted.body.operation.action).toBe('install');
-      expect((await readStatus(app)).body.operation).toMatchObject({
-        action: 'install', message: expect.stringContaining('Downloading weights'),
-      });
-      expect((await mutate(app, 'start')).status).toBe(409);
-    } finally {
-      finish();
-    }
-    expect((await readStatus(app)).body).toMatchObject({ operation: null, lastError: null });
-    expect(app.get('io').emit).toHaveBeenCalledWith(
-      'localLlm:progress', expect.objectContaining({ event: 'complete', runtime: id }),
-    );
-  });
-
-  it('routes Update and Stop to the managed service, rejecting launch overrides', async () => {
-    const app = makeApp();
-    install.mockClear().mockResolvedValueOnce({});
-    stop.mockClear().mockResolvedValueOnce({});
-    start.mockClear();
-    const invalid = await mutate(app, 'start').send({ host: '0.0.0.0' });
-    expect(invalid.status).toBe(400);
-    expect(start).not.toHaveBeenCalled();
-    expect((await mutate(app, 'upgrade')).status).toBe(202);
-    expect(install).toHaveBeenCalledOnce();
-    expect((await mutate(app, 'stop')).status).toBe(202);
-    expect(stop).toHaveBeenCalledOnce();
-  });
-
-  it('surfaces actionable refusal after accepting a background start', async () => {
-    const app = makeApp();
-    start.mockRejectedValueOnce(new ServerError('Preset port is occupied. Stop the external process first.', { status: 409 }));
-    expect((await mutate(app, 'start')).status).toBe(202);
-    expect((await readStatus(app)).body).toMatchObject({
-      operation: null, lastError: 'Preset port is occupied. Stop the external process first.',
-    });
-    expect(app.get('io').emit).toHaveBeenCalledWith(
-      'localLlm:progress', expect.objectContaining({ event: 'error', runtime: id }),
-    );
-  });
-});
-
-
-describe('managed runtime provider-model refresh after a user lifecycle action', () => {
-  const post = (path, body = {}) => request(makeApp()).post(`/api/local-llm/${path}`).send(body);
-  const MODEL = 'example-org/example-model';
+describe('llama.cpp provider-model refresh through the mounted Local LLM router', () => {
+  const endpoint = 'http://127.0.0.1:9000/v1';
+  const post = (action, body = {}) => request(makeApp()).post(`/api/local-llm/llama-server/${action}`).send(body);
 
   beforeEach(() => {
     syncRuntimeProviderModels.mockClear();
   });
 
-  it.each([
-    ['llama', 'llama-server/start', startLlamaServer, waitForLlamaServerReady],
-    ['mtplx', 'mtplx/start', startMtplxServer, waitForMtplxReady, {}],
-    ['slotstream', 'slotstream/start', startSlotstreamServer, waitForSlotstreamReady, {}],
-  ])('%s start refreshes after the response; a server still loading waits on its readiness probe', async (kind, path, start, waitFor) => {
-    start.mockResolvedValueOnce({ success: true, online: true, endpoint: 'http://127.0.0.1:9000/v1' });
-    const body = kind === 'llama' ? { model: 'preset' } : {};
-    expect((await post(path, body)).status).toBe(200);
-    expect(syncRuntimeProviderModels).toHaveBeenCalledTimes(1);
-    expect(syncRuntimeProviderModels.mock.calls[0][0]).toMatchObject({ kind, waitForReady: null });
-    expect(syncRuntimeProviderModels.mock.calls[0][0].io).toBeTruthy();
-
-    syncRuntimeProviderModels.mockClear();
-    start.mockResolvedValueOnce({ success: true, online: false, endpoint: 'http://127.0.0.1:9000/v1' });
-    waitFor.mockResolvedValueOnce({ ready: true });
-    expect((await post(path, body)).status).toBe(200);
-    await syncRuntimeProviderModels.mock.calls[0][0].waitForReady();
-    expect(waitFor).toHaveBeenCalledWith('http://127.0.0.1:9000/v1');
-  });
-
-  it('does not wait on the refresh: the response returns while it is still pending', async () => {
-    startMtplxServer.mockResolvedValueOnce({ success: true, online: true, endpoint: 'http://127.0.0.1:8000/v1' });
-    syncRuntimeProviderModels.mockReturnValueOnce(new Promise(() => {}));
-    expect((await post('mtplx/start')).status).toBe(200);
-  });
-
-  it.each([
-    ['llama-server/start', startLlamaServer, { model: 'preset' }],
-    ['mtplx/start', startMtplxServer, {}],
-    ['slotstream/start', startSlotstreamServer, {}],
-    ['mtplx/models/pull', pullMtplxModel, { model: MODEL }],
-    ['mtplx/models/remove', removeMtplxModel, { model: MODEL }],
-    ['slotstream/models/download', downloadSlotstreamModel, { model: MODEL }],
-  ])('%s that throws refreshes nothing', async (path, action, body) => {
-    action.mockRejectedValueOnce(new ServerError('refused', { status: 400 }));
-    expect((await post(path, body)).status).toBe(400);
-    expect(syncRuntimeProviderModels).not.toHaveBeenCalled();
-  });
-
-  it.each([
-    ['mtplx', 'mtplx/models/pull', pullMtplxModel],
-    ['slotstream', 'slotstream/models/download', downloadSlotstreamModel],
-  ])('%s checkpoint download refreshes when it succeeds', async (kind, path, action) => {
-    action.mockResolvedValueOnce({ success: true });
-    expect((await post(path, { model: MODEL })).status).toBe(200);
-    expect(syncRuntimeProviderModels.mock.calls[0][0]).toMatchObject({ kind, waitForReady: null });
-  });
-
-  it.each([
-    ['mtplx/models/pull', pullMtplxModel, {}, 502, 'MTPLX_PULL_FAILED'],
-    ['slotstream/models/download', downloadSlotstreamModel, {}, 502, 'SLOTSTREAM_DOWNLOAD_FAILED'],
-    ['slotstream/models/download', downloadSlotstreamModel, { status: 401, code: 'HF_AUTH' }, 401, 'HF_AUTH'],
-    ['slotstream/models/download', downloadSlotstreamModel, { status: 422, code: 'SLOTSTREAM_NO_WEIGHTS' }, 422, 'SLOTSTREAM_NO_WEIGHTS'],
-    ['slotstream/models/download', downloadSlotstreamModel, { status: 504, code: 'SLOTSTREAM_METADATA_TIMEOUT' }, 504, 'SLOTSTREAM_METADATA_TIMEOUT'],
-  ])('%s returns a structured error and skips refresh (%#)', async (path, action, details, status, code) => {
-    action.mockResolvedValueOnce({ success: false, error: 'Checkpoint unavailable', ...details });
-
-    const response = await post(path, { model: MODEL });
-
-    expect(response.status).toBe(status);
-    expect(response.body).toMatchObject({ error: 'Checkpoint unavailable', code });
-    expect(syncRuntimeProviderModels).not.toHaveBeenCalled();
-  });
-
-  it('returns a successful HTTP response for Slotstream cancellation and skips refresh', async () => {
-    downloadSlotstreamModel.mockResolvedValueOnce({
-      success: false, cancelled: true, model: MODEL, error: 'Cancelled', code: 'SLOTSTREAM_DOWNLOAD_CANCELLED',
+  it.each([true, false])('refreshes after a successful start (online=%s)', async (online) => {
+    startLlamaServer.mockResolvedValueOnce({ success: true, online, endpoint });
+    expect((await post('start', { model: 'preset' })).status).toBe(200);
+    expect(syncRuntimeProviderModels).toHaveBeenCalledExactlyOnceWith({
+      kind: 'llama', io: expect.any(Object), waitForReady: online ? null : expect.any(Function),
     });
+    if (!online) {
+      waitForLlamaServerReady.mockResolvedValueOnce({ ready: true });
+      await syncRuntimeProviderModels.mock.calls[0][0].waitForReady();
+      expect(waitForLlamaServerReady).toHaveBeenCalledWith(endpoint);
+    }
+  });
 
-    const response = await post('slotstream/models/download', { model: MODEL });
+  it('skips refresh when start throws', async () => {
+    startLlamaServer.mockRejectedValueOnce(new ServerError('refused', { status: 400 }));
+    expect((await post('start', { model: 'preset' })).status).toBe(400);
+    expect(syncRuntimeProviderModels).not.toHaveBeenCalled();
+  });
+
+  it('skips refresh for a successful stop', async () => {
+    stopLlamaServer.mockResolvedValueOnce({ success: true });
+    expect((await post('stop')).status).toBe(200);
+    expect(syncRuntimeProviderModels).not.toHaveBeenCalled();
+  });
+
+  it('reports an externally owned daemon as a conflict', async () => {
+    stopLlamaServer.mockResolvedValueOnce({
+      success: false, message: 'An external process is listening.', code: 'EXTERNAL_PROCESS_RUNNING',
+    });
+    const response = await post('stop');
+    expect(response.status).toBe(409);
+    expect(response.body).toMatchObject({ error: 'An external process is listening.', code: 'EXTERNAL_PROCESS_RUNNING' });
+  });
+});
+
+describe('local LLM setup and context reads', () => {
+  it('returns the checklist when local Persistent Mind setup is inapplicable', async () => {
+    const checklist = { applicable: false, recommendation: null, ready: false, steps: [{ id: 'recommendation', status: 'skipped' }] };
+    describeLocalPersistentMindSetup.mockResolvedValueOnce(checklist);
+
+    const response = await request(makeApp()).get('/api/local-llm/persistent-mind-setup');
 
     expect(response.status).toBe(200);
-    expect(response.body).toEqual({ success: false, cancelled: true, model: MODEL });
-    expect(syncRuntimeProviderModels).not.toHaveBeenCalled();
+    expect(response.body).toEqual(checklist);
   });
 
-  it('mtplx checkpoint removal refreshes', async () => {
-    removeMtplxModel.mockResolvedValueOnce({ success: true });
-    await post('mtplx/models/remove', { model: MODEL });
-    expect(syncRuntimeProviderModels.mock.calls[0][0]).toMatchObject({ kind: 'mtplx' });
+  it('returns the installed model context recommendations', async () => {
+    const context = { plans: [{ modelId: 'example-model', recommended: 8192 }], cacheType: 'q8_0' };
+    listContextPlans.mockResolvedValueOnce(context);
+
+    const response = await request(makeApp()).get('/api/local-llm/context-plans');
+
+    expect(response.status).toBe(200);
+    expect(response.body).toEqual(context);
+  });
+});
+
+describe('local LLM service and upgrade routes', () => {
+  const progressEvents = (app) => app.get('io').emit.mock.calls
+    .filter(([topic]) => topic === 'localLlm:progress')
+    .map(([, payload]) => payload.event);
+
+  describe.each([
+    ['ollama-service', controlOllamaServer, 'enable', 'restart'],
+    ['lmstudio-service', controlLmStudioServer, 'stop', 'enable'],
+  ])('POST /%s', (path, control, action, invalidAction) => {
+    beforeEach(() => control.mockReset());
+
+    it('validates the action before invoking the service or emitting progress', async () => {
+      const app = makeApp();
+      const response = await request(app).post(`/api/local-llm/${path}`).send({ action: invalidAction });
+
+      expect(response.status).toBe(400);
+      expect(response.body.code).toBe('VALIDATION_ERROR');
+      expect(control).not.toHaveBeenCalled();
+      expect(progressEvents(app)).toEqual([]);
+    });
+
+    it('passes a supported action through and emits terminal completion', async () => {
+      const app = makeApp();
+      const result = { success: true };
+      control.mockResolvedValueOnce(result);
+
+      const response = await request(app).post(`/api/local-llm/${path}`).send({ action });
+
+      expect(response.status).toBe(200);
+      expect(response.body).toEqual(result);
+      expect(control).toHaveBeenCalledExactlyOnceWith(action);
+      expect(progressEvents(app)).toEqual(['start', 'complete']);
+    });
+
+    it('returns a service failure and emits a terminal error', async () => {
+      const app = makeApp();
+      const error = 'Service unavailable';
+      control.mockResolvedValueOnce({ success: false, error });
+
+      const response = await request(app).post(`/api/local-llm/${path}`).send({ action });
+
+      expect(response.status).toBe(502);
+      expect(response.body.error).toBe(error);
+      expect(progressEvents(app)).toEqual(['start', 'error']);
+    });
   });
 
-  it.each(['splash', 'mkserve'])('%s refreshes after a successful background start only', async (id) => {
-    const start = { splash: startSplashServer, mkserve: startMkserveServer }[id];
-    start.mockResolvedValueOnce({ success: true });
-    expect((await post(`${id}/start`)).status).toBe(202);
-    await vi.waitFor(() => expect(syncRuntimeProviderModels).toHaveBeenCalledTimes(1));
-    expect(syncRuntimeProviderModels.mock.calls[0][0]).toMatchObject({ kind: id, waitForReady: null });
-
-    syncRuntimeProviderModels.mockClear();
-    start.mockRejectedValueOnce(new ServerError('port in use', { status: 409 }));
+  it('forwards upgrade progress and completes with the service result', async () => {
     const app = makeApp();
-    expect((await request(app).post(`/api/local-llm/${id}/start`)).status).toBe(202);
-    await vi.waitFor(async () => expect((await request(app).get(`/api/local-llm/${id}/status`)).body.lastError).toBe('port in use'));
-    expect(syncRuntimeProviderModels).not.toHaveBeenCalled();
+    const result = { success: true, note: 'Version updated' };
+    upgradeBackend.mockReset().mockImplementationOnce(async (_backend, progress) => {
+      progress({ event: 'start', message: 'Downloading update' });
+      return result;
+    });
+
+    const response = await request(app).post('/api/local-llm/upgrade-backend').send({ backend: 'ollama' });
+
+    expect(response.status).toBe(200);
+    expect(response.body).toEqual(result);
+    expect(upgradeBackend).toHaveBeenCalledExactlyOnceWith('ollama', expect.any(Function), expect.any(AbortSignal));
+    expect(upgradeBackend.mock.calls[0][2].aborted).toBe(false);
+    expect(app.get('io').emit.mock.calls).toEqual(expect.arrayContaining([
+      ['localLlm:progress', { event: 'start', message: 'Downloading update' }],
+      ['localLlm:progress', { event: 'complete', message: 'Ollama upgraded — Version updated' }],
+    ]));
   });
 
-  it.each([
-    ['llama-server/stop', stopLlamaServer],
-    ['mtplx/stop', stopMtplxServer],
-    ['slotstream/stop', stopSlotstreamServer],
-  ])('%s never refreshes: an unreachable daemon is no evidence the set changed', async (path, stop) => {
-    stop.mockResolvedValueOnce({ success: true });
-    expect((await post(path)).status).toBe(200);
-    expect(syncRuntimeProviderModels).not.toHaveBeenCalled();
-  });
+  it('returns 502 on upgrade failure and never emits completion', async () => {
+    const app = makeApp();
+    const error = 'Upgrade unavailable';
+    upgradeBackend.mockResolvedValueOnce({ success: false, error });
 
-  it.each([
-    ['llama-server/stop', stopLlamaServer],
-    ['mtplx/stop', stopMtplxServer],
-    ['slotstream/stop', stopSlotstreamServer],
-  ])('%s reports an externally owned daemon as a conflict', async (path, stop) => {
-    stop.mockResolvedValueOnce({ success: false, message: 'An external process is listening.', code: 'EXTERNAL_PROCESS_RUNNING' });
-    const res = await request(makeApp()).post(`/api/local-llm/${path}`);
-    expect(res.status).toBe(409);
-    expect(res.body).toMatchObject({ error: 'An external process is listening.', code: 'EXTERNAL_PROCESS_RUNNING' });
+    const response = await request(app).post('/api/local-llm/upgrade-backend').send({ backend: 'lmstudio' });
+
+    expect(response.status).toBe(502);
+    expect(response.body.error).toBe(error);
+    expect(progressEvents(app)).toEqual(['error']);
   });
 });
 
-it('validates and saves the Splash next-start context through the runtime route', async () => {
-  const app = makeApp();
-  const save = (contextWindow) => request(app).put('/api/local-llm/splash/context').send({ contextWindow });
-  expect((await save(1010000)).status).toBe(400);
-  expect((await save('1000000')).status).toBe(400);
-  expect(saveSplashContextWindow).not.toHaveBeenCalled();
-  saveSplashContextWindow.mockResolvedValueOnce({ requestedContextWindow: 1000000 });
-  const result = await save(1000000);
-  expect(result.status).toBe(200);
-  expect(result.body).toEqual({ requestedContextWindow: 1000000 });
-  expect(saveSplashContextWindow).toHaveBeenCalledWith(1000000);
+describe('Hugging Face catalog search', () => {
+  beforeEach(() => searchHuggingFaceModels.mockClear());
+
+  it('validates the query before searching', async () => {
+    const response = await request(makeApp()).get('/api/local-llm/huggingface-search?backend=lmstudio&limit=31');
+
+    expect(response.status).toBe(400);
+    expect(response.body.code).toBe('VALIDATION_ERROR');
+    expect(searchHuggingFaceModels).not.toHaveBeenCalled();
+  });
+
+  it('passes the installed LM Studio quantization and the numeric limit to search', async () => {
+    const id = 'example-org/model-GGUF';
+    const models = [{ id }];
+    listModels.mockResolvedValueOnce([{ id, quantization: 'Q4_K_M' }]);
+    searchHuggingFaceModels.mockResolvedValueOnce(models);
+
+    const response = await request(makeApp()).get('/api/local-llm/huggingface-search?backend=lmstudio&q=example&limit=7');
+
+    expect(response.status).toBe(200);
+    expect(response.body).toMatchObject({ backend: 'lmstudio', source: 'huggingface', models });
+    expect(searchHuggingFaceModels).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({
+      backend: 'lmstudio', query: 'example', category: 'all', limit: 7, installedIds: [`${id}@Q4_K_M`],
+    }));
+  });
 });
 
-it('save-startup leaves every on-demand runtime out of the boot dump', async () => {
-  const res = await request(makeApp()).post('/api/local-llm/save-startup');
-  expect(res.status).toBe(200);
-  expect(saveProcessList).toHaveBeenCalledWith(null, {
-    exclude: ['portos-mtplx', 'portos-slotstream', 'portos-splash', 'portos-mkserve'],
+describe('JEV head adoption', () => {
+  const decisionId = 'issue-comment-reply';
+  const adopt = (decision) => request(makeApp()).post('/api/local-llm/jev/heads/adopt').send({ decisionId: decision });
+
+  beforeEach(() => adoptJevHead.mockReset());
+
+  it('rejects unknown decisions before invoking the head store', async () => {
+    const response = await adopt('unknown-decision');
+
+    expect(response.status).toBe(400);
+    expect(response.body.code).toBe('VALIDATION_ERROR');
+    expect(adoptJevHead).not.toHaveBeenCalled();
+  });
+
+  it('surfaces the adoption gate refusal', async () => {
+    const code = 'jev-head-revision-mismatch';
+    adoptJevHead.mockResolvedValueOnce({ ok: false, code });
+
+    const response = await adopt(decisionId);
+
+    expect(response.status).toBe(400);
+    expect(response.body.code).toBe(code);
+    expect(adoptJevHead).toHaveBeenCalledExactlyOnceWith(decisionId);
+  });
+
+  it('returns only the adopted decision and its metrics', async () => {
+    const metrics = { macroF1: 0.9 };
+    adoptJevHead.mockResolvedValueOnce({ ok: true, head: { metrics, weights: [0.5] } });
+
+    const response = await adopt(decisionId);
+
+    expect(response.status).toBe(200);
+    expect(response.body).toEqual({ adopted: true, decisionId, metrics });
+    expect(adoptJevHead).toHaveBeenCalledExactlyOnceWith(decisionId);
   });
 });

@@ -1,13 +1,11 @@
 import { Suspense, useState, useEffect, useCallback, useMemo, useRef } from 'react';
 import { useLocation, useNavigate, useParams } from 'react-router';
-import { Bot, Cpu, Gauge, Network, Package, Plug, Plus, TerminalSquare } from 'lucide-react';
+import { AlertTriangle, Bot, Cpu, Gauge, Network, Package, Plug, Plus, TerminalSquare } from 'lucide-react';
 import toast from '../components/ui/Toast';
-import { useAsyncAction } from '../hooks/useAsyncAction';
-import { getApps } from '../services/apiApps.js';
+import useCodexAccount from '../components/providers/useCodexAccount';
+import useProviderQuickRun from '../components/providers/useProviderQuickRun';
 import {
   getSampleProviders,
-  getCodexModels,
-  getCodexAccount,
   getProviderRuntimes,
   getProviders,
   getProviderStatuses,
@@ -18,21 +16,14 @@ import {
   deleteProvider,
   addProviderTuiMode,
   updateProvider,
-  startCodexLogin,
-  cancelCodexLogin,
-  codexLogout,
   serveProviderModel,
   refreshProviderModels,
   createProvider,
 } from '../services/apiProviders.js';
 import { getInstances } from '../services/apiSystem.js';
-import { createRun, stopRun } from '../services/apiRuns.js';
-import socket from '../services/socket';
-import { isProviderHardwareCompatible, mergeModelLists, localBackendForProvider, isTuiProvider, isApiProvider, isCodexSubscriptionProvider, isLocalInstanceProvider, providerRuntimeKey, providerCardState, PROVIDER_CARD_STATE } from '../utils/providers';
+import { isProviderHardwareCompatible, localBackendForProvider, isApiProvider, isCodexSubscriptionProvider, isLocalInstanceProvider, providerRuntimeKey, providerCardState, PROVIDER_CARD_STATE } from '../utils/providers';
 import { OTHER_HARNESS_GROUP, groupProvidersByHarness, presetEditPath } from '../utils/providerHarnesses';
 import useProviderCatalog from '../hooks/useProviderCatalog';
-import { copyToClipboard } from '../lib/clipboard';
-import { isHttpsUrl } from '../utils/urlNormalize';
 import useLocalModels from '../hooks/useLocalModels';
 import useMounted from '../hooks/useMounted.js';
 import useListResource from '../hooks/useListResource.js';
@@ -59,7 +50,6 @@ const RuntimeInstallModal = lazyWithReload(() => import('../components/install/R
 
 const STATUS_EVENTS = ['provider-status:changed'];
 const READINESS_EVENTS = ['provider-readiness:changed'];
-const ACCOUNT_EVENTS = ['codex-account:changed'];
 
 // Title and icon follow the routed view; labels and icons match the Models
 // section strip and navPresentation for the same paths.
@@ -123,24 +113,6 @@ export default function AIProviders() {
   const [refreshing, setRefreshing] = useState({});
   // A typed refusal (e.g. MTPLX stopped with no saved launch line) is rendered inline on the card rather than toasted — so the card can name the fix and link to it. Keyed by provider id.
   const [refreshNotice, setRefreshNotice] = useState({});
-  // `undefined` = this page has not asked the account endpoint yet; `null` =
-  // the endpoint did not give a verdict. The distinction keeps a failed fetch
-  // from posing as either signed out or ready.
-  const [codexAccount, setCodexAccount] = useState(undefined);
-  const [codexModels, setCodexModels] = useState(null);
-  const [codexAccountLoading, setCodexAccountLoading] = useState(false);
-  const [codexLoginLoading, setCodexLoginLoading] = useState(false);
-  const [showRunPanel, setShowRunPanel] = useState(false);
-  const [runPrompt, setRunPrompt] = useState('');
-  const [selectedWorkspace, setSelectedWorkspace] = useState('');
-  const loadApps = useCallback(async () => {
-    const list = await getApps({ silent: true });
-    return Array.isArray(list) ? list : [];
-  }, []);
-  const appsResource = useListResource(loadApps);
-  const { items: apps, state: appsState, error: appsError, retry: retryApps } = appsResource;
-  const [activeRun, setActiveRun] = useState(null);
-  const [runOutput, setRunOutput] = useState('');
   const [showSamples, setShowSamples] = useState(false);
   // Samples are fetched only once the user asks for them (`showSamples`).
   const loadSamples = useCallback(async () => {
@@ -163,57 +135,11 @@ export default function AIProviders() {
     () => sampleProviders.filter(isProviderHardwareCompatible),
     [sampleProviders],
   );
-  const hasCodexSubscriptionProvider = providers.some(isCodexSubscriptionProvider);
   const [observationUnavailable, setObservationUnavailable] = useState({});
   const providerListRevision = useRef({ read: 0, mutation: 0 });
-  const observationRevision = useRef({ account: 0, readiness: 0, status: 0 });
+  const observationRevision = useRef({ readiness: 0, status: 0 });
   const observationMounted = useMounted();
 
-  const mergeCodexCatalog = useCallback((catalog) => {
-    if (!Array.isArray(catalog)) return;
-    const ids = catalog.map((model) => (typeof model === 'string' ? model : model?.id))
-      .filter((id) => typeof id === 'string' && id.trim() !== '');
-    setProviders((current) => current.map((provider) => (
-      isCodexSubscriptionProvider(provider)
-        ? { ...provider, models: mergeModelLists(provider.models, ids) }
-        : provider
-    )));
-  }, []);
-
-  const loadCodexModels = useCallback(async (fresh = false) => {
-    const result = await getCodexModels({ fresh, silent: true }).catch(() => null);
-    if (!result || !Object.hasOwn(result, 'models')) return null;
-    setCodexModels(result);
-    // `null` is never fetched; an empty list is a real catalog. Only merge a
-    // real array, preserving every current default/tier pin even if it is no
-    // longer in the catalog so the form can show it as stale rather than clear
-    // a saved choice behind the user's back.
-    mergeCodexCatalog(result.models);
-    return result;
-  }, [mergeCodexCatalog]);
-
-  const loadCodexAccount = useCallback(async (fresh = false) => {
-    // Compatibility with a server that predates the account endpoint. The
-    // normal client library always has this function; the guard makes a mixed
-    // client/server upgrade leave the established provider controls intact.
-    if (typeof getCodexAccount !== 'function') return undefined;
-    const revision = ++observationRevision.current.account;
-    setCodexAccountLoading(true);
-    const result = await getCodexAccount({ fresh, silent: true }).catch(() => null);
-    if (!observationMounted.current || revision !== observationRevision.current.account) return;
-    const readiness = result?.readiness && typeof result.readiness === 'object' ? result.readiness : null;
-    setCodexAccount(readiness);
-    setCodexAccountLoading(false);
-    if (readiness?.status === 'ready') loadCodexModels(fresh);
-    return readiness;
-  }, [loadCodexModels]);
-
-  useEffect(() => {
-    if (!hasCodexSubscriptionProvider) {
-      setCodexAccount(undefined);
-      setCodexModels(null);
-    }
-  }, [hasCodexSubscriptionProvider, loadCodexAccount]);
   // CLI availability per provider card, keyed by `providerRuntimeKey`. An empty
   // map means the endpoint was not reached (for example, an older server during
   // an upgrade) — distinct from a confirmed missing CLI — and simply renders no
@@ -257,6 +183,10 @@ export default function AIProviders() {
   const editingProviderId = presetId ?? providerId;
   const barePath = location.pathname.replace(/\/+$/, '');
   const activeTab = providerPageTabForPath(barePath);
+  const codex = useCodexAccount({ providers, setProviders, providerListRevision, enabled: activeTab !== 'harnesses' });
+  const codexAccount = codex.account;
+  const defaultProvider = providers.find(provider => provider.id === activeProviderId) || null;
+  const quickRun = useProviderQuickRun(defaultProvider, activeProviderId);
   const { icon: HeaderIcon, title: headerTitle } = VIEW_HEADERS[activeTab];
   const creatingProvider = barePath.endsWith('/ai/presets/new');
   const creatingService = barePath.endsWith('/ai/services/new');
@@ -292,26 +222,6 @@ export default function AIProviders() {
   }, []);
   const fleetPeersResource = useListResource(loadFleetPeers, { enabled: fleetSetupOpen });
   const { items: fleetPeers, state: fleetPeersState, error: fleetPeersError, retry: retryFleetPeers } = fleetPeersResource;
-
-  useEffect(() => {
-    if (!activeRun) return;
-
-    const handleData = (data) => {
-      setRunOutput(prev => prev + data);
-    };
-
-    const handleComplete = (_metadata) => {
-      setActiveRun(null);
-    };
-
-    socket.on(`run:${activeRun}:data`, handleData);
-    socket.on(`run:${activeRun}:complete`, handleComplete);
-
-    return () => {
-      socket.off(`run:${activeRun}:data`, handleData);
-      socket.off(`run:${activeRun}:complete`, handleComplete);
-    };
-  }, [activeRun]);
 
   // `setLoading(true)` swaps the entire list for the page skeleton, which
   // unmounts the scroll container and drops the user back at the top. That is
@@ -391,10 +301,6 @@ export default function AIProviders() {
   useSocketResource(loadReadiness, {
     namespace: 'provider-readiness', events: READINESS_EVENTS, enabled: activeTab !== 'harnesses',
   });
-  useSocketResource(() => loadCodexAccount(), {
-    namespace: 'codex-account', events: ACCOUNT_EVENTS,
-    enabled: activeTab !== 'harnesses' && hasCodexSubscriptionProvider,
-  });
 
   // Clear a provider's bench (runtime unavailability) so the next call retries it.
   // Note: if the underlying cause persists (e.g. an invalid model id), the very
@@ -466,67 +372,6 @@ export default function AIProviders() {
     setProviders(prev => prev.map(p => (p.id === provider.id ? { ...p, enabled: typeof updated?.enabled === 'boolean' ? updated.enabled : !provider.enabled } : p)));
   };
 
-  const handleEnableCodexSubscription = async (provider) => {
-    const updated = await updateProvider(provider.id, { textTransportEnabled: true }, { silent: true }).catch(() => null);
-    if (!updated) {
-      toast.error('Could not save the ChatGPT subscription transport');
-      return;
-    }
-    providerListRevision.current.mutation += 1;
-    setProviders((current) => current.map((entry) => (
-      entry.id === provider.id ? { ...entry, textTransportEnabled: true } : entry
-    )));
-    toast.success('ChatGPT subscription transport enabled');
-  };
-
-  const handleCodexSignIn = async (deviceCode) => {
-    setCodexLoginLoading(true);
-    const result = await startCodexLogin(deviceCode, { silent: true }).catch(() => null);
-    setCodexLoginLoading(false);
-    if (!result?.login) {
-      toast.error('Could not start ChatGPT sign-in');
-      return;
-    }
-    const login = {
-      ...result.login,
-      authUrl: isHttpsUrl(result.login.authUrl) ? result.login.authUrl : null,
-      verificationUrl: isHttpsUrl(result.login.verificationUrl) ? result.login.verificationUrl : null,
-    };
-    observationRevision.current.account += 1;
-    setCodexAccount((current) => ({
-      ...(current && typeof current === 'object' ? current : {}),
-      status: 'login-pending',
-      login,
-    }));
-    if (login.authUrl) window.open(login.authUrl, '_blank', 'noopener,noreferrer');
-  };
-
-  const handleCancelCodexLogin = async (loginId) => {
-    setCodexLoginLoading(true);
-    const result = await cancelCodexLogin(loginId, { silent: true }).catch(() => null);
-    setCodexLoginLoading(false);
-    if (!result?.readiness) {
-      toast.error('Could not cancel ChatGPT sign-in');
-      return;
-    }
-    observationRevision.current.account += 1;
-    setCodexAccount(result.readiness);
-  };
-
-  const handleCodexLogout = async () => {
-    setCodexAccountLoading(true);
-    const result = await codexLogout({ silent: true }).catch(() => null);
-    setCodexAccountLoading(false);
-    if (!result?.readiness) {
-      toast.error('Could not log out of ChatGPT');
-      return;
-    }
-    observationRevision.current.account += 1;
-    setCodexAccount(result.readiness);
-    toast.success('ChatGPT subscription signed out');
-  };
-
-  const handleCopyCodexDeviceCode = (code) => copyToClipboard(code, 'Device code copied');
 
   // llama.cpp (and similar local daemons) answer as a single model id — the
   // server's `--alias`, not the preset name on this card. Matching the
@@ -617,43 +462,17 @@ export default function AIProviders() {
         toast.error('Failed to refresh models - provider may not support this feature');
       }
     } catch (error) {
-      // The typed stopped result the card renders inline — nothing toasts, so
-      // the card is the one place the fix is named.
-      if (error?.code === 'MTPLX_STOPPED') {
-        setRefreshNotice(prev => ({ ...prev, [id]: { message: error.message } }));
+      // Older servers sent only the MTPLX code. Structured notices let
+      // other runtimes direct users to setup without adding client error codes.
+      const metadata = error?.context?.refreshNotice;
+      const notice = metadata ?? (error?.code === 'MTPLX_STOPPED' ? { runtime: 'mtplx' } : null);
+      if (notice) {
+        setRefreshNotice(prev => ({ ...prev, [id]: { ...notice, message: error.message } }));
       } else {
         toast.error(`Error refreshing models: ${error.message}`);
       }
     } finally {
       setRefreshing(prev => ({ ...prev, [id]: false }));
-    }
-  };
-
-  const [handleExecuteRun, startingRun] = useAsyncAction(async () => {
-    if (!runPrompt.trim() || !activeProviderId) return;
-
-    setRunOutput('');
-    const workspace = apps.find(a => a.id === selectedWorkspace);
-
-    const result = await createRun({
-      providerId: activeProviderId,
-      prompt: runPrompt,
-      workspacePath: workspace?.repoPath,
-      workspaceName: workspace?.name,
-    }, { silent: true }).catch(err => ({ error: err.message }));
-
-    if (result.error) {
-      setRunOutput(`Error: ${result.error}`);
-      return;
-    }
-
-    setActiveRun(result.runId);
-  });
-
-  const handleStopRun = async () => {
-    if (activeRun) {
-      await stopRun(activeRun);
-      setActiveRun(null);
     }
   };
 
@@ -667,11 +486,12 @@ export default function AIProviders() {
   const handleAddSample = async (provider) => {
     setAddingSample(prev => ({ ...prev, [provider.id]: true }));
     try {
-      await createProvider(provider);
+      await createProvider(provider, { silent: true });
       setSampleProviders(prev => prev.filter(p => p.id !== provider.id));
       await loadData();
       toast.success(`Added ${provider.name}`);
     } catch (err) {
+      if (err?.toasted) return;
       const message = (typeof err?.message === 'string' && err.message) ||
                       (typeof err?.error === 'string' && err.error) ||
                       (typeof err === 'string' ? err : 'An unknown error occurred');
@@ -704,19 +524,29 @@ export default function AIProviders() {
 
     const succeededIds = [];
     const failedIds = [];
+    let failureAlreadyToasted = false;
 
     for (const provider of addableSamples) {
       try {
-        await createProvider(provider);
+        await createProvider(provider, { silent: true });
         succeededIds.push(provider.id);
       } catch (err) {
+        // Host-control refusals apply to every remaining create and already
+        // explain why the operator must reconnect.
+        if (err?.toasted) {
+          failureAlreadyToasted = true;
+          break;
+        }
         console.error(`Failed to add sample provider ${provider.name || provider.id}:`, err);
         failedIds.push(provider.id);
       }
     }
 
-    setSampleProviders(prev => prev.filter(p => !succeededIds.includes(p.id)));
-    await loadData();
+    if (succeededIds.length > 0) {
+      setSampleProviders(prev => prev.filter(p => !succeededIds.includes(p.id)));
+      await loadData();
+    }
+    if (failureAlreadyToasted) return;
 
     if (failedIds.length === 0) {
       toast.success(`Added ${succeededIds.length} provider${succeededIds.length === 1 ? '' : 's'}`);
@@ -844,10 +674,6 @@ export default function AIProviders() {
     navigate('/ai/presets', { replace: true });
   }, [loading, loadError, editingProviderId, editingProvider, navigate]);
 
-  const selectedRunProvider = providers.find(p => p.id === activeProviderId);
-  const defaultProvider = selectedRunProvider || null;
-  const runProviderIsTui = isTuiProvider(selectedRunProvider);
-
   const scrollToDefaultCard = useCallback(() => {
     if (!activeProviderId) return;
     const el = document.getElementById(`provider-card-${activeProviderId}`)
@@ -896,10 +722,10 @@ export default function AIProviders() {
   const headerActions = activeTab === 'presets' ? (
     <>
       <button
-        onClick={() => setShowRunPanel(!showRunPanel)}
+        onClick={() => quickRun.setShowRunPanel(!quickRun.showRunPanel)}
         className="inline-flex min-h-[40px] items-center rounded-lg bg-port-accent px-3 py-1.5 text-sm text-white transition-colors hover:bg-port-accent/80"
       >
-        {showRunPanel ? 'Hide Runner' : 'Run Prompt'}
+        {quickRun.showRunPanel ? 'Hide Runner' : 'Run Prompt'}
       </button>
       <button
         onClick={() => setComposeInitial({})}
@@ -924,7 +750,7 @@ export default function AIProviders() {
 
       <ModelsTabsHeader activeTab="providers" />
       {activeTab !== 'harnesses' && Object.values(observationUnavailable).some(Boolean) && (
-        <Banner variant="warning">Provider readiness status unavailable. Showing the last known state.</Banner>
+        <Banner tone="warning" icon={AlertTriangle}>Provider readiness status unavailable. Showing the last known state.</Banner>
       )}
 
       <div className={`min-h-0 min-w-0 flex-1 overflow-auto p-4 ${activeTab === 'presets' ? 'space-y-6' : ''}`}>
@@ -956,77 +782,28 @@ export default function AIProviders() {
 
       {activeTab === 'presets' && (
         <ProviderPresetsTab
-          providers={providers}
-          providersById={providersById}
-          presetSections={presetSections}
-          cardStateByProviderId={cardStateByProviderId}
-          runtimeByProviderId={runtimeByProviderId}
-          readiness={readiness}
-          statuses={statuses}
-          activeProviderId={activeProviderId}
-          defaultProvider={defaultProvider}
-          runnerAllowedCommands={runnerAllowedCommands}
-          testResults={testResults}
-          refreshing={refreshing}
-          refreshNotice={refreshNotice}
-          recovering={recovering}
-          addingTuiMode={addingTuiMode}
-          servingModel={servingModel}
-          codexAccount={codexAccount}
-          codexModels={codexModels}
-          codexAccountLoading={codexAccountLoading}
-          codexLoginLoading={codexLoginLoading}
-          loadError={loadError}
-          modelPinReloadKey={modelPinReloadKey}
-          showSamples={showSamples}
-          setShowSamples={setShowSamples}
-          loadingSamples={loadingSamples}
-          samplesState={samplesState}
-          samplesError={samplesError}
-          retrySamples={retrySamples}
-          sampleProviders={sampleProviders}
-          addableSamples={addableSamples}
-          addingSample={addingSample}
-          onAddSample={handleAddSample}
-          onAddAllSamples={handleAddAllSamples}
-          showRunPanel={showRunPanel}
-          apps={apps}
-          appsState={appsState}
-          appsError={appsError}
-          retryApps={retryApps}
-          selectedWorkspace={selectedWorkspace}
-          setSelectedWorkspace={setSelectedWorkspace}
-          runPrompt={runPrompt}
-          setRunPrompt={setRunPrompt}
-          activeRun={activeRun}
-          runOutput={runOutput}
-          runProviderIsTui={runProviderIsTui}
-          onExecuteRun={handleExecuteRun}
-          startingRun={startingRun}
-          onStopRun={handleStopRun}
-          compositionCatalog={compositionCatalog}
-          onCompose={setComposeInitial}
-          onScrollToDefaultCard={scrollToDefaultCard}
-          onReload={loadData}
-          onTest={handleTest}
-          onRefreshModels={handleRefreshModels}
-          onToggleEnabled={handleToggleEnabled}
-          onSetActive={handleSetActive}
-          onEdit={openForm}
-          onDelete={handleDelete}
-          onAddTuiMode={handleAddTuiMode}
-          onRecover={handleRecover}
-          onInstallRuntime={setInstallingRuntime}
-          onAutoSetupRuntime={setSettingUpRuntime}
-          onUseServedModel={handleUseServedModel}
-          onServeWantedModel={handleServeWantedModel}
-          onCodexCheckAccount={() => loadCodexAccount(true)}
-          onCodexSignIn={handleCodexSignIn}
-          onCodexCancelLogin={handleCancelCodexLogin}
-          onCodexLogout={handleCodexLogout}
-          onCodexRefreshModels={() => loadCodexModels(true)}
-          onCodexCopyCode={handleCopyCodexDeviceCode}
-          onCodexEnable={handleEnableCodexSubscription}
+          catalog={{
+            providers, providersById, presetSections, cardStateByProviderId, runtimeByProviderId, readiness,
+            statuses, activeProviderId, defaultProvider, runnerAllowedCommands, loadError, modelPinReloadKey,
+            compositionCatalog,
+          }}
+          cardState={{
+            testResults, refreshing, refreshNotice, recovering, addingTuiMode, servingModel,
+          }}
+          codex={codex}
+          quickRun={quickRun}
+          samples={{
+            showSamples, setShowSamples, loadingSamples, samplesState, samplesError, retrySamples, sampleProviders,
+            addableSamples, addingSample, onAddSample: handleAddSample, onAddAllSamples: handleAddAllSamples,
+          }}
+          actions={{
+            onCompose: setComposeInitial, onScrollToDefaultCard: scrollToDefaultCard,
+            onReload: loadData, onTest: handleTest, onRefreshModels: handleRefreshModels,
+            onToggleEnabled: handleToggleEnabled, onSetActive: handleSetActive, onEdit: openForm,
+            onDelete: handleDelete, onAddTuiMode: handleAddTuiMode, onRecover: handleRecover,
+            onInstallRuntime: setInstallingRuntime, onAutoSetupRuntime: setSettingUpRuntime,
+            onUseServedModel: handleUseServedModel, onServeWantedModel: handleServeWantedModel,
+          }}
         />
       )}
       </Suspense>

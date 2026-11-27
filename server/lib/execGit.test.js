@@ -1,3 +1,4 @@
+// test-memo: git-fixture
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { EventEmitter } from 'events';
 import { mkdir, mkdtemp, rm, symlink } from 'node:fs/promises';
@@ -10,7 +11,7 @@ vi.mock('./childProcess.js', () => ({
 
 import { spawn } from './childProcess.js';
 vi.mock('./windowsGitProcess.js', async importOriginal => ({
-  ...await importOriginal(), startGit: vi.fn((args, options, wire) => wire(spawn('git', args, options))),
+  ...await importOriginal(), startGit: vi.fn((args, options, wire) => wire(spawn('git', args, { ...options, cwd: options.cwd }))),
 }));
 import { startGit } from './windowsGitProcess.js';
 import { assertGitWorkSettled, execGit, execGitSafe, withGitMutationLifetime } from './execGit.js';

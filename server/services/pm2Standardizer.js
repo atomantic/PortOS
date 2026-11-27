@@ -1,8 +1,7 @@
 import { readFile, writeFile, readdir, realpath } from 'fs/promises';
 import { existsSync } from 'fs';
 import { join, basename, } from 'path';
-import { exec, spawn } from '../lib/childProcess.js';
-import { promisify } from 'util';
+import { bufferedSpawnOrThrow } from '../lib/bufferedSpawn.js';
 import { getActiveProvider, getProviderById } from './provider/providers.js';
 import { tryReadFile } from '../lib/fileUtils.js';
 import { extractJson } from '../lib/jsonExtract.js';
@@ -20,7 +19,7 @@ import { isPathInsideDir } from '../lib/pathSafety.js';
 // model's plan without any schema validation.
 const STRAY_VARIABLE_RE = /^[A-Za-z_][A-Za-z0-9_]*$/;
 
-const execAsync = promisify(exec);
+const GIT_BACKUP_TIMEOUT_MS = 30_000;
 const DEFAULT_PM2_AI_TIMEOUT_MS = 180000;
 
 // Marker written into the header of every ecosystem.config.cjs PortOS generates.
@@ -502,8 +501,11 @@ export async function createGitBackup(repoPath) {
     return { success: false, reason: 'Not a git repository' };
   }
 
+  const gitOptions = { cwd: repoPath, shell: false, timeoutMs: GIT_BACKUP_TIMEOUT_MS, processGroup: true };
   // Refuse to overwrite uncommitted changes
-  const { stdout: statusOut } = await execAsync('git status --porcelain', { cwd: repoPath });
+  const { stdout: statusOut } = await bufferedSpawnOrThrow('git', ['status', '--porcelain'], {
+    ...gitOptions, timeoutLabel: 'git status',
+  });
   if (statusOut.trim()) {
     return { success: false, code: 'DIRTY_WORKTREE', reason: 'Working tree has uncommitted changes — commit or discard them before standardizing' };
   }
@@ -512,14 +514,7 @@ export async function createGitBackup(repoPath) {
   const branch = `portos-backup-${timestamp}`;
 
   // Create backup branch from current HEAD (captures committed state without stashing)
-  // Use spawn with shell:false to avoid shell injection via branch name
-  await new Promise((resolve, reject) => {
-    const proc = spawn('git', ['branch', branch], { cwd: repoPath, shell: false });
-    let stderr = '';
-    proc.stderr.on('data', (chunk) => { stderr += chunk.toString(); });
-    proc.on('close', (code) => code === 0 ? resolve() : reject(new Error(`git branch failed: ${stderr.trim()}`)));
-    proc.on('error', reject);
-  });
+  await bufferedSpawnOrThrow('git', ['branch', branch], { ...gitOptions, timeoutLabel: 'git branch' });
 
   return { success: true, branch };
 }
@@ -787,11 +782,11 @@ export async function runStandardizeFlow(
   emit('backup', 'running', { message: 'Creating git backup...' });
 
   const backupResult = await backup(repoPath)
-    .catch(err => ({ success: false, reason: err.message }));
+    .catch(err => ({ success: false, code: 'GIT_BACKUP_FAILED', reason: err.message }));
 
   if (backupResult.success) {
     emit('backup', 'done', { message: `Backup branch: ${backupResult.branch}`, branch: backupResult.branch });
-  } else if (backupResult.code === 'DIRTY_WORKTREE') {
+  } else if (backupResult.code === 'DIRTY_WORKTREE' || backupResult.code === 'GIT_BACKUP_FAILED') {
     emit('backup', 'error', { message: backupResult.reason });
     return { success: false, error: backupResult.reason };
   } else {

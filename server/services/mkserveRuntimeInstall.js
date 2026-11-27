@@ -3,9 +3,11 @@ import { constants } from 'node:fs';
 import { access, mkdir, readFile, rename, rm, stat } from 'node:fs/promises';
 import { homedir } from 'node:os';
 import { dirname, join } from 'node:path';
+import { createArtifactHttpTransport } from '../lib/artifactHttpTransport.js';
 import { spawn } from '../lib/childProcess.js';
 import { atomicWrite, sha256File, sha256Text } from '../lib/fileCore.js';
-import { assessDownloadPreflight, assertDownloadFits } from '../lib/downloadPreflight.js';
+import { assessDownloadPreflight, assertDownloadFits, etagPathFor, partialPathFor, streamResumableDownload } from '../lib/downloadPreflight.js';
+import { MKSERVE_MODEL } from '../lib/mkserveRuntime.js';
 import { PATHS } from '../lib/paths.js';
 import { ServerError } from '../lib/errorHandler.js';
 import { runStreamingCommand } from '../lib/streamingSpawn.js';
@@ -13,7 +15,7 @@ import { artifactDownloadEnv } from '../lib/processEnv.js';
 import { withSpawnCwdEnv } from '../lib/spawnCwd.js';
 
 export const MKSERVE_VERSION = '95e315c808a7d935c10ef924a8fc0d901bfc3b89';
-export const MKSERVE_MODEL = 'thinkingmachines/Inkling-2-Mini';
+export { MKSERVE_MODEL };
 const MODEL_REVISION = 'c9d028302cd0f035fdf8e7e91f089a4ce94d2195';
 const ARCHIVE_SHA256 = 'c72e99348f3ba301df71ae6bce755be959f1a3e8db8fafc8c4275d6db4f9f5f3';
 // Patched uv is bootstrapped without requiring Python, Homebrew, or Xcode.
@@ -66,6 +68,12 @@ function isCheckpointEntry(entry) {
     && Number.isSafeInteger(size) && size > 0;
 }
 
+export async function removeMkserveRelease({ bundle, revision }) {
+  if (!isMkserveRevision(bundle) || !isMkserveRevision(revision)) throw new TypeError('Invalid mkserve release');
+  await rm(mkserveInstallPaths(bundle, revision).work, { recursive: true, force: true });
+  await rm(MARKER, { force: true });
+}
+
 export async function readMkserveInstall() {
   const raw = await readFile(MARKER, 'utf8').catch((error) => {
     if (error.code === 'ENOENT') return null;
@@ -90,7 +98,7 @@ export async function readMkserveInstall() {
   return { ...paths, bundle: record.bundle, version: record.version, revision: record.revision };
 }
 
-const runFailure = (message) => new ServerError(message, { status: 500, code: 'MKSERVE_INSTALL_FAILED' });
+const runFailure = (message) => new ServerError(message, { status: 502, code: 'MKSERVE_INSTALL_FAILED' });
 const cleanEnv = () => ({ HOME: homedir(), PATH: '/usr/bin:/bin:/usr/sbin:/sbin', PYTHONNOUSERSITE: '1' });
 export function mkserveLaunchEnvironment() {
   // Clear the environment inside the PM2-owned process, not merely the PM2
@@ -98,41 +106,112 @@ export function mkserveLaunchEnvironment() {
   return ['-i', ...Object.entries({ ...cleanEnv(), HF_HUB_OFFLINE: '1' }).map(([key, value]) => key + '=' + value)];
 }
 
-async function command(bin, args, message, { timeoutMs = 20 * MINUTE, cwd, env = {}, network = false } = {}) {
+async function command(bin, args, message, { timeoutMs = 20 * MINUTE, cwd, env = {}, signal, network = false } = {}) {
   // Only fixed curl/uv invocations get the machine's proxy/CA settings. The
   // unpacked engine and daemon never receive them or other server credentials.
   const exactEnv = withSpawnCwdEnv({ ...cleanEnv(), ...(network ? artifactDownloadEnv() : {}), ...env }, cwd);
   const result = await runStreamingCommand(bin, args, undefined, {
-    cwd, timeoutMs, processGroup: true,
+    cwd, timeoutMs, signal, processGroup: true,
     // The streaming helper's normal env option merges with process.env.
     spawnImpl: (file, argv, options) => spawn(file, argv, { ...options, env: exactEnv }),
   });
+  signal?.throwIfAborted();
   if (!result.success) throw runFailure(message);
 }
 
-async function downloadVerified({ url, final, expectedHash, expectedSize, emit, label }) {
-  if (await fileSize(final) !== null && await sha256File(final) === expectedHash) return;
+async function downloadArchive({ url, final, expectedHash, emit, label, signal }) {
+  if (await fileSize(final) !== null && await sha256File(final, { signal }) === expectedHash) return;
   await mkdir(dirname(final), { recursive: true });
   const partial = final + '.part';
-  const partialSize = (await fileSize(partial)) ?? 0;
-  const resume = expectedSize && partialSize > 0 && partialSize < expectedSize;
-  if (!resume && partialSize !== expectedSize) await rm(partial, { force: true });
-  if (!expectedSize || partialSize !== expectedSize) {
-    emit('Downloading ' + label + '…');
-    await command('/usr/bin/curl', [
-      '-q', '--fail', '--location', '--proto', '=https', '--proto-redir', '=https',
-      '--silent', '--show-error', '--retry', '2', '--connect-timeout', '30',
-      '--speed-limit', '1024', '--speed-time', '90',
-      ...(expectedSize ? ['--max-filesize', String(expectedSize)] : []),
-      ...(resume ? ['--continue-at', '-'] : []), '--output', partial, url,
-    ], 'Could not download ' + label + '. Retry Install to resume.', { timeoutMs: 180 * MINUTE, network: true });
-  }
+  await rm(partial, { force: true });
+  emit('Downloading ' + label + '…');
+  await command('/usr/bin/curl', [
+    '-q', '--fail', '--location', '--proto', '=https', '--proto-redir', '=https',
+    '--silent', '--show-error', '--retry', '2', '--connect-timeout', '30',
+    '--speed-limit', '1024', '--speed-time', '90', '--output', partial, url,
+  ], 'Could not download ' + label + '. Retry Install.', { timeoutMs: 180 * MINUTE, network: true, signal });
+  await verifyAndPublish(partial, final, expectedHash, label, emit, signal);
+}
+
+async function verifyAndPublish(partial, final, expectedHash, label, emit, signal) {
   emit('Verifying ' + label + '…');
-  if (await sha256File(partial) !== expectedHash) {
+  if (await sha256File(partial, { signal }) !== expectedHash) {
     await rm(partial, { force: true });
+    if (partial === partialPathFor(final)) await rm(etagPathFor(final), { force: true });
     throw runFailure(label + ' failed SHA-256 verification and was discarded. Retry Install.');
   }
+  signal?.throwIfAborted();
   await rename(partial, final);
+}
+
+async function fetchCheckpoint(url, options, transport) {
+  let target = new URL(url);
+  for (let redirects = 0; redirects <= 20; redirects += 1) {
+    if (target.protocol !== 'https:' || target.username || target.password) {
+      throw runFailure('The mkserve checkpoint download redirected to an invalid HTTPS URL.');
+    }
+    const response = await transport(target, { ...options, redirect: 'manual' });
+    const location = response.headers.get('location');
+    if (![301, 302, 303, 307, 308].includes(response.status) || !location) {
+      if (!response.ok) await response.body?.cancel().catch(() => {});
+      return response;
+    }
+    await response.body?.cancel();
+    target = new URL(location, target);
+  }
+  throw runFailure('The mkserve checkpoint download exceeded its HTTPS redirect limit.');
+}
+
+async function downloadCheckpointFile({ url, final, expectedHash, expectedSize, emit, label, signal, transport }) {
+  if (await fileSize(final) === expectedSize && await sha256File(final, { signal }) === expectedHash) return;
+  signal?.throwIfAborted();
+  const partial = partialPathFor(final);
+  const legacy = final + '.part';
+  const legacySize = await fileSize(legacy);
+  if (legacySize !== null) {
+    // The pinned revision and digest still apply to curl's old ETag-less partial.
+    if (await fileSize(partial) === null && legacySize <= expectedSize) {
+      await rm(etagPathFor(final), { force: true });
+      await rename(legacy, partial);
+    } else {
+      await rm(legacy, { force: true });
+    }
+  }
+  if (await fileSize(partial) !== expectedSize) {
+    const transfer = new AbortController();
+    const transferSignal = AbortSignal.any([transfer.signal, AbortSignal.timeout(180 * MINUTE), ...(signal ? [signal] : [])]);
+    let lastUpdate = -Infinity;
+    emit('Downloading ' + label + '…');
+    try {
+      await streamResumableDownload({
+        url, destPath: final, fetchImpl: (source, options) => fetchCheckpoint(source, options, transport),
+        finalize: false, signal: transferSignal,
+        idleStallTimeoutMs: 90_000,
+        onIdleStall: () => transfer.abort(),
+        onBytes: (received) => {
+          if (received > expectedSize) {
+            transfer.abort(runFailure(label + ' exceeded its pinned download size.'));
+            return;
+          }
+          const now = performance.now();
+          if (now - lastUpdate < 500 && received !== expectedSize) return;
+          lastUpdate = now;
+          emit(`Downloading ${label}: ${Math.floor(received * 100 / expectedSize)}% (${received} / ${expectedSize} bytes)`);
+        },
+      });
+    } catch (err) {
+      signal?.throwIfAborted();
+      if (transfer.signal.reason instanceof ServerError) {
+        await rm(partial, { force: true });
+        await rm(etagPathFor(final), { force: true });
+        throw transfer.signal.reason;
+      }
+      if (err instanceof ServerError) throw err;
+      throw runFailure('Could not download ' + label + '. Retry Install to resume.');
+    }
+  }
+  await verifyAndPublish(partial, final, expectedHash, label, emit, signal);
+  await rm(etagPathFor(final), { force: true });
 }
 
 // Finished files and resumable partials already occupy their share of the disk.
@@ -140,50 +219,60 @@ async function assertCheckpointFits(weights) {
   const remaining = await Promise.all(CHECKPOINT_FILES.map(async ([name, size]) => {
     const path = join(weights, name);
     if (await fileSize(path) === size) return 0;
-    return Math.max(0, size - ((await fileSize(path + '.part')) ?? 0));
+    const partial = (await fileSize(partialPathFor(path))) ?? (await fileSize(path + '.part')) ?? 0;
+    return partial <= size ? size - partial : size;
   }));
   assertDownloadFits(await assessDownloadPreflight({
     destPath: weights, expectedBytes: remaining.reduce((total, bytes) => total + bytes, 0),
   }));
 }
 
-async function installCheckpoint(weights, emit) {
+async function installCheckpoint(weights, emit, signal) {
+  let transportPromise;
+  const transport = async (url, options) => {
+    transportPromise ??= createArtifactHttpTransport(artifactDownloadEnv(), { signal: options.signal }).catch((error) => {
+      options.signal?.throwIfAborted();
+      throw runFailure(error.message);
+    });
+    return (await transportPromise)(url, options);
+  };
   for (const [name, expectedSize, expectedHash] of CHECKPOINT) {
-    await downloadVerified({
+    await downloadCheckpointFile({
       url: ['https://huggingface.co', MKSERVE_MODEL, 'resolve', MODEL_REVISION, name].join('/'),
-      final: join(weights, name), expectedSize, expectedHash, emit, label: name,
+      final: join(weights, name), expectedSize, expectedHash, emit, label: name, signal, transport,
     });
   }
 }
 
-async function installUv(work, emit) {
+export async function installPinnedAppleUv(work, emit, signal) {
   const archive = join(work, 'uv.tar.gz');
-  await downloadVerified({
+  await downloadArchive({
     url: 'https://github.com/astral-sh/uv/releases/download/' + UV_VERSION + '/uv-aarch64-apple-darwin.tar.gz',
-    final: archive, expectedHash: UV_SHA256, emit, label: 'pinned Python installer',
+    final: archive, expectedHash: UV_SHA256, emit, label: 'pinned Python installer', signal,
   });
   await command('/usr/bin/tar', [
     '-xzf', archive, '-C', work, '--strip-components', '1', 'uv-aarch64-apple-darwin/uv',
-  ], 'Could not unpack the verified Python installer.');
+  ], 'Could not unpack the verified Python installer.', { signal });
   return join(work, 'uv');
 }
 
-async function installRuntime(paths, emit) {
-  if (await sha256File(LOCK) !== WHEEL_LOCK_SHA256) throw runFailure('The shipped mkserve wheel lock does not match its pinned digest. Update PortOS and retry.');
+async function installRuntime(paths, emit, signal) {
+  if (await sha256File(LOCK, { signal }) !== WHEEL_LOCK_SHA256) throw runFailure('The shipped mkserve wheel lock does not match its pinned digest. Update PortOS and retry.');
   await mkdir(paths.work, { recursive: true });
-  const uv = await installUv(paths.work, emit);
+  const uv = await installPinnedAppleUv(paths.work, emit, signal);
   const archive = join(paths.work, 'source.tar.gz');
-  await downloadVerified({
+  await downloadArchive({
     url: 'https://codeload.github.com/dangxingyu/megakernel-zoo/tar.gz/' + MKSERVE_VERSION,
-    final: archive, expectedHash: ARCHIVE_SHA256, emit, label: 'pinned mkserve source',
+    final: archive, expectedHash: ARCHIVE_SHA256, emit, label: 'pinned mkserve source', signal,
   });
+  signal?.throwIfAborted();
   await rm(paths.source, { recursive: true, force: true });
   await mkdir(paths.source);
   await command('/usr/bin/tar', [
     '-xzf', archive, '-C', paths.source, '--strip-components', '1',
-  ], 'Could not unpack the verified mkserve source.');
+  ], 'Could not unpack the verified mkserve source.', { signal });
   emit('Preparing an isolated Python and installing verified MLX wheels…');
-  const uvOptions = { network: true, env: {
+  const uvOptions = { network: true, signal, env: {
     UV_CACHE_DIR: join(RUNTIME_ROOT, 'uv-cache'),
     UV_PYTHON_INSTALL_DIR: join(RUNTIME_ROOT, 'python'),
   } };
@@ -196,19 +285,30 @@ async function installRuntime(paths, emit) {
   ], 'Could not install the verified mkserve wheels. Check your connection and retry.', uvOptions);
 }
 
-export async function installPinnedMkserve(emit, previous) {
+export async function installPinnedMkserve(emit, previous, { signal } = {}) {
   const paths = mkserveInstallPaths(MKSERVE_BUNDLE, MODEL_REVISION);
+  signal?.throwIfAborted();
   await assertCheckpointFits(paths.weights);
-  await installRuntime(paths, emit);
-  await installCheckpoint(paths.weights, emit);
+  await installRuntime(paths, emit, signal);
+  await installCheckpoint(paths.weights, emit, signal);
+  await rebuildMkserveEngine(paths, emit, { signal });
+  signal?.throwIfAborted();
+  await activateMkserveInstall(previous);
+}
+
+export async function rebuildMkserveEngine(paths, emit, { repair = false, signal } = {}) {
+  signal?.throwIfAborted();
+  if (repair) {
+    emit('Clearing the mkserve engine cache for rebuild…');
+    await rm(paths.build, { recursive: true, force: true });
+  }
   // Local pull checks the engine without a model call, daemon launch or
   // implicit snapshot download by mkserve.
   emit('Checking the installed mkserve engine and checkpoint…');
   await command(paths.python, [
     '-m', 'mkserve', 'pull', MKSERVE_MODEL,
     '--card', 'm5max', '--engine', 'offline-c', '--model-dir', paths.weights, '--workdir', paths.build,
-  ], 'The pinned mkserve engine could not validate the local checkpoint.', { cwd: paths.source });
-  await activateMkserveInstall(previous);
+  ], 'The pinned mkserve engine could not validate the local checkpoint.', { cwd: paths.source, signal });
 }
 
 // Only retire the exact prior managed bundle after the new one is active.

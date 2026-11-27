@@ -170,7 +170,7 @@ describe('ImageGenTab grouped tabs', () => {
   it('renders a pills sub-nav with all media-settings groups', async () => {
     await renderTab();
     const tabs = screen.getAllByRole('tab').map((t) => t.textContent);
-    for (const label of ['Backend', 'External', 'Local', 'Codex CLI', 'Grok CLI', 'Agy CLI', 'Tokens', 'Expose', 'Test']) {
+    for (const label of ['Backend', 'External', 'Local', 'Codex CLI', 'Grok CLI', 'Agy CLI', 'Tokens', 'Test']) {
       expect(tabs.some((t) => t.includes(label))).toBe(true);
     }
   });
@@ -276,6 +276,12 @@ describe('ImageGenTab grouped tabs', () => {
     expect(tokensTab.getAttribute('aria-selected')).toBe('true');
   });
 
+  it('falls back to Backend from the retired exposure tab URL', async () => {
+    await renderTab(['/media/image?mediaTab=expose']);
+    expect(screen.getByRole('heading', { name: 'Backend' })).toBeTruthy();
+    expect(screen.queryByRole('tab', { name: 'Expose' })).toBeNull();
+  });
+
   it('keeps the detailed managed-token source labels while reading shared status', async () => {
     useHfTokenStatus.mockReturnValue({ present: true, source: 'cli', refresh: vi.fn() });
     await renderTab(['/media/image?mediaTab=tokens']);
@@ -288,8 +294,8 @@ describe('ImageGenTab grouped tabs', () => {
     expect(screen.getByRole('button', { name: /^Save$/ })).toBeTruthy();
     expect(screen.getByRole('button', { name: /Test Connection/i })).toBeTruthy();
     // Still present after switching to a non-backend tab.
-    fireEvent.click(screen.getByRole('tab', { name: /Expose/i }));
-    expect(screen.getByText('Expose as A1111 API on the Tailnet')).toBeTruthy();
+    fireEvent.click(screen.getByRole('tab', { name: /Tokens/i }));
+    expect(screen.getByRole('heading', { name: 'HuggingFace Token' })).toBeTruthy();
     expect(screen.getByRole('button', { name: /^Save$/ })).toBeTruthy();
   });
 

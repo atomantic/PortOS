@@ -159,7 +159,7 @@ export default function ForkSpriteModal({ open, onClose, source, referencePath, 
         {!hasBackends && (
           <p className="text-xs text-port-warning">
             No image-to-image backend configured — enable Codex, Grok or Agy, or set a local Python path,
-            in Settings → Image Gen. A fork redraws this reference, so it needs a backend that takes an
+            in Media Gen Settings. A fork redraws this reference, so it needs a backend that takes an
             input image.
           </p>
         )}

@@ -1,10 +1,5 @@
 version: 2
 updates:
-  - package-ecosystem: npm
-    directory: /
-    schedule:
-      interval: weekly
-    open-pull-requests-limit: 10
   # server/ and client/ each carry their own package.json +
   # overrides and their own lockfile, so npm resolves each tree separately —
   # list every directory so none of those trees is invisible to Dependabot (a
@@ -31,14 +26,6 @@ updates:
         patterns:
           - react
           - react-dom
-    ignore:
-      # 2.11.0's ESM build throws ERR_IMPORT_ATTRIBUTE_MISSING under Node — see
-      # #7371 and https://github.com/cantoo-scribe/pdf-lib/issues/155. Remove
-      # once a release fixes the JSON import-attribute regression. Scoped to
-      # 2.11.0 only so the fixing release (and later security patches) are
-      # still proposed.
-      - dependency-name: "@cantoo/pdf-lib"
-        versions: ["2.11.0"]
   - package-ecosystem: github-actions
     directory: /
     schedule:

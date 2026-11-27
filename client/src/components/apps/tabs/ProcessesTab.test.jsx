@@ -1,5 +1,7 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { fireEvent, render, screen } from '@testing-library/react';
+import { fireEvent, render, screen, within } from '@testing-library/react';
+
+import userEvent from '@testing-library/user-event';
 
 vi.mock('../../../services/apiCommands.js', () => ({
   applyProcessAction: vi.fn(),
@@ -16,8 +18,6 @@ vi.mock('../../../hooks/useProcessLogs', () => ({
 
 vi.mock('../../../lib/clipboard', () => ({ copyToClipboard: vi.fn() }));
 vi.mock('../../BrailleSpinner', () => ({ default: () => null }));
-vi.mock('../../ui/FormField', () => ({ FormField: ({ children }) => children }));
-vi.mock('../../ui/ProcessLogLines', () => ({ default: () => null, LogStreamBadge: () => null }));
 // `formatCount` is deliberately NOT stubbed — a stub that returns the raw
 // number would make the "N lines" assertions blind to a grouping regression.
 vi.mock('../../../utils/formatters', async (importOriginal) => ({
@@ -27,21 +27,68 @@ vi.mock('../../../utils/formatters', async (importOriginal) => ({
   formatTimeOfDaySeconds: vi.fn((timestamp) => `time-${timestamp}`),
 }));
 
+import { applyProcessAction } from '../../../services/apiCommands.js';
+import { PORTOS_APP_ID } from '../../../lib/appIdentity.js';
 import { useProcessLogs } from '../../../hooks/useProcessLogs';
 import { useProcessSnapshot } from '../../../hooks/useProcessSnapshot';
 import { copyToClipboard } from '../../../lib/clipboard';
 import ProcessesTab from './ProcessesTab';
 
+const PROCESS = { name: 'example-api', status: 'online', pid: 1, cpu: 0, memory: 0, uptime: null, restarts: 0, pm_id: 1 };
+
 describe('ProcessesTab', () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    applyProcessAction.mockResolvedValue(null);
     useProcessLogs.mockReturnValue({ logs: [], status: 'connecting', retry: vi.fn(), clear: vi.fn() });
     useProcessSnapshot.mockReturnValue({
-      data: [{ name: 'example-api', status: 'online', pid: 1, cpu: 0, memory: 0, uptime: null, restarts: 0, pm_id: 1 }],
+      data: [PROCESS],
       loading: false,
       error: null,
       refetch: vi.fn(),
     });
+  });
+
+  it.each([
+    [PORTOS_APP_ID, 'example-api'],
+    [undefined, 'portos-server'],
+    [undefined, 'portos-ui'],
+  ])('confirms before stopping the %s process %s', async (appId, name) => {
+    const user = userEvent.setup();
+    useProcessSnapshot.mockReturnValue({
+      data: [{ ...PROCESS, name }, { ...PROCESS, name: 'other-process', pm_id: 2 }],
+      loading: false,
+      error: null,
+      refetch: vi.fn(),
+    });
+    render(<ProcessesTab appId={appId} />);
+
+    const [trigger, otherTrigger] = screen.getAllByRole('button', { name: 'Stop' });
+    await user.click(trigger);
+    expect(applyProcessAction).not.toHaveBeenCalled();
+    expect(screen.getByRole('group', { name: 'Stop PortOS? This shuts down the web UI and requires terminal access to start again.' })).toHaveFocus();
+    await user.click(screen.getByRole('button', { name: 'Cancel' }));
+    expect(applyProcessAction).not.toHaveBeenCalled();
+    expect(trigger).toHaveFocus();
+
+    await user.click(trigger);
+    const confirmation = screen.getByRole('group', { name: /^Stop PortOS\?/ });
+    await user.click(within(confirmation).getByRole('button', { name: `Stop ${name}` }));
+    expect(applyProcessAction).toHaveBeenCalledExactlyOnceWith(name, 'stop', appId);
+
+    if (!appId) {
+      await user.click(otherTrigger);
+      expect(applyProcessAction).toHaveBeenLastCalledWith('other-process', 'stop', undefined);
+    }
+  });
+
+  it('stops processes for other managed apps immediately', async () => {
+    const user = userEvent.setup();
+    render(<ProcessesTab appId="app-1" />);
+
+    await user.click(screen.getByRole('button', { name: 'Stop' }));
+    expect(applyProcessAction).toHaveBeenCalledExactlyOnceWith('example-api', 'stop', 'app-1');
+    expect(screen.queryByRole('group', { name: /^Stop PortOS\?/ })).toBeNull();
   });
 
   it('shows Retry after the initial snapshot fails without claiming there are no processes', () => {
@@ -60,7 +107,7 @@ describe('ProcessesTab', () => {
 
   it('keeps the last snapshot and unavailable warning after a refresh failure', () => {
     useProcessSnapshot.mockReturnValue({
-      data: [{ name: 'example-api', status: 'online', pid: 1, cpu: 0, memory: 0, uptime: null, restarts: 0, pm_id: 1 }],
+      data: [PROCESS],
       loading: false,
       error: new Error('offline'),
       refetch: vi.fn(),
@@ -82,12 +129,32 @@ describe('ProcessesTab', () => {
     expect(screen.getByText('0 processes')).toBeTruthy();
   });
 
-  it('passes its app id to the expanded process log subscription', () => {
+  it('keeps the active log viewer outside the metrics table and wires its controls', () => {
+    const clear = vi.fn();
+    const retry = vi.fn();
+    useProcessLogs.mockReturnValue({ logs: [], status: 'error', clear, retry });
     render(<ProcessesTab appId="app-1" pm2ProcessNames={['example-api']} />);
 
-    fireEvent.click(screen.getByRole('button', { name: 'Expand details for example-api' }));
+    const trigger = screen.getByRole('button', { name: 'Expand details for example-api' });
+    expect(trigger).toHaveAttribute('aria-expanded', 'false');
+    fireEvent.click(trigger);
 
+    const table = screen.getByRole('table', { name: 'PM2 processes' });
+    const viewer = screen.getByRole('region', { name: 'Live logs for example-api' });
+    expect(table.parentElement.nextElementSibling).toBe(viewer);
+    expect(trigger).toHaveAttribute('aria-expanded', 'true');
     expect(useProcessLogs).toHaveBeenLastCalledWith('example-api', { lines: 500, appId: 'app-1' });
+
+    fireEvent.change(within(viewer).getByLabelText('Tail lines:'), { target: { value: '250' } });
+    expect(useProcessLogs).toHaveBeenLastCalledWith('example-api', { lines: 250, appId: 'app-1' });
+    fireEvent.click(within(viewer).getByRole('button', { name: 'Clear' }));
+    fireEvent.click(within(viewer).getByRole('button', { name: 'Retry' }));
+    expect(clear).toHaveBeenCalledOnce();
+    expect(retry).toHaveBeenCalledOnce();
+
+    fireEvent.click(trigger);
+    expect(trigger).toHaveAttribute('aria-expanded', 'false');
+    expect(screen.queryByRole('region', { name: 'Live logs for example-api' })).toBeNull();
   });
 
   it('copies the current live log snapshot from both viewers in display order', () => {

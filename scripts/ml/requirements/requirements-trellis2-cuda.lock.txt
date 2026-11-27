@@ -1,6 +1,6 @@
 # Linux x86_64 / CPython 3.11 / CUDA 12.6; generated with uv 0.13.6.
 # Input: scripts/ml/requirements/requirements-trellis2-cuda.txt; cutoff 2026-11-04T00:00:00Z.
-# Exact regeneration command and OSV/MAL audit: docs/TRELLIS2_CUDA.md.
+# Exact regeneration command and OSV/MAL audit: docs/RUNTIME_LOCKS.md#trellis2-cuda.
 annotated-doc==0.0.5 \
     --hash=sha256:117bac03a25ede5df5440e855b32d556049ca169ead221505badf432fed4b101 \
     --hash=sha256:c7e58ce09192557605d8bbd92836d7e1d520ac9580096042c0bfd197efacf1bb

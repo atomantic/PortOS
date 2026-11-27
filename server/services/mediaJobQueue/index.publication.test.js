@@ -5,6 +5,7 @@ import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { tempDataDir, atomicWriteSpy, queueSnapshotJobs, currentAdmission, stubs, mediaJobQueue, videoGenEvents, imageGenEvents, audioGenEvents, importFresh, flush, waitFor, persistedJobs } from './index.test.fixture.js';
 import { mkdirSync, writeFileSync, existsSync, readFileSync, readdirSync } from 'fs';
 import { join } from 'path';
+import { once } from 'node:events';
 
 // A completion publishes a file (written by the generator before it reports
 // done) and rows (the queue snapshot and the attach hooks that name the file).
@@ -228,11 +229,11 @@ describe('backup snapshot admission for media completion', () => {
       startBackgroundServices: noWork, ensureSelf: noWork, initSyncLog: noWork,
       recoverStuckClassifications: noWork, recoverInterruptedRepoClones: noWork,
       initMediaJobQueue: options => mediaJobQueue.initMediaJobQueue({ ...options, prepareTerminalHooks }),
-      initLoraTraining: async () => {
+      initMediaJobDependentHooks: async () => {
+        expect(loadHook).not.toHaveBeenCalled();
         await mediaJobQueue.flushMediaJobQueue();
         beforeHooks = { job: persistedJobs()[0], rowCount: rows.size };
       },
-      initMediaJobDependentHooks: () => expect(loadHook).not.toHaveBeenCalled(),
       recoverStoryboardRuns: noWork,
       resumeMediaJobCompletions: mediaJobQueue.resumeMediaJobCompletions,
       initSharing: noWork, recoverCreativeDirectorProjects: noWork,
@@ -350,7 +351,7 @@ describe('backup snapshot admission for media completion', () => {
 // declare all four; this pins what each existing kind does today, including the
 // inherited default window/verb of html-composition and supercollider.
 describe('mediaJobQueue per-kind runtime wiring', () => {
-  const WINDOWS = { VIDEO: 4000, TRAINING: 6000, AUDIO: 8000, IMAGE: 10000 };
+  const WINDOWS = { VIDEO: 4000, AUDIO: 8000, IMAGE: 10000 };
   const KIND_CASES = [
     { kind: 'video', params: {}, entry: 'generateVideo', bus: 'video', verb: 'Rendering', window: WINDOWS.VIDEO },
     { kind: 'video-upscale', params: {}, entry: 'runVideoUpscale', bus: 'video', verb: 'Upscaling', window: WINDOWS.VIDEO },
@@ -363,15 +364,14 @@ describe('mediaJobQueue per-kind runtime wiring', () => {
     { kind: 'audio', params: {}, entry: 'generateAudio', bus: 'audio', verb: 'Generating', window: WINDOWS.AUDIO },
     { kind: 'supercollider', params: {}, entry: 'renderSuperCollider', bus: 'audio', verb: 'Generating', window: WINDOWS.IMAGE },
   ];
-  const busFor = async (name) => ({
+  const busFor = (name) => ({
     video: videoGenEvents,
     image: imageGenEvents,
     audio: audioGenEvents,
-    training: (await import('../loraTraining/events.js')).trainingEvents,
   })[name];
 
-  it('covers every newly dispatchable kind; historical training is recovery-only', () => {
-    expect(KIND_CASES.map(c => c.kind).sort()).toEqual(mediaJobQueue.JOB_KINDS.filter(kind => kind !== 'training').sort());
+  it('covers every dispatchable kind', () => {
+    expect(KIND_CASES.map(c => c.kind).sort()).toEqual([...mediaJobQueue.JOB_KINDS].sort());
   });
 
   describe.each(KIND_CASES)('$kind', ({ kind, params, entry, bus, verb, window }) => {
@@ -381,19 +381,18 @@ describe('mediaJobQueue per-kind runtime wiring', () => {
       const { jobId } = await mediaJobQueue.enqueueJob({ kind, params: { prompt: 'example', ...params } });
       await waitFor(() => stubs[entry].mock.calls.length === 1);
       expect(stubs[entry]).toHaveBeenCalledWith(expect.objectContaining({ jobId }));
-      // The three other buses must not move this job; only its own does.
-      for (const other of ['video', 'image', 'audio', 'training'].filter(b => b !== bus)) {
-        (await busFor(other)).emit('progress', { generationId: jobId, progress: 0.1, step: 1, totalSteps: 4 });
+      // The other buses must not move this job; only its own does.
+      for (const other of ['video', 'image', 'audio'].filter(b => b !== bus)) {
+        busFor(other).emit('progress', { generationId: jobId, progress: 0.1, step: 1, totalSteps: 4 });
       }
       expect(mediaJobQueue.getJob(jobId).statusMsg).not.toMatch(/step/);
-      (await busFor(bus)).emit('progress', { generationId: jobId, progress: 0.5, step: 2, totalSteps: 4 });
+      busFor(bus).emit('progress', { generationId: jobId, progress: 0.5, step: 2, totalSteps: 4 });
       expect(mediaJobQueue.getJob(jobId).statusMsg).toBe(`${verb} step 2/4`);
     });
 
     it('trips the idle watchdog at its own window', async () => {
       vi.useFakeTimers();
       process.env.MEDIA_JOB_WATCHDOG_VIDEO_MS = String(WINDOWS.VIDEO);
-      process.env.MEDIA_JOB_WATCHDOG_TRAINING_MS = String(WINDOWS.TRAINING);
       process.env.MEDIA_JOB_WATCHDOG_AUDIO_MS = String(WINDOWS.AUDIO);
       process.env.MEDIA_JOB_WATCHDOG_IMAGE_MS = String(WINDOWS.IMAGE);
       await importFresh();
@@ -420,9 +419,9 @@ describe('mediaJobQueue per-kind runtime wiring', () => {
           status: 'failed', error: expect.stringMatching(/watchdog timeout/),
         }));
       } finally {
-        for (const name of ['VIDEO', 'TRAINING', 'AUDIO', 'IMAGE']) delete process.env[`MEDIA_JOB_WATCHDOG_${name}_MS`];
+        for (const name of ['VIDEO', 'AUDIO', 'IMAGE']) delete process.env[`MEDIA_JOB_WATCHDOG_${name}_MS`];
         if (jobId) {
-          for (const name of ['video', 'image', 'audio', 'training']) (await busFor(name)).emit('failed', { generationId: jobId, error: 'Fixture teardown' });
+          for (const name of ['video', 'image', 'audio']) busFor(name).emit('failed', { generationId: jobId, error: 'Fixture teardown' });
         }
         await flush();
       }
@@ -490,6 +489,85 @@ describe('mediaJobQueue per-kind runtime wiring', () => {
   });
 });
 
+describe('media queue worker wakeups', () => {
+  beforeEach(() => { vi.useFakeTimers(); });
+  afterEach(() => { vi.clearAllTimers(); vi.useRealTimers(); });
+
+  it('sleeps without a timer while idle and dispatches on durable enqueue', async () => {
+    await mediaJobQueue.initMediaJobQueue();
+    expect(vi.getTimerCount()).toBe(0);
+    const checks = vi.spyOn(currentAdmission, 'held');
+    try {
+      await vi.advanceTimersByTimeAsync(60_000);
+      expect(checks).not.toHaveBeenCalled();
+      expect(vi.getTimerCount()).toBe(0);
+    } finally {
+      checks.mockRestore();
+    }
+
+    stubs.generateImage.mockResolvedValue({});
+    const { jobId } = await mediaJobQueue.enqueueJob({ kind: 'image', params: { prompt: 'frame' } });
+    await flush();
+    expect(stubs.generateImage).toHaveBeenCalledWith(expect.objectContaining({ jobId }));
+    imageGenEvents.emit('completed', { generationId: jobId, filename: 'frame.png' });
+  });
+
+  it('dispatches on maintenance resume, limit changes and lane completion without a clock tick', async () => {
+    stubs.generateImageGrok.mockResolvedValue({});
+    const { hold } = currentAdmission.begin({ reason: 'Fixture hold', owner: 'Operator' });
+    const enqueue = () => mediaJobQueue.enqueueJob({ kind: 'image', params: { mode: 'grok', prompt: 'frame' } });
+    const first = await enqueue();
+    const second = await enqueue();
+    const third = await enqueue();
+    await flush();
+    expect(stubs.generateImageGrok).not.toHaveBeenCalled();
+    expect(vi.getTimerCount()).toBe(0);
+
+    const triggerAndWaitForStart = async (trigger) => {
+      const started = once(mediaJobQueue.mediaJobEvents, 'started');
+      trigger();
+      const [job] = await started;
+      await flush();
+      return job.id;
+    };
+    expect(await triggerAndWaitForStart(() => currentAdmission.resume({ id: hold.id, revision: hold.revision }))).toBe(first.jobId);
+    expect(await triggerAndWaitForStart(() => mediaJobQueue.setParallelLimit('image', 'grok', 2))).toBe(second.jobId);
+    expect(await triggerAndWaitForStart(() => imageGenEvents.emit('completed', {
+      generationId: first.jobId, filename: 'first.png',
+    }))).toBe(third.jobId);
+  });
+
+  it('interrupts a later timer for an earlier start and expires a waiting job at its stop-by time', async () => {
+    const now = Date.now();
+    const at = (ms) => new Date(now + ms).toISOString();
+    const enqueue = (schedule) => mediaJobQueue.enqueueJob({ kind: 'image', params: { prompt: 'frame', schedule } });
+    stubs.generateImage.mockResolvedValue({});
+    const later = await enqueue({ startAt: at(60_000), stopBy: at(90_000) });
+    await flush();
+    expect(vi.getTimerCount()).toBe(1);
+
+    const earlier = await enqueue({ startAt: at(30_000) });
+    await flush();
+    expect(vi.getTimerCount()).toBe(1);
+    await vi.advanceTimersByTimeAsync(29_999);
+    expect(stubs.generateImage).not.toHaveBeenCalled();
+    await vi.advanceTimersByTimeAsync(1);
+    await flush();
+    expect(stubs.generateImage).toHaveBeenCalledWith(expect.objectContaining({ jobId: earlier.jobId }));
+
+    // The first render still holds the GPU lane at the second job's start.
+    await vi.advanceTimersByTimeAsync(59_999);
+    expect(mediaJobQueue.getJob(later.jobId).status).toBe('queued');
+    await vi.advanceTimersByTimeAsync(1);
+    await flush();
+    expect(mediaJobQueue.getJob(later.jobId)).toMatchObject({
+      status: 'canceled', error: 'Its stop-by time passed before it started',
+    });
+    expect(stubs.generateImage).toHaveBeenCalledTimes(1);
+    imageGenEvents.emit('completed', { generationId: earlier.jobId, filename: 'frame.png' });
+  });
+});
+
 describe('provider quota cooldowns', () => {
   // Verbatim from this install on 2026-10-17 (redacted of nothing — it carries
   // no private state). The duration is the only machine-readable part.
@@ -522,30 +600,29 @@ describe('provider quota cooldowns', () => {
   });
 
   it('keeps one hold message for the window, then promotes the job without it once the reset passes', async () => {
-    // Resolve so the first render releases its cloud slot once it fails.
-    stubs.generateImageCodex.mockResolvedValue({ jobId: 'codex-job' });
-    const first = await mediaJobQueue.enqueueJob({ kind: 'image', params: { mode: 'codex', prompt: 'page 1' } });
-    await waitFor(() => stubs.generateImageCodex.mock.calls.length === 1);
-    imageGenEvents.emit('failed', { generationId: first.jobId, error: QUOTA_ERROR });
-    await waitFor(() => mediaJobQueue.getJob(first.jobId)?.status === 'failed');
-
-    const second = await mediaJobQueue.enqueueJob({ kind: 'image', params: { mode: 'codex', prompt: 'page 2' } });
-    await waitFor(() => (mediaJobQueue.getJob(second.jobId)?.statusMsg || '').startsWith('Waiting for codex quota'));
-    const waiting = mediaJobQueue.getJob(second.jobId).statusMsg;
-    // A later scan in the same window must not rewrite (and re-persist) it.
-    // Each worker pass starts by reading the maintenance hold, so two more
-    // reads prove at least one complete later scan.
-    const scans = vi.spyOn(currentAdmission, 'held');
-    await waitFor(() => scans.mock.calls.length >= 2);
-    expect(mediaJobQueue.getJob(second.jobId).statusMsg).toBe(waiting);
-
-    const realNow = Date.now();
-    const clock = vi.spyOn(Date, 'now').mockImplementation(() => realNow + 3 * 60 * 60 * 1000);
+    vi.useFakeTimers();
     try {
-      await waitFor(() => mediaJobQueue.getJob(second.jobId)?.status === 'running');
-      expect(mediaJobQueue.getJob(second.jobId).statusMsg).toBe('Starting');
+      stubs.generateImageCodex.mockResolvedValue({ jobId: 'codex-job' });
+      const first = await mediaJobQueue.enqueueJob({ kind: 'image', params: { mode: 'codex', prompt: 'page 1' } });
+      await flush();
+      expect(stubs.generateImageCodex).toHaveBeenCalledTimes(1);
+      imageGenEvents.emit('failed', { generationId: first.jobId, error: QUOTA_ERROR });
+      await flush();
+
+      const second = await mediaJobQueue.enqueueJob({ kind: 'image', params: { mode: 'codex', prompt: 'page 2' } });
+      await flush();
+      const waiting = mediaJobQueue.getJob(second.jobId).statusMsg;
+      expect(waiting).toMatch(/^Waiting for codex quota/);
+      const snapshot = JSON.parse(readFileSync(join(tempDataDir, 'media-jobs.json'), 'utf8'));
+      const resumeAt = snapshot.quotaCooldowns.find(([mode]) => mode === 'codex')[1];
+      await vi.advanceTimersByTimeAsync(resumeAt - Date.now() - 1);
+      expect(mediaJobQueue.getJob(second.jobId)).toMatchObject({ status: 'queued', statusMsg: waiting });
+      await vi.advanceTimersByTimeAsync(1);
+      await flush();
+      expect(mediaJobQueue.getJob(second.jobId)).toMatchObject({ status: 'running', statusMsg: 'Starting' });
     } finally {
-      clock.mockRestore();
+      vi.clearAllTimers();
+      vi.useRealTimers();
     }
   });
 
@@ -613,26 +690,35 @@ describe('provider quota cooldowns', () => {
     });
 
     it('holds a one-slot lane after a bare 429, preserves other lanes and resumes after the cooldown', async () => {
-      stubs.generateVideoGrok.mockResolvedValue({ jobId: 'grok-video-job' });
-      stubs.generateImageGrok.mockResolvedValue({ jobId: 'grok-image-job' });
-      const first = await mediaJobQueue.enqueueJob({ kind: 'video', params: { mode: 'grok', prompt: 'clip 1' } });
-      const second = await mediaJobQueue.enqueueJob({ kind: 'video', params: { mode: 'grok', prompt: 'clip 2' } });
-      await waitFor(() => stubs.generateVideoGrok.mock.calls.length === 1);
-      videoGenEvents.emit('failed', { generationId: first.jobId, error: 'HTTP 429 Too Many Requests', status: 429 });
-      await waitFor(() => (mediaJobQueue.getJob(second.jobId).statusMsg || '').startsWith('Rate-limited (429)'));
-      expect(mediaJobQueue.getJob(second.jobId).status).toBe('queued');
-      expect(stubs.generateVideoGrok).toHaveBeenCalledTimes(1);
-      const image = await mediaJobQueue.enqueueJob({ kind: 'image', params: { mode: 'grok', prompt: 'frame' } });
-      await waitFor(() => stubs.generateImageGrok.mock.calls.length === 1);
-      expect(mediaJobQueue.getJob(image.jobId).status).toBe('running');
-      imageGenEvents.emit('completed', { generationId: image.jobId, filename: 'frame.png' });
-      const realNow = Date.now.bind(Date);
-      const clock = vi.spyOn(Date, 'now').mockImplementation(() => realNow() + mediaJobQueue.RATE_LIMIT_COOLDOWN_MS + 1);
+      vi.useFakeTimers();
       try {
-        await waitFor(() => stubs.generateVideoGrok.mock.calls.length === 2);
+        stubs.generateVideoGrok.mockResolvedValue({ jobId: 'grok-video-job' });
+        stubs.generateImageGrok.mockResolvedValue({ jobId: 'grok-image-job' });
+        const first = await mediaJobQueue.enqueueJob({ kind: 'video', params: { mode: 'grok', prompt: 'clip 1' } });
+        const second = await mediaJobQueue.enqueueJob({ kind: 'video', params: { mode: 'grok', prompt: 'clip 2' } });
+        await flush();
+        expect(stubs.generateVideoGrok).toHaveBeenCalledTimes(1);
+        videoGenEvents.emit('failed', { generationId: first.jobId, error: 'HTTP 429 Too Many Requests', status: 429 });
+        await flush();
+        expect(mediaJobQueue.getJob(second.jobId)).toMatchObject({
+          status: 'queued', statusMsg: expect.stringMatching(/^Rate-limited \(429\)/),
+        });
+        const image = await mediaJobQueue.enqueueJob({ kind: 'image', params: { mode: 'grok', prompt: 'frame' } });
+        await flush();
+        expect(stubs.generateImageGrok).toHaveBeenCalledWith(expect.objectContaining({ jobId: image.jobId }));
+        imageGenEvents.emit('completed', { generationId: image.jobId, filename: 'frame.png' });
+        const { expiresAt } = mediaJobQueue.getRateLimitCooldown('video', 'grok');
+        await vi.advanceTimersByTimeAsync(expiresAt - Date.now() - 1);
+        expect(stubs.generateVideoGrok).toHaveBeenCalledTimes(1);
+        await vi.advanceTimersByTimeAsync(1);
+        await flush();
+        expect(stubs.generateVideoGrok).toHaveBeenCalledTimes(2);
         expect(mediaJobQueue.getJob(second.jobId).statusMsg).toBe('Starting');
         videoGenEvents.emit('completed', { generationId: second.jobId, filename: 'second.mp4' });
-      } finally { clock.mockRestore(); }
+      } finally {
+        vi.clearAllTimers();
+        vi.useRealTimers();
+      }
     });
 
     it('runs Grok video up to its parallel limit and queues beyond it', async () => {

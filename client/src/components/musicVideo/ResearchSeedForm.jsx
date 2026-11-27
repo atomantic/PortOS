@@ -39,6 +39,7 @@ export default function ResearchSeedForm({ projectId, match, start, onSaved, roo
     const receive = (event) => {
       if (event?.projectId !== projectId || event?.[key] !== value) return;
       if (event.status === 'running') { setStatus('running'); return; }
+      if (event.status === 'canceled') { setStatus(null); return; }
       if (event.status === 'failed') { setStatus({ error: event.error || 'Research found no usable photos.' }); return; }
       if (event.project) saved.current(event.project);
       setStatus({ added: event.added || 0 });

@@ -10,9 +10,9 @@
  */
 
 import { describe, expect, it, beforeEach, afterEach, vi } from 'vitest';
-import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, readFile, rm, stat, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { dirname, join } from 'node:path';
 import migration from './358-provider-connection-graph.js';
 import { MIGRATION_OWNED_PATHS } from '../lib/migrationOwnedPaths.js';
 
@@ -47,6 +47,15 @@ describe('358-provider-connection-graph', () => {
 
     expect(await migration.up({ rootDir })).toEqual({ success: true });
     expect(JSON.parse(await readFile(recoveryPath(), 'utf-8'))).toEqual(PROVIDERS);
+  });
+
+  it.skipIf(process.platform === 'win32')('creates the recovery copy and directory with owner-only modes', async () => {
+    await writeFile(join(rootDir, 'data/providers.json'), JSON.stringify(PROVIDERS));
+
+    await migration.up({ rootDir });
+
+    expect((await stat(recoveryPath())).mode & 0o7777).toBe(0o600);
+    expect((await stat(dirname(recoveryPath()))).mode & 0o7777).toBe(0o700);
   });
 
   it('skips when the INPUT is absent rather than seeding anything', async () => {

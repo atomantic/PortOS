@@ -1,3 +1,4 @@
+import { STALL_NUDGE_IDLE_MS } from '../../test/fixtures/tuiTiming.js';
 /**
  * Session-controller teardown contract (#8021).
  *
@@ -18,7 +19,7 @@
  */
 
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
-import { STALL_NUDGE_IDLE_MS, STALL_NUDGE_TEXT } from '../../lib/tuiHandshake.js';
+import { STALL_NUDGE_TEXT } from '../../lib/tuiHandshake.js';
 
 vi.mock('../cos/cosEvents.js', () => ({ emitLog: vi.fn() }));
 
@@ -72,6 +73,8 @@ function makeController({
     paste: vi.fn(() => ({ /* a live submit-Enter interval handle */ })),
     kill: vi.fn(),
     markUnsettled: vi.fn(),
+    shouldAbandonRun: vi.fn(() => false),
+    probeMergeGatePr: vi.fn().mockResolvedValue(prProbe),
     resolveErrorAnalysis: vi.fn(async ({ immediateFallbackAnalysis }) => immediateFallbackAnalysis),
   };
   const controller = createTuiSessionController({
@@ -122,11 +125,11 @@ function makeController({
     finalization: {
       finalizeAgent: seams.finalizeAgent,
       finalizeRunCommon: ({ success, error }) => ({ outcome: success ? 'completed' : 'failed', finalSuccess: success, finalError: error, terminatedByUser: false }),
-      shouldAbandonRun: () => false,
+      shouldAbandonRun: seams.shouldAbandonRun,
       resolveErrorAnalysis: seams.resolveErrorAnalysis,
       runCompletionCleanup: seams.runCompletionCleanup,
     },
-    probeMergeGatePr: async () => prProbe,
+    probeMergeGatePr: seams.probeMergeGatePr,
   });
   return { controller, ...seams };
 }
@@ -189,6 +192,87 @@ describe('TUI session controller — teardown owns its own machinery (#8021)', (
     expect(kill).toHaveBeenCalledWith('session-abcdef12');
     expect(markUnsettled).toHaveBeenCalled();
     expect(emitLog).toHaveBeenCalledWith('warn', expect.stringContaining(`${label} drain failed`), { agentId: 'agent-8021' });
+  });
+
+  it.each([
+    ['the host shutdown check throws', 'shouldAbandonRun'],
+    ['the merge-gate probe rejects', 'probeMergeGatePr'],
+    ['the merge-gate sentinel removal rejects', 'remove'],
+  ])('finalizes once and releases the run when %s', async (_case, seam) => {
+    const subject = makeController({
+      mergeGateIsOwed: true,
+      sentinelSummary: 'Shipped the extraction. PR is open.',
+      prProbe: { prState: 'OPEN', prUrl: 'https://example.com/pr/1', readable: true },
+    });
+    const failure = new Error('completion decision failed');
+    if (seam === 'shouldAbandonRun') subject[seam].mockImplementationOnce(() => { throw failure; });
+    else subject[seam].mockRejectedValueOnce(failure);
+    const { controller, closers, watch, finalizeAgent, runCompletionCleanup, kill, releaseRunRecord } = subject;
+    controller.attachSession({ sessionId: 'session-abcdef12', pid: 4242 });
+
+    await controller.finish({ success: true, reason: 'agent-signaled-done' });
+    await controller.handleExit({ exitCode: 0, killed: false });
+
+    expect(controller.isTerminal()).toBe(true);
+    expect(finalizeAgent).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({ success: true }));
+    expect(runCompletionCleanup).toHaveBeenCalledOnce();
+    expect(kill).toHaveBeenCalledWith('session-abcdef12');
+    expect(releaseRunRecord).toHaveBeenCalledOnce();
+    expect(watch).toHaveBeenCalledOnce();
+    expect(closers[0]).toHaveBeenCalledOnce();
+    expect(vi.getTimerCount()).toBe(0);
+  });
+
+  it('finalizes the failed run and releases it when error analysis rejects', async () => {
+    const { controller, finalizeAgent, runCompletionCleanup, resolveErrorAnalysis, kill, releaseRunRecord } = makeController();
+    resolveErrorAnalysis.mockRejectedValueOnce(new Error('analysis failed'));
+    controller.attachSession({ sessionId: 'session-abcdef12', pid: 4242 });
+
+    await controller.handleExit({ exitCode: 1, killed: false });
+
+    expect(finalizeAgent).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({ success: false, errorAnalysis: null }));
+    expect(runCompletionCleanup).toHaveBeenCalledOnce();
+    expect(kill).toHaveBeenCalledWith('session-abcdef12');
+    expect(releaseRunRecord).toHaveBeenCalledOnce();
+    expect(emitLog).toHaveBeenCalledWith('warn', expect.stringContaining('analysis failed'), { agentId: 'agent-8021' });
+  });
+
+  it('detects a split PTY banner in arrival order while the working phase write is pending', async () => {
+    const { controller, updateAgent, finalizeAgent } = makeController();
+    const workingWrite = Promise.withResolvers();
+    updateAgent.mockReturnValueOnce(workingWrite.promise);
+    controller.attachSession({ sessionId: 'session-abcdef12', pid: 4242 });
+
+    const firstChunk = controller.handleData('Now using extra ');
+    try {
+      await controller.handleData('usage\n');
+      expect(updateAgent).toHaveBeenCalledWith('agent-8021', { metadata: { phase: 'working' } });
+      expect(finalizeAgent).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({
+        success: false, completionReason: 'fallback-signal',
+      }));
+    } finally {
+      workingWrite.reject(new Error('working phase write failed'));
+      await firstChunk;
+      await controller.handleExit({ exitCode: 0, killed: false });
+    }
+    expect(emitLog).toHaveBeenCalledWith('warn', expect.stringContaining('working phase write failed'), { agentId: 'agent-8021' });
+  });
+
+  it.each([
+    ['proven empty branch', { success: true, branchProvenEmpty: true }, true, true],
+    ['no proof of an empty branch', { success: true }, true, false],
+    ['downgraded success', { success: false }, false, false],
+  ])('passes the finalize verdict to cleanup for %s', async (_case, verdict, success, branchProvenEmpty) => {
+    const { controller, finalizeAgent, runCompletionCleanup } = makeController();
+    finalizeAgent.mockResolvedValueOnce(verdict);
+
+    controller.attachSession({ sessionId: 'session-abcdef12', pid: 4242 });
+    await controller.handleExit({ exitCode: 0, killed: false });
+
+    expect(finalizeAgent).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({ success: true }));
+    expect(runCompletionCleanup).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({
+      agentId: 'agent-8021', success, branchProvenEmpty,
+    }));
   });
 
   it('holds error analysis and completion until the raw PTY spool drain settles', async () => {

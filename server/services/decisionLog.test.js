@@ -191,6 +191,72 @@ describe('decisionLog.js', () => {
       expect(savedData.decisions[0].reason).toBe('New one');
     });
 
+    it('persists every occurrence from overlapping calls and keeps the missing-file default empty', async () => {
+      readJSONFile.mockImplementation(async (_path, fallback) => fallback);
+
+      const decisions = await Promise.all([
+        recordDecision(DECISION_TYPES.IDLE, 'No work', { cycle: 1 }),
+        recordDecision(DECISION_TYPES.IDLE, 'No work', { cycle: 2 }),
+        recordDecision(DECISION_TYPES.TASK_SELECTED, 'New work')
+      ]);
+
+      expect(decisions.map(({ count }) => count)).toEqual([1, 2, 1]);
+      expect(savedData.decisions).toMatchObject([
+        { reason: 'New work', count: 1 },
+        { reason: 'No work', count: 2, context: { cycle: 2 } }
+      ]);
+      expect(savedData.stats).toEqual({
+        totalDecisions: 3,
+        byType: { [DECISION_TYPES.IDLE]: 2, [DECISION_TYPES.TASK_SELECTED]: 1 }
+      });
+      expect(readJSONFile.mock.calls[0][1]).toEqual(makeDecisionData());
+    });
+
+    it('isolates defaults across cold reads while a decision is being recorded', async () => {
+      const firstRead = Promise.withResolvers();
+      const readStarted = Promise.withResolvers();
+      readJSONFile
+        .mockImplementationOnce(async (_path, fallback) => {
+          readStarted.resolve();
+          await firstRead.promise;
+          return fallback;
+        })
+        .mockImplementation(async (_path, fallback) => fallback);
+
+      const dashboardRead = getDecisionSummary();
+      await readStarted.promise;
+      try {
+        await recordDecision(DECISION_TYPES.IDLE, 'Recorded during dashboard read');
+      } finally {
+        firstRead.resolve();
+        await dashboardRead;
+      }
+
+      const [, firstFallback] = readJSONFile.mock.calls[0];
+      const [, secondFallback] = readJSONFile.mock.calls[1];
+      expect(secondFallback.decisions).not.toBe(firstFallback.decisions);
+      expect(secondFallback.stats).not.toBe(firstFallback.stats);
+      expect((await dashboardRead).last24Hours.total).toBe(1);
+      expect((await getDecisionSummary()).last24Hours.total).toBe(1);
+    });
+
+    it('continues queued writes from the last persisted state when a write fails', async () => {
+      readJSONFile.mockResolvedValue(makeDecisionData());
+      const failure = new Error('Decision write failed');
+      writeFile.mockRejectedValueOnce(failure);
+
+      const outcomes = await Promise.allSettled([
+        recordDecision(DECISION_TYPES.IDLE, 'Failed write'),
+        recordDecision(DECISION_TYPES.IDLE, 'Persisted write')
+      ]);
+
+      expect(outcomes[0]).toEqual({ status: 'rejected', reason: failure });
+      expect(outcomes[1].status).toBe('fulfilled');
+      expect(savedData.decisions.map(({ reason }) => reason)).toEqual(['Persisted write']);
+      expect(savedData.stats.totalDecisions).toBe(1);
+      expect((await getDecisionSummary()).last24Hours.total).toBe(1);
+    });
+
     it('should update stats', async () => {
       readJSONFile.mockResolvedValue(makeDecisionData());
 

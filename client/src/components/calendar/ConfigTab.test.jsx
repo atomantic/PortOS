@@ -120,12 +120,12 @@ describe('calendar account deletion', () => {
       return <MemoryRouter><ConfigTab accounts={accounts} setAccounts={setAccounts} /></MemoryRouter>;
     }
     render(<Harness />);
-    fireEvent.click(screen.getByRole('button', { name: 'Delete account' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Delete account Example Calendar' }));
     fireEvent.click(screen.getByRole('button', { name: 'Remove' }));
     await waitFor(() => expect(toast.error).toHaveBeenCalledExactlyOnceWith('Filesystem operation failed'));
     expect(screen.getByText('Example Calendar')).toBeTruthy();
     expect(toast.success).not.toHaveBeenCalled();
-    fireEvent.click(screen.getByRole('button', { name: 'Delete account' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Delete account Example Calendar' }));
     fireEvent.click(screen.getByRole('button', { name: 'Remove' }));
     await waitFor(() => expect(screen.queryByText('Example Calendar')).toBeNull());
     expect(toast.success).toHaveBeenCalledExactlyOnceWith('Account deleted');
@@ -183,7 +183,7 @@ describe('subcalendar color', () => {
   }
 
   it('previews input events and saves the final color once on blur', async () => {
-    api.updateSubcalendars.mockResolvedValue({});
+    api.updateSubcalendars.mockImplementation(async (_id, body) => body);
     const picker = await openColorPicker();
 
     for (const value of ['#ff1000', '#ff2000', '#ff3000']) {
@@ -215,23 +215,71 @@ describe('subcalendar color', () => {
     expect(toast.error).toHaveBeenCalledExactlyOnceWith('Failed to update subcalendars');
   });
 
+  it.each([
+    ['Disable Work', { enabled: false }],
+    ['Dormant', { dormant: true }],
+  ])('preserves the color when blur is followed by %s', async (name, fields) => {
+    let finishColor;
+    api.updateSubcalendars
+      .mockImplementationOnce((_id, body) => new Promise(resolve => { finishColor = () => resolve(body); }))
+      .mockImplementation(async (_id, body) => body);
+    const picker = await openColorPicker();
+    expect(picker.parentElement).toHaveClass(
+      'focus-within:ring-2', 'focus-within:ring-port-accent', 'pointer-coarse:min-h-11', 'pointer-coarse:min-w-11',
+    );
+    const action = screen.getByRole('button', { name });
+    expect(screen.getByRole('button', { name: 'Disable Work', pressed: true })).toBeEnabled();
+
+    fireEvent.input(picker, { target: { value: '#ff1000' } });
+    await act(async () => fireEvent.blur(picker));
+    expect(api.updateSubcalendars).toHaveBeenCalledExactlyOnceWith(
+      account.id, { subcalendars: [{ ...subcalendar, color: '#ff1000' }] }, { silent: true },
+    );
+    expect(action).toBeEnabled();
+    await act(async () => fireEvent.click(action));
+    expect(api.updateSubcalendars).toHaveBeenCalledTimes(1);
+
+    await act(async () => finishColor());
+    expect(api.updateSubcalendars).toHaveBeenNthCalledWith(
+      2, account.id, { subcalendars: [{ ...subcalendar, color: '#ff1000', ...fields }] }, { silent: true },
+    );
+    expect(picker).toHaveValue('#ff1000');
+  });
+
+  it('continues with the last confirmed list when a queued save fails', async () => {
+    let failColor;
+    api.updateSubcalendars
+      .mockImplementationOnce(() => new Promise((_resolve, reject) => { failColor = reject; }))
+      .mockImplementation(async (_id, body) => body);
+    const picker = await openColorPicker();
+    fireEvent.input(picker, { target: { value: '#ff1000' } });
+    await act(async () => fireEvent.blur(picker));
+    await act(async () => fireEvent.click(screen.getByRole('button', { name: 'Disable Work' })));
+    await act(async () => failColor(new Error('Synthetic save failure')));
+
+    expect(api.updateSubcalendars).toHaveBeenNthCalledWith(
+      2, account.id, { subcalendars: [{ ...subcalendar, enabled: false }] }, { silent: true },
+    );
+    expect(picker).toHaveValue(subcalendar.color);
+    expect(screen.getByRole('button', { name: 'Enable Work', pressed: false })).toBeEnabled();
+    expect(toast.error).toHaveBeenCalledExactlyOnceWith('Failed to update subcalendars');
+  });
+
   it('still saves enable, dormant and activate actions immediately', async () => {
-    api.updateSubcalendars.mockResolvedValue({});
+    api.updateSubcalendars.mockImplementation(async (_id, body) => body);
     await openColorPicker();
 
     for (const [index, name, fields] of [
-      [1, 'Disable', { enabled: false }],
-      [2, 'Enable', { enabled: true }],
+      [1, 'Disable Work', { enabled: false }],
+      [2, 'Enable Work', { enabled: true }],
       [3, 'Dormant', { dormant: true }],
       [4, 'Activate', { dormant: false }],
     ]) {
       const button = screen.getByRole('button', { name });
-      await act(async () => {
-        fireEvent.click(button);
-        expect(api.updateSubcalendars).toHaveBeenNthCalledWith(
-          index, account.id, { subcalendars: [{ ...subcalendar, ...fields }] }, { silent: true },
-        );
-      });
+      await act(async () => fireEvent.click(button));
+      expect(api.updateSubcalendars).toHaveBeenNthCalledWith(
+        index, account.id, { subcalendars: [{ ...subcalendar, ...fields }] }, { silent: true },
+      );
     }
   });
 });

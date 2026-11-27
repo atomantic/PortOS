@@ -58,6 +58,23 @@ describe('useMusicVideoSceneMedia in-flight restore and failure chip (#10154)', 
   beforeEach(() => { handlers.clear(); renderMusicVideoSceneFrame.mockClear(); getMusicVideoSceneJobs.mockReset(); });
   afterEach(cleanup);
 
+  it('restores an upscale separately from clip renders and tracks its socket progress', async () => {
+    getMusicVideoSceneJobs.mockResolvedValue({ jobs: [
+      { lane: 'video', sceneId: 's1', jobId: 'clip-job', status: 'queued' },
+      { lane: 'upscale', sceneId: 's1', jobId: 'upscale-job', status: 'running' },
+    ] });
+    const { result } = setup();
+    await waitFor(() => expect(result.current.upscaleSceneJobs.s1).toEqual([
+      expect.objectContaining({ jobId: 'upscale-job', running: true }),
+    ]));
+    act(() => handlers.get('video-gen:progress')({ generationId: 'upscale-job', progress: 0.5 }));
+    expect(result.current.upscaleSceneJobs.s1[0].progress).toBe(0.5);
+    expect(result.current.videoSceneJobs.s1[0]).toMatchObject({ jobId: 'clip-job', running: false });
+    act(() => handlers.get('video-gen:canceled')({ generationId: 'upscale-job' }));
+    expect(result.current.upscaleSceneJobs.s1).toBeUndefined();
+    expect(result.current.genVideoScenes.s1).toBe(true);
+  });
+
   it('forwards a candidate refinement and reference opt-out for either frame slot', async () => {
     getMusicVideoSceneJobs.mockResolvedValue({ jobs: [] });
     const { result } = setup();

@@ -3,6 +3,7 @@ import { createMemoryRouter, RouterProvider } from 'react-router';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { render, screen, waitFor, fireEvent, within, act } from '@testing-library/react';
 import { awaitPageLoaded } from '../test/pageLoadBarrier';
+import { MockEventSource, lastEventSource } from '../test/mockEventSource';
 import { BedAudio } from '../components/media/VideoTimelineLanes';
 
 // The editor's pure rules live in lib/videoTimelineModel.js and its blocks in
@@ -20,14 +21,20 @@ vi.mock('../lib/dnd/index.js', async () => {
   };
 });
 
+const libraryRender = vi.hoisted(() => vi.fn());
+vi.mock('../components/ui/TabPills', async (importOriginal) => {
+  const { default: TabPills } = await importOriginal();
+  return {
+    default: function ObservedTabPills(props) {
+      if (props.ariaLabel === 'Clip library') libraryRender();
+      return <TabPills {...props} />;
+    },
+  };
+});
+
 const toastError = vi.hoisted(() => vi.fn());
 vi.mock('../components/ui/Toast', () => ({
   default: Object.assign(vi.fn(), { error: toastError, success: vi.fn() }),
-}));
-
-vi.mock('../hooks/useSseProgress', () => ({
-  useSseProgress: () => ({ latest: null, closed: false }),
-  isTerminalSseFrame: () => false,
 }));
 
 const api = vi.hoisted(() => ({
@@ -39,6 +46,8 @@ const api = vi.hoisted(() => ({
   music: { tracks: [] },
   galleryThrows: false,
   updateTimelineProject: vi.fn(async () => ({ updatedAt: 'u2' })),
+  renderTimelineProject: vi.fn(),
+  cancelTimelineRender: vi.fn(),
   listHistory: vi.fn(),
   listMusic: vi.fn(),
 }));
@@ -53,7 +62,8 @@ vi.mock('../services/apiImageVideo', () => ({
   listVideoHistory: (...args) => api.listHistory(...args),
   getGalleryImages: (...args) => api.getGalleryImages(...args),
   updateTimelineProject: (...args) => api.updateTimelineProject(...args),
-  renderTimelineProject: async () => ({ jobId: 'j1' }),
+  renderTimelineProject: (...args) => api.renderTimelineProject(...args),
+  cancelTimelineRender: (...args) => api.cancelTimelineRender(...args),
 }));
 
 const VideoTimelineEditor = (await import('./VideoTimelineEditor')).default;
@@ -92,12 +102,15 @@ beforeEach(() => {
     return api.gallery.filter(row => filenames.includes(row.filename));
   });
   api.updateTimelineProject.mockReset().mockResolvedValue({ updatedAt: 'u2' });
+  api.renderTimelineProject.mockReset().mockResolvedValue({ jobId: 'j1' });
+  api.cancelTimelineRender.mockReset().mockResolvedValue({ ok: true });
 });
 
 const renderEditorRoute = ({ strict = false } = {}) => {
   const router = createMemoryRouter([
     { path: '/media/timeline/:projectId', element: <VideoTimelineEditor /> },
     { path: '/media/timeline', element: <div>Project index</div> },
+    { path: '/media/history', element: <div>Media History</div> },
   ], { initialEntries: ['/media/timeline/p1'] });
   const provider = <RouterProvider router={router} />;
   return { ...render(strict ? <StrictMode>{provider}</StrictMode> : provider), router };
@@ -244,6 +257,45 @@ describe('route and refresh ownership', () => {
     view.unmount();
     await waitFor(() => expect(api.updateTimelineProject).toHaveBeenCalledTimes(3));
     expect(api.updateTimelineProject.mock.calls[2][1].expectedUpdatedAt).toBe('current');
+  });
+});
+
+describe('timeline render jobs', () => {
+  it('shows progress, returns to Render after cancellation, and opens the next completed clip', async () => {
+    api.project = project({ segments: [clipSegment] });
+    api.renderTimelineProject.mockResolvedValueOnce({ jobId: 'j1' }).mockResolvedValueOnce({ jobId: 'j2' });
+    MockEventSource.reset();
+    vi.stubGlobal('EventSource', MockEventSource);
+    try {
+      const { router } = renderEditorRoute();
+      await awaitPageLoaded('Loading timeline project');
+
+      fireEvent.click(screen.getByRole('button', { name: 'Render' }));
+      await waitFor(() => expect(lastEventSource()?.url).toBe('/api/video-timeline/j1/events'));
+      act(() => lastEventSource().emit({ type: 'progress', progress: 0.42 }));
+      expect(screen.getByRole('button', { name: 'Rendering 42%' })).toBeDisabled();
+
+      await act(async () => { fireEvent.click(screen.getByRole('button', { name: 'Cancel render' })); });
+      expect(api.cancelTimelineRender).toHaveBeenCalledWith('j1', expect.objectContaining({ silent: true }));
+      expect(screen.getByRole('button', { name: 'Canceling…' })).toBeDisabled();
+      expect(screen.getByRole('button', { name: 'Rendering 42%' })).toBeDisabled();
+
+      act(() => lastEventSource().emit({ type: 'canceled' }));
+      fireEvent.click(screen.getByRole('button', { name: 'Render' }));
+      await waitFor(() => expect(lastEventSource()?.url).toBe('/api/video-timeline/j2/events'));
+      expect(screen.getByRole('button', { name: 'Rendering 0%' })).toBeDisabled();
+
+      api.cancelTimelineRender.mockRejectedValueOnce(Object.assign(new Error('Already finishing'), { code: 'ALREADY_TERMINAL' }));
+      await act(async () => { fireEvent.click(screen.getByRole('button', { name: 'Cancel render' })); });
+      await waitFor(() => expect(api.cancelTimelineRender).toHaveBeenLastCalledWith('j2', expect.anything()));
+
+      act(() => lastEventSource().emit({ type: 'complete', result: { id: 'rendered-clip' } }));
+      expect(await screen.findByText('Media History')).toBeInTheDocument();
+      expect(router.state.location.search).toBe('?focus=rendered-clip');
+      expect(toastError).not.toHaveBeenCalled();
+    } finally {
+      vi.unstubAllGlobals();
+    }
   });
 });
 
@@ -521,6 +573,34 @@ describe('source-aware playback', () => {
     api.project = project({ segments: [{ ...clipSegment, outSec: 8, fadeInSec: 3 }] });
     await renderEditor();
     expect(screen.getByRole('slider', { name: 'Playhead position' })).toHaveAttribute('max', '8');
+  });
+
+  it('advances the playhead without rerendering the library and places a bed at the live position', async () => {
+    api.project = project({ segments: [stillSegment] });
+    await renderEditor();
+    fireEvent.click(screen.getByRole('tab', { name: /Audio/ }));
+    const addBed = screen.getByRole('button', { name: 'Add' });
+    const playhead = screen.getByRole('slider', { name: 'Playhead position' });
+    expect(libraryRender).toHaveBeenCalled();
+    libraryRender.mockClear();
+
+    const frame = vi.spyOn(window, 'requestAnimationFrame').mockReturnValue(1);
+    const clock = vi.spyOn(performance, 'now').mockReturnValue(1000);
+    try {
+      fireEvent.click(screen.getByRole('button', { name: 'Play' }));
+      const tick = frame.mock.calls.at(-1)?.[0];
+      expect(tick).toBeTypeOf('function');
+      act(() => tick(1750));
+      expect(playhead).toHaveValue('0.75');
+      expect(libraryRender).not.toHaveBeenCalled();
+
+      fireEvent.click(addBed);
+      expect(screen.getByRole('spinbutton', { name: 'Start (s)' })).toHaveValue(0.75);
+      fireEvent.click(screen.getByRole('button', { name: 'Pause' }));
+    } finally {
+      clock.mockRestore();
+      frame.mockRestore();
+    }
   });
 
   describe('bed audio', () => {

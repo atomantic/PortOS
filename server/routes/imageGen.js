@@ -1,3 +1,4 @@
+import { assertCancelResult } from '../lib/cancelResponse.js';
 import { getRunwayModelCatalog } from '../services/runwayModelCatalog.js';
 import { getFalImageModelCatalog } from '../services/falImageModelCatalog.js';
 /**
@@ -13,9 +14,8 @@ import { getFalImageModelCatalog } from '../services/falImageModelCatalog.js';
 
 import { createImageGalleryHandlers } from './imageGalleryRead.js';
 import { Router } from 'express';
-import { z } from 'zod';
 import { fableLoomMultipartUnsupported } from '../services/imageGen/fableLoomParams.js';
-import { asyncHandler, ServerError, failValidation } from '../lib/errorHandler.js';
+import { asyncHandler, ServerError } from '../lib/errorHandler.js';
 import { validateRequest } from '../lib/validateRequest.js';
 import { optionalUploadFields, optionalUpload } from '../lib/multipart.js';
 import * as imageGen from '../services/imageGen/index.js';
@@ -30,6 +30,7 @@ import {
   inspectModelCache, verifyModelCache, repairModelCache, aggregateVerifies, verifyCachedRepoFiles, repairCachedRepoFiles,
 } from '../lib/hfCache.js';
 import { startHfDownloadStream } from '../services/hfDownloadStream.js';
+import { registerArtifactRoutes } from '../lib/modelArtifactRoutes.js';
 import { PATHS, ensureDir, resolveGalleryImage, unlinkGuarded, copyFileGuarded } from '../lib/fileUtils.js';
 import { applyImageClean, applyWatermarkRemoval, applyLightRegenVariant } from '../services/imageGen/variants.js';
 import { applyFilmLookBake, readFilmLookSource } from '../services/imageGen/filmLookBake.js';
@@ -50,7 +51,7 @@ import { randomUUID } from 'crypto';
 import { getSettings } from '../services/settings.js';
 import { deleteImageHostedCopy } from '../services/hostedRenderRemoteDelete.js';
 import {
-  hostedProviderParamSchema, mediaDeleteQuerySchema, modelDownloadQuerySchema, modelDownloadParamsSchema,
+  hostedProviderParamSchema, mediaDeleteQuerySchema, modelDownloadParamsSchema,
   imageCancelBodySchema, imageVisibilityBodySchema
 } from '../lib/mediaGenerationValidation.js';
 import {
@@ -87,8 +88,7 @@ const routeSource = (req) => ({ route: `${req.baseUrl}${req.route?.path ?? ''}`,
 
 router.get('/style-presets', (_req, res) => res.json(STYLE_PRESETS));
 
-// JSON callers (SDAPI bridge, avatar route, the Imagine page's old payload
-// shape) skip the parser entirely; FormData callers get req.file + string
+// JSON callers skip the multipart parser. FormData callers get req.file + string
 // req.body that coerceFormFields() converts before Zod validation.
 // Only the formats mflux can decode — keep this in sync with the extension
 // allowlist below so the route never silently relabels (e.g. HEIC) bytes
@@ -297,90 +297,65 @@ router.get('/models/status', asyncHandler(async (_req, res) => {
   res.json(await Promise.all(getImageModels().map(imageModelCacheStatus)));
 }));
 
-// POST /models/verify — on-demand integrity re-scan. `deep:true` adds the
-// per-file sha256 comparison on top of the structural check. With no `modelId`
-// it scans every model.
-const verifyImageBodySchema = z.object({
-  modelId: z.string().min(1).optional(),
-  deep: z.boolean().optional(),
-});
-router.post('/models/verify', asyncHandler(async (req, res) => {
-  const parsed = verifyImageBodySchema.safeParse(req.body || {});
-  if (!parsed.success) failValidation(parsed);
-  const { modelId, deep = false } = parsed.data;
-  const models = getImageModels().filter((m) => (modelId ? m.id === modelId : true));
-  if (modelId && models.length === 0) {
-    throw new ServerError(`Unknown model id: ${modelId}`, { status: 404, code: 'UNKNOWN_MODEL' });
-  }
-  const results = await Promise.all(models.map(async (m) => {
-    if (usesMossSwift(m)) return { id: m.id, ...aggregateVerifies([await verifyMossWeights({ deep })]) };
-    const targets = imageModelDownloadTargets(m);
-    if (targets) return { id: m.id, ...(aggregateVerifies(await verifyPinnedTargets(targets, deep)) || { status: 'missing', checkedDeep: deep, badFiles: [] }) };
-    const required = requiredRepoSpecsForModel(m) || [];
-    const verifies = await Promise.all(required.map(({ repo, revision }) => verifyModelCache(repo, { deep, revision })));
-    return { id: m.id, ...(aggregateVerifies(verifies) || { status: 'missing', checkedDeep: deep, badFiles: [] }) };
-  }));
-  res.json({ deep, models: results });
-}));
-
-// POST /models/:modelId/repair — delete the flagged weight files across the
-// model's required repos so the existing resumable HF fetch path re-downloads
-// them. Returns the deleted-file list; the client then re-triggers the normal
-// download SSE to pull clean copies with progress.
-router.post('/models/:modelId/repair', asyncHandler(async (req, res) => {
-  const model = getImageModels().find((m) => m.id === req.params.modelId);
-  if (!model) throw new ServerError(`Unknown model id: ${req.params.modelId}`, { status: 404, code: 'UNKNOWN_MODEL' });
-  const parsed = z.object({ deep: z.boolean().optional() }).safeParse(req.body || {});
-  if (!parsed.success) failValidation(parsed);
-  const deep = parsed.data.deep || false;
-  if (usesMossSwift(model)) return res.json(await repairMossWeights({ deep }));
-  const targets = imageModelDownloadTargets(model);
-  if (targets) {
-    const repaired = await Promise.all(targets.map((t) => repairCachedRepoFiles(t.repo, t.only, { deep, revision: t.revision })));
-    const deleted = repaired.flatMap((r, i) => (r.deleted || []).map((name) => ({ repo: targets[i].repo, name })));
-    return res.json({ deep, deleted, repos: targets.map((t) => t.repo) });
-  }
-  const required = requiredRepoSpecsForModel(model);
-  if (!required) {
-    throw new ServerError(`Model "${model.id}" has no HuggingFace repo on file.`, { status: 400, code: 'NO_REPO_FOR_MODEL' });
-  }
-  const repaired = await Promise.all(required.map(({ repo, revision }) => repairModelCache(repo, { deep, revision })));
-  const deleted = repaired.flatMap((r) => r.deleted.map((name) => ({ repo: r.repoId, name })));
-  res.json({ deep, deleted, repos: required.map(({ repo }) => repo) });
-}));
-
-// SSE-driven model download. Cancels the python child if the client
-// disconnects mid-download; cross-route in-flight dedupe lives in
-// startHfDownloadStream so a FLUX repo shared with video gen can't spawn
-// two concurrent children.
-const downloadableImageModel = (req) => {
-  const { modelId } = validateRequest(modelDownloadParamsSchema, req.params);
-  const model = getImageModels().find((m) => m.id === modelId);
+const imageModelFromId = (modelId) => {
+  const model = getImageModels().find((entry) => entry.id === modelId);
   if (!model) throw new ServerError(`Unknown model id: ${modelId}`, { status: 404, code: 'UNKNOWN_MODEL' });
   return model;
 };
 
-router.get('/models/:modelId/download', asyncHandler(async (req, res) => {
-  validateRequest(modelDownloadQuerySchema, req.query);
-  res.json(await imageModelCacheStatus(downloadableImageModel(req)));
-}));
-
-router.post('/models/:modelId/download', asyncHandler(async (req, res) => {
-  const { force } = validateRequest(modelDownloadQuerySchema, req.query);
-  const model = downloadableImageModel(req);
-  if (usesMossSwift(model)) return streamMossAction(req, res, downloadMossWeights);
-  const repos = imageModelDownloadTargets(model) || requiredRepoSpecsForModel(model);
-  if (!repos) {
-    throw new ServerError(`Model "${model.id}" has no HuggingFace repo on file — cannot pre-download.`, {
-      status: 400,
-      code: 'NO_REPO_FOR_MODEL',
-    });
-  }
-  // Sequentially fetch the required snapshots. SSE events carry `repo` so the
-  // client can show per-repo progress. `?force=1` (repair-initiated) re-fetches
-  // even when the repo still looks cached, so a deleted shard isn't skipped.
-  await startHfDownloadStream({ req, res, repos, force });
-}));
+registerArtifactRoutes(router, {
+  mount: (router, { status, download, repair, verify }) => {
+    router.post('/models/verify', verify);
+    router.post('/models/:modelId/repair', repair);
+    router.get('/models/:modelId/download', status);
+    router.post('/models/:modelId/download', download);
+  },
+  paramsSchema: modelDownloadParamsSchema,
+  resolve: ({ modelId }) => imageModelFromId(modelId),
+  status: imageModelCacheStatus,
+  download: (model, { req, res, force }) => {
+    if (usesMossSwift(model)) return streamMossAction(req, res, downloadMossWeights);
+    const repos = imageModelDownloadTargets(model) || requiredRepoSpecsForModel(model);
+    if (!repos) {
+      throw new ServerError(`Model "${model.id}" has no HuggingFace repo on file — cannot pre-download.`, {
+        status: 400,
+        code: 'NO_REPO_FOR_MODEL',
+      });
+    }
+    return startHfDownloadStream({ req, res, repos, force });
+  },
+  repair: async (model, { deep }) => {
+    if (usesMossSwift(model)) return repairMossWeights({ deep });
+    const targets = imageModelDownloadTargets(model);
+    if (targets) {
+      const repaired = await Promise.all(targets.map((t) => repairCachedRepoFiles(t.repo, t.only, { deep, revision: t.revision })));
+      const deleted = repaired.flatMap((r, i) => (r.deleted || []).map((name) => ({ repo: targets[i].repo, name })));
+      return { deleted, repos: targets.map((t) => t.repo) };
+    }
+    const required = requiredRepoSpecsForModel(model);
+    if (!required) {
+      throw new ServerError(`Model "${model.id}" has no HuggingFace repo on file.`, { status: 400, code: 'NO_REPO_FOR_MODEL' });
+    }
+    const repaired = await Promise.all(required.map(({ repo, revision }) => repairModelCache(repo, { deep, revision })));
+    const deleted = repaired.flatMap((r) => r.deleted.map((name) => ({ repo: r.repoId, name })));
+    return { deleted, repos: required.map(({ repo }) => repo) };
+  },
+  verify: async ({ modelId, deep }) => {
+    const models = getImageModels().filter((m) => (modelId ? m.id === modelId : true));
+    if (modelId && models.length === 0) {
+      throw new ServerError(`Unknown model id: ${modelId}`, { status: 404, code: 'UNKNOWN_MODEL' });
+    }
+    return Promise.all(models.map(async (m) => {
+      if (usesMossSwift(m)) return { id: m.id, ...aggregateVerifies([await verifyMossWeights({ deep })]) };
+      const targets = imageModelDownloadTargets(m);
+      const verifies = targets
+        ? await verifyPinnedTargets(targets, deep)
+        : await Promise.all((requiredRepoSpecsForModel(m) || [])
+          .map(({ repo, revision }) => verifyModelCache(repo, { deep, revision })));
+      return { id: m.id, ...(aggregateVerifies(verifies) || { status: 'missing', checkedDeep: deep, badFiles: [] }) };
+    }));
+  },
+});
 
 const galleryReads = createImageGalleryHandlers(local.listGallery);
 router.get('/gallery/collections', galleryReads.collections);
@@ -433,16 +408,11 @@ router.post('/cancel', asyncHandler(async (req, res) => {
       if (!cancellable.includes(known)) {
         throw new ServerError(`Job already ${known.status}`, { status: 409, code: 'ALREADY_TERMINAL' });
       }
-      const result = await cancelJob(known.id);
-      if (!result?.ok && result?.code) {
-        throw new ServerError(result.error || 'Cancel failed', { status: result.code === 'ALREADY_TERMINAL' ? 409 : 404, code: result.code });
-      }
-      return res.json(result);
+      return res.json(assertCancelResult(await cancelJob(known.id)));
     }
     // Not in the queue — it may be a legacy provider job (sync codex/grok/agy/
     // fal, local) the dispatcher owns. Exact-ID only; never the bulk path.
-    if (imageGen.cancelJob(requestedJobId)) return res.json({ ok: true });
-    throw new ServerError('Job not found or expired', { status: 404 });
+    return res.json(assertCancelResult(imageGen.cancelJob(requestedJobId)));
   } else if (cancellable.length) {
     // "Most recent submit" — explicitly sort by queuedAt DESC instead of
     // relying on listJobs() ordering (which puts gpuRunning before
@@ -455,10 +425,9 @@ router.post('/cancel', asyncHandler(async (req, res) => {
       const tb = new Date(b.queuedAt || 0).getTime();
       return tb - ta;
     });
-    return res.json(await cancelJob(latestSubmitFirst[0].id));
+    return res.json(assertCancelResult(await cancelJob(latestSubmitFirst[0].id)));
   }
-  const cancelled = imageGen.cancel();
-  res.json({ ok: cancelled });
+  res.json(assertCancelResult(imageGen.cancel(), { notFoundMessage: 'No active image render' }));
 }));
 
 // Deletes on the machine that owns the image (services/mediaRemoteDelete.js):

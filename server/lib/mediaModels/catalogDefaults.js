@@ -5,7 +5,6 @@ import { flux2RepoRevision, diffusersRepoRevision } from '../runners.js';
 import { applyVideoDisclosures } from '../videoDisclosure.js';
 import { applyVideoFinishProfiles } from '../videoFinishProfiles.js';
 import { applyVideoSpeedProfiles } from '../videoSpeedProfiles.js';
-import { applyVideoDraftDecoders } from '../videoDraftDecoders.js';
 import { applyMiniMaxH3MemoryProfiles } from '../minimaxH3Memory.js';
 
 // Migration 267 and the load-time normalizer share this exact shipped-profile
@@ -423,10 +422,8 @@ export const DEFAULT_REGISTRY = {
     // `applyVideoSpeedProfiles` (lib/videoSpeedProfiles.js) is the third such
     // decorator: it attaches the shipped `speedProfiles` a model offers, pin-
     // guarded on repo AND revision so a re-pointed entry keeps no schedule
-    // claim we can't back. `applyVideoDraftDecoders`
-    // (lib/videoDraftDecoders.js) is the fourth, attaching the separately
-    // downloaded preview-fidelity decoder a model can render drafts on.
-    mlx: applyMiniMaxH3MemoryProfiles(applyVideoDraftDecoders(applyVideoSpeedProfiles(applyVideoFinishProfiles(applyVideoDisclosures([
+    // claim we can't back.
+    mlx: applyMiniMaxH3MemoryProfiles(applyVideoSpeedProfiles(applyVideoFinishProfiles(applyVideoDisclosures([
       // notapalindrome's mlx-video-with-audio runtime — single PyPI package,
       // T2V/I2V only, FFLF degrades to last-frame conditioning (one --image arg).
       // LTX-2 Unified (the older 42 GB model) was retired in favour of 2.3 —
@@ -786,8 +783,8 @@ export const DEFAULT_REGISTRY = {
         supportsTiling: false,
         supportsDisableAudio: false,
       },
-    ]))))),
-    cuda: applyMiniMaxH3MemoryProfiles(applyVideoDraftDecoders(applyVideoSpeedProfiles(applyVideoFinishProfiles(applyVideoDisclosures([
+    ])))),
+    cuda: applyMiniMaxH3MemoryProfiles(applyVideoSpeedProfiles(applyVideoFinishProfiles(applyVideoDisclosures([
       { id: 'ltx_video', name: 'LTX-Video 0.9.5 — T2V + I2V (~9.5 GB, auto-downloads)', runtime: 'cuda_video', steps: 25, guidance: 3.0 },
       {
         id: 'ltx25_cuda_distilled',
@@ -863,7 +860,7 @@ export const DEFAULT_REGISTRY = {
         supportsTiling: false,
         supportsDisableAudio: false,
       },
-    ]))))),
+    ])))),
     defaultMlx: 'fastmetal_5b_qad',
     defaultCuda: 'ltx_video',
   },

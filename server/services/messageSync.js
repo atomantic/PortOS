@@ -5,6 +5,7 @@
  * never federated; timeline events stay in PostgreSQL. Browser rows carry additive identity fields that
  * retain established timeline keys; older caches stay readable and are reconciled lazily.
  */
+import { emitToOperatorsOn } from './socketIo.js';
 import { messageLogError } from '../lib/messageLogError.js';
 
 import { browserSummaryId, browserDetailIdentities, messageIngestionIdentity, matchBrowserMessage, createBrowserMessageMatcher, retainLegacyActivityIdentities } from '../lib/messageBrowserIdentity.js';
@@ -174,7 +175,7 @@ function loadSummaryCache(accountId) {
 
 async function saveCache(accountId, cache) {
   const filePath = join(CACHE_DIR, `${accountId}.json`);
-  await atomicWrite(filePath, cache);
+  await atomicWrite(filePath, cache, { mode: 0o600, dirMode: 0o700 });
   invalidateSummary(accountId);
 }
 
@@ -276,7 +277,7 @@ export async function syncAccount(accountId, io, options = {}) {
       return { error: `${account.type} accounts do not support ${mode} sync`, status: 400 };
     }
 
-    io?.emit('messages:sync:started', { accountId, mode });
+    emitToOperatorsOn(io, 'messages:sync:started', { accountId, mode });
     console.log(`📧 Starting ${mode} sync for account ${account.id} (${account.type})`);
 
     const providerSync = async () => {
@@ -450,9 +451,9 @@ export async function syncAccount(accountId, io, options = {}) {
           console.error(`🤝 Sent-ingest watermark failed for account ${accountId}: ${messageLogError(err)}`));
       }
 
-      io?.emit('messages:sync:completed', { accountId, newMessages: uniqueNew.length, pruned, status: providerStatus, ...providerReason });
+      emitToOperatorsOn(io, 'messages:sync:completed', { accountId, newMessages: uniqueNew.length, pruned, status: providerStatus, ...providerReason });
       if (providerStatus === 'success') {
-        io?.emit('messages:changed', {});
+        emitToOperatorsOn(io, 'messages:changed', {});
       }
       console.log(`📧 Sync complete for account ${account.id}: ${uniqueNew.length} new, ${pruned} pruned, status=${providerStatus}`);
 
@@ -465,8 +466,10 @@ export async function syncAccount(accountId, io, options = {}) {
     // write against the other cache mutators so none clobbers the others.
     const result = await queueAccountWrite(accountId, providerSync).catch(async (error) => {
       console.error(`📧 Sync failed for account ${account.id} (${account.type}): ${messageLogError(error)}`);
-      await updateSyncStatus(accountId, 'error').catch(() => {});
-      io?.emit('messages:sync:failed', { accountId, error: error.message });
+      await updateSyncStatus(accountId, 'error').catch((statusError) => {
+        console.error(`📧 Sync error status write failed for account ${accountId}: ${messageLogError(statusError)}`);
+      });
+      emitToOperatorsOn(io, 'messages:sync:failed', { accountId, error: error.message });
       return { error: error.message, status: 502 };
     });
 

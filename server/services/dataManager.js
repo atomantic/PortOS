@@ -10,7 +10,7 @@ import { PATHS, ensureDir, isTopLevelEntryName, rmGuarded, writeFileGuarded } fr
 import { isPersistentMindScreenshotEntry } from '../lib/persistent/persistentMindAttachmentOwnership.js';
 import { ServerError } from '../lib/errorHandler.js';
 import { withBackupAssetPublication } from '../lib/backupSnapshotBoundary.js';
-import { ARCHIVE_FILENAME, CATEGORIES } from './dataManagerCategories.js';
+import { ARCHIVE_FILENAME, CATEGORIES, dataCacheEntry } from './dataManagerCategories.js';
 import { getEidoversePaths } from './eidoverse.js';
 import { getAllApps } from './apps.js';
 import { withUpdateControlLock } from './updateControlActivity.js';
@@ -266,6 +266,27 @@ export async function getDataOverview({ strict = false } = {}) {
   };
 }
 
+async function describeManagedRuntime(item, dirPath) {
+  if (item.type !== 'directory') return;
+  const splashDirectory = item.name === 'runtimes'
+    && (await lstat(join(dirPath, 'runtimes', 'splash')).catch(() => null))?.isDirectory();
+  const read = splashDirectory
+    ? async () => (await import('./splashRuntimeStatus.js')).getSplashRuntimeStatus({ includeLogs: false })
+    : item.name === 'mkserve'
+      ? async () => (await import('./mkserveRuntimeManager.js')).getMkserveRuntimeStatus({ includeLogs: false })
+      : null;
+  if (!read) return;
+  const status = await read().catch(() => null);
+  const state = !status ? 'status unavailable'
+    : status.supported === false ? 'unsupported on this host'
+      : status.state === 'external' ? 'external server running'
+        : !status.installed ? 'runtime not installed'
+          : status.state === 'stopped' ? 'installed, stopped'
+            : status.state === 'running' ? 'running'
+              : status.state || 'status unavailable';
+  item.description = `${splashDirectory ? 'Splash' : 'mkserve'}: ${state}. ${item.description}`;
+}
+
 export async function getCategoryDetail(categoryKey, { measure = false } = {}) {
   if (!SAFE_NAME.test(categoryKey)) return null;
   const dirPath = join(DATA_DIR, categoryKey);
@@ -276,22 +297,25 @@ export async function getCategoryDetail(categoryKey, { measure = false } = {}) {
   // Parallel: stat files + getDirSizeAndCount for subdirs
   const itemPromises = entries.map(async (entry) => {
     const fullPath = join(dirPath, entry.name);
+    const regularType = entry.isDirectory() ? 'directory' : entry.isFile() ? 'file' : null;
+    const cacheEntry = categoryKey === 'cache' ? dataCacheEntry(entry.name, regularType) : null;
     if (entry.isDirectory()) {
       const { size, fileCount } = await getDirSizeAndCount(fullPath);
-      return { name: entry.name, type: 'directory', size, fileCount };
+      return { name: entry.name, type: 'directory', size, fileCount, ...cacheEntry };
     }
     const fileStat = await stat(fullPath).catch(() => null);
     return {
       name: entry.name,
       type: 'file',
       size: fileStat?.size || 0,
-      modified: fileStat?.mtime?.toISOString() || null
+      modified: fileStat?.mtime?.toISOString() || null,
+      ...cacheEntry
     };
   });
 
   const items = await Promise.all(itemPromises);
-  // Resolve opaque training-run folders in one bounded-to-the-list
-  // lookup, including old runs beyond the training page's recent-run limit.
+  if (categoryKey === 'cache') await Promise.all(items.map(item => describeManagedRuntime(item, dirPath)));
+  // Resolve opaque retired training-run folders against retained Postgres records.
   if (categoryKey === 'training-runs' && items.length) {
     const { query } = await import('../lib/db.js');
     const result = await query(
@@ -303,8 +327,8 @@ export async function getCategoryDetail(categoryKey, { measure = false } = {}) {
       const run = runs.get(item.name);
       if (run) {
         item.label = run.name || run.character?.name || run.baseModelId || item.name;
-        item.description = [run.baseModelId, run.status].filter(Boolean).join(' · ');
-        if (run.datasetId) item.sourceHref = `/models/training/${encodeURIComponent(run.datasetId)}`;
+        const status = ['queued', 'running'].includes(run.status) ? `last recorded as ${run.status}` : run.status;
+        item.description = [run.baseModelId, status].filter(Boolean).join(' · ');
       }
       item.sourceUnavailable = result === null ? 'Source lookup unavailable' : !run ? 'Run record no longer available' : null;
     }
@@ -519,6 +543,7 @@ async function purgeCategoryUncached(categoryKey, options) {
       // removes a single file and never recurses. `lstat`, not `stat`, so a
       // symlinked entry is judged as the link it is and simply unlinked.
       const itemScoped = meta.purgeScope === 'items';
+      if (categoryKey === 'cache') return await purgeDataCacheEntry(dirPath, resolvedTarget, options.subPath);
       if (itemScoped) {
         const entryStat = await lstat(resolvedTarget).catch(() => null);
         if (!entryStat) {
@@ -547,6 +572,25 @@ async function purgeCategoryUncached(categoryKey, options) {
 
     return { category: categoryKey, subPath: wantsItem ? options.subPath : null };
   });
+}
+
+async function purgeDataCacheEntry(dirPath, target, name) {
+  const dir = await lstat(dirPath);
+  if (!dir.isDirectory()) {
+    throw new ServerError('Data Manager will not purge a redirected cache directory.', { status: 409, code: 'CATEGORY_ITEM_PROTECTED' });
+  }
+  const entry = await lstat(target).catch((error) => {
+    if (error.code === 'ENOENT') return null;
+    throw error;
+  });
+  if (!entry) throw new ServerError('Item not found in "cache"', { status: 404, code: 'NOT_FOUND' });
+  const type = entry.isDirectory() ? 'directory' : entry.isFile() ? 'file' : null;
+  if (!dataCacheEntry(name, type).canPurge) {
+    throw new ServerError('This entry is not a rebuildable cache that Data Manager can purge.', { status: 409, code: 'CATEGORY_ITEM_PROTECTED' });
+  }
+  await rmGuarded(target, { recursive: type === 'directory', force: true });
+  console.log('🗑️ Purged a rebuildable entry from data/cache');
+  return { category: 'cache', subPath: name };
 }
 
 export async function getBackups() {

@@ -336,10 +336,8 @@ function MusicTasteSection({ musicTaste, patchForm }) {
       {musicTaste.enabled && (
         <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
           <div>
-            <label className={labelCls} htmlFor="commission-music-taste-source">Taste source</label>
-            <select id="commission-music-taste-source" className={inputCls} value="digital-twin" disabled>
-              <option value="digital-twin">Digital Twin profile</option>
-            </select>
+            <span className={labelCls}>Taste source</span>
+            <p className="text-sm text-gray-300">Taste source: Digital Twin profile</p>
           </div>
           <div>
             <label className={labelCls} htmlFor="commission-music-taste-window">Listening window</label>
@@ -469,7 +467,7 @@ function RenderBackendSection({ ability, generation, patchForm }) {
       <h3 className="text-sm font-semibold text-gray-200">Render backend</h3>
       <p className="text-xs text-gray-500">
         Which backend actually renders each run. Leave on <strong className="text-gray-400">Auto</strong> to
-        follow your install&apos;s Settings → Image Gen defaults. Pin{' '}
+        follow your install&apos;s Media Gen Settings defaults. Pin{' '}
         <strong className="text-gray-400">Local</strong> to also choose the model each render uses; the cloud
         backends pick their own.
       </p>
@@ -504,7 +502,7 @@ function RenderBackendSection({ ability, generation, patchForm }) {
                 </select>
                 {unavailable && (
                   <p className="text-xs text-port-warning mt-1">
-                    This backend is disabled in Settings → Image Gen — runs fall back to the default until you enable it.
+                    This backend is disabled in Media Gen Settings — runs fall back to the default until you enable it.
                   </p>
                 )}
               </div>

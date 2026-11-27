@@ -3,10 +3,9 @@
  * per-run/settings option resolvers (#2842 split of seriesAutopilot.js).
  */
 
-import { readReadinessGate } from '../../../lib/editorial/index.js';
+import { READINESS_GATES, readReadinessGate } from '../../../lib/editorial/severityConfig.js';
 import { resolveSeriesLlmOverride } from '../../../lib/seriesLlmOverride.js';
 import { SERIES_AUTOPILOT_DEFAULTS } from '../../../lib/seriesAutopilotDefaults.js';
-import { READINESS_GATES } from '../editorialScore.js';
 
 // Bounded convergence loops: re-verify/re-review at most this many rounds, then
 // pause with the residual findings. Floor defaults; raisable via

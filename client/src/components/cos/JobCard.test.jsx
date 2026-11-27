@@ -45,15 +45,69 @@ it('labels a disabled job without dimming the card or hiding its actions', () =>
   const card = screen.getByRole('group', { name: 'Job Legacy handler' });
   expect(card.className).not.toMatch(/\bopacity-/);
   expect(card).toContainElement(screen.getByText('Disabled'));
-  expect(card).toContainElement(screen.getByRole('button', { name: 'Enable job Legacy handler' }));
+  expect(card).toContainElement(screen.getByRole('button', { name: 'Enable job Legacy handler', pressed: false }));
   expect(card).toContainElement(screen.getByRole('button', { name: 'Edit' }));
+});
+
+it('uses button types for card actions and exposes the briefing toggle state', () => {
+  render(
+    <form onSubmit={event => event.preventDefault()}>
+      <JobCard
+        job={{ ...SCRIPT_JOB, id: 'job-daily-briefing', config: { dailyJoke: true } }}
+        onToggle={noop} onTrigger={noop} onDelete={noop} onUpdate={noop}
+      />
+    </form>
+  );
+
+  expect(screen.getByRole('button', { name: 'Enable job Legacy handler', pressed: true })).toHaveAttribute('type', 'button');
+  fireEvent.click(screen.getByRole('button', { name: 'Details' }));
+  expect(screen.getByRole('button', { name: 'Delete' })).toHaveAttribute('type', 'button');
+  fireEvent.click(screen.getByRole('button', { name: 'Edit' }));
+  const joke = screen.getByRole('button', { name: /Daily Joke/, pressed: true });
+  expect(joke).toHaveAttribute('type', 'button');
+  fireEvent.click(joke);
+  expect(joke).toHaveAttribute('aria-pressed', 'false');
+  for (const name of ['Save', 'Cancel']) {
+    expect(screen.getByRole('button', { name })).toHaveAttribute('type', 'button');
+  }
+});
+
+it('saves once while in flight and preserves the draft when the save fails', async () => {
+  const pending = Promise.withResolvers();
+  const onUpdate = vi.fn();
+  updateCosJob.mockReset().mockReturnValueOnce(pending.promise).mockResolvedValueOnce({ success: true });
+  render(<JobCard job={SCRIPT_JOB} onToggle={noop} onTrigger={noop} onDelete={noop} onUpdate={onUpdate} />);
+  fireEvent.click(screen.getByRole('button', { name: 'Edit' }));
+  const name = screen.getByRole('textbox', { name: 'Job name' });
+  fireEvent.change(name, { target: { value: 'New handler name' } });
+
+  const save = screen.getByRole('button', { name: 'Save' });
+  act(() => {
+    fireEvent.click(save);
+    fireEvent.click(save);
+  });
+  expect(updateCosJob).toHaveBeenCalledTimes(1);
+  expect(save).toBeDisabled();
+  expect(screen.getByRole('button', { name: 'Cancel' })).toBeDisabled();
+  expect(screen.getByRole('button', { name: 'Edit' })).toBeDisabled();
+
+  await act(async () => pending.reject(new Error('Save failed')));
+  expect(onUpdate).not.toHaveBeenCalled();
+  expect(save).toBeEnabled();
+  expect(name).toHaveValue('New handler name');
+
+  await act(async () => { fireEvent.click(save); });
+  expect(updateCosJob).toHaveBeenCalledTimes(2);
+  expect(updateCosJob).toHaveBeenLastCalledWith(SCRIPT_JOB.id, expect.objectContaining({ name: 'New handler name' }), { silent: true });
+  expect(onUpdate).toHaveBeenCalledTimes(1);
+  expect(screen.queryByRole('textbox', { name: 'Job name' })).not.toBeInTheDocument();
 });
 
 describe('JobCard machine output', () => {
   it('wraps the read-only legacy command so a long single-line value stays fully readable', () => {
     renderCard(SCRIPT_JOB);
     expect(screen.getByRole('group', { name: 'Job Legacy handler' })).toContainElement(
-      screen.getByRole('button', { name: 'Disable job Legacy handler' }),
+      screen.getByRole('button', { name: 'Enable job Legacy handler', pressed: true }),
     );
     fireEvent.click(screen.getByRole('button', { name: 'Edit' }));
 
@@ -307,6 +361,31 @@ describe('JobCard failure incident', () => {
 
     expect(acknowledgeCosJobIncident).toHaveBeenCalledWith('inc-1', { silent: true });
     expect(onUpdate).toHaveBeenCalled();
+  });
+
+  it('acknowledges once while in flight and permits a retry after failure', async () => {
+    const pending = Promise.withResolvers();
+    const onUpdate = vi.fn();
+    acknowledgeCosJobIncident.mockReset()
+      .mockReturnValueOnce(pending.promise)
+      .mockResolvedValueOnce({ incident: { ...INCIDENT, state: 'acknowledged' } });
+    render(<JobCard job={{ ...SCRIPT_JOB, openIncident: INCIDENT }} onToggle={noop} onTrigger={noop} onDelete={noop} onUpdate={onUpdate} />);
+
+    const acknowledge = screen.getByRole('button', { name: 'Acknowledge' });
+    act(() => {
+      fireEvent.click(acknowledge);
+      fireEvent.click(acknowledge);
+    });
+    expect(acknowledgeCosJobIncident).toHaveBeenCalledTimes(1);
+    expect(acknowledge).toBeDisabled();
+
+    await act(async () => pending.reject(new Error('Acknowledgement failed')));
+    expect(onUpdate).not.toHaveBeenCalled();
+    expect(acknowledge).toBeEnabled();
+
+    await act(async () => { fireEvent.click(acknowledge); });
+    expect(acknowledgeCosJobIncident).toHaveBeenCalledTimes(2);
+    expect(onUpdate).toHaveBeenCalledTimes(1);
   });
 
   it('an acknowledged incident stays visible without an Acknowledge action', () => {

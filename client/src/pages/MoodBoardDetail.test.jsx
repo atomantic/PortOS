@@ -18,6 +18,7 @@ const mockImportMoodBoardPinterest = vi.fn();
 const mockImportMoodBoardXPost = vi.fn();
 const mockLocalizeMoodBoardMedia = vi.fn();
 const mockRenderMoodBoardItem = vi.fn();
+const mockExtractMoodBoardItemFrames = vi.fn();
 const socketHandlers = new Map();
 const mockNavigate = vi.fn();
 
@@ -42,6 +43,7 @@ vi.mock('../services/apiMoodBoard.js', async (importOriginal) => ({
   importMoodBoardXPost: (...args) => mockImportMoodBoardXPost(...args),
   localizeMoodBoardMedia: (...args) => mockLocalizeMoodBoardMedia(...args),
   renderMoodBoardItem: (...args) => mockRenderMoodBoardItem(...args),
+  extractMoodBoardItemFrames: (...args) => mockExtractMoodBoardItemFrames(...args),
 }));
 
 const mockToastError = vi.fn();
@@ -149,7 +151,7 @@ describe('MoodBoardDetail item removal', () => {
     ] });
     mockRemoveMoodBoardItem.mockResolvedValue({ id: 'a', items: [] });
     renderPage();
-    const trigger = await screen.findByRole('button', { name: 'Remove item' });
+    const trigger = await screen.findByRole('button', { name: /^Remove image 1/ });
     fireEvent.click(trigger);
     const confirmation = screen.getByRole('group', { name: 'Remove this mood board item?' });
     expect(trigger.parentElement.nextElementSibling).toBe(confirmation);
@@ -166,7 +168,7 @@ describe('MoodBoardDetail item removal', () => {
     expect(document.activeElement).toBe(trigger);
     fireEvent.click(trigger);
     fireEvent.click(screen.getByRole('button', { name: 'Remove', exact: true }));
-    await waitFor(() => expect(screen.queryByRole('button', { name: 'Remove item' })).toBeNull());
+    await waitFor(() => expect(screen.queryByRole('button', { name: /^Remove image 1/ })).toBeNull());
     expect(mockRemoveMoodBoardItem).toHaveBeenCalledWith('a', 'i1', { silent: true });
   });
 });
@@ -178,7 +180,7 @@ describe('MoodBoardDetail image preview', () => {
       items: [{ id: 'i1', type: 'image', imageUrl: '/data/images/one.png', caption: 'one' }],
     });
     renderPage();
-    fireEvent.click(await screen.findByRole('button', { name: 'Preview image' }));
+    fireEvent.click(await screen.findByRole('button', { name: /^Preview image / }));
     expect(screen.getByTestId('lightbox').dataset.src).toBe('/data/images/one.png');
     fireEvent.click(screen.getByText('close-lightbox'));
     expect(screen.queryByTestId('lightbox')).toBeNull();
@@ -373,7 +375,7 @@ describe('MoodBoardDetail render event during the first load', () => {
     });
     await act(async () => { first.resolve({ id: 'a', name: 'Board A', items: [] }); });
     await waitFor(() => expect(boardNameValue()).toBe('Board A'));
-    expect(await screen.findByRole('button', { name: 'Preview image' })).toBeInTheDocument();
+    expect(await screen.findByRole('button', { name: /^Preview image / })).toBeInTheDocument();
     expect(mockGetMoodBoard).toHaveBeenCalledTimes(2);
     expect(mockToastError).toHaveBeenCalledOnce();
   });
@@ -509,7 +511,7 @@ describe('MoodBoardDetail video items (#4188)', () => {
     const { container } = renderPage();
     await waitFor(() => expect(boardNameValue()).toBe('Board A'));
 
-    const playButton = screen.getByRole('button', { name: 'Play video' });
+    const playButton = screen.getByRole('button', { name: /^Play video / });
     expect(playButton.querySelector('img').getAttribute('src')).toBe('/data/video-thumbnails/upload-ab12cd34.jpg');
     fireEvent.click(playButton);
     await waitFor(() => {
@@ -517,6 +519,35 @@ describe('MoodBoardDetail video items (#4188)', () => {
       expect(video).not.toBeNull();
       expect(video.getAttribute('src')).toBe('/data/videos/upload-ab12cd34.mp4');
     });
+  });
+
+  it('uses a separate frame count and item-specific control names for each video', async () => {
+    const items = [
+      { id: 'video-a', type: 'video', mediaKey: 'video:coast.mp4', caption: 'Rocky coast' },
+      { id: 'video-b', type: 'video', mediaKey: 'video:forest.mp4', caption: 'Forest path' },
+    ];
+    const board = { id: 'a', name: 'Board A', items };
+    mockGetMoodBoard.mockResolvedValueOnce(board);
+    mockExtractMoodBoardItemFrames.mockResolvedValue({ board, added: 0 });
+    renderPage();
+
+    const coast = await screen.findByRole('spinbutton', { name: 'Frames to extract from video 1 (Rocky coast)' });
+    const forest = screen.getByRole('spinbutton', { name: 'Frames to extract from video 2 (Forest path)' });
+    fireEvent.change(coast, { target: { value: '7' } });
+    fireEvent.blur(coast);
+    expect(coast).toHaveValue(7);
+    expect(forest).toHaveValue(4);
+    expect(screen.getByRole('button', { name: 'Pick frames from video 2 (Forest path)' })).toBeEnabled();
+    expect(screen.getByRole('button', { name: 'Remove video 1 (Rocky coast)' })).toBeEnabled();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Extract frames to board from video 1 (Rocky coast)' }));
+    await waitFor(() => expect(screen.getByRole('button', { name: 'Extract frames to board from video 1 (Rocky coast)' })).toBeEnabled());
+    fireEvent.click(screen.getByRole('button', { name: 'Extract frames to board from video 2 (Forest path)' }));
+    await waitFor(() => expect(screen.getByRole('button', { name: 'Extract frames to board from video 2 (Forest path)' })).toBeEnabled());
+    expect(mockExtractMoodBoardItemFrames.mock.calls).toEqual([
+      ['a', 'video-a', 7, { silent: true }],
+      ['a', 'video-b', 4, { silent: true }],
+    ]);
   });
 
   it('falls back to the derived stem poster when the stored thumbnail 404s (synced download pin)', async () => {
@@ -537,7 +568,7 @@ describe('MoodBoardDetail video items (#4188)', () => {
     renderPage();
     await waitFor(() => expect(boardNameValue()).toBe('Board A'));
 
-    const poster = screen.getByRole('button', { name: 'Play video' }).querySelector('img');
+    const poster = screen.getByRole('button', { name: /^Play video / }).querySelector('img');
     expect(poster.getAttribute('src')).toBe('/data/video-thumbnails/abc123.jpg');
     fireEvent.error(poster);
     expect(poster.getAttribute('src')).toBe('/data/video-thumbnails/downloaded-abc123.jpg');
@@ -557,7 +588,7 @@ describe('MoodBoardDetail item analysis (#4188 Phase 3)', () => {
       .mockResolvedValueOnce({ id: 'b', name: 'Board B', items: [] });
     const { rerender } = renderPage();
     await waitFor(() => expect(boardNameValue()).toBe('Board A'));
-    fireEvent.click(screen.getByRole('button', { name: 'Prompt from media' }));
+    fireEvent.click(screen.getByRole('button', { name: /^Prompt from media for / }));
     fireEvent.click(screen.getByRole('button', { name: 'mock-generate' }));
 
     currentId = 'b';
@@ -585,7 +616,7 @@ describe('MoodBoardDetail item analysis (#4188 Phase 3)', () => {
 
     // One analyzable item → exactly one analyze button; the text item and the
     // external-URL pin get none.
-    expect(screen.getAllByRole('button', { name: 'Prompt from media' })).toHaveLength(1);
+    expect(screen.getAllByRole('button', { name: /^Prompt from media for / })).toHaveLength(1);
   });
 
   it('persists a run onto the item and flips the card to its analyzed state', async () => {
@@ -605,7 +636,7 @@ describe('MoodBoardDetail item analysis (#4188 Phase 3)', () => {
     renderPage();
     await waitFor(() => expect(boardNameValue()).toBe('Board A'));
 
-    fireEvent.click(screen.getByRole('button', { name: 'Prompt from media' }));
+    fireEvent.click(screen.getByRole('button', { name: /^Prompt from media for / }));
     expect(screen.getByTestId('pfm-modal')).toBeInTheDocument();
 
     fireEvent.click(screen.getByRole('button', { name: 'mock-generate' }));
@@ -625,11 +656,11 @@ describe('MoodBoardDetail item analysis (#4188 Phase 3)', () => {
 
     // The persisted item flows back into board state: the card badge flips and
     // the modal now shows the stored analysis.
-    await screen.findByRole('button', { name: 'View prompt from media' });
+    await screen.findByRole('button', { name: /^View prompt from media for / });
     expect(screen.getByLabelText('Saved analysis prompt')).toHaveValue('a moody castle at dusk');
   });
 
-  it('removes a stored analysis via the modal', async () => {
+  it('removes a stored analysis only after confirming in the modal', async () => {
     const analyzed = {
       ...galleryImageItem,
       analysis: {
@@ -642,12 +673,21 @@ describe('MoodBoardDetail item analysis (#4188 Phase 3)', () => {
     renderPage();
     await waitFor(() => expect(boardNameValue()).toBe('Board A'));
 
-    fireEvent.click(screen.getByRole('button', { name: 'View prompt from media' }));
-    fireEvent.click(screen.getByRole('button', { name: 'Remove' }));
-    await waitFor(() => {
-      expect(mockUpdateMoodBoardItem).toHaveBeenCalledWith('a', 'i1', { analysis: null }, { silent: true });
-    });
-    await screen.findByRole('button', { name: 'Prompt from media' });
+    fireEvent.click(screen.getByRole('button', { name: /^View prompt from media for / }));
+    const openConfirmation = () => {
+      fireEvent.click(screen.getByRole('button', { name: 'Remove saved analysis' }));
+      return screen.getByRole('group', { name: 'Remove saved analysis?' });
+    };
+    fireEvent.click(within(openConfirmation()).getByRole('button', { name: 'Cancel' }));
+    expect(mockUpdateMoodBoardItem).not.toHaveBeenCalled();
+    expect(screen.getByLabelText('Saved analysis prompt')).toHaveValue(analyzed.analysis.prompt);
+
+    const confirmation = openConfirmation();
+    expect(mockUpdateMoodBoardItem).not.toHaveBeenCalled();
+    fireEvent.click(within(confirmation).getByRole('button', { name: 'Remove analysis' }));
+    await screen.findByRole('button', { name: /^Prompt from media for / });
+    expect(mockUpdateMoodBoardItem).toHaveBeenCalledExactlyOnceWith('a', 'i1', { analysis: null }, { silent: true });
+    expect(screen.queryByLabelText('Saved analysis prompt')).toBeNull();
   });
 
   it('displays the analyzed prompt indicator and value over the default caption', async () => {
@@ -899,6 +939,7 @@ describe('MoodBoardDetail phone tool sheet', () => {
     const row = screen.getByRole('navigation', { name: 'Board tools' });
     fireEvent.click(within(row).getByRole('button', { name: 'Import' }));
     const sheet = screen.getByRole('dialog', { name: 'Board tools' });
+    expect(sheet.parentElement).toBe(document.body);
     expect(sheet).toContainElement(screen.getByRole('heading', { name: 'Import from Pinterest' }));
 
     // Switching tools inside the sheet keeps it open on the same entry.
@@ -936,7 +977,7 @@ describe('MoodBoardDetail note render', () => {
       items: [{ id: 'n1', type: 'image', mediaKey: 'image:job-1.png', caption: note.text }],
     });
     await act(async () => { await socketHandlers.get('mood-board:item-render')({ boardId: 'a', itemId: 'n1', status: 'done' }); });
-    expect(await screen.findByRole('button', { name: 'Preview image' })).toBeInTheDocument();
+    expect(await screen.findByRole('button', { name: /^Preview image / })).toBeInTheDocument();
     expect(screen.queryByRole('button', { name: /^Render/ })).toBeNull();
   });
 
@@ -1027,7 +1068,7 @@ it('keeps one visible item when the gallery returns an already pinned asset', as
   fireEvent.click(await screen.findByRole('button', { name: 'Pick from gallery' }));
   await act(async () => { fireEvent.click(screen.getByRole('button', { name: 'Choose fixture' })); });
   await act(async () => { fireEvent.click(screen.getByRole('button', { name: 'Choose fixture' })); });
-  expect(screen.getAllByRole('button', { name: 'Preview image' })).toHaveLength(1);
+  expect(screen.getAllByRole('button', { name: /^Preview image / })).toHaveLength(1);
   expect(screen.getByLabelText('Item prompt')).toHaveAttribute('maxlength', '2000');
 });
 
@@ -1052,7 +1093,7 @@ it('accepts a >2048-char data:image URL without input truncation and surfaces se
   expect(mockToastError).toHaveBeenCalledWith('Image data URL is truncated — re-paste the full URL or upload the image');
 
   await act(async () => { fireEvent.click(screen.getByRole('button', { name: 'Pin to board' })); });
-  expect(screen.getByRole('button', { name: 'Preview image' })).toBeInTheDocument();
+  expect(screen.getByRole('button', { name: /^Preview image / })).toBeInTheDocument();
   expect(input).toHaveValue('');
 });
 

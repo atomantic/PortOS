@@ -9,15 +9,15 @@ import { createHash } from 'node:crypto';
 import { isAbsolute, join } from 'node:path';
 import * as fs from 'node:fs/promises';
 import { z } from 'zod';
+import { sha256File, syncDirectory } from '../lib/fileCore.js';
 import { canonicalStringify } from '../lib/objects.js';
 import { assertNotRealDataWrite } from '../lib/testDataIsolation.js';
 import { assertPeerExecutionCapability } from '../lib/maintenanceExclusive.js';
-import { PEER_CATALOG_KEY_RE, peerCatalogKeySchema } from '../lib/peerAdminValidation.js';
+import { PEER_CATALOG_KEY_RE, peerCatalogReviewTargetSchema } from '../lib/peerAdminValidation.js';
 
 const digest = z.string().regex(/^[a-f0-9]{64}$/);
 const bytes = z.number().int().min(16).max(512 * 1024 ** 3).safe();
-export const peerCatalogReviewTargetSchema = z.object({ backend: z.literal('lmstudio'),
-  catalogKey: peerCatalogKeySchema }).strict();
+export { peerCatalogReviewTargetSchema };
 export const peerCatalogReviewSchema = peerCatalogReviewTargetSchema.extend({
   sourceRevision: z.string().regex(/^[a-f0-9]{40}$/),
   fileName: z.string().max(180).regex(/^[A-Za-z0-9][A-Za-z0-9_.-]*\.gguf$/)
@@ -44,12 +44,6 @@ const exists = path => fs.lstat(path).then(() => true, error => {
   if (error.code === 'ENOENT') return false;
   throw error;
 });
-async function syncDirectory(path) {
-  if (process.platform === 'win32') return;
-  const file = await fs.open(path, 'r');
-  try { await file.sync(); } finally { await file.close(); }
-}
-
 /** Inject only receiver-owned probes/settings and an offline fixture transport in tests. */
 export function _createPeerCatalogInstaller({ catalog, readReviews, writeReviews, inspectRuntime,
   fetchImpl = fetch, download = args => downloadPinned({ ...args, fetchImpl }),
@@ -166,9 +160,9 @@ export function _createPeerCatalogInstaller({ catalog, readReviews, writeReviews
       // hardlink is atomic and preserves the verified bytes without another copy.
       await fs.link(artifact, destination);
       published = true;
-      await syncDirectory(directory);
+      await syncDirectory(directory, { strict: true });
       await fs.rm(staging, { recursive: true });
-      await syncDirectory(directory);
+      await syncDirectory(directory, { strict: true });
       await afterInstall(row);
       return { state: 'succeeded', code: 'PEER_EXECUTION_CATALOG_INSTALLED', evidenceDigest: hash({ operationId: id,
         evidenceDigest, artifactDigest: row.artifactDigest, bytes: row.downloadBytes, cleanup: true }) };
@@ -178,7 +172,7 @@ export function _createPeerCatalogInstaller({ catalog, readReviews, writeReviews
     return { completion: complete().catch(async error => {
       if (published) throw error;
       await fs.rm(staging, { recursive: true });
-      await syncDirectory(directory);
+      await syncDirectory(directory, { strict: true });
       return { state: 'failed', code: /^[A-Z0-9_]{1,100}$/.test(error.code) ? error.code : 'PEER_EXECUTION_CATALOG_DOWNLOAD_FAILED',
         evidenceDigest: hash({ operationId: id, evidenceDigest, published: false, cleanup: true }) };
     }) };
@@ -199,7 +193,6 @@ export function _createPeerCatalogInstaller({ catalog, readReviews, writeReviews
     const { destination, directory } = await resolveLocation(row);
     const entry = await fs.lstat(destination).catch(() => null);
     if (!entry?.isFile() || entry.size !== row.downloadBytes) return null;
-    const { sha256File } = await import('../lib/fileCore.js');
     if (await sha256File(destination) !== row.artifactDigest) return null;
     const staging = join(directory, `.portos-peer-${z.string().uuid().parse(operation.operationId)}`);
     assertWrite(staging, 'peer catalog completed stage cleanup');
@@ -208,7 +201,7 @@ export function _createPeerCatalogInstaller({ catalog, readReviews, writeReviews
       const names = await fs.readdir(staging);
       if (names.some(name => name !== 'artifact')) return null;
       await fs.rm(staging, { recursive: true });
-      await syncDirectory(directory);
+      await syncDirectory(directory, { strict: true });
     }
     await afterInstall(row);
     return { state: 'succeeded', code: 'PEER_EXECUTION_CATALOG_VERIFIED', evidenceDigest: hash({ operationId: operation.operationId,

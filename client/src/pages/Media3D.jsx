@@ -1,7 +1,6 @@
 import { Suspense, useCallback, useEffect, useMemo, useState } from 'react';
 import { Link } from 'react-router';
 import { Boxes, CheckCircle2, AlertTriangle, Loader2, ImagePlus, Sparkles, Settings2, ChevronDown, Plus } from 'lucide-react';
-import PageHeader from '../components/PageHeader';
 import EmptyState from '../components/EmptyState';
 import BrailleSpinner from '../components/BrailleSpinner';
 import { createImageTo3dModel, getImageTo3dModel, listImageTo3dModels } from '../services/apiImageTo3d.js';
@@ -219,17 +218,15 @@ export default function Media3D() {
 
   return (
     <div className="flex h-full min-h-0 flex-col">
-      <PageHeader
-        icon={Boxes}
-        title="3D"
-        subtitle="Turn a rendered image into a 3D mesh. Pick a source image and model, then render on-device. Or build one from Blender Python."
-        actions={(
-          <button type="button" onClick={openBlenderForm} disabled={creatingBlender}
-            className="inline-flex min-h-[44px] items-center gap-1.5 rounded-md border border-port-border px-3 py-1.5 text-sm hover:border-port-accent disabled:opacity-50 pointer-fine:sm:min-h-0">
-            <Plus className="h-4 w-4" aria-hidden="true" /> New Blender model
-          </button>
-        )}
-      />
+      <div className="flex flex-wrap items-center justify-between gap-3 px-4 pt-3">
+        <p className="hidden text-sm text-gray-400 sm:block">
+          Turn a rendered image into a 3D mesh. Pick a source image and model, then render on-device. Or build one from Blender Python.
+        </p>
+        <button type="button" onClick={openBlenderForm} disabled={creatingBlender}
+          className="inline-flex min-h-[44px] items-center gap-1.5 rounded-md border border-port-border px-3 py-1.5 text-sm hover:border-port-accent disabled:opacity-50 pointer-fine:sm:min-h-0">
+          <Plus className="h-4 w-4" aria-hidden="true" /> New Blender model
+        </button>
+      </div>
       <div className="flex-1 min-h-0 overflow-auto p-4">
         {creatingBlender && <NewBlenderModelForm tool={blender.data?.tool} onCancel={() => updateParams({ new: '' })} />}
 
@@ -274,7 +271,8 @@ export default function Media3D() {
                         key={t.id}
                         type="button"
                         onClick={() => updateParams({ target: t.id })}
-                        className={`rounded-lg border px-3 py-1.5 text-xs ${active
+                        aria-pressed={active}
+                        className={`pointer-coarse:min-h-11 pointer-coarse:min-w-11 rounded-lg border px-3 py-1.5 text-xs ${active
                           ? 'border-port-accent bg-port-accent/10 text-white'
                           : 'border-port-border bg-port-bg text-gray-300 hover:border-port-accent'}`}
                       >
@@ -300,7 +298,7 @@ export default function Media3D() {
                   : <><Sparkles className="h-4 w-4" /> Generate 3D</>}
               </button>
               {genError ? (
-                <p className="flex items-start gap-1.5 text-xs text-port-error">
+                <p role="alert" className="flex items-start gap-1.5 text-xs text-port-error">
                   <AlertTriangle className="mt-0.5 h-3.5 w-3.5 shrink-0" /> {genError}
                 </p>
               ) : (

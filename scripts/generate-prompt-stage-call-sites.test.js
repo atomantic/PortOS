@@ -135,11 +135,11 @@ describe('prompt stage call-site scanner', () => {
     expect(index['demo-alpha']).toEqual(['server/services/desync.js']);
   });
 
-  it('throws naming the file when a source will not parse', () => {
+  it('throws naming the file when a candidate will not parse', () => {
     expect(() =>
       buildStageCallSites({
         shippedStageKeys,
-        sources: [src('server/services/broken.js', 'export const = ;')],
+        sources: [src('server/services/broken.js', "export const = 'demo-alpha';")],
       }),
     ).toThrow(/server\/services\/broken\.js/);
   });
@@ -191,6 +191,27 @@ describe('prompt stage call-site scanner', () => {
       elapsedMs: 60001, phaseMs: { parse: 60001 },
       cpuMs: expect.any(Number), sampledPeakHeapMiB: expect.any(Number), sampledPeakRssMiB: expect.any(Number),
     })]);
+  });
+
+  it('keeps escaped resolver names and cooked references in both scan passes', () => {
+    const index = buildStageCallSites({
+      shippedStageKeys,
+      sources: [
+        src('server/services/a.js', String.raw`const stage = 'demo-\x75nshipped';`),
+        src('server/services/b.js', String.raw`const stage = 'demo-\x62et\u0061';`),
+        src('server/services/c.js', 'const view = <Panel stage="demo&#45;alpha" />;'),
+        src('server/services/d.js', 'const stage = `demo-panel-\\\none`;'),
+        src('server/services/z.js', String.raw`// resolver\
+g\u0065tStage('demo-unshipped');`),
+      ],
+    });
+
+    expect(index).toEqual({
+      'demo-alpha': ['server/services/c.js'],
+      'demo-beta': ['server/services/b.js'],
+      'demo-panel-one': ['server/services/d.js'],
+      'demo-unshipped': ['server/services/a.js', 'server/services/z.js'],
+    });
   });
 
   it('omits keys nothing references and dedupes repeated references', () => {

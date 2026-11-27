@@ -6,7 +6,7 @@ import express from 'express';
 import { request } from '../lib/testHelper.js';
 import { makePathsProxy } from '../lib/mockPathsDataRoot.js';
 const root = realpathSync(mkdtempSync(join(tmpdir(), 'maintenance-fixture-')));
-const state = vi.hoisted(() => ({ jobs: [], busy: false, authorized: true, failRemoval: false, recreate: false }));
+const state = vi.hoisted(() => ({ jobs: [], processes: [], authorized: true, failRemoval: false, recreate: false }));
 vi.mock('../lib/fileUtils.js', async original => {
   const actual = await original();
   return { ...makePathsProxy(actual, { dataRoot: root }), rmGuarded: async (path, options) => {
@@ -19,7 +19,10 @@ vi.mock('../lib/fileUtils.js', async original => {
   } };
 });
 vi.mock('../services/mediaJobQueue/index.js', () => ({ listJobs: () => state.jobs }));
-vi.mock('../services/dataManagerBusy.js', () => ({ trainingRunsBusy: async () => ({ busy: state.busy }) }));
+vi.mock('../lib/detachedSpawn.js', async importOriginal => ({
+  ...await importOriginal(),
+  snapshotMaintenanceProcesses: async () => state.processes,
+}));
 vi.mock('../lib/backupSnapshotBoundary.js', () => ({ withBackupAssetPublication: work => work() }));
 // hostControlRouteGate (#16018) admits the writes; the inventory GET carries its own check.
 const gate = (_req, res, next) => state.authorized ? next() : res.sendStatus(403);
@@ -35,7 +38,7 @@ beforeEach(() => {
   writeFileSync(join(root, 'training-runs/run-example/checkpoint.bin'), 'unique checkpoint');
   writeFileSync(join(root, 'lora-datasets/example/images/source.png'), 'unique source');
   writeFileSync(join(root, 'loras/example.safetensors'), 'shared adapter');
-  state.jobs = []; state.busy = false; state.authorized = true; state.failRemoval = false; state.recreate = false;
+  state.jobs = []; state.processes = []; state.authorized = true; state.failRemoval = false; state.recreate = false;
 });
 afterAll(() => rmSync(root, { recursive: true, force: true }));
 describe('allowlisted data maintenance HTTP workflow', () => {
@@ -61,12 +64,44 @@ describe('allowlisted data maintenance HTTP workflow', () => {
     for (const id of ['..%2Floras', 'shared-lora-adapters', 'archives', 'loras']) expect((await del(id)).status).toBe(404);
     expect(existsSync(join(root, 'loras/example.safetensors'))).toBe(true);
   });
-  it('refuses while a trainer or media job owns the data', async () => {
-    state.busy = true; expect((await del()).body.code).toBe('MAINTENANCE_BUSY');
-    state.busy = false; state.jobs = [{ status: 'running', kind: 'image' }];
-    expect((await del()).body.code).toBe('MAINTENANCE_BUSY');
+  it('refuses while queued or running media could own inputs', async () => {
+    for (const status of ['queued', 'running']) {
+      state.jobs = [{ status, kind: 'image' }];
+      expect((await del()).body.code).toBe('MAINTENANCE_BUSY');
+    }
     expect(existsSync(join(root, 'training-runs/run-example/checkpoint.bin'))).toBe(true);
   });
+
+  it('protects both directories from a legacy detached writer until it exits', async () => {
+    const control = join(root, 'training-runs/run-example/.detached');
+    mkdirSync(control);
+    writeFileSync(join(control, 'pid'), String(process.pid));
+
+    for (const id of ['retired-training-runs', 'retired-lora-datasets']) {
+      expect((await del(id)).body.code).toBe('MAINTENANCE_BUSY');
+    }
+    expect(existsSync(join(root, 'training-runs/run-example/checkpoint.bin'))).toBe(true);
+    expect(existsSync(join(root, 'lora-datasets/example/images/source.png'))).toBe(true);
+
+    writeFileSync(join(control, 'exit'), '0');
+    expect((await del('retired-lora-datasets')).body).toMatchObject({ status: 'deleted', removedFiles: 1 });
+    expect(existsSync(join(root, 'lora-datasets'))).toBe(false);
+    expect(existsSync(join(root, 'training-runs/run-example/checkpoint.bin'))).toBe(true);
+    expect((await del()).body.status).toBe('deleted');
+    expect(existsSync(join(root, 'loras/example.safetensors'))).toBe(true);
+  });
+  it('protects files when a legacy trainer has no usable control files', async () => {
+    state.processes = [{
+      pid: 777,
+      state: 'S',
+      command: `python train_flux2_lora.py --output-dir "${join(root, 'training-runs/run-example')}"`,
+    }];
+    expect((await del()).body.code).toBe('MAINTENANCE_BUSY');
+    expect((await del('retired-lora-datasets')).body.code).toBe('MAINTENANCE_BUSY');
+    expect(existsSync(join(root, 'training-runs/run-example/checkpoint.bin'))).toBe(true);
+    expect(existsSync(join(root, 'lora-datasets/example/images/source.png'))).toBe(true);
+  });
+
   it('reports nothing-to-delete as stale', async () => {
     expect((await del()).status).toBe(200);
     expect((await del()).body.code).toBe('MAINTENANCE_STALE');
@@ -78,17 +113,6 @@ describe('allowlisted data maintenance HTTP workflow', () => {
     expect(rows.find(row => row.id === 'retired-training-runs').status).toBe('unavailable');
     expect(existsSync(join(root, 'loras/example.safetensors'))).toBe(true);
   });
-});
-
-it('refuses removal while checkpoint promotion or a retained dataset write owns the data', async () => {
-  const { withRetiredDataAccess } = await import('../lib/retiredLoraTraining.js');
-  let release;
-  const access = withRetiredDataAccess(() => new Promise(resolve => { release = resolve; }));
-  try {
-    expect((await del()).body.code).toBe('MAINTENANCE_BUSY');
-    expect(existsSync(join(root, 'training-runs/run-example/checkpoint.bin'))).toBe(true);
-  } finally { release(); await access; }
-  expect((await del()).status).toBe(200);
 });
 
 it('reports filesystem failure without success and restores the untouched detached tree', async () => {

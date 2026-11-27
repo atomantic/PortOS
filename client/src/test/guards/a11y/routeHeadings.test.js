@@ -109,13 +109,11 @@ describe('a11y conventions: routeHeadings', () => {
   const HEADINGLESS_ROUTE_ELEMENTS = new Set([
     'src/components/Layout.jsx',    // the app chrome — <Outlet/> children own the page h1
     'src/components/PageShell.jsx', // the <main> shells — <Outlet/> children own the page h1
-    'src/pages/IMessage.jsx',       // redirect-only: renders <Navigate> to /messages/imessage
     'src/pages/SyncView.jsx',       // deep link that mounts SyncDetailDrawer over the prior page
   ]);
 
   const ROUTE_HEADING_GAP_ALLOWLIST = new Set([
     'src/pages/MoodBoardDetail.jsx',
-    'src/pages/UniverseBuilder.jsx',
   ]);
 
   it('gives every routed page a top-level heading (#7245)', () => {

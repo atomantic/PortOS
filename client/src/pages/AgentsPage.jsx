@@ -1,6 +1,5 @@
 import { useState, useCallback, useEffect, Fragment } from 'react';
 import toast from '../components/ui/Toast';
-import PageHeader from '../components/PageHeader';
 import { RefreshCw, XCircle, Cpu, MemoryStick, Terminal } from 'lucide-react';
 import { getAgents, killAgent } from '../services/apiAgents.js';
 import { useSocketResource } from '../hooks/useSocketResource';
@@ -9,12 +8,47 @@ import useMounted from '../hooks/useMounted';
 import { formatCount, formatDateTime, formatPercent } from '../utils/formatters';
 import PageSkeleton from '../components/ui/PageSkeleton';
 import ListLoadError from '../components/ui/ListLoadError';
+import ConfirmButtonPair from '../components/ui/ConfirmButtonPair';
+import useConfirmDelete from '../hooks/useConfirmDelete';
 
 const AGENT_EVENTS = [];
+
+function AgentKillButton({ agent, killing, confirmation, onKill }) {
+  const label = `Kill ${agent.agentName} process ${agent.pid}`;
+
+  if (confirmation.isConfirming(agent.pid)) {
+    return (
+      <ConfirmButtonPair
+        prompt="Kill process?"
+        ariaLabel={`${label}?`}
+        confirmText="Kill"
+        confirmAriaLabel={`Confirm kill ${agent.agentName} process ${agent.pid}`}
+        onConfirm={() => confirmation.confirmDelete(() => onKill(agent.pid))}
+        onCancel={confirmation.cancelDelete}
+        className="max-sm:basis-full sm:justify-center"
+      />
+    );
+  }
+
+  return (
+    <button
+      type="button"
+      aria-label={label}
+      onClick={() => confirmation.requestDelete(agent.pid)}
+      disabled={killing}
+      className="shrink-0 px-2 py-1 sm:px-3 sm:py-1.5 pointer-coarse:min-h-11 pointer-coarse:px-3 bg-port-error/20 text-port-error hover:bg-port-error/30 hover:text-port-error/80 disabled:opacity-50 rounded text-xs sm:text-sm font-medium inline-flex items-center gap-1 sm:gap-1.5 transition-colors"
+    >
+      <XCircle size={14} aria-hidden="true" className={killing ? 'animate-pulse' : ''} />
+      Kill
+    </button>
+  );
+}
 
 export function AgentsPage() {
   const [killing, setKilling] = useState({});
   const [expandedPid, setExpandedPid] = useState(null);
+  const confirmation = useConfirmDelete();
+  const { confirmingId, cancelDelete } = confirmation;
   const mounted = useMounted();
 
   const loadAgents = useCallback(() => getAgents({ silent: true }), []);
@@ -31,6 +65,12 @@ export function AgentsPage() {
     socket.on('agent-processes:changed', onSnapshot);
     return () => socket.off('agent-processes:changed', onSnapshot);
   }, [updateData]);
+
+  useEffect(() => {
+    if (data && confirmingId !== null && !data.some(agent => agent.pid === confirmingId)) {
+      cancelDelete();
+    }
+  }, [data, confirmingId, cancelDelete]);
 
   const handleKill = async (pid) => {
     setKilling(prev => ({ ...prev, [pid]: true }));
@@ -59,37 +99,21 @@ export function AgentsPage() {
   const totalMemory = agents.reduce((sum, a) => sum + (a.memory || 0), 0);
 
   if (loading) {
-    return (
-      <PageSkeleton
-        header="bar"
-        fullHeight
-        padded
-        label="Scanning for AI agents"
-        headerRowClass="flex flex-col sm:flex-row sm:items-center justify-between gap-3"
-        titleWidthClass="w-56"
-        cards={3}
-        sidebar={false}
-      />
-    );
+    return <PageSkeleton label="Scanning for AI agents" cards={3} sidebar={false} />;
   }
 
   return (
-    <div className="flex h-full flex-col">
-      <PageHeader
-        icon={Cpu}
-        title="AI Agents"
-        actions={<>
+    <div className="space-y-4 lg:space-y-6">
+      <div className="flex justify-end">
         <button
+          type="button"
           onClick={refetch}
           className="flex items-center justify-center gap-2 px-3 py-1.5 sm:px-4 sm:py-2 bg-port-card border border-port-border hover:border-gray-500 text-white text-sm rounded-lg transition-colors"
         >
           <RefreshCw size={14} className="sm:w-4 sm:h-4" />
-          <span className="sm:inline">Refresh</span>
+          Refresh
         </button>
-        </>}
-      />
-      <div className="flex-1 min-h-0 overflow-auto p-4 md:p-6">
-      <div className="space-y-4 lg:space-y-6">
+      </div>
 
       {initialLoadFailed ? (
         <ListLoadError what="AI agents" error={error} onRetry={refetch} />
@@ -132,7 +156,7 @@ export function AgentsPage() {
           {agents.map(agent => (
             <div key={agent.pid} className="p-3">
               {/* Top row: Name, PID, Runtime, Kill button */}
-              <div className="flex items-center justify-between gap-2 mb-2">
+              <div className="flex flex-wrap items-center justify-between gap-2 mb-2">
                 <div className="flex items-center gap-2 min-w-0 flex-1">
                   <span className="font-mono text-white text-sm truncate">{agent.agentName.toLowerCase()}</span>
                   {agent.source === 'cos' && (
@@ -141,14 +165,7 @@ export function AgentsPage() {
                   <span className="text-gray-500 text-xs shrink-0">#{agent.pid}</span>
                   <span className="font-mono text-port-accent text-xs shrink-0 whitespace-nowrap">{agent.runtimeFormatted}</span>
                 </div>
-                <button
-                  onClick={() => handleKill(agent.pid)}
-                  disabled={killing[agent.pid]}
-                  className="shrink-0 px-2 py-1 pointer-coarse:min-h-11 pointer-coarse:px-3 bg-port-error/20 text-port-error hover:bg-port-error/30 hover:text-port-error/80 disabled:opacity-50 rounded text-xs font-medium flex items-center gap-1"
-                >
-                  <XCircle size={14} className={killing[agent.pid] ? 'animate-pulse' : ''} />
-                  Kill
-                </button>
+                <AgentKillButton agent={agent} killing={killing[agent.pid]} confirmation={confirmation} onKill={handleKill} />
               </div>
               {/* Stats row: CPU & Memory */}
               <div className="flex items-center gap-4 text-xs">
@@ -162,10 +179,12 @@ export function AgentsPage() {
                 </div>
               </div>
               <button
+                type="button"
+                aria-expanded={expandedPid === agent.pid}
                 onClick={() => toggleExpand(agent.pid)}
                 className="mt-2 pointer-coarse:min-h-11 inline-flex items-center text-xs text-gray-500 hover:text-white gap-1"
               >
-                <span className={`inline-block transition-transform ${expandedPid === agent.pid ? 'rotate-90' : ''}`}>▶</span>
+                <span className={`inline-block transition-transform ${expandedPid === agent.pid ? 'rotate-90' : ''}`} aria-hidden="true">▶</span>
                 {expandedPid === agent.pid ? 'Hide details' : 'Show details'}
               </button>
               {expandedPid === agent.pid && (
@@ -252,15 +271,7 @@ export function AgentsPage() {
                     )}
                   </td>
                   <td className="px-4 py-4 text-center">
-                    <button
-                      onClick={() => handleKill(agent.pid)}
-                      disabled={killing[agent.pid]}
-                      className="px-3 py-1.5 bg-port-error/20 text-port-error hover:bg-port-error/30 hover:text-port-error/80 disabled:opacity-50 rounded text-sm font-medium inline-flex items-center gap-1.5 transition-colors"
-                      title="Kill process"
-                    >
-                      <XCircle size={16} className={killing[agent.pid] ? 'animate-pulse' : ''} />
-                      Kill
-                    </button>
+                    <AgentKillButton agent={agent} killing={killing[agent.pid]} confirmation={confirmation} onKill={handleKill} />
                   </td>
                 </tr>
                 {expandedPid === agent.pid && (
@@ -385,8 +396,6 @@ export function AgentsPage() {
         </div>
       </div>
       </>}
-    </div>
-      </div>
     </div>
   );
 }

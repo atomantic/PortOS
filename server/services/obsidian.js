@@ -11,10 +11,12 @@ import { readdir, stat, realpath } from 'fs/promises';
 import { join, relative, resolve, basename, dirname, extname, isAbsolute } from 'path';
 import { v4 as uuidv4 } from '../lib/uuid.js';
 import { atomicWrite, ensureDir, readJSONFile, pathExists, PATHS, writeFileGuarded, unlinkGuarded } from '../lib/fileUtils.js';
+import { createFileWriteQueue } from '../lib/fileWriteQueue.js';
 import { ICLOUD_NOT_MATERIALIZED, isSuspectedDataless, materializeAndWait, readIfMaterialized } from '../lib/icloudFile.js';
 import { escapeRegExp } from '../lib/textUtils.js';
 
 const VAULTS_FILE = join(PATHS.brain, 'obsidian-vaults.json');
+const queueVaultWrite = createFileWriteQueue();
 
 export const DEFAULT_ICLOUD_OBSIDIAN = join(
   homedir(),
@@ -39,27 +41,29 @@ async function saveVaults(vaults) {
 }
 
 export async function addVault({ name, path }) {
-  const vaults = await getVaults();
+  return queueVaultWrite(async () => {
+    const vaults = await getVaults();
 
-  if (!await pathExists(path)) {
-    return { error: 'PATH_NOT_FOUND', message: `Directory not found: ${path}` };
-  }
+    if (!await pathExists(path)) {
+      return { error: 'PATH_NOT_FOUND', message: `Directory not found: ${path}` };
+    }
 
-  if (vaults.some(v => v.path === path)) {
-    return { error: 'DUPLICATE_PATH', message: 'A vault with this path already exists' };
-  }
+    if (vaults.some(v => v.path === path)) {
+      return { error: 'DUPLICATE_PATH', message: 'A vault with this path already exists' };
+    }
 
-  const vault = {
-    id: uuidv4(),
-    name: name || basename(path),
-    path,
-    addedAt: new Date().toISOString()
-  };
+    const vault = {
+      id: uuidv4(),
+      name: name || basename(path),
+      path,
+      addedAt: new Date().toISOString()
+    };
 
-  vaults.push(vault);
-  await saveVaults(vaults);
-  console.log(`📓 Added Obsidian vault: ${vault.id}`);
-  return vault;
+    vaults.push(vault);
+    await saveVaults(vaults);
+    console.log(`📓 Added Obsidian vault: ${vault.id}`);
+    return vault;
+  });
 }
 
 // Resolve `notePath` against `vault.path` and confirm the result is still

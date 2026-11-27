@@ -1,16 +1,15 @@
 import { MIN_RETENTION_COUNT, MAX_RETENTION_COUNT, DEFAULT_RETENTION_COUNT } from '../../../../server/lib/backupConfig.js';
 import { useState, useEffect, useId, useRef, useCallback } from 'react';
 import useSettingsForm from '../../hooks/useSettingsForm';
-import { AlertTriangle, Archive, CalendarClock, CheckCircle2, Database, Play, Plus, Save, ShieldOff, Trash2, X, ChevronDown, ChevronRight } from 'lucide-react';
+import { AlertTriangle, CalendarClock, CheckCircle2, Database, Play, Save } from 'lucide-react';
 import toast from '../ui/Toast';
 import BrailleSpinner from '../BrailleSpinner';
 import ToggleSwitch from '../ToggleSwitch';
 import FolderPicker from '../FolderPicker';
 import { useBackupRun } from '../../hooks/useBackupRun';
-import Modal from '../ui/Modal';
 import Banner from '../ui/Banner';
-import CollapsibleSection from '../ui/CollapsibleSection';
-import CollapsibleListItem from '../ui/CollapsibleListItem';
+import BackupExclusionsSection from './BackupExclusionsSection';
+import BackupSnapshotsSection from './BackupSnapshotsSection';
 import {
   getSettings,
   updateSettings,
@@ -23,7 +22,7 @@ import {
 import { formatBytes } from '../../utils/formatters';
 import { describeCron } from '../../utils/cronHelpers';
 import CronSchedulePicker from '../CronSchedulePicker';
-import { anchorUserExclude, anchorUserExcludes, isSafeExcludePattern } from '../../lib/backupExcludes';
+import { isSafeExcludePattern } from '../../lib/backupExcludes';
 import { pluralize } from '../../lib/textUtils';
 import { failureMessage } from '../messages/failureMessage';
 
@@ -60,7 +59,7 @@ const DB_RESTORE_FAILURE_MESSAGES = {
   restore_preflight: 'Database restore was refused because the database contains unexpected objects, ownership, or dependencies. Nothing was changed. Check the server logs and resolve the reported database conflict before trying again.',
   restore_preflight_unavailable: 'Database restore preflight check could not be completed because the database query failed. Nothing was changed. Restore database connectivity and retry preview before restoring.',
   restore_journal: 'The restore recovery journal could not be written. Nothing was changed. Check the server logs and available disk space before trying again.',
-  backup_snapshot_busy: 'A backup is capturing the database, or an asset publication did not finish in time. Nothing was changed. Retry once the backup completes; if it keeps happening, the details that follow name the blocking publication and docs/BACKUP_PUBLICATION_ADMISSION.md explains recovery.',
+  backup_snapshot_busy: 'A backup is capturing the database, or an asset publication did not finish in time. Nothing was changed. Retry once the backup completes; if it keeps happening, the details that follow name the blocking publication and the Interrupted ownership recovery section of docs/BACKUP.md explains recovery.',
   database_restore_busy: 'The database restore was refused before changing any data.',
   no_dump: 'No DB dump in this snapshot',
   not_configured: 'The database is unavailable for restore. Check Database status and the server logs for connection details.',
@@ -76,19 +75,10 @@ const dbRestoreFailureMessage = (result) => {
   const details = typeof result?.error === 'string' ? result.error.trim() : '';
   return details ? `${message} Details: ${details}` : message;
 };
-const snapshotIdentity = (snapshot) =>
-  snapshot.selectionKey || `${snapshot.source || 'current'}/${snapshot.id}`;
-const snapshotSourceLabel = (snapshot) =>
-  snapshot.sourceLabel || snapshot.source || 'Current machine';
 
 export function BackupTab() {
   const destPathId = useId();
   const retentionId = useId();
-  const additionalExcludeId = useId();
-  const defaultExcludesPanelId = useId();
-  const effectiveExcludesPanelId = useId();
-  const exclusionsPanelId = useId();
-  const snapshotsPanelId = useId();
   const exclusionsRef = useRef(null);
   const [loading, setLoading] = useState(true);
   // A settings response that never resolved is NOT 'the defaults' — the schedule
@@ -115,7 +105,6 @@ export function BackupTab() {
   // checking and the save payload) only updates once the text parses.
   const [retentionInputText, setRetentionInputText] = useState('');
   const [defaultExcludes, setDefaultExcludes] = useState([]);
-  const [newExclude, setNewExclude] = useState('');
   const [pgBackup, setPgBackup] = useState(null);
   const [backupStatus, setBackupStatus] = useState('never');
   const [restoreWarning, setRestoreWarning] = useState(null);
@@ -127,29 +116,39 @@ export function BackupTab() {
   const [snapshotRevision, setSnapshotRevision] = useState(0);
   const historyOpenRef = useRef(false);
   const savingRef = useRef(false);
-  // Disclosure open/closed flags for the collapsible panels, all collapsed by default.
-  const [disclosure, setDisclosure] = useState({});
-  const toggleDisclosure = (key, next) => setDisclosure(prev => ({ ...prev, [key]: typeof next === 'function' ? next(!!prev[key]) : next }));
+  const [historyOpen, setHistoryOpen] = useState(false);
+  const handleHistoryOpenChange = (next) => {
+    historyOpenRef.current = next;
+    if (!next) snapshotGenerationRef.current += 1;
+    setHistoryOpen(next);
+  };
+  const [exclusionDisclosure, setExclusionDisclosure] = useState({});
+  const toggleExclusionDisclosure = (key, next) => setExclusionDisclosure(prev => ({ ...prev, [key]: next }));
   const reviewExclusions = () => {
-    setDisclosure(prev => ({ ...prev, exclusions: true, defaultExcludes: true, effectiveExcludes: true }));
+    setExclusionDisclosure({ exclusions: true, defaultExcludes: true, effectiveExcludes: true });
     exclusionsRef.current?.querySelector('button')?.focus({ preventScroll: true });
     exclusionsRef.current?.scrollIntoView?.({ block: 'start' });
   };
-  const [restoreTarget, setRestoreTarget] = useState(null); // source-bound request pending confirm
-  const [restorePreview, setRestorePreview] = useState(null); // dry-run result
+  const [restoreAction, setRestoreAction] = useState(null);
+  // Claim the action synchronously so another event cannot enter before React
+  // commits disabled controls.
+  const restoreActionRef = useRef(null);
+  const updateRestoreAction = (operation) => {
+    restoreActionRef.current = operation;
+    setRestoreAction(operation);
+  };
+
+  const closeRestore = () => {
+    if (restoreActionRef.current?.phase === 'confirm') updateRestoreAction(null);
+  };
+
   // A committed database restore awaiting recovery (#9725): the server keeps
   // ordinary database work fenced until it is resumed to completion.
   const [restoreRecovery, setRestoreRecovery] = useState(null);
   const [recovering, setRecovering] = useState(false);
-  const restorePreviewGenerationRef = useRef(0);
   const [deleteTarget, setDeleteTarget] = useState(null); // snapshot pending delete confirm
   const [deletingIds, setDeletingIds] = useState(new Set());
   const pendingDeletes = useRef(new Set());
-  // The default-exclusions catalog is a 15+ row reference list the user rarely
-  // edits — collapsed by default so the fields they came to change (destination,
-  // enabled, schedule) and the action bar are what the tab actually shows.
-  // Same reasoning as the catalog above: the effective list is defaults + user
-  // entries, so it is longer still. Collapsed by default, one click from visible.
 
   const loadInitialSettings = useCallback(() => {
     setLoading(true);
@@ -215,7 +214,11 @@ export function BackupTab() {
       const result = await getBackupSnapshots({ silent: true });
       if (generation !== snapshotGenerationRef.current) return;
       if (!Array.isArray(result)) throw new Error('Invalid snapshot history');
-      setSnapshots(result);
+      setSnapshots(result.map(snapshot => ({
+        ...snapshot,
+        selectionKey: snapshot.selectionKey || `${snapshot.source || 'current'}/${snapshot.id}`,
+        sourceLabel: snapshot.sourceLabel || snapshot.source || 'Current machine',
+      })));
       setSnapshotState('loaded');
     } catch {
       if (generation === snapshotGenerationRef.current) setSnapshotState('error');
@@ -225,20 +228,19 @@ export function BackupTab() {
   };
 
   useEffect(() => {
-    if (disclosure.snapshots && !savingRef.current) refreshSnapshots();
+    if (historyOpen && !savingRef.current) refreshSnapshots();
     return () => { snapshotGenerationRef.current += 1; };
-  }, [disclosure.snapshots, snapshotRevision]);
+  }, [historyOpen, snapshotRevision]);
 
   const handleSave = async () => {
+    if (restoreActionRef.current?.phase === 'restore') return;
     savingRef.current = true;
     snapshotGenerationRef.current += 1;
     setSnapshotState('idle');
     if (destPath !== savedDestPath) {
       destinationGenerationRef.current += 1;
       setDeletingIds(new Set());
-      restorePreviewGenerationRef.current += 1;
-      setRestoreTarget(null);
-      setRestorePreview(null);
+      closeRestore();
       setDeleteTarget(null);
     }
     setSaving(true);
@@ -285,20 +287,6 @@ export function BackupTab() {
     ]);
   });
 
-  // Anchor exactly as the server does on read, so the chip the user sees IS the
-  // rsync filter that will run. A bare `repos/` would otherwise match every
-  // `repos/` at any depth under data/ and silently drop unrelated records (#7241).
-  const addExclude = () => {
-    const anchored = anchorUserExclude(newExclude);
-    if (!anchored) return;
-    if (!excludePaths.includes(anchored)) set('excludePaths', [...excludePaths, anchored]);
-    setNewExclude('');
-  };
-
-  const removeExclude = (index) => {
-    set('excludePaths', excludePaths.filter((_, i) => i !== index));
-  };
-
   if (loading) {
     return <BrailleSpinner text="Loading backup settings" />;
   }
@@ -327,37 +315,9 @@ export function BackupTab() {
   const runTitle = runDisabledReason || 'Run a backup snapshot now using saved settings';
   const formStatus = saving ? 'Saving…' : dirty ? 'Unsaved changes' : '';
 
-  const defaultExcludeRows = defaultExcludes.map(d => ({
-    ...d,
-    defaultActive: !(d.overridable && disabledDefaultExcludes.includes(d.path)),
-  }));
-  const enabledDefaultCount = defaultExcludeRows.filter(d => d.defaultActive).length;
-  const disabledDefaultCount = defaultExcludeRows.length - enabledDefaultCount;
-
-  // The rsync filter list this configuration actually produces — the client half
-  // of `computeEffectiveExcludes`, built from the same anchoring helper so the
-  // preview cannot drift from the run. Rendering it is the point: without it the
-  // user never sees how a pattern was interpreted until a restore comes up short.
-  const effectiveExcludes = [...new Set([
-    ...defaultExcludeRows.filter(d => d.defaultActive).map(d => d.path),
-    ...anchorUserExcludes(excludePaths),
-  ])];
   const scheduleSummary = savedEnabled
     ? (describeCron(savedCronExpression) || savedCronExpression)
     : 'Scheduled backups are off';
-  const snapshotSummary = snapshotState === 'error'
-    ? 'Unavailable — open to retry'
-    : snapshotState === 'loading' ? 'Loading…'
-    : snapshotState !== 'loaded' ? 'Open to load'
-    : snapshots.length > 0
-    ? `${snapshots.length} ${snapshots.length === 1 ? 'snapshot' : 'snapshots'}`
-    : 'No snapshots yet';
-  const exclusionsSummary = loadFailures.exclusions
-    ? 'Unavailable — reload to retry'
-    : excludePaths.length > 0
-    ? `${excludePaths.length} custom · ${effectiveExcludes.length} active patterns`
-    : `${effectiveExcludes.length} active patterns`;
-
   const renderPgStatus = () => {
     if (loadFailures.status) return <span className="text-port-warning">Backup status unavailable — reload to retry</span>;
     if (!pgBackup) return <span className="text-gray-500">No backup run yet</span>;
@@ -386,37 +346,44 @@ export function BackupTab() {
   };
 
   const handleRestoreDb = async (snapshot) => {
-    const generation = restorePreviewGenerationRef.current + 1;
-    restorePreviewGenerationRef.current = generation;
-    setRestorePreview(null);
-    setRestoreTarget(null);
+    if (restoreActionRef.current || deleteTarget || savingRef.current) return;
+    const destinationGeneration = destinationGenerationRef.current;
     const request = {
       snapshotId: snapshot.id,
       ...(snapshot.source ? { source: snapshot.source } : {}),
     };
-    // Dry-run first to show what would restore, then open the confirm modal.
-    const preview = await restoreDatabase({ ...request, dryRun: true }, { silent: true })
-      .catch(err => ({ status: 'failed', reason: 'request_error', error: err?.message }));
-    if (restorePreviewGenerationRef.current !== generation) return;
-    if (preview?.status !== 'ok') {
-      reportRestoreFailure(preview);
-      return;
+    updateRestoreAction({ phase: 'preview', snapshotId: snapshot.id });
+    let confirmation = null;
+    try {
+      // Dry-run first to show what would restore, then open the confirm modal.
+      const preview = await restoreDatabase({ ...request, dryRun: true }, { silent: true })
+        .catch(err => ({ status: 'failed', reason: 'request_error', error: err?.message }));
+      if (destinationGenerationRef.current !== destinationGeneration) return;
+      if (preview?.status !== 'ok') {
+        reportRestoreFailure(preview);
+        return;
+      }
+      confirmation = { phase: 'confirm', request, sourceLabel: snapshot.sourceLabel, preview };
+    } finally {
+      updateRestoreAction(confirmation);
     }
-    setRestorePreview(preview);
-    setRestoreTarget({ request, sourceLabel: snapshotSourceLabel(snapshot) });
   };
 
   const confirmRestoreDb = async () => {
-    const target = restoreTarget;
-    setRestoreTarget(null);
-    const result = await restoreDatabase({ ...target.request, dryRun: false }, { silent: true })
-      .catch(err => ({ status: 'failed', reason: 'request_error', error: err?.message }));
-    if (result?.status === 'ok') {
-      toast.success(`Database restored from ${target.request.snapshotId}`, { icon: '💾' });
-    } else {
-      reportRestoreFailure(result);
+    const target = restoreActionRef.current;
+    if (target?.phase !== 'confirm' || savingRef.current) return;
+    updateRestoreAction({ ...target, phase: 'restore' });
+    try {
+      const result = await restoreDatabase({ ...target.request, dryRun: false }, { silent: true })
+        .catch(err => ({ status: 'failed', reason: 'request_error', error: err?.message }));
+      if (result?.status === 'ok') {
+        toast.success(`Database restored from ${target.request.snapshotId}`, { icon: '💾' });
+      } else {
+        reportRestoreFailure(result);
+      }
+    } finally {
+      updateRestoreAction(null);
     }
-    setRestorePreview(null);
   };
 
   const resumeRestoreRecovery = async () => {
@@ -437,18 +404,19 @@ export function BackupTab() {
   };
 
   const handleDeleteSnapshot = (snapshot) => {
+    if (restoreActionRef.current || deleteTarget || savingRef.current) return;
     setDeleteTarget({
-      identity: snapshotIdentity(snapshot),
+      identity: snapshot.selectionKey,
       snapshotId: snapshot.id,
       source: snapshot.source,
-      sourceLabel: snapshotSourceLabel(snapshot),
+      sourceLabel: snapshot.sourceLabel,
     });
   };
 
   const confirmDeleteSnapshot = async () => {
     const target = deleteTarget;
+    if (!target || restoreActionRef.current || savingRef.current || pendingDeletes.current.has(target.identity)) return;
     setDeleteTarget(null);
-    if (!target || pendingDeletes.current.has(target.identity)) return;
     pendingDeletes.current.add(target.identity);
     const destinationGeneration = destinationGenerationRef.current;
     const result = await deleteBackupSnapshot(target.snapshotId, target.source, { silent: true })
@@ -463,6 +431,15 @@ export function BackupTab() {
     snapshotGenerationRef.current += 1;
     setDeletingIds(previous => new Set(previous).add(target.identity));
     if (snapshotLoadingRef.current && historyOpenRef.current && !savingRef.current) refreshSnapshots();
+  };
+
+  const finishDeleteAnimation = (identity) => {
+    setSnapshots(previous => previous.filter(snapshot => snapshot.selectionKey !== identity));
+    setDeletingIds(previous => {
+      const next = new Set(previous);
+      next.delete(identity);
+      return next;
+    });
   };
 
   return (
@@ -624,14 +601,16 @@ export function BackupTab() {
           sticky while the longer exclusion and snapshot regions are open. */}
       <div className="sticky top-0 z-20 flex flex-wrap items-center gap-2 -mx-4 sm:-mx-6 px-4 sm:px-6 py-3 bg-port-card/95 sm:backdrop-blur border-y border-port-border">
         <button
+          type="button"
           onClick={handleSave}
-          disabled={saving}
+          disabled={saving || restoreAction?.phase === 'restore'}
           className="inline-flex items-center justify-center gap-2 min-h-[40px] px-4 py-2 bg-port-accent hover:bg-port-accent/80 text-white text-sm font-medium rounded-lg transition-colors disabled:opacity-50"
         >
           {saving ? <BrailleSpinner /> : <Save size={16} />}
           Save
         </button>
         <button
+          type="button"
           onClick={handleRunNow}
           disabled={!canRun}
           title={runTitle}
@@ -650,276 +629,36 @@ export function BackupTab() {
         </span>
       </div>
 
-      <div ref={exclusionsRef} className="scroll-mt-20 border-t border-port-border pt-5">
-        <CollapsibleSection
-          label="Exclusions"
-          icon={ShieldOff}
-          summary={exclusionsSummary}
-          id={exclusionsPanelId}
-          open={!!disclosure.exclusions}
-          onOpenChange={(next) => toggleDisclosure('exclusions', next)}
-          size="bar"
-          className="space-y-3"
-          bodyClassName="space-y-4 pt-2"
-        >
-          {loadFailures.exclusions ? (
-            <p className="text-sm text-port-warning">Backup exclusion details are unavailable — reload to retry before editing these rules.</p>
-          ) : (
-            <>
-              <p className="text-sm text-gray-400">Review default and custom rules that keep data out of snapshots. Optional defaults can be disabled; always-excluded rules cannot. Custom rules still apply independently.</p>
+      <BackupExclusionsSection
+        sectionRef={exclusionsRef}
+        unavailable={loadFailures.exclusions}
+        defaultExcludes={defaultExcludes}
+        excludePaths={excludePaths}
+        disabledDefaultExcludes={disabledDefaultExcludes}
+        disclosure={exclusionDisclosure}
+        toggleDisclosure={toggleExclusionDisclosure}
+        toggleDefaultExclude={toggleDefaultExclude}
+        setExcludePaths={(paths) => set('excludePaths', paths)}
+      />
 
-          {defaultExcludeRows.length > 0 && (
-            <div className="space-y-2">
-              <button
-                type="button"
-                onClick={() => toggleDisclosure('defaultExcludes', v => !v)}
-                aria-expanded={!!disclosure.defaultExcludes}
-                aria-controls={defaultExcludesPanelId}
-                className="flex items-center gap-2 w-full text-left text-sm text-gray-400 hover:text-white transition-colors min-h-[44px]"
-              >
-                {disclosure.defaultExcludes ? <ChevronDown size={14} className="shrink-0" /> : <ChevronRight size={14} className="shrink-0" />}
-                <ShieldOff size={14} className="text-gray-500 shrink-0" />
-                <span>Default exclusions — {enabledDefaultCount} enabled, {disabledDefaultCount} disabled</span>
-              </button>
-              {disclosure.defaultExcludes && (
-                <div id={defaultExcludesPanelId} className="space-y-2">
-                  <p className="text-xs text-gray-500">Built-in exclusion rules keep snapshots small. Switch on to disable an overridable default rule; fixed rules remain enabled.</p>
-                  <ul className="space-y-1.5 mt-1">
-                    {defaultExcludeRows.map((d, i) => (
-                      <li key={i} className="flex items-start gap-2 text-xs">
-                        {d.overridable ? (
-                          <ToggleSwitch
-                            enabled={!d.defaultActive}
-                            onChange={() => toggleDefaultExclude(d.path)}
-                            size="sm"
-                            ariaLabel={`Disable default exclusion ${d.path}`}
-                            className="mt-0.5"
-                          />
-                        ) : (
-                          <span className="inline-flex items-center justify-center w-12 h-7 shrink-0 text-gray-600" title="Fixed default exclusion — always enabled">
-                            <ShieldOff size={14} />
-                          </span>
-                        )}
-                        <code className="px-1.5 py-0.5 bg-port-bg border rounded shrink-0 text-gray-300 border-port-border">{d.path}</code>
-                        <span className="text-gray-500">
-                          <span className="text-gray-400">{d.overridable ? 'Optional' : 'Always excluded'} · </span>{d.reason}
-                          {!d.defaultActive && <span className="text-gray-400 ml-1">(Default exclusion disabled)</span>}
-                        </span>
-                      </li>
-                    ))}
-                  </ul>
-                </div>
-              )}
-            </div>
-          )}
-
-          <div className="space-y-2">
-            <label htmlFor={additionalExcludeId} className="block text-sm text-gray-400">Additional Exclude Paths</label>
-            <p className="text-xs text-gray-500">Custom directories/patterns to skip during backup (relative to data/). Patterns are anchored to the data root, so <code>repos/</code> is stored as <code>/repos/</code> and skips only <code>data/repos/</code>. Start a pattern with <code>**/</code> to match at any depth instead. Additional rules still apply when a default exclusion is disabled. Disabling a default does not guarantee matching files will be backed up.</p>
-            <div className="flex flex-wrap gap-2">
-              <input
-                id={additionalExcludeId}
-                type="text"
-                value={newExclude}
-                onChange={e => setNewExclude(e.target.value)}
-                onKeyDown={e => e.key === 'Enter' && addExclude()}
-                className="flex-1 min-w-[12rem] bg-port-bg border border-port-border rounded-lg px-3 py-2 text-sm text-white focus:outline-none focus:border-port-accent"
-                placeholder="/repos/"
-              />
-              <button
-                onClick={addExclude}
-                disabled={!anchorUserExclude(newExclude)}
-                aria-label="Add exclude path"
-                className="pointer-coarse:min-h-11 pointer-coarse:min-w-11 inline-flex items-center justify-center min-w-[40px] min-h-[40px] px-3 py-2 bg-port-border hover:bg-port-border/70 text-white rounded-lg transition-colors disabled:opacity-50 shrink-0"
-              >
-                <Plus size={16} />
-              </button>
-            </div>
-            {excludePaths.length > 0 && (
-              <div className="flex flex-wrap gap-2 mt-2">
-                {excludePaths.map((path, i) => (
-                  <span key={i} className="inline-flex items-center gap-1.5 px-2.5 py-1 bg-port-bg border border-port-border rounded-lg text-sm text-gray-300">
-                    <code className="text-xs break-all">{path}</code>
-                    <button onClick={() => removeExclude(i)} aria-label="Dismiss" className="pointer-coarse:min-h-11 pointer-coarse:min-w-11 text-gray-500 hover:text-port-error transition-colors">
-                      <X size={14} />
-                    </button>
-                  </span>
-                ))}
-              </div>
-            )}
-
-            {effectiveExcludes.length > 0 && (
-              <div className="space-y-2 pt-1">
-                <button
-                  type="button"
-                  onClick={() => toggleDisclosure('effectiveExcludes', v => !v)}
-                  aria-expanded={!!disclosure.effectiveExcludes}
-                  aria-controls={effectiveExcludesPanelId}
-                  className="flex items-center gap-2 w-full text-left text-sm text-gray-400 hover:text-white transition-colors min-h-[44px]"
-                >
-                  {disclosure.effectiveExcludes ? <ChevronDown size={14} className="shrink-0" /> : <ChevronRight size={14} className="shrink-0" />}
-                  <span>Effective exclude list — {effectiveExcludes.length} rsync {effectiveExcludes.length === 1 ? 'pattern' : 'patterns'}</span>
-                </button>
-                {disclosure.effectiveExcludes && (
-                  <div id={effectiveExcludesPanelId} className="space-y-2">
-                    <p className="text-xs text-gray-500">The exact <code>--exclude</code> filters the next snapshot will use: enabled default rules plus your anchored patterns. Saved changes above are reflected here.</p>
-                    <ul className="flex flex-wrap gap-1.5">
-                      {effectiveExcludes.map((pattern) => (
-                        <li key={pattern}>
-                          <code className="inline-block px-1.5 py-0.5 bg-port-bg border border-port-border rounded text-xs text-gray-300 break-all">{pattern}</code>
-                        </li>
-                      ))}
-                    </ul>
-                  </div>
-                )}
-              </div>
-            )}
-              </div>
-            </>
-          )}
-        </CollapsibleSection>
-      </div>
-
-      <div className="border-t border-port-border pt-5">
-        <CollapsibleSection
-          label="Snapshot history"
-          icon={Archive}
-          summary={snapshotSummary}
-          id={snapshotsPanelId}
-          open={!!disclosure.snapshots}
-          onOpenChange={(next) => {
-            historyOpenRef.current = next;
-            if (!next) snapshotGenerationRef.current += 1;
-            toggleDisclosure('snapshots', next);
-          }}
-          size="bar"
-          className="space-y-3"
-          bodyClassName="space-y-2 pt-2"
-        >
-          {saving || snapshotState === 'idle' || snapshotState === 'loading' ? (
-            <BrailleSpinner text="Loading snapshot history" />
-          ) : snapshotState === 'error' ? (
-            <div className="text-sm text-port-warning">
-              Snapshot history is unavailable.{' '}
-              <button type="button" onClick={refreshSnapshots} className="px-3 py-2 border border-port-border rounded-lg hover:bg-port-border">Retry</button>
-            </div>
-          ) : snapshots.length === 0 ? (
-            <p className="text-sm text-gray-500">No snapshots have been recorded on this machine yet.</p>
-          ) : (
-            <>
-              <ul className="space-y-1.5">
-                {(disclosure.allSnapshots ? snapshots : snapshots.slice(0, 10)).map((snap) => {
-                  const identity = snapshotIdentity(snap);
-                  return (
-                    <li key={identity}>
-                      <CollapsibleListItem
-                        removing={deletingIds.has(identity)}
-                        spacing="0.375rem"
-                        onExited={() => {
-                          setSnapshots(previous => previous.filter(s => snapshotIdentity(s) !== identity));
-                          setDeletingIds(previous => {
-                            const next = new Set(previous);
-                            next.delete(identity);
-                            return next;
-                          });
-                        }}
-                      >
-                        <div className="flex items-center justify-between gap-2 text-xs bg-port-bg border border-port-border rounded-lg px-2.5 py-1.5">
-                          <span className="min-w-0">
-                            <span className="block text-gray-300 truncate">{snap.id}</span>
-                            <span className="block text-gray-500 truncate">Source: {snapshotSourceLabel(snap)}</span>
-                            {snap.interrupted ? (
-                              <span className="block text-port-warning">Interrupted</span>
-                            ) : snap.failed && (
-                              <span className="block text-port-error">Backup failed — download only</span>
-                            )}
-                            {snap.incomplete && (
-                              <span className="block text-gray-500">Still being written…</span>
-                            )}
-                          </span>
-                          <span className="flex shrink-0 items-center gap-1.5">
-                            <button
-                              onClick={() => handleRestoreDb(snap)}
-                              disabled={snap.failed || snap.incomplete || snap.interrupted}
-                              title={snap.interrupted
-                                ? 'An interrupted backup snapshot cannot be restored'
-                                : snap.failed ? 'Failed backup snapshots can only be downloaded for salvage' : undefined}
-                              className="px-2 py-2 min-h-[40px] bg-port-border hover:bg-port-border/70 text-white rounded transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
-                            >
-                              Restore DB
-                            </button>
-                            <button
-                              onClick={() => handleDeleteSnapshot(snap)}
-                              disabled={snap.incomplete}
-                              title="Permanently delete this snapshot"
-                              aria-label={`Delete snapshot ${snap.id}`}
-                              className="pointer-coarse:min-h-11 pointer-coarse:min-w-11 p-2 min-h-[40px] min-w-[40px] bg-port-border hover:bg-port-error/80 text-white rounded transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
-                            >
-                              <Trash2 size={14} />
-                            </button>
-                          </span>
-                        </div>
-                      </CollapsibleListItem>
-                    </li>
-                  );
-                })}
-              </ul>
-              {snapshots.length > 10 && (
-                <button
-                  type="button"
-                  onClick={() => toggleDisclosure('allSnapshots', v => !v)}
-                  aria-expanded={!!disclosure.allSnapshots}
-                  className="text-xs text-port-accent hover:text-port-accent/80 transition-colors min-h-[32px]"
-                >
-                  {disclosure.allSnapshots ? 'Show newest 10 snapshots' : `Show all ${snapshots.length} snapshots`}
-                </button>
-              )}
-            </>
-          )}
-        </CollapsibleSection>
-      </div>
-
-      <Modal
-        open={!!restoreTarget}
-        onClose={() => { setRestoreTarget(null); setRestorePreview(null); }}
-        size="sm"
-        usePortal
-        ariaLabel="Restore database"
-      >
-        <div className="bg-port-card border border-port-border rounded-xl p-5 space-y-4">
-          <h3 className="text-white text-sm font-medium">Restore database?</h3>
-          <p className="text-sm text-gray-400">
-            This replays <code>portos-db.sql</code> from snapshot <code className="text-gray-300">{restoreTarget?.request.snapshotId}</code>
-            {' '}on <span className="text-gray-300">{restoreTarget?.sourceLabel}</span>
-            {restorePreview && <> ({formatBytes(restorePreview.sizeBytes || 0)} · {pluralize(restorePreview.tableCount, 'table')})</>}
-            {' '}as a full replacement of the live PostgreSQL database. All current application tables and rows are replaced, including tables added after this snapshot. Newer tables are recreated empty and current migrations run afterward.
-          </p>
-          <div className="flex justify-end gap-2">
-            <button onClick={() => { setRestoreTarget(null); setRestorePreview(null); }} className="px-3 py-2 text-sm text-gray-400 hover:text-white transition-colors">Cancel</button>
-            <button onClick={confirmRestoreDb} className="px-3 py-2 text-sm bg-port-warning hover:bg-port-warning/80 text-black font-medium rounded-lg transition-colors">Restore</button>
-          </div>
-        </div>
-      </Modal>
-
-      <Modal
-        open={!!deleteTarget}
-        onClose={() => setDeleteTarget(null)}
-        size="sm"
-        usePortal
-        ariaLabel="Delete snapshot"
-      >
-        <div className="bg-port-card border border-port-border rounded-xl p-5 space-y-4">
-          <h3 className="text-white text-sm font-medium">Delete snapshot?</h3>
-          <p className="text-sm text-gray-400">
-            This permanently deletes snapshot <code className="text-gray-300">{deleteTarget?.snapshotId}</code>
-            {' '}on <span className="text-gray-300">{deleteTarget?.sourceLabel}</span>, including its files and database dump. This cannot be undone.
-          </p>
-          <div className="flex justify-end gap-2">
-            <button onClick={() => setDeleteTarget(null)} className="px-3 py-2 text-sm text-gray-400 hover:text-white transition-colors">Cancel</button>
-            <button onClick={confirmDeleteSnapshot} className="px-3 py-2 text-sm bg-port-error hover:bg-port-error/80 text-white font-medium rounded-lg transition-colors">Delete</button>
-          </div>
-        </div>
-      </Modal>
+      <BackupSnapshotsSection
+        snapshots={snapshots}
+        snapshotState={snapshotState}
+        saving={saving}
+        open={historyOpen}
+        onOpenChange={handleHistoryOpenChange}
+        refreshSnapshots={refreshSnapshots}
+        restoreAction={restoreAction}
+        handleRestoreDb={handleRestoreDb}
+        closeRestore={closeRestore}
+        confirmRestoreDb={confirmRestoreDb}
+        deleteTarget={deleteTarget}
+        handleDeleteSnapshot={handleDeleteSnapshot}
+        closeDelete={() => setDeleteTarget(null)}
+        confirmDeleteSnapshot={confirmDeleteSnapshot}
+        deletingIds={deletingIds}
+        finishDeleteAnimation={finishDeleteAnimation}
+      />
 
     </section>
   );

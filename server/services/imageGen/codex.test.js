@@ -979,8 +979,8 @@ describe('codex provider — noImageReason (no-image diagnostics)', () => {
   });
 
   it('falls back to session/settings guidance when codex said nothing usable', () => {
-    expect(codex.noImageReason('')).toMatch(/Check the Codex session and Settings/i);
-    expect(codex.noImageReason('codex\nuser\n----\ntokens used\n42')).toMatch(/Check the Codex session and Settings/i);
+    expect(codex.noImageReason('')).toMatch(/Check the Codex session and Media Gen Settings → Codex CLI/i);
+    expect(codex.noImageReason('codex\nuser\n----\ntokens used\n42')).toMatch(/Check the Codex session and Media Gen Settings → Codex CLI/i);
   });
 
   it('strips ANSI escape codes from the surfaced narration', () => {
@@ -1013,8 +1013,9 @@ it('settles admission rejection from the actual close event and clears the activ
 // #10749 — a launch that throws must settle through the job's own finalizer,
 // not leave a phantom 'running' job, a never-terminating SSE stream and a
 // cancel that cannot find a process.
+const sseClient = () => ({ writeHead: vi.fn(), write: vi.fn(), end: vi.fn(), req: new EventEmitter() });
+
 describe('codex provider — launch refusal settlement', () => {
-  const sseClient = () => ({ writeHead: vi.fn(), write: vi.fn(), end: vi.fn(), req: new EventEmitter() });
 
   it.each([
     // Node validates argv synchronously and throws before any child exists.
@@ -1135,6 +1136,7 @@ describe('codex provider — Windows shim lifecycle', () => {
     firstChild.pid = 4242;
     secondChild.pid = 4243;
 
+    const failed = new Promise(resolve => imageGenEvents.once('failed', resolve));
     expect(codex.cancel(first.jobId)).toBe(true);
     if (platform === 'win32') {
       expect(spawnCalls.at(-1)).toMatchObject({ bin: 'taskkill', args: ['/T', '/F', '/PID', '4242'] });
@@ -1145,6 +1147,11 @@ describe('codex provider — Windows shim lifecycle', () => {
     expect(secondChild.killed).toBe(false);
     firstChild.exitCode = 1;
     firstChild.emit('close', 1);
+    expect(await failed).toMatchObject({ generationId: first.jobId, error: 'Canceled' });
+    const client = sseClient();
+    expect(codex.attachSseClient(first.jobId, client)).toBe(true);
+    expect(client.write).toHaveBeenCalledWith(`data: ${JSON.stringify({ type: 'canceled', reason: 'Canceled' })}\n\n`);
+    client.req.emit('close');
     await flush();
     expect(codex.getActiveJob()).toMatchObject({ generationId: second.jobId });
     expect(codex.cancelAll()).toBe(true);
@@ -1261,7 +1268,7 @@ describe('Codex cached defaults and isolated workspace', () => {
     expect(codex.getActiveJob()).toBeNull();
   });
 
-  it('keeps scratch files until physical exit and never harvests shell drawings', async () => {
+  it.each([false, true])('keeps scratch until exit and never harvests shell drawings (canceled: %s)', async canceled => {
     const sessionId = '019e2513-c506-7de1-815e-c1f589229242';
     const sessions = join(TEST_HOME, '.codex', 'sessions');
     await mkdir(sessions, { recursive: true });
@@ -1285,7 +1292,7 @@ describe('Codex cached defaults and isolated workspace', () => {
     expect(call.args.at(-1)).toContain('Call image_gen exactly once');
     await writeFile(join(call.options.cwd, 'drawing.svg'), '<svg/>');
     await writeFile(join(call.options.cwd, 'drawing.png'), 'not a generated image');
-    codex.cancel(job.jobId);
+    if (canceled) expect(codex.cancel(job.jobId)).toBe(true);
     expect(existsSync(call.options.cwd)).toBe(true);
     call.child.stderr.emit('data', Buffer.from(`session id: ${sessionId}\n`));
     call.child.exitCode = 0;
@@ -1293,6 +1300,10 @@ describe('Codex cached defaults and isolated workspace', () => {
     await vi.waitFor(() => expect(existsSync(call.options.cwd)).toBe(false));
     expect(existsSync(join(FAKE_IMAGES_DIR, job.filename))).toBe(false);
     expect(failed).toHaveBeenCalledTimes(1);
+    if (canceled) {
+      expect(failed).toHaveBeenCalledWith(expect.objectContaining({ error: 'Canceled' }));
+      return;
+    }
     expect(JSON.stringify(failed.mock.calls)).toContain('No image_gen call was observed');
     expect(JSON.stringify(failed.mock.calls)).toContain('shell activity was recorded');
     expect(JSON.stringify(failed.mock.calls)).toContain('does not establish whether the tool is available');

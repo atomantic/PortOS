@@ -79,9 +79,7 @@ describe.skipIf(!canRun)('rich document authoring in a real browser (Chrome, ffm
 
     const ui = join(PATHS.data, 'review-ui'); await mkdir(ui, { recursive: true });
     const entry = `import React,{useEffect,useState} from 'react';import{createRoot}from'react-dom/client';import Panel from './src/components/musicVideo/ProductionReviewPanel.jsx';import DocumentPanel from './src/components/musicVideo/DocumentCompositionPanel.jsx';import useReview from './src/components/musicVideo/useMusicVideoProductionReview.js';const STEPS=[['art','Look step'],['storyboard','Storyboard step'],['proof','Make step']];function App(){const[p,setP]=useState(null);const[stage,setStage]=useState('art');const planning=useState(null);useEffect(()=>{fetch('/api/music-video/${p.id}/production-review').then(r=>r.json()).then(r=>setP(r.project))},[]);const review=useReview({project:p,replaceProject:setP});return p?<main style={{maxWidth:1100,margin:'auto',padding:24}}><h1>Music video production review</h1><DocumentPanel project={p} onProject={setP} onSave={async patch=>{const r=await fetch('/api/music-video/${p.id}',{method:'PUT',headers:{'Content-Type':'application/json'},body:JSON.stringify(patch)});setP(await r.json())}}/><nav>{STEPS.map(([id,name])=><button key={id} type="button" aria-pressed={stage===id} onClick={()=>setStage(id)}>{name}</button>)}</nav><Panel key={stage} project={p} review={review} stage={stage} planning={planning} onOpenArtifact={id=>window.open('/api/music-video/${p.id}/dev-artifacts/'+id+'/file')}/></main>:null}createRoot(document.getElementById('root')).render(<App/>);`;
-    const { build } = await import(clientBundler[0]);
-    const { default: react } = await import(clientBundler[1]);
-    const { default: tailwind } = await import(clientBundler[2]);
+    const { build, react, tailwind } = await import('../../client/src/test/clientBundler.js');
     const { symlink } = await import('node:fs/promises');
     await symlink(join(client, 'node_modules'), join(ui, 'node_modules'), 'dir');
     await writeFile(join(ui, 'entry.jsx'), `import ${JSON.stringify(join(client, 'src/index.css'))};\n` + entry.replaceAll("'./src/", `'${client}/src/`));
@@ -90,9 +88,9 @@ describe.skipIf(!canRun)('rich document authoring in a real browser (Chrome, ffm
       build,
       recordedRoot: client,
       temp: ui,
-      config: { configFile: false, root: ui, plugins: [react()], css: { postcss: { plugins: [tailwind({ base: client })] } }, build: { outDir: join(ui, 'dist'), emptyOutDir: true }, logLevel: 'warn' },
+      config: { configFile: false, root: ui, publicDir: join(client, 'public'), plugins: [react()], css: { postcss: { plugins: [tailwind({ base: client })] } }, build: { outDir: join(ui, 'dist'), emptyOutDir: true }, logLevel: 'warn' },
     });
-    const app = express(); const staticFiles = createRecordedStaticServer(express); app.use(express.json()); app.get('/api/providers', (req,res)=>res.json({activeProvider:'stub-provider',providers:[{id:'stub-provider',name:'Synthetic author',type:'api',enabled:true,models:['fixture-model'],defaultModel:'fixture-model',toolFreeOneShot:true}]})); app.use('/api/music-video', router); app.use('/data/videos', staticFiles.serve(PATHS.videos)); app.use('/fonts', staticFiles.serve(join(client, 'public/fonts'))); app.use(staticFiles.serve(join(ui, 'dist'))); app.use(errorMiddleware);
+    const app = express(); const staticFiles = createRecordedStaticServer(express); app.use(express.json()); app.get('/api/providers', (req,res)=>res.json({activeProvider:'stub-provider',providers:[{id:'stub-provider',name:'Synthetic author',type:'api',enabled:true,models:['fixture-model'],defaultModel:'fixture-model',toolFreeOneShot:true}]})); app.use('/api/music-video', router); app.use('/data/videos', staticFiles.serve(PATHS.videos)); app.use(staticFiles.serve(join(ui, 'dist'))); app.use(errorMiddleware);
     server = await staticFiles.start(app);
     proc = spawn(chrome, _testChromeCaptureArgs(join(PATHS.data, 'test-chrome')), { stdio: ['ignore', 'ignore', 'pipe'], detached: process.platform !== 'win32' });
     endpoint = new URL(await _waitForTestChrome(proc)).origin.replace('ws:', 'http:');
@@ -132,6 +130,8 @@ describe.skipIf(!canRun)('rich document authoring in a real browser (Chrome, ffm
       }
     };
     await page.goto(`http://127.0.0.1:${server.address().port}`);
+    await page.evaluate(() => document.fonts.ready);
+    expect(await page.evaluate(async () => Promise.all(['Inter-Regular.woff2', 'Inter-Medium.woff2', 'Inter-SemiBold.woff2', 'Inter-Bold.woff2', 'IBMPlexMono-Regular.woff2', 'IBMPlexMono-Medium.woff2', 'IBMPlexMono-SemiBold.woff2', 'GeistPixel-Square.woff2', 'GeistPixel-Grid.woff2'].map(async file => (await fetch(`/fonts/${file}`)).ok)))).toEqual(Array(9).fill(true));
     expect(await page.getByLabel('Design and composition media').count()).toBe(0); // media mode is chosen in Setup only
     await page.getByText('Document source', { exact: true }).click();
     await page.getByLabel('Authoring renderer').selectOption('three');

@@ -1,9 +1,10 @@
 /** Public workflows pin revision/audio binding, restart/cancel and provider consent. */
 import { afterAll, describe, expect, it, vi } from 'vitest';
 import express from 'express';
-import { mkdir, readFile, writeFile } from 'fs/promises';
+import { mkdir, readFile, rm, writeFile } from 'fs/promises';
 import { join } from 'path';
 import { randomUUID } from 'crypto';
+import { EventEmitter } from 'node:events';
 import { lazyTempDataRoot, makePathsProxy, cleanupTempDataRoots } from '../../lib/mockPathsDataRoot.js';
 vi.mock('../../lib/paths.js', async original => makePathsProxy(await original(), { dataRoot: () => lazyTempDataRoot('animation-sound-') }));
 vi.mock('../../lib/fileUtils.js', async original => makePathsProxy(await original(), { dataRoot: () => lazyTempDataRoot('animation-sound-') }));
@@ -17,17 +18,27 @@ vi.mock('./stageRender.js', () => ({
   }),
   renderViaMediaQueue: vi.fn(async ({ signal }) => { signal.throwIfAborted(); throw new Error('Synthetic render failure'); }),
 }));
+vi.mock('../../lib/childProcess.js', async original => {
+  const actual = await original();
+  return { ...actual, spawn: vi.fn(actual.spawn) };
+});
+vi.mock('../../lib/ffmpeg.js', async original => {
+  const actual = await original();
+  return { ...actual, findFfmpeg: vi.fn(actual.findFfmpeg), hasAudioStream: vi.fn(actual.hasAudioStream) };
+});
 import { checkHealth, ensureSchema, query, close } from '../../lib/db.js';
 import { requireDbOrSkip } from '../../lib/dbTestGate.js';
 import { errorMiddleware } from '../../lib/errorHandler.js';
 import { request } from '../../lib/testHelper.js';
 import { PATHS } from '../../lib/paths.js';
+import { spawn } from '../../lib/childProcess.js';
+import { findFfmpeg, hasAudioStream } from '../../lib/ffmpeg.js';
 import { createCodeAnimationPackage } from '../../lib/codeAnimationPackage.js';
 import { pcmToWavBuffer } from '../../lib/chiptuneRender.js';
 import { soundTimeline, synthesizeSoundtrack } from '../../lib/codeAnimationSound.js';
 import { evaluateVerdict } from './evidence.js';
 import { sampleFilm, renderViaMediaQueue } from './stageRender.js';
-import { activeStageRunIds } from './stages.js';
+import { activeStageRunIds, startProductionStageRun } from './stages.js';
 import { muxSoundtrack } from './sound.js';
 import { emitCodeAnimationChanged } from './events.js';
 import routes from '../../routes/codeAnimation.js';
@@ -77,13 +88,16 @@ async function terminal(id, start) {
 
 describe.skipIf(!ready)('Revision-bound sound public workflows', () => {
   it('keeps v1 packages compatible and validates versioned sound timelines at the public import boundary', async () => {
-    expect((await post('/packages/validate', packageOf({ kind: 'silence' }))).body.schemaVersion).toBe(1);
+    const legacy = await create({ kind: 'silence' });
+    expect(packageOf({ kind: 'silence' }).schemaVersion).toBe(1);
     const versioned = packageOf();
-    expect((await post('/packages/validate', versioned)).body.schemaVersion).toBe(2);
-    expect((await post('/packages/validate', { ...versioned, schemaVersion: 1 })).status).toBe(400);
+    expect(versioned.schemaVersion).toBe(2);
+    await create();
+    const importPath = `/projects/${legacy.project.id}/import`;
+    expect((await post(importPath, { ...versioned, schemaVersion: 1 })).status).toBe(400);
     const outside = structuredClone(versioned);
     outside.manifest.audio.events[0].atSeconds = 2;
-    expect((await post('/packages/validate', outside)).status).toBe(400);
+    expect((await post(importPath, outside)).status).toBe(400);
   });
 
   it('persists deterministic audio despite render failure, and rejects stale event/revision evidence with identical source bytes', async () => {
@@ -170,4 +184,44 @@ describe.skipIf(!ready)('Revision-bound sound public workflows', () => {
     expect(sampleFilm).not.toHaveBeenCalled(); expect(renderViaMediaQueue).not.toHaveBeenCalled();
     expect(await readFile(join(PATHS.data, canceled.data.soundtrack.artifact.relativePath))).toEqual(persisted);
   }, 30000);
+
+  it('bounds the final mux to the soundtrack sample grid and drains the owned encoder on cancellation', async () => {
+    const { project, revision } = await create();
+    const filename = 'cancel-mux.mp4';
+    const candidate = join(PATHS.videos, filename);
+    await mkdir(PATHS.videos, { recursive: true });
+    await writeFile(candidate, 'synthetic video');
+    const cleanup = vi.fn(() => rm(candidate));
+    const child = Object.assign(new EventEmitter(), { pid: 123, stderr: new EventEmitter(), kill: vi.fn(() => true) });
+    const spawned = Promise.withResolvers();
+    vi.mocked(findFfmpeg).mockResolvedValueOnce('ffmpeg');
+    vi.mocked(hasAudioStream).mockResolvedValueOnce(false);
+    vi.mocked(spawn).mockImplementationOnce((_bin, args) => {
+      spawned.resolve(args);
+      return child;
+    });
+    const { run, done } = await startProductionStageRun(project.id, {}, { render: async () => ({ filename, cleanup }) });
+    let scratch;
+    try {
+      const args = await Promise.race([spawned.promise, done.then(status => { throw new Error(`Run settled before mux: ${status}`); })]);
+      scratch = args.at(-1);
+      const { samples } = soundTimeline(revision.manifest);
+      expect(args[args.indexOf('-filter_complex') + 1]).toContain(`apad=whole_len=${samples},atrim=end_sample=${samples}`);
+      expect(args).not.toContain('-shortest');
+      await writeFile(scratch, 'partial mux');
+      expect((await post(`/projects/${project.id}/stage-runs/${run.id}/cancel`, {})).status).toBe(200);
+      expect(child.kill).toHaveBeenCalledWith('SIGTERM');
+      expect(cleanup).not.toHaveBeenCalled();
+      await expect(readFile(scratch, 'utf8')).resolves.toBe('partial mux');
+    } finally {
+      child.emit('close', null, 'SIGTERM');
+      await done;
+    }
+    expect(await done).toBe('canceled');
+    expect(cleanup).toHaveBeenCalledTimes(1);
+    await expect(readFile(scratch)).rejects.toMatchObject({ code: 'ENOENT' });
+    expect(activeStageRunIds()).not.toContain(run.id);
+    const saved = (await get(`/projects/${project.id}/history`)).body.items.find(item => item.id === run.id);
+    expect(saved).toMatchObject({ status: 'canceled', data: { output: null } });
+  });
 });

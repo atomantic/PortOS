@@ -18,6 +18,7 @@ describe('local runtime marker registry', () => {
       ['vllm', 'vllmBacked'],
       ['sglang', 'sglangBacked'],
       ['splash', 'splashBacked'],
+      ['mkserve', 'mkserveBacked'],
     ]);
     expect(LOCAL_RUNTIME_MARKER_KEYS).toEqual(Object.values(LOCAL_RUNTIME_MARKERS));
   });

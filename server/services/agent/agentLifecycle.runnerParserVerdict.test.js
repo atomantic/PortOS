@@ -56,6 +56,7 @@ import { handleAgentCompletion, normalizeRunnerCompletionExtras } from './agentL
 import { runnerAgents, completingAgents, pausedAgents } from './agentState.js';
 import { getAgentRecord, getAgent } from '../cos/cosAgentLifecycle.js';
 import { getTaskById } from '../cos/cosTaskStore.js';
+import { replayAgentCompletionCleanup, runAgentCompletionCleanup } from './agentCompletionCleanup.js';
 import { finalizeAgent, retireDeadAgent } from './agentFinalization.js';
 import { handleOrphanedTask } from './agentManagement.js';
 
@@ -106,6 +107,45 @@ describe('handleAgentCompletion — runner output-parser verdict', () => {
     const input = await complete(1, false, undefined);
     expect(input).toMatchObject({ success: false, finalSummary: null });
     expect(input.errorAnalysis).toBeTruthy();
+  });
+});
+
+describe('handleAgentCompletion — runner cleanup verdict', () => {
+  it.each([
+    ['downgraded success', { success: false }, false, false, false],
+    ['verified PR claim', { success: true, prClaimVerified: true }, true, true, false],
+    ['proven empty branch', { success: true, branchProvenEmpty: true }, true, false, true],
+    ['explicitly false flags', { success: true, prClaimVerified: false, branchProvenEmpty: false }, true, false, false],
+  ])('passes the finalize verdict to cleanup for %s', async (_case, verdict, effectiveSuccess, prClaimVerified, branchProvenEmpty) => {
+    finalizeAgent.mockResolvedValueOnce(verdict);
+
+    expect(await complete(0, true)).toMatchObject({ success: true });
+
+    expect(runAgentCompletionCleanup).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({
+      agentId: AGENT_ID, effectiveSuccess, prClaimVerified, branchProvenEmpty,
+    }));
+  });
+
+  it('runs cleanup without verification flags before propagating a finalize error', async () => {
+    const error = new Error('finalize failed');
+    finalizeAgent.mockRejectedValueOnce(error);
+
+    await expect(handleAgentCompletion(AGENT_ID, 0, true, 1000)).rejects.toBe(error);
+
+    expect(runAgentCompletionCleanup).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({
+      agentId: AGENT_ID, effectiveSuccess: true, prClaimVerified: false, branchProvenEmpty: false,
+    }));
+  });
+
+  it('replays persisted cleanup without issuing a new verdict for a completed agent still in the runner map', async () => {
+    const record = { agentId: AGENT_ID, status: 'completed', metadata: {} };
+    getAgentRecord.mockResolvedValueOnce(record);
+
+    await handleAgentCompletion(AGENT_ID, 143, false, 1000);
+
+    expect(finalizeAgent).not.toHaveBeenCalled();
+    expect(runAgentCompletionCleanup).not.toHaveBeenCalled();
+    expect(replayAgentCompletionCleanup).toHaveBeenCalledExactlyOnceWith(record);
   });
 });
 

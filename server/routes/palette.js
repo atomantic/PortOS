@@ -11,10 +11,10 @@
  */
 
 import { Router } from 'express';
-import { z } from 'zod';
 import { asyncHandler, ServerError } from '../lib/errorHandler.js';
 import { validateRequest } from '../lib/validateRequest.js';
 import { NAV_COMMANDS_WITH_SEARCH } from '../lib/navSearchMetadata.js';
+import { actionBodySchema, manifestQuerySchema } from '../lib/paletteValidation.js';
 import { dispatchTool, getToolMetadata } from '../services/voice/tools.js';
 
 const router = Router();
@@ -73,10 +73,6 @@ const MANIFEST = Object.freeze({
   }),
 });
 
-const manifestQuerySchema = z.object({
-  actionsOnly: z.enum(['0', '1', 'true', 'false']).optional(),
-});
-
 router.get('/manifest', asyncHandler(async (req, res) => {
   const { actionsOnly } = validateRequest(manifestQuerySchema, req.query ?? {});
   res.set('Cache-Control', 'private, max-age=300');
@@ -87,10 +83,6 @@ router.get('/manifest', asyncHandler(async (req, res) => {
   res.json(MANIFEST);
 }));
 
-const actionBodySchema = z.object({
-  args: z.record(z.any()).optional().default({}),
-});
-
 router.post('/action/:id', asyncHandler(async (req, res) => {
   const id = String(req.params.id || '');
   if (!PALETTE_ACTION_IDS.has(id)) {
@@ -98,7 +90,13 @@ router.post('/action/:id', asyncHandler(async (req, res) => {
   }
   const { args } = validateRequest(actionBodySchema, req.body ?? {});
   const result = await dispatchTool(id, args, { sideEffects: [], hasHostControl: () => true });
-  res.json({ ok: result?.ok !== false, result });
+  if (result?.ok === false) {
+    throw new ServerError(result.summary || result.error || 'Action failed', {
+      status: result.status || (result.error && !result.summary ? 502 : 400),
+      context: { result },
+    });
+  }
+  res.json({ ok: true, result });
 }));
 
 export default router;

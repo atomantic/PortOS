@@ -17,9 +17,6 @@ import {
   memoryUpdateSchema,
   memorySearchSchema,
   memoryListSchema,
-  memoryTimelineSchema,
-  memoryConsolidateSchema,
-  memoryLinkSchema,
   memorySyncSchema,
   memoryIdParamSchema,
   memoryVersionQuerySchema,
@@ -43,26 +40,6 @@ router.get('/', asyncHandler(async (req, res) => {
 router.get('/stats', asyncHandler(async (req, res) => {
   const stats = await memory.getStats();
   res.json(stats);
-}));
-
-// GET /api/memory/categories - Get all categories
-router.get('/categories', asyncHandler(async (req, res) => {
-  const categories = await memory.getCategories();
-  res.json(categories);
-}));
-
-// GET /api/memory/tags - Get all tags
-router.get('/tags', asyncHandler(async (req, res) => {
-  const tags = await memory.getTags();
-  res.json(tags);
-}));
-
-// GET /api/memory/timeline - Get timeline view
-router.get('/timeline', asyncHandler(async (req, res) => {
-  const options = validateRequest(memoryTimelineSchema, req.query);
-
-  const timeline = await memory.getTimeline(options);
-  res.json(timeline);
 }));
 
 // GET /api/memory/graph - Get graph visualization data
@@ -119,31 +96,19 @@ router.get('/embeddings/config', asyncHandler(async (req, res) => {
   res.json(await embeddings.resolveEmbeddingSource());
 }));
 
-// POST /api/memory/search - Semantic search
+// POST /api/memory/search - Semantic search with a lexical fallback
 router.post('/search', asyncHandler(async (req, res) => {
   const { query, types, categories, tags, appId, minRelevance, limit, offset } = validateRequest(memorySearchSchema, req.body);
-
-  // Generate query embedding
+  const options = { types, categories, tags, appId, limit, offset };
   const queryEmbedding = await embeddings.generateQueryEmbedding(query, { types, categories });
 
-  if (!queryEmbedding) {
-    const source = await embeddings.resolveEmbeddingSource();
-    throw new ServerError(source.disabled
-      ? `Embeddings are disabled — choose a provider on ${embeddings.embeddingsSettingsPage()} to enable semantic search`
-      : `Failed to generate query embedding — is the ${source.provider} embedding backend running?`, { status: 503 });
+  if (queryEmbedding) {
+    const result = await memory.searchMemories(queryEmbedding, { ...options, minRelevance });
+    return res.json({ ...result, searchMode: 'semantic' });
   }
 
-  const result = await memory.searchMemories(queryEmbedding, {
-    types,
-    categories,
-    tags,
-    appId,
-    minRelevance,
-    limit,
-    offset
-  });
-
-  res.json(result);
+  const result = await memory.hybridSearchMemories(query, null, { ...options, lexicalMatch: 'any' });
+  res.json({ ...result, searchMode: 'lexical' });
 }));
 
 // POST /api/memory - Create a new memory
@@ -155,26 +120,6 @@ router.post('/', asyncHandler(async (req, res) => {
 
   const created = await memory.createMemory(data, embedding);
   res.status(201).json(created);
-}));
-
-// POST /api/memory/consolidate - Consolidate similar memories
-router.post('/consolidate', asyncHandler(async (req, res) => {
-  const { similarityThreshold, dryRun, reason } = validateRequest(memoryConsolidateSchema, req.body);
-  const result = await memory.consolidateMemories(similarityThreshold, dryRun, { reason });
-  res.json(result);
-}));
-
-// POST /api/memory/link - Link two memories
-router.post('/link', asyncHandler(async (req, res) => {
-  const { sourceId, targetId, linkType, note, createdBy } = validateRequest(memoryLinkSchema, req.body);
-  const result = await memory.linkMemories(sourceId, targetId, { linkType, note, createdBy });
-  res.json(result);
-}));
-
-// DELETE /api/memory/expired - Clear expired memories
-router.delete('/expired', asyncHandler(async (req, res) => {
-  const result = await memory.clearExpired();
-  res.json(result);
 }));
 
 // GET /api/memory/:id - Get a single memory

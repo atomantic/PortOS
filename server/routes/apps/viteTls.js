@@ -15,7 +15,7 @@ import * as appsService from '../../services/apps.js';
 import { PORTOS_APP_ID } from '../../services/apps.js';
 import { addTask } from '../../services/cos/cosTaskStore.js';
 import { isRunning } from '../../services/cos/cos.js';
-import { z } from 'zod';
+import { upgradeTlsSchema, fixViteHostsSchema } from '../../lib/appValidation.js';
 import { validateRequest } from '../../lib/validateRequest.js';
 import { asyncHandler, ServerError } from '../../lib/errorHandler.js';
 import { checkViteHost, findViteConfig, rewriteAllowedHosts } from '../../lib/viteAllowedHosts.js';
@@ -29,10 +29,6 @@ const router = Router();
 // needs to be edited manually to call createTailscaleServers() — we return an example
 // snippet in the response so the frontend can surface it. Refuse to overwrite an existing
 // helper unless `force: true` is set; this way a user who has customized their copy keeps it.
-const upgradeTlsSchema = z.object({
-  tlsPort: z.number().int().min(1).max(65535),
-  force: z.boolean().optional()
-});
 router.post('/:id/upgrade-tls', loadApp, asyncHandler(async (req, res) => {
   const { tlsPort, force } = validateRequest(upgradeTlsSchema, req.body);
   const app = req.loadedApp;
@@ -107,10 +103,6 @@ router.get('/:id/vite-host-check', loadApp, asyncHandler(async (req, res) => {
 //   mode 'ai': spawn a CoS agent that edits the app's vite.config in its OWN
 //     repo (honoring the Scope Boundary) — handles arbitrary config shapes and
 //     can create a vite.config when none exists.
-const fixViteHostsSchema = z.object({
-  mode: z.enum(['allow-all', 'ai']).default('allow-all'),
-  host: z.string().trim().optional()
-});
 router.post('/:id/fix-vite-hosts', loadApp, asyncHandler(async (req, res) => {
   const { mode, host } = validateRequest(fixViteHostsSchema, req.body);
   const app = req.loadedApp;

@@ -9,6 +9,19 @@ import { join } from 'path';
 import { IMAGE_GEN_MODE } from '../imageGen/modes.js';
 
 describe('mediaJobQueue', () => {
+  it('durably admits a caller-generated ID and rejects a duplicate', async () => {
+    const jobId = '11111111-1111-4111-8111-111111111111';
+    mediaJobQueue.quiesceMediaJobQueue();
+    const request = { kind: 'image', params: { prompt: 'original request' } };
+
+    await expect(mediaJobQueue.enqueueJob(request, { jobId })).resolves.toMatchObject({ jobId, status: 'queued' });
+    await expect(mediaJobQueue.enqueueJob({ ...request, params: { prompt: 'duplicate request' } }, { jobId }))
+      .rejects.toThrow('job ID already exists');
+    expect(persistedJobs().filter(row => row.id === jobId)).toEqual([
+      expect.objectContaining({ status: 'queued', params: request.params }),
+    ]);
+  });
+
   it.each(['unchanged', 'replaced', 'removed'])('dispatches the admitted reviewed bytes after the source is %s', async (change) => {
     const source = join(tempDataDir, 'images', 'reviewed.png');
     mkdirSync(join(tempDataDir, 'images'), { recursive: true });

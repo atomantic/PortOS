@@ -270,7 +270,7 @@ describe('MusicVideo project status filter', () => {
     fireEvent.click(screen.getByRole('button', { name: 'All' }));
     expect(await screen.findByRole('heading', { name: 'Working' })).toBeInTheDocument();
     expect(screen.getByRole('heading', { name: 'Finished' })).toBeInTheDocument();
-    fireEvent.click(within(screen.getByTestId('mv-project-card-mv-2')).getByRole('button', { name: 'Open' }));
+    fireEvent.click(within(screen.getByTestId('mv-project-card-mv-2')).getByRole('button', { name: 'Open Finished' }));
     await waitFor(() => expect(screen.getByTestId('loc')).toHaveTextContent('/music-video/mv-2'));
     expect(updateMusicVideoProject).not.toHaveBeenCalled();
   });
@@ -882,7 +882,7 @@ describe('MusicVideo stage tabs (#9243)', () => {
     }]);
     renderAt('/music-video/mv-1/cast-sets');
     await screen.findByRole('heading', { level: 2, name: PROJECT_WITH_CLIP.name });
-    const review = screen.getByRole('region', { name: 'Production review' });
+    const review = await screen.findByRole('region', { name: 'Production review' });
     expect(within(review).getByRole('region', { name: 'Approve: Art direction' })).toBeInTheDocument();
     expect(within(review).queryByRole('region', { name: 'Approve: Lyric-timed storyboard' })).toBeNull();
     expect(screen.queryByText('Production approvals')).toBeNull();
@@ -902,7 +902,7 @@ describe('MusicVideo stage tabs (#9243)', () => {
         expect(within(panel).queryByRole('region', { name: 'Production review' })).toBeNull();
         continue;
       }
-      const stageReview = within(panel).getByRole('region', { name: 'Production review' });
+      const stageReview = await within(panel).findByRole('region', { name: 'Production review' });
       if (stage === 'cast-sets') {
         // Look is reviewed through its visual guide: the step's work comes first and the approval closes it.
         expect(panel.lastElementChild).toBe(stageReview);
@@ -993,7 +993,10 @@ describe('MusicVideo stage tabs (#9243)', () => {
     const settings = {
       // The render style and the image/video services are set once, here.
       Project: {
-        'Render style': () => document.getElementById('mv-toolbar-render-style'), 'Scene video renderer': (root) => root.queryByLabelText('Scene video renderer'),
+        'Render style': () => document.getElementById('mv-toolbar-render-style'),
+        'Draft clip backend': (root) => root.queryByLabelText('Draft clip backend'),
+        'Clip upscaler': (root) => root.queryByLabelText('Clip upscaler'),
+        'SeedVR2 target resolution': (root) => root.queryByLabelText('SeedVR2 target resolution'),
         Media: (root) => root.queryByLabelText('Design and composition media'),
       },
       Audio: { MIDI: (root) => root.queryByRole('button', { name: /^MIDI$/ }) },
@@ -1285,7 +1288,7 @@ describe('MusicVideo main page project cards', () => {
     renderMV();
 
     const card = await screen.findByTestId(`mv-project-card-${PROJECT_WITH_CLIP.id}`);
-    const openBtn = within(card).getByRole('button', { name: /^Open$/i });
+    const openBtn = within(card).getByRole('button', { name: `Open ${PROJECT_WITH_CLIP.name}` });
 
     await act(async () => {
       fireEvent.click(openBtn);
@@ -1316,7 +1319,7 @@ describe('MusicVideo main page project cards', () => {
     listMusicVideoProjects.mockResolvedValue([project]);
     render(<MemoryRouter initialEntries={['/music-video']}><LocationProbe />{MV_ROUTES}</MemoryRouter>);
     const card = await screen.findByTestId(`mv-project-card-${project.id}`);
-    await act(async () => fireEvent.click(within(card).getByRole('button', { name: 'Review video' })));
+    await act(async () => fireEvent.click(within(card).getByRole('button', { name: `Review video ${project.name}` })));
     expect(screen.getByTestId('loc')).toHaveTextContent(`/music-video/${project.id}/review`);
     expect(screen.getByRole('tab', { name: /^Final render/ })).toHaveAttribute('aria-selected', 'true');
   });

@@ -20,6 +20,8 @@ import { peerBaseUrl } from '../lib/peerUrl.js';
 import { withAbortTimeout } from '../lib/abortTimeout.js';
 import { getNavPageForPath } from '../lib/navManifest.js';
 import { localRuntimeForProvider } from '../lib/localProviderRuntime.js';
+import { createSingleFlight } from '../lib/singleFlight.js';
+import { parseOpencodeConfigContent } from '../lib/provider/providerModels.js';
 
 const ENABLED_KEY = 'PORTOS_FLEET_LLM_ENABLED';
 // The id the validated RTX 3090 compose recipe serves. Only a FALLBACK: status
@@ -29,6 +31,7 @@ const RECIPE_MODEL = 'qwen3.8-27b';
 const upstream = `http://127.0.0.1:${PORTS.VLLM_QWEN}`;
 let gateway = null;
 let setupRunning = false;
+const startFleetLlmHostFlight = createSingleFlight({ exclusive: true });
 
 export function recommendFleetLlmHost(specs) {
   const gpu = specs.cuda?.gpus?.find((item) => /RTX 3090\b/i.test(item.name || '') && item.vramGb >= 23);
@@ -74,7 +77,11 @@ export function describeFleetHostError(err) {
   return String(err?.message ?? err).split('\n')[0].slice(0, 200);
 }
 
-export async function startFleetLlmHost() {
+export function startFleetLlmHost() {
+  return startFleetLlmHostFlight.run('start', startFleetLlmHostOnce);
+}
+
+async function startFleetLlmHostOnce() {
   if (gateway) return;
   const enabled = parseEnvContents((await tryReadFile(PORTOS_ENV_PATH)) || '').get(ENABLED_KEY) === '1';
   if (!enabled) return;
@@ -371,7 +378,11 @@ async function configure({ emit, isCancelled }) {
     if (!provider.vllmBacked || localRuntime?.kind !== 'vllm') continue;
     const envVars = { ...provider.envVars };
     if (envVars.OPENCODE_CONFIG_CONTENT) {
-      const config = JSON.parse(envVars.OPENCODE_CONFIG_CONTENT);
+      const config = parseOpencodeConfigContent(envVars.OPENCODE_CONFIG_CONTENT);
+      if (!config) {
+        console.warn(`⚠️ Skipping malformed OpenCode config for provider ${provider.id}`);
+        continue;
+      }
       if (config.provider?.vllm) config.provider.vllm.options = { ...config.provider.vllm.options, baseURL: endpoint };
       envVars.OPENCODE_CONFIG_CONTENT = JSON.stringify(config);
     }

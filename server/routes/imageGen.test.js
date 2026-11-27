@@ -587,6 +587,10 @@ describe('Image Gen Routes', () => {
       expect(empty.body).toEqual({ items: [], total: 0, limit: 60, offset: 0 });
     });
 
+    it.each(['0', '-1', '1.5', 'Infinity', '9007199254740992'])('rejects an invalid video size threshold %s', async value => {
+      expect((await request(app).get(`/api/image-gen/gallery?videoSizeOverBytes=${value}`)).status).toBe(400);
+    });
+
     it('filters the gallery to original files on this machine when requested', async () => {
       const items = [{ filename: 'local-filter.png' }, { filename: 'hosted-filter.png' }];
       imageGen.local.listGallery.mockResolvedValue(items);
@@ -2157,11 +2161,11 @@ describe('Image Gen Routes', () => {
       expect(imageGen.attachSseClient).toHaveBeenCalledWith('missing-job', expect.anything());
     });
 
-    it('POST /cancel returns ok=false when no provider had a job', async () => {
+    it('POST /cancel returns 404 when no provider had a job', async () => {
       imageGen.cancel.mockReturnValueOnce(false);
       const response = await request(app).post('/api/image-gen/cancel');
-      expect(response.status).toBe(200);
-      expect(response.body.ok).toBe(false);
+      expect(response.status).toBe(404);
+      expect(response.body).toMatchObject({ code: 'NOT_FOUND' });
       expect(imageGen.cancel).toHaveBeenCalled();
     });
 

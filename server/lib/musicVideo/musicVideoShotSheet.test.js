@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { framingScale, sceneFramingScale, normalizeShotSheet, shotCameraRuleText, shotOmitsOwnedCameraDetail, shotSheetBulkEdits, shotSheetCast, shotSheetMapRows, shotSheetMediaEdits, shotSheetOptions, SHOT_SHEET_MAP_BARS, shotSheetProblems, shotSheetRows, shotSheetStretches } from './musicVideoShotSheet.js';
 import { musicVideoSceneUpdateSchema } from './musicVideoValidation.js';
-import { musicVideoProjectUpdateSchema } from './musicVideoRouteValidation.js';
+import { musicVideoProjectUpdateSchema } from './routeValidation/project.js';
 import { applySceneUpdate, applyProjectPatch, replaceScenes } from '../../services/musicVideo/projectsLogic.js';
 
 const selectedFrameOutdated = (shot) => shotSheetRows({ scenes: [shot] })[0].frameOutdated;

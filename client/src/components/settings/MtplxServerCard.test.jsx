@@ -45,6 +45,33 @@ describe('MtplxServerCard', () => {
     expect(handlers.onSaveLaunch).toHaveBeenCalledWith({ model: 'Example/Other-MTP', port: 8010 });
   });
 
+  it.each([
+    ['Port', '8011', { model: 'Example/Qwen-MTP', port: 8011, tuning: { draftTokens: 4 } }],
+    ['Checkpoint', 'Example/Other-MTP', { model: 'Example/Other-MTP', port: 8010, tuning: { draftTokens: 4 } }],
+  ])('hydrates once when status arrives and preserves the saved field when editing %s', async (field, value, payload) => {
+    const onSaveLaunch = vi.fn();
+    const onSearchModels = vi.fn().mockResolvedValue({ models: [], error: null });
+    const status = {
+      installed: true, supported: true, cachedModels: ['Example/Qwen-MTP', 'Example/Other-MTP'],
+      launch: { model: 'Example/Qwen-MTP', port: 8010, tuning: { draftTokens: 4 } },
+    };
+    const card = (runtimeStatus) => (
+      <MemoryRouter>
+        <MtplxServerCard status={runtimeStatus} onSaveLaunch={onSaveLaunch} onSearchModels={onSearchModels} />
+      </MemoryRouter>
+    );
+    const { rerender } = render(card(null));
+    await act(async () => rerender(card(status)));
+
+    expect(screen.getByLabelText('Checkpoint')).toHaveValue('Example/Qwen-MTP');
+    expect(screen.getByLabelText('Port')).toHaveValue(8010);
+    fireEvent.change(screen.getByLabelText(field), { target: { value } });
+    rerender(card({ ...status, launch: { ...status.launch } }));
+    fireEvent.click(screen.getByRole('button', { name: /Save configuration/ }));
+
+    expect(onSaveLaunch).toHaveBeenCalledWith(payload);
+  });
+
   // An untouched port stays off the saved config so a lazy start falls through
   // to the shipped default; an untouched checkpoint is saved as an explicit
   // `null`, which is what CLEARS a previously-saved pick back to "Auto".

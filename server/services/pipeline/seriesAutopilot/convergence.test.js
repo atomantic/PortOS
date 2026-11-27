@@ -1,54 +1,10 @@
-/**
- * convergence.test.js
- *
- * convergence.js divergence and regression guards. Split from seriesAutopilot.test.js (#16214); shared mocks and
- * fixtures live in seriesAutopilot.testFixtures.js.
- */
-import { describe, it, expect, vi, beforeEach } from 'vitest';
-
-// vi.mock factories are hoisted above imports; the shared fixtures module is
-// loaded the same way.
-const h = await vi.hoisted(() => import('./seriesAutopilot.testFixtures.js'));
-
-vi.mock('../../runner.js', (importOriginal) => h.runnerFactory(importOriginal));
-vi.mock('../../../lib/fileUtils.js', () => h.fileUtilsFactory());
-vi.mock('crypto', () => h.cryptoFactory());
-vi.mock('../../instanceIdentity.js', () => h.instanceIdentityFactory());
-vi.mock('../../instances.js', () => h.instancesFactory());
-vi.mock('../../sharing/peerSync.js', () => h.peerSyncFactory());
-vi.mock('../../cos/cosState.js', () => h.cosStateFactory());
-vi.mock('../../domainUsage.js', () => h.domainUsageFactory());
-vi.mock('../arcPlanner.js', (importOriginal) => h.arcPlannerFactory(importOriginal));
-vi.mock('../volumeBeatsRunner.js', () => h.volumeBeatsSpies);
-vi.mock('../autoRunner.js', () => h.autoRunnerSpies);
-vi.mock('../manuscriptReview.js', () => h.manuscriptReviewFactory());
-vi.mock('../editorial/checkRunner.js', () => h.checkRunnerSpies);
-vi.mock('../reverseOutline.js', () => h.reverseOutlineFactory());
-vi.mock('../../settings.js', (importOriginal) => h.settingsFactory(importOriginal));
-vi.mock('../manuscriptFix.js', () => h.manuscriptFixFactory());
-vi.mock('../visualStages.js', () => h.visualSpies);
-vi.mock('../../cos/cosTaskStore.js', () => h.cosTaskStoreFactory());
-vi.mock('../scriptVerify.js', () => h.scriptVerifyFactory());
-vi.mock('../canonReadiness.js', () => h.canonReadinessFactory());
-vi.mock('../../universeCanon.js', () => h.universeCanonFactory());
-vi.mock('../foundationJudge.js', (importOriginal) => h.foundationJudgeFactory(importOriginal));
-vi.mock('./modelPerformance.js', () => h.modelPerformanceFactory());
-vi.mock('../../notifications.js', () => h.notificationsFactory());
-
-// Mocked bindings, so a test can drive the budget and persisted settings per call.
-const { getDomainBudgetStatus } = await import('../../domainUsage.js');
-const { getSettings } = await import('../../settings.js');
-
-// Real services + the unit under test (imported AFTER the mocks above).
-const autopilot = await import('../seriesAutopilot.js');
-
-beforeEach(() => {
-  h.resetFixtures({ autopilot, getDomainBudgetStatus, getSettings });
-});
+import { describe, it, expect } from 'vitest';
+import {
+  DIVERGENCE_PATIENCE, findingTextOverlap, isBlockingSetRegression, isIsolatedFixSafe,
+  isResolveRegression, isTargetedPatchRegression, sameFinding, trackConvergence,
+} from './convergence.js';
 
 describe('trackConvergence (pure divergence/oscillation guard — #1571)', () => {
-  const { trackConvergence, DIVERGENCE_PATIENCE } = autopilot;
-
   // Fold a sequence of per-round blocking counts into the final tracker state.
   const fold = (counts) => counts.reduce(trackConvergence, { best: null, sinceBest: 0 });
 
@@ -86,7 +42,6 @@ describe('trackConvergence (pure divergence/oscillation guard — #1571)', () =>
 });
 
 describe('isIsolatedFixSafe (pure per-finding patch acceptance, #3780)', () => {
-  const { isIsolatedFixSafe } = autopilot;
   const f = (problem, location = 'V1', severity = 'high') => ({ severity, location, problem });
   const target = f('volume 1 and volume 2 both stage the first eclipse');
   const other = f('mentor subplot never pays off', 'V3');
@@ -145,7 +100,6 @@ describe('isIsolatedFixSafe (pure per-finding patch acceptance, #3780)', () => {
 });
 
 describe('isResolveRegression (pure resolve-round damage check)', () => {
-  const { isResolveRegression, sameFinding, findingTextOverlap } = autopilot;
   const f = (problem, location = 'V1', severity = 'high') => ({ severity, location, problem });
 
   it('flags a round that grew the blocking set while leaving what it targeted standing', () => {
@@ -242,7 +196,6 @@ describe('isResolveRegression (pure resolve-round damage check)', () => {
 });
 
 describe('isTargetedPatchRegression (bounded exact-text damage check)', () => {
-  const { isTargetedPatchRegression } = autopilot;
   const f = (problem, location = 'V1', severity = 'medium') => ({ severity, location, problem });
 
   it('keeps a sparse patch that closed its target when an exhaustive judge exposes unrelated latent blockers', () => {
@@ -268,7 +221,6 @@ describe('isTargetedPatchRegression (bounded exact-text damage check)', () => {
 });
 
 describe('isBlockingSetRegression (arc rollback ordering)', () => {
-  const { isBlockingSetRegression } = autopilot;
   const f = (severity, problem) => ({ severity, problem, location: 'V1' });
 
   it('rejects an equal-count candidate whose severity mix got worse', () => {

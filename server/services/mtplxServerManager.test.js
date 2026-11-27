@@ -4,7 +4,7 @@ import * as os from 'os';
 vi.mock('os', async (importOriginal) => ({ ...(await importOriginal()), release: vi.fn(() => '23.0.0') }));
 import { join } from 'path';
 import { describe, it, expect, beforeEach, afterEach, afterAll, vi } from 'vitest';
-import { getMtplxServerStatus, startMtplxServer, stopMtplxServer, relaunchMtplxServerWithTuning, runOnMtplxCheckpoint, installMtplx, _resetMtplxServerStateForTests, ensureMtplxRunning, ensureMtplxProviderReady, isMtplxProvider, MTPLX_APP } from './mtplxServerManager.js';
+import { getMtplxServerStatus, startMtplxServer, stopMtplxServer, relaunchMtplxServerWithTuning, runOnMtplxCheckpoint, installMtplx, uninstallMtplx, _resetMtplxServerStateForTests, ensureMtplxRunning, ensureMtplxProviderReady, isMtplxProvider, MTPLX_APP } from './mtplxServerManager.js';
 import { mtplxCachedModelIds } from './localCachedModels.js';
 import * as processEnv from '../lib/processEnv.js';
 import * as platform from '../lib/platform.js';
@@ -63,6 +63,23 @@ const resetForTest = (overrides = {}) => {
 };
 
 describe('mtplxServerManager', () => {
+  it('uninstalls its private venv without removing another MTPLX installation', async () => {
+    await createManagedEntry();
+    const external = join(testLogDir, 'external-mtplx');
+    await writeFile(external, 'external');
+    const realLookup = processEnv.findCommandOnPath;
+    vi.spyOn(processEnv, 'findCommandOnPath').mockImplementation((cmd) => cmd === 'mtplx' ? external : realLookup(cmd));
+    await expect(getMtplxServerStatus()).resolves.toMatchObject({ canUninstall: true });
+    platform.isPortInUse.mockResolvedValueOnce(true);
+    await expect(uninstallMtplx()).rejects.toMatchObject({ code: 'MTPLX_IN_USE' });
+    await expect(uninstallMtplx()).resolves.toMatchObject({ success: true });
+    await expect(readFile(mtplxRuntime.mtplxManagedBinary())).rejects.toMatchObject({ code: 'ENOENT' });
+    expect(await readFile(external, 'utf8')).toBe('external');
+    await expect(getMtplxServerStatus()).resolves.toMatchObject({ installed: true, canUninstall: false });
+    await expect(uninstallMtplx()).rejects.toMatchObject({ code: 'MTPLX_NOT_MANAGED' });
+    expect(execPm2Calls).toEqual([]);
+  });
+
   let pm2State = null;
   let execPm2Calls = [];
   let testLogDir = null;
@@ -472,13 +489,33 @@ describe('mtplxServerManager', () => {
     const servedModel = () => { const launch = execPm2Calls.filter((a) => a[0] === 'start').pop(); return launch[launch.indexOf('--model') + 1]; };
 
     it('serves the asked-for pack while fn runs, then puts the previous pack back', async () => {
+      vi.spyOn(mtplxModels, 'listMtplxCachedModels').mockResolvedValue({
+        models: [{ repo_id: 'Example/Qwen-MTP' }, { repo_id: 'Example/Other-MTP' }], error: null,
+      });
       await startMtplxServer({ port: 8010 });
       let during = null;
-      const out = await runOnMtplxCheckpoint('Example/Other-MTP', async (served) => { during = { served, model: servedModel() }; return 'done'; });
+      const out = await runOnMtplxCheckpoint('Example/Other-MTP', async (served, endpoint) => {
+        during = { served, endpoint, model: servedModel() };
+        return 'done';
+      }, { requireCached: true });
       expect(out).toBe('done');
-      expect(during).toEqual({ served: 'served-Example/Other-MTP', model: 'Example/Other-MTP' });
+      expect(during).toEqual({ served: 'served-Example/Other-MTP', endpoint: 'http://127.0.0.1:8010/v1', model: 'Example/Other-MTP' });
       expect(servedModel()).toBe('Example/Qwen-MTP');
       expect(pm2State?.status).toBe('online');
+    });
+
+    it('refuses incomplete and absent checkpoint IDs before changing the daemon', async () => {
+      vi.spyOn(mtplxModels, 'listMtplxCachedModels').mockResolvedValue({
+        models: [{ repo_id: 'Example/Partial-MTP', validation: { ok: false } }], error: null,
+      });
+      const run = vi.fn();
+      for (const model of ['Example/Partial-MTP', 'Example/Not-Cached']) {
+        await expect(runOnMtplxCheckpoint(model, run, { requireCached: true })).rejects.toMatchObject({
+          status: 400, code: 'MTPLX_NO_CACHED_MODEL',
+        });
+      }
+      expect(execPm2Calls.map(([verb]) => verb)).not.toContain('start');
+      expect(run).not.toHaveBeenCalled();
     });
 
     it('does not relaunch when the pack is already serving', async () => {
@@ -570,8 +607,7 @@ describe('mtplxServerManager', () => {
       const saved = { port: 8000, model: 'Example/Qwen-MTP', tuning: { depth: 2 } };
       settingsStore = { localLlm: { mtplx: { launch: saved } } };
       await expect(runOnMtplxCheckpoint('Example/Other-MTP', async () => {
-        // The switch itself persists its own line while the bench runs.
-        expect(settingsStore.localLlm.mtplx.launch.model).toBe('Example/Other-MTP');
+        expect(settingsStore.localLlm.mtplx.launch).toEqual(saved);
         throw new Error('page failed');
       })).rejects.toThrow('page failed');
       expect(pm2State?.status).not.toBe('online');
@@ -895,7 +931,7 @@ describe('mtplxServerManager', () => {
 
     it('does not report success when the installer leaves no executable', async () => {
       streamingSpawn.runStreamingCommand.mockResolvedValue({ success: true });
-      await expect(installMtplx()).rejects.toMatchObject({ code: 'MTPLX_INSTALL_FAILED', message: expect.stringContaining('executable') });
+      await expect(installMtplx()).rejects.toMatchObject({ status: 502, code: 'MTPLX_INSTALL_FAILED', message: expect.stringContaining('executable') });
     });
 
     it('refuses before install when the private patched tool is unavailable', async () => {
@@ -1036,7 +1072,7 @@ describe('mtplxServerManager', () => {
         await writeFile(entry, '#!/bin/sh');
         return { success: false, error: 'hash mismatch' };
       });
-      await expect(installMtplx()).rejects.toMatchObject({ code: 'MTPLX_INSTALL_FAILED' });
+      await expect(installMtplx()).rejects.toMatchObject({ status: 502, code: 'MTPLX_INSTALL_FAILED' });
       await expect(readFile(entry)).rejects.toMatchObject({ code: 'ENOENT' });
       run.mockImplementation(successfulInstallStep);
       await expect(installMtplx()).resolves.toMatchObject({ success: true });
@@ -1169,13 +1205,14 @@ describe('mtplxServerManager', () => {
 
     it('marks the daemon used, so a request resets the idle clock', async () => {
       pm2State = { name: MTPLX_APP, status: 'online', pid: 777, args: ['serve', '--port', '8000'] };
-      const { daemonLastUsedAt } = await import('../lib/managedDaemon.js');
-
-      const before = daemonLastUsedAt(MTPLX_APP);
-      await new Promise((r) => setTimeout(r, 2));
+      const { reapIdleDaemons } = await import('../lib/managedDaemon.js');
+      resetForTest({ idleMinutes: 1 });
+      const before = Date.now();
+      vi.spyOn(Date, 'now').mockReturnValue(before + 60_000);
       await ensureMtplxRunning();
 
-      expect(daemonLastUsedAt(MTPLX_APP)).toBeGreaterThan(before);
+      expect(await reapIdleDaemons(before + 60_000, { memoryStats: false })).not.toContain(MTPLX_APP);
+      expect(await reapIdleDaemons(before + 120_000, { memoryStats: false })).toContain(MTPLX_APP);
     });
   });
 
@@ -1304,12 +1341,17 @@ describe('mtplxServerManager', () => {
       expect(isMtplxProvider({ type: 'api', endpoint: 'http://100.64.0.5:8000/v1', id: 'mtplx', mtplxBacked: true })).toBe(false);
     });
 
-    it('does not match a CLI provider', () => {
-      expect(isMtplxProvider({ type: 'cli', endpoint: 'http://127.0.0.1:8000/v1', id: 'mtplx', mtplxBacked: true })).toBe(false);
+    it.each(['api', 'cli', 'tui'])('matches a local %s provider', (type) => {
+      expect(isMtplxProvider({ type, endpoint: 'http://127.0.0.1:8000/v1', id: 'mtplx', mtplxBacked: true })).toBe(true);
     });
 
-    it('matches an MTPLX-backed TUI provider', () => {
-      expect(isMtplxProvider({ type: 'tui', endpoint: 'http://127.0.0.1:8000/v1', id: 'mtplx-tui', mtplxBacked: true })).toBe(true);
+    it('matches an OpenCode provider whose loopback endpoint is only in its config', () => {
+      expect(isMtplxProvider({
+        type: 'cli',
+        command: 'opencode',
+        mtplxBacked: true,
+        envVars: { OPENCODE_CONFIG_CONTENT: JSON.stringify({ provider: { mtplx: { options: { baseURL: 'http://127.0.0.1:8000/v1' } } } }) },
+      })).toBe(true);
     });
 
     // Regression for #8105: `localEndpointPort` returns a STRING, and the port

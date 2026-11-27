@@ -10,6 +10,10 @@
  */
 
 import { request } from './apiCore.js';
+import { getCosAgent } from './apiAppShell.js';
+
+export { getCosAgent };
+export { submitCosAgentFeedback } from './apiAppShell.js';
 
 // Running Agents (Process Management)
 const getRunningAgents = (options) => request('/agents', options);
@@ -251,11 +255,6 @@ export const recheckCosAgentCleanup = (agentId, taskId, options = {}) => request
 export const getCosCompletedAgents = ({ cursor, limit = 25, feedback = false, ...options } = {}) =>
   request(`/cos/agents/${feedback ? 'feedback/pending' : 'completed'}${runEventQuery({ limit, cursor })}`, options);
 export const getCosPendingAgentFeedback = ({ countOnly, ...options } = {}) => request(`/cos/agents/feedback/pending${countOnly ? '?countOnly=1' : ''}`, options);
-// `lines` caps the transcript TAIL the server hydrates (server default: 1000
-// lines / 512 KB). Pass it when the record is wanted for its metadata rather
-// than its log.
-export const getCosAgent = (id, { lines, ...options } = {}) =>
-  request(`/cos/agents/${id}${lines ? `?lines=${lines}` : ''}`, options);
 
 // Agent LIST responses bound `metadata.taskDescription` (see
 // `server/lib/cos/cosAgentListProjection.js`), which is fine for a clamped card but
@@ -305,17 +304,11 @@ export const getCosAgentStats = (id, options) => request(`/cos/agents/${id}/stat
 export const getCosAgentPrompt = (id, options = {}) => request(`/cos/agents/${id}/prompt`, options);
 export const deleteCosAgent = (id, options = {}) => request(`/cos/agents/${id}`, { method: 'DELETE', ...options });
 export const clearCompletedCosAgents = (options = {}) => request('/cos/agents/completed', { method: 'DELETE', ...options });
-export const submitCosAgentFeedback = (id, feedback, options = {}) => request(`/cos/agents/${id}/feedback`, {
-  method: 'POST',
-  body: JSON.stringify(feedback),
-  ...options
-});
 export const sendCosAgentBtw = (id, message, options = {}) => request(`/cos/agents/${id}/btw`, {
   method: 'POST',
   body: JSON.stringify({ message }),
   ...options
 });
-export const getCosFeedbackStats = (options = {}) => request('/cos/feedback/stats', options);
 
 // CoS Briefings
 export const getCosBriefings = (options = {}) => request('/cos/briefings', options);
@@ -330,16 +323,11 @@ export const getCosWhileAwayActivity = (since, options) =>
   request(`/cos/activity/while-away${since ? `?since=${encodeURIComponent(since)}` : ''}`, options);
 
 // CoS Learning
-export const getCosLearning = (options = {}) => request('/cos/learning', options);
+export const getCosLearningDashboard = (options = {}) => request('/cos/learning/dashboard', options);
 export const getCosLearningDurations = (options = {}) => request('/cos/learning/durations', options);
-export const getCosLearningSkipped = (options = {}) => request('/cos/learning/skipped', options);
-export const getCosLearningPerformance = (options = {}) => request('/cos/learning/performance', options);
-export const getCosLearningRouting = (options = {}) => request('/cos/learning/routing', options);
 export const getCosLearningSummary = (options) => request('/cos/learning/summary', options);
-export const getCosLearningConfidence = (options = {}) => request('/cos/learning/confidence', options);
 export const backfillCosLearning = () => request('/cos/learning/backfill', { method: 'POST' });
 export const resetCosTaskTypeLearning = (taskType) => request(`/cos/learning/reset/${encodeURIComponent(taskType)}`, { method: 'POST' });
-export const getDismissedCosRecommendations = (options = {}) => request('/cos/learning/recommendations/dismissed', options);
 export const dismissCosRecommendation = (id, snapshot) => request('/cos/learning/recommendations/dismiss', {
   method: 'POST',
   body: JSON.stringify({ id, snapshot })

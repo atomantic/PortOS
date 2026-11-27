@@ -11,6 +11,7 @@
  * reclaimed on the next acquisition, so a crash cannot wedge local rendering.
  */
 
+import { isPidPossiblyAlive as isPidAlive } from './processLiveness.js';
 import { randomUUID } from 'crypto';
 import { link, mkdir, open, readFile, readdir, unlink } from 'fs/promises';
 import { constants, existsSync, readFileSync, realpathSync, unlinkSync } from 'fs';
@@ -23,7 +24,6 @@ export const HEAVY_LOCAL_JOB_STALE_MS = 24 * 60 * 60 * 1000;
 
 const heldClaims = new Map();
 const locallyCompletedClaims = new Map();
-const recoveringClaims = new Map();
 const localMutations = new Map();
 let exitCleanupInstalled = false;
 
@@ -51,22 +51,7 @@ const lockMutation = async claimPath => {
   }
 };
 
-// A known survivor must be observed while its on-disk claim is reattached.
-export function beginHeavyJobRecovery(id) {
-  const token = randomUUID();
-  recoveringClaims.set(token, id);
-  return () => recoveringClaims.delete(token);
-}
-
-export function isPidAlive(pid) {
-  if (!Number.isInteger(pid) || pid <= 0) return false;
-  try {
-    process.kill(pid, 0);
-    return true;
-  } catch (err) {
-    return err?.code === 'EPERM';
-  }
-}
+export { isPidAlive };
 
 const parseHolder = (raw) => {
   try {
@@ -167,7 +152,7 @@ const readTrainerPid = async path => {
   } finally { await file.close(); }
 };
 
-async function findSurvivingTrainer({ root = PATHS.trainingRuns, ignorePid = null,
+export async function findSurvivingTrainer({ root = PATHS.trainingRuns, ignorePid = null,
   snapshot = async () => (await import('./detachedSpawn.js')).snapshotMaintenanceProcesses(),
   readControl = readTrainerPid } = {}) {
   let rootUnavailable = false;
@@ -243,7 +228,6 @@ async function findSurvivingTrainer({ root = PATHS.trainingRuns, ignorePid = nul
     return trainingCommand(command) && (runs.some(run => related(command, run)) || (rootUnavailable && related(command, root)));
   }) ?? null;
 }
-export { findSurvivingTrainer as __findSurvivingTrainer };
 
 const CLAIM_UNLINK_ATTEMPTS = 3;
 const CLAIM_UNLINK_RETRY_MS = 100;
@@ -352,7 +336,6 @@ function createClaimHandle(ctx) {
 }
 
 const recoveryBusy = () => ({ ok: false, message: 'Local accelerator is in use by a recovering job.', release: async () => {} });
-const recoveryBlocked = id => [...recoveringClaims.values()].some(owner => owner !== id);
 
 /**
  * One acquisition attempt while holding the local mutation lock. Returns
@@ -361,27 +344,23 @@ const recoveryBlocked = id => [...recoveringClaims.values()].some(owner => owner
  * caller's deadline has passed; it may throw).
  */
 async function tryClaimLocked(ctx, handleState) {
-  const { claimPath, token, ours, id, pid, createClaim, survivorCheck } = ctx;
-  if (recoveryBlocked(id)) return { retryMs: 250, onDeadline: recoveryBusy };
+  const { claimPath, token, ours, pid, createClaim, survivorCheck } = ctx;
   try {
     await createClaim(claimPath, JSON.stringify(ours), { flag: 'wx' });
   } catch (err) {
     if (err?.code !== 'EEXIST') throw err;
     return resolveExistingClaim(ctx);
   }
-  let observedSurvivor = false;
-  let blocked;
+  let survivor;
   try {
-    blocked = recoveryBlocked(id);
-    if (!blocked) observedSurvivor = Boolean(await survivorCheck({ ignorePid: pid }));
-    blocked = blocked || observedSurvivor || recoveryBlocked(id);
+    survivor = await survivorCheck({ ignorePid: pid });
   } catch (err) {
     await withdrawClaim(ctx);
     return { retryMs: 250, onDeadline: () => { throw err; } };
   }
-  if (blocked) {
+  if (survivor) {
     await withdrawClaim(ctx);
-    return { retryMs: observedSurvivor ? 2000 : 250, onDeadline: recoveryBusy };
+    return { retryMs: 2000, onDeadline: recoveryBusy };
   }
   if (pid === process.pid) heldClaims.set(claimPath, token);
   installExitCleanup();
@@ -478,21 +457,19 @@ export async function claimHeavyLocalJob({
   createClaim = publishClaim,
   writeCompletion = writeFileGuarded,
   survivorCheck = findSurvivingTrainer,
-  continuationOwned = false,
   admission = maintenance,
 } = {}) {
   if (typeof kind !== 'string' || !kind.trim() || typeof id !== 'string' || !id.trim()) {
     throw new Error('A heavy local job claim requires non-empty kind and id.');
   }
   if (signal?.aborted) return abortedClaim();
-  if (continuationOwned) admission.assertCurrent();
-  const permit = continuationOwned ? null : admission.admit('heavy-job', id.slice(0, 256), { continuation: true });
+  const permit = admission.admit('heavy-job', id.slice(0, 256), { continuation: true });
   const handleState = { retained: false };
   try {
     const deadline = now() + Math.max(0, timeoutMs);
     const token = randomUUID();
     const ours = { kind, id, pid, startedAt: now(), token };
-    const ctx = { id, pid, claimPath, token, ours, now, deadline, wait, pidIsAlive, unlinkClaim, writeClaim, createClaim, writeCompletion, survivorCheck, permit };
+    const ctx = { pid, claimPath, token, ours, now, deadline, wait, pidIsAlive, unlinkClaim, writeClaim, createClaim, writeCompletion, survivorCheck, permit };
     // Sleep at most `intervalMs`, never past the caller's deadline.
     const waitRemaining = intervalMs => waitForInterval(wait, Math.min(intervalMs, Math.max(1, deadline - now())), signal);
     await mkdir(dirname(claimPath), { recursive: true });
@@ -509,56 +486,18 @@ export async function claimHeavyLocalJob({
   } finally { if (!handleState.retained) await permit?.finish(); }
 }
 
-// Pre-lock checks (recovery, surviving trainer, mutation lock), then one locked attempt.
+// Check for an existing trainer before taking the mutation lock, then recheck after publication.
 async function nextClaimStep(ctx, handleState) {
-  const { id, pid, claimPath, survivorCheck } = ctx;
-  const recovering = recoveryBlocked(id) || localMutations.has(claimPath);
+  const { pid, claimPath, survivorCheck } = ctx;
+  if (localMutations.has(claimPath)) return { retryMs: 250, onDeadline: recoveryBusy };
   let survivor;
-  try { survivor = !recovering && await survivorCheck({ ignorePid: pid }); }
+  try { survivor = await survivorCheck({ ignorePid: pid }); }
   catch (err) {
     return { retryMs: 250, onDeadline: () => { throw err; } };
   }
-  if (recovering || survivor) return { retryMs: recovering ? 250 : 2000, onDeadline: recoveryBusy };
+  if (survivor) return { retryMs: 2000, onDeadline: recoveryBusy };
   const unlock = tryLockMutation(claimPath);
   if (!unlock) return { retryMs: 250, onDeadline: recoveryBusy };
   try { return await tryClaimLocked(ctx, handleState); }
   finally { unlock(); }
-}
-
-/**
- * Adopt a claim already recorded on disk, for a process that did not
- * acquire it — a restarted server re-attaching to a detached child that
- * survived the crash (#1332). The surviving child already holds the
- * machine-wide accelerator claim (transferred to it via `handoffTo` before
- * the restart); calling `claimHeavyLocalJob` again here would see that live
- * claim as a COMPETING job and refuse it, failing every restart-survived run
- * outright. This never contends for the lock — it only recognizes a claim
- * that already names this exact job and PID, so it's safe to call blind.
- *
- * Returns `null` when no on-disk claim matches `kind`/`id`/`pid` (e.g. an
- * in-flight run that predates this claim file, or a genuinely different
- * holder), so the caller can fall back to `claimHeavyLocalJob`.
- */
-export async function adoptHeavyLocalJob({
-  kind, id, pid, claimPath = HEAVY_LOCAL_JOB_CLAIM_PATH,
-} = {}) {
-  const holder = await readHolder(claimPath);
-  if (holder?.kind !== kind || holder.id !== id || holder.pid !== pid || typeof holder.token !== 'string') return null;
-  let released = false;
-  return {
-    ok: true,
-    holder: publicHolder(holder),
-    async handoffTo() {},
-    async release() {
-      if (released) return;
-      released = true;
-      const unlock = await lockMutation(claimPath);
-      try {
-        const current = await readHolder(claimPath);
-        if (current?.token === holder.token) await unlink(claimPath).catch((err) => {
-          if (err?.code !== 'ENOENT') throw err;
-        });
-      } finally { unlock(); }
-    },
-  };
 }

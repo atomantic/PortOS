@@ -1,7 +1,7 @@
 import { act, cleanup, renderHook } from '@testing-library/react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 const { listeners, fetchStatus } = vi.hoisted(() => ({ listeners: new Map(), fetchStatus: vi.fn() }));
-vi.mock('../services/apiSystem.js', () => ({ getMaintenanceStatus: fetchStatus }));
+vi.mock('../services/apiAppShell.js', () => ({ getMaintenanceStatus: fetchStatus }));
 vi.mock('./useSocket.js', () => ({ useSocket: () => socket }));
 const socket = { on: (name, fn) => listeners.set(name, fn), off: (name) => listeners.delete(name) };
 import { useMaintenance } from './useMaintenance.js';

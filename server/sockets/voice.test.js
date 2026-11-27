@@ -61,6 +61,7 @@ const { transcribe } = await import('../services/voice/stt.js');
 const { synthesize } = await import('../services/voice/tts.js');
 const { runTurn } = await import('../services/voice/pipeline.js');
 const { isAuthEnabled, verifyRequestSession } = await import('../services/auth.js');
+const { PEER_SOCKET_ROOM } = await import('../services/socketIo.js');
 const { getVoiceConfig } = await import('../services/voice/config.js');
 const {
   attachHost: attachCallHost,
@@ -319,6 +320,16 @@ describe('voice:text turn recovery', () => {
 
 describe('voice:output single-recipient wiring', () => {
   const flush = () => new Promise((resolve) => setTimeout(resolve, 0));
+  const makeIo = (...sockets) => ({
+    emit: vi.fn(),
+    sockets: {
+      sockets: new Map(sockets.map((socket, index) => {
+        Object.assign(socket, { id: String(index), data: { portosLocalConnection: true } });
+        socket.rooms ??= new Set();
+        return [socket.id, socket];
+      })),
+    },
+  });
   beforeEach(() => __resetVoiceOutput());
 
   it('registers a candidate only after the tab announces voice:output:available', () => {
@@ -334,15 +345,17 @@ describe('voice:output single-recipient wiring', () => {
     expect(getVoiceOutputSocket()).toBe(socket);
   });
 
-  it('a connection that never announces is never elected primary', () => {
-    const relay = makeFakeSocket(); // stands in for a peer-relay Socket.IO client
+  it('a relay that never announces receives no output belonging to the primary', async () => {
+    const relay = makeFakeSocket();
+    relay.rooms = new Set([PEER_SOCKET_ROOM]);
     const tab = makeFakeSocket();
     registerVoiceHandlers(relay);
     registerVoiceHandlers(tab);
     tab.fire('voice:output:available');
     // Even though the relay connected, output routes to the real tab.
-    const io = { emit: () => { throw new Error('must not broadcast'); } };
-    emitVoiceOutput(io, 'voice:speak', { sentence: 'ping' });
+    const io = makeIo(relay, tab);
+    await emitVoiceOutput(io, 'voice:speak', { sentence: 'ping' });
+    expect(io.emit).not.toHaveBeenCalled();
     expect(relay.emitted.filter((e) => e.event === 'voice:speak')).toHaveLength(0);
     expect(tab.emitted.filter((e) => e.event === 'voice:speak')).toHaveLength(1);
   });
@@ -358,8 +371,9 @@ describe('voice:output single-recipient wiring', () => {
     b.fire('voice:output:claim');
     await flush();
 
-    const io = { emit: () => { throw new Error('must not broadcast'); } };
-    emitVoiceOutput(io, 'voice:speak', { sentence: 'ping' });
+    const io = makeIo(a, b);
+    await emitVoiceOutput(io, 'voice:speak', { sentence: 'ping' });
+    expect(io.emit).not.toHaveBeenCalled();
     expect(a.emitted.filter((e) => e.event === 'voice:speak')).toHaveLength(0);
     expect(b.emitted.filter((e) => e.event === 'voice:speak')).toHaveLength(1);
   });
@@ -717,6 +731,15 @@ describe('voice:capture socket handlers (meeting capture)', () => {
     expect(refusal.payload).toMatchObject({ error: 'host-taken' });
   });
 
+  it('reports the active state when the host repeats capture start', async () => {
+    const socket = makeFakeSocket();
+    registerVoiceHandlers(socket);
+    await socket.fire('voice:capture:start');
+    await socket.fire('voice:capture:start');
+    expect(socket.emitted.filter((e) => e.event === 'voice:capture:state').at(-1).payload)
+      .toMatchObject({ active: true, state: 'listening', error: 'capture-in-progress' });
+  });
+
   it('refuses to start a capture on a tab already hosting a FaceTime call', async () => {
     const socket = makeFakeSocket();
     registerVoiceHandlers(socket);
@@ -822,6 +845,49 @@ describe('voice:capture socket handlers (meeting capture)', () => {
     expect(getCallState().hostAttached).toBe(true);
     expect(createInboxLog).toHaveBeenCalledWith(expect.objectContaining({ capturedText: expect.stringContaining('Keep this final utterance.') }));
     expect(socket.emitted.filter(frame => frame.event === 'voice:call:state').some(frame => frame.payload.error)).toBe(false);
+  });
+
+  it('aborts an in-flight transcription on abrupt disconnect', async () => {
+    let finishTranscription;
+    let signal;
+    transcribe.mockImplementationOnce((_audio, options) => {
+      signal = options.signal;
+      return new Promise((resolve) => { finishTranscription = resolve; });
+    });
+    const socket = makeFakeSocket();
+    registerVoiceHandlers(socket);
+    await socket.fire('voice:capture:start');
+    for (let i = 0; i < 14; i += 1) socket.fire('voice:call:audio', { pcm: loudFrame() });
+    for (let i = 0; i < 36; i += 1) socket.fire('voice:call:audio', { pcm: silentFrame() });
+    await flushMicrotasks();
+    expect(signal).toBeInstanceOf(AbortSignal);
+    socket.fire('disconnect');
+    expect(signal.aborted).toBe(true);
+    finishTranscription({ text: 'discard after disconnect' });
+    await flushMicrotasks();
+    expect(appendJournal).not.toHaveBeenCalled();
+  });
+
+  it('does not abort queued tail transcription when disconnect races stop', async () => {
+    let finishTranscription;
+    let signal;
+    transcribe.mockImplementationOnce((_audio, options) => {
+      signal = options.signal;
+      return new Promise((resolve) => { finishTranscription = resolve; });
+    });
+    const socket = makeFakeSocket();
+    registerVoiceHandlers(socket);
+    await socket.fire('voice:capture:start');
+    for (let i = 0; i < 14; i += 1) socket.fire('voice:call:audio', { pcm: loudFrame() });
+    for (let i = 0; i < 36; i += 1) socket.fire('voice:call:audio', { pcm: silentFrame() });
+    await flushMicrotasks();
+    const stopping = socket.fire('voice:capture:stop');
+    socket.fire('disconnect');
+    expect(signal.aborted).toBe(false);
+    finishTranscription({ text: 'preserved tail' });
+    await stopping;
+    expect(appendJournal).toHaveBeenCalledTimes(1);
+    expect(appendJournal.mock.calls[0][1]).toContain('preserved tail');
   });
 
   it('ignores voice:call:audio on a tab that never attached either host', () => {

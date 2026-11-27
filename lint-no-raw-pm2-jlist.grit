@@ -1,0 +1,20 @@
+language js
+
+// The owner distinguishes a failed PM2 read from an empty process list (#8164).
+file(body = $body) where {
+  $body <: r"(?s).*jlist.*",
+  $body <: contains (
+    JsCallExpression(arguments = JsCallArguments(args = [
+      JsArrayExpression(elements = [or { `'jlist'`, `"jlist"` }, ...]),
+      ...
+    ])) as $call where {
+      register_diagnostic(
+        span = $call,
+        message = "Use server/services/pm2.js or the autofixer/shared.js reader instead of executing raw pm2 jlist.",
+        severity = "error"
+      ),
+      // Continue the subtree search after reporting this match.
+      false
+    }
+  )
+}

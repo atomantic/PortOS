@@ -110,11 +110,13 @@ export async function updateConfig(updates) {
  * Defense-in-depth: the LLM sees what's already stored so it avoids proposing
  * duplicates. The backend dedup in memoryExtractor is the actual safety net.
  */
-async function loadExistingMemorySummary() {
+async function loadExistingMemorySummary(appId) {
+  if (!appId) return '';
+  const scope = { appId, limit: 30, includeCount: false, excludePersistentMind: true };
   const [active, pending] = await Promise.all([
-    getMemories({ status: 'active', sortBy: 'importance', sortOrder: 'desc', limit: 30, excludePersistentMind: true })
+    getMemories({ ...scope, status: 'active', sortBy: 'importance', sortOrder: 'desc' })
       .catch(() => ({ memories: [] })),
-    getMemories({ status: 'pending_approval', limit: 30, excludePersistentMind: true })
+    getMemories({ ...scope, status: 'pending_approval' })
       .catch(() => ({ memories: [] }))
   ]);
 
@@ -138,7 +140,7 @@ async function buildClassificationPrompt(task, agentOutput, config) {
   const template = await getStageTemplate('memory-evaluate').catch(() => null);
 
   // Load existing memories to inject into the prompt
-  const existingMemories = await loadExistingMemorySummary();
+  const existingMemories = await loadExistingMemorySummary(task.metadata?.app);
 
   if (!template) {
     // Fallback inline template

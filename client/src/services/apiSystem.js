@@ -3,8 +3,30 @@
  * via `patchSettingsSlice`.
  */
 
-import { uploadBody, request, singleFlightRead, API_BASE, throwApiError } from './apiCore.js';
+import { uploadBody, request, API_BASE, throwApiError } from './apiCore.js';
 import { downloadBlob } from '../lib/downloadBlob.js';
+
+export {
+  getShellBootstrap,
+  getSystemBuild,
+  getSystemActivity,
+  getCapabilities,
+  getUpdateStatus,
+  ignoreUpdateVersion,
+  getSettings,
+  getInstanceFeatures,
+  updateInstanceFeature,
+  updateSettings,
+  getNotifications,
+  getNotificationCount,
+  getNotificationSnapshot,
+  markNotificationRead,
+  markAllNotificationsRead,
+  deleteNotification,
+  clearNotifications,
+  getSelfInstance,
+  getMaintenanceStatus,
+} from './apiAppShell.js';
 
 export const rectifyModelDuplicates = (payload, options = {}) => request('/system-resources/duplicates/rectify', {
   method: 'POST', body: JSON.stringify(payload), ...options,
@@ -13,10 +35,6 @@ export const rectifyModelDuplicates = (payload, options = {}) => request('/syste
 // Health
 export const checkHealth = (options) => request('/system/health', options);
 export const getSystemHealth = (options) => request('/system/health/details', options);
-// Its own route, not a field on health/details — peers scrape that payload and
-// persist it verbatim, and the build stamp must stay machine-local (#4694).
-export const getSystemBuild = (options) => request('/system/build', options);
-export const getShellBootstrap = (options) => request('/shell/bootstrap', options);
 export const runSystemResourceReport = (options = {}) => request('/system-resources/report', {
   method: 'POST',
   ...options,
@@ -31,13 +49,9 @@ export const triageSystemResources = (payload, options = {}) => request('/system
   ...options,
 });
 export const getActiveProcessing = (options) => request('/system/processing', options);
-// Bounded activity snapshot (no GPU shell-out). Shared by the update banner
-// and the live-activity widget; refreshed from `system:activity`, not a poll.
-export const getSystemActivity = (options) => request('/system/activity', options);
 // nvidia-smi samples. Polled only while the live-activity inspector is visible.
 export const getGpuTelemetry = (options) => request('/system/gpu-telemetry', options);
 export const getNetworkExposure = (options) => request('/network-exposure/status', options);
-export const getCapabilities = (options) => singleFlightRead('/capabilities', () => request('/capabilities', options), options);
 // Machine-local hardware facts used for UI fit and recommendation surfaces.
 // This endpoint deliberately stays outside peer-synced health payloads.
 export const getSystemCapabilities = (options) => request('/system/capabilities', options);
@@ -60,16 +74,11 @@ export const undismissHealthWarning = (type, options = {}) => request(`/system/h
 });
 
 // Update
-export const getUpdateStatus = (options) => request('/update/status', options);
 export const checkForUpdate = () => request('/update/check', { method: 'POST' });
 // Automatic-update config + what the scheduler is currently waiting on. Its own
 // route because it walks git status, which /update/status must not do on the
 // Update tab's poll interval.
 export const getAutoUpdateStatus = (options) => request('/update/auto', options);
-export const ignoreUpdateVersion = (version) => request('/update/ignore', {
-  method: 'POST',
-  body: JSON.stringify({ version })
-});
 export const clearIgnoredVersions = () => request('/update/ignore', { method: 'DELETE' });
 export const executePortosUpdate = (opts) => {
   const body = opts && Object.keys(opts).length ? JSON.stringify(opts) : undefined;
@@ -125,17 +134,7 @@ export const syncPortosFork = (opts = {}, requestOpts = {}) => request('/update/
   ...requestOpts
 });
 
-// Settings
-export const getSettings = (options) => singleFlightRead('/settings', () => request('/settings', options), options);
-export const getInstanceFeatures = (options) => request('/settings/features', options);
 export const getCredentialInventory = (options) => request('/settings/credentials', options);
-// `enabled` accepts `null` — the tri-state override going back to "inherit" for
-// a grouped feature (see instanceFeatureUpdateSchema on the server).
-export const updateInstanceFeature = (featureId, enabled, options = {}) => request(`/settings/features/${encodeURIComponent(featureId)}`, {
-  method: 'PUT',
-  body: JSON.stringify({ enabled }),
-  ...options,
-});
 export const updateInstanceFeatureGroup = (groupId, enabled, options = {}) => request(`/settings/features/groups/${encodeURIComponent(groupId)}`, {
   method: 'PUT',
   body: JSON.stringify({ enabled }),
@@ -220,11 +219,6 @@ export const updateEidoverseControllerConfig = (id, config, options = {}) => req
 export const retireEidoverseController = (id, options = {}) => request(`/eidoverse/world/controllers/${encodeURIComponent(id)}`, {
   method: 'DELETE',
   ...options,
-});
-export const updateSettings = (data, options) => request('/settings', {
-  method: 'PUT',
-  body: JSON.stringify(data),
-  ...options
 });
 export const getAiAssignments = (options) => request('/settings/ai-assignments', options);
 // Local image/video models this instance could offer as a federated media
@@ -419,6 +413,12 @@ export const deleteBackupSnapshot = (snapshotId, source, options = {}) => {
   return request(`/backup/snapshots/${encodeURIComponent(snapshotId)}${query}`, { method: 'DELETE', ...options });
 };
 
+// Retired-training storage (allowlisted server-side; the caller names an operation id, never a path).
+export const getRetiredDataInventory = (options = {}) =>
+  request('/data-maintenance', { silent: true, hostControlOptional: true, ...options });
+export const deleteRetiredData = (operationId) =>
+  request(`/data-maintenance/${encodeURIComponent(operationId)}`, { method: 'DELETE' });
+
 // Data Manager
 export const getDataOverview = (options) => request('/data', options);
 export const getDataCategory = (key, options = {}) => request(`/data/${key}${options.measure ? '?measure=1' : ''}`, options);
@@ -431,30 +431,6 @@ export const purgeDataCategory = (key, opts, options = {}) => request(`/data/${k
 export const getDataBackups = (options) => request('/data/backups', options);
 export const deleteDataBackup = (filename) => request(`/data/backups/${filename}`, { method: 'DELETE' });
 
-// Notifications
-export const getNotifications = (options = {}) => {
-  const params = new URLSearchParams();
-  if (options.type) params.set('type', options.type);
-  if (options.unreadOnly) params.set('unreadOnly', 'true');
-  if (options.limit) params.set('limit', options.limit);
-  if (options.includeCount) params.set('includeCount', 'true');
-  const read = () => request(`/notifications?${params}`);
-  return options.coalesce ? singleFlightRead(`/notifications?${params}`, read) : read();
-};
-export const getNotificationCount = () => request('/notifications/count');
-export const getNotificationSnapshot = async ({ limit, coalesce = false }) => {
-  const result = await getNotifications({ limit, includeCount: true, coalesce });
-  // Older servers ignore includeCount and return the original list.
-  if (Array.isArray(result)) return { notifications: result, ...await getNotificationCount() };
-  if (!Array.isArray(result?.notifications) || !Number.isInteger(result.count)) {
-    throw new Error('Invalid notification snapshot');
-  }
-  return result;
-};
-export const markNotificationRead = (id) => request(`/notifications/${id}/read`, { method: 'POST' });
-export const markAllNotificationsRead = () => request('/notifications/read-all', { method: 'POST' });
-export const deleteNotification = (id) => request(`/notifications/${id}`, { method: 'DELETE' });
-export const clearNotifications = () => request('/notifications', { method: 'DELETE' });
 
 // Telegram
 export const getTelegramStatus = (options) => request('/telegram/status', options);
@@ -507,7 +483,6 @@ export const navigateBrowser = (url, options = {}) => request('/browser/navigate
 
 // Instances (Federation)
 export const getInstances = (options) => request('/instances', options);
-export const getSelfInstance = (options) => request('/instances/self', options);
 // Federated instances a CoS task may be pinned to (#4520): id/name/isSelf only.
 export const getAssignableInstances = (options) => request('/instances/assignable', options);
 export const updateSelfInstance = (data) => request('/instances/self', { method: 'PUT', body: JSON.stringify(data) });
@@ -681,7 +656,6 @@ export const cancelCosStorage = (options) => request('/data/cos/storage/cancel',
 export const saveCosStoragePolicy = (policy, options) => request('/data/cos/storage/policy', { ...options, method: 'PUT', body: JSON.stringify(policy) });
 export const pinCosRecording = (input, options) => request('/data/cos/storage/pin', { ...options, method: 'PUT', body: JSON.stringify(input) });
 
-export const getMaintenanceStatus = (options) => request('/system/maintenance', options);
 export const beginMaintenance = (reason, options = {}) => request('/system/maintenance', {
   method: 'POST', body: JSON.stringify({ reason }), ...options,
 });

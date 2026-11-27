@@ -5,7 +5,8 @@ import { errorMiddleware } from '../lib/errorHandler.js';
 import jobRoutes from './cosJobRoutes.js';
 
 vi.mock('../services/cos/cosTaskStore.js', () => ({
-  addTask: vi.fn()
+  addTask: vi.fn(),
+  reviveBlockedTask: vi.fn()
 }));
 vi.mock('../services/cos/cos.js', () => ({
   forceSpawnTask: vi.fn()
@@ -49,7 +50,7 @@ vi.mock('../services/userTimezone.js', () => ({
   getUserTimezone: vi.fn(),
 }));
 
-import { addTask } from '../services/cos/cosTaskStore.js';
+import { addTask, reviveBlockedTask } from '../services/cos/cosTaskStore.js';
 import { forceSpawnTask } from '../services/cos/cos.js';
 import * as autonomousJobs from '../services/autonomousJobs.js';
 import { hasGate, getRegisteredGates } from '../services/jobGates.js';
@@ -117,14 +118,6 @@ describe('CoS Job Routes', () => {
 
       expect(listJobIncidents).toHaveBeenCalledWith({ openOnly: true });
       expect(response.body.jobs.map(job => job.openIncident?.id ?? null)).toEqual(['new', null]);
-    });
-
-    it('lists incidents without colliding with GET /jobs/:id', async () => {
-      listJobIncidents.mockResolvedValueOnce([{ id: 'i1', jobId: 'j1' }]);
-      const response = await request(app).get('/api/cos/jobs/incidents');
-      expect(response.status).toBe(200);
-      expect(response.body.incidents).toEqual([{ id: 'i1', jobId: 'j1' }]);
-      expect(autonomousJobs.getJob).not.toHaveBeenCalled();
     });
 
     it('acknowledges an open incident and 404s an unknown one', async () => {
@@ -543,7 +536,7 @@ describe('CoS Job Routes', () => {
       expect(response.body.status).toBe('completed');
     });
 
-    it('returns the standard error envelope when a shell job fails', async () => {
+    it('preserves the standard server error for unexpected shell job faults', async () => {
       autonomousJobs.getJob.mockResolvedValue({ id: 'j1', type: 'shell' });
       autonomousJobs.isShellJob.mockReturnValue(true);
       autonomousJobs.executeShellJob.mockRejectedValue(new Error('command failed'));
@@ -553,6 +546,46 @@ describe('CoS Job Routes', () => {
       expect(response.status).toBe(500);
       expect(response.body).toMatchObject({ error: 'command failed', code: 'INTERNAL_ERROR' });
       expect(response.body).not.toHaveProperty('success');
+    });
+
+    it.each([
+      ['shell', { success: false, error: 'command failed', reason: 'fallback', exitCode: 7 }, 'command failed', 7],
+      ['script', { success: false, reason: 'handler refused' }, 'handler refused', null],
+    ])('returns 502 for a reported %s execution failure', async (type, result, error, exitCode) => {
+      autonomousJobs.getJob.mockResolvedValue({ id: 'j1', type });
+      autonomousJobs.isShellJob.mockReturnValue(type === 'shell');
+      autonomousJobs.isScriptJob.mockReturnValue(type === 'script');
+      const execute = type === 'shell' ? autonomousJobs.executeShellJob : autonomousJobs.executeScriptJob;
+      execute.mockResolvedValue(result);
+
+      const response = await request(app).post('/api/cos/jobs/j1/trigger');
+
+      expect(response.status).toBe(502);
+      expect(response.body).toMatchObject({
+        error,
+        code: 'JOB_EXECUTION_FAILED',
+        context: { exitCode, type }
+      });
+    });
+
+    it.each([
+      ['shell', 'command exited with code 7', 7],
+      ['script', 'handler failed', null],
+    ])('returns 502 for a rejected %s execution failure', async (type, message, exitCode) => {
+      autonomousJobs.getJob.mockResolvedValue({ id: 'j1', type });
+      autonomousJobs.isShellJob.mockReturnValue(type === 'shell');
+      autonomousJobs.isScriptJob.mockReturnValue(type === 'script');
+      const execute = type === 'shell' ? autonomousJobs.executeShellJob : autonomousJobs.executeScriptJob;
+      execute.mockRejectedValue(Object.assign(new Error(message), { code: 'JOB_EXECUTION_FAILED', exitCode: exitCode ?? undefined }));
+
+      const response = await request(app).post('/api/cos/jobs/j1/trigger');
+
+      expect(response.status).toBe(502);
+      expect(response.body).toMatchObject({
+        error: message,
+        code: 'JOB_EXECUTION_FAILED',
+        context: { exitCode, type }
+      });
     });
 
     it('should trigger a script job', async () => {
@@ -568,7 +601,7 @@ describe('CoS Job Routes', () => {
       expect(response.body.status).toBe('completed');
     });
 
-    it('returns the standard error envelope when a script job fails', async () => {
+    it('preserves the standard server error for unexpected script job faults', async () => {
       autonomousJobs.getJob.mockResolvedValue({ id: 'j1', type: 'script' });
       autonomousJobs.isShellJob.mockReturnValue(false);
       autonomousJobs.isScriptJob.mockReturnValue(true);
@@ -774,6 +807,7 @@ describe('CoS Job Routes', () => {
         }
       });
       addTask.mockResolvedValue({ id: 'task-no-change' });
+      forceSpawnTask.mockResolvedValue({ success: true, taskId: 'task-no-change' });
 
       const response = await request(app).post('/api/cos/jobs/j1/trigger');
 
@@ -818,13 +852,11 @@ describe('CoS Job Routes', () => {
 
       const response = await request(app).post('/api/cos/jobs/j1/trigger');
 
-      expect(response.status).toBe(200);
+      expect(response.status).toBe(409);
       expect(response.body).toMatchObject({
-        success: false,
-        type: 'agent',
-        status: 'skipped',
-        taskId: 'task-4',
-        reason: 'No available agent slots (1/1)'
+        error: 'No available agent slots (1/1)',
+        code: 'JOB_SPAWN_REFUSED',
+        context: { taskId: 'task-4', status: 'pending' }
       });
     });
 
@@ -845,10 +877,46 @@ describe('CoS Job Routes', () => {
 
       const response = await request(app).post('/api/cos/jobs/j1/trigger');
 
+      expect(response.status).toBe(409);
+      expect(response.body).toMatchObject({
+        error: 'Task was not queued',
+        code: 'JOB_NOT_QUEUED',
+        context: { taskId: null, status: 'skipped' }
+      });
+      expect(forceSpawnTask).not.toHaveBeenCalled();
+    });
+
+    it('returns success for an equivalent queued task without spawning again', async () => {
+      autonomousJobs.getJob.mockResolvedValue({ id: 'j1', type: 'agent', name: 'Review' });
+      autonomousJobs.isShellJob.mockReturnValue(false);
+      autonomousJobs.isScriptJob.mockReturnValue(false);
+      autonomousJobs.generateTaskFromJob.mockResolvedValue({ description: 'Review', priority: 'MEDIUM' });
+      addTask.mockResolvedValue({ id: 'task-1', status: 'pending', duplicate: true });
+
+      const response = await request(app).post('/api/cos/jobs/j1/trigger');
+
       expect(response.status).toBe(200);
-      expect(response.body.success).toBe(false);
-      expect(response.body.status).toBe('skipped');
-      expect(response.body.reason).toMatch(/not queued/i);
+      expect(response.body).toMatchObject({ success: true, duplicate: true, taskId: 'task-1' });
+      expect(forceSpawnTask).not.toHaveBeenCalled();
+    });
+
+    it('reports a blocked task that could not be requeued', async () => {
+      autonomousJobs.getJob.mockResolvedValue({ id: 'j1', type: 'agent', name: 'Review' });
+      autonomousJobs.isShellJob.mockReturnValue(false);
+      autonomousJobs.isScriptJob.mockReturnValue(false);
+      autonomousJobs.generateTaskFromJob.mockResolvedValue({ description: 'Review', priority: 'MEDIUM' });
+      addTask.mockResolvedValue({ id: 'task-1', status: 'blocked', duplicate: true });
+      reviveBlockedTask.mockResolvedValue({ error: 'Task changed before retry' });
+
+      const response = await request(app).post('/api/cos/jobs/j1/trigger');
+
+      expect(reviveBlockedTask).toHaveBeenCalledWith('task-1', expect.any(Object), 'internal', { expectedStatus: 'blocked' });
+      expect(response.status).toBe(409);
+      expect(response.body).toMatchObject({
+        error: 'Task changed before retry',
+        code: 'JOB_NOT_QUEUED',
+        context: { taskId: 'task-1', status: 'blocked' }
+      });
     });
   });
 

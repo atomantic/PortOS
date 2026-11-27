@@ -1,3 +1,4 @@
+import { recordingOperatorIo } from '../test/recordingOperatorIo.js';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 const deps = vi.hoisted(() => ({
@@ -83,7 +84,7 @@ describe('automatic update dispatch', () => {
   // the matching button performs, through the same service — not a second
   // implementation that could drift from the preflights and the launch rules.
   it('runs the release channel through the Update page launcher', async () => {
-    const io = { emit: vi.fn() };
+    const io = recordingOperatorIo();
     await expect(runAutoUpdateTick({ io })).resolves.toMatchObject({ ran: true, channel: 'release' });
     expect(deps.selfUpdate).toHaveBeenCalledWith({ io, mode: 'release', automatic: true });
     expect(deps.appUpdate).not.toHaveBeenCalled();
@@ -91,7 +92,7 @@ describe('automatic update dispatch', () => {
 
   it('runs the main channel through the App Management update runner', async () => {
     deps.settings.mockResolvedValue({ autoUpdate: { enabled: true, channel: 'main', minIntervalHours: 6 } });
-    const io = { emit: vi.fn() };
+    const io = recordingOperatorIo();
     await expect(runAutoUpdateTick({ io })).resolves.toMatchObject({ ran: true, channel: 'main' });
     expect(deps.appUpdate).toHaveBeenCalledWith({ io, appId: 'portos-default', automatic: true });
     expect(deps.selfUpdate).not.toHaveBeenCalled();
@@ -617,7 +618,7 @@ describe('updater status invalidation', () => {
     const watcher = { on: vi.fn((event, handler) => { listeners.set(event, handler); return watcher; }), close: vi.fn() };
     deps.watch.mockReturnValue(watcher);
     deps.git.mockResolvedValue({ stdout: '.git' });
-    const io = { emit: vi.fn() };
+    const io = recordingOperatorIo();
     await startAutoUpdateScheduler(io);
     await vi.advanceTimersByTimeAsync(100);
     expect(io.emit).toHaveBeenCalledWith('portos:auto-update:changed', {});

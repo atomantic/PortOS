@@ -31,6 +31,8 @@ const MEMORY_EVENTS = ['cos:memory:created', 'cos:memory:updated', 'cos:memory:d
 const QUEUE_EVENTS = [...MEMORY_EVENTS, 'cos:memory:approval-needed'];
 const MODEL_STATUS_EVENTS = ['memory:models:changed', 'providers:changed'];
 const BACKEND_STATUS_EVENTS = [];
+const MEMORY_PAGE_SIZE = 50;
+const SECONDARY_BUTTON = 'rounded-lg border border-port-border px-3 py-2 text-sm hover:bg-port-border/40 focus-visible:outline-port-accent';
 
 function memorySnippet(memory) {
   const summary = memory.summary?.trim() || memory.content?.trim() || memory.id;
@@ -65,12 +67,37 @@ export default function MemoryTab({ apps = [] }) {
 
   const appId = sourceFilter === 'brain' ? 'brain' : sourceFilter === 'cos' ? '__not_brain' : undefined;
   const queryKey = JSON.stringify([sourceFilter, filters, submittedSearch]);
-  const list = useSocketResource(async ({ signal }) => {
-    const result = submittedSearch
-      ? await searchMemories(submittedSearch, { limit: 20, appId }, { signal, silent: true })
-      : await getMemories({ limit: 100, ...filters, appId }, { signal, silent: true });
-    if (!Array.isArray(result?.memories)) throw new Error('Invalid memory list response');
-    return result.memories;
+  const browseRequest = useRef(null);
+  const [loadingMore, setLoadingMore] = useState(false);
+  const list = useSocketResource(async ({ signal, events }) => {
+    if (submittedSearch) {
+      const result = await searchMemories(submittedSearch, {
+        limit: 20, appId, ...(filters.types.length ? { types: filters.types } : {})
+      }, { signal, silent: true });
+      if (!Array.isArray(result?.memories)) throw new Error('Invalid memory search response');
+      return result;
+    }
+
+    const request = browseRequest.current;
+    // A Load more click can reuse the visible prefix. Socket reconciliation
+    // rereads it because insertions and removals may shift the page offsets.
+    const previous = events.length === 0 ? request?.appendFrom : null;
+    if (request) request.appendFrom = null;
+    const target = request?.limit ?? MEMORY_PAGE_SIZE;
+    const memories = [...(previous?.memories ?? [])];
+    let total = previous?.total ?? target;
+    while (memories.length < Math.min(target, total)) {
+      const result = await getMemories({
+        limit: Math.min(MEMORY_PAGE_SIZE, target - memories.length), offset: memories.length, ...filters, appId
+      }, { signal, silent: true });
+      if (!Array.isArray(result?.memories) || !Number.isSafeInteger(result.total) || result.total < 0) {
+        throw new Error('Invalid memory list response');
+      }
+      total = result.total;
+      if (result.memories.length === 0) break;
+      memories.push(...result.memories);
+    }
+    return { memories, total };
   }, { namespace: 'cos', events: MEMORY_EVENTS, resourceKey: queryKey, enabled: view !== 'graph' });
 
   const queue = useSocketResource(async ({ signal }) => {
@@ -98,7 +125,7 @@ export default function MemoryTab({ apps = [] }) {
     { events: BACKEND_STATUS_EVENTS }
   );
 
-  const memories = list.data || [];
+  const memories = list.data?.memories ?? [];
   const pendingMemories = queue.data || [];
   const stats = counts.data;
   const embeddingStatus = modelStatus.data;
@@ -115,12 +142,12 @@ export default function MemoryTab({ apps = [] }) {
   const [actionInFlight, setActionInFlight] = useState(null);
   const actionRef = useRef(false);
 
-  const handleMemoryAction = async (id, action, label, updateStats) => {
+  const handleMemoryAction = async (id, action, label) => {
     if (actionRef.current) return;
     actionRef.current = true;
     setActionInFlight(id);
     const result = await action(id, { silent: true }).catch(err => {
-      toast.error(err?.message || `Failed to ${label.toLowerCase()} memory`);
+      toast.error(err?.message || `Failed to mark memory as ${label}`);
       return null;
     });
     actionRef.current = false;
@@ -128,36 +155,49 @@ export default function MemoryTab({ apps = [] }) {
     if (!result) return;
     toast.success(`Memory ${label}`);
     queue.updateData(prev => prev?.filter(m => m.id !== id));
-    counts.updateData(prev => prev ? {
-      ...prev,
-      pendingApproval: Math.max(0, (prev.pendingApproval || 0) - 1),
-      ...(updateStats ? updateStats(prev) : {})
-    } : prev);
-    list.refetch();
-    queue.refetch();
-    counts.refetch();
   };
 
-  const handleApprove = (id) => handleMemoryAction(id, approveMemory, 'approved', (prev) => ({ active: (prev.active || 0) + 1 }));
-  const handleReject = (id) => handleMemoryAction(id, rejectMemory, 'rejected', () => ({}));
+  const handleApprove = (id) => handleMemoryAction(id, approveMemory, 'approved');
+  const handleReject = (id) => handleMemoryAction(id, rejectMemory, 'rejected');
+
+  const resetBrowse = () => {
+    browseRequest.current = null;
+    setLoadingMore(false);
+  };
 
   const handleSearch = () => {
     const query = searchQuery.trim();
     if (query === submittedSearch) list.refetch();
-    else setSubmittedSearch(query);
+    else {
+      resetBrowse();
+      setSubmittedSearch(query);
+    }
+  };
+
+  const handleLoadMore = async () => {
+    if (!list.data || loadingMore || browseRequest.current?.appendFrom) return;
+    const request = { limit: memories.length + MEMORY_PAGE_SIZE, appendFrom: list.data };
+    browseRequest.current = request;
+    setLoadingMore(true);
+    await list.refetch();
+    if (browseRequest.current === request) setLoadingMore(false);
   };
 
   const handleDelete = async (id) => {
-    await deleteMemory(id);
+    const result = await deleteMemory(id, false, { silent: true }).catch(err => {
+      toast.error(err?.message || 'Failed to archive memory');
+      return null;
+    });
+    if (!result) return;
     toast.success('Memory archived');
-    list.updateData(prev => prev?.filter(memory => memory.id !== id));
-    list.refetch();
-    queue.refetch();
-    counts.refetch();
+    // A socket read may already have removed this row and reconciled the total.
+    list.updateData(prev => prev?.memories.some(memory => memory.id === id) ? {
+      memories: prev.memories.filter(memory => memory.id !== id),
+      total: (prev.total ?? prev.memories.length) - 1,
+    } : prev);
   };
 
-  const displayMemories = memories;
-  const snippets = cardRecordLabels([...pendingMemories, ...displayMemories].map(memory => [memory.id, memorySnippet(memory)]));
+  const snippets = cardRecordLabels([...pendingMemories, ...memories].map(memory => [memory.id, memorySnippet(memory)]));
 
   return (
     <div className="space-y-6">
@@ -224,7 +264,7 @@ export default function MemoryTab({ apps = [] }) {
           value={searchQuery}
           onChange={(e) => setSearchQuery(e.target.value)}
           onKeyDown={(e) => e.key === 'Enter' && handleSearch()}
-          placeholder="Search memories semantically..."
+          placeholder="Search memories..."
           aria-label="Search memories"
           className="flex-1 bg-port-card border border-port-border rounded-lg px-3 py-1.5 text-sm text-white placeholder-gray-500 focus:border-port-accent outline-hidden"
         />
@@ -237,7 +277,7 @@ export default function MemoryTab({ apps = [] }) {
         {submittedSearch && (
           <button
             type="button"
-            onClick={() => { setSubmittedSearch(''); setSearchQuery(''); }}
+            onClick={() => { resetBrowse(); setSubmittedSearch(''); setSearchQuery(''); }}
             aria-label="Clear search"
             className="px-2 py-1.5 flex items-center justify-center bg-port-border text-gray-400 hover:text-white rounded-lg transition-colors min-h-[44px] min-w-[44px]"
           >
@@ -253,7 +293,11 @@ export default function MemoryTab({ apps = [] }) {
           <button
             key={src}
             aria-pressed={sourceFilter === src}
-            onClick={() => setSourceFilter(src)}
+            onClick={() => {
+              if (src === sourceFilter) return;
+              resetBrowse();
+              setSourceFilter(src);
+            }}
             className={`px-3 py-2 min-h-[36px] text-xs rounded-full border transition-colors flex items-center gap-1.5 ${
               sourceFilter === src
                 ? 'border-port-accent text-port-accent bg-port-accent/10'
@@ -274,6 +318,7 @@ export default function MemoryTab({ apps = [] }) {
               const newTypes = filters.types.includes(type)
                 ? filters.types.filter(t => t !== type)
                 : [...filters.types, type];
+              resetBrowse();
               setFilters({ ...filters, types: newTypes });
             }}
             className={`px-3 py-2 min-h-[36px] text-xs rounded-full border transition-colors ${
@@ -373,7 +418,7 @@ export default function MemoryTab({ apps = [] }) {
       )}
 
       {(list.error || queue.error || counts.error || modelStatus.error || backend.error) && (
-        <Banner tone="warning" title="Unable to refresh memories" actions={<button onClick={fetchData}>Retry</button>}>
+        <Banner tone="warning" title="Unable to refresh memories" actions={<button type="button" className={SECONDARY_BUTTON} onClick={fetchData}>Retry</button>}>
           Existing rows are retained. Retry to reconcile the latest changes.
         </Banner>
       )}
@@ -387,9 +432,9 @@ export default function MemoryTab({ apps = [] }) {
         <p role="alert" className="text-port-text-muted">Memory list unavailable.</p>
       ) : view === 'list' ? (
         <div className="space-y-3">
-          {displayMemories.length === 0 ? (
+          {memories.length === 0 ? (
             <div className="text-center py-12 text-gray-500">
-              {searchQuery ? (
+              {submittedSearch ? (
                 'No memories found for this search'
               ) : (
                 <div className="space-y-4">
@@ -426,7 +471,7 @@ export default function MemoryTab({ apps = [] }) {
               )}
             </div>
           ) : (
-            displayMemories.map(memory => {
+            memories.map(memory => {
               const snippet = snippets.get(memory.id);
               return <div key={memory.id} role="group" aria-label={`Memory: ${snippet}`} className="bg-port-card border border-port-border rounded-lg p-4">
                 <div className="flex flex-col sm:flex-row sm:items-start justify-between gap-3">
@@ -517,6 +562,17 @@ export default function MemoryTab({ apps = [] }) {
         </Suspense>
       )}
 
+      {view !== 'graph' && !submittedSearch && list.data?.total > memories.length && (
+        <button
+          type="button"
+          className={`${SECONDARY_BUTTON} disabled:opacity-50`}
+          disabled={loadingMore}
+          onClick={handleLoadMore}
+        >
+          {loadingMore ? 'Loading more…' : `Load more (showing ${formatCount(memories.length)} of ${formatCount(list.data.total)})`}
+        </button>
+      )}
+
       {/* Edit Modal */}
       {openMemory && (
         <MemoryEditModal
@@ -524,10 +580,20 @@ export default function MemoryTab({ apps = [] }) {
           memory={openMemory}
           apps={apps}
           onSave={updated => {
-            list.updateData(prev => prev?.map(memory => memory.id === updated.id ? updated : memory));
-            queue.updateData(prev => prev?.map(memory => memory.id === updated.id ? updated : memory));
+            if (!submittedSearch && memories.some(memory => memory.id === updated.id)) {
+              const matchesSource = sourceFilter === 'all' || (sourceFilter === 'brain') === (updated.sourceAppId === 'brain');
+              const matchesType = filters.types.length === 0 || filters.types.includes(updated.type);
+              list.updateData(prev => {
+                if (!prev?.memories.some(memory => memory.id === updated.id)) return prev;
+                return matchesSource && matchesType
+                  ? { ...prev, memories: prev.memories.map(memory => memory.id === updated.id ? updated : memory) }
+                  : { memories: prev.memories.filter(memory => memory.id !== updated.id), total: prev.total - 1 };
+              });
+            }
+            if (pendingMemories.some(memory => memory.id === updated.id)) {
+              queue.updateData(prev => prev?.map(memory => memory.id === updated.id ? updated : memory));
+            }
             closeMemory();
-            fetchData();
           }}
           onClose={closeMemory}
         />

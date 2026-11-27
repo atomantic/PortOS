@@ -53,7 +53,6 @@ const buildApp = async () => {
   // vi.resetModules() re-imports a FRESH errorHandler each buildApp() with no
   // 'error' listener — a bare EventEmitter throws on an unhandled 'error'
   // event. Leaving `io` unset skips that path; the 400 response is still sent.
-  // None of the routes exercised here need `io` (we don't hit /api/voice/speak).
   app.use('/api/voice/public', voicePublicRoutes);
   app.use('/api/voice', voiceRoutes);
   return app;

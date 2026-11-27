@@ -37,6 +37,7 @@ vi.mock('../services/apiImageVideo', () => ({
   getGalleryImages: async () => [{ filename: 'first.png' }, { filename: 'second.png' }],
   updateTimelineProject: async (_id, patch) => { api.saved.push(patch); return { updatedAt: 'u2' }; },
   renderTimelineProject: async () => ({ jobId: 'j1' }),
+  cancelTimelineRender: async () => ({ ok: true }),
 }));
 
 const VideoTimelineEditor = (await import('./VideoTimelineEditor')).default;

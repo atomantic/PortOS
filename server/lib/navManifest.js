@@ -39,6 +39,7 @@ export const SECTION_FEATURE = new Map([
 ]);
 
 export const PROVIDERS_PAGE_PATH = '/ai/presets';
+export const ABUSE_GUARD_PAGE_PATH = '/models/llms/abuse';
 
 const RAW_NAV_COMMANDS = [
   { id: 'nav.dashboard', path: '/', label: 'Dashboard', section: 'Main' },
@@ -47,14 +48,13 @@ const RAW_NAV_COMMANDS = [
   { id: 'nav.eidoverse.solo', path: '/eidoverse/solo', label: 'Eidoverse World Only', section: 'Main', feature: 'eidoverse' },
   { id: 'nav.eidoverse', path: '/eidoverse', label: 'Eidoverse', section: 'Main', feature: 'eidoverse', previousPaths: ['/openworld', '/openworld/*', '/city', '/city/*'], preservePreviousPathSuffix: false },
   { id: 'nav.apps', path: '/apps', label: 'Apps', section: 'Main' },
+  { id: 'nav.apps.create', path: '/apps/create', label: 'Create App', section: 'Main', parentPath: '/apps' },
   // Submodules are per-app (a tab on the app detail page), so this entry is
   // explicitly PortOS's own — the only repo whose app id is a fixed constant.
   // Every other app reaches its tab from /apps/<id>/submodules.
   { id: 'nav.apps.submodules', path: `/apps/${PORTOS_APP_ID}/submodules`, label: 'PortOS Submodules', section: 'Apps', previousPaths: ['/devtools/submodules'] },
   { id: 'nav.templates', path: '/templates', label: 'Templates', section: 'Main' },
 
-  { id: 'nav.create.media-studio', path: '/create/media', label: 'Media Studio', section: 'Create' },
-  { id: 'nav.create.story-studio', path: '/create/story', label: 'Story Studio', section: 'Create' },
   { id: 'nav.catalog', path: '/catalog', label: 'Catalog', section: 'Create' },
   { id: 'nav.catalog.ingest', path: '/catalog/ingest', label: 'Catalog Ingest', section: 'Create' },
   { id: 'nav.catalog.settings', path: '/catalog?settings=1', label: 'Catalog Types', section: 'Create', previousPaths: ['/settings/catalog'] },
@@ -63,11 +63,10 @@ const RAW_NAV_COMMANDS = [
   { id: 'nav.create.casting-import', path: '/casting/import', label: 'Import Cast from Music Videos', section: 'Create' },
   { id: 'nav.create.environments', path: '/catalog/environments', label: 'Environments', section: 'Create', parentPath: '/catalog', previousPaths: ['/environments'] },
   { id: 'nav.create.objects', path: '/catalog/objects', label: 'Objects', section: 'Create', parentPath: '/catalog', previousPaths: ['/objects'] },
-  { id: 'nav.media', path: '/media', label: 'Media Gen', section: 'Create', parentPath: '/create/media' },
+  { id: 'nav.media', path: '/media', label: 'Media Gen', section: 'Create', previousPaths: ['/create/media'] },
   { id: 'nav.media.image', path: '/media/image', label: 'Image', section: 'Create', tabGroup: 'media', tabId: 'image', previousPaths: ['/image-gen'] },
-  { id: 'nav.media.video', path: '/video/generate', label: 'Generate Video', tabLabel: 'Video', section: 'Create', tabGroup: 'media', tabId: 'video', previousPaths: ['/video-gen', '/media/video'] },
+  { id: 'nav.media.video', path: '/media/video', label: 'Generate Video', tabLabel: 'Video', section: 'Create', tabGroup: 'media', tabId: 'video', previousPaths: ['/video-gen', '/video/generate'] },
   { id: 'nav.media.prompt', path: '/media/prompt', label: 'Prompt from Media', tabLabel: 'Prompt', section: 'Create', tabGroup: 'media', tabId: 'prompt' },
-  { id: 'nav.media.threejs', path: '/media/threejs', label: 'Three.js Models', section: 'Create', tabGroup: 'media', tabId: 'threejs', tabLabel: 'Three.js' },
   { id: 'nav.media.pages', path: '/html-pages', label: 'HTML Pages', section: 'Create', previousPaths: ['/media/pages'] },
   { id: 'nav.media.pages.runs', path: '/html-pages/runs', label: 'HTML Pages Runs', section: 'Create' },
   { id: 'nav.media.pages.gallery', path: '/html-pages/gallery', label: 'HTML Pages Gallery', section: 'Create' },
@@ -75,14 +74,15 @@ const RAW_NAV_COMMANDS = [
   { id: 'nav.media.timeline', path: '/media/timeline', label: 'Timeline', section: 'Create', tabGroup: 'media', tabId: 'timeline' },
   { id: 'nav.media.history', path: '/media/history', label: 'Media History', section: 'Create', tabGroup: 'media', tabId: 'history', tabLabel: 'History', previousPaths: ['/media-history'] },
   { id: 'nav.media.collections', path: '/media/collections', label: 'Collections', section: 'Create', tabGroup: 'media', tabId: 'collections' },
-  { id: 'nav.create.code-animation', path: '/code-animation', label: 'Code Animation', section: 'Create', parentPath: '/create/media' },
+  { id: 'nav.create.code-animation', path: '/code-animation', label: 'Code Animation', section: 'Create', parentPath: '/media' },
   { id: 'nav.create.code-animation.gallery', path: '/code-animation/gallery', label: 'Code Animation Gallery', section: 'Create' },
   { id: 'nav.create.code-animation.production', path: '/code-animation/production', label: 'Code Animation Production', section: 'Create' },
-  { id: 'nav.create.creative-director', path: '/creative-director', label: 'Creative Director', section: 'Create', parentPath: '/create/media', previousPaths: ['/video', '/video/:id', '/video/:id/:tab', '/video/:id/:tab/:sceneId', '/media/creative-director', '/media/creative-director/:id', '/media/creative-director/:id/:tab', '/media/creative-director/:id/:tab/:sceneId'] },
-  { id: 'nav.create.creative-commission', path: '/creative-commission', label: 'Creative Commissions', section: 'Create', parentPath: '/create/media' },
-  { id: 'nav.create.fableloom', path: '/fableloom', label: 'FableLoom', section: 'Create', parentPath: '/create/story' },
+  { id: 'nav.create.creative-director', path: '/creative-director', label: 'Creative Director', section: 'Create', parentPath: '/media', previousPaths: ['/video', '/video/:id', '/video/:id/:tab', '/video/:id/:tab/:sceneId', '/media/creative-director', '/media/creative-director/:id', '/media/creative-director/:id/:tab', '/media/creative-director/:id/:tab/:sceneId'] },
+  { id: 'nav.create.creative-commission', path: '/creative-commission', label: 'Creative Commissions', section: 'Create', parentPath: '/media' },
+  { id: 'nav.create.creative-commission.new', path: '/creative-commission/new', label: 'New Creative Commission', section: 'Create' },
+  { id: 'nav.create.fableloom', path: '/fableloom', label: 'FableLoom', section: 'Create', parentPath: '/writers-room' },
   { id: 'nav.create.game', path: '/game', label: 'Game', section: 'Create' },
-  { id: 'nav.create.music-video', path: '/music-video', label: 'Music Video', section: 'Create', parentPath: '/create/media', previousPaths: ['/media/music-video', '/media/music-video/:projectId', '/media/music-video/*'] },
+  { id: 'nav.create.music-video', path: '/music-video', label: 'Music Video', section: 'Create', parentPath: '/media', previousPaths: ['/media/music-video', '/media/music-video/:projectId', '/media/music-video/*'] },
   { id: 'nav.create.music-video.new', path: '/music-video?new=project', label: 'New Music Video', section: 'Create' },
   { id: 'nav.create.music-video.setup', path: '/music-video/setup', label: 'Music Video Song', section: 'Create' },
   { id: 'nav.create.music-video.cast-sets', path: '/music-video/cast-sets', label: 'Music Video Look', section: 'Create' },
@@ -96,26 +96,28 @@ const RAW_NAV_COMMANDS = [
   { id: 'nav.create.music-video-cleanup', path: '/music-video/cleanup', label: 'Music Video Cleanup', section: 'Create' },
   { id: 'nav.create.decks', path: '/decks', label: 'Decks', section: 'Create' },
   { id: 'nav.create.mood-boards', path: '/mood-boards', label: 'Mood Boards', section: 'Create' },
-  { id: 'nav.create.storyboards', path: '/storyboards', label: 'Storyboards', section: 'Create', parentPath: '/create/media' },
+  { id: 'nav.create.storyboards', path: '/storyboards', label: 'Storyboards', section: 'Create', parentPath: '/media' },
   // Promoted out of the Media Gen tabs to a top-level Create page (#2930).
   // The id stays `nav.media.sprites` — it's opaque and stored in palette
   // history, so renaming it would orphan those entries.
   { id: 'nav.media.sprites', path: '/sprites', label: 'Sprites', section: 'Create', previousPaths: ['/media/sprites', '/media/sprites/:id'] },
-  { id: 'nav.create.3d', path: '/3d', label: '3D', section: 'Create', previousPaths: ['/media/3d', '/media/3d/:id'] },
+  { id: 'nav.create.3d', path: '/3d', label: '3D', section: 'Create', tabGroup: '3d', tabId: 'meshes', tabLabel: 'Meshes & Blender', previousPaths: ['/media/3d', '/media/3d/:id'] },
+  { id: 'nav.media.threejs', path: '/3d/threejs', label: 'Three.js Models', section: 'Create', tabGroup: '3d', tabId: 'threejs', tabLabel: 'Three.js', previousPaths: ['/media/threejs', '/media/threejs/:id'] },
   { id: 'nav.create.authors', path: '/authors', label: 'Authors', section: 'Create' },
   { id: 'nav.create.voice-studio', path: '/voices', label: 'Voice Studio', section: 'Create' },
   { id: 'nav.create.universe-builder', path: '/universes', label: 'Universes', section: 'Create', previousPaths: ['/media/universe-builder', '/media/universe-builder/:universeId', '/universe-builder', '/universe-builder/:universeId'] },
-  { id: 'nav.create.importer', path: '/importer', label: 'Importer', section: 'Create', parentPath: '/create/story' },
-  { id: 'nav.create.pipeline', path: '/pipeline', label: 'Series Pipeline', section: 'Create', parentPath: '/create/story' },
-  { id: 'nav.create.pipeline.editorial-checks', path: '/pipeline/editorial-checks', label: 'Editorial Checks', section: 'Create', parentPath: '/create/story' },
+  { id: 'nav.create.universe-builder.new', path: '/universes/new', label: 'New Universe', section: 'Create' },
+  { id: 'nav.create.importer', path: '/importer', label: 'Importer', section: 'Create', parentPath: '/writers-room' },
+  { id: 'nav.create.pipeline', path: '/pipeline', label: 'Series Pipeline', section: 'Create', parentPath: '/writers-room' },
+  { id: 'nav.create.pipeline.editorial-checks', path: '/pipeline/editorial-checks', label: 'Editorial Checks', section: 'Create', parentPath: '/writers-room' },
   { id: 'nav.create.pipeline-continuity-bible', path: '/pipeline', label: 'Series Continuity', section: 'Create' },
   { id: 'nav.create.pipeline-voice-fingerprint', path: '/pipeline', label: 'Voice Fingerprint', section: 'Create' },
   { id: 'nav.create.pipeline-export', path: '/pipeline', label: 'Prose Series Export', section: 'Create' },
   { id: 'nav.create.sharing', path: '/sharing', label: 'Sharing', section: 'Create', tabGroup: 'sharing', tabId: 'buckets', tabLabel: 'Buckets' },
   { id: 'nav.create.sharing-duplicates', path: '/sharing/duplicates', label: 'Duplicates', section: 'Create', tabGroup: 'sharing', tabId: 'duplicates' },
   { id: 'nav.create.sharing-conflicts', path: '/sharing/conflicts', label: 'Conflicts', section: 'Create', tabGroup: 'sharing', tabId: 'conflicts' },
-  { id: 'nav.create.start-story', path: '/start-story', label: 'Start a Story', section: 'Create', parentPath: '/create/story' },
-  { id: 'nav.create.story-builder', path: '/story-builder', label: 'Story Builder', section: 'Create', parentPath: '/create/story' },
+  { id: 'nav.create.start-story', path: '/start-story', label: 'Start a Story', section: 'Create', parentPath: '/writers-room' },
+  { id: 'nav.create.story-builder', path: '/story-builder', label: 'Story Builder', section: 'Create', parentPath: '/writers-room' },
   { id: 'nav.create.rounds', path: '/rounds', label: 'Rounds', section: 'Create' },
   { id: 'nav.create.rounds-guide', path: '/rounds/guide', label: 'Rounds Guide', section: 'Create' },
   { id: 'nav.create.music', path: '/music', label: 'Music', section: 'Create' },
@@ -124,7 +126,7 @@ const RAW_NAV_COMMANDS = [
   { id: 'nav.create.music-albums', path: '/music/albums', label: 'Music Albums', section: 'Create', tabGroup: 'music', tabId: 'albums', tabLabel: 'Albums' },
   { id: 'nav.create.music-tracks', path: '/music/tracks', label: 'Music Tracks', section: 'Create', tabGroup: 'music', tabId: 'tracks', tabLabel: 'Tracks' },
   { id: 'nav.media.settings', path: '/media/image?settings=1', label: 'Media Gen Settings', section: 'Create' },
-  { id: 'nav.writers-room', path: '/writers-room', label: 'Writers Room', section: 'Create', parentPath: '/create/story' },
+  { id: 'nav.writers-room', path: '/writers-room', label: 'Writers Room', section: 'Create', previousPaths: ['/create/story'] },
   { id: 'nav.writers-room.guide', path: '/writers-room/guide', label: 'Writers Room Guide', section: 'Create' },
   // /prompts lands on its Stages tab; each editor is its own `/prompts/:tab`
   // route, and a pre-route `/prompts?tab=` link redirects onto it in the page.
@@ -139,8 +141,10 @@ const RAW_NAV_COMMANDS = [
   // own URL so a card can be linked and reached from ⌘K and voice; the retired
   // Backend Connections drawer (#6369) redirects onto Services.
   { id: 'nav.settings.providers', path: PROVIDERS_PAGE_PATH, label: 'Providers', section: 'Models', tabId: 'providers', navGroup: 'Connect', previousPaths: ['/ai'] },
+  { id: 'nav.settings.providers.new', path: '/ai/presets/new', label: 'New Provider Preset', section: 'Models' },
   { id: 'nav.ai.harnesses', path: '/ai/harnesses', label: 'Harnesses', section: 'Models', tabId: 'harnesses', navGroup: 'Connect', previousPaths: ['/models/harnesses'] },
   { id: 'nav.ai.services', path: '/ai/services', label: 'AI Services', section: 'Models', tabId: 'services', navGroup: 'Connect', previousPaths: ['/ai/connections', '/ai/connections/:connectionId'] },
+  { id: 'nav.ai.services.new', path: '/ai/services/new', label: 'New AI Service', section: 'Models' },
   { id: 'nav.settings.fleet-llm', path: '/ai/fleet', label: 'Fleet LLM Setup', section: 'Settings' },
 
   { id: 'nav.brain.inbox', path: '/brain/inbox', label: 'Inbox', section: 'Brain', tabGroup: 'brain', tabId: 'inbox' },
@@ -166,6 +170,7 @@ const RAW_NAV_COMMANDS = [
   { id: 'nav.rapid-reader', path: '/rapid-reader', label: 'Rapid Reader', section: 'Brain' },
   // No 'songs'/'song' aliases — those already resolve to nav.create.rounds (first-declared wins).
   { id: 'nav.brain.songbook', path: '/songbook', label: 'SongBook', section: 'Brain' },
+  { id: 'nav.brain.songbook.import', path: '/songbook/import', label: 'Import SongBook', section: 'Brain' },
 
   { id: 'nav.calendar.agenda', path: '/calendar/agenda', label: 'Agenda', section: 'Calendar', tabGroup: 'calendar', tabId: 'agenda' },
   { id: 'nav.calendar.day', path: '/calendar/day', label: 'Day', section: 'Calendar', tabGroup: 'calendar', tabId: 'day' },
@@ -193,6 +198,7 @@ const RAW_NAV_COMMANDS = [
   { id: 'nav.cos.health', path: '/cos/health', label: 'Health', section: 'Chief of Staff', tabGroup: 'cos', tabId: 'health' },
   { id: 'nav.cos.config', path: '/cos/config', label: 'Config', section: 'Chief of Staff', tabGroup: 'cos', tabId: 'config' },
   { id: 'nav.feature-agents', path: '/feature-agents', label: 'Feature Agents', section: 'Chief of Staff' },
+  { id: 'nav.feature-agents.create', path: '/feature-agents/create', label: 'Create Feature Agent', section: 'Chief of Staff' },
   { id: 'nav.cos.mind-tools', path: '/cos/mind?panel=tools', label: 'Mind Tools', section: 'Chief of Staff', previousPaths: ['/cos/tools', '/cos/mind/tools'] },
   { id: 'nav.social-agents', path: '/agents', label: 'Social Agents', section: 'Chief of Staff' },
 
@@ -204,7 +210,7 @@ const RAW_NAV_COMMANDS = [
   // links, and voice `ui_navigate` still land — only ⌘K/sidebar visibility gates.
   // `feature` rides through `getPageNavTabs` onto the Messages tab strip, so the
   // pill is gated by the same field the sidebar reads.
-  { id: 'nav.messages.imessage', path: '/messages/imessage', label: 'iMessage', section: 'Comms', tabGroup: 'messages', tabId: 'imessage', feature: 'imessage', previousPaths: ['/imessage'] },
+  { id: 'nav.messages.imessage', path: '/messages/imessage', label: 'iMessage', section: 'Comms', tabGroup: 'messages', tabId: 'imessage', feature: 'imessage', previousPaths: ['/imessage', '/imessage/:chatKey'] },
   { id: 'nav.messages.signal', path: '/messages/signal', label: 'Signal', section: 'Comms', tabGroup: 'messages', tabId: 'signal', feature: 'signal', previousPaths: ['/settings/signal'] },
   // Beeper (#30, fork issue #1): a local Beeper Desktop bridge fronting
   // WhatsApp/Discord/Telegram/Instagram/X/Slack and more, joining the Comms
@@ -236,7 +242,6 @@ const RAW_NAV_COMMANDS = [
   { id: 'nav.timeline', path: '/timeline', label: 'Timeline', section: 'Brain' },
   { id: 'nav.tribe', path: '/tribe', label: 'Tribe', section: 'Brain' },
 
-  { id: 'nav.devtools.agents', path: '/devtools/agents', label: 'AI Agents', section: 'Dev Tools' },
   { id: 'nav.browser', path: '/browser', label: 'Browser', section: 'Dev Tools' },
   { id: 'nav.devtools.runner', path: '/devtools/runner', label: 'Code', section: 'Dev Tools' },
   { id: 'nav.devtools.datadog', path: '/devtools/datadog', label: 'DataDog', section: 'Dev Tools', feature: 'datadog', previousPaths: ['/datadog'] },
@@ -379,7 +384,7 @@ const RAW_NAV_COMMANDS = [
   { id: 'nav.models.code-reviewers.follow-up', path: '/models/code-reviewers/follow-up', label: 'Reviewer follow-up', section: 'Models' },
   { id: 'nav.settings.embeddings', path: '/models/embeddings', label: 'Embeddings', section: 'Models', tabId: 'embeddings', navGroup: 'Library', previousPaths: ['/settings/embeddings'] },
   { id: 'nav.settings.local-llm', path: '/models/llms', label: 'Model Library', section: 'Models', tabId: 'llms', navGroup: 'Library', previousPaths: ['/settings/local-llm'] },
-  { id: 'nav.models.llms.abuse', path: '/models/llms/abuse', label: 'Abuse Guard', section: 'Models', tabId: 'abuse', navGroup: 'Policies' },
+  { id: 'nav.models.llms.abuse', path: ABUSE_GUARD_PAGE_PATH, label: 'Abuse Guard', section: 'Models', tabId: 'abuse', navGroup: 'Policies' },
   { id: 'nav.models.llms.jev', path: '/models/decision-classifiers/jev', label: 'Jev', section: 'Models', parentPath: '/models/decision-classifiers', previousPaths: ['/models/llms/jev'] },
   { id: 'nav.models.jev.try', path: '/models/decision-classifiers/jev/try', label: 'Jev Try a decision', section: 'Models' },
   { id: 'nav.models.jev.integrations', path: '/models/decision-classifiers/jev/integrations', label: 'Jev Integrations', section: 'Models' },
@@ -416,13 +421,15 @@ const RAW_NAV_COMMANDS = [
   { id: 'nav.settings.telegram', path: '/settings/telegram', label: 'Telegram', section: 'Settings', tabId: 'telegram', navGroup: 'Integrations' },
   { id: 'nav.settings.voice', path: '/settings/voice', label: 'Voice', section: 'Settings', tabId: 'voice', navGroup: 'Integrations' },
   { id: 'nav.settings.facetime', path: '/settings/voice', label: 'FaceTime Audio', section: 'Settings', feature: 'facetime' },
+  { id: 'nav.settings.voice-call', path: '/voice/call', label: 'Voice Call', section: 'Settings' },
   { id: 'nav.settings.call-host', path: '/voice/call-host', label: 'Call Host', section: 'Settings', feature: 'facetime' },
 
   { id: 'nav.ambient', path: '/ambient', label: 'Ambient', section: 'Dev Tools' },
   { id: 'nav.data', path: '/data', label: 'Data', section: 'Dev Tools' },
   { id: 'nav.instances', path: '/instances', label: 'Instances', section: 'Dev Tools' },
   { id: 'nav.loops', path: '/loops', label: 'Loops', section: 'Dev Tools' },
-  { id: 'nav.devtools.processes', path: '/devtools/processes', label: 'Processes', section: 'Dev Tools' },
+  { id: 'nav.devtools.processes', path: '/devtools/processes', label: 'Processes', section: 'Dev Tools', tabGroup: 'processes', tabId: 'pm2', tabLabel: 'PM2' },
+  { id: 'nav.devtools.agents', path: '/devtools/processes/agents', label: 'AI Agents', section: 'Dev Tools', tabGroup: 'processes', tabId: 'agents', previousPaths: ['/devtools', '/devtools/agents'] },
   { id: 'nav.security', path: '/security', label: 'Security Camera', section: 'Dev Tools' },
   { id: 'nav.system-health', path: '/system-resources/overview', label: 'System Resources', section: 'Dev Tools', tabGroup: 'system-resources', tabId: 'overview', tabLabel: 'Overview', previousPaths: ['/system-health', '/system-resources'] },
   { id: 'nav.system-resources.storage', path: '/system-resources/storage', label: 'Storage Report', section: 'Dev Tools', tabGroup: 'system-resources', tabId: 'storage', tabLabel: 'Storage' },
@@ -578,6 +585,7 @@ export const getNavPageForPath = (pathname) => {
 };
 
 export const PROVIDERS_PAGE_BREADCRUMB = getNavPageForPath(PROVIDERS_PAGE_PATH)?.breadcrumb ?? 'the Providers page';
+export const ABUSE_GUARD_PAGE_BREADCRUMB = getNavPageForPath(ABUSE_GUARD_PAGE_PATH)?.breadcrumb ?? 'the Abuse Guard page';
 
 // Expand the `{page}` token user-facing copy writes instead of a breadcrumb,
 // resolved from `runtime.manageUrl` (or any object carrying that field) via

@@ -26,7 +26,7 @@
  * (the default) this module behaves exactly as it did before families existed.
  */
 
-import { listSpecNames } from './threejsModel.js';
+import { listSpecNames } from './threejsModelSpecNames.js';
 import { findMissingFamilyComponents } from './threejsModelFamilies.js';
 
 // Severity of a promised-but-unbuilt feature scales with how much of the

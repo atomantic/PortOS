@@ -8,7 +8,7 @@
  * deliberately not the same as `[]` (read, and empty).
  */
 
-import { readdir, readFile, stat } from 'fs/promises';
+import { lstat, readdir, readFile, stat } from 'fs/promises';
 import { homedir, totalmem } from 'os';
 import { join } from 'path';
 
@@ -20,6 +20,13 @@ const WARM_DECODE_REF_GB = 32;
 const WARM_DECODE_REF_TOKS = 12;
 
 const round1 = (n) => Math.round(n * 10) / 10;
+
+export const SLOTSTREAM_CACHE_DISPLAY = '~/.slotstream/models';
+
+// A removal takes the literal cache entry name, not a Hub repo or a path.
+export const isSlotstreamCheckpointId = (id) =>
+  typeof id === 'string' && id.length > 0 && id.length <= 255 &&
+  id !== '.' && id !== '..' && (process.platform !== 'win32' || !/[. ]$/.test(id)) && !/[\\/:\0]/.test(id);
 
 /**
  * Default on-disk cache. Override with `SLOTSTREAM_MODEL_DIR` or the `cacheDir`
@@ -95,21 +102,31 @@ export async function isServableCheckpoint(dir, { ignoreIncomplete = false } = {
   return true;
 }
 
+// Follow the checkpoint link and linked weight files (Hub snapshots store
+// their shards as links), but do not walk linked subdirectories.
+async function checkpointSize(dir) {
+  const entries = await readdir(dir, { recursive: true, withFileTypes: true });
+  let bytes = 0;
+  for (const entry of entries) {
+    if (!entry.isFile() && !entry.isSymbolicLink()) continue;
+    const info = await stat(join(entry.parentPath, entry.name));
+    if (info.isFile()) bytes += info.size;
+  }
+  return bytes;
+}
+
 /**
- * Cached checkpoints on disk.
- *
- * Each subdirectory of the cache is one checkpoint; the directory name is the
- * id handed to `slotstream serve --model`. No network.
- *
- * @param {{cacheDir?: string}} [options]
- * @returns {Promise<{models: object[]|null, error: string|null}>}
+ * Servable checkpoints are launch candidates. Status can also request cache
+ * rows for unfinished downloads so interrupted transfers can be removed.
  */
-export async function listSlotstreamCachedModels({ cacheDir } = {}) {
+export async function listSlotstreamCachedModels({ cacheDir, includeRows = false } = {}) {
   const dir = cacheDir || slotstreamCacheDir();
   const entries = await readdir(dir).catch((err) => err);
+  const rows = [];
+  const result = (models, error = null) => ({ models, error, ...(includeRows ? { rows } : {}) });
   if (entries instanceof Error) {
-    if (entries.code === 'ENOENT') return { models: [], error: null };
-    return { models: null, error: `could not read Slotstream cache (${entries.code || entries.message})` };
+    if (entries.code === 'ENOENT') return result([]);
+    return result(null, 'could not read Slotstream cache');
   }
 
   const models = [];
@@ -117,10 +134,17 @@ export async function listSlotstreamCachedModels({ cacheDir } = {}) {
     const full = join(dir, name);
     const info = await stat(full).catch(() => null);
     if (!info?.isDirectory()) continue;
-    if (!(await isServableCheckpoint(full))) continue;
-    models.push({ id: name, path: full });
+    const servable = await isServableCheckpoint(full);
+    if (servable) models.push({ id: name, path: full });
+    if (!includeRows || !isSlotstreamCheckpointId(name)) continue;
+    const incomplete = !servable && await lstat(join(full, SLOTSTREAM_INCOMPLETE_MARKER)).catch(() => null);
+    if (!servable && !incomplete) continue;
+    const entry = await lstat(full).catch(() => null);
+    if (!entry) continue;
+    const sizeBytes = await checkpointSize(full).catch(() => null);
+    rows.push({ id: name, sizeBytes, linked: entry.isSymbolicLink() });
   }
-  return { models, error: null };
+  return result(models);
 }
 
 /**

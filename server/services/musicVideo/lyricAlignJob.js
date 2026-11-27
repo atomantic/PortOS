@@ -12,6 +12,7 @@
  */
 
 import { randomUUID } from 'crypto';
+import { CANCEL_ALREADY_TERMINAL } from '../../lib/cancelResponse.js';
 import { shortId } from '../../lib/fileUtils.js';
 import { broadcastSse, attachSseClient as attachSse, closeJobAfterDelay } from '../../lib/sseUtils.js';
 import { ServerError } from '../../lib/errorHandler.js';
@@ -35,7 +36,8 @@ export function getActiveLyricAlignJobId(projectId) {
 
 export function cancelLyricAlign(jobId) {
   const job = alignJobs.get(jobId);
-  if (!job || job.settled) return false;
+  if (!job) return false;
+  if (job.settled) return CANCEL_ALREADY_TERMINAL;
   job.cancelRequested = true;
   return true;
 }
@@ -47,7 +49,8 @@ export function cancelLyricAlign(jobId) {
  * queueing a second whisper run over the same song.
  */
 export async function startLyricAlign(projectId, { cueId = null, separateVocals = false, retimeSong = false, align = alignProjectLyrics, retime = null } = {}) {
-  if (getActiveLyricVerifyJobId(projectId)) throw new ServerError('Lyric verification is running.', { status: 409, code: 'LYRIC_ALIGN_BUSY' });
+  const verifyJobId = getActiveLyricVerifyJobId(projectId);
+  if (verifyJobId) throw new ServerError('Lyric verification is running.', { status: 409, code: 'LYRIC_ALIGN_BUSY', context: { jobId: verifyJobId } });
   const running = getActiveLyricAlignJobId(projectId);
   if (running) return { jobId: running, reused: true };
   // Fail with a real status before a job exists, as the blocking route did.
@@ -64,7 +67,8 @@ export async function startLyricAlign(projectId, { cueId = null, separateVocals 
     throw new ServerError('That lyric line is no longer on the project.', { status: 404, code: 'NOT_FOUND' });
   }
   // Another request may have started a job while the project was read.
-  if (getActiveLyricVerifyJobId(projectId)) throw new ServerError('Lyric verification is running.', { status: 409, code: 'LYRIC_ALIGN_BUSY' });
+  const racedVerifyJobId = getActiveLyricVerifyJobId(projectId);
+  if (racedVerifyJobId) throw new ServerError('Lyric verification is running.', { status: 409, code: 'LYRIC_ALIGN_BUSY', context: { jobId: racedVerifyJobId } });
   const raced = getActiveLyricAlignJobId(projectId);
   if (raced) return { jobId: raced, reused: true };
   const jobId = randomUUID();

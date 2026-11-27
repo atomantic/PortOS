@@ -9,7 +9,6 @@ import { getBrowserStatusSnapshot } from '../services/browserStatus.js';
 import { requestHasHostControl } from '../services/authGate.js';
 import * as browserService from '../services/browserService.js';
 import { logsQuerySchema } from '../lib/sharedSchemas.js';
-import { browserVaultFillSchema, browserVaultListInputSchema } from '../lib/websiteLoginValidation.js';
 
 const router = express.Router();
 
@@ -88,13 +87,18 @@ const updateConfigSchema = z.object({
 // GET /api/browser - Full browser status
 router.get('/', asyncHandler(async (req, res) => {
   const status = await getBrowserStatusSnapshot();
-  // Page titles/URLs and saved filenames come from the signed-in profile; only
-  // a caller who may drive that profile (see HOST_CONTROL_GET_ROUTES) sees them.
   if (requestHasHostControl(req)) return res.json(status);
+  // The snapshot includes raw CDP metadata, host paths and process details.
+  // Publish only the fields needed to show basic browser health remotely.
   res.json({
-    ...status,
+    connected: status.connected,
+    processRunning: status.processRunning,
+    status: status.status,
+    headless: status.headless,
+    process: { status: status.process?.status },
     pages: [],
-    downloads: { ...status.downloads, files: [] },
+    pageCount: status.pageCount,
+    downloads: { files: [] },
     contentRedacted: true,
   });
 }));
@@ -165,50 +169,10 @@ router.post('/navigate', asyncHandler(async (req, res) => {
   res.json(page);
 }));
 
-// GET /api/browser/vault/logins - Website logins that may be filled (#17397).
-// Metadata only (labels, exact origins, masked username, hasTotp) across every
-// household subject; `?origin=` narrows to logins allowed on that exact origin.
-router.get('/vault/logins', asyncHandler(async (req, res) => {
-  const { origin } = validateRequest(browserVaultListInputSchema, req.query);
-  const { listWebsiteLogins } = await import('../services/privacyWebsiteLogins.js');
-  res.json(await listWebsiteLogins({ origin, allSubjects: true }));
-}));
-
-// POST /api/browser/vault/fill - Model-blind credential fill into one tab.
-// Host-control gated like every write. The host decrypts and injects only
-// when the tab's live origin exactly matches the login; the response is
-// metadata only and never carries a password, seed or 2FA code. Never submits.
-router.post('/vault/fill', asyncHandler(async (req, res) => {
-  const request = validateRequest(browserVaultFillSchema, req.body);
-  const { fillWebsiteLogin } = await import('../services/browserVaultFill.js');
-  res.json(await fillWebsiteLogin(request));
-}));
-
 // GET /api/browser/health - Quick health check
 router.get('/health', asyncHandler(async (req, res) => {
   const health = await browserService.getHealthStatus();
   res.json(health);
-}));
-
-// GET /api/browser/process - PM2 process status
-router.get('/process', asyncHandler(async (req, res) => {
-  const processStatus = await browserService.getProcessStatus();
-  res.json(processStatus);
-}));
-
-// GET /api/browser/pages - List open CDP pages
-router.get('/pages', asyncHandler(async (req, res) => {
-  const pages = await browserService.getOpenPages();
-  res.json(pages);
-}));
-
-// GET /api/browser/version - CDP version info
-router.get('/version', asyncHandler(async (req, res) => {
-  const version = await browserService.getCdpVersion();
-  if (!version) {
-    throw new ServerError('Browser not reachable', { status: 503 });
-  }
-  res.json(version);
 }));
 
 // GET /api/browser/logs - Recent PM2 logs

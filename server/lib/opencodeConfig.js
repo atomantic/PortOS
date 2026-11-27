@@ -30,6 +30,7 @@ import {
 import { PROVIDER_GATEWAY_IDS, gatewayById, isGatewayNamespace } from './provider/providerGateways.js';
 import { isPublicReviewNoToolProfile } from './agent/agentExecutionProfiles.js';
 import { isPlainObject } from './objects.js';
+import { MKSERVE_CONTEXT, MKSERVE_MODEL } from './mkserveRuntime.js';
 import { SPLASH_CONTEXT, SPLASH_MODEL } from './splashRuntime.js';
 
 import { isTruthyMeta } from './metadataFlags.js';
@@ -95,6 +96,7 @@ const THINKING_STYLE = {
   lmstudio: null,
   // Inkling chooses its own reasoning; do not translate the toggle into an Ollama field.
   splash: null,
+  mkserve: null,
   mtplx: 'chatTemplate',
   llama: 'chatTemplate',
   vllm: 'chatTemplate',
@@ -112,9 +114,11 @@ const asObject = (value) => (isPlainObject(value) ? value : {});
 // renderer never sees on the next tool step. OpenCode 2 also migrates this
 // legacy model-level field when reading the `provider` config shape.
 function localModelEntry(providerKey, id, existing) {
-  if (providerKey === 'splash') {
+  if (providerKey === 'splash' || providerKey === 'mkserve') {
     // OpenCode otherwise assumes 0 context for a custom ID and never compacts.
-    const limits = id === SPLASH_MODEL ? { limit: { context: SPLASH_CONTEXT, output: 8192 } } : {};
+    const context = providerKey === 'splash' && id === SPLASH_MODEL ? SPLASH_CONTEXT
+      : providerKey === 'mkserve' && id === MKSERVE_MODEL ? MKSERVE_CONTEXT : null;
+    const limits = context ? { limit: { context, output: 8192 } } : {};
     return {
       name: id,
       reasoning: true,

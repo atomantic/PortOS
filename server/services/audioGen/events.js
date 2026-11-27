@@ -1,6 +1,6 @@
 import { EventEmitter } from 'events';
 
-// Mirrors imageGenEvents/videoGenEvents/trainingEvents — the mediaJobQueue
+// Mirrors imageGenEvents/videoGenEvents — the mediaJobQueue
 // emitter contract every gen module rides (`progress`/`activity`/`completed`/
 // `failed`, keyed by `generationId`). See server/services/imageGenEvents.js for
 // the maxListeners rationale. Federated audio jobs can share a bounded parallel

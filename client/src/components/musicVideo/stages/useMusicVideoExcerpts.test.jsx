@@ -58,20 +58,20 @@ it('does not reattach its own settled job while the terminal refresh is still pe
   expect(MockEventSource.instances).toHaveLength(1);
 });
 
-it('reloads the project and toasts when an excerpt cancel returns { ok: false }, ignoring double-clicks', async () => {
+it.each([404, 409])('reloads the project when an excerpt cancel returns %s and ignores double-clicks', async (status) => {
   const project = { id: 'first', excerpts: [{ id: 'draft-job', status: 'rendering' }] };
   const fresh = { id: 'first', excerpts: [{ id: 'draft-job', status: 'complete' }] };
-  let resolveCancel;
-  cancelMusicVideoExcerptRender.mockReturnValue(new Promise((r) => { resolveCancel = r; }));
+  let rejectCancel;
+  cancelMusicVideoExcerptRender.mockReturnValue(new Promise((_resolve, reject) => { rejectCancel = reject; }));
   getMusicVideoProject.mockResolvedValue(fresh);
   const replaceProject = vi.fn();
   const { result } = renderHook(() => useMusicVideoExcerpts({ project, replaceProject }));
   act(() => { result.current.cancelExcerpt('draft-job'); result.current.cancelExcerpt('draft-job'); });
   expect(cancelMusicVideoExcerptRender).toHaveBeenCalledTimes(1);
   expect(result.current.cancellingId).toBe('draft-job');
-  await act(async () => resolveCancel({ ok: false }));
+  await act(async () => rejectCancel(Object.assign(new Error('Draft render is no longer stoppable'), { status })));
   await waitFor(() => expect(replaceProject).toHaveBeenCalledWith(fresh));
-  expect(toast.error).toHaveBeenCalledWith('This draft render is no longer running — refreshed status');
+  expect(toast.error).toHaveBeenCalledWith('Draft render is no longer stoppable');
   expect(result.current.cancellingId).toBe(null);
 });
 

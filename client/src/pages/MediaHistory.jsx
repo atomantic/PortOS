@@ -38,6 +38,12 @@ import {
   makeVideoVertical,
 } from '../services/apiImageVideo.js';
 
+// Match the binary thresholds used by the Media History size badges.
+const VIDEO_SIZE_FILTERS = [
+  [25 * 1024 ** 2, '25 MB'], [100 * 1024 ** 2, '100 MB'], [500 * 1024 ** 2, '500 MB'],
+  [1024 ** 3, '1 GB'], [5 * 1024 ** 3, '5 GB'],
+];
+
 const FILTERS = [
   { id: 'all', label: 'All' },
   { id: 'image', label: 'Images' },
@@ -49,6 +55,7 @@ export default function MediaHistory() {
   const navigate = useNavigate();
   const [filter, setFilter] = useState('all');
   const [query, setQuery] = useState('');
+  const [videoSizeOverBytes, setVideoSizeOverBytes] = useState('');
   const [stitchMode, setStitchMode] = useState(false);
   const [showHosting, setShowHosting] = useState(false);
   const [selected, setSelected] = useState([]); // video ids
@@ -75,7 +82,8 @@ export default function MediaHistory() {
   // over the full metadata.
   const page = useGalleryPage({
     kind: filter, q: query, starred: favoritesOnly, localOnly: localOnly || undefined,
-    rating: ratingFilter || undefined, summary: true, hidden: false, compact: true,
+    rating: ratingFilter || undefined, videoSizeOverBytes: videoSizeOverBytes ? Number(videoSizeOverBytes) : undefined,
+    summary: true, hidden: false, compact: true,
   }, { media: true, preserveLoadedOnRefresh: true, revision: annotationRevision, paused: (favoritesOnly || !!ratingFilter) && annotationSaves > 0 });
   const { loading, counts, refresh } = page;
   const items = useMemo(() => page.items.map(normalizeMediaRow), [page.items]);
@@ -98,6 +106,19 @@ export default function MediaHistory() {
   const [verifyModel, setVerifyModel] = useState('auto');
   const [batchVerifying, setBatchVerifying] = useState(false);
   const [batchProgress, setBatchProgress] = useState({ current: 0, total: 0 });
+  const batchController = useRef(null);
+  useEffect(() => () => {
+    batchController.current?.abort();
+    batchController.current = null;
+  }, []);
+
+  const handleCancelVerify = useCallback(() => {
+    batchController.current?.abort();
+    batchController.current = null;
+    setBatchVerifying(false);
+    setVerifyMode(false);
+    setSelectedVerify([]);
+  }, []);
 
   const visibleImages = useMemo(() => items.filter((it) => it.kind === 'image' && it.filename), [items]);
 
@@ -114,7 +135,10 @@ export default function MediaHistory() {
   }, []);
 
   const handleRunBatchVerify = useCallback(async (profileId, modelId = verifyModel) => {
-    if (selectedVerify.length === 0) return;
+    if (selectedVerify.length === 0 || batchController.current) return;
+    const controller = new AbortController();
+    const { signal } = controller;
+    batchController.current = controller;
     setBatchVerifying(true);
     setBatchProgress({ current: 0, total: selectedVerify.length });
 
@@ -123,16 +147,16 @@ export default function MediaHistory() {
     let errorCount = 0;
 
     for (let i = 0; i < selectedVerify.length; i++) {
+      if (signal.aborted || !mounted.current) return;
       const filename = selectedVerify[i];
       setBatchProgress({ current: i + 1, total: selectedVerify.length });
-      const targetItem = items.find((it) => it.filename === filename);
       try {
         const res = await verifyImageNow({
           filename,
           profileId,
-          prompt: targetItem?.prompt || '',
           reviewerModel: modelId !== 'auto' ? modelId : undefined,
-        });
+        }, { signal, silent: true });
+        if (signal.aborted || !mounted.current) return;
         if (res?.verdict === 'pass') passCount++;
         else if (res?.verdict === 'fail') failCount++;
 
@@ -147,17 +171,19 @@ export default function MediaHistory() {
           return it;
         }));
       } catch (err) {
+        if (signal.aborted || !mounted.current) return;
         errorCount++;
         console.error(`Verification error on ${filename}:`, err);
       }
     }
 
+    batchController.current = null;
     setBatchVerifying(false);
     if (errorCount > 0) toast.warning(`Batch verification: ${passCount} passed, ${failCount} defect(s) flagged, ${errorCount} could not be verified.`);
     else toast.success(`Batch verification complete: ${passCount} passed, ${failCount} defect(s) flagged.`);
     setSelectedVerify([]);
     refresh();
-  }, [selectedVerify, verifyModel, items, setItems, refresh]);
+  }, [selectedVerify, verifyModel, mounted, setItems, refresh]);
 
   const settleStitch = useCallback((id, error = null) => {
     if (!stitchJobsRef.current.delete(id)) return false;
@@ -246,9 +272,9 @@ export default function MediaHistory() {
   // without a full gallery refetch.
   const handleCleanComplete = useCallback((cleaned) => {
     const normalized = normalizeImage(cleaned);
-    setItems((prev) => [normalized, ...prev.filter((x) => x.key !== normalized.key)]);
+    if (!videoSizeOverBytes) setItems((prev) => [normalized, ...prev.filter((x) => x.key !== normalized.key)]);
     refresh();
-  }, [setItems, refresh]);
+  }, [setItems, refresh, videoSizeOverBytes]);
   const { handleRemix, handleSendToImage, handleSendToVideo, handleSendTo3d, handleContinue, handleClean, handleRemoveWatermark, handleFilmLookComplete } = useMediaPreviewActions({
     onCleanComplete: handleCleanComplete,
   });
@@ -308,7 +334,10 @@ export default function MediaHistory() {
             <button
               key={f.id}
               type="button"
-              onClick={() => setFilter(f.id)}
+              onClick={() => {
+                setFilter(f.id);
+                if (f.id !== 'video') setVideoSizeOverBytes('');
+              }}
               className={`min-h-[44px] pointer-fine:sm:min-h-0 px-2.5 py-1 rounded-full border ${
                 filter === f.id
                   ? 'bg-port-accent/20 border-port-accent text-port-accent'
@@ -336,22 +365,41 @@ export default function MediaHistory() {
             On this machine
           </button>
           <RatingFilterChips value={ratingFilter} onChange={setRatingFilter} />
+          <select
+            aria-label="Video file size"
+            title="Filter by original video size on this machine"
+            value={videoSizeOverBytes}
+            onChange={event => {
+              const value = event.target.value;
+              setVideoSizeOverBytes(value);
+              if (value) setFilter('video');
+              setSelected([]);
+              setSelectedVerify([]);
+            }}
+            className="min-h-[44px] pointer-fine:sm:min-h-0 rounded-lg border border-port-border bg-port-card px-2.5 py-1 text-port-text"
+          >
+            <option value="">Any video size</option>
+            {VIDEO_SIZE_FILTERS.map(([bytes, label]) => <option key={bytes} value={bytes}>Over {label}</option>)}
+          </select>
         </div>
-        <div className="flex items-center gap-1">
-          <Link to="/media/image" className="flex items-center gap-1.5 px-2 py-1 text-xs text-gray-300 hover:text-white border border-port-border rounded hover:bg-port-border/50">
+        <div className="flex flex-wrap items-center gap-1">
+          <Link to="/media/image" className="flex min-h-[44px] pointer-fine:sm:min-h-0 items-center gap-1.5 px-2 py-1 text-xs text-gray-300 hover:text-white border border-port-border rounded hover:bg-port-border/50">
             <ImageIcon className="w-3.5 h-3.5" /> Image
           </Link>
-          <Link to="/media/video" className="flex items-center gap-1.5 px-2 py-1 text-xs text-gray-300 hover:text-white border border-port-border rounded hover:bg-port-border/50">
+          <Link to="/media/video" className="flex min-h-[44px] pointer-fine:sm:min-h-0 items-center gap-1.5 px-2 py-1 text-xs text-gray-300 hover:text-white border border-port-border rounded hover:bg-port-border/50">
             <Film className="w-3.5 h-3.5" /> Video
           </Link>
           <button
             type="button"
+            aria-pressed={verifyMode}
             onClick={() => {
-              setVerifyMode((v) => !v);
-              setSelectedVerify([]);
-              if (!verifyMode) setStitchMode(false);
+              if (verifyMode) handleCancelVerify();
+              else {
+                setVerifyMode(true);
+                setStitchMode(false);
+              }
             }}
-            className={`flex items-center gap-1.5 px-2 py-1 text-xs rounded border ${
+            className={`flex min-h-[44px] pointer-fine:sm:min-h-0 items-center gap-1.5 px-2 py-1 text-xs rounded border ${
               verifyMode
                 ? 'bg-port-accent text-white border-port-accent'
                 : 'border-port-border text-gray-300 hover:text-white hover:bg-port-border/50'
@@ -361,8 +409,13 @@ export default function MediaHistory() {
           </button>
           <button
             type="button"
-            onClick={() => { setStitchMode((m) => !m); setSelected([]); if (!stitchMode) setVerifyMode(false); }}
-            className={`flex items-center gap-1.5 px-2 py-1 text-xs rounded border ${
+            aria-pressed={stitchMode}
+            onClick={() => {
+              setStitchMode((m) => !m);
+              setSelected([]);
+              if (verifyMode) handleCancelVerify();
+            }}
+            className={`flex min-h-[44px] pointer-fine:sm:min-h-0 items-center gap-1.5 px-2 py-1 text-xs rounded border ${
               stitchMode
                 ? 'bg-port-accent text-white border-port-accent'
                 : 'border-port-border text-gray-300 hover:text-white hover:bg-port-border/50'
@@ -374,7 +427,7 @@ export default function MediaHistory() {
             type="button"
             aria-expanded={showHosting}
             onClick={() => setShowHosting((v) => !v)}
-            className={`flex items-center gap-1.5 px-2 py-1 text-xs rounded border ${
+            className={`flex min-h-[44px] pointer-fine:sm:min-h-0 items-center gap-1.5 px-2 py-1 text-xs rounded border ${
               showHosting
                 ? 'bg-port-accent/20 border-port-accent text-port-accent'
                 : 'border-port-border text-gray-300 hover:text-white hover:bg-port-border/50'
@@ -387,7 +440,7 @@ export default function MediaHistory() {
               type="button"
               onClick={handleStitch}
               disabled={stitching}
-              className="flex items-center gap-1.5 px-2 py-1 text-xs bg-port-success hover:bg-port-success/80 disabled:opacity-50 text-white rounded"
+              className="flex min-h-[44px] pointer-fine:sm:min-h-0 items-center gap-1.5 px-2 py-1 text-xs bg-port-success hover:bg-port-success/80 disabled:opacity-50 text-white rounded"
             >
               {stitching ? 'Stitching…' : `Stitch ${selected.length}`}
             </button>
@@ -406,7 +459,7 @@ export default function MediaHistory() {
           onRunBatchVerify={handleRunBatchVerify}
           isVerifying={batchVerifying}
           progress={batchProgress}
-          onCancel={() => { setVerifyMode(false); setSelectedVerify([]); }}
+          onCancel={handleCancelVerify}
           selectedProfile={verifyProfile}
           onProfileChange={setVerifyProfile}
           selectedModel={verifyModel}
@@ -415,7 +468,7 @@ export default function MediaHistory() {
       )}
 
       <MediaBatchImport onImported={item => {
-        if ((filter === 'all' || filter === item.kind) && !query && !favoritesOnly && !ratingFilter) {
+        if ((filter === 'all' || filter === item.kind) && !query && !favoritesOnly && !ratingFilter && !videoSizeOverBytes) {
           page.setItems(previous => [item, ...previous.filter(row => !(row.kind === item.kind && row.data.filename === item.data.filename))]);
         }
         refresh();
@@ -428,7 +481,9 @@ export default function MediaHistory() {
         <div className="bg-port-card border border-port-border rounded-xl p-8 text-center text-gray-500 text-sm">
           {query.trim()
             ? <>No matches for <span className="text-gray-300">"{query}"</span>. <button type="button" onClick={() => setQuery('')} className="text-port-accent hover:underline">Clear search</button></>
-            : localOnly
+            : videoSizeOverBytes
+              ? 'No videos on this machine match this size filter.'
+              : localOnly
               ? 'No matching media on this machine.'
               : filter === 'video'
               ? <>No videos yet. <Link to="/media/video" className="text-port-accent hover:underline">Generate one →</Link></>

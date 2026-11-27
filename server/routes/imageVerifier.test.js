@@ -1,6 +1,6 @@
-import { describe, it, expect, vi, } from 'vitest';
+import { describe, it, expect, vi } from 'vitest';
 import express from 'express';
-import { request } from '../lib/testHelper.js';
+import { closeLoopbackServer, request, startLoopbackServer, waitForAbort } from '../lib/testHelper.js';
 import { errorMiddleware } from '../lib/errorHandler.js';
 
 vi.mock('../services/imageVerifier.js', () => ({
@@ -18,6 +18,7 @@ vi.mock('../services/imageVerifier.js', () => ({
 }));
 
 import imageVerifierRoutes from './imageVerifier.js';
+import { verifyImage } from '../services/imageVerifier.js';
 
 const buildApp = () => {
   const app = express();
@@ -36,6 +37,36 @@ describe('imageVerifier routes', () => {
       .send({ filename: 'test.png', profileId: 'strict_anatomy' });
     expect(res.status).toBe(200);
     expect(res.body.verdict).toBe('pass');
+  });
+
+  it('aborts verification when the client disconnects after sending the JSON body', async () => {
+    const started = Promise.withResolvers();
+    const canceled = Promise.withResolvers();
+    verifyImage.mockImplementationOnce(async ({ signal }) => {
+      started.resolve(signal);
+      await waitForAbort(signal);
+      canceled.resolve();
+      signal.throwIfAborted();
+    });
+    const server = await startLoopbackServer(app);
+    const client = new AbortController();
+    const response = fetch(`http://127.0.0.1:${server.address().port}/api/image-verifier/verify`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ filename: 'test.png' }),
+      signal: client.signal,
+    }).catch((error) => error);
+    try {
+      const signal = await started.promise;
+      expect(signal.aborted).toBe(false);
+      client.abort();
+      expect(await response).toMatchObject({ name: 'AbortError' });
+      await canceled.promise;
+      expect(signal.aborted).toBe(true);
+    } finally {
+      client.abort();
+      await closeLoopbackServer(server);
+    }
   });
 
   it.each([

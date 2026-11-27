@@ -195,7 +195,7 @@ async function checkUnansweredTribeThreads() {
 
 /**
  * Collect only the non-product alert sources. Product engagement is composed
- * separately by proactiveAlerts.js and by the Review Queue product producer.
+ * separately by the Review Queue product producer.
  */
 export async function generateNonProductAlerts() {
   const resolutions = await getHealthAlertResolutions();

@@ -2,7 +2,7 @@ import { useModelInputPreview } from '../../hooks/useModelInputPreview';
 import { previewMediaJobRetry } from '../../services/apiMediaJobs';
 import ModelInputPreview from './ModelInputPreview';
 import { useCallback, useState, useEffect } from 'react';
-import { RotateCw } from 'lucide-react';
+import RetryFormActions from './RetryFormActions';
 import { FormField } from '../ui/FormField';
 import AutoSizeTextarea from '../ui/AutoSizeTextarea';
 import ModelSelect from '../ModelSelect';
@@ -158,23 +158,7 @@ export default function EditRetryForm({ job, retrying, onSubmit, onCancel }) {
           </select>
         </FormField>
       )}
-      <div className="flex items-center justify-end gap-2 pt-1">
-        <button
-          type="button"
-          disabled={retrying} onClick={onCancel}
-          className="px-3 py-1 text-xs text-port-text-muted hover:text-white"
-        >
-          Cancel
-        </button>
-        <button
-          type="submit"
-          disabled={retrying || !!modelInputPreview.error}
-          className="inline-flex items-center gap-1 px-3 py-1 bg-port-accent text-white text-xs rounded hover:bg-port-accent/90 disabled:opacity-50"
-        >
-          <RotateCw className="w-3 h-3" />
-          Retry with changes
-        </button>
-      </div>
+      <RetryFormActions onCancel={onCancel} retrying={retrying} submitDisabled={!!modelInputPreview.error} />
     </form>
   );
 }

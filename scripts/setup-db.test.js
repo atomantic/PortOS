@@ -73,7 +73,7 @@ async function runSetup({ mode = 'docker', unavailable, tty = false, nativeReady
   const savedEnv = { PGMODE: mode, EXAMPLE_SETTING: 'preserved', ...dotEnv };
   const initialEnv = { ...savedEnv };
   const calls = [];
-  const childEnvs = [];
+  const childOptions = [];
   const errors = [];
   const logs = [];
   const exitSignal = {};
@@ -110,7 +110,7 @@ async function runSetup({ mode = 'docker', unavailable, tty = false, nativeReady
       console: { log: (message) => logs.push(message), error: (message) => errors.push(message) },
       execFileSync: (command, args, options) => {
         calls.push([command, ...args]);
-        childEnvs.push(options?.env);
+        childOptions.push(options);
         const invocation = [command, ...args].join(' ');
         if (invocation === unavailable) throw new Error('Synthetic unavailable dependency');
         const isPsql = command === 'psql' || command === KEG_PSQL;
@@ -141,6 +141,16 @@ async function runSetup({ mode = 'docker', unavailable, tty = false, nativeReady
     if (error !== exitSignal) throw error;
   }
   expect(savedEnv).toEqual(initialEnv);
+  // Check outside the mock so a probe's catch block cannot swallow a failure.
+  for (const [index, [command, ...args]] of calls.entries()) {
+    const isSetup = (command === 'bash' && args[1] === 'setup-native')
+      || (command === 'docker' && args.join(' ') === 'compose up -d db');
+    expect(childOptions[index], [command, ...args].join(' ')).toMatchObject({
+      timeout: isSetup ? 120_000 : 10_000,
+      windowsHide: true,
+    });
+  }
+  const childEnvs = childOptions.map((options) => options?.env);
   return { clients, exitCode, calls, childEnvs, errors, logs, container, volumeRecords, recreations };
 }
 
@@ -331,7 +341,7 @@ describe('setup preserves the selected database', () => {
     expect(result.calls.some(([command]) => command === KEG_PSQL)).toBe(true);
     expect(result.calls.some((call) => call.includes('setup-native'))).toBe(expectSetup);
   });
-  // Pairs with scripts/ecosystemEnv.test.js "mode precedence matches setup" (#10758).
+  // Pairs with server/test/guards/repo/ecosystemEnv.test.js "mode precedence matches setup" (#10758).
   it.each([
     ['docker', 'native', true],
     ['native', 'docker', false],

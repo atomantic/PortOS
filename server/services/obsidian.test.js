@@ -26,6 +26,7 @@ vi.mock('../lib/fileUtils.js', async () => {
 
 const {
   addVault,
+  getVaults,
   scanVault,
   upsertNote,
   getNote,
@@ -47,6 +48,24 @@ beforeEach(async () => {
 });
 
 afterAll(() => rmSync(tempRoot, { recursive: true, force: true }));
+
+describe('obsidian.addVault', () => {
+  it('preserves concurrent registrations and rejects a racing duplicate path', async () => {
+    const second = join(tempRoot, 'second-vault');
+    const third = join(tempRoot, 'third-vault');
+    mkdirSync(second);
+    mkdirSync(third);
+
+    const [, , duplicate] = await Promise.all([
+      addVault({ path: second }),
+      addVault({ path: third }),
+      addVault({ path: second }),
+    ]);
+
+    expect(duplicate).toMatchObject({ error: 'DUPLICATE_PATH' });
+    expect((await getVaults()).map(({ path }) => path)).toEqual([VAULT_DIR, second, third]);
+  });
+});
 
 describe('obsidian.upsertNote', () => {
   it('creates the note when it does not exist yet, including missing folders', async () => {

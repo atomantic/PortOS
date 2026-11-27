@@ -7,8 +7,8 @@
 
 import CharacterDetailEditor from '../../universe/CharacterDetailEditor';
 import { RevealTimingField } from '../../pipeline/CanonCard';
-import CharacterLoraChip from '../../loraTraining/CharacterLoraChip';
 import TagPicker from '../../TagPicker';
+import CharacterLoraChip from './CharacterLoraChip';
 import GenerateImageControl from '../GenerateImageControl';
 import CatalogImagePreview from '../CatalogImagePreview';
 import { ReferenceSheetPanel } from '../CatalogSheetsPanel';

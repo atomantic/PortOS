@@ -23,9 +23,9 @@
 # then check the result against OSV (including MAL- malicious-package records).
 # The bounded AnyIO refresh uses uv 0.13.7 and cutoff 2026-11-05T00:00:00Z;
 # preserve all other versions, markers and hash blocks. See
-# docs/PYTHON_RUNTIME_REFRESH.md#selective-regeneration for the selective recipe.
+# docs/RUNTIME_LOCKS.md#selective-regeneration for the selective recipe.
 # For the bounded dateutil 4 refresh, constrain all companion versions and
-# preserve their existing hash blocks; see docs/PYTHON_RUNTIME_REFRESH.md#selective-regeneration.
+# preserve their existing hash blocks; see docs/RUNTIME_LOCKS.md#selective-regeneration.
 accelerate==1.15.0 ; platform_machine == 'arm64' and sys_platform == 'darwin' \
     --hash=sha256:5654f8c5eaa0d4fa68b33e287a97765da6849bf6d51dcac874e73fbbddfb6134 \
     --hash=sha256:97eacca0b73e45cb867dbf8c5d5d4dc32219544300e0c8992c7334dc2ef33cec

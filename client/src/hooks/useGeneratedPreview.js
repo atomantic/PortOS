@@ -2,7 +2,7 @@
  * One OS-isolated generated-preview session.
  *
  * Emits `generated-preview:open` for `request` and returns inert JPEG frames, seek/command functions,
- * and a recording blob. Reconnect opens a fresh session with the current controls and playhead;
+ * and recording save status. Reconnect opens a fresh session with the current controls and playhead;
  * idle/capacity closure returns `status: 'idle'` until the viewer calls `resume()`. Film-look and
  * title-card `controls` ride the open and later commands. A revision change reopens; a control change
  * does not. Unsupported hosts surface `status: 'unavailable'` and never fall back to an iframe. Use
@@ -367,10 +367,21 @@ export default function useGeneratedPreview({ active, request, controls = null }
 
   useEffect(() => {
     lastSeek.current = null;
+    const retireSession = () => {
+      cancelPlayback();
+      pending.current = null;
+      // An exact frame may finish decoding across an in-session seek. Once
+      // its session ends, only the already visible picture may survive it.
+      const desired = frameUrls.current.get(frameUrl.current);
+      if (desired?.loader) {
+        desired.retired = true;
+        frameUrl.current = imageRef.current?.getAttribute('src') || decodedUrl.current;
+        retireUrls();
+      }
+    };
     if (!requestKey) {
       const current = pending.current;
-      cancelPlayback(current);
-      pending.current = null;
+      retireSession();
       if (current && socket.connected) {
         socket.emit('generated-preview:close', {
           requestId: current.requestId,
@@ -388,8 +399,7 @@ export default function useGeneratedPreview({ active, request, controls = null }
       if (!socket.connected) return;
       if (retry && pending.current) {
         const previous = pending.current;
-        cancelPlayback(previous);
-        pending.current = null;
+        retireSession();
         socket.emit('generated-preview:close', { requestId: previous.requestId, ...(previous.sessionId ? { sessionId: previous.sessionId } : {}) });
       }
       if (pending.current) return;
@@ -406,8 +416,7 @@ export default function useGeneratedPreview({ active, request, controls = null }
       });
     };
     const onDisconnect = () => {
-      cancelPlayback();
-      pending.current = null;
+      retireSession();
       // A save in flight reports to the lost connection; Media History still gets it.
       if (mounted.current) setState((prev) => ({ ...prev, status: 'disconnected', sessionId: null, ready: false, lastEvent: null, recording: null }));
     };
@@ -549,8 +558,7 @@ export default function useGeneratedPreview({ active, request, controls = null }
     const onClosed = (payload) => {
       if (!pending.current?.sessionId || payload?.sessionId !== pending.current.sessionId) return;
       const failed = pending.current.hasError;
-      cancelPlayback();
-      pending.current = null;
+      retireSession();
       stoppedStatus = failed ? 'error' : 'idle';
       if (!mounted.current) return;
       // Idle/capacity cleanup stays effective until the viewer explicitly
@@ -585,8 +593,7 @@ export default function useGeneratedPreview({ active, request, controls = null }
       openRef.current = null;
       const current = pending.current;
       if (current?.requestId === requestId) {
-        cancelPlayback(current);
-        pending.current = null;
+        retireSession();
         if (socket.connected) {
           socket.emit('generated-preview:close', {
             requestId,

@@ -73,7 +73,8 @@ export default function Pipeline() {
   const fetchSeries = useCallback(() => listPipelineSeriesSummaries({ silent: true }), []);
   const seriesResource = useListResource(fetchSeries);
   const { items: series, setItems: setSeries } = seriesResource;
-  const [universes, setWorlds] = useState([]);
+  const fetchUniverses = useCallback(() => listUniverseNames({ silent: true }), []);
+  const { items: universes, state: universesState, error: universesError, retry: retryUniverses } = useListResource(fetchUniverses);
   // Series badges are optional; a failed loom read leaves the series list
   // usable and exposes its own retry row below.
   const fetchLooms = useCallback(() => listLooms({ silent: true }), []);
@@ -102,12 +103,6 @@ export default function Pipeline() {
   // committed form value — covers every path that changes it (pick, reset, create).
   const universeIdRef = useRef(form.universeId);
   useEffect(() => { universeIdRef.current = form.universeId; }, [form.universeId]);
-
-  useEffect(() => {
-    listUniverseNames({ silent: true }).then(setWorlds).catch((err) => {
-      toast.error(err.message || 'Failed to load universes');
-    });
-  }, []);
 
   // Pull logline/premise/styleNotes from the selected world. Only overwrites
   // form fields that are currently empty so a user who's already typed a
@@ -277,11 +272,13 @@ export default function Pipeline() {
   // AGENTS.md) and the non-discoverable two-click-arm pattern.
   const { isConfirming, requestDelete, cancelDelete, confirmDelete } = useConfirmDelete();
   const handleDelete = (s) => confirmDelete(() => {
-    const prior = series;
+    const index = series.findIndex((item) => item.id === s.id);
     setSeries((prev) => prev.filter((x) => x.id !== s.id));
     return deletePipelineSeries(s.id, { silent: true }).catch((err) => {
       toast.error(err.message || 'Delete failed');
-      setSeries(prior);
+      setSeries((prev) => prev.some((item) => item.id === s.id)
+        ? prev
+        : prev.toSpliced(index, 0, s));
     });
   });
 
@@ -361,13 +358,19 @@ export default function Pipeline() {
                   <option key={w.id} value={w.id}>{w.name}</option>
                 ))}
               </select>
-              <p className="text-[11px] text-gray-500 mt-1">
-                {form.universeId
-                  ? 'Logline / premise / style notes pulled from the universe — edit below.'
-                  : universes.length === 0
-                    ? 'No universes yet. Create one under Create → Universes before creating a series.'
-                    : 'Series carry style + canon from their universe — pick one to continue.'}
-              </p>
+              {universesState === 'error' ? (
+                <ListLoadError what="universes" error={universesError} onRetry={retryUniverses} className="mt-1" />
+              ) : (
+                <p className="text-[11px] text-gray-500 mt-1">
+                  {universesState === 'loading'
+                    ? 'Loading universes…'
+                    : form.universeId
+                      ? 'Logline / premise / style notes pulled from the universe — edit below.'
+                      : universes.length === 0
+                        ? 'No universes yet. Create one under Create → Universes before creating a series.'
+                        : 'Series carry style + canon from their universe — pick one to continue.'}
+                </p>
+              )}
             </div>
           </div>
           <div className="flex items-center gap-3 flex-wrap">

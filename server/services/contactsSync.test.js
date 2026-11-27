@@ -1,7 +1,8 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { DatabaseSync } from 'node:sqlite';
-import { existsSync, mkdirSync, rmSync, statSync } from 'node:fs';
+import { existsSync, mkdirSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
+import { homedir } from 'node:os';
 import { createTempDataRoot, makePathsProxy } from '../lib/mockPathsDataRoot.js';
 
 let tempDataRoot = createTempDataRoot('portos-contacts-test-');
@@ -24,6 +25,8 @@ const {
   runSync,
   readContactCache,
   readSyncState,
+  checkSetup,
+  getStatus,
   clearContactCache,
 } = await import('./contactsSync.js');
 
@@ -210,7 +213,11 @@ describe('contactsSync cache security and erasure (#18130)', () => {
 
     if (process.platform !== 'win32') {
       expect(statSync(cacheFile).mode & 0o777).toBe(0o600);
+      expect(statSync(stateFile).mode & 0o777).toBe(0o600);
     }
+    expect(readFileSync(stateFile, 'utf8')).not.toContain(homedir());
+    expect(JSON.stringify(result)).not.toContain(homedir());
+    expect(JSON.stringify(await getStatus())).not.toContain(homedir());
 
     const cache = await readContactCache();
     expect(cache.contacts).toHaveLength(1);
@@ -238,5 +245,36 @@ describe('contactsSync.getStatus (#18279)', () => {
     const { getStatus } = await import('./contactsSync.js');
     const status = await getStatus();
     expect(Object.keys(status).sort()).toEqual(['cache', 'state']);
+  });
+
+  it('scrubs legacy state paths and errors when read and setup paths when returned', async () => {
+    const prevAbRoot = process.env.CONTACTS_AB_ROOT;
+    const privateRoot = join(homedir(), 'synthetic-contacts-root');
+    process.env.CONTACTS_AB_ROOT = privateRoot;
+    try {
+      const setup = await checkSetup();
+      expect(JSON.stringify(setup)).not.toContain(homedir());
+
+      tempDataRoot = createTempDataRoot('portos-contacts-legacy-');
+      const legacy = {
+        lastRunAt: 'synthetic',
+        lastResult: {
+          root: join(privateRoot, 'AddressBook'),
+          paths: [join(privateRoot, 'AddressBook-v22.abcddb')],
+          error: `Could not open ${privateRoot}`,
+          remediation: `Check ${privateRoot}`,
+          errors: [{ path: join(privateRoot, 'source.db'), error: `Denied at ${privateRoot}` }],
+        },
+      };
+      writeFileSync(join(tempDataRoot, 'contacts-sync-state.json'), JSON.stringify(legacy));
+      const state = await readSyncState();
+      expect(JSON.stringify(state)).not.toContain(homedir());
+      expect(state.lastResult.errors[0].path).toContain('~/');
+      expect(state.lastResult.errors[0].error).toContain('~/');
+    } finally {
+      if (prevAbRoot === undefined) delete process.env.CONTACTS_AB_ROOT;
+      else process.env.CONTACTS_AB_ROOT = prevAbRoot;
+      rmSync(tempDataRoot, { recursive: true, force: true });
+    }
   });
 });

@@ -87,10 +87,12 @@ export default function NicotineChart({ onRefreshKey, onViewChange }) {
         <h2 className="text-sm font-medium text-gray-400 uppercase tracking-wider">
           Daily Consumption
         </h2>
-        <div className="flex gap-1">
+        <div className="flex gap-1" role="group" aria-label="Nicotine chart date range">
           {VIEWS.map(v => (
             <button
               key={v.id}
+              type="button"
+              aria-pressed={view === v.id}
               onClick={() => { setView(v.id); onViewChange?.(v.id); }}
               className={`px-2 py-1 min-h-[40px] text-xs rounded transition-colors ${
                 view === v.id

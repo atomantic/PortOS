@@ -1,9 +1,9 @@
 import { it, expect, vi } from 'vitest';
-import { render, screen } from '@testing-library/react';
+import { fireEvent, render, screen } from '@testing-library/react';
 import { MemoryRouter, Outlet, useLocation } from 'react-router';
 vi.mock('./components/Layout', () => ({ default: () => <Outlet /> }));
 vi.mock('./pages/Dashboard', () => ({ default: () => null }));
-vi.mock('./services/apiSystem.js', () => ({ getSettings: vi.fn(() => Promise.resolve({ timezone: 'UTC' })), updateSettings: vi.fn(), getSelfInstance: vi.fn(() => Promise.resolve({})) }));
+vi.mock('./services/apiAppShell.js', () => ({ getSettings: vi.fn(() => Promise.resolve({ timezone: 'UTC' })), updateSettings: vi.fn(), getSelfInstance: vi.fn(() => Promise.resolve({})) }));
 vi.mock('./pages/MediaGen', () => ({ default: () => (
   <>
     <div data-testid="media-gen-shell" />
@@ -14,16 +14,30 @@ vi.mock('./pages/VideoGen', () => ({ default: () => { const location = useLocati
 vi.mock('./pages/MusicVideo', () => ({ default: () => { const location = useLocation(); return <pre data-testid="mv-location">{JSON.stringify({ pathname: location.pathname, search: location.search, hash: location.hash })}</pre>; } }));
 vi.mock('./pages/CreativeDirector', () => ({ default: () => { const location = useLocation(); return <pre data-testid="library-location">{JSON.stringify({ pathname: location.pathname, search: location.search, hash: location.hash, state: location.state })}</pre>; } }));
 vi.mock('./pages/CreativeDirectorDetail', () => ({ default: () => { const location = useLocation(); return <pre data-testid="project-location">{JSON.stringify({ pathname: location.pathname, search: location.search, hash: location.hash, state: location.state })}</pre>; } }));
+vi.mock('./pages/Media3D', () => ({ default: () => <p>Mesh library</p> }));
+vi.mock('./pages/ThreejsModelDetail', () => ({ default: () => <p>Procedural model editor</p> }));
 import App from './App.jsx';
+
+it('opens a bookmarked Three.js model in the 3D workspace and switches to meshes', async () => {
+  render(<MemoryRouter initialEntries={['/media/threejs/example-model']}><App /></MemoryRouter>);
+
+  expect(await screen.findByText('Procedural model editor')).toBeInTheDocument();
+  expect(screen.getByRole('heading', { name: '3D', level: 1 })).toBeInTheDocument();
+  expect(screen.getByRole('tab', { name: 'Three.js', selected: true })).toBeInTheDocument();
+  fireEvent.click(screen.getByRole('tab', { name: 'Meshes & Blender' }));
+  expect(await screen.findByText('Mesh library')).toBeInTheDocument();
+  expect(screen.getByRole('tab', { name: 'Meshes & Blender', selected: true })).toBeInTheDocument();
+});
+
 it('keeps Generate Video inside the Media Gen tab shell', async () => {
-  render(<MemoryRouter initialEntries={['/video/generate']}><App /></MemoryRouter>);
+  render(<MemoryRouter initialEntries={['/media/video']}><App /></MemoryRouter>);
   expect(await screen.findByTestId('media-gen-shell')).toBeInTheDocument();
   expect(screen.getByTestId('clip-location')).toBeInTheDocument();
 });
-it.each(['/media/video', '/video-gen'])('preserves clip handoff state through %s', async path => {
+it.each(['/video/generate', '/video-gen'])('preserves clip handoff state through %s', async path => {
   const state = { remix: { ingredientIds: ['example-ingredient'] } };
   render(<MemoryRouter initialEntries={[{ pathname: path, search: '?settings=1', hash: '#clip', state }]}><App /></MemoryRouter>);
-  expect(JSON.parse((await screen.findByTestId('clip-location')).textContent)).toEqual({ pathname: '/video/generate', search: '?settings=1', hash: '#clip', state });
+  expect(JSON.parse((await screen.findByTestId('clip-location')).textContent)).toEqual({ pathname: '/media/video', search: '?settings=1', hash: '#clip', state });
 });
 
 it('redirects the retired Video library and preserves draft handoff state', async () => {

@@ -28,7 +28,7 @@ describe('loops routes — caller errors are 4xx', () => {
   it.each([
     [{ prompt: 'hi', interval: 5 }],
     [{ prompt: 'hi', interval: 'abc' }],
-    [{ prompt: '   ', interval: '1m' }]
+    [{ prompt: '  \t\n', interval: '1m' }]
   ])('rejects %j with 400 before writing', async (body) => {
     const res = await request(app).post('/api/loops').send(body);
     expect(res.status).toBe(400);
@@ -46,4 +46,16 @@ describe('loops routes — caller errors are 4xx', () => {
     expect(res.status).toBe(409);
     expect(res.body.code).toBe('INVALID_STATE');
   });
+});
+
+it('returns the exact prompt when creating a loop through the API', async () => {
+  const prompt = '    example\n\n';
+  const res = await request(app).post('/api/loops').send({ prompt, interval: '1m', runImmediately: false });
+  expect(res.status).toBe(201);
+  try {
+    expect(res.body.prompt).toBe(prompt);
+    expect(res.body.name).toBe('example');
+  } finally {
+    await request(app).post(`/api/loops/${res.body.id}/stop`);
+  }
 });

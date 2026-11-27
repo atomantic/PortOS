@@ -165,6 +165,17 @@ describe('tracks routes', () => {
     expect(tracks.getTrack).not.toHaveBeenCalled();
   });
 
+  it('GET /library paginates library files with the shared envelope', async () => {
+    const files = Array.from({ length: 505 }, (_, index) => ({ filename: `music-${index}.mp3` }));
+    musicLibrary.listMusicLibrary.mockResolvedValueOnce(files);
+
+    const response = await request(app).get('/api/tracks/library?limit=800&offset=3');
+
+    expect(response.status).toBe(200);
+    expect(response.body).toEqual({ items: files.slice(3, 503), total: 505, limit: 500, offset: 3 });
+    expect(tracks.getTrack).not.toHaveBeenCalled();
+  });
+
   describe('YouTube import (#1945)', () => {
     it('POST /import/youtube starts a job for a valid URL', async () => {
       const r = await request(app).post('/api/tracks/import/youtube').send({ url: 'https://www.youtube.com/watch?v=dQw4w9WgXcQ' });
@@ -206,6 +217,24 @@ describe('tracks routes', () => {
       expect(r.status).toBe(200);
       expect(r.body).toEqual({ ok: true });
       expect(ytImport.cancelYoutubeImport).toHaveBeenCalledWith('job-1');
+    });
+
+    it('returns 404 after checking both import services for an unknown job', async () => {
+      ytImport.cancelYoutubeImport.mockReturnValueOnce(false);
+      sunoImport.cancelSunoImport.mockReturnValueOnce(false);
+      const response = await request(app).post('/api/tracks/import/unknown-job/cancel');
+      expect(response.status).toBe(404);
+      expect(response.body).toMatchObject({ code: 'NOT_FOUND' });
+      expect(sunoImport.cancelSunoImport).toHaveBeenCalledWith('unknown-job');
+    });
+
+    it('returns 409 for a terminal job and leaves provider selection unchanged', async () => {
+      ytImport.cancelYoutubeImport.mockReturnValueOnce({ ok: false, code: 'ALREADY_TERMINAL' });
+      sunoImport.cancelSunoImport.mockClear();
+      const response = await request(app).post('/api/tracks/import/finished-job/cancel');
+      expect(response.status).toBe(409);
+      expect(response.body).toMatchObject({ code: 'ALREADY_TERMINAL' });
+      expect(sunoImport.cancelSunoImport).not.toHaveBeenCalled();
     });
   });
 

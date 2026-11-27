@@ -82,9 +82,81 @@ describe('Modal accessibility', () => {
     expect(onClose).toHaveBeenCalledTimes(1);
   });
 
+  it('recaptures Tab after a click on a non-dismissing backdrop', () => {
+    const onClose = vi.fn();
+    render(
+      <Modal open closeOnBackdrop={false} onClose={onClose} ariaLabel="Settings">
+        <button>First</button>
+        <button>Last</button>
+      </Modal>
+    );
+    const first = screen.getByRole('button', { name: 'First' });
+    const last = screen.getByRole('button', { name: 'Last' });
+
+    fireEvent.click(screen.getByRole('dialog').parentElement);
+    // The DOM test runner does not perform the pointer's native focus change.
+    first.blur();
+    expect(document.activeElement).toBe(document.body);
+    expect(onClose).not.toHaveBeenCalled();
+
+    expect(fireEvent.keyDown(document.body, { key: 'Tab' })).toBe(false);
+    expect(document.activeElement).toBe(first);
+    expect(fireEvent.keyDown(first, { key: 'Tab', shiftKey: true })).toBe(false);
+    expect(document.activeElement).toBe(last);
+  });
+
   it('renders nothing while closed', () => {
     render(<Modal open={false} onClose={() => {}} ariaLabel="x"><p>body</p></Modal>);
     expect(screen.queryByRole('dialog')).toBeNull();
+  });
+});
+
+describe('Modal placement and scroll lock', () => {
+  it('portals outside the owning card and restores body overflow when closed', () => {
+    const initialOverflow = document.body.style.overflow;
+    document.body.style.overflow = 'auto';
+    const ui = (open) => (
+      <section className="bg-port-card">
+        <Modal open={open} ariaLabel="Test dialog"><p>body</p></Modal>
+      </section>
+    );
+    const { rerender } = render(ui(true));
+    try {
+      expect(screen.getByRole('dialog').parentElement.parentElement).toBe(document.body);
+      expect(document.body.style.overflow).toBe('hidden');
+
+      rerender(ui(false));
+      expect(document.body.style.overflow).toBe('auto');
+    } finally {
+      cleanup();
+      document.body.style.overflow = initialOverflow;
+    }
+  });
+
+  it('supports rendering in place while retaining the scroll lock', () => {
+    render(
+      <section data-testid="owner">
+        <Modal open usePortal={false} ariaLabel="Test dialog"><p>body</p></Modal>
+      </section>
+    );
+    expect(screen.getByTestId('owner')).toContainElement(screen.getByRole('dialog'));
+    expect(document.body.style.overflow).toBe('hidden');
+  });
+
+  it('keeps scroll locked until the last overlay closes', () => {
+    const initialOverflow = document.body.style.overflow;
+    const ui = (nestedOpen) => (
+      <>
+        <Modal open ariaLabel="Base dialog"><p>base</p></Modal>
+        <Modal open={nestedOpen} ariaLabel="Nested dialog"><p>nested</p></Modal>
+      </>
+    );
+    const { rerender, unmount } = render(ui(true));
+
+    rerender(ui(false));
+    expect(document.body.style.overflow).toBe('hidden');
+    unmount();
+    expect(document.body.style.overflow).toBe(initialOverflow);
   });
 });
 

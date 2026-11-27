@@ -7,7 +7,6 @@ vi.mock('../services/usage.js', () => ({
   getUsageSummary: vi.fn(),
   getUsage: vi.fn(),
   getFirstActivityDay: vi.fn(() => '2026-01-01'),
-  recordMessages: vi.fn(),
   resetUsage: vi.fn()
 }));
 
@@ -461,14 +460,6 @@ describe('usage routes', () => {
     expect(getProviderQuotas).not.toHaveBeenCalled();
   });
 
-  it('POST /api/usage/messages rejects negative or non-integer token counts', async () => {
-    const res = await request(buildApp())
-      .post('/api/usage/messages')
-      .send({ providerId: 'p1', model: 'm', messageCount: 1, tokenCount: -5 });
-    expect(res.status).toBe(400);
-    expect(usage.recordMessages).not.toHaveBeenCalled();
-  });
-
   it('starts historical reconciliation only from the explicit POST and reports progress', async () => {
     getHistoricalUsageBackfillStatus.mockReturnValue({ status: 'running', processed: 2, total: 5 });
     startHistoricalUsageBackfill.mockReturnValue({ status: 'running', processed: 0, total: 0 });
@@ -481,16 +472,6 @@ describe('usage routes', () => {
     const started = await request(buildApp()).post('/api/usage/backfill');
     expect(started.status).toBe(202);
     expect(startHistoricalUsageBackfill).toHaveBeenCalledTimes(1);
-  });
-
-  it('POST /api/usage/messages records messages and returns success', async () => {
-    usage.recordMessages.mockResolvedValue();
-    const res = await request(buildApp())
-      .post('/api/usage/messages')
-      .send({ providerId: 'p1', model: 'm', messageCount: 3, tokenCount: 1000 });
-    expect(res.status).toBe(200);
-    expect(res.body).toEqual({ success: true });
-    expect(usage.recordMessages).toHaveBeenCalledWith('p1', 'm', 3, 1000, 0);
   });
 
   it('DELETE /api/usage resets usage data', async () => {

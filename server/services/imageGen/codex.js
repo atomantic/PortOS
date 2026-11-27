@@ -15,7 +15,7 @@
  * after the child exits. A session can hold several images; codexSessionImages.js
  * decides which one is the job's.
  *
- * The user must explicitly enable this provider in Settings → Image Gen
+ * The user must explicitly enable this provider in Media Gen Settings
  * because not every Codex account has access to the `image_gen` tool. When
  * disabled the dispatcher rejects up front; this module assumes it's enabled
  * by the time generateImage() is called.
@@ -125,7 +125,7 @@ async function resolveCodexDriverModel(model, modelIsShippedDefault) {
     console.log(`🔀 Codex image default ${preferred} is not listed in the local model cache; using ${fallback}`);
     return fallback;
   }
-  throw new ServerError('The local Codex model cache lists no supported low-cost image-generation driver default. Select an available model explicitly in Settings → Image Gen.', { status: 400 });
+  throw new ServerError('The local Codex model cache lists no supported low-cost image-generation driver default. Select an available model explicitly in Media Gen Settings → Codex CLI.', { status: 400 });
 }
 
 const referenceEventFields = ({ initImageFilename, referenceImageFilenames }) => ({
@@ -239,7 +239,7 @@ async function generateImagePrepared({
   await ensureDir(PATHS.images);
 
   // Ship the cheap gpt-6-luna / low-effort path by default (see modes.js).
-  // A caller-supplied model/effort (an explicit Settings → Image Gen override,
+  // A caller-supplied model/effort (an explicit Media Gen Settings override,
   // threaded through the dispatcher) wins; `null`/`''`/absent falls back to the
   // shipped default so a bare install never runs Codex's heaviest tier.
   const effectiveModel = await resolveCodexDriverModel(model, modelIsShippedDefault);
@@ -360,7 +360,7 @@ async function generateImagePrepared({
 // Preserve the model's reported reason without inferring account capability
 // from a missing output file or a narrated success claim.
 const CODEX_NO_IMAGE_HINT =
-  'Codex returned no generated image. Check the Codex session and Settings → Image Gen.';
+  'Codex returned no generated image. Check the Codex session and Media Gen Settings → Codex CLI.';
 export const noImageReason = (stdoutTail = '') => buildNoImageReason(stdoutTail, {
   hint: CODEX_NO_IMAGE_HINT,
   // Codex's own structural labels, on top of the shared dashed-rule /
@@ -477,7 +477,7 @@ async function noImageSessionReason(sessionId, stdoutTail) {
     } catch { /* Incomplete transcript lines do not establish tool usage. */ }
   }
   if (imageToolObserved) return noImageReason(stdoutTail);
-  return `No image_gen call was observed in the Codex session${shellObserved ? '; shell activity was recorded' : ''}. No generated image was found. This does not establish whether the tool is available to this account. Check Settings → Image Gen and the Codex session. ${noImageReason(stdoutTail)}`;
+  return `No image_gen call was observed in the Codex session${shellObserved ? '; shell activity was recorded' : ''}. No generated image was found. This does not establish whether the tool is available to this account. Check Media Gen Settings → Codex CLI and the Codex session. ${noImageReason(stdoutTail)}`;
 }
 
 async function sessionImageRecords(sessionId) {

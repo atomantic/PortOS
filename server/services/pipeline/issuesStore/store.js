@@ -18,6 +18,7 @@
  * data/pipeline-issues file store into the table (migrateIssuesToDB).
  */
 
+import { createIdValidator } from '../../../lib/recordIdValidation.js';
 import { join } from 'path';
 import { PATHS } from '../../../lib/fileUtils.js';
 import { createCollectionStore } from '../../../lib/collectionStore.js';
@@ -40,11 +41,7 @@ export const stripRunHistoryFromIssue = (issue) => {
 const TYPE_SCHEMA_VERSION = 1;
 const ID_PATTERN = /^iss-[A-Za-z0-9-]+$/;
 
-function assertValidId(id) {
-  if (typeof id !== 'string' || !ID_PATTERN.test(id)) {
-    throw new Error(`pipelineIssuesStore: invalid record id "${id}" — must match ${ID_PATTERN}`);
-  }
-}
+const assertValidId = createIdValidator('pipelineIssuesStore', ID_PATTERN);
 
 function makeFileBackend(dir, sanitizeRecord) {
   const cs = createCollectionStore({

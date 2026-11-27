@@ -885,15 +885,13 @@ export const runTurn = async ({ audio, text, mimeType, source, history = [], emi
     toolSummary
   );
 
-  // Surface the silent-empty-reply case — most commonly caused by picking a
-  // model that doesn't speak the OpenAI tool-calling API (e.g., IBM Granite,
-  // which emits `<tool_call>[...]</tool_call>` inline in content), especially
-  // when many tools are attached and the model bails with a zero-length
-  // stream. Without this the user sees their transcript, then silence.
+  // Empty content is not proof of tool incompatibility. Preserve a definite
+  // length stop and don't ask users to disable tools based on an empty stream.
   if (!signal?.aborted && !finalText.trim() && toolRuns.length === 0) {
-    const hint = toolsEnabled
-      ? `Model ${lastLlm?.model || cfg.llm.model} returned no response. It may not support OpenAI tool-calling with ${toolSpecs?.length || 0} tools — try a tool-use model (Qwen2.5-Instruct, Hermes-3, Mistral) or disable voice tools in Settings.`
-      : `Model ${lastLlm?.model || cfg.llm.model} returned no response.`;
+    const model = lastLlm?.model || cfg.llm.model;
+    const hint = lastLlm?.finishReason === 'length'
+      ? `Model ${model} reached its output limit before replying. This can happen when thinking uses the budget. Try a faster or lower-thinking voice model.`
+      : `Model ${model} returned no spoken reply or tool call. Try again or select a different voice model in Settings.`;
     console.warn(`🎙️  empty LLM output — ${hint}`);
     emit('voice:error', { stage: 'llm', message: hint });
   } else if (!signal?.aborted && toolsEnabled && detectNarrationWithoutCall({ finalText, toolRuns })) {

@@ -18,6 +18,9 @@
 import { isEndFrameImageEffect } from './musicVideoImageEffects.js';
 import { isContinuingScene, resolveSourceTake, scenePlayableClipId } from './musicVideoSourceTake.js';
 
+// `endImage` is an optional style-break frame a clip ends on (#11173).
+export const TAKE_SLOT = Object.freeze({ image: 'referenceImageId', video: 'videoHistoryId', endImage: 'endImageId' });
+
 export const MUSIC_VIDEO_VISUAL_LAYERS = ['footage', 'still', 'card', 'code'];
 
 /** Layers the composition draws itself: no reference frame and no clip to generate. */

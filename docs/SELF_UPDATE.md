@@ -1,424 +1,51 @@
 # Self-Update Flow
 
-How PortOS notices a new release and updates itself. PortOS is distributed software — many people run it, and a large share run it from a **personal fork**, so every step here is fork-aware. Breaking that assumption produces silent no-op updates.
-
-Code: `server/services/updateChecker.js`, `server/services/portosSelfUpdate.js`, `server/services/updateExecutor.js`, `server/services/appUpdater.js`, `server/routes/update.js`, `server/lib/gitRemote.js`, `server/lib/detachedSpawn.js`, `update.sh` / `update.ps1`, `scripts/update.mjs`, `scripts/verify-server-health.js`, `client/src/components/apps/tabs/UpdateTab.jsx`, `client/src/hooks/usePortosRestartWatch.js`, `client/src/hooks/useAppOperation.js`. The unattended, idle-gated variant is a section of its own below.
+PortOS checks upstream releases and updates from the configured origin. Forks keep their independent history and configuration.
 
 ## Manual and automatic updates
 
-Manual Update and Reconcile actions stay available while work is running. When
-current execution is observed, PortOS explains that restarting PortOS and
-Chrome can interrupt agents, renders and provider calls. **Update now and interrupt
-active work** explicitly accepts that risk. Saved state and queued jobs remain;
-interrupted work is never reported as successful. Fork and image-backup
-acknowledgments remain separate and are preserved when retrying.
+Use **Update Now** for a newer release, **Reconcile Now** for an out-of-sync installation, or the managed app's **Update app** action to refresh after advancing its checkout. Terminal entry points are `bash update.sh`, `./update.ps1` and `npm run update`.
 
-For terminal updates, run `bash update.sh` or `./update.ps1`. If current running
-work is observed, an interactive terminal offers a warning;
-a noninteractive invocation exits with an actionable message. Use
-`bash update.sh --interrupt`, `./update.ps1 --interrupt`, or
-`npm run update -- --interrupt` to explicitly continue. Stale reservations,
-missing counters and unavailable activity APIs do not
-require this flag. Normal manual updates stop PortOS before source changes and
-settle old reservations after shutdown, without asking for a force phrase.
+Manual updates close intake, stop PortOS before source/dependency changes and recheck executing work under the hold. If current work would be interrupted, the UI or terminal requests explicit consent. For a noninteractive run, `--interrupt` supplies that consent. Interrupted work retains failure or recovery evidence, and queued durable jobs stay queued. An active database maintenance operation, live installer, surviving runtime or unsafe checkout can still block the update.
 
-An already-running older UI cannot render the new confirmation controls. When
-the fresh updater observes running work, it puts a
-confirmation URL in the waiting-step output. Open that URL on the same PortOS
-instance, sign in, and explicitly continue in the browser. The generic page
-uses the existing authenticated command endpoint and the normal detached
-updater. Its private attempt retains the previous image-backup acknowledgment
-and reconcile options, bound to the originating checkout. A newer pending or
-completed attempt, or a changed checkout, invalidates the confirmation.
-Command acceptance or a server disconnect does not claim update success.
-Installations without a served production client can use the terminal
-confirmation or `--interrupt`.
-If the old server refuses an existing updater before it can launch fresh
-scripts, open **DevTools → Runner**, choose **Command** and the PortOS workspace,
-and run `node scripts/manual-update-recovery.mjs --request`. This starts the
-normal detached manual path without granting interruption consent; follow its
-confirmation URL only when running work needs interruption consent.
+If an older UI cannot show the continuation, open the confirmation URL printed in the waiting step on the same instance and sign in. The URL is bound to its attempt and checkout. If the old server refuses to launch fresh scripts, **Dev Tools → Runner → Command** in the PortOS workspace can invoke `node scripts/manual-update-recovery.mjs --request`. That uses the normal path and retains interruption consent checks.
 
-Automatic callers use `--automatic`. They wait for actual running work, while
-queued durable jobs remain queued across restart. The scheduler passes this
-policy explicitly; an automatic waiting owner does not prevent an acknowledged
-manual continuation. Missing activity instrumentation never counts as proof of
-idleness.
+## Releases, origin and forks
 
-Every manual update closes intake and gracefully stops PortOS before git or
-dependency changes. It rechecks executing work after acquiring the hold; only
-positive running work requires interruption consent. Stale ordinary
-reservations are removed after shutdown without requiring an audit receipt.
-Domain jobs and outputs are never marked successful by that cleanup, and
-positively identified detached workers retain their ownership evidence. Boot uses normal interrupted-media recovery:
-owned orphan videos are reaped and failed, remote jobs reconcile, and surviving
-trainers reattach. Unrelated desktop daemons are untouched.
+Release polling always reads upstream `atomantic/PortOS`. Use `server/lib/gitRemote.js` for upstream identity and local `remoteInfo` classification. The scripts update the local `main` branch from origin. A clean checkout can move to `main` without deleting another branch. The scripts refuse dirty checkouts and do not stash. Submodules advance to parent-pinned gitlinks only, preserving edits, untracked work and independently advanced commits.
 
-A live installer, database restore/cutover, or dirty/divergent source still
-prevents conflicting changes. A surviving directly launched PortOS runtime is
-named with its PID and must be stopped before retrying. Update failures after
-shutdown use the existing service-restart recovery and still report failure.
-
-## Release polling always targets upstream
-
-The release-notification poll **always queries the upstream `atomantic/PortOS`** repo, so a user running from a fork still sees new upstream versions. The constants come from `server/lib/gitRemote.js` (`UPSTREAM_OWNER`, `UPSTREAM_REPO`, `UPSTREAM_FULL_NAME`) — do not re-hardcode the upstream slug anywhere else.
-
-## Classifying the local remote
-
-`getOriginInfo()` in `server/lib/gitRemote.js` classifies the local `origin` remote into `{ isUpstream, isFork, isGithub, owner, repo, fullName }`. `getUpdateStatus()` returns this as `remoteInfo`, alongside a fixed `upstream` block.
-
-**New UI that says "you are running PortOS" must read `remoteInfo.isUpstream`, not just `currentVersion`** — otherwise it lies to fork users.
-
-## Pulling: origin, not upstream
-
-`update.sh` / `update.ps1` always `git pull --rebase` from **origin**. They are
-stash-free; a dirty checkout is refused before the pull. A fork user who has
-not merged upstream into their fork gets a silent no-op pull.
-
-### The update always lands on `main` first
-
-Before pulling, both scripts check the current branch and **switch to `main` if you are anywhere else** — a feature branch or a detached HEAD. This is deliberate: the rest of the script (install, build, restart) has to run on the revision the app will boot from, and pulling on a feature branch would leave the running app on a version the update never advanced.
-
-If the working tree is dirty when switching off a non-`main` branch or detached
-HEAD — including unstaged, staged, or untracked files — the scripts refuse the
-update before changing branches. They are intentionally stash-free: a hidden
-stash is not an unattended recovery contract, and the operator must commit or
-restore the work before retrying. A clean feature branch or detached checkout
-is still moved to `main` before the pull.
-
-A previous run can be killed after the parent repository advances but before
-its submodule checkout finishes. That leaves the submodule gitlink looking like
-an uncommitted change and would otherwise make the next run fail at `git-pull`.
-Before the dirty-tree guard, both scripts inspect recursive submodule status and
-repair any checkout that is not at the parent commit with:
-
-```bash
-git submodule sync --recursive
-git submodule update --init --recursive
-```
-
-The same pinned update runs after switching to `main` and again after the pull.
-It does not use `--remote`; the parent gitlink is the reviewed release
-contract. Git still refuses to overwrite local files changed inside a
-submodule, so those changes remain a visible update blocker.
-
-### Submodules follow the pulled parent revision
-
-**An unsupported Node.js runtime refuses the target before installation.** The target revision owns its Node support range, so after the dirty-tree and submodule checks and before the pull or ff-only merge, the shared updater resolves the target (the fetched upstream, or `PORTOS_PEER_UPDATE_TARGET_SHA` on the peer path), extract its `scripts/checkNodeVersion.js` (plus `package.json` and `scripts/lib`) with `git archive` into a temporary directory, and run it with the installed Node. A rejection reports `runtime-preflight` as failed with the requirement and exits non-zero before pulling the target or changing dependencies. Automatic idle updates leave PM2 apps running. Manual updates have already stopped them and use failure recovery to restart them. The checkout therefore does not advance to an unsupported target. A target that predates the gate, or an unresolvable target, skips the pre-check; the post-pull gate stays as a second line of defence.
-
-Before pulling, the shared updater repairs any recursive submodule checkout
-that is not at the commit pinned by the current parent tree. After switching to
-`main` they repeat that repair, then after pulling `main` it runs:
-
-```bash
-git submodule sync --recursive
-git submodule update --init --recursive
-```
-
-The sync step refreshes each checkout's local submodule metadata from the newly pulled `.gitmodules`; the update step initializes missing modules and restores every recursive checkout to the commit pinned by PortOS. It intentionally does **not** use `--remote`: a release consumes the reviewed gitlink commit, not an unreviewed newer submodule head.
-
-All restart-triggering UI actions (`Update Now`, `Sync Fork & Update`, both “from Fork As-Is” variants, and the reconcile variants) launch `update.sh` or `update.ps1`, so they inherit this exact sequence. `Sync Fork Only` remains intentionally different: it only fast-forwards the GitHub fork and does not touch the local checkout.
-
-After source update and restart, the normal boot migration pass upgrades
-versioned PortOS-owned data before route initialization. Eidoverse World Design
-updates use this path: the offline migration changes only
-`data/eidoverse/portos-world.json`, preserving V1 custom leaves as explicit V2
-overrides and recording a pending checkpoint. A post-boot, non-AI reconciler
-applies that checkpoint only when the separately managed Eidoverse runtime is
-already online; otherwise the Eidoverse page keeps the update pending with a
-direct managed-app remediation link. Update scripts never mutate the external
-Eidoverse checkouts to apply a PortOS world design.
-
-`GET /api/update/status` also compares recursive submodule checkouts with their pinned revisions. An uninitialized, conflicted, behind, or divergent module marks the install out of sync, making the existing Reconcile control available even when no newer release is waiting. A checkout deliberately advanced through the Submodules tab is not treated as stale, and CoS worktrees report submodule state as unknown because they intentionally leave submodules uninitialized and cannot run the primary-checkout update flow.
-
-For the point-in-time analysis of macOS Finder metadata false positives and the separate managed-App build omission, see [macOS “Install out of sync” research](research/2026-09-03-macos-install-out-of-sync.md).
-
-To prevent that confusion, `POST /api/update/execute` rejects fork runs with **412 `FORK_SYNC_REQUIRED`** unless either:
-
-- the request body sets `acknowledgeFork: true`, or
-- `lastForkSync.fullName` matches `remoteInfo.fullName` (compared case-insensitively — GitHub owner/repo names are) and is less than 10 minutes old. The service computes this once as `status.forkSyncFresh` from `FORK_SYNC_FRESHNESS_MS`; the route and the UI both read that flag rather than re-implementing the time math.
+The Update tab distinguishes **Sync Fork & Update**, **Sync Fork Only**, and **Update from Fork As-Is**. Server-side fork sync fast-forwards from upstream and returns `FORK_DIVERGED` on divergence. Never pass `--force`. Keep a customized fork's changes on a separate branch if using upstream fast-forward sync, then rebase that branch and rebuild dependencies and the client before restarting it. PM2 boots the checked-out code.
 
 ## Every PortOS update goes through the detached launcher
 
-`scripts/update.mjs` is the Node-only pipeline that deletes and restarts the PortOS PM2 entries. Scripts `update.sh` and `update.ps1` preserve the old launcher contract, and `npm run update` enters the same supervisor directly. PM2's TreeKill walks **PPID**, so a script left attached to `portos-server` is killed by its own `pm2 delete` step — mid-list, before it can run the closing `pm2 start` — and the install is left headless. `spawnDetached`'s double-fork (`server/lib/detachedSpawn.js`) is what reparents the script to init so it survives; `launchUpdate()` in `server/services/updateExecutor.js` is the single launcher that applies it, along with the `STEP:` progress parsing, the still-running-script guard, and `recordUpdateResult()`.
+The service entry points share `startPortosSelfUpdate()` and the detached launcher. Direct scripts and service launches enter `scripts/deferred-update.mjs` before touching git, logs or PM2. A waiting operation leaves admission open until it can take the maintenance hold atomically. A manual or peer maintenance hold superseding a waiting update cancels that update without releasing the new owner. A retry can replace only an older waiting supervisor that has no worker or hold.
 
-**Windows needs the same escape, and cannot get it from `detached: true`.** PM2 kills there with `taskkill /pid <app> /T /F`, which walks the identical parent→child tree, so an attached `update.ps1` dies at `pm2-stop` exactly as an attached `update.sh` would. But Node's `detached: true` maps to **`DETACHED_PROCESS`** on Windows, which denies the child a console — and a console host like `powershell.exe` given no console exits **0 within ~100ms without running a single line**. That combination is why the in-app update silently did nothing on Windows while reporting a successful update to the target release (#6169): the script never ran, `executeUpdate` saw exit 0, and stamped the triggering tag onto a "Success" result. So on Windows `spawnDetached` launches a short-lived PowerShell launcher that `Process.Start`s a **supervisor** (with `CreateNoWindow`, per [WINDOWS_CONSOLE.md](WINDOWS_CONSOLE.md)) and exits. The supervisor's parent is then gone, so `taskkill /T` from the server never reaches it; it redirects the script's output into the control dir and records its pid and exit status there, so the same tailer streams `STEP:` progress on both platforms. This is the *only* win32 path — it shipped in #6169 behind a `windowsDetached` opt-in, because the plain-spawn fallback beside it handed back a real `ChildProcess` whose `kill` tree-killed the job's own descendants and the supervisor path could then only signal the job's pid; #6170 routed the supervisor handle's `kill` (and the boot-time orphan reaper) through the same `taskkill /T /F`, which removed the trade-off and with it the option.
+The supervisor survives server restart and records ordered `STEP:` progress and terminal status. POSIX settlement also proves process-group completion. Windows uses a detached console-less supervisor and requires operation-specific terminal evidence. A console close or forced kill can leave a hold pending. A missing process or timeout alone cannot settle ownership. With the API offline, `node scripts/deferred-update.mjs --recover` reconciles update ownership. For workflow publication and inactive-reservation recovery, see [Storage](STORAGE.md#workflow-maintenance-journal).
 
-Two guards keep a launch that did nothing from being reported as an update:
-
-- A run that exits 0 having emitted **no `STEP:` line at all** is recorded as a failure, not a success — both scripts emit `git-pull:running` before touching anything, so silence means the script never ran.
-- When `data/update-complete.json` is missing (usually because the restarted server already consumed it), the recorded version comes from **package.json on disk**, never from the triggering tag: the tag is only what the update aimed at.
-
-**PortOS is also a managed app**, so an update started from **App Management**'s Git tab reaches `update.sh` through `appUpdater.js` rather than `routes/update.js`. Both entry points call the same `startPortosSelfUpdate()` (`server/services/portosSelfUpdate.js`), which owns the whole lifecycle: the authenticated preflight refusals and the detached `launchUpdate()` launch. The script supervisor owns shared deferred admission. They differ only in `mode`:
-
-| Surface | Mode | Gate |
-|---|---|---|
-| Update page — "Update Now" | `release` | needs a newer release tag |
-| Update page — "Reconcile Now" | `reconcile` | needs `installState.outOfSync` |
-| App Management — "Update app" | `refresh` | none; the caller has already advanced the checkout onto its origin default branch |
-
-`refresh` exists because App Management moves HEAD before handing off. Gating it on out-of-sync would only re-ask whether the pull it just did happened — and that same pull makes `update.sh`'s own `git pull` a no-op, so the script's commit-diff dependency detection sees nothing. The launcher therefore passes `installState`'s stale workspaces through as `forceCleanWorkspaces` for both non-release modes, which is what keeps deps from surviving the update (#1779).
-
-The socket path runs `checkPortosUpdatePreflight` itself before it pulls — a refusal must land before the checkout moves, and its `code` is what the panel's acknowledge-and-retry buttons key on — then passes `preflightAlreadyRun` so the launcher reads a fresh `getUpdateStatus()` (post-pull, for the stale workspaces) without re-running guards that already answered. The script checks image-state trust again after acquiring its shared hold.
-
-Direct `update.sh` / `update.ps1` and service launches enter `scripts/deferred-update.mjs` before changing logs, git or PM2. Its machine-local operation waits without holding admission, allowing an active release to launch and finish its children. The maintenance journal atomically takes the update hold only after admitted work has released its reservation; a render racing that transaction either becomes a blocker or is refused. While an update waits, both the server and the fresh updater can reconcile inactive legacy reservations after fresh activity and process checks, preserving them in an automatic receipt with output completeness unknown (see [Storage](STORAGE_RECOVERY.md#inactive-reservations-while-updating)). Existing receiver-issued peer updates retain their exclusive capability hold. A manual/peer maintenance hold supersedes a still-waiting local update: the updater cancels its own pending row, leaves that hold untouched, and reports failure so the maintenance drain can finish. It does not silently requeue.
-
-A retry can replace an older supervisor only while it is still waiting with no
-child or hold. The transfer and acquisition share the journal lock, so a
-supervisor already starting or running cannot be replaced. The transfer preserves
-the original request time and writes `update-handoff-<successor-id>.json`; the
-replaced attempt is recorded as interrupted. The old supervisor's later cleanup
-cannot release its successor. The UI continues observing its current launch
-instead of starting another copy on repeated clicks.
-
-Fresh updater recovery works before an older server restarts. It authenticates
-local activity reads using the existing credential or a temporary local session,
-checks `COS_RUNNER_URL` from the environment or `.env`, and verifies the running
-service observes the same waiting owner. A missing local runner is allowed only
-when process inspection confirms direct mode; an unavailable configured runner
-remains a blocker. Only a confirmed self-update handoff is excluded from app
-activity. Exact empty legacy media rows are ignored during inspection without
-rewriting the saved inventory; real jobs and recovery uncertainty remain intact.
-
-The offline supervisor, shared journal transaction and image guard use only Node built-ins, so missing or replaced application dependencies cannot disable admission or terminal failure publication. Live reservation recovery loads service dependencies before acquiring admission; an offline install without outstanding work reservations can still update without them.
-
-The detached supervisor survives the server restart and releases only after proven command settlement. Success requires terminal script evidence and child completion. POSIX additionally waits for the whole process group; after an interrupted supervisor, proven owner/group absence records failure and releases automatically. Windows requires the exact operation's terminal script record, written after awaited update, restart and health commands; controlled failure exits publish failure after recovery finishes. A Windows interruption without that evidence leaves liveness unknown and admission held. Neither a timeout nor an old completion marker clears ownership. Legacy control files alone are history; an observed surviving updater or update child still makes the new update wait.
-
-Boot/status reads reconcile interrupted update operations. With the API offline, `node scripts/deferred-update.mjs --recover` performs the same update-owner reconciliation; running `update.sh` also reconciles before requesting another update. Automatic disposal of stale ordinary work reservations requires the server to be running. The updater never kills existing work to obtain admission. Unknown process liveness or damaged maintenance state remains held and is reported explicitly.
-
-`appUpdater` also **skips its own `restart` step** for that case: the script starts the production app set from `ecosystem.config.cjs` itself, excluding `portos-ui`, so restarting on top of it would be redundant and would race the script.
-
-### Launch and completion are separate phases
-
-`launchUpdate(tag, emit, options)` resolves to `{ started: false, result }` when a previous script is still running, or `{ started: true, completion }` after the detached spawn succeeds and progress listeners are attached. Spawn failures reject. `completion` tracks the script lifetime and its persisted result; it is observed for socket reporting without delaying the launch response. A refusal retains the 409 `UPDATE_LAUNCH_FAILED` response, and a rejected launch does not claim or release another supervisor's hold.
-
-`executeUpdate()` remains a compatibility adapter: it returns the refusal result or awaits `completion`, preserving the existing result shape and calling `onLaunched` once after a successful spawn. New handoff callers use `launchUpdate()` directly so they need no callback flag or promise race.
-
-`startPortosSelfUpdate()` resolves as soon as the detached script is RUNNING. It cannot report the outcome, because `update.sh` `pm2 delete`s this server partway through and the process awaiting it dies there — an awaited launch simply never runs its own completion code. The Git tab used to await it, which is why it hung: `app:update:complete` never fired, the operation was never cleared, and the row sat on "Stopping PortOS apps..." forever while the update finished fine in the background. So `appUpdater` returns `{ selfUpdateStarted: true }` at the launch, and `server/sockets/apps.js` deliberately **leaves the operation registered** and emits no completion — the map dies with the process, and the remaining `STEP:` frames keep rendering right up to the moment the server goes down.
-
-The client half of that contract is `usePortosRestartWatch` (`client/src/hooks/usePortosRestartWatch.js`). **App Management surfaces do not wire it themselves** — `useAppOperation` owns it and exposes `restarting`, so every caller of `startUpdate` inherits the baseline capture and the restart detection and a new surface cannot regress to the hang by forgetting them. The Update page, which does not go through an app operation, uses the hook directly. It arms on the update stream's `restart` step, on `portos:update:complete`, or on a socket `disconnect` **confirmed unreachable** (a raw disconnect is not proof — PortOS is commonly used remotely over Tailscale, and a network blip fires one too). Once armed it polls `/api/system/health` and reloads on a version change, a down→up dip, or an uptime reset below the pre-update peak — three signals, because a reconcile often lands the same version and its restart can be too fast to sample the down window.
-
-A PortOS record carrying a custom `updateCommand`, or a `repoPath` that is not this checkout, keeps the ordinary attached path — delegating there would silently run `update.sh` instead of the configured command. That decision is logged rather than silent, since the attached path is the one that failed. The `repoPath` comparison resolves symlinks and case-folds on macOS/Windows: `repoPath` is user-editable and not force-synced, so a trailing slash or a different spelling must not be mistaken for a different checkout. Non-PortOS managed apps are unaffected and still get their own PM2 restart from `appUpdater`. The dashboard handoff it starts before that restart is PortOS-only — it opens the PortOS dashboard, so it would be meaningless after another app's update.
+The managed app receives launch acceptance while the supervisor is still running. Its UI follows the progress and restart watcher. A raw socket disconnect and a successful spawn are insufficient to establish a restart.
 
 ## Post-update health verification
 
-`pm2 start` exiting 0 is not proof the server came back, and the process that would notice is the one that did not. Both platform scripts therefore close with a `verify` step that polls `/api/system/health` (`scripts/verify-server-health.js`) until it reports `ok` or the budget — `PORTOS_HEALTH_WAIT_MS`, default 120s — runs out. On failure they retry the production app set with `--only` (excluding Vite), then log the outcome loudly with the manual recovery command.
-
-The probe tries the loopback HTTP mirror (`:5553`) first, then the API port over HTTP and HTTPS, because the listening scheme depends on whether a cert is provisioned; `/api/system/health` is in the always-public set, so it works with the optional instance password on. The recovery only fires when the probe fails, so it cannot make a healthy update worse.
-
-**When the probe still fails after the recovery, the scripts say so and exit non-zero** — the closing banner reads "Update applied, but PortOS is DOWN" instead of "Update Complete". The script outlives the server it restarts, so its exit status and the tail of `data/update.log` are the only signals a wrapper, a CI job, or an operator still has; printing a success banner over a confirmed-headless install is how the failure went unnoticed for hours in the first place.
+The updater verifies `/api/system/health` after starting the production PM2 apps, beginning with the loopback HTTP mirror when available. If the probe cannot confirm healthy startup, it attempts the production restart recovery and probes again. A remaining failure exits nonzero and records diagnostic guidance in `data/update.log`. A trigger tag, an old marker or a launch that never emitted progress cannot prove success.
 
 ## Automatic updates (unattended, idle-gated)
 
-OFF by default. **Update tab → Automatic updates** turns it on; the config lives in
-`settings.autoUpdate` and resolves through `resolveAutoUpdateConfig` in
-`server/lib/sharedSchemas.js` (the schema, the scheduler, and the settings GET all read
-that one resolver, so a sparse slice cannot mean different things to different readers).
+The opt-in Update tab setting selects release or main. The scheduler uses the corresponding manual implementation and dispatches only when cooldown, update availability, checkout readiness and system idleness all pass. The default cooldown is six hours. It records launch before restart and persists the latest skip reason for the panel.
 
-Code: `server/services/autoUpdateScheduler.js`, `server/services/updateRepoReadiness.js`,
-`server/lib/systemIdle.js`, `server/services/appUpdateRunner.js`,
-`client/src/components/apps/tabs/AutoUpdatePanel.jsx`, `GET /api/update/auto`.
+Renders and jobs, running or queued CoS work, Persistent Mind turns/messages, app operations and unresolved ownership can block the idle gate. Unreadable activity is not proof of idleness. Readiness can switch a clean branch back to the default, restore approved generated lockfile drift, or repair a clean stale submodule ancestor to the pinned revision. Local commits, staged gitlinks, conflicts and untrusted state remain protected. The optional agent escalation is deduplicated and off when the operator disables it.
 
-**It runs the SAME action the matching button runs, through the same service.** There is no
-second update implementation, so every preflight refusal, the update lock, and the
-never-await-the-launcher rule apply unchanged:
+## Node.js runtime and dependencies
 
-| Channel | Dispatches | Equivalent to |
-|---|---|---|
-| `release` | `startPortosSelfUpdate({ mode: 'release' })` | Update page → "Update Now" |
-| `main` | `runAppUpdate({ appId: PORTOS_APP_ID })` | App Management → Git tab → "Update app" |
+The Update tab reports the running Node version and supported alternatives, plus the shipped, daemon and global PM2 versions. An authorized Node switch requires idle state, pins the selected interpreter in `PORTOS_NODE_INTERPRETER` and uses the normal detached refresh path. The PM2 sync action aligns an older daemon or global CLI to the shipped version.
 
-`runAppUpdate` is the extracted body of the `app:update` socket handler (claim → PortOS
-preflight → `appUpdater.updateApp` → ledger row → apps-changed broadcast); the socket
-handler now only routes the two refusals that belong to the person who clicked.
+The server workspace supplies PM2 for startup, updates and the root `pm2:*` commands. During the first update from an older release, the updater can create a compatibility link at the previous CLI location so it can complete the restart with the server copy.
 
-### Every gate must pass on the same tick
-
-A 5-minute interval poll (`eventScheduler`, id `portos-auto-update`, registered only while
-the feature is on) checks, in order:
-
-1. **Cooldown** — `minIntervalHours` (default 6) since the last update. The baseline is the
-   most recent of the scheduler's own `lastRunAt`, the last recorded update result (so a
-   MANUAL update also resets the clock), and the `armedAt` stamped on the first tick after
-   the feature was switched on. `lastRunAt` is written at the LAUNCH, not at a completion
-   this process does not live to see — `update.sh` pm2-deletes the server partway through,
-   and without that stamp the restarted server would find the interval elapsed and fire a
-   second update.
-2. **Something to update to** — a newer release tag (`release`), or origin's default branch
-   ahead of this checkout / `installState.outOfSync` (`main`). Nothing to do is a no-op.
-3. **Checkout readiness** (`updateRepoReadiness.js`) — see below.
-4. **System idle** (`lib/systemIdle.js`) — no render running **or queued**, no detached job
-   tracked in `renderActivity.js` (downloads, song analysis, voice training, exports,
-   Homebrew jobs), no CoS agent or
-   queued task, no Persistent Mind turn or queued message, no app operation, no update
-   already in flight. An unreadable Persistent Mind state counts as busy, matching the
-   update path's own `PERSISTENT_MIND_STATE_UNTRUSTED` refusal.
-
-`summarizeSystemActivity` is the ONE definition of idle: the dashboard's Live activity
-widget renders the verdict the updater refuses on, so the two cannot disagree about a
-window in which PortOS may restart itself. Every skip is recorded to
-`data/update.json` (`autoUpdate.lastSkip`) and rendered in the panel — an unattended
-updater that simply never runs is otherwise indistinguishable from a broken one.
-
-### Checkout readiness: repair mechanically, escalate judgement
-
-Both update paths MOVE the checkout. `update.sh` switches to `main` only from a
-clean branch and refuses dirty work; the manual managed-app path
-(`updateDefaultBranch`) can fall back to `pull --rebase --autostash` for
-non-conflicting local changes. The unattended readiness gate refuses until the
-checkout is on the default branch and clean, because a stash nobody is told
-about reads as lost work.
-
-These remedies run without asking, because they preserve local work:
-
-- **switch to the default branch** from a CLEAN feature branch (the commits stay on the
-  branch ref), and
-- **restore modified auto-generated lockfiles** (`npm install` rewrites them; the update
-  reinstalls anyway). Restored by explicit path, never `-- .`, and
-- **update stale submodule checkouts to their parent gitlinks** when the checkouts
-  are clean ancestors of the pins, including recursively stale children. Staged
-  gitlinks, edits, untracked files, ahead/divergent commits and unreadable state
-  remain blockers. Repository Sources uses the same read-only classification to
-  offer **Update app** for this drift, even when the parent is already current,
-  rather than requiring **Resolve with agent**. The managed updater then runs
-  its existing pinned submodule update; it never uses `--remote` or `--force`.
-
-Everything else — uncommitted work, a local commit not on origin, an interrupted
-rebase/merge, conflict markers — queues ONE high-priority CoS task (deduped on a constant
-first line, `useWorktree: false`) and waits. That agent then counts as activity, so the
-update lands in the first idle window after it finishes. The escalation is switchable
-(`resolveBlockersWithAgent`), since it costs a provider call.
-
-## Node.js runtime and pm2
-
-The Update tab's **Node.js runtime** panel (`client/src/components/apps/tabs/NodeRuntimePanel.jsx`, `GET /api/update/node-runtime`) reports the Node the server process is actually running (`process.version`, not `node -v`), newer releases from nodejs.org's index inside `SUPPORTED_NODE_RANGE` (the running line's latest patch, the newest LTS, the newest release, with a security flag), nvm, and pm2 three ways: the version PortOS ships, the daemon's own `getReport`, and the terminal's global CLI.
-
-The Review Hub also checks these versions and installed coding-agent harnesses in the background, with a same-major Node security alert and links back to the guarded update flows. A failed check keeps the last known action and marks it unverified. Its cached observations are machine-local; no update or restart is automatic. The pm2 synchronization action aligns the CLI and daemon to the version bundled by PortOS, while an upstream npm release needs a PortOS dependency update. Setup enforces the separately maintained Node security floors in `scripts/checkNodeVersion.js`; normal startup and self-update continue to enforce the compatibility range, so a newly published security floor does not stop an existing installation.
-
-Why the runtime has to be pinned: `interpreter: 'node'` resolves against the pm2 daemon's PATH, and `pm2 resurrect` reuses each app's saved PATH, so an install can keep running an older Homebrew node after nvm's default moved. `ecosystem.config.cjs` therefore launches every PortOS app on `PORTOS_NODE_INTERPRETER` (exported env, then `.env`), falling back to `node` when the value is not an absolute path to an existing node binary (`server/lib/nodeInterpreterPin.js`).
-
-`POST /api/update/node-runtime { version }` (offered versions only, host-control gated) refuses unless the system is idle, then: `nvm install`, `nvm alias default`, `npm install -g pm2@<shipped>` under the new Node, pins `PORTOS_NODE_INTERPRETER` (in `.env` and in the server's own env, because pm2 exports the old pin into every app and an exported pin beats `.env`), repoints a macOS pm2 LaunchAgent's nvm paths, and launches the detached update script in `refresh` mode. `launchUpdate` puts the pin first on the script's PATH and exports it, so npm install and the trusted native rebuilds target the new Node, `pm2-daemon-refresh.js` reloads a daemon still on another Node, and `pm2 delete` + `pm2 start` makes pm2 read the new interpreter. A refused launch restores the previous pin. The run also pulls `main`, like any refresh.
-
-`POST /api/update/pm2` aligns a global CLI or daemon that is older than the shipped pm2 (a restart only for the daemon). A systemd boot script still needs `sudo pm2 startup`; the panel shows the exact command.
-
-## Syncing a fork
-
-`POST /api/update/sync-fork` shells out to:
-
-```bash
-gh repo sync <owner>/<fork> --source atomantic/PortOS --branch <branch>
-```
-
-`gh` is fast-forward only by default, so a diverged fork `main` returns **409 `FORK_DIVERGED`**. **Never add `--force` server-side** — the error message instead points the user at the explicit `--force` command they can run from their own terminal if they really want to discard fork commits.
-
-## Fork UI: three distinct buttons
-
-When `isFork` is true, `UpdateTab` replaces the single "Update Now" button with three:
-
-| Button | Behavior |
-|--------|----------|
-| Sync Fork & Update | `sync-fork`, then `execute` |
-| Sync Fork Only | `sync-fork`, no update |
-| Update from Fork As-Is | `execute` with `acknowledgeFork: true` |
-
-Keep these three behaviors distinct. Collapsing them strips the user's agency over what touches their GitHub fork.
-
-### Interruption on Windows
-
-A terminal `Ctrl+C` can deliver `SIGINT` to the attached Node updater. Closing
-the console can deliver `SIGHUP`, but Windows may then terminate Node after
-about 10 seconds even when a handler is installed. The updater stops advancing
-the pipeline after the in-flight command settles and tries to restart any PM2
-apps it removed. It cannot promise to finish recovery before a console-close
-deadline, and a forced kill does not run the handler at all. If settlement was
-not recorded after the worker was admitted, the update hold stays in place
-for investigation. On Windows a missing process is not enough to reconcile
-an admitted update without terminal evidence. Do not close the terminal as
-a way to cancel a live update. See [Node's Windows signal behavior](https://nodejs.org/api/process.html#signal-events).
-
-The Windows sandbox tests inject both control-signal events into the real
-Node updater during a fake PM2 delete and check restart, health and failure
-status. They do not close or terminate a native console. The macOS/Linux
-fixture also sends a real PID-only signal to the shell-launched supervisor
-while it waits for admission and checks that no update starts.
-
-## Verifying a change to the updater itself
-
-Do not test a candidate on a primary install. A worktree by itself does not isolate
-PM2, the database, or service ports. Use a disposable instance with its own VM or
-an otherwise isolated maintenance window on each OS. Before starting, record the
-current commit, configured `node --version` and `npm --version`, checked-out data
-backup, running PM2 app list, and working local health URL. Make sure the current
-operator can restore that snapshot without going through the candidate updater.
-
-Use a test remote that exposes the chosen revision as `main`. First advance it
-from the old installation to the exact PR head, and update through the old
-launcher. That run can finish entirely in the old updater even though it checked
-out the new shims. Then advance the test remote to a distinct, content-identical
-commit descended from the PR head so the second invocation has to pull. Invoke
-the newly installed `update.sh` or `update.ps1` this time. Both runs should preserve
-their ordered `STEP:` transcript, advance to the expected SHA, record a new
-`data/update-complete.json`, and start the production PM2 app set without Vite.
-Verify `/api/system/health` after each run and record the commit and exact result.
-If a run fails, retain `data/update.log` and its terminal result; do not merge on a
-failed recovery. Restore the disposable instance from its known-good snapshot
-rather than guessing which partial setup or migration ran.
-
-## When the updater reuses dependencies
-
-The updater checks root, client and server separately. It skips a workspace's
-npm install when the last install receipt matches its manifest, lockfile and
-project `.npmrc`, and the packages on disk match the lockfile. Older v2 receipts
-still identify the manifest and lockfile, but workspaces with a project
-`.npmrc` acquire configuration evidence on their next install. Changed inputs,
-missing or stale packages, forced repair and pending reconciliation take the
-repair path. The server's trusted native rebuilds, client build, PM2 restart
-and health verification still run when all three trees are reused.
-
-## Running a customized fork
-
-The `UpdateTab` fork panel states this in short form. The full loop is here, because that panel is
-the only other place it exists and it renders only when `isFork` is true.
-
-Keep `main` a clean mirror of upstream and never commit to it — that is what keeps `gh repo sync`
-fast-forward and avoids 409 `FORK_DIVERGED`. Private changes live on their own branch, rebased
-onto `main` after each sync. Anything shareable goes upstream as a PR instead, so you carry less
-forward each time.
-
-**PM2 boots whatever is checked out**, so the branch you are on is the code that runs. Staying on
-your private branch is what makes your customizations live; there is no separate step.
-
-### After rebasing, reinstall and rebuild
-
-`update.sh` / `update.ps1` always finish on `main`, so they cannot do this half for you:
-
-```bash
-git checkout main && ./update.sh            # .\update.ps1 on Windows
-git checkout <your-branch> && git rebase main
-for d in . client server; do (cd "$d" && npm install --no-save); done
-node scripts/trusted-rebuilds.js server
-npm run build && npm run pm2:restart
-```
-
-**Use `--no-save`, not a bare `npm install`.** `--no-save` is what `scripts/update.mjs` and `scripts/ensure-deps.js` run, for two reasons that both bite a fork: a bare install rewrites
-`client/package.json` and the lockfiles, which dirties your private branch and re-stales a build
-you just made (`client/package.json` is a `staleBuild` input — see below); and an older npm can
-strip newer lockfile metadata it does not understand. `--no-save` still honors `package-lock.json`.
-
-`scripts/trusted-rebuilds.js` is not optional for the server. Every workspace `.npmrc` sets
-`ignore-scripts=true`, so the server's native addons (`node-pty` and friends) are never built by
-the install itself — skip the rebuild and the shell and TUI features crash on a missing binding.
-
-Order matters: install before you build, so the build sees the deps it compiles against.
-
-**A clean rebase makes the install look broken.** Checking out a branch based on an older `main`
-rewinds the working tree, and the rebase rolls it forward, so every touched file gets a new mtime.
-`getInstallState()` (`server/services/installState.js`) compares mtimes, so it reports a stale
-build and stale deps in all three workspaces (root, `client`, `server`) even though no dependency changed and no build input
-was edited. The reinstall and rebuild above clear it.
+Workspace dependencies can be reused when the install receipt, manifests, lockfile, project npm configuration and installed packages agree. Stale or unknown state triggers repair. Trusted native rebuilds, client build, restart and verification still run. A primary-install update is separate from dependency linking in a CoS worktree.
 
 ## Image-bearing Persistent Mind work must drain before source transitions
 
-The managed update route refuses to restart into a different source revision while a queued Persistent Mind message or active turn carries image references. `GET /api/update/status` reports the privacy-safe `persistentMindImages` preflight (`safe`, queued count, and active-turn boolean), and `POST /api/update/execute` checks it before launch, and the script rechecks persisted state after acquiring the shared update hold, including direct/offline invocation.
+The update preflight and the detached script both refuse while a queued message or active turn carries image references. Drain the work, verify preflight, take a normal backup, then retry. When a stopped provider prevents draining, back up `data/cos/state.json` and `data/screenshots/` before explicitly passing `acknowledgePersistentMindImageBackup: true` or `PORTOS_UPDATE_IMAGE_BACKUP_ACKNOWLEDGED=1` for a direct launch. Unreadable persisted state still blocks the transition. Rolling back manually with live image references is unsupported.
 
-To recover, drain the image-bearing messages, confirm the preflight is safe, create a normal PortOS backup, and retry the update. If a stopped or unavailable provider prevents the queue from draining, create a backup that includes `data/cos/state.json` and `data/screenshots/`, then explicitly retry the API request with `acknowledgePersistentMindImageBackup: true`; that acknowledgement is the recovery escape hatch and is never sent silently by the UI. Direct invocation can carry that same explicit backup acknowledgement as `PORTOS_UPDATE_IMAGE_BACKUP_ACKNOWLEDGED=1`. Invalid or unreadable Persistent Mind state blocks the transition until it is restored from backup. Claimed historical images do not block updates once their message has completed. PortOS does not offer a managed rollback command; manually checking out an older source revision while image-bearing work is queued or active is unsupported because schema-v2 readers cannot preserve those references.
+## Verifying a change to the updater itself
+
+Use a disposable install with its own service ports, DB and PM2 state. Record the starting commit, runtime versions, healthy endpoint, PM2 state and a restorable snapshot. First run the old updater into the candidate, then run the installed candidate into a content-identical descendant. Verify ordered progress, exact checkout, completion evidence and live health after each. Retain the logs and restore the disposable snapshot on failure.

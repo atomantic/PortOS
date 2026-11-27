@@ -1,4 +1,4 @@
-import { Suspense, useState, useEffect, useCallback, useMemo } from 'react';
+import { Suspense, useState, useEffect, useCallback, useMemo, useRef } from 'react';
 import { Link, useParams, useNavigate, useSearchParams } from 'react-router';
 import {
   ArrowLeft, Play, Square, RotateCcw, ExternalLink, Gamepad2, Hammer, RefreshCw,
@@ -9,6 +9,7 @@ import {
 import DeployPanel from './DeployPanel';
 import EditAppDrawer from './EditAppDrawer';
 import toast from '../ui/Toast';
+import InlineConfirmRow from '../ui/InlineConfirmRow';
 import BrailleSpinner from '../BrailleSpinner';
 import StatusBadge from '../StatusBadge';
 import {
@@ -25,7 +26,7 @@ import {
 import { PORTOS_APP_ID } from '../../services/apiCore.js';
 import { getLaunchUrls } from '../../services/appUrls';
 import { useSocketResource } from '../../hooks/useSocketResource';
-import { APP_DETAIL_TABS, NON_PM2_TYPES, getAppTypeLabel, isAppFeatureEnabled, resolveLaunchPanelProcess } from './constants';
+import { APP_DETAIL_TABS, NON_PM2_TYPES, PORTOS_STOP_WARNING, getAppTypeLabel, isAppFeatureEnabled, resolveLaunchPanelProcess } from './constants';
 import { useProcessSnapshot } from '../../hooks/useProcessSnapshot.js';
 import { useInstanceFeatures } from '../../hooks/useInstanceFeatures.js';
 import DesktopLaunchProgress from './DesktopLaunchProgress';
@@ -86,6 +87,8 @@ function AppDetail() {
   const activeTab = tab || 'overview';
 
   const [actionLoading, setActionLoading] = useState(null);
+  const [confirmingStop, setConfirmingStop] = useState(false);
+  const stopTriggerRef = useRef(null);
   // PM2 process whose live output the desktop launch panel is tailing (null = hidden).
   const [launchProcess, setLaunchProcess] = useState(null);
   const [nativeLaunchLoading, setNativeLaunchLoading] = useState(false);
@@ -407,7 +410,8 @@ function AppDetail() {
               {app.overallStatus === 'online' ? (
                 <>
                   <button
-                    onClick={handleStop}
+                    ref={app.id === PORTOS_APP_ID ? stopTriggerRef : undefined}
+                    onClick={app.id === PORTOS_APP_ID ? () => setConfirmingStop(true) : handleStop}
                     disabled={actionLoading}
                     aria-busy={actionLoading === 'stop'}
                     className="px-2 py-1 pointer-coarse:min-h-11 pointer-coarse:rounded-lg pointer-coarse:border pointer-coarse:border-port-border bg-port-error/20 text-port-error enabled:hover:bg-port-error/30 transition-colors disabled:opacity-50 flex items-center gap-1"
@@ -533,10 +537,27 @@ function AppDetail() {
               </button>
             )}
             {app.hasDeployScript && (
-              <DeployPanel appId={appId} appName={app.name} />
+              <DeployPanel key={appId} appId={appId} appName={app.name} />
             )}
           </div>
         </div>
+
+        {app.id === PORTOS_APP_ID && !NON_PM2_TYPES.has(app.type) && app.overallStatus === 'online' && confirmingStop && (
+          <InlineConfirmRow
+            className="mt-3"
+            autoFocus
+            tone="warning"
+            question={PORTOS_STOP_WARNING}
+            confirmText="Stop PortOS"
+            confirmDisabled={Boolean(actionLoading)}
+            returnFocusRef={stopTriggerRef}
+            onConfirm={() => {
+              setConfirmingStop(false);
+              handleStop();
+            }}
+            onCancel={() => setConfirmingStop(false)}
+          />
+        )}
 
         {/* Vite Dev-UI host guard — the app's dev server would block this host. */}
         {viteHostStatus && !viteHostStatus.hostAllowed && (

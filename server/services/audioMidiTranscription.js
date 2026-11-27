@@ -28,11 +28,12 @@ import { unlink } from 'fs/promises';
 import { join, dirname } from 'path';
 import { fileURLToPath } from 'url';
 import { tmpdir } from 'os';
+import { CANCEL_ALREADY_TERMINAL } from '../lib/cancelResponse.js';
 import { withBackupAssetPublication } from '../lib/backupSnapshotBoundary.js';
 import { PATHS, shortId } from '../lib/fileUtils.js';
 import { importFileToDir } from '../lib/uploads.js';
 import { broadcastSse, attachSseClient as attachSse, closeJobAfterDelay } from '../lib/sseUtils.js';
-import { MUSCRIPTOR_MODELS } from '../lib/muscriptorModels.js';
+import { DEFAULT_MUSCRIPTOR_MODEL, MUSCRIPTOR_MODELS } from '../lib/muscriptorModels.js';
 import { killWithEscalation } from '../lib/killWithEscalation.js';
 import { hfChildEnv } from './hfToken.js';
 import { trackedRenderMap } from './renderActivity.js';
@@ -49,7 +50,7 @@ const MUSCRIPTOR_SCRIPT = join(__dirname, '../../scripts/ml/transcribe_muscripto
 // MuScriptor model sizes (weights auto-download on first use). Medium is the
 // library default — a quality/speed balance; small is the CPU-friendly tier.
 export { MUSCRIPTOR_MODELS };
-export const DEFAULT_MUSCRIPTOR_MODEL = 'medium';
+export { DEFAULT_MUSCRIPTOR_MODEL };
 
 /** Clamp a requested model size onto the known set (route validates shape; this guards the value). */
 export const resolveMuscriptorModel = (model) =>
@@ -148,15 +149,15 @@ export function getActiveMidiTranscriptionJobId(ownerKey) {
 export const attachMidiTranscriptionSseClient = (jobId, res) => attachSse(transcriptionJobs, jobId, res);
 
 /**
- * Cancel an in-flight transcription. Returns false if the job is unknown or
- * already finished. The flag (not just the SIGTERM) is what makes cancel
+ * Cancel an in-flight transcription. The flag (not just the SIGTERM) makes cancel
  * reliable in the windows where no child exists yet/anymore — before the
  * spawn (env still resolving) and between the child's exit and the result
  * landing — the run body checks it at both points.
  */
 export function cancelMidiTranscription(jobId) {
   const job = transcriptionJobs.get(jobId);
-  if (!job || job.settled) return false;
+  if (!job) return false;
+  if (job.settled) return CANCEL_ALREADY_TERMINAL;
   job.cancelRequested = true;
   job.decodeController.abort();
   const proc = job.process;

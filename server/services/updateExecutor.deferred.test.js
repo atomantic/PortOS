@@ -1,3 +1,4 @@
+// test-memo: git-fixture — git only runs in temporary repositories created for this suite.
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { readFile, readdir, rm, stat, writeFile } from 'node:fs/promises';
 import { existsSync, mkdirSync } from 'node:fs';
@@ -10,6 +11,40 @@ import { continueManualUpdateRecovery, offerManualUpdateRecovery } from '../../s
 import { requestManualUpdate } from '../../scripts/manual-update-recovery.mjs';
 
 vi.mock('./updateChecker.js', () => ({ recordUpdateResult: vi.fn(async () => {}), getCurrentVersion: vi.fn(async () => '0.0.0') }));
+
+// Match the detached attempt by its PID. The automatic waiter has a separate
+// control directory and can leave its own exit record while the manual run settles.
+async function manualCompletionEvidence(root, admission, launch, outcome) {
+  const completion = {
+    success: outcome.success === true,
+    uncertain: outcome.uncertain === true,
+    failedStep: outcome.failedStep === 'starting' ? 'starting' : null,
+    errorCode: outcome.errorCode === 'UPDATE_INTERRUPTION_REQUIRED' ? outcome.errorCode : null,
+  };
+  const control = join(root, 'data', 'update-detached');
+  const attempts = await readdir(control).catch(() => []);
+  for (const attempt of attempts) {
+    const directory = join(control, attempt);
+    const pid = await readFile(join(directory, 'pid'), 'utf8').catch(() => '');
+    if (!Number.isSafeInteger(launch.supervisorPid) || pid.trim() !== String(launch.supervisorPid)) continue;
+
+    let admissionTerminal = null;
+    try {
+      const result = admission.deferredUpdate.get().result;
+      if (result?.id === attempt) admissionTerminal = { success: result.success === true };
+    } catch {
+      admissionTerminal = 'unreadable';
+    }
+    // Completion can resolve from the journal before the launcher writes its exit.
+    const supervisorExitStatus = await vi.waitFor(async () => {
+      const exit = (await readFile(join(directory, 'exit'), 'utf8')).trim();
+      if (!/^[0-9]{1,3}$/.test(exit) || Number(exit) > 255) throw new Error('No valid detached exit status');
+      return Number(exit);
+    }, { timeout: 10000 }).catch(() => null);
+    return { completion, admissionTerminal, supervisorExitStatus };
+  }
+  return { completion, admissionTerminal: null, supervisorExitStatus: null };
+}
 
 describe.skipIf(process.platform === 'win32')('service launch through the real detached supervisor', () => {
   let root, admission, launchUpdate, completions;
@@ -101,7 +136,13 @@ describe.skipIf(process.platform === 'win32')('service launch through the real d
       await writeFile(join(root, 'observed-running-work'), 'render');
       const initial = await launchUpdate('v0.0.0', vi.fn());
       expect(initial.started).toBe(true);
-      await expect(initial.completion).resolves.toMatchObject({ success: false, errorCode: 'UPDATE_INTERRUPTION_REQUIRED' });
+      const refusal = await initial.completion;
+      expect(refusal).toMatchObject({ success: false, errorCode: 'UPDATE_INTERRUPTION_REQUIRED' });
+      expect(await manualCompletionEvidence(root, admission, initial, refusal)).toEqual({
+        completion: { success: false, uncertain: false, failedStep: 'starting', errorCode: 'UPDATE_INTERRUPTION_REQUIRED' },
+        admissionTerminal: { success: false },
+        supervisorExitStatus: 1,
+      });
       expect(existsSync(join(root, 'consent-applied'))).toBe(false);
       expect(Object.keys(admission.deferredUpdate.get().result)).toHaveLength(4);
       const continued = await launchUpdate('v0.0.0', vi.fn(), { acknowledgeInterruption: true });
@@ -143,10 +184,31 @@ describe.skipIf(process.platform === 'win32')('service launch through the real d
       const manual = await launchUpdate('v0.0.0', vi.fn(), { acknowledgeInterruption: true });
       expect(manual.started).toBe(true);
       const outcome = await automatic.completion;
-      expect(outcome, JSON.stringify({ outcome, steps: report.mock.calls })).toMatchObject({ success: false, superseded: true });
-      await expect(manual.completion).resolves.toMatchObject({ success: true });
+      expect(outcome).toMatchObject({ success: false, superseded: true });
+      const manualOutcome = await manual.completion;
+      const evidence = manualOutcome.success === true ? undefined : await manualCompletionEvidence(root, admission, manual, manualOutcome);
+      expect(manualOutcome.success, JSON.stringify(evidence)).toBe(true);
       expect(report.mock.calls.some(([, status]) => status === 'error')).toBe(false);
       expect(existsSync(join(root, 'manual-applied'))).toBe(true);
     } finally { await render.finish(); }
+  });
+
+  it('summarizes a failed detached manual update without including fixture output', async () => {
+    installAdmittedUpdateFixture(root, "console.error('private fixture output'); process.exit(19);");
+    const manual = await launchUpdate('v0.0.0', vi.fn());
+    expect(manual.started).toBe(true);
+    const outcome = await manual.completion;
+    expect(await manualCompletionEvidence(root, admission, manual, outcome)).toEqual({
+      completion: { success: false, uncertain: false, failedStep: 'starting', errorCode: null },
+      admissionTerminal: { success: false },
+      supervisorExitStatus: 19,
+    });
+    const unrelatedAdmission = {
+      deferredUpdate: { get: () => ({ result: { id: 'another-attempt', success: true } }) },
+    };
+    expect(await manualCompletionEvidence(root, unrelatedAdmission, manual, outcome)).toMatchObject({
+      admissionTerminal: null,
+      supervisorExitStatus: 19,
+    });
   });
 });

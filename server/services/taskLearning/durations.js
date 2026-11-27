@@ -176,8 +176,10 @@ export async function getTaskDurationEstimate(taskDescription, { providerId, mod
  * @returns {Object} Map of task type to duration info
  */
 export async function getAllTaskDurations() {
-  const data = await loadLearningData();
+  return summarizeTaskDurations(await loadLearningData());
+}
 
+export function summarizeTaskDurations(data) {
   const durations = {};
 
   for (const [taskType, metrics] of Object.entries(data.byTaskType)) {

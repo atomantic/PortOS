@@ -436,11 +436,10 @@ export default function CmdKSearch({ open: controlledOpen, setOpen: controlledSe
       const res = await runPaletteAction(item.id).then((result) => result, () => null);
       if (!res) { inputRef.current?.focus(); return; }
       const summary = res?.result?.summary || `${item.label} ran.`;
-      if (res?.ok === false) toast.error(summary);
-      else toast.success(summary);
+      toast.success(summary);
       close();
     },
-  }), [navigate, close, enterCaptureMode]);
+  }), [location.pathname, navigate, close, enterCaptureMode]);
 
   const dispatchCommand = useCallback((item) => DISPATCH[item.kind]?.(item), [DISPATCH]);
 

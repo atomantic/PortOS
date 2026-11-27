@@ -44,7 +44,7 @@ Repository: {repoPath}
    before you research, so every comparison names real files. In PortOS start
    with \`server/services/imageGen/\`, \`server/services/videoGen/\`, the
    Python runners and pinned requirements in \`scripts/\`, and the rendering
-   notes in \`docs/features/\` and \`docs/research/\`. For another app,
+   notes in \`docs/features/\`. For another app,
    locate the equivalent code with \`rg\`; if the app has no local image or video rendering, say so in your
    summary and file nothing. Record, for each image and video path: the model
    and checkpoint revision, the runtime and pinned version, quantization, and
@@ -55,8 +55,8 @@ Repository: {repoPath}
    to record the findings", and use the preloaded Open pull requests section
    (list open PRs yourself only if it is absent). A model, runtime upgrade,
    or setting change that is already filed, in an open PR, or shipped in the last 50 \`git log\` entries
-   is NOT a candidate. Past \`docs/research/\` notes that rejected an option
-   count as a rejection unless you find new evidence that changes the verdict.
+   is NOT a candidate. Respect rejections recorded in tracker discussions or repository history
+   unless you find new evidence that changes the verdict.
 
 3. **Research what changed.** Use web search and fetch primary sources: model
    cards and repositories on Hugging Face and GitHub, release notes, and

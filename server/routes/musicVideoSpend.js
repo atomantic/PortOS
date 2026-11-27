@@ -5,11 +5,11 @@
 import { Router } from 'express';
 import { asyncHandler } from '../lib/errorHandler.js';
 import { validateRequest } from '../lib/validateRequest.js';
-import { musicVideoSpendAdjustmentSchema } from '../lib/musicVideo/musicVideoRouteValidation.js';
+import { musicVideoSpendAdjustmentSchema } from '../lib/musicVideo/routeValidation/misc.js';
 import { projectSpend } from '../lib/musicVideo/musicVideoSpend.js';
 import { currentRun } from '../lib/musicVideo/musicVideoSummary.js';
 import { requireProject } from '../services/musicVideo/requireProject.js';
-import { adjustProjectSpend, readProjectRenderSpend, removeProjectSpendAdjustment } from '../services/musicVideo/renderSpend.js';
+import { adjustProjectSpend, removeProjectSpendAdjustment } from '../services/musicVideo/renderSpend.js';
 
 const router = Router();
 
@@ -17,11 +17,6 @@ const spendResponse = (project, renderSpend) => {
   const withLedger = { ...project, renderSpend };
   return { renderSpend, spend: projectSpend(withLedger, currentRun(withLedger)) };
 };
-
-router.get('/:id/spend', asyncHandler(async (req, res) => {
-  const project = await requireProject(req.params.id);
-  res.json(spendResponse(project, await readProjectRenderSpend(project)));
-}));
 
 router.post('/:id/spend/adjustments', asyncHandler(async (req, res) => {
   const input = validateRequest(musicVideoSpendAdjustmentSchema, req.body ?? {});

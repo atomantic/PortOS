@@ -15,7 +15,6 @@ import { RUNNER_FAMILIES, flux2RepoRevision, diffusersRepoRevision } from '../ru
 import { applyVideoDisclosures } from '../videoDisclosure.js';
 import { applyVideoFinishProfiles, sanitizeFinishProfiles } from '../videoFinishProfiles.js';
 import { applyVideoSpeedProfiles, sanitizeSpeedProfiles } from '../videoSpeedProfiles.js';
-import { applyVideoDraftDecoders, sanitizeDraftDecoders } from '../videoDraftDecoders.js';
 import { applyMiniMaxH3MemoryProfiles, sanitizeMiniMaxH3MemoryProfiles } from '../minimaxH3Memory.js';
 import { LTX25_AUDIO_PROFILE } from '../videoDurationProfiles.js';
 
@@ -453,7 +452,7 @@ const dropRetiredEntries = (list) => (
 const VIDEO_REGISTRY_UPGRADES = Object.freeze([
   // FIRST, unconditionally: a withdrawn model has to leave before any later row
   // spends work on it, and before the apply* decorators would hand it a
-  // disclosure, a Finish edge, a speed profile or a draft decoder on its way out.
+  // disclosure, a Finish edge, or a speed profile on its way out.
   Object.freeze({ name: 'dropRetiredEntries', apply: dropRetiredEntries }),
   Object.freeze({ name: 'upgradeMiniMaxH3OutputControls', apply: upgradeMiniMaxH3OutputControls }),
   Object.freeze({ name: 'upgradeLtx25AudioControls', apply: upgradeLtx25AudioControls }),
@@ -630,19 +629,12 @@ export const normalizeRegistry = (parsed) => {
     // hand-edited profile with a NaN step count would otherwise reach the
     // picker and spawn a broken render, so it is warned about and stripped.
     const withSpeed = sanitizeSpeedProfiles(applyVideoSpeedProfiles(decorated));
-    // applyVideoDraftDecoders + sanitizeDraftDecoders (lib/videoDraftDecoders.js)
-    // are the same arrangement for the preview-fidelity decode (#5423). The
-    // sanitizer matters more here than elsewhere: a hand-edited decoder pointed
-    // at a runtime whose builder emits no draft flags would render on the FULL
-    // decoder while the history record claimed a draft one, so it is warned
-    // about and stripped rather than allowed to make a false claim.
-    const withDraftDecode = sanitizeDraftDecoders(applyVideoDraftDecoders(withSpeed));
     // applyMiniMaxH3MemoryProfiles is the load-time twin of migration 317, and
     // its sanitizer the sibling of the two above: a hand-edited profile with a
     // NaN memory floor would otherwise make every capacity comparison false and
     // refuse H3 renders on a machine that can run them, so it is warned about
     // and stripped.
-    return sanitizeMiniMaxH3MemoryProfiles(applyMiniMaxH3MemoryProfiles(withDraftDecode));
+    return sanitizeMiniMaxH3MemoryProfiles(applyMiniMaxH3MemoryProfiles(withSpeed));
   };
   const normalizedBuckets = Object.fromEntries(
     VIDEO_BUCKETS.map((bucket) => [bucket, videoEntries(bucketResults[bucket].entries, bucket)]),

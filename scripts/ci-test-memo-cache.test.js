@@ -23,6 +23,12 @@ const restoreFrom = (restore, available, context) => {
     .find(Boolean);
 };
 const memoPath = stepText => stepText.match(/^ +path: (.+)$/m)[1];
+const familyFallback = "${{ inputs.partition-only != 'true' && format('test-memo-{0}-{1}-{2}-', runner.os, runner.arch, inputs.suite) || '' }}";
+const initialRestore = (job, family, { partitionOnly = false } = {}) => {
+  const restore = step(job, 'Restore from the trusted memo cache');
+  expect(restore).toContain(familyFallback);
+  return restore.replace(familyFallback, partitionOnly ? '' : `test-memo-\${{ runner.os }}-\${{ runner.arch }}-${family}-`);
+};
 const ciYml = readFileSync(new URL('../.github/workflows/ci.yml', import.meta.url), 'utf8');
 
 describe('trusted CI test-memo cache reuse', () => {
@@ -32,7 +38,7 @@ describe('trusted CI test-memo cache reuse', () => {
     ['client', 'client', 'Linux'],
     ['windows-server', 'windows', 'Windows'],
   ])('%s can restore a full-run shard without crossing runtime or job families', (jobId, family, os) => {
-    const restore = step(jobs[jobId], 'Restore from the trusted memo cache');
+    const restore = initialRestore(jobs[jobId], jobId);
     const save = step(jobs[jobId], 'Save the test memo');
     // The save reuses the restore's primary key rather than restating it.
     expect(save).toContain('key: ${{ steps.test-memo.outputs.key }}');
@@ -56,13 +62,13 @@ describe('trusted CI test-memo cache reuse', () => {
     expect(save).toContain("github.event_name != 'pull_request'");
   });
 
-  // Related selection and smoke browser ownership both need sibling records.
+  // Related unit selection and smaller smoke matrices both need sibling records.
   it.each([
     ['server', FULL_SUITE_SHARDS.server],
     ['client', FULL_SUITE_SHARDS.client],
     ['browser', FULL_SUITE_SHARDS.browser],
   ])('restores and merges each full-run %s shard lineage once', (family, count) => {
-    const mergeBrowserShards = `env.PORTOS_BROWSER_TEST_PROFILE == 'smoke' && '${FULL_SUITE_SHARDS.browser}' || '0'`;
+    const mergeBrowserShards = `env.PORTOS_BROWSER_TEST_PROFILE == 'smoke' && (strategy.job-total != ${count} || steps.browser-memo-donors.outputs.shards != '[]') && '${count}' || '0'`;
     const mergeExpression = family === 'browser'
       ? mergeBrowserShards
       : `fromJSON(needs.impact.outputs.plan).${family}_mode == 'full' && '0' || '${count}'`;
@@ -85,7 +91,7 @@ describe('trusted CI test-memo cache reuse', () => {
       expect(invocation).toContain(`merge-shards: ${mergeInput}\n`);
       expect(ciYml).toContain(`merge-shards: ${mergeInput}\n`);
     }
-    const initial = step(job, 'Restore from the trusted memo cache');
+    const initial = initialRestore(job, family);
     const context = { 'runner.os': 'Linux', 'runner.arch': 'X64', 'github.run_id': 123 };
     const fullKeys = Array.from({ length: count }, (_, index) => expand(restoreKey(initial), {
       ...context, 'matrix.shard': index + 1, 'strategy.job-total': count,
@@ -98,8 +104,9 @@ describe('trusted CI test-memo cache reuse', () => {
       const restore = step(job, `Restore full-run shard ${shard} of the memo`);
       expect(restore).toContain(`id: restore-shard-${shard}`);
       expect(step(noMergeJob, `Restore full-run shard ${shard} of the memo`)).toContain(`fromJSON('0') >= ${shard} &&`);
-      const [, minimum, template] = restore.match(/^ +if: >-\n +fromJSON\(inputs\.merge-shards\) >= (\d) &&\n +!startsWith\(steps\.restore\.outputs\.cache-matched-key, format\('([^']+)', runner\.os, runner\.arch, inputs\.suite, inputs\.merge-shards\)\)$/m);
+      const [, minimum, donor, template] = restore.match(/^ +if: >-\n +fromJSON\(inputs\.merge-shards\) >= (\d) &&\n +\(inputs\.merge-partitions == '\[\]' \|\| contains\(fromJSON\(inputs\.merge-partitions\), (\d)\)\) &&\n +!startsWith\(steps\.restore\.outputs\.cache-matched-key, format\('([^']+)', runner\.os, runner\.arch, inputs\.suite, inputs\.merge-shards\)\)$/m);
       expect(Number(minimum)).toBe(shard);
+      expect(Number(donor)).toBe(shard);
       const formatArgs = [context['runner.os'], context['runner.arch'], family, count];
       const skipPrefix = template.replace(/\{(\d)\}/g, (_, argument) => formatArgs[argument]);
       // Use the same complete lineage prefix in the exclusion and the lookup.
@@ -151,23 +158,49 @@ describe('trusted CI test-memo cache reuse', () => {
     expect(job.indexOf(`- name: Park full-run shard ${count}\n`)).toBeLessThan(job.indexOf('- name: Read the full-run shard lineages in place\n'));
   });
 
-  it('prefers the new browser lineage and falls back to all four old shard indices', () => {
+  it('keeps the primary browser restore on its partition and requests only computed donors', () => {
     const job = jobs.browser;
-    const currentCount = FULL_SUITE_SHARDS.browser;
-    const oldCount = 4;
-    expect(step(job, 'Restore the test memo')).toContain("legacy-shards: '4'");
-    const mergeInput = `\${{ env.PORTOS_BROWSER_TEST_PROFILE == 'smoke' && '${currentCount}' || '0' }}`;
-    const context = { 'runner.os': 'Linux', 'runner.arch': 'X64' };
-    const previous = Array.from({ length: oldCount }, (_, index) => `test-memo-Linux-X64-browser-${index + 1}of${oldCount}-123`);
+    const invocation = step(job, 'Restore the test memo');
+    const count = FULL_SUITE_SHARDS.browser;
+    expect(invocation).toContain(`partition-only: \${{ strategy.job-total == ${count} }}\n`);
+    expect(invocation).toContain("merge-partitions: ${{ steps.browser-memo-donors.outputs.shards || '[]' }}");
+    const selectDonors = step(job, 'Select browser memo donors');
+    expect(selectDonors).toContain(`if: env.PORTOS_BROWSER_TEST_PROFILE == 'smoke' && strategy.job-total == ${count}`);
+    expect(selectDonors).toContain("const files = browserTestProfileFiles('smoke', JSON.parse(process.env.BROWSER_FILES));");
+    expect(selectDonors).toContain('const donors = browserSmokeMemoDonors(files, Number(process.env.BROWSER_SHARD_INDEX));');
+    const restore = initialRestore(job, 'browser', { partitionOnly: true });
+    const context = {
+      'runner.os': 'Linux', 'runner.arch': 'X64', 'github.run_id': 123,
+      'strategy.job-total': count,
+    };
+    const savedKeys = Array.from({ length: count }, (_, i) =>
+      expand(restoreKey(restore), { ...context, 'matrix.shard': i + 1 }));
+    for (const [i, key] of savedKeys.entries()) {
+      const current = { ...context, 'matrix.shard': i + 1, 'github.run_id': 456 };
+      const other = savedKeys.filter(candidate => candidate !== key);
+      const previous = key.replace(`of${count}-`, 'of4-');
+      expect(restoreFrom(restore, [...other, previous, key], current)).toBe(key);
+      expect(restoreFrom(restore, [...other, previous], current)).toBeUndefined();
+    }
+  });
 
-    for (let shard = 1; shard <= currentCount; shard += 1) {
-      const rawRestore = step(job, `Restore full-run shard ${shard} of the memo`).replaceAll(mergeInput, String(currentCount));
-      const expression = `\${{ fromJSON(inputs.legacy-shards) >= ${shard} && format('test-memo-{0}-{1}-{2}-${shard}of{3}-', runner.os, runner.arch, inputs.suite, inputs.legacy-shards) || '' }}`;
-      expect(rawRestore).toContain(expression);
-      const restore = rawRestore.replace(expression, shard <= oldCount ? `test-memo-Linux-X64-browser-${shard}of${oldCount}-` : '');
-      const current = `test-memo-Linux-X64-browser-${shard}of${currentCount}-456`;
-      expect(restoreFrom(restore, previous, context)).toBe(previous[shard - 1]);
-      expect(restoreFrom(restore, [...previous, current], context)).toBe(current);
+  it('disables only the browser memo for explicitly requested cold dispatches', () => {
+    expect(ciYml).toMatch(/\n {6}browser_timing:\n[^\n]+\n {8}type: choice\n {8}default: ordinary\n {8}options:\n {10}- ordinary\n {10}- cold-smoke\n {10}- cold-full\n {2}workflow_call:/);
+    const browser = jobs.browser;
+    const manualSmoke = "github.event_name == 'workflow_dispatch' && inputs.browser_timing == 'cold-smoke'";
+    const prSmoke = "github.event_name == 'pull_request' && github.base_ref != 'release' && inputs.full != true";
+    expect(browser).toContain(`PORTOS_BROWSER_TEST_PROFILE: \${{ (${manualSmoke} && 'smoke') || (${prSmoke} && 'smoke' || 'full') }}`);
+    const coldDispatch = `github.event_name == 'workflow_dispatch' && contains(fromJSON('["cold-smoke","cold-full"]'), inputs.browser_timing)`;
+    expect(browser).toContain(`PORTOS_TEST_MEMO: \${{ ${coldDispatch} && 'off' || '' }}`);
+    const concurrency = ciYml.match(/^ {2}group: (.+)$/m)?.[1];
+    expect(concurrency).toBe(`ci-\${{ github.workflow }}-\${{ github.event.pull_request.number || (github.event_name == 'schedule' && 'schedule') || github.ref }}\${{ ${coldDispatch} && format(':{0}', inputs.browser_timing) || '' }}`);
+    for (const name of ['Select browser memo donors', 'Restore the test memo', 'Save the test memo']) {
+      expect(step(browser, name)).toContain("env.PORTOS_TEST_MEMO != 'off'");
+    }
+    expect(jobs['full-gate']).toContain(`&& !(${manualSmoke})`);
+    for (const [id, job] of Object.entries(jobs)) {
+      if (id === 'browser' || id === 'full-gate') continue;
+      expect(job).not.toContain('inputs.browser_timing');
     }
   });
 

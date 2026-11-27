@@ -160,13 +160,18 @@ describe('the matrix', () => {
     expect(within(card).getByText('qwen3-coder:30b')).toBeInTheDocument();
   });
 
-  it('uses themed surfaces for task and recommendation cards', () => {
+  it('shows four recommendation cards in an even grid and keeps each test description in its drawer', async () => {
+    const user = userEvent.setup();
     renderPanel();
 
-    expect(screen.getByText('Fix a broken module in a sandbox.').parentElement)
-      .toHaveClass('bg-port-card');
-    expect(screen.getByText('Best coding evidence').parentElement)
-      .toHaveClass('bg-port-card');
+    const firstCard = screen.getByText('Best coding evidence').parentElement;
+    expect(firstCard).toHaveClass('bg-port-card');
+    expect(firstCard.parentElement).toHaveClass('sm:grid-cols-2', 'xl:grid-cols-4');
+    expect(firstCard.parentElement.children).toHaveLength(4);
+    expect(screen.queryByText('Fix a broken module in a sandbox.')).not.toBeInTheDocument();
+
+    await user.click(screen.getAllByRole('button', { name: /not run/i })[0]);
+    expect(await screen.findByText('Fix a broken module in a sandbox.')).toBeInTheDocument();
   });
 });
 
@@ -315,7 +320,7 @@ describe('a recorded result', () => {
     expect(screen.getAllByLabelText('not found')).toHaveLength(4);
   });
 
-  it('discards a result and refreshes rather than leaving a stale row', async () => {
+  it('requires confirmation to discard a result and refreshes after deletion', async () => {
     const user = userEvent.setup();
     const onReload = vi.fn();
     deleteModelCapabilityTest.mockResolvedValue({ success: true });
@@ -323,6 +328,14 @@ describe('a recorded result', () => {
 
     await openResult(user);
     await user.click(await screen.findByRole('button', { name: /discard this result/i }));
+
+    expect(screen.getByRole('group', { name: /discard the saved result and transcript/i })).toBeInTheDocument();
+    expect(deleteModelCapabilityTest).not.toHaveBeenCalled();
+
+    await user.click(screen.getByRole('button', { name: 'Cancel' }));
+    expect(deleteModelCapabilityTest).not.toHaveBeenCalled();
+    await user.click(screen.getByRole('button', { name: /discard this result/i }));
+    await user.click(screen.getByRole('button', { name: 'Discard result' }));
 
     await waitFor(() => expect(deleteModelCapabilityTest).toHaveBeenCalledWith(
       'ollama', 'example-model:7b', 'image-analysis', { silent: true },
@@ -365,47 +378,95 @@ describe('a recorded result', () => {
 });
 
 describe('running everything that applies to one model', () => {
-  it('offers only the runnable tests, and says how many before the click', () => {
+  it('reviews only runnable tests for the selected model and cancels without a call', async () => {
+    const user = userEvent.setup();
     renderPanel({
       report: report({
         models: [model({
           tests: [
             slot('sandbox-repair', { state: 'not-applicable', reason: 'no tools badge' }),
             slot('image-analysis'),
-            slot('story-outline'),
+            slot('story-outline', { state: 'unknown' }),
           ],
         })],
       }),
     });
-    expect(screen.getByRole('button', { name: /run 2/i })).toBeInTheDocument();
+    await user.click(screen.getByRole('button', { name: /^run 2$/i }));
+    const gate = within(await screen.findByRole('dialog', { name: 'Review capability tests' }));
+    expect(gate.getByText('example-model:7b')).toBeInTheDocument();
+    expect(gate.getByText(/on Ollama/)).toBeInTheDocument();
+    expect(gate.getAllByRole('heading', { level: 3 }).map((heading) => heading.textContent))
+      .toEqual(['Image analysis', 'Story outline']);
+    const vision = within(gate.getAllByRole('listitem')[0]);
+    await user.click(vision.getByText('What PortOS will send'));
+    expect(vision.getByText('Describe everything you can see in this image.')).toBeVisible();
+    expect(gate.getByText(/does not report whether the model claims this capability/i)).toBeInTheDocument();
+    expect(runModelCapabilityTest).not.toHaveBeenCalled();
+
+    await user.click(gate.getByRole('button', { name: 'Cancel' }));
+    expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
+    expect(runModelCapabilityTest).not.toHaveBeenCalled();
   });
 
-  it('runs them one after another rather than all at once', async () => {
+  it('runs the reviewed selection sequentially even if more tests become available', async () => {
     const user = userEvent.setup();
     const onReload = vi.fn();
-    runModelCapabilityTest.mockImplementation(async ({ testId }) => ({ testId, verdict: 'passed', summary: 'ok' }));
-    renderPanel({ onReload });
+    let finishFirst;
+    runModelCapabilityTest
+      .mockImplementationOnce(() => new Promise((resolve) => { finishFirst = resolve; }))
+      .mockImplementation(async ({ testId }) => ({ testId, verdict: 'passed', summary: 'ok' }));
+    const initialReport = report({ models: [model({
+      tests: [slot('sandbox-repair', { state: 'unavailable' }), slot('image-analysis'), slot('story-outline')],
+    })] });
+    const { rerender } = renderPanel({ report: initialReport, onReload });
 
-    await user.click(screen.getByRole('button', { name: /run 3/i }));
+    await user.click(screen.getByRole('button', { name: /^run 2$/i }));
+    expect(await screen.findByRole('button', { name: 'Run 2 capability tests' })).toBeInTheDocument();
+    rerender(
+      <MemoryRouter initialEntries={['/models/performance']}>
+        <ModelCapabilityTests report={report()} loading={false} onReload={onReload} />
+      </MemoryRouter>,
+    );
+    expect(runModelCapabilityTest).not.toHaveBeenCalled();
 
-    await waitFor(() => expect(runModelCapabilityTest).toHaveBeenCalledTimes(3));
-    expect(runModelCapabilityTest.mock.calls.map(([payload]) => payload.testId))
-      .toEqual(['sandbox-repair', 'image-analysis', 'story-outline']);
-    // One refresh at the end, not one per test.
+    await user.click(screen.getByRole('button', { name: 'Run 2 capability tests' }));
+    expect(await screen.findByText(/test 1 of 2/)).toBeInTheDocument();
+    expect(runModelCapabilityTest).toHaveBeenCalledTimes(1);
+    await act(async () => { finishFirst({ testId: 'image-analysis', verdict: 'passed', summary: 'ok' }); });
+
+    expect(runModelCapabilityTest.mock.calls.map(([payload]) => payload)).toEqual([
+      { backend: 'ollama', modelId: 'example-model:7b', testId: 'image-analysis' },
+      { backend: 'ollama', modelId: 'example-model:7b', testId: 'story-outline' },
+    ]);
     await waitFor(() => expect(onReload).toHaveBeenCalledTimes(1));
   });
 
-  it('stops the whole queue when a test fails rather than pressing on', async () => {
+  it('stops the whole queue when the runtime rejects a test', async () => {
     const user = userEvent.setup();
     runModelCapabilityTest.mockRejectedValueOnce(new Error('llama.cpp is not reachable'));
     renderPanel();
 
-    await user.click(screen.getByRole('button', { name: /run 3/i }));
+    await user.click(screen.getByRole('button', { name: /^run 3$/i }));
+    await user.click(await screen.findByRole('button', { name: 'Run 3 capability tests' }));
+    await screen.findByRole('button', { name: 'Run sandbox repair' });
 
-    await waitFor(() => expect(runModelCapabilityTest).toHaveBeenCalledTimes(1));
-    // Minutes of queued work must not run on after the user has been told the
-    // runtime is down.
-    expect(runModelCapabilityTest).not.toHaveBeenCalledTimes(2);
+    expect(runModelCapabilityTest).toHaveBeenCalledTimes(1);
+  });
+
+  it('aborts the active request and does not advance the batch after stopping', async () => {
+    const user = userEvent.setup();
+    let finishFirst;
+    runModelCapabilityTest.mockImplementationOnce(() => new Promise((resolve) => { finishFirst = resolve; }));
+    renderPanel();
+
+    await user.click(screen.getByRole('button', { name: /^run 3$/i }));
+    await user.click(await screen.findByRole('button', { name: 'Run 3 capability tests' }));
+    await user.click(await screen.findByRole('button', { name: 'Stop the remaining tests' }));
+    expect(runModelCapabilityTest.mock.calls[0][1].signal.aborted).toBe(true);
+    await act(async () => { finishFirst({ testId: 'sandbox-repair', verdict: 'passed', summary: 'ok' }); });
+
+    expect(runModelCapabilityTest).toHaveBeenCalledTimes(1);
+    expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
   });
 
   it('hides the control for a model no test applies to', () => {

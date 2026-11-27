@@ -1,6 +1,6 @@
 {
   "name": "portos",
-  "version": "2.130.0",
+  "version": "2.131.0",
   "private": true,
   "description": "Local dev machine App OS portal",
   "author": "Adam Eivy (@antic|@atomantic)",
@@ -14,20 +14,20 @@
     "api": "node scripts/portos-api.js",
     "portos-acp": "node scripts/portos-acp.js",
     "dev": "node scripts/checkNodeVersion.js && node scripts/checkNpmVersion.js && node scripts/dev-start.js",
-    "dev:stop": "node ./node_modules/pm2/bin/pm2 stop ecosystem.config.cjs",
+    "dev:stop": "node ./server/node_modules/pm2/bin/pm2 stop ecosystem.config.cjs",
     "eval:agent-context": "node scripts/agent-context-eval.js",
     "prompt-surface:render": "node scripts/prompt-surface.js render",
     "lint": "node scripts/run-ci-lint.js",
     "measure:agent-prompt": "node scripts/measure-agent-prompt.js",
     "build": "npm run build --prefix client",
     "start": "node scripts/checkNodeVersion.js && node scripts/checkNpmVersion.js && node scripts/ensure-deps.js && npm run build && node scripts/setup-db.js && node scripts/setup-cert.js && node scripts/pm2-start.js portos-server,portos-cos,portos-autofixer,portos-browser",
-    "pm2:start": "(node ./node_modules/pm2/bin/pm2 delete portos-ui --silent || echo pm2 delete skipped) && (node ./node_modules/pm2/bin/pm2 delete portos-autofixer-ui --silent || echo pm2 delete skipped) && node ./node_modules/pm2/bin/pm2 start ecosystem.config.cjs --only \"portos-server,portos-cos,portos-autofixer,portos-browser\" && node ./node_modules/pm2/bin/pm2 save",
-    "pm2:stop": "node ./node_modules/pm2/bin/pm2 stop ecosystem.config.cjs",
-    "pm2:restart": "(node ./node_modules/pm2/bin/pm2 delete portos-ui --silent || echo pm2 delete skipped) && (node ./node_modules/pm2/bin/pm2 delete portos-autofixer-ui --silent || echo pm2 delete skipped) && node ./node_modules/pm2/bin/pm2 restart ecosystem.config.cjs --only \"portos-server,portos-cos,portos-autofixer,portos-browser\" && node ./node_modules/pm2/bin/pm2 save",
-    "pm2:logs": "node ./node_modules/pm2/bin/pm2 logs",
-    "pm2:status": "node ./node_modules/pm2/bin/pm2 status",
-    "pm2:save": "node ./node_modules/pm2/bin/pm2 save",
-    "pm2:startup": "node ./node_modules/pm2/bin/pm2 startup",
+    "pm2:start": "(node ./server/node_modules/pm2/bin/pm2 delete portos-ui --silent || echo pm2 delete skipped) && (node ./server/node_modules/pm2/bin/pm2 delete portos-autofixer-ui --silent || echo pm2 delete skipped) && node ./server/node_modules/pm2/bin/pm2 start ecosystem.config.cjs --only \"portos-server,portos-cos,portos-autofixer,portos-browser\" && node ./server/node_modules/pm2/bin/pm2 save",
+    "pm2:stop": "node ./server/node_modules/pm2/bin/pm2 stop ecosystem.config.cjs",
+    "pm2:restart": "(node ./server/node_modules/pm2/bin/pm2 delete portos-ui --silent || echo pm2 delete skipped) && (node ./server/node_modules/pm2/bin/pm2 delete portos-autofixer-ui --silent || echo pm2 delete skipped) && node ./server/node_modules/pm2/bin/pm2 restart ecosystem.config.cjs --only \"portos-server,portos-cos,portos-autofixer,portos-browser\" && node ./server/node_modules/pm2/bin/pm2 save",
+    "pm2:logs": "node ./server/node_modules/pm2/bin/pm2 logs",
+    "pm2:status": "node ./server/node_modules/pm2/bin/pm2 status",
+    "pm2:save": "node ./server/node_modules/pm2/bin/pm2 save",
+    "pm2:startup": "node ./server/node_modules/pm2/bin/pm2 startup",
     "install:all": "npm run setup",
     "doctor": "node scripts/doctor.js",
     "migrations": "node scripts/run-migrations.js",
@@ -59,14 +59,5 @@
     "eidoverse:assay": "node scripts/eidoverse-resilience-assay.js",
     "theme:check": "node scripts/check-themes.js",
     "smoke": "node scripts/smoke-boot.js"
-  },
-  "dependencies": {
-    "pm2": "7.1.2"
-  },
-  "overrides": {
-    "lodash": "4.18.1",
-    "follow-redirects": "1.16.3",
-    "js-yaml": "4.3.2",
-    "ws": "8.23.0"
   }
 }

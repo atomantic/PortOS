@@ -9,7 +9,7 @@ import toast from './ui/Toast';
 import { ThumbsUp, ThumbsDown, Loader2, AlertTriangle } from 'lucide-react';
 import socket from '../services/socket';
 import { useSocketSubscription } from '../hooks/useSocketSubscription';
-import { getCosAgent, submitCosAgentFeedback } from '../services/apiAgents.js';
+import { getCosAgent, submitCosAgentFeedback } from '../services/apiAppShell.js';
 import { lazyWithReload } from '../utils/lazyWithReload';
 import { isAgentFeedbackEligible } from '../lib/cosAgentFeedback';
 import { agentIssueLinkifier } from '../lib/issueRefs';
@@ -241,6 +241,7 @@ export function useAgentFeedbackToast() {
 
   // Clean up old entries periodically (keep last 50)
   useEffect(() => {
+    // biome-ignore lint/plugin/lint-no-view-interval: Trims an in-memory shown-feedback set every minute; no I/O.
     const cleanup = setInterval(() => {
       const entries = Array.from(shownFeedbackFor.current);
       if (entries.length > 50) {

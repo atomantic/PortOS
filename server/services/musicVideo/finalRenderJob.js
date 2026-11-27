@@ -104,7 +104,7 @@ musicVideoEvents.on('audio-changed', ({ projectId, project }) => {
   const job = jobId ? jobs.get(jobId) : null;
   if (!job || job.audioRevision === audioRevisionOf(project)) return;
   ensureInstanceId().then((instanceId) => {
-    if (isLocalRenderMark(project.renderingOn, instanceId) && cancelRender(jobId)) {
+    if (isLocalRenderMark(project.renderingOn, instanceId) && cancelRender(jobId) === true) {
       console.log(`🛑 Music-video render [${jobId.slice(0, 8)}] project ${projectId.slice(0, 8)}: the song changed, canceling the render`);
     }
   }).catch((err) => console.error(`❌ Music-video render [${jobId.slice(0, 8)}] cancel after a song change failed: ${err.message}`));
@@ -285,12 +285,17 @@ export async function runFinalRenderJob({ projectId, project, options = {}, perm
   // A cancel is a user action (stdout); a failure is an error (#7945). A cancel
   // restores the pre-render status (so a cancelled re-render of a 'complete'
   // project stays 'complete'); a real failure marks it 'failed'.
+  const unpublishedPaths = [outputPath];
   const fail = async ({ canceled, reason, keepOutput = false }) => {
     job.status = canceled ? 'canceled' : 'error';
     job.lastError = reason;
     const log = canceled ? console.log : console.error;
     log(`${canceled ? '🛑' : '❌'} Music-video${tag} render ${canceled ? 'cancelled' : 'failed'} [${short}]: ${reason}`);
-    if (!keepOutput) await unlink(outputPath).catch(() => {});
+    if (!keepOutput) {
+      await Promise.all(unpublishedPaths.map((path) => unlink(path).catch((err) => {
+        if (err.code !== 'ENOENT') console.error(`❌ Music-video${tag} render [${short}] could not remove an unpublished artifact: ${err.message}`);
+      })));
+    }
     const { settled } = await writeSettled(canceled ? priorStatus : 'failed', { renderError: canceled ? null : reason.slice(0, 2000) });
     finish({ type: canceled ? 'canceled' : 'error', error: reason }, settled === false);
   };
@@ -303,8 +308,10 @@ export async function runFinalRenderJob({ projectId, project, options = {}, perm
     let proof = null;
     if (encoded.proofSheet) {
       const sheetName = filename.replace(/\.mp4$/, '-proof.png');
+      const sheetPath = join(PATHS.videoThumbnails, sheetName);
+      unpublishedPaths.push(sheetPath);
       try {
-        await encoded.proofSheet(join(PATHS.videoThumbnails, sheetName));
+        await encoded.proofSheet(sheetPath);
         proof = sheetName;
       } catch (err) {
         console.warn(`⚠️ Music-video${tag} proof sheet failed [${short}]: ${err.message}`);
@@ -312,6 +319,8 @@ export async function runFinalRenderJob({ projectId, project, options = {}, perm
     }
     const extra = { renderHistoryId: jobId, renderDependencies: captureMusicVideoEvidence(project, { clipFrames: false }) };
     const { thumbnail, result } = await withBackupAssetPublication(async () => {
+      // Register the destination before FFmpeg runs so a partial write is cleaned up too.
+      unpublishedPaths.push(join(PATHS.videoThumbnails, `${jobId}.jpg`));
       const thumbnail = await generateThumbnail(outputPath, jobId, { atSec: encoded.posterAtSec });
       await appendToVideoHistory({
         id: jobId,
@@ -367,7 +376,7 @@ export async function runFinalRenderJob({ projectId, project, options = {}, perm
       published = await publish(encoded);
     } catch (err) {
       // The publication boundary keeps its own unsettled row for a lease whose work started and threw;
-      // one that never started (a backup cut that outlasted even this wait) wrote nothing and leaves none.
+      // one that never started (a backup cut that outlasted even this wait) leaves no unsettled row.
       await fail({ canceled: false, reason: `Finalize failed: ${err?.message || String(err)}`, keepOutput: historyCommitted });
       return;
     }

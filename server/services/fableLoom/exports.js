@@ -464,7 +464,7 @@ async function build(job, snapshot, episodes, history, universe, signal) {
     ...(characterProjection ? characterProjection.characters.map(character => ({
       name: `characters/${character.id}.json`, data: json(character),
     })) : []),
-    { name: 'runtime-v1.md', data: await readFile(new URL('../../../docs/features/fableloom-runtime-v1.md', import.meta.url)) },
+    { name: 'runtime-v1.md', data: await readFile(new URL('./runtime-v1.md', import.meta.url)) },
     ...[...media.entries()].map(([name, data]) => ({ name, data })),
     ...(job.options.includePlayer === true ? await playerEntries() : []),
   ].sort((a, b) => a.name < b.name ? -1 : a.name > b.name ? 1 : 0);

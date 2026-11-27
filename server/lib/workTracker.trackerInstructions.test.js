@@ -25,7 +25,7 @@ import { getAuditFilingPreset } from './auditCatalog.js';
 // budget when a full run is contending for CPU. File scope is unbudgeted
 // (#7951, #10356).
 const { DEFAULT_TASK_PROMPTS } = await import('../services/taskPromptDefaults.js');
-const { AUDIT_EXECUTION_TASK_TYPES, applyDepfreeMode, modeContractFor } = await import('./auditCatalog.js');
+const { AUDIT_TASK_TYPE_LIST, applyDepfreeMode, modeContractFor } = await import('./auditCatalog.js');
 
 const REF_WATCH = { slugPrefix: 'ref-watch-', label: 'reference-watch', issueLabel: 'reference-watch' };
 
@@ -182,20 +182,20 @@ describe('formatTrackerInstructions — metric labels beside the category', () =
   });
 
   it('applies the metric label as a second forge label when it differs from the category', () => {
-    const preset = getAuditFilingPreset('better-cognitive-load');
+    const preset = getAuditFilingPreset('code-simplification');
     const github = formatTrackerInstructions('github', preset);
-    expect(github).toContain('--label code-quality --label cognitive-load --label plan');
-    expect(github).toContain('gh label create cognitive-load --color 0366D6 --description "Proposed from a cognitive-load/readability audit" 2>/dev/null || true');
+    expect(github).toContain('--label code-quality --label code-simplification --label plan');
+    expect(github).toContain('gh label create code-simplification --color 0366D6 --description "Code simplification audit" 2>/dev/null || true');
     expect(github).not.toMatch(/gh label create [^`\n]*--force/);
     expect(github).not.toContain('[<slug>]');
-    expect(formatTrackerInstructions('gitlab', preset)).toContain('--label code-quality --label cognitive-load --label plan');
-    expect(formatTrackerInstructions('jira', preset)).toContain('and the metric label `cognitive-load`');
+    expect(formatTrackerInstructions('gitlab', preset)).toContain('--label code-quality --label code-simplification --label plan');
+    expect(formatTrackerInstructions('jira', preset)).toContain('and the metric label `code-simplification`');
   });
 
   it('does not duplicate the category when the slug stem is already the issue label', () => {
-    const github = formatTrackerInstructions('github', getAuditFilingPreset('ux'));
-    expect(github).toContain('--label ux --label plan');
-    expect(github).not.toContain('--label ux --label ux');
+    const github = formatTrackerInstructions('github', getAuditFilingPreset('security'));
+    expect(github).toContain('--label security --label plan');
+    expect(github).not.toContain('--label security --label security');
     expect(github).not.toContain('then the metric label');
   });
 });
@@ -254,8 +254,8 @@ describe('formatTrackerInstructions — ux preset (#3273)', () => {
   // If an audit prompt later adopts a placeholder the generator substitutes but
   // this chain does not, this test fails and names the token — add it here.
   it('leaves no unexpanded {token} in ANY shipped audit prompt, in either mode', async () => {
-    expect(AUDIT_EXECUTION_TASK_TYPES.length).toBeGreaterThan(1);
-    for (const taskType of AUDIT_EXECUTION_TASK_TYPES) {
+    expect(AUDIT_TASK_TYPE_LIST.length).toBeGreaterThan(1);
+    for (const taskType of AUDIT_TASK_TYPE_LIST) {
       const template = DEFAULT_TASK_PROMPTS[taskType];
       expect(template, taskType).toBeTruthy();
       for (const tracker of ['plan', 'github', 'gitlab', 'jira']) {
@@ -296,7 +296,7 @@ describe('formatTrackerInstructions — ux preset (#3273)', () => {
   // ux keeps one assertion of its own: it is the audit whose body most recently
   // hardcoded its posture instead of deferring to the injected banner.
   it('keeps the ux prompt on the injected tracker and mode seams', async () => {
-    const template = DEFAULT_TASK_PROMPTS['ux'];
+    const template = DEFAULT_TASK_PROMPTS['design-usability'];
     expect(template).toContain('{trackerInstructions}');
     expect(template).toContain('{modeInstructions}');
   });
@@ -311,8 +311,8 @@ describe('resolveTrackerFilingBlock — fileIssues audit types', () => {
 
     const on = await resolveTrackerFilingBlock(app, 'data-safety', { fileIssues: true });
     expect(on.workTracker).toBe('plan');
-    expect(on.trackerInstructions).toContain('ID beginning with `data-safety-`');
-    expect(on.trackerInstructions).toContain('data-safety-audit');
+    expect(on.trackerInstructions).toContain('ID beginning with `data-integrity-safety-`');
+    expect(on.trackerInstructions).toContain('data-integrity-safety-audit');
   });
 
   it('still files always-filing types (reference-watch) without fileIssues', async () => {

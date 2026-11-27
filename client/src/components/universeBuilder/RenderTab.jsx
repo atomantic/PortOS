@@ -71,7 +71,7 @@ export default function RenderTab({
         </h2>
         {availableBackends.length === 0 && (
           <p className="text-xs text-port-warning">
-            Configure a local mflux Python path or enable Codex Imagegen in Settings → Image Gen
+            Configure a local mflux Python path or enable Codex Imagegen in Media Gen Settings
             to enable batch render.
           </p>
         )}

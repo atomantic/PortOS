@@ -20,6 +20,7 @@ import { query, withTransaction } from '../../lib/db.js';
 import { ServerError } from '../../lib/errorHandler.js';
 import { PATHS } from '../../lib/paths.js';
 import { writeFileGuarded } from '../../lib/fileUtils.js';
+import { createRecordWriteQueue } from '../../lib/fileWriteQueue.js';
 import { trimTo } from '../../lib/textUtils.js';
 import { toPgJson } from '../../lib/pgJson.js';
 
@@ -186,6 +187,13 @@ export function sanitizeVoiceProfile(raw) {
 }
 
 const profileDirectory = (id) => join(PATHS.voiceProfiles, id);
+const queueProfileWrite = createRecordWriteQueue();
+
+// Training reads the row and creates its output directory under the same
+// queue as withdrawal, so a stale startup cannot recreate a deleted profile.
+export function queueVoiceProfileLifecycle(id, work) {
+  return queueProfileWrite(trimTo(id, 80), work);
+}
 
 export function profileArtifactDirectory(id) {
   if (!PROFILE_ID_RE.test(id || '')) {
@@ -197,13 +205,7 @@ export function profileArtifactDirectory(id) {
 export const persistVoiceProfile = async (profile, execute = query) => {
   await execute(
     `INSERT INTO voice_profiles (id, universe_id, character_id, approval_status, data, created_at, updated_at)
-     VALUES ($1, $2, $3, $4, $5::jsonb, $6, $7)
-     ON CONFLICT (id) DO UPDATE SET
-       universe_id = EXCLUDED.universe_id,
-       character_id = EXCLUDED.character_id,
-       approval_status = EXCLUDED.approval_status,
-       data = EXCLUDED.data,
-       updated_at = EXCLUDED.updated_at`,
+     VALUES ($1, $2, $3, $4, $5::jsonb, $6, $7)`,
     [
       profile.id,
       profile.binding.universeId,
@@ -245,14 +247,20 @@ export async function deleteVoiceProfile(id) {
   if (!PROFILE_ID_RE.test(profileId)) {
     throw new ServerError('Voice profile not found', { status: 404, code: 'VOICE_PROFILE_NOT_FOUND' });
   }
-  return withBackupAssetPublication(async () => {
-    const { rows } = await query('DELETE FROM voice_profiles WHERE id = $1 RETURNING id', [profileId]);
-    if (!rows.length) {
-      throw new ServerError('Voice profile not found', { status: 404, code: 'VOICE_PROFILE_NOT_FOUND' });
-    }
-    await rm(profileDirectory(profileId), { recursive: true, force: true });
-    console.log(`🗑️ voice profile deleted: ${profileId}`);
-    return { id: profileId };
+  return queueVoiceProfileLifecycle(profileId, async () => {
+    const { cancelActiveJobsForProfile } = await import('./fineTuning.js');
+    // A queued sidecar write may be waiting for backup admission. Drain it
+    // before acquiring this lease so a pending cut cannot wait on itself.
+    await cancelActiveJobsForProfile(profileId);
+    return withBackupAssetPublication(async () => {
+      const { rows } = await query('DELETE FROM voice_profiles WHERE id = $1 RETURNING id', [profileId]);
+      if (!rows.length) {
+        throw new ServerError('Voice profile not found', { status: 404, code: 'VOICE_PROFILE_NOT_FOUND' });
+      }
+      await rm(profileDirectory(profileId), { recursive: true, force: true });
+      console.log(`🗑️ voice profile deleted: ${profileId}`);
+      return { id: profileId };
+    });
   });
 }
 
@@ -306,34 +314,36 @@ async function getBoundPresetProfile(universeId, characterId) {
   return sanitizeVoiceProfile(rows[0]?.data);
 }
 
-/**
- * Retire existing approved profiles for a character when promoting a new profile.
- */
-async function supersedeApprovedProfiles(universeId, characterId, exceptProfileId, execute = query) {
-  const { rows } = await execute(
-    `SELECT data FROM voice_profiles
-     WHERE universe_id = $1 AND character_id = $2 AND approval_status = 'approved' AND id != $3`,
-    [universeId, characterId, exceptProfileId],
-  );
-  for (const row of rows) {
-    const item = sanitizeVoiceProfile(row.data);
-    if (item) {
-      const updated = sanitizeVoiceProfile({
-        ...item,
-        approval: { ...item.approval, status: 'retired' },
-        updatedAt: timestamp(),
-      });
-      await persist(updated, execute);
-    }
-  }
+// Read existing targets under the withdrawal queue. A single conditional SQL
+// update retires siblings without ever copying a stale sibling row back to disk.
+async function promoteAtomically(profileId, buildProfile) {
+  const id = profileId ?? randomUUID();
+  return queueVoiceProfileLifecycle(id, async () => {
+    const current = profileId == null ? null : await getVoiceProfileRequired(id);
+    const next = await buildProfile(current, current?.id ?? id);
+    if (!current) await mkdir(profileDirectory(next.id), { recursive: true });
+    const { universeId, characterId } = next.binding;
+    return withTransaction(async (client) => {
+      await client.query(
+        `UPDATE voice_profiles SET approval_status = 'retired', updated_at = $4::text::timestamptz,
+           data = jsonb_set(data || jsonb_build_object('updatedAt', $4::text), '{approval}',
+             COALESCE(NULLIF(data->'approval', 'null'::jsonb), '{}'::jsonb) || '{"status":"retired","approvedAt":null}'::jsonb)
+         WHERE universe_id = $1 AND character_id = $2 AND approval_status = 'approved' AND id != $3`,
+        [universeId, characterId, next.id, next.updatedAt],
+      );
+      if (!current) return persist(next, client.query.bind(client));
+      const { rows } = await client.query(
+        `UPDATE voice_profiles SET universe_id = $2, character_id = $3, approval_status = $4,
+           data = $5::jsonb, updated_at = $6 WHERE id = $1 RETURNING id`,
+        [next.id, universeId, characterId, next.approval.status, toPgJson(next), next.updatedAt],
+      );
+      if (!rows.length) {
+        throw new ServerError('Voice profile not found', { status: 404, code: 'VOICE_PROFILE_NOT_FOUND' });
+      }
+      return next;
+    });
+  });
 }
-
-/** Retire the old approved voice and persist the new one atomically so a failure never leaves the character voiceless. */
-const promoteAtomically = (universeId, characterId, next) => withTransaction(async (client) => {
-  const execute = (...args) => client.query(...args);
-  await supersedeApprovedProfiles(universeId, characterId, next.id, execute);
-  return persist(next, execute);
-});
 
 /**
  * Create a candidate Voice Design profile without changing the approved character voice.
@@ -473,86 +483,84 @@ export async function createClonedVoiceCandidate({
   // The source recording and the row that names it publish under one lease, so
   // a snapshot never carries a candidate whose consented recording it lacks (#9982).
   return withBackupAssetPublication(async () => {
-    await mkdir(sourceDir, { recursive: true });
-    await writeFileGuarded(safePath, audioBuffer);
-    return persist(next);
+    try {
+      await mkdir(sourceDir, { recursive: true });
+      await writeFileGuarded(safePath, audioBuffer);
+      return await persist(next);
+    } catch (error) {
+      try {
+        await rm(profileDir, { recursive: true, force: true });
+      } catch (cleanupError) {
+        throw new AggregateError([error, cleanupError], 'Voice clone upload and cleanup failed', { cause: error });
+      }
+      throw error;
+    }
   });
 }
 
 /**
  * Promote a fine-tuned checkpoint artifact into an approved voice profile.
  */
-export async function promoteFineTunedProfile({
-  profileId,
-  universeId,
-  characterId,
-  checkpointPath,
-  checkpointId: _checkpointId,
-  modelRevision = null,
-  step = 100,
-} = {}) {
-  const current = await getVoiceProfile(profileId);
-  const now = timestamp();
-  const id = current?.id || randomUUID();
-  const next = sanitizeVoiceProfile({
-    ...current,
-    id,
-    version: current ? current.version + 1 : 1,
-    binding: { universeId, characterId },
-    label: current?.label || null,
-    kind: 'fine-tuned',
-    engine: 'qwen3-tts',
-    voiceId: `qwen3:fine-tuned-step-${step}`,
-    modelRevision: trimTo(modelRevision, MAX_REVISION) || `qwen3-tts:checkpoint-${step}`,
-    inference: {
-      ...current?.inference,
-      checkpointPath,
-    },
-    routes: { studio: { enabled: true }, interactive: { enabled: false, maxFirstAudioMs: 900 } },
-    delivery: current?.delivery || DEFAULT_DELIVERY,
-    mastering: current?.mastering || DEFAULT_MASTERING,
-    approval: {
-      status: 'approved',
-      approvedAt: now,
-      benchmarkRevision: current ? current.approval.benchmarkRevision + 1 : 1,
-    },
-    benchmark: null,
-    createdAt: current?.createdAt || now,
-    updatedAt: now,
+export function promoteFineTunedProfile({ profileId, ...details } = {}, resolveCheckpoint = () => details) {
+  return promoteAtomically(profileId, async (current, id) => {
+    const { universeId, characterId, checkpointPath, modelRevision, step = 100 } = await resolveCheckpoint();
+    const now = timestamp();
+    return sanitizeVoiceProfile({
+      ...current,
+      id,
+      version: current ? current.version + 1 : 1,
+      binding: { universeId, characterId },
+      label: current?.label || null,
+      kind: 'fine-tuned',
+      engine: 'qwen3-tts',
+      voiceId: `qwen3:fine-tuned-step-${step}`,
+      modelRevision: trimTo(modelRevision, MAX_REVISION) || `qwen3-tts:checkpoint-${step}`,
+      inference: {
+        ...current?.inference,
+        checkpointPath,
+      },
+      routes: { studio: { enabled: true }, interactive: { enabled: false, maxFirstAudioMs: 900 } },
+      delivery: current?.delivery || DEFAULT_DELIVERY,
+      mastering: current?.mastering || DEFAULT_MASTERING,
+      approval: {
+        status: 'approved',
+        approvedAt: now,
+        benchmarkRevision: current ? current.approval.benchmarkRevision + 1 : 1,
+      },
+      benchmark: null,
+      createdAt: current?.createdAt || now,
+      updatedAt: now,
+    });
   });
-
-  await mkdir(profileDirectory(next.id), { recursive: true });
-  return promoteAtomically(universeId, characterId, next);
 }
 
 /**
  * Explicitly promote any draft or candidate profile to approved status.
  */
 export async function promoteVoiceProfile(profileId, { routes = null } = {}) {
-  const current = await getVoiceProfileRequired(profileId);
-  const now = timestamp();
+  return promoteAtomically(trimTo(profileId, 80), (current) => {
+    const now = timestamp();
 
-  const nextRoutes = routes ? sanitizeRoutes(routes) : {
-    studio: { enabled: true },
-    interactive: {
-      enabled: current.routes.interactive?.enabled === true,
-      maxFirstAudioMs: current.routes.interactive?.maxFirstAudioMs || 900,
-    },
-  };
+    const nextRoutes = routes ? sanitizeRoutes(routes) : {
+      studio: { enabled: true },
+      interactive: {
+        enabled: current.routes.interactive?.enabled === true,
+        maxFirstAudioMs: current.routes.interactive?.maxFirstAudioMs || 900,
+      },
+    };
 
-  const next = sanitizeVoiceProfile({
-    ...current,
-    version: current.approval.status === 'approved' ? current.version : current.version + 1,
-    routes: nextRoutes,
-    approval: {
-      status: 'approved',
-      approvedAt: now,
-      benchmarkRevision: current.approval.benchmarkRevision || 1,
-    },
-    updatedAt: now,
+    return sanitizeVoiceProfile({
+      ...current,
+      version: current.approval.status === 'approved' ? current.version : current.version + 1,
+      routes: nextRoutes,
+      approval: {
+        status: 'approved',
+        approvedAt: now,
+        benchmarkRevision: current.approval.benchmarkRevision || 1,
+      },
+      updatedAt: now,
+    });
   });
-
-  return promoteAtomically(current.binding.universeId, current.binding.characterId, next);
 }
 
 /**
@@ -575,37 +583,39 @@ export async function promotePresetProfile({
       code: 'VOICE_PROFILE_INVALID_PRESET',
     });
   }
-  const current = await getBoundPresetProfile(universe, character);
-  const samePreset = current?.voiceId === preset.voiceId;
-  const now = timestamp();
-  const profileId = current?.id || randomUUID();
-  const next = sanitizeVoiceProfile({
-    ...current,
-    id: profileId,
-    version: current ? (samePreset ? current.version : current.version + 1) : 1,
-    binding: { universeId: universe, characterId: character },
-    label: trimTo(characterName, MAX_LABEL) || current?.label || null,
-    kind: 'preset',
-    sourceAssets: samePreset ? current?.sourceAssets : [],
-    inference: samePreset ? current?.inference : {},
-    originProfileId: samePreset ? current?.originProfileId : null,
-    engine: preset.engine,
-    voiceId: preset.voiceId,
-    modelRevision: trimTo(modelRevision, MAX_REVISION) || 'configured-preset',
-    routes: current?.routes || { studio: { enabled: true }, interactive: { enabled: true, maxFirstAudioMs: 900 } },
-    delivery: current?.delivery || delivery,
-    mastering: current?.mastering || DEFAULT_MASTERING,
-    approval: {
-      status: 'approved',
-      approvedAt: now,
-      benchmarkRevision: current ? (samePreset ? current.approval.benchmarkRevision : current.approval.benchmarkRevision + 1) : 1,
-    },
-    benchmark: samePreset ? current?.benchmark : null,
-    createdAt: current?.createdAt || now,
-    updatedAt: now,
+  const presetProfile = await getBoundPresetProfile(universe, character);
+  return promoteAtomically(presetProfile?.id, (current, profileId) => {
+    if (current && current.kind !== 'preset') {
+      throw new ServerError('Selected preset changed during promotion. Retry selecting the preset.', { status: 409 });
+    }
+    const samePreset = current?.voiceId === preset.voiceId;
+    const now = timestamp();
+    return sanitizeVoiceProfile({
+      ...current,
+      id: profileId,
+      version: current ? (samePreset ? current.version : current.version + 1) : 1,
+      binding: { universeId: universe, characterId: character },
+      label: trimTo(characterName, MAX_LABEL) || current?.label || null,
+      kind: 'preset',
+      sourceAssets: samePreset ? current?.sourceAssets : [],
+      inference: samePreset ? current?.inference : {},
+      originProfileId: samePreset ? current?.originProfileId : null,
+      engine: preset.engine,
+      voiceId: preset.voiceId,
+      modelRevision: trimTo(modelRevision, MAX_REVISION) || 'configured-preset',
+      routes: current?.routes || { studio: { enabled: true }, interactive: { enabled: true, maxFirstAudioMs: 900 } },
+      delivery: current?.delivery || delivery,
+      mastering: current?.mastering || DEFAULT_MASTERING,
+      approval: {
+        status: 'approved',
+        approvedAt: now,
+        benchmarkRevision: current ? (samePreset ? current.approval.benchmarkRevision : current.approval.benchmarkRevision + 1) : 1,
+      },
+      benchmark: samePreset ? current?.benchmark : null,
+      createdAt: current?.createdAt || now,
+      updatedAt: now,
+    });
   });
-  await mkdir(profileDirectory(next.id), { recursive: true });
-  return promoteAtomically(universe, character, next);
 }
 
 export async function saveProfileBenchmark(profile, benchmark, { interactive } = {}) {

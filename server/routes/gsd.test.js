@@ -121,7 +121,7 @@ describe('GSD routes', () => {
         await symlink(secret, join(planningPath, 'PROJECT.md'));
       }
       const url = '/api/cos/gsd/projects/app-1/documents/PROJECT.md';
-      const read = await request(makeApp('192.0.2.10')).get(url);
+      const read = await request(app).get(url);
       const write = await request(app).put(url).send({ content: 'replacement' });
       expect(read.status).toBe(400);
       expect(read.body.code).toBe('PATH_TRAVERSAL');

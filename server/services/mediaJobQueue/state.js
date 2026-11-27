@@ -44,16 +44,6 @@ export function setRunningJob(job) {
   running = job;
 }
 
-// Once quiesced, no path promotes a waiting job or re-arms the worker.
-// Waiting jobs stay durably queued for the next process.
-export const workerState = {
-  started: false,
-  operation: null,
-  wake: null,
-  quiesced: false,
-  resettingForTests: false,
-};
-
 export const recoveryState = { initPromise: null, inventoryReady: false };
 export const testLifecycleDisposals = new Set();
 export const laneOperations = new Set();
@@ -116,8 +106,6 @@ export function listJobs({ status, kind, owner } = {}) {
   });
 }
 
-// IDs proven by the boot probe to have an existing trainer; request params cannot grant this.
-export const recoveringJobs = new Set();
 
 // Test-only: empty every container in place so held references stay valid.
 export function resetQueueStateForTests() {
@@ -127,5 +115,4 @@ export function resetQueueStateForTests() {
   remoteRunning.length = 0;
   archive.length = 0;
   videoHolds.clear();
-  recoveringJobs.clear();
 }

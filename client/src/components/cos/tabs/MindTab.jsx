@@ -1,5 +1,6 @@
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useSearchParams } from 'react-router';
+import { useTimeTick } from '../../../hooks/useTimeTick.js';
 import { useVisibilityEvent } from '../../../hooks/useVisibilityEvent.js';
 import useMounted from '../../../hooks/useMounted';
 import useProviderModels from '../../../hooks/useProviderModels';
@@ -36,6 +37,7 @@ const MAX_VISIBLE_EVENTS = PAGE_LIMIT * MAX_BACKFILL_PAGES;
 const MAX_MESSAGE_IMAGE_BYTES = 10 * 1024 * 1024;
 // Stable empties: these feed child props and effect dependencies, so a fresh
 // literal on every render would re-fire work that has nothing new to do.
+const NO_EVENTS = Object.freeze([]);
 const NO_PRESETS = Object.freeze([]);
 const NO_TURN_EXECUTIONS = Object.freeze([]);
 const MIND_PANELS = new Set(['context', 'journal', 'memories', 'maintenance', 'tools', 'models', 'settings']);
@@ -59,6 +61,21 @@ const mergeEvents = (previous, incoming) => {
   const byId = new Map(previous.map((event) => [event.eventId, event]));
   for (const event of incoming) byId.set(event.eventId, event);
   return [...byId.values()].sort((a, b) => a.sequence - b.sequence).slice(-MAX_VISIBLE_EVENTS);
+};
+
+const cursorSequence = (cursor) => cursor === null ? null : Number(cursor.split(':', 1)[0]);
+
+const trackScrollPosition = (messageList, stickToBottomRef) => {
+  stickToBottomRef.current = !messageList
+    || messageList.scrollHeight - messageList.scrollTop - messageList.clientHeight < 80;
+};
+
+const chosenNameFromEvent = ({ kind, data }) => {
+  const prefix = 'Chosen display name: ';
+  return kind === 'mind.capability.result' && data?.success === true
+    && ['mind.choose-name', 'mind_choose_name'].includes(data.tool)
+    && typeof data.displayText === 'string' && data.displayText.startsWith(prefix)
+    ? data.displayText.slice(prefix.length) : null;
 };
 
 const mintId = (prefix) => `${prefix}-${uuidv4()}`;
@@ -126,7 +143,8 @@ export default function MindTab() {
   const [contextRefreshKey, setContextRefreshKey] = useState(0);
   const [visitedPanels, setVisitedPanels] = useState(() => new Set(activePanel ? [activePanel] : []));
   const [showActivity, setShowActivity] = useState(false);
-  const [runtime, setRuntime] = useState(null);
+  const [runtimeSample, setRuntimeSample] = useState(null);
+  const runtime = runtimeSample?.value ?? null;
   const [runtimeError, setRuntimeError] = useState(null);
   const [runtimeLoading, setRuntimeLoading] = useState(true);
   const [visibility, setVisibility] = useState(null);
@@ -141,8 +159,9 @@ export default function MindTab() {
   // account-backed before the user commits. Never a provider probe.
   const { providers } = useProviderModels({ allowDefault: true, silent: true });
   const cursorRef = useRef(null);
-  const loadPendingRef = useRef(false);
-  const deferredLoadRef = useRef(false);
+  const liveHistoryEventsRef = useRef(null);
+  const mindStateRef = useRef(null);
+  const deferredLoadRef = useRef(null);
   const runtimePendingRef = useRef(false);
   const deferredRuntimeRef = useRef(false);
   const runtimeLoadedRef = useRef(false);
@@ -150,6 +169,7 @@ export default function MindTab() {
   const deferredVisibilityRef = useRef(false);
   const deferredVisibilityRefreshRef = useRef(false);
   const visibilityLoadedRef = useRef(false);
+  const missedVisibilityRef = useRef(false);
   const runtimeMountedRef = useMounted();
   const messageDraftIdRef = useRef(null);
   const messageDraftImagesRef = useRef(null);
@@ -173,14 +193,14 @@ export default function MindTab() {
 
   const loadHistory = useCallback(async ({ reset = false } = {}) => {
     if (!runtimeMountedRef.current) return;
-    if (loadPendingRef.current) {
-      deferredLoadRef.current = true;
+    if (liveHistoryEventsRef.current) {
+      deferredLoadRef.current = { reset: reset || deferredLoadRef.current?.reset === true };
       return;
     }
-    loadPendingRef.current = true;
-    const messageList = messageListRef.current;
-    stickToBottomRef.current = reset || !messageList
-      || messageList.scrollHeight - messageList.scrollTop - messageList.clientHeight < 80;
+    const liveEvents = [];
+    liveHistoryEventsRef.current = liveEvents;
+    trackScrollPosition(messageListRef.current, stickToBottomRef);
+    if (reset) stickToBottomRef.current = true;
     if (reset) setLoading(true);
     let cursor = reset ? null : cursorRef.current;
     let page = 0;
@@ -189,14 +209,16 @@ export default function MindTab() {
     let needsMore = false;
     try {
       do {
+        const stateBefore = mindStateRef.current;
         const response = await getPersistentMind({ cursor, limit: PAGE_LIMIT }, { silent: true });
         if (!runtimeMountedRef.current) return;
         accumulated = mergeEvents(accumulated, response.events || []);
         sawGap ||= response.gap === true;
         cursor = response.gap === true ? response.cursor : response.cursor || cursor;
+        if (mindStateRef.current === stateBefore) mindStateRef.current = response.state;
         setMind({
           identity: response.identity,
-          state: response.state,
+          state: mindStateRef.current,
           profile: response.profile,
           capabilities: response.capabilities,
           imageCapability: response.imageCapability,
@@ -209,22 +231,35 @@ export default function MindTab() {
         needsMore = response.hasMore === true && !sawGap;
         if (!needsMore) break;
       } while (page < MAX_BACKFILL_PAGES);
+      // The GET may have captured its tail before some of these live events.
+      // Advance only across known predecessors; the next backfill still starts
+      // at the last confirmed cursor if a live link is missing.
+      const afterSnapshot = mergeEvents(NO_EVENTS, liveEvents).filter((event) => event.sequence > (cursorSequence(cursor) ?? -1));
+      for (const event of afterSnapshot) {
+        if (event.data?.previousSequence !== cursorSequence(cursor)) {
+          deferredLoadRef.current ??= {};
+          break;
+        }
+        cursor = `${event.sequence}:${event.eventId}`;
+      }
       cursorRef.current = cursor;
-      setEvents((previous) => reset || sawGap || previous === null ? accumulated : mergeEvents(previous, accumulated));
+      const incoming = mergeEvents(accumulated, afterSnapshot);
+      setEvents((previous) => reset || sawGap || previous === null ? incoming : mergeEvents(previous, incoming));
+      const chosenName = afterSnapshot.map(chosenNameFromEvent).findLast(Boolean);
+      if (chosenName) setMind((current) => ({ ...current, identity: { ...current.identity, name: chosenName } }));
       setGap(sawGap);
       setLoadError(null);
-      if (needsMore) deferredLoadRef.current = true;
+      if (needsMore) deferredLoadRef.current ??= {};
     } catch (error) {
       if (runtimeMountedRef.current) setLoadError(error?.message || 'Could not load the persistent mind');
     } finally {
       if (runtimeMountedRef.current) setLoading(false);
-      loadPendingRef.current = false;
-      if (runtimeMountedRef.current && deferredLoadRef.current) {
-        deferredLoadRef.current = false;
-        void loadHistory();
-      }
+      liveHistoryEventsRef.current = null;
+      const deferredLoad = deferredLoadRef.current;
+      deferredLoadRef.current = null;
+      if (runtimeMountedRef.current && deferredLoad) void loadHistory(deferredLoad);
     }
-  }, []);
+  }, [runtimeMountedRef]);
 
   const loadRuntime = useCallback(async () => {
     if (!runtimeMountedRef.current) return;
@@ -237,7 +272,7 @@ export default function MindTab() {
     try {
       const response = await getPersistentMindRuntime({ silent: true });
       if (!runtimeMountedRef.current) return;
-      setRuntime(response);
+      setRuntimeSample({ value: response, receivedAt: Date.now() });
       runtimeLoadedRef.current = true;
       setRuntimeError(null);
     } catch (error) {
@@ -252,7 +287,7 @@ export default function MindTab() {
         void loadRuntime();
       }
     }
-  }, []);
+  }, [runtimeMountedRef]);
 
   const loadVisibility = useCallback(async ({ refresh = false } = {}) => {
     if (!runtimeMountedRef.current) return;
@@ -286,35 +321,76 @@ export default function MindTab() {
   }, [runtimeMountedRef]);
 
   const refresh = useCallback(() => {
-    if (document.visibilityState === 'hidden') return;
     void loadHistory();
     void loadRuntime();
-    void loadVisibility();
-  }, [loadHistory, loadRuntime, loadVisibility]);
+  }, [loadHistory, loadRuntime]);
 
   const lastVisibilityRef = useRef(document.visibilityState);
   useVisibilityEvent((state) => {
     const changed = lastVisibilityRef.current !== state;
     lastVisibilityRef.current = state;
-    if (changed && state === 'visible') refresh();
+    if (!changed || state !== 'visible') return;
+    refresh();
+    if (missedVisibilityRef.current) {
+      missedVisibilityRef.current = false;
+      void loadVisibility();
+    }
   });
 
   useEffect(() => {
-    refresh();
     const refreshVisibility = () => {
-      if (document.visibilityState !== 'hidden') void loadVisibility();
+      if (document.visibilityState === 'hidden') missedVisibilityRef.current = true;
+      else void loadVisibility();
     };
-    socket.on('connect', refresh);
-    socket.on('cos:mind:event', refresh);
-    socket.on('cos:mind:status', refresh);
+    const reconnect = () => {
+      if (document.visibilityState !== 'hidden') refresh();
+      refreshVisibility();
+    };
+    const onMindEvent = (event) => {
+      if (document.visibilityState === 'hidden' || !event?.eventId || !Number.isSafeInteger(event.sequence)) return;
+      const liveEvents = liveHistoryEventsRef.current;
+      const previousSequence = cursorSequence(cursorRef.current);
+      if (event.sequence <= (previousSequence ?? -1)) return;
+      if (liveEvents) {
+        liveEvents.push(event);
+      } else if (event.data?.previousSequence === previousSequence) {
+        cursorRef.current = `${event.sequence}:${event.eventId}`;
+      } else {
+        void loadHistory();
+        liveHistoryEventsRef.current?.push(event);
+      }
+      trackScrollPosition(messageListRef.current, stickToBottomRef);
+      setEvents((previous) => mergeEvents(previous || NO_EVENTS, [event]));
+      const chosenName = chosenNameFromEvent(event);
+      if (chosenName) {
+        setMind((current) => current && { ...current, identity: { ...current.identity, name: chosenName } });
+      }
+    };
+    const onMindStatus = (state) => {
+      if (document.visibilityState === 'hidden' || typeof state?.status !== 'string') return;
+      const previous = mindStateRef.current;
+      mindStateRef.current = state;
+      setMind((current) => current && { ...current, state });
+      const turnChanged = (previous?.activeTurnId ?? null) !== (state.activeTurnId ?? null);
+      const routeChanged = previous?.activeRoute?.providerId !== state.activeRoute?.providerId
+        || previous?.activeRoute?.model !== state.activeRoute?.model;
+      if (turnChanged || routeChanged || Boolean(previous?.usageLimited) !== Boolean(state.usageLimited)) void loadRuntime();
+      // The receipts and thinking-request catalog are server projections.
+      // Reconcile them once when a turn settles, after its events have landed.
+      if (turnChanged && previous?.activeTurnId) void loadHistory();
+    };
+    socket.on('connect', reconnect);
+    socket.on('cos:mind:event', onMindEvent);
+    socket.on('cos:mind:status', onMindStatus);
     socket.on('cos:mind:visibility', refreshVisibility);
+    reconnect();
     return () => {
-      socket.off('connect', refresh);
-      socket.off('cos:mind:event', refresh);
-      socket.off('cos:mind:status', refresh);
+      socket.off('connect', reconnect);
+      socket.off('cos:mind:event', onMindEvent);
+      socket.off('cos:mind:status', onMindStatus);
       socket.off('cos:mind:visibility', refreshVisibility);
     };
-  }, [refresh, loadVisibility, socket]);
+  }, [refresh, loadHistory, loadRuntime, loadVisibility, socket]);
 
   useEffect(() => {
     const onCallState = (snapshot) => setCallState(snapshot?.error ? null : snapshot);
@@ -345,10 +421,12 @@ export default function MindTab() {
   }, [selectedEventId]);
 
   const appendLocalInput = ({ id, content, inputKind, targetEventId = null, images = [] }) => {
+    const eventId = `mind-${inputKind}:${id}`;
     setEvents((previous) => {
-      const sequence = Math.max(-1, ...(previous || []).map((item) => item.sequence || -1)) + 1;
-      return mergeEvents(previous || [], [{
-        eventId: `mind-${inputKind}:${id}`,
+      if (previous?.some((event) => event.eventId === eventId)) return previous;
+      const sequence = Math.max(-1, ...(previous || NO_EVENTS).map((item) => item.sequence || -1)) + 1;
+      return mergeEvents(previous || NO_EVENTS, [{
+        eventId,
         kind: inputKind === 'message' ? 'mind.message.accepted' : 'mind.annotation.accepted',
         mindId: 'cos-persistent-mind',
         turnId: null,
@@ -414,7 +492,6 @@ export default function MindTab() {
       if (thinkingPreset) clearPresetSelection();
       await loadHistory();
       stickToBottomRef.current = true;
-      void loadRuntime();
     } catch (error) {
       setSubmitError(error?.message || 'The input was not accepted');
     } finally {
@@ -525,7 +602,6 @@ export default function MindTab() {
       if (action === 'resume') await resumePersistentMind({ silent: true });
       if (action === 'stop') await stopPersistentMind({ silent: true });
       await loadHistory();
-      void loadRuntime();
     } catch (error) {
       setLifecycleError(error?.message || `Could not ${action} the persistent mind`);
     } finally {
@@ -565,6 +641,7 @@ export default function MindTab() {
   };
 
   const handleMindspaceCleaned = async (result) => {
+    if (result.state) mindStateRef.current = result.state;
     cursorRef.current = null;
     setEvents([]);
     setMind((current) => current ? { ...current, state: result.state || current.state } : current);
@@ -574,11 +651,12 @@ export default function MindTab() {
   };
 
   const state = mind?.state;
-  // Derived from the runtime snapshot, whose freshness numbers are measured
-  // against the SERVER clock — so elapsed/heartbeat never subtract a browser
-  // clock from a server timestamp, and both refresh on the existing 10s
-  // runtime poll plus every socket-driven reload.
-  const turnProgress = describeMindTurnProgress({ state, runtime, events });
+  const activeTurnId = state?.activeTurnId;
+  // Start from the server's elapsed measurement and add only time measured
+  // locally since receipt, so clock differences between machines do not matter.
+  const now = useTimeTick(1000, { enabled: Boolean(activeTurnId) });
+  const snapshotAgeMs = runtimeSample ? Math.max(0, now - runtimeSample.receivedAt) : 0;
+  const turnProgress = describeMindTurnProgress({ state, runtime, events, snapshotAgeMs });
   const selectedEvent = events?.find((event) => event.eventId === selectedEventId) || null;
   const isPaused = state?.status === 'paused';
   const profileReady = Boolean(mind?.profile?.enabled && mind.profile.providerId && mind.profile.model);
@@ -587,7 +665,7 @@ export default function MindTab() {
   const { status: imageCapabilityStatus, guidance: imageCapabilityGuidance } = imageCapability(mind);
   const imageAttachmentsUnavailable = imageCapabilityStatus === 'unsupported';
   const setupSaving = profileSaving || capabilitiesSaving || presetsSaving;
-  const conversationItems = buildConversationItems(events || [], showActivity);
+  const conversationItems = useMemo(() => buildConversationItems(events || NO_EVENTS, showActivity), [events, showActivity]);
   const thinkingPresets = mind?.thinkingPresets || NO_PRESETS;
   const turnExecutions = mind?.turnExecutions || NO_TURN_EXECUTIONS;
   const selectedPreset = findMindThinkingPreset(thinkingPresets, selectedPresetId);
@@ -658,7 +736,6 @@ export default function MindTab() {
     closePanel();
     document.getElementById('mind-input-text')?.focus();
   };
-  const refreshContext = () => setContextRefreshKey((current) => current + 1);
   const updateCapabilities = (capabilities) => setMind((current) => current ? { ...current, capabilities } : current);
   const saveThinkingRequests = (capabilities) => setMind((current) => ({ ...current, capabilities }));
   const cancelThinkingRequest = () => setMind((current) => ({ ...current, thinkingRequests: { ...current.thinkingRequests, pending: null } }));
@@ -759,7 +836,6 @@ export default function MindTab() {
         loadVisibility={loadVisibility}
         prepareRepair={prepareRepair}
         contextRefreshKey={contextRefreshKey}
-        refreshContext={refreshContext}
         mind={mind}
         handleMindspaceCleaned={handleMindspaceCleaned}
         updateCapabilities={updateCapabilities}

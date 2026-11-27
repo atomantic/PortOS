@@ -35,6 +35,8 @@ const TOOLCHAIN_CACHE_PREFIXES = new Set([
   'com.google.Chrome.',
   // Chrome for Testing has its own bundle ID, so its scratch prefix differs.
   'com.google.chrome.for.testing.',
+  // Chrome Canary uses a distinct macOS bundle ID from Stable Chrome.
+  'com.google.Chrome.canary.',
   // Chrome's component updater stages unpacked downloads in this exact prefix.
   'com.google.Chrome.chrome_chrome_Unpacker_BeginUnzipping.',
   // Component download scratch uses this exact prefix (the underscore precedes

@@ -52,7 +52,6 @@ import {
   readJSONFile,
   renameGuarded,
   shortId,
-  tryReadFile,
   unlinkGuarded,
 } from '../lib/fileUtils.js';
 import { withBackupAssetPublication } from '../lib/backupSnapshotBoundary.js';
@@ -76,11 +75,11 @@ import {
   buildIngestNote,
   compareIngestsDesc,
   decodeIngestCursor,
-  formatDuration,
+  formatSecondsClock,
   paginateIngests,
   parseVideoMetadata,
   resolveObsidianPointer,
-  sanitizeFilename,
+  sanitizeObsidianFilename,
 } from '../lib/youtubeIngestFormat.js';
 import * as obsidian from './obsidian.js';
 import * as brainStorage from './brainStorage.js';
@@ -210,13 +209,6 @@ export async function listIngests({ limit, cursor } = {}) {
 export async function getIngest(videoId) {
   const index = await loadIndex();
   return index[videoId] || null;
-}
-
-/** The stored transcript markdown, or null when this video has none. */
-export async function getTranscript(videoId) {
-  const record = await getIngest(videoId);
-  if (!record?.transcript?.path) return null;
-  return tryReadFile(record.transcript.path);
 }
 
 /**
@@ -372,7 +364,7 @@ async function readTranscriptFrom(subsDir, { hasManualCaptions } = {}) {
 
 const buildNotePath = (settings, meta, capturedAt) => {
   const folder = (settings.obsidianFolder || '').replace(/^\/+|\/+$/g, '');
-  const filename = `${capturedAt.slice(0, 10)} ${sanitizeFilename(meta.title)} (${meta.videoId}).md`;
+  const filename = `${capturedAt.slice(0, 10)} ${sanitizeObsidianFilename(meta.title)} (${meta.videoId}).md`;
   return folder ? `${folder}/${filename}` : filename;
 };
 
@@ -656,7 +648,7 @@ export async function startYoutubeIngest({
       const existingLink = priorLink || await brainStorage.getLinkByUrl(url).catch(() => null);
       const linkFields = {
         title: meta.title,
-        description: [meta.channel, formatDuration(meta.durationSec)].filter(Boolean).join(' · '),
+        description: [meta.channel, formatSecondsClock(meta.durationSec)].filter(Boolean).join(' · '),
         linkType: 'reference',
         tags: ['youtube', ...cleanTags],
       };

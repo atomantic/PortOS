@@ -37,7 +37,6 @@ import {
   loadUsage,
   providerVolumeSinceBlock,
   recordLimitBlock,
-  recordMessages,
   recordRunUsage,
   recordSession,
   rollupOldDailyActivity
@@ -240,6 +239,42 @@ describe('usage.js — summary', () => {
   });
 
   describe('summary memoization', () => {
+    it('keeps seven local calendar days across DST and refreshes the cache at local midnight', async () => {
+      // 23:30 Saturday PST. UTC midnight has already passed, and the next
+      // local midnight occurs in the same UTC day.
+      vi.setSystemTime(new Date('2025-03-09T07:30:00Z'));
+      getUserTimezone.mockResolvedValueOnce('America/Los_Angeles');
+      readJSONFile.mockResolvedValueOnce(makeUsage({
+        '2025-03-08': { sessions: 3, messages: 10, tokens: 200 }
+      }));
+      await loadUsage();
+
+      const beforeMidnight = getUsageSummary();
+      expect(beforeMidnight.last7Days.at(-1)).toEqual({
+        date: '2025-03-08', label: 'Sat', sessions: 3, messages: 10, tokens: 200
+      });
+
+      vi.setSystemTime(new Date('2025-03-09T08:30:00Z'));
+      const afterMidnight = getUsageSummary();
+      expect(afterMidnight).not.toBe(beforeMidnight);
+      expect(afterMidnight.last7Days.map(({ date, label }) => [date, label])).toEqual([
+        ['2025-03-03', 'Mon'], ['2025-03-04', 'Tue'], ['2025-03-05', 'Wed'],
+        ['2025-03-06', 'Thu'], ['2025-03-07', 'Fri'], ['2025-03-08', 'Sat'],
+        ['2025-03-09', 'Sun']
+      ]);
+
+      // UTC rolls over at 17:00 Sunday PDT. Local midnight is still hours away.
+      vi.setSystemTime(new Date('2025-03-10T00:30:00Z'));
+      expect(getUsageSummary()).toBe(afterMidnight);
+
+      // At 00:30 Monday PDT, subtracting 24 hours as instants skips Sunday.
+      vi.setSystemTime(new Date('2025-03-10T07:30:00Z'));
+      expect(getUsageSummary().last7Days.slice(-2)).toEqual([
+        { date: '2025-03-09', label: 'Sun', sessions: 0, messages: 0, tokens: 0 },
+        { date: '2025-03-10', label: 'Mon', sessions: 0, messages: 0, tokens: 0 }
+      ]);
+    });
+
     it('reuses a summary until usage changes', async () => {
       readJSONFile.mockResolvedValueOnce(makeUsage({ [daysAgo(0)]: { sessions: 1 } }));
       await loadUsage();
@@ -260,10 +295,10 @@ describe('usage.js — summary', () => {
       // 16:30 UTC is 09:30 in America/Los_Angeles (PDT, UTC-7).
       vi.useFakeTimers();
       vi.setSystemTime(Date.parse('2026-07-15T16:30:00Z'));
-      getUserTimezone.mockResolvedValueOnce('America/Los_Angeles');
       try {
         readJSONFile.mockResolvedValueOnce(makeUsage({}));
         await loadUsage();
+        getUserTimezone.mockResolvedValueOnce('America/Los_Angeles');
         await recordSession('claude-code', 'Claude Code', 'opus');
 
         expect(getUsage().hourlyActivity[9]).toBe(1);
@@ -279,10 +314,10 @@ describe('usage.js — summary', () => {
       // 02:00Z on 07-16 is 19:00 on 07-15 in America/Los_Angeles (PDT).
       vi.useFakeTimers();
       vi.setSystemTime(Date.parse('2026-07-16T02:00:00Z'));
-      getUserTimezone.mockResolvedValueOnce('America/Los_Angeles');
       try {
         readJSONFile.mockResolvedValueOnce(makeUsage({}));
         await loadUsage();
+        getUserTimezone.mockResolvedValueOnce('America/Los_Angeles');
         await recordSession('claude-code', 'Claude Code', 'opus');
 
         const days = getUsage().dailyActivity;
@@ -321,7 +356,7 @@ describe('usage.js — summary', () => {
       await loadUsage();
       await recordSession('example-provider', 'Example', '__proto__');
       await recordSession('__proto__', undefined, 'constructor');
-      await recordMessages('example-provider', '__proto__', 1, 40, 10);
+      await recordRunUsage({ providerId: 'example-provider', model: '__proto__', tokensOut: 40, tokensIn: 10 });
 
       expect(Object.hasOwn(Object.prototype, 'sessions')).toBe(false);
       expect(Object.hasOwn(Object.prototype, 'messages')).toBe(false);
@@ -335,7 +370,7 @@ describe('usage.js — summary', () => {
       readJSONFile.mockResolvedValueOnce(makeUsage({}));
       await loadUsage();
       await recordSession(undefined, undefined, null);
-      await recordMessages(undefined, null, 1, 40, 10);
+      await recordRunUsage({ providerId: undefined, model: null, tokensOut: 40, tokensIn: 10 });
 
       const usage = getUsage();
       expect(usage.byProvider.undefined).toBeUndefined();
@@ -423,11 +458,11 @@ describe('usage.js — summary', () => {
       });
     });
 
-    it('recordMessages attributes input and output tokens to provider, model, and day', async () => {
+    it('recordRunUsage attributes input and output tokens to provider, model, and day', async () => {
       readJSONFile.mockResolvedValueOnce(makeUsage({}));
       await loadUsage();
       await recordSession('claude-code', 'Claude Code', 'opus');
-      await recordMessages('claude-code', 'opus', 1, 400, 1200);
+      await recordRunUsage({ providerId: 'claude-code', model: 'opus', tokensOut: 400, tokensIn: 1200 });
 
       const usage = getUsage();
       expect(usage.totalTokens).toEqual({ input: 1200, output: 400 });
@@ -455,13 +490,23 @@ describe('usage.js — summary', () => {
       expect(report.totals.estimatedCost).toBeGreaterThan(0);
     });
 
-    it('recordMessages accumulates onto legacy all-time entries without reshaping them', async () => {
+    it('records all-time model usage for a one-shot run without a session', async () => {
+      readJSONFile.mockResolvedValueOnce(makeUsage({}));
+      await loadUsage();
+      await recordRunUsage({ providerId: 'codex', model: 'gpt-5.3-codex', tokensOut: 50, tokensIn: 200 });
+
+      expect(getUsageSummary().topModels).toContainEqual({
+        model: 'gpt-5.3-codex', sessions: 0, messages: 1, tokens: 50
+      });
+    });
+
+    it('recordRunUsage accumulates onto legacy all-time entries without reshaping them', async () => {
       readJSONFile.mockResolvedValueOnce(makeUsage({}, {
         byProvider: { codex: { name: 'Codex', sessions: 5, messages: 5, tokens: 100 } },
         byModel: { 'gpt-5.3-codex': { sessions: 5, messages: 5, tokens: 100 } }
       }));
       await loadUsage();
-      await recordMessages('codex', 'gpt-5.3-codex', 1, 50, 200);
+      await recordRunUsage({ providerId: 'codex', model: 'gpt-5.3-codex', tokensOut: 50, tokensIn: 200 });
 
       const usage = getUsage();
       expect(usage.byProvider.codex).toMatchObject({ messages: 6, tokens: 150 });
@@ -952,8 +997,7 @@ describe('usage.js — cache tiers and measured/estimate provenance (#3124 Phase
   it('records a multi-model run with one atomic write', async () => {
     readJSONFile.mockResolvedValueOnce(makeUsage({}, {
       byModel: {
-        'claude-opus-5': { sessions: 1, messages: 0, tokens: 0 },
-        'claude-sonnet-5': { sessions: 1, messages: 0, tokens: 0 }
+        'claude-opus-5': { sessions: 1, messages: 0, tokens: 0 }
       }
     }));
     await loadUsage();
@@ -987,8 +1031,8 @@ describe('usage.js — cache tiers and measured/estimate provenance (#3124 Phase
         'claude-code': { messages: 5, tokens: 50 }
       },
       byModel: {
-        'claude-opus-5': { messages: 2, tokens: 20 },
-        'claude-sonnet-5': { messages: 3, tokens: 30 }
+        'claude-opus-5': { sessions: 1, messages: 2, tokens: 20 },
+        'claude-sonnet-5': { sessions: 0, messages: 3, tokens: 30 }
       }
     });
     expect(getUsage().dailyActivity[today].byProvider['claude-code']).toMatchObject({
@@ -1022,10 +1066,10 @@ describe('usage.js — cache tiers and measured/estimate provenance (#3124 Phase
     expect(buildUsageDigest(getUsage())).not.toHaveProperty('interactiveScan');
   });
 
-  it('defaults recordMessages to an estimate source with no cache tokens', async () => {
+  it('defaults recordRunUsage to an estimate source with no cache tokens', async () => {
     readJSONFile.mockResolvedValueOnce(makeUsage({}));
     await loadUsage();
-    await recordMessages('codex', 'gpt-5.3-codex', 1, 400, 30);
+    await recordRunUsage({ providerId: 'codex', model: 'gpt-5.3-codex', tokensOut: 400, tokensIn: 30 });
 
     expect(getUsage().dailyActivity[today].byProvider.codex).toMatchObject({
       tokensIn: 30,

@@ -46,7 +46,7 @@ describe('stageGroupLabel', () => {
   });
 
   it('matches a word prefix on a hyphenated stage key', () => {
-    expect(stageGroupLabel('cos-evaluate')).toBe('CoS');
+    expect(stageGroupLabel('cos-task-enhance')).toBe('CoS');
     expect(stageGroupLabel('brain-classifier')).toBe('Brain');
   });
 
@@ -79,7 +79,7 @@ describe('buildStageGroups', () => {
     'pipeline-prose-draft': stage('Pipeline — Prose Draft', 'Draft the prose'),
     'pipeline-comic-script': stage('Pipeline — Comic Book Script', 'Panels and balloons'),
     'creative-director-treatment': stage('Creative Director — Treatment', 'Treatment doc'),
-    'cos-evaluate': stage('CoS Task Evaluation', 'Grade a task'),
+    'cos-task-enhance': stage('CoS Task Enhancement', 'Expand a task'),
     'brain-classifier': stage('Brain Classifier', 'Classify a thought'),
     'values-alignment-scorer': stage('Values-Alignment Scorer', 'Score alignment'),
   };
@@ -135,19 +135,19 @@ describe('buildStageGroups', () => {
   });
 
   // The list the server ships as `systemStages` on GET /api/prompts.
-  const systemStageKeys = ['cos-evaluate', 'brain-classifier'];
+  const systemStageKeys = ['brain-classifier'];
 
   it('narrows to system stages when systemOnly is set', () => {
     const { groups, matchCount, totalCount } = buildStageGroups(stages, { systemOnly: true, systemStageKeys });
     expect(totalCount).toBe(6);
-    expect(matchCount).toBe(2);
-    expect(groups.flatMap(g => g.stages.map(([k]) => k)).sort()).toEqual(['brain-classifier', 'cos-evaluate']);
+    expect(matchCount).toBe(1);
+    expect(groups.flatMap(g => g.stages.map(([k]) => k))).toEqual(['brain-classifier']);
   });
 
   it('composes systemOnly with a query', () => {
     const { matchCount } = buildStageGroups(stages, { query: 'classify', systemOnly: true, systemStageKeys });
     expect(matchCount).toBe(1);
-    expect(buildStageGroups(stages, { query: 'prose', systemOnly: true, systemStageKeys }).matchCount).toBe(0);
+    expect(buildStageGroups(stages, { query: 'comic', systemOnly: true, systemStageKeys }).matchCount).toBe(0);
   });
 
   // A server that predates the `systemStages` key (or a failed load) leaves the
@@ -175,7 +175,7 @@ describe('buildStageGroups', () => {
   });
 
   it('groups a name-less stage by its key', () => {
-    const { groups } = buildStageGroups({ 'cos-report-summary': {} });
+    const { groups } = buildStageGroups({ 'cos-task-enhance': {} });
     expect(groups[0].label).toBe('CoS');
   });
 

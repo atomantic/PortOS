@@ -1309,6 +1309,20 @@ describe('UsagePage per-provider refresh', () => {
     expect(await screen.findByText('55% used')).toBeInTheDocument();
   });
 
+  it('does not reload quotas when a family refresh fails after leaving Usage', async () => {
+    const { unmount } = render(<MemoryRouter><UsagePage /></MemoryRouter>);
+    const refresh = await screen.findByRole('button', { name: 'Refresh Grok usage' });
+    let failFamily;
+    api.getProviderUsage.mockClear();
+    api.getProviderUsage.mockImplementationOnce(() => new Promise((_, reject) => { failFamily = reject; }));
+
+    fireEvent.click(refresh);
+    unmount();
+    await act(async () => failFamily(new Error('synthetic failure')));
+
+    expect(api.getProviderUsage).toHaveBeenCalledTimes(1);
+  });
+
   it('re-reads only the clicked provider and swaps that card in', async () => {
     render(<MemoryRouter><UsagePage /></MemoryRouter>);
 

@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 
 const mocks = vi.hoisted(() => ({
   dueFeatureAgents: [], featureAgentPending: [],
@@ -12,13 +12,27 @@ const mocks = vi.hoisted(() => ({
   autoApprove: true, noWork: false, budget: { exceeded: null, budget: {}, usage: {} }, preflightInputs: [], hookInputs: [], userTasks: [],
 }));
 
-vi.mock('./cosEvents.js', () => ({
-  cosEvents: { emit: (...args) => mocks.emit(...args), on: vi.fn(), off: vi.fn() },
-  emitLog: (...args) => mocks.emitLog(...args),
+vi.mock('./cosEvents.js', async original => {
+  const { cosEvents, ...real } = await original();
+  const emit = cosEvents.emit.bind(cosEvents);
+  return {
+    ...real, cosEvents: Object.assign(cosEvents, { emit: (...args) => {
+      const handled = emit(...args);
+      const observed = mocks.emit(...args);
+      return handled || observed === true;
+    } }),
+    emitLog: (...args) => mocks.emitLog(...args),
+  };
+});
+vi.mock('../investigationDependencyWait.js', () => ({
+  bindInvestigationDependencyEvents: vi.fn(),
+  reconcileInvestigationDependencies: vi.fn(async () => {}),
 }));
+vi.mock('../blockedSystemInvestigation.js', () => ({ recoverBlockedSystemTask: vi.fn(async () => {}) }));
 vi.mock('./cosState.js', async (importActual) => ({
   ...(await importActual()),
   isDaemonRunning: () => true,
+  ensureDirectories: async () => {},
   loadState: async () => mocks.state,
   saveState: async () => {},
   withStateLock: async (fn) => fn(),
@@ -138,11 +152,15 @@ vi.mock('./cosLocalEndpointSlots.js', async (importActual) => ({
 vi.mock('../featureAgents.js', async (importActual) => ({
   ...(await importActual()),
   getDueFeatureAgents: async () => [...mocks.dueFeatureAgents],
-  setCurrentAgent: async (...args) => { mocks.featureAgentPending.push(args); },
+  queueFeatureAgentTask: async (task) => {
+    mocks.featureAgentPending.push([task.metadata.featureAgentId, task.id]);
+    return { task };
+  },
 }));
 
 const { evaluateTasks } = await import('./cosTaskGenerator.js');
-const { dequeueNextTask } = await import('./cos.js');
+const { dequeueNextTask, init } = await import('./cos.js');
+const { cosEvents } = await import('./cosEvents.js');
 
 const engines = [
   ['evaluateTasks', () => evaluateTasks({ initialStartup: true })],
@@ -300,5 +318,19 @@ describe.each(engines)('%s idle admission public boundary', (name, run) => {
     expect(readyTasks()).toHaveLength(1);
     expect(mocks.requests).toEqual([]);
     expect(mocks.cards['preflight-demand-1'].outcome).toBe('handed-off');
+  });
+});
+
+describe('agent:completed idle continuation', () => {
+  beforeAll(async () => {
+    mocks.state = { running: false, config: {} };
+    await init();
+  });
+
+  it('excludes the completing task before its persisted status settles', async () => {
+    cosEvents.emit('agent:completed', { id: 'agent-finished', taskId: 'task-in-progress', result: { success: false } });
+
+    await vi.waitFor(() => expect(readyTasks()).toHaveLength(1));
+    expect(mocks.hookInputs).toEqual([expect.objectContaining({ ignoreTaskId: 'task-in-progress' })]);
   });
 });

@@ -20,8 +20,8 @@ vi.mock('../../../services/apiMeatspace.js', () => ({
 }));
 vi.mock('../../../services/apiGoals.js', () => ({ getGoals: mocks.getGoals }));
 vi.mock('../../../services/apiDashboard.js', () => ({ markDailyDriverHandled: mocks.markDailyDriverHandled }));
-// useInstanceFeatures reads apiSystem.js directly, not the api barrel (#16562).
-vi.mock('../../../services/apiSystem.js', async (importOriginal) => ({
+// useInstanceFeatures reads apiAppShell.js directly, not the api barrel (#16562).
+vi.mock('../../../services/apiAppShell.js', async (importOriginal) => ({
   ...(await importOriginal()),
   getInstanceFeatures: mocks.getInstanceFeatures,
 }));

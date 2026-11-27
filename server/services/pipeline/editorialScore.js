@@ -20,19 +20,22 @@
  * try/catch) — callers own their boundary.
  */
 
+import { CHECK_SEVERITIES as SEVERITIES } from '../../lib/editorial/checkInfra/taxonomy.js';
 import { join } from 'path';
 import { assertValidSeriesId } from '../../lib/pipelineIds.js';
 import { PATHS, atomicWrite, readJSONFile } from '../../lib/fileUtils.js';
 import { createKeyedFileWriteQueue } from '../../lib/fileWriteQueue.js';
 import { getReview } from './manuscriptReview.js';
 import { DEFAULT_SEVERITY_WEIGHTS } from '../../lib/editorial/severityConfig.js';
+import { READINESS_GATES, DEFAULT_READINESS_GATE } from '../../lib/editorial/severityConfig.js';
+
+export { READINESS_GATES, DEFAULT_READINESS_GATE };
 
 // Storage-layout version for the trend ledger. Bump + migrate if the snapshot
 // shape changes in a way older peers can't read. (Trend snapshots are local
 // telemetry — they do NOT ride peer sync, so this is install-local.)
 const SCHEMA_VERSION = 1;
 
-const SEVERITIES = Object.freeze(['high', 'medium', 'low']);
 
 // Transparent severity penalty weights. A draft starts at 100 and loses points
 // per OPEN finding: a `high` finding costs as much as a dozen `low` nits. These
@@ -43,12 +46,6 @@ const SEVERITIES = Object.freeze(['high', 'medium', 'low']);
 // override these weights — `computeHealth`/`getSeriesHealth` accept a resolved
 // `weights` opt (via `mergeSeverityWeights`) and fall back to this default.
 export const SEVERITY_WEIGHTS = DEFAULT_SEVERITY_WEIGHTS;
-
-// Readiness gates — the convergence signal the autopilot + UI read as "clean".
-// `noOpenHigh` (default) is the manuscript-not-clean threshold; the stricter
-// gate also blocks on mediums; `none` disables the gate (always ready).
-export const READINESS_GATES = Object.freeze(['noOpenHigh', 'noOpenHighOrMedium', 'none']);
-export const DEFAULT_READINESS_GATE = 'noOpenHigh';
 
 // Cap on the persisted revision-trend ledger. Each run appends one snapshot; the
 // oldest roll off so the file can't grow unbounded over a long series' life.

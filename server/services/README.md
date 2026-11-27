@@ -19,59 +19,15 @@ A domain with five or more cohesive modules lives in its own named subdirectory 
 | `voice/` | Voice pipeline (STT/TTS, tools, config). |
 | `provider/`, `backup/`, `sharing/`, `identity/`, `worktree/`, `branchReconcile/` | Provider execution, backups, sharing, identity, worktree and branch maintenance. |
 
-Remaining flat `brain*` and `eidoverse*` clusters are candidates for the same treatment.
 
-| Module | Responsibility |
-| --- | --- |
-| `nativeUsageDayStore.js` | Persisted per-app `day -> model -> counts` store: max-merge folds that survive app pruning, `coverageStart`, incremental lookback, fence-aware refresh. |
-| `nativeUsageHistory.js` | Readers for Claude, Codex, Grok and Antigravity session records into native stores, background refresh, and `withNativeUsage` overlay of the ledger for the Usage report and peer digest. |
-| `nativeUsageEvents.js` | Emitter for `usage:native-history-updated` after a refresh changes a store. |
-| `codexUsageSources.js` | Explicit bounded, read-only streamed Codex raw/Zstandard/archive inspection; accounting-only projection, logical-session deduplication, source-integrity coverage and unknown ledger overlap. |
-| `cos/cosSpawnBudget.js` | The spawn budget's vocabulary: the per-run dispatch accounting keys and the count parser. The budget itself is one counter, `totalSpawnCount`, which `cos/cosTaskStore.js` keeps monotonic; only an explicit reset lowers it. |
-| `explicitSpawnBudgetReset.js` | Resolves the stopped run (the only one, or the task's latest dispatch among several) and its retained checkout before an explicit reset-and-run action. |
-| `catalog/catalogPrimitives.js` | Explicit creative primitive ownership, safe universe membership, independent forks and durable retry receipts. |
-| `catalogDB/ingredients.js` | Canonical ingredient CRUD/history, atomic flag-only locks and bounded requested-ID card projections with batched cover/ownership/identity context. |
-| `catalogDB/media.js` | Ingredient media associations, metadata-free profile covers (`getIngredientMediaCover`), image-owner lookup by media key (`findMediaOwnersByKeys`) and integrity checks that can reuse already-read media rows. |
-| `catalog/catalogPrimitiveUsage.js` | Indexed/derived creative usage aggregation and exact canon-pointer removal guards for FableLoom and local voice profiles. |
-| `deadOwnerReservations.js` | Boot and orphan-sweep reconcile for reservations whose admitting process died: stamps settled Output publication rows unsettled for receipt recovery, and releases only cli-run or mind-turn residue whose owning record proves completion. |
-| `repoCleanupRecovery.js` | Reserves one bounded exact-owner review or code-repair obligation, rechecks policy and delivery evidence before publication, and never queues a provider for routine holds. |
-| `repoCleanupObservation.js` | Read-only exact-ref presence/absence accounting; malformed, changing or unsupported metadata remains unknown. |
-| `branchReconcileCompletion.js` | Runs ownership-checked merged and superseded cleanup on coordinator completion, independent of perpetual scheduling. |
-| `heldCheckoutRecovery.js` | Retires one inventoried checkout directly once its work is merged: a PR merged at the exact head (dirty files disposable), or every commit on the default branch or in a later merged PR head with a clean tree. Re-proves release identity, lock, ownership and content under the retirement fence; unmerged work stays. Hosts branch-reconcile's automatic pass (`retireCompletedCheckouts`), the daemon gate, and pending-merge receipts (`retirePendingMergeCheckout`, which binds the receipt's own PR and head and never unlocks). |
-| `branchRetirementDecision.js` | Pure decide-or-ask hold/retire decisions for branch-reconcile, held-checkout retirement and the early merged-worktree reaper: each takes the facts read so far and returns a hold, an admission, or the next fact to read, so callers keep their I/O order while every permutation is tested without Git. |
-| `mergedPrEvidence.js` | Read-only GitHub facts for a merged PR: `findMergedPullRequest` selects the PR for an exact local tip; `readMergedPrDelivery` proves the same-repository merged head and target, and whether a captured head is that head or one it contains. |
-| `cosClaimOwnershipState.js` | Shared ownership lock (each checkout removal re-reads owners, verifies and removes in one section) and fail-closed live-agent reader used by claim binding and worktree cleanup. Re-exported by `cosClaimOwnership.js` for existing callers; does not import reconciliation. |
-| `systemActivityNotify.js` | Coalesced activity invalidation signal and LLM lifecycle adapters; producers do not import media execution. |
-| `systemActivityWatchers.js` | Socket initialization arms media and CoS activity subscriptions here, sharing the notification signal without pulling boot observers into producers. |
-| `branchCompletionPolicy.js` | Retains explicit registered PR completion policy through agent archives. Scoped reads reuse a PostgreSQL archive index validated against the current file revision and overlay the live working set. `readBranchCompletionHold` gates reconciliation by exact repository/branch/PR identity (`readBranchCompletionHoldDetail` also flags a review obligation whose run never opened a PR, so branch-reconcile still dispatches that unshipped work); human handoffs and configured review stay held, explicit releases require a fresh matching forge head, and verified merged retirement is a separate action. |
-| `databaseCutoverHandshake.js` | Narrow fenced-boot path for the ordinary server: at `verifying`/`verified` prove this process's own pool reaches the recorded target, publish a per-pid proof, and wait for admission release before the app graph loads. |
-| `databaseMaintenanceCutover.js` | Internal cutover worker body (transfer → forward-only `.env` mode commit → server restart with target proof → release → CoS restart) and `recoverDatabaseCutover(id)` same-operation recovery for the CLI/API. |
-| `databaseMaintenanceProducers.js` | Internal one-use coordinator stage: retain producer identity, stop this install's PM2 CoS/server, and verify fresh readback while admission remains fenced. |
-| `databaseMaintenanceQuiescence.js` | Internal coordinator stage after producer shutdown: terminate verified running detached-writer groups, prove every registry record quiescent from process-table evidence, archive it with the operation, and refuse pending, legacy, orphaned, ambiguous or unregistered writers. |
-| `gmailApi.js` | Six-operation Gmail v1 adapter (`createGmailApi(auth)`) over the shared OAuth client's `request()`: fixed origin, encoded IDs, URLSearchParams queries, explicit JSON bodies, capped 30s request timeout and no automatic send retries. Auth, refresh and transport stay in `googleAuth.js`. |
-| `imageGen/prepareParams.js` | Shared image request preparation and the canonical local image model selector. Use `selectLocalImageModelFromSettings()` for model identity and `resolveLocalImageModel()` when the caller must also enforce local runtime, hardware, and edit-image requirements. |
-| `musicVideo/renderCleanupActivity.js` | Synchronous per-project admission between render retirement, shot renders, previews and publishing-kit preparation. |
-| `musicVideo/renderCleanup.js` | Derived-render inventory and cleanup, preserving current finals, saved references, source takes and comparison looks; serializes retirement with project and history writers. |
-| `musicVideo/renderCancellation.js` | Shared capture-abort and ffmpeg kill selection for full/excerpt renders; records explicit cancellation before signaling and classifies nonzero closes without releasing ownership. |
-| `musicVideo/sharingCopy.js` | Source-hashed private sharing MP4s: queued 720p H.264/AAC export, strict decimal 100 MB cap, supervised cancellation, verified download and owned-file cleanup. |
-| `mediaJobQueue/index.js` | Public admission, cancellation, queue queries and recovery. `state.js` owns queue state, `scheduler.js` handles lane dispatch and shutdown, `execution.js` selects providers, and `persistence.js` owns snapshot durability. Boot passes `deferCompletionRecovery` to `initMediaJobQueue()` and calls `resumeMediaJobCompletions()` after completion hooks are registered. |
-| `imageGen/index.js` | Mode-aware image backend execution dispatcher. Preparation uses `lib/imageCleanDefaults.js` for cleaner policy and resolves local model identity before enqueueing. |
-| `dockerEngine.js` | Shared Docker discovery (#12844): `resolveDockerCli` (PATH, then the Docker Desktop bundle), `probeDocker`, and `resolveDockerEngine` — prefers a running Docker Desktop, falls back to native Docker Engine, refuses `tcp://`/`ssh://` endpoints, requires Linux containers and pins the chosen context. Never starts or installs Docker. |
-| `dockerContainment.js` | Docker containment executor (#12844): `runContained` (install/validate over a worktree, serialized per worktree, wall-time kill-and-remove, tracked-file patch, refuses with `CONTAINMENT_UNAVAILABLE` instead of ever running on the host), status, explicit image pull, orphan sweep and `reconcileDockerContainment` for the feature toggle. |
-| `superColliderRuntime.js` | Managed SuperCollider runtime I/O (#9412): Docker probe, recipe-hash-stamped image build, `runSuperColliderContainer` (contained `sclang` run with forced container removal), the synthetic render probe and its cached evidence, `getSuperColliderStatus` and idempotent `setupSuperColliderRuntime`. Never runs at boot. |
-| `superColliderRender.js` | Contained SuperCollider renders (#9413): media-queue `supercollider` jobs that snapshot source into a job-private dir, run the trusted NRT wrapper via `runSuperColliderContainer` (output quota, timeout, cancel → container force-removed), validate the decoded WAV and publish a 24 h preview + provenance sidecar (`readSuperColliderPreview`). Sweeps orphaned containers/scratch before each render. |
-| `universeBuilderRender.js` | Universe Builder batch render jobs. |
-| `pipeline/visualStageHelpers.js` | Shared pipeline visual prompt, LoRA compatibility, and image-job enqueue helpers. |
-| `creativeStyleSources.js` | Resolves a universe style guide or mood board into art-direction text plus local reference images; shared by Code Animation and Creative Commissions. |
-| `creativeDirector/firstPassGen.js` | Gracefully gated first-pass portraits and scene frames. |
-| `universeCharacterSheet.js` | Character reference-sheet render and completion workflow. |
-| `loraDatasets.js` | Retained LoRA dataset store and the surviving-trainer status update; training is retired. |
-| `dataMaintenance.js` | Allowlisted retired-data inventory and serialized removal by operation id with active-work refusal. |
-| `sprites/reference.js` | Sprite reference candidate rendering and provenance. |
-| `deckRender.js` | Deck card image render jobs. |
-| `fableLoom/production.js` | FableLoom production render planning and enqueueing. |
-| `appProcessTypes.js` | Dependency-free managed-app process-type vocabulary and PM2/desktop predicates. |
-| `appProcessStatus.js` | PM2-backed managed-app status projections, expected-exit policy, and custom PM2 home resolution. |
-| `forkReviewMergeTarget.js` | Captures a fresh fork review target from the base repository’s live PR; admission verifies the registered target, live task, exact checkout head, fork remote/upstream and live forge identity. |
+## Common entry points
 
-| `provider/providerExecutionOptions.js` | Explicit source-linked execution selection creation; compatibility exports for capability inspection and dispatch preparation. |
+- [Image preparation](imageGen/prepareParams.js) resolves model selection and
+  input policy. [Image dispatch](imageGen/index.js) selects the backend.
+- [Media queue](mediaJobQueue/index.js) owns admission, cancellation and recovery.
+  Register completion hooks before resuming completion recovery.
+- [Docker discovery](dockerEngine.js) selects a local engine. The contained
+  [executor](dockerContainment.js) applies the install/test runtime policy.
+- [Server conventions](../AGENTS.md) cover service boundaries, write serialization
+  and provider selection. Search the module catalog with
+  `node scripts/lib-catalog.js <term>` from the repository root.

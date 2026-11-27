@@ -117,6 +117,23 @@ it('clears the stale pause banner when automation has already resumed elsewhere'
 });
 
 describe('AutomationTab per-app options', () => {
+  it('labels the bulk toggle and confirms the affected task count before enabling all', async () => {
+    await renderTab();
+    const toggle = screen.getByRole('switch', { name: 'Enable every scheduled task for this app' });
+    expect(screen.getByText('All tasks')).toBeInTheDocument();
+    api.toggleAllAppTaskTypes.mockResolvedValue({ success: true });
+
+    fireEvent.click(toggle);
+
+    expect(screen.getByText('Enable all 3 scheduled tasks for MyApp?')).toBeInTheDocument();
+    expect(api.toggleAllAppTaskTypes).not.toHaveBeenCalled();
+    fireEvent.click(screen.getByRole('button', { name: 'Enable all' }));
+
+    await waitFor(() => expect(screen.queryByText('Enable all 3 scheduled tasks for MyApp?')).not.toBeInTheDocument());
+    expect(api.toggleAllAppTaskTypes).toHaveBeenCalledWith('app-1', true, { silent: true });
+    expect(mockToast.success).toHaveBeenCalledWith('Enabled all 3 scheduled tasks for MyApp');
+  });
+
   it('acknowledges a slow run immediately, prevents duplicate clicks, and retains the queued receipt', async () => {
     await renderTab({ security: { enabled: true } });
     let resolveRun;

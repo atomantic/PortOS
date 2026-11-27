@@ -38,9 +38,15 @@ const dedupeByLink = (items, seen = new Set()) =>
 
 // Sort runs on writes only; getItems trusts the invariant. Legacy unsorted
 // state on disk gets normalized once on first read (see ensureItemsSorted).
-// The invariant assumes this module owns all writes to feeds.json — out-of-band
-// edits while the process is running won't retrigger normalization.
+// A live restore resets the invariant before queued mutations can run.
 let _itemsSorted = false;
+
+export function invalidateCache() {
+  store.invalidateCache();
+  _itemsSorted = false;
+}
+
+export const withLiveRestore = (restore) => store.withLiveRestore(() => restore(invalidateCache));
 const sortItemsNewestFirst = (items) => {
   items.sort(compareItemsNewestFirst);
   _itemsSorted = true;
@@ -485,7 +491,7 @@ const FEED_HEADERS = {
 // keeps feeds' historical block-all-private posture (an arbitrary user-added
 // feed URL must not be aimable at the home network) while gaining the
 // connect-time IP PIN that closes the DNS-rebinding TOCTOU (#2046): the
-// hostname is resolved once and undici connects to exactly that vetted address,
+// hostname is resolved once and the transport connects to that vetted address,
 // re-validated and re-pinned on every redirect hop. `throwOnUnsafe: false`
 // preserves this module's contract of returning null on any failure (so addFeed
 // surfaces the friendly "Could not fetch feed" message rather than a bubbled

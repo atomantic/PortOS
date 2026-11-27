@@ -11,7 +11,7 @@ vi.mock('../instances.js', () => ({ getPeers: vi.fn(async () => []) }));
 vi.mock('../../lib/peerHttpClient.js', async importOriginal => ({ ...(await importOriginal()), peerFetch: vi.fn() }));
 vi.mock('./peerSyncAssets.js', async importOriginal => {
   const actual = await importOriginal();
-  return { ...actual, hashImageForManifest: vi.fn(actual.hashImageForManifest), diffAssetManifestAgainstLocal: vi.fn(actual.diffAssetManifestAgainstLocal) };
+  return { ...actual, hashImageForManifest: vi.fn(actual.hashImageForManifest), hashSimpleAsset: vi.fn(actual.hashSimpleAsset), diffAssetManifestAgainstLocal: vi.fn(actual.diffAssetManifestAgainstLocal) };
 });
 vi.mock('../../lib/databaseMaintenanceJournal.js', async importOriginal => ({ ...(await importOriginal()), assertDatabaseAdmission: () => {} }));
 
@@ -25,7 +25,7 @@ const { PATHS } = await import('../../lib/fileUtils.js');
 const { getPeers } = await import('../instances.js');
 const { peerFetch } = await import('../../lib/peerHttpClient.js');
 const { syncMediaLibraryFromPeer, syncMediaLibraryWithAllPeers, buildMediaLibraryManifest } = await import('./peerMediaLibrarySync.js');
-const { diffAssetManifestAgainstLocal, hashImageForManifest } = await import('./peerSyncAssets.js');
+const { diffAssetManifestAgainstLocal, hashImageForManifest, hashSimpleAsset } = await import('./peerSyncAssets.js');
 const { acquireBackupSnapshotCut } = await import('../../lib/backupSnapshotBoundary.js');
 
 const rows = new Map();
@@ -110,6 +110,46 @@ it('reuses image entries, invalidates changed files and sidecars, and prunes del
   expect(imageChanged.assets.find(asset => asset.filename === filename).sha256)
     .not.toBe(first.assets.find(asset => asset.filename === filename).sha256);
   expect(hashImageForManifest).toHaveBeenCalledTimes(5);
+});
+
+it('prunes deleted flat assets and paths replaced by directories without evicting another media kind', async () => {
+  const filename = 'cached.mp4';
+  const video = join(PATHS.videos, filename);
+  const parked = join(tempRoot, filename);
+  const other = join(PATHS.music, 'cached.mp3');
+  await mkdir(PATHS.videos, { recursive: true });
+  await mkdir(PATHS.music, { recursive: true });
+  try {
+    await writeFile(video, bytes);
+    await writeFile(other, bytes);
+    vi.mocked(hashSimpleAsset).mockClear();
+
+    const original = await buildMediaLibraryManifest();
+    expect(original.assets).toEqual(expect.arrayContaining([
+      expect.objectContaining({ kind: 'video', filename }),
+      expect.objectContaining({ kind: 'music', filename: 'cached.mp3' }),
+    ]));
+    expect(await buildMediaLibraryManifest()).toEqual(original);
+    expect(hashSimpleAsset).toHaveBeenCalledTimes(2);
+
+    await rename(video, parked);
+    expect((await buildMediaLibraryManifest()).assets.map(asset => asset.filename)).not.toContain(filename);
+    await rename(parked, video);
+    expect(await buildMediaLibraryManifest()).toEqual(original);
+
+    await rename(video, parked);
+    await mkdir(video);
+    expect((await buildMediaLibraryManifest()).assets.map(asset => asset.filename)).not.toContain(filename);
+    await rm(video, { recursive: true });
+    await rename(parked, video);
+    expect(await buildMediaLibraryManifest()).toEqual(original);
+
+    expect(vi.mocked(hashSimpleAsset).mock.calls.map(([name]) => name)).toEqual([
+      filename, 'cached.mp3', filename, filename,
+    ]);
+  } finally {
+    await Promise.all([rm(video, { recursive: true, force: true }), rm(parked, { force: true }), rm(other, { force: true })]);
+  }
 });
 
 it('sweeps online and unprobed peers without dialing explicitly offline peers', async () => {

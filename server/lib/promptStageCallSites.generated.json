@@ -32,7 +32,7 @@
     "server/services/taskEnhancer.js"
   ],
   "fableloom-branch-node": [
-    "server/services/fableLoom/weave.js"
+    "server/services/fableLoom/weaveEpisode.js"
   ],
   "fableloom-editorial-remediate": [
     "server/services/fableLoom/editorial.js"
@@ -41,60 +41,60 @@
     "server/services/fableLoom/editorialSelfImprove.js"
   ],
   "fableloom-feedback-episode": [
-    "server/services/fableLoom/weave.js"
+    "server/services/fableLoom/weaveReviewFeedback.js"
   ],
   "fableloom-feedback-series-plan": [
-    "server/services/fableLoom/weave.js"
+    "server/services/fableLoom/weaveSeriesPlan.js"
   ],
   "fableloom-generate-series-plan": [
-    "server/services/fableLoom/weave.js"
+    "server/services/fableLoom/weaveSeriesPlan.js"
   ],
   "fableloom-outline-episode": [
-    "server/services/fableLoom/weave.js"
+    "server/services/fableLoom/weaveEpisode.js"
   ],
   "fableloom-plan-shots": [
     "server/services/fableLoom/shots.js"
   ],
   "fableloom-play-turn": [
     "server/lib/fableLoomExport.js",
-    "server/services/fableLoom/weave.js"
+    "server/services/fableLoom/weavePlayReformat.js"
   ],
   "fableloom-reformat-scenes": [
-    "server/services/fableLoom/weave.js"
+    "server/services/fableLoom/weavePlayReformat.js"
   ],
   "fableloom-review": [
-    "server/services/fableLoom/weave.js"
+    "server/services/fableLoom/weaveReviewFeedback.js"
   ],
   "fableloom-review-episode-outline": [
-    "server/services/fableLoom/weave.js"
+    "server/services/fableLoom/weaveSeriesPlan.js"
   ],
   "fableloom-review-playthroughs": [
     "server/services/fableLoom/editorial.js"
   ],
   "fableloom-review-series-plan": [
-    "server/services/fableLoom/weave.js"
+    "server/services/fableLoom/weaveSeriesPlan.js"
   ],
   "fableloom-review-series-teleplay": [
-    "server/services/fableLoom/weave.js"
+    "server/services/fableLoom/weaveSeriesPlan.js"
   ],
   "fableloom-review-shots": [
     "server/services/fableLoom/shots.js"
   ],
   "fableloom-weave-episode": [
-    "server/services/fableLoom/weave.js"
+    "server/services/fableLoom/weaveEpisode.js"
   ],
   "importer-arc-extract": [
-    "server/services/importer.js",
+    "server/services/importer/importerAnalyze.js",
     "server/services/pipeline/arcPlanner/manuscriptDerive.js"
   ],
   "importer-canon-extract": [
-    "server/services/importer.js"
+    "server/services/importer/importerAnalyze.js"
   ],
   "importer-classify": [
-    "server/services/importer.js"
+    "server/services/importer/importerAnalyze.js"
   ],
   "importer-issue-proposal": [
-    "server/services/importer.js"
+    "server/services/importer/importerAnalyze.js"
   ],
   "manuscript-reformat": [
     "server/lib/creativeLatitude.js",
@@ -114,15 +114,15 @@
     "server/services/digital-twin-multi-turn-testing.js"
   ],
   "pipeline-arc-overview": [
-    "server/services/pipeline/arcPlanner/arcCore.js",
+    "server/services/pipeline/arcPlanner/arcGenerateVerify.js",
     "server/services/pipeline/foundationJudge.js",
     "server/services/pipeline/seriesReview.js"
   ],
   "pipeline-arc-resolve": [
-    "server/services/pipeline/arcPlanner/arcCore.js"
+    "server/services/pipeline/arcPlanner/arcResolveEdits.js"
   ],
   "pipeline-arc-verify": [
-    "server/services/pipeline/arcPlanner/arcCore.js"
+    "server/services/pipeline/arcPlanner/arcGenerateVerify.js"
   ],
   "pipeline-audio-cues": [
     "server/services/pipeline/audioCues.js"
@@ -141,7 +141,7 @@
   ],
   "pipeline-character-foundation": [
     "server/services/pipeline/foundationCharacterOverflow.js",
-    "server/services/pipeline/foundationJudge.js"
+    "server/services/pipeline/foundationRepairs.js"
   ],
   "pipeline-character-refine": [
     "server/services/universeCanon.js"
@@ -301,7 +301,7 @@
     "server/services/sceneExtractor.js"
   ],
   "pipeline-foundation-repair": [
-    "server/services/pipeline/foundationJudge.js"
+    "server/services/pipeline/foundationRepairs.js"
   ],
   "pipeline-idea-expansion": [
     "server/services/pipeline/textStages.js"
@@ -381,7 +381,7 @@
     "server/services/pipeline/arcPlanner/coverConcepts.js"
   ],
   "pipeline-volume-verify": [
-    "server/services/pipeline/arcPlanner/arcCore.js"
+    "server/services/pipeline/arcPlanner/arcGenerateVerify.js"
   ],
   "soul-contradiction-detector": [
     "server/services/digital-twin-analysis.js"
@@ -402,16 +402,16 @@
     "server/services/digital-twin-analysis.js"
   ],
   "story-builder-arc-refine": [
-    "server/services/pipeline/arcPlanner/arcCore.js"
+    "server/services/pipeline/arcPlanner/arcGenerateVerify.js"
   ],
   "story-builder-idea-expand": [
     "server/services/storyBuilder.js"
   ],
   "story-builder-reader-map": [
-    "server/services/pipeline/arcPlanner/arcCore.js"
+    "server/services/pipeline/arcPlanner/arcGenerateVerify.js"
   ],
   "story-builder-reader-map-refine": [
-    "server/services/pipeline/arcPlanner/arcCore.js"
+    "server/services/pipeline/arcPlanner/arcGenerateVerify.js"
   ],
   "twin-confidence-analyzer": [
     "server/services/digital-twin-analysis.js"

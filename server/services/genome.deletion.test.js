@@ -8,16 +8,24 @@ vi.mock('../lib/paths.js', async importOriginal => {
   const { makePathsProxy, lazyTempDataRoot } = await import('../lib/mockPathsDataRoot.js');
   return makePathsProxy(await importOriginal(), { dataRoot: () => lazyTempDataRoot('portos-genome-deletion-') });
 });
+vi.mock('../lib/fileUtils.js', async importOriginal => {
+  const actual = await importOriginal();
+  return {
+    ...actual,
+    readJSONFileStrict: vi.fn(actual.readJSONFileStrict),
+    tryReadFile: vi.fn(actual.tryReadFile),
+    unlinkGuarded: vi.fn(actual.unlinkGuarded),
+  };
+});
 vi.mock('./mortalLoomStore.js', () => ({
   isMortalLoomEnabled: vi.fn(async () => false),
   mlArrayIfEnabled: vi.fn(async () => null),
-  mlReplace: vi.fn()
 }));
 
 const { cleanupTempDataRoots } = await import('../lib/mockPathsDataRoot.js');
-const { PATHS, atomicWrite } = await import('../lib/fileUtils.js');
+const { PATHS, atomicWrite, readJSONFileStrict, tryReadFile, unlinkGuarded } = await import('../lib/fileUtils.js');
 const { holdsBackupAssetPublication, acquireBackupSnapshotCut } = await import('../lib/backupSnapshotBoundary.js');
-const { deleteGenome, getGenomeSummary, getSnpIndex } = await import('./genome.js');
+const { deleteGenome, getGenomeSummary, getSnpIndex, saveMarker, scanCuratedMarkers } = await import('./genome.js');
 const { deriveChronotype, getChronotype } = await import('./identity/chronotype.js');
 const { deriveLongevity, getLongevity } = await import('./identity/longevity.js');
 const { CHRONOTYPE_FILE, LONGEVITY_FILE, GOALS_FILE } = await import('./identity/store.js');
@@ -115,6 +123,42 @@ describe('genome deletion erases derived identity', () => {
     await expect(deleteGenome()).rejects.toThrow();
     expect((await getGenomeSummary()).uploaded).toBe(true);
     await rm(rawFile, { recursive: true });
+  });
+
+  it.each([
+    ['marker save', () => saveMarker({ rsid: 'rs4753426', name: 'Synthetic marker', category: 'test' })],
+    ['curated scan', scanCuratedMarkers],
+  ])('rejects a %s that read the raw genome before deletion', async (_label, mutate) => {
+    // Reset the cache first, then reinstate the synthetic fixture on disk so
+    // the mutation opens a cold read that can finish after genome deletion.
+    const rawFile = join(PATHS.meatspace, 'genome-raw.txt');
+    const metaFile = join(PATHS.meatspace, 'genome.json');
+    const [raw, meta] = await Promise.all([readFile(rawFile, 'utf8'), readJSON(metaFile)]);
+    await deleteGenome();
+    await atomicWrite(rawFile, raw);
+    await atomicWrite(metaFile, meta);
+
+    const opened = Promise.withResolvers();
+    const finish = Promise.withResolvers();
+    tryReadFile.mockImplementationOnce(async path => {
+      const content = await readFile(path, 'utf8');
+      opened.resolve();
+      await finish.promise;
+      return content;
+    });
+
+    const mutation = mutate();
+    try {
+      await opened.promise;
+      await expect(deleteGenome()).resolves.toEqual({ success: true });
+    } finally {
+      finish.resolve();
+      await mutation;
+    }
+    await expect(mutation).resolves.toEqual({ error: expect.stringMatching(/No genome data uploaded/) });
+    await expect(getGenomeSummary()).resolves.toEqual({ uploaded: false });
+    await expect(getSnpIndex()).resolves.toBeNull();
+    expect(existsSync(metaFile)).toBe(false);
   });
 
   it('retains the source genome when a derived snapshot cannot be written', async () => {
@@ -256,6 +300,47 @@ describe('genome deletion erases derived identity', () => {
     await expect(deleteGenome()).rejects.toMatchObject({ code: 'UNREADABLE_STORE' });
     expect((await getGenomeSummary()).uploaded).toBe(true);
     expect(await readFile(join(PATHS.meatspace, 'genome-raw.txt'), 'utf8')).toContain('rs4753426');
+  });
+
+  it.each(['existing snapshots', 'no snapshots directory'])('waits to collect a new snapshot during genome deletion with %s', async state => {
+    const before = state === 'existing snapshots' ? await createSnapshot('before deletion') : null;
+    const rawFile = join(PATHS.meatspace, 'genome-raw.txt');
+    const metaFile = join(PATHS.meatspace, 'genome.json');
+    const unlinkStarted = Promise.withResolvers();
+    const resumeUnlink = Promise.withResolvers();
+    const realUnlink = unlinkGuarded.getMockImplementation();
+    unlinkGuarded.mockImplementation(async path => {
+      if (path === rawFile) {
+        unlinkStarted.resolve();
+        await resumeUnlink.promise;
+      }
+      return realUnlink(path);
+    });
+
+    const deletion = deleteGenome();
+    let pendingSnapshot;
+    try {
+      await Promise.race([unlinkStarted.promise, deletion]);
+      expect(existsSync(metaFile)).toBe(true);
+      if (before) expect((await getSnapshot(before.id)).data['genome.json']).toBeUndefined();
+
+      readJSONFileStrict.mockClear();
+      pendingSnapshot = createSnapshot('during deletion');
+      // Let an unblocked index writer start collecting while the unlink is paused.
+      await new Promise(resolve => setImmediate(resolve));
+      expect(readJSONFileStrict.mock.calls.some(([path]) => path === metaFile)).toBe(false);
+    } finally {
+      resumeUnlink.resolve();
+      await Promise.allSettled([deletion, pendingSnapshot]);
+      unlinkGuarded.mockImplementation(realUnlink);
+    }
+
+    await expect(deletion).resolves.toEqual({ success: true });
+    const { id } = await pendingSnapshot;
+    const persisted = await getSnapshot(id);
+    expect(persisted.data['genome.json']).toBeUndefined();
+    expect(persisted.summary.genomeMarkers).toBe(0);
+    expect((await listSnapshots()).find(snapshot => snapshot.id === id).summary.genomeMarkers).toBe(0);
   });
 
   it('defers narrative removal and Time Capsule snapshot stripping while a backup cut is active', async () => {

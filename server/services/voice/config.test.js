@@ -1,21 +1,37 @@
-import { beforeEach, describe, expect, it, vi } from 'vitest';
-import { readFile } from 'node:fs/promises';
-vi.mock('../settings.js', () => ({ getSettings: vi.fn(), updateSettings: vi.fn() }));
-const { getSettings, updateSettings } = await import('../settings.js');
+import { afterAll, beforeEach, describe, expect, it, vi } from 'vitest';
+import { readFile, writeFile } from 'node:fs/promises';
+import { join } from 'node:path';
+import { cleanupTempDataRoots, lazyTempDataRoot, makePathsProxy } from '../../lib/mockPathsDataRoot.js';
+
+const dataRoot = () => lazyTempDataRoot('portos-voice-config-');
+vi.mock('../../lib/fileUtils.js', async (original) => makePathsProxy(await original(), { dataRoot }));
+vi.mock('../userActions.js', () => ({ recordUserAction: vi.fn() }));
+
+const { __resetSettingsCache } = await import('../settings.js');
 const { VOICE_DEFAULTS, getVoiceConfig, updateVoiceConfig, invalidateVoiceConfigCache } = await import('./config.js');
 
-beforeEach(() => { vi.clearAllMocks(); invalidateVoiceConfigCache(); });
+const settingsFile = () => join(dataRoot(), 'settings.json');
+const seedSettings = (settings) => writeFile(settingsFile(), JSON.stringify(settings));
+const readPersistedSettings = async () => JSON.parse(await readFile(settingsFile(), 'utf8'));
+
+beforeEach(async () => {
+  __resetSettingsCache();
+  invalidateVoiceConfigCache();
+  await seedSettings({});
+});
+
+afterAll(cleanupTempDataRoots);
 
 it('upgrades restored legacy config on reads and old-client saves without losing settings', async () => {
   const legacy = { enabled: true, tts: { engine: 'kokoro', rate: 1.3, kokoro: { voice: 'af_heart' } } };
-  getSettings.mockResolvedValue({ voice: legacy });
+  await seedSettings({ voice: legacy });
   const cfg = await getVoiceConfig();
   expect(cfg.tts).toMatchObject({ engine: 'piper', retiredEngine: 'kokoro', rate: 1.3, piper: VOICE_DEFAULTS.tts.piper });
   expect(cfg.enabled).toBe(true);
-  expect(updateSettings).not.toHaveBeenCalled();
+  expect(await readPersistedSettings()).toEqual({ voice: legacy });
   const saved = await updateVoiceConfig({ tts: { engine: 'kokoro' } });
-  expect(saved.tts.engine).toBe('piper');
-  expect(updateSettings).toHaveBeenCalledWith({ voice: saved });
+  expect(saved).toEqual(cfg);
+  expect(await readPersistedSettings()).toEqual({ voice: saved });
 });
 
 
@@ -47,21 +63,60 @@ describe('voice configuration defaults', () => {
 
 it('persists retirement acknowledgement without removing customized TTS settings', async () => {
   const tts = { engine: 'piper', retiredEngine: 'kokoro', rate: 1.3, piper: { voice: 'custom', voicePath: '~/custom.onnx' } };
-  getSettings.mockResolvedValue({ voice: { enabled: true, tts } });
+  await seedSettings({ voice: { enabled: true, tts } });
   const saved = await updateVoiceConfig({ tts: { retiredEngine: null } });
   expect(saved.tts).not.toHaveProperty('retiredEngine');
   expect(saved.tts).toMatchObject({ engine: 'piper', rate: 1.3, piper: tts.piper });
-  expect(updateSettings).toHaveBeenCalledWith({ voice: saved });
+  expect(await readPersistedSettings()).toEqual({ voice: saved });
   expect(await getVoiceConfig()).toBe(saved);
 });
 
 it('strips the retired voice.trigger key on read and on save', async () => {
-  getSettings.mockResolvedValue({ voice: { enabled: true, trigger: 'hotword' } });
+  await seedSettings({ voice: { enabled: true, trigger: 'hotword' } });
   expect(VOICE_DEFAULTS).not.toHaveProperty('trigger');
   expect(await getVoiceConfig()).not.toHaveProperty('trigger');
   invalidateVoiceConfigCache();
   const saved = await updateVoiceConfig({ trigger: 'vad', hotkey: 'F5' });
   expect(saved).not.toHaveProperty('trigger');
   expect(saved.hotkey).toBe('F5');
-  expect(updateSettings.mock.calls[0][0].voice).not.toHaveProperty('trigger');
+  expect((await readPersistedSettings()).voice).not.toHaveProperty('trigger');
+});
+
+it('preserves overlapping disjoint Voice patches in the committed config', async () => {
+  await seedSettings({ theme: 'dark', voice: { hotkey: 'F5' } });
+  const original = await getVoiceConfig();
+  const [first, second] = await Promise.all([
+    updateVoiceConfig({ stt: { engine: 'whisper' } }),
+    updateVoiceConfig({ llm: { model: 'example-model' } }),
+  ]);
+
+  expect(first).toEqual({ ...original, stt: { ...original.stt, engine: 'whisper' } });
+  expect(second).toEqual({ ...first, llm: { ...first.llm, model: 'example-model' } });
+  expect(await readPersistedSettings()).toEqual({ theme: 'dark', voice: second });
+  expect(await getVoiceConfig()).toBe(second);
+  invalidateVoiceConfigCache();
+  __resetSettingsCache();
+  expect(await getVoiceConfig()).toEqual(second);
+});
+
+it('applies overlapping edits to the same Voice key in queue order', async () => {
+  const [first, second] = await Promise.all([
+    updateVoiceConfig({ llm: { model: 'first-model' } }),
+    updateVoiceConfig({ llm: { model: 'second-model' } }),
+  ]);
+
+  expect(first.llm.model).toBe('first-model');
+  expect(second.llm.model).toBe('second-model');
+  expect(await readPersistedSettings()).toEqual({ voice: second });
+  expect(await getVoiceConfig()).toBe(second);
+});
+
+it('refuses to save Voice config over malformed settings without caching the patch', async () => {
+  const previous = await getVoiceConfig();
+  const malformed = '{"voice":';
+  await writeFile(settingsFile(), malformed);
+
+  await expect(updateVoiceConfig({ hotkey: 'F5' })).rejects.toMatchObject({ code: 'SETTINGS_UNREADABLE' });
+  expect(await readFile(settingsFile(), 'utf8')).toBe(malformed);
+  expect(await getVoiceConfig()).toBe(previous);
 });

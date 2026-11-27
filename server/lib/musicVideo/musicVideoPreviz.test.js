@@ -9,7 +9,7 @@ import {
   updatePrevizCut,
 } from './musicVideoPreviz.js';
 import { musicVideoPrevizSchema } from './musicVideoValidation.js';
-import { musicVideoProjectUpdateSchema } from './musicVideoRouteValidation.js';
+import { musicVideoProjectUpdateSchema } from './routeValidation/project.js';
 
 const subjects = [
   { id: 'c-ana', kind: 'character', name: 'Ana' },

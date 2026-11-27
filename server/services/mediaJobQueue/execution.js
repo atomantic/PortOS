@@ -8,7 +8,6 @@ import { IMAGE_GEN_MODE, CLOUD_IMAGE_GEN_MODES } from '../imageGen/modes.js';
 import { videoGenEvents } from '../videoGen/events.js';
 import { setVideoExecutionRecorder } from '../videoGen/executionRecorder.js';
 import { imageGenEvents } from '../imageGenEvents.js';
-import { trainingEvents } from '../loraTraining/events.js';
 import { audioGenEvents } from '../audioGen/events.js';
 import { getSettings } from '../settings.js';
 import { REMOTE_MEDIA_MODULES, isRemoteMediaJob } from './remoteMediaJob.js';
@@ -16,8 +15,9 @@ import { canRequestCancellation, claimTerminalOutcome, createJobHandlers } from 
 import { isCloudImageJob, isLocalFinishReplay, jobLane } from './limits.js';
 import {
   dispatchOperations, findJob, isRemoteReconcile, isTopazUpscale, testLifecycleDisposals,
-  trackOperation, trackTerminalOperation, workerState,
+  trackOperation, trackTerminalOperation,
 } from './state.js';
+import { wakeWorker, workerState } from './workerSignal.js';
 import {
   isUnderUploadsRoot, normalizeTempPaths, admitCompletion, stageTerminalTransition,
   persistTerminalTransition, persist, announceTerminalTransition, releaseStagedUploads,
@@ -42,8 +42,6 @@ const WATCHDOG_VIDEO_MS = watchdogMs(process.env.MEDIA_JOB_WATCHDOG_VIDEO_MS, 30
 const WATCHDOG_IMAGE_MS = watchdogMs(process.env.MEDIA_JOB_WATCHDOG_IMAGE_MS, 5 * 60 * 1000);
 // Silent Codex renders can exceed 5 minutes while sharing provider throughput.
 const WATCHDOG_CODEX_MS = watchdogMs(process.env.MEDIA_JOB_WATCHDOG_CODEX_MS, 20 * 60 * 1000);
-// Training step output and audio sidecar STAGE messages reset the idle clock.
-const WATCHDOG_TRAINING_MS = watchdogMs(process.env.MEDIA_JOB_WATCHDOG_TRAINING_MS, 30 * 60 * 1000);
 const WATCHDOG_AUDIO_MS = watchdogMs(process.env.MEDIA_JOB_WATCHDOG_AUDIO_MS, 10 * 60 * 1000);
 
 
@@ -79,7 +77,12 @@ const MEDIA_JOB_RUNTIME = Object.freeze({
     events: videoGenEvents,
     verb: 'Upscaling',
     watchdogMs: flatWatchdog(WATCHDOG_VIDEO_MS),
-    modules: { topaz: () => loadMediaRuntimeModule('topazUpscale'), default: () => loadMediaRuntimeModule('ltxUpscale') },
+    modules: {
+      topaz: () => loadMediaRuntimeModule('topazUpscale'),
+      fal: () => loadMediaRuntimeModule('falUpscale'),
+      realesrgan: () => loadMediaRuntimeModule('realesrganUpscale'),
+      default: () => loadMediaRuntimeModule('ltxUpscale'),
+    },
     invoke: (mod, request) => mod.runVideoUpscale(request),
   },
   // Hand stitching (#13000): ffmpeg only, so it never touches the GPU lane's
@@ -131,13 +134,6 @@ const MEDIA_JOB_RUNTIME = Object.freeze({
     },
     invoke: (mod, request) => mod.generateImage(request),
   },
-  training: {
-    events: trainingEvents,
-    verb: 'Training',
-    watchdogMs: flatWatchdog(WATCHDOG_TRAINING_MS),
-    modules: { default: () => loadMediaRuntimeModule('training') },
-    invoke: (mod, request) => mod.runTraining(request),
-  },
   audio: {
     events: audioGenEvents,
     verb: 'Generating',
@@ -182,12 +178,8 @@ async function resolveLiveParams(job, safeParams) {
   // neither used nor meaningful — resolving it would only emit a confusing
   // re-resolution log line for a render that never touches local Python.
   if (isRemoteMediaJob(job)) return;
-  // mflux training runs in the same venv as local image renders, so the
-  // live settings pythonPath wins there too. flux2 training resolves its
-  // own venv (resolveFlux2Python) inside runTraining — skip it here.
   const usesLocalPython = (job.kind === 'video' && !CLOUD_VIDEO_GEN_MODES.includes(job.params?.mode))
-    || (job.kind === 'image' && !CLOUD_IMAGE_GEN_MODES.includes(job.params?.mode))
-    || (job.kind === 'training' && job.params?.runtime === 'mflux');
+    || (job.kind === 'image' && !CLOUD_IMAGE_GEN_MODES.includes(job.params?.mode));
   if (!usesLocalPython) return;
   const live = await getSettings().catch(() => null);
   const livePythonPath = live?.imageGen?.local?.pythonPath || null;
@@ -392,8 +384,10 @@ async function runJobLifecycle(job, markDispatched, permit, finalizeLane, enqueu
     if (!disposable || !isRemoteMediaJob(job)) return;
     if (job.params?.remotePeerReservation === true) {
       job.params = { ...job.params, remotePeerReservation: false };
-      try { await persist(); }
-      catch (_error) {
+      try {
+        await persist();
+        wakeWorker();
+      } catch (_error) {
         job.params = { ...job.params, remotePeerReservation: true };
         maintenance.markResourceUnsettled('media', job.id);
         return;

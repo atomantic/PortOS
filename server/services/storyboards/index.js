@@ -11,13 +11,13 @@
  */
 
 import { ServerError } from '../../lib/errorHandler.js';
-import { sanitizeStoryboard, sanitizeTake, summarizeStoryboard } from '../../lib/storyboardRecord.js';
+import { sanitizeStoryboard, sanitizeTake } from '../../lib/storyboardRecord.js';
 import { defaultStoryboardStyle, defaultStoryboardSystemPrompt, isDefaultStoryboardStyle } from '../../lib/storyboardRecipe.js';
 import {
   isValidStoryboardId, newStoryboardEntityId, newStoryboardId, STORYBOARD_LIMITS,
 } from '../../lib/storyboardVocabulary.js';
 import { autoSubscribeRecordToAllPeers, emitRecordDeleted, emitRecordUpdated } from '../sharing/recordEvents.js';
-import { listRaw, listRawPage, queueStoryboardWrite, readRaw, writeRaw } from './store.js';
+import { listSummaries, listSummaryPage, queueStoryboardWrite, readRaw, writeRaw } from './store.js';
 import { STORYBOARD_KIND } from './sync.js';
 
 export * from './sync.js';
@@ -43,20 +43,11 @@ async function readLive(id) {
 }
 
 export async function listStoryboards() {
-  const rows = await listRaw();
-  return rows
-    .map(sanitizeStoryboard)
-    .filter((board) => board && !board.deleted)
-    .sort((a, b) => b.updatedAt.localeCompare(a.updatedAt))
-    .map(summarizeStoryboard);
+  return (await listSummaries()).sort((a, b) => b.updatedAt.localeCompare(a.updatedAt));
 }
 
 /** One bounded page of board summaries (newest first) with the live total. */
-export async function listStoryboardsPage({ limit, offset }) {
-  const { rows, total } = await listRawPage({ limit, offset });
-  const items = rows.map(sanitizeStoryboard).filter(Boolean).map(summarizeStoryboard);
-  return { items, total };
-}
+export const listStoryboardsPage = listSummaryPage;
 
 export async function getStoryboard(id) {
   const board = await readLive(id);

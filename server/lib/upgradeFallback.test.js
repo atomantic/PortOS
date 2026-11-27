@@ -1,6 +1,6 @@
 import { once } from 'node:events';
 import { createServer, request as httpRequest } from 'node:http';
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import {
   DEFAULT_UPGRADE_TIMEOUT_MS,
   installUpgradeFallback,
@@ -10,6 +10,7 @@ import {
 describe('upgradeFallback', () => {
   const servers = [];
   const sockets = [];
+  const timeoutMs = 10;
 
   const listen = async (server) => {
     server.on('connection', (s) => sockets.push(s));
@@ -20,6 +21,7 @@ describe('upgradeFallback', () => {
   };
 
   afterEach(async () => {
+    vi.useRealTimers();
     while (sockets.length > 0) {
       const socket = sockets.pop();
       try {
@@ -76,66 +78,53 @@ describe('upgradeFallback', () => {
 
   it('ends an unclaimed upgrade socket after timeout', async () => {
     const server = createServer();
-    installUpgradeFallback(server, { timeoutMs: 50 });
+    installUpgradeFallback(server, { timeoutMs });
     const port = await listen(server);
 
-    let clientSocket = null;
-    await new Promise((resolve) => {
-      const req = httpRequest({
-        hostname: '127.0.0.1',
-        port,
-        path: '/unknown-upgrade',
-        headers: {
-          Connection: 'Upgrade',
-          Upgrade: 'websocket',
-        },
-      });
-      req.on('socket', (s) => {
-        clientSocket = s;
-        sockets.push(s);
-      });
-      req.on('close', resolve);
-      req.on('error', resolve);
-      req.end();
-    });
-
-    await new Promise((resolve) => setTimeout(resolve, 80));
-    expect(clientSocket?.destroyed ?? true).toBe(true);
+    const upgraded = once(server, 'upgrade');
+    const req = sendRawUpgrade(port);
+    const closed = new Promise(resolve => req.once('close', resolve));
+    await upgraded;
+    await closed;
+    expect(req.socket.destroyed).toBe(true);
   });
 
   it('does not end a socket marked portosUpgradeClaimed', async () => {
     const server = createServer();
-    let serverSocket = null;
     server.on('upgrade', (_req, socket) => {
-      serverSocket = socket;
       markUpgradeClaimed(socket);
     });
-    installUpgradeFallback(server, { timeoutMs: 50 });
+    installUpgradeFallback(server, { timeoutMs });
     const port = await listen(server);
 
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
+    const upgraded = once(server, 'upgrade');
     sendRawUpgrade(port, '/claimed');
+    const [, serverSocket] = await upgraded;
 
-    await new Promise((resolve) => setTimeout(resolve, 80));
-    expect(serverSocket).not.toBeNull();
+    await vi.advanceTimersByTimeAsync(timeoutMs);
     expect(serverSocket.destroyed).toBe(false);
     expect(serverSocket.writable).toBe(true);
+    expect(serverSocket.writableEnded).toBe(false);
   });
 
   it('does not end a socket that has written bytes', async () => {
     const server = createServer();
-    let serverSocket = null;
     server.on('upgrade', (_req, socket) => {
-      serverSocket = socket;
       socket.write('HTTP/1.1 101 Switching Protocols\r\nConnection: Upgrade\r\nUpgrade: websocket\r\n\r\n');
     });
-    installUpgradeFallback(server, { timeoutMs: 50 });
+    installUpgradeFallback(server, { timeoutMs });
     const port = await listen(server);
 
-    sendRawUpgrade(port, '/socket.io');
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
+    const upgraded = once(server, 'upgrade');
+    await once(sendRawUpgrade(port, '/socket.io'), 'upgrade');
+    const [, serverSocket] = await upgraded;
 
-    await new Promise((resolve) => setTimeout(resolve, 80));
+    await vi.advanceTimersByTimeAsync(timeoutMs);
     expect(serverSocket.bytesWritten).toBeGreaterThan(0);
     expect(serverSocket.destroyed).toBe(false);
+    expect(serverSocket.writableEnded).toBe(false);
   });
 
   it('ends an unclaimed upgrade even on a keep-alive socket with previous bytesWritten', async () => {
@@ -143,7 +132,7 @@ describe('upgradeFallback', () => {
       res.writeHead(200, { 'Content-Length': '4', Connection: 'keep-alive' });
       res.end('pong');
     });
-    installUpgradeFallback(server, { timeoutMs: 50 });
+    installUpgradeFallback(server, { timeoutMs });
     const port = await listen(server);
 
     const { createConnection } = await import('node:net');
@@ -156,9 +145,10 @@ describe('upgradeFallback', () => {
     await once(socket, 'data');
 
     // Next, send an unclaimed upgrade over the same keep-alive socket
+    const closed = once(socket, 'close');
     socket.write('GET /unclaimed HTTP/1.1\r\nHost: 127.0.0.1\r\nConnection: Upgrade\r\nUpgrade: websocket\r\n\r\n');
 
-    await new Promise((resolve) => setTimeout(resolve, 180));
+    await closed;
     expect(socket.destroyed).toBe(true);
   });
 

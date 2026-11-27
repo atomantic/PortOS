@@ -30,7 +30,7 @@ function setBackend(backend) {
 }
 
 function hasCommand(cmd, args) {
-  try { execFileSync(cmd, args, { stdio: 'pipe' }); return true; } catch { return false; }
+  try { execFileSync(cmd, args, { stdio: 'pipe', timeout: 10_000, windowsHide: true }); return true; } catch { return false; }
 }
 
 const hasBrew = () => hasCommand('brew', ['--version']);
@@ -39,18 +39,20 @@ const hasLmStudio = () =>
   hasCommand('lms', ['version']) ||
   (process.platform === 'darwin' && existsSync('/Applications/LM Studio.app'));
 
+const INSTALL_OPTIONS = { stdio: 'inherit', timeout: 600_000, windowsHide: true };
+
 function installOllama() {
   const platform = process.platform;
   try {
     if (platform === 'darwin' && hasBrew()) {
       console.log('🍺 Installing Ollama via Homebrew...');
-      execFileSync('brew', ['install', 'ollama'], { stdio: 'inherit' });
+      execFileSync('brew', ['install', 'ollama'], INSTALL_OPTIONS);
       console.log('   Start it with: ollama serve (or `brew services start ollama`)');
       return true;
     }
     if (platform === 'linux') {
       console.log('⬇️  Installing Ollama via official script...');
-      execFileSync('bash', [join(__dirname, 'install-ollama.sh')], { stdio: 'inherit' });
+      execFileSync('bash', [join(__dirname, 'install-ollama.sh')], INSTALL_OPTIONS);
       return true;
     }
   } catch (err) {
@@ -64,7 +66,7 @@ function installLmStudio() {
   try {
     if (process.platform === 'darwin' && hasBrew()) {
       console.log('🍺 Installing LM Studio via Homebrew...');
-      execFileSync('brew', ['install', '--cask', 'lm-studio'], { stdio: 'inherit' });
+      execFileSync('brew', ['install', '--cask', 'lm-studio'], INSTALL_OPTIONS);
       console.log('   Launch LM Studio, then enable the local server (Developer tab) and run: lms bootstrap');
       return true;
     }
@@ -81,7 +83,7 @@ function promptChoice() {
     console.log('');
     console.log('   1) Ollama    (CLI-first, simple `ollama pull`, great default)');
     console.log('   2) LM Studio (GUI app with a built-in model browser)');
-    console.log('   3) Skip      (configure later in Settings → Local LLMs)');
+    console.log('   3) Skip      (configure later in Models → Runtimes)');
     console.log('');
     const rl = createInterface({ input: process.stdin, output: process.stdout });
     rl.question('   Enter choice [1/2/3]: ', (answer) => {
@@ -116,14 +118,14 @@ if (existing) {
 
 // Non-interactive: don't block setup / CI. Leave LLM_BACKEND unset.
 if (!process.stdin.isTTY || !process.stdout.isTTY) {
-  console.log('🧠 No local LLM backend selected — set one later in Settings → Local LLMs (or `npm run setup:llm`).');
+  console.log('🧠 No local LLM backend selected — set one later in Models → Runtimes (or `npm run setup:llm`).');
   process.exit(0);
 }
 
 const choice = await promptChoice();
 
 if (choice === 'skip') {
-  console.log('   Skipped — pick a backend later in Settings → Local LLMs.');
+  console.log('   Skipped — pick a backend later in Models → Runtimes.');
   process.exit(0);
 }
 

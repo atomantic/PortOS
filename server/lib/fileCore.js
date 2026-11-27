@@ -6,13 +6,15 @@
  * directory helpers, `parseFilesystemStats(stats)` → canonical/byte-alias metrics or `null`, bounded
  * tail reads/watchers), time/format helpers, directory sizing, and SHA-256 helpers.
  */
-import { access, appendFile, chmod, copyFile, mkdir, open, readFile, readdir, stat, writeFile, rename, unlink, rm } from 'fs/promises';
+import { access, appendFile, chmod, copyFile, lstat, mkdir, open, readFile, readdir, stat, writeFile, rename, unlink, rm } from 'fs/promises';
 import { createReadStream, createWriteStream, existsSync, statSync, watch as watchFileSystem } from 'fs';
 import { createHash, randomUUID } from 'crypto';
 import { basename, dirname, extname, join } from 'path';
 import { promisify } from 'util';
 import { execFile } from './childProcess.js';
 import { isVitestRunner } from './runtimeEnv.js';
+
+export { syncDirectorySync, writeDurableExclusiveSync } from './fileDurability.js';
 
 // The #6176 data-root guard is loaded ONLY under an actual Vitest worker —
 // `isVitestRunner()`, narrower than `isTestRunner()`, because `scripts/
@@ -74,15 +76,16 @@ export function setAtomicWriteDurabilityForTests(durable) {
  * Best-effort once the rename is visible: the bytes are already in place, so a
  * filesystem that cannot sync its directory degrades to the pre-#12025
  * guarantee with one warning rather than failing a write that succeeded.
- * Windows cannot open a directory for fsync, so it is skipped there.
+ * Strict callers require durability and propagate I/O failures. Windows
+ * cannot open a directory for fsync, so it is skipped there.
  */
-async function syncDirectory(dir) {
+export async function syncDirectory(dir, { strict = false } = {}) {
   if (isWindows()) return;
   try {
     const handle = await open(dir, 'r');
     try { await handle.sync(); } finally { await handle.close(); }
   } catch (err) {
-    if (!err?.code) throw err;
+    if (strict || !err?.code) throw err;
     if (unsyncableDirs.has(dir)) return;
     unsyncableDirs.add(dir);
     console.warn(`⚠️ Directory fsync unavailable for ${dir} (${err.code}); renames there are not crash-durable`);
@@ -205,7 +208,7 @@ export function watchForFile(
  * await ensureDir(PATHS.data);
  * await ensureDir('/custom/path/to/dir');
  */
-export async function ensureDir(dir) {
+export async function ensureDir(dir, { mode } = {}) {
   // #6176 — refuse a NEW dir in the real data/ tree under the runner. Only the
   // CREATE path: `mkdir -p` on an existing directory mutates nothing.
   if (isVitestRunner()) (await loadGuard()).assertNotNewRealDataDir(dir);
@@ -215,7 +218,7 @@ export async function ensureDir(dir) {
   // OneDrive sync, and network/mapped drives all surface spurious failures that
   // the POSIX-modeled `recursive: true` no-op contract doesn't anticipate.
   // Swallow the error when the path is in fact a directory afterward.
-  await mkdir(dir, { recursive: true }).catch((err) => {
+  await mkdir(dir, { recursive: true, mode }).catch((err) => {
     if (err?.code === 'EEXIST') return; // already exists — the intended state
     const s = statSync(dir, { throwIfNoEntry: false });
     if (s && s.isDirectory()) {
@@ -224,6 +227,15 @@ export async function ensureDir(dir) {
     }
     throw err;
   });
+  if (mode === undefined || isWindows()) return;
+
+  // mkdir only applies a umask-filtered mode to newly created directories.
+  const metadata = await lstat(dir);
+  if (!metadata.isDirectory()) throw new Error('Expected a real directory for private storage');
+  if ((metadata.mode & 0o7777) !== mode) {
+    if (isVitestRunner()) (await loadGuard()).assertNotRealDataWrite(dir, 'chmod');
+    await chmod(dir, mode);
+  }
 }
 
 /**
@@ -281,7 +293,8 @@ export async function ensureDirs(dirs) {
  *
  * @param {string} filePath - Destination file path
  * @param {string|object} data - String or JSON-serializable value
- * @param {{ onStage?: (stage: 'write'|'replace'|'dirSync') => void }} [options] -
+ * @param {{ mode?: number, dirMode?: number, onStage?: (stage: 'write'|'replace'|'dirSync') => void }} [options] -
+ *   Use `dirMode` to restrict the containing directory before writing.
  *   `onStage` is called as each durable stage begins, for slow-write diagnostics.
  * @returns {Promise<void>}
  *
@@ -289,7 +302,7 @@ export async function ensureDirs(dirs) {
  * await atomicWrite(FILE, { version: 1, items: [] });
  * await atomicWrite(LOG_FILE, 'raw string content');
  */
-export async function atomicWrite(filePath, data, { onStage, mode } = {}) {
+export async function atomicWrite(filePath, data, { onStage, mode, dirMode } = {}) {
   // #6176 — the filesystem analogue of db.js's row-write backstop. Refuses
   // before any bytes are produced, so a leaking suite cannot even leave a temp
   // file behind in the real tree.
@@ -298,7 +311,7 @@ export async function atomicWrite(filePath, data, { onStage, mode } = {}) {
   // `{"type":"Buffer","data":[...]}` which corrupts binary writes (PNG, etc.).
   const payload = typeof data === 'string' || Buffer.isBuffer(data) ? data : JSON.stringify(data, null, 2);
   onStage?.('write');
-  await ensureDir(dirname(filePath));
+  await ensureDir(dirname(filePath), { mode: dirMode });
   // Preserve the destination's existing permission bits. A plain
   // writeFile(existing) truncated the inode in place and kept its mode, but
   // atomicWrite creates a fresh temp inode and renames it over the target —
@@ -663,15 +676,16 @@ export const sha256Text = (value) => createHash('sha256').update(value).digest('
  * snapshot manifest generator.
  */
 const SHA256_STREAM_THRESHOLD = 512 * 1024;
-export async function sha256File(path) {
+export async function sha256File(path, { signal } = {}) {
+  signal?.throwIfAborted();
   const info = await stat(path);
   if (info.size < SHA256_STREAM_THRESHOLD) {
-    const buf = await readFile(path);
+    const buf = await readFile(path, { signal });
     return createHash('sha256').update(buf).digest('hex');
   }
   return new Promise((resolve, reject) => {
     const hasher = createHash('sha256');
-    const stream = createReadStream(path);
+    const stream = createReadStream(path, { signal });
     stream.on('error', reject);
     stream.pipe(hasher);
     hasher.on('finish', () => resolve(hasher.digest('hex')));

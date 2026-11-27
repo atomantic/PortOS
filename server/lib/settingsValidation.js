@@ -14,6 +14,7 @@ import {
 import { isValidCronExpression } from './cronValidation.js';
 import { providerRefSchema, emptyToUndefined, emptyToNull, partialWithoutDefaults } from './zodCompat.js';
 import { EFFORT_LEVELS } from './provider/providerModels.js';
+import { isGitHubRepoUrl } from './repoUrl.js';
 import { RENDER_TARGET_BACKEND_AUTO, RENDER_TARGETS } from './renderTargets.js';
 import { VIDEO_GEN_MODES, QUEUEABLE_IMAGE_MODES, IMAGE_GEN_MODES } from './generationModes.js';
 import { GOOGLE_PROJECT_ID_PATTERN, GOOGLE_LOCATION_PATTERN } from './googleCloudConfig.js';
@@ -418,6 +419,7 @@ export const settingsSlicePartialSchemas = Object.freeze({
   'imageGen.runway': imageGenRunwaySettingsSchema.strict(),
   'imageGen.higgsfield': imageGenHiggsfieldSettingsSchema.strict(),
   'imageGen.google': imageGenGoogleSettingsSchema.strict(),
+  // Keep accepting the retired inbound API's settings slice from older clients.
   'imageGen.expose': z.object({ a1111: z.boolean().optional() }).strict(),
   renderDefaults: renderDefaultsSettingsSchema,
   videoGen: videoGenSettingsSchema.pick({
@@ -468,3 +470,14 @@ export const settingsSlicePatchSchema = z.preprocess((value, ctx) => {
   }
   return { slicePath, partial: deepMerge(partial, result.data) };
 }));
+
+export const aiAssignmentUpdateSchema = z.object({
+  providerId: z.string().trim().max(128).nullable().optional(),
+  model: z.string().trim().max(300).nullable().optional(),
+  effort: z.enum(EFFORT_LEVELS).nullable().optional(),
+}).strict();
+
+export const eidoverseRepoSchema = z.object({
+  worldsRepoUrl: z.string().trim().max(500).refine(isGitHubRepoUrl, 'Must be a GitHub repository URL'),
+  worldsBranch: z.string().trim().max(255).regex(/^[^\u0000-\u001f\u007f]*$/).optional(),
+}).strict();

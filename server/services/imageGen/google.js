@@ -17,7 +17,7 @@
 
 import { readFile } from 'fs/promises';
 import { ensureDir, PATHS } from '../../lib/fileUtils.js';
-import { stripImageMetadata } from '../../lib/imageClean.js';
+import { stripImageMetadataPreservingOrientation } from '../../lib/imageClean.js';
 import { ServerError } from '../../lib/errorHandler.js';
 import { GOOGLE_IMAGE_DEFAULT_MODEL, buildGoogleImageRequest, googleImageFamily } from '../../lib/googleImageModels.js';
 import { imageGenEvents } from '../imageGenEvents.js';
@@ -104,7 +104,8 @@ async function encodeInputImage(filePath, reviewedBytes = null) {
   const metadata = await sharp(input).metadata();
   const longSide = Math.max(metadata.width || 0, metadata.height || 0);
   if (longSide <= INPUT_MAX_LONG_SIDE && input.length <= INPUT_MAX_BYTES && ['png', 'jpeg', 'webp'].includes(metadata.format)) {
-    return googleInlineImage(stripImageMetadata(input).data);
+    const { data } = await stripImageMetadataPreservingOrientation(input, metadata);
+    if (data.length <= INPUT_MAX_BYTES) return googleInlineImage(data);
   }
   const resized = sharp(input).rotate()
     .resize({ width: INPUT_MAX_LONG_SIDE, height: INPUT_MAX_LONG_SIDE, fit: 'inside', withoutEnlargement: true });
@@ -189,6 +190,7 @@ async function runGoogle(job, jobId, {
   const entry = runner.track(jobId, { controller: new AbortController() });
   // The activity ping keeps the media queue's idle watchdog quiet during one long synchronous call.
   const heartbeat = setInterval(() => imageGenEvents.emit('activity', { generationId: jobId }), 5000);
+  heartbeat.unref?.();
   try {
     const signal = entry.controller.signal;
     // A reviewed edit's snapshot replaces the first input's bytes (assertSnapshotForAdapter).

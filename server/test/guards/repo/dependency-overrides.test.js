@@ -4,7 +4,6 @@ import { discoverWorkspaces } from '../../../../scripts/trusted-rebuilds.js';
 import { guardCorpus, readText, REPO_ROOT } from '../../../../scripts/lib/guardCorpus.js';
 
 const MANIFESTS = [
-  'package.json',
   'server/package.json',
   'client/package.json'
 ];
@@ -106,28 +105,22 @@ describe('dependency override parity across manifests (#2848)', () => {
       // ws 8.23.0 bounds pending automatic Pongs (upstream ace7248f); older
       // releases let a peer that stops reading exhaust memory with Ping frames.
       'ws': '8.23.0',
-      'protobufjs': '7.6.5', // GHSA-j3f2-48v5-ccww
       'body-parser': '2.3.0', // GHSA-v422-hmwv-36x6
       // GHSA-52cp-r559-cp3m, then GHSA-5p4m-2wfm-xmqj (quadratic CPU in !!omap
       // resolution, CVE-2026-59870) which covers 4.0.0–4.3.0 — the previous 4.3.0
       // floor is itself vulnerable. GHSA-2883-xcg3-v3hh then covers 4.3.1,
       // so the 4.x line must be at least 4.3.2.
       'js-yaml': '4.3.2',
-      'tar': '7.5.21', // GHSA-vmf3-w455-68vh et al
       // GHSA-2v37-7h3g-55p8 (zero-size custom generators loop forever). Only reachable
       // via postcss, which asks for ^3.3.16 — the 3.x line is the one to floor.
       'nanoid': '3.3.17',
-      // GHSA-f88m-g3jw-g9cj (libvips CVE-2026-33327/33328/35590/35591). Pinned in
-      // server/ only, so the parity assertion above never sees it — this floor is
-      // the sole guard against a downgrade back onto the vulnerable 0.34.x line
-      // that @huggingface/transformers still requests.
+      // GHSA-f88m-g3jw-g9cj (libvips CVE-2026-33327/33328/35590/35591). The server
+      // pins sharp directly; this floor catches a downgrade of that dependency.
       'sharp': '0.35.0',
       // GHSA-8r9p-f939-6h3c and GHSA-q3jh-wrc6-jgq8 (credential headers leak across
       // cross-origin redirects); 1.16.0 was itself the fix for the previous advisory.
       // GHSA-mrwp-f3q8-3g9p also covers 1.16.1 (cross-realm sensitive-header arrays).
-      'follow-redirects': '1.16.2',
-      // GHSA-g3hv-75wg-m249 (globparts amplification at optimizationLevel >= 2).
-      'minimatch': '11.0.1'
+      'follow-redirects': '1.16.2'
     };
 
     const EXACT_VERSION = /^\d+\.\d+\.\d+$/;
@@ -143,7 +136,13 @@ describe('dependency override parity across manifests (#2848)', () => {
 
     const stale = [];
     for (const rel of MANIFESTS) {
-      for (const [name, version] of Object.entries(readOverrides(rel))) {
+      const manifest = JSON.parse(readText(join(REPO_ROOT, rel)));
+      const pins = {
+        ...Object.fromEntries(Object.entries(manifest.dependencies ?? {}).filter(([name]) => MINIMUM_SAFE[name])),
+        ...Object.fromEntries(Object.entries(manifest.devDependencies ?? {}).filter(([name]) => MINIMUM_SAFE[name])),
+        ...readOverrides(rel)
+      };
+      for (const [name, version] of Object.entries(pins)) {
         if (typeof version !== 'string') continue;
         const min = MINIMUM_SAFE[name];
         if (!min) continue;
@@ -162,10 +161,25 @@ describe('dependency override parity across manifests (#2848)', () => {
     expect(stale).toEqual([]);
   });
 
+  it('rejects flat overrides with no non-root dependants', () => {
+    const dead = [];
+    for (const rel of MANIFESTS) {
+      const overrides = readOverrides(rel);
+      const packages = readLockPackages(lockfileFor(rel));
+      for (const key of Object.keys(overrides)) {
+        if (typeof overrides[key] !== 'string') continue;
+        const name = overrideTargetName(key);
+        const dependants = Object.entries(packages).filter(([path]) => path && packageNameFromLockPath(path) === name);
+        if (dependants.length === 0) dead.push(`${rel}: ${name}`);
+      }
+    }
+    expect(dead).toEqual([]);
+  });
+
   // PortOS dropped its local braces depth guard (#9906) once pm2 7.1.0 stopped
   // pulling braces in. A dependency that brings it back would run unguarded, so
   // the guard has to return with it.
-  it.each(['package.json', 'server/package.json'])('%s resolves no braces install', rel => {
+  it.each(MANIFESTS)('%s resolves no braces install', rel => {
     const resolved = Object.keys(readLockPackages(lockfileFor(rel)))
       .filter((path) => packageNameFromLockPath(path) === 'braces');
     expect(resolved).toEqual([]);

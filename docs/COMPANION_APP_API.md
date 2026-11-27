@@ -1,336 +1,88 @@
-# Companion-App API Contract
+# Companion-app API
 
-The stable HTTP contract a native companion client (working name **PortDeck**;
-repo `atomantic/PortDeck`) consumes to discover, authenticate to, and drive one
-or more PortOS instances across a Tailscale tailnet.
+Native companion clients connect to the user's own PortOS installs over
+Tailscale. The server listens on port 5555 with HTTP or configured HTTPS.
+The mirror on 5553 is loopback-only. See [port assignments](PORTS.md).
 
-> **Scope.** This documents the **PortOS-side** contract only. The iOS app itself
-> (Swift/SwiftUI, Keychain, iCloud store, UI) lives in its own repository per the
-> Scope Boundary rule in `AGENTS.md` — its code, plan, and docs never land in this
-> repo. Everything below already exists in PortOS today unless explicitly marked.
+## Discover an instance
 
-## Deployment shape the app targets
+`GET /api/system/health` is available before login. Use `instanceId` as
+the stable installation key (it can be null before setup), and
+`name` or `hostname` as the display label. `scheme`, `version` and
+`authRequired` describe the instance's API transport and auth status.
+Store a separate connection and credential for each instance.
 
-A single user commonly runs **several PortOS installs federated as sync peers**
-over Tailscale. Each install:
+## Operator sessions vs. HTTP Basic
 
-- Serves its API on **`:5555`** at the tailnet host (MagicDNS name or Tailscale IP).
-- Speaks **HTTP or HTTPS** depending on whether a TLS cert is provisioned
-  (`npm run setup:cert`). When HTTPS is on, `:5555` is TLS-only and a loopback HTTP
-  mirror runs on `127.0.0.1:5553` (not reachable over the tailnet). See
-  [PORTS.md](./PORTS.md).
-- Has an **optional single password** gate. When off, the app needs no
-  credential to read; when on, every `/api/*` request needs credentials. Either
-  way, every write needs an **operator session** (see
-  [Authentication](#authentication)), so a passwordless install is read-only to
-  a remote app (#16018).
+On a password-enabled install, ordinary reads accept HTTP Basic using an
+empty username and the instance password. Store it in the device's secure
+credential store. Writes and sensitive reads listed in
+`server/lib/hostControlRoutes.js` require an operator session.
+Peer-federation bootstrap and scoped peer routes have their own rules.
+See the [API security model](API.md#security-model) and
+[peer push authentication](PEER_PUSH_AUTH.md).
 
-The app therefore treats each instance as `{ scheme, host, port: 5555, password? }`
-and must handle both the auth-on/auth-off and HTTP/HTTPS cases per instance,
-plus whether it currently holds an operator session for that instance.
+Send `POST /api/auth/login` with JSON `{ "password": "…" }`. The response
+reports authentication and sets a session cookie in `Set-Cookie`. Retain
+it in the client cookie store per instance and send it with protected
+requests. The name is port-scoped and should come from the response.
+`GET /api/auth/status` reports the password gate and
+`GET /api/auth/whoami` checks the session. A passwordless install permits
+remote ordinary reads but reserves host control for loopback.
+Login there returns `400 AUTH_NOT_ENABLED`.
 
-## 1. Discovery & identity (pre-auth)
+On `401 AUTH_REQUIRED`, obtain an accepted credential. On
+`403 HOST_CONTROL_FORBIDDEN` or `PEER_SETTINGS_OPERATOR_REQUIRED`, check
+that the request carries an operator session. Preserve normal browser
+origin behavior for an embedded viewer. Native HTTP requests should
+leave browser-origin headers unset.
 
-`GET /api/system/health` — **public**, bypasses the auth gate even when the
-password is on (`ALWAYS_PUBLIC_API_PATHS` in `server/lib/apiAccessPolicy.js`), and is the same
-endpoint Tailscale reachability checks hit. Use it to confirm a tailnet host is a
-PortOS instance and to label it on a connection screen **before** the app holds
-any credential.
+## Instance management and remote desktop
 
-**Response:**
+Find the mounted self, peer and sync routes in the
+[live API inventory](API.md). Read self and status with the baseline
+credential. Use an operator session for rename, peer changes, probes and
+sync actions.
 
-```json
-{
-  "status": "ok",
-  "timestamp": "2026-07-16T00:00:00.000Z",
-  "uptime": 12345.6,
-  "version": "1.2.3",
-  "hostname": "host-XXXX",
-  "instanceId": "3f2a…-uuid",
-  "name": "Example Instance",
-  "authRequired": true,
-  "scheme": "https"
-}
-```
+Remote desktop also requires the instance password to be enabled.
+`GET /api/remote-desktop/status` reports host readiness. With a session,
+`POST /api/remote-desktop/sessions` returns `{ viewerPath, expiresAt }`.
+Open the five-minute viewer path in an embedded browser. Enter the
+separate VNC password inside the viewer. Its WebSocket targets the
+server-configured loopback VNC port. See [remote desktop setup](REMOTE_DESKTOP.md).
 
-| Field | Meaning |
-|-------|---------|
-| `instanceId` | Stable per-install UUID (`crypto.randomUUID()`, persisted in `data/instances.json`). The identity key the app stores per connection; survives hostname changes. `null` before the self-identity is first created. |
-| `name` | User-set display name for the instance (`self.name`), falling back to `hostname` when unset. This is what to show in the instance list. |
-| `hostname` | OS hostname of the machine. |
-| `authRequired` | `true` when the password gate is on — the app must obtain a password and send it on subsequent requests. `false` when off — no credential needed. Lets the app decide whether to prompt **without** a second round-trip to `/api/auth/status`. Mirrors the server's `isAuthEnabled()`; the app should still handle a `401` on a gated request as the authoritative signal to (re)prompt. |
-| `scheme` | `"http"` or `"https"` — the scheme `:5555` serves, decided once at boot. Use it to build request URLs and label the connection's security. |
-| `version` | PortOS release the instance is running — useful for compatibility gating. |
+## Quick actions and daily log
 
-These fields are additive and non-sensitive: exposing `name`/`hostname`/
-`instanceId` to tailnet peers is within the trust model. No mutation or config
-route is exposed pre-auth.
+`GET /api/palette/manifest` describes navigation and permitted action
+schemas. Use it to render native controls. Dispatch
+`POST /api/palette/action/:id` with an optional `{ "args": {} }` and an
+operator session. Results are `{ ok, result }`. Unknown action IDs
+return 404. Use Brain capture for classified notes and daily log for
+quick text.
 
-## 2. Authentication
+`POST /api/brain/daily-log/:date/append` accepts `{ text, source }` and
+returns `{ date, entry }`. The date is `today` or `YYYY-MM-DD`, and
+`source` is `text`, `voice` or `edit` (unrecognized values normalize
+to `text`). The palette's `daily_log_append` always tags `voice` and
+returns the voice action result. Transcribe on-device or through the
+supported Socket.IO path before posting text.
 
-PortOS auth is a single optional password (`server/services/auth.js`,
-`server/services/authGate.js`), but it grants **two different levels of access**
-depending on how the app presents it — Basic is not a full session, and the app
-needs both.
+## POST progress
 
-- **When `authRequired` is `false`:** reads need no credential at all (except
-  the few sensitive reads listed under [Host control](#operator-sessions-vs-http-basic)),
-  but every write is gated — see
-  [Operator sessions](#operator-sessions-vs-http-basic) below. A remote
-  companion app can never satisfy that gate on a passwordless install: host
-  control falls back to a local (loopback) connection, which a tailnet caller
-  never is, and a real session is what `POST /api/auth/login` refuses to issue
-  while the password is off (`400 AUTH_NOT_ENABLED`). Writing remotely
-  requires setting a password first.
-- **When `authRequired` is `true`:** send
-  `Authorization: Basic base64(":" + password)` on every `/api/*` request as a
-  baseline credential. PortOS is single-user, so the username half is ignored —
-  only the password is verified. Store the password **per instance in the iOS
-  Keychain**. Basic alone is enough for reads other than the sensitive reads
-  listed under host control, but **not** for any write (below) — every write
-  and those reads need an operator session on top.
+Read configuration, sessions and progress under `/api/meatspace/post` on
+each instance directly. POST history is private to that installation
+and excluded from federation. Record scored tests with
+`POST /api/meatspace/post/sessions`. For practice, use
+`POST /api/meatspace/post/training/runs` with a stable UUID and attempt IDs.
+Retry the identical payload after a transport failure. The run and its
+attempts commit together.
 
-### Operator sessions vs. HTTP Basic
+## MortalLoom recovery
 
-`server/services/authGate.js` distinguishes three authenticated states on a
-request: `method: 'session'` (a signed-in operator), `method: 'basic'` (the
-instance password sent as HTTP Basic — the legacy peer-federation credential),
-and `method: 'peer'` (a paired peer's scoped token, out of scope for a native
-client). **A route can require `method: 'session'` specifically** — Basic does
-not satisfy it, no matter how correct the password is:
-
-- **Peer management** (`POST/PUT/DELETE /api/instances/peers/*`, except
-  `POST /peers/announce` and the one-time `POST /peers/pair-secret` Basic
-  bootstrap — see [§3](#3-instance-management)) requires an operator session,
-  or a local connection on a password-free install. A Basic-only request gets
-  `403 HOST_CONTROL_FORBIDDEN`, as does a remote caller on a password-free
-  install (the route's own `403 PEER_SETTINGS_OPERATOR_REQUIRED` stays behind
-  that gate). `POST /peers/sync-categories` additionally accepts a
-  paired peer's scoped credential acting for its own instance id.
-- **Host control** — every `/api/*` write (any method but `GET`/`HEAD`/
-  `OPTIONS`), the sensitive reads listed in `server/lib/hostControlRoutes.js`
-  (`HOST_CONTROL_GET_ROUTES`), and the matching Socket.IO events — requires an
-  operator session, **or** a genuinely local (loopback) connection when no
-  password is set. The only writes outside it are the public auth routes and
-  the peer federation, managed-visitor and opt-in public API surfaces, none of
-  which a companion app calls. A remote caller — which a companion app always
-  is, even on a passwordless install — never gets host control from Basic or
-  from being on the tailnet; it gets `403 HOST_CONTROL_FORBIDDEN`. See
-  [API.md](./API.md#security-model) for the full host-control contract.
-
-To obtain a session, sign in the same way the web UI does:
-
-```
-POST /api/auth/login
-Content-Type: application/json
-
-{ "password": "…" }
-```
-
-- If the password is enabled and correct, the response is `{ "authenticated":
-  true }` with a `Set-Cookie` header carrying the session token — **the token
-  is never returned in the JSON body**, only in that header. There is no
-  bearer-token endpoint for native clients today.
-- Preserve that cookie in the app's per-instance HTTP cookie store (e.g.
-  `HTTPCookieStorage` scoped to the instance's host/port) and send it back on
-  every subsequent request that needs operator authority. **Do not hardcode
-  the cookie name** — it's port-scoped from the request's `Host` header
-  (`portos_auth_<port>`, `sessionCookieNameFor` in `lib/portosAuthCore.js`) so
-  one device can hold sessions for several instances without collisions.
-- If the password is not enabled, `/api/auth/login` returns
-  `400 AUTH_NOT_ENABLED` — there is nothing to sign in to, and no other way to
-  mint a session. A companion app reaching the instance remotely therefore
-  cannot write at all on a passwordless install, since host control falls
-  back to requiring a local (loopback) connection instead of a session. Set an
-  instance password to write from the companion app.
-- `GET /api/auth/status` (always public) reports whether a password is set;
-  `GET /api/auth/whoami` confirms whether the app's current cookie is still a
-  valid session. Neither requires the app to already hold a session.
-
-**401 vs. 403.** A `401 AUTH_REQUIRED` means the request carried no accepted
-credential at all (no session, Basic, or peer token) on a password-enabled
-instance — reprompt for the password. A `403` (`PEER_SETTINGS_OPERATOR_REQUIRED`
-/ `HOST_CONTROL_FORBIDDEN`) means the credential was valid but insufficient for
-that specific route — retrying the same password won't help; the app needs a
-session instead of Basic.
-
-**CSRF note.** In both auth modes — with or without a password — PortOS 403s a
-browser request whose `Origin` does not match its `Host` (`CROSS_ORIGIN_BLOCKED`,
-including the opaque `Origin: null`), and a browser request (one carrying
-`Origin` or `Sec-Fetch-Site`) whose `Host` is not an IP literal, a single-label
-name, a `.localhost`/`.ts.net`/`.local`/`.home.arpa`/`.internal`/`.lan` name, the
-machine's own hostname, or a name listed in the comma-separated
-`PORTOS_ALLOWED_HOSTS` environment variable (`HOST_NOT_ALLOWED`; a leading dot
-admits every subdomain). This stops any web page from relaying requests onto
-loopback through the user's own browser, and DNS rebinding. A native
-`URLSession` sends **neither** header, so it passes the guard cleanly — no special
-handling needed. Do not set an `Origin` header manually.
-
-A dedicated per-device API-key surface (a companion group in `apiRegistry.js` /
-long-lived device token) is a **possible future enhancement**, not built here —
-the password, exchanged for a session cookie, works today and reuses the whole gate.
-
-## 3. Instance management
-
-Full CRUD + peer operations at `/api/instances/*` (`server/routes/instances.js`,
-`server/services/instances.js`). The foundation the app's instance-management UI
-builds on:
-
-Every route under `/api/instances/peers/*` other than `GET`/`HEAD`,
-`POST /peers/announce`, and the one-time `POST /peers/pair-secret` Basic
-bootstrap requires an **operator session** (see
-[Operator sessions vs. HTTP Basic](#operator-sessions-vs-http-basic)) — Basic
-alone gets `403 HOST_CONTROL_FORBIDDEN`, even with the correct
-password and even on a passwordless install. The other reads below only need
-the baseline credential from [§2](#2-authentication) (Basic when a password is
-set, none when it's off); `PUT /api/instances/self`, like every write, needs a
-session.
-
-| Method | Path | Session required? | Purpose |
-|--------|------|--------------------|---------|
-| `GET` | `/api/instances` | No | Self + all configured peers. |
-| `GET` | `/api/instances/self` | No | This instance's identity (`instanceId`, `name`). |
-| `PUT` | `/api/instances/self` | **Yes** | Rename this instance. |
-| `GET` | `/api/instances/tailnet-suffix` | No | The tailnet's MagicDNS suffix. |
-| `GET` | `/api/instances/sync-status` | No | Federation sync status. |
-| `POST` | `/api/instances/peers` | **Yes** | Add a peer. |
-| `PUT` / `DELETE` | `/api/instances/peers/:id` | **Yes** | Update / remove a peer. |
-| `POST` | `/api/instances/peers/:id/connect` | **Yes** | Establish a peer connection. |
-| `POST` | `/api/instances/peers/:id/reciprocate` | **Yes** | Reciprocate a peer connection. |
-| `POST` | `/api/instances/peers/:id/probe` | **Yes** | Probe a peer's reachability. |
-| `POST` | `/api/instances/peers/:id/sync` | **Yes** | Trigger a sync with a peer. |
-| `GET` | `/api/instances/peers/:id/query?path=/api/…` | No | Proxy a request through a peer. |
-
-## 4. Remote desktop
-
-Remote desktop is deliberately stricter than the rest of the companion API: it
-requires the PortOS instance password gate to be enabled even though ordinary
-API routes support the default passwordless tailnet posture.
-
-| Method | Path | Purpose |
-|--------|------|---------|
-| `GET` | `/api/remote-desktop/status` | Report whether a VNC server is reachable on loopback, whether PortOS auth is enabled, and the host setup command. |
-| `POST` | `/api/remote-desktop/sessions` | Create a five-minute, single-purpose viewer URL. Returns `{ viewerPath, expiresAt }`. |
-
-The native client signs in via `POST /api/auth/login` with its saved instance
-password to obtain an operator session cookie (like every `/api/*` write in [§2](#operator-sessions-vs-http-basic),
-`POST /api/remote-desktop/sessions` requires an operator session — HTTP Basic alone
-gets `403 HOST_CONTROL_FORBIDDEN`), then opens `viewerPath` in an embedded browser. The viewer loads the
-vendored noVNC module and connects to `/remote-desktop/ws?token=…`. That
-WebSocket is a byte-for-byte RFB bridge to `127.0.0.1:5900` (or the fixed
-`PORTOS_VNC_PORT` configured for the server process); neither the HTTP request
-nor the token can select an arbitrary TCP destination.
-
-The separate VNC password is entered inside the viewer and is never returned to
-PortOS's REST API or stored by the companion. See [REMOTE_DESKTOP.md](./REMOTE_DESKTOP.md)
-for setup and the complete security contract.
-
-## 5. Quick actions, brain capture & daily log — the palette bridge
-
-Non-DOM voice/palette actions are dispatchable over plain HTTP via the command
-palette bridge (`server/routes/palette.js`) — the app drives these directly and
-navigates its own UI from the manifest's nav list.
-
-- `GET /api/palette/manifest` — returns the navigable-page list (`nav`) plus the
-  whitelisted action schemas (`actions`). DOM-driving `ui_*` tools are
-  intentionally excluded, so the app renders its own UI and uses `nav` for routing.
-- `POST /api/palette/action/:id` — dispatch a whitelisted action. Body:
-  `{ "args": { … } }` (args object optional, defaults to `{}`). Returns
-  `{ ok, result }`. Unknown ids 404. Like every write, it needs an operator
-  session (`403 HOST_CONTROL_FORBIDDEN` otherwise).
-
-Palette action ids the app is expected to use (`PALETTE_ACTIONS` in
-`server/routes/palette.js` — always read the live manifest for the authoritative
-list and each action's parameter schema):
-
-| id | Purpose |
-|----|---------|
-| `brain_capture` | Capture a note to the Brain. Like `POST /api/brain/capture`, it can clone a repo URL or run the classifier. Use `daily_log_append` for a quick note. |
-| `brain_search` / `brain_list_recent` | Search / list recent Brain entries. |
-| `daily_log_append` | Append a line to today's daily log. |
-| `daily_log_read` | Read today's daily log. |
-| `goal_list` / `goal_update_progress` / `goal_log_note` | List goals, update progress, log a note. |
-| `meatspace_log_drink` / `_nicotine` / `_weight` / `_workout` | Log health events. |
-| `meatspace_summary_today` | Today's health summary. |
-
-### Daily-log append (direct route)
-
-Dictation is transcribed **on device** (or server-side over Socket.IO); the
-resulting text is POSTed as plain text. There is **no** server-side audio/STT
-upload endpoint.
-
-- `POST /api/brain/daily-log/:date/append` — body `{ "text": "…", "source": "…" }`;
-  needs an operator session, like every write.
-  `:date` accepts `today` (resolved server-side) or `YYYY-MM-DD`. Empty/whitespace
-  `text` 400s. `source` records the **input modality** and is a controlled
-  vocabulary — one of `text`, `voice`, or `edit` (any other value is silently
-  normalized to `text` by `brainJournal.normalizeSource`). A dictated capture sends
-  `"voice"`; a typed one sends `"text"`. It is **not** a free-form app-identity tag.
-- `GET /api/brain/daily-log/:date` — read a day's log.
-
-The palette `daily_log_append` / `daily_log_read` actions cover the same feature but
-are **not** interchangeable with these routes — pick per your need:
-
-- `daily_log_append` (palette) always tags the entry `source: "voice"` and returns a
-  voice-tool result shape (`{ ok, date, summary, … }`). Use it for dictated captures.
-- The direct `POST …/append` route honors the `source` you send and returns
-  `{ date, entry }`. Use it for a **typed** entry (`source: "text"`) or when you need
-  the structured `entry` back.
-
-## 6. MeatSpace POST training & testing
-
-`/api/meatspace/post/*` (`server/routes/meatspacePostRoutes.js`). These are the
-read/write endpoints for POST config, sessions, and progress on a single instance.
-The writes need an operator session; the reads only the baseline credential.
-
-> **Note — POST progress is intentionally machine-local today.** Normalized
-> history lives in PostgreSQL `post_runs` / `post_attempts` with no peer-sync
-> cursor or record kind; cognitive-performance history never rides federation.
-> A companion app that shows multiple instances must read each instance's
-> `/api/meatspace/post/*` directly.
-
-| Method | Path | Purpose |
-|--------|------|---------|
-| `GET` / `PUT` | `/api/meatspace/post/config` | Read / update POST config. |
-| `GET` | `/api/meatspace/post/sessions` | List scored test sessions. |
-| `POST` | `/api/meatspace/post/sessions` | Record an idempotent scored test session. |
-| `POST` | `/api/meatspace/post/training/runs` | Atomically record one completed training run and all attempts. |
-| `POST` | `/api/meatspace/post/training` | Backward-compatible single-attempt adapter. |
-| `GET` | `/api/meatspace/post/progress` | Current progress. |
-| `GET` | `/api/meatspace/post/stats` | Aggregate stats. |
-| `GET` | `/api/meatspace/post/recommendations` | Recommended next drills. |
-
-For a training run, generate one UUID run id and stable attempt ids before the
-request. Retry the identical payload after transport failure; the server upserts
-those ids in one transaction and returns success only after the full batch is
-durable. Use `/sessions` only for scored tests, keeping training evidence out of
-benchmark history.
-
-## 7. iCloud-JSON sync precedent (POST-progress reconciliation)
-
-The working reference for "iOS app writes an iCloud JSON file, PortOS ingests it"
-is MortalLoom (`server/routes/mortalloom.js`, `server/services/mortalLoomStore.js`):
-
-- `GET /api/mortalloom/status` — store status.
-- `POST /api/mortalloom/import` — non-destructive **by-id merge** of the shared
-  iCloud JSON into `data/`.
-
-A POST-progress iCloud reconciliation endpoint would need an explicit privacy
-design before it can mirror this precedent. Until then there is no cross-instance
-POST reconciliation — a companion app reads and writes each instance's
-`/api/meatspace/post/*` routes directly (see the note in §6).
-
-## Deferred follow-ups (filed separately)
-
-- Privacy-reviewed POST-progress reconciliation design (no federation by default).
-- Server-side audio/STT upload endpoint — only if on-device transcription is
-  abandoned.
-- Push-notification / reminder plumbing to prompt POST training from the phone.
-- A dedicated companion `apiRegistry.js` public group + per-device API token, if
-  the single-password posture proves insufficient.
-
-## See also
-
-- [API.md](./API.md) — full REST/WebSocket reference and route-domain index.
-- [PORTS.md](./PORTS.md) — port allocation and HTTP/HTTPS scheme.
-- Machine-readable spec: `GET /api/api-docs/openapi.json` (public-API surface only).
+MortalLoom uses a separate iCloud JSON import. Read status and use
+**Settings → MortalLoom** to preview or download a verified recovery
+copy. Restore against the displayed current revision or use MortalLoom's
+Restore from File with the downloaded copy if iCloud reports a conflict.
+PortOS pauses shared writes during uncertain iCloud state and keeps local
+planning metadata and recovery copies outside shared data. Use the live
+HTTP inventory for the import and recovery operation schemas.

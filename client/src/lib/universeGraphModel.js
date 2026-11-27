@@ -11,6 +11,7 @@
  * the data already links by co-appearance.
  */
 
+import { BIBLE_KINDS } from '../../../server/lib/universeCanon.js';
 import { EVOLUTION_STAGES, EVOLUTION_STAGE_LABELS } from './characterEvolution.js';
 import { pluralize } from './textUtils.js';
 
@@ -29,9 +30,6 @@ export const GRAPH_KINDS = Object.freeze({
   moodboard: { label: 'Mood board', singular: 'Mood board', color: '#eab308', ring: 3, radius: 4.5 },
 });
 export const GRAPH_KIND_ORDER = Object.freeze(Object.keys(GRAPH_KINDS));
-
-// The three canon trunks — the only kinds a gap can be reported against.
-const CANON_KINDS = Object.freeze(['character', 'place', 'object']);
 
 // Edge types keyed by the `type` the server emits. The seven relationship
 // values mirror `RELATIONSHIP_LINK_TYPES`; the rest are the derived groups.
@@ -158,7 +156,7 @@ export function computeUniverseGaps(index) {
   const { nodes, edges, storyDegree, appear } = index;
 
   for (const node of nodes) {
-    if (!CANON_KINDS.includes(node.kind)) continue;
+    if (!BIBLE_KINDS.includes(node.kind)) continue;
     if (storyDegree.get(node.id) === 0) {
       gaps.push({
         cat: 'isolated',

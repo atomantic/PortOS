@@ -3,7 +3,7 @@ import { isPublicGuestRoute } from './lib/publicGuestRoutes';
 import { Routes, Route, Navigate, useLocation, useParams } from 'react-router';
 import Layout from './components/Layout';
 import { FullWidthMain, PaddedMain } from './components/PageShell';
-import { getSettings, updateSettings } from './services/apiSystem.js';
+import { getSettings, updateSettings } from './services/apiAppShell.js';
 import { NAV_COMMANDS } from '../../server/lib/navManifest.js';
 import { previousPathRedirects, previousPathTarget } from './lib/previousPaths';
 import PageLoader from './components/PageLoader';
@@ -27,7 +27,6 @@ const HistoryPage = lazyWithReload(() => import('./pages/HistoryPage'));
 const RunnerPage = lazyWithReload(() => import('./pages/RunnerPage'));
 const UsagePage = lazyWithReload(() => import('./pages/UsagePage'));
 const ProcessesPage = lazyWithReload(() => import('./pages/ProcessesPage'));
-const AgentsPage = lazyWithReload(() => import('./pages/AgentsPage'));
 const DataDog = lazyWithReload(() => import('./pages/DataDog'));
 const GitHub = lazyWithReload(() => import('./pages/GitHub'));
 const Eidoverse = lazyWithReload(() => import('./pages/Eidoverse'));
@@ -38,7 +37,6 @@ const CalendarPage = lazyWithReload(() => import('./pages/Calendar'));
 const Messages = lazyWithReload(() => import('./pages/Messages'));
 const StackerNews = lazyWithReload(() => import('./pages/StackerNews'));
 const XPage = lazyWithReload(() => import('./pages/X'));
-const IMessage = lazyWithReload(() => import('./pages/IMessage'));
 const Tribe = lazyWithReload(() => import('./pages/Tribe'));
 const Timeline = lazyWithReload(() => import('./pages/Timeline'));
 const Goals = lazyWithReload(() => import('./pages/Goals'));
@@ -58,6 +56,7 @@ const MediaCollections = lazyWithReload(() => import('./pages/MediaCollections')
 const MediaCollectionDetail = lazyWithReload(() => import('./pages/MediaCollectionDetail'));
 const MediaCollectionSyncView = lazyWithReload(() => import('./pages/MediaCollectionSyncView'));
 const SyncView = lazyWithReload(() => import('./pages/SyncView'));
+const Media3DWorkspace = lazyWithReload(() => import('./pages/Media3DWorkspace'));
 const ThreejsModels = lazyWithReload(() => import('./pages/ThreejsModels'));
 const HtmlPages = lazyWithReload(() => import('./pages/HtmlPages'));
 const Media3D = lazyWithReload(() => import('./pages/Media3D'));
@@ -68,7 +67,6 @@ const UniverseBuilder = lazyWithReload(() => import('./pages/UniverseBuilder'));
 const Universes = lazyWithReload(() => import('./pages/Universes'));
 const Authors = lazyWithReload(() => import('./pages/Authors'));
 const Music = lazyWithReload(() => import('./pages/Music'));
-const CreativeStudio = lazyWithReload(() => import('./pages/CreativeStudio'));
 const Catalog = lazyWithReload(() => import('./pages/Catalog'));
 const Rounds = lazyWithReload(() => import('./pages/Rounds'));
 const SongBook = lazyWithReload(() => import('./pages/SongBook'));
@@ -116,6 +114,7 @@ const Agents = lazyWithReload(() => import('./pages/Agents'));
 const Uploads = lazyWithReload(() => import('./pages/Uploads'));
 const Settings = lazyWithReload(() => import('./pages/Settings'));
 const VoiceStudio = lazyWithReload(() => import('./pages/VoiceStudio'));
+const VoiceCall = lazyWithReload(() => import('./pages/VoiceCall'));
 const VoiceCallHost = lazyWithReload(() => import('./pages/VoiceCallHost'));
 const ApiExplorer = lazyWithReload(() => import('./pages/ApiExplorer'));
 const LocalLlmPlayground = lazyWithReload(() => import('./pages/LocalLlmPlayground'));
@@ -267,7 +266,6 @@ export default function App() {
             <Route index element={<Dashboard />} />
             <Route path="apps/create" element={<CreateApp />} />
             <Route path="voice/call-host" element={<VoiceCallHost />} />
-            <Route path="imessage/:chatKey" element={<IMessage />} />
             <Route path="devtools/jira/reports" element={<JiraReports />} />
             <Route path="3d/:id" element={<Media3DDetail />} />
             <Route path="creative-commission/:id" element={<CreativeCommissionDetail />} />
@@ -290,7 +288,7 @@ export default function App() {
             <Route path="devtools/usage" element={<UsagePage />} />
             <Route path="devtools/video-download" element={<VideoDownloaderPage />} />
             <Route path="devtools/processes" element={<ProcessesPage />} />
-            <Route path="devtools/agents" element={<AgentsPage />} />
+            <Route path="devtools/processes/agents" element={<ProcessesPage />} />
             <Route path="eidoverse" element={<Eidoverse />} />
             {/* AI Providers is three views over one page (#7567): Presets (the
                 stored records — the index /ai lands on), Harnesses and Services.
@@ -338,6 +336,7 @@ export default function App() {
             {/* The FaceTime call host runs in its own tab on the Mac — device
                 permissions and setSinkId need a real browser profile, and the
                 page holds a Web Lock so a second tab cannot double-answer. */}
+            <Route path="voice/call" element={<VoiceCall />} />
             <Route path="voices" element={<VoiceStudio />} />
             <Route path="voices/:profileId" element={<VoiceStudio />} />
             <Route path="api-reference/:tab" element={<ApiExplorer />} />
@@ -396,8 +395,9 @@ export default function App() {
             <Route path="ask" element={<Ask />} />
             <Route path="ask/:conversationId" element={<Ask />} />
             <Route path="media" element={<MediaGen />}>
-              <Route index element={<Navigate to="/media/image" replace />} />
+              <Route index element={<RedirectWithSearch to="/media/image" />} />
               <Route path="image" element={<ImageGen />} />
+              <Route path="video" element={<VideoGen />} />
               <Route path="prompt" element={<PromptFromMediaPage />} />
               <Route path="prompt/:examinationId" element={<PromptFromMediaPage />} />
               <Route path="history" element={<MediaHistory />} />
@@ -408,8 +408,6 @@ export default function App() {
               <Route path="collections/:id/sync" element={<MediaCollectionSyncView />} />
               <Route path="timeline" element={<VideoTimeline />} />
               <Route path="timeline/:projectId" element={<VideoTimelineEditor />} />
-              <Route path="threejs" element={<ThreejsModels />} />
-              <Route path="threejs/:id" element={<ThreejsModelDetail />} />
               <Route path="universe-builder/:universeId/canon" element={<UniverseRouteRedirect fromPrefix={/^\/media\/universe-builder/} to="/universes" />} />
             </Route>
             {/* Sprite Manager — a top-level Create page (moved out of the Media
@@ -417,14 +415,6 @@ export default function App() {
                 convention. */}
             <Route path="sprites" element={<Sprites />} />
             <Route path="sprites/:id" element={<Sprites />} />
-            {/* Creative Director — a top-level Create page (moved out of the
-                Media Gen tabs); /video is its browse-only view. */}
-            {/* VideoGen still uses the Media Gen tab shell (header + tabs +
-                overflow-auto body); VideoGen has no internal scroller of its
-                own, so rendering it bare in the full-width main clips the form. */}
-            <Route path="video/generate" element={<MediaGen />}>
-              <Route index element={<VideoGen />} />
-            </Route>
             <Route path="creative-director" element={<CreativeDirector />} />
             <Route path="creative-director/:id/:tab/:sceneId" element={<CreativeDirectorDetail />} />
             <Route path="creative-director/:id/:tab" element={<CreativeDirectorDetail />} />
@@ -441,9 +431,11 @@ export default function App() {
             <Route path="music-video/:projectId/scene/:sceneId" element={<MusicVideo />} />
             <Route path="music-video/:projectId/dev/:artifactId" element={<MusicVideo />} />
             <Route path="music-video/:projectId/:stage/dev/:artifactId" element={<MusicVideo />} />
-            {/* 3D — a top-level Create page (moved out of the Media Gen tabs). The
-                record id is the URL, per the ID-based deep-linking convention. */}
-            <Route path="3d" element={<Media3D />} />
+            <Route path="3d" element={<Media3DWorkspace />}>
+              <Route index element={<Media3D />} />
+              <Route path="threejs" element={<ThreejsModels />} />
+              <Route path="threejs/:id" element={<ThreejsModelDetail />} />
+            </Route>
             <Route path="3d/blender/:id/:tab?" element={<BlenderModelDetail />} />
             {/* Index (list) hosts the create drawer at /new; `:id` is now a routed
                 detail page (editable config + render history), not a sidebar edit
@@ -470,8 +462,6 @@ export default function App() {
             <Route path="songbook" element={<SongBook />} />
             <Route path="songbook/import" element={<SongBookImport />} />
             <Route path="songbook/:id" element={<SongBookViewer />} />
-            <Route path="create/media" element={<CreativeStudio studio="media" />} />
-            <Route path="create/story" element={<CreativeStudio studio="story" />} />
             <Route path="catalog" element={<Catalog />} />
             <Route path="catalog/ingest" element={<CatalogIngest />} />
             <Route path="catalog/:type/:id" element={<CatalogIngredient />} />
@@ -495,7 +485,7 @@ export default function App() {
             <Route path="storyboards/:id/panel/:panelId" element={<StoryboardDetail />} />
             <Route path="decks" element={<Decks />} />
             <Route path="universes" element={<Universes />} />
-            <Route path="universes/new" element={<UniverseBuilder />} />
+            <Route path="universes/new" element={<UniverseBuilder create />} />
             <Route path="universes/:universeId" element={<UniverseBuilder />} />
             <Route path="universes/:universeId/sync" element={<SyncView kind="universe" param="universeId" backPath="/universes" />} />
             <Route path="writers-room" element={<WritersRoom />} />
@@ -548,7 +538,6 @@ export default function App() {
           {PREVIOUS_PATH_REDIRECTS.map((redirect) => (
             <Route key={redirect.from} path={redirect.from.slice(1)} element={<PreviousPathRedirect {...redirect} />} />
           ))}
-          <Route path="devtools" element={<Navigate to="/devtools/agents" replace />} />
           <Route path="ai/new" element={<RedirectWithSearch to="/ai/presets/new" />} />
           <Route path="ai/harnesses/:harnessId/connections" element={<HarnessConnectionsRedirect />} />
           <Route path="ai/harnesses/:harnessId/connections/:connectionId" element={<HarnessConnectionsRedirect />} />

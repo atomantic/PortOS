@@ -43,6 +43,7 @@ const { runStandardizeFlow: runRealStandardizeFlow } = await vi.importActual('..
 import { logAction } from '../services/history.js';
 import { checkPortosUpdatePreflight } from '../services/updatePreflight.js';
 import { PORTOS_APP_ID } from '../lib/appIdentity.js';
+import { PEER_SOCKET_ROOM } from '../services/socketIo.js';
 import { maintenance } from '../lib/maintenanceAdmission.js';
 import { __resetAppOperations, registerAppHandlers } from '../sockets/apps.js';
 
@@ -62,24 +63,32 @@ const deferred = () => {
   return { promise, resolve };
 };
 
-// Fake socket/io. `io.emit` is a real broadcast — every connected client sees
-// it — so one bus fans out to each connection opened in a test, while
-// `socket.emit` reaches only its own. Both land in that connection's ordered
-// log, since the contract under test is which events carry which payloads.
+// Delivery uses the same client rooms for broadcasts and direct connection replies.
 const makeBus = () => {
-  const sinks = [];
+  const sockets = [];
+  const broadcast = (event, payload, excludedRoom) => {
+    for (const socket of sockets) {
+      if (!socket.rooms.has(excludedRoom)) socket.emit(event, payload);
+    }
+  };
   return {
-    io: { emit: (event, payload) => sinks.forEach((sink) => sink.push({ event, payload })) },
-    connect: (sink) => sinks.push(sink),
+    io: {
+      emit: broadcast,
+      except: (room) => ({ emit: (event, payload) => broadcast(event, payload, room) }),
+    },
+    connect: (socket) => sockets.push(socket),
   };
 };
 
-// A fresh connection on the shared bus, modelling a client (re)mounting.
-const connect = (bus) => {
+const connect = (bus, rooms = []) => {
   const handlers = new Map();
   const emitted = [];
-  bus.connect(emitted);
-  const socket = { on: (event, fn) => handlers.set(event, fn), emit: (event, payload) => emitted.push({ event, payload }) };
+  const socket = {
+    rooms: new Set(rooms),
+    on: (event, fn) => handlers.set(event, fn),
+    emit: (event, payload) => emitted.push({ event, payload }),
+  };
+  bus.connect(socket);
   registerAppHandlers(socket, bus.io);
   return {
     emitted,
@@ -127,6 +136,41 @@ describe('app socket handlers', () => {
       backup: pm2Standardizer.createGitBackup,
       apply: pm2Standardizer.applyStandardization,
     }));
+  });
+
+  it('delivers app operation snapshots and lifecycle events only to operators', async () => {
+    const operator = connect(bus);
+    const observer = connect(bus);
+    const peer = connect(bus, [PEER_SOCKET_ROOM]);
+    expect(observer.last('app:operations:active').payload).toEqual({ operations: [] });
+    expect(peer.emitted).toEqual([]);
+
+    runDeployFlow.mockImplementationOnce(async (_id, _flags, { onOutput }) => {
+      onOutput('output', { text: 'Example output', stream: 'stderr' });
+      return { ok: true, success: true, code: 0 };
+    });
+    pm2Standardizer.runStandardizeFlow.mockImplementationOnce(async (_repo, _provider, { onStep }) => {
+      onStep({ step: 'analyze', status: 'running' });
+      return { success: true, result: {} };
+    });
+    appUpdater.updateApp.mockImplementationOnce(async (_app, onStep) => {
+      onStep('pull', 'running', 'Example progress');
+      throw new Error('Example update failure');
+    });
+
+    await operator.fire('app:deploy', { appId: 'app-a' });
+    await operator.fire('app:standardize', { appId: 'app-a' });
+    await operator.fire('app:update', { appId: 'app-a' });
+    appUpdater.updateApp.mockResolvedValueOnce({ success: true, steps: [] });
+    await operator.fire('app:update', { appId: 'app-a' });
+
+    expect(observer.emitted.map(({ event }) => event)).toEqual(expect.arrayContaining([
+      'app:operations:active', 'app:deploy:output', 'app:deploy:complete',
+      'app:standardize:step', 'app:standardize:complete',
+      'app:update:step', 'app:update:error', 'app:update:complete',
+    ]));
+    expect(observer.events('app:operations:active').some(({ payload }) => payload.operations.length > 0)).toBe(true);
+    expect(peer.emitted).toEqual([]);
   });
 
   it('waits for Create App standardization and refuses another once update maintenance starts', async () => {

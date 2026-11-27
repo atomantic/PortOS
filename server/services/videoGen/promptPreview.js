@@ -11,7 +11,7 @@ import { carriedPromptAdditions, sentPromptRecord } from '../../lib/modelInput.j
 import { getSettings } from '../settings.js';
 import { VIDEO_GEN_MODE } from './modes.js';
 import { assertReactorNegativePromptSupported } from './negativePrompt.js';
-import { HOSTED_VIDEO_SUBMISSIONS } from './hostedSubmission.js';
+import { googleVideoProjectError, HOSTED_VIDEO_SUBMISSIONS } from './hostedSubmission.js';
 import { RUNWAY_FORM_REFERENCE_LABEL } from '../../lib/runwayVideoModels.js';
 import { hostedReferenceInputsError, referenceImageUploadsError, resolveRequestedVideoBackend } from './prepareParams.js';
 import { VIDEO_GEN_LOCAL_ONLY_FIELD_NAMES, PREVIEW_UPLOAD_FIELDS, videoReferenceImageSlots } from './requestFields.js';
@@ -147,6 +147,8 @@ export async function previewVideoPrompt({ previewUploads = [], ...body }) {
     }).record };
   }
   if (backend === VIDEO_GEN_MODE.GOOGLE) {
+    const projectError = googleVideoProjectError(settings, body.googleModelId);
+    if (projectError) throw projectError;
     const { googleVideoSentPrompt } = await import('./google.js');
     return { backend, ...googleVideoSentPrompt({
       modelId: body.googleModelId, prompt: body.prompt, negativePrompt: body.negativePrompt,

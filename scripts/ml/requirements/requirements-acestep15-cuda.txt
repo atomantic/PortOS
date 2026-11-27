@@ -1,6 +1,6 @@
 # ACE-Step 1.5 CUDA: direct pins for the dedicated CPython 3.11 runtime.
 # Install from the windows/linux hash locks, never directly from this input.
-# Regeneration and hardware validation: docs/ACESTEP15_CUDA.md.
+# Regeneration and hardware validation: docs/RUNTIME_LOCKS.md#regenerating-locks.
 #
 # The ACE-Step 1.5 package itself is not in the lock: the installer checks out
 # ace-step/ACE-Step-1.5 at ACESTEP15_PIN and installs it with --no-deps

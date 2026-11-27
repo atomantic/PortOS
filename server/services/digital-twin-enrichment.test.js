@@ -73,7 +73,9 @@ describe('Digital Twin enrichment provider admission', () => {
 
     await expect(processEnrichmentAnswer(entry)).resolves.toMatchObject({ targetDoc, contentAdded: rawMarkdown });
     expect(callProviderAI).not.toHaveBeenCalled();
-    expect(atomicWrite).toHaveBeenCalledWith(`/example/digital-twin/${targetDoc}`, `# Existing content\n\n${rawMarkdown}`);
+    expect(atomicWrite).toHaveBeenCalledWith(
+      `/example/digital-twin/${targetDoc}`, `# Existing content\n\n${rawMarkdown}`, { mode: 0o600, dirMode: 0o700 }
+    );
     expect(saveMeta).toHaveBeenCalledOnce();
   });
 });

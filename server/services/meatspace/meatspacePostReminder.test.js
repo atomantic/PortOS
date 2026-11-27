@@ -30,11 +30,11 @@ vi.mock('../userTimezone.js', () => ({
   getUserTimezone: vi.fn().mockResolvedValue('UTC'),
   getTimezoneUpdatedAt: vi.fn().mockResolvedValue(null),
 }));
-vi.mock('./meatspacePost.js', () => ({
+vi.mock('./postConfig.js', () => ({
   getPostConfig: vi.fn(),
-  getPostSessions: vi.fn(),
-  postConfigEvents: postConfigEventEmitter
+  postConfigEvents: postConfigEventEmitter,
 }));
+vi.mock('./postSessionHistory.js', () => ({ getPostSessions: vi.fn() }));
 vi.mock('../instanceFeatures.js', () => ({
   isInstanceFeatureEnabled: vi.fn().mockResolvedValue(true),
 }));
@@ -49,7 +49,8 @@ vi.mock('../reviewQueueDelivery.js', () => ({ claimQueueDelivery: vi.fn().mockRe
 
 const { schedule, cancel } = await import('../eventScheduler.js');
 const { getUserTimezone } = await import('../userTimezone.js');
-const { getPostConfig, getPostSessions } = await import('./meatspacePost.js');
+const { getPostConfig } = await import('./postConfig.js');
+const { getPostSessions } = await import('./postSessionHistory.js');
 const { isInstanceFeatureEnabled } = await import('../instanceFeatures.js');
 const { addNotification, getNotifications } = await import('../notifications.js');
 const {

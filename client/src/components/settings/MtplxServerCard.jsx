@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { Link } from 'react-router';
 import { Gauge, RefreshCw, ExternalLink, Save, Square, Download, Terminal } from 'lucide-react';
 import BrailleSpinner from '../BrailleSpinner';
@@ -14,13 +14,14 @@ import RuntimeLogDisclosure from './RuntimeLogDisclosure.jsx';
  * remove. A download is never implicit — it moves tens of gigabytes and only
  * runs from a button that says so — but it IS in the app, because sending the
  * user to a terminal for the one step in the middle of a managed lifecycle is a
- * dead end (PRD NR-9). See `docs/features/mtplx.md`.
+ * dead end (PRD NR-9). See `docs/features/local-llm-runtimes.md`.
  */
 
 const btnClass = 'flex items-center gap-1.5 px-2.5 py-1.5 text-xs font-medium rounded-lg transition-colors disabled:opacity-50';
 
 export default function MtplxServerCard({
   status,
+  visible = true,
   loading,
   busy,
   actionInProgress,
@@ -29,8 +30,11 @@ export default function MtplxServerCard({
   onStart,
   onStop,
   onInstall,
+  onUninstall,
   onSearchModels,
   onPullModel,
+  onCancelPull,
+  cancellingPull,
   onRemoveModel,
   download,
 }) {
@@ -38,6 +42,15 @@ export default function MtplxServerCard({
   // checklist's one-click setup does).
   const [model, setModel] = useState('');
   const [port, setPort] = useState('');
+  const [seeded, setSeeded] = useState(false);
+
+  const launch = status?.launch;
+  useEffect(() => {
+    if (seeded || !launch) return;
+    setModel(launch.model || '');
+    setPort(launch.port == null ? '' : String(launch.port));
+    setSeeded(true);
+  }, [launch, seeded]);
 
   const cached = status?.cachedModels || [];
   // Rows carry size/verification for the manage-checkpoints list; older status
@@ -173,6 +186,7 @@ export default function MtplxServerCard({
                   className="w-full bg-port-card border border-port-border rounded px-2 py-1.5 text-xs text-white"
                 >
                   <option value="">Auto — first verified checkpoint in the cache</option>
+                  {model && !cached.includes(model) && <option value={model}>{model} (saved)</option>}
                   {cached.map((id) => <option key={id} value={id}>{id}</option>)}
                 </select>
               </div>
@@ -210,7 +224,7 @@ export default function MtplxServerCard({
             </button>
           )}
           <button
-            onClick={() => onSaveLaunch({ model: model || null, ...(port ? { port: Number(port) } : {}) })}
+            onClick={() => onSaveLaunch({ ...(launch || {}), model: model || null, ...(port ? { port: Number(port) } : {}) })}
             disabled={busy || emptyCache}
             className={`${btnClass} bg-port-accent/20 hover:bg-port-accent/30 text-port-accent`}
             title={emptyCache ? 'Download an MTP checkpoint below first — a start never fetches weights' : 'Remember these options for the next on-demand start'}
@@ -223,6 +237,7 @@ export default function MtplxServerCard({
 
       {status?.installed && status?.supported !== false && !runtimeMissing && (
         <MtplxCheckpoints
+          visible={visible}
           cached={cachedRows}
           cacheError={status?.cacheError || null}
           download={download}
@@ -230,11 +245,18 @@ export default function MtplxServerCard({
           actionInProgress={actionInProgress}
           onSearch={onSearchModels}
           onPull={onPullModel}
+          onCancelPull={onCancelPull}
+          cancellingPull={cancellingPull}
           onRemove={onRemoveModel}
         />
       )}
 
       <RuntimeLogDisclosure logs={status?.recentLogs} />
+      {status?.canUninstall && onUninstall && (
+        <button type="button" onClick={onUninstall} disabled={busy} className={`${btnClass} border border-port-border text-port-warning`}>
+          Uninstall MTPLX
+        </button>
+      )}
     </div>
   );
 }

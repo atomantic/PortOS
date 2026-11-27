@@ -7,7 +7,7 @@ const resetsAt = new Date(now + 2 * 3600_000).toISOString();
 // resolver stamps a runnable step rather than 'unknown task'.
 const taskCatalog = () => ({
   builtin: {
-    ux: { enabled: true, eligible: true, appIds: ['app-1'] },
+    'design-usability': { enabled: true, eligible: true, appIds: ['app-1'] },
     docs: { enabled: true, eligible: true, appIds: ['app-1'] },
     'universe-bible-images': { enabled: true, eligible: true, appIds: [] },
   },

@@ -114,7 +114,7 @@ describe('async timer callbacks own their rejections (#5668)', () => {
     expect(sites).toEqual(expect.arrayContaining([
       'cos-runner/index.js',
       'services/mediaJobQueue/execution.js',
-      'services/tuiPromptRunner.js',
+      'services/tuiPromptRunner/responseWatcher.js',
     ]));
   });
 
@@ -274,7 +274,7 @@ describe('the timer-callback recognizer', () => {
     // The site that motivated the rule — pinned so a revert is caught here and
     // not only by the tree-wide scan.
     const src = readText(join(SERVER_ROOT, 'cos-runner/index.js'));
-    expect(src).toContain('cleanupOrphanedAgents()');
+    expect(src).toContain('lifecycle.trackWork(cleanupOrphanedAgents)');
     expect(findUnguardedTimerAwaits(src)).toEqual([]);
   });
 });

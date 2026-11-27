@@ -40,6 +40,11 @@ vi.mock('./ollamaRunWindow.js', () => ({
   beginOllamaRun: vi.fn(async (provider) => ({ provider, release: vi.fn() })),
 }));
 
+vi.mock('../lib/provider/providerExecutionOptions.js', async (importOriginal) => {
+  const actual = await importOriginal();
+  return { ...actual, prepareExecutionOptions: vi.fn(actual.prepareExecutionOptions) };
+});
+
 vi.mock('./provider/providerExecutionReadiness.js', () => ({
   ensureProviderReadyForExecution: vi.fn().mockResolvedValue({ success: true }),
 }));
@@ -1872,6 +1877,38 @@ describe('promptRunner — retry-with-fallback', () => {
     expect(status.markUnavailable).not.toHaveBeenCalled();
   });
 
+  it('picks policy-compatible fallbacks for concurrent failures', async () => {
+    const status = mockToolkitWithFallback();
+    autoFixer.noteFallbackHandled.mockImplementation(() => {});
+    status.getFallbackProvider.mockImplementation((_id, _providers, _vision, _context, { allowedModes }) => ({
+      provider: allowedModes.includes('cli') ? primaryCli : fallbackApi,
+      source: 'provider',
+    }));
+
+    const { promise: providerRead, resolve: releaseProviderRead } = Promise.withResolvers();
+    providers.getAllProviders.mockReturnValue(providerRead);
+    runner.executeApiRun.mockImplementation(async ({ provider, onComplete }) => {
+      onComplete(provider.id === primaryApi.id
+        ? { success: false, error: 'Primary failed' }
+        : { success: true });
+    });
+    runner.executeCliRun.mockImplementation(async ({ onComplete }) => onComplete({ success: true }));
+
+    const calls = ['any-text', ['tui', 'api', 'cli'], 'direct-api'].map((callerPolicy) =>
+      runPromptThroughProvider({ provider: primaryApi, callerPolicy, prompt: 'p', source: 'test' })
+    );
+    const outcomes = Promise.allSettled(calls);
+    // Hold the first lookup open while every primary failure reaches the shared lookup.
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    releaseProviderRead({ activeProvider: null, providers: [primaryApi, primaryCli, fallbackApi] });
+
+    expect(await outcomes).toEqual([primaryCli, primaryCli, fallbackApi].map((provider) => ({
+      status: 'fulfilled',
+      value: expect.objectContaining({ usedFallback: true, fallbackProvider: expect.objectContaining({ id: provider.id }) }),
+    })));
+    expect(status.getFallbackProvider).toHaveBeenCalledTimes(2);
+  });
+
   it('coalesces a 10-concurrent-failure storm into one provider-map read + one mark-unavailable', async () => {
     // Acceptance for [coalesce-fallback-provider-failure-storm]: when a
     // stuck provider has N simultaneous in-flight calls, the per-provider
@@ -2906,6 +2943,52 @@ describe('promptRunner — context gate on the requested provider', () => {
 
       expect(runner.executeApiRun).toHaveBeenCalledTimes(1);
       expect(runner.executeApiRun.mock.calls[0][0].maxTokens).toBe(2_048);
+    });
+
+    it('keeps the local cap when execution options clone the provider', async () => {
+      const { prepareExecutionOptions } = await import('../lib/provider/providerExecutionOptions.js');
+      const api = localOllama({ numCtx: 16_384 });
+      const prepared = { ...api, executionOptions: { serviceTier: 'fast' } };
+      prepareExecutionOptions.mockResolvedValueOnce({
+        provider: prepared,
+        attribution: { requested: prepared.executionOptions },
+      });
+      runner.executeApiRun.mockImplementation(async ({ onComplete }) => onComplete({ success: true }));
+
+      await runPromptThroughProvider({
+        provider: api,
+        prompt: 'short',
+        source: 'test',
+        executionOptions: prepared.executionOptions,
+        outputReserveTokens: 8_192,
+      });
+
+      expect(runner.executeApiRun).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({
+        provider: prepared,
+        maxTokens: 2_048,
+      }));
+    });
+
+    it('tightens the cap to the smaller window of a busy Ollama runner', async () => {
+      const { beginOllamaRun } = await import('./ollamaRunWindow.js');
+      const release = vi.fn();
+      const api = localOllama({ numCtx: 32_768, modelNumCtx: { 'qwen3.8-27b': 32_768 } });
+      const resident = { ...api, numCtx: 4_096, modelNumCtx: { 'qwen3.8-27b': 4_096 } };
+      beginOllamaRun.mockResolvedValueOnce({ provider: resident, release });
+      runner.executeApiRun.mockImplementation(async ({ onComplete }) => onComplete({ success: true }));
+
+      await runPromptThroughProvider({
+        provider: api,
+        prompt: 'short',
+        source: 'test',
+        outputReserveTokens: 8_192,
+      });
+
+      expect(runner.executeApiRun).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({
+        provider: resident,
+        maxTokens: 1_024,
+      }));
+      expect(release).toHaveBeenCalledTimes(1);
     });
 
     it('still refuses a local prompt that cannot fit even with the smaller reserve', async () => {

@@ -61,6 +61,7 @@ import { fileURLToPath } from 'node:url';
 import { isDirectlyInvoked } from './lib/directInvocation.js';
 import { materializeRoute } from '../server/lib/provider/providerRouteRecipes.js';
 import { LOCAL_RUNTIME_MARKER_KEYS } from '../server/lib/aiToolkit/internal/localRuntimeMarkers.js';
+import { MKSERVE_MODEL, MKSERVE_ORIGIN } from '../server/lib/mkserveRuntime.js';
 import { SPLASH_MODEL, SPLASH_ORIGIN } from '../server/lib/splashRuntime.js';
 
 const HERE = dirname(fileURLToPath(import.meta.url));
@@ -75,6 +76,14 @@ const SPLASH_SEED = {
     transports: { openai: { baseUrl: `${SPLASH_ORIGIN}/v1` }, anthropic: { baseUrl: SPLASH_ORIGIN } },
   },
   overrides: { enabled: false, models: [SPLASH_MODEL], defaultModel: SPLASH_MODEL, timeout: 600000 },
+};
+
+const MKSERVE_SEED = {
+  service: {
+    definitionId: 'mkserve',
+    transports: { openai: { baseUrl: `${MKSERVE_ORIGIN}/v1` } },
+  },
+  overrides: { enabled: false, models: [MKSERVE_MODEL], defaultModel: MKSERVE_MODEL, timeout: 600000 },
 };
 
 /** The `activeProvider` both shipped files select on a fresh install. */
@@ -414,6 +423,30 @@ const TUPLES = [
     },
   },
   {
+    id: 'opencode-splash-tui', harnessId: 'opencode', method: 'tui', service: SPLASH_SEED.service,
+    overrides: {
+      ...SPLASH_SEED.overrides,
+      name: 'OpenCode · Splash TUI (local)',
+      envVars: { OPENCODE_CONFIG_CONTENT: opencodeConfigContent('splash', 'Splash (local)', `${SPLASH_ORIGIN}/v1`) },
+    },
+  },
+  {
+    id: 'opencode-mkserve', harnessId: 'opencode', method: 'cli', service: MKSERVE_SEED.service,
+    overrides: {
+      ...MKSERVE_SEED.overrides,
+      name: 'OpenCode · mkserve (local)',
+      envVars: { OPENCODE_CONFIG_CONTENT: opencodeConfigContent('mkserve', 'mkserve (local)', `${MKSERVE_ORIGIN}/v1`) },
+    },
+  },
+  {
+    id: 'opencode-mkserve-tui', harnessId: 'opencode', method: 'tui', service: MKSERVE_SEED.service,
+    overrides: {
+      ...MKSERVE_SEED.overrides,
+      name: 'OpenCode · mkserve TUI (local)',
+      envVars: { OPENCODE_CONFIG_CONTENT: opencodeConfigContent('mkserve', 'mkserve (local)', `${MKSERVE_ORIGIN}/v1`) },
+    },
+  },
+  {
     id: 'claude-splash', harnessId: 'claude', method: 'cli',
     service: { ...SPLASH_SEED.service, credentials: { apiKey: 'splash' } },
     overrides: {
@@ -687,6 +720,10 @@ const TUPLES = [
     },
   },
   {
+    id: 'mkserve', harnessId: 'direct', method: 'api', service: MKSERVE_SEED.service,
+    overrides: { ...MKSERVE_SEED.overrides, name: 'mkserve (local)' },
+  },
+  {
     id: 'splash', harnessId: 'direct', method: 'api', service: SPLASH_SEED.service,
     overrides: { ...SPLASH_SEED.overrides, name: 'Splash (local)' },
   },
@@ -749,14 +786,14 @@ export const PROVIDER_ORDER = [
   'opencode-mtplx', 'opencode-mtplx-tui', 'opencode-llama-tui',
   'opencode-vllm', 'opencode-vllm-tui', 'opencode-sglang', 'opencode-sglang-tui',
   'claude-sglang', 'claude-sglang-tui',
-  'opencode-splash', 'claude-splash',
+  'opencode-splash', 'opencode-splash-tui', 'opencode-mkserve', 'opencode-mkserve-tui', 'claude-splash',
   'orcarouter', 'opencode-orcarouter', 'openrouter', 'opencode-openrouter', 'opencode-openrouter-tui',
   'nvidia-nim', 'opencode-nvidia-nim', 'opencode-nvidia-nim-tui', 'opencode-orcarouter-tui',
   'opencode-zen', 'opencode-zen-cli', 'opencode-zen-tui',
   'codex', 'codex-tui', 'codex-ollama', 'codex-lmstudio',
   'claude-code-tui', 'claude-code-tui-bedrock',
   'antigravity-tui', 'antigravity-cli',
-  'cerebras', 'lmstudio', 'ollama', 'mtplx', 'splash', 'slotstream',
+  'cerebras', 'lmstudio', 'ollama', 'mtplx', 'mkserve', 'splash', 'slotstream',
   'grok', 'grok-cli', 'grok-tui', 'kimi-cli', 'kimi-tui', 'cursor-cli', 'cursor-tui',
 ];
 

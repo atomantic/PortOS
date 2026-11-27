@@ -5,6 +5,7 @@ import { MemoryRouter, useLocation } from 'react-router';
 vi.mock('../../services/apiLocalLlm.js', () => ({
   getLocalLlmStatus: vi.fn(),
   getLocalLlmCatalog: vi.fn(),
+  checkConversationalGemmaAccess: vi.fn(),
   getLocalLlmHuggingFaceSearch: vi.fn(),
   installLocalLlmModel: vi.fn(),
   cancelLocalLlmInstall: vi.fn(),
@@ -61,6 +62,8 @@ import {
   deleteLocalLlmModel,
   getLocalLlmStatus,
   getLocalLlmCatalog,
+  checkConversationalGemmaAccess,
+  getLocalLlmHuggingFaceSearch,
   installLocalLlmBackend,
   installLocalLlmModel,
   cancelLocalLlmInstall,
@@ -142,6 +145,31 @@ describe('LocalLlmLibraryView information architecture', () => {
     expect(getMtplxServerStatus).not.toHaveBeenCalled();
     expect(getSlotstreamServerStatus).not.toHaveBeenCalled();
     await waitFor(() => expect(getLocalLlmCatalog).toHaveBeenCalled());
+  });
+
+  it('lists externally served Conversational Gemma without offering an invalid backend install', async () => {
+    await renderLibrary();
+    fireEvent.click(screen.getByText('Externally served voice models'));
+    const heading = screen.getByRole('heading', { name: 'Conversational Gemma 4 31B' });
+    const entry = heading.closest('article');
+    expect(within(entry).getByRole('link', { name: 'Model card and access' }))
+      .toHaveAttribute('href', 'https://huggingface.co/Trelis/gemma-4-31B-it-conversational');
+    expect(within(entry).queryByRole('button', { name: /install/i })).not.toBeInTheDocument();
+  });
+
+  it('offers terms and retries the download access check without starting a download', async () => {
+    checkConversationalGemmaAccess.mockResolvedValueOnce({ status: 'terms-required' })
+      .mockResolvedValueOnce({ status: 'ready' });
+    await renderLibrary();
+    fireEvent.click(screen.getByText('Externally served voice models'));
+    expect(checkConversationalGemmaAccess).not.toHaveBeenCalled();
+    fireEvent.click(screen.getByRole('button', { name: 'Check download access' }));
+    expect(await screen.findByLabelText('Hugging Face read token')).toBeInTheDocument();
+    expect(screen.getByText(/Hugging Face denied access/)).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: 'Recheck download access' }));
+    expect(await screen.findByText('Hugging Face confirmed access to the checkpoint.')).toBeInTheDocument();
+    expect(screen.queryByLabelText('Hugging Face read token')).not.toBeInTheDocument();
+    expect(installLocalLlmModel).not.toHaveBeenCalled();
   });
 
   it('keeps the model-abuse guard off the catalog panel', async () => {
@@ -449,6 +477,23 @@ describe('LocalLlmLibraryView recommendations', () => {
     expect(screen.getByText('Security specialist')).toBeInTheDocument();
     expect(screen.queryByText('Security candidate')).toBeNull();
     expect(screen.queryByRole('note')).toBeNull();
+  });
+
+  it('searches Hugging Face with the selected category and keeps the query when switching sources', async () => {
+    getLocalLlmHuggingFaceSearch.mockResolvedValue({ models: [] });
+    await renderLibrary();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Hugging Face' }));
+    const query = screen.getByPlaceholderText('Search Hugging Face GGUF models…');
+    fireEvent.change(query, { target: { value: 'example' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Audio & Music' }));
+
+    expect(screen.getByPlaceholderText('Search Hugging Face audio models…')).toHaveValue('example');
+    await waitFor(() => expect(getLocalLlmHuggingFaceSearch)
+      .toHaveBeenCalledWith('ollama', 'example', 'audio', 18, { silent: true }));
+
+    fireEvent.click(screen.getByRole('button', { name: 'Recommended', exact: true }));
+    expect(screen.getByPlaceholderText('Search the Ollama catalog…')).toHaveValue('example');
   });
 
   it('links a gated curated model to Hugging Face so its terms can be accepted', async () => {

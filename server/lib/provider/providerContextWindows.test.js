@@ -1,4 +1,5 @@
 import { describe, it, expect } from 'vitest';
+import { readFileSync } from 'node:fs';
 import {
   CODEX_CONTEXT_WINDOW,
   GEMINI_CONTEXT_WINDOW,
@@ -9,12 +10,20 @@ import {
   knownProviderContextWindow,
 } from './providerContextWindows.js';
 
+const SHIPPED_PROVIDERS = JSON.parse(readFileSync(new URL('../../../data.reference/providers.json', import.meta.url), 'utf8')).providers;
+const SHIPPED_MODELS = Object.values(SHIPPED_PROVIDERS).flatMap((provider) => provider.models ?? []);
+
 describe('providerContextWindows — known model windows', () => {
   it('resolves known model windows from the selected model id', () => {
     expect(knownModelContextWindow('gpt-5.5')).toBe(CODEX_CONTEXT_WINDOW);
+    expect(knownModelContextWindow('gpt-5.6-sol')).toBe(CODEX_CONTEXT_WINDOW);
+    expect(knownModelContextWindow('gpt-6.2-astra')).toBe(CODEX_CONTEXT_WINDOW);
+    expect(knownModelContextWindow('gpt-6-astra')).toBe(CODEX_CONTEXT_WINDOW);
     expect(knownModelContextWindow('gpt-5.4')).toBe(CODEX_CONTEXT_WINDOW);
     expect(knownModelContextWindow('gpt-5.4-mini')).toBe(400_000);
     expect(knownModelContextWindow('gpt-5.4-nano')).toBeNull();
+    expect(knownModelContextWindow('gemini-3.8-flash-high')).toBe(GEMINI_CONTEXT_WINDOW);
+    expect(knownModelContextWindow('gemini-4-neon-medium')).toBe(GEMINI_CONTEXT_WINDOW);
     expect(knownModelContextWindow('claude-opus-5')).toBe(1_000_000);
     expect(knownModelContextWindow('global.anthropic.claude-opus-5')).toBe(1_000_000);
     expect(knownModelContextWindow('claude-opus-4-8')).toBe(1_000_000);
@@ -25,6 +34,16 @@ describe('providerContextWindows — known model windows', () => {
     expect(knownModelContextWindow('us.anthropic.claude-sonnet-4-5-20250929-v1:0')).toBe(200_000);
     expect(knownModelContextWindow('gemini-2.5-pro')).toBe(GEMINI_CONTEXT_WINDOW);
     expect(knownModelContextWindow('unknown-model')).toBeNull();
+  });
+
+  it('covers every shipped GPT 5.6/6 and Gemini 3/4 model id', () => {
+    const shippedFrontierModels = SHIPPED_MODELS.filter((model) => /^(?:gpt[-_.:/]?5\.6|gpt[-_.:/]?6|gemini[-_.:/]?[34](?:\.|[-_.:/]|$))/i.test(model));
+    expect(shippedFrontierModels.length).toBeGreaterThan(0);
+
+    for (const model of shippedFrontierModels) {
+      const expected = /^gemini/i.test(model) ? GEMINI_CONTEXT_WINDOW : CODEX_CONTEXT_WINDOW;
+      expect(knownModelContextWindow(model), `shipped model ${model}`).toBe(expected);
+    }
   });
 });
 

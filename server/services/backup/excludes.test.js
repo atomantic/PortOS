@@ -7,6 +7,11 @@ const machineLocalCredentialPaths = [
   '/spotify/tokens.json',
   '/spotify/cache/',
   '/openclaw/',
+  '/jira.json',
+  '/datadog.json',
+  '/auth-sessions.json',
+  '/agents/accounts.json',
+  '/agents/accounts.json.*.tmp',
 ];
 
 describe('Machine-local OAuth and OpenClaw backup exclusions (#19173)', () => {
@@ -31,9 +36,28 @@ describe('Machine-local OAuth and OpenClaw backup exclusions (#19173)', () => {
     ['spotify/tokens.json', 'SPOTIFY/TOKENS.JSON'],
     ['spotify/cache', 'Spotify/Cache/raw/response.json'],
     ['openclaw', 'OpenClaw/profiles/default/token.json'],
+    ['jira.json', 'JIRA.JSON'],
+    ['datadog.json', 'Datadog.JSON'],
+    ['auth-sessions.json', 'AUTH-SESSIONS.JSON'],
   ])('preserves %s and nested paths case-insensitively', (root, nested) => {
     expect(isRestorePreservedPath(root)).toBe(true);
     expect(isRestorePreservedPath(nested)).toBe(true);
+  });
+});
+
+describe('Machine-local peer authority backup exclusions', () => {
+  it.each([
+    '/peer-admin-grants.json',
+    '/peer-execution-grants.json',
+    '/peer-execution-catalog.json',
+    '/peer-execution-authority.json',
+    '/peer-execution-recovery.jsonl',
+    '/peer-execution/',
+    '/peer-admin-grants.json.*.tmp',
+    '/peer-execution-grants.json.*.tmp',
+  ])('keeps %s local even if the backup exclusion is disabled', path => {
+    expect(computeEffectiveExcludes({ disabledDefaultExcludes: [path] })).toContain(path);
+    expect(isRestorePreservedPath(path.slice(1).replace(/\/$/, '').replace('*', 'example').toUpperCase())).toBe(true);
   });
 });
 

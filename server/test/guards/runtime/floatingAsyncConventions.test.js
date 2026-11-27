@@ -6,12 +6,10 @@
  */
 import { describe, it, expect } from 'vitest';
 import { dirname, join, relative, resolve } from 'path';
-import { parse } from '@babel/parser';
-import { guardCorpus, readText, REPO_ROOT, trackedFiles } from '../../../../scripts/lib/guardCorpus.js';
+import { guardCorpus, parseGuardSource, readText, REPO_ROOT, trackedFiles } from '../../../../scripts/lib/guardCorpus.js';
+import { parseRuntimeAst } from '../../guardSources.js';
 
 const SERVER_ROOT = join(REPO_ROOT, 'server');
-
-const parseSource = (src) => parse(src, { sourceType: 'module', errorRecovery: true, allowReturnOutsideFunction: true, attachComment: false });
 
 const isAsyncInit = (node) => (
   (node?.type === 'ArrowFunctionExpression' || node?.type === 'FunctionExpression') && node.async === true
@@ -28,12 +26,13 @@ function walkStatements(node, visit) {
   if (!node || typeof node.type !== 'string' || NO_STATEMENTS.has(node.type)) return;
   if (node.type === 'ExpressionStatement') visit(node);
   for (const key in node) {
-    if (key === 'loc' || key === 'extra' || key === 'comments' || key === 'errors') continue;
     const child = node[key];
+    if (child === null || typeof child !== 'object') continue;
     if (Array.isArray(child)) {
       for (const c of child) walkStatements(c, visit);
+    } else if (typeof child.type === 'string') {
+      walkStatements(child, visit);
     }
-    else if (child && typeof child === 'object') walkStatements(child, visit);
   }
 }
 
@@ -72,9 +71,8 @@ function moduleBindings(body, dir) {
   return { local, exported, imports };
 }
 
-function summarizeSource(src, dir) {
-  const { program } = parseSource(src);
-  return { ...moduleBindings(program.body, dir), program };
+function summarizeSource(src, dir, { program } = parseGuardSource(src)) {
+  return { ...moduleBindings(program.body, dir), program, src };
 }
 
 /**
@@ -108,7 +106,8 @@ function relativeLiteralValues(src) {
 
 // Import spellings share a binding summary. Only a caller visit walks its
 // program, which is then discarded while the async exports stay cached.
-function createFloatingAsyncScanner(readSource = (file) => readText(file), onParsed = () => {}) {
+function createFloatingAsyncScanner(readSource = readText, onParsed = () => {}) {
+  const parseFile = readSource === readText ? parseRuntimeAst : (_file, src) => parseGuardSource(src);
   const summaries = new Map();
   const resolutions = new Map();
   const summaryOf = (file) => {
@@ -116,7 +115,7 @@ function createFloatingAsyncScanner(readSource = (file) => readText(file), onPar
       const src = readSource(file);
       // Nothing here is async; a visit still needs the text to check what it imports.
       if (ASYNC_KEYWORD.test(src)) {
-        summaries.set(file, summarizeSource(src, dirname(file)));
+        summaries.set(file, summarizeSource(src, dirname(file), parseFile(file, src)));
         onParsed(file);
       } else {
         summaries.set(file, { exported: NO_EXPORTS, src });
@@ -145,7 +144,7 @@ function createFloatingAsyncScanner(readSource = (file) => readText(file), onPar
     const values = relativeLiteralValues(src);
     return values === null || values.some((value) => asyncExportsOf(resolve(dir, value)).size > 0);
   };
-  const findCalls = ({ local, imports, program }, dir) => {
+  const findCalls = ({ local, imports, program, src }, dir) => {
     const importedAsync = new Map();
     const isAsyncImport = (name) => {
       if (!importedAsync.has(name)) {
@@ -164,7 +163,8 @@ function createFloatingAsyncScanner(readSource = (file) => readText(file), onPar
       if (call.type !== 'CallExpression' || call.callee.type !== 'Identifier') return;
       const name = call.callee.name;
       if (local.has(name) || (imports.has(name) && isAsyncImport(name))) {
-        hits.push(`line ${node.loc.start.line}: ${name}()`);
+        const line = src.slice(0, node.start).split(/\r\n?|[\n\u2028\u2029]/).length;
+        hits.push(`line ${line}: ${name}()`);
       }
     });
     return hits;
@@ -174,12 +174,12 @@ function createFloatingAsyncScanner(readSource = (file) => readText(file), onPar
     findInFile: (file) => {
       let summary = summaryOf(file);
       if (summary.hits) return summary.hits;
-      if (summary.src !== undefined) {
+      if (!summary.program) {
         if (!mayImportAsync(summary.src, dirname(file))) {
           summaries.set(file, { exported: summary.exported, hits: [] });
           return [];
         }
-        summary = summarizeSource(summary.src, dirname(file));
+        summary = summarizeSource(summary.src, dirname(file), parseFile(file, summary.src));
       }
       const hits = findCalls(summary, dirname(file));
       // After visiting a file, only its exports and verdict can be needed again.
@@ -200,8 +200,8 @@ function scanFiles(files, readSource) {
   const scanner = createFloatingAsyncScanner(readSource, (file) => {
     if (remaining.has(file)) pending.push(file);
   });
-  // Give parsed imports their own caller visit promptly so their programs
-  // do not accumulate in memory while waiting for filename order.
+  // Give parsed imports their own caller visit promptly so programs only used
+  // here do not accumulate in memory while waiting for filename order.
   const visit = (file) => {
     if (remaining.delete(file)) scanner.findInFile(file);
   };
@@ -235,6 +235,11 @@ describe('the floating-async recognizer', () => {
   it('flags a bare call to a local async function, declaration or arrow', () => {
     expect(findFloatingAsyncCalls('async function f() {}\nfunction g() { f(); }')).toEqual(['line 2: f()']);
     expect(findFloatingAsyncCalls('const f = async () => {};\nf();')).toEqual(['line 2: f()']);
+  });
+
+  it('reports the statement start across every JavaScript line terminator', () => {
+    const source = 'async function f() {}\r\n// one\r// two\u2028// three\u2029(\nf)();';
+    expect(findFloatingAsyncCalls(source)).toEqual(['line 5: f()']);
   });
 
   it('accepts await, void, a trailing .catch, and a returned or assigned promise', () => {

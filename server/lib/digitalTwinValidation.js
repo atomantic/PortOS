@@ -276,6 +276,10 @@ export const tasteAnswerInputSchema = z.object({
   identityContextUsed: z.array(z.string().max(1000)).max(50).optional()
 });
 
+export const tasteSkipInputSchema = z.object({
+  questionId: z.string().trim().min(1).max(200),
+});
+
 export const tastePersonalizedQuestionInputSchema = z.object({
   providerId: z.string().min(1).optional(),
   model: z.string().min(1).optional()

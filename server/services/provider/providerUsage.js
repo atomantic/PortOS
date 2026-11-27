@@ -981,7 +981,7 @@ async function readProviderQuotas({ wait, family, period }) {
 
 /**
  * The image-gen card is keyed off the imageGen SETTINGS, not the provider
- * registry — a cloud image backend is enabled per-mode in Settings → Image Gen,
+ * registry — a cloud image backend is enabled per-mode in Media Gen Settings,
  * independently of whether that CLI is also an enabled agent provider. That is
  * why it isn't a FAMILIES entry: `resolveEnabledFamilies` gates on
  * `matches(providerConfig)` and there is no provider config to match.

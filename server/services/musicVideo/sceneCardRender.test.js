@@ -29,7 +29,7 @@ const { prepareGenerateParams } = await import('../imageGen/prepareParams.js');
 const { buildSceneFrameGenerateBody } = await import('./sceneFrameReferences.js');
 const { musicVideoLinkedReferenceId } = await import('../../lib/musicVideo/musicVideoConditioning.js');
 const { validateRequest } = await import('../../lib/validateRequest.js');
-const { musicVideoSceneClipRenderSchema, musicVideoSceneFrameRenderSchema } = await import('../../lib/musicVideo/musicVideoRouteValidation.js');
+const { musicVideoSceneClipRenderSchema, musicVideoSceneFrameRenderSchema } = await import('../../lib/musicVideo/routeValidation/scenes.js');
 const { renderSceneClips } = await import('./sceneCardRender.js');
 
 const names = (result) => result.data.referenceImagePaths.map((file) => file.split(/[\\/]/).at(-1));

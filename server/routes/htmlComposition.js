@@ -1,8 +1,10 @@
+import { randomUUID } from 'node:crypto';
 import { Router } from 'express';
+import { assertCancelResult } from '../lib/cancelResponse.js';
 import { asyncHandler, ServerError } from '../lib/errorHandler.js';
 import { validateRequest } from '../lib/validateRequest.js';
 import { MOTION_SKILL_PACKS, detectMotionSkills, installMotionSkillPack } from '../lib/motionSkills.js';
-import { enqueueJob, attachSseClient, cancelJob } from '../services/mediaJobQueue/index.js';
+import { enqueueJob, attachSseClient, cancelJob, getJob } from '../services/mediaJobQueue/index.js';
 
 import { htmlCompositionRenderSchema } from '../lib/htmlCompositionValidation.js';
 const router = Router();
@@ -11,7 +13,7 @@ const router = Router();
 // the launch-video form can offer only components that are actually present.
 router.get('/toolkit', asyncHandler(async (req, res) => {
   const { findFfmpeg } = await import('../lib/ffmpeg.js');
-  res.json({ ffmpeg: Boolean(await findFfmpeg()), skillPacks: detectMotionSkills() });
+  res.set('Cache-Control', 'no-store').json({ ffmpeg: Boolean(await findFfmpeg()), skillPacks: detectMotionSkills(), skillInstall: skillInstall ? { runId: skillInstall } : null });
 }));
 
 // One-click equivalent of `npm run setup:motion -- --skills`: installs every
@@ -19,11 +21,12 @@ router.get('/toolkit', asyncHandler(async (req, res) => {
 // (a button), never run on boot.
 let skillInstall = null;
 router.post('/toolkit/skills/install', asyncHandler(async (req, res) => {
-  if (skillInstall) throw new ServerError('A motion skills install is already running', { status: 409, code: 'INSTALL_IN_PROGRESS' });
+  if (skillInstall) throw new ServerError('A motion skills install is already running', { status: 409, code: 'INSTALL_IN_PROGRESS', context: { runId: skillInstall } });
   const packs = detectMotionSkills().filter(pack => !pack.installed);
   const sources = new Map(MOTION_SKILL_PACKS.map(pack => [pack.id, pack]));
   const failed = [];
-  skillInstall = (async () => {
+  skillInstall = randomUUID();
+  await (async () => {
     for (const { id, label } of packs) {
       console.log(`🎬 Installing ${label} motion skills`);
       const ok = await installMotionSkillPack(sources.get(id)).then(() => true, error => {
@@ -32,8 +35,7 @@ router.post('/toolkit/skills/install', asyncHandler(async (req, res) => {
       });
       if (!ok) failed.push(label);
     }
-  })();
-  await skillInstall.finally(() => { skillInstall = null; });
+  })().finally(() => { skillInstall = null; });
   if (failed.length) throw new ServerError(`Could not install: ${failed.join(', ')}. Run npm run setup:motion -- --skills for details.`, { status: 502, code: 'MOTION_SKILLS_INSTALL_FAILED' });
   res.json({ skillPacks: detectMotionSkills() });
 }));
@@ -59,7 +61,10 @@ router.get('/:jobId/events', (req, res) => {
 });
 
 router.post('/:jobId/cancel', asyncHandler(async (req, res) => {
-  res.json(await cancelJob(req.params.jobId));
+  const { jobId } = req.params;
+  const job = getJob(jobId);
+  const result = job?.kind === 'html-composition' && await cancelJob(jobId);
+  res.json(assertCancelResult(result, { notFoundMessage: 'HTML composition job not found or expired' }));
 }));
 
 export default router;

@@ -7,7 +7,7 @@ vi.mock('./xBrowser.js', () => ({ openXHandoff: vi.fn() }));
 const { query, withTransaction } = await import('../lib/db.js');
 const { executeXBrowserRead } = await import('../integrations/x/index.js');
 const { openXHandoff } = await import('./xBrowser.js');
-const { buildXReadError, deriveXDiagnostics, syncAccount, reviewDraft, openApprovedDraft, createAccount, updateAccount, createDraft, openAccountDestination } = await import('./x.js');
+const { buildXReadError, deriveXDiagnostics, syncAccount, reviewDraft, openApprovedDraft, createAccount, updateAccount, createDraft, updateDraft, deleteDraft, openAccountDestination } = await import('./x.js');
 
 describe('X diagnostics', () => {
   it('distinguishes observable public/search reach from unknown recommendation eligibility', () => {
@@ -338,6 +338,55 @@ describe('reviewDraft state transitions', () => {
   });
 });
 
+describe('X draft edits and deletion', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    query.mockReset();
+  });
+
+  it('edits only saved and rejected drafts and clears prior review data in the update', async () => {
+    query.mockResolvedValueOnce({ rows: [{
+      id: 'draft-1', account_id: 'acct-1', body: 'Revision', state: 'draft', review_note: '', approved_at: null,
+    }] }).mockResolvedValueOnce({ rows: [{ label: 'Example', username: 'example_user' }] });
+
+    await expect(updateDraft('draft-1', { body: ' Revision ' })).resolves.toMatchObject({
+      id: 'draft-1', accountId: 'acct-1', body: 'Revision', state: 'draft', reviewNote: '', approvedAt: null,
+      accountLabel: 'Example', username: 'example_user',
+    });
+    const [sql, params] = query.mock.calls[0];
+    expect(sql).toMatch(/SET body=\$2,state='draft',review_note='',approved_at=NULL/);
+    expect(sql).toMatch(/WHERE id=\$1 AND state IN \('draft','rejected'\)/);
+    expect(params).toEqual(['draft-1', 'Revision']);
+    expect(openXHandoff).not.toHaveBeenCalled();
+  });
+
+  it('distinguishes a wrong-state edit from a missing draft', async () => {
+    query.mockResolvedValueOnce({ rows: [] }).mockResolvedValueOnce({ rows: [{ exists: true }] })
+      .mockResolvedValueOnce({ rows: [] }).mockResolvedValueOnce({ rows: [] });
+    await expect(updateDraft('draft-1', { body: 'Revision' })).resolves.toBeNull();
+    await expect(updateDraft('draft-gone', { body: 'Revision' })).rejects.toMatchObject({ status: 404 });
+  });
+
+  it('deletes only the requested draft and returns its account for the notification', async () => {
+    query.mockResolvedValueOnce({ rows: [{ account_id: 'acct-1' }] }).mockResolvedValueOnce({ rows: [] });
+    await expect(deleteDraft('draft-1')).resolves.toBe('acct-1');
+    await expect(deleteDraft('draft-1')).resolves.toBeNull();
+    expect(query).toHaveBeenCalledWith('DELETE FROM x_drafts WHERE id=$1 RETURNING account_id', ['draft-1']);
+    expect(openXHandoff).not.toHaveBeenCalled();
+  });
+
+  it('refuses a compose handoff while the same draft is being deleted', async () => {
+    const id = '00000000-0000-4000-8000-000000000abc';
+    let finishDelete;
+    query.mockImplementationOnce(() => new Promise((resolve) => { finishDelete = resolve; }));
+    const deleting = deleteDraft(id);
+    await expect(openApprovedDraft(id.toUpperCase())).rejects.toMatchObject({ status: 409 });
+    expect(openXHandoff).not.toHaveBeenCalled();
+    finishDelete({ rows: [{ account_id: 'acct-1' }] });
+    await expect(deleting).resolves.toBe('acct-1');
+  });
+});
+
 describe('openApprovedDraft approval gates', () => {
   const draftRow = (overrides = {}) => ({
     id: 'draft-1',
@@ -438,6 +487,40 @@ describe('openApprovedDraft approval gates', () => {
   });
 });
 
+describe('updateAccount', () => {
+  beforeEach(() => {
+    query.mockReset();
+  });
+
+  it('preserves concurrent patches to different fields in a single statement per patch', async () => {
+    const row = { id: 'a', username: 'example_user', label: 'Example', enabled: true, notes: 'Old notes' };
+    query.mockImplementation(async (sql, params) => {
+      // Apply the UPDATE assignments to the current row, as PostgreSQL does.
+      expect(sql).toMatch(/^UPDATE x_accounts SET .* WHERE id = \$1 RETURNING \*$/);
+      expect(params[0]).toBe(row.id);
+      for (const [, column, parameter] of sql.matchAll(/(\w+) = \$(\d+)/g)) {
+        if (column !== 'id') row[column] = params[Number(parameter) - 1];
+      }
+      return { rows: [{ ...row }] };
+    });
+
+    const [disabled, cleared] = await Promise.all([
+      updateAccount('a', { enabled: false }),
+      updateAccount('a', { notes: '' }),
+    ]);
+
+    expect(query.mock.calls.map(([, params]) => params)).toEqual([['a', false], ['a', '']]);
+    expect(disabled).toMatchObject({ enabled: false });
+    expect(cleared).toMatchObject({ enabled: false, notes: '', label: 'Example', username: 'example_user' });
+  });
+
+  it('returns null when the update matches no account', async () => {
+    query.mockResolvedValueOnce({ rows: [] });
+    await expect(updateAccount('missing', { label: 'Example' })).resolves.toBeNull();
+    expect(query).toHaveBeenCalledTimes(1);
+  });
+});
+
 describe('X service refusals are 4xx, not 500', () => {
   beforeEach(() => {
     vi.clearAllMocks();
@@ -453,7 +536,6 @@ describe('X service refusals are 4xx, not 500', () => {
       message: 'An X account with that username already exists',
     });
 
-    query.mockResolvedValueOnce({ rows: [{ id: 'a', username: 'example_user' }] });
     query.mockRejectedValueOnce(Object.assign(new Error('violates foreign key constraint "x_accounts_pkey"'), { code: '23503' }));
     await expect(updateAccount('a', { label: 'B' })).rejects.toMatchObject({ status: 404, message: 'X account not found' });
   });

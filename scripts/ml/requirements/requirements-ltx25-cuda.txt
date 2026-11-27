@@ -1,6 +1,6 @@
 # LTX-2.5 CUDA direct pins. Install only the target hash lock.
 # Source packages use the immutable v1.2.0 archive, never git or a moving tag.
-# Regeneration, isolated build bootstrap and GPU evidence: docs/LTX25_CUDA.md.
+# Regeneration, isolated build bootstrap and GPU evidence: docs/RUNTIME_LOCKS.md#ltx-25-cuda.
 torch==2.14.1+cu132
 torchaudio==2.11.1+cu132
 torchvision==0.29.1+cu132

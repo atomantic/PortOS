@@ -110,13 +110,15 @@ describe('cosChallenge', () => {
       expect(classifyRecheckOutcome('Some preamble\n### Blocking\n- bar')).toBe('escalated');
     });
 
-    it('overturns when only non-blocking (recommended/nits) findings remain', () => {
-      expect(classifyRecheckOutcome('## Recommended\n- rename x\n\n## Nits\n- spacing')).toBe('upheld');
+    it('checks subsequent recognized headings after an empty section', () => {
+      expect(classifyRecheckOutcome('## Priority findings\r\n\r\n## Additional findings\r\n- Document the exit code')).toBe('escalated');
+      expect(classifyRecheckOutcome('## Blocking\n\n## Blocking\n- Fix the leak')).toBe('escalated');
     });
 
     it('does NOT escalate on a bare/empty Blocking header (noisy-reviewer guard)', () => {
       expect(classifyRecheckOutcome('## Blocking\n\n## Recommended\n- x')).toBe('upheld');
       expect(classifyRecheckOutcome('## Blocking')).toBe('upheld');
+      expect(classifyRecheckOutcome('## Priority findings — resolution required\n\n## Additional findings')).toBe('upheld');
     });
 
     it('returns null for unusable input so the caller treats it as a failed re-check', () => {
@@ -124,6 +126,8 @@ describe('cosChallenge', () => {
       expect(classifyRecheckOutcome('   ')).toBeNull();
       expect(classifyRecheckOutcome(null)).toBeNull();
       expect(classifyRecheckOutcome(undefined)).toBeNull();
+      expect(classifyRecheckOutcome('Review interrupted')).toBeNull();
+      expect(classifyRecheckOutcome('## Recommended\n- rename x\n\n## Nits\n- spacing')).toBeNull();
     });
   });
 

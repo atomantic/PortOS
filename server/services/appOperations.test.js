@@ -13,7 +13,7 @@ afterAll(cleanupTempDataRoots);
 
 describe('observed app work', () => {
   it('distinguishes an execution promise from a retained claim or finished handoff', async () => {
-    const io = { emit: vi.fn() };
+    const io = { except: () => ({ emit: vi.fn() }) };
     const { operation } = claimAppOperation(io, { id: 'example', name: 'Example', repoPath: '/example/app' }, 'update');
     expect(listActiveAppOperations()).toHaveLength(1);
     expect(listActiveAppOperations({ onlyRunning: true })).toEqual([]);

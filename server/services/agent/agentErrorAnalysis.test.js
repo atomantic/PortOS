@@ -266,6 +266,41 @@ describe('analyzeAgentFailure — ERROR_PATTERNS classification', () => {
     expect(analysis.message).toContain('gemini-3.6-flash');
   });
 
+  describe('launcher interactive sign-in in an unattended run', () => {
+    const options = { completionReason: 'shell-exit', completionError: 'Process exited with code 1' };
+    const spin = '⠼ Starting Example authentication… ⠴ Starting Example authentication… ⠦ Starting Example authentication… ';
+
+    it('classifies the callback-port collision as a provider auth-error, not unknown', () => {
+      const analysis = analyzeAgentFailure(withLead(`${spin}listen EADDRINUSE: address already in use 127.0.0.1:8787`), { id: 't' }, 'x', options);
+      expect(analysis).toMatchObject({ category: 'auth-error', origin: 'provider', actionable: false, requiresFallback: true });
+      expect(analysis.message).toContain('8787');
+    });
+
+    it('classifies the unanswered browser login timeout the same way', () => {
+      const output = withLead('⠧ Waiting for Example login in your browser…\nError: Example login timed out after five minutes');
+      expect(analyzeAgentFailure(output, { id: 't' }, 'x', options)).toMatchObject({ category: 'auth-error', origin: 'provider' });
+    });
+
+    it('classifies an input-ready deadline that fired mid sign-in as a provider auth-error', () => {
+      const waiting = '⠏ Waiting for Example login in your browser…\r⠋ Waiting for Example login in your browser…\r⠙ Waiting for Example login in your browser…\n';
+      const output = withLead(`⠧ Starting Example authentication…\nComplete Example login:\nhttps://sso.example.com/authorize?state=x\n${waiting}`);
+      const analysis = analyzeAgentFailure(output, { id: 't' }, 'x', { completionReason: 'tui-not-ready', completionError: 'claude did not present an input prompt within 45s, so no prompt was sent.' });
+      expect(analysis).toMatchObject({ category: 'auth-error', origin: 'provider', actionable: false, requiresFallback: true, completionReason: 'tui-not-ready' });
+    });
+
+    it('keeps the startup verdict when the run got past the sign-in spinner', () => {
+      const output = withLead('⠙ Waiting for Example login in your browser…\nSigned in.\nWelcome to the CLI, loading workspace and plugins now');
+      expect(analyzeAgentFailure(output, { id: 't' }, 'x', { completionReason: 'tui-not-ready', completionError: 'x' }).category).toBe('startup-failure');
+    });
+
+    it('does not promote a transcript that only quotes the spinner line', () => {
+      const output = withLead('The log said "Starting Example authentication…" and then the tests failed: test failed: expected 1 to be 2');
+      // The pre-existing loose `authentication` rule may still match, but only as
+      // output-scan, which never benches the provider.
+      expect(analyzeAgentFailure(output, { id: 't' }, 'x', options).origin).not.toBe('provider');
+    });
+  });
+
   it('classifies a 401/authentication error as actionable auth-error', () => {
     const analysis = analyzeAgentFailure(withLead('API Error: 401 Unauthorized — authentication failed'), { id: 't' }, 'x');
     expect(analysis.category).toBe('auth-error');

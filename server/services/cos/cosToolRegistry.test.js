@@ -1015,6 +1015,23 @@ describe('cosToolRegistry', () => {
       expect(mocks.executeTasks).not.toHaveBeenCalled();
     });
 
+    it.each(['persistent-mind-taks', 'sandbox.unknown', 'reports.unknown', 'constructor'])(
+      'rejects an unknown adapter kind %s before calling any handler',
+      async (kind) => {
+        mocks.adapter.resolveRecipeInvocation.mockResolvedValue({ ...recipeTool, adapter: { kind } });
+        const requestId = 'invalid-adapter';
+
+        await expect(executeCosToolCall({
+          call: { requestId, name: recipeTool.name },
+          authority: { scope: 'mind', capabilities: { manageToolRecipes: true } },
+        })).rejects.toMatchObject({ status: 500, code: 'TOOL_ADAPTER_MISSING' });
+        expect(mocks.executeTasks).not.toHaveBeenCalled();
+        expect(mocks.delegateSandbox).not.toHaveBeenCalled();
+        expect(mocks.adapter.assertAuditAccess).not.toHaveBeenCalled();
+        expect(__testing.toolCalls.has(requestId)).toBe(false);
+      },
+    );
+
     it('lists controllers with the shipped definitions and state-free install summaries', async () => {
       mocks.adapter.describeControllers.mockResolvedValue([{ id: 'example' }]);
       mocks.adapter.listControllers.mockResolvedValue({ counts: { installed: 0 }, installs: [] });

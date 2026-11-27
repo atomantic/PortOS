@@ -1,5 +1,6 @@
-import { useRef } from 'react';
+import { useRef, useState } from 'react';
 import toast from '../../ui/Toast';
+import { showBoardUndoToast } from '../BoardUndoToast.jsx';
 import {
   addMusicVideoScene,
   approveMusicVideoFinal,
@@ -12,6 +13,7 @@ import {
   moveMusicVideoSceneStart,
   reorderMusicVideoScenes,
   splitMusicVideoScene,
+  undoMusicVideoBoardEdit,
   updateMusicVideoScene,
   varyMusicVideoWipes,
 } from '../../../services/apiMusicVideo.js';
@@ -159,8 +161,34 @@ export default function useProduceStageWiring({
     saveScene(sceneId, patch);
   };
 
+  const [undoing, setUndoing] = useState(false);
+  const undoingRef = useRef(false);
+
+  // Restore the most recent structural/timing board edit (merge, split, delete, reorder, retime).
+  const handleUndoBoardEdit = ({ silentSuccess = false } = {}) => {
+    if (!selected || undoingRef.current) return Promise.resolve(false);
+    undoingRef.current = true;
+    setUndoing(true);
+    return boardEdit((projectId, options) => undoMusicVideoBoardEdit(projectId, { ...options, silent: true }))
+      .then(({ undone }) => {
+        if (!silentSuccess) toast.success(undone ? `Undid ${undone}` : 'Undid last board edit');
+        return true;
+      })
+      .catch((err) => {
+        toast.error(err?.message || 'Nothing to undo');
+        return false;
+      })
+      .finally(() => {
+        undoingRef.current = false;
+        setUndoing(false);
+      });
+  };
+
+  const canUndoReply = (reply) => Boolean(reply?.edit?.project?.boardUndo?.count || (!reply?.edit?.removed?.includes('boardUndo') && selected?.boardUndo?.count));
+
   const handleDeleteScene = (sceneId) => {
     boardEdit((projectId, options) => deleteMusicVideoScene(projectId, sceneId, options))
+      .then((reply) => showBoardUndoToast('Deleted shot', handleUndoBoardEdit, canUndoReply(reply)))
       .catch((err) => toast.error(err?.message || 'Failed to delete scene'));
   };
 
@@ -169,30 +197,35 @@ export default function useProduceStageWiring({
   // `atSec` cuts the shot in two at that song time instead (the card's "Split shot").
   const handleSplitScene = (sceneId, backend, atSec = null) => {
     boardEdit((projectId, options) => splitMusicVideoScene(projectId, sceneId, backend, { atSec, ...options }))
-      .then(({ scenes }) => {
-        toast.success(`Split into ${pluralize(scenes.length, 'shot')}`);
+      .then((reply) => {
+        showBoardUndoToast(`Split into ${pluralize(reply.scenes.length, 'shot')}`, handleUndoBoardEdit, canUndoReply(reply));
       })
       .catch((err) => toast.error(err?.message || 'Failed to split scene'));
   };
 
   // Cut the board on sung words over a run of lyric lines (#14820).
   const handleCutOnLyrics = ({ cueIds, mode }) => boardEdit((projectId, options) => cutMusicVideoScenesOnLyrics(projectId, { cueIds, mode }, options))
-    .then(({ scenes, skipped, laidOut }) => {
-      toast.success(`${laidOut ? 'Laid out' : 'Cut'} ${pluralize(scenes.length, 'shot')} on the words${skipped ? ` (${pluralize(skipped, 'word')} skipped: ${laidOut ? '' : 'outside a shot or '}too close to a cut)` : ''}`);
+    .then((reply) => {
+      const { scenes, skipped, laidOut } = reply;
+      showBoardUndoToast(
+        `${laidOut ? 'Laid out' : 'Cut'} ${pluralize(scenes.length, 'shot')} on the words${skipped ? ` (${pluralize(skipped, 'word')} skipped: ${laidOut ? '' : 'outside a shot or '}too close to a cut)` : ''}`,
+        handleUndoBoardEdit,
+        canUndoReply(reply),
+      );
     })
     .catch((err) => toast.error(err?.message || 'Failed to cut on the lyric words'));
 
   // Join a scene with the next one (the inverse of the split above).
   const handleMergeNextScene = (sceneId, backend) => {
     boardEdit((projectId, options) => mergeMusicVideoNextScene(projectId, sceneId, backend, options))
-      .then(() => toast.success('Merged with the next shot'))
+      .then((reply) => showBoardUndoToast('Merged with the next shot', handleUndoBoardEdit, canUndoReply(reply)))
       .catch((err) => toast.error(err?.message || 'Failed to merge scenes'));
   };
 
   // Extend a scene back over the previous one, which is removed (the mirror of the merge above).
   const handleMergePreviousScene = (sceneId, backend) => {
     boardEdit((projectId, options) => mergeMusicVideoPreviousScene(projectId, sceneId, backend, options))
-      .then(() => toast.success('Merged over the previous shot'))
+      .then((reply) => showBoardUndoToast('Merged over the previous shot', handleUndoBoardEdit, canUndoReply(reply)))
       .catch((err) => toast.error(err?.message || 'Failed to merge scenes'));
   };
 
@@ -210,12 +243,12 @@ export default function useProduceStageWiring({
   const reorderShots = (ids, moved) => {
     const wasApproved = !!productionReview.readiness?.storyboard?.approved;
     return boardEdit((projectId, options) => reorderMusicVideoScenes(projectId, ids, options))
-      .then(({ edit }) => {
+      .then((reply) => {
         // Reordering keeps each slot's timing: the moved shot's new time is in the reply.
-        const now = edit?.scenes?.find((s) => s.sceneId === moved.sceneId);
+        const now = reply?.edit?.scenes?.find((s) => s.sceneId === moved.sceneId);
         if (now) seekToScene(now);
         const at = typeof now?.startSec === 'number' ? ` to ${formatTimecode(now.startSec)}` : '';
-        toast.success(`Moved ${moved.label || 'shot'}${at}${wasApproved ? '; re-approve the storyboard' : ''}`);
+        showBoardUndoToast(`Moved ${moved.label || 'shot'}${at}${wasApproved ? '; re-approve the storyboard' : ''}`, handleUndoBoardEdit, canUndoReply(reply));
       })
       .catch((err) => toast.error(err?.message || 'Failed to reorder'));
   };
@@ -261,10 +294,13 @@ export default function useProduceStageWiring({
       })),
       // "Vary wipes": a wipe out of each of `count` shots from this one; only their cut-out fields change here.
       varyWipes: (fromSceneId, count) => boardEdit((projectId, options) => varyMusicVideoWipes(projectId, { fromSceneId, count, seed: Math.floor(Math.random() * 2147483646) }, options))
-        .then(({ scenes }) => {
-          toast.success(`Wipes on ${scenes.length} cut${scenes.length === 1 ? '' : 's'}`);
+        .then((reply) => {
+          showBoardUndoToast(`Wipes on ${reply.scenes.length} cut${reply.scenes.length === 1 ? '' : 's'}`, handleUndoBoardEdit, canUndoReply(reply));
         })
         .catch((err) => toast.error(err?.message || 'Failed to vary the wipes')),
+      boardUndo: selected.boardUndo || null,
+      undoingBoard: undoing,
+      onUndoBoardEdit: handleUndoBoardEdit,
       onAddScene: handleAddScene,
       onDeleteScene: handleDeleteScene,
       onSplitScene: handleSplitScene,

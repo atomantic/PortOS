@@ -10,9 +10,9 @@
  * digests) is narrowed: lazy `import()` edges count only where the record
  * cannot vouch for them (`recordedReach`), so a hub's lazy fan-out no longer
  * selects every suite. The planner's explicit files are always added. A
- * gate-tooling test (`TOOLING_TESTS`) can never earn a record, so it is kept
- * from the walk only when a changed source reaches its closure; otherwise the
- * planner selects it through the tooling owner paths.
+ * gate-tooling test stays in a related walk only when a changed source
+ * reaches its real inputs. The planner may also select heavyweight tooling
+ * suites explicitly through their owner paths.
  * Vitest then receives the exact list through a selection file
  * (`vitestRunnerSelection` in `scripts/vitestCiPool.js`).
  *
@@ -45,7 +45,8 @@ import { homedir, tmpdir } from 'node:os';
 import * as nodePath from 'node:path';
 import { dirname, isAbsolute, join, relative, sep } from 'node:path';
 import { resolveTestChrome } from './testChrome.js';
-import { TOOLING_TESTS, getAlwaysRunTests } from './ciPlanRules.js';
+import { collectionFixtureSources } from '../perf/collectionFixtureSources.js';
+import { getAlwaysRunTests, isGateToolingTest } from './ciPlanRules.js';
 import { FULL_SUITE_SHARDS } from './ciPlanOutput.js';
 import { isGuardTest } from './guardScanners.js';
 import { NEVER_MARKER, TEST_MEMO_NEVER, WORKSPACE_BASE_INPUTS, WORKSPACE_SETUP_ENTRIES, createDiskFs, createTestMemoAnalyzer, relatedTests } from './testMemo.js';
@@ -73,35 +74,15 @@ const neverMemoized = (test, repoRoot, alwaysRun) => {
 /** True when a changed source is a member or a non-module input of the verdict's closure. */
 const reachesClosure = (info, sources) => sources.some((rel) => info.closure.has(rel) || info.inputs.has(rel));
 
-/**
- * The runner's selection and memo verdicts for one workspace. Verdicts cover
- * only owned candidates. For related plans, selection is also local to the
- * shard because reach is determined from those verdicts.
- *
- * @param {object} options
- * @param {'server'|'client'|'db'} options.scope
- * @param {'full'|'files'|'related'} options.mode
- * @param {string[]} options.repoFiles planner-selected test files (repo-relative)
- * @param {string[]} options.repoSources changed sources for related mode (repo-relative)
- * @param {string|string[]|null} options.memoDir null when the memo is off; several directories read in order (`testMemoStore.js`)
- * @param {object|null} [options.factsCache] parsed file facts from earlier runs (`factsCache.js`); loaded from the store by default
- * @param {Array<{label: string, env: object, caseFilter: string[]}>} [options.acceptVerdictsFrom]
- *   settings whose green entry may also skip a file here (`createTestMemoAnalyzer`)
- * @param {string} [options.provisionableTool] tool that setup can change, for counting misses that may still become hits
- * @returns {{ selected: string[], run: string[], skipped: Array<{test: string, via: 'recorded'|'floor', from?: string}>,
- *   unsettled: number, unmemoizable: Set<string>, analyze: (test: string, recorded: string[]) => object, verdicts: Map }}
- */
-export function planTestMemo({ scope, mode, repoFiles, repoSources, memoDir, repoRoot, shard = null, env = process.env, platform, arch, nodeVersion, toolVersion = () => null, freshToolVersion = toolVersion, requireToolVersions = false, provisionableTool, planBeforeClientSetup = false, caseFilter = [], acceptVerdictsFrom = [], listFiles = listRepositoryFiles, shardSlice = serverShardSlice, listTests = listWorkspaceTests, readRecord = readMemoRecord, readEntry = readMemoEntry, factsCache = memoDir ? loadFactsCache(memoDir, scope) : null }) {
-  const candidates = mode === 'files' ? uniqueSorted(repoFiles)
-    : uniqueSorted([...listTests(scope, { repoRoot, platform, env }).map((rel) => toRepoPath(scope, rel)), ...repoFiles]);
-  // Related reach can differ between sibling shards with different memo records.
-  // Partition the complete inventory first so this cannot move a test's owner.
-  const owned = shard ? shardSlice(candidates, { repoRoot, scope, ...shard }) : candidates;
-  // Full and files modes already know what to run without analyzing never-memoized tests.
-  const alwaysRun = new Set(getAlwaysRunTests());
-  const unmemoizable = new Set(mode === 'files' || (mode === 'full' && memoDir)
-    ? owned.filter((test) => neverMemoized(test, repoRoot, alwaysRun)) : []);
-  const options = { fs: createDiskFs(repoRoot, nodeFs, nodePath), workspaceRel: workspaceOf(scope), env, platform, arch, nodeVersion, toolVersion, requireToolVersions, planBeforeClientSetup, caseFilter, acceptVerdictsFrom, listFiles: () => listFiles(repoRoot), factsCache };
+function createMemoRunAnalysis({ scope, repoRoot, env = process.env, platform, arch, nodeVersion, toolVersion, freshToolVersion = toolVersion,
+  requireToolVersions, planBeforeClientSetup, caseFilter = [], acceptVerdictsFrom, listFiles = listRepositoryFiles, factsCache }) {
+  const fs = createDiskFs(repoRoot, nodeFs, nodePath, {
+    collectionFixtureSources: () => {
+      try { return collectionFixtureSources(repoRoot); } catch { return null; }
+    },
+  });
+  const options = { fs, workspaceRel: workspaceOf(scope), env, platform, arch, nodeVersion, toolVersion, requireToolVersions,
+    planBeforeClientSetup, caseFilter, acceptVerdictsFrom, listFiles: () => listFiles(repoRoot), factsCache };
   // Built on first use: a plan whose candidates are all unmemoizable never pays for the base closure.
   let primary = null;
   const analyze = (test, recorded, digests = null, served = null) => {
@@ -124,6 +105,71 @@ export function planTestMemo({ scope, mode, repoFiles, repoSources, memoDir, rep
   // Digests for a new record come from the post-run analyzer, whose key matched the pre-run one.
   const moduleDigest = (rel) => fresh?.analyzer.moduleDigest(rel) ?? null;
 
+  return { analyze, freshAnalyze, moduleDigest, caseFiltered: caseFilter.length > 0 };
+}
+
+/**
+ * Snapshot only the previously selected suites, using the installed tools
+ * and packages so trusted CI can verify and record results after Vitest.
+ */
+export function prepareMemoRun(run, { memoDir, ...options }) {
+  if (!memoDir) return { run };
+  const { scope, repoRoot } = options;
+  const factsCache = loadFactsCache(memoDir, scope);
+  const analysis = createMemoRunAnalysis({ ...options, factsCache });
+  const alwaysRun = new Set(getAlwaysRunTests());
+  const unmemoizable = new Set();
+  const verdicts = new Map();
+  for (const test of run) {
+    if (neverMemoized(test, repoRoot, alwaysRun)) {
+      unmemoizable.add(test);
+      continue;
+    }
+    const record = readMemoRecord(memoDir, scope, test);
+    const info = analysis.analyze(test, record?.modules ?? null, null, record?.served ?? null);
+    // Capture the static floor now. recordTestMemo compares it after Vitest.
+    verdicts.set(test, { floor: info.floor });
+  }
+  return { ...analysis, run, unmemoizable, verdicts, factsCache };
+}
+
+/** Partition the complete memo-independent inventory before evaluating related reach or skipping green tests. */
+export function sliceTestCandidates({ scope, mode, repoFiles, repoRoot, shard, env, platform,
+  shardSlice = serverShardSlice, listTests = listWorkspaceTests }) {
+  const candidates = mode === 'files' ? uniqueSorted(repoFiles)
+    : uniqueSorted([...listTests(scope, { repoRoot, platform, env }).map((rel) => toRepoPath(scope, rel)), ...repoFiles]);
+  const owned = shard ? shardSlice(candidates, { repoRoot, scope, ...shard }) : candidates;
+  return { candidates, owned };
+}
+
+/**
+ * The runner's selection and memo verdicts for one workspace. Verdicts cover
+ * only owned candidates. For related plans, selection is also local to the
+ * shard because reach is determined from those verdicts.
+ *
+ * @param {object} options
+ * @param {'server'|'client'|'db'} options.scope
+ * @param {'full'|'files'|'related'} options.mode
+ * @param {string[]} options.repoFiles planner-selected test files (repo-relative)
+ * @param {string[]} options.repoSources changed sources for related mode (repo-relative)
+ * @param {string|string[]|null} options.memoDir null when the memo is off; several directories read in order (`testMemoStore.js`)
+ * @param {object|null} [options.factsCache] parsed file facts from earlier runs (`factsCache.js`); loaded from the store by default
+ * @param {Array<{label: string, env: object, caseFilter: string[]}>} [options.acceptVerdictsFrom]
+ *   settings whose green entry may also skip a file here (`createTestMemoAnalyzer`)
+ * @param {string} [options.provisionableTool] tool that setup can change, for counting misses that may still become hits
+ * @returns {{ selected: string[], run: string[], skipped: Array<{test: string, via: 'recorded'|'floor', from?: string}>,
+ *   unsettled: number, unmemoizable: Set<string>, analyze: (test: string, recorded: string[]) => object, verdicts: Map }}
+ */
+export function planTestMemo({ scope, mode, repoFiles, repoSources, memoDir, repoRoot, shard = null, env = process.env, platform, arch, nodeVersion, toolVersion = () => null, freshToolVersion = toolVersion, requireToolVersions = false, provisionableTool, planBeforeClientSetup = false, caseFilter = [], acceptVerdictsFrom = [], listFiles = listRepositoryFiles, shardSlice = serverShardSlice, listTests = listWorkspaceTests, readRecord = readMemoRecord, readEntry = readMemoEntry, factsCache = memoDir ? loadFactsCache(memoDir, scope) : null }) {
+  const { candidates, owned } = sliceTestCandidates({ scope, mode, repoFiles, repoRoot, shard, env, platform, shardSlice, listTests });
+  // Full and files modes already know what to run without analyzing never-memoized tests.
+  const alwaysRun = new Set(getAlwaysRunTests());
+  const unmemoizable = new Set(mode === 'files' || (mode === 'full' && memoDir)
+    ? owned.filter((test) => neverMemoized(test, repoRoot, alwaysRun)) : []);
+  const analysis = createMemoRunAnalysis({ scope, repoRoot, env, platform, arch, nodeVersion, toolVersion, freshToolVersion,
+    requireToolVersions, planBeforeClientSetup, caseFilter, acceptVerdictsFrom, listFiles, factsCache });
+  const { analyze } = analysis;
+
   // Closures are needed to look up memo entries and to resolve a related
   // plan. With the memo off, a full or files plan is just its list — the
   // analysis of a whole workspace (~10s) must not sit in front of Vitest,
@@ -142,11 +188,11 @@ export function planTestMemo({ scope, mode, repoFiles, repoSources, memoDir, rep
   if (mode === 'related') {
     const ownedTests = new Set(owned);
     const explicit = repoFiles.filter((test) => ownedTests.has(test));
-    // A gate-tooling test never earns a narrowing record, so the walk would select it on any
-    // diff (an unresolved edge or open read fails closed). It stays only when a changed
-    // source is in its closure or inputs; otherwise the planner's explicit files carry it.
+    // An unresolved edge or open read would select a tooling test on any diff.
+    // Include it in the related walk only if the diff reaches its real inputs.
+    // The heavyweight suites also have explicit selectors from the planner.
     const reached = relatedTests(verdicts, repoSources)
-      .filter((test) => !TOOLING_TESTS.includes(test) || reachesClosure(verdicts.get(test), repoSources));
+      .filter((test) => !isGateToolingTest(test) || reachesClosure(verdicts.get(test), repoSources));
     selected = uniqueSorted([...reached, ...explicit]);
   }
   const slice = mode === 'related' ? selected : owned;
@@ -182,7 +228,7 @@ export function planTestMemo({ scope, mode, repoFiles, repoSources, memoDir, rep
     }
   }
   const narrowed = mode === 'related' ? [...verdicts.values()].filter((info) => info.narrowed).length : 0;
-  return { selected, slice, run, skipped, unsettled, unmemoizable, unanalyzed, narrowed, analyze, freshAnalyze, moduleDigest, verdicts, caseFiltered: caseFilter.length > 0, factsCache };
+  return { selected, slice, run, skipped, unsettled, unmemoizable, unanalyzed, narrowed, ...analysis, verdicts, factsCache };
 }
 
 export function memoSummaryLine(plan) {
@@ -232,43 +278,48 @@ export function vitestShardSlice(files, { repoRoot, scope, index, count, path = 
   return hashed.slice(start, end).map(({ rel }) => rel);
 }
 
-// Balance heavy suites, always-run guards and the non-capture serial tail
-// across the two server jobs (#18336). The duration budget includes shard 1's
-// 7s Smoke-boot step. Other files keep their hash owner and memo cache lineage.
+// Balance heavy suites, always-run guards and the serial tail against the
+// four hashed slices using hosted cold and memoized timings (#19771).
+// Shard 1 has extra headroom for the Smoke-boot step.
 export const SERVER_HEAVY_SHARD_OWNERS = {
-  'server/test/guards/repo.guard.test.js': 1,
-  'server/test/guards/runtime.guard.test.js': 1,
-  'server/scripts/run-local-code-review.test.js': 1,
-  'server/lib/workTracker.trackerInstructions.test.js': 1,
-  'server/services/databaseMaintenanceCutover.test.js': 1,
-  'server/services/creativeDirector/videoAssembly.test.js': 1,
-  'scripts/workspaceCaches.test.js': 1,
-  'scripts/pregate.test.js': 1,
-  'scripts/setup-image-video.test.js': 1,
-  'scripts/lib/testMemo.test.js': 1,
-  'scripts/vitestSiblingSweep.test.js': 1,
-  'scripts/update-headless-recovery.test.js': 1,
-  'server/services/updateExecutor.deferred.test.js': 1,
   'scripts/runCiTestsClientFixture.test.js': 1,
+  'scripts/workspaceCaches.test.js': 1,
+  'server/routes/musicVideoBlender.test.js': 1,
+  'server/services/backup.authority.test.js': 1,
+  'server/services/creativeDirector/videoAssembly.test.js': 1,
   'server/services/musicVideo/castAndSetsService.test.js': 1,
-  'server/services/musicVideo/audioAnalysis.test.js': 1,
-  'server/lib/databaseMaintenanceWorker.test.js': 1,
-  'server/test/guards/modules.guard.test.js': 2,
-  'scripts/ci-test-plan.test.js': 2,
-  'server/routes/cosAgentRoutes.ownershipResponse.test.js': 2,
-  'server/services/git.sharedRecovery.test.js': 2,
-  'server/services/musicVideo/publishKit.test.js': 2,
-  'server/services/musicVideo/sharingCopy.test.js': 2,
-  'scripts/run-ci-tests.test.js': 2,
-  'server/services/repoRepairCompletion.test.js': 2,
+  'server/services/musicVideo/sharingCopy.test.js': 1,
+  'server/services/repoRepairCompletion.test.js': 1,
+  'server/test/guards/repo.guard.test.js': 1,
   'scripts/lib/testMemoRunner.test.js': 2,
-  'scripts/vitestTempRoot.test.js': 2,
-  'scripts/generate_ltx2.test.js': 2,
-  'server/services/claimBranchCleanup.integration.test.js': 2,
-  'server/routes/musicVideoBlender.test.js': 2,
-  'server/services/eidoverseWorld.runtime.test.js': 2,
+  'scripts/ml/generate_ltx2.test.js': 2,
+  'scripts/pregate.test.js': 2,
   'scripts/setup-voice.ps1.test.js': 2,
-  'server/routes/musicVideoDcp.test.js': 2,
+  'scripts/vitestCiPool.test.js': 2,
+  'scripts/vitestSiblingSweep.test.js': 2,
+  'scripts/vitestTempRoot.test.js': 2,
+  'server/lib/workTracker.trackerInstructions.test.js': 2,
+  'server/services/git.sharedRecovery.test.js': 2,
+  'server/services/updateExecutor.deferred.test.js': 2,
+  'server/test/guards/runtime.guard.test.js': 2,
+  'scripts/ci-test-plan.test.js': 3,
+  'scripts/lib/testMemo.test.js': 3,
+  'server/lib/databaseMaintenanceWorker.test.js': 3,
+  'server/scripts/run-local-code-review.test.js': 3,
+  'server/services/databaseMaintenanceCutover.test.js': 3,
+  'server/services/eidoverseWorld.runtime.test.js': 3,
+  'server/services/musicVideo/autonomousService.test.js': 3,
+  'server/services/musicVideo/documentGeneration.test.js': 3,
+  'server/test/guards/modules.guard.test.js': 3,
+  'scripts/db-lifecycle-dispatch.test.js': 4,
+  'scripts/run-ci-tests.test.js': 4,
+  'scripts/setup-image-video.test.js': 4,
+  'scripts/update-headless-recovery.test.js': 4,
+  'server/routes/cosAgentRoutes.ownershipResponse.test.js': 4,
+  'server/routes/musicVideoDcp.test.js': 4,
+  'server/services/claimBranchCleanup.integration.test.js': 4,
+  'server/services/musicVideo/audioAnalysis.test.js': 4,
+  'server/services/musicVideo/publishKit.test.js': 4,
 };
 
 /**
@@ -316,15 +367,14 @@ export const CLIENT_BROWSER_SHARD_OWNERS = Object.freeze({
 });
 
 /**
- * Shard `index` of `count`. Server with two shards moves `SERVER_HEAVY_SHARD_OWNERS`
- * and the client matrix moves `CLIENT_BROWSER_SHARD_OWNERS` off the hash. Every
- * other file stays where `vitestShardSlice` of the full list put it. Any other
- * shape is that hash alone, so Vitest's own sequencer stays aligned.
+ * Shard `index` of `count`. The full-width server and client matrices pin costly
+ * suites onto their configured owners. The remaining files keep their
+ * `vitestShardSlice` owner. Other matrix widths use Vitest's hash alone.
  */
 export function serverShardSlice(files, options) {
   const { index, count, scope } = options;
   const owners = scope === 'client' && count === FULL_SUITE_SHARDS.client ? CLIENT_BROWSER_SHARD_OWNERS
-    : scope !== 'client' && count === 2 ? SERVER_HEAVY_SHARD_OWNERS : null;
+    : scope === 'server' && count === FULL_SUITE_SHARDS.server ? SERVER_HEAVY_SHARD_OWNERS : null;
   if (!owners) return vitestShardSlice(files, options);
   const pinned = new Set(files.filter((file) => Number.isInteger(owners[file])));
   if (pinned.size === 0) return vitestShardSlice(files, options);

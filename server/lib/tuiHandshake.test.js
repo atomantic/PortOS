@@ -1,85 +1,93 @@
-import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import {
-  PASTE_MARKER_PATTERN,
-  detectPasteMarker,
-  countPasteMarkers,
-  createGenerationActivityTracker,
-  createSelfClearingSignalGate,
-  createOomNudgeGate,
+  CAPACITY_NUDGE_SETTLE_MS,
+  CAPACITY_NUDGE_COOLDOWN_MS,
+  SUBMIT_ENTER_ATTEMPTS,
+  SUBMIT_ENTER_SPACING_MS,
   OOM_NUDGE_SETTLE_MS,
   OOM_NUDGE_ARM_WINDOW_MS,
   OOM_NUDGE_COOLDOWN_MS,
+  STALL_NUDGE_IDLE_MS,
+  STALL_NUDGE_RECOVERY_MS,
+  SELF_CLEARING_RESUBMIT_INTERVAL_MS,
+  SELF_CLEARING_RESUBMIT_ECHO_MS,
+  RETRY_STALL_MS,
+  RETRY_STALL_MIN_ADVANCES,
+  TOOL_PERMISSION_REPAINT_COOLDOWN_MS,
+  TUI_TRUST_MAX_NAVIGATIONS,
+  TUI_TRUST_NAVIGATION_MIN_AGE_MS,
+  TUI_TRUST_SETTLE_MS,
+} from '../test/fixtures/tuiTiming.js';
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
+import {
+  countPasteMarkers,
+  createPromptSubmissionGate,
+  isPasteCommitted,
+  isPasteConfirmed,
+  createMcpBootTracker,
+  scheduleSubmitEnters,
+  extractVerifiablePromptPrefix,
+  SUBMIT_KEY,
+} from './tuiPromptSubmission.js';
+import {
+  createAgyResumeGate,
+  createModelCapacityNudgeGate,
+  CAPACITY_NUDGE_MAX_ATTEMPTS,
+  createGenerationActivityTracker,
+  createSelfClearingSignalGate,
+  createOomNudgeGate,
   OOM_NUDGE_MAX_ATTEMPTS,
   createTruncationNudgeGate,
   TRUNCATION_NUDGE_MAX_ATTEMPTS,
   createStallNudgeGate,
-  createPromptSubmissionGate,
   STALL_NUDGE_MAX_TOTAL,
-  STALL_NUDGE_IDLE_MS,
-  STALL_NUDGE_RECOVERY_MS,
   STALL_NUDGE_MAX_ATTEMPTS,
-  SELF_CLEARING_RESUBMIT_INTERVAL_MS,
-  SELF_CLEARING_RESUBMIT_ECHO_MS,
-  isPasteCommitted,
-  isPasteConfirmed,
-  isMcpBootSignal,
-  createMcpBootTracker,
-  SUBMIT_ENTER_ATTEMPTS,
-  SUBMIT_ENTER_SPACING_MS,
+  createRetryStallGate,
+  createToolPermissionGate,
+  TOOL_PERMISSION_DECLINE_MAX,
+  TOOL_PERMISSION_NUDGE_TEXT,
+  screenShowsInFlightChrome,
+} from './tuiSignalGates.js';
+import {
   inferTuiCommand,
   applyCommandDefaults,
   buildTuiInvocation,
   detectMissingTuiBinary,
-  scheduleSubmitEnters,
-  extractVerifiablePromptPrefix,
-  verifyPasteRendered,
-  isCollapsedPasteChip,
+} from './tuiHandshake.js';
+import {
   createInputReadyTracker,
   describeTrustGateFailure,
-  TUI_TRUST_MAX_NAVIGATIONS,
-  TUI_TRUST_NAVIGATION_MIN_AGE_MS,
-  TUI_TRUST_SETTLE_MS,
   createStartupDialogAnswers,
   answerStartupDialogs,
-  SUBMIT_KEY,
   AGY_INPUT_READY_PATTERN,
-  createRetryStallGate,
-  RETRY_STALL_MS,
-  RETRY_STALL_MIN_ADVANCES,
-  detectToolPermissionPrompt,
-  createToolPermissionGate,
-  TOOL_PERMISSION_REPAINT_COOLDOWN_MS,
-  TOOL_PERMISSION_DECLINE_MAX,
-  TOOL_PERMISSION_NUDGE_TEXT,
   CODEX_COMPOSER_READY_PATTERN,
-  screenShowsInFlightChrome,
-} from './tuiHandshake.js';
+} from './tuiReadyTracker.js';
 import { detectImmediateFallbackSignal } from './aiToolkit/errorDetection.js';
 import { CODEX_CONFIGURED_DEFAULT } from './provider/providerModels.js';
 import { readFileSync } from 'fs';
 import { dirname, resolve } from 'path';
 import { fileURLToPath } from 'url';
 
-describe('tuiHandshake — paste timing constants', () => {  it('PASTE_MARKER_PATTERN matches Claude Code paste markers', () => {
-    expect(PASTE_MARKER_PATTERN.test('[Pasted text #1 +3 lines]')).toBe(true);
-    expect(PASTE_MARKER_PATTERN.test('[Pasted text #42 +120 lines]')).toBe(true);
+describe('TUI paste markers', () => {
+  it('countPasteMarkers matches Claude Code paste markers', () => {
+    expect(countPasteMarkers('[Pasted text #1 +3 lines]')).toBe(1);
+    expect(countPasteMarkers('[Pasted text #42 +120 lines]')).toBe(1);
     // Embedded inside a banner of escape-stripped output.
-    expect(PASTE_MARKER_PATTERN.test('banner stuff [Pasted text #7 +1 lines] trailer')).toBe(true);
+    expect(countPasteMarkers('banner stuff [Pasted text #7 +1 lines] trailer')).toBe(1);
   });
 
-  it('PASTE_MARKER_PATTERN matches Codex paste-commit chips', () => {
-    expect(PASTE_MARKER_PATTERN.test('[Pasted Content 2431 chars]')).toBe(true);
-    expect(PASTE_MARKER_PATTERN.test('[PastedContent2431chars]')).toBe(true);
+  it('countPasteMarkers matches Codex paste-commit chips', () => {
+    expect(countPasteMarkers('[Pasted Content 2431 chars]')).toBe(1);
+    expect(countPasteMarkers('[PastedContent2431chars]')).toBe(1);
   });
 
-  it('PASTE_MARKER_PATTERN matches OpenCode paste-commit chips', () => {
-    expect(PASTE_MARKER_PATTERN.test('[Pasted ~46 lines]')).toBe(true);
-    expect(PASTE_MARKER_PATTERN.test('[Pasted~46lines]')).toBe(true);
-    expect(PASTE_MARKER_PATTERN.test('[Pasted ~1 line]')).toBe(true);
-    expect(PASTE_MARKER_PATTERN.test('[Pasted ~46 chars]')).toBe(false);
+  it('countPasteMarkers matches OpenCode paste-commit chips', () => {
+    expect(countPasteMarkers('[Pasted ~46 lines]')).toBe(1);
+    expect(countPasteMarkers('[Pasted~46lines]')).toBe(1);
+    expect(countPasteMarkers('[Pasted ~1 line]')).toBe(1);
+    expect(countPasteMarkers('[Pasted ~46 chars]')).toBe(0);
   });
 
-  it('PASTE_MARKER_PATTERN matches Pi paste-commit chips', () => {
+  it('countPasteMarkers matches Pi paste-commit chips', () => {
     // Pi spells the chip `[paste #N +M lines]` — lowercase and WITHOUT the
     // trailing `d` every other TUI uses, and with no `text` token. Real
     // incident (2026-09-17): a pi-TUI CoS agent pasted its prompt 3 times and
@@ -88,10 +96,10 @@ describe('tuiHandshake — paste timing constants', () => {  it('PASTE_MARKER_PA
     // sent. Pi collapses the paste and HIDES the body, so the marker is the
     // ONLY confirmation signal available — without it the text fallback in
     // verifyPasteRendered can never succeed either.
-    expect(PASTE_MARKER_PATTERN.test('[paste #1 +371 lines]')).toBe(true);
-    expect(PASTE_MARKER_PATTERN.test('[paste #3 +1 line]')).toBe(true);
+    expect(countPasteMarkers('[paste #1 +371 lines]')).toBe(1);
+    expect(countPasteMarkers('[paste #3 +1 line]')).toBe(1);
     // Space-collapsed form left behind by the ANSI stripper.
-    expect(PASTE_MARKER_PATTERN.test('[paste#1+371lines]')).toBe(true);
+    expect(countPasteMarkers('[paste#1+371lines]')).toBe(1);
     // Each re-paste adds its own chip, so the count is what distinguishes the
     // TUI's own commit from a marker echoed out of the prompt.
     expect(countPasteMarkers('[paste #1 +371 lines][paste #2 +371 lines]')).toBe(2);
@@ -104,22 +112,22 @@ describe('tuiHandshake — paste timing constants', () => {  it('PASTE_MARKER_PA
     const verifiablePrefix = extractVerifiablePromptPrefix(prompt);
     expect(verifiablePrefix).toBeTruthy();
     const buffer = '[Skills] find-skills, hyperframes\n[paste #1 +371 lines]';
-    expect(verifyPasteRendered(buffer, verifiablePrefix)).toBe(false);
+    expect(buffer.replace(/\s+/g, '')).not.toContain(verifiablePrefix.replace(/\s+/g, ''));
     expect(isPasteConfirmed(buffer, { verifiablePrefix, promptMarkerCount: 0 })).toBe(true);
   });
 
-  it('PASTE_MARKER_PATTERN matches the SPACE-COLLAPSED form left after ANSI strip', () => {
+  it('countPasteMarkers matches the SPACE-COLLAPSED form left after ANSI strip', () => {
     // The raw PTY stream renders the marker with absolute-column cursor moves
     // between tokens (`[Pasted\x1b[11Gtext\x1b[16G#1…`), so once ANSI is stripped
     // the spaces vanish and glyphs collapse adjacent. This is the exact shape
     // observed in real transcripts and the root cause of #1229 — a space-
     // requiring regex never matched it. (See the integration assertion below
     // that strips the real escape sequence and matches the result.)
-    expect(PASTE_MARKER_PATTERN.test('[Pastedtext#1+35lines]')).toBe(true);
-    expect(PASTE_MARKER_PATTERN.test('[Pastedtext#42+120lines]')).toBe(true);
+    expect(countPasteMarkers('[Pastedtext#1+35lines]')).toBe(1);
+    expect(countPasteMarkers('[Pastedtext#42+120lines]')).toBe(1);
   });
 
-  it('PASTE_MARKER_PATTERN matches the real cursor-positioned marker once ANSI-stripped', () => {
+  it('countPasteMarkers matches the real cursor-positioned marker once ANSI-stripped', () => {
     // Verbatim byte shape from data/cos/agents/.../raw.txt, stripped the same
     // way the streaming ANSI stripper does (drop CSI sequences).
     const rawMarker = '[Pasted\x1b[11Gtext\x1b[16G#1\x1b[19G+35\x1b[23Glines]';
@@ -127,25 +135,25 @@ describe('tuiHandshake — paste timing constants', () => {  it('PASTE_MARKER_PA
     expect(stripped).toBe('[Pastedtext#1+35lines]');
     // The raw form must NOT match (regression guard: this is why the fast path
     // was dead) but the stripped form MUST.
-    expect(detectPasteMarker(rawMarker)).toBe(false);
-    expect(detectPasteMarker(stripped)).toBe(true);
+    expect(countPasteMarkers(rawMarker)).toBe(0);
+    expect(countPasteMarkers(stripped)).toBe(1);
   });
 
-  it('PASTE_MARKER_PATTERN does NOT match similar-looking but distinct text', () => {
-    expect(PASTE_MARKER_PATTERN.test('[Pasted text]')).toBe(false);
-    expect(PASTE_MARKER_PATTERN.test('[Pasted #1]')).toBe(false);
+  it('countPasteMarkers does NOT match similar-looking but distinct text', () => {
+    expect(countPasteMarkers('[Pasted text]')).toBe(0);
+    expect(countPasteMarkers('[Pasted #1]')).toBe(0);
     // Pi's `#N` branch requires the `+M lines` tail, so a bare chip stays out.
-    expect(PASTE_MARKER_PATTERN.test('[paste #1]')).toBe(false);
-    expect(PASTE_MARKER_PATTERN.test('[paste #1 +371 chars]')).toBe(false);
-    expect(PASTE_MARKER_PATTERN.test('Pasted text #1')).toBe(false);
-    expect(PASTE_MARKER_PATTERN.test('')).toBe(false);
+    expect(countPasteMarkers('[paste #1]')).toBe(0);
+    expect(countPasteMarkers('[paste #1 +371 chars]')).toBe(0);
+    expect(countPasteMarkers('Pasted text #1')).toBe(0);
+    expect(countPasteMarkers('')).toBe(0);
   });
 
-  it('detectPasteMarker guards non-string input', () => {
-    expect(detectPasteMarker(null)).toBe(false);
-    expect(detectPasteMarker(undefined)).toBe(false);
-    expect(detectPasteMarker(123)).toBe(false);
-    expect(detectPasteMarker('[Pasted text #1 +3 lines]')).toBe(true);
+  it('countPasteMarkers guards non-string input', () => {
+    expect(countPasteMarkers(null)).toBe(0);
+    expect(countPasteMarkers(undefined)).toBe(0);
+    expect(countPasteMarkers(123)).toBe(0);
+    expect(countPasteMarkers('[Pasted text #1 +3 lines]')).toBe(1);
   });
 
   it('countPasteMarkers counts markers (so an echoed-prompt marker can be subtracted)', () => {
@@ -462,21 +470,21 @@ describe('tuiHandshake — paste timing constants', () => {  it('PASTE_MARKER_PA
 });
 
 describe('tuiHandshake — codex MCP-boot paste patience (agent-c5a26b40)', () => {
-  it('isMcpBootSignal matches codex MCP boot banners (case-insensitive)', () => {
-    expect(isMcpBootSignal('Booting MCP server: codex_apps(0s • esc to interrupt)')).toBe(true);
-    expect(isMcpBootSignal('Starting MCP servers (0/3): codex_apps, node_repl, playwright')).toBe(true);
-    expect(isMcpBootSignal('STARTING MCP SERVERS (3/3)')).toBe(true);
+  it('the MCP boot tracker matches codex MCP boot banners (case-insensitive)', () => {
+    expect(createMcpBootTracker().observe('Booting MCP server: codex_apps(0s • esc to interrupt)')).toBe(true);
+    expect(createMcpBootTracker().observe('Starting MCP servers (0/3): codex_apps, node_repl, playwright')).toBe(true);
+    expect(createMcpBootTracker().observe('STARTING MCP SERVERS (3/3)')).toBe(true);
   });
 
-  it('isMcpBootSignal ignores ordinary output that merely mentions MCP', () => {
+  it('the MCP boot tracker ignores ordinary output that merely mentions MCP', () => {
     // Conservative anchoring: a prompt/output that talks ABOUT mcp servers must
     // not latch the extended budget (a false positive only slows a failure, but
     // keep it tight anyway — mirrors the merge-queue/review-loop discipline).
-    expect(isMcpBootSignal('Configure the mcp server in server/services/voice/tools.js')).toBe(false);
-    expect(isMcpBootSignal('the playwright MCP server is slow')).toBe(false);
-    expect(isMcpBootSignal('')).toBe(false);
-    expect(isMcpBootSignal(null)).toBe(false);
-    expect(isMcpBootSignal(undefined)).toBe(false);
+    expect(createMcpBootTracker().observe('Configure the mcp server in server/services/voice/tools.js')).toBe(false);
+    expect(createMcpBootTracker().observe('the playwright MCP server is slow')).toBe(false);
+    expect(createMcpBootTracker().observe('')).toBe(false);
+    expect(createMcpBootTracker().observe(null)).toBe(false);
+    expect(createMcpBootTracker().observe(undefined)).toBe(false);
   });
 
   it('createMcpBootTracker latches on first banner and stays active through the silent boot', () => {
@@ -1026,6 +1034,21 @@ describe('createInputReadyTracker', () => {
     expect(tracker.ready).toBe(true);
   });
 
+  it('waits for each startup selector to be acknowledged when their text shares a rolling screen', () => {
+    const tracker = createInputReadyTracker({ launchShape: 'direct' });
+    tracker.observe(PASTE_ON, 'Disable external imports.');
+    tracker.observe('', 'Make auto mode your default permission mode?');
+    tracker.ackExternalImportsChoice();
+    tracker.observe('', 'Repaint');
+    expect(tracker.needsExternalImportsChoice).toBe(false);
+    expect(tracker.needsAutoModeChoice).toBe(true);
+    expect(tracker.ready).toBe(false);
+
+    tracker.ackAutoModeChoice();
+    tracker.observe('', 'Composer ready');
+    expect(tracker.ready).toBe(true);
+  });
+
   it('latches needsTrust on every vendor trust-gate wording', () => {
     const claude = createInputReadyTracker();
     claude.observe('', 'Is this a project you trust?\n❯ 1. Yes, I trust this folder\n2. No, exit\n');
@@ -1360,35 +1383,35 @@ describe('createInputReadyTracker', () => {
   });
 });
 
-describe('tuiHandshake.verifyPasteRendered', () => {
+describe('isPasteConfirmed with rendered prompt text', () => {
   it('returns true when prefix is found in buffer', () => {
     const prefix = 'implement the truncateMiddle function';
     const buffer = 'Some TUI chrome... implement the truncateMiddle function ...more text';
-    expect(verifyPasteRendered(buffer, prefix)).toBe(true);
+    expect(isPasteConfirmed(buffer, { verifiablePrefix: prefix })).toBe(true);
   });
 
   it('returns false when prefix is not found in buffer', () => {
     const prefix = 'implement the truncateMiddle function';
     const buffer = 'Some TUI chrome without the prompt text';
-    expect(verifyPasteRendered(buffer, prefix)).toBe(false);
+    expect(isPasteConfirmed(buffer, { verifiablePrefix: prefix })).toBe(false);
   });
 
   it('handles whitespace normalization', () => {
     const prefix = 'implement the function';
     const buffer = 'implement   the\n  function';
-    expect(verifyPasteRendered(buffer, prefix)).toBe(true);
+    expect(isPasteConfirmed(buffer, { verifiablePrefix: prefix })).toBe(true);
   });
 
   it('returns true for null/empty prefix (no verification possible)', () => {
-    expect(verifyPasteRendered('any buffer', null)).toBe(true);
-    expect(verifyPasteRendered('any buffer', '')).toBe(true);
-    expect(verifyPasteRendered('any buffer', undefined)).toBe(true);
+    expect(isPasteConfirmed('any buffer', { verifiablePrefix: null })).toBe(true);
+    expect(isPasteConfirmed('any buffer', { verifiablePrefix: '' })).toBe(true);
+    expect(isPasteConfirmed('any buffer', { verifiablePrefix: undefined })).toBe(true);
   });
 
   it('returns false for non-string buffer', () => {
-    expect(verifyPasteRendered(null, 'prefix')).toBe(false);
-    expect(verifyPasteRendered(undefined, 'prefix')).toBe(false);
-    expect(verifyPasteRendered(123, 'prefix')).toBe(false);
+    expect(isPasteConfirmed(null, { verifiablePrefix: 'prefix' })).toBe(false);
+    expect(isPasteConfirmed(undefined, { verifiablePrefix: 'prefix' })).toBe(false);
+    expect(isPasteConfirmed(123, { verifiablePrefix: 'prefix' })).toBe(false);
   });
 
   it('handles real-world OpenCode scenario (issue #2192)', () => {
@@ -1397,39 +1420,25 @@ describe('tuiHandshake.verifyPasteRendered', () => {
     const prefix = extractVerifiablePromptPrefix(prompt);
 
     // Empty buffer = paste was swallowed
-    expect(verifyPasteRendered('', prefix)).toBe(false);
+    expect(isPasteConfirmed('', { verifiablePrefix: prefix })).toBe(false);
 
     // Only TUI chrome = paste was swallowed
-    expect(verifyPasteRendered('Ask anything... (ESC to exit)', prefix)).toBe(false);
+    expect(isPasteConfirmed('Ask anything... (ESC to exit)', { verifiablePrefix: prefix })).toBe(false);
 
     // Prompt text visible (with the full prompt echoed) = paste succeeded
     // The buffer would contain the actual prompt text after a successful paste
-    expect(verifyPasteRendered(`Ask anything... ${prompt}`, prefix)).toBe(true);
+    expect(isPasteConfirmed(`Ask anything... ${prompt}`, { verifiablePrefix: prefix })).toBe(true);
 
     // Also verify partial echo (just the middle portion where the prefix is from)
-    expect(verifyPasteRendered(`Ask anything... o:next --issues --swarm using the trunca...`, prefix)).toBe(true);
+    expect(isPasteConfirmed(`Ask anything... o:next --issues --swarm using the trunca...`, { verifiablePrefix: prefix })).toBe(true);
   });
 
-  // Every claude-code-tui CoS agent started failing immediately after #2192
-  // shipped, all with identical "paste-not-rendered" after 3 retries — 100%
-  // reproduction across real agent runs (agent-65e4d17f, agent-1f0bda99,
-  // agent-ec5a000c, agent-7dda893e, agent-9916b7be, agent-f5c8ca2a,
-  // agent-d0fa3cdc, 2026-07-05). Root cause: Claude Code redraws/reflows a
-  // pasted multi-word line using cursor-positioning escapes instead of literal
-  // space bytes between words — the exact "inter-glyph cursor moves" quirk
-  // already documented above (BRACKETED_PASTE_MODE_PATTERN comment) as the
-  // reason createInputReadyTracker deliberately avoids literal footer-text
-  // matching. #2192's verifyPasteRendered was never carved out for Claude (the
-  // changelog claimed "Claude TUIs ... are unaffected" but sendPrompt/
-  // attemptPaste is shared across all providers), so it inherited the same
-  // trap: normalizing to a SINGLE space still requires a space to exist, and a
-  // reflowed line has none. Captured verbatim (post-production-ansiStrip) from
-  // agent-147ad88f's raw.txt.
-  it('finds a pasted prompt whose words got glued together by Claude Code reflow (real incident)', () => {
-    const prompt = 'On the tasks page when we render pending/active/blocked task cards, I want to truncate the prompt and only show the first couple of lines with an expand button\n\nBegin working on the task now.';
+  // Claude can position each word with cursor escapes. After ANSI stripping there may be no spaces.
+  it('finds a pasted prompt whose words got glued together by Claude Code reflow', () => {
+    const prompt = 'Describe the changes to the example workspace in numbered steps.';
     const prefix = extractVerifiablePromptPrefix(prompt);
-    const renderedBuffer = '⏵⏵ bypass permissions on (shift+tab to cycle) · ← for agents Opus 4.8 (1M context) │ agent-147ad88f [Pastedtext#1+3lines] paste again to expand ctrl+g to edit in Vim ──────── ❯ Onthetaskspagewhenwerenderpending/active/blockedtaskcards,Iwant totruncatethepromptandonlyshowthefirstcoupleoflineswithan expandbutton Begin working on the task now.';
-    expect(verifyPasteRendered(renderedBuffer, prefix)).toBe(true);
+    const renderedBuffer = '❯ Describethechangestotheexampleworkspaceinnumberedsteps.';
+    expect(isPasteConfirmed(renderedBuffer, { verifiablePrefix: prefix })).toBe(true);
   });
 });
 
@@ -1447,7 +1456,7 @@ describe('tuiHandshake.isPasteConfirmed', () => {
   it('confirms a multi-line paste that Claude collapsed to a chip (body text hidden) — real incident', () => {
     const collapsedBuffer = 'Opus 4.8 │ agent-656efa6e [Pastedtext#1+3lines] paste again to expand ──────── ❯ [Pastedtext#1+3lines] ──────── Begin working on the task now. ⏵⏵ bypass permissions on (shift+tab to cycle)';
     // The body prefix really is NOT in the buffer — verifyPasteRendered alone fails…
-    expect(verifyPasteRendered(collapsedBuffer, prefix)).toBe(false);
+    expect(collapsedBuffer.replace(/\s+/g, '')).not.toContain(prefix.replace(/\s+/g, ''));
     // …but the marker proves delivery, so isPasteConfirmed confirms it.
     expect(isPasteConfirmed(collapsedBuffer, { verifiablePrefix: prefix, promptMarkerCount: 0 })).toBe(true);
   });
@@ -1459,7 +1468,7 @@ describe('tuiHandshake.isPasteConfirmed', () => {
 
   it('confirms an OpenCode line-count chip even when the prompt body is hidden', () => {
     const opencodeBuffer = 'Build · hf.co/example/model Ollama [Pasted ~46 lines]';
-    expect(verifyPasteRendered(opencodeBuffer, prefix)).toBe(false);
+    expect(opencodeBuffer.replace(/\s+/g, '')).not.toContain(prefix.replace(/\s+/g, ''));
     expect(isPasteConfirmed(opencodeBuffer, { verifiablePrefix: prefix, promptMarkerCount: 0 })).toBe(true);
   });
 
@@ -1499,7 +1508,7 @@ describe('tuiHandshake.isPasteConfirmed', () => {
     // The count-only comparison false-negatives (1 is not > 1)…
     expect(countPasteMarkers(collapsedBuffer) > promptMarkerCount).toBe(false);
     // …and the hidden body defeats the text fallback too…
-    expect(verifyPasteRendered(collapsedBuffer, selfMarkerPrefix)).toBe(false);
+    expect(collapsedBuffer.replace(/\s+/g, '')).not.toContain(selfMarkerPrefix.replace(/\s+/g, ''));
     // …but the collapsed-chip shape proves the paste landed, so this MUST confirm.
     expect(isPasteConfirmed(collapsedBuffer, { verifiablePrefix: selfMarkerPrefix, promptMarkerCount })).toBe(true);
   });
@@ -1509,7 +1518,7 @@ describe('tuiHandshake.isPasteConfirmed', () => {
     // "paste again to expand" chrome — the paste has NOT committed. The
     // collapsed-chip rescue must not fire here; the subtraction must still reject.
     const inlineEchoBuffer = '❯ [Pastedtext#1+40lines] analyze this TUI transcript where the agent hit a paste bug';
-    expect(isCollapsedPasteChip(inlineEchoBuffer)).toBe(false);
+    expect(isPasteCommitted(inlineEchoBuffer, { promptMarkerCount: 1 })).toBe(false);
     expect(isPasteConfirmed(inlineEchoBuffer, { verifiablePrefix: prefix, promptMarkerCount: 1 })).toBe(false);
   });
 
@@ -1519,24 +1528,24 @@ describe('tuiHandshake.isPasteConfirmed', () => {
   });
 });
 
-describe('tuiHandshake.isCollapsedPasteChip', () => {
+describe('isPasteCommitted with a marker echoed by the prompt', () => {
   it('is true only when a marker AND the "paste again to expand" affordance are both present', () => {
-    expect(isCollapsedPasteChip('[Pastedtext#1+3lines] paste again to expand')).toBe(true);
+    expect(isPasteCommitted('[Pastedtext#1+3lines] paste again to expand', { promptMarkerCount: 1 })).toBe(true);
     // Marker but no collapse affordance → not a collapsed chip.
-    expect(isCollapsedPasteChip('[Pastedtext#1+3lines] analyze this transcript')).toBe(false);
+    expect(isPasteCommitted('[Pastedtext#1+3lines] analyze this transcript', { promptMarkerCount: 1 })).toBe(false);
     // Collapse affordance but no marker → nothing committed.
-    expect(isCollapsedPasteChip('paste again to expand')).toBe(false);
+    expect(isPasteCommitted('paste again to expand', { promptMarkerCount: 1 })).toBe(false);
   });
 
   it('tolerates the inter-glyph whitespace Claude renders (ANSI-stripped)', () => {
-    expect(isCollapsedPasteChip('[Pastedtext#2+9lines] pasteagaintoexpand')).toBe(true);
+    expect(isPasteCommitted('[Pastedtext#2+9lines] pasteagaintoexpand', { promptMarkerCount: 1 })).toBe(true);
   });
 
   it('returns false for non-string / empty input', () => {
-    expect(isCollapsedPasteChip(null)).toBe(false);
-    expect(isCollapsedPasteChip(undefined)).toBe(false);
-    expect(isCollapsedPasteChip('')).toBe(false);
-    expect(isCollapsedPasteChip(123)).toBe(false);
+    expect(isPasteCommitted(null, { promptMarkerCount: 1 })).toBe(false);
+    expect(isPasteCommitted(undefined, { promptMarkerCount: 1 })).toBe(false);
+    expect(isPasteCommitted('', { promptMarkerCount: 1 })).toBe(false);
+    expect(isPasteCommitted(123, { promptMarkerCount: 1 })).toBe(false);
   });
 });
 
@@ -1790,20 +1799,20 @@ describe('tool-permission dialog (agent-e057cca7)', () => {
   const READ_DIALOG = ' Read(/data.reference/providers.json) Doyouwanttoproceed? ❯1. Yes 2. Yes,allowreadingfrom/data.referenceduringthissession 3. No Esc to cancel · Tab to amend ';
   const TWO_OPTION_DIALOG = 'Bash(rm -rf build)\nDo you want to proceed?\n❯ 1. Yes\n  2. No\n';
 
-  describe('detectToolPermissionPrompt', () => {
+  describe('createToolPermissionGate reads the complete dialog', () => {
     it('reads the decline option off the screen, whatever its number', () => {
-      expect(detectToolPermissionPrompt(READ_DIALOG)).toEqual({ noOption: 3, toolCall: 'Read(/data.reference/providers.json)' });
-      expect(detectToolPermissionPrompt(TWO_OPTION_DIALOG)).toEqual({ noOption: 2, toolCall: 'Bash(rm -rf build)' });
+      expect(createToolPermissionGate().observe(READ_DIALOG, 0)).toEqual({ count: 1, noOption: 3, toolCall: 'Read(/data.reference/providers.json)' });
+      expect(createToolPermissionGate().observe(TWO_OPTION_DIALOG, 0)).toEqual({ count: 1, noOption: 2, toolCall: 'Bash(rm -rf build)' });
     });
 
     it('waits for the option list rather than guessing which key declines', () => {
-      expect(detectToolPermissionPrompt(' Read(/etc/hosts) Doyouwanttoproceed? ')).toBeNull();
+      expect(createToolPermissionGate().observe(' Read(/etc/hosts) Doyouwanttoproceed? ', 0)).toBeNull();
     });
 
     it('ignores prose and the nudge it sends', () => {
-      expect(detectToolPermissionPrompt('Ask the user whether they want to proceed with 3. No changes')).toBeNull();
-      expect(detectToolPermissionPrompt(TOOL_PERMISSION_NUDGE_TEXT)).toBeNull();
-      expect(detectToolPermissionPrompt('')).toBeNull();
+      expect(createToolPermissionGate().observe('Ask the user whether they want to proceed with 3. No changes', 0)).toBeNull();
+      expect(createToolPermissionGate().observe(TOOL_PERMISSION_NUDGE_TEXT, 0)).toBeNull();
+      expect(createToolPermissionGate().observe('', 0)).toBeNull();
     });
   });
 
@@ -2250,8 +2259,7 @@ describe('CODEX_COMPOSER_READY_PATTERN', () => {
 describe('createAgyResumeGate', () => {
   const ID = '81c97d96-72b6-44d1-a6d1-18f3e283d642';
 
-  it('returns the conversation id once the shell has gone quiet, even split across chunks', async () => {
-    const { createAgyResumeGate } = await import('./tuiHandshake.js');
+  it('returns the conversation id once the shell has gone quiet, even split across chunks', () => {
     const gate = createAgyResumeGate({ settleMs: 1000 });
     gate.observe('Resume with -c (or command below):\nagy--conversation=81c97d96-72b6-');
     gate.observe('44d1-a6d1-18f3e283d642\n');
@@ -2260,8 +2268,7 @@ describe('createAgyResumeGate', () => {
     expect(gate.takeResume(9000, 1000)).toBeNull();
   });
 
-  it('stops relaunching after the attempt budget is spent', async () => {
-    const { createAgyResumeGate } = await import('./tuiHandshake.js');
+  it('stops relaunching after the attempt budget is spent', () => {
     const gate = createAgyResumeGate({ settleMs: 0, maxAttempts: 2 });
     for (let i = 0; i < 2; i++) {
       gate.observe(`--conversation=${ID}`);
@@ -2294,8 +2301,7 @@ describe('screenShowsInFlightChrome', () => {
 });
 
 describe('createModelCapacityNudgeGate', () => {
-  it('waits for a long quiet spell, nudges, then reports exhaustion after the budget', async () => {
-    const { createModelCapacityNudgeGate, CAPACITY_NUDGE_SETTLE_MS, CAPACITY_NUDGE_COOLDOWN_MS, CAPACITY_NUDGE_MAX_ATTEMPTS } = await import('./tuiHandshake.js');
+  it('waits for a long quiet spell, nudges, then reports exhaustion after the budget', () => {
     const gate = createModelCapacityNudgeGate();
     let now = 1_000_000;
     expect(gate.arm({ hasError: true }, now)).toBe('armed');

@@ -118,6 +118,14 @@ export const closeJobAfterDelay = (jobs, jobId, delay = SSE_CLEANUP_DELAY_MS, ex
   }, delay);
 };
 
+// Queue settlement listens for 'failed' with the cancellation reason. Direct SSE consumers
+// receive their own canceled terminal frame, including clients attaching after the child exits.
+export function dispatchCanceledJob(job, jobId, label, emitSettlement) {
+  job.status = 'canceled';
+  console.log(`⏹️ ${label} canceled [${jobId.slice(0, 8)}]`);
+  dispatchTerminalEvent(jobId, () => broadcastSse(job, { type: 'canceled', reason: 'Canceled' }), emitSettlement);
+}
+
 // Shared "this job died" finalizer for the media-generation backends (imageGen/{agy,codex,grok,fal}.js, videoGen/{grok,fal,reactor}.js): idempotency guard, clear the active-slot map,
 // stamp `job.status = 'error'`, drop from `activeJobs`, log, broadcast an SSE error frame, emit `failed`, and `closeJobAfterDelay` (#6830: private copies had drifted).
 //
@@ -126,31 +134,42 @@ export const closeJobAfterDelay = (jobs, jobId, delay = SSE_CLEANUP_DELAY_MS, ex
 // whose slot map has no owner identity (deletes unconditionally).
 //
 // `failedPayload(jobId, reason)` builds the `events.emit('failed', …)` body; it defaults to the video shape (`{ generationId, error }`), and image backends add `mode`
-// (read by `imageGenQuota.js`). The returned function also carries `.canceled(job, jobId, slotOwner?)`, a `force: true` 'Canceled' wrapper for fal/reactor.
+// (read by `imageGenQuota.js`). Hosted backends retain their error-frame cancellation contract.
+// CLI backends opt into a distinct canceled SSE frame while settling the same queue subscriber.
 export const createJobFailureFinalizer = ({
-  jobs, activeJobs, activeSlots, label, events,
+  jobs, activeJobs, activeSlots, label, events, emitCanceledFrame = false,
   failedPayload = (jobId, reason) => ({ generationId: jobId, error: reason }),
 }) => {
-  const finalize = (job, jobId, slotOwner, reason, { force = false } = {}) => {
+  const clearActive = (jobId, slotOwner) => {
+    if (slotOwner == null || activeSlots.get(jobId) === slotOwner) activeSlots.delete(jobId);
+    activeJobs.delete(jobId);
+  };
+  const finalize = (job, jobId, slotOwner, reason, { force = false, code } = {}) => {
     // Idempotent except under `force` — spawn failures fire 'error' AND a
     // follow-up 'close', so both paths reach this finalizer, and a caller
     // whose success path can throw AFTER stamping 'complete' passes `force`
     // to still deliver a terminal 'failed' for that window.
-    if (!force && (job.status === 'error' || job.status === 'complete')) return;
-    if (slotOwner == null || activeSlots.get(jobId) === slotOwner) activeSlots.delete(jobId);
+    if (!force && (job.status === 'error' || job.status === 'complete' || job.status === 'canceled')) return;
+    clearActive(jobId, slotOwner);
     job.status = 'error';
-    activeJobs.delete(jobId);
     // Provider errors can echo private prompts and input URLs. Keep the details
     // on the job channel; operational logs need only the backend and job id.
     console.error(`❌ ${label} failed [${jobId.slice(0, 8)}]`);
+    const details = code ? { code } : {};
     dispatchTerminalEvent(
       jobId,
-      () => broadcastSse(job, { type: 'error', error: reason }),
-      () => events.emit('failed', failedPayload(jobId, reason, slotOwner)),
+      () => broadcastSse(job, { type: 'error', error: reason, ...details }),
+      () => events.emit('failed', { ...failedPayload(jobId, reason, slotOwner), ...details }),
     );
     closeJobAfterDelay(jobs, jobId);
   };
-  finalize.canceled = (job, jobId, slotOwner = null) => finalize(job, jobId, slotOwner, 'Canceled', { force: true });
+  finalize.canceled = (job, jobId, slotOwner = null) => {
+    if (!emitCanceledFrame) return finalize(job, jobId, slotOwner, 'Canceled', { force: true });
+    if (job.status === 'canceled') return;
+    clearActive(jobId, slotOwner);
+    dispatchCanceledJob(job, jobId, label, () => events.emit('failed', failedPayload(jobId, 'Canceled', slotOwner)));
+    closeJobAfterDelay(jobs, jobId);
+  };
   return finalize;
 };
 

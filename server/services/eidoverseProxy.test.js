@@ -41,7 +41,7 @@ vi.mock('./auth.js', async () => {
     verifyPassword: async (password) => password === 'instance-password',
   };
 });
-vi.mock('./eidoverseTravel.js', () => ({ hasValidEidoverseGuestCookie: async () => false }));
+vi.mock('./eidoverseTravel.js', () => ({ getEidoverseGuestSession: async () => null }));
 
 const servers = [];
 const webSocketServers = [];
@@ -379,7 +379,10 @@ describe('main-server eidoverse reverse-proxy', () => {
     expect(Number(receivedHeaders['content-length'])).toBe(Buffer.byteLength(JSON.stringify(payload)));
   });
 
-  it('completes a /ws upgrade whose upstream answers after 1.5 s when Socket.IO is attached with destroyUpgrade: false', async () => {
+  const fallbackTimeoutMs = 40;
+  const handshakeDelayMs = 80;
+
+  it('completes a /ws upgrade whose upstream answers after the fallback deadline', async () => {
     const upstream = createServer();
     const upstreamWss = new WebSocketServer({ noServer: true });
     webSocketServers.push(upstreamWss);
@@ -388,7 +391,7 @@ describe('main-server eidoverse reverse-proxy', () => {
         upstreamWss.handleUpgrade(req, socket, head, (ws) => {
           ws.send('slow-ready');
         });
-      }, 1500);
+      }, handshakeDelayMs);
       timer.unref?.();
     });
     const upstreamPort = await listen(upstream);
@@ -403,6 +406,7 @@ describe('main-server eidoverse reverse-proxy', () => {
     const server = createServer(app);
     const io = new SocketIoServer(server, {
       destroyUpgrade: false,
+      destroyUpgradeTimeout: fallbackTimeoutMs,
       path: '/socket.io',
     });
     ioServers.push(io);
@@ -412,7 +416,7 @@ describe('main-server eidoverse reverse-proxy', () => {
       targetPort: upstreamPort,
       getProtocol: () => 'http',
     });
-    installUpgradeFallback(server);
+    installUpgradeFallback(server, { timeoutMs: fallbackTimeoutMs });
     const port = await listen(server);
 
     const client = new WebSocket(`ws://127.0.0.1:${port}/ws`);
@@ -486,12 +490,12 @@ describe('main-server eidoverse reverse-proxy', () => {
       destroyUpgrade: false,
       path: '/socket.io',
       allowRequest: async (_req, callback) => {
-        await new Promise((resolve) => setTimeout(resolve, 1500));
+        await new Promise((resolve) => setTimeout(resolve, handshakeDelayMs));
         callback(null, true);
       },
     });
     ioServers.push(io);
-    installUpgradeFallback(server);
+    installUpgradeFallback(server, { timeoutMs: fallbackTimeoutMs });
     const port = await listen(server);
 
     const client = SocketIoClient(`http://127.0.0.1:${port}`, {

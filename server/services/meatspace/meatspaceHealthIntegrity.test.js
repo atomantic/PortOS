@@ -156,7 +156,10 @@ it('refuses an eye exam list of the wrong shape instead of replacing it', async 
 
 it('refuses a clinical import over an unreadable local blood file while MortalLoom is on', async () => {
   settings.enabled = true;
-  await source({ bloodTests: [] });
+  await source({
+    profile: { lifestyle: { smokingStatus: 'never', dietQuality: 'good', stressLevel: 'low', exerciseMinutesPerWeek: 0, sleepHoursPerNight: 8 } },
+    alcoholDrinks: [], alcoholPresets: [], nicotineEntries: [], nicotinePresets: [], bloodTests: [], eyeExams: [], epigeneticTests: [],
+  });
   await mkdir(PATHS.meatspace, { recursive: true });
   await writeFile(localPath('blood-tests.json'), '{"tests":[{"id":"kept"');
   await expect(commitClinicalBloodImport({ tests: [], referenceRanges: { glucose: [70, 99] } }, () => ({ tests: [] })))

@@ -19,7 +19,7 @@ async function loadAccounts() {
 
 async function saveAccounts(accounts) {
   await ensureDir(PATHS.messages);
-  await atomicWrite(ACCOUNTS_FILE, accounts);
+  await atomicWrite(ACCOUNTS_FILE, accounts, { mode: 0o600, dirMode: 0o700 });
   noteReadinessChanged();
 }
 

@@ -1,4 +1,6 @@
 import { useEffect, useState } from 'react';
+import { Link } from 'react-router';
+import DraftNumber from '../ui/DraftNumber';
 import useSettingsForm from '../../hooks/useSettingsForm';
 import { Save, Loader2, Users, ShieldCheck, Network } from 'lucide-react';
 import toast from '../ui/Toast';
@@ -26,7 +28,7 @@ const modelKey = ({ engine, modelId }) => `${engine}\u0000${modelId}`;
 // the local catalog (uninstalled, or newly reported broken), or there is no
 // checkbox left to un-share it and the provider keeps advertising a stale
 // `unknown-model` entry forever. Mirrors the peer panel's `not-advertised` rows.
-function candidateRows(candidates, selected) {
+function candidateRows(candidates, selected, unavailableReason) {
   const rows = [...candidates];
   const known = new Set(candidates.map(modelKey));
   for (const model of selected) {
@@ -37,7 +39,7 @@ function candidateRows(candidates, selected) {
       modelId: model.modelId,
       modelName: model.modelId,
       ready: false,
-      unavailableReason: 'no longer installed',
+      unavailableReason,
     });
   }
   return rows;
@@ -70,6 +72,8 @@ const PROVIDER_COMPARATORS = {
 
 export function SharingTab() {
   const [loading, setLoading] = useState(true);
+  const [settingsAttempt, setSettingsAttempt] = useState(0);
+  const [loadError, setLoadError] = useState(null);
   const { values: profile, isDirty: dirty, set: setProfileField, load: loadProfile, markSaved: markProfileSaved } = useSettingsForm(PROFILE_INITIAL);
   const { displayName, bio } = profile;
   const setDisplayName = (value) => setProfileField('displayName', value);
@@ -94,22 +98,38 @@ export function SharingTab() {
   // for a transient API failure would send the user hunting for a model they
   // already have.
   const [visualCandidates, setVisualCandidates] = useState({ image: undefined, video: undefined });
+  const [visualAttempt, setVisualAttempt] = useState(0);
+  const [retryingVisualCandidates, setRetryingVisualCandidates] = useState(false);
   const [providerSaving, setProviderSaving] = useState(false);
 
+  // Readiness inspection can touch the model cache, so keep it off the
+  // critical path for the other controls.
   useEffect(() => {
-    // Same rationale as the engine probe above: readiness inspection can touch
-    // the model cache, so keep it off the critical path for the other controls.
+    let active = true;
+    setRetryingVisualCandidates(true);
     getMediaShareCandidates({ silent: true })
-      .then((candidates) => setVisualCandidates({
-        image: Array.isArray(candidates?.image) ? candidates.image : null,
-        video: Array.isArray(candidates?.video) ? candidates.video : null,
-      }))
-      .catch(() => setVisualCandidates({ image: null, video: null }));
+      .catch(() => null)
+      .then((candidates) => {
+        if (!active) return;
+        setVisualCandidates((previous) => ({
+          image: Array.isArray(candidates?.image) ? candidates.image : previous.image ?? null,
+          video: Array.isArray(candidates?.video) ? candidates.video : previous.video ?? null,
+        }));
+        setRetryingVisualCandidates(false);
+      });
+    return () => { active = false; };
+  }, [visualAttempt]);
+
+  useEffect(() => {
+    let active = true;
+    setLoading(true);
+    setLoadError(null);
     Promise.all([
       getSettings({ silent: true }),
       getAuthStatus({ silent: true }).catch(() => ({ enabled: false })),
     ])
       .then(([settings, auth]) => {
+        if (!active) return;
         const display = settings?.sharingDisplayName || '';
         const b = settings?.sharingBio || '';
         loadProfile({ displayName: display, bio: b });
@@ -125,9 +145,17 @@ export function SharingTab() {
         setProviderSettings(provider);
         loadProvider({ enabled, maxQueuedJobs, models, visualModels: visual });
       })
-.catch((err) => toast.error(failureMessage('Could not load sharing settings', err, 'Reload the page to retry.')))
-      .finally(() => setLoading(false));
-  }, []);
+      .catch((err) => {
+        if (active) setLoadError(err instanceof Error ? err : new Error('Request failed'));
+      })
+      .finally(() => {
+        if (active) setLoading(false);
+      });
+    return () => { active = false; };
+  }, [loadProfile, loadProvider, settingsAttempt]);
+
+  const loadInitial = () => setSettingsAttempt((attempt) => attempt + 1);
+  const loadVisualCandidates = () => setVisualAttempt((attempt) => attempt + 1);
 
   const handleSave = async () => {
     setSaving(true);
@@ -247,6 +275,7 @@ export function SharingTab() {
   };
 
   if (loading) return <BrailleSpinner />;
+  if (loadError) return <ListLoadError what="sharing settings" error={loadError} onRetry={loadInitial} />;
 
   return (
     <div className="space-y-6">
@@ -342,7 +371,8 @@ export function SharingTab() {
 
         {!authEnabled && (
           <div className="mb-4 rounded border border-amber-500/30 bg-amber-500/10 px-3 py-2 text-sm text-amber-200">
-            An instance password is required for peer jobs. Configure one in the Security tab before enabling this provider.
+            An instance password is required for peer jobs. Configure one in the{' '}
+            <Link to="/settings/security" className="underline hover:text-white">Security tab</Link> before enabling this provider.
           </div>
         )}
 
@@ -363,16 +393,17 @@ export function SharingTab() {
             <label htmlFor="federated-media-max-queued" className="block text-xs uppercase tracking-wider text-gray-500 mb-1">
               Shared active-job limit
             </label>
-            <input
-              id="federated-media-max-queued"
-              type="number"
-              min="1"
-              max="20"
-              value={providerMaxQueuedJobs}
-              disabled={providerSaving || strictPullSaving}
-              onChange={(event) => setProviderMaxQueuedJobs(Number(event.target.value))}
-              className="w-28 px-3 py-2 bg-port-bg border border-port-border rounded text-white text-sm disabled:opacity-40"
-            />
+            <DraftNumber value={providerMaxQueuedJobs} min={1} max={20} integer onCommit={setProviderMaxQueuedJobs}>
+              {(field) => (
+                <input
+                  id="federated-media-max-queued"
+                  type="number"
+                  {...field}
+                  disabled={providerSaving || strictPullSaving}
+                  className="w-28 px-3 py-2 bg-port-bg border border-port-border rounded text-white text-sm disabled:opacity-40"
+                />
+              )}
+            </DraftNumber>
             <p className="mt-1 text-xs text-gray-500">
               Remote admission stops when this many local and remote media jobs are already active.
             </p>
@@ -383,7 +414,7 @@ export function SharingTab() {
               type="button"
               onClick={() => setAllModels(true)}
               disabled={providerSaving || strictPullSaving}
-              className="inline-flex items-center min-h-[40px] px-3 py-2 bg-port-card hover:bg-port-border text-gray-200 rounded-lg text-sm transition-colors disabled:opacity-40"
+              className="inline-flex items-center min-h-[40px] px-3 py-2 bg-port-card border border-port-border hover:bg-port-border text-gray-200 rounded-lg text-sm transition-colors disabled:opacity-40"
             >
               Enable all
             </button>
@@ -391,7 +422,7 @@ export function SharingTab() {
               type="button"
               onClick={() => setAllModels(false)}
               disabled={providerSaving || strictPullSaving}
-              className="inline-flex items-center min-h-[40px] px-3 py-2 bg-port-card hover:bg-port-border text-gray-200 rounded-lg text-sm transition-colors disabled:opacity-40"
+              className="inline-flex items-center min-h-[40px] px-3 py-2 bg-port-card border border-port-border hover:bg-port-border text-gray-200 rounded-lg text-sm transition-colors disabled:opacity-40"
             >
               Disable all
             </button>
@@ -442,19 +473,27 @@ export function SharingTab() {
           {VISUAL_KINDS.map(({ kind, label, field }) => {
             const loadingModels = visualCandidates[kind] === undefined;
             const unavailable = visualCandidates[kind] === null;
-            const rows = candidateRows(visualCandidates[kind] || [], providerVisualModels[kind]);
+            const rows = candidateRows(visualCandidates[kind] || [], providerVisualModels[kind],
+              loadingModels || unavailable ? 'local model status unknown' : 'no longer installed');
             return (
             <fieldset key={field}>
               <legend className="block text-xs uppercase tracking-wider text-gray-500 mb-2">Allowed {label} models</legend>
-              {rows.length === 0 ? (
+              {unavailable && (
+                <ListLoadError
+                  what={`local ${label} models`}
+                  onRetry={loadVisualCandidates}
+                  retrying={retryingVisualCandidates}
+                  className="mb-2"
+                />
+              )}
+              {!unavailable && rows.length === 0 && (
                 <p className="text-sm text-gray-500">
                   {loadingModels
                     ? <span className="inline-flex items-center gap-2"><Loader2 size={14} className="animate-spin" />{`Loading local ${label} models...`}</span>
-                    : unavailable
-                    ? `Could not load the local ${label} model list. Reload to try again.`
                     : `No local ${label} models are installed to share.`}
                 </p>
-              ) : (
+              )}
+              {rows.length > 0 && (
                 <div className="grid grid-cols-1 lg:grid-cols-2 gap-2">
                   {rows.map((candidate, index) => {
                     const checked = providerVisualModels[kind].some((model) => modelKey(model) === modelKey(candidate));

@@ -26,6 +26,7 @@
  * enough to estimate (null = unknown, never zero); the Cloud billing console has
  * the real charge.
  */
+import { nearestRatio } from './aspectRatios.js';
 
 const GEMINI_RATIOS = Object.freeze(['1:1', '2:3', '3:2', '3:4', '4:3', '4:5', '5:4', '9:16', '16:9', '21:9']);
 const IMAGEN_RATIOS = Object.freeze(['1:1', '3:4', '4:3', '9:16', '16:9']);
@@ -98,12 +99,6 @@ export function googleImagePriceLabel(family) {
 }
 
 const refuse = (message) => Object.assign(new Error(message), { status: 400, code: 'GOOGLE_IMAGE_INPUT_INVALID' });
-
-function nearestRatio(w, h, ratios) {
-  const target = Math.log(w / h);
-  const distance = (ratio) => { const [rw, rh] = ratio.split(':').map(Number); return Math.abs(Math.log(rw / rh) - target); };
-  return ratios.reduce((best, ratio) => (distance(ratio) < distance(best) ? ratio : best));
-}
 
 /** The prompt text the model receives: the user's words plus a folded "Avoid:" clause. */
 function googleImagePromptText(prompt = '', negativePrompt = '') {

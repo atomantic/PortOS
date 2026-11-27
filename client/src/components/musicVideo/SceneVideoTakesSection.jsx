@@ -1,4 +1,9 @@
-import { Activity, Clapperboard, Shuffle, Video } from 'lucide-react';
+import { useEffect, useState } from 'react';
+import { Activity, Clapperboard, Maximize2, Shuffle, Video } from 'lucide-react';
+import { musicVideoUpscaleSettings } from '../../../../server/lib/musicVideo/musicVideoUpscale.js';
+import { getVideoHistoryItem } from '../../services/apiImageVideo.js';
+import VideoUpscaleDrawer from '../media/VideoUpscaleDrawer.jsx';
+import toast from '../ui/Toast';
 import { shotDownloadBasis } from '../../../../server/lib/musicVideo/musicVideoShotDownloadBasis.js';
 import { isPreMusicShot } from '../../../../server/lib/musicVideo/musicVideoColdOpen.js';
 import { formatUsd } from '../../utils/formatters.js';
@@ -72,7 +77,7 @@ function SceneClipMediaPreview({
       {/* A clip under 720p (grok's 480p default) goes soft in a 1080p render. */}
       {clipId && clipSize && isLowResVideo(clipSize) && (
         <p className="text-xs text-port-warning" data-testid="clip-low-res">
-          Low-res clip: {clipSize.width}×{clipSize.height}, under 720p. Upscale it in Media History or regenerate it before the final render.
+          Low-res clip: {clipSize.width}×{clipSize.height}, under 720p. Upscale or regenerate it before the final render.
         </p>
       )}
       {/* Until the clip exists its still stands in, so the player is never an empty box. */}
@@ -197,8 +202,53 @@ function SceneClipRenderControls({
   );
 }
 
+function ShotUpscale({ project, scene, media, takes, actions }) {
+  const [sourceId, setSourceId] = useState(null);
+  const [item, setItem] = useState(null);
+  const activeId = sourceId === scene.videoHistoryId ? sourceId : null;
+  useEffect(() => {
+    if (!activeId) return undefined;
+    let active = true;
+    getVideoHistoryItem(activeId, { silent: true }).then((clip) => {
+      if (!active) return;
+      if (clip?.id !== activeId) throw new Error('The selected clip is missing from video history.');
+      setItem(clip);
+    }).catch((error) => {
+      if (!active) return;
+      setSourceId(null);
+      toast.error(error.message || 'Could not load the selected clip');
+    });
+    return () => { active = false; };
+  }, [activeId]);
+  const close = () => {
+    setItem(null);
+    setSourceId(null);
+  };
+  const defaults = musicVideoUpscaleSettings(project.videoSettings, media.falEnabled);
+  const pending = Boolean(activeId && item?.id !== activeId);
+  return (
+    <>
+      <button type="button" className={SECONDARY_BUTTON}
+        disabled={pending || takes.busy || media.settingsSaving || media.upscaleJobs.length > 0}
+        onClick={() => { setItem(null); setSourceId(scene.videoHistoryId); }}>
+        <Maximize2 size={14} /> {pending ? 'Opening upscale…' : 'Upscale'}
+      </button>
+      {activeId && item?.id === activeId && (
+        <VideoUpscaleDrawer item={item} onClose={close} musicVideo={{ projectId: project.id, sceneId: scene.sceneId }}
+          defaultMethod={defaults.upscaleMethod} defaultTargetResolution={defaults.upscaleTargetResolution}
+          onQueued={(job) => actions.onUpscaleQueued?.(job.jobId, scene.sceneId)}
+          onUpscaled={(_video, updated) => {
+            if (updated) actions.onApplySaved?.(scene.sceneId, {
+              videoHistoryId: updated.videoHistoryId, takes: updated.takes, lastFailure: updated.lastFailure ?? null,
+            });
+          }} />
+      )}
+    </>
+  );
+}
+
 function SceneClipActionBar({
-  scene, layer, sourceWindow, renderPlan, media, takes, actions,
+  scene, project, layer, sourceWindow, renderPlan, media, takes, actions,
   applyPatch, generateVideo, generateStoryboardClip, withFrameTarget, setSwapKind,
 }) {
   const {
@@ -236,6 +286,9 @@ function SceneClipActionBar({
             {sendingClip ? <Activity size={14} className="animate-spin" /> : <Video size={14} />}
             {sendingClip ? 'Sending…' : `Render${scene.videoHistoryId || clipJobs.length ? ' again' : ''}`}
           </button>
+        )}
+        {project?.id && scene.videoHistoryId && (
+          <ShotUpscale key={scene.videoHistoryId} project={project} scene={scene} media={media} takes={takes} actions={actions} />
         )}
         {actions.onPlacePoolItem && (
           <button type="button" onClick={() => setSwapKind('video')} disabled={takes.busy} className={SECONDARY_BUTTON}
@@ -324,7 +377,7 @@ export default function SceneVideoTakesSection({
             applyPatch={applyPatch} markDirty={markDirty} clearDirty={clearDirty} saveIfDirty={saveIfDirty} saveShot={saveShot}
           />
           <SceneClipActionBar
-            scene={scene} layer={layer} sourceWindow={sourceWindow} renderPlan={renderPlan}
+            scene={scene} project={project} layer={layer} sourceWindow={sourceWindow} renderPlan={renderPlan}
             media={media} takes={takes} actions={actions} applyPatch={applyPatch}
             generateVideo={generateVideo} generateStoryboardClip={generateStoryboardClip}
             withFrameTarget={withFrameTarget} setSwapKind={setSwapKind}

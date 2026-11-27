@@ -10,7 +10,10 @@ vi.mock('fs/promises', () => ({
   rename: vi.fn(),
   rm: vi.fn(),
 }));
-vi.mock('../lib/childProcess.js', () => ({ spawn: vi.fn() }));
+vi.mock('../lib/childProcess.js', async (importOriginal) => ({
+  ...await importOriginal(),
+  spawn: vi.fn(),
+}));
 vi.mock('../lib/fileUtils.js', () => ({
   ensureDir: vi.fn(),
   PATHS: { repos: '/repos' },
@@ -134,6 +137,28 @@ describe('cloneRepo', () => {
       STAGING_ROOT,
       { recursive: true, force: true }
     );
+  });
+
+  it('times out an unfinished clone and removes only its staging directory', async () => {
+    const child = createChild();
+    child.exitCode = null;
+    child.signalCode = null;
+    spawn.mockReturnValue(child);
+    vi.useFakeTimers();
+    try {
+      const pending = cloneRepo('https://github.com/acme/widgets');
+      const rejected = expect(pending).rejects.toThrow('Clone timed out after 5 minutes');
+      await vi.advanceTimersByTimeAsync(300_000);
+      await rejected;
+
+      expect(child.kill).toHaveBeenCalledWith('SIGTERM');
+      expect(rename).not.toHaveBeenCalled();
+      expect(rm).toHaveBeenCalledExactlyOnceWith(STAGING_ROOT, { recursive: true, force: true });
+      child.signalCode = 'SIGTERM';
+      await vi.advanceTimersByTimeAsync(8000);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it('keeps a checkout a concurrent attempt already published', async () => {

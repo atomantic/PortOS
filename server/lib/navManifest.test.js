@@ -1,3 +1,4 @@
+import { MORSE_MODE_IDS } from './morseModes.js';
 import { describe, it, expect } from 'vitest';
 import fs from 'node:fs';
 import path from 'node:path';
@@ -50,7 +51,7 @@ const TABBED_PAGES = [
   // path, which is how the two-deep Elements modes are declared.
   { prefix: '/post', file: 'client/src/components/meatspace/tabs/PostTab.jsx', kind: 'switch', switchVar: 'tab',
     nestedIdSources: [
-      { parent: 'morse', file: 'client/src/components/meatspace/post/trainerModes.js', constName: 'MORSE_MODES' },
+      { parent: 'morse', ids: MORSE_MODE_IDS },
       { parent: 'memory', file: 'client/src/components/meatspace/tabs/PostTab.jsx', constName: 'MEMORY_SUBROUTES' },
       { parent: 'memory/elements', file: 'client/src/components/meatspace/post/trainerModes.js', constName: 'ELEMENTS_PRACTICE_MODES' },
       { parent: 'wordplay', file: 'client/src/components/meatspace/post/WordplayTrainer.jsx', constName: 'GAME_MODES' },
@@ -99,8 +100,8 @@ function extractConstIds(filePath, constName) {
 
 // The set of absolute tab paths a page serves under its own prefix.
 function extractTabPaths(filePath, { kind, switchVar, prefix, section, nestedIdSources }) {
-  const nested = (nestedIdSources || []).flatMap(({ parent, file, constName: c }) =>
-    extractConstIds(path.join(REPO_ROOT, file), c).map((id) => `${prefix}/${parent}/${id}`));
+  const nested = (nestedIdSources || []).flatMap(({ parent, file, constName: c, ids }) =>
+    (ids ?? extractConstIds(path.join(REPO_ROOT, file), c)).map((id) => `${prefix}/${parent}/${id}`));
   if (kind === 'switch') {
     const src = fs.readFileSync(filePath, 'utf8');
     return [...extractSwitchTabs(src, switchVar).map((id) => `${prefix}/${id}`), ...nested];
@@ -654,15 +655,8 @@ const SOCKET_JS = path.join(REPO_ROOT, 'client/src/services/socket.js');
 // not from ⌘K / voice / the sidebar.
 const NAV_COVERAGE_OPT_OUT = new Map([
   ['/*', 'catch-all 404 page — reached only by an unmatched URL, never a destination'],
-  ['/ai/presets/new', 'create-preset drawer, reached via the "Add preset" button on /ai/presets'],
-  ['/ai/services/new', 'add-service drawer, reached via the "Add service" button on /ai/services'],
-  ['/apps/create', 'create-app form, reached via the "New App" button on /apps'],
-  ['/creative-commission/new', 'create-commission drawer, reached via the "New Commission" button on /creative-commission'],
-  ['/feature-agents/create', 'create-agent form, reached via the "New Agent" button'],
   ['/fableloom/join', 'scoped QR mobile join view, reached via scanned QR code with fragment credentials'],
   ['/login', 'auth gate — surfaced only when settings.secrets.auth is enabled, reached via 401 redirect'],
-  ['/songbook/import', 'import-song form, reached via the "Import" button on /songbook'],
-  ['/universes/new', 'create-mode sentinel for the Universe Builder editor'],
 ]);
 
 // Element wrappers that forward to another route rather than render a page. A
@@ -777,6 +771,13 @@ describe('nav coverage — every navigable App.jsx route has a manifest entry', 
     expect(uncovered).toEqual([]);
   });
 
+  it('registers the seven create and import routes for palette and voice navigation', () => {
+    expect([...navPaths].filter((p) => [
+      '/apps/create', '/ai/presets/new', '/ai/services/new', '/feature-agents/create',
+      '/creative-commission/new', '/songbook/import', '/universes/new',
+    ].includes(p))).toHaveLength(7);
+  });
+
   it('keeps the hosted audience join route outside the chrome layout', () => {
     // The hosted audience shell owns a full dynamic viewport and must not be
     // nested under Layout's shorter overflow-hidden main (#5499).
@@ -820,6 +821,13 @@ describe('nav coverage — every navigable App.jsx route has a manifest entry', 
   it('still declares the previous paths of the pages already moved', () => {
     const declared = new Set(NAV_COMMANDS.flatMap((c) => c.previousPaths || []));
     const missing = [
+      '/video/generate',
+      '/imessage/:chatKey',
+      '/devtools/agents',
+      '/media/threejs',
+      '/media/threejs/:id',
+      '/create/media',
+      '/create/story',
       '/settings/local-llm',   // #4736 — Local LLM management left Settings
       '/models/llms/runtimes', // #7414 — Runtimes left the LLMs pill bar for its own tab
       '/media/models',         // #4728 — the rest of model management left Create/Settings/Dev Tools
@@ -932,7 +940,7 @@ describe('nav contract — POST Practice Library links are registered destinatio
 it('routes video browsing and production aliases to Creative Director', () => {
   expect(resolveNavCommand('video').path).toBe('/creative-director');
   expect(resolveNavCommand('browse-video').path).toBe('/creative-director');
-  expect(resolveNavCommand('generate-video').path).toBe('/video/generate');
+  expect(resolveNavCommand('generate-video').path).toBe('/media/video');
   expect(resolveNavCommand('create-video').path).toBe('/creative-director');
   expect(resolveNavCommand('video-production').path).toBe('/creative-director');
 });

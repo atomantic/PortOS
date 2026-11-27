@@ -8,7 +8,7 @@ import * as api from '../services/apiVoice';
 import { getUniverse } from '../services/apiUniverseBuilder';
 vi.mock('../services/socket', () => ({ default: { on: vi.fn(), off: vi.fn(), emit: vi.fn() } }));
 vi.mock('../services/apiVoice', () => ({
-  listStudioVoices: vi.fn(), getStudioVoice: vi.fn(), getVoiceStudioStatus: vi.fn(), setupVoiceStudio: vi.fn(), unloadVoiceStudio: vi.fn(),
+  listStudioVoices: vi.fn(), getStudioVoice: vi.fn(), getVoiceStudioStatus: vi.fn(), setupVoiceStudio: vi.fn(), cancelVoiceStudioSetup: vi.fn(), unloadVoiceStudio: vi.fn(),
   designStudioVoice: vi.fn(), assignStudioVoice: vi.fn(),
 }));
 vi.mock('../services/apiUniverseBuilder', () => ({ listUniverseNames: vi.fn().mockResolvedValue([{ id: 'u1', name: 'Example Universe' }]), getUniverse: vi.fn() }));
@@ -62,6 +62,17 @@ describe('Voice Studio', () => {
     expect(screen.getByRole('button', { name: 'Generate & save preview' })).toBeDisabled();
     expect(api.setupVoiceStudio).not.toHaveBeenCalled();
     expect(api.designStudioVoice).not.toHaveBeenCalled();
+  });
+  it('cancels an active setup and uses the result to enable setup again', async () => {
+    api.getVoiceStudioStatus.mockResolvedValue({ supported: true, ready: false, state: 'running', stage: 'Downloading weights' });
+    api.cancelVoiceStudioSetup.mockResolvedValue({ supported: true, ready: false, state: 'canceled', stage: 'Setup canceled' });
+    open('/voices/new');
+    expect(await screen.findByText(/Downloading weights/)).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: 'Cancel setup' }));
+    expect(await screen.findByRole('button', { name: 'Set up AuK locally' })).toBeEnabled();
+    expect(within(screen.getByRole('region', { name: 'Voice engine' })).getByRole('status')).toHaveTextContent('Setup canceled');
+    expect(api.cancelVoiceStudioSetup).toHaveBeenCalledWith({ silent: true });
+    expect(screen.getByRole('button', { name: 'Generate & save preview' })).toBeDisabled();
   });
   it('shows a stale voice URL as missing instead of silently selecting another voice', async () => {
     api.getStudioVoice.mockRejectedValue(new Error('Not found'));

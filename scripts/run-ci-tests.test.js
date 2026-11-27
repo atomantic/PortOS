@@ -108,6 +108,59 @@ it('hands Vitest the selection as a file, sliced by the runner for the matrix sh
   }
 }, 150_000);
 
+it.skipIf(process.platform === 'win32')('hands the browser plan to the supervised runner, refreshes it when audio changes, and rejects foreign files', () => {
+  const fixture = mkdtempSync(join(tmpdir(), 'portos-preplanned-browser-'));
+  const preplanned = join(fixture, 'browser-run.json');
+  const output = join(fixture, 'github-output');
+  const owned = 'server/services/musicVideo/animaticCapture.browser.test.js';
+  const otherShard = 'server/services/musicVideo/documentRenderAudioTimeline.browser.test.js';
+  try {
+    installFakeNpm(fixture, [
+      REPORTING_NPM,
+      'const report = process.argv.find(arg => arg.startsWith("--outputFile.json=")).slice("--outputFile.json=".length);',
+      'require("fs").writeFileSync(report, JSON.stringify({ numPassedTests: 1, numFailedTests: 0, testResults: [] }));',
+    ].join('\n'));
+    const invoke = (script, args = [], env = {}) => spawnSync(process.execPath, [join(import.meta.dirname, script), 'server', ...args], {
+      encoding: 'utf8', timeout: 120000,
+      env: { ...process.env, PATH: `${fixture}${delimiter}${process.env.PATH}`, CI: '',
+        CI_TEST_MODE: 'files', CI_SHARD: '3/7', CI_TEST_FILES: JSON.stringify([owned, otherShard]),
+        PORTOS_CI_BROWSER_OWNER: 'browser', PORTOS_BROWSER_TEST_PROFILE: 'full', PORTOS_TEST_MEMO: 'off',
+        PORTOS_CI_PREPLANNED_RUN: preplanned, PORTOS_CI_BEFORE_AUDIO_SETUP: '',
+        PORTOS_CI_DIAGNOSTICS_DIR: join(fixture, 'diagnostics'),
+        GITHUB_OUTPUT: output, GITHUB_ENV: '', GITHUB_STEP_SUMMARY: '', ...env,
+      },
+    });
+
+    const plan = invoke('run-ci-tests.js', ['--check-remaining'], { PORTOS_CI_BEFORE_AUDIO_SETUP: '1' });
+    expect(plan.status, plan.stderr).toBe(0);
+    expect(readFileSync(output, 'utf8')).toBe('remaining=1\n');
+    expect(JSON.parse(readFileSync(preplanned, 'utf8'))).toEqual({ run: [owned] });
+
+    const run = invoke('watch-ci-tests.js');
+    expect(run.status, run.stderr).toBe(0);
+    expect(run.stdout).toContain('Using the preplanned selection of 1 browser test files.');
+    const { args, selection } = JSON.parse(run.stdout.split('\n').find(line => line.startsWith('{"args"')));
+    expect(args).toContain('--testNamePattern=^(?!.*\\[local-performance\\]).*$');
+    expect(selection).toEqual({ include: [toWorkspacePath('server', owned)], exclude: [] });
+
+    // A plan that matched earlier audio can no longer skip the whole shard.
+    writeFileSync(preplanned, JSON.stringify({ run: [], ffmpeg: 'ffmpeg version fixture-before-setup' }));
+    writeFileSync(output, '');
+    const recheck = invoke('run-ci-tests.js', ['--check-remaining']);
+    expect(recheck.status, recheck.stderr).toBe(0);
+    expect(readFileSync(output, 'utf8')).toBe('remaining=1\n');
+    expect(JSON.parse(readFileSync(preplanned, 'utf8'))).toEqual({ run: [owned] });
+
+    writeFileSync(preplanned, JSON.stringify({ run: [otherShard] }));
+    const invalid = invoke('run-ci-tests.js');
+    expect(invalid.status).toBe(1);
+    expect(invalid.stderr).toContain('Invalid preplanned browser test selection for this shard.');
+    expect(invalid.stdout).not.toContain('{"args"');
+  } finally {
+    rmSync(fixture, { recursive: true, force: true });
+  }
+}, 150_000);
+
 it('runs the db scope through the server workspace\'s test:db:ci script with the same selection file', () => {
   const fixture = mkdtempSync(join(tmpdir(), 'portos-db-scope-'));
   try {
@@ -124,6 +177,54 @@ it('runs the db scope through the server workspace\'s test:db:ci script with the
     expect(args.slice(0, 5)).toEqual(['run', 'test:db:ci', '--prefix', 'server', '--']);
     expect(selection.include).toEqual(['services/dbAdmin.db.test.js']);
     expect(result.stdout).toMatch(/⏱ db files|⏱ db selected tests/);
+  } finally {
+    rmSync(fixture, { recursive: true, force: true });
+  }
+}, 150_000);
+
+it('hands the full DB plan to the runner and reuses PR facts without writing to the memo', () => {
+  const fixture = mkdtempSync(join(tmpdir(), 'portos-preplanned-db-'));
+  const memoDir = join(fixture, 'memo');
+  const preplanned = join(fixture, 'db-run.json');
+  const output = join(fixture, 'github-output');
+  try {
+    installFakeNpm(fixture, REPORTING_NPM);
+    const invoke = (...args) => spawnSync(process.execPath, [join(import.meta.dirname, 'run-ci-tests.js'), 'db', ...args], {
+      encoding: 'utf8', timeout: 120000,
+      env: { ...process.env, PATH: `${fixture}${delimiter}${process.env.PATH}`, CI: '',
+        // Exercise the full DB inventory path without analyzing all DB suites twice.
+        CI_TEST_MODE: 'full', CI_SHARD: '1/64', CI_TEST_FILES: '[]', CI_TEST_SOURCES: '[]',
+        GITHUB_EVENT_NAME: 'pull_request', GITHUB_OUTPUT: output, GITHUB_ENV: '', GITHUB_STEP_SUMMARY: '',
+        PORTOS_TEST_MEMO: '', PORTOS_TEST_MEMO_DIR: memoDir, PORTOS_TEST_MEMO_READ_DIRS: '',
+        PORTOS_CI_PREPLANNED_RUN: preplanned, RUNNER_TEMP: fixture,
+      },
+    });
+    const plan = invoke('--check-remaining');
+    expect(plan.status, plan.stderr).toBe(0);
+    const coldParses = Number(plan.stdout.match(/Parsed (\d+) files/)?.[1]);
+    expect(coldParses).toBeGreaterThan(0);
+    const { run } = JSON.parse(readFileSync(preplanned, 'utf8'));
+    expect(run.length).toBeGreaterThan(0);
+    expect(run.every(file => /(?:^|[/.])db\.test\.js$/.test(file))).toBe(true);
+    expect(readFileSync(output, 'utf8')).toBe(`remaining=${run.length}\n`);
+    expect(existsSync(join(fixture, 'portos-facts-cache', 'facts', 'db.json'))).toBe(true);
+    expect(existsSync(memoDir)).toBe(false);
+
+    const warm = invoke('--check-remaining');
+    expect(warm.status, warm.stderr).toBe(0);
+    const [, warmParses, reused] = warm.stdout.match(/Parsed (\d+) files, reused (\d+)/) ?? [];
+    expect(Number(warmParses)).toBeLessThan(coldParses);
+    expect(Number(reused)).toBeGreaterThan(0);
+    expect(JSON.parse(readFileSync(preplanned, 'utf8')).run).toEqual(run);
+    expect(existsSync(memoDir)).toBe(false);
+
+    const executed = invoke();
+    expect(executed.status, executed.stderr).toBe(0);
+    expect(executed.stdout).toContain(`Using the preplanned selection of ${run.length} DB test files.`);
+    const { args, selection } = JSON.parse(executed.stdout.split('\n').find(line => line.startsWith('{"args"')));
+    expect(args).not.toContain('--experimental.recordDependencies');
+    expect(selection.include).toEqual(run.map(rel => toWorkspacePath('db', rel)));
+    expect(existsSync(memoDir)).toBe(false);
   } finally {
     rmSync(fixture, { recursive: true, force: true });
   }
@@ -195,9 +296,9 @@ describe('test memo through the real runner', () => {
       expect(trustedPr.stdout).not.toContain('RAN ');
 
       // A passed file that stores nothing says why on a trusted run (#16545). The
-      // stuck file spawns git, so neither key exists (any other undeclared reason
-      // serves equally). A declared guard is only counted.
-      const stuck = 'scripts/check-import-case.test.js';
+      // stuck file can read checkout Git state, so neither key exists. A
+      // declared guard is only counted.
+      const stuck = 'scripts/ci-base-sha.test.js';
       const [guard] = getAlwaysRunTests();
       const unrecorded = { CI_TEST_FILES: JSON.stringify([stuck, guard]), PORTOS_TEST_MEMO_DIR: join(fixture, 'unrecorded-memo') };
       const trusted = run(unrecorded);
@@ -254,15 +355,19 @@ describe('test memo through the real runner', () => {
       expect(coldPlan.status, coldPlan.stderr).toBe(0);
       expect(coldPlan.stdout).not.toContain('RAN ');
       expect(readFileSync(outputFile, 'utf8')).toBe('remaining=1\n');
+      expect(existsSync(join(memoDir, 'facts', `${scope}.json`))).toBe(true);
 
       const record = invoke([]);
       expect(record.status, record.stderr).toBe(0);
       expect(record.stdout).toContain('RAN ');
 
       writeFileSync(outputFile, '');
+      const factsPath = join(memoDir, 'facts', `${scope}.json`);
+      rmSync(factsPath);
       const warmPlan = invoke(['--check-remaining'], { GITHUB_EVENT_NAME: 'pull_request' });
       expect(warmPlan.status, warmPlan.stderr).toBe(0);
       expect(warmPlan.stdout).toContain('skipped 1 of 1 selected files');
+      expect(existsSync(factsPath)).toBe(false);
       expect(warmPlan.stdout).toContain(`No ${scope} tests left to run.`);
       expect(warmPlan.stdout).not.toContain('RAN ');
       expect(readFileSync(outputFile, 'utf8')).toBe('remaining=0\n');
@@ -669,7 +774,7 @@ describe('always-run guard time budget through the real runner (#16551, #16996)'
         '    { status: "passed", ancestorTitles: ["slowCheck", "case"], duration: slow === "no-such-file" ? 5 : 4500 },',
         '    { status: "passed", ancestorTitles: ["fastCheck", "case"], duration: 5 }] }',
         '  : { name: require("path").resolve(repo, "server", rel), status: "passed", startTime: 0,',
-        '    endTime: rel.endsWith(slow) ? 6500 : 10, assertionResults: [{ status: "passed" }] });',
+        '    endTime: rel === slow ? 6500 : 10, assertionResults: [{ status: "passed" }] });',
         'if (selection.include.some(rel => rel.endsWith("repo.guard.test.js")) && process.env.PORTOS_GUARD_LOAD_LOG) {',
         '  fs.appendFileSync(process.env.PORTOS_GUARD_LOAD_LOG, JSON.stringify({ runner: "server/test/guards/repo.guard.test.js", check: "fastCheck", ms: slow === "no-such-file" ? 1 : 4600 }) + "\\n");',
         '}',
@@ -677,13 +782,14 @@ describe('always-run guard time budget through the real runner (#16551, #16996)'
         'fs.writeFileSync(process.env.PORTOS_CI_DIAGNOSTICS_PATH, JSON.stringify({ reason: "passed", errorCount: 0, errors: [] }));',
         'process.stdout.write("RAN " + JSON.stringify(selection.include) + "\\n");',
       ].join('\n'));
-      const guard = 'scripts/node-version-drift.guard.test.js';
+      const guard = 'server/lib/apiRouteParity.test.js';
+      const guardSelector = 'lib/apiRouteParity.test.js';
       const runner = 'server/test/guards/repo.guard.test.js';
       const scheduled = 'scripts/generate-prompt-stage-call-sites.test.js';
       const other = 'scripts/lib/releaseTitle.test.js';
       const run = (extraEnv) => spawnSync(process.execPath, [join(import.meta.dirname, 'run-ci-tests.js'), 'server'], {
         encoding: 'utf8', timeout: 120000,
-        env: { ...process.env, PATH: `${fixture}${delimiter}${process.env.PATH}`, FAKE_SLOW_GUARD: guard,
+        env: { ...process.env, PATH: `${fixture}${delimiter}${process.env.PATH}`, FAKE_SLOW_GUARD: guardSelector,
           CI_TEST_MODE: 'files', CI_TEST_FILES: JSON.stringify([other, guard, runner, scheduled]), CI_TEST_SOURCES: '[]',
           PORTOS_TEST_MEMO: 'off', CI_SHARD: '', CI_GUARD_BUDGET: '', GITHUB_ENV: '', GITHUB_STEP_SUMMARY: '', ...extraEnv },
       });
@@ -693,9 +799,17 @@ describe('always-run guard time budget through the real runner (#16551, #16996)'
       const enforced = run({ CI_GUARD_BUDGET: 'enforce' });
       expect(enforced.status).toBe(1);
       expect(enforced.stderr).toContain(`❌ Guard over its time budget: ${over}`);
-      expect(ranSets(enforced.stdout)).toEqual([[`../${guard}`, 'test/guards/repo.guard.test.js'], [`../${scheduled}`], [`../${other}`]]);
+      expect(ranSets(enforced.stdout)).toEqual([[guardSelector, 'test/guards/repo.guard.test.js'], [`../${scheduled}`], [`../${other}`]]);
+      const timings = enforced.stdout.split('\n')
+        .filter(line => line.startsWith('⏱️ Guard timing '));
+      expect(timings.sort()).toEqual([
+        `⏱️ Guard timing ${guard} 6500.0ms`,
+        `⏱️ Guard timing ${runner} > slowCheck 4500.0ms`,
+        `⏱️ Guard timing ${runner} > fastCheck 4605.0ms`,
+        `⏱️ Guard timing ${scheduled} 10.0ms`,
+      ].sort());
 
-      const slowScheduled = run({ CI_GUARD_BUDGET: 'enforce', FAKE_SLOW_GUARD: scheduled });
+      const slowScheduled = run({ CI_GUARD_BUDGET: 'enforce', FAKE_SLOW_GUARD: `../${scheduled}` });
       expect(slowScheduled.status).toBe(1);
       expect(slowScheduled.stderr).toContain(`❌ Guard over its time budget: ${scheduled} 6.5s over the 4.0s per-guard budget.`);
 
@@ -704,8 +818,9 @@ describe('always-run guard time budget through the real runner (#16551, #16996)'
       for (const extraEnv of [{}, { CI_GUARD_BUDGET: 'report' }]) {
         const reported = run(extraEnv);
         expect(reported.status, reported.stderr).toBe(0);
-        expect(ranSets(reported.stdout)).toEqual([[`../${guard}`, `../${other}`, `../${scheduled}`, 'test/guards/repo.guard.test.js'].sort()]);
+        expect(ranSets(reported.stdout)).toEqual([[guardSelector, `../${other}`, `../${scheduled}`, 'test/guards/repo.guard.test.js'].sort()]);
         expect(reported.stdout).toContain(`::warning title=Guard over its time budget::${over}`);
+        expect(reported.stdout).not.toContain('⏱️ Guard timing ');
         expect(reported.stderr).not.toContain('Guard over its time budget');
       }
 
@@ -718,9 +833,10 @@ describe('always-run guard time budget through the real runner (#16551, #16996)'
     }
   }, 120_000);
 
-  it('enforces it on the scheduled Linux server run only, and reports it everywhere else', () => {
+  it('enforces it on the scheduled Linux server run and the opt-in manual run only', () => {
     const jobs = readCiJobs();
-    const expression = "CI_GUARD_BUDGET: ${{ github.event_name == 'schedule' && 'enforce' || 'report' }}";
+    const expression = "CI_GUARD_BUDGET: ${{ (github.event_name == 'schedule' || (github.event_name == 'workflow_dispatch' && inputs.enforce_guard_budget)) && 'enforce' || 'report' }}";
+    expect(WORKFLOW).toMatch(/workflow_dispatch:\n {4}inputs:\n {6}enforce_guard_budget:\n {8}description: [^\n]+\n {8}type: boolean\n {8}default: false/);
     expect(Object.entries(jobs).filter(([, body]) => body.includes('CI_GUARD_BUDGET:')).map(([id]) => id)).toEqual(['server']);
     expect(jobs.server).toContain(expression);
   });
@@ -744,15 +860,9 @@ describe('ci.yml shard wiring', () => {
   it('requires NumPy for CTC in related, explicit and full plans on its owning shard', () => {
     const fixture = mkdtempSync(join(tmpdir(), 'portos-check-ctc-'));
     const output = join(fixture, 'github_output');
-    const ctc = 'scripts/align_lyrics_ctc.test.js';
+    const ctc = 'scripts/ml/align_lyrics_ctc.test.js';
     try {
-      const related = JSON.parse(execFileSync(process.execPath, [join(import.meta.dirname, 'ci-test-plan.js')], {
-        cwd: join(import.meta.dirname, '..'),
-        encoding: 'utf8', env: { ...process.env, CI_FORCE_FULL: 'false', CI_BASE_REF: 'main', CI_BASE_SHA: 'HEAD',
-          CI_CHANGED_FILES: '["server/lib/testHelper.js"]', GITHUB_OUTPUT: '', GITHUB_STEP_SUMMARY: '' },
-      }));
-      expect(related.server_mode).toBe('related');
-      expect(related.server_files).toContain(ctc);
+      const sources = ['server/lib/testHelper.js'];
       const requiresNumpy = (mode, files, sources = [], shard = '1/1') => {
         writeFileSync(output, '');
         execFileSync(process.execPath, [join(import.meta.dirname, 'run-ci-tests.js'), 'server', '--check-ctc'], {
@@ -761,8 +871,8 @@ describe('ci.yml shard wiring', () => {
         });
         return readFileSync(output, 'utf8').trim();
       };
-      expect(requiresNumpy(related.server_mode, related.server_files, related.server_sources)).toBe('required=true');
-      expect(requiresNumpy('related', [], related.server_sources)).toBe('required=true');
+      expect(requiresNumpy('related', [ctc], sources)).toBe('required=true');
+      expect(requiresNumpy('related', [], sources)).toBe('required=true');
       expect(requiresNumpy('files', [ctc])).toBe('required=true');
       expect(requiresNumpy('files', ['scripts/run-ci-tests.test.js'])).toBe('required=false');
       expect(['1/2', '2/2'].map(shard => requiresNumpy('full', [], [], shard)).sort())
@@ -808,6 +918,7 @@ describe('ci.yml shard wiring', () => {
       expect(step).toContain('CI_TEST_MODE: full');
       expect(step).toContain('PGDATABASE: portos_test');
       expect(step).toContain('PORTOS_TEST_MEMO_DIR: ${{ runner.temp }}/portos-test-memo');
+      expect(step).toContain('PORTOS_CI_PREPLANNED_RUN: ${{ runner.temp }}/portos-db-run.json');
     }
     const liveRestore = 'fromJSON(needs.impact.outputs.plan).db_live_restore';
     const dbGate = `if: fromJSON(steps.db-plan.outputs.remaining) > 0 || ${liveRestore}\n`;
@@ -855,7 +966,8 @@ describe('ci.yml shard wiring', () => {
     const recheckStep = body.slice(recheckIndex, clientIndex);
     expect(recheckStep).toContain("if: steps.browser-plan.outputs.recheck == 'true'");
     expect(recheckStep).toContain('run: node scripts/run-ci-tests.js server --check-remaining');
-    for (const name of ['PORTOS_TEST_MEMO_DIR', 'CI_TEST_MODE', 'CI_SHARD', 'PORTOS_CI_BROWSER_OWNER',
+    expect(step).toContain('PORTOS_CI_PREPLANNED_RUN: ${{ runner.temp }}/portos-browser-run.json');
+    for (const name of ['PORTOS_TEST_MEMO_DIR', 'PORTOS_CI_PREPLANNED_RUN', 'CI_TEST_MODE', 'CI_SHARD', 'PORTOS_CI_BROWSER_OWNER',
       'CI_TEST_FILES', 'PORTOS_REQUIRE_BROWSER_SUITES', 'PORTOS_TEST_QUIET']) {
       const envLine = step.match(new RegExp(`^ +${name}: .+$`, 'm'))?.[0];
       expect(envLine).toBeDefined();

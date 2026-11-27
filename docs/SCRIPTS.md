@@ -13,7 +13,7 @@ Python ML runners and probes live under `scripts/ml/`. Their input and lock file
 | `npm run lint` | Biome over client, server, scripts, lib and autofixer, the same command pregate and CI run (`scripts/run-ci-lint.js`). Exits non-zero on any diagnostic. Use it as the local lint step, e.g. `npm run lint && npm test`. |
 | `npm run eval:agent-context` | Evaluate the agent instruction context (`server/services/agent/agentContextEval.js`). Takes `--fixture <path>` and `--failure-threshold <n>`. |
 | `npm run prompt-surface:render` | Re-render the deterministic model-facing prompt/tool snapshot into `server/test/fixtures/prompt-surface/`; run after an intended prompt or tool-schema change. `node scripts/prompt-surface.js diff <baseDir> <headDir>` prints a Markdown token-delta table. Guarded by `promptSurfaceSnapshot.test.js`. |
-| `npm run setup` | The first-run install pipeline, `scripts/setup.js`; `install:all` is an alias and `setup.sh` / `setup.ps1` call the same file, so all three run the same ordered steps: version checks, git submodules, root/client/server dependency installs (cwd-based `npm install --no-save`, no `--prefix`, via the installer in `scripts/ensure-deps.js`) with the trusted native rebuilds, then data, database, local LLM, managed browser and certificate setup, then ffmpeg, slash-do and the setup walkthrough. It imports only Node builtins so it runs on a fresh clone. ffmpeg and slash-do are fail-soft. `PORTOS_DEFER_SETUP_GUIDE=1` holds the walkthrough back for the caller to print. |
+| `npm run setup` | The first-run install pipeline, `scripts/setup.js`; `install:all` is an alias and `setup.sh` / `setup.ps1` call the same file, so all three run the same ordered steps: version checks, git submodules, client and server dependency installs (cwd-based `npm install --no-save`, no `--prefix`, via the installer in `scripts/ensure-deps.js`) with the trusted native rebuilds, then data, database, local LLM, managed browser and certificate setup, then ffmpeg, slash-do and the setup walkthrough. It imports only Node builtins so it runs on a fresh clone. ffmpeg and slash-do are fail-soft. `PORTOS_DEFER_SETUP_GUIDE=1` holds the walkthrough back for the caller to print. |
 | `node scripts/ensure-ffmpeg.js [--non-interactive]` | The one ffmpeg installer (Homebrew, apt-get, dnf or pacman; a manual hint on Windows). Called by `scripts/setup.js`, `update.sh` and `update.ps1`; `--non-interactive` limits Linux to passwordless `sudo -n`. Always exits 0. |
 | `node scripts/install-slashdo.js` | The one slash-do installer: runs the git-pinned `lib/slashdo/bin/cli.js` submodule CLI with the current Node binary (no registry fetch); skips with a `git submodule update --init --recursive` hint when the submodule is absent. Called by `scripts/setup.js` and `scripts/update.mjs`. Always exits 0. |
 | `npm run setup:data` | `scripts/setup-data.js`. Seeds `data/` from `data.reference/` (copies missing files, merges missing keys into structured JSON, expands `__PORTOS_ROOT__` in `apps.json`) and tidies legacy migration-ledger layout. Idempotent; `setup` runs it. Run it by hand after pulling changes that add seed files. |
@@ -40,3 +40,36 @@ Python ML runners and probes live under `scripts/ml/`. Their input and lock file
 | `scripts/ops/seed-readme-demo-data.mjs --root <empty-dir>` | Builds a synthetic data root for README screenshots from `data.reference/`. It never reads the install's `data/`. Give it an empty directory. |
 | `scripts/ml/align_lyrics_ctc_accuracy.py --model-dir <dir>` | Opt-in accuracy check of the lyric aligner against the real MMS_FA checkpoint (about 1.2 GB, downloaded on first use). CI never runs it. Run it with the `lyric-align` venv's interpreter. |
 | `scripts/prune-model-comparison-seed.js [--check]` | Prunes `data.reference/model-comparison.json` to models in provider scope and public benchmark observations. Run with `--check` in CI or after modifying `providers.json`. |
+
+## Test fixtures
+
+Run `scripts/fixtures/minimax_h3_history.py --runtime-dir <cached-mlx-checkout>`
+with the MiniMax H3 MLX environment's Python interpreter. It exercises the
+pinned runtime's history packing and scheduler with deterministic test tensors
+and small model stubs.
+
+Run `node scripts/eidoverse-frame-acceptance.mjs` with the Worlds and Video
+checkouts, Bun, Playwright and Chrome available. It checks the real renderer's
+frame handshake, navigation and interaction against a disposable world.
+
+Run `python3 -B -m unittest discover -s scripts/ml/avatarforcing` for the
+AvatarForcing motion and checkpoint regressions in
+`scripts/ml/avatarforcing/test_motion.py` and
+`scripts/ml/avatarforcing/test_weights.py`. The motion tests use PyTorch.
+
+## Offline greybox sequences
+
+Use `node scripts/greybox-sequence.js --input docs/examples/greybox-sequence.json
+--output <new-directory> --plan-only` to check a sequence plan. Omit
+`--plan-only` to capture the reference with installed Chrome and FFmpeg
+with libx264. The output directory must be new. The script operates on
+the explicit input file and leaves catalog records and project shots alone.
+For interactive work, use the **Greybox** tab on a catalog environment to
+start a layout, frame and save shots, and capture references.
+
+## Compare cooled runtime pins
+
+The opt-in [cooled runtime probe](../scripts/ml/cooled_runtime_probe.py)
+compares the declared baseline and candidate Python dependencies in
+isolated environments with the same fixtures. Use it as supporting
+evidence for selective lock refreshes.

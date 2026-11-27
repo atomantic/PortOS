@@ -74,13 +74,6 @@ router.get('/jobs', asyncHandler(async (req, res) => {
   res.json({ jobs: jobsWithGates, stats, registeredGates: getRegisteredGates(), dataInputCatalog: getTaskDataInputCatalog() });
 }));
 
-// GET /api/cos/jobs/incidents - Deduplicated failure incidents (open first, then resolved), newest first
-router.get('/jobs/incidents', asyncHandler(async (req, res) => {
-  const { listJobIncidents } = await loadIncidents();
-  const incidents = await listJobIncidents();
-  res.json({ incidents });
-}));
-
 // POST /api/cos/jobs/incidents/:id/ack - Acknowledge an open incident (silences reminders until a new signature appears)
 router.post('/jobs/incidents/:id/ack', asyncHandler(async (req, res) => {
   const { acknowledgeJobIncident } = await loadIncidents();
@@ -159,6 +152,29 @@ router.post('/jobs/:id/toggle', asyncHandler(async (req, res) => {
   res.json({ success: true, job });
 }));
 
+async function executeTriggeredJob(type, execution) {
+  const result = await execution.catch((err) => {
+    if (err?.code !== 'JOB_EXECUTION_FAILED') throw err;
+    return { success: false, error: err.message, exitCode: err.exitCode };
+  });
+  if (result?.success === false) {
+    throw new ServerError(result.error || result.reason || `Could not execute ${type} job`, {
+      status: 502,
+      code: 'JOB_EXECUTION_FAILED',
+      context: { exitCode: result.exitCode ?? null, type }
+    });
+  }
+  return { success: true, type, status: 'completed', ...result };
+}
+
+function jobNotQueued(taskResult, message) {
+  return new ServerError(message || taskResult?.error || 'Task was not queued', {
+    status: 409,
+    code: 'JOB_NOT_QUEUED',
+    context: { taskId: taskResult?.id ?? null, status: taskResult?.status ?? 'skipped' }
+  });
+}
+
 // POST /api/cos/jobs/:id/trigger - Manually trigger a job now
 router.post('/jobs/:id/trigger', asyncHandler(async (req, res) => {
   const job = await autonomousJobs.getJob(req.params.id);
@@ -172,8 +188,7 @@ router.post('/jobs/:id/trigger', asyncHandler(async (req, res) => {
 
   // Shell jobs execute the command directly
   if (autonomousJobs.isShellJob(job)) {
-    const result = await autonomousJobs.executeShellJob(job);
-    return res.json({ success: result.success !== false, type: 'shell', status: 'completed', ...result });
+    return res.json(await executeTriggeredJob('shell', autonomousJobs.executeShellJob(job)));
   }
 
   // Script jobs run their built-in handler directly. This is the manual
@@ -181,8 +196,7 @@ router.post('/jobs/:id/trigger', asyncHandler(async (req, res) => {
   // (`manual: true`) and any fan-out handler reports failures individually
   // rather than coalescing them as unattended background work.
   if (autonomousJobs.isScriptJob(job)) {
-    const result = await autonomousJobs.executeScriptJob(job, { manual: true });
-    return res.json({ success: (result?.success ?? true) !== false, type: 'script', status: 'completed', ...(result || {}) });
+    return res.json(await executeTriggeredJob('script', autonomousJobs.executeScriptJob(job, { manual: true })));
   }
 
   // Generate task and add to CoS internal task queue
@@ -222,21 +236,17 @@ router.post('/jobs/:id/trigger', asyncHandler(async (req, res) => {
     approvalRequired: false
   }, 'internal', { suppressDequeue: true });
 
-  if (!taskResult?.id) {
-    res.json({
-      success: false,
-      type: 'agent',
-      status: 'skipped',
-      reason: 'Task was not queued (may be duplicate or blocked)'
-    });
-    return;
-  }
+  if (!taskResult?.id || taskResult.error) throw jobNotQueued(taskResult);
   if (taskResult.duplicate) {
     // A manual trigger is an explicit retry: a failure-blocked twin is revived
     // with a fresh retry budget (#2614) instead of silently pointing the user
     // at a task that will never run; an active twin is surfaced as-is.
     if (taskResult.status === 'blocked') {
-      await reviveBlockedTask(taskResult.id, { priority: task.priority, metadata: task.metadata }, 'internal');
+      const revived = await reviveBlockedTask(taskResult.id, {
+        priority: task.priority,
+        metadata: task.metadata
+      }, 'internal', { expectedStatus: 'blocked' });
+      if (!revived?.id || revived.error) throw jobNotQueued(taskResult, revived?.error || 'Blocked task could not be requeued');
       res.json({ success: true, type: 'agent', status: 'queued', taskId: taskResult.id, revived: true });
       return;
     }
@@ -258,15 +268,12 @@ router.post('/jobs/:id/trigger', asyncHandler(async (req, res) => {
   // start. Keep the task queued when the spawn cannot proceed (for example, no
   // capacity), but report the actionable reason instead of claiming it started.
   const spawnResult = await forceSpawnTask(taskResult.id);
-  if (spawnResult?.error) {
-    res.json({
-      success: false,
-      type: 'agent',
-      status: 'skipped',
-      reason: spawnResult.error,
-      taskId: taskResult.id
+  if (!spawnResult?.success) {
+    throw new ServerError(spawnResult?.error || 'Task could not be started', {
+      status: 409,
+      code: 'JOB_SPAWN_REFUSED',
+      context: { taskId: taskResult.id, status: taskResult.status ?? 'pending' }
     });
-    return;
   }
   res.json({ success: true, type: 'agent', status: 'queued', started: true, taskId: taskResult.id });
 }));

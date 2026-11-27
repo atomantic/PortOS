@@ -44,6 +44,24 @@ export const ARCHIVE_FILENAME = /^[a-z0-9_-]+-\d{4}-\d{2}-\d{2}T\d{2}-\d{2}-\d{2
 //   purgeFilter — optional `name => boolean`. A category-wide purge removes only
 //     the entries it accepts. Use it when the directory also holds files the
 //     category's own service owns (backup's state.json and in-flight staging).
+// Explicit allowlist: new children of data/cache may be installed runtimes,
+// active work or retained state, regardless of the parent directory's name.
+const CACHE_ENTRIES = {
+  'accelerando.html': { label: 'Accelerando reading cache', type: 'file', description: 'Rebuilt by fetching the author-hosted book again.' },
+  'huggingface-repos.json': { label: 'Hugging Face catalog cache', type: 'file', description: 'Rebuilt by fetching repository metadata again.' },
+  'codex-usage-inventory': { label: 'Codex usage scan cache', type: 'directory', description: 'Rebuilt from Codex session logs. Clearing it does not delete those logs or saved PortOS usage records, but the next scan takes longer.' },
+  runtimes: { label: 'Local model runtimes and weights', description: 'Runtime installations and downloaded models, not temporary files. Open this entry to manage the runtime installations.', sourceHref: '/models/llms-runtimes' },
+  avatarforcing: { label: 'Voice Call avatar runtime and weights', description: 'Manage AvatarForcing in Voice Call settings.', sourceHref: '/voice/call' },
+  mkserve: { label: 'mkserve runtime and weights', description: 'Runtime installation and downloaded models. Manage them on the mkserve card.', sourceHref: '/models/llms-runtimes/mkserve' },
+  'runtime-update-review.json': { label: 'Runtime update review state', description: 'PortOS uses this to track runtime update reviews. Kept by Data Manager.' },
+};
+
+export function dataCacheEntry(name, type) {
+  const known = Object.hasOwn(CACHE_ENTRIES, name) ? CACHE_ENTRIES[name] : null;
+  const { type: purgeableType, ...meta } = known ?? { description: 'Not classified as disposable. Kept by Data Manager.' };
+  return { ...meta, canPurge: type === purgeableType && Boolean(purgeableType) };
+}
+
 export const CATEGORIES = {
   'agents': { label: 'Agents', description: 'Agent personality data', archivable: false, deletable: false },
   'ask-conversations': { label: 'Ask Conversations', description: 'Saved Ask chat transcripts', archivable: true, deletable: false },
@@ -76,7 +94,7 @@ export const CATEGORIES = {
   // but installs that predate that move still carry the dir, and backup still excludes it.
   'browser-downloads': { label: 'Browser Downloads', description: 'Files the agent browser downloaded — re-downloadable, safe to purge', archivable: false, deletable: true, purgeScope: 'category' },
   'browser-profile': { label: 'Browser Profile', description: 'Chrome/Chromium browser data', archivable: false, deletable: true, purgeScope: 'category' },
-  cache: { label: 'Remote API and Reading Cache', description: 'Cached remote API metadata and the author-hosted Accelerando reading source — refetched on demand, safe to purge', archivable: false, deletable: true, purgeScope: 'category' },
+  cache: { label: 'Local Runtimes and Caches', description: 'Installed runtime files, downloaded models, and rebuildable caches. Only marked entries can be cleared.', archivable: false, deletable: true, purgeScope: 'items', mixed: true },
   'calendar': { label: 'Calendar', description: 'Calendar sync data', archivable: true, deletable: false, archiveExcludes: ['calendar/google-auth'] },
   'cover-fonts': { label: 'Cover Fonts', description: 'Typefaces uploaded for music video cover lettering; covers made with one fall back to a built-in typeface if it is removed', archivable: true, deletable: false },
   'private': { label: 'Private Keys', description: 'Machine-local integration credentials — managed in Settings > Credentials', archivable: false, deletable: false },

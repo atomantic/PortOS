@@ -29,11 +29,14 @@ vi.mock('./settings.js', () => {
 });
 
 vi.mock('./imageGen/sidecarStore.js', () => ({
+  readImageSidecar: vi.fn(async () => ({ metadata: {} })),
   editImageSidecar: vi.fn(async (filename, mutate) => {
     const meta = {};
     return mutate(meta);
   }),
 }));
+
+vi.mock('./runner.js', () => ({ stopRun: vi.fn(async () => true) }));
 
 vi.mock('./musicVideo/plateReview.js', () => ({
   resolvePlateReviewer: vi.fn(async () => ({
@@ -46,7 +49,7 @@ vi.mock('./provider/providers.js', () => ({
   getAllProviders: vi.fn(async () => ({
     providers: [
       { id: 'antigravity-cli', name: 'Antigravity CLI', enabled: true, models: ['antigravity-configured-default', 'gemini-4-argon-medium', 'gemini-4-argon-high'] },
-      { id: 'ollama-local', name: 'Ollama', enabled: true, type: 'ollama', models: ['qwen3.8:27b', 'llama3'] },
+      { id: 'ollama-local', name: 'Ollama', enabled: true, type: 'ollama', ollamaBacked: true, models: ['qwen3.8:27b', 'llama3'] },
     ],
   })),
   getProviderById: vi.fn(async (id) => {
@@ -63,7 +66,7 @@ vi.mock('./promptRunner.js', () => ({
     if (prompt.includes('Automated first looks frequently hallucinate')) {
       // Pass 2 confirmation reply
       return {
-        text: JSON.stringify({ confirmed: true, region: 'lower-right', note: 'Polydactyly confirmed' }),
+        text: JSON.stringify({ verdicts: [{ index: 0, confirmed: true, region: 'lower-right', note: 'Polydactyly confirmed' }] }),
         model: 'mock-model-1',
       };
     }
@@ -94,7 +97,10 @@ import {
   overrideVerification,
 } from './imageVerifier.js';
 import { runPromptThroughProvider } from './promptRunner.js';
+import { editImageSidecar, readImageSidecar } from './imageGen/sidecarStore.js';
+import { stopRun } from './runner.js';
 import { getSettings, saveSettings } from './settings.js';
+import { MAX_CONFIRMATION_DEFECTS } from '../lib/imageVerification.js';
 
 describe('imageVerifier service settings and profiles', () => {
   it('reads verifier settings with defaults', async () => {
@@ -126,17 +132,135 @@ describe('imageVerifier service settings and profiles', () => {
 });
 
 describe('verifyImage execution', () => {
-  it('runs Pass 1 and Pass 2 confirmation to evaluate defects', async () => {
-    const result = await verifyImage({
-      filename: 'sample.png',
-      prompt: 'A man waving hand',
-    });
+  beforeEach(() => {
+    runPromptThroughProvider.mockClear();
+    readImageSidecar.mockClear();
+    editImageSidecar.mockClear();
+    stopRun.mockClear();
+  });
 
+  it('uses the full stored prompt for the scan and defect confirmation when it is omitted', async () => {
+    const prompt = `${'A person waving. '.repeat(16)}Keep the lettering legible.`;
+    readImageSidecar.mockResolvedValueOnce({ metadata: { prompt } });
+    await verifyImage({ filename: 'sample.png' });
+    expect(readImageSidecar).toHaveBeenCalledExactlyOnceWith('sample.png');
+    expect(runPromptThroughProvider).toHaveBeenCalledTimes(2);
+    for (const [{ prompt: providerPrompt }] of runPromptThroughProvider.mock.calls) {
+      expect(providerPrompt).toContain(prompt);
+    }
+  });
+
+  it.each(['', 'An explicit prompt'])('preserves the supplied prompt %j', async (prompt) => {
+    await verifyImage({ filename: 'sample.png', prompt });
+    expect(readImageSidecar).not.toHaveBeenCalled();
+    const providerPrompt = runPromptThroughProvider.mock.calls[0][0].prompt;
+    if (prompt) expect(providerPrompt).toContain(prompt);
+    else expect(providerPrompt).not.toContain('Original Generation Prompt:');
+  });
+
+  it('stops the active scan on abort and skips confirmation and persistence', async () => {
+    const controller = new AbortController();
+    const started = Promise.withResolvers();
+    const scan = Promise.withResolvers();
+    const beforeExecute = vi.fn();
+    runPromptThroughProvider.mockImplementationOnce(async ({ onRunCreated, beforeExecute: admit }) => {
+      onRunCreated('scan-run');
+      await admit({ runId: 'scan-run' });
+      started.resolve();
+      return scan.promise;
+    });
+    const result = verifyImage({ filename: 'sample.png', beforeExecute, signal: controller.signal });
+    await started.promise;
+    controller.abort();
+    await vi.waitFor(() => expect(stopRun).toHaveBeenCalledExactlyOnceWith('scan-run'));
+    scan.resolve({ text: JSON.stringify({ checks: [{ dimension: 'hands_and_fingers', status: 'fail' }] }) });
+    await expect(result).rejects.toBe(controller.signal.reason);
+    expect(beforeExecute).toHaveBeenCalledExactlyOnceWith({ runId: 'scan-run' });
+    expect(runPromptThroughProvider).toHaveBeenCalledTimes(1);
+    expect(editImageSidecar).not.toHaveBeenCalled();
+  });
+
+  it('does not persist the first-pass result if confirmation is canceled', async () => {
+    const controller = new AbortController();
+    runPromptThroughProvider
+      .mockResolvedValueOnce({
+        text: JSON.stringify({ checks: [{ dimension: 'hands_and_fingers', status: 'fail', claim: 'Extra finger' }] }),
+      })
+      .mockImplementationOnce(async ({ onRunCreated }) => {
+        onRunCreated('confirmation-run');
+        controller.abort();
+        throw new Error('Provider stopped');
+      });
+    await expect(verifyImage({ filename: 'sample.png', signal: controller.signal })).rejects.toHaveProperty('name', 'AbortError');
+    expect(stopRun).toHaveBeenCalledExactlyOnceWith('confirmation-run');
+    expect(editImageSidecar).not.toHaveBeenCalled();
+  });
+
+  it('batches all confirmation work into one call and reconciles claims by index', async () => {
+    const checks = Array.from({ length: MAX_CONFIRMATION_DEFECTS + 1 }, (_, index) => ({
+      dimension: 'hands_and_fingers',
+      status: 'fail',
+      severity: 'critical',
+      claim: `Claim ${index}`,
+      region: 'lower-left',
+    }));
+    runPromptThroughProvider
+      .mockResolvedValueOnce({ text: JSON.stringify({ checks }) })
+      .mockResolvedValueOnce({ text: JSON.stringify({ verdicts: [
+        { index: 2, confirmed: false },
+        { index: 0, confirmed: true, region: 'upper right', note: 'Extra digit visible' },
+        { index: 3, confirmed: 'true' },
+        { index: MAX_CONFIRMATION_DEFECTS, confirmed: true },
+      ] }) });
+    const beforeExecute = vi.fn();
+    const result = await verifyImage({ filename: 'sample.png', prompt: 'A person waving', beforeExecute });
+
+    expect(runPromptThroughProvider).toHaveBeenCalledTimes(2);
+    expect(runPromptThroughProvider).toHaveBeenNthCalledWith(2, expect.objectContaining({
+      screenshots: ['/fake/data/images/sample.png'],
+      source: 'image-verifier-confirmation',
+      allowFallback: false,
+      beforeExecute,
+    }));
     expect(result.verdict).toBe('fail');
-    expect(result.defects).toHaveLength(1);
-    expect(result.defects[0].dimension).toBe('hands_and_fingers');
-    expect(result.defects[0].confirmed).toBe(true);
-    expect(result.reviewer.providerId).toBe('mock-vision');
+    expect(result.defects).toMatchObject([
+      { claim: 'Claim 0', confirmed: true, region: 'upper right', confirmationNote: 'Extra digit visible' },
+    ]);
+    expect(result.checks.map(({ status }) => status)).toEqual([
+      'fail', ...Array(MAX_CONFIRMATION_DEFECTS).fill('unverified'),
+    ]);
+  });
+
+  it('skips confirmation when the initial scan passes', async () => {
+    runPromptThroughProvider.mockResolvedValueOnce({ text: '{"overallVerdict":"pass"}' });
+    const result = await verifyImage({ filename: 'sample.png' });
+    expect(runPromptThroughProvider).toHaveBeenCalledTimes(1);
+    expect(result.verdict).toBe('pass');
+    expect(result.defects).toEqual([]);
+  });
+
+  it('demotes a critical claim when the confirmation response is malformed', async () => {
+    runPromptThroughProvider.mockResolvedValueOnce({
+      text: JSON.stringify({ checks: [{ dimension: 'hands_and_fingers', status: 'fail', claim: 'Extra finger' }] }),
+    }).mockResolvedValueOnce({ text: 'No structured verdict' });
+    const result = await verifyImage({ filename: 'sample.png' });
+    expect(result.verdict).toBe('pass');
+    expect(result.defects).toEqual([]);
+    expect(result.checks).toMatchObject([{ status: 'unverified', note: 'Unconfirmed defect claim: Extra finger' }]);
+  });
+
+  it.each([
+    ['the default reviewer', undefined, 1],
+    ['an advisory reviewer', { model: 'qwen-27b' }, 0],
+  ])('preserves the provider failure fallback for %s', async (_name, reviewer, remainingDefects) => {
+    runPromptThroughProvider.mockResolvedValueOnce({
+      text: JSON.stringify({ checks: [{ dimension: 'hands_and_fingers', status: 'fail', claim: 'Extra finger' }] }),
+    }).mockRejectedValueOnce(new Error('reviewer failed'));
+    const result = await verifyImage({ filename: 'sample.png', reviewer });
+    expect(runPromptThroughProvider).toHaveBeenCalledTimes(2);
+    expect(result.verdict).toBe('fail');
+    expect(result.defects).toHaveLength(remainingDefects);
+    expect(result.checks).toMatchObject([{ status: 'fail' }]);
   });
 
   it('supports operator override', async () => {

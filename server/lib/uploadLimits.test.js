@@ -85,6 +85,7 @@ describe('uploadLimits', () => {
     const routesDir = join(HERE, '../routes');
     const SAVERS = /saveBase64Upload|saveImageUpload/;
     const INLINE_DECODE = /Buffer\.from\([^)]*'base64'\)/;
+    const SHARED_CAP_IMPORT = /import\s*\{[^}]*\b(?:MAX_BASE64_UPLOAD_BYTES|MAX_SCREENSHOT_BYTES)\b[^}]*\}\s*from '\.[^']*\/uploadLimits\.js'/;
     const readSafe = (p) => { try { return readFileSync(p, 'utf8'); } catch { return ''; } };
 
     const routeFiles = readdirSync(routesDir)
@@ -96,20 +97,22 @@ describe('uploadLimits', () => {
       const delegates = [...src.matchAll(/from '\.\.\/services\/([\w/.-]+\.js)'/g)]
         .map((m) => ({ name: `services/${m[1]}`, src: readSafe(join(HERE, '../services', m[1])) }))
         .filter((s) => SAVERS.test(s.src));
-      return { name: f, src, delegates };
+      // A domain validation module can own the cap before the saver runs.
+      const validators = [...src.matchAll(/from '\.\.\/lib\/([\w/.-]*Validation\.js)'/g)]
+        .map((m) => ({ name: `lib/${m[1]}`, src: readSafe(join(HERE, m[1])) }));
+      return { name: f, src, delegates, validators };
     }).filter((r) => INLINE_DECODE.test(r.src) || SAVERS.test(r.src) || r.delegates.length > 0);
 
     expect(uploadRoutes.length, 'no upload routes discovered — did the detection heuristic break?')
       .toBeGreaterThanOrEqual(5);
 
     for (const route of uploadRoutes) {
-      // The cap may live in the route or in the service it delegates to; assert
-      // one of them USES a shared constant (positive), rather than
-      // pattern-matching for the absence of one literal spelling — a route
-      // could hardcode `= 52428800` under any name and slip past that.
-      const chain = [{ name: route.name, src: route.src }, ...route.delegates];
+      // The route, its validator, or its delegated saver must import a shared
+      // cap. A check for only one literal spelling would miss other ways of
+      // hardcoding the same number.
+      const chain = [{ name: route.name, src: route.src }, ...route.delegates, ...route.validators];
       const where = chain.map((f) => f.name).join(' / ');
-      expect(chain.some((f) => /MAX_BASE64_UPLOAD_BYTES|MAX_SCREENSHOT_BYTES/.test(f.src)),
+      expect(chain.some((f) => SHARED_CAP_IMPORT.test(f.src)),
         `${where} must take its cap from lib/uploadLimits.js`).toBe(true);
       // Belt-and-braces: no raw MB-shaped byte literal left anywhere on the path.
       for (const file of chain) {

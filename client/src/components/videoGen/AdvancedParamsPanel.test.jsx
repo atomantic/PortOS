@@ -1,5 +1,5 @@
 import { describe, it, expect, vi } from 'vitest';
-import { render, screen, fireEvent } from '@testing-library/react';
+import { render, screen, fireEvent, within } from '@testing-library/react';
 import AdvancedParamsPanel from './AdvancedParamsPanel';
 
 // Every model reaching the client carries a server-resolved `supportedModes`
@@ -23,7 +23,43 @@ const baseProps = {
   noMusic: false, onNoMusicChange: vi.fn(),
 };
 
-const renderPanel = (props = {}) => render(<AdvancedParamsPanel {...baseProps} {...props} />);
+function panel(overrides = {}) {
+  const {
+    mode, currentModel,
+    numFrames, onNumFramesChange, chunks, onChunksChange, keyframesActive, chunkPrompts,
+    onChunkPromptChange, chainingActive, contextFrames, onContextFramesChange, fps, onFpsChange, batchSize,
+    onBatchSizeChange, seed, onSeedChange, onRandomSeed,
+    steps, onStepsChange, guidanceScale, onGuidanceScaleChange, speedProfileId, onSpeedProfileChange,
+    speedProfileStatus, onSpeedProfileDownload, width, height, onCancelSpeedProfileDownload,
+    speedProfileDownloadError, streamingMode,
+    onStreamingModeChange, showStreamingMode,
+    imageStrength, onImageStrengthChange, i2vReferenceMode, onI2vReferenceModeChange,
+    effectiveImageStrength, tiling, onTilingChange, disableAudio, onDisableAudioChange, noMusic,
+    onNoMusicChange,
+  } = { ...baseProps, ...overrides };
+
+  return <AdvancedParamsPanel
+    mode={mode} currentModel={currentModel}
+    timing={{
+      numFrames, onNumFramesChange, chunks, onChunksChange, keyframesActive, chunkPrompts,
+      onChunkPromptChange, chainingActive, contextFrames, onContextFramesChange, fps, onFpsChange, batchSize,
+      onBatchSizeChange, seed, onSeedChange, onRandomSeed,
+    }}
+    samplerMemory={{
+      steps, onStepsChange, guidanceScale, onGuidanceScaleChange, speedProfileId, onSpeedProfileChange,
+      speedProfileStatus, onSpeedProfileDownload, width, height, onCancelSpeedProfileDownload,
+      speedProfileDownloadError, streamingMode,
+      onStreamingModeChange, showStreamingMode,
+    }}
+    conditioningAudio={{
+      imageStrength, onImageStrengthChange, i2vReferenceMode, onI2vReferenceModeChange,
+      effectiveImageStrength, tiling, onTilingChange, disableAudio, onDisableAudioChange, noMusic,
+      onNoMusicChange,
+    }}
+  />;
+}
+
+const renderPanel = (props) => render(panel(props));
 
 describe('AdvancedParamsPanel', () => {
   it('shows every sampler knob without a disclosure', () => {
@@ -429,6 +465,33 @@ describe('AdvancedParamsPanel — speed profiles', () => {
     ...extra,
   });
 
+  it('gives each mounted panel unique IDs and explicit control labels', () => {
+    const { container } = render(<>
+      <section aria-label="First panel">{panel({ currentModel: ltx25() })}</section>
+      <section aria-label="Second panel">{panel({ currentModel: ltx25() })}</section>
+    </>);
+
+    const ids = [...container.querySelectorAll('[id]')].map((control) => control.id);
+    expect(new Set(ids).size).toBe(ids.length);
+
+    for (const name of ['First panel', 'Second panel']) {
+      const controls = within(screen.getByRole('region', { name }));
+      for (const label of ['Speed', /Disable audio/, /No music/]) {
+        const element = controls.getByText(label, { selector: 'label' });
+        const control = controls.getByLabelText(label);
+        expect(control.id).toBeTruthy();
+        expect(element).toHaveAttribute('for', control.id);
+      }
+    }
+  });
+
+  it('lets the user download a cached adapter again', () => {
+    const onSpeedProfileDownload = vi.fn();
+    renderPanel({ currentModel: h3, speedProfileId: H3_PROFILE.id, speedProfileStatus: { cached: true }, onSpeedProfileDownload });
+    fireEvent.click(screen.getByRole('button', { name: 'Download adapter again' }));
+    expect(onSpeedProfileDownload).toHaveBeenCalledTimes(1);
+  });
+
   it('is hidden on a model that declares no profiles', () => {
     renderPanel();
     expect(screen.queryByLabelText('Speed')).toBeNull();
@@ -534,82 +597,19 @@ describe('AdvancedParamsPanel — speed profiles', () => {
   });
 });
 
-// Draft decode (#5423). The control exists so a user can trade decode fidelity
-// for a faster look at prompt and composition — but it must never appear for a
-// model that has no draft decoder, or it would offer a choice the server
-// declines and the render silently ignores.
-describe('AdvancedParamsPanel — draft decode', () => {
-  const DRAFT_OPTIONS = [
-    { id: 'full', label: 'Full decode', description: "The model's own decoder." },
-    { id: 'draft', label: 'Draft decode', description: 'Preview fidelity.', sizeLabel: '~1 GB' },
-  ];
-  const h3 = (over = {}) => ({
-    steps: 8, guidance: 0, runtime: 'minimax_h3', supportedModes: ['text', 'image', 'fflf'],
-    samplerLocked: true, draftDecodeOptions: DRAFT_OPTIONS, ...over,
-  });
-
-  it('renders no control for a model that declares no draft decoder', () => {
-    renderPanel({ currentModel: h3({ draftDecodeOptions: [] }) });
-    expect(screen.queryByLabelText('Decode')).toBeNull();
-  });
-
-  it('offers full first, then the declared decoder with its size', () => {
-    renderPanel({ currentModel: h3() });
-    const select = screen.getByLabelText('Decode');
-    expect([...select.options].map((o) => o.value)).toEqual(['full', 'draft']);
-    expect([...select.options].map((o) => o.text)).toEqual(['Full decode', 'Draft decode · ~1 GB']);
-  });
-
-  it('reports a selection to the parent', () => {
-    const onDraftDecodeChange = vi.fn();
-    renderPanel({ currentModel: h3(), onDraftDecodeChange });
-    fireEvent.change(screen.getByLabelText('Decode'), { target: { value: 'draft' } });
-    expect(onDraftDecodeChange).toHaveBeenCalledWith('draft');
-  });
-
-  // A stale selection carried in from a model that DID declare a decoder must
-  // not leave the select on a value with no matching option.
-  it('falls back to full for a selection this model does not offer', () => {
-    renderPanel({ currentModel: h3(), draftDecode: 'turbo' });
-    expect(screen.getByLabelText('Decode').value).toBe('full');
-  });
-
-  // The one thing a user picking Draft most needs to know, and the property the
-  // server enforces regardless of what the form says.
-  it('says that delivery renders always use the full decoder', () => {
-    renderPanel({ currentModel: h3(), draftDecode: 'draft' });
-    expect(screen.getByText(/Finish and delivery renders always use the full decoder/)).toBeTruthy();
-  });
-
-  // #5449 — on a model the finish graph names as a DELIVERY target the server
-  // declines a draft request outright, so the control must show Full and say
-  // why rather than offering a choice that is silently dropped.
-  it('locks the picker to full on a delivery model and explains why', () => {
-    renderPanel({
-      currentModel: h3({ name: 'Example Delivery' }),
-      draftDecode: 'draft',
-      draftDecodeLocked: true,
-    });
-    const select = screen.getByLabelText('Decode');
-    expect(select.value).toBe('full');
-    expect(select.disabled).toBe(true);
-    expect(screen.getByText(/Example Delivery is a delivery model/)).toBeTruthy();
-  });
-});
-
 it('offers a bounded batch selector and explains unsupported models and chaining', () => {
   const onBatchSizeChange = vi.fn();
   const props = { ...baseProps, currentModel: { ...baseProps.currentModel, supportsWarmBatch: true }, batchSize: 3, onBatchSizeChange };
-  const { rerender } = render(<AdvancedParamsPanel {...props} />);
+  const { rerender } = render(panel(props));
   const picker = screen.getByLabelText('Renders in batch');
   expect(picker.value).toBe('3');
   fireEvent.change(picker, { target: { value: '5' } });
   expect(onBatchSizeChange).toHaveBeenCalledWith(5);
   expect(screen.getByText(/Blank seed: random each time/)).toBeTruthy();
-  rerender(<AdvancedParamsPanel {...props} chainingActive />);
+  rerender(panel({ ...props, chainingActive: true }));
   expect(picker.disabled).toBe(true);
   expect(picker.value).toBe('1');
-  rerender(<AdvancedParamsPanel {...props} currentModel={baseProps.currentModel} />);
+  rerender(panel({ ...props, currentModel: baseProps.currentModel }));
   expect(picker.disabled).toBe(true);
   expect(screen.getByText(/available for local MiniMax H3/)).toBeTruthy();
 });

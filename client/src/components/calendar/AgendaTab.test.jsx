@@ -1,4 +1,4 @@
-import { act, fireEvent, render, screen } from '@testing-library/react';
+import { act, fireEvent, render, screen, within } from '@testing-library/react';
 import { MemoryRouter, Routes, Route, useLocation, useNavigate } from 'react-router';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
@@ -22,6 +22,7 @@ import {
   mcpSyncGoogleCalendar,
 } from '../../services/apiCalendar.js';
 import AgendaTab from './AgendaTab';
+import { formatWeekdayDate } from '../../utils/formatters';
 import toast from '../ui/Toast';
 
 function LocationProbe() {
@@ -111,6 +112,48 @@ describe('AgendaTab date scope and paging', () => {
     vi.resetAllMocks();
   });
 
+  it('groups all-day midnights on the calendar date and sorts them before timed events', async () => {
+    const day = new Date(2099, 6, 4);
+    const meeting = event('meeting', '2099-07-04T00:30:00');
+    const allDay = event('holiday', '2099-07-04T00:00:00Z', '2099-07-05T00:00:00Z', { isAllDay: true });
+    const withOffset = event('observance', '2099-07-04T00:00:00+14:00', '2099-07-05T00:00:00+14:00', { isAllDay: true });
+    getCalendarEvents.mockResolvedValue({ events: [meeting, allDay, withOffset] });
+
+    await renderAgenda(accounts, '/calendar/agenda?from=2099-07-03');
+
+    const heading = screen.getByRole('heading', { name: formatWeekdayDate(day) });
+    expect(screen.getAllByRole('heading', { level: 3 })).toEqual([heading]);
+    expect(within(heading.parentElement).getAllByRole('button').map(button => button.textContent))
+      .toEqual([
+        expect.stringContaining(allDay.title),
+        expect.stringContaining(withOffset.title),
+        expect.stringContaining(meeting.title),
+      ]);
+  });
+
+  it('requests only the latest search after 250 ms without typing', async () => {
+    vi.useFakeTimers();
+    try {
+      getCalendarEvents.mockResolvedValue({ events: [] });
+      await renderAgenda(accounts);
+      expect(getCalendarEvents).toHaveBeenCalledTimes(1);
+
+      const input = screen.getByRole('textbox', { name: 'Search events' });
+      fireEvent.change(input, { target: { value: 'm' } });
+      await act(async () => vi.advanceTimersByTimeAsync(200));
+      fireEvent.change(input, { target: { value: 'meeting' } });
+      expect(input).toHaveValue('meeting');
+
+      await act(async () => vi.advanceTimersByTimeAsync(249));
+      expect(getCalendarEvents).toHaveBeenCalledTimes(1);
+      await act(async () => vi.advanceTimersByTimeAsync(1));
+      expect(getCalendarEvents).toHaveBeenCalledTimes(2);
+      expect(getCalendarEvents).toHaveBeenLastCalledWith(expect.objectContaining({ search: 'meeting', offset: 0 }));
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it('starts at local midnight, keeps overnight/all-day events, and browses history with URL Back and Today', async () => {
     const today = new Date();
     today.setHours(0, 0, 0, 0);
@@ -196,8 +239,7 @@ describe('AgendaTab date scope and paging', () => {
     expect(getCalendarEvents).toHaveBeenLastCalledWith(expect.objectContaining({ search: '104', offset: 0 }));
 
     fireEvent.change(screen.getByLabelText('Search events'), { target: { value: '' } });
-    await act(async () => {});
-    fireEvent.click(screen.getByRole('button', { name: 'Load more' }));
+    fireEvent.click(await screen.findByRole('button', { name: 'Load more' }));
     await act(async () => {});
     fireEvent.change(screen.getByLabelText('From date'), { target: { value: '2099-01-01' } });
     await act(async () => {});
@@ -219,11 +261,10 @@ describe('AgendaTab date scope and paging', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Load more' }));
     getCalendarEvents.mockResolvedValue({ events: [event('new', '2099-01-02T12:00:00')], total: 2 });
     fireEvent.change(screen.getByLabelText('Search events'), { target: { value: 'new' } });
-    await act(async () => {});
+    expect(await screen.findByText('Event new')).toBeTruthy();
     await act(async () => finishOldPage({ events: [event('stale', '2099-01-01T13:00:00')], total: 2 }));
     expect(screen.queryByText('Event stale')).toBeNull();
     expect(screen.queryByText('Event first')).toBeNull();
-    expect(screen.getByText('Event new')).toBeTruthy();
 
     getCalendarEvents.mockRejectedValueOnce(new Error('offline'));
     fireEvent.click(screen.getByRole('button', { name: 'Load more' }));

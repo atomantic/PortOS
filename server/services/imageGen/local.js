@@ -22,10 +22,11 @@ import { spawn } from '../../lib/childProcess.js';
 import { atomicWrite, ensureDir, PATHS, resolveImageInputPath, rmGuarded, unlinkGuarded } from '../../lib/fileUtils.js';
 import { assertLocalImageModelInputs, DEFAULT_LOCAL_IMAGE_DIMENSION } from '../../lib/localImageModelInputs.js';
 import { ServerError } from '../../lib/errorHandler.js';
+import { finishedImageAdmission } from '../../lib/backupPublicationWait.js';
 import { withBackupAssetPublication } from '../../lib/backupSnapshotBoundary.js';
 import { autoCleanGeneratedImage } from '../../lib/imageClean.js';
 import { imageGenEvents } from '../imageGenEvents.js';
-import { broadcastSse, attachSseClient as attachSse, closeJobAfterDelay, dispatchTerminalEvent } from '../../lib/sseUtils.js';
+import { broadcastSse, attachSseClient as attachSse, closeJobAfterDelay, dispatchCanceledJob, dispatchTerminalEvent } from '../../lib/sseUtils.js';
 import { FLUX2_VENV_DEFAULT, isFlux2VenvHealthy, invalidateFlux2Health } from '../../lib/pythonSetup.js';
 import { usesTorchVenv, usesMossSwift, usesFlux3, usesMinimaxH3Image } from '../../lib/imageRuntimeRemedies.js';
 import { mossChildEnv, MOSS_MANIFEST } from './mossRuntime.js';
@@ -92,6 +93,8 @@ export const cancel = () => {
   // mflux child is still running, and we lose the handle for a follow-up
   // SIGKILL. The `activeProcess === proc` guard escalates only when this is
   // still the tracked child (mflux can ignore SIGTERM mid-tensor-op).
+  const job = jobs.get(activeJob?.generationId);
+  if (job) job.canceled = true;
   killWithEscalation(proc, { label: 'image child', stillRunning: () => activeProcess === proc });
   return true;
 };
@@ -133,10 +136,10 @@ async function preflightLocalModel(params) {
   }
   // Both flux2 and z-image runners resolve their own Python via the FLUX.2
   // venv — only the legacy mflux/imagine_win path needs the user-configured
-  // Settings > Image Gen pythonPath.
+  // Python path from Media Gen Settings → Local.
   if (usesMossSwift(model)) await assertRuntimeReady('MOSS_NOT_READY');
   if (!usesTorchVenv(model) && !usesMossSwift(model) && !usesFlux3(model) && !usesMinimaxH3Image(model) && !pythonPath) {
-    throw new ServerError('Python path not configured — set it in Settings > Image Gen', { status: 400, code: 'IMAGE_GEN_NOT_CONFIGURED' });
+    throw new ServerError('Python path not configured — set it in Media Gen Settings → Local', { status: 400, code: 'IMAGE_GEN_NOT_CONFIGURED' });
   }
   // Health, not mere presence. buildArgs below only checks that the shared
   // torch venv's python BINARY exists, so a venv left half-installed (killed
@@ -148,7 +151,7 @@ async function preflightLocalModel(params) {
     const healthy = await isFlux2VenvHealthy(model.pipelineClass).catch(() => null);
     if (healthy === false) {
       throw new ServerError(
-        `The shared torch image runtime is not installed or healthy (expected at ${FLUX2_VENV_DEFAULT}). Install it from Settings › Image Gen › Local, then retry. FLUX.2, Z-Image, ERNIE, HiDream and Qwen all render through it.`,
+        `The shared torch image runtime is not installed or healthy (expected at ${FLUX2_VENV_DEFAULT}). Install it from Media Gen Settings → Local, then retry. FLUX.2, Z-Image, ERNIE, HiDream and Qwen all render through it.`,
         // Same code buildArgs throws when the venv's python is missing outright:
         // "the shared torch runtime is not usable" is one state to a caller,
         // whether it is absent or broken.
@@ -552,9 +555,7 @@ async function finalizeLocalSuccess(render) {
   // `outputPath` so the queue/route can read the finished bytes; `path`
   // stays null so nothing treats it as a gallery URL.
   const result = { filename, seed: actualSeed, path: publicPath, outputPath, ...(meta.executionProvenance ? { executionProvenance: meta.executionProvenance } : {}) };
-  // Include `seed` so /sdapi/v1/txt2img can surface the actual seed used
-  // (mflux generates a random one if the client didn't pass one). Emit the
-  // gallery `completed` (which drives the media-asset index + peer-sync
+  // Emit the gallery `completed` (which drives the media-asset index + peer-sync
   // hooks) ONLY for a gallery target — a temp render must not be indexed or
   // federated. The queue's own `completed` handler still fires off the
   // return value below, so the job settles either way.
@@ -585,15 +586,21 @@ function reportLocalError({ job, jobId }, reason, lifecycleFields = {}) {
 }
 
 async function finalizeLocalExit(render, exit) {
-  const { jobId, outputPath, outputDir } = render;
+  const { jobId, job, outputPath, outputDir } = render;
   try {
-    // A successful exit can still leave an empty frame. Reject it before publishing.
-    const emptyFrame = exit.code === 0 ? await rejectDegenerateFrame(outputPath) : null;
+    if (job.canceled) {
+      dispatchCanceledJob(job, jobId, 'Image generation', () => imageGenEvents.emit('failed', {
+        mode: IMAGE_GEN_MODE.LOCAL, generationId: jobId, inputProcessSettled: true, error: 'Canceled',
+      }));
+      return;
+    }
+    if (exit.code !== 0 || exit.processError) {
+      return finalizeLocalFailure(render, { ...exit, lines: exit.readFailureLines() });
+    }
+    const emptyFrame = await rejectDegenerateFrame(outputPath);
     if (emptyFrame) {
       console.error(`❌ Image generation failed [${jobId.slice(0, 8)}]: ${emptyFrame}`);
       reportLocalError(render, emptyFrame, { inputProcessSettled: true });
-    } else if (exit.code !== 0 || exit.processError) {
-      finalizeLocalFailure(render, { ...exit, lines: exit.readFailureLines() });
     } else {
       await finalizeLocalSuccess(render);
     }
@@ -636,26 +643,23 @@ function wireLocalChild(render, child, stepwiseDir) {
   const stopWatching = startStepwiseWatcher(stepwiseDir, jobId);
   const output = wireLocalOutput(proc, render);
   proc.on('close', (code, signal) => {
-    void withBackupAssetPublication(async () => {
-      if (finalized) return;
-      finalized = true;
-      // An unterminated final line can still update the active job.
-      output.flush();
-      activeProcess = null;
-      activeJob = null;
-      void releaseHeavyClaim();
-      stopWatching();
-      void removeStepwise();
-      await finalizeLocalExit(render, { code, signal, processError, readFailureLines: output.failureLines });
-    }).catch(async (err) => {
-      // Admission refused before the finalizer ran. Settle without touching
-      // gallery bytes outside the backup publication boundary.
-      if (finalized) return;
-      finalized = true;
-      activeProcess = null;
-      activeJob = null;
-      stopWatching();
-      await Promise.all([releaseHeavyClaim(), removeStepwise()]);
+    if (finalized) return;
+    finalized = true;
+    // The last partial line still belongs to this process. Release compute and
+    // scratch independently of any backup cut holding the finished image.
+    output.flush();
+    activeProcess = null;
+    activeJob = null;
+    void releaseHeavyClaim();
+    stopWatching();
+    void removeStepwise();
+    const settle = () => finalizeLocalExit(render, { code, signal, processError, readFailureLines: output.failureLines });
+    if (code !== 0 || processError || job.canceled || !render.publicPath) {
+      void settle();
+      return;
+    }
+    void withBackupAssetPublication(settle, finishedImageAdmission(imageGenEvents, jobId)).catch(err => {
+      // Admission refused before any gallery writes were permitted.
       reportLocalError(render, err?.message || String(err), { inputProcessSettled: true });
       closeJobAfterDelay(jobs, jobId);
     });

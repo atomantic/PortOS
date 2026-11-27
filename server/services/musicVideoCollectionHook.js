@@ -20,11 +20,14 @@ import { storyboardFirstFrameFile } from '../lib/storyboardGuidance.js';
 
 /** The project and asset a completed job files, or null when it names no music video. */
 function musicVideoCollectionTarget(job) {
-  if (job?.kind !== 'image' && job?.kind !== 'video') return null;
+  if (job?.kind !== 'image' && job?.kind !== 'video' && job?.kind !== 'video-upscale') return null;
   const params = job.params || {};
   const projectId = params.musicVideoProjectId || params.musicVideo?.projectId;
   if (typeof projectId !== 'string' || !projectId) return null;
-  const ref = job.kind === 'image' ? job.result?.filename : (job.result?.generationId || job.id);
+  const isUpscale = job.kind === 'video-upscale';
+  const ref = job.kind === 'image'
+    ? job.result?.filename
+    : (isUpscale && typeof job.result?.id === 'string' && job.result.id) || job.result?.generationId || job.id;
   if (typeof ref !== 'string' || !ref) return null;
   const sceneId = params.musicVideo?.sceneId || null;
   // A clip from a storyboard panel files the first frame it built too (videoGen/grok.js).
@@ -34,7 +37,7 @@ function musicVideoCollectionTarget(job) {
     projectId,
     assets: [
       ...(firstFrame ? [{ kind: 'image', ref: firstFrame, sceneId, take: null }] : []),
-      { kind: job.kind, ref, sceneId, take: sourceImageId ? { sourceImageId } : null },
+      { kind: isUpscale ? 'video' : job.kind, ref, sceneId, take: sourceImageId ? { sourceImageId } : null },
     ],
   };
 }

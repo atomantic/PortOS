@@ -24,10 +24,11 @@
  * tokenizer-less checkpoint that has to be converted against its target) simply
  * carries no `repo` — the UI then links out to a Hugging Face search instead of
  * offering a Download button that cannot work. Pairs are the ones documented in
- * docs/features/dflash2.md; see also docs/research/2026-08-19-dspark-vs-dflash2.md.
+ * docs/features/local-llm-runtimes.md.
  */
 import { homedir } from 'node:os';
 import { join, resolve } from 'node:path';
+import { CONVERSATIONAL_GEMMA } from './voiceModelCatalog.js';
 
 
 // llama.cpp exposes one `--spec-type` per drafter family. `draft-dspark` merged
@@ -130,8 +131,7 @@ export const SPEC_DECODE_PRESETS = Object.freeze([
     // what the label warns about — and a launch that starts is NOT evidence the
     // right binary is there, because a stock build accepts a plain ternary Q2_0
     // and then emits garbage. Measurements, build recipe and why this model is
-    // absent from the Ollama/LM Studio catalog:
-    // docs/research/2026-09-18-ternary-bonsai-2-27b.md
+    // absent from the Ollama/LM Studio catalog.
     id: 'ternary-bonsai-2-27b',
     label: 'Ternary Bonsai 2 27B — no drafter (needs a PrismML llama.cpp build)',
     specType: 'none',
@@ -146,8 +146,7 @@ export const SPEC_DECODE_PRESETS = Object.freeze([
     // `BF16`) that also matches language packs in this repo, so the hint alone
     // cannot say which of the two to fetch. Q8_0 (629 MB) over BF16 (931 MB) —
     // the projector is a fraction of the 6.7 GiB target either way, and Q8_0 is
-    // what the evaluation in docs/research/2026-09-18-ternary-bonsai-2-27b.md
-    // ran. Optional: the preset launches text-only until this is downloaded.
+    // the measured configuration. Optional: the preset launches text-only until this is downloaded.
     projector: {
       path: 'models/Ternary-Bonsai-2-27B-mmproj-Q8_0.gguf',
       repo: 'prism-ml/Ternary-Bonsai-2-27B-gguf',
@@ -180,6 +179,16 @@ export const SPEC_DECODE_PRESETS = Object.freeze([
     },
   },
   {
+    // A private conversion of the gated FP8 release, not a public GGUF download.
+    id: 'conversational-gemma-local',
+    label: 'Conversational Gemma 4 31B (locally converted Q8_0)',
+    specType: 'none',
+    alias: CONVERSATIONAL_GEMMA.id,
+    ctxSize: 4096,
+    localBuild: true,
+    model: { path: CONVERSATIONAL_GEMMA.localGgufPath },
+  },
+  {
     id: 'custom',
     label: 'Custom GGUF / Manual Paths',
     specType: 'draft-dspark',
@@ -198,7 +207,7 @@ export const SPEC_DECODE_PRESETS = Object.freeze([
  * presets), and a from-source llama.cpp can carry implementations that never
  * land upstream. The field therefore stays free text — what PortOS actually
  * reasons about is the `draft-` prefix, which is what decides whether a drafter
- * GGUF is required. Reference: llama.cpp `docs/speculative.md`.
+ * GGUF is required. See the llama-server section of the local LLM runtime guide.
  */
 export const SPEC_TYPE_SUGGESTIONS = Object.freeze([
   { id: 'none', note: 'Speculative decoding off' },

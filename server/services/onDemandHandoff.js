@@ -5,6 +5,7 @@
  * Storage: `file-primary` (`onDemandHandoffs` in `data/cos/task-schedule.json`) — machine-local, never
  * federated. Accepted-task/refusal receipts are durable control state, not preflight telemetry; an absent
  * map means no handoffs, so no migration is needed. */
+import { isPidConfirmedDead } from '../lib/processLiveness.js';
 import { randomUUID } from 'node:crypto';
 import { loadSchedule, updateSchedule } from './taskScheduleStore.js';
 import { quotaBurnProvenance } from '../lib/quotaBurnOrigin.js';
@@ -15,9 +16,7 @@ const ownerPid = process.pid;
 // ESRCH is proof of absence, unlike a different nonce or elapsed time. A reused
 // PID conservatively remains held; permission/probe errors are not proof of death.
 function ownerIsGone(claim) {
-  if (claim.owner === owner || !Number.isSafeInteger(claim.ownerPid) || claim.ownerPid <= 0) return false;
-  try { process.kill(claim.ownerPid, 0); return false; }
-  catch (error) { return error.code === 'ESRCH'; }
+  return claim.owner !== owner && isPidConfirmedDead(claim.ownerPid);
 }
 
 export async function claimOnDemandRequest(requestId) {

@@ -1,28 +1,15 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
-import { mkdir, mkdtemp, rm, access } from 'node:fs/promises';
+import { mkdir, mkdtemp, rm, access, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
 let voiceProfilesRoot = '';
 const queryMock = vi.fn();
 
-let txFailure = null;
+const runTransaction = vi.fn();
 vi.mock('../../lib/db.js', () => ({
   query: (...args) => queryMock(...args),
-  // Buffer writes and drop them on failure so rollback is observable.
-  withTransaction: async (fn) => {
-    const staged = [];
-    const result = await fn({ query: async (sql, args) => {
-      if (/^\s*INSERT/.test(sql)) {
-        staged.push([sql, args]);
-        if (txFailure && JSON.parse(args[4]).approval.status === 'approved') throw txFailure;
-        return { rows: [] };
-      }
-      return queryMock(sql, args);
-    } });
-    for (const [sql, args] of staged) await queryMock(sql, args);
-    return result;
-  },
+  withTransaction: fn => runTransaction(fn),
 }));
 vi.mock('../../lib/paths.js', async () => {
   const actual = await vi.importActual('../../lib/paths.js');
@@ -33,6 +20,7 @@ const {
   parsePresetVoiceId,
   sanitizeVoiceProfile,
   promotePresetProfile,
+  promoteVoiceProfile,
   createVoiceDesignCandidate,
   createClonedVoiceCandidate,
   deleteVoiceProfile,
@@ -64,7 +52,7 @@ const PROFILE = {
 beforeEach(async () => {
   voiceProfilesRoot = await mkdtemp(join(tmpdir(), 'portos-voice-profiles-'));
   queryMock.mockReset();
-  txFailure = null;
+  runTransaction.mockReset().mockImplementation(fn => fn({ query: queryMock }));
 });
 
 afterEach(async () => {
@@ -132,7 +120,7 @@ describe('voice profile contract', () => {
     await expect(promotePresetProfile({ universeId: 'universe-1', characterId: 'character-1', voiceId: 'auk:invented' }))
       .rejects.toMatchObject({ code: 'VOICE_PROFILE_INVALID_PRESET' });
     expect(queryMock).not.toHaveBeenCalled();
-    queryMock.mockResolvedValue({ rows: [] }).mockResolvedValueOnce({ rows: [{ data: {
+    queryMock.mockResolvedValue({ rows: [{ data: {
       ...PROFILE, engine: 'auk', voiceId: 'auk:voice-profile-1', kind: 'preset', originProfileId: 'library-1',
       sourceAssets: [{ filename: 'reference.wav', transcript: 'Hello.' }], inference: { instructions: 'Old voice' },
     } }] });
@@ -147,11 +135,14 @@ describe('voice profile contract', () => {
     };
     const args = { universeId: 'universe-1', characterId: 'character-1', voiceId: 'piper:example' };
     const writes = () => queryMock.mock.calls.filter(([sql]) => /INSERT INTO voice_profiles/.test(sql)).map(([, a]) => JSON.parse(a[4]));
-    // Mirrors the kind filter so a regression to an unfiltered lookup is caught.
-    const useRows = (rows) => queryMock.mockImplementation(async (sql) => {
-      if (/data->>'kind' = 'preset'/.test(sql)) return { rows: rows.filter((r) => r.kind === 'preset').map((data) => ({ data })) };
-      if (/approval_status = 'approved' AND id != /.test(sql)) return { rows: rows.filter((r) => r.approval.status === 'approved').map((data) => ({ data })) };
-      return { rows: rows.map((data) => ({ data })) };
+    const useRows = (rows) => queryMock.mockImplementation(async (sql, args) => {
+      if (/data->>'kind' = 'preset'/.test(sql)) return { rows: rows.filter(r => r.kind === 'preset').map(data => ({ data })) };
+      if (sql.includes("SET approval_status = 'retired'")) {
+        for (const row of rows.filter(r => r.approval.status === 'approved' && r.id !== args[2])) {
+          row.approval = { ...row.approval, status: 'retired' };
+        }
+      }
+      return { rows: rows.map(data => ({ data })) };
     });
 
     it('leaves a draft clone untouched and adds a separate preset row', async () => {
@@ -163,12 +154,12 @@ describe('voice profile contract', () => {
     });
 
     it('retires an approved clone with its fields intact', async () => {
-      useRows([clone]);
+      const approved = structuredClone(clone);
+      useRows([approved]);
       const preset = await promotePresetProfile(args);
-      const retired = writes().find((w) => w.id === 'clone-1');
       expect(preset.id).not.toBe('clone-1');
-      expect(retired).toMatchObject({ kind: 'cloned', approval: { status: 'retired' } });
-      expect(retired.sourceAssets).toHaveLength(1);
+      expect(approved).toMatchObject({ kind: 'cloned', approval: { status: 'retired' } });
+      expect(approved.sourceAssets).toHaveLength(1);
     });
 
     it('re-promoting the same preset updates the preset row in place', async () => {
@@ -180,9 +171,19 @@ describe('voice profile contract', () => {
 
     it('keeps the approved voice when persisting the new profile fails', async () => {
       useRows([clone]);
-      txFailure = new Error('db down');
+      const committed = [];
+      runTransaction.mockImplementation(async fn => {
+        const statements = [];
+        const result = await fn({ query: async sql => {
+          if (sql.includes('INSERT INTO voice_profiles')) throw new Error('db down');
+          statements.push(sql);
+        } });
+        committed.push(...statements);
+        return result;
+      });
       await expect(promotePresetProfile(args)).rejects.toThrow('db down');
-      expect(writes()).toEqual([]);
+      expect(committed).toEqual([]);
+      expect(clone.approval.status).toBe('approved');
     });
   });
 
@@ -247,6 +248,29 @@ describe('voice profile contract', () => {
     expect(candidate.sourceAssets[0].sha256).toMatch(/^[a-f0-9]{64}$/);
   });
 
+  it('removes failed clone uploads before returning the database error', async () => {
+    const originalError = new Error('Clone insert failed');
+    const existingDir = join(voiceProfilesRoot, 'existing-profile');
+    await mkdir(existingDir);
+    let failedProfileDir;
+    queryMock.mockImplementationOnce(async (_sql, [id]) => {
+      failedProfileDir = profileArtifactDirectory(id);
+      await access(join(failedProfileDir, 'source', 'sample.wav'));
+      throw originalError;
+    });
+
+    await expect(createClonedVoiceCandidate({
+      universeId: 'universe-1',
+      characterId: 'character-1',
+      audioBuffer: Buffer.from('RIFFmockwavheaderdata'),
+      filename: 'sample.wav',
+      performerConsentConfirmed: true,
+    })).rejects.toBe(originalError);
+
+    await expect(access(failedProfileDir)).rejects.toMatchObject({ code: 'ENOENT' });
+    await access(existingDir);
+  });
+
   it('deletes a cloned profile row and its source directory, and refuses a missing id', async () => {
     queryMock.mockResolvedValueOnce({ rows: [] });
     const candidate = await createClonedVoiceCandidate({
@@ -287,7 +311,6 @@ describe('voice profile contract', () => {
       .mockResolvedValueOnce({ rows: [] });
 
     const profile = await promoteFineTunedProfile({
-      profileId: 'profile-fine-tuned-1',
       universeId: 'universe-1',
       characterId: 'character-1',
       checkpointPath: '/path/to/checkpoint-100.safetensors',
@@ -303,6 +326,83 @@ describe('voice profile contract', () => {
       inference: {
         checkpointPath: '/path/to/checkpoint-100.safetensors',
       },
+    });
+  });
+
+  describe('withdrawal during promotion', () => {
+    const jobId = '11111111-2222-4333-8444-555555555555';
+    const checkpointId = 'checkpoint-20';
+    const draft = { ...PROFILE, approval: { status: 'draft' } };
+
+    async function startRace({ withdrawSibling = false, checkpoint = false } = {}) {
+      const sibling = { ...PROFILE, id: 'example-sibling' };
+      const records = new Map([draft, sibling].map(item => [item.id, item]));
+      const directory = profileArtifactDirectory(withdrawSibling ? sibling.id : draft.id);
+      const runDir = join(directory, 'fine-tune', jobId);
+      await mkdir(runDir, { recursive: true });
+      await writeFile(join(runDir, 'job.json'), JSON.stringify({
+        id: jobId, profileId: draft.id, ...draft.binding, status: 'completed', trainingAdapter: 'qwen-tts-sft-12hz',
+        checkpoints: [{ id: checkpointId, step: 20, checkpointPath: join(runDir, checkpointId), modelRevision: 'example-revision' }],
+      }));
+      const entered = Promise.withResolvers();
+      const resume = Promise.withResolvers();
+      queryMock.mockImplementation(async (sql, args) => {
+        if (sql.startsWith('SELECT data FROM voice_profiles WHERE id')) {
+          return { rows: records.has(args[0]) ? [{ data: records.get(args[0]) }] : [] };
+        }
+        if (sql.includes("approval_status = 'approved' AND id !=")) {
+          // Pause after the target read, before retiring any current siblings.
+          const previouslyApproved = [{ data: sibling }];
+          entered.resolve();
+          await resume.promise;
+          if (sql.startsWith('SELECT')) return { rows: previouslyApproved };
+          if (records.has(sibling.id)) records.set(sibling.id, { ...sibling, approval: { status: 'retired' } });
+          return { rows: [] };
+        }
+        if (sql.startsWith('DELETE')) return { rows: records.delete(args[0]) ? [{ id: args[0] }] : [] };
+        if (sql.startsWith('INSERT') || (sql.startsWith('UPDATE') && records.has(args[0]))) {
+          records.set(args[0], JSON.parse(args[4]));
+          return { rows: [{ id: args[0] }] };
+        }
+        return { rows: [] };
+      });
+      const { promoteCheckpoint } = await import('./fineTuning.js');
+      const promotion = checkpoint
+        ? promoteCheckpoint({ profileId: draft.id, jobId, checkpointId })
+        : promoteVoiceProfile(draft.id);
+      await entered.promise;
+      const withdrawn = withdrawSibling ? sibling.id : draft.id;
+      const deletion = deleteVoiceProfile(withdrawn);
+      try {
+        if (withdrawSibling) await deletion;
+        else {
+          await new Promise(resolve => setImmediate(resolve));
+          expect(records.has(withdrawn)).toBe(true);
+        }
+      } finally {
+        resume.resolve();
+        await Promise.all([promotion, deletion]);
+      }
+      expect(records.has(withdrawn)).toBe(false);
+      await expect(access(directory)).rejects.toMatchObject({ code: 'ENOENT' });
+      return records;
+    }
+
+    it.each([['draft', false], ['checkpoint', true]])('withdraws the target after an in-flight %s promotion', async (_kind, checkpoint) => {
+      await startRace({ checkpoint });
+    });
+
+    it('refuses an explicit checkpoint target that has already been withdrawn', async () => {
+      queryMock.mockResolvedValue({ rows: [] });
+      await expect(promoteFineTunedProfile({ profileId: draft.id, ...draft.binding }))
+        .rejects.toMatchObject({ code: 'VOICE_PROFILE_NOT_FOUND' });
+      expect(runTransaction).not.toHaveBeenCalled();
+      await expect(access(profileArtifactDirectory(draft.id))).rejects.toMatchObject({ code: 'ENOENT' });
+    });
+
+    it('finishes promotion when an approved sibling is withdrawn before retirement', async () => {
+      const rows = await startRace({ withdrawSibling: true });
+      expect(rows.get(draft.id).approval.status).toBe('approved');
     });
   });
 

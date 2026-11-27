@@ -103,7 +103,7 @@ program on one backend.
 | Storage + gateway inheritance | `server/lib/aiToolkit/providers.js` (`withGatewayModelAccess`) |
 | Schema | `server/lib/aiToolkit/validation.js` (`providerSchema.modelAccess`) |
 | The selecting-vs-executing seam | `server/services/provider/providers.js` (`getSelectableProviders` / `listSelectableProviders`) |
-| Applied to provider payloads | `server/routes/providers.js` (`presentProvider`) and `server/lib/aiToolkit/routes/providers.js` |
+| Applied to provider payloads | `server/routes/providers/presenter.js` (`presentProvider`) and `server/lib/aiToolkit/routes/providers.js` |
 | Applied to provider discovery and PortOS benchmark runs | `server/routes/modelPerformanceBenchmarks.js` |
 | Editor | `client/src/components/providers/ProviderModelAccess.jsx` |
 | Browser-side rules | `client/src/utils/providerModelAccess.js` |

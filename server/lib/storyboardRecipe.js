@@ -372,9 +372,12 @@ export function storyboardPanelShotText(panel) {
 /** A panel's per-node run state for `nodeId` (never null). */
 export const panelNodeState = (panel, nodeId) => panel?.make?.nodes?.[nodeId] || EMPTY_NODE_STATE;
 
+// Older runs only recorded takes. Keep counting those while newer runs track completed jobs even after take deletion.
+export const settledImageFrameCount = (state) => Math.max(state.completedJobIds?.length ?? 0, state.takeIds.length) + state.failedJobIds.length;
+
 const EMPTY_NODE_STATE = Object.freeze({
   text: '', status: 'idle', error: '', sentPrompt: '', promptAdditions: [], providerId: '', model: '',
-  runId: '', frameCount: 0, jobIds: [], failedJobIds: [], takeIds: [], excludedRefs: [], extraRefs: [], sentRefs: [], selectOnLand: false, runAt: null,
+  runId: '', frameCount: 0, jobIds: [], completedJobIds: [], failedJobIds: [], takeIds: [], excludedRefs: [], extraRefs: [], sentRefs: [], selectOnLand: false, runAt: null,
 });
 
 /**
@@ -448,6 +451,7 @@ function sanitizeNodeState(raw, takeIds) {
     // Frames an image run asked for; the node settles when that many landed or failed.
     frameCount: Number.isInteger(raw.frameCount) ? Math.max(0, Math.min(raw.frameCount, RECIPE_LIMITS.frames)) : 0,
     jobIds: idList(raw.jobIds, RECIPE_LIMITS.frames),
+    completedJobIds: idList(raw.completedJobIds, RECIPE_LIMITS.frames),
     failedJobIds: idList(raw.failedJobIds, RECIPE_LIMITS.frames),
     // Frames point at the panel's takes; a removed take drops out.
     takeIds: idList(raw.takeIds, RECIPE_LIMITS.frames).filter((id) => takeIds.has(id)),

@@ -10,7 +10,7 @@
  */
 
 import { selectPersistentMindContextEvents, renderPersistentMindContextEvent } from './persistentMindContextEvents.js';
-import { fenceBlock, UNTRUSTED_REFERENCE_NOTICE } from '../promptFencing.js';
+import { fenceBlock, neutralizeFences, UNTRUSTED_REFERENCE_NOTICE } from '../promptFencing.js';
 /**
  * Pure persistent-mind trajectory helpers.
  *
@@ -349,33 +349,8 @@ const renderContinuationNote = (note) => {
 
 const renderOmittedContinuationNote = (note) => `# Continuation note\n(omitted due to context budget: ${note.content.length} chars. The stored note is unchanged. Omit continuationNote to keep it.)`;
 
-/**
- * Render stable identity + older rollups + recent verbatim events into a hard
- * character budget. Unavailable/failed/stale summary state is explicit;
- * a real empty history is `summaryState: "empty"`, never conflated with one.
- */
-export function assemblePersistentMindContext({
-  mindId = PERSISTENT_MIND_ID,
-  identity = '',
-  instructions = '',
-  memories = [],
-  continuationNote = null,
-  memoryRecall = null,
-  reflection = null,
-  events = [],
-  rollups = [],
-  journalDigest = null,
-  maxChars = PERSISTENT_MIND_TRAJECTORY_LIMITS.maxContextChars,
-  recentEventLimit = PERSISTENT_MIND_TRAJECTORY_LIMITS.recentContextEvents,
-  promptVersion = PERSISTENT_MIND_ROLLUP_PROMPT_VERSION,
-  coverageGap = null,
-} = {}) {
-  const cap = Math.max(1_000, Math.min(Number(maxChars) || PERSISTENT_MIND_TRAJECTORY_LIMITS.maxContextChars, 100_000));
-  const ordered = orderedMindEvents(events, mindId);
-  const meaningful = selectPersistentMindContextEvents(ordered, mindId);
-  const recent = meaningful.slice(-Math.max(1, recentEventLimit));
-  const older = recent.length ? ordered.filter(event => event.sequence < recent[0].sequence) : [];
-  const validRollups = (Array.isArray(rollups) ? rollups : [])
+function resolveRollupSummaryState({ rollups, mindId, promptVersion, older, ordered, coverageGap }) {
+  const selectedRollups = (Array.isArray(rollups) ? rollups : [])
     .filter(isStoredPersistentMindRollup)
     .filter((rollup) => rollup.mindId === mindId)
     .sort((a, b) => a.source.fromSequence - b.source.fromSequence);
@@ -384,7 +359,6 @@ export function assemblePersistentMindContext({
   // range, including overlap with the expanded meaningful-event window. The
   // cumulative summary may be the only surviving record of earlier decisions;
   // bounded overlap is preferable to silently dropping that durable context.
-  const selectedRollups = validRollups;
   const currentReadyRollups = selectedRollups
     .filter((rollup) => rollup.status === 'ready' && rollup.provenance.promptVersion === promptVersion);
   // Incremental summaries are cumulative. Keep only ranges that are not fully
@@ -416,113 +390,6 @@ export function assemblePersistentMindContext({
     else if (stale) summaryState = 'stale';
   }
 
-  const identityText = bounded(
-    typeof identity === 'string' ? identity : JSON.stringify(identity),
-    PERSISTENT_MIND_TRAJECTORY_LIMITS.maxIdentityChars
-  );
-  const instructionsText = bounded(
-    typeof instructions === 'string' ? instructions : JSON.stringify(instructions),
-    PERSISTENT_MIND_TRAJECTORY_LIMITS.maxInstructionsChars
-  );
-  const seenMemoryContent = new Set();
-  let coreIdentityChars = 0;
-  const renderMemory = (memory, note = '') => {
-    const content = typeof memory.content === 'string' && memory.content.trim()
-      ? memory.content.trim()
-      : typeof memory.summary === 'string' ? memory.summary.trim() : '';
-    const key = content.replace(/\s+/g, ' ');
-    if (!content || seenMemoryContent.has(key)) return null;
-    const label = [memory.type, memory.category].filter(Boolean).join('/') || 'memory';
-    const protection = persistentMindMemoryProtection(memory);
-    return { key, line: `- [${label}; id=${memory.id || 'unknown'}${protection === 'standard' ? '' : `; protected=${protection}`}${note}] ${content}` };
-  };
-  const renderBaseline = (records) => records.flatMap((memory) => {
-    const rendered = renderMemory(memory);
-    if (!rendered) return [];
-    seenMemoryContent.add(rendered.key);
-    if (persistentMindMemoryProtection(memory) === 'core-identity') coreIdentityChars += rendered.line.length + 1;
-    return [rendered.line];
-  });
-  const isProtected = (memory) => persistentMindMemoryProtection(memory) !== 'standard';
-  const baseline = (Array.isArray(memories) ? memories : [])
-    .filter((memory) => memory && typeof memory === 'object')
-    .sort(comparePersistentMindMemories);
-  const protectedLines = renderBaseline(baseline.filter(isProtected));
-  // Superseded wording never reaches the prompt: the digest carries only what
-  // is still true plus the settled history that explains it. The caller renders
-  // it — this module is reached by ~300 suites for its id/kind constants alone,
-  // so importing the journal renderer here would pull that leaf into every one
-  // of them (server suite import budget, #6156).
-  const journalSummary = journalDigest && typeof journalDigest === 'object'
-    ? journalDigest
-    : { text: '', activeCount: 0, resolvedCount: 0, supersededCount: 0 };
-  const journalText = bounded(journalSummary.text, PERSISTENT_MIND_TRAJECTORY_LIMITS.maxJournalChars);
-  // Identity, instructions, protected identity memories, and the newest human
-  // input outrank the note. Whatever is left admits it whole or not at all.
-  const latestInput = recent.findLast((event) => ['mind.message.accepted', 'mind.annotation.accepted'].includes(event.kind));
-  const requiredChars = identityText.length + instructionsText.length + mindId.length + 500
-    + Math.min(coreIdentityChars, PERSISTENT_MIND_TRAJECTORY_LIMITS.maxMemoriesChars)
-    + (latestInput ? renderPersistentMindContextEvent(latestInput).length : 0);
-  const fullNoteSection = continuationNote ? renderContinuationNote(continuationNote) : '';
-  const noteAdmitted = Boolean(continuationNote) && fullNoteSection.length <= cap - requiredChars;
-  const noteSection = !continuationNote ? ''
-    : noteAdmitted ? fullNoteSection : renderOmittedContinuationNote(continuationNote);
-  // Leave room for the full delimiter even with a small context budget.
-  // Truncating the assembled prefix must never cut through a memory fence.
-  const memoryBudget = Math.max(0, Math.min(
-    PERSISTENT_MIND_TRAJECTORY_LIMITS.maxMemoriesChars,
-    cap - identityText.length - instructionsText.length - mindId.length - 500 - noteSection.length,
-  ));
-
-  // Order is the priority: protected identity, recalled records, then ordinary
-  // records. The final bound can therefore only cut ordinary context, so a
-  // recalled record is either whole in the prompt or reported as omitted.
-  const usedByProtected = protectedLines.length ? protectedLines.join('\n').length + 1 : 0;
-  let recallRoom = Math.min(
-    Math.floor(memoryBudget * PERSISTENT_MIND_TRAJECTORY_LIMITS.recalledMemoryBudgetShare),
-    memoryBudget - usedByProtected,
-  );
-  const recalledLines = [];
-  const includedIds = [];
-  const omittedIds = [];
-  for (const memory of Array.isArray(memoryRecall?.memories) ? memoryRecall.memories : []) {
-    if (isProtected(memory)) continue;
-    const rendered = renderMemory(memory, '; recalled=current-message');
-    if (!rendered) continue;
-    const needed = rendered.line.length + (recalledLines.length ? 1 : 0);
-    if (needed > recallRoom) {
-      omittedIds.push(memory.id);
-      continue;
-    }
-    recallRoom -= needed;
-    seenMemoryContent.add(rendered.key);
-    recalledLines.push(rendered.line);
-    includedIds.push(memory.id);
-  }
-  const ordinaryLines = renderBaseline(baseline.filter((memory) => !isProtected(memory)));
-  const memoryLines = [...protectedLines, ...recalledLines, ...ordinaryLines];
-  const memoryText = bounded(
-    memoryLines.join('\n'),
-    PERSISTENT_MIND_TRAJECTORY_LIMITS.maxMemoriesChars
-  );
-  const recallState = memoryRecall?.state === 'matched'
-    ? (includedIds.length ? 'included' : omittedIds.length ? 'omitted-budget' : 'already-in-baseline')
-    : memoryRecall?.state || 'none';
-  const memoryBlock = memoryBudget > 0
-    ? fenceBlock('Curated memory reference data', memoryText || '(none)', memoryBudget)
-    : '(omitted due to context budget)';
-  const identitySection = `# Persistent mind identity\nmindId=${mindId}${identityText ? `\n${identityText}` : ''}`;
-  const instructionsSection = `# Operating instructions\n${instructionsText || '(none)'}`;
-  const memorySection = `# Curated memories\n${UNTRUSTED_REFERENCE_NOTICE}\n${memoryBlock}`;
-  const journalSection = `# Decision journal\n${journalText || '(none)'}`;
-  const prefix = [
-    identitySection,
-    instructionsSection,
-    // Ahead of the sections the final slice can cut, so an admitted note stays whole.
-    ...(noteSection ? [noteSection] : []),
-    memorySection,
-    journalSection,
-  ].join('\n\n');
   const summaryLines = effectiveReadyRollups
     .map((rollup) => `[events ${rollup.source.fromSequence}-${rollup.source.toSequence}; ${rollup.provenance.providerId || 'unknown'}/${rollup.provenance.model || 'default'}; prompt v${rollup.provenance.promptVersion}]\n${rollup.summary}`);
   const omittedStarts = [selectedRollups[0]?.source.fromSequence, older[0]?.sequence].filter(Number.isSafeInteger);
@@ -533,34 +400,184 @@ export function assemblePersistentMindContext({
     ? `summary-cache=${summaryState}; omitted-events=${omittedStart}-${omittedEnd}`
     : `summary-cache=${summaryState}`;
 
-  // Keep recent raw events available even if many large rollups exist. Older
-  // summaries receive at most 45% of the post-header budget; newest summaries
-  // win inside that bound, while recent events consume the remainder.
-  const sectionOverhead = `\n\n# Older context\n${statusLine}\n\n# Recent trajectory\n`;
-  const contentBudget = Math.max(0, cap - prefix.length - sectionOverhead.length);
-  const summaryBudget = summaryLines.length ? Math.floor(contentBudget * 0.45) : 0;
+  return {
+    statusLine,
+    summaryLines,
+    summaryState,
+    omittedRange: hasOmittedHistory ? {
+      fromSequence: omittedStart,
+      toSequence: omittedEnd,
+      fromEventId: selectedRollups[0]?.source.fromEventId ?? older[0]?.eventId ?? null,
+      toEventId: older.at(-1)?.eventId ?? selectedRollups.at(-1)?.source.toEventId ?? null,
+    } : null,
+  };
+}
+
+function renderMemoryLine(memory, note = '') {
+  const content = typeof memory.content === 'string' && memory.content.trim()
+    ? memory.content.trim()
+    : typeof memory.summary === 'string' ? memory.summary.trim() : '';
+  if (!content) return null;
+  const key = content.replace(/\s+/g, ' ');
+  const label = [memory.type, memory.category].filter(Boolean).join('/') || 'memory';
+  const protection = persistentMindMemoryProtection(memory);
+  const line = `- [${label}; id=${memory.id || 'unknown'}${protection === 'standard' ? '' : `; protected=${protection}`}${note}] ${content}`;
+  return { key, protection, line: neutralizeFences(line) };
+}
+
+function takeDistinctMemoryLines(records, seen) {
+  const lines = [];
+  for (const record of records) {
+    if (!record || seen.has(record.key)) continue;
+    seen.add(record.key);
+    lines.push(record);
+  }
+  return lines;
+}
+
+function prepareMemoryLines(memories) {
+  const baseline = (Array.isArray(memories) ? memories : [])
+    .filter((memory) => memory && typeof memory === 'object')
+    .sort(comparePersistentMindMemories)
+    .map(memory => renderMemoryLine(memory))
+    .filter(Boolean);
+  const seen = new Set();
+  const protectedRecords = takeDistinctMemoryLines(baseline.filter(record => record.protection !== 'standard'), seen);
+  const coreIdentityChars = protectedRecords
+    .filter(record => record.protection === 'core-identity')
+    .reduce((chars, record) => chars + record.line.length + 1, 0);
+  return {
+    coreIdentityChars,
+    protectedLines: protectedRecords.map(record => record.line),
+    protectedKeys: seen,
+    ordinaryRecords: baseline.filter(record => record.protection === 'standard'),
+  };
+}
+
+const TRUNCATION_NOTICE = '\n… [truncated]';
+const CURATED_MEMORY_HEADING = '# Curated memories';
+const MEMORY_PREFIX = CURATED_MEMORY_HEADING + '\n' + UNTRUSTED_REFERENCE_NOTICE + '\n';
+const MEMORY_FENCE_LABEL = 'Curated memory reference data';
+const MEMORY_FRAME_CHARS = MEMORY_PREFIX.length + fenceBlock(MEMORY_FENCE_LABEL, 'x', 1).length - 1;
+
+function admitContinuationNote(note, room, coreIdentityChars) {
+  if (!note) return { section: '', state: 'none' };
+  // An optional note cannot displace core identity or its memory fence.
+  const protectedReserve = coreIdentityChars > 0
+    ? Math.min(coreIdentityChars + TRUNCATION_NOTICE.length, PERSISTENT_MIND_TRAJECTORY_LIMITS.maxMemoriesChars)
+      + MEMORY_FRAME_CHARS + 2
+    : 0;
+  const available = room - protectedReserve;
+  const full = renderContinuationNote(note);
+  if (full.length <= available) return { section: full, state: 'included' };
+  const omitted = renderOmittedContinuationNote(note);
+  return { section: omitted.length <= available ? omitted : '', state: 'omitted-budget' };
+}
+
+function assembleMemorySection(prepared, memoryRecall, room) {
+  const { protectedLines, protectedKeys, ordinaryRecords } = prepared;
+  const seen = new Set(protectedKeys);
+  const memoryBudget = Math.max(0, Math.min(
+    PERSISTENT_MIND_TRAJECTORY_LIMITS.maxMemoriesChars,
+    room - MEMORY_FRAME_CHARS,
+  ));
+  // Protected records lead the block, followed by complete recalled records.
+  // Reserve the truncation marker so a reported recall always renders whole.
+  const usedByProtected = protectedLines.length ? protectedLines.join('\n').length + 1 : 0;
+  let recallRoom = Math.min(
+    Math.floor(memoryBudget * PERSISTENT_MIND_TRAJECTORY_LIMITS.recalledMemoryBudgetShare),
+    memoryBudget - usedByProtected - TRUNCATION_NOTICE.length,
+  );
+  const recalledLines = [];
+  const includedIds = [];
+  const omittedIds = [];
+  for (const memory of Array.isArray(memoryRecall?.memories) ? memoryRecall.memories : []) {
+    const rendered = renderMemoryLine(memory, '; recalled=current-message');
+    if (!rendered || rendered.protection !== 'standard' || seen.has(rendered.key)) continue;
+    const needed = rendered.line.length + (recalledLines.length ? 1 : 0);
+    if (needed > recallRoom) {
+      omittedIds.push(memory.id);
+      continue;
+    }
+    recallRoom -= needed;
+    seen.add(rendered.key);
+    recalledLines.push(rendered.line);
+    includedIds.push(memory.id);
+  }
+  const ordinaryLines = takeDistinctMemoryLines(ordinaryRecords, seen).map(record => record.line);
+  const memoryLines = [...protectedLines, ...recalledLines, ...ordinaryLines];
+  const memoryText = memoryLines.join('\n') || '(none)';
+  const recallState = memoryRecall?.state === 'matched'
+    ? (includedIds.length ? 'included' : omittedIds.length ? 'omitted-budget' : 'already-in-baseline')
+    : memoryRecall?.state || 'none';
+  // The room includes delimiters and the truncation notice. Clamp the body
+  // before fencing so even the smallest retained block closes intact.
+  const body = memoryText.length <= memoryBudget ? memoryText
+    : memoryBudget > TRUNCATION_NOTICE.length
+      ? memoryText.slice(0, memoryBudget - TRUNCATION_NOTICE.length) + TRUNCATION_NOTICE
+      : '';
+  const omitted = CURATED_MEMORY_HEADING + '\n(omitted due to context budget)';
+  const section = body ? MEMORY_PREFIX + fenceBlock(MEMORY_FENCE_LABEL, body, memoryBudget)
+    : omitted.length <= room ? omitted : '';
+  return {
+    section,
+    memoryCount: memoryLines.length,
+    recall: { state: recallState, includedIds, omittedIds },
+    protectedChars: protectedLines.join('\n').length,
+    recalledChars: recalledLines.join('\n').length,
+    ordinaryChars: ordinaryLines.join('\n').length,
+  };
+}
+
+function renderJournalSection(journalDigest, room) {
+  const text = typeof journalDigest?.text === 'string' ? journalDigest.text : '';
+  const heading = '# Decision journal\n';
+  const limit = Math.min(PERSISTENT_MIND_TRAJECTORY_LIMITS.maxJournalChars, room - heading.length);
+  if (!text && limit >= '(none)'.length) return heading + '(none)';
+  if (text && text.length <= limit) return heading + text;
+  // The caller's digest contains JSON-quoted entries, one per line.
+  const end = text.lastIndexOf('\n', limit - TRUNCATION_NOTICE.length);
+  if (end > 0) return heading + text.slice(0, end) + TRUNCATION_NOTICE;
+  const omitted = heading + '(omitted due to context budget)';
+  return omitted.length <= room ? omitted : '';
+}
+
+function allocateTrajectorySections({ olderHeading, recentHeading, contentBudget, summaryLines, recent, latestInput, latestLine }) {
+  // Keep the latest human input whole in its chronological position. Older
+  // summaries receive at most 45% of the room left after that reservation.
+  const summaryBudget = Math.floor((contentBudget - latestLine.length) * 0.45);
   const keptSummaryLines = [];
   let summaryChars = 0;
   for (const line of [...summaryLines].reverse()) {
-    const separator = keptSummaryLines.length ? 1 : 0;
-    if (summaryChars + separator + line.length > summaryBudget) continue;
+    const cost = line.length + 1;
+    if (summaryChars + cost > summaryBudget) continue;
     keptSummaryLines.unshift(line);
-    summaryChars += separator + line.length;
+    summaryChars += cost;
   }
-  const recentBudget = contentBudget - summaryChars;
+
+  const recentBudget = contentBudget - summaryChars - latestLine.length;
   const recentLines = [];
   let recentChars = 0;
   for (const event of [...recent].reverse()) {
+    if (event === latestInput && latestLine) {
+      recentLines.unshift(latestLine);
+      continue;
+    }
     const line = renderPersistentMindContextEvent(event);
-    const separator = recentLines.length ? 1 : 0;
+    const separator = latestLine.length || recentLines.length ? 1 : 0;
     if (recentChars + separator + line.length > recentBudget) continue;
     recentLines.unshift(line);
     recentChars += separator + line.length;
   }
-  const olderSection = `# Older context\n${statusLine}${keptSummaryLines.length ? `\n${keptSummaryLines.join('\n')}` : ''}`;
-  const recentSection = `# Recent trajectory\n${recentLines.join('\n')}`;
-  const sections = [prefix, olderSection, recentSection];
-  let text = sections.join('\n\n').slice(0, cap);
+
+  return {
+    olderSection: keptSummaryLines.length ? olderHeading + '\n' + keptSummaryLines.join('\n') : olderHeading,
+    recentSection: recentHeading + recentLines.join('\n'),
+    recentEventCount: recentLines.length,
+  };
+}
+
+function appendOptionalReflection(text, reflection, cap) {
   let reflectionState = reflection?.state || 'disabled';
   let reflectionBlock = '';
   if (reflectionState === 'pending' && reflection.source) {
@@ -575,46 +592,118 @@ export function assemblePersistentMindContext({
       reflectionState = 'omitted-budget';
     }
   }
+  return { text, reflection: { ...reflection, state: reflectionState, block: reflectionBlock } };
+}
+
+const optionalSectionCost = (section) => section ? section.length + 2 : 0;
+const isHumanInput = ({ kind }) => kind === 'mind.message.accepted' || kind === 'mind.annotation.accepted';
+
+function prepareContextBudget({ maxChars, mindId, identity, instructions, latestInput, trajectoryOverhead }) {
+  const cap = Math.max(1_000, Math.min(Number(maxChars) || PERSISTENT_MIND_TRAJECTORY_LIMITS.maxContextChars, 100_000));
+  const identityText = bounded(
+    typeof identity === 'string' ? identity : JSON.stringify(identity),
+    PERSISTENT_MIND_TRAJECTORY_LIMITS.maxIdentityChars
+  );
+  const instructionsText = bounded(
+    typeof instructions === 'string' ? instructions : JSON.stringify(instructions),
+    PERSISTENT_MIND_TRAJECTORY_LIMITS.maxInstructionsChars
+  );
+
+  // In the smallest windows only the trusted prefix can be clipped. Account
+  // for every later section before joining so no data fence is ever sliced.
+  const prefixBudget = cap - trajectoryOverhead;
+  const identitySection = `# Persistent mind identity\nmindId=${mindId}${identityText ? `\n${identityText}` : ''}`.slice(0, prefixBudget);
+  const instructionsSection = `# Operating instructions\n${instructionsText || '(none)'}`
+    .slice(0, Math.max(0, prefixBudget - identitySection.length - 2));
+  const trustedPrefix = [identitySection, instructionsSection].filter(Boolean).join('\n\n');
+
+  const available = cap - trustedPrefix.length - trajectoryOverhead;
+  const candidate = latestInput ? renderPersistentMindContextEvent(latestInput) : '';
+  const latestLine = candidate.length <= available ? candidate : '';
+
+  return { cap, identityText, instructionsText, identitySection, instructionsSection, trustedPrefix, available, latestLine };
+}
+
+/**
+ * Render stable identity + older rollups + recent verbatim events into a hard
+ * character budget. Unavailable/failed/stale summary state is explicit;
+ * a real empty history is `summaryState: "empty"`, never conflated with one.
+ */
+export function assemblePersistentMindContext({
+  mindId = PERSISTENT_MIND_ID,
+  identity = '',
+  instructions = '',
+  memories = [],
+  continuationNote = null,
+  memoryRecall = null,
+  reflection = null,
+  events = [],
+  rollups = [],
+  journalDigest = null,
+  maxChars = PERSISTENT_MIND_TRAJECTORY_LIMITS.maxContextChars,
+  recentEventLimit = PERSISTENT_MIND_TRAJECTORY_LIMITS.recentContextEvents,
+  promptVersion = PERSISTENT_MIND_ROLLUP_PROMPT_VERSION,
+  coverageGap = null,
+} = {}) {
+  const ordered = orderedMindEvents(events, mindId);
+  const meaningful = selectPersistentMindContextEvents(ordered, mindId);
+  const recent = meaningful.slice(-Math.max(1, recentEventLimit));
+  const older = recent.length ? ordered.filter(event => event.sequence < recent[0].sequence) : [];
+  const { summaryState, statusLine, summaryLines, omittedRange } = resolveRollupSummaryState({
+    rollups, mindId, promptVersion, older, ordered, coverageGap,
+  });
+  const olderHeading = `# Older context\n${statusLine}`;
+  const recentHeading = '# Recent trajectory\n';
+  const trajectoryOverhead = olderHeading.length + recentHeading.length + 4;
+  const latestInput = recent.findLast(isHumanInput);
+  const { cap, identityText, instructionsText, identitySection, instructionsSection, trustedPrefix, available, latestLine } =
+    prepareContextBudget({ maxChars, mindId, identity, instructions, latestInput, trajectoryOverhead });
+
+  // The caller renders current and settled journal entries. Importing the
+  // journal renderer here would add it to every suite that needs our constants.
+  const journalSection = renderJournalSection(journalDigest, available - latestLine.length - 2);
+  const afterJournal = available - optionalSectionCost(journalSection);
+  const prepared = prepareMemoryLines(memories);
+  const note = admitContinuationNote(continuationNote, afterJournal - latestLine.length - 2, prepared.coreIdentityChars);
+  const afterNote = afterJournal - optionalSectionCost(note.section);
+  const memory = assembleMemorySection(prepared, memoryRecall, afterNote - latestLine.length - 2);
+
+  const { olderSection, recentSection, recentEventCount } = allocateTrajectorySections({
+    olderHeading, recentHeading, summaryLines, recent, latestInput, latestLine,
+    contentBudget: afterNote - optionalSectionCost(memory.section),
+  });
+  const sections = [trustedPrefix, note.section, memory.section, journalSection, olderSection, recentSection];
+  const final = appendOptionalReflection(sections.filter(Boolean).join('\n\n'), reflection, cap);
   return {
     mindId,
-    text,
-    chars: text.length,
-    approximateTokens: Math.ceil(text.length / 4),
+    text: final.text,
+    chars: final.text.length,
+    approximateTokens: Math.ceil(final.text.length / 4),
     summaryState,
     coverageGap,
-    omittedRange: hasOmittedHistory ? {
-      fromSequence: omittedStart,
-      toSequence: omittedEnd,
-      fromEventId: selectedRollups[0]?.source.fromEventId ?? older[0]?.eventId ?? null,
-      toEventId: older.at(-1)?.eventId ?? selectedRollups.at(-1)?.source.toEventId ?? null,
-    } : null,
-    recentEventCount: recentLines.length,
-    memoryCount: memoryLines.length,
-    continuationNote: continuationNote
-      ? { ...continuationNote, state: noteAdmitted ? 'included' : 'omitted-budget' }
-      : { state: 'none' },
-    memoryRecall: { state: recallState, includedIds, omittedIds },
-    reflection: { ...reflection, state: reflectionState, block: reflectionBlock },
-    journalActiveCount: journalSummary.activeCount,
+    omittedRange,
+    recentEventCount,
+    memoryCount: memory.memoryCount,
+    continuationNote: { ...continuationNote, state: note.state },
+    memoryRecall: memory.recall,
+    reflection: final.reflection,
+    journalActiveCount: journalDigest?.activeCount ?? 0,
     identityChars: identityText.length,
     instructionsChars: instructionsText.length,
-    // Aggregate rendered-character counts per prompt section (no text), for the
-    // context-window breakdown. Pre-final-slice, so they can sum to slightly
-    // more than `chars` when the hard cap cut the tail. The `memories*` figures
-    // split the baseline lines by origin (protected / recalled-for-this-message
-    // / ordinary); the fenced block adds the remaining framing.
+    // Rendered section lengths drive the context-window breakdown. Memory
+    // origin counts describe the records before fencing and bounding the body.
     sectionChars: {
       identity: identitySection.length,
       instructions: instructionsSection.length,
-      continuationNote: noteSection.length,
-      memories: memorySection.length,
-      memoriesProtected: protectedLines.join('\n').length,
-      memoriesRecalled: recalledLines.join('\n').length,
-      memoriesOrdinary: ordinaryLines.join('\n').length,
+      continuationNote: note.section.length,
+      memories: memory.section.length,
+      memoriesProtected: memory.protectedChars,
+      memoriesRecalled: memory.recalledChars,
+      memoriesOrdinary: memory.ordinaryChars,
       journalDigest: journalSection.length,
       rollups: olderSection.length,
       recentTrajectory: recentSection.length,
-      reflection: reflectionBlock.length,
+      reflection: final.reflection.block.length,
     },
   };
 }

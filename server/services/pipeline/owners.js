@@ -8,12 +8,10 @@
  * end is a compile/lint failure instead of a silently-unmatched event.
  */
 
-const PREFIX = 'pipeline';
+import { COMIC_PAGE_VARIANTS } from '../../lib/pipelineIssueConfig.js';
 
-// Comic-pages owners encode (issue, target, variant). `variant` distinguishes
-// the proof render from the high-resolution final; legacy owners without a
-// variant suffix parse as proof so in-flight jobs at upgrade time still land.
-export const COMIC_PAGE_VARIANTS = /** @type {const} */ (['proof', 'final']);
+export { COMIC_PAGE_VARIANTS };
+const PREFIX = 'pipeline';
 
 // Single source of truth for variant → slot-key. Used by the routes (writing
 // the in-flight job's slot), the filename hook (stamping the completed

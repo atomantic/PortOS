@@ -1,4 +1,4 @@
-import { useState, useEffect, useMemo } from 'react';
+import { useState, useEffect, useLayoutEffect, useMemo, useRef } from 'react';
 import { useNavigate, useParams } from 'react-router';
 import {
   ClipboardList,
@@ -63,6 +63,11 @@ export default function Review() {
   const [searchParams, updateParams] = useUrlParams();
   const requestedActionView = searchParams.get('view');
   const actionView = ACTION_VIEW_IDS.has(requestedActionView) ? requestedActionView : 'today';
+  const currentActionRoute = useRef(null);
+  useLayoutEffect(() => {
+    currentActionRoute.current = { actionId, actionView };
+    return () => { currentActionRoute.current = null; };
+  }, [actionId, actionView]);
   const [briefing, setBriefing] = useState(null);
   const [newTodo, setNewTodo] = useState('');
   const [filter, setFilter] = useState('pending');
@@ -168,6 +173,17 @@ export default function Review() {
     void fetchQueue();
   };
 
+  const reconcileQueueOperation = async (item) => {
+    // Dismiss immediately, then re-read the canonical source for status views.
+    handleQueueDismiss(item);
+    await fetchQueue();
+    // The refresh can remove the drawer while its action is still in the URL.
+    const route = currentActionRoute.current;
+    if (actionId === item.id && route?.actionId === actionId && route.actionView === actionView) {
+      navigate(`/review?view=${actionView}`, { replace: true });
+    }
+  };
+
   const handleQueueResolve = async (item, operation, input = {}) => {
     if (resolvingQueueIds.has(item.id)) return;
     setResolvingQueueIds(prev => new Set(prev).add(item.id));
@@ -181,14 +197,7 @@ export default function Review() {
       next.delete(item.id);
       return next;
     });
-    // Keep the visible row responsive, then re-read the canonical source. This
-    // matters for status views: a completed commitment must disappear from
-    // Today but remain reachable in History.
-    if (ok) {
-      handleQueueDismiss(item);
-      await fetchQueue();
-      if (actionId === item.id) navigate(`/review?view=${actionView}`, { replace: true });
-    }
+    if (ok) await reconcileQueueOperation(item);
     return ok;
   };
 
@@ -203,11 +212,7 @@ export default function Review() {
       next.delete(item.id);
       return next;
     });
-    if (ok) {
-      handleQueueDismiss(item);
-      await fetchQueue();
-      if (actionId === item.id) navigate(`/review?view=${actionView}`, { replace: true });
-    }
+    if (ok) await reconcileQueueOperation(item);
     return ok;
   };
 
@@ -266,7 +271,7 @@ export default function Review() {
             )}
             {queue && !showLegacyReviewSurface && <span className="text-sm text-port-text">{queue.partial || queueError ? 'At least ' : ''}{formatCount(queueItems.filter(item => item.required === true).length)} required</span>}
             {queueLoading && !queue && <span role="status">Loading actions…</span>}
-            {queueError && <span role="alert">Actions unavailable{queue ? ' — showing last known actions' : ''}. <button onClick={fetchQueue}>Retry</button></span>}
+            {queueError && <span role="alert">Actions unavailable{queue ? ' — showing last known actions' : ''}. <button type="button" onClick={fetchQueue} className="inline-flex items-center rounded border border-port-border px-2 py-1 text-xs text-gray-300 hover:text-white pointer-coarse:min-h-11">Retry</button></span>}
           </section>
           {!showLegacyReviewSurface && <ReviewHistoryDisclosure briefing={briefing} counts={counts} showBriefing={false} />}
 
@@ -375,6 +380,7 @@ export default function Review() {
         </div>
       </div>
       <ActionDetailDrawer
+        key={selectedAction?.id || 'closed'}
         item={selectedAction}
         onClose={() => navigate(`/review?view=${actionView}`, { replace: true })}
         onResolve={handleQueueResolve}

@@ -220,7 +220,7 @@ async function loadStories() {
 
 async function saveStories(data) {
   await ensureDir(DATA_DIR);
-  await atomicWrite(STORIES_FILE, data);
+  await atomicWrite(STORIES_FILE, data, { mode: 0o600, dirMode: 0o700 });
 }
 
 async function loadConfig() {
@@ -236,7 +236,7 @@ async function loadConfig() {
 
 async function saveConfig(config) {
   await ensureDir(DATA_DIR);
-  await atomicWrite(CONFIG_FILE, config);
+  await atomicWrite(CONFIG_FILE, config, { mode: 0o600, dirMode: 0o700 });
 }
 
 // Stories written against a question the user typed themselves file under this

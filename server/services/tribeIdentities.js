@@ -69,7 +69,7 @@ export function identityLookupKey({ kind, network = '', handle }) {
  * (`deleted = FALSE`) Tribe person IDs in one query. Returns a `Map` keyed by
  * `identityLookupKey(scope) -> personId`.
  */
-export async function resolvePeopleByIdentities(scopes = []) {
+export async function resolvePeopleByIdentities(scopes = [], { client } = {}) {
   const unique = new Map();
   for (const scope of scopes) {
     if (!isValidLookupScope(scope)) continue;
@@ -78,9 +78,9 @@ export async function resolvePeopleByIdentities(scopes = []) {
   }
   if (unique.size === 0) return new Map();
 
-  await ensureReady();
+  if (!client) await ensureReady();
   const entries = [...unique.values()];
-  const result = await query(
+  const result = await (client ?? { query }).query(
     `SELECT ti.kind, ti.network, ti.handle, ti.person_id
        FROM unnest($1::text[], $2::text[], $3::text[]) AS s(kind, network, handle)
        JOIN tribe_identities ti

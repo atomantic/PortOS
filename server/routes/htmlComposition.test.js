@@ -2,7 +2,7 @@ import { beforeEach, describe, it, expect, vi } from 'vitest';
 import express from 'express';
 import { request } from '../lib/testHelper.js';
 import { errorMiddleware } from '../lib/errorHandler.js';
-import { enqueueJob } from '../services/mediaJobQueue/index.js';
+import { cancelJob, enqueueJob, getJob } from '../services/mediaJobQueue/index.js';
 import router from './htmlComposition.js';
 import { authGate, hostControlRouteGate } from '../services/authGate.js';
 import { installMotionSkillPack } from '../lib/motionSkills.js';
@@ -26,7 +26,7 @@ vi.mock('../lib/ffmpeg.js', () => ({ findFfmpeg: async () => '/example/ffmpeg' }
 
 vi.mock('../services/mediaJobQueue/index.js', () => ({
   enqueueJob: vi.fn(async () => ({ jobId: 'example-job', status: 'queued' })),
-  attachSseClient: vi.fn(() => false), cancelJob: vi.fn(),
+  attachSseClient: vi.fn(() => false), cancelJob: vi.fn(), getJob: vi.fn(),
 }));
 vi.mock('../services/pipeline/audioMux.js', () => ({ resolveMusicTrackPath: vi.fn(async () => null) }));
 const skillState = vi.hoisted(() => ({ installed: false, existingPack: null }));
@@ -75,6 +75,33 @@ describe('HTML composition admission', () => {
     const response = await request(app).post('/api/html-composition/render').send(body);
     expect(response.status).toBe(400);
     expect(enqueueJob).not.toHaveBeenCalled();
+  });
+});
+
+describe('HTML composition cancellation', () => {
+  const cancel = () => request(app).post('/api/html-composition/example-job/cancel');
+
+  beforeEach(() => cancelJob.mockClear());
+
+  it.each([null, { kind: 'video' }])('refuses a job outside the composition queue (%j)', async (job) => {
+    getJob.mockReturnValueOnce(job);
+    const response = await cancel();
+    expect(response.status).toBe(404);
+    expect(response.body).toMatchObject({ code: 'NOT_FOUND' });
+    expect(cancelJob).not.toHaveBeenCalled();
+  });
+
+  it('acknowledges a canceled composition job and reports a conflict after it settles', async () => {
+    getJob.mockReturnValueOnce({ kind: 'html-composition' }).mockReturnValueOnce({ kind: 'html-composition' });
+    cancelJob.mockResolvedValueOnce({ ok: true, status: 'canceled' }).mockResolvedValueOnce({ ok: false, code: 'ALREADY_TERMINAL' });
+    const accepted = await cancel();
+    expect(accepted.status).toBe(200);
+    expect(accepted.body).toEqual({ ok: true, status: 'canceled' });
+    expect(cancelJob).toHaveBeenCalledWith('example-job');
+
+    const refused = await cancel();
+    expect(refused.status).toBe(409);
+    expect(refused.body).toMatchObject({ code: 'ALREADY_TERMINAL' });
   });
 });
 
@@ -127,6 +154,26 @@ describe('motion skills install authority (#9439)', () => {
     expect(peer.body.code).toBe('PEER_SCOPE_FORBIDDEN');
     expect(installMotionSkillPack).not.toHaveBeenCalled();
     expect(skillState.installed).toBe(false);
+  });
+
+  it('identifies the same active install in toolkit status and a duplicate refusal', async () => {
+    const local = buildApp('127.0.0.1');
+    const release = Promise.withResolvers();
+    installMotionSkillPack.mockReturnValueOnce(release.promise);
+    const pending = request(local).post(installPath).then(response => response);
+    try {
+      await vi.waitFor(() => expect(installMotionSkillPack).toHaveBeenCalledTimes(1));
+      const toolkit = await request(local).get('/api/html-composition/toolkit');
+      const { runId } = toolkit.body.skillInstall;
+      expect(runId).toEqual(expect.any(String));
+      const duplicate = await request(local).post(installPath);
+      expect(duplicate.status).toBe(409);
+      expect(duplicate.body).toMatchObject({ code: 'INSTALL_IN_PROGRESS', context: { runId } });
+    } finally {
+      release.resolve();
+      await pending;
+    }
+    expect((await request(local).get('/api/html-composition/toolkit')).body.skillInstall).toBeNull();
   });
 
   it.each(['loopback', 'operator-session'])('allows %s authority and installs only missing packs', async mode => {

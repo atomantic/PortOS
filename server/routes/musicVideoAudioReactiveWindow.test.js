@@ -285,7 +285,6 @@ describe('audio-reactive scene clip song window (#15971)', () => {
       visualConditioning: null,
       t2vTwoStage: null,
       speedProfile: null,
-      draftDecoder: null,
       a2vLoraStageStrengths: null,
       resolvedLoras: [],
       streamingMode: null,

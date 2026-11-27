@@ -32,7 +32,7 @@ describe('mounted route graph', () => {
   // Both sides are fresh in-memory scans: the walk from `server/index.js`
   // versus every declaration parsed straight out of `server/routes/`. A route
   // file nothing mounts, or a subrouter nothing `use()`s, shows up here.
-  it('covers every HTTP declaration mounted below /api or /sdapi', () => {
+  it('covers every HTTP declaration mounted below /api', () => {
     const { declarationKeys } = routeGraph();
     const routeFiles = collectServerSources(join(SERVER_DIR, 'routes')).map((path) => join(SERVER_DIR, path));
     expect(routeFiles.length).toBeGreaterThan(100);
@@ -54,7 +54,7 @@ describe('mounted route graph', () => {
     expect(mounts.length).toBeGreaterThan(140);
     expect(new Set(routes.map((route) => `${route.method} ${route.path}`)).size).toBe(routes.length);
     for (const route of routes) {
-      expect(route.path).toMatch(/^\/(?:api|sdapi)(?:\/|$)/);
+      expect(route.path).toMatch(/^\/api(?:\/|$)/);
       expect(route.sources.length).toBeGreaterThan(0);
       for (const source of route.sources) {
         expect(source).toMatch(/^server\/(?:routes|lib\/aiToolkit\/routes)\/[\w./-]+\.js$/);
@@ -77,8 +77,26 @@ describe('mounted route graph', () => {
       'GET /api/runs/:id/output',
       'POST /api/runs/:id/stop',
       'GET /api/cos/mind/tools',
-      'POST /sdapi/v1/txt2img',
+      'POST /api/image-gen/generate',
     ]) expect(operations.has(operation), operation).toBe(true);
+  });
+
+  it('discovers all shared model artifact handlers under their owning routers', () => {
+    const operations = new Set(getApiRouteCatalog().routes.map(({ method, path }) => `${method} ${path}`));
+    for (const path of [
+      '/api/image-gen/models/:modelId',
+      '/api/video-gen/models/:modelId',
+      '/api/video-gen/ic-loras/:mode',
+      '/api/video-gen/text-encoders/:id',
+      '/api/video-gen/text-encoder',
+    ]) {
+      expect(operations.has(`GET ${path}/download`), path).toBe(true);
+      expect(operations.has(`POST ${path}/download`), path).toBe(true);
+      expect(operations.has(`POST ${path}/repair`), path).toBe(true);
+    }
+    for (const kind of ['image', 'video']) {
+      expect(operations.has(`POST /api/${kind}-gen/models/verify`)).toBe(true);
+    }
   });
 
   it('covers every declaration in the mounted toolkit providers and runs routers', () => {

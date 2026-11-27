@@ -66,14 +66,7 @@ miss, is high; a small, easily-fixed detail is low. If the prose is consistent w
 the reference, return an empty `findings` array — do not invent errors, and do not
 flag claims the reference is silent on.
 
-## Output contract
-
-Return ONLY valid JSON matching this shape — no prose, no markdown fence, no
-commentary:
-
-```json
-{
-  "findings": [
+{{> editorial-findings-contract }}
     {
       "severity": "high|medium|low",
       "issueNumber": 3,

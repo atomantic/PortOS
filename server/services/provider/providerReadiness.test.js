@@ -1,6 +1,26 @@
-import { describe, it, expect, beforeEach } from 'vitest';
+import { describe, it, expect, beforeEach, vi } from 'vitest';
 import { pinPlatform } from '../../lib/testHelper.js';
 import { getProviderReadiness, getProviderReadinessMap, resetProviderReadinessCache } from './providerReadiness.js';
+
+const runtimeInstalls = vi.hoisted(() => ({
+  readInstalledSplashVersion: vi.fn(),
+  readMkserveInstall: vi.fn(),
+  resolveSlotstreamBinary: vi.fn(),
+}));
+vi.mock('../splashManagedRuntime.js', async (importOriginal) => ({
+  ...await importOriginal(),
+  supportsManagedSplash: async () => true,
+  readInstalledSplashVersion: runtimeInstalls.readInstalledSplashVersion,
+}));
+vi.mock('../mkserveRuntimeInstall.js', async (importOriginal) => ({
+  ...await importOriginal(), readMkserveInstall: runtimeInstalls.readMkserveInstall,
+}));
+vi.mock('../mkserveRuntimeManager.js', async (importOriginal) => ({
+  ...await importOriginal(), supportsMkserve: () => true,
+}));
+vi.mock('../slotstreamServerManager.js', async (importOriginal) => ({
+  ...await importOriginal(), resolveSlotstreamBinary: runtimeInstalls.resolveSlotstreamBinary,
+}));
 
 const llamaProvider = (overrides = {}) => ({
   id: 'opencode-llama-tui',
@@ -333,7 +353,7 @@ describe('getProviderReadiness', () => {
       { findCommand: () => null, probe: unreachable() },
     );
     restore();
-    expect(readiness.manageUrl).toBe('/models/llms-runtimes');
+    expect(readiness.manageUrl).toBe('/models/llms-runtimes/mtplx');
     // Setup lives in the PortOS UI — the payload never points at a vendor doc.
     expect(readiness.docsUrl).toBeUndefined();
     expect(readiness.setup).toMatchObject({ runtime: 'mtplx', action: 'install-start', blockedReason: null });
@@ -583,5 +603,41 @@ describe('getProviderReadiness — observed context windows', () => {
       { findCommand: () => '/opt/homebrew/bin/llama-server', probe: reachable(['dflash']) },
     );
     expect(silent.contextWindows).toBeNull();
+  });
+});
+
+describe.each([
+  ['splash', { id: 'splash', splashBacked: true }, runtimeInstalls.readInstalledSplashVersion, '1.7.2'],
+  ['mkserve', { id: 'mkserve' }, runtimeInstalls.readMkserveInstall, { version: 'pinned' }],
+  ['slotstream', { id: 'slotstream' }, runtimeInstalls.resolveSlotstreamBinary, '/example/.slotstream/bin/slotstream'],
+])('%s managed runtime readiness', (kind, provider, readInstall, installation) => {
+  it('reports standby with Start when installed without a PATH entry', async () => {
+    const restore = pinPlatform('darwin');
+    readInstall.mockReturnValue(installation);
+    try {
+      const readiness = await getProviderReadinessMap([{ ...provider, type: 'api' }], {
+        findCommand: (command, resolve) => command === 'slotstream' ? resolve() : null, probe: unreachable(), readWeights: async () => 'ready',
+      });
+      expect(readiness[kind]).toMatchObject({ kind, standby: true, ready: false, setup: { action: 'start' } });
+      expect(checkById(readiness[kind], 'runtime')).toMatchObject({ ok: true, detail: expect.stringContaining('installed locally') });
+    } finally {
+      readInstall.mockReset();
+      restore();
+    }
+  });
+
+  it('offers installation when there is no usable install evidence and the daemon is down', async () => {
+    const restore = pinPlatform('darwin');
+    readInstall.mockReturnValue(null);
+    try {
+      const readiness = await getProviderReadiness({ ...provider, type: 'api' }, {
+        findCommand: (command, resolve) => command === 'slotstream' ? resolve() : '/usr/local/bin/unmanaged', probe: unreachable(),
+      });
+      expect(readiness).toMatchObject({ kind, standby: false, setup: { action: 'install-start' } });
+      expect(checkById(readiness, 'runtime').ok).toBe(false);
+    } finally {
+      readInstall.mockReset();
+      restore();
+    }
   });
 });

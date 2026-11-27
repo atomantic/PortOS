@@ -6,69 +6,135 @@ import { isAgentHandoff, agentHandoffReason, normalizeTaskOutcome, isTaskDeliver
 
 /** Shared delivery and execution verdict for cards and the Resume dialog. */
 export default function AgentResultLine({ agent, className = '' }) {
-  const publication = agent?.metadata?.releasePublication;
-  const synchronization = agent?.metadata?.releaseSynchronization || publication?.synchronization;
-  if (!agent?.result) return <ReleasePublicationLine publication={publication} synchronization={synchronization} className={className} />;
-  const handoff = isAgentHandoff(agent);
-  const outcome = normalizeTaskOutcome(agent.result.taskOutcome);
-  const executionSuccess = agent.result.executionSuccess ?? agent.result.success;
-  const assessment = [agent.metadata?.auditAssessment, agent.result.auditAssessment]
-    .find(value => value?.status === 'recorded') || agent.metadata?.auditAssessment || agent.result.auditAssessment;
-  const assessmentUnverified = assessment && assessment.status !== 'recorded';
-  const validationFailed = agent.result.validationPassed === false;
-  const publicationValidation = agent.metadata?.publicationValidation;
-  const publicationIncomplete = ['running', 'blocked'].includes(publicationValidation?.status);
-  const syncIncomplete = synchronization && synchronization.status !== 'verified';
-  const interruption = agent.metadata?.executionInterruption || agent.result.executionInterruption;
-  const scanner = agent.metadata?.securityScan;
-  const scanIncomplete = scanner && scanner.status !== 'completed';
-  const cleanup = agent.metadata?.cleanupOutcome;
-  const cleanupRecovery = agent.metadata?.recoveryOrigin?.subsystem === 'repository-cleanup';
-  const cleanupTracked = cleanupRecovery || cleanup || agent.result.cleanupPending === true;
-  const cleanupComplete = isCleanupComplete(cleanup);
-  const cleanupPending = cleanupTracked && !cleanupComplete;
-  const merged = cleanup?.committedIntegrationVerified === true;
-  // The assigned PR's merge does not verify delivery of later local work.
-  const followUp = agent.metadata?.mergedReviewFollowUp;
-  const assignedPrMerged = agent.metadata?.taskOutcomeSource === 'forge-verification' && followUp?.status === 'verified'
-    && typeof followUp.prUrl === 'string' && !!followUp.prUrl && followUp.prUrl === agent.metadata?.reviewLoopMergeTarget?.url;
-  // A completed cleanup audit supersedes the old cleanup-only handoff, while
-  // unrelated delivery decisions and execution failures keep their own verdict.
-  const cleanupResolved = cleanupComplete && (outcome?.recovery?.mode === 'cleanup'
-    || (executionSuccess && agent.metadata?.repoStateVerification?.deliveryVerified === true));
-  const deliveryHeld = ['blocked', 'incomplete'].includes(outcome?.status) && !cleanupResolved;
-  const deliveryComplete = isTaskDeliveryComplete(agent) || cleanupResolved;
-  const incomplete = cleanupPending || interruption || scanIncomplete || assessmentUnverified || validationFailed || publicationIncomplete || syncIncomplete;
-  const tone = handoff ? 'text-port-accent' : !executionSuccess ? 'text-port-error' : incomplete || deliveryHeld ? 'text-port-warning'
-    : deliveryComplete ? 'text-port-success' : executionSuccess ? 'text-port-text-muted' : 'text-port-error';
-
+  const state = deriveAgentResultState(agent);
+  if (!state.hasResult) return <ReleasePublicationLine publication={state.publication} synchronization={state.synchronization} className={className} />;
   return (
-    <div className={`text-sm ${tone} min-w-0 max-w-full ${className}`.trim()}>
-      <ReleasePublicationLine publication={publication} synchronization={synchronization} />
-      <span className="flex items-center gap-2">
-      {handoff ? (
-        <><RotateCcw size={14} aria-hidden="true" /> {agentHandoffReason(agent)}</>
-      ) : deliveryHeld && executionSuccess ? (
-        <><AlertCircle size={14} aria-hidden="true" /> {outcome.status === 'blocked' ? 'Task blocked' : 'Task incomplete'}</>
-      ) : executionSuccess ? (
-        <><CheckCircle size={14} aria-hidden="true" /> {incomplete || !deliveryComplete ? 'Execution completed' : outcome?.status === 'no-action-needed' ? 'No action needed' : 'Completed successfully'}</>
-      ) : (
-        <><AlertCircle size={14} aria-hidden="true" /> {agent.result.error || 'Failed'}</>
-      )}
-      </span>
-      {!handoff && cleanupTracked && (assignedPrMerged && (!merged || cleanupPending) ? <>
-        <div>Assigned pull request merged.</div>
-        <div>Later local work may still need delivery verification.</div>
-      </> : <div>{merged ? 'Code merged.' : cleanupComplete ? 'Local worktree cleaned up.' : deliveryComplete ? 'Delivery verified.' : 'Cleanup pending.'}</div>)}
-      {!handoff && outcome?.reason && (!cleanupTracked || outcome.recovery?.mode === 'approval') && <div>{outcome.reason}</div>}
-      {interruption && <div>Execution interrupted: {interruption.category === 'content-refusal' ? 'provider safety refusal; automatic retry stopped' : interruption.category}</div>}
-      {!handoff && cleanupTracked && <CleanupStatus cleanup={cleanup} outcome={outcome} />}
-      <SecurityScanEvidence scanner={scanner} control={agent.metadata?.securityScanControl} />
-      {!handoff && assessment && <div>{assessment.status === 'recorded' ? 'Assessment saved' : assessment.status === 'persistence-failed' ? 'Assessment could not be saved' : assessment.status === 'not-attempted' ? 'Assessment not attempted' : 'Assessment not verified as saved'}</div>}
-      {!handoff && validationFailed && <div>Delivery validation failed</div>}
-      {!handoff && publicationIncomplete && <div>{publicationValidation.status === 'running' ? 'Publication checks running' : 'Publication blocked; worktree preserved'}</div>}
+    <div className={`text-sm ${state.tone} min-w-0 max-w-full ${className}`.trim()}>
+      <ReleasePublicationLine publication={state.publication} synchronization={state.synchronization} />
+      <ResultVerdict state={state} agent={agent} />
+      <CleanupEvidence state={state} />
+      <InterruptionEvidence interruption={state.interruption} />
+      {!state.handoff && state.cleanupTracked && <CleanupStatus cleanup={state.cleanup} outcome={state.outcome} />}
+      <SecurityScanEvidence scanner={state.scanner} control={agent.metadata?.securityScanControl} />
+      <AssessmentEvidence assessment={state.assessment} handoff={state.handoff} />
+      <ValidationEvidence state={state} />
     </div>
   );
+}
+
+/** Derive display decisions without coupling them to React rendering. */
+export function deriveAgentResultState(agent) {
+  const result = agent?.result;
+  const metadata = agent?.metadata || {};
+  const publication = metadata.releasePublication;
+  const synchronization = metadata.releaseSynchronization || publication?.synchronization;
+  if (!result) return { hasResult: false, publication, synchronization };
+
+  const handoff = isAgentHandoff(agent);
+  const outcome = normalizeTaskOutcome(result.taskOutcome);
+  const executionSuccess = result.executionSuccess ?? result.success;
+  const assessment = selectAssessment(metadata.auditAssessment, result.auditAssessment);
+  const cleanup = metadata.cleanupOutcome;
+  const cleanupTracked = metadata.recoveryOrigin?.subsystem === 'repository-cleanup' || cleanup || result.cleanupPending === true;
+  const cleanupComplete = isCleanupComplete(cleanup);
+  const cleanupPending = cleanupTracked && !cleanupComplete;
+  const assignedPrMerged = hasVerifiedMergedReviewFollowUp(metadata);
+  const cleanupResolved = cleanupComplete && isCleanupSuperseded(outcome, executionSuccess, metadata);
+  const deliveryHeld = ['blocked', 'incomplete'].includes(outcome?.status) && !cleanupResolved;
+  const deliveryComplete = isTaskDeliveryComplete(agent) || cleanupResolved;
+  const publicationValidation = metadata.publicationValidation;
+  const scanner = metadata.securityScan;
+  const interruption = metadata.executionInterruption || result.executionInterruption;
+  const validationFailed = result.validationPassed === false;
+  const publicationIncomplete = ['running', 'blocked'].includes(publicationValidation?.status);
+  const incomplete = hasIncompleteEvidence({ cleanupPending, interruption, scanner, assessment, validationFailed, publicationIncomplete, synchronization });
+  return {
+    hasResult: true, publication, synchronization, handoff, outcome, executionSuccess, assessment,
+    cleanup, cleanupTracked, cleanupComplete, cleanupPending,
+    merged: cleanup?.committedIntegrationVerified === true, assignedPrMerged,
+    deliveryHeld, deliveryComplete, interruption, scanner, validationFailed,
+    publicationValidation, publicationIncomplete, incomplete,
+    tone: resultTone({ handoff, executionSuccess, incomplete, deliveryHeld, deliveryComplete }),
+  };
+}
+
+function selectAssessment(metadataAssessment, resultAssessment) {
+  return [metadataAssessment, resultAssessment].find(value => value?.status === 'recorded')
+    || metadataAssessment || resultAssessment;
+}
+
+function hasVerifiedMergedReviewFollowUp(metadata) {
+  const followUp = metadata.mergedReviewFollowUp;
+  return metadata.taskOutcomeSource === 'forge-verification' && followUp?.status === 'verified'
+    && typeof followUp.prUrl === 'string' && !!followUp.prUrl
+    && followUp.prUrl === metadata.reviewLoopMergeTarget?.url;
+}
+
+function isCleanupSuperseded(outcome, executionSuccess, metadata) {
+  return outcome?.recovery?.mode === 'cleanup'
+    || (executionSuccess && metadata.repoStateVerification?.deliveryVerified === true);
+}
+
+function hasIncompleteEvidence({ cleanupPending, interruption, scanner, assessment, validationFailed, publicationIncomplete, synchronization }) {
+  return Boolean(cleanupPending || interruption || (scanner && scanner.status !== 'completed')
+    || (assessment && assessment.status !== 'recorded') || validationFailed || publicationIncomplete
+    || (synchronization && synchronization.status !== 'verified'));
+}
+
+function resultTone({ handoff, executionSuccess, incomplete, deliveryHeld, deliveryComplete }) {
+  if (handoff) return 'text-port-accent';
+  if (!executionSuccess) return 'text-port-error';
+  if (incomplete || deliveryHeld) return 'text-port-warning';
+  if (deliveryComplete) return 'text-port-success';
+  return 'text-port-text-muted';
+}
+
+function ResultVerdict({ state, agent }) {
+  const { handoff, deliveryHeld, executionSuccess, outcome, incomplete, deliveryComplete } = state;
+  return (
+    <span className="flex items-center gap-2">
+      {handoff ? <><RotateCcw size={14} aria-hidden="true" /> {agentHandoffReason(agent)}</>
+        : deliveryHeld && executionSuccess ? <><AlertCircle size={14} aria-hidden="true" /> {outcome.status === 'blocked' ? 'Task blocked' : 'Task incomplete'}</>
+          : executionSuccess ? <><CheckCircle size={14} aria-hidden="true" /> {incomplete || !deliveryComplete ? 'Execution completed' : outcome?.status === 'no-action-needed' ? 'No action needed' : 'Completed successfully'}</>
+            : <><AlertCircle size={14} aria-hidden="true" /> {agent?.result?.error || 'Failed'}</>}
+    </span>
+  );
+}
+
+function CleanupEvidence({ state }) {
+  const { handoff, cleanupTracked, assignedPrMerged, merged, cleanupPending, cleanupComplete, deliveryComplete, outcome } = state;
+  if (handoff) return null;
+  return <>
+    {cleanupTracked && (assignedPrMerged && (!merged || cleanupPending) ? <>
+      <div>Assigned pull request merged.</div>
+      <div>Later local work may still need delivery verification.</div>
+    </> : <div>{merged ? 'Code merged.' : cleanupComplete ? 'Local worktree cleaned up.' : deliveryComplete ? 'Delivery verified.' : 'Cleanup pending.'}</div>)}
+    {outcome?.reason && (!cleanupTracked || outcome.recovery?.mode === 'approval') && <div>{outcome.reason}</div>}
+  </>;
+}
+
+function InterruptionEvidence({ interruption }) {
+  if (!interruption) return null;
+  const detail = interruption.category === 'content-refusal' ? 'provider safety refusal; automatic retry stopped' : interruption.category;
+  return <div>Execution interrupted: {detail}</div>;
+}
+
+function AssessmentEvidence({ assessment, handoff }) {
+  if (!assessment || handoff) return null;
+  const labels = {
+    recorded: 'Assessment saved',
+    'persistence-failed': 'Assessment could not be saved',
+    'not-attempted': 'Assessment not attempted',
+  };
+  return <div>{labels[assessment.status] || 'Assessment not verified as saved'}</div>;
+}
+
+function ValidationEvidence({ state }) {
+  const { handoff, validationFailed, publicationIncomplete, publicationValidation } = state;
+  return <>
+    {!handoff && validationFailed && <div>Delivery validation failed</div>}
+    {!handoff && publicationIncomplete && <div>{publicationValidation.status === 'running' ? 'Publication checks running' : 'Publication blocked; worktree preserved'}</div>}
+  </>;
 }
 
 function isCleanupComplete(cleanup) {
@@ -121,7 +187,7 @@ export function SecurityScanEvidence({ scanner, control }) {
         <div>Security scanner ({scanner.source === 'runner' ? 'runner observed' : 'agent reported'}): {control?.status || scanner.status}{control && ' (runner connection lost)'}</div>
         {scanner.status === 'invalid-input' && <div>Input rejected before scanner launch</div>}
         {scanner.baseline && <div>Committed baseline: {scanner.baseline.commit} · Tree: {scanner.baseline.tree}. Uncommitted files and submodules excluded; symlinks read as link text. Subsequent repairs are not certified.</div>}
-        {scanner.preflight && <div>Input rejections: {formatCount(scanner.preflight.rejectedRequests)} · Last: {scanner.preflight.lastError.field} item {formatCount(scanner.preflight.lastError.index + 1)} — {scanner.preflight.lastError.code}</div>}
+        {scanner.preflight && <div>Input rejections: {formatCount(scanner.preflight.rejectedRequests)}{scanner.preflight.lastError && <> · Last: {scanner.preflight.lastError.field} item {formatCount(scanner.preflight.lastError.index + 1)} — {scanner.preflight.lastError.code}</>}</div>}
         <div>Model: {scanner.model ?? 'unknown'} · Effort: {scanner.effort ?? 'unknown'} · Auth: {scanner.auth}</div>
         <div>Estimated baseline: {scanner.estimatedCostUsd == null ? 'unknown' : formatUsd(scanner.estimatedCostUsd, { maximumFractionDigits: 4 })} · Estimate cap: {scanner.maxCostUsd == null ? 'unknown' : scanner.maxCostUsd === 'unlimited' ? 'none (no estimate cap)' : formatUsd(scanner.maxCostUsd, { maximumFractionDigits: 4 })} (API-equivalent USD)</div>
         <div>Short-context estimates do not measure billed charges or ChatGPT subscription quota.</div>
@@ -172,7 +238,7 @@ export function ReleasePublicationLine({ publication, synchronization, className
 
   return (
     <div className={`text-sm break-words ${className}`.trim()}>
-      <div className={!publicationVerified ? 'text-port-warning' : syncStatus === 'verified' || !syncStatus ? 'text-port-success' : syncTone()}>
+      <div className={!publicationVerified ? 'text-port-warning' : syncTone()}>
         {syncLabel()}
       </div>
       {tag && releaseUrl && (

@@ -7,15 +7,8 @@ import { safeJSONParse } from '../lib/fileUtils.js';
 import { evaluateSecretEndpoint } from '../lib/aiToolkit/endpointGuard.js';
 import { getAllProviders } from './provider/providers.js';
 import { modelAbuseContentFingerprint } from '../lib/modelAbuseGuard.js';
-import { formatUntrustedContent, isUntrustedContentProvider, resolveUntrustedContentPolicy, selectUntrustedContentProvider, UNTRUSTED_CONTENT_INSTRUCTIONS } from '../lib/untrustedContent.js';
-// Deep imports on purpose (#7473): both leaves are cheap (`ollamaContext.js`
-// is zero-dependency, `providerStatus.js` reaches only the `num_ctx` clamp it
-// already shares), unlike `services/stageRunner.js#effectiveContextWindow`,
-// which would drag this request-path module across the ~44-module prompt
-// budgeter closure that `server/lib/importScoping.test.js` has little
-// headroom for.
-import { withOllamaRuntimeContextWindow } from '../lib/ollamaContext.js';
-import { knownContextWindow } from '../lib/aiToolkit/providerStatus.js';
+import { formatUntrustedContent, resolveUntrustedContentPolicy, selectUntrustedContentProvider, UNTRUSTED_CONTENT_INSTRUCTIONS } from '../lib/untrustedContent.js';
+import { resolveUntrustedContentWindow } from '../lib/untrustedContentWindow.js';
 import { ollamaNativeChatUrl } from '../lib/aiToolkit/internal/ollamaNativeChat.js';
 import { withModelNumCtx } from '../lib/aiToolkit/internal/ollamaBacked.js';
 
@@ -360,24 +353,6 @@ export async function getContributionAssessmentFingerprint(source = 'github-pr')
   })).digest('hex');
 }
 
-/**
- * The token budget an analysis against this provider/model gets.
- *
- * The runtime projection folds in the ambient `OLLAMA_CONTEXT_LENGTH` ceiling
- * before the shared ladder resolves anything, so an Ollama daemon configured
- * through the env var alone still budgets at what it serves (#7472).
- * `knownContextWindow` clamps on `numCtx` only for Ollama-backed providers;
- * other OpenAI-compatible local endpoints ignore `num_ctx` and must not be
- * shrunk by it. A local endpoint with no explicit `numCtx` keeps this guard's
- * own 4096 floor: this is a security guard, and the floor only ever LOWERS the
- * shared ladder's answer.
- */
-function resolveUntrustedContentWindow(selected, effectiveModel) {
-  const runtimeProvider = withOllamaRuntimeContextWindow(withModelNumCtx(selected, effectiveModel));
-  const claimedWindow = knownContextWindow(runtimeProvider, effectiveModel) ?? 4096;
-  const local = isUntrustedContentProvider(selected, 'messages');
-  return local && !(Number(runtimeProvider.numCtx) > 0) ? Math.min(claimedWindow, 4096) : claimedWindow;
-}
 const selectProvider = (args) => selectUntrustedContentProvider({ ...args, windowOf: resolveUntrustedContentWindow });
 
 // Private transport entry: only callers above can supply a completed screen.

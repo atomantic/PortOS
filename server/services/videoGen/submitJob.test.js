@@ -233,7 +233,7 @@ describe('submitVideoGenJob', () => {
       }),
     }));
     const params = mocks.enqueueJob.mock.calls[0][0].params;
-    for (const key of ['textEncoderId', 'speedProfileId', 'draftDecode', 'i2vReferenceMode', 'chunkPrompts']) {
+    for (const key of ['textEncoderId', 'speedProfileId', 'i2vReferenceMode', 'chunkPrompts']) {
       expect(params).not.toHaveProperty(key);
     }
   });

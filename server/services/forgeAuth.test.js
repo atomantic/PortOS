@@ -1,3 +1,4 @@
+// test-memo: git-fixture
 import { EventEmitter } from 'node:events';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { mkdirSync, mkdtempSync, rmSync, symlinkSync } from 'fs';
@@ -14,7 +15,7 @@ vi.mock('./github.js', () => ({ execGh: vi.fn() }));
 
 import { spawn } from '../lib/childProcess.js';
 vi.mock('../lib/windowsGitProcess.js', async importOriginal => ({
-  ...await importOriginal(), startGit: (args, options, wire) => wire(spawn('git', args, options)),
+  ...await importOriginal(), startGit: (args, options, wire) => wire(spawn('git', args, { ...options, cwd: options.cwd })),
 }));
 import { listForgePinnedApps } from './agent/agentAppWorkspace.js';
 import { resolveForgeForRepo, resolveForgeTokenEnv, getWorkflowScopeStatus, __resetWorkflowScopeCache } from './forgeAuth.js';

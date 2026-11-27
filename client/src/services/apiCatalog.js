@@ -349,7 +349,7 @@ export const attachCatalogIngredientMediaFromMoodBoard = (id, body, options) =>
   request(`/catalog/ingredients/${enc(id)}/media/from-mood-board`, { method: 'POST', body: JSON.stringify(body), ...options });
 
 // Place greybox: AI draft (preview only), save/clear, and shot capture as a
-// tagged reference image. See docs/plans/2026-10-25-place-greybox.md.
+// tagged reference image.
 export const draftCatalogGreybox = (id, body, options) =>
   request(`/catalog/ingredients/${enc(id)}/greybox/draft`, { method: 'POST', body: JSON.stringify(body), ...options });
 
@@ -394,6 +394,9 @@ export const saveCatalogPhotorealLook = (id, look, { source, ...options } = {}) 
 
 export const startCatalogPhotorealRender = (id, body, options) =>
   request(`/catalog/ingredients/${enc(id)}/photoreal/render`, { method: 'POST', body: JSON.stringify(body), ...options });
+
+export const cancelCatalogPhotorealRender = (id, jobId, options) =>
+  request(`/catalog/ingredients/${enc(id)}/photoreal/cancel`, { method: 'POST', body: JSON.stringify({ jobId }), ...options });
 
 export const openCatalogPhotorealBlend = (id, options) =>
   request(`/catalog/ingredients/${enc(id)}/photoreal/open`, { method: 'POST', body: '{}', ...options });

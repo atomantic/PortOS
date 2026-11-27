@@ -1,3 +1,4 @@
+// test-memo: git-fixture
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { EventEmitter } from 'events';
 import { spawn as nodeSpawn } from 'node:child_process';
@@ -22,6 +23,8 @@ const {
   bufferedSpawn,
   bufferedSpawnOrThrow,
   killProcessTree,
+  confirmWindowsProcessTreeExit,
+  pendingWindowsProcessTreeExit,
   needsShell,
   resolveWindowsExecutable,
   prepareWindowsSafeSpawn,
@@ -48,6 +51,7 @@ function makeFakeChild({ pid = 1234 } = {}) {
   child.pid = pid;
   child.exitCode = null;
   child.signalCode = null;
+  child.killed = false;
   child.stdout = new EventEmitter();
   child.stderr = new EventEmitter();
   child.kill = vi.fn();
@@ -77,6 +81,69 @@ describe('needsShell / constants', () => {
     // needsShell mirrors IS_WIN32 — false on non-Windows test runners.
     expect(needsShell('npm')).toBe(IS_WIN32);
     expect(needsShell('git')).toBe(false);
+  });
+});
+
+describe('confirmWindowsProcessTreeExit', () => {
+  it('coalesces in-flight attempts and waits for taskkill to close before marking the child killed', async () => {
+    const target = makeFakeChild();
+    const killer = makeFakeChild();
+    spawnMock.mockReturnValueOnce(killer);
+    const confirmation = confirmWindowsProcessTreeExit(target, true);
+    expect(confirmWindowsProcessTreeExit(target, true)).toBe(confirmation);
+    expect(spawnMock).toHaveBeenCalledExactlyOnceWith('taskkill', ['/T', '/F', '/PID', '1234'], expect.anything());
+    killer.emit('exit', 0);
+    await Promise.resolve();
+    expect(target.killed).toBe(false);
+    killer.emit('close', 0);
+    await confirmation;
+    expect(target.killed).toBe(true);
+  });
+
+  it('accepts a child that has already exited without signalling a potentially reused PID', async () => {
+    const target = makeFakeChild();
+    target.exitCode = 1;
+    await expect(confirmWindowsProcessTreeExit(target, true)).resolves.toBeUndefined();
+    expect(spawnMock).not.toHaveBeenCalled();
+  });
+
+  it('holds close finalization through a failed attempt and releases it after a confirmed retry', async () => {
+    const target = makeFakeChild();
+    const killer = makeFakeChild();
+    spawnMock.mockReturnValueOnce(killer);
+    const failedAttempt = confirmWindowsProcessTreeExit(target, true);
+    const finalized = vi.fn();
+    const closeFinalizer = pendingWindowsProcessTreeExit(target).then(finalized);
+    const rejection = expect(failedAttempt).rejects.toThrow('taskkill unavailable');
+    killer.emit('error', new Error('taskkill unavailable'));
+    await rejection;
+    expect(finalized).not.toHaveBeenCalled();
+
+    target.exitCode = 1;
+    await confirmWindowsProcessTreeExit(target, true);
+    await closeFinalizer;
+    expect(finalized).toHaveBeenCalledOnce();
+    expect(spawnMock).toHaveBeenCalledOnce();
+  });
+
+  it.each([['ESRCH', true], ['EPERM', false], [null, false]])('interprets nonzero taskkill with probe result %s', async (code, exited) => {
+    const probe = vi.spyOn(process, 'kill').mockImplementation(() => {
+      if (code) throw Object.assign(new Error(code), { code });
+      return true;
+    });
+    try {
+      const target = makeFakeChild();
+      const killer = makeFakeChild();
+      spawnMock.mockReturnValueOnce(killer);
+      const confirmation = confirmWindowsProcessTreeExit(target, true);
+      killer.emit('close', 1);
+      if (exited) await expect(confirmation).resolves.toBeUndefined();
+      else await expect(confirmation).rejects.toThrow('exit code 1');
+      expect(probe).toHaveBeenCalledExactlyOnceWith(target.pid, 0);
+      expect(target.killed).toBe(exited);
+    } finally {
+      probe.mockRestore();
+    }
   });
 });
 
@@ -603,6 +670,40 @@ describe.skipIf(IS_WIN32)('terminateWithEscalation (#12021)', () => {
     child.exitCode = 0;
     vi.advanceTimersByTime(1000);
     expect(child.kill).toHaveBeenCalledTimes(1);
+  });
+
+  it('escalates the entire group after its leader has already exited', async () => {
+    const script = `
+      const { spawn } = require('node:child_process');
+      const worker = spawn(process.execPath, ['-e', ${JSON.stringify(
+        "process.on('SIGTERM', () => {}); setInterval(() => {}, 1000); process.stdout.write('ready');"
+      )}], { stdio: ['ignore', 'pipe', process.stderr] });
+      worker.stdout.once('data', () => process.stdout.write('ready'));
+    `;
+    // Inherit the launcher's stderr so the worker holds its pipe open after
+    // SIGTERM kills the launcher. The test only receives close after SIGKILL.
+    const child = nodeSpawn(process.execPath, ['-e', script], {
+      stdio: ['ignore', 'pipe', 'pipe'], detached: true,
+    });
+    let exit;
+    const done = closed(child).then((result) => { exit = result; });
+    try {
+      await new Promise((resolve, reject) => {
+        child.stdout.once('data', resolve);
+        child.once('error', reject);
+      });
+      const cancel = terminateWithEscalation(child, { graceMs: 100, processGroup: true });
+      try {
+        await expect.poll(() => exit?.signal, { timeout: 1500 }).toBe('SIGTERM');
+      } finally {
+        cancel();
+      }
+    } finally {
+      if (!exit) {
+        try { process.kill(-child.pid, 'SIGKILL'); } catch { /* The group has already exited. */ }
+        await done;
+      }
+    }
   });
 
   it('on Windows the tree kill is already forced, so there is nothing to escalate', () => {

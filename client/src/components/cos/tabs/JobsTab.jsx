@@ -167,32 +167,24 @@ export default function JobsTab() {
   // `runOptions` carries the card's ad-hoc run configuration, when the job
   // declares one — the values apply to this run only and are not saved.
   const handleTrigger = async (jobId, runOptions) => {
-    toast.loading('Triggering job...', { id: 'job-trigger' });
-    // Held so the card can disable its own button: without it a second click
-    // fires a second trigger, which for a re-aimed run comes back as a
-    // confusing duplicate-skipped success.
+    const toastId = toast.loading('Triggering job...');
+    // Held so the card can disable its own button while its trigger is pending.
     setTriggering(jobId);
-    const result = await triggerCosJob(jobId, { ...runOptions, silent: true }).catch(err => {
-      toast.error(err.message, { id: 'job-trigger' });
-      return null;
-    });
-    // Only if this job is still the one held: triggering a second job while the
-    // first is in flight would otherwise have the first's completion re-enable
-    // the second's button, which is the double-click this state exists to stop.
-    setTriggering(prev => (prev === jobId ? null : prev));
-    if (result) {
-      if (result.status === 'skipped') {
-        const notify = result.duplicate ? toast.success : toast.error;
-        notify(result.reason || 'Job was not queued', { id: 'job-trigger' });
-      } else if (result.success === false) {
-        toast.error(result.reason || `Job failed (exit ${result.exitCode ?? '?'})`, { id: 'job-trigger' });
-      } else {
-        const msg = result.type === 'shell' || result.type === 'script'
-          ? 'Job executed successfully'
-          : result.started ? 'Job started — agent launching' : 'Job triggered — task queued';
-        toast.success(msg, { id: 'job-trigger' });
-      }
+    try {
+      const result = await triggerCosJob(jobId, { ...runOptions, silent: true });
+      const message = result.type === 'shell' || result.type === 'script'
+        ? 'Job executed successfully'
+        : result.started ? 'Job started — agent launching' : 'Job triggered — task queued';
+      toast.success(result.duplicate ? result.reason || 'An equivalent task is already queued' : message, { id: toastId });
       fetchJobs();
+    } catch (err) {
+      toast.dismiss(toastId);
+      // Leave the ID unset so the shared toast layer can deduplicate socket errors.
+      if (!err.toasted) toast.error(err.message);
+      if (err.code === 'JOB_EXECUTION_FAILED') fetchJobs();
+    } finally {
+      // Another job may have been triggered while this one was in flight.
+      setTriggering(prev => (prev === jobId ? null : prev));
     }
   };
 
@@ -226,7 +218,7 @@ export default function JobsTab() {
     <div className="space-y-6">
       <div className="flex items-center justify-between">
         <div>
-          <h3 className="text-lg font-semibold text-white">System Tasks</h3>
+          <h2 className="text-lg font-semibold text-white">System Tasks</h2>
           <p className="text-sm text-gray-500 mt-1">
             Recurring system-level jobs — AI agents and shell commands
           </p>

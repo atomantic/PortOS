@@ -2,7 +2,7 @@
  * `getAuditScheduleMetadata` derives upgrade-safe display names and cluster labels.
  */
 
-import { ACTIVE_AUDIT_DOMAIN_IDS, CONSOLIDATED_AUDIT_DOMAINS, auditDomainFor, normalizeAuditTaskType } from './auditDomains.js';
+import { ACTIVE_AUDIT_DOMAIN_IDS, CONSOLIDATED_AUDIT_DOMAINS, auditDomainFor } from './auditDomains.js';
 import { LIGHT_FINDINGS_BATCH_EXCEPTION } from './dispatchLabels.js';
 import { isTruthyMeta } from './metadataFlags.js';
 import { renderOrPrependSection } from './promptSectionRenderer.js';
@@ -134,14 +134,8 @@ export const AUDIT_CAPABILITY_MISSING_REASON = Object.freeze({
   infrastructure: 'no infrastructure-as-code, container, deployment, or CI configuration found in this repository',
 });
 
-/**
- * Scheduled audit types that support the file-issues vs do-work toggle.
- * `quotaBurnId` maps onto `QUOTA_BURN_PROMPT_PRESETS` so a new burn preset
- * cannot land without a scheduled counterpart (guarded in auditCatalog.test.js).
- */
-const legacyProfiles = Object.freeze({
+const standaloneDomains = {
   security: {
-    quotaBurnId: 'security-audit',
     label: 'Security',
     description: 'Security audit — configurable: file issues or implement fixes',
     defaultFileIssues: false,
@@ -153,49 +147,19 @@ const legacyProfiles = Object.freeze({
       noun: 'security finding(s)',
     }),
   },
-  'code-quality': {
-    quotaBurnId: null,
-    label: 'Code quality',
-    description: 'Code quality improvements — configurable: file issues or implement fixes',
-    defaultFileIssues: false,
-    filing: filing({
-      slugPrefix: 'code-quality-',
-      label: 'code-quality-audit',
-      issueLabel: 'code-quality',
-      labelDescription: 'Proposed from a code-quality audit',
-      noun: 'code-quality finding(s)',
-    }),
-  },
-  'test-coverage': {
-    quotaBurnId: 'test-gap-audit',
-    label: 'Test coverage',
-    description: 'Test-coverage audit — configurable: file issues or add tests',
-    // Files by default (#12087): unattended test addition is a CI-time cost with
-    // no reviewer judging whether the regression named is worth the suite time.
+  privacy: {
+    label: 'Privacy & data governance',
+    description: 'Personal/sensitive-data handling audit (exposure, minimization, retention, erasure) — configurable: file issues (default) or implement fixes',
     defaultFileIssues: true,
     filing: filing({
-      slugPrefix: 'test-gap-',
-      label: 'test-gap-audit',
-      issueLabel: 'tests',
-      labelDescription: 'Proposed from a test-coverage audit',
-      noun: 'test-gap finding(s)',
-    }),
-  },
-  performance: {
-    quotaBurnId: 'perf-audit',
-    label: 'Performance',
-    description: 'Performance audit — configurable: file issues or implement fixes',
-    defaultFileIssues: false,
-    filing: filing({
-      slugPrefix: 'perf-',
-      label: 'performance-audit',
-      issueLabel: 'performance',
-      labelDescription: 'Proposed from a performance audit',
-      noun: 'performance finding(s)',
+      slugPrefix: 'privacy-',
+      label: 'privacy-audit',
+      issueLabel: 'privacy',
+      labelDescription: 'Proposed from a privacy/data-governance audit',
+      noun: 'privacy finding(s)',
     }),
   },
   accessibility: {
-    quotaBurnId: 'a11y-audit',
     label: 'Accessibility',
     description: 'Accessibility audit — configurable: file issues or implement fixes',
     defaultFileIssues: false,
@@ -208,189 +172,7 @@ const legacyProfiles = Object.freeze({
       noun: 'accessibility finding(s)',
     }),
   },
-  documentation: {
-    quotaBurnId: 'docs-audit',
-    label: 'Documentation',
-    description: 'Docs-drift audit — configurable: file issues or implement fixes',
-    defaultFileIssues: false,
-    filing: filing({
-      slugPrefix: 'docs-',
-      label: 'docs-audit',
-      issueLabel: 'documentation',
-      labelDescription: 'Proposed from a documentation-drift audit',
-      noun: 'docs finding(s)',
-    }),
-  },
-  'ui-bugs': {
-    quotaBurnId: null,
-    label: 'UI bugs',
-    description: 'Find UI bugs — configurable: file issues or implement fixes',
-    defaultFileIssues: false,
-    requiresCapability: 'ui',
-    filing: filing({
-      slugPrefix: 'ui-bug-',
-      label: 'ui-bug-audit',
-      issueLabel: 'bug',
-      labelDescription: 'Proposed from a UI-bug audit',
-      noun: 'UI bug(s)',
-    }),
-  },
-  // Server-side counterpart of ui-bugs: behavior bugs in routes, jobs and core
-  // logic, judged by whether a user or a job of the app can actually reach them.
-  'app-bugs': {
-    quotaBurnId: null,
-    label: 'App bugs',
-    description: 'Find server and core-logic bugs (wrong results, edge inputs, user-triggerable races) — configurable: file issues (default) or implement fixes',
-    defaultFileIssues: true,
-    filing: filing({
-      slugPrefix: 'app-bug-',
-      label: 'app-bug-audit',
-      issueLabel: 'bug',
-      labelDescription: 'Proposed from an app/server bug audit',
-      noun: 'app bug(s)',
-    }),
-  },
-  'mobile-responsive': {
-    quotaBurnId: 'mobile-audit',
-    label: 'Mobile & responsive',
-    description: 'Mobile/responsive audit — configurable: file issues or implement fixes',
-    defaultFileIssues: false,
-    requiresCapability: 'ui',
-    filing: filing({
-      slugPrefix: 'mobile-',
-      label: 'mobile-audit',
-      issueLabel: 'mobile',
-      labelDescription: 'Proposed from a mobile/responsive audit',
-      noun: 'mobile finding(s)',
-    }),
-  },
-  'error-handling': {
-    quotaBurnId: 'resilience-audit',
-    label: 'Error handling',
-    description: 'Failure-path audit — configurable: file issues or implement fixes',
-    defaultFileIssues: false,
-    filing: filing({
-      slugPrefix: 'resilience-',
-      label: 'resilience-audit',
-      issueLabel: 'resilience',
-      labelDescription: 'Proposed from a failure-path audit',
-      noun: 'resilience finding(s)',
-    }),
-  },
-  typing: {
-    quotaBurnId: null,
-    label: 'Typing',
-    description: 'Typed-language audit — configurable: file issues or implement fixes',
-    defaultFileIssues: false,
-    requiresCapability: 'typed',
-    filing: filing({
-      slugPrefix: 'typing-',
-      label: 'typing-audit',
-      issueLabel: 'code-quality',
-      labelDescription: 'Proposed from a typed-language audit',
-      noun: 'typing finding(s)',
-    }),
-  },
-  'console-errors': {
-    quotaBurnId: null,
-    label: 'Console errors',
-    description: 'Console-error audit — configurable: file issues or implement fixes',
-    defaultFileIssues: false,
-    requiresCapability: 'ui',
-    filing: filing({
-      slugPrefix: 'console-',
-      label: 'console-error-audit',
-      issueLabel: 'bug',
-      labelDescription: 'Proposed from a console-error audit',
-      noun: 'console-error finding(s)',
-    }),
-  },
-  design: {
-    quotaBurnId: null,
-    label: 'Design',
-    description: 'Rendered design audit — configurable: file issues (default) or implement fixes',
-    defaultFileIssues: true,
-    requiresCapability: 'ui',
-    filing: filing({
-      slugPrefix: 'design-',
-      label: 'design-audit',
-      issueLabel: 'ux',
-      labelDescription: 'Proposed from a rendered design audit',
-      noun: 'design finding(s)',
-    }),
-  },
-  ux: {
-    quotaBurnId: 'ux-audit',
-    label: 'UX',
-    description: 'UX audit — configurable: file issues (default) or implement fixes',
-    defaultFileIssues: true,
-    requiresCapability: 'ui',
-    filing: filing({
-      slugPrefix: 'ux-',
-      label: 'UX-audit',
-      issueLabel: 'ux',
-      labelDescription: 'Proposed from a UX audit',
-      noun: 'UX finding(s)',
-    }),
-  },
-  'data-safety': {
-    quotaBurnId: 'data-safety-audit',
-    label: 'Data & upgrade safety',
-    description: 'Data/upgrade-safety audit — configurable: file issues (default) or implement fixes',
-    defaultFileIssues: true,
-    filing: filing({
-      slugPrefix: 'data-safety-',
-      label: 'data-safety-audit',
-      issueLabel: 'data-safety',
-      labelDescription: 'Proposed from a data/upgrade-safety audit',
-      noun: 'data-safety finding(s)',
-    }),
-  },
-  simplify: {
-    quotaBurnId: 'simplify-audit',
-    label: 'Dead code & duplication',
-    description: 'Dead-code/duplication audit — configurable: file issues (default) or implement removals',
-    defaultFileIssues: true,
-    filing: filing({
-      slugPrefix: 'simplify-',
-      label: 'simplify-audit',
-      issueLabel: 'code-quality',
-      labelDescription: 'Proposed from a dead-code/duplication audit',
-      noun: 'simplify finding(s)',
-    }),
-  },
-  // Active cleanup counterpart of the shared proportionality check in
-  // auditQualityInstructions: other lanes avoid ADDING heavyweight process
-  // machinery, this one hunts the machinery already added.
-  'over-engineering': {
-    quotaBurnId: null,
-    label: 'Over-engineering',
-    description: 'Over-engineering audit (process and validation machinery whose cost exceeds its demonstrated harm) — configurable: file issues (default) or implement removals',
-    defaultFileIssues: true,
-    filing: filing({
-      slugPrefix: 'over-engineering-',
-      label: 'over-engineering-audit',
-      issueLabel: 'code-quality',
-      labelDescription: 'Proposed from an over-engineering audit',
-      noun: 'over-engineering finding(s)',
-    }),
-  },
-  'module-hygiene': {
-    quotaBurnId: null,
-    label: 'Module hygiene',
-    description: 'Module-hygiene audit — configurable: file issues (default) or implement one isolated refactor',
-    defaultFileIssues: true,
-    doWorkRequiresWorktree: true,
-    filing: filing({
-      slugPrefix: 'module-hygiene-',
-      label: 'module-hygiene-audit',
-      issueLabel: 'code-quality',
-      labelDescription: 'Proposed from a module-hygiene audit',
-      noun: 'module-hygiene finding(s)',
-    }),
-  },
   'api-contract': {
-    quotaBurnId: 'api-contract-audit',
     label: 'API & route contracts',
     description: 'API contract audit — configurable: file issues (default) or implement fixes',
     defaultFileIssues: true,
@@ -403,116 +185,7 @@ const legacyProfiles = Object.freeze({
       noun: 'API contract finding(s)',
     }),
   },
-  'ui-lifecycle': {
-    quotaBurnId: 'ui-lifecycle-audit',
-    label: 'UI lifecycle & state',
-    description: 'UI lifecycle audit — configurable: file issues (default) or implement fixes',
-    defaultFileIssues: true,
-    requiresCapability: 'ui',
-    filing: filing({
-      slugPrefix: 'ui-lifecycle-',
-      label: 'ui-lifecycle-audit',
-      issueLabel: 'ui-lifecycle',
-      labelDescription: 'Proposed from a UI lifecycle/state audit',
-      noun: 'UI lifecycle finding(s)',
-    }),
-  },
-  observability: {
-    quotaBurnId: 'observability-audit',
-    label: 'Logging & observability',
-    description: 'Observability audit — configurable: file issues (default) or implement fixes',
-    defaultFileIssues: true,
-    filing: filing({
-      slugPrefix: 'observability-',
-      label: 'observability-audit',
-      // Category stays `code-quality` (a missing log line is a
-      // maintainability defect); the metric label `observability` is
-      // derived from the slug so the backlog can still be filtered by lens.
-      issueLabel: 'code-quality',
-      labelDescription: 'Proposed from a logging/observability audit',
-      noun: 'observability finding(s)',
-    }),
-  },
-  copy: {
-    quotaBurnId: 'copy-audit',
-    label: 'Copy & text clarity',
-    description: 'Copy-clarity audit — configurable: file issues (default) or implement rewrites',
-    defaultFileIssues: true,
-    requiresCapability: 'ui',
-    filing: filing({
-      slugPrefix: 'copy-',
-      label: 'copy-audit',
-      // User-facing wording is a UX concern, so the category stays `ux`;
-      // the metric label `copy` is derived from the slug.
-      issueLabel: 'ux',
-      labelDescription: 'Proposed from a copy/text-clarity audit',
-      noun: 'copy finding(s)',
-    }),
-  },
-  // These six PortOS-owned focused missions map onto the current generic
-  // `/do:better` scopes through DO_BETTER_SCOPE_COVERAGE below. Their
-  // scheduleable mission bodies add narrow checks; they do not copy slashdo's
-  // audit orchestration or tracker-filing procedure. Each keeps its existing
-  // category label and an additional metric label where needed. Refactor lanes
-  // require a managed worktree in do-work mode so edits never land in a live
-  // checkout.
-  'better-complexity': {
-    quotaBurnId: null,
-    label: 'Cyclomatic complexity',
-    description: 'Complexity-reduction audit — configurable: file issues (default) or implement one refactor',
-    defaultFileIssues: true,
-    doWorkRequiresWorktree: true,
-    filing: filing({
-      slugPrefix: 'complexity-',
-      label: 'complexity-audit',
-      issueLabel: 'code-quality',
-      labelDescription: 'Proposed from a cyclomatic-complexity audit',
-      noun: 'complexity finding(s)',
-    }),
-  },
-  'better-cognitive-load': {
-    quotaBurnId: null,
-    label: 'Cognitive load & readability',
-    description: 'Reader-cost and excessive code-comment audit — configurable: file issues (default) or implement one refactor',
-    defaultFileIssues: true,
-    doWorkRequiresWorktree: true,
-    filing: filing({
-      slugPrefix: 'cognitive-load-',
-      label: 'cognitive-load-audit',
-      issueLabel: 'code-quality',
-      labelDescription: 'Proposed from a cognitive-load/readability audit',
-      noun: 'cognitive-load finding(s)',
-    }),
-  },
-  'better-structural-drift': {
-    quotaBurnId: null,
-    label: 'Structural drift & sources of truth',
-    description: 'Generated-artifact / hand-synced-registry drift audit — configurable: file issues (default) or implement one consolidation',
-    defaultFileIssues: true,
-    doWorkRequiresWorktree: true,
-    filing: filing({
-      slugPrefix: 'structural-drift-',
-      label: 'structural-drift-audit',
-      issueLabel: 'code-quality',
-      labelDescription: 'Proposed from a structural-drift audit',
-      noun: 'structural-drift finding(s)',
-    }),
-  },
-  'better-runtime-safety': {
-    quotaBurnId: null,
-    label: 'Runtime safety & async correctness',
-    description: 'Latent-defect audit — configurable: file issues (default) or implement fixes',
-    defaultFileIssues: true,
-    filing: filing({
-      slugPrefix: 'runtime-safety-',
-      label: 'runtime-safety-audit',
-      issueLabel: 'bug',
-      labelDescription: 'Proposed from a runtime-safety audit',
-      noun: 'runtime-safety finding(s)',
-    }),
-  },
   'better-dependency-freedom': {
-    quotaBurnId: null,
     label: 'Dependency freedom',
     description: 'Dependency-necessity audit — configurable: file issues (default) or implement one removal',
     defaultFileIssues: true,
@@ -526,124 +199,7 @@ const legacyProfiles = Object.freeze({
       noun: 'dependency finding(s)',
     }),
   },
-  'better-test-quality': {
-    quotaBurnId: null,
-    label: 'Test quality',
-    description: 'Vacuous/weak/redundant-test audit — configurable: file issues (default) or implement one cleanup',
-    defaultFileIssues: true,
-    requiresCapability: 'tests',
-    filing: filing({
-      slugPrefix: 'test-quality-',
-      label: 'test-quality-audit',
-      issueLabel: 'tests',
-      labelDescription: 'Proposed from a test-quality audit',
-      noun: 'test-quality finding(s)',
-    }),
-  },
-  // The host the code is developed on. Every lens above reads source or runs
-  // the product; none measures what running the test suites or dev server
-  // does to the developer's machine — the gap that let test suites leak
-  // tens of thousands of temp directories unnoticed (#9000). Ungated: any
-  // repository has a development loop.
-  'better-dev-environment': {
-    quotaBurnId: null,
-    label: 'Development environment',
-    description: 'Dev-loop host-impact audit (leaked temp files and processes, writes outside the sandbox, watcher and idle cost, suite runtime) — configurable: file issues (default) or implement one fix',
-    defaultFileIssues: true,
-    filing: filing({
-      slugPrefix: 'dev-environment-',
-      label: 'dev-environment-audit',
-      issueLabel: 'tests',
-      labelDescription: 'Proposed from a development-environment audit',
-      noun: 'dev-environment finding(s)',
-    }),
-  },
-  // Service and data-platform lenses. The catalog above grew out of a web app
-  // with a UI; these cover what a backend service, data platform, or
-  // infrastructure repository is judged on and nothing above owns: the
-  // deployment it describes, the correctness of the data flowing through it,
-  // how it behaves under restarts and load, what it does with personal data,
-  // and what it costs to run. Each defaults to file-issues — their findings
-  // usually touch production configuration, where an unattended edit is the
-  // wrong default.
-  infrastructure: {
-    quotaBurnId: null,
-    label: 'Infrastructure & deployment',
-    description: 'Infrastructure-as-code, container, deployment and CI audit — configurable: file issues (default) or implement fixes',
-    defaultFileIssues: true,
-    requiresCapability: 'infrastructure',
-    filing: filing({
-      slugPrefix: 'infrastructure-',
-      label: 'infrastructure-audit',
-      issueLabel: 'infrastructure',
-      labelDescription: 'Proposed from an infrastructure/deployment audit',
-      noun: 'infrastructure finding(s)',
-    }),
-  },
-  'data-integrity': {
-    quotaBurnId: null,
-    label: 'Data integrity & pipelines',
-    description: 'Data-correctness audit (ingestion, idempotency, consistency, schema evolution) — configurable: file issues (default) or implement fixes',
-    defaultFileIssues: true,
-    filing: filing({
-      slugPrefix: 'data-integrity-',
-      label: 'data-integrity-audit',
-      // Same category as its upgrade-time sibling; the metric label
-      // `data-integrity` separates runtime data correctness in the backlog.
-      issueLabel: 'data-safety',
-      labelDescription: 'Proposed from a data-integrity/pipeline audit',
-      noun: 'data-integrity finding(s)',
-    }),
-  },
-  reliability: {
-    quotaBurnId: null,
-    label: 'Reliability & operability',
-    description: 'Service reliability audit (shutdown, health checks, backpressure, job leasing, mixed-version deploys) — configurable: file issues (default) or implement fixes',
-    defaultFileIssues: true,
-    filing: filing({
-      slugPrefix: 'reliability-',
-      label: 'reliability-audit',
-      // Filed beside error-handling's call-level findings; the metric label
-      // `reliability` marks the system-level ones.
-      issueLabel: 'resilience',
-      labelDescription: 'Proposed from a reliability/operability audit',
-      noun: 'reliability finding(s)',
-    }),
-  },
-  privacy: {
-    quotaBurnId: null,
-    label: 'Privacy & data governance',
-    description: 'Personal/sensitive-data handling audit (exposure, minimization, retention, erasure) — configurable: file issues (default) or implement fixes',
-    defaultFileIssues: true,
-    filing: filing({
-      slugPrefix: 'privacy-',
-      label: 'privacy-audit',
-      issueLabel: 'privacy',
-      labelDescription: 'Proposed from a privacy/data-governance audit',
-      noun: 'privacy finding(s)',
-    }),
-  },
-  'cost-efficiency': {
-    quotaBurnId: null,
-    label: 'Cost & resource efficiency',
-    description: 'Metered-spend audit (paid API calls, unbounded scans, storage tiers, over-provisioning) — configurable: file issues (default) or implement fixes',
-    defaultFileIssues: true,
-    filing: filing({
-      slugPrefix: 'cost-',
-      label: 'cost-efficiency-audit',
-      // Spend is a performance-family concern; the metric label `cost` keeps
-      // it filterable apart from latency work.
-      issueLabel: 'performance',
-      labelDescription: 'Proposed from a cost/resource-efficiency audit',
-      noun: 'cost finding(s)',
-    }),
-  },
-  // Work that was started and never finished: stubs reachable from the UI,
-  // permanently disabled controls, settings nothing reads. Every other lens
-  // reads these as intentional (simplify would delete them, ui-bugs sees
-  // nothing "broken"), so they need an owner that decides finish/hide/remove.
   'feature-completeness': {
-    quotaBurnId: null,
     label: 'Feature completeness',
     description: 'Incomplete-feature audit (stubs reachable from the UI, disabled or "coming soon" controls, settings nothing reads, capabilities with no entry point) — configurable: file issues (default) or finish one',
     defaultFileIssues: true,
@@ -655,68 +211,21 @@ const legacyProfiles = Object.freeze({
       noun: 'incomplete-feature finding(s)',
     }),
   },
-  // Multi-step workflows judged from the server's in-progress states: each
-  // needs a visible resume/cancel/reattach exit after a failed follow-up step
-  // or a reload. A page walk exercises one click and never sees this.
-  'workflow-recovery': {
-    quotaBurnId: null,
-    label: 'Workflow recovery',
-    description: 'Workflow completion and recovery audit (stranded in-progress states, busy refusals without a handle, client follow-up steps that fail after the server succeeded) — configurable: file issues (default) or implement fixes',
-    defaultFileIssues: true,
-    filing: filing({
-      slugPrefix: 'workflow-',
-      label: 'workflow-recovery-audit',
-      issueLabel: 'bug',
-      labelDescription: 'Proposed from a workflow completion and recovery audit',
-      noun: 'workflow-recovery finding(s)',
-    }),
-  },
-  // Executes the upgrade path and a backup restore against scratch roots built
-  // from fixture shapes. `data-safety` reads migrations and backup code
-  // statically; the failures that reached installs (#6182, #12044, #12046,
-  // #12049) were visible only on the executed path.
-  'upgrade-rehearsal': {
-    quotaBurnId: null,
-    label: 'Upgrade & restore rehearsal',
-    description: 'Upgrade and restore rehearsal (runs migrations over synthetic older installs and a backup restore in scratch directories, never the live data) — configurable: file issues (default) or implement fixes',
-    defaultFileIssues: true,
-    filing: filing({
-      slugPrefix: 'upgrade-rehearsal-',
-      label: 'upgrade-rehearsal-audit',
-      // Same category as the static read; the metric label separates what an
-      // executed rehearsal found from what a read of the code found.
-      issueLabel: 'data-safety',
-      labelDescription: 'Proposed from an upgrade and restore rehearsal',
-      noun: 'upgrade-rehearsal finding(s)',
-    }),
-  },
-});
+};
 
-const consolidated = Object.fromEntries(Object.entries(CONSOLIDATED_AUDIT_DOMAINS).map(([id, domain]) => {
-  const members = domain.members.map(member => legacyProfiles[member]);
-  const requirement = members[0].requiresCapability;
-  return [id, {
-    label: domain.label, description: domain.mission, defaultFileIssues: true, quotaBurnId: null,
-    doWorkRequiresWorktree: members.some(member => member.doWorkRequiresWorktree),
-    requiresCapability: members.every(member => member.requiresCapability === requirement) ? requirement : null,
-    filing: filing({ slugPrefix: id + '-', label: id + '-audit', issueLabel: domain.issueLabel,
-      labelDescription: domain.label + ' audit', noun: domain.label + ' finding(s)' }),
-  }];
-}));
+const consolidated = Object.fromEntries(Object.entries(CONSOLIDATED_AUDIT_DOMAINS).map(([id, domain]) => [id, {
+  label: domain.label,
+  description: domain.mission,
+  defaultFileIssues: true,
+  doWorkRequiresWorktree: domain.doWorkRequiresWorktree,
+  requiresCapability: domain.requiresCapability,
+  filing: filing({ slugPrefix: id + '-', label: id + '-audit', issueLabel: domain.issueLabel,
+    labelDescription: domain.label + ' audit', noun: domain.label + ' finding(s)' }),
+}]));
 
-export const AUDIT_EXECUTION_PROFILES = Object.freeze({ ...legacyProfiles, ...consolidated });
-export const AUDIT_EXECUTION_TASK_TYPES = Object.freeze(Object.keys(AUDIT_EXECUTION_PROFILES));
-export const AUDIT_DEFINITIONS = Object.freeze(Object.fromEntries(
-  ACTIVE_AUDIT_DOMAIN_IDS.map(id => [id, AUDIT_EXECUTION_PROFILES[id]])
-));
-export const AUDIT_TASK_TYPES = new Set(ACTIVE_AUDIT_DOMAIN_IDS);
-
-/**
- * The same set as an ordered list, in catalog order. The Set answers
- * membership; the Quality page and the default schedule planner enumerate these
- * active domains. Input schemas accept AUDIT_EXECUTION_TASK_TYPES for older clients.
- */
-export const AUDIT_TASK_TYPE_LIST = Object.freeze([...AUDIT_TASK_TYPES]);
+export const AUDIT_DEFINITIONS = Object.freeze({ ...standaloneDomains, ...consolidated });
+export const AUDIT_TASK_TYPE_LIST = ACTIVE_AUDIT_DOMAIN_IDS;
+export const AUDIT_TASK_TYPES = new Set(AUDIT_TASK_TYPE_LIST);
 
 /**
  * Check if a task type is an audit task registered in the catalog.
@@ -725,7 +234,7 @@ export const AUDIT_TASK_TYPE_LIST = Object.freeze([...AUDIT_TASK_TYPES]);
  * @returns {boolean} True if registered in AUDIT_DEFINITIONS
  */
 export function isAuditTaskType(taskType) {
-  return Object.hasOwn(AUDIT_EXECUTION_PROFILES, normalizeAuditTaskType(taskType));
+  return Object.hasOwn(AUDIT_DEFINITIONS, auditDomainFor(taskType));
 }
 
 /**
@@ -735,7 +244,7 @@ export function isAuditTaskType(taskType) {
  * @returns {boolean} True if the audit defaults to filing issues rather than fixing
  */
 export function defaultFileIssuesFor(taskType) {
-  return AUDIT_EXECUTION_PROFILES[normalizeAuditTaskType(taskType)]?.defaultFileIssues === true;
+  return AUDIT_DEFINITIONS[auditDomainFor(taskType)]?.defaultFileIssues === true;
 }
 
 /**
@@ -746,7 +255,7 @@ export function defaultFileIssuesFor(taskType) {
  * @returns {boolean} True when live-checkout remediation is forbidden
  */
 export function auditDoWorkRequiresWorktree(taskType) {
-  return AUDIT_EXECUTION_PROFILES[normalizeAuditTaskType(taskType)]?.doWorkRequiresWorktree === true;
+  return AUDIT_DEFINITIONS[auditDomainFor(taskType)]?.doWorkRequiresWorktree === true;
 }
 
 /**
@@ -839,7 +348,7 @@ export const FILE_ISSUES_DELIVERY_SETTINGS = Object.freeze({
  * @returns {string|null} A member of AUDIT_REPO_CAPABILITIES, or null
  */
 export function auditCapabilityRequirement(taskType) {
-  return AUDIT_EXECUTION_PROFILES[normalizeAuditTaskType(taskType)]?.requiresCapability || null;
+  return AUDIT_DEFINITIONS[auditDomainFor(taskType)]?.requiresCapability || null;
 }
 
 /**
@@ -849,7 +358,7 @@ export function auditCapabilityRequirement(taskType) {
  * @returns {object|null} Filing preset metadata (slugPrefix, label, issueLabel, planItemBody, etc.) or null
  */
 export function getAuditFilingPreset(taskType) {
-  return AUDIT_EXECUTION_PROFILES[normalizeAuditTaskType(taskType)]?.filing || null;
+  return AUDIT_DEFINITIONS[auditDomainFor(taskType)]?.filing || null;
 }
 
 // Owner labels as `task-type=labels`: the lane metric label is what lane
@@ -988,34 +497,30 @@ export function applyDepfreeMode(promptTemplate, taskType, metadata) {
  * adding a slashdo scope without a scheduled owner or leaving stale scope
  * labels fails at the source boundary.
  */
-const profileScopes = Object.freeze({
+export const DO_BETTER_SCOPE_COVERAGE = Object.freeze({
   security: ['security', 'privacy'],
-  'code-quality': ['code-quality', 'observability'],
-  dry: ['simplify'],
-  architecture: ['module-hygiene', 'api-contract'],
-  'bugs-perf': ['app-bugs', 'better-runtime-safety', 'performance', 'error-handling', 'observability', 'reliability', 'cost-efficiency', 'workflow-recovery'],
-  'stack-specific': ['ui-lifecycle', 'accessibility', 'data-safety', 'upgrade-rehearsal', 'security', 'infrastructure', 'data-integrity'],
+  'code-quality': ['architecture-maintainability', 'reliability-error-handling'],
+  dry: ['code-simplification'],
+  architecture: ['architecture-maintainability', 'api-contract'],
+  'bugs-perf': ['ui-runtime-bugs', 'reliability-error-handling', 'performance-efficiency'],
+  'stack-specific': ['ui-runtime-bugs', 'accessibility', 'data-integrity-safety', 'security', 'infrastructure-environment'],
   deps: ['better-dependency-freedom', 'security'],
-  tests: ['test-coverage', 'better-test-quality', 'better-dev-environment'],
-  ux: ['ux', 'design', 'mobile-responsive', 'copy', 'feature-completeness'],
-  structural: ['module-hygiene', 'better-structural-drift', 'simplify', 'over-engineering'],
-  'cognitive-load': ['better-cognitive-load', 'better-complexity'],
+  tests: ['test-quality-coverage', 'infrastructure-environment'],
+  ux: ['design-usability', 'documentation-content', 'feature-completeness'],
+  structural: ['architecture-maintainability', 'code-simplification'],
+  'cognitive-load': ['code-simplification'],
 });
 
-export const DO_BETTER_SCOPE_COVERAGE = Object.freeze(Object.fromEntries(
-  Object.entries(profileScopes).map(([scope, profiles]) => [scope, [...new Set(profiles.map(auditDomainFor))]])
-));
 /** @deprecated Use DO_BETTER_SCOPE_COVERAGE. */
 export const DO_BETTER_LENS_COVERAGE = DO_BETTER_SCOPE_COVERAGE;
 
-/** Display metadata is derived, so upgrades never rewrite durable task IDs. */
+/** Schedule display metadata follows the active audit domain. */
 export function getAuditScheduleMetadata(taskType) {
-  const canonicalType = normalizeAuditTaskType(taskType);
+  const canonicalType = auditDomainFor(taskType);
   if (!isAuditTaskType(canonicalType)) return { displayName: taskType, defaultLabels: [] };
-  const scopes = Object.entries(Object.hasOwn(AUDIT_DEFINITIONS, canonicalType) ? DO_BETTER_SCOPE_COVERAGE : profileScopes)
+  const scopes = Object.entries(DO_BETTER_SCOPE_COVERAGE)
     .filter(([, types]) => types.includes(canonicalType)).map(([scope]) => scope);
   return {
-    ...(auditDomainFor(canonicalType) !== canonicalType && { legacyAuditDomain: auditDomainFor(canonicalType) }),
     displayName: canonicalType.startsWith('better-') ? canonicalType : `better-${canonicalType}`,
     defaultLabels: ['codebase-improvement', 'slashdo', ...scopes],
   };
@@ -1038,15 +543,8 @@ export function getAuditScheduleMetadata(taskType) {
  * could not tell whether "structural drift" was another scheduled task or just
  * a concept — which is the whole question the guidance exists to answer.
  *
- * Each entry lists only its IMMEDIATE predecessors; transitive order follows
- * from the chain (better-cognitive-load comes after simplify because it comes
- * after better-complexity, which comes after module-hygiene, which comes after
- * simplify). Keeping the lists to one or two entries is deliberate — a list
- * that restates the whole chain is unreadable and drifts on every edit.
- *
- * The safety audits (security, data-safety, better-runtime-safety,
- * error-handling) and the broad code-quality triage seed EMPTY: they are the
- * head of the order, and an exploitable defect outranks the sequence anyway.
+ * Each entry lists only its immediate predecessors. Urgent defects outrank
+ * the advisory sequence.
  */
 export const AUDIT_SUGGESTED_AFTER = Object.freeze({
   // Broad triage first, then coverage, so the tests written next are aimed at
@@ -1056,30 +554,7 @@ export const AUDIT_SUGGESTED_AFTER = Object.freeze({
   'infrastructure-environment': Object.freeze(['security', 'test-quality-coverage']),
   'performance-efficiency': Object.freeze(['code-simplification']),
   'documentation-content': Object.freeze(['performance-efficiency', 'design-usability']),
-  'test-coverage': Object.freeze(['code-quality']),
-  'better-test-quality': Object.freeze(['test-coverage']),
-  'better-dev-environment': Object.freeze(['better-test-quality']),
-  // The restructuring ladder: consolidate sources of truth, delete what is
-  // dead, then draw module boundaries, then reduce what survives.
-  simplify: Object.freeze(['better-structural-drift', 'feature-completeness']),
-  'over-engineering': Object.freeze(['simplify']),
-  'module-hygiene': Object.freeze(['simplify']),
-  'better-dependency-freedom': Object.freeze(['module-hygiene']),
-  'better-complexity': Object.freeze(['module-hygiene']),
-  'better-cognitive-load': Object.freeze(['better-complexity']),
-  // Measure and describe the shape that survived the ladder.
-  performance: Object.freeze(['better-complexity']),
-  documentation: Object.freeze(['performance', 'better-cognitive-load']),
-  // Service lenses: deployment config after the code-level security pass it
-  // shares findings with; system-level reliability after call-level failure
-  // handling; spend after latency, since a performance fix often moves cost.
-  infrastructure: Object.freeze(['security']),
-  reliability: Object.freeze(['error-handling']),
-  'workflow-recovery': Object.freeze(['error-handling']),
-  'cost-efficiency': Object.freeze(['performance']),
-  // The executed rehearsal follows the static read, so it spends its scratch
-  // boots on the hazards the read could not see.
-  'upgrade-rehearsal': Object.freeze(['data-safety']),
+  'better-dependency-freedom': Object.freeze(['architecture-maintainability']),
 });
 
 // WHY each audit sits where it does in the order above — rationale only. The
@@ -1092,31 +567,8 @@ export const AUDIT_RUN_GUIDANCE = Object.freeze({
   'infrastructure-environment': 'Review deployment and developer workflows after code security and test behavior are understood.',
   'performance-efficiency': 'Measure the cost of the code that remains after simplification.',
   'documentation-content': 'Document the verified performance characteristics and final user workflows.',
-  'better-test-quality': 'Assesses whether the tests you have detect the regressions the other audits found — so refactors that follow have a safety net.',
-  'better-dev-environment': 'Follows test quality, so it measures the host impact of the suite that will keep running rather than tests about to be deleted.',
-  'test-coverage': 'Adds the missing boundary coverage a refactor needs before it starts; avoid duplicating assertions a stronger test already makes.',
   security: 'Head of the order — an exploitable defect is fixed before any cleanup, whatever else is queued.',
-  'data-safety': 'Head of the order — data-loss and upgrade hazards are fixed before code moves around them.',
-  'better-runtime-safety': 'Head of the order — reachable runtime defects are fixed first; rerun once structure settles.',
-  'app-bugs': 'Head of the order — a bug a user can hit is fixed before cleanup moves the code around it.',
-  'error-handling': 'Head of the order — safe failure behavior is established before the same code is restructured.',
-  'better-structural-drift': 'Start of the restructuring ladder: consolidating sources of truth first means every later refactor targets the surviving implementation.',
-  simplify: 'Dead and duplicate code is removed before modules are reorganized, so the reorganization only moves live code.',
-  'over-engineering': 'Follows simplify, which removes code with no behavior; this removes process and validation machinery that works but costs more than the harm it prevents.',
-  'module-hygiene': 'Ownership and module boundaries are settled before function-level work, so complexity is measured on the final layout.',
   'better-dependency-freedom': 'Unnecessary dependencies go once ownership is clear, so no effort is spent polishing code a removal deletes.',
-  'better-complexity': 'Remeasures the functions that survived the ladder and reduces the costliest branching.',
-  'better-cognitive-load': 'Reviews names, abstraction levels, and readability of the shape everything else left behind.',
-  design: 'Inspect rendered composition after UX clarifies the task flow; preserve authored theme identity and deduplicate shared root causes with sibling UI audits.',
-  'code-quality': 'Broad triage that points at the focused audit worth running; avoid overlapping fixes in the same slice.',
-  documentation: 'Describes the final result, so it runs once behavior and structure have settled.',
-  performance: 'Measure a real bottleneck before optimizing, and remeasure after structural and complexity changes.',
-  'data-integrity': 'Head of the order — duplicated, dropped, or silently wrong data compounds with every run, so it is fixed before code moves around it.',
   privacy: 'Head of the order — exposed personal data is a harm already happening, whatever cleanup is queued.',
-  infrastructure: 'Follows the code-level security pass, so deployment findings (exposure, credentials, unpinned images) do not duplicate what it already filed.',
-  reliability: 'Follows call-level failure handling: once each call fails safely, look at how the service as a whole restarts, drains, and sheds load.',
-  'cost-efficiency': 'Follows performance, because a latency fix often changes what the path costs; measure spend on the shape that survived.',
   'feature-completeness': 'Runs before simplify sweeps unreferenced code, so an unfinished feature is decided (finish, hide, or remove) rather than silently deleted.',
-  'workflow-recovery': 'Follows call-level failure handling: once each step fails safely, check that a workflow stopped between steps still offers the user a way to finish or cancel it.',
-  'upgrade-rehearsal': 'Follows the static data-safety read: once the hazards a read can see are fixed, execute migrations and a backup restore against scratch installs to catch what only running them shows.',
 });

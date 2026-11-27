@@ -159,6 +159,7 @@ import {
   triageReviewQueueItem,
   getReviewItems,
   getReviewBriefing,
+  updateReviewItem,
 } from '../services/apiReview.js';
 import { getHarnessUpdateReference } from '../services/apiHarnesses.js';
 import {
@@ -169,7 +170,7 @@ import {
   reviewGitHubDeployment,
 } from '../services/apiGithub.js';
 import { addCosTask, getCosAgent, submitCosAgentFeedback } from '../services/apiAgents.js';
-import { createThread } from '../services/apiBrainThreads.js';
+import { createThread, getThread, updateThread } from '../services/apiBrainThreads.js';
 import socket from '../services/socket';
 import toast from '../components/ui/Toast';
 import { __resetActionQueue } from '../hooks/useActionQueue';
@@ -645,7 +646,141 @@ describe('Review Hub queue-card triage (#3282)', () => {
   });
 });
 
+describe.each([
+  ['resolve', resolveReviewQueueItem, 'Mark resolved', 'complete'],
+  ['triage', triageReviewQueueItem, 'Dismiss this recommendation', 'dismiss'],
+])('Review Hub %s navigation', (_kind, mutate, button, operation) => {
+  const action = {
+    ...TRIAGE_RECOMMENDATION,
+    operations: [{ id: 'complete', label: 'Mark resolved', available: true }],
+  };
+  const commitment = {
+    id: 'todo:example',
+    source: 'todo',
+    sourceRef: 'example',
+    title: 'Another commitment',
+    summary: 'Original notes',
+    operations: [],
+  };
+  const queue = (...items) => ({ items, sources: {}, partial: false });
+
+  async function startOperation() {
+    const mutation = Promise.withResolvers();
+    routerState.actionId = action.id;
+    getReviewQueue.mockResolvedValueOnce(queue(action, commitment));
+    mutate.mockReturnValueOnce(mutation.promise);
+    const page = render(<Review />);
+    const drawer = within(await screen.findByRole('dialog', { name: action.title }));
+    fireEvent.click(drawer.getByRole('button', { name: button }));
+    expect(mutate).toHaveBeenCalledWith(action.id, { operation });
+    return { ...page, mutation };
+  }
+
+  it('preserves a newer action and its unsaved draft when the mutation finishes', async () => {
+    const { rerender, mutation } = await startOperation();
+    routerState.actionId = commitment.id;
+    rerender(<Review />);
+    const drawer = within(await screen.findByRole('dialog', { name: commitment.title }));
+    fireEvent.change(drawer.getByLabelText('Notes'), { target: { value: 'Unsaved notes' } });
+
+    getReviewQueue.mockResolvedValueOnce(queue(commitment));
+    await act(async () => mutation.resolve({}));
+
+    expect(getReviewQueue).toHaveBeenCalledTimes(2);
+    expect(screen.queryByText(action.title)).not.toBeInTheDocument();
+    expect(routerState.navigate).not.toHaveBeenCalled();
+    expect(drawer.getByLabelText('Notes')).toHaveValue('Unsaved notes');
+  });
+
+  it('preserves a newer view of the same action when the queue refresh finishes', async () => {
+    const { rerender, mutation } = await startOperation();
+    const refresh = Promise.withResolvers();
+    getReviewQueue.mockReturnValueOnce(refresh.promise);
+    await act(async () => mutation.resolve({}));
+    expect(getReviewQueue).toHaveBeenLastCalledWith({ view: 'today', silent: true });
+
+    routerState.searchParams = new URLSearchParams('view=all');
+    getReviewQueue.mockResolvedValueOnce(queue(action, commitment));
+    rerender(<Review />);
+    await screen.findByRole('dialog', { name: action.title });
+    await act(async () => refresh.resolve(queue(commitment)));
+
+    expect(getReviewQueue).toHaveBeenCalledTimes(3);
+    expect(getReviewQueue).toHaveBeenLastCalledWith({ view: 'all', silent: true });
+    expect(routerState.navigate).not.toHaveBeenCalled();
+    expect(screen.getByRole('dialog', { name: action.title })).toBeInTheDocument();
+  });
+
+  it('closes the originating route even when the refreshed queue removes its action', async () => {
+    const { mutation } = await startOperation();
+    getReviewQueue.mockResolvedValueOnce(queue(commitment));
+    await act(async () => mutation.resolve({}));
+
+    expect(getReviewQueue).toHaveBeenCalledTimes(2);
+    expect(screen.queryByRole('dialog', { name: action.title })).not.toBeInTheDocument();
+    expect(routerState.navigate).toHaveBeenCalledExactlyOnceWith('/review?view=today', { replace: true });
+  });
+});
+
 describe('Actions commitments workspace (#7739)', () => {
+  it.each([
+    ['threads', updateThread, 'notes', ['Local status', 'Priority', 'Next action', 'Due date']],
+    ['todo', updateReviewItem, 'description', []],
+  ])('locks %s commitment fields during saves and preserves the draft on failure', async (source, update, notesKey, extraFields) => {
+    const item = {
+      id: `${source}:example`,
+      source,
+      sourceRef: 'example',
+      title: 'Example commitment',
+      summary: 'Original notes',
+      operations: [],
+    };
+    const fields = ['Title', 'Notes', ...extraFields];
+    const detail = Promise.withResolvers();
+    if (source === 'threads') {
+      getThread.mockReturnValueOnce(detail.promise).mockResolvedValueOnce({ id: item.sourceRef, title: item.title, notes: item.summary });
+    }
+    const queue = { partial: false, sources: {}, items: [item] };
+    getReviewQueue.mockResolvedValueOnce(queue);
+    routerState.actionId = item.id;
+
+    render(<Review />);
+    const drawer = within(await screen.findByRole('dialog'));
+    if (source === 'threads') {
+      expect(drawer.getByLabelText('Notes')).toBeDisabled();
+      await act(async () => detail.reject(new Error('Example detail read failed')));
+      expect(drawer.getByRole('alert')).toHaveTextContent('Commitment details could not be loaded');
+      expect(drawer.getByRole('button', { name: 'Save changes' })).toBeDisabled();
+      fireEvent.click(drawer.getByRole('button', { name: 'Retry' }));
+    }
+    await waitFor(() => expect(drawer.getByLabelText('Notes')).toHaveValue(item.summary));
+    fireEvent.change(drawer.getByLabelText('Notes'), { target: { value: 'Draft notes' } });
+
+    const failed = Promise.withResolvers();
+    const successful = Promise.withResolvers();
+    update.mockReturnValueOnce(failed.promise).mockReturnValueOnce(successful.promise);
+    fireEvent.click(drawer.getByRole('button', { name: 'Save changes' }));
+    expect(drawer.getByRole('button', { name: 'Saving…' })).toBeDisabled();
+    for (const field of fields) expect(drawer.getByLabelText(field)).toBeDisabled();
+
+    await act(async () => failed.reject(new Error('Example save failed')));
+    expect(drawer.getByLabelText('Notes')).toHaveValue('Draft notes');
+    for (const field of fields) expect(drawer.getByLabelText(field)).toBeEnabled();
+
+    fireEvent.click(drawer.getByRole('button', { name: 'Save changes' }));
+    expect(update).toHaveBeenLastCalledWith(
+      item.sourceRef,
+      expect.objectContaining({ [notesKey]: 'Draft notes' }),
+      { silent: true },
+    );
+    expect(drawer.getByLabelText('Notes')).toBeDisabled();
+    getReviewQueue.mockResolvedValueOnce(queue);
+    await act(async () => successful.resolve({ title: item.title, [notesKey]: 'Saved notes' }));
+    expect(drawer.getByLabelText('Notes')).toHaveValue('Saved notes');
+    for (const field of fields) expect(drawer.getByLabelText(field)).toBeEnabled();
+    expect(drawer.getByRole('button', { name: 'Save changes' })).toBeEnabled();
+  });
+
   it('keeps stored-item filters and bulk actions out of the canonical queue header', async () => {
     const canonicalItem = {
       id: 'health:required-example', source: 'health', sourceLabel: 'Health anomalies',
@@ -778,6 +913,122 @@ describe('Actions commitments workspace (#7739)', () => {
     await waitFor(() => expect(routerState.navigate).toHaveBeenCalledWith(
       '/review/threads%3Athread-1?view=today',
     ));
+  });
+});
+
+describe('Review thread drawer', () => {
+  const firstThread = { id: 'first-thread', title: 'First thread', status: 'waiting', priority: 'high', nextAction: 'Review the example', notes: 'Keep these notes' };
+  const secondThread = { id: 'second-thread', title: 'Second thread', status: 'open', priority: 'normal', nextAction: 'Check the result', notes: 'Second thread notes' };
+  const queueItem = (thread) => ({ id: `threads:${thread.id}`, source: 'threads', sourceRef: thread.id, title: thread.title, operations: [] });
+  const showThreads = (threads) => {
+    const items = threads.map(queueItem);
+    const queue = { items, sources: {}, partial: false };
+    getReviewQueue.mockResolvedValueOnce(queue);
+    routerState.actionId = items[0].id;
+    return queue;
+  };
+
+  it('blocks editing and saving until a failed detail request is retried successfully', async () => {
+    const firstRead = Promise.withResolvers();
+    const retryRead = Promise.withResolvers();
+    const dueAt = new Date(2026, 10, 26).toISOString();
+    const full = { ...firstThread, dueAt };
+    const queue = showThreads([firstThread]);
+    getThread.mockReturnValueOnce(firstRead.promise).mockReturnValueOnce(retryRead.promise);
+    getReviewQueue.mockResolvedValueOnce(queue);
+    updateThread.mockResolvedValueOnce({ ...full, title: 'Updated thread' });
+    render(<Review />);
+
+    const drawer = within(await screen.findByRole('dialog', { name: firstThread.title }));
+    const save = drawer.getByRole('button', { name: 'Save changes' });
+    const expectEditingBlocked = () => {
+      for (const name of ['Title', 'Local status', 'Priority', 'Next action', 'Due date', 'Notes']) {
+        expect(drawer.getByLabelText(name)).toBeDisabled();
+      }
+      expect(save).toBeDisabled();
+      fireEvent.click(save);
+      expect(updateThread).not.toHaveBeenCalled();
+    };
+
+    expect(drawer.getByRole('status')).toHaveTextContent('Loading thread details');
+    expectEditingBlocked();
+    await act(async () => firstRead.reject(new Error('Read failed')));
+    expect(drawer.queryByRole('status')).not.toBeInTheDocument();
+    expect(drawer.getByRole('alert')).toHaveTextContent('Commitment details could not be loaded');
+    expectEditingBlocked();
+
+    fireEvent.click(drawer.getByRole('button', { name: 'Retry' }));
+    expect(getThread).toHaveBeenCalledTimes(2);
+    expect(getThread).toHaveBeenLastCalledWith(firstThread.id, { silent: true });
+    expect(drawer.queryByRole('alert')).not.toBeInTheDocument();
+    expect(drawer.getByRole('status')).toHaveTextContent('Loading thread details');
+    expectEditingBlocked();
+
+    await act(async () => retryRead.resolve(full));
+    expect(drawer.queryByRole('status')).not.toBeInTheDocument();
+    expect(drawer.getByLabelText('Notes')).toHaveValue(full.notes);
+    expect(save).toBeEnabled();
+    fireEvent.change(drawer.getByLabelText('Title'), { target: { value: 'Updated thread' } });
+    fireEvent.click(save);
+    await waitFor(() => expect(save).toBeEnabled());
+    expect(updateThread).toHaveBeenCalledExactlyOnceWith(firstThread.id, {
+      title: 'Updated thread',
+      status: full.status,
+      priority: full.priority,
+      nextAction: full.nextAction,
+      dueAt,
+      notes: full.notes,
+    }, { silent: true });
+  });
+
+  it('keeps a new drawer editable during an earlier save and ignores the earlier completion', async () => {
+    const firstSave = Promise.withResolvers();
+    const secondSave = Promise.withResolvers();
+    const queue = showThreads([firstThread, secondThread]);
+    getThread.mockResolvedValueOnce(firstThread).mockResolvedValueOnce(secondThread);
+    getReviewQueue.mockResolvedValueOnce(queue);
+    updateThread.mockReturnValueOnce(firstSave.promise).mockReturnValueOnce(secondSave.promise);
+    const { rerender } = render(<Review />);
+
+    const first = within(await screen.findByRole('dialog', { name: firstThread.title }));
+    await waitFor(() => expect(first.getByLabelText('Notes')).toHaveValue(firstThread.notes));
+    fireEvent.click(first.getByRole('button', { name: 'Save changes' }));
+
+    routerState.actionId = queueItem(secondThread).id;
+    rerender(<Review />);
+    const second = within(await screen.findByRole('dialog', { name: secondThread.title }));
+    await waitFor(() => expect(second.getByLabelText('Notes')).toHaveValue(secondThread.notes));
+    fireEvent.change(second.getByLabelText('Notes'), { target: { value: 'Second thread edit' } });
+    fireEvent.click(second.getByRole('button', { name: 'Save changes' }));
+    expect(updateThread.mock.calls.map(([id]) => id)).toEqual([firstThread.id, secondThread.id]);
+
+    await act(async () => firstSave.resolve({ ...firstThread, notes: 'First saved notes' }));
+    expect(second.getByLabelText('Notes')).toHaveValue('Second thread edit');
+    expect(second.getByRole('button', { name: 'Saving…' })).toBeDisabled();
+    expect(getReviewQueue).toHaveBeenCalledTimes(1);
+
+    await act(async () => secondSave.resolve({ ...secondThread, notes: 'Second saved notes' }));
+    expect(second.getByLabelText('Notes')).toHaveValue('Second saved notes');
+    expect(second.getByRole('button', { name: 'Save changes' })).toBeEnabled();
+    expect(getReviewQueue).toHaveBeenCalledTimes(2);
+  });
+
+  it('discards a thread detail response that arrives after switching records', async () => {
+    const firstRead = Promise.withResolvers();
+    showThreads([firstThread, secondThread]);
+    getThread.mockReturnValueOnce(firstRead.promise).mockResolvedValueOnce(secondThread);
+    const { rerender } = render(<Review />);
+    const first = within(await screen.findByRole('dialog', { name: firstThread.title }));
+    expect(first.getByRole('status')).toHaveTextContent('Loading thread details');
+
+    routerState.actionId = queueItem(secondThread).id;
+    rerender(<Review />);
+    const second = within(await screen.findByRole('dialog', { name: secondThread.title }));
+    await waitFor(() => expect(second.getByLabelText('Notes')).toHaveValue(secondThread.notes));
+
+    await act(async () => firstRead.resolve(firstThread));
+    expect(second.getByLabelText('Notes')).toHaveValue(secondThread.notes);
+    expect(second.getByRole('button', { name: 'Save changes' })).toBeEnabled();
   });
 });
 

@@ -48,8 +48,45 @@ export const HOST_CONTROL_GET_ROUTES = Object.freeze([
   'GET /api/instances/peers/tailcat/devices',
   // Progress of a forge sign-in the operator started on the host.
   'GET /api/apps/:id/forge-auth/refresh/:jobId/events',
+  // Reads files and planning metadata from managed host repositories (#19495).
+  'GET /api/apps/:id/documents',
+  'GET /api/apps/:id/documents/*docPath',
+  'GET /api/apps/:id/vite-host-check',
+  'GET /api/cos/gsd/projects',
+  'GET /api/cos/gsd/projects/:appId',
+  'GET /api/cos/gsd/projects/:appId/phases',
+  'GET /api/cos/gsd/projects/:appId/documents/:docName',
+  // Runs host process, forge and runtime probes (#19495).
+  'GET /api/commands/processes',
+  'GET /api/github/accounts/:id/status',
+  'GET /api/apps/:id/issues',
+  'GET /api/apps/:id/pull-requests',
+  'GET /api/apps/:id/work-items',
+  'GET /api/apps/:id/lane-health',
+  'GET /api/devtools/video-download/yt-dlp',
+  'GET /api/midi-runtime/install',
+  'GET /api/music/setup/runtime-install',
+  'GET /api/remote-desktop/status',
+  // Materializes generated HTML on demand and returns its host path.
+  'GET /api/html-pages/runs/:id/pages/:index/path',
   // Raw backup archives export private records and credentials (#8772).
   'GET /api/backup/snapshots/:snapshotId/download',
+  // Household records, subject-scoped counts and account links expose private data.
+  'GET /api/privacy/subjects',
+  'GET /api/privacy/subjects/:id',
+  'GET /api/privacy/subjects/:id/consents',
+  'GET /api/privacy/status',
+  'GET /api/privacy/vault',
+  'GET /api/privacy/vault/:id',
+  'GET /api/privacy/logins',
+  'GET /api/privacy/orgs',
+  'GET /api/privacy/orgs/:id',
+  'GET /api/privacy/orgs/:id/holdings',
+  'GET /api/privacy/social-account-links',
+  'GET /api/privacy/changes',
+  'GET /api/privacy/changes/:id',
+  'GET /api/privacy/broker-cases',
+  'GET /api/privacy/scan/status',
   // Broker evidence and digest search URLs reveal sealed identity data (#18851).
   'GET /api/privacy/broker-cases/:id/evidence',
   'GET /api/privacy/optout/digest',
@@ -57,6 +94,15 @@ export const HOST_CONTROL_GET_ROUTES = Object.freeze([
   'GET /api/data/cos/storage/recording/:date/:id',
   // The directory picker lists any readable host directory, not a PortOS record.
   'GET /api/scaffold/directories',
+  // Obsidian vault reads scan arbitrary host directories and return note contents (#19729).
+  'GET /api/notes/detect',
+  'GET /api/notes/vaults',
+  'GET /api/notes/vaults/:id/scan',
+  'GET /api/notes/vaults/:id/note',
+  'GET /api/notes/vaults/:id/search',
+  'GET /api/notes/vaults/:id/tags',
+  'GET /api/notes/vaults/:id/folders',
+  'GET /api/notes/vaults/:id/graph',
   // Status of a Topaz upscale, part of the gated host upscale workflow (#11076).
   'GET /api/video-gen/upscale/topaz/jobs/:jobId/status',
   // DCP packaging progress, reports and the package's host location.
@@ -72,9 +118,10 @@ export const HOST_CONTROL_GET_ROUTES = Object.freeze([
   // is operator work (#12488, #18224); browser and harness update checks belong
   // to the gated installers (#8798).
   'GET /api/browser/update-preflight',
-  'GET /api/browser/pages',
   'GET /api/browser/downloads/:name',
   'GET /api/browser/logs',
+  // Browser configuration includes private host filesystem paths.
+  'GET /api/browser/config',
   'GET /api/harnesses/update-reference',
   // The private FableLoom package an export produced.
   'GET /api/fableloom/:id/export/:jobId/download',
@@ -96,12 +143,16 @@ export const HOST_CONTROL_GET_ROUTES = Object.freeze([
   'GET /api/apps/:id/logs',
   // Runs `brew update --quiet` and host runtime probes on `fresh=1` or cache miss (#18224).
   'GET /api/update/software/homebrew',
+  // Enumerates host processes and exposes full command lines and agent prompts (#19170).
+  'GET /api/agents',
+  'GET /api/agents/:pid',
   // Host runtime probes and repository inspection (#19025).
   'GET /api/git/submodules/status',
   'GET /api/git/:appId',
   'GET /api/rigging/readiness',
   'GET /api/image-gen/setup/moss-install',
   'GET /api/voice/facetime/status',
+  'GET /api/voice/avatar/status',
   'GET /api/update/software',
   'GET /api/update/node-runtime',
   'GET /api/docker-containment/status',

@@ -23,6 +23,7 @@
  * command to run, never run from here.
  */
 
+import { emitToOperatorsOn } from './socketIo.js';
 import { existsSync } from 'fs';
 import { readdir, readFile } from 'fs/promises';
 import { homedir, userInfo } from 'os';
@@ -192,8 +193,8 @@ async function readPackageVersion(packageJsonPath) {
   }
 }
 
-/** The pm2 PortOS ships (its pinned root dependency). */
-const shippedPm2Version = () => readPackageVersion(join(PATHS.root, 'node_modules', 'pm2', 'package.json'));
+/** The pm2 PortOS ships (its pinned server dependency). */
+const shippedPm2Version = () => readPackageVersion(join(PATHS.root, 'server', 'node_modules', 'pm2', 'package.json'));
 
 /**
  * npm's global prefix for a node binary. Homebrew runs node from its Cellar
@@ -473,7 +474,7 @@ function launchJob(kind, io, work, { restart = true } = {}) {
     throw new ServerError('A Node or pm2 update is already running.', { status: 409, code: 'NODE_RUNTIME_BUSY' });
   }
   currentJob = { kind, startedAt: new Date().toISOString() };
-  const emit = (step, status, message) => io?.emit('portos:update:step', { step, status, message, timestamp: Date.now() });
+  const emit = (step, status, message) => emitToOperatorsOn(io, 'portos:update:step', { step, status, message, timestamp: Date.now() });
   // Runs past the response: nvm downloads take minutes, and the restart this
   // ends in outlives the request anyway. Progress and failure go out on the
   // same `portos:update:*` channel the Update tab already renders.
@@ -481,13 +482,13 @@ function launchJob(kind, io, work, { restart = true } = {}) {
     .then(() => work(emit))
     .catch((error) => {
       console.error(`❌ ${kind} failed: ${error.message}`);
-      io?.emit('portos:update:error', { message: error.message, step: kind });
+      emitToOperatorsOn(io, 'portos:update:error', { message: error.message, step: kind });
     })
     .finally(() => {
       currentJob = null;
       runtimeUpdateEvents.emit('changed');
       // After the job slot clears, so a status read on this event sees it finished.
-      io?.emit('portos:node-runtime:changed', { reason: 'job-finished', kind });
+      emitToOperatorsOn(io, 'portos:node-runtime:changed', { reason: 'job-finished', kind });
     });
   // `restart: false` tells the Update tab not to wait for a restart.
   return { started: true, restart };
@@ -546,7 +547,7 @@ export async function startPm2Update({ io, acknowledgeBusy = false }) {
     if (daemonStale) {
       await pinAndRestart({ io, emit, nodeBinary: null, acknowledgeBusy });
     } else {
-      io?.emit('portos:node-runtime:changed', { reason: 'pm2-cli' });
+      emitToOperatorsOn(io, 'portos:node-runtime:changed', { reason: 'pm2-cli' });
     }
   }, { restart: daemonStale });
 }

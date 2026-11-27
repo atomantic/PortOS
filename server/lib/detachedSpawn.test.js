@@ -15,7 +15,7 @@ import { pathToFileURL } from 'url';
 import { pinPlatform } from './testHelper.js';
 import { quoteForShell } from './shellCd.js';
 import { killProcessTree } from './bufferedSpawn.js';
-import { spawnDetached, reapDetached, reapAndCleanDetachedDirs, reattachDetached, isReattachable, isDetachedRunning, __detachedSpawnTesting } from './detachedSpawn.js';
+import { spawnDetached, reapDetached, reapAndCleanDetachedDirs, reattachDetached, isDetachedRunning, __detachedSpawnTesting } from './detachedSpawn.js';
 import { isProcessAlive } from '../test/processAlive.js';
 
 // Only a win32 cancel reaches killProcessTree, so stubbing it is inert for
@@ -1141,14 +1141,13 @@ describe('spawnDetached', () => {
     // any run to the cap costs 5s of wall-clock. So this pins the shape, in the
     // spirit of lib/importScoping.test.js, rather than adding a 5s sleep.
     it('bounds both poll loops on WALL-CLOCK deadlines, not accumulated poll ticks', async () => {
-      const raw = await readFile(
-        new URL('./detachedSpawn.js', import.meta.url),
-        'utf8',
-      );
+      const implementations = await Promise.all(['detachedSpawn.js', 'detachedLauncher.js'].map(
+        (name) => readFile(new URL(name, import.meta.url), 'utf8'),
+      ));
       // Scan CODE only. The comments above both loops name the shape they
       // replaced — `waited += pollMs` — so a scan of the raw file matches the
       // very prose explaining the fix and fails on a correct tree.
-      const source = raw
+      const source = implementations.join('\n')
         .replace(/\/\*[\s\S]*?\*\//g, '')
         .replace(/(^|[^:])\/\/[^\n]*/g, '$1');
       // Positive control: the loops this guards still exist to be guarded.
@@ -1161,7 +1160,7 @@ describe('spawnDetached', () => {
       // pollMs, so the real cap stretches by the oversubscription factor.
       expect(
         /waited\s*\+=\s*pollMs/.test(source),
-        'detachedSpawn.js is accumulating poll ticks again (`waited += pollMs`). That '
+        'A detached process loop is accumulating poll ticks again (`waited += pollMs`). That '
           + 'measures the loop\'s own cadence, not elapsed time, so REAP_GRACE_MS and '
           + 'pidTimeoutMs both stretch on a loaded machine — and the hard cap stops '
           + 'bounding boot, which is the only reason it exists (#7951). Compare '
@@ -1246,33 +1245,33 @@ describe('spawnDetached', () => {
   });
 });
 
-describe('isReattachable', () => {
-  it.runIf(IS_POSIX)('is true while the recorded child is still alive', async () => {
+describe('reattachDetached eligibility', () => {
+  it.runIf(IS_POSIX)('returns a handle while the recorded child is still alive', async () => {
     const controlDir = await tmpControlDir();
     const handle = await spawnDetached('sh', ['-c', 'sleep 30'], { controlDir, pollMs: 25 });
-    expect(await isReattachable(controlDir)).toBe(true);
+    expect(await reattachDetached(controlDir, { deferTail: true })).toMatchObject({ pid: handle.pid });
     handle.kill('SIGKILL');
     await onClose(handle);
   });
 
-  it.runIf(IS_POSIX)('is true after the child exited (RESULT line still unprocessed on disk)', async () => {
+  it.runIf(IS_POSIX)('returns a replay handle after the child exited (RESULT line still unprocessed on disk)', async () => {
     const controlDir = await tmpControlDir();
     const handle = await spawnDetached('sh', ['-c', 'printf "x\\n"; exit 0'], { controlDir, pollMs: 25 });
     await onClose(handle);
-    expect(await isReattachable(controlDir)).toBe(true);
+    expect(await reattachDetached(controlDir, { deferTail: true })).toMatchObject({ pid: handle.pid });
   });
 
-  it('is false when no pid was ever recorded', async () => {
+  it('returns null when no pid was ever recorded', async () => {
     const controlDir = await tmpControlDir();
-    expect(await isReattachable(controlDir)).toBe(false);
+    expect(await reattachDetached(controlDir)).toBeNull();
   });
 
-  it('is false for a dead pid with no exit sentinel (killed mid-run)', async () => {
+  it('returns null for a dead pid with no exit sentinel (killed mid-run)', async () => {
     const controlDir = await tmpControlDir();
     // A reparented-then-tree-killed orphan: pid recorded, never alive again,
     // and the supervisor never got to write `exit`. PID 2^31-1 is never live.
     await writeFile(join(controlDir, 'pid'), '2147483647');
-    expect(await isReattachable(controlDir)).toBe(false);
+    expect(await reattachDetached(controlDir)).toBeNull();
   });
 });
 

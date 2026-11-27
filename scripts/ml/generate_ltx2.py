@@ -138,22 +138,13 @@ def _resolve_pipeline(*names: str, method: str | None = None):
     )
 
 
-def _first_module_with_attr(attr: str, *modnames: str):
-    """Return the first importable module exposing `attr`, or None.
-
-    Best-effort sibling to _resolve_pipeline for module-level symbols: the
-    extend denoise loop lives in `extend` on pre-rename pins and in `retake` on
-    v0.14.x. Unlike _resolve_pipeline this returns None instead of raising —
-    callers treat a miss as "feature unavailable at this pin" and degrade.
-    """
-    for modname in modnames:
+def _available_modules(*loaders):
+    """Yield successfully imported modules in preference order."""
+    for load_module in loaders:
         try:
-            mod = importlib.import_module(modname)
+            yield load_module()
         except ImportError:
             continue
-        if hasattr(mod, attr):
-            return mod
-    return None
 
 
 def _rate_kwarg_name(func) -> str | None:
@@ -269,11 +260,13 @@ def _install_guided_denoise_teacache_patches() -> None:
     except Exception:
         return
 
-    extend_mod = _first_module_with_attr(
-        "guided_denoise_loop",
-        "ltx_pipelines_mlx.extend",
-        "ltx_pipelines_mlx.retake",
+    # Pre-rename pins carry the denoise loop in extend; newer pins moved it
+    # into retake. An importable module can still lack the loop.
+    extend_modules = _available_modules(
+        lambda: importlib.import_module("ltx_pipelines_mlx.extend"),
+        lambda: importlib.import_module("ltx_pipelines_mlx.retake"),
     )
+    extend_mod = next((mod for mod in extend_modules if hasattr(mod, "guided_denoise_loop")), None)
     if extend_mod is None:
         return
 
@@ -534,20 +527,16 @@ def configure_negative_prompt(negative_prompt: str) -> None:
     if not negative_prompt:
         return
 
-    _candidates = [
-        ("ltx_pipelines_mlx", "ti2vid_one_stage"),
-        ("ltx_pipelines_mlx", "_base"),
-        ("ltx_pipelines_mlx.utils", "constants"),
-        ("ltx_core_mlx.utils", "constants"),
-    ]
+    candidates = _available_modules(
+        lambda: importlib.import_module("ltx_pipelines_mlx.ti2vid_one_stage"),
+        lambda: importlib.import_module("ltx_pipelines_mlx._base"),
+        lambda: importlib.import_module("ltx_pipelines_mlx.utils.constants"),
+        lambda: importlib.import_module("ltx_core_mlx.utils.constants"),
+    )
     patched = 0
-    for pkg, mod in _candidates:
-        try:
-            m = importlib.import_module(f"{pkg}.{mod}")
-        except ImportError:
-            continue
-        if hasattr(m, "DEFAULT_NEGATIVE_PROMPT"):
-            m.DEFAULT_NEGATIVE_PROMPT = negative_prompt
+    for module in candidates:
+        if hasattr(module, "DEFAULT_NEGATIVE_PROMPT"):
+            module.DEFAULT_NEGATIVE_PROMPT = negative_prompt
             patched += 1
 
     if patched:

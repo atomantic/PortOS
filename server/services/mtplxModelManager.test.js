@@ -1,5 +1,6 @@
 import { describe, it, expect, beforeEach, vi } from 'vitest';
 import {
+  cancelMtplxModelPull,
   isMtplxRepoId,
   parseMtplxPullFrame,
   pullMtplxModel,
@@ -166,6 +167,35 @@ describe('mtplxModelManager', () => {
       expect(frames.at(-1)).toMatchObject({ event: 'error', message: 'disk full' });
     });
 
+    it('cancels the process group, emits one terminal frame and releases the transfer slot', async () => {
+      const commandResult = Promise.withResolvers();
+      const commandStarted = Promise.withResolvers();
+      const run = vi.spyOn(streamingSpawn, 'runStreamingCommand').mockImplementationOnce((_binary, _args, _onLine, options) => {
+        commandStarted.resolve(options);
+        return commandResult.promise;
+      });
+      const frames = [];
+      const model = 'Example/Qwen-MTP';
+      expect(cancelMtplxModelPull()).toBe(false);
+      const pull = pullMtplxModel({ model, onProgress: (frame) => frames.push(frame) });
+      const options = await commandStarted.promise;
+      expect(options.processGroup).toBe(true);
+      expect(options.isCancelled()).toBe(false);
+      await expect(pullMtplxModel()).rejects.toMatchObject({ status: 409, code: 'MTPLX_PULL_BUSY' });
+
+      expect(cancelMtplxModelPull()).toBe(true);
+      expect(options.isCancelled()).toBe(true);
+      expect(cancelMtplxModelPull()).toBe(false);
+      commandResult.resolve({ success: false, error: 'cancelled' });
+      await expect(pull).resolves.toEqual({ success: false, cancelled: true, model });
+      expect(frames.map(({ event }) => event)).toEqual(['start', 'cancelled']);
+      expect(modelManifest.recordModelInstall).not.toHaveBeenCalled();
+      expect(cancelMtplxModelPull()).toBe(false);
+
+      run.mockResolvedValueOnce({ success: true });
+      await expect(pullMtplxModel()).resolves.toMatchObject({ success: true });
+    });
+
     it('forwards progress lines but swallows upstream\'s own terminal frames', async () => {
       vi.spyOn(streamingSpawn, 'runStreamingCommand').mockImplementation(async (_cmd, _args, onLine) => {
         onLine(JSON.stringify({ event: 'progress', size_bytes: 5, total_bytes: 10 }));
@@ -229,14 +259,13 @@ describe('mtplxModelManager', () => {
       vi.spyOn(bufferedSpawnModule, 'bufferedSpawn').mockResolvedValue({
         success: false, code: 1, stdout: '', stderr: 'error: model not cached', timedOut: false,
       });
-      await expect(removeMtplxModel('Example/Qwen-MTP')).rejects.toThrow(/error: model not cached/);
+      await expect(removeMtplxModel('Example/Qwen-MTP')).rejects.toMatchObject({ status: 502, message: expect.stringMatching(/error: model not cached/) });
     });
   });
   // `mtplx pull` writes to MTPLX's own store (`~/.mtplx/models/<org>--<name>`), so a
   // checkpoint it fetches is recorded under the `mtplx` backend, the same identity
-  // the store scan gives it. Recording lives in this manager because BOTH
-  // entry points reach it — the model-pull route and the readiness checklist's
-  // default-checkpoint fetch — and neither would have recorded on its own.
+  // the store scan gives it. Both the model-pull route and the readiness
+  // checklist use the same registration step.
   describe('model manifest', () => {
     it('records a named pull under its MTPLX store directory name', async () => {
       vi.spyOn(streamingSpawn, 'runStreamingCommand').mockResolvedValue({ success: true });
@@ -251,10 +280,13 @@ describe('mtplxModelManager', () => {
       }));
     });
 
-    it('records what actually landed when the default checkpoint was pulled by no name', async () => {
-      vi.spyOn(streamingSpawn, 'runStreamingCommand').mockResolvedValue({ success: true });
+    it('records the reported default checkpoint when other checkpoints are already cached', async () => {
+      vi.spyOn(streamingSpawn, 'runStreamingCommand').mockImplementation(async (_binary, _args, onLine) => {
+        onLine(JSON.stringify({ event: 'result', repo_id: 'Example/Default-MTP' }));
+        return { success: true };
+      });
       mtplxModels.listMtplxCachedModels.mockResolvedValue({
-        models: [{ repo_id: 'Example/Default-MTP' }], error: null,
+        models: [{ repo_id: 'Example/Default-MTP' }, { repo_id: 'Example/Existing-MTP' }], error: null,
       });
 
       await pullMtplxModel({});
@@ -262,6 +294,7 @@ describe('mtplxModelManager', () => {
       expect(modelManifest.recordModelInstall).toHaveBeenCalledWith(expect.objectContaining({
         id: 'mtplx:Example--Default-MTP',
       }));
+      expect(modelManifest.recordModelInstall).toHaveBeenCalledTimes(1);
     });
 
     it('records nothing when the pull failed', async () => {

@@ -37,6 +37,7 @@ import './services/serviceLoaders.js';
 import './services/localModelObservations.js';
 import { initSocket } from './services/socket.js';
 import { remoteDesktopBroker } from './services/remoteDesktop.js';
+import { revokeAllHostedSessions } from './services/fableLoom/hostedSession.js';
 import { authEvents } from './services/auth.js';
 import { mountEidoverseOnServer } from './services/eidoverseHost.js';
 import { closeEidoverseProxySockets } from './services/eidoverseProxy.js';
@@ -54,7 +55,6 @@ import { createPortOSPromptsRoutes } from './routes/prompts.js';
 import { startNativeUsageRefresh } from './services/nativeUsageHistory.js';
 
 const providerFallbackRoutes = createLazyRouter(() => import('./routes/providerFallbacks.js'));
-const alertsRoutes = createLazyRouter(() => import('./routes/alerts.js'));
 const systemCapabilitiesRoutes = createLazyRouter(() => import('./routes/systemCapabilities.js'));
 const systemResourcesRoutes = createLazyRouter(() => import('./routes/systemResources.js'));
 const capabilitiesRoutes = createLazyRouter(() => import('./routes/capabilities.js'));
@@ -62,7 +62,6 @@ const agentContextMcpRoutes = createLazyRouter(() => import('./routes/agentConte
 const appsRoutes = createLazyRouter(() => import('./routes/apps/index.js'));
 const workspaceContextsRoutes = createLazyRouter(() => import('./routes/workspaceContexts.js'));
 const referenceReposRoutes = createLazyRouter(() => import('./routes/referenceRepos.js'));
-const portsRoutes = createLazyRouter(() => import('./routes/ports.js'));
 const networkExposureRoutes = createLazyRouter(() => import('./routes/networkExposure.js'));
 const logsRoutes = createLazyRouter(() => import('./routes/logs.js'));
 const scaffoldRoutes = createLazyRouter(() => import('./routes/scaffold.js'));
@@ -153,7 +152,6 @@ const autobiographyRoutes = createLazyRouter(() => import('./routes/autobiograph
 const legacyExportRoutes = createLazyRouter(() => import('./routes/legacyExport.js'));
 const paletteRoutes = createLazyRouter(() => import('./routes/palette.js'));
 const dashboardLayoutsRoutes = createLazyRouter(() => import('./routes/dashboardLayouts.js'));
-const dashboardDailyActionsRoutes = createLazyRouter(() => import('./routes/dashboardDailyActions.js'));
 const dailyDriverRoutes = createLazyRouter(() => import('./routes/dailyDriver.js'));
 const mediaCollectionsRoutes = createLazyRouter(() => import('./routes/mediaCollections.js'));
 const mediaAnnotationsRoutes = createLazyRouter(() => import('./routes/mediaAnnotations.js'));
@@ -220,8 +218,6 @@ const importerRoutes = createLazyRouter(() => import('./routes/importer.js'));
 const storyBuilderRoutes = createLazyRouter(() => import('./routes/storyBuilder.js'));
 const imageVideoModelsRoutes = createLazyRouter(() => import('./routes/imageVideoModels.js'));
 const lorasRoutes = createLazyRouter(() => import('./routes/loras.js'));
-const loraTrainingRoutes = createLazyRouter(() => import('./routes/loraTraining.js'));
-const sdapiRoutes = createLazyRouter(() => import('./routes/sdapi.js'));
 const midiRuntimeRoutes = createLazyRouter(() => import('./routes/midiRuntime.js'));
 
 const __filename = fileURLToPath(import.meta.url);
@@ -262,6 +258,13 @@ remoteDesktopBroker.mountWebSocket(httpServer);
 remoteDesktopBroker.mountWebSocket(localHttpServer);
 // Viewer tokens obey the same revocation contract as every other session credential.
 authEvents.on('sessions:revoked-all', () => remoteDesktopBroker.revokeAll('PortOS sessions revoked'));
+authEvents.on('sessions:revoked-all', () => {
+  try {
+    revokeAllHostedSessions({ io });
+  } catch (err) {
+    console.error(`❌ FableLoom hosted-session revocation failed: ${err.message}`);
+  }
+});
 // Eidoverse same-origin path + root allowlist (active only after the on-demand
 // host starts). Upgrade for `/ws` and `/eidoverse-host/**` on both listeners.
 mountEidoverseOnServer(null, [httpServer, localHttpServer]);
@@ -348,7 +351,6 @@ app.use('/remote-desktop', remoteDesktopViewerRoutes);
 
 // API Routes
 app.use('/api/auth', authRoutes);
-app.use('/api/alerts', alertsRoutes);
 app.use('/api/avatar', avatarRoutes);
 app.use('/api/system', systemActivityRoutes);
 app.use('/api/system', systemHealthRoutes);
@@ -362,7 +364,6 @@ app.use('/api/agent-context', agentContextMcpRoutes);
 app.use('/api/apps', appsRoutes);
 app.use('/api/workspace-contexts', workspaceContextsRoutes);
 app.use('/api/apps/:appId/reference-repos', referenceReposRoutes);
-app.use('/api/ports', portsRoutes);
 app.use('/api/network-exposure', networkExposureRoutes);
 app.use('/api/logs', logsRoutes);
 app.use('/api/scaffold', scaffoldRoutes);
@@ -387,7 +388,6 @@ app.use('/api/search', searchRoutes);
 app.use('/api/rapid-reader', rapidReaderRoutes);
 app.use('/api/palette', paletteRoutes);
 app.use('/api/dashboard/layouts', dashboardLayoutsRoutes);
-app.use('/api/dashboard/daily-actions', dashboardDailyActionsRoutes);
 app.use('/api/daily-driver', dailyDriverRoutes);
 app.use('/api/media/collections', mediaCollectionsRoutes);
 app.use('/api/media/annotations', mediaAnnotationsRoutes);
@@ -528,10 +528,6 @@ app.use('/api/story-builder', storyBuilderRoutes);
 app.use('/api/image-video/models', imageVideoModelsRoutes);
 app.use('/api/loras', lorasRoutes);
 app.use('/api/data-maintenance', dataMaintenanceRoutes);
-app.use('/api/lora-training', loraTrainingRoutes);
-// AUTOMATIC1111-compatible surface for tailnet clients — gated by
-// settings.imageGen.expose.a1111 so it returns 403 unless the user opted in.
-app.use('/sdapi/v1', sdapiRoutes);
 app.use('/api/openclaw', openclawRoutes);
 app.use('/api/sharing', sharingRoutes);
 app.use('/api/rounds', roundsRoutes);
@@ -546,10 +542,9 @@ app.use('/api/moa-presets', moaPresetRoutes);
 // Asset static mounts, then a terminating 404 for every server-owned prefix so
 // an extensionless `/data/…` or a mistyped `/api/…` can no longer fall through
 // to the SPA fallback below and be answered with index.html and a 200 (#4688).
-// Both lists live in lib/assetRoutePrefixes.js, which `scripts/dev-proxy-drift.test.js`
-// reads as data. NOTE: this call installs a terminating 404 on `/api` and
-// `/sdapi` too, so every router above must stay above — one added BELOW it is
-// shadowed and never runs. That guard test holds the ordering.
+// Both lists live in lib/assetRoutePrefixes.js, which `server/test/guards/repo/dev-proxy-drift.test.js`
+// reads as data. This call also terminates unmatched API requests, so API
+// routers must be registered before it. The drift guard holds that ordering.
 mountAssetRoutes(app);
 
 // Serve built client UI (production mode — no Vite dev server needed)

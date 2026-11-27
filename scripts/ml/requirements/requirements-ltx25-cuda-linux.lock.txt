@@ -1,6 +1,6 @@
 # LTX-2.5 CUDA: CPython 3.11, x86_64 linux, CUDA 13.2.
 # LTX source packages: 1.2.0 at d151147788a9284cca791edc6ce898007e727fe6.
-# Regeneration and build bootstrap: docs/LTX25_CUDA.md.
+# Regeneration and build bootstrap: docs/RUNTIME_LOCKS.md#ltx-25-cuda.
 --index-url https://pypi.org/simple
 --extra-index-url https://download.pytorch.org/whl/cu132
 

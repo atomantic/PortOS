@@ -7,7 +7,7 @@ import { isPublicGuestRoute } from '../lib/publicGuestRoutes';
 import { showStaleBuildToast } from './staleBuildToast';
 import { createBuildDriftWatcher, SERVED_BUILD_ID } from '../lib/buildStamp.js';
 import { readShellBootstrap } from './shellBootstrap.js';
-import { getSystemBuild } from './apiSystem';
+import { getSystemBuild } from './apiAppShell';
 import toast from '../components/ui/Toast';
 
 // Connect to Socket.IO using relative path (works with Tailscale)

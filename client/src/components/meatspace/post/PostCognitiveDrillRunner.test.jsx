@@ -635,6 +635,36 @@ describe('ReactionTimeRunner race-condition guards', () => {
     vi.useRealTimers();
   });
 
+  it('exposes the active choice with visible text and an accessible name', () => {
+    const onComplete = vi.fn();
+    const drill = {
+      type: 'reaction-time',
+      config: { mode: 'choice', choices: 3 },
+      trials: [{ delayMs: 100, target: 1 }],
+    };
+    render(
+      <PostCognitiveDrillRunner drill={drill} drillIndex={0} drillCount={1} onComplete={onComplete} isTraining={false} />,
+    );
+
+    expect(screen.queryByRole('button', { name: /target/i })).not.toBeInTheDocument();
+    expect(screen.getByRole('status')).toBeEmptyDOMElement();
+    act(() => vi.advanceTimersByTime(100));
+    expect(screen.getByRole('status')).toHaveTextContent('Target 2 — Go');
+    const target = screen.getByRole('button', { name: 'Target 2 — Go' });
+    expect(within(target).getByText('GO')).toBeVisible();
+    for (const number of [1, 3]) {
+      const distractor = screen.getByRole('button', { name: `Choice ${number}` });
+      expect(within(distractor).queryByText('GO')).not.toBeInTheDocument();
+    }
+
+    act(() => vi.advanceTimersByTime(200));
+    fireEvent.keyDown(window, { key: '2' });
+    act(() => vi.advanceTimersByTime(500));
+    expect(onComplete).toHaveBeenCalledWith(expect.objectContaining({
+      questions: [expect.objectContaining({ answered: 1, correct: true, responseMs: 200 })],
+    }));
+  });
+
   it('cancels the reveal timer on a false start so it cannot leak a stale GO into a later trial', () => {
     const onComplete = vi.fn();
     const drill = makeSimpleDrill({ count: 1, delayMs: 1000 });
@@ -814,6 +844,34 @@ describe('executive-control runners', () => {
     act(() => vi.advanceTimersByTime(250));
     expect(onComplete).toHaveBeenCalledTimes(1);
     expect(onComplete.mock.calls[0][0]).toMatchObject({ type: 'task-switching', accuracy: 1, omissions: 0 });
+  });
+
+  it.each([
+    ['Command+A', { key: 'a', metaKey: true }],
+    ['Control+A', { key: 'a', ctrlKey: true }],
+    ['Alt+Left', { key: 'ArrowLeft', altKey: true }],
+    ['an auto-repeat', { key: 'd', repeat: true }],
+    ['typing in a text field', { key: 'a' }, 'input'],
+    ['an arrow in a modal dialog', { key: 'ArrowLeft' }, 'dialog'],
+  ])('leaves %s alone during a binary-choice stimulus', (_label, event, targetType) => {
+    const onComplete = vi.fn();
+    const drill = {
+      type: 'flanker',
+      config: { responseDeadlineMs: 800 },
+      trials: [{ target: 'right', flanker: 'left', congruent: false }],
+    };
+    render(
+      <>
+        <input aria-label="Other input" />
+        {targetType === 'dialog' && <div role="dialog" aria-modal="true">Other dialog</div>}
+        <PostCognitiveDrillRunner drill={drill} drillIndex={0} drillCount={1} onComplete={onComplete} isTraining={false} />
+      </>,
+    );
+
+    const dispatchTarget = targetType === 'input' ? screen.getByRole('textbox') : window;
+    expect(fireEvent.keyDown(dispatchTarget, event)).toBe(true);
+    expect(screen.getByRole('button', { name: /right/i })).toBeEnabled();
+    expect(onComplete).not.toHaveBeenCalled();
   });
 
   it('go/no-go supports touch, advances withheld trials at the deadline, and records errors separately', () => {

@@ -166,13 +166,14 @@ describe('getInstallState — stale deps', () => {
   it('skips workspaces with no package.json (absent in this install)', async () => {
     const state = await getInstallState(syncedOpts({
       statMtime: makeStat({
-        // Only the root manifest exists; others absent → skipped
-        '/repo/package.json': 100,
-        '/repo/node_modules/.package-lock.json': 200,
+        // Client is absent and the script-only root needs no install receipt.
+        '/repo/package.json': 300,
+        '/repo/server/package.json': 100,
+        '/repo/server/node_modules/.package-lock.json': 200,
         'client/dist/index.html': 500
       })
     }));
-    expect(state.staleDeps.workspaces.map(w => w.name)).toEqual(['root']);
+    expect(state.staleDeps.workspaces.map(w => w.name)).toEqual(['server']);
     expect(state.staleDeps.stale).toBe(false);
   });
 
@@ -458,7 +459,6 @@ describe('detectStaleDeps (direct)', () => {
   it('classifies each workspace independently', async () => {
     const statMtime = makeStat({
       '/repo/package.json': 100,
-      '/repo/node_modules/.package-lock.json': 200, // root: fresh
       '/repo/client/package.json': 300,
       '/repo/client/node_modules/.package-lock.json': 200, // client: manifest-newer
       '/repo/server/package.json': 100,
@@ -466,7 +466,7 @@ describe('detectStaleDeps (direct)', () => {
     });
     const result = await __internal.detectStaleDeps(ROOT, { statMtime });
     const byName = Object.fromEntries(result.workspaces.map(w => [w.name, w]));
-    expect(byName.root.stale).toBe(false);
+    expect(Object.keys(byName)).toEqual(['client', 'server']);
     expect(byName.client.reason).toBe('manifest-newer');
     expect(byName.server.reason).toBe('not-installed');
     expect(result.stale).toBe(true);

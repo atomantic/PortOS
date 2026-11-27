@@ -6,6 +6,7 @@ import {Plus, Trash2, ChevronDown, ChevronRight,
 import BrailleSpinner from '../BrailleSpinner';
 import ConfirmButtonPair from '../ui/ConfirmButtonPair';
 import ListLoadError from '../ui/ListLoadError';
+import StatusPill from '../ui/Pill';
 import useListResource from '../../hooks/useListResource';
 import { useConfirmDelete } from '../../hooks/useConfirmDelete';
 import {
@@ -160,6 +161,8 @@ export default function EpigeneticTracker({ markerCategories = [] }) {
           </p>
         </div>
         <button
+          type="button"
+          aria-expanded={showAdd}
           onClick={() => setShowAdd(!showAdd)}
           className="flex items-center gap-1.5 px-3 py-2 bg-port-accent/20 text-port-accent border border-port-accent/30 rounded text-sm hover:bg-port-accent/30 transition-colors"
         >
@@ -281,12 +284,17 @@ export default function EpigeneticTracker({ markerCategories = [] }) {
             return (
               <div key={key} className="rounded bg-port-card border border-port-border overflow-hidden">
                 <button
+                  type="button"
+                  aria-expanded={Boolean(isExpanded)}
                   onClick={() => setExpandedTracked(prev => ({ ...prev, [key]: !prev[key] }))}
                   className="w-full flex items-center gap-3 p-3 text-left hover:bg-white/5 transition-colors"
                 >
-                  <Icon size={16} className={intervention.active ? 'text-port-success' : 'text-gray-600'} />
-                  <span className={`text-sm font-medium flex-1 ${intervention.active ? 'text-white' : 'text-gray-500'}`}>
-                    {intervention.name}
+                  <Icon aria-hidden="true" size={16} className={intervention.active ? 'shrink-0 text-port-success' : 'shrink-0 text-gray-600'} />
+                  <span className="flex flex-1 flex-wrap items-center gap-x-2 gap-y-1">
+                    <span className={`text-sm font-medium ${intervention.active ? 'text-white' : 'text-gray-500'}`}>
+                      {intervention.name}
+                    </span>
+                    {!intervention.active && <StatusPill size="xs">Paused</StatusPill>}
                   </span>
                   {intervention.dosage && (
                     <span className="text-xs text-gray-500">{intervention.dosage}</span>
@@ -358,7 +366,7 @@ export default function EpigeneticTracker({ markerCategories = [] }) {
                         />
                       ) : (
                         <button
-                          aria-label="Delete"
+                          aria-label={`Delete ${intervention.name}`}
                           onClick={() => requestDelete(key)}
                           className="pointer-coarse:min-h-11 pointer-coarse:min-w-11 px-2 py-1 bg-port-error/10 border border-port-error/20 rounded text-port-error hover:bg-port-error/20"
                         >
@@ -393,6 +401,8 @@ export default function EpigeneticTracker({ markerCategories = [] }) {
             return (
               <div key={rec.id} className="rounded bg-port-card border border-port-border overflow-hidden">
                 <button
+                  type="button"
+                  aria-expanded={Boolean(isExpanded)}
                   onClick={() => setExpandedRecs(prev => ({ ...prev, [rec.id]: !prev[rec.id] }))}
                   className="w-full flex items-center gap-3 p-3 text-left hover:bg-white/5 transition-colors"
                 >

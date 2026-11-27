@@ -36,6 +36,12 @@ vi.mock('./agentPromptBuilder.js', () => ({
   isClaimFlowTask: () => false,
   promptOpensOwnPr: () => false,
 }));
+vi.mock('../modelAbuseGuard.js', async (importOriginal) => ({
+  ...await importOriginal(), validatePublicReviewModel: vi.fn(async () => ({ ok: true })),
+}));
+vi.mock('../publicReviewSpawnInput.js', () => ({
+  loadPublicReviewSpawnInput: vi.fn(async () => ({ promptData: { pullRequests: [] } })),
+}));
 vi.mock('../workspaceContext.js', () => ({ snapshotOnRepoSwitch: vi.fn() }));
 vi.mock('./agentProviderResolution.js', () => ({
   resolveAgentProviderAndModel: async () => ({
@@ -50,6 +56,8 @@ vi.mock('./agentCliSpawning.js', () => ({
   getClaudeSettingsEnv: async () => ({}),
   spawnDirectly: vi.fn(async () => 'agent-x'),
 }));
+const groupCodexIssueClaim = vi.hoisted(() => vi.fn(async () => ({ status: 'grouped' })));
+vi.mock('../codexAppServer.js', () => ({ groupCodexIssueClaim }));
 const updateClaimOwnership = vi.hoisted(() => vi.fn(async ({ branch }) => ({ bound: true, branch })));
 vi.mock('../cos/cosClaimOwnership.js', () => ({ updateClaimOwnership }));
 const markAppIssueClaimed = vi.hoisted(() => vi.fn(async () => undefined));
@@ -69,6 +77,7 @@ import { execGh } from '../github.js';
 import { createAgentRun } from './agentRunTracking.js';
 import { prepareAgentWorkspace } from './agentWorkspacePrep.js';
 import { updateTask } from '../cos/cosTaskStore.js';
+import { emitLog } from '../cos/cosEvents.js';
 import { registerAgent, updateAgent } from '../cos/cosAgentLifecycle.js';
 import { markHostShuttingDown, resetHostShutdownFlagForTests } from '../../lib/hostShutdown.js';
 
@@ -93,6 +102,27 @@ beforeEach(() => {
   f.tui = false;
 });
 
+
+it('registers the instance identity and headless public review posture for a TUI provider', async () => {
+  f.tui = true;
+  f.provider = { id: 'grok-tui', type: 'tui', command: 'grok' };
+  const context = newContext();
+  context.task = { ...task, metadata: {
+    executionProfile: 'public-review-gate',
+    pipeline: { securityScan: { completed: true, status: 'passed', safePrCount: 1 } },
+  } };
+
+  expect(await dispatchAgentRun(context)).toBe(context.agentId);
+
+  expect(registerAgent).toHaveBeenCalledExactlyOnceWith(context.agentId, task.id, expect.objectContaining({
+    instanceId: context.instanceId,
+    publicReviewPosture: 'no-tool',
+    workspacePath: f.prep.workspacePath,
+    executionMode: 'direct',
+  }));
+  expect(spawnDirectly).toHaveBeenCalledOnce();
+  expect(spawnTuiAgent).not.toHaveBeenCalled();
+});
 
 it('passes TUI prompt memory lineage to the run and agent records', async () => {
   f.tui = true;
@@ -171,6 +201,19 @@ describe('dispatchAgentRun with a server-provisioned claim checkout (#15517)', (
     expect(markAppIssueClaimed.mock.invocationCallOrder[0]).toBeLessThan(spawnDirectly.mock.invocationCallOrder[0]);
     expect(spawnDirectly).toHaveBeenCalledWith(expect.objectContaining({ workspacePath: claimCheckout.worktreePath }));
     expect(context.spawnClaimCheckout).toBe(claimCheckout);
+  });
+
+  it('groups a Codex claim under the app without moving the agent outside its worktree', async () => {
+    f.prep = { ...f.prep, resolvedAppName: 'Example App' };
+    const context = newContext();
+    expect(await dispatchAgentRun(context)).toBe(context.agentId);
+    await vi.dynamicImportSettled();
+    expect(spawnDirectly).toHaveBeenCalledWith(expect.objectContaining({ workspacePath: claimCheckout.worktreePath }));
+    expect(groupCodexIssueClaim).toHaveBeenCalledExactlyOnceWith({
+      repoPath: claimCheckout.repoPath, workspacePath: claimCheckout.worktreePath,
+      appName: 'Example App', sourceKind: 'exec', startedAt: expect.any(Number),
+    });
+    expect(spawnDirectly.mock.invocationCallOrder[0]).toBeLessThan(groupCodexIssueClaim.mock.invocationCallOrder[0]);
   });
 
   it('blocks without launching when the run cannot bind its checkout', async () => {
@@ -278,6 +321,50 @@ describe('dispatchAgentRun ownership window', () => {
     f.updateResult = { error: 'Task not found' };
     await dispatchAgentRun(context);
     expect(spawnDirectly.mock.calls[0][0].task).toBe(context.task);
+  });
+
+  it('logs a refused task dispatch write and does not start the agent', async () => {
+    f.updateResult = { error: 'write refused' };
+
+    await expect(dispatchAgentRun(newContext())).resolves.toBeNull();
+
+    expect(emitLog).toHaveBeenCalledWith('warn', expect.stringContaining('write refused'), {
+      taskId: task.id,
+      error: 'write refused',
+    });
+    expect(spawnDirectly).not.toHaveBeenCalled();
+  });
+
+  it('releases dispatch protection without launching or discarding the checkout when the task write fails', async () => {
+    const context = newContext();
+    context.claimAcquired = true;
+    f.prep.worktreeInfo = { branchName: 'prepared-branch' };
+    const runner = vi.fn();
+    vi.mocked(updateTask).mockRejectedValueOnce(new Error('task write failed'));
+
+    await expect(dispatchAgentRun(context, { spawnViaRunner: runner })).resolves.toBeNull();
+
+    expect(updateTask).toHaveBeenCalledWith(task.id, expect.objectContaining({ status: 'in_progress' }), 'user', expect.any(Object));
+    expect(spawnDirectly).not.toHaveBeenCalled();
+    expect(spawnTuiAgent).not.toHaveBeenCalled();
+    expect(runner).not.toHaveBeenCalled();
+    expect(context.cleanupOnError).toHaveBeenCalledWith('Failed to update task status');
+    expect(context.claimAcquired).toBe(false);
+    expect(context.spawnWorktree).toBeNull();
+    expect(isProtected()).toBe(false);
+  });
+
+  it('registers a TUI agent in runner mode and hands it to the durable spawner', async () => {
+    f.tui = true;
+    f.provider = { id: 'example-tui', type: 'tui', command: 'codex' };
+    setUseRunner(true);
+
+    await dispatchAgentRun(newContext());
+
+    expect(registerAgent).toHaveBeenCalledWith('agent-x', task.id, expect.objectContaining({
+      executionMode: 'runner-tui',
+    }));
+    expect(spawnTuiAgent).toHaveBeenCalledWith(expect.objectContaining({ useDurableRunner: true }));
   });
 
   it('protects the agent while registration is pending and releases once handed off', async () => {

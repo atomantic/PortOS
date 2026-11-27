@@ -1,50 +1,44 @@
+/**
+ * Serialize CoS queue mutations and expose the public task-store operations.
+ *
+ * Task intake maps requests to records. The working-set cache commits row diffs,
+ * and `tasks:changed` events notify the scheduler after the write succeeds.
+ */
 import { auditWorkflow, newAuditMetadata, isLegacyDeepAudit } from '../../lib/auditWorkflow.js';
 import { isForgeMaintenanceTask, hasCurrentForgeMaintenanceEvidence, LEGACY_FORGE_MAINTENANCE_REASON } from '../../lib/forgeMaintenanceTasks.js';
-import { getSkipReason } from './cosTaskClaim.js';
 import { isDeepStrictEqual } from 'node:util';
 import { RELEASE_SYNC_FROZEN_METADATA_KEYS } from '../../lib/releaseSynchronization.js';
 import { spawnBudgetCount } from './cosSpawnBudget.js';
-/**
- * CoS Task Store Module
- *
- * Task CRUD + queue persistence extracted from cos.js. Owns the read/write
- * round-trip to the user and internal task queues (`cos_tasks`, through
- * `cosTaskRepository.js`): the cached working set, row-diff saves, grouping,
- * dedup, and the `tasks:changed` event emissions that drive the scheduler. The request → record mapping (ID generation, metadata
- * normalization) is `cosTaskIntake.js`, kept in parity with the request schema.
- *
- * Self-contained — it emits `tasks:changed` rather than calling the scheduler
- * directly. cos.js's `init()` listens on that event to fire `tryImmediateSpawn`
- * (user-added tasks) and `dequeueNextTask` (approved tasks), so the spawn-side
- * logic stays in cos.js while persistence lives here.
- */
-
 import { DEVELOPMENT_ACTIVE_STATUSES, developmentWorkIdentity, sameDevelopmentWork } from '../../lib/developmentWorkIdentity.js';
 import { isTruthyMeta, sameMetaValue } from '../../lib/metadataFlags.js';
-import { reviewerModelsFromDefaults } from '../../lib/reviewerConfig.js';
-import { createSingleFlight } from '../../lib/singleFlight.js';
-import { groupTasksByStatus, getAutoApprovedTasks, getAwaitingApprovalTasks, hasKnownPrefix, toRepresentableTask, PRIORITY_VALUES } from '../../lib/taskParser.js';
-import { MAX_TOTAL_SPAWNS, cosTaskTypeSchema } from '../../lib/cos/cosTaskMetadata.js';
+import { hasKnownPrefix, toRepresentableTask, PRIORITY_VALUES } from '../../lib/taskParser.js';
+import { cosTaskTypeSchema } from '../../lib/cos/cosTaskMetadata.js';
 import { validateRequest } from '../../lib/validateRequest.js';
 import { RETRY_HOLD_KEY, RETRY_HOLD_SINCE_KEY, isRetryHeld } from '../../lib/taskRetryHold.js';
 import { resolveTaskTargetBranch, shouldStripTaskTargetBranch } from '../../lib/taskTargetBranch.js';
 import { PAUSE_METADATA_KEYS, isAgentPausedTask, resolvePausedTaskResume, retirePausedAgent } from '../../lib/taskPauseHold.js';
 import { REQUEUED_AT_KEY } from '../../lib/taskRequeue.js';
 import { resolveTaskStatusTransition, isTerminalTaskStatus } from '../../lib/taskStatusTransition.js';
-import { isInvestigationTask } from '../../lib/investigationTasks.js';
-import { PAUSED_BLOCKED_CATEGORIES, USER_DECISION_BLOCKED_CATEGORIES } from '../../lib/taskBlockCategories.js';
+import { PAUSED_BLOCKED_CATEGORIES } from '../../lib/taskBlockCategories.js';
 import { isPromptPayload, splitTaskPromptFields } from '../../lib/cos/cosTaskPrompt.js';
 import { normalizeOrchestrationMode, normalizeOrchestrationProfile } from '../../lib/orchestrationProfile.js';
 import { loadState, withStateLock, readAgentsStateForSafetyCheck } from './cosState.js';
 import { activeAgents, runnerAgents, hasActiveTaskOwner } from '../agent/agentState.js';
 import { cosEvents } from './cosEvents.js';
-import { CLAIM_METADATA_KEYS, isLeaseLive } from './cosTaskClaim.js';
+import { CLAIM_METADATA_KEYS, getSkipReason, isLeaseLive } from './cosTaskClaim.js';
 import { mergeTaskLists } from './cosTaskMerge.js';
-import { applyTaskListSave, countCompletedTasks, deleteStoredTask, getCompletedTaskIds, getStoredTask, loadTaskWorkingSet, pageCompletedTasks, readTaskListVersion } from './cosTaskRepository.js';
-import { planListSave, selectWorkingSet, storedForm } from '../../lib/cos/cosTaskRows.js';
+import { deleteStoredTask, getCompletedTaskIds, getStoredTask } from './cosTaskRepository.js';
+import { storedForm } from '../../lib/cos/cosTaskRows.js';
 import { buildQueuedTask } from './cosTaskIntake.js';
-import { canChallenge, getChallengeCount, buildChallengePatch, buildChallengeResolutionPatch, classifyRecheckOutcome, MAX_CHALLENGES_PER_TASK } from './cosChallenge.js';
-import { runLocalCodeReview, getCodeReviewDefaults } from '../codeReview.js';
+import { createTaskChallenges } from './cosTaskChallenges.js';
+import { sweepFailureQueues } from './cosTaskReaper.js';
+import { getTaskById } from './cosTaskViews.js';
+import { cloneTaskSnapshot, readTaskFile, readTaskSnapshot, writeTaskList } from './cosTaskWorkingSet.js';
+
+export { __resetTaskCache } from './cosTaskWorkingSet.js';
+export { getUserTasks, getCosTasks, getAllTasks, getTaskView, getPendingTaskIds, getTaskDiagnostics, getCosApprovalView, findTaskWithSource, getTaskById } from './cosTaskViews.js';
+export { DEFAULT_FAILURE_TASK_MAX_AGE_MS, DEFAULT_REAP_LIMIT, blockedFailureAgeMs, isReapableBlockedFailure, isReapableInvestigation } from './cosTaskReaper.js';
+export { approveTask } from './cosTaskChallenges.js';
 
 // First non-empty line of a string — addTask's duplicate key, so two tasks that
 // differ only in a multi-line body still collide. Declared
@@ -69,7 +63,7 @@ function withoutRetiredSpawnProof(task) {
 }
 
 // The `blockedCategory` vocabulary lives in `lib/taskBlockCategories.js` — the
-// pause logic, the failure reaper below, and the investigation auto-retry all
+// pause logic, the failure reaper, and the investigation auto-retry all
 // have to answer "may I move this task?" from that one value, and each keeping
 // its own literal set is how they drifted. Re-exported at the address callers
 // already use.
@@ -119,321 +113,6 @@ function isContentEdit(updates, existingMetadata = {}) {
     }
   }
   return false;
-}
-
-// ── Working-set cache ───────────────────────────────────────────────────────
-//
-// `getUserTasks`/`getCosTasks`/`getTaskById` run on every daemon evaluation
-// tick, scheduler sweep, and agent state update. A queue's WORKING SET (every
-// open task plus recently completed ones, see lib/cos/cosTaskRows.js) is loaded once
-// per queue version and shared: an unchanged queue costs one single-row version
-// read plus a structured clone instead of a query over the rows.
-//
-// Concurrent readers share the load for a version (#12225), so a cold cache does
-// not multiply the working set by the number of readers. Correctness rests on:
-//
-//   1. The queue version, bumped by every write in the same transaction, so a
-//      write this process did NOT make is noticed on the next read.
-//   2. Our own writes replace the cached entry only when the version moved by
-//      exactly one (nobody else wrote in between); otherwise they drop it.
-const snapshotCache = new Map(); // source -> { version, snapshot }
-const snapshotLoads = createSingleFlight();
-// A list may be mutated or transformed before saving. Keep its ORIGINAL read
-// snapshot, never a fresh read whose omissions could turn into accidental deletes.
-const listSnapshots = new WeakMap();
-
-// Private snapshots never leave this module: list readers clone the array,
-// while ID lookups clone only the matching task. Both share invalidation.
-// `rows` keeps each task's stored position for the next save's diff.
-async function readTaskSnapshot(source) {
-  const version = await readTaskListVersion(source);
-  const cached = snapshotCache.get(source);
-  if (cached?.version === version) return cached.snapshot;
-  return snapshotLoads.run(`${source}:${version}`, async () => {
-    const loaded = await loadTaskWorkingSet(source);
-    const snapshot = { version: loaded.version, rows: loaded.rows, tasks: loaded.rows.map((row) => row.task) };
-    if (!snapshotCache.get(source) || snapshotCache.get(source).version <= loaded.version) {
-      snapshotCache.set(source, { version: loaded.version, snapshot });
-    }
-    return snapshot;
-  });
-}
-
-async function readTaskFile(source) {
-  const snapshot = await readTaskSnapshot(source);
-  const tasks = structuredClone(snapshot.tasks);
-  listSnapshots.set(tasks, snapshot);
-  return tasks;
-}
-
-async function findTaskInFile(source, taskId) {
-  const snapshot = await readTaskSnapshot(source);
-  if (!snapshot.byId) {
-    snapshot.byId = new Map();
-    for (const task of snapshot.tasks) {
-      // Preserve Array.find's first-match behavior for duplicate IDs.
-      if (!snapshot.byId.has(task.id)) snapshot.byId.set(task.id, task);
-    }
-  }
-  const task = snapshot.byId.get(taskId);
-  return task ? structuredClone(task) : null;
-}
-
-/**
- * Persist the queue as `tasks`: diff against the stored working set and write
- * only the rows that changed, in one transaction. Every write path in this
- * module goes through here. Resolves to whether anything was written.
- */
-async function writeTaskList(source, tasks, original = tasks, dependencies = {}) {
-  const snapshot = listSnapshots.get(original);
-  if (!snapshot) throw new Error('Task saves require their original read snapshot');
-  const cached = snapshotCache.get(source);
-  const plan = planListSave({ previous: snapshot.rows, next: tasks, source });
-  if (plan.upserts.length === 0 && plan.deletes.length === 0) return false;
-  const version = await applyTaskListSave(source, {
-    ...plan, expectedVersions: { ...dependencies, [source]: snapshot.version },
-  });
-
-  const positions = new Map(snapshot.rows.map((row) => [row.task.id, row.position]));
-  for (const { task, position } of plan.upserts) positions.set(task.id, position);
-  if (cached?.snapshot === snapshot && version === cached.version + 1) {
-    // Same bound as a reload, so completions never accumulate in the cache.
-    const rows = selectWorkingSet(plan.saved.map((task) => ({ task, position: positions.get(task.id) })));
-    snapshotCache.set(source, { version, snapshot: { version, rows, tasks: rows.map((row) => row.task) } });
-  } else {
-    snapshotCache.delete(source);
-  }
-  return true;
-}
-
-/** Test hook: forget every cached working set. */
-export function __resetTaskCache() {
-  snapshotCache.clear();
-}
-
-/**
- * Get user tasks
- */
-export async function getUserTasks() {
-  const tasks = await readTaskFile('user');
-  return { tasks, grouped: groupTasksByStatus(tasks), type: 'user' };
-}
-
-/**
- * Get CoS internal tasks
- */
-export async function getCosTasks() {
-  const tasks = await readTaskFile('internal');
-  const grouped = groupTasksByStatus(tasks);
-  const autoApproved = getAutoApprovedTasks(tasks);
-  const awaitingApproval = getAwaitingApprovalTasks(tasks);
-
-  return { tasks, grouped, type: 'internal', autoApproved, awaitingApproval };
-}
-
-/**
- * Get all tasks (user + internal)
- */
-export async function getAllTasks() {
-  const [userTasks, cosTasks] = await Promise.all([getUserTasks(), getCosTasks()]);
-  return { user: userTasks, cos: cosTasks };
-}
-
-// ── Bounded task views (#9677) ──────────────────────────────────────────────
-//
-// `GET /api/cos/tasks` returns the open queue plus at most one page of completed
-// history, yet `getAllTasks()` structured-clones the whole working set (recent
-// completed prompt bodies included) from BOTH queues first. These readers select
-// from the private snapshot, or page completed history straight from the table,
-// and clone only what the response carries. Nothing returned here aliases the cache.
-const COMPLETED_FIRST_PAGE = 25;
-const SOURCES = ['user', 'internal'];
-const isCompleted = (task) => task.status === 'completed';
-
-// Per-snapshot derivations, dropped with the snapshot on any version change.
-function snapshotPartitions(snapshot) {
-  if (!snapshot.partitions) {
-    const open = [];
-    const completed = [];
-    for (const task of snapshot.tasks) (isCompleted(task) ? completed : open).push(task);
-    snapshot.partitions = { open, completed };
-  }
-  return snapshot.partitions;
-}
-
-// Shape of getUserTasks()/getCosTasks() over an already-selected task subset.
-// Callers pass CLONED tasks; grouped/derived lists share those clones.
-function sourceShape(type, tasks) {
-  const shape = { tasks, grouped: groupTasksByStatus(tasks), type };
-  if (type === 'internal') {
-    shape.autoApproved = getAutoApprovedTasks(tasks);
-    shape.awaitingApproval = getAwaitingApprovalTasks(tasks);
-  }
-  return shape;
-}
-
-/**
- * One page of completed history from ONE queue, newest id first, straight from
- * the table. `nextCursor` is the last id of a full page when more remain.
- */
-async function pageCompleted(type, { cursor = null, limit }) {
-  const rows = await pageCompletedTasks(type, { before: cursor, limit: limit + 1 });
-  const items = rows.slice(0, limit);
-  return { items, total: await countCompletedTasks(type), nextCursor: rows.length > limit ? items[limit - 1].id : null };
-}
-
-/**
- * Open queue (every non-completed task, plus the `selected` historical task)
- * for both queues. `completedCount` carries the completed total.
- */
-async function readQueueView(selected) {
-  const read = async (type) => {
-    const snapshot = await readTaskSnapshot(type);
-    const { open } = snapshotPartitions(snapshot);
-    const refs = selected === undefined ? open : snapshot.tasks.filter((task) => !isCompleted(task) || task.id === selected);
-    const tasks = structuredClone(refs);
-    // A selected historical task older than the working set is fetched by id.
-    if (selected !== undefined && !refs.some((task) => task.id === selected)) {
-      const stored = await getStoredTask(selected, type);
-      if (stored) tasks.push(stored.task);
-    }
-    return { ...sourceShape(type, tasks), completedCount: await countCompletedTasks(type) };
-  };
-  const [user, cos] = await Promise.all([read('user'), read('internal')]);
-  return { user, cos };
-}
-
-/** Open queue plus the first completed page; the rest of the history stays in the table. */
-async function readBareView() {
-  const read = async (type) => {
-    const { open } = snapshotPartitions(await readTaskSnapshot(type));
-    const page = await pageCompleted(type, { limit: COMPLETED_FIRST_PAGE });
-    const shape = sourceShape(type, [...structuredClone(open), ...page.items]);
-    // Completed rows leave `grouped`; only the page inside `tasks` carries them.
-    return { ...shape, grouped: { ...shape.grouped, completed: [] }, completedCount: page.total, completedNextCursor: page.nextCursor };
-  };
-  const [user, cos] = await Promise.all([read('user'), read('internal')]);
-  return { user, cos };
-}
-
-/** One page of completed history from ONE source, newest id first. */
-async function readCompletedView({ source, cursor, limit }) {
-  return pageCompleted(source === 'internal' ? 'internal' : 'user', { cursor, limit });
-}
-
-/**
- * Legacy limit/offset window over each queue's working set, in queue order. The
- * slice and scalar metadata only; completed history older than the working set
- * pages through the `completed` view.
- */
-async function readWindowView({ offset, limit }) {
-  const read = async (type) => {
-    const { tasks } = await readTaskSnapshot(type);
-    return { meta: { type }, tasks: structuredClone(tasks.slice(offset, offset + limit)), total: tasks.length };
-  };
-  const [user, cos] = await Promise.all([read('user'), read('internal')]);
-  return {
-    user: { ...user.meta, tasks: user.tasks },
-    cos: { ...cos.meta, tasks: cos.tasks },
-    totals: { user: user.total, cos: cos.total },
-  };
-}
-
-/**
- * Read-only, bounded task view for the HTTP layer. `kind`:
- *   - 'queue'     { selected? } open tasks (+ the selected historical one) + completedCount
- *   - 'bare'      open tasks + first completed page (+ completedCount/completedNextCursor)
- *   - 'completed' { source, cursor?, limit } one source's page → { items, total, nextCursor }
- *   - 'window'    { offset, limit } legacy slice of the working set → { user, cos, totals }
- * Sources come back unsettled for the spawn window; `getAllTasks()` stays the raw
- * truth (the working set) for scheduler readers and `view=full`.
- */
-export async function getTaskView({ kind, ...options }) {
-  if (kind === 'queue') return readQueueView(options.selected);
-  if (kind === 'bare') return readBareView();
-  if (kind === 'completed') return readCompletedView(options);
-  if (kind === 'window') return readWindowView(options);
-  throw new Error(`Unknown task view: ${kind}`);
-}
-
-/**
- * Lightweight live-activity input. Derive once per queue version, so a
- * three-second poll never clones prompts or groups completed history.
- * Keep duplicates and source order, matching getAllTasks() counting semantics.
- */
-export async function getPendingTaskIds() {
-  const sources = await Promise.all(SOURCES.map(async (source) => {
-    const snapshot = await readTaskSnapshot(source);
-    snapshot.pendingIds ??= snapshot.tasks.filter(task => task.status === 'pending').map(task => task.id);
-    return snapshot.pendingIds;
-  }));
-  // Never expose the cached arrays to callers.
-  return sources.flat();
-}
-
-/**
- * Telemetry reads only diagnostics-bearing records, never full prompts or
- * grouped history. Derive per snapshot and reuse the cache's write invalidation;
- * clone the projection to keep it private.
- */
-export async function getTaskDiagnostics() {
-  const sources = await Promise.all(SOURCES.map(async (source) => {
-    const snapshot = await readTaskSnapshot(source);
-    snapshot.diagnosticTasks ??= snapshot.tasks.filter(task => {
-      const diagnostics = task.metadata?.diagnostics;
-      return diagnostics && typeof diagnostics === 'object' && !Array.isArray(diagnostics);
-    }).map(task => ({
-      status: task.status,
-      metadata: { diagnostics: task.metadata.diagnostics, updatedAt: task.metadata.updatedAt }
-    }));
-    return snapshot.diagnosticTasks;
-  }));
-  return structuredClone(sources.flat());
-}
-
-/**
- * Approval-state view of the internal queue for pollers that need the awaiting
- * list or the auto-approved count, not the whole queue. `getCosTasks()` clones
- * every working-set prompt body to answer the same question. Derived once per
- * snapshot; only the first `limit` awaiting tasks are cloned.
- */
-export async function getCosApprovalView({ limit = Infinity } = {}) {
-  const snapshot = await readTaskSnapshot('internal');
-  snapshot.approval ??= {
-    awaiting: getAwaitingApprovalTasks(snapshot.tasks),
-    autoApprovedCount: getAutoApprovedTasks(snapshot.tasks).length,
-  };
-  const { awaiting, autoApprovedCount } = snapshot.approval;
-  return { awaitingApproval: structuredClone(awaiting.slice(0, limit)), autoApprovedCount };
-}
-
-/**
- * Get a specific task by ID from any task source
- */
-/**
- * One task and the queue it lives in: `{ task, source: 'user' | 'internal' }`,
- * or null. The record is returned as stored (its own `taskType` intact), which
- * is what a client merging it into a list it already holds needs.
- */
-export async function findTaskWithSource(taskId) {
-  // Keep user-first precedence, including legacy/custom IDs. Do not infer the
-  // source from a prefix or prepare grouped copies of both queues for one ID.
-  const userTask = await findTaskInFile('user', taskId);
-  if (userTask) return { task: userTask, source: 'user' };
-
-  const cosTask = await findTaskInFile('internal', taskId);
-  if (cosTask) return { task: cosTask, source: 'internal' };
-
-  // Completed history older than the working set is fetched by id.
-  const stored = await getStoredTask(taskId);
-  return stored ? { task: stored.task, source: stored.source } : null;
-}
-
-// Legacy shape: the source overwrites the record's `taskType`. Callers that
-// need the record as stored use findTaskWithSource.
-export async function getTaskById(taskId) {
-  const found = await findTaskWithSource(taskId);
-  return found ? { ...found.task, taskType: found.source } : null;
 }
 
 async function uniqueTaskId(source, id, tasks) {
@@ -518,8 +197,10 @@ async function addTaskAttempt(taskData, taskType, { raw = false, ignoreTaskId = 
   const newWorkIdentity = developmentWorkIdentity(taskData);
   const dependencies = {};
   if (newWorkIdentity) {
-    const other = await readTaskFile(taskType === 'user' ? 'internal' : 'user');
-    dependencies[taskType === 'user' ? 'internal' : 'user'] = listSnapshots.get(other).version;
+    const otherSource = taskType === 'user' ? 'internal' : 'user';
+    const snapshot = await readTaskSnapshot(otherSource);
+    const other = cloneTaskSnapshot(snapshot);
+    dependencies[otherSource] = snapshot.version;
     const owner = [...tasks, ...other].find(task => task.id !== ignoreTaskId && !cleanupOnlyIds.has(task.id)
       && DEVELOPMENT_ACTIVE_STATUSES.has(task.status) && sameDevelopmentWork(task, taskData)
       // Targeted claims and the backlog drain coexist in either admission order.
@@ -880,9 +561,9 @@ function isRuntimeVerificationRelease({ current, updates, expectedStatus, expect
 }
 
 // Caller holds withStateLock, including its status and ownership decision.
-async function writeTaskUpdateLocked(taskId, updates, taskType, { now, suppressDequeue = false, suppressCompletionWake = false, expectedStatus = null, expectedMetadata = null, expectedTask = null, recoveryOwner = null, preserveRetryBudget = false, spawnBudgetOperation = null, expectedSourceTask = null }) {
+async function writeTaskUpdateLocked(taskId, updates, taskType, options) {
   const tasks = await readTaskFile(taskType);
-  if (!matchesInvestigationSource(tasks, taskType, expectedSourceTask)) return { statusChanged: true };
+  if (!matchesInvestigationSource(tasks, taskType, options.expectedSourceTask)) return { statusChanged: true };
 
   let taskIndex = tasks.findIndex(t => t.id === taskId);
   // A history item older than the working set can still be edited or reopened:
@@ -899,14 +580,19 @@ async function writeTaskUpdateLocked(taskId, updates, taskType, { now, suppressD
     return { error: 'Task not found' };
   }
 
-  // Deterministic sweepers can retire a queued task only while it is still
-  // pending. Check under the same lock as the write so a concurrent dequeue or
-  // user action cannot be overwritten by a stale queue snapshot.
-  if (expectedStatus && tasks[taskIndex].status !== expectedStatus) {
-    return { statusChanged: true, task: tasks[taskIndex] };
-  }
+  const result = await prepareTaskUpdate(tasks[taskIndex], updates, taskType, options);
+  if (!result.change) return result;
 
-  const current = tasks[taskIndex];
+  tasks[taskIndex] = result.change.task;
+  await writeTaskList(taskType, tasks);
+  cosEvents.emit('tasks:changed', result.change);
+  return result.change.task;
+}
+
+// Build a transition and its event without saving. The caller holds the lock
+// and publishes the event only after the corresponding write succeeds.
+async function prepareTaskUpdate(current, updates, taskType, { now, suppressDequeue = false, suppressCompletionWake = false, expectedStatus = null, expectedMetadata = null, expectedTask = null, recoveryOwner = null, preserveRetryBudget = false, spawnBudgetOperation = null }) {
+  if (expectedStatus && current.status !== expectedStatus) return { statusChanged: true, task: current };
   if (updates.metadata && Object.hasOwn(updates.metadata, 'repoRepairContract')
     && !isDeepStrictEqual(updates.metadata.repoRepairContract, current.metadata?.repoRepairContract)) {
     return { error: 'Checkout repair completion contract is server-owned and immutable' };
@@ -925,7 +611,7 @@ async function writeTaskUpdateLocked(taskId, updates, taskType, { now, suppressD
   if (expectedTask && Object.entries(expectedTask).some(([key, value]) => !isDeepStrictEqual(current[key], value))) {
     return { statusChanged: true, task: current };
   }
-  if (recoveryOwner && await isStaleRecoveryOwner({ taskId, recoveryOwner })) return { statusChanged: true, task: current };
+  if (recoveryOwner && await isStaleRecoveryOwner({ taskId: current.id, recoveryOwner })) return { statusChanged: true, task: current };
   if (expectedMetadata && Object.entries(expectedMetadata).some(([key, value]) => current.metadata?.[key] !== value)) {
     return { statusChanged: true, task: current };
   }
@@ -937,7 +623,7 @@ async function writeTaskUpdateLocked(taskId, updates, taskType, { now, suppressD
   if (isRuntimeVerificationHeld(current) && updates.status && updates.status !== 'blocked' && !runtimeRelease) {
     return { error: 'Runtime verification prerequisite must be released by its server coordinator' };
   }
-  const updatedMetadata = mergeUpdateMetadata(tasks[taskIndex].metadata, updates);
+  const updatedMetadata = mergeUpdateMetadata(current.metadata, updates);
 
   applySpawnAccounting({ current, updatedMetadata, reset: spawnBudgetOperation?.kind === 'reset' });
 
@@ -947,7 +633,7 @@ async function writeTaskUpdateLocked(taskId, updates, taskType, { now, suppressD
   // clear and the claim release ended up as the same predicate written twice, and
   // how the requeue stamp and the emitted action came to key on the same edge from
   // 52 lines apart while having to agree (#6620).
-  const previousStatus = tasks[taskIndex].status;
+  const previousStatus = current.status;
   const transition = resolveTaskStatusTransition(previousStatus, updates.status);
 
   const dependencyRelease = isVerifiedDependencyRelease({ current, updates, expectedStatus, expectedTask, recoveryOwner, preserveRetryBudget });
@@ -1018,7 +704,7 @@ async function writeTaskUpdateLocked(taskId, updates, taskType, { now, suppressD
   // against the task's CURRENT metadata so a lease-renewal heartbeat that re-includes
   // unchanged metadata doesn't read as an edit (see isContentEdit). `now` is
   // injectable for deterministic test output.
-  if (isContentEdit(updates, tasks[taskIndex].metadata)) {
+  if (isContentEdit(updates, current.metadata)) {
     updatedMetadata.updatedAt = new Date(now).toISOString();
   }
 
@@ -1032,7 +718,7 @@ async function writeTaskUpdateLocked(taskId, updates, taskType, { now, suppressD
   // generateTasksMarkdown would leave every consumer reading the pre-repair status
   // until something re-read the file (#7239).
   const updatedTask = toRepresentableTask({
-    ...tasks[taskIndex],
+    ...current,
     ...(updates.description && { description: updates.description }),
     ...(updates.priority && {
       priority: updates.priority.toUpperCase(),
@@ -1041,10 +727,6 @@ async function writeTaskUpdateLocked(taskId, updates, taskType, { now, suppressD
     ...(updates.status && { status: updates.status }),
     metadata: updatedMetadata
   });
-
-  tasks[taskIndex] = updatedTask;
-
-  await writeTaskList(taskType, tasks);
 
   // `transition.action` distinguishes the two flips that must WAKE the scheduler
   // from an ordinary edit. A blocked → pending flip is a revive: the task is newly
@@ -1066,8 +748,7 @@ async function writeTaskUpdateLocked(taskId, updates, taskType, { now, suppressD
   if (suppressDequeue) change.suppressDequeue = true;
   // An explicit cleanup-only action must not itself launch dependent work.
   if (suppressCompletionWake) change.suppressCompletionWake = true;
-  cosEvents.emit('tasks:changed', change);
-  return updatedTask;
+  return { change };
 }
 
 /**
@@ -1237,159 +918,8 @@ export async function reconcileLegacyForgeMaintenanceTasks({ instanceId, now = D
   });
 }
 
-// ── Stale failure-artifact reaper (issue #2619) ──────────────────────────────
-//
-// After a failure storm is fixed, nothing retired what it left behind: tasks
-// parked in `blocked` by a failure category, and the `[Auto] Investigate agent
-// failure` tasks filed against them. They persisted indefinitely and stayed
-// input to every generator/learning read. The sweep below runs on the CoS
-// health tick and resolves them via STATUS FLIP (→ completed + a `resolution:
-// 'auto-expired'` marker), NEVER deletion: LWW federation sync does not
-// propagate deletions, so a delete just resurrects from any peer still holding
-// the row.
-
-// Default age a failure-blocked task must exceed before it is auto-expired.
-export const DEFAULT_FAILURE_TASK_MAX_AGE_MS = 14 * 24 * 60 * 60 * 1000; // 14 days
-
-// Max tasks the reaper flips in a single sweep — bounded so one tick can't fan
-// out an unbounded burst of writes/`tasks:changed` events after a large storm.
-export const DEFAULT_REAP_LIMIT = 50;
-
-// Blocks that encode USER INTENT or an OPEN user decision are the reaper's
-// exemption (`USER_DECISION_BLOCKED_CATEGORIES`, lib/taskBlockCategories.js).
-// Everything else with a `blockedCategory` is a failure-path block and therefore
-// reapable — including `orphan-cooldown`, which revives itself in ~30 minutes, so
-// one still sitting there after 14 days IS stale.
-
-/**
- * Age (ms) of a failure-blocked task, read from the most specific timestamp it
- * carries. Returns null when the task is not a reapable failure block, or when
- * it has no parseable timestamp — an undated block is never reaped (we can't
- * prove it is old, so leaving it is the safe default). Pure.
- */
-export function blockedFailureAgeMs(task, now = Date.now()) {
-  if (task?.status !== 'blocked') return null;
-  const category = task.metadata?.blockedCategory;
-  if (!category || USER_DECISION_BLOCKED_CATEGORIES.has(category)) return null;
-  const stampedAt = task.metadata?.blockedAt
-    || task.metadata?.lastFailureAt
-    || task.metadata?.updatedAt;
-  const t = Date.parse(stampedAt);
-  if (!Number.isFinite(t)) return null;
-  return Math.max(0, now - t);
-}
-
-/** True when a failure-blocked task is old enough to auto-expire. Pure. */
-export function isReapableBlockedFailure(task, { now = Date.now(), maxAgeMs = DEFAULT_FAILURE_TASK_MAX_AGE_MS } = {}) {
-  const age = blockedFailureAgeMs(task, now);
-  return age !== null && age >= maxAgeMs;
-}
-
-/**
- * True when an investigation task's originating task(s) are all resolved —
- * absent (already reaped/deleted) or in a terminal `completed` status — so the
- * investigation no longer tracks any live failure. Requires a known originating
- * link (`metadata.affectedTasks`); a legacy investigation with no link is left
- * alone (we can't prove its cause is resolved). Pure.
- *
- * @param {object} task       the candidate investigation task
- * @param {Map}    tasksById  id → task across BOTH queues
- */
-export function isReapableInvestigation(task, tasksById) {
-  if (!isInvestigationTask(task)) return false;
-  if (task.status === 'completed') return false; // already terminal
-  // An in-progress investigation has a live agent diagnosing it; reaping it
-  // would let a later finalize regress the status or spawn a second run (#12059).
-  if (task.status === 'in_progress') return false;
-  const affected = Array.isArray(task.metadata?.affectedTasks) ? task.metadata.affectedTasks : [];
-  if (affected.length === 0) return false;
-  return affected.every((id) => {
-    const origin = tasksById?.get(id);
-    return !origin || origin.status === 'completed';
-  });
-}
-
-/**
- * Sweep resolved failure artifacts and auto-expire them via status flip (#2619).
- *
- * Two categories, both resolved to `completed` with a `resolution: 'auto-expired'`
- * marker (never deleted — federation-safe): (1) tasks parked in `blocked` by a
- * failure `blockedCategory` older than `maxAgeMs`, and (2) `[Auto] Investigate
- * agent failure` tasks whose originating task(s) are gone/completed. Bounded to
- * `limit` flips per call and single-line-logged. Runs off the health tick.
- *
- * @param {{ now?:number, maxAgeMs?:number, limit?:number }} [opts]
- * @returns {Promise<{ reaped:number, staleBlocks:number, investigations:number }>}
- */
-export async function sweepResolvedFailureTasks({
-  now = Date.now(),
-  maxAgeMs = DEFAULT_FAILURE_TASK_MAX_AGE_MS,
-  limit = DEFAULT_REAP_LIMIT
-} = {}) {
-  const { user, cos } = await getAllTasks();
-  const userTasks = user?.tasks || [];
-  const cosTasks = cos?.tasks || [];
-  const tasksById = new Map([...userTasks, ...cosTasks].map((t) => [t.id, t]));
-
-  // Collect targets across both queues, tagging each with its file type so the
-  // flip writes back to the right markdown store. Bounded by `limit`.
-  const targets = [];
-  for (const [type, list] of [['user', userTasks], ['internal', cosTasks]]) {
-    for (const task of list) {
-      const reason = isReapableBlockedFailure(task, { now, maxAgeMs })
-        ? 'stale-failure-block'
-        : (isReapableInvestigation(task, tasksById) ? 'investigation-resolved' : null);
-      if (reason) targets.push({ task, type, reason });
-      if (targets.length >= limit) break;
-    }
-    if (targets.length >= limit) break;
-  }
-
-  if (targets.length === 0) return { reaped: 0, staleBlocks: 0, investigations: 0 };
-
-  let staleBlocks = 0;
-  let investigations = 0;
-  for (const { task, type, reason } of targets) {
-    // Re-read BOTH queues and re-evaluate the reason under the same lock as the
-    // write. Status/metadata pins protect a target from its own stale snapshot,
-    // but an investigation also depends on its origins: one can be resumed after
-    // this sweep's snapshot while the investigation itself stays pending (#12059).
-    const updated = await withStateLock(async () => {
-      const current = await getAllTasks();
-      const currentTask = (type === 'user' ? current.user.tasks : current.cos.tasks)
-        .find((candidate) => candidate.id === task.id);
-      if (!currentTask) return { statusChanged: true };
-      const currentById = new Map([...current.user.tasks, ...current.cos.tasks].map((candidate) => [candidate.id, candidate]));
-      const currentReason = isReapableBlockedFailure(currentTask, { now, maxAgeMs })
-        ? 'stale-failure-block'
-        : (isReapableInvestigation(currentTask, currentById) ? 'investigation-resolved' : null);
-      if (currentReason !== reason) return { statusChanged: true, task: currentTask };
-
-      return writeTaskUpdateLocked(task.id, {
-        status: 'completed',
-        metadata: { resolution: 'auto-expired', autoExpiredReason: reason, autoExpiredAt: new Date(now).toISOString() }
-      }, type, {
-        now,
-        expectedStatus: task.status,
-        // A revived task can fail again before this write and return to blocked.
-        // Preserve the category and every age fallback that justified this sweep.
-        expectedMetadata: reason === 'stale-failure-block' ? {
-          blockedCategory: task.metadata?.blockedCategory,
-          blockedAt: task.metadata?.blockedAt,
-          lastFailureAt: task.metadata?.lastFailureAt,
-          updatedAt: task.metadata?.updatedAt,
-        } : null,
-      });
-    });
-    if (updated?.error || updated?.statusChanged) continue;
-    if (reason === 'stale-failure-block') staleBlocks++; else investigations++;
-  }
-
-  const reaped = staleBlocks + investigations;
-  if (reaped > 0) {
-    console.log(`🧹 Reaped ${reaped} resolved failure task(s): ${staleBlocks} stale block(s), ${investigations} investigation(s)`);
-  }
-  return { reaped, staleBlocks, investigations };
+export async function sweepResolvedFailureTasks(options = {}) {
+  return sweepFailureQueues(prepareTaskUpdate, options);
 }
 
 /**
@@ -1425,236 +955,4 @@ export async function reorderTasks(taskIds) {
   });
 }
 
-/**
- * Approve a task that requires approval (marks it as auto-approved).
- *
- * Emits `tasks:changed` with `action: 'approved'`; cos.js's init listener
- * fires `dequeueNextTask` off that so the newly approved task can spawn
- * immediately.
- */
-export async function approveTask(taskId, { now = Date.now() } = {}) {
-  return withStateLock(async () => {
-  // Both queues, internal first. A USER row can hold too: a row the parser had
-  // to RECOVER is withheld from the unattended spawn and now persists that hold
-  // as `| APPROVAL |` (#7300, #7367). Without a release path here that row is a
-  // zombie — pending forever, with nothing in the product able to clear it —
-  // which is a worse outcome than the evaporating hold it replaced.
-  let found = null;
-  for (const taskType of ['internal', 'user']) {
-    const tasks = await readTaskFile(taskType);
-    const taskIndex = tasks.findIndex(t => t.id === taskId);
-    if (taskIndex !== -1) {
-      found = { taskType, tasks, taskIndex };
-      break;
-    }
-  }
-
-  if (!found) {
-    return { error: 'Task not found' };
-  }
-
-  const { taskType, tasks, taskIndex } = found;
-
-  if (!tasks[taskIndex].approvalRequired) {
-    return { error: 'Task does not require approval' };
-  }
-
-  // Update approval flags. Approval is editable content (the merge's
-  // contentSignature counts the approval flags), so bump the `updatedAt` LWW
-  // stamp (#1714) too — otherwise an approval on one peer would lose a same-status
-  // tie to a stale edit on the other instead of winning as the newest edit.
-  tasks[taskIndex] = {
-    ...tasks[taskIndex],
-    approvalRequired: false,
-    autoApproved: true,
-    metadata: { ...tasks[taskIndex].metadata, updatedAt: new Date(now).toISOString() }
-  };
-
-  await writeTaskList(taskType, tasks);
-
-  cosEvents.emit('tasks:changed', { type: taskType, action: 'approved', task: tasks[taskIndex] });
-
-  const { removeByMetadata } = await import('../notifications.js');
-  await removeByMetadata('taskId', taskId).catch(() => {});
-
-  return tasks[taskIndex];
-  });
-}
-
-/**
- * Record a sub-agent's challenge of a reviewer rejection (#2441).
- *
- * Parks the task in the `challenged` status with the worker's case attached and
- * consumes one of its bounded challenge slots (MAX_CHALLENGES_PER_TASK). A second
- * dispute on the same task is refused — the acceptance contract is "exactly one
- * per task." Read, budget check, and write share the completion/state lock.
- *
- * @returns the updated task, or `{ error, code }` on not-found / budget-exhausted.
- */
-export async function challengeTask(taskId, { reason, evidence, reviewer } = {}, taskType = 'user', { now = Date.now() } = {}) {
-  return withStateLock(async () => {
-    const task = await getTaskById(taskId);
-    if (!task) return { error: 'Task not found', code: 'NOT_FOUND' };
-    const resolvedType = task.taskType || taskType;
-    // A challenge disputes a REJECTION of in-flight work — never a finished task.
-    // Parking a `completed` task in `challenged` would also regress it out of a
-    // terminal state (a completed task never re-completes), so refuse it outright.
-    if (task.status === 'completed') {
-      return { error: 'Cannot challenge a completed task', code: 'CANNOT_CHALLENGE_COMPLETED' };
-    }
-    // Bounded by BOTH the one-shot dispute cap AND the shared retry budget (#2471) —
-    // a challenge that overturns re-queues the task, so refuse one that's already out
-    // of total spawns (it would only get re-blocked by agentLifecycle's spawn gate).
-    if (!canChallenge(task.metadata, { maxTotalSpawns: MAX_TOTAL_SPAWNS })) {
-      const spawns = Number(task.metadata?.totalSpawnCount) || 0;
-      const budgetExhausted = spawns >= MAX_TOTAL_SPAWNS;
-      return {
-        error: budgetExhausted
-          ? `Retry budget exhausted (${spawns}/${MAX_TOTAL_SPAWNS} spawns) — cannot challenge a task out of retries`
-          : `Challenge budget exhausted (${getChallengeCount(task.metadata)}/${MAX_CHALLENGES_PER_TASK} used)`,
-        code: budgetExhausted ? 'CHALLENGE_BUDGET_EXHAUSTED' : 'CHALLENGE_EXHAUSTED',
-      };
-    }
-    const patch = buildChallengePatch(task.metadata, { reason, evidence, reviewer, now });
-    const updated = await writeTaskUpdateLocked(taskId, { status: 'challenged', metadata: patch }, resolvedType, { now });
-    if (updated?.error) return updated;
-    console.log(`⚖️ Task ${taskId} challenged (${patch.challengeCount}/${MAX_CHALLENGES_PER_TASK})${patch.challenge.reviewer ? ` — disputing ${patch.challenge.reviewer}` : ''}`);
-    return updated;
-  });
-}
-
-/**
- * Resolve a parked challenge (#2441). `upheld` overturns the rejection and
- * preserves its active owner (→ in_progress), or requeues an unowned task
- * (→ pending); `escalated` hands the unresolved dispute to
- * the user — the task is blocked with a challenge-escalation reason AND an
- * approval-required arbitration task is filed into COS-TASKS.md (reusing the same
- * investigation/escalation surface `createInvestigationTask` writes to), so a
- * sustained disagreement surfaces to the user rather than silently fixing or
- * quietly blocking.
- *
- * @returns the updated task, or `{ error, code }` on not-found / not-challenged /
- *          invalid-outcome.
- */
-export async function resolveTaskChallenge(taskId, { outcome, note, resolvedBy } = {}, taskType = 'user', { now = Date.now() } = {}) {
-  const resolution = await withStateLock(async () => {
-    const task = await getTaskById(taskId);
-    if (!task) return { error: 'Task not found', code: 'NOT_FOUND' };
-    if (task.status !== 'challenged') {
-      return { error: 'Task is not under challenge', code: 'NOT_CHALLENGED' };
-    }
-    const resolvedType = task.taskType || taskType;
-    const resolutionPatch = buildChallengeResolutionPatch({ outcome, note, resolvedBy, now });
-    if (!resolutionPatch) return { error: `Invalid challenge outcome: ${outcome}`, code: 'INVALID_OUTCOME' };
-
-    const state = await loadState();
-    const nextStatus = outcome === 'upheld'
-      ? (hasActiveTaskOwner(taskId, state.agents) ? 'in_progress' : 'pending')
-      : 'blocked';
-    const metadataPatch = { ...resolutionPatch };
-    if (outcome === 'escalated') {
-      metadataPatch.blockedReason = 'Challenge unresolved — escalated to user for arbitration';
-      metadataPatch.blockedCategory = 'challenge-escalation';
-    }
-    const updated = await writeTaskUpdateLocked(taskId, { status: nextStatus, metadata: metadataPatch }, resolvedType, { now });
-    if (updated?.error) return updated;
-    return { task, updated, nextStatus, resolvedType };
-  });
-  if (resolution.error) return resolution;
-  const { task, updated, nextStatus } = resolution;
-
-  if (outcome === 'escalated') {
-    // Surface the dispute to the single PortOS user as an approval-required
-    // arbitration task (mirrors createInvestigationTask's escalation surface).
-    // Best-effort: a failed escalation-task write must not fail the resolution
-    // itself (the original task is already blocked with the reason attached).
-    const caseReason = task.metadata?.challenge?.reason || '(no reason recorded)';
-    const disputedReviewer = task.metadata?.challenge?.reviewer;
-    const escalationDescription = `[Challenge] Arbitrate disputed rejection on ${taskId}`;
-    const escalationContext = [
-      `A sub-agent challenged a reviewer rejection on task ${taskId} and the dispute is unresolved.`,
-      disputedReviewer ? `Disputed reviewer: ${disputedReviewer}` : null,
-      `Worker's case: ${caseReason}`,
-      note ? `Resolver note: ${note}` : null,
-      'Decide: approve to overturn the rejection, or delete to let the rejection stand.',
-    ].filter(Boolean).join('\n');
-    await addTask({
-      description: escalationDescription,
-      priority: 'HIGH',
-      context: escalationContext,
-      approvalRequired: true,
-    }, 'internal', { now }).catch((err) => {
-      console.error(`❌ Failed to file challenge-escalation task for ${taskId}: ${err.message}`);
-    });
-  }
-
-  console.log(`⚖️ Task ${taskId} challenge resolved: ${outcome} → ${nextStatus}`);
-  return updated;
-}
-
-/**
- * Resolve a parked challenge by AUTOMATIC reviewer re-check (#2471). Instead of a
- * human verdict, re-run the disputed (or a second) local-LLM reviewer against the
- * current diff and derive the outcome from its fresh findings — a blocking finding
- * that survives sustains the rejection (→ escalated); nothing blocking overturns it
- * (→ upheld). This is the cheap confirm/overturn pass that runs BEFORE falling back
- * to user escalation, closing the gap #2470 left ("this slice resolves manually").
- *
- * Only the in-process local reviewers (`LOCAL_LLM_REVIEWERS`) are re-run here; CLI
- * reviewers are re-run by the follow-up agent itself, which then calls the manual
- * `resolveTaskChallenge` path with an explicit outcome.
- *
- * @returns the updated task, or `{ error, code }` on not-found / not-challenged /
- *          RECHECK_FAILED (reviewer unreachable or no usable findings).
- */
-export async function resolveTaskChallengeWithRecheck(taskId, { recheck, resolvedBy } = {}, taskType = 'user', { now = Date.now() } = {}) {
-  const task = await getTaskById(taskId);
-  if (!task) return { error: 'Task not found', code: 'NOT_FOUND' };
-  if (task.status !== 'challenged') {
-    return { error: 'Task is not under challenge', code: 'NOT_CHALLENGED' };
-  }
-  const backend = recheck?.backend;
-  // Model: explicit override wins, else the Code Review Defaults for this backend.
-  // Effort has no per-request override (a re-check re-runs the SAME reviewer
-  // configuration, it doesn't reconfigure it), so it always comes from the
-  // defaults — but it must come from somewhere: this verdict decides whether a
-  // disputed rejection is upheld or escalated to the user, and deriving it from a
-  // pass run at a weaker effort than the user configured is the same silent
-  // downgrade the pin exists to prevent.
-  // Read straight off the picked defaults: `pickCodeReviewDefaults` already ran
-  // every `<reviewer>Effort` scalar through `reviewerEffortsFromDefaults`, so a
-  // stale level is null by the time it reaches here — same as the model read below.
-  const recheckDefaults = await getCodeReviewDefaults().catch(() => null);
-  const effort = recheckDefaults?.[`${backend}Effort`] || null;
-  // Keyed off the roster's `<reviewer>Model` scalar rather than a per-backend
-  // branch (matching `POST /api/code-review/local`): the old ollama-or-lmstudio
-  // ternary read LM STUDIO's model for any third local backend, so an `mtplx`
-  // re-check ran against a model id from the wrong daemon.
-  //
-  // An unset scalar is no longer fatal here: `runLocalCodeReview` falls back to the
-  // model the backend is actually serving when that answer is unambiguous, so a
-  // single-model daemon re-checks without one. It reports `code: 'NO_MODEL'` when it
-  // could not resolve one either, which stays a config problem (4xx) rather than the
-  // 502 bucket reserved for a reviewer that's actually unreachable.
-  const model = recheck?.model || reviewerModelsFromDefaults(recheckDefaults)[backend] || null;
-  console.log(`⚖️ Re-checking challenge on ${taskId} via ${backend} (${model || 'model from the backend'}${effort ? `, ${effort} effort` : ''})`);
-  const review = await runLocalCodeReview({ backend, model, effort, diff: recheck?.diff });
-  if (!review?.ok) {
-    if (review?.code === 'NO_MODEL') return { error: review.error, code: 'RECHECK_NO_MODEL' };
-    return { error: `Re-check failed: ${review?.error || 'unknown reviewer error'}`, code: 'RECHECK_FAILED' };
-  }
-  const outcome = classifyRecheckOutcome(review.findings);
-  if (!outcome) {
-    return { error: 'Re-check returned no usable findings', code: 'RECHECK_FAILED' };
-  }
-  const verdict = outcome === 'upheld'
-    ? `no blocking findings survived (${backend})`
-    : `a blocking finding still stands (${backend})`;
-  // The resolution note is auto-generated from the re-check verdict (any caller
-  // `note` is intentionally not threaded here — the machine verdict is the record).
-  // `review.model` rather than `model`: the reviewer resolves an unpinned id from
-  // what the backend is serving, and the record has to name the model that actually
-  // produced this verdict, not `null`.
-  const note = `Auto re-check by ${backend} (${review.model || model}): ${verdict}.`;
-  return resolveTaskChallenge(taskId, { outcome, note, resolvedBy: resolvedBy || `recheck:${backend}` }, taskType, { now });
-}
+export const { challengeTask, resolveTaskChallenge, resolveTaskChallengeWithRecheck } = createTaskChallenges({ addTask, writeTaskUpdateLocked });

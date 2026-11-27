@@ -66,7 +66,7 @@ export function assertNoPendingTopaz(historyId) {
   if (pending || admitting.has(historyId)) throw new ServerError('A Topaz request for this video is still running or has an uncertain outcome. Check the existing request before starting another.', { status: 409, code: 'TOPAZ_PENDING' });
 }
 
-export async function enqueueTopazUpscale(historyId, token) {
+export async function enqueueTopazUpscale(historyId, token, { musicVideo } = {}) {
   assertNoPendingTopaz(historyId);
   admitting.add(historyId);
   try {
@@ -78,7 +78,7 @@ export async function enqueueTopazUpscale(historyId, token) {
     await cleanupTopazStaging(quote.preparedId).catch(() => { throw new ServerError('Could not clean Topaz staging.', { status: 500, code: 'TOPAZ_CLEANUP_FAILED' }); });
     throw new ServerError('The source changed after the estimate. Request a new estimate.', { status: 409, code: 'TOPAZ_SOURCE_CHANGED' });
   }
-  return await enqueueJob({ kind: 'video-upscale', params: { mode: 'topaz', ...quote, prompt: 'Topaz video upscale', width: 1920, height: 1080 } })
+  return await enqueueJob({ kind: 'video-upscale', params: { mode: 'topaz', ...quote, ...(musicVideo ? { musicVideo } : {}), prompt: 'Topaz video upscale', width: 1920, height: 1080 } })
     .then(result => { releaseTopazStaging(quote.preparedId); return result; })
     .catch(async error => { await cleanupTopazStaging(quote.preparedId).catch(() => { throw new ServerError('Could not clean Topaz staging.', { status: 500, code: 'TOPAZ_CLEANUP_FAILED' }); }); throw error; });
   } finally { admitting.delete(historyId); }
@@ -246,8 +246,22 @@ async function removeUnrecordedOutputLink({ jobId, finalPath }) {
 
 /** Persists what is known about the provider request after a failed run: still uncertain, or complete and recoverable. */
 async function recordFailedRun({ jobId, requestId, providerTerminal, confirmedCancel, status }) {
-  if (getJob(jobId)?.result?.topazPhase) await updateJobResult(jobId, { topazUncertain: !providerTerminal, topazRequestId: requestId }).catch(() => {});
-  if (providerTerminal && !confirmedCancel && status?.status === 'complete') await updateJobResult(jobId, { topazRecoveryAvailable: true, topazProviderStatus: 'complete', topazRequestId: requestId }).catch(() => {});
+  const job = getJob(jobId);
+  const recoverable = providerTerminal && !confirmedCancel && status?.status === 'complete';
+  if (!job || (!job.result?.topazPhase && !recoverable)) return;
+  const patch = {
+    topazUncertain: !providerTerminal,
+    topazRequestId: requestId,
+    ...(recoverable ? { topazRecoveryAvailable: true, topazProviderStatus: 'complete' } : {}),
+  };
+  try {
+    if (!await updateJobResult(jobId, patch)) throw Object.assign(new Error('Job unavailable'), { code: 'JOB_NOT_FOUND' });
+  } catch (error) {
+    // The queue rolls back failed writes. Keep the billing and recovery state
+    // on the live record so subsequent requests see it during this process.
+    job.result = { ...job.result, ...patch };
+    console.error(`❌ Topaz failure state could not be saved: job=${jobId} request=${requestId} code=${error?.code ?? 'PERSIST_FAILED'}`);
+  }
 }
 
 /** Local file cleanup once a run ends. Files are retained and the job marked unsettled whenever ownership cannot be proven. */

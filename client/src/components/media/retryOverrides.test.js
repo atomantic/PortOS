@@ -11,13 +11,13 @@ const draftFrom = (p, patch = {}) => ({
   chunks: p.chunks ?? 1, chunkPrompts: p.chunkPrompts || [], seed: p.seed ?? '', steps: p.steps ?? '',
   guidanceScale: p.guidanceScale ?? '', imageStrength: p.imageStrength ?? '',
   i2vReferenceMode: 'anchor', tiling: 'auto', disableAudio: false, textEncoderId: 'stock',
-  speedProfileId: DEFAULT_SPEED_PROFILE_ID, draftDecode: 'full', a2vLoraStageStrengths: [1, 1], streamingMode: 'auto',
+  speedProfileId: DEFAULT_SPEED_PROFILE_ID, a2vLoraStageStrengths: [1, 1], streamingMode: 'auto',
   selectedLoras: [], ...patch,
 });
 
 const ctxFor = (patch = {}) => ({
   currentModel: null, isHosted: false, chainingActive: false, displayedContextFrames: 0,
-  originalEncoder: 'stock', originalSpeedProfileForModel: DEFAULT_SPEED_PROFILE_ID, originalDraftDecode: 'full', ...patch,
+  originalEncoder: 'stock', originalSpeedProfileForModel: DEFAULT_SPEED_PROFILE_ID, ...patch,
 });
 
 describe('change helpers', () => {
@@ -61,7 +61,7 @@ describe('buildVideoRetryOverrides', () => {
 
   it('a model switch re-sends the model-bound knobs even when they snap to defaults', () => {
     const out = buildVideoRetryOverrides(draftFrom(baseParams, { modelId: 'm2' }), baseParams, ctxFor());
-    expect(out).toEqual({ modelId: 'm2', textEncoderId: 'stock', speedProfileId: null, draftDecode: null });
+    expect(out).toEqual({ modelId: 'm2', textEncoderId: 'stock', speedProfileId: null });
   });
 
   it('drops chunk prompts when chaining is collapsed back to one chunk', () => {
@@ -94,16 +94,16 @@ describe('buildVideoRetryOverrides', () => {
 });
 
 describe('reconcileModelBoundParams', () => {
-  const draft = { contextFrames: 0, i2vReferenceMode: 'anchor', textEncoderId: 'stock', speedProfileId: DEFAULT_SPEED_PROFILE_ID, draftDecode: 'full' };
+  const draft = { contextFrames: 0, i2vReferenceMode: 'anchor', textEncoderId: 'stock', speedProfileId: DEFAULT_SPEED_PROFILE_ID };
 
   it('leaves the draft untouched until the model resolves', () => {
-    expect(reconcileModelBoundParams(null, [], draft)).toBe(draft);
+    expect(reconcileModelBoundParams(null, draft)).toBe(draft);
   });
 
   it('is idempotent for a resolved model', () => {
     const model = { id: 'm1', runtime: 'ltx' };
-    const once = reconcileModelBoundParams(model, [model], draft);
-    expect(reconcileModelBoundParams(model, [model], once)).toEqual(once);
+    const once = reconcileModelBoundParams(model, draft);
+    expect(reconcileModelBoundParams(model, once)).toEqual(once);
   });
 });
 

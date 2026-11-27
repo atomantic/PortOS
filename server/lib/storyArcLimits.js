@@ -1,6 +1,5 @@
 /**
- * Pure canonical length/count caps and series-design field/mode contract shared by sanitizers, schemas
- * and browser editors.
+ * Story arc limits, series-design fields and modes, and ticking-clock kinds shared by sanitizers and browser editors.
  */
 
 /** Canonical length and count caps for story arcs, seasons, and episodes. */
@@ -46,3 +45,5 @@ export const SERIES_DESIGN_FIELDS = Object.freeze({
 
 // Title/logo design concept prose (series bible) — see services/pipeline/series.js.
 export const TITLE_LOGO_MAX = 2000;
+
+export const TICKING_CLOCK_KINDS = Object.freeze(['deadline', 'event', 'countdown', 'prophecy', 'bomb', 'custom']);

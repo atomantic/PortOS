@@ -10,9 +10,9 @@ vi.mock('../services/apiDigitalTwin.js', () => ({
   getDigitalTwinStatus: api.getDigitalTwinStatus,
   getDigitalTwinSettings: api.getDigitalTwinSettings,
 }));
-// useInstanceFeatures reads apiSystem.js directly (#16562); the barrel mock above
+// useInstanceFeatures reads apiAppShell.js directly (#16562); the barrel mock above
 // never provided getInstanceFeatures, so keep the hook on its fail-open path.
-vi.mock('../services/apiSystem.js', async (importOriginal) => ({
+vi.mock('../services/apiAppShell.js', async (importOriginal) => ({
   ...(await importOriginal()),
   getInstanceFeatures: vi.fn(() => Promise.reject(new Error('features unavailable'))),
 }));

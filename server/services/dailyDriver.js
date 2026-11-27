@@ -13,10 +13,12 @@
 
 import { join } from 'path';
 import { atomicWrite, ensureDir, PATHS, readJSONFile } from '../lib/fileUtils.js';
+import { createFileWriteQueue } from '../lib/fileWriteQueue.js';
 import { todayInTimezone } from '../lib/timezone.js';
 import { getUserTimezone } from './userTimezone.js';
 
 const FILE = join(PATHS.data, 'daily-driver.json');
+const queueDriverWrite = createFileWriteQueue();
 
 /**
  * Pure: derive the driver state for `today` (YYYY-MM-DD) from a stored record.
@@ -55,14 +57,16 @@ async function localToday() {
  * per local day, on the first landing), then stamps `lastVisitDay = today`.
  */
 export async function getAndRecordVisit() {
-  const today = await localToday();
-  const record = await load();
-  const state = computeDriverState(record, today);
-  if (record.lastVisitDay !== today) {
-    record.lastVisitDay = today;
-    await save(record);
-  }
-  return state;
+  return queueDriverWrite(async () => {
+    const today = await localToday();
+    const record = await load();
+    const state = computeDriverState(record, today);
+    if (record.lastVisitDay !== today) {
+      record.lastVisitDay = today;
+      await save(record);
+    }
+    return state;
+  });
 }
 
 /**
@@ -79,10 +83,12 @@ export async function getDriverState() {
  * Also stamps `lastVisitDay` so a same-day reload doesn't re-flag a first visit.
  */
 export async function markDriverHandled() {
-  const today = await localToday();
-  const record = await load();
-  record.handledDay = today;
-  record.lastVisitDay = today;
-  await save(record);
-  return computeDriverState(record, today);
+  return queueDriverWrite(async () => {
+    const today = await localToday();
+    const record = await load();
+    record.handledDay = today;
+    record.lastVisitDay = today;
+    await save(record);
+    return computeDriverState(record, today);
+  });
 }

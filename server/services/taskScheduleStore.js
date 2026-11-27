@@ -13,6 +13,7 @@ import { join } from 'path';
 import { atomicWrite, ensureDir, readJSONFile, PATHS } from '../lib/fileUtils.js';
 import { createFileWriteQueue } from '../lib/fileWriteQueue.js';
 import { isPlainObject } from '../lib/objects.js';
+import { foldAuditSchedule } from '../lib/auditScheduleCompatibility.js';
 import { currentTaskTypeName, taskExecutionKey as executionKey } from '../lib/scheduledTaskTypes.js';
 import { emitLog } from './cos/cosEvents.js';
 import { LEGACY_INTERVAL_TYPES, normalizeIntervalConfig } from './taskScheduleConstants.js';
@@ -24,6 +25,7 @@ import {
 } from './taskScheduleRegistry.js';
 import {
   DEFAULT_TASK_PROMPTS,
+  promptMatchesShippedDefault,
   reconcileStoredPrompt
 } from './taskPromptDefaults.js';
 
@@ -70,7 +72,8 @@ function migrateScheduleV1toV2(schedule) {
     tasks: structuredClone(DEFAULT_TASK_INTERVALS),
     executions: {},
     templates: schedule.templates || [],
-    onDemandRequests: schedule.onDemandRequests || []
+    onDemandRequests: schedule.onDemandRequests || [],
+    ...(schedule.retiredAuditConfigs && { retiredAuditConfigs: schedule.retiredAuditConfigs })
   };
 
   // Merge selfImprovement settings into tasks (excluding cos-enhancement)
@@ -228,7 +231,8 @@ async function readSchedule() {
     return { schedule: structuredClone(DEFAULT_SCHEDULE), needsSave: false };
   }
 
-  let executionStateNormalized = normalizeRetirementRecords(loaded);
+  let executionStateNormalized = foldAuditSchedule(loaded, promptMatchesShippedDefault);
+  if (normalizeRetirementRecords(loaded)) executionStateNormalized = true;
   // Older global execution records can predate per-app history. Normalize before
   // the v1/v2 split so status, readiness and the first app write share the shape.
   for (const record of Object.values(loaded.executions || {})) {
@@ -364,7 +368,7 @@ export async function updateSchedule(mutate) {
  */
 export async function resetExecutionHistory(taskType, appId = null) {
   const result = await updateSchedule(async (schedule) => {
-    const key = `task:${taskType}`;
+    const key = executionKey(taskType);
 
     if (!schedule.executions[key]) {
       return { result: { error: 'No execution history found' }, changed: false };

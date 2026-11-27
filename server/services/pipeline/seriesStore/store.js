@@ -34,6 +34,7 @@
  * the manuscript-review.json siblings in place.
  */
 
+import { createIdValidator } from '../../../lib/recordIdValidation.js';
 import { join } from 'path';
 import { PATHS } from '../../../lib/fileUtils.js';
 import { createCollectionStore } from '../../../lib/collectionStore.js';
@@ -47,11 +48,7 @@ import { bumpPipelineMutationEpoch } from '../syncEpoch.js';
 const TYPE_SCHEMA_VERSION = 1;
 const ID_PATTERN = /^ser-[A-Za-z0-9-]+$/;
 
-function assertValidId(id) {
-  if (typeof id !== 'string' || !ID_PATTERN.test(id)) {
-    throw new Error(`pipelineSeriesStore: invalid record id "${id}" — must match ${ID_PATTERN}`);
-  }
-}
+const assertValidId = createIdValidator('pipelineSeriesStore', ID_PATTERN);
 
 // --- File backend (escape hatch / tests): wraps collectionStore ---
 function makeFileBackend(dir, sanitizeRecord) {

@@ -217,7 +217,8 @@ async function openEnvironment(fixture, { warmup = false } = {}) {
     phase('shot selection');
     await page.getByRole('button', { name: /Overhead/, pressed: false }).click();
     phase('shot lens synchronization');
-    await page.waitForFunction(() => document.querySelector('#greybox-lens')?.value === '28');
+    const lens = page.getByRole('slider', { name: /^Lens:/ });
+    await expect.poll(() => lens.inputValue(), { timeout: 10000 }).toBe('28');
     // Demand rendering and Html placement finish after React commits.
     phase('shot demand frames');
     await page.evaluate(() => new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve))));
@@ -292,9 +293,7 @@ describe.skipIf(!canRun)('Environment greybox in Chromium', () => {
   // delaying the next. Warmup compiles the lazy chunk without mounting a canvas.
   beforeEach(async () => {
     fixture = undefined;
-    const { createServer } = await import(bundler[0]);
-    const { default: react } = await import(bundler[1]);
-    const { default: tailwind } = await import(bundler[2]);
+    const { createServer, react, tailwind } = await import('../../client/src/test/clientBundler.js');
     fixture = await startBrowserFixture({
       name: 'catalog-greybox', createServer, chromium,
       launchOptions: { executablePath: chrome, args: ['--mute-audio', '--use-angle=swiftshader', '--enable-unsafe-swiftshader'] },
