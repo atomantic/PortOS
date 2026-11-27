@@ -38,6 +38,36 @@ const built = {
 };
 
 describe('PublishKitPanel (#9281)', () => {
+  it('merges live updates into untouched copy and draft settings, keeping the active edit', async () => {
+    const k = hook();
+    const panel = kit => <PublishKitPanel project={{ id: 'mv-1', publishKit: kit }} publishKit={k} enabledTargets={['youtube']} />;
+    const { rerender } = render(panel(built));
+    expandAll();
+    const description = screen.getByLabelText('Description');
+    fireEvent.change(description, { target: { value: 'Local description' } });
+
+    rerender(panel({ ...built, notes: 'Updated notes', links: { youtube: 'https://example.com/full', song: 'https://example.com/song' },
+      draftOptions: { length: 'full', include: { hashtags: true } },
+      copy: { youtube: { title: 'Updated title', description: 'Other description', tags: [] } } }));
+    expect(screen.getByLabelText('Title')).toHaveValue('Updated title');
+    expect(screen.getByLabelText('Tags (comma-separated)')).toHaveValue('');
+    expect(description).toHaveValue('Local description');
+    expect(screen.getByLabelText(/Making-of notes/)).toHaveValue('Updated notes');
+    expect(screen.getByLabelText(/Full video URL/)).toHaveValue('https://example.com/full');
+    expect(screen.getByLabelText(/Song URL/)).toHaveValue('https://example.com/song');
+    expect(screen.getByLabelText(/Hashtags and YouTube tags/)).toBeChecked();
+    expect(screen.getByLabelText('Full making-of')).toBeChecked();
+    expect(k.saveCopy).not.toHaveBeenCalled();
+    fireEvent.click(screen.getByRole('button', { name: 'Redraft copy' }));
+    expect(k.draftCopy).toHaveBeenCalledWith(expect.objectContaining({
+      notes: 'Updated notes', links: { youtube: 'https://example.com/full', song: 'https://example.com/song' },
+      length: 'full', include: expect.objectContaining({ hashtags: true }),
+    }));
+    fireEvent.blur(description);
+    expect(k.saveCopy).toHaveBeenCalledWith({ youtube: { description: 'Local description' } });
+    await act(async () => {});
+  });
+
   it('opens the current final render for a separate upscale and clears it when the render changes', () => {
     const k = hook();
     const { rerender } = render(<PublishKitPanel project={{ id: 'mv-1' }} publishKit={k} />);
