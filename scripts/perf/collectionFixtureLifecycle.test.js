@@ -17,9 +17,7 @@ vi.mock('node:module', () => ({ createRequire: () => () => ({ Client: function (
     } };
 } }) }));
 vi.mock('node:child_process', () => {
-  const execFile = vi.fn();
-  execFile[Symbol.for('nodejs.util.promisify.custom')] = async () => ({ stdout: 'server/package.json\0lib/fixture.js\0' });
-  return { execFile, fork: () => {
+  return { fork: () => {
     const child = new EventEmitter();
     child.exitCode = null;
     child.signalCode = null;
@@ -32,6 +30,11 @@ vi.mock('node:child_process', () => {
     return child;
   } };
 });
+vi.mock('./collectionFixtureSources.js', () => ({
+  collectionFixtureSources: () => ({
+    entries: ['server/package.json', 'lib/fixture.js'].map(file => ({ file, source: '/synthetic-source/' + file })),
+  }),
+}));
 import { startCollectionFixture } from './collectionFixture.js';
 
 afterEach(() => vi.useRealTimers());

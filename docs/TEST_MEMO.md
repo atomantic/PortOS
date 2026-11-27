@@ -4,7 +4,7 @@ PortOS can skip a whole Vitest suite file when the same inputs already produced 
 
 ## What the key covers
 
-The key includes suite content and its local static and dynamic dependency closure, runner/coverage configuration, lockfiles and runtime identity (Node, platform, architecture and relevant environment). It includes explicitly discovered non-module file inputs and scoped tree reads. Test-path and checkout-path differences are normalized only when the detector can prove equivalence. Unbounded dynamic input, unknown subprocesses, live services and machine-local reads fail closed. A dirty or newly added relevant file changes the key.
+The key includes suite content and its local static and dynamic dependency closure, runner/coverage configuration, lockfiles and runtime identity (Node, platform, architecture and relevant environment). It includes explicitly discovered non-module file inputs and scoped tree reads. Test-path and checkout-path differences are normalized only when the detector can prove equivalence. Unbounded dynamic input, unknown subprocesses, untracked live-service dependencies and machine-local reads fail closed. A dirty or newly added relevant file changes the key.
 
 ### Directory trees
 
@@ -12,13 +12,19 @@ The detector distinguishes literal file reads, scoped walks with provable path f
 
 ### Never memoized
 
-Database-backed tests and always-run guards cannot earn a memo. Use `// test-memo: never` for a suite whose inputs must remain live or cannot be captured, and keep the marker near the owning input boundary. A name-pattern run cannot record reusable full-file success. Full verdict reuse is allowed for the same inputs when the requested test set is a subset. Smoke/full and browser project entries still use their respective context and strength rules.
+Always-run guards cannot earn a memo. Use `// test-memo: never` for a suite whose inputs must remain live or cannot be captured, and keep the marker near the owning input boundary. A name-pattern run cannot record reusable full-file success. Full verdict reuse is allowed for the same inputs when the requested test set is a subset. Smoke/full and browser project entries still use their respective context and strength rules.
 
 ## Git fixtures
 
 Use `// test-memo: git-fixture` only when every Git command runs in a test-created fixture repository under the temp directory. Initialize that repository before any Git operation that could otherwise discover a containing checkout. Pass the fixture directory explicitly to subprocesses or wrappers. Never send Git a real checkout, reuse inherited cwd, read worktree state as an input or use unknown shell programs under this declaration.
 
 The key includes the effective Git executable/version and inheritable Git configuration, including system/global includes and configured environment overrides. Temporary repository-local configuration comes from the test itself. Unverified Git identity or a call the detector cannot prove to be fixture-scoped refuses memoization. The marker is a checkable assertion, not a bypass. Keep the checkout and fixture Git paths separate and use temporary repos for all transitive wrappers. `scripts/lib/testMemo/gitFixture.js` owns the detector.
+
+## Database suites
+
+Trusted CI can reuse complete DB-suite verdicts within the separate `db` memo lineage. The key includes the DB runner config, schema setup files and each suite's tracked inputs. The workflow counts remaining DB tests before provisioning `portos_test`. The impact plan can still require the live restore probe, which runs outside the memo. Run `npm run test:db` for live verification against `portos_test`.
+
+The collection fixture copies indexed `server/` and `lib/` files from the working tree. Its memo includes eligible index membership, staged identities, effective file modes and working bytes. The analyzer refuses this special input when it cannot verify the source reader, index or physical files. Untracked files and paths excluded by the copy do not enter this input.
 
 ## Store
 
