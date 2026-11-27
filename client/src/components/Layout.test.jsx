@@ -1,6 +1,7 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { render, screen, within, act, fireEvent, waitFor } from '@testing-library/react';
-import { MemoryRouter, Routes, Route, createMemoryRouter, RouterProvider, useLocation } from 'react-router';
+import userEvent from '@testing-library/user-event';
+import { MemoryRouter, Routes, Route, createMemoryRouter, createRoutesFromElements, RouterProvider, useLocation } from 'react-router';
 import { reloadOnceForStaleChunk } from '../utils/staleChunkReload';
 import { PINNED_KEY, RECENT_KEY } from '../utils/navWorkingSet.js';
 import socket from '../services/socket';
@@ -112,7 +113,7 @@ import { __resetInstanceFeatureCache } from '../hooks/useInstanceFeatures.js';
 
 import { NAV_COMMANDS } from '../../../server/lib/navManifest.js';
 import Layout from './Layout';
-import { PaddedMain } from './PageShell';
+import { FullWidthMain, PaddedMain } from './PageShell';
 import { RECONNECTING_PILL_DELAY_MS } from './SocketReconnectingPill.jsx';
 import {
   NAV_PRESENTATION,
@@ -864,6 +865,59 @@ describe('Layout — keyboard navigation shell', () => {
     fireEvent.click(screen.getByTestId('mobile-nav-scrim'));
     expect(opener).toHaveFocus();
     expect(sidebar).toHaveAttribute('inert');
+  });
+
+  it('hands off keyboard focus to each new page and restores the opener for the current page', async () => {
+    desktopMedia.matches = false;
+    localStorage.setItem(PINNED_KEY, JSON.stringify(['/apps/create']));
+    const user = userEvent.setup();
+    const appsLoader = Promise.withResolvers();
+    const router = createMemoryRouter(createRoutesFromElements(
+      <Route element={<Layout />}>
+        <Route element={<PaddedMain />}>
+          <Route index element={<h1>Dashboard</h1>} />
+          <Route path="apps/create" element={<><h1>Create App</h1><button type="button">Save app</button></>} />
+        </Route>
+        <Route element={<FullWidthMain />}>
+          <Route path="apps" loader={() => appsLoader.promise} element={<><h1>Apps</h1><button type="button">Filter apps</button></>} />
+        </Route>
+      </Route>,
+    ));
+    render(<RouterProvider router={router} />);
+    await act(async () => {});
+    const opener = screen.getByRole('button', { name: 'Open navigation menu' });
+    const openMenu = async () => {
+      opener.focus();
+      await user.keyboard('{Enter}');
+      return screen.getByRole('dialog', { name: 'Navigation menu' });
+    };
+    const select = async (item) => {
+      item.focus();
+      await user.keyboard('{Enter}');
+      expect(screen.queryByRole('dialog', { name: 'Navigation menu' })).not.toBeInTheDocument();
+    };
+
+    let menu = await openMenu();
+    await select(within(menu).getByRole('link', { name: 'Dashboard', exact: true }));
+    expect(opener).toHaveFocus();
+
+    menu = await openMenu();
+    await select(within(menu).getByRole('button', { name: 'Apps', exact: true }));
+    expect(screen.getByRole('heading', { name: 'Dashboard' })).toBeInTheDocument();
+    expect(opener).toHaveFocus();
+    await act(async () => appsLoader.resolve(null));
+    expect(screen.getByRole('main')).toHaveFocus();
+    expect(within(screen.getByRole('main')).getByRole('heading', { name: 'Apps' })).toBeInTheDocument();
+    await user.tab();
+    expect(screen.getByRole('button', { name: 'Filter apps' })).toHaveFocus();
+
+    menu = await openMenu();
+    const pinned = within(menu).getByTestId('pinned-section');
+    await select(within(pinned).getByRole('link', { name: 'Create App' }));
+    expect(screen.getByRole('main')).toHaveFocus();
+    expect(within(screen.getByRole('main')).getByRole('heading', { name: 'Create App' })).toBeInTheDocument();
+    await user.tab();
+    expect(screen.getByRole('button', { name: 'Save app' })).toHaveFocus();
   });
 
   it('dismisses a portaled theme picker before closing its mobile sidebar', async () => {
