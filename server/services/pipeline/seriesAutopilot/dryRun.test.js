@@ -1,52 +1,10 @@
-/**
- * dryRun.test.js
- *
- * dryRun.js plan / resolveNextStep drift guard. Split from seriesAutopilot.test.js (#16214); shared mocks and
- * fixtures live in seriesAutopilot.testFixtures.js.
- */
-import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { describe, it, expect } from 'vitest';
+import { summarizePlanCost } from './convergence.js';
+import { buildDryRunPlan } from './dryRun.js';
+import { resolveNextStep } from './stepResolver.js';
 
-// vi.mock factories are hoisted above imports; the shared fixtures module is
-// loaded the same way.
-const h = await vi.hoisted(() => import('./seriesAutopilot.testFixtures.js'));
-const { VALID_SCRIPT, ready } = h;
-
-vi.mock('../../runner.js', (importOriginal) => h.runnerFactory(importOriginal));
-vi.mock('../../../lib/fileUtils.js', () => h.fileUtilsFactory());
-vi.mock('crypto', () => h.cryptoFactory());
-vi.mock('../../instanceIdentity.js', () => h.instanceIdentityFactory());
-vi.mock('../../instances.js', () => h.instancesFactory());
-vi.mock('../../sharing/peerSync.js', () => h.peerSyncFactory());
-vi.mock('../../cos/cosState.js', () => h.cosStateFactory());
-vi.mock('../../domainUsage.js', () => h.domainUsageFactory());
-vi.mock('../arcPlanner.js', (importOriginal) => h.arcPlannerFactory(importOriginal));
-vi.mock('../volumeBeatsRunner.js', () => h.volumeBeatsSpies);
-vi.mock('../autoRunner.js', () => h.autoRunnerSpies);
-vi.mock('../manuscriptReview.js', () => h.manuscriptReviewFactory());
-vi.mock('../editorial/checkRunner.js', () => h.checkRunnerSpies);
-vi.mock('../reverseOutline.js', () => h.reverseOutlineFactory());
-vi.mock('../../settings.js', (importOriginal) => h.settingsFactory(importOriginal));
-vi.mock('../manuscriptFix.js', () => h.manuscriptFixFactory());
-vi.mock('../visualStages.js', () => h.visualSpies);
-vi.mock('../../cos/cosTaskStore.js', () => h.cosTaskStoreFactory());
-vi.mock('../scriptVerify.js', () => h.scriptVerifyFactory());
-vi.mock('../canonReadiness.js', () => h.canonReadinessFactory());
-vi.mock('../../universeCanon.js', () => h.universeCanonFactory());
-vi.mock('../foundationJudge.js', (importOriginal) => h.foundationJudgeFactory(importOriginal));
-vi.mock('./modelPerformance.js', () => h.modelPerformanceFactory());
-vi.mock('../../notifications.js', () => h.notificationsFactory());
-
-// Mocked bindings, so a test can drive the budget and persisted settings per call.
-const { getDomainBudgetStatus } = await import('../../domainUsage.js');
-const { getSettings } = await import('../../settings.js');
-
-// Real services + the unit under test (imported AFTER the mocks above).
-const autopilot = await import('../seriesAutopilot.js');
-const { resolveNextStep } = autopilot;
-
-beforeEach(() => {
-  h.resetFixtures({ autopilot, getDomainBudgetStatus, getSettings });
-});
+const VALID_SCRIPT = 'PAGE 1\nPANEL 1\nA scene.';
+const ready = (output = 'x') => ({ status: 'ready', output });
 
 describe('dry-run plan ↔ resolveNextStep drift guard (#1577)', () => {
   // buildDryRunPlan is kept in sync with resolveNextStep BY HAND (see the comment
@@ -66,7 +24,7 @@ describe('dry-run plan ↔ resolveNextStep drift guard (#1577)', () => {
   // the regime where the two are contractually identical — the dry-run plan is a
   // snapshot prediction of the CURRENT records, not a recursive expansion of
   // issues a generateEpisodes step would later add. generateArc / generateEpisodes
-  // parity is covered separately by the dedicated cases above.
+  // parity is covered separately by the dedicated plan tests.
 
   const freshRunState = () => ({
     locksUnlocked: false,
@@ -203,7 +161,7 @@ describe('dry-run plan ↔ resolveNextStep drift guard (#1577)', () => {
 
   // The plan carries extra annotation fields (note, etc.); compare only kind + count.
   const planEntries = (series, issues, options) =>
-    autopilot.__testing.buildDryRunPlan(series, issues, options).map((p) => ({ kind: p.kind, count: p.count }));
+    buildDryRunPlan(series, issues, options).map((p) => ({ kind: p.kind, count: p.count }));
 
   const baseComic = () => ({ targetFormat: 'comic', arc: { logline: 'L', summary: 'S' }, seasons: [{ id: 'se1', number: 1 }] });
   const baseTv = () => ({ targetFormat: 'tv', arc: { logline: 'L', summary: 'S' }, seasons: [{ id: 'se1', number: 1 }] });
@@ -239,4 +197,210 @@ describe('dry-run plan ↔ resolveNextStep drift guard (#1577)', () => {
       expect(executed).toEqual(plan);
     });
   }
+});
+
+describe('buildDryRunPlan', () => {
+  it('dry-run previews duplicate-volume repair without charging episode generation for absorbed records', () => {
+    const duplicate = {
+      targetFormat: 'comic', arc: { logline: 'L', summary: 'S' },
+      // A lock makes the empty first record the survivor; the issue-bearing
+      // duplicate is absorbed and its issue must be projected onto that survivor.
+      seasons: [{ id: 'se1', number: 1, locked: true }, { id: 'dup1', number: 1 }],
+    };
+    const plan = buildDryRunPlan(duplicate, [
+      { id: 'i1', seasonId: 'dup1', number: 1, arcPosition: 1, stages: {} },
+    ], {});
+    expect(plan[0]).toMatchObject({ kind: 'repairArcStructure', estActions: 0 });
+    expect(plan.some((entry) => entry.kind === 'generateEpisodes')).toBe(false);
+  });
+
+  it('stops the plan at duplicate-volume repair when the arc is locked', () => {
+    const series = {
+      targetFormat: 'comic',
+      arc: { logline: 'L', summary: 'S' },
+      locked: { arc: true },
+      seasons: [{ id: 'se1', number: 1 }, { id: 'dup1', number: 1 }],
+    };
+
+    expect(buildDryRunPlan(series, [], {})).toEqual([
+      expect.objectContaining({ kind: 'repairArcStructure', count: 1, estActions: 0 }),
+    ]);
+
+    const unlockedPlan = buildDryRunPlan(series, [], { unlockForRun: true });
+    expect(unlockedPlan.slice(0, 2)).toEqual([
+      expect.objectContaining({ kind: 'unlockLocks', estActions: 0 }),
+      expect.objectContaining({ kind: 'repairArcStructure', estActions: 0 }),
+    ]);
+    expect(unlockedPlan).toContainEqual({ kind: 'generateEpisodes', count: 1, estActions: 1 });
+    expect(series.locked.arc).toBe(true);
+    expect(series.seasons).toHaveLength(2);
+  });
+
+  it('projects arc generation without the foundation prerequisite when foundation rounds are zero', () => {
+    const plan = buildDryRunPlan({ targetFormat: 'comic', seasons: [] }, [], { maxFoundationRounds: 0 });
+    expect(plan[0]).toEqual(expect.objectContaining({ kind: 'generateArc', count: 1, estActions: 1 }));
+    const kinds = plan.map((step) => step.kind);
+    expect(kinds).not.toContain('characterFoundation');
+    expect(kinds).not.toContain('foundationGate');
+  });
+
+  it('dry-run plan includes generateArc for an arc-only series (parity with execute)', () => {
+    const plan = buildDryRunPlan(
+      { targetFormat: 'comic', arc: { logline: 'L', summary: 'S' }, seasons: [] }, [], {},
+    );
+    expect(plan.slice(0, 2).map((step) => step.kind)).toEqual(['characterFoundation', 'generateArc']);
+  });
+
+  it('dry-run plan omits editorialChecks + editorialHealthGate when editorial rounds are 0', () => {
+    const series = { targetFormat: 'comic', arc: { logline: 'L', summary: 'S' }, seasons: [{ id: 'se1', number: 1 }] };
+    const issues = [{ id: 'i1', seasonId: 'se1', number: 1, arcPosition: 1, stages: {} }];
+    const kinds = (opts) => buildDryRunPlan(series, issues, opts).map((p) => p.kind);
+    // With editorial enabled (default), the reverse-outline refresh (#1349), both
+    // registry checks + health gate appear.
+    expect(kinds({})).toEqual(expect.arrayContaining(['pilotReview', 'reverseOutline', 'editorialChecks', 'editorialHealthGate']));
+    // The reverse-outline refresh is enumerated BEFORE the editorial checks it feeds.
+    const defaultKinds = kinds({});
+    expect(defaultKinds.indexOf('reverseOutline')).toBeLessThan(defaultKinds.indexOf('editorialChecks'));
+    // With maxEditorialRounds:0, execute mode skips the whole editorial gate — the
+    // plan must omit the reverse-outline refresh and both checks too.
+    const skipped = kinds({ maxEditorialRounds: 0 });
+    expect(skipped).toContain('editorialReview'); // shown as "skipped (0 rounds)"
+    expect(skipped).not.toContain('reverseOutline');
+    expect(skipped).not.toContain('editorialChecks');
+    expect(skipped).not.toContain('editorialHealthGate');
+  });
+
+  it('dry-run plan annotates the editorial-checks step with a per-run subset (#1575)', () => {
+    const series = { targetFormat: 'comic', arc: { logline: 'L', summary: 'S' }, seasons: [{ id: 'se1', number: 1 }] };
+    const issues = [{ id: 'i1', seasonId: 'se1', number: 1, arcPosition: 1, stages: {} }];
+    const noteFor = (opts) => buildDryRunPlan(series, issues, opts)
+      .find((p) => p.kind === 'editorialChecks')?.note;
+    // No subset → the plan advertises the full enabled set.
+    expect(noteFor({})).toMatch(/enabled editorial checks/);
+    // A subset → the plan says how many checks will run instead of implying all.
+    expect(noteFor({ editorialCheckIds: ['pacing', 'continuity'] })).toMatch(/subset of 2 editorial check/);
+    // An empty array is treated as "no override" — back to the full set.
+    expect(noteFor({ editorialCheckIds: [] })).toMatch(/enabled editorial checks/);
+  });
+
+  it('annotates every dry-run step with an estActions estimate (#1576)', () => {
+    const series = { targetFormat: 'comic', arc: { logline: 'L', summary: 'S' }, seasons: [{ id: 'se1', number: 1 }] };
+    const issues = [
+      { id: 'i1', seasonId: 'se1', number: 1, arcPosition: 1, stages: {} },
+      { id: 'i2', seasonId: 'se1', number: 2, arcPosition: 2, stages: {} },
+    ];
+    const plan = buildDryRunPlan(series, issues, {});
+    // Every step carries a numeric estimate.
+    expect(plan.every((p) => Number.isFinite(p.estActions))).toBe(true);
+    const byKind = Object.fromEntries(plan.map((p) => [p.kind, p]));
+    // verifyArc: each round checks the whole arc + one volume, then resolves
+    // between rounds → 3*(1+1)+2 = 8 — plus the per-finding isolation pass the
+    // gate can escalate to inside a round (#3780): an attempt costs a resolve +
+    // an arc verify + one volume verify = 3, so the 8-call budget buys 2 → +6.
+    expect(byKind.verifyArc.estActions).toBe(14);
+    // textStages: one child action per not-yet-text-ready issue (2 here).
+    expect(byKind.pilotDraft.estActions).toBe(1);
+    expect(byKind.textStages.estActions).toBe(1);
+    // Pure-gate steps that bill nothing against the cap are zero-cost.
+    expect(byKind.editorialHealthGate.estActions).toBe(0);
+  });
+
+  it('scales verify/editorial estActions with the per-run round caps (#1576)', () => {
+    const series = { targetFormat: 'comic', arc: { logline: 'L', summary: 'S' }, seasons: [{ id: 'se1', number: 1 }] };
+    const issues = [{ id: 'i1', seasonId: 'se1', number: 1, arcPosition: 1, stages: {} }];
+    const actionsFor = (opts, kind) => buildDryRunPlan(series, issues, opts)
+      .find((p) => p.kind === kind)?.estActions;
+    // 0 rounds → the loop is skipped → 0 actions.
+    expect(actionsFor({ maxArcVerifyRounds: 0 }, 'verifyArc')).toBe(0);
+    // 1 round → whole-arc + one-volume verify, no resolve → 2 actions. Isolation
+    // needs a second round to verify what it kept, so it projects nothing here.
+    expect(actionsFor({ maxArcVerifyRounds: 1 }, 'verifyArc')).toBe(2);
+    // 4 rounds → 4 arc verifies + 4 volume verifies + 3 resolves → 11, plus the
+    // isolation pass's 2 attempts × 3 calls (#3780) → 17.
+    expect(actionsFor({ maxArcVerifyRounds: 4 }, 'verifyArc')).toBe(17);
+    // …and a run that declined it gets the round-based estimate back.
+    expect(actionsFor({ maxArcVerifyRounds: 4, maxArcIsolationAttempts: 0 }, 'verifyArc')).toBe(11);
+    expect(actionsFor({ maxArcVerifyRounds: 4, maxArcResolveRetries: 0 }, 'verifyArc')).toBe(11);
+    // Editorial review follows the same convergence shape.
+    expect(actionsFor({ maxEditorialRounds: 2 }, 'pilotReview')).toBe(3);
+  });
+
+  it('estimates editorialChecks LLM fan-out as issues × enabled LLM checks (#1576)', () => {
+    const series = { targetFormat: 'comic', arc: { logline: 'L', summary: 'S' }, seasons: [{ id: 'se1', number: 1 }] };
+    const issues = [
+      { id: 'i1', seasonId: 'se1', number: 1, arcPosition: 1, stages: {} },
+      { id: 'i2', seasonId: 'se1', number: 2, arcPosition: 2, stages: {} },
+      { id: 'i3', seasonId: 'se1', number: 3, arcPosition: 3, stages: {} },
+    ];
+    const stepFor = (ctx) => buildDryRunPlan(series, issues, {}, ctx)
+      .find((p) => p.kind === 'editorialChecks');
+    // 2 enabled LLM checks × 3 issues = 6 LLM calls; the pass bills 1 cos action.
+    const two = stepFor({ editorialLlmCheckCount: 2 });
+    expect(two.estLlmCalls).toBe(6);
+    expect(two.estActions).toBe(1);
+    expect(two.note).toMatch(/~6 LLM call/);
+    // No enabled LLM check → no cos action billed and no LLM calls.
+    const none = stepFor({ editorialLlmCheckCount: 0 });
+    expect(none.estActions).toBe(0);
+    expect(none.estLlmCalls).toBe(0);
+  });
+
+  it('summarizePlanCost totals estActions and estLlmCalls across the plan (#1576)', () => {
+    const series = { targetFormat: 'comic', arc: { logline: 'L', summary: 'S' }, seasons: [{ id: 'se1', number: 1 }] };
+    const issues = [{ id: 'i1', seasonId: 'se1', number: 1, arcPosition: 1, stages: {} }];
+    const plan = buildDryRunPlan(series, issues, {}, { editorialLlmCheckCount: 3 });
+    const totals = summarizePlanCost(plan);
+    const manualActions = plan.reduce((s, p) => s + (p.estActions || 0), 0);
+    const manualLlm = plan.reduce((s, p) => s + (p.estLlmCalls || 0), 0);
+    expect(totals.estActions).toBe(manualActions);
+    expect(totals.estLlmCalls).toBe(manualLlm);
+    // Single issue × 3 LLM checks → 3 editorial-check LLM calls in the total.
+    expect(totals.estLlmCalls).toBe(3);
+    // A non-array (defensive) summarizes to zeroes.
+    expect(summarizePlanCost(null)).toEqual({ estActions: 0, estLlmCalls: 0 });
+  });
+
+  it('dry-run plan surfaces the effective readiness gate on the health-gate step (#1580)', () => {
+    const series = { targetFormat: 'comic', arc: { logline: 'L', summary: 'S' }, seasons: [{ id: 'se1', number: 1 }] };
+    const issues = [{ id: 'i1', seasonId: 'se1', number: 1, arcPosition: 1, stages: {} }];
+    const gateNote = (opts) => buildDryRunPlan(series, issues, opts)
+      .find((p) => p.kind === 'editorialHealthGate')?.note;
+    // No override → the plan shows the default gate.
+    expect(gateNote({})).toMatch(/gate: noOpenHigh$/);
+    // A per-run override is reflected in the plan note.
+    expect(gateNote({ readinessGate: 'none' })).toMatch(/gate: none$/);
+    expect(gateNote({ readinessGate: 'noOpenHighOrMedium' })).toMatch(/gate: noOpenHighOrMedium$/);
+    // An invalid gate falls through to the default.
+    expect(gateNote({ readinessGate: 'bogus' })).toMatch(/gate: noOpenHigh$/);
+  });
+
+  it('dry-run plan annotates the editorial-checks step with the pause threshold when armed (#1613)', () => {
+    const series = { targetFormat: 'comic', arc: { logline: 'L', summary: 'S' }, seasons: [{ id: 'se1', number: 1 }] };
+    const issues = [{ id: 'i1', seasonId: 'se1', number: 1, arcPosition: 1, stages: {} }];
+    const noteFor = (opts) => buildDryRunPlan(series, issues, opts)
+      .find((p) => p.kind === 'editorialChecks')?.note;
+    // Off (default / 0) → no pause annotation.
+    expect(noteFor({})).not.toMatch(/pauses at/);
+    expect(noteFor({ checkFindingsPauseThreshold: 0 })).not.toMatch(/pauses at/);
+    // Armed → the threshold is surfaced in the note.
+    expect(noteFor({ checkFindingsPauseThreshold: 5 })).toMatch(/pauses at ≥ 5 high finding/);
+  });
+
+  it('dry-run plan lists the revision cycle after the health gate when enabled', () => {
+    const series = { targetFormat: 'comic', arc: { logline: 'L', summary: 'S' }, seasons: [{ id: 'se1', number: 1 }] };
+    const issues = [{ id: 'i1', seasonId: 'se1', number: 1, arcPosition: 1, stages: {} }];
+    const plan = buildDryRunPlan(series, issues, { revisionEnabled: true, revisionMaxCycles: 3, includeVisual: false });
+    const kinds = plan.map((p) => p.kind);
+    expect(kinds).toContain('revisionCycle');
+    expect(kinds.indexOf('revisionCycle')).toBeGreaterThan(kinds.indexOf('editorialHealthGate'));
+    const rev = plan.find((p) => p.kind === 'revisionCycle');
+    expect(rev.count).toBe(3);
+  });
+
+  it('dry-run plan omits the revision cycle when disabled', () => {
+    const series = { targetFormat: 'comic', arc: { logline: 'L', summary: 'S' }, seasons: [{ id: 'se1', number: 1 }] };
+    const issues = [{ id: 'i1', seasonId: 'se1', number: 1, arcPosition: 1, stages: {} }];
+    const plan = buildDryRunPlan(series, issues, { includeVisual: false });
+    expect(plan.map((p) => p.kind)).not.toContain('revisionCycle');
+  });
 });
