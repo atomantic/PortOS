@@ -115,6 +115,8 @@ export const pipelineDdl = [
     `ALTER TABLE fableloom_stories ADD COLUMN IF NOT EXISTS deleted_at TIMESTAMPTZ`,
     `CREATE INDEX IF NOT EXISTS idx_fableloom_universe ON fableloom_stories (universe_id)`,
     `CREATE INDEX IF NOT EXISTS idx_fableloom_updated ON fableloom_stories (updated_at)`,
-    `CREATE INDEX IF NOT EXISTS idx_fableloom_live ON fableloom_stories (deleted) WHERE deleted = FALSE`,
+    `CREATE INDEX IF NOT EXISTS idx_fableloom_live_updated ON fableloom_stories (updated_at DESC, id ASC) WHERE deleted = FALSE`,
+    `CREATE INDEX IF NOT EXISTS idx_fableloom_series ON fableloom_stories (series_id, updated_at DESC) WHERE deleted = FALSE AND series_id IS NOT NULL`,
+    `DROP INDEX IF EXISTS idx_fableloom_live`,
 
 ];
