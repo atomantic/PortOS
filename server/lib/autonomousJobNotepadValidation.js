@@ -1,9 +1,10 @@
 /**
- * Zod schemas for the Autonomous Job notepad routes (#17392); the caps live in `autonomousJobNotepad.js`.
+ * Zod schemas for the Autonomous Job notepad routes (#17392); the caps live in `autonomousJobNotepadLimits.js`.
  */
 
 import { z } from 'zod';
-import { MAX_KEY_CHARS, MAX_VALUE_BYTES, NOTE_KEY_PATTERN, byteLength } from './autonomousJobNotepad.js';
+import { MAX_KEY_CHARS, MAX_VALUE_BYTES, NOTE_KEY_PATTERN } from './autonomousJobNotepadLimits.js';
+import { byteLength } from './autonomousJobNotepad.js';
 
 export const noteKeySchema = z.string()
   .min(1, 'key is required')

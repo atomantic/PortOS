@@ -5,11 +5,9 @@
  */
 
 import { ServerError } from './errorHandler.js';
+import { MAX_JOB_TOTAL_BYTES } from './autonomousJobNotepadLimits.js';
 
-export const MAX_KEY_CHARS = 128;
-export const MAX_VALUE_BYTES = 16 * 1024;
-export const MAX_JOB_TOTAL_BYTES = 64 * 1024;
-export const NOTE_KEY_PATTERN = /^[a-zA-Z0-9._:-]+$/;
+export { MAX_KEY_CHARS, MAX_VALUE_BYTES, MAX_JOB_TOTAL_BYTES, NOTE_KEY_PATTERN } from './autonomousJobNotepadLimits.js';
 
 export const byteLength = (text) => Buffer.byteLength(text, 'utf8');
 

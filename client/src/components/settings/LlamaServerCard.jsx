@@ -5,6 +5,7 @@ import toast from '../ui/Toast';
 import FormField from '../ui/FormField';
 import BrailleSpinner from '../BrailleSpinner';
 import { PORTS } from '../../lib/ports.js';
+import { CACHE_TYPES, tuningSpecsFor } from '../../../../server/lib/localModelTuning.js';
 import {
   cancelSpecDecodeModelDownload, downloadSpecDecodeModel, previewLocalLlmDownload, removeSpecDecodeModel,
 } from '../../services/apiLocalLlm.js';
@@ -40,10 +41,10 @@ const DEFAULT_LLAMA_ALIAS = 'dflash';
 const LLAMA_NUMBER_DEFAULTS = { port: PORTS.LLAMA_SERVER, ctxSize: 32768, nGpuLayers: 99, parallel: 1 };
 // Optional llama.cpp tuning flags — unlike the fields above these have NO
 // PortOS default: an untouched one is stripped from the launch payload so
-// llama.cpp applies its own. Mirrors `server/lib/localModelTuning.js`.
-const LLAMA_TUNING_FIELDS = ['batchSize', 'ubatchSize', 'threads', 'cacheTypeK', 'cacheTypeV'];
-// KV-cache types llama.cpp accepts for --cache-type-k/-v; '' means "leave it off".
-const LLAMA_CACHE_TYPES = ['f16', 'q8_0', 'q4_0'];
+// llama.cpp applies its own.
+const LLAMA_TUNING_FIELDS = tuningSpecsFor('llama')
+  .filter(({ id, type, config }) => config && type !== 'boolean' && !Object.hasOwn(LLAMA_NUMBER_DEFAULTS, id))
+  .map(({ id }) => id);
 
 export default function LlamaServerCard({
   status: llamaStatus, busy, actionInProgress, onRefresh, onStart, onStop, onInstall,
@@ -679,7 +680,7 @@ export default function LlamaServerCard({
                   className="w-full bg-port-card border border-port-border rounded px-2 py-1 text-xs text-white"
                 >
                   <option value="">default</option>
-                  {LLAMA_CACHE_TYPES.map((t) => <option key={t} value={t}>{t}</option>)}
+                  {CACHE_TYPES.map((t) => <option key={t} value={t}>{t}</option>)}
                 </select>
               </FormField>
               <FormField label="KV cache V" labelClassName="text-[11px] text-gray-400 block mb-1">
@@ -691,7 +692,7 @@ export default function LlamaServerCard({
                   className="w-full bg-port-card border border-port-border rounded px-2 py-1 text-xs text-white"
                 >
                   <option value="">default</option>
-                  {LLAMA_CACHE_TYPES.map((t) => <option key={t} value={t}>{t}</option>)}
+                  {CACHE_TYPES.map((t) => <option key={t} value={t}>{t}</option>)}
                 </select>
               </FormField>
             </div>

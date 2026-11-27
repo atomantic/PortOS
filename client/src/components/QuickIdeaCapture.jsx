@@ -20,15 +20,9 @@ import { createCatalogIngredient } from '../services/apiCatalog';
 import { CATALOG_TYPES, getCatalogType } from '../lib/catalogTypes';
 import { ingredientPath } from '../lib/creativeLibraries';
 import { onRadioGroupKeyDown } from '../lib/a11yKeyboard.js';
+import { BIBLE_LIMITS } from '../../../server/lib/bibleLimits.js';
 
 const TYPES = CATALOG_TYPES;
-
-// Per-tag length cap (mirrors BIBLE_LIMITS.TAG_MAX used by
-// catalogIngredientCreateSchema) + tag-count cap (mirrors
-// BIBLE_LIMITS.TAGS_PER_ENTRY_MAX). The server still re-validates + normalizes;
-// these keep the fast-capture submit from 400-ing on an oversized tag.
-const TAG_MAX_CHARS = 60;
-const TAGS_MAX = 12;
 
 export default function QuickIdeaCapture() {
   const [type, setType] = useState('idea');
@@ -144,8 +138,8 @@ export default function QuickIdeaCapture() {
               value={tags}
               onChange={setTags}
               placeholder="Tags…"
-              maxTags={TAGS_MAX}
-              maxTagChars={TAG_MAX_CHARS}
+              maxTags={BIBLE_LIMITS.TAGS_PER_ENTRY_MAX}
+              maxTagChars={BIBLE_LIMITS.TAG_MAX}
             />
           </div>
           <button

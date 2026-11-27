@@ -1,9 +1,11 @@
 import { useEffect, useState } from 'react';
 import { getSettings, updateSettings } from '../../services/apiSystem.js';
-import useProviderModels from '../../hooks/useProviderModels';
+import { getProviders } from '../../services/apiProviders.js';
+import useListResource from '../../hooks/useListResource.js';
 import ProviderModelSelector from '../ProviderModelSelector';
 import toast from '../ui/Toast';
-import { isLocalEndpoint } from '../../utils/providerEndpoints';
+import ListLoadError from '../ui/ListLoadError';
+import { isUntrustedContentProvider, selectUntrustedContentProvider } from '../../../../server/lib/untrustedContentSelection.js';
 import {
   PRIVATE_UNTRUSTED_CONTENT_SOURCES,
   UNTRUSTED_CONTENT_SOURCES,
@@ -15,8 +17,14 @@ const SOURCES = [
   ...UNTRUSTED_CONTENT_SOURCES.map(source => [source, UNTRUSTED_CONTENT_SOURCE_LABELS[source] || source]),
 ];
 const PRIVATE_SOURCES = PRIVATE_UNTRUSTED_CONTENT_SOURCES;
-const apiProvider = provider => provider.type === 'api';
-const localApiProvider = provider => apiProvider(provider) && isLocalEndpoint(provider.endpoint);
+const fetchProviders = () => getProviders({ silent: true }).then(({ providers }) => {
+  if (!Array.isArray(providers)) throw new Error('Invalid provider list');
+  return providers;
+});
+const windowOf = ({ untrustedContentWindows }, model) => {
+  const byModel = untrustedContentWindows?.byModel;
+  return byModel && Object.hasOwn(byModel, model) ? byModel[model] : untrustedContentWindows?.defaultWindow;
+};
 const INPUT_CLASS = 'w-full min-w-0 px-3 py-2 bg-port-bg border border-port-border rounded-lg text-sm text-white';
 
 export default function UntrustedContentPolicyPanel() {
@@ -25,7 +33,7 @@ export default function UntrustedContentPolicyPanel() {
   const [source, setSource] = useState('defaults');
   const [error, setError] = useState('');
   const [saving, setSaving] = useState(false);
-  const { providers, loading } = useProviderModels({ filter: apiProvider, allowDefault: true, silent: true });
+  const { items: providers, state: providerState, retry: retryProviders } = useListResource(fetchProviders);
   const load = () => getSettings({ silent: true }).then(settings => {
     const policy = settings.untrustedContent || {};
     setConfig(policy); setSaved(JSON.stringify(policy)); setError('');
@@ -45,23 +53,12 @@ export default function UntrustedContentPolicyPanel() {
   const effectiveValue = name => effective[name];
   const inheritanceName = isPrivate && source !== 'messages' ? 'message defaults' : 'shared defaults';
   const selectedProvider = providers.find(provider => provider.id === effectiveValue('providerId'));
-  // Mirrors selectUntrustedContentProvider (server/lib/untrustedContent.js):
-  // a pinned provider is used as-is; Automatic takes the first eligible
-  // provider that resolves a model, never one that cannot.
-  const eligibleProvider = provider => provider.enabled !== false && (isPrivate ? localApiProvider : apiProvider)(provider);
-  const resolution = (() => {
-    const pinned = effectiveValue('providerId');
-    const candidates = pinned ? providers.filter(provider => provider.id === pinned) : providers;
-    const usable = candidates.filter(eligibleProvider);
-    for (const provider of usable) {
-      const model = effectiveValue('model') || provider.defaultModel;
-      if (model) return { provider, model };
-    }
-    if (!usable.length) return { problem: pinned ? 'The pinned provider is not available for this source.' : 'No eligible API provider is available for this source.' };
-    return { problem: pinned
-      ? 'The pinned provider has no default model; pick an installed model.'
-      : 'No eligible API provider has a default model; pick an installed model.' };
-  })();
+  const eligibleProvider = provider => isUntrustedContentProvider(provider, source);
+  const resolution = selectUntrustedContentProvider({ providers, policy: effective, source, windowOf });
+  const pinned = Boolean(effective.providerId);
+  const problem = resolution.code === 'untrusted-content-provider-unavailable'
+    ? (pinned ? 'The pinned provider is not available for this source.' : 'No eligible API provider is available for this source.')
+    : (pinned ? 'The pinned provider has no default model; pick an installed model.' : 'No eligible API provider has a default model; pick an installed model.');
   const patch = fields => setConfig(current => source === 'defaults'
     ? { ...current, defaults: { ...current?.defaults, ...fields } }
     : { ...current, sources: { ...current?.sources, [source]: { ...current?.sources?.[source], ...fields } } });
@@ -156,14 +153,16 @@ export default function UntrustedContentPolicyPanel() {
                 onProviderChange={providerId => patch({ providerId: providerId || null, model: null })}
                 onModelChange={model => patch({ model: model || null })}
                 label="Analysis API provider"
-                loading={loading}
-                selectionPolicy={{ provider: isPrivate ? localApiProvider : apiProvider }}
+                loading={providerState === 'loading'}
+                disabled={providerState !== 'ready'}
+                selectionPolicy={{ provider: eligibleProvider }}
                 emptyProviderOption="Automatic eligible API provider"
                 emptyModelOption="Provider default model"
                 alwaysShowModel
               />
-              {!loading && (resolution.problem
-                ? <p role="status" className="text-xs text-port-warning">Analysis is not ready for {source === 'defaults' ? 'sources that use shared defaults' : 'this source'}: {resolution.problem}</p>
+              {providerState === 'error' && <ListLoadError what="analysis providers" onRetry={retryProviders} />}
+              {providerState === 'ready' && (resolution.code
+                ? <p role="status" className="text-xs text-port-warning">Analysis is not ready for {source === 'defaults' ? 'sources that use shared defaults' : 'this source'}: {problem}</p>
                 : <p className="text-xs text-gray-400">Resolves to {resolution.provider.name || resolution.provider.id} with model {resolution.model}.</p>)}
               <p className="text-xs text-gray-500">{isPrivate ? 'Only local API endpoints are eligible for private messages. Cloud APIs, CLI agents, and provider fallback are blocked.' : 'Choose an API provider for text analysis. Automatic selection uses an eligible API provider; a failed provider never falls back. Cloud APIs may receive public sources.'} <a href="/ai" className="text-port-accent hover:underline">Configure providers</a></p>
             </div>

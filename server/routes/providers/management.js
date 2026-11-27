@@ -24,6 +24,8 @@ import { isDerivedPreset } from '../../lib/provider/providerGraphRecords.js';
 import { detectSystemCapabilities } from '../../lib/systemCapabilities.js';
 import { serviceDefinitionById } from '../../lib/serviceDefinitions.js';
 import { presentProvider } from './presenter.js';
+import { isUntrustedContentProvider } from '../../lib/untrustedContentSelection.js';
+import { untrustedContentWindowsFor } from '../../lib/untrustedContentWindow.js';
 
 /**
  * The CoS Agent Runner's exec allowlist, published read-only so the AI
@@ -156,6 +158,8 @@ export function createProviderManagementRoutes(providerService, readProviders) {
       providers: data.providers.map((provider) => ({
         ...presentProvider(provider, capabilities),
         executionModes: modeGroups.get(provider.id),
+        // The policy editor previews unsaved provider/model choices against the host budget.
+        ...(isUntrustedContentProvider(provider) ? { untrustedContentWindows: untrustedContentWindowsFor(provider) } : {}),
         // Whether this record can be COMPLETED into a CLI/TUI pair. Derived
         // here rather than on the record alone because the verdict reads the
         // whole list — this record's mode GROUP (a `<stem>-cli` record is
