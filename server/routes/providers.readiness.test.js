@@ -34,6 +34,11 @@ const setupService = vi.hoisted(() => ({ runLocalRuntimeSetup: vi.fn() }));
 // and a stubbed copy would let a route accepting an action the service cannot
 // run still pass here.
 vi.mock('../services/localRuntimeSetup.js', async (importOriginal) => ({ ...(await importOriginal()), ...setupService }));
+const fleetService = vi.hoisted(() => ({
+  configureFleetLlmHost: vi.fn().mockResolvedValue({ success: true }),
+  getFleetLlmHostStatus: vi.fn().mockResolvedValue({ enabled: true }),
+}));
+vi.mock('../services/fleetLlmHost.js', () => fleetService);
 import { createPortOSProviderRoutes } from './providers.js';
 
 // A provider whose real base URL lives in an env var the user marked secret —
@@ -120,6 +125,28 @@ describe('POST /api/providers/readiness/setup', () => {
     // point the setup at a different port.
     expect(ctx.endpoint).toBe('http://localhost:11500/v1');
     expect(frames(response.text).at(-1)).toEqual({ type: 'complete', message: 'Ollama is running.' });
+  });
+
+  it('refuses fleet host setup while a local runtime setup holds the shared lock', async () => {
+    const server = app([CLAUDE_OLLAMA]);
+    const release = Promise.withResolvers();
+    setupService.runLocalRuntimeSetup.mockReturnValueOnce(release.promise);
+    const pending = request(server)
+      .post('/api/providers/readiness/setup?provider=claude-ollama')
+      .then(response => response);
+    try {
+      await vi.waitFor(() => expect(setupService.runLocalRuntimeSetup).toHaveBeenCalledOnce());
+      const busy = await request(server).post('/api/providers/fleet-host/setup');
+      expect(busy.status).toBe(409);
+      expect(busy.body).toMatchObject({
+        code: 'SETUP_BUSY',
+        context: { holder: { runId: expect.any(String), kind: 'ollama' } },
+      });
+      expect(fleetService.configureFleetLlmHost).not.toHaveBeenCalled();
+    } finally {
+      release.resolve({ success: true });
+      await pending;
+    }
   });
 
   it('forwards the action the checklist button named, and null when it names none', async () => {

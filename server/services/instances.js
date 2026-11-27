@@ -198,7 +198,7 @@ export function redactPeerForWire(peer) {
 // client (API responses + socket broadcasts). Keeps the non-secret username
 // and a `hasPassword` marker so the UI can show "credential set" and prefill
 // the username, but never ships the password to the browser — mirrors the
-// `hasApiKey` pattern in server/routes/providers.js. The password stays only
+// `hasApiKey` pattern in server/routes/providers/presenter.js. The password stays only
 // on the server-side record, where peerAuthHeaders reads it.
 export function sanitizePeerForClient(peer) {
   if (!peer || typeof peer !== 'object') return peer;

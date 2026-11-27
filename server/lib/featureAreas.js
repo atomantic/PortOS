@@ -437,7 +437,7 @@ export const FEATURE_AREAS = Object.freeze([
     navPathPrefixes: ['/ai'],
     codeGlobs: [
       'server/routes/{providers,provider,harnesses,model,lmstudio,localLlm,quotaBurn,usage,moaPresets}*',
-      'server/routes/localLlm/**',
+      'server/routes/{providers,localLlm}/**',
       'server/lib/local!(Memory*)',
       'server/lib/{provider,model,quota,usage,codex,llm,ollama,vllm,sglang,mtplx,slotstream,subscription,aiToolkit}*',
       'server/lib/{aiToolkit,provider}/**',

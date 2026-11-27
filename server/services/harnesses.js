@@ -123,7 +123,7 @@ export const usesHarnessCatalog = (provider) =>
  * the binary must enumerate its models (`modelsArgs` or `listModels`) and the record must be
  * a plain wrapper ({@link usesHarnessCatalog}). A custom binary has no runtime row and
  * answers `null`. Shared by the provider card's Refresh Models button
- * (`server/routes/providers.js`) and the seed pin in tests so they can't drift.
+ * (`server/routes/providers/presenter.js`) and the seed pin in tests so they can't drift.
  */
 export const harnessCatalogRuntime = (provider) => {
   const runtime = getProviderRuntime(providerRuntimeKey(provider));
