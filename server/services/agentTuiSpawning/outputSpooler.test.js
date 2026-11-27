@@ -84,10 +84,10 @@ describe('createOutputSpooler', () => {
     expect(appendFile).toHaveBeenCalledWith(RAW_FILE, 'abc');
   });
 
-  it('batches a sustained raw stream once per second while status stays responsive', async () => {
+  it('batches a sustained raw stream once per five seconds while status stays responsive', async () => {
     const s = makeSpooler();
-    for (let tick = 0; tick < 8; tick++) {
-      s.pushRaw(`${tick}`);
+    for (let tick = 0; tick < 40; tick++) {
+      s.pushRaw(`${tick % 10}`);
       if (tick === 0) s.appendLine('running');
       await vi.advanceTimersByTimeAsync(250);
       if (tick === 0) {
@@ -96,7 +96,7 @@ describe('createOutputSpooler', () => {
       }
     }
     expect(vi.mocked(appendFile).mock.calls.filter(([path]) => path === RAW_FILE))
-      .toEqual([[RAW_FILE, '0123'], [RAW_FILE, '4567']]);
+      .toEqual([[RAW_FILE, '01234567890123456789'], [RAW_FILE, '01234567890123456789']]);
   });
 
   it('drains raw output immediately and includes chunks arriving during an in-flight append', async () => {
@@ -104,7 +104,7 @@ describe('createOutputSpooler', () => {
     let finishAppend;
     vi.mocked(appendFile).mockImplementationOnce(() => new Promise(resolve => { finishAppend = resolve; }));
     s.pushRaw('first');
-    await vi.advanceTimersByTimeAsync(1000);
+    await vi.advanceTimersByTimeAsync(5000);
     s.pushRaw('tail');
     let drained = false;
     const drain = s.drainRaw().then(() => { drained = true; });
@@ -114,7 +114,7 @@ describe('createOutputSpooler', () => {
     await drain;
     expect(vi.mocked(appendFile).mock.calls.filter(([path]) => path === RAW_FILE))
       .toEqual([[RAW_FILE, 'first'], [RAW_FILE, 'tail']]);
-    await vi.advanceTimersByTimeAsync(1000);
+    await vi.advanceTimersByTimeAsync(5000);
     expect(vi.mocked(appendFile).mock.calls.filter(([path]) => path === RAW_FILE)).toHaveLength(2);
   });
 
@@ -209,7 +209,7 @@ describe('createOutputSpooler — run directory removed under the spool', () => 
     vi.mocked(appendFile).mockRejectedValueOnce(enoent());
 
     s.pushRaw('chunk');
-    await vi.advanceTimersByTimeAsync(1000);
+    await vi.advanceTimersByTimeAsync(5000);
 
     expect(errorSpy.mock.calls.filter(([m]) => String(m).includes('raw.txt write failed (ENOENT)'))).toHaveLength(1);
     expect(transcriptFlags()).toHaveLength(1);
@@ -224,7 +224,7 @@ describe('createOutputSpooler — run directory removed under the spool', () => 
     // The completion path archived the directory; a late chunk now cannot land.
     vi.mocked(appendFile).mockRejectedValueOnce(enoent());
     s.pushRaw('late');
-    await vi.advanceTimersByTimeAsync(1000);
+    await vi.advanceTimersByTimeAsync(5000);
 
     expect(errorSpy).not.toHaveBeenCalled();
     expect(transcriptFlags()).toHaveLength(0);
@@ -238,9 +238,9 @@ describe('createOutputSpooler — run directory removed under the spool', () => 
     s.pushRaw('a');
     let drained = false;
     const drain = s.drainRaw().then(() => { drained = true; });
-    await vi.advanceTimersByTimeAsync(1000);
+    await vi.advanceTimersByTimeAsync(5000);
     s.pushRaw('b'); // arrives mid-drain; the drain, not the timer, must write it
-    await vi.advanceTimersByTimeAsync(1000);
+    await vi.advanceTimersByTimeAsync(5000);
 
     expect(appendFile).toHaveBeenCalledTimes(1);
     expect(drained).toBe(false);
