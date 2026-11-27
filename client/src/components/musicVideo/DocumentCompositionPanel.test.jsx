@@ -172,6 +172,29 @@ describe('DocumentCompositionPanel', () => {
     await waitFor(() => expect(onProject).toHaveBeenLastCalledWith(bare));
   });
 
+  it('updates untouched HUD fields after undo and saves the local edit over the latest manifest', async () => {
+    const onSave = vi.fn(async () => true);
+    const panel = overlay => <DocumentCompositionPanel project={{ ...attached, composition: { ...attached.composition, overlay } }}
+      onProject={vi.fn()} onSave={onSave} />;
+    const { rerender } = render(panel({ enabled: true, timecodeStartSec: 3, titleLines: ['Original'] }));
+    const title = screen.getByLabelText(/Title lines/);
+    fireEvent.change(title, { target: { value: 'Local title' } });
+    const overlay = { enabled: false, timecode: false, timecodeStartSec: 12, titleLines: ['Restored'], ticker: ['New ticker'],
+      meter: { label: 'Fuel', keyframes: [[1, 90]] } };
+    rerender(panel(overlay));
+    expect(title).toHaveValue('Local title');
+    expect(screen.getByLabelText(/Timecode starts/)).toHaveValue(12);
+    expect(screen.getByLabelText(/Ticker/)).toHaveValue('New ticker');
+    expect(screen.getByLabelText('Meter label')).toHaveValue('Fuel');
+    expect(screen.getByLabelText(/Meter keyframes/)).toHaveValue('1 = 90');
+    expect(onSave).not.toHaveBeenCalled();
+    fireEvent.blur(title);
+    expect(onSave).toHaveBeenCalledWith({ composition: expect.objectContaining({ document: DOCUMENT, overlay: { ...overlay, titleLines: ['Local title'] } }) });
+    await act(async () => {});
+    rerender(panel({ ...overlay, titleLines: ['Next title'] }));
+    expect(title).toHaveValue('Next title');
+  });
+
   it('associates each HUD label with the field in its own panel', async () => {
     const props = { project: attached, onProject: vi.fn(), onSave: vi.fn() };
     render(<><DocumentCompositionPanel {...props} /><DocumentCompositionPanel {...props} /></>);
