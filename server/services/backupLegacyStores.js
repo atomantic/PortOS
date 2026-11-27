@@ -69,6 +69,17 @@ const statIfPresent = path => stat(path).catch(error => {
   throw error;
 });
 
+/** A scoped restore keeps the live ledger, so migration 081 cannot process the raw inbox. */
+export async function hasUnrestorableScopedInbox(srcDir, scope, { stores }, splitSchemaVersion) {
+  if (scope !== 'brain' && scope !== INBOX_PREDECESSOR.input) return false;
+  if (!(await statIfPresent(join(srcDir, INBOX_PREDECESSOR.input)))?.isFile()) return false;
+  // Restoring just the raw file leaves any newer inbox in the snapshot outside the transfer.
+  if (scope === INBOX_PREDECESSOR.input) return true;
+  if (stores.some(entry => entry.predecessor === INBOX_PREDECESSOR && entry.readable)) return false;
+  const { ok, value } = await readJSONFileStrict(join(srcDir, 'brain', 'inbox', 'index.json'), null, { logError: false });
+  return !ok || value?.schemaVersion !== splitSchemaVersion;
+}
+
 /**
  * The split stores a restore of `scope` installs in their pre-split layout: the
  * snapshot carries the monolith but no `<typeDir>/index.json`. A snapshot with
