@@ -6,6 +6,7 @@ import { browserTestProfileFiles } from './browserTestProfiles.js';
 const visual = 'server/services/musicVideo/documentRender.browser.test.js';
 const templates = 'server/services/musicVideo/documentRenderTemplates.browser.test.js';
 const timeline = 'server/services/musicVideo/documentRenderAudioTimeline.browser.test.js';
+const effects = 'server/services/musicVideo/documentRenderEffects.browser.test.js';
 const templateParity = 'server/services/musicVideo/documentTemplateParity.browser.test.js';
 const htmlComposition = 'server/services/htmlComposition/index.test.js';
 const animatic = 'server/services/musicVideo/animaticCapture.browser.test.js';
@@ -55,12 +56,13 @@ describe('browser shard ownership', () => {
   });
 
   it.each([2, 4, FULL_BROWSER_SHARD_COUNT])('gives each split capture a separate runner with %i shards', count => {
-    const files = [visual, templates, animatic, overlays];
+    const files = [visual, templates, timeline, effects, animatic, overlays];
     expect(EXCLUSIVE_CAPTURE_TESTS).toEqual(expect.arrayContaining(files.map(file => file.slice('server/'.length))));
     for (const profile of ['smoke', 'full']) {
       const owners = new Map(Array.from({ length: count }, (_, i) =>
         browserShardSlice(files, { index: i + 1, count }, profile).map(file => [file, i])).flat());
       expect(owners.get(visual)).not.toBe(owners.get(templates));
+      expect(owners.get(timeline)).not.toBe(owners.get(effects));
       expect(owners.get(animatic)).not.toBe(owners.get(overlays));
     }
   });

@@ -23,6 +23,7 @@ const BROWSER_SUITE_OWNERS = {
   'server/services/musicVideo/documentRender.browser.test.js': 2,
   'server/services/musicVideo/documentRenderTemplates.browser.test.js': 1,
   'server/services/musicVideo/documentRenderAudioTimeline.browser.test.js': 1,
+  'server/services/musicVideo/documentRenderEffects.browser.test.js': 2,
   'server/services/musicVideo/documentRenderGeneration.browser.test.js': 2,
   'server/services/musicVideo/documentTemplateParity.browser.test.js': 1,
   'server/services/musicVideo/documentFilmLook.browser.test.js': 2,
@@ -44,11 +45,9 @@ const BROWSER_SUITE_OWNERS = {
 export const BROWSER_SUITES = Object.keys(BROWSER_SUITE_OWNERS);
 export const FULL_BROWSER_SHARD_COUNT = 7;
 
-// Spread the two document-render capture suites, HTML composition, and
-// animatic capture across the four runners. Template parity ran for 40–53s
-// on hosted runs 45782641727 and 45781773182. Pair it with the audio/timeline suite, whose
-// smoke workload omits two fidelity cases, and away from HTML composition and
-// animatic capture so common render changes do not stack those long jobs.
+// Spread the visual and audio/timeline renders, HTML composition, and
+// animatic capture across the four runners. Pair template parity with
+// audio/timeline and keep the split effects suite on another runner.
 const FOUR_SHARD_OWNERS = {
   'server/lib/filmLook.browser.test.js': 2,
   'server/lib/filmLookGpu.browser.test.js': 3,
@@ -69,6 +68,7 @@ const FOUR_SHARD_OWNERS = {
   'server/services/musicVideo/documentRender.browser.test.js': 1,
   'server/services/musicVideo/documentRenderTemplates.browser.test.js': 4,
   'server/services/musicVideo/documentRenderAudioTimeline.browser.test.js': 3,
+  'server/services/musicVideo/documentRenderEffects.browser.test.js': 1,
   'server/services/musicVideo/documentRenderGeneration.browser.test.js': 1,
   'server/services/musicVideo/documentTemplateParity.browser.test.js': 3,
   'server/services/musicVideo/documentFilmLook.browser.test.js': 4,
@@ -89,46 +89,47 @@ const FOUR_SHARD_OWNERS = {
 };
 
 // Seven-shard smoke and full share owners so a shard can restore its own memo.
-// Use hosted per-file timings (45798710246 and 45804297540) to spread serial
-// captures and account for parallel work that runs before them. Keep the two
-// halves of each split capture on different runners.
+// Use hosted per-file timings (45804312833, 45804297540, 45910290367) to
+// spread serial captures and group expensive parallel suites. Shard 5 also
+// runs the full-only rich-authoring suite, so give it less common work.
 const FULL_SHARD_OWNERS = {
-  'server/lib/filmLook.browser.test.js': 1,
+  'server/lib/filmLook.browser.test.js': 7,
   'server/lib/filmLookGpu.browser.test.js': 5,
-  'server/lib/musicVideo/musicVideoTitleCard.browser.test.js': 5,
-  'server/routes/catalogGreyboxViewer.browser.test.js': 7,
-  'server/routes/musicVideoProductionReview.browser.test.js': 1,
-  'server/routes/musicVideoRichAuthoring.browser.test.js': 3,
-  'server/routes/musicVideoSongRevision.browser.test.js': 2,
+  'server/lib/musicVideo/musicVideoTitleCard.browser.test.js': 2,
+  'server/routes/catalogGreyboxViewer.browser.test.js': 2,
+  'server/routes/musicVideoProductionReview.browser.test.js': 3,
+  'server/routes/musicVideoRichAuthoring.browser.test.js': 5,
+  'server/routes/musicVideoSongRevision.browser.test.js': 5,
   'server/services/codeAnimation/export.realBrowser.test.js': 5,
-  'server/services/fableLoom/static-player/player.browser.test.js': 5,
-  'server/services/federatedMedia/sourceAudio.browser.test.js': 2,
+  'server/services/fableLoom/static-player/player.browser.test.js': 1,
+  'server/services/federatedMedia/sourceAudio.browser.test.js': 1,
   'server/services/browserVaultFill.browser.test.js': 4,
   'server/services/greyboxRender.browser.test.js': 2,
-  'server/services/htmlComposition/index.test.js': 2,
+  'server/services/htmlComposition/index.test.js': 7,
   'server/services/musicVideo/animaticCapture.browser.test.js': 3,
-  'server/services/musicVideo/animaticCaptureOverlays.browser.test.js': 5,
+  'server/services/musicVideo/animaticCaptureOverlays.browser.test.js': 1,
   'server/services/musicVideo/compositionRender.test.js': 6,
   'server/services/musicVideo/documentRender.browser.test.js': 1,
-  'server/services/musicVideo/documentRenderTemplates.browser.test.js': 7,
+  'server/services/musicVideo/documentRenderTemplates.browser.test.js': 6,
   'server/services/musicVideo/documentRenderAudioTimeline.browser.test.js': 4,
+  'server/services/musicVideo/documentRenderEffects.browser.test.js': 2,
   'server/services/musicVideo/documentRenderGeneration.browser.test.js': 3,
   'server/services/musicVideo/documentTemplateParity.browser.test.js': 6,
   'server/services/musicVideo/documentFilmLook.browser.test.js': 7,
-  'server/services/musicVideo/documentVignette.browser.test.js': 7,
+  'server/services/musicVideo/documentVignette.browser.test.js': 3,
   'server/services/musicVideo/filmLookFinish.browser.test.js': 6,
-  'server/services/musicVideo/documentTemplates/layered/engine.controls.browser.test.js': 7,
+  'server/services/musicVideo/documentTemplates/layered/engine.controls.browser.test.js': 2,
   'server/services/musicVideo/documentTemplates/layered/engine.overlay.browser.test.js': 4,
   'server/services/musicVideo/documentTemplates/shared/lyricType.browser.test.js': 4,
   'server/services/musicVideo/documentTemplates/shared/toonWorld.browser.test.js': 2,
   'server/services/musicVideo/lyricPlaythrough.browser.test.js': 3,
-  'server/services/musicVideo/publish/linkedin.browser.test.js': 4,
+  'server/services/musicVideo/publish/linkedin.browser.test.js': 1,
   'server/services/musicVideo/publish/x.browser.test.js': 6,
-  'server/services/musicVideo/publish/sunoHook.browser.test.js': 1,
-  'server/routes/manualUpdateRecovery.browser.test.js': 5,
+  'server/services/musicVideo/publish/sunoHook.browser.test.js': 4,
+  'server/routes/manualUpdateRecovery.browser.test.js': 7,
   'server/routes/autofixerUi.browser.test.js': 3,
-  'server/services/musicVideo/overlayTextService.browser.test.js': 1,
-  'server/services/codeAnimation/poster.realBrowser.test.js': 6,
+  'server/services/musicVideo/overlayTextService.browser.test.js': 5,
+  'server/services/codeAnimation/poster.realBrowser.test.js': 4,
 };
 
 // Moving the serial GPU suite (82s on smoke run 45081031945) splits it from
