@@ -5,8 +5,10 @@
 
 export const MAX_VIDEO_BATCH_SIZE = 20;
 
-export const UPSCALE_METHODS = Object.freeze(['lanczos', 'ltx']);
+export const UPSCALE_METHODS = Object.freeze(['lanczos', 'ltx', 'fal-seedvr2']);
 export const DEFAULT_UPSCALE_METHOD = 'lanczos';
+export const FAL_SEEDVR2_TARGET_RESOLUTIONS = Object.freeze(['720p', '1080p', '1440p', '2160p']);
+export const DEFAULT_FAL_SEEDVR2_TARGET_RESOLUTION = '1080p';
 
 // Request fields that only local video runtimes understand. Their Zod schemas
 // stay in `lib/videoGenValidation.js`, while this domain-level list lets

@@ -351,11 +351,19 @@ export const extractLastFrame = (id, options = {}) => request(`/video-gen/last-f
 // spread so it can never collide with the HTTP `method: 'POST'` fetch config
 // below — an omitted `method` sends exactly the bare-POST request this
 // endpoint has always received, so existing mocks/tests keep matching.
-export const upscaleVideo = (id, { method, ...options } = {}) => request(`/video-gen/upscale/${encodeURIComponent(id)}`, {
-  method: 'POST',
-  ...(method != null ? { body: JSON.stringify({ method }) } : {}),
-  ...options,
-});
+export const upscaleVideo = (id, { method, targetResolution, musicVideoProjectId, sceneId, ...options } = {}) => {
+  const payload = {
+    ...(method != null ? { method } : {}),
+    ...(targetResolution != null ? { targetResolution } : {}),
+    ...(musicVideoProjectId != null ? { musicVideoProjectId } : {}),
+    ...(sceneId != null ? { sceneId } : {}),
+  };
+  return request(`/video-gen/upscale/${encodeURIComponent(id)}`, {
+    method: 'POST',
+    ...(Object.keys(payload).length > 0 ? { body: JSON.stringify(payload) } : {}),
+    ...options,
+  });
+};
 export const quoteTopazUpscale = (id, model, options = {}) => request(`/video-gen/upscale/${encodeURIComponent(id)}/topaz/quote`, {
   method: 'POST', body: JSON.stringify({ model }), ...options,
 });

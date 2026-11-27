@@ -16,7 +16,7 @@ import { useState, useEffect, useCallback, useRef } from 'react';
 import { Loader2 } from 'lucide-react';
 import Drawer from '../Drawer';
 import toast from '../ui/Toast';
-import { formatBytes } from '../../utils/formatters';
+import { formatBytes, formatUsd } from '../../utils/formatters';
 import { isHardwareAvailable, hardwareUnavailableReason } from '../../utils/systemCapabilities';
 import { useSseProgress } from '../../hooks/useSseProgress';
 import { upscaleVideo, getUpscalePlan, upscaleAdapterDownloadUrl, quoteTopazUpscale, startTopazUpscale } from '../../services/apiImageVideo';
@@ -29,6 +29,9 @@ export default function VideoUpscaleDrawer({ item, onClose, onUpscaled }) {
   const [plan, setPlan] = useState(null);
   const [planLoading, setPlanLoading] = useState(false);
   const [planError, setPlanError] = useState(null);
+  const [falPlan, setFalPlan] = useState(null);
+  const [falPlanLoading, setFalPlanLoading] = useState(false);
+  const [falPlanError, setFalPlanError] = useState(null);
   const [submitting, setSubmitting] = useState(false);
   const [topazModel, setTopazModel] = useState('proteus');
   const [quote, setQuote] = useState(null);
@@ -50,6 +53,9 @@ export default function VideoUpscaleDrawer({ item, onClose, onUpscaled }) {
     setMethod('lanczos');
     setPlan(null);
     setPlanError(null);
+    setFalPlan(null);
+    setFalPlanError(null);
+    setFalPlanLoading(false);
     setTopazModel('proteus');
     setQuote(null);
     setQuoteError(null);
@@ -74,6 +80,19 @@ export default function VideoUpscaleDrawer({ item, onClose, onUpscaled }) {
     return () => { cancelled = true; };
   }, [open, itemId]);
 
+  useEffect(() => {
+    if (!open || !itemId || method !== 'fal-seedvr2' || falPlan) return undefined;
+    let cancelled = false;
+    setFalPlanLoading(true);
+    setFalPlanError(null);
+    getUpscalePlan(itemId, 'fal-seedvr2')
+      .then((res) => { if (!cancelled) setFalPlan(res?.plan || null); })
+      .catch((err) => { if (!cancelled) setFalPlanError(err.message || 'Could not check fal.ai SeedVR2 readiness'); })
+      .finally(() => { if (!cancelled) setFalPlanLoading(false); });
+    return () => { cancelled = true; };
+  }, [open, itemId, method, falPlan]);
+
+  const falSeedvr2Ready = falPlan?.runtime?.installed === true && falPlan?.alreadyUpscaled !== true;
   const runtimeReady = plan?.runtime?.installed === true;
   const adapterReady = plan?.adapter?.cached === true;
   // The base checkpoint is a third readiness axis (#6512): the venv and the
@@ -134,8 +153,15 @@ export default function VideoUpscaleDrawer({ item, onClose, onUpscaled }) {
   const handleSubmit = useCallback(async () => {
     if (!itemId || submitting) return;
     if (method === 'ltx' && !generativeReady) return;
+    if (method === 'fal-seedvr2' && !falSeedvr2Ready) return;
     setSubmitting(true);
-    toast.loading(method === 'topaz' ? 'Queueing Topaz upscale…' : method === 'ltx' ? 'Upscaling 2× (generative)…' : 'Upscaling 2× — typically 10-30s…');
+    toast.loading(method === 'topaz'
+      ? 'Queueing Topaz upscale…'
+      : method === 'fal-seedvr2'
+        ? 'Queueing fal.ai SeedVR2 1080p upscale…'
+        : method === 'ltx'
+          ? 'Upscaling 2× (generative)…'
+          : 'Upscaling 2× — typically 10-30s…');
     const result = await (method === 'topaz'
       ? startTopazUpscale(itemId, quote?.token, { silent: true })
       : upscaleVideo(itemId, { method, silent: true })).catch((err) => {
@@ -157,7 +183,7 @@ export default function VideoUpscaleDrawer({ item, onClose, onUpscaled }) {
       toast.success('Upscaled 2×');
       onClose();
     }
-  }, [itemId, method, quote, submitting, generativeReady, onUpscaled, onClose]);
+  }, [itemId, method, quote, submitting, generativeReady, falSeedvr2Ready, onUpscaled, onClose]);
 
   const getQuote = async () => {
     setQuoting(true);
@@ -249,12 +275,44 @@ export default function VideoUpscaleDrawer({ item, onClose, onUpscaled }) {
             </span>
           </label>
 
+          <label htmlFor="upscale-method-fal-seedvr2" className="flex items-start gap-2 p-2 border border-port-border rounded cursor-pointer hover:border-port-accent/60">
+            <input type="radio" id="upscale-method-fal-seedvr2" name="upscale-method" value="fal-seedvr2" checked={method === 'fal-seedvr2'} onChange={() => setMethod('fal-seedvr2')} className="mt-0.5" />
+            <span><span className="block text-sm text-white">SeedVR2 cloud 1080p (fal.ai, paid)</span>
+              <span className="block text-[11px] text-gray-500">Diffusion 1080p upscale on fal.ai (~$0.25/5s clip, ~2-3 min). Preserves faces and color.</span></span>
+          </label>
+
           <label htmlFor="upscale-method-topaz" className="flex items-start gap-2 p-2 border border-port-border rounded cursor-pointer hover:border-port-accent/60">
             <input type="radio" id="upscale-method-topaz" name="upscale-method" value="topaz" checked={method === 'topaz'} onChange={() => setMethod('topaz')} className="mt-0.5" />
             <span><span className="block text-sm text-white">Topaz Labs cloud (paid)</span>
               <span className="block text-[11px] text-gray-500">Sends this video to Topaz after you start the job.</span></span>
           </label>
         </fieldset>
+
+        {method === 'fal-seedvr2' && (
+          <div className="p-2 border border-port-border rounded space-y-1 text-[11px] text-gray-400">
+            <p className="text-xs font-medium text-white">Before you submit</p>
+            {falPlanLoading && <p>Checking fal.ai readiness…</p>}
+            {falPlanError && <p role="alert" className="text-port-error">{falPlanError}</p>}
+            {falPlan && !falPlan.runtime?.installed && (
+              <p role="alert" className="text-port-warning">{falPlan.runtime?.reason || 'Configure FAL_KEY in Settings → Credentials.'}</p>
+            )}
+            {falPlan && falPlan.runtime?.installed && (
+              <>
+                <p>Model: <span className="text-white">fal-ai/seedvr/upscale/video</span></p>
+                <p>
+                  Target size:{' '}
+                  <span className="text-white">
+                    {falPlan.target?.width ?? '?'}×{falPlan.target?.height ?? '?'}
+                  </span>
+                  {falPlan.target?.frameCount ? `, ${falPlan.target.frameCount} frames` : ''}
+                </p>
+                {falPlan.estimatedCostUsd != null && (
+                  <p>Estimated cost: <span className="text-white">{formatUsd(falPlan.estimatedCostUsd)}</span> ($0.001/MP billed to fal.ai)</p>
+                )}
+              </>
+            )}
+          </div>
+        )}
 
         {method === 'topaz' && (
           <div className="p-2 border border-port-border rounded space-y-2 text-xs text-gray-400">
@@ -308,11 +366,11 @@ export default function VideoUpscaleDrawer({ item, onClose, onUpscaled }) {
           <button
             type="button"
             onClick={handleSubmit}
-            disabled={submitting || (method === 'ltx' && !generativeReady) || (method === 'topaz' && (!quote || quoting))}
+            disabled={submitting || (method === 'ltx' && !generativeReady) || (method === 'fal-seedvr2' && !falSeedvr2Ready) || (method === 'topaz' && (!quote || quoting))}
             className="px-3 py-1.5 text-xs rounded bg-port-accent text-white hover:bg-port-accent/80 disabled:opacity-50 disabled:cursor-not-allowed flex items-center gap-1.5"
           >
             {submitting && <Loader2 className="w-3.5 h-3.5 animate-spin" />}
-            {method === 'topaz' ? 'Start Topaz upscale' : 'Upscale 2×'}
+            {method === 'topaz' ? 'Start Topaz upscale' : method === 'fal-seedvr2' ? 'Start SeedVR2 upscale' : 'Upscale 2×'}
           </button>
         </div>
       </div>

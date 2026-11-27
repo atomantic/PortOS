@@ -21,10 +21,13 @@ import { getVideoModels } from '../../lib/mediaModels.js';
 import { inspectModelCache } from '../../lib/hfCache.js';
 import { BYOV_RUNTIME_INFO, isByovRuntimeInstalled } from './runtimes.js';
 import {
-  UPSCALE_METHODS, DEFAULT_UPSCALE_METHOD, UPSCALE_SCALE, LANCZOS_RUNTIME_ID,
+  UPSCALE_METHODS, DEFAULT_UPSCALE_METHOD, DEFAULT_FAL_SEEDVR2_TARGET_RESOLUTION,
+  UPSCALE_SCALE, LANCZOS_RUNTIME_ID, FAL_SEEDVR2_RUNTIME_ID, FAL_SEEDVR2_MODEL_ID,
   LTX_UPSCALE_WEIGHT_KEY, ltxUpscaleRuntimeId, ltxUpscaleBaseModelId,
-  planLtxAlignment, planTargetDimensions,
+  planLtxAlignment, planTargetDimensions, estimateFalSeedvr2CostUsd,
 } from './upscalePlan.js';
+import { getSettings } from '../settings.js';
+import { resolveFalApiKey } from '../falQueue.js';
 
 export * from './upscalePlan.js';
 
@@ -202,11 +205,21 @@ export async function planUpscaleHistoryItem(historyId, options = {}) {
     hasAudio: audio,
   };
 
+  const targetResolution = method === 'fal-seedvr2' ? (options?.targetResolution || DEFAULT_FAL_SEEDVR2_TARGET_RESOLUTION) : null;
   const alignment = method === 'ltx' ? planLtxAlignment(source) : null;
-  const target = planTargetDimensions({ method, ...source, alignment });
+  const target = planTargetDimensions({ method, ...source, alignment, targetResolution });
+  const falConfigured = method === 'fal-seedvr2' ? Boolean(resolveFalApiKey(await getSettings())) : false;
   const runtime = method === 'ltx'
     ? describeLtxRuntime()
-    : { id: LANCZOS_RUNTIME_ID, label: 'ffmpeg (Lanczos)', supported: true, installed: true, reason: null };
+    : method === 'fal-seedvr2'
+      ? {
+        id: FAL_SEEDVR2_RUNTIME_ID,
+        label: 'fal.ai SeedVR2',
+        supported: true,
+        installed: falConfigured,
+        reason: falConfigured ? null : 'Configure FAL_KEY in Settings → Credentials to use fal.ai SeedVR2 upscaling.',
+      }
+      : { id: LANCZOS_RUNTIME_ID, label: 'ffmpeg (Lanczos)', supported: true, installed: true, reason: null };
   const [adapter, baseModel] = method === 'ltx'
     ? await Promise.all([describeLtxAdapter(), describeLtxBaseModel(runtime.id)])
     : [null, null];
@@ -222,6 +235,11 @@ export async function planUpscaleHistoryItem(historyId, options = {}) {
     runtime,
     adapter,
     baseModel,
+    ...(method === 'fal-seedvr2' ? {
+      modelId: FAL_SEEDVR2_MODEL_ID,
+      targetResolution,
+      estimatedCostUsd: estimateFalSeedvr2CostUsd(target),
+    } : {}),
   };
 }
 
@@ -232,8 +250,8 @@ export async function planUpscaleHistoryItem(historyId, options = {}) {
 //
 // `options.method` selects the pass: `'lanczos'` (the default, and what every
 // pre-#6509 caller gets by omitting the bag) runs the historical ffmpeg filter
-// inline. `'ltx'` belongs to the queued dispatch path (upscaleJob.js, #6511)
-// and is refused here rather than silently falling back to Lanczos.
+// inline. `'ltx'` and `'fal-seedvr2'` belong to the queued dispatch paths
+// (upscaleJob.js / falUpscaleJob.js) and are refused here rather than silently falling back.
 //
 // Returns the new history entry on success; throws ServerError on any
 // missing-input / ffmpeg / file-system failure so the route can map it to
@@ -244,15 +262,9 @@ export async function upscaleHistoryItem(historyId, options = {}) {
   if (item.upscaledFrom) {
     throw new ServerError('Cannot upscale an already-upscaled video', { status: 400, code: 'ALREADY_UPSCALED' });
   }
-  if (method === 'ltx') {
-    // This is the INLINE pass. A generative upscale is a multi-minute GPU
-    // render and must go through the media job queue (#6511), so running it
-    // here would block the request and bypass cancellation, the watchdog and
-    // the partial-output cleanup. Callers use enqueueLtxUpscale instead; the
-    // route already dispatches on the method, so reaching this is a bug, not a
-    // capability gap.
+  if (method === 'ltx' || method === 'fal-seedvr2') {
     throw new ServerError(
-      'Generative upscale runs through the media job queue — submit it with enqueueLtxUpscale, not the inline pass.',
+      'Generative upscale runs through the media job queue — submit it with its queue helper, not the inline pass.',
       { status: 400, code: 'UPSCALE_METHOD_NOT_INLINE' },
     );
   }

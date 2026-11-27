@@ -67,13 +67,13 @@ async function extendRecord(extend, videoHistoryId) {
 const hook = createMediaJobImageHook({
   label: 'music-video scene-video',
   initLog: '🎬 Music Video scene-video hook initialized',
-  kind: 'video',
+  kind: ['video', 'video-upscale'],
   tagKey: 'musicVideo',
-  // History id = the completed video job's id. The videoGenEvents 'completed'
-  // payload (stored as job.result) echoes it as generationId; fall back to
-  // job.id so a runtime that omits the field still attaches correctly.
+  // History id = the completed video job's id (or `result.id` for video-upscale jobs,
+  // which mint a new history id distinct from the queue job id).
   extractResult: (job) => {
-    const videoHistoryId = (typeof job.result?.generationId === 'string' && job.result.generationId)
+    const videoHistoryId = (job.kind === 'video-upscale' && typeof job.result?.id === 'string' && job.result.id)
+      || (typeof job.result?.generationId === 'string' && job.result.generationId)
       || (typeof job.id === 'string' ? job.id : null);
     return videoHistoryId ? { videoHistoryId } : null;
   },
