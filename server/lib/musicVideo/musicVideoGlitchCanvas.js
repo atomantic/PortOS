@@ -94,7 +94,12 @@ export function createMusicVideoGlitchPainter({ blockBox, edgeGlows }) {
     ctx.drawImage(band, 0, 0, narrow, h, 0, y, width, h);
   }
 
-  return (canvas, params, frame) => {
+  const paint = (canvas, params, frame) => {
+    if (Array.isArray(params?.layers)) {
+      let painted = false;
+      for (const layer of params.layers) painted = paint(canvas, layer, frame) || painted;
+      return painted;
+    }
     const width = canvas.width;
     const height = canvas.height;
     const out = canvas.getContext('2d');
@@ -178,16 +183,41 @@ export function createMusicVideoGlitchPainter({ blockBox, edgeGlows }) {
       out.fillStyle = `#${b.color}`;
       out.fillRect(box.x, box.y, box.w, box.h);
     }
+    const addQuadraticStops = (ramp, hex) => {
+      // Quadratic (1 - t)^2 falloff matching ffmpeg glowFilter's pow(max(0, 1 - d), 2).
+      const rgb = [0, 2, 4].map((i) => parseInt(hex.slice(i, i + 2), 16)).join(',');
+      for (const t of [0, 0.25, 0.5, 0.75, 1]) ramp.addColorStop(t, `rgba(${rgb},${(1 - t) ** 2})`);
+    };
     for (const glow of edgeGlows(params.glows)) {
-      const reach = glow.size * (glow.side === 'left' || glow.side === 'right' ? width : height);
-      const [x0, y0, x1, y1] = glow.side === 'left' ? [0, 0, reach, 0] : glow.side === 'right' ? [width, 0, width - reach, 0]
-        : glow.side === 'top' ? [0, 0, 0, reach] : [0, height, 0, height - reach];
-      const ramp = out.createLinearGradient(x0, y0, x1, y1);
-      ramp.addColorStop(0, `#${glow.color}`);
-      ramp.addColorStop(1, `#${glow.color}00`);
+      out.save();
+      out.globalCompositeOperation = glow.blend === 'screen' ? 'screen' : 'source-over';
       out.globalAlpha = glow.alpha;
-      out.fillStyle = ramp;
-      out.fillRect(0, 0, width, height);
+      if (glow.shape === 'radial') {
+        const cx = glow.x * width;
+        const cy = glow.y * height;
+        const rx = Math.max(1, glow.rx * width);
+        const ry = Math.max(1, glow.ry * height);
+        out.translate(cx, cy);
+        out.scale(rx, ry);
+        const ramp = out.createRadialGradient(0, 0, 0, 0, 0, 1);
+        addQuadraticStops(ramp, glow.color);
+        out.fillStyle = ramp;
+        out.fillRect(-1.5, -1.5, 3, 3);
+      } else {
+        const reach = glow.size * (glow.side === 'left' || glow.side === 'right' ? width : height);
+        const [x0, y0, x1, y1] = glow.side === 'left' ? [0, 0, reach, 0] : glow.side === 'right' ? [width, 0, width - reach, 0]
+          : glow.side === 'top' ? [0, 0, 0, reach] : [0, height, 0, height - reach];
+        const ramp = out.createLinearGradient(x0, y0, x1, y1);
+        if (glow.blend === 'screen') {
+          addQuadraticStops(ramp, glow.color);
+        } else {
+          ramp.addColorStop(0, `#${glow.color}`);
+          ramp.addColorStop(1, `#${glow.color}00`);
+        }
+        out.fillStyle = ramp;
+        out.fillRect(0, 0, width, height);
+      }
+      out.restore();
     }
     out.globalAlpha = 1;
     for (const bar of [...(params.bar ? [params.bar] : []), ...(params.bars || [])]) {
@@ -228,6 +258,7 @@ export function createMusicVideoGlitchPainter({ blockBox, edgeGlows }) {
     }
     return true;
   };
+  return paint;
 }
 
 /** Inline the same painter into the sandboxed document host, without a network import. */

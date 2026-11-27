@@ -243,7 +243,7 @@ export default function SceneSettingsGroups({
   scene, project, layer, codeShot, fromSheet, loops, sourceWindow,
   renderPlan, position, composition, actions, fieldId,
   applyPatch, applySaved, markDirty, saveIfDirty, moveStart, moveEnd, saveShot,
-  setSpeakerDirty, setSpeakerSaving,
+  setSpeakerDirty, setSpeakerSaving, onPreviewGlitches = null,
 }) {
   const preMusic = isPreMusicShot(scene);
   const { layered, documentComposition } = composition;
@@ -304,7 +304,7 @@ export default function SceneSettingsGroups({
         {/* How this shot hands over to the next: a cut, beat toggle, dissolve or fade, as its storyboard row plans until one is picked. */}
         <SceneCutEffect fieldId={fieldId} scene={scene} isLast={!!position.isLast} onChange={applyPatch} planned={planned.get(scene.sceneId)} />
         {/* Glitches at moments inside the shot, set and moved on a slider; they add no time. */}
-        <SceneGlitches fieldId={fieldId} scene={scene} onChange={applyPatch} />
+        <SceneGlitches fieldId={fieldId} scene={scene} onChange={applyPatch} onPreview={onPreviewGlitches} />
       </ShotEditorGroup>
       <SceneImageTreatments key={scene.sceneId} project={project} scene={scene} onSave={saveShot} />
       {/* Where the lyrics over this shot sit, their style and size, whenever the render draws lyrics (a card draws its own text). */}

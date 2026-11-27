@@ -13,7 +13,7 @@ const SETTLE_FRAMES = 30;
 const paintEffect = createMusicVideoGlitchPainter({ blockBox, edgeGlows });
 
 /** Paint one glitch frame (`params` from musicVideoTransitions.js) of what the figure shows. */
-function paintGlitch(canvas, figure, params, frame) {
+export function paintFigureGlitch(canvas, figure, params, frame) {
   const box = canvas.getBoundingClientRect();
   if (!box.width || !box.height) return false;
   const width = Math.min(MAX_CANVAS_PX, Math.round(box.width * (window.devicePixelRatio || 1)));
@@ -50,7 +50,7 @@ export default function TransitionGlitch({ scenes, figureRef, audioRef, time, en
     const hit = transitionFrameAt(glitches, Math.floor(t * fps + 1e-6));
     // Mid-seek the clip cannot be copied; keep the last glitch frame rather than paint the shot's still.
     if (hit && figureClipSettling(figureRef.current)) return;
-    const shown = !!hit && paintGlitch(canvas, figureRef.current, hit.params, hit.frame);
+    const shown = !!hit && paintFigureGlitch(canvas, figureRef.current, hit.params, hit.frame);
     canvas.style.visibility = shown ? 'visible' : 'hidden';
   }, [glitches, fps, figureRef]);
   // A pause, a scrub or a frame step lands through `time`; playback runs on animation frames.

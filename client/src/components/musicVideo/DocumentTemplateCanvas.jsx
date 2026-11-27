@@ -6,7 +6,7 @@ import { CLIP_PRELOAD_SHOTS, shotStillIds } from './animaticTiming.js';
 import { shotImageUrl } from './sceneImageTreatmentUrls.js';
 import { sceneVisualLayer } from '../../lib/musicVideoLayers.js';
 import { sceneImageEffect, scenePhotoSequence, photoSequenceLayers, photoSequenceIndex } from '../../../../server/lib/musicVideo/musicVideoImageEffects.js';
-import { blockBox, edgeGlows, glitchFrameParams, mergeGlitchFrames, sceneImageEffectGlitchFrames, sceneShotGlitchFrames, sceneTransitionSections, transitionGlitchFrames } from '../../../../server/lib/musicVideo/musicVideoTransitions.js';
+import { blockBox, edgeGlows, groupedEffectFrames, mergeGlitchFrames, sceneImageEffectGlitchFrames, sceneShotGlitchFrames, sceneTransitionSections, transitionGlitchFrames } from '../../../../server/lib/musicVideo/musicVideoTransitions.js';
 import { createMusicVideoGlitchPainter } from '../../../../server/lib/musicVideo/musicVideoGlitchCanvas.js';
 import { compileWipeNode, createMusicVideoWipePainter, wipeDefinition } from '../../../../server/lib/musicVideo/musicVideoWipes.js';
 import './documentTemplateFonts.css';
@@ -36,11 +36,11 @@ export default function DocumentTemplateCanvas({ project, data, figureRef, audio
     const options = { fps, beats: project.audioAnalysis?.beats || [] };
     const effectScenes = project.scenes || [];
     const endSec = data.song.durationSec;
-    const effects = new Map(mergeGlitchFrames(
+    const effects = new Map(groupedEffectFrames(mergeGlitchFrames(
       transitionGlitchFrames(sceneTransitionSections(effectScenes, fps, { endSec, cameras: project.cameras })),
       sceneImageEffectGlitchFrames(effectScenes, fps, { layered: true, endSec, cameras: project.cameras }),
       sceneShotGlitchFrames(effectScenes, fps, { endSec, cameras: project.cameras }),
-    ).map(effect => [effect.frame, glitchFrameParams(effect)]));
+    )).map(effect => [effect.frame, effect.params]));
     const images = new Map();
     let active = true, handle = 0;
     const videoFrames = new Map();
