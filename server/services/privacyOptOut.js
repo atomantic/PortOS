@@ -50,14 +50,14 @@ import {
   listBrokers, getBroker, listBrokerCases, transitionCase,
 } from './privacyBrokers.js';
 import { listScanEligibleValues } from './privacyVault.js';
-import { buildSearchVectors, probeBroker } from './privacyScan.js';
+import { buildSearchVectors, probeBroker, onBrokerFetchFailure } from './privacyScan.js';
 import { parseCityState } from '../lib/cityState.js';
 import { createDraft, approveDraft } from './messageDrafts.js';
 import { pickEmailSenderAccount, sendViaForAccountType } from '../lib/messageTransport.js';
 import { listAccounts } from './messageAccounts.js';
 import { getMessages } from './messageSync.js';
 import { getSettings } from './settings.js';
-import { resolveSubjectId, assertSubjectConsent } from './privacySubjects.js';
+import { resolveSubjectId, assertSubjectConsent, withSubjectConsent, dispatchWithSubjectConsent } from './privacySubjects.js';
 
 // ─── Disclosure guardrail (pure) ────────────────────────────────────────────
 
@@ -357,25 +357,27 @@ export async function emailLane(broker, kase, {
       nextAction: 'Connect a Gmail or Outlook account to send opt-out emails' };
   }
   const { subject, body, templateName } = await renderOptOutEmail({ broker, payload, disclosedFields, listingUrls, now });
-  const draft = await draftCreator({
-    accountId: account.id,
-    to: [to], // recipient LOCKED to the broker's declared address
-    subject,
-    body,
-    generatedBy: 'privacy-optout',
-    privacyMeta: { subjectId: kase.subjectId, vaultRecordIds, caseId: kase.id },
-    sendVia: sendViaForAccountType(account.type), // the account's real transport, not an assumed Gmail API
-  });
+  return withSubjectConsent(kase.subjectId, { scope: 'broker_optout', action: 'prepare opt-out email' }, async (owner) => {
+    const draft = await draftCreator({
+      accountId: account.id,
+      to: [to], // recipient LOCKED to the broker's declared address
+      subject,
+      body,
+      generatedBy: 'privacy-optout',
+      privacyMeta: { subjectId: owner.id, vaultRecordIds, caseId: kase.id },
+      sendVia: sendViaForAccountType(account.type), // the account's real transport, not an assumed Gmail API
+    });
 
-  await transitionCase(kase.id, 'optout_in_progress', { channel: 'email', disclosedFields, evidence: { lane: 'email', to, template: templateName, draftId: draft.id, disclosed: disclosedFields }, now });
+    await transitionCase(kase.id, 'optout_in_progress', { channel: 'email', disclosedFields, evidence: { lane: 'email', to, template: templateName, draftId: draft.id, disclosed: disclosedFields }, now });
 
-  if (autoApprove) await draftApprover(draft.id);
-  const submitted = await transitionCase(kase.id, 'submitted', {
-    channel: 'email',
-    evidence: { lane: 'email', to, template: templateName, draftId: draft.id, autoApproved: autoApprove, disclosed: disclosedFields },
-    now,
+    if (autoApprove) await draftApprover(draft.id);
+    const submitted = await transitionCase(kase.id, 'submitted', {
+      channel: 'email',
+      evidence: { lane: 'email', to, template: templateName, draftId: draft.id, autoApproved: autoApprove, disclosed: disclosedFields },
+      now,
+    });
+    return { caseId: kase.id, lane: 'email', outcome: 'submitted', draftId: draft.id, autoApproved: autoApprove, case: submitted };
   });
-  return { caseId: kase.id, lane: 'email', outcome: 'submitted', draftId: draft.id, autoApproved: autoApprove, case: submitted };
 }
 
 // ─── Planner (pure) ─────────────────────────────────────────────────────────
@@ -431,7 +433,8 @@ export async function runVerificationPass({
   // part of the removal workflow, so it is gated on `broker_optout` exactly
   // like the submission pass.
   const resolvedSubjectId = resolveSubjectId(subjectId);
-  await assertSubjectConsent(resolvedSubjectId, { scope: 'broker_optout', action: 'opt-out verification pass' });
+  const purpose = { scope: 'broker_optout', action: 'opt-out verification pass' };
+  await assertSubjectConsent(resolvedSubjectId, purpose);
   const cases = await listBrokerCases({ subjectId: resolvedSubjectId });
   const advanced = [];
   const confirmed = [];
@@ -469,7 +472,8 @@ export async function runVerificationPass({
       // READ-ONLY probe (no ledger write) — a raw scan verdict is gated out of
       // opt-out-owned states, so probeBroker classifies the CURRENT listing
       // without touching the case. `not_found` is the ONLY path to confirmed.
-      const probed = await removalProbe(broker, vectors, probeDeps).catch(() => null);
+      const probed = await dispatchWithSubjectConsent(resolvedSubjectId, purpose, () =>
+        removalProbe(broker, vectors, { ...probeDeps, subjectId: resolvedSubjectId, verifyingRemoval: true }).catch(onBrokerFetchFailure));
       if (probed && !probed.skipped) {
         if (probed.verdict === 'not_found') {
           await transitionCase(c.id, 'confirmed_removed', { viaRescan: true, evidence: { ...(c.evidence || {}), verifiedRemovedAt: now.toISOString() }, now });

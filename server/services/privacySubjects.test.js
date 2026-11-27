@@ -137,7 +137,7 @@ describe('deleteSubject', () => {
   it('erases the subject\'s privacy drafts before the cascade, selecting by provenance only', async () => {
     const client = { query: vi.fn(async sql => ({ rows: sql.includes('SELECT id') ? [{ id: 's2' }] : [] })) };
     withTransactionMock.mockImplementation(fn => fn(client));
-    await deleteSubject('s2');
+    await deleteSubject('S2');
     expect(eraseMock).toHaveBeenCalledTimes(1);
     const [predicate, opts] = eraseMock.mock.calls[0];
     expect(opts).toBeUndefined();

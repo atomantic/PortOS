@@ -31,7 +31,7 @@ import { fetchPublicResponse } from '../lib/safeUrlFetch.js';
 import { fetchUrlMainText } from './catalog/catalogIngestSources.js';
 import { listScanEligibleValues } from './privacyVault.js';
 import { listBrokers, listBrokerCases, recordScanVerdict } from './privacyBrokers.js';
-import { resolveSubjectId, assertSubjectConsent } from './privacySubjects.js';
+import { resolveSubjectId, assertSubjectConsent, dispatchWithSubjectConsent } from './privacySubjects.js';
 import { parseCityState } from '../lib/cityState.js';
 
 // Case states a scan pass may (re)touch: no case yet, or a settled SCAN verdict.
@@ -173,12 +173,11 @@ async function isScanUrlSafe(target) {
   return !(resolved?.address && isBlockedIngestHost(resolved.address));
 }
 
-// Default HTTP lane transport: every hop (including redirects) is DNS-pinned and
-// revalidated, and private/LAN addresses are refused, so a broker page cannot
-// bounce the scan into loopback or LAN services. A refused hop yields null.
-const pinnedScanFetch = (url, { headers }) => fetchPublicResponse(url, {
-  headers, timeoutMs: HTTP_FETCH_TIMEOUT_MS, blockPrivate: true, throwOnUnsafe: false,
-});
+// Fetch failures are inconclusive. A withdrawn grant or erased subject stops the pass.
+export function onBrokerFetchFailure(error) {
+  if (error?.code === 'SUBJECT_CONSENT_REQUIRED' || error?.code === 'SUBJECT_NOT_FOUND') throw error;
+  return null;
+}
 
 // Plain HTTP GET lane. Returns { status, html } or null on network failure.
 async function httpFetchLane(url, fetchImpl) {
@@ -192,9 +191,8 @@ async function httpFetchLane(url, fetchImpl) {
     if (!res) return null;
     const html = await res.text();
     return { status: res.status, html };
-  } catch {
-    // An unreadable body is inconclusive, even when headers reported success.
-    return null;
+  } catch (error) {
+    return onBrokerFetchFailure(error);
   } finally {
     clearTimeout(timer);
   }
@@ -209,7 +207,7 @@ async function httpFetchLane(url, fetchImpl) {
  * `deps` injectable so tests/verification never hit the network.
  */
 export async function probeBroker(broker, vectors, {
-  fetchImpl = pinnedScanFetch, browserFetch = fetchUrlMainText, urlSafe = isScanUrlSafe,
+  fetchImpl, browserFetch, urlSafe = isScanUrlSafe, subjectId, verifyingRemoval = false,
 } = {}) {
   const template = broker?.urls?.search;
   const name = (vectors.names || [])[0];
@@ -222,7 +220,12 @@ export async function probeBroker(broker, vectors, {
     return { skipped: true, reason: 'unsafe_or_unfillable_url' };
   }
 
-  const result = await httpFetchLane(url, fetchImpl);
+  const scope = verifyingRemoval ? 'broker_optout' : 'broker_scan';
+  const dispatchRequest = start => dispatchWithSubjectConsent(subjectId, { scope, action: 'broker exposure probe' }, start);
+  // The pinned transport checks each hop after DNS, including redirects.
+  const result = await httpFetchLane(url, (target, options) => fetchImpl
+    ? dispatchRequest(() => fetchImpl(target, options))
+    : fetchPublicResponse(target, { ...options, timeoutMs: HTTP_FETCH_TIMEOUT_MS, blockPrivate: true, throwOnUnsafe: false, dispatchRequest }));
   let html = result?.html ?? '';
   let status = result?.status ?? null;
 
@@ -242,7 +245,9 @@ export async function probeBroker(broker, vectors, {
   const walled = result && (status === 403 || (status < 400 && containsAntibot(html)));
   const jsShell = result && !walled && status >= 200 && status < 400 && looksLikeJsShell(html);
   if (walled || jsShell) {
-    const browsed = await browserFetch(url).catch(() => null);
+    const browsed = await dispatchRequest(() => browserFetch
+      ? browserFetch(url)
+      : fetchUrlMainText(url, { dispatchRequest })).catch(onBrokerFetchFailure);
     if (browsed?.text) {
       if (jsShell || !looksLikeJsShell(browsed.text)) {
         html = browsed.text;
@@ -281,20 +286,20 @@ export async function probeBroker(broker, vectors, {
  * read-only probeBroker that then writes the ledger verdict. Re-asserts the
  * subject's consent even though runScanPass already did: this is an exported
  * entry point, so a direct caller (route, agent, single-broker recheck) must not
- * be able to reach a ledger write around the gate. One indexed SELECT per broker. `deps` are
+ * be able to reach a ledger write around the gate. `deps` are
  * injectable so tests never hit the network/browser:
- *   - `fetchImpl` (default global fetch) — the HTTP lane.
+ *   - `fetchImpl` (default DNS-pinned fetch) — the HTTP lane.
  *   - `browserFetch` (default fetchUrlMainText) — the JS-required escalation.
  * Returns the recorded case, or `{ skipped: true, reason }` when the broker has
  * no usable search URL (blind scan not possible) or the URL is unsafe.
  */
 export async function scanBroker(broker, vectors, {
-  fetchImpl = pinnedScanFetch, browserFetch = fetchUrlMainText, urlSafe = isScanUrlSafe, now = new Date(),
+  fetchImpl, browserFetch, urlSafe = isScanUrlSafe, now = new Date(),
   subjectId,
 } = {}) {
   const resolvedSubjectId = resolveSubjectId(subjectId);
   await assertSubjectConsent(resolvedSubjectId, { scope: 'broker_scan', action: `broker exposure scan (${broker?.id})` });
-  const probed = await probeBroker(broker, vectors, { fetchImpl, browserFetch, urlSafe });
+  const probed = await probeBroker(broker, vectors, { fetchImpl, browserFetch, urlSafe, subjectId: resolvedSubjectId });
   if (probed.skipped) return { skipped: true, reason: probed.reason };
   const kase = await recordScanVerdict(broker.id, probed.verdict, {
     evidence: probed.evidence, found: probed.found ?? null, now, subjectId: resolvedSubjectId,
@@ -309,7 +314,7 @@ export async function scanBroker(broker, vectors, {
  *
  * Returns a summary { scanned, verdicts: {<verdict>: n}, skipped, brokers }.
  */
-export async function runScanPass({ concurrency = 3, fetchImpl = pinnedScanFetch, browserFetch = fetchUrlMainText, urlSafe = isScanUrlSafe, now = new Date(), subjectId } = {}) {
+export async function runScanPass({ concurrency = 3, fetchImpl, browserFetch, urlSafe = isScanUrlSafe, now = new Date(), subjectId } = {}) {
   // CONSENT GATE — BEFORE any vault read or broker fetch. A subject without an
   // active `broker_scan` grant is refused outright (403); the UI hiding the Scan
   // button is not sufficient, since a cron/API/agent caller reaches this same

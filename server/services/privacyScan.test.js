@@ -22,6 +22,7 @@ const { assertSubjectConsentMock } = vi.hoisted(() => ({
 vi.mock('./privacySubjects.js', () => ({
   resolveSubjectId: (id) => id || SELF,
   assertSubjectConsent: assertSubjectConsentMock,
+  dispatchWithSubjectConsent: async (id, purpose, start) => { await assertSubjectConsentMock(id, purpose); return start(); },
 }));
 
 const {

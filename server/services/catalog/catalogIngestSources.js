@@ -112,7 +112,7 @@ async function assertIngestUrlSafe(target) {
  * Returns `{ text, title, finalUrl }`. Throws when the browser can't reach
  * the page or extracts nothing usable, so the route surfaces a clean 4xx/5xx.
  */
-export async function fetchUrlMainText(url, { settleMs = PAGE_SETTLE_MS } = {}) {
+export async function fetchUrlMainText(url, { settleMs = PAGE_SETTLE_MS, dispatchRequest } = {}) {
   await assertIngestUrlSafe(url);
 
   // Prefer the page's own <article>/<main> if present (skips nav/footer chrome),
@@ -138,6 +138,7 @@ export async function fetchUrlMainText(url, { settleMs = PAGE_SETTLE_MS } = {}) 
   // Every ingested URL would otherwise leave one open in the user's browser.
   const page = await navigateToUrlPinned(url, {
     verifyRemoteIp: (ip) => !isBlockedIngestHost(ip),
+    dispatchRequest,
     settleMs,
     evaluateExpression: expression,
   });
