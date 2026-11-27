@@ -22,13 +22,15 @@ def assert_runtime_contract(args):
     """Check installed bytes and package/model pins before importing or loading models."""
     if (args.model_repo, args.model_revision) != (CONTRACT["model"]["repo"], CONTRACT["model"]["revision"]):
         raise RuntimeError("H3 CUDA history requires the pinned FL2VA checkpoint.")
-    for package, version in CONTRACT["runtimePackages"].items():
+    for package, expected in CONTRACT["runtimePackages"].items():
+        versions = [expected] if isinstance(expected, str) else expected
+        requirement = " or ".join(f"{package}=={version}" for version in versions)
         try:
             installed = importlib.metadata.distribution(package)
         except importlib.metadata.PackageNotFoundError as exc:
-            raise RuntimeError(f"H3 CUDA history requires {package}=={version}. Repair the CUDA runtime.") from exc
-        if installed.version != version:
-            raise RuntimeError(f"H3 CUDA history requires {package}=={version}. Repair the CUDA runtime.")
+            raise RuntimeError(f"H3 CUDA history requires {requirement}. Repair the CUDA runtime.") from exc
+        if installed.version not in versions:
+            raise RuntimeError(f"H3 CUDA history requires {requirement}. Repair the CUDA runtime.")
         if package == "diffusers":
             for filename, digest in CONTRACT["sourceSha256"].items():
                 source = Path(installed.locate_file(filename))
