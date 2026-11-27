@@ -27,6 +27,7 @@ import ObjectAttachmentsEditor from '../universe/ObjectAttachmentsEditor';
 import Pill from '../ui/Pill';
 import CollapsibleSection from '../ui/CollapsibleSection';
 import { BIBLE_LIMITS } from '../../lib/bibleLimits';
+import { isEntryRevealGated } from '../../../../server/lib/storyBibleReveal.js';
 
 // Place metadata enums — kept in lock-step with `PLACE_INT_EXT` and
 // `PLACE_TIME_OF_DAY` in `server/lib/storyBible.js`. Mirror is fine: a
@@ -102,15 +103,11 @@ function ReadonlyChip({ children }) {
   );
 }
 
-// A canon entry is reveal-gated (#2178) when it carries a hard `spoiler` flag
-// or a numeric `revealIssue`. Mirrors the server's `isEntryRevealGated`.
-const isEntryGated = (entry) => entry?.spoiler === true || Number.isInteger(entry?.revealIssue);
-
 // Spoiler badge shown in the card title when an entry is reveal-gated (#2178).
 // Purely informational; the gating itself happens server-side in
 // `buildStageContext`. Uses the shared `Pill` primitive (warning tone).
 function SpoilerBadge({ entry }) {
-  if (!isEntryGated(entry)) return null;
+  if (!isEntryRevealGated(entry)) return null;
   const label = entry.spoiler === true ? 'spoiler' : `reveal #${entry.revealIssue}`;
   const title = entry.spoiler === true
     ? 'Hard spoiler — hidden from every issue’s drafting prompt'
@@ -134,7 +131,7 @@ export function RevealTimingField({ entry, editable, onPatch }) {
     typeof entry.surfaceDescriptor === 'string' ? entry.surfaceDescriptor : '',
     (v) => onPatch({ surfaceDescriptor: v || null }),
   );
-  const gated = isEntryGated(entry);
+  const gated = isEntryRevealGated(entry);
   if (!editable) {
     if (!gated) return null;
     return (

@@ -32,7 +32,7 @@
     "server/services/taskEnhancer.js"
   ],
   "fableloom-branch-node": [
-    "server/services/fableLoom/weave.js"
+    "server/services/fableLoom/weaveEpisode.js"
   ],
   "fableloom-editorial-remediate": [
     "server/services/fableLoom/editorial.js"
@@ -41,47 +41,47 @@
     "server/services/fableLoom/editorialSelfImprove.js"
   ],
   "fableloom-feedback-episode": [
-    "server/services/fableLoom/weave.js"
+    "server/services/fableLoom/weaveReviewFeedback.js"
   ],
   "fableloom-feedback-series-plan": [
-    "server/services/fableLoom/weave.js"
+    "server/services/fableLoom/weaveSeriesPlan.js"
   ],
   "fableloom-generate-series-plan": [
-    "server/services/fableLoom/weave.js"
+    "server/services/fableLoom/weaveSeriesPlan.js"
   ],
   "fableloom-outline-episode": [
-    "server/services/fableLoom/weave.js"
+    "server/services/fableLoom/weaveEpisode.js"
   ],
   "fableloom-plan-shots": [
     "server/services/fableLoom/shots.js"
   ],
   "fableloom-play-turn": [
     "server/lib/fableLoomExport.js",
-    "server/services/fableLoom/weave.js"
+    "server/services/fableLoom/weavePlayReformat.js"
   ],
   "fableloom-reformat-scenes": [
-    "server/services/fableLoom/weave.js"
+    "server/services/fableLoom/weavePlayReformat.js"
   ],
   "fableloom-review": [
-    "server/services/fableLoom/weave.js"
+    "server/services/fableLoom/weaveReviewFeedback.js"
   ],
   "fableloom-review-episode-outline": [
-    "server/services/fableLoom/weave.js"
+    "server/services/fableLoom/weaveSeriesPlan.js"
   ],
   "fableloom-review-playthroughs": [
     "server/services/fableLoom/editorial.js"
   ],
   "fableloom-review-series-plan": [
-    "server/services/fableLoom/weave.js"
+    "server/services/fableLoom/weaveSeriesPlan.js"
   ],
   "fableloom-review-series-teleplay": [
-    "server/services/fableLoom/weave.js"
+    "server/services/fableLoom/weaveSeriesPlan.js"
   ],
   "fableloom-review-shots": [
     "server/services/fableLoom/shots.js"
   ],
   "fableloom-weave-episode": [
-    "server/services/fableLoom/weave.js"
+    "server/services/fableLoom/weaveEpisode.js"
   ],
   "importer-arc-extract": [
     "server/services/importer/importerAnalyze.js",
