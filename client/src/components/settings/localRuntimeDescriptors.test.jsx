@@ -7,6 +7,7 @@ const fakeRuntime = vi.hoisted(() => {
   let status = { installed: false, running: false };
   return {
     status: vi.fn(async () => status),
+    setStatus: (nextStatus) => { status = nextStatus; },
     install: vi.fn(async () => {
       status = { installed: true, running: false, cachedModels: ['example/checkpoint'] };
     }),
@@ -16,6 +17,7 @@ const fakeRuntime = vi.hoisted(() => {
     stop: vi.fn(async () => {
       status = { ...status, running: false };
     }),
+    upgrade: vi.fn(async () => {}),
   };
 });
 
@@ -65,5 +67,31 @@ describe('local runtime descriptors', () => {
     fireEvent.click(await row.findByRole('button', { name: 'Stop' }));
     await waitFor(() => expect(fakeRuntime.stop).toHaveBeenCalledOnce());
     expect(await row.findByText('Stopped')).toBeInTheDocument();
+  });
+
+  it('offers runtime install when an installed MTPLX wrapper is not bootstrapped', async () => {
+    fakeRuntime.setStatus({ installed: true, running: false, runtimeReady: false, cachedModels: [] });
+    render(<MemoryRouter><LocalLlmRuntimesView /></MemoryRouter>);
+    const row = within(screen.getByRole('group', { name: 'Example runtime' }));
+
+    expect(await row.findByRole('button', { name: 'Install' })).toBeInTheDocument();
+    expect(await row.findByText('MTPLX runtime is not ready — use Install to download it')).toBeInTheDocument();
+  });
+
+  it('maps MTPLX runtime versions and updates to the roster row', async () => {
+    fakeRuntime.setStatus({
+      installed: true,
+      running: false,
+      runtimeReady: true,
+      runtimeVersion: '1.0.0',
+      lockedVersion: '1.1.0',
+      runtimeOutdated: true,
+      cachedModels: ['example/checkpoint'],
+    });
+    render(<MemoryRouter><LocalLlmRuntimesView /></MemoryRouter>);
+    const row = within(screen.getByRole('group', { name: 'Example runtime' }));
+
+    expect(await row.findByRole('button', { name: /Update/ })).toBeInTheDocument();
+    expect(await row.findByText(/1\.0\.0/)).toBeInTheDocument();
   });
 });

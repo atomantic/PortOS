@@ -49,7 +49,9 @@ function pm2Row({ id, label, icon, status, platformReason, onStart, onStop, onIn
     pid: status?.managed && status?.pid ? status.pid : null,
     // `status` is null until the first status response lands. Offering Install then would
     // put a button on a host that turns out not to support the runtime at all.
-    onInstall: status && !platformReason && !status.installed ? onInstall : null,
+    // Some wrappers (notably Homebrew's MTPLX shim) are installed before their
+    // private runtime is downloaded. Keep Install available for that state.
+    onInstall: status && !platformReason && (!status.installed || status.runtimeReady === false) ? onInstall : null,
     onStart: !platformReason && status?.installed && !status?.running && !startBlockedReason ? onStart : null,
     startBlockedReason: status?.installed && !status?.running ? startBlockedReason : null,
     onUninstall: !platformReason && status?.canUninstall ? onUninstall : null,
@@ -171,13 +173,21 @@ export const LOCAL_RUNTIME_DESCRIPTORS = {
       stop: (r) => r?.message || 'MTPLX stopped',
     },
     toRow(status, action) {
+      const runtimeStatus = status && {
+        ...status,
+        version: status.runtimeVersion,
+        latestVersion: status.lockedVersion,
+        updateAvailable: status.runtimeOutdated,
+        canUpgrade: true,
+      };
       return pm2Row({
         id: this.id,
         label: this.label,
         icon: this.icon,
-        status,
+        status: runtimeStatus,
         platformReason: status?.supported === false ? 'macOS with Apple Silicon only' : null,
         onInstall: action('install'),
+        onUpgrade: action('install'),
         onUninstall: action('uninstall'),
         // MTPLX can be started explicitly when a verified checkpoint is cached,
         // and is still restarted automatically before a request after an idle
@@ -185,7 +195,9 @@ export const LOCAL_RUNTIME_DESCRIPTORS = {
         onStart: status?.cachedModels?.length ? action('start') : null,
         onStop: action('stop'),
         startBlockedReason: status?.installed && !status?.running
-          ? (status?.cachedModels?.length === 0 && !status?.cacheError
+          ? (status?.runtimeReady === false
+            ? 'MTPLX runtime is not ready — use Install to download it'
+            : status?.cachedModels?.length === 0 && !status?.cacheError
             ? 'No checkpoint yet — use Configure to download one'
             : null)
           : null,
