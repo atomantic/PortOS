@@ -18,6 +18,10 @@ capture and playback. Typed messages work without microphone permission.
 choose a streaming API provider (including a configured local model), model,
 speech recognition, voice, and other controls, then **Save & Reconcile**.
 No particular model is required.
+Voice asks for short replies and leaves the default output budget to the provider.
+For Ollama Inkling 2 Mini, Voice requests thinking off for low-latency replies;
+structured tools remain available. This does not change Inkling settings for
+coding agents or other features.
 
 The optional stylized portrait animates using the local playback level, not the
 camera or microphone input. It does not fetch a model or send audio to a renderer.

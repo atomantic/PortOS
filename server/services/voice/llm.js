@@ -348,8 +348,12 @@ export const streamChat = async (messages, opts = {}) => {
   // o1) emit `<think>` unconditionally. The deprioritization in resolveModel
   // is the durable fix; this is best-effort speedup for the rare case where
   // a reasoning model is the only tool-capable option.
-  const reasoning = isReasoningModel(model);
-  const sentMessages = reasoning ? messages.map((m, i, arr) => {
+  // Ollama exposes Inkling's opt-out as a model-defined compatibility effort.
+  // Apply it only to interactive Voice; other callers keep their own effort.
+  const ollamaInkling = (opts.provider || DEFAULT_VOICE_BACKEND) === 'ollama'
+    && /(?:^|[/:])inkling-2-mini(?:$|[-:/.])/i.test(model);
+  const legacyReasoning = !ollamaInkling && isReasoningModel(model);
+  const sentMessages = legacyReasoning ? messages.map((m, i, arr) => {
     if (m.role !== 'system' || i !== arr.findLastIndex((x) => x.role === 'system')) return m;
     const directive = (m.content || '').includes('/no_think') ? '' : '\n/no_think';
     return { ...m, content: (m.content || '') + directive };
@@ -360,9 +364,11 @@ export const streamChat = async (messages, opts = {}) => {
     messages: sentMessages,
     stream: true,
     temperature: 0.5,
-    max_tokens: opts.maxTokens ?? 180,
+    // The provider owns default output limits; the Voice prompt requests brevity.
+    ...(opts.maxTokens != null ? { max_tokens: opts.maxTokens } : {}),
   };
-  if (reasoning) {
+  if (ollamaInkling) body.reasoning_effort = 'none';
+  if (legacyReasoning) {
     body.chat_template_kwargs = { thinking: false, enable_thinking: false };
     body.reasoning_effort = 'minimal';
   }
