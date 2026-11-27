@@ -149,6 +149,50 @@ describe('insightsService generation', () => {
     expect(atomicWrite).not.toHaveBeenCalled();
   });
 
+  it('discards a response already in flight when the prior narrative is cleared', async () => {
+    const requested = Promise.withResolvers();
+    const providerResponse = Promise.withResolvers();
+    callProviderAISimple.mockImplementationOnce(() => {
+      requested.resolve();
+      return providerResponse.promise;
+    });
+    unlinkGuarded.mockResolvedValueOnce(undefined);
+
+    const refresh = refreshCrossDomainNarrative();
+    try {
+      await requested.promise;
+      await clearCrossDomainNarrative();
+    } finally {
+      providerResponse.resolve({ text: 'Response based on erased data.' });
+      await refresh;
+    }
+
+    await expect(refresh).resolves.toEqual({ available: false, reason: 'not_generated' });
+    expect(atomicWrite).not.toHaveBeenCalled();
+  });
+
+  it('reads the diff baseline only after the source deletion following a clear', async () => {
+    const clearReachedSource = Promise.withResolvers();
+    const sourceRemoved = Promise.withResolvers();
+    const clear = clearCrossDomainNarrative(async () => {
+      clearReachedSource.resolve();
+      await sourceRemoved.promise;
+      readJSONFile.mockImplementation(async (file) => /[/\\]themes\.json$/.test(file) ? CACHED_THEMES : null);
+    });
+    unlinkGuarded.mockResolvedValueOnce(undefined);
+    await clearReachedSource.promise;
+
+    callProviderAISimple.mockResolvedValueOnce({ text: 'New narrative.' });
+    const refresh = refreshCrossDomainNarrative();
+    sourceRemoved.resolve();
+    await clear;
+
+    await expect(refresh).resolves.toMatchObject({ available: true, text: 'New narrative.', previousText: null });
+    expect(atomicWrite).toHaveBeenCalledExactlyOnceWith(expect.any(String), expect.objectContaining({
+      text: 'New narrative.', previousText: null, previousGeneratedAt: null,
+    }), { mode: 0o600, dirMode: 0o700 });
+  });
+
   it.each(['{"themes":[null,{"title":"  "},{"title":9}]}', 'null', '[]', 'plain text'])(
     'rejects unusable themes without replacing the cache (%s)',
     async text => {

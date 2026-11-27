@@ -64,6 +64,12 @@ router.post('/search', asyncHandler(async (req, res) => {
 router.post('/markers', asyncHandler(async (req, res) => {
   const data = validateRequest(genomeSaveMarkerSchema, req.body);
   const marker = await genomeService.saveMarker(data);
+  if (marker.error) {
+    throw new ServerError(marker.error, {
+      status: 400,
+      code: 'GENOME_MARKER_SAVE_ERROR'
+    });
+  }
   res.status(201).json(marker);
 }));
 
