@@ -33,4 +33,13 @@ it('can hide the performer, customize the card and save an arbitrary multiline g
   expect(screen.getByLabelText('Block 1 text').value).toBe('First line\nSecond line');
   fireEvent.click(screen.getByLabelText('Show “Performed by”'));
   expect(screen.getByLabelText('Performed by').value).toBe('Example artist');
+  fireEvent.change(screen.getByLabelText('Card style'), { target: { value: 'analog-16mm' } });
+  fireEvent.click(screen.getByRole('button', { name: 'Add social handle' }));
+  const handle = screen.getByLabelText('Handle');
+  fireEvent.change(handle, { target: { value: '@example_yt' } });
+  fireEvent.blur(handle);
+  expect(save).toHaveBeenLastCalledWith({ creditsOutro: expect.objectContaining({
+    style: 'analog-16mm',
+    socials: [{ platform: 'youtube', handle: '@example_yt' }],
+  }) });
 });

@@ -113,4 +113,37 @@ describe('credits ending', () => {
     expect(grid.every((d) => d.y > 0 && d.y < 720)).toBe(true);
     expect(texts({ ...long, layout: 'grid' }, 7)).toEqual(grid);
   });
+
+  it('normalizes and renders styled cards with social handles and optional background still', () => {
+    const record = {
+      enabled: true, layout: 'grid', style: 'analog-16mm', title: 'Example Song', showPerformer: false,
+      accentColor: '#F5B038', backgroundImageId: 'shot-bg.png',
+      lines: [{ role: 'Directed by', name: 'Alice' }],
+      socials: [{ platform: 'youtube', handle: '@example_yt' }, { platform: 'x', handle: '@example_x' }],
+    };
+    const parsed = musicVideoProjectUpdateSchema.parse({ creditsOutro: record });
+    const normalized = normalizeCreditsOutro(parsed.creditsOutro);
+    expect(normalized).toMatchObject({
+      style: 'analog-16mm',
+      backgroundImageId: 'shot-bg.png',
+      socials: [{ platform: 'youtube', handle: '@example_yt' }, { platform: 'x', handle: '@example_x' }],
+    });
+    expect(creditsOutroSeconds({ enabled: true, socials: [{ platform: 'x', handle: '@solo' }] })).toBe(10);
+
+    const drawn = [];
+    const ctx = new Proxy({
+      measureText: (text) => ({ width: text.length * 10 }),
+      fillText: (text, x, y) => drawn.push({ text, x, y }),
+      createRadialGradient: () => ({ addColorStop() {} }),
+    }, {
+      get: (target, key) => (key in target ? target[key] : () => {}),
+      set: () => true,
+    });
+    for (const style of ['analog-16mm', 'mtv-broadcast', 'snapshot-print', 'festival-poster']) {
+      drawn.length = 0;
+      drawCreditsOutro(ctx, { width: 1280, height: 720, t: 5, durationSec: 10, credits: { ...normalized, style } });
+      expect(drawn.some((d) => d.text === '@example_yt'), style).toBe(true);
+      expect(drawn.some((d) => d.text === '@example_x'), style).toBe(true);
+    }
+  });
 });

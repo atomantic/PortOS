@@ -211,7 +211,7 @@ export default function ProjectWorkspace({
       <TitleCardPanel project={selected} onEditLocal={editProjectLocal} onSave={saveProjectFields}
         onPreview={(startSec) => seekToScene({ startSec }, { play: true })} />
       <StatsOutroPanel project={selected} onEditLocal={editProjectLocal} onSave={saveProjectFields} />
-      <CreditsOutroPanel project={selected} onEditLocal={editProjectLocal} onSave={saveProjectFields} />
+      <CreditsOutroPanel project={selected} onEditLocal={editProjectLocal} onSave={saveProjectFields} showPreview />
       </Suspense>
     </div>
   ));

@@ -51,13 +51,13 @@ function endingPartAt(parts, t) {
 }
 
 /** Paint the ending at its own time `t`: whichever part is showing, on its own clock. */
-function drawEnding(ctx, { width, height, t, parts, stats, images = [] }) {
+function drawEnding(ctx, { width, height, t, parts, stats, images = [], creditsBg = null }) {
   const at = endingPartAt(parts, t);
   if (!at.part) return;
   if (at.part.kind === 'floor') {
     drawStatsOutro(ctx, { width, height, t: at.t, durationSec: at.part.durationSec, stats, outro: at.part.outro, images });
   } else {
-    drawCreditsOutro(ctx, { width, height, t: at.t, durationSec: at.part.durationSec, credits: at.part.credits });
+    drawCreditsOutro(ctx, { width, height, t: at.t, durationSec: at.part.durationSec, credits: at.part.credits, bgImage: creditsBg });
   }
 }
 
@@ -76,7 +76,7 @@ const ENDING_FACE_LOADS = Object.freeze([
  * for `stats.floorImages[i]`; the faces are declared by the page's
  * @font-face rules. Every seek waits for the stills and faces to load.
  */
-export function endingPageSource({ stats, parts, imageSrcs = [], width, height, fps, durationSec }) {
+export function endingPageSource({ stats, parts, imageSrcs = [], creditsBgSrc = '', width, height, fps, durationSec }) {
   const json = (value) => JSON.stringify(value).replace(/</g, '\\u003c');
   return `(() => {
   const CREDITS_OUTRO_FONTS = ${json(CREDITS_OUTRO_FONTS)};
@@ -88,6 +88,7 @@ export function endingPageSource({ stats, parts, imageSrcs = [], width, height, 
   const STATS = ${json(stats)};
   const PARTS = ${json(parts)};
   const SRCS = ${json(imageSrcs)};
+  const CREDITS_BG_SRC = ${json(creditsBgSrc || '')};
   const FACES = ${json(ENDING_FACE_LOADS)};
   const WIDTH = ${Number(width)}, HEIGHT = ${Number(height)}, FPS = ${Number(fps)}, DURATION = ${Number(durationSec)};
   const canvas = document.getElementById('outro');
@@ -95,13 +96,18 @@ export function endingPageSource({ stats, parts, imageSrcs = [], width, height, 
   canvas.height = HEIGHT;
   const ctx = canvas.getContext('2d');
   const images = SRCS.map(() => null);
-  const loaded = Promise.all(SRCS.map((src, i) => new Promise((resolve) => {
+  let creditsBg = null;
+  const loadImg = (src, assign) => new Promise((resolve) => {
     if (!src) { resolve(); return; }
     const img = new Image();
-    img.onload = () => { images[i] = img; resolve(); };
+    img.onload = () => { assign(img); resolve(); };
     img.onerror = () => resolve();
     img.src = src;
-  })));
+  });
+  const loaded = Promise.all([
+    ...SRCS.map((src, i) => loadImg(src, (img) => { images[i] = img; })),
+    loadImg(CREDITS_BG_SRC, (img) => { creditsBg = img; }),
+  ]);
   const faces = document.fonts && document.fonts.load
     ? Promise.all(FACES.map((font) => document.fonts.load(font).catch(() => null)))
     : Promise.resolve();
@@ -110,7 +116,7 @@ export function endingPageSource({ stats, parts, imageSrcs = [], width, height, 
     async seek(t) {
       await loaded;
       await faces;
-      drawEnding(ctx, { width: WIDTH, height: HEIGHT, t, parts: PARTS, stats: STATS, images });
+      drawEnding(ctx, { width: WIDTH, height: HEIGHT, t, parts: PARTS, stats: STATS, images, creditsBg });
       await new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve)));
     },
   };
