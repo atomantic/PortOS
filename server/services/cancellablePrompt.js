@@ -16,7 +16,13 @@ export async function runCancellablePrompt(runPrompt, args, signal, stopRun = st
   try {
     const result = await runPrompt({
       ...args,
-      beforeExecute: () => signal.throwIfAborted(),
+      beforeExecute: async (run) => {
+        signal.throwIfAborted();
+        if (args.beforeExecute) {
+          await args.beforeExecute(run);
+          signal.throwIfAborted();
+        }
+      },
       onRunCreated: (runId) => {
         if (signal.aborted) stop(runId);
         else active.add(runId);
