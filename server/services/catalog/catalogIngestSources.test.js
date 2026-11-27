@@ -128,6 +128,14 @@ describe('fetchUrlMainText', () => {
     expect(browserService.closeCdpPage).not.toHaveBeenCalled();
   });
 
+  it('forwards off-the-record navigation only when requested', async () => {
+    await fetchUrlMainText('https://ex.com/a', { settleMs: 0 });
+    await fetchUrlMainText('https://ex.com/a', { settleMs: 0, disposableContext: true });
+
+    expect(browserService.navigateToUrlPinned.mock.calls.map(([, options]) => options.disposableContext))
+      .toEqual([undefined, true]);
+  });
+
   it('throws when the page extracts no readable text', async () => {
     browserService.navigateToUrlPinned.mockImplementation(pinnedNav({
       finalUrl: 'https://ex.com/a', hops: ['93.184.216.34'], evalResult: JSON.stringify({ title: '', text: '   ' }),
