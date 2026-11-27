@@ -2537,23 +2537,13 @@ const __dirname = dirname(fileURLToPath(import.meta.url));
 const STORE_SRC = realReadFileSync(join(__dirname, 'cosTaskStore.js'), 'utf-8');
 
 describe('working-set cache — no bypass (source guards, #3497)', () => {
-  // Everything outside the cache accessors. Any direct repository load or save
-  // the rest of the module makes is a bypass by definition.
-  const ACCESSOR_START = 'async function readTaskSnapshot';
-  const ACCESSOR_END = '/** Test hook: forget every cached working set. */';
-  const outsideAccessors = (() => {
-    const start = STORE_SRC.indexOf(ACCESSOR_START);
-    const end = STORE_SRC.indexOf(ACCESSOR_END);
-    if (start === -1 || end <= start) return null; // asserted below, not thrown here
-    return (STORE_SRC.slice(0, start) + STORE_SRC.slice(end))
-      .split('\n')
-      .filter(line => !line.trim().startsWith('//') && !line.trim().startsWith('*'));
-  })();
-
-  it('locates the cache accessors it is guarding', () => {
-    // If this fails the guards below are vacuous — the anchors drifted.
-    expect(outsideAccessors, `anchors "${ACCESSOR_START}" / "${ACCESSOR_END}" not found in order`).not.toBeNull();
-  });
+  const readSource = name => realReadFileSync(join(__dirname, name), 'utf-8');
+  const codeLines = source => source.split('\n')
+    .filter(line => !line.trim().startsWith('//') && !line.trim().startsWith('*'));
+  const workingSet = codeLines(readSource('cosTaskWorkingSet.js')).join('\n');
+  const outsideAccessors = [
+    STORE_SRC, readSource('cosTaskViews.js'), readSource('cosTaskReaper.js'), readSource('cosTaskChallenges.js'),
+  ].flatMap(codeLines);
 
   it('every working-set read goes through the snapshot cache', () => {
     // A read path calling the repository directly still works, but skips the
@@ -2561,6 +2551,8 @@ describe('working-set cache — no bypass (source guards, #3497)', () => {
     // in-place mutations out of the cache.
     const bypasses = outsideAccessors.filter(line => /\b(loadTaskWorkingSet|readTaskListVersion)\(/.test(line));
     expect(bypasses, `direct repository read(s): ${bypasses.join(' | ')}`).toEqual([]);
+    expect(workingSet.match(/\bloadTaskWorkingSet\(/g)).toHaveLength(1);
+    expect(workingSet.match(/\breadTaskListVersion\(/g)).toHaveLength(1);
   });
 
   it('every list save goes through writeTaskList', () => {
@@ -2569,12 +2561,12 @@ describe('working-set cache — no bypass (source guards, #3497)', () => {
     // one-field change a one-row write.
     const bypasses = outsideAccessors.filter(line => /\bapplyTaskListSave\(/.test(line));
     expect(bypasses, `direct applyTaskListSave call(s): ${bypasses.join(' | ')}`).toEqual([]);
+    expect(workingSet.match(/\bapplyTaskListSave\(/g)).toHaveLength(1);
   });
 
   it('writeTaskList persists a row diff, never the whole queue', () => {
-    const code = STORE_SRC.split('\n').filter(line => !line.trim().startsWith('//') && !line.trim().startsWith('*')).join('\n');
-    expect(code).toMatch(/planListSave\(\{ previous: snapshot\.rows, next: tasks, source \}\)/);
-    expect(code).not.toMatch(/generateTasksMarkdown|parseTasksMarkdown|atomicWrite/);
+    expect(workingSet).toMatch(/planListSave\(\{ previous: snapshot\.rows, next: tasks, source \}\)/);
+    expect([workingSet, ...outsideAccessors].join('\n')).not.toMatch(/generateTasksMarkdown|parseTasksMarkdown|atomicWrite/);
   });
 });
 
