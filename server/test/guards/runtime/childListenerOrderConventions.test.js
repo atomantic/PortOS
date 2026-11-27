@@ -219,6 +219,7 @@ describe('spawned children get a terminal listener before the next await (#11761
       'cos-runner/index.js',
       'services/imageGen/local.js',
       'services/videoGen/spawnWatch.js',
+      'services/videoGen/metalWatchdog.js',
     ]));
   });
 
