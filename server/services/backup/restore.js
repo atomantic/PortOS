@@ -69,12 +69,16 @@ async function clearRestoredImageTombstones(subdirFilter) {
 
 async function reconcileLiveFileRestore(subdirFilter, ownerRefreshes) {
   const restoresMedia = restoresMediaScope(subdirFilter);
+  // Restored cron registrations read the configured timezone from the settings cache.
+  // Still refresh every owner if settings fail, and report each failure once.
+  const settingsReload = Promise.resolve().then(reloadSettings);
+  const settingsSettled = Promise.allSettled([settingsReload]);
   const refreshes = [
-    ...ownerRefreshes,
+    ...ownerRefreshes.map(({ label, run }) => ({ label, run: () => settingsSettled.then(() => run()) })),
     ...(!subdirFilter || subdirFilter === 'brain' || subdirFilter.startsWith('brain/')
       ? [{ label: 'Brain cache invalidation', run: invalidateBrainCaches }]
       : []),
-    { label: 'settings reload', run: reloadSettings },
+    { label: 'settings reload', run: () => settingsReload },
     ...(restoresMedia && !usesFileEscapeHatch()
       ? [{ label: 'media index rebuild', run: async () => {
         const { reconcileMediaAssets } = await import('../mediaAssetIndex/db.js');

@@ -13,6 +13,7 @@ import * as notifications from './notifications.js';
 import * as feeds from './feeds.js';
 import * as personalities from './agent/agentPersonalities.js';
 import * as automation from './automationScheduler.js';
+import { cancelAll, getEvent } from './eventScheduler.js';
 import { updateMeta } from './digital-twin-meta.js';
 import { getDigitalTwinForPrompt } from './digital-twin-context.js';
 import { scheduleTimer, __resetVoiceTimers } from './voice/timers.js';
@@ -83,6 +84,61 @@ describe('live file restore caches', () => {
       expect(scheduleData.schedules).toMatchObject({ [restored]: { runCount: 4 } });
       expect(scheduleData.schedules).not.toHaveProperty(original);
     } finally {
+      clock.mockRestore();
+    }
+  });
+
+  it.each([0, 1])('reconciles running automation timers and queued edits after transfer exit %i', async exit => {
+    const path = join(PATHS.agentPersonalities, 'schedules.json');
+    const interval = intervalMs => ({ enabled: true, action: { type: 'example' }, schedule: { type: 'interval', intervalMs } });
+    const install = schedules => fs.writeFile(path, JSON.stringify({ schedules }));
+    const event = id => getEvent(`agent-schedule-${id}`);
+    const executor = vi.fn();
+    automation.registerActionExecutor(executor);
+    const clock = vi.spyOn(Date, 'now').mockReturnValue(Date.now());
+    try {
+      await fs.mkdir(PATHS.agentPersonalities, { recursive: true });
+      await install(Object.fromEntries(['changed', 'removed', 'disabled', 'unchanged'].map(id => [id, interval(600000)])));
+      automation.invalidateCache();
+      await automation.init();
+      const unchangedNext = event('unchanged').nextRunAt;
+      clock.mockReturnValue(Date.now() + 10000);
+      const now = Date.now();
+      const lastRun = new Date(now - 30000).toISOString();
+      const proc = fakeProc();
+      spawn.mockReturnValue(proc);
+      const pending = restoreSnapshot('/dest', 'snap-1', { dryRun: false, subdirFilter: 'agents/schedules.json' });
+      await flush();
+      const edit = automation.updateSchedule('edited', { schedule: { type: 'interval', intervalMs: 900000 } });
+      await install({
+        added: interval(800000),
+        changed: { ...interval(700000), lastRun, runCount: 3 },
+        unchanged: interval(600000),
+        disabled: { ...interval(600000), enabled: false },
+        edited: interval(600000),
+        random: { ...interval(0), schedule: { type: 'random', randomWindow: { minMs: 500000, maxMs: 500000 } } },
+      });
+      proc.emit('close', exit);
+      if (exit) await expect(pending).rejects.toThrow(/Some files may already have been overwritten/);
+      else await pending;
+      await edit;
+      expect(event('added').nextRunAt).toBe(now + 800000);
+      expect(event('changed').nextRunAt).toBe(Date.parse(lastRun) + 700000);
+      expect(event('removed')).toBeNull();
+      expect(event('disabled')).toBeNull();
+      expect(event('unchanged').nextRunAt).toBe(unchangedNext);
+      expect(event('random').nextRunAt).toBe(now + 500000);
+      expect(event('edited').nextRunAt).toBe(now + 900000);
+      const { schedules } = JSON.parse(await fs.readFile(path, 'utf8'));
+      expect(schedules.random.rolledIntervalMs).toBe(500000);
+      expect(schedules.changed.runCount).toBe(3);
+      expect(schedules.edited.schedule.intervalMs).toBe(900000);
+      expect(executor).not.toHaveBeenCalled();
+    } finally {
+      cancelAll();
+      await install({});
+      automation.invalidateCache();
+      automation.registerActionExecutor(null);
       clock.mockRestore();
     }
   });
