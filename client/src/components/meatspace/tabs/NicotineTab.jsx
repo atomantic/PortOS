@@ -1,7 +1,6 @@
-import { useState, useEffect, useCallback, useMemo, useRef } from 'react';
+import { useState, useMemo } from 'react';
 import { Cigarette, Plus, Trash2, Pencil, Check, X, Settings } from 'lucide-react';
 import { pluralize } from '../../../lib/textUtils';
-import toast from '../../ui/Toast';
 import {
   getCustomNicotineProducts,
   getNicotineSummary,
@@ -13,239 +12,62 @@ import {
   updateCustomNicotineProduct,
   removeCustomNicotineProduct,
 } from '../../../services/apiMeatspace.js';
-import { getAppleHealthCorrelation } from '../../../services/apiHealth.js';
 import BrailleSpinner from '../../BrailleSpinner';
 import LoadFailureNotice from '../LoadFailureNotice';
 import ConfirmButtonPair from '../../ui/ConfirmButtonPair';
 import { FormField } from '../../ui/FormField';
-import { useConfirmDelete } from '../../../hooks/useConfirmDelete';
 import NicotineChart from '../NicotineChart';
 import NicotineHealthCorrelation from '../NicotineHealthCorrelation';
 import { dayOfWeek } from '../constants';
 import { localDateKey } from '../../../utils/formatters';
-import { useSingleFlight } from '../../../hooks/useSingleFlight';
 import DraftNumber from '../../ui/DraftNumber';
+import useSubstanceLog from '../useSubstanceLog';
 
-const DAYS_PER_PAGE = 50;
+const nicotineLog = {
+  getSummary: getNicotineSummary,
+  entry: {
+    read: getDailyNicotine,
+    add: logNicotine,
+    update: updateNicotineEntry,
+    remove: removeNicotineEntry,
+    emptyDraft: { product: '', mgPerUnit: '', count: 1 },
+    canAdd: ({ mgPerUnit }) => Boolean(mgPerUnit),
+    toPayload: ({ product, mgPerUnit }) => ({ product, mgPerUnit: parseFloat(mgPerUnit) }),
+    fromRecord: item => ({ product: item.product || '', mgPerUnit: String(item.mgPerUnit || '') }),
+    fromButton: ({ name, mgPerUnit }) => ({ product: name, mgPerUnit })
+  },
+  button: {
+    read: getCustomNicotineProducts,
+    add: addCustomNicotineProduct,
+    update: (...args) => updateCustomNicotineProduct(...args),
+    remove: removeCustomNicotineProduct,
+    label: 'product',
+    emptyDraft: { name: '', mgPerUnit: '' },
+    toPayload: ({ name, mgPerUnit }) => ({ name, mgPerUnit: parseFloat(mgPerUnit) }),
+    fromRecord: item => ({ name: item.name, mgPerUnit: String(item.mgPerUnit) }),
+    validate: ({ name, mgPerUnit }) => {
+      if (!name) return 'Name is required';
+      const parsed = parseFloat(mgPerUnit);
+      if (isNaN(parsed) || parsed < 0.1 || parsed > 100) return 'mg must be between 0.1 and 100';
+      return null;
+    }
+  }
+};
 
 export default function NicotineTab() {
-  const [summary, setSummary] = useState(null);
-  const [allEntries, setAllEntries] = useState(null);
-  const [loading, setLoading] = useState(true);
-  const [loadFailed, setLoadFailed] = useState(false);
-  const [logging, setLogging] = useState(false);
-  const [refreshKey, setRefreshKey] = useState(0);
-  const [visibleDays, setVisibleDays] = useState(DAYS_PER_PAGE);
-  const { isConfirming, requestDelete, cancelDelete, confirmDelete } = useConfirmDelete();
-
-  // Custom product buttons
-  // null = not loaded or the read failed.
-  const [productButtons, setProductButtons] = useState(null);
-  const [buttonsFailed, setButtonsFailed] = useState(false);
-  const buttonsReadSeq = useRef(0);
-  const [managingButtons, setManagingButtons] = useState(false);
-  const [editingButtonIdx, setEditingButtonIdx] = useState(null);
-  const [buttonForm, setButtonForm] = useState({ name: '', mgPerUnit: '' });
-
-  // Form state
+  const {
+    summary, loading, loadFailed, logging, refreshKey, fetchData,
+    totalDays, visibleEntries, remainingDays, loadMoreDays,
+    chartView, setChartView, correlationData,
+    entryForm: { product, mgPerUnit, count }, setEntryForm, editingKey, editForm, setEditForm,
+    handleQuickAdd, handleCustomAdd, handleRemove, startEdit, cancelEdit, saveEdit,
+    buttons: productButtons, buttonsFailed, fetchButtons, managingButtons, setManagingButtons,
+    editingButtonIdx, buttonForm, setButtonForm, handleAddButton,
+    startEditButton, saveEditButton, cancelEditButton, handleRemoveButton,
+    isConfirming, requestDelete, cancelDelete, confirmDelete
+  } = useSubstanceLog(nicotineLog);
   const today = useMemo(() => localDateKey(), []);
-  const [product, setProduct] = useState('');
-  const [mgPerUnit, setMgPerUnit] = useState('');
-  const [count, setCount] = useState(1);
   const [date, setDate] = useState(today);
-  // Inline edit state
-  const [editingKey, setEditingKey] = useState(null);
-  const [editForm, setEditForm] = useState({ product: '', mgPerUnit: '', count: 1 });
-
-  // Correlation chart state
-  const [chartView, setChartView] = useState('30d');
-  const [correlationData, setCorrelationData] = useState(null);
-
-  // Buttons are edited and removed by position, so a failed read must not leave
-  // a stale list whose positions differ from the stored one, and an older read
-  // must not land after a newer one.
-  const fetchProductButtons = useCallback(async () => {
-    const seq = ++buttonsReadSeq.current;
-    const buttons = await getCustomNicotineProducts({ silent: true }).catch(() => null);
-    if (seq !== buttonsReadSeq.current) return;
-    const ok = Array.isArray(buttons);
-    setProductButtons(ok ? buttons : null);
-    setButtonsFailed(!ok);
-    if (!ok) {
-      // The edit row and the Add form share this draft; drop it with the edit.
-      setEditingButtonIdx(null);
-      setButtonForm({ name: '', mgPerUnit: '' });
-    }
-  }, []);
-
-  const fetchData = useCallback(async () => {
-    const [summaryResult, entriesResult] = await Promise.allSettled([
-      getNicotineSummary({ silent: true }),
-      getDailyNicotine(undefined, undefined, { silent: true })
-    ]);
-    // A rejected read keeps what is already shown and raises the notice, so a
-    // transient failure never renders as an empty history.
-    if (summaryResult.status === 'fulfilled') setSummary(summaryResult.value);
-    if (entriesResult.status === 'fulfilled') setAllEntries(entriesResult.value);
-    setLoadFailed(summaryResult.status === 'rejected' || entriesResult.status === 'rejected');
-    setLoading(false);
-  }, []);
-
-  useEffect(() => {
-    fetchProductButtons();
-  }, [fetchProductButtons]);
-
-  useEffect(() => {
-    fetchData();
-  }, [fetchData, refreshKey]);
-
-  // Fetch correlation data — memoize date range to avoid refetch on every render
-  const { correlationFrom, correlationTo } = useMemo(() => {
-    const days = { '7d': 7, '30d': 30, '90d': 90 }[chartView] || 30;
-    const d = new Date();
-    d.setDate(d.getDate() - days);
-    return { correlationFrom: localDateKey(d), correlationTo: localDateKey() };
-  }, [chartView]);
-
-  useEffect(() => {
-    let active = true;
-    getAppleHealthCorrelation(correlationFrom, correlationTo)
-      .then(data => { if (active) setCorrelationData(data); })
-      .catch(() => { if (active) setCorrelationData(null); });
-    return () => { active = false; };
-  }, [correlationFrom, correlationTo]);
-
-  const handleQuickAdd = async (prod) => {
-    setLogging(true);
-    await logNicotine({
-      product: prod.name,
-      mgPerUnit: prod.mgPerUnit,
-      count: 1,
-      date: date || undefined
-    }).catch(() => null);
-    setLogging(false);
-    setRefreshKey(k => k + 1);
-  };
-
-  const handleCustomAdd = async (e) => {
-    e.preventDefault();
-    if (!mgPerUnit) return;
-    setLogging(true);
-    const result = await logNicotine({
-      product: product || '',
-      mgPerUnit: parseFloat(mgPerUnit),
-      count: count || 1,
-      date: date || undefined
-    }).catch(() => null);
-    setLogging(false);
-    // request() already toasts. A rejected log must keep the draft; clearing
-    // here used to drop the dose the person just typed.
-    if (!result) return;
-    setProduct('');
-    setMgPerUnit('');
-    setCount(1);
-    setRefreshKey(k => k + 1);
-  };
-
-  const handleRemove = async (entryDate, index, id) => {
-    await removeNicotineEntry(entryDate, index, id).catch(() => null);
-    setRefreshKey(k => k + 1);
-  };
-
-  const startEdit = (entryDate, index, item) => {
-    setEditingKey(`${entryDate}:${index}`);
-    setEditForm({
-      id: item.id,
-      product: item.product || '',
-      mgPerUnit: String(item.mgPerUnit || ''),
-      count: item.count || 1,
-      date: entryDate
-    });
-  };
-
-  const cancelEdit = () => {
-    setEditingKey(null);
-  };
-
-  const saveEdit = async () => {
-    if (!editingKey) return;
-    const [entryDate, indexStr] = editingKey.split(':');
-    const index = parseInt(indexStr, 10);
-    const result = await updateNicotineEntry(entryDate, index, {
-      id: editForm.id,
-      product: editForm.product,
-      mgPerUnit: parseFloat(editForm.mgPerUnit),
-      count: parseInt(editForm.count, 10) || 1,
-      date: editForm.date !== entryDate ? editForm.date : undefined
-    }).catch(() => null);
-    // A failed edit stays open. Refreshing here would also replace the row
-    // under the draft with the last server list.
-    if (!result) return;
-    setEditingKey(null);
-    setRefreshKey(k => k + 1);
-  };
-
-  // === Custom product button management ===
-
-  const validateProductButton = (form) => {
-    if (!form.name) return 'Name is required';
-    const parsed = parseFloat(form.mgPerUnit);
-    if (isNaN(parsed) || parsed < 0.1 || parsed > 100) return 'mg must be between 0.1 and 100';
-    return null;
-  };
-
-  const handleAddButton = useSingleFlight(async (e) => {
-    e.preventDefault();
-    const error = validateProductButton(buttonForm);
-    if (error) { toast.error(error); return; }
-    const result = await addCustomNicotineProduct({ name: buttonForm.name, mgPerUnit: parseFloat(buttonForm.mgPerUnit) }, { silent: true }).catch(() => null);
-    if (!result) { toast.error('Failed to add product button'); return; }
-    setButtonForm({ name: '', mgPerUnit: '' });
-    // Drop any in-flight list read: it predates this mutation. An unloaded list
-    // (failed read) can't take a positional patch, so it re-reads instead.
-    buttonsReadSeq.current += 1;
-    if (Array.isArray(productButtons)) setProductButtons(prev => [...prev, result]);
-    else fetchProductButtons();
-  });
-
-  const startEditButton = (idx) => {
-    const btn = productButtons[idx];
-    setEditingButtonIdx(idx);
-    setButtonForm({ name: btn.name, mgPerUnit: String(btn.mgPerUnit) });
-  };
-
-  const saveEditButton = async () => {
-    if (editingButtonIdx === null) return;
-    const error = validateProductButton(buttonForm);
-    if (error) { toast.error(error); return; }
-    const result = await updateCustomNicotineProduct(editingButtonIdx, { name: buttonForm.name, mgPerUnit: parseFloat(buttonForm.mgPerUnit) }, { silent: true }).catch(() => null);
-    if (!result) { toast.error('Failed to update product button'); return; }
-    setEditingButtonIdx(null);
-    setButtonForm({ name: '', mgPerUnit: '' });
-    buttonsReadSeq.current += 1;
-    const editedIdx = editingButtonIdx;
-    setProductButtons(prev => prev && prev.map((btn, idx) => (idx === editedIdx ? result : btn)));
-  };
-
-  const cancelEditButton = () => {
-    setEditingButtonIdx(null);
-    setButtonForm({ name: '', mgPerUnit: '' });
-  };
-
-  const handleRemoveButton = async (idx) => {
-    const removed = await removeCustomNicotineProduct(idx).catch(() => null);
-    if (!removed) return;
-    buttonsReadSeq.current += 1;
-    setProductButtons(prev => prev && prev.filter((_, buttonIdx) => buttonIdx !== idx));
-    // Positions shift under the draft: keep editing the same button, or drop
-    // the draft when that button is the one removed.
-    if (editingButtonIdx === idx) {
-      setEditingButtonIdx(null);
-      setButtonForm({ name: '', mgPerUnit: '' });
-    } else if (editingButtonIdx !== null && editingButtonIdx > idx) {
-      setEditingButtonIdx(editingButtonIdx - 1);
-    }
-  };
 
   if (loading) {
     return (
@@ -254,9 +76,6 @@ export default function NicotineTab() {
       </div>
     );
   }
-
-  const visibleEntries = allEntries?.slice(0, visibleDays) || [];
-  const hasMore = allEntries?.length > visibleDays;
 
   return (
     <div className="space-y-4">
@@ -311,7 +130,7 @@ export default function NicotineTab() {
 
         {buttonsFailed && (
           <div className="mb-3">
-            <LoadFailureNotice message="Could not load your quick-add product buttons." onRetry={fetchProductButtons} />
+            <LoadFailureNotice message="Could not load your quick-add product buttons." onRetry={fetchButtons} />
           </div>
         )}
 
@@ -394,7 +213,7 @@ export default function NicotineTab() {
               {productButtons?.map((btn, idx) => (
                 <button
                   key={idx}
-                  onClick={() => handleQuickAdd(btn)}
+                  onClick={() => handleQuickAdd(btn, date)}
                   disabled={logging}
                   className="flex items-center gap-1 px-3 py-2 min-h-[40px] text-xs bg-port-border/50 text-gray-300 rounded-lg hover:bg-port-accent/10 hover:text-port-accent transition-colors disabled:opacity-50"
                 >
@@ -405,12 +224,12 @@ export default function NicotineTab() {
             </div>
 
             {/* Custom entry + date — single row */}
-            <form onSubmit={handleCustomAdd} className="flex flex-wrap items-end gap-2 pt-2 border-t border-port-border/50">
+            <form onSubmit={e => handleCustomAdd(e, date)} className="flex flex-wrap items-end gap-2 pt-2 border-t border-port-border/50">
               <FormField label="Product" className="flex-1 min-w-[100px]" labelClassName="block text-xs text-gray-500 mb-1">
                 <input
                   type="text"
                   value={product}
-                  onChange={e => setProduct(e.target.value)}
+                  onChange={e => setEntryForm(f => ({ ...f, product: e.target.value }))}
                   className="w-full bg-port-bg border border-port-border rounded px-2 py-1.5 text-xs text-white placeholder-gray-600"
                   placeholder="e.g. Stokes Pick"
                 />
@@ -419,7 +238,7 @@ export default function NicotineTab() {
                 <input
                   type="number"
                   value={mgPerUnit}
-                  onChange={e => setMgPerUnit(e.target.value)}
+                  onChange={e => setEntryForm(f => ({ ...f, mgPerUnit: e.target.value }))}
                   className="w-full bg-port-bg border border-port-border rounded px-2 py-1.5 text-xs text-white placeholder-gray-600"
                   placeholder="5"
                   step="0.1"
@@ -427,7 +246,7 @@ export default function NicotineTab() {
                   required
                 />
               </FormField>
-              <DraftNumber integer value={count} onCommit={setCount} min={1}>
+              <DraftNumber integer value={count} onCommit={value => setEntryForm(f => ({ ...f, count: value }))} min={1}>
                 {(field) => (
                   <FormField label="Qty" className="w-14" labelClassName="block text-xs text-gray-500 mb-1">
                     <input type="number" className="w-full bg-port-bg border border-port-border rounded px-2 py-1.5 text-xs text-white" {...field} />
@@ -471,10 +290,10 @@ export default function NicotineTab() {
       </div>
 
       {/* Entry History — table format */}
-      {allEntries?.length > 0 && (
+      {totalDays > 0 && (
         <div className="bg-port-card border border-port-border rounded-xl p-4">
           <h2 className="text-sm font-medium text-gray-400 uppercase tracking-wider mb-3">
-            History ({pluralize(allEntries.length, 'day')})
+            History ({pluralize(totalDays, 'day')})
           </h2>
           <div className="max-h-dvh-cap [--dvh-cap:70dvh] overflow-x-auto overflow-y-auto rounded-lg border border-port-border">
             <table className="w-full text-sm min-w-[500px]">
@@ -596,12 +415,12 @@ export default function NicotineTab() {
               </tbody>
             </table>
           </div>
-          {hasMore && (
+          {remainingDays > 0 && (
             <button
-              onClick={() => setVisibleDays(v => v + DAYS_PER_PAGE)}
+              onClick={loadMoreDays}
               className="mt-3 w-full py-2 text-sm text-port-accent hover:text-port-accent/80 border border-port-border rounded-lg hover:bg-port-border/20 transition-colors"
             >
-              Load More ({pluralize(allEntries.length - visibleDays, 'day')} remaining)
+              Load More ({pluralize(remainingDays, 'day')} remaining)
             </button>
           )}
         </div>
