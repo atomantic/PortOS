@@ -31,7 +31,7 @@ const ACTION_CONFIG = {
 };
 
 const ACTION_ORDER = ['reply', 'review', 'archive', 'delete'];
-const INBOX_EVENTS = ['messages:sync:completed'];
+const INBOX_EVENTS = ['messages:sync:completed', 'messages:changed'];
 const EMPTY_MESSAGES = [];
 
 const PRIORITY_DOT = {
@@ -252,9 +252,8 @@ export default function InboxTab({ accounts }) {
     return () => clearTimeout(debounceRef.current);
   }, [search]);
 
-  // Sync providers report progress without broadcasting message bodies. Read
-  // the bounded, filtered summary page only after the cache has been saved.
-  // The resource also reconciles missed completions on reconnect/tab show.
+  // Cache invalidations carry no message bodies. Read the bounded, filtered
+  // summary page after a write and reconcile missed events on reconnect/tab show.
   const readMessages = useCallback(async ({ signal }) => {
     const params = { summary: true };
     if (selectedAccount) params.accountId = selectedAccount;
@@ -265,8 +264,10 @@ export default function InboxTab({ accounts }) {
   const { data, loading, error, refetch: fetchMessages, updateData } = useSocketResource(readMessages, {
     events: INBOX_EVENTS,
     resourceKey: JSON.stringify([selectedAccount, debouncedSearch]),
-    // A locally requested multi-account sync owns one final refresh below.
-    matchesEvent: payload => !syncing && (!selectedAccount || payload?.accountId === selectedAccount),
+    // Cache changes can affect any account. A local sync batch owns its final
+    // refresh, so only external completions for the active scope trigger a read.
+    matchesEvent: (payload, event) => event === 'messages:changed'
+      || (!syncing && (!selectedAccount || payload?.accountId === selectedAccount)),
   });
   const messages = data || EMPTY_MESSAGES;
   const loadFailed = Boolean(error);
