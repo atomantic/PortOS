@@ -1,3 +1,5 @@
+import ConfirmButtonPair from '../../../components/ui/ConfirmButtonPair';
+import useConfirmDelete from '../../../hooks/useConfirmDelete';
 import { Link } from 'react-router';
 import { BarChart3, RefreshCw, SlidersHorizontal, Trash2 } from 'lucide-react';
 import { TestCell } from '../ModelTestCell.jsx';
@@ -48,6 +50,7 @@ function CapabilityStrip({ capability, backend, modelId, tests, onOpen }) {
 }
 
 export default function RankedAssessmentRow({ entry, runtimeLabel, onRemeasure, onDelete, onSweepTunings, sweepVariants, busy, capability, capabilityTests, onOpenCapabilityTest, selected, search }) {
+  const { isConfirming, requestDelete, cancelDelete, confirmDelete } = useConfirmDelete();
   const perf = entry.performance || {};
   return (
     <div className={`bg-port-bg border rounded-lg p-3 space-y-2 ${selected ? 'border-port-accent/70' : 'border-port-border'}`}>
@@ -88,7 +91,7 @@ export default function RankedAssessmentRow({ entry, runtimeLabel, onRemeasure, 
             </p>
           )}
         </div>
-        <div className="flex items-center gap-2 shrink-0">
+        <div className="flex flex-wrap items-center gap-2 min-w-0">
           <Link
             to={{ pathname: localModelAssessmentPath(entry), search }}
             aria-label={`View evidence for ${entry.modelId}`}
@@ -121,15 +124,26 @@ export default function RankedAssessmentRow({ entry, runtimeLabel, onRemeasure, 
               <SlidersHorizontal size={13} />
             </button>
           )}
-          <button
-            onClick={() => onDelete(entry)}
-            disabled={busy}
-            title="Discard this measurement"
-            aria-label={`Discard the measurement for ${entry.modelId}`}
-            className="min-h-[44px] min-w-[44px] inline-flex items-center justify-center p-1.5 text-gray-400 hover:text-port-error transition-colors disabled:opacity-50"
-          >
-            <Trash2 size={13} />
-          </button>
+          {isConfirming(entry) ? (
+            <ConfirmButtonPair
+              prompt="Discard measurement?"
+              confirmText="Discard"
+              onConfirm={() => confirmDelete(() => onDelete(entry))}
+              onCancel={cancelDelete}
+              busy={busy}
+              className="flex-wrap"
+            />
+          ) : (
+            <button
+              onClick={() => requestDelete(entry)}
+              disabled={busy}
+              title="Discard this measurement"
+              aria-label={`Discard the measurement for ${entry.modelId}`}
+              className="min-h-[44px] min-w-[44px] inline-flex items-center justify-center p-1.5 text-gray-400 hover:text-port-error transition-colors disabled:opacity-50"
+            >
+              <Trash2 size={13} />
+            </button>
+          )}
         </div>
       </div>
 

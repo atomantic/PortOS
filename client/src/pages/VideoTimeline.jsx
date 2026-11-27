@@ -1,3 +1,5 @@
+import ConfirmButtonPair from '../components/ui/ConfirmButtonPair';
+import useConfirmDelete from '../hooks/useConfirmDelete';
 import { useMemo, useState } from 'react';
 import { useNavigate } from 'react-router';
 import { Plus, Film, Trash2, Clock } from 'lucide-react';
@@ -18,6 +20,7 @@ const loadTimelineProjects = () => listTimelineProjects({ silent: true });
 const loadVideoHistory = () => listVideoHistory({ silent: true, query: CLIP_CATALOG_QUERY });
 
 export default function VideoTimeline() {
+  const { isConfirming, requestDelete, cancelDelete, confirmDelete } = useConfirmDelete();
   const navigate = useNavigate();
   const projectsResource = useListResource(loadTimelineProjects);
   const {
@@ -120,22 +123,31 @@ export default function VideoTimeline() {
                   )}
                 </button>
                 <div className="p-3 space-y-1.5">
-                  <div className="flex items-start justify-between gap-2">
+                  <div className="flex flex-wrap items-start justify-between gap-2">
                     <button
                       type="button"
                       onClick={() => navigate(`/media/timeline/${project.id}`)}
-                      className="flex-1 text-left text-sm font-medium text-white hover:text-port-accent transition-colors truncate"
+                      className="flex-1 min-w-0 text-left text-sm font-medium text-white hover:text-port-accent transition-colors truncate"
                     >
                       {project.name}
                     </button>
-                    <button
-                      type="button"
-                      onClick={() => handleDelete(project)}
-                      className="min-h-[44px] min-w-[44px] inline-flex items-center justify-center p-1 text-gray-500 hover:text-port-error transition-colors"
-                      title="Delete project" aria-label="Delete project"
-                    >
-                      <Trash2 className="w-4 h-4" />
-                    </button>
+                    {isConfirming(project.id) ? (
+                      <ConfirmButtonPair
+                        prompt="Delete project?"
+                        onConfirm={() => confirmDelete(() => handleDelete(project))}
+                        onCancel={cancelDelete}
+                        className="basis-full flex-wrap"
+                      />
+                    ) : (
+                      <button
+                        type="button"
+                        onClick={() => requestDelete(project.id)}
+                        className="min-h-[44px] min-w-[44px] inline-flex items-center justify-center p-1 text-gray-500 hover:text-port-error transition-colors"
+                        title="Delete project" aria-label="Delete project"
+                      >
+                        <Trash2 className="w-4 h-4" />
+                      </button>
+                    )}
                   </div>
                   <div className="flex items-center gap-3 text-xs text-gray-400">
                     <span className="flex items-center gap-1"><Film className="w-3 h-3" />{blockCount} blocks</span>

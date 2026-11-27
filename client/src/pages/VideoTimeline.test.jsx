@@ -11,7 +11,7 @@ vi.mock('../services/apiImageVideo.js', () => ({
 vi.mock('../components/ui/Toast');
 
 import VideoTimeline from './VideoTimeline.jsx';
-import { listTimelineProjects, listVideoHistory } from '../services/apiImageVideo.js';
+import { listTimelineProjects, listVideoHistory, deleteTimelineProject } from '../services/apiImageVideo.js';
 
 describe('VideoTimeline page', () => {
   beforeEach(() => {
@@ -58,6 +58,21 @@ describe('VideoTimeline page', () => {
     await act(async () => {});
 
     expect(screen.getByRole('alert')).toHaveTextContent('Could not load video history — History 500 error');
+  });
+
+  it('deletes a project only after confirmation', async () => {
+    listTimelineProjects.mockResolvedValue([{ id: 'proj-1', name: 'Example project', clips: [] }]);
+    deleteTimelineProject.mockResolvedValue({});
+
+    render(<MemoryRouter><VideoTimeline /></MemoryRouter>);
+    fireEvent.click(await screen.findByRole('button', { name: 'Delete project' }));
+    expect(deleteTimelineProject).not.toHaveBeenCalled();
+    fireEvent.click(screen.getByRole('button', { name: 'Cancel' }));
+    expect(deleteTimelineProject).not.toHaveBeenCalled();
+    expect(screen.getByText('Example project')).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: 'Delete project' }));
+    await act(async () => { fireEvent.click(screen.getByRole('button', { name: 'Delete' })); });
+    expect(deleteTimelineProject).toHaveBeenCalledExactlyOnceWith('proj-1', { silent: true });
   });
 
   it('renders projects and duration when loaded', async () => {

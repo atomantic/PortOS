@@ -302,6 +302,20 @@ describe('JevPanel project head', () => {
     await waitFor(() => expect(adoptJevHead).toHaveBeenCalledWith('scope-adherence', { silent: true }));
   });
 
+  it.each([false, true])('confirms discard of a head with adopted=%s', async (adopted) => {
+    getJevHeads.mockResolvedValue({ heads: [headRow({ adopted })], training: false });
+    await renderPanel();
+    await screen.findByTestId('jev-head-table');
+
+    fireEvent.click(screen.getByRole('button', { name: 'Discard' }));
+    expect(discardJevHead).not.toHaveBeenCalled();
+    fireEvent.click(screen.getByRole('button', { name: 'Cancel' }));
+    expect(discardJevHead).not.toHaveBeenCalled();
+    fireEvent.click(screen.getByRole('button', { name: 'Discard' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Discard' }));
+    await waitFor(() => expect(discardJevHead).toHaveBeenCalledExactlyOnceWith('scope-adherence', { adopted }, { silent: true }));
+  });
+
   it('refuses to offer adoption for a head that lost to the stock zero-shot scorer', async () => {
     getJevHeads.mockResolvedValue({
       heads: [headRow({

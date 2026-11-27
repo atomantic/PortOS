@@ -48,7 +48,7 @@ import {
   registerTool,
   updateTool,
 } from '../../services/apiSystem.js';
-import { listAgyImageModels, listImageModels, getVideoGenModelContext } from '../../services/apiImageVideo.js';
+import { clearHfToken, listAgyImageModels, listImageModels, getVideoGenModelContext } from '../../services/apiImageVideo.js';
 import { getProviders } from '../../services/apiProviders.js';
 import toast from '../ui/Toast';
 import { useHfTokenStatus } from '../../hooks/useHfTokenStatus';
@@ -280,6 +280,22 @@ describe('ImageGenTab grouped tabs', () => {
     await renderTab(['/media/image?mediaTab=expose']);
     expect(screen.getByRole('heading', { name: 'Backend' })).toBeTruthy();
     expect(screen.queryByRole('tab', { name: 'Expose' })).toBeNull();
+  });
+
+  it('clears a stored HuggingFace token only after confirmation', async () => {
+    const refresh = vi.fn();
+    useHfTokenStatus.mockReturnValue({ present: true, source: 'stored', refresh });
+    clearHfToken.mockResolvedValue({ ok: true });
+    await renderTab(['/media/image?mediaTab=tokens']);
+
+    fireEvent.click(screen.getByRole('button', { name: 'Clear stored token' }));
+    expect(clearHfToken).not.toHaveBeenCalled();
+    fireEvent.click(screen.getByRole('button', { name: 'Cancel' }));
+    expect(clearHfToken).not.toHaveBeenCalled();
+    fireEvent.click(screen.getByRole('button', { name: 'Clear stored token' }));
+    await act(async () => { fireEvent.click(screen.getByRole('button', { name: 'Clear token' })); });
+    expect(clearHfToken).toHaveBeenCalledExactlyOnceWith();
+    expect(refresh).toHaveBeenCalled();
   });
 
   it('keeps the detailed managed-token source labels while reading shared status', async () => {

@@ -1,3 +1,5 @@
+import ConfirmButtonPair from '../../components/ui/ConfirmButtonPair';
+import useConfirmDelete from '../../hooks/useConfirmDelete';
 import { useId } from 'react';
 import { sortByLabel } from '../../lib/sortByLabel.js';
 import { Plus, Image, X, ChevronDown, ChevronRight, Sparkles, Loader2, Paperclip, FileText, Zap, Bookmark, Ticket, GitBranch, GitMerge, GitPullRequest, ShieldCheck, Wand2 } from 'lucide-react';
@@ -75,6 +77,7 @@ function TaskSubmitButton({ form, variant = 'full' }) {
 }
 
 function TaskTemplates({ form }) {
+  const { isConfirming, requestDelete, cancelDelete, confirmDelete } = useConfirmDelete();
   const { state, quickTemplatesEnabled, applyTemplate, deleteTemplate, setField } = form;
   if (!quickTemplatesEnabled || state.templates.length === 0) return null;
   return (
@@ -105,16 +108,25 @@ function TaskTemplates({ form }) {
                 {template.useCount > 0 && <span className="text-xs text-gray-600">({template.useCount})</span>}
               </button>
               {!template.isBuiltin && (
-                <button
-                  type="button"
-                  onClick={() => deleteTemplate(template.id)}
-                  className="flex [@media(hover:hover)]:md:opacity-0 [@media(hover:hover)]:md:pointer-events-none md:group-hover:opacity-100 md:group-hover:pointer-events-auto focus-visible:opacity-100 focus-visible:pointer-events-auto transition-opacity absolute -top-3 -right-3 w-11 h-11 items-center justify-center"
-                  aria-label={`Delete template ${template.name}`}
-                >
-                  <span className="flex w-4 h-4 bg-port-error rounded-full items-center justify-center">
-                    <X size={10} />
-                  </span>
-                </button>
+                isConfirming(template.id) ? (
+                  <ConfirmButtonPair
+                    prompt="Delete template?"
+                    onConfirm={() => confirmDelete(() => deleteTemplate(template.id))}
+                    onCancel={cancelDelete}
+                    className="flex-wrap"
+                  />
+                ) : (
+                  <button
+                    type="button"
+                    onClick={() => requestDelete(template.id)}
+                    className="flex [@media(hover:hover)]:md:opacity-0 [@media(hover:hover)]:md:pointer-events-none md:group-hover:opacity-100 md:group-hover:pointer-events-auto focus-visible:opacity-100 focus-visible:pointer-events-auto transition-opacity absolute -top-3 -right-3 w-11 h-11 items-center justify-center"
+                    aria-label={`Delete template ${template.name}`}
+                  >
+                    <span className="flex w-4 h-4 bg-port-error rounded-full items-center justify-center">
+                      <X size={10} />
+                    </span>
+                  </button>
+                )
               )}
             </div>
           ))}

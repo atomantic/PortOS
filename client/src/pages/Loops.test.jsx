@@ -20,7 +20,7 @@ vi.mock('../components/ui/Toast');
 
 import Loops from './Loops';
 import socket from '../services/socket';
-import { createLoop, getLoops, stopLoop } from '../services/apiLoops.js';
+import { createLoop, deleteLoop, getLoops, stopLoop } from '../services/apiLoops.js';
 import toast from '../components/ui/Toast';
 
 describe('Loops action feedback (#8621)', () => {
@@ -28,6 +28,22 @@ describe('Loops action feedback (#8621)', () => {
     id: 'loop-1', name: 'Example loop', isRunning: true, intervalMs: 60_000,
     currentIteration: 0, lastRun: null,
   };
+
+  it('requires confirmation before deleting a loop and leaves its details collapsed', async () => {
+    getLoops.mockResolvedValueOnce([runningLoop]);
+    render(<Loops />);
+
+    const user = userEvent.setup();
+    await user.click(await screen.findByRole('button', { name: 'Delete' }));
+    expect(deleteLoop).not.toHaveBeenCalled();
+    expect(screen.queryByText('Live Output')).not.toBeInTheDocument();
+    await user.click(screen.getByRole('button', { name: 'Cancel' }));
+    expect(deleteLoop).not.toHaveBeenCalled();
+    await user.click(screen.getByRole('button', { name: 'Delete' }));
+    await user.click(screen.getByRole('button', { name: 'Delete' }));
+    expect(deleteLoop).toHaveBeenCalledExactlyOnceWith('loop-1');
+    expect(screen.queryByText('Live Output')).not.toBeInTheDocument();
+  });
 
   it('does not report success when a rendered action request fails', async () => {
     getLoops.mockResolvedValueOnce([runningLoop]);

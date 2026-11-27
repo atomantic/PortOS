@@ -131,6 +131,8 @@ describe('PovRewritePanel', () => {
 
     await waitFor(() => expect(screen.getByText('Ada')).toBeInTheDocument());
     await userEvent.click(screen.getByRole('button', { name: /Delete rewrite/i }));
+    expect(deletePipelinePerspectiveRewrite).not.toHaveBeenCalled();
+    await userEvent.click(screen.getByRole('button', { name: 'Delete' }));
 
     await waitFor(() => expect(deletePipelinePerspectiveRewrite).toHaveBeenCalledWith('iss-1', 'pov-1'));
     await waitFor(() => expect(screen.queryByText('Ada')).not.toBeInTheDocument());

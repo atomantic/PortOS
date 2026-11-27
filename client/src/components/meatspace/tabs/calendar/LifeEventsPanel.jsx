@@ -1,9 +1,12 @@
+import ConfirmButtonPair from '../../../../components/ui/ConfirmButtonPair';
+import useConfirmDelete from '../../../../hooks/useConfirmDelete';
 import { useState } from 'react';
 import { Calendar, Plus, Trash2, Eye, EyeOff, ChevronDown } from 'lucide-react';
 import { FormField } from '../../../ui/FormField';
 import { EVENT_TYPE_STYLES, EVENT_TYPES, MONTH_NAMES_FULL } from './lifeGridMath';
 
 export default function LifeEventsPanel({ events, onAdd, onToggle, onRemove }) {
+  const { isConfirming, requestDelete, cancelDelete, confirmDelete } = useConfirmDelete();
   const [expanded, setExpanded] = useState(false);
   const [adding, setAdding] = useState(false);
 
@@ -45,7 +48,7 @@ export default function LifeEventsPanel({ events, onAdd, onToggle, onRemove }) {
       <button
         type="button"
         aria-expanded={expanded}
-        onClick={() => setExpanded(!expanded)}
+        onClick={() => { cancelDelete(); setExpanded(!expanded); }}
         className="w-full flex items-center justify-between p-4 text-left hover:bg-port-bg/30 transition-colors"
       >
         <div className="flex items-center gap-2">
@@ -63,7 +66,7 @@ export default function LifeEventsPanel({ events, onAdd, onToggle, onRemove }) {
             {events.map(event => {
               const style = EVENT_TYPE_STYLES[event.type] || EVENT_TYPE_STYLES.custom;
               return (
-                <div key={event.id} className="flex items-center gap-2.5 py-1.5 group">
+                <div key={event.id} className="flex flex-wrap items-center gap-2.5 py-1.5 group">
                   <span className={`w-2.5 h-2.5 rounded-sm shrink-0 ${style.bg}`} />
                   <div className="flex-1 min-w-0">
                     <span className={`text-sm ${event.enabled ? 'text-white' : 'text-gray-600 line-through'}`}>
@@ -83,13 +86,23 @@ export default function LifeEventsPanel({ events, onAdd, onToggle, onRemove }) {
                   >
                     {event.enabled ? <Eye size={12} /> : <EyeOff size={12} />}
                   </button>
-                  <button
-                    onClick={() => onRemove(event.id)}
-                    className="min-h-[44px] min-w-[44px] inline-flex items-center justify-center opacity-40 [@media(hover:hover)]:sm:opacity-0 sm:group-hover:opacity-100 focus-visible:opacity-100 transition-opacity text-gray-600 hover:text-port-error p-0.5"
-                    title="Remove" aria-label={`Remove ${event.name || event.type || 'event'}`}
-                  >
-                    <Trash2 size={12} />
-                  </button>
+                  {isConfirming(event.id) ? (
+                    <ConfirmButtonPair
+                      prompt="Remove event?"
+                      confirmText="Remove"
+                      onConfirm={() => confirmDelete(() => onRemove(event.id))}
+                      onCancel={cancelDelete}
+                      className="basis-full flex-wrap"
+                    />
+                  ) : (
+                    <button
+                      onClick={() => requestDelete(event.id)}
+                      className="min-h-[44px] min-w-[44px] inline-flex items-center justify-center opacity-40 [@media(hover:hover)]:sm:opacity-0 sm:group-hover:opacity-100 focus-visible:opacity-100 transition-opacity text-gray-600 hover:text-port-error p-0.5"
+                      title="Remove" aria-label={`Remove ${event.name || event.type || 'event'}`}
+                    >
+                      <Trash2 size={12} />
+                    </button>
+                  )}
                 </div>
               );
             })}

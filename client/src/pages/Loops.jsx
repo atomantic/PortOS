@@ -1,3 +1,5 @@
+import ConfirmButtonPair from '../components/ui/ConfirmButtonPair';
+import useConfirmDelete from '../hooks/useConfirmDelete';
 import PageHeader from '../components/PageHeader';
 import PageLayout from '../components/PageLayout';
 import { useState, useEffect, useRef, useCallback, useId } from 'react';
@@ -190,6 +192,7 @@ function CreateLoopForm({ providers, onCreated, promptRef }) {
 }
 
 function LoopCard({ loop, onAction, expandedId, onToggle }) {
+  const { isConfirming, requestDelete, cancelDelete, confirmDelete } = useConfirmDelete();
   const outputRef = useRef(null);
   const [liveOutput, setLiveOutput] = useState([]);
   const expanded = expandedId === loop.id;
@@ -240,7 +243,7 @@ function LoopCard({ loop, onAction, expandedId, onToggle }) {
   return (
     <div className="bg-port-card border border-port-border rounded-lg overflow-hidden">
       <div
-        className="flex items-center gap-3 px-4 py-3 cursor-pointer hover:bg-port-bg/50"
+        className="flex flex-wrap items-center gap-3 px-4 py-3 cursor-pointer hover:bg-port-bg/50"
         onClick={() => onToggle(loop.id)}
         {...clickableProps(() => onToggle(loop.id))}
         onKeyDown={onActivateKeyDown(() => onToggle(loop.id))}
@@ -258,7 +261,7 @@ function LoopCard({ loop, onAction, expandedId, onToggle }) {
           </div>
         </div>
 
-        <div className="flex items-center gap-2">
+        <div className="flex flex-wrap items-center gap-2">
           {loop.isRunning ? (
             <>
               <button onClick={e => { e.stopPropagation(); onAction('trigger', loop.id); }} className="min-h-[44px] min-w-[44px] inline-flex items-center justify-center p-1.5 rounded hover:bg-port-border text-gray-400 hover:text-port-accent" title="Run now" aria-label="Run now">
@@ -273,9 +276,18 @@ function LoopCard({ loop, onAction, expandedId, onToggle }) {
               <Play size={14} />
             </button>
           )}
-          <button onClick={e => { e.stopPropagation(); onAction('delete', loop.id); }} className="min-h-[44px] min-w-[44px] inline-flex items-center justify-center p-1.5 rounded hover:bg-port-border text-gray-400 hover:text-port-error" title="Delete" aria-label="Delete">
-            <Trash2 size={14} />
-          </button>
+          {isConfirming(loop.id) ? (
+            <ConfirmButtonPair
+              prompt="Delete loop?"
+              onConfirm={e => { e.stopPropagation(); confirmDelete(() => onAction('delete', loop.id)); }}
+              onCancel={e => { e.stopPropagation(); cancelDelete(); }}
+              className="flex-wrap"
+            />
+          ) : (
+            <button onClick={e => { e.stopPropagation(); requestDelete(loop.id); }} className="min-h-[44px] min-w-[44px] inline-flex items-center justify-center p-1.5 rounded hover:bg-port-border text-gray-400 hover:text-port-error" title="Delete" aria-label="Delete">
+              <Trash2 size={14} />
+            </button>
+          )}
           {expanded ? <ChevronDown size={14} className="text-gray-500" /> : <ChevronRight size={14} className="text-gray-500" />}
         </div>
       </div>
