@@ -69,10 +69,10 @@ describe('testSelectors', () => {
     expect(querySelectorAll).toHaveBeenCalledWith(selector);
   });
 
-  it('tests the saved list override without looking for compose controls on the list page', async () => {
+  it('tests the saved list override without looking for compose controls or patterns on the list page', async () => {
     findOrOpenPage.mockResolvedValue(OPEN_PAGE);
     tryReadFile.mockResolvedValue(JSON.stringify({
-      teams: { messageItem: '.chat-row', composeSend: '.send-button', sendAckPattern: 'sent' },
+      teams: { messageItem: '.chat-row', composeSend: '.send-button', sendAckPattern: 'sent', sendRefusalPattern: 'try again' },
     }));
     evaluateOnPage.mockResolvedValue(3);
 

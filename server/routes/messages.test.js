@@ -832,16 +832,29 @@ describe('Messages Routes', () => {
   });
 
   describe('PUT /api/messages/selectors/:provider', () => {
-    it('should update selectors for a valid provider', async () => {
-      const updated = { inbox: '.new-inbox' };
+    it('updates selectors and accepts a localized pattern and a blank reset', async () => {
+      const updated = { inbox: '.new-inbox', sendAckPattern: '^Nachricht gesendet$', sendRefusalPattern: '' };
       messagePlaywrightSync.updateSelectors.mockResolvedValue(updated);
 
       const response = await request(app)
         .put('/api/messages/selectors/outlook')
-        .send({ selectors: { inbox: '.new-inbox' } });
+        .send({ selectors: updated });
 
       expect(response.status).toBe(200);
-      expect(messagePlaywrightSync.updateSelectors).toHaveBeenCalledWith('outlook', { inbox: '.new-inbox' });
+      expect(messagePlaywrightSync.updateSelectors).toHaveBeenCalledWith('outlook', updated);
+    });
+
+    it.each(['sendAckPattern', 'sendRefusalPattern'])('rejects an invalid %s without updating selectors', async key => {
+      const response = await request(app)
+        .put('/api/messages/selectors/outlook')
+        .send({ selectors: { [key]: '(unclosed' } });
+
+      expect(response.status).toBe(400);
+      expect(response.body.context.details).toContainEqual({
+        path: `selectors.${key}`,
+        message: 'Enter a valid regular expression.',
+      });
+      expect(messagePlaywrightSync.updateSelectors).not.toHaveBeenCalled();
     });
 
     it('should return 400 for invalid provider', async () => {

@@ -1,5 +1,5 @@
 import { useState, useEffect, useCallback, useRef } from 'react';
-import { MESSAGE_SELECTOR_DEFAULTS, resolveComposeSelectors } from '../../../../server/lib/messageSelectorDefaults.js';
+import { MESSAGE_COMPOSE_PATTERN_DEFAULTS, MESSAGE_SELECTOR_DEFAULTS, isValidComposePattern, resolveComposeSelectors } from '../../../../server/lib/messageSelectorDefaults.js';
 import { RefreshCw, AlertCircle, CheckCircle2, Settings, Globe, Mail, MailOpen, Trash2, TestTube } from 'lucide-react';
 import toast from '../ui/Toast';
 import { FormField } from '../ui/FormField';
@@ -31,6 +31,11 @@ const TEST_STATUS_TEXT = {
   partial: 'Some selectors matched zero elements on the live page',
 };
 
+const PATTERN_LABELS = {
+  sendAckPattern: 'Send acknowledgement pattern',
+  sendRefusalPattern: 'Send refusal pattern',
+};
+
 const EMPTY_OVERRIDES = Object.freeze({});
 
 function SelectorFields({ values, onChange }) {
@@ -49,6 +54,40 @@ function SelectorFields({ values, onChange }) {
       <span className="text-gray-400 font-mono break-all">{value}</span>
     </div>
   ));
+}
+
+function ComposePatternFields({ provider, overrides, onChange }) {
+  const keys = Object.keys(MESSAGE_COMPOSE_PATTERN_DEFAULTS).filter(key =>
+    provider === 'outlook' || key === 'sendRefusalPattern' || Object.hasOwn(overrides, key)
+  );
+  return (
+    <div className="space-y-2 border-t border-port-border pt-2">
+      <p className="text-xs text-gray-400">Send confirmation uses case-insensitive regular expressions. Clear an override to restore its default.</p>
+      {keys.map(key => {
+        const defaultPattern = MESSAGE_COMPOSE_PATTERN_DEFAULTS[key];
+        const value = typeof overrides[key] === 'string' ? overrides[key] : '';
+        const hint = provider === 'teams' && key === 'sendAckPattern'
+          ? 'Teams confirms delivery using the new chat message.'
+          : <>Default <code className="break-all text-gray-400">{defaultPattern}</code></>;
+        return onChange ? (
+          <FormField key={key} className="min-w-0" labelClassName="text-xs text-gray-400" label={PATTERN_LABELS[key]} hint={hint}>
+            <input
+              type="text"
+              value={value}
+              onChange={event => onChange(key, event.target.value)}
+              className="w-full px-2 py-1 bg-port-bg border border-port-border rounded text-xs text-white font-mono focus:outline-none focus:border-port-accent"
+            />
+          </FormField>
+        ) : (
+          <div key={key} className="text-xs text-gray-400">
+            <div className="text-gray-300">{PATTERN_LABELS[key]}</div>
+            <div>{hint}</div>
+            {value.trim() && <div>Override <code className="break-all">{value}</code></div>}
+          </div>
+        );
+      })}
+    </div>
+  );
 }
 
 export default function SyncTab({ accounts, onRefresh, accountsUnavailable = false }) {
@@ -127,8 +166,18 @@ export default function SyncTab({ accounts, onRefresh, accountsUnavailable = fal
 
   const handleSaveSelectors = async (provider) => {
     if (selectorsState !== 'ready' || savingSelectors) return;
+    const selectors = { ...selectorForm };
+    for (const key of Object.keys(MESSAGE_COMPOSE_PATTERN_DEFAULTS)) {
+      if (!Object.hasOwn(selectors, key)) continue;
+      if (typeof selectors[key] !== 'string' || !selectors[key].trim()) {
+        delete selectors[key];
+      } else if (!isValidComposePattern(selectors[key])) {
+        toast.error(`${PATTERN_LABELS[key]} must be a valid regular expression.`);
+        return;
+      }
+    }
     setSavingSelectors(true);
-    const result = await updateMessageSelectors(provider, selectorForm)
+    const result = await updateMessageSelectors(provider, selectors)
       .catch(() => null)
       .finally(() => setSavingSelectors(false));
     if (!result) return;
@@ -273,7 +322,7 @@ export default function SyncTab({ accounts, onRefresh, accountsUnavailable = fal
             const editing = editingSelector === provider;
             const overrides = editing ? selectorForm : saved;
             const list = { ...defaults.list, ...Object.fromEntries(
-              Object.entries(overrides).filter(([key]) => !Object.hasOwn(defaults.compose, key))
+              Object.entries(overrides).filter(([key]) => !Object.hasOwn(defaults.compose, key) && !Object.hasOwn(MESSAGE_COMPOSE_PATTERN_DEFAULTS, key))
             ) };
             const compose = editing
               ? Object.fromEntries(Object.entries(defaults.compose).map(([key, value]) => [key, overrides[key] ?? value]))
@@ -312,6 +361,7 @@ export default function SyncTab({ accounts, onRefresh, accountsUnavailable = fal
                     <div className="mt-2 space-y-2">
                       {editing && <p className="text-xs text-gray-500">Clear a compose field to use its built-in default.</p>}
                       <SelectorFields values={compose} onChange={updateField} />
+                      <ComposePatternFields provider={provider} overrides={overrides} onChange={updateField} />
                     </div>
                   </details>
                   {editing && (
