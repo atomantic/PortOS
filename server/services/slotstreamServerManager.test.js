@@ -529,11 +529,16 @@ describe('slotstreamServerManager', () => {
   });
 
   describe('isSlotstreamProvider', () => {
-    it('matches a local Slotstream endpoint on the dedicated port', () => {
+    it.each(['api', 'cli', 'tui'])('matches a local %s Slotstream provider', (type) => {
+      expect(isSlotstreamProvider({ type, endpoint: `http://127.0.0.1:${PORTS.SLOTSTREAM}/v1`, id: 'slotstream' })).toBe(true);
+    });
+
+    it('matches an OpenCode provider whose loopback endpoint is only in its config', () => {
       expect(isSlotstreamProvider({
-        type: 'api',
-        endpoint: `http://127.0.0.1:${PORTS.SLOTSTREAM}/v1`,
+        type: 'cli',
+        command: 'opencode',
         id: 'slotstream',
+        envVars: { OPENCODE_CONFIG_CONTENT: JSON.stringify({ provider: { slotstream: { options: { baseURL: `http://127.0.0.1:${PORTS.SLOTSTREAM}/v1` } } } }) },
       })).toBe(true);
     });
 

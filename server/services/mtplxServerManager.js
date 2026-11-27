@@ -28,7 +28,7 @@ import { join } from 'path';
 import { sleep } from '../lib/fileUtils.js';
 import { ServerError } from '../lib/errorHandler.js';
 import { launchArgs, normalizeTuning, tuningSpecsFor } from '../lib/localModelTuning.js';
-import { LOCAL_RUNTIMES, localEndpointPort, localRuntimeKind, isLocalInstanceEndpoint } from '../lib/localProviderRuntime.js';
+import { LOCAL_RUNTIMES, localEndpointPort, localRuntimeForProvider, isLocalInstanceEndpoint } from '../lib/localProviderRuntime.js';
 import { listMtplxCachedModels, pickMtplxCachedModel } from '../lib/mtplxModels.js';
 import { compareMtplxVersions, describeMtplxRuntime, lockedMtplxVersion, readExternalMtplxVersion, mtplxManagedBinary, mtplxVenvDir, readManagedMtplxVersion, resolveMtplxBinary, setMtplxInstallInProgress } from '../lib/mtplxRuntime.js';
 import { LOCK_PROFILES } from '../lib/pythonLockProfiles.js';
@@ -972,16 +972,17 @@ export function isMtplxProvider(provider) {
   // API providers reach MTPLX directly, while OpenCode TUI providers carry
   // the same local endpoint and need the exact same lazy wake-up before the
   // TUI is spawned.
-  if (!provider || !['api', 'tui'].includes(provider.type)) return false;
+  if (!provider || !['api', 'cli', 'tui'].includes(provider.type)) return false;
+  const localRuntime = localRuntimeForProvider(provider);
+  if (localRuntime?.kind === 'mtplx') return true;
   if (!isLocalInstanceEndpoint(provider.endpoint)) return false;
-  // `localRuntimeKind`, not `localBackendForProvider` — the latter only ever
+  // `localRuntimeForProvider`, not `localBackendForProvider` — the latter only ever
   // answers 'ollama'/'lmstudio' (it maps those two catalog ports), so it reports
   // every MTPLX provider as having no local backend at all. This one call now
   // covers both marker-backed wrappers (`mtplxBacked`) and the shipped bare API
   // record (`id === 'mtplx'`) — #6466 collapsed the two hand-rolled checks that
-  // used to live here into `localRuntimeKind` itself.
-  if (localRuntimeKind(provider) === 'mtplx') return true;
-  // ...and an endpoint-only provider aimed at the port THIS daemon is serving.
+  // used to live here into the shared runtime resolver itself.
+  // An endpoint-only provider aimed at the port THIS daemon is serving.
   // Deliberately compared against the live launch config rather than treating
   // :8000 as "must be MTPLX" — 8000 is a generic port, and claiming any local
   // server on it would lazily start MTPLX for someone else's API. This arm
