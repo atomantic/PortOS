@@ -14,10 +14,10 @@
  * read-only `CHARACTER_LIST_FIELDS`, badge/ref-role lookups, and the
  * user-defined-type normalization the `useCatalogTypes` hook merges in.
  *
- * Adding a type: add it to the SERVER registry (+ one migration loosening the
- * CHECK constraint), then give it an editor layout in `TYPE_EDITOR_LAYOUT`
- * below. The Catalog list/picker/inline-form, the detail editor, and the type
- * chips all map over `CATALOG_TYPES`, so it surfaces everywhere at once.
+ * Register new system types in the server registry, which governs type
+ * validation. No type constraint migration is needed. Add the client editor
+ * layout in `TYPE_EDITOR_LAYOUT` below. The Catalog list/picker/inline-form,
+ * the detail editor, and the type chips all map over `CATALOG_TYPES`.
  */
 import { CATALOG_TYPES as SERVER_CATALOG_TYPES } from '../../../server/lib/catalog/catalogTypes.js';
 

@@ -61,8 +61,8 @@ describe('Pipeline series detail — mobile layout', () => {
   it('opens on issues, exposes direct destinations, and keeps inactive panels mounted', async () => {
     listPipelineIssues.mockResolvedValue([{ id: 'issue-1', number: 1 }]);
     getPipelineSeries.mockResolvedValue({ id: 'series-1', name: 'Example Series', universeId: 'universe-1' });
-    renderPage();
-    expect(await screen.findByRole('link', { name: /open first issue/i })).toHaveAttribute('href', '/pipeline/issues/issue-1');
+    await act(async () => { renderPage(); });
+    expect(screen.getByRole('link', { name: /open first issue/i })).toHaveAttribute('href', '/pipeline/issues/issue-1');
     expect(screen.getByRole('link', { name: /universe bible/i })).toHaveAttribute('href', '/universes/universe-1');
     expect(screen.getByRole('tabpanel')).toHaveAttribute('id', 'series-editor-issues');
     fireEvent.click(screen.getByRole('tab', { name: 'Autopilot' }));
