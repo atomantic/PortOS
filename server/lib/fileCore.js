@@ -14,6 +14,8 @@ import { promisify } from 'util';
 import { execFile } from './childProcess.js';
 import { isVitestRunner } from './runtimeEnv.js';
 
+export { syncDirectorySync, writeDurableExclusiveSync } from './fileDurability.js';
+
 // The #6176 data-root guard is loaded ONLY under an actual Vitest worker —
 // `isVitestRunner()`, narrower than `isTestRunner()`, because `scripts/
 // smoke-boot.js` sets NODE_ENV=test on the real server boot to select the
@@ -74,15 +76,16 @@ export function setAtomicWriteDurabilityForTests(durable) {
  * Best-effort once the rename is visible: the bytes are already in place, so a
  * filesystem that cannot sync its directory degrades to the pre-#12025
  * guarantee with one warning rather than failing a write that succeeded.
- * Windows cannot open a directory for fsync, so it is skipped there.
+ * Strict callers require durability and propagate I/O failures. Windows
+ * cannot open a directory for fsync, so it is skipped there.
  */
-async function syncDirectory(dir) {
+export async function syncDirectory(dir, { strict = false } = {}) {
   if (isWindows()) return;
   try {
     const handle = await open(dir, 'r');
     try { await handle.sync(); } finally { await handle.close(); }
   } catch (err) {
-    if (!err?.code) throw err;
+    if (strict || !err?.code) throw err;
     if (unsyncableDirs.has(dir)) return;
     unsyncableDirs.add(dir);
     console.warn(`⚠️ Directory fsync unavailable for ${dir} (${err.code}); renames there are not crash-durable`);

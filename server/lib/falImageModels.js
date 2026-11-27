@@ -32,6 +32,7 @@
  * knobs (`safety_tolerance`, `enable_safety_checker`) are left at fal.ai's
  * defaults on purpose: PortOS does not pick a moderation posture for the user.
  */
+import { nearestRatio } from './aspectRatios.js';
 
 /** How a family takes its output geometry. */
 export const FAL_IMAGE_SIZING = Object.freeze({
@@ -213,21 +214,6 @@ const validDims = (width, height) => {
   const h = Number(height);
   return Number.isFinite(w) && Number.isFinite(h) && w > 0 && h > 0 ? { w: Math.round(w), h: Math.round(h) } : null;
 };
-
-function nearestRatio(w, h, ratios) {
-  const target = w / h;
-  let best = null;
-  let bestDelta = Infinity;
-  for (const ratio of ratios) {
-    const [rw, rh] = ratio.split(':').map(Number);
-    const delta = Math.abs((rw / rh) - target);
-    if (delta < bestDelta) {
-      bestDelta = delta;
-      best = ratio;
-    }
-  }
-  return best;
-}
 
 function resolutionTier(w, h, tiers) {
   const longSide = Math.max(w, h);
@@ -416,8 +402,6 @@ export function falInputSchemaFromOpenApi(spec) {
   };
 }
 
-const aspectReady = (schema) => Array.isArray(schema.aspectRatio?.ratios) && schema.aspectRatio.ratios.length > 0;
-
 /**
  * Request body for a listed model PortOS does not price. `estimatedCostUsd`
  * stays null — the gallery says the price is unknown rather than inventing one.
@@ -442,8 +426,9 @@ export function buildListedFalImageRequest({
 
   const dims = validDims(width, height);
   let resolution = null;
-  if (dims && aspectReady(schema)) {
-    body.aspect_ratio = nearestRatio(dims.w, dims.h, schema.aspectRatio.ratios);
+  const aspectRatio = dims && nearestRatio(dims.w, dims.h, schema.aspectRatio?.ratios ?? []);
+  if (aspectRatio) {
+    body.aspect_ratio = aspectRatio;
     if (schema.resolution) {
       resolution = resolutionTier(dims.w, dims.h, schema.resolution.tiers);
       body.resolution = resolution;

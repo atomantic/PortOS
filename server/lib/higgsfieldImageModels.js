@@ -19,6 +19,7 @@
  * is sent OFF, and a negative prompt the endpoint has no field for is folded in
  * as a visible "Avoid:" clause, the same fallback the fal.ai backend uses.
  */
+import { nearestRatio } from './aspectRatios.js';
 
 const SOUL_RATIOS = Object.freeze(['9:16', '16:9', '4:3', '3:4', '1:1', '2:3', '3:2']);
 const ALIBABA_RATIOS = Object.freeze(['1:1', '2:3', '3:2', '3:4', '4:3', '7:9', '9:7', '9:16', '16:9', '21:9']);
@@ -103,12 +104,6 @@ export const higgsfieldImageFamily = (modelId) => (typeof modelId === 'string'
   : null);
 
 const refuse = (message) => Object.assign(new Error(message), { status: 400, code: 'HIGGSFIELD_IMAGE_INPUT_INVALID' });
-
-function nearestRatio(w, h, ratios) {
-  const target = Math.log(w / h);
-  const distance = (ratio) => { const [rw, rh] = ratio.split(':').map(Number); return Math.abs(Math.log(rw / rh) - target); };
-  return ratios.reduce((best, ratio) => (distance(ratio) < distance(best) ? ratio : best));
-}
 
 /** The prompt text the model receives: the user's words plus a folded "Avoid:" clause where needed. */
 function higgsfieldImagePromptText(family, prompt = '', negativePrompt = '') {

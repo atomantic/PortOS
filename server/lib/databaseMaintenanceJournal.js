@@ -13,8 +13,7 @@
  * readable while either backend is unavailable, so it cannot live in PostgreSQL; its directory is the admission
  * fence. Lifecycle and recovery commands: docs/STORAGE.md#cutover-recovery.
  */
-
-import { existsSync, lstatSync, mkdirSync, linkSync, unlinkSync, openSync, closeSync, fsyncSync, readFileSync, renameSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, lstatSync, mkdirSync, linkSync, unlinkSync, openSync, closeSync, fsyncSync, readFileSync, renameSync, rmSync } from 'node:fs';
 import { join } from 'node:path';
 import { randomUUID } from 'node:crypto';
 import { z } from 'zod';
@@ -22,6 +21,7 @@ import { PATHS } from './paths.js';
 import { createMaintenanceJournal } from './maintenanceJournal.js';
 import { assertNotRealDataWrite } from './testDataIsolation.js';
 import { createDatabaseAuthority } from './databaseAuthority.js';
+import { syncDirectorySync, writeDurableExclusiveSync } from './fileDurability.js';
 
 export const databaseMaintenanceEndpointSchema = z.object({
   mode: z.enum(['native', 'docker']),
@@ -103,24 +103,6 @@ const databaseMaintenanceError = () => Object.assign(
   new Error('Persistent database maintenance is active or requires recovery. Inspect scripts/database-maintenance.mjs status.'),
   { status: 503, code: 'DATABASE_MAINTENANCE' },
 );
-
-function syncDirectory(path) {
-  // Windows does not expose directory fsync through Node. The fence still
-  // exists before journal publication; unreadable/incomplete state fails shut.
-  if (process.platform === 'win32') return;
-  const fd = openSync(path, 'r');
-  try { fsyncSync(fd); } finally { closeSync(fd); }
-}
-
-function writeDurableExclusive(path, value) {
-  const fd = openSync(path, 'wx', 0o600);
-  try {
-    writeFileSync(fd, JSON.stringify(value, null, 2) + '\n');
-    fsyncSync(fd);
-  } finally {
-    closeSync(fd);
-  }
-}
 
 /**
  * The DIRECTORY is the fence, not a successfully parsed journal. In particular,
@@ -204,14 +186,14 @@ export function createDatabaseMaintenanceJournal(dataDir = PATHS.data) {
     const acquired = createMaintenanceJournal(dataDir).transaction(state => {
       if ((state.hold && ['manual-update', 'deferred-update'].includes(state.hold.owner)) || state.exclusive || isFenced()) return false;
       mkdirSync(activeDir, { mode: 0o700 });
-      syncDirectory(dataDir);
+      syncDirectorySync(dataDir);
       return true;
     });
     if (!acquired) throw databaseMaintenanceError();
     const temporary = join(activeDir, 'operation.pending');
-    writeDurableExclusive(temporary, record);
+    writeDurableExclusiveSync(temporary, record);
     renameSync(temporary, recordPath);
-    syncDirectory(activeDir);
+    syncDirectorySync(activeDir);
     return record;
   };
 
@@ -222,8 +204,8 @@ export function createDatabaseMaintenanceJournal(dataDir = PATHS.data) {
     const current = read();
     if (!current || current.id !== id || current.stage !== 'accepted') throw databaseMaintenanceError();
     const token = randomUUID();
-    writeDurableExclusive(join(activeDir, 'cancel-' + id + '.claim'), { id, token });
-    syncDirectory(activeDir);
+    writeDurableExclusiveSync(join(activeDir, 'cancel-' + id + '.claim'), { id, token });
+    syncDirectorySync(activeDir);
     const owned = read();
     if (!owned || owned.id !== id || owned.stage !== 'accepted') throw databaseMaintenanceError();
     return token;
@@ -282,12 +264,12 @@ export function createDatabaseMaintenanceJournal(dataDir = PATHS.data) {
     const pending = join(activeDir, 'worker-pending-' + randomUUID());
     mkdirSync(pending, { mode: 0o700 });
     try {
-      writeDurableExclusive(join(pending, 'owner.json'), owner);
-      syncDirectory(pending);
+      writeDurableExclusiveSync(join(pending, 'owner.json'), owner);
+      syncDirectorySync(pending);
       // The complete, nonempty reservation is published at once. Another
       // launch cannot replace it (rename refuses a nonempty destination).
       renameSync(pending, directory);
-      syncDirectory(activeDir);
+      syncDirectorySync(activeDir);
     } finally {
       rmSync(pending, { recursive: true, force: true });
     }
@@ -333,8 +315,8 @@ export function createDatabaseMaintenanceJournal(dataDir = PATHS.data) {
     assertNotRealDataWrite(activeDir, 'database maintenance worker entry');
     const current = assertCoordinatorWorker(id, token);
     // A second invocation with copied arguments cannot become a second worker.
-    writeDurableExclusive(join(workerDirectory(token), 'started.json'), { id, token });
-    syncDirectory(workerDirectory(token));
+    writeDurableExclusiveSync(join(workerDirectory(token), 'started.json'), { id, token });
+    syncDirectorySync(workerDirectory(token));
     assertCoordinatorWorker(id, token);
     return current;
   };
@@ -368,8 +350,8 @@ export function createDatabaseMaintenanceJournal(dataDir = PATHS.data) {
     assertNotRealDataWrite(activeDir, 'database maintenance worker group');
     assertEnteredCoordinatorWorker(id, token);
     const value = workerGroupSchema.parse({ id, token, pgid });
-    writeDurableExclusive(join(workerDirectory(token), 'group.json'), value);
-    syncDirectory(workerDirectory(token));
+    writeDurableExclusiveSync(join(workerDirectory(token), 'group.json'), value);
+    syncDirectorySync(workerDirectory(token));
     assertEnteredCoordinatorWorker(id, token);
     return value;
   };
@@ -420,7 +402,7 @@ export function createDatabaseMaintenanceJournal(dataDir = PATHS.data) {
   // No-replace publication of already-fsynced bytes; the first writer wins.
   const publishFirst = (destination, value) => {
     const pending = join(activeDir, 'record-' + randomUUID() + '.pending');
-    writeDurableExclusive(pending, value);
+    writeDurableExclusiveSync(pending, value);
     try {
       linkSync(pending, destination);
     } catch (err) {
@@ -428,7 +410,7 @@ export function createDatabaseMaintenanceJournal(dataDir = PATHS.data) {
     } finally {
       unlinkSync(pending);
     }
-    syncDirectory(activeDir);
+    syncDirectorySync(activeDir);
   };
 
   // Immutable publication: a retry of the identical record is accepted; a
@@ -489,8 +471,8 @@ export function createDatabaseMaintenanceJournal(dataDir = PATHS.data) {
     assertCoordinatorWorker(id, token);
     if (read()?.stage !== 'accepted' || readProducerSnapshot(id, token)) throw databaseMaintenanceError();
     const snapshot = producerSnapshotSchema.parse({ id, producers });
-    writeDurableExclusive(join(activeDir, 'producers.json'), snapshot);
-    syncDirectory(activeDir);
+    writeDurableExclusiveSync(join(activeDir, 'producers.json'), snapshot);
+    syncDirectorySync(activeDir);
     return readProducerSnapshot(id, token);
   };
 
@@ -502,7 +484,7 @@ export function createDatabaseMaintenanceJournal(dataDir = PATHS.data) {
     const value = decisionSchema.parse({ id, token, stage, action });
     const destination = join(activeDir, 'decision-' + stage + '-' + token + '.json');
     const pending = join(activeDir, 'decision-' + randomUUID() + '.pending');
-    writeDurableExclusive(pending, value);
+    writeDurableExclusiveSync(pending, value);
     try {
       linkSync(pending, destination);
     } catch (err) {
@@ -510,7 +492,7 @@ export function createDatabaseMaintenanceJournal(dataDir = PATHS.data) {
     } finally {
       unlinkSync(pending);
     }
-    syncDirectory(activeDir);
+    syncDirectorySync(activeDir);
     if (!lstatSync(destination).isFile()) throw databaseMaintenanceError();
     const winner = decisionSchema.parse(JSON.parse(readFileSync(destination, 'utf8')));
     if (winner.id !== id || winner.token !== token || winner.stage !== stage) throw databaseMaintenanceError();
@@ -534,7 +516,7 @@ export function createDatabaseMaintenanceJournal(dataDir = PATHS.data) {
       const published = successorSchema.parse(JSON.parse(readFileSync(
         join(activeDir, 'coordinator-after-' + previousToken + '.json'), 'utf8')));
       if (published.id !== id || published.previousToken !== previousToken || published.token !== recoveryToken) throw databaseMaintenanceError();
-      syncDirectory(activeDir);
+      syncDirectorySync(activeDir);
       return recoveryToken;
     }
     assertCoordinator(id, previousToken);
@@ -555,10 +537,10 @@ export function createDatabaseMaintenanceJournal(dataDir = PATHS.data) {
     const directory = workerDirectory(previousToken);
     const fd = openSync(join(directory, 'exit'), 'r+');
     try { fsyncSync(fd); } finally { closeSync(fd); }
-    syncDirectory(directory);
+    syncDirectorySync(directory);
     const next = { id, token: recoveryToken, previousToken };
     const pending = join(activeDir, 'coordinator-' + randomUUID() + '.pending');
-    writeDurableExclusive(pending, next);
+    writeDurableExclusiveSync(pending, next);
     try {
       // EEXIST is a lost race unless this is the SAME recorded recovery
       // request. Different claimants must never receive the winning token.
@@ -568,7 +550,7 @@ export function createDatabaseMaintenanceJournal(dataDir = PATHS.data) {
     } finally {
       unlinkSync(pending);
     }
-    syncDirectory(activeDir);
+    syncDirectorySync(activeDir);
     assertCoordinator(id, next.token);
     return next.token;
   };
@@ -582,7 +564,7 @@ export function createDatabaseMaintenanceJournal(dataDir = PATHS.data) {
     // An acknowledged publication may have crashed before returning to its
     // caller. Only that exact owned transition is idempotent, never a reversal.
     if (current.stage === nextStage) {
-      syncDirectory(activeDir);
+      syncDirectorySync(activeDir);
       return current;
     }
     if (current.stage !== expectedStage) throw databaseMaintenanceError();
@@ -594,7 +576,7 @@ export function createDatabaseMaintenanceJournal(dataDir = PATHS.data) {
     if (decision.kind !== 'transition' || decision.nextStage !== nextStage) throw databaseMaintenanceError();
     const next = journalSchema.parse({ ...current, stage: nextStage });
     const pending = join(activeDir, 'publication-' + randomUUID() + '.pending');
-    writeDurableExclusive(pending, next);
+    writeDurableExclusiveSync(pending, next);
     try {
       // link is an atomic, no-replace publication of already-fsynced bytes.
       // A competing owner-token retry may win; both describe the same transition.
@@ -604,7 +586,7 @@ export function createDatabaseMaintenanceJournal(dataDir = PATHS.data) {
     } finally {
       unlinkSync(pending);
     }
-    syncDirectory(activeDir);
+    syncDirectorySync(activeDir);
     const published = read();
     if (!published || published.id !== id || stages.indexOf(published.stage) < stages.indexOf(nextStage)) throw databaseMaintenanceError();
     return next;
@@ -622,7 +604,7 @@ export function createDatabaseMaintenanceJournal(dataDir = PATHS.data) {
     if (JSON.stringify(initial.source) !== JSON.stringify(parsedSource)) {
       throw new Error('Saved database endpoint changed; source-only cancellation refused.');
     }
-    writeDurableExclusive(join(activeDir, 'cancel-' + id + '.claim'), { id });
+    writeDurableExclusiveSync(join(activeDir, 'cancel-' + id + '.claim'), { id });
     const current = read();
     if (current?.id !== id || current.stage !== 'accepted') throw databaseMaintenanceError();
     const archiveDir = join(dataDir, 'database-maintenance-cancelled');
@@ -632,8 +614,8 @@ export function createDatabaseMaintenanceJournal(dataDir = PATHS.data) {
     const destination = join(archiveDir, id);
     if (existsSync(destination)) throw databaseMaintenanceError();
     renameSync(activeDir, destination);
-    syncDirectory(archiveDir);
-    syncDirectory(dataDir);
+    syncDirectorySync(archiveDir);
+    syncDirectorySync(dataDir);
     return { id, stage: 'cancelled' };
   };
 
@@ -713,8 +695,8 @@ export function createDatabaseMaintenanceJournal(dataDir = PATHS.data) {
     if (existsSync(destination)) throw databaseMaintenanceError();
     assertEnteredCoordinatorWorker(id, token);
     renameSync(activeDir, destination);
-    syncDirectory(archiveDir);
-    syncDirectory(dataDir);
+    syncDirectorySync(archiveDir);
+    syncDirectorySync(dataDir);
     return { id, stage: 'released', source: current.source.mode, target: current.target.mode };
   };
 

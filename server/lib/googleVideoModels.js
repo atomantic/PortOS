@@ -23,6 +23,7 @@
  * clip from them so Music Video spend counts Veo renders (#16509). They are estimates: the Cloud billing
  * console has the real charge, and a combination with no listed rate stays unknown (never zero).
  */
+import { nearestRatio } from './aspectRatios.js';
 
 import { coverOrLongest, durationLengths } from './hostedVideoClipRules.js';
 
@@ -103,15 +104,6 @@ function googleVideoClipQuote({ modelId, seconds, resolution, generateAudio = fa
 }
 
 const refuse = (message) => Object.assign(new Error(message), { status: 400, code: 'GOOGLE_VIDEO_INPUT_INVALID' });
-
-function nearestRatio(width, height, ratios) {
-  const w = Number(width);
-  const h = Number(height);
-  if (!(w > 0 && h > 0)) return null;
-  const target = Math.log(w / h);
-  const distance = (ratio) => { const [rw, rh] = ratio.split(':').map(Number); return Math.abs(Math.log(rw / rh) - target); };
-  return ratios.reduce((best, ratio) => (distance(ratio) < distance(best) ? ratio : best));
-}
 
 /** The nearest length the model accepts, or null when none was asked for. */
 function nearestLength(model, seconds) {

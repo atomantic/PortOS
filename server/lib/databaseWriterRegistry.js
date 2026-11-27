@@ -14,14 +14,13 @@
  * never federated; it must survive the database being fenced or offline during maintenance cutover.
  */
 
-import { closeSync, fsyncSync, lstatSync, mkdirSync, openSync, readFileSync, readdirSync, renameSync, writeFileSync, linkSync, rmSync } from 'node:fs';
+import { lstatSync, mkdirSync, readFileSync, readdirSync, renameSync, linkSync, rmSync } from 'node:fs';
 import { isAbsolute, join, resolve } from 'node:path';
 import { randomUUID } from 'node:crypto';
 import { z } from 'zod';
 import { PATHS } from './paths.js';
 import { createDatabaseMaintenanceJournal } from './databaseMaintenanceJournal.js';
 import { assertNotRealDataWrite } from './testDataIsolation.js';
-
 const reservationSchema = z.object({
   version: z.literal(1), id: z.string().uuid(), controlDir: z.string().refine(isAbsolute),
   createdAt: z.string().datetime(), processGroup: z.boolean(),
@@ -41,17 +40,11 @@ const completionSchema = z.object({
 const retirementSchema = z.object({ version: z.literal(1) }).strict();
 const RETIRED_EXITS = 'unreconciled-exits.json';
 const refused = name => new Error(`Detached writer inventory is incomplete or unreadable${name === undefined ? '' : ` at entry ${JSON.stringify(name)}`}; maintenance must remain fenced.`);
+import { syncDirectorySync, writeDurableExclusiveSync } from './fileDurability.js';
 
-function syncDirectory(directory) {
-  if (process.platform === 'win32') return;
-  const fd = openSync(directory, 'r');
-  try { fsyncSync(fd); } finally { closeSync(fd); }
-}
 function publish(directory, name, value) {
-  const fd = openSync(join(directory, name), 'wx', 0o600);
-  try { writeFileSync(fd, JSON.stringify(value) + '\n'); fsyncSync(fd); }
-  finally { closeSync(fd); }
-  syncDirectory(directory);
+  writeDurableExclusiveSync(join(directory, name), value, { indent: 0 });
+  syncDirectorySync(directory);
 }
 function readRecord(directory, name, schema, optional = false) {
   const path = join(directory, name);
@@ -95,11 +88,11 @@ export function createDatabaseWriterRegistry(dataDir = PATHS.data) {
     if (archiveDir) {
       mkdirSync(archiveDir, { recursive: true, mode: 0o700 });
       renameSync(entry, join(archiveDir, id));
-      syncDirectory(archiveDir);
+      syncDirectorySync(archiveDir);
     } else {
       rmSync(entry, { recursive: true });
     }
-    syncDirectory(directory);
+    syncDirectorySync(directory);
   };
   const reserve = (controlDir, processGroup = false) => {
     assertNotRealDataWrite(directory, 'detached writer reservation');
@@ -110,12 +103,12 @@ export function createDatabaseWriterRegistry(dataDir = PATHS.data) {
     // would only create more unretirable records. Missing history is normal.
     readRecord(directory, RETIRED_EXITS, retirementSchema, true);
     mkdirSync(directory, { recursive: true, mode: 0o700 });
-    syncDirectory(dataDir);
+    syncDirectorySync(dataDir);
     const record = reservationSchema.parse({ version: 1, id: randomUUID(),
       controlDir: resolve(controlDir), createdAt: new Date().toISOString(), processGroup });
     const entry = join(directory, record.id);
     mkdirSync(entry, { mode: 0o700 });
-    syncDirectory(directory);
+    syncDirectorySync(directory);
     // Incomplete publication stays visible and fails inventory closed after a
     // crash. No child may start before this record is durable and admitted.
     publish(entry, 'reservation.json', record);
@@ -147,9 +140,9 @@ export function createDatabaseWriterRegistry(dataDir = PATHS.data) {
         try { linkSync(join(entry, 'retirement.json'), join(directory, RETIRED_EXITS)); }
         catch (err) { if (err.code !== 'EEXIST') throw err; }
         readRecord(directory, RETIRED_EXITS, retirementSchema);
-        syncDirectory(directory);
+        syncDirectorySync(directory);
         rmSync(entry, { recursive: true });
-        syncDirectory(directory);
+        syncDirectorySync(directory);
       },
     };
   };
