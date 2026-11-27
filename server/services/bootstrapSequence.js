@@ -1,14 +1,10 @@
 /**
  * The load-bearing ORDER of server boot, extracted from `bootstrap.js` (#3451).
  *
- * `bootstrap.js` owns *what* each boot step is — the real migration runner, the
- * real AI Toolkit, the real stores, the real listener. This module owns *when*
- * each step runs relative to its neighbours, and receives every step as an
- * injected parameter. That split is the whole point: the ordering contract the
- * `bootstrap.js` header describes ("ordering inside each phase is load-bearing")
- * can then be executed and asserted by `bootstrapSequence.test.js` without
- * importing a module graph that would open a real listener, touch the real
- * database, or reach a provider.
+ * The bootstrap phase modules supply the migration runner, AI Toolkit, stores,
+ * and listener. This module owns when each step runs and accepts the steps as
+ * parameters so `bootstrapSequence.test.js` can verify their order and await
+ * boundaries without starting the server.
  *
  * Rules for editing:
  *   - Nothing here may import a PortOS service, `db.js`, or the AI Toolkit.

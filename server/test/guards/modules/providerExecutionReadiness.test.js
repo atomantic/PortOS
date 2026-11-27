@@ -4,7 +4,7 @@ import { dirname, join, relative, resolve } from 'path';
 import { readText, REPO_ROOT } from '../../../../scripts/lib/guardCorpus.js';
 
 describe('managed-runtime wake ownership (issue #8104)', () => {
-  // `bootstrap.js`'s boot-time `ensureRunning` import from `ollamaManager.js`
+  // The services phase's boot-time `ensureRunning` import from `ollamaManager.js`
   // is a different symbol (the daemon's own startup hook, not a per-call
   // readiness gate) and stays allowed — this only guards the three symbols
   // `providerExecutionReadiness.js` wraps into `ensureManagedRuntimeReady`.

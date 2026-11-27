@@ -27,7 +27,7 @@ vi.mock('./privacyScan.js', () => ({ runScanPass }));
 vi.mock('./privacyOptOut.js', () => ({ runOptOutPass: vi.fn(async () => ({})) }));
 
 const BOOT_DELAY_MS = 5 * 60_000;
-const bootstrapSource = readFileSync(new URL('./bootstrap.js', import.meta.url), 'utf8');
+const bootstrapSource = readFileSync(new URL('./bootstrap/shutdown.js', import.meta.url), 'utf8');
 const drainWindowMs = Number(bootstrapSource.match(/const HTTP_DRAIN_WINDOW_MS = (\d+);/)[1]);
 
 // Run the real shutdown grace without booting the HTTP/DB service graph.
