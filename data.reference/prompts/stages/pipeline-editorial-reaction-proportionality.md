@@ -34,10 +34,8 @@ restraint (a hardened soldier who grieves quietly); an intense reaction the stor
 has clearly earned through accumulated pressure or a revealed prior wound.
 
 {{#sceneMap}}
-## Scene segmentation
-
-The reverse outline below segments the manuscript into scenes in story order
-(with the recorded setting, POV character, and characters present). Use it to
+{{> scene-segmentation-note }}
+Use it to
 weigh each event's MAGNITUDE in context and to attribute your finding to the
 right `issueNumber`.
 
@@ -46,11 +44,7 @@ right `issueNumber`.
 ```
 {{/sceneMap}}
 
-## Manuscript
-
-The manuscript is stitched from the drafted issues. Section headers attribute
-each chunk to an issue (e.g. `# Issue 3 — Title (prose)`). Use the issue number
-in each header to attribute every finding to its `issueNumber`.
+{{> editorial-manuscript-preamble }}
 
 {{#finalPart}}
 This is the FINAL part of the manuscript — the whole story is now in view, so an
@@ -101,14 +95,7 @@ reaction, is medium; a small proportionality wobble is low. If every reaction
 fits its event's stakes (or fits the character the story has established), return
 an empty `findings` array — do not invent an imbalance where the beats land.
 
-## Output contract
-
-Return ONLY valid JSON matching this shape — no prose, no markdown fence, no
-commentary:
-
-```json
-{
-  "findings": [
+{{> editorial-findings-contract }}
     {
       "severity": "high|medium|low",
       "issueNumber": 4,

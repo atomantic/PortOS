@@ -1,5 +1,6 @@
 /** Checkout-scoped wrappers for the shared repository corpus. */
 import { readFileSync } from 'node:fs';
+import { createRequire } from 'node:module';
 import { dirname, isAbsolute, relative, resolve, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { createGuardCorpus as createCorpus } from '../../lib/guardCorpus.js';
@@ -7,7 +8,33 @@ import { trackedFiles as gitTrackedFiles, workingTreeFiles as gitWorkingTreeFile
 
 export { pathspecMatcher } from '../../lib/guardCorpus.js';
 export const REPO_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..', '..');
-export const createGuardCorpus = (root = REPO_ROOT) => createCorpus(root);
+// Babel belongs to the server workspace. Resolve it only when an AST check runs
+// so standalone scripts and the pre-install CI planner can still use the corpus.
+const requireServer = createRequire(new URL('../../server/package.json', import.meta.url));
+let parse;
+
+export function parseGuardSource(source, { tokens = false } = {}) {
+  parse ??= requireServer('@babel/parser').parse;
+  return parse(source, {
+    sourceType: 'module',
+    errorRecovery: true,
+    attachComment: false,
+    locations: false,
+    tokens,
+  });
+}
+
+export const createGuardCorpus = (root = REPO_ROOT) => {
+  const corpus = createCorpus(root);
+  return {
+    ...corpus,
+    /** Shared read-only AST with tokens. Strict consumers must reject recovered errors. */
+    parseAst(path) {
+      const absolute = resolve(corpus.root, path);
+      return corpus.derive('babelAst', absolute, () => parseGuardSource(corpus.read(absolute), { tokens: true }));
+    },
+  };
+};
 
 let repoCorpus = null;
 /** The process-wide corpus over this repository. */

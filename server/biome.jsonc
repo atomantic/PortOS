@@ -1,7 +1,21 @@
 {
   "$schema": "../client/node_modules/@biomejs/biome/configuration_schema.json",
   "root": true,
-  "files": { "includes": ["**/*.js", "**/*.mjs", "!node_modules", "!native", "!coverage"] },
+  "files": { "includes": ["**/*.js", "**/*.mjs", "**/*.cjs", "!node_modules", "!native", "!coverage"] },
+  "plugins": [
+    {
+      "path": "../lint-no-raw-pm2-jlist.grit",
+      "includes": ["**/*.{js,mjs,cjs}", "!**/*.test.*"]
+    },
+    {
+      "path": "./lint-pg-json.grit",
+      "includes": ["{services,lib,routes,scripts}/**/*.{js,mjs}", "!**/*.test.*"]
+    },
+    {
+      "path": "./lint-glab-list-flags.grit",
+      "includes": ["**/*.{js,mjs,cjs}", "!**/*.test.{js,mjs,cjs}"]
+    }
+  ],
   "formatter": { "enabled": false },
   "assist": { "enabled": false },
   "linter": {

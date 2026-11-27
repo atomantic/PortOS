@@ -60,6 +60,7 @@ export async function enqueueFalSeedvr2Upscale(historyId, {
   targetResolution = DEFAULT_FAL_SEEDVR2_TARGET_RESOLUTION,
   musicVideoProjectId = null,
   sceneId = null,
+  musicVideo: shot = null,
 } = {}) {
   const plan = await planUpscaleHistoryItem(historyId, { method: 'fal-seedvr2', targetResolution });
   if (plan.alreadyUpscaled) {
@@ -71,10 +72,13 @@ export async function enqueueFalSeedvr2Upscale(historyId, {
       { status: 400, code: 'FAL_KEY_MISSING' },
     );
   }
+  if (shot && plan.estimatedCostUsd == null) {
+    throw new ServerError('The selected clip could not be measured for a cost estimate.', { status: 422, code: 'UPSCALE_GEOMETRY_UNKNOWN' });
+  }
   const item = await getHistoryItem(historyId);
-  const musicVideo = musicVideoProjectId
+  const musicVideo = shot ?? (musicVideoProjectId
     ? { projectId: musicVideoProjectId, ...(sceneId ? { sceneId } : {}), tier: 'final' }
-    : null;
+    : null);
 
   return enqueueJob({
     kind: LTX_UPSCALE_JOB_KIND,

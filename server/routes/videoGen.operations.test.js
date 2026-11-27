@@ -23,6 +23,7 @@ import * as stitchJobService from '../services/videoGen/stitchJob.js';
 import { enqueueVertical } from '../services/videoGen/verticalJob.js';
 import { trimHistoryItem } from '../services/videoGen/trim.js';
 import * as mediaJobQueue from '../services/mediaJobQueue/index.js';
+import { getProject as getMusicVideoProject } from '../services/musicVideo/projects.js';
 import { listIcLoraRemixModes, IC_LORA_MODES, icLoraWeightKey } from '../lib/icLoraWeights.js';
 
 describe('videoGen routes', () => {
@@ -1199,6 +1200,24 @@ describe('videoGen routes', () => {
       expect(videoGenService.upscaleHistoryItem).toHaveBeenCalledWith(validHistoryId, { method: 'lanczos' });
     });
 
+    it('queues an upscale for the selected shot and refuses a changed selection', async () => {
+      const context = { musicVideoProjectId: 'mv-example', sceneId: 's1', method: 'ltx' };
+      getMusicVideoProject.mockResolvedValueOnce({ id: 'mv-example', scenes: [{ sceneId: 's1', videoHistoryId: otherValidId }] });
+      const stale = await request(app).post(`/api/video-gen/upscale/${validHistoryId}`).send(context);
+      expect(stale.status).toBe(409);
+      expect(upscaleJobService.enqueueLtxUpscale).not.toHaveBeenCalled();
+
+      getMusicVideoProject.mockResolvedValueOnce({ id: 'mv-example', scenes: [{ sceneId: 's1', videoHistoryId: validHistoryId }] });
+      mediaJobQueue.listJobs.mockReturnValueOnce([]);
+      upscaleJobService.enqueueLtxUpscale.mockResolvedValueOnce({ jobId: 'ltx-upscale', status: 'queued' });
+      const accepted = await request(app).post(`/api/video-gen/upscale/${validHistoryId}`).send(context);
+      expect(accepted.status).toBe(200);
+      expect(accepted.body.job).toMatchObject({ jobId: 'ltx-upscale', status: 'queued' });
+      expect(upscaleJobService.enqueueLtxUpscale).toHaveBeenCalledWith(validHistoryId, {
+        musicVideo: { projectId: 'mv-example', sceneId: 's1', tier: 'final', selectOnComplete: true },
+      });
+    });
+
     it('forwards a shared-gallery upload id to upscaleHistoryItem', async () => {
       const uploadId = 'upload-ab12cd34';
       videoGenService.upscaleHistoryItem.mockResolvedValue({ id: otherValidId, filename: `${otherValidId}.mp4`, upscaledFrom: uploadId });
@@ -1247,15 +1266,15 @@ describe('videoGen routes', () => {
     });
 
     // #19985: Real-ESRGAN is a queued local GPU job carrying the selected weights
-    // and any Music Video attribution, never the inline pass.
+    // and any project attribution, never the inline pass.
     it('queues the Real-ESRGAN method with its weights and Music Video attribution', async () => {
       realesrganJobService.enqueueRealesrganUpscale.mockResolvedValue({ jobId: 'job-2', position: 1, status: 'queued' });
       const r = await request(app).post(`/api/video-gen/upscale/${validHistoryId}`)
-        .send({ method: 'realesrgan', realesrganModel: 'realesr-animevideov3', musicVideoProjectId: 'mv-1', sceneId: 'mvs-1' });
+        .send({ method: 'realesrgan', realesrganModel: 'realesr-animevideov3', musicVideoProjectId: 'mv-1' });
       expect(r.status).toBe(200);
       expect(r.body).toEqual({ ok: true, job: { jobId: 'job-2', position: 1, status: 'queued' } });
       expect(realesrganJobService.enqueueRealesrganUpscale).toHaveBeenCalledWith(validHistoryId, {
-        realesrganModel: 'realesr-animevideov3', musicVideoProjectId: 'mv-1', sceneId: 'mvs-1',
+        realesrganModel: 'realesr-animevideov3', musicVideoProjectId: 'mv-1', sceneId: undefined,
       });
       expect(videoGenService.upscaleHistoryItem).not.toHaveBeenCalled();
     });

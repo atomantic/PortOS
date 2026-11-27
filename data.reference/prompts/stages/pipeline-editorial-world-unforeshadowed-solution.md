@@ -61,11 +61,7 @@ still withholding for a planned later reveal.
 {{worldRules}}
 {{/worldRules}}
 
-## Manuscript
-
-The manuscript is stitched from the drafted issues. Section headers attribute
-each chunk to an issue (e.g. `# Issue 3 — Title (prose)`). Use the issue number
-in each header to attribute every finding to its `issueNumber`.
+{{> editorial-manuscript-preamble }}
 
 ```
 {{manuscript}}
@@ -84,14 +80,7 @@ built on a wholly-unplanted rule `high`; a minor scene-level one `medium` or
 Be specific and cite the text. If every solution is earned by an established
 mechanism, return an empty `findings` array — do not invent issues.
 
-## Output contract
-
-Return ONLY valid JSON matching this shape — no prose, no markdown fence, no
-commentary:
-
-```json
-{
-  "findings": [
+{{> editorial-findings-contract }}
     {
       "severity": "high|medium|low",
       "issueNumber": 7,

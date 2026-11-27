@@ -14,13 +14,13 @@
  */
 
 /** Render backends billed per render. Subscription and browser lanes (Grok, Codex, Agy, Gemini) are not. */
-export const METERED_RENDER_LANES = Object.freeze(['fal', 'runway', 'higgsfield', 'google', 'reactor']);
+export const METERED_RENDER_LANES = Object.freeze(['fal', 'runway', 'higgsfield', 'google', 'reactor', 'topaz']);
 
 /** Lanes a manual adjustment can name: the metered lanes and `other`. */
 export const SPEND_ADJUSTMENT_LANES = Object.freeze([...METERED_RENDER_LANES, 'other']);
 
 export const SPEND_LANE_LABELS = Object.freeze({
-  fal: 'fal.ai', runway: 'Runway', higgsfield: 'Higgsfield', google: 'Google', reactor: 'reactor.inc', other: 'Other',
+  fal: 'fal.ai', runway: 'Runway', higgsfield: 'Higgsfield', google: 'Google', reactor: 'reactor.inc', topaz: 'Topaz Labs', other: 'Other',
   earlier: 'Earlier estimates',
 });
 

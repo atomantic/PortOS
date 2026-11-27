@@ -10,27 +10,24 @@ import { join, resolve } from 'path';
 import { clearTimeout as cancelBatchTimer, setTimeout as scheduleBatchTimer } from 'node:timers';
 import { createFileWriteQueue } from '../lib/fileWriteQueue.js';
 import { atomicWrite, ensureDir, PATHS, readJSONFile } from '../lib/fileUtils.js';
-import { isFreeProvider, SPEED_LEDGER_FIELDS } from '../lib/modelPricing.js';
-import { familyForProvider } from '../lib/provider/providerFamilies.js';
-import { POLLUTING_KEYS } from '../lib/objects.js';
-import { UNKNOWN_PROVIDER_ID, UNKNOWN_PROVIDER_NAME, isUsageKey, usageModelKey, normalizeProvider, countFields, hasUsageCounts, mergeSource, buildUsageReport } from '../lib/usageReport.js';
-import { nativeUsageSignature, withNativeUsage } from './nativeUsageHistory.js';
+import { SPEED_LEDGER_FIELDS } from '../lib/modelPricing.js';
+import { UNKNOWN_PROVIDER_ID, UNKNOWN_PROVIDER_NAME, isUsageKey, usageModelKey, normalizeProvider, hasUsageCounts, mergeSource } from '../lib/usageReport.js';
 import { getLocalParts, todayInTimezone } from '../lib/timezone.js';
 import { getUserTimezone } from './userTimezone.js';
 import { isTestRunner } from '../lib/runtimeEnv.js';
 import { bumpChangeToken } from './changeToken.js';
 
+import { adjustCounts, cacheActivityDay, datedUsageDay, DAY_KEY_RE, deepSumInto, findEarliestActivityDay, getEmptyUsage, rebuildDayTotals, rollupOldDailyActivity } from '../lib/usageBuckets.js';
+import { correctUsageDraft } from './usageCorrections.js';
+import { buildUsageSummary, buildUsageDigest as digestUsage } from './usageSummary.js';
+
+export { providerVolumeSinceBlock } from './usageSummary.js';
+export { rollupOldDailyActivity } from '../lib/usageBuckets.js';
+export { buildUsageReport } from '../lib/usageReport.js';
+
 const DATA_DIR = PATHS.data;
 export const USAGE_FILE = join(DATA_DIR, 'usage.json');
 
-// Day buckets older than this are rolled up into monthly buckets at load time so
-// dailyActivity (and therefore the in-memory report) stops growing
-// linearly forever. 400 days keeps a full year-plus of per-day granularity — beyond
-// any useful streak/report window — while collapsing everything older to per-month.
-const ROLLUP_RETENTION_DAYS = 400;
-const DAY_KEY_RE = /^\d{4}-\d{2}-\d{2}$/;
-const MONTH_KEY_RE = /^\d{4}-\d{2}$/;
-const SUMMARY_CACHE_LIMIT = 20;
 const RUN_WRITE_BATCH_MS = 50;
 
 let usageData = null;
@@ -165,110 +162,6 @@ const normalizeUndefinedProviderBucket = (byProvider) => {
   byProvider[UNKNOWN_PROVIDER_ID] = { ...merged, name: UNKNOWN_PROVIDER_NAME };
   delete byProvider.undefined;
   return true;
-};
-
-/**
- * Initialize usage data structure
- */
-function getEmptyUsage() {
-  return {
-    totalSessions: 0,
-    totalMessages: 0,
-    totalToolCalls: 0,
-    totalTokens: {
-      input: 0,
-      output: 0
-    },
-    byProvider: {},
-    byModel: {},
-    dailyActivity: {},
-    monthlyActivity: {},
-    earliestActivityDay: null,
-    hourlyActivity: Array(24).fill(0),
-    // Observed provider limit blocks (`recordLimitBlock`): timestamped
-    // `{ providerId, model, category, message, resetHint, at }` facts the
-    // Usage page's free-tier section reads as an estimated-quota signal.
-    // Additive: absent on installs that predate it, seeded on load.
-    blockEvents: [],
-    // Ids of Grok repairs and live media/long-context records already added.
-    // Local bookkeeping, like reconciledRuns: not part of the peer digest.
-    grokRepairIds: [],
-    lastUpdated: null
-  };
-}
-
-/**
- * Deep-sum a source bucket into a target bucket, in place. Numbers add; nested
- * objects recurse. Shape-tolerant on purpose: a day bucket may be the flat
- * `{ sessions, messages, tokens }` shape, or carry nested per-provider/per-model
- * token splits — either way its per-provider/per-model detail is preserved when
- * rolled up to monthly granularity.
- */
-function deepSumInto(target, source) {
-  for (const [key, value] of Object.entries(source)) {
-    if (POLLUTING_KEYS.has(key)) continue;
-    if (typeof value === 'number') {
-      target[key] = (typeof target[key] === 'number' ? target[key] : 0) + value;
-    } else if (value && typeof value === 'object' && !Array.isArray(value)) {
-      if (!target[key] || typeof target[key] !== 'object' || Array.isArray(target[key])) {
-        target[key] = {};
-      }
-      deepSumInto(target[key], value);
-    }
-    // Non-numeric scalars (strings like provider `name`) are intentionally dropped:
-    // a monthly rollup aggregates counts, not labels.
-  }
-  return target;
-}
-
-/**
- * Pure, idempotent load-time transform: move day buckets older than `retentionDays`
- * out of `dailyActivity` and into `monthlyActivity['YYYY-MM']`, deep-summing their
- * (possibly nested) numeric fields so long-range totals stay accurate at monthly
- * granularity. Mutates the passed maps in place and returns whether anything moved.
- * Only well-formed YYYY-MM-DD keys are considered, so an already-rolled monthly key
- * is never re-processed (guaranteeing idempotency).
- */
-export function rollupOldDailyActivity(dailyActivity, monthlyActivity, { retentionDays = ROLLUP_RETENTION_DAYS, now = new Date() } = {}) {
-  if (!dailyActivity || !monthlyActivity) return false;
-
-  const cutoff = new Date(now);
-  cutoff.setDate(cutoff.getDate() - retentionDays);
-  const cutoffKey = cutoff.toISOString().split('T')[0];
-
-  let changed = false;
-  for (const dayKey of Object.keys(dailyActivity)) {
-    if (!DAY_KEY_RE.test(dayKey)) continue;
-    if (dayKey >= cutoffKey) continue; // lexical compare is date-correct for YYYY-MM-DD
-
-    const monthKey = dayKey.slice(0, 7); // 'YYYY-MM'
-    if (!monthlyActivity[monthKey]) monthlyActivity[monthKey] = {};
-    deepSumInto(monthlyActivity[monthKey], dailyActivity[dayKey]);
-    delete dailyActivity[dayKey];
-    changed = true;
-  }
-  return changed;
-}
-
-const findEarliestActivityDay = (dailyActivity, monthlyActivity) => {
-  let earliest = null;
-  const consider = (day) => {
-    if (!earliest || day < earliest) earliest = day;
-  };
-  for (const key of Object.keys(dailyActivity || {})) {
-    if (DAY_KEY_RE.test(key)) consider(key);
-  }
-  for (const key of Object.keys(monthlyActivity || {})) {
-    if (MONTH_KEY_RE.test(key)) consider(`${key}-01`);
-  }
-  return earliest;
-};
-
-const cacheActivityDay = (day) => {
-  if (!DAY_KEY_RE.test(day)) return;
-  if (!usageData.earliestActivityDay || day < usageData.earliestActivityDay) {
-    usageData.earliestActivityDay = day;
-  }
 };
 
 // Both live attribution and historical speed repair merge Codex counters by
@@ -507,23 +400,6 @@ function modelDayBucket(providerDay, model) {
   }));
 }
 
-const zeroCounts = () => Object.fromEntries(countFields.map((field) => [field, 0]));
-
-const recordTotals = (records) => (Array.isArray(records) ? records : [records]).reduce((total, record) => {
-  for (const field of countFields) total[field] += Math.max(0, record?.[field] || 0);
-  return total;
-}, zeroCounts());
-
-const adjustCounts = (bucket, counts, direction) => {
-  if (!bucket) return;
-  for (const field of countFields) {
-    const delta = direction * Math.max(0, counts?.[field] || 0);
-    // A zero delta must not stamp a new key onto a pre-existing bucket.
-    if (!delta && bucket[field] == null) continue;
-    bucket[field] = Math.max(0, (bucket[field] || 0) + delta);
-  }
-};
-
 /**
  * The estimated share of a bucket's counts, kept beside them as `estimated`.
  * The native usage overlay (lib/nativeUsageOverlay.js) replaces a provider
@@ -546,17 +422,6 @@ function rememberRepairIds(ids) {
   }
 }
 
-const BACKFILL_YIELD_INTERVAL = 25;
-const yieldToEventLoop = () => new Promise((resolve) => setImmediate(resolve));
-
-const rebuildDayTotals = (day) => {
-  const providers = Object.values(day.byProvider || {});
-  day.sessions = providers.reduce((sum, provider) => sum + (provider.sessions || 0), 0);
-  day.messages = providers.reduce((sum, provider) => sum + (provider.messages || 0), 0);
-  day.tokensIn = providers.reduce((sum, provider) => sum + (provider.tokensIn || 0), 0);
-  day.tokensOut = providers.reduce((sum, provider) => sum + (provider.tokensOut || 0), 0);
-  day.tokens = day.tokensOut;
-};
 
 /**
  * Run ids whose completion accounting has already landed. Kept with usage.json
@@ -666,148 +531,6 @@ function addUsageRecord(day, record) {
   }
 }
 
-const isParentCorrectionPending = (correction) => Boolean(correction?.measured)
-  && !usageData.reconciledRuns[correction.runId]
-  && (correction.unrecorded === true || Boolean(usageData.dailyActivity?.[correction.day]?.byProvider?.[correction.providerId]));
-
-const isSiblingCorrectionPending = (correction) => (correction?.siblings?.length > 0)
-  && !usageData.siblingReconciledRuns[correction.runId];
-
-// Transcript-derived provider ids and model names index the same plain-object
-// maps as live recording, so a correction naming a prototype key is skipped.
-const isUsableCorrectionRecord = (record) => !record
-  || ((!record.providerId || isUsageKey(record.providerId)) && (!record.model || usageModelKey(record.model) !== null));
-
-function isEligibleCorrection(correction) {
-  const { runId, day: dayKey, providerId } = correction || {};
-  if (!runId || !dayKey || !providerId) return false;
-  if (POLLUTING_KEYS.has(runId) || POLLUTING_KEYS.has(dayKey) || !isUsageKey(providerId)) return false;
-  const records = [correction, ...[correction.measured].flat(), ...(correction.siblings || [])];
-  if (!records.every(isUsableCorrectionRecord)) return false;
-  return isParentCorrectionPending(correction) || isSiblingCorrectionPending(correction);
-}
-
-// Snapshots each bucket before the batch touches it and sums the estimates the
-// batch removes from it, so `settleCorrectedSources` can tell a bucket whose
-// every estimate was replaced (`measured`) from one still holding other runs'
-// estimates (`mixed`). Keyed by bucket object: one day/provider/model, one bucket.
-function trackEstimateRemoval(scopes, bucket, estimate) {
-  if (!scopes.has(bucket)) scopes.set(bucket, { original: recordTotals([bucket]), removed: recordTotals([]) });
-  adjustCounts(scopes.get(bucket).removed, estimate, 1);
-}
-
-async function collectEstimateScopes(eligible) {
-  const scopes = new Map();
-  for (const [index, correction] of eligible.entries()) {
-    if (index > 0 && index % BACKFILL_YIELD_INTERVAL === 0) await yieldToEventLoop();
-    if (!isParentCorrectionPending(correction) || correction.unrecorded) continue;
-    const providerDay = usageData.dailyActivity[correction.day].byProvider[correction.providerId];
-    trackEstimateRemoval(scopes, providerDay, correction.estimate);
-    const modelDay = correction.model ? providerDay.byModel?.[correction.model] : null;
-    if (modelDay) trackEstimateRemoval(scopes, modelDay, correction.estimate);
-  }
-  return scopes;
-}
-
-function settleCorrectedSources(scopes) {
-  for (const [bucket, { original, removed }] of scopes) {
-    const hasResidual = countFields.some((field) => (original[field] || 0) > (removed[field] || 0));
-    bucket.source = hasUsageCounts(bucket) ? (hasResidual ? 'mixed' : 'measured') : null;
-  }
-}
-
-// A sibling-only correction can target a day that has no bucket for the
-// PARENT provider (the run may predate provider/model breakdowns entirely),
-// so the day itself is created on demand rather than required.
-function correctionDay(dayKey) {
-  if (!usageData.dailyActivity[dayKey]) {
-    usageData.dailyActivity[dayKey] = { sessions: 0, messages: 0, tokens: 0, byProvider: {} };
-    cacheActivityDay(dayKey);
-  }
-  return usageData.dailyActivity[dayKey];
-}
-
-function replaceEstimateWithMeasured(providerDay, { model, estimate, measured }) {
-  const measuredRecords = [measured].flat();
-  adjustCounts(providerDay, estimate, -1);
-  adjustCounts(model ? providerDay.byModel?.[model] : null, estimate, -1);
-  if (providerDay?.estimated) adjustCounts(providerDay.estimated, estimate, -1);
-  const estimatedModel = model ? providerDay?.byModel?.[model] : null;
-  if (estimatedModel?.estimated) adjustCounts(estimatedModel.estimated, estimate, -1);
-  for (const record of measuredRecords) {
-    adjustCounts(providerDay, record, 1);
-    if (!record?.model) continue;
-    const target = modelDayBucket(providerDay, record.model);
-    const hadCounts = hasUsageCounts(target);
-    adjustCounts(target, record, 1);
-    target.source = hadCounts ? mergeSource(target.source, 'measured') : 'measured';
-  }
-  return measuredRecords;
-}
-
-// All-time rollups only hold messages and tokens, so the parent swap moves them
-// by the measured-minus-estimate delta. Input carries the measured cache tiers.
-function applyAllTimeCorrection({ providerId, model, estimate }, measuredRecords) {
-  const measuredTotals = recordTotals(measuredRecords);
-  const delta = {
-    messages: measuredTotals.messages - (estimate?.messages || 0),
-    tokensIn: measuredTotals.tokensIn + measuredTotals.cacheReadTokens + measuredTotals.cacheWriteTokens
-      - (estimate?.tokensIn || 0),
-    tokensOut: measuredTotals.tokensOut - (estimate?.tokensOut || 0)
-  };
-  usageData.totalMessages = Math.max(0, (usageData.totalMessages || 0) + delta.messages);
-  usageData.totalTokens.input = Math.max(0, (usageData.totalTokens.input || 0) + delta.tokensIn);
-  usageData.totalTokens.output = Math.max(0, (usageData.totalTokens.output || 0) + delta.tokensOut);
-
-  const allProvider = usageData.byProvider?.[providerId];
-  if (allProvider) {
-    allProvider.messages = Math.max(0, (allProvider.messages || 0) + delta.messages);
-    allProvider.tokens = Math.max(0, (allProvider.tokens || 0) + delta.tokensOut);
-  }
-  const estimatedModel = model ? usageData.byModel?.[model] : null;
-  if (estimatedModel) {
-    estimatedModel.messages = Math.max(0, (estimatedModel.messages || 0) - (estimate?.messages || 0));
-    estimatedModel.tokens = Math.max(0, (estimatedModel.tokens || 0) - (estimate?.tokensOut || 0));
-  }
-  for (const record of measuredRecords) {
-    if (!record?.model) continue;
-    usageData.byModel[record.model] ??= { sessions: 0, messages: 0, tokens: 0 };
-    usageData.byModel[record.model].messages += record.messages || 0;
-    usageData.byModel[record.model].tokens += record.tokensOut || 0;
-  }
-}
-
-// Routed by `record.providerId`, never the run's provider: a nested grok
-// review inside a Claude run is grok's spend. There is no estimate to
-// remove — nothing ever recorded these tokens at all.
-function addSiblingRecords(day, siblings) {
-  for (const record of siblings) {
-    if (!record?.providerId) continue;
-    addUsageRecord(day, record);
-    rememberRepairIds(record.repairIds);
-  }
-}
-
-/**
- * Replace historical per-run estimates with transcript measurements, and add
- * the nested-CLI sessions a run's own provider never accounted for.
- *
- * Two independent halves, each with its own idempotency marker:
- *
- *   PARENT (`estimate` + `measured`, keyed by `reconciledRuns`) — the original
- *     estimate is subtracted from the exact configured provider/model bucket
- *     that received it, then the measured records are added.
- *   SIBLING (`siblings`, keyed by `siblingReconciledRuns`) — a nested reviewer
- *     CLI's session is a pure ADDITION to ITS OWN provider's bucket. It has no
- *     estimate to remove (nothing ever recorded it), and it must never land in
- *     the parent's bucket — that is exactly the mis-attribution #5831 fixes.
- *     A sibling-only correction therefore does not require a pre-existing day
- *     bucket for the parent provider; the target bucket is created on demand.
- *
- * Flat day totals are rebuilt from the provider split so report residual
- * reconciliation cannot resurrect the removed estimate as a synthetic legacy row.
- */
-
 async function applyHistoricalUsageCorrectionsDraft(corrections = [], { interactiveScan = null, expectedRevision } = {}) {
   if (!usageData) await loadUsageDraft();
   if (expectedRevision !== undefined && expectedRevision !== usageData.lastUpdated) {
@@ -816,51 +539,9 @@ async function applyHistoricalUsageCorrectionsDraft(corrections = [], { interact
     });
   }
   await loadDraftRunMarkers(corrections.map((correction) => correction?.runId).filter((id) => typeof id === 'string' && id));
-  usageData.reconciledRuns ??= {};
-  // Additive: absent on every install that predates the sibling scan, which
-  // reads as "no run has had its nested sessions attributed yet".
-  usageData.siblingReconciledRuns ??= {};
-  const eligible = corrections.filter(isEligibleCorrection);
-  if (eligible.some((correction) => correction.unrecorded)) await refreshDayKeyTimezone();
-  const scopes = await collectEstimateScopes(eligible);
-  const correctedRunIds = [];
-
-  for (const [index, correction] of eligible.entries()) {
-    if (index > 0 && index % BACKFILL_YIELD_INTERVAL === 0) await yieldToEventLoop();
-    const { runId } = correction;
-    const applyParent = isParentCorrectionPending(correction);
-    const applySiblings = isSiblingCorrectionPending(correction);
-    const day = correctionDay(correction.unrecorded
-      ? todayInTimezone(dayKeyTimezone, new Date(correction.endTime)) : correction.day);
-
-    if (applyParent) {
-      if (correction.unrecorded) {
-        for (const record of correction.measured) addUsageRecord(day, record);
-        if (correction.deferredSession) {
-          const at = new Date(correction.startTime);
-          applySessionCounts(correction.providerId, correction.providerName, correction.model,
-            correctionDay(todayInTimezone(dayKeyTimezone, at)), at);
-        }
-      } else {
-        const measuredRecords = replaceEstimateWithMeasured(day.byProvider[correction.providerId], correction);
-        applyAllTimeCorrection(correction, measuredRecords);
-      }
-      usageData.reconciledRuns[runId] = new Date().toISOString();
-    }
-    if (applySiblings) addSiblingRecords(day, correction.siblings);
-    // Same save as the counts. A later Grok repair skips any id recorded here,
-    // so a turn billed with its long-context subset is not billed again.
-    rememberRepairIds(correction.repairIds);
-    // Marked whenever this run's sibling pass actually ran — including a run
-    // whose only correction was the parent swap — so a second backfill can't
-    // add the same nested session twice.
-    if (correction.siblingScanned) usageData.siblingReconciledRuns[runId] = new Date().toISOString();
-
-    rebuildDayTotals(day);
-    correctedRunIds.push(runId);
-  }
-
-  settleCorrectedSources(scopes);
+  const correctedRunIds = await correctUsageDraft(usageData, corrections, {
+    refreshDayKeyTimezone, modelDayBucket, addUsageRecord, applySessionCounts, rememberRepairIds,
+  });
   // The scan watermark rides the same write as the counts it covers, so a crash
   // cannot leave billed counts without the watermark that stops a re-bill.
   if (interactiveScan) usageData.interactiveScan = structuredClone(interactiveScan);
@@ -875,12 +556,13 @@ let dayKeyTimezone = 'UTC';
 
 async function refreshDayKeyTimezone() {
   dayKeyTimezone = await getUserTimezone();
+  return dayKeyTimezone;
 }
 
 function todayBucket(at) {
   const today = todayInTimezone(dayKeyTimezone, at);
   const dailyActivity = mutableUsageChild(usageData, 'dailyActivity');
-  if (!dailyActivity[today]) cacheActivityDay(today);
+  if (!dailyActivity[today]) cacheActivityDay(usageData, today);
   return mutableUsageChild(dailyActivity, today, () => ({ sessions: 0, messages: 0, tokens: 0 }));
 }
 
@@ -1088,12 +770,9 @@ async function addDatedUsageDraft(dayKey, record, { repairId = null, flush = tru
   if (!DAY_KEY_RE.test(dayKey || '') || !record) return false;
   if (!usageData) await loadUsageDraft();
   if (repairId && grokRepairIndex.has(repairId)) return false;
-  if (!usageData.dailyActivity[dayKey]) {
-    usageData.dailyActivity[dayKey] = { sessions: 0, messages: 0, tokens: 0, byProvider: {} };
-    cacheActivityDay(dayKey);
-  }
-  addUsageRecord(usageData.dailyActivity[dayKey], record);
-  rebuildDayTotals(usageData.dailyActivity[dayKey]);
+  const day = datedUsageDay(usageData, dayKey);
+  addUsageRecord(day, record);
+  rebuildDayTotals(day);
   if (repairId) rememberRepairIds([repairId]);
   if (flush) await saveUsage();
   return true;
@@ -1175,154 +854,12 @@ export function getLimitBlocks() {
   return Array.isArray(events) ? [...events] : [];
 }
 
-const blockDayOf = (at) => {
-  const ms = typeof at === 'number' ? at : Date.parse(at);
-  if (!Number.isFinite(ms)) return null;
-  return new Date(ms).toISOString().slice(0, 10);
-};
-
-/**
- * Ledger volume for one provider since a block's day (inclusive): the
- * heuristic half of the free-tier "estimated remaining" signal — how much has
- * run since the provider last refused. Null when the block carries no usable
- * timestamp (unknown, never zero-collapsed). Pure.
- */
-export function providerVolumeSinceBlock(dailyActivity, monthlyActivity, providerId, day) {
-  if (!day || !providerId) return null;
-  const totals = { sessions: 0, messages: 0, tokensIn: 0, tokensOut: 0 };
-  const add = (bucket) => {
-    const p = bucket?.byProvider?.[providerId];
-    if (!p) return;
-    totals.sessions += p.sessions || 0;
-    totals.messages += p.messages || 0;
-    totals.tokensIn += p.tokensIn || 0;
-    totals.tokensOut += p.tokensOut || 0;
-  };
-  for (const [key, bucket] of Object.entries(monthlyActivity || {})) {
-    if (key > day.slice(0, 7)) add(bucket);
-  }
-  for (const [key, bucket] of Object.entries(dailyActivity || {})) {
-    if (DAY_KEY_RE.test(key) && key >= day) add(bucket);
-  }
-  return totals;
+export function getUsageSummary(options) {
+  return buildUsageSummary(committedUsage, todayInTimezone(dayKeyTimezone), summaryCache, options);
 }
 
-export { buildUsageReport };
-
-/** The trailing seven calendar days, oldest first, each filled from `dailyActivity` (zeros when absent). */
-function buildLast7Days(dailyActivity, today) {
-  const last7Days = [];
-  // Encode the local calendar date in UTC for day arithmetic across DST.
-  const date = new Date(`${today}T00:00:00Z`);
-  date.setUTCDate(date.getUTCDate() - 6);
-  for (let i = 0; i < 7; i++) {
-    const dateStr = date.toISOString().slice(0, 10);
-    const { sessions = 0, messages = 0, tokens = 0 } = dailyActivity?.[dateStr] || {};
-    last7Days.push({ date: dateStr, label: date.toLocaleDateString('en-US', { weekday: 'short', timeZone: 'UTC' }), sessions, messages, tokens });
-    date.setUTCDate(date.getUTCDate() + 1);
-  }
-  return last7Days;
-}
-
-/**
- * Get usage summary. Optional `range` selects the cost-report window:
- * `{ from, to }` as inclusive YYYY-MM-DD strings (null = unbounded), plus the
- * live `providers` config list for free-classification.
- */
-export function getUsageSummary({ from = null, to = null, providers = [] } = {}) {
-  const today = todayInTimezone(dayKeyTimezone);
-  const usageData = withNativeUsage(committedUsage, providers);
-  if (!usageData) {
-    const empty = getEmptyUsage();
-    const last7Days = buildLast7Days({}, today);
-    return {
-      ...empty,
-      last7Days,
-      estimatedCost: 0,
-      topProviders: [],
-      topModels: [],
-      report: buildUsageReport({}, { from, to, providers, monthlyActivity: {} }),
-      freeTier: { providers: [], blocks: [], basis: 'ledger' }
-    };
-  }
-
-  const cacheKey = JSON.stringify({
-    day: today,
-    from,
-    to,
-    native: nativeUsageSignature(),
-    providers: providers.map((provider) => ({
-      id: provider.id,
-      name: provider.name,
-      free: isFreeProvider(provider),
-      family: familyForProvider(provider)
-    }))
-  });
-  const cached = summaryCache.get(cacheKey);
-  if (cached) return cached;
-
-  const last7Days = buildLast7Days(usageData.dailyActivity, today);
-
-  const report = buildUsageReport(usageData.dailyActivity, {
-    from,
-    to,
-    providers,
-    monthlyActivity: usageData.monthlyActivity,
-    totalTokens: from || to ? null : usageData.totalTokens
-  });
-  const allTimeReport = from || to
-    ? buildUsageReport(usageData.dailyActivity, {
-        providers,
-        monthlyActivity: usageData.monthlyActivity,
-        totalTokens: usageData.totalTokens
-      })
-    : report;
-
-  const summary = {
-    totalSessions: usageData.totalSessions,
-    totalMessages: usageData.totalMessages,
-    totalToolCalls: usageData.totalToolCalls,
-    totalTokens: usageData.totalTokens,
-    // Backward-compatible field, now sourced from the same complete,
-    // per-model/fallback-priced report as the headline instead of a second
-    // contradictory blended-rate calculation.
-    estimatedCost: allTimeReport.totals.estimatedCost,
-    last7Days,
-    hourlyActivity: usageData.hourlyActivity,
-    topProviders: Object.entries(usageData.byProvider)
-      .map(([id, data]) => ({ id, ...data }))
-      .sort((a, b) => b.sessions - a.sessions)
-      .slice(0, 5),
-    topModels: Object.entries(usageData.byModel)
-      .map(([model, data]) => ({ model, ...data }))
-      .sort((a, b) => b.sessions - a.sessions)
-      .slice(0, 5),
-    report,
-    // Free-tier counterpart of the paid cost report: the report rows already
-    // free-classified (local inference, Zen quota), plus the observed limit
-    // blocks with ledger volume since each — the estimated-quota signal for
-    // providers that expose no usage API. `basis: 'ledger'` is the card's
-    // stated provenance (see UsagePage's free-tier section).
-    freeTier: {
-      providers: report.providers.filter((row) => row.free),
-      blocks: getLimitBlocks().slice(-20).map((event) => ({
-        ...event,
-        volumeSince: providerVolumeSinceBlock(
-          usageData.dailyActivity,
-          usageData.monthlyActivity,
-          event.providerId,
-          blockDayOf(event.at)
-        )
-      })),
-      basis: 'ledger'
-    },
-    lastUpdated: usageData.lastUpdated
-  };
-  if (summaryCache.size >= SUMMARY_CACHE_LIMIT) {
-    summaryCache.delete(summaryCache.keys().next().value);
-  }
-  summaryCache.set(cacheKey, summary);
-  return summary;
+export function buildUsageDigest(source = getUsage(), options) {
+  return digestUsage(source, options);
 }
 
 /**
@@ -1335,63 +872,6 @@ async function resetUsageDraft() {
   if (committedUsage) usageData.lastUpdated = committedUsage.lastUpdated;
   await saveUsage({ previous: null, reset: true });
   return true;
-}
-
-/**
- * How many days of PER-DAY granularity ride the federated usage digest. Older
- * days are folded into their month bucket for the WIRE ONLY — the local file
- * keeps its own (much longer) `ROLLUP_RETENTION_DAYS` window untouched, and a
- * local report always reads the live maps.
- *
- * The cap exists because the digest is re-fetched by every peer whenever local
- * usage moves (which is every AI run). All-time totals stay exact either way —
- * folding a day into its month preserves every count, just at coarser
- * granularity, which is all a fleet-level report needs for old periods.
- */
-const DIGEST_DAILY_RETENTION_DAYS = 120;
-
-/**
- * Build the federated wire shape for this instance's usage: aggregate counters
- * only — provider ids, model ids, token counts, timestamps. No prompts, no
- * transcripts, no record contents, no PII.
- *
- * Two fields of `usageData` are deliberately absent. `reconciledRuns` is
- * idempotency bookkeeping keyed by LOCAL run ids — meaningless on a peer and
- * the largest field in the file. All-time `byProvider`/`byModel` are a coarser
- * restatement of what the day buckets already carry, which is what a fleet
- * report actually aggregates.
- *
- * Pure: only the buckets that survive the wire rollup are copied, so the
- * caller's `usageData` is untouched and old days aren't cloned to be discarded.
- */
-export function buildUsageDigest(source = getUsage(), { retentionDays = DIGEST_DAILY_RETENTION_DAYS, now = new Date() } = {}) {
-  // Shallow copy first: the rollup DELETES the days it folds away, so it runs
-  // over our own map of references while only READING the buckets themselves.
-  // Deep-cloning afterwards therefore copies just the days that survived,
-  // instead of copying the whole history to throw most of it away.
-  const surviving = { ...(source?.dailyActivity || {}) };
-  const monthlyActivity = structuredClone(source?.monthlyActivity || {});
-  rollupOldDailyActivity(surviving, monthlyActivity, { retentionDays, now });
-  const dailyActivity = structuredClone(surviving);
-
-  const hourly = Array.isArray(source?.hourlyActivity) ? source.hourlyActivity : [];
-  return {
-    totalSessions: source?.totalSessions || 0,
-    totalMessages: source?.totalMessages || 0,
-    totalToolCalls: source?.totalToolCalls || 0,
-    totalTokens: {
-      input: source?.totalTokens?.input || 0,
-      output: source?.totalTokens?.output || 0
-    },
-    dailyActivity,
-    monthlyActivity,
-    hourlyActivity: Array.from({ length: 24 }, (_, i) => hourly[i] || 0),
-    earliestActivityDay: findEarliestActivityDay(dailyActivity, monthlyActivity),
-    // The instant this instance last recorded usage. Doubles as the digest's
-    // LWW stamp on the wire. Local-only claim compaction leaves the stamp
-    // untouched, so peers keep the same digest while the counters are unchanged.
-    lastUpdated: source?.lastUpdated ?? null
-  };
 }
 
 export async function loadUsage({ includeRepairEvidence = false } = {}) {

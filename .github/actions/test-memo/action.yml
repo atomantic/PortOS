@@ -22,6 +22,10 @@ inputs:
       from all shards. Up to 7.
     required: false
     default: '0'
+  merge-partitions:
+    description: JSON list of specific full-run shard indexes to merge, or [] for all when merge-shards is set.
+    required: false
+    default: '[]'
   partition-only:
     description: Limit the restore to the requested partition lineage.
     required: false
@@ -76,6 +80,7 @@ runs:
       id: restore-shard-1
       if: >-
         fromJSON(inputs.merge-shards) >= 1 &&
+        (inputs.merge-partitions == '[]' || contains(fromJSON(inputs.merge-partitions), 1)) &&
         !startsWith(steps.restore.outputs.cache-matched-key, format('test-memo-{0}-{1}-{2}-1of{3}-', runner.os, runner.arch, inputs.suite, inputs.merge-shards))
       uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
       with:
@@ -97,6 +102,7 @@ runs:
       id: restore-shard-2
       if: >-
         fromJSON(inputs.merge-shards) >= 2 &&
+        (inputs.merge-partitions == '[]' || contains(fromJSON(inputs.merge-partitions), 2)) &&
         !startsWith(steps.restore.outputs.cache-matched-key, format('test-memo-{0}-{1}-{2}-2of{3}-', runner.os, runner.arch, inputs.suite, inputs.merge-shards))
       uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
       with:
@@ -118,6 +124,7 @@ runs:
       id: restore-shard-3
       if: >-
         fromJSON(inputs.merge-shards) >= 3 &&
+        (inputs.merge-partitions == '[]' || contains(fromJSON(inputs.merge-partitions), 3)) &&
         !startsWith(steps.restore.outputs.cache-matched-key, format('test-memo-{0}-{1}-{2}-3of{3}-', runner.os, runner.arch, inputs.suite, inputs.merge-shards))
       uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
       with:
@@ -139,6 +146,7 @@ runs:
       id: restore-shard-4
       if: >-
         fromJSON(inputs.merge-shards) >= 4 &&
+        (inputs.merge-partitions == '[]' || contains(fromJSON(inputs.merge-partitions), 4)) &&
         !startsWith(steps.restore.outputs.cache-matched-key, format('test-memo-{0}-{1}-{2}-4of{3}-', runner.os, runner.arch, inputs.suite, inputs.merge-shards))
       uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
       with:
@@ -160,6 +168,7 @@ runs:
       id: restore-shard-5
       if: >-
         fromJSON(inputs.merge-shards) >= 5 &&
+        (inputs.merge-partitions == '[]' || contains(fromJSON(inputs.merge-partitions), 5)) &&
         !startsWith(steps.restore.outputs.cache-matched-key, format('test-memo-{0}-{1}-{2}-5of{3}-', runner.os, runner.arch, inputs.suite, inputs.merge-shards))
       uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
       with:
@@ -181,6 +190,7 @@ runs:
       id: restore-shard-6
       if: >-
         fromJSON(inputs.merge-shards) >= 6 &&
+        (inputs.merge-partitions == '[]' || contains(fromJSON(inputs.merge-partitions), 6)) &&
         !startsWith(steps.restore.outputs.cache-matched-key, format('test-memo-{0}-{1}-{2}-6of{3}-', runner.os, runner.arch, inputs.suite, inputs.merge-shards))
       uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
       with:
@@ -202,6 +212,7 @@ runs:
       id: restore-shard-7
       if: >-
         fromJSON(inputs.merge-shards) >= 7 &&
+        (inputs.merge-partitions == '[]' || contains(fromJSON(inputs.merge-partitions), 7)) &&
         !startsWith(steps.restore.outputs.cache-matched-key, format('test-memo-{0}-{1}-{2}-7of{3}-', runner.os, runner.arch, inputs.suite, inputs.merge-shards))
       uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
       with:

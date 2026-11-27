@@ -48,11 +48,13 @@ describe('enqueueRealesrganUpscale', () => {
     expect(mediaJobExecutionLane({ kind, mode: params.mode })).toBe('gpu');
   });
 
-  it('attributes a Music Video shot as a final take, selecting it over its source only when asked', async () => {
-    await enqueueRealesrganUpscale(SOURCE_ID, { musicVideoProjectId: 'mv-1', sceneId: 'mvs-1', selectOverSource: true });
+  it('attributes a Music Video shot as a final take, preserving shot-upscale selectOnComplete', async () => {
+    await enqueueRealesrganUpscale(SOURCE_ID, {
+      musicVideo: { projectId: 'mv-1', sceneId: 'mvs-1', tier: 'final', selectOnComplete: true },
+    });
     expect(mocks.enqueueJob.mock.calls[0][0].params).toMatchObject({
       musicVideoProjectId: 'mv-1',
-      musicVideo: { projectId: 'mv-1', sceneId: 'mvs-1', tier: 'final', selectOverSource: true },
+      musicVideo: { projectId: 'mv-1', sceneId: 'mvs-1', tier: 'final', selectOnComplete: true },
     });
     await enqueueRealesrganUpscale(SOURCE_ID, { musicVideoProjectId: 'mv-1', sceneId: 'mvs-1' });
     expect(mocks.enqueueJob.mock.calls[1][0].params.musicVideo).toEqual({ projectId: 'mv-1', sceneId: 'mvs-1', tier: 'final' });

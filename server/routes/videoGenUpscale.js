@@ -1,7 +1,7 @@
 /** Plan and run local (Lanczos, LTX, Real-ESRGAN) and cloud (fal SeedVR2, Topaz) video upscales. */
 
 import { Router } from 'express';
-import { asyncHandler, failValidation } from '../lib/errorHandler.js';
+import { asyncHandler, failValidation, ServerError } from '../lib/errorHandler.js';
 import { validateRequest } from '../lib/validateRequest.js';
 import { upscaleHistoryItem, planUpscaleHistoryItem } from '../services/videoGen/local.js';
 import { enqueueLtxUpscale } from '../services/videoGen/upscaleJob.js';
@@ -14,6 +14,12 @@ import { assertNoPendingTopaz, enqueueTopazUpscale, reconcileTopazStatus, recove
 import { historyIdSchema, topazJobParamsSchema, topazQuoteBodySchema, topazTokenBodySchema, upscaleMethodSchema } from '../lib/videoGenValidation.js';
 
 const router = Router();
+
+async function upscaleShot(historyId, { musicVideoProjectId, sceneId, ...options }) {
+  if (!musicVideoProjectId) throw new ServerError('A Music Video project is required for a shot upscale.', { status: 400, code: 'VALIDATION_ERROR' });
+  const { submitShotUpscale } = await import('../services/musicVideo/shotUpscale.js');
+  return submitShotUpscale(musicVideoProjectId, sceneId, historyId, options);
+}
 
 router.post('/upscale/:id/topaz/quote', asyncHandler(async (req, res) => {
   const parsed = historyIdSchema.safeParse(req.params.id);
@@ -42,7 +48,10 @@ router.post('/upscale/:id/topaz', asyncHandler(async (req, res) => {
   const parsed = historyIdSchema.safeParse(req.params.id);
   if (!parsed.success) failValidation(parsed);
   const body = validateRequest(topazTokenBodySchema, req.body ?? {});
-  res.json({ ok: true, job: await enqueueTopazUpscale(parsed.data, body.token) });
+  const result = body.sceneId
+    ? await upscaleShot(parsed.data, { ...body, method: 'fal-topaz', topazToken: body.token })
+    : { job: await enqueueTopazUpscale(parsed.data, body.token) };
+  res.json({ ok: true, ...result });
 }));
 
 // The explicit Real-ESRGAN setup (#19985): the only request that downloads the
@@ -76,6 +85,11 @@ router.post('/upscale/:id', asyncHandler(async (req, res) => {
   if (!parsed.success) failValidation(parsed);
   const body = upscaleMethodSchema.safeParse(req.body ?? {});
   if (!body.success) failValidation(body);
+  if (body.data.sceneId) {
+    const method = body.data.method === 'ltx' ? 'local-ltx25' : body.data.method;
+    res.json({ ok: true, ...await upscaleShot(parsed.data, { ...body.data, method }) });
+    return;
+  }
   if (body.data.method === 'ltx') {
     res.json({ ok: true, job: await enqueueLtxUpscale(parsed.data) });
     return;

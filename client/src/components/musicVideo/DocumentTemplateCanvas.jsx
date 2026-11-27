@@ -85,7 +85,8 @@ export default function DocumentTemplateCanvas({ project, data, figureRef, audio
       const video = [...(figureRef.current?.querySelectorAll('video[data-document-scene]') || [])].find(v => v.dataset.documentScene === scene.sceneId);
       if (footage) watchVideo(video);
       const sequence = !footage ? scenePhotoSequence(shot, options) : null;
-      let source = footage && video?.readyState >= 2 && !video.seeking ? video : image(shot?.referenceImageId);
+      const decodedClip = footage && video?.readyState >= 2 && !video.seeking;
+      let source = decodedClip ? video : image(shot?.referenceImageId);
       if (sequence?.stacked) {
         const layers = photoSequenceLayers(sequence, t, { fps });
         const loaded = layers.map(layer => image(sequence.imageIds[layer.index]));
@@ -105,15 +106,13 @@ export default function DocumentTemplateCanvas({ project, data, figureRef, audio
       } else if (sequence) source = image(sequence.imageIds[photoSequenceIndex(sequence, t, { fps })]);
       // Use the already-installed color-match filter, the same sRGB curve as the render.
       const filter = figureRef.current?.querySelector(`[data-document-color-match="${scene.sceneId.replace(/[^A-Za-z0-9_-]/g, '')}"]`)?.style.filter || null;
-      return { source, footage, effect: sceneImageEffect(shot, { layered: true }), end: image(shot?.endImageId), filter };
+      return { source, footage, decodedClip, pendingClip: footage && !decodedClip && !video?.error, effect: sceneImageEffect(shot, { layered: true }), end: image(shot?.endImageId), filter };
     };
     const raw = document.createElement('canvas'); raw.width = canvas.width; raw.height = canvas.height;
     const held = document.createElement('canvas'); held.width = canvas.width; held.height = canvas.height;
-    let heldScene = null;
-    const drawScene = (scene, t) => {
-      const media = scene ? sourceFor(scene, t) : {};
-      return drawing.scene(t, scene, media.source, { ...media, index: scenes.indexOf(scene) });
-    };
+    let heldScene = null, paintedClipScene = null;
+    const drawScene = (scene, t, media = scene ? sourceFor(scene, t) : {}) =>
+      drawing.scene(t, scene, media.source, { ...media, index: scenes.indexOf(scene) });
     const paint = () => {
       if (!active) return;
       for (const [video, pending] of videoFrames) if (!video.isConnected) {
@@ -125,6 +124,12 @@ export default function DocumentTemplateCanvas({ project, data, figureRef, audio
       const frame = Math.floor(t * fps + 1e-6);
       // Before the shot's own images, so the cache keeps those most recent.
       if (scene) preloadAfter(scene);
+      const media = scene ? sourceFor(scene, t) : {};
+      // A seek temporarily makes an already displayed clip undrawable. Keep
+      // the composed picture and its frame identity until the decoder catches
+      // up; the reference still is only a fallback before the clip is seen
+      // (or when it fails), not a frame from that clip.
+      if (media.pendingClip && paintedClipScene === scene.sceneId) return;
       const cut = scene?.wipe;
       if (cut && frame >= cut.cutFrame && frame < cut.cutFrame + cut.frames) {
         const outgoing = scenes.find(s => s.sceneId === cut.fromSceneId);
@@ -135,12 +140,12 @@ export default function DocumentTemplateCanvas({ project, data, figureRef, audio
           // waiting on media. Repaint it until a real last-frame hold is cached.
           heldScene = null;
         }
-        const fx = drawScene(scene, t);
+        const fx = drawScene(scene, t, media);
         raw.getContext('2d').drawImage(canvas, 0, 0);
         wipe(ctx, { outgoing: held, incoming: raw, style: cut.style, index: frame - cut.cutFrame, frames: cut.frames, color: cut.color || null, width: canvas.width, height: canvas.height });
         drawing.finish(t, fx, scene);
       } else {
-        const fx = drawScene(scene, t);
+        const fx = drawScene(scene, t, media);
         const nextWipe = wipeAfter.get(scene?.sceneId);
         // Keep the latest displayed outgoing picture even when playback drops
         // the last frame before the cut. Only scenes feeding a wipe need a copy.
@@ -153,6 +158,7 @@ export default function DocumentTemplateCanvas({ project, data, figureRef, audio
       if (selectedEffect) glitch(canvas, selectedEffect, frame);
       drawing.hud(t);
       canvas.dataset.songFrame = String(frame);
+      paintedClipScene = media.decodedClip ? scene.sceneId : null;
     };
     paintRef.current = paint;
     const tick = () => { paint(); handle = requestAnimationFrame(tick); };
@@ -162,7 +168,7 @@ export default function DocumentTemplateCanvas({ project, data, figureRef, audio
     audio.addEventListener('play', start); audio.addEventListener('pause', stop); audio.addEventListener('ended', stop);
     audio.addEventListener('seeking', onSeek); audio.addEventListener('seeked', onSeek);
     const figure = figureRef.current;
-    figure?.addEventListener('loadeddata', paint, true); figure?.addEventListener('seeked', paint, true);
+    for (const event of ['loadeddata', 'seeked', 'error']) figure?.addEventListener(event, paint, true);
     Promise.all(['900 40px "MV Stencil"', '400 20px "MV Mono"', '600 20px "MV Mono"'].map(font => document.fonts.load(font))).then(() => { if (active) paint(); });
     paint(); if (!audio.paused) start();
     return () => {
@@ -171,7 +177,7 @@ export default function DocumentTemplateCanvas({ project, data, figureRef, audio
       videoFrames.clear();
       audio.removeEventListener('play', start); audio.removeEventListener('pause', stop); audio.removeEventListener('ended', stop);
       audio.removeEventListener('seeking', onSeek); audio.removeEventListener('seeked', onSeek);
-      figure?.removeEventListener('loadeddata', paint, true); figure?.removeEventListener('seeked', paint, true);
+      for (const event of ['loadeddata', 'seeked', 'error']) figure?.removeEventListener(event, paint, true);
       for (const img of images.values()) img.onload = null;
     };
   }, [project, data, figureRef, audioRef]);

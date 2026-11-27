@@ -477,4 +477,7 @@ alike: ordinary PRs, release PRs, nightly and local. A red run still writes no
 test-memo entry, and the launcher's one-file retry of a native worker crash is kept
 (a recovered crash never masks a real failure elsewhere in the same run). Each attempt's
 `invocation.json`, `run.json`, `failures.json` and `processes.json` stay in the job's
-diagnostics directory for the failure summary. Job timeouts bound a badly broken PR.
+diagnostics directory for the failure summary. Windows native contracts also
+record the directly launched Vitest child's exit or close in `vitest-child.json`.
+This record can survive a missing reporter verdict. The failure summary identifies
+an unavailable child record explicitly. Job timeouts bound a badly broken PR.

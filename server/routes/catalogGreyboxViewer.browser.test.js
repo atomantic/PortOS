@@ -217,7 +217,8 @@ async function openEnvironment(fixture, { warmup = false } = {}) {
     phase('shot selection');
     await page.getByRole('button', { name: /Overhead/, pressed: false }).click();
     phase('shot lens synchronization');
-    await page.waitForFunction(() => document.querySelector('#greybox-lens')?.value === '28');
+    const lens = page.getByRole('slider', { name: /^Lens:/ });
+    await expect.poll(() => lens.inputValue(), { timeout: 10000 }).toBe('28');
     // Demand rendering and Html placement finish after React commits.
     phase('shot demand frames');
     await page.evaluate(() => new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve))));

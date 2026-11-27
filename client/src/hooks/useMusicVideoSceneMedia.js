@@ -116,6 +116,16 @@ export default function useMusicVideoSceneMedia({ project, videoSettings, applyS
     sceneLabel,
   });
 
+  const upscaleLane = useSceneRenderLifecycle({
+    completedEvent: 'video-gen:completed',
+    failedEvent: 'video-gen:failed',
+    canceledEvent: 'video-gen:canceled',
+    startedEvent: 'video-gen:started',
+    progressEvent: 'video-gen:progress',
+    failMessage: 'Shot upscale failed',
+    sceneLabel,
+  });
+
   // The server persists a failed scene render on the scene (#10154); fold it in
   // live so the card's "failed · Retry" chip appears without a refetch.
   const applyRef = useRef(applyScenePatch);
@@ -133,6 +143,7 @@ export default function useMusicVideoSceneMedia({ project, videoSettings, applyS
   const { restoreJobs: restoreFrameJobs, reconcileJobs: reconcileFrameJobs } = frameLane;
   const { restoreJobs: restoreVideoJobs, reconcileJobs: reconcileVideoJobs } = videoLane;
   const { restoreJobs: restoreEndFrameJobs, reconcileJobs: reconcileEndFrameJobs } = endFrameLane;
+  const { restoreJobs: restoreUpscaleJobs, reconcileJobs: reconcileUpscaleJobs } = upscaleLane;
   const onReconciledRef = useRef(onReconciled);
   onReconciledRef.current = onReconciled;
   useEffect(() => {
@@ -148,12 +159,13 @@ export default function useMusicVideoSceneMedia({ project, videoSettings, applyS
           if (!live || !Array.isArray(jobs) || requestId !== latest) return;
           restoreFrameJobs(jobs.filter((j) => j.lane === 'image'));
           restoreVideoJobs(jobs.filter((j) => j.lane === 'video'));
+          restoreUpscaleJobs(jobs.filter((j) => j.lane === 'upscale'));
           restoreEndFrameJobs(jobs.filter((j) => j.lane === 'endImage'));
           if (!reconnected) return;
           // Terminal events fired while the socket was down are never replayed: settle the
           // tracked jobs the server no longer lists, then reload so their finished takes land.
           const activeIds = jobs.map((j) => j.jobId);
-          const counts = await Promise.all([reconcileFrameJobs, reconcileVideoJobs, reconcileEndFrameJobs].map((reconcile) => reconcile(activeIds)));
+          const counts = await Promise.all([reconcileFrameJobs, reconcileVideoJobs, reconcileEndFrameJobs, reconcileUpscaleJobs].map((reconcile) => reconcile(activeIds)));
           if (live && counts.some((n) => n > 0)) onReconciledRef.current?.(projectId);
         })
         .catch(() => {}); // best-effort: a failed lookup just means no restored spinners
@@ -165,7 +177,7 @@ export default function useMusicVideoSceneMedia({ project, videoSettings, applyS
       live = false;
       socket.off('connect', onConnect);
     };
-  }, [projectId, restoreFrameJobs, restoreVideoJobs, restoreEndFrameJobs, reconcileFrameJobs, reconcileVideoJobs, reconcileEndFrameJobs]);
+  }, [projectId, restoreFrameJobs, restoreVideoJobs, restoreEndFrameJobs, reconcileFrameJobs, reconcileVideoJobs, reconcileEndFrameJobs, restoreUpscaleJobs, reconcileUpscaleJobs]);
   // The Casting media of every character linked from the catalog and every cast member
   // a shot names in its `characterVariant` (#12763), keyed by ingredient id: an array once loaded, null when the first load
   // failed, absent while pending. A shot's frames lead with that member's guides;
@@ -462,6 +474,8 @@ export default function useMusicVideoSceneMedia({ project, videoSettings, applyS
     sceneProgress: frameLane.sceneProgress,
     videoSceneProgress: videoLane.sceneProgress,
     videoSceneJobs: videoLane.sceneJobs,
+    upscaleSceneJobs: upscaleLane.sceneJobs,
+    trackShotUpscale: upscaleLane.trackJob,
     frameBatch,
     videoBatch,
     conditioning,

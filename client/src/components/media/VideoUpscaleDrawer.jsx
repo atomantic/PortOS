@@ -16,6 +16,7 @@
  * existing reactive local-state update (no refetch).
  */
 import { useState, useEffect, useCallback, useRef } from 'react';
+import { DEFAULT_FAL_SEEDVR2_TARGET_RESOLUTION, DEFAULT_REALESRGAN_MODEL, FAL_SEEDVR2_TARGET_RESOLUTIONS } from '../../../../server/lib/videoGenRequestFields.js';
 import { Loader2 } from 'lucide-react';
 import Drawer from '../Drawer';
 import toast from '../ui/Toast';
@@ -23,7 +24,6 @@ import { formatBytes, formatUsd } from '../../utils/formatters';
 import { isHardwareAvailable, hardwareUnavailableReason } from '../../utils/systemCapabilities';
 import { useSseProgress } from '../../hooks/useSseProgress';
 import { upscaleVideo, getUpscalePlan, upscaleAdapterDownloadUrl, quoteTopazUpscale, startTopazUpscale } from '../../services/apiImageVideo';
-import { DEFAULT_REALESRGAN_MODEL } from '../../../../server/lib/videoGenRequestFields.js';
 import RealesrganInstallButton from './RealesrganInstallButton';
 
 // The Real-ESRGAN weights the server can run (`REALESRGAN_MODEL_IDS`), in picker order.
@@ -32,15 +32,16 @@ const REALESRGAN_MODEL_OPTIONS = Object.freeze([
   { id: 'realesr-animevideov3', label: 'Animation (animevideov3)' },
 ]);
 
-/**
- * `musicVideo` (`{ projectId, sceneId }`, optional) attributes a queued upscale
- * to a Music Video shot, so the scene-video hook files the result as its final take.
- */
-export default function VideoUpscaleDrawer({ item, onClose, onUpscaled, musicVideo = null }) {
+export default function VideoUpscaleDrawer({
+  item, onClose, onUpscaled, onQueued, musicVideo = null, defaultMethod = 'lanczos',
+  defaultTargetResolution = DEFAULT_FAL_SEEDVR2_TARGET_RESOLUTION,
+}) {
   const open = !!item;
   const itemId = item?.id ?? null;
 
-  const [method, setMethod] = useState('lanczos');
+  const initialMethod = defaultMethod === 'local-ltx25' ? 'ltx' : defaultMethod === 'fal-topaz' ? 'topaz' : defaultMethod;
+  const [method, setMethod] = useState(initialMethod);
+  const [targetResolution, setTargetResolution] = useState(defaultTargetResolution);
   const [plan, setPlan] = useState(null);
   const [planLoading, setPlanLoading] = useState(false);
   const [planError, setPlanError] = useState(null);
@@ -69,7 +70,8 @@ export default function VideoUpscaleDrawer({ item, onClose, onUpscaled, musicVid
   // over onto a different clip.
   useEffect(() => {
     ++planRequestRef.current;
-    setMethod('lanczos');
+    setMethod(initialMethod);
+    setTargetResolution(defaultTargetResolution);
     setPlan(null);
     setPlanError(null);
     setFalPlan(null);
@@ -84,7 +86,7 @@ export default function VideoUpscaleDrawer({ item, onClose, onUpscaled, musicVid
     setQuoteError(null);
     setQuoting(false);
     setDownloadItemId(null);
-  }, [open, itemId]);
+  }, [open, itemId, initialMethod, defaultTargetResolution]);
 
   // The generative plan drives the radio's disabled state AND its disclosure
   // once picked, so fetch it as soon as the drawer opens rather than waiting
@@ -104,16 +106,17 @@ export default function VideoUpscaleDrawer({ item, onClose, onUpscaled, musicVid
   }, [open, itemId]);
 
   useEffect(() => {
-    if (!open || !itemId || method !== 'fal-seedvr2' || falPlan) return undefined;
+    if (!open || !itemId || method !== 'fal-seedvr2') return undefined;
     let cancelled = false;
     setFalPlanLoading(true);
     setFalPlanError(null);
-    getUpscalePlan(itemId, 'fal-seedvr2')
+    setFalPlan(null);
+    getUpscalePlan(itemId, 'fal-seedvr2', { targetResolution })
       .then((res) => { if (!cancelled) setFalPlan(res?.plan || null); })
       .catch((err) => { if (!cancelled) setFalPlanError(err.message || 'Could not check fal.ai SeedVR2 readiness'); })
       .finally(() => { if (!cancelled) setFalPlanLoading(false); });
     return () => { cancelled = true; };
-  }, [open, itemId, method, falPlan]);
+  }, [open, itemId, method, targetResolution]);
 
   // Read-only like the others: the plan stats the Real-ESRGAN install and its
   // receipt, and never downloads; only the Install button below does (#19985).
@@ -131,9 +134,12 @@ export default function VideoUpscaleDrawer({ item, onClose, onUpscaled, musicVid
   }, [open, itemId, method, realesrganModel, realesrganPlan]);
   const refreshRealesrganPlan = useCallback(() => setRealesrganPlan(null), []);
 
-  const falSeedvr2Ready = falPlan?.runtime?.installed === true && falPlan?.alreadyUpscaled !== true;
+  const falSeedvr2Ready = falPlan?.runtime?.installed === true && falPlan?.alreadyUpscaled !== true
+    && falPlan?.targetResolution === targetResolution && (musicVideo == null || falPlan.estimatedCostUsd != null);
   const realesrganRuntime = realesrganPlan?.runtime?.model?.id === realesrganModel ? realesrganPlan.runtime : null;
   const realesrganReady = realesrganRuntime?.installed === true && realesrganPlan?.alreadyUpscaled !== true;
+  const shotTarget = musicVideo?.projectId;
+  const sceneId = musicVideo?.sceneId;
   const runtimeReady = plan?.runtime?.installed === true;
   const adapterReady = plan?.adapter?.cached === true;
   // The base checkpoint is a third readiness axis (#6512): the venv and the
@@ -192,7 +198,7 @@ export default function VideoUpscaleDrawer({ item, onClose, onUpscaled, musicVid
   }, [dl.closed, dl.latest, downloading, itemId]);
 
   const handleSubmit = useCallback(async () => {
-    if (!itemId || submitting) return;
+    if (!itemId || submitting || item?.upscaledFrom) return;
     if (method === 'ltx' && !generativeReady) return;
     if (method === 'fal-seedvr2' && !falSeedvr2Ready) return;
     if (method === 'realesrgan' && !realesrganReady) return;
@@ -200,22 +206,20 @@ export default function VideoUpscaleDrawer({ item, onClose, onUpscaled, musicVid
     toast.loading(method === 'topaz'
       ? 'Queueing Topaz upscale…'
       : method === 'fal-seedvr2'
-        ? 'Queueing fal.ai SeedVR2 1080p upscale…'
+        ? `Queueing fal.ai SeedVR2 ${targetResolution} upscale…`
         : method === 'realesrgan'
           ? 'Queueing Real-ESRGAN 2× upscale…'
           : method === 'ltx'
             ? 'Upscaling 2× (generative)…'
             : 'Upscaling 2× — typically 10-30s…');
-    const attribution = musicVideo?.projectId && (method === 'fal-seedvr2' || method === 'realesrgan')
-      ? { musicVideoProjectId: musicVideo.projectId, ...(musicVideo.sceneId ? { sceneId: musicVideo.sceneId } : {}) }
-      : {};
+    const options = { silent: true, ...(shotTarget && sceneId ? { musicVideoProjectId: shotTarget, sceneId } : {}) };
     const result = await (method === 'topaz'
-      ? startTopazUpscale(itemId, quote?.token, { silent: true })
+      ? startTopazUpscale(itemId, quote?.token, options)
       : upscaleVideo(itemId, {
         method,
+        ...(method === 'fal-seedvr2' ? { targetResolution } : {}),
         ...(method === 'realesrgan' ? { realesrganModel } : {}),
-        ...attribution,
-        silent: true,
+        ...options,
       })).catch((err) => {
       toast.error(err.message || 'Upscale failed');
       return null;
@@ -226,16 +230,18 @@ export default function VideoUpscaleDrawer({ item, onClose, onUpscaled, musicVid
     // row, while the generative pass is a multi-minute GPU render that answers
     // with the queued job and lands in history when it completes.
     if (result?.job) {
+      onQueued?.(result.job);
       toast.success('Queued — watch it in the render queue');
       onClose();
       return;
     }
     if (result?.video) {
-      onUpscaled(result.video);
+      if (result.scene) onUpscaled?.(result.video, result.scene);
+      else onUpscaled?.(result.video);
       toast.success('Upscaled 2×');
       onClose();
     }
-  }, [itemId, method, quote, submitting, generativeReady, falSeedvr2Ready, realesrganReady, realesrganModel, musicVideo, onUpscaled, onClose]);
+  }, [itemId, item?.upscaledFrom, method, quote, submitting, generativeReady, falSeedvr2Ready, realesrganReady, realesrganModel, shotTarget, sceneId, targetResolution, onUpscaled, onQueued, onClose]);
 
   const getQuote = async () => {
     setQuoting(true);
@@ -335,8 +341,8 @@ export default function VideoUpscaleDrawer({ item, onClose, onUpscaled, musicVid
 
           <label htmlFor="upscale-method-fal-seedvr2" className="flex items-start gap-2 p-2 border border-port-border rounded cursor-pointer hover:border-port-accent/60">
             <input type="radio" id="upscale-method-fal-seedvr2" name="upscale-method" value="fal-seedvr2" checked={method === 'fal-seedvr2'} onChange={() => setMethod('fal-seedvr2')} className="mt-0.5" />
-            <span><span className="block text-sm text-white">SeedVR2 cloud 1080p (fal.ai, paid)</span>
-              <span className="block text-[11px] text-gray-500">Diffusion 1080p upscale on fal.ai (~$0.25/5s clip, ~2-3 min). Preserves faces and color.</span></span>
+            <span><span className="block text-sm text-white">SeedVR2 cloud (fal.ai, paid)</span>
+              <span className="block text-[11px] text-gray-500">Diffusion upscale billed per output megapixel across all frames.</span></span>
           </label>
 
           <label htmlFor="upscale-method-topaz" className="flex items-start gap-2 p-2 border border-port-border rounded cursor-pointer hover:border-port-accent/60">
@@ -348,11 +354,20 @@ export default function VideoUpscaleDrawer({ item, onClose, onUpscaled, musicVid
 
         {method === 'fal-seedvr2' && (
           <div className="p-2 border border-port-border rounded space-y-1 text-[11px] text-gray-400">
-            <p className="text-xs font-medium text-white">Before you submit</p>
+            <label htmlFor="upscale-target-resolution" className="text-xs font-medium text-white">Target resolution</label>
+            <select id="upscale-target-resolution" value={targetResolution} onChange={(event) => {
+              setFalPlan(null);
+              setTargetResolution(event.target.value);
+            }} className="ml-2 rounded border border-port-border bg-port-bg p-1">
+              {FAL_SEEDVR2_TARGET_RESOLUTIONS.map((resolution) => <option key={resolution}>{resolution}</option>)}
+            </select>
             {falPlanLoading && <p>Checking fal.ai readiness…</p>}
             {falPlanError && <p role="alert" className="text-port-error">{falPlanError}</p>}
             {falPlan && !falPlan.runtime?.installed && (
               <p role="alert" className="text-port-warning">{falPlan.runtime?.reason || 'Configure FAL_KEY in Settings → Credentials.'}</p>
+            )}
+            {musicVideo && falPlan?.runtime?.installed && falPlan.estimatedCostUsd == null && (
+              <p role="alert" className="text-port-warning">The selected clip could not be measured for a cost estimate.</p>
             )}
             {falPlan && falPlan.runtime?.installed && (
               <>
@@ -461,6 +476,7 @@ export default function VideoUpscaleDrawer({ item, onClose, onUpscaled, musicVid
           </div>
         )}
 
+        {item?.upscaledFrom && <p role="alert" className="text-xs text-port-warning">This clip is already upscaled. Select the original take to use a different method.</p>}
         <div className="flex justify-end gap-2 pt-2">
           <button
             type="button"
@@ -472,7 +488,7 @@ export default function VideoUpscaleDrawer({ item, onClose, onUpscaled, musicVid
           <button
             type="button"
             onClick={handleSubmit}
-            disabled={submitting || (method === 'ltx' && !generativeReady) || (method === 'fal-seedvr2' && !falSeedvr2Ready) || (method === 'realesrgan' && !realesrganReady) || (method === 'topaz' && (!quote || quoting))}
+            disabled={submitting || !!item?.upscaledFrom || (method === 'ltx' && !generativeReady) || (method === 'fal-seedvr2' && !falSeedvr2Ready) || (method === 'realesrgan' && !realesrganReady) || (method === 'topaz' && (!quote || quoting))}
             className="px-3 py-1.5 text-xs rounded bg-port-accent text-white hover:bg-port-accent/80 disabled:opacity-50 disabled:cursor-not-allowed flex items-center gap-1.5"
           >
             {submitting && <Loader2 className="w-3.5 h-3.5 animate-spin" />}

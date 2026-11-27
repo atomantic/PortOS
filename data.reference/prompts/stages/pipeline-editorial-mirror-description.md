@@ -17,11 +17,7 @@ someone *behind* them, a plot clue in the reflection), or a glance in a mirror
 that does NOT turn into a self-description. The bar is the description-delivery
 trick, not any mention of a mirror.
 
-## Manuscript
-
-The manuscript is stitched from the drafted issues. Section headers attribute
-each chunk to an issue (e.g. `# Issue 3 — Title (prose)`). Use the issue number
-in each section header to attribute every finding to its `issueNumber`.
+{{> editorial-manuscript-preamble }}
 
 ```
 {{manuscript}}
@@ -38,14 +34,7 @@ mirror — woven into action, noted by another character, or simply cut.
 Be specific and cite the text. If there are no mirror self-descriptions, return an
 empty `findings` array — do not invent problems.
 
-## Output contract
-
-Return ONLY valid JSON matching this shape — no prose, no markdown fence, no
-commentary:
-
-```json
-{
-  "findings": [
+{{> editorial-findings-contract }}
     {
       "severity": "high|medium|low",
       "issueNumber": 3,

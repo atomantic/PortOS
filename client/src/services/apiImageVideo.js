@@ -368,8 +368,8 @@ export const upscaleVideo = (id, { method, targetResolution, realesrganModel, mu
 export const quoteTopazUpscale = (id, model, options = {}) => request(`/video-gen/upscale/${encodeURIComponent(id)}/topaz/quote`, {
   method: 'POST', body: JSON.stringify({ model }), ...options,
 });
-export const startTopazUpscale = (id, token, options = {}) => request(`/video-gen/upscale/${encodeURIComponent(id)}/topaz`, {
-  method: 'POST', body: JSON.stringify({ token }), ...options,
+export const startTopazUpscale = (id, token, { musicVideoProjectId, sceneId, ...options } = {}) => request(`/video-gen/upscale/${encodeURIComponent(id)}/topaz`, {
+  method: 'POST', body: JSON.stringify({ token, musicVideoProjectId, sceneId }), ...options,
 });
 export const getTopazJobStatus = (id, options = {}) => request(`/video-gen/upscale/topaz/jobs/${encodeURIComponent(id)}/status`, options);
 export const cancelTopazRemoteJob = (id, options = {}) => request(`/video-gen/upscale/topaz/jobs/${encodeURIComponent(id)}/cancel`, { method: 'POST', ...options });
@@ -378,8 +378,12 @@ export const recoverTopazJob = (id, options = {}) => request(`/video-gen/upscale
 // required padding, and runtime/adapter readiness for `method`. Never queues a
 // job or triggers a download. `silent` by default — the picker owns its own
 // inline error state rather than a toast.
-export const getUpscalePlan = (id, method, { realesrganModel, ...options } = {}) => request(
-  `/video-gen/upscale/${encodeURIComponent(id)}/plan?method=${encodeURIComponent(method)}${realesrganModel ? `&realesrganModel=${encodeURIComponent(realesrganModel)}` : ''}`,
+export const getUpscalePlan = (id, method, { targetResolution, realesrganModel, ...options } = {}) => request(
+  `/video-gen/upscale/${encodeURIComponent(id)}/plan?${new URLSearchParams({
+    method,
+    ...(targetResolution ? { targetResolution } : {}),
+    ...(realesrganModel ? { realesrganModel } : {}),
+  })}`,
   { silent: true, ...options },
 );
 // POST SSE stream for the explicit Real-ESRGAN setup (#19985): downloads the

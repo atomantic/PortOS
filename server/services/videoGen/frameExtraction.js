@@ -4,7 +4,6 @@ import { existsSync, statSync } from 'fs';
 import { join } from 'path';
 import { randomUUID } from 'crypto';
 import { tmpdir } from 'os';
-import { spawn } from '../../lib/childProcess.js';
 import { ensureDir, PATHS, UUID_RE, tryReadFile, copyFileGuarded, writeFileGuarded, unlinkGuarded, rmGuarded } from '../../lib/fileUtils.js';
 import { ServerError } from '../../lib/errorHandler.js';
 import {
@@ -13,7 +12,6 @@ import {
 import {
   TAIL_WINDOW_SECONDS, CANDIDATE_FPS, MAX_CANDIDATES, pickBestFrame,
 } from '../../lib/frameQuality.js';
-import { safeChildProcessOptions } from '../../lib/processEnv.js';
 import { loadHistory } from './history.js';
 
 const UPLOADED_HISTORY_ID_RE = /^upload-[a-f0-9]{8}$/i;
@@ -267,47 +265,25 @@ async function extractLastFrameUncoalesced(historyId) {
     console.log(`⚠️ No usable anchor among ${candidates.length} tail candidates for ${item.id.slice(0, 8)} — falling back to the end seek`);
   }
 
-  return new Promise((resolve, reject) => {
-    // -sseof -1.0 seeks 1s before end. The previous -0.1 was too tight on
-    // videos with audio (B-frames + AV mux push the last keyframe earlier
-    // than 100 ms from EOF), and ffmpeg silently returned 0 frames while
-    // sometimes still exiting 0 — leaving a phantom-success log + missing
-    // file. The output file gets a -update 1 flag so ffmpeg overwrites
-    // any partial file from a prior failed run instead of erroring.
-    const proc = spawn(ffmpeg, ['-sseof', '-1.0', '-i', videoPath, '-update', '1', '-vframes', '1', '-q:v', '2', '-y', framePath], safeChildProcessOptions({ stdio: 'ignore' }));
-    proc.on('close', async (code) => {
-      // Wrap the body so a throw (e.g. writeSidecar) routes to reject() instead
-      // of leaking an unhandled rejection AND leaving this Promise forever
-      // pending — the executor only settles via the explicit resolve/reject.
-      try {
-        // safeStatSize swallows throws so the async handler can't leak an
-        // unhandled rejection on transient stat errors — null is treated as
-        // "extraction failed".
-        const writtenSize = safeStatSize(framePath);
-        if (code !== 0 || writtenSize == null || writtenSize === 0) {
-          // A 0-byte file is a partial extraction, not a cache-worthy result —
-          // delete it so the next call retries instead of returning a broken
-          // image from the cache hit above.
-          if (writtenSize === 0) await unlinkGuarded(framePath).catch(() => {});
-          return reject(new ServerError('Failed to extract last frame', { status: 500, code: 'FFMPEG_FAILED' }));
-        }
-        // A scan that RAN and found nothing usable is a property of the clip —
-        // cache it. Everything else reaching here is transient (the scan could
-        // not run, or a winner was found and the install failed), and caching it
-        // would pin this degraded frame forever behind the size>0 cache hit.
-        // Key on what actually happened, not merely on candidate count.
-        await writeSidecar(candidates.length && !best ? 'last-frame' : UNSCANNED_ANCHOR);
-        console.log(`🎞️ Anchor frame via end-seek fallback: ${frameFilename}`);
-        resolve({ filename: frameFilename, path: `/data/images/${frameFilename}` });
-      } catch (err) {
-        reject(err instanceof ServerError ? err : new ServerError(`Failed to extract last frame: ${err.message}`, { status: 500, code: 'FFMPEG_FAILED' }));
-      }
-    });
-    proc.on('error', (err) => {
-      reject(new ServerError(`ffmpeg failed to spawn: ${err.message}`, { status: 500, code: 'FFMPEG_FAILED' }));
-    });
+  // Seek a full second back so B-frames and audio muxing do not push the
+  // last usable keyframe outside the seek window.
+  const fallback = await runFfmpegProcess({
+    bin: ffmpeg,
+    args: ['-sseof', '-1.0', '-i', videoPath, '-update', '1', '-vframes', '1', '-q:v', '2', '-y', framePath],
+    timeoutMs: 30_000,
   });
+  if (!fallback.ok || !safeStatSize(framePath)) {
+    // A failed or interrupted encode may leave a nonempty partial PNG.
+    await unlinkGuarded(framePath).catch(() => {});
+    throw new ServerError('Failed to extract last frame', { status: 500, code: 'FFMPEG_FAILED' });
+  }
+  // A scan that found no usable candidates can be cached. A fallback
+  // after a transient scan or install failure should be retried later.
+  await writeSidecar(candidates.length && !best ? 'last-frame' : UNSCANNED_ANCHOR);
+  console.log(`🎞️ Anchor frame via end-seek fallback: ${frameFilename}`);
+  return { filename: frameFilename, path: `/data/images/${frameFilename}` };
 }
+
 
 // Sample N evenly-spaced frames from a video for multi-frame LLM evaluation.
 // Thin wrapper around the canonical lib/ffmpeg.js helper `extractEvaluationFrames`

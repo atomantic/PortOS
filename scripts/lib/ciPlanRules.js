@@ -76,12 +76,12 @@ const FULL_TRIGGER_RULES = [
   { re: /^server\/vitest\.setup\.js$/, reason: 'server test setup changed', windowsRelevant: true },
   // Client-only: windows-server never loads the client setup file.
   { re: /^client\/src\/test\/setup\.js$/, reason: 'client test setup changed', windowsRelevant: false },
-  // Biome config + the client's GritQL plugins (the former client/eslint.config.js).
+  // Biome configs and their enforced GritQL plugins.
   // The .grit files carry real enforced rules — notably the crypto.randomUUID ban —
   // so a change there is as load-bearing as a change to the config itself. The
-  // repo-root biome.jsonc is the same kind of gate for scripts/, lib/ and
-  // autofixer/. The Windows job runs no lint.
-  { re: /^(?:client\/(?:biome\.jsonc|[^/]+\.grit)|biome\.jsonc)$/, reason: 'lint configuration changed', windowsRelevant: false },
+  // server and repo-root rules also have fixture coverage in the server suite.
+  // The Windows job runs no lint.
+  { re: /^(?:(?:client\/|server\/)?biome\.jsonc|client\/[^/]+\.grit|(?:server\/)?lint-[^/]+\.grit)$/, reason: 'lint configuration changed', windowsRelevant: false },
   // Client-only: the Windows job builds no client bundle.
   { re: /^client\/vite\.config\.js$/, reason: 'client build configuration changed', windowsRelevant: false },
   { re: /^server\/index\.js$/, reason: 'server composition root changed', windowsRelevant: true },
@@ -137,6 +137,7 @@ export const WINDOWS_RISK_RULES = [
 // one shared process helper must not pull all its application consumers onto
 // Windows. Full, scheduled and release plans retain this same native set.
 export const WINDOWS_CONTRACT_TESTS = [
+  'scripts/ci-test-diagnostics.test.js',
   'scripts/update-headless-recovery.test.js',
   'scripts/update-submodules.test.js',
   // Launch, prompt transport, executable discovery and environment/cwd safety.

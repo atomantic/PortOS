@@ -1,5 +1,5 @@
 import { spawnSync } from 'node:child_process';
-import { mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { delimiter, join } from 'node:path';
 import { pathToFileURL } from 'node:url';
@@ -75,6 +75,63 @@ async function launchAndCollect(abrupt) {
 }
 
 describe('independent CI test failure recovery (#11552)', () => {
+  // Use the same direct-launch opt-in as Windows CI and the real workspace
+  // Vitest binary. Dying during config load leaves no reporter running.
+  it.each(['abrupt', 'failed', 'passed', 'cancelled'])('observes the actual Vitest child for a %s run', async (outcome) => {
+    const root = mkdtempSync(join(tmpdir(), 'ci-vitest-child-'));
+    try {
+      const reports = join(root, 'reports');
+      const ready = join(root, 'config-loaded');
+      const config = join(root, 'vitest.config.mjs');
+      writeFileSync(config, `
+        import { writeFileSync } from 'node:fs';
+        writeFileSync(${JSON.stringify(ready)}, '');
+        if (${outcome === 'abrupt'}) process.kill(process.pid, 'SIGKILL');
+        if (${outcome === 'cancelled'}) await new Promise(resolve => setTimeout(resolve, 10000));
+        export default { root: ${JSON.stringify(root)}, test: { globals: true } };
+      `);
+      writeFileSync(join(root, 'fixture.test.js'),
+        `test('synthetic assertion', () => expect(${outcome !== 'failed'}).toBe(true));`);
+      const args = ['--config', config, './fixture.test.js'];
+      const result = spawnSync(process.execPath, ['--input-type=module', '-e', `
+        import { existsSync } from 'node:fs';
+        import { runNpm } from ${JSON.stringify(launcher)};
+        const controller = new AbortController();
+        const watcher = ${outcome === 'cancelled'} && setInterval(() => {
+          if (existsSync(${JSON.stringify(ready)})) controller.abort();
+        }, 20);
+        try {
+          process.exitCode = (await runNpm('server', 'test:ci', ${JSON.stringify(args)}, { signal: controller.signal })).status;
+        } finally { clearInterval(watcher); }
+      `], { encoding: 'utf8', timeout: 25_000, env: { ...process.env, PORTOS_CI_OBSERVE_VITEST: '1',
+        PORTOS_CI_DIAGNOSTICS_DIR: reports, PORTOS_CI_TEST_SELECTION: '', PORTOS_TEST_TEMP_ROOT: '',
+        TMPDIR: root, TMP: root, TEMP: root, NODE_DISABLE_COMPILE_CACHE: '1', GITHUB_STEP_SUMMARY: '', GITHUB_ENV: '' } });
+      expect(result.error).toBeUndefined();
+      expect(existsSync(ready), result.stderr).toBe(true);
+      if (outcome === 'abrupt') {
+        expect(result.status, result.stderr).not.toBeNull();
+        expect(result.status, result.stderr).not.toBe(0);
+      } else {
+        expect(result.status, result.stderr).toBe({ failed: 1, passed: 0, cancelled: 143 }[outcome]);
+      }
+      const lines = await collectTestDiagnostics(reports, { logger: { warn() {} }, diagnose: async () => {}, writeSummary() {} });
+      const output = lines.join('\n');
+      expect(output).toContain('Observed command boundary: direct Vitest process.');
+      expect(output).toMatch(/Observed Vitest child close: code=(?:-?\d+|unavailable); signal=(?:SIG\w+|none)\./);
+      expect(output).toContain(`Launcher completed; exit=${result.status}`);
+      if (outcome === 'abrupt' || outcome === 'cancelled') {
+        expect(output).toContain('Vitest progress unavailable');
+        expect(output).toContain('structured test report missing');
+        expect(output).not.toContain('Failed suites');
+      } else {
+        expect(output).toContain(`Vitest progress: reason=${outcome}`);
+        expect(output).toContain(`Observed Vitest child close: code=${result.status}; signal=none.`);
+      }
+      expect(output).not.toContain(root);
+      expect(output).not.toContain(root.replaceAll('\\', '/'));
+    } finally { rmSync(root, { recursive: true, force: true }); }
+  }, 30_000);
+
   it('recovers a failed launcher result after its normal report callback', async () => {
     const output = await launchAndCollect(false);
     expect(output).toContain('Launcher completed; exit=17');
@@ -167,6 +224,7 @@ describe('independent CI test failure recovery (#11552)', () => {
       writeFileSync(join(attempt, 'invocation.json'), '{');
       writeFileSync(join(attempt, 'run.json'), JSON.stringify({ reason: 'passed', activeModules: [] }));
       writeFileSync(join(attempt, 'failures.json'), '{}');
+      writeFileSync(join(attempt, 'vitest-child.json'), JSON.stringify({ phase: 'close', code: 2 ** 32, signal: 'example-private' }));
       const logger = { warn: vi.fn() };
       const lines = await collectTestDiagnostics(root, { logger,
         diagnose: async () => { throw Error('example-private'); },
@@ -174,6 +232,8 @@ describe('independent CI test failure recovery (#11552)', () => {
       });
       expect(lines.join('\n')).toContain('launcher completion is unverified');
       expect(lines.join('\n')).toContain('active test file is unknown');
+      expect(lines.join('\n')).toContain('Vitest child exit or close record unavailable');
+      expect(lines.join('\n')).not.toContain('example-private');
       expect(lines.join('\n')).toContain('Inconclusive failure');
       expect(logger.warn.mock.calls.flat().join('\n')).not.toContain('example-private');
     } finally { rmSync(root, { recursive: true, force: true }); }
@@ -196,6 +256,7 @@ describe('independent CI test failure recovery (#11552)', () => {
     const durable = 'PORTOS_CI_DIAGNOSTICS_DIR: ${{ runner.temp }}/portos-ci-diagnostics';
     expect(testStep).toContain(durable);
     expect(step).toContain(durable);
+    if (jobId === 'windows-server') expect(testStep).toContain('PORTOS_CI_OBSERVE_VITEST: 1');
     const testMinutes = Number(testStep.match(/timeout-minutes:\s*(\d+)/)?.[1]);
     const jobMinutes = Number(job.match(/^ {4}timeout-minutes:\s*(\d+)/m)?.[1]);
     expect(testMinutes).toBeGreaterThan(0);

@@ -130,6 +130,22 @@ describe('musicVideo dispatcher — record-event emit (#1770)', () => {
 });
 
 describe('create-time video-backend seeding (#3231 Phase 4)', () => {
+  it('seeds the upscale default from credentials and preserves an explicit project choice', async () => {
+    vi.stubEnv('FAL_KEY', '');
+    try {
+      const local = await projects.createProject({ name: 'Local draft' });
+      expect(local.videoSettings).toMatchObject({ upscaleMethod: 'lanczos', upscaleTargetResolution: '1080p' });
+      getSettings.mockResolvedValue({ videoGen: { fal: { apiKey: 'synthetic-key' } } });
+      const hosted = await projects.createProject({ name: 'Hosted draft', videoSettings: { backend: 'grok' } });
+      expect(hosted.videoSettings).toMatchObject({ backend: 'grok', upscaleMethod: 'fal-seedvr2', upscaleTargetResolution: '1080p' });
+      await projects.updateProject(hosted.id, { videoSettings: { upscaleTargetResolution: '1440p' } });
+      expect((await projects.getProject(hosted.id)).videoSettings).toMatchObject({ backend: 'grok', upscaleMethod: 'fal-seedvr2', upscaleTargetResolution: '1440p' });
+      const explicit = await projects.createProject({ name: 'Explicit local upscale', videoSettings: { upscaleMethod: 'lanczos' } });
+      expect(explicit.videoSettings.upscaleMethod).toBe('lanczos');
+    } finally {
+      vi.unstubAllEnvs();
+    }
+  });
   const grokPinned = (pins) => ({
     imageGen: { grok: { enabled: true } },
     ...pins,

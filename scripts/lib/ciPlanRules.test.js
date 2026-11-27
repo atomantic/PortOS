@@ -239,7 +239,10 @@ describe('CI test impact planner', () => {
       // trigger went untested when it pointed at eslint.config.js, so the rename
       // to biome.jsonc could have silently matched nothing.
       'client/biome.jsonc',
+      'server/biome.jsonc',
       'biome.jsonc',
+      'server/lint-pg-json.grit',
+      'lint-no-raw-pm2-jlist.grit',
       'client/lint-no-random-uuid.grit',
       'client/lint-react-legacy-apis.grit',
       'scripts/run-ci-tests.test.js',

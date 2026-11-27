@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { EXCLUSIVE_CAPTURE_TESTS } from '../vitestCiPool.js';
-import { BROWSER_SUITES, browserShardSlice, FULL_BROWSER_SHARD_COUNT } from './browserSuites.js';
+import { BROWSER_SUITES, browserShardSlice, browserSmokeMemoDonors, FULL_BROWSER_SHARD_COUNT } from './browserSuites.js';
 import { browserTestProfileFiles } from './browserTestProfiles.js';
 
 const visual = 'server/services/musicVideo/documentRender.browser.test.js';
@@ -42,17 +42,34 @@ describe('browser shard ownership', () => {
     }
   });
 
-  it('balances the broad matrix with identical owners across profiles and scoped selections', () => {
+  it('keeps broad owners stable for scoped selections within each profile', () => {
+    const count = FULL_BROWSER_SHARD_COUNT;
+    for (const profile of ['smoke', 'full']) {
+      const selected = browserTestProfileFiles(profile, BROWSER_SUITES);
+      for (let index = 1; index <= count; index++) {
+        const shard = { index, count };
+        const files = browserShardSlice(BROWSER_SUITES, shard, profile);
+        expect(browserShardSlice(selected, shard, profile)).toEqual(files.filter(file => selected.includes(file)));
+        expect(files.length).toBeGreaterThanOrEqual(4);
+        expect(files.length).toBeLessThanOrEqual(7);
+      }
+    }
+  });
+
+  it('restores exactly the distinct full-run donors of selected moved smoke suites', () => {
     const count = FULL_BROWSER_SHARD_COUNT;
     const smoke = browserTestProfileFiles('smoke', BROWSER_SUITES);
-    const full = Array.from({ length: count }, (_, index) => browserShardSlice(BROWSER_SUITES, { index: index + 1, count }, 'full'));
-    for (const [i, files] of full.entries()) {
-      const shard = { index: i + 1, count };
-      expect(browserShardSlice(BROWSER_SUITES, shard, 'smoke')).toEqual(files);
-      expect(browserShardSlice(smoke, shard, 'smoke')).toEqual(files.filter(file => smoke.includes(file)));
-      expect(files.length).toBeGreaterThanOrEqual(4);
-      expect(files.length).toBeLessThanOrEqual(7);
+    for (let index = 1; index <= count; index++) {
+      const selected = browserShardSlice(smoke, { index, count }, 'smoke');
+      const donors = Array.from({ length: count }, (_, i) => i + 1)
+        .filter(owner => owner !== index && browserShardSlice(selected, { index: owner, count }, 'full').length > 0);
+      expect(browserSmokeMemoDonors(smoke, index)).toEqual(donors);
+      expect(donors.length).toBeLessThanOrEqual(2);
     }
+    expect(browserSmokeMemoDonors([templates], 4)).toEqual([5]);
+    expect(browserSmokeMemoDonors([templates, timeline], 4)).toEqual([5]);
+    expect(browserSmokeMemoDonors([timeline], 4)).toEqual([]);
+    expect(browserSmokeMemoDonors([templates], 5)).toEqual([]);
   });
 
   it.each([2, 4, FULL_BROWSER_SHARD_COUNT])('gives each split capture a separate runner with %i shards', count => {
@@ -67,7 +84,7 @@ describe('browser shard ownership', () => {
     }
   });
 
-  it('applies the smoke GPU override only to two-shard plans', () => {
+  it('keeps the four-shard GPU owner shared across profiles', () => {
     const gpu = 'server/lib/filmLookGpu.browser.test.js';
     expect(browserShardSlice([gpu], { index: 2, count: 2 }, 'full')).toEqual([]);
     expect(browserShardSlice([gpu], { index: 2, count: 2 }, 'smoke')).toEqual([gpu]);

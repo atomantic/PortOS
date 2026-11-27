@@ -2,8 +2,8 @@
 
 import { z } from 'zod';
 import { COLOR_MATCH_LIMITS } from '../../shotColorMatch.js';
-import { MUSIC_VIDEO_RENDER_TIERS, MUSIC_VIDEO_UPGRADE_METHODS, MUSIC_VIDEO_UPSCALE_METHODS } from '../musicVideoRenderTier.js';
-import { galleryImageName } from '../musicVideoValidation.js';
+import { MUSIC_VIDEO_RENDER_TIERS, MUSIC_VIDEO_UPGRADE_METHODS } from '../musicVideoRenderTier.js';
+import { galleryImageName, musicVideoUpscaleFields } from '../musicVideoValidation.js';
 import { MUSIC_VIDEO_WIPES, MUSIC_VIDEO_WIPE_SEC } from '../musicVideoWipes.js';
 import { videoHistoryIdSchema } from './shared.js';
 
@@ -193,7 +193,8 @@ export const musicVideoApproveFinalSchema = z.object({
 export const musicVideoUpgradeSchema = z.object({
   sceneIds: musicVideoSceneIdListSchema.optional(),
   method: z.enum(MUSIC_VIDEO_UPGRADE_METHODS),
-  upscaleMethod: z.enum(MUSIC_VIDEO_UPSCALE_METHODS).optional(),
+  ...musicVideoUpscaleFields,
+  topazQuotes: z.record(z.string().min(1).max(128), z.string().uuid()).optional(),
   dryRun: z.boolean().optional(),
 });
 

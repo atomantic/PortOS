@@ -7,7 +7,8 @@ import { tmpdir } from 'os';
 import { join } from 'path';
 import { promisify } from 'util';
 import { execFile } from '../childProcess.js';
-import { safeChildProcessOptions } from '../processEnv.js';
+import { safeChildProcessEnv, safeChildProcessOptions } from '../processEnv.js';
+import { bufferedSpawn } from '../bufferedSpawn.js';
 import { findFfmpeg, findFfprobe } from './discovery.js';
 import { FFMPEG_SCAN_TIMEOUT_MS, runFfmpegProcess } from './process.js';
 
@@ -31,7 +32,7 @@ const runFfprobe = async (args, timeout = 5000) => {
 // input on this probe. Returns false when ffprobe is unavailable so callers
 // default to the safe "no clip audio" path rather than emitting a graph that
 // can't build.
-export const hasAudioStream = async (videoPath, { signal, onLifecycle } = {}) => {
+export const hasAudioStream = async (videoPath, { signal, onLifecycle, timeoutMs = 5000 } = {}) => {
   if (typeof videoPath !== 'string' || !videoPath) return false;
   const args = [
     '-v', 'error',
@@ -40,11 +41,18 @@ export const hasAudioStream = async (videoPath, { signal, onLifecycle } = {}) =>
     '-of', 'default=nokey=1:noprint_wrappers=1',
     videoPath,
   ];
-  if (!signal && !onLifecycle) return (await runFfprobe(args)).length > 0;
   const bin = await findFfprobe();
   if (!bin) return false;
+  if (!signal && !onLifecycle) {
+    const result = await bufferedSpawn(bin, args, {
+      env: safeChildProcessEnv(),
+      timeoutMs,
+      processGroup: true,
+    });
+    return result.success && result.stdout.trim().length > 0;
+  }
   let hasOutput = false;
-  const result = await runFfmpegProcess({ bin, args, signal, timeoutMs: 5000, onLifecycle,
+  const result = await runFfmpegProcess({ bin, args, signal, timeoutMs, onLifecycle,
     onStdout: chunk => { hasOutput ||= chunk.toString().trim().length > 0; } });
   return result.ok && hasOutput;
 };

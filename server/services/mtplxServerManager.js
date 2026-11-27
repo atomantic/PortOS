@@ -12,7 +12,7 @@
  * re-adopt a server it started earlier instead of losing track of a detached
  * pid. A detached child gets none of that.
  *
- * Two limits carried over from `docs/features/mtplx.md`:
+ * Two limits carried over from `docs/features/local-llm-runtimes.md`:
  *   - **A start never downloads weights.** `mtplx serve` is started on a
  *     checkpoint ALREADY in MTPLX's cache; an empty cache is reported rather
  *     than silently filled. Fetching one is its own explicit, user-pressed
@@ -524,7 +524,7 @@ export const startMtplxServer = (options = {}) => onDemand.runStart(() => launch
  * endpoint answers when this returns".
  *
  * There is deliberately no `host` option: MTPLX is a loopback daemon
- * (`docs/features/mtplx.md`), every shipped provider preset points at
+ * (`docs/features/local-llm-runtimes.md`), every shipped provider preset points at
  * 127.0.0.1, and accepting a host PortOS never puts on the launch line would
  * report an endpoint the server is not bound to.
  *

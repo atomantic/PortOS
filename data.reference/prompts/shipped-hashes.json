@@ -5,11 +5,27 @@
       "218f0e85643609ed85a12b1ccc7b5a8d"
     ]
   },
+  "_partials/character-evolution-stage-definitions.md": {
+    "current": "0aed5d938107bfd27fad84ca456f26c5",
+    "retired": []
+  },
   "_partials/craft-anti-patterns.md": {
     "current": "f34e75f19ac4e41aa0533a0abcb38a2a",
     "retired": [
       "bd0149bf1a5c721e65e053dad8e536d3"
     ]
+  },
+  "_partials/editorial-findings-contract.md": {
+    "current": "92ada234ae346b6799d2d3af356115c6",
+    "retired": []
+  },
+  "_partials/editorial-manuscript-preamble.md": {
+    "current": "c1a8b0bc62c2c0597d9cc10a9ccbdac2",
+    "retired": []
+  },
+  "_partials/five-stage-character-lens.md": {
+    "current": "83bd44528694205669d4470d619f066b",
+    "retired": []
   },
   "_partials/portos-api-auth.md": {
     "current": "65fc444e6c9f10486b51ea356d5b1d31",
@@ -17,6 +33,18 @@
   },
   "_partials/scene-output-contract.md": {
     "current": "e310b103bdfec2a9c33cde0b775d40a9",
+    "retired": []
+  },
+  "_partials/scene-segmentation-note.md": {
+    "current": "edccb3b5d8abf9a6c65fca8732d91774",
+    "retired": []
+  },
+  "_partials/story-shape-vonnegut.md": {
+    "current": "4fb8ca0ef339269c1a892d06b80b6507",
+    "retired": []
+  },
+  "_partials/untrusted-source-fence.md": {
+    "current": "8549c33b95c4d058c2a321e6d2b76a4a",
     "retired": []
   },
   "skills/bug-fix.md": {
@@ -248,11 +276,12 @@
     ]
   },
   "stages/fableloom-review-series-plan.md": {
-    "current": "d82ff6df1d41c3e53fb0cc7ea49f8dc5",
+    "current": "9e07baa1061700bb468b0f610c5570e2",
     "retired": [
       "1c1ab552f6f6a4d9d51f1d3bacd89122",
       "588c82fafd733581490f24cb6fb4bfa7",
-      "d7d3b306c82cea4d7f13a78512a46948"
+      "d7d3b306c82cea4d7f13a78512a46948",
+      "d82ff6df1d41c3e53fb0cc7ea49f8dc5"
     ]
   },
   "stages/fableloom-review-series-teleplay.md": {
@@ -287,27 +316,32 @@
     ]
   },
   "stages/importer-arc-extract.md": {
-    "current": "a60450cabce43eb8340f63135a5fbc5d",
+    "current": "93b9d2f8bcd73938d69755c917fd8dad",
     "retired": [
-      "d3cdbcc4c6a0bf1481f922e900b6d848"
+      "d3cdbcc4c6a0bf1481f922e900b6d848",
+      "a60450cabce43eb8340f63135a5fbc5d"
     ]
   },
   "stages/importer-canon-extract.md": {
-    "current": "724bb2ae8ff68e29e79999452ddefd63",
+    "current": "4632628597fd89e15e75697626112380",
     "retired": [
-      "cd5e4ed4096723e05642b881fb74b3ec"
+      "cd5e4ed4096723e05642b881fb74b3ec",
+      "724bb2ae8ff68e29e79999452ddefd63"
     ]
   },
   "stages/importer-classify.md": {
-    "current": "f4506b0864999f1a49e45fafd0822ff7",
-    "retired": []
+    "current": "78c47fd4df3f22eb159f409c0a3eebcf",
+    "retired": [
+      "f4506b0864999f1a49e45fafd0822ff7"
+    ]
   },
   "stages/importer-issue-proposal.md": {
-    "current": "9ba2ff965fba61efb85a3568bb530055",
+    "current": "83258a1e6ef4b2c455971190fdf0c8c1",
     "retired": [
       "192f824a02885010d380aaacb4df67b5",
       "a6838832f8289932836db84ee565b870",
-      "d837e6321b8f6820bddaf972e7dbe01c"
+      "d837e6321b8f6820bddaf972e7dbe01c",
+      "9ba2ff965fba61efb85a3568bb530055"
     ]
   },
   "stages/manuscript-reformat.md": {
@@ -333,7 +367,7 @@
     "retired": []
   },
   "stages/pipeline-arc-overview.md": {
-    "current": "901557b9f146a2d279ce2e81bda24d73",
+    "current": "fafc8be03e3db8da85872b2faa38430d",
     "retired": [
       "0a1f6ffa6908522e3690c5e9e53a6ee0",
       "59e19fb81417e640194a5e3ac5773125",
@@ -342,11 +376,12 @@
       "648e11352cd1565aee490de1f662bef0",
       "6a3ecab43d1f46b7ef9aab6c69ea0326",
       "74d6c26548660d85fc345b2099c63b6c",
-      "d34d72b8e49ba303d38607845dd87f1c"
+      "d34d72b8e49ba303d38607845dd87f1c",
+      "901557b9f146a2d279ce2e81bda24d73"
     ]
   },
   "stages/pipeline-arc-resolve.md": {
-    "current": "5fb659e459a296b7d378d7711f4b78cd",
+    "current": "ae907fdc660798c8c640b47db8436a52",
     "retired": [
       "0611db539437083621e19bb88b005e8d",
       "0787128babf3c4c50e2f2cdb60214030",
@@ -366,11 +401,12 @@
       "a8677bbe1eb38f871fb152a5b0fec7c6",
       "aa2e463ebe0857859d79aa0c6ccb0256",
       "cc27b4da1d1a13c35e35d1c2d6183815",
-      "ebd85d3a0b5949f16877c25ca498cce9"
+      "ebd85d3a0b5949f16877c25ca498cce9",
+      "5fb659e459a296b7d378d7711f4b78cd"
     ]
   },
   "stages/pipeline-arc-verify.md": {
-    "current": "090920d816beef8dfc12ee6152511456",
+    "current": "608f809e51a5fb6217bd6a60cd57dc7b",
     "retired": [
       "36aa70cdfc25d7549573a4d556e7702c",
       "4b60a322e35b536405d0fbf543580562",
@@ -382,7 +418,8 @@
       "a397f158fd9c0dca1c8dbe62df253f70",
       "d077c3d6197fbb9a684a1fbb41a9493c",
       "f09e81655ec897c74a2fae68ad31b9c4",
-      "ff56d8387162017e08d5d0491060ddd6"
+      "ff56d8387162017e08d5d0491060ddd6",
+      "090920d816beef8dfc12ee6152511456"
     ]
   },
   "stages/pipeline-audio-cues.md": {
@@ -432,7 +469,7 @@
     "retired": []
   },
   "stages/pipeline-comic-script.md": {
-    "current": "49af30c05f008b20f6998a0f113f7d87",
+    "current": "f7f4e5949b5af641884e048605de6946",
     "retired": [
       "133d200d069c2e8173b7c129eea58f53",
       "1d380ef4b6c372099ce5fbe09e74b0d9",
@@ -445,7 +482,8 @@
       "beab031951859ca13579cdb9c4dbe769",
       "dea7d497d1cb38e7574f236f4ff8e644",
       "e530fc76b89cedaef848ad7ec99c934c",
-      "e9ee70bf18888492edada6633cd9928a"
+      "e9ee70bf18888492edada6633cd9928a",
+      "49af30c05f008b20f6998a0f113f7d87"
     ]
   },
   "stages/pipeline-continuity-bible.md": {
@@ -453,8 +491,10 @@
     "retired": []
   },
   "stages/pipeline-editorial-adversarial-cuts.md": {
-    "current": "452a1e70efa276014c2f5d9ddd36b8d0",
-    "retired": []
+    "current": "2afc2443671743a735803f40611061aa",
+    "retired": [
+      "452a1e70efa276014c2f5d9ddd36b8d0"
+    ]
   },
   "stages/pipeline-editorial-analysis.md": {
     "current": "daeb02bd54b0c099b21af659c6298cfe",
@@ -463,225 +503,292 @@
     ]
   },
   "stages/pipeline-editorial-appearance-continuity.md": {
-    "current": "8ef03aa3ed15557febe85d7ee66b6cc6",
+    "current": "f47a372cd9ef089b218dc2a7c7cd732f",
     "retired": [
-      "25ccc731f1596a99d21600919896a8e3"
+      "25ccc731f1596a99d21600919896a8e3",
+      "8ef03aa3ed15557febe85d7ee66b6cc6"
     ]
   },
   "stages/pipeline-editorial-arc-regression.md": {
-    "current": "8e34b3a84cd7f948592a2a94b28caee4",
+    "current": "778dce57bb1c1c3c58b8c49871860124",
     "retired": [
-      "85b15c9e913fe8a436d407f1562a2b10"
+      "85b15c9e913fe8a436d407f1562a2b10",
+      "8e34b3a84cd7f948592a2a94b28caee4"
     ]
   },
   "stages/pipeline-editorial-arc-transitions.md": {
-    "current": "46cb5444f41d05fb7bdbc219d62619b2",
+    "current": "31191d6eaa0fac6231796c300fb05387",
     "retired": [
       "4c297e92df472965be8641f8b9ce9853",
-      "72e27707f0dc82eab84eed74e9707587"
+      "72e27707f0dc82eab84eed74e9707587",
+      "46cb5444f41d05fb7bdbc219d62619b2"
     ]
   },
   "stages/pipeline-editorial-character-consistency.md": {
-    "current": "bbefd9b033cc7830752acf87722659a0",
+    "current": "f7501f1f6707fcfd13914a3694573e53",
     "retired": [
-      "69bbee3a1bb126b2675d8b00f5aef48c"
+      "69bbee3a1bb126b2675d8b00f5aef48c",
+      "bbefd9b033cc7830752acf87722659a0"
     ]
   },
   "stages/pipeline-editorial-chekhov.md": {
-    "current": "1f8a1696b5e4f476051dc5b2e5737db9",
+    "current": "e3db209246a43d0fa02055468a313a7b",
     "retired": [
       "21246b605f442f8c749fc2835bd293b5",
-      "bfacbf343ba2b9a3f6037bb45b94e1bb"
+      "bfacbf343ba2b9a3f6037bb45b94e1bb",
+      "1f8a1696b5e4f476051dc5b2e5737db9"
     ]
   },
   "stages/pipeline-editorial-climax-agency.md": {
-    "current": "255ad29214f48e6dd1c17adbb5887478",
+    "current": "a5f431a4171e6c6d070b48fe854a0c49",
     "retired": [
       "1bca84f9a0b7cde84e20e43702a12ffa",
       "55c25664b9904806146f92cc739d7208",
-      "f6611ff22e36d6738b3b4faa9c1310df"
+      "f6611ff22e36d6738b3b4faa9c1310df",
+      "255ad29214f48e6dd1c17adbb5887478"
     ]
   },
   "stages/pipeline-editorial-comic-page-turn.md": {
-    "current": "00da454e9fea2170f9eec7de848ca962",
-    "retired": []
+    "current": "e32fa15acb66f6d98567e2cd3f704e8c",
+    "retired": [
+      "00da454e9fea2170f9eec7de848ca962"
+    ]
   },
   "stages/pipeline-editorial-comic-prose-sync.md": {
-    "current": "838bb10dc30eaed0247225e1b5635b53",
-    "retired": []
+    "current": "b413846bdad996acca8b4ec30592d306",
+    "retired": [
+      "838bb10dc30eaed0247225e1b5635b53"
+    ]
   },
   "stages/pipeline-editorial-dead-metaphor.md": {
-    "current": "9410b0dfc345b212dc93e47f5386d505",
-    "retired": []
+    "current": "0b58706db03a5077688ddc74b276d85a",
+    "retired": [
+      "9410b0dfc345b212dc93e47f5386d505"
+    ]
   },
   "stages/pipeline-editorial-dialogue-pleasantries.md": {
-    "current": "33e0af1726a0d6d58f9e8ffa443dd702",
-    "retired": []
+    "current": "5dbd3429a6ca156fb27f7eadacd99c02",
+    "retired": [
+      "33e0af1726a0d6d58f9e8ffa443dd702"
+    ]
   },
   "stages/pipeline-editorial-endings-cliffhanger.md": {
-    "current": "deaebfa026d40a6e576479ecc4f1e98b",
+    "current": "2b3ef26bea2db5f257ff1504583d78d6",
     "retired": [
-      "3ef5e6fbc160f9f33902ab22d9284281"
+      "3ef5e6fbc160f9f33902ab22d9284281",
+      "deaebfa026d40a6e576479ecc4f1e98b"
     ]
   },
   "stages/pipeline-editorial-eyeline-match.md": {
-    "current": "7c66926cbf8f7174ca17043e1f2e2251",
+    "current": "3c762bb40f14e6e5094dc0995e113994",
     "retired": [
-      "5d0b8d0d4605225d208786165e26abb4"
+      "5d0b8d0d4605225d208786165e26abb4",
+      "7c66926cbf8f7174ca17043e1f2e2251"
     ]
   },
   "stages/pipeline-editorial-fact-accuracy.md": {
-    "current": "caa7b3c7ed28c981248a8f19a3409837",
-    "retired": []
+    "current": "0b35a7d38ac629b9147d938113096e3d",
+    "retired": [
+      "caa7b3c7ed28c981248a8f19a3409837"
+    ]
   },
   "stages/pipeline-editorial-head-hopping.md": {
-    "current": "00e596e9dea15b3154a6a9f3509e90a5",
+    "current": "339ce1e95e2f2214b14c5629ce4a2266",
     "retired": [
-      "460e6449c4f1daec815b9ff0a6573f97"
+      "460e6449c4f1daec815b9ff0a6573f97",
+      "00e596e9dea15b3154a6a9f3509e90a5"
     ]
   },
   "stages/pipeline-editorial-info-dumping.md": {
-    "current": "7d558254de26b73852787234a821a09b",
-    "retired": []
+    "current": "645afc40f71273f247c2348f38fbdc68",
+    "retired": [
+      "7d558254de26b73852787234a821a09b"
+    ]
   },
   "stages/pipeline-editorial-interiority-balance.md": {
-    "current": "426a75658737a33643fb35ae134e8f6f",
-    "retired": []
+    "current": "149a371131558fb61eac72068f167204",
+    "retired": [
+      "426a75658737a33643fb35ae134e8f6f"
+    ]
   },
   "stages/pipeline-editorial-interiority-register.md": {
-    "current": "caf813ec7a9f9107e442ffc1c916e38d",
-    "retired": []
+    "current": "b2f47a962716c4427b70b4f6b0b3530d",
+    "retired": [
+      "caf813ec7a9f9107e442ffc1c916e38d"
+    ]
   },
   "stages/pipeline-editorial-interiority.md": {
-    "current": "95368d05696104d3109cfcdd6e109492",
-    "retired": []
+    "current": "17beaa0c07fe10cf44c4c3d45bd8978b",
+    "retired": [
+      "95368d05696104d3109cfcdd6e109492"
+    ]
   },
   "stages/pipeline-editorial-kill-your-darlings.md": {
-    "current": "25767ad1e7c0d7e54b64fac7308ab6b6",
-    "retired": []
+    "current": "0b7a73a6dadd80a494eb059ea8b8cf42",
+    "retired": [
+      "25767ad1e7c0d7e54b64fac7308ab6b6"
+    ]
   },
   "stages/pipeline-editorial-mirror-description.md": {
-    "current": "d8f2fa869a65dc8f7816b4197f254ba3",
-    "retired": []
+    "current": "5dd7b62c577c73db5eab09c05f3bb2d3",
+    "retired": [
+      "d8f2fa869a65dc8f7816b4197f254ba3"
+    ]
   },
   "stages/pipeline-editorial-object-backstory.md": {
-    "current": "daa063781e70df6711bac66eb773b0e6",
-    "retired": []
+    "current": "f64f7bd3fecffc520436d709dcf73d2c",
+    "retired": [
+      "daa063781e70df6711bac66eb773b0e6"
+    ]
   },
   "stages/pipeline-editorial-object-motivation.md": {
-    "current": "9c783890ccbfe1b18f5b77c52928c71b",
-    "retired": []
+    "current": "7e9f4f3f2a5422e1b90898512cc5a6ca",
+    "retired": [
+      "9c783890ccbfe1b18f5b77c52928c71b"
+    ]
   },
   "stages/pipeline-editorial-object-weight-proportionality.md": {
-    "current": "761890e3dcdc2cd828ec2be2a5f9cb82",
+    "current": "90d739d3c927fcd6b2ff599cedade530",
     "retired": [
       "89f6f6c6856ebcf0183b7760d71a6898",
       "c1b7b58e0255c86b6ba5cece4330ac48",
-      "f4f91a4ea55a9fd89eaebc70074a89ec"
+      "f4f91a4ea55a9fd89eaebc70074a89ec",
+      "761890e3dcdc2cd828ec2be2a5f9cb82"
     ]
   },
   "stages/pipeline-editorial-on-the-nose.md": {
-    "current": "e5786fb019e5bf19c7aa6ed0c8b35cda",
+    "current": "e2d9629412602e81f8eb3d391433c544",
     "retired": [
       "48182b49149e6b5829fbed71b3ffc242",
-      "8d9038a2b197728f6edeedb84699f364"
+      "8d9038a2b197728f6edeedb84699f364",
+      "e5786fb019e5bf19c7aa6ed0c8b35cda"
     ]
   },
   "stages/pipeline-editorial-opening-start.md": {
-    "current": "b87fe01ced08aa5640b6847f69cf0d9a",
-    "retired": []
+    "current": "3d4a365a461916bf1db9208724270e8f",
+    "retired": [
+      "b87fe01ced08aa5640b6847f69cf0d9a"
+    ]
   },
   "stages/pipeline-editorial-pacing-escalation-curve.md": {
-    "current": "52e7f023d4894e736609e8d0311cc403",
-    "retired": []
+    "current": "b55b7c1265d321fddf6049deb6845bea",
+    "retired": [
+      "52e7f023d4894e736609e8d0311cc403"
+    ]
   },
   "stages/pipeline-editorial-plot-structure.md": {
-    "current": "2a4fe67b7b5e128314c385bb458decf2",
+    "current": "b91d8fae4ae727643c99985ae070dbeb",
     "retired": [
-      "400d829dd291753a299fa08d6afbe561"
+      "400d829dd291753a299fa08d6afbe561",
+      "2a4fe67b7b5e128314c385bb458decf2"
     ]
   },
   "stages/pipeline-editorial-premature-reveal.md": {
-    "current": "90485c0031da6e5f5207abb0acbc5da3",
-    "retired": []
+    "current": "a9e48d4a01706be2343750b46d95d2f4",
+    "retired": [
+      "90485c0031da6e5f5207abb0acbc5da3"
+    ]
   },
   "stages/pipeline-editorial-reaction-proportionality.md": {
-    "current": "b15471388a184d6f805e6dfac76fb164",
+    "current": "9018a98041a35d636a4a56fc4dfb801b",
     "retired": [
       "38ca1b6edaa55c8989e22e7ffdbd76c7",
-      "8787e6e40f8bb46067b8303b866c7ff8"
+      "8787e6e40f8bb46067b8303b866c7ff8",
+      "b15471388a184d6f805e6dfac76fb164"
     ]
   },
   "stages/pipeline-editorial-reported-speech.md": {
-    "current": "23d8c950f647950cea760ac79e196758",
-    "retired": []
+    "current": "3974e298d4ae9c6911f7e9e774e351ed",
+    "retired": [
+      "23d8c950f647950cea760ac79e196758"
+    ]
   },
   "stages/pipeline-editorial-secondary-arc.md": {
-    "current": "a9bd4dd9a06bc571f0363e0031d9a5d7",
+    "current": "5a7b28edfe32ea31095ed20e99799320",
     "retired": [
       "6ad9eb7c4969d8baeb2c8c38d8f6695e",
-      "8a96ce93f6592fed3d30e221497739a4"
+      "8a96ce93f6592fed3d30e221497739a4",
+      "a9bd4dd9a06bc571f0363e0031d9a5d7"
     ]
   },
   "stages/pipeline-editorial-sensory-balance.md": {
-    "current": "41acdb117f63ff1e5123af429b48d4d5",
-    "retired": []
+    "current": "4b3a08417ea9f2afa6d47bf8fbb6103c",
+    "retired": [
+      "41acdb117f63ff1e5123af429b48d4d5"
+    ]
   },
   "stages/pipeline-editorial-style-conformance.md": {
-    "current": "79e388202a0d8d9929dd86387e24d1a5",
-    "retired": []
+    "current": "6cb31be9244efe7db943fa496eb8731f",
+    "retired": [
+      "79e388202a0d8d9929dd86387e24d1a5"
+    ]
   },
   "stages/pipeline-editorial-summary-not-scene.md": {
-    "current": "472dfdc328df0147663e333ab9eaf7c7",
-    "retired": []
+    "current": "1ceee5f39dd7031a3e3885f74b13fea7",
+    "retired": [
+      "472dfdc328df0147663e333ab9eaf7c7"
+    ]
   },
   "stages/pipeline-editorial-telling-emotion.md": {
-    "current": "871f7e8bea2a2d95f28875ab45a318e2",
+    "current": "f6ba05f6e2641f17bc41332c8a8c855f",
     "retired": [
-      "2c5c33709732fe7ffa319d32b8755354"
+      "2c5c33709732fe7ffa319d32b8755354",
+      "871f7e8bea2a2d95f28875ab45a318e2"
     ]
   },
   "stages/pipeline-editorial-theme-coherence.md": {
-    "current": "89e29d0f101c0e368376c379e8e40518",
-    "retired": []
+    "current": "14b390db167a53594d9afd11fd2d0f8a",
+    "retired": [
+      "89e29d0f101c0e368376c379e8e40518"
+    ]
   },
   "stages/pipeline-editorial-timeline-contradiction.md": {
-    "current": "2d797a9fa3b55f4c9f85c22cc0baa547",
+    "current": "a4a01b3a12a9c6468d9565fe7f09b29f",
     "retired": [
-      "f39272a486d4cc031ebb7b3b8fc01ed3"
+      "f39272a486d4cc031ebb7b3b8fc01ed3",
+      "2d797a9fa3b55f4c9f85c22cc0baa547"
     ]
   },
   "stages/pipeline-editorial-unmodeled-names.md": {
-    "current": "6b35274e08ea9b5727c42f6ef6653cd5",
+    "current": "f2cbe9c12286f15fb13f62376e3e00ee",
     "retired": [
       "2e562a414726b5b412537ad4ecbdbff5",
       "50029186d6009d50c3850f3f4b90a5d6",
       "9b9732f729c96dd7154175b77755fdd2",
-      "d34323ee9bf05fffc3584ad9d91146bd"
+      "d34323ee9bf05fffc3584ad9d91146bd",
+      "6b35274e08ea9b5727c42f6ef6653cd5"
     ]
   },
   "stages/pipeline-editorial-voice-consistency.md": {
-    "current": "bdde721c72e90f653f7c64be13302d0e",
-    "retired": []
+    "current": "9ef1cbcd75b0a27615e02281c40c123d",
+    "retired": [
+      "bdde721c72e90f653f7c64be13302d0e"
+    ]
   },
   "stages/pipeline-editorial-voice-distinctiveness.md": {
-    "current": "542e598444b037c82ea61044e47d97b7",
-    "retired": []
+    "current": "9546404e4fab924838d4faa0461c5d7e",
+    "retired": [
+      "542e598444b037c82ea61044e47d97b7"
+    ]
   },
   "stages/pipeline-editorial-white-room.md": {
-    "current": "df7a7351bc05e2e8977db1dcfbda9fbf",
-    "retired": []
+    "current": "403cd3c3c169f0b101bb28a80386c536",
+    "retired": [
+      "df7a7351bc05e2e8977db1dcfbda9fbf"
+    ]
   },
   "stages/pipeline-editorial-world-cost-free-power.md": {
-    "current": "2b761163f63c2e4fbe8dc6d7f6e577f7",
+    "current": "cfb78305d75f6232fc66ed71010efc7a",
     "retired": [
-      "42db5691fa6e4b2db9a146a821ed1fe7"
+      "42db5691fa6e4b2db9a146a821ed1fe7",
+      "2b761163f63c2e4fbe8dc6d7f6e577f7"
     ]
   },
   "stages/pipeline-editorial-world-unforeshadowed-solution.md": {
-    "current": "09d5997e8c9ea77a5cf1bf446ef211f1",
+    "current": "b5f04b4e3bd30de637c0ee86524fdb17",
     "retired": [
-      "9a23180e49fbac1699c846ced1625575"
+      "9a23180e49fbac1699c846ced1625575",
+      "09d5997e8c9ea77a5cf1bf446ef211f1"
     ]
   },
   "stages/pipeline-extract-scenes.md": {
@@ -696,7 +803,7 @@
     "retired": []
   },
   "stages/pipeline-idea-expansion.md": {
-    "current": "a032e4a724251ed3e3495d33c4dbab8e",
+    "current": "dcd97b34cc04f75be068451fb983ce75",
     "retired": [
       "1ee44cf95851ff8debf18729ebcd40b4",
       "1f3c5d077a5ef9a4b610335d5e3edd9c",
@@ -708,27 +815,33 @@
       "b5c47c94ffc74637983c95761ab0c66c",
       "c50f016639d41cd8244f5ff13429f997",
       "c5b2e719e232a281b3829a5348cb29c1",
-      "d6fa86a435f978336661dcabca67258f"
+      "d6fa86a435f978336661dcabca67258f",
+      "a032e4a724251ed3e3495d33c4dbab8e"
     ]
   },
   "stages/pipeline-judge-compare.md": {
-    "current": "48a0182eb9861b428024a147063b887c",
-    "retired": []
+    "current": "1e3d0724ecd384a9bad5bae6361bcc4f",
+    "retired": [
+      "48a0182eb9861b428024a147063b887c"
+    ]
   },
   "stages/pipeline-judge-foundation.md": {
-    "current": "d4abf4ddafbf84a2903e6d70d14adea1",
+    "current": "502a20c6e94f6ab7250f803faa7a72b1",
     "retired": [
       "02a8e9215ba534b333f3a29f11f3ac4f",
       "4c0bd349ff4d329048c9f4ac068745d4",
       "74c0244e641dcf7a73e9c83123ebdee9",
       "75714f0e41c77ff5c8b9623cb4fb0a25",
       "e44b6c50d741bbd21fc86f481684c410",
-      "edf7850d0c724c63761bc9fb667227d9"
+      "edf7850d0c724c63761bc9fb667227d9",
+      "d4abf4ddafbf84a2903e6d70d14adea1"
     ]
   },
   "stages/pipeline-judge-issue.md": {
-    "current": "18657e52d16bd3426877bb5c28979faa",
-    "retired": []
+    "current": "e0a364a9d802ef8214f086f53abfe008",
+    "retired": [
+      "18657e52d16bd3426877bb5c28979faa"
+    ]
   },
   "stages/pipeline-manuscript-completeness.md": {
     "current": "a08a7aaea9b57dcf12311505150672cd",
@@ -776,13 +889,14 @@
     "retired": []
   },
   "stages/pipeline-pov-rewrite.md": {
-    "current": "eedcc03aaaf7e22e7726491f08d52974",
+    "current": "248589db011575ab2e7d6cb89d607c94",
     "retired": [
-      "cd073c8dbca2bf25eea07b6103e27d81"
+      "cd073c8dbca2bf25eea07b6103e27d81",
+      "eedcc03aaaf7e22e7726491f08d52974"
     ]
   },
   "stages/pipeline-prose.md": {
-    "current": "4cb3ef48309f3673570cf80e4d544b54",
+    "current": "49fc3149a84e717ca76da0090b2ea111",
     "retired": [
       "25e3d58c2741bd98acd5d08ba70d8a5e",
       "30ac30ec2b9d3e2a9eb869c181732cc6",
@@ -792,7 +906,8 @@
       "bef1bc2767b78f585f2bd89f3d615130",
       "bfea5aeeb471aae9749baee765b473a7",
       "d1f8e3f1d214725b5aa67f309a81cd7d",
-      "d344d987cf19ddeaa4db021d009ec875"
+      "d344d987cf19ddeaa4db021d009ec875",
+      "4cb3ef48309f3673570cf80e4d544b54"
     ]
   },
   "stages/pipeline-reverse-outline.md": {
@@ -807,13 +922,14 @@
     ]
   },
   "stages/pipeline-season-episodes.md": {
-    "current": "b3fc07d785599b5a4859af8bed3c1d4e",
+    "current": "ea4790ca290c64f397a0db0ffb64089b",
     "retired": [
       "50c68a29c3ebc275db3095d06bd87100",
       "6e349ad26bed8a0ccb042571f03f03eb",
       "7c24df53c097c2525a52bfb766239647",
       "a88e8e78a949b7aaf500d03314e2ea0b",
-      "c4928e2a5f833358116b29d2d669888d"
+      "c4928e2a5f833358116b29d2d669888d",
+      "b3fc07d785599b5a4859af8bed3c1d4e"
     ]
   },
   "stages/pipeline-self-improve.md": {
@@ -846,13 +962,14 @@
     "retired": []
   },
   "stages/pipeline-teleplay.md": {
-    "current": "2ea9974ac3803658b2314db1f5818b77",
+    "current": "a5f4f75120ff84f5e55e51458082b32e",
     "retired": [
       "1280ef6b1ad68fa44070ca7478ec2a5f",
       "2568e14beaa574d43f8018a5def51d04",
       "376f779f4687b598f1c92ca4e770fd5a",
       "3f6fecc25573ed054b47db392250034a",
-      "afa4215330bf856429d70d7e2f856605"
+      "afa4215330bf856429d70d7e2f856605",
+      "2ea9974ac3803658b2314db1f5818b77"
     ]
   },
   "stages/pipeline-volume-cover-concepts.md": {
@@ -860,14 +977,15 @@
     "retired": []
   },
   "stages/pipeline-volume-verify.md": {
-    "current": "6f9b4ba4d9dd9a51a1032c7f0ca90405",
+    "current": "49fe8e710ae94109abc3913eb9e60f27",
     "retired": [
       "03f3c874cb80e1c98abcf03168fa7a92",
       "3e8a8f00d5faaee9d8e08a49d801b812",
       "49458d36700cb94e34806d536ffe2940",
       "56ad31371452a6fdf68597512f8c0d35",
       "9c0839d7fe1760c0891464afd4a3b8fd",
-      "c6ea28e972ad6e229bafb2d602b4dda3"
+      "c6ea28e972ad6e229bafb2d602b4dda3",
+      "6f9b4ba4d9dd9a51a1032c7f0ca90405"
     ]
   },
   "stages/soul-contradiction-detector.md": {
@@ -899,10 +1017,11 @@
     "retired": []
   },
   "stages/story-builder-idea-expand.md": {
-    "current": "c12d76fefaaded2838023065bfc94bb0",
+    "current": "0efa3ddc942ae8f94227c4f459ffdc61",
     "retired": [
       "778c86e2caa120856c36e4d5a4da3355",
-      "a23939626a226f7420cebfb45d47950c"
+      "a23939626a226f7420cebfb45d47950c",
+      "c12d76fefaaded2838023065bfc94bb0"
     ]
   },
   "stages/story-builder-reader-map-refine.md": {
@@ -992,11 +1111,12 @@
     "retired": []
   },
   "stages/writers-room-evaluate.md": {
-    "current": "995cfd92061b55730b0e081998e96f84",
+    "current": "e4ffc48bd178c368d868bb4564ab4596",
     "retired": [
       "286e9498966187ed74126680da4a6a54",
       "d3374472820df264731f435141e05270",
-      "d3b2b40bcabc9ca690fa67b69d64d628"
+      "d3b2b40bcabc9ca690fa67b69d64d628",
+      "995cfd92061b55730b0e081998e96f84"
     ]
   },
   "stages/writers-room-format.md": {

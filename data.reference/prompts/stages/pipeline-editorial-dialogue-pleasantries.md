@@ -20,11 +20,7 @@ menace, an awkward greeting that characterizes a strained relationship, or
 politeness that is itself the point of the scene. The bar is empty ritual that
 delays the scene, not any greeting.
 
-## Manuscript
-
-The manuscript is stitched from the drafted issues. Section headers attribute
-each chunk to an issue (e.g. `# Issue 3 — Title (prose)`). Use the issue number
-in each section header to attribute every finding to its `issueNumber`.
+{{> editorial-manuscript-preamble }}
 
 ```
 {{manuscript}}
@@ -41,14 +37,7 @@ first beat that matters).
 Be specific and cite the text. If the dialogue openings start in the right place,
 return an empty `findings` array — do not invent problems.
 
-## Output contract
-
-Return ONLY valid JSON matching this shape — no prose, no markdown fence, no
-commentary:
-
-```json
-{
-  "findings": [
+{{> editorial-findings-contract }}
     {
       "severity": "high|medium|low",
       "issueNumber": 3,

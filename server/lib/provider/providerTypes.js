@@ -37,3 +37,8 @@ export const isClaudeHarnessProvider = (provider) => isProcessProvider(provider)
  * `client/src/utils/providerTypes.js` re-exports this one.
  */
 export const isGrokBuildCli = (provider) => isProcessProvider(provider) && isGrokProvider(provider);
+
+/** How a provider names itself in an error a user has to act on. */
+export function providerLabel(provider) {
+  return provider?.id || provider?.command || 'unknown';
+}

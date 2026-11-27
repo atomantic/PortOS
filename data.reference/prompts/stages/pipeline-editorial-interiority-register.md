@@ -59,11 +59,7 @@ Severity is **advisory**: most findings are `low`; reserve `medium` for a
 pivotal beat whose essayistic thought deflates the tension, and `high` only for
 a sustained register mismatch that misrepresents who the character is.
 
-## Manuscript
-
-The manuscript is stitched from the drafted issues. Section headers attribute
-each chunk to an issue (e.g. `# Issue 3 — Title (prose)`). Use the issue number
-in each section header to attribute every finding to its `issueNumber`.
+{{> editorial-manuscript-preamble }}
 
 ```
 {{manuscript}}
@@ -83,14 +79,7 @@ Be specific and cite the text. If the interiority reads as genuine thought in
 each character's own voice, return an empty `findings` array — do not invent
 problems.
 
-## Output contract
-
-Return ONLY valid JSON matching this shape — no prose, no markdown fence, no
-commentary:
-
-```json
-{
-  "findings": [
+{{> editorial-findings-contract }}
     {
       "severity": "high|medium|low",
       "issueNumber": 3,

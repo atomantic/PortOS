@@ -47,3 +47,12 @@ Run `scripts/fixtures/minimax_h3_history.py --runtime-dir <cached-mlx-checkout>`
 with the MiniMax H3 MLX environment's Python interpreter. It exercises the
 pinned runtime's history packing and scheduler with deterministic test tensors
 and small model stubs.
+
+Run `node scripts/eidoverse-frame-acceptance.mjs` with the Worlds and Video
+checkouts, Bun, Playwright and Chrome available. It checks the real renderer's
+frame handshake, navigation and interaction against a disposable world.
+
+Run `python3 -B -m unittest discover -s scripts/ml/avatarforcing` for the
+AvatarForcing motion and checkpoint regressions in
+`scripts/ml/avatarforcing/test_motion.py` and
+`scripts/ml/avatarforcing/test_weights.py`. The motion tests use PyTorch.

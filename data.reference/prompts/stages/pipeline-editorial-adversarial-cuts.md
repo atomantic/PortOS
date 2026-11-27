@@ -32,11 +32,7 @@ Do NOT cut:
 - Foreshadowing or thematic setup that pays off later
 - Voice-defining prose that establishes the narrator's personality
 
-## Manuscript
-
-The manuscript is stitched from the drafted issues. Each section begins with a
-header like `# Issue 3 — Title (prose)`; use the issue number in that header to
-attribute each finding.
+{{> editorial-manuscript-preamble }}
 
 ```
 {{manuscript}}

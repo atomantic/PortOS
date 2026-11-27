@@ -85,7 +85,7 @@ const upscaledPrompt = (prompt) => (prompt ? `${prompt} (2×)` : '(upscaled 2×)
  * grid cannot take without losing duration — so a refusal is an immediate
  * 4xx/501 rather than a job that fails minutes later.
  */
-export async function enqueueLtxUpscale(historyId) {
+export async function enqueueLtxUpscale(historyId, { musicVideo } = {}) {
   const plan = await planUpscaleHistoryItem(historyId, { method: 'ltx' });
   if (plan.alreadyUpscaled) {
     throw new ServerError('Cannot upscale an already-upscaled video', { status: 400, code: 'ALREADY_UPSCALED' });
@@ -159,6 +159,7 @@ export async function enqueueLtxUpscale(historyId) {
     kind: LTX_UPSCALE_JOB_KIND,
     params: {
       historyId: plan.id,
+      ...(musicVideo ? { musicVideo } : {}),
       // The FILENAME, not an absolute path: job params are persisted and
       // replayed, and `runVideoUpscale` re-resolves them through `safeUnder`
       // so a hand-edited media-jobs.json cannot point the render (or the

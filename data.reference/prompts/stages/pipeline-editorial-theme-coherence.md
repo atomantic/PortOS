@@ -49,10 +49,8 @@ emergent-theme suggestions the author could add to the arc.
 {{/declaredThemes}}
 
 {{#sceneMap}}
-## Scene segmentation
-
-The reverse outline below segments the manuscript into scenes (with the recorded
-setting, POV character, and characters present). Use it to attribute a theme's
+{{> scene-segmentation-note }}
+Use it to attribute a theme's
 setup/complication/payoff to a scene and its issue.
 
 ```
@@ -60,11 +58,7 @@ setup/complication/payoff to a scene and its issue.
 ```
 {{/sceneMap}}
 
-## Manuscript
-
-The manuscript is stitched from the drafted issues. Section headers attribute
-each chunk to an issue (e.g. `# Issue 3 — Title (prose)`). Use the issue number
-in each header to attribute every finding to its `issueNumber`.
+{{> editorial-manuscript-preamble }}
 
 ```
 {{manuscript}}
@@ -99,14 +93,7 @@ declared theme is set up, complicated, and paid off — and no strong competing
 emergent theme is unaddressed — return an empty `findings` array. Do not invent
 thematic problems where the story coheres.
 
-## Output contract
-
-Return ONLY valid JSON matching this shape — no prose, no markdown fence, no
-commentary:
-
-```json
-{
-  "findings": [
+{{> editorial-findings-contract }}
     {
       "severity": "high|medium|low",
       "issueNumber": 3,

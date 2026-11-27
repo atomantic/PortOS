@@ -63,7 +63,7 @@ const PROBE_TIMEOUT_MS = 2_000;
 const CONFIRM_TIMEOUT_MS = 5_000;
 
 /**
- * Why an installed MTPLX still cannot be started: weights stay the user's decision (`docs/features/mtplx.md`), so a plain
+ * Why an installed MTPLX still cannot be started: weights stay the user's decision (`docs/features/local-llm-runtimes.md`), so a plain
  * Start names the button that fetches them plus the in-app card for a non-default checkpoint.
  */
 const MTPLX_NO_MODEL_ERROR = expandPageToken('no model weights are cached, so its server exits before it binds a port. Close this window — the checklist now offers “Download the default model & start MTPLX”, which fetches MTPLX\'s own verified checkpoint (a multi-gigabyte download) and then starts the server. To use a different MTP checkpoint instead, search for one on the MTPLX card in {page}, download it there, then click Start MTPLX again.', LOCAL_RUNTIMES.mtplx);
@@ -290,7 +290,7 @@ const SETUP_ROWS = Object.freeze({
       // Never installs: Docker Desktop / NVIDIA toolkit / WSL2 are host-level operator decisions and the payload is ~9.5 GB.
       return {
         success: false,
-        error: 'PortOS does not install this stack. On the RTX 3090 host, set up WSL2 (or Linux) with Docker and the NVIDIA Container Toolkit — then the checklist can clone, build and prepare the compose project for you (see docs/features/qwen38-rtx3090.md).',
+        error: 'PortOS does not install this stack. On the RTX 3090 host, set up WSL2 (or Linux) with Docker and the NVIDIA Container Toolkit — then the checklist can clone, build and prepare the compose project for you (see docs/features/local-llm-runtimes.md#vllm-on-rtx-3090).',
       };
     },
     // On-disk state in the four-state vocabulary; `'empty'` makes the checklist offer `provision-start`, which `vllmProjectSetupState` reports only where cloning/building IS the fix.
@@ -310,7 +310,7 @@ const SETUP_ROWS = Object.freeze({
       // Never installs, same reasons as vLLM (host-level operator decisions).
       return {
         success: false,
-        error: 'PortOS does not install this stack. On the Hopper or Blackwell host, set up Docker with the NVIDIA Container Toolkit, then follow docs/features/sglang-qwen38.md — it carries the compose file (with the verified launch line) and the one-time weight download.',
+        error: 'PortOS does not install this stack. On the Hopper or Blackwell host, set up Docker with the NVIDIA Container Toolkit, then follow docs/features/local-llm-runtimes.md#sglang-on-hopper-or-blackwell — it carries the compose file (with the verified launch line) and the one-time weight download.',
       };
     },
     async start({ emit, isCancelled }) {

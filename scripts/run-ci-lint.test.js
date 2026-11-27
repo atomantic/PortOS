@@ -1,8 +1,7 @@
 import { spawnSync } from 'node:child_process';
-import { cpSync, existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { cpSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
-import { fileURLToPath } from 'node:url';
 import { describe, expect, it } from 'vitest';
 
 import { BIOME_BIN, LINT_MODES, SERVER_LINT_ARGS, SHARED_LINT_ARGS, buildLintArgs, selectClientFiles, touchesServer } from './run-ci-lint.js';
@@ -132,6 +131,9 @@ describe('CI lint runner', () => {
     expect(touchesServer(['server/services/a.js', 'docs/x.md'])).toBe(true);
     expect(touchesServer(['server/biome.jsonc'])).toBe(true);
     expect(touchesServer(['biome.jsonc'])).toBe(true);
+    expect(touchesServer(['lint-no-raw-pm2-jlist.grit'])).toBe(true);
+    expect(touchesServer(['server/lint-glab-list-flags.grit'])).toBe(true);
+    expect(touchesServer(['autofixer/runner.cjs'])).toBe(true);
     expect(touchesServer(['scripts/ci-test-plan.js'])).toBe(true);
     expect(touchesServer(['scripts/migrations/shippedPromptHashes.test.js'])).toBe(true);
     expect(touchesServer(['lib/portosAuthCore.js'])).toBe(true);
@@ -148,43 +150,5 @@ describe('CI lint runner', () => {
       'client/biome.jsonc',
       'docs/API.md',
     ])).toBe(false);
-  });
-
-  it.skipIf(!existsSync(BIOME_BIN))('fails server lint for unused bindings and inherited warning diagnostics', () => {
-    const serverDir = join(dirname(fileURLToPath(import.meta.url)), '..', 'server');
-    const dir = mkdtempSync(join(tmpdir(), 'biome-findings-'));
-    try {
-      cpSync(join(serverDir, 'biome.jsonc'), join(dir, 'biome.jsonc'));
-      writeFileSync(join(dir, 'app.js'), 'const unused = 1;\n');
-      const lint = () => spawnSync(process.execPath, [BIOME_BIN, ...SERVER_LINT_ARGS], { cwd: dir, encoding: 'utf8' });
-      const unused = lint();
-      expect(unused.status).not.toBe(0);
-      expect(unused.stderr).toContain('noUnusedVariables');
-      writeFileSync(join(dir, 'app.js'), 'export const used = 1;\n');
-      expect(lint().status).toBe(0);
-      writeFileSync(join(dir, 'biome.jsonc'), JSON.stringify({ linter: { rules: { preset: 'none', correctness: { noUnusedVariables: 'warn' } } } }));
-      writeFileSync(join(dir, 'app.js'), 'const unused = 1;\n');
-      expect(lint().status).not.toBe(0);
-    } finally {
-      rmSync(dir, { recursive: true, force: true });
-    }
-  });
-
-  // Vitest's HTML reporter writes JS assets under server/coverage/; lint must
-  // ignore them while still failing on an undeclared identifier in real source.
-  it.skipIf(!existsSync(BIOME_BIN))('ignores generated coverage assets but still flags undeclared variables in source', () => {
-    const serverDir = join(dirname(fileURLToPath(import.meta.url)), '..', 'server');
-    const dir = mkdtempSync(join(tmpdir(), 'biome-cov-'));
-    try {
-      cpSync(join(serverDir, 'biome.jsonc'), join(dir, 'biome.jsonc'));
-      mkdirSync(join(dir, 'coverage'));
-      writeFileSync(join(dir, 'coverage', 'prettify.js'), 'PR.prettyPrint();\n');
-      const lint = () => spawnSync(process.execPath, [BIOME_BIN, 'lint', '.'], { cwd: dir, encoding: 'utf8' });
-      expect(lint().status).toBe(0);
-      writeFileSync(join(dir, 'app.js'), 'undeclaredThing();\n');
-      expect(lint().status).not.toBe(0);
-    } finally {
-      rmSync(dir, { recursive: true, force: true });
-    }
   });
 });

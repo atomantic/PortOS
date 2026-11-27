@@ -79,9 +79,9 @@ export const frameRateArg = (fps) => {
  */
 export async function enqueueRealesrganUpscale(historyId, {
   realesrganModel = DEFAULT_REALESRGAN_MODEL,
+  musicVideo = null,
   musicVideoProjectId = null,
   sceneId = null,
-  selectOverSource = false,
 } = {}) {
   const plan = await planUpscaleHistoryItem(historyId, { method: 'realesrgan', realesrganModel });
   if (plan.alreadyUpscaled) {
@@ -101,9 +101,11 @@ export async function enqueueRealesrganUpscale(historyId, {
   }
   const item = await getHistoryItem(plan.id);
   if (!item) throw new ServerError('Video not found', { status: 404, code: 'NOT_FOUND' });
-  const musicVideo = musicVideoProjectId
-    ? { projectId: musicVideoProjectId, ...(sceneId ? { sceneId } : {}), tier: 'final', ...(selectOverSource && sceneId ? { selectOverSource: true } : {}) }
-    : null;
+  const attribution = musicVideo?.projectId
+    ? musicVideo
+    : musicVideoProjectId
+      ? { projectId: musicVideoProjectId, ...(sceneId ? { sceneId } : {}), tier: 'final' }
+      : null;
   return enqueueJob({
     kind: LTX_UPSCALE_JOB_KIND,
     params: {
@@ -121,7 +123,7 @@ export async function enqueueRealesrganUpscale(historyId, {
       height: plan.target.height,
       numFrames: plan.target.frameCount,
       fps: plan.source.fps,
-      ...(musicVideo ? { musicVideo, musicVideoProjectId: musicVideo.projectId } : {}),
+      ...(attribution ? { musicVideo: attribution, musicVideoProjectId: attribution.projectId } : {}),
     },
   });
 }

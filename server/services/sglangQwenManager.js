@@ -1,7 +1,7 @@
 /**
  * Finds where the SGLang Qwen3.8-27B project lives on a Windows host (WSL2 distro).
  * No provisioning counterpart to `services/vllmQwenManager.js`: the operator prepares
- * the directory from `docs/features/sglang-qwen38.md`. `ensureSglangProjectDir` is the
+ * the directory from `docs/features/local-llm-runtimes.md#sglang-on-hopper-or-blackwell`. `ensureSglangProjectDir` is the
  * shared settle → detect → record loop (`services/wslProjectPlacement.js`) with this
  * stack's env var, leaf and wording; nothing is created.
  */
@@ -21,7 +21,7 @@ const SGLANG_PLACEMENT = Object.freeze({
   envVar: SGLANG_PROJECT_DIR_ENV,
   leaf: SGLANG_PROJECT_LEAF,
   sizeHint: '~20 GB',
-  afterInstall: 'prepare the project inside it as docs/features/sglang-qwen38.md describes — PortOS finds it there by itself, and never downloads the image or the weights for you',
+  afterInstall: 'prepare the project inside it as docs/features/local-llm-runtimes.md#sglang-on-hopper-or-blackwell describes — PortOS finds it there by itself, and never downloads the image or the weights for you',
 });
 
 /**

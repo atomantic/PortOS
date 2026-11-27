@@ -80,4 +80,4 @@ run's budget too.
 ## Related Features
 
 - [Chief of Staff](./chief-of-staff.md) - Uses prompts for agent briefings
-- [Memory System](./memory-system.md) - Uses prompts for memory evaluation
+- [Persistent Mind](./persistent-mind-continuous-play.md) documents the local thinking profile.

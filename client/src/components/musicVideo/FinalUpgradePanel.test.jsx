@@ -5,7 +5,9 @@ import { finalApprovalPatch } from '../../../../server/lib/musicVideo/musicVideo
 const upgradeMusicVideoShots = vi.fn();
 vi.mock('../../services/apiMusicVideo.js', () => ({ upgradeMusicVideoShots: (...args) => upgradeMusicVideoShots(...args) }));
 vi.mock('../ui/Toast');
-vi.mock('../media/RealesrganInstallButton', () => ({ default: () => <button type="button">Install Real-ESRGAN</button> }));
+vi.mock('../media/RealesrganInstallButton', () => ({
+  default: ({ onInstalled }) => <button type="button" onClick={onInstalled}>Install Real-ESRGAN</button>,
+}));
 
 const { default: FinalUpgradePanel } = await import('./FinalUpgradePanel.jsx');
 
@@ -40,7 +42,7 @@ it('prices each method with a dry run before the upgrade runs, then reports each
   expect(screen.getByTestId('final-upgrade-run').disabled).toBe(true);
   expect(screen.getByTestId('final-upgrade-run').textContent).toContain('pricing…');
   await waitFor(() => expect(screen.getByTestId('final-upgrade-run').textContent).toBe('Upgrade approved (1) · no provider cost'));
-  expect(upgradeMusicVideoShots).toHaveBeenLastCalledWith('p1', { method: 'upscale', upscaleMethod: 'lanczos', dryRun: true }, { silent: true });
+  expect(upgradeMusicVideoShots).toHaveBeenLastCalledWith('p1', { method: 'upscale', dryRun: true }, { silent: true });
 
   fireEvent.click(screen.getByLabelText(/Re-render at final/));
   await waitFor(() => expect(screen.getByTestId('final-upgrade-run').textContent).toBe('Upgrade approved (1) · $1.50'));
@@ -49,7 +51,7 @@ it('prices each method with a dry run before the upgrade runs, then reports each
 
   fireEvent.click(screen.getByTestId('final-upgrade-run'));
   await screen.findByTestId('final-upgrade-results');
-  expect(upgradeMusicVideoShots).toHaveBeenLastCalledWith('p1', { method: 'rerender' }, { silent: true });
+  expect(upgradeMusicVideoShots).toHaveBeenLastCalledWith('p1', { method: 'rerender', sceneIds: ['s0'] }, { silent: true });
   expect(screen.getByTestId('final-upgrade-results').textContent).toContain('Shot 0: final render queued; it lands beside the draft');
 });
 
@@ -94,37 +96,51 @@ it('drops the plan when an approval stops matching, so a stale price is never of
   expect(screen.queryByTestId('final-upgrade-run')).toBeNull();
 });
 
-// #19985: an upscale upgrade can run the opt-in local Real-ESRGAN lane; the dry run reports its
-// readiness, offers the install in place, and a run reports queued shots rather than selected ones.
-it('plans and queues a Real-ESRGAN upscale, offering the install while it is missing', async () => {
-  let installed = false;
-  upgradeMusicVideoShots.mockImplementation(async (_id, body) => {
-    const ready = body.upscaleMethod !== 'realesrgan' || installed;
-    const plan = {
-      dryRun: true, method: 'upscale', upscaleMethod: body.upscaleMethod, totalCostUsd: 0,
-      upscalerReason: ready ? null : 'Real-ESRGAN (ncnn Vulkan) is not installed on this machine.',
-      shots: [ready
-        ? { sceneId: 's0', status: 'ready', method: 'upscale', upscaleMethod: body.upscaleMethod, costUsd: 0 }
-        : { sceneId: 's0', status: 'upscaler-not-ready', upscaleMethod: body.upscaleMethod }],
-    };
-    return body.dryRun ? plan : { ...plan, dryRun: false, results: [{ sceneId: 's0', ok: true, method: 'upscale', jobId: 'job-up', queued: true }] };
+it('displays the SeedVR2 estimate and tracks the queued upscale', async () => {
+  const plan = {
+    ...planFor({ method: 'upscale' }), upscaleMethod: 'fal-seedvr2', upscaleTargetResolution: '1440p',
+    totalCostUsd: 0.49, shots: [{ sceneId: 's0', status: 'ready', method: 'upscale', costUsd: 0.49 }],
+  };
+  upgradeMusicVideoShots.mockResolvedValueOnce(plan).mockResolvedValueOnce({
+    results: [{ sceneId: 's0', method: 'upscale', ok: true, jobId: 'upscale-s0' }],
   });
-  const project = { id: 'p1', videoSettings: {}, scenes: [approve(shot(0))] };
-  const view = render(<FinalUpgradePanel project={project} shotName={shotName} onApprove={vi.fn()} />);
+  const onUpscaleQueued = vi.fn();
+  render(<FinalUpgradePanel project={{ id: 'p1', scenes: [approve(shot(0))] }} shotName={shotName} onUpscaleQueued={onUpscaleQueued} />);
   openPanel();
-  await screen.findByTestId('final-upgrade-plan');
-  fireEvent.change(screen.getByLabelText('Upscaler'), { target: { value: 'realesrgan' } });
-  await waitFor(() => expect(upgradeMusicVideoShots).toHaveBeenLastCalledWith('p1', { method: 'upscale', upscaleMethod: 'realesrgan', dryRun: true }, { silent: true }));
-  expect(await screen.findByText(/not installed on this machine/)).toBeTruthy();
-  expect(screen.getByRole('button', { name: 'Install Real-ESRGAN' })).toBeTruthy();
-  expect(screen.getByTestId('final-upgrade-plan').textContent).toContain('Shot 0: the upscaler is not installed');
-  expect(screen.getByTestId('final-upgrade-run').disabled).toBe(true);
+  expect(await screen.findByText('fal.ai SeedVR2 · 1440p')).toBeInTheDocument();
+  fireEvent.click(screen.getByRole('button', { name: 'Upgrade approved (1) · $0.49' }));
+  expect(await screen.findByText(/Shot 0: upscale queued/)).toBeInTheDocument();
+  expect(onUpscaleQueued).toHaveBeenCalledWith('upscale-s0', 's0');
+  expect(upgradeMusicVideoShots).toHaveBeenLastCalledWith('p1', {
+    method: 'upscale', sceneIds: ['s0'], upscaleMethod: 'fal-seedvr2', upscaleTargetResolution: '1440p',
+  }, { silent: true });
+});
 
-  installed = true;
-  view.rerender(<FinalUpgradePanel project={{ ...project, videoSettings: { refreshed: true } }} shotName={shotName} onApprove={vi.fn()} />);
-  await waitFor(() => expect(screen.getByTestId('final-upgrade-plan').textContent).toContain('Shot 0: upscale 2x with Real-ESRGAN'));
+it('offers the Real-ESRGAN install in place while blocked and queues once installed', async () => {
+  const blocked = {
+    dryRun: true, method: 'upscale', upscaleMethod: 'realesrgan', upscaleTargetResolution: '1080p', totalCostUsd: 0,
+    shots: [{
+      sceneId: 's0', status: 'upscale-blocked', method: 'upscale', upscaleMethod: 'realesrgan',
+      upscalerSupported: true, upscalerInstallTarget: { version: 'v0.2.5.0', sizeBytes: 51_817_124 },
+      reason: 'Real-ESRGAN (ncnn Vulkan) is not installed on this machine.',
+    }],
+  };
+  const ready = {
+    dryRun: true, method: 'upscale', upscaleMethod: 'realesrgan', upscaleTargetResolution: '1080p', totalCostUsd: 0,
+    shots: [{ sceneId: 's0', status: 'ready', method: 'upscale', upscaleMethod: 'realesrgan', costUsd: 0 }],
+  };
+  upgradeMusicVideoShots
+    .mockResolvedValueOnce(blocked)
+    .mockResolvedValueOnce(ready)
+    .mockResolvedValueOnce({ results: [{ sceneId: 's0', method: 'upscale', ok: true, jobId: 'realesrgan-s0' }] });
+  const onUpscaleQueued = vi.fn();
+  render(<FinalUpgradePanel project={{ id: 'p1', videoSettings: { upscaleMethod: 'realesrgan' }, scenes: [approve(shot(0))] }} shotName={shotName} onUpscaleQueued={onUpscaleQueued} />);
+  openPanel();
+  expect(await screen.findByText('Real-ESRGAN · 2×')).toBeInTheDocument();
+  expect(screen.getByTestId('final-upgrade-run').disabled).toBe(true);
+  fireEvent.click(screen.getByRole('button', { name: 'Install Real-ESRGAN' }));
+  await waitFor(() => expect(screen.getByTestId('final-upgrade-run').disabled).toBe(false));
   fireEvent.click(screen.getByTestId('final-upgrade-run'));
-  await screen.findByTestId('final-upgrade-results');
-  expect(upgradeMusicVideoShots).toHaveBeenLastCalledWith('p1', { method: 'upscale', upscaleMethod: 'realesrgan' }, { silent: true });
-  expect(screen.getByTestId('final-upgrade-results').textContent).toContain('Shot 0: Real-ESRGAN upscale queued; the final take is selected when it lands');
+  expect(await screen.findByText(/Shot 0: upscale queued/)).toBeInTheDocument();
+  expect(onUpscaleQueued).toHaveBeenCalledWith('realesrgan-s0', 's0');
 });

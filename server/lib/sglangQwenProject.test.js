@@ -137,12 +137,12 @@ describe('sglangStartBlockedReason', () => {
   it('names the project dir and the doc when the directory is missing', () => {
     const reason = sglangStartBlockedReason({ ...base, hasProject: false });
     expect(reason).toContain('/srv/sglang');
-    expect(reason).toContain('docs/features/sglang-qwen38.md');
+    expect(reason).toContain('docs/features/local-llm-runtimes.md#sglang-on-hopper-or-blackwell');
   });
 
   it('points at the doc\'s compose file when only that is missing', () => {
     expect(sglangStartBlockedReason({ ...base, composeFile: null }))
-      .toContain('docs/features/sglang-qwen38.md');
+      .toContain('docs/features/local-llm-runtimes.md#sglang-on-hopper-or-blackwell');
   });
 
   it('gives the empty-cache and unreadable-cache cases DIFFERENT copy', () => {

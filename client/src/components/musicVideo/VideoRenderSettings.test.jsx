@@ -86,3 +86,19 @@ describe('draft and final clip resolutions', () => {
     expect(screen.queryByLabelText('Draft clip resolution')).toBeNull();
   });
 });
+
+it('offers the saved draft backend and SeedVR2 resolution in the preferred workflow', () => {
+  const change = vi.fn();
+  const videoSettings = { ...base, falEnabled: true, settings: { ...base.settings, backend: 'grok' }, change };
+  render(<VideoRenderSettings videoSettings={videoSettings} />);
+  expect(screen.getByRole('combobox', { name: 'Draft clip backend' })).toHaveValue('grok');
+  expect(screen.getByRole('combobox', { name: 'Clip upscaler' })).toHaveValue('fal-seedvr2');
+  const target = screen.getByRole('combobox', { name: 'SeedVR2 target resolution' });
+  expect(target).toHaveValue('1080p');
+  fireEvent.change(target, { target: { value: '1440p' } });
+  expect(change).toHaveBeenCalledWith({ upscaleTargetResolution: '1440p' });
+  const upscaler = screen.getByRole('combobox', { name: 'Clip upscaler' });
+  expect(screen.getByRole('option', { name: 'Real-ESRGAN' }).disabled).toBe(false);
+  fireEvent.change(upscaler, { target: { value: 'realesrgan' } });
+  expect(change).toHaveBeenLastCalledWith({ upscaleMethod: 'realesrgan' });
+});

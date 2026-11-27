@@ -965,6 +965,11 @@ describe('socket.js — initSocket', () => {
     expect(io.emitted).toContainEqual(['image-gen:failed', { generationId: 'job-fail', error: 'runtime not ready' }]);
   });
 
+  it('bridges cancellation for a shot upscale queued alongside clip renders', () => {
+    mediaJobEvents.emit('canceled', { kind: 'video-upscale', id: 'shot-upscale', params: { musicVideo: { projectId: 'mv-example', sceneId: 's1' } } });
+    expect(io.emitted).toContainEqual(['video-gen:canceled', { generationId: 'shot-upscale' }]);
+  });
+
   it('bridges a failed video job to video-gen:failed', () => {
     mediaJobEvents.emit('failed', { id: 'vid-fail', kind: 'video', error: 'BYOV runtime threw' });
     expect(io.emitted).toContainEqual(['video-gen:failed', { generationId: 'vid-fail', error: 'BYOV runtime threw' }]);
