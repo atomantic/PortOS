@@ -676,7 +676,7 @@ export default function LlamaServerCard({
                   id="llama-cache-type-k"
                   aria-label="KV cache K"
                   value={llamaForm.cacheTypeK}
-                  onChange={(e) => setLlamaField('cacheTypeK', e.target.value)}
+                  onChange={(e) => setLlamaForm((prev) => ({ ...prev, cacheTypeK: e.target.value }))}
                   className="w-full bg-port-card border border-port-border rounded px-2 py-1 text-xs text-white"
                 >
                   <option value="">default</option>
@@ -688,7 +688,7 @@ export default function LlamaServerCard({
                   id="llama-cache-type-v"
                   aria-label="KV cache V"
                   value={llamaForm.cacheTypeV}
-                  onChange={(e) => setLlamaField('cacheTypeV', e.target.value)}
+                  onChange={(e) => setLlamaForm((prev) => ({ ...prev, cacheTypeV: e.target.value }))}
                   className="w-full bg-port-card border border-port-border rounded px-2 py-1 text-xs text-white"
                 >
                   <option value="">default</option>
