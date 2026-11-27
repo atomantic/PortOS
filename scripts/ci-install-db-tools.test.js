@@ -33,10 +33,12 @@ Signed-By: /usr/share/keyrings/ubuntu-archive-keyring.gpg
 //   ok         — every source answers promptly
 //   slowRunner — the watchdog expires while the Azure mirror is configured
 //   dead       — the watchdog expires for every download
+//   indexError — APT rejects an index refresh
+//   missing    — the refresh succeeds but ffmpeg cannot be resolved
 // Inject a Bash clock and watchdog instead of sleeping against 1–3 second
 // budgets: startup/source rewriting consumed those budgets under load, and
 // macOS does not ship GNU timeout. The real script still computes deadlines.
-function run(mirror, cache, { includePostgres = true, event = 'push', missingTool } = {}) {
+function run(mirror, cache, { includePostgres = true, event = 'push', missingTool, ubuntuSources = RUNNER_SOURCES } = {}) {
   const dir = mkdtempSync(join(tmpdir(), 'ci-db-tools-'));
   const bin = join(dir, 'bin');
   const root = join(dir, 'root');
@@ -61,7 +63,7 @@ function run(mirror, cache, { includePostgres = true, event = 'push', missingToo
   }
   mkdirSync(join(root, 'etc/apt/sources.list.d'), { recursive: true });
   writeFileSync(join(root, 'etc/os-release'), 'VERSION_CODENAME=noble\n');
-  writeFileSync(sourcesFile, RUNNER_SOURCES);
+  if (ubuntuSources) writeFileSync(sourcesFile, ubuntuSources);
   writeFileSync(join(root, 'etc/apt/sources.list.d/microsoft-prod.list'), 'deb [arch=amd64] https://packages.microsoft.com/ubuntu/24.04/prod noble main\n');
   writeFileSync(join(root, 'etc/apt/sources.list.d/microsoft-prod.sources'), 'Types: deb\nURIs: https://packages.microsoft.com/ubuntu/24.04/prod\nSuites: noble\nComponents: main\n');
   const fake = (name, body) => writeFileSync(join(bin, name), `#!/bin/bash\n${body}\n`, { mode: 0o755 });
@@ -137,7 +139,15 @@ if [[ " $* " = *" update "* ]]; then
     fi
   done
 fi
-if ${stall}; then exit 124; fi
+if ${stall ?? 'false'}; then exit 124; fi
+if [[ " $* " = *" update "* && '${mirror}' = indexError ]]; then
+  echo 'E: Failed to fetch an index' >&2
+  exit 100
+fi
+if [[ '${mirror}' = missing && ( " $* " = *" --print-uris "* || " $* " = *" --download-only "* ) ]]; then
+  echo 'E: Unable to locate package ffmpeg' >&2
+  exit 100
+fi
 if [[ " $* " = *" --print-uris "* ]]; then
   for file in '${PACKAGE_FILE}' '${COMPANION_FILE}'; do
     echo "'https://example.com/$file' $file ${PACKAGE_BYTES.length} SHA256:${PACKAGE_HASH}"
@@ -209,7 +219,8 @@ describe.skipIf(process.platform === 'win32')('CI DB tool installation', () => {
     expect(result.sourceparts).toEqual([['pgdg.list', 'ubuntu.sources']]);
     for (const call of result.rawCalls) expect(call).toContain('-o Dir::Etc::sourceparts=');
     expect(result.calls).toEqual([
-      'apt-get update',
+      'apt-get update --error-on=any',
+      'apt-get --print-uris install -y --no-install-recommends postgresql-client-17 ffmpeg',
       'apt-get install -y --no-install-recommends --download-only postgresql-client-17 ffmpeg',
       INSTALL_FROM_CACHE,
     ]);
@@ -225,7 +236,8 @@ describe.skipIf(process.platform === 'win32')('CI DB tool installation', () => {
     expect(result.rawCalls[0]).toContain('-o Acquire::Languages=none');
     expect(result.sourceparts).toEqual([['ubuntu.sources']]);
     expect(result.calls).toEqual([
-      'apt-get update',
+      'apt-get update --error-on=any',
+      'apt-get --print-uris install -y --no-install-recommends ffmpeg',
       'apt-get install -y --no-install-recommends --download-only ffmpeg',
       'apt-get install -y --no-install-recommends --no-download ffmpeg',
     ]);
@@ -236,24 +248,57 @@ describe.skipIf(process.platform === 'win32')('CI DB tool installation', () => {
   it('recovers from a stalled runner mirror through the official archive, keeping signing', () => {
     const result = run('slowRunner', 'cold');
     expect(result.status, result.stderr).toBe(0);
+    expect(result.stdout).toContain('APT index refresh exceeded the 45s runner mirror budget');
     expect(result.stdout).toContain('switching to https://archive.ubuntu.com/ubuntu/');
     expect(result.sources).toBe(RUNNER_SOURCES.replace('http://azure.archive.ubuntu.com/ubuntu/', 'https://archive.ubuntu.com/ubuntu/'));
     expect(result.calls).toEqual([
-      'apt-get update',
-      'apt-get update',
+      'apt-get update --error-on=any',
+      'apt-get update --error-on=any',
+      'apt-get --print-uris install -y --no-install-recommends postgresql-client-17 ffmpeg',
       'apt-get install -y --no-install-recommends --download-only postgresql-client-17 ffmpeg',
       INSTALL_FROM_CACHE,
     ]);
     // The primary stall spends 45s of fake time, leaving 345s of the one
     // total deadline for all fallback commands (no per-command reset).
-    expect(result.budgets).toEqual([45, 345, 345]);
+    expect(result.budgets).toEqual([45, 345, 345, 345]);
     expect(result.githubPath).toBe('/usr/lib/postgresql/17/bin\n');
 
     // Mirror failover also works with Ubuntu-only source filtering.
     const browser = run('slowRunner', 'cold', { includePostgres: false });
     expect(browser.status, browser.stderr).toBe(0);
     expect(browser.sourceparts).toEqual([['ubuntu.sources'], ['ubuntu.sources']]);
-    expect(browser.budgets).toEqual([45, 345, 345]);
+    expect(browser.budgets).toEqual([45, 345, 345, 345]);
+  });
+
+  it('reports a failed index refresh before resolving packages or reading cached bytes', () => {
+    const result = run('indexError', 'warm');
+    expect(result.status).toBe(1);
+    expect(result.stderr).toContain('APT index refresh failed (exit 100)');
+    expect(result.stderr).toContain('Recognized Ubuntu source-parts files: 1');
+    expect(result.stderr).toContain('replaceable runner mirror URI match: yes');
+    expect(result.calls).toEqual(['apt-get update --error-on=any']);
+    expect(result.checksumCalls).toBe(0);
+    expect(result.stdout).not.toContain('switching');
+  });
+
+  it.each([
+    { ubuntuSources: null, files: 0, mirrorMatch: 'no', cache: 'cold' },
+    { ubuntuSources: RUNNER_SOURCES, files: 1, mirrorMatch: 'yes', cache: 'warm' },
+  ])('reports unresolved ffmpeg after a fast index refresh with $files Ubuntu files', ({ ubuntuSources, files, mirrorMatch, cache }) => {
+    const result = run('missing', cache, { includePostgres: false, ubuntuSources });
+    expect(result.status).toBe(1);
+    expect(result.stdout).toContain('APT indexes refreshed in 0s');
+    expect(result.stderr).toContain('APT package resolution failed (exit 100)');
+    expect(result.stderr).toContain(`Recognized Ubuntu source-parts files: ${files}`);
+    expect(result.stderr).toContain(`replaceable runner mirror URI match: ${mirrorMatch}`);
+    expect(result.stderr).not.toContain('azure.archive.ubuntu.com');
+    expect(result.calls).toEqual([
+      'apt-get update --error-on=any',
+      'apt-get --print-uris install -y --no-install-recommends ffmpeg',
+    ]);
+    expect(result.checksumCalls).toBe(0);
+    expect(result.githubPath).toBe('');
+    expect(result.stdout).not.toContain('switching');
   });
 
   it('fails as an installation failure once the whole budget is spent', () => {
@@ -271,7 +316,7 @@ describe.skipIf(process.platform === 'win32')('CI DB tool installation', () => {
     expect(cold.status, cold.stderr).toBe(0);
     expect(cold.downloaded).toEqual([`download ${PACKAGE_FILE}`, `download ${COMPANION_FILE}`]);
     expect(cold.checksumCalls).toBe(0);
-    expect(cold.budgets).toEqual([45, 45]);
+    expect(cold.budgets).toEqual([45, 45, 45]);
     expect(cold.stageCalls).toEqual(['stage 2 files']);
     expect(cold.cachedPackage).toBe(PACKAGE_BYTES);
     expect(cold.cachedPartial).toBe(false);
@@ -286,7 +331,7 @@ describe.skipIf(process.platform === 'win32')('CI DB tool installation', () => {
     expect(warm.githubPath).toMatch(/\/portos-ci-tools\.[^/]+\/bin\n$/);
     expect(warm.stdout).toContain(`Reused verified APT package ${PACKAGE_FILE}`);
     expect(warm.calls).toEqual([
-      'apt-get update',
+      'apt-get update --error-on=any',
       'apt-get --print-uris install -y --no-install-recommends postgresql-client-17 ffmpeg',
     ]);
     expect(warm.budgets).toEqual([45, 45]);
@@ -309,7 +354,7 @@ describe.skipIf(process.platform === 'win32')('CI DB tool installation', () => {
         expect(result.verifiedTools).toEqual(['ffmpeg', 'ffprobe']);
         expect(result.githubPath).toMatch(/\/portos-ci-tools\.[^/]+\/bin\n$/);
         expect(result.calls).toEqual([
-          'apt-get update',
+          'apt-get update --error-on=any',
           'apt-get --print-uris install -y --no-install-recommends ffmpeg',
         ]);
       }

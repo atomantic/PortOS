@@ -21,6 +21,7 @@ PRIMARY_BUDGET="${APT_PRIMARY_BUDGET_SECONDS:-45}"
 TOTAL_BUDGET="${APT_TOTAL_BUDGET_SECONDS:-390}"
 # The HTTP archive can trickle while the same index is reachable over HTTPS.
 OFFICIAL_ARCHIVE='https://archive.ubuntu.com/ubuntu/'
+SOURCE_URI_LINE='^[[:space:]]*(deb(-src)?[[:space:]]|URIs:[[:space:]])'
 # The runner's Azure mirror, by URL or through its mirror list.
 RUNNER_MIRROR='(mirror\+file:/etc/apt/apt-mirrors\.txt|https?://[a-z0-9.-]+\.archive\.ubuntu\.com/ubuntu/?)'
 PACKAGES=(ffmpeg)
@@ -113,12 +114,9 @@ prepare_private_runtime() {
 # whose SHA256 matches the current signed index, never cached indexes or state.
 restore_archives() {
   [[ -n "${APT_PACKAGE_CACHE:-}" ]] || return 0
-  local manifest uri filename _size hash result expected=0
+  local manifest="$1" uri filename _size hash result expected=0
   local cached=("$APT_PACKAGE_CACHE/"*.deb) checksums=() verified=()
   [[ -f "${cached[0]:-}" ]] || return 0
-  manifest=$(bounded "$1" sudo apt-get "${APT_OPTS[@]}" \
-    -o "Dir::Cache::archives=${ARCHIVES}/verify-empty" -o Acquire::ForceHash=sha256 \
-    --print-uris "${APT_INSTALL_OPTS[@]}" "${PACKAGES[@]}") || return
   while read -r uri filename _size hash; do
     [[ "$uri" == \'* ]] || continue
     expected=$((expected + 1))
@@ -159,12 +157,22 @@ restore_archives() {
 }
 
 download_by() {
-  local started=$SECONDS
-  bounded "$1" sudo apt-get "${APT_OPTS[@]}" update || return
+  local manifest started=$SECONDS
+  apt_stage='index refresh'
+  # APT can otherwise exit successfully and reuse old indexes after a fetch error.
+  bounded "$1" sudo apt-get "${APT_OPTS[@]}" update --error-on=any || return
   echo "⏱ APT indexes refreshed in $((SECONDS - started))s"
   started=$SECONDS
-  restore_archives "$1" || return
+  apt_stage='package resolution'
+  # Resolve even on a cold cache. Use the same signed-index manifest to verify
+  # restored archives, leaving APT's normal dependency and trust checks in place.
+  manifest=$(bounded "$1" sudo apt-get "${APT_OPTS[@]}" \
+    -o "Dir::Cache::archives=${ARCHIVES}/verify-empty" -o Acquire::ForceHash=sha256 \
+    --print-uris "${APT_INSTALL_OPTS[@]}" "${PACKAGES[@]}") || return
+  apt_stage='cache restoration'
+  restore_archives "$manifest" || return
   [[ "$PRIVATE_READY" == false ]] || return 0
+  apt_stage='archive download'
   bounded "$1" sudo apt-get "${APT_OPTS[@]}" "${APT_INSTALL_OPTS[@]}" --download-only "${PACKAGES[@]}" || return
   echo "⏱ APT archives ready in $((SECONDS - started))s"
 }
@@ -181,16 +189,41 @@ if [[ "$INCLUDE_POSTGRES" == true ]]; then
   echo "deb [signed-by=${keyring#"$ROOT"}] https://apt.postgresql.org/pub/repos/apt ${VERSION_CODENAME}-pgdg main" > "${APT_SOURCEPARTS_DIR}/pgdg.list"
 fi
 
-if ! download_by "$PRIMARY_BUDGET"; then
-  echo "⚠️ Runner mirror did not deliver packages within ${PRIMARY_BUDGET}s; switching to ${OFFICIAL_ARCHIVE}"
-  sources=()
+apt_timed_out() {
+  # GNU timeout also returns 137 if its kill-after grace period expires.
+  [[ "$1" == 124 ]] || [[ "$1" == 137 && "$SECONDS" -ge "$2" ]]
+}
+
+describe_sources() {
+  local legacy_source="${ROOT}/etc/apt/sources.list" legacy_present=no mirror_match=no source
+  [[ ! -f "$legacy_source" ]] || legacy_present=yes
+  mirror_sources=()
   while IFS= read -r source; do
-    sources+=("$source")
-  done < <(grep -lE "$RUNNER_MIRROR" "${ROOT}/etc/apt/sources.list" ${ubuntu_sourceparts[@]+"${ubuntu_sourceparts[@]}"} 2>/dev/null || true)
-  (( ${#sources[@]} > 0 )) || fail "The runner mirror was slow and no Ubuntu source names it, so there is no mirror to replace."
-  sudo sed -i -E "s#${RUNNER_MIRROR}#${OFFICIAL_ARCHIVE}#g" "${sources[@]}"
-  download_by "$TOTAL_BUDGET" ||
-    fail "Packages did not download from the runner mirror or ${OFFICIAL_ARCHIVE} within ${TOTAL_BUDGET}s."
+    mirror_sources+=("$source")
+  done < <(grep -lE "${SOURCE_URI_LINE}.*${RUNNER_MIRROR}" "$legacy_source" ${ubuntu_sourceparts[@]+"${ubuntu_sourceparts[@]}"} 2>/dev/null || true)
+  (( ${#mirror_sources[@]} == 0 )) || mirror_match=yes
+  source_summary="Recognized Ubuntu source-parts files: ${#ubuntu_sourceparts[@]}; legacy source file present: ${legacy_present}; replaceable runner mirror URI match: ${mirror_match}."
+}
+
+download_status=0
+download_by "$PRIMARY_BUDGET" || download_status=$?
+if (( download_status != 0 )); then
+  describe_sources
+  apt_timed_out "$download_status" "$PRIMARY_BUDGET" ||
+    fail "APT ${apt_stage} failed (exit ${download_status}). ${source_summary}"
+  (( ${#mirror_sources[@]} > 0 )) ||
+    fail "APT ${apt_stage} exceeded the ${PRIMARY_BUDGET}s budget with no runner mirror URI to replace. ${source_summary}"
+  echo "⚠️ APT ${apt_stage} exceeded the ${PRIMARY_BUDGET}s runner mirror budget; switching to ${OFFICIAL_ARCHIVE}. ${source_summary}"
+  sudo sed -i -E "/${SOURCE_URI_LINE}/s#${RUNNER_MIRROR}#${OFFICIAL_ARCHIVE}#g" "${mirror_sources[@]}"
+  download_status=0
+  download_by "$TOTAL_BUDGET" || download_status=$?
+  if (( download_status != 0 )); then
+    describe_sources
+    if apt_timed_out "$download_status" "$TOTAL_BUDGET"; then
+      fail "APT ${apt_stage} did not finish with the official archive within ${TOTAL_BUDGET}s. ${source_summary}"
+    fi
+    fail "APT ${apt_stage} failed after switching to the official archive (exit ${download_status}). ${source_summary}"
+  fi
 fi
 
 if [[ "$PRIVATE_READY" == true ]]; then
