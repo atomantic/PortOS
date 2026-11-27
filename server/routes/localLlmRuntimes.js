@@ -390,7 +390,7 @@ router.post('/slotstream/models/download', asyncHandler(async (req, res) => {
   const io = req.app.get('io')
   const result = await downloadSlotstreamModel({ model, onProgress: (frame) => emitToOperatorsOn(io, 'slotstream:download', frame) })
   if (result.cancelled === true) {
-    return res.json({ success: false, cancelled: true, model: result.model })
+    return res.json({ status: 'canceled', canceled: true, model: result.model })
   }
   if (!result.success) {
     throw new ServerError(result.error || 'Slotstream checkpoint download failed', {

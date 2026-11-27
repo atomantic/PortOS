@@ -87,9 +87,10 @@ export default function LocalPersistentMindSetupCard({
     setBusy(key);
     try {
       const result = await fn();
-      if (successMessage) toast.success(successMessage);
+      if (result?.canceled) toast.info('Model download canceled');
+      else if (successMessage) toast.success(successMessage);
       await refresh();
-      onApplied?.(result);
+      if (!result?.canceled) onApplied?.(result);
     } catch (error) {
       toast.error(error?.message || 'Setup step failed');
       await refresh();

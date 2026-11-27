@@ -692,7 +692,10 @@ describe('LocalLlmRuntimesView runtime servers', () => {
     expect(screen.getByRole('button', { name: `Remove ${active}` })).toBeDisabled();
   });
 
-  it('clears a cancelled Slotstream download without a failure or completion toast', async () => {
+  it.each([
+    ['canceled', { status: 'canceled', canceled: true }],
+    ['cancelled', { success: false, cancelled: true }],
+  ])('clears a Slotstream download on %s without a failure or completion toast', async (event, outcome) => {
     const { getSlotstreamServerStatus, downloadSlotstreamModel, cancelSlotstreamModelDownload } = await import('../../services/apiLocalLlm.js');
     const toast = (await import('../ui/Toast')).default;
     const model = 'example-org/example-model';
@@ -719,11 +722,12 @@ describe('LocalLlmRuntimesView runtime servers', () => {
     expect(cancel).toBeDisabled();
     await act(async () => cancellation.resolve({ success: true, cancelled: true }));
     expect(toast.info).toHaveBeenCalledWith('Cancelling checkpoint download…');
-    act(() => receiveProgress({ event: 'cancelled', model }));
+    act(() => receiveProgress({ event, model }));
+    expect(screen.queryByRole('button', { name: 'Cancel' })).not.toBeInTheDocument();
     expect(download).toBeDisabled();
     expect(cancelSlotstreamModelDownload).toHaveBeenCalledWith(model, { silent: true });
 
-    await act(async () => transfer.resolve({ success: false, cancelled: true, model }));
+    await act(async () => transfer.resolve({ ...outcome, model }));
 
     expect(screen.queryByRole('button', { name: 'Cancel' })).not.toBeInTheDocument();
     expect(download).toBeEnabled();

@@ -71,6 +71,7 @@ import {
 } from '../../services/apiLocalLlm.js';
 import { getSystemCapabilities, patchSettingsSlice } from '../../services/apiSystem.js';
 import socket from '../../services/socket';
+import toast from '../ui/Toast';
 import { clickStartDownload } from '../../test/downloadPreflightConfirm.js';
 import LocalLlmLibraryView from './LocalLlmLibraryView.jsx';
 
@@ -326,7 +327,10 @@ describe('LocalLlmLibraryView installed models', () => {
   it('shows a running download with live progress and cancels it', async () => {
     let finish;
     installLocalLlmModel.mockImplementation(() => new Promise((resolve) => { finish = resolve; }));
-    cancelLocalLlmInstall.mockImplementation(async () => { finish({ success: false, canceled: true }); return { success: true }; });
+    cancelLocalLlmInstall.mockImplementation(async () => {
+      finish({ status: 'canceled', canceled: true, modelId: LONG_ID });
+      return { success: true };
+    });
     await renderLibrary();
     fireEvent.click(screen.getByRole('button', { name: `Redownload ${LONG_ID}` }));
     await clickStartDownload();
@@ -339,6 +343,9 @@ describe('LocalLlmLibraryView installed models', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Cancel' }));
     expect(cancelLocalLlmInstall).toHaveBeenCalledWith('ollama', LONG_ID);
     await waitFor(() => expect(screen.queryByText(`Downloading ${LONG_ID} on Ollama`)).toBeNull());
+    expect(toast.info).toHaveBeenCalledWith(`${LONG_ID} download canceled`);
+    expect(toast.success).not.toHaveBeenCalled();
+    expect(toast.error).not.toHaveBeenCalled();
   });
 
   it('shows a download the server reports after a reload, with its Cancel', async () => {
@@ -350,10 +357,10 @@ describe('LocalLlmLibraryView installed models', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Cancel' }));
     expect(cancelLocalLlmInstall).toHaveBeenCalledWith('ollama', 'example-model:7b');
     await act(async () => {});
-    // The canceled install ends on an `error` frame; the reloaded status no longer lists it.
+    // The terminal frame reloads status for a tab that did not start the install.
     getLocalLlmStatus.mockResolvedValue(status);
     const progressHandler = socket.on.mock.calls.find(([event]) => event === 'localLlm:progress')[1];
-    act(() => progressHandler({ event: 'error', message: 'example-model:7b download canceled' }));
+    act(() => progressHandler({ event: 'canceled', message: 'example-model:7b download canceled' }));
     await waitFor(() => expect(screen.queryByText('Downloading example-model:7b on Ollama')).toBeNull());
   });
 

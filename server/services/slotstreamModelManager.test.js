@@ -355,7 +355,7 @@ describe('downloadSlotstreamModel', () => {
       status: null,
       code: 'SLOTSTREAM_DOWNLOAD_CANCELLED',
     });
-    expect(frames.at(-1).event).toBe('cancelled');
+    expect(frames.at(-1).event).toBe('canceled');
   });
 
   it('does not apply the metadata deadline to a checkpoint transfer', async () => {
@@ -448,7 +448,7 @@ describe('downloadSlotstreamModel', () => {
     expect(result.success).toBe(false);
     expect(result.cancelled).toBe(true);
     expect(result.code).toBe('SLOTSTREAM_DOWNLOAD_CANCELLED');
-    expect(frames.at(-1).event).toBe('cancelled');
+    expect(frames.at(-1).event).toBe('canceled');
     expect(isSlotstreamDownloadInFlight(join(cacheDir, DIR_NAME))).toBe(false);
     // The bytes that landed are kept, so pressing download again resumes rather
     // than restarting a multi-gigabyte shard from zero.

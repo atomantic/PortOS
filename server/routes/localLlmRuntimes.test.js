@@ -267,10 +267,13 @@ describe.each([
   });
 
   it('acknowledges cancellation and returns cancelled transfers as HTTP 200', async () => {
-    const { post } = makeApp();
-    // Slotstream's service also returns internal cancellation metadata.
+    const { io, post } = makeApp();
     const cancelled = { success: false, cancelled: true, model };
-    transfer.mockResolvedValue(kind === 'slotstream' ? { ...cancelled, code: 'SLOTSTREAM_DOWNLOAD_CANCELLED' } : cancelled);
+    const frame = { event: kind === 'slotstream' ? 'canceled' : 'cancelled', model };
+    transfer.mockImplementation(async ({ onProgress }) => {
+      onProgress(frame);
+      return kind === 'slotstream' ? { ...cancelled, code: 'SLOTSTREAM_DOWNLOAD_CANCELLED' } : cancelled;
+    });
     cancel.mockReturnValueOnce(true).mockReturnValueOnce(false);
 
     const cancelledResponse = await post(`${path}/cancel`, cancelArgs[0]);
@@ -281,7 +284,8 @@ describe.each([
 
     const response = await post(path, { model });
     expect(response.status).toBe(200);
-    expect(response.body).toEqual(cancelled);
+    expect(response.body).toEqual(kind === 'slotstream' ? { status: 'canceled', canceled: true, model } : cancelled);
+    expect(io.emit).toHaveBeenCalledExactlyOnceWith(`${kind}:download`, frame);
     expect(resetProviderReadinessCache).not.toHaveBeenCalled();
     expect(syncRuntimeProviderModels).not.toHaveBeenCalled();
   });

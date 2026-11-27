@@ -470,11 +470,17 @@ describe('local LLM playground routes', () => {
     );
   });
 
-  it('answers a canceled install as canceled, not as a 502 failure', async () => {
+  it('reports a canceled install over HTTP and progress', async () => {
+    const app = makeApp();
     installModel.mockResolvedValue({ success: false, canceled: true, code: 'INSTALL_CANCELED', modelId: 'llama3.2' });
-    const res = await request(makeApp()).post('/api/local-llm/install').send({ backend: 'ollama', modelId: 'llama3.2' });
+    const res = await request(app).post('/api/local-llm/install').send({ backend: 'ollama', modelId: 'llama3.2' });
+
     expect(res.status).toBe(200);
-    expect(res.body).toEqual({ success: false, canceled: true, modelId: 'llama3.2' });
+    expect(res.body).toEqual({ status: 'canceled', canceled: true, modelId: 'llama3.2' });
+    expect(app.get('io').emit.mock.calls).toEqual([
+      ['localLlm:progress', { event: 'start', message: 'Installing llama3.2 on ollama…' }],
+      ['localLlm:progress', { event: 'canceled', message: 'llama3.2 download canceled' }],
+    ]);
   });
 
   it('POST /install/cancel stops a running download and 404s when none is running', async () => {
