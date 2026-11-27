@@ -20,14 +20,14 @@ import { randomUUID } from 'crypto';
 import {
   PATHS,
   ensureDir,
-  assertSafeFilename,
-  isSafeFilename,
   listDirectoryByExtension,
   copyFileGuarded,
   unlinkGuarded,
 } from '../../lib/fileUtils.js';
 import { assertFileNotMediaManifest } from '../../lib/uploads.js';
 import { withBackupAssetPublication } from '../../lib/backupSnapshotBoundary.js';
+import { SUPPORTED_AUDIO_EXTENSIONS, assertSafeMusicFilename } from '../../lib/musicFilename.js';
+export { SUPPORTED_AUDIO_EXTENSIONS, assertSafeMusicFilename, isSafeMusicFilename } from '../../lib/musicFilename.js';
 
 // Mirror of the sanitizer's MUSIC_SOURCES set in `services/pipeline/issues.js`.
 // Exported so routes don't sprinkle bare strings across upload, library, and
@@ -37,8 +37,6 @@ export const MUSIC_SOURCE = Object.freeze({
   LIBRARY: 'library',
   GEN: 'gen',
 });
-
-export const SUPPORTED_AUDIO_EXTENSIONS = Object.freeze(['.mp3', '.wav', '.m4a', '.ogg', '.flac']);
 
 export const MUSIC_UPLOAD_MAX_BYTES = 50 * 1024 * 1024;
 
@@ -56,28 +54,6 @@ export function isSupportedMusicUpload(file) {
   if (mime === 'video/mp4' && ext === '.m4a') return true; // some browsers
   return false;
 }
-
-/**
- * Validate a stored music filename — same pattern as the rest of the codebase.
- * Rejects path traversal, separators, and disallowed extensions.
- */
-export function assertSafeMusicFilename(filename) {
-  assertSafeFilename(filename, {
-    extensions: [...SUPPORTED_AUDIO_EXTENSIONS],
-    subject: 'music filename',
-  });
-}
-
-/**
- * The same rule as a predicate, for read-only callers that must treat a bad
- * stored filename as data. `sanitizeTrack` only `trimTo`s the top-level
- * `audioFilename` (unlike `renders[]`, which goes through
- * `trackAudioFilename`), so a legacy or peer-synced track can carry an
- * unsupported name — a preflight has to report that as one blocked asset, not
- * 400 the whole sweep via `assertSafeMusicFilename`.
- */
-export const isSafeMusicFilename = (filename) =>
-  isSafeFilename(filename, SUPPORTED_AUDIO_EXTENSIONS);
 
 /**
  * Generate a fresh deterministic basename for a newly-uploaded track. Keeps

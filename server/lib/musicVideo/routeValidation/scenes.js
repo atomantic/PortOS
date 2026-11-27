@@ -203,3 +203,5 @@ export const musicVideoPerformanceRepairSchema = z.object({
   sourceAssetId: z.string().min(1).max(200),
   boundarySec: z.number().finite().min(0).max(36000),
 }).strict();
+
+export const musicVideoColorMatchBasisSchema = z.object({ basis: z.string().max(100000) });
