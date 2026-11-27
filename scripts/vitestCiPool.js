@@ -89,6 +89,7 @@ export const EXCLUSIVE_TESTS = [
   'services/musicVideo/sharingCopy.test.js',
   'scripts/run-local-code-review.test.js',
   'lib/workTracker.trackerInstructions.test.js',
+  // The planner's real-tree walks and nested CLI runs need the quiet worker.
   '../scripts/ci-test-plan.test.js',
   // Three real nested runners need quiet startup, with owned cancellation.
   '../scripts/workspaceCaches.test.js',

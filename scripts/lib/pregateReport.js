@@ -12,9 +12,10 @@
  * checkouts its own tests build.
  */
 import { execFileSync } from 'node:child_process';
-import { copyFileSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, utimesSync, writeFileSync } from 'node:fs';
-import { tmpdir } from 'node:os';
+import { copyFileSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, utimesSync, writeFileSync, writeSync } from 'node:fs';
+import { constants, tmpdir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
+import { worktreeStatus } from './pregateGitState.js';
 
 /** Repo-relative location of the receipt; gitignored under `/.cache/`. */
 export const PREGATE_REPORT_PATH = '.cache/pregate/report.json';
@@ -137,4 +138,56 @@ export function writePregateReport(root, report) {
   mkdirSync(dirname(path), { recursive: true });
   writeFileSync(path, `${JSON.stringify(report, null, 2)}\n`);
   return path;
+}
+
+export function finalizePregateReceipt(repoRoot, plan, { results, uncovered, verdict }, {
+  options, repo, tree, hashWorkingTree, initiallyClean, initialHashError,
+  downgraded, maxWorkers, startedAt, owner,
+}) {
+  const { baseRef, baseSha, head: headSha } = repo;
+  let { failure, exitCode } = verdict ?? { failure: null, exitCode: 0 };
+  // A signal after the last stage ran (e.g. during its group sweep) leaves the
+  // completed run's receipt; it is reported below and still ends the process.
+  if (owner.signal && !failure && results.some((stage) => stage.status === 'not-run')) {
+    writeSync(2, `❌ Pregate incomplete: owner_pid=${process.pid} received_signal=${owner.signal} between stages.\n`);
+    failure = `❌ Pregate incomplete: cancelled by ${owner.signal} before every stage ran.`;
+    exitCode = 128 + constants.signals[owner.signal];
+  }
+
+  let treeAfterRun = null;
+  try {
+    if (initialHashError) throw new Error(initialHashError);
+    const after = initiallyClean ? worktreeStatus(repoRoot) : null;
+    treeAfterRun = after?.head === headSha && after.files.length === 0 && after.conflicts.length === 0
+      ? repo.tree
+      : hashWorkingTree();
+  } catch (error) {
+    failure ??= `❌ Cannot hash the working tree for the receipt: ${error.message}`;
+    if (exitCode === 0) exitCode = 2;
+  }
+  const report = buildPregateReport({
+    plan,
+    options: { base: baseRef, full: options.full, skipLint: options.skipLint, skipDb: options.skipDb, skipBrowser: options.skipBrowser, skipBuild: options.skipBuild, skipSmoke: options.skipSmoke },
+    base: { ref: baseRef, sha: baseSha },
+    head: { sha: headSha },
+    tree,
+    treeAfterRun,
+    stages: results,
+    skipped: uncovered,
+    downgraded,
+    runtime: { node: process.version, platform: process.platform, arch: process.arch, maxWorkers },
+    startedAt,
+    finishedAt: new Date().toISOString(),
+  });
+  if (!options.guardsOnly) writePregateReport(repoRoot, report);
+  // Synchronous: a piped stderr is written asynchronously, and the self-signal
+  // below would drop these lines before they flush.
+  if (tree !== null && !report.treeStable && !failure) {
+    failure = `❌ The working tree changed while pregate ran (${tree.slice(0, 12)} → ${treeAfterRun?.slice(0, 12) ?? 'unhashable'}); rerun on the resulting tree.`;
+    exitCode = 1;
+  }
+  if (failure) writeSync(2, `${failure}\n${options.guardsOnly ? '' : `📄 Receipt: ${PREGATE_REPORT_PATH}\n`}`);
+  else if (owner.signal) writeSync(2, `⚠️ Received ${owner.signal} after every stage passed; the receipt records that completed run.\n`);
+
+  return { failure, exitCode };
 }

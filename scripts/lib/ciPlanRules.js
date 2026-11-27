@@ -103,11 +103,10 @@ const FULL_TRIGGER_RULES = [
   // The scripts that decide what CI runs, run it, and gate the release on it.
   // A bug in any of them can make a scoped plan silently test nothing, so they
   // prove themselves against the complete suite rather than their own scope.
-  // Only the ones the windows-server job itself executes (ci-base-sha,
-  // run-ci-tests and the githubOutput helper it imports) escalate Windows; the
-  // planner, lint runner, hidden-content scan and status verifier run on Linux
-  // jobs only, so a Windows run would observe nothing they change.
-  { re: /^scripts\/(?:lib\/githubOutput|ci-base-sha|run-ci-tests)(?:\.test)?\.js$/, reason: 'CI pipeline script changed', windowsRelevant: true },
+  // The Windows runner executes the diff-base and npm launch code and consumes
+  // the planner outputs. Lint, hidden-content scanning and status verification
+  // run on Linux only.
+  { re: /^scripts\/(?:lib\/(?:githubOutput|ciNpmRunner|ciTestDiagnosticsFormat)|ci-base-sha|run-ci-tests)(?:\.test)?\.js$/, reason: 'CI pipeline script changed', windowsRelevant: true },
   // The planner, the modules it is split into and the module graph it walks (#16998).
   { re: /^scripts\/(?:ci-test-plan|lib\/(?:ciPlan[A-Za-z]+|moduleGraph))(?:\.test)?\.js$/, reason: 'CI pipeline script changed', windowsRelevant: true },
   { re: /^scripts\/(?:run-ci-lint|run-actionlint|scan-diff-hidden-content|verify-ci-status)(?:\.test)?\.js$/, reason: 'CI pipeline script changed', windowsRelevant: false },
@@ -269,6 +268,12 @@ export const TOOLING_TESTS = [
   'scripts/vitestTempRoot.test.js',
   'scripts/workspaceCaches.test.js',
 ];
+
+// Split planner suites contain synthetic path literals like the integration suite.
+// Their real dependencies select them; unrelated tooling diffs need no explicit selector.
+const PLANNER_MODULE_TEST_RE = /^scripts\/lib\/ciPlan(?:Rules|Inputs|Dependencies|Output)\.test\.js$/;
+
+export const isGateToolingTest = (path) => TOOLING_TESTS.includes(path) || PLANNER_MODULE_TEST_RE.test(path);
 
 // Paths whose edit can break a tooling test with no import edge reaching it: the
 // scripts and workflows themselves, every dependency manifest, the Vitest configs,
