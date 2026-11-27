@@ -48,6 +48,11 @@ import { parseCronToNextRun } from './eventScheduler.js'
 import { isInstanceFeatureEnabled } from './instanceFeatures.js'
 import { inputsUnchangedSince } from './taskInputGate.js'
 
+vi.mock('./taskScheduleRegistry.js', async (importOriginal) => {
+  const registry = await importOriginal();
+  return { ...registry, getTaskTypeInvocation: vi.fn(registry.getTaskTypeInvocation) };
+});
+
 // Resolve "the most recent 9 AM in the past, local time." Bare
 // `setHours(9, 0, 0, 0)` flakes in CI when the runner's wall-clock is
 // before 9 AM local (UTC CI fires at ~04:00 UTC daily) — today's 9 AM
@@ -1288,23 +1293,38 @@ describe('taskSchedule', () => {
           .toMatch(/Unknown task type/)
       })
 
-      // The invocation-eligibility gate is the one that cannot be exercised
-      // behaviorally: `TASK_TYPE_INVOCATION` is deliberately empty today, so no
-      // shipped type is subsidiary and there is nothing to refuse. The rule still
-      // has to hold the day one is added, and the failure mode is silent — an
-      // unattended burn commandeering a task another automation owns — so the
-      // shape is pinned here. Only REFILL (that automation re-issuing itself) is
-      // exempt; a burn is gated exactly like a human Run.
-      it('exempts only a drain refill from the invocation-eligibility gate', async () => {
-        // `fs` is doubled for this suite, so read through the real one.
-        const { readFileSync } = await vi.importActual('node:fs')
-        const src = readFileSync(new URL('./taskSchedule.js', import.meta.url), 'utf8')
-        // The rung itself lives in `evaluateOnDemandEligibility`; what this file
-        // still owns is which origins are exempt, so that is what is pinned.
-        expect(src).toMatch(/eligible: origin === ON_DEMAND_ORIGINS\.REFILL \|\| getTaskTypeInvocation\(taskType\)\.userInvokable !== false/)
-        // Probe: the previous, narrower gate must be gone, or the assertion above
-        // could pass on a file that still only checks USER somewhere else.
-        expect(src).not.toMatch(/origin === ON_DEMAND_ORIGINS\.USER && !invocation\.userInvokable/)
+      describe('invocation eligibility', () => {
+        beforeEach(() => {
+          // No shipped task is subsidiary today. Give the real trigger path a
+          // registry entry owned by another automation without changing defaults.
+          vi.mocked(getTaskTypeInvocation).mockReturnValue({ userInvokable: false })
+        })
+        afterEach(() => vi.mocked(getTaskTypeInvocation).mockReset())
+
+        it.each([ON_DEMAND_ORIGINS.USER, ON_DEMAND_ORIGINS.QUOTA_BURN])(
+          'refuses a %s request for a task another automation owns',
+          async (origin) => {
+            mockSchedule({ tasks: { security: { type: 'on-demand', enabled: true } } })
+
+            const result = await trigger({ origin, burn })
+
+            expect(result).toEqual({ error: "Task type 'security' is managed by another automation and cannot be invoked on demand" })
+            // Loading can write normalized defaults even when admission refuses the request.
+            const queued = writeFile.mock.calls.flatMap(([, data]) => JSON.parse(data).onDemandRequests ?? [])
+            expect(queued).toEqual([])
+          },
+        )
+
+        it('queues a refill for a drain that cannot be invoked on demand', async () => {
+          const taskType = 'branch-reconcile'
+          mockSchedule({ tasks: { [taskType]: { type: 'on-demand', perpetual: true, enabled: true } } })
+
+          const refill = await queuePerpetualRefill(taskType, 'app-1')
+
+          expect(refill).toMatchObject({ taskType, appId: 'app-1', origin: ON_DEMAND_ORIGINS.REFILL })
+          const { onDemandRequests } = JSON.parse(writeFile.mock.calls.at(-1)[1])
+          expect(onDemandRequests).toContainEqual(refill)
+        })
       })
     })
 

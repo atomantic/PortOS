@@ -1,5 +1,4 @@
-import { once } from 'node:events';
-import { readFileSync } from 'node:fs';
+import { EventEmitter, once } from 'node:events';
 import { createServer } from 'node:http';
 import { Server } from 'socket.io';
 import { Manager } from 'socket.io-client';
@@ -36,6 +35,7 @@ import * as stt from '../voice/stt.js';
 import * as voiceProfiles from '../voice/profiles.js';
 import * as universeBuilder from '../universeBuilder.js';
 import { registerFableLoomHostedNamespace } from '../../sockets/fableLoomHosted.js';
+import { registerSessionRevocation } from '../../sessionRevocation.js';
 
 describe('fableLoom hostedSession', () => {
   const mockLoom = {
@@ -985,6 +985,10 @@ describe('fableLoom hostedSession', () => {
       const http = createServer();
       const io = new Server(http);
       registerFableLoomHostedNamespace(io);
+      const authEvents = new EventEmitter();
+      registerSessionRevocation({
+        authEvents, io, revokeAllHostedSessions, remoteDesktopBroker: { revokeAll: vi.fn() },
+      });
       const clients = [];
       const nextEvent = (client, event) => once(client, event, { signal: AbortSignal.timeout(3000) });
       try {
@@ -1036,7 +1040,7 @@ describe('fableLoom hostedSession', () => {
           expectClosed(audience, second.session.id, 'sessions_revoked'),
           expectClosed(otherHost, third.session.id, 'sessions_revoked'),
         ]);
-        revokeAllHostedSessions({ io });
+        authEvents.emit('sessions:revoked-all');
         await revoked;
         for (const { session, token, hostToken } of [second, third, idle]) {
           expect(getHostedSession(session.id)).toBeNull();
@@ -1060,11 +1064,6 @@ describe('fableLoom hostedSession', () => {
       await expect(creating).rejects.toMatchObject({ code: 'HOSTED_SESSION_REVOKED', status: 409 });
       const fresh = await createHostedSession('loom-1', 'ep-1');
       expect(verifyHostedHostToken(fresh.session.id, fresh.hostToken)).toBe(true);
-    });
-
-    it('wires PortOS session revocation to hosted-session teardown at boot', () => {
-      const source = readFileSync(new URL('../../index.js', import.meta.url), 'utf8');
-      expect(source).toMatch(/authEvents\.on\('sessions:revoked-all',[^;]*revokeAllHostedSessions\(\{ io \}\)/);
     });
 
     it('ends hosted session cleanly', async () => {
