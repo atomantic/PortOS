@@ -15,6 +15,7 @@ const STATIC_AGENT_TARGETS = Object.entries(LOCAL_TUI_AGENT_BENCHMARK_TARGETS)
 
 export default function AgentBenchmarkPanel({ active, disabled }) {
   const [results, setAgentBenchmarkResults] = useState({});
+  const [activeTargetKey, setActiveTargetKey] = useState(null);
   const [runAgentBenchmark, agentBenchmarkRunning] = useAsyncAction(async (target) => {
     const result = await runOpenCodeAgentBenchmark({ backend: target.backend, modelId: target.modelId }, { silent: true });
     setAgentBenchmarkResults((previous) => ({ ...previous, [modelKey(target)]: result }));
@@ -27,6 +28,16 @@ export default function AgentBenchmarkPanel({ active, disabled }) {
   }, { errorMessage: 'OpenCode agent benchmark failed' });
 
   const running = agentBenchmarkRunning || disabled;
+
+  const runTarget = async (target) => {
+    const targetKey = modelKey(target);
+    setActiveTargetKey(targetKey);
+    try {
+      await runAgentBenchmark(target);
+    } finally {
+      setActiveTargetKey(null);
+    }
+  };
 
   const [mtplxStatus, setMtplxStatus] = useState(null);
   const [cacheError, setCacheError] = useState(null);
@@ -88,7 +99,7 @@ export default function AgentBenchmarkPanel({ active, disabled }) {
           <button type="button" disabled={cacheLoading} onClick={() => setCacheRequest((value) => value + 1)} className="rounded border border-port-border px-2 py-1 hover:border-port-accent disabled:opacity-50">Retry</button>
         </div>
       )}
-      {!cacheLoading && !cacheError && mtplxModels.length === 0 && (
+      {!cacheLoading && !cacheError && mtplxStatus?.supported !== false && mtplxModels.length === 0 && (
         <p className="text-[11px] text-gray-400">
           Add a complete checkpoint on the <Link className="text-port-accent hover:underline" to={LOCAL_RUNTIME_MANAGE_URLS.mtplx}>MTPLX runtime page</Link> to run an MTPLX task check.
         </p>
@@ -117,11 +128,11 @@ export default function AgentBenchmarkPanel({ active, disabled }) {
               )}
               <button
                 type="button"
-                onClick={() => runAgentBenchmark(target)}
+                onClick={() => runTarget(target)}
                 disabled={running}
                 className="w-full flex items-center justify-center gap-1 px-2 py-1 text-[10px] pointer-coarse:min-h-11 rounded border border-port-border text-gray-300 hover:border-port-accent hover:text-white transition-colors disabled:opacity-50"
               >
-                <Play size={10} /> {running ? 'Running…' : 'Run task check'}
+                <Play size={10} /> {activeTargetKey === modelKey(target) ? 'Running…' : 'Run task check'}
               </button>
             </div>
           );
