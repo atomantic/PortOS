@@ -36,6 +36,7 @@ const specWeightEntries = (preset) => [preset?.model, preset?.draftModel, preset
 // The launcher port comes from the shared PORTS map. 8080 is a common
 // IPFS / Tomcat / local-dashboard port and is not a safe default for a managed
 // daemon.
+const DEFAULT_LLAMA_ALIAS = 'dflash';
 const LLAMA_NUMBER_DEFAULTS = { port: PORTS.LLAMA_SERVER, ctxSize: 32768, nGpuLayers: 99, parallel: 1 };
 // Optional llama.cpp tuning flags — unlike the fields above these have NO
 // PortOS default: an untouched one is stripped from the launch payload so
@@ -61,7 +62,7 @@ export default function LlamaServerCard({
     host: '127.0.0.1',
     ctxSize: 32768,
     nGpuLayers: 99,
-    alias: 'dflash',
+    alias: DEFAULT_LLAMA_ALIAS,
     // Always sent — llama-server's own default is often 4 slots, which divides
     // the context window and spends VRAM a TUI agent never uses.
     parallel: 1,
@@ -148,7 +149,12 @@ export default function LlamaServerCard({
   // that preset — say Custom rather than keep claiming the preset is in effect.
   const setLlamaField = (field, value) => {
     setLlamaPresetId('custom');
-    setLlamaForm((prev) => ({ ...prev, [field]: value }));
+    setLlamaForm((prev) => ({
+      ...prev,
+      ...(field === 'model' && activeSpecPreset?.localBuild && prev.alias === activeSpecPreset.alias
+        ? { alias: DEFAULT_LLAMA_ALIAS } : {}),
+      [field]: value,
+    }));
   };
 
   // Keep an emptied field empty so it can be retyped; the launch path fills in
@@ -338,6 +344,9 @@ export default function LlamaServerCard({
         draftModel: preset.draftModel?.path || '',
         projector: seededProjectorPath(preset),
         specType: preset.specType || prev.specType,
+        // Do not keep the previous preset's model alias or context on a different target.
+        alias: preset.alias ?? (prev.alias === activeSpecPreset?.alias ? DEFAULT_LLAMA_ALIAS : prev.alias),
+        ctxSize: preset.ctxSize ?? (prev.ctxSize === activeSpecPreset?.ctxSize ? LLAMA_NUMBER_DEFAULTS.ctxSize : prev.ctxSize),
       }));
     }
   };
@@ -488,7 +497,9 @@ export default function LlamaServerCard({
           {activeSpecWeights.length > 0 && (
             <div className="space-y-1.5 pt-2 border-t border-port-border/40">
               <p className="text-[11px] text-gray-500">
-                Weights on this machine — each GGUF is a separate multi-gigabyte download from Hugging Face, fetched into the path above.
+                {activeSpecPreset?.localBuild
+                  ? 'Weights were converted locally from the original checkpoint.'
+                  : 'Weights on this machine — each GGUF is a separate multi-gigabyte download from Hugging Face, fetched into the path above.'}
               </p>
               {activeSpecWeights.map((entry) => (
                 <SpecDecodeWeightRow

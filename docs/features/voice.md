@@ -33,6 +33,17 @@ Connect the server as an OpenAI-compatible provider, refresh its model list in *
 and select **Conversational Gemma 4 31B**. PortOS sends structured OpenAI chat messages and tools as usual;
 the server applies the Gemma template. Keep your existing speech engine and use the assistant personality,
 not a caller-simulation prompt. The model also appears in the Model Library under **Externally served voice models**.
+Use **Check download access** to test the read token against the actual pinned checkpoint,
+follow the model-card link to accept terms if prompted, then recheck. It does not download the model.
+
+On Apple Silicon you can instead convert your licensed FP8 files to text-only GGUF
+using a current [llama.cpp converter](https://github.com/ggml-org/llama.cpp/blob/master/convert_hf_to_gguf.py) with
+`--outtype q8_0`. PortOS does not redistribute or automatically convert the gated weights.
+Save the file at `~/.portos/models/Conversational-Gemma-4-31B-Q8_0.gguf`. The llama.cpp
+card then offers **Conversational Gemma 4 31B (locally converted Q8_0)** with the
+right model alias, no drafter, and a 4K context initial setting. Start it, then
+select its provider and model in Voice. Use a short test turn, and if tools are
+enabled, verify a tool call followed by an answer grounded in the tool output.
 
 The optional radio operator portrait was generated in PortOS Image Gen.
 Its mouth opens with the local playback level. This tests timing and

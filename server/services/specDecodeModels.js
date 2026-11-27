@@ -169,10 +169,11 @@ const describeEntry = async (presetId, role) => {
  * the launcher must never reach out to Hugging Face (or any provider) on its own.
  */
 export async function getSpecDecodePresetStatus() {
-  return Promise.all(SPEC_DECODE_PRESETS.map(async (preset) => ({
+  const presets = await Promise.all(SPEC_DECODE_PRESETS.map(async (preset) => ({
     id: preset.id,
     label: preset.label,
     specType: preset.specType,
+    ...(preset.localBuild ? { localBuild: true, alias: preset.alias, ctxSize: preset.ctxSize } : {}),
     // Keyed off the role list so a role added to the vocabulary is reported
     // without a fourth hand-written line here — `describeEntry` already returns
     // null for a preset that declares no weight for it.
@@ -180,6 +181,7 @@ export async function getSpecDecodePresetStatus() {
       SPEC_MODEL_ROLES.map(async (role) => [role, await describeEntry(preset.id, role)]),
     )),
   })));
+  return presets.filter(preset => !preset.localBuild || preset.model?.exists);
 }
 
 // A quant hint matches loosely: repos publish `…-Q4_K_M.gguf`, `….q4_k_m.gguf`

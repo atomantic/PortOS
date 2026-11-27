@@ -376,7 +376,9 @@ describe('streamChat request lifecycle', () => {
     const second = await streamChat(replay, { provider: 'test-provider', model: requested, tools, onDelta });
     expect(second).toMatchObject({ model: served, text: 'Your bike is ready to pick up.' });
     expect(onDelta).toHaveBeenCalledWith('Your bike is ready to pick up.');
-    expect(trace[0]).toMatchObject({ model: served, messages, tools, tool_choice: 'auto' });
+    expect(trace[0]).toMatchObject({ model: served, messages, tools, tool_choice: 'auto',
+      chat_template_kwargs: { enable_thinking: false } });
+    expect(trace[0]).not.toHaveProperty('max_tokens');
     expect(trace[1]).toMatchObject({ model: served, messages: replay, tools });
   });
 

@@ -899,6 +899,26 @@ describe('LocalLlmRuntimesView llama-server management', () => {
     });
   });
 
+  it('starts the locally converted Conversational Gemma with its Voice alias and no drafter', async () => {
+    const { getLlamaServerStatus, startLlamaServer } = await import('../../services/apiLocalLlm.js');
+    const model = '~/.portos/models/Conversational-Gemma-4-31B-Q8_0.gguf';
+    const alias = 'Trelis/gemma-4-31B-it-conversational';
+    getLlamaServerStatus.mockResolvedValue(llamaReady({ presets: [...specPresets(), {
+      id: 'conversational-gemma-local', label: 'Conversational Gemma 4 31B (locally converted Q8_0)',
+      specType: 'none', localBuild: true, alias, ctxSize: 4096,
+      model: { role: 'model', path: model, exists: true, downloadable: false },
+    }] }));
+    startLlamaServer.mockResolvedValueOnce({ success: true, pid: 99 });
+    await renderRuntimes();
+    const preset = await screen.findByRole('combobox', { name: 'Preset' });
+    fireEvent.change(preset, { target: { value: 'conversational-gemma-local' } });
+    expect(screen.getByRole('textbox', { name: 'Target Base Model (GGUF Path)' })).toHaveValue(model);
+    fireEvent.click(screen.getByRole('button', { name: /Start Speculative Server/ }));
+    await waitFor(() => expect(startLlamaServer).toHaveBeenCalledWith(expect.objectContaining({
+      model, alias, ctxSize: 4096, specType: 'none', draftModel: '', projector: '', parallel: 1,
+    }), { silent: true }));
+  });
+
   it('sends --parallel 1 by default and honours an edited slot count', async () => {
     const { getLlamaServerStatus, startLlamaServer } = await import('../../services/apiLocalLlm.js');
     getLlamaServerStatus.mockResolvedValue(llamaReady());

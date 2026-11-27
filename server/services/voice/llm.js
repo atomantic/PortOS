@@ -376,6 +376,8 @@ export const streamChat = async (messages, opts = {}) => {
     ...(opts.maxTokens != null ? { max_tokens: opts.maxTokens } : {}),
   };
   if (ollamaInkling) body.reasoning_effort = 'none';
+  // Trelis recommends the assistant template with thinking disabled for spoken turns.
+  if (isConversationalGemma(model)) body.chat_template_kwargs = { enable_thinking: false };
   if (legacyReasoning) {
     body.chat_template_kwargs = { thinking: false, enable_thinking: false };
     body.reasoning_effort = 'minimal';

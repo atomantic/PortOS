@@ -28,6 +28,7 @@
  */
 import { homedir } from 'node:os';
 import { join, resolve } from 'node:path';
+import { CONVERSATIONAL_GEMMA } from './voiceModelCatalog.js';
 
 
 // llama.cpp exposes one `--spec-type` per drafter family. `draft-dspark` merged
@@ -176,6 +177,16 @@ export const SPEC_DECODE_PRESETS = Object.freeze([
       file: 'mmproj-thinkingmachines_Inkling-2-Mini-f16.gguf',
       quant: 'f16',
     },
+  },
+  {
+    // A private conversion of the gated FP8 release, not a public GGUF download.
+    id: 'conversational-gemma-local',
+    label: 'Conversational Gemma 4 31B (locally converted Q8_0)',
+    specType: 'none',
+    alias: CONVERSATIONAL_GEMMA.id,
+    ctxSize: 4096,
+    localBuild: true,
+    model: { path: CONVERSATIONAL_GEMMA.localGgufPath },
   },
   {
     id: 'custom',
