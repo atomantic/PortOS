@@ -536,6 +536,68 @@ describe('restoreSnapshot manifest verification', () => {
     }
   });
 
+  it.each(['media-collections', 'media-collections.json'])('restores a legacy collection through %s using real rsync', async (subdirFilter, context) => {
+    if (process.platform === 'win32' && spawnSync('rsync', ['--version']).error?.code === 'ENOENT') {
+      context.skip('Windows runner has no rsync executable; real rsync remains required on Linux/macOS.');
+      return;
+    }
+    const legacy = JSON.stringify({ collections: [{ id: 'example-collection', name: 'Example Collection' }] });
+    const legacyPath = 'media-collections.json';
+    const liveDir = joinPath(PATHS.data, 'media-collections');
+    await realFs.mkdir(liveDir, { recursive: true });
+    await realFs.writeFile(joinPath(liveDir, 'live-record.json'), '{}');
+    const hash = await writeSnapshotFile(legacyPath, legacy);
+    await writeManifest({ [legacyPath]: hash });
+    const previousRsync = process.env.PORTOS_RSYNC;
+    delete process.env.PORTOS_RSYNC;
+    spawn.mockImplementation((...args) => spawnChild(...args));
+    try {
+      const preview = await restoreSnapshot(tmpRoot, 'snap-1', { dryRun: true, subdirFilter });
+      expect(preview.verification).toMatchObject({ status: 'verified', checkedFiles: 1 });
+      expect(preview.restoredLegacyStores).toEqual([expect.objectContaining({ legacyFile: legacyPath, status: 'pending' })]);
+      expect(await realFs.readFile(joinPath(liveDir, 'live-record.json'), 'utf8')).toBe('{}');
+      await restoreSnapshot(tmpRoot, 'snap-1', { dryRun: false, subdirFilter });
+      expect(await realFs.readFile(joinPath(PATHS.data, 'media-collections', 'example-collection', 'index.json'), 'utf8')).toContain('Example Collection');
+    } finally {
+      if (previousRsync === undefined) delete process.env.PORTOS_RSYNC;
+      else process.env.PORTOS_RSYNC = previousRsync;
+      spawn.mockReset();
+    }
+  });
+
+  it('rejects a corrupt legacy collection through the folder alias before moving the live directory', async () => {
+    const liveDir = joinPath(PATHS.data, 'media-collections');
+    await realFs.mkdir(liveDir, { recursive: true });
+    await realFs.writeFile(joinPath(liveDir, 'live-record.json'), '{}');
+    await writeSnapshotFile('media-collections.json', '{"collections":[]}');
+    await writeManifest({ 'media-collections.json': '0'.repeat(64) });
+    await expect(restoreSnapshot(tmpRoot, 'snap-1', { dryRun: true, subdirFilter: 'media-collections' }))
+      .rejects.toThrow(/integrity check failed/);
+    expect(await realFs.readFile(joinPath(liveDir, 'live-record.json'), 'utf8')).toBe('{}');
+  });
+
+  it('keeps current media collection directory snapshots scoped to the folder', async context => {
+    if (process.platform === 'win32' && spawnSync('rsync', ['--version']).error?.code === 'ENOENT') {
+      context.skip('Windows runner has no rsync executable; real rsync remains required on Linux/macOS.');
+      return;
+    }
+    const relativePath = 'media-collections/example-collection/index.json';
+    const hash = await writeSnapshotFile(relativePath, '{"name":"Example Collection"}');
+    await writeManifest({ [relativePath]: hash });
+    const previousRsync = process.env.PORTOS_RSYNC;
+    delete process.env.PORTOS_RSYNC;
+    spawn.mockImplementation((...args) => spawnChild(...args));
+    try {
+      const preview = await restoreSnapshot(tmpRoot, 'snap-1', { dryRun: true, subdirFilter: 'media-collections' });
+      expect(preview.verification).toMatchObject({ status: 'verified', checkedFiles: 1 });
+      expect(preview.restoredLegacyStores).toBeUndefined();
+    } finally {
+      if (previousRsync === undefined) delete process.env.PORTOS_RSYNC;
+      else process.env.PORTOS_RSYNC = previousRsync;
+      spawn.mockReset();
+    }
+  });
+
   describe.skipIf(process.platform === 'win32')('owner-only credential restore', () => {
     const settings = 'settings.json';
     const visitor = 'managed-visitor-credentials.json';
