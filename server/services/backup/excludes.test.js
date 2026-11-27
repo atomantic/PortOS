@@ -43,6 +43,22 @@ describe('Machine-local OAuth and OpenClaw backup exclusions (#19173)', () => {
   });
 });
 
+describe('Machine-local peer authority backup exclusions', () => {
+  it.each([
+    '/peer-admin-grants.json',
+    '/peer-execution-grants.json',
+    '/peer-execution-catalog.json',
+    '/peer-execution-authority.json',
+    '/peer-execution-recovery.jsonl',
+    '/peer-execution/',
+    '/peer-admin-grants.json.*.tmp',
+    '/peer-execution-grants.json.*.tmp',
+  ])('keeps %s local even if the backup exclusion is disabled', path => {
+    expect(computeEffectiveExcludes({ disabledDefaultExcludes: [path] })).toContain(path);
+    expect(isRestorePreservedPath(path.slice(1).replace(/\/$/, '').replace('*', 'example').toUpperCase())).toBe(true);
+  });
+});
+
 describe('Autofixer session backup exclusions', () => {
   it('keeps repair session artifacts out of backups even if the exclusion is disabled', () => {
     const path = '/autofixer/sessions/';

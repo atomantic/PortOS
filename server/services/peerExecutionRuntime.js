@@ -40,7 +40,7 @@ async function compose() {
   const path = join(PATHS.data, 'peer-execution-grants.json');
   const grants = createPeerExecutionGrants({ ledger, identity: peerAdminIdentity,
     readStore: () => readJSONFile(path, { version: 1, grants: [] }, { strict: true, logError: false }),
-    writeStore: store => atomicWrite(path, store) });
+    writeStore: store => atomicWrite(path, store, { mode: 0o600 }) });
   const version = JSON.parse(await readFile(new URL('../../package.json', import.meta.url), 'utf8')).version;
   const receiver = createPeerExecutionReceiver({ ledger, grants, coordinator, caller: peerAdminCaller, version, terminalProofs, identityLock: withInstanceIdentityLock,
     adapters: { prepare: adapters.preparePeerExecution, run: adapters.runPeerExecution, reconcile: adapters.reconcilePeerExecution },

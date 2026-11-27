@@ -10,6 +10,7 @@ import { PATHS, readJSONFileStrict, sha256File, sha256Text } from '../../lib/fil
 import { acquireBackupSnapshotCut } from '../../lib/backupSnapshotBoundary.js';
 import { APPLIED_LEDGER_RELPATH, LEGACY_APPLIED_LEDGER_RELPATH } from '../../../scripts/lib/migrationLedger.js';
 import { ServerError } from '../../lib/errorHandler.js';
+import { getAIToolkitInstance } from '../../lib/aiToolkitState.js';
 import { isSafeSubdirFilter } from '../../lib/sharedSchemas.js';
 import { reloadSettings, withLiveSettingsRestore } from '../settings.js';
 import { invalidateAllCaches as invalidateBrainCaches } from '../brainStorage.js';
@@ -23,12 +24,12 @@ import {
   legacyDbMetadataMessage, manifestDataEntries, resolveSnapshotPath, usesFileEscapeHatch, withSnapshotRead,
 } from './snapshots.js';
 import {
-  IDENTITY_FILE, IDENTITY_RSYNC_EXCLUDE, OS_METADATA_RSYNC_EXCLUDES, RESTORE_CREDENTIAL_FILES,
+  IDENTITY_FILE, IDENTITY_RSYNC_EXCLUDE, OS_METADATA_RSYNC_EXCLUDES, PRIVATE_DIRECTORY_RSYNC_EXCLUDE, RESTORE_CREDENTIAL_FILES,
   RESTORE_CREDENTIAL_RSYNC_EXCLUDES, RESTORE_PRESERVED_RSYNC_EXCLUDES, isIdentityPath,
   isOsMetadataFile, isRestorePreservedPath, restoreScopeIsPreservedFile,
 } from './excludes.js';
 import { BACKUP_PROCESS_IDLE_TIMEOUT_MS, runRsync } from './rsync.js';
-import { readSnapshotCredentials, transferWithCredentials } from './restoreCredentials.js';
+import { readSnapshotCredentials, scopeTouchesPrivateDirectory, transferWithCredentials } from './restoreCredentials.js';
 import { requireManagedVisitorCredentialRestore } from '../bootHookRegistry.js';
 
 // `-ii` heartbeats once per file rsync finishes deciding about, so a single
@@ -272,7 +273,7 @@ async function verifySnapshotFiles(snapshotDir, srcDir, snapshotId, subdirFilter
   if (unmanifested) throw snapshotFileIntegrityError(snapshotId, unmanifested);
 
   for (const { filePath, expectedHash } of selected) {
-    const name = relative(srcDir, filePath);
+    const name = relative(srcDir, filePath).replaceAll('\\', '/');
     if (RESTORE_CREDENTIAL_FILES.includes(name)) {
       // Verify the exact buffer the private writer will publish.
       const bytes = credentials.get(name);
@@ -417,7 +418,10 @@ async function restoreHeldSnapshot({ snapshotDir, currentSource }, snapshotId, {
   // inventory and are excluded here because they have their own writer.
   const flags = ['-ii', '--checksum', ...OS_METADATA_RSYNC_EXCLUDES, ...RESTORE_PRESERVED_RSYNC_EXCLUDES,
     ...RESTORE_CREDENTIAL_RSYNC_EXCLUDES,
-    ...(preserveIdentity ? [IDENTITY_RSYNC_EXCLUDE] : [])];
+    ...(preserveIdentity ? [IDENTITY_RSYNC_EXCLUDE] : []),
+    // The directory-wide include for a selective restore also matches parent
+    // metadata. Keep private directory permissions outside unrelated scopes.
+    ...(!scopeTouchesPrivateDirectory(subdirFilter) ? [PRIVATE_DIRECTORY_RSYNC_EXCLUDE] : [])];
   if (dryRun) flags.push('--dry-run');
   if (subdirFilter) {
     // Anchored with a leading `/` — rsync matches an unanchored pattern against
@@ -436,8 +440,16 @@ async function restoreHeldSnapshot({ snapshotDir, currentSource }, snapshotId, {
   // file whose digest outlasts the default deadline emits no `-ii` heartbeat
   // until it finishes (#7302), so this restore's idle floor scales to it.
   const idleTimeoutMs = restoreIdleTimeoutMs(verification.largestFileBytes);
-  const transferFiles = () => transferWithCredentials(credentials, PATHS.data,
-    () => runRsync(srcDir, PATHS.data, flags, { idleTimeoutMs }), { dryRun });
+  const transferFiles = () => {
+    const transfer = () => transferWithCredentials(credentials, PATHS.data,
+      () => runRsync(srcDir, PATHS.data, flags, { idleTimeoutMs }), { dryRun, scope: subdirFilter });
+    const withLiveProvidersRestore = getAIToolkitInstance()?.withLiveProvidersRestore;
+    // Only the toolkit's legacy provider file shares this write queue. Hold it
+    // through publication and invalidate its cached file after the transfer.
+    return !dryRun && credentials.has('providers.json') && withLiveProvidersRestore
+      ? withLiveProvidersRestore(transfer)
+      : transfer();
+  };
   // A preview holds no owner, fences no identity and reconciles no cache.
   if (dryRun) {
     const changedFiles = await transferFiles();
@@ -628,7 +640,7 @@ const LIVE_FILE_RESTORE_OWNERS = Object.freeze([
   },
   {
     name: 'settings',
-    appliesTo: scope => !scope || scope === 'settings.json',
+    appliesTo: scope => scope === 'settings.json' || scopeTouchesPrivateDirectory(scope),
     hold: inner => withLiveSettingsRestore(inner),
   },
   {

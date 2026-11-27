@@ -12,6 +12,8 @@ import { reloadSettings } from './settings.js';
 import { invalidateAllCaches as invalidateBrainCaches } from './brainStorage.js';
 import { openSnapshotStream, restoreSnapshot, deleteSnapshot } from './backup.js';
 import { createFileWriteQueue } from '../lib/fileWriteQueue.js';
+import { createProviderService } from '../lib/aiToolkit/providers.js';
+import { setAIToolkitInstance } from '../lib/aiToolkitState.js';
 import { registerManagedVisitorCredentialRestore } from './bootHookRegistry.js';
 
 const credentialRestoreLock = vi.fn(createFileWriteQueue());
@@ -515,6 +517,9 @@ describe('restoreSnapshot manifest verification', () => {
   describe.skipIf(process.platform === 'win32')('owner-only credential restore', () => {
     const settings = 'settings.json';
     const visitor = 'managed-visitor-credentials.json';
+    const privateKeys = 'private/api-keys.json';
+    const providers = 'providers.json';
+    const credentialRecords = [settings, visitor, privateKeys, providers];
     const other = `restore-integrity/${settings}`;
     const snapshotBytes = '{ "example": "snapshot" }\n';
     const liveBytes = '{ "example": "live" }\n';
@@ -528,8 +533,11 @@ describe('restoreSnapshot manifest verification', () => {
     }
 
     afterEach(async () => {
+      setAIToolkitInstance(null);
       await realFs.rm(livePath(settings), { force: true });
       await realFs.rm(livePath(visitor), { force: true });
+      await realFs.rm(livePath(providers), { force: true });
+      await realFs.rm(livePath('private'), { force: true, recursive: true });
     });
 
     it('previews and restores verified credential bytes and permissions in a full restore', async () => {
@@ -537,6 +545,8 @@ describe('restoreSnapshot manifest verification', () => {
       await writeManifest({
         [settings]: await writeLegacySnapshot(settings),
         [visitor]: await writeLegacySnapshot(visitor),
+        [privateKeys]: await writeLegacySnapshot(privateKeys),
+        [providers]: await writeLegacySnapshot(providers),
         [other]: await writeLegacySnapshot(other),
       });
       await realFs.writeFile(livePath(settings), liveBytes, { mode: 0o600 });
@@ -545,10 +555,10 @@ describe('restoreSnapshot manifest verification', () => {
       spawn.mockImplementation((...args) => spawnChild(...args));
 
       const preview = await restoreSnapshot(tmpRoot, 'snap-1');
-      expect(preview.verification).toMatchObject({ status: 'verified', checkedFiles: 3 });
-      expect(preview.changedFiles).toHaveLength(3);
+      expect(preview.verification).toMatchObject({ status: 'verified', checkedFiles: 5 });
+      expect(preview.changedFiles).toHaveLength(5);
       expect(preview.changedFiles).toEqual(expect.arrayContaining([
-        `>fc........ ${settings}`, `.f...p..... ${visitor}`, expect.stringContaining(other),
+        `>fc........ ${settings}`, `.f...p..... ${visitor}`, `>f+++++++++ ${privateKeys}`, `>f+++++++++ ${providers}`, expect.stringContaining(other),
       ]));
       expect(await mode(livePath(visitor))).toBe(0o644);
       expect(await realFs.readFile(livePath(settings), 'utf8')).toBe(liveBytes);
@@ -557,33 +567,98 @@ describe('restoreSnapshot manifest verification', () => {
       const result = await restoreSnapshot(tmpRoot, 'snap-1', { dryRun: false });
       expect(credentialRestoreLock).toHaveBeenCalledOnce();
       expect(result.changedFiles).toEqual(preview.changedFiles);
-      for (const name of [settings, visitor]) {
+      for (const name of credentialRecords) {
         expect(await realFs.readFile(livePath(name), 'utf8')).toBe(snapshotBytes);
         expect(await mode(livePath(name))).toBe(0o600);
         expect(await mode(joinPath(snapshotDataDir, name))).toBe(0o644);
       }
       expect(await mode(livePath(other))).toBe(0o644);
+      expect(await mode(livePath('private'))).toBe(0o700);
       expect((await restoreSnapshot(tmpRoot, 'snap-1')).changedFiles).toEqual([]);
       expect((await restoreSnapshot(tmpRoot, 'snap-1', { dryRun: false })).changedFiles).toEqual([]);
       expect(await mode(livePath(settings))).toBe(0o600);
       expect(await mode(livePath(visitor))).toBe(0o600);
     });
 
-    it.each([settings, visitor])('restores only %s from a pre-manifest snapshot', async subdirFilter => {
-      await writeLegacySnapshot(settings);
-      await writeLegacySnapshot(visitor);
+    it.each([...credentialRecords, 'private'])('restores only %s from a pre-manifest snapshot', async subdirFilter => {
+      for (const name of credentialRecords) await writeLegacySnapshot(name);
+      const selected = subdirFilter === 'private' ? privateKeys : subdirFilter;
       spawn.mockImplementation((...args) => spawnChild(...args));
 
       const preview = await restoreSnapshot(tmpRoot, 'snap-1', { subdirFilter });
       expect(preview.verification.status).toBe('unverified');
-      expect(preview.changedFiles).toEqual([expect.stringContaining(subdirFilter)]);
-      await expect(realFs.stat(livePath(subdirFilter))).rejects.toMatchObject({ code: 'ENOENT' });
+      expect(preview.changedFiles).toEqual([expect.stringContaining(selected)]);
+      await expect(realFs.stat(livePath(selected))).rejects.toMatchObject({ code: 'ENOENT' });
 
       await restoreSnapshot(tmpRoot, 'snap-1', { dryRun: false, subdirFilter });
-      expect(await mode(livePath(subdirFilter))).toBe(0o600);
-      expect(await realFs.readFile(livePath(subdirFilter), 'utf8')).toBe(snapshotBytes);
-      await expect(realFs.stat(livePath(subdirFilter === settings ? visitor : settings)))
-        .rejects.toMatchObject({ code: 'ENOENT' });
+      expect(await mode(livePath(selected))).toBe(0o600);
+      expect(await realFs.readFile(livePath(selected), 'utf8')).toBe(snapshotBytes);
+      for (const name of credentialRecords.filter(name => name !== selected)) {
+        await expect(realFs.stat(livePath(name))).rejects.toMatchObject({ code: 'ENOENT' });
+      }
+      if (selected === privateKeys) expect(await mode(livePath('private'))).toBe(0o700);
+    });
+
+    it('keeps private sibling records restorable while securing the credential directory', async () => {
+      const sibling = 'private/example.json';
+      await writeLegacySnapshot(privateKeys);
+      await writeLegacySnapshot(sibling);
+      await realFs.chmod(joinPath(snapshotDataDir, 'private'), 0o755);
+      await realFs.mkdir(livePath('private'), { mode: 0o755 });
+      await realFs.writeFile(livePath(privateKeys), liveBytes, { mode: 0o644 });
+      spawn.mockImplementation((...args) => spawnChild(...args));
+
+      await restoreSnapshot(tmpRoot, 'snap-1', { dryRun: false, subdirFilter: sibling });
+      expect(await realFs.readFile(livePath(sibling), 'utf8')).toBe(snapshotBytes);
+      expect(await realFs.readFile(livePath(privateKeys), 'utf8')).toBe(liveBytes);
+      expect(await mode(livePath(privateKeys))).toBe(0o600);
+      expect(await mode(livePath('private'))).toBe(0o700);
+    });
+
+    it('serializes provider edits through live restore and reloads the restored configuration', async () => {
+      let withLiveProvidersRestore;
+      const providerService = createProviderService({
+        dataDir: PATHS.data,
+        providersCacheTtlMs: 60_000,
+        registerProviderRestore: restore => { withLiveProvidersRestore = restore; },
+      });
+      const proc = fakeProc();
+      const seed = { id: 'example-provider', name: 'Example Provider', type: 'api' };
+      await providerService.createProvider({ ...seed, apiKey: 'example-live-key' });
+      await writeSnapshotFile(providers, JSON.stringify({
+        activeProvider: seed.id, providers: { [seed.id]: { ...seed, apiKey: 'example-backup-key' } },
+      }));
+      setAIToolkitInstance({ withLiveProvidersRestore });
+      spawn.mockReturnValue(proc);
+      const pending = restoreSnapshot(tmpRoot, 'snap-1', { dryRun: false, subdirFilter: providers });
+      let closeCode = 1;
+      let edit;
+      try {
+        await flush();
+        edit = providerService.updateProvider(seed.id, { name: 'Edited Provider' });
+        expect(await providerService.getProviderById(seed.id)).toMatchObject(seed);
+        closeCode = 0;
+      } finally {
+        proc.emit('close', closeCode);
+        await Promise.all([pending, edit]);
+      }
+      expect(await providerService.getProviderById(seed.id)).toMatchObject({
+        name: 'Edited Provider', apiKey: 'example-backup-key',
+      });
+      expect(await mode(livePath(providers))).toBe(0o600);
+    });
+
+    it('keeps snapshot and live credentials independent of shared inodes', async () => {
+      await writeLegacySnapshot(privateKeys);
+      await realFs.mkdir(livePath('private'), { mode: 0o700 });
+      const original = livePath('private/example.json');
+      await realFs.writeFile(original, liveBytes, { mode: 0o600 });
+      await realFs.link(original, livePath(privateKeys));
+
+      await expect(restoreSnapshot(tmpRoot, 'snap-1', { subdirFilter: privateKeys }))
+        .rejects.toMatchObject({ code: 'BACKUP_RESTORE_UNSAFE_CREDENTIAL' });
+      expect(spawn).not.toHaveBeenCalled();
+      expect(await realFs.readFile(original, 'utf8')).toBe(liveBytes);
     });
 
     it.each([23, null])('keeps live bytes private when the bulk transfer closes with %s', async exitCode => {
