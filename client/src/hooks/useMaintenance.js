@@ -9,7 +9,7 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import useMounted from './useMounted.js';
 import { useSocket } from './useSocket.js';
 import { readShellBootstrap } from '../services/shellBootstrap.js';
-import { getMaintenanceStatus } from '../services/apiSystem.js';
+import { getMaintenanceStatus } from '../services/apiAppShell.js';
 
 // mode 'banner' follows only the coarse `maintenance:readiness` projection
 // ({ state, blockerCount, agentDiskPressure }) after the bootstrap/reconnect read, so detailed

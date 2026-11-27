@@ -12,7 +12,7 @@
 import { useCallback, useSyncExternalStore } from 'react';
 import { INSTANCE_FEATURES_CHANGED } from '../constants/events.js';
 import { readShellBootstrap } from '../services/shellBootstrap.js';
-import * as systemApi from '../services/apiSystem.js';
+import * as systemApi from '../services/apiAppShell.js';
 
 // One snapshot and event bridge for every mounted consumer. `null` means not
 // loaded (or failed), while [] is a successfully loaded empty feature list.

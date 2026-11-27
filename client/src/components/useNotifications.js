@@ -8,7 +8,7 @@ import { useState, useEffect, useCallback, useRef } from 'react';
 import socket from '../services/socket';
 import { useSocketSubscription } from '../hooks/useSocketSubscription';
 import useMounted from '../hooks/useMounted';
-import { getNotificationCount, getNotificationSnapshot, markNotificationRead, markAllNotificationsRead, deleteNotification, clearNotifications } from '../services/apiSystem.js';
+import { getNotificationCount, getNotificationSnapshot, markNotificationRead, markAllNotificationsRead, deleteNotification, clearNotifications } from '../services/apiAppShell.js';
 
 export function useNotifications() {
   const [notifications, setNotifications] = useState([]);

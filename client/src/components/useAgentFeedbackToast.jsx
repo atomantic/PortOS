@@ -9,7 +9,7 @@ import toast from './ui/Toast';
 import { ThumbsUp, ThumbsDown, Loader2, AlertTriangle } from 'lucide-react';
 import socket from '../services/socket';
 import { useSocketSubscription } from '../hooks/useSocketSubscription';
-import { getCosAgent, submitCosAgentFeedback } from '../services/apiAgents.js';
+import { getCosAgent, submitCosAgentFeedback } from '../services/apiAppShell.js';
 import { lazyWithReload } from '../utils/lazyWithReload';
 import { isAgentFeedbackEligible } from '../lib/cosAgentFeedback';
 import { agentIssueLinkifier } from '../lib/issueRefs';

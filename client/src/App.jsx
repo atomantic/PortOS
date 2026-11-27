@@ -3,7 +3,7 @@ import { isPublicGuestRoute } from './lib/publicGuestRoutes';
 import { Routes, Route, Navigate, useLocation, useParams } from 'react-router';
 import Layout from './components/Layout';
 import { FullWidthMain, PaddedMain } from './components/PageShell';
-import { getSettings, updateSettings } from './services/apiSystem.js';
+import { getSettings, updateSettings } from './services/apiAppShell.js';
 import { NAV_COMMANDS } from '../../server/lib/navManifest.js';
 import { previousPathRedirects, previousPathTarget } from './lib/previousPaths';
 import PageLoader from './components/PageLoader';

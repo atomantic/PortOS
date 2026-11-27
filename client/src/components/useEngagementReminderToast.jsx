@@ -7,7 +7,7 @@
 import { useEffect, useState } from 'react';
 import { Link } from 'react-router';
 import toast from './ui/Toast';
-import { updateInstanceFeature } from '../services/apiSystem.js';
+import { updateInstanceFeature } from '../services/apiAppShell.js';
 import { claimReviewQueueDelivery } from '../services/apiReview.js';
 import { useActionQueue } from '../hooks/useActionQueue';
 import { actionSelectionLink } from './ActionQueuePreview';

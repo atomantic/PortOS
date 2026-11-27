@@ -28,7 +28,7 @@ vi.mock('./utils/lazyWithReload', () => ({
   },
 }));
 vi.mock('./components/Layout', () => ({ default: () => <Outlet /> }));
-vi.mock('./services/apiSystem.js', () => ({ getSettings: vi.fn(() => Promise.resolve({ timezone: 'UTC' })), updateSettings: vi.fn(), getSelfInstance: vi.fn(() => Promise.resolve({})) }));
+vi.mock('./services/apiAppShell.js', () => ({ getSettings: vi.fn(() => Promise.resolve({ timezone: 'UTC' })), updateSettings: vi.fn(), getSelfInstance: vi.fn(() => Promise.resolve({})) }));
 
 import App from './App.jsx';
 

@@ -5,7 +5,7 @@
  * Use when: The sidebar universes section.
  */
 
-import { listUniverseNames } from '../services/apiUniverseBuilder.js';
+import { listUniverseNames } from '../services/apiNavNames.js';
 import { useFocusRefreshedList } from '../hooks/useFocusRefreshedList.js';
 
 const UNIVERSE_EVENTS = ['universe:changed'];

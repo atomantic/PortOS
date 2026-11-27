@@ -96,14 +96,17 @@ const api = vi.hoisted(() => ({
   getReviewQueue: vi.fn(() => new Promise(() => {})),
   getInstanceFeatures: vi.fn(() => Promise.resolve({ features: featureMock.features })),
 }));
-vi.mock('../services/apiApps.js', () => ({ getApps: api.getApps }));
 vi.mock('../services/apiNavNames.js', () => ({
+  getApps: api.getApps,
+  listUniverseNames: api.listUniverseNames,
   listPipelineSeriesNames: api.listPipelineSeriesNames,
   listMusicVideoProjectNames: api.listMusicVideoProjectNames,
 }));
-vi.mock('../services/apiUniverseBuilder.js', () => ({ listUniverseNames: api.listUniverseNames }));
 vi.mock('../services/apiReview.js', () => ({ getReviewQueue: api.getReviewQueue }));
-vi.mock('../services/apiSystem.js', () => ({ getInstanceFeatures: api.getInstanceFeatures }));
+vi.mock('../services/apiAppShell.js', async (importOriginal) => ({
+  ...(await importOriginal()),
+  getInstanceFeatures: api.getInstanceFeatures,
+}));
 
 import { __resetInstanceFeatureCache } from '../hooks/useInstanceFeatures.js';
 

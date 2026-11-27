@@ -101,8 +101,8 @@ vi.mock('../services/apiCodeReview.js', () => ({ getCodeReviewDefaults: api.getC
 
 vi.mock('../services/apiAvatar.js', () => ({ getRiggedAvatars: api.getRiggedAvatars }));
 
-// useInstanceFeatures reads apiSystem.js directly, not the api barrel (#16562).
-vi.mock('../services/apiSystem.js', async (importOriginal) => ({
+// useInstanceFeatures reads apiAppShell.js directly, not the api barrel (#16562).
+vi.mock('../services/apiAppShell.js', async (importOriginal) => ({
   ...(await importOriginal()),
   getInstanceFeatures: api.getInstanceFeatures,
 }));

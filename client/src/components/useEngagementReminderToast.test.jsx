@@ -8,7 +8,7 @@ const mock = vi.hoisted(() => ({
   updateInstanceFeature: vi.fn(),
 }));
 
-vi.mock('../services/apiSystem.js', () => ({ updateInstanceFeature: mock.updateInstanceFeature }));
+vi.mock('../services/apiAppShell.js', () => ({ updateInstanceFeature: mock.updateInstanceFeature }));
 vi.mock('../services/apiReview.js', () => ({ getReviewQueue: mock.getReviewQueue, claimReviewQueueDelivery: mock.claimReviewQueueDelivery }));
 vi.mock('../services/socket', () => ({ default: { on: vi.fn(), off: vi.fn() } }));
 
