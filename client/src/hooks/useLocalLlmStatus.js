@@ -83,16 +83,16 @@ export default function useLocalLlmStatus({ onRefresh, onReload, onProgress, inl
       if (data?.scope === 'assessment' || data?.scope === 'assessment-sweep' || data?.scope === 'security-guard' || data?.scope === 'jev') return;
       onProgress?.(data);
       clearTimeout(progressTimer.current);
-      setProgressMsg(data.message || '');
-      if (data.event === 'complete' || data.event === 'cancelled') {
-        progressTimer.current = setTimeout(() => setProgressMsg(''), 3000);
+      const canceled = data.event === 'canceled';
+      setProgressMsg(canceled ? '' : data.message || '');
+      if (data.event === 'complete' || data.event === 'cancelled' || canceled) {
+        if (!canceled) progressTimer.current = setTimeout(() => setProgressMsg(''), 3000);
         loadStatus();
         onReload?.();
       }
       if (data.event === 'error') {
         progressTimer.current = setTimeout(() => setProgressMsg(''), 5000);
-        // A canceled or failed install ends here, not on `complete`; the server has
-        // already dropped it from `installs`, so reload or its banner lingers.
+        // A failed install has left the server's `installs` list. Reload to clear its row.
         loadStatus();
       }
     };

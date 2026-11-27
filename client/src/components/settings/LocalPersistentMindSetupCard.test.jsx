@@ -11,7 +11,8 @@ vi.mock('../../services/apiLocalLlm.js', () => ({
 }));
 vi.mock('../ui/Toast');
 
-import { getLocalPersistentMindSetup, applyLocalPersistentMindSetup } from '../../services/apiLocalLlm.js';
+import { getLocalPersistentMindSetup, applyLocalPersistentMindSetup, installLocalLlmModel } from '../../services/apiLocalLlm.js';
+import toast from '../ui/Toast';
 import LocalPersistentMindSetupCard from './LocalPersistentMindSetupCard.jsx';
 
 const applicableSetup = {
@@ -76,6 +77,23 @@ describe('LocalPersistentMindSetupCard', () => {
     );
     await waitFor(() => expect(getLocalPersistentMindSetup).toHaveBeenCalled());
     expect(container.querySelector('[data-testid="local-persistent-mind-setup"]')).toBeNull();
+  });
+
+  it('leaves the pull available when the download is canceled', async () => {
+    const onApplied = vi.fn();
+    installLocalLlmModel.mockResolvedValueOnce({ status: 'canceled', canceled: true, modelId: 'qwen2.5:7b-instruct' });
+    render(
+      <MemoryRouter>
+        <LocalPersistentMindSetupCard onApplied={onApplied} />
+      </MemoryRouter>,
+    );
+    fireEvent.click(await screen.findByRole('button', { name: /pull qwen2\.5 7b instruct/i }));
+
+    await waitFor(() => expect(screen.getByRole('button', { name: /pull qwen2\.5 7b instruct/i })).toBeEnabled());
+    expect(toast.info).toHaveBeenCalledWith('Model download canceled');
+    expect(toast.success).not.toHaveBeenCalled();
+    expect(toast.error).not.toHaveBeenCalled();
+    expect(onApplied).not.toHaveBeenCalled();
   });
 
   it('applies the mind profile pin when requested', async () => {

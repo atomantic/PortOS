@@ -174,11 +174,9 @@ router.post('/install', asyncHandler(async (req, res) => {
     emit('error', `Install failed: ${err.message}`)
     throw err
   })
-  // A user's Cancel is not a failure: no error toast, just a terminal frame.
   if (result.canceled) {
-    emit('error', `${modelId} download canceled`)
-    res.json({ success: false, canceled: true, modelId })
-    return
+    emit('canceled', `${modelId} download canceled`)
+    return res.json({ status: 'canceled', canceled: true, modelId })
   }
   if (!result.success) {
     emit('error', result.error || 'Install failed')

@@ -295,7 +295,7 @@ export default function LocalLlmRuntimesView({ view } = {}) {
   const startSlotstreamDownload = (model) => runAction(
     'slotstream-download',
     () => downloadSlotstreamModel(model, { silent: true }).then((r) => {
-      if (r?.cancelled === true) return r;
+      if (r?.canceled === true || r?.cancelled === true) return r;
       if (r?.success === false) throw new Error(r.error || 'Download failed');
       toast.success(`${r?.repo || 'Checkpoint'} downloaded`);
       return r;
@@ -313,7 +313,7 @@ export default function LocalLlmRuntimesView({ view } = {}) {
   });
   // A 100 GB+ transfer that is merely SLOW never trips the idle watchdog, so
   // without this the only way out was to wait it out. The bar comes down on the
-  // 'cancelled' frame the server emits, not here.
+  // terminal 'canceled' frame from the transfer.
   const [cancelSlotstreamDownload, cancellingSlotstreamDownload] = useAsyncAction(async (model) => {
     const result = await cancelSlotstreamModelDownload(model, { silent: true });
     toast.info(result?.cancelled ? 'Cancelling checkpoint download…' : 'No checkpoint download is running');
