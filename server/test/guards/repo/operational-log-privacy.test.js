@@ -8,7 +8,7 @@
 import { describe, it, expect } from 'vitest';
 import { readFileSync } from 'fs';
 import { join } from 'path';
-import { REPO_ROOT } from '../../../../scripts/lib/guardCorpus.js';
+import { REPO_ROOT, trackedFiles } from '../../../../scripts/lib/guardCorpus.js';
 
 const FORBIDDEN = {
   'server/services/socialAccounts.js': [/account\.username/],
@@ -25,6 +25,9 @@ const FORBIDDEN = {
   'server/services/brainMemoryBridge.js': [/record\.name/, /record\.title/]
 };
 
+const instanceModules = trackedFiles(REPO_ROOT).filter(path => path.startsWith('server/services/instances/')
+  && path.endsWith('.js') && !path.endsWith('.test.js'));
+
 const consoleLines = (rel) => readFileSync(join(REPO_ROOT, rel), 'utf8')
   .split('\n')
   .filter((l) => /\bconsole\s*\.\s*(log|warn|error)\s*\(/.test(l));
@@ -32,7 +35,8 @@ const consoleLines = (rel) => readFileSync(join(REPO_ROOT, rel), 'utf8')
 describe('operational logs omit personal and machine-identifying values', () => {
   for (const [file, patterns] of Object.entries(FORBIDDEN)) {
     it(file, () => {
-      const lines = consoleLines(file);
+      const files = file === 'server/services/instances.js' ? [file, ...instanceModules] : [file];
+      const lines = files.flatMap(consoleLines);
       expect(lines.length).toBeGreaterThan(0);
       for (const line of lines) {
         for (const p of patterns) expect(line, `${p} in: ${line.trim()}`).not.toMatch(p);
