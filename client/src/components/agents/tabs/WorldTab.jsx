@@ -1,30 +1,15 @@
 import { useState, useEffect, useCallback, useRef } from 'react';
-import { X } from 'lucide-react';
-import toast from '../../ui/Toast';
-import { FormField } from '../../ui/FormField';
 import ConnectionStatusDot from '../../ui/ConnectionStatusDot';
-import {
-  moltworldGetQueue,
-  getPlatformAccounts,
-  moltworldStatus,
-  moltworldRateLimits,
-  moltworldWsMove,
-  moltworldExplore,
-  moltworldWsThink,
-  moltworldThink,
-  moltworldBuild,
-  moltworldWsInteract,
-  moltworldSay,
-  moltworldAddToQueue,
-  moltworldRemoveFromQueue,
-} from '../../../services/apiAccounts.js';
-import { getAgentActivityTimeline } from '../../../services/apiAgents.js';
+import { getPlatformAccounts, moltworldStatus, moltworldRateLimits } from '../../../services/apiAccounts.js';
 import BrailleSpinner from '../../BrailleSpinner';
 import ListLoadError from '../../ui/ListLoadError';
-import { useSocketResource } from '../../../hooks/useSocketResource';
 import useMoltworldWs from './useMoltworldWs';
 import { useCooldownTick } from '../../../hooks/useCooldownTick';
-import { timeAgo, formatCooldown, formatClockTime } from '../../../utils/formatters';
+import { formatCooldown, formatClockTime } from '../../../utils/formatters';
+import useWorldHistory from './useWorldHistory';
+import WorldHistorySection from './WorldHistorySection';
+import WorldQueueSection, { useWorldQueue } from './WorldQueueSection';
+import WorldActionControls, { useWorldActionControls } from './WorldActionControls';
 
 const EVENT_ICONS = {
   status: '🔌',
@@ -43,61 +28,9 @@ const EVENT_ICONS = {
   event: '📨'
 };
 
-const HISTORY_ACTION_ICONS = {
-  mw_explore: '🌍',
-  mw_build: '🧱',
-  mw_think: '💭',
-  mw_say: '💬',
-  mw_heartbeat: '💓',
-  mw_interact: '🤝'
-};
-
-const MW_HISTORY_ACTIONS = ['mw_explore', 'mw_build', 'mw_think', 'mw_say', 'mw_heartbeat', 'mw_interact'];
-const HISTORY_PAGE_SIZE = 30;
-
-const HISTORY_FILTERS = [
-  { value: '', label: 'All' },
-  { value: 'mw_explore', label: 'Explore' },
-  { value: 'mw_think', label: 'Think' },
-  { value: 'mw_say', label: 'Say' },
-  { value: 'mw_build', label: 'Build' },
-  { value: 'mw_heartbeat', label: 'Heartbeat' }
-];
-
-// Module-level so the resource keeps one stable subscription across renders.
-const QUEUE_EVENTS = ['moltworld:queue:added', 'moltworld:queue:updated', 'moltworld:queue:removed'];
-
-const QUEUE_ACTION_TYPES = [
-  { value: 'mw_explore', label: 'Explore' },
-  { value: 'mw_think', label: 'Think' },
-  { value: 'mw_build', label: 'Build' },
-  { value: 'mw_say', label: 'Say' }
-];
-
-const QUEUE_STATUS_STYLES = {
-  pending: 'bg-gray-600/20 text-gray-400',
-  executing: 'bg-port-accent/20 text-port-accent animate-pulse',
-  completed: 'bg-port-success/20 text-port-success',
-  failed: 'bg-port-error/20 text-port-error'
-};
-
 function formatEventTime(ts) {
   const d = new Date(ts);
   return formatClockTime(d);
-}
-
-function summarizeParams(action, params) {
-  if (!params) return '';
-  if (action === 'mw_explore' || action === 'mw_heartbeat') {
-    const parts = [];
-    if (params.x != null && params.y != null) parts.push(`(${params.x}, ${params.y})`);
-    if (params.thinking) parts.push(`"${params.thinking.substring(0, 40)}..."`);
-    return parts.join(' ');
-  }
-  if (action === 'mw_think') return params.thought ? `"${params.thought.substring(0, 50)}"` : '';
-  if (action === 'mw_say') return params.message ? `"${params.message.substring(0, 50)}"` : '';
-  if (action === 'mw_build') return `(${params.x},${params.y},${params.z}) ${params.type || 'stone'} ${params.action || 'place'}`;
-  return '';
 }
 
 export default function WorldTab({ agentId }) {
@@ -115,56 +48,11 @@ export default function WorldTab({ agentId }) {
   const [nearby, setNearby] = useState([]);
   const [messages, setMessages] = useState([]);
 
-  // Move/Explore state
-  const [moveX, setMoveX] = useState('');
-  const [moveY, setMoveY] = useState('');
-  const [moveThinking, setMoveThinking] = useState('');
-  const [moving, setMoving] = useState(false);
-
-  // Think state
-  const [thought, setThought] = useState('');
-  const [thinking, setThinking] = useState(false);
-
-  // Build state
-  const [buildX, setBuildX] = useState('');
-  const [buildY, setBuildY] = useState('');
-  const [buildZ, setBuildZ] = useState('0');
-  const [blockType, setBlockType] = useState('stone');
-  const [buildAction, setBuildAction] = useState('place');
-  const [building, setBuilding] = useState(false);
-
-  // Say state
-  const [sayMessage, setSayMessage] = useState('');
-  const [sayTo, setSayTo] = useState('');
-  const [saying, setSaying] = useState(false);
-
   // Cooldown timer state
   const [cooldownEnds, setCooldownEnds] = useState({});
 
-  // Activity History state
-  const [history, setHistory] = useState([]);
-  const [historyLoading, setHistoryLoading] = useState(false);
-  const [historyHasMore, setHistoryHasMore] = useState(false);
-  const [historyFilter, setHistoryFilter] = useState('');
-  // Bumped by every first-page history load; an older answer (first page or
-  // Load More) is dropped so a quick filter change never shows or appends
-  // another filter's rows under the selected one.
-  const historyGenerationRef = useRef(0);
-  // Filter the rows on screen were loaded for (null when none). Load More pages
-  // only those rows; a failed first page for a different filter clears them
-  // rather than leaving another filter's rows under the selected one.
-  const historyShownFilterRef = useRef(null);
-  const [historyLoadFailed, setHistoryLoadFailed] = useState(false);
-
-  // Action Queue state
-  const { data: queueData, loading: queueLoading, error: queueError, refetch: refetchQueue } = useSocketResource(
-    () => moltworldGetQueue(agentId),
-    { events: QUEUE_EVENTS, resourceKey: agentId, enabled: Boolean(accountId) }
-  );
-  const queue = queueData ?? [];
-  const [showAddForm, setShowAddForm] = useState(false);
-  const [newActionType, setNewActionType] = useState('mw_explore');
-  const [newActionParams, setNewActionParams] = useState({});
+  // Keep queue and action drafts mounted across account loading and error views.
+  const queueSection = useWorldQueue({ agentId, accountId });
 
   // WebSocket hook
   const {
@@ -220,53 +108,14 @@ export default function WorldTab({ agentId }) {
     if (data) setRateLimits(data);
   }, [accountId]);
 
-  // Fetch activity history
-  const fetchHistory = useCallback(async (append = false, before = null) => {
-    if (append && historyShownFilterRef.current !== historyFilter) return;
-    const generation = append ? historyGenerationRef.current : ++historyGenerationRef.current;
-    setHistoryLoading(true);
-    const mwActions = historyFilter || MW_HISTORY_ACTIONS;
-    // A first page owns its failure UI (ListLoadError below); Load More keeps the helper's toast.
-    const data = await (append
-      ? getAgentActivityTimeline(HISTORY_PAGE_SIZE, [agentId], before, mwActions)
-      : getAgentActivityTimeline(HISTORY_PAGE_SIZE, [agentId], before, mwActions, { silent: true })
-    ).catch(() => null);
-    if (generation !== historyGenerationRef.current) return;
-    if (data) {
-      const items = Array.isArray(data) ? data : [];
-      if (append) {
-        setHistory(prev => [...prev, ...items]);
-      } else {
-        historyShownFilterRef.current = historyFilter;
-        setHistoryLoadFailed(false);
-        setHistory(items);
-      }
-      // The server already applied the filter, so a full page means more may exist.
-      setHistoryHasMore(items.length >= HISTORY_PAGE_SIZE);
-    } else if (!append) {
-      setHistoryLoadFailed(true);
-      if (historyShownFilterRef.current !== historyFilter) {
-        historyShownFilterRef.current = null;
-        setHistory([]);
-        setHistoryHasMore(false);
-      }
-    }
-    setHistoryLoading(false);
-  }, [agentId, historyFilter]);
-
-  // Fetch status + rate limits + queue when account resolves. History has its
-  // own effect below so a filter change re-reads only the history.
+  // Status and rate limits depend on the account, independently of history filters.
   useEffect(() => {
     if (!accountId) return;
     fetchStatus();
     fetchRateLimits();
   }, [accountId, fetchStatus, fetchRateLimits]);
 
-  // History loads once the account resolves and again on every filter change
-  // (fetchHistory is re-created when historyFilter changes).
-  useEffect(() => {
-    if (accountId) fetchHistory();
-  }, [accountId, historyFilter, fetchHistory]);
+  const historySection = useWorldHistory({ agentId, accountId });
 
   // Calculate cooldown end timestamps from rate limit data
   useEffect(() => {
@@ -292,141 +141,10 @@ export default function WorldTab({ agentId }) {
     if (msgs.length) setMessages(msgs);
   };
 
-  const refreshAfterAction = () => {
-    fetchRateLimits();
-    fetchHistory();
-  };
-
-  const handleExplore = async (random = false) => {
-    if (!accountId) return;
-    setMoving(true);
-    const x = random ? undefined : (moveX !== '' ? parseInt(moveX, 10) : undefined);
-    const y = random ? undefined : (moveY !== '' ? parseInt(moveY, 10) : undefined);
-
-    if (wsConnected && !random && x != null && y != null) {
-      try {
-        await moltworldWsMove({ x, y, thought: moveThinking || undefined });
-      } catch {
-        setMoving(false);
-        fetchRateLimits();
-        return;
-      }
-      setMoving(false);
-      toast.success(`Move sent via WS to (${x}, ${y})`);
-      refreshAfterAction();
-      return;
-    }
-
-    const result = await moltworldExplore({
-      accountId, agentId, x, y, thinking: moveThinking || undefined
-    }).catch(() => null);
-    setMoving(false);
-    if (!result) { fetchRateLimits(); return; }
-    updateFromJoinResponse(result);
-    toast.success(`Moved to (${result.x}, ${result.y})`);
-    fetchStatus();
-    refreshAfterAction();
-  };
-
-  const handleThink = async () => {
-    if (!accountId || !thought) return;
-    setThinking(true);
-
-    if (wsConnected) {
-      try {
-        await moltworldWsThink(thought);
-      } catch {
-        setThinking(false);
-        fetchRateLimits();
-        return;
-      }
-      setThinking(false);
-      toast.success('Thought sent via WS');
-      setThought('');
-      refreshAfterAction();
-      return;
-    }
-
-    const result = await moltworldThink({ accountId, agentId, thought }).catch(() => null);
-    setThinking(false);
-    if (!result) { fetchRateLimits(); return; }
-    toast.success('Thought sent');
-    setThought('');
-    refreshAfterAction();
-  };
-
-  const handleBuild = async () => {
-    if (!accountId || buildX === '' || buildY === '') return;
-    setBuilding(true);
-    const result = await moltworldBuild({
-      accountId, agentId,
-      x: parseInt(buildX, 10), y: parseInt(buildY, 10), z: parseInt(buildZ || '0', 10),
-      type: blockType, action: buildAction
-    }).catch(() => null);
-    setBuilding(false);
-    if (!result) { fetchRateLimits(); return; }
-    toast.success(`Block ${buildAction}d at (${buildX}, ${buildY}, ${buildZ})`);
-    refreshAfterAction();
-  };
-
-  const handleSay = async () => {
-    if (!accountId || !sayMessage) return;
-    setSaying(true);
-
-    if (wsConnected && sayTo) {
-      try {
-        await moltworldWsInteract(sayTo, { message: sayMessage });
-      } catch {
-        setSaying(false);
-        fetchRateLimits();
-        return;
-      }
-      setSaying(false);
-      toast.success('DM sent via WS');
-      setSayMessage('');
-      setSayTo('');
-      refreshAfterAction();
-      return;
-    }
-
-    const result = await moltworldSay({
-      accountId, agentId, message: sayMessage, sayTo: sayTo || undefined
-    }).catch(() => null);
-    setSaying(false);
-    if (!result) { fetchRateLimits(); return; }
-    updateFromJoinResponse(result);
-    toast.success(sayTo ? 'DM sent' : 'Message sent');
-    setSayMessage('');
-    setSayTo('');
-    refreshAfterAction();
-  };
-
-  const handleLoadMoreHistory = () => {
-    if (history.length === 0) return;
-    const lastTs = history[history.length - 1].timestamp;
-    fetchHistory(true, lastTs);
-  };
-
-  const handleAddToQueue = async () => {
-    const params = { ...newActionParams };
-    // Convert numeric fields
-    if (params.x != null) params.x = parseInt(params.x, 10);
-    if (params.y != null) params.y = parseInt(params.y, 10);
-    if (params.z != null) params.z = parseInt(params.z, 10);
-
-    try {
-      await moltworldAddToQueue({ agentId, actionType: newActionType, params });
-    } catch {
-      return;
-    }
-    setShowAddForm(false);
-    setNewActionParams({});
-    toast.success('Action queued');
-  };
-
-  const handleRemoveFromQueue = async (id) => {
-    await moltworldRemoveFromQueue(id).catch(() => null);
-  };
+  const actionControls = useWorldActionControls({
+    accountId, agentId, wsConnected, updateFromJoinResponse, fetchStatus, fetchRateLimits,
+    fetchHistory: historySection.fetchHistory
+  });
 
   const getCooldownMs = (action) => {
     const end = cooldownEnds[action];
@@ -457,52 +175,6 @@ export default function WorldTab({ agentId }) {
   // snapshot wins so a "nobody nearby" event clears the panel instead of
   // leaving stale phantoms.
   const displayNearby = presence !== null ? presence : nearby;
-
-  // Dynamic param fields for add-to-queue form
-  const renderQueueParamFields = () => {
-    switch (newActionType) {
-      case 'mw_explore':
-        return (
-          <div className="grid grid-cols-2 gap-2">
-            <input type="number" placeholder="X" aria-label="Queued action X coordinate" value={newActionParams.x || ''} onChange={e => setNewActionParams(p => ({ ...p, x: e.target.value }))} className="px-2 py-1.5 bg-port-bg border border-port-border rounded text-white text-sm" />
-            <input type="number" placeholder="Y" aria-label="Queued action Y coordinate" value={newActionParams.y || ''} onChange={e => setNewActionParams(p => ({ ...p, y: e.target.value }))} className="px-2 py-1.5 bg-port-bg border border-port-border rounded text-white text-sm" />
-            <input type="text" placeholder="Thinking (optional)" aria-label="Queued action thinking (optional)" value={newActionParams.thinking || ''} onChange={e => setNewActionParams(p => ({ ...p, thinking: e.target.value }))} className="col-span-2 px-2 py-1.5 bg-port-bg border border-port-border rounded text-white text-sm" />
-          </div>
-        );
-      case 'mw_think':
-        return (
-          <input type="text" placeholder="Thought text" aria-label="Queued thought text" value={newActionParams.thought || ''} onChange={e => setNewActionParams(p => ({ ...p, thought: e.target.value }))} className="w-full px-2 py-1.5 bg-port-bg border border-port-border rounded text-white text-sm" />
-        );
-      case 'mw_build':
-        return (
-          <div className="grid grid-cols-3 gap-2">
-            <input type="number" placeholder="X" aria-label="Queued action X coordinate" value={newActionParams.x || ''} onChange={e => setNewActionParams(p => ({ ...p, x: e.target.value }))} className="px-2 py-1.5 bg-port-bg border border-port-border rounded text-white text-sm" />
-            <input type="number" placeholder="Y" aria-label="Queued action Y coordinate" value={newActionParams.y || ''} onChange={e => setNewActionParams(p => ({ ...p, y: e.target.value }))} className="px-2 py-1.5 bg-port-bg border border-port-border rounded text-white text-sm" />
-            <input type="number" placeholder="Z" aria-label="Queued action Z coordinate" value={newActionParams.z || ''} onChange={e => setNewActionParams(p => ({ ...p, z: e.target.value }))} className="px-2 py-1.5 bg-port-bg border border-port-border rounded text-white text-sm" />
-            <select aria-label="Queued build block type" value={newActionParams.type || 'stone'} onChange={e => setNewActionParams(p => ({ ...p, type: e.target.value }))} className="px-2 py-1.5 bg-port-bg border border-port-border rounded text-white text-sm">
-              <option value="wood">Wood</option>
-              <option value="stone">Stone</option>
-              <option value="dirt">Dirt</option>
-              <option value="grass">Grass</option>
-              <option value="leaves">Leaves</option>
-            </select>
-            <select aria-label="Queued build action" value={newActionParams.action || 'place'} onChange={e => setNewActionParams(p => ({ ...p, action: e.target.value }))} className="px-2 py-1.5 bg-port-bg border border-port-border rounded text-white text-sm">
-              <option value="place">Place</option>
-              <option value="remove">Remove</option>
-            </select>
-          </div>
-        );
-      case 'mw_say':
-        return (
-          <div className="space-y-2">
-            <input type="text" placeholder="Message" aria-label="Queued message" value={newActionParams.message || ''} onChange={e => setNewActionParams(p => ({ ...p, message: e.target.value }))} className="w-full px-2 py-1.5 bg-port-bg border border-port-border rounded text-white text-sm" />
-            <input type="text" placeholder="To Agent ID (optional)" aria-label="Queued message recipient agent ID (optional)" value={newActionParams.sayTo || ''} onChange={e => setNewActionParams(p => ({ ...p, sayTo: e.target.value }))} className="w-full px-2 py-1.5 bg-port-bg border border-port-border rounded text-white text-sm" />
-          </div>
-        );
-      default:
-        return null;
-    }
-  };
 
   return (
     <div className="p-4">
@@ -715,341 +387,12 @@ export default function WorldTab({ agentId }) {
             )}
           </div>
 
-          {/* Activity History */}
-          <div className="bg-port-card border border-port-border rounded-lg p-4">
-            <div className="flex flex-wrap items-center justify-between gap-2 mb-3">
-              <h3 className="font-semibold text-white min-w-0">Activity History</h3>
-              <div className="flex flex-wrap items-center gap-2 min-w-0">
-                <select
-                  aria-label="Filter history"
-                  value={historyFilter}
-                  onChange={e => setHistoryFilter(e.target.value)}
-                  className="min-w-0 pointer-coarse:min-h-11 px-2 py-1 text-xs bg-port-bg border border-port-border rounded text-white"
-                >
-                  {HISTORY_FILTERS.map(f => (
-                    <option key={f.value} value={f.value}>{f.label}</option>
-                  ))}
-                </select>
-                <button
-                  onClick={() => fetchHistory()}
-                  disabled={historyLoading}
-                  className="pointer-coarse:min-h-11 px-2 py-1 text-xs bg-port-border text-gray-300 rounded hover:bg-port-border/80 disabled:opacity-50"
-                >
-                  {historyLoading ? '...' : 'Refresh'}
-                </button>
-              </div>
-            </div>
-            {historyLoadFailed && !historyLoading && (
-              <ListLoadError what="activity history" onRetry={() => fetchHistory()} className="mb-2" />
-            )}
-            {history.length === 0 ? (
-              !(historyLoadFailed && !historyLoading) && (
-                <p className="text-sm text-gray-500 text-center py-4">
-                  {historyLoading ? <BrailleSpinner text="Loading" /> : 'No activity history yet'}
-                </p>
-              )
-            ) : (
-              <div className="space-y-1.5 max-h-[400px] overflow-y-auto">
-                {history.map((entry) => (
-                  <div key={entry.id} className="flex items-start gap-2 p-2 bg-port-bg rounded text-xs">
-                    <span className="shrink-0 text-sm">{HISTORY_ACTION_ICONS[entry.action] || '📋'}</span>
-                    <div className="min-w-0 flex-1">
-                      <div className="flex items-center gap-1.5">
-                        <span className="px-1.5 py-0.5 bg-port-border rounded text-gray-300 font-medium">
-                          {entry.action?.replace('mw_', '')}
-                        </span>
-                        <span className={`px-1 py-0.5 rounded text-[10px] ${entry.status === 'completed' ? 'bg-port-success/20 text-port-success' : 'bg-port-error/20 text-port-error'}`}>
-                          {entry.status}
-                        </span>
-                        {entry.params?.via === 'ws' && (
-                          <span className="text-[10px] text-port-accent">WS</span>
-                        )}
-                      </div>
-                      <p className="text-gray-400 truncate mt-0.5">
-                        {summarizeParams(entry.action, entry.params)}
-                      </p>
-                    </div>
-                    <span className="text-gray-600 shrink-0 text-[10px]" title={entry.timestamp}>
-                      {timeAgo(entry.timestamp)}
-                    </span>
-                  </div>
-                ))}
-                {historyHasMore && (
-                  <button
-                    onClick={handleLoadMoreHistory}
-                    disabled={historyLoading}
-                    className="w-full py-2 text-xs text-gray-400 hover:text-white bg-port-bg rounded disabled:opacity-50"
-                  >
-                    {historyLoading ? <BrailleSpinner text="Loading" /> : 'Load More'}
-                  </button>
-                )}
-              </div>
-            )}
-          </div>
+          <WorldHistorySection {...historySection} />
         </div>
 
-        {/* Right Column: Actions */}
         <div className="space-y-4">
-          {/* Action Queue */}
-          <div className="bg-port-card border border-port-border rounded-lg p-4">
-            <div className="flex flex-wrap items-center justify-between gap-2 mb-3">
-              <h3 className="font-semibold text-white min-w-0">Action Queue</h3>
-              <div className="flex flex-wrap items-center gap-2">
-                {queue.length > 0 && (
-                  <span className="text-xs text-gray-500">{queue.length} item{queue.length !== 1 ? 's' : ''}</span>
-                )}
-                <button
-                  onClick={() => { setShowAddForm(!showAddForm); setNewActionParams({}); }}
-                  className="pointer-coarse:min-h-11 px-2 py-1 text-xs bg-port-accent text-white rounded hover:bg-port-accent/80"
-                >
-                  {showAddForm ? 'Cancel' : '+ Add'}
-                </button>
-              </div>
-            </div>
-
-            {showAddForm && (
-              <div className="mb-3 p-3 bg-port-bg border border-port-border rounded space-y-2">
-                <select
-                  aria-label="Action type"
-                  value={newActionType}
-                  onChange={e => { setNewActionType(e.target.value); setNewActionParams({}); }}
-                  className="w-full px-2 py-1.5 bg-port-card border border-port-border rounded text-white text-sm"
-                >
-                  {QUEUE_ACTION_TYPES.map(t => (
-                    <option key={t.value} value={t.value}>{t.label}</option>
-                  ))}
-                </select>
-                {renderQueueParamFields()}
-                <button
-                  onClick={handleAddToQueue}
-                  className="w-full px-3 py-1.5 text-sm bg-port-accent text-white rounded hover:bg-port-accent/80"
-                >
-                  Add to Queue
-                </button>
-              </div>
-            )}
-
-            {queueError && (
-              <ListLoadError what="action queue" error={queueError} onRetry={refetchQueue} retrying={queueLoading} className="mb-2" />
-            )}
-            {queue.length === 0 && !queueLoading && !queueError ? (
-              <p className="text-sm text-gray-500 text-center py-4">No queued actions</p>
-            ) : (
-              <div className="space-y-1.5 max-h-[300px] overflow-y-auto">
-                {queue.map((item) => (
-                  <div key={item.id} className="flex items-center gap-2 p-2 bg-port-bg rounded text-xs">
-                    <span className="shrink-0">{HISTORY_ACTION_ICONS[item.actionType] || '📋'}</span>
-                    <div className="min-w-0 flex-1">
-                      <div className="flex items-center gap-1.5">
-                        <span className="text-gray-300 font-medium">{item.actionType?.replace('mw_', '')}</span>
-                        <span className={`px-1 py-0.5 rounded text-[10px] ${QUEUE_STATUS_STYLES[item.status] || ''}`}>
-                          {item.status}
-                        </span>
-                      </div>
-                      <p className="text-gray-500 truncate mt-0.5">
-                        {summarizeParams(item.actionType, item.params)}
-                      </p>
-                    </div>
-                    {item.status === 'pending' && (
-                      <button
-                        type="button"
-                        aria-label={`Cancel pending ${item.actionType?.replace('mw_', '') || 'action'}`}
-                        onClick={() => handleRemoveFromQueue(item.id)}
-                        className="inline-flex items-center justify-center shrink-0 text-gray-500 hover:text-port-error pointer-coarse:min-h-11 pointer-coarse:min-w-11"
-                      >
-                        <X size={14} aria-hidden="true" />
-                      </button>
-                    )}
-                  </div>
-                ))}
-              </div>
-            )}
-          </div>
-
-          {/* Move / Explore */}
-          <div className="bg-port-card border border-port-border rounded-lg p-4">
-            <div className="flex items-center gap-2 mb-3">
-              <h3 className="font-semibold text-white">Move / Explore</h3>
-              {wsConnected && <span className="text-xs text-port-success">(via WS)</span>}
-            </div>
-            <div className="grid grid-cols-2 gap-2 mb-2">
-              <FormField label="X (-240 to 240)" labelClassName="block text-xs text-gray-500 mb-1">
-                <input
-                  type="number"
-                  value={moveX}
-                  onChange={(e) => setMoveX(e.target.value)}
-                  min={-240}
-                  max={240}
-                  placeholder="X"
-                  className="w-full px-3 py-2 bg-port-bg border border-port-border rounded text-white"
-                />
-              </FormField>
-              <FormField label="Y (-240 to 240)" labelClassName="block text-xs text-gray-500 mb-1">
-                <input
-                  type="number"
-                  value={moveY}
-                  onChange={(e) => setMoveY(e.target.value)}
-                  min={-240}
-                  max={240}
-                  placeholder="Y"
-                  className="w-full px-3 py-2 bg-port-bg border border-port-border rounded text-white"
-                />
-              </FormField>
-            </div>
-            <input
-              type="text"
-              value={moveThinking}
-              onChange={(e) => setMoveThinking(e.target.value)}
-              placeholder="Thinking... (optional)"
-              aria-label="Move thinking (optional)"
-              className="w-full px-3 py-2 bg-port-bg border border-port-border rounded text-white mb-3"
-            />
-            <div className="flex gap-2">
-              <button
-                onClick={() => handleExplore(false)}
-                disabled={moving || (moveX === '' && moveY === '')}
-                className="px-4 py-2 bg-port-accent text-white rounded hover:bg-port-accent/80 disabled:opacity-50"
-              >
-                {moving ? 'Moving...' : 'Move Here'}
-              </button>
-              <button
-                onClick={() => handleExplore(true)}
-                disabled={moving}
-                className="px-4 py-2 bg-port-accent-2 text-white rounded hover:bg-port-accent-2/80 disabled:opacity-50"
-              >
-                {moving ? 'Exploring...' : 'Random Explore'}
-              </button>
-            </div>
-          </div>
-
-          {/* Think */}
-          <div className="bg-port-card border border-port-border rounded-lg p-4">
-            <div className="flex items-center gap-2 mb-3">
-              <h3 className="font-semibold text-white">Think</h3>
-              {wsConnected && <span className="text-xs text-port-success">(via WS)</span>}
-            </div>
-            <input
-              type="text"
-              value={thought}
-              onChange={(e) => setThought(e.target.value)}
-              placeholder="What is this agent thinking?"
-              aria-label="Thought text"
-              maxLength={500}
-              className="w-full px-3 py-2 bg-port-bg border border-port-border rounded text-white mb-3"
-            />
-            <button
-              onClick={handleThink}
-              disabled={thinking || !thought || getCooldownMs('think') > 0}
-              className="px-4 py-2 bg-port-accent text-white rounded hover:bg-port-accent/80 disabled:opacity-50"
-              title={getCooldownMs('think') > 0 ? `Cooldown: ${formatCooldown(getCooldownMs('think'))}` : ''}
-            >
-              {thinking ? 'Thinking...' : getCooldownMs('think') > 0 ? `Wait ${formatCooldown(getCooldownMs('think'))}` : 'Think'}
-            </button>
-          </div>
-
-          {/* Build */}
-          <div className="bg-port-card border border-port-border rounded-lg p-4">
-            <h3 className="font-semibold text-white mb-3">Build</h3>
-            <div className="grid grid-cols-3 gap-2 mb-2">
-              <FormField label="X" labelClassName="block text-xs text-gray-500 mb-1">
-                <input
-                  type="number"
-                  value={buildX}
-                  onChange={(e) => setBuildX(e.target.value)}
-                  min={-500}
-                  max={500}
-                  placeholder="X"
-                  className="w-full px-3 py-2 bg-port-bg border border-port-border rounded text-white"
-                />
-              </FormField>
-              <FormField label="Y" labelClassName="block text-xs text-gray-500 mb-1">
-                <input
-                  type="number"
-                  value={buildY}
-                  onChange={(e) => setBuildY(e.target.value)}
-                  min={-500}
-                  max={500}
-                  placeholder="Y"
-                  className="w-full px-3 py-2 bg-port-bg border border-port-border rounded text-white"
-                />
-              </FormField>
-              <FormField label="Z (height)" labelClassName="block text-xs text-gray-500 mb-1">
-                <input
-                  type="number"
-                  value={buildZ}
-                  onChange={(e) => setBuildZ(e.target.value)}
-                  min={0}
-                  max={100}
-                  placeholder="Z"
-                  className="w-full px-3 py-2 bg-port-bg border border-port-border rounded text-white"
-                />
-              </FormField>
-            </div>
-            <div className="grid grid-cols-2 gap-2 mb-3">
-              <select
-                aria-label="Block type"
-                value={blockType}
-                onChange={(e) => setBlockType(e.target.value)}
-                className="px-3 py-2 bg-port-bg border border-port-border rounded text-white"
-              >
-                <option value="wood">Wood</option>
-                <option value="stone">Stone</option>
-                <option value="dirt">Dirt</option>
-                <option value="grass">Grass</option>
-                <option value="leaves">Leaves</option>
-              </select>
-              <select
-                aria-label="Build action"
-                value={buildAction}
-                onChange={(e) => setBuildAction(e.target.value)}
-                className="px-3 py-2 bg-port-bg border border-port-border rounded text-white"
-              >
-                <option value="place">Place</option>
-                <option value="remove">Remove</option>
-              </select>
-            </div>
-            <button
-              onClick={handleBuild}
-              disabled={building || buildX === '' || buildY === '' || getCooldownMs('build') > 0}
-              className="px-4 py-2 bg-port-accent text-white rounded hover:bg-port-accent/80 disabled:opacity-50"
-              title={getCooldownMs('build') > 0 ? `Cooldown: ${formatCooldown(getCooldownMs('build'))}` : ''}
-            >
-              {building ? 'Building...' : getCooldownMs('build') > 0 ? `Wait ${formatCooldown(getCooldownMs('build'))}` : 'Build'}
-            </button>
-          </div>
-
-          {/* Say */}
-          <div className="bg-port-card border border-port-border rounded-lg p-4">
-            <div className="flex items-center gap-2 mb-3">
-              <h3 className="font-semibold text-white">Say</h3>
-              {wsConnected && sayTo && <span className="text-xs text-port-success">(DM via WS)</span>}
-            </div>
-            <input
-              type="text"
-              value={sayMessage}
-              onChange={(e) => setSayMessage(e.target.value)}
-              placeholder="Message to nearby agents..."
-              aria-label="Message to nearby agents"
-              maxLength={500}
-              className="w-full px-3 py-2 bg-port-bg border border-port-border rounded text-white mb-2"
-            />
-            <input
-              type="text"
-              value={sayTo}
-              onChange={(e) => setSayTo(e.target.value)}
-              placeholder="To Agent ID (optional — leave blank for broadcast)"
-              aria-label="Recipient agent ID (optional — leave blank for broadcast)"
-              className="w-full px-3 py-2 bg-port-bg border border-port-border rounded text-white mb-3"
-            />
-            <button
-              onClick={handleSay}
-              disabled={saying || !sayMessage || getCooldownMs('join') > 0}
-              className="px-4 py-2 bg-port-accent text-white rounded hover:bg-port-accent/80 disabled:opacity-50"
-              title={getCooldownMs('join') > 0 ? `Cooldown: ${formatCooldown(getCooldownMs('join'))}` : ''}
-            >
-              {saying ? 'Sending...' : getCooldownMs('join') > 0 ? `Wait ${formatCooldown(getCooldownMs('join'))}` : 'Say'}
-            </button>
-          </div>
+          <WorldQueueSection {...queueSection} />
+          <WorldActionControls {...actionControls} wsConnected={wsConnected} getCooldownMs={getCooldownMs} />
         </div>
       </div>
     </div>
