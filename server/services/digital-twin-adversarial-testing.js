@@ -44,8 +44,9 @@ export const ADVERSARIAL_SUITE_FILE = 'ADVERSARIAL_BOUNDARY_SUITE.md';
  *   <what crossing the boundary looks like>
  */
 export async function parseAdversarialSuite() {
-  if (cache.adversarialTests.data && (Date.now() - cache.adversarialTests.timestamp) < CACHE_TTL_MS) {
-    return cache.adversarialTests.data;
+  const entry = cache.adversarialTests;
+  if (entry.data && (Date.now() - entry.timestamp) < CACHE_TTL_MS) {
+    return entry.data;
   }
 
   const suiteFile = join(DIGITAL_TWIN_DIR, ADVERSARIAL_SUITE_FILE);
@@ -70,8 +71,8 @@ export async function parseAdversarialSuite() {
     });
   }
 
-  cache.adversarialTests.data = scenarios;
-  cache.adversarialTests.timestamp = Date.now();
+  entry.data = scenarios;
+  entry.timestamp = Date.now();
 
   return scenarios;
 }

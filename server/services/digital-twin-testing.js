@@ -8,8 +8,9 @@ import { loadMeta, mutateMeta, cache, CACHE_TTL_MS } from './digital-twin-meta.j
 import { getDigitalTwinContextWithDocs } from './digital-twin-context.js';
 
 export async function parseTestSuite() {
-  if (cache.tests.data && (Date.now() - cache.tests.timestamp) < CACHE_TTL_MS) {
-    return cache.tests.data;
+  const entry = cache.tests;
+  if (entry.data && (Date.now() - entry.timestamp) < CACHE_TTL_MS) {
+    return entry.data;
   }
 
   const testFile = join(DIGITAL_TWIN_DIR, 'BEHAVIORAL_TEST_SUITE.md');
@@ -33,8 +34,8 @@ export async function parseTestSuite() {
     });
   }
 
-  cache.tests.data = tests;
-  cache.tests.timestamp = Date.now();
+  entry.data = tests;
+  entry.timestamp = Date.now();
 
   return tests;
 }

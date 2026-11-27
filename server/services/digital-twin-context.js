@@ -2,6 +2,7 @@ import { readFile, stat } from 'fs/promises';
 import { existsSync } from 'fs';
 import { join } from 'path';
 import { DIGITAL_TWIN_DIR } from './digital-twin-helpers.js';
+import { docContentCache } from './digital-twin-cache.js';
 import { loadMeta } from './digital-twin-meta.js';
 import { renderTraitBlendDirective } from '../lib/personaTraitBlend.js';
 import { fenceBlock, UNTRUSTED_REFERENCE_NOTICE } from '../lib/promptFencing.js';
@@ -12,14 +13,14 @@ import { getPrivacyTwinContext } from './privacyTwinContext.js';
 // (getDigitalTwinForPrompt runs per prompt, per twin test). These files rarely
 // change, so cache their contents keyed by path + mtime and only re-read when
 // the file actually changes on disk. A cheap fs.stat gates the expensive read.
-const docContentCache = new Map();
 
 async function readTwinDoc(filePath) {
+  const cache = docContentCache;
   const { mtimeMs } = await stat(filePath);
-  const cached = docContentCache.get(filePath);
+  const cached = cache.get(filePath);
   if (cached && cached.mtimeMs === mtimeMs) return cached.content;
   const content = await readFile(filePath, 'utf-8');
-  docContentCache.set(filePath, { mtimeMs, content });
+  cache.set(filePath, { mtimeMs, content });
   return content;
 }
 

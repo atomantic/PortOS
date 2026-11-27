@@ -67,9 +67,10 @@ async function clearRestoredImageTombstones(subdirFilter) {
   });
 }
 
-async function reconcileLiveFileRestore(subdirFilter) {
+async function reconcileLiveFileRestore(subdirFilter, ownerRefreshes) {
   const restoresMedia = restoresMediaScope(subdirFilter);
   const refreshes = [
+    ...ownerRefreshes,
     ...(!subdirFilter || subdirFilter === 'brain' || subdirFilter.startsWith('brain/')
       ? [{ label: 'Brain cache invalidation', run: invalidateBrainCaches }]
       : []),
@@ -106,7 +107,7 @@ async function reconcileLiveFileRestore(subdirFilter) {
 
   if (failures.length > 0) {
     throw new Error(
-      `Live restore cache reconciliation failed (${failures.join('; ')}). Restart PortOS before relying on restored settings, Brain data or media.`,
+      `Live restore cache reconciliation failed (${failures.join('; ')}). Restart PortOS before relying on restored data.`,
       { cause: results.find(result => result.status === 'rejected').reason },
     );
   }
@@ -469,8 +470,8 @@ async function restoreHeldSnapshot({ snapshotDir, currentSource }, snapshotId, {
   // Conversion parks live stores, so it runs only after a successful transfer,
   // and before reconciliation so the Brain caches drop the parked records. It
   // follows ledger adoption so a replay reads the ledger the boot would read.
-  const changedFiles = await withLiveFileRestoreOwners(scope, srcDir, () => transferAndReconcileLiveFiles({
-    subdirFilter,
+  const changedFiles = await withLiveFileRestoreOwners(scope, srcDir, ownerRefreshes => transferAndReconcileLiveFiles({
+    subdirFilter, ownerRefreshes,
     transfer: async () => {
       const changed = await transferWithIdentityFence({
         installsIdentity: identity.installs,
@@ -608,7 +609,9 @@ async function snapshotLegacyCosConfig(srcDir, scope) {
  * `appliesTo` receives the normalized scope (`''`/undefined = full restore);
  * `hold(inner, { srcDir, scope })` acquires the owner, runs `inner`, and
  * releases on every exit; `srcDir` is the verified snapshot's data directory. Domain
- * modules are imported only once every outer owner is held.
+ * modules are imported only once every outer owner is held. An owner can pass
+ * a reload callback to `inner` to reconcile inside its write fence after a
+ * successful or partial transfer. Its refreshLabel identifies reload errors.
  *
  * - The snapshot cut drains in-flight asset publications BEFORE any domain
  *   queue they may need to finish, and keeps admission closed throughout.
@@ -672,6 +675,33 @@ const LIVE_FILE_RESTORE_OWNERS = Object.freeze([
     },
   },
   {
+    name: 'prompts',
+    refreshLabel: 'prompts reload',
+    appliesTo: scope => !scope || scope === 'prompts' || scope.startsWith('prompts/'),
+    hold: inner => {
+      const prompts = getAIToolkitInstance()?.services?.prompts;
+      return prompts ? prompts.withLiveRestore(inner) : inner();
+    },
+  },
+  {
+    name: 'digital twin',
+    refreshLabel: 'digital twin cache invalidation',
+    appliesTo: scope => !scope || scope === 'digital-twin' || scope.startsWith('digital-twin/'),
+    hold: async inner => {
+      const { metaMutex, invalidateDigitalTwinCaches } = await import('../digital-twin-cache.js');
+      return metaMutex(() => inner(invalidateDigitalTwinCaches));
+    },
+  },
+  {
+    name: 'voice timers',
+    refreshLabel: 'voice timers reload',
+    appliesTo: scope => !scope || scope === 'voice-timers.json',
+    hold: async inner => {
+      const { withLiveVoiceTimersRestore } = await import('../voice/timers.js');
+      return withLiveVoiceTimersRestore(inner);
+    },
+  },
+  {
     name: 'Apple Health day files',
     appliesTo: scope => !scope || scope === 'health' || scope.startsWith('health/'),
     hold: async (inner) => {
@@ -683,9 +713,16 @@ const LIVE_FILE_RESTORE_OWNERS = Object.freeze([
 
 /** Run `operation` inside every live-restore owner that applies to `scope`, in table order. */
 function withLiveFileRestoreOwners(scope, srcDir, operation) {
+  const ownerRefreshes = [];
   const nested = LIVE_FILE_RESTORE_OWNERS.reduceRight(
-    (inner, owner) => (owner.appliesTo(scope) ? () => owner.hold(inner, { srcDir, scope }) : inner),
-    operation,
+    (inner, owner) => {
+      if (!owner.appliesTo(scope)) return inner;
+      return () => owner.hold(run => {
+        if (owner.refreshLabel && run) ownerRefreshes.push({ label: owner.refreshLabel, run });
+        return inner();
+      }, { srcDir, scope });
+    },
+    () => operation(ownerRefreshes),
   );
   return nested();
 }
@@ -722,9 +759,9 @@ async function transferWithIdentityFence({ installsIdentity, assertIdentityUncha
  * failure stays the primary error (keeping its code); a reconciliation failure
  * is appended to it, or thrown on its own after a successful transfer.
  */
-async function transferAndReconcileLiveFiles({ subdirFilter, transfer }) {
+async function transferAndReconcileLiveFiles({ subdirFilter, ownerRefreshes, transfer }) {
   const [result] = await Promise.allSettled([transfer()]);
-  const reconciliationError = await reconcileLiveFileRestore(subdirFilter).then(() => null, error => error);
+  const reconciliationError = await reconcileLiveFileRestore(subdirFilter, ownerRefreshes).then(() => null, error => error);
   if (result.status === 'rejected') {
     if (result.reason?.beforeTransfer) throw result.reason;
     const partialRestoreError = new Error(

@@ -5,7 +5,7 @@ import { AsyncLocalStorage } from 'node:async_hooks';
 import { digitalTwinMetaSchema } from '../lib/digitalTwinSchemas.js';
 import { safeJSONParse, atomicWrite, tryReadFileStrict, unreadableStoreError } from '../lib/fileUtils.js';
 import { isPlainObject } from '../lib/objects.js';
-import { createMutex } from '../lib/asyncMutex.js';
+import { cache, metaMutex } from './digital-twin-cache.js';
 import { DIGITAL_TWIN_DIR, generateId, ensureSoulDir } from './digital-twin-helpers.js';
 
 export const META_FILE = join(DIGITAL_TWIN_DIR, 'meta.json');
@@ -13,15 +13,6 @@ export const META_FILE = join(DIGITAL_TWIN_DIR, 'meta.json');
 // Event emitter for digital twin data changes
 export const digitalTwinEvents = new EventEmitter();
 
-// In-memory cache
-const cache = {
-  meta: { data: null, timestamp: 0 },
-  documents: { data: null, timestamp: 0 },
-  tests: { data: null, timestamp: 0 },
-  valuesTests: { data: null, timestamp: 0 },
-  adversarialTests: { data: null, timestamp: 0 },
-  multiTurnTests: { data: null, timestamp: 0 }
-};
 export const CACHE_TTL_MS = 5000;
 
 // One lock for every load -> mutate -> saveMeta workflow. loadMeta hands every
@@ -29,7 +20,6 @@ export const CACHE_TTL_MS = 5000;
 // would otherwise each push onto it and the later saveMeta would persist
 // whichever tombstone/record set it happened to hold. NOT re-entrant: never
 // call withMetaLock from inside a withMetaLock callback.
-const metaMutex = createMutex();
 // Marks code running inside withMetaLock: loadMeta refuses an untrusted file
 // there instead of serving defaults, so a transient read fault cannot hand a
 // mutation defaults that a later, healthy read in saveMeta would let through.
@@ -63,6 +53,12 @@ export async function loadMeta() {
     return cache.meta.data;
   }
 
+  // A cache miss may bootstrap metadata on disk. Drain these reads alongside
+  // writers before a restore and keep restored bytes authoritative afterwards.
+  return metaLockContext.getStore() ? readMeta() : metaMutex(readMeta);
+}
+
+async function readMeta() {
   await ensureSoulDir();
 
   const { ok, value: content } = await tryReadFileStrict(META_FILE);
