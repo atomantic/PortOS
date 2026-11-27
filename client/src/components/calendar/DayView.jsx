@@ -1,4 +1,4 @@
-import { useState, useEffect, useMemo, useRef } from 'react';
+import { useMemo, useRef } from 'react';
 import {CalendarDays, ChevronLeft, ChevronRight, MapPin} from 'lucide-react';
 import { useCalendarWindowEvents } from '../../hooks/useCalendarWindowEvents';
 import CalendarWindowStatus from './CalendarWindowStatus';
@@ -12,6 +12,7 @@ import BrailleSpinner from '../BrailleSpinner';
 import EmptyState from '../EmptyState';
 import { useThemeContext } from '../ThemeContext';
 import useUrlParams from '../../hooks/useUrlParams';
+import { useTimeTick } from '../../hooks/useTimeTick';
 
 export default function DayView({ accounts }) {
   const [searchParams, updateParams] = useUrlParams();
@@ -43,13 +44,7 @@ export default function DayView({ accounts }) {
   const selectedEventKey = searchParams.get('event');
   const selectedEvent = events.find((event) => `${event.accountId}:${event.id}` === selectedEventKey) || null;
 
-  // Current time indicator — update every 60s so the red line moves
-  const [now, setNow] = useState(() => new Date());
-  useEffect(() => {
-    // biome-ignore lint/plugin/lint-no-view-interval: Moves the "now" line down the day grid; no I/O.
-    const id = setInterval(() => setNow(new Date()), 60_000);
-    return () => clearInterval(id);
-  }, []);
+  const now = new Date(useTimeTick());
   const isToday = date.toDateString() === now.toDateString();
   const nowMinutes = now.getHours() * 60 + now.getMinutes();
   const nowTop = (nowMinutes / 60) * PX_PER_HOUR;
