@@ -7,15 +7,17 @@
 // sentences.
 
 import { transcribe } from './stt.js';
-import { synthesize } from './tts.js';
+import { createTurnTtsSpeaker, emitSyntheticReply } from './turnTtsSpeaker.js';
 import { streamChat } from './llm.js';
 import { getVoiceConfig } from './config.js';
 import { getToolSpecsForIntent, classifyIntent, dispatchTool, getAllToolNames, UI_KINDS } from './tools.js';
-import { isEchoOfRecentTts, rememberTtsSentence } from './echo.js';
+import { isEchoOfRecentTts } from './echo.js';
 import { appendJournal, getToday } from '../brainJournal.js';
 import { resolvePending, isExpired } from './confirmGate.js';
-import { anyAbortSignal } from '../../lib/requestAbort.js';
 import { ServerError } from '../../lib/errorHandler.js';
+
+export { splitSentences } from './turnTtsSpeaker.js';
+
 // getRelevantMemories is imported lazily inside buildMemoryContext — it only
 // runs for retrieval-shaped turns, so keep its memory-backend + embeddings
 // dependency graph out of voice startup / non-retrieval turns (same rationale
@@ -317,35 +319,6 @@ export const buildMemoryContext = async (userText, { limit = MEMORY_INJECT_LIMIT
   ].join('\n');
 };
 
-const SENTENCE_RE = /[.!?\n](?:\s+|$)/;
-
-// Exported for unit testing — the sentence-boundary logic is too central to
-// leave untested.
-export const splitSentences = (buffer) => {
-  const out = [];
-  let rest = buffer;
-  while (true) {
-    const m = rest.match(SENTENCE_RE);
-    if (!m || m.index === undefined) break;
-    const end = m.index + m[0].length;
-    const sentence = rest.slice(0, end).trim();
-    if (sentence) out.push(sentence);
-    rest = rest.slice(end);
-  }
-  return { sentences: out, remainder: rest };
-};
-
-/**
- * Run one turn.
- *
- * @param {object} args
- * @param {Buffer} args.audio        — utterance audio bytes
- * @param {string} args.mimeType     — e.g. 'audio/webm', 'audio/wav'
- * @param {Array}  args.history      — prior conversation messages
- * @param {(event:string, payload:any) => void} args.emit
- * @param {AbortSignal} [args.signal]
- * @returns {Promise<{ transcript: string, reply: string }>}
- */
 // Whisper tags non-speech as bracketed markers like [BLANK_AUDIO], [MUSIC],
 // [LAUGHTER], [INAUDIBLE]. Treat those as empty so we don't waste an LLM turn.
 export const isNonSpeechMarker = (text) => /^\s*\[[A-Z_ ]+\]\s*$/i.test(text);
@@ -388,26 +361,6 @@ const shortId = () => Math.random().toString(36).slice(2, 7);
 // the persistent mind's). Bounded here because it rides in front of every turn
 // of that conversation and a runaway caller would blow the model's window.
 const MAX_SYSTEM_CONTEXT_CHARS = 4000;
-
-const reportTtsError = (err, signal, emit) => {
-  // Piper can reject with a plain Error when synthesis is interrupted.
-  if (signal?.aborted || err?.name === 'AbortError' || /aborted/i.test(err?.message || '')) return;
-  emit('voice:error', { stage: 'tts', message: err?.message ?? String(err) });
-};
-
-// Canonical replies still complete in text when the synthesizer is unavailable.
-const emitSyntheticReply = async ({ reply, signal, recentTts, emit }) => {
-  if (signal?.aborted) return;
-  const audio = await synthesize(reply, { signal }).catch((err) => reportTtsError(err, signal, emit));
-  if (signal?.aborted) return;
-  if (audio) {
-    if (recentTts) rememberTtsSentence(recentTts, reply);
-    emit('voice:tts:audio', { sentence: reply, wav: audio.wav, latencyMs: audio.latencyMs });
-  }
-  emit('voice:llm:delta', { delta: reply });
-  emit('voice:llm:done', { text: reply });
-  emit('voice:idle', { reason: 'turn-complete' });
-};
 
 // Journal dictation bypasses the model and emits only the newly appended segment.
 const runDictationTurn = async ({ userText, state, signal, emit, hasHostControl }) => {
@@ -639,6 +592,119 @@ const buildTurnMessages = async ({ cfg, systemContext, userText, intent, state, 
   return messages;
 };
 
+const executeTurnLlmLoop = async ({
+  cfg, messages, toolSpecs, maxIterations, signal, emit, turnId, tlog, speaker, state, hasHostControl,
+}) => {
+  let firstLlm = null;
+  let lastLlm = null;
+  let finalText = '';
+  const toolRuns = [];
+  // Set when a tool returned confirmation_required:true. We short-circuit the
+  // turn server-side rather than trusting system-prompt instructions to keep
+  // the LLM from issuing further tool calls in the same turn. The pending
+  // record was already stashed on state by the tool itself.
+  let confirmationPrompt = null;
+
+  try {
+    for (let iter = 0; iter < maxIterations; iter++) {
+      if (signal?.aborted) break;
+
+      const iterStart = Date.now();
+      let firstDeltaAt = null;
+      let deltaChars = 0;
+      tlog(`llm.start iter=${iter + 1}/${maxIterations} provider=${cfg.llm.provider || 'lmstudio'} model=${cfg.llm.model} tools=${toolSpecs?.length || 0} msgs=${messages.length}`);
+      const llm = await streamChat(messages, {
+        provider: cfg.llm.provider,
+        model: cfg.llm.model,
+        signal,
+        onTimeout: () => speaker.cancel('timeout'),
+        tools: toolSpecs,
+        tag: turnId,
+        onDelta: (delta) => {
+          if (firstDeltaAt === null) {
+            firstDeltaAt = Date.now();
+            tlog(`llm.ttft  iter=${iter + 1} ${firstDeltaAt - iterStart}ms model=${lastLlm?.model || cfg.llm.model}`);
+          }
+          deltaChars += delta.length;
+          emit('voice:llm:delta', { delta });
+          speaker.appendDelta(delta);
+        },
+      });
+      if (!firstLlm) firstLlm = llm;
+      lastLlm = llm;
+      tlog(`llm.done  iter=${iter + 1} ${Date.now() - iterStart}ms model=${llm.model} text=${(llm.text || '').length}c spoken=${deltaChars}c tool_calls=${llm.toolCalls?.length || 0} finish=${llm.finishReason ?? '—'}`);
+      // Accumulate spoken text across tool-calling iterations. The old single-
+      // assignment version dropped every earlier segment, so the persisted
+      // `reply` (and next turn's history) diverged from what the user actually
+      // heard when the model spoke before/between tool calls.
+      if (llm.text) finalText += (finalText ? ' ' : '') + llm.text;
+
+      if (!llm.toolCalls?.length) break;
+
+      // Assign stable IDs up-front so the assistant's tool_calls[].id and each
+      // tool response's tool_call_id are guaranteed to match, even when the
+      // upstream stream omitted tc.id. Previously the fallback `call_<index>`
+      // was computed only at the tool-response side, so the assistant entry
+      // could carry a different id and the next LLM iteration wouldn't pair
+      // the result with the call.
+      const callsWithIds = llm.toolCalls.map((tc, i) => ({
+        ...tc,
+        resolvedId: tc.id || `call_${iter}_${tc.index ?? i}`,
+      }));
+
+      // Persist the assistant's tool-call turn, then execute each call and
+      // feed the result back as a 'tool' message for the next iteration.
+      messages.push({
+        role: 'assistant',
+        content: llm.text || null,
+        tool_calls: callsWithIds.map((tc) => ({
+          id: tc.resolvedId,
+          type: tc.type,
+          function: { name: tc.function.name, arguments: tc.function.arguments },
+        })),
+      });
+
+      for (const tc of callsWithIds) {
+        if (signal?.aborted) break;
+        const result = await executeTurnToolCall({ tc, cfg, emit, state, signal, hasHostControl, tlog, toolRuns });
+        messages.push({
+          role: 'tool',
+          tool_call_id: tc.resolvedId,
+          content: JSON.stringify(result),
+        });
+        // Destructive-action short-circuit: the tool stashed a pending record on
+        // state and returned a deterministic confirmation prompt. Stop executing
+        // further tool calls in this turn AND skip the next LLM iteration so the
+        // model can't (a) issue more tool calls that overwrite pendingDestructive
+        // or fire unrelated side effects, or (b) paraphrase the prompt in its
+        // own voice. The next user utterance ("yes"/"cancel") is handled by the
+        // pre-LLM gate in runTurn.
+        if (result?.confirmation_required) {
+          confirmationPrompt = result.summary || 'That looks destructive — confirm by saying "yes" or "cancel" to skip.';
+          break;
+        }
+      }
+      if (confirmationPrompt) break;
+    }
+  } catch (err) {
+    speaker.cancel('error');
+    throw err;
+  }
+
+  return { firstLlm, lastLlm, finalText, toolRuns, confirmationPrompt };
+};
+
+/**
+ * Run one turn.
+ *
+ * @param {object} args
+ * @param {Buffer} args.audio        — utterance audio bytes
+ * @param {string} args.mimeType     — e.g. 'audio/webm', 'audio/wav'
+ * @param {Array}  args.history      — prior conversation messages
+ * @param {(event:string, payload:any) => void} args.emit
+ * @param {AbortSignal} [args.signal]
+ * @returns {Promise<{ transcript: string, reply: string }>}
+ */
 export const runTurn = async ({ audio, text, mimeType, source, history = [], emit, signal, state, systemContext = null, hasHostControl }) => {
   const cfg = await getVoiceConfig();
   if (signal?.aborted) return { transcript: '', reply: '' };
@@ -722,142 +788,11 @@ export const runTurn = async ({ audio, text, mimeType, source, history = [], emi
   const messages = await buildTurnMessages({ cfg, systemContext, userText, intent, state, history, tlog });
   const maxIterations = Math.max(1, cfg.llm.tools?.maxIterations ?? 3);
 
-  let pending = '';
-  const ttsTimings = [];
-  let ttsIdx = 0;
-  // Stop audio on LLM failure without making the socket treat it as a barge-in.
-  const ttsController = new AbortController();
-  const ttsSignal = anyAbortSignal([signal, ttsController.signal]);
-  const cancelTts = (reason) => {
-    if (ttsSignal.aborted) return;
-    ttsController.abort();
-    emit('voice:tts:cancel', { reason });
-  };
-  const speak = async (sentence) => {
-    if (ttsSignal.aborted) return;
-    const i = ++ttsIdx;
-    const t0 = Date.now();
-    tlog(`tts.start #${i} chars=${sentence.length}`);
-    const { wav, latencyMs } = await synthesize(sentence, { signal: ttsSignal });
-    if (ttsSignal.aborted) return;
-    ttsTimings.push(latencyMs);
-    tlog(`tts.done  #${i} ${latencyMs}ms synth+queue=${Date.now() - t0}ms`);
-    // Track what we just said so the next inbound transcript can be checked
-    // for echo. Done before emit so an immediately-arriving STT result on
-    // the next event-loop tick already sees this sentence in the buffer.
-    if (state?.recentTts) rememberTtsSentence(state.recentTts, sentence);
-    emit('voice:tts:audio', { sentence, wav, latencyMs });
-  };
-
-  let synthQueue = Promise.resolve();
-  const enqueueSpeak = (sentence) => {
-    if (!sentence) return;
-    synthQueue = synthQueue.then(() => speak(sentence)).catch((err) => reportTtsError(err, ttsSignal, emit));
-  };
-  const flushSentence = (delta) => {
-    const { sentences, remainder } = splitSentences(pending + delta);
-    pending = remainder;
-    for (const sentence of sentences) enqueueSpeak(sentence);
-  };
-
-  let firstLlm = null;
-  let lastLlm = null;
-  let finalText = '';
-  const toolRuns = []; // [{ name, ok, ms, error }]
-  // Set when a tool returned confirmation_required:true. We short-circuit the
-  // turn server-side rather than trusting system-prompt instructions to keep
-  // the LLM from issuing further tool calls in the same turn. The pending
-  // record was already stashed on state by the tool itself.
-  let confirmationPrompt = null;
-
-  try {
-    for (let iter = 0; iter < maxIterations; iter++) {
-      if (signal?.aborted) break;
-
-      const iterStart = Date.now();
-      let firstDeltaAt = null;
-      let deltaChars = 0;
-      tlog(`llm.start iter=${iter + 1}/${maxIterations} provider=${cfg.llm.provider || 'lmstudio'} model=${cfg.llm.model} tools=${toolSpecs?.length || 0} msgs=${messages.length}`);
-      const llm = await streamChat(messages, {
-        provider: cfg.llm.provider,
-        model: cfg.llm.model,
-        signal,
-        onTimeout: () => cancelTts('timeout'),
-        tools: toolSpecs,
-        tag: turnId,
-        onDelta: (delta) => {
-          if (firstDeltaAt === null) {
-            firstDeltaAt = Date.now();
-            tlog(`llm.ttft  iter=${iter + 1} ${firstDeltaAt - iterStart}ms model=${lastLlm?.model || cfg.llm.model}`);
-          }
-          deltaChars += delta.length;
-          emit('voice:llm:delta', { delta });
-          flushSentence(delta);
-        },
-      });
-      if (!firstLlm) firstLlm = llm;
-      lastLlm = llm;
-      tlog(`llm.done  iter=${iter + 1} ${Date.now() - iterStart}ms model=${llm.model} text=${(llm.text || '').length}c spoken=${deltaChars}c tool_calls=${llm.toolCalls?.length || 0} finish=${llm.finishReason ?? '—'}`);
-      // Accumulate spoken text across tool-calling iterations. The old single-
-      // assignment version dropped every earlier segment, so the persisted
-      // `reply` (and next turn's history) diverged from what the user actually
-      // heard when the model spoke before/between tool calls.
-      if (llm.text) finalText += (finalText ? ' ' : '') + llm.text;
-
-      if (!llm.toolCalls?.length) break;
-
-      // Assign stable IDs up-front so the assistant's tool_calls[].id and each
-      // tool response's tool_call_id are guaranteed to match, even when the
-      // upstream stream omitted tc.id. Previously the fallback `call_<index>`
-      // was computed only at the tool-response side, so the assistant entry
-      // could carry a different id and the next LLM iteration wouldn't pair
-      // the result with the call.
-      const callsWithIds = llm.toolCalls.map((tc, i) => ({
-        ...tc,
-        resolvedId: tc.id || `call_${iter}_${tc.index ?? i}`,
-      }));
-
-      // Persist the assistant's tool-call turn, then execute each call and
-      // feed the result back as a 'tool' message for the next iteration.
-      messages.push({
-        role: 'assistant',
-        content: llm.text || null,
-        tool_calls: callsWithIds.map((tc) => ({
-          id: tc.resolvedId,
-          type: tc.type,
-          function: { name: tc.function.name, arguments: tc.function.arguments },
-        })),
-      });
-
-      for (const tc of callsWithIds) {
-        if (signal?.aborted) break;
-        const result = await executeTurnToolCall({ tc, cfg, emit, state, signal, hasHostControl, tlog, toolRuns });
-        messages.push({
-          role: 'tool',
-          tool_call_id: tc.resolvedId,
-          content: JSON.stringify(result),
-        });
-        // Destructive-action short-circuit: the tool stashed a pending record on
-        // state and returned a deterministic confirmation prompt. Stop executing
-        // further tool calls in this turn AND skip the next LLM iteration so the
-        // model can't (a) issue more tool calls that overwrite pendingDestructive
-        // or fire unrelated side effects, or (b) paraphrase the prompt in its
-        // own voice. The next user utterance ("yes"/"cancel") is handled by the
-        // pre-LLM gate in this same function.
-        if (result?.confirmation_required) {
-          confirmationPrompt = result.summary || 'That looks destructive — confirm by saying "yes" or "cancel" to skip.';
-          break;
-        }
-      }
-      if (confirmationPrompt) break;
-    }
-  } catch (err) {
-    cancelTts('error');
-    throw err;
-  }
-
-  enqueueSpeak(pending.trim());
-  await synthQueue;
+  const speaker = createTurnTtsSpeaker({ signal, state, emit, tlog });
+  const { firstLlm, lastLlm, finalText, toolRuns, confirmationPrompt } = await executeTurnLlmLoop({
+    cfg, messages, toolSpecs, maxIterations, signal, emit, turnId, tlog, speaker, state, hasHostControl,
+  });
+  await speaker.drain();
 
   // Destructive-confirm short-circuit: drain any already-streamed sentences
   // (the model may have spoken "Okay, deleting that" before the tool call),
@@ -872,6 +807,7 @@ export const runTurn = async ({ audio, text, mimeType, source, history = [], emi
   }
 
   const totalMs = Date.now() - turnStart;
+  const { ttsTimings } = speaker;
   const ttsTotal = ttsTimings.reduce((a, b) => a + b, 0);
   const inputKind = text ? 'text' : 'voice';
   const toolSummary = toolRuns.length
