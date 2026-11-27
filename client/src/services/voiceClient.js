@@ -47,6 +47,7 @@ const isOwnerCurrent = (generation) => generation === captureOwnerGeneration;
 const playback = {
   queue: Promise.resolve(),
   source: null,
+  startedAt: 0,
   depth: 0,
   echoTailUntil: 0,
   acceptsServerTurnAudio: true,
@@ -72,6 +73,13 @@ const ensureCtx = () => {
   resumeAudioContext(audioCtx).catch(() => {});
   return audioCtx;
 };
+
+// Call synchronously from the user's tap/submit so WebKit can start playback
+// before the asynchronous reply arrives. This never opens the microphone.
+export function prepareVoicePlayback() {
+  if (!window.AudioContext && !window.webkitAudioContext) return;
+  try { ensureCtx(); } catch { /* Native audio unavailable; don't block the typed turn. */ }
+}
 
 const cancelVoicePlayback = () => {
   playback.decodeGeneration += 1;
@@ -129,9 +137,30 @@ const enqueuePlay = async (bytes) => {
       resolve();
     };
     playback.source = src;
+    playback.startedAt = ctx.currentTime;
     src.start();
   }));
 };
+
+// Sample only the already-decoded output that is actually playing. No mic,
+// second audio graph, network, or queue changes for the visualizer.
+export function getVoiceOutputLevel() {
+  const buffer = playback.source?.buffer;
+  if (!buffer?.numberOfChannels || audioCtx?.state !== 'running') return 0;
+  const elapsed = audioCtx.currentTime - playback.startedAt;
+  if (elapsed < 0 || elapsed >= buffer.duration) return 0;
+  const sample = Math.floor(elapsed * buffer.sampleRate);
+  // Use a bounded sample window (~20 ms) at the current audio-clock position.
+  const stride = Math.max(1, Math.floor(buffer.sampleRate / 1600));
+  const samples = buffer.getChannelData(0);
+  let energy = 0;
+  let count = 0;
+  for (let i = Math.max(0, sample - 16 * stride); i < Math.min(samples.length, sample + 16 * stride); i += stride) {
+    energy += samples[i] ** 2;
+    count += 1;
+  }
+  return count ? Math.min(1, Math.sqrt(energy / count) * 4) : 0;
+}
 
 const isTtsActive = () => playback.depth > 0 || playback.source !== null;
 const isInTtsEchoWindow = () => isTtsActive() || performance.now() < playback.echoTailUntil;

@@ -50,6 +50,12 @@ describe('page shells', () => {
     expect(page.closest('main')?.dataset.shell).toBe(shell);
   });
 
+  it('opens the browser call console in the full-width shell', () => {
+    const page = renderAt('/voice/call');
+    expect(page.dataset.page).toBe('VoiceCall');
+    expect(page.closest('main')?.dataset.shell).toBe('full');
+  });
+
   it('opens General from the Settings root', () => {
     const page = renderAt('/settings');
     expect(page.dataset.page).toBe('Settings');

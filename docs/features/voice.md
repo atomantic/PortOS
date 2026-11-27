@@ -4,6 +4,27 @@ PortOS includes an optional voice assistant with support for fully local operati
 
 **Privacy note:** LLM, TTS, and pipeline orchestration always run locally. For speech-to-text, the default **Web Speech API** uses your browser's built-in recognition service — in Chrome/Chromium this forwards audio to a Google cloud endpoint. Switch `stt.engine` to **`whisper`** (whisper.cpp, local HTTP server) under *Settings → Voice* for fully-offline STT with no audio leaving the machine.
 
+## Browser call console
+
+Open **Voice Call** from the mobile top bar or command palette. On desktop,
+**Open call console** is also available in the floating widget and Voice
+settings. The console uses the same microphone, agent, voice, tools, and
+conversation as the widget; it does not start a second voice session. **Open mic**
+or **Talk** starts capture, and **End** stops the microphone and interrupts output
+without submitting an unfinished recording. Leaving the console also ends active
+capture and playback. Typed messages work without microphone permission.
+
+**Model & voice settings** opens the regular instance-wide Voice settings:
+choose a streaming API provider (including a configured local model), model,
+speech recognition, voice, and other controls, then **Save & Reconcile**.
+No particular model is required.
+
+The optional stylized portrait animates using the local playback level, not the
+camera or microphone input. It does not fetch a model or send audio to a renderer.
+It stays still with reduced motion enabled. The **Avatar** button switches to
+audio-only display without interrupting the conversation. This is a browser
+surface, independent of FaceTime Audio.
+
 ## Stack
 
 | Stage | Default engine | Alternatives | Local? |

@@ -296,6 +296,7 @@ export const NAV_SEARCH_METADATA = Object.freeze({
   'nav.settings.telegram': { aliases: ['settings-telegram', 'telegram'] },
   'nav.settings.voice': { aliases: ['settings-voice', 'voice', 'voice-settings'], keywords: ['mic', 'microphone', 'speech', 'tts', 'whisper', 'kokoro'] },
   'nav.settings.facetime': { aliases: ['facetime', 'facetime-audio', 'call-settings'], keywords: ['facetime', 'audio call', 'call', 'hang up', 'blackhole'] },
+  'nav.settings.voice-call': { aliases: ['voice-call', 'call-console', 'voice-console'], keywords: ['avatar', 'browser call', 'transceiver'] },
   'nav.settings.call-host': { aliases: ['call-host', 'voice-call-host', 'facetime-call-host', 'audio-bridge', 'meeting-capture', 'capture-audio'], keywords: ['facetime', 'call audio', 'blackhole', 'bridge', 'attach', 'microphone', 'speaker', 'call host', 'meeting capture', 'transcribe meeting', 'record meeting'] },
   'nav.ambient': { aliases: ['ambient', 'ambient-mode', 'ambient mode'], keywords: ['idle', 'background', 'display', 'screensaver', 'fullscreen'] },
   'nav.data': { aliases: ['data'] },

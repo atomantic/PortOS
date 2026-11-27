@@ -109,7 +109,7 @@ vi.mock('../../services/uiInteract', () => ({
   doSetCheckbox: vi.fn(() => ({ ok: true })),
 }));
 vi.mock('../micrographics', () => ({ MicroGlyph: () => null }));
-vi.mock('react-router', () => ({ useNavigate: () => vi.fn() }));
+vi.mock('react-router', () => ({ useNavigate: () => vi.fn(), Link: ({ to, children }) => <a href={to}>{children}</a> }));
 
 import { warmNano } from '../../services/browserLlm';
 import VoiceWidgetGate from './VoiceWidgetGate';

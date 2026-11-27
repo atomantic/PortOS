@@ -1,5 +1,7 @@
 import { useState, useEffect, useLayoutEffect, useRef, useCallback, useId } from 'react';
-import { useNavigate } from 'react-router';
+import { createPortal } from 'react-dom';
+import { Link, useNavigate } from 'react-router';
+import VoiceCallConsole from './VoiceCallConsole';
 import { Mic, MicOff, Brain, Volume2, VolumeX, Square, Trash2, ChevronDown, ChevronUp, Send, Infinity as InfinityIcon, NotebookPen, X, EyeOff, Monitor, MonitorOff } from 'lucide-react';
 import {
   startCapture, stopCapture, interrupt, resetConversation, sendText, onVoiceEvent, isCapturing,
@@ -8,7 +10,7 @@ import {
   disposeCaptureOwner,
   onProactiveSpeech, captureScreenForVision, sendScreenshotResult,
   enableVisionCapture, disableVisionCapture, isVisionCaptureEnabled, onVisionCaptureEnded,
-  speakSynthesized, onVoiceOutputPrimary, claimVoiceOutput,
+  speakSynthesized, onVoiceOutputPrimary, claimVoiceOutput, prepareVoicePlayback,
 } from '../../services/voiceClient';
 import { resolveTurn, buildRouterSystemPrompt, TIER } from '../../services/voiceFastPath';
 import { warmNano } from '../../services/browserLlm';
@@ -58,12 +60,13 @@ const warnIfQuiet = (peak) => {
 // its `voice:config:changed` subscription and hands the result down as
 // `config`. `claimHeld` returns, once, what happened while this chunk was
 // still loading: `{ start, dictation }`.
-export default function VoiceWidget({ config, claimHeld }) {
+export default function VoiceWidget({ config, claimHeld, consoleHost }) {
   // Read at capture start so a settings change applies to the next turn without rebinding the mic.
   const vadRef = useRef(config.vad);
   vadRef.current = config.vad;
   const navigate = useNavigate();
   const { enabled, hotkey, sttEngine, sttLanguage, fastPath, personality, tts } = config;
+  const turnGenerationRef = useRef(0);
   const [stage, setStage] = useState('idle');
   const [history, setHistory] = useState([]);
   const [collapsed, setCollapsed] = useState(false);
@@ -352,6 +355,7 @@ export default function VoiceWidget({ config, claimHeld }) {
   // to the server pipeline as usual". Reads config via refs so it stays stable.
   const runFastPath = useCallback(async (text) => {
     if (disposedRef.current) return false;
+    const generation = turnGenerationRef.current;
     const fp = fastPathRef.current;
     if (!fp?.enabled) return false;
     // Ensure the nav manifest is loaded (retries if an earlier fetch failed) so
@@ -369,7 +373,7 @@ export default function VoiceWidget({ config, claimHeld }) {
     } catch {
       return false;
     }
-    if (disposedRef.current) return false;
+    if (disposedRef.current || generation !== turnGenerationRef.current) return true;
     if (decision.tier === TIER.SERVER) return false;
 
     // A fast tier owns this turn. Stop any lingering playback, speak the reply
@@ -441,8 +445,9 @@ export default function VoiceWidget({ config, claimHeld }) {
         // effect on the next utterance without restarting the recognizer.
         routeFinal: async (text) => {
           if (disposedRef.current) return;
+          const generation = turnGenerationRef.current;
           const handled = fastPathRef.current?.enabled ? await runFastPath(text) : false;
-          if (!disposedRef.current && !handled) sendText(text, 'voice');
+          if (!disposedRef.current && generation === turnGenerationRef.current && !handled) sendText(text, 'voice');
         },
         onError: (err) => {
           if (disposedRef.current) return;
@@ -588,12 +593,14 @@ export default function VoiceWidget({ config, claimHeld }) {
     setStage('thinking');
     // Typed turns run through the same cascade (a typed "go to tasks" navigates
     // instantly). Falls through to the server pipeline when unhandled.
+    const generation = turnGenerationRef.current;
     const handled = fastPathRef.current?.enabled ? await runFastPath(text) : false;
-    if (disposedRef.current || handled) return;
+    if (disposedRef.current || generation !== turnGenerationRef.current || handled) return;
     sendText(text);
   }, [draft, runFastPath]);
 
   const toggleCapture = useCallback(() => {
+    if (cancelInFlightRef.current) return;
     if (isWebSpeechCapturing() || isCapturing() || isContinuous()) handleStop();
     else handleStart();
   }, [handleStart, handleStop]);
@@ -755,7 +762,49 @@ export default function VoiceWidget({ config, claimHeld }) {
     (next === 'input' ? inputRef : fabRef).current?.focus();
   }, [expanded]);
 
-  if (!enabled || hidden) return null;
+  const sendFromConsole = () => {
+    if (!draft.trim()) return;
+    prepareVoicePlayback();
+    handleSend();
+  };
+
+  const toggleConsoleMic = () => {
+    prepareVoicePlayback();
+    toggleCapture();
+  };
+
+  const endCall = useCallback(() => {
+    turnGenerationRef.current += 1;
+    engageSeqRef.current += 1;
+    pendingEngageRef.current = false;
+    // Stop even a pending permission request or an unsent push-to-talk turn.
+    disposeCaptureOwner();
+    disableVisionCapture();
+    interrupt();
+    setInterimTranscript('');
+    setStage('idle');
+  }, []);
+
+  // Leaving the dedicated call console stops its microphone and cancels
+  // playback; switching surfaces never mounts a second capture engine.
+  const previousConsole = useRef(null);
+  useEffect(() => {
+    if (previousConsole.current && !consoleHost) endCall();
+    previousConsole.current = consoleHost;
+  }, [consoleHost, endCall]);
+
+  if (!enabled) return null;
+  if (consoleHost) {
+    return createPortal(
+      <VoiceCallConsole stage={stage} history={history} scrollRef={scrollRef} interimTranscript={interimTranscript}
+        capturing={ACTIVE_STAGES.has(stage) || isWebSpeechCapturing()} handsFree={!useWebSpeech && handsFree}
+        canChangeMicMode={!useWebSpeech} draft={draft} onDraft={setDraft} onSend={sendFromConsole} onMic={toggleConsoleMic}
+        onMode={toggleHandsFree} onInterrupt={interrupt} onEnd={endCall}
+        voiceLabel={tts?.voice || tts?.engine} />,
+      consoleHost,
+    );
+  }
+  if (hidden) return null;
 
   const { icon: Icon, label, tone } = STAGE[stage] || STAGE.idle;
   const capturing = ACTIVE_STAGES.has(stage) || isWebSpeechCapturing();
@@ -833,6 +882,9 @@ export default function VoiceWidget({ config, claimHeld }) {
             </div>
           </div>
         )}
+        <Link to="/voice/call" className="self-end rounded-full border border-port-border bg-port-card px-3 py-2 text-xs text-port-text hover:border-port-accent">
+          Open call console
+        </Link>
         <form
           onSubmit={(e) => { e.preventDefault(); handleSend(); }}
           className={`flex items-center gap-1 bg-port-card/95 backdrop-blur border rounded-full pl-4 pr-1 py-1 w-full focus-within:border-port-accent ${fabSurface}`}
