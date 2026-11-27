@@ -5,6 +5,7 @@
  * coordinator below, including the persisted legacy approval ledger.
  */
 
+import { isDeepStrictEqual } from 'node:util';
 import { z } from 'zod';
 import { createGithubActorTrust } from './forgeActorTrust.js';
 import { safeJSONParse } from '../lib/fileUtils.js';
@@ -45,7 +46,7 @@ const MAX_DIFF_CHARS = MODEL_ABUSE_GUARD_MAX_INPUT_CHARS;
 const MAX_ISSUE_COMMENTS_PER_RUN = 25;
 const MAX_ISSUE_CONTEXT_CHARS = 40_000;
 const MAX_PENDING_ISSUE_COMMENTS = 250;
-// How many carried-over issues `pruneClosedIssueComments` re-reads at once. Each
+// How many carried-over issues `findClosedIssues` re-reads at once. Each
 // read forks a gh child, and the queue it walks is capped at 250 entries.
 const ISSUE_STATE_PROBE_BATCH = 10;
 // One entry per PR, so this only grows with the count of external PRs that were
@@ -519,7 +520,7 @@ async function gatherIssueComments(ctx, { since, trust, state }) {
 }
 
 /**
- * Drop pending comments whose issue has closed since it was gathered.
+ * Find carried issues which have closed since the last gather.
  *
  * The gather query is `state=open`, so a fresh comment always belongs to an open
  * issue — but `state.pendingIssueComments` carries a comment forward across runs
@@ -540,10 +541,9 @@ async function gatherIssueComments(ctx, { since, trust, state }) {
  * entries, so an unbounded `Promise.all` over it would fork hundreds of children
  * at once.
  */
-async function pruneClosedIssueComments(ctx, items, freshIssueNumbers) {
+async function findClosedIssues(ctx, items, freshIssueNumbers) {
   const carried = [...new Set(items.map((item) => item.issueNumber))]
     .filter((number) => !freshIssueNumbers.has(number));
-  if (carried.length === 0) return items;
   const closed = new Set();
   for (let start = 0; start < carried.length; start += ISSUE_STATE_PROBE_BATCH) {
     const batch = carried.slice(start, start + ISSUE_STATE_PROBE_BATCH);
@@ -554,7 +554,7 @@ async function pruneClosedIssueComments(ctx, items, freshIssueNumbers) {
       if (issues[index] && !isOpenIssue(issues[index])) closed.add(number);
     });
   }
-  return closed.size === 0 ? items : items.filter((item) => !closed.has(item.issueNumber));
+  return closed;
 }
 
 async function readPullRequest(ctx, number) {
@@ -832,23 +832,34 @@ async function keepPendingApproval(app, approval, remaining, reason, { patch = {
   }
 }
 
+const approvalEntries = (state) => Array.isArray(state.approvedPullRequests) ? state.approvedPullRequests : [];
+
+// A poll or review can settle after another pass replaced even the same PR's
+// entry. Apply only the dispositions whose original entry is still current.
+function approvalStatePatch(state, original, changes) {
+  if (!changes.size) return {};
+  const byNumber = new Map(approvalEntries(state).map((entry) => [entry.number, entry]));
+  const before = new Map(original.map((entry) => [entry.number, entry]));
+  for (const [number, approval] of changes) {
+    if (!isDeepStrictEqual(before.get(number), byNumber.get(number))) continue;
+    if (approval) byNumber.set(number, approval);
+    else byNumber.delete(number);
+  }
+  return { approvedPullRequests: [...byNumber.values()] };
+}
+
 async function processPendingApprovals(app, ctx) {
-  const approvals = Array.isArray(readState(app).approvedPullRequests) ? readState(app).approvedPullRequests : [];
+  const approvals = approvalEntries(readState(app));
   const remaining = [];
   const drops = createDropLog();
   const handbacks = createHandbackTracker(app);
-  let changed = false;
   for (let approval of approvals) {
     const pr = await readPullRequest(ctx, approval.number);
     if (!pr) {
       await keepPendingApproval(app, approval, remaining, 'it could not be read from GitHub', { tracker: handbacks });
-      changed = true;
       continue;
     }
-    if (pr.state !== 'OPEN') {
-      changed = true;
-      continue;
-    }
+    if (pr.state !== 'OPEN') continue;
     // Upgrade old queues before any further wait/action: GitHub auto-merge
     // would otherwise bypass the current content and security-model gates.
     if (approval.autoMergeEnabled) {
@@ -861,15 +872,12 @@ async function processPendingApprovals(app, ctx) {
           await notifyPendingApproval(app, approval, 'GitHub auto-merge could not be disabled for security reassessment. Disable it on the PR; PortOS will keep trying.');
         }
         remaining.push({ ...approval, autoMergeRevocationFailed: true });
-        changed = true;
         continue;
       }
       approval = { ...approval, autoMergeEnabled: false };
-      changed = true;
     }
     if (pr.headRefOid !== approval.headSha) {
       drops.record(pr.number, 'a new head commit replaced the approved one');
-      changed = true;
       continue;
     }
     const approvedDiff = await runGh(['pr', 'diff', String(pr.number), '--repo', ctx.repoSpec], ctx).catch(() => null);
@@ -882,19 +890,16 @@ async function processPendingApprovals(app, ctx) {
       // head after the review. An old approval is never enough to merge the
       // new content, so discard the pending action and require a fresh run.
       drops.record(pr.number, 'its content no longer matches the approved revision');
-      changed = true;
       continue;
     }
     const assessment = await assessCurrentPullRequest(ctx, pr, approvedDiff);
     if (!assessment.ok) {
       await keepPendingApproval(app, approval, remaining, 'the current security-model assessment did not pass');
-      changed = true;
       continue;
     }
     if (approval.eligibilityFacts !== undefined
       && !await eligibilityFactsStillCurrent(ctx, pr, approval)) {
       await notifyPendingApproval(app, approval, 'The linked issue state or assignee changed, so the previous approval was discarded.');
-      changed = true;
       continue;
     }
     const outcome = await advanceApprovedPullRequest({
@@ -904,16 +909,16 @@ async function processPendingApprovals(app, ctx) {
     if (outcome.kind === 'hold') {
       await keepPendingApproval(app, outcome.approval, remaining, outcome.reason, { ctx, pr, tracker: handbacks });
     }
-    changed = true;
   }
   const handbackPatch = handbackStatePatch(handbacks);
-  if (changed || typeof handbackPatch === 'function') {
+  if (approvals.length) {
+    const changes = new Map(approvals.map(({ number }) => [number, null]));
+    for (const entry of remaining) changes.set(entry.number, entry);
     await persistState(app.id, (state) => ({
-      approvedPullRequests: remaining,
+      ...approvalStatePatch(state, approvals, changes),
       ...(typeof handbackPatch === 'function' ? handbackPatch(state) : handbackPatch),
     }));
   }
-  return remaining;
 }
 
 async function notifyPendingApproval(app, approval, description) {
@@ -928,6 +933,12 @@ async function notifyPendingApproval(app, approval, description) {
     console.error(`❌ issue-watcher: failed to notify about PR #${approval.number}: ${err.message}`);
     return null;
   });
+}
+
+function pendingCommentsById(state) {
+  const items = Array.isArray(state.pendingIssueComments) ? state.pendingIssueComments : [];
+  return new Map(items.filter((item) => Number.isInteger(item?.issueNumber) && Number.isInteger(item.commentId))
+    .map((item) => [issueCommentKey(item), item]));
 }
 
 /** Deterministic gather + assignment pass run before cognition. */
@@ -956,30 +967,40 @@ export async function gatherIssueWatcherInput({ app } = {}) {
     await persistState(app.id, { lastCheckedAt: startedAt, lastError: 'activity-read-failed' });
     return { skip: { reason: 'activity-read-failed' } };
   }
-  const pendingById = new Map();
-  for (const item of [...(Array.isArray(state.pendingIssueComments) ? state.pendingIssueComments : []), ...issueResult.comments]) {
-    if (item && Number.isInteger(item.issueNumber) && Number.isInteger(item.commentId)) {
-      const key = issueCommentKey(item);
-      const existing = pendingById.get(key);
-      pendingById.set(key, { ...item, ticks: existing?.ticks || item.ticks || 0 });
+  const original = pendingCommentsById(state);
+  const closed = await findClosedIssues(ctx, [...original.values()],
+    new Set(issueResult.comments.map((item) => item.issueNumber)));
+
+  const gathered = await persistState(app.id, (latest) => {
+    const pending = pendingCommentsById(latest);
+    for (const [key, item] of original) {
+      if (closed.has(item.issueNumber) && isDeepStrictEqual(pending.get(key), item)) pending.delete(key);
     }
-  }
-  const allPendingIssueComments = await pruneClosedIssueComments(
-    ctx,
-    [...pendingById.values()],
-    new Set(issueResult.comments.map((item) => item.issueNumber)),
-  );
-  if (allPendingIssueComments.length > MAX_PENDING_ISSUE_COMMENTS) {
-    await persistState(app.id, { lastCheckedAt: startedAt, lastError: 'issue-activity-overflow' });
-    return { skip: { reason: 'issue-activity-overflow' } };
-  }
-  const pendingIssueComments = allPendingIssueComments;
-  await persistState(app.id, {
-    cursor: startedAt,
-    pendingIssueComments,
-    lastCheckedAt: startedAt,
-    lastError: null,
+    for (const item of issueResult.comments) {
+      if (!Number.isInteger(item?.issueNumber) || !Number.isInteger(item.commentId)) continue;
+      const key = issueCommentKey(item);
+      const current = pending.get(key);
+      // A peer may have consumed or refreshed this comment during forge I/O.
+      const previous = original.get(key);
+      if (current && (!previous || issueAbuseInput(current) !== issueAbuseInput(previous))) continue;
+      if (!current && previous && issueAbuseInput(previous) === issueAbuseInput(item)) continue;
+      if (item.commentId === 0 && latest.issueSnapshots?.[item.issueNumber] === abuseFingerprint(item, issueAbuseInput(item))) continue;
+      pending.set(key, { ...item, ticks: current?.ticks || 0 });
+    }
+    if (pending.size > MAX_PENDING_ISSUE_COMMENTS) {
+      return { lastCheckedAt: startedAt, lastError: 'issue-activity-overflow' };
+    }
+    return {
+      cursor: latest.cursor > startedAt ? latest.cursor : startedAt,
+      pendingIssueComments: [...pending.values()].map((item) => ({ ticks: 0, ...item })),
+      lastCheckedAt: startedAt,
+      lastError: null,
+    };
   });
+  if (!gathered) return { skip: { reason: 'no-app' } };
+  const gatheredState = readState(gathered);
+  if (gatheredState.lastError) return { skip: { reason: gatheredState.lastError } };
+  const pendingIssueComments = gatheredState.pendingIssueComments;
   if (pendingIssueComments.length === 0) {
     return { skip: { reason: firstRun ? 'baselined' : 'no-cognitive-activity' } };
   }
@@ -996,37 +1017,38 @@ export async function gatherIssueWatcherInput({ app } = {}) {
     issueComments: takeIssueCommentsWithinBudget(pendingIssueComments),
   });
   if (!screened.ok) {
-    await persistState(app.id, {
+    await persistState(app.id, (latest) => ({
       lastError: screened.code || 'model-abuse-guard-unavailable',
       modelAbuse: {
-        ...(state.modelAbuse || {}),
+        ...(latest.modelAbuse || {}),
         guardId: MODEL_ABUSE_GUARD_ID,
         lastScanAt: startedAt,
       },
-    });
+    }));
     return { skip: { reason: 'model-abuse-guard-unavailable' } };
   }
   const assignmentResult = await assignSafeVolunteers(ctx, screened.safeComments);
   if (assignmentResult.assignments > 0) {
     console.log(`📌 issue-watcher: assigned ${assignmentResult.assignments} issue volunteer(s) for ${app.name}`);
   }
-  const existingBlocked = Array.isArray(state.modelAbuse?.blocked) ? state.modelAbuse.blocked : [];
-  const blockedByFingerprint = new Map(existingBlocked.map((report) => [report?.fingerprint, report]));
-  for (const report of screened.blocked) blockedByFingerprint.set(report.fingerprint, report);
-  const modelAbuse = {
-    guardId: MODEL_ABUSE_GUARD_ID,
-    lastScanAt: startedAt,
-    blocked: [...blockedByFingerprint.values()].filter(Boolean).slice(-MODEL_ABUSE_REPORT_LIMIT),
-  };
-  const withheldKeys = new Set(screened.blocked.map(issueCommentKey));
-  const pendingAfterAssignments = pendingIssueComments.filter((item) => {
-    const key = issueCommentKey(item);
-    return !assignmentResult.assignedCommentKeys.has(key) && !withheldKeys.has(key);
-  });
-  await persistState(app.id, {
-    modelAbuse,
-    pendingIssueComments: pendingAfterAssignments,
-    lastError: null,
+  const consumed = new Map(screened.blocked.map((report) => [issueCommentKey(report), report.fingerprint]));
+  for (const key of assignmentResult.assignedCommentKeys) consumed.set(key, screened.safeCommentFingerprints.get(key));
+  await persistState(app.id, (latest) => {
+    const existingBlocked = Array.isArray(latest.modelAbuse?.blocked) ? latest.modelAbuse.blocked : [];
+    const blockedByFingerprint = new Map(existingBlocked.map((report) => [report?.fingerprint, report]));
+    for (const report of screened.blocked) blockedByFingerprint.set(report.fingerprint, report);
+    return {
+      modelAbuse: {
+        guardId: MODEL_ABUSE_GUARD_ID,
+        lastScanAt: startedAt,
+        blocked: [...blockedByFingerprint.values()].filter(Boolean).slice(-MODEL_ABUSE_REPORT_LIMIT),
+      },
+      pendingIssueComments: [...pendingCommentsById(latest).values()].filter((item) => {
+        const fingerprint = consumed.get(issueCommentKey(item));
+        return !fingerprint || fingerprint !== abuseFingerprint(item, issueAbuseInput(item));
+      }),
+      lastError: null,
+    };
   });
 
   const safeIssueComments = takeIssueCommentsWithinBudget(screened.safeComments.filter((item) => (
@@ -1254,12 +1276,6 @@ async function updatePullRequestBranch(ctx, number, headSha) {
     });
 }
 
-const withoutApproval = (approvals, number) => approvals.filter((entry) => entry.number !== number);
-
-function mergeApproval(existing, approval) {
-  return [...withoutApproval(existing, approval.number), approval];
-}
-
 /** The ledger entry a fresh APPROVE hands to `advanceApprovedPullRequest`. */
 function approvalRecordFor(pr, target, decision) {
   return {
@@ -1365,14 +1381,6 @@ async function advanceApprovedPullRequest({ app, ctx, pr, approval, handbacks, r
   }
   // PortOS owns the wait so a later merge must pass fresh security checks.
   return hold('CI or mergeability did not settle', ciHold);
-}
-
-/** How a fresh landing outcome changes this pass's approval ledger. */
-function ledgerAfterLanding(approvals, number, outcome) {
-  if (outcome.kind === 'hold') return mergeApproval(approvals, outcome.approval);
-  // Landed, or handed off because CI failed: nothing is left to poll.
-  if (outcome.kind === 'merged' || outcome.kind === 'handed-back') return withoutApproval(approvals, number);
-  return approvals;
 }
 
 /**
@@ -1555,10 +1563,9 @@ async function answerIssueComments(ctx, expectedComments, commentDecisions) {
 }
 
 /**
- * Verify, review and (when approved) land one PR decision. Returns what happened
- * and the approvals ledger after any eligibility lapse or landing.
+ * Verify, review and (when approved) land one PR decision, recording its approval disposition.
  */
-async function reviewScreenedPullRequest({ app, ctx, raw, expectedPullRequests, drops, handbacks, approvals, requireEligibilityFacts }) {
+async function reviewScreenedPullRequest({ app, ctx, raw, expectedPullRequests, drops, handbacks, approvalChanges, requireEligibilityFacts }) {
   const verified = await verifyScreenedPullRequest(ctx, raw, expectedPullRequests);
   if (!verified.ok) {
     drops.record(verified.number, verified.reason);
@@ -1566,11 +1573,10 @@ async function reviewScreenedPullRequest({ app, ctx, raw, expectedPullRequests, 
       await notifyPendingApproval(app, { number: verified.number, url: verified.pr?.url || null },
         `The review finished, but ${verified.reason}, so PortOS took no action on it.`);
     }
-    return { reviewed: false, handedBack: false, landing: null, approvals };
+    return { reviewed: false, handedBack: false, landing: null };
   }
   const { decision, target, pr, diff, assessment } = verified;
-  let ledger = approvals;
-  const skipped = () => ({ reviewed: false, handedBack: false, landing: null, approvals: ledger });
+  const skipped = () => ({ reviewed: false, handedBack: false, landing: null });
   const eligibilityRequired = requireEligibilityFacts
     || Object.hasOwn(target, 'eligibilityFacts');
   const eligibilityStillCurrent = async () => {
@@ -1581,7 +1587,7 @@ async function reviewScreenedPullRequest({ app, ctx, raw, expectedPullRequests, 
     if (!eligibilityRequired) return true;
     const current = await eligibilityFactsStillCurrent(ctx, pr, target);
     if (!current) {
-      ledger = withoutApproval(ledger, pr.number);
+      approvalChanges.set(pr.number, null);
       drops.record(decision.number, 'the linked issue state or author assignment changed since the eligibility gate ran');
     }
     return current;
@@ -1591,7 +1597,7 @@ async function reviewScreenedPullRequest({ app, ctx, raw, expectedPullRequests, 
     const outcome = await postNonApprovingReview({
       app, ctx, pr, raw, decision, review, target, handbacks, drops, recheck: eligibilityStillCurrent,
     });
-    return { reviewed: outcome.reviewed, handedBack: outcome.handedBack, landing: null, approvals: ledger };
+    return { reviewed: outcome.reviewed, handedBack: outcome.handedBack, landing: null };
   }
   if (!await eligibilityStillCurrent()) return skipped();
   // Every accepted finding is blocking, so an approvable review never carries inline comments.
@@ -1608,7 +1614,9 @@ async function reviewScreenedPullRequest({ app, ctx, raw, expectedPullRequests, 
     approval: approvalRecordFor(pr, target, decision),
     recheck: eligibilityStillCurrent,
   });
-  return { reviewed: true, handedBack: false, landing, approvals: ledgerAfterLanding(ledger, pr.number, landing) };
+  if (landing.kind === 'hold') approvalChanges.set(pr.number, landing.approval);
+  if (landing.kind === 'merged' || landing.kind === 'handed-back') approvalChanges.set(pr.number, null);
+  return { reviewed: true, handedBack: false, landing };
 }
 
 /** Age the still-unanswered handed comments; those past the retry budget time out. */
@@ -1617,8 +1625,10 @@ function agePendingIssueComments(latestState, handledCommentKeys, expectedCommen
   const pendingIssueComments = (Array.isArray(latestState.pendingIssueComments) ? latestState.pendingIssueComments : [])
     .flatMap((item) => {
       const key = issueCommentKey(item);
+      const expected = expectedComments.get(key);
+      if (!expected || (expected.contentFingerprint
+        && expected.contentFingerprint !== abuseFingerprint(item, issueAbuseInput(item)))) return [item];
       if (handledCommentKeys.has(key)) return [];
-      if (!expectedComments.has(key)) return [item];
       const next = { ...item, ticks: (item.ticks || 0) + 1 };
       if (next.ticks < MAX_PENDING_ISSUE_COMMENT_TICKS) return [next];
       timedOutComments.push(next);
@@ -1673,7 +1683,7 @@ export async function processTaskOutput({ appId, success, payload, task, require
   const commentsHandled = handledCommentKeys.size === expectedComments.size
     && commentDecisions.size === expectedComments.size;
 
-  let approvals = Array.isArray(readState(app).approvedPullRequests) ? readState(app).approvedPullRequests : [];
+  const approvalChanges = new Map();
   const drops = createDropLog();
   const handbacks = createHandbackTracker(app);
   // One disposition per approved PR; the result counts are tallied from them.
@@ -1682,32 +1692,34 @@ export async function processTaskOutput({ appId, success, payload, task, require
   let handedBack = 0;
   for (const raw of payload.pullRequests) {
     const step = await reviewScreenedPullRequest({
-      app, ctx, raw, expectedPullRequests, drops, handbacks, approvals, requireEligibilityFacts,
+      app, ctx, raw, expectedPullRequests, drops, handbacks, approvalChanges, requireEligibilityFacts,
     });
-    approvals = step.approvals;
     if (step.reviewed) reviewed += 1;
     if (step.handedBack) handedBack += 1;
     if (step.landing) landings.push(step.landing);
   }
 
-  const { pendingIssueComments, timedOutComments } = agePendingIssueComments(
-    readState(await getAppById(appId) || app), handledCommentKeys, expectedComments);
-  await notifyTimedOutIssueComments(appId, timedOutComments);
+  let timedOutComments = [];
   const handbackPatch = handbackStatePatch(handbacks);
-  await persistState(appId, (state) => ({
-    approvedPullRequests: approvals,
-    pendingIssueComments,
-    issueSnapshots: Object.fromEntries([
-      ...Object.entries(state.issueSnapshots || {}),
-      ...[...handledCommentKeys].filter((key) => key.endsWith(':0')).map((key) => {
-        const item = expectedComments.get(key);
-        return [String(item.issueNumber), item.contentFingerprint];
-      }),
-    ].slice(-MAX_PENDING_ISSUE_COMMENTS)),
-    lastCheckedAt: new Date().toISOString(),
-    lastError: commentsHandled ? null : 'issue-response-incomplete',
-    ...(typeof handbackPatch === 'function' ? handbackPatch(state) : handbackPatch),
-  }));
+  await persistState(appId, (state) => {
+    const aged = agePendingIssueComments(state, handledCommentKeys, expectedComments);
+    timedOutComments = aged.timedOutComments;
+    return {
+      ...approvalStatePatch(state, approvalEntries(readState(app)), approvalChanges),
+      pendingIssueComments: aged.pendingIssueComments,
+      issueSnapshots: Object.fromEntries([
+        ...Object.entries(state.issueSnapshots || {}),
+        ...[...handledCommentKeys].filter((key) => key.endsWith(':0')).map((key) => {
+          const item = expectedComments.get(key);
+          return [String(item.issueNumber), item.contentFingerprint];
+        }),
+      ].slice(-MAX_PENDING_ISSUE_COMMENTS)),
+      lastCheckedAt: new Date().toISOString(),
+      lastError: commentsHandled ? null : 'issue-response-incomplete',
+      ...(typeof handbackPatch === 'function' ? handbackPatch(state) : handbackPatch),
+    };
+  });
+  await notifyTimedOutIssueComments(appId, timedOutComments);
   const landed = (kind) => landings.filter((outcome) => outcome.kind === kind).length;
   return {
     action: 'processed',
