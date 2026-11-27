@@ -561,15 +561,31 @@ jobs:
         with:
           vitest-key-suffix: -browser-${{ matrix.shard }}of${{ strategy.job-total }}
 
-      # Seven-shard smoke and full share owners, so restore only the matching
-      # partition. Smaller smoke matrices can still need any full-run shard.
+      # Wide smoke restores its own full-run lineage and the lineages of
+      # selected suites that move between profiles. Smaller plans merge all.
+      - name: Select browser memo donors
+        id: browser-memo-donors
+        if: env.PORTOS_BROWSER_TEST_PROFILE == 'smoke' && strategy.job-total == 7
+        env:
+          BROWSER_SHARD_INDEX: ${{ matrix.shard }}
+          BROWSER_FILES: ${{ toJSON(fromJSON(needs.impact.outputs.plan).browser_files) }}
+        run: |
+          node --input-type=module <<'JS' >> "$GITHUB_OUTPUT"
+          import { browserSmokeMemoDonors } from './scripts/lib/browserSuites.js';
+          import { browserTestProfileFiles } from './scripts/lib/browserTestProfiles.js';
+          const files = browserTestProfileFiles('smoke', JSON.parse(process.env.BROWSER_FILES));
+          const donors = browserSmokeMemoDonors(files, Number(process.env.BROWSER_SHARD_INDEX));
+          console.log('shards=' + JSON.stringify(donors));
+          JS
+
       - name: Restore the test memo
         id: test-memo
         uses: ./.github/actions/test-memo
         with:
           suite: browser
           partition: browser-${{ matrix.shard }}of${{ strategy.job-total }}
-          merge-shards: ${{ env.PORTOS_BROWSER_TEST_PROFILE == 'smoke' && strategy.job-total != 7 && '7' || '0' }}
+          merge-shards: ${{ env.PORTOS_BROWSER_TEST_PROFILE == 'smoke' && (strategy.job-total != 7 || steps.browser-memo-donors.outputs.shards != '[]') && '7' || '0' }}
+          merge-partitions: ${{ steps.browser-memo-donors.outputs.shards || '[]' }}
           partition-only: ${{ strategy.job-total == 7 }}
 
       # Plan before installing ffmpeg/client deps so shards 100% covered by the

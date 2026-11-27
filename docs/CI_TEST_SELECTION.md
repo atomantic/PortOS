@@ -5,12 +5,15 @@ How CI selects, partitions and sizes the test suites. Split out of [GITHUB_ACTIO
 ## Browser workload partition
 
 The browser job uses one runner for one selected suite, two for two or three,
-and four for four or more. Each runner receives the complete planner selection
+four for four to six, and seven for seven or more. Each runner receives the complete planner selection
 and `CI_SHARD`. For a given shard count and profile, the registry pins suite
 owners before subtracting memo hits. The two-runner smoke profile moves GPU
 film look away from animatic capture. With four runners, both profiles separate
 those suites through the shared ownership table. Unknown browser selectors fail
-rather than being dropped.
+rather than being dropped. Seven-runner plans move a few suites between profiles
+to account for fidelity-only work. Each broad smoke runner restores its own
+full-run memo partition and only the additional partitions of selected suites
+whose full owner differs. Suites with no matching memo verdict still run.
 
 The four-runner layout spreads the expensive memo misses from hosted run
 45642241181. That run's fastest runner skipped its only suite, while the

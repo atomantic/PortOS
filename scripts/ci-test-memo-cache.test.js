@@ -68,7 +68,7 @@ describe('trusted CI test-memo cache reuse', () => {
     ['client', FULL_SUITE_SHARDS.client],
     ['browser', FULL_SUITE_SHARDS.browser],
   ])('restores and merges each full-run %s shard lineage once', (family, count) => {
-    const mergeBrowserShards = `env.PORTOS_BROWSER_TEST_PROFILE == 'smoke' && strategy.job-total != ${count} && '${count}' || '0'`;
+    const mergeBrowserShards = `env.PORTOS_BROWSER_TEST_PROFILE == 'smoke' && (strategy.job-total != ${count} || steps.browser-memo-donors.outputs.shards != '[]') && '${count}' || '0'`;
     const mergeExpression = family === 'browser'
       ? mergeBrowserShards
       : `fromJSON(needs.impact.outputs.plan).${family}_mode == 'full' && '0' || '${count}'`;
@@ -104,8 +104,9 @@ describe('trusted CI test-memo cache reuse', () => {
       const restore = step(job, `Restore full-run shard ${shard} of the memo`);
       expect(restore).toContain(`id: restore-shard-${shard}`);
       expect(step(noMergeJob, `Restore full-run shard ${shard} of the memo`)).toContain(`fromJSON('0') >= ${shard} &&`);
-      const [, minimum, template] = restore.match(/^ +if: >-\n +fromJSON\(inputs\.merge-shards\) >= (\d) &&\n +!startsWith\(steps\.restore\.outputs\.cache-matched-key, format\('([^']+)', runner\.os, runner\.arch, inputs\.suite, inputs\.merge-shards\)\)$/m);
+      const [, minimum, donor, template] = restore.match(/^ +if: >-\n +fromJSON\(inputs\.merge-shards\) >= (\d) &&\n +\(inputs\.merge-partitions == '\[\]' \|\| contains\(fromJSON\(inputs\.merge-partitions\), (\d)\)\) &&\n +!startsWith\(steps\.restore\.outputs\.cache-matched-key, format\('([^']+)', runner\.os, runner\.arch, inputs\.suite, inputs\.merge-shards\)\)$/m);
       expect(Number(minimum)).toBe(shard);
+      expect(Number(donor)).toBe(shard);
       const formatArgs = [context['runner.os'], context['runner.arch'], family, count];
       const skipPrefix = template.replace(/\{(\d)\}/g, (_, argument) => formatArgs[argument]);
       // Use the same complete lineage prefix in the exclusion and the lookup.
@@ -157,11 +158,16 @@ describe('trusted CI test-memo cache reuse', () => {
     expect(job.indexOf(`- name: Park full-run shard ${count}\n`)).toBeLessThan(job.indexOf('- name: Read the full-run shard lineages in place\n'));
   });
 
-  it('restores only the current partition of a seven-shard browser job', () => {
+  it('keeps the primary browser restore on its partition and requests only computed donors', () => {
     const job = jobs.browser;
     const invocation = step(job, 'Restore the test memo');
     const count = FULL_SUITE_SHARDS.browser;
     expect(invocation).toContain(`partition-only: \${{ strategy.job-total == ${count} }}\n`);
+    expect(invocation).toContain("merge-partitions: ${{ steps.browser-memo-donors.outputs.shards || '[]' }}");
+    const selectDonors = step(job, 'Select browser memo donors');
+    expect(selectDonors).toContain(`if: env.PORTOS_BROWSER_TEST_PROFILE == 'smoke' && strategy.job-total == ${count}`);
+    expect(selectDonors).toContain("const files = browserTestProfileFiles('smoke', JSON.parse(process.env.BROWSER_FILES));");
+    expect(selectDonors).toContain('const donors = browserSmokeMemoDonors(files, Number(process.env.BROWSER_SHARD_INDEX));');
     const restore = initialRestore(job, 'browser', { partitionOnly: true });
     const context = {
       'runner.os': 'Linux', 'runner.arch': 'X64', 'github.run_id': 123,
