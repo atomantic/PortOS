@@ -181,6 +181,19 @@ describe('VoiceWidget accessibility', () => {
     expect(within(widget).getByRole('button', { name: 'Start hands-free listening' })).toHaveAttribute('aria-pressed', 'false');
   });
 
+  it('lets the floating handset claim voice output from another tab', async () => {
+    voiceClientMock.onVoiceOutputPrimary.mockImplementationOnce((handler) => {
+      handler(false);
+      return vi.fn();
+    });
+    const widget = await renderWidget();
+    const speaker = within(widget).getByRole('button', { name: 'claim speaker' });
+    expect(speaker).toHaveAttribute('aria-pressed', 'false');
+
+    fireEvent.click(speaker);
+    expect(voiceClientMock.claimVoiceOutput).toHaveBeenCalledTimes(1);
+  });
+
   it('announces finalized turns in a log and wires the collapse disclosure', async () => {
     const widget = await renderWidget();
     fireEvent.change(within(widget).getByLabelText('Message to the voice assistant'), { target: { value: 'hello there' } });
@@ -260,13 +273,14 @@ describe('Voice Call console', () => {
     localStorage.setItem('portos.voice.handsFree', '1');
     const { rerender } = render(<VoiceWidgetGate><ConsoleHost /></VoiceWidgetGate>);
     const consoleView = await screen.findByRole('region', { name: 'PortOS call console' });
+    await settle();
     const ui = within(consoleView);
     expect(voiceClientMock.startContinuous).not.toHaveBeenCalled();
     expect(voiceClientMock.prepareVoicePlayback).not.toHaveBeenCalled();
     fireEvent.click(ui.getByRole('button', { name: 'Open mic' }));
     expect(voiceClientMock.prepareVoicePlayback).toHaveBeenCalledTimes(1);
     expect(voiceClientMock.startContinuous).toHaveBeenCalledTimes(1);
-    expect(ui.getByRole('status')).toHaveTextContent('Mic open');
+    expect(ui.getByText('Mic open', { selector: '[role="status"]' })).toBeInTheDocument();
 
     fireEvent.change(ui.getByRole('textbox'), { target: { value: 'Hello' } });
     fireEvent.click(ui.getByRole('button', { name: 'Send', exact: true }));
@@ -283,7 +297,7 @@ describe('Voice Call console', () => {
     fireEvent.click(ui.getByRole('button', { name: 'End' }));
     expect(voiceClientMock.disposeCaptureOwner).toHaveBeenCalledTimes(1);
     expect(voiceClientMock.interrupt).toHaveBeenCalled();
-    expect(ui.getByRole('status')).toHaveTextContent('Standby');
+    expect(ui.getByText('Standby', { selector: '[role="status"]' })).toBeInTheDocument();
 
     fireEvent.click(ui.getByRole('button', { name: 'Open mic' }));
     rerender(<VoiceWidgetGate><main /></VoiceWidgetGate>);

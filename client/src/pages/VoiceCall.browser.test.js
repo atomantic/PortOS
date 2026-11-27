@@ -61,6 +61,7 @@ function stubApi(page, enabled = true, avatar = {}) {
       return route.fulfill({ json: { config: route.request().postDataJSON(), reconciliation: {} } });
     }
     const responses = {
+      '/api/notifications': { notifications: [], count: 0 },
       '/api/voice/config': { ...config, enabled },
       '/api/voice/avatar/status': avatar.status ?? { supported: true, installed: true, phase: 'running' },
       '/api/voice/status': { services: {} },
